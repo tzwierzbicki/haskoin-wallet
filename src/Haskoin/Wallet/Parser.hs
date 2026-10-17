@@ -1003,7 +1003,11 @@ signMsgParser = do
       <> footer
         [r|
 Sign a user-defined message using the private key associated with a given
-address.
+address. The signature uses the Bitcoin Signed Message format (the legacy
+format of BIP-322), which can be verified by Bitcoin Core and other wallets.
+The message is signed exactly as provided. A warning is shown when it contains
+leading or trailing whitespace or line breaks, as these are easily altered
+when copying the message and the signature would then fail to verify.
 |]
 
 signAddressArg :: Parser Text

@@ -20,7 +20,6 @@ import Data.Foldable (for_)
 import Data.Maybe (fromMaybe, isJust)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
-import Data.Text.Encoding (encodeUtf8)
 import qualified Data.Text as Text
 import Database.Persist.Sqlite (transactionUndo)
 import Haskoin
@@ -40,6 +39,7 @@ import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import qualified System.Console.Haskeline as Haskeline
 import qualified System.Directory as D
+import System.IO (hPutStrLn, stderr)
 import System.Random (initStdGen)
 
 data Response
@@ -590,13 +590,15 @@ cmdSignMessage ctx cfg addrTxt txtMsg splitMnemIn =
     let accPub = accountXPubKey ctx acc
         net = accountNetwork acc
         idx = fromIntegral $ dBAccountIndex acc
+    addr <- liftEither $ textToAddrE net addrTxt
+    -- Warn before asking for the mnemonic so that the user can abort. Use
+    -- stderr to keep the armored block and the --json output clean.
+    liftIO $ mapM_ (hPutStrLn stderr) $ messageWarnings txtMsg
     mnem <- askMnemonic splitMnemIn
     accPrvKey <- askPrvKey net ctx idx mnem accPub
     let addrPrvKey = derivePath ctx (addrPath addrDB) accPrvKey
-        msgHash = sha256 $ encodeUtf8 txtMsg
-        msgSig = signHash ctx addrPrvKey.key msgHash
-        sigB64 = B64.encode msgSig.get
-    return $ ResponseSignMsg txtMsg (cs sigB64) addrTxt
+    msgSig <- liftEither $ signMessage ctx addr addrPrvKey.key txtMsg
+    return $ ResponseSignMsg txtMsg (cs $ B64.encode msgSig) addrTxt
 
 cmdSignTx ::
   Ctx ->
