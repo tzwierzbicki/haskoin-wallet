@@ -1,48 +1,46 @@
-{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# OPTIONS_GHC -fno-warn-orphans #-}
+{-# LANGUAGE TupleSections #-}
 
+-- | Helpers shared by the test modules. The QuickCheck generators are in
+-- "Haskoin.Wallet.Arbitrary".
 module Haskoin.Wallet.TestUtils where
 
-import Control.Monad
+import Control.Monad (forM, unless, void)
 import Control.Monad.Except (ExceptT)
 import Control.Monad.Trans (liftIO)
 import Control.Monad.Trans.Except (runExceptT)
-import Data.Either
-import qualified Data.Map.Strict as Map
-import Data.Maybe
-import Data.String.Conversions (cs)
+import Data.Aeson (FromJSON (..), eitherDecodeFileStrict, withObject, (.!=), (.:), (.:?))
+import Data.Either (fromRight, isRight)
+import Data.List (isSuffixOf, sort)
 import Data.Text (Text)
-import Data.Word
+import qualified Data.Text as Text
 import Database.Persist.Sql (runMigrationQuiet)
 import Database.Persist.Sqlite (runSqlite)
 import Haskoin
-import qualified Haskoin.Store.Data as Store
-import Haskoin.Util.Arbitrary
-import Haskoin.Wallet.Backup
-import Haskoin.Wallet.Commands
-import Haskoin.Wallet.Config
-import Haskoin.Wallet.Database
-import Haskoin.Wallet.FileIO
-import Haskoin.Wallet.TxInfo
-import Numeric.Natural
-import Test.HUnit
+import Haskoin.Wallet.Database (DB, migrateAll)
+import Haskoin.Wallet.Signing (MnemonicPass (..), signingKey)
+import Numeric.Natural (Natural)
+import System.Directory (listDirectory)
+import Test.HUnit (Assertion)
 import Test.Hspec
-import Test.QuickCheck
 
-genNatural :: Test.QuickCheck.Gen Natural
-genNatural = arbitrarySizedNatural
+{- Either -}
 
 forceRight :: Either a b -> b
 forceRight = fromRight (error "fromRight")
 
+{- Database -}
+
+-- | Run an action on a fresh in-memory wallet database
 runDBMemory :: DB IO a -> Assertion
 runDBMemory action = do
   runSqlite ":memory:" $ do
     _ <- runMigrationQuiet migrateAll
     void action
 
+-- | Like 'runDBMemory', and the action must succeed (Right)
 runDBMemoryE :: (Show a) => ExceptT String (DB IO) a -> Assertion
 runDBMemoryE action = do
   runSqlite ":memory:" $ do
@@ -50,266 +48,126 @@ runDBMemoryE action = do
     resE <- runExceptT action
     liftIO $ resE `shouldSatisfy` isRight
 
-arbitraryText :: Gen Text
-arbitraryText = cs <$> (arbitrary :: Gen String)
+{- Test vector files -}
 
-arbitraryPositive :: (Arbitrary a, Integral a) => Gen a
-arbitraryPositive = abs <$> arbitrary
+-- Test vectors are stored as JSON files in a directory under test/data (see
+-- test/data/message-signing for an example). Each test module defines the
+-- type of its files, loads them with 'loadVectorFiles' and checks each file
+-- with 'vectorFileSpec'.
 
-arbitraryNatural :: Gen Natural
-arbitraryNatural = fromIntegral <$> (arbitraryPositive :: Gen Word64)
+-- | Load every .json file of a directory, in alphabetical order. A file that
+-- can not be parsed is returned as Left, so that the test reports it.
+loadVectorFiles :: (FromJSON a) => FilePath -> IO [(FilePath, Either String a)]
+loadVectorFiles dir = do
+  files <- sort . filter (".json" `isSuffixOf`) <$> listDirectory dir
+  forM files $ \f -> (f,) <$> eitherDecodeFileStrict (dir <> "/" <> f)
 
-arbitraryBlockRef :: Gen Store.BlockRef
-arbitraryBlockRef =
-  oneof [a, b]
+-- | One check per vector file. It passes only if every vector of the file
+-- passes. Otherwise it reports every problem, not only the first one. The
+-- caller gives the number of vectors in a file and the problems found in it.
+vectorFileSpec :: (a -> Int) -> (a -> Problems) -> (FilePath, Either String a) -> Spec
+vectorFileSpec _ _ (file, Left err) =
+  it file $ expectationFailure $ "Could not parse the file: " <> err
+vectorFileSpec vectorCount fileProblems (file, Right doc) =
+  it (file <> " (" <> show (vectorCount doc) <> " vectors)") $
+    unless (null problems) $
+      expectationFailure $
+        show (length problems)
+          <> (if length problems == 1 then " failure:\n" else " failures:\n")
+          <> unlines problems
   where
-    a = Store.BlockRef <$> arbitraryPositive <*> arbitraryPositive
-    b = Store.MemRef <$> arbitrary
+    problems = fileProblems doc
 
-arbitraryDBAccount :: Network -> Ctx -> Gen DBAccount
-arbitraryDBAccount net ctx =
-  DBAccount
-    <$> arbitraryText
-    <*> (DBWalletKey . fingerprintToText <$> arbitraryFingerprint)
-    <*> arbitraryPositive
-    <*> return (cs net.name)
-    <*> (cs . pathToStr <$> arbitraryDerivPath)
-    <*> arbitraryPositive
-    <*> arbitraryPositive
-    <*> (xPubExport net ctx <$> arbitraryXPubKey ctx)
-    <*> arbitraryPositive
-    <*> arbitraryPositive
-    <*> arbitraryPositive
-    <*> arbitraryUTCTime
+{- Collecting problems -}
 
-arbitraryDBAddress :: Network -> Gen DBAddress
-arbitraryDBAddress net =
-  DBAddress
-    <$> arbitraryPositive
-    <*> (DBWalletKey . fingerprintToText <$> arbitraryFingerprint)
-    <*> (cs . pathToStr <$> arbitraryDerivPath)
-    <*> (cs . pathToStr <$> arbitraryDerivPath)
-    <*> (fromJust . addrToText net <$> arbitraryAddress net)
-    <*> arbitraryText
-    <*> arbitraryPositive
-    <*> arbitraryPositive
-    <*> arbitraryPositive
-    <*> arbitraryPositive
-    <*> arbitraryPositive
-    <*> arbitrary
-    <*> arbitrary
-    <*> arbitraryUTCTime
+-- | The problems found in a test vector, as readable messages. An empty list
+-- means that the vector passed. Assertions like 'shouldBe' stop at the first
+-- failure; collecting problems instead lets a test report every failing
+-- vector of a file at once.
+type Problems = [String]
 
-arbitraryAddressBalance :: Gen AddressBalance
-arbitraryAddressBalance =
-  AddressBalance
-    <$> arbitraryPositive
-    <*> arbitraryPositive
-    <*> arbitraryPositive
-    <*> arbitraryPositive
-    <*> arbitraryPositive
+-- | A problem if the actual value differs from the expected one
+check :: (Eq a, Show a) => String -> a -> a -> Problems
+check label expected actual =
+  [ label <> ": expected " <> show expected <> ", got " <> show actual
+    | expected /= actual
+  ]
 
-arbitraryJsonCoin :: Network -> Gen JsonCoin
-arbitraryJsonCoin net =
-  JsonCoin
-    <$> arbitraryOutPoint
-    <*> arbitraryAddress net
-    <*> arbitraryPositive
-    <*> arbitraryBlockRef
-    <*> arbitraryNatural
-    <*> arbitrary
+-- | A problem if the condition does not hold
+require :: String -> Bool -> Problems
+require label ok = ["failed: " <> label | not ok]
 
-arbitraryPubKeyDoc :: Ctx -> Gen PubKeyDoc
-arbitraryPubKeyDoc ctx =
-  PubKeyDoc
-    <$> arbitraryXPubKey ctx
-    <*> arbitraryNetwork
-    <*> arbitraryText
-    <*> arbitraryFingerprint
+-- | Prefix the problems of a vector with its name
+named :: Text -> Problems -> Problems
+named name = map (\p -> "  " <> Text.unpack name <> ": " <> p)
 
-arbitraryTxSignData :: Network -> Ctx -> Gen TxSignData
-arbitraryTxSignData net ctx =
-  TxSignData
-    <$> arbitraryTx net ctx
-    <*> resize 10 (listOf (arbitraryTx net ctx))
-    <*> resize 10 (listOf arbitrarySoftPath)
-    <*> resize 10 (listOf arbitrarySoftPath)
-    <*> arbitrary
+prefixError :: String -> Either String a -> Either String a
+prefixError p = either (Left . ((p <> ": ") <>)) Right
 
-arbitraryMyOutputs :: Gen MyOutputs
-arbitraryMyOutputs =
-  MyOutputs
-    <$> arbitraryNatural
-    <*> arbitrarySoftPath
-    <*> arbitraryText
+-- | The checks of a vector first read its data (a key, a signature, an
+-- address...), which can fail (Left). Such a setup error is reported as the
+-- only problem of the vector. Otherwise (Right), the problems found by the
+-- checks are returned.
+reportSetupError :: Either String Problems -> Problems
+reportSetupError (Left setupError) = [setupError]
+reportSetupError (Right problems) = problems
 
-arbitraryMyInputs :: Network -> Ctx -> Gen MyInputs
-arbitraryMyInputs net ctx =
-  MyInputs
-    <$> arbitraryNatural
-    <*> arbitrarySoftPath
-    <*> arbitraryText
-    <*> resize 10 (listOf $ fst <$> arbitrarySigInput net ctx)
+{- Networks and keys in test vectors -}
 
-arbitraryOtherInputs :: Network -> Ctx -> Gen OtherInputs
-arbitraryOtherInputs net ctx =
-  OtherInputs
-    <$> arbitraryNatural
-    <*> resize 10 (listOf $ fst <$> arbitrarySigInput net ctx)
+-- | Read a network by its haskoin name (btc, btctest, bch, bchtest...)
+parseNetwork :: (MonadFail m) => String -> m Network
+parseNetwork name =
+  maybe (fail $ "Unknown network: " <> name) return (netByName name)
 
-arbitraryTxType :: Gen TxType
-arbitraryTxType = oneof [pure TxDebit, pure TxInternal, pure TxCredit]
+-- | How a private key is specified in a test vector. In JSON, one of:
+--
+-- * {"wif": ...}: compressed WIF private key
+-- * {"secretHex": ...}: 32-byte secret in hex
+-- * {"mnemonic", "passphrase", "path"}: BIP-39 mnemonic and any BIP-32 path
+-- * {"mnemonic", "passphrase", "account", "chain", "index"}: derived like hw
+--   does, with 'signingKey' for the account key m/44'/coin'/account'
+data KeySpec
+  = KeyWif !Text
+  | KeySecret !Text
+  | -- | Mnemonic, passphrase and any BIP-32 path
+    KeyPath !Text !Text !Text
+  | -- | Mnemonic, passphrase, account, chain and index, derived like hw does
+    KeyAccount !Text !Text !Natural !Natural !Natural
 
-arbitraryStoreOutput :: Network -> Gen Store.StoreOutput
-arbitraryStoreOutput net =
-  Store.StoreOutput
-    <$> arbitrary
-    <*> arbitraryBS1
-    <*> arbitraryMaybe arbitrarySpender
-    <*> arbitraryMaybe (arbitraryAddress net)
+instance FromJSON KeySpec where
+  parseJSON =
+    withObject "KeySpec" $ \o -> do
+      wifM <- o .:? "wif"
+      secretM <- o .:? "secretHex"
+      mnemonicM <- o .:? "mnemonic"
+      pathM <- o .:? "path"
+      pass <- o .:? "passphrase" .!= ""
+      case (wifM, secretM, mnemonicM, pathM) of
+        (Just wif, _, _, _) -> return $ KeyWif wif
+        (_, Just secret, _, _) -> return $ KeySecret secret
+        (_, _, Just mnem, Just path) -> return $ KeyPath mnem pass path
+        (_, _, Just mnem, Nothing) ->
+          KeyAccount mnem pass
+            <$> o .: "account"
+            <*> o .: "chain"
+            <*> o .: "index"
+        _ -> fail "Invalid key specification"
 
-arbitrarySpender :: Gen Store.Spender
-arbitrarySpender = Store.Spender <$> arbitraryTxHash <*> arbitrary
-
-arbitraryStoreInput :: Network -> Gen Store.StoreInput
-arbitraryStoreInput net =
-  oneof
-    [ Store.StoreCoinbase
-        <$> arbitraryOutPoint
-        <*> arbitrary
-        <*> arbitraryBS1
-        <*> listOf arbitraryBS1,
-      Store.StoreInput
-        <$> arbitraryOutPoint
-        <*> arbitrary
-        <*> arbitraryBS1
-        <*> arbitraryBS1
-        <*> arbitrary
-        <*> listOf arbitraryBS1
-        <*> arbitraryMaybe (arbitraryAddress net)
-    ]
-
-arbitraryTxInfo :: Network -> Ctx -> Gen TxInfo
-arbitraryTxInfo net ctx =
-  TxInfo
-    <$> arbitraryMaybe arbitraryTxHash
-    <*> arbitraryTxType
-    <*> arbitrary
-    <*> ( Map.fromList
-            <$> resize
-              10
-              (listOf $ (,) <$> arbitraryAddress net <*> arbitraryMyOutputs)
-        )
-    <*> ( Map.fromList
-            <$> resize
-              10
-              (listOf $ (,) <$> arbitraryAddress net <*> arbitraryNatural)
-        )
-    <*> resize 10 (listOf $ arbitraryStoreOutput net)
-    <*> ( Map.fromList
-            <$> resize
-              10
-              (listOf $ (,) <$> arbitraryAddress net <*> arbitraryMyInputs net ctx)
-        )
-    <*> ( Map.fromList
-            <$> resize
-              10
-              (listOf $ (,) <$> arbitraryAddress net <*> arbitraryOtherInputs net ctx)
-        )
-    <*> resize 10 (listOf $ arbitraryStoreInput net)
-    <*> arbitraryNatural
-    <*> arbitraryNatural
-    <*> arbitraryNatural
-    <*> arbitraryBlockRef
-    <*> arbitraryNatural
-    <*> arbitraryMaybe arbitraryTxInfoPending
-
-arbitraryTxInfoPending :: Gen TxInfoPending
-arbitraryTxInfoPending =
-  TxInfoPending
-    <$> arbitraryTxHash
-    <*> arbitrary
-    <*> arbitrary
-
-arbitraryAccountBackup :: Network -> Ctx -> Gen AccountBackup
-arbitraryAccountBackup net ctx =
-  AccountBackup
-    <$> arbitraryText
-    <*> arbitraryFingerprint
-    <*> arbitraryXPubKey ctx
-    <*> return net
-    <*> arbitraryNatural
-    <*> arbitraryNatural
-    <*> ( Map.fromList
-            <$> resize 20 (listOf $ (,) <$> arbitraryAddress net <*> arbitraryText)
-        )
-    <*> resize 20 (listOf $ arbitraryAddress net)
-    <*> arbitraryUTCTime
-
-arbitrarySyncRes :: Network -> Ctx -> Gen SyncRes
-arbitrarySyncRes net ctx =
-  SyncRes
-    <$> arbitraryDBAccount net ctx
-    <*> arbitraryBlockHash
-    <*> arbitrary
-    <*> arbitraryNatural
-    <*> arbitraryNatural
-
-arbitraryResponse :: Network -> Ctx -> Gen Response
-arbitraryResponse net ctx =
-  oneof
-    [ ResponseError <$> arbitraryText,
-      ResponseMnemonic
-        <$> arbitraryText
-        <*> resize 12 (listOf arbitraryText)
-        <*> resize 12 (listOf $ resize 12 $ listOf arbitraryText),
-      ResponseAccount <$> arbitraryDBAccount net ctx,
-      ResponseAccResult
-        <$> arbitraryDBAccount net ctx
-        <*> arbitrary
-        <*> arbitraryText,
-      ResponseFile <$> (cs <$> arbitraryText),
-      ResponseAccounts <$> resize 20 (listOf $ arbitraryDBAccount net ctx),
-      ResponseAddress <$> arbitraryDBAccount net ctx <*> arbitraryDBAddress net,
-      ResponseAddresses
-        <$> arbitraryDBAccount net ctx
-        <*> resize 20 (listOf $ arbitraryDBAddress net),
-      ResponseTxs
-        <$> arbitraryDBAccount net ctx
-        <*> resize 20 (listOf $ arbitraryTxInfo net ctx),
-      ResponseTx <$> arbitraryDBAccount net ctx <*> arbitraryTxInfo net ctx,
-      ResponseDeleteTx
-        <$> arbitraryTxHash
-        <*> arbitraryNatural
-        <*> arbitraryNatural,
-      ResponseCoins
-        <$> arbitraryDBAccount net ctx
-        <*> resize 20 (listOf $ arbitraryJsonCoin net),
-      ResponseSync
-        <$> (resize 10 $ listOf $ arbitrarySyncRes net ctx),
-      ResponseRestore
-        <$> resize
-          20
-          ( listOf $
-              (,,)
-                <$> arbitraryDBAccount net ctx
-                <*> arbitraryNatural
-                <*> arbitraryNatural
-          ),
-      ResponseVersion
-        <$> arbitraryText
-        <*> arbitraryText,
-      ResponseRollDice <$> resize 20 (listOf arbitraryNatural) <*> arbitraryText
-    ]
-
-arbitraryConfig :: Gen Config
-arbitraryConfig =
-  Config
-    <$> arbitraryText
-    <*> arbitraryNatural
-    <*> arbitraryNatural
-    <*> arbitraryNatural
-    <*> arbitraryNatural
-    <*> arbitraryNatural
-    <*> arbitraryNatural
-    <*> arbitrary
+-- | The private key of a key specification
+vectorKey :: Ctx -> Network -> KeySpec -> Either String SecKey
+vectorKey ctx net =
+  \case
+    KeyWif wif -> do
+      prv <- maybeToEither "Invalid WIF" $ fromWif net wif
+      unless prv.compress $ Left "Uncompressed WIF keys are not supported"
+      return prv.key
+    KeySecret secret ->
+      maybeToEither "Invalid secret" $ secKey =<< decodeHex secret
+    KeyPath mnem pass path -> do
+      seed <- mnemonicToSeed pass mnem
+      parsed <- maybeToEither "Invalid path" $ parsePath (Text.unpack path)
+      return (derivePath ctx parsed.get (makeXPrvKey seed)).key
+    KeyAccount mnem pass acc chain idx -> do
+      accKey <- signingKey net ctx (MnemonicPass mnem pass) acc
+      let path = Deriv :/ fromIntegral chain :/ fromIntegral idx :: SoftPath
+      return (derivePath ctx path accKey).key

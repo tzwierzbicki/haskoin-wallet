@@ -16,6 +16,15 @@ maintainer:     jprupp@protonmail.ch
 license:        PublicDomain
 license-file:   UNLICENSE
 build-type:     Simple
+extra-source-files:
+    test/data/message-signing/bitcoin-core.json
+    test/data/message-signing/bitcoinjs-message.json
+    test/data/message-signing/edge-cases.json
+    test/data/message-signing/electrum.json
+    test/data/message-signing/hw-regression.json
+    test/data/message-signing/python-bitcoinlib.json
+    test/data/message-signing/trezor.json
+    test/data/message-signing/README.md
 
 source-repository head
   type: git
@@ -138,8 +147,11 @@ test-suite spec
   main-is: Spec.hs
   other-modules:
       Haskoin.Wallet.AmountsSpec
+      Haskoin.Wallet.Arbitrary
       Haskoin.Wallet.CommandsSpec
       Haskoin.Wallet.EntropySpec
+      Haskoin.Wallet.MainSpec
+      Haskoin.Wallet.MessageSigningSpec
       Haskoin.Wallet.SigningSpec
       Haskoin.Wallet.TestUtils
       Haskoin.Wallet.VersionSpec

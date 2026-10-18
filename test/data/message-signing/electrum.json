@@ -1,0 +1,46 @@
+{
+  "description": "Message signing vectors from the Electrum test suite.",
+  "vectors": [
+    {
+      "name": "electrum/test_signmessage_legacy_address",
+      "network": "btc",
+      "key": {
+        "wif": "L1TnU2zbNaAqMoVh65Cyvmcjzbrj41Gs9iTLcWbpJCMynXuap6UN"
+      },
+      "address": "15hETetDmcXm1mM4sEf7U2KXC9hDHFMSzz",
+      "message": "Chancellor on brink of second bailout for banks",
+      "signature": "Hzsu0U/THAsPz/MSuXGBKSULz2dTfmrg1NsAhFp+wH5aKfmX4Db7ExLGa7FGn0m6Mf43KsbEOWpvUUUBTM3Uusw=",
+      "expect": "verify",
+      "source": "Electrum tests/test_bitcoin.py, test_signmessage_legacy_address (compressed key)",
+      "sourceUrl": "https://github.com/spesmilo/electrum/blob/0f7f1857b872/tests/test_bitcoin.py#L206-L221",
+      "comment": "The uncompressed-key vector of this test is not included: hw only uses compressed keys. Electrum grinds the nonce until r < 2^255 (low R, as Bitcoin Core does for transaction signatures) while hw, like Bitcoin Core's SignCompact, uses plain RFC6979. For this message the RFC6979 signature has r >= 2^255, so Electrum's signature is different but equally valid: it is verified against hw's message hash and key."
+    },
+    {
+      "name": "electrum/test_signmessage_low_s/high-s",
+      "network": "btc",
+      "key": {
+        "wif": "L1TnU2zbNaAqMoVh65Cyvmcjzbrj41Gs9iTLcWbpJCMynXuap6UN"
+      },
+      "address": "15hETetDmcXm1mM4sEf7U2KXC9hDHFMSzz",
+      "message": "Chancellor on brink of second bailout for banks",
+      "signature": "IDsu0U/THAsPz/MSuXGBKSULz2dTfmrg1NsAhFp+wH5a1gZoH8kE7O05lE65YLZFzLx3sh/rDzXMbo1dQAJhhnU=",
+      "expect": "verify",
+      "source": "Electrum tests/test_bitcoin.py, test_signmessage_low_s (sig_high_s)",
+      "sourceUrl": "https://github.com/spesmilo/electrum/blob/0f7f1857b872/tests/test_bitcoin.py#L229-L236",
+      "comment": "Valid signature with a high S value (s > n/2). Bitcoin Core's verifymessage does not enforce low S, so it is accepted. hw never produces high-S signatures (libsecp256k1 normalizes S). Same key and message as the test_signmessage_legacy_address vector."
+    },
+    {
+      "name": "electrum/test_signmessage_segwit_witness_v0_address",
+      "network": "btc",
+      "key": {
+        "wif": "L1cgMEnShp73r9iCukoPE3MogLeueNYRD9JVsfT1zVHyPBR3KqBY"
+      },
+      "address": "1Ei8atd4F1oqB32JYr7mA6i6ve3Ffb7bY",
+      "message": "Electrum",
+      "signature": "HyFaND+87TtVbRhkTfT3mPNBCQcJ32XXtNZGW8sFldJsNpOPCegEmdcCf5Thy18hdMH88GLxZLkOby/EwVUuSeA=",
+      "source": "Electrum tests/test_bitcoin.py, test_signmessage_segwit_witness_v0_address",
+      "sourceUrl": "https://github.com/spesmilo/electrum/blob/0f7f1857b872/tests/test_bitcoin.py#L238-L251",
+      "comment": "Electrum signs for SegWit addresses using the plain compressed-key header (31/32), so the signature equals the P2PKH signature of the same key. The P2PKH address is not from the source: it was derived from the key."
+    }
+  ]
+}

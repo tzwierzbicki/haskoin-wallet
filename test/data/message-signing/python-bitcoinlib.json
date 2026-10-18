@@ -1,0 +1,2207 @@
+{
+  "description": "Message signing vectors from python-bitcoinlib bitcoin/tests/data/signmessage.json. In each vector the message is the address itself. The signatures were not made with RFC6979 nonces (python-bitcoinlib only verifies them), so hw cannot reproduce them byte for byte: they are verified against hw's message hash and the key's public key.",
+  "source": "python-bitcoinlib bitcoin/tests/data/signmessage.json",
+  "sourceUrl": "https://github.com/petertodd/python-bitcoinlib/blob/91e334d831fd/bitcoin/tests/data/signmessage.json",
+  "vectors": [
+    {
+      "name": "python-bitcoinlib/signmessage.json[0]",
+      "network": "btc",
+      "key": {
+        "wif": "KwfJTiKdcjNMjBu4ksgGd21EZXz6JomoZNbirP3nfd3K9ZMXMEUi"
+      },
+      "address": "1K5Z1nxN4mjUgCLpSXMRkeZxuAMpbn2CQB",
+      "message": "1K5Z1nxN4mjUgCLpSXMRkeZxuAMpbn2CQB",
+      "signature": "H8PgOb/liZzt3QQHJn9kLBqH7E/i+SC6JTwYGtdNdOjnXzFqXnHMZqP7oZ1wb1QiQ3H/kF8xC9Yx7pK9ddlx8TA=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[1]",
+      "network": "btc",
+      "key": {
+        "wif": "L38oXgJ9vuatxjZzU99tBn9ggwyL2mJa1iGxBw34m5tgvxkbimAJ"
+      },
+      "address": "1CzDCcHkJq2cH9bMWwQgaJsgSxPL8cw3ex",
+      "message": "1CzDCcHkJq2cH9bMWwQgaJsgSxPL8cw3ex",
+      "signature": "H8p9zchgGjDqXjL/RRRFCxdmrszMBhOM5H3/7guzGPrpPpK98PSFxPPC+bbB9qKFxIcRqEwmTs0CyOh2L+NtqlA=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[2]",
+      "network": "btc",
+      "key": {
+        "wif": "Kyri8mmjXpzwBNz8HsUV949gNt6BXD5NNkYCBprMUJTTyi8MgCyH"
+      },
+      "address": "1CaKn6rs61k5C62kwdqzHvDiJa4aijiiSZ",
+      "message": "1CaKn6rs61k5C62kwdqzHvDiJa4aijiiSZ",
+      "signature": "H2CmJhzcOW9KOBVWT4xhiyGpXz7fvjgjsf4IdXMNdif761byosI2Qtk8firpHF0euOEGpE6DyogbWzhPNKuO6kw=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[3]",
+      "network": "btc",
+      "key": {
+        "wif": "L4abGhH51nRffuHr6zsH9NXyKtpX3YB52bUiF95n2WZdLVNAA278"
+      },
+      "address": "1LoGaos8SGCFVx9vMQP2kMnJuYN5gxpogF",
+      "message": "1LoGaos8SGCFVx9vMQP2kMnJuYN5gxpogF",
+      "signature": "H1n6031DKK+4HdoyNNk6U5bgqd/vk/as2SfR9WyHcyI/J86xQrnHTuqw9hJ5BuF1sAq17euETP3By/FA7IJsANM=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[4]",
+      "network": "btc",
+      "key": {
+        "wif": "L3434z4bHCX1Z3Z9jsEyZoaex19CZh97xhUfbrvwBYpw6sCSCAvX"
+      },
+      "address": "1CHrifiFz2sGeBKM6P98yQuPboUWrpH75B",
+      "message": "1CHrifiFz2sGeBKM6P98yQuPboUWrpH75B",
+      "signature": "H4fNh9cxEL7oyv0Sxc/qj65EBfyulYgfhu31dMHqMJEFEr///pYndzrVGE5Ncf4hAi/kNY/gj+CT/E3GDaKtlhQ=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[5]",
+      "network": "btc",
+      "key": {
+        "wif": "L1trSS5d8Vk6koakoab2M1ZE9CfKyKMzQTLLXacR8Ez9hRUbX7pL"
+      },
+      "address": "13KyVsmGYSopgmsK1rzWah73HVUSPfQZAZ",
+      "message": "13KyVsmGYSopgmsK1rzWah73HVUSPfQZAZ",
+      "signature": "HzOwq2BnqAEsMzusoXjPATGMOX7hTKR63wc1LHU69GYi3PtsYt26O5s4i0K/ro6y4F/62Lb93n5qsxUQ2ZDXklo=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[6]",
+      "network": "btc",
+      "key": {
+        "wif": "L1oLA8E5Narp9NDWtv2SQ1z32iL9gfy7nx9q38vbd324JbrUdHyW"
+      },
+      "address": "148xViYbEoBG5QjxWT2sUG4nehVhvng5Fq",
+      "message": "148xViYbEoBG5QjxWT2sUG4nehVhvng5Fq",
+      "signature": "IGFQhE+R0buv+a8QAiK7dfZ7oMlZVFJAkRpm572Ir53fWGT510QxGp5uHyc0x3Pcrn6FMSndml5jOU+exVfST6c=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[7]",
+      "network": "btc",
+      "key": {
+        "wif": "KzuoZykvmrjs2nkgVCdC869bJ6b33kasqSc2XzVL2XFnY5JJcbL7"
+      },
+      "address": "1KMHXVGbtwAJKbWcqyk6amSBBXXvHdcJmv",
+      "message": "1KMHXVGbtwAJKbWcqyk6amSBBXXvHdcJmv",
+      "signature": "IDAweD2d6rN7d3ALWkf/pfyAHgxm955Uj8yAZaLDb5un5WDcdnu/Xy7YsY65h8Os8TFmJNN+nkPkxKapjr0fUaY=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[8]",
+      "network": "btc",
+      "key": {
+        "wif": "L4ZEN4VFWDLFDoruqJYYNMzfqYo8Y6ZcwG3JEX2o54Rtt1sD58ti"
+      },
+      "address": "1KL8oHatYi8gT2sXR8z7hD64Na1TNM3T5H",
+      "message": "1KL8oHatYi8gT2sXR8z7hD64Na1TNM3T5H",
+      "signature": "H+MfZsyz63oBkVl0VyrE2e3I8i//v8VqMzN6KvOnHjcnyr2vzX6VPVAZfvPxnqKlGsqSZ964sk78HYBByecFqZ0=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[9]",
+      "network": "btc",
+      "key": {
+        "wif": "Kwhh9C4Fq7bKS3SL9DMtRkk7DuBGkjjSt3dFYFc92SD8Wt2eqX82"
+      },
+      "address": "122A264VaC4iBS8oKasjmFsRuNUXmoiJDN",
+      "message": "122A264VaC4iBS8oKasjmFsRuNUXmoiJDN",
+      "signature": "IBEyPRsRkqzVMcH7aXKLdEButyJRDM4f3VB5Z8eevmTZgyDGmTXkK+V6aZNPWiDmhANSzU4J700xaw1DV4bPBX8=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[10]",
+      "network": "btc",
+      "key": {
+        "wif": "L3hEeVxBHa6VQwVcdxLPpWPaqHr3krDU88QqRUEVZbRCHE5H3eAt"
+      },
+      "address": "1gZubzqPigT2W1NEHhTQ6vRc9m9UUQiRN",
+      "message": "1gZubzqPigT2W1NEHhTQ6vRc9m9UUQiRN",
+      "signature": "H9ZBAPbPUEVnyflsNjCzYg2XYiqypngwHLzi3EE1ErnlWofCy71cFFyxy8aERAzrqkDRzdmVTh+AxvWaJfPxpPc=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[11]",
+      "network": "btc",
+      "key": {
+        "wif": "L1KiFe2UCpt7SZik6h4Y6ojNgyZYiGPaXgQbNTCAR5uAhvEMoCWY"
+      },
+      "address": "1JyAmHFZRYughnxcyySEKESDxDHPCBbGtD",
+      "message": "1JyAmHFZRYughnxcyySEKESDxDHPCBbGtD",
+      "signature": "IOSbmEDXRNUeftut3RCTHM5yHMTMVArVICXWQg21AHKfBkPjSp4se7JkSYZ3E2CvtckMRUZTn0IF+ZJVwevpQKo=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[12]",
+      "network": "btc",
+      "key": {
+        "wif": "L1mtAJyN4z5FWsazodkFeXpMFQzniYoMy4srniZgcmZVDXwV5E8w"
+      },
+      "address": "1KRLy3r2ukguk9qdtC7YC69eBMb515dyMp",
+      "message": "1KRLy3r2ukguk9qdtC7YC69eBMb515dyMp",
+      "signature": "H8ed1b9hzu3KnqHhgDqsNyb70lsrujLcW31llmVIKaIUPb1odcVl860gwF5z93YQnwqyRezabnRFJJGFRPDTDhc=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[13]",
+      "network": "btc",
+      "key": {
+        "wif": "L5FmANAjEwj7pooNDrRw1bQFw1MvBH1gYCSCPCGgKCfA1VtvKEoF"
+      },
+      "address": "1GPXPQ5WZuVUtREKavM83NCTuVubd73MYC",
+      "message": "1GPXPQ5WZuVUtREKavM83NCTuVubd73MYC",
+      "signature": "IB+ktPQT3jwHFniWn1lfrF+vDAQpP4E9aThlLniK9uxTKlySNA9ArOB/7QI0Fq16NN7jkFL8LhEw2u8iUDeSdj0=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[14]",
+      "network": "btc",
+      "key": {
+        "wif": "L2egcHyb5jzppeGWYPhKXeYj3BNRtBej7FmqQi3hgijdNTsjPcbw"
+      },
+      "address": "187iiiy3P9EiEEo5xFQQmeXnc4Mh93oWqj",
+      "message": "187iiiy3P9EiEEo5xFQQmeXnc4Mh93oWqj",
+      "signature": "ICnsyyD4NdaEbCzFJ6+a+iqYDyi2TZsFU5fs4BVxYwXPCf+Fs/bXfJkgewneXubkOKOweGQta1dGH6PTv4X711I=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[15]",
+      "network": "btc",
+      "key": {
+        "wif": "L2kZjNrfJPv1tj8bVUFLkKBVWSWj5M5cSHWhhM8tTTaxefE1ZpPL"
+      },
+      "address": "1KYF4kyD75Hqr4bszgT7M2b3dffnpjfNKk",
+      "message": "1KYF4kyD75Hqr4bszgT7M2b3dffnpjfNKk",
+      "signature": "H+7FBxzH+KT1Y4kbzGyO8/uVTpySdrEf5lSMkLy+Nlr3HK5ySF3bRX8GWN68nABsf3JvGbF7HGNeG5tnF1o0VAY=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[16]",
+      "network": "btc",
+      "key": {
+        "wif": "KyTNcK1xm26b1tcGnC1nAZJHGro54WuatdEjxSGDs5s6BKgL5sht"
+      },
+      "address": "1CMrqDTQu6WUrFjJFPHLEESTwLsZ5uDYCM",
+      "message": "1CMrqDTQu6WUrFjJFPHLEESTwLsZ5uDYCM",
+      "signature": "IHKfBFZiHTmIlsrzxc3Wj8AvkpnQMKpg7mefJjxkT0qiYTNkbXqyyoWEvB6N4f56M9Ar+mw0nhK9J4CjC0wdCVs=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[17]",
+      "network": "btc",
+      "key": {
+        "wif": "L2H82fpnWjpQUr3s5CJ92rDfj8P3JFKgLywxbdKGjVSNcbk3gMfA"
+      },
+      "address": "1PDFHCWhgfrx3ZU1UWimUTpnyRjhjbhxkX",
+      "message": "1PDFHCWhgfrx3ZU1UWimUTpnyRjhjbhxkX",
+      "signature": "ILT3UNo/GS9MsOcbie5vVSUQUXnWKfCLioc6DxbbYPVxVvfuaWoJqnzTBVqXmyfrV942yjMEFoYjZ1U6SaeH+M4=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[18]",
+      "network": "btc",
+      "key": {
+        "wif": "Kx4GGUhbZK1fDunwjsfTSJpq37yoEwb6h6e7k2RxeYLBPnd8KJtC"
+      },
+      "address": "1MG5ETsNTUhvg6av8A8jddJJ4gRk6YKnWH",
+      "message": "1MG5ETsNTUhvg6av8A8jddJJ4gRk6YKnWH",
+      "signature": "IDz+MJgPs7da/lBskPUibOfd0Ht0u5VGYAVeOQvygnv93JrG5REUHY5WdK5CCOKA0S7qW9zsLVAcrHSzHyqac34=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[19]",
+      "network": "btc",
+      "key": {
+        "wif": "L1Pf9nn3SYw7YfWgWygNDD6eMd3DKM1BbZKiLKAHmyGfh7Doibtb"
+      },
+      "address": "181pMcFzbLTcmUP8z1XSmUcNZWKsPBBxpi",
+      "message": "181pMcFzbLTcmUP8z1XSmUcNZWKsPBBxpi",
+      "signature": "H7/BVLl33yfaldy/dOM4at3y+tjnGITH/aJHr1s6tN5BSbXue9cmSe6OVWv7jbwnFa0DrlNLY9gOZzJuY5bDsQI=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[20]",
+      "network": "btc",
+      "key": {
+        "wif": "L2MUxGLQrXJaTSS9ou2PSEcWrjtDQE4BQTF6EL7fKwQM5VwJzcCR"
+      },
+      "address": "1MN4DL4mQWxsk3mfUYZ8ic5uHEUAemWSjb",
+      "message": "1MN4DL4mQWxsk3mfUYZ8ic5uHEUAemWSjb",
+      "signature": "Hz2nR9Uv1yfpxl8eVZhhqOOmJvODcCG14K/2rgNyHkop8dDpJi2HHwGb4YII0LeNBv/LK9O+J12aNOcyMzKMD2M=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[21]",
+      "network": "btc",
+      "key": {
+        "wif": "Kxwq4ssi3vmmgWPoRafS6UYD3QSnMT4SRtiCaWSNWKM6ZBiEqvc4"
+      },
+      "address": "18XZkC4CkL6bwLHy3zhzLyPB4xh7f4h23D",
+      "message": "18XZkC4CkL6bwLHy3zhzLyPB4xh7f4h23D",
+      "signature": "H+MQJjqlSgG+mAgI/8JX+VE40E5t1w5YSGBiMbUigphjz1zQOHjK7HW5yKHwsO3byB0O1dQAicPNtITq8J14K4U=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[22]",
+      "network": "btc",
+      "key": {
+        "wif": "L2ms2rjGrRttzSdqynwgSDV76ED3WmPFM2YYqHGzHNaZiVQzsCg5"
+      },
+      "address": "1AyXZ9RYp9pE1qsR1rqivB3edJXP8GWyiP",
+      "message": "1AyXZ9RYp9pE1qsR1rqivB3edJXP8GWyiP",
+      "signature": "H0LCyCPf+NlA4LL850YIHIVpqhN/ImUFy9oZIAR+H9Op4CNUVu87Ee0fbSoikpmcGELWIaFM0WoUyGk8Vi7uNrY=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[23]",
+      "network": "btc",
+      "key": {
+        "wif": "L5kcHFsH2jNGoU6J4BqNy8g8Dao85VjhYa8ccxA3stSJqpdVYMzu"
+      },
+      "address": "1DB7NMtNRtP3QdAtNaUjwM86HvnfCC5AzZ",
+      "message": "1DB7NMtNRtP3QdAtNaUjwM86HvnfCC5AzZ",
+      "signature": "IKPAmB40MTsgd4npAEAO7AskWDH7K6hqRPI/z5tG5VS53ESBqnprF/kHmPPot8uRPNoXHkFuYxQZOyMXX7lJEmM=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[24]",
+      "network": "btc",
+      "key": {
+        "wif": "L4YMEXuLecrzrfuypwtVdaChhmCj64X2MkETUAPg6DtRiuVGFjja"
+      },
+      "address": "15BJrja5LsFAchqUg6rTnQMLnihiMLxhJo",
+      "message": "15BJrja5LsFAchqUg6rTnQMLnihiMLxhJo",
+      "signature": "H21Xzc40Kr45kx5oiiC3qgSr973Vtn+mvIscnPObxtmrDtSICoF0QbiTVUE0CZu/x19WOA4omjb7EBMZ44V6ovY=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[25]",
+      "network": "btc",
+      "key": {
+        "wif": "L1Fd1jF6u1vbPeNcTxVn1KTab4smbqFj6gVZ6jtXAbrvdzcytvHB"
+      },
+      "address": "1A7Tfi8FVpfDKJZWBrsBWjze3nnCV4ZfXL",
+      "message": "1A7Tfi8FVpfDKJZWBrsBWjze3nnCV4ZfXL",
+      "signature": "HxO5kpb4UlAhii8eVHxuw2/aSiqR+KxVG/WZH5Qy2epRHrOIsI5DJmJ1Yd04PK4ishnLFXlc1MqlIIImgQWogJo=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[26]",
+      "network": "btc",
+      "key": {
+        "wif": "L2E55PLU9t4bcgVYm7LwCR7E2YFEdtJo7C1EJjzsdiRGz6geXy2X"
+      },
+      "address": "1DHwsc3aHztCyqaPG2EQ7Jf91CAqxGGYkM",
+      "message": "1DHwsc3aHztCyqaPG2EQ7Jf91CAqxGGYkM",
+      "signature": "INcHA2+Wvpi2RM800ykYI5+CphMqC9eXYdtMeidQTWwAM9tuKG5/zPzM4dGYlWNF1r+aoISFv+yFUkthUbnoH7o=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[27]",
+      "network": "btc",
+      "key": {
+        "wif": "L2x6KEbRpmQLoCxaCPCYtwc9fjjxSr25hQmH5hHgnG7eUahRoKs3"
+      },
+      "address": "1LjwcSHxLfZGh84Scuazu7iumbUq9dQ2eq",
+      "message": "1LjwcSHxLfZGh84Scuazu7iumbUq9dQ2eq",
+      "signature": "H9EG7E88+jhJgO2/bfYBNf8da9J8tUs7ziV3XwojZ4msTppUA+ldVIKjdP6fhucji29LUHbAWrbpYPjEenrz6ow=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[28]",
+      "network": "btc",
+      "key": {
+        "wif": "L2Qe8XEhc8CNbckzB7F3RMXemh9ntDQyVC1wR1Z3LPxTDRmVj9ER"
+      },
+      "address": "18bAFKGHtzE3ZB4zR4XX1c9X114jchhHDw",
+      "message": "18bAFKGHtzE3ZB4zR4XX1c9X114jchhHDw",
+      "signature": "HwJXfWR2WqUqqtrkIpJRQK2OwStkfLvBAq4gDM9fdiwpm3rcPPS7pgIhhONr6oE+Ea1FdWB8D7Ui4st/PFgxZxc=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[29]",
+      "network": "btc",
+      "key": {
+        "wif": "L1Pypc7vL1kifCzY12KzhvcpqxUwNC1LUA8ui7tFuE9Wyhun7hw3"
+      },
+      "address": "15LzGqNqeJ1doaQ8j9SdJ5D9UtekGgvVnD",
+      "message": "15LzGqNqeJ1doaQ8j9SdJ5D9UtekGgvVnD",
+      "signature": "H9ORqWL1Jpl682gVwZ7rNXvKiwzXX4/b6+cu7L3vtliwKaxLkgO2xyHs87SBah33Vog0kJZaK76jA4Kr7eNqR7E=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[30]",
+      "network": "btc",
+      "key": {
+        "wif": "KxTCujUdoKXVe9HGPR5id85YYf8HnaRxYc66JVA51G4uoSDgxY8b"
+      },
+      "address": "1B1KnUWgErwNPy5ddyTFHUimzKSFPp847h",
+      "message": "1B1KnUWgErwNPy5ddyTFHUimzKSFPp847h",
+      "signature": "IOFXUdyOgYLMFfOBLlzSQL1/JLQ89Sb8eOAH0pZCvJ3m3CuLsbtd5YvmA1J8u1fCjrp9dkK/VjjsgrB1zuaahco=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[31]",
+      "network": "btc",
+      "key": {
+        "wif": "L25fWioivsYomokpcyhBoNGrSKoCw6J6wGvpanr2tizMPtB8Wbze"
+      },
+      "address": "15ymYptFaP9TvkS7AJY8LBUD4X8215Aeyq",
+      "message": "15ymYptFaP9TvkS7AJY8LBUD4X8215Aeyq",
+      "signature": "IEXYj7Be6qpmhNBqLf/hauqT3M4Xq2h0XeaBPhlJFBX2EPdR/s9qPTJ8lnPHCOzAPJXcSWK2ZqSCjCr9lTBJAhM=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[32]",
+      "network": "btc",
+      "key": {
+        "wif": "L4FYTnstvkrUBfC3dRqNzra3zU6RUFXR7AGCFF3ifKuQ1ggKrmTs"
+      },
+      "address": "172pMom9HYExjrFwaDLXpMUePqG8koLQcc",
+      "message": "172pMom9HYExjrFwaDLXpMUePqG8koLQcc",
+      "signature": "H8eiIuaUp7Rr6frtypvjVtsSAyvCGSg0VbymjkYHBMIvj+rcHR8KCCwIZ/v8XQDGMjz7t9o5BiEJLjD2gtDd3qE=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[33]",
+      "network": "btc",
+      "key": {
+        "wif": "L2zY8FHZFgmRKULk9YzaLBb8XTdjfYtLtX1AufjkZaZTpjUU4xAS"
+      },
+      "address": "1pzJeXN3h8kJ67kfF8nkKbcEDatX2bwVQ",
+      "message": "1pzJeXN3h8kJ67kfF8nkKbcEDatX2bwVQ",
+      "signature": "IOYT2uNuPUGt6SzHG6m/2aGswjcR/A9NX08x2Pjq5PY//Dwj4PStj/4ExQCPUdZPd5TgD2JSzQYjAa0qJOvzO7U=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[34]",
+      "network": "btc",
+      "key": {
+        "wif": "Kz2V929m1nnhmTa8HLKZDE8Letq2Z5J7jXCKs7d5ccRga79nzcoB"
+      },
+      "address": "1GqaGRFZi5gTxK2BHNTEDKs1GxnPL2r55Z",
+      "message": "1GqaGRFZi5gTxK2BHNTEDKs1GxnPL2r55Z",
+      "signature": "H3BoJag7tI17tqi7gGXe6ki+cM4YyWq8m5HVmcHXwkziGCJ2a+qhl5wVigYhUwWkNtQU5+fjz5tzlEoJD/UjccY=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[35]",
+      "network": "btc",
+      "key": {
+        "wif": "KzSoJeJXBTwsdZZiKuiGVboWa5HyFD8eekNEq23iTGg6oQEDZYvu"
+      },
+      "address": "143F3q22Cpdx7cPMsbaqkyLYyHf8aJadLr",
+      "message": "143F3q22Cpdx7cPMsbaqkyLYyHf8aJadLr",
+      "signature": "IAvp0Nl9FVODboh4mwyvGwLQtSxKKb+XXG6xt10h0AJHV3bD4AIzKjPCzmt4uDykg9hxJchnbtoJA/gw1zJyLq0=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[36]",
+      "network": "btc",
+      "key": {
+        "wif": "KwwZGgUaHTZMcwiB8G8vCoKqfDRShoffxEJoziwzQUcSFuKVUzEk"
+      },
+      "address": "12tkcUE2kvBayoSjeuU2naodL7byN3Zah3",
+      "message": "12tkcUE2kvBayoSjeuU2naodL7byN3Zah3",
+      "signature": "HyqO1n06z2DQfoD9ulhjVe+M0Isk6hWr9IYvgQTK+IOfUENjxbR+y3FBcxFOFvppQ8Ff/IzZ0e5anX3BIrmRHeo=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[37]",
+      "network": "btc",
+      "key": {
+        "wif": "L58mKsU6g8kK5frb1zxkqZnJc4uMC7BoPY87AXubScJVU1RCB3xk"
+      },
+      "address": "12KPhtXmbSm6zJypCMQ6W4iX547cyQWrVv",
+      "message": "12KPhtXmbSm6zJypCMQ6W4iX547cyQWrVv",
+      "signature": "ICPqjIvbFxi5HWzWVkvzIfACzRqIL4IXyNBYjC15f3gOQsyp5UxWPshGIHcVbHV1oRsJt6usc//2okQJ/OcFx30=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[38]",
+      "network": "btc",
+      "key": {
+        "wif": "L43Zw8EYTaDYMmQbTU4oqTPqyDk5ywtHSMPWwUJz6xKiXGr6tfHd"
+      },
+      "address": "1MW1eYaV15DPQjUXzHUBDzQarPRxT8vzct",
+      "message": "1MW1eYaV15DPQjUXzHUBDzQarPRxT8vzct",
+      "signature": "IFBIz9Ba3JcgBga1K5dJMp4HAgOQg0HJIfzdUTDkeRsbf/+afc3C8p37eHUjgTWQTtRRjQ3bAzgH5QRLuNfhZBA=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[39]",
+      "network": "btc",
+      "key": {
+        "wif": "KwGV2LuFzAD9HEnv71tHrse6oVFxQ9PUYHLb2rLfG3pD45fdMC9j"
+      },
+      "address": "1EeNpNQZDuHXasaKH78UdVWvi3C2vkXSJe",
+      "message": "1EeNpNQZDuHXasaKH78UdVWvi3C2vkXSJe",
+      "signature": "H8kJAwrvo5ngwG0u0XGTrHOPM9u9QOI5QGTZwRKngUCbS2jw5v6KpBaLoEdb05BWdgZBgQ8ETP/qZdeIenXcOc0=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[40]",
+      "network": "btc",
+      "key": {
+        "wif": "KzUNtCXbP6sJPRGpLVUZvjAscSdfWj7eEZCrMasydTvsH2UMYmdh"
+      },
+      "address": "18uGpu2XHtpaKbV398cA5z3ztQR7VJPmwi",
+      "message": "18uGpu2XHtpaKbV398cA5z3ztQR7VJPmwi",
+      "signature": "H+3BME1BJ0fXlK65/PZS9ttp/uYxyS7dSQiD68eOVzHufjsbcU9l1nKivRpnPRcElXJnN/LMSPIM9YgVmzA/Mxs=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[41]",
+      "network": "btc",
+      "key": {
+        "wif": "L18vqXW83WLDdD1HBncdvoK4rjXTwLaHTb5w5gcxzGpXXuLN3fRo"
+      },
+      "address": "17isxDy9b3ruvwzyPfJ8eAq3rAAXzRVCkH",
+      "message": "17isxDy9b3ruvwzyPfJ8eAq3rAAXzRVCkH",
+      "signature": "H+humGt3Un1m68TtIoWZLvIWnWx6hb1cQslMzAg0ZghGCDvrN2N/3VmshUxZLaC9nwFUogWUL/gfkKWb1XpgtUo=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[42]",
+      "network": "btc",
+      "key": {
+        "wif": "KwkrkDQQSAx85neUp29aHyfM3S9LVT3g6D8tZuFQ5FTX9dvBNURP"
+      },
+      "address": "123Dwfp6RDMuqk4PNuQZ1FLhACnNgNe4FY",
+      "message": "123Dwfp6RDMuqk4PNuQZ1FLhACnNgNe4FY",
+      "signature": "H0OSxW7HEcqLya7LKWAWQir0FZDH9WCwJcbuMrEUkbxLJs+KXmb2NKipjTFxEni5ovi1q6VfrCZbw7U1WbVU/lQ=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[43]",
+      "network": "btc",
+      "key": {
+        "wif": "KzzQA1fHTjVwHXWjjUwgaPLvZSS9NUHHSHwwvB26BJtrGUdTjLJ8"
+      },
+      "address": "13rt73QHSjHDRHLFJ2QLNDC9MvL8tDg8dK",
+      "message": "13rt73QHSjHDRHLFJ2QLNDC9MvL8tDg8dK",
+      "signature": "IBAvh4HyS72mTOi9jaB2z/rFgiuU/G8aW3HbVqhYhdKPSw73bhlL50E4Kz7EU27FUZ0B5j93Om7wNRBEXD8p/eo=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[44]",
+      "network": "btc",
+      "key": {
+        "wif": "Kxaz6CV1vk9P3H86XH3ne1eucdHCzLG2bmrKVSpyBGftDwceMs16"
+      },
+      "address": "1Hz3b39PfCMnEUiDh1TdRzAEhShaweAQps",
+      "message": "1Hz3b39PfCMnEUiDh1TdRzAEhShaweAQps",
+      "signature": "IGtqzxiqbzujQQSurkbuT9fkPUblzMt43uwWz1+Koq1w8izU3y2sWtrYFWwXCP/DUdM8xt15ahXMdu9JYh34wo8=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[45]",
+      "network": "btc",
+      "key": {
+        "wif": "KyJQ6zs2bVSBF4jGm6sP5WkTFc4HTFx1gp3J84bxwMvdv9CmtU5x"
+      },
+      "address": "19wXdV8ceRQVfB2LyTaGqd5NrKhbkMPSWp",
+      "message": "19wXdV8ceRQVfB2LyTaGqd5NrKhbkMPSWp",
+      "signature": "HyxjlzS8Se/VLRVLjjp0g+eorFPhF7XDlRBVq2uL1cea66hH5TS5K2toUBxhh57NsmN65cSHKVAvUMocsDXwx1c=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[46]",
+      "network": "btc",
+      "key": {
+        "wif": "L19dLxXSaXrfRDEuE7TvBoTdSnCEgg7ngfv6nQzJwRtcKFCF9hMA"
+      },
+      "address": "13Vp66YYuiMvSALRQwXVXWPVsY58SGHWwm",
+      "message": "13Vp66YYuiMvSALRQwXVXWPVsY58SGHWwm",
+      "signature": "H/0jnELT8Y7awiiy7auv3MYzmvdZW/WY6Me7DA1K3vZW4P/nNPEvl8e+VbcamwOumRWyHsJFfCe+uzpExNQ3Gvs=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[47]",
+      "network": "btc",
+      "key": {
+        "wif": "L1ScH9BHd8FuKTP9qYtqmgMw1ejbVUZgCzrFK8FXwdbubzr3ewgR"
+      },
+      "address": "1Dh4SH1wqezkvWr6H7w3g8eCEMAqFfxQVp",
+      "message": "1Dh4SH1wqezkvWr6H7w3g8eCEMAqFfxQVp",
+      "signature": "H8+FVphkG5UykflJdRQECvjyjm4oKVT9PxZd6guGBeT3trV3a90nnDtBy9Xeb9qsabwOvh4vdRfO45EXr695s1g=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[48]",
+      "network": "btc",
+      "key": {
+        "wif": "L21cHbM8Ef2GxhjdXNB5Z37fPVdDYZ46HtxLj6gTBQ1oXLfXnSZF"
+      },
+      "address": "1LjrTEqRbTsHFQfrLsB9wZBoH9RqZSyKj2",
+      "message": "1LjrTEqRbTsHFQfrLsB9wZBoH9RqZSyKj2",
+      "signature": "HxDQz5Kc9yO9k29rCBVL9tBAmRSrf31vyT6v77xVfYXe2GxxE/QMVcdGUTUgcF4PWkvLOhC93d50Wm+ddv4+3XU=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[49]",
+      "network": "btc",
+      "key": {
+        "wif": "L4YurUpTav4iqSqoqWmg9XAg2V9EjecXm4cHXKeJXz46agtBpqNx"
+      },
+      "address": "1MGCkQ8sn9SyfL5HknjSZCFaLvExMpCAMh",
+      "message": "1MGCkQ8sn9SyfL5HknjSZCFaLvExMpCAMh",
+      "signature": "IBQgu8Ap+KY7v88KOzCWiB9ttMH2/nZmAMOcFTfh2lw0nQ+hqBq5GRyIqMb44kcM+eTUzIl1DEjQStjMNK4HTc0=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[50]",
+      "network": "btc",
+      "key": {
+        "wif": "L4hH3E2BQ49MhqFNo6CiM2KpAMUboirBZbiFgSYUpx5b1DdUju6X"
+      },
+      "address": "1GfJB8239xR8F35TmdjrGo2SY8MAupJrLn",
+      "message": "1GfJB8239xR8F35TmdjrGo2SY8MAupJrLn",
+      "signature": "IOpdiP0EtHOCKZn+7ZlFTT7MiDQLeWzspeNchC4bGP6FtH/eqQT5eHBVQPg9/OLY58B7Z+Ir0CVMIaAfIRNOC40=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[51]",
+      "network": "btc",
+      "key": {
+        "wif": "L1ahxHckVaj39EThcPVfNHwKW2sVTziW9U6Q1dKkVaToqXTqXyrU"
+      },
+      "address": "17n7Q4YhL5vKvaTkSNxiwegoaCuCXnZqht",
+      "message": "17n7Q4YhL5vKvaTkSNxiwegoaCuCXnZqht",
+      "signature": "IJeNGUDdVLP0//+189da5cQd4I9VEwPD8hwOC3O2XzNfCkD1JrYw3pKXnQ6ScMak45+Yzt85FJzXqCxtwFCQ6y4=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[52]",
+      "network": "btc",
+      "key": {
+        "wif": "KzgHq24oXvw9eh2qkyTnSCnG1t4hbJM7biF4kztFd3ZVoX3gDT7k"
+      },
+      "address": "15fZ9cGM9h3jYy6mCiYstbRAt2m9xdoi4N",
+      "message": "15fZ9cGM9h3jYy6mCiYstbRAt2m9xdoi4N",
+      "signature": "IKYLZrCU52KxZ5nSqdu2Y4aO4EDgcE12bAUFE6F7AY6oKuqvEYXr16/3GBX1uSltHpbkdfeuC8x6L+6hszQNYbU=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[53]",
+      "network": "btc",
+      "key": {
+        "wif": "L23q8LughXAHZ19QrXPtyfgMHd3nnPqnobUCbZZRvCTCBnmUnf3B"
+      },
+      "address": "143uCjGTcFS7ZcqqvG5Qkp87KgHWp5dmb9",
+      "message": "143uCjGTcFS7ZcqqvG5Qkp87KgHWp5dmb9",
+      "signature": "IJG5j5kL24+GR70kAeiPuEOTA5bgS/5QStWr8d4eSJSwErdFV2/KhffLoCVX307Z7e49/5vfvU9wnOEvrHh75V4=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[54]",
+      "network": "btc",
+      "key": {
+        "wif": "L1EufMThGK16SEMVnU3xvendi3GgJbgiqJJ9my6dbhPrMo3CLyFA"
+      },
+      "address": "1EyqKMSMzSxxZfL8Xxh75apwtf9uE8ZPvY",
+      "message": "1EyqKMSMzSxxZfL8Xxh75apwtf9uE8ZPvY",
+      "signature": "IGR3J5EG4wfqvp6OfxpGgI+IW4vaOEk7jY//i//bkb/N2g0OtVQ1CzJMTpcWex4JJh+Sf1RR6fDdwr53oeU2Svk=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[55]",
+      "network": "btc",
+      "key": {
+        "wif": "L4q9sERTjVXnwGc3jjKnuUzSdJC2DqJkKVkiM9NxcCZTb8vDQgk6"
+      },
+      "address": "1HhnnRbF5HdP9qMCxYUXyZYiFmSyn9km2X",
+      "message": "1HhnnRbF5HdP9qMCxYUXyZYiFmSyn9km2X",
+      "signature": "ILqgn2VpGEvuoAr9lMGZnUfbOUIqYyr+aDQF6sDSfKWdYGMjkw8xkdzv2+K3JH0sizwb7Wk9p/iT60RKxk2XYfk=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[56]",
+      "network": "btc",
+      "key": {
+        "wif": "L2u1XzFbsYwP8zTHJr4CtAVtFXekR3GrnEduCqBSYqx2ZjY5he7L"
+      },
+      "address": "1GX3xLrSWcpi7DystcLhmsLLQw4UVbRM45",
+      "message": "1GX3xLrSWcpi7DystcLhmsLLQw4UVbRM45",
+      "signature": "H5zAuY4zyzWqGzMurQ8S6IuAOpo9klKI3qrWduku/DjBVxSZy292N5Vi41KlN3rPWiuWfcuK/W5PbWqE++xHjK8=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[57]",
+      "network": "btc",
+      "key": {
+        "wif": "L5bFGv4UYzyXoT5C8JH2dSt3439McApNH4mpc5yhhvCRZSZEwxDM"
+      },
+      "address": "1AoXa1rqxGKtPCLm4uYwLoRB8Jno1yPHvK",
+      "message": "1AoXa1rqxGKtPCLm4uYwLoRB8Jno1yPHvK",
+      "signature": "H9ucP/r3fiuADX5GMcrHbucsei3mg0pD1UZMJxxX6u/TxEkK5fSB+ZQpXRYch5Fj8d6FZIus2B8FRvb1WkzvMII=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[58]",
+      "network": "btc",
+      "key": {
+        "wif": "L2utcSqwskdaKHz6xTsvpNAgMVzUbKvtScwzepDrXok38wt1isGC"
+      },
+      "address": "14Nwure8VUK335BhdVPDaPsnbo4cqPNFsA",
+      "message": "14Nwure8VUK335BhdVPDaPsnbo4cqPNFsA",
+      "signature": "H349anynU/ZC+pclPK0WSZY22x/eVqHqD/6SAZKehDQVAn4gJ9b9LCJvBh71gmNiN43KXpUXlP3+3AkPC9rE0A4=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[59]",
+      "network": "btc",
+      "key": {
+        "wif": "L249xHtXB1FTBQYcHk3jjcVHvcDiBUZeyRNYbHbSUHTQpCmE5T3c"
+      },
+      "address": "1Mcwkd9TMw1928J2f32eMFhZJdYNg3DJ1L",
+      "message": "1Mcwkd9TMw1928J2f32eMFhZJdYNg3DJ1L",
+      "signature": "H8GkSuH6ySFFiYdE3SH3yxCiooWUfzWBhDMS6Y6US/MYnF2Fq5JH36GSUDCR6DthzqVhA4IzmOFTRJLXoDVVgM8=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[60]",
+      "network": "btc",
+      "key": {
+        "wif": "KyoFbyB8GdxwfVje91ozpwkBhtL6ZqFhEwpJByRk3hGqW3T13DxQ"
+      },
+      "address": "1313rtkE9YCrRPft6t1cEn7BQLqrGis98d",
+      "message": "1313rtkE9YCrRPft6t1cEn7BQLqrGis98d",
+      "signature": "IMo96LM7pLci5/FNJd3F8FxEAhaNQhr7xY40GJObdTikYvpWrAYYDVJOG8H7GelDCZ4J8TpkNEMwLC0R/Vb6KwU=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[61]",
+      "network": "btc",
+      "key": {
+        "wif": "KyE9ZETbmgPwqiAWzWvpdPvhXjFQY2kmX78n2T6JGheXUNyrpALg"
+      },
+      "address": "1AwDAXUxiQLAWXwS4fXCFWUKFCnnS12hkh",
+      "message": "1AwDAXUxiQLAWXwS4fXCFWUKFCnnS12hkh",
+      "signature": "H1/lcb4P4/OtzN65XkDoQgB3IE+Il2o3R/Xrwcwq98Y3oIAD8jsx02NXUqyftO5fyqew0bmAb2Okx4JczwREzOM=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[62]",
+      "network": "btc",
+      "key": {
+        "wif": "KzYQurK4HrzvKh7etMjpZeCGAheDmyxSZqZLwfgNgs79SUw2HhVH"
+      },
+      "address": "14P2YaD3ZR6uh6Z7FRfeis5k4M1Ju9KtKc",
+      "message": "14P2YaD3ZR6uh6Z7FRfeis5k4M1Ju9KtKc",
+      "signature": "ICvCrCGRoDg4dxNw1+BdKI7APNa57sRluimtKYI2i4LubQulIW4Q+wsQLr/qdIB3ODRPkvt5YBJl+IO2Xumqkrk=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[63]",
+      "network": "btc",
+      "key": {
+        "wif": "KzLPw5tSweTeyipmMn9EumUSZqBvBBovokJNupou3FV1BZUBn1sW"
+      },
+      "address": "12h4uaKw5avZMCSgZspNfMJQNw2BLZDC4d",
+      "message": "12h4uaKw5avZMCSgZspNfMJQNw2BLZDC4d",
+      "signature": "IGkxiYqR6GLArABfy+H/vKVCXrD9Ipsnas1TM6qLKdlRBJD5MnRbBjQ8a34QEhtPJKOZhCtHEEl/3ZcRhF68Urc=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[64]",
+      "network": "btc",
+      "key": {
+        "wif": "L42pHLwDTxVoxdE5Wwfp14Za9v4kx9RXAXPwHriQtBcXRfrxwiEc"
+      },
+      "address": "1EUTJBJ1hRk9zsy5Bjrbgdi6hCn8Vsymsv",
+      "message": "1EUTJBJ1hRk9zsy5Bjrbgdi6hCn8Vsymsv",
+      "signature": "IIs7QwA4Kp+Vmk6Slm1gT5gM0Fp+Ud1gSBsq3PU6HKpFOxhdXI4r2ajc4whsF3DPqiZsW4cprt2TjG7qMGD6qsc=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[65]",
+      "network": "btc",
+      "key": {
+        "wif": "L5dq7x6uSmHG2JeRznCcDqj95qftQaDM1ZHSXB17iyGwJjLNY1yo"
+      },
+      "address": "1CkfqE817cy32ZCNUm61iihrS9GUeSKaW7",
+      "message": "1CkfqE817cy32ZCNUm61iihrS9GUeSKaW7",
+      "signature": "HyRQHFYjYfJf1xv2QFfDBih6Rr8QksMrnCgcuetinSiTVh0b2C+dbkt01hloFrDgxBgrH/HhIlnyBz2RIqi1OLo=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[66]",
+      "network": "btc",
+      "key": {
+        "wif": "KzyziFNa2m2WC84NDBG2ix3rQXYcKHndvCjTkmJQWuoadpQxmdmu"
+      },
+      "address": "12eEcHXeXtmZ7GmP2entf3vVaibj1TLDCD",
+      "message": "12eEcHXeXtmZ7GmP2entf3vVaibj1TLDCD",
+      "signature": "IGPAhXmmtHpuZEf2b/WeKQy9mto+JEXSj9sTq96QyGaCkufnIKyVClnxuO6P+5339BqhdB6IPQUYaaHoJNgs/1s=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[67]",
+      "network": "btc",
+      "key": {
+        "wif": "KwLDpsUW8LWsvLV1TbMkP6zfikWZ97qD8ef234mMe3ex1SXj4HcP"
+      },
+      "address": "184baxHMv9dP8izfuziCCAHrgNsRrLzN5n",
+      "message": "184baxHMv9dP8izfuziCCAHrgNsRrLzN5n",
+      "signature": "IEhwg+hTX1Y9o42O4PGENtq2ztGpuqhzOF0VErCRM5+jr7lNbwVzI8fEzVde7A/dCD5GuGkIz82jbEhW50GljrI=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[68]",
+      "network": "btc",
+      "key": {
+        "wif": "L5irTrWG25mbMjRDvCnbiB22kGDqR8E3rUPg1xRZ3haVz35Q1fHp"
+      },
+      "address": "1FWS3ujasK5oW4THiAoAtUKjaoyPJzTDco",
+      "message": "1FWS3ujasK5oW4THiAoAtUKjaoyPJzTDco",
+      "signature": "H5UHyCchg+CuqeXc9URsvbSCI8ACeNl8Q4OQy8YKpd+rL5b99JBWyZfqjkxolT4UcDSfdYaKvY2yeyGtwF7rTkg=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[69]",
+      "network": "btc",
+      "key": {
+        "wif": "L4WNzfReeAgaEUAkyyrFxVJUB214QWzbKDd8hDXRUwNvPzZWoxVp"
+      },
+      "address": "159BYwD5mS9eTNGueE1Ag24GVbiAi92JVy",
+      "message": "159BYwD5mS9eTNGueE1Ag24GVbiAi92JVy",
+      "signature": "H9pjQfBIJm6FPlKxW65O0XYkGUUVCwWOa+4r8eHDTtc4YKpDy3qUKzpe2pHtRwhGtdd1s7kvjceS88uravZtW7A=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[70]",
+      "network": "btc",
+      "key": {
+        "wif": "L1jsWBe8gRjWE6drMUbTZkiW4eRua6keuJm3AzouF11siedmtYph"
+      },
+      "address": "163c6wB5tvpigRTaHPcgnc7VkEVAVnPCcr",
+      "message": "163c6wB5tvpigRTaHPcgnc7VkEVAVnPCcr",
+      "signature": "IFI6skiJzxQ6EjzDnossNJBNnFmd1EsVwJ0fZw0RSGkMGTXFZE0+Ie5VVcYm8VTaX2lxkPK60JJMAJUs0XDfEcE=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[71]",
+      "network": "btc",
+      "key": {
+        "wif": "KzjUW1UuDSdnsD1RAi1rV2m532qvP9JEnj8NrXbK3nwwag2T4tVr"
+      },
+      "address": "17PBYqGHcUCshcwxUA74krGFxPSZVJGpwU",
+      "message": "17PBYqGHcUCshcwxUA74krGFxPSZVJGpwU",
+      "signature": "H7jU+nembbTdpfz48ZlCAyIcP6Akm4Kt1kvA9t7o6DIJ3FfkffCalSeiNlYqCWTzjg5nQQ17Y6lrMIJ7P4skW1c=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[72]",
+      "network": "btc",
+      "key": {
+        "wif": "KyFQR2j7EtJUPmucd19YJTidAAKFJve8f2Kpgpvc1S3FeFbT1dHs"
+      },
+      "address": "16XBxqa3kReetARy9zr4HxiiMEJxeE7SU2",
+      "message": "16XBxqa3kReetARy9zr4HxiiMEJxeE7SU2",
+      "signature": "IPOHN2BJ3/aTdpv9pUKh8PHzLc5N6yN56xKJUrrcJQMTbi6tEYeI+svC62P6X8pwKodBu5AVhjrGUlsqaNVjT3Q=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[73]",
+      "network": "btc",
+      "key": {
+        "wif": "L2pCvLoNSVzmZpHVQtrmAGtd1mKzUBYCb5e5Fpqfixs4eh2N4Qmt"
+      },
+      "address": "1Et2zPv51myLEijiicfEz5P8j2mS7JoaCw",
+      "message": "1Et2zPv51myLEijiicfEz5P8j2mS7JoaCw",
+      "signature": "IJeaE6Rg41PgxWTdNDcEvWFEYDjHoRRL6EI9m34kMiMSnJuKepGmyp2kRpPqLkoVUrXHpSe7nOh6WcKn72gEmQA=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[74]",
+      "network": "btc",
+      "key": {
+        "wif": "L5ivuZ77LMKmB6qeJTvdt1TSTE3HhfZHRiRGJCXXzK2UqxbqnPpV"
+      },
+      "address": "1LdFKHGMzyeKk7tadZ5kTYdYDDHaHeiRzE",
+      "message": "1LdFKHGMzyeKk7tadZ5kTYdYDDHaHeiRzE",
+      "signature": "IBT+f2JQKrxHx4azXFff6KbbtqIXQvoUBFjoIsnYYVkb2UOwykQtO8qGWrK9Io+d20l8XKzwahL7ZFZ+p5gQ+uE=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[75]",
+      "network": "btc",
+      "key": {
+        "wif": "L4isKMvpjCt9DsUvhD8sRLQvAN6J8rn1hCPgLVRRGJtCRp532Jd2"
+      },
+      "address": "1Hp3WYiPNxRHyqgD2kuKrFsAJkpbbRFwCU",
+      "message": "1Hp3WYiPNxRHyqgD2kuKrFsAJkpbbRFwCU",
+      "signature": "H2vC2xsdEeStM0KRlc11OMpY5GrnV4ij5P9mc9tT5w/mJdEzJClyyDMaIVN7mzVobbRAd1K42ppmJ9esPl0UlOg=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[76]",
+      "network": "btc",
+      "key": {
+        "wif": "L5ZjyNcHyMxBRptBGqJ8J4NY7cwM7sCh2wSF83nEazXCqYcTep3Q"
+      },
+      "address": "1DXNaNXuT2QTsB82JFsDzV6RAHeckPsHJz",
+      "message": "1DXNaNXuT2QTsB82JFsDzV6RAHeckPsHJz",
+      "signature": "Hz5Z5Rw9xLHA6bxaQWbAi8zg2FsCCtVWWbGf3XKrsP5L36vMvGak7Bv+55XiPszlTirgC5U92o+Fgg1y5VIh95k=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[77]",
+      "network": "btc",
+      "key": {
+        "wif": "L3nPAoVpYpWPdDbGLQ57KhG6Jqrs73cUbqaY16bmgvAu5HfdKhvL"
+      },
+      "address": "1BxCxQfdb1H9nwjJPNoyBVgvNAX3aqH9eK",
+      "message": "1BxCxQfdb1H9nwjJPNoyBVgvNAX3aqH9eK",
+      "signature": "IFgCZY7Zzsm9kqL9Y3kHAEI6o7gV9gnEKr7MlB82b1dFPVErqo3WtWsz9EPrdIcGJ1sZyBR0hjXLo3aKsRC1ZD8=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[78]",
+      "network": "btc",
+      "key": {
+        "wif": "L5nG3nroZqaDycChEfDM4WA6Wa7AYTbvacE2NQjZcNLX92GS9G7z"
+      },
+      "address": "1GXD1hfUCRQtN9RuZvovPG41sYZNh93ggN",
+      "message": "1GXD1hfUCRQtN9RuZvovPG41sYZNh93ggN",
+      "signature": "ICOx2DtydZcy/DnrYEanDy+l3tU4sDQVKZ+0LMtLqQtKRgHmxe+qrnnmOfsZsecV9bobpGn1j4GzBd7QgmoKpdY=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[79]",
+      "network": "btc",
+      "key": {
+        "wif": "L113EJ3bK172kW2bDtAP91SVk1DEstGzUU8Ve2WAg9LxWFfy8XCi"
+      },
+      "address": "1Cvb9dMuP6zYgPz7f61d6YRUJBpc3vnmpW",
+      "message": "1Cvb9dMuP6zYgPz7f61d6YRUJBpc3vnmpW",
+      "signature": "II93IbR8zfilNx+y4KgpX1pzSWzKCYLSdD268QviPcbY8LPVk6bDl881NhnOmsXaWMTWbn+GMEhUu/fLcxq0uV4=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[80]",
+      "network": "btc",
+      "key": {
+        "wif": "KzfR68GsosfhHRoQT3XNn4LPkKCbPLZCQEPYGboyTewQQhZEfAsD"
+      },
+      "address": "145STseLAHiMx3n9Yr7rZV89DrCWJx3jEG",
+      "message": "145STseLAHiMx3n9Yr7rZV89DrCWJx3jEG",
+      "signature": "IO9t6GLfom6RTi5f9b3wQm5h101mtivGq7w4n4sclJaTQNJ2FRTIRIjJmBs4LZLeffuXo1NXubIO3Kw3p3Oe8VA=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[81]",
+      "network": "btc",
+      "key": {
+        "wif": "L4GfiNRNSjNiigqiFPsP2h5yPCzVwRjKzJj7AP9Wo8zQnXjT1GSi"
+      },
+      "address": "1FVSNHNwhgqVAwS358CFL4FBP9pQBqRufz",
+      "message": "1FVSNHNwhgqVAwS358CFL4FBP9pQBqRufz",
+      "signature": "HzWvXFMtCPcBvbRUTk8Ty8qWBPHSLvVX5MgygQT7jPlW1LkKTrpv9UkHIETdT7zcAZLS1AH/omT06GFxbc6eioM=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[82]",
+      "network": "btc",
+      "key": {
+        "wif": "KyLyfXnPXAvLJ1A1i4PijieKdK5DNBJJgnsoB6qVZpo3PAsVsi2G"
+      },
+      "address": "15QHUTRdCGNSEgRXtMsdMVGKgPfym5UgAG",
+      "message": "15QHUTRdCGNSEgRXtMsdMVGKgPfym5UgAG",
+      "signature": "IH2iUWTGKOcuZMcmCaGZHjwst+ThXXr89/4owiK+r5XxcxDLYJ9kGZURVdCrA4UzDlPW+QRLQPi0fVlh3vK0FBU=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[83]",
+      "network": "btc",
+      "key": {
+        "wif": "L59oyiTmu6GBJat5uVbRX2cmbpV4yJbiqcNpRwS2hotH44o7agQb"
+      },
+      "address": "1EEX6N6WbQHcsCw2fKa45g5K8QJrF44A83",
+      "message": "1EEX6N6WbQHcsCw2fKa45g5K8QJrF44A83",
+      "signature": "IM9LibOO1APkZqXjgsnNILrW8kwm4GG4F+0bFWx3ZEYeemeVLlrDEZ8wqrX8Dj00AyXjYY9kWpS5BrU+jto+Vvo=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[84]",
+      "network": "btc",
+      "key": {
+        "wif": "Kze2QDc5rm3gNb1q7DSGGEUHi3qZUcTrEwdKFxCa6Pi6GCUmiubU"
+      },
+      "address": "1M2yN1dLupuFNfDDzpQV6eK9WPg8WANwSF",
+      "message": "1M2yN1dLupuFNfDDzpQV6eK9WPg8WANwSF",
+      "signature": "IDqiYmnJ8iXN57ZyUoSuCZn3mjM4IqfZUIk7QhhZ2PHES/wVeQg9emJmu664QF53slPsys5BfhkAxP2LEF63KVU=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[85]",
+      "network": "btc",
+      "key": {
+        "wif": "L1WTP2a6iarAKE7xRYwpDdXHkSybjfW6jdq5v1HUoZrCKMgrKJQc"
+      },
+      "address": "1BDuM6EJH6HespbGLLobPf2ev25KKrCm2n",
+      "message": "1BDuM6EJH6HespbGLLobPf2ev25KKrCm2n",
+      "signature": "HybG6Mi2IbTXKuTFhOdI42pm9b5kD9Tsp1C3TjBUXYzOSzr0Q0yOyr01JxUZs+p8ewjr7TQk6SbEvSfeAuuxtFs=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[86]",
+      "network": "btc",
+      "key": {
+        "wif": "Kzx6BvqRZYYsKMzo5rbhLqaJo6SmR6E9e8T1yzRWhYaPHDS4jya3"
+      },
+      "address": "1GtXw5mybbsvxCGDtqoZTcjdDrbZBCfzT4",
+      "message": "1GtXw5mybbsvxCGDtqoZTcjdDrbZBCfzT4",
+      "signature": "IEJIWKNgYsgg/UkkRnmD5gD7Cb5jJdzuYDUZTuFT1nzillvogh71y7h2M7JEOfToD9G0bHH6nlfW7M6ZDUf+n6U=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[87]",
+      "network": "btc",
+      "key": {
+        "wif": "L5kDLSkJSrVfMVG1dfYiuuhyBug1WoxEyV6YoFaaUza4tTiXizhP"
+      },
+      "address": "169Df5CTDneqekNjjp1H9LVw1csW1UdUNB",
+      "message": "169Df5CTDneqekNjjp1H9LVw1csW1UdUNB",
+      "signature": "II0i6EJOhIKrs75Q6shP/FCBYgQ8MEi/CwKuh3AYWvkkDF/I73wwVWMxgb7WZtZbRAUmQpEgGo5ba7gkIEUOk5g=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[88]",
+      "network": "btc",
+      "key": {
+        "wif": "Kwp5L1U8kNkevRfuJKq8DhNHdKdnhHExWoQFBBgAkcUk3ZhtcgPB"
+      },
+      "address": "1LRffBFQuiJbekXpJgJESuB2v2fhdpG91w",
+      "message": "1LRffBFQuiJbekXpJgJESuB2v2fhdpG91w",
+      "signature": "IN/7MNstRZKQn8ch30Cl3WYwn2oMawqjPN2iJucRcy1+IUt177EpnsBcmu6kcPvBVobaM3g04/A18lPWlAs9qEA=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[89]",
+      "network": "btc",
+      "key": {
+        "wif": "L5WRW5V8gSMtwDnnwwVKh8mcUjtFHhzxdqkdUJZdhDzcAGVMeW4f"
+      },
+      "address": "15KamntmABnW4aWVo8kLbFz5ER78tN3VMB",
+      "message": "15KamntmABnW4aWVo8kLbFz5ER78tN3VMB",
+      "signature": "H/62OtZcztVO7rj7T+XB2nl84vBz514OU1iTF+T6BV9GFsn7VGbIAZ1bDjPmdDKlpqa3xi5MFI10UZMcaMQDl4c=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[90]",
+      "network": "btc",
+      "key": {
+        "wif": "KxNLHVtoxU68ifG6gAriFh7ZSGqDxARMNNfYnffqocobaMM57mJB"
+      },
+      "address": "1JcABxW6TXRcgf5BZNV6u2xmw3pq8FNmUL",
+      "message": "1JcABxW6TXRcgf5BZNV6u2xmw3pq8FNmUL",
+      "signature": "IKjt4WcAd72DgFSvt9dEF62O1VZna+Z5/JFYTXuOp15ndzCz45qLz8Ph9DATZD44B593cKcjZ8fyIKNTkHzPZpU=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[91]",
+      "network": "btc",
+      "key": {
+        "wif": "Kz1akBFdrfEPaDhfqZnNyWD2n3csJmJ3FruDuMQAKyq1uFAknG7x"
+      },
+      "address": "1GfZJwyAQ6MLfNYpUaU2ajxcMgQwZgdfnJ",
+      "message": "1GfZJwyAQ6MLfNYpUaU2ajxcMgQwZgdfnJ",
+      "signature": "H1xEsIOvJAbPAGQ6NAd6Y92TsMdKUZc195F4M+t8V6TukZePlNPG4s6z09t21hNrVo7sUzADm10wa/u06FCTqEY=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[92]",
+      "network": "btc",
+      "key": {
+        "wif": "L4wT4erYbNMZHoCadDNcBevxmPTZwmrJTAtxfg9WJmfZzKn2d5YK"
+      },
+      "address": "18gTSRci5jCuV1qkhcrkXE6wQs3mVXsuJF",
+      "message": "18gTSRci5jCuV1qkhcrkXE6wQs3mVXsuJF",
+      "signature": "H3Jh4UH1s4jHHIzSd5U82cIMeRypIHCfhx5cal9ZzTqq2TYz2+y42Rl0trGEfRSargK3QXuR1GutspSspBP77QE=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[93]",
+      "network": "btc",
+      "key": {
+        "wif": "L1Ls4Bh31kD1wEHYk9uQNudbe74UiBsCv3oepz93KK3ix2iwWQzN"
+      },
+      "address": "18X5V3UBFEU7GyxTBVUDzC9zoKygjyjM5m",
+      "message": "18X5V3UBFEU7GyxTBVUDzC9zoKygjyjM5m",
+      "signature": "HxO5L4rMHfKhKiu2hYI5ICS8SH4Zvdf69TG+TrIHMOuP0OwRnn+Af1ARYQf3C4D8MRsqS2NIPt97JVsFHT0uYoQ=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[94]",
+      "network": "btc",
+      "key": {
+        "wif": "L54jDho2TPS3m15Q3cGyC1JLB34374cJJQg9MQi4hix48S2SzMvi"
+      },
+      "address": "1MH3aJKMpDitzmDeMpLRSY1rr6qJwgGhvX",
+      "message": "1MH3aJKMpDitzmDeMpLRSY1rr6qJwgGhvX",
+      "signature": "H5l0T9ZZ5AENgJaR+OnGAlqYesiyRPV1lS3U9IhyQ6HlSRONfh2ctiVTrxMgAdIeVYk9wYeq+RREBpplqeJMDUs=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[95]",
+      "network": "btc",
+      "key": {
+        "wif": "L1GGWpu1wDDqL4Jk1nHvUiKGPfgqv3A4yZ6PPSEwqRdrHBtLnBVe"
+      },
+      "address": "1AKGsp3mUrsHhQfMzaujRwYQBZxjknTmAm",
+      "message": "1AKGsp3mUrsHhQfMzaujRwYQBZxjknTmAm",
+      "signature": "H9bb30fUNb5oWzK4cr6J6pJsB+foc1KKKaagigGU2qsB5BlJM0gz0T7E1c1/vpIz3cKHIj0ujYihDpzA0lQY+bA=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[96]",
+      "network": "btc",
+      "key": {
+        "wif": "L1UfxnohDeahQXB6we23mCrBexuiGuwZcuBpF7NZcaZEAqCHgac5"
+      },
+      "address": "19CG3Q4YwszMaCACVHEreksKybNSD2LpnT",
+      "message": "19CG3Q4YwszMaCACVHEreksKybNSD2LpnT",
+      "signature": "IAz10RluG5W1uxRo4BAEoTSMVAAn4/7yeq6F9hd5zy9MIaESbixAl1dlA2kQeZzaCMPsQu1rfJ0hogXMWjTMiss=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[97]",
+      "network": "btc",
+      "key": {
+        "wif": "L28wNvfaTxnzEhpMQTbDTfaPVz2nBK3mhsBPY16MoL7LeNXgTbcA"
+      },
+      "address": "18gyGD3527g7rMNs9FAq4XQEwGE364FuoX",
+      "message": "18gyGD3527g7rMNs9FAq4XQEwGE364FuoX",
+      "signature": "HxlQQlCdv9iRDLEagRcrWAZUZ2nt9thsKOaw5fGFok/nCF1VYVfsYVJL9Vjt+Dqtf30H7ZwTb9JBU+uV9kyZi50=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[98]",
+      "network": "btc",
+      "key": {
+        "wif": "Kzvo4Ro7WGJZecQ7yeRirPLFEJHSejsiku1Kvq7A6ntDjGqW62ZJ"
+      },
+      "address": "15WNkcRUMQGqqnniPz5QdCQU4ZkbP85wAM",
+      "message": "15WNkcRUMQGqqnniPz5QdCQU4ZkbP85wAM",
+      "signature": "IM7/m/eWUtMuwwyEcfY5CAsVgHEOPBsXLmfrV0KY1E1NMT88i6Ra4x3XLdUA3JLGRyWRXe1etOcW07WPaq/2RH4=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[99]",
+      "network": "btc",
+      "key": {
+        "wif": "L1pHeQhsQvcH2zpQwPMTXhN7D9bNsdeWscWePqFf4vobcqF2HuEX"
+      },
+      "address": "1Nk6kYcc5Jh3nUCEw15uEaTcuCLmTRmNDa",
+      "message": "1Nk6kYcc5Jh3nUCEw15uEaTcuCLmTRmNDa",
+      "signature": "IA5boXMguIrwQZ62vzl1UX9UqVuu1CDwoOdY3z+lv9/5FQyMAyORL34xV6d4QOpDW6exYX1Z6SXJ4ouCzc5JI4s=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[100]",
+      "network": "btc",
+      "key": {
+        "wif": "KzreACkntbpsZfYfco58ZVnkeRD6eEq9ihYJxqqpZuUgPbtb5oaC"
+      },
+      "address": "18gYZfkRwbvKmDVRGxdAXRfATDFz7PuA7B",
+      "message": "18gYZfkRwbvKmDVRGxdAXRfATDFz7PuA7B",
+      "signature": "INIyfNlUs0D/vFj1twvoWt+xTIPLs1znWEq6TPcoV3EZSX1h/OUbyRAyhTe9cCrk/cxPVu1LBa2+Ow0JBOdxOyc=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[101]",
+      "network": "btc",
+      "key": {
+        "wif": "L5RHA8w5rHDFAzoPmvrMiuGja8ecMEdCHiYeHW65XaLjjCLaPvYQ"
+      },
+      "address": "14LZzTu9HZDQ8EboqU7LF5Kqzq76fneLTm",
+      "message": "14LZzTu9HZDQ8EboqU7LF5Kqzq76fneLTm",
+      "signature": "IE+sHMB+hWIszRFKJNYM31hTE5kZv6ZJkIYtSFbJytEIuR9ZgkRxyhoeyQSjpgkNiGfV7gJfoeYqnVYzbtBSIYQ=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[102]",
+      "network": "btc",
+      "key": {
+        "wif": "L5PxEns2CpgcxxeV8Pu1kmDV2SV7JpL2kccZmgCMshNxhaVbPzK4"
+      },
+      "address": "1K7WUjovPrHiCV1YDYJ63TutnXc5dZRyZ1",
+      "message": "1K7WUjovPrHiCV1YDYJ63TutnXc5dZRyZ1",
+      "signature": "IE5PMjwHCOcUKtENdXnUO3rcvY560yJTN0mh71vO3uaMWXMShhpH9+LolU+bdQ7Iz9XKuRxs0IasZ9pFvZ7l3Os=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[103]",
+      "network": "btc",
+      "key": {
+        "wif": "L3qRc2CwHHzY1oL59KkyhzH6Y4SwW7xjZNuvTs1mLbZ5aKzi3UXw"
+      },
+      "address": "1LWDXFcJLMb7FS46oJFcaFoh6VLBg1E15V",
+      "message": "1LWDXFcJLMb7FS46oJFcaFoh6VLBg1E15V",
+      "signature": "ILrc48iQBhlpJsvkWFM1IrxEGp0emkb5DPIonkvG/I2QiN5zWlTlrr0b/Gos1IpeADDfoXZuwmSoH2oTQqeghAw=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[104]",
+      "network": "btc",
+      "key": {
+        "wif": "KyfHJ63Eb55x7jzUfUZsqNCiV3j72JRCFiLqkvx7FWnKpnE3vugR"
+      },
+      "address": "17oLFjRCUe3p6vybT78zAWQANwquM76kme",
+      "message": "17oLFjRCUe3p6vybT78zAWQANwquM76kme",
+      "signature": "IAJ5a0O6BQWI773vRW6pARa5UD2qGTqYdFZNSpGzcDLbXIXjxiJPO+Tc9fF+0vxcsQBk+Mm3dV1Xc6MbjEpAGno=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[105]",
+      "network": "btc",
+      "key": {
+        "wif": "KxmMLGXged66XBdFVZmjAd7RKGeEu6tzsWzuqAxAtAnJmLfWw5E3"
+      },
+      "address": "15wJkbPmcukGD1r5FaH4SCtuNDbE3gTcXN",
+      "message": "15wJkbPmcukGD1r5FaH4SCtuNDbE3gTcXN",
+      "signature": "IEXoDNPk2ID2WuL6QPl+r7Sh6vLfpVsWGPqMLYgdRB+T++Y5eRphpWE08gf+GHeHpGwxZ35j35ygGINJuPfuxRA=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[106]",
+      "network": "btc",
+      "key": {
+        "wif": "KzLwj9V6QXfVoKFnJAvcs1ywmxR5DPUc41wRtEk3Uoz9siPbG4S9"
+      },
+      "address": "1FYRkiQWhNs46YgegM6XDvPfBqcYemGcR5",
+      "message": "1FYRkiQWhNs46YgegM6XDvPfBqcYemGcR5",
+      "signature": "H+8cEdCRCaWyvdWrAvlGgxtVi9ITE8hq7tMMMOeo3+MzhdGiaODCYYN93QbyCUZCPKbWhZwFAut3E+zwfUm74Qs=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[107]",
+      "network": "btc",
+      "key": {
+        "wif": "L3vSTuYt9WkcpFBeYcJKPYtKUZaBSJcjGKU6u1piMkVCZMHXy9Mx"
+      },
+      "address": "1FykjChZM7CXo5qgcSzhi9EwsfzCGLHJ9r",
+      "message": "1FykjChZM7CXo5qgcSzhi9EwsfzCGLHJ9r",
+      "signature": "IM8Mfu6VeCFcva4xbTd05Tw1Fz/x7ZE9jUhZxwhjZlZLi8FllBexBZUYILnfVWwcnIb60jbMrmYXZeieKj6eTjw=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[108]",
+      "network": "btc",
+      "key": {
+        "wif": "Kwh4pCJh5s8pnccGz775q8vxyXMgTh4VRhfMiSy4j14o5aQMdcxS"
+      },
+      "address": "18ryNP9Y6sj1mM1ao8VJHAnnVE6aMN9BZj",
+      "message": "18ryNP9Y6sj1mM1ao8VJHAnnVE6aMN9BZj",
+      "signature": "IHksgi1przvnIEi20+1FU1EGJJTE2A0qsxgjhZssDi1akIQxlIgzcHG5a6kumOYCLh2pgnc6SSmKR0fn3BQTsRI=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[109]",
+      "network": "btc",
+      "key": {
+        "wif": "L2bSUYqCxuB1hktostcCmUz5FQPu5Gp7sKPEnDNhQ29kQWk1Q7og"
+      },
+      "address": "14b5i7LT88TVLa8Xc15fZ3jTsr28v7TiaW",
+      "message": "14b5i7LT88TVLa8Xc15fZ3jTsr28v7TiaW",
+      "signature": "Hyp6mq3VlP3DSQERz084eYwU7uycGy9yG7maS15apk6TJ9nD3MsAzqwnC7DXrAUywWqkgPPVcpd6wRB5E4xPzGc=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[110]",
+      "network": "btc",
+      "key": {
+        "wif": "L4PbYoyd8u3aRXyJLsha6Vu5Lm8DT6W3ecqQVgqJzYyco6B8HCiv"
+      },
+      "address": "1AM8daWg9Yo7QQsqhn8pTM8aqzYJzEfv3b",
+      "message": "1AM8daWg9Yo7QQsqhn8pTM8aqzYJzEfv3b",
+      "signature": "ILm+EsrjaLQXcz+TssF76ucykZeZysUQ3Ycl4c/Yia75ZrCTl+Mf1RqIS6pypMmzguobC2ZvDLWn9YFVORajc0M=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[111]",
+      "network": "btc",
+      "key": {
+        "wif": "KyxE7fP7DhpMn2MKEL5MgNAAceUfRg6HsGdYSNJcdjVaHfAw6CXo"
+      },
+      "address": "15Z5e3wPA6pPFBjtZDv63Rrvnpjfumwfcb",
+      "message": "15Z5e3wPA6pPFBjtZDv63Rrvnpjfumwfcb",
+      "signature": "IMIXhUwnhG86Y03Ijt8VZ6MEtnt9UXJIHvRL2PWssBJI75xpypG1GcfHoSDKFfN44eAqoJ0qvoF+IOXfq3cNdxg=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[112]",
+      "network": "btc",
+      "key": {
+        "wif": "L5APBPo7aNbg92citzXBaHEjrkHNVRKhcVRHF3iZZzCA6XDSNtEF"
+      },
+      "address": "19QVaXZURXyS8u4akAcVvSskyTYNwdMNQv",
+      "message": "19QVaXZURXyS8u4akAcVvSskyTYNwdMNQv",
+      "signature": "H3j1BjzgW928ObBey2vSg2WF5USGXC/at3X2wlmim1/QTLqI6lQExoqMidiQ1yC0CVl52ywod7FSi3MHAeV0CGo=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[113]",
+      "network": "btc",
+      "key": {
+        "wif": "L4fy5cT31uAavPSxvrtFvMEEHRw64w4Lv1HwC6871dh8ZTVFr7w3"
+      },
+      "address": "1KXFFRd8jenZwikVsH3waxTcBqvnnWHYSG",
+      "message": "1KXFFRd8jenZwikVsH3waxTcBqvnnWHYSG",
+      "signature": "Hxu2odpNOycOIDeVxBgvGg7Z34ASkKYY91Ro0gHwX8LuKG2VRN2DYFcL0i/bwrcXd7ohHTC6/HQM94HZXfYv7v0=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[114]",
+      "network": "btc",
+      "key": {
+        "wif": "Kxtdxymf3TYjJbnYNwiLBudCBbRr1tgFF5tZFUB2bEpnQLtjNtCo"
+      },
+      "address": "17dyke1cznQZbo9FFTiJTcF5EC9UDYfHa9",
+      "message": "17dyke1cznQZbo9FFTiJTcF5EC9UDYfHa9",
+      "signature": "IArkfHdNFnkwLIPabpPak96mNyjWW16v1rAHJv1x8If8avXsz7XP2y4bUiMEm1ubMsISm43mRzgMv5ZpYrsPFRg=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[115]",
+      "network": "btc",
+      "key": {
+        "wif": "L3aUQkcjEVgG3sqsL38uHBS7ryRTRuXktUAnkqU333C6rzbtDjw9"
+      },
+      "address": "18zbhF9vCuXdCo6aUVgrkCdHmUriKhRRb2",
+      "message": "18zbhF9vCuXdCo6aUVgrkCdHmUriKhRRb2",
+      "signature": "IPXpultX/xpsIRLbyjpBQ39ifMDk281+PkM9wDj6qHMhSoU4fqozelHPHvYPdqIgDKKA6QE74oy+KzJRTWN6dYw=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[116]",
+      "network": "btc",
+      "key": {
+        "wif": "KxwYk3eAZD7L2WomPafxe73FbpDMiAokE2DcWi9B4TiUeNjT85np"
+      },
+      "address": "197U8iN2qxkRKZs6ouAD1eUiS9zxPb9sAW",
+      "message": "197U8iN2qxkRKZs6ouAD1eUiS9zxPb9sAW",
+      "signature": "H3dUUpC91mx2t6OOUlfl2qcaVx5nZWbf5VKck3YZV3R43GpTgLlYLgBr5lVm2pJK3GXSce0IILPGxbuIQp6u5l4=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[117]",
+      "network": "btc",
+      "key": {
+        "wif": "KxBsZexBjcC66fYGdr9M5fmUWjyUNBXRDRuCpt64jnwzNPMmGPiF"
+      },
+      "address": "12enMBzw5rNAnvqhgZCgF2GciVMT5uhaBg",
+      "message": "12enMBzw5rNAnvqhgZCgF2GciVMT5uhaBg",
+      "signature": "H5IkkOaTUHkGVbxQ5bwUgcuohKKzoU0hJVBuiGYk/bIJ/rYKzgMjxIVDXuGxTaUg3SEoThv7yH0vq76ZnrISVgY=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[118]",
+      "network": "btc",
+      "key": {
+        "wif": "L5hHKFm3Jmwiih4XFtRE3nXST92JaY82irdztrEn5NWm6HytcfjY"
+      },
+      "address": "1AsydSHMj14oKps7hTnwjyM12gCKL3PcH4",
+      "message": "1AsydSHMj14oKps7hTnwjyM12gCKL3PcH4",
+      "signature": "H09V/Tfkgg7ToNQEoM5TWFRheAKPsA5eBxAgfmMLpeE1pzXWVwfqAQ8vNREN8MYv43YPy17jNdstbiOUQwFRGy8=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[119]",
+      "network": "btc",
+      "key": {
+        "wif": "L1R93kS3DoxQMvcRMDBjUYgnRA9XTeLGUEvP5xhc55VfxsP5zQfS"
+      },
+      "address": "1CMqXad7rHZNucU5x3DPHjCxX7F3F6XtZF",
+      "message": "1CMqXad7rHZNucU5x3DPHjCxX7F3F6XtZF",
+      "signature": "HztpK83pdtiu0CNf8mhzxUFfFPKOBcsqWLRZygHWaDxLtFewYMxI2yG7NZgzlJ7pKAcD0JDJ3RufDR6VeZxwkN8=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[120]",
+      "network": "btc",
+      "key": {
+        "wif": "KxF9CpKkm4U48LBRegV8oXR7M2sZHNArnr7gjotgjJhUeQRp46se"
+      },
+      "address": "154ArLdUuCdtWef4d26HEuAqCWmMDDUfLh",
+      "message": "154ArLdUuCdtWef4d26HEuAqCWmMDDUfLh",
+      "signature": "ILExo1wGDChNrLMEoELq7i4HzMEjGH52klKTIjEL6eC8IEcry1XYoKX3adOT0qYNWy8viJSOi2CjJKYqZAWzDFE=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[121]",
+      "network": "btc",
+      "key": {
+        "wif": "KzLn6YB3AdgNSrySfT6qWvn82GVFqy91CssiaeGvZ7GjEzpComau"
+      },
+      "address": "13cfNWYKWW65fT69WhgtNeRJypxcuE9VyF",
+      "message": "13cfNWYKWW65fT69WhgtNeRJypxcuE9VyF",
+      "signature": "ICDFc+8R8Bnljs9TSsmr1qzTbm431AkRUenZ5kf/hnGiAN3mgq7E5BiAyE67r6thT1qDSMf41xujvtznLW9ZdTs=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[122]",
+      "network": "btc",
+      "key": {
+        "wif": "L2fS5SMGqM7yVTbhCRm3LwbuzZMkWVQnExHPXzVmd5szzbKySmsd"
+      },
+      "address": "1Yi45LzwCSGvaDKfYZKYw1YJLgz8R1LLJ",
+      "message": "1Yi45LzwCSGvaDKfYZKYw1YJLgz8R1LLJ",
+      "signature": "H9b/nH/ohTTW/qcG8Y3lRaRf8JdtEN2uOcswWqssyDK1pMWH6SxLTZcQYwWiMzbqebFzIaaM1dDTcBcP1ca/eGY=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[123]",
+      "network": "btc",
+      "key": {
+        "wif": "L2PrBqtdGcvQoudokcHP5STP9qQBmSYHpz23pyak7xAzPzzS3i26"
+      },
+      "address": "1JK3nvbnTBiV4Xsf9WLgHrwe1Fk4ZPvxLw",
+      "message": "1JK3nvbnTBiV4Xsf9WLgHrwe1Fk4ZPvxLw",
+      "signature": "HwgGpTDMVS56ah/DgXri67vrBrAl211+sVIHkziP2Pj8c1KBEeukRttTkwH65HnVmLC7wF2sPnHpyV/6TOnsnVw=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[124]",
+      "network": "btc",
+      "key": {
+        "wif": "L11aCz6eeEChnAnVGLEGghjWFf1LvGZdhRNMckBcy9P4znSPCpmm"
+      },
+      "address": "136V7pa6xJTwe3ZjxLTwcYXCjibvVPJfem",
+      "message": "136V7pa6xJTwe3ZjxLTwcYXCjibvVPJfem",
+      "signature": "IEEtM743yIerINdN6jktzb6FLbFLlABW/LSWP0PZyLASoFbKZqZelOr/SlM/Yg6WJyzTpkH0PK8fZ9xM4/TpoQY=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[125]",
+      "network": "btc",
+      "key": {
+        "wif": "L4SJCt8TyBrXutYprHVLTTLMJEoRwRyPxPqP49Dd5F5kP5m2K1zY"
+      },
+      "address": "1Le2rCqhgXRMJnWCBE7rBHdZ8kq6BsJ4aJ",
+      "message": "1Le2rCqhgXRMJnWCBE7rBHdZ8kq6BsJ4aJ",
+      "signature": "Hx9eWJSJfibOjV3GF5+WmI64T7G/VMjZqqd86qQ4ZU+Ky+wuFyw0DOwoxup+3+sp3wmNvgM1WbPu1rymN3YD1O4=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[126]",
+      "network": "btc",
+      "key": {
+        "wif": "Kz5n3JqP7gcEXNyTyYGdEFcqMvmNEKRFAJtXh2EkvqAeZ4Pgf7po"
+      },
+      "address": "1MtCnAy9pMeF2bnoZgxMw2bf3gjW9JZL6T",
+      "message": "1MtCnAy9pMeF2bnoZgxMw2bf3gjW9JZL6T",
+      "signature": "IBJCJZa6tsgbCvlVoQh8K6JkdP804rqs4tmZ5RUmxoalEjEYOd+AE2ClEap6lcF9Ej3R3cVcvscMTFqI3Dicbdw=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[127]",
+      "network": "btc",
+      "key": {
+        "wif": "L323hwwEN6FfsJd9a3szoPaPNQV8uxJdMPqdvXv8hapJJeiRrgms"
+      },
+      "address": "1FiDyN7y88jxpanEna6BbjzEyUHgjL1UVr",
+      "message": "1FiDyN7y88jxpanEna6BbjzEyUHgjL1UVr",
+      "signature": "IJ5052PUxE+7kSabgaKyG6VPlSSAS/IXlb55OmnVvBaglkVnmcADG8mWKpoPftCEOdJkxGrPMyhFsQET5jyTckE=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[128]",
+      "network": "btc",
+      "key": {
+        "wif": "L4n5iVXA62GBg76wcDCAojtKLf6WyEbZxqo8zqFvGENHQizMhdej"
+      },
+      "address": "18pT7zb9QgpcZoLAFBBpbBkJqe3BZY5hhk",
+      "message": "18pT7zb9QgpcZoLAFBBpbBkJqe3BZY5hhk",
+      "signature": "IGlDmbTF34a+XCct0K681DOl0NfzuyLJDfLoAVTDhSvpIqVz08cMRJcyuRZiXfJfOjGGpgzTgXZZJL6YsxC/1Mg=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[129]",
+      "network": "btc",
+      "key": {
+        "wif": "L1cu5rD1iAZmcAcgK87o9jF71huojDTytNVLYFQ1Fact8EK5B7GB"
+      },
+      "address": "142ZivDuV7mGWCiUpwdQ2z13L24tMKidq4",
+      "message": "142ZivDuV7mGWCiUpwdQ2z13L24tMKidq4",
+      "signature": "H6uxflO+kXQkvfw+vzrEAubB/W32b7+6qNMQCwLLNh5pppt4EW0NHUClvBJ8UNfO3ZGS48V2NOu7a9wcDGgcBPU=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[130]",
+      "network": "btc",
+      "key": {
+        "wif": "L3fL6nKqvtqgbYwpquRnHNuqqVGWi2DxL5vNXFzfuMKDBE86mPSh"
+      },
+      "address": "1BtCK1CiFyby9JVX6wJUqoN5nAuyNsaAkE",
+      "message": "1BtCK1CiFyby9JVX6wJUqoN5nAuyNsaAkE",
+      "signature": "H8a6eRXEY4z643GeLsknfULPFUR40/7VgSp0FBYrWrNTx9qvXsQEfaYkG8dGdBUWmNEe9kL0Au9owH1XhREvwY0=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[131]",
+      "network": "btc",
+      "key": {
+        "wif": "KwRxbCHkp7U6yDj8Nzm6mfiYaRfQxi6gAwkDWpsu79sCbJcA6xxd"
+      },
+      "address": "1JhTugoaUiSk6a3UvBfs6DH5RkLr9uLbBR",
+      "message": "1JhTugoaUiSk6a3UvBfs6DH5RkLr9uLbBR",
+      "signature": "H7z0nHp0DHZUtU/yy8e+UUsEN6XYxZTRVcWvi5meQ9oEyWYpYgDYC95FSNOKZAkCfuNrDY3OV6gMIXGn/esJ1SM=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[132]",
+      "network": "btc",
+      "key": {
+        "wif": "L1XqH456GCKsRPrgnd18wPQVs3WVcuxNGBmmEdRHFdcaM3MJKg22"
+      },
+      "address": "1JwwdHUvLsfsyVUoskfkBTvyYqLtncXLwY",
+      "message": "1JwwdHUvLsfsyVUoskfkBTvyYqLtncXLwY",
+      "signature": "H5Q1Ztqtev6s3uCYROvPvpaYJtfKysa5FpGxAN1X7vswJpwFMxgIfzALOKcx5wLqNVDMz1tfDbnHWMGG2k1ETVU=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[133]",
+      "network": "btc",
+      "key": {
+        "wif": "L4JgXdcdS7v4Rmw7YAe8Sxig4FFSic3HVN4atG7H7ArAMmjqLRHX"
+      },
+      "address": "13hd26fp8TzEXJNeUBNdcfnfvXQFGAAhTA",
+      "message": "13hd26fp8TzEXJNeUBNdcfnfvXQFGAAhTA",
+      "signature": "IG9AzsGcCEepGaPc2Qe2MP/2flR1ah7ncP6zbX9c6uwE540zNn7X1oFfHGQZFpOtERkgENYSfrWY/Wq5iqRQYZY=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[134]",
+      "network": "btc",
+      "key": {
+        "wif": "KwMgjkwwWwDeG6cDXsmaQCkVM2pSZzXnHwMxrH4w1oniQsuaPSnb"
+      },
+      "address": "16ucY3uGJi1pptFzKph9nsQzX9L1Zah7qx",
+      "message": "16ucY3uGJi1pptFzKph9nsQzX9L1Zah7qx",
+      "signature": "H0m05aWt0CCCNWooc3CGxYyjxw5ziao3Gp0FxYRMkE3x9PY5XHlCuUVWzEy1jLfGSiyaCyp90b7Z0oFQuQ1PxT8=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[135]",
+      "network": "btc",
+      "key": {
+        "wif": "L4SQQFAqjaoHmzxWnzzDm83uRhLywVGAogTjJqu1CfHRpFoNRGtp"
+      },
+      "address": "1FLGMUND7pQKV6FbLZ7GLChPpHjYuzesw",
+      "message": "1FLGMUND7pQKV6FbLZ7GLChPpHjYuzesw",
+      "signature": "HyAcsA60GqRTdXu3cG5+u9Xo1gjhwPkAIY9R8dX7sTN4wfrSbeDITnPQWMGd1CHC1n4N/TYygsm91HtpF71F6Cs=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[136]",
+      "network": "btc",
+      "key": {
+        "wif": "Kwsmpz9fE1zQqZM7ieypBLz6dRizLQMzzyELZV8Jk24MbJT19N8k"
+      },
+      "address": "114frswQGaefdfq9ZY9gT5N31gLX3MWjGo",
+      "message": "114frswQGaefdfq9ZY9gT5N31gLX3MWjGo",
+      "signature": "IJzFqaDw91unjuwMxG0xumDbsceBJFg2b9/aryxg/CeluydKkJDZhlsd2lcyPKCLSth9utwlkmTlN10Q5sYtbDo=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[137]",
+      "network": "btc",
+      "key": {
+        "wif": "KycA7FhTrG84uikZ1o1pNV11rhSSAQM623thGeVH5pfXDMPMHSZu"
+      },
+      "address": "12nNtkmjgHQmq4yKgtbNsgBnqGfUXBym6f",
+      "message": "12nNtkmjgHQmq4yKgtbNsgBnqGfUXBym6f",
+      "signature": "IBe6FAwyq5gGh9E0DRGddzqW6uiqP4bOzgsrp4aM4oGccboaLED1EtQ4BxiVbj0CsHTkAJxvSvH4itMIb1LJc0E=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[138]",
+      "network": "btc",
+      "key": {
+        "wif": "L5fWXwd7Rw7E4yf7f4WtiSQmgqq6HbtnHqdUDsWf1s82W2Hfd5fa"
+      },
+      "address": "18zYwELNgkkFo8BH1Bssq6BabtKCHGUWHa",
+      "message": "18zYwELNgkkFo8BH1Bssq6BabtKCHGUWHa",
+      "signature": "H8ESgZRxOis7+etBcEqQ2Tqb+41ymg4DuEoTIB6IeyVDOcjdjcLBfoXSviVVVcpowGsyGnUVg03HpF7pwV25Ih0=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[139]",
+      "network": "btc",
+      "key": {
+        "wif": "Kz34CMzUxYnXzJzCcPWF4Ta4ckF77wZ1YEcwu42b3PhUiqqjFxQJ"
+      },
+      "address": "1PcuefFpE4JPA98t5mFuk9666rdq56iyFQ",
+      "message": "1PcuefFpE4JPA98t5mFuk9666rdq56iyFQ",
+      "signature": "IF3xL4OiZmoMe7faKDGpKXBfoAi6B3fn9NnZ6hH25iNfvcmxaeYyiD12qsYtObGHgsgU48+EusKHQig2e/s988o=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[140]",
+      "network": "btc",
+      "key": {
+        "wif": "L58PShsyAj785EwXbXbpNUwnF6Vtf2XVXXkuDWamCVGgUYgXZicU"
+      },
+      "address": "1HNHDnzL5ivHYH32Zno7Ve6LUuN8BrUcsr",
+      "message": "1HNHDnzL5ivHYH32Zno7Ve6LUuN8BrUcsr",
+      "signature": "HwwD+jHPTm9Xk0M3LYja9NF5b/6HFIxFXIdjI4H4tbjfvwg5NVA4W3TEhGCnV8H3Np3ZfHLox0Z5kf7B2/4YCEE=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[141]",
+      "network": "btc",
+      "key": {
+        "wif": "KxJUYAxARCKvCmhxoT2x69DKqJmNw2raz6LHhqUXyXDKGEaj3Na7"
+      },
+      "address": "16vw5dMgCHA9ykJLg66Csjgj6d3GUAQcXN",
+      "message": "16vw5dMgCHA9ykJLg66Csjgj6d3GUAQcXN",
+      "signature": "H3FE5gcyjPXC2zBWsOQzZ1/gen3fmlqkhu4OOSajmT8GUQQsguaDAp7rub2EqNvBoJ9WbS/zG98eM85SEJRTiLs=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[142]",
+      "network": "btc",
+      "key": {
+        "wif": "KxQkTAQFSZoLb8YMruhTM86dRkLn3ULV5wZUr4aXg1raEE8xmtr2"
+      },
+      "address": "1CxxVdX5vFjjm4j7HFdNs95bjHfqYfw2km",
+      "message": "1CxxVdX5vFjjm4j7HFdNs95bjHfqYfw2km",
+      "signature": "HxL1S3suJvp9/mwbAtUgfWPenavgWlJ/0mr7sHPFpMQaaofMIX8i/2GWgACdg6ydw8QEI6DvSGIjKsAYQFnN56E=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[143]",
+      "network": "btc",
+      "key": {
+        "wif": "KwrjSVqzdQkAdRpJStoRe8v7rBdjqVTmP2WN5gUTuyqA1K5nWoHa"
+      },
+      "address": "1F6RLtVepf1YmBJ12XLtc2ZPjis6MujFV5",
+      "message": "1F6RLtVepf1YmBJ12XLtc2ZPjis6MujFV5",
+      "signature": "H1p7S1Sh0+osdbBNMRfgqqU4JcvNe0eO9b0k0QzBp4zmLnkwKSf167+nxdVHaB5Vm4YOz0k9UappNnjibBlf/kI=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[144]",
+      "network": "btc",
+      "key": {
+        "wif": "Kx5JQKczGQ4kvkwzjQgMDpsGGmovPqTdnKC7HfMEzKBBLsA38SJ3"
+      },
+      "address": "18EN4qWBkc2oui5aSxg7AVG1nTakH2xvJ8",
+      "message": "18EN4qWBkc2oui5aSxg7AVG1nTakH2xvJ8",
+      "signature": "HwJblWRzZh1C91C3PKsCKG1rer+pk/mQw7/0uT0HGHY7XjfymI7t7gRbU/2imq60wf/oDxIqs6rZVO0C/K9gbEg=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[145]",
+      "network": "btc",
+      "key": {
+        "wif": "Kyne8Y5kRHBVbrG5WskGBHcSUJscDxACbT6oL4Cw1HvjtiZaBzbi"
+      },
+      "address": "1PL9j8JE9NTAAu9Em5dKJQ7Xngf5B1BKZH",
+      "message": "1PL9j8JE9NTAAu9Em5dKJQ7Xngf5B1BKZH",
+      "signature": "IE/9pf6kC3ayQ054+aD8kJiuXTTN1s0ql4j12wA3RxEyKDbltLHvLH0V98DNmvjTdzmLqBLG5GAkdBwYVIhHeBQ=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[146]",
+      "network": "btc",
+      "key": {
+        "wif": "KwRW9DHRE4ccYAnoKV16WXgeceyVohk5u6LPwYoFzoEudS1sKBFk"
+      },
+      "address": "1JB7EWy4VstHUYYShso2hFQemB1c1s8WXk",
+      "message": "1JB7EWy4VstHUYYShso2hFQemB1c1s8WXk",
+      "signature": "H7cdWu9GGqkujGwPFMjFvfzUdGWVWVMyCfxaerENqv+NQ5YkBY9PExR3C3lCzx+gf1j8Pbg5E/sdfowubMMxhL0=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[147]",
+      "network": "btc",
+      "key": {
+        "wif": "L1Z9cVF2SwTcMjh9tv6pbtq9RKGvuvw5fpd87Q4RTks1RLSwefRh"
+      },
+      "address": "1LUjN5oWUtWDYLV5CkF8h4jTtsab8QqwjQ",
+      "message": "1LUjN5oWUtWDYLV5CkF8h4jTtsab8QqwjQ",
+      "signature": "H8mqfJc+FZehDAga90hPH0VfIvfHi9PwvJIj2C0K8bWy+t7ASmy45bbouLsfgt8X3m32l04WfXK4reSeHEi4x3E=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[148]",
+      "network": "btc",
+      "key": {
+        "wif": "KyT3az4Pq7NJS3KSq58DRPp9CpFXnsMEan1wQeFB6tmvYzCSunYE"
+      },
+      "address": "1Nf8eRSRgkp2RL1Pfnr4fnpxMRrjSPRGhR",
+      "message": "1Nf8eRSRgkp2RL1Pfnr4fnpxMRrjSPRGhR",
+      "signature": "IBULc7dfaRlAlg9ogbWH7l6W5DXQWbtCZhgJ17RKmj5v+a3Z2fvMMGcDHJv2uaSSowJXrnYIEgMd6LtqNFaHh2w=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[149]",
+      "network": "btc",
+      "key": {
+        "wif": "Kyzxe4zYuFaUPzcft3aa9qAR4zdZCMmUVPBwP9TupTTVADfmsAx5"
+      },
+      "address": "1BGN1Vfd8XfTFp2gkgHwaSvypu8N3UGxPz",
+      "message": "1BGN1Vfd8XfTFp2gkgHwaSvypu8N3UGxPz",
+      "signature": "IOUnxp6MOSdjATJh50SVfMEIZz9uCi9o45P3cNTQB66taaJIRmr5LSlID+xR/TSJQhQfAqbxytKGwO+sZYOMjgA=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[150]",
+      "network": "btc",
+      "key": {
+        "wif": "KxacNvHwdjWF3FTbuDb9s1reUrvhdpYHYTHw741jQeuKRKYBQVmi"
+      },
+      "address": "182sS9BeAgSyx6WNDJidthdtfmu3CxHp3g",
+      "message": "182sS9BeAgSyx6WNDJidthdtfmu3CxHp3g",
+      "signature": "IDF+wb6KSMKaquxqziDk1l3pxQEweSy/0wkhuPuvnFFXZGvUW6d+Yc+LDrF2IzKam7RA2868k9vgReLrb7oN5Fk=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[151]",
+      "network": "btc",
+      "key": {
+        "wif": "L1KsN27ic9GxsWS8q1wqvhS5p2stifxhcibXgJGfQsoxdmutvc2E"
+      },
+      "address": "1CgftGrr6zd3JKLGLZqjg9XkwUQos9TzKh",
+      "message": "1CgftGrr6zd3JKLGLZqjg9XkwUQos9TzKh",
+      "signature": "INM62jukmMO2aAYMPIdd+ZX1wuVpxzYfTiuWI59t4X4AHqD7uekp8pxVjBe9gJkicxUiTjvnFkchEXimnIUJrMM=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[152]",
+      "network": "btc",
+      "key": {
+        "wif": "L2JoR6K3gSUu3ZTjVsMZSGuqRhz5bwN55PdfkDAWXUikwEJVjAg7"
+      },
+      "address": "1LTA4MuaQfSrxSoqKsSZWnzNqYeapsBFMy",
+      "message": "1LTA4MuaQfSrxSoqKsSZWnzNqYeapsBFMy",
+      "signature": "H2xHxz3Otat2odzjmWMZ+Prksrjb3SRp3m2b1CEvXVi1XpZOeL8cwU3yFLSoC0kLMCTy1Z5Rh7SfIysxFWZjcxc=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[153]",
+      "network": "btc",
+      "key": {
+        "wif": "KxHRZ1QWzWTj5tGkCpiwvmmnqLwwuzTnWsyhacpsRM53hn92kqf8"
+      },
+      "address": "1PRtA7hCYzrFjuYTymsx95LTp32zM2P3pg",
+      "message": "1PRtA7hCYzrFjuYTymsx95LTp32zM2P3pg",
+      "signature": "H6eqmm1HKhyMR+gZgPzWlpRXg2QPNgXB3Zge5monKaDIYLqIFno6JcHbGPQlPrcY1LeIIfNWP3DVgprQovQ2i1o=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[154]",
+      "network": "btc",
+      "key": {
+        "wif": "L5JosQVcAP5Q7ApyGq839eDUpYvAoDppHn5sXFbZkjhWKjsD9BaJ"
+      },
+      "address": "12JcGBZza4Vrdn3mGyv7WoxMHqkTQYRLs9",
+      "message": "12JcGBZza4Vrdn3mGyv7WoxMHqkTQYRLs9",
+      "signature": "H+d9w64at/B26WPzoQCtOuFxYKxWRijrEqxne9broAiXj8cHXgdYUmCfdEeTcdH2wuxti901hUpu5zfyZVBpZoo=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[155]",
+      "network": "btc",
+      "key": {
+        "wif": "L4wNfTzzaFjMwfkFemTAwmZgDESVf8f2QTfMmvojBzn4eoqEhsmR"
+      },
+      "address": "15xVtXWQSmiDF1FVbMq9mTBrySLrWJLDdB",
+      "message": "15xVtXWQSmiDF1FVbMq9mTBrySLrWJLDdB",
+      "signature": "Hxs3TMFAV1XeibZyI/Rq5X6ejbozU8e+cZDZ39FCKA1KN92AFvtkUxSbqUWqLKAnkfBiz8bDyLl531amqMHiN8M=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[156]",
+      "network": "btc",
+      "key": {
+        "wif": "KyJyrAr5ugMeTEntTNBDyPwLbo2YvQVBrHtKv7nPYPK8XKSRZg6a"
+      },
+      "address": "14w13xbzCdCvrYLrGWdi6ExWP3jSLB3Pqb",
+      "message": "14w13xbzCdCvrYLrGWdi6ExWP3jSLB3Pqb",
+      "signature": "HwfQg1x1PfBYxkPutK+CDqPPtWEQrHaEjuoNB0R14SgnX9RYcvZIHl5cz8KYiWRh6lwvTmxAf+FPL0/2jiE0kUY=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[157]",
+      "network": "btc",
+      "key": {
+        "wif": "KxKxt7ntTDhLLy5xhuAS5YAxksSp5ceP7q2pvruxL5vdZzmoRHKG"
+      },
+      "address": "1F2xJ9izn5AbXmVQjqPfEnrTT5AFDa8xFB",
+      "message": "1F2xJ9izn5AbXmVQjqPfEnrTT5AFDa8xFB",
+      "signature": "IL42d1xHf8R7PF2cJ1+BcOyjYzZNWovR5lVegBF1vT8wHMj2FCCw+OmywxN58BijpR2LDQsKsHkED/8QwdAaY1k=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[158]",
+      "network": "btc",
+      "key": {
+        "wif": "L21X7Po1DuB49AhBiTFFQuVywaBRgwxKKdwZv5vRnGKX26wtKg41"
+      },
+      "address": "195BmjZJuz6Kc9vj6Sn3Ujw8F2amAVu1YW",
+      "message": "195BmjZJuz6Kc9vj6Sn3Ujw8F2amAVu1YW",
+      "signature": "H0+ZEL/kQ1AA9ha9Zgkk6mPmGQCqDPPBiaU/aMEmfz4gNDODDwAuDxQVBwoFIkp5QJ1l0NWuOBbTVEndaSOrFig=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[159]",
+      "network": "btc",
+      "key": {
+        "wif": "Kyqk7GgVWaaJSa681qmNPdY2j7VqhcJ9aUqBWCrF8FLTbyq5A97z"
+      },
+      "address": "1Kp4n2Z3RacDrwAF8m7ZhFYBjVzSP5EG3v",
+      "message": "1Kp4n2Z3RacDrwAF8m7ZhFYBjVzSP5EG3v",
+      "signature": "IEcl8PyC89VOmo33PiDPhUQnDxWzg336QHu3sZ54IrA9KNy0l8iaavWiMt/o6aK1ednn1FZw9NL66PVAyxSZyDQ=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[160]",
+      "network": "btc",
+      "key": {
+        "wif": "KxYddEN95vRt5KMDXSzX3p7m4E3KL9aBPaSNAZSRQVQeSWizHEtC"
+      },
+      "address": "1Ahzue8Ksu46zDuHehN4tkNx9pnrFSV8Pb",
+      "message": "1Ahzue8Ksu46zDuHehN4tkNx9pnrFSV8Pb",
+      "signature": "HxzXsWW12bhsLbiBIH2//dgRcRt4Cu8kMEl7VxTeqhNDXa2koK2OhSID3InxTHz5q5y9av/rT78SoxRfItWx2Tc=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[161]",
+      "network": "btc",
+      "key": {
+        "wif": "KxoJLiGXjMjYkzV7z3uAVNnk3firKe9TU87RwSYohfBmy4qkd6ph"
+      },
+      "address": "1K6g2t6q3SrMQTuvxMgm4arYnye9JUokcb",
+      "message": "1K6g2t6q3SrMQTuvxMgm4arYnye9JUokcb",
+      "signature": "ICocj16ksUcsbynjRhQkxKY8AfLJBYS8VvsU+qi9UBBtEdXN1gpivxaWVJcPdzZDC7rkBeq3rPUi6wD3jf8GbMQ=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[162]",
+      "network": "btc",
+      "key": {
+        "wif": "KxUQdjc3fPtgpdFsFsqGveFY8UBeP6GUazoMni1cc3xM2tnKEwjP"
+      },
+      "address": "14H7VmFPdvh9otGRSR63X16cTd8KNfQcsJ",
+      "message": "14H7VmFPdvh9otGRSR63X16cTd8KNfQcsJ",
+      "signature": "HyAxKcRNpe12D4rjnYQM+9r+mxgkXblhUUhQs6PsC+ILvMjLnWN5V+atoS2TjrPwTLMfoToGKDpFuUTKYBE+T60=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[163]",
+      "network": "btc",
+      "key": {
+        "wif": "L5KLavtpkgAeCHpyuaXBDdoRrCojy2vnTPHofNizTFH2HzjPgtkd"
+      },
+      "address": "1PKmkgxUVjhHwmFH9ZXw29ovJLDiMgS85p",
+      "message": "1PKmkgxUVjhHwmFH9ZXw29ovJLDiMgS85p",
+      "signature": "IAop7pO82as4PrGY+d7237Wh64Br4m4H14SdQGwYb0h611IFD3lmYQVLtl8ifhRC/FJRn1G4q5Sbw3021WOpx9U=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[164]",
+      "network": "btc",
+      "key": {
+        "wif": "KzZkyaQ2p8ycxZkAV8t4VhvVY393H5qtWm2JwFLnPKVqzBc8aFqF"
+      },
+      "address": "1GkAeYoh81w1XUB5QAjewXcLJuG4MEPMGg",
+      "message": "1GkAeYoh81w1XUB5QAjewXcLJuG4MEPMGg",
+      "signature": "IIDb7RGOiwORafjsU2oeTLcbfMzDs4JHgFWnj3asu4zAmqS5xJxgBrQ1dPDMtIQ9MOf0goUkMdN1yho04TUkCCI=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[165]",
+      "network": "btc",
+      "key": {
+        "wif": "L14Y6GTQXFAGFgzdWic8GG6PAdJgZbKu4YZGJBHndn9CPFLpUuZZ"
+      },
+      "address": "1AEDebJoNN1oAWFWxQBRDTV3Q9JY5zF7qo",
+      "message": "1AEDebJoNN1oAWFWxQBRDTV3Q9JY5zF7qo",
+      "signature": "HxebtQFHXBZydScE4/gUA0jsGDKklLSwxKK/jsWyVTQw8VfiD0lJEEnTaSv9bgPllNbMEAJXvVtU23kfb4W7+L8=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[166]",
+      "network": "btc",
+      "key": {
+        "wif": "L1bYMTmFVu8FFoqJjqHQecy7h1cgdcGvPwFBMeC2fitFxEvAtvLR"
+      },
+      "address": "1LGQMUrgQQjdzKaNZW4VRsiWnnzGoWZTVW",
+      "message": "1LGQMUrgQQjdzKaNZW4VRsiWnnzGoWZTVW",
+      "signature": "H57ky6Qlfl+Jupof4pxSmsypKniiDA2otOAP4tsIfYJT3K9GxjmFzqRtaT/HM0sx1xESV66kL5MPyFyHSf6rsYM=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[167]",
+      "network": "btc",
+      "key": {
+        "wif": "KwYZMN1CTCpfJ28xvAPWQLrWpu7FShdNhhFt7Sc87tTMTepMBXFK"
+      },
+      "address": "1HWzchVECQUGJKhu4Vx4z7kX9WwMvMoZGh",
+      "message": "1HWzchVECQUGJKhu4Vx4z7kX9WwMvMoZGh",
+      "signature": "HwyJtAWLpAFqMEM5FjC1tncGKP7I63QtTsOPbedsiX6Tg+TiDCdYVBw/3V8vwqWaH3NEhm3F3haPHgf7dfIjcZ8=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[168]",
+      "network": "btc",
+      "key": {
+        "wif": "L1DfXwwHAHiGQ9ziXB5DX89GSTNS6oGYsEKHNWJjrFnvjza1iBpq"
+      },
+      "address": "1NT9xTsRc5mZPnRRzoHUsGEBRR9EuB5VSk",
+      "message": "1NT9xTsRc5mZPnRRzoHUsGEBRR9EuB5VSk",
+      "signature": "H+wfYf/vA50p7M5kpreHBcAj86W1qgdce7cxlrAAolYYOHrdmR3MHVFddTs41uLPcZQCkiSmbxcC6ETeZMxykXM=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[169]",
+      "network": "btc",
+      "key": {
+        "wif": "KxjyEjdQ731DUEqQVYhWpmkbBKJCY3hd8pKwem3RjGJBygeLQbLo"
+      },
+      "address": "1A14Zia37FtzscnHVQMowHZzcoibUL73wc",
+      "message": "1A14Zia37FtzscnHVQMowHZzcoibUL73wc",
+      "signature": "IJGTlHhcyc1PwLnzKg8lwAffGMJzcAVwYMyIiJ41t2gLOGpBPQ9vr5/j4KncIedyKfFi5it8JBYUu8NzUtzfXkQ=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[170]",
+      "network": "btc",
+      "key": {
+        "wif": "L4oLj8ycPZsnsmK818Q8cehakD2HXMwysAUBmWX1mVErrpfcwZ5G"
+      },
+      "address": "1CXVsX1dRmWm3KedDtoDMJSbenfdeDPK88",
+      "message": "1CXVsX1dRmWm3KedDtoDMJSbenfdeDPK88",
+      "signature": "IBTHdNmH/L3dsaGEQ2BD50HJj861dUN2oXNV/MDc4x5fYwfDQ/Hc1ir8XF4zg9bRIyoPLJL+qKcfC90tyJbgwcY=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[171]",
+      "network": "btc",
+      "key": {
+        "wif": "L3hQX3abPQWia9kosanvrK6btJkm6Dg2Qcg4yw9y92BjJCJgZnjS"
+      },
+      "address": "1BMZUpFe3FZj8n3XR94FXhkxGmf9KRYKGg",
+      "message": "1BMZUpFe3FZj8n3XR94FXhkxGmf9KRYKGg",
+      "signature": "IMisx/Mu/z/Qeo6ZvT4zV+NysQmdBd5L/O2Qm2Kb4re40564PIc2asiXtN63+H8J9ih1XsN8eFn5DzEkb9D8kAk=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[172]",
+      "network": "btc",
+      "key": {
+        "wif": "L1u6YL6vugnX8zn22pthNr63MLaCNn8rU3ex6UBV6XYtoEGmoeMu"
+      },
+      "address": "1KjSicpQLoEzgqg7SjQnNFjNkQdKoVRKVp",
+      "message": "1KjSicpQLoEzgqg7SjQnNFjNkQdKoVRKVp",
+      "signature": "H1UP0Sxr5mKjT75dJGo8E4n2hB/SYrWb2ttSGsOgHPiDky/UxHDrpYFLVm5oNDideGLFUOdG5yN4oUvIoVcryEo=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[173]",
+      "network": "btc",
+      "key": {
+        "wif": "KwZr1A9MtMpvdP7iSoT4AyW5aUJiya4toFWePt4ijnQrm5A6xbye"
+      },
+      "address": "1NAhHfAR3WGdaeWg3ZXhr8sAtUGPFJtKTe",
+      "message": "1NAhHfAR3WGdaeWg3ZXhr8sAtUGPFJtKTe",
+      "signature": "HxSqKGPg1iUeMKrBg2GYz7+gv8AWxirPo0eLHLThUTrL+bXgE91dcgdy9LPFOn5wuvIRxSp/MsRm9loYa411osA=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[174]",
+      "network": "btc",
+      "key": {
+        "wif": "KzdNhSobjBTUEpQstbGvCZSVDjxJfnCEHycfuLWHHJ6CSNeYgHax"
+      },
+      "address": "1J55LFmr2wwXwaLMAxidjDAZXUHMgS8nL5",
+      "message": "1J55LFmr2wwXwaLMAxidjDAZXUHMgS8nL5",
+      "signature": "H2TWrz6xO7RGdoi2qgqrcr6PLpVbPyr/2sN3F/0nCE0FVE/sBcZGQJjRVpsp1EYx/6w3GH/oD6jnEtRePWqKWI0=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[175]",
+      "network": "btc",
+      "key": {
+        "wif": "L5ikWToVZK1b8heKDL6Y2WsF1sZhZQQAgUvqRrZFX9xMsSzZCD4w"
+      },
+      "address": "1568zfydB9n1LXhaSVc7zE7FZCqRpe5itX",
+      "message": "1568zfydB9n1LXhaSVc7zE7FZCqRpe5itX",
+      "signature": "H5biQUgDZfVtporZe0+WLk4TIpyibaYosQbIFIj6MiqVzXyj1l7T8Rav35fCE+B7rz/mFgmTYW/vTeMGd73MZaU=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[176]",
+      "network": "btc",
+      "key": {
+        "wif": "L3YRxU1SUsyeVz9cV9BW5hyiFsh4atgoDKHivMxL862SPLKg3rXa"
+      },
+      "address": "1EpPQJeica4FeXTxPBtM2HcN1drGT9NiV6",
+      "message": "1EpPQJeica4FeXTxPBtM2HcN1drGT9NiV6",
+      "signature": "IHlNh6QsJT99x1Q8f36FAn3B+EDBS2oeBN2MCIGnLUFrVutUzUGaIs3/J9VfKKhXQArdnbrPrzor8vy65MvMDu0=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[177]",
+      "network": "btc",
+      "key": {
+        "wif": "L1MyJ25p5nzyuqkDHWbPCMA3dJWoGTPPX8M1PgsyHZygWFUyKQet"
+      },
+      "address": "12duLneSfQWCuZwZriM9qK9wW99gMrNUig",
+      "message": "12duLneSfQWCuZwZriM9qK9wW99gMrNUig",
+      "signature": "IIgkm9e762tsz6ZbhlvD06I4q+lu1X0qof9fk578SKYWx9j7P/qew/Xxzp9iwIHAdLPM7yuJTyTJOyVlgXT1Jt0=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[178]",
+      "network": "btc",
+      "key": {
+        "wif": "L4gYSCnBi35MCPRCfbDzPMmRvYBFWw9fQAxcvs4pYSCBc6SKD696"
+      },
+      "address": "14YZHZbrL9EzH6sCpmQbeutTBqrFB1dRdD",
+      "message": "14YZHZbrL9EzH6sCpmQbeutTBqrFB1dRdD",
+      "signature": "IEpeBqqPmjbVpMb2LaPjgDfUcpDuAuxdidFiR2Q34b4MpuWBQmFvsAwqbyn8vAV8883sFGO//LDqIPmZfnvxdkI=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[179]",
+      "network": "btc",
+      "key": {
+        "wif": "Kyn4mz682ahaoiNvkYuVZh3zRWRLCDSFyQaz6cAmcNLE2fV3QZhZ"
+      },
+      "address": "1CiuEouXGWG1TR8iVo2reDe7ebcCqwcnPV",
+      "message": "1CiuEouXGWG1TR8iVo2reDe7ebcCqwcnPV",
+      "signature": "HxRfJ73AFHPeiHasEN1r5Hp4heeLS/oQxcTDSX1K1X11oACPFQ6bG7iS1WV3PKmKKB4ZY/6WWfz2kE8mmHEVIIY=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[180]",
+      "network": "btc",
+      "key": {
+        "wif": "L4q49J2rR5waECqpCy2BqmY7rmw1y8TNRmqfsRVwGD6Hs1XFHHXs"
+      },
+      "address": "1P3z6491LJ78McE3AXUA6YBjmtPgnhmPm",
+      "message": "1P3z6491LJ78McE3AXUA6YBjmtPgnhmPm",
+      "signature": "IFb5K9hljcuW7vUE1d8TSJ3FvtK+Tbz+QX99/HuxkNE2kxF70S8dYMaUbibq9/9bmsnZa5UGJg1wFPUtPMI5jWE=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[181]",
+      "network": "btc",
+      "key": {
+        "wif": "Kwk34zp3ZxBRwJWCE3iTHVz9X7ZwsAXcgkdiK6rBwSo7yAkMxCoK"
+      },
+      "address": "16qzDG8m63tTEv9rrYuzTumZTcWQwhnRMA",
+      "message": "16qzDG8m63tTEv9rrYuzTumZTcWQwhnRMA",
+      "signature": "Hxqa8KbHcpjOcmHwu6SI0e5M2uGUPKpN7DOJN6NkBY3Epqiz56a61NikoTarEqMZ7MA3JZbP/qYWN51hmkSaGXw=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[182]",
+      "network": "btc",
+      "key": {
+        "wif": "L4z6mmq5vBTNhWKQcu4ri7sBeZoqWoRJxFPzm4HovMidB7ioE5og"
+      },
+      "address": "1Emrg69U67pGoLApMqAHVRWc5XKy88B3rG",
+      "message": "1Emrg69U67pGoLApMqAHVRWc5XKy88B3rG",
+      "signature": "IGDbZp23n01SS8wcbiKBkVq0bXApo2/qwCoSQt5MhSQMSQHmduePO9qhG981//FuWZIX4X6Hkc/UWgfuZxeQ3h8=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[183]",
+      "network": "btc",
+      "key": {
+        "wif": "L43ZM7uut9rEWNneSW3aT4mmNKfoKia8nbhpJNtA2TxFfaZtj9Eh"
+      },
+      "address": "14dcz4s1Uno7a1jqt1GxsLKahczMEVVNT8",
+      "message": "14dcz4s1Uno7a1jqt1GxsLKahczMEVVNT8",
+      "signature": "H9ekLjFd0ueGUb11IA1D94t6XpTxbVP6wuZQrvdilHRdAahZQEh5qL8xSGGLQ7IEtooDpuVcyeJYhSv3vfIgI6g=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[184]",
+      "network": "btc",
+      "key": {
+        "wif": "KxzNhnDuFRbFmoiogxQAvrPtDLX4CEiwHwiiYXte6VH8EU3jCzC8"
+      },
+      "address": "1AZcwLLxSoXKGVBpxxbG83ZDgLZJEqzNQv",
+      "message": "1AZcwLLxSoXKGVBpxxbG83ZDgLZJEqzNQv",
+      "signature": "H5HW+ZZosxwczxxsqYhq+UwHJEk1Sf2xIQhkGCCbEljKLrM+PeSsFFvVKHny9eTYuNaCgoXD21LtfqaJQZmxg0E=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[185]",
+      "network": "btc",
+      "key": {
+        "wif": "L3rRYDqdTXm4jvRg9qzUB2R9JX1eZf5RtmWoDgUtnmDHfSrpwgMb"
+      },
+      "address": "1Net84z34Bz2Yz3o1fUeYauD1RgKFBUpyH",
+      "message": "1Net84z34Bz2Yz3o1fUeYauD1RgKFBUpyH",
+      "signature": "HzgPoNDIe2QFdvRO+9YqlpWokioiZJETYAcSRboHgjlE/Il5vInuxRNxGkcbX9fu1mP3Nf3bH0v/en5EVzWRGlA=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[186]",
+      "network": "btc",
+      "key": {
+        "wif": "L5SLhsW38EKUz6ZpLCDx8PLqeyQCBMEfH2MKySidwHFqVvi7uoj8"
+      },
+      "address": "1q5DjZfjqXSW83PkrncQqByJkuKnSc926",
+      "message": "1q5DjZfjqXSW83PkrncQqByJkuKnSc926",
+      "signature": "HxxTt7XidQfjMLDmK6fsf0f57wD+5wJGEV0pNtzFrR7d5+V2/YvdB1BurjRxvSZTzp5o/7AAEQcqE/JvpBprWIw=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[187]",
+      "network": "btc",
+      "key": {
+        "wif": "KzTmDNoobwaHkEvLBwnbwKNm6Qutwndqw3NnyNg9yaCKnb7WMQWq"
+      },
+      "address": "19ryK9RzvTeC7CZ1oRtw22ssCFWWYSGi29",
+      "message": "19ryK9RzvTeC7CZ1oRtw22ssCFWWYSGi29",
+      "signature": "IFFeD6EQuyBjp0UU0t9gsYxiOzKSzEpIn30Kdy/pX4Z5pTrD/uxvO1k47sjFk513BVOCSFxWuqhFL5sNFq8aLSI=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[188]",
+      "network": "btc",
+      "key": {
+        "wif": "L58gvLiGSZ3m3jRzo9Ypp7TDD9LGKMcAS45e1pFSQY8H4FUsr1kd"
+      },
+      "address": "1Pc9FnL4nys9sNxDv5uhVrUQJptTdgN3ur",
+      "message": "1Pc9FnL4nys9sNxDv5uhVrUQJptTdgN3ur",
+      "signature": "H+ZXwCyU90e21YL6S0n1bcJ208zsq8FWLBQU/sOicsIMFdYQ8jLCiA2ErG7hv2o7UCNVD1p0QmLD7H73SjX5kEs=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[189]",
+      "network": "btc",
+      "key": {
+        "wif": "L4mLCnkFYcTGWY7xWdrr9fhLqzQGfMwKbFivHaaUA3BMBvm625FY"
+      },
+      "address": "12Y7Vn7bZXs27H9bDVt1hSmEKmqfhjUHNr",
+      "message": "12Y7Vn7bZXs27H9bDVt1hSmEKmqfhjUHNr",
+      "signature": "H5Z2UZmRSvXCKJvFxaqsDw1rwtE20Ts2x2I/17Gl8ZrpBf8uFL/bfw2geBOSoEFU/uCVZOJj/GSHiW+vdWindik=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[190]",
+      "network": "btc",
+      "key": {
+        "wif": "L1fgADHELoBzLRDNiUvcXScW1tEpgLeBRJ79pWuNRUqQ7RC5fgVQ"
+      },
+      "address": "18TNP7QLezqsv3cvBsnrB7adJbPaZhQELj",
+      "message": "18TNP7QLezqsv3cvBsnrB7adJbPaZhQELj",
+      "signature": "H2HcMFessphuTqJLLxhdxM9j3KFKmTFvkigLB+L/JJQ5u/RlqzMeFkvEjVVHZtXhm1KLdYYsCIPvgh/5MTLc0lY=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[191]",
+      "network": "btc",
+      "key": {
+        "wif": "Ky6G8MAnacN9aAhpiFYYYgVMyp2YoQAmmSau6f9DJygP74FBa1ob"
+      },
+      "address": "1NYDPFBSvtEx3DtAaevqN8c4DMdMHNZz3H",
+      "message": "1NYDPFBSvtEx3DtAaevqN8c4DMdMHNZz3H",
+      "signature": "H/hilSsA20DUX/O2AGVvnAgsndt9Talirx5PIEYc3QTIxuK5qaacH1UKuqvxyFk0/mDNBJCK1Zb6SB+XsmgfWHQ=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[192]",
+      "network": "btc",
+      "key": {
+        "wif": "Kzj6ZSeXB6S38rNeQaAnDRnBEvhkpcwz8uksYC1uFKm45NFvmjHg"
+      },
+      "address": "18hz5PkxYQWTPdVg3wPwtcpHpgxXGwYbPU",
+      "message": "18hz5PkxYQWTPdVg3wPwtcpHpgxXGwYbPU",
+      "signature": "H2cNrEqNAyqiPISsxkNM8Siaj7H+J8cFe5ZID1bkk0Tsf0D2fLYUE4rjWxkI+3di2i1rGwUEJIsV9hb8CjaBHZs=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[193]",
+      "network": "btc",
+      "key": {
+        "wif": "L5Hm3zXXpuiBrF4ywFTqh5L7D7WfW2UfcfWfDbQwNarJJg2Y5LVL"
+      },
+      "address": "14yvK3MatK2u28nxZXfCNjyoyFuaGd4kU7",
+      "message": "14yvK3MatK2u28nxZXfCNjyoyFuaGd4kU7",
+      "signature": "HzqB0gZfVAiKoXJ9Z5WGgz9EMAveMxF67gGReSpgr0zw1Mf7KA5inV0hPqA3lPRY4rmSOeKE0dBz2rFz0VawAwY=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[194]",
+      "network": "btc",
+      "key": {
+        "wif": "KygyNuSYL82GrswYvb3w1ntpCmDaNEbwm4U5DKfWT6EGbBDz6oUE"
+      },
+      "address": "1HEjBMwYBoWPT3JJH16MEZbQ2EutUX9sU4",
+      "message": "1HEjBMwYBoWPT3JJH16MEZbQ2EutUX9sU4",
+      "signature": "H+K90IF2uu1NVj/fnpH1sn7gEEjJ+zhXN1JHjRq5QC2GBWx92ScHjCb9EsecARtsMdsIyBd/lRA5B/9KjGfZoZs=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[195]",
+      "network": "btc",
+      "key": {
+        "wif": "L2MEa6TKPY3BVMYH7h22cq64Wx9iGNEzTu1RRtWc1W3gSy3kV3ZJ"
+      },
+      "address": "1KCetUsMuMDXQiZqcA7TzQ8Gyvuo6ZgU9V",
+      "message": "1KCetUsMuMDXQiZqcA7TzQ8Gyvuo6ZgU9V",
+      "signature": "H23kt5yF2D6oCcSb4XpKGej9TAkspKbGaG/C3GSzduVMLnI7NltLeAbJqsIBCDP8qK3xRaqE1ZlHbn5ZJJcdvjs=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[196]",
+      "network": "btc",
+      "key": {
+        "wif": "KzqZiepEePG14E6HVt9uB7Nrq1XS9mCyaeAHC82jZZaNSLLjtCYK"
+      },
+      "address": "1LPQfNKdVEs5pYEzeszqCa5zfFZSouD5zF",
+      "message": "1LPQfNKdVEs5pYEzeszqCa5zfFZSouD5zF",
+      "signature": "IO3YOm+Zq/JLWGjWq4f2j2NKXJNvZ8LIjSiPO6p19DdcA+exSXWrfYs5GsvSkQlxEoYgHvCGlXJOdwdCnpktFMM=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[197]",
+      "network": "btc",
+      "key": {
+        "wif": "L5KgJJsJcpj3dHzdGUCJtShWSo4q6hCCZhLZqfbP2F3XgNSXVq6N"
+      },
+      "address": "12Hzw6UKBoJ3rhqvUczbr86y3HZu683t93",
+      "message": "12Hzw6UKBoJ3rhqvUczbr86y3HZu683t93",
+      "signature": "IB2+5oRrwyoAko9V1rwAvFAdujavO4QXqmKktcZjg2ap8dZkj7Y1XR+d3SNORCRrZ0DAsyE1yrjvd7yR8Xy19GU=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[198]",
+      "network": "btc",
+      "key": {
+        "wif": "L4p1pXiJq5STXefQekKCJajXwATg2wLwsPKHcWAuKUoGoNCRQvbF"
+      },
+      "address": "1CfY95vjs38hqmeaZndyM7PRRVumzgPkUC",
+      "message": "1CfY95vjs38hqmeaZndyM7PRRVumzgPkUC",
+      "signature": "H8kFuZeSJ7A7fiGzjgjvNHDDYXzFjxe/KLBxF5nB7Onpf/xndQ6KNeHcJD2xj0VoP1GVJKEI83ddXzt7svB53m4=",
+      "expect": "verify"
+    },
+    {
+      "name": "python-bitcoinlib/signmessage.json[199]",
+      "network": "btc",
+      "key": {
+        "wif": "L144LBabTTCXk96x5HonRN7skfikcYqBN6X5ZqFXg9ag4bJFwdaj"
+      },
+      "address": "1JHaAQemw8o11ELAAcjosNLDzVqUU2dWW4",
+      "message": "1JHaAQemw8o11ELAAcjosNLDzVqUU2dWW4",
+      "signature": "HxQ+IxT9KAsGoBcJyKbC4VTzFAqEOFH3va1lw57kiywbs7XwsrojP91Md31jUM/U9pvosYceC6qaRvfG62arXa8=",
+      "expect": "verify"
+    }
+  ]
+}

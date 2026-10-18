@@ -1,0 +1,163 @@
+{
+  "description": "Regression vectors produced by the hw binary itself (hw 0.9.5, commit 2ebb5e7): accounts created with `hw createacc`, addresses from `hw receive`, signatures from `hw --json signmsg`, on a scratch database. The mnemonic is the public BIP-39 test mnemonic (11 x \"abandon\" + \"about\"); \"TREZOR\" is the BIP-39 test passphrase. All signatures were verified with Bitcoin Core 25.0 verifymessage.",
+  "vectors": [
+    {
+      "name": "hw/btc-abandon/0-0",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "hw regression vector",
+      "signature": "IJN8tlSE4MWCp/6iEUQdFBrpApnRFZ6gDa8byW7N9YhIUAEXOIqaaWxeKrR1MH1AltiFOheOrG98xUElPCvR/eU=",
+      "comment": "Derivation path m/44'/0'/0'/0/0, no BIP-39 passphrase."
+    },
+    {
+      "name": "hw/btc-abandon/0-1",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 1
+      },
+      "address": "1Ak8PffB2meyfYnbXZR9EGfLfFZVpzJvQP",
+      "message": "The Times 03/Jan/2009 Chancellor on brink of second bailout for banks",
+      "signature": "IDqng1NBarIpi1yBtXyeGl8WHIFFh0TYKuqdeWQkkhHbYD0CXqJGuCMGLPi78aRUvItSAT7Vz4oVfTFPYCIiTQc=",
+      "comment": "Derivation path m/44'/0'/0'/0/1, no BIP-39 passphrase."
+    },
+    {
+      "name": "hw/btc-abandon/0-2",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 2
+      },
+      "address": "1MNF5RSaabFwcbtJirJwKnDytsXXEsVsNb",
+      "message": "Ünïcödé ₿ message",
+      "messageUtf8Hex": "c39c6ec3af63c3b664c3a920e282bf206d657373616765",
+      "signature": "IMPV2exGa7dPrdyNhSswdtAcK+9TPaqLZwYk4YpX5vpARewbHFKYWnYo3QMzzX4c/kdITgRda5852gpR806I0j4=",
+      "comment": "Derivation path m/44'/0'/0'/0/2, no BIP-39 passphrase."
+    },
+    {
+      "name": "hw/btc-abandon-acc1/0-0",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 1,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "15qucUWKf95Fo58FdCBhUTSAtsm22HHE2Q",
+      "message": "Multi-line\nmessage signed by hw",
+      "signature": "IIuy+KrNOrI72pALZFGwsYQHurYhaia6T7bL3BCytKi9Oa7tcq56E6j9j5105GMgDNP/zX0fGZfP5Gcj3z6kRRg=",
+      "warnings": [
+        "linebreak"
+      ],
+      "comment": "Derivation path m/44'/0'/1'/0/0, no BIP-39 passphrase. hw printed the line-break warning (and the verifier note) on stderr for this message."
+    },
+    {
+      "name": "hw/btc-abandon-trezor/0-0",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "TREZOR",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1PEha8dk5Me5J1rZWpgqSt5F4BroTBLS5y",
+      "message": "hw regression vector",
+      "signature": "IIPlwjjQJe3liQ2IZed6N3IxLBF0DH7X/P9XN531BknGS3OOqvo+HJnSUN/yo87qqrm/N9hz1KzfFJ5O9qQJO9Y=",
+      "comment": "Derivation path m/44'/0'/0'/0/0, BIP-39 passphrase \"TREZOR\"."
+    },
+    {
+      "name": "hw/btctest-abandon/0-0",
+      "network": "btctest",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "mkpZhYtJu2r87Js3pDiWJDmPte2NRZ8bJV",
+      "message": "The Times 03/Jan/2009 Chancellor on brink of second bailout for banks",
+      "signature": "IIb26B8xhAnpczYffQpUyjuKFGr7d2o+5qJwHuaxaxDhNvYuqn5WMqEvfRDYcSPDnumEpjvXmqlShzHIQMtX2z4=",
+      "comment": "Derivation path m/44'/1'/0'/0/0, no BIP-39 passphrase."
+    },
+    {
+      "name": "hw/btctest-abandon/0-1",
+      "network": "btctest",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 1
+      },
+      "address": "mzpbWabUQm1w8ijuJnAof5eiSTep27deVH",
+      "message": "Ünïcödé ₿ message",
+      "messageUtf8Hex": "c39c6ec3af63c3b664c3a920e282bf206d657373616765",
+      "signature": "IPYb3lYOXYm/p9hJsLdbJBV5mzI/ExRiCq6pNFlethYnFMYb4rZnEpEAKaV1HNEDfjz7FXXZvk/A/TgUIXoQyoc=",
+      "comment": "Derivation path m/44'/1'/0'/0/1, no BIP-39 passphrase."
+    },
+    {
+      "name": "hw/bch-abandon/0-0",
+      "network": "bch",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "bitcoincash:qqyx49mu0kkn9ftfj6hje6g2wfer34yfnq5tahq3q6",
+      "message": "Multi-line\nmessage signed by hw",
+      "signature": "IJaUsQOkRWLW1WSvZ5u2E3rcu6GuHzKiYch7EraClWYOc4h9c9wWq6v7c5YXtCatJM7ohKWvSJEQOBNfcpjDAlQ=",
+      "warnings": [
+        "linebreak"
+      ],
+      "comment": "Derivation path m/44'/145'/0'/0/0, no BIP-39 passphrase. hw printed the line-break warning (and the verifier note) on stderr for this message."
+    },
+    {
+      "name": "hw/bch-abandon/0-1",
+      "network": "bch",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 1
+      },
+      "address": "bitcoincash:qp8sfdhgjlq68hlzka9lcsxtcnvuvnd0xqxugfzzc5",
+      "message": "hw regression vector",
+      "signature": "H6c7cY4A5Ebfp68ETR2LhqJZp5yx2Bh6nOF9yE+VHPnfSncbAW/58xvWNrqn4HuGnYfyNooYmrVIPaynUhVk3ek=",
+      "comment": "Derivation path m/44'/145'/0'/0/1, no BIP-39 passphrase."
+    },
+    {
+      "name": "hw/bchtest-abandon-trezor/0-0",
+      "network": "bchtest",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "TREZOR",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "bchtest:qztv0mmm3yscxcvfr93hq3wn63xk50merq7wl5gp3m",
+      "message": "The Times 03/Jan/2009 Chancellor on brink of second bailout for banks",
+      "signature": "ILNWjYXGHOixt5iBiawVAHWUXQ2QcXjm8XeaiYF+FrzsRV9EPsyYx0xqXG1eBHzu4P7xp79PgHDnp9G+d1c2Oy8=",
+      "comment": "Derivation path m/44'/1'/0'/0/0, BIP-39 passphrase \"TREZOR\"."
+    }
+  ]
+}
