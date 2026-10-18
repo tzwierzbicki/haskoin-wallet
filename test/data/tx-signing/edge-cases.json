@@ -1,5 +1,5 @@
 {
-  "description": "Transactions that hw must refuse to sign, with the exact error. Produced by hw (commit d054e45) from the hw-regression.json transactions.",
+  "description": "Transactions that hw must refuse to sign, with the exact error. Produced by hw (commit d054e45) from the hw-regression.json transactions, plus transactions without inputs, without outputs and spending a coin twice.",
   "vectors": [
     {
       "name": "edge/already-signed",
@@ -25,6 +25,71 @@
       "expect": "error",
       "error": "The transaction is already signed",
       "comment": "The TxSignData is already marked as signed (the signed hw/btc/debit transaction)."
+    },
+    {
+      "name": "edge/no-inputs",
+      "network": "btc",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "txSignData": {
+        "tx": "01000000000000000000",
+        "txinputs": [],
+        "inputpaths": [],
+        "outputpaths": [],
+        "signed": false
+      },
+      "expect": "error",
+      "error": "The transaction has no inputs",
+      "comment": "A transaction without inputs, and without outputs so that no other check fires first."
+    },
+    {
+      "name": "edge/no-outputs",
+      "network": "btc",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "txSignData": {
+        "tx": "0100000001de4347cb93cb25a1b2819ee92427a5558f3f65879e581ddda12f917e80d255e50000000000ffffffff0000000000",
+        "txinputs": [
+          "010000000101000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0100e1f505000000001976a914c80d55223e2f1061363add2a7b0363c285bf298d88ac00000000"
+        ],
+        "inputpaths": [
+          "/0/0"
+        ],
+        "outputpaths": [],
+        "signed": false
+      },
+      "expect": "error",
+      "error": "The transaction has no outputs",
+      "comment": "One own input (/0/0) and no output: invalid on the network, and the whole coin would go to fees."
+    },
+    {
+      "name": "edge/duplicate-inputs",
+      "network": "btc",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "txSignData": {
+        "tx": "0100000002de4347cb93cb25a1b2819ee92427a5558f3f65879e581ddda12f917e80d255e50000000000ffffffffde4347cb93cb25a1b2819ee92427a5558f3f65879e581ddda12f917e80d255e50000000000ffffffff0180f0fa02000000001976a914bcb6e2aa16a725659548910d7a020414cbfe65df88ac00000000",
+        "txinputs": [
+          "010000000101000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0100e1f505000000001976a914c80d55223e2f1061363add2a7b0363c285bf298d88ac00000000"
+        ],
+        "inputpaths": [
+          "/0/0"
+        ],
+        "outputpaths": [],
+        "signed": false
+      },
+      "expect": "error",
+      "error": "The transaction spends the same coin twice",
+      "comment": "The same coin (/0/0) spent by both inputs: invalid on the network, and counting it twice would inflate the input sum and the fee."
     },
     {
       "name": "edge/no-private-keys",

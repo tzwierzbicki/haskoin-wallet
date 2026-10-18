@@ -28,6 +28,7 @@ import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.TxInfo
+import Haskoin.Wallet.TxSigning (parseTxSignData)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import System.Random (Random (randomR), StdGen, initStdGen)
@@ -167,18 +168,6 @@ walletFingerprint net ctx mnem = do
   xPrvKey <- signingKey net ctx mnem 0
   return $ xPubFP ctx $ deriveXPubKey ctx xPrvKey
 
-signWalletTx ::
-  Network ->
-  Ctx ->
-  TxSignData ->
-  XPrvKey ->
-  Either String (TxSignData, TxInfo)
-signWalletTx net ctx tsd@TxSignData {txSignDataInputPaths = inPaths} signKey =
-  signTxWithKeys net ctx tsd publicKey prvKeys
-  where
-    publicKey = deriveXPubKey ctx signKey
-    prvKeys = (.key) . (\p -> derivePath ctx p signKey) <$> inPaths
-
 signTxWithKeys ::
   Network ->
   Ctx ->
@@ -188,8 +177,8 @@ signTxWithKeys ::
   Either String (TxSignData, TxInfo)
 signTxWithKeys net ctx tsd@(TxSignData tx _ _ _ signed) publicKey secKeys = do
   when signed $ Left "The transaction is already signed"
-  when (null secKeys) $ Left "There are no private keys to sign"
   txInfo <- parseTxSignData net ctx publicKey tsd
+  when (null secKeys) $ Left "There are no private keys to sign"
   -- signing
   let myInputs = txInfoMyInputs txInfo
       othInputs = txInfoOtherInputs txInfo

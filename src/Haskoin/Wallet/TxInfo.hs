@@ -8,21 +8,16 @@
 
 module Haskoin.Wallet.TxInfo where
 
-import Control.Arrow ((&&&))
-import Control.Monad (unless)
 import Data.Aeson (object, withObject, (.:), (.:?), (.=))
 import qualified Data.Aeson as Json
 import Data.Aeson.Types (Parser)
-import qualified Data.ByteString as BS
 import Data.Either (partitionEithers)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, isJust)
-import qualified Data.Serialize as S
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 
@@ -280,128 +275,9 @@ inputAddressMap ins =
     f (Store.StoreInput _ _ _ _ v _ (Just a)) = Right (a, fromIntegral v)
     f s = Left s
 
-txOutAddressMap :: Ctx -> [TxOut] -> (Map Address Natural, [TxOut])
-txOutAddressMap ctx outs =
-  (Map.fromListWith (+) rs, ls)
-  where
-    (ls, rs) = partitionEithers $ f <$> outs
-    f to@(TxOut v s) =
-      case scriptToAddressBS ctx s of
-        Left _ -> Left to
-        Right a -> Right (a, fromIntegral v)
-
-txInAddressMap ::
-  Network ->
-  Ctx ->
-  [(OutPoint, TxOut)] ->
-  (Map Address (Natural, [SigInput]), [(OutPoint, TxOut)])
-txInAddressMap net ctx ins =
-  (Map.fromListWith (\(a, b) (c, d) -> (a + c, b <> d)) rs, mconcat ls)
-  where
-    sh = maybeSetForkId net sigHashAll
-    (ls, rs) = partitionEithers $ f <$> ins
-    f (op, to@(TxOut v s)) =
-      case scriptToAddressBS ctx s of
-        Left _ -> Left [(op, to)]
-        Right a ->
-          case addressToOutput a of
-            Just o ->
-              Right
-                ( a,
-                  ( fromIntegral v,
-                  [SigInput o v op sh Nothing]
-                  )
-                )
-            _ -> Left [(op, to)]
-          
-
-maybeSetForkId :: Network -> SigHash -> SigHash
-maybeSetForkId net
-  | isJust net.sigHashForkId = setForkIdFlag
-  | otherwise = id
-
-parseTxSignData ::
-  Network ->
-  Ctx ->
-  XPubKey ->
-  TxSignData ->
-  Either String TxInfo
-parseTxSignData net ctx pubkey tsd@(TxSignData tx _ inPaths outPaths signed) = do
-  coins <- txSignDataCoins tsd
-  -- Fees
-  let outSum = fromIntegral $ sum $ (.value) <$> tx.outputs :: Natural
-      inSum = fromIntegral $ sum $ (.value) . snd <$> coins :: Natural
-  fee <- maybeToEither "Fee is negative" $ inSum `safeSubtract` outSum
-  let feeByte = fee `div` fromIntegral size
-      -- Outputs
-      (outputMap, nonStdOut) = txOutAddressMap ctx tx.outputs
-      myOutputsMap = Map.intersectionWith (,) outputMap outPathAddrs
-      othOutputsMap = Map.difference outputMap outPathAddrs
-      -- Inputs
-      (inputMap, nonStdIn) = txInAddressMap net ctx coins
-      myInputsMap =
-        Map.intersectionWith (\(n, xs) p -> (n, p, xs)) inputMap inPathAddrs
-      othInputsMap = Map.difference inputMap inPathAddrs
-      -- Amounts
-      myOutputsSum =
-        fromIntegral $ sum $ fst <$> Map.elems myOutputsMap :: Integer
-      myInputsSum =
-        fromIntegral $ sum $ fst3 <$> Map.elems myInputsMap :: Integer
-      amount = myOutputsSum - myInputsSum
-  -- Sanity checks
-  unless (null nonStdOut) $
-    Left "There are non-standard outputs in the transaction"
-  unless (null nonStdIn) $
-    Left "There are non-standard inputs in the transaction"
-  unless (length coins == length tx.inputs) $
-    Left "Referenced input transactions are missing"
-  unless (length inPaths == Map.size myInputsMap) $
-    Left "Input derivations don't match the transaction inputs"
-  unless (length outPaths == Map.size myOutputsMap) $
-    Left "Output derivations don't match the transaction outputs"
-  return $
-    TxInfo
-      { txInfoHash = if signed then Just $ txHash tx else Nothing,
-        txInfoType = txType amount fee,
-        txInfoAmount = amount,
-        txInfoMyOutputs =
-          Map.map (\(v, p) -> MyOutputs v p "") myOutputsMap,
-        txInfoOtherOutputs = othOutputsMap,
-        txInfoNonStdOutputs = [],
-        txInfoMyInputs =
-          Map.map (\(i, p, s) -> MyInputs i p "" s) myInputsMap,
-        txInfoOtherInputs = Map.map (uncurry OtherInputs) othInputsMap,
-        txInfoNonStdInputs = [],
-        txInfoSize = fromIntegral size,
-        txInfoFee = fee,
-        txInfoFeeByte = feeByte,
-        txInfoBlockRef = Store.MemRef 0,
-        txInfoConfirmations = 0,
-        txInfoPending = Just $ TxInfoPending (nosigTxHash tx) signed False
-      }
-  where
-    inPathAddrs = Map.fromList $ (pathToAddr ctx pubkey &&& id) <$> inPaths
-    outPathAddrs = Map.fromList $ (pathToAddr ctx pubkey &&& id) <$> outPaths
-    size
-      | signed = BS.length $ S.encode tx
-      | otherwise = guessTxSize (length tx.inputs) [] (length tx.outputs) 0
-
-txSignDataCoins :: TxSignData -> Either String [(OutPoint, TxOut)]
-txSignDataCoins (TxSignData tx depTxs _ _ _) =
-  maybeToEither "Referenced input transactions are missing" $ mapM f ops
-  where
-    ops = (.outpoint) <$> tx.inputs :: [OutPoint]
-    txMap =
-      Map.fromList $ (txHash &&& (.outputs)) <$> depTxs :: Map TxHash [TxOut]
-    f :: OutPoint -> Maybe (OutPoint, TxOut)
-    f op@(OutPoint h i) =
-      (op,) <$> ((!!? fromIntegral i) =<< Map.lookup h txMap)
-
 txType :: Integer -> Natural -> TxType
 txType amount fee
   | amount > 0 = TxCredit
   | abs amount == fromIntegral fee = TxInternal
   | otherwise = TxDebit
 
-pathToAddr :: Ctx -> XPubKey -> SoftPath -> Address
-pathToAddr ctx pk path = xPubAddr ctx $ derivePubPath ctx path pk

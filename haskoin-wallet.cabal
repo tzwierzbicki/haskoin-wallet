@@ -53,6 +53,7 @@ library
       Haskoin.Wallet.PrettyPrinter
       Haskoin.Wallet.Signing
       Haskoin.Wallet.TxInfo
+      Haskoin.Wallet.TxSigning
       Haskoin.Wallet.Util
   other-modules:
       Paths_haskoin_wallet

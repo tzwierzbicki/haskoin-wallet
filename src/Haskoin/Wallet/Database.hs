@@ -53,6 +53,7 @@ import Haskoin.Wallet.Config
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Migration.SemVersion
 import Haskoin.Wallet.TxInfo
+import Haskoin.Wallet.TxSigning (parseTxSignData)
 import Haskoin.Wallet.Util (Page (Page), textToAddrE)
 import Numeric.Natural (Natural)
 

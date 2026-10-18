@@ -22,10 +22,10 @@ import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Signing
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo
+import Haskoin.Wallet.TxSigning (signWalletTx)
 import Numeric.Natural (Natural)
 import System.Random (StdGen, mkStdGen)
 import Test.Hspec
-import GHC.IO.Handle (hGetChar)
 
 spec :: Spec
 spec =
@@ -340,7 +340,7 @@ signWalletTxSpec ctx =
               False
           xPrv = fst $ keys ctx
       let resE = signWalletTx btc ctx dat xPrv
-      resE `shouldBe` Left "The transaction could not be signed"
+      resE `shouldBe` Left "input 1 (1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg) does not belong to the wallet"
     it "fails when referenced input transactions are missing" $ do
       let fundTx = tx' ctx [(txid' 1, 0)] [(addr' 0, 100000000)]
           newTx =

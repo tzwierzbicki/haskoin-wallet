@@ -29,6 +29,7 @@ import Haskoin.Wallet.Signing
 import Haskoin.Wallet.SigningSpec
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo
+import Haskoin.Wallet.TxSigning (signWalletTx)
 import Haskoin.Wallet.Util
 import Test.Hspec
 
