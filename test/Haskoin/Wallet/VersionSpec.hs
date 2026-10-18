@@ -4,7 +4,7 @@
 
 module Haskoin.Wallet.VersionSpec where
 
-import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Arbitrary
 import Haskoin.Wallet.Migration.SemVersion
 import Test.Hspec
 import Test.QuickCheck

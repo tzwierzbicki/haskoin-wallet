@@ -1,0 +1,156 @@
+{
+  "description": "Message signing vectors from the Trezor firmware device tests. The Trezor test mnemonic is 12 x \"all\" with no passphrase. Excluded: Groestlcoin and Decred (different hash functions) and BIP-137 SegWit headers (35-42), which hw does not produce.",
+  "vectors": [
+    {
+      "name": "trezor/bitcoin/p2pkh",
+      "network": "btc",
+      "key": {
+        "mnemonic": "all all all all all all all all all all all all",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1JAd7XCBzGudGpJQSDSfpmJhiygtLQWaGL",
+      "message": "This is an example of a signed message.",
+      "signature": "IP2PL321I4/N0HfVIEw+aUnCYdcAJpzvwdnS3O9rlQI2MO5hf2yKz560DI7dcEycp06kr8OT9D81tOiVgyTL3Rw=",
+      "source": "Trezor firmware tests/device_tests/bitcoin/test_signmessage.py, case \"p2pkh\" (Bitcoin, m/44h/0h/0h/0/0)",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_signmessage.py",
+      "comment": "Trezor test mnemonic (12 x \"all\"), no passphrase. Signature converted from hex to base64. Trezor path m/44h/0h/0h/0/0 is hw account 0, chain 0, index 0."
+    },
+    {
+      "name": "trezor/bitcoin/segwit-p2sh",
+      "network": "btc",
+      "key": {
+        "mnemonic": "all all all all all all all all all all all all",
+        "passphrase": "",
+        "path": "m/49'/0'/0'/0/0"
+      },
+      "address": "1NnkavtGu3gAJpBQHremGiMNovd28gLAj3",
+      "message": "This is an example of a signed message.",
+      "signature": "H3RN5FFvrFwUCAgBVmRRajL+rZTeiXdc7H4k28JP4TMHWsCTAcTMjhl76ktkgWYdW46b8Z2Le4o4Ls21PC7gdQ0=",
+      "source": "Trezor firmware tests/device_tests/bitcoin/test_signmessage.py, case \"segwit-p2sh\" (Bitcoin, m/49h/0h/0h/0/0)",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_signmessage.py",
+      "comment": "Trezor test mnemonic (12 x \"all\"), no passphrase. Signature converted from hex to base64. Case with no_script_type=True: a SegWit-path key signed with the plain compressed-key header, which equals its P2PKH signature. The P2PKH address is not from the source: it was derived from the key."
+    },
+    {
+      "name": "trezor/bitcoin/segwit-native",
+      "network": "btc",
+      "key": {
+        "mnemonic": "all all all all all all all all all all all all",
+        "passphrase": "",
+        "path": "m/84'/0'/0'/0/0"
+      },
+      "address": "1Nbcgwt46xLnaz9iQRshge195zQQZs5Zii",
+      "message": "This is an example of a signed message.",
+      "signature": "ILVddgDZ6afipJFV3fPP2455bCB/qrgzAQ+kH7eCiIm8R89iNIp6qgkjwIMqWJ+rVB6PEutU+3EckOIwfw9msZQ=",
+      "source": "Trezor firmware tests/device_tests/bitcoin/test_signmessage.py, case \"segwit-native\" (Bitcoin, m/84h/0h/0h/0/0)",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_signmessage.py",
+      "comment": "Trezor test mnemonic (12 x \"all\"), no passphrase. Signature converted from hex to base64. Case with no_script_type=True: a SegWit-path key signed with the plain compressed-key header, which equals its P2PKH signature. The P2PKH address is not from the source: it was derived from the key."
+    },
+    {
+      "name": "trezor/bitcoin/NFKD-message",
+      "network": "btc",
+      "key": {
+        "mnemonic": "all all all all all all all all all all all all",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 1
+      },
+      "address": "1GWFxtwWmNVqotUPXLcKVL2mUKpshuJYo",
+      "message": "Příšerně žluťoučký kůň úpěl ďábelské ódy zákeřný učeň běží podél zóny úlů",
+      "messageUtf8Hex": "5072cc8c69cc8173cc8c65726e65cc8c207acc8c6c7574cc8c6f7563cc8c6b79cc81206b75cc8a6ecc8c2075cc817065cc8c6c2064cc8c61cc8162656c736b65cc81206fcc816479207a61cc816b6572cc8c6e79cc81207563cc8c656ecc8c206265cc8c7acc8c69cc8120706f6465cc816c207a6fcc816e792075cc816c75cc8a",
+      "signature": "IEagtG6BSS+C4EEsc3Abl0DmRixgNXXuLTbH17TCDw8zdjyoyzAn6o4c5eg/2otnRv6o9cgmVdeP1Bnnx2al4Xo=",
+      "expect": "differ",
+      "source": "Trezor firmware tests/device_tests/bitcoin/test_signmessage.py, case \"NFKD message\" (Bitcoin, m/44h/0h/0h/0/1)",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_signmessage.py",
+      "comment": "EXPECTED TO DIFFER, THIS IS NORMAL. This message is the same text as the \"NFC-message\" vector, but written with decomposed Unicode characters (NFKD), e.g. \"r\" + combining caron instead of \"ř\". It looks identical on screen but has different bytes (see messageUtf8Hex). Trezor converts messages to NFC before signing, so it signs the same bytes for both vectors and produces the same signature. hw, like Bitcoin Core, signs the exact bytes it is given, so its signature is different. Bitcoin Core's verifymessage rejects Trezor's signature for these bytes. Provenance: Trezor test mnemonic (12 x \"all\"), no passphrase. Signature converted from hex to base64. Trezor path m/44h/0h/0h/0/1 is hw account 0, chain 0, index 1."
+    },
+    {
+      "name": "trezor/bitcoin/NFC-message",
+      "network": "btc",
+      "key": {
+        "mnemonic": "all all all all all all all all all all all all",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 1
+      },
+      "address": "1GWFxtwWmNVqotUPXLcKVL2mUKpshuJYo",
+      "message": "Příšerně žluťoučký kůň úpěl ďábelské ódy zákeřný učeň běží podél zóny úlů",
+      "messageUtf8Hex": "50c599c3adc5a165726ec49b20c5be6c75c5a56f75c48d6bc3bd206bc5afc58820c3ba70c49b6c20c48fc3a162656c736bc3a920c3b36479207ac3a16b65c5996ec3bd2075c48d65c5882062c49bc5bec3ad20706f64c3a96c207ac3b36e7920c3ba6cc5af",
+      "signature": "IEagtG6BSS+C4EEsc3Abl0DmRixgNXXuLTbH17TCDw8zdjyoyzAn6o4c5eg/2otnRv6o9cgmVdeP1Bnnx2al4Xo=",
+      "source": "Trezor firmware tests/device_tests/bitcoin/test_signmessage.py, case \"NFC message\" (Bitcoin, m/44h/0h/0h/0/1)",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_signmessage.py",
+      "comment": "Trezor test mnemonic (12 x \"all\"), no passphrase. Signature converted from hex to base64. Trezor path m/44h/0h/0h/0/1 is hw account 0, chain 0, index 1. The message is already NFC, so Trezor's normalization does not change it and hw must produce the same signature."
+    },
+    {
+      "name": "trezor/bitcoin/t1-firmware-path",
+      "network": "btc",
+      "key": {
+        "mnemonic": "all all all all all all all all all all all all",
+        "passphrase": "",
+        "path": "m/10026'/826421588'/2'/0'"
+      },
+      "address": "1FoHjQT6bAEu2FQGzTgqj4PBneoiCAk4ZN",
+      "message": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "signature": "H0CuWN1oSAovOe7PTez+ec6s3j+GVQLbZ8CDuEZbM1NcB1DVN3t6xi5TT3HJIs0Cn2WXYfismehZ3zYyLFsyDv8=",
+      "source": "Trezor firmware tests/device_tests/bitcoin/test_signmessage.py, case \"t1 firmware path\" (Bitcoin, m/10026'/826421588'/2'/0')",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_signmessage.py",
+      "comment": "Trezor test mnemonic (12 x \"all\"), no passphrase. Signature converted from hex to base64."
+    },
+    {
+      "name": "trezor/testnet/p2pkh",
+      "network": "btctest",
+      "key": {
+        "mnemonic": "all all all all all all all all all all all all",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "mvbu1Gdy8SUjTenqerxUaZyYjmveZvt33q",
+      "message": "This is an example of a signed message.",
+      "signature": "IDDNfxFsBIHRk2z+9IE3/SPuVqrwB4e/oIqUg3Rm7JkJOQw++s/Fa65XgvHbTPSa4F8kK19ipH+HHsRr8aMlPn8=",
+      "source": "Trezor firmware tests/device_tests/bitcoin/test_signmessage.py, case \"p2pkh\" (Testnet, m/44h/1h/0h/0/0)",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_signmessage.py",
+      "comment": "Trezor test mnemonic (12 x \"all\"), no passphrase. Signature converted from hex to base64. Trezor path m/44h/1h/0h/0/0 is hw account 0, chain 0, index 0."
+    },
+    {
+      "name": "trezor/bcash/bcash",
+      "network": "bch",
+      "key": {
+        "mnemonic": "all all all all all all all all all all all all",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "bitcoincash:qr08q88p9etk89wgv05nwlrkm4l0urz4cyl36hh9sv",
+      "message": "This is an example of a signed message.",
+      "signature": "H9p3M+ZmpKuLqG88/Dco0xjs+CSjv5lZdXApeqExYHwQMWlZE2ssUAsrR4pzxWO6MUwLeyoiBlttlZYRjyRtNg4=",
+      "source": "Trezor firmware tests/device_tests/bitcoin/test_signmessage.py, case \"bcash\" (Bcash, m/44h/145h/0h/0/0)",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_signmessage.py",
+      "comment": "Trezor test mnemonic (12 x \"all\"), no passphrase. Signature converted from hex to base64. Trezor path m/44h/145h/0h/0/0 is hw account 0, chain 0, index 0."
+    },
+    {
+      "name": "trezor/bitcoin/p2pkh-long-message",
+      "network": "btc",
+      "key": {
+        "mnemonic": "all all all all all all all all all all all all",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1JAd7XCBzGudGpJQSDSfpmJhiygtLQWaGL",
+      "message": "VeryLongMessage!",
+      "messageRepeat": 64,
+      "signature": "IApGR2zrhNBu9XhIKAJvkiyIFfV6rIN7jAEwB8qKhGDbY++Rfb6669EIscgUu+6m2x8rIkGpWOU/5xXMhrGZ2cM=",
+      "source": "Trezor firmware tests/device_tests/bitcoin/test_signmessage.py, case \"p2pkh long message\" (Bitcoin, m/44h/0h/0h/0/0)",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_signmessage.py",
+      "comment": "Trezor test mnemonic (12 x \"all\"), no passphrase. Signature converted from hex to base64. Trezor path m/44h/0h/0h/0/0 is hw account 0, chain 0, index 0. The message is \"VeryLongMessage!\" repeated 64 times (1024 bytes, 3-byte length prefix)."
+    }
+  ]
+}

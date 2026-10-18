@@ -21,6 +21,7 @@ import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Util.Arbitrary
+import Haskoin.Wallet.Arbitrary
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.FileIO

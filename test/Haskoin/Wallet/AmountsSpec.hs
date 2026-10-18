@@ -4,7 +4,7 @@
 module Haskoin.Wallet.AmountsSpec where
 
 import Haskoin.Wallet.Amounts
-import Haskoin.Wallet.TestUtils (genNatural)
+import Haskoin.Wallet.Arbitrary (genNatural)
 import Test.Hspec (Spec, describe, it, shouldBe)
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (Arbitrary (arbitrary), elements, forAll)

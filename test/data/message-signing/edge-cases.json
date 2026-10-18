@@ -1,0 +1,1037 @@
+{
+  "description": "Generated edge-case vectors. Expected signatures and hashes were produced by hw's signMessage (commit 2ebb5e7) and independently verified with Bitcoin Core 25.0 verifymessage and a separate Python implementation. The expected warnings were written by hand. Vectors in \"rejected\" must make signMessage fail.",
+  "rejected": [
+    {
+      "name": "edge/rejected/other-key",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1J3J6EvPrv8q6AC3VCjWV45Uf3nssNMRtH",
+      "comment": "Address of a different key (the internal address m/44'/0'/0'/1/0 of the same wallet)."
+    },
+    {
+      "name": "edge/rejected/uncompressed-p2pkh",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "18LhnLKXjcTw5xJFiTxntnKit2Gd63eWFm",
+      "comment": "P2PKH address of the uncompressed public key of the signing key: hw only signs for compressed keys."
+    },
+    {
+      "name": "edge/rejected/p2wpkh",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "bc1qmxrw6qdh5g3ztfcwm0et5l8mvws4eva24kmp8m",
+      "comment": "P2WPKH (SegWit v0) address of the signing key: the BIP-322 legacy format is restricted to P2PKH."
+    },
+    {
+      "name": "edge/rejected/p2sh-p2wpkh",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "3HkzTaFbEMWeJPLyNCNhPyGfZsVLDwdD3G",
+      "comment": "P2SH-P2WPKH address of the signing key: the BIP-322 legacy format is restricted to P2PKH."
+    },
+    {
+      "name": "edge/rejected/p2sh-bitcoin-core",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "3B5fQsEXEaV8v6U3ejYc8XaKXAkyQj2MjV",
+      "comment": "P2SH address used by Bitcoin Core's message_verify unit test (ERR_ADDRESS_NO_KEY)."
+    },
+    {
+      "name": "edge/rejected/d-1-p2wpkh",
+      "network": "btc",
+      "key": {
+        "secretHex": "0000000000000000000000000000000000000000000000000000000000000001"
+      },
+      "address": "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
+      "comment": "P2WPKH address of d = 1 (the address in bitcoinjs-message's P2WPKH fixture for the same key)."
+    }
+  ],
+  "vectors": [
+    {
+      "name": "edge/empty",
+      "edgeCase": "empty message",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "",
+      "messageUtf8Hex": "",
+      "messageHash": "80e795d4a4caadd7047af389d9f7f220562feb6196032e2131e10563352c4bcc",
+      "signature": "IGhMPJ00B3WP1UmQx9XmWhhBAK4ghbRqpsKMesv6s7EoW060LMcjmz/UXNuGQm2pRl088LsDFO6DPwve5tQXgDc=",
+      "warnings": [],
+      "comment": "Zero-length message: the length prefix is the single byte 0x00. Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/single-character",
+      "edgeCase": "minimal message",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "a",
+      "messageUtf8Hex": "61",
+      "messageHash": "81059b18a4975dc3ba3a5437b4bad1b38c3875407f80c7965be4ab42be222c3d",
+      "signature": "H8eb+WFu+coy3uig9pFllbB15klJGQHnbbNqPQhKSrUYIOKkAHMO4P/j1bp2nD/LyDeKAQ5OYTnFRkElj3Kc874=",
+      "warnings": [],
+      "comment": "Header byte 31 (recovery id 0)."
+    },
+    {
+      "name": "edge/single-space",
+      "edgeCase": "whitespace only",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": " ",
+      "messageUtf8Hex": "20",
+      "messageHash": "a18ceda30a92e61ee1ae12b1c4815de1562fbc4892ddeff931e87b083ca570e4",
+      "signature": "IK+ahtaVitWjb/hpQE3qmUVTf5DzPAiiwgsySvprJvbvLw3ndSW6tW1U2QvVrodkaTdNDJPaDWbtoCXWVceDRN0=",
+      "warnings": [
+        "whitespace"
+      ],
+      "comment": "Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/leading-space",
+      "edgeCase": "leading whitespace",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": " leading space",
+      "messageUtf8Hex": "206c656164696e67207370616365",
+      "messageHash": "53f5ac61c648e2de78ac7569a719dc5e55eb0fd9d303b36abf00af4ad3fc8c7c",
+      "signature": "H615y9o8v+cCys5hiezDWghUCcxBOoPnCW7uuBsBDVF9DPuj1F3oenmFDe/JkudVeavUUu2cMqlYYW23I6NvbcE=",
+      "warnings": [
+        "whitespace"
+      ],
+      "comment": "Header byte 31 (recovery id 0)."
+    },
+    {
+      "name": "edge/trailing-space",
+      "edgeCase": "trailing whitespace",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "trailing space ",
+      "messageUtf8Hex": "747261696c696e6720737061636520",
+      "messageHash": "a71cf7fe826462ccf0e1dfca4877ceb876e4c485305dca6aeb305ad3cd048bc3",
+      "signature": "IJXbG04GwewqK64Qt3iyITFBLl2zKTn1Q2rgwvew3VGkJqYPAeuI1a0DOSgYqdTNUSru6hpPc4y1x15vCSuFJoE=",
+      "warnings": [
+        "whitespace"
+      ],
+      "comment": "Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/leading-tab",
+      "edgeCase": "leading whitespace (tab)",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "\tleading tab",
+      "messageUtf8Hex": "096c656164696e6720746162",
+      "messageHash": "b0d466187abf83cab9fb68bee5df385ed3aa9ffcebcf0f71d586932e42012957",
+      "signature": "H+xICdTzq9y/o3QOdFOGjOzBizwUKkqbyOXVt+58tzp/a81r4g3s08pKg7osE1tsBhvXYjsNgcEfSbwibD9Ikr0=",
+      "warnings": [
+        "whitespace"
+      ],
+      "comment": "Header byte 31 (recovery id 0)."
+    },
+    {
+      "name": "edge/inner-tab",
+      "edgeCase": "inner whitespace (tab)",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "inner\ttab",
+      "messageUtf8Hex": "696e6e657209746162",
+      "messageHash": "5d75062243cbb9c6adbb1bd92eeb61a6064ba54817da2d29cf7be6cae2f1ccc8",
+      "signature": "ICkRSq6Yg/y6GotpYfI2ngJ+anAqztew0gRGK/jUtvkUFd3GaFSXDAw65cji7XL5c19Z/DrbvikfMtLVfxgHVUU=",
+      "warnings": [],
+      "comment": "Whitespace inside the message does not trigger a warning. Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/inner-double-spaces",
+      "edgeCase": "inner whitespace (repeated spaces)",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "two  spaces  inside",
+      "messageUtf8Hex": "74776f20207370616365732020696e73696465",
+      "messageHash": "c836fbab5cda320e44db4ba3d5db3e31ecde166f8807e2f893bf800f9ba6b219",
+      "signature": "IEtB24fcz5d+J3pku1cy7a5iiI6ajSJBMd9eR6rWrmjWNkGOMVy7E6hEpJu3+aLBhRlC1L5Giqv6fLQ1xtp6Wto=",
+      "warnings": [],
+      "comment": "Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/vertical-tab-and-form-feed",
+      "edgeCase": "leading/trailing whitespace (VT, FF)",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "\u000bvertical tab and form feed\f",
+      "messageUtf8Hex": "0b766572746963616c2074616220616e6420666f726d20666565640c",
+      "messageHash": "a04bc0b1d942fe65f03e1121ddee6d59c34aec50013b0a7a5e769aaf05cd725a",
+      "signature": "H2uF9Sftmf7paTbPOj/yIlrEYn3rLtJ17yY59RIX4kf4Adlkb9fa8mdNYMjB6R07X171Gwt8Hr1qqyapf+jk8T0=",
+      "warnings": [
+        "whitespace"
+      ],
+      "comment": "Header byte 31 (recovery id 0)."
+    },
+    {
+      "name": "edge/trailing-lf",
+      "edgeCase": "trailing line feed",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "trailing newline\n",
+      "messageUtf8Hex": "747261696c696e67206e65776c696e650a",
+      "messageHash": "4aac9a5a807d5d191c8fa60e891bbb2eb5b2ba88828594aea3c4f51fc34d7235",
+      "signature": "IF0h0Qe+V6EOo2GFoPzkbCzH2NEAo77+QqObjF3queeaf+Iw2KN0IeKfVuNZ1I4+T6VqJOlm5cABomd25leD0eQ=",
+      "warnings": [
+        "whitespace",
+        "linebreak"
+      ],
+      "comment": "A trailing newline is both edge whitespace and a line break. Easily lost when copying. Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/leading-lf",
+      "edgeCase": "leading line feed",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "\nleading newline",
+      "messageUtf8Hex": "0a6c656164696e67206e65776c696e65",
+      "messageHash": "35e8af86d1e4fe2f3fa1055e4e853e75bbf225dcb368c2401842db2709b9902a",
+      "signature": "IN+wdFaEkjmOAsJEvO2nKD1WCCwyaIRlvjwga4nGETnFQCQP5Eg0SZivhWSiGqMEdLQzFK5blIDDb1GXMJwKYxo=",
+      "warnings": [
+        "whitespace",
+        "linebreak"
+      ],
+      "comment": "Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/inner-lf",
+      "edgeCase": "line feed (LF)",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "line 1\nline 2",
+      "messageUtf8Hex": "6c696e6520310a6c696e652032",
+      "messageHash": "f4573d21d9021af04f33a4a6f2e8c72f8fd873d57c9e9d9bd45bb21f8b75a797",
+      "signature": "Hz+OO92KC8RtZqRiLoM/ffnVZBQqr85yXK/cQwsG/m+kaESZYCltLmAlmfoyxIOFk8aNHZ5KjRhGs2f6NMwHl2A=",
+      "warnings": [
+        "linebreak"
+      ],
+      "comment": "Header byte 31 (recovery id 0)."
+    },
+    {
+      "name": "edge/inner-crlf",
+      "edgeCase": "carriage return + line feed (CRLF)",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "line 1\r\nline 2",
+      "messageUtf8Hex": "6c696e6520310d0a6c696e652032",
+      "messageHash": "b25d146ccdfce2f6cc962252036bc3ce3ad70698b2419e76b49f511478d3d066",
+      "signature": "IMSJ5HR70ObWSRaR05Ktf7tLS3oeM6hLbAoz2DuojsGeB3ntVBoRpFWFAnPOeWPiPyKGU+gFjR/nmkZY0XfNljE=",
+      "warnings": [
+        "linebreak"
+      ],
+      "comment": "Signs different bytes than the LF version: line ending conversions break signatures. Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/inner-cr",
+      "edgeCase": "carriage return only (CR)",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "line 1\rline 2",
+      "messageUtf8Hex": "6c696e6520310d6c696e652032",
+      "messageHash": "a65860ac636ddc5e72e2eba50fcab5f01cfaae30cca2896b9bc3da5ed1e7dcb4",
+      "signature": "HzGrxUtRBN4P87DjWm0z1wuQcZ2YyLGU2VA9+XEIrJi8FDAYRJXYaLL7SJron+IKSSdx88BF945SG2gK7D+/Rb0=",
+      "warnings": [
+        "linebreak"
+      ],
+      "comment": "Header byte 31 (recovery id 0)."
+    },
+    {
+      "name": "edge/only-lf",
+      "edgeCase": "line feed only",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "\n",
+      "messageUtf8Hex": "0a",
+      "messageHash": "fa3c3798a5660734d21f0bbfa507f2f043ea405ee82891a313e82946b8ae1249",
+      "signature": "HzLQnriDfNnVDWHQ4l2X0unOCtRJzifjbGxOFOG80qaWJT519QDfh7KSD+l3gLWLoTlhfBDP11UMZ6JrCs1jFvA=",
+      "warnings": [
+        "whitespace",
+        "linebreak"
+      ],
+      "comment": "Header byte 31 (recovery id 0)."
+    },
+    {
+      "name": "edge/only-crlf",
+      "edgeCase": "CRLF only",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "\r\n",
+      "messageUtf8Hex": "0d0a",
+      "messageHash": "c9de2e0d41a9669f3189a7d16719484310a2e89b3ea605998e05f0dd902e0c95",
+      "signature": "IKolth0//Thjjy8vWXwllG4652QJNL08HIrAIbi2eJbXKC88iwZdOW4K+ApXhrIMxkOHJ1tHvjidk49NXzvBoCc=",
+      "warnings": [
+        "whitespace",
+        "linebreak"
+      ],
+      "comment": "Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/nul-byte",
+      "edgeCase": "NUL byte",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "nul\u0000byte",
+      "messageUtf8Hex": "6e756c0062797465",
+      "messageHash": "bbdc2be328a084a2a5379fb88718698bea534b2cd2baf62ea8a98a7f1a404414",
+      "signature": "H2lQN7cPcyL8/7cgR1QcvkNcQbV5DqGIUSymb4W/uk4bZ3A4jaQZDhuiafmOduNbGSDzjG7gd3GjXy6/+hm93r8=",
+      "warnings": [],
+      "comment": "Cannot be passed on the command line, but the library must sign the exact bytes, including 0x00. Header byte 31 (recovery id 0)."
+    },
+    {
+      "name": "edge/control-characters",
+      "edgeCase": "non-whitespace control characters",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "\u0001\u0002\u001f",
+      "messageUtf8Hex": "01021f7f",
+      "messageHash": "13442717d493c0bfa3d32b943e074bfdeabe3b613660381b082fd52586a2900e",
+      "signature": "IPSHesWn0rX2vYTVuxSN/ewaMGFhsNxzazg17Ib/g2grQ4UtwwnKhUA2spgjuB+1lnjpgcWzNj7j+Gz9Wx24Jgs=",
+      "warnings": [],
+      "comment": "C0 controls and DEL are not whitespace, so no warning. Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/json-special-characters",
+      "edgeCase": "quotes and backslashes",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "quote \" backslash \\ slash /",
+      "messageUtf8Hex": "71756f74652022206261636b736c617368205c20736c617368202f",
+      "messageHash": "5b59025d0db2360d6866e0cc537a06ecb6c3234c099c8160b9a57c33a068b19f",
+      "signature": "ICgYiLHrqKdFUpWpNVzuxN1EsikJ6iFSyuVi3bSpbN+zZT4+yliOrvxwJVBUz35m6fgQ7v4Llr61eRDGnQgpL/E=",
+      "warnings": [],
+      "comment": "Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/armor-marker",
+      "edgeCase": "armor delimiter as message",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "-----BEGIN BITCOIN SIGNED MESSAGE-----",
+      "messageUtf8Hex": "2d2d2d2d2d424547494e20424954434f494e205349474e4544204d4553534147452d2d2d2d2d",
+      "messageHash": "3595bf68af07be486adc8df9f1618ea21bae841f83279b5f71cbfa3cd2b52789",
+      "signature": "H98oQ3CPR46uWS29gvN7Jj+HFiQMfRtt+2iZgVfyxi8yD6nRmCXLURjqSgd3+BNKHu/EtS7Bu2/0ql6vfp3fHZY=",
+      "warnings": [],
+      "comment": "A message that looks like an armor delimiter. The signature is unaffected, but the armored block becomes ambiguous. Header byte 31 (recovery id 0)."
+    },
+    {
+      "name": "edge/magic-prefix",
+      "edgeCase": "message equals the magic prefix",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "Bitcoin Signed Message:\n",
+      "messageUtf8Hex": "426974636f696e205369676e6564204d6573736167653a0a",
+      "messageHash": "eac46a5c64233c7d605e27ec345ff15c1b89aaad22c9a1b742250e78df1c76fe",
+      "signature": "ILROsIcD4ZksLLuWPPI0DOTsYOI1PX6yWJaA2H6/vgWOVIs0E6XgA/p+NM4YFMWwkT9bPfUe9Db1RW7o6ct6dYQ=",
+      "warnings": [
+        "whitespace",
+        "linebreak"
+      ],
+      "comment": "The prefix is length-prefixed, so a message equal to the prefix cannot collide with it. Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/nfc-e-acute",
+      "edgeCase": "Unicode NFC (precomposed)",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "café",
+      "messageUtf8Hex": "636166c3a9",
+      "messageHash": "f043b185e2de78a1df94752f592405dcce734d8c6842a522dc5aaec2f4569df4",
+      "signature": "IDPn2DEqU2+5oEK/ydQLxpdme/76Nsg7f6SGqUsx7NN+f534jgIbhRHT3i5lEzlwREKUdcL5xKkOVZTeOSFsBjY=",
+      "warnings": [],
+      "comment": "U+00E9 (2 UTF-8 bytes). Pairs with nfd-e-acute: same text, different bytes, different signature. Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/nfd-e-acute",
+      "edgeCase": "Unicode NFD (decomposed)",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "café",
+      "messageUtf8Hex": "63616665cc81",
+      "messageHash": "0582f7d7ed5535f468dc87a96dadcde759e9eace6a9e40f61fa3f2a723024f1e",
+      "signature": "IMAGGfqalf91gbXDoO0K3M9Ngu5+Fvhhh5mfQZZo2Pt6W2R4NaFMdjnI+Xa1cd0ZJY4KKkkJrNKk2nuez87NUCQ=",
+      "warnings": [],
+      "comment": "U+0065 U+0301 (3 UTF-8 bytes). hw does not normalize, like Bitcoin Core: signature differs from nfc-e-acute. Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/replacement-character",
+      "edgeCase": "U+FFFD, what a non-ASCII argument became in a process without a UTF-8 locale",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "caf��",
+      "messageUtf8Hex": "636166efbfbdefbfbd",
+      "messageHash": "1dad7c708b4a71e5cd9339c74c0bf20c3f0f07e6fadf822b9e8f3b248de5f4fa",
+      "signature": "H7dG5LA/hCqS0WfP7w+QEWFaaaex3o/K1V7PWJFz7dP+Gmls6KLyg9+PpFfFR1mDuY+C4ACxoDvZRMdvY4f1isY=",
+      "warnings": [],
+      "comment": "Two U+FFFD REPLACEMENT CHARACTERs (3 UTF-8 bytes each). Before hw forced UTF-8 (setUtf8Encoding), the argument \"caf\u00e9\" became this in a process without a UTF-8 locale (one U+FFFD per undecodable byte of \u00e9), and the altered message was signed silently: this is the signature hw 0.9.5 produced for \"caf\u00e9\" under LANG=C. The characters themselves are valid and signed byte for byte: the signature differs from nfc-e-acute. Header byte 31 (recovery id 0)."
+    },
+    {
+      "name": "edge/two-byte-utf8",
+      "edgeCase": "2-byte UTF-8 characters",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "Ünïcödé ñ ß",
+      "messageUtf8Hex": "c39c6ec3af63c3b664c3a920c3b120c39f",
+      "messageHash": "92d9568f120646c5cdcc108c3c55ebbd7b5c0439d6c5b807ca4da79861109023",
+      "signature": "H0gIuP3FzzfkjOBWU+ZY7yQh4kJ1C657iO4mIiDkHt/rWwIH+XsTAmKj6KJ4QnATxYh5cxMBS/ReoWFFrqBxuto=",
+      "warnings": [],
+      "comment": "Header byte 31 (recovery id 0)."
+    },
+    {
+      "name": "edge/three-byte-utf8",
+      "edgeCase": "3-byte UTF-8 characters (CJK)",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "中本聰",
+      "messageUtf8Hex": "e4b8ade69cace881b0",
+      "messageHash": "bfed6f0b1e121973dde925308eccc97a867bd9df890ec294d76cae7e885e0a08",
+      "signature": "H9AskyIT7lzXw9+etOvqVdbCB6eOTbDZ+xwgTe1yznwsGtUeNUFm4jaEJrr5yjSLSebJqRgqWbJ9RfGn1iv3B7w=",
+      "warnings": [],
+      "comment": "Header byte 31 (recovery id 0)."
+    },
+    {
+      "name": "edge/four-byte-utf8",
+      "edgeCase": "4-byte UTF-8 characters (emoji, astral plane)",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "₿itcoin 🚀",
+      "messageUtf8Hex": "e282bf6974636f696e20f09f9a80",
+      "messageHash": "43be67d4e974533fca6b62e8334879f7326c3b6b708f291d1da695e09bd2ba30",
+      "signature": "INBmahDZ71rxQIZBFVGT0ZBgkNGI+mdeo9KVV3lyu2t2Sy2klYXHf0aFL79ZHR7pO3eVU+d9Te8qhAcGv3ZMqz0=",
+      "warnings": [],
+      "comment": "U+1F680 is outside the BMP: 4 UTF-8 bytes (a surrogate pair in UTF-16). Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/zwj-sequence",
+      "edgeCase": "zero-width joiner sequence",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "👨‍👩‍👧",
+      "messageUtf8Hex": "f09f91a8e2808df09f91a9e2808df09f91a7",
+      "messageHash": "bf6d7bab9558c8efa82cbca1d609e6c63a4c9ad41db75ef46056fd82eceed210",
+      "signature": "H0tK8NFSvHlRsRNFfJ/mwxpHPnrvsjvEuXj5nlEg3r5VR16VKGXsMn5FGyj6uZ0GENQ5JJ52yL3IaqKlnV+Vx2o=",
+      "warnings": [],
+      "comment": "One visible glyph made of 5 code points (18 UTF-8 bytes). Header byte 31 (recovery id 0)."
+    },
+    {
+      "name": "edge/right-to-left",
+      "edgeCase": "right-to-left scripts",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "שלום עולם مرحبا بالعالم",
+      "messageUtf8Hex": "d7a9d79cd795d79d20d7a2d795d79cd79d20d985d8b1d8add8a8d8a720d8a8d8a7d984d8b9d8a7d984d985",
+      "messageHash": "cf855b03613fe7248f52416aa609cd9f99f482ed0ad8da95150ca89f5326fe1f",
+      "signature": "IMulAZ2E4x697y+yMIcR42lJ8IxoGwpVr3eDUrFgkl5kenpUp0yIRept5TgsCsT5VOc8vqrEFvFS2TVVAscvvgU=",
+      "warnings": [],
+      "comment": "Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/byte-order-mark",
+      "edgeCase": "byte order mark at start",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "﻿BOM at start",
+      "messageUtf8Hex": "efbbbf424f4d206174207374617274",
+      "messageHash": "84178c4462345959f2338def19d3b589e5504e007620666f15dce1dd1ad9032b",
+      "signature": "IOjW306FjcXakqCSDvoOxf2g7ztfHadfOXJnV/36MZlcFv9CPhHL/lJFQTER87CUb9Kkmg9Kb6uOSZYSMCrA+Nc=",
+      "warnings": [],
+      "comment": "U+FEFF is invisible but is a format character, not whitespace: no warning. Its bytes EF BB BF are signed. Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/nbsp-trailing",
+      "edgeCase": "trailing no-break space (U+00A0)",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "no-break space ",
+      "messageUtf8Hex": "6e6f2d627265616b207370616365c2a0",
+      "messageHash": "ded4ff0e4c3bc72c9d010482bf45a9f8e68c488cb1cb3203179629947b071ff2",
+      "signature": "IL2MBi7+ksHogano15Ce+v8oA/yE4GiJwKGjSXcmT5eYAaP6Jd24UEJv433EfWDdqiicrMoWv/COuMYQ6RhSiEA=",
+      "warnings": [
+        "whitespace"
+      ],
+      "comment": "Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/ideographic-space-trailing",
+      "edgeCase": "trailing ideographic space (U+3000)",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "ideographic space　",
+      "messageUtf8Hex": "6964656f67726170686963207370616365e38080",
+      "messageHash": "5985afddd8e80427798ca8cf39e5edbd6186eb57adc8e6216527144ef306bf45",
+      "signature": "H/uQKA0p5Cqw6onrrINCf9uKDNpyTqNJjaSXZaaC8uzhbu0m4McgRXJ6ZzwzxxTx36JuB0EfLBeZQlZws+cfjFc=",
+      "warnings": [
+        "whitespace"
+      ],
+      "comment": "Header byte 31 (recovery id 0)."
+    },
+    {
+      "name": "edge/line-separator-inner",
+      "edgeCase": "inner Unicode line separator (U+2028)",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "line separator",
+      "messageUtf8Hex": "6c696e65e280a8736570617261746f72",
+      "messageHash": "2ad088aeb77196283e9ce063ceb2e7562b0df35d4f7cf11cfa2724120bd38d04",
+      "signature": "IO294BE6VGUWVdW43RcYQ2d82/lkQq+CzbOIfx4RnnmDQndyPrUL/jWHRJexdGWT1hVgFcRfeY38x3/nIdWJA0Y=",
+      "warnings": [],
+      "comment": "U+2028 is not LF/CR, so no line-break warning, and it is not at the edges. Documents the current definition. Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/length-252",
+      "edgeCase": "length prefix: largest 1-byte length (252)",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "a",
+      "messageRepeat": 252,
+      "messageHash": "b7b164ef991d52735c6bb888642ad7eb6b6939dc984a7fceff4376be041d142f",
+      "signature": "IIHQfdTzpa6MjTI2OZu3nkrofj99jwbhStYqZ8ygXR91XASemk1DcjKyGDx1FT0+Yp2fMBxKopLfqNtaYaIqQE8=",
+      "warnings": [],
+      "comment": "Message is \"a\" repeated 252 times (252 bytes). 252 bytes: length prefix 0xfc. Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/length-253",
+      "edgeCase": "length prefix: smallest 3-byte length (253)",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "a",
+      "messageRepeat": 253,
+      "messageHash": "df167ad249ff5837e6acada677118b2ecc6757ab4cdade39caead99ef0220230",
+      "signature": "H5uVMMvX/nG6eYzzi/5/feuUwHhOO7u4Y5Wo0xoaRh1sZrhH6PTe2l381jghDQ3m72AzUwkKpDwz5Z8EuSc0ByE=",
+      "warnings": [],
+      "comment": "Message is \"a\" repeated 253 times (253 bytes). 253 bytes: length prefix fd fd 00. Header byte 31 (recovery id 0)."
+    },
+    {
+      "name": "edge/length-65535",
+      "edgeCase": "length prefix: largest 3-byte length (65535)",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "a",
+      "messageRepeat": 65535,
+      "messageHash": "fade4e6ebe191b9dcf869e37c4ab6a2d5f9ffc1160fbfb84370afb579af7de8d",
+      "signature": "IFI0kBHX1EcXoZ9f8J3OI+Y/bRDlSiiCLtzT+/mQSPxHY5uVo+OBI9Cf+5HXNtEvDsc/V8kzpfv3EKXZhitkYRA=",
+      "warnings": [],
+      "comment": "Message is \"a\" repeated 65535 times (65535 bytes). 65535 bytes: length prefix fd ff ff. Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/length-65536",
+      "edgeCase": "length prefix: smallest 5-byte length (65536)",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "a",
+      "messageRepeat": 65536,
+      "messageHash": "d5db7ae9446693355e5674d5d17e7b0a29f13fc174055077d9613e9ab2b462fe",
+      "signature": "H1jHmLLooYiEwnWvXURrLjbMby2bLSMjKGqRggGL3t0gLNSh50O2GFtz0QcQxiPITpQd288dPPH+wbOG+tWwiUA=",
+      "warnings": [],
+      "comment": "Message is \"a\" repeated 65536 times (65536 bytes). 65536 bytes: length prefix fe 00 00 01 00. Header byte 31 (recovery id 0)."
+    },
+    {
+      "name": "edge/bytes-not-chars-252",
+      "edgeCase": "length counts bytes, not characters (126 chars, 252 bytes)",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "é",
+      "messageRepeat": 126,
+      "messageUtf8Hex": "c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9",
+      "messageHash": "575a4af7d4da7b1c4a2dee167e23db6e2b1be2d654e1b1acc690c87a9f186800",
+      "signature": "IHnhGm7091+b5BILG2Xbulb211m6oq9bjQz37FoYSBOYUkLZeEmW+kopNxYawLj69jFriuIK3Yyz9O/lXSCWsAk=",
+      "warnings": [],
+      "comment": "Message is \"é\" repeated 126 times (252 bytes). 126 characters of 2 bytes: 252 bytes, 1-byte length prefix. Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/bytes-not-chars-254",
+      "edgeCase": "length counts bytes, not characters (127 chars, 254 bytes)",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "é",
+      "messageRepeat": 127,
+      "messageUtf8Hex": "c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9",
+      "messageHash": "8e6d710a1c97433934727b628d45ce22809370a4f52f0c193f9b77f7a8666eee",
+      "signature": "IFM4vc51Gs29kDKiCDQekOMdiowNqyfJWjBiHg0hwTM5DqFKJ/B4LIE53ff5LsQUGGOrULhdVos3zowBNnS1oFw=",
+      "warnings": [],
+      "comment": "Message is \"é\" repeated 127 times (254 bytes). 127 characters of 2 bytes: 254 bytes, so a 3-byte length prefix although there are fewer than 253 characters. Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/three-byte-chars-255",
+      "edgeCase": "length counts bytes (85 chars, 255 bytes)",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "message": "€",
+      "messageRepeat": 85,
+      "messageUtf8Hex": "e282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ac",
+      "messageHash": "a2e5a355e141b8a44c12511a7f5f7e933b1de9acc2d095d3ea0260a44c4e5635",
+      "signature": "H5zR8TyR80+YLYUcG/IMDanrKHg13vJUfQX38s+c0vixNRmPTcNLLGxB5sRZpr673T5dlhC6zhTWdC+N/AgOphc=",
+      "warnings": [],
+      "comment": "Message is \"€\" repeated 85 times (255 bytes). 85 x U+20AC (3 bytes each). Header byte 31 (recovery id 0)."
+    },
+    {
+      "name": "edge/key-d-1",
+      "edgeCase": "private key d = 1",
+      "network": "btc",
+      "key": {
+        "secretHex": "0000000000000000000000000000000000000000000000000000000000000001"
+      },
+      "address": "1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH",
+      "message": "key edge case",
+      "messageUtf8Hex": "6b657920656467652063617365",
+      "messageHash": "eb0be81a1d319f97229981d82d42a4be8759ab7f2fbd335836e0f7d44d2f0720",
+      "signature": "IIfDsgZqnUnqln5nNI/MNpCHbqV7wv6XCVmqnIQAEZJQWNtiK5KB9IdztLqSR2N8PmZj10OHVKou4RhWZvXiSBU=",
+      "warnings": [],
+      "comment": "Smallest valid private key (public key = G). Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/key-d-2",
+      "edgeCase": "private key d = 2",
+      "network": "btc",
+      "key": {
+        "secretHex": "0000000000000000000000000000000000000000000000000000000000000002"
+      },
+      "address": "1cMh228HTCiwS8ZsaakH8A8wze1JR5ZsP",
+      "message": "key edge case",
+      "messageUtf8Hex": "6b657920656467652063617365",
+      "messageHash": "eb0be81a1d319f97229981d82d42a4be8759ab7f2fbd335836e0f7d44d2f0720",
+      "signature": "H+E3euzagWirjw1fCMbWgLOWOJN5VvkYJDZuupF4R+coMKn7INwCumG1r5u4ZZE21EYckPbHtez7nn/7+g7ILJw=",
+      "warnings": [],
+      "comment": "Header byte 31 (recovery id 0)."
+    },
+    {
+      "name": "edge/key-d-255",
+      "edgeCase": "private key with 31 leading zero bytes",
+      "network": "btc",
+      "key": {
+        "secretHex": "00000000000000000000000000000000000000000000000000000000000000ff"
+      },
+      "address": "1DF7Yr4GKWoCXZZZXoEczo9oiokwQe8Urz",
+      "message": "key edge case",
+      "messageUtf8Hex": "6b657920656467652063617365",
+      "messageHash": "eb0be81a1d319f97229981d82d42a4be8759ab7f2fbd335836e0f7d44d2f0720",
+      "signature": "IPzVg3KQ0jMqMSbYPGCp9yn14LPWd928EnIt3Hs32QnxbME5paZRzZ+xXrH6A7w42pxqeoLP2nov4VUZ+LaHNp0=",
+      "warnings": [],
+      "comment": "Tests that the 32-byte key encoding keeps its leading zero bytes. Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/key-d-2pow128",
+      "edgeCase": "private key d = 2^128",
+      "network": "btc",
+      "key": {
+        "secretHex": "0000000000000000000000000000000100000000000000000000000000000000"
+      },
+      "address": "15e9MshmwtPT4T8h6pRMNnBppN9DmjrRDK",
+      "message": "key edge case",
+      "messageUtf8Hex": "6b657920656467652063617365",
+      "messageHash": "eb0be81a1d319f97229981d82d42a4be8759ab7f2fbd335836e0f7d44d2f0720",
+      "signature": "H3CsIssBeucy9ObA0E4fhGcnXrbQdJma5jD53QfnRDDLUZrTcCz3AbvOdTLL3Otsp+VZ0ODqT5Vl+0C6iSE4iHU=",
+      "warnings": [],
+      "comment": "Header byte 31 (recovery id 0)."
+    },
+    {
+      "name": "edge/key-d-2pow255",
+      "edgeCase": "private key d = 2^255 (top bit set)",
+      "network": "btc",
+      "key": {
+        "secretHex": "8000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "address": "18h7RmwXCTYX69z9S2Hc9gs8ET7SUN7YG5",
+      "message": "key edge case",
+      "messageUtf8Hex": "6b657920656467652063617365",
+      "messageHash": "eb0be81a1d319f97229981d82d42a4be8759ab7f2fbd335836e0f7d44d2f0720",
+      "signature": "IOVuLreT3kdroQrfk4tO02Mgc76lUTwFPQvp7/4OX58jLbprOJ6pFpy7OF4dZCc8utqGxyjuxsPHh/eW5Bgo/SE=",
+      "warnings": [],
+      "comment": "Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/key-d-n-minus-1",
+      "edgeCase": "private key d = n - 1 (largest valid key)",
+      "network": "btc",
+      "key": {
+        "secretHex": "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140"
+      },
+      "address": "1GrLCmVQXoyJXaPJQdqssNqwxvha1eUo2E",
+      "message": "key edge case",
+      "messageUtf8Hex": "6b657920656467652063617365",
+      "messageHash": "eb0be81a1d319f97229981d82d42a4be8759ab7f2fbd335836e0f7d44d2f0720",
+      "signature": "IEz1ibLOYYOQhX7EuOD/67oTvLX51NrUxSpO+6yJr5NoUuz7H82zGwsO3u5GOzs4l8VkQBvrt9r1K9gogP0XazU=",
+      "warnings": [],
+      "comment": "Public key is -G: same x coordinate as d = 1, opposite y parity. Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/network-btctest-d-1",
+      "edgeCase": "same key on testnet",
+      "network": "btctest",
+      "key": {
+        "secretHex": "0000000000000000000000000000000000000000000000000000000000000001"
+      },
+      "address": "mrCDrCybB6J1vRfbwM5hemdJz73FwDBC8r",
+      "message": "key edge case",
+      "messageUtf8Hex": "6b657920656467652063617365",
+      "messageHash": "eb0be81a1d319f97229981d82d42a4be8759ab7f2fbd335836e0f7d44d2f0720",
+      "signature": "IIfDsgZqnUnqln5nNI/MNpCHbqV7wv6XCVmqnIQAEZJQWNtiK5KB9IdztLqSR2N8PmZj10OHVKou4RhWZvXiSBU=",
+      "warnings": [],
+      "comment": "Same key and message as key-d-1: the signature must be identical, only the address encoding differs. Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/network-bch-d-1",
+      "edgeCase": "same key on Bitcoin Cash (CashAddr)",
+      "network": "bch",
+      "key": {
+        "secretHex": "0000000000000000000000000000000000000000000000000000000000000001"
+      },
+      "address": "bitcoincash:qp63uahgrxged4z5jswyt5dn5v3lzsem6cy4spdc2h",
+      "message": "key edge case",
+      "messageUtf8Hex": "6b657920656467652063617365",
+      "messageHash": "eb0be81a1d319f97229981d82d42a4be8759ab7f2fbd335836e0f7d44d2f0720",
+      "signature": "IIfDsgZqnUnqln5nNI/MNpCHbqV7wv6XCVmqnIQAEZJQWNtiK5KB9IdztLqSR2N8PmZj10OHVKou4RhWZvXiSBU=",
+      "warnings": [],
+      "comment": "Same key and message as key-d-1: the signature must be identical, only the address encoding differs. Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/account-index-change",
+      "edgeCase": "hw derivation: internal (change) chain",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "",
+        "account": 0,
+        "chain": 1,
+        "index": 0
+      },
+      "address": "1J3J6EvPrv8q6AC3VCjWV45Uf3nssNMRtH",
+      "message": "change address message",
+      "messageUtf8Hex": "6368616e67652061646472657373206d657373616765",
+      "messageHash": "d5baa472a284086e76720e9aa29b25f3fb9519de621a0a0411f3907b17b3cc4d",
+      "signature": "IPK9a13xkkUrs1WjxLrZZw9MCO6F8b1pBWGb0Uex0iasD1/yxvRAgQN6VlaRRoV0AfpQRSAa2GGMYpafMBkoX9k=",
+      "warnings": [],
+      "comment": "signmsg also accepts internal addresses (m/44'/0'/0'/1/0) when they exist in the wallet. Header byte 32 (recovery id 1)."
+    },
+    {
+      "name": "edge/passphrase-unicode",
+      "edgeCase": "hw derivation: Unicode BIP-39 passphrase",
+      "network": "btc",
+      "key": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": "pässwörd ₿",
+        "account": 0,
+        "chain": 0,
+        "index": 0
+      },
+      "address": "1tNv4GaeVfs9qe6HtU1RtnWZd2PW84Sfb",
+      "message": "passphrase edge case",
+      "messageUtf8Hex": "7061737370687261736520656467652063617365",
+      "messageHash": "0e89cc2e4b2b15773d22bbb8ab581cce71e50e03d724b0418223a6441a48dd93",
+      "signature": "HxCbKDFYAQkK6eGn2/s5cbQCkU2JAvyvWnhLClDV5C43VOrS+AXlcBXrfMXAF3oRwQEpbtKz1OOp+esbP7B9T5c=",
+      "warnings": [],
+      "comment": "KNOWN BIP-39 DEVIATION: BIP-39 requires NFKD normalization of the passphrase, but hw passes it to haskoin-core's mnemonicToSeed unchanged and haskoin-core does not normalize (documented in anyToSeed). For this passphrase (ä/ö in NFC form), BIP-39 compliant wallets derive a different key and address. This vector records the current behaviour; it must be updated if normalization is added. Header byte 31 (recovery id 0)."
+    }
+  ]
+}
