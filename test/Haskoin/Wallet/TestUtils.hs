@@ -121,7 +121,7 @@ parseNetwork name =
 
 -- | How a private key is specified in a test vector. In JSON, one of:
 --
--- * {"wif": ...}: compressed WIF private key
+-- * {"wif": ...}: WIF private key, compressed or uncompressed
 -- * {"secretHex": ...}: 32-byte secret in hex
 -- * {"mnemonic", "passphrase", "path"}: BIP-39 mnemonic and any BIP-32 path
 -- * {"mnemonic", "passphrase", "account", "chain", "index"}: derived like hw
@@ -157,10 +157,7 @@ instance FromJSON KeySpec where
 vectorKey :: Ctx -> Network -> KeySpec -> Either String SecKey
 vectorKey ctx net =
   \case
-    KeyWif wif -> do
-      prv <- maybeToEither "Invalid WIF" $ fromWif net wif
-      unless prv.compress $ Left "Uncompressed WIF keys are not supported"
-      return prv.key
+    KeyWif wif -> (.key) <$> maybeToEither "Invalid WIF" (fromWif net wif)
     KeySecret secret ->
       maybeToEither "Invalid secret" $ secKey =<< decodeHex secret
     KeyPath mnem pass path -> do
@@ -168,6 +165,24 @@ vectorKey ctx net =
       parsed <- maybeToEither "Invalid path" $ parsePath (Text.unpack path)
       return (derivePath ctx parsed.get (makeXPrvKey seed)).key
     KeyAccount mnem pass acc chain idx -> do
-      accKey <- signingKey net ctx (MnemonicPass mnem pass) acc
+      accKey <- accountSigningKey net ctx (AccountSpec mnem pass acc)
       let path = Deriv :/ fromIntegral chain :/ fromIntegral idx :: SoftPath
       return (derivePath ctx path accKey).key
+
+-- | An account of a BIP-39 mnemonic, derived like hw does: the account key is
+-- m/44'/coin'/account'. In JSON: {"mnemonic", "passphrase", "account"}, where
+-- the passphrase is optional.
+data AccountSpec = AccountSpec !Text !Text !Natural
+
+instance FromJSON AccountSpec where
+  parseJSON =
+    withObject "AccountSpec" $ \o ->
+      AccountSpec
+        <$> o .: "mnemonic"
+        <*> o .:? "passphrase" .!= ""
+        <*> o .: "account"
+
+-- | The account private key of an account specification
+accountSigningKey :: Network -> Ctx -> AccountSpec -> Either String XPrvKey
+accountSigningKey net ctx (AccountSpec mnem pass acc) =
+  signingKey net ctx (MnemonicPass mnem pass) acc
