@@ -14,6 +14,7 @@ import Haskoin.Wallet.FileIO (TxSignData (..))
 import Haskoin.Wallet.Signing
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo
+import Haskoin.Wallet.TxSigning (signWalletTx)
 import Numeric.Natural (Natural)
 import Test.Hspec
 

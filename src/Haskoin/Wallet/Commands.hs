@@ -35,6 +35,7 @@ import Haskoin.Wallet.Migration.SemVersion
 import Haskoin.Wallet.Parser
 import Haskoin.Wallet.Signing
 import Haskoin.Wallet.TxInfo
+import Haskoin.Wallet.TxSigning (parseTxSignData, signWalletTx)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import qualified System.Console.Haskeline as Haskeline
