@@ -16,6 +16,8 @@ bug-reports: http://github.com/jprupp/haskoin-wallet/issues
 extra-source-files:
   - test/data/message-signing/*.json
   - test/data/message-signing/README.md
+  - test/data/tx-signing/*.json
+  - test/data/tx-signing/README.md
 dependencies:
   - base >=4.9 && <5
   - aeson >= 1.4.6.0

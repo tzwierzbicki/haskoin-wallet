@@ -25,6 +25,11 @@ extra-source-files:
     test/data/message-signing/python-bitcoinlib.json
     test/data/message-signing/trezor.json
     test/data/message-signing/README.md
+    test/data/tx-signing/edge-cases.json
+    test/data/tx-signing/external.json
+    test/data/tx-signing/hw-regression.json
+    test/data/tx-signing/trezor.json
+    test/data/tx-signing/README.md
 
 source-repository head
   type: git
@@ -154,6 +159,7 @@ test-suite spec
       Haskoin.Wallet.MessageSigningSpec
       Haskoin.Wallet.SigningSpec
       Haskoin.Wallet.TestUtils
+      Haskoin.Wallet.TxSigningSpec
       Haskoin.Wallet.VersionSpec
       Paths_haskoin_wallet
   hs-source-dirs:
