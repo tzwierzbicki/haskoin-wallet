@@ -18,7 +18,7 @@ import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Haskoin
 import Haskoin.Util.Arbitrary (arbitraryPrivateKey)
 import Haskoin.Wallet.Arbitrary (arbitraryText)
-import Haskoin.Wallet.Signing
+import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.TestUtils
 import Test.Hspec
 import Test.Hspec.QuickCheck (prop)

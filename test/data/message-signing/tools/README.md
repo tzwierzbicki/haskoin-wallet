@@ -44,7 +44,7 @@ The vectors were originally produced by generator scripts (removed in October
 2026 to avoid maintaining them). To add one:
 
 1. Compute the expected values with hw's library, for example in `stack ghci`
-   with `signedMessageHash` and `signMessage` from `Haskoin.Wallet.Signing`,
+   with `signedMessageHash` and `signMessage` from `Haskoin.Wallet.MessageSigning`,
    or with the `hw signmsg` command on a temporary `HOME`.
 2. Add it to the JSON file by hand, following the format in `../README.md`.
    A non-ASCII message needs its `messageUtf8Hex`, and every signing vector
