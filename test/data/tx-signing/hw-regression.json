@@ -1,5 +1,5 @@
 {
-  "description": "Regression vectors produced by hw's signWalletTx and signTxWithKeys (commit d054e45) and independently verified with tools/verify_vectors.py. The wallet is the test mnemonic of SigningSpec.hs, account 0. The funding transactions spend a fake outpoint, so these transactions exist on no blockchain.",
+  "description": "Regression vectors produced by hw's signWalletTx and independently verified with tools/verify_vectors.py. The wallet is the test mnemonic of SigningSpec.hs, account 0. The funding transactions spend a fake outpoint, so these transactions exist on no blockchain.",
   "vectors": [
     {
       "name": "hw/btc/debit",
@@ -128,42 +128,197 @@
       "comment": "Transaction version 2, lock time 650000 and input sequence 0xfffffffe must be preserved by signing."
     },
     {
-      "name": "hw/btc/sweep-credit",
+      "name": "hw/btc/four-inputs",
       "network": "btc",
       "account": {
         "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
         "passphrase": "correct horse battery staple",
         "account": 0
       },
-      "sweepKeys": [
-        {
-          "wif": "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU7Bqcefezr"
-        },
-        {
-          "wif": "5HpHagT65TZzG1PH3CSu63k8DbpvD8s5ip4nEB3kEsreEYP1uta"
-        }
-      ],
       "txSignData": {
-        "tx": "01000000028b0ff3b0c181064aeb03e20dff161221a3789f677fb68b1af7ccd66f8d8db4dc0000000000ffffffff8b0ff3b0c181064aeb03e20dff161221a3789f677fb68b1af7ccd66f8d8db4dc0100000000ffffffff01f07be111000000001976a914c80d55223e2f1061363add2a7b0363c285bf298d88ac00000000",
+        "tx": "01000000042ceb86c6648a9689328f0a9f8a8c8234f0881428db68aa171732eef371f107b10000000000ffffffff2ceb86c6648a9689328f0a9f8a8c8234f0881428db68aa171732eef371f107b10100000000ffffffff8f832bf798de6117790ce638967b8c10d96eee16998b08d2b11db1148a55b20e0000000000ffffffff8f832bf798de6117790ce638967b8c10d96eee16998b08d2b11db1148a55b20e0100000000ffffffff020065cd1d000000001976a914bcb6e2aa16a725659548910d7a020414cbfe65df88acf03dcd1d000000001976a914e181ae30b4301faf52b9720c32062e89cfe9f13288ac00000000",
         "txinputs": [
-          "010000000105000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0200e1f505000000001976a9144f99bbf75707e44bc2afa65337dece914e817aac88ac00c2eb0b000000001976a9149ae69f69b01ab5b33d05f41535464337df3d031d88ac00000000"
+          "010000000115000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0200e1f505000000001976a914c80d55223e2f1061363add2a7b0363c285bf298d88ac00c2eb0b000000001976a9146827f615550f4597a0feb17e267229a99146d9a588ac00000000",
+          "010000000116000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0200a3e111000000001976a914455aa50c2663141771ebac2096e37833911227d688ac0084d717000000001976a914ef805a06ddaaa849bf39da1cd05d646d8130309388ac00000000"
         ],
-        "inputpaths": [],
+        "inputpaths": [
+          "/0/0",
+          "/0/1",
+          "/1/0",
+          "/1/1"
+        ],
         "outputpaths": [
-          "/0/0"
+          "/1/2"
         ],
         "signed": false
       },
       "signed": {
-        "tx": "01000000028b0ff3b0c181064aeb03e20dff161221a3789f677fb68b1af7ccd66f8d8db4dc000000006b483045022100a492ef4f987b8e563f53c9a7f690c66eef8ddc57997e006da9fcb0015f401f5f0220395365dc0a71c8ed435a53f7bd7121e49b7a8bf946ddd3f377b6e4810c17244d012103defdea4cdb677750a420fee807eacf21eb9898ae79b9768766e4faa04a2d4a34ffffffff8b0ff3b0c181064aeb03e20dff161221a3789f677fb68b1af7ccd66f8d8db4dc010000008b4830450221008d2c7feb262ce166d7707a2d69201fa091dd59206944399921c4544beab6c18f022043cc927c5a63b8a091d76d0049df2ceebdb50af8bdca7939d3284c5d8c7de9e80141041be68a5a028f2601d0e80d468c344ba331d611b96c358b6032e8b4da0547fc11bebc47511ade7308b3ca6265f9400779c076329c75146bc6ff1822f5d1f30e79ffffffff01f07be111000000001976a914c80d55223e2f1061363add2a7b0363c285bf298d88ac00000000",
-        "txid": "5b5305db982977c8aca393095ceb15a12e6740031ba9cf2f6e64c27f2c4b75b3",
+        "tx": "01000000042ceb86c6648a9689328f0a9f8a8c8234f0881428db68aa171732eef371f107b1000000006a47304402200a7167e162a8de3d468b17b7d1ce4ba9fbbf059405d15ad72bf78bfb82f5226602200fdd4088be7cd5772d3a88ed35c8582596970c649000655e1d0e2e709743f0240121032f6437022256c854e0090e7d6c8b65e96606ef7f405399e0f0187c93097ac0f9ffffffff2ceb86c6648a9689328f0a9f8a8c8234f0881428db68aa171732eef371f107b1010000006a473044022039c5ab44437624019fd8c37eeccfd70d3963ca86155c36735d4e9fc17832d679022037bf04aaafa55f183b9cf97ae17eb64e6868be5526d0187fc976eddeb208c7f9012103888b122cb2164cbd9ba7ded6e246e7af8b2336ccd9e2e6546647e3c65ad3fc0fffffffff8f832bf798de6117790ce638967b8c10d96eee16998b08d2b11db1148a55b20e000000006a47304402207916980d720587eb43e521ccab748091aaa344a4ef196f959f2dc79c9ebc7dad022045fa0fab200fc92fcb36aa5399d482cd8eb8c52983d591d0b264084d0031515e01210376f2e706458dd75673ba19b8efd842efddd9bc0ae41e31339dffcf917b6db6ebffffffff8f832bf798de6117790ce638967b8c10d96eee16998b08d2b11db1148a55b20e010000006a47304402201519b662138bd8180076305c4d5eda7f14038f37341fef36047c6a7477dd4a3a0220774f22fba36308ffc0a059351b56ba17deac1ad4133291109e2f2a172fb406a301210263fdbc78b83e6fcd615b03f490d894b13e2fcc697f30ffbe50b839899e70b54cffffffff020065cd1d000000001976a914bcb6e2aa16a725659548910d7a020414cbfe65df88acf03dcd1d000000001976a914e181ae30b4301faf52b9720c32062e89cfe9f13288ac00000000",
+        "txid": "e8163c04e4273c9a63b84b46ce1467cbbdd74692c84ec8ed4543d454e4abc82c",
         "txInfo": {
-          "type": "credit",
-          "amount": 299990000,
+          "type": "debit",
+          "amount": -500010000,
           "fee": 10000
         }
       },
-      "comment": "Sweep (signTxWithKeys): two coins of external keys, one compressed and one uncompressed WIF, swept to the wallet's own address (/0/0): the type is credit."
+      "comment": "Four coins from two dependent transactions, on the external (/0/0, /0/1) and internal (/1/0, /1/1) chains, spent to an external output and a change output (/1/2)."
+    },
+    {
+      "name": "hw/btc/unused-dependent-transaction",
+      "network": "btc",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "txSignData": {
+        "tx": "0100000001df0eb26daf1d0755a34844210326cb8fd1b4347b97906a6c300d8fb08900e1700000000000ffffffff01f0b9f505000000001976a914fbc714c637d88dd61a266b073372af5d5c68e90d88ac00000000",
+        "txinputs": [
+          "010000000117000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0100e1f505000000001976a914e19bd5c1603ddc8d7b752675f83fc7de7b16868788ac00000000",
+          "010000000118000000000000000000000000000000000000000000000000000000000000000000000000ffffffff010027b929000000001976a914bf23647c952fcce127355d4023e756e6d838a26088ac00000000"
+        ],
+        "inputpaths": [
+          "/0/5"
+        ],
+        "outputpaths": [],
+        "signed": false
+      },
+      "signed": {
+        "tx": "0100000001df0eb26daf1d0755a34844210326cb8fd1b4347b97906a6c300d8fb08900e170000000006a473044022018d42374141866641562b2a47c1444f187414e3d5031687a148a2721cb73542802202fa63b6bbaef05e28a5aaf156d1459b4477d7dda99ce2c21ba0fbb0e206550d70121037d2b060f6403a7b2a79373d1ef49f37e524dbc6fa039365dd48e94140da90188ffffffff01f0b9f505000000001976a914fbc714c637d88dd61a266b073372af5d5c68e90d88ac00000000",
+        "txid": "5ba5331ea0ee62ee4c0303e151a1ebb21f8ce9c00a591e4d7d212f8147f16064",
+        "txInfo": {
+          "type": "debit",
+          "amount": -100000000,
+          "fee": 10000
+        }
+      },
+      "comment": "A dependent transaction that no input spends is ignored."
+    },
+    {
+      "name": "hw/btc/segwit-outputs",
+      "network": "btc",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "txSignData": {
+        "tx": "010000000122d3d6a83a8f1894f7f53420fef3db62d72d0c04d230f372caaa725b3284d4840000000000ffffffff0480c3c90100000000160014bcb6e2aa16a725659548910d7a020414cbfe65df80c3c90100000000220020b3e603f64217721e3d850889bd7879b18f5cd7949b834ef7dc1870644f8aaaf280c3c901000000002251203333333333333333333333333333333333333333333333333333333333333333706f9800000000001976a9145d8a319d25de2bac9b7da24b393917067851a96788ac00000000",
+        "txinputs": [
+          "010000000119000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0100e1f505000000001976a914b9f05e08a338d5c0e46a71589b5972494db51fcf88ac00000000"
+        ],
+        "inputpaths": [
+          "/0/7"
+        ],
+        "outputpaths": [
+          "/1/3"
+        ],
+        "signed": false
+      },
+      "signed": {
+        "tx": "010000000122d3d6a83a8f1894f7f53420fef3db62d72d0c04d230f372caaa725b3284d484000000006a473044022059713a02606dc25ba16757d10326d9bceb7b46247590587135d14f6b91f39aa602202c43a8d03b7dd21a26e2cf16192aebd764a9dc9b317a2d3e1bea7bc2c81dadd301210327775b93e4454826e842a862bddd7bd27fc20a8fe9e78b5ed739efe4ef39b3f6ffffffff0480c3c90100000000160014bcb6e2aa16a725659548910d7a020414cbfe65df80c3c90100000000220020b3e603f64217721e3d850889bd7879b18f5cd7949b834ef7dc1870644f8aaaf280c3c901000000002251203333333333333333333333333333333333333333333333333333333333333333706f9800000000001976a9145d8a319d25de2bac9b7da24b393917067851a96788ac00000000",
+        "txid": "da2bd35a6edc2ce576bd4cd292a57a6eb9a260bb6e183a2f8c3a4cd1862cba7e",
+        "txInfo": {
+          "type": "debit",
+          "amount": -90010000,
+          "fee": 10000
+        }
+      },
+      "comment": "Outputs to P2WPKH, P2WSH and Taproot (witness version 1) scripts, which the wallet can pay to but never owns, plus a change output (/1/3). The witness outputs count as external outputs."
+    },
+    {
+      "name": "hw/btc/zero-fee",
+      "network": "btc",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "txSignData": {
+        "tx": "010000000162e4d3cf2e19bfc72edb6803b3690b189378441a58f5c8518a8c0351dbfa080e0000000000ffffffff0100e1f505000000001976a91457cf49b9749f5cd69641216d97ef678a692b4f8e88ac00000000",
+        "txinputs": [
+          "01000000011a000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0100e1f505000000001976a914b53d44802663f191c335598858ab1c337103f8bb88ac00000000"
+        ],
+        "inputpaths": [
+          "/0/8"
+        ],
+        "outputpaths": [],
+        "signed": false
+      },
+      "signed": {
+        "tx": "010000000162e4d3cf2e19bfc72edb6803b3690b189378441a58f5c8518a8c0351dbfa080e000000006b483045022100b886929659505942a349888494111bf1ab086090b8db1edcff4690e746fa8304022030d16d2c00ba89287dede21b7a00de351d0d128e3b7a912eae843b5feb4603d701210265532623ac48d5fbc47f6fc788cb47073cf7db80c16405536945b2bb0f877133ffffffff0100e1f505000000001976a91457cf49b9749f5cd69641216d97ef678a692b4f8e88ac00000000",
+        "txid": "e39e77a59b17a48828a17e1ccfe37cbd6c17735d3d6d99a8ad2ba7bc6cf3683e",
+        "txInfo": {
+          "type": "debit",
+          "amount": -100000000,
+          "fee": 0
+        }
+      },
+      "comment": "A transaction without fee: the fee rate is 0. hw does not enforce a minimum fee when signing."
+    },
+    {
+      "name": "hw/bchtest/debit",
+      "network": "bchtest",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "txSignData": {
+        "tx": "010000000127d8847c7115b6e13c2e5bf373b01b7b38c6dded24600632b72a8e5574a40e210000000000ffffffff0280f0fa02000000001976a914bcb6e2aa16a725659548910d7a020414cbfe65df88ac70c9fa02000000001976a914592ee89605a3a085e0c3ef6bca944475e7ca456988ac00000000",
+        "txinputs": [
+          "01000000011b000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0100e1f505000000001976a914136eb1efb353e6c672975ddab66f11ec2fa40d4a88ac00000000"
+        ],
+        "inputpaths": [
+          "/0/0"
+        ],
+        "outputpaths": [
+          "/1/0"
+        ],
+        "signed": false
+      },
+      "signed": {
+        "tx": "010000000127d8847c7115b6e13c2e5bf373b01b7b38c6dded24600632b72a8e5574a40e21000000006b483045022100d88aa4b656727521b8b877643740a47746f3796ae09e3a915e9f3ae2b22b5fa602207dad51ec1cb76356f0a0cff512a5dfae6fdddf4d528fa549dd5536459d293c7c412103005ffee35831ed9bccac2013cbb98bd0f95a84c724007874daacf12fc7108025ffffffff0280f0fa02000000001976a914bcb6e2aa16a725659548910d7a020414cbfe65df88ac70c9fa02000000001976a914592ee89605a3a085e0c3ef6bca944475e7ca456988ac00000000",
+        "txid": "81275e102f44f1d52813990f8ae8f1a0e647d6f716be928a5f3d21b359a89c7a",
+        "txInfo": {
+          "type": "debit",
+          "amount": -50010000,
+          "fee": 10000
+        }
+      },
+      "comment": "Bitcoin Cash testnet: SIGHASH_ALL | SIGHASH_FORKID with the testnet coin type, one input (/0/0), an external output and a change output (/1/0)."
+    },
+    {
+      "name": "hw/btc/other-input-signed",
+      "network": "btc",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "txSignData": {
+        "tx": "010000000270361a77d22a5f62c5991744d8d803ff3872527bdf80f1ded818b63f4ca8f7af0000000000ffffffff70361a77d22a5f62c5991744d8d803ff3872527bdf80f1ded818b63f4ca8f7af010000006b48304502210098cbbe06a6a22098a347de9b8f8c48da0bc5264e61b4f841e977ffac39d1b0f2022000d612013829a4b820858a75136b88288aec0ac2f936bf26dec5a4a710c3d3fa012103defdea4cdb677750a420fee807eacf21eb9898ae79b9768766e4faa04a2d4a34ffffffff0280d1f008000000001976a914bcb6e2aa16a725659548910d7a020414cbfe65df88ac005a6202000000001976a914acd16d5125f32492701becaf2c23001e26d75a2d88ac00000000",
+        "txinputs": [
+          "01000000011c000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0200e1f505000000001976a914e19733c7a1a9d224e311620e9a95e99947f0890e88ac00e1f505000000001976a9144f99bbf75707e44bc2afa65337dece914e817aac88ac00000000"
+        ],
+        "inputpaths": [
+          "/0/9"
+        ],
+        "outputpaths": [
+          "/1/4"
+        ],
+        "signed": false
+      },
+      "signed": {
+        "tx": "010000000270361a77d22a5f62c5991744d8d803ff3872527bdf80f1ded818b63f4ca8f7af000000006b483045022100bfb725576f7219b6dcf09e6ed8fd793b1f2fd7bb1ee8b33a1dae846e17dc078802204ff5c8dae9de7f6268f61385b77d596e0749a0f50e4337a9f061c3a6cff2b74b0121028c07ef6208bc2e299ae054ccda20a91011469aeddbad1cc1bc80de6d3252ae5bffffffff70361a77d22a5f62c5991744d8d803ff3872527bdf80f1ded818b63f4ca8f7af010000006b48304502210098cbbe06a6a22098a347de9b8f8c48da0bc5264e61b4f841e977ffac39d1b0f2022000d612013829a4b820858a75136b88288aec0ac2f936bf26dec5a4a710c3d3fa012103defdea4cdb677750a420fee807eacf21eb9898ae79b9768766e4faa04a2d4a34ffffffff0280d1f008000000001976a914bcb6e2aa16a725659548910d7a020414cbfe65df88ac005a6202000000001976a914acd16d5125f32492701becaf2c23001e26d75a2d88ac00000000",
+        "txid": "6f3210cd19bee43f83a2a58969939e04fb54d677663ddcb5168c54016c71f3fa",
+        "txInfo": {
+          "type": "debit",
+          "amount": -60000000,
+          "fee": 10000000
+        }
+      },
+      "comment": "Two inputs: the wallet's (/0/9) and one of another party, which already carries that party's signature in the unsigned transaction. The wallet signs only its own input and verifies both. The other party's coin is not part of the amount, but its value is part of the fee."
     }
   ]
 }

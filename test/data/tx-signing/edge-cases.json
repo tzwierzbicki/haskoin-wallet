@@ -1,5 +1,5 @@
 {
-  "description": "Transactions that hw must refuse to sign, with the exact error. Produced by hw (commit d054e45) from the hw-regression.json transactions, plus transactions without inputs, without outputs and spending a coin twice.",
+  "description": "Transactions that hw must refuse to sign, with the exact error. Produced by hw from synthetic transactions of the test wallet of SigningSpec.hs.",
   "vectors": [
     {
       "name": "edge/already-signed",
@@ -90,30 +90,6 @@
       "expect": "error",
       "error": "The transaction spends the same coin twice",
       "comment": "The same coin (/0/0) spent by both inputs: invalid on the network, and counting it twice would inflate the input sum and the fee."
-    },
-    {
-      "name": "edge/no-private-keys",
-      "network": "btc",
-      "account": {
-        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
-        "passphrase": "correct horse battery staple",
-        "account": 0
-      },
-      "sweepKeys": [],
-      "txSignData": {
-        "tx": "01000000028b0ff3b0c181064aeb03e20dff161221a3789f677fb68b1af7ccd66f8d8db4dc0000000000ffffffff8b0ff3b0c181064aeb03e20dff161221a3789f677fb68b1af7ccd66f8d8db4dc0100000000ffffffff01f07be111000000001976a914c80d55223e2f1061363add2a7b0363c285bf298d88ac00000000",
-        "txinputs": [
-          "010000000105000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0200e1f505000000001976a9144f99bbf75707e44bc2afa65337dece914e817aac88ac00c2eb0b000000001976a9149ae69f69b01ab5b33d05f41535464337df3d031d88ac00000000"
-        ],
-        "inputpaths": [],
-        "outputpaths": [
-          "/0/0"
-        ],
-        "signed": false
-      },
-      "expect": "error",
-      "error": "There are no private keys to sign",
-      "comment": "Sweep with an empty list of keys."
     },
     {
       "name": "edge/missing-input-transaction",
@@ -260,60 +236,122 @@
       "comment": "Signed with the account key of another mnemonic: its addresses match none of the input paths, which is detected before signing."
     },
     {
-      "name": "edge/sweep-missing-key",
+      "name": "edge/other-input-unsigned",
       "network": "btc",
       "account": {
         "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
         "passphrase": "correct horse battery staple",
         "account": 0
       },
-      "sweepKeys": [
-        {
-          "wif": "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU7Bqcefezr"
-        }
-      ],
       "txSignData": {
-        "tx": "01000000028b0ff3b0c181064aeb03e20dff161221a3789f677fb68b1af7ccd66f8d8db4dc0000000000ffffffff8b0ff3b0c181064aeb03e20dff161221a3789f677fb68b1af7ccd66f8d8db4dc0100000000ffffffff01f07be111000000001976a914c80d55223e2f1061363add2a7b0363c285bf298d88ac00000000",
+        "tx": "010000000270361a77d22a5f62c5991744d8d803ff3872527bdf80f1ded818b63f4ca8f7af0000000000ffffffff70361a77d22a5f62c5991744d8d803ff3872527bdf80f1ded818b63f4ca8f7af0100000000ffffffff0280d1f008000000001976a914bcb6e2aa16a725659548910d7a020414cbfe65df88ac005a6202000000001976a914acd16d5125f32492701becaf2c23001e26d75a2d88ac00000000",
         "txinputs": [
-          "010000000105000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0200e1f505000000001976a9144f99bbf75707e44bc2afa65337dece914e817aac88ac00c2eb0b000000001976a9149ae69f69b01ab5b33d05f41535464337df3d031d88ac00000000"
+          "01000000011c000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0200e1f505000000001976a914e19733c7a1a9d224e311620e9a95e99947f0890e88ac00e1f505000000001976a9144f99bbf75707e44bc2afa65337dece914e817aac88ac00000000"
         ],
-        "inputpaths": [],
+        "inputpaths": [
+          "/0/9"
+        ],
         "outputpaths": [
-          "/0/0"
+          "/1/4"
         ],
         "signed": false
       },
       "expect": "error",
-      "error": "The transaction could not be signed",
-      "comment": "Sweep of two coins with only one of the two keys: one input stays unsigned."
+      "error": "input 1 (18FtYoEJipP5bCJnjgWdeeEbxSvozSjEUA) does not belong to the wallet",
+      "comment": "The two-input transaction of hw/btc/other-input-signed, but the other party's input is not signed: the wallet has no key for it."
     },
     {
-      "name": "edge/sweep-wrong-key",
+      "name": "edge/other-input-bad-signature",
       "network": "btc",
       "account": {
         "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
         "passphrase": "correct horse battery staple",
         "account": 0
       },
-      "sweepKeys": [
-        {
-          "wif": "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU7UmdASwtK"
-        }
-      ],
       "txSignData": {
-        "tx": "01000000028b0ff3b0c181064aeb03e20dff161221a3789f677fb68b1af7ccd66f8d8db4dc0000000000ffffffff8b0ff3b0c181064aeb03e20dff161221a3789f677fb68b1af7ccd66f8d8db4dc0100000000ffffffff01f07be111000000001976a914c80d55223e2f1061363add2a7b0363c285bf298d88ac00000000",
+        "tx": "010000000270361a77d22a5f62c5991744d8d803ff3872527bdf80f1ded818b63f4ca8f7af0000000000ffffffff70361a77d22a5f62c5991744d8d803ff3872527bdf80f1ded818b63f4ca8f7af010000006a47304402205164e909606ea4bc8f7449bce916edf1e7a2a964bf5c160b3a4e9f4d593e1e6c02202607f53447bf370cf8a53e5dbde9c5255575a599f4214134afca10a404995566012102463b3d9f662621fb1b4be8fbbe2520125a216cdfc9dae3debcba4850c690d45bffffffff0280d1f008000000001976a914bcb6e2aa16a725659548910d7a020414cbfe65df88ac005a6202000000001976a914acd16d5125f32492701becaf2c23001e26d75a2d88ac00000000",
         "txinputs": [
-          "010000000105000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0200e1f505000000001976a9144f99bbf75707e44bc2afa65337dece914e817aac88ac00c2eb0b000000001976a9149ae69f69b01ab5b33d05f41535464337df3d031d88ac00000000"
+          "01000000011c000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0200e1f505000000001976a914e19733c7a1a9d224e311620e9a95e99947f0890e88ac00e1f505000000001976a9144f99bbf75707e44bc2afa65337dece914e817aac88ac00000000"
         ],
-        "inputpaths": [],
+        "inputpaths": [
+          "/0/9"
+        ],
         "outputpaths": [
-          "/0/0"
+          "/1/4"
         ],
         "signed": false
       },
       "expect": "error",
-      "error": "The transaction could not be signed",
-      "comment": "Sweep with a key that owns none of the coins."
+      "error": "Invalid signature for input 1 (18FtYoEJipP5bCJnjgWdeeEbxSvozSjEUA)",
+      "comment": "The two-input transaction of hw/btc/other-input-signed with the other party's input signed by the wrong key: the final verification rejects it."
+    },
+    {
+      "name": "edge/wallet-coin-not-p2pkh",
+      "network": "btc",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "txSignData": {
+        "tx": "01000000011530fa69e377d763f55839fd3866d22407396ea90271a44e29751447a6e13bfd0000000000ffffffff01f0b9f505000000001976a914bcb6e2aa16a725659548910d7a020414cbfe65df88ac00000000",
+        "txinputs": [
+          "01000000011d000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0100e1f505000000002321022750f720694482cecceeb1e62a6bed275eee6795295a02b13e6c3abd99b74f28ac00000000"
+        ],
+        "inputpaths": [
+          "/0/10"
+        ],
+        "outputpaths": [],
+        "signed": false
+      },
+      "expect": "error",
+      "error": "input 0 (16jj9LFEK2ULQ9dMkDArv6ud4xVQVbWyfX) is not a P2PKH coin",
+      "comment": "A pay-to-public-key coin paying to the key of a wallet address (/0/10): the wallet only signs P2PKH coins."
+    },
+    {
+      "name": "edge/non-standard-input",
+      "network": "btc",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "txSignData": {
+        "tx": "0100000001dcc58e8673ead04c161834245d0ccf81c25eb87c7a41e9c35fd4c988d57ad0c10000000000ffffffff01f0b9f505000000001976a914bcb6e2aa16a725659548910d7a020414cbfe65df88ac00000000",
+        "txinputs": [
+          "01000000011e000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0100e1f50500000000015100000000"
+        ],
+        "inputpaths": [],
+        "outputpaths": [],
+        "signed": false
+      },
+      "expect": "error",
+      "error": "There are non-standard inputs in the transaction",
+      "comment": "The input spends an output whose script is not a standard template (a bare OP_TRUE), so it has no address."
+    },
+    {
+      "name": "edge/duplicate-input-path",
+      "network": "btc",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "txSignData": {
+        "tx": "010000000141d47a1bb07da9f80724202b2013d22c1893f5781765c22a86a939cfb8357f040000000000ffffffff01f0b9f505000000001976a914bcb6e2aa16a725659548910d7a020414cbfe65df88ac00000000",
+        "txinputs": [
+          "01000000011f000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0100e1f505000000001976a914e6ca5cf4cdc906ba3c192fb47fa7e8a8fdb65c3288ac00000000"
+        ],
+        "inputpaths": [
+          "/0/11",
+          "/0/11"
+        ],
+        "outputpaths": [],
+        "signed": false
+      },
+      "expect": "error",
+      "error": "Input derivations don't match the transaction inputs",
+      "comment": "The same input path given twice."
     }
   ]
 }

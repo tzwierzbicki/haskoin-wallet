@@ -35,7 +35,8 @@ import Haskoin.Wallet.Migration.SemVersion
 import Haskoin.Wallet.Parser
 import Haskoin.Wallet.Signing
 import Haskoin.Wallet.TxInfo
-import Haskoin.Wallet.TxSigning (parseTxSignData, signWalletTx)
+import Haskoin.Wallet.TxSigning (parseTxSignData, signWalletTx, verifySignedTx)
+import Haskoin.Wallet.TxSweep
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import qualified System.Console.Haskeline as Haskeline
@@ -693,8 +694,8 @@ cmdSendTx ctx cfg nosigH =
             pub = accountXPubKey ctx acc
         txInfo <- liftEither $ parseTxSignData net ctx pub tsd
         txInfoL <- lift $ fillTxInfoLabels net txInfo
-        let verify = verifyTxInfo net ctx signedTx txInfoL
-        unless (signed && verify) $ throwError "The transaction is not signed"
+        unless signed $ throwError "The transaction is not signed"
+        liftEither $ verifySignedTx net ctx tsd
         checkHealth ctx net cfg
         let host = apiHost net cfg
         Store.TxId netTxId <- liftExcept $ apiCall ctx host (PostTx signedTx)
@@ -779,7 +780,9 @@ prepareSweep ctx cfg nameM prvKeyFile sweepToT outputM feeByte dust =
     secKeys <- parseSecKeysFile net <$> liftIO (readFileWords prvKeyFile)
     sweepTo <- liftEither $ mapM (textToAddrE net) sweepToT
     checkHealth ctx net cfg
-    tsd <- buildSweepSignData net ctx cfg accId secKeys sweepTo feeByte dust
+    found <- fetchSweepCoins net ctx cfg accId secKeys sweepTo
+    gen <- liftIO initStdGen
+    tsd <- liftEither $ buildSweepSignData net ctx gen found sweepTo feeByte dust
     txInfo <- liftEither $ parseTxSignData net ctx pub tsd
     txInfoL <- lift $ fillTxInfoLabels net txInfo
     for_ outputM checkPathFree

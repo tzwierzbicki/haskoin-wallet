@@ -5,7 +5,7 @@ cabal-version: 1.12
 -- see: https://github.com/sol/hpack
 
 name:           haskoin-wallet
-version:        0.9.5
+version:        0.9.6
 synopsis:       Lightweight CLI wallet for Bitcoin and Bitcoin Cash
 description:    Lightweight command-line interface offline-friendly hierarchical-deterministic BTC/BCH wallet compatible with BIP44 and BIP39.
 category:       Bitcoin, Finance, Network
@@ -30,6 +30,11 @@ extra-source-files:
     test/data/tx-signing/hw-regression.json
     test/data/tx-signing/trezor.json
     test/data/tx-signing/README.md
+    test/data/tx-sweep/edge-cases.json
+    test/data/tx-sweep/external.json
+    test/data/tx-sweep/hw-regression.json
+    test/data/tx-sweep/trezor.json
+    test/data/tx-sweep/README.md
 
 source-repository head
   type: git
@@ -54,6 +59,7 @@ library
       Haskoin.Wallet.Signing
       Haskoin.Wallet.TxInfo
       Haskoin.Wallet.TxSigning
+      Haskoin.Wallet.TxSweep
       Haskoin.Wallet.Util
   other-modules:
       Paths_haskoin_wallet
@@ -161,6 +167,8 @@ test-suite spec
       Haskoin.Wallet.SigningSpec
       Haskoin.Wallet.TestUtils
       Haskoin.Wallet.TxSigningSpec
+      Haskoin.Wallet.TxSweepSpec
+      Haskoin.Wallet.TxVectors
       Haskoin.Wallet.VersionSpec
       Paths_haskoin_wallet
   hs-source-dirs:
