@@ -12,7 +12,6 @@ import Control.Monad.Except
 import Control.Monad.State
 import qualified Data.ByteString as BS
 import Data.Char (isSpace)
-import Data.Default (def)
 import Data.Either (rights)
 import Data.List (nub, partition)
 import qualified Data.Map.Strict as Map
@@ -23,15 +22,13 @@ import Data.Text.Encoding (encodeUtf8)
 import Data.Word (Word64, Word8)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Store.WebClient
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.TxInfo
-import Haskoin.Wallet.TxSigning (parseTxSignData)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
-import System.Random (Random (randomR), StdGen, initStdGen)
+import System.Random (Random (randomR), StdGen)
 
 {- Building Transactions -}
 
@@ -168,55 +165,6 @@ walletFingerprint net ctx mnem = do
   xPrvKey <- signingKey net ctx mnem 0
   return $ xPubFP ctx $ deriveXPubKey ctx xPrvKey
 
-signTxWithKeys ::
-  Network ->
-  Ctx ->
-  TxSignData ->
-  XPubKey ->
-  [SecKey] ->
-  Either String (TxSignData, TxInfo)
-signTxWithKeys net ctx tsd@(TxSignData tx _ _ _ signed) publicKey secKeys = do
-  when signed $ Left "The transaction is already signed"
-  txInfo <- parseTxSignData net ctx publicKey tsd
-  when (null secKeys) $ Left "There are no private keys to sign"
-  -- signing
-  let myInputs = txInfoMyInputs txInfo
-      othInputs = txInfoOtherInputs txInfo
-      mySigInputs = mconcat $ myInputsSigInput <$> Map.elems myInputs
-      othSigInputs = mconcat $ otherInputsSigInput <$> Map.elems othInputs
-      sigInputs = mySigInputs <> othSigInputs
-  signedTx <- signTx net ctx tx sigInputs secKeys
-  let txInfoS = signTxInfo signedTx txInfo
-      isSigned = verifyTxInfo net ctx signedTx txInfoS
-  unless isSigned $ Left "The transaction could not be signed"
-  return
-    ( tsd {txSignDataTx = signedTx, txSignDataSigned = True},
-      txInfoS
-    )
-
-signTxInfo :: Tx -> TxInfo -> TxInfo
-signTxInfo tx txInfo =
-  txInfo
-    { txInfoHash = Just $ txHash tx,
-      txInfoPending = Just $ TxInfoPending (nosigTxHash tx) True False
-    }
-
-verifyTxInfo :: Network -> Ctx -> Tx -> TxInfo -> Bool
-verifyTxInfo net ctx tx txInfo =
-  let myInputs = txInfoMyInputs txInfo
-      othInputs = txInfoOtherInputs txInfo
-      mySigInputs = mconcat $ myInputsSigInput <$> Map.elems myInputs
-      othSigInputs = mconcat $ otherInputsSigInput <$> Map.elems othInputs
-      sigInputs = mySigInputs <> othSigInputs
-      f i = (i.script, i.value, i.outpoint)
-      vDat = f <$> sigInputs
-   in Just (txHash tx) == txInfoHash txInfo
-        && noEmptyInputs tx
-        && verifyStdTx net ctx tx vDat
-
-noEmptyInputs :: Tx -> Bool
-noEmptyInputs = (not . any BS.null) . fmap (.script) . (.inputs)
-
 {- Message Signing -}
 
 -- Message signatures follow the "legacy" format of BIP-322 (Generic Signed
@@ -328,90 +276,6 @@ messageWarnings message =
       not (Text.null message)
         && (isSpace (Text.head message) || isSpace (Text.last message))
     lineBreaks = Text.any (`elem` ['\n', '\r']) message
-
-{- Transaction Sweeping -}
-
-buildSweepSignData ::
-  (MonadUnliftIO m) =>
-  Network ->
-  Ctx ->
-  Config ->
-  DBAccountId ->
-  [SecKey] ->
-  [Address] ->
-  Natural ->
-  Natural ->
-  ExceptT String (DB m) TxSignData
-buildSweepSignData net ctx cfg accId prvKeys sweepTo feeByte dust
-  | null prvKeys = throwError "No private keys to sweep from"
-  | null sweepTo = throwError "No addresses to sweep to"
-  | otherwise = do
-      let host = apiHost net cfg
-      -- Generate the addresses to sweep from
-      let sweepFrom = nub $ concatMap (genPossibleAddrs net ctx) prvKeys
-      -- Get the unspent coins of the sweepFrom addresses
-      Store.SerialList coins <-
-        liftExcept . apiBatch ctx (configCoinBatch cfg) host $
-          GetAddrsUnspent sweepFrom def {limit = Just 0}
-      when (null coins) $
-        throwError "There are no coins to sweep in those addresses"
-      -- Build a set of sweep transactions
-      gen <- liftIO initStdGen
-      tx <- liftEither $ buildSweepTx net ctx gen coins sweepTo feeByte dust
-      -- Get the dependent transactions
-      let depTxHash = (.hash) . (.outpoint) <$> (.inputs) tx
-      Store.RawResultList depTxs <-
-        liftExcept . apiBatch ctx (configTxFullBatch cfg) host $
-          GetTxsRaw depTxHash
-      -- Check if any of the coins belong to us
-      inDerivs <- rights <$> lift (mapM (getAddrDeriv net accId) sweepFrom)
-      -- Check if any of the sweepTo addrs belong to us
-      outDerivs <- rights <$> lift (mapM (getAddrDeriv net accId) sweepTo)
-      return $ TxSignData tx depTxs (nub inDerivs) (nub outDerivs) False
-
-genPossibleAddrs :: Network -> Ctx -> SecKey -> [Address]
-genPossibleAddrs net ctx k
-  | net `elem` [btc, btcTest, btcRegTest] =
-      [ pubKeyAddr ctx pc,
-        pubKeyAddr ctx pu,
-        pubKeyWitnessAddr ctx pc,
-        pubKeyWitnessAddr ctx pu,
-        pubKeyCompatWitnessAddr ctx pc,
-        pubKeyCompatWitnessAddr ctx pu
-      ]
-  | otherwise =
-      [ pubKeyAddr ctx pc,
-        pubKeyAddr ctx pu
-      ]
-  where
-    c = wrapSecKey False k :: PrivateKey -- Compressed
-    u = wrapSecKey True k :: PrivateKey -- Uncompressed
-    pc = derivePublicKey ctx c
-    pu = derivePublicKey ctx u
-
-buildSweepTx ::
-  Network ->
-  Ctx ->
-  StdGen ->
-  [Store.Unspent] ->
-  [Address] ->
-  Natural ->
-  Natural ->
-  Either String Tx
-buildSweepTx net ctx gen coins sweepTo feeByte dust =
-  flip evalStateT gen $ do
-    rdmOutpoints <- ((.outpoint) <$>) <$> randomShuffle coins
-    rdmSweepTo <- randomShuffle sweepTo
-    let coinsTot = sum $ (.value) <$> coins
-        fee = guessTxFee (fromIntegral feeByte) (length sweepTo) (length coins)
-    when (coinsTot < fee) $
-      throwError "Could not find a sweep solution: fee is too large"
-    let (q, r) = (coinsTot - fee) `quotRem` fromIntegral (length sweepTo)
-        amnts = (q + r) : repeat q
-    when (q <= fromIntegral dust) $
-      throwError "Outputs are smaller than the dust value"
-    addrsT <- lift $ mapM (maybeToEither "Addr" . addrToText net) rdmSweepTo
-    lift $ buildAddrTx net ctx rdmOutpoints (zip addrsT amnts)
 
 -- Utilities --
 

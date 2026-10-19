@@ -1,0 +1,235 @@
+{
+  "description": "Sweep signing vectors from other projects: Ledger (app-bitcoin-new device tests, SegWit coins of the 24-word speculos test mnemonic), bitcoinjs-lib and Electrum (P2PKH coins with WIF keys). The expected transactions come from the upstream tests; Electrum only gives the txid (see the comment). The previous transactions come from the tests, except for the bitcoinjs-lib fixture, whose previous transactions are on chain. The unsigned transaction of each vector is the signed one without its input scripts and witness, so hw must reproduce it byte for byte.",
+  "vectors": [
+    {
+      "name": "ledger/testnet/sweep-sh-wpkh-1to2",
+      "network": "btctest",
+      "account": {
+        "mnemonic": "glory promote mansion idle axis finger extra february uncover one trip resource lawn turtle enact monster seven myth punch hobby comfort wild raise skin",
+        "passphrase": "",
+        "account": 0
+      },
+      "sweepKeys": [
+        {
+          "mnemonic": "glory promote mansion idle axis finger extra february uncover one trip resource lawn turtle enact monster seven myth punch hobby comfort wild raise skin",
+          "passphrase": "",
+          "path": "m/49'/1'/0'/1/0"
+        }
+      ],
+      "txSignData": {
+        "tx": "020000000174f4c9a4da8d148bbb56e869aca3690dda0ce3acbcf81609cc946d1b6f164ace0100000000fdffffff0250d41200000000001600143318e04fae6c12afcb009c69cd57e5b2504ae6b4f57108000000000017a9146d4852daf3a5409f77216dbb8ea3d592312d7ee98700000000",
+        "txinputs": [
+          "0200000001d0e3b591dc484edb71eab66a0e994731007feb7d082a50c742f023ea09014d1e0100000017160014e310d044f88dab1b42769e4a84caf08363f9ecc1fdffffff0260ea0000000000001976a91445881ed0d3587550f794847b7c8b9fa03edd0a3c88ac7f661b000000000017a914f0464d9fa0ea42d80e4d5f1457883982e23b8eec8700000000"
+        ],
+        "inputpaths": [],
+        "outputpaths": [],
+        "signed": false
+      },
+      "signed": {
+        "tx": "0200000000010174f4c9a4da8d148bbb56e869aca3690dda0ce3acbcf81609cc946d1b6f164ace0100000017160014cb078087eff485aaa2260e94a53d7d6d1c5dd151fdffffff0250d41200000000001600143318e04fae6c12afcb009c69cd57e5b2504ae6b4f57108000000000017a9146d4852daf3a5409f77216dbb8ea3d592312d7ee987024730440220720722b08489c2a50d10edea8e21880086c8e8f22889a16815e306daeea4665b02203fcf453fa490b76cf4f929714065fc90a519b7b97ab18914f9451b5a4b4524120121024ba3b77d933de9fa3f9583348c40f3caaf2effad5b6e244ece8abbfcc7244f6700000000",
+        "txid": "7751c6291eebaa5a426687db7429d108caa82803652f01dcaed0c10fdd9d95aa",
+        "txInfo": {
+          "type": "debit",
+          "amount": 0,
+          "fee": 8250
+        }
+      },
+      "source": "Ledger app-bitcoin-new tests/test_sign_psbt.py::test_sign_psbt_singlesig_sh_wpkh_1to2, PSBT tests/psbt/singlesig/sh-wpkh-1to2.psbt",
+      "sourceUrl": "https://github.com/LedgerHQ/app-bitcoin-new/blob/017aee474472/tests/test_sign_psbt.py",
+      "comment": "Sweep of a P2SH-P2WPKH coin (m/49h/1h/0h/1/0) with the key of the Ledger test mnemonic. The signed transaction is built from the signatures given by the test."
+    },
+    {
+      "name": "ledger/testnet/sweep-wpkh-1to2",
+      "network": "btctest",
+      "account": {
+        "mnemonic": "glory promote mansion idle axis finger extra february uncover one trip resource lawn turtle enact monster seven myth punch hobby comfort wild raise skin",
+        "passphrase": "",
+        "account": 0
+      },
+      "sweepKeys": [
+        {
+          "mnemonic": "glory promote mansion idle axis finger extra february uncover one trip resource lawn turtle enact monster seven myth punch hobby comfort wild raise skin",
+          "passphrase": "",
+          "path": "m/84'/1'/0'/1/8"
+        }
+      ],
+      "txSignData": {
+        "tx": "02000000017a2a997956c09f8ea7fd2819c1a987bb14e22bf9adcdaf20a89763722ceee2640100000000fdffffff02a0bb0d00000000001976a914344a0f48ca150ec2b903817660b9b68b13a6702688ac7438230000000000160014eb38fa9b8128f81f26e95edb0c5ffaea83690fe400000000",
+        "txinputs": [
+          "0200000001afbfae06590f741ff1af59b6ac461126336a4c4a82db553df6fefab737ac33f30100000000fdffffff027011010000000000220020fdee441c56e5b06d0df82c124c707014a5ca19658be0b9856bca16f1ed3259f7a5f43000000000001600143af8429ad5954aa5ee8a33c983fd8a1e8679924b00000000"
+        ],
+        "inputpaths": [],
+        "outputpaths": [],
+        "signed": false
+      },
+      "signed": {
+        "tx": "020000000001017a2a997956c09f8ea7fd2819c1a987bb14e22bf9adcdaf20a89763722ceee2640100000000fdffffff02a0bb0d00000000001976a914344a0f48ca150ec2b903817660b9b68b13a6702688ac7438230000000000160014eb38fa9b8128f81f26e95edb0c5ffaea83690fe402483045022100ab44f34dd7e87c9054591297a101e8500a0641d1d591878d0d23cf8096fa79e802205d12d1062d925e27b57bdcf994ecf332ad0a8e67b8fe407bab2101255da632aa012103ee2c3d98eb1f93c0a1aa8e5a4009b70eb7b44ead15f1666f136b012ad58d306800000000",
+        "txid": "45b64907e77561bb3245eac1a84f26f03a17eec76731d4a1782cf38383ff5461",
+        "txInfo": {
+          "type": "debit",
+          "amount": 0,
+          "fee": 145
+        }
+      },
+      "source": "Ledger app-bitcoin-new tests/test_sign_psbt.py::test_sign_psbt_singlesig_wpkh_1to2, PSBT tests/psbt/singlesig/wpkh-1to2.psbt",
+      "sourceUrl": "https://github.com/LedgerHQ/app-bitcoin-new/blob/017aee474472/tests/test_sign_psbt.py",
+      "comment": "Sweep of a P2WPKH coin (m/84h/1h/0h/1/8) with the key of the Ledger test mnemonic. The signed transaction is built from the signatures given by the test."
+    },
+    {
+      "name": "ledger/testnet/sweep-wpkh-2to2",
+      "network": "btctest",
+      "account": {
+        "mnemonic": "glory promote mansion idle axis finger extra february uncover one trip resource lawn turtle enact monster seven myth punch hobby comfort wild raise skin",
+        "passphrase": "",
+        "account": 0
+      },
+      "sweepKeys": [
+        {
+          "mnemonic": "glory promote mansion idle axis finger extra february uncover one trip resource lawn turtle enact monster seven myth punch hobby comfort wild raise skin",
+          "passphrase": "",
+          "path": "m/84'/1'/0'/0/1"
+        },
+        {
+          "mnemonic": "glory promote mansion idle axis finger extra february uncover one trip resource lawn turtle enact monster seven myth punch hobby comfort wild raise skin",
+          "passphrase": "",
+          "path": "m/84'/1'/0'/1/0"
+        }
+      ],
+      "txSignData": {
+        "tx": "02000000029e2cfe27f0ad87b78a237d5d7405d4a30666ca361d585a467b0dfe42262b4db40100000000fdffffffafbfae06590f741ff1af59b6ac461126336a4c4a82db553df6fefab737ac33f30000000000fdffffff02a83a060000000000160014eb38fa9b8128f81f26e95edb0c5ffaea83690fe4e0930400000000002200203fa966c9ddcdc2fd96e4a5e1bc765b9faf6ce8b3eb4f1104aad6bdf77324e5be00000000",
+        "txinputs": [
+          "0200000001936ab2e01072f793cfe4c97754de1b61fe03e7db6536c8b2f21dd0b5742c48450100000000feffffff02dee1c70000000000160014eb78d7c40bf1063b0e3fce29c3565b689c8559ab10270000000000001600142318d66f84fef5c4875f933b038dc63831f8da13f9971e00",
+          "01000000010e471ef4e92c1acb51efc8660f8d3f69936ea9c9b2bff72ff9bc81c51efcf4640100000000000000000260ae0a000000000016001435c6e0dd6d3c84b16ba885dca73ac863d0b593ecaf06320000000000160014dc286e0cd2e6bd37cebe9ec349fb5f08905672fc00000000"
+        ],
+        "inputpaths": [],
+        "outputpaths": [],
+        "signed": false
+      },
+      "signed": {
+        "tx": "020000000001029e2cfe27f0ad87b78a237d5d7405d4a30666ca361d585a467b0dfe42262b4db40100000000fdffffffafbfae06590f741ff1af59b6ac461126336a4c4a82db553df6fefab737ac33f30000000000fdffffff02a83a060000000000160014eb38fa9b8128f81f26e95edb0c5ffaea83690fe4e0930400000000002200203fa966c9ddcdc2fd96e4a5e1bc765b9faf6ce8b3eb4f1104aad6bdf77324e5be0247304402206b3e877655f08c6e7b1b74d6d893a82cdf799f68a5ae7cecae63a71b0339e5ce022019b94aa3fb6635956e109f3d89c996b1bfbbaf3c619134b5a302badfaf52180e012103455ee7cedc97b0ba435b80066fc92c963a34c600317981d135330c4ee43ac7a302483045022100e2e98e4f8c70274f10145c89a5d86e216d0376bdf9f42f829e4315ea67d79d210220743589fd4f55e540540a976a5af58acd610fa5e188a5096dfe7d36baf3afb94001210271b5b779ad870838587797bcf6f0c7aec5abe76a709d724f48d2e26cf874f0a000000000",
+        "txid": "54e3752e16af13b324eb0bb009fa768f7dddda799bc869ed6702d02846db8207",
+        "txInfo": {
+          "type": "debit",
+          "amount": 0,
+          "fee": 1768
+        }
+      },
+      "source": "Ledger app-bitcoin-new tests/test_sign_psbt.py::test_sign_psbt_singlesig_wpkh_2to2, PSBT tests/psbt/singlesig/wpkh-2to2.psbt",
+      "sourceUrl": "https://github.com/LedgerHQ/app-bitcoin-new/blob/017aee474472/tests/test_sign_psbt.py",
+      "comment": "Sweep of two P2WPKH coins (m/84h/1h/0h/0/1, m/84h/1h/0h/1/0) with the keys of the Ledger test mnemonic. The signed transaction is built from the signatures given by the test."
+    },
+    {
+      "name": "bitcoinjs/sighash-all",
+      "network": "btc",
+      "account": {
+        "mnemonic": "all all all all all all all all all all all all",
+        "passphrase": "",
+        "account": 0
+      },
+      "sweepKeys": [
+        {
+          "wif": "KzRGFiqhXB7SyX6idHQkt77B8mX7adnujdg3VG47jdVK2x4wbUYg"
+        },
+        {
+          "wif": "KzRGFiqhXB7SyX6idHQkt77B8mX7adnujdg3VG47jdVK2x4wbUYg"
+        },
+        {
+          "wif": "KzRGFiqhXB7SyX6idHQkt77B8mX7adnujdg3VG47jdVK2x4wbUYg"
+        }
+      ],
+      "txSignData": {
+        "tx": "01000000037db7f0b2a345ded6ddf28da3211a7d7a95a2943e9a879493d6481b7d69613f040100000000ffffffff652c491e5a781a6a3c547fa8d980741acbe4623ae52907278f10e1f064f67e050000000000ffffffffb9fa270fa3e4dd8c79f9cbfe5f1953cba071ed081f7c277a49c33466c695db350000000000ffffffff03204e0000000000001976a9149ed1f577c60e4be1dbf35318ec12f51d25e8577388ac30750000000000001976a914fb407e88c48921d5547d899e18a7c0a36919f54d88ac50c30000000000001976a91404ccb4eed8cfa9f6e394e945178960f5ccddb38788ac00000000",
+        "txinputs": [
+          "0100000001652c491e5a781a6a3c547fa8d980741acbe4623ae52907278f10e1f064f67e05010000006a47304402202e96d42f625f6024eb4ca8d519ec002de45f3c4d931131706878162f200161f802204f7be25bf1f8584e9f157dfd90e0061cf5e17b8a25b170ad15d259d70c0bb1ad012103c704cbf34c686068287649687bd85c5bdd9f9917b1ea27dd12bdeb4a5bcd369affffffff0268804900000000001976a914a29e26543e3c2a1233005fe9f43a90fc0602881c88ac409c0000000000001976a9140de1f9b92d2ab6d8ead83f9a0ff5cf518dcb03b888ac00000000",
+          "0100000001b9fa270fa3e4dd8c79f9cbfe5f1953cba071ed081f7c277a49c33466c695db35010000006a47304402200163ec246a23d42e66fa2ef7d4515a9b8d53e18dc62c2ce97950dca587465d0e0220138fc154238f9baebdd46cd5f9e17a4b8c3ba253dcd98807a66462f7feb72daa012102e7ecb15a814ea95ae932455f9efcfc0fa8d4d79f2ac8aff963fd7d5f93769190ffffffff02409c0000000000001976a9140de1f9b92d2ab6d8ead83f9a0ff5cf518dcb03b888ac90204a00000000001976a914eca1358918fab23f3a570030295a2091e8c56a6e88ac00000000",
+          "0100000001fe7a2ef677030b877c493bbe53fa566a6830d864f2228e03ed4ec7ceb676deb7010000006b48304502210099e43b9afb19ef44cc207b33fb993a79297fc48308a996989de9703c898a99d602206ceca41218b44ffcc8c1956b0afb2fa41814cd832d99f48f67d57073aa3bc6930121030d800fa11cd76362554a9e8d355ada401c4669245f6268d8409e95be4f6dafb6ffffffff02409c0000000000001976a9140de1f9b92d2ab6d8ead83f9a0ff5cf518dcb03b888acb8c04a00000000001976a91466e6f04c9ff34e73a77600dca525d2a9437b14d488ac00000000"
+        ],
+        "inputpaths": [],
+        "outputpaths": [],
+        "signed": false
+      },
+      "signed": {
+        "tx": "01000000037db7f0b2a345ded6ddf28da3211a7d7a95a2943e9a879493d6481b7d69613f04010000006a47304402206abb0622b8b6ca83f1f4de84830cf38bf4615dc9e47a7dcdcc489905f26aa9cb02201d2d8a7815242b88e4cd66390ca46da802238f9b1395e0d118213d30dad38184012102f1c7eac9200f8dee7e34e59318ff2076c8b3e3ac7f43121e57569a1aec1803d4ffffffff652c491e5a781a6a3c547fa8d980741acbe4623ae52907278f10e1f064f67e05000000006b483045022100de13b42804f87a09bb46def12ab4608108d8c2db41db4bc09064f9c46fcf493102205e5c759ab7b2895c9b0447e56029f6895ff7bb20e0847c564a88a3cfcf080c4f012102f1c7eac9200f8dee7e34e59318ff2076c8b3e3ac7f43121e57569a1aec1803d4ffffffffb9fa270fa3e4dd8c79f9cbfe5f1953cba071ed081f7c277a49c33466c695db35000000006b4830450221009100a3f5b30182d1cb0172792af6947b6d8d42badb0539f2c209aece5a0628f002200ae91702ca63347e344c85fcb536f30ee97b75cdf4900de534ed5e040e71a548012102f1c7eac9200f8dee7e34e59318ff2076c8b3e3ac7f43121e57569a1aec1803d4ffffffff03204e0000000000001976a9149ed1f577c60e4be1dbf35318ec12f51d25e8577388ac30750000000000001976a914fb407e88c48921d5547d899e18a7c0a36919f54d88ac50c30000000000001976a91404ccb4eed8cfa9f6e394e945178960f5ccddb38788ac00000000",
+        "txid": "256848dfb934b71aa8497b97180b504cbc03f995c04c4cce6ca93c1a661ab3ab",
+        "txInfo": {
+          "type": "debit",
+          "amount": 0,
+          "fee": 20000
+        }
+      },
+      "source": "bitcoinjs-lib v5.2.0 test/fixtures/transaction_builder.json, valid.build \"SIGHASH ALL\"",
+      "sourceUrl": "https://github.com/bitcoinjs/bitcoinjs-lib/blob/v5.2.0/test/fixtures/transaction_builder.json",
+      "comment": "Three mainnet P2PKH inputs from three previous transactions, each with its own WIF key, and three outputs. The fixture gives only the txids of the previous transactions: they are on chain and were fetched from blockstream.info. No wallet account takes part in this sweep: the account only identifies the wallet's own inputs and outputs, and there are none. "
+    },
+    {
+      "name": "bitcoinjs/1-to-1",
+      "network": "btc",
+      "account": {
+        "mnemonic": "all all all all all all all all all all all all",
+        "passphrase": "",
+        "account": 0
+      },
+      "sweepKeys": [
+        {
+          "wif": "L2uPYXe17xSTqbCjZvL2DsyXPCbXspvcu5mHLDYUgzdUbZGSKrSr"
+        }
+      ],
+      "txSignData": {
+        "tx": "02000000013ebc8203037dda39d482bf41ff3be955996c50d9d4f7cfc3d2097a694a7b067d0000000000ffffffff0180380100000000001976a914ca0d36044e0dc08a22724efa6f6a07b0ec4c79aa88ac00000000",
+        "txinputs": [
+          "0200000001f9f34e95b9d5c8abcd20fc5bd4a825d1517be62f0f775e5f36da944d9452e550000000006b483045022100c86e9a111afc90f64b4904bd609e9eaed80d48ca17c162b1aca0a788ac3526f002207bb79b60d4fc6526329bf18a77135dc5660209e761da46e1c2f1152ec013215801210211755115eabf846720f5cb18f248666fec631e5e1e66009ce3710ceea5b1ad13ffffffff01905f0100000000001976a9148bbc95d2709c71607c60ee3f097c1217482f518d88ac00000000"
+        ],
+        "inputpaths": [],
+        "outputpaths": [],
+        "signed": false
+      },
+      "signed": {
+        "tx": "02000000013ebc8203037dda39d482bf41ff3be955996c50d9d4f7cfc3d2097a694a7b067d000000006b483045022100931b6db94aed25d5486884d83fc37160f37f3368c0d7f48c757112abefec983802205fda64cff98c849577026eb2ce916a50ea70626a7669f8596dd89b720a26b4d501210365db9da3f8a260078a7e8f8b708a1161468fb2323ffda5ec16b261ec1056f455ffffffff0180380100000000001976a914ca0d36044e0dc08a22724efa6f6a07b0ec4c79aa88ac00000000",
+        "txid": "5e34c94bfe7f7ba797fc263b9f612951a5624705607d23c5f20811f36df9a7f2",
+        "txInfo": {
+          "type": "debit",
+          "amount": 0,
+          "fee": 10000
+        }
+      },
+      "source": "bitcoinjs-lib test/integration/transactions.spec.ts, \"can create a 1-to-1 Transaction\"",
+      "sourceUrl": "https://github.com/bitcoinjs/bitcoinjs-lib/blob/ab9fad5978bc/test/integration/transactions.spec.ts",
+      "comment": "One mainnet P2PKH input with a WIF key, one output. The test gives the previous transaction (nonWitnessUtxo) and the expected transaction. Transaction version 2. No wallet account takes part in this sweep: the account only identifies the wallet's own inputs and outputs, and there are none. "
+    },
+    {
+      "name": "electrum/testnet/wif-p2pkh",
+      "network": "btctest",
+      "account": {
+        "mnemonic": "all all all all all all all all all all all all",
+        "passphrase": "",
+        "account": 0
+      },
+      "sweepKeys": [
+        {
+          "wif": "cQDxbmQfwRV3vP1mdnVHq37nJekHLsuD3wdSQseBRA2ct4MFk5Pq"
+        }
+      ],
+      "txSignData": {
+        "tx": "0100000001626bbbb7a4ad82dbf7f6bd64ac3f40d0e2695b606d7953f2802b9ea426ea080a0100000000fdffffff02a025260000000000160014e5bddbfee3883729b48fe3385216e64e6035f6eb585d7200000000001976a91405a20074ef7eb42c7c6fcd4f499faa699742783288ac1c391400",
+        "txinputs": [
+          "01000000000101197a89cff51096b9dd4214cdee0eb90cb27a25477e739521d728a679724042730100000000fdffffff048096980000000000160014dab37af8fefbbb31887a0a5f9b2698f4a7b45f6a80969800000000001976a91405a20074ef7eb42c7c6fcd4f499faa699742783288ac809698000000000017a914b808938a8007bc54509cd946944c479c0fa6554f87131b2c0400000000160014a04dfdb9a9aeac3b3fada6f43c2a66886186e2440247304402204f5dbb9dda65eab26179f1ca7c37c8baf028153815085dd1bbb2b826296e3b870220379fcd825742d6e2bdff772f347b629047824f289a5499a501033f6c3495594901210363c9c98740fe0455c646215cea9b13807b758791c8af7b74e62968bef57ff8ae1e391400"
+        ],
+        "inputpaths": [],
+        "outputpaths": [],
+        "signed": false
+      },
+      "signed": {
+        "tx": "0100000001626bbbb7a4ad82dbf7f6bd64ac3f40d0e2695b606d7953f2802b9ea426ea080a010000006a4730440220079e17291fac5112b36101407a06ebf76b2bf4c8c236c5caf8967baede884b45022072b1a2aa7f1a8fb6410d287b1902cd6debff3046c69e56a1355d5b95bf84c8cf01210384c5a4a52f64924bf3b6c32c4d744198389d56aa9a8f825a80c4efe23b44990bfdffffff02a025260000000000160014e5bddbfee3883729b48fe3385216e64e6035f6eb585d7200000000001976a91405a20074ef7eb42c7c6fcd4f499faa699742783288ac1c391400",
+        "txid": "e56da664631b8c666c6df38ec80c954c4ac3c4f56f040faf0070e4681e937fc4",
+        "txInfo": {
+          "type": "debit",
+          "amount": 0,
+          "fee": 5000
+        }
+      },
+      "source": "Electrum tests/test_wallet_vertical.py::TestWalletOfflineSigning.test_sending_offline_wif_online_addr_p2pkh",
+      "sourceUrl": "https://github.com/spesmilo/electrum/blob/4fb9ad37f75a/tests/test_wallet_vertical.py",
+      "comment": "One testnet P2PKH input with an imported WIF key, outputs to a P2WPKH address and a change address of the online wallet. The test gives the funding transaction and the unsigned transaction (as a PSBT) and asserts only the txid of the signed transaction. For a legacy transaction the txid commits to the signatures, so hw's transaction with that txid is the expected one (and the test test_sending_offline_xprv_online_addr_p2pkh signs the same transaction from the xprv). Transaction version 1, lock time 1325340, RBF sequence 0xfffffffd. No wallet account takes part in this sweep: the account only identifies the wallet's own inputs and outputs, and there are none. "
+    }
+  ]
+}

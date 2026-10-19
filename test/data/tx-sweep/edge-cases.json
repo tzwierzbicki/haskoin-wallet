@@ -1,0 +1,85 @@
+{
+  "description": "Sweep transactions that hw must refuse to sign, with the exact error. Produced by hw (commit d054e45) from the hw-regression.json transactions.",
+  "vectors": [
+    {
+      "name": "edge/no-private-keys",
+      "network": "btc",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "sweepKeys": [],
+      "txSignData": {
+        "tx": "01000000028b0ff3b0c181064aeb03e20dff161221a3789f677fb68b1af7ccd66f8d8db4dc0000000000ffffffff8b0ff3b0c181064aeb03e20dff161221a3789f677fb68b1af7ccd66f8d8db4dc0100000000ffffffff01f07be111000000001976a914c80d55223e2f1061363add2a7b0363c285bf298d88ac00000000",
+        "txinputs": [
+          "010000000105000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0200e1f505000000001976a9144f99bbf75707e44bc2afa65337dece914e817aac88ac00c2eb0b000000001976a9149ae69f69b01ab5b33d05f41535464337df3d031d88ac00000000"
+        ],
+        "inputpaths": [],
+        "outputpaths": [
+          "/0/0"
+        ],
+        "signed": false
+      },
+      "expect": "error",
+      "error": "There are no private keys to sign",
+      "comment": "Sweep with an empty list of keys."
+    },
+    {
+      "name": "edge/sweep-missing-key",
+      "network": "btc",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "sweepKeys": [
+        {
+          "wif": "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU7Bqcefezr"
+        }
+      ],
+      "txSignData": {
+        "tx": "01000000028b0ff3b0c181064aeb03e20dff161221a3789f677fb68b1af7ccd66f8d8db4dc0000000000ffffffff8b0ff3b0c181064aeb03e20dff161221a3789f677fb68b1af7ccd66f8d8db4dc0100000000ffffffff01f07be111000000001976a914c80d55223e2f1061363add2a7b0363c285bf298d88ac00000000",
+        "txinputs": [
+          "010000000105000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0200e1f505000000001976a9144f99bbf75707e44bc2afa65337dece914e817aac88ac00c2eb0b000000001976a9149ae69f69b01ab5b33d05f41535464337df3d031d88ac00000000"
+        ],
+        "inputpaths": [],
+        "outputpaths": [
+          "/0/0"
+        ],
+        "signed": false
+      },
+      "expect": "error",
+      "error": "No private key for input 1 (1F83LVL8YKm4ugbNt2ePFVmsyoiHrx4NF7)",
+      "comment": "Sweep of two coins with only one of the two keys: one input stays unsigned."
+    },
+    {
+      "name": "edge/sweep-wrong-key",
+      "network": "btc",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "sweepKeys": [
+        {
+          "wif": "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU7UmdASwtK"
+        }
+      ],
+      "txSignData": {
+        "tx": "01000000028b0ff3b0c181064aeb03e20dff161221a3789f677fb68b1af7ccd66f8d8db4dc0000000000ffffffff8b0ff3b0c181064aeb03e20dff161221a3789f677fb68b1af7ccd66f8d8db4dc0100000000ffffffff01f07be111000000001976a914c80d55223e2f1061363add2a7b0363c285bf298d88ac00000000",
+        "txinputs": [
+          "010000000105000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0200e1f505000000001976a9144f99bbf75707e44bc2afa65337dece914e817aac88ac00c2eb0b000000001976a9149ae69f69b01ab5b33d05f41535464337df3d031d88ac00000000"
+        ],
+        "inputpaths": [],
+        "outputpaths": [
+          "/0/0"
+        ],
+        "signed": false
+      },
+      "expect": "error",
+      "error": "No private key for input 0 (18FtYoEJipP5bCJnjgWdeeEbxSvozSjEUA)",
+      "comment": "Sweep with a key that owns none of the coins."
+    }
+  ]
+}

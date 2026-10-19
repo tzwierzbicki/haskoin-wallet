@@ -1,5 +1,5 @@
 name: haskoin-wallet
-version: 0.9.5
+version: 0.9.6
 synopsis: Lightweight CLI wallet for Bitcoin and Bitcoin Cash
 description:
   Lightweight command-line interface offline-friendly 
@@ -18,6 +18,8 @@ extra-source-files:
   - test/data/message-signing/README.md
   - test/data/tx-signing/*.json
   - test/data/tx-signing/README.md
+  - test/data/tx-sweep/*.json
+  - test/data/tx-sweep/README.md
 dependencies:
   - base >=4.9 && <5
   - aeson >= 1.4.6.0

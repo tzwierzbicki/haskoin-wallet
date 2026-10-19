@@ -1,0 +1,216 @@
+{
+  "description": "Regression vectors produced by hw's signTxWithKeys and independently verified with ../tx-signing/tools/verify_vectors.py. The wallet is the test mnemonic of SigningSpec.hs, account 0; the swept keys are fixed test secrets. The funding transactions spend a fake outpoint, so these transactions exist on no blockchain.",
+  "vectors": [
+    {
+      "name": "hw/btc/sweep-credit",
+      "network": "btc",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "sweepKeys": [
+        {
+          "wif": "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU7Bqcefezr"
+        },
+        {
+          "wif": "5HpHagT65TZzG1PH3CSu63k8DbpvD8s5ip4nEB3kEsreEYP1uta"
+        }
+      ],
+      "txSignData": {
+        "tx": "01000000028b0ff3b0c181064aeb03e20dff161221a3789f677fb68b1af7ccd66f8d8db4dc0000000000ffffffff8b0ff3b0c181064aeb03e20dff161221a3789f677fb68b1af7ccd66f8d8db4dc0100000000ffffffff01f07be111000000001976a914c80d55223e2f1061363add2a7b0363c285bf298d88ac00000000",
+        "txinputs": [
+          "010000000105000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0200e1f505000000001976a9144f99bbf75707e44bc2afa65337dece914e817aac88ac00c2eb0b000000001976a9149ae69f69b01ab5b33d05f41535464337df3d031d88ac00000000"
+        ],
+        "inputpaths": [],
+        "outputpaths": [
+          "/0/0"
+        ],
+        "signed": false
+      },
+      "signed": {
+        "tx": "01000000028b0ff3b0c181064aeb03e20dff161221a3789f677fb68b1af7ccd66f8d8db4dc000000006b483045022100a492ef4f987b8e563f53c9a7f690c66eef8ddc57997e006da9fcb0015f401f5f0220395365dc0a71c8ed435a53f7bd7121e49b7a8bf946ddd3f377b6e4810c17244d012103defdea4cdb677750a420fee807eacf21eb9898ae79b9768766e4faa04a2d4a34ffffffff8b0ff3b0c181064aeb03e20dff161221a3789f677fb68b1af7ccd66f8d8db4dc010000008b4830450221008d2c7feb262ce166d7707a2d69201fa091dd59206944399921c4544beab6c18f022043cc927c5a63b8a091d76d0049df2ceebdb50af8bdca7939d3284c5d8c7de9e80141041be68a5a028f2601d0e80d468c344ba331d611b96c358b6032e8b4da0547fc11bebc47511ade7308b3ca6265f9400779c076329c75146bc6ff1822f5d1f30e79ffffffff01f07be111000000001976a914c80d55223e2f1061363add2a7b0363c285bf298d88ac00000000",
+        "txid": "5b5305db982977c8aca393095ceb15a12e6740031ba9cf2f6e64c27f2c4b75b3",
+        "txInfo": {
+          "type": "credit",
+          "amount": 299990000,
+          "fee": 10000
+        }
+      },
+      "comment": "Sweep (signTxWithKeys): two coins of external keys, one compressed and one uncompressed WIF, swept to the wallet's own address (/0/0): the type is credit."
+    },
+    {
+      "name": "hw/btc/sweep-p2pk",
+      "network": "btc",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "sweepKeys": [
+        {
+          "wif": "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU7Bqcefezr"
+        }
+      ],
+      "txSignData": {
+        "tx": "0100000001df67b7994f8aeecc414d0dfed037c6483af3c6ea4dc28006d2df267f451eb5b90000000000ffffffff01f0b9f505000000001976a914bcb6e2aa16a725659548910d7a020414cbfe65df88ac00000000",
+        "txinputs": [
+          "01000000010b000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0100e1f50500000000232103defdea4cdb677750a420fee807eacf21eb9898ae79b9768766e4faa04a2d4a34ac00000000"
+        ],
+        "inputpaths": [],
+        "outputpaths": [],
+        "signed": false
+      },
+      "signed": {
+        "tx": "0100000001df67b7994f8aeecc414d0dfed037c6483af3c6ea4dc28006d2df267f451eb5b90000000049483045022100fd7341d714835b1f0f8d7a89c59b2ae1ffe94334d67a2d702120ba9b2182c4d9022078e6dc919020ceabeebe0b3811f1667113146b3b75fca6642f474eb1b4b6b99001ffffffff01f0b9f505000000001976a914bcb6e2aa16a725659548910d7a020414cbfe65df88ac00000000",
+        "txid": "4d67931b88921653b95526358ac39cb04625fc77b3d78dea7ef0ddd0479bd150",
+        "txInfo": {
+          "type": "debit",
+          "amount": 0,
+          "fee": 10000
+        }
+      },
+      "comment": "A pay-to-public-key coin of a compressed key (the funding output is a P2PK script, not P2PKH), swept with its WIF key: the scriptSig is a single signature. Such a coin is found under the P2PKH address of its key."
+    },
+    {
+      "name": "hw/btc/sweep-p2pk-uncompressed",
+      "network": "btc",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "sweepKeys": [
+        {
+          "wif": "5HpHagT65TZzG1PH3CSu63k8DbpvD8s5ip4nEB3kEsreEYP1uta"
+        }
+      ],
+      "txSignData": {
+        "tx": "010000000174cdc4f1964161eb5aae45b3d5a977baee3b7805cedd293304193940f995ae220000000000ffffffff01f0ca052a010000001976a914bcb6e2aa16a725659548910d7a020414cbfe65df88ac00000000",
+        "txinputs": [
+          "01000000010c000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0100f2052a010000004341041be68a5a028f2601d0e80d468c344ba331d611b96c358b6032e8b4da0547fc11bebc47511ade7308b3ca6265f9400779c076329c75146bc6ff1822f5d1f30e79ac00000000"
+        ],
+        "inputpaths": [],
+        "outputpaths": [],
+        "signed": false
+      },
+      "signed": {
+        "tx": "010000000174cdc4f1964161eb5aae45b3d5a977baee3b7805cedd293304193940f995ae2200000000494830450221008fa771dcdf4c8f39f97af6fd043a683fd7dea4f75a10d467169c586be6cfbdf302200090a58e163e1ead300b36c10a38355c1e7c7c2ce96aa6ec8fdd3e2e1a05e93801ffffffff01f0ca052a010000001976a914bcb6e2aa16a725659548910d7a020414cbfe65df88ac00000000",
+        "txid": "f869fdcda65ca7eca4215d81259469251a167e4b5f22ced7fd4e44a466ce7a74",
+        "txInfo": {
+          "type": "debit",
+          "amount": 0,
+          "fee": 10000
+        }
+      },
+      "comment": "A pay-to-public-key coin of an uncompressed key, as mined in the first years of Bitcoin, swept with its uncompressed WIF key. 50 BTC."
+    },
+    {
+      "name": "hw/btc/sweep-p2pkh-and-p2wpkh",
+      "network": "btc",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "sweepKeys": [
+        {
+          "wif": "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU7Bqcefezr"
+        }
+      ],
+      "txSignData": {
+        "tx": "0100000002d3bef1486ff130493e66f150c0490660a8c1d9980e2d49cb11eedbb3e8dc0ea00000000000ffffffffd3bef1486ff130493e66f150c0490660a8c1d9980e2d49cb11eedbb3e8dc0ea00100000000ffffffff01f07be111000000001976a914fbc714c637d88dd61a266b073372af5d5c68e90d88ac00000000",
+        "txinputs": [
+          "01000000010d000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0200e1f505000000001976a9144f99bbf75707e44bc2afa65337dece914e817aac88ac00c2eb0b000000001600144f99bbf75707e44bc2afa65337dece914e817aac00000000"
+        ],
+        "inputpaths": [],
+        "outputpaths": [],
+        "signed": false
+      },
+      "signed": {
+        "tx": "01000000000102d3bef1486ff130493e66f150c0490660a8c1d9980e2d49cb11eedbb3e8dc0ea0000000006b483045022100bc835531bb547545dc1298bad9725e373b80c03f921ea9e5a4342f664b75bea802204902392cd34b8b5919e02c423869b2c5d710122cf96b4fa9d2e8d7c676e92793012103defdea4cdb677750a420fee807eacf21eb9898ae79b9768766e4faa04a2d4a34ffffffffd3bef1486ff130493e66f150c0490660a8c1d9980e2d49cb11eedbb3e8dc0ea00100000000ffffffff01f07be111000000001976a914fbc714c637d88dd61a266b073372af5d5c68e90d88ac00024730440220772099df7e67694f189e38d285a0838c8786b39ade9ac65452503288fe16a7a7022065fe1b6b3f6b2fc82edef65e3fdecaa7e6c8c67feb93b5051c658f9ae054131a012103defdea4cdb677750a420fee807eacf21eb9898ae79b9768766e4faa04a2d4a3400000000",
+        "txid": "1fac60526fb07733978f507d992caf386aac26b9f39c7313572532e84b25a911",
+        "txInfo": {
+          "type": "debit",
+          "amount": 0,
+          "fee": 10000
+        }
+      },
+      "comment": "A P2PKH coin and a P2WPKH coin of the same key swept together, as preparesweep builds it: a legacy input and a witness input in one transaction."
+    },
+    {
+      "name": "hw/btc/sweep-with-wallet-coin",
+      "network": "btc",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "sweepKeys": [
+        {
+          "wif": "KwhWZMzxXLKaUa4BSLxVKMRuLfrkqV9gYDCjH5sVjx8fDtck9oWc"
+        },
+        {
+          "wif": "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU7Bqcefezr"
+        }
+      ],
+      "txSignData": {
+        "tx": "0100000002cfb75c3297cd1fc3282970064b1cf1b6c8f495e5637b878d807b2f5ada140ab80000000000ffffffffcfb75c3297cd1fc3282970064b1cf1b6c8f495e5637b878d807b2f5ada140ab80100000000ffffffff01f07be111000000001976a91457cf49b9749f5cd69641216d97ef678a692b4f8e88ac00000000",
+        "txinputs": [
+          "01000000010e000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0200e1f505000000001976a914c80d55223e2f1061363add2a7b0363c285bf298d88ac00c2eb0b000000001976a9144f99bbf75707e44bc2afa65337dece914e817aac88ac00000000"
+        ],
+        "inputpaths": [
+          "/0/0"
+        ],
+        "outputpaths": [],
+        "signed": false
+      },
+      "signed": {
+        "tx": "0100000002cfb75c3297cd1fc3282970064b1cf1b6c8f495e5637b878d807b2f5ada140ab8000000006a473044022058121c2917f08646a369c5811d23a9be7862dc935042728fc27d5ac7ed80eac102206435e2e456ee289fa3d54a083f19b7ac7b303f2e4e5a269951cae8ba0d6059180121032f6437022256c854e0090e7d6c8b65e96606ef7f405399e0f0187c93097ac0f9ffffffffcfb75c3297cd1fc3282970064b1cf1b6c8f495e5637b878d807b2f5ada140ab8010000006a473044022041d1ca816edaf78c484ace2d639a7c753e12680b59b21ebb63762c636345ff6c0220081a2719c0071a6ccf3ca04c1f9d33a393ce95424252316ec125df5117333763012103defdea4cdb677750a420fee807eacf21eb9898ae79b9768766e4faa04a2d4a34ffffffff01f07be111000000001976a91457cf49b9749f5cd69641216d97ef678a692b4f8e88ac00000000",
+        "txid": "c97ed817258d831e11ecf6b609c1106c9beb11cde2bf245ab163e01ed5f84632",
+        "txInfo": {
+          "type": "debit",
+          "amount": -100000000,
+          "fee": 10000
+        }
+      },
+      "comment": "A sweep that also spends a coin of the wallet's own address (/0/0, given as an input path) whose key is in the key file. The wallet's coin counts as its own input, so the amount is negative and the type is debit."
+    },
+    {
+      "name": "hw/bch/sweep-p2pkh",
+      "network": "bch",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "sweepKeys": [
+        {
+          "wif": "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU7Bqcefezr"
+        },
+        {
+          "wif": "5HpHagT65TZzG1PH3CSu63k8DbpvD8s5ip4nEB3kEsreEYP1uta"
+        }
+      ],
+      "txSignData": {
+        "tx": "010000000264439abd8a884134cfd1dffb64f638b920a613b518cac46d6bb4c81a2882863f0000000000ffffffff64439abd8a884134cfd1dffb64f638b920a613b518cac46d6bb4c81a2882863f0100000000ffffffff01f07be111000000001976a914bcb6e2aa16a725659548910d7a020414cbfe65df88ac00000000",
+        "txinputs": [
+          "01000000010f000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0200e1f505000000001976a9144f99bbf75707e44bc2afa65337dece914e817aac88ac00c2eb0b000000001976a9149ae69f69b01ab5b33d05f41535464337df3d031d88ac00000000"
+        ],
+        "inputpaths": [],
+        "outputpaths": [],
+        "signed": false
+      },
+      "signed": {
+        "tx": "010000000264439abd8a884134cfd1dffb64f638b920a613b518cac46d6bb4c81a2882863f000000006b483045022100e5740c84ac8ea327fc78d964155e4bef3a2359cefed2df4dfc1d1d4211f161e402207ba638865112d11dfdf1acba7512046c8fda7a1762fecae5f26f80b6b97ff1e0412103defdea4cdb677750a420fee807eacf21eb9898ae79b9768766e4faa04a2d4a34ffffffff64439abd8a884134cfd1dffb64f638b920a613b518cac46d6bb4c81a2882863f010000008b4830450221009c630c66103b13fd2ee9dbe7a26adbecaee389212cb095bd14ff314fcf3ee027022052d863406d6a3eddecbc151d4b93437c120391edc06300e65978056db22d2dea4141041be68a5a028f2601d0e80d468c344ba331d611b96c358b6032e8b4da0547fc11bebc47511ade7308b3ca6265f9400779c076329c75146bc6ff1822f5d1f30e79ffffffff01f07be111000000001976a914bcb6e2aa16a725659548910d7a020414cbfe65df88ac00000000",
+        "txid": "38e6992f1e74503ca3735aea371745f71dca41e578fd661c871d20c1fade936b",
+        "txInfo": {
+          "type": "debit",
+          "amount": 0,
+          "fee": 10000
+        }
+      },
+      "comment": "Bitcoin Cash: two P2PKH coins, of a compressed and of an uncompressed key, signed with SIGHASH_ALL | SIGHASH_FORKID (sighash byte 0x41)."
+    }
+  ]
+}

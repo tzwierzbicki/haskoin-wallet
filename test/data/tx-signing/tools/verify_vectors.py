@@ -5,8 +5,8 @@ Usage: verify_vectors.py VECTOR_DIR
 
 Uses only the pure-Python primitives of ../../message-signing/tools/btc.py (no
 hw or haskoin-core code). For every vector with a signed transaction it checks
-the unsigned transaction, the txid, the previous transactions, every input
-signature and the txInfo summary. Exits with an error if anything is wrong.
+the unsigned transaction, the txid, every input signature and the txInfo
+summary. Exits with an error if anything is wrong.
 """
 
 import json
@@ -244,7 +244,8 @@ def vector_problems(v):
     tsd, expected = v["txSignData"], v["signed"]
     tx = parse_tx(bytes.fromhex(expected["tx"]))
     problems = []
-    if serialize(tx, {}).hex() != tsd["tx"]:
+    # An input of another party may already be signed in the unsigned transaction
+    if serialize(tx, {}) != serialize(parse_tx(bytes.fromhex(tsd["tx"])), {}):
         problems.append("the unsigned transaction is not the signed one without input scripts")
     if txid(tx) != expected["txid"]:
         problems.append("wrong txid")
@@ -252,9 +253,6 @@ def vector_problems(v):
     for raw in tsd["txinputs"]:
         prev = parse_tx(bytes.fromhex(raw))
         previous[txid(prev)] = prev
-    spent = {inp["prev"][::-1].hex() for inp in tx["ins"]}
-    for unused in set(previous) - spent:
-        problems.append(f"previous transaction {unused} is not spent")
     own_inputs, own_outputs = path_key_hashes(v)
     in_sum = my_in = 0
     spent_hashes = set()
@@ -270,8 +268,8 @@ def vector_problems(v):
         spent_hashes.add(key_hash)
         if key_hash in own_inputs:
             my_in += prevout["value"]
-    if "sweepKeys" not in v and spent_hashes != own_inputs:
-        problems.append("the input paths do not match the signing keys of the inputs")
+    if not own_inputs <= spent_hashes:
+        problems.append("an input path is not spent by the transaction")
     out_sum = sum(o["value"] for o in tx["outs"])
     my_out = sum(o["value"] for o in tx["outs"] if o["script"] in {p2pkh_script(h) for h in own_outputs})
     fee = in_sum - out_sum

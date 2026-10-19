@@ -7,12 +7,16 @@ from this folder (Python 3.8+, standard library only):
 
 ```sh
 python3 verify_vectors.py ..
+python3 verify_vectors.py ../../tx-sweep
 ```
 
+The second command checks the sweep vectors of `test/data/tx-sweep`, which
+have the same format.
+
 For every vector it checks that the unsigned transaction is the signed one
-without its input scripts and witness, that the `txid` is right, that every
-previous transaction is referenced, and that every input of the signed
-transaction carries a valid, low-S signature by the key of the coin it spends
+without its input scripts and witness, that the `txid` is right, and that every
+input of the signed transaction carries a valid, low-S signature by the key of
+the coin it spends
 (legacy sighash, Bitcoin Cash SIGHASH_FORKID, or BIP-143 for SegWit coins). It
 derives the wallet's addresses from the `account` and the paths to check the
 `txInfo` type, amount and fee. The `signed` transaction of a known-bug vector

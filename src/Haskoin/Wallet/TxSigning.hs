@@ -24,6 +24,7 @@
 module Haskoin.Wallet.TxSigning
   ( parseTxSignData,
     signWalletTx,
+    verifySignedTx,
   )
 where
 
@@ -59,6 +60,13 @@ parseTxSignData net ctx accountPub tsd = do
   coins <- spentCoins ctx tsd
   analysis <- analyze net ctx tsd accountPub coins
   return $ txInfo analysis tsd.txSignDataTx tsd.txSignDataSigned
+
+-- | Check that every input of a signed transaction carries a valid signature
+-- for the coin it spends
+verifySignedTx :: Network -> Ctx -> TxSignData -> Either String ()
+verifySignedTx net ctx tsd = do
+  coins <- spentCoins ctx tsd
+  verifyInputs net ctx tsd.txSignDataTx coins
 
 -- | Sign a transaction of the wallet with its account private key
 signWalletTx ::
