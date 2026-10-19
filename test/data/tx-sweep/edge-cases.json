@@ -80,6 +80,89 @@
       "expect": "error",
       "error": "No private key for input 0 (18FtYoEJipP5bCJnjgWdeeEbxSvozSjEUA)",
       "comment": "Sweep with a key that owns none of the coins."
+    },
+    {
+      "name": "edge/sweep-already-signed",
+      "network": "btc",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "sweepKeys": [
+        {
+          "wif": "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU7Bqcefezr"
+        },
+        {
+          "wif": "5HpHagT65TZzG1PH3CSu63k8DbpvD8s5ip4nEB3kEsreEYP1uta"
+        }
+      ],
+      "txSignData": {
+        "tx": "01000000028b0ff3b0c181064aeb03e20dff161221a3789f677fb68b1af7ccd66f8d8db4dc000000006b483045022100a492ef4f987b8e563f53c9a7f690c66eef8ddc57997e006da9fcb0015f401f5f0220395365dc0a71c8ed435a53f7bd7121e49b7a8bf946ddd3f377b6e4810c17244d012103defdea4cdb677750a420fee807eacf21eb9898ae79b9768766e4faa04a2d4a34ffffffff8b0ff3b0c181064aeb03e20dff161221a3789f677fb68b1af7ccd66f8d8db4dc010000008b4830450221008d2c7feb262ce166d7707a2d69201fa091dd59206944399921c4544beab6c18f022043cc927c5a63b8a091d76d0049df2ceebdb50af8bdca7939d3284c5d8c7de9e80141041be68a5a028f2601d0e80d468c344ba331d611b96c358b6032e8b4da0547fc11bebc47511ade7308b3ca6265f9400779c076329c75146bc6ff1822f5d1f30e79ffffffff01f07be111000000001976a914c80d55223e2f1061363add2a7b0363c285bf298d88ac00000000",
+        "txinputs": [
+          "010000000105000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0200e1f505000000001976a9144f99bbf75707e44bc2afa65337dece914e817aac88ac00c2eb0b000000001976a9149ae69f69b01ab5b33d05f41535464337df3d031d88ac00000000"
+        ],
+        "inputpaths": [],
+        "outputpaths": [
+          "/0/0"
+        ],
+        "signed": true
+      },
+      "expect": "error",
+      "error": "The transaction is already signed",
+      "comment": "The signed hw/btc/sweep-credit transaction, marked as signed."
+    },
+    {
+      "name": "edge/sweep-p2sh-unknown-redeem",
+      "network": "btc",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "sweepKeys": [
+        {
+          "wif": "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU7Bqcefezr"
+        }
+      ],
+      "txSignData": {
+        "tx": "01000000015eee41cd3a5fa3706000038e1a5a12dfd3eb3fe240ccadcf80b9f56cf492f11e0000000000ffffffff01f0b9f505000000001976a914bcb6e2aa16a725659548910d7a020414cbfe65df88ac00000000",
+        "txinputs": [
+          "010000000129000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0100e1f5050000000017a9148b0d28d6675ca870537c5562461475d47e032c228700000000"
+        ],
+        "inputpaths": [],
+        "outputpaths": [],
+        "signed": false
+      },
+      "expect": "error",
+      "error": "No private key for input 0 (3ENFcYiwpwiBv54iSjPgM33xFsjuw8SBLY)",
+      "comment": "A P2SH coin whose redeem script is a 1-of-1 multisig of the key, not its P2WPKH script: the only P2SH coins the sweep signs are P2SH-P2WPKH coins of the given keys."
+    },
+    {
+      "name": "edge/sweep-unsupported-script",
+      "network": "btc",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "sweepKeys": [
+        {
+          "wif": "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU7Bqcefezr"
+        }
+      ],
+      "txSignData": {
+        "tx": "010000000160fe0b9682ce9d9640c745a4bc434e3711f45b0e848aa85df505ab58aefb6c400000000000ffffffff01f0b9f505000000001976a914bcb6e2aa16a725659548910d7a020414cbfe65df88ac00000000",
+        "txinputs": [
+          "01000000012a000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0100e1f50500000000220020c4ad09ac88e583c86e730ad435d2bab0b896b3e7035c5bdfe8785ebc885c9e5b00000000"
+        ],
+        "inputpaths": [],
+        "outputpaths": [],
+        "signed": false
+      },
+      "expect": "error",
+      "error": "Unsupported output script for input 0 (bc1qcjksntygukpusmnnpt2rt546kzufdvl8qdw9hhlg0p0tezzuneds5w7se8)",
+      "comment": "A P2WSH coin: the sweep signs no script type other than P2PKH, P2PK, P2WPKH and P2SH-P2WPKH."
     }
   ]
 }

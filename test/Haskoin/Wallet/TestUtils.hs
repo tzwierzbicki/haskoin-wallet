@@ -1,3 +1,4 @@
+{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -12,15 +13,20 @@ import Control.Monad.Except (ExceptT)
 import Control.Monad.Trans (liftIO)
 import Control.Monad.Trans.Except (runExceptT)
 import Data.Aeson (FromJSON (..), eitherDecodeFileStrict, withObject, (.!=), (.:), (.:?))
+import qualified Data.ByteString as BS
 import Data.Either (fromRight, isRight)
 import Data.List (isSuffixOf, sort)
+import Data.Maybe (fromMaybe)
+import qualified Data.Serialize as S
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Database.Persist.Sql (runMigrationQuiet)
 import Database.Persist.Sqlite (runSqlite)
 import Haskoin
+import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database (DB, migrateAll)
 import Haskoin.Wallet.Signing (MnemonicPass (..), signingKey)
+import Data.Word (Word32, Word8)
 import Numeric.Natural (Natural)
 import System.Directory (listDirectory)
 import Test.HUnit (Assertion)
@@ -30,6 +36,10 @@ import Test.Hspec
 
 forceRight :: Either a b -> b
 forceRight = fromRight (error "fromRight")
+
+-- | The Right value, or a test failure showing the error
+expectRight :: (HasCallStack) => Either String a -> IO a
+expectRight = either (\err -> expectationFailure err >> fail err) return
 
 {- Database -}
 
@@ -186,3 +196,168 @@ instance FromJSON AccountSpec where
 accountSigningKey :: Network -> Ctx -> AccountSpec -> Either String XPrvKey
 accountSigningKey net ctx (AccountSpec mnem pass acc) =
   signingKey net ctx (MnemonicPass mnem pass) acc
+
+{- Synthetic transactions and coins -}
+
+-- The transactions of the tests exist on no blockchain: a funding transaction
+-- spends a fake outpoint and pays the addresses a test needs, and the test
+-- then spends the coins of that funding transaction.
+
+-- | A transaction hash that exists nowhere: one byte, then zeros
+fakeTxHash :: Word8 -> TxHash
+fakeTxHash w =
+  either (error "fakeTxHash") id $ S.decode $ w `BS.cons` BS.replicate 31 0x00
+
+-- | A block hash that exists nowhere: one byte, then zeros
+fakeBlockHash :: Word8 -> BlockHash
+fakeBlockHash w =
+  either (error "fakeBlockHash") id $ S.decode $ w `BS.cons` BS.replicate 31 0x00
+
+-- | An unsigned transaction spending the given outputs and paying the given
+-- amounts to the given addresses (version 1, final sequence, no lock time)
+spendingTx :: Ctx -> [(TxHash, Word32)] -> [(Address, Natural)] -> Tx
+spendingTx ctx spent paid =
+  Tx 1 [TxIn (OutPoint h i) BS.empty maxBound | (h, i) <- spent] (payment <$> paid) [] 0
+  where
+    payment (addr, amount) = TxOut (fromIntegral amount) (addressScript ctx addr)
+
+-- | A transaction funded by a fake outpoint, paying the given addresses
+fundingTx :: Ctx -> Word8 -> [(Address, Natural)] -> Tx
+fundingTx ctx w = spendingTx ctx [(fakeTxHash w, 0)]
+
+-- | A coin as the store reports it: at the given block height, or unconfirmed
+storeCoin :: Ctx -> (TxHash, Word32) -> Maybe Natural -> Address -> Natural -> Store.Unspent
+storeCoin ctx (h, i) heightM addr amount =
+  Store.Unspent
+    { Store.block = maybe (Store.MemRef 0) (\height -> Store.BlockRef (fromIntegral height) 0) heightM,
+      Store.outpoint = OutPoint h i,
+      Store.value = fromIntegral amount,
+      Store.script = addressScript ctx addr,
+      Store.address = Just addr
+    }
+
+-- | All the coins of a transaction, unconfirmed, as the store reports them
+coinsOf :: Ctx -> Tx -> [Store.Unspent]
+coinsOf ctx tx =
+  [ Store.Unspent
+      { Store.block = Store.MemRef 0,
+        Store.outpoint = OutPoint (txHash tx) i,
+        Store.value = out.value,
+        Store.script = out.script,
+        Store.address = either (const Nothing) Just (scriptToAddressBS ctx out.script)
+      }
+    | (i, out) <- zip [0 ..] tx.outputs
+  ]
+
+-- | The output script paying an address
+addressScript :: Ctx -> Address -> BS.ByteString
+addressScript ctx addr =
+  maybe (error "addressScript: unsupported address") (marshal ctx) (addressToOutput addr)
+
+{- The test wallet -}
+
+-- The tests share one wallet, written out in full so that any deviation in a
+-- derivation is caught: a mnemonic with a passphrase, the fingerprint of the
+-- wallet, the keys of its first Bitcoin account (m/44'/0'/0') and the first
+-- ten addresses of the account's external and internal chains. A second
+-- wallet and ten addresses of other wallets complete the set.
+
+testMnemonic :: MnemonicPass
+testMnemonic =
+  MnemonicPass
+    "snow senior nerve virus fabric now fringe clip marble interest analyst can"
+    "correct horse battery staple"
+
+testFingerprintText :: Text
+testFingerprintText = "892eb8e4"
+
+testFingerprint :: Fingerprint
+testFingerprint = forceRight $ textToFingerprint testFingerprintText
+
+-- | The keys of account 0 of the test wallet, m/44'/0'/0'
+testAccountXPrv, testAccountXPub :: Text
+testAccountXPrv = "xprv9yHxeaLAZvxXb9VtJNesqk8avfN8misGAW9DUW9eacZJNqsfZxqKLmK5jfmvFideQqGesviJeagzSQYCuQySjgvt7TdfowKja5aJqbgyuNh"
+testAccountXPub = "xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah"
+
+testAccountKey :: XPrvKey
+testAccountKey = fromMaybe (error "testAccountKey") $ xPrvImport btc testAccountXPrv
+
+testAccountPub :: Ctx -> XPubKey
+testAccountPub ctx = fromMaybe (error "testAccountPub") $ xPubImport btc ctx testAccountXPub
+
+-- | The external (receiving) addresses /0/0 to /0/9 of the test account
+externalAddrsText :: [Text]
+externalAddrsText =
+  [ "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj",
+    "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg",
+    "1Dg6Kg7kQuyiZz41HRWXKUWKRu6ZyEf1Nr",
+    "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1",
+    "1cWcYiGK7NwjPBJuKRqZxV4aymUnPu1mx",
+    "1MZuimSXigp8oqxkVUvZofqHNtVjdcdAqc",
+    "1JReTkpFnsrMqhSEJwUNZXPAyeTo2HQfnE",
+    "1Hx9xWAHhcjea5uJnyADktCfcLbuBnRnwA",
+    "1HXJhfiD7JFCGMFZnhKRsZxoPF7xDTqWXP",
+    "1MZpAt1FofY69B6fzooFxZqe6SdrVrC3Yw"
+  ]
+
+-- | The internal (change) addresses /1/0 to /1/9 of the test account
+internalAddrsText :: [Text]
+internalAddrsText =
+  [ "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn",
+    "1NqNFsuS7K3dfF8RnAVr9YYCMvJuF9GCn6",
+    "1MZNPWwFwy2CqVgWBq6unPWBWrZTQ7WTnr",
+    "19XbPiR98wmoJQZ42K8pVMzdCwSXZBh7iz",
+    "1Gkn7EsphiaYuv6XXvG4Kyg3LSfqFMeXHX",
+    "14VkCGcLkNqUwRMVjpLEyodAhXvzUWLqPM",
+    "1PkyVUxPMGTLzUWNFNraMagACA1x3eD4CF",
+    "1M2mmDhWTjEuqPfUdaQH6XPsr5i29gx581",
+    "184JdZjasQUmNo2AimkbKAW2sxXMF9BAvK",
+    "13b1QVnWFRwCrjvhthj4JabpnJ4nyxbBqm"
+  ]
+
+externalAddrs, internalAddrs :: [Address]
+externalAddrs = testAddress <$> externalAddrsText
+internalAddrs = testAddress <$> internalAddrsText
+
+-- | Addresses of other wallets
+otherAddrs :: [Address]
+otherAddrs =
+  testAddress
+    <$> [ "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU",
+          "1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ",
+          "191J7K3FaXXyM7C9ceSMRsJNF6aWCvvf1Q",
+          "1FVnYNLRdR5vQkynApupUez6ZfcDqsLHdj",
+          "1PmNJHnbk7Kct5FMqbEVRxqqR2mXVQKK5P",
+          "18CaQNcVwzUkE9KvwmMd6a5UWNgqJFEAh1",
+          "1M2Cv69B7LRud8su2wdd7HV2i6MrXqzdKP",
+          "19xYPmoJ2XV1vJnSkzsrXUJXCgKvPE3ri4",
+          "1N2JAKWVFAoKFEUci3tY3kvrGFY6poRgvm",
+          "15EANoYyJoo1J51ERdQzNwZCyhEtPfcP8g"
+        ]
+
+-- | The external address /0/i, the internal address /1/i, and the i-th
+-- address of another wallet
+externalAddr, internalAddr, otherAddr :: Int -> Address
+externalAddr i = externalAddrs !! i
+internalAddr i = internalAddrs !! i
+otherAddr i = otherAddrs !! i
+
+testAddress :: Text -> Address
+testAddress = fromMaybe (error "testAddress") . textToAddr btc
+
+-- | A second wallet, with its fingerprint and the keys of its account 0
+testMnemonic2 :: MnemonicPass
+testMnemonic2 =
+  MnemonicPass
+    "boring auction demand filter frog accuse company exchange rely slogan trim typical"
+    "correct horse battery staple"
+
+testFingerprintText2 :: Text
+testFingerprintText2 = "807a5cfb"
+
+testFingerprint2 :: Fingerprint
+testFingerprint2 = forceRight $ textToFingerprint testFingerprintText2
+
+testAccountXPrv2, testAccountXPub2 :: Text
+testAccountXPrv2 = "xprv9yXnZpEVdonEtT3strknsAgso5qq1cwRooo6susmzVmB5E2vvNw1KKRBgvwvNLxXdBHnkEN5R5uXi2QDs3tpkoBbL61NE6bnSbcrvH6keGa"
+testAccountXPub2 = "xpub6CX8yKmPUBLY6w8LztHoEJdcM7gKR5fHB2ihgJHPYqJ9x2N5TvFFs7jfYCX6So9oYyu6eLDTG5dbQWPncv1PYJtXLJ4cwymhoCpeTEmnZFZ"
