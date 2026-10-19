@@ -37,7 +37,7 @@ import Data.Either (fromRight)
 import Data.List (find, nub, partition)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromJust, fromMaybe, mapMaybe)
+import Data.Maybe (catMaybes, fromJust, fromMaybe, mapMaybe)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -844,6 +844,15 @@ getAddrDeriv net (DBAccountKey wallet accDeriv) addr =
         return $ a ^. DBAddressDerivation
     liftEither . maybeToEither "getAddrDeriv: no derivation" $
       parseSoft . cs . unValue =<< derivM
+
+-- | The addresses that belong to the account, with their derivation paths
+walletPaths ::
+  (MonadUnliftIO m) =>
+  Network -> DBAccountId -> [Address] -> ExceptT String (DB m) (Map Address SoftPath)
+walletPaths net accId addrs =
+  Map.fromList . catMaybes <$> lift (mapM pathOf (nub addrs))
+  where
+    pathOf addr = either (const Nothing) (\path -> Just (addr, path)) <$> getAddrDeriv net accId addr
 
 {- Transactions -}
 

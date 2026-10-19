@@ -29,7 +29,7 @@ import Data.Default (def)
 import Data.List (find, nub)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes, fromMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin
@@ -81,15 +81,6 @@ fetchSweepCoins net ctx cfg accId secKeys sweepTo = do
       GetTxsRaw (nub $ (.outpoint.hash) <$> coins)
   walletAddrs <- walletPaths net accId (mapMaybe (.address) coins <> sweepTo)
   return SweepCoins {coins, transactions, walletAddrs}
-
--- | The addresses that belong to the account, with their derivation paths
-walletPaths ::
-  (MonadUnliftIO m) =>
-  Network -> DBAccountId -> [Address] -> ExceptT String (DB m) (Map Address SoftPath)
-walletPaths net accId addrs =
-  Map.fromList . catMaybes <$> lift (mapM pathOf (nub addrs))
-  where
-    pathOf addr = either (const Nothing) (Just . (addr,)) <$> getAddrDeriv net accId addr
 
 -- | The addresses where a key may hold coins: the P2PKH addresses of both
 -- encodings of its public key and, on SegWit networks, the P2WPKH and
