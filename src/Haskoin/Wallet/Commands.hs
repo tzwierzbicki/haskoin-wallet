@@ -31,6 +31,7 @@ import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Entropy
 import Haskoin.Wallet.FileIO
+import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.Migration.SemVersion
 import Haskoin.Wallet.Parser
 import Haskoin.Wallet.Signing

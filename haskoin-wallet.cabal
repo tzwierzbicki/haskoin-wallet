@@ -51,6 +51,7 @@ library
       Haskoin.Wallet.Entropy
       Haskoin.Wallet.FileIO
       Haskoin.Wallet.Main
+      Haskoin.Wallet.MessageSigning
       Haskoin.Wallet.Migration
       Haskoin.Wallet.Migration.SemVersion
       Haskoin.Wallet.Migration.V0_9_0
