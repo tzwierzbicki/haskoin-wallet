@@ -352,6 +352,32 @@
       "expect": "error",
       "error": "Input derivations don't match the transaction inputs",
       "comment": "The same input path given twice."
+    },
+    {
+      "name": "edge/duplicate-output-path",
+      "network": "btc",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "txSignData": {
+        "tx": "0100000001de4347cb93cb25a1b2819ee92427a5558f3f65879e581ddda12f917e80d255e50000000000ffffffff0280f0fa02000000001976a914bcb6e2aa16a725659548910d7a020414cbfe65df88ac005a6202000000001976a914455aa50c2663141771ebac2096e37833911227d688ac00000000",
+        "txinputs": [
+          "010000000101000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0100e1f505000000001976a914c80d55223e2f1061363add2a7b0363c285bf298d88ac00000000"
+        ],
+        "inputpaths": [
+          "/0/0"
+        ],
+        "outputpaths": [
+          "/1/0",
+          "/1/0"
+        ],
+        "signed": false
+      },
+      "expect": "error",
+      "error": "Output derivations don't match the transaction outputs",
+      "comment": "The same output path given twice."
     }
   ]
 }

@@ -31,7 +31,9 @@
         "txInfo": {
           "type": "debit",
           "amount": 0,
-          "fee": 11000
+          "fee": 11000,
+          "size": 250,
+          "feeByte": 44
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx_segwit.py::test_send_p2sh",
@@ -68,7 +70,9 @@
         "txInfo": {
           "type": "debit",
           "amount": 0,
-          "fee": 10000
+          "fee": 10000,
+          "size": 223,
+          "feeByte": 44
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx_segwit_native.py::test_send_native",
