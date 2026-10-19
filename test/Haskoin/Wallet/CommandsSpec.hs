@@ -92,17 +92,17 @@ dbShouldSatisfy action f = liftTest . (`shouldSatisfy` f) =<< action
 
 testNewAcc :: Ctx -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
 testNewAcc ctx name = do
-  let fp = forceRight $ walletFingerprint btc ctx mnemPass
+  let fp = forceRight $ walletFingerprint btc ctx testMnemonic
   d <- lift $ nextAccountDeriv fp btc
-  let prv = forceRight $ signingKey btc ctx mnemPass d
+  let prv = forceRight $ signingKey btc ctx testMnemonic d
       pub = deriveXPubKey ctx prv
   insertAccount btc ctx fp name pub
 
 testNewAcc2 :: Ctx -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
 testNewAcc2 ctx name = do
-  let fp = forceRight $ walletFingerprint btc ctx mnemPass2
+  let fp = forceRight $ walletFingerprint btc ctx testMnemonic2
   d <- lift $ nextAccountDeriv fp btc
-  let prv = forceRight $ signingKey btc ctx mnemPass2 d
+  let prv = forceRight $ signingKey btc ctx testMnemonic2 d
       pub = deriveXPubKey ctx prv
   insertAccount btc ctx fp name pub
 
@@ -152,22 +152,22 @@ accountSpec ctx = do
       -- No accounts
       lift $ shouldBeLeft $ getAccountByName $ Just "acc1"
       lift $ shouldBeLeft $ getAccountByName Nothing
-      lift $ nextAccountDeriv walletFP btc `dbShouldBe` 0
-      lift $ nextAccountDeriv walletFP btc `dbShouldBe` 0 -- Still 0
+      lift $ nextAccountDeriv testFingerprint btc `dbShouldBe` 0
+      lift $ nextAccountDeriv testFingerprint btc `dbShouldBe` 0 -- Still 0
       lift $ getAccounts `dbShouldBe` []
       -- Check basic account properties
       (accId, acc) <- testNewAcc ctx "acc1"
-      lift $ nextAccountDeriv walletFP btc `dbShouldBe` 1
-      lift $ nextAccountDeriv walletFP btc `dbShouldBe` 1 -- Still 1
+      lift $ nextAccountDeriv testFingerprint btc `dbShouldBe` 1
+      lift $ nextAccountDeriv testFingerprint btc `dbShouldBe` 1 -- Still 1
       liftTest $ do
         dBAccountName acc `shouldBe` "acc1"
-        dBAccountWallet acc `shouldBe` DBWalletKey walletFPText
+        dBAccountWallet acc `shouldBe` DBWalletKey testFingerprintText
         dBAccountIndex acc `shouldBe` 0
         dBAccountNetwork acc `shouldBe` "btc"
         dBAccountDerivation acc `shouldBe` "/44'/0'/0'"
         dBAccountExternal acc `shouldBe` 0
         dBAccountInternal acc `shouldBe` 0
-        dBAccountXPubKey acc `shouldBe` snd keysT
+        dBAccountXPubKey acc `shouldBe` testAccountXPub
         dBAccountBalanceConfirmed acc `shouldBe` 0
         dBAccountBalanceUnconfirmed acc `shouldBe` 0
         dBAccountBalanceCoins acc `shouldBe` 0
@@ -179,24 +179,24 @@ accountSpec ctx = do
       lift $ getAccounts `dbShouldBe` [(accId, acc)]
       -- Check the creation of a second account
       (accId2, acc2) <- testNewAcc ctx "acc2"
-      lift $ nextAccountDeriv walletFP btc `dbShouldBe` 2
+      lift $ nextAccountDeriv testFingerprint btc `dbShouldBe` 2
       getAccountByName (Just "acc2") `dbShouldBeE` (accId2, acc2)
       lift $ getAccounts `dbShouldBe` [(accId, acc), (accId2, acc2)]
       lift $ shouldBeLeft $ getAccountByName Nothing -- There are > 1 accounts
       liftTest $ do
-        dBAccountWallet acc2 `shouldBe` DBWalletKey walletFPText
+        dBAccountWallet acc2 `shouldBe` DBWalletKey testFingerprintText
         dBAccountDerivation acc2 `shouldBe` "/44'/0'/1'"
         dBAccountIndex acc2 `shouldBe` 1
       -- Create an account in a new wallet
       (accId3, acc3) <- testNewAcc2 ctx "acc3"
       liftTest $ do
         dBAccountName acc3 `shouldBe` "acc3"
-        dBAccountWallet acc3 `shouldBe` DBWalletKey walletFPText2
+        dBAccountWallet acc3 `shouldBe` DBWalletKey testFingerprintText2
         dBAccountIndex acc3 `shouldBe` 0
         dBAccountNetwork acc3 `shouldBe` "btc"
         dBAccountDerivation acc3 `shouldBe` "/44'/0'/0'"
-        dBAccountXPubKey acc3 `shouldBe` snd keysT2
-      lift $ nextAccountDeriv walletFP2 btc `dbShouldBe` 1
+        dBAccountXPubKey acc3 `shouldBe` testAccountXPub2
+      lift $ nextAccountDeriv testFingerprint2 btc `dbShouldBe` 1
       lift $
         getAccounts `dbShouldBe` [(accId3, acc3), (accId, acc), (accId2, acc2)]
       getAccountByName (Just "acc3") `dbShouldBeE` (accId3, acc3)
@@ -225,10 +225,10 @@ extAddressSpec ctx cfg =
       ext1 <- genExtAddress ctx cfg accId "Address 1"
       liftTest $ do
         dBAddressIndex ext1 `shouldBe` 0
-        dBAddressAccountWallet ext1 `shouldBe` DBWalletKey walletFPText
+        dBAddressAccountWallet ext1 `shouldBe` DBWalletKey testFingerprintText
         dBAddressAccountDerivation ext1 `shouldBe` "/44'/0'/0'"
         dBAddressDerivation ext1 `shouldBe` "/0/0"
-        dBAddressAddress ext1 `shouldBe` head extAddrsT
+        dBAddressAddress ext1 `shouldBe` head externalAddrsText
         dBAddressLabel ext1 `shouldBe` "Address 1"
         dBAddressInternal ext1 `shouldBe` False
         dBAddressFree ext1 `shouldBe` False
@@ -236,10 +236,10 @@ extAddressSpec ctx cfg =
       ext2 <- genExtAddress ctx cfg accId "Address 2"
       liftTest $ do
         dBAddressIndex ext2 `shouldBe` 1
-        dBAddressAccountWallet ext2 `shouldBe` DBWalletKey walletFPText
+        dBAddressAccountWallet ext2 `shouldBe` DBWalletKey testFingerprintText
         dBAddressAccountDerivation ext2 `shouldBe` "/44'/0'/0'"
         dBAddressDerivation ext2 `shouldBe` "/0/1"
-        dBAddressAddress ext2 `shouldBe` extAddrsT !! 1
+        dBAddressAddress ext2 `shouldBe` externalAddrsText !! 1
         dBAddressLabel ext2 `shouldBe` "Address 2"
         dBAddressInternal ext2 `shouldBe` False
         dBAddressFree ext2 `shouldBe` False
@@ -257,14 +257,14 @@ extAddressSpec ctx cfg =
       replicateM_ 18 $ genExtAddress ctx cfg accId "" -- We have 20 addresses
       lift $ shouldBeLeft $ genExtAddress ctx cfg accId "" -- fail gap
       lift $ addressPage accId (Page 100 0) `dbShouldSatisfy` ((== 20) . length)
-      updateAddressBalances btc [Store.Balance (extAddrs !! 2) 0 0 0 1 1]
-      updateAddressBalances btc [Store.Balance (extAddrs !! 4) 0 0 0 1 1]
+      updateAddressBalances btc [Store.Balance (externalAddrs !! 2) 0 0 0 1 1]
+      updateAddressBalances btc [Store.Balance (externalAddrs !! 4) 0 0 0 1 1]
       lift $ bestAddrWithFunds accId AddrExternal `dbShouldBe` Just 4
       replicateM_ 5 $ genExtAddress ctx cfg accId "" -- We have 25 addresses
       lift $ shouldBeLeft $ genExtAddress ctx cfg accId "" -- fail gap
       lift $ addressPage accId (Page 100 0) `dbShouldSatisfy` ((== 25) . length)
       -- Test discoverAccGenAddrs
-      updateAddressBalances btc [Store.Balance (extAddrs !! 9) 0 0 0 1 1]
+      updateAddressBalances btc [Store.Balance (externalAddrs !! 9) 0 0 0 1 1]
       discoverAccGenAddrs ctx cfg accId AddrExternal 0
       lift $ addressPage accId (Page 100 0) `dbShouldSatisfy` ((== 25) . length)
       discoverAccGenAddrs ctx cfg accId AddrExternal 25
@@ -273,10 +273,10 @@ extAddressSpec ctx cfg =
       lift $ addressPage accId (Page 100 0) `dbShouldSatisfy` ((== 26) . length)
       -- Test getAddrDeriv
       lift $
-        getAddrDeriv btc accId (head extAddrs)
+        getAddrDeriv btc accId (head externalAddrs)
           `dbShouldBe` Right (Deriv :/ 0 :/ 0)
       lift $
-        getAddrDeriv btc accId (extAddrs !! 7)
+        getAddrDeriv btc accId (externalAddrs !! 7)
           `dbShouldBe` Right (Deriv :/ 0 :/ 7)
       -- Test accound balances
       acc1 <- lift $ updateAccountBalances accId
@@ -284,10 +284,10 @@ extAddressSpec ctx cfg =
         dBAccountBalanceConfirmed acc1 `shouldBe` 0
         dBAccountBalanceUnconfirmed acc1 `shouldBe` 0
         dBAccountBalanceCoins acc1 `shouldBe` 0
-      updateAddressBalances btc [Store.Balance (extAddrs !! 1) 2 0 1 1 2]
-      updateAddressBalances btc [Store.Balance (extAddrs !! 4) 2 8 2 2 10]
+      updateAddressBalances btc [Store.Balance (externalAddrs !! 1) 2 0 1 1 2]
+      updateAddressBalances btc [Store.Balance (externalAddrs !! 4) 2 8 2 2 10]
       _ <- nextFreeIntAddr ctx cfg accId
-      updateAddressBalances btc [Store.Balance (head intAddrs) 3 2 1 1 5]
+      updateAddressBalances btc [Store.Balance (head internalAddrs) 3 2 1 1 5]
       acc1' <- lift $ updateAccountBalances accId
       liftTest $ do
         dBAccountBalanceConfirmed acc1' `shouldBe` 7
@@ -307,37 +307,37 @@ intAddressSpec ctx cfg =
       int1 <- nextFreeIntAddr ctx cfg accId
       liftTest $ do
         dBAddressIndex int1 `shouldBe` 0
-        dBAddressAccountWallet int1 `shouldBe` DBWalletKey walletFPText
+        dBAddressAccountWallet int1 `shouldBe` DBWalletKey testFingerprintText
         dBAddressAccountDerivation int1 `shouldBe` "/44'/0'/0'"
         dBAddressDerivation int1 `shouldBe` "/1/0"
-        dBAddressAddress int1 `shouldBe` head intAddrsT
+        dBAddressAddress int1 `shouldBe` head internalAddrsText
         dBAddressLabel int1 `shouldBe` "Internal Address"
         dBAddressInternal int1 `shouldBe` True
         dBAddressFree int1 `shouldBe` True
       -- Test the Free status
       nextFreeIntAddr ctx cfg accId `dbShouldBeE` int1 -- Should return the same address
-      lift $ setAddrsFree AddrBusy [head intAddrsT] `dbShouldBe` 1
-      lift $ setAddrsFree AddrBusy [intAddrsT !! 1] `dbShouldBe` 0
+      lift $ setAddrsFree AddrBusy [head internalAddrsText] `dbShouldBe` 1
+      lift $ setAddrsFree AddrBusy [internalAddrsText !! 1] `dbShouldBe` 0
       (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 1
-      _ <- lift $ setAddrsFree AddrFree [head intAddrsT]
+      _ <- lift $ setAddrsFree AddrFree [head internalAddrsText]
       (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 0
-      _ <- lift $ setAddrsFree AddrBusy [intAddrsT !! 1]
+      _ <- lift $ setAddrsFree AddrBusy [internalAddrsText !! 1]
       (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 0
-      _ <- lift $ setAddrsFree AddrBusy [head intAddrsT]
+      _ <- lift $ setAddrsFree AddrBusy [head internalAddrsText]
       (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 2
-      _ <- lift $ setAddrsFree AddrBusy [intAddrsT !! 2]
+      _ <- lift $ setAddrsFree AddrBusy [internalAddrsText !! 2]
       (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 3
-      _ <- lift $ setAddrsFree AddrBusy [intAddrsT !! 3]
+      _ <- lift $ setAddrsFree AddrBusy [internalAddrsText !! 3]
       (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 4
-      _ <- lift $ setAddrsFree AddrBusy [intAddrsT !! 4]
+      _ <- lift $ setAddrsFree AddrBusy [internalAddrsText !! 4]
       (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 5
-      _ <- lift $ setAddrsFree AddrFree [intAddrsT !! 2]
-      _ <- lift $ setAddrsFree AddrFree [intAddrsT !! 4]
+      _ <- lift $ setAddrsFree AddrFree [internalAddrsText !! 2]
+      _ <- lift $ setAddrsFree AddrFree [internalAddrsText !! 4]
       (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 2
-      _ <- lift $ setAddrsFree AddrBusy [intAddrsT !! 2]
-      _ <- lift $ setAddrsFree AddrBusy [intAddrsT !! 5]
+      _ <- lift $ setAddrsFree AddrBusy [internalAddrsText !! 2]
+      _ <- lift $ setAddrsFree AddrBusy [internalAddrsText !! 5]
       (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 4
-      _ <- lift $ setAddrsFree AddrBusy [intAddrsT !! 4]
+      _ <- lift $ setAddrsFree AddrBusy [internalAddrsText !! 4]
       (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 6
       -- Test account indices
       acc <- getAccountById accId
@@ -348,7 +348,7 @@ intAddressSpec ctx cfg =
 emptyTxInfo :: TxInfo
 emptyTxInfo =
   TxInfo
-    (Just $ txid' 0)
+    (Just $ fakeTxHash 0)
     TxInternal
     0
     Map.empty
@@ -373,7 +373,7 @@ txsSpec ctx =
       (dbInfo, change) <- repsertTxInfo btc ctx accId emptyTxInfo
       liftTest $ do
         change `shouldBe` True
-        dBTxInfoAccountWallet dbInfo `shouldBe` DBWalletKey walletFPText
+        dBTxInfoAccountWallet dbInfo `shouldBe` DBWalletKey testFingerprintText
         dBTxInfoAccountDerivation dbInfo `shouldBe` "/44'/0'/0'"
         dBTxInfoBlockRef dbInfo `shouldBe` S.encode (Store.MemRef 0)
         dBTxInfoConfirmed dbInfo `shouldBe` False
@@ -384,9 +384,9 @@ txsSpec ctx =
         dbInfo2 `shouldBe` dbInfo
       txsPage ctx accId (Page 5 0) `dbShouldBeE` [emptyTxInfo]
       -- Check that confirmations are updated correctly
-      lift $ updateBest btc (bid' 0) 0
+      lift $ updateBest btc (fakeBlockHash 0) 0
       getConfirmedTxs accId True `dbShouldBeE` []
-      getConfirmedTxs accId False `dbShouldBeE` [txid' 0]
+      getConfirmedTxs accId False `dbShouldBeE` [fakeTxHash 0]
       txsPage ctx accId (Page 5 0) `dbShouldBeE` [emptyTxInfo]
       (dbInfo', change') <-
         repsertTxInfo
@@ -405,10 +405,10 @@ txsSpec ctx =
                             txInfoConfirmations = 1
                           }
                       ]
-      getConfirmedTxs accId True `dbShouldBeE` [txid' 0]
+      getConfirmedTxs accId True `dbShouldBeE` [fakeTxHash 0]
       getConfirmedTxs accId False `dbShouldBeE` []
-      lift $ updateBest btcTest (bid' 0) 10
-      lift $ updateBest btc (bid' 0) 20
+      lift $ updateBest btcTest (fakeBlockHash 0) 10
+      lift $ updateBest btc (fakeBlockHash 0) 20
       txsPage ctx accId (Page 5 0)
         `dbShouldBeE` [ emptyTxInfo
                           { txInfoBlockRef = Store.BlockRef 0 0,
@@ -438,13 +438,13 @@ coinSpec ctx =
     runDBMemoryE $ do
       (accId, _) <- testNewAcc ctx "test"
       -- Insert a single coin
-      let coin1 = coin' ctx (txid' 0, 0) Nothing (head extAddrs) 10
-      (c, dbCoin) <- second head <$> refreshCoins btc accId extAddrs [coin1]
+      let coin1 = storeCoin ctx (fakeTxHash 0, 0) Nothing (head externalAddrs) 10
+      (c, dbCoin) <- second head <$> refreshCoins btc accId externalAddrs [coin1]
       liftTest $ do
         c `shouldBe` 1
-        dBCoinAccountWallet dbCoin `shouldBe` DBWalletKey walletFPText
+        dBCoinAccountWallet dbCoin `shouldBe` DBWalletKey testFingerprintText
         dBCoinAccountDerivation dbCoin `shouldBe` "/44'/0'/0'"
-        dBCoinAddress dbCoin `shouldBe` head extAddrsT
+        dBCoinAddress dbCoin `shouldBe` head externalAddrsText
         dBCoinConfirmed dbCoin `shouldBe` False
         dBCoinLocked dbCoin `shouldBe` False
       -- Test JSON coins
@@ -452,8 +452,8 @@ coinSpec ctx =
       liftTest $
         jsonCoin1
           `shouldBe` JsonCoin
-            { jsonCoinOutpoint = OutPoint (txid' 0) 0,
-              jsonCoinAddress = head extAddrs,
+            { jsonCoinOutpoint = OutPoint (fakeTxHash 0) 0,
+              jsonCoinAddress = head externalAddrs,
               jsonCoinValue = 10,
               jsonCoinBlock = Store.MemRef 0,
               jsonCoinConfirmations = 0,
@@ -463,10 +463,10 @@ coinSpec ctx =
       getSpendableCoins btc accId 0 `dbShouldBeE` [coin1]
       getSpendableCoins btc accId 1 `dbShouldBeE` []
       -- Nothing should happen when refreshing the same data
-      refreshCoins btc accId extAddrs [coin1] `dbShouldBeE` (0, [])
+      refreshCoins btc accId externalAddrs [coin1] `dbShouldBeE` (0, [])
       -- Confirm and update the coin
       let coin1' = coin1 {Store.block = Store.BlockRef 1 0} :: Store.Unspent
-      refreshCoins btc accId extAddrs [coin1'] `dbShouldBeE` (1, [])
+      refreshCoins btc accId externalAddrs [coin1'] `dbShouldBeE` (1, [])
       getSpendableCoins btc accId 0 `dbShouldBeE` [coin1']
       getSpendableCoins btc accId 1 `dbShouldBeE` [coin1']
       getSpendableCoins btc accId 2 `dbShouldBeE` []
@@ -477,7 +477,7 @@ coinSpec ctx =
                           }
                       ]
       -- Best = 0
-      lift $ updateBest btc (bid' 0) 0
+      lift $ updateBest btc (fakeBlockHash 0) 0
       coinPage btc accId (Page 5 0)
         `dbShouldBeE` [ jsonCoin1
                           { jsonCoinBlock = Store.BlockRef 1 0,
@@ -488,7 +488,7 @@ coinSpec ctx =
       getSpendableCoins btc accId 1 `dbShouldBeE` [coin1']
       getSpendableCoins btc accId 2 `dbShouldBeE` []
       -- Best = 1
-      lift $ updateBest btc (bid' 0) 1
+      lift $ updateBest btc (fakeBlockHash 0) 1
       coinPage btc accId (Page 5 0)
         `dbShouldBeE` [ jsonCoin1
                           { jsonCoinBlock = Store.BlockRef 1 0,
@@ -499,7 +499,7 @@ coinSpec ctx =
       getSpendableCoins btc accId 1 `dbShouldBeE` [coin1']
       getSpendableCoins btc accId 2 `dbShouldBeE` []
       -- Best = 10
-      lift $ updateBest btc (bid' 0) 10
+      lift $ updateBest btc (fakeBlockHash 0) 10
       coinPage btc accId (Page 5 0)
         `dbShouldBeE` [ jsonCoin1
                           { jsonCoinBlock = Store.BlockRef 1 0,
@@ -510,7 +510,7 @@ coinSpec ctx =
       getSpendableCoins btc accId 10 `dbShouldBeE` [coin1']
       getSpendableCoins btc accId 11 `dbShouldBeE` []
       let coin1'' = coin1 {Store.block = Store.BlockRef 10 0} :: Store.Unspent
-      refreshCoins btc accId extAddrs [coin1''] `dbShouldBeE` (1, [])
+      refreshCoins btc accId externalAddrs [coin1''] `dbShouldBeE` (1, [])
       coinPage btc accId (Page 5 0)
         `dbShouldBeE` [ jsonCoin1
                           { jsonCoinBlock = Store.BlockRef 10 0,
@@ -521,7 +521,7 @@ coinSpec ctx =
       getSpendableCoins btc accId 1 `dbShouldBeE` [coin1'']
       getSpendableCoins btc accId 2 `dbShouldBeE` []
       -- Lock the coin
-      lift $ setLockCoin (OutPoint (txid' 0) 0) True `dbShouldBe` 1
+      lift $ setLockCoin (OutPoint (fakeTxHash 0) 0) True `dbShouldBe` 1
       coinPage btc accId (Page 5 0)
         `dbShouldBeE` [ jsonCoin1
                           { jsonCoinBlock = Store.BlockRef 10 0,
@@ -530,9 +530,9 @@ coinSpec ctx =
                           }
                       ]
       getSpendableCoins btc accId 0 `dbShouldBeE` []
-      lift $ setLockCoin (OutPoint (txid' 0) 0) True `dbShouldBe` 0
-      lift $ setLockCoin (OutPoint (txid' 0) 0) False `dbShouldBe` 1
-      lift $ setLockCoin (OutPoint (txid' 0) 0) False `dbShouldBe` 0
+      lift $ setLockCoin (OutPoint (fakeTxHash 0) 0) True `dbShouldBe` 0
+      lift $ setLockCoin (OutPoint (fakeTxHash 0) 0) False `dbShouldBe` 1
+      lift $ setLockCoin (OutPoint (fakeTxHash 0) 0) False `dbShouldBe` 0
       coinPage btc accId (Page 5 0)
         `dbShouldBeE` [ jsonCoin1
                           { jsonCoinBlock = Store.BlockRef 10 0,
@@ -544,7 +544,7 @@ coinSpec ctx =
       getSpendableCoins btc accId 1 `dbShouldBeE` [coin1'']
       getSpendableCoins btc accId 2 `dbShouldBeE` []
       -- Delete the coin
-      refreshCoins btc accId extAddrs [] `dbShouldBeE` (1, [])
+      refreshCoins btc accId externalAddrs [] `dbShouldBeE` (1, [])
       getSpendableCoins btc accId 0 `dbShouldBeE` []
       coinPage btc accId (Page 5 0) `dbShouldBeE` []
 
@@ -552,7 +552,7 @@ checkFree :: Int -> Bool -> ExceptT String (DB IO) ()
 checkFree i free =
   lift $
     ( dBAddressFree . entityVal . fromJust
-        <$> P.getBy (UniqueAddress (intAddrsT !! i))
+        <$> P.getBy (UniqueAddress (internalAddrsText !! i))
     )
       `dbShouldBe` free
 
@@ -561,36 +561,36 @@ pendingTxsSpec ctx cfg =
   it "can manage pending transactions" $ do
     runDBMemoryE $ do
       (accId, _) <- testNewAcc ctx "test"
-      lift $ updateBest btc (bid' 0) 0
+      lift $ updateBest btc (fakeBlockHash 0) 0
       -- Build some test data coins/txs
       (dBAddressAddress <$> genExtAddress ctx cfg accId "")
-        `dbShouldBeE` head extAddrsT
+        `dbShouldBeE` head externalAddrsText
       (dBAddressAddress <$> nextFreeIntAddr ctx cfg accId)
-        `dbShouldBeE` head intAddrsT
+        `dbShouldBeE` head internalAddrsText
       checkFree 0 True
-      lift $ setAddrsFree AddrBusy [head intAddrsT] `dbShouldBe` 1
+      lift $ setAddrsFree AddrBusy [head internalAddrsText] `dbShouldBe` 1
       checkFree 0 False
-      let fundTx1 = tx' ctx [(txid' 1, 0)] [(addr' 0, 20)]
-          fundTx2 = tx' ctx [(txid' 1, 1)] [(iAddr' 0, 10)]
-          coin1 = coin' ctx (txHash fundTx1, 0) (Just 0) (addr' 0) 20
-          coin2 = coin' ctx (txHash fundTx2, 0) (Just 0) (iAddr' 0) 10
+      let fundTx1 = spendingTx ctx [(fakeTxHash 1, 0)] [(externalAddr 0, 20)]
+          fundTx2 = spendingTx ctx [(fakeTxHash 1, 1)] [(internalAddr 0, 10)]
+          coin1 = storeCoin ctx (txHash fundTx1, 0) (Just 0) (externalAddr 0) 20
+          coin2 = storeCoin ctx (txHash fundTx2, 0) (Just 0) (internalAddr 0) 10
       -- Insert the dependent transactions
       lift $ insertRawTx fundTx1
       lift $ insertRawTx fundTx2
       -- Insert two coins in the database
-      (c, dbCoins) <- refreshCoins btc accId (extAddrs <> intAddrs) [coin1, coin2]
+      (c, dbCoins) <- refreshCoins btc accId (externalAddrs <> internalAddrs) [coin1, coin2]
       liftTest $ c `shouldBe` 2
       let jsonCoin1 = forceRight $ toJsonCoin btc Nothing (head dbCoins)
           jsonCoin2 = forceRight $ toJsonCoin btc Nothing (dbCoins !! 1)
-      tsd <- buildTxSignData btc ctx cfg gen accId [(oAddr' 0, 8)] 0 0 False 1 []
+      tsd <- buildTxSignData btc ctx cfg gen accId [(otherAddr 0, 8)] 0 0 False 1 []
       liftTest $
         tsd
           `shouldBe` TxSignData
             { txSignDataTx =
-                tx'
+                spendingTx
                   ctx
                   [(txHash fundTx1, 0)]
-                  [(iAddr' 1, 12), (oAddr' 0, 8)],
+                  [(internalAddr 1, 12), (otherAddr 0, 8)],
               txSignDataInputs = [fundTx1],
               txSignDataInputPaths = [Deriv :/ 0 :/ 0],
               txSignDataOutputPaths = [Deriv :/ 1 :/ 1],
@@ -615,20 +615,20 @@ pendingTxsSpec ctx cfg =
       (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 2
       lift $
         shouldBeLeft' "chooseCoins: No solution found" $
-          buildTxSignData btc ctx cfg gen accId [(oAddr' 1, 12)] 0 0 False 1 []
+          buildTxSignData btc ctx cfg gen accId [(otherAddr 1, 12)] 0 0 False 1 []
       lift $
         shouldBeLeft' "The transaction already exists" $
           importPendingTx btc ctx accId tsd
       -- Create second pending transaction
-      tsd2 <- buildTxSignData btc ctx cfg gen accId [(oAddr' 1, 7)] 0 0 False 1 []
+      tsd2 <- buildTxSignData btc ctx cfg gen accId [(otherAddr 1, 7)] 0 0 False 1 []
       liftTest $
         tsd2
           `shouldBe` TxSignData
             { txSignDataTx =
-                tx'
+                spendingTx
                   ctx
                   [(txHash fundTx2, 0)]
-                  [(iAddr' 2, 3), (oAddr' 1, 7)],
+                  [(internalAddr 2, 3), (otherAddr 1, 7)],
               txSignDataInputs = [fundTx2],
               txSignDataInputPaths = [Deriv :/ 1 :/ 0],
               txSignDataOutputPaths = [Deriv :/ 1 :/ 2],
@@ -652,7 +652,7 @@ pendingTxsSpec ctx cfg =
       (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 3
       lift $
         shouldBeLeft' "chooseCoins: No solution found" $
-          buildTxSignData btc ctx cfg gen accId [(oAddr' 2, 1)] 0 0 False 1 []
+          buildTxSignData btc ctx cfg gen accId [(otherAddr 2, 1)] 0 0 False 1 []
       -- Delete first transaction
       deletePendingTx ctx h1 `dbShouldBeE` (1, 1)
       coinPage btc accId (Page 5 0)
@@ -666,15 +666,15 @@ pendingTxsSpec ctx cfg =
       checkFree 2 False
       (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 1
       -- Create transaction with no change
-      tsd3 <- buildTxSignData btc ctx cfg gen accId [(oAddr' 2, 20)] 0 0 False 1 []
+      tsd3 <- buildTxSignData btc ctx cfg gen accId [(otherAddr 2, 20)] 0 0 False 1 []
       liftTest $
         tsd3
           `shouldBe` TxSignData
             { txSignDataTx =
-                tx'
+                spendingTx
                   ctx
                   [(txHash fundTx1, 0)]
-                  [(oAddr' 2, 20)],
+                  [(otherAddr 2, 20)],
               txSignDataInputs = [fundTx1],
               txSignDataInputPaths = [Deriv :/ 0 :/ 0],
               txSignDataOutputPaths = [],
@@ -695,7 +695,7 @@ pendingTxsSpec ctx cfg =
       checkFree 2 False
       (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 1
       -- Import a signed transaction
-      let resE = signWalletTx btc ctx tsd2 (fst $ keys ctx)
+      let resE = signWalletTx btc ctx tsd2 (testAccountKey)
       liftTest $ resE `shouldSatisfy` isRight
       let tsd2' = fst $ forceRight resE
       liftTest $ txSignDataSigned tsd2' `shouldBe` True
@@ -738,17 +738,17 @@ pendingTxsSpec ctx cfg =
       checkFree 1 True
       checkFree 2 False
       -- Check for other errors
-      let fundTx3 = tx' ctx [(txid' 2, 0)] [(addr' 8, 30)]
-          coin3 = coin' ctx (txHash fundTx3, 0) (Just 0) (addr' 8) 30
+      let fundTx3 = spendingTx ctx [(fakeTxHash 2, 0)] [(externalAddr 8, 30)]
+          coin3 = storeCoin ctx (txHash fundTx3, 0) (Just 0) (externalAddr 8) 30
       lift $ do
         shouldBeLeft' "A coin referenced by the transaction is locked" $
           importPendingTx btc ctx accId $
             TxSignData
               { txSignDataTx =
-                  tx'
+                  spendingTx
                     ctx
                     [(txHash fundTx1, 0)]
-                    [(oAddr' 3, 20)],
+                    [(otherAddr 3, 20)],
                 txSignDataInputs = [fundTx3, fundTx1],
                 txSignDataInputPaths = [Deriv :/ 0 :/ 0],
                 txSignDataOutputPaths = [],
@@ -758,16 +758,16 @@ pendingTxsSpec ctx cfg =
           importPendingTx btc ctx accId $
             TxSignData
               { txSignDataTx =
-                  tx'
+                  spendingTx
                     ctx
                     [(txHash fundTx3, 0)]
-                    [(oAddr' 3, 20)],
+                    [(otherAddr 3, 20)],
                 txSignDataInputs = [fundTx3, fundTx1],
                 txSignDataInputPaths = [Deriv :/ 0 :/ 8],
                 txSignDataOutputPaths = [],
                 txSignDataSigned = False
               }
-      (_, dbCoins3) <- refreshCoins btc accId (extAddrs <> intAddrs) [coin1, coin3]
+      (_, dbCoins3) <- refreshCoins btc accId (externalAddrs <> internalAddrs) [coin1, coin3]
       let jsonCoin3 = forceRight $ toJsonCoin btc Nothing (head dbCoins3)
       coinPage btc accId (Page 5 0)
         `dbShouldBeE` [ jsonCoin3 {jsonCoinLocked = False},
@@ -778,10 +778,10 @@ pendingTxsSpec ctx cfg =
           importPendingTx btc ctx accId $
             TxSignData
               { txSignDataTx =
-                  tx'
+                  spendingTx
                     ctx
                     [(txHash fundTx3, 0)]
-                    [(iAddr' 1, 5), (oAddr' 3, 25)],
+                    [(internalAddr 1, 5), (otherAddr 3, 25)],
                 txSignDataInputs = [fundTx3],
                 txSignDataInputPaths = [Deriv :/ 0 :/ 8],
                 txSignDataOutputPaths = [Deriv :/ 1 :/ 1],
@@ -802,10 +802,10 @@ pendingTxsSpec ctx cfg =
           importPendingTx btc ctx accId $
             TxSignData
               { txSignDataTx =
-                  tx'
+                  spendingTx
                     ctx
                     [(txHash fundTx3, 0)]
-                    [(iAddr' 2, 1), (oAddr' 3, 25)],
+                    [(internalAddr 2, 1), (otherAddr 3, 25)],
                 txSignDataInputs = [fundTx3],
                 txSignDataInputPaths = [Deriv :/ 0 :/ 8],
                 txSignDataOutputPaths = [Deriv :/ 1 :/ 2],
