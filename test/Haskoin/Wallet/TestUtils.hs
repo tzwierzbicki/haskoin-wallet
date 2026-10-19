@@ -25,7 +25,7 @@ import Database.Persist.Sqlite (runSqlite)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database (DB, migrateAll)
-import Haskoin.Wallet.Signing (MnemonicPass (..), signingKey)
+import Haskoin.Wallet.Keys (MnemonicPass (..), signingKey)
 import Data.Word (Word32, Word8)
 import Numeric.Natural (Natural)
 import System.Directory (listDirectory)

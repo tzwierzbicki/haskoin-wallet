@@ -15,7 +15,8 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.FileIO
-import Haskoin.Wallet.Signing
+import Haskoin.Wallet.Keys
+import Haskoin.Wallet.TxBuilding
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSigning (signWalletTx)

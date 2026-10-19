@@ -50,6 +50,7 @@ library
       Haskoin.Wallet.Database
       Haskoin.Wallet.Entropy
       Haskoin.Wallet.FileIO
+      Haskoin.Wallet.Keys
       Haskoin.Wallet.Main
       Haskoin.Wallet.MessageSigning
       Haskoin.Wallet.Migration
@@ -57,7 +58,7 @@ library
       Haskoin.Wallet.Migration.V0_9_0
       Haskoin.Wallet.Parser
       Haskoin.Wallet.PrettyPrinter
-      Haskoin.Wallet.Signing
+      Haskoin.Wallet.TxBuilding
       Haskoin.Wallet.TxInfo
       Haskoin.Wallet.TxSigning
       Haskoin.Wallet.TxSweep

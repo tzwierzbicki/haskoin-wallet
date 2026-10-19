@@ -38,7 +38,6 @@ import Haskoin.Store.WebClient
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.FileIO (TxSignData (..))
-import Haskoin.Wallet.Signing (randomShuffle)
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSigning (parseTxSignData, verifySignedTx)
 import Haskoin.Wallet.Util

@@ -25,7 +25,8 @@ import Haskoin.Wallet.Arbitrary
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.FileIO
-import Haskoin.Wallet.Signing
+import Haskoin.Wallet.Keys
+import Haskoin.Wallet.TxBuilding
 import Haskoin.Wallet.SigningSpec
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo

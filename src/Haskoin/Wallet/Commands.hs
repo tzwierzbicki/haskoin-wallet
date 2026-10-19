@@ -31,10 +31,11 @@ import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Entropy
 import Haskoin.Wallet.FileIO
+import Haskoin.Wallet.Keys
 import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.Migration.SemVersion
 import Haskoin.Wallet.Parser
-import Haskoin.Wallet.Signing
+import Haskoin.Wallet.TxBuilding
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSigning (parseTxSignData, signWalletTx, verifySignedTx)
 import Haskoin.Wallet.TxSweep

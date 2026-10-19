@@ -3,7 +3,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 
-module Haskoin.Wallet.Signing where
+-- | Building the wallet's transactions: coin selection, change and fees.
+module Haskoin.Wallet.TxBuilding where
 
 import Conduit (MonadUnliftIO)
 import Control.Arrow (second)
@@ -12,7 +13,6 @@ import Control.Monad.Except
 import Control.Monad.State
 import Data.Either (rights)
 import Data.List (nub, partition)
-import Data.Text (Text)
 import Data.Word (Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -21,7 +21,7 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
-import System.Random (Random (randomR), StdGen)
+import System.Random (StdGen)
 
 {- Building Transactions -}
 
@@ -137,41 +137,3 @@ makeRcptsPay fee rcpts =
     err = "Recipients can't pay for the fee"
     (q, r) = fee `quotRem` fromIntegral (length rcpts)
     toPay = if r == 0 then q else q + 1
-
-{- Signing Transactions -}
-
-data MnemonicPass = MnemonicPass
-  { mnemonicWords :: !Text,
-    mnemonicPass :: !Text
-  }
-  deriving (Eq, Show)
-
--- Compute an account signing key
-signingKey :: Network -> Ctx -> MnemonicPass -> Natural -> Either String XPrvKey
-signingKey net ctx mnem acc = do
-  seed <- mnemonicToSeed (mnemonicPass mnem) (mnemonicWords mnem)
-  return $ derivePath ctx (bip44Deriv net acc) (makeXPrvKey seed)
-
--- Compute the unique wallet fingerprint given a mnemonic
-walletFingerprint :: Network -> Ctx -> MnemonicPass -> Either String Fingerprint
-walletFingerprint net ctx mnem = do
-  xPrvKey <- signingKey net ctx mnem 0
-  return $ xPubFP ctx $ deriveXPubKey ctx xPrvKey
-
--- Utilities --
-
-randomRange :: (Random a, MonadState StdGen m) => a -> a -> m a
-randomRange low hi = do
-  gen <- get
-  let (res, newGen) = randomR (low, hi) gen
-  put newGen
-  return res
-
-randomShuffle :: (MonadState StdGen m) => [a] -> m [a]
-randomShuffle [] = return []
-randomShuffle [x] = return [x]
-randomShuffle xs = do
-  i <- randomRange 0 (length xs - 1)
-  case splitAt i xs of
-    (as, e : bs) -> (e :) <$> randomShuffle (as <> bs)
-    _ -> error "randomShuffle"
