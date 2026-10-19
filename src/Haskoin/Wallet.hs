@@ -6,7 +6,7 @@ module Haskoin.Wallet
     module Entropy,
     module FileIO,
     module Parser,
-    module Signing,
+    module TxBuilding,
     module TxInfo,
     module Util,
   )
@@ -19,6 +19,6 @@ import Haskoin.Wallet.Database as Database
 import Haskoin.Wallet.Entropy as Entropy
 import Haskoin.Wallet.FileIO as FileIO
 import Haskoin.Wallet.Parser as Parser
-import Haskoin.Wallet.Signing as Signing
+import Haskoin.Wallet.TxBuilding as TxBuilding
 import Haskoin.Wallet.TxInfo as TxInfo
 import Haskoin.Wallet.Util as Util
