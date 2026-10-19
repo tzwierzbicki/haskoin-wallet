@@ -80,7 +80,10 @@ data Signed = Signed
 data Summary = Summary
   { summaryType :: !TxType,
     summaryAmount :: !Integer,
-    summaryFee :: !Natural
+    summaryFee :: !Natural,
+    -- | The size of the signed transaction and the fee rate reported with it
+    summarySize :: !Natural,
+    summaryFeeByte :: !Natural
   }
 
 instance FromJSON Vector where
@@ -114,6 +117,8 @@ instance FromJSON Summary where
         <$> o .: "type"
         <*> o .: "amount"
         <*> o .: "fee"
+        <*> o .: "size"
+        <*> o .: "feeByte"
 
 {- Checks -}
 
@@ -148,3 +153,5 @@ signedProblems expected signedData info =
       check "transaction type" s.summaryType info.txInfoType
         <> check "amount" s.summaryAmount info.txInfoAmount
         <> check "fee" s.summaryFee info.txInfoFee
+        <> check "size" s.summarySize info.txInfoSize
+        <> check "fee rate" s.summaryFeeByte info.txInfoFeeByte

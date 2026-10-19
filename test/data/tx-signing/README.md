@@ -30,6 +30,6 @@ Each file is a JSON object with a `description` and a list of `vectors`:
 | `account` | The wallet account: `{"mnemonic", "passphrase", "account"}` (passphrase optional). Its key `m/44'/coin'/account'` signs the transaction, or only identifies the wallet's own inputs and outputs when `sweepKeys` is given |
 | `sweepKeys` | Only in `../tx-sweep`. Private keys of a sweep transaction, in the key format of the message signing vectors (`wif`, `secretHex`, or `mnemonic` with `path`). The transaction is then signed like `signsweep` does |
 | `txSignData` | The transaction to sign, in hw's own TxSignData format: unsigned `tx` (hex), the previous transactions `txinputs` (hex), and the `inputpaths` and `outputpaths` of the wallet's own inputs and outputs, relative to the account (`/chain/index`) |
-| `signed` | What hw must produce: the signed `tx` (hex), its `txid`, and `txInfo`, the `type` (`debit`, `credit` or `internal`), `amount` and `fee` reported with it |
+| `signed` | What hw must produce: the signed `tx` (hex), its `txid`, and `txInfo`, the `type` (`debit`, `credit` or `internal`), `amount`, `fee`, `size` (of the signed transaction, in bytes) and `feeByte` reported with it |
 | `expect` | `match` (default): hw must produce `signed`. `error`: hw must refuse to sign with the message in `error`. A vector with both `expect: error` and `signed` documents a known bug: the comment says what to do once it is fixed |
 | `source`, `sourceUrl`, `comment` | Provenance and explanations |

@@ -276,8 +276,11 @@ def vector_problems(v):
     amount = my_out - my_in
     kind = "credit" if amount > 0 else "internal" if -amount == fee else "debit"
     info = expected["txInfo"]
+    size = len(bytes.fromhex(expected["tx"]))
     if (info["type"], info["amount"], info["fee"]) != (kind, amount, fee):
         problems.append(f"txInfo: expected {kind} {amount} {fee}, vector says {info}")
+    if (info["size"], info["feeByte"]) != (size, fee // size):
+        problems.append(f"txInfo: expected size {size} and fee rate {fee // size}, vector says {info}")
     return problems
 
 

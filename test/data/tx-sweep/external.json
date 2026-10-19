@@ -31,7 +31,9 @@
         "txInfo": {
           "type": "debit",
           "amount": 0,
-          "fee": 8250
+          "fee": 8250,
+          "size": 246,
+          "feeByte": 33
         }
       },
       "source": "Ledger app-bitcoin-new tests/test_sign_psbt.py::test_sign_psbt_singlesig_sh_wpkh_1to2, PSBT tests/psbt/singlesig/sh-wpkh-1to2.psbt",
@@ -68,7 +70,9 @@
         "txInfo": {
           "type": "debit",
           "amount": 0,
-          "fee": 145
+          "fee": 145,
+          "size": 226,
+          "feeByte": 0
         }
       },
       "source": "Ledger app-bitcoin-new tests/test_sign_psbt.py::test_sign_psbt_singlesig_wpkh_1to2, PSBT tests/psbt/singlesig/wpkh-1to2.psbt",
@@ -111,7 +115,9 @@
         "txInfo": {
           "type": "debit",
           "amount": 0,
-          "fee": 1768
+          "fee": 1768,
+          "size": 383,
+          "feeByte": 4
         }
       },
       "source": "Ledger app-bitcoin-new tests/test_sign_psbt.py::test_sign_psbt_singlesig_wpkh_2to2, PSBT tests/psbt/singlesig/wpkh-2to2.psbt",
@@ -154,7 +160,9 @@
         "txInfo": {
           "type": "debit",
           "amount": 0,
-          "fee": 20000
+          "fee": 20000,
+          "size": 555,
+          "feeByte": 36
         }
       },
       "source": "bitcoinjs-lib v5.2.0 test/fixtures/transaction_builder.json, valid.build \"SIGHASH ALL\"",
@@ -189,7 +197,9 @@
         "txInfo": {
           "type": "debit",
           "amount": 0,
-          "fee": 10000
+          "fee": 10000,
+          "size": 192,
+          "feeByte": 52
         }
       },
       "source": "bitcoinjs-lib test/integration/transactions.spec.ts, \"can create a 1-to-1 Transaction\"",
@@ -224,7 +234,9 @@
         "txInfo": {
           "type": "debit",
           "amount": 0,
-          "fee": 5000
+          "fee": 5000,
+          "size": 222,
+          "feeByte": 22
         }
       },
       "source": "Electrum tests/test_wallet_vertical.py::TestWalletOfflineSigning.test_sending_offline_wif_online_addr_p2pkh",

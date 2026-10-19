@@ -26,7 +26,9 @@
         "txInfo": {
           "type": "debit",
           "amount": -1000000,
-          "fee": 200
+          "fee": 200,
+          "size": 192,
+          "feeByte": 1
         }
       },
       "source": "Ledger app-bitcoin-new tests/test_sign_psbt.py::test_sign_psbt_singlesig_pkh_1to1, PSBT tests/psbt/singlesig/pkh-1to1.psbt",

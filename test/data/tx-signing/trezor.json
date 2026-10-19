@@ -26,7 +26,9 @@
         "txInfo": {
           "type": "debit",
           "amount": -63988,
-          "fee": 13740
+          "fee": 13740,
+          "size": 192,
+          "feeByte": 71
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx.py::test_one_one_fee",
@@ -60,7 +62,9 @@
         "txInfo": {
           "type": "debit",
           "amount": -20000,
-          "fee": 10000
+          "fee": 10000,
+          "size": 225,
+          "feeByte": 44
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx.py::test_one_two_fee",
@@ -95,7 +99,9 @@
         "txInfo": {
           "type": "debit",
           "amount": -21340,
-          "fee": 11340
+          "fee": 11340,
+          "size": 373,
+          "feeByte": 30
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx.py::test_two_two",
@@ -129,7 +135,9 @@
         "txInfo": {
           "type": "debit",
           "amount": -30100000,
-          "fee": 10000
+          "fee": 10000,
+          "size": 226,
+          "feeByte": 44
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx.py::test_testnet_one_two_fee",
@@ -163,7 +171,9 @@
         "txInfo": {
           "type": "debit",
           "amount": -210200,
-          "fee": 10000
+          "fee": 10000,
+          "size": 260,
+          "feeByte": 38
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx.py::test_one_three_fee",
@@ -195,7 +205,9 @@
         "txInfo": {
           "type": "debit",
           "amount": -50000,
-          "fee": 10000
+          "fee": 10000,
+          "size": 189,
+          "feeByte": 52
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx.py::test_p2sh",
@@ -227,7 +239,9 @@
         "txInfo": {
           "type": "debit",
           "amount": -4500000000,
-          "fee": 10000
+          "fee": 10000,
+          "size": 190,
+          "feeByte": 52
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx.py::test_testnet_big_amount",
@@ -259,7 +273,9 @@
         "txInfo": {
           "type": "debit",
           "amount": -2500278230,
-          "fee": 10000
+          "fee": 10000,
+          "size": 192,
+          "feeByte": 52
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx.py::test_spend_coinbase",
@@ -293,7 +309,9 @@
         "txInfo": {
           "type": "debit",
           "amount": -99294,
-          "fee": 25842
+          "fee": 25842,
+          "size": 225,
+          "feeByte": 114
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_bcash.py::test_send_bch_change",
@@ -326,7 +344,9 @@
         "txInfo": {
           "type": "debit",
           "amount": -1969502,
-          "fee": 34542
+          "fee": 34542,
+          "size": 338,
+          "feeByte": 102
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_bcash.py::test_send_bch_nochange",

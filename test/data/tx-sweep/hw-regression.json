@@ -34,7 +34,9 @@
         "txInfo": {
           "type": "credit",
           "amount": 299990000,
-          "fee": 10000
+          "fee": 10000,
+          "size": 372,
+          "feeByte": 26
         }
       },
       "comment": "Sweep (signTxWithKeys): two coins of external keys, one compressed and one uncompressed WIF, swept to the wallet's own address (/0/0): the type is credit."
@@ -67,7 +69,9 @@
         "txInfo": {
           "type": "debit",
           "amount": 0,
-          "fee": 10000
+          "fee": 10000,
+          "size": 158,
+          "feeByte": 63
         }
       },
       "comment": "A pay-to-public-key coin of a compressed key (the funding output is a P2PK script, not P2PKH), swept with its WIF key: the scriptSig is a single signature. Such a coin is found under the P2PKH address of its key."
@@ -100,7 +104,9 @@
         "txInfo": {
           "type": "debit",
           "amount": 0,
-          "fee": 10000
+          "fee": 10000,
+          "size": 158,
+          "feeByte": 63
         }
       },
       "comment": "A pay-to-public-key coin of an uncompressed key, as mined in the first years of Bitcoin, swept with its uncompressed WIF key. 50 BTC."
@@ -133,7 +139,9 @@
         "txInfo": {
           "type": "debit",
           "amount": 0,
-          "fee": 10000
+          "fee": 10000,
+          "size": 343,
+          "feeByte": 29
         }
       },
       "comment": "A P2PKH coin and a P2WPKH coin of the same key swept together, as preparesweep builds it: a legacy input and a witness input in one transaction."
@@ -171,7 +179,9 @@
         "txInfo": {
           "type": "debit",
           "amount": -100000000,
-          "fee": 10000
+          "fee": 10000,
+          "size": 338,
+          "feeByte": 29
         }
       },
       "comment": "A sweep that also spends a coin of the wallet's own address (/0/0, given as an input path) whose key is in the key file. The wallet's coin counts as its own input, so the amount is negative and the type is debit."
@@ -207,7 +217,9 @@
         "txInfo": {
           "type": "debit",
           "amount": 0,
-          "fee": 10000
+          "fee": 10000,
+          "size": 372,
+          "feeByte": 26
         }
       },
       "comment": "Bitcoin Cash: two P2PKH coins, of a compressed and of an uncompressed key, signed with SIGHASH_ALL | SIGHASH_FORKID (sighash byte 0x41)."

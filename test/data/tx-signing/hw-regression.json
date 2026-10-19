@@ -28,7 +28,9 @@
         "txInfo": {
           "type": "debit",
           "amount": -60000000,
-          "fee": 10000000
+          "fee": 10000000,
+          "size": 226,
+          "feeByte": 44247
         }
       },
       "comment": "One own input (/0/0), an external output and a change output (/1/0). The same transaction as the \"can sign a simple transaction\" test of SigningSpec.hs."
@@ -62,7 +64,9 @@
         "txInfo": {
           "type": "internal",
           "amount": -50000000,
-          "fee": 50000000
+          "fee": 50000000,
+          "size": 373,
+          "feeByte": 134048
         }
       },
       "comment": "Both inputs and both outputs belong to the wallet: the amount equals the fee and the type is internal."
@@ -92,7 +96,9 @@
         "txInfo": {
           "type": "debit",
           "amount": -300000000,
-          "fee": 10000000
+          "fee": 10000000,
+          "size": 340,
+          "feeByte": 29411
         }
       },
       "comment": "Two coins on the same address (/0/3) spent together: a single input path covers both inputs."
@@ -122,7 +128,9 @@
         "txInfo": {
           "type": "debit",
           "amount": -100000000,
-          "fee": 10000
+          "fee": 10000,
+          "size": 192,
+          "feeByte": 52
         }
       },
       "comment": "Transaction version 2, lock time 650000 and input sequence 0xfffffffe must be preserved by signing."
@@ -158,7 +166,9 @@
         "txInfo": {
           "type": "debit",
           "amount": -500010000,
-          "fee": 10000
+          "fee": 10000,
+          "size": 666,
+          "feeByte": 15
         }
       },
       "comment": "Four coins from two dependent transactions, on the external (/0/0, /0/1) and internal (/1/0, /1/1) chains, spent to an external output and a change output (/1/2)."
@@ -189,7 +199,9 @@
         "txInfo": {
           "type": "debit",
           "amount": -100000000,
-          "fee": 10000
+          "fee": 10000,
+          "size": 191,
+          "feeByte": 52
         }
       },
       "comment": "A dependent transaction that no input spends is ignored."
@@ -221,7 +233,9 @@
         "txInfo": {
           "type": "debit",
           "amount": -90010000,
-          "fee": 10000
+          "fee": 10000,
+          "size": 308,
+          "feeByte": 32
         }
       },
       "comment": "Outputs to P2WPKH, P2WSH and Taproot (witness version 1) scripts, which the wallet can pay to but never owns, plus a change output (/1/3). The witness outputs count as external outputs."
@@ -251,7 +265,9 @@
         "txInfo": {
           "type": "debit",
           "amount": -100000000,
-          "fee": 0
+          "fee": 0,
+          "size": 192,
+          "feeByte": 0
         }
       },
       "comment": "A transaction without fee: the fee rate is 0. hw does not enforce a minimum fee when signing."
@@ -283,7 +299,9 @@
         "txInfo": {
           "type": "debit",
           "amount": -50010000,
-          "fee": 10000
+          "fee": 10000,
+          "size": 226,
+          "feeByte": 44
         }
       },
       "comment": "Bitcoin Cash testnet: SIGHASH_ALL | SIGHASH_FORKID with the testnet coin type, one input (/0/0), an external output and a change output (/1/0)."
@@ -315,7 +333,9 @@
         "txInfo": {
           "type": "debit",
           "amount": -60000000,
-          "fee": 10000000
+          "fee": 10000000,
+          "size": 374,
+          "feeByte": 26737
         }
       },
       "comment": "Two inputs: the wallet's (/0/9) and one of another party, which already carries that party's signature in the unsigned transaction. The wallet signs only its own input and verifies both. The other party's coin is not part of the amount, but its value is part of the fee."
