@@ -114,6 +114,7 @@ buildSweepSignData ::
 buildSweepSignData net ctx gen found sweepTo feeByte dust = do
   when (null found.coins) $ Left "There are no coins to sweep in those addresses"
   when (null sweepTo) $ Left "No addresses to sweep to"
+  when (feeByte == 0) $ Left "The fee rate must be at least 1 satoshi per byte"
   let total = sum $ (.value) <$> found.coins
       fee = guessTxFee (fromIntegral feeByte) (length sweepTo) (length found.coins)
   when (total < fee) $ Left "Could not find a sweep solution: fee is too large"
@@ -148,6 +149,8 @@ signTxWithKeys net ctx tsd accountPub secKeys = do
   when tsd.txSignDataSigned $ Left "The transaction is already signed"
   when (null secKeys) $ Left "There are no private keys to sign"
   info <- parseTxSignData net ctx accountPub tsd
+  -- The sweep builder refuses a fee rate of zero; the signer checks the fee itself
+  when (info.txInfoFee == 0) $ Left "The transaction pays no fee"
   coins <- inputCoins tsd.txSignDataTx info
   signedTx <- foldM (signCoin net ctx (indexKeys ctx secKeys)) tsd.txSignDataTx (zip [0 ..] coins)
   let signedData = tsd {txSignDataTx = signedTx, txSignDataSigned = True}

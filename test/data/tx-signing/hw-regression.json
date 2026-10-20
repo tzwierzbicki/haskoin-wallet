@@ -259,18 +259,9 @@
         "outputpaths": [],
         "signed": false
       },
-      "signed": {
-        "tx": "010000000162e4d3cf2e19bfc72edb6803b3690b189378441a58f5c8518a8c0351dbfa080e000000006b483045022100b886929659505942a349888494111bf1ab086090b8db1edcff4690e746fa8304022030d16d2c00ba89287dede21b7a00de351d0d128e3b7a912eae843b5feb4603d701210265532623ac48d5fbc47f6fc788cb47073cf7db80c16405536945b2bb0f877133ffffffff0100e1f505000000001976a91457cf49b9749f5cd69641216d97ef678a692b4f8e88ac00000000",
-        "txid": "e39e77a59b17a48828a17e1ccfe37cbd6c17735d3d6d99a8ad2ba7bc6cf3683e",
-        "txInfo": {
-          "type": "debit",
-          "amount": -100000000,
-          "fee": 0,
-          "size": 192,
-          "feeByte": 0
-        }
-      },
-      "comment": "A transaction without fee: the fee rate is 0. hw does not enforce a minimum fee when signing."
+      "expect": "error",
+      "error": "The transaction pays no fee",
+      "comment": "A transaction without fee: the fee rate is 0. hw refuses to sign it."
     },
     {
       "name": "hw/bchtest/debit",

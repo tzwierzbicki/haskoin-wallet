@@ -79,6 +79,8 @@ signWalletTx net ctx tsd accountKey = do
   when tsd.txSignDataSigned $ Left "The transaction is already signed"
   coins <- spentCoins ctx tsd
   analysis <- analyze net ctx tsd (deriveXPubKey ctx accountKey) coins
+  -- The builder refuses a fee rate of zero; the signer checks the fee itself
+  when (analysis.fee == 0) $ Left "The transaction pays no fee"
   signedTx <- signInputs net ctx accountKey analysis tsd.txSignDataTx coins
   verifyInputs net ctx signedTx coins
   let signedData = tsd {txSignDataTx = signedTx, txSignDataSigned = True}

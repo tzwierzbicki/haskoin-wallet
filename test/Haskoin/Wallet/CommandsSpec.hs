@@ -562,10 +562,13 @@ pendingTxsSpec ctx cfg =
       checkFree 0 True
       lift $ setAddrsFree AddrBusy [head internalAddrsText] `dbShouldBe` 1
       checkFree 0 False
-      let fundTx1 = spendingTx ctx [(fakeTxHash 1, 0)] [(externalAddr 0, 20)]
-          fundTx2 = spendingTx ctx [(fakeTxHash 1, 1)] [(internalAddr 0, 10)]
-          coin1 = storeCoin ctx (txHash fundTx1, 0) (Just 0) (externalAddr 0) 20
-          coin2 = storeCoin ctx (txHash fundTx2, 0) (Just 0) (internalAddr 0) 10
+      -- Two coins of 20000 and 10000, spent at 1 satoshi per byte with no
+      -- dust limit: a transaction with one input pays 226 with two outputs,
+      -- 192 with one
+      let fundTx1 = spendingTx ctx [(fakeTxHash 1, 0)] [(externalAddr 0, 20000)]
+          fundTx2 = spendingTx ctx [(fakeTxHash 1, 1)] [(internalAddr 0, 10000)]
+          coin1 = storeCoin ctx (txHash fundTx1, 0) (Just 0) (externalAddr 0) 20000
+          coin2 = storeCoin ctx (txHash fundTx2, 0) (Just 0) (internalAddr 0) 10000
       -- Insert the dependent transactions
       lift $ insertRawTx fundTx1
       lift $ insertRawTx fundTx2
@@ -574,7 +577,7 @@ pendingTxsSpec ctx cfg =
       liftTest $ c `shouldBe` 2
       let jsonCoin1 = forceRight $ toJsonCoin btc Nothing (head dbCoins)
           jsonCoin2 = forceRight $ toJsonCoin btc Nothing (dbCoins !! 1)
-      tsd <- buildTxSignData btc ctx cfg gen LeastWaste accId [(otherAddr 0, 8)] 0 0 SenderPays 1 []
+      tsd <- buildTxSignData btc ctx cfg gen LeastWaste accId [(otherAddr 0, 8000)] 1 0 SenderPays 1 []
       -- The outputs are compared by amount: the builder shuffles them
       liftTest $
         unshuffled tsd
@@ -583,7 +586,7 @@ pendingTxsSpec ctx cfg =
                 spendingTx
                   ctx
                   [(txHash fundTx1, 0)]
-                  [(otherAddr 0, 8), (internalAddr 1, 12)],
+                  [(otherAddr 0, 8000), (internalAddr 1, 11774)],
               txSignDataInputs = [fundTx1],
               txSignDataInputPaths = [Deriv :/ 0 :/ 0],
               txSignDataOutputPaths = [Deriv :/ 1 :/ 1],
@@ -608,12 +611,12 @@ pendingTxsSpec ctx cfg =
       (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 2
       lift $
         shouldBeLeft' "The coins do not cover the amount and the fee" $
-          buildTxSignData btc ctx cfg gen LeastWaste accId [(otherAddr 1, 12)] 0 0 SenderPays 1 []
+          buildTxSignData btc ctx cfg gen LeastWaste accId [(otherAddr 1, 12000)] 1 0 SenderPays 1 []
       lift $
         shouldBeLeft' "The transaction already exists" $
           importPendingTx btc ctx accId tsd
       -- Create second pending transaction
-      tsd2 <- buildTxSignData btc ctx cfg gen LeastWaste accId [(otherAddr 1, 7)] 0 0 SenderPays 1 []
+      tsd2 <- buildTxSignData btc ctx cfg gen LeastWaste accId [(otherAddr 1, 7000)] 1 0 SenderPays 1 []
       liftTest $
         unshuffled tsd2
           `shouldBe` TxSignData
@@ -621,7 +624,7 @@ pendingTxsSpec ctx cfg =
                 spendingTx
                   ctx
                   [(txHash fundTx2, 0)]
-                  [(internalAddr 2, 3), (otherAddr 1, 7)],
+                  [(internalAddr 2, 2774), (otherAddr 1, 7000)],
               txSignDataInputs = [fundTx2],
               txSignDataInputPaths = [Deriv :/ 1 :/ 0],
               txSignDataOutputPaths = [Deriv :/ 1 :/ 2],
@@ -645,7 +648,7 @@ pendingTxsSpec ctx cfg =
       (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 3
       lift $
         shouldBeLeft' "The coins do not cover the amount and the fee" $
-          buildTxSignData btc ctx cfg gen LeastWaste accId [(otherAddr 2, 1)] 0 0 SenderPays 1 []
+          buildTxSignData btc ctx cfg gen LeastWaste accId [(otherAddr 2, 1000)] 1 0 SenderPays 1 []
       -- Delete first transaction
       deletePendingTx ctx h1 `dbShouldBeE` (1, 1)
       coinPage btc accId (Page 5 0)
@@ -659,7 +662,7 @@ pendingTxsSpec ctx cfg =
       checkFree 2 False
       (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 1
       -- Create transaction with no change
-      tsd3 <- buildTxSignData btc ctx cfg gen LeastWaste accId [(otherAddr 2, 20)] 0 0 SenderPays 1 []
+      tsd3 <- buildTxSignData btc ctx cfg gen LeastWaste accId [(otherAddr 2, 19808)] 1 0 SenderPays 1 []
       liftTest $
         unshuffled tsd3
           `shouldBe` TxSignData
@@ -667,14 +670,14 @@ pendingTxsSpec ctx cfg =
                 spendingTx
                   ctx
                   [(txHash fundTx1, 0)]
-                  [(otherAddr 2, 20)],
+                  [(otherAddr 2, 19808)],
               txSignDataInputs = [fundTx1],
               txSignDataInputPaths = [Deriv :/ 0 :/ 0],
               txSignDataOutputPaths = [],
               txSignDataSigned = False
             }
       -- One output: nothing to shuffle, so the hash is fixed
-      let h3 = "abe82b09dddb8abdb5490c3d404d34f2ff3c8f7b893bbe80f0af4018576e1f9e"
+      let h3 = "720a9cfea170cc699458a97fe34da547dde30d9d54e5210cd88f1b76b139696c"
       importPendingTx btc ctx accId tsd3 `dbShouldBeE` h3
       coinPage btc accId (Page 5 0)
         `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = True},

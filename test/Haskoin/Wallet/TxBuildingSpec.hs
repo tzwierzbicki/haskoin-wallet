@@ -164,11 +164,6 @@ transactionSpec ctx =
       built <- expectRight $ build ctx LargestFirst found [(otherAddr 0, 350000)] SenderPays
       spends ctx built `shouldBe` ([200000, 200000], [(internalAddr 0, 46260), (otherAddr 0, 350000)])
       built.inputPaths `shouldBe` [Deriv :/ 0 :/ 0]
-    it "builds a free transaction at a fee rate of zero" $ do
-      -- Change: 400000 - 350000 = 50000
-      built <- expectRight $ buildWalletTx btc ctx (mkStdGen 0) LargestFirst (wallet (coinsWorth ctx [400000]) []) [(otherAddr 0, 350000)] 0 546 SenderPays []
-      spends ctx built `shouldBe` ([400000], [(internalAddr 0, 50000), (otherAddr 0, 350000)])
-      feePaid built `shouldBe` 0
 
 {- The dust limit -}
 
@@ -337,6 +332,9 @@ errorSpec ctx =
   describe "Errors" $ do
     it "fails without recipients" $
       pay ctx [400000] [] `shouldBe` Left "No recipients provided"
+    it "fails at a fee rate of zero" $
+      buildWalletTx btc ctx (mkStdGen 0) LargestFirst (wallet (coinsWorth ctx [400000]) []) [(otherAddr 0, 350000)] 0 546 SenderPays []
+        `shouldBe` Left "The fee rate must be at least 1 satoshi per byte"
     it "fails when the coins do not cover the amount and the fee" $
       -- 100000 - 1480 < 350000 + 440
       pay ctx [100000] [(otherAddr 0, 350000)] `shouldBe` Left "The coins do not cover the amount and the fee"
