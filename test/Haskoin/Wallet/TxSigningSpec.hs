@@ -28,6 +28,7 @@ spec = do
   txVectorSpec "test/data/tx-signing" "Transaction signing test vectors" walletSigner
   prepareContext $ \ctx -> do
     analysisSpec ctx
+    signingSpec ctx
     verificationSpec ctx
     propertiesSpec ctx
 
@@ -102,6 +103,17 @@ analysisSpec ctx =
     accountPub = testAccountPub ctx
     nosigHash = "9b41b3cb7b10bfd1dc3f7f1885ce3623789b1b946d206fd59fb432ad4fdb6d70"
 
+{- Signing -}
+
+signingSpec :: Ctx -> Spec
+signingSpec ctx =
+  describe "Signing" $
+    it "refuses to sign a transaction without fee" $ do
+      -- The coin of 1 BTC is sent in full
+      let tx = spendingTx ctx [(txHash (simpleFunding ctx), 0)] [(otherAddr 0, 100000000)]
+          unsigned = TxSignData tx [simpleFunding ctx] [Deriv :/ 0 :/ 0] [] False
+      signWalletTx btc ctx unsigned testAccountKey `shouldBe` Left "The transaction pays no fee"
+
 {- Verification -}
 
 verificationSpec :: Ctx -> Spec
@@ -154,8 +166,8 @@ data Expected = Expected
 
 -- | A transaction of the test wallet: one to six coins at random wallet
 -- addresses, spent to one to four outputs of random amounts, each paid to
--- another wallet or back to the test wallet. The outputs never exceed the
--- coins, so the fee is never negative.
+-- another wallet or back to the test wallet. The outputs never reach the
+-- coins, so the fee is always positive.
 walletTransaction :: Ctx -> Gen (TxSignData, Expected)
 walletTransaction ctx = do
   coinCount <- choose (1, 6)
@@ -166,7 +178,7 @@ walletTransaction ctx = do
     vectorOf outputCount $
       (,)
         <$> frequency [(2, elements otherAddrs), (1, elements walletAddresses)]
-        <*> amount 1 (coinsTotal `div` fromIntegral outputCount)
+        <*> amount 1 (coinsTotal `div` fromIntegral outputCount - 1)
   let funding = fundingTx ctx 1 coins
       tx = spendingTx ctx [(txHash funding, i) | i <- [0 .. fromIntegral coinCount - 1]] outputs
       pathsOf addrs = nub $ mapMaybe (`lookup` walletPaths) addrs

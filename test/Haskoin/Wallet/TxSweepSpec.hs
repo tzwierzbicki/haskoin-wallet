@@ -116,6 +116,13 @@ sweepBuilderSpec ctx =
       buildWith 10 745910 destinations `shouldBe` build destinations
     it "refuses outputs below the dust value" $
       buildWith 10 745911 destinations `shouldBe` Left "Outputs are smaller than the dust value"
+    it "refuses a fee rate of zero" $
+      buildWith 0 546 destinations `shouldBe` Left "The fee rate must be at least 1 satoshi per byte"
+    it "refuses to sign a sweep without fee" $ do
+      -- The wallet's coin of 500000 is swept in full
+      let tx = spendingTx ctx [(txHash walletFunding, 0)] [(otherAddr 0, 500000)]
+          unsigned = TxSignData tx [walletFunding] [firstExternal] [] False
+      signTxWithKeys btc ctx unsigned accountPub [walletKey] `shouldBe` Left "The transaction pays no fee"
   where
     seed = mkStdGen 0
     -- The wallet: the test wallet of TestUtils, with its first two external addresses

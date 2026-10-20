@@ -138,7 +138,8 @@ longTermRate = 10
 -- coins are chosen by the strategy, or are exactly those under coin control.
 -- The change goes to the change address, or to the fee when it is below the
 -- dust limit, and the outputs are shuffled. When the recipients pay the fee, it is deducted from
--- their amounts in equal parts.
+-- their amounts in equal parts. A fee rate of zero is refused: the network
+-- would not relay the transaction.
 buildWalletTx ::
   Network ->
   Ctx ->
@@ -158,6 +159,7 @@ buildWalletTx ::
 buildWalletTx net ctx gen strategy found recipients feeByte dust payer coinControl =
   flip evalStateT gen $ do
     when (null recipients) $ throwError "No recipients provided"
+    when (feeByte == 0) $ throwError "The fee rate must be at least 1 satoshi per byte"
     -- The coin selection draws from a generator of its own; the outputs are
     -- shuffled with what is left
     drawGen <- state splitGen
