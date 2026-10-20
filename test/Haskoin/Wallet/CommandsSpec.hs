@@ -15,23 +15,22 @@ import Data.Either
 import qualified Data.Map as Map
 import Data.Maybe
 import qualified Data.Serialize as S
-import Data.Text (Text)
 import Database.Esqueleto.Legacy hiding (isNothing)
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Util.Arbitrary
 import Haskoin.Wallet.Arbitrary
+import Haskoin.Wallet.CoinSelection (CoinSelection (..), FeePayer (..))
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.FileIO
-import Haskoin.Wallet.Keys
 import Haskoin.Wallet.TxBuilding
-import Haskoin.Wallet.SigningSpec
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSigning (signWalletTx)
 import Haskoin.Wallet.Util
+import System.Random (StdGen, mkStdGen)
 import Test.Hspec
 
 identityTests :: Network -> Ctx -> IdentityTests
@@ -67,11 +66,19 @@ spec = do
       coinSpec ctx
       pendingTxsSpec ctx cfg
 
+-- | A fixed seed for the transactions built in these tests
+gen :: StdGen
+gen = mkStdGen 0
+
 liftTest :: (MonadIO m) => Expectation -> m ()
 liftTest = liftIO
 
 shouldBeLeft :: (Show a) => ExceptT String (DB IO) a -> DB IO ()
 shouldBeLeft action = liftTest . (`shouldSatisfy` isLeft) =<< runExceptT action
+
+-- | The signing data with the outputs of its transaction sorted by amount
+unshuffled :: TxSignData -> TxSignData
+unshuffled tsd = tsd {txSignDataTx = sortedOutputs (txSignDataTx tsd)}
 
 shouldBeLeft' ::
   (Show a, Eq a) => String -> ExceptT String (DB IO) a -> DB IO ()
@@ -90,22 +97,6 @@ dbShouldBeE action a = liftTest . (`shouldBe` a) =<< action
 
 dbShouldSatisfy :: (Show a) => DB IO a -> (a -> Bool) -> DB IO ()
 dbShouldSatisfy action f = liftTest . (`shouldSatisfy` f) =<< action
-
-testNewAcc :: Ctx -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
-testNewAcc ctx name = do
-  let fp = forceRight $ walletFingerprint btc ctx testMnemonic
-  d <- lift $ nextAccountDeriv fp btc
-  let prv = forceRight $ signingKey btc ctx testMnemonic d
-      pub = deriveXPubKey ctx prv
-  insertAccount btc ctx fp name pub
-
-testNewAcc2 :: Ctx -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
-testNewAcc2 ctx name = do
-  let fp = forceRight $ walletFingerprint btc ctx testMnemonic2
-  d <- lift $ nextAccountDeriv fp btc
-  let prv = forceRight $ signingKey btc ctx testMnemonic2 d
-      pub = deriveXPubKey ctx prv
-  insertAccount btc ctx fp name pub
 
 bestSpec :: Spec
 bestSpec =
@@ -583,15 +574,16 @@ pendingTxsSpec ctx cfg =
       liftTest $ c `shouldBe` 2
       let jsonCoin1 = forceRight $ toJsonCoin btc Nothing (head dbCoins)
           jsonCoin2 = forceRight $ toJsonCoin btc Nothing (dbCoins !! 1)
-      tsd <- buildTxSignData btc ctx cfg gen accId [(otherAddr 0, 8)] 0 0 False 1 []
+      tsd <- buildTxSignData btc ctx cfg gen LeastWaste accId [(otherAddr 0, 8)] 0 0 SenderPays 1 []
+      -- The outputs are compared by amount: the builder shuffles them
       liftTest $
-        tsd
+        unshuffled tsd
           `shouldBe` TxSignData
             { txSignDataTx =
                 spendingTx
                   ctx
                   [(txHash fundTx1, 0)]
-                  [(internalAddr 1, 12), (otherAddr 0, 8)],
+                  [(otherAddr 0, 8), (internalAddr 1, 12)],
               txSignDataInputs = [fundTx1],
               txSignDataInputPaths = [Deriv :/ 0 :/ 0],
               txSignDataOutputPaths = [Deriv :/ 1 :/ 1],
@@ -600,9 +592,9 @@ pendingTxsSpec ctx cfg =
       -- Import the pending transaction
       checkFree 0 False
       checkFree 1 True
-      let h1 = "db1085753d1d9b14005dd2951ff643803d4fa7ffa3bde6841dbb817958cb74e1"
+      -- The hash depends on the order of the shuffled outputs
+      let h1 = nosigTxHash (txSignDataTx tsd)
       importPendingTx btc ctx accId tsd `dbShouldBeE` h1
-      liftTest $ nosigTxHash (txSignDataTx tsd) `shouldBe` h1
       -- Check locked coins
       coinPage btc accId (Page 5 0)
         `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = False},
@@ -615,15 +607,15 @@ pendingTxsSpec ctx cfg =
       checkFree 1 False
       (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 2
       lift $
-        shouldBeLeft' "chooseCoins: No solution found" $
-          buildTxSignData btc ctx cfg gen accId [(otherAddr 1, 12)] 0 0 False 1 []
+        shouldBeLeft' "The coins do not cover the amount and the fee" $
+          buildTxSignData btc ctx cfg gen LeastWaste accId [(otherAddr 1, 12)] 0 0 SenderPays 1 []
       lift $
         shouldBeLeft' "The transaction already exists" $
           importPendingTx btc ctx accId tsd
       -- Create second pending transaction
-      tsd2 <- buildTxSignData btc ctx cfg gen accId [(otherAddr 1, 7)] 0 0 False 1 []
+      tsd2 <- buildTxSignData btc ctx cfg gen LeastWaste accId [(otherAddr 1, 7)] 0 0 SenderPays 1 []
       liftTest $
-        tsd2
+        unshuffled tsd2
           `shouldBe` TxSignData
             { txSignDataTx =
                 spendingTx
@@ -637,7 +629,7 @@ pendingTxsSpec ctx cfg =
             }
       -- Import the second transaction
       checkFree 2 True
-      let h2 = "bb0e46f95f90bf0d2b0805655a77e632a0bd5088d5722d0055bc2862158ba747"
+      let h2 = nosigTxHash (txSignDataTx tsd2)
       importPendingTx btc ctx accId tsd2 `dbShouldBeE` h2
       coinPage btc accId (Page 5 0)
         `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = True},
@@ -652,8 +644,8 @@ pendingTxsSpec ctx cfg =
       checkFree 2 False
       (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 3
       lift $
-        shouldBeLeft' "chooseCoins: No solution found" $
-          buildTxSignData btc ctx cfg gen accId [(otherAddr 2, 1)] 0 0 False 1 []
+        shouldBeLeft' "The coins do not cover the amount and the fee" $
+          buildTxSignData btc ctx cfg gen LeastWaste accId [(otherAddr 2, 1)] 0 0 SenderPays 1 []
       -- Delete first transaction
       deletePendingTx ctx h1 `dbShouldBeE` (1, 1)
       coinPage btc accId (Page 5 0)
@@ -667,9 +659,9 @@ pendingTxsSpec ctx cfg =
       checkFree 2 False
       (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 1
       -- Create transaction with no change
-      tsd3 <- buildTxSignData btc ctx cfg gen accId [(otherAddr 2, 20)] 0 0 False 1 []
+      tsd3 <- buildTxSignData btc ctx cfg gen LeastWaste accId [(otherAddr 2, 20)] 0 0 SenderPays 1 []
       liftTest $
-        tsd3
+        unshuffled tsd3
           `shouldBe` TxSignData
             { txSignDataTx =
                 spendingTx
@@ -681,6 +673,7 @@ pendingTxsSpec ctx cfg =
               txSignDataOutputPaths = [],
               txSignDataSigned = False
             }
+      -- One output: nothing to shuffle, so the hash is fixed
       let h3 = "abe82b09dddb8abdb5490c3d404d34f2ff3c8f7b893bbe80f0af4018576e1f9e"
       importPendingTx btc ctx accId tsd3 `dbShouldBeE` h3
       coinPage btc accId (Page 5 0)

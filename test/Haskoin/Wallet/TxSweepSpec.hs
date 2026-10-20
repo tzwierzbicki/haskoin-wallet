@@ -108,8 +108,14 @@ sweepBuilderSpec ctx =
       build [] `shouldBe` Left "No addresses to sweep to"
     it "refuses a fee larger than the coins" $
       buildWith 10000 546 destinations `shouldBe` Left "Could not find a sweep solution: fee is too large"
-    it "refuses outputs smaller than the dust value" $
-      buildWith 10 800000 destinations `shouldBe` Left "Outputs are smaller than the dust value"
+    -- Each destination gets 745910: the dust limit right below, at and
+    -- right above that amount
+    it "accepts outputs above the dust value" $
+      buildWith 10 745909 destinations `shouldBe` build destinations
+    it "accepts outputs exactly at the dust value" $
+      buildWith 10 745910 destinations `shouldBe` build destinations
+    it "refuses outputs below the dust value" $
+      buildWith 10 745911 destinations `shouldBe` Left "Outputs are smaller than the dust value"
   where
     seed = mkStdGen 0
     -- The wallet: the test wallet of TestUtils, with its first two external addresses

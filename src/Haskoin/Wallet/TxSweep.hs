@@ -118,7 +118,7 @@ buildSweepSignData net ctx gen found sweepTo feeByte dust = do
       fee = guessTxFee (fromIntegral feeByte) (length sweepTo) (length found.coins)
   when (total < fee) $ Left "Could not find a sweep solution: fee is too large"
   let (each, remainder) = (total - fee) `quotRem` fromIntegral (length sweepTo)
-  when (each <= fromIntegral dust) $ Left "Outputs are smaller than the dust value"
+  when (each < fromIntegral dust) $ Left "Outputs are smaller than the dust value"
   outputs <- mapM payTo $ zip destinations ((each + remainder) : repeat each)
   let tx = Tx 1 [TxIn c.outpoint BS.empty maxBound | c <- shuffledCoins] outputs [] 0
       inputPaths = pathsOf $ mapMaybe (.address) found.coins

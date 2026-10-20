@@ -1,5 +1,6 @@
 module Haskoin.Wallet
   ( module Amounts,
+    module CoinSelection,
     module Commands,
     module Config,
     module Database,
@@ -13,6 +14,7 @@ module Haskoin.Wallet
 where
 
 import Haskoin.Wallet.Amounts as Amounts
+import Haskoin.Wallet.CoinSelection as CoinSelection
 import Haskoin.Wallet.Commands as Commands
 import Haskoin.Wallet.Config as Config
 import Haskoin.Wallet.Database as Database

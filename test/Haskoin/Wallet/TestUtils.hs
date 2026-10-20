@@ -10,12 +10,12 @@ module Haskoin.Wallet.TestUtils where
 
 import Control.Monad (forM, unless, void)
 import Control.Monad.Except (ExceptT)
-import Control.Monad.Trans (liftIO)
+import Control.Monad.Trans (lift, liftIO)
 import Control.Monad.Trans.Except (runExceptT)
 import Data.Aeson (FromJSON (..), eitherDecodeFileStrict, withObject, (.!=), (.:), (.:?))
 import qualified Data.ByteString as BS
 import Data.Either (fromRight, isRight)
-import Data.List (isSuffixOf, sort)
+import Data.List (isSuffixOf, sort, sortOn)
 import Data.Maybe (fromMaybe)
 import qualified Data.Serialize as S
 import Data.Text (Text)
@@ -24,8 +24,8 @@ import Database.Persist.Sql (runMigrationQuiet)
 import Database.Persist.Sqlite (runSqlite)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Database (DB, migrateAll)
-import Haskoin.Wallet.Keys (MnemonicPass (..), signingKey)
+import Haskoin.Wallet.Database (DB, DBAccount, DBAccountId, insertAccount, migrateAll, nextAccountDeriv)
+import Haskoin.Wallet.Keys (MnemonicPass (..), signingKey, walletFingerprint)
 import Data.Word (Word32, Word8)
 import Numeric.Natural (Natural)
 import System.Directory (listDirectory)
@@ -57,6 +57,24 @@ runDBMemoryE action = do
     _ <- runMigrationQuiet migrateAll
     resE <- runExceptT action
     liftIO $ resE `shouldSatisfy` isRight
+
+-- | A new account of the test wallet in the database, with the given name
+testNewAcc :: Ctx -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
+testNewAcc ctx name = do
+  let fp = forceRight $ walletFingerprint btc ctx testMnemonic
+  d <- lift $ nextAccountDeriv fp btc
+  let prv = forceRight $ signingKey btc ctx testMnemonic d
+      pub = deriveXPubKey ctx prv
+  insertAccount btc ctx fp name pub
+
+-- | A new account of the second test wallet in the database
+testNewAcc2 :: Ctx -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
+testNewAcc2 ctx name = do
+  let fp = forceRight $ walletFingerprint btc ctx testMnemonic2
+  d <- lift $ nextAccountDeriv fp btc
+  let prv = forceRight $ signingKey btc ctx testMnemonic2 d
+      pub = deriveXPubKey ctx prv
+  insertAccount btc ctx fp name pub
 
 {- Test vector files -}
 
@@ -253,6 +271,12 @@ coinsOf ctx tx =
 addressScript :: Ctx -> Address -> BS.ByteString
 addressScript ctx addr =
   maybe (error "addressScript: unsupported address") (marshal ctx) (addressToOutput addr)
+
+-- | The transaction with its outputs sorted by amount: the builders shuffle
+-- them and the tests do not pin that order
+sortedOutputs :: Tx -> Tx
+sortedOutputs (Tx version inputs outputs witness locktime) =
+  Tx version inputs (sortOn (.value) outputs) witness locktime
 
 {- The test wallet -}
 

@@ -45,6 +45,7 @@ library
       Haskoin.Wallet
       Haskoin.Wallet.Amounts
       Haskoin.Wallet.Backup
+      Haskoin.Wallet.CoinSelection
       Haskoin.Wallet.Commands
       Haskoin.Wallet.Config
       Haskoin.Wallet.Database
@@ -162,12 +163,14 @@ test-suite spec
   other-modules:
       Haskoin.Wallet.AmountsSpec
       Haskoin.Wallet.Arbitrary
+      Haskoin.Wallet.CoinSelectionSpec
       Haskoin.Wallet.CommandsSpec
       Haskoin.Wallet.EntropySpec
+      Haskoin.Wallet.KeysSpec
       Haskoin.Wallet.MainSpec
       Haskoin.Wallet.MessageSigningSpec
-      Haskoin.Wallet.SigningSpec
       Haskoin.Wallet.TestUtils
+      Haskoin.Wallet.TxBuildingSpec
       Haskoin.Wallet.TxSigningSpec
       Haskoin.Wallet.TxSweepSpec
       Haskoin.Wallet.TxVectors
