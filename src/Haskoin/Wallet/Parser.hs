@@ -4,11 +4,12 @@
 
 module Haskoin.Wallet.Parser where
 
-import Data.List (intercalate)
+import Data.List (find, intercalate)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Haskoin
 import Haskoin.Wallet.Amounts (AmountUnit (..), readNatural)
+import Haskoin.Wallet.CoinSelection (CoinSelection (..), FeePayer (..))
 import Haskoin.Wallet.Util (Page (Page))
 import Numeric.Natural (Natural)
 import Options.Applicative
@@ -74,8 +75,9 @@ data Command
         commandMaybeAcc :: !(Maybe Text),
         commandFeeByte :: !Natural,
         commandDust :: !Natural,
-        commandRcptPay :: !Bool,
+        commandFeePayer :: !FeePayer,
         commandMinConf :: !Natural,
+        commandCoinSelection :: !CoinSelection,
         commandOutputFileMaybe :: !(Maybe FilePath),
         commandCoins :: ![(TxHash, Natural)]
       }
@@ -643,6 +645,7 @@ prepareTxParser = do
           <*> dustOption
           <*> rcptPayOption
           <*> minConfOption
+          <*> coinSelectionOption
           <*> outputFileMaybeOption
           <*> many coinOption
   info cmd $
@@ -704,7 +707,7 @@ feeOption =
     short 'f'
       <> long "fee"
       <> metavar "INT"
-      <> value 200
+      <> value 10
       <> showDefault
       <> help "Fee to pay in satoshi/bytes"
 
@@ -714,16 +717,15 @@ dustOption =
     short 'd'
       <> long "dust"
       <> metavar "INT"
-      <> value 5430
+      <> value 546
       <> showDefault
       <> help "Amount (in satoshi) below which an output is considered dust"
 
-rcptPayOption :: Parser Bool
+rcptPayOption :: Parser FeePayer
 rcptPayOption =
-  switch $
+  flag SenderPays RecipientsPay $
     short 'r'
       <> long "recipientpay"
-      <> showDefault
       <> help "The transaction fee will be deducted from the recipient amounts"
 
 minConfOption :: Parser Natural
@@ -735,6 +737,36 @@ minConfOption =
       <> value 1
       <> showDefault
       <> help "Minimum number of confirmations required to spend a coin"
+
+coinSelectionOption :: Parser CoinSelection
+coinSelectionOption =
+  option (eitherReader f) $
+    long "strategy"
+      <> metavar "STRATEGY"
+      <> value LeastWaste
+      <> showDefaultWith strategyName
+      <> completeWith (strategyName <$> strategies)
+      <> help
+        [r|
+How the coins to spend are chosen. least-waste keeps, among the strategies
+below and an exact match without change, the coins that waste the least fee
+now and later, like Bitcoin Core. random-draw spends coins in random order.
+largest-first spends the fewest coins, for the smallest fee. smallest-first
+spends the smallest coins first, to consolidate them.
+|]
+  where
+    strategies = [LeastWaste, RandomDraw, LargestFirst, SmallestFirst]
+    f s =
+      maybeToEither ("Invalid strategy. Select one of the following: " <> names) $
+        find ((== s) . strategyName) strategies
+    names = intercalate ", " (strategyName <$> strategies)
+
+-- | The name of a coin selection strategy on the command line
+strategyName :: CoinSelection -> String
+strategyName LeastWaste = "least-waste"
+strategyName RandomDraw = "random-draw"
+strategyName LargestFirst = "largest-first"
+strategyName SmallestFirst = "smallest-first"
 
 outputFileMaybeOption :: Parser (Maybe FilePath)
 outputFileMaybeOption =

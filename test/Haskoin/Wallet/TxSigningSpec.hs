@@ -7,11 +7,11 @@ import Control.Monad (when)
 import qualified Data.ByteString as BS
 import Data.List (nub)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (isJust, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, mapMaybe)
 import Haskoin
 import Haskoin.Wallet.FileIO (TxSignData (..))
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.TxInfo (TxInfo (..), TxInfoPending (..), TxType (..))
+import Haskoin.Wallet.TxInfo (MyInputs (..), MyOutputs (..), TxInfo (..), TxInfoPending (..), TxType (..))
 import Haskoin.Wallet.TxSigning
 import Haskoin.Wallet.TxVectors
 import Numeric.Natural (Natural)
@@ -48,10 +48,17 @@ walletSigner ctx v = do
 -- the hw/btc/debit vector of test/data/tx-signing.
 simpleTransaction :: Ctx -> TxSignData
 simpleTransaction ctx =
-  TxSignData tx [funding] [Deriv :/ 0 :/ 0] [Deriv :/ 1 :/ 0] False
+  TxSignData tx [simpleFunding ctx] [Deriv :/ 0 :/ 0] [Deriv :/ 1 :/ 0] False
   where
-    funding = fundingTx ctx 1 [(externalAddr 0, 100000000)]
-    tx = spendingTx ctx [(txHash funding, 0)] [(otherAddr 0, 50000000), (internalAddr 0, 40000000)]
+    tx = spendingTx ctx [(txHash (simpleFunding ctx), 0)] [(otherAddr 0, 50000000), (internalAddr 0, 40000000)]
+
+-- | The transaction funding the wallet's coin of 'simpleTransaction'
+simpleFunding :: Ctx -> Tx
+simpleFunding ctx = fundingTx ctx 1 [(externalAddr 0, 100000000)]
+
+-- | The output script paying an address, as a signing input carries it
+scriptOf :: Address -> ScriptOutput
+scriptOf = fromMaybe (error "scriptOf: unsupported address") . addressToOutput
 
 analysisSpec :: Ctx -> Spec
 analysisSpec ctx =
@@ -66,9 +73,22 @@ analysisSpec ctx =
       info.txInfoSize `shouldBe` 226
       info.txInfoFeeByte `shouldBe` 44247
       info.txInfoPending `shouldBe` Just (TxInfoPending nosigHash False False)
-      Map.keys info.txInfoMyInputs `shouldBe` [externalAddr 0]
-      Map.keys info.txInfoMyOutputs `shouldBe` [internalAddr 0]
-      Map.keys info.txInfoOtherOutputs `shouldBe` [otherAddr 0]
+      -- The wallet's input, with what signing it needs, and its change
+      info.txInfoMyInputs
+        `shouldBe` Map.fromList
+          [ ( externalAddr 0,
+              MyInputs
+                100000000
+                (Deriv :/ 0 :/ 0)
+                ""
+                [SigInput (scriptOf (externalAddr 0)) 100000000 (OutPoint (txHash (simpleFunding ctx)) 0) sigHashAll Nothing]
+            )
+          ]
+      info.txInfoMyOutputs `shouldBe` Map.fromList [(internalAddr 0, MyOutputs 40000000 (Deriv :/ 1 :/ 0) "")]
+      info.txInfoOtherOutputs `shouldBe` Map.fromList [(otherAddr 0, 50000000)]
+      info.txInfoOtherInputs `shouldBe` Map.empty
+      info.txInfoNonStdInputs `shouldBe` []
+      info.txInfoNonStdOutputs `shouldBe` []
     it "describes the signed transaction with its real size" $ do
       (signed, _) <- expectRight $ signWalletTx btc ctx unsigned testAccountKey
       info <- expectRight $ parseTxSignData btc ctx accountPub signed

@@ -27,6 +27,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebClient
 import Haskoin.Wallet.Amounts
 import Haskoin.Wallet.Backup
+import Haskoin.Wallet.CoinSelection (CoinSelection, FeePayer)
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Entropy
@@ -348,8 +349,8 @@ commandResponse ctx cfg unit cmd =
     CommandLabel nameM i l -> cmdLabel cfg nameM i l
     -- Transaction management
     CommandTxs nameM p -> cmdTxs ctx cfg nameM p
-    CommandPrepareTx rcpts nameM fee dust rcptPay minConf o coins ->
-      cmdPrepareTx ctx cfg rcpts nameM unit fee dust rcptPay minConf o coins
+    CommandPrepareTx rcpts nameM fee dust payer minConf strategy o coins ->
+      cmdPrepareTx ctx cfg rcpts nameM unit fee dust payer minConf strategy o coins
     CommandPendingTxs nameM p -> cmdPendingTxs ctx cfg nameM p
     CommandSignTx nameM h i o s -> cmdSignTx ctx cfg nameM h i o s
     CommandSendTx h -> cmdSendTx ctx cfg h
@@ -511,12 +512,13 @@ cmdPrepareTx ::
   AmountUnit ->
   Natural ->
   Natural ->
-  Bool ->
+  FeePayer ->
   Natural ->
+  CoinSelection ->
   Maybe FilePath ->
   [(TxHash, Natural)] ->
   IO Response
-cmdPrepareTx ctx cfg rcpTxt nameM unit feeByte dust rcptPay minConf fileM coins =
+cmdPrepareTx ctx cfg rcpTxt nameM unit feeByte dust payer minConf strategy fileM coins =
   runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
@@ -525,7 +527,7 @@ cmdPrepareTx ctx cfg rcpTxt nameM unit feeByte dust rcptPay minConf fileM coins 
     rcpts <- liftEither $ mapM (toRecipient net) rcpTxt
     gen <- liftIO initStdGen
     signDat <-
-      buildTxSignData net ctx cfg gen accId rcpts feeByte dust rcptPay minConf cControl
+      buildTxSignData net ctx cfg gen strategy accId rcpts feeByte dust payer minConf cControl
     txInfo <- liftEither $ parseTxSignData net ctx pub signDat
     txInfoL <- lift $ fillTxInfoLabels net txInfo
     for_ fileM checkPathFree

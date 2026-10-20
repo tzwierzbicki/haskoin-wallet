@@ -19,7 +19,7 @@ import qualified Data.Text as Text
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Numeric.Natural (Natural)
-import System.Random (Random (randomR), StdGen)
+import System.Random (StdGen, uniformShuffleList)
 
 {- JSON -}
 
@@ -143,21 +143,7 @@ a </> b = a <> "/" <> b
 
 {- Random -}
 
--- Random choices driven by a 'StdGen' kept in a state monad, for the
--- transaction builders, which shuffle inputs and outputs.
-
-randomRange :: (Random a, MonadState StdGen m) => a -> a -> m a
-randomRange low hi = do
-  gen <- get
-  let (res, newGen) = randomR (low, hi) gen
-  put newGen
-  return res
-
+-- | Shuffle a list, drawing from the 'StdGen' kept in a state monad: the
+-- Fisher-Yates shuffle of the random library, for the transaction builders
 randomShuffle :: (MonadState StdGen m) => [a] -> m [a]
-randomShuffle [] = return []
-randomShuffle [x] = return [x]
-randomShuffle xs = do
-  i <- randomRange 0 (length xs - 1)
-  case splitAt i xs of
-    (as, e : bs) -> (e :) <$> randomShuffle (as <> bs)
-    _ -> error "randomShuffle"
+randomShuffle xs = state (uniformShuffleList xs)
