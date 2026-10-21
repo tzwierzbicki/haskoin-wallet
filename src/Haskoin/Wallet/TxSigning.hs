@@ -59,7 +59,7 @@ parseTxSignData ::
 parseTxSignData net ctx accountPub tsd = do
   coins <- spentCoins ctx tsd
   analysis <- analyze net ctx tsd accountPub coins
-  return $ txInfo analysis tsd.txSignDataTx tsd.txSignDataSigned
+  return $ txInfo tsd.txSignDataFeeRate analysis tsd.txSignDataTx tsd.txSignDataSigned
 
 -- | Check that every input of a signed transaction carries a valid signature
 -- for the coin it spends
@@ -84,7 +84,7 @@ signWalletTx net ctx tsd accountKey = do
   signedTx <- signInputs net ctx accountKey analysis tsd.txSignDataTx coins
   verifyInputs net ctx signedTx coins
   let signedData = tsd {txSignDataTx = signedTx, txSignDataSigned = True}
-  return (signedData, txInfo analysis signedTx True)
+  return (signedData, txInfo tsd.txSignDataFeeRate analysis signedTx True)
 
 {- Coins -}
 
@@ -241,8 +241,8 @@ describeInput net i coin =
 
 -- | The information reported about the transaction. The size of a signed
 -- transaction is that of its bytes; the size of an unsigned one is estimated.
-txInfo :: Analysis -> Tx -> Bool -> TxInfo
-txInfo analysis tx signed =
+txInfo :: Maybe Natural -> Analysis -> Tx -> Bool -> TxInfo
+txInfo feeRate analysis tx signed =
   TxInfo
     { txInfoHash = if signed then Just (txHash tx) else Nothing,
       txInfoType = txType analysis.amount analysis.fee,
@@ -256,6 +256,7 @@ txInfo analysis tx signed =
       txInfoSize = size,
       txInfoFee = analysis.fee,
       txInfoFeeByte = analysis.fee `div` size,
+      txInfoChangeInFee = changeInFee,
       txInfoBlockRef = Store.MemRef 0,
       txInfoConfirmations = 0,
       txInfoPending = Just $ TxInfoPending (nosigTxHash tx) signed False
@@ -263,4 +264,9 @@ txInfo analysis tx signed =
   where
     size
       | signed = fromIntegral $ BS.length $ S.encode tx
-      | otherwise = fromIntegral $ guessTxSize (length tx.inputs) [] (length tx.outputs) 0
+      | otherwise = estimatedSize
+    estimatedSize = fromIntegral $ guessTxSize (length tx.inputs) [] (length tx.outputs) 0
+    -- What the fee pays beyond the requested rate on the size the builder
+    -- estimated, which signing does not change: the change that was not
+    -- worth an output
+    changeInFee = (\rate -> analysis.fee - min analysis.fee (rate * estimatedSize)) <$> feeRate

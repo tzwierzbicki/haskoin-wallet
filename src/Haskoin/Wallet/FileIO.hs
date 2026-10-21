@@ -11,6 +11,7 @@ import Control.Monad.Except
 import Control.Monad.Reader (MonadIO (..))
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
+import Numeric.Natural (Natural)
 import qualified Data.ByteString.Char8 as C8
 import Data.Maybe (mapMaybe)
 import qualified Data.Serialize as S
@@ -53,6 +54,10 @@ data TxSignData = TxSignData
     txSignDataInputs :: ![Tx],
     txSignDataInputPaths :: ![SoftPath],
     txSignDataOutputPaths :: ![SoftPath],
+    -- | The fee rate the transaction was built for, in satoshis per byte,
+    -- when known: what the fee pays beyond that rate is change that was not
+    -- worth an output
+    txSignDataFeeRate :: !(Maybe Natural),
     txSignDataSigned :: !Bool
   }
   deriving (Eq, Show)
@@ -66,15 +71,17 @@ instance FromJSON TxSignData where
       TxSignData t i
         <$> o .: "inputpaths"
         <*> o .: "outputpaths"
+        <*> o .:? "feerate"
         <*> o .: "signed"
 
 instance ToJSON TxSignData where
-  toJSON (TxSignData t i oi op s) =
+  toJSON (TxSignData t i oi op r s) =
     object
       [ "tx" .= encodeHex (S.encode t),
         "txinputs" .= (encodeHex . S.encode <$> i),
         "inputpaths" .= oi,
         "outputpaths" .= op,
+        "feerate" .= r,
         "signed" .= s
       ]
 

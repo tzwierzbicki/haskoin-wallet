@@ -109,6 +109,7 @@ arbitraryTxSignData net ctx =
     <*> resize 10 (listOf (arbitraryTx net ctx))
     <*> resize 10 (listOf arbitrarySoftPath)
     <*> resize 10 (listOf arbitrarySoftPath)
+    <*> arbitraryMaybe arbitraryNatural
     <*> arbitrary
 
 arbitraryMyOutputs :: Gen MyOutputs
@@ -195,6 +196,7 @@ arbitraryTxInfo net ctx =
     <*> arbitraryNatural
     <*> arbitraryNatural
     <*> arbitraryNatural
+    <*> arbitraryMaybe arbitraryNatural
     <*> arbitraryBlockRef
     <*> arbitraryNatural
     <*> arbitraryMaybe arbitraryTxInfoPending

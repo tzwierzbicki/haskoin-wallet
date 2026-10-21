@@ -22,7 +22,7 @@ where
 
 import Conduit (MonadUnliftIO)
 import Control.Arrow (second)
-import Control.Monad (when)
+import Control.Monad (when, zipWithM)
 import Control.Monad.Except
 import Control.Monad.State
 import Data.List (nub)
@@ -93,7 +93,7 @@ buildTxSignData net ctx cfg gen strategy accId recipients feeByte dust payer min
   found <- fetchWalletCoins net ctx cfg accId (fst <$> recipients) minConf
   built <- liftEither $ buildWalletTx net ctx gen strategy found recipients feeByte dust payer coinControl
   spentFrom <- mapM getRawTx $ nub $ (.outpoint.hash) <$> built.tx.inputs
-  return $ TxSignData built.tx spentFrom built.inputPaths built.outputPaths False
+  return $ TxSignData built.tx spentFrom built.inputPaths built.outputPaths (Just feeByte) False
 
 -- | Fetch the spendable coins of the account with their derivation paths,
 -- its next free change address, and the paths of the recipients that are
@@ -137,9 +137,10 @@ longTermRate = 10
 -- | Build a transaction paying the recipients from the wallet's coins. The
 -- coins are chosen by the strategy, or are exactly those under coin control.
 -- The change goes to the change address, or to the fee when it is below the
--- dust limit, and the outputs are shuffled. When the recipients pay the fee, it is deducted from
--- their amounts in equal parts. A fee rate of zero is refused: the network
--- would not relay the transaction.
+-- dust limit, and the outputs are shuffled. When the recipients pay the fee,
+-- it is deducted from their amounts in equal parts, the first recipient also
+-- paying the remainder. A fee rate of zero is refused: the network would not
+-- relay the transaction.
 buildWalletTx ::
   Network ->
   Ctx ->
@@ -201,11 +202,11 @@ controlledCoins coins control
   where
     controlled = filter ((`elem` control) . (.outpoint)) coins
 
--- | Deduct the fee from the recipients, in equal parts rounded up
+-- | Deduct the fee from the recipients in equal parts; the first recipient
+-- also pays the remainder, like Bitcoin Core
 recipientsPayFee :: Word64 -> [(Address, Natural)] -> Either String [(Address, Natural)]
-recipientsPayFee fee recipients = mapM pay recipients
+recipientsPayFee fee recipients = zipWithM pay (remainder : repeat 0) recipients
   where
     (each, remainder) = fromIntegral fee `quotRem` fromIntegral (length recipients) :: (Natural, Natural)
-    share = if remainder == 0 then each else each + 1
-    pay (addr, amount) =
-      (addr,) <$> maybeToEither "Recipients can't pay for the fee" (amount `safeSubtract` share)
+    pay extra (addr, amount) =
+      (addr,) <$> maybeToEither "Recipients can't pay for the fee" (amount `safeSubtract` (each + extra))

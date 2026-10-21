@@ -94,6 +94,7 @@ sweepBuilderSpec ctx =
       tsd.txSignDataInputs `shouldBe` [keyFunding, walletFunding]
       tsd.txSignDataInputPaths `shouldBe` [firstExternal]
       tsd.txSignDataOutputPaths `shouldBe` [secondExternal]
+      tsd.txSignDataFeeRate `shouldBe` Just 10
     it "builds a transaction the sweep signer accepts" $ do
       tsd <- expectRight $ build destinations
       (signed, info) <- expectRight $ signTxWithKeys btc ctx tsd accountPub [sweptKey, walletKey]
@@ -121,7 +122,7 @@ sweepBuilderSpec ctx =
     it "refuses to sign a sweep without fee" $ do
       -- The wallet's coin of 500000 is swept in full
       let tx = spendingTx ctx [(txHash walletFunding, 0)] [(otherAddr 0, 500000)]
-          unsigned = TxSignData tx [walletFunding] [firstExternal] [] False
+          unsigned = TxSignData tx [walletFunding] [firstExternal] [] Nothing False
       signTxWithKeys btc ctx unsigned accountPub [walletKey] `shouldBe` Left "The transaction pays no fee"
   where
     seed = mkStdGen 0

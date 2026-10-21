@@ -335,6 +335,7 @@ txInfoPrinter net unit TxInfo {..} =
       txid,
       pending,
       fee,
+      changeInFee,
       internal,
       debit,
       credit
@@ -347,6 +348,14 @@ txInfoPrinter net unit TxInfo {..} =
         TxCredit -> "Credit"
     total = integerAmountPrinter unit txInfoAmount
     fee = keyPrinter 9 "Fee" <> feePrinter unit txInfoFee txInfoFeeByte
+    changeInFee =
+      case txInfoChangeInFee of
+        Just change
+          | change > 0 ->
+              keyPrinter 9 "Change"
+                <> amountPrinter unit (fromIntegral change)
+                  <+> text "too small for an output, added to the fee"
+        _ -> mempty
     txid =
       case txInfoHash of
         Just tid ->
