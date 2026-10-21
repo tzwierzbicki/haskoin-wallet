@@ -27,6 +27,7 @@ module Haskoin.Wallet.CoinSelection
     Selection (..),
     selectCoins,
     spendCoins,
+    txSize,
     waste,
   )
 where
@@ -100,14 +101,32 @@ data Selection = Selection
   }
   deriving (Eq, Show)
 
-inputSize, outputSize, frameSize :: Word64
+-- | The size in bytes of a P2PKH input and of a P2PKH output, as the
+-- wallet builds them. An input is 32 bytes of transaction hash, 4 of output
+-- index, 1 of script length, a 107-byte script (1 + 72 for the signature
+-- with its hash type, 1 + 33 for the public key) and 4 of sequence. An
+-- output is 8 bytes of amount, 1 of script length and a 25-byte script.
+inputSize, outputSize :: Word64
 inputSize = 148
 outputSize = 34
-frameSize = 10
 
--- | The size of a transaction with the given numbers of inputs and outputs
+-- | The size in bytes of a transaction with the given numbers of P2PKH
+-- inputs and outputs: 4 bytes of version, the counts of inputs and outputs
+-- as variable-length integers, the inputs, the outputs and 4 bytes of lock
+-- time. An upper bound: a signature can be a byte or two shorter than the
+-- 72 counted for it.
 txSize :: Int -> Int -> Word64
-txSize inputs outputs = frameSize + inputSize * fromIntegral inputs + outputSize * fromIntegral outputs
+txSize inputs outputs =
+  8 + varIntSize inputs + varIntSize outputs + inputSize * fromIntegral inputs + outputSize * fromIntegral outputs
+
+-- | The size in bytes of a count as Bitcoin encodes it: one byte up to 252,
+-- then a marker byte and 2, 4 or 8 bytes
+varIntSize :: Int -> Word64
+varIntSize n
+  | n <= 0xfc = 1
+  | n <= 0xffff = 3
+  | n <= 0xffffffff = 5
+  | otherwise = 9
 
 -- | Choose the coins of a payment among the candidates
 selectCoins ::
@@ -167,20 +186,22 @@ selectionOf :: Payment -> [Store.Unspent] -> Selection
 selectionOf payment coins = Selection {selected = coins, paid, changeAmount, feeAmount}
   where
     total = sum $ (.value) <$> coins
-    -- What the coins cover beyond the target, and what a change output
-    -- would be worth: both as Integers, the change may be negative
-    excess = sum (covers payment <$> coins) - fromIntegral (target payment)
+    inputs = length coins
+    -- What the coins hold beyond the amount and, when the sender pays, the
+    -- fee of the transaction with a change output: as an Integer, it may be
+    -- negative
+    change :: Integer
     change = case payment.payer of
-      -- Once its own output is paid for
-      SenderPays -> excess - fromIntegral (payment.rates.feeRate * outputSize)
-      RecipientsPay -> excess
+      SenderPays ->
+        fromIntegral total - fromIntegral payment.amount - fromIntegral (payment.rates.feeRate * txSize inputs (payment.outputCount + 1))
+      RecipientsPay -> fromIntegral total - fromIntegral payment.amount
     hasChange = change > 0 && change >= fromIntegral payment.dust
     changeAmount = if hasChange then fromIntegral change else 0
     -- The fee of the whole transaction, deducted from the recipients. A fee
     -- above the amount leaves them nothing, which the builder rejects.
     deducted = case payment.payer of
       SenderPays -> 0
-      RecipientsPay -> payment.rates.feeRate * txSize (length coins) (payment.outputCount + fromEnum hasChange)
+      RecipientsPay -> payment.rates.feeRate * txSize inputs (payment.outputCount + fromEnum hasChange)
     paid = fromMaybe 0 $ payment.amount `safeSubtract` deducted
     feeAmount = total - paid - changeAmount
 

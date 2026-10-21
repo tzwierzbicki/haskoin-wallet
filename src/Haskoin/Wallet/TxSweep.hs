@@ -35,6 +35,7 @@ import qualified Data.Text as Text
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebClient
+import Haskoin.Wallet.CoinSelection (txSize)
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.FileIO (TxSignData (..))
@@ -116,7 +117,7 @@ buildSweepSignData net ctx gen found sweepTo feeByte dust = do
   when (null sweepTo) $ Left "No addresses to sweep to"
   when (feeByte == 0) $ Left "The fee rate must be at least 1 satoshi per byte"
   let total = sum $ (.value) <$> found.coins
-      fee = guessTxFee (fromIntegral feeByte) (length sweepTo) (length found.coins)
+      fee = fromIntegral feeByte * txSize (length found.coins) (length sweepTo)
   when (total < fee) $ Left "Could not find a sweep solution: fee is too large"
   let (each, remainder) = (total - fee) `quotRem` fromIntegral (length sweepTo)
   when (each < fromIntegral dust) $ Left "Outputs are smaller than the dust value"

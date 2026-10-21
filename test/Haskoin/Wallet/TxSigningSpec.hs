@@ -9,6 +9,7 @@ import Data.List (nub)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust, mapMaybe)
 import Haskoin
+import Haskoin.Wallet.CoinSelection (txSize)
 import Haskoin.Wallet.FileIO (TxSignData (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo (MyInputs (..), MyOutputs (..), TxInfo (..), TxInfoPending (..), TxType (..))
@@ -98,6 +99,7 @@ analysisSpec ctx =
       info.txInfoHash `shouldBe` Just "e66b790c73d4e72fe13a07e247e4439bdea210cac2f947040e901f1e0ce59ac2"
       -- The signature of this transaction is 72 bytes long, which the estimate assumes
       info.txInfoSize `shouldBe` 226
+      info.txInfoSize `shouldBe` fromIntegral (txSize 1 2)
       info.txInfoFeeByte `shouldBe` 44247
       info.txInfoPending `shouldBe` Just (TxInfoPending nosigHash True False)
     it "reports the change too small for an output that the fee includes" $ do
@@ -172,10 +174,16 @@ propertiesSpec ctx =
         case signWalletTx btc ctx tsd testAccountKey of
           Left err -> counterexample ("hw refused to sign: " <> err) False
           Right (signed, info) ->
-            verifySignedTx btc ctx signed === Right ()
-              .&&. info.txInfoFee === expected.expectedFee
-              .&&. info.txInfoAmount === expected.expectedAmount
-              .&&. info.txInfoType === expected.expectedType
+            let inputs = length signed.txSignDataTx.inputs
+                estimated = fromIntegral $ txSize inputs (length signed.txSignDataTx.outputs)
+             in verifySignedTx btc ctx signed === Right ()
+                  .&&. info.txInfoFee === expected.expectedFee
+                  .&&. info.txInfoAmount === expected.expectedAmount
+                  .&&. info.txInfoType === expected.expectedType
+                  -- The real size: at most the estimate, and at most a few
+                  -- bytes per signature below it
+                  .&&. counterexample ("size " <> show info.txInfoSize <> " for an estimate of " <> show estimated)
+                    (info.txInfoSize <= estimated && info.txInfoSize + 3 * fromIntegral inputs >= estimated)
 
 -- | What the analysis must report for a generated transaction, computed from
 -- the generated amounts

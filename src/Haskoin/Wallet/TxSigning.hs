@@ -40,6 +40,7 @@ import qualified Data.Text as Text
 import Data.Word (Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.CoinSelection (txSize)
 import Haskoin.Wallet.FileIO (TxSignData (..))
 import Haskoin.Wallet.TxInfo
   ( MyInputs (..),
@@ -265,7 +266,7 @@ txInfo feeRate analysis tx signed =
     size
       | signed = fromIntegral $ BS.length $ S.encode tx
       | otherwise = estimatedSize
-    estimatedSize = fromIntegral $ guessTxSize (length tx.inputs) [] (length tx.outputs) 0
+    estimatedSize = fromIntegral $ txSize (length tx.inputs) (length tx.outputs)
     -- What the fee pays beyond the requested rate on the size the builder
     -- estimated, which signing does not change: the change that was not
     -- worth an output
