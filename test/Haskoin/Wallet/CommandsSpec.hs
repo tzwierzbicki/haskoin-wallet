@@ -47,8 +47,7 @@ identityTests net ctx =
         [ MarshalJsonBox ((btc,) <$> arbitraryJsonCoin net),
           MarshalJsonBox ((ctx,) <$> arbitraryPubKeyDoc ctx),
           MarshalJsonBox (((btc, ctx),) <$> arbitraryTxInfo btc ctx),
-          MarshalJsonBox ((ctx,) <$> arbitraryResponse btc ctx),
-          MarshalJsonBox ((ctx,) <$> arbitraryAccountBackup net ctx)
+          MarshalJsonBox ((ctx,) <$> arbitraryResponse btc ctx)
         ]
     }
 

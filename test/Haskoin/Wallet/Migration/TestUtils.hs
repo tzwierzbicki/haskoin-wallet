@@ -13,7 +13,8 @@
 module Haskoin.Wallet.Migration.TestUtils where
 
 import Conduit (runConduit, sinkList, (.|))
-import Control.Monad (void)
+import Control.Exception (finally)
+import Control.Monad (void, when)
 import Control.Monad.IO.Class (liftIO)
 import Data.IORef (modifyIORef, newIORef, readIORef)
 import Data.List (sort)
@@ -24,11 +25,24 @@ import Database.Persist.Sqlite (runSqlite)
 import Haskoin (Ctx)
 import Haskoin.Wallet.Database (DB, migrateAll)
 import Haskoin.Wallet.Migration (Hooks (..), latestDatabaseVersion, migrateDBTo)
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getTemporaryDirectory, removeDirectoryRecursive)
+import System.FilePath ((</>))
 import Test.Hspec
 
 -- | Run an action on a new in-memory database, without any table
 inMemory :: DB IO a -> IO a
 inMemory = runSqlite ":memory:"
+
+-- | Run a test in a fresh directory under the temporary directory, removed
+-- afterwards, for the tests that need database files
+inScratchDirectory :: (FilePath -> IO a) -> IO a
+inScratchDirectory test = do
+  base <- getTemporaryDirectory
+  let dir = base </> "hw-database-test"
+  exists <- doesDirectoryExist dir
+  when exists $ removeDirectoryRecursive dir
+  createDirectoryIfMissing True dir
+  test dir `finally` removeDirectoryRecursive dir
 
 -- | Create the tables of a schema: the current one ('migrateAll') or an old
 -- one

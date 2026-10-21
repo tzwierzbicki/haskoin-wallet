@@ -21,7 +21,7 @@ import Data.Time.Format
 import Data.Word
 import Haskoin
 import Haskoin.Wallet.Amounts
-import Haskoin.Wallet.Backup
+import Haskoin.Wallet.Sync
 import Haskoin.Wallet.Commands
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.TxInfo
@@ -544,14 +544,6 @@ prettyPrinter unit =
               nest 2 $ keyPrinter 12 "Coin updates" <> formatValue (show c)
             ]
       renderIO $ vcat $ intercalate [text " "] (f <$> xs)
-    ResponseRestore as -> do
-      let f (acc, t, c) =
-            [ accountPrinter unit acc,
-              formatTitle "Restore Results:",
-              nest 2 $ keyPrinter 12 "Tx updates" <> formatValue (show t),
-              nest 2 $ keyPrinter 12 "Coin updates" <> formatValue (show c)
-            ]
-      renderIO $ vcat $ intercalate [text " "] (f <$> as)
     ResponseVersion v dbv ->
       renderIO $
         vcat

@@ -55,13 +55,13 @@ library
       Haskoin.Wallet.Main
       Haskoin.Wallet.MessageSigning
       Haskoin.Wallet.Migration
-      Haskoin.Wallet.Migration.Backup
       Haskoin.Wallet.Migration.V2
       Haskoin.Wallet.Migration.V3
       Haskoin.Wallet.Parser
       Haskoin.Wallet.PrettyPrinter
       Haskoin.Wallet.Schema.V2
       Haskoin.Wallet.Schema.V3
+      Haskoin.Wallet.Sync
       Haskoin.Wallet.TxBuilding
       Haskoin.Wallet.TxInfo
       Haskoin.Wallet.TxSigning
@@ -168,6 +168,7 @@ test-suite spec
   other-modules:
       Haskoin.Wallet.AmountsSpec
       Haskoin.Wallet.Arbitrary
+      Haskoin.Wallet.BackupSpec
       Haskoin.Wallet.CoinSelectionSpec
       Haskoin.Wallet.CommandsSpec
       Haskoin.Wallet.EntropySpec

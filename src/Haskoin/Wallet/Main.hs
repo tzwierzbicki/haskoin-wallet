@@ -9,7 +9,7 @@ import Haskoin.Wallet.Commands (Response, commandResponse)
 import Haskoin.Wallet.Config (Config, databaseFile, initConfig)
 import Haskoin.Wallet.Database (runDB)
 import Haskoin.Wallet.Migration (Hooks (..), migrateDB)
-import Haskoin.Wallet.Migration.Backup (backupDatabase, backupDirectory)
+import Haskoin.Wallet.Backup (backupDatabase, migrationBackupDirectory)
 import Haskoin.Wallet.Parser (parserMain)
 import Haskoin.Wallet.PrettyPrinter (prettyPrinter)
 import Haskoin.Wallet.Util (encodeJsonPretty)
@@ -41,7 +41,7 @@ migrationHooks cfg =
     { announce = hPutStrLn stderr,
       backup = \version -> do
         database <- databaseFile cfg
-        directory <- backupDirectory
+        directory <- migrationBackupDirectory
         copy <- backupDatabase database directory version
         hPutStrLn stderr $ "The database at version " <> show version <> " was backed up to " <> copy
     }

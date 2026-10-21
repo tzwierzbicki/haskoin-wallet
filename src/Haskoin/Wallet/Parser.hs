@@ -125,9 +125,7 @@ data Command
       { commandMaybeAcc :: !(Maybe Text)
       }
   | CommandBackup
-      {commandFilePath :: !FilePath}
-  | CommandRestore
-      {commandFilePath :: !FilePath}
+      {commandBackupFile :: !(Maybe FilePath)}
   | CommandVersion
   | CommandPrepareSweep
       { commandMaybeAcc :: !(Maybe Text),
@@ -250,9 +248,8 @@ commandParser =
           ],
       hsubparser $
         mconcat
-          [ commandGroup "Backup/restore commands",
+          [ commandGroup "Backup commands",
             command "backup" backupParser,
-            command "restore" restoreParser,
             command "discoveracc" discoverAccParser,
             hidden
           ],
@@ -982,36 +979,25 @@ old wallet, it is important to discover it first before generating addresses
 and receiving payments. Otherwise some addresses might be reused.
 |]
 
-{- Backup & Restore Parsers -}
+{- Backup Parser -}
 
 backupParser :: ParserInfo Command
 backupParser = do
   let cmd =
         CommandBackup
-          <$> fileArgument "File where the backup will be saved"
+          <$> optional (fileArgument "File to copy the database to (default: a file in ~/.hw/backups)")
   info cmd $
-    progDesc "Create a wallet backup file"
+    progDesc "Copy the wallet database to a backup file"
       <> footer
         [r|
-This command will backup your wallet accounts, your address labels and the
-internal free addresses to an external file. This is enough to restore your
-entire wallet state with some network help. It will, however, not backup any
-pending transactions you might have so you should save those separately.
-|]
+Without a file, the copy goes to ~/.hw/backups, named after the format version
+of the database and the time of the copy. The copy is complete: accounts,
+addresses, labels, coins, transactions and pending transactions.
 
-restoreParser :: ParserInfo Command
-restoreParser = do
-  let cmd =
-        CommandRestore
-          <$> fileArgument "Path to the backup file"
-  info cmd $
-    progDesc "Restore a wallet backup file"
-      <> footer
-        [r|
-Restore a backup file containing your accounts, address labels and internal
-free addresses. This command will connect to the network to download everything
-else that is not included in the backup file like your transactions and coins.
-Pending transactions are not included in the backup file.
+To restore a backup, replace ~/.hw/accounts.sqlite with the copy, or point
+"database-file" in ~/.hw/config.json to it, then run any command. A copy made
+by an older hw is migrated first, after being backed up again into
+~/.hw/migration-backups. A copy made by a newer hw is refused.
 |]
 
 {- Version Parser -}
