@@ -6,14 +6,16 @@ import qualified Data.ByteString.Char8 as C8
 import GHC.IO.Encoding (setFileSystemEncoding, setLocaleEncoding, utf8)
 import Haskoin (Ctx, MarshalJSON (..), withContext)
 import Haskoin.Wallet.Commands (Response, commandResponse)
-import Haskoin.Wallet.Config (initConfig)
+import Haskoin.Wallet.Config (Config, databaseFile, initConfig)
 import Haskoin.Wallet.Database (runDB)
-import Haskoin.Wallet.Migration (migrateDB)
+import Haskoin.Wallet.Migration (Hooks (..), migrateDB)
+import Haskoin.Wallet.Migration.Backup (backupDatabase, backupDirectory)
 import Haskoin.Wallet.Parser (parserMain)
 import Haskoin.Wallet.PrettyPrinter (prettyPrinter)
 import Haskoin.Wallet.Util (encodeJsonPretty)
 import System.Environment (getArgs)
 import System.Exit (die)
+import System.IO (hPutStrLn, stderr)
 
 clientMain :: IO ()
 clientMain = do
@@ -25,11 +27,24 @@ clientMain = do
     (cmd, unit, json) <- parserMain
     -- Only a command touches the database: help and usage errors leave it
     -- as it is, and a database newer than this hw still gets help
-    either die return =<< runDB cfg (migrateDB ctx)
+    either die return =<< runDB cfg (migrateDB (migrationHooks cfg) ctx)
     res <- commandResponse ctx cfg unit cmd
     if json
       then jsonPrinter ctx res
       else prettyPrinter unit res
+
+-- | How the migration talks to the user, on stderr, and backs up the
+-- database before it changes anything
+migrationHooks :: Config -> Hooks
+migrationHooks cfg =
+  Hooks
+    { announce = hPutStrLn stderr,
+      backup = \version -> do
+        database <- databaseFile cfg
+        directory <- backupDirectory
+        copy <- backupDatabase database directory version
+        hPutStrLn stderr $ "The database at version " <> show version <> " was backed up to " <> copy
+    }
 
 -- | Use UTF-8 for the command line arguments, the standard streams and file
 -- paths, whatever the locale of the process is.
