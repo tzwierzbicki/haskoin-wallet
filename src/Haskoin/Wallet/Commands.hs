@@ -27,7 +27,7 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebClient
 import Haskoin.Wallet.Amounts
-import Haskoin.Wallet.Backup
+import Haskoin.Wallet.Backup (backupDatabase, backupDirectory, copyDatabase)
 import Haskoin.Wallet.CoinSelection (CoinSelection, FeePayer)
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
@@ -35,8 +35,9 @@ import Haskoin.Wallet.Entropy
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Keys
 import Haskoin.Wallet.MessageSigning
-import Haskoin.Wallet.Migration (databaseVersion)
+import Haskoin.Wallet.Migration (databaseVersion, latestDatabaseVersion)
 import Haskoin.Wallet.Parser
+import Haskoin.Wallet.Sync
 import Haskoin.Wallet.TxBuilding
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSigning (parseTxSignData, signWalletTx, verifySignedTx)
@@ -103,9 +104,6 @@ data Response
         responseAddr :: !Text
       }
   | ResponseSync {responseSync :: [SyncRes]}
-  | ResponseRestore
-      { responseRestore :: ![(DBAccount, Natural, Natural)]
-      }
   | ResponseVersion
       { responseVersion :: !Text,
         responseDBVersion :: !Text
@@ -211,17 +209,6 @@ instance MarshalJSON Ctx Response where
           [ "type" .= Json.String "sync",
             "syncres" .= (f <$> xs)
           ]
-      ResponseRestore xs ->
-        let f (acc, t, c) =
-              object
-                [ "account" .= acc,
-                  "txupdates" .= t,
-                  "coinupdates" .= c
-                ]
-         in object
-              [ "type" .= Json.String "restore",
-                "restore" .= (f <$> xs)
-              ]
       ResponseVersion v dbv ->
         object
           [ "type" .= Json.String "version",
@@ -298,14 +285,6 @@ instance MarshalJSON Ctx Response where
               <*> x .: "txupdates"
               <*> x .: "coinupdates"
           return $ ResponseSync res
-        "restore" -> do
-          let f =
-                Json.withObject "account" $ \o' ->
-                  (,,)
-                    <$> o' .: "account"
-                    <*> o' .: "txupdates"
-                    <*> o' .: "coinupdates"
-          ResponseRestore <$> (mapM f =<< o .: "restore")
         "version" ->
           ResponseVersion
             <$> o .: "version"
@@ -364,9 +343,8 @@ commandResponse ctx cfg unit cmd =
     CommandReviewTx nameM file -> cmdReviewTx ctx cfg nameM file
     CommandExportTx h f -> cmdExportTx cfg h f
     CommandImportTx nameM file -> cmdImportTx ctx cfg nameM file
-    -- Backup and Restore
-    CommandBackup f -> cmdBackup ctx cfg f
-    CommandRestore f -> cmdRestore ctx cfg f
+    -- Backup
+    CommandBackup fileM -> cmdBackup cfg fileM
     CommandDiscoverAcc nameM -> cmdDiscoverAccount ctx cfg nameM
     -- Utilities
     CommandVersion -> cmdVersion cfg
@@ -747,20 +725,23 @@ cmdDiscoverAccount ctx cfg nameM = do
     res <- sync ctx cfg net accId True
     return $ ResponseSync [res]
 
-cmdBackup :: Ctx -> Config -> FilePath -> IO Response
-cmdBackup ctx cfg fp =
-  runDBResponse cfg $ do
-    backup <- createBackup ctx
-    checkPathFree fp
-    liftIO $ writeJsonFile fp $ marshalValue ctx backup
-    return $ ResponseFile fp
-
-cmdRestore :: Ctx -> Config -> FilePath -> IO Response
-cmdRestore ctx cfg fp =
-  runDBResponse cfg $ do
-    backup <- liftEitherIO $ readMarshalFile ctx fp
-    let f (SyncRes a _ _ t c) = (a, t, c)
-    ResponseRestore . (f <$>) <$> restoreBackup ctx cfg backup
+-- | Copy the database to the given file, which must not exist, or into the
+-- backups directory of hw under a name carrying the format version and the
+-- time. The database is at the latest format version, since every command
+-- migrates it first.
+cmdBackup :: Config -> Maybe FilePath -> IO Response
+cmdBackup cfg fileM =
+  catchResponseError $ do
+    database <- liftIO $ databaseFile cfg
+    copy <- case fileM of
+      Just file -> do
+        checkPathFree file
+        liftIO $ copyDatabase database file
+        return file
+      Nothing -> liftIO $ do
+        directory <- backupDirectory
+        backupDatabase database directory latestDatabaseVersion
+    return $ ResponseFile copy
 
 cmdVersion :: Config -> IO Response
 cmdVersion cfg =

@@ -13,7 +13,7 @@ import Data.Word
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Util.Arbitrary
-import Haskoin.Wallet.Backup
+import Haskoin.Wallet.Sync
 import Haskoin.Wallet.Commands
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
@@ -208,21 +208,6 @@ arbitraryTxInfoPending =
     <*> arbitrary
     <*> arbitrary
 
-arbitraryAccountBackup :: Network -> Ctx -> Gen AccountBackup
-arbitraryAccountBackup net ctx =
-  AccountBackup
-    <$> arbitraryText
-    <*> arbitraryFingerprint
-    <*> arbitraryXPubKey ctx
-    <*> return net
-    <*> arbitraryNatural
-    <*> arbitraryNatural
-    <*> ( Map.fromList
-            <$> resize 20 (listOf $ (,) <$> arbitraryAddress net <*> arbitraryText)
-        )
-    <*> resize 20 (listOf $ arbitraryAddress net)
-    <*> arbitraryUTCTime
-
 arbitrarySyncRes :: Network -> Ctx -> Gen SyncRes
 arbitrarySyncRes net ctx =
   SyncRes
@@ -264,15 +249,6 @@ arbitraryResponse net ctx =
         <*> resize 20 (listOf $ arbitraryJsonCoin net),
       ResponseSync
         <$> (resize 10 $ listOf $ arbitrarySyncRes net ctx),
-      ResponseRestore
-        <$> resize
-          20
-          ( listOf $
-              (,,)
-                <$> arbitraryDBAccount net ctx
-                <*> arbitraryNatural
-                <*> arbitraryNatural
-          ),
       ResponseVersion
         <$> arbitraryText
         <*> arbitraryText,
