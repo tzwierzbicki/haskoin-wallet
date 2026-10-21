@@ -55,10 +55,13 @@ library
       Haskoin.Wallet.Main
       Haskoin.Wallet.MessageSigning
       Haskoin.Wallet.Migration
+      Haskoin.Wallet.Migration.Backup
       Haskoin.Wallet.Migration.V2
       Haskoin.Wallet.Migration.V3
       Haskoin.Wallet.Parser
       Haskoin.Wallet.PrettyPrinter
+      Haskoin.Wallet.Schema.V2
+      Haskoin.Wallet.Schema.V3
       Haskoin.Wallet.TxBuilding
       Haskoin.Wallet.TxInfo
       Haskoin.Wallet.TxSigning
@@ -85,6 +88,7 @@ library
     , directory >=1.3.6.0
     , entropy >=0.4.1.6
     , esqueleto >=3.5.10.1
+    , filepath >=1.4
     , haskeline >=0.7.5.0
     , haskoin-core >=1.0.4
     , haskoin-store-data >=1.2.2
@@ -132,6 +136,7 @@ executable hw
     , directory >=1.3.6.0
     , entropy >=0.4.1.6
     , esqueleto >=3.5.10.1
+    , filepath >=1.4
     , haskeline >=0.7.5.0
     , haskoin-core >=1.0.4
     , haskoin-store-data >=1.2.2
@@ -169,6 +174,11 @@ test-suite spec
       Haskoin.Wallet.KeysSpec
       Haskoin.Wallet.MainSpec
       Haskoin.Wallet.MessageSigningSpec
+      Haskoin.Wallet.Migration.TestUtils
+      Haskoin.Wallet.Migration.V2Spec
+      Haskoin.Wallet.Migration.V3Spec
+      Haskoin.Wallet.MigrationSpec
+      Haskoin.Wallet.Schema.V1
       Haskoin.Wallet.TestUtils
       Haskoin.Wallet.TxBuildingSpec
       Haskoin.Wallet.TxSigningSpec
@@ -196,6 +206,7 @@ test-suite spec
     , directory >=1.3.6.0
     , entropy >=0.4.1.6
     , esqueleto >=3.5.10.1
+    , filepath >=1.4
     , haskeline >=0.7.5.0
     , haskoin-core >=1.0.4
     , haskoin-store-data >=1.2.2

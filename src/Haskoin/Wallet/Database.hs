@@ -9,17 +9,23 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
-module Haskoin.Wallet.Database where
+-- | The wallet database. Its tables are those of the latest format version,
+-- defined in "Haskoin.Wallet.Schema.V3" and exported again from here: a
+-- version that changes the tables gets a new schema module, and this module
+-- moves to it.
+module Haskoin.Wallet.Database
+  ( module Haskoin.Wallet.Database,
+    module Haskoin.Wallet.Schema.V3,
+  )
+where
 
 import Conduit (MonadUnliftIO, ResourceT)
 import Control.Arrow (Arrow (second))
@@ -31,7 +37,6 @@ import Control.Monad.Reader (MonadTrans (lift), ReaderT)
 import Control.Monad.Trans.Maybe
 import Data.Aeson
 import qualified Data.Aeson as Json
-import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Either (fromRight)
 import Data.List (find, nub, partition)
@@ -41,133 +46,21 @@ import Data.Maybe (catMaybes, fromJust, fromMaybe, mapMaybe)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
-import Data.Time (UTCTime, getCurrentTime)
+import Data.Time (getCurrentTime)
 import Data.Word (Word64)
 import Database.Esqueleto.Legacy as E
 import qualified Database.Persist as P
 import Database.Persist.Sqlite (runSqlite)
-import Database.Persist.TH
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.FileIO
+import Haskoin.Wallet.Schema.V3
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSigning (parseTxSignData)
 import Haskoin.Wallet.Util (Page (Page), textToAddrE)
 import Numeric.Natural (Natural)
 
-{- SQL Table Definitions -}
-
-share
-  [mkPersist sqlSettings, mkMigrate "migrateAll"]
-  [persistLowerCase|
-
-DBVersion
-  version Int
-  Primary version
-  deriving Show
-
-DBWallet
-  fingerprint Text
-  Primary fingerprint
-  deriving Show
-
-DBAccount
-  name Text
-  wallet DBWalletId
-  index Int
-  network Text
-  derivation Text
-  external Int
-  internal Int
-  xPubKey Text
-  balanceConfirmed Word64
-  balanceUnconfirmed Word64
-  balanceCoins Word64
-  created UTCTime default=CURRENT_TIME
-  Primary wallet derivation
-  UniqueName name
-  UniqueXPubKey xPubKey
-  UniqueNetworkId wallet network index
-  deriving Show
-  deriving Eq
-
-DBAddress
-  index Int
-  accountWallet DBWalletId
-  accountDerivation Text
-  derivation Text
-  address Text
-  label Text
-  balanceConfirmed Word64
-  balanceUnconfirmed Word64
-  balanceCoins Word64
-  balanceTxs Word64
-  balanceReceived Word64
-  internal Bool
-  free Bool
-  created UTCTime default=CURRENT_TIME
-  Primary accountWallet accountDerivation derivation
-  UniqueAddress address
-  Foreign DBAccount fk_wallet_derivation accountWallet accountDerivation
-  deriving Show
-  deriving Eq
-
-DBTxInfo
-  accountWallet DBWalletId
-  accountDerivation Text
-  txid Text
-  blockRef ByteString
-  confirmed Bool
-  blob ByteString
-  created UTCTime default=CURRENT_TIME
-  Primary accountWallet accountDerivation txid
-  Foreign DBAccount fk_wallet_derivation accountWallet accountDerivation
-  deriving Show
-  deriving Eq
-
-DBCoin
-  accountWallet DBWalletId
-  accountDerivation Text
-  outpoint Text
-  address Text
-  value Word64
-  blockRef ByteString
-  blob ByteString
-  confirmed Bool
-  locked Bool
-  created UTCTime default=CURRENT_TIME
-  Primary outpoint
-  Foreign DBAccount fk_wallet_derivation accountWallet accountDerivation
-  deriving Show
-  deriving Eq
-
-DBRawTx
-  hash Text
-  blob ByteString
-  Primary hash
-  deriving Show
-  deriving Eq
-
-DBPendingTx
-  accountWallet DBWalletId
-  accountDerivation Text
-  nosigHash Text
-  blob ByteString
-  online Bool
-  created UTCTime default=CURRENT_TIME
-  Primary nosigHash
-  Foreign DBAccount fk_wallet_derivation accountWallet accountDerivation
-  deriving Show
-  deriving Eq
-
-DBBest
-  network Text
-  bestBlock Text
-  bestHeight Int
-  Primary network
-  deriving Show
-|]
 
 type DB m = ReaderT SqlBackend (NoLoggingT (ResourceT m))
 
