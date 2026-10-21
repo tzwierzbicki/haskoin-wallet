@@ -22,8 +22,10 @@ clientMain = do
   forM_ argumentsProblem die
   withContext $ \ctx -> do
     cfg <- initConfig
-    runDB cfg $ migrateDB ctx cfg
     (cmd, unit, json) <- parserMain
+    -- Only a command touches the database: help and usage errors leave it
+    -- as it is, and a database newer than this hw still gets help
+    either die return =<< runDB cfg (migrateDB ctx)
     res <- commandResponse ctx cfg unit cmd
     if json
       then jsonPrinter ctx res

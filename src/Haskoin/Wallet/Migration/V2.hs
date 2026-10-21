@@ -10,7 +10,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
-module Haskoin.Wallet.Migration.V0_9_0 where
+module Haskoin.Wallet.Migration.V2 where
 
 import Conduit (MonadUnliftIO)
 import Control.Monad
@@ -28,15 +28,9 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.TxInfo
 import Numeric.Natural (Natural)
-import Haskoin.Wallet.Migration.SemVersion
 
-{- Migration from 0.8 to 0.9 -}
-
-migrateFrom :: SemVersion
-migrateFrom = VerMinor 0 8
-
-migrateTo :: SemVersion
-migrateTo = VerMinor 0 9
+{- The step to the format version 2 (hw 0.9) from version 1 (hw 0.8): the
+   transaction summaries gained labels, and the version table appeared -}
 
 data OldTxInfo = OldTxInfo
   { oldTxInfoHash :: !TxHash,
@@ -193,7 +187,6 @@ migrateDB ctx = do
       let newTxInfo = migrateTxInfo oldTxInfo
           newBlob = BS.toStrict $ marshalJSON (net, ctx) newTxInfo
       lift $ P.update tKey [DBTxInfoBlob P.=. newBlob]
-  -- This will create the missing version table
-  lift $ do
-    globalMigration
-    setVersion migrateTo
+  -- Create the tables missing from the old format, the version table among
+  -- them; the caller stamps the version
+  lift globalMigration
