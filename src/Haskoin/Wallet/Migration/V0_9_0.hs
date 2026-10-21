@@ -167,6 +167,7 @@ migrateTxInfo OldTxInfo {..} =
       txInfoSize = oldTxInfoSize,
       txInfoFee = oldTxInfoFee,
       txInfoFeeByte = oldTxInfoFeeByte,
+      txInfoChangeInFee = Nothing,
       txInfoBlockRef = oldTxInfoBlockRef,
       txInfoConfirmations = oldTxInfoConfirmations,
       txInfoPending = Nothing

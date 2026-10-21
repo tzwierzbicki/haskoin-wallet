@@ -1283,14 +1283,14 @@ importPendingTx ::
   DBAccountId ->
   TxSignData ->
   ExceptT String (DB m) TxHash
-importPendingTx net ctx accId tsd@(TxSignData tx _ _ _ signed) = do
+importPendingTx net ctx accId tsd@(TxSignData tx _ _ _ _ signed) = do
   acc <- getAccountById accId
   let pub = accountXPubKey ctx acc
       nosigHash = nosigTxHash $ txSignDataTx tsd
       bs = BS.toStrict $ Json.encode tsd
   prevM <- lift $ getPendingTx nosigHash
   case prevM of
-    Just (_, TxSignData prevTx _ _ _ prevSigned, pending) -> do
+    Just (_, TxSignData prevTx _ _ _ _ prevSigned, pending) -> do
       when (pendingOnline pending) $
         throwError "The transaction is already online"
       when (prevSigned && not signed) $

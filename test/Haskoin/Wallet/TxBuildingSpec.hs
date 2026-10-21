@@ -227,13 +227,18 @@ feePayerSpec ctx =
       built <- expectRight $ recipientsPayFor ctx [400000] [(otherAddr 0, 350000)]
       spends ctx built `shouldBe` ([400000], [(internalAddr 0, 50000), (otherAddr 0, 347740)])
       feePaid built `shouldBe` 2260
-    it "splits the fee between the recipients in equal parts rounded up" $ do
-      -- Fee: 10 + 148 + 3 * 34 = 260 bytes * 10 = 2600, 867 each (2600 / 3 rounded up)
-      -- Paid: 150000 - 867 = 149133, 120000 - 867 = 119133, 80000 - 867 = 79133
-      -- The transaction pays 3 * 867 = 2601: the extra satoshi goes to the fee
+    it "splits the fee between the recipients in equal parts" $ do
+      -- Fee: 10 + 148 + 2 * 34 = 226 bytes * 10 = 2260, 1130 each
+      -- Paid: 200000 - 1130 = 198870, 150000 - 1130 = 148870
+      built <- expectRight $ recipientsPayFor ctx [350000] [(otherAddr 0, 200000), (otherAddr 1, 150000)]
+      spends ctx built `shouldBe` ([350000], [(otherAddr 1, 148870), (otherAddr 0, 198870)])
+      feePaid built `shouldBe` 2260
+    it "makes the first recipient pay the remainder of the split" $ do
+      -- Fee: 10 + 148 + 3 * 34 = 260 bytes * 10 = 2600 = 3 * 866 + 2
+      -- Paid: 150000 - 866 - 2 = 149132, 120000 - 866 = 119134, 80000 - 866 = 79134
       built <- expectRight $ recipientsPayFor ctx [350000] [(otherAddr 0, 150000), (otherAddr 1, 120000), (otherAddr 2, 80000)]
-      spends ctx built `shouldBe` ([350000], [(otherAddr 2, 79133), (otherAddr 1, 119133), (otherAddr 0, 149133)])
-      feePaid built `shouldBe` 2601
+      spends ctx built `shouldBe` ([350000], [(otherAddr 2, 79134), (otherAddr 1, 119134), (otherAddr 0, 149132)])
+      feePaid built `shouldBe` 2600
     it "adds a dust change to the fee the recipient pays" $ do
       -- Change: 350300 - 350000 = 300, not above the dust of 546: no change output
       -- Fee: 1920 paid by the recipient (350000 - 1920 = 348080) and the 300 left over
@@ -405,6 +410,7 @@ databaseSpec ctx =
           txSignDataInputs tsd `shouldBe` [fund]
           txSignDataInputPaths tsd `shouldBe` [Deriv :/ 0 :/ 0]
           txSignDataOutputPaths tsd `shouldBe` [Deriv :/ 1 :/ 0]
+          txSignDataFeeRate tsd `shouldBe` Just 10
           txSignDataSigned tsd `shouldBe` False
     it "fails without recipients" $
       runDBMemoryE $ do

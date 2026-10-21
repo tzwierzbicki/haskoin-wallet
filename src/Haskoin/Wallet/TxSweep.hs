@@ -123,7 +123,7 @@ buildSweepSignData net ctx gen found sweepTo feeByte dust = do
   outputs <- mapM payTo $ zip destinations ((each + remainder) : repeat each)
   let tx = Tx 1 [TxIn c.outpoint BS.empty maxBound | c <- shuffledCoins] outputs [] 0
       inputPaths = pathsOf $ mapMaybe (.address) found.coins
-  return $ TxSignData tx found.transactions inputPaths (pathsOf sweepTo) False
+  return $ TxSignData tx found.transactions inputPaths (pathsOf sweepTo) (Just feeByte) False
   where
     (shuffledCoins, destinations) =
       evalState ((,) <$> randomShuffle found.coins <*> randomShuffle sweepTo) gen

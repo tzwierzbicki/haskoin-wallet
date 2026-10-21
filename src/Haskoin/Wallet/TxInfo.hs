@@ -52,6 +52,9 @@ data TxInfo = TxInfo
     txInfoSize :: !Natural,
     txInfoFee :: !Natural,
     txInfoFeeByte :: !Natural,
+    -- | What the fee includes beyond the requested fee rate: change that was
+    -- not worth an output. Nothing when the requested rate is unknown.
+    txInfoChangeInFee :: !(Maybe Natural),
     txInfoBlockRef :: !Store.BlockRef,
     txInfoConfirmations :: !Natural,
     txInfoPending :: !(Maybe TxInfoPending)
@@ -164,6 +167,7 @@ instance MarshalJSON (Network, Ctx) TxInfo where
         "size" .= txInfoSize tx,
         "fee" .= txInfoFee tx,
         "feebyte" .= txInfoFeeByte tx,
+        "changeinfee" .= txInfoChangeInFee tx,
         "block" .= txInfoBlockRef tx,
         "confirmations" .= txInfoConfirmations tx,
         "pending" .= txInfoPending tx
@@ -183,6 +187,7 @@ instance MarshalJSON (Network, Ctx) TxInfo where
         <*> o .: "size"
         <*> o .: "fee"
         <*> o .: "feebyte"
+        <*> o .:? "changeinfee"
         <*> o .: "block"
         <*> o .: "confirmations"
         <*> o .: "pending"
@@ -231,6 +236,7 @@ storeToTxInfo walletAddrs currHeight sTx =
       txInfoSize = size,
       txInfoFee = fee,
       txInfoFeeByte = feeByte,
+      txInfoChangeInFee = Nothing,
       txInfoBlockRef = sTx.block,
       txInfoConfirmations = fromMaybe 0 confM,
       txInfoPending = Nothing

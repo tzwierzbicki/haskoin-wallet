@@ -352,6 +352,7 @@ emptyTxInfo =
     0
     0
     0
+    Nothing 
     (Store.MemRef 0)
     0
     Nothing
@@ -590,6 +591,7 @@ pendingTxsSpec ctx cfg =
               txSignDataInputs = [fundTx1],
               txSignDataInputPaths = [Deriv :/ 0 :/ 0],
               txSignDataOutputPaths = [Deriv :/ 1 :/ 1],
+              txSignDataFeeRate = Just 1,
               txSignDataSigned = False
             }
       -- Import the pending transaction
@@ -628,6 +630,7 @@ pendingTxsSpec ctx cfg =
               txSignDataInputs = [fundTx2],
               txSignDataInputPaths = [Deriv :/ 1 :/ 0],
               txSignDataOutputPaths = [Deriv :/ 1 :/ 2],
+              txSignDataFeeRate = Just 1,
               txSignDataSigned = False
             }
       -- Import the second transaction
@@ -674,6 +677,7 @@ pendingTxsSpec ctx cfg =
               txSignDataInputs = [fundTx1],
               txSignDataInputPaths = [Deriv :/ 0 :/ 0],
               txSignDataOutputPaths = [],
+              txSignDataFeeRate = Just 1,
               txSignDataSigned = False
             }
       -- One output: nothing to shuffle, so the hash is fixed
@@ -749,6 +753,7 @@ pendingTxsSpec ctx cfg =
                 txSignDataInputs = [fundTx3, fundTx1],
                 txSignDataInputPaths = [Deriv :/ 0 :/ 0],
                 txSignDataOutputPaths = [],
+                txSignDataFeeRate = Nothing,
                 txSignDataSigned = False
               }
         shouldBeLeft' "A coin referenced by the transaction does not exist" $
@@ -762,6 +767,7 @@ pendingTxsSpec ctx cfg =
                 txSignDataInputs = [fundTx3, fundTx1],
                 txSignDataInputPaths = [Deriv :/ 0 :/ 8],
                 txSignDataOutputPaths = [],
+                txSignDataFeeRate = Nothing,
                 txSignDataSigned = False
               }
       (_, dbCoins3) <- refreshCoins btc accId (externalAddrs <> internalAddrs) [coin1, coin3]
@@ -782,6 +788,7 @@ pendingTxsSpec ctx cfg =
                 txSignDataInputs = [fundTx3],
                 txSignDataInputPaths = [Deriv :/ 0 :/ 8],
                 txSignDataOutputPaths = [Deriv :/ 1 :/ 1],
+                txSignDataFeeRate = Nothing,
                 txSignDataSigned = False
               }
       -- The transaction is not being rolled back so we roll it back manually
@@ -806,5 +813,6 @@ pendingTxsSpec ctx cfg =
                 txSignDataInputs = [fundTx3],
                 txSignDataInputPaths = [Deriv :/ 0 :/ 8],
                 txSignDataOutputPaths = [Deriv :/ 1 :/ 2],
+                txSignDataFeeRate = Nothing,
                 txSignDataSigned = False
               }

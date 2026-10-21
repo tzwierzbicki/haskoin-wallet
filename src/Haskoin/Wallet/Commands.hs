@@ -692,7 +692,7 @@ cmdSendTx ctx cfg nosigH =
   runDBResponse cfg $ do
     tsdM <- lift $ getPendingTx nosigH
     case tsdM of
-      Just (accId, tsd@(TxSignData signedTx _ _ _ signed), _) -> do
+      Just (accId, tsd@(TxSignData signedTx _ _ _ _ signed), _) -> do
         acc <- getAccountById accId
         let net = accountNetwork acc
             pub = accountXPubKey ctx acc
