@@ -51,7 +51,6 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.FileIO
-import Haskoin.Wallet.Migration.SemVersion
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSigning (parseTxSignData)
 import Haskoin.Wallet.Util (Page (Page), textToAddrE)
@@ -64,7 +63,7 @@ share
   [persistLowerCase|
 
 DBVersion
-  version Text
+  version Int
   Primary version
   deriving Show
 
@@ -181,20 +180,6 @@ globalMigration :: (MonadUnliftIO m) => DB m ()
 globalMigration = void $ runMigrationQuiet migrateAll
 
 {- Meta -}
-
--- Database versions use major.minor only. Patch versions are ignored.
-setVersion :: (MonadUnliftIO m) => SemVersion -> DB m ()
-setVersion semVer = do
-  verM <- selectOne $ from return
-  let verTxt = cs $ verString $ toMinor semVer
-  case verM of
-    Nothing -> P.insert_ $ DBVersion verTxt
-    Just (Entity k _) -> P.update k [DBVersionVersion P.=. verTxt]
-
-getVersion :: (MonadUnliftIO m) => DB m SemVersion
-getVersion = do
-  resM <- selectOne . from $ \v -> return $ v ^. DBVersionVersion
-  return $ parseSemVersion . cs . unValue $ fromJust resM
 
 updateBest ::
   (MonadUnliftIO m) => Network -> BlockHash -> BlockHeight -> DB m ()

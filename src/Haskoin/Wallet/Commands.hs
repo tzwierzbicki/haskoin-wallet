@@ -20,6 +20,7 @@ import Data.Foldable (for_)
 import Data.Maybe (fromMaybe, isJust)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
+import Data.Version (showVersion)
 import qualified Data.Text as Text
 import Database.Persist.Sqlite (transactionUndo)
 import Haskoin
@@ -34,7 +35,7 @@ import Haskoin.Wallet.Entropy
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Keys
 import Haskoin.Wallet.MessageSigning
-import Haskoin.Wallet.Migration.SemVersion
+import Haskoin.Wallet.Migration (databaseVersion)
 import Haskoin.Wallet.Parser
 import Haskoin.Wallet.TxBuilding
 import Haskoin.Wallet.TxInfo
@@ -42,6 +43,7 @@ import Haskoin.Wallet.TxSigning (parseTxSignData, signWalletTx, verifySignedTx)
 import Haskoin.Wallet.TxSweep
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
+import qualified Paths_haskoin_wallet as Paths
 import qualified System.Console.Haskeline as Haskeline
 import qualified System.Directory as D
 import System.IO (hPutStrLn, stderr)
@@ -761,10 +763,10 @@ cmdRestore ctx cfg fp =
     ResponseRestore . (f <$>) <$> restoreBackup ctx cfg backup
 
 cmdVersion :: Config -> IO Response
-cmdVersion cfg = do
+cmdVersion cfg =
   runDBResponse cfg $ do
-    dbv <- lift getVersion
-    return $ ResponseVersion currentVersionStr (cs $ verString dbv)
+    dbVersion <- databaseVersion
+    return $ ResponseVersion (cs $ showVersion Paths.version) (maybe "none" (cs . show) dbVersion)
 
 prepareSweep ::
   Ctx ->
