@@ -26,6 +26,8 @@ import qualified Data.ByteString as BS
 import Data.Word (Word64)
 import Haskoin (ScriptOutput (..))
 
+{- Inputs -}
+
 -- | The size of a signed input: its bytes among the inputs, and the bytes
 -- of its witness with their item count, 0 for an input without a witness
 data InputSize = InputSize
@@ -72,6 +74,8 @@ p2pkhInputSize = 148
 uncompressedKeyInput :: InputSize
 uncompressedKeyInput = InputSize 180 0
 
+{- Outputs -}
+
 -- | The size of an output paying a script: 8 bytes of amount, the length
 -- of the script and the script
 outputSize :: BS.ByteString -> Word64
@@ -83,6 +87,8 @@ outputSize script = 8 + varIntSize scriptLength + fromIntegral scriptLength
 -- script in a 34-byte output
 p2pkhOutputSize :: Word64
 p2pkhOutputSize = 34
+
+{- Transactions -}
 
 -- | The size of a transaction with the given inputs and outputs: 4 bytes
 -- of version, the counts of inputs and outputs as variable-length

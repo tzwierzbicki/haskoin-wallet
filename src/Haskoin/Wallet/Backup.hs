@@ -19,6 +19,8 @@ import Haskoin.Wallet.Config (hwDataDirectory)
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeBaseName, (</>))
 
+{- The directories -}
+
 -- | Where the backup command puts its copies: the backups directory of hw
 backupDirectory :: IO FilePath
 backupDirectory = (</> "backups") <$> hwDataDirectory
@@ -27,6 +29,8 @@ backupDirectory = (</> "backups") <$> hwDataDirectory
 -- hw
 migrationBackupDirectory :: IO FilePath
 migrationBackupDirectory = (</> "migration-backups") <$> hwDataDirectory
+
+{- Copying the database -}
 
 -- | Copy the database, at the given format version, into a directory,
 -- created if missing, and return the copy, named after the database, the

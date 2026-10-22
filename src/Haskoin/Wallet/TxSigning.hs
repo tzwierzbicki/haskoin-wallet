@@ -53,6 +53,8 @@ import Haskoin.Wallet.TxSize (inputSize, outputSize, p2pkhInput, txSize)
 import Haskoin.Wallet.Util (safeSubtract)
 import Numeric.Natural (Natural)
 
+{- Entry points -}
+
 -- | The 'TxInfo' of a transaction to sign, or already signed, as the wallet
 -- sees it. Fails when the 'TxSignData' is not consistent.
 parseTxSignData ::

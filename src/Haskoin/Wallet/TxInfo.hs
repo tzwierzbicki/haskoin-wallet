@@ -50,6 +50,8 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 
+{- Summaries and their JSON -}
+
 data TxType = TxDebit | TxInternal | TxCredit
   deriving (Show, Eq)
 
@@ -236,6 +238,8 @@ instance MarshalJSON (Network, Ctx) TxInfo where
         <*> o .: "pending"
         <*> o .:? "dead" .!= False
 
+{- From the store's transactions -}
+
 storeToTxInfo ::
   Map Address SoftPath -> Natural -> Store.Transaction -> TxInfo
 storeToTxInfo walletAddrs currHeight sTx =
@@ -277,8 +281,6 @@ storeToTxInfo walletAddrs currHeight sTx =
         Store.MemRef _ -> Nothing
         Store.BlockRef height _ ->
           (+ 1) <$> currHeight `safeSubtract` fromIntegral height
-
-{- Helpers for building address maps -}
 
 outputAddressMap ::
   [Store.StoreOutput] -> (Map Address Natural, [Store.StoreOutput])

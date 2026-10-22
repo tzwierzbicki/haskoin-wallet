@@ -557,6 +557,15 @@ notingRawRequests asked store =
         storeRawTransactions store tids
     }
 
+-- | The store, noting every list of addresses whose coins it is asked for
+notingUnspentRequests :: IORef [[Address]] -> Store -> Store
+notingUnspentRequests asked store =
+  store
+    { storeUnspents = \addrs -> do
+        liftIO $ modifyIORef asked (<> [addrs])
+        storeUnspents store addrs
+    }
+
 -- | A block of the main chain, whose hash depends on the nonce
 blockAt :: BlockHeight -> Word32 -> Store.BlockData
 blockAt height nonce =

@@ -68,6 +68,8 @@ import qualified Haskoin.Wallet.Migration.V3 as V3
 import qualified Haskoin.Wallet.Migration.V4 as V4
 import qualified Haskoin.Wallet.Migration.V5 as V5
 
+{- The versions and their steps -}
+
 -- | The version of the database format of this hw. Version 1 is the format
 -- of hw 0.8, before the version table existed; version 2 is the format of
 -- hw 0.9, whose version table holds the text "0.9"; from version 3 the
@@ -98,6 +100,8 @@ steps ctx =
     Step 5 "the coin locks read from the pending transactions" V5.migrateDB
   ]
 
+{- The version of a database -}
+
 getDatabaseTables :: (MonadUnliftIO m) => DB m [Text]
 getDatabaseTables = do
   s <- rawSql "select name from sqlite_master where type='table'" []
@@ -109,15 +113,6 @@ getStoredVersion :: (MonadUnliftIO m) => DB m (Maybe PersistValue)
 getStoredVersion = do
   rows <- rawSql "select version from d_b_version" []
   return $ unSingle <$> listToMaybe rows
-
--- | What the migration does outside the database: announce each step before
--- it runs, and back up the database once before the first step, given the
--- version it is at. hw prints the announcements to stderr and copies the
--- database file; the tests collect them instead.
-data Hooks = Hooks
-  { announce :: String -> IO (),
-    backup :: Int -> IO ()
-  }
 
 -- | Store the format version of a new database: the single row of the
 -- version table. The steps store theirs themselves, as their hw did.
@@ -150,6 +145,17 @@ versionOf (PersistText label)
   | "0.9" `Text.isPrefixOf` label = return 2
   | otherwise = throwError $ "Unknown database version " <> cs label
 versionOf value = throwError $ "Unknown database version " <> show value
+
+{- Migrating -}
+
+-- | What the migration does outside the database: announce each step before
+-- it runs, and back up the database once before the first step, given the
+-- version it is at. hw prints the announcements to stderr and copies the
+-- database file; the tests collect them instead.
+data Hooks = Hooks
+  { announce :: String -> IO (),
+    backup :: Int -> IO ()
+  }
 
 -- | Bring the database to the latest format version. See 'migrateDBTo'.
 migrateDB :: (MonadUnliftIO m) => Hooks -> Ctx -> DB m (Either String ())

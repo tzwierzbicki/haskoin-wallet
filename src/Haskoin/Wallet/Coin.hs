@@ -49,6 +49,8 @@ import Haskoin.Wallet.PendingTx
 import Haskoin.Wallet.Util (Page (Page), textToAddrE)
 import Numeric.Natural (Natural)
 
+{- Coins as the user sees them -}
+
 data JsonCoin = JsonCoin
   { jsonCoinOutpoint :: !OutPoint,
     jsonCoinAddress :: !Address,
@@ -99,6 +101,18 @@ toJsonCoin net bestM locked dbCoin = do
         jsonCoinConfirmations = confirmations,
         jsonCoinLocked = op `Set.member` locked
       }
+
+-- | The coins of the store by the text of their address
+groupCoins :: Network -> [Store.Unspent] -> Map Text [Store.Unspent]
+groupCoins net =
+  Map.fromListWith (<>) . mapMaybe f
+  where
+    f x =
+      case x.address of
+        Just a -> (,[x]) <$> addrToText net a
+        _ -> Nothing
+
+{- Coins in the database -}
 
 -- Get all coins in an account, spendable or not
 coinPage ::
@@ -223,12 +237,3 @@ refreshCoins net accId addrsToUpdate allUnspent = do
        in case cM of
             Just c -> dBCoinBlockRef c /= S.encode s.block
             _ -> False
-
-groupCoins :: Network -> [Store.Unspent] -> Map Text [Store.Unspent]
-groupCoins net =
-  Map.fromListWith (<>) . mapMaybe f
-  where
-    f x =
-      case x.address of
-        Just a -> (,[x]) <$> addrToText net a
-        _ -> Nothing

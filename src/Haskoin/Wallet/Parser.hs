@@ -612,7 +612,7 @@ first 20 values and then display the following 10, use --limit=10 and
 --offset=20.
 |]
 
-{- Label Parser-}
+{- Label Parser -}
 
 labelParser :: ParserInfo Command
 labelParser = do

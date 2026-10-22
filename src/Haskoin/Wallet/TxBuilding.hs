@@ -44,6 +44,8 @@ import Haskoin.Wallet.Util (addrToText2, randomShuffle, safeSubtract)
 import Numeric.Natural (Natural)
 import System.Random (StdGen, splitGen)
 
+{- Types -}
+
 -- | What the builder needs from the wallet database
 data WalletCoins = WalletCoins
   { -- | The spendable coins of the account
@@ -68,7 +70,7 @@ data BuiltTx = BuiltTx
   }
   deriving (Eq, Show)
 
-{- Fetching -}
+{- Fetching from the database -}
 
 -- | The signing data of a transaction paying the recipients from the
 -- account's coins

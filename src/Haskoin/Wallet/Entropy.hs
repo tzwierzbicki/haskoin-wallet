@@ -24,6 +24,8 @@ import System.Entropy (getEntropy)
 import System.IO (IOMode (ReadMode), withBinaryFile)
 import Text.Read (readMaybe)
 
+{- Dice rolls and bits -}
+
 -- Produces uniformily distributed dice rolls from a random byte
 -- 0,   0x00 -> [6,6,6]
 -- 1,   0x01 -> [6,6,1]
@@ -106,6 +108,8 @@ packBools bs
   | length bs `mod` 8 /= 0 = error "Invalid packBools length"
   | otherwise = BS.pack $ boolsToWord8 <$> chunksOf 8 bs
 
+{- Splitting the entropy -}
+
 -- Mix entropy of same length by xoring them
 xorBytes :: BS.ByteString -> BS.ByteString -> BS.ByteString
 xorBytes ent1 ent2
@@ -138,6 +142,8 @@ mergeMnemonicParts mnems
       bs <- mapM fromMnemonic mnems
       let ent = foldl' xorBytes (head bs) (tail bs)
       toMnemonic ent
+
+{- Dice rolls from the user -}
 
 askInputDice :: IO Natural
 askInputDice = do
@@ -176,6 +182,8 @@ getDiceEntropy ent = do
                 <> " bytes collected"
           f (ws <> res) bs
 
+{- Generating a mnemonic -}
+
 -- Generate a mnemonic with optional dice entropy and key splitting
 genMnemonic ::
   (MonadIO m) =>
@@ -208,6 +216,8 @@ genMnemonic reqEnt reqDice splitIn
           return (origEnt, mnem, splitMnems)
         else return (origEnt, mnem, [])
   | otherwise = throwError "The entropy value can only be in [16,20..32]"
+
+{- The system entropy -}
 
 systemEntropy :: Natural -> IO (Text, BS.ByteString)
 systemEntropy bytes = do

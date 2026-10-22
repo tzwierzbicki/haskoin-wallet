@@ -6,9 +6,10 @@
 
 -- | Sweeping the coins of external private keys into the wallet.
 --
--- 'fetchSweepCoins' finds the coins to sweep: those at the given addresses
--- and at every address where a given key may hold them, and the coins given
--- by outpoint, so that a sweep can be prepared without the keys at hand;
+-- 'fetchSweepCoins' asks the store for the coins to sweep: those at the
+-- given addresses and at every address where a given key may hold them, and
+-- the coins given by outpoint, so that a sweep can be prepared without the
+-- keys at hand;
 -- 'buildSweepSignData' builds the transaction spending them all to the
 -- destinations, in the wallet or not, with a fee on the size 'sweepTxSize'
 -- estimates from the kinds of coins, and 'signTxWithKeys' signs it with the
@@ -31,7 +32,6 @@ import Control.Monad (foldM, when)
 import Control.Monad.Except
 import Control.Monad.State
 import qualified Data.ByteString as BS
-import Data.Default (def)
 import Data.Function (on)
 import Data.List (find, nub, nubBy)
 import Data.Map.Strict (Map)
@@ -43,11 +43,9 @@ import qualified Data.Text as Text
 import Data.Word (Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Store.WebClient
 import Haskoin.Wallet.Address
-import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Store (liftExcept)
+import Haskoin.Wallet.Store
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSigning (parseTxSignData, verifySignedTx)
@@ -56,7 +54,7 @@ import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import System.Random (StdGen)
 
-{- Building -}
+{- Fetching from the store -}
 
 -- | What a sweep needs from the network and the database
 data SweepCoins = SweepCoins
@@ -72,17 +70,19 @@ data SweepCoins = SweepCoins
     -- a compressed one.
     uncompressedAddrs :: ![Address]
   }
+  deriving (Eq, Show)
 
--- | Fetch the coins to sweep: every coin at the given addresses and at the
--- addresses of the given keys, and the coins given by outpoint, each once;
--- the transactions they come from; and which of the addresses involved
--- belong to the wallet. The keys may be absent, when they are kept
--- elsewhere: the sweep is then prepared from addresses or coins alone.
+-- | Ask the store for the coins to sweep: every coin at the given
+-- addresses and at the addresses of the given keys, and the coins given by
+-- outpoint, each once; and the transactions they come from. The database
+-- says which of the addresses involved belong to the wallet. The keys may
+-- be absent, when they are kept elsewhere: the sweep is then prepared from
+-- addresses or coins alone.
 fetchSweepCoins ::
   (MonadUnliftIO m) =>
   Network ->
   Ctx ->
-  Config ->
+  Store ->
   DBAccountId ->
   -- | The private keys, if at hand
   [SecKey] ->
@@ -93,28 +93,34 @@ fetchSweepCoins ::
   -- | The destinations
   [Address] ->
   ExceptT String (DB m) SweepCoins
-fetchSweepCoins net ctx cfg accId secKeys sweepFrom given sweepTo = do
-  let host = apiHost net cfg
-      addresses = nub $ sweepFrom <> concatMap (keyAddresses net ctx) secKeys
+fetchSweepCoins net ctx store accId secKeys sweepFrom given sweepTo = do
+  let addresses = nub $ sweepFrom <> concatMap (keyAddresses net ctx) secKeys
   when (null addresses && null given) $
     throwError "No private keys, addresses or coins to sweep from"
-  Store.SerialList found <-
+  fromStore $ storeHealth store
+  found <-
     if null addresses
-      then return $ Store.SerialList []
-      else
-        liftExcept . apiBatch ctx (configCoinBatch cfg) host $
-          GetAddrsUnspent addresses def {limit = Just 0}
-  Store.SerialList parents <-
+      then return []
+      else fromStore $ storeUnspents store addresses
+  parents <-
     if null given
-      then return $ Store.SerialList []
-      else
-        liftExcept . apiBatch ctx (configTxFullBatch cfg) host $
-          GetTxs (nub $ fst <$> given)
+      then return []
+      else fromStore $ storeTransactions store (nub $ fst <$> given)
   givenCoins <- liftEither $ coinsOfTransactions given parents
   let coins = nubBy ((==) `on` (.outpoint)) (found <> givenCoins)
-  Store.RawResultList transactions <-
-    liftExcept . apiBatch ctx (configTxFullBatch cfg) host $
-      GetTxsRaw (nub $ (.outpoint.hash) <$> coins)
+      spentFrom = nub $ (.outpoint.hash) <$> coins
+  -- The store lists the coins, so it must have every transaction they
+  -- come from
+  transactions <-
+    if null spentFrom
+      then return []
+      else fromStore $ storeRawTransactions store spentFrom
+  when (length transactions /= length spentFrom) $
+    throwError $
+      "The store was asked for "
+        <> show (length spentFrom)
+        <> " raw transactions but returned "
+        <> show (length transactions)
   walletAddrs <- walletPaths net accId (mapMaybe (.address) coins <> sweepTo)
   let uncompressedAddrs = nub $ uncompressedKeyAddr ctx <$> secKeys
   return SweepCoins {coins, transactions, walletAddrs, uncompressedAddrs}
@@ -158,6 +164,8 @@ keyAddresses net ctx key =
 -- | The P2PKH address of the uncompressed encoding of the key's public key
 uncompressedKeyAddr :: Ctx -> SecKey -> Address
 uncompressedKeyAddr ctx key = pubKeyAddr ctx $ derivePublicKey ctx (wrapSecKey False key)
+
+{- Building -}
 
 -- | The sweep transaction and its signing data: all the coins spent to the
 -- destinations, both in random order, with what is left after the estimated

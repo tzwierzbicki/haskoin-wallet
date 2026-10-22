@@ -29,6 +29,8 @@ data TxSignData = TxSignData
   }
   deriving (Eq, Show)
 
+{- JSON -}
+
 instance FromJSON TxSignData where
   parseJSON =
     withObject "txsigndata" $ \o -> do
@@ -55,6 +57,8 @@ instance ToJSON TxSignData where
 instance MarshalJSON Ctx TxSignData where
   marshalValue _ = toJSON
   unmarshalValue _ = parseJSON
+
+{- The hash without signatures -}
 
 -- | The hash of a transaction without its signatures: the input scripts
 -- and the witnesses cleared, so it is the same before and after signing.

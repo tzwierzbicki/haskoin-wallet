@@ -53,6 +53,8 @@ import qualified System.Directory as D
 import System.IO (hPutStrLn, stderr)
 import System.Random (initStdGen)
 
+{- Responses -}
+
 data Response
   = ResponseError
       { responseError :: !Text
@@ -316,6 +318,8 @@ instance MarshalJSON Ctx Response where
             <*> o .: "entropysource"
         _ -> fail "Invalid JSON response type"
 
+{- Running a command -}
+
 runDBResponse ::
   (MonadUnliftIO m) => Config -> ExceptT String (DB m) Response -> m Response
 runDBResponse cfg action = do
@@ -375,6 +379,8 @@ commandResponse ctx cfg unit cmd =
       cmdPrepareSweep ctx cfg nameM prvKeyM sf st coins outputM f d
     CommandSignSweep nameM h i o k -> cmdSignSweep ctx cfg nameM h i o k
     CommandRollDice n -> cmdRollDice n
+
+{- Mnemonics and accounts -}
 
 cmdMnemonic :: Natural -> Bool -> Natural -> IO Response
 cmdMnemonic ent useDice splitMnemIn =
@@ -472,6 +478,8 @@ cmdAccounts cfg nameM =
         accs <- lift getAccounts
         return $ ResponseAccounts $ snd <$> accs
 
+{- Addresses -}
+
 cmdReceive :: Ctx -> Config -> Maybe Text -> Maybe Text -> IO Response
 cmdReceive ctx cfg nameM labelM =
   runDBResponse cfg $ do
@@ -492,6 +500,8 @@ cmdLabel cfg nameM idx lab =
     (accId, acc) <- getAccountByName nameM
     adr <- setAddrLabel accId (fromIntegral idx) lab
     return $ ResponseAddress acc adr
+
+{- Transactions and coins -}
 
 cmdTxs :: Ctx -> Config -> Maybe Text -> Page -> IO Response
 cmdTxs ctx cfg nameM page =
@@ -584,23 +594,6 @@ cmdDeleteTx ctx cfg nosigH =
   runDBResponse cfg $ do
     (coins, addrs) <- deleteTx ctx (webStore ctx cfg) nosigH
     return $ ResponseDeleteTx nosigH coins addrs
-
-cmdSignMessage :: Ctx -> Config -> Text -> Text -> Natural -> IO Response
-cmdSignMessage ctx cfg addrTxt txtMsg splitMnemIn =
-  runDBResponse cfg $ do
-    (acc, addrDB) <- getAddressByText addrTxt
-    let accPub = accountXPubKey ctx acc
-        net = accountNetwork acc
-        idx = fromIntegral $ dBAccountIndex acc
-    addr <- liftEither $ textToAddrE net addrTxt
-    -- Warn before asking for the mnemonic so that the user can abort. Use
-    -- stderr to keep the armored block and the --json output clean.
-    liftIO $ mapM_ (hPutStrLn stderr) $ messageWarnings txtMsg
-    mnem <- askMnemonic splitMnemIn
-    accPrvKey <- askPrvKey net ctx idx mnem accPub
-    let addrPrvKey = derivePath ctx (addrPath addrDB) accPrvKey
-    msgSig <- liftEither $ signMessage ctx addr addrPrvKey.key txtMsg
-    return $ ResponseSignMsg txtMsg (cs $ B64.encode msgSig) addrTxt
 
 cmdSignTx ::
   Ctx ->
@@ -697,6 +690,8 @@ sendTxFile ctx cfg file netM =
     unless accepted $ throwError notAccepted
     return $ ResponseSentTx net (txHash signedTx)
 
+{- Synchronisation -}
+
 cmdSyncAcc :: Ctx -> Config -> Maybe Text -> Bool -> IO Response
 cmdSyncAcc ctx cfg nameM full =
   runDBResponse cfg $ do
@@ -725,6 +720,8 @@ cmdDiscoverAccount ctx cfg nameM = do
     res <- sync ctx cfg store net accId True
     return $ ResponseSync [res]
 
+{- Backup and version -}
+
 -- | Copy the database to the given file, which must not exist, or into the
 -- backups directory of hw under a name carrying the format version and the
 -- time. The database is at the latest format version, since every command
@@ -748,6 +745,8 @@ cmdVersion cfg =
   runDBResponse cfg $ do
     dbVersion <- databaseVersion
     return $ ResponseVersion (cs $ showVersion Paths.version) (maybe "none" (cs . show) dbVersion)
+
+{- Sweeps -}
 
 -- | Sweep coins to the destinations: the coins at the given addresses and
 -- at the addresses of the given private keys, and the coins given by
@@ -776,8 +775,7 @@ cmdPrepareSweep ctx cfg nameM keysM sweepFromT sweepToT coins outputM feeByte du
     secKeys <- maybe (return []) (readSecKeys net) keysM
     sweepFrom <- liftEither $ mapM (textToAddrE net) sweepFromT
     sweepTo <- liftEither $ mapM (textToAddrE net) sweepToT
-    fromStore $ storeHealth (webStore ctx cfg net)
-    found <- fetchSweepCoins net ctx cfg accId secKeys sweepFrom coins sweepTo
+    found <- fetchSweepCoins net ctx (webStore ctx cfg net) accId secKeys sweepFrom coins sweepTo
     gen <- liftIO initStdGen
     tsd <- liftEither $ buildSweepSignData net ctx gen found sweepTo feeByte dust
     txInfo <- liftEither $ parseTxSignData net ctx pub tsd
@@ -820,6 +818,27 @@ cmdSignSweep ctx cfg nameM nosigHM inputM outputM keysM =
     when (isJust nosigHM) $ void $ importPendingTx net ctx accId newTsd
     for_ outputM $ \o -> liftIO $ writeJsonFile o $ Json.toJSON newTsd
     return $ ResponseTx acc txInfoL
+
+{- Signed messages -}
+
+cmdSignMessage :: Ctx -> Config -> Text -> Text -> Natural -> IO Response
+cmdSignMessage ctx cfg addrTxt txtMsg splitMnemIn =
+  runDBResponse cfg $ do
+    (acc, addrDB) <- getAddressByText addrTxt
+    let accPub = accountXPubKey ctx acc
+        net = accountNetwork acc
+        idx = fromIntegral $ dBAccountIndex acc
+    addr <- liftEither $ textToAddrE net addrTxt
+    -- Warn before asking for the mnemonic so that the user can abort. Use
+    -- stderr to keep the armored block and the --json output clean.
+    liftIO $ mapM_ (hPutStrLn stderr) $ messageWarnings txtMsg
+    mnem <- askMnemonic splitMnemIn
+    accPrvKey <- askPrvKey net ctx idx mnem accPub
+    let addrPrvKey = derivePath ctx (addrPath addrDB) accPrvKey
+    msgSig <- liftEither $ signMessage ctx addr addrPrvKey.key txtMsg
+    return $ ResponseSignMsg txtMsg (cs $ B64.encode msgSig) addrTxt
+
+{- Dice -}
 
 -- | Dice rolls for the user, drawn from the system entropy
 cmdRollDice :: Natural -> IO Response

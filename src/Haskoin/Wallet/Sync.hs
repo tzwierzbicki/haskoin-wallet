@@ -258,6 +258,8 @@ listTxs cfg store net bals = do
           <> show (length refs)
     return (bal, refs)
 
+{- The balances to update -}
+
 -- | The balances that differ from the stored ones: the addresses to update
 filterAddresses ::
   [Store.Balance] ->

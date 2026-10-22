@@ -49,6 +49,8 @@ import Haskoin.Wallet.Config
 import Haskoin.Wallet.Schema.V5
 import UnliftIO.Exception (catch, throwIO)
 
+{- The connection and its lock -}
+
 type DB m = ReaderT SqlBackend (NoLoggingT (ResourceT m))
 
 -- | Run a database action as one transaction that holds the database from
@@ -104,10 +106,12 @@ catchDatabaseInUse action = (Right <$> action) `catch` held
       SqliteException ErrorLocked _ _ -> return $ Left databaseInUse
       _ -> throwIO failure
 
+{- The tables -}
+
 globalMigration :: (MonadUnliftIO m) => DB m ()
 globalMigration = void $ runMigrationQuiet migrateAll
 
-{- Helpers -}
+{- Outpoints as text -}
 
 outpointText :: OutPoint -> Text
 outpointText = encodeHex . S.encode
@@ -116,6 +120,8 @@ textToOutpoint :: Text -> Either String OutPoint
 textToOutpoint t = do
   bs <- maybeToEither "textToOutpoint: invalid input" $ decodeHex t
   S.decode bs
+
+{- Query helpers -}
 
 -- like `maybe` but for a maybe/value sandwich
 joinMaybe :: b -> (a -> b) -> Maybe (E.Value (Maybe a)) -> b
