@@ -19,6 +19,7 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.FileIO (TxSignData (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo (TxInfo (..), TxInfoPending (..), TxType (..))
+import Haskoin.Wallet.TxSigning (parseTxSignData)
 import Haskoin.Wallet.TxSweep
 import Haskoin.Wallet.TxVectors
 import Haskoin.Wallet.Util (Page (Page), nosigHash)
@@ -195,15 +196,25 @@ sweepBuilderSpec ctx =
         `shouldBe` Left "There are no coins to sweep in those addresses"
     it "refuses to sweep without destinations" $
       build [] `shouldBe` Left "No addresses to sweep to"
-    it "builds a sweep to addresses outside the wallet, which the signer accepts" $ do
-      -- 10 bytes of overhead, the inputs (581), one P2PKH output (34) and
-      -- the witness data (221): 846 bytes, a fee of 8460
-      tsd <- expectRight $ build [otherAddr 0]
-      ((.value) <$> tsd.txSignDataTx.outputs) `shouldBe` [1491540]
+    it "builds a sweep to addresses outside the wallet, P2PKH and Taproot, which the signer accepts" $ do
+      -- 10 bytes of overhead, the inputs (581), a P2PKH output (34), a
+      -- Taproot output (43) and the witness data (221): 889 bytes, a fee of
+      -- 8890, and (1500000 - 8890) / 2 = 745555 for each destination
+      tsd <- expectRight $ build [otherAddr 0, taprootAddr]
+      ((.value) <$> tsd.txSignDataTx.outputs) `shouldBe` [745555, 745555]
       tsd.txSignDataOutputPaths `shouldBe` []
       (_, info) <- expectRight $ signTxWithKeys btc ctx tsd accountPub [sweptKey, walletKey]
-      info.txInfoFee `shouldBe` 8460
-      Map.keys info.txInfoOtherOutputs `shouldBe` [otherAddr 0]
+      info.txInfoFee `shouldBe` 8890
+      Map.toList info.txInfoOtherOutputs `shouldBe` [(otherAddr 0, 745555), (taprootAddr, 745555)]
+      -- A sweep has no change: nothing of the fee is change
+      info.txInfoChangeInFee `shouldBe` Nothing
+    it "is reported before signing with the size estimated without the keys" $ do
+      -- The report cannot know that one coin belongs to an uncompressed key
+      -- and counts its input as 148 bytes rather than 180: 848 bytes for the
+      -- 8800 of fee the builder set on 880
+      tsd <- expectRight $ build destinations
+      info <- expectRight $ parseTxSignData btc ctx accountPub tsd
+      (info.txInfoSize, info.txInfoFee, info.txInfoFeeByte, info.txInfoChangeInFee) `shouldBe` (848, 8800, 10, Nothing)
     it "refuses a fee larger than the coins" $
       buildWith 10000 546 destinations `shouldBe` Left "Could not find a sweep solution: fee is too large"
     -- Each destination gets 745600: the dust limit right below, at and
@@ -246,6 +257,8 @@ sweepBuilderSpec ctx =
     -- = 221): 880 bytes, so the fee is 8800 and each destination gets
     -- (1500000 - 8800) / 2 = 745600.
     destinations = [otherAddr 0, externalAddr 1]
+    -- The Taproot example address of BIP350
+    taprootAddr = fromJust $ textToAddr btc "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0"
     build = buildWith 10 546
     buildWith feeByte dust to = buildSweepSignData btc ctx seed found to feeByte dust
     spentBy :: TxSignData -> [OutPoint]
@@ -337,6 +350,8 @@ sweepIntoWalletSpec ctx =
         -- (1000000 - 7310) / 2 = 496345 each
         liftIO $ (info.txInfoType, info.txInfoAmount, info.txInfoFee) `shouldBe` (TxCredit, 496345, 7310)
         liftIO $ Map.keys info.txInfoMyOutputs `shouldBe` [externalAddr 1]
+        -- Paid into the wallet or not, a sweep has no change
+        liftIO $ info.txInfoChangeInFee `shouldBe` Nothing
         -- sendtx marks it online, the sync retires it once the store lists it
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
         ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))

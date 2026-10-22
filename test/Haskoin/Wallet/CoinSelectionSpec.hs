@@ -18,7 +18,6 @@ spec =
     coinSelectionSpec ctx
     changeAndFeeSpec ctx
     wasteSpec ctx
-    txSizeSpec
 
 -- Every coin pays the fee of its own input (148 bytes) and the target adds
 -- the fee of the frame (10 bytes) and of the outputs (34 bytes each). With
@@ -38,7 +37,7 @@ amounts s = ((.value) <$> s.selected, s.changeAmount, s.feeAmount)
 -- and dust
 selectWithSeed :: Ctx -> Int -> CoinSelection -> Word64 -> Word64 -> Word64 -> [Natural] -> Either String ([Word64], Word64, Word64)
 selectWithSeed ctx seed strategy feeRate dust amount coins =
-  amounts <$> selectCoins strategy (mkStdGen seed) (Payment (FeeRates feeRate 10) SenderPays dust 1 amount) (coinsWorth ctx coins)
+  amounts <$> selectCoins strategy (mkStdGen seed) (Payment (FeeRates feeRate 10) SenderPays dust [34] amount) (coinsWorth ctx coins)
 
 -- | Select with the seed 0; only the random draw depends on it
 select :: Ctx -> CoinSelection -> Word64 -> Word64 -> Word64 -> [Natural] -> Either String ([Word64], Word64, Word64)
@@ -135,7 +134,7 @@ changeAndFeeSpec ctx =
     it "charges the fee of every output" $
       -- Fee: two outputs and the change, 10 + 148 + 3 * 34 = 260 bytes * 10 = 2600
       -- Change: 400000 - 350000 - 2600 = 47400
-      amounts <$> selectCoins LargestFirst (mkStdGen 0) (Payment (FeeRates 10 10) SenderPays 546 2 350000) (coinsWorth ctx [400000])
+      amounts <$> selectCoins LargestFirst (mkStdGen 0) (Payment (FeeRates 10 10) SenderPays 546 [34, 34] 350000) (coinsWorth ctx [400000])
         `shouldBe` Right ([400000], 47400, 2600)
     it "builds a free transaction at a fee rate of zero" $
       -- Fee: 10 + 148 + 2 * 34 = 226 bytes * 0 = 0
@@ -146,7 +145,7 @@ wasteSpec :: Ctx -> Spec
 wasteSpec ctx =
   describe "Waste of a selection" $ do
     -- 350000 paid by the sender in one output, at the given fee rate
-    let payment feeRate = Payment (FeeRates feeRate 10) SenderPays 546 1 350000
+    let payment feeRate = Payment (FeeRates feeRate 10) SenderPays 546 [34] 350000
         selection coins change fee = Selection (coinsWorth ctx coins) 350000 change fee
     it "is the cost of the change output at the long-term fee rate" $
       -- Creating the output now (10 * 34) and spending it later (10 * 148)
@@ -166,31 +165,3 @@ wasteSpec ctx =
       -- One input at 148 * (50 - 10) = 5920, plus a change output costing
       -- 50 * 34 + 10 * 148 = 3180
       waste (payment 50) (selection [400000] 38700 11300) `shouldBe` 9100
-
-txSizeSpec :: Spec
-txSizeSpec =
-  describe "Transaction size" $ do
-    it "is 10 bytes of frame, 148 per input and 34 per output" $ do
-      txSize 1 1 `shouldBe` 192
-      txSize 1 2 `shouldBe` 226
-      txSize 2 2 `shouldBe` 374
-      txSize 3 2 `shouldBe` 522
-      txSize 1 3 `shouldBe` 260
-    it "is the frame alone without inputs and outputs" $
-      txSize 0 0 `shouldBe` 10
-    it "counts 3 bytes for a count of 253 or more" $ do
-      -- 252 inputs: 10 + 252 * 148 + 34; 253 inputs: 12 + 253 * 148 + 34
-      txSize 252 1 `shouldBe` 37340
-      txSize 253 1 `shouldBe` 37490
-      -- The same for the outputs: 10 + 148 + 252 * 34, then 12 + 148 + 253 * 34
-      txSize 1 252 `shouldBe` 8726
-      txSize 1 253 `shouldBe` 8762
-    it "counts 5 bytes for a count above 65535" $ do
-      -- 11 + 65535 * 148 + 34, then 13 + 65536 * 148 + 34
-      txSize 65535 1 `shouldBe` 9699226
-      txSize 65536 1 `shouldBe` 9699376
-    it "counts 9 bytes for a count above 4294967295" $ do
-      -- No such transaction exists, but the encoding rule holds:
-      -- 8 + 5 + 1 + 4294967295 * 148, then 8 + 9 + 1 + 4294967296 * 148
-      txSize 4294967295 0 `shouldBe` 635655159674
-      txSize 4294967296 0 `shouldBe` 635655159826

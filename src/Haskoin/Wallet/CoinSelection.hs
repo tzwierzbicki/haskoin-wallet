@@ -27,8 +27,6 @@ module Haskoin.Wallet.CoinSelection
     Selection (..),
     selectCoins,
     spendCoins,
-    txSize,
-    varIntSize,
     waste,
   )
 where
@@ -39,6 +37,7 @@ import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Ord (Down (..), comparing)
 import Data.Word (Word64)
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.TxSize (p2pkhInput, p2pkhInputSize, p2pkhOutputSize, txSize)
 import Haskoin.Wallet.Util (randomShuffle, safeSubtract)
 import System.Random (StdGen)
 
@@ -83,8 +82,9 @@ data Payment = Payment
     -- | Dust: the smallest change worth an output, like Bitcoin Core's dust
     -- limit (546 for P2PKH), below which an output is dust
     dust :: !Word64,
-    -- | The number of outputs paid
-    outputCount :: !Int,
+    -- | The sizes in bytes of the outputs paid, by the scripts of the
+    -- recipients
+    outputSizes :: ![Word64],
     -- | The amount paid, over all the outputs
     amount :: !Word64
   }
@@ -102,32 +102,12 @@ data Selection = Selection
   }
   deriving (Eq, Show)
 
--- | The size in bytes of a P2PKH input and of a P2PKH output, as the
--- wallet builds them. An input is 32 bytes of transaction hash, 4 of output
--- index, 1 of script length, a 107-byte script (1 + 72 for the signature
--- with its hash type, 1 + 33 for the public key) and 4 of sequence. An
--- output is 8 bytes of amount, 1 of script length and a 25-byte script.
-inputSize, outputSize :: Word64
-inputSize = 148
-outputSize = 34
-
--- | The size in bytes of a transaction with the given numbers of P2PKH
--- inputs and outputs: 4 bytes of version, the counts of inputs and outputs
--- as variable-length integers, the inputs, the outputs and 4 bytes of lock
--- time. An upper bound: a signature can be a byte or two shorter than the
--- 72 counted for it.
-txSize :: Int -> Int -> Word64
-txSize inputs outputs =
-  8 + varIntSize inputs + varIntSize outputs + inputSize * fromIntegral inputs + outputSize * fromIntegral outputs
-
--- | The size in bytes of a count as Bitcoin encodes it: one byte up to 252,
--- then a marker byte and 2, 4 or 8 bytes
-varIntSize :: Int -> Word64
-varIntSize n
-  | n <= 0xfc = 1
-  | n <= 0xffff = 3
-  | n <= 0xffffffff = 5
-  | otherwise = 9
+-- | The size of the payment transaction with the given number of the
+-- wallet's own inputs, which are P2PKH, its outputs, and a change output
+-- or not
+paymentSize :: Payment -> Int -> Bool -> Word64
+paymentSize payment inputs hasChange =
+  txSize (replicate inputs p2pkhInput) (payment.outputSizes <> [p2pkhOutputSize | hasChange])
 
 -- | Choose the coins of a payment among the candidates
 selectCoins ::
@@ -166,7 +146,7 @@ spendCoins payment coins
 -- around the inputs when the sender pays it
 target :: Payment -> Word64
 target payment = case payment.payer of
-  SenderPays -> payment.amount + payment.rates.feeRate * txSize 0 payment.outputCount
+  SenderPays -> payment.amount + payment.rates.feeRate * paymentSize payment 0 False
   RecipientsPay -> payment.amount
 
 -- | What a coin brings towards the target: its effective value when the
@@ -179,7 +159,7 @@ covers payment coin = case payment.payer of
 -- | What a coin is worth once its input is paid for. Negative for a coin
 -- smaller than the fee of spending it.
 effectiveValue :: FeeRates -> Store.Unspent -> Integer
-effectiveValue rates coin = fromIntegral coin.value - fromIntegral (rates.feeRate * inputSize)
+effectiveValue rates coin = fromIntegral coin.value - fromIntegral (rates.feeRate * p2pkhInputSize)
 
 -- | How the value of coins covering the target is split between the
 -- recipients, the change and the fee
@@ -194,7 +174,7 @@ selectionOf payment coins = Selection {selected = coins, paid, changeAmount, fee
     change :: Integer
     change = case payment.payer of
       SenderPays ->
-        fromIntegral total - fromIntegral payment.amount - fromIntegral (payment.rates.feeRate * txSize inputs (payment.outputCount + 1))
+        fromIntegral total - fromIntegral payment.amount - fromIntegral (payment.rates.feeRate * paymentSize payment inputs True)
       RecipientsPay -> fromIntegral total - fromIntegral payment.amount
     hasChange = change > 0 && change >= fromIntegral payment.dust
     changeAmount = if hasChange then fromIntegral change else 0
@@ -202,7 +182,7 @@ selectionOf payment coins = Selection {selected = coins, paid, changeAmount, fee
     -- above the amount leaves them nothing, which the builder rejects.
     deducted = case payment.payer of
       SenderPays -> 0
-      RecipientsPay -> payment.rates.feeRate * txSize inputs (payment.outputCount + fromEnum hasChange)
+      RecipientsPay -> payment.rates.feeRate * paymentSize payment inputs hasChange
     paid = fromMaybe 0 $ payment.amount `safeSubtract` deducted
     feeAmount = total - paid - changeAmount
 
@@ -223,7 +203,7 @@ exactMatch payment coins =
   snd $ search (100000 :: Int) 0 (sortOn (Down . (.value)) coins)
   where
     lower = fromIntegral (target payment) :: Integer
-    upper = lower + fromIntegral (payment.rates.feeRate * outputSize + payment.rates.longTermFeeRate * inputSize)
+    upper = lower + fromIntegral (payment.rates.feeRate * p2pkhOutputSize + payment.rates.longTermFeeRate * p2pkhInputSize)
     -- (steps left, solution): try with the next coin, then without it
     search steps acc cs
       | acc >= lower && acc <= upper = (steps, Just [])
@@ -244,7 +224,7 @@ waste payment selection = inputs + changeOrExcess
   where
     rates = payment.rates
     count = length selection.selected
-    inputs = fromIntegral count * fromIntegral inputSize * (fromIntegral rates.feeRate - fromIntegral rates.longTermFeeRate)
+    inputs = fromIntegral count * fromIntegral p2pkhInputSize * (fromIntegral rates.feeRate - fromIntegral rates.longTermFeeRate)
     changeOrExcess
-      | selection.changeAmount > 0 = fromIntegral $ rates.feeRate * outputSize + rates.longTermFeeRate * inputSize
-      | otherwise = fromIntegral selection.feeAmount - fromIntegral (rates.feeRate * txSize count payment.outputCount)
+      | selection.changeAmount > 0 = fromIntegral $ rates.feeRate * p2pkhOutputSize + rates.longTermFeeRate * p2pkhInputSize
+      | otherwise = fromIntegral selection.feeAmount - fromIntegral (rates.feeRate * paymentSize payment count False)
