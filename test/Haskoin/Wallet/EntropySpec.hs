@@ -186,7 +186,7 @@ testVectors4 =
 
 testBip44Vector :: Ctx -> Config -> (Text, Text, Text, Text) -> Assertion
 testBip44Vector ctx cfg (mnem, pass, addr0, addr1) = do
-  runDBMemoryE $ do
+  inDatabaseE $ do
     (accId, _) <- insertAccount btc ctx walletFP "test" pub
     extAddr <- genExtAddress ctx cfg accId ""
     intAddr <- nextFreeIntAddr ctx cfg accId

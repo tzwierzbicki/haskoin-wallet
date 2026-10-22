@@ -10,12 +10,11 @@ import Data.String.Conversions (cs)
 import Data.Time (LocalTime (..), TimeOfDay (..), ZonedTime (..), fromGregorian, utc)
 import qualified Database.Persist as P
 import Database.Persist.Sql (PersistValue (..), transactionSave)
-import Database.Persist.Sqlite (runSqlite)
 import Haskoin.Wallet.Backup (backupDatabase, backupName)
 import Haskoin.Wallet.Commands (Response (..), cmdBackup)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Migration.TestUtils
+import Haskoin.Wallet.TestUtils
 import qualified Haskoin.Wallet.Schema.V2 as V2
 import System.FilePath (takeDirectory, takeFileName, (</>))
 import Test.Hspec
@@ -31,46 +30,46 @@ spec = do
       inScratchDirectory $ \dir -> do
         let database = dir </> "accounts.sqlite"
             backups = dir </> "backups"
-        runSqlite (cs database) $ do
+        inDatabaseFile database $ do
           createTables V2.migrateAll
           P.insert_ $ V2.DBVersion "0.9"
           P.insert_ $ V2.DBWallet "892eb8e4"
         copy <- backupDatabase database backups 2
         takeDirectory copy `shouldBe` backups
         takeFileName copy `shouldSatisfy` \name -> "accounts-version-2-" `isPrefixOf` name && ".sqlite" `isSuffixOf` name
-        runSqlite (cs copy) storedVersions `shouldReturn` [(PersistText "0.9", "text")]
-        runSqlite (cs copy) (tableRows "d_b_wallet") `shouldReturn` [[PersistText "892eb8e4"]]
+        inDatabaseFile copy storedVersions `shouldReturn` [(PersistText "0.9", "text")]
+        inDatabaseFile copy (tableRows "d_b_wallet") `shouldReturn` [[PersistText "892eb8e4"]]
 
     it "includes the rows still in the write-ahead log" $
       inScratchDirectory $ \dir -> do
         let database = dir </> "accounts.sqlite"
         -- Committed while the connection is open: the rows are in the
         -- write-ahead log, not yet in the file
-        copy <- runSqlite (cs database) $ do
+        copy <- inDatabaseFile database $ do
           createTables V2.migrateAll
           P.insert_ $ V2.DBVersion "0.9"
           transactionSave
           liftIO $ backupDatabase database (dir </> "backups") 2
-        runSqlite (cs copy) storedVersions `shouldReturn` [(PersistText "0.9", "text")]
+        inDatabaseFile copy storedVersions `shouldReturn` [(PersistText "0.9", "text")]
 
   describe "The backup command" $ do
     it "copies the database to the given file" $
       inScratchDirectory $ \dir -> do
         let database = dir </> "accounts.sqlite"
             copy = dir </> "copy.sqlite"
-        runSqlite (cs database) $ do
+        inDatabaseFile database $ do
           createTables migrateAll
           P.insert_ $ DBVersion 3
           P.insert_ $ DBWallet "892eb8e4"
         cmdBackup (configUsing database) (Just copy) `shouldReturn` ResponseFile copy
-        runSqlite (cs copy) storedVersions `shouldReturn` [(PersistInt64 3, "integer")]
-        runSqlite (cs copy) (tableRows "d_b_wallet") `shouldReturn` [[PersistText "892eb8e4"]]
+        inDatabaseFile copy storedVersions `shouldReturn` [(PersistInt64 3, "integer")]
+        inDatabaseFile copy (tableRows "d_b_wallet") `shouldReturn` [[PersistText "892eb8e4"]]
 
     it "refuses to overwrite a file" $
       inScratchDirectory $ \dir -> do
         let database = dir </> "accounts.sqlite"
             copy = dir </> "copy.sqlite"
-        runSqlite (cs database) $ createTables migrateAll
+        inDatabaseFile database $ createTables migrateAll
         _ <- cmdBackup (configUsing database) (Just copy)
         cmdBackup (configUsing database) (Just copy)
           `shouldReturn` ResponseError (cs $ "Path '" <> copy <> "' already exists")

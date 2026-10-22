@@ -8,19 +8,23 @@
 -- "Haskoin.Wallet.Arbitrary".
 module Haskoin.Wallet.TestUtils where
 
-import Control.Monad (forM, unless, void)
+import Conduit (runConduit, sinkList, (.|))
+import Control.Exception (finally)
+import Control.Monad (forM, unless, void, when)
 import Control.Monad.Except (ExceptT)
 import Control.Monad.Trans (lift, liftIO)
 import Control.Monad.Trans.Except (runExceptT)
 import Data.Aeson (FromJSON (..), eitherDecodeFileStrict, withObject, (.!=), (.:), (.:?))
 import qualified Data.ByteString as BS
-import Data.Either (fromRight, isRight)
+import Data.Either (fromRight, isLeft)
 import Data.List (isSuffixOf, sort, sortOn)
 import Data.Maybe (fromMaybe)
 import qualified Data.Serialize as S
+import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Database.Persist.Sql (runMigrationQuiet)
+import Data.Time (UTCTime (UTCTime), fromGregorian)
+import Database.Persist.Sql (Migration, PersistValue, Single (..), rawQuery, rawSql, runMigrationQuiet)
 import Database.Persist.Sqlite (runSqlite)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -28,8 +32,8 @@ import Haskoin.Wallet.Database (DB, DBAccount, DBAccountId, insertAccount, migra
 import Haskoin.Wallet.Keys (MnemonicPass (..), signingKey, walletFingerprint)
 import Data.Word (Word32, Word8)
 import Numeric.Natural (Natural)
-import System.Directory (listDirectory)
-import Test.HUnit (Assertion)
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getTemporaryDirectory, listDirectory, removeDirectoryRecursive)
+import System.FilePath ((</>))
 import Test.Hspec
 
 {- Either -}
@@ -41,22 +45,101 @@ forceRight = fromRight (error "fromRight")
 expectRight :: (HasCallStack) => Either String a -> IO a
 expectRight = either (\err -> expectationFailure err >> fail err) return
 
-{- Database -}
+{- Databases -}
 
--- | Run an action on a fresh in-memory wallet database
-runDBMemory :: DB IO a -> Assertion
-runDBMemory action = do
-  runSqlite ":memory:" $ do
-    _ <- runMigrationQuiet migrateAll
-    void action
+-- A test runs its database actions on a new in-memory database, which is
+-- gone when the test ends. The wallet's tables are created unless the test
+-- creates its own, as the migration tests do from old schemas.
 
--- | Like 'runDBMemory', and the action must succeed (Right)
-runDBMemoryE :: (Show a) => ExceptT String (DB IO) a -> Assertion
-runDBMemoryE action = do
-  runSqlite ":memory:" $ do
-    _ <- runMigrationQuiet migrateAll
-    resE <- runExceptT action
-    liftIO $ resE `shouldSatisfy` isRight
+-- | Run an action on a new in-memory database, without any table
+inMemory :: DB IO a -> IO a
+inMemory = runSqlite ":memory:"
+
+-- | Run an action on a new in-memory database with the wallet's tables
+inDatabase :: DB IO a -> IO a
+inDatabase action = inMemory $ createTables migrateAll >> action
+
+-- | Like 'inDatabase', and the action must succeed: an error fails the test
+-- with its message
+inDatabaseE :: ExceptT String (DB IO) a -> IO ()
+inDatabaseE action = inDatabase $ do
+  result <- runExceptT action
+  liftIO $ void $ expectRight result
+
+-- | Run an action on a database file, created if missing
+inDatabaseFile :: FilePath -> DB IO a -> IO a
+inDatabaseFile path = runSqlite (cs path)
+
+-- | Create the tables of a schema: the wallet's ('migrateAll') or an old one
+createTables :: Migration -> DB IO ()
+createTables = void . runMigrationQuiet
+
+-- | The creation time of the rows the tests write
+fixtureTime :: UTCTime
+fixtureTime = UTCTime (fromGregorian 2023 11 1) 0
+
+-- | Run a test in a fresh directory under the temporary directory, removed
+-- afterwards, for the tests that need database files
+inScratchDirectory :: (FilePath -> IO a) -> IO a
+inScratchDirectory test = do
+  base <- getTemporaryDirectory
+  let dir = base </> "hw-database-test"
+  exists <- doesDirectoryExist dir
+  when exists $ removeDirectoryRecursive dir
+  createDirectoryIfMissing True dir
+  test dir `finally` removeDirectoryRecursive dir
+
+{- Checks inside a database action -}
+
+-- | The result of a database action must be the expected value
+dbShouldBe :: (HasCallStack, Eq a, Show a) => DB IO a -> a -> DB IO ()
+dbShouldBe action expected = do
+  actual <- action
+  liftIO $ actual `shouldBe` expected
+
+-- | The result of a database action must satisfy the condition
+dbShouldSatisfy :: (HasCallStack, Show a) => DB IO a -> (a -> Bool) -> DB IO ()
+dbShouldSatisfy action condition = do
+  actual <- action
+  liftIO $ actual `shouldSatisfy` condition
+
+-- | The result of a database action that can fail must be the expected value
+dbShouldBeE :: (HasCallStack, Eq a, Show a) => ExceptT String (DB IO) a -> a -> ExceptT String (DB IO) ()
+dbShouldBeE action expected = do
+  actual <- action
+  liftIO $ actual `shouldBe` expected
+
+-- | The database action must fail
+dbShouldFail :: (HasCallStack, Show a) => ExceptT String (DB IO) a -> DB IO ()
+dbShouldFail action = do
+  result <- runExceptT action
+  liftIO $ result `shouldSatisfy` isLeft
+
+-- | The database action must fail with the given message
+dbShouldFailWith :: (HasCallStack, Eq a, Show a) => String -> ExceptT String (DB IO) a -> DB IO ()
+dbShouldFailWith message action = do
+  result <- runExceptT action
+  liftIO $ result `shouldBe` Left message
+
+{- Raw views of a database -}
+
+-- | The rows of a query, as raw values, in a fixed order
+queryRows :: Text -> DB IO [[PersistValue]]
+queryRows query = sort <$> runConduit (rawQuery query [] .| sinkList)
+
+-- | All the rows of a table
+tableRows :: Text -> DB IO [[PersistValue]]
+tableRows table = queryRows $ "select * from " <> table
+
+-- | All the rows of several tables
+tablesRows :: [Text] -> DB IO [[[PersistValue]]]
+tablesRows = mapM tableRows
+
+-- | What the version table holds, each value with its SQLite storage class
+storedVersions :: DB IO [(PersistValue, Text)]
+storedVersions = do
+  rows <- rawSql "select version, typeof(version) from d_b_version" []
+  return [(value, storageClass) | (Single value, Single storageClass) <- rows]
 
 -- | A new account of the test wallet in the database, with the given name
 testNewAcc :: Ctx -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)

@@ -386,7 +386,7 @@ databaseSpec ctx =
   describe "With the database" $ do
     let cfg = def :: Config
     it "fetches the coins with their paths, the change address and the wallet recipients" $
-      runDBMemoryE $ do
+      inDatabaseE $ do
         (accId, fund) <- fundedAccount ctx cfg
         found <- fetchWalletCoins btc ctx cfg accId [otherAddr 0, externalAddr 0] 1
         liftIO $ do
@@ -395,13 +395,13 @@ databaseSpec ctx =
           found.change `shouldBe` (internalAddr 0, Deriv :/ 1 :/ 0)
           found.recipientPaths `shouldBe` Map.fromList [(externalAddr 0, Deriv :/ 0 :/ 0)]
     it "leaves out the coins without enough confirmations" $
-      runDBMemoryE $ do
+      inDatabaseE $ do
         (accId, _) <- fundedAccount ctx cfg
         -- The coin at the best block has one confirmation
         found <- fetchWalletCoins btc ctx cfg accId [] 2
         liftIO $ found.coins `shouldBe` []
     it "builds the signing data with the transactions spent from" $
-      runDBMemoryE $ do
+      inDatabaseE $ do
         (accId, fund) <- fundedAccount ctx cfg
         tsd <- buildTxSignData btc ctx cfg (mkStdGen 0) LargestFirst accId [(otherAddr 0, 350000)] 10 546 SenderPays 1 []
         liftIO $ do
@@ -413,7 +413,7 @@ databaseSpec ctx =
           txSignDataFeeRate tsd `shouldBe` Just 10
           txSignDataSigned tsd `shouldBe` False
     it "fails without recipients" $
-      runDBMemoryE $ do
+      inDatabaseE $ do
         (accId, _) <- fundedAccount ctx cfg
         result <- lift $ runExceptT $ buildTxSignData btc ctx cfg (mkStdGen 0) LargestFirst accId [] 10 546 SenderPays 1 []
         liftIO $ result `shouldBe` Left "No recipients provided"
