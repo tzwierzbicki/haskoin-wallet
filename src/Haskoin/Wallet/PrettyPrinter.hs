@@ -516,6 +516,12 @@ prettyPrinter unit =
     ResponseTx acc txInfo -> do
       let net = accountNetwork acc
       renderIO $ txInfoPrinter net unit txInfo
+    ResponseSentTx net h ->
+      renderIO $
+        vcat
+          [ formatKey "Sent:" <+> formatTxHash (cs $ txHashToHex h),
+            nest 2 $ formatKey "Network:" <+> formatValue net.name
+          ]
     ResponseDeleteTx h c a ->
       renderIO $
         vcat

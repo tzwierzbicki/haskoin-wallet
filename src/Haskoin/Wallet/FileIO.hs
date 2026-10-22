@@ -112,27 +112,3 @@ readMarshalFile s filePath = do
 
 -- Parse wallet dump files for sweeping --
 
-readFileWords :: FilePath -> IO [[Text]]
-readFileWords fp = do
-  strContents <- IO.readFile fp
-  return $ removeComments $ Text.words <$> Text.lines (cs strContents)
-
-parseSecKeysFile :: Network -> [[Text]] -> [SecKey]
-parseSecKeysFile net =
-  withParser $ \w -> (.key) <$> (fromWif net w <|> fromMiniKey (cs w))
-
-withParser :: (Text -> Maybe a) -> [[Text]] -> [a]
-withParser parser =
-  mapMaybe go
-  where
-    go [] = Nothing
-    go (w : ws) = parser w <|> go ws
-
-removeComments :: [[Text]] -> [[Text]]
-removeComments =
-  mapMaybe go
-  where
-    go [] = Nothing
-    go ws@(w : _)
-      | "#" `Text.isPrefixOf` w = Nothing
-      | otherwise = Just ws

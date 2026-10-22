@@ -63,6 +63,10 @@ data TxInfo = TxInfo
   }
   deriving (Eq, Show)
 
+-- | Whether the wallet spends or receives anything in the transaction
+involvesWallet :: TxInfo -> Bool
+involvesWallet txInfo = not (Map.null (txInfoMyInputs txInfo) && Map.null (txInfoMyOutputs txInfo))
+
 data TxInfoPending = TxInfoPending
   { pendingNosigHash :: !TxHash,
     pendingSigned :: !Bool,

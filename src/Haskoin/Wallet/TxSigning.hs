@@ -50,7 +50,7 @@ import Haskoin.Wallet.TxInfo
     TxInfoPending (..),
     txType,
   )
-import Haskoin.Wallet.Util (safeSubtract)
+import Haskoin.Wallet.Util (nosigHash, safeSubtract)
 import Numeric.Natural (Natural)
 
 -- | The 'TxInfo' of a transaction to sign, or already signed, as the wallet
@@ -260,7 +260,7 @@ txInfo feeRate analysis tx signed =
       txInfoChangeInFee = changeInFee,
       txInfoBlockRef = Store.MemRef 0,
       txInfoConfirmations = 0,
-      txInfoPending = Just $ TxInfoPending (nosigTxHash tx) signed False,
+      txInfoPending = Just $ TxInfoPending (nosigHash tx) signed False,
       txInfoDead = False
     }
   where

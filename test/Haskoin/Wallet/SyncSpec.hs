@@ -31,7 +31,7 @@ import Haskoin.Wallet.FileIO (TxSignData (..))
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo (TxInfo (..))
-import Haskoin.Wallet.Util (Page (Page))
+import Haskoin.Wallet.Util (Page (Page), nosigHash)
 import Numeric.Natural (Natural)
 import Test.Hspec
 
@@ -610,7 +610,7 @@ pendingRow (DBAccountKey wallet accDeriv) tx =
   DBPendingTx
     { dBPendingTxAccountWallet = wallet,
       dBPendingTxAccountDerivation = accDeriv,
-      dBPendingTxNosigHash = txHashToHex (nosigTxHash tx),
+      dBPendingTxNosigHash = txHashToHex (nosigHash tx),
       dBPendingTxBlob = BS.toStrict $ Json.encode $ TxSignData tx [] [] [] Nothing True,
       dBPendingTxOnline = False,
       dBPendingTxCreated = fixtureTime

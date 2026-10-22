@@ -58,7 +58,7 @@ import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Schema.V4
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSigning (parseTxSignData)
-import Haskoin.Wallet.Util (Page (Page), textToAddrE)
+import Haskoin.Wallet.Util (Page (Page), nosigHash, textToAddrE)
 import Numeric.Natural (Natural)
 
 
@@ -1127,8 +1127,8 @@ getPendingTx ::
   (MonadUnliftIO m) =>
   TxHash ->
   DB m (Maybe (DBAccountId, TxSignData, TxInfoPending))
-getPendingTx nosigHash = do
-  let hashT = txHashToHex nosigHash
+getPendingTx pendingHash = do
+  let hashT = txHashToHex pendingHash
       key = DBPendingTxKey hashT
   resM <- P.get key
   case resM of
@@ -1139,7 +1139,7 @@ getPendingTx nosigHash = do
         tsd <- tsdM
         let pending =
               TxInfoPending
-                (nosigTxHash $ txSignDataTx tsd)
+                (nosigHash $ txSignDataTx tsd)
                 (txSignDataSigned tsd)
                 online
         return (accId, tsd, pending)
@@ -1167,9 +1167,8 @@ pendingTxPage ctx accId@(DBAccountKey wallet accDeriv) (Page lim off) = do
   forM tsds $ \(Entity _ res) -> do
     tsd <- liftEither . Json.eitherDecode . BS.fromStrict $ dBPendingTxBlob res
     txInfo <- liftEither $ parseTxSignData net ctx pub tsd
-    let nosigHash = nosigTxHash $ txSignDataTx tsd
-        pending =
-          TxInfoPending nosigHash (txSignDataSigned tsd) (dBPendingTxOnline res)
+    let pending =
+          TxInfoPending (nosigHash $ txSignDataTx tsd) (txSignDataSigned tsd) (dBPendingTxOnline res)
     let txInfoP = txInfo {txInfoPending = Just pending}
     lift $ fillTxInfoLabels net txInfoP
 
@@ -1204,9 +1203,9 @@ importPendingTx ::
 importPendingTx net ctx accId tsd@(TxSignData tx _ _ _ _ signed) = do
   acc <- getAccountById accId
   let pub = accountXPubKey ctx acc
-      nosigHash = nosigTxHash $ txSignDataTx tsd
+      pendingHash = nosigHash $ txSignDataTx tsd
       bs = BS.toStrict $ Json.encode tsd
-  prevM <- lift $ getPendingTx nosigHash
+  prevM <- lift $ getPendingTx pendingHash
   case prevM of
     Just (_, TxSignData prevTx _ _ _ _ prevSigned, pending) -> do
       when (pendingOnline pending) $
@@ -1216,11 +1215,15 @@ importPendingTx net ctx accId tsd@(TxSignData tx _ _ _ _ signed) = do
       when (prevTx == tx) $
         throwError "The transaction already exists"
       when (not prevSigned && signed) $ do
-        let key = DBPendingTxKey $ txHashToHex nosigHash
+        let key = DBPendingTxKey $ txHashToHex pendingHash
         lift $ P.update key [DBPendingTxBlob P.=. bs]
-      return nosigHash
+      return pendingHash
     Nothing -> do
       txInfoU <- liftEither $ parseTxSignData net ctx pub tsd
+      -- A pending transaction is retired when the sync sees it under one
+      -- of the wallet's addresses; one touching none would wait forever
+      unless (involvesWallet txInfoU) $
+        throwError "The transaction does not involve this wallet"
       let (outpoints, outIntAddrs, restAddrs) = parseTxInfoU txInfoU
       -- Verify coins and lock them
       forM_ outpoints $ \outpoint -> do
@@ -1255,12 +1258,12 @@ importPendingTx net ctx accId tsd@(TxSignData tx _ _ _ _ signed) = do
             DBPendingTx
               (dBAccountWallet acc)
               (dBAccountDerivation acc)
-              (txHashToHex nosigHash)
+              (txHashToHex pendingHash)
               bs
               False
               time
       lift $ P.insert_ ptx
-      return nosigHash
+      return pendingHash
 
 -- (Outpoints, external addrs, internal addrs)
 parseTxInfoU :: TxInfo -> ([OutPoint], [(Address, KeyIndex)], [Address])
@@ -1283,9 +1286,9 @@ deletePendingTx ::
   Ctx ->
   TxHash ->
   ExceptT String (DB m) (Natural, Natural)
-deletePendingTx ctx nosigHash = do
-  let key = DBPendingTxKey $ txHashToHex nosigHash
-  tsdM <- lift $ getPendingTx nosigHash
+deletePendingTx ctx pendingHash = do
+  let key = DBPendingTxKey $ txHashToHex pendingHash
+  tsdM <- lift $ getPendingTx pendingHash
   case tsdM of
     Just (_, _, TxInfoPending _ _ True) -> do
       throwError

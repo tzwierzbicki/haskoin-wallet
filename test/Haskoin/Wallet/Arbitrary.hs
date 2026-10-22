@@ -241,6 +241,7 @@ arbitraryResponse net ctx =
         <$> arbitraryDBAccount net ctx
         <*> resize 20 (listOf $ arbitraryTxInfo net ctx),
       ResponseTx <$> arbitraryDBAccount net ctx <*> arbitraryTxInfo net ctx,
+      ResponseSentTx <$> arbitraryNetwork <*> arbitraryTxHash,
       ResponseDeleteTx
         <$> arbitraryTxHash
         <*> arbitraryNatural

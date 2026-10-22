@@ -76,6 +76,13 @@ addrToTextE :: Network -> Address -> Either String Text
 addrToTextE net a =
   maybeToEither "Invalid Address in addrToTextE" (addrToText net a)
 
+-- | The hash of a transaction without its signatures: the input scripts
+-- and the witnesses cleared, so it is the same before and after signing.
+-- It identifies a pending transaction. (haskoin-core's nosigTxHash keeps
+-- the witnesses, which changes the hash of a SegWit transaction once signed.)
+nosigHash :: Tx -> TxHash
+nosigHash tx = nosigTxHash tx {witness = []}
+
 textToAddrE :: Network -> Text -> Either String Address
 textToAddrE net a =
   maybeToEither "Invalid Address in textToAddrE" (textToAddr net a)
