@@ -266,4 +266,5 @@ arbitraryConfig =
     <*> arbitraryNatural
     <*> arbitraryNatural
     <*> arbitraryNatural
+    <*> arbitraryNatural
     <*> arbitrary

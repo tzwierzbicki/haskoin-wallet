@@ -42,7 +42,7 @@ import Data.Either (fromRight)
 import Data.List (find, nub, partition)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes, fromJust, fromMaybe, mapMaybe)
+import Data.Maybe (catMaybes, fromJust, fromMaybe, isJust, mapMaybe)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -1108,6 +1108,14 @@ getRawTx hash = do
   case txM of
     Just tx -> liftEither . S.decode $ dBRawTxBlob tx
     Nothing -> throwError "getRawTx: missing transaction"
+
+-- | Whether the raw transaction is stored
+hasRawTx :: (MonadUnliftIO m) => TxHash -> DB m Bool
+hasRawTx hash = isJust <$> P.get (DBRawTxKey $ txHashToHex hash)
+
+-- | Those of the transactions whose raw transaction is not stored
+missingRawTxs :: (MonadUnliftIO m) => [TxHash] -> DB m [TxHash]
+missingRawTxs = filterM (fmap not . hasRawTx)
 
 {- Pending Transactions -}
 

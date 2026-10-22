@@ -10,6 +10,31 @@
 -- and against the stored data as the hw of its version wrote it. A step knows
 -- nothing of the versions after it, so a database goes from version to
 -- version as the hw of each version left it.
+--
+-- Adding a format version N:
+--
+-- * Copy the tables of version N-1 to "Haskoin.Wallet.Schema.VN", change
+--   them, and point "Haskoin.Wallet.Database" at the new module. The older
+--   schema modules never change again.
+--
+-- * Write the step in "Haskoin.Wallet.Migration.VN" against the tables of
+--   version N, and of version N-1 where it reads them, and against the
+--   stored data as the hw of version N-1 wrote it. Whatever types the step
+--   needs for that data, copy them into the step module as they were then.
+--   The step stores the version N itself.
+--
+-- * List the step in 'steps' and bump 'latestDatabaseVersion'.
+--
+-- * Test it in test/Haskoin/Wallet/Migration/VNSpec.hs, from the tables of
+--   version N-1 to version N only.
+--
+-- The rule behind all of this: a step and its spec see versions N-1 and N
+-- and nothing else. They use the schema modules of those versions and the
+-- types frozen in the step modules, never the live code: no entity of
+-- "Haskoin.Wallet.Database", no type of "Haskoin.Wallet.TxInfo", no
+-- 'latestDatabaseVersion'. The live code moves on with every version, and
+-- anything that reaches it from a step or a spec breaks the day version
+-- N+1 changes it.
 module Haskoin.Wallet.Migration
   ( latestDatabaseVersion,
     databaseVersion,

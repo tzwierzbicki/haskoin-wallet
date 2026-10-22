@@ -2,7 +2,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TupleSections #-}
 
 -- | Synchronising an account with the store: address discovery, balances,
 -- transaction summaries, coins and the raw transactions the coins come from.
@@ -22,7 +21,6 @@ import Data.List (nub, sort)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromJust)
-import qualified Data.Serialize as S
 import qualified Data.Set as Set
 import Data.String.Conversions (cs)
 import Haskoin
@@ -33,6 +31,7 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
+import UnliftIO.Async (pooledMapConcurrentlyN)
 
 {- The store -}
 
@@ -57,7 +56,8 @@ data Store = Store
     storeTransactions :: [TxHash] -> ExceptT String IO [Store.Transaction],
     -- | Every unspent output of the addresses
     storeUnspents :: [Address] -> ExceptT String IO [Store.Unspent],
-    -- | The raw transactions with the given ids
+    -- | The raw transactions with the given ids; a transaction the store
+    -- does not know is left out
     storeRawTransactions :: [TxHash] -> ExceptT String IO [Tx]
   }
 
@@ -98,6 +98,14 @@ webStore ctx cfg net =
 -- | Ask the store from inside a database action
 fromStore :: (MonadIO m) => ExceptT String IO a -> ExceptT String (DB m) a
 fromStore action = ExceptT $ liftIO $ runExceptT action
+
+-- | Ask the store several questions, at most the given number at a time,
+-- and answer them in the order asked. One failed question fails them all.
+inParallel :: Natural -> [ExceptT String IO a] -> ExceptT String IO [a]
+inParallel atATime questions = do
+  let threads = max 1 (fromIntegral atATime)
+  answers <- liftIO $ pooledMapConcurrentlyN threads runExceptT questions
+  liftEither $ sequence answers
 
 {- Address discovery -}
 
@@ -156,12 +164,13 @@ data SyncRes = SyncRes
 sync ::
   (MonadUnliftIO m) =>
   Ctx ->
+  Config ->
   Store ->
   Network ->
   DBAccountId ->
   Bool ->
   ExceptT String (DB m) SyncRes
-sync ctx store net accId full = do
+sync ctx cfg store net accId full = do
   fromStore $ storeHealth store
   -- The best block is taken before anything else, so that a block found
   -- during the sync is caught up with on the next one rather than missed
@@ -180,7 +189,7 @@ sync ctx store net accId full = do
   newAcc <- lift $ updateAccountBalances accId
   -- Every transaction the store lists for each changed address. A
   -- transaction touching two of them is listed under both.
-  listedByAddress <- forM changedBals $ \bal -> (bal,) <$> listTxs store net bal
+  listedByAddress <- listTxs cfg store net changedBals
   let listed = concatMap snd listedByAddress
   -- The summaries already stored, with their blocks
   known <- txInfoBlockRefs accId
@@ -225,14 +234,21 @@ sync ctx store net accId full = do
         <> show countedCoins
         <> " coins for the addresses to update but listed "
         <> show (length unspents)
-  (coinCount, newCoins) <- refreshCoins net accId changedAddrs unspents
-  -- The raw transactions the coins come from, which signing needs
-  depTxsHash <-
-    if everything
-      then return $ (.outpoint.hash) <$> unspents
-      else mapM (liftEither . coinToTxHash) newCoins
-  rawTxs <- fromStore $ storeRawTransactions store $ nub depTxsHash
-  lift $ forM_ rawTxs insertRawTx
+  (coinCount, _) <- refreshCoins net accId changedAddrs unspents
+  -- The raw transactions the coins come from, which signing needs. A raw
+  -- transaction never changes, so the ones already stored are not fetched
+  -- again. The store must have every one asked for: it lists the coins.
+  let parents = nub $ (.outpoint.hash) <$> unspents
+  missing <- lift $ missingRawTxs parents
+  unless (null missing) $ do
+    rawTxs <- fromStore $ storeRawTransactions store missing
+    when (length rawTxs /= length missing) $
+      throwError $
+        "The store was asked for "
+          <> show (length missing)
+          <> " raw transactions but returned "
+          <> show (length rawTxs)
+    lift $ forM_ rawTxs insertRawTx
   -- A pending transaction the store lists has been sent to the network
   pendingTids <- pendingTxHashes accId
   let seen = Set.fromList $ (.txid) <$> listed
@@ -261,23 +277,36 @@ chainReorganised store net = do
       let stillMain b = headerHash b.header == hash && b.main
       return $ not $ any stillMain blocks
 
--- | Every transaction the store lists for an address: as many as it counts
--- in the balance, which a listing cut short would not match
+-- | Every transaction the store lists for each address that has any: as
+-- many as it counts in the balance, which a listing cut short would not
+-- match. The addresses are not listed together in one request, because the
+-- store would merge a transaction listed under two of them into one and
+-- the counts could no longer be checked; the listings are asked in
+-- parallel instead, as many at a time as the configuration allows.
 listTxs ::
-  (MonadUnliftIO m) => Store -> Network -> Store.Balance -> ExceptT String (DB m) [Store.TxRef]
-listTxs store net bal
-  | bal.txs == 0 = return []
-  | otherwise = do
-      refs <- fromStore $ storeAddressTxs store bal.address (fromIntegral bal.txs)
-      when (fromIntegral (length refs) /= bal.txs) $
-        throwError $
-          "The store counts "
-            <> show bal.txs
-            <> " transactions for "
-            <> cs (fromJust $ addrToText net bal.address)
-            <> " but listed "
-            <> show (length refs)
-      return refs
+  (MonadUnliftIO m) =>
+  Config ->
+  Store ->
+  Network ->
+  [Store.Balance] ->
+  ExceptT String (DB m) [(Store.Balance, [Store.TxRef])]
+listTxs cfg store net bals = do
+  let used = filter ((/= 0) . (.txs)) bals
+  listings <-
+    fromStore $
+      inParallel
+        (configParallelRequests cfg)
+        [storeAddressTxs store bal.address (fromIntegral bal.txs) | bal <- used]
+  forM (zip used listings) $ \(bal, refs) -> do
+    when (fromIntegral (length refs) /= bal.txs) $
+      throwError $
+        "The store counts "
+          <> show bal.txs
+          <> " transactions for "
+          <> cs (fromJust $ addrToText net bal.address)
+          <> " but listed "
+          <> show (length refs)
+    return (bal, refs)
 
 -- | The balances that differ from the stored ones: the addresses to update
 filterAddresses ::
@@ -297,10 +326,3 @@ filterAddresses sBals aMap
             || s.confirmed /= addrBalanceConfirmed b
             || s.unconfirmed /= addrBalanceUnconfirmed b
             || s.utxo /= addrBalanceCoins b
-
-coinToTxHash :: DBCoin -> Either String TxHash
-coinToTxHash coin =
-  maybeToEither "coinToTxHash: Invalid outpoint" $ do
-    bs <- decodeHex $ dBCoinOutpoint coin
-    op <- eitherToMaybe (S.decode bs) :: Maybe OutPoint
-    return op.hash
