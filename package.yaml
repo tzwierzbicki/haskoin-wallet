@@ -77,7 +77,9 @@ tests:
     verbatim:
       build-tool-depends:
         hspec-discover:hspec-discover
-    ghc-options: -Wall
+    # Threaded: the lock tests hold the database from one thread while
+    # another waits on it inside SQLite
+    ghc-options: -Wall -threaded
     dependencies:
       - haskoin-wallet
       - hspec >= 2.7.1
