@@ -25,14 +25,19 @@ import Data.Word (Word32, Word64, Word8)
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Commands (deleteTx)
+import Haskoin.Wallet.Account
+import Haskoin.Wallet.Address
+import Haskoin.Wallet.BestBlock
+import Haskoin.Wallet.Coin
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.FileIO (TxSignData (..))
+import Haskoin.Wallet.PendingTx
+import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.TxInfo (TxInfo (..), TxInfoPending (..))
-import Haskoin.Wallet.Util (Page (Page), nosigHash)
+import Haskoin.Wallet.TxInfo (TxInfo (..), TxInfoPending (..), txsPage)
+import Haskoin.Wallet.TxSignData
+import Haskoin.Wallet.Util (Page (Page))
 import Numeric.Natural (Natural)
 import Test.Hspec
 

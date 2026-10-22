@@ -17,13 +17,17 @@ import Data.Maybe (fromJust)
 import Data.Word (Word32, Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.Address
+import Haskoin.Wallet.BestBlock
+import Haskoin.Wallet.Coin
 import Haskoin.Wallet.CoinSelection
 import Haskoin.Wallet.Config (Config)
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.FileIO (TxSignData (..))
+import Haskoin.Wallet.RawTx
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxBuilding
 import Haskoin.Wallet.TxInfo (TxInfo (..))
+import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSigning (parseTxSignData, signWalletTx, verifySignedTx)
 import Numeric.Natural (Natural)
 import System.Random (mkStdGen)
@@ -50,18 +54,9 @@ spec =
 
 {- Helpers -}
 
--- | The transaction funding coins worth the given amounts, on the external
--- addresses /0/0, /0/1, ... of the test wallet
-funding :: Ctx -> [Natural] -> Tx
-funding ctx values = fundingTx ctx 1 $ zip (externalAddr <$> [0 ..]) values
-
--- | The coins of 'funding', as the store reports them
-coinsWorth :: Ctx -> [Natural] -> [Store.Unspent]
-coinsWorth ctx = coinsOf ctx . funding ctx
-
--- | The outpoint of the i-th coin of 'funding'
+-- | The outpoint of the i-th coin of 'fundingWorth'
 coinAt :: Ctx -> [Natural] -> Word32 -> OutPoint
-coinAt ctx values = OutPoint (txHash $ funding ctx values)
+coinAt ctx values = OutPoint (txHash $ fundingWorth ctx values)
 
 -- | The wallet as the builder sees it: the coins, the paths of the first ten
 -- external addresses, the change address /1/0, and the recipients that
@@ -131,7 +126,7 @@ transactionSpec ctx =
     it "is a version 1 transaction with final sequences and no lock time" $ do
       built <- expectRight $ pay ctx [400000] [(otherAddr 0, 350000)]
       sortedOutputs built.tx
-        `shouldBe` spendingTx ctx [(txHash (funding ctx [400000]), 0)] [(internalAddr 0, 47740), (otherAddr 0, 350000)]
+        `shouldBe` spendingTx ctx [(txHash (fundingWorth ctx [400000]), 0)] [(internalAddr 0, 47740), (otherAddr 0, 350000)]
     it "pays several recipients" $ do
       -- Fee: 10 + 148 + 3 * 34 = 260 bytes * 10 = 2600
       -- Change: 400000 - 150000 - 100000 - 2600 = 147400
@@ -219,7 +214,7 @@ recipientTypesSpec ctx =
       built.outputPaths `shouldBe` [Deriv :/ 1 :/ 0]
     it "reports, signs and verifies the payment to every type" $ do
       built <- expectRight $ pay ctx [400000] everyType
-      let tsd = TxSignData built.tx [funding ctx [400000]] built.inputPaths built.outputPaths (Just 10) False
+      let tsd = TxSignData built.tx [fundingWorth ctx [400000]] built.inputPaths built.outputPaths (Just 10) False
       unsignedInfo <- expectRight $ parseTxSignData btc ctx (testAccountPub ctx) tsd
       (unsignedInfo.txInfoSize, unsignedInfo.txInfoFeeByte, unsignedInfo.txInfoChangeInFee) `shouldBe` (375, 10, Just 0)
       (signed, info) <- expectRight $ signWalletTx btc ctx tsd testAccountKey
@@ -440,7 +435,7 @@ fundedAccount ctx cfg = do
   (accId, _) <- testNewAcc ctx "test"
   lift $ updateBest btc (fakeBlockHash 0) 0
   _ <- genExtAddress ctx cfg accId ""
-  let fund = funding ctx [400000]
+  let fund = fundingWorth ctx [400000]
   lift $ insertRawTx fund
   _ <- refreshCoins btc accId [externalAddr 0] [storeCoin ctx (txHash fund, 0) (Just 0) (externalAddr 0) 400000]
   return (accId, fund)

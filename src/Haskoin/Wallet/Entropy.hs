@@ -4,9 +4,9 @@
 
 module Haskoin.Wallet.Entropy where
 
-import Control.Monad.IO.Class ( MonadIO, liftIO )
 import Control.Monad (replicateM, unless, when)
 import Control.Monad.Except
+import Control.Monad.IO.Class ( MonadIO, liftIO )
 import Data.Bits (Bits (setBit, xor))
 import qualified Data.ByteString as BS
 import Data.List (foldl', nub)
@@ -219,3 +219,14 @@ systemEntropy bytes = do
 devRandom :: Natural -> IO BS.ByteString
 devRandom bytes =
   withBinaryFile "/dev/random" ReadMode (`BS.hGet` fromIntegral bytes)
+
+-- | Dice rolls drawn from the system entropy, with the name of its source:
+-- a byte at a time, each worth up to three rolls, until there are enough
+rollDice :: Natural -> IO ([Natural], Text)
+rollDice n = go [] ""
+  where
+    go rolls source
+      | length rolls >= fromIntegral n = return (take (fromIntegral n) rolls, source)
+      | otherwise = do
+          (source', bytes) <- systemEntropy 1
+          go (concatMap word8ToBase6 (BS.unpack bytes) <> rolls) source'

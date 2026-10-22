@@ -5,18 +5,48 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE EmptyDataDecls #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE UndecidableInstances #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 
+-- | The transaction summaries of the wallet: what a transaction means to
+-- an account, with its amounts and the inputs and outputs that are the
+-- wallet's, their JSON form for the files and the output of hw, and their
+-- rows in the database, which the sync keeps up to date.
 module Haskoin.Wallet.TxInfo where
 
-import Data.Aeson (object, withObject, (.!=), (.:), (.:?), (.=))
+import Conduit (MonadUnliftIO, ResourceT, runResourceT)
+import Control.Monad
+import Control.Monad.Except
+import Control.Monad.IO.Class (MonadIO (liftIO))
+import Control.Monad.Reader (MonadTrans (lift), ReaderT)
+import Control.Monad.Trans.Maybe
+import Data.Aeson
 import qualified Data.Aeson as Json
+import qualified Data.ByteString as BS
 import Data.Either (partitionEithers)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (catMaybes, fromJust, fromMaybe, isJust, mapMaybe)
+import qualified Data.Serialize as S
 import Data.Text (Text)
+import Data.Time (getCurrentTime)
+import Database.Esqueleto.Legacy as E
+import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.Account
+import Haskoin.Wallet.BestBlock
+import Haskoin.Wallet.Database
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 
@@ -206,7 +236,6 @@ instance MarshalJSON (Network, Ctx) TxInfo where
         <*> o .: "pending"
         <*> o .:? "dead" .!= False
 
-
 storeToTxInfo ::
   Map Address SoftPath -> Natural -> Store.Transaction -> TxInfo
 storeToTxInfo walletAddrs currHeight sTx =
@@ -275,3 +304,155 @@ txType amount fee
   | abs amount == fromIntegral fee = TxInternal
   | otherwise = TxDebit
 
+{- Summaries in the database -}
+
+-- | The block of every live transaction summary of an account, by
+-- transaction id. The dead ones are left out: the sync treats them as
+-- unknown, so that a transaction the store lists again is fetched and comes
+-- back to life.
+txInfoBlockRefs ::
+  (MonadUnliftIO m) => DBAccountId -> ExceptT String (DB m) (Map TxHash Store.BlockRef)
+txInfoBlockRefs (DBAccountKey wallet accDeriv) = do
+  rows <-
+    lift . select . from $ \t -> do
+      where_ $
+        t ^. DBTxInfoAccountWallet ==. val wallet
+          &&. t ^. DBTxInfoAccountDerivation ==. val accDeriv
+          &&. t ^. DBTxInfoDead ==. val False
+      return (t ^. DBTxInfoTxid, t ^. DBTxInfoBlockRef)
+  entries <- forM rows $ \(Value tidT, Value refBytes) -> do
+    tid <- liftEither $ maybeToEither "txInfoBlockRefs: invalid txid" $ hexToTxHash tidT
+    ref <- liftEither $ S.decode refBytes
+    return (tid, ref)
+  return $ Map.fromList entries
+
+-- | Mark the summary of a transaction dead: the store no longer has it, or
+-- reports it replaced or dropped. The summary stays, for the history.
+markTxInfoDead :: (MonadUnliftIO m) => DBAccountId -> TxHash -> DB m ()
+markTxInfoDead (DBAccountKey wallet accDeriv) tid =
+  P.update (DBTxInfoKey wallet accDeriv (txHashToHex tid)) [DBTxInfoDead P.=. True]
+
+getConfirmedTxs ::
+  (MonadUnliftIO m) => DBAccountId -> Bool -> ExceptT String (DB m) [TxHash]
+getConfirmedTxs (DBAccountKey wallet accDeriv) confirm = do
+  ts <-
+    lift . select $
+      from $ \t -> do
+        where_ $
+          t ^. DBTxInfoAccountWallet ==. val wallet
+            &&. t ^. DBTxInfoAccountDerivation ==. val accDeriv
+            &&. t ^. DBTxInfoConfirmed ==. val confirm
+        orderBy [asc (t ^. DBTxInfoBlockRef)]
+        return $ t ^. DBTxInfoTxid
+  forM ts $ \(Value t) ->
+    liftEither $ maybeToEither "getConfirmedTxs invalid TxHash" $ hexToTxHash t
+
+-- Insert a new transaction or replace it, if it already exists
+-- Returns True if there was a change or an insert
+repsertTxInfo ::
+  (MonadUnliftIO m) =>
+  Network ->
+  Ctx ->
+  DBAccountId ->
+  TxInfo ->
+  ExceptT String (DB m) (DBTxInfo, Bool)
+repsertTxInfo net ctx accId txInfo = do
+  time <- liftIO getCurrentTime
+  tid <- liftEither $ maybeToEither "TxId" $ txInfoHash txInfo
+  let confirmed' = Store.confirmed $ txInfoBlockRef txInfo
+      tidT = txHashToHex tid
+      bRef = S.encode $ txInfoBlockRef txInfo
+      -- Confirmations will get updated when retrieving them
+      blob =
+        BS.toStrict $
+          marshalJSON
+            (net, ctx)
+            txInfo
+              { txInfoConfirmations = 0,
+                txInfoPending = Nothing,
+                txInfoDead = False
+              }
+      (DBAccountKey wallet accDeriv) = accId
+      key = DBTxInfoKey wallet accDeriv tidT
+      dbInfo =
+        DBTxInfo
+          { dBTxInfoAccountWallet = wallet,
+            dBTxInfoAccountDerivation = accDeriv,
+            dBTxInfoTxid = tidT,
+            dBTxInfoBlockRef = bRef,
+            dBTxInfoConfirmed = confirmed',
+            dBTxInfoBlob = blob,
+            dBTxInfoDead = False,
+            dBTxInfoCreated = time
+          }
+  prevM <- lift $ P.get key
+  case prevM of
+    Just prev -> do
+      -- A live transaction from the store: a summary marked dead comes back
+      let newDBInfo =
+            prev
+              { dBTxInfoBlockRef = bRef,
+                dBTxInfoConfirmed = confirmed',
+                dBTxInfoBlob = blob,
+                dBTxInfoDead = False
+              }
+      lift $ P.replace key newDBInfo
+      return (newDBInfo, prev /= newDBInfo)
+    Nothing -> do
+      lift $ P.insert_ dbInfo
+      return (dbInfo, True)
+
+txsPage ::
+  (MonadUnliftIO m) =>
+  Ctx ->
+  DBAccountId ->
+  Page ->
+  ExceptT String (DB m) [TxInfo]
+txsPage ctx accId@(DBAccountKey wallet accDeriv) (Page lim off) = do
+  acc <- getAccountById accId
+  let net = accountNetwork acc
+  dbTxs <-
+    lift . select . from $ \t -> do
+      where_ $
+        t ^. DBTxInfoAccountWallet ==. val wallet
+          &&. t ^. DBTxInfoAccountDerivation ==. val accDeriv
+      orderBy [asc (t ^. DBTxInfoBlockRef)]
+      limit $ fromIntegral lim
+      offset $ fromIntegral off
+      return (t ^. DBTxInfoBlob, t ^. DBTxInfoDead)
+  res <-
+    forM dbTxs $ \(Value dbTx, Value dead) -> do
+      txInfo <-
+        liftMaybe "TxInfo unmarshalJSON Failed" $
+          unmarshalJSON (net, ctx) $
+            BS.fromStrict dbTx
+      return txInfo {txInfoDead = dead}
+  resLabels <- lift $ mapM (fillTxInfoLabels net) res
+  bestM <- lift $ getBest net
+  return $ updateConfirmations (snd <$> bestM) <$> resLabels
+  where
+    updateConfirmations bestM tif =
+      tif {txInfoConfirmations = getConfirmations bestM (txInfoBlockRef tif)}
+
+fillTxInfoLabels :: (MonadUnliftIO m) => Network -> TxInfo -> DB m TxInfo
+fillTxInfoLabels net txInfo = do
+  o <- mapM fillOutput $ Map.assocs $ txInfoMyOutputs txInfo
+  i <- mapM fillInput $ Map.assocs $ txInfoMyInputs txInfo
+  return $
+    txInfo
+      { txInfoMyOutputs = Map.fromList o,
+        txInfoMyInputs = Map.fromList i
+      }
+  where
+    fillOutput (a, o) = do
+      resM <- runMaybeT $ do
+        addrT <- hoistMaybe $ addrToText net a
+        (Entity _ dbAddr) <- hoistMaybe =<< lift (P.getBy $ UniqueAddress addrT)
+        return (a, o {myOutputsLabel = dBAddressLabel dbAddr})
+      return $ fromMaybe (a, o) resM
+    fillInput (a, i) = do
+      resM <- runMaybeT $ do
+        addrT <- hoistMaybe $ addrToText net a
+        (Entity _ dbAddr) <- hoistMaybe =<< lift (P.getBy $ UniqueAddress addrT)
+        return (a, i {myInputsLabel = dBAddressLabel dbAddr})
+      return $ fromMaybe (a, i) resM

@@ -2,8 +2,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The keys of a wallet: from its mnemonic and passphrase to the signing
--- key of an account and the fingerprint of the wallet; and the private keys
--- of a sweep, as users write them.
+-- key of an account, along its BIP44 path, and the fingerprint of the
+-- wallet; and the private keys of a sweep, as users write them and where
+-- they come from.
 module Haskoin.Wallet.Keys where
 
 import Control.Applicative ((<|>))
@@ -12,7 +13,6 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin
-import Haskoin.Wallet.Database (bip44Deriv)
 import Numeric.Natural (Natural)
 
 data MnemonicPass = MnemonicPass
@@ -21,19 +21,38 @@ data MnemonicPass = MnemonicPass
   }
   deriving (Eq, Show)
 
--- Compute an account signing key
+-- | The BIP44 path of an account: m/44'/coin'/account', with the coin
+-- type of the network
+bip44Deriv :: Network -> Natural -> HardPath
+bip44Deriv net a = Deriv :| 44 :| net.bip44Coin :| fromIntegral a
+
+-- | The index of an account from its public key: the last step of its path
+xPubIndex :: XPubKey -> Natural
+xPubIndex = fromIntegral . xPubChild
+
+-- | The signing key of an account: the key at its BIP44 path under the
+-- master key of the seed
 signingKey :: Network -> Ctx -> MnemonicPass -> Natural -> Either String XPrvKey
 signingKey net ctx mnem acc = do
   seed <- mnemonicToSeed (mnemonicPass mnem) (mnemonicWords mnem)
   return $ derivePath ctx (bip44Deriv net acc) (makeXPrvKey seed)
 
--- Compute the unique wallet fingerprint given a mnemonic
+-- | The fingerprint of a wallet: that of the public key of its first
+-- Bitcoin account
 walletFingerprint :: Network -> Ctx -> MnemonicPass -> Either String Fingerprint
 walletFingerprint net ctx mnem = do
   xPrvKey <- signingKey net ctx mnem 0
   return $ xPubFP ctx $ deriveXPubKey ctx xPrvKey
 
 {- Private keys of a sweep -}
+
+-- | Where the private keys of a sweep come from
+data KeySource
+  = -- | A file with one or more keys per line
+    KeysInFile !FilePath
+  | -- | Typed on the terminal without echo, asked for with --prvkeys -
+    KeysOnTerminal
+  deriving (Eq, Show)
 
 -- | A private key as a user writes it: in WIF, compressed or not, of the
 -- network; as a minikey; or as 64 hexadecimal digits. Whether the key is

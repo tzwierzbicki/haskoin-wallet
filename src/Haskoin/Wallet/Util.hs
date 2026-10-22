@@ -5,11 +5,13 @@
 module Haskoin.Wallet.Util where
 
 import Control.Arrow (second)
+import Control.Monad ((<=<))
 import Control.Monad.Except
+import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.State (MonadState (..))
 import qualified Data.Aeson as JSON
-import Data.Aeson.Types (Parser)
 import qualified Data.Aeson.Encode.Pretty as Pretty
+import Data.Aeson.Types (Parser)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.List (sortBy)
@@ -20,7 +22,6 @@ import qualified Data.Serialize as S
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin
-import qualified Haskoin.Store.Data as Store
 import Numeric.Natural (Natural)
 import System.Random (StdGen, uniformShuffleList)
 
@@ -60,12 +61,9 @@ toPage (Page limit offset) xs =
 
 {- Errors -}
 
-liftExcept :: (MonadError String m) => ExceptT Store.Except m a -> m a
-liftExcept action = do
-  e <- runExceptT action
-  case e of
-    Right a -> return a
-    Left err -> throwError $ show (err :: Store.Except)
+-- | The result of an IO action that may fail, as an error of the monad
+liftEitherIO :: (MonadIO m) => IO (Either String a) -> ExceptT String m a
+liftEitherIO = liftEither <=< liftIO
 
 {- Addresses -}
 
@@ -75,13 +73,6 @@ liftExcept action = do
 addrToTextE :: Network -> Address -> Either String Text
 addrToTextE net a =
   maybeToEither "Invalid Address in addrToTextE" (addrToText net a)
-
--- | The hash of a transaction without its signatures: the input scripts
--- and the witnesses cleared, so it is the same before and after signing.
--- It identifies a pending transaction. (haskoin-core's nosigTxHash keeps
--- the witnesses, which changes the hash of a SegWit transaction once signed.)
-nosigHash :: Tx -> TxHash
-nosigHash tx = nosigTxHash tx {witness = []}
 
 textToAddrE :: Network -> Text -> Either String Address
 textToAddrE net a =

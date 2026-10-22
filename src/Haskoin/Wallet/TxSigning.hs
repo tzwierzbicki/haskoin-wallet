@@ -40,8 +40,6 @@ import qualified Data.Text as Text
 import Data.Word (Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.TxSize (inputSize, outputSize, p2pkhInput, txSize)
-import Haskoin.Wallet.FileIO (TxSignData (..))
 import Haskoin.Wallet.TxInfo
   ( MyInputs (..),
     MyOutputs (..),
@@ -50,7 +48,9 @@ import Haskoin.Wallet.TxInfo
     TxInfoPending (..),
     txType,
   )
-import Haskoin.Wallet.Util (nosigHash, safeSubtract)
+import Haskoin.Wallet.TxSignData
+import Haskoin.Wallet.TxSize (inputSize, outputSize, p2pkhInput, txSize)
+import Haskoin.Wallet.Util (safeSubtract)
 import Numeric.Natural (Natural)
 
 -- | The 'TxInfo' of a transaction to sign, or already signed, as the wallet

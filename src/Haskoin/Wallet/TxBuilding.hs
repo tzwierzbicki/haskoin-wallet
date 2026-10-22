@@ -30,13 +30,16 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
 import Data.Word (Word64)
-import Haskoin.Wallet.TxSize (outputSize, p2pkhOutputSize)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.Address
+import Haskoin.Wallet.Coin
 import Haskoin.Wallet.CoinSelection
 import Haskoin.Wallet.Config (Config)
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.FileIO (TxSignData (..))
+import Haskoin.Wallet.RawTx
+import Haskoin.Wallet.TxSignData
+import Haskoin.Wallet.TxSize (outputSize, p2pkhOutputSize)
 import Haskoin.Wallet.Util (addrToText2, randomShuffle, safeSubtract)
 import Numeric.Natural (Natural)
 import System.Random (StdGen, splitGen)

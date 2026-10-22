@@ -13,12 +13,15 @@ import Data.Word
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Util.Arbitrary
-import Haskoin.Wallet.Sync
+import Haskoin.Wallet.Account
+import Haskoin.Wallet.Address
+import Haskoin.Wallet.Coin
 import Haskoin.Wallet.Commands
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.FileIO
+import Haskoin.Wallet.Sync
 import Haskoin.Wallet.TxInfo
+import Haskoin.Wallet.TxSignData
 import Numeric.Natural
 import Test.QuickCheck
 

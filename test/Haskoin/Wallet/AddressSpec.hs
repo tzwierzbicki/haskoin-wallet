@@ -1,0 +1,162 @@
+{-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
+{-# OPTIONS_GHC -Wno-ambiguous-fields -fno-warn-orphans #-}
+
+-- | The external and internal addresses of an account in the database
+module Haskoin.Wallet.AddressSpec (spec) where
+
+import Conduit (liftIO)
+import Control.Monad
+import Control.Monad.Trans (lift)
+import Data.Default (def)
+import Haskoin
+import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.Account
+import Haskoin.Wallet.Address
+import Haskoin.Wallet.Config
+import Haskoin.Wallet.Database
+import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Util
+import Test.Hspec
+
+spec :: Spec
+spec =
+  prepareContext $ \ctx ->
+    describe "Addresses" $ do
+      let cfg = def :: Config
+      extAddressSpec ctx cfg
+      intAddressSpec ctx cfg
+
+extAddressSpec :: Ctx -> Config -> Spec
+extAddressSpec ctx cfg =
+  it "can generate external addresses" $ do
+    inDatabaseE $ do
+      (accId, _) <- testNewAcc ctx "test"
+      -- No addresses yet
+      lift $ bestAddrWithFunds accId AddrInternal `dbShouldBe` Nothing
+      lift $ bestAddrWithFunds accId AddrExternal `dbShouldBe` Nothing
+      lift $ addressPage accId (Page 5 0) `dbShouldBe` []
+      -- Generate external addresses
+      ext1 <- genExtAddress ctx cfg accId "Address 1"
+      liftIO $ do
+        dBAddressIndex ext1 `shouldBe` 0
+        dBAddressAccountWallet ext1 `shouldBe` DBWalletKey testFingerprintText
+        dBAddressAccountDerivation ext1 `shouldBe` "/44'/0'/0'"
+        dBAddressDerivation ext1 `shouldBe` "/0/0"
+        dBAddressAddress ext1 `shouldBe` head externalAddrsText
+        dBAddressLabel ext1 `shouldBe` "Address 1"
+        dBAddressInternal ext1 `shouldBe` False
+        dBAddressFree ext1 `shouldBe` False
+      lift $ addressPage accId (Page 5 0) `dbShouldBe` [ext1]
+      ext2 <- genExtAddress ctx cfg accId "Address 2"
+      liftIO $ do
+        dBAddressIndex ext2 `shouldBe` 1
+        dBAddressAccountWallet ext2 `shouldBe` DBWalletKey testFingerprintText
+        dBAddressAccountDerivation ext2 `shouldBe` "/44'/0'/0'"
+        dBAddressDerivation ext2 `shouldBe` "/0/1"
+        dBAddressAddress ext2 `shouldBe` externalAddrsText !! 1
+        dBAddressLabel ext2 `shouldBe` "Address 2"
+        dBAddressInternal ext2 `shouldBe` False
+        dBAddressFree ext2 `shouldBe` False
+      -- Test Paging
+      lift $ addressPage accId (Page 5 0) `dbShouldBe` [ext2, ext1]
+      lift $ addressPage accId (Page 1 0) `dbShouldBe` [ext2]
+      lift $ addressPage accId (Page 1 1) `dbShouldBe` [ext1]
+      lift $ addressPage accId (Page 1 2) `dbShouldBe` []
+      -- Set address labels
+      _ <- setAddrLabel accId 0 "test address"
+      lift $
+        addressPage accId (Page 5 0)
+          `dbShouldBe` [ext2, ext1 {dBAddressLabel = "test address"}]
+      -- Test the gap
+      replicateM_ 18 $ genExtAddress ctx cfg accId "" -- We have 20 addresses
+      lift $ dbShouldFail $ genExtAddress ctx cfg accId "" -- fail gap
+      lift $ addressPage accId (Page 100 0) `dbShouldSatisfy` ((== 20) . length)
+      updateAddressBalances btc [Store.Balance (externalAddrs !! 2) 0 0 0 1 1]
+      updateAddressBalances btc [Store.Balance (externalAddrs !! 4) 0 0 0 1 1]
+      lift $ bestAddrWithFunds accId AddrExternal `dbShouldBe` Just 4
+      replicateM_ 5 $ genExtAddress ctx cfg accId "" -- We have 25 addresses
+      lift $ dbShouldFail $ genExtAddress ctx cfg accId "" -- fail gap
+      lift $ addressPage accId (Page 100 0) `dbShouldSatisfy` ((== 25) . length)
+      -- Test discoverAccGenAddrs
+      updateAddressBalances btc [Store.Balance (externalAddrs !! 9) 0 0 0 1 1]
+      discoverAccGenAddrs ctx cfg accId AddrExternal 0
+      lift $ addressPage accId (Page 100 0) `dbShouldSatisfy` ((== 25) . length)
+      discoverAccGenAddrs ctx cfg accId AddrExternal 25
+      lift $ addressPage accId (Page 100 0) `dbShouldSatisfy` ((== 25) . length)
+      discoverAccGenAddrs ctx cfg accId AddrExternal 26
+      lift $ addressPage accId (Page 100 0) `dbShouldSatisfy` ((== 26) . length)
+      -- Test getAddrDeriv
+      lift $
+        getAddrDeriv btc accId (head externalAddrs)
+          `dbShouldBe` Right (Deriv :/ 0 :/ 0)
+      lift $
+        getAddrDeriv btc accId (externalAddrs !! 7)
+          `dbShouldBe` Right (Deriv :/ 0 :/ 7)
+      -- Test accound balances
+      acc1 <- lift $ updateAccountBalances accId
+      liftIO $ do
+        dBAccountBalanceConfirmed acc1 `shouldBe` 0
+        dBAccountBalanceUnconfirmed acc1 `shouldBe` 0
+        dBAccountBalanceCoins acc1 `shouldBe` 0
+      updateAddressBalances btc [Store.Balance (externalAddrs !! 1) 2 0 1 1 2]
+      updateAddressBalances btc [Store.Balance (externalAddrs !! 4) 2 8 2 2 10]
+      _ <- nextFreeIntAddr ctx cfg accId
+      updateAddressBalances btc [Store.Balance (head internalAddrs) 3 2 1 1 5]
+      acc1' <- lift $ updateAccountBalances accId
+      liftIO $ do
+        dBAccountBalanceConfirmed acc1' `shouldBe` 7
+        dBAccountBalanceUnconfirmed acc1' `shouldBe` 10
+        dBAccountBalanceCoins acc1' `shouldBe` 4
+      -- Test account indices
+      liftIO $ do
+        dBAccountInternal acc1' `shouldBe` 1
+        dBAccountExternal acc1' `shouldBe` 26
+
+intAddressSpec :: Ctx -> Config -> Spec
+intAddressSpec ctx cfg =
+  it "can generate internal addresses" $ do
+    inDatabaseE $ do
+      (accId, _) <- testNewAcc ctx "test"
+      -- Generate internal addresses
+      int1 <- nextFreeIntAddr ctx cfg accId
+      liftIO $ do
+        dBAddressIndex int1 `shouldBe` 0
+        dBAddressAccountWallet int1 `shouldBe` DBWalletKey testFingerprintText
+        dBAddressAccountDerivation int1 `shouldBe` "/44'/0'/0'"
+        dBAddressDerivation int1 `shouldBe` "/1/0"
+        dBAddressAddress int1 `shouldBe` head internalAddrsText
+        dBAddressLabel int1 `shouldBe` "Internal Address"
+        dBAddressInternal int1 `shouldBe` True
+        dBAddressFree int1 `shouldBe` True
+      -- Test the Free status
+      nextFreeIntAddr ctx cfg accId `dbShouldBeE` int1 -- Should return the same address
+      lift $ setAddrsFree AddrBusy [head internalAddrsText] `dbShouldBe` 1
+      lift $ setAddrsFree AddrBusy [internalAddrsText !! 1] `dbShouldBe` 0
+      (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 1
+      _ <- lift $ setAddrsFree AddrFree [head internalAddrsText]
+      (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 0
+      _ <- lift $ setAddrsFree AddrBusy [internalAddrsText !! 1]
+      (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 0
+      _ <- lift $ setAddrsFree AddrBusy [head internalAddrsText]
+      (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 2
+      _ <- lift $ setAddrsFree AddrBusy [internalAddrsText !! 2]
+      (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 3
+      _ <- lift $ setAddrsFree AddrBusy [internalAddrsText !! 3]
+      (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 4
+      _ <- lift $ setAddrsFree AddrBusy [internalAddrsText !! 4]
+      (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 5
+      _ <- lift $ setAddrsFree AddrFree [internalAddrsText !! 2]
+      _ <- lift $ setAddrsFree AddrFree [internalAddrsText !! 4]
+      (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 2
+      _ <- lift $ setAddrsFree AddrBusy [internalAddrsText !! 2]
+      _ <- lift $ setAddrsFree AddrBusy [internalAddrsText !! 5]
+      (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 4
+      _ <- lift $ setAddrsFree AddrBusy [internalAddrsText !! 4]
+      (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 6
+      -- Test account indices
+      acc <- getAccountById accId
+      liftIO $ do
+        dBAccountInternal acc `shouldBe` 7
+        dBAccountExternal acc `shouldBe` 0
