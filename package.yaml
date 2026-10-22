@@ -57,6 +57,7 @@ dependencies:
   - text >= 1.2.4.0
   - time >= 1.12.2
   - transformers >= 0.5.6.2
+  - unliftio >= 0.2.10
   - unordered-containers >= 0.2.10.0
   - wreq >= 0.5.3.2
 library:

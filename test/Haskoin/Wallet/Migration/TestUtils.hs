@@ -6,11 +6,20 @@
 -- "Haskoin.Wallet.TestUtils".
 --
 -- The tables of each format version live under "Haskoin.Wallet.Schema":
--- versions 2 and 3 with hw, version 1 with the tests, since nothing migrates
--- to it. The spec of a version builds a database from the tables of the
--- version before it, fills it with rows written as that hw wrote them,
+-- versions 2 and later with hw, version 1 with the tests, since nothing
+-- migrates to it. The spec of a version builds a database from the tables of
+-- the version before it, fills it with rows written as that hw wrote them,
 -- migrates to its version only, and checks the result against the tables of
 -- its version and the data its hw wrote.
+--
+-- A version spec sees its two versions and nothing else. Rows are read with
+-- the entities of its schema modules, never those of "Haskoin.Wallet.Database",
+-- and stored data is parsed and compared with the types frozen in the step
+-- module that wrote it, never with "Haskoin.Wallet.TxInfo" or any other live
+-- type. Only the orchestrator spec, "Haskoin.Wallet.MigrationSpec", may use
+-- the live tables and 'latestDatabaseVersion', since the whole migration is
+-- its scope. A spec that reaches the live code breaks the day a later
+-- version changes it, which is exactly what these tests must survive.
 module Haskoin.Wallet.Migration.TestUtils where
 
 import Control.Monad.IO.Class (liftIO)

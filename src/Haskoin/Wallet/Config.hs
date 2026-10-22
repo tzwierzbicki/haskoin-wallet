@@ -44,6 +44,11 @@ data Config = Config
     configTxBatch :: Natural,
     configCoinBatch :: Natural,
     configTxFullBatch :: Natural,
+    -- | How many requests the sync sends to the store at a time. The
+    -- public store at api.haskoin.com refuses a second request while one
+    -- is in flight (503 Service Temporarily Unavailable), so the default
+    -- is one; a store of your own may allow more.
+    configParallelRequests :: Natural,
     configDatabaseFile :: Maybe FilePath
   }
   deriving (Eq, Show)
@@ -59,6 +64,8 @@ instance FromJSON Config where
         <*> o .: "tx-batch"
         <*> o .: "coin-batch"
         <*> o .: "tx-full-batch"
+        -- Since hw 0.10: a configuration file written before has no entry
+        <*> o .:? "parallel-requests" .!= 1
         <*> o .:? "database-file"
 
 instance ToJSON Config where
@@ -71,6 +78,7 @@ instance ToJSON Config where
         "tx-batch" .= configTxBatch cfg,
         "coin-batch" .= configCoinBatch cfg,
         "tx-full-batch" .= configTxFullBatch cfg,
+        "parallel-requests" .= configParallelRequests cfg,
         "database-file" .= configDatabaseFile cfg
       ]
 
@@ -84,6 +92,7 @@ instance Default Config where
         configTxBatch = 100,
         configCoinBatch = 100,
         configTxFullBatch = 100,
+        configParallelRequests = 1,
         configDatabaseFile = Nothing
       }
 
