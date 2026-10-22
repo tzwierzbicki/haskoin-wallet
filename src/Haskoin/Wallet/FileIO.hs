@@ -17,6 +17,8 @@ import Haskoin
 import Haskoin.Wallet.Util
 import qualified System.Directory as D
 
+{- Paths -}
+
 checkPathFree :: (MonadIO m) => FilePath -> ExceptT String m ()
 checkPathFree path = do
   exist <- liftIO $ D.doesPathExist path

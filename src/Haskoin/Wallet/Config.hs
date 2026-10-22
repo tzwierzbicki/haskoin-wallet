@@ -12,12 +12,13 @@ import Data.Aeson
 import Data.Default
 import Data.String.Conversions (cs)
 import Data.Text (Text)
-import Haskoin
 import Haskoin.Store.WebClient
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import qualified System.Directory as D
+
+{- The data directory -}
 
 hwDataDirectory :: IO FilePath
 hwDataDirectory = do
@@ -32,6 +33,8 @@ databaseFile cfg =
     _ -> do
       dir <- hwDataDirectory
       return $ dir </> "accounts.sqlite"
+
+{- The configuration -}
 
 data Config = Config
   { configHost :: Text,
@@ -101,6 +104,3 @@ initConfig = do
   unless exists $ writeJsonFile configFile $ toJSON (def :: Config)
   resE <- readJsonFile configFile
   either (error "Could not read config.json") return resE
-
-apiHost :: Network -> Config -> ApiConfig
-apiHost net = ApiConfig net . cs . configHost

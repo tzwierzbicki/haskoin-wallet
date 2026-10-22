@@ -41,6 +41,8 @@ import Haskoin.Wallet.TxSize (p2pkhInput, p2pkhInputSize, p2pkhOutputSize, txSiz
 import Haskoin.Wallet.Util (randomShuffle, safeSubtract)
 import System.Random (StdGen)
 
+{- Types -}
+
 -- | How the coins to spend are chosen
 data CoinSelection
   = -- | The proposal with the least waste among the strategies below and an
@@ -102,6 +104,8 @@ data Selection = Selection
   }
   deriving (Eq, Show)
 
+{- Choosing the coins -}
+
 -- | The size of the payment transaction with the given number of the
 -- wallet's own inputs, which are P2PKH, its outputs, and a change output
 -- or not
@@ -141,6 +145,8 @@ spendCoins payment coins
   | sum (covers payment <$> coins) < fromIntegral (target payment) =
       Left "The selected coins do not cover the amount and the fee"
   | otherwise = Right $ selectionOf payment coins
+
+{- Values and the split -}
 
 -- | What the coins must cover: the amount, plus the fee of the transaction
 -- around the inputs when the sender pays it
@@ -186,6 +192,8 @@ selectionOf payment coins = Selection {selected = coins, paid, changeAmount, fee
     paid = fromMaybe 0 $ payment.amount `safeSubtract` deducted
     feeAmount = total - paid - changeAmount
 
+{- Searches -}
+
 -- | The coins, in order, until they cover the target
 greedy :: Payment -> [Store.Unspent] -> Maybe [Store.Unspent]
 greedy payment = go (fromIntegral $ target payment)
@@ -213,6 +221,8 @@ exactMatch payment coins =
           c : rest -> case search (steps - 1) (acc + covers payment c) rest of
             (steps', Just found) -> (steps', Just (c : found))
             (steps', Nothing) -> search steps' acc rest
+
+{- Waste -}
 
 -- | The waste of a selection, as Bitcoin Core measures it: what its inputs
 -- cost beyond the long-term fee rate, plus the cost of its change output

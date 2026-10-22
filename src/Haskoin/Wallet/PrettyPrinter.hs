@@ -33,6 +33,8 @@ import System.Console.ANSI
 import System.Exit
 import System.IO
 
+{- The printer -}
+
 data Printer
   = PConcat !Printer !Printer
   | PNewline !Printer
@@ -96,6 +98,8 @@ rblock n str =
     Just missing -> replicate (fromIntegral missing) ' ' <> str
     _ -> str
 
+{- Rendering -}
+
 renderIO :: Printer -> IO ()
 renderIO cp = go 0 0 cp >> putStrLn ""
   where
@@ -119,6 +123,15 @@ renderIO cp = go 0 0 cp >> putStrLn ""
               return $ l + fromIntegral (length s)
             PEmpty -> return l
             PNonEmpty -> return l
+
+printFormat :: [SGR] -> String -> IO ()
+printFormat sgr str = do
+  support <- hSupportsANSI stdout
+  when support $ setSGR sgr
+  putStr str
+  when support $ setSGR []
+
+{- Formats -}
 
 formatTitle :: String -> Printer
 formatTitle =
@@ -206,14 +219,7 @@ formatFalse = PText [SetColor Foreground Vivid Red]
 formatError :: String -> Printer
 formatError = PText [SetColor Foreground Vivid Red]
 
-printFormat :: [SGR] -> String -> IO ()
-printFormat sgr str = do
-  support <- hSupportsANSI stdout
-  when support $ setSGR sgr
-  putStr str
-  when support $ setSGR []
-
-{- Pretty Response -}
+{- Printing responses -}
 
 mnemonicPrinter :: Bool -> [Text] -> Printer
 mnemonicPrinter split ws =

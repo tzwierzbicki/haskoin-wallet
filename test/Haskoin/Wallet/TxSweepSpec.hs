@@ -4,20 +4,24 @@
 
 module Haskoin.Wallet.TxSweepSpec where
 
+import Control.Monad.Except (throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans (lift)
 import qualified Data.ByteString as BS
+import Data.IORef (newIORef, readIORef)
 import Data.Default (def)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromJust)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
+import Data.Word (Word32, Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Address
 import Haskoin.Wallet.Coin
 import Haskoin.Wallet.PendingTx
+import Haskoin.Wallet.Store
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo (TxInfo (..), TxInfoPending (..), TxType (..))
 import Haskoin.Wallet.TxSignData
@@ -39,6 +43,7 @@ spec = do
     sweepSizeSpec ctx
     sweepBuilderSpec ctx
     givenCoinsSpec ctx
+    fetchSpec ctx
     sweepIntoWalletSpec ctx
 
 -- | Sign with the sweep keys and the account public key, like signsweep does
@@ -314,6 +319,88 @@ givenCoinsSpec ctx =
           Store.weight = 904,
           Store.fee = 1000
         }
+
+{- Fetching the coins -}
+
+-- The store: the swept key holds a coin at each of its four Bitcoin
+-- addresses, 100000 to 400000, and the test wallet one of 500000 at its
+-- first external address. The store knows both funding transactions, raw
+-- and as it reports them.
+fetchSpec :: Ctx -> Spec
+fetchSpec ctx =
+  describe "Fetching the coins of a sweep" $ do
+    it "fetches the coins at the given addresses and the transactions they come from" $
+      inDatabaseE $ do
+        accId <- account
+        found <- fetchSweepCoins btc ctx (toStore store) accId [] (take 2 sweptKeyAddrs) [] [otherAddr 0]
+        liftIO $ summary found `shouldBe` ([(0, 100000), (1, 200000)], [keyFunding], Map.empty, [])
+    it "asks the store for every address of a given key and notes its uncompressed address" $
+      inDatabaseE $ do
+        accId <- account
+        asked <- liftIO $ newIORef []
+        found <- fetchSweepCoins btc ctx (notingUnspentRequests asked (toStore store)) accId [sweptKey] [] [] [otherAddr 0]
+        liftIO $ do
+          readIORef asked `shouldReturn` [sweptKeyAddrs]
+          summary found `shouldBe` ([(0, 100000), (1, 200000), (2, 300000), (3, 400000)], [keyFunding], Map.empty, [sweptKeyUncompressedAddr])
+    it "takes the coins given by outpoint from their transactions, each coin once" $
+      inDatabaseE $ do
+        accId <- account
+        found <- fetchSweepCoins btc ctx (toStore store) accId [] [sweptKeyAddrs !! 0] [(txHash keyFunding, 0), (txHash keyFunding, 3)] [otherAddr 0]
+        liftIO $ summary found `shouldBe` ([(0, 100000), (3, 400000)], [keyFunding], Map.empty, [])
+    it "records the paths of the wallet's addresses among the coins and the destinations" $
+      inDatabaseE $ do
+        accId <- account
+        found <- fetchSweepCoins btc ctx (toStore store) accId [] [externalAddr 0, sweptKeyAddrs !! 0] [] [externalAddr 1, otherAddr 0]
+        liftIO $ do
+          ((.outpoint.hash) <$> found.coins) `shouldBe` [txHash keyFunding, txHash walletFunding]
+          found.transactions `shouldBe` [keyFunding, walletFunding]
+          found.walletAddrs `shouldBe` Map.fromList [(externalAddr 0, Deriv :/ 0 :/ 0), (externalAddr 1, Deriv :/ 0 :/ 1)]
+    it "finds nothing at an address without coins and asks for no raw transaction" $
+      inDatabaseE $ do
+        accId <- account
+        asked <- liftIO $ newIORef []
+        found <- fetchSweepCoins btc ctx (notingRawRequests asked (toStore store)) accId [] [otherAddr 5] [] [otherAddr 0]
+        liftIO $ do
+          summary found `shouldBe` ([], [], Map.empty, [])
+          readIORef asked `shouldReturn` []
+    it "refuses to fetch without keys, addresses or coins" $
+      inDatabaseE $ do
+        accId <- account
+        lift $
+          dbShouldFailWith "No private keys, addresses or coins to sweep from" $
+            fetchSweepCoins btc ctx (toStore store) accId [] [] [] [otherAddr 0]
+    it "refuses a store that does not return the transaction a coin comes from" $
+      inDatabaseE $ do
+        accId <- account
+        lift $
+          dbShouldFailWith "The store was asked for 1 raw transactions but returned 0" $
+            fetchSweepCoins btc ctx (toStore store {fakeRawTransactions = []}) accId [] [sweptKeyAddrs !! 0] [] [otherAddr 0]
+    it "refuses a store that is not healthy" $
+      inDatabaseE $ do
+        accId <- account
+        let unhealthy = (toStore store) {storeHealth = throwError "The indexer health check has failed"}
+        lift $
+          dbShouldFailWith "The indexer health check has failed" $
+            fetchSweepCoins btc ctx unhealthy accId [] [sweptKeyAddrs !! 0] [] [otherAddr 0]
+  where
+    -- The test wallet with its first two external addresses
+    account = do
+      (accId, _) <- testNewAcc ctx "main"
+      _ <- genExtAddress ctx def accId ""
+      _ <- genExtAddress ctx def accId ""
+      return accId
+    keyFunding = fundingTx ctx 1 (zip sweptKeyAddrs [100000, 200000, 300000, 400000])
+    walletFunding = fundingTx ctx 2 [(externalAddr 0, 500000)]
+    store =
+      emptyStore
+        { fakeUnspents = coinsOf ctx keyFunding <> coinsOf ctx walletFunding,
+          fakeTransactions = [payoutTx ctx (txHash keyFunding) (Store.BlockRef 800000 0) (zip sweptKeyAddrs [100000, 200000, 300000, 400000])],
+          fakeRawTransactions = [(txHash keyFunding, keyFunding), (txHash walletFunding, walletFunding)]
+        }
+    -- What was fetched: the coins as (output index, value), the transactions,
+    -- the wallet's paths and the uncompressed addresses
+    summary :: SweepCoins -> ([(Word32, Word64)], [Tx], Map.Map Address SoftPath, [Address])
+    summary found = ([(c.outpoint.index, c.value) | c <- found.coins], found.transactions, found.walletAddrs, found.uncompressedAddrs)
 
 {- Sweeping into the wallet -}
 

@@ -41,6 +41,8 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Keys (bip44Deriv, xPubIndex)
 import Numeric.Natural (Natural)
 
+{- Accounts in JSON -}
+
 instance ToJSON DBAccount where
   toJSON acc =
     object
@@ -104,6 +106,8 @@ instance FromJSON AccountBalance where
         <*> o .: "unconfirmed"
         <*> o .: "coins"
 
+{- The fields of an account -}
+
 accountIndex :: DBAccount -> Natural
 accountIndex = fromIntegral . dBAccountIndex
 
@@ -125,6 +129,13 @@ accountXPubKey ctx acc =
   fromMaybe (error "Invalid XPubKey in database") $
     xPubImport (accountNetwork acc) ctx (dBAccountXPubKey acc)
 
+-- | The smallest index not taken: the index of the next account of a
+-- wallet on a network
+smallestUnused :: [Natural] -> Natural
+smallestUnused xs = fromJust $ find (not . (`elem` xs)) [0 ..]
+
+{- Accounts in the database -}
+
 nextAccountDeriv :: (MonadUnliftIO m) => Fingerprint -> Network -> DB m Natural
 nextAccountDeriv walletFP net = do
   let walletId = DBWalletKey $ fingerprintToText walletFP
@@ -135,9 +146,6 @@ nextAccountDeriv walletFP net = do
           &&. a ^. DBAccountWallet ==. val walletId
       return $ a ^. DBAccountIndex
   return $ smallestUnused $ fromIntegral . unValue <$> idxs
-
-smallestUnused :: [Natural] -> Natural
-smallestUnused xs = fromJust $ find (not . (`elem` xs)) [0 ..]
 
 existsAccount :: (MonadUnliftIO m) => Text -> DB m Bool
 existsAccount name = P.existsBy $ UniqueName name

@@ -24,6 +24,8 @@ import Haskoin.Wallet.Database
 import Numeric.Natural (Natural)
 import UnliftIO.Async (pooledMapConcurrentlyN)
 
+{- The questions -}
+
 -- | The questions the sync asks the store. Every answer is complete: a
 -- function that lists things lists all of them, and the sync checks the
 -- counts the store gives against the lists it returns, so that a truncated
@@ -53,6 +55,8 @@ data Store = Store
     -- the store listing it afterwards tells that the network took it.
     storePublish :: Tx -> ExceptT String IO ()
   }
+
+{- The web client -}
 
 -- | A call of the web client, its failure shown as a message
 liftExcept :: (MonadError String m) => ExceptT Store.Except m a -> m a
@@ -90,7 +94,7 @@ webStore ctx cfg net =
           throwError $ "The store returned the wrong transaction id: " <> cs (txHashToHex published)
     }
   where
-    host = apiHost net cfg
+    host = ApiConfig net (cs (configHost cfg))
     call req = liftExcept $ apiCall ctx host req
     batch size req = liftExcept $ apiBatch ctx size host req
     serial (Store.SerialList xs) = xs
@@ -99,6 +103,8 @@ webStore ctx cfg net =
     -- store answers with its default page of a hundred items and says
     -- nothing about the rest.
     everything = def {limit = Just 0}
+
+{- Asking -}
 
 -- | Ask the store from inside a database action
 fromStore :: (MonadIO m) => ExceptT String IO a -> ExceptT String (DB m) a

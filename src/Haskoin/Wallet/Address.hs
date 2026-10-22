@@ -47,6 +47,8 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Util (Page (Page), textToAddrE)
 import Numeric.Natural (Natural)
 
+{- Kinds of addresses -}
+
 data AddrType = AddrInternal | AddrExternal
   deriving (Eq, Show)
 
@@ -72,6 +74,8 @@ data AddrFree = AddrFree | AddrBusy
 isAddrFree :: AddrFree -> Bool
 isAddrFree AddrFree = True
 isAddrFree AddrBusy = False
+
+{- Addresses in JSON -}
 
 instance ToJSON DBAddress where
   toJSON addr =
@@ -147,6 +151,8 @@ instance FromJSON AddressBalance where
         <*> o .: "coins"
         <*> o .: "txs"
         <*> o .: "received"
+
+{- Addresses in the database -}
 
 updateAddressBalances ::
   (MonadUnliftIO m) =>
@@ -332,14 +338,6 @@ nextFreeIntAddr ctx cfg accId@(DBAccountKey wallet accDeriv) = do
     -- True: Check the gap
     Nothing -> genNextAddress ctx cfg accId AddrInternal AddrFree True
 
-fromDBAddr :: Network -> DBAddress -> Either String (Address, SoftPath)
-fromDBAddr net addrDB = do
-  let addrT = dBAddressAddress addrDB
-      derivT = dBAddressDerivation addrDB
-  deriv <- maybeToEither "fromDBAddress deriv" $ parseSoft $ cs derivT
-  addr <- maybeToEither "fromDBAddress addr" $ textToAddr net addrT
-  return (addr, deriv)
-
 setAddrsFree :: (MonadUnliftIO m) => AddrFree -> [Text] -> DB m Natural
 setAddrsFree free addrs = do
   (fromIntegral <$>) . updateCount $ \a -> do
@@ -467,6 +465,15 @@ addrPath addr = f :/ fromIntegral (dBAddressIndex addr)
       if dBAddressInternal addr
         then intDeriv
         else extDeriv
+
+-- | The address of a row with its derivation path
+fromDBAddr :: Network -> DBAddress -> Either String (Address, SoftPath)
+fromDBAddr net addrDB = do
+  let addrT = dBAddressAddress addrDB
+      derivT = dBAddressDerivation addrDB
+  deriv <- maybeToEither "fromDBAddress deriv" $ parseSoft $ cs derivT
+  addr <- maybeToEither "fromDBAddress addr" $ textToAddr net addrT
+  return (addr, deriv)
 
 addrsDerivPage :: Ctx -> SoftPath -> Page -> XPubKey -> [(Address, SoftPath)]
 addrsDerivPage ctx deriv (Page lim off) xpub =

@@ -18,6 +18,8 @@ import System.Environment (getArgs)
 import System.Exit (die)
 import System.IO (hPutStrLn, stderr)
 
+{- The program -}
+
 clientMain :: IO ()
 clientMain = do
   setUtf8Encoding
@@ -47,6 +49,8 @@ migrationHooks cfg =
         copy <- backupDatabase database directory version
         hPutStrLn stderr $ "The database at version " <> show version <> " was backed up to " <> copy
     }
+
+{- The encoding of the arguments -}
 
 -- | Use UTF-8 for the command line arguments, the standard streams and file
 -- paths, whatever the locale of the process is.
@@ -79,6 +83,8 @@ invalidArgumentsError = do
           "The command line arguments are not valid UTF-8.\
           \ hw reads and prints text, including signed messages, as UTF-8."
       Right _ -> Nothing
+
+{- JSON output -}
 
 jsonPrinter :: Ctx -> Response -> IO ()
 jsonPrinter ctx = C8.putStrLn . encodeJsonPretty . marshalValue ctx

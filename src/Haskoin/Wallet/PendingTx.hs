@@ -53,6 +53,34 @@ import Haskoin.Wallet.TxSigning (parseTxSignData, verifySignedTx)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 
+{- Summaries of pending transactions -}
+
+-- | What a transaction of the wallet touches, from its summary: the coins
+-- it spends, its internal addresses, which are change, with their
+-- indices, and its other addresses of the wallet, paid or spent from
+parseTxInfoU :: TxInfo -> ([OutPoint], [(Address, KeyIndex)], [Address])
+parseTxInfoU TxInfo {..} =
+  (outpoints, nub $ f <$> outIntAddrs, nub $ fst <$> restAddrs)
+  where
+    outpoints = (.outpoint) <$> concatMap myInputsSigInput (Map.elems txInfoMyInputs)
+    outAddrs = second myOutputsPath <$> Map.assocs txInfoMyOutputs
+    inAddrs = second myInputsPath <$> Map.assocs txInfoMyInputs
+    (outIntAddrs, outExtAddrs) = partition (isIntPath . snd) outAddrs
+    restAddrs = outExtAddrs <> inAddrs
+    f (a, p) =
+      case pathToList p of
+        (_ : i : _) -> (a, i)
+        _ -> error "parseTxInfoU"
+
+-- | The summary with its pending transaction marked online
+setTxInfoOnline :: TxInfo -> TxInfo
+setTxInfoOnline txInfo =
+  case txInfoPending txInfo of
+    Just p -> txInfo {txInfoPending = Just p {pendingOnline = True}}
+    _ -> txInfo
+
+{- Pending transactions in the database -}
+
 -- | A pending transaction by its nosigHash: its account, its signing data
 -- and whether the user sent it to the network
 getPendingTx ::
@@ -210,32 +238,16 @@ importPendingTx net ctx accId tsd@(TxSignData tx _ _ _ _ signed) = do
       lift $ P.insert_ ptx
       return pendingHash
 
--- (Outpoints, external addrs, internal addrs)
-parseTxInfoU :: TxInfo -> ([OutPoint], [(Address, KeyIndex)], [Address])
-parseTxInfoU TxInfo {..} =
-  (outpoints, nub $ f <$> outIntAddrs, nub $ fst <$> restAddrs)
-  where
-    outpoints = (.outpoint) <$> concatMap myInputsSigInput (Map.elems txInfoMyInputs)
-    outAddrs = second myOutputsPath <$> Map.assocs txInfoMyOutputs
-    inAddrs = second myInputsPath <$> Map.assocs txInfoMyInputs
-    (outIntAddrs, outExtAddrs) = partition (isIntPath . snd) outAddrs
-    restAddrs = outExtAddrs <> inAddrs
-    f (a, p) =
-      case pathToList p of
-        (_ : i : _) -> (a, i)
-        _ -> error "parseTxInfoU"
-
--- Delete a pending transaction, unlocks coins and frees internal addresses
-deletePendingTx ::
-  (MonadUnliftIO m) =>
-  Ctx ->
-  TxHash ->
-  ExceptT String (DB m) (Natural, Natural)
 -- | Delete a pending transaction, whatever its state: the coins it spent
 -- are free again by its absence, and its change address is freed. Returns
 -- how many coins of the wallet it was holding and how many addresses were
 -- freed. Whether a transaction the user sent may be deleted is for the
 -- command to decide.
+deletePendingTx ::
+  (MonadUnliftIO m) =>
+  Ctx ->
+  TxHash ->
+  ExceptT String (DB m) (Natural, Natural)
 deletePendingTx ctx pendingHash = do
   let key = DBPendingTxKey $ txHashToHex pendingHash
   tsdM <- lift $ getPendingTx pendingHash
@@ -266,7 +278,7 @@ setPendingTxOnline nosigH = do
     where_ $ p ^. DBPendingTxNosigHash ==. val nosigHT
   return $ fromIntegral cnt
 
-{- Sending and deleting -}
+{- Sending and abandoning -}
 
 -- | Send a pending transaction of the wallet and wait for the store to see
 -- it. Once it does, the transaction is marked online, for the sync to send
@@ -312,10 +324,3 @@ deleteTx ctx storeOn nosigH = do
         when (any (\t -> t.txid == txid && not t.deleted) known) $
           throwError "The transaction is in the network's mempool or in the chain: syncacc retires it once it is listed"
       deletePendingTx ctx nosigH
-
--- | The summary with its pending transaction marked online
-setTxInfoOnline :: TxInfo -> TxInfo
-setTxInfoOnline txInfo =
-  case txInfoPending txInfo of
-    Just p -> txInfo {txInfoPending = Just p {pendingOnline = True}}
-    _ -> txInfo

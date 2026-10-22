@@ -15,6 +15,8 @@ import Data.Text.Encoding (encodeUtf8)
 import Data.Word (Word8)
 import Haskoin
 
+{- Signing -}
+
 -- Message signatures follow the "legacy" format of BIP-322 (Generic Signed
 -- Message Format), which is the Bitcoin Core signmessage/verifymessage scheme
 -- (src/common/signmessage.cpp in Bitcoin Core):
@@ -63,6 +65,8 @@ signMessage ctx addr key message = do
     rs = (exportCompactSig ctx $ signHash ctx key h).get
     (r, s) = BS.splitAt 32 rs
 
+{- The recovery id -}
+
 -- | Find the recovery id of the signature (r, s) of hash e by the public key Q.
 -- It is the y-parity of the nonce point R, whose x coordinate is r. We test
 -- both candidate points for the ECDSA relation s*R == e*G + r*Q. The case
@@ -99,6 +103,8 @@ recoveryId ctx pub h r s = do
 secp256k1Order :: Integer
 secp256k1Order =
   0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+
+{- Warnings -}
 
 -- | Warnings for messages that are hard to reproduce exactly. A verifier must
 -- use the exact signed bytes, but whitespace at the edges of a message and

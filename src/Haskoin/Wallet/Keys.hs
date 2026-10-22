@@ -15,6 +15,8 @@ import qualified Data.Text as Text
 import Haskoin
 import Numeric.Natural (Natural)
 
+{- The keys of an account -}
+
 data MnemonicPass = MnemonicPass
   { mnemonicWords :: !Text,
     mnemonicPass :: !Text
