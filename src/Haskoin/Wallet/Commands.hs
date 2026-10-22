@@ -17,7 +17,7 @@ import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Base64 as B64
 import Data.Foldable (for_)
-import Data.Maybe (fromMaybe, isJust)
+import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Version (showVersion)
@@ -47,6 +47,7 @@ import Numeric.Natural (Natural)
 import qualified Paths_haskoin_wallet as Paths
 import qualified System.Console.Haskeline as Haskeline
 import qualified System.Directory as D
+import qualified System.IO as IO
 import System.IO (hPutStrLn, stderr)
 import System.Random (initStdGen)
 
@@ -88,6 +89,11 @@ data Response
   | ResponseTx
       { responseAccount :: !DBAccount,
         responsePendingTx :: !TxInfo
+      }
+  | -- | A transaction sent from a file, on its network
+    ResponseSentTx
+      { responseNetwork :: !Network,
+        responseTxHash :: !TxHash
       }
   | ResponseDeleteTx
       { responseNoSigHash :: !TxHash,
@@ -175,6 +181,12 @@ instance MarshalJSON Ctx Response where
             "account" .= a,
             "tx" .= marshalValue (net, ctx) t
           ]
+      ResponseSentTx net h ->
+        object
+          [ "type" .= Json.String "senttx",
+            "network" .= net.name,
+            "txid" .= h
+          ]
       ResponseDeleteTx h c a ->
         object
           [ "type" .= Json.String "deletetx",
@@ -260,6 +272,9 @@ instance MarshalJSON Ctx Response where
           let net = accountNetwork a
           t <- unmarshalValue (net, ctx) =<< o .: "tx"
           return $ ResponseTx a t
+        "senttx" -> do
+          net <- maybe (fail "Unknown network") return . netByName =<< o .: "network"
+          ResponseSentTx net <$> o .: "txid"
         "deletetx" ->
           ResponseDeleteTx
             <$> o .: "nosighash"
@@ -334,7 +349,7 @@ commandResponse ctx cfg unit cmd =
       cmdPrepareTx ctx cfg rcpts nameM unit fee dust payer minConf strategy o coins
     CommandPendingTxs nameM p -> cmdPendingTxs ctx cfg nameM p
     CommandSignTx nameM h i o s -> cmdSignTx ctx cfg nameM h i o s
-    CommandSendTx h -> cmdSendTx ctx cfg h
+    CommandSendTx h i n -> cmdSendTx ctx cfg h i n
     CommandDeleteTx h -> cmdDeleteTx ctx cfg h
     CommandCoins nameM p -> cmdCoins cfg nameM p
     -- Import/export commands
@@ -349,8 +364,8 @@ commandResponse ctx cfg unit cmd =
     -- Utilities
     CommandVersion -> cmdVersion cfg
     CommandSignMsg a m s -> cmdSignMessage ctx cfg a m s
-    CommandPrepareSweep nameM prvKey st outputM f d ->
-      prepareSweep ctx cfg nameM prvKey st outputM f d
+    CommandPrepareSweep nameM prvKeyM sf st coins outputM f d ->
+      prepareSweep ctx cfg nameM prvKeyM sf st coins outputM f d
     CommandSignSweep nameM h i o k -> signSweep ctx cfg nameM h i o k
     CommandRollDice n -> rollDice n
 
@@ -667,8 +682,20 @@ cmdCoins cfg nameM page =
     coins <- coinPage net accId page
     return $ ResponseCoins acc coins
 
-cmdSendTx :: Ctx -> Config -> TxHash -> IO Response
-cmdSendTx ctx cfg nosigH =
+-- | Send a pending transaction of the wallet, by its nosigHash, or a
+-- signed transaction from a file
+cmdSendTx :: Ctx -> Config -> Maybe TxHash -> Maybe FilePath -> Maybe Network -> IO Response
+cmdSendTx ctx cfg nosigHM inputM netM =
+  case (nosigHM, inputM) of
+    (Just nosigH, Nothing) -> sendPendingTx ctx cfg nosigH
+    (Nothing, Just file) -> sendTxFile ctx cfg file netM
+    (Nothing, Nothing) -> return $ ResponseError "Give the NOSIGHASH of a pending transaction or an --input file"
+    (Just _, Just _) -> return $ ResponseError "Can not specify both a NOSIGHASH and an --input file"
+
+-- | Send a pending transaction: once the store has it, it is marked as
+-- online and its raw transaction is stored
+sendPendingTx :: Ctx -> Config -> TxHash -> IO Response
+sendPendingTx ctx cfg nosigH =
   runDBResponse cfg $ do
     tsdM <- lift $ getPendingTx nosigH
     case tsdM of
@@ -691,6 +718,28 @@ cmdSendTx ctx cfg nosigH =
         lift $ insertRawTx signedTx
         return $ ResponseTx acc $ setTxInfoOnline txInfoL
       _ -> throwError "The nosigHash does not exist in the wallet"
+
+-- | Send a signed transaction from a file, which need not involve the
+-- wallet: it is checked against the coins it spends and uploaded, and
+-- nothing in the wallet is updated. A transaction that does involve the
+-- wallet is caught up with by the next sync.
+sendTxFile :: Ctx -> Config -> FilePath -> Maybe Network -> IO Response
+sendTxFile ctx cfg file netM =
+  catchResponseError $ do
+    net <- maybe (throwError "Give the --network of a transaction sent from a file") return netM
+    exists <- liftIO $ D.doesFileExist file
+    unless exists $ throwError "Input file does not exist"
+    tsd <- liftEitherIO (readJsonFile file)
+    unless (txSignDataSigned tsd) $ throwError "The transaction is not signed"
+    liftEither $ verifySignedTx net ctx tsd
+    checkHealth ctx net cfg
+    let signedTx = txSignDataTx tsd
+    Store.TxId netTxId <- liftExcept $ apiCall ctx (apiHost net cfg) (PostTx signedTx)
+    unless (netTxId == txHash signedTx) $
+      throwError $
+        "The server returned the wrong TxHash: "
+          <> cs (txHashToHex netTxId)
+    return $ ResponseSentTx net (txHash signedTx)
 
 setTxInfoOnline :: TxInfo -> TxInfo
 setTxInfoOnline txInfo =
@@ -750,34 +799,67 @@ cmdVersion cfg =
     dbVersion <- databaseVersion
     return $ ResponseVersion (cs $ showVersion Paths.version) (maybe "none" (cs . show) dbVersion)
 
+-- | Sweep coins to the destinations: the coins at the given addresses and
+-- at the addresses of the given private keys, and the coins given by
+-- outpoint. The keys are not needed here, only to sign: a sweep can be
+-- prepared from addresses or coins alone. A sweep that pays or spends an
+-- address of the wallet waits among its pending transactions, to be signed
+-- by its nosigHash; one that does not involve the wallet can only be
+-- written to a file, to be signed from there.
 prepareSweep ::
   Ctx ->
   Config ->
   Maybe Text ->
-  FilePath ->
+  Maybe KeySource ->
   [Text] ->
+  [Text] ->
+  [(TxHash, Natural)] ->
   Maybe FilePath ->
   Natural ->
   Natural ->
   IO Response
-prepareSweep ctx cfg nameM prvKeyFile sweepToT outputM feeByte dust =
+prepareSweep ctx cfg nameM keysM sweepFromT sweepToT coins outputM feeByte dust =
   runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
-    secKeys <- parseSecKeysFile net <$> liftIO (readFileWords prvKeyFile)
+    secKeys <- maybe (return []) (readSecKeys net) keysM
+    sweepFrom <- liftEither $ mapM (textToAddrE net) sweepFromT
     sweepTo <- liftEither $ mapM (textToAddrE net) sweepToT
     checkHealth ctx net cfg
-    found <- fetchSweepCoins net ctx cfg accId secKeys sweepTo
+    found <- fetchSweepCoins net ctx cfg accId secKeys sweepFrom coins sweepTo
     gen <- liftIO initStdGen
     tsd <- liftEither $ buildSweepSignData net ctx gen found sweepTo feeByte dust
     txInfo <- liftEither $ parseTxSignData net ctx pub tsd
     txInfoL <- lift $ fillTxInfoLabels net txInfo
     for_ outputM checkPathFree
-    _ <- importPendingTx net ctx accId tsd
+    if involvesWallet txInfo
+      then void $ importPendingTx net ctx accId tsd
+      else
+        when (isNothing outputM) $
+          throwError "The sweep does not involve this wallet: give an --output file to write it to"
     for_ outputM $ \file -> liftIO $ writeJsonFile file $ Json.toJSON tsd
     return $ ResponseTx acc txInfoL
 
+-- | The private keys of a sweep, from where the user keeps them: a file,
+-- or typed on the terminal without echo
+readSecKeys :: (MonadIO m) => Network -> KeySource -> ExceptT String m [SecKey]
+readSecKeys net (KeysInFile file) = do
+  exists <- liftIO $ D.doesFileExist file
+  unless exists $ throwError "The private key file does not exist"
+  parseKeys net . cs =<< liftIO (IO.readFile file)
+readSecKeys net KeysOnTerminal = do
+  text <- liftIO $ askInputLineHidden "Private keys (WIF, minikey or hex, separated by spaces): "
+  parseKeys net (cs text)
+
+parseKeys :: (Monad m) => Network -> Text -> ExceptT String m [SecKey]
+parseKeys net text = do
+  keys <- liftEither $ parseSecKeys net text
+  when (null keys) $ throwError "No private keys were given"
+  return keys
+
+-- | Sign a sweep with private keys: a pending transaction of the wallet,
+-- by its nosigHash, or one in a file, which need not involve the wallet
 signSweep ::
   Ctx ->
   Config ->
@@ -785,9 +867,9 @@ signSweep ::
   Maybe TxHash ->
   Maybe FilePath ->
   Maybe FilePath ->
-  FilePath ->
+  Maybe KeySource ->
   IO Response
-signSweep ctx cfg nameM nosigHM inputM outputM keyFile =
+signSweep ctx cfg nameM nosigHM inputM outputM keysM =
   runDBResponse cfg $ do
     (tsd, online) <- parseSignInput nosigHM inputM outputM
     when online $
@@ -798,10 +880,8 @@ signSweep ctx cfg nameM nosigHM inputM outputM keyFile =
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
     for_ outputM checkPathFree
-    -- Read the file containing the private keys
-    secKeys <- parseSecKeysFile net <$> liftIO (readFileWords keyFile)
-    when (null secKeys) $ throwError "No private keys to sign"
-    -- Sign the transactions
+    -- Without a file, the keys are typed: signing cannot do without them
+    secKeys <- readSecKeys net (fromMaybe KeysOnTerminal keysM)
     (newTsd, txInfo) <- liftEither $ signTxWithKeys net ctx tsd pub secKeys
     txInfoL <- lift $ fillTxInfoLabels net txInfo
     when (isJust nosigHM) $ void $ importPendingTx net ctx accId newTsd

@@ -1,13 +1,16 @@
-{-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE DisambiguateRecordFields #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 
 -- | Sweeping the coins of external private keys into the wallet.
 --
--- 'fetchSweepCoins' finds the coins of the keys at every address where a
--- key may hold them, 'buildSweepSignData' builds the transaction spending
--- them all to the destinations, with a fee on the size 'sweepTxSize'
+-- 'fetchSweepCoins' finds the coins to sweep: those at the given addresses
+-- and at every address where a given key may hold them, and the coins given
+-- by outpoint, so that a sweep can be prepared without the keys at hand;
+-- 'buildSweepSignData' builds the transaction spending them all to the
+-- destinations, in the wallet or not, with a fee on the size 'sweepTxSize'
 -- estimates from the kinds of coins, and 'signTxWithKeys' signs it with the
 -- keys: P2PKH, P2PK, P2WPKH and P2SH-P2WPKH coins, each with the key that
 -- matches its output script. Analysis and verification come from
@@ -15,6 +18,7 @@
 module Haskoin.Wallet.TxSweep
   ( SweepCoins (..),
     buildSweepSignData,
+    coinsOfTransactions,
     fetchSweepCoins,
     keyAddresses,
     signTxWithKeys,
@@ -28,10 +32,12 @@ import Control.Monad.Except
 import Control.Monad.State
 import qualified Data.ByteString as BS
 import Data.Default (def)
-import Data.List (find, nub)
+import Data.Function (on)
+import Data.List (find, nub, nubBy)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, listToMaybe, mapMaybe)
+import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin
@@ -59,36 +65,82 @@ data SweepCoins = SweepCoins
     -- | The wallet's own addresses among the coins and the destinations
     walletAddrs :: !(Map Address SoftPath),
     -- | The P2PKH addresses of the uncompressed encodings of the keys:
-    -- their inputs carry a 65-byte public key instead of 33
+    -- their inputs carry a 65-byte public key instead of 33. Known only
+    -- when the keys are given; a P2PKH coin of an unknown key is sized for
+    -- a compressed one.
     uncompressedAddrs :: ![Address]
   }
 
--- | Fetch the coins of the keys at every address where a key may hold them,
--- the transactions they come from, and which of the addresses involved
--- belong to the wallet
+-- | Fetch the coins to sweep: every coin at the given addresses and at the
+-- addresses of the given keys, and the coins given by outpoint, each once;
+-- the transactions they come from; and which of the addresses involved
+-- belong to the wallet. The keys may be absent, when they are kept
+-- elsewhere: the sweep is then prepared from addresses or coins alone.
 fetchSweepCoins ::
   (MonadUnliftIO m) =>
   Network ->
   Ctx ->
   Config ->
   DBAccountId ->
+  -- | The private keys, if at hand
   [SecKey] ->
+  -- | The addresses to sweep from
+  [Address] ->
+  -- | The coins to sweep, by transaction hash and output index
+  [(TxHash, Natural)] ->
   -- | The destinations
   [Address] ->
   ExceptT String (DB m) SweepCoins
-fetchSweepCoins net ctx cfg accId secKeys sweepTo = do
-  when (null secKeys) $ throwError "No private keys to sweep from"
+fetchSweepCoins net ctx cfg accId secKeys sweepFrom given sweepTo = do
   let host = apiHost net cfg
-      sweepFrom = nub $ concatMap (keyAddresses net ctx) secKeys
-  Store.SerialList coins <-
-    liftExcept . apiBatch ctx (configCoinBatch cfg) host $
-      GetAddrsUnspent sweepFrom def {limit = Just 0}
+      addresses = nub $ sweepFrom <> concatMap (keyAddresses net ctx) secKeys
+  when (null addresses && null given) $
+    throwError "No private keys, addresses or coins to sweep from"
+  Store.SerialList found <-
+    if null addresses
+      then return $ Store.SerialList []
+      else
+        liftExcept . apiBatch ctx (configCoinBatch cfg) host $
+          GetAddrsUnspent addresses def {limit = Just 0}
+  Store.SerialList parents <-
+    if null given
+      then return $ Store.SerialList []
+      else
+        liftExcept . apiBatch ctx (configTxFullBatch cfg) host $
+          GetTxs (nub $ fst <$> given)
+  givenCoins <- liftEither $ coinsOfTransactions given parents
+  let coins = nubBy ((==) `on` (.outpoint)) (found <> givenCoins)
   Store.RawResultList transactions <-
     liftExcept . apiBatch ctx (configTxFullBatch cfg) host $
       GetTxsRaw (nub $ (.outpoint.hash) <$> coins)
   walletAddrs <- walletPaths net accId (mapMaybe (.address) coins <> sweepTo)
   let uncompressedAddrs = nub $ uncompressedKeyAddr ctx <$> secKeys
   return SweepCoins {coins, transactions, walletAddrs, uncompressedAddrs}
+
+-- | The coins given by outpoint, read from their transactions as the store
+-- reports them: each must be an output of a transaction the store knows,
+-- that is not spent
+coinsOfTransactions :: [(TxHash, Natural)] -> [Store.Transaction] -> Either String [Store.Unspent]
+coinsOfTransactions given parents = mapM coinOf given
+  where
+    coinOf (hash, index) = do
+      let name = "Coin " <> cs (txHashToHex hash) <> " " <> show index
+      tx <-
+        maybeToEither (name <> " is unknown to the store") $
+          find (\t -> t.txid == hash && not t.deleted) parents
+      output <-
+        maybeToEither (name <> " does not exist: the transaction has " <> show (length tx.outputs) <> " outputs") $
+          nth index tx.outputs
+      when (isJust output.spender) $ Left $ name <> " is already spent"
+      return
+        Store.Unspent
+          { Store.block = tx.block,
+            Store.outpoint = OutPoint hash (fromIntegral index),
+            Store.value = output.value,
+            Store.script = output.script,
+            Store.address = output.address
+          }
+    nth index xs = listToMaybe $ drop (fromIntegral index) xs
 
 -- | The addresses where a key may hold coins: the P2PKH addresses of both
 -- encodings of its public key and, on SegWit networks, the P2WPKH and
@@ -109,7 +161,9 @@ uncompressedKeyAddr ctx key = pubKeyAddr ctx $ derivePublicKey ctx (wrapSecKey F
 -- destinations, both in random order, with what is left after the estimated
 -- fee split evenly between the destinations. The signing data carries the
 -- transactions the coins come from and the paths of the wallet's own
--- addresses among the coins and the destinations.
+-- addresses among the coins and the destinations, which may be none: a
+-- sweep need not involve the wallet, but only one that does can wait among
+-- its pending transactions.
 buildSweepSignData ::
   Network ->
   Ctx ->

@@ -116,7 +116,10 @@ data Command
         commandPage :: !Page
       }
   | CommandSendTx
-      {commandNoSigHash :: !TxHash}
+      { commandNoSigHashMaybe :: !(Maybe TxHash),
+        commandInputFileMaybe :: !(Maybe FilePath),
+        commandNetworkMaybe :: !(Maybe Network)
+      }
   | CommandSyncAcc
       { commandMaybeAcc :: !(Maybe Text),
         commandFull :: !Bool
@@ -129,8 +132,10 @@ data Command
   | CommandVersion
   | CommandPrepareSweep
       { commandMaybeAcc :: !(Maybe Text),
-        commandSecKeyPath :: !FilePath,
+        commandSecKeysMaybe :: !(Maybe KeySource),
+        commandSweepFrom :: ![Text],
         commandSweepTo :: ![Text],
+        commandCoins :: ![(TxHash, Natural)],
         commandOutputFileMaybe :: !(Maybe FilePath),
         commandFeeByte :: !Natural,
         commandDust :: !Natural
@@ -140,11 +145,19 @@ data Command
         commandNoSigHashMaybe :: !(Maybe TxHash),
         commandInputFileMaybe :: !(Maybe FilePath),
         commandOutputFileMaybe :: !(Maybe FilePath),
-        commandSecKeyPath :: !FilePath
+        commandSecKeysMaybe :: !(Maybe KeySource)
       }
   | CommandRollDice
       { commandCount :: !Natural
       }
+  deriving (Eq, Show)
+
+-- | Where the private keys of a sweep come from
+data KeySource
+  = -- | A file with one or more keys per line
+    KeysInFile !FilePath
+  | -- | Typed on the terminal without echo, asked for with --prvkeys -
+    KeysOnTerminal
   deriving (Eq, Show)
 
 parserMain :: IO (Command, AmountUnit, Bool)
@@ -369,16 +382,23 @@ offline computer, you can then export your account and import it on an online
 computer.
 |]
 
+-- | The network, Bitcoin by default
 networkOption :: Parser Network
-networkOption =
+networkOption = networkOptionWith (value btc <> showDefaultWith (.name))
+
+-- | The network, when given
+networkMaybeOption :: Parser (Maybe Network)
+networkMaybeOption = optional $ networkOptionWith mempty
+
+networkOptionWith :: Mod OptionFields Network -> Parser Network
+networkOptionWith mods =
   option (eitherReader (f . netByName)) $
     short 'n'
       <> long "network"
       <> metavar "TEXT"
-      <> value btc
-      <> showDefaultWith (.name)
       <> completeWith ((.name) <$> allNets)
       <> help ("Specify one of the following networks to use: " <> nets)
+      <> mods
   where
     nets = intercalate ", " ((.name) <$> allNets)
     f :: Maybe Network -> Either String Network
@@ -922,15 +942,24 @@ and free up any locked coins.
 
 sendTxParser :: ParserInfo Command
 sendTxParser = do
-  let cmd = CommandSendTx <$> nosigHashArg
+  let cmd =
+        CommandSendTx
+          <$> optional nosigHashArg
+          <*> inputFileMaybeOption
+          <*> networkMaybeOption
   info cmd $
     progDesc "Send (upload) a signed transaction to the network"
       <> footer
         [r|
 Once a transaction is signed, it can be sent to the network. This step is
 irreversible and the transaction will become effective. Make sure everything is
-correct with your transaction before sending it. You must `importtx` the
-transaction before sending it if you have it in a file.
+correct with your transaction before sending it.
+
+A pending transaction of the wallet is sent by its NOSIGHASH and marked as
+online. A signed transaction in a file is sent with --input and the --network
+it is for: it is only checked and uploaded, nothing in the wallet is updated,
+so that a sweep that does not involve this wallet can be sent too. To track a
+transaction of the wallet, `importtx` the file and send it by its nosigHash.
 |]
 
 {- SyncAcc Parser -}
@@ -1053,8 +1082,10 @@ prepareSweepParser = do
   let cmd =
         CommandPrepareSweep
           <$> accountOption
-          <*> prvKeyFileOption
-          <*> some sweepToOption -- some: optional
+          <*> prvKeysMaybeOption
+          <*> many sweepFromOption
+          <*> some sweepToOption -- some: at least one
+          <*> many coinOption
           <*> outputFileMaybeOption
           <*> feeOption
           <*> dustOption
@@ -1062,11 +1093,22 @@ prepareSweepParser = do
     progDesc "Prepare a transaction to sweep funds"
       <> footer
         [r|
-`preparesweep` will prepare a transaction that sweeps the funds of the given
-private keys. The private keys are passed in a file and can be in WIF or minikey
-format. The typical use case for this command is to migrate an old wallet to a
-new mnemonic. You can send the funds to 1 or multiple addresses. You can use the
-shorthand format -t ADDR1 -t ADDR2 to specify the --sweepto addresses.
+`preparesweep` will prepare a transaction that sweeps coins that are not in
+this wallet: every coin found at the --sweepfrom addresses, every coin found at
+the addresses of the private keys given with --prvkeys, and the coins given
+with --coin. Give any of the three. The private keys are not needed to prepare
+the sweep, only to sign it with `signsweep`, so they can stay on another
+computer; when given, in a file or typed on the terminal with --prvkeys -, they
+can be in WIF, minikey or hexadecimal format, and the fee of a coin of an
+uncompressed key is estimated exactly. The typical use
+case for this command is to migrate an old wallet to a new mnemonic. You can
+send the funds to 1 or multiple addresses, in this wallet or not. You can use
+the shorthand format -t ADDR1 -t ADDR2 to specify the --sweepto addresses.
+
+A sweep that pays or spends an address of this wallet is stored as a pending
+transaction, to be signed with `signsweep` by its nosigHash. A sweep that does
+not involve this wallet at all is only written to the --output file, which is
+then required, and signed from that file.
 |]
 
 sweepFromOption :: Parser Text
@@ -1075,7 +1117,7 @@ sweepFromOption =
     short 'w'
       <> long "sweepfrom"
       <> metavar "ADDRESS"
-      <> help "Addresses to sweep from"
+      <> help "Addresses to sweep the coins from"
 
 addressFileOption :: Parser (Maybe FilePath)
 addressFileOption =
@@ -1103,26 +1145,32 @@ signSweepParser = do
           <*> optional nosigHashArg
           <*> inputFileMaybeOption
           <*> outputFileMaybeOption
-          <*> prvKeyFileOption
+          <*> prvKeysMaybeOption
   info cmd $
     progDesc "Sign a sweep transaction"
       <> footer
         [r|
 Sign a transaction that was prepared with the `preparesweep` command. As the
 coins of this transaction are not from this wallet, the private keys for signing
-must be passed in a separate --prvkeys file. The sweep transaction can be
-referenced by its nosigHash if it exists in the wallet or you can pass it as a
-file --input.
+are passed in a separate --prvkeys file, or typed on the terminal without echo
+with --prvkeys - or when no file is given. The sweep transaction can be
+referenced by its nosigHash if it exists in the wallet, or you can pass it as a
+file with --input and --output, in which case it need not involve this wallet
+at all.
 |]
 
-prvKeyFileOption :: Parser FilePath
-prvKeyFileOption =
-  strOption $
+-- | The private keys: a file, or - for the terminal
+prvKeysMaybeOption :: Parser (Maybe KeySource)
+prvKeysMaybeOption =
+  optional . option (eitherReader source) $
     short 'k'
       <> long "prvkeys"
       <> metavar "FILENAME"
       <> action "file"
-      <> help "File containing the private keys in WIF or MiniKey format"
+      <> help "File with the private keys in WIF, minikey or hex format, one or more per line; - to type them on the terminal"
+  where
+    source "-" = Right KeysOnTerminal
+    source file = Right (KeysInFile file)
 
 {- RollDice Parser -}
 

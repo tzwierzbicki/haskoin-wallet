@@ -12,6 +12,7 @@ import Control.Monad.Except
 import Control.Monad.Trans (lift)
 import Data.Default (def)
 import Data.Either
+import qualified Data.Aeson as Json
 import qualified Data.Map as Map
 import Data.Maybe
 import qualified Data.Serialize as S
@@ -22,6 +23,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Util.Arbitrary
 import Haskoin.Wallet.Arbitrary
 import Haskoin.Wallet.CoinSelection (CoinSelection (..), FeePayer (..))
+import Haskoin.Wallet.Commands (Response (..), cmdSendTx)
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.FileIO
@@ -55,6 +57,28 @@ spec :: Spec
 spec = do
   let cfg = def :: Config
   prepareContext $ \ctx -> do
+    describe "Sending a transaction from a file" $ do
+      -- The checks before anything is uploaded: no network is reached
+      let unsignedSweep = TxSignData (spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 1000)]) [] [] [] (Just 1) False
+      it "needs a nosigHash or a file" $
+        cmdSendTx ctx def Nothing Nothing Nothing
+          `shouldReturn` ResponseError "Give the NOSIGHASH of a pending transaction or an --input file"
+      it "takes a nosigHash or a file, not both" $
+        cmdSendTx ctx def (Just (fakeTxHash 1)) (Just "sweep.json") Nothing
+          `shouldReturn` ResponseError "Can not specify both a NOSIGHASH and an --input file"
+      it "needs the network of the file" $
+        cmdSendTx ctx def Nothing (Just "sweep.json") Nothing
+          `shouldReturn` ResponseError "Give the --network of a transaction sent from a file"
+      it "refuses a missing file" $
+        inScratchDirectory $ \dir ->
+          cmdSendTx ctx def Nothing (Just (dir </> "missing.json")) (Just btc)
+            `shouldReturn` ResponseError "Input file does not exist"
+      it "refuses an unsigned transaction" $
+        inScratchDirectory $ \dir -> do
+          let file = dir </> "sweep.json"
+          writeJsonFile file $ Json.toJSON unsignedSweep
+          cmdSendTx ctx def Nothing (Just file) (Just btc)
+            `shouldReturn` ResponseError "The transaction is not signed"
     testIdentity $ identityTests btc ctx
     describe "Database" $ do
       bestSpec
@@ -574,7 +598,7 @@ pendingTxsSpec ctx cfg =
       checkFree 0 False
       checkFree 1 True
       -- The hash depends on the order of the shuffled outputs
-      let h1 = nosigTxHash (txSignDataTx tsd)
+      let h1 = nosigHash (txSignDataTx tsd)
       importPendingTx btc ctx accId tsd `dbShouldBeE` h1
       -- Check locked coins
       coinPage btc accId (Page 5 0)
@@ -611,7 +635,7 @@ pendingTxsSpec ctx cfg =
             }
       -- Import the second transaction
       checkFree 2 True
-      let h2 = nosigTxHash (txSignDataTx tsd2)
+      let h2 = nosigHash (txSignDataTx tsd2)
       importPendingTx btc ctx accId tsd2 `dbShouldBeE` h2
       coinPage btc accId (Page 5 0)
         `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = True},

@@ -4,18 +4,24 @@
 
 module Haskoin.Wallet.TxSweepSpec where
 
+import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans (lift)
 import qualified Data.ByteString as BS
+import Data.Default (def)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromJust)
 import qualified Data.Serialize as S
+import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.Database
 import Haskoin.Wallet.FileIO (TxSignData (..))
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.TxInfo (TxInfo (..), TxType (..))
+import Haskoin.Wallet.TxInfo (TxInfo (..), TxInfoPending (..), TxType (..))
 import Haskoin.Wallet.TxSweep
 import Haskoin.Wallet.TxVectors
+import Haskoin.Wallet.Util (Page (Page), nosigHash)
 import System.Random (mkStdGen)
 import Test.Hspec
 
@@ -29,6 +35,8 @@ spec = do
     keyAddressesSpec ctx
     sweepSizeSpec ctx
     sweepBuilderSpec ctx
+    givenCoinsSpec ctx
+    sweepIntoWalletSpec ctx
 
 -- | Sign with the sweep keys and the account public key, like signsweep does
 sweepSigner :: VectorSigner
@@ -187,6 +195,15 @@ sweepBuilderSpec ctx =
         `shouldBe` Left "There are no coins to sweep in those addresses"
     it "refuses to sweep without destinations" $
       build [] `shouldBe` Left "No addresses to sweep to"
+    it "builds a sweep to addresses outside the wallet, which the signer accepts" $ do
+      -- 10 bytes of overhead, the inputs (581), one P2PKH output (34) and
+      -- the witness data (221): 846 bytes, a fee of 8460
+      tsd <- expectRight $ build [otherAddr 0]
+      ((.value) <$> tsd.txSignDataTx.outputs) `shouldBe` [1491540]
+      tsd.txSignDataOutputPaths `shouldBe` []
+      (_, info) <- expectRight $ signTxWithKeys btc ctx tsd accountPub [sweptKey, walletKey]
+      info.txInfoFee `shouldBe` 8460
+      Map.keys info.txInfoOtherOutputs `shouldBe` [otherAddr 0]
     it "refuses a fee larger than the coins" $
       buildWith 10000 546 destinations `shouldBe` Left "Could not find a sweep solution: fee is too large"
     -- Each destination gets 745600: the dust limit right below, at and
@@ -233,3 +250,106 @@ sweepBuilderSpec ctx =
     buildWith feeByte dust to = buildSweepSignData btc ctx seed found to feeByte dust
     spentBy :: TxSignData -> [OutPoint]
     spentBy tsd = (.outpoint) <$> tsd.txSignDataTx.inputs
+
+{- Coins given by outpoint -}
+
+-- The store's view of the transaction funding the swept key's four
+-- addresses, first in block 800000, with its third output spent
+givenCoinsSpec :: Ctx -> Spec
+givenCoinsSpec ctx =
+  describe "The coins of a sweep given by outpoint" $ do
+    it "reads them from their transactions, in the order given" $
+      coinsOfTransactions [(txHash keyFunding, 1), (txHash keyFunding, 0)] [storeFunding]
+        `shouldBe` Right
+          [ storeCoin ctx (txHash keyFunding, 1) (Just 800000) (sweptKeyAddrs !! 1) 200000,
+            storeCoin ctx (txHash keyFunding, 0) (Just 800000) (sweptKeyAddrs !! 0) 100000
+          ]
+    it "refuses a coin of a transaction the store does not know" $
+      coinsOfTransactions [(fakeTxHash 7, 1)] [storeFunding]
+        `shouldBe` Left "Coin 0000000000000000000000000000000000000000000000000000000000000007 1 is unknown to the store"
+    it "refuses a coin of a transaction the store reports as deleted" $
+      coinsOfTransactions [(txHash keyFunding, 0)] [storeFunding {Store.deleted = True}]
+        `shouldBe` Left ("Coin " <> fundingHex <> " 0 is unknown to the store")
+    it "refuses an output index past the last output" $
+      coinsOfTransactions [(txHash keyFunding, 4)] [storeFunding]
+        `shouldBe` Left ("Coin " <> fundingHex <> " 4 does not exist: the transaction has 4 outputs")
+    it "refuses a spent output" $
+      coinsOfTransactions [(txHash keyFunding, 2)] [storeFunding]
+        `shouldBe` Left ("Coin " <> fundingHex <> " 2 is already spent")
+  where
+    keyFunding = fundingTx ctx 1 (zip sweptKeyAddrs [100000, 200000, 300000, 400000])
+    fundingHex = cs $ txHashToHex $ txHash keyFunding
+    storeFunding =
+      Store.Transaction
+        { Store.block = Store.BlockRef 800000 0,
+          Store.version = 1,
+          Store.locktime = 0,
+          Store.inputs = [],
+          Store.outputs =
+            [ Store.StoreOutput 100000 (addressScript ctx (sweptKeyAddrs !! 0)) Nothing (Just (sweptKeyAddrs !! 0)),
+              Store.StoreOutput 200000 (addressScript ctx (sweptKeyAddrs !! 1)) Nothing (Just (sweptKeyAddrs !! 1)),
+              Store.StoreOutput 300000 (addressScript ctx (sweptKeyAddrs !! 2)) (Just (Store.Spender (fakeTxHash 9) 0)) (Just (sweptKeyAddrs !! 2)),
+              Store.StoreOutput 400000 (addressScript ctx (sweptKeyAddrs !! 3)) Nothing (Just (sweptKeyAddrs !! 3))
+            ],
+          Store.deleted = False,
+          Store.rbf = False,
+          Store.timestamp = 1700000000,
+          Store.txid = txHash keyFunding,
+          Store.size = 226,
+          Store.weight = 904,
+          Store.fee = 1000
+        }
+
+{- Sweeping into the wallet -}
+
+-- The original use of a sweep, as the commands run it: coins of an outside
+-- key are swept to an address of the wallet, the transaction waits among
+-- the pending transactions, is signed there by its nosigHash with the
+-- outside key, and the signed one takes its place.
+sweepIntoWalletSpec :: Ctx -> Spec
+sweepIntoWalletSpec ctx =
+  describe "Sweeping into the wallet" $ do
+    it "keeps the sweep pending, signs it in place and reports the credit" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "main"
+        _ <- genExtAddress ctx def accId ""
+        _ <- genExtAddress ctx def accId ""
+        -- preparesweep: the coins of the swept key, 100000 to 400000, to the
+        -- wallet's second external address and to an outside address. The
+        -- wallet holds no coin, so none is locked.
+        found <- SweepCoins (coinsOf ctx keyFunding) [keyFunding] <$> walletPaths btc accId [externalAddr 1, otherAddr 0] <*> pure [sweptKeyUncompressedAddr]
+        tsd <- liftEither $ buildSweepSignData btc ctx (mkStdGen 0) found [externalAddr 1, otherAddr 0] 10 546
+        let pendingHash = nosigHash tsd.txSignDataTx
+        importPendingTx btc ctx accId tsd `dbShouldBeE` pendingHash
+        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
+          `dbShouldBeE` [Just (TxInfoPending pendingHash False False)]
+        coinPage btc accId (Page 5 0) `dbShouldBeE` []
+        -- signsweep by nosigHash, with the outside key only
+        (_, pendingTsd, TxInfoPending _ _ online) <- lift (getPendingTx pendingHash) >>= liftMaybe "The nosigHash does not exist in the wallet"
+        liftIO $ online `shouldBe` False
+        (signed, info) <- liftEither $ signTxWithKeys btc ctx pendingTsd accountPub [sweptKey]
+        importPendingTx btc ctx accId signed `dbShouldBeE` pendingHash
+        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
+          `dbShouldBeE` [Just (TxInfoPending pendingHash True False)]
+        -- The wallet receives one of the two outputs: 10 bytes of overhead,
+        -- inputs of 148 + 180 + 41 + 64, two P2PKH outputs and 2 + 1 + 1 +
+        -- 108 + 108 of witness data make 731 bytes, a fee of 7310, so
+        -- (1000000 - 7310) / 2 = 496345 each
+        liftIO $ (info.txInfoType, info.txInfoAmount, info.txInfoFee) `shouldBe` (TxCredit, 496345, 7310)
+        liftIO $ Map.keys info.txInfoMyOutputs `shouldBe` [externalAddr 1]
+        -- sendtx marks it online, the sync retires it once the store lists it
+        lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
+        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
+          `dbShouldBeE` [Just (TxInfoPending pendingHash True True)]
+    it "refuses to keep a transaction that does not involve the wallet" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "main"
+        _ <- genExtAddress ctx def accId ""
+        let tx = spendingTx ctx [(txHash keyFunding, 0)] [(otherAddr 0, 90000)]
+            outside = TxSignData tx [keyFunding] [] [] (Just 10) False
+        lift $
+          dbShouldFailWith "The transaction does not involve this wallet" $
+            importPendingTx btc ctx accId outside
+  where
+    accountPub = testAccountPub ctx
+    keyFunding = fundingTx ctx 1 (zip sweptKeyAddrs [100000, 200000, 300000, 400000])
