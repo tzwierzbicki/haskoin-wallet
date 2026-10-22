@@ -1,8 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Helpers shared by the migration tests: in-memory databases built from the
--- schema of an old hw, raw views of the tables, and the migration of hw run
--- with its announcements collected instead of printed.
+-- | Helpers shared by the migration tests: the migration of hw run with its
+-- announcements and backups collected instead of done, and schema
+-- comparisons. The database helpers themselves are in
+-- "Haskoin.Wallet.TestUtils".
 --
 -- The tables of each format version live under "Haskoin.Wallet.Schema":
 -- versions 2 and 3 with hw, version 1 with the tests, since nothing migrates
@@ -12,42 +13,14 @@
 -- its version and the data its hw wrote.
 module Haskoin.Wallet.Migration.TestUtils where
 
-import Conduit (runConduit, sinkList, (.|))
-import Control.Exception (finally)
-import Control.Monad (void, when)
 import Control.Monad.IO.Class (liftIO)
 import Data.IORef (modifyIORef, newIORef, readIORef)
-import Data.List (sort)
 import Data.Text (Text)
-import Data.Time (UTCTime (UTCTime), fromGregorian)
-import Database.Persist.Sql (Migration, PersistValue, Single (..), rawQuery, rawSql, runMigrationQuiet, transactionSave)
-import Database.Persist.Sqlite (runSqlite)
+import Database.Persist.Sql (Migration, Single (..), rawSql, transactionSave)
 import Haskoin (Ctx)
 import Haskoin.Wallet.Database (DB, migrateAll)
 import Haskoin.Wallet.Migration (Hooks (..), latestDatabaseVersion, migrateDBTo)
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getTemporaryDirectory, removeDirectoryRecursive)
-import System.FilePath ((</>))
-import Test.Hspec
-
--- | Run an action on a new in-memory database, without any table
-inMemory :: DB IO a -> IO a
-inMemory = runSqlite ":memory:"
-
--- | Run a test in a fresh directory under the temporary directory, removed
--- afterwards, for the tests that need database files
-inScratchDirectory :: (FilePath -> IO a) -> IO a
-inScratchDirectory test = do
-  base <- getTemporaryDirectory
-  let dir = base </> "hw-database-test"
-  exists <- doesDirectoryExist dir
-  when exists $ removeDirectoryRecursive dir
-  createDirectoryIfMissing True dir
-  test dir `finally` removeDirectoryRecursive dir
-
--- | Create the tables of a schema: the current one ('migrateAll') or an old
--- one
-createTables :: Migration -> DB IO ()
-createTables = void . runMigrationQuiet
+import Haskoin.Wallet.TestUtils (createTables, inMemory)
 
 -- | Commit the fixture, as the hw that wrote the database did. A failed
 -- migration rolls its transaction back, which must undo the migration only:
@@ -55,16 +28,6 @@ createTables = void . runMigrationQuiet
 -- tables.
 commitFixture :: DB IO ()
 commitFixture = transactionSave
-
--- | The result of a database action must be the expected value
-dbShouldBe :: (HasCallStack, Eq a, Show a) => DB IO a -> a -> DB IO ()
-dbShouldBe action expected = do
-  actual <- action
-  liftIO $ actual `shouldBe` expected
-
--- | The creation time of the fixture rows
-fixtureTime :: UTCTime
-fixtureTime = UTCTime (fromGregorian 2023 11 1) 0
 
 -- | The migration to a format version, with what it does outside the
 -- database collected instead of done: its result, the steps it announces
@@ -90,10 +53,6 @@ migrateToAndCollect target ctx = do
 migrateAndCollect :: Ctx -> DB IO (Either String (), [String], [Int])
 migrateAndCollect = migrateToAndCollect latestDatabaseVersion
 
--- | The result of a migration alone
-resultOf :: (Either String (), [String], [Int]) -> Either String ()
-resultOf (result, _, _) = result
-
 -- | The schema of the database: the SQL that created each table and index
 databaseSchema :: DB IO [(Text, Text)]
 databaseSchema = do
@@ -111,21 +70,3 @@ schemaCreatedBy definition = inMemory $ createTables definition >> databaseSchem
 -- | The schema of a database created by this hw
 currentSchema :: IO [(Text, Text)]
 currentSchema = schemaCreatedBy migrateAll
-
--- | The rows of a query, as raw values, in a fixed order
-queryRows :: Text -> DB IO [[PersistValue]]
-queryRows query = sort <$> runConduit (rawQuery query [] .| sinkList)
-
--- | All the rows of a table
-tableRows :: Text -> DB IO [[PersistValue]]
-tableRows table = queryRows $ "select * from " <> table
-
--- | All the rows of several tables
-tablesRows :: [Text] -> DB IO [[[PersistValue]]]
-tablesRows = mapM tableRows
-
--- | What the version table holds, each value with its SQLite storage class
-storedVersions :: DB IO [(PersistValue, Text)]
-storedVersions = do
-  rows <- rawSql "select version, typeof(version) from d_b_version" []
-  return [(value, storageClass) | (Single value, Single storageClass) <- rows]

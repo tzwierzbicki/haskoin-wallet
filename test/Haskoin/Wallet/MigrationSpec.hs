@@ -16,6 +16,7 @@ import Haskoin (prepareContext)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Migration
 import Haskoin.Wallet.Migration.TestUtils
+import Haskoin.Wallet.TestUtils
 import qualified Haskoin.Wallet.Schema.V1 as V1
 import Test.Hspec
 

@@ -734,6 +734,27 @@ walletPaths net accId addrs =
 
 {- Transactions -}
 
+-- | The block of every transaction summary of an account, by transaction id
+txInfoBlockRefs ::
+  (MonadUnliftIO m) => DBAccountId -> ExceptT String (DB m) (Map TxHash Store.BlockRef)
+txInfoBlockRefs (DBAccountKey wallet accDeriv) = do
+  rows <-
+    lift . select . from $ \t -> do
+      where_ $
+        t ^. DBTxInfoAccountWallet ==. val wallet
+          &&. t ^. DBTxInfoAccountDerivation ==. val accDeriv
+      return (t ^. DBTxInfoTxid, t ^. DBTxInfoBlockRef)
+  entries <- forM rows $ \(Value tidT, Value refBytes) -> do
+    tid <- liftEither $ maybeToEither "txInfoBlockRefs: invalid txid" $ hexToTxHash tidT
+    ref <- liftEither $ S.decode refBytes
+    return (tid, ref)
+  return $ Map.fromList entries
+
+-- | Remove the summary of a transaction, which the store no longer has
+deleteTxInfo :: (MonadUnliftIO m) => DBAccountId -> TxHash -> DB m ()
+deleteTxInfo (DBAccountKey wallet accDeriv) tid =
+  P.delete $ DBTxInfoKey wallet accDeriv (txHashToHex tid)
+
 getConfirmedTxs ::
   (MonadUnliftIO m) => DBAccountId -> Bool -> ExceptT String (DB m) [TxHash]
 getConfirmedTxs (DBAccountKey wallet accDeriv) confirm = do

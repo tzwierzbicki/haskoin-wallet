@@ -708,7 +708,7 @@ cmdSyncAcc ctx cfg nameM full =
     when (null accs) $ throwError "There are no accounts in the wallet"
     res <- forM accs $ \(accId, acc) -> do
       let net = accountNetwork acc
-      sync ctx cfg net accId full
+      sync ctx (webStore ctx cfg net) net accId full
     return $ ResponseSync res
 
 cmdDiscoverAccount :: Ctx -> Config -> Maybe Text -> IO Response
@@ -717,12 +717,13 @@ cmdDiscoverAccount ctx cfg nameM = do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
+        store = webStore ctx cfg net
     checkHealth ctx net cfg
-    (e, i) <- discoverAddrs net ctx cfg pub
+    (e, i) <- discoverAddrs ctx cfg store pub
     discoverAccGenAddrs ctx cfg accId AddrExternal $ fromIntegral e
     discoverAccGenAddrs ctx cfg accId AddrInternal $ fromIntegral i
     -- Perform a full sync after discovery
-    res <- sync ctx cfg net accId True
+    res <- sync ctx store net accId True
     return $ ResponseSync [res]
 
 -- | Copy the database to the given file, which must not exist, or into the

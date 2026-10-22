@@ -180,6 +180,7 @@ test-suite spec
       Haskoin.Wallet.Migration.V3Spec
       Haskoin.Wallet.MigrationSpec
       Haskoin.Wallet.Schema.V1
+      Haskoin.Wallet.SyncSpec
       Haskoin.Wallet.TestUtils
       Haskoin.Wallet.TxBuildingSpec
       Haskoin.Wallet.TxSigningSpec
