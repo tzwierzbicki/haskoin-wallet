@@ -43,8 +43,12 @@ source-repository head
 library
   exposed-modules:
       Haskoin.Wallet
+      Haskoin.Wallet.Account
+      Haskoin.Wallet.Address
       Haskoin.Wallet.Amounts
       Haskoin.Wallet.Backup
+      Haskoin.Wallet.BestBlock
+      Haskoin.Wallet.Coin
       Haskoin.Wallet.CoinSelection
       Haskoin.Wallet.Commands
       Haskoin.Wallet.Config
@@ -60,14 +64,19 @@ library
       Haskoin.Wallet.Migration.V4
       Haskoin.Wallet.Migration.V5
       Haskoin.Wallet.Parser
+      Haskoin.Wallet.PendingTx
       Haskoin.Wallet.PrettyPrinter
+      Haskoin.Wallet.Prompt
+      Haskoin.Wallet.RawTx
       Haskoin.Wallet.Schema.V2
       Haskoin.Wallet.Schema.V3
       Haskoin.Wallet.Schema.V4
       Haskoin.Wallet.Schema.V5
+      Haskoin.Wallet.Store
       Haskoin.Wallet.Sync
       Haskoin.Wallet.TxBuilding
       Haskoin.Wallet.TxInfo
+      Haskoin.Wallet.TxSignData
       Haskoin.Wallet.TxSigning
       Haskoin.Wallet.TxSize
       Haskoin.Wallet.TxSweep
@@ -173,10 +182,14 @@ test-suite spec
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   other-modules:
+      Haskoin.Wallet.AccountSpec
+      Haskoin.Wallet.AddressSpec
       Haskoin.Wallet.AmountsSpec
       Haskoin.Wallet.Arbitrary
       Haskoin.Wallet.BackupSpec
+      Haskoin.Wallet.BestBlockSpec
       Haskoin.Wallet.CoinSelectionSpec
+      Haskoin.Wallet.CoinSpec
       Haskoin.Wallet.CommandsSpec
       Haskoin.Wallet.ConfigSpec
       Haskoin.Wallet.DatabaseLockSpec
@@ -190,10 +203,12 @@ test-suite spec
       Haskoin.Wallet.Migration.V4Spec
       Haskoin.Wallet.Migration.V5Spec
       Haskoin.Wallet.MigrationSpec
+      Haskoin.Wallet.PendingTxSpec
       Haskoin.Wallet.Schema.V1
       Haskoin.Wallet.SyncSpec
       Haskoin.Wallet.TestUtils
       Haskoin.Wallet.TxBuildingSpec
+      Haskoin.Wallet.TxInfoSpec
       Haskoin.Wallet.TxSigningSpec
       Haskoin.Wallet.TxSizeSpec
       Haskoin.Wallet.TxSweepSpec

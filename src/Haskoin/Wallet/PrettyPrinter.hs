@@ -20,10 +20,12 @@ import qualified Data.Text as Text
 import Data.Time.Format
 import Data.Word
 import Haskoin
+import Haskoin.Wallet.Account
 import Haskoin.Wallet.Amounts
-import Haskoin.Wallet.Sync
+import Haskoin.Wallet.Coin
 import Haskoin.Wallet.Commands
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.Sync
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)

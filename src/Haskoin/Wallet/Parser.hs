@@ -10,6 +10,7 @@ import Data.Text (Text)
 import Haskoin
 import Haskoin.Wallet.Amounts (AmountUnit (..), readNatural)
 import Haskoin.Wallet.CoinSelection (CoinSelection (..), FeePayer (..))
+import Haskoin.Wallet.Keys (KeySource (..))
 import Haskoin.Wallet.Util (Page (Page))
 import Numeric.Natural (Natural)
 import Options.Applicative
@@ -150,14 +151,6 @@ data Command
   | CommandRollDice
       { commandCount :: !Natural
       }
-  deriving (Eq, Show)
-
--- | Where the private keys of a sweep come from
-data KeySource
-  = -- | A file with one or more keys per line
-    KeysInFile !FilePath
-  | -- | Typed on the terminal without echo, asked for with --prvkeys -
-    KeysOnTerminal
   deriving (Eq, Show)
 
 parserMain :: IO (Command, AmountUnit, Bool)

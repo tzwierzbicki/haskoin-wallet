@@ -15,9 +15,9 @@ import qualified Data.Serialize as S
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin
-import Haskoin.Wallet.FileIO (TxSignData (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo
+import Haskoin.Wallet.TxSignData
 import Numeric.Natural (Natural)
 import Test.Hspec
 

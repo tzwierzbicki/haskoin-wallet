@@ -14,20 +14,20 @@ import Control.Monad.Except
 import Control.Monad.Reader (MonadIO(..), MonadTrans(lift))
 import Data.Aeson (object, (.:), (.=))
 import qualified Data.Aeson as Json
-import qualified Data.ByteString as BS
 import qualified Data.ByteString.Base64 as B64
 import Data.Foldable (for_)
 import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
-import Data.Version (showVersion)
 import qualified Data.Text as Text
+import Data.Version (showVersion)
 import Database.Persist.Sqlite (transactionUndo)
 import Haskoin
-import qualified Haskoin.Store.Data as Store
-import Haskoin.Store.WebClient
+import Haskoin.Wallet.Account
+import Haskoin.Wallet.Address
 import Haskoin.Wallet.Amounts
 import Haskoin.Wallet.Backup (backupDatabase, backupDirectory, copyDatabase)
+import Haskoin.Wallet.Coin
 import Haskoin.Wallet.CoinSelection (CoinSelection, FeePayer)
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
@@ -37,17 +37,19 @@ import Haskoin.Wallet.Keys
 import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.Migration (databaseVersion, latestDatabaseVersion)
 import Haskoin.Wallet.Parser
+import Haskoin.Wallet.PendingTx
+import Haskoin.Wallet.Prompt
+import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.TxBuilding
 import Haskoin.Wallet.TxInfo
+import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSigning (parseTxSignData, signWalletTx, verifySignedTx)
 import Haskoin.Wallet.TxSweep
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import qualified Paths_haskoin_wallet as Paths
-import qualified System.Console.Haskeline as Haskeline
 import qualified System.Directory as D
-import qualified System.IO as IO
 import System.IO (hPutStrLn, stderr)
 import System.Random (initStdGen)
 
@@ -370,15 +372,9 @@ commandResponse ctx cfg unit cmd =
     CommandVersion -> cmdVersion cfg
     CommandSignMsg a m s -> cmdSignMessage ctx cfg a m s
     CommandPrepareSweep nameM prvKeyM sf st coins outputM f d ->
-      prepareSweep ctx cfg nameM prvKeyM sf st coins outputM f d
-    CommandSignSweep nameM h i o k -> signSweep ctx cfg nameM h i o k
-    CommandRollDice n -> rollDice n
-
--- runDBResponse Monad Stack:
--- ExceptT String (ReaderT SqlBackend (NoLoggingT (ResourceT (IO))))
-
-liftEitherIO :: (MonadIO m) => IO (Either String a) -> ExceptT String m a
-liftEitherIO = liftEither <=< liftIO
+      cmdPrepareSweep ctx cfg nameM prvKeyM sf st coins outputM f d
+    CommandSignSweep nameM h i o k -> cmdSignSweep ctx cfg nameM h i o k
+    CommandRollDice n -> cmdRollDice n
 
 cmdMnemonic :: Natural -> Bool -> Natural -> IO Response
 cmdMnemonic ent useDice splitMnemIn =
@@ -589,25 +585,6 @@ cmdDeleteTx ctx cfg nosigH =
     (coins, addrs) <- deleteTx ctx (webStore ctx cfg) nosigH
     return $ ResponseDeleteTx nosigH coins addrs
 
--- | Delete a pending transaction, freeing the coins it held. One the user
--- sent is abandoned only when the store does not know it: a transaction in
--- the network's mempool or in the chain may still confirm, and the sync
--- retires it once it is listed.
-deleteTx ::
-  (MonadUnliftIO m) => Ctx -> (Network -> Store) -> TxHash -> ExceptT String (DB m) (Natural, Natural)
-deleteTx ctx storeOn nosigH = do
-  pendingM <- lift $ getPendingTx nosigH
-  case pendingM of
-    Nothing -> throwError "The pending transaction does not exist"
-    Just (accId, tsd, online) -> do
-      when online $ do
-        acc <- getAccountById accId
-        let txid = txHash (txSignDataTx tsd)
-        known <- fromStore $ storeTransactions (storeOn (accountNetwork acc)) [txid]
-        when (any (\t -> t.txid == txid && not t.deleted) known) $
-          throwError "The transaction is in the network's mempool or in the chain: syncacc retires it once it is listed"
-      deletePendingTx ctx nosigH
-
 cmdSignMessage :: Ctx -> Config -> Text -> Text -> Natural -> IO Response
 cmdSignMessage ctx cfg addrTxt txtMsg splitMnemIn =
   runDBResponse cfg $ do
@@ -654,24 +631,6 @@ cmdSignTx ctx cfg nameM nosigHM inputM outputM splitMnemIn =
     for_ outputM $ \o -> liftIO $ writeJsonFile o $ Json.toJSON newSignData
     return $ ResponseTx acc txInfoL
 
-askPrvKey ::
-  (MonadUnliftIO m) =>
-     Network
-  -> Ctx
-  -> Natural
-  -> MnemonicPass
-  -> XPubKey
-  -> ExceptT String (DB m) XPrvKey
-askPrvKey net ctx idx mnem@(MnemonicPass m _) accPub = do
-  p <- liftIO askPassword1
-  prvKey <- liftEither $ signingKey net ctx (MnemonicPass m $ cs p) idx
-  let xpub = deriveXPubKey ctx prvKey
-  if accPub == xpub
-    then return prvKey
-    else do
-      liftIO $ putStrLn "The passphrase or the mnemonic did not match the account "
-      askPrvKey net ctx idx mnem accPub
-
 parseSignInput ::
   (MonadUnliftIO m) =>
   Maybe TxHash ->
@@ -711,36 +670,12 @@ cmdCoins cfg nameM page =
 cmdSendTx :: Ctx -> Config -> Maybe TxHash -> Maybe FilePath -> Maybe Network -> IO Response
 cmdSendTx ctx cfg nosigHM inputM netM =
   case (nosigHM, inputM) of
-    (Just nosigH, Nothing) -> runDBResponse cfg $ sendPending ctx (webStore ctx cfg) nosigH
+    (Just nosigH, Nothing) -> runDBResponse cfg $ do
+      (acc, txInfo) <- sendPending ctx (webStore ctx cfg) nosigH
+      return $ ResponseTx acc txInfo
     (Nothing, Just file) -> sendTxFile ctx cfg file netM
     (Nothing, Nothing) -> return $ ResponseError "Give the NOSIGHASH of a pending transaction or an --input file"
     (Just _, Just _) -> return $ ResponseError "Can not specify both a NOSIGHASH and an --input file"
-
--- | Send a pending transaction of the wallet and wait for the store to see
--- it. Once it does, the transaction is marked online, for the sync to send
--- again should the store lose it, and its raw transaction is stored. If the
--- store does not see it, nothing is recorded and the answer says so.
-sendPending ::
-  (MonadUnliftIO m) => Ctx -> (Network -> Store) -> TxHash -> ExceptT String (DB m) Response
-sendPending ctx storeOn nosigH = do
-  tsdM <- lift $ getPendingTx nosigH
-  case tsdM of
-    Just (accId, tsd@(TxSignData signedTx _ _ _ _ signed), _) -> do
-      acc <- getAccountById accId
-      let net = accountNetwork acc
-          pub = accountXPubKey ctx acc
-          store = storeOn net
-      txInfo <- liftEither $ parseTxSignData net ctx pub tsd
-      txInfoL <- lift $ fillTxInfoLabels net txInfo
-      unless signed $ throwError "The transaction is not signed"
-      liftEither $ verifySignedTx net ctx tsd
-      fromStore $ storeHealth store
-      accepted <- fromStore $ broadcast store signedTx
-      unless accepted $ throwError notAccepted
-      _ <- lift $ setPendingTxOnline nosigH
-      lift $ insertRawTx signedTx
-      return $ ResponseTx acc $ setTxInfoOnline txInfoL
-    _ -> throwError "The nosigHash does not exist in the wallet"
 
 -- | Send a signed transaction from a file, which need not involve the
 -- wallet: it is checked against the coins it spends and uploaded, and
@@ -762,12 +697,6 @@ sendTxFile ctx cfg file netM =
     unless accepted $ throwError notAccepted
     return $ ResponseSentTx net (txHash signedTx)
 
-setTxInfoOnline :: TxInfo -> TxInfo
-setTxInfoOnline txInfo =
-  case txInfoPending txInfo of
-    Just p -> txInfo {txInfoPending = Just p {pendingOnline = True}}
-    _ -> txInfo
-
 cmdSyncAcc :: Ctx -> Config -> Maybe Text -> Bool -> IO Response
 cmdSyncAcc ctx cfg nameM full =
   runDBResponse cfg $ do
@@ -788,7 +717,7 @@ cmdDiscoverAccount ctx cfg nameM = do
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
         store = webStore ctx cfg net
-    checkHealth ctx net cfg
+    fromStore $ storeHealth store
     (e, i) <- discoverAddrs ctx cfg store pub
     discoverAccGenAddrs ctx cfg accId AddrExternal $ fromIntegral e
     discoverAccGenAddrs ctx cfg accId AddrInternal $ fromIntegral i
@@ -827,7 +756,7 @@ cmdVersion cfg =
 -- address of the wallet waits among its pending transactions, to be signed
 -- by its nosigHash; one that does not involve the wallet can only be
 -- written to a file, to be signed from there.
-prepareSweep ::
+cmdPrepareSweep ::
   Ctx ->
   Config ->
   Maybe Text ->
@@ -839,7 +768,7 @@ prepareSweep ::
   Natural ->
   Natural ->
   IO Response
-prepareSweep ctx cfg nameM keysM sweepFromT sweepToT coins outputM feeByte dust =
+cmdPrepareSweep ctx cfg nameM keysM sweepFromT sweepToT coins outputM feeByte dust =
   runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
@@ -847,7 +776,7 @@ prepareSweep ctx cfg nameM keysM sweepFromT sweepToT coins outputM feeByte dust 
     secKeys <- maybe (return []) (readSecKeys net) keysM
     sweepFrom <- liftEither $ mapM (textToAddrE net) sweepFromT
     sweepTo <- liftEither $ mapM (textToAddrE net) sweepToT
-    checkHealth ctx net cfg
+    fromStore $ storeHealth (webStore ctx cfg net)
     found <- fetchSweepCoins net ctx cfg accId secKeys sweepFrom coins sweepTo
     gen <- liftIO initStdGen
     tsd <- liftEither $ buildSweepSignData net ctx gen found sweepTo feeByte dust
@@ -862,26 +791,9 @@ prepareSweep ctx cfg nameM keysM sweepFromT sweepToT coins outputM feeByte dust 
     for_ outputM $ \file -> liftIO $ writeJsonFile file $ Json.toJSON tsd
     return $ ResponseTx acc txInfoL
 
--- | The private keys of a sweep, from where the user keeps them: a file,
--- or typed on the terminal without echo
-readSecKeys :: (MonadIO m) => Network -> KeySource -> ExceptT String m [SecKey]
-readSecKeys net (KeysInFile file) = do
-  exists <- liftIO $ D.doesFileExist file
-  unless exists $ throwError "The private key file does not exist"
-  parseKeys net . cs =<< liftIO (IO.readFile file)
-readSecKeys net KeysOnTerminal = do
-  text <- liftIO $ askInputLineHidden "Private keys (WIF, minikey or hex, separated by spaces): "
-  parseKeys net (cs text)
-
-parseKeys :: (Monad m) => Network -> Text -> ExceptT String m [SecKey]
-parseKeys net text = do
-  keys <- liftEither $ parseSecKeys net text
-  when (null keys) $ throwError "No private keys were given"
-  return keys
-
 -- | Sign a sweep with private keys: a pending transaction of the wallet,
 -- by its nosigHash, or one in a file, which need not involve the wallet
-signSweep ::
+cmdSignSweep ::
   Ctx ->
   Config ->
   Maybe Text ->
@@ -890,7 +802,7 @@ signSweep ::
   Maybe FilePath ->
   Maybe KeySource ->
   IO Response
-signSweep ctx cfg nameM nosigHM inputM outputM keysM =
+cmdSignSweep ctx cfg nameM nosigHM inputM outputM keysM =
   runDBResponse cfg $ do
     (tsd, online) <- parseSignInput nosigHM inputM outputM
     when online $
@@ -909,81 +821,8 @@ signSweep ctx cfg nameM nosigHM inputM outputM keysM =
     for_ outputM $ \o -> liftIO $ writeJsonFile o $ Json.toJSON newTsd
     return $ ResponseTx acc txInfoL
 
-rollDice :: Natural -> IO Response
-rollDice n = do
-  (res, origEnt) <- go [] ""
-  return $ ResponseRollDice (take (fromIntegral n) res) origEnt
-  where
-    go acc orig
-      | length acc >= fromIntegral n = return (acc, orig)
-      | otherwise = do
-          (origEnt, sysEnt) <- systemEntropy 1
-          go (word8ToBase6 (head $ BS.unpack sysEnt) <> acc) origEnt
-
--- Haskeline Helpers --
-
-askInputLineHidden :: String -> IO String
-askInputLineHidden message = do
-  inputM <-
-    Haskeline.runInputT Haskeline.defaultSettings $
-      Haskeline.getPassword (Just '*') message
-  maybe
-    (error "No action due to EOF")
-    return
-    inputM
-
-askInputLine :: String -> IO String
-askInputLine message = do
-  inputM <-
-    Haskeline.runInputT Haskeline.defaultSettings $
-      Haskeline.getInputLine message
-  maybe
-    (error "No action due to EOF")
-    return
-    inputM
-
-askMnemonicWords :: String -> IO Mnemonic
-askMnemonicWords txt = do
-  mnm <- askInputLineHidden txt
-  case fromMnemonic (cs mnm) of -- validate the mnemonic
-    Right _ -> return $ cs mnm
-    Left _ -> do
-      liftIO $ putStrLn "Invalid mnemonic"
-      askMnemonicWords txt
-
-askMnemonic :: (MonadError String m, MonadIO m) => Natural -> m MnemonicPass
-askMnemonic splitMnemIn = do
-  mnm <-
-    if splitMnemIn == 1
-      then liftIO $ askMnemonicWords "Enter your mnemonic words: "
-      else do
-        ms <- forM [1 .. splitMnemIn] $ \n ->
-          liftIO $ askMnemonicWords $ "Split mnemonic part #" <> show n <> ": "
-        liftEither $ mergeMnemonicParts ms
-  return
-    MnemonicPass
-      { mnemonicWords = mnm,
-        mnemonicPass = ""
-      }
-
-askMnemonicPass :: (MonadError String m, MonadIO m) => Natural -> m MnemonicPass
-askMnemonicPass splitMnemIn = do
-  mnem <- askMnemonic splitMnemIn
-  passStr <- liftIO askPassword
-  return mnem {mnemonicPass = cs passStr}
-
-askPassword :: IO String
-askPassword = do
-  pass <- askPassword1
-  if null pass
-    then return pass
-    else do
-      pass2 <- askInputLineHidden "Repeat your mnemonic passphrase   : "
-      if pass == pass2
-        then return pass
-        else do
-          putStrLn "The passphrases did not match"
-          askPassword
-
-askPassword1 :: IO String
-askPassword1 = askInputLineHidden "Mnemonic passphrase or leave empty: "
+-- | Dice rolls for the user, drawn from the system entropy
+cmdRollDice :: Natural -> IO Response
+cmdRollDice n = do
+  (rolls, source) <- rollDice n
+  return $ ResponseRollDice rolls source

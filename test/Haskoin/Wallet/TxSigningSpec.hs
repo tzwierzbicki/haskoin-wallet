@@ -9,11 +9,11 @@ import Data.List (nub)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust, mapMaybe)
 import Haskoin
-import Haskoin.Wallet.TxSize (p2pkhInput, p2pkhOutputSize, txSize)
-import Haskoin.Wallet.FileIO (TxSignData (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo (MyInputs (..), MyOutputs (..), TxInfo (..), TxInfoPending (..), TxType (..))
+import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSigning
+import Haskoin.Wallet.TxSize (p2pkhInput, p2pkhOutputSize, txSize)
 import Haskoin.Wallet.TxVectors
 import Numeric.Natural (Natural)
 import Test.Hspec

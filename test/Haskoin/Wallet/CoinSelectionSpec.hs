@@ -6,8 +6,8 @@ module Haskoin.Wallet.CoinSelectionSpec where
 import Data.Word (Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.CoinSelection
+import Haskoin.Wallet.TestUtils
 import Numeric.Natural (Natural)
 import System.Random (mkStdGen)
 import Test.Hspec
@@ -24,10 +24,6 @@ spec =
 -- one output at 10 satoshis per byte: a coin is worth its amount - 1480, and
 -- the target to cover is the amount + 440. The long-term fee rate is 10, the
 -- value Bitcoin Core uses.
-
--- | Coins of the test wallet with the given amounts
-coinsWorth :: Ctx -> [Natural] -> [Store.Unspent]
-coinsWorth ctx values = coinsOf ctx $ fundingTx ctx 1 $ zip (externalAddr <$> [0 ..]) values
 
 -- | A selection as its amounts: the coins, the change and the fee
 amounts :: Selection -> ([Word64], Word64, Word64)

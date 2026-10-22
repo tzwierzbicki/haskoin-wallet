@@ -12,14 +12,16 @@ import Data.Maybe
 import Data.Text (Text)
 import Haskoin
 import Haskoin.Util.Arbitrary
+import Haskoin.Wallet.Account
+import Haskoin.Wallet.Address
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Entropy
 import Haskoin.Wallet.Keys
 import Haskoin.Wallet.TestUtils
-import Test.HUnit
 import Test.Hspec
 import Test.Hspec.QuickCheck
+import Test.HUnit
 import Test.QuickCheck
 
 spec :: Spec

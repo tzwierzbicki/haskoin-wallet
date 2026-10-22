@@ -25,14 +25,15 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (UTCTime (UTCTime), fromGregorian)
+import Data.Word (Word32, Word64, Word8)
 import Database.Persist.Sql (Migration, PersistValue, Single (..), rawQuery, rawSql, runMigrationQuiet)
 import Database.Persist.Sqlite (runSqlite)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Database (DB, DBAccount, DBAccountId, insertAccount, migrateAll, nextAccountDeriv)
+import Haskoin.Wallet.Account (insertAccount, nextAccountDeriv)
+import Haskoin.Wallet.Database (DB, DBAccount, DBAccountId, migrateAll)
 import Haskoin.Wallet.Keys (MnemonicPass (..), signingKey, walletFingerprint)
-import Haskoin.Wallet.Sync (Store (..))
-import Data.Word (Word32, Word64, Word8)
+import Haskoin.Wallet.Store
 import Numeric.Natural (Natural)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getTemporaryDirectory, listDirectory, removeDirectoryRecursive)
 import System.FilePath ((</>))
@@ -351,6 +352,15 @@ coinsOf ctx tx =
       }
     | (i, out) <- zip [0 ..] tx.outputs
   ]
+
+-- | The transaction funding coins worth the given amounts, on the external
+-- addresses /0/0, /0/1, ... of the test wallet
+fundingWorth :: Ctx -> [Natural] -> Tx
+fundingWorth ctx values = fundingTx ctx 1 $ zip (externalAddr <$> [0 ..]) values
+
+-- | The coins of 'fundingWorth', as the store reports them
+coinsWorth :: Ctx -> [Natural] -> [Store.Unspent]
+coinsWorth ctx = coinsOf ctx . fundingWorth ctx
 
 -- | The output script paying an address
 addressScript :: Ctx -> Address -> BS.ByteString

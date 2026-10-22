@@ -15,14 +15,16 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Database
-import Haskoin.Wallet.FileIO (TxSignData (..))
+import Haskoin.Wallet.Address
+import Haskoin.Wallet.Coin
+import Haskoin.Wallet.PendingTx
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo (TxInfo (..), TxInfoPending (..), TxType (..))
+import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSigning (parseTxSignData)
 import Haskoin.Wallet.TxSweep
 import Haskoin.Wallet.TxVectors
-import Haskoin.Wallet.Util (Page (Page), nosigHash)
+import Haskoin.Wallet.Util (Page (Page))
 import System.Random (mkStdGen)
 import Test.Hspec
 
