@@ -166,6 +166,19 @@ spec = prepareContext $ \ctx -> do
         coins accId `dbShouldBeE` [OutPoint (fakeTxHash 2) 0]
         balances accId `dbShouldBeE` (30000, 0, 1)
 
+    it "looks for a reorganisation on an incremental sync, not on a full one" $
+      inDatabaseE $ do
+        accId <- account
+        asked <- liftIO $ newIORef []
+        let store = notingBlockRequests asked $ toStore $ paymentStore ctx
+        -- The first sync has no block to check against, the full ones look
+        -- at everything anyway
+        _ <- sync ctx cfg store btc accId False
+        _ <- sync ctx cfg store btc accId True
+        _ <- sync ctx cfg store btc accId False
+        _ <- sync ctx cfg store btc accId True
+        liftIO $ readIORef asked `shouldReturn` [800002]
+
     it "keeps every coin of an address with two hundred of them" $
       inDatabaseE $ do
         accId <- account

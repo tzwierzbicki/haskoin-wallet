@@ -78,6 +78,11 @@ textToAddrE :: Network -> Text -> Either String Address
 textToAddrE net a =
   maybeToEither "Invalid Address in textToAddrE" (textToAddr net a)
 
+-- | An address as it is written in a message or on the screen, or a
+-- mention of the mismatch when it cannot be written on the network
+addrToString :: Network -> Address -> String
+addrToString net a = maybe "an address of another network" Text.unpack (addrToText net a)
+
 addrToText2 :: Network -> (Address, v) -> Either String (Text, v)
 addrToText2 net (a, v) = (,v) <$> addrToTextE net a
 
