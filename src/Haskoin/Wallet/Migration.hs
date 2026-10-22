@@ -66,6 +66,7 @@ import Haskoin.Wallet.Database
 import qualified Haskoin.Wallet.Migration.V2 as V2
 import qualified Haskoin.Wallet.Migration.V3 as V3
 import qualified Haskoin.Wallet.Migration.V4 as V4
+import qualified Haskoin.Wallet.Migration.V5 as V5
 
 -- | The version of the database format of this hw. Version 1 is the format
 -- of hw 0.8, before the version table existed; version 2 is the format of
@@ -77,7 +78,7 @@ import qualified Haskoin.Wallet.Migration.V4 as V4
 -- add the step as a module under "Haskoin.Wallet.Migration", listed in
 -- 'steps'.
 latestDatabaseVersion :: Int
-latestDatabaseVersion = 4
+latestDatabaseVersion = 5
 
 -- | A step from the version before 'stepTo' to 'stepTo'. It leaves the
 -- database as the hw of that version left it: its tables, its data and its
@@ -93,7 +94,8 @@ steps :: (MonadUnliftIO m) => Ctx -> [Step m]
 steps ctx =
   [ Step 2 "the transaction summaries of hw 0.9" (V2.migrateDB ctx),
     Step 3 "the version stored as a number" V3.migrateDB,
-    Step 4 "the dead transactions" V4.migrateDB
+    Step 4 "the dead transactions" V4.migrateDB,
+    Step 5 "the coin locks read from the pending transactions" V5.migrateDB
   ]
 
 getDatabaseTables :: (MonadUnliftIO m) => DB m [Text]

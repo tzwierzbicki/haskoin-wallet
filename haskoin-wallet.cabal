@@ -58,11 +58,13 @@ library
       Haskoin.Wallet.Migration.V2
       Haskoin.Wallet.Migration.V3
       Haskoin.Wallet.Migration.V4
+      Haskoin.Wallet.Migration.V5
       Haskoin.Wallet.Parser
       Haskoin.Wallet.PrettyPrinter
       Haskoin.Wallet.Schema.V2
       Haskoin.Wallet.Schema.V3
       Haskoin.Wallet.Schema.V4
+      Haskoin.Wallet.Schema.V5
       Haskoin.Wallet.Sync
       Haskoin.Wallet.TxBuilding
       Haskoin.Wallet.TxInfo
@@ -186,6 +188,7 @@ test-suite spec
       Haskoin.Wallet.Migration.V2Spec
       Haskoin.Wallet.Migration.V3Spec
       Haskoin.Wallet.Migration.V4Spec
+      Haskoin.Wallet.Migration.V5Spec
       Haskoin.Wallet.MigrationSpec
       Haskoin.Wallet.Schema.V1
       Haskoin.Wallet.SyncSpec

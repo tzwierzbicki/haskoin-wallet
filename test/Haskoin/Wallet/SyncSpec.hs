@@ -17,7 +17,7 @@ import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
 import Data.Default (def)
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef, newIORef, readIORef)
-import Data.List (find, sort, sortOn)
+import Data.List (sort, sortOn)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Text (Text)
@@ -25,12 +25,13 @@ import Data.Word (Word32, Word64, Word8)
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.Commands (deleteTx)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.FileIO (TxSignData (..))
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.TxInfo (TxInfo (..))
+import Haskoin.Wallet.TxInfo (TxInfo (..), TxInfoPending (..))
 import Haskoin.Wallet.Util (Page (Page), nosigHash)
 import Numeric.Natural (Natural)
 import Test.Hspec
@@ -242,9 +243,51 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         accId <- account
         lift $ P.insert_ $ pendingRow accId (pendingTx ctx)
-        (map fst <$> pendingTxHashes accId) `dbShouldBeE` [txHash (pendingTx ctx)]
-        _ <- syncWith (sentStore ctx) accId
-        (map fst <$> pendingTxHashes accId) `dbShouldBeE` []
+        pendingHashes accId `dbShouldBeE` [txHash (pendingTx ctx)]
+        res <- syncWith (sentStore ctx) accId
+        pendingHashes accId `dbShouldBeE` []
+        liftIO $ syncResRebroadcast res `shouldBe` 0
+
+    it "sends again a transaction the user sent that the store lost" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (realPaymentStore ctx) accId
+        -- The user sent the payment to otherAddr 0 but the store does not
+        -- list it: the coin is still unspent
+        pendingHash <- importPendingTx btc ctx accId (signedSpend ctx)
+        lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
+        published <- liftIO $ newIORef []
+        res <- sync ctx cfg (notingPublished published $ toStore $ realPaymentStore ctx) btc accId False
+        liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (1, 0)
+        liftIO $ readIORef published `shouldReturn` [txSignDataTx (signedSpend ctx)]
+        pendingHashes accId `dbShouldBeE` [txHash (txSignDataTx (signedSpend ctx))]
+        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
+          `dbShouldBeE` [Just (TxInfoPending pendingHash True True False)]
+
+    it "leaves alone a signed transaction the user has not sent" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (realPaymentStore ctx) accId
+        _ <- importPendingTx btc ctx accId (signedSpend ctx)
+        published <- liftIO $ newIORef []
+        res <- sync ctx cfg (notingPublished published $ toStore $ realPaymentStore ctx) btc accId False
+        liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (0, 0)
+        liftIO $ readIORef published `shouldReturn` []
+
+    it "reports a pending transaction whose coin was spent by another transaction" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (realPaymentStore ctx) accId
+        pendingHash <- importPendingTx btc ctx accId (unsignedSpend ctx)
+        coins accId `dbShouldBeE` [OutPoint (realPaymentId ctx) 0]
+        res <- syncWith (spentElsewhereStore ctx) accId
+        liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (0, 1)
+        coins accId `dbShouldBeE` []
+        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
+          `dbShouldBeE` [Just (TxInfoPending pendingHash False False True)]
+        -- Nothing is left to free but the change address, which it had none of
+        deleteTx ctx (const (toStore emptyStore)) pendingHash `dbShouldBeE` (0, 0)
+        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0)) `dbShouldBeE` []
 
   describe "Asking the store in parallel" $ do
     it "answers in the order asked, even when later questions finish first" $ do
@@ -270,109 +313,7 @@ spec = prepareContext $ \ctx -> do
           inParallel 2 [return 1, throwError "The store is down", throwError "Not this one", return (4 :: Int)]
       answers `shouldBe` Left "The store is down"
 
-{- The scripted store -}
-
--- | What the store answers: every list is complete, as the real store's
--- are when asked for everything
-data FakeStore = FakeStore
-  { fakeBest :: Store.BlockData,
-    -- | The blocks at each height, for the reorganisation check
-    fakeBlocks :: [Store.BlockData],
-    -- | Addresses not listed have an empty balance
-    fakeBalances :: [Store.Balance],
-    -- | The transactions of each address, newest first
-    fakeTxRefs :: [(Address, [Store.TxRef])],
-    fakeTransactions :: [Store.Transaction],
-    fakeUnspents :: [Store.Unspent],
-    -- | Raw transactions by the id the store knows them under. Most stores
-    -- here list their payments under made-up ids rather than the hashes
-    -- of these raw transactions, which the sync only notices when it
-    -- checks which raw transactions it has: 'realPaymentStore' is the one
-    -- to use for that.
-    fakeRawTransactions :: [(TxHash, Tx)]
-  }
-
-toStore :: FakeStore -> Store
-toStore fake =
-  Store
-    { storeHealth = return (),
-      storeBestBlock = return fake.fakeBest,
-      storeBlocksAtHeight = \height ->
-        return $ filter ((== height) . (.height)) fake.fakeBlocks,
-      storeBalances = \addrs ->
-        return [fromMaybe (Store.Balance a 0 0 0 0 0) (find ((== a) . (.address)) fake.fakeBalances) | a <- addrs],
-      storeAddressTxs = \addr count ->
-        return $ take (fromIntegral count) $ fromMaybe [] $ lookup addr fake.fakeTxRefs,
-      storeTransactions = \tids ->
-        return $ filter ((`elem` tids) . (.txid)) fake.fakeTransactions,
-      storeUnspents = \addrs ->
-        return $ filter ((`elem` (Just <$> addrs)) . (.address)) fake.fakeUnspents,
-      storeRawTransactions = \tids ->
-        return [tx | (tid, tx) <- fake.fakeRawTransactions, tid `elem` tids]
-    }
-
--- | The store, noting every list of raw transactions it is asked for
-notingRawRequests :: IORef [[TxHash]] -> Store -> Store
-notingRawRequests asked store =
-  store
-    { storeRawTransactions = \tids -> do
-        liftIO $ modifyIORef asked (<> [tids])
-        storeRawTransactions store tids
-    }
-
--- | A block of the main chain, whose hash depends on the nonce
-blockAt :: BlockHeight -> Word32 -> Store.BlockData
-blockAt height nonce =
-  Store.BlockData
-    height
-    True
-    0
-    (BlockHeader 1 (fakeBlockHash 0) (fakeTxHash 0).get 1700000000 0x1d00ffff nonce)
-    1000
-    4000
-    []
-    0
-    0
-    0
-
--- | A transaction of the store paying an amount to one of our addresses,
--- funded by somebody else, with a fee of 1000
-creditTx :: Ctx -> TxHash -> Store.BlockRef -> Address -> Word64 -> Store.Transaction
-creditTx ctx tid block addr amount = payoutTx ctx tid block [(addr, amount)]
-
--- | A transaction of the store paying several addresses, funded by somebody
--- else, with a fee of 1000
-payoutTx :: Ctx -> TxHash -> Store.BlockRef -> [(Address, Word64)] -> Store.Transaction
-payoutTx ctx tid block paid =
-  Store.Transaction
-    { Store.block = block,
-      Store.version = 1,
-      Store.locktime = 0,
-      Store.inputs =
-        [ Store.StoreInput
-            (OutPoint (fakeTxHash 0xee) 0)
-            0xffffffff
-            BS.empty
-            (addressScript ctx (otherAddr 0))
-            (sum (snd <$> paid) + 1000)
-            []
-            (Just (otherAddr 0))
-        ],
-      Store.outputs = [Store.StoreOutput amount (addressScript ctx addr) Nothing (Just addr) | (addr, amount) <- paid],
-      Store.deleted = False,
-      Store.rbf = False,
-      Store.timestamp = 1700000000,
-      Store.txid = tid,
-      Store.size = 226,
-      Store.weight = 904,
-      Store.fee = 1000
-    }
-
--- | The same transaction, replaced or dropped: the store keeps it, marked
--- as deleted
-replaced :: Store.Transaction -> Store.Transaction
-replaced (Store.Transaction b v l i o _ r t x s w f) =
-  Store.Transaction b v l i o True r t x s w f
+{- The stores -}
 
 -- | The coin of a payment: output 0 of the transaction, at the given block
 coinOf :: Ctx -> TxHash -> Maybe Natural -> Address -> Natural -> Store.Unspent
@@ -605,6 +546,59 @@ fewerTxsStore ctx =
 pendingTx :: Ctx -> Tx
 pendingTx ctx = spendingTx ctx [(fakeTxHash 9, 0)] [(externalAddr 0, 50000)]
 
+-- | The coin of 'realPaymentStore' spent to otherAddr 0, with its signing
+-- data as the wallet keeps it, marked signed
+signedSpend :: Ctx -> TxSignData
+signedSpend ctx = (unsignedSpend ctx) {txSignDataSigned = True}
+
+unsignedSpend :: Ctx -> TxSignData
+unsignedSpend ctx =
+  TxSignData
+    (spendingTx ctx [(realPaymentId ctx, 0)] [(otherAddr 0, 40000)])
+    [realPaymentTx ctx]
+    [Deriv :/ 0 :/ 0]
+    []
+    (Just 10)
+    False
+
+-- | The payment of 'realPaymentStore' spent by somebody else's transaction
+-- 8, confirmed at height 800001: the coin is gone
+spentElsewhereStore :: Ctx -> FakeStore
+spentElsewhereStore ctx =
+  (realPaymentStore ctx)
+    { fakeBalances = [Store.Balance (externalAddr 0) 0 0 0 2 50000],
+      fakeTxRefs =
+        [ ( externalAddr 0,
+            [ Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 8),
+              Store.TxRef (Store.BlockRef 800000 1) (realPaymentId ctx)
+            ]
+          )
+        ],
+      fakeTransactions =
+        [ creditTx ctx (realPaymentId ctx) (Store.BlockRef 800000 1) (externalAddr 0) 50000,
+          spendingStoreTx ctx (fakeTxHash 8) (Store.BlockRef 800001 1) (realPaymentId ctx, 0) (externalAddr 0) (otherAddr 1) 49000
+        ],
+      fakeUnspents = []
+    }
+
+-- | A transaction of the store spending one coin of ours to another address
+spendingStoreTx :: Ctx -> TxHash -> Store.BlockRef -> (TxHash, Word32) -> Address -> Address -> Word64 -> Store.Transaction
+spendingStoreTx ctx tid block (spentHash, spentIndex) from to amount =
+  Store.Transaction
+    { Store.block = block,
+      Store.version = 1,
+      Store.locktime = 0,
+      Store.inputs = [Store.StoreInput (OutPoint spentHash spentIndex) 0xffffffff BS.empty (addressScript ctx from) (amount + 1000) [] (Just from)],
+      Store.outputs = [Store.StoreOutput amount (addressScript ctx to) Nothing (Just to)],
+      Store.deleted = False,
+      Store.rbf = False,
+      Store.timestamp = 1700000000,
+      Store.txid = tid,
+      Store.size = 226,
+      Store.weight = 904,
+      Store.fee = 1000
+    }
+
 pendingRow :: DBAccountId -> Tx -> DBPendingTx
 pendingRow (DBAccountKey wallet accDeriv) tx =
   DBPendingTx
@@ -666,3 +660,9 @@ balances accId = do
 
 rawTransactionCount :: ExceptT String (DB IO) Int
 rawTransactionCount = lift $ P.count ([] :: [P.Filter DBRawTx])
+
+-- | The hashes of the signed pending transactions of the account
+pendingHashes :: DBAccountId -> ExceptT String (DB IO) [TxHash]
+pendingHashes accId = do
+  pending <- pendingTxs accId
+  return [txHash (txSignDataTx (pendingTxData p)) | p <- pending, txSignDataSigned (pendingTxData p)]

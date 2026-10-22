@@ -335,15 +335,15 @@ sweepIntoWalletSpec ctx =
         let pendingHash = nosigHash tsd.txSignDataTx
         importPendingTx btc ctx accId tsd `dbShouldBeE` pendingHash
         ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
-          `dbShouldBeE` [Just (TxInfoPending pendingHash False False)]
+          `dbShouldBeE` [Just (TxInfoPending pendingHash False False False)]
         coinPage btc accId (Page 5 0) `dbShouldBeE` []
         -- signsweep by nosigHash, with the outside key only
-        (_, pendingTsd, TxInfoPending _ _ online) <- lift (getPendingTx pendingHash) >>= liftMaybe "The nosigHash does not exist in the wallet"
+        (_, pendingTsd, online) <- lift (getPendingTx pendingHash) >>= liftMaybe "The nosigHash does not exist in the wallet"
         liftIO $ online `shouldBe` False
         (signed, info) <- liftEither $ signTxWithKeys btc ctx pendingTsd accountPub [sweptKey]
         importPendingTx btc ctx accId signed `dbShouldBeE` pendingHash
         ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
-          `dbShouldBeE` [Just (TxInfoPending pendingHash True False)]
+          `dbShouldBeE` [Just (TxInfoPending pendingHash True False False)]
         -- The wallet receives one of the two outputs: 10 bytes of overhead,
         -- inputs of 148 + 180 + 41 + 64, two P2PKH outputs and 2 + 1 + 1 +
         -- 108 + 108 of witness data make 731 bytes, a fee of 7310, so
@@ -355,7 +355,7 @@ sweepIntoWalletSpec ctx =
         -- sendtx marks it online, the sync retires it once the store lists it
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
         ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
-          `dbShouldBeE` [Just (TxInfoPending pendingHash True True)]
+          `dbShouldBeE` [Just (TxInfoPending pendingHash True True False)]
     it "refuses to keep a transaction that does not involve the wallet" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "main"

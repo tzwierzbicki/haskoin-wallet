@@ -209,13 +209,15 @@ instance MarshalJSON Ctx Response where
             "address" .= a
           ]
       ResponseSync xs -> do
-        let f (SyncRes as bb bh tc cc) =
+        let f (SyncRes as bb bh tc cc rb ck) =
               object
                 [ "account" .= as,
                   "bestblock" .= bb,
                   "bestheight" .= bh,
                   "txupdates" .= tc,
-                  "coinupdates" .= cc
+                  "coinupdates" .= cc,
+                  "rebroadcast" .= rb,
+                  "conflicted" .= ck
                 ]
         object
           [ "type" .= Json.String "sync",
@@ -299,6 +301,8 @@ instance MarshalJSON Ctx Response where
               <*> x .: "bestheight"
               <*> x .: "txupdates"
               <*> x .: "coinupdates"
+              <*> x .: "rebroadcast"
+              <*> x .: "conflicted"
           return $ ResponseSync res
         "version" ->
           ResponseVersion
@@ -582,8 +586,27 @@ cmdImportTx ctx cfg nameM fp =
 cmdDeleteTx :: Ctx -> Config -> TxHash -> IO Response
 cmdDeleteTx ctx cfg nosigH =
   runDBResponse cfg $ do
-    (coins, addrs) <- deletePendingTx ctx nosigH
+    (coins, addrs) <- deleteTx ctx (webStore ctx cfg) nosigH
     return $ ResponseDeleteTx nosigH coins addrs
+
+-- | Delete a pending transaction, freeing the coins it held. One the user
+-- sent is abandoned only when the store does not know it: a transaction in
+-- the network's mempool or in the chain may still confirm, and the sync
+-- retires it once it is listed.
+deleteTx ::
+  (MonadUnliftIO m) => Ctx -> (Network -> Store) -> TxHash -> ExceptT String (DB m) (Natural, Natural)
+deleteTx ctx storeOn nosigH = do
+  pendingM <- lift $ getPendingTx nosigH
+  case pendingM of
+    Nothing -> throwError "The pending transaction does not exist"
+    Just (accId, tsd, online) -> do
+      when online $ do
+        acc <- getAccountById accId
+        let txid = txHash (txSignDataTx tsd)
+        known <- fromStore $ storeTransactions (storeOn (accountNetwork acc)) [txid]
+        when (any (\t -> t.txid == txid && not t.deleted) known) $
+          throwError "The transaction is in the network's mempool or in the chain: syncacc retires it once it is listed"
+      deletePendingTx ctx nosigH
 
 cmdSignMessage :: Ctx -> Config -> Text -> Text -> Natural -> IO Response
 cmdSignMessage ctx cfg addrTxt txtMsg splitMnemIn =
@@ -667,7 +690,7 @@ parseSignInput nosigHM inputM outputM =
     (Just h, _, _) -> do
       resM <- lift $ getPendingTx h
       case resM of
-        Just (_, t, TxInfoPending _ _ online) -> return (t, online)
+        Just (_, t, online) -> return (t, online)
         _ -> throwError "The nosigHash does not exist in the wallet"
     (_, Just i, _) -> do
       exist <- liftIO $ D.doesFileExist i
@@ -688,37 +711,36 @@ cmdCoins cfg nameM page =
 cmdSendTx :: Ctx -> Config -> Maybe TxHash -> Maybe FilePath -> Maybe Network -> IO Response
 cmdSendTx ctx cfg nosigHM inputM netM =
   case (nosigHM, inputM) of
-    (Just nosigH, Nothing) -> sendPendingTx ctx cfg nosigH
+    (Just nosigH, Nothing) -> runDBResponse cfg $ sendPending ctx (webStore ctx cfg) nosigH
     (Nothing, Just file) -> sendTxFile ctx cfg file netM
     (Nothing, Nothing) -> return $ ResponseError "Give the NOSIGHASH of a pending transaction or an --input file"
     (Just _, Just _) -> return $ ResponseError "Can not specify both a NOSIGHASH and an --input file"
 
--- | Send a pending transaction: once the store has it, it is marked as
--- online and its raw transaction is stored
-sendPendingTx :: Ctx -> Config -> TxHash -> IO Response
-sendPendingTx ctx cfg nosigH =
-  runDBResponse cfg $ do
-    tsdM <- lift $ getPendingTx nosigH
-    case tsdM of
-      Just (accId, tsd@(TxSignData signedTx _ _ _ _ signed), _) -> do
-        acc <- getAccountById accId
-        let net = accountNetwork acc
-            pub = accountXPubKey ctx acc
-        txInfo <- liftEither $ parseTxSignData net ctx pub tsd
-        txInfoL <- lift $ fillTxInfoLabels net txInfo
-        unless signed $ throwError "The transaction is not signed"
-        liftEither $ verifySignedTx net ctx tsd
-        checkHealth ctx net cfg
-        let host = apiHost net cfg
-        Store.TxId netTxId <- liftExcept $ apiCall ctx host (PostTx signedTx)
-        unless (netTxId == txHash signedTx) $
-          throwError $
-            "The server returned the wrong TxHash: "
-              <> cs (txHashToHex netTxId)
-        _ <- lift $ setPendingTxOnline nosigH
-        lift $ insertRawTx signedTx
-        return $ ResponseTx acc $ setTxInfoOnline txInfoL
-      _ -> throwError "The nosigHash does not exist in the wallet"
+-- | Send a pending transaction of the wallet and wait for the store to see
+-- it. Once it does, the transaction is marked online, for the sync to send
+-- again should the store lose it, and its raw transaction is stored. If the
+-- store does not see it, nothing is recorded and the answer says so.
+sendPending ::
+  (MonadUnliftIO m) => Ctx -> (Network -> Store) -> TxHash -> ExceptT String (DB m) Response
+sendPending ctx storeOn nosigH = do
+  tsdM <- lift $ getPendingTx nosigH
+  case tsdM of
+    Just (accId, tsd@(TxSignData signedTx _ _ _ _ signed), _) -> do
+      acc <- getAccountById accId
+      let net = accountNetwork acc
+          pub = accountXPubKey ctx acc
+          store = storeOn net
+      txInfo <- liftEither $ parseTxSignData net ctx pub tsd
+      txInfoL <- lift $ fillTxInfoLabels net txInfo
+      unless signed $ throwError "The transaction is not signed"
+      liftEither $ verifySignedTx net ctx tsd
+      fromStore $ storeHealth store
+      accepted <- fromStore $ broadcast store signedTx
+      unless accepted $ throwError notAccepted
+      _ <- lift $ setPendingTxOnline nosigH
+      lift $ insertRawTx signedTx
+      return $ ResponseTx acc $ setTxInfoOnline txInfoL
+    _ -> throwError "The nosigHash does not exist in the wallet"
 
 -- | Send a signed transaction from a file, which need not involve the
 -- wallet: it is checked against the coins it spends and uploaded, and
@@ -733,13 +755,11 @@ sendTxFile ctx cfg file netM =
     tsd <- liftEitherIO (readJsonFile file)
     unless (txSignDataSigned tsd) $ throwError "The transaction is not signed"
     liftEither $ verifySignedTx net ctx tsd
-    checkHealth ctx net cfg
-    let signedTx = txSignDataTx tsd
-    Store.TxId netTxId <- liftExcept $ apiCall ctx (apiHost net cfg) (PostTx signedTx)
-    unless (netTxId == txHash signedTx) $
-      throwError $
-        "The server returned the wrong TxHash: "
-          <> cs (txHashToHex netTxId)
+    let store = webStore ctx cfg net
+        signedTx = txSignDataTx tsd
+    storeHealth store
+    accepted <- broadcast store signedTx
+    unless accepted $ throwError notAccepted
     return $ ResponseSentTx net (txHash signedTx)
 
 setTxInfoOnline :: TxInfo -> TxInfo

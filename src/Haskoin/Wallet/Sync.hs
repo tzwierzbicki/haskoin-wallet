@@ -13,11 +13,12 @@
 module Haskoin.Wallet.Sync where
 
 import Conduit (MonadUnliftIO)
+import Control.Concurrent (threadDelay)
 import Control.Monad
 import Control.Monad.Except
 import Control.Monad.Reader (MonadIO (..), MonadTrans (lift))
 import Data.Default (def)
-import Data.List (nub, sort)
+import Data.List (nub, partition, sort)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromJust)
@@ -28,7 +29,9 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebClient
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.FileIO (TxSignData (..))
 import Haskoin.Wallet.TxInfo
+import Haskoin.Wallet.TxSigning (parseTxSignData)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import UnliftIO.Async (pooledMapConcurrentlyN)
@@ -58,7 +61,11 @@ data Store = Store
     storeUnspents :: [Address] -> ExceptT String IO [Store.Unspent],
     -- | The raw transactions with the given ids; a transaction the store
     -- does not know is left out
-    storeRawTransactions :: [TxHash] -> ExceptT String IO [Tx]
+    storeRawTransactions :: [TxHash] -> ExceptT String IO [Tx],
+    -- | Hand a signed transaction to the network. The store passes it to
+    -- its peers without checking it and says nothing of their answer: only
+    -- the store listing it afterwards tells that the network took it.
+    storePublish :: Tx -> ExceptT String IO ()
   }
 
 -- | The store of hw: the web API of a haskoin-store, with the batch sizes
@@ -82,7 +89,11 @@ webStore ctx cfg net =
       storeUnspents = \addrs ->
         serial <$> batch (configCoinBatch cfg) (GetAddrsUnspent addrs everything),
       storeRawTransactions = \tids ->
-        raw <$> batch (configTxFullBatch cfg) (GetTxsRaw tids)
+        raw <$> batch (configTxFullBatch cfg) (GetTxsRaw tids),
+      storePublish = \tx -> do
+        Store.TxId published <- call (PostTx tx)
+        unless (published == txHash tx) $
+          throwError $ "The store returned the wrong transaction id: " <> cs (txHashToHex published)
     }
   where
     host = apiHost net cfg
@@ -106,6 +117,44 @@ inParallel atATime questions = do
   let threads = max 1 (fromIntegral atATime)
   answers <- liftIO $ pooledMapConcurrentlyN threads runExceptT questions
   liftEither $ sequence answers
+
+{- Broadcasting -}
+
+-- | How long 'broadcast' waits for the store to see a transaction, in
+-- seconds
+acceptanceWait :: Int
+acceptanceWait = 10
+
+-- | Hand a signed transaction to the network and wait for the store to see
+-- it in its mempool, the only sign that the network accepted it: True once
+-- seen, False after the wait. The transaction may then have been refused,
+-- for a fee below what the nodes relay for instance, or may just be slow
+-- to come back.
+broadcast :: Store -> Tx -> ExceptT String IO Bool
+broadcast = broadcastWith 1000000 acceptanceWait
+
+-- | 'broadcast' asking the store the given number of times, waiting the
+-- given microseconds before each
+broadcastWith :: Int -> Int -> Store -> Tx -> ExceptT String IO Bool
+broadcastWith pause asks store tx = do
+  storePublish store tx
+  seen asks
+  where
+    seen :: Int -> ExceptT String IO Bool
+    seen 0 = return False
+    seen left = do
+      liftIO $ threadDelay pause
+      known <- storeTransactions store [txHash tx]
+      if any (\t -> t.txid == txHash tx && not t.deleted) known
+        then return True
+        else seen (left - 1)
+
+-- | What sendtx answers when the store has not seen the transaction
+notAccepted :: String
+notAccepted =
+  "The transaction was handed to the network but the store has not seen it after "
+    <> show acceptanceWait
+    <> " seconds. It stays signed and not online: run sendtx again later"
 
 {- Address discovery -}
 
@@ -150,7 +199,12 @@ data SyncRes = SyncRes
     syncResBlockHash :: !BlockHash,
     syncResBlockHeight :: !BlockHeight,
     syncResTxUpdates :: !Natural,
-    syncResCoinUpdates :: !Natural
+    syncResCoinUpdates :: !Natural,
+    -- | Transactions the user sent that the store had lost, sent again
+    syncResRebroadcast :: !Natural,
+    -- | Pending transactions a coin of which was spent by another
+    -- transaction
+    syncResConflicted :: !Natural
   }
   deriving (Eq, Show)
 
@@ -249,11 +303,21 @@ sync ctx cfg store net accId full = do
           <> " raw transactions but returned "
           <> show (length rawTxs)
     lift $ forM_ rawTxs insertRawTx
-  -- A pending transaction the store lists has been sent to the network
-  pendingTids <- pendingTxHashes accId
+  -- The pending transactions. A signed one the store lists has reached the
+  -- network and is done with. One the user sent that the store does not
+  -- list is sent again: nodes forget unconfirmed transactions, and the
+  -- store may never have accepted it; a signed one the user has not sent is
+  -- left alone. One whose coins are gone conflicts with the transaction
+  -- that spent them, and is counted for the user.
+  pending <- pendingTxs accId
   let seen = Set.fromList $ (.txid) <$> listed
-      sent = filter ((`Set.member` seen) . fst) pendingTids
-  forM_ sent $ \(_, key) -> lift $ deletePendingTxOnline key
+      reached p = p.pendingTxData.txSignDataSigned && txHash p.pendingTxData.txSignDataTx `Set.member` seen
+      (done, waiting) = partition reached pending
+  lift $ forM_ done $ deletePendingTxOnline . (.pendingTxKey)
+  let resend = [p.pendingTxData.txSignDataTx | p <- waiting, p.pendingTxOnline]
+  forM_ resend $ fromStore . storePublish store
+  let pub = accountXPubKey ctx newAcc
+  conflicted <- filterM (inConflict net pub) waiting
   lift $ updateBest net (headerHash best.header) best.height
   return $
     SyncRes
@@ -262,6 +326,12 @@ sync ctx cfg store net accId full = do
       (fromIntegral best.height)
       (fromIntegral $ length $ filter id $ snd <$> resTxInfo)
       (fromIntegral coinCount)
+      (fromIntegral $ length resend)
+      (fromIntegral $ length conflicted)
+  where
+    inConflict net' pub p = do
+      txInfo <- liftEither $ parseTxSignData net' ctx pub p.pendingTxData
+      not . null <$> lift (conflictedInputs txInfo)
 
 -- | Whether the chain has moved away from the block of the last sync: that
 -- block is no longer in the main chain at its height. Balances alone do not
