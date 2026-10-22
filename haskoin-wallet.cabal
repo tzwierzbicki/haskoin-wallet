@@ -177,6 +177,7 @@ test-suite spec
       Haskoin.Wallet.CoinSelectionSpec
       Haskoin.Wallet.CommandsSpec
       Haskoin.Wallet.ConfigSpec
+      Haskoin.Wallet.DatabaseLockSpec
       Haskoin.Wallet.EntropySpec
       Haskoin.Wallet.KeysSpec
       Haskoin.Wallet.MainSpec
@@ -197,7 +198,7 @@ test-suite spec
       Paths_haskoin_wallet
   hs-source-dirs:
       test
-  ghc-options: -Wall
+  ghc-options: -Wall -threaded
   build-depends:
       Decimal >=0.5.1
     , HUnit >=1.6.0.0

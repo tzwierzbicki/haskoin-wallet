@@ -313,13 +313,14 @@ instance MarshalJSON Ctx Response where
 runDBResponse ::
   (MonadUnliftIO m) => Config -> ExceptT String (DB m) Response -> m Response
 runDBResponse cfg action = do
-  runDB cfg $ do
+  result <- catchDatabaseInUse $ runDB cfg $ do
     resE <- runExceptT action
     case resE of
       Left err -> do
         transactionUndo -- Roll back the current sqlite transaction
         return $ ResponseError $ cs err
       Right res -> return res
+  return $ either (ResponseError . cs) id result
 
 catchResponseError :: (Monad m) => ExceptT String m Response -> m Response
 catchResponseError m = do

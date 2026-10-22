@@ -1,13 +1,14 @@
 module Haskoin.Wallet.Main where
 
 import Control.Exception (IOException, try)
+import Control.Monad (join)
 import Data.Foldable (forM_)
 import qualified Data.ByteString.Char8 as C8
 import GHC.IO.Encoding (setFileSystemEncoding, setLocaleEncoding, utf8)
 import Haskoin (Ctx, MarshalJSON (..), withContext)
 import Haskoin.Wallet.Commands (Response, commandResponse)
 import Haskoin.Wallet.Config (Config, databaseFile, initConfig)
-import Haskoin.Wallet.Database (runDB)
+import Haskoin.Wallet.Database (catchDatabaseInUse, runDB)
 import Haskoin.Wallet.Migration (Hooks (..), migrateDB)
 import Haskoin.Wallet.Backup (backupDatabase, migrationBackupDirectory)
 import Haskoin.Wallet.Parser (parserMain)
@@ -27,7 +28,8 @@ clientMain = do
     (cmd, unit, json) <- parserMain
     -- Only a command touches the database: help and usage errors leave it
     -- as it is, and a database newer than this hw still gets help
-    either die return =<< runDB cfg (migrateDB (migrationHooks cfg) ctx)
+    migrated <- catchDatabaseInUse $ runDB cfg (migrateDB (migrationHooks cfg) ctx)
+    either die return (join migrated)
     res <- commandResponse ctx cfg unit cmd
     if json
       then jsonPrinter ctx res
