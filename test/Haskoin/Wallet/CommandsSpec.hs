@@ -5,7 +5,7 @@
 
 module Haskoin.Wallet.CommandsSpec where
 
-import Conduit (MonadIO, liftIO)
+import Conduit (liftIO)
 import Control.Arrow (second)
 import Control.Monad
 import Control.Monad.Except
@@ -331,6 +331,7 @@ emptyTxInfo =
     (Store.MemRef 0)
     0
     Nothing
+    False
 
 txsSpec :: Ctx -> Spec
 txsSpec ctx =

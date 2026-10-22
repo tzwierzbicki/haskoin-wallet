@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 
 -- | Synchronising an account with the store: address discovery, balances,
 -- transaction summaries, coins and the raw transactions the coins come from.
@@ -150,8 +151,8 @@ data SyncRes = SyncRes
 -- An incremental sync looks only at the addresses whose balance changed
 -- since the last sync, which is every address a new, confirmed, replaced
 -- or dropped transaction touches. A full sync, asked for or forced by a
--- reorganisation of the chain, looks at every address and also drops the
--- summaries of transactions the store no longer lists.
+-- reorganisation of the chain, looks at every address and also marks dead
+-- the summaries of transactions the store no longer lists.
 sync ::
   (MonadUnliftIO m) =>
   Ctx ->
@@ -177,34 +178,44 @@ sync ctx store net accId full = do
   let changedAddrs = (.address) <$> changedBals
   updateAddressBalances net changedBals
   newAcc <- lift $ updateAccountBalances accId
-  -- Every transaction the store lists for the changed addresses. A
-  -- transaction touching two of them is listed twice.
-  listed <- concat <$> mapM (listTxs store net) changedBals
+  -- Every transaction the store lists for each changed address. A
+  -- transaction touching two of them is listed under both.
+  listedByAddress <- forM changedBals $ \bal -> (bal,) <$> listTxs store net bal
+  let listed = concatMap snd listedByAddress
   -- The summaries already stored, with their blocks
   known <- txInfoBlockRefs accId
   -- What to fetch in full: the listed transactions that are new or whose
-  -- block changed, and the unconfirmed summaries, whose transactions may
-  -- have been confirmed, replaced or dropped since the last sync
+  -- block changed; the unconfirmed summaries, whose transactions may have
+  -- been confirmed, replaced or dropped since the last sync; and every
+  -- transaction of an address that has transactions for the first time. A
+  -- summary is built with the addresses the wallet knows at the time, so a
+  -- transaction that also paid an address generated later, say a batch
+  -- payout from someone deriving the public key, shows that output as
+  -- somebody else's until it is rebuilt.
   let changed = [r.txid | r <- listed, Map.lookup r.txid known /= Just r.block]
       unconfirmed = [tid | (tid, ref) <- Map.toList known, not (Store.confirmed ref)]
-      toFetch = nub $ changed <> unconfirmed
+      storedCount bal = maybe 0 addrBalanceTxs $ Map.lookup bal.address addrBalMap
+      firstSeen = [r.txid | (bal, refs) <- listedByAddress, storedCount bal == 0, r <- refs]
+      toFetch = nub $ changed <> unconfirmed <> firstSeen
   txs <- fromStore $ storeTransactions store toFetch
   -- A transaction the store reports as deleted, or does not return at all,
   -- is dead: replaced, dropped from the mempool, or left out by a
-  -- reorganisation. Its summary goes.
+  -- reorganisation. Its summary is marked dead and kept, for the history.
+  -- Dead summaries are not among the known ones, so a transaction the store
+  -- lists again later is fetched and its summary comes back to life.
   let live = filter (not . (.deleted)) txs
       alive = Set.fromList $ (.txid) <$> live
       dead = [tid | tid <- toFetch, tid `Set.notMember` alive, tid `Map.member` known]
       txInfos = storeToTxInfo addrPathMap (fromIntegral best.height) <$> live
   resTxInfo <- forM txInfos $ repsertTxInfo net ctx accId
-  lift $ forM_ dead $ deleteTxInfo accId
+  lift $ forM_ dead $ markTxInfoDead accId
   -- After a reorganisation a confirmed transaction may have vanished without
   -- a trace in the addresses it touched; a full sync lists every
-  -- transaction of every address, so what is not listed is gone
+  -- transaction of every address, so what is not listed is dead
   when everything $ do
     let stillListed = Set.fromList $ (.txid) <$> listed
         vanished = [tid | tid <- Map.keys known, tid `Set.notMember` stillListed]
-    lift $ forM_ vanished $ deleteTxInfo accId
+    lift $ forM_ vanished $ markTxInfoDead accId
   -- The coins of the changed addresses, all of them
   unspents <- fromStore $ storeUnspents store changedAddrs
   let countedCoins = sum $ (.utxo) <$> changedBals

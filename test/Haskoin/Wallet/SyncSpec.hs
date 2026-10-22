@@ -13,8 +13,10 @@ import Control.Monad.Trans (lift)
 import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
 import Data.Default (def)
-import Data.List (find, sortOn)
-import Data.Maybe (fromMaybe)
+import Data.List (find, sort, sortOn)
+import qualified Data.Map.Strict as Map
+import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Text (Text)
 import Data.Word (Word32, Word64, Word8)
 import qualified Database.Persist as P
 import Haskoin
@@ -85,22 +87,52 @@ spec = prepareContext $ \ctx -> do
                       ]
         coins accId `dbShouldBeE` [OutPoint (fakeTxHash 2) 0, OutPoint (fakeTxHash 3) 0, OutPoint (fakeTxHash 4) 0]
 
-    it "drops a payment the store reports as replaced" $
+    it "rebuilds a known payment when a new address of ours turns out to be in it" $
+      inDatabaseE $ do
+        accId <- account
+        -- Transaction 5 paid externalAddr 0 and externalAddr 1, but only the
+        -- first exists yet: the second output looks like somebody else's
+        _ <- syncWith (payoutStore ctx) accId
+        summaries ctx accId `dbShouldBeE` [(Just (fakeTxHash 5), Store.BlockRef 800000 1, 30000)]
+        paidAddresses ctx accId `dbShouldBeE` [["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]]
+        coins accId `dbShouldBeE` [OutPoint (fakeTxHash 5) 0]
+        _ <- genExtAddress ctx cfg accId ""
+        res <- syncWith (payoutSeenStore ctx) accId
+        liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (1, 1)
+        summaries ctx accId `dbShouldBeE` [(Just (fakeTxHash 5), Store.BlockRef 800000 1, 50000)]
+        paidAddresses ctx accId `dbShouldBeE` [["1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]]
+        coins accId `dbShouldBeE` [OutPoint (fakeTxHash 5) 0, OutPoint (fakeTxHash 5) 1]
+        balances accId `dbShouldBeE` (50000, 0, 2)
+
+    it "marks a payment the store reports as replaced as dead, and keeps it" $
       inDatabaseE $ do
         accId <- account
         _ <- syncWith (mempoolStore ctx) accId
         _ <- syncWith (replacedStore ctx) accId
-        summaries ctx accId `dbShouldBeE` []
+        summaries ctx accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.MemRef 1700000000, 50000)]
+        deadSummaries ctx accId `dbShouldBeE` [Just (fakeTxHash 1)]
         coins accId `dbShouldBeE` []
         balances accId `dbShouldBeE` (0, 0, 0)
 
-    it "drops a payment the store no longer knows" $
+    it "marks a payment the store no longer knows as dead" $
       inDatabaseE $ do
         accId <- account
         _ <- syncWith (mempoolStore ctx) accId
         _ <- syncWith (forgottenStore ctx) accId
-        summaries ctx accId `dbShouldBeE` []
+        deadSummaries ctx accId `dbShouldBeE` [Just (fakeTxHash 1)]
         coins accId `dbShouldBeE` []
+
+    it "brings a dead payment back when the store lists it again" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (mempoolStore ctx) accId
+        _ <- syncWith (replacedStore ctx) accId
+        res <- syncWith (paymentStore ctx) accId
+        liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (1, 1)
+        summaries ctx accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
+        deadSummaries ctx accId `dbShouldBeE` []
+        coins accId `dbShouldBeE` [OutPoint (fakeTxHash 1) 0]
+        balances accId `dbShouldBeE` (50000, 0, 1)
 
     it "moves a payment to its new block after a reorganisation that kept the balances" $
       inDatabaseE $ do
@@ -111,12 +143,16 @@ spec = prepareContext $ \ctx -> do
         summaries ctx accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800001 3, 50000)]
         lift (getBest btc) `dbShouldBeE` Just (headerHash (blockAt 800003 7).header, 800003)
 
-    it "drops a payment a reorganisation left out" $
+    it "marks a payment a reorganisation left out as dead" $
       inDatabaseE $ do
         accId <- account
         _ <- syncWith (twoPaymentsStore ctx) accId
         _ <- syncWith (leftOutStore ctx) accId
-        summaries ctx accId `dbShouldBeE` [(Just (fakeTxHash 2), Store.BlockRef 800001 1, 30000)]
+        summaries ctx accId
+          `dbShouldBeE` [ (Just (fakeTxHash 2), Store.BlockRef 800001 1, 30000),
+                          (Just (fakeTxHash 3), Store.BlockRef 800002 1, 20000)
+                        ]
+        deadSummaries ctx accId `dbShouldBeE` [Just (fakeTxHash 3)]
         coins accId `dbShouldBeE` [OutPoint (fakeTxHash 2) 0]
         balances accId `dbShouldBeE` (30000, 0, 1)
 
@@ -206,7 +242,12 @@ blockAt height nonce =
 -- | A transaction of the store paying an amount to one of our addresses,
 -- funded by somebody else, with a fee of 1000
 creditTx :: Ctx -> TxHash -> Store.BlockRef -> Address -> Word64 -> Store.Transaction
-creditTx ctx tid block addr amount =
+creditTx ctx tid block addr amount = payoutTx ctx tid block [(addr, amount)]
+
+-- | A transaction of the store paying several addresses, funded by somebody
+-- else, with a fee of 1000
+payoutTx :: Ctx -> TxHash -> Store.BlockRef -> [(Address, Word64)] -> Store.Transaction
+payoutTx ctx tid block paid =
   Store.Transaction
     { Store.block = block,
       Store.version = 1,
@@ -217,11 +258,11 @@ creditTx ctx tid block addr amount =
             0xffffffff
             BS.empty
             (addressScript ctx (otherAddr 0))
-            (amount + 1000)
+            (sum (snd <$> paid) + 1000)
             []
             (Just (otherAddr 0))
         ],
-      Store.outputs = [Store.StoreOutput amount (addressScript ctx addr) Nothing (Just addr)],
+      Store.outputs = [Store.StoreOutput amount (addressScript ctx addr) Nothing (Just addr) | (addr, amount) <- paid],
       Store.deleted = False,
       Store.rbf = False,
       Store.timestamp = 1700000000,
@@ -239,7 +280,11 @@ replaced (Store.Transaction b v l i o _ r t x s w f) =
 
 -- | The coin of a payment: output 0 of the transaction, at the given block
 coinOf :: Ctx -> TxHash -> Maybe Natural -> Address -> Natural -> Store.Unspent
-coinOf ctx tid heightM = storeCoin ctx (tid, 0) heightM
+coinOf ctx tid = coinAt ctx tid 0
+
+-- | The coin of an output of a transaction, at the given block
+coinAt :: Ctx -> TxHash -> Word32 -> Maybe Natural -> Address -> Natural -> Store.Unspent
+coinAt ctx tid index = storeCoin ctx (tid, index)
 
 -- | externalAddr 0 paid 50000 by transaction 1, confirmed at height 800000
 paymentStore :: Ctx -> FakeStore
@@ -324,6 +369,38 @@ oldPaymentStore ctx =
       fakeUnspents =
         fakeUnspents (twoPaymentsStore ctx)
           <> [coinOf ctx (fakeTxHash 4) (Just 700000) (externalAddr 1) 10000]
+    }
+
+-- | Transaction 5 paid 30000 to externalAddr 0 and 20000 to externalAddr 1,
+-- confirmed at height 800000, while the wallet knows externalAddr 0 only
+payoutStore :: Ctx -> FakeStore
+payoutStore ctx =
+  FakeStore
+    { fakeBest = blockAt 800002 1,
+      fakeBlocks = [blockAt 800002 1],
+      fakeBalances = [Store.Balance (externalAddr 0) 30000 0 1 1 30000],
+      fakeTxRefs = [(externalAddr 0, [Store.TxRef (Store.BlockRef 800000 1) (fakeTxHash 5)])],
+      fakeTransactions = [payoutTx ctx (fakeTxHash 5) (Store.BlockRef 800000 1) [(externalAddr 0, 30000), (externalAddr 1, 20000)]],
+      fakeUnspents = [coinAt ctx (fakeTxHash 5) 0 (Just 800000) (externalAddr 0) 30000],
+      fakeRawTransactions = []
+    }
+
+-- | The same store once the wallet asks about externalAddr 1 as well
+payoutSeenStore :: Ctx -> FakeStore
+payoutSeenStore ctx =
+  (payoutStore ctx)
+    { fakeBalances =
+        [ Store.Balance (externalAddr 0) 30000 0 1 1 30000,
+          Store.Balance (externalAddr 1) 20000 0 1 1 20000
+        ],
+      fakeTxRefs =
+        [ (externalAddr 0, [Store.TxRef (Store.BlockRef 800000 1) (fakeTxHash 5)]),
+          (externalAddr 1, [Store.TxRef (Store.BlockRef 800000 1) (fakeTxHash 5)])
+        ],
+      fakeUnspents =
+        [ coinAt ctx (fakeTxHash 5) 0 (Just 800000) (externalAddr 0) 30000,
+          coinAt ctx (fakeTxHash 5) 1 (Just 800000) (externalAddr 1) 20000
+        ]
     }
 
 -- | After a reorganisation: the block at height 800002 is another one, the
@@ -412,6 +489,22 @@ summaries :: Ctx -> DBAccountId -> ExceptT String (DB IO) [(Maybe TxHash, Store.
 summaries ctx accId = do
   txInfos <- txsPage ctx accId (Page 500 0)
   return $ sortOn (\(h, _, _) -> txHashToHex <$> h) [(txInfoHash t, txInfoBlockRef t, txInfoAmount t) | t <- txInfos]
+
+-- | The dead summaries of the account, by transaction id
+deadSummaries :: Ctx -> DBAccountId -> ExceptT String (DB IO) [Maybe TxHash]
+deadSummaries ctx accId = do
+  txInfos <- txsPage ctx accId (Page 500 0)
+  return $ sortOn (fmap txHashToHex) [txInfoHash t | t <- txInfos, txInfoDead t]
+
+-- | The addresses of ours each summary pays, as sorted texts, in the order
+-- of the transaction ids
+paidAddresses :: Ctx -> DBAccountId -> ExceptT String (DB IO) [[Text]]
+paidAddresses ctx accId = do
+  txInfos <- txsPage ctx accId (Page 500 0)
+  return
+    [ sort (mapMaybe (addrToText btc) (Map.keys (txInfoMyOutputs t)))
+      | t <- sortOn (fmap txHashToHex . txInfoHash) txInfos
+    ]
 
 -- | The coins of the account, in the order of their outpoints
 coins :: DBAccountId -> ExceptT String (DB IO) [OutPoint]

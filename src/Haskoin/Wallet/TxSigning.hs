@@ -260,7 +260,8 @@ txInfo feeRate analysis tx signed =
       txInfoChangeInFee = changeInFee,
       txInfoBlockRef = Store.MemRef 0,
       txInfoConfirmations = 0,
-      txInfoPending = Just $ TxInfoPending (nosigTxHash tx) signed False
+      txInfoPending = Just $ TxInfoPending (nosigTxHash tx) signed False,
+      txInfoDead = False
     }
   where
     size

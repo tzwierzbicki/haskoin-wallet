@@ -8,10 +8,13 @@ import Control.Arrow (second)
 import Control.Monad.Except
 import Control.Monad.State (MonadState (..))
 import qualified Data.Aeson as JSON
+import Data.Aeson.Types (Parser)
 import qualified Data.Aeson.Encode.Pretty as Pretty
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.List (sortBy)
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import qualified Data.Serialize as S
 import Data.Text (Text)
@@ -147,3 +150,37 @@ a </> b = a <> "/" <> b
 -- Fisher-Yates shuffle of the random library, for the transaction builders
 randomShuffle :: (MonadState StdGen m) => [a] -> m [a]
 randomShuffle xs = state (uniformShuffleList xs)
+
+{- Address maps in JSON -}
+
+-- Maps keyed by address are written with the address text of the network as
+-- the key. Shared by the summaries of every format version, so it lives
+-- here rather than with the current summary type.
+
+marshalMap ::
+  (MarshalJSON Ctx v) =>
+  Network ->
+  Ctx ->
+  Map Address v ->
+  Map Text JSON.Value
+marshalMap net ctx m = mapAddrText net $ Map.map (marshalValue ctx) m
+
+unmarshalMap ::
+  (MarshalJSON Ctx v) =>
+  Network ->
+  Ctx ->
+  Map Text JSON.Value ->
+  Parser (Map Address v)
+unmarshalMap net ctx m = mapTextAddr net <$> (unmarshalValue ctx `mapM` m)
+
+mapAddrText :: Network -> Map Address v -> Map Text v
+mapAddrText net m =
+  either error id $ do
+    let f (a, v) = (\t -> (t, v)) <$> addrToTextE net a
+    Map.fromList <$> mapM f (Map.assocs m)
+
+mapTextAddr :: Network -> Map Text v -> Map Address v
+mapTextAddr net m =
+  either error id $ do
+    let f (a, v) = (\t -> (t, v)) <$> textToAddrE net a
+    Map.fromList <$> mapM f (Map.assocs m)

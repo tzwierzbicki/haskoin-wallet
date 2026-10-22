@@ -200,6 +200,7 @@ arbitraryTxInfo net ctx =
     <*> arbitraryBlockRef
     <*> arbitraryNatural
     <*> arbitraryMaybe arbitraryTxInfoPending
+    <*> arbitrary
 
 arbitraryTxInfoPending :: Gen TxInfoPending
 arbitraryTxInfoPending =

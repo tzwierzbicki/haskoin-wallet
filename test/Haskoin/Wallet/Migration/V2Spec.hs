@@ -21,13 +21,13 @@ import qualified Database.Persist as P
 import Database.Persist.Sql (Entity (..), PersistValue (..))
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Database
+import Haskoin.Wallet.Database (DB)
 import Haskoin.Wallet.Migration (databaseVersion)
 import Haskoin.Wallet.Migration.TestUtils
 import qualified Haskoin.Wallet.Schema.V1 as V1
+import qualified Haskoin.Wallet.Migration.V2 as V2
 import qualified Haskoin.Wallet.Schema.V2 as V2
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.TxInfo
 import Test.Hspec
 import Text.RawString.QQ (r)
 
@@ -126,22 +126,22 @@ stepAnnounced = "Migrating the database to version 2: the transaction summaries 
 migrateTo2 :: Ctx -> DB IO ()
 migrateTo2 ctx = migrateToAndCollect 2 ctx `dbShouldBe` (Right (), [stepAnnounced], [1])
 
--- | The summary of a transaction, read with the format of this hw, or
--- Nothing when it does not parse
-summary :: Ctx -> Network -> Text -> DB IO (Maybe TxInfo)
+-- | The summary of a transaction, in the row of version 2, read with the
+-- format of hw 0.9, or Nothing when it does not parse
+summary :: Ctx -> Network -> Text -> DB IO (Maybe V2.TxInfo)
 summary ctx net txid = do
-  rowM <- P.selectFirst [DBTxInfoTxid P.==. txid] []
+  rowM <- P.selectFirst [V2.DBTxInfoTxid P.==. txid] []
   return $ do
     Entity _ row <- rowM
-    unmarshalJSON (net, ctx) $ BS.fromStrict $ dBTxInfoBlob row
+    unmarshalJSON (net, ctx) $ BS.fromStrict $ V2.dBTxInfoBlob row
 
 -- | The blob of a transaction summary, as JSON
 blobOf :: Text -> DB IO (Maybe Value)
 blobOf txid = do
-  rowM <- P.selectFirst [DBTxInfoTxid P.==. txid] []
+  rowM <- P.selectFirst [V2.DBTxInfoTxid P.==. txid] []
   return $ do
     Entity _ row <- rowM
-    decodeStrict $ dBTxInfoBlob row
+    decodeStrict $ V2.dBTxInfoBlob row
 
 -- | A JSON literal, as a value: the comparison ignores spacing and key order
 json :: String -> Maybe Value
@@ -573,45 +573,45 @@ creditBlobOfHw09 =
     "type": "credit"
 }|]
 
-{- The same summaries read with the format of this hw -}
+{- The same summaries in the format of hw 0.9 -}
 
--- This hw reads the summaries of hw 0.9 as they are: the change absorbed into
--- the fee, which it added, is optional.
+-- The types of hw 0.9's summaries are frozen in the step module: the step
+-- adds an empty label to every output and input of the wallet, and the
+-- pending state, unknown for an old transaction.
 
-creditInfo :: TxInfo
+creditInfo :: V2.TxInfo
 creditInfo =
-  TxInfo
-    { txInfoHash = Just (fakeTxHash 0x11),
-      txInfoType = TxCredit,
-      txInfoAmount = 50000,
-      txInfoMyOutputs = Map.fromList [(externalAddr 0, MyOutputs 50000 (Deriv :/ 0 :/ 0) "")],
-      txInfoOtherOutputs = Map.fromList [(otherAddr 0, 49000)],
-      txInfoNonStdOutputs = [],
-      txInfoMyInputs = Map.empty,
-      txInfoOtherInputs = Map.fromList [(otherAddr 1, OtherInputs 100000 [])],
-      txInfoNonStdInputs = [],
-      txInfoSize = 226,
-      txInfoFee = 1000,
-      txInfoFeeByte = 4,
-      txInfoChangeInFee = Nothing,
-      txInfoBlockRef = Store.BlockRef 800000 3,
-      txInfoConfirmations = 12,
-      txInfoPending = Nothing
+  V2.TxInfo
+    { V2.txInfoHash = Just (fakeTxHash 0x11),
+      V2.txInfoType = V2.TxCredit,
+      V2.txInfoAmount = 50000,
+      V2.txInfoMyOutputs = Map.fromList [(externalAddr 0, V2.MyOutputs 50000 (Deriv :/ 0 :/ 0) "")],
+      V2.txInfoOtherOutputs = Map.fromList [(otherAddr 0, 49000)],
+      V2.txInfoNonStdOutputs = [],
+      V2.txInfoMyInputs = Map.empty,
+      V2.txInfoOtherInputs = Map.fromList [(otherAddr 1, V2.OtherInputs 100000 [])],
+      V2.txInfoNonStdInputs = [],
+      V2.txInfoSize = 226,
+      V2.txInfoFee = 1000,
+      V2.txInfoFeeByte = 4,
+      V2.txInfoBlockRef = Store.BlockRef 800000 3,
+      V2.txInfoConfirmations = 12,
+      V2.txInfoPending = Nothing
     }
 
-debitInfo :: TxInfo
+debitInfo :: V2.TxInfo
 debitInfo =
-  TxInfo
-    { txInfoHash = Just (fakeTxHash 0x22),
-      txInfoType = TxDebit,
-      txInfoAmount = -31000,
-      txInfoMyOutputs = Map.fromList [(internalAddr 0, MyOutputs 19000 (Deriv :/ 1 :/ 0) "")],
-      txInfoOtherOutputs = Map.fromList [(otherAddr 2, 30000)],
-      txInfoNonStdOutputs = [],
-      txInfoMyInputs =
+  V2.TxInfo
+    { V2.txInfoHash = Just (fakeTxHash 0x22),
+      V2.txInfoType = V2.TxDebit,
+      V2.txInfoAmount = -31000,
+      V2.txInfoMyOutputs = Map.fromList [(internalAddr 0, V2.MyOutputs 19000 (Deriv :/ 1 :/ 0) "")],
+      V2.txInfoOtherOutputs = Map.fromList [(otherAddr 2, 30000)],
+      V2.txInfoNonStdOutputs = [],
+      V2.txInfoMyInputs =
         Map.fromList
           [ ( externalAddr 0,
-              MyInputs
+              V2.MyInputs
                 50000
                 (Deriv :/ 0 :/ 0)
                 ""
@@ -624,62 +624,59 @@ debitInfo =
                 ]
             )
           ],
-      txInfoOtherInputs = Map.empty,
-      txInfoNonStdInputs = [],
-      txInfoSize = 226,
-      txInfoFee = 1000,
-      txInfoFeeByte = 4,
-      txInfoChangeInFee = Nothing,
-      txInfoBlockRef = Store.MemRef 1700000000,
-      txInfoConfirmations = 0,
-      txInfoPending = Nothing
+      V2.txInfoOtherInputs = Map.empty,
+      V2.txInfoNonStdInputs = [],
+      V2.txInfoSize = 226,
+      V2.txInfoFee = 1000,
+      V2.txInfoFeeByte = 4,
+      V2.txInfoBlockRef = Store.MemRef 1700000000,
+      V2.txInfoConfirmations = 0,
+      V2.txInfoPending = Nothing
     }
 
-internalInfo :: TxInfo
+internalInfo :: V2.TxInfo
 internalInfo =
-  TxInfo
-    { txInfoHash = Just (fakeTxHash 0x33),
-      txInfoType = TxInternal,
-      txInfoAmount = -500,
-      txInfoMyOutputs = Map.fromList [(externalAddr 1, MyOutputs 19100 (Deriv :/ 0 :/ 1) "")],
-      txInfoOtherOutputs = Map.empty,
-      txInfoNonStdOutputs = [Store.StoreOutput 0 (bytes "6a0474657374") Nothing Nothing],
-      txInfoMyInputs = Map.fromList [(internalAddr 0, MyInputs 19000 (Deriv :/ 1 :/ 0) "" [])],
-      txInfoOtherInputs = Map.empty,
-      txInfoNonStdInputs =
+  V2.TxInfo
+    { V2.txInfoHash = Just (fakeTxHash 0x33),
+      V2.txInfoType = V2.TxInternal,
+      V2.txInfoAmount = -500,
+      V2.txInfoMyOutputs = Map.fromList [(externalAddr 1, V2.MyOutputs 19100 (Deriv :/ 0 :/ 1) "")],
+      V2.txInfoOtherOutputs = Map.empty,
+      V2.txInfoNonStdOutputs = [Store.StoreOutput 0 (bytes "6a0474657374") Nothing Nothing],
+      V2.txInfoMyInputs = Map.fromList [(internalAddr 0, V2.MyInputs 19000 (Deriv :/ 1 :/ 0) "" [])],
+      V2.txInfoOtherInputs = Map.empty,
+      V2.txInfoNonStdInputs =
         [Store.StoreInput (OutPoint (fakeTxHash 0x44) 1) 0xffffffff BS.empty (bytes "51") 600 [] Nothing],
-      txInfoSize = 300,
-      txInfoFee = 500,
-      txInfoFeeByte = 1,
-      txInfoChangeInFee = Nothing,
-      txInfoBlockRef = Store.BlockRef 800100 7,
-      txInfoConfirmations = 5,
-      txInfoPending = Nothing
+      V2.txInfoSize = 300,
+      V2.txInfoFee = 500,
+      V2.txInfoFeeByte = 1,
+      V2.txInfoBlockRef = Store.BlockRef 800100 7,
+      V2.txInfoConfirmations = 5,
+      V2.txInfoPending = Nothing
     }
 
-bchCreditInfo :: TxInfo
+bchCreditInfo :: V2.TxInfo
 bchCreditInfo =
-  TxInfo
-    { txInfoHash = Just (fakeTxHash 0x55),
-      txInfoType = TxCredit,
-      txInfoAmount = 70000,
-      txInfoMyOutputs =
+  V2.TxInfo
+    { V2.txInfoHash = Just (fakeTxHash 0x55),
+      V2.txInfoType = V2.TxCredit,
+      V2.txInfoAmount = 70000,
+      V2.txInfoMyOutputs =
         Map.fromList
-          [(bchAddress "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u", MyOutputs 70000 (Deriv :/ 0 :/ 0) "")],
-      txInfoOtherOutputs = Map.empty,
-      txInfoNonStdOutputs = [],
-      txInfoMyInputs = Map.empty,
-      txInfoOtherInputs =
+          [(bchAddress "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u", V2.MyOutputs 70000 (Deriv :/ 0 :/ 0) "")],
+      V2.txInfoOtherOutputs = Map.empty,
+      V2.txInfoNonStdOutputs = [],
+      V2.txInfoMyInputs = Map.empty,
+      V2.txInfoOtherInputs =
         Map.fromList
-          [(bchAddress "bitcoincash:qz58yx42jwteh7xuzuyc8zkac4zdruynmyq2txkffn", OtherInputs 80000 [])],
-      txInfoNonStdInputs = [],
-      txInfoSize = 192,
-      txInfoFee = 10000,
-      txInfoFeeByte = 52,
-      txInfoChangeInFee = Nothing,
-      txInfoBlockRef = Store.BlockRef 820000 1,
-      txInfoConfirmations = 3,
-      txInfoPending = Nothing
+          [(bchAddress "bitcoincash:qz58yx42jwteh7xuzuyc8zkac4zdruynmyq2txkffn", V2.OtherInputs 80000 [])],
+      V2.txInfoNonStdInputs = [],
+      V2.txInfoSize = 192,
+      V2.txInfoFee = 10000,
+      V2.txInfoFeeByte = 52,
+      V2.txInfoBlockRef = Store.BlockRef 820000 1,
+      V2.txInfoConfirmations = 3,
+      V2.txInfoPending = Nothing
     }
 
 bchAddress :: Text -> Address

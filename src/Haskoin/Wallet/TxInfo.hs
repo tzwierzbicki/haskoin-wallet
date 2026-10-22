@@ -8,9 +8,8 @@
 
 module Haskoin.Wallet.TxInfo where
 
-import Data.Aeson (object, withObject, (.:), (.:?), (.=))
+import Data.Aeson (object, withObject, (.!=), (.:), (.:?), (.=))
 import qualified Data.Aeson as Json
-import Data.Aeson.Types (Parser)
 import Data.Either (partitionEithers)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -57,7 +56,10 @@ data TxInfo = TxInfo
     txInfoChangeInFee :: !(Maybe Natural),
     txInfoBlockRef :: !Store.BlockRef,
     txInfoConfirmations :: !Natural,
-    txInfoPending :: !(Maybe TxInfoPending)
+    txInfoPending :: !(Maybe TxInfoPending),
+    -- | The transaction is no longer valid: replaced, or dropped from the
+    -- network. Its summary is kept, so that the history shows what happened.
+    txInfoDead :: !Bool
   }
   deriving (Eq, Show)
 
@@ -170,7 +172,8 @@ instance MarshalJSON (Network, Ctx) TxInfo where
         "changeinfee" .= txInfoChangeInFee tx,
         "block" .= txInfoBlockRef tx,
         "confirmations" .= txInfoConfirmations tx,
-        "pending" .= txInfoPending tx
+        "pending" .= txInfoPending tx,
+        "dead" .= txInfoDead tx
       ]
   unmarshalValue (net, ctx) =
     Json.withObject "TxInfo" $ \o ->
@@ -191,34 +194,8 @@ instance MarshalJSON (Network, Ctx) TxInfo where
         <*> o .: "block"
         <*> o .: "confirmations"
         <*> o .: "pending"
+        <*> o .:? "dead" .!= False
 
-marshalMap ::
-  (MarshalJSON Ctx v) =>
-  Network ->
-  Ctx ->
-  Map Address v ->
-  Map Text Json.Value
-marshalMap net ctx m = mapAddrText net $ Map.map (marshalValue ctx) m
-
-unmarshalMap ::
-  (MarshalJSON Ctx v) =>
-  Network ->
-  Ctx ->
-  Map Text Json.Value ->
-  Parser (Map Address v)
-unmarshalMap net ctx m = mapTextAddr net <$> (unmarshalValue ctx `mapM` m)
-
-mapAddrText :: Network -> Map Address v -> Map Text v
-mapAddrText net m =
-  either error id $ do
-    let f (a, v) = (,v) <$> addrToTextE net a
-    Map.fromList <$> mapM f (Map.assocs m)
-
-mapTextAddr :: Network -> Map Text v -> Map Address v
-mapTextAddr net m =
-  either error id $ do
-    let f (a, v) = (,v) <$> textToAddrE net a
-    Map.fromList <$> mapM f (Map.assocs m)
 
 storeToTxInfo ::
   Map Address SoftPath -> Natural -> Store.Transaction -> TxInfo
@@ -239,7 +216,8 @@ storeToTxInfo walletAddrs currHeight sTx =
       txInfoChangeInFee = Nothing,
       txInfoBlockRef = sTx.block,
       txInfoConfirmations = fromMaybe 0 confM,
-      txInfoPending = Nothing
+      txInfoPending = Nothing,
+      txInfoDead = False
     }
   where
     size = fromIntegral sTx.size :: Natural
