@@ -333,6 +333,7 @@ txInfoPrinter net unit TxInfo {..} =
   vcat
     [ formatTitle (block 9 title) <> text ": " <> total,
       txid,
+      status,
       pending,
       fee,
       changeInFee,
@@ -361,6 +362,12 @@ txInfoPrinter net unit TxInfo {..} =
         Just tid ->
           keyPrinter 9 "TxHash" <> formatTxHash (cs $ txHashToHex tid)
         _ -> mempty
+    status
+      | txInfoDead =
+          keyPrinter 9 "Status"
+            <> formatFalse "dead"
+              <+> text "(replaced, or dropped from the network)"
+      | otherwise = mempty
     pending =
       case txInfoPending of
         Just (TxInfoPending nosigH signed online) ->

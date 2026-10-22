@@ -19,13 +19,13 @@ import qualified Database.Persist as P
 import Database.Persist.Sql (Entity (..), PersistValue (..))
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Database
+import Haskoin.Wallet.Database (DB)
 import Haskoin.Wallet.Migration (databaseVersion)
 import Haskoin.Wallet.Migration.TestUtils
+import qualified Haskoin.Wallet.Migration.V2 as V2
 import qualified Haskoin.Wallet.Schema.V2 as V2
 import qualified Haskoin.Wallet.Schema.V3 as V3
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.TxInfo
 import Test.Hspec
 import Text.RawString.QQ (r)
 
@@ -222,31 +222,32 @@ creditBlob =
     "type": "credit"
 }|]
 
--- | The summary of the credit, read with the format of this hw
-labelledSummary :: Ctx -> DB IO (Maybe TxInfo)
+-- | The summary of the credit, in the row of version 3, read with the format
+-- of hw 0.9, frozen in the step module to version 2: the step to version 3
+-- leaves the summaries as they are
+labelledSummary :: Ctx -> DB IO (Maybe V2.TxInfo)
 labelledSummary ctx = do
-  rowM <- P.selectFirst [DBTxInfoTxid P.==. creditTxid] []
+  rowM <- P.selectFirst [V3.DBTxInfoTxid P.==. creditTxid] []
   return $ do
     Entity _ row <- rowM
-    unmarshalJSON (btc, ctx) $ BS.fromStrict $ dBTxInfoBlob row
+    unmarshalJSON (btc, ctx) $ BS.fromStrict $ V3.dBTxInfoBlob row
 
-labelledCreditInfo :: TxInfo
+labelledCreditInfo :: V2.TxInfo
 labelledCreditInfo =
-  TxInfo
-    { txInfoHash = Just (fakeTxHash 0x11),
-      txInfoType = TxCredit,
-      txInfoAmount = 50000,
-      txInfoMyOutputs = Map.fromList [(externalAddr 0, MyOutputs 50000 (Deriv :/ 0 :/ 0) "salary")],
-      txInfoOtherOutputs = Map.fromList [(otherAddr 0, 49000)],
-      txInfoNonStdOutputs = [],
-      txInfoMyInputs = Map.empty,
-      txInfoOtherInputs = Map.fromList [(otherAddr 1, OtherInputs 100000 [])],
-      txInfoNonStdInputs = [],
-      txInfoSize = 226,
-      txInfoFee = 1000,
-      txInfoFeeByte = 4,
-      txInfoChangeInFee = Nothing,
-      txInfoBlockRef = Store.BlockRef 800000 3,
-      txInfoConfirmations = 12,
-      txInfoPending = Nothing
+  V2.TxInfo
+    { V2.txInfoHash = Just (fakeTxHash 0x11),
+      V2.txInfoType = V2.TxCredit,
+      V2.txInfoAmount = 50000,
+      V2.txInfoMyOutputs = Map.fromList [(externalAddr 0, V2.MyOutputs 50000 (Deriv :/ 0 :/ 0) "salary")],
+      V2.txInfoOtherOutputs = Map.fromList [(otherAddr 0, 49000)],
+      V2.txInfoNonStdOutputs = [],
+      V2.txInfoMyInputs = Map.empty,
+      V2.txInfoOtherInputs = Map.fromList [(otherAddr 1, V2.OtherInputs 100000 [])],
+      V2.txInfoNonStdInputs = [],
+      V2.txInfoSize = 226,
+      V2.txInfoFee = 1000,
+      V2.txInfoFeeByte = 4,
+      V2.txInfoBlockRef = Store.BlockRef 800000 3,
+      V2.txInfoConfirmations = 12,
+      V2.txInfoPending = Nothing
     }

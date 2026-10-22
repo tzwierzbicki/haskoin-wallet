@@ -45,7 +45,7 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database (DB)
 import Haskoin.Wallet.Schema.V2
-import Haskoin.Wallet.TxInfo (mapAddrText, mapTextAddr, marshalMap, unmarshalMap)
+import Haskoin.Wallet.Util (mapAddrText, mapTextAddr, marshalMap, unmarshalMap)
 import Numeric.Natural (Natural)
 
 {- The transaction summaries of version 2 -}

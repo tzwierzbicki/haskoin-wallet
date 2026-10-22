@@ -18,12 +18,12 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 -- | The wallet database. Its tables are those of the latest format version,
--- defined in "Haskoin.Wallet.Schema.V3" and exported again from here: a
+-- defined in "Haskoin.Wallet.Schema.V4" and exported again from here: a
 -- version that changes the tables gets a new schema module, and this module
 -- moves to it.
 module Haskoin.Wallet.Database
   ( module Haskoin.Wallet.Database,
-    module Haskoin.Wallet.Schema.V3,
+    module Haskoin.Wallet.Schema.V4,
   )
 where
 
@@ -55,7 +55,7 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.FileIO
-import Haskoin.Wallet.Schema.V3
+import Haskoin.Wallet.Schema.V4
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSigning (parseTxSignData)
 import Haskoin.Wallet.Util (Page (Page), textToAddrE)
@@ -734,7 +734,10 @@ walletPaths net accId addrs =
 
 {- Transactions -}
 
--- | The block of every transaction summary of an account, by transaction id
+-- | The block of every live transaction summary of an account, by
+-- transaction id. The dead ones are left out: the sync treats them as
+-- unknown, so that a transaction the store lists again is fetched and comes
+-- back to life.
 txInfoBlockRefs ::
   (MonadUnliftIO m) => DBAccountId -> ExceptT String (DB m) (Map TxHash Store.BlockRef)
 txInfoBlockRefs (DBAccountKey wallet accDeriv) = do
@@ -743,6 +746,7 @@ txInfoBlockRefs (DBAccountKey wallet accDeriv) = do
       where_ $
         t ^. DBTxInfoAccountWallet ==. val wallet
           &&. t ^. DBTxInfoAccountDerivation ==. val accDeriv
+          &&. t ^. DBTxInfoDead ==. val False
       return (t ^. DBTxInfoTxid, t ^. DBTxInfoBlockRef)
   entries <- forM rows $ \(Value tidT, Value refBytes) -> do
     tid <- liftEither $ maybeToEither "txInfoBlockRefs: invalid txid" $ hexToTxHash tidT
@@ -750,10 +754,11 @@ txInfoBlockRefs (DBAccountKey wallet accDeriv) = do
     return (tid, ref)
   return $ Map.fromList entries
 
--- | Remove the summary of a transaction, which the store no longer has
-deleteTxInfo :: (MonadUnliftIO m) => DBAccountId -> TxHash -> DB m ()
-deleteTxInfo (DBAccountKey wallet accDeriv) tid =
-  P.delete $ DBTxInfoKey wallet accDeriv (txHashToHex tid)
+-- | Mark the summary of a transaction dead: the store no longer has it, or
+-- reports it replaced or dropped. The summary stays, for the history.
+markTxInfoDead :: (MonadUnliftIO m) => DBAccountId -> TxHash -> DB m ()
+markTxInfoDead (DBAccountKey wallet accDeriv) tid =
+  P.update (DBTxInfoKey wallet accDeriv (txHashToHex tid)) [DBTxInfoDead P.=. True]
 
 getConfirmedTxs ::
   (MonadUnliftIO m) => DBAccountId -> Bool -> ExceptT String (DB m) [TxHash]
@@ -792,7 +797,8 @@ repsertTxInfo net ctx accId txInfo = do
             (net, ctx)
             txInfo
               { txInfoConfirmations = 0,
-                txInfoPending = Nothing
+                txInfoPending = Nothing,
+                txInfoDead = False
               }
       (DBAccountKey wallet accDeriv) = accId
       key = DBTxInfoKey wallet accDeriv tidT
@@ -804,16 +810,19 @@ repsertTxInfo net ctx accId txInfo = do
             dBTxInfoBlockRef = bRef,
             dBTxInfoConfirmed = confirmed',
             dBTxInfoBlob = blob,
+            dBTxInfoDead = False,
             dBTxInfoCreated = time
           }
   prevM <- lift $ P.get key
   case prevM of
     Just prev -> do
+      -- A live transaction from the store: a summary marked dead comes back
       let newDBInfo =
             prev
               { dBTxInfoBlockRef = bRef,
                 dBTxInfoConfirmed = confirmed',
-                dBTxInfoBlob = blob
+                dBTxInfoBlob = blob,
+                dBTxInfoDead = False
               }
       lift $ P.replace key newDBInfo
       return (newDBInfo, prev /= newDBInfo)
@@ -838,12 +847,14 @@ txsPage ctx accId@(DBAccountKey wallet accDeriv) (Page lim off) = do
       orderBy [asc (t ^. DBTxInfoBlockRef)]
       limit $ fromIntegral lim
       offset $ fromIntegral off
-      return $ t ^. DBTxInfoBlob
+      return (t ^. DBTxInfoBlob, t ^. DBTxInfoDead)
   res <-
-    forM dbTxs $ \(Value dbTx) -> do
-      liftMaybe "TxInfo unmarshalJSON Failed" $
-        unmarshalJSON (net, ctx) $
-          BS.fromStrict dbTx
+    forM dbTxs $ \(Value dbTx, Value dead) -> do
+      txInfo <-
+        liftMaybe "TxInfo unmarshalJSON Failed" $
+          unmarshalJSON (net, ctx) $
+            BS.fromStrict dbTx
+      return txInfo {txInfoDead = dead}
   resLabels <- lift $ mapM (fillTxInfoLabels net) res
   bestM <- lift $ getBest net
   return $ updateConfirmations (snd <$> bestM) <$> resLabels

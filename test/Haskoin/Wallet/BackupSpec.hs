@@ -14,6 +14,7 @@ import Haskoin.Wallet.Backup (backupDatabase, backupName)
 import Haskoin.Wallet.Commands (Response (..), cmdBackup)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.Migration (latestDatabaseVersion)
 import Haskoin.Wallet.TestUtils
 import qualified Haskoin.Wallet.Schema.V2 as V2
 import System.FilePath (takeDirectory, takeFileName, (</>))
@@ -59,10 +60,10 @@ spec = do
             copy = dir </> "copy.sqlite"
         inDatabaseFile database $ do
           createTables migrateAll
-          P.insert_ $ DBVersion 3
+          P.insert_ $ DBVersion latestDatabaseVersion
           P.insert_ $ DBWallet "892eb8e4"
         cmdBackup (configUsing database) (Just copy) `shouldReturn` ResponseFile copy
-        inDatabaseFile copy storedVersions `shouldReturn` [(PersistInt64 3, "integer")]
+        inDatabaseFile copy storedVersions `shouldReturn` [(PersistInt64 (fromIntegral latestDatabaseVersion), "integer")]
         inDatabaseFile copy (tableRows "d_b_wallet") `shouldReturn` [[PersistText "892eb8e4"]]
 
     it "refuses to overwrite a file" $
