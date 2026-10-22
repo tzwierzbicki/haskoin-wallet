@@ -35,8 +35,6 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import qualified Data.Serialize as S
-import Data.Text (Text)
-import qualified Data.Text as Text
 import Data.Word (Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -50,7 +48,7 @@ import Haskoin.Wallet.TxInfo
   )
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSize (inputSize, outputSize, p2pkhInput, txSize)
-import Haskoin.Wallet.Util (safeSubtract)
+import Haskoin.Wallet.Util (addrToString, safeSubtract)
 import Numeric.Natural (Natural)
 
 {- Entry points -}
@@ -236,9 +234,7 @@ verifyInputs net ctx tx coins =
 
 describeInput :: Network -> Int -> SpentCoin -> String
 describeInput net i coin =
-  "input " <> show i <> " (" <> Text.unpack address <> ")"
-  where
-    address = fromMaybe "unknown address" (addrToText net coin.address) :: Text
+  "input " <> show i <> " (" <> addrToString net coin.address <> ")"
 
 {- Result -}
 

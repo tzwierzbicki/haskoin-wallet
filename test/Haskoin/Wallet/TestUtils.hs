@@ -566,6 +566,15 @@ notingUnspentRequests asked store =
         storeUnspents store addrs
     }
 
+-- | The store, noting every height whose blocks it is asked for
+notingBlockRequests :: IORef [BlockHeight] -> Store -> Store
+notingBlockRequests asked store =
+  store
+    { storeBlocksAtHeight = \height -> do
+        liftIO $ modifyIORef asked (<> [height])
+        storeBlocksAtHeight store height
+    }
+
 -- | A block of the main chain, whose hash depends on the nonce
 blockAt :: BlockHeight -> Word32 -> Store.BlockData
 blockAt height nonce =

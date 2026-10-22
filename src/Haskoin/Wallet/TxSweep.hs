@@ -38,8 +38,6 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust, listToMaybe, mapMaybe)
 import Data.String.Conversions (cs)
-import Data.Text (Text)
-import qualified Data.Text as Text
 import Data.Word (Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -205,7 +203,7 @@ buildSweepSignData net ctx gen found sweepTo feeByte dust = do
   return $ TxSignData tx found.transactions inputPaths (pathsOf sweepTo) (Just feeByte) False
   where
     pathsOf addrs = nub $ mapMaybe (`Map.lookup` found.walletAddrs) addrs
-    scriptOf addr = maybeToEither ("Can not pay to " <> addressText net addr) (addressToOutput addr)
+    scriptOf addr = maybeToEither ("Can not pay to " <> addrToString net addr) (addressToOutput addr)
 
 {- Size -}
 
@@ -229,7 +227,7 @@ coinInputSize net ctx uncompressedAddrs coin = do
     _ -> maybe unsupported Right (inputSize script)
   where
     unsupported =
-      Left $ "Unsupported output script for the coin at " <> maybe "unknown address" (addressText net) coin.address
+      Left $ "Unsupported output script for the coin at " <> maybe "unknown address" (addrToString net) coin.address
 
 {- Signing -}
 
@@ -322,7 +320,4 @@ signCoin net ctx keys tx (i, coin) =
     withKey maybeKey sign = maybe noKey sign maybeKey
     noKey = Left $ "No private key for " <> describeInput
     describeInput =
-      "input " <> show i <> " (" <> maybe "unknown address" (addressText net) (outputAddress ctx coin.script) <> ")"
-
-addressText :: Network -> Address -> String
-addressText net addr = Text.unpack $ fromMaybe ("unknown address" :: Text) (addrToText net addr)
+      "input " <> show i <> " (" <> maybe "unknown address" (addrToString net) (outputAddress ctx coin.script) <> ")"

@@ -13,12 +13,11 @@ import Conduit (MonadUnliftIO)
 import Control.Monad
 import Control.Monad.Except
 import Control.Monad.Reader (MonadIO (..), MonadTrans (lift))
-import Data.List (nub, partition, sort)
+import Data.Containers.ListUtils (nubOrd)
+import Data.List (partition, sort)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromJust)
 import qualified Data.Set as Set
-import Data.String.Conversions (cs)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Account
@@ -109,8 +108,9 @@ sync ctx cfg store net accId full = do
   -- The best block is taken before anything else, so that a block found
   -- during the sync is caught up with on the next one rather than missed
   best <- fromStore $ storeBestBlock store
-  reorganised <- chainReorganised store net
-  let everything = full || reorganised
+  -- A full sync looks at everything anyway: only an incremental one asks
+  -- whether the chain moved
+  everything <- if full then return True else chainReorganised store net
   -- The addresses of the account, with their stored balances
   (addrPathMap, addrBalMap) <- allAddressesMap net accId
   storeBals <- fromStore $ storeBalances store (Map.keys addrBalMap)
@@ -139,7 +139,7 @@ sync ctx cfg store net accId full = do
       unconfirmed = [tid | (tid, ref) <- Map.toList known, not (Store.confirmed ref)]
       storedCount bal = maybe 0 addrBalanceTxs $ Map.lookup bal.address addrBalMap
       firstSeen = [r.txid | (bal, refs) <- listedByAddress, storedCount bal == 0, r <- refs]
-      toFetch = nub $ changed <> unconfirmed <> firstSeen
+      toFetch = nubOrd $ changed <> unconfirmed <> firstSeen
   txs <- fromStore $ storeTransactions store toFetch
   -- A transaction the store reports as deleted, or does not return at all,
   -- is dead: replaced, dropped from the mempool, or left out by a
@@ -172,7 +172,7 @@ sync ctx cfg store net accId full = do
   -- The raw transactions the coins come from, which signing needs. A raw
   -- transaction never changes, so the ones already stored are not fetched
   -- again. The store must have every one asked for: it lists the coins.
-  let parents = nub $ (.outpoint.hash) <$> unspents
+  let parents = nubOrd $ (.outpoint.hash) <$> unspents
   missing <- lift $ missingRawTxs parents
   unless (null missing) $ do
     rawTxs <- fromStore $ storeRawTransactions store missing
@@ -253,7 +253,7 @@ listTxs cfg store net bals = do
         "The store counts "
           <> show bal.txs
           <> " transactions for "
-          <> cs (fromJust $ addrToText net bal.address)
+          <> addrToString net bal.address
           <> " but listed "
           <> show (length refs)
     return (bal, refs)
@@ -268,13 +268,14 @@ filterAddresses ::
 filterAddresses sBals aMap
   | sort ((.address) <$> sBals) /= sort (Map.keys aMap) =
       Left "Sync: addresses do not match"
-  | otherwise =
-      Right $ filter f sBals
+  | otherwise = filterM changed sBals
   where
-    -- The address is in the map: the guard above checked the two sets
-    f s =
-      let b = fromJust $ s.address `Map.lookup` aMap
-       in s.txs /= addrBalanceTxs b
-            || s.confirmed /= addrBalanceConfirmed b
-            || s.unconfirmed /= addrBalanceUnconfirmed b
-            || s.utxo /= addrBalanceCoins b
+    -- Whether the store's balance differs from the stored one. The guard
+    -- above makes every lookup succeed.
+    changed s = do
+      b <- maybeToEither "Sync: addresses do not match" $ Map.lookup s.address aMap
+      return $
+        s.txs /= addrBalanceTxs b
+          || s.confirmed /= addrBalanceConfirmed b
+          || s.unconfirmed /= addrBalanceUnconfirmed b
+          || s.utxo /= addrBalanceCoins b

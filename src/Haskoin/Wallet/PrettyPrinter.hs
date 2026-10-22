@@ -13,7 +13,6 @@ module Haskoin.Wallet.PrettyPrinter where
 import Control.Monad
 import Data.List (intercalate, intersperse)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -438,7 +437,7 @@ txInfoPrinter net unit TxInfo {..} =
     g (MyInputs v p l _) = (v, Just p, cs l)
     addrPrinter isMine (a, (v, pathM, label)) =
       vcat
-        [ formatAddress isMine (parseAddr net a)
+        [ formatAddress isMine (addrToString net a)
             <> text ":"
               <+> if isMine
                 then integerAmountPrinterWith formatPosAmount unit (fromIntegral v)
@@ -452,9 +451,6 @@ txInfoPrinter net unit TxInfo {..} =
             then mempty
             else nest 2 $ formatKey "Label:" <+> formatLabel label
         ]
-
-parseAddr :: Network -> Address -> String
-parseAddr net = cs . fromMaybe "Invalid Address" . addrToText net
 
 feePrinter :: AmountUnit -> Natural -> Natural -> Printer
 feePrinter unit fee feeBytes =
@@ -478,7 +474,7 @@ coinPrinter net unit JsonCoin {..} =
           <+> amountPrinter unit jsonCoinValue,
       formatKey (block 7 "Address")
         <> text ":"
-          <+> formatAddress True (parseAddr net jsonCoinAddress),
+          <+> formatAddress True (addrToString net jsonCoinAddress),
       formatKey (block 7 "Confs")
         <> text ":"
           <+> formatValue (show jsonCoinConfirmations),
