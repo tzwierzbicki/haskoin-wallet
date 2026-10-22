@@ -28,6 +28,7 @@ module Haskoin.Wallet.CoinSelection
     selectCoins,
     spendCoins,
     txSize,
+    varIntSize,
     waste,
   )
 where
