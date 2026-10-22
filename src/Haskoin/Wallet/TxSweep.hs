@@ -44,12 +44,12 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebClient
 import Data.Word (Word64)
-import Haskoin.Wallet.CoinSelection (varIntSize)
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.FileIO (TxSignData (..))
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSigning (parseTxSignData, verifySignedTx)
+import Haskoin.Wallet.TxSize (InputSize, inputSize, outputSize, txSize, uncompressedKeyInput)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import System.Random (StdGen)
@@ -200,71 +200,26 @@ buildSweepSignData net ctx gen found sweepTo feeByte dust = do
 {- Size -}
 
 -- | The estimated size of the sweep transaction paying the given output
--- scripts, in bytes of the serialized transaction, which is how hw measures
--- sizes and fee rates everywhere. Every input is sized by the kind of its
--- coin ('inputSize'), every output by its script. Signatures are counted
--- at their largest, so the estimate is an upper bound, by a byte or two
--- per input.
---
--- The network charges fees by weight, where the bytes of the witnesses
--- count a quarter: a sweep of SegWit coins at a given rate per byte pays
--- more per virtual byte than that rate.
+-- scripts, as "Haskoin.Wallet.TxSize" counts it: every input by the kind of
+-- its coin, and by the encoding of its key for a P2PKH coin when the keys
+-- were given, every output by its script
 sweepTxSize :: Network -> Ctx -> SweepCoins -> [ScriptOutput] -> Either String Word64
 sweepTxSize net ctx found outputs = do
-  inputs <- mapM (inputSize net ctx found.uncompressedAddrs) found.coins
-  let -- 4 bytes of version, the counts of inputs and outputs, 4 of lock time
-      overhead = 8 + varIntSize (length found.coins) + varIntSize (length outputs)
-      witnesses = (.witnessBytes) <$> inputs
-      -- A transaction with a witness carries a marker byte and a flag byte,
-      -- then a witness for every input: an empty one, a single count byte,
-      -- for an input without
-      witnessData
-        | all (== 0) witnesses = 0
-        | otherwise = 2 + sum [max 1 w | w <- witnesses]
-  return $ overhead + sum ((.inputBytes) <$> inputs) + sum (outputSize ctx <$> outputs) + witnessData
+  inputs <- mapM (coinInputSize net ctx found.uncompressedAddrs) found.coins
+  return $ txSize inputs (outputSize . marshal ctx <$> outputs)
 
--- | The size of a signed input: its bytes among the inputs, and the bytes
--- of its witness with their item count, 0 for an input without a witness
-data InputSize = InputSize
-  { inputBytes :: !Word64,
-    witnessBytes :: !Word64
-  }
-
--- | The size of the signed input of a coin, by the kind of its output
--- script. An input is 32 bytes of transaction hash, 4 of output index, 1 of
--- script length, the script and 4 of sequence; a signature is counted as 72
--- bytes with its hash type, and the push of it as 1 more.
---
---   * P2PKH: the script pushes the signature and the public key, 33 bytes
---     compressed or 65 uncompressed: 148 or 180 bytes.
---   * P2PK: the script pushes the signature alone: 114 bytes.
---   * P2WPKH: an empty script, 41 bytes; the witness holds the signature and
---     the compressed public key, each with its length, after their count:
---     108 bytes.
---   * P2SH-P2WPKH: the script pushes the 22-byte P2WPKH script, 64 bytes,
---     with the same witness. A P2SH coin of a sweep is one of these, the
---     only script hash a sweep looks for.
-inputSize :: Network -> Ctx -> [Address] -> Store.Unspent -> Either String InputSize
-inputSize net ctx uncompressedAddrs coin = do
+-- | The size of the signed input of a coin of the sweep: a P2PKH coin at an
+-- address of an uncompressed key carries the 65-byte public key; a coin of
+-- a kind the sweep cannot sign is refused here, before signing
+coinInputSize :: Network -> Ctx -> [Address] -> Store.Unspent -> Either String InputSize
+coinInputSize net ctx uncompressedAddrs coin = do
   script <- either (const unsupported) Right $ unmarshal ctx coin.script
   case script of
-    PayPKHash h
-      | PubKeyAddress h `elem` uncompressedAddrs -> Right $ InputSize 180 0
-      | otherwise -> Right $ InputSize 148 0
-    PayPK _ -> Right $ InputSize 114 0
-    PayWitnessPKHash _ -> Right $ InputSize 41 108
-    PayScriptHash _ -> Right $ InputSize 64 108
-    _ -> unsupported
+    PayPKHash h | PubKeyAddress h `elem` uncompressedAddrs -> Right uncompressedKeyInput
+    _ -> maybe unsupported Right (inputSize script)
   where
     unsupported =
       Left $ "Unsupported output script for the coin at " <> maybe "unknown address" (addressText net) coin.address
-
--- | The size of an output: 8 bytes of amount, the length of the script and
--- the script
-outputSize :: Ctx -> ScriptOutput -> Word64
-outputSize ctx script = 8 + varIntSize scriptLength + fromIntegral scriptLength
-  where
-    scriptLength = BS.length $ marshal ctx script
 
 {- Signing -}
 

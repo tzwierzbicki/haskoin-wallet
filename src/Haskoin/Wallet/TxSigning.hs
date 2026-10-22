@@ -40,7 +40,7 @@ import qualified Data.Text as Text
 import Data.Word (Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.CoinSelection (txSize)
+import Haskoin.Wallet.TxSize (inputSize, outputSize, p2pkhInput, txSize)
 import Haskoin.Wallet.FileIO (TxSignData (..))
 import Haskoin.Wallet.TxInfo
   ( MyInputs (..),
@@ -60,7 +60,7 @@ parseTxSignData ::
 parseTxSignData net ctx accountPub tsd = do
   coins <- spentCoins ctx tsd
   analysis <- analyze net ctx tsd accountPub coins
-  return $ txInfo tsd.txSignDataFeeRate analysis tsd.txSignDataTx tsd.txSignDataSigned
+  return $ txInfo tsd.txSignDataFeeRate analysis coins tsd.txSignDataTx tsd.txSignDataSigned
 
 -- | Check that every input of a signed transaction carries a valid signature
 -- for the coin it spends
@@ -85,7 +85,7 @@ signWalletTx net ctx tsd accountKey = do
   signedTx <- signInputs net ctx accountKey analysis tsd.txSignDataTx coins
   verifyInputs net ctx signedTx coins
   let signedData = tsd {txSignDataTx = signedTx, txSignDataSigned = True}
-  return (signedData, txInfo tsd.txSignDataFeeRate analysis signedTx True)
+  return (signedData, txInfo tsd.txSignDataFeeRate analysis coins signedTx True)
 
 {- Coins -}
 
@@ -241,9 +241,10 @@ describeInput net i coin =
 {- Result -}
 
 -- | The information reported about the transaction. The size of a signed
--- transaction is that of its bytes; the size of an unsigned one is estimated.
-txInfo :: Maybe Natural -> Analysis -> Tx -> Bool -> TxInfo
-txInfo feeRate analysis tx signed =
+-- transaction is that of its bytes; the size of an unsigned one is
+-- estimated from the coins it spends and the outputs it pays.
+txInfo :: Maybe Natural -> Analysis -> [SpentCoin] -> Tx -> Bool -> TxInfo
+txInfo feeRate analysis coins tx signed =
   TxInfo
     { txInfoHash = if signed then Just (txHash tx) else Nothing,
       txInfoType = txType analysis.amount analysis.fee,
@@ -267,8 +268,18 @@ txInfo feeRate analysis tx signed =
     size
       | signed = fromIntegral $ BS.length $ S.encode tx
       | otherwise = estimatedSize
-    estimatedSize = fromIntegral $ txSize (length tx.inputs) (length tx.outputs)
+    -- The size the builder estimated, from the kinds of the coins and the
+    -- scripts of the outputs. The signing data does not say whether a P2PKH
+    -- coin belongs to an uncompressed key, so such a coin is counted for a
+    -- compressed one, as is a coin of a kind hw cannot sign.
+    estimatedSize =
+      fromIntegral $
+        txSize (fromMaybe p2pkhInput . inputSize . (.script) <$> coins) (outputSize . (.script) <$> tx.outputs)
     -- What the fee pays beyond the requested rate on the size the builder
     -- estimated, which signing does not change: the change that was not
-    -- worth an output
-    changeInFee = (\rate -> analysis.fee - min analysis.fee (rate * estimatedSize)) <$> feeRate
+    -- worth an output. Only a transaction of the wallet's own coins has
+    -- change folded into its fee; one that spends other coins, a sweep,
+    -- pays what its builder decided and has no change.
+    changeInFee
+      | Map.null analysis.otherInputs = (\rate -> analysis.fee - min analysis.fee (rate * estimatedSize)) <$> feeRate
+      | otherwise = Nothing

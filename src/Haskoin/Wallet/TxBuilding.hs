@@ -30,6 +30,7 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
 import Data.Word (Word64)
+import Haskoin.Wallet.TxSize (outputSize, p2pkhOutputSize)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.CoinSelection
@@ -186,13 +187,19 @@ buildWalletTx net ctx gen strategy found recipients feeByte dust payer coinContr
         { rates = FeeRates {feeRate = fromIntegral feeByte, longTermFeeRate = longTermRate},
           payer,
           dust = fromIntegral dust,
-          outputCount = length recipients,
+          outputSizes = recipientOutputSize ctx . fst <$> recipients,
           amount = sum $ fromIntegral . snd <$> recipients
         }
     coinPath :: Store.Unspent -> Either String SoftPath
     coinPath coin =
       maybeToEither "A chosen coin has no derivation path" $
         (`Map.lookup` found.coinPaths) =<< coin.address
+
+-- | The size of the output paying a recipient. An address that cannot be
+-- paid is counted as P2PKH; the builder refuses it further down.
+recipientOutputSize :: Ctx -> Address -> Word64
+recipientOutputSize ctx addr =
+  maybe p2pkhOutputSize (outputSize . marshal ctx) (addressToOutput addr)
 
 -- | The coins under coin control, which must all be spendable
 controlledCoins :: [Store.Unspent] -> [OutPoint] -> Either String [Store.Unspent]

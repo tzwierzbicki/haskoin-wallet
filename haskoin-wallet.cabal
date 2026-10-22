@@ -67,6 +67,7 @@ library
       Haskoin.Wallet.TxBuilding
       Haskoin.Wallet.TxInfo
       Haskoin.Wallet.TxSigning
+      Haskoin.Wallet.TxSize
       Haskoin.Wallet.TxSweep
       Haskoin.Wallet.Util
   other-modules:
@@ -190,6 +191,7 @@ test-suite spec
       Haskoin.Wallet.TestUtils
       Haskoin.Wallet.TxBuildingSpec
       Haskoin.Wallet.TxSigningSpec
+      Haskoin.Wallet.TxSizeSpec
       Haskoin.Wallet.TxSweepSpec
       Haskoin.Wallet.TxVectors
       Paths_haskoin_wallet

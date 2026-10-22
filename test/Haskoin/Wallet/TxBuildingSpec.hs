@@ -13,6 +13,7 @@ import Control.Monad.Trans.Except (ExceptT, runExceptT)
 import Data.Default (def)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as Map
+import Data.Maybe (fromJust)
 import Data.Word (Word32, Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -22,6 +23,8 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.FileIO (TxSignData (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxBuilding
+import Haskoin.Wallet.TxInfo (TxInfo (..))
+import Haskoin.Wallet.TxSigning (parseTxSignData, signWalletTx, verifySignedTx)
 import Numeric.Natural (Natural)
 import System.Random (mkStdGen)
 import Test.Hspec
@@ -30,6 +33,7 @@ spec :: Spec
 spec =
   prepareContext $ \ctx -> do
     transactionSpec ctx
+    recipientTypesSpec ctx
     dustSpec ctx
     feePayerSpec ctx
     coinControlSpec ctx
@@ -170,6 +174,66 @@ transactionSpec ctx =
 -- An output is dust below the limit of 546, like in Bitcoin Core: an output
 -- of exactly 546 is fine. A dust change goes to the fee; a dust recipient
 -- output is an error.
+
+{- Recipients of every standard address type -}
+
+-- The wallet pays its own P2PKH change, but a recipient may be of any
+-- standard kind, and each output is charged its own size: 34 bytes for
+-- P2PKH, 32 for P2SH, 31 for P2WPKH, 43 for P2WSH and 43 for Taproot. The
+-- addresses are the P2SH address of the swept key of
+-- "Haskoin.Wallet.TxSweepSpec" and the examples of BIP173 and BIP350.
+recipientTypesSpec :: Ctx -> Spec
+recipientTypesSpec ctx =
+  describe "Recipients of every standard address type" $ do
+    it "pays a P2SH recipient: 10 + 148 + 32 + 34 = 224 bytes" $ do
+      built <- expectRight $ pay ctx [400000] [(p2shAddr, 350000)]
+      spends ctx built `shouldBe` ([400000], [(internalAddr 0, 47760), (p2shAddr, 350000)])
+      feePaid built `shouldBe` 2240
+    it "pays a P2WPKH recipient: 10 + 148 + 31 + 34 = 223 bytes" $ do
+      built <- expectRight $ pay ctx [400000] [(p2wpkhAddr, 350000)]
+      spends ctx built `shouldBe` ([400000], [(internalAddr 0, 47770), (p2wpkhAddr, 350000)])
+      feePaid built `shouldBe` 2230
+    it "pays a P2WSH recipient: 10 + 148 + 43 + 34 = 235 bytes" $ do
+      built <- expectRight $ pay ctx [400000] [(p2wshAddr, 350000)]
+      spends ctx built `shouldBe` ([400000], [(internalAddr 0, 47650), (p2wshAddr, 350000)])
+      feePaid built `shouldBe` 2350
+    it "pays a Taproot recipient: 10 + 148 + 43 + 34 = 235 bytes" $ do
+      built <- expectRight $ pay ctx [400000] [(taprootAddr, 350000)]
+      spends ctx built `shouldBe` ([400000], [(internalAddr 0, 47650), (taprootAddr, 350000)])
+      feePaid built `shouldBe` 2350
+    it "pays one recipient of each type in one transaction" $ do
+      -- 10 + 148 + 34 + 32 + 31 + 43 + 43 + 34 = 375 bytes, a fee of 3750,
+      -- and a change of 400000 - 350000 - 3750 = 46250
+      built <- expectRight $ pay ctx [400000] everyType
+      spends ctx built
+        `shouldBe` ( [400000],
+                     [ (internalAddr 0, 46250),
+                       (otherAddr 0, 50000),
+                       (p2shAddr, 60000),
+                       (p2wpkhAddr, 70000),
+                       (p2wshAddr, 80000),
+                       (taprootAddr, 90000)
+                     ]
+                   )
+      feePaid built `shouldBe` 3750
+      built.outputPaths `shouldBe` [Deriv :/ 1 :/ 0]
+    it "reports, signs and verifies the payment to every type" $ do
+      built <- expectRight $ pay ctx [400000] everyType
+      let tsd = TxSignData built.tx [funding ctx [400000]] built.inputPaths built.outputPaths (Just 10) False
+      unsignedInfo <- expectRight $ parseTxSignData btc ctx (testAccountPub ctx) tsd
+      (unsignedInfo.txInfoSize, unsignedInfo.txInfoFeeByte, unsignedInfo.txInfoChangeInFee) `shouldBe` (375, 10, Just 0)
+      (signed, info) <- expectRight $ signWalletTx btc ctx tsd testAccountKey
+      verifySignedTx btc ctx signed `shouldBe` Right ()
+      -- The signature of this transaction is 72 bytes, as estimated
+      (info.txInfoFee, info.txInfoSize, info.txInfoFeeByte) `shouldBe` (3750, 375, 10)
+      Map.toList info.txInfoOtherOutputs
+        `shouldBe` [(otherAddr 0, 50000), (p2shAddr, 60000), (p2wpkhAddr, 70000), (p2wshAddr, 80000), (taprootAddr, 90000)]
+  where
+    everyType = [(otherAddr 0, 50000), (p2shAddr, 60000), (p2wpkhAddr, 70000), (p2wshAddr, 80000), (taprootAddr, 90000)]
+    p2shAddr = fromJust $ textToAddr btc "3J6JzvfPtYr3GvY37YXbjuTx7ZLedG3C9p"
+    p2wpkhAddr = fromJust $ textToAddr btc "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
+    p2wshAddr = fromJust $ textToAddr btc "bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv3"
+    taprootAddr = fromJust $ textToAddr btc "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0"
 
 dustSpec :: Ctx -> Spec
 dustSpec ctx =
