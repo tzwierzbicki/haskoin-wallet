@@ -70,16 +70,21 @@ involvesWallet txInfo = not (Map.null (txInfoMyInputs txInfo) && Map.null (txInf
 data TxInfoPending = TxInfoPending
   { pendingNosigHash :: !TxHash,
     pendingSigned :: !Bool,
-    pendingOnline :: !Bool
+    -- | Sent to the network by the user
+    pendingOnline :: !Bool,
+    -- | A coin of the wallet it spends was spent by another transaction,
+    -- so it can no longer be sent
+    pendingConflicted :: !Bool
   }
   deriving (Eq, Show)
 
 instance Json.ToJSON TxInfoPending where
-  toJSON (TxInfoPending h s o) =
+  toJSON (TxInfoPending h s o c) =
     object
       [ "nosighash" .= h,
         "signed" .= s,
-        "online" .= o
+        "online" .= o,
+        "conflicted" .= c
       ]
 
 instance Json.FromJSON TxInfoPending where
@@ -88,7 +93,8 @@ instance Json.FromJSON TxInfoPending where
       h <- o .: "nosighash"
       s <- o .: "signed"
       onl <- o .: "online"
-      return $ TxInfoPending h s onl
+      c <- o .:? "conflicted" .!= False
+      return $ TxInfoPending h s onl c
 
 data MyOutputs = MyOutputs
   { myOutputsValue :: !Natural,

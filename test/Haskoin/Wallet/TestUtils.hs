@@ -17,7 +17,8 @@ import Control.Monad.Trans.Except (runExceptT)
 import Data.Aeson (FromJSON (..), eitherDecodeFileStrict, withObject, (.!=), (.:), (.:?))
 import qualified Data.ByteString as BS
 import Data.Either (fromRight, isLeft)
-import Data.List (isSuffixOf, sort, sortOn)
+import Data.IORef (IORef, modifyIORef)
+import Data.List (find, isSuffixOf, sort, sortOn)
 import Data.Maybe (fromMaybe)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
@@ -30,7 +31,8 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database (DB, DBAccount, DBAccountId, insertAccount, migrateAll, nextAccountDeriv)
 import Haskoin.Wallet.Keys (MnemonicPass (..), signingKey, walletFingerprint)
-import Data.Word (Word32, Word8)
+import Haskoin.Wallet.Sync (Store (..))
+import Data.Word (Word32, Word64, Word8)
 import Numeric.Natural (Natural)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getTemporaryDirectory, listDirectory, removeDirectoryRecursive)
 import System.FilePath ((</>))
@@ -468,3 +470,133 @@ testFingerprint2 = forceRight $ textToFingerprint testFingerprintText2
 testAccountXPrv2, testAccountXPub2 :: Text
 testAccountXPrv2 = "xprv9yXnZpEVdonEtT3strknsAgso5qq1cwRooo6susmzVmB5E2vvNw1KKRBgvwvNLxXdBHnkEN5R5uXi2QDs3tpkoBbL61NE6bnSbcrvH6keGa"
 testAccountXPub2 = "xpub6CX8yKmPUBLY6w8LztHoEJdcM7gKR5fHB2ihgJHPYqJ9x2N5TvFFs7jfYCX6So9oYyu6eLDTG5dbQWPncv1PYJtXLJ4cwymhoCpeTEmnZFZ"
+
+{- The scripted store -}
+
+-- A store the sync and the commands can be played against without a
+-- network, filled with the answers it gives
+
+-- | What the store answers: every list is complete, as the real store's
+-- are when asked for everything
+data FakeStore = FakeStore
+  { fakeBest :: Store.BlockData,
+    -- | The blocks at each height, for the reorganisation check
+    fakeBlocks :: [Store.BlockData],
+    -- | Addresses not listed have an empty balance
+    fakeBalances :: [Store.Balance],
+    -- | The transactions of each address, newest first
+    fakeTxRefs :: [(Address, [Store.TxRef])],
+    fakeTransactions :: [Store.Transaction],
+    fakeUnspents :: [Store.Unspent],
+    -- | Raw transactions by the id the store knows them under. Most stores
+    -- here list their payments under made-up ids rather than the hashes
+    -- of these raw transactions, which the sync only notices when it
+    -- checks which raw transactions it has: 'realPaymentStore' is the one
+    -- to use for that.
+    fakeRawTransactions :: [(TxHash, Tx)]
+  }
+
+toStore :: FakeStore -> Store
+toStore fake =
+  Store
+    { storeHealth = return (),
+      storeBestBlock = return fake.fakeBest,
+      storeBlocksAtHeight = \height ->
+        return $ filter ((== height) . (.height)) fake.fakeBlocks,
+      storeBalances = \addrs ->
+        return [fromMaybe (Store.Balance a 0 0 0 0 0) (find ((== a) . (.address)) fake.fakeBalances) | a <- addrs],
+      storeAddressTxs = \addr count ->
+        return $ take (fromIntegral count) $ fromMaybe [] $ lookup addr fake.fakeTxRefs,
+      storeTransactions = \tids ->
+        return $ filter ((`elem` tids) . (.txid)) fake.fakeTransactions,
+      storeUnspents = \addrs ->
+        return $ filter ((`elem` (Just <$> addrs)) . (.address)) fake.fakeUnspents,
+      storeRawTransactions = \tids ->
+        return [tx | (tid, tx) <- fake.fakeRawTransactions, tid `elem` tids],
+      storePublish = \_ -> return ()
+    }
+
+-- | A store with nothing in it: no transactions, no coins, no balances
+emptyStore :: FakeStore
+emptyStore =
+  FakeStore
+    { fakeBest = blockAt 800002 1,
+      fakeBlocks = [blockAt 800002 1],
+      fakeBalances = [],
+      fakeTxRefs = [],
+      fakeTransactions = [],
+      fakeUnspents = [],
+      fakeRawTransactions = []
+    }
+
+-- | The store, noting every transaction handed to it for the network
+notingPublished :: IORef [Tx] -> Store -> Store
+notingPublished published store =
+  store
+    { storePublish = \tx -> do
+        liftIO $ modifyIORef published (<> [tx])
+        storePublish store tx
+    }
+
+-- | The store, noting every list of raw transactions it is asked for
+notingRawRequests :: IORef [[TxHash]] -> Store -> Store
+notingRawRequests asked store =
+  store
+    { storeRawTransactions = \tids -> do
+        liftIO $ modifyIORef asked (<> [tids])
+        storeRawTransactions store tids
+    }
+
+-- | A block of the main chain, whose hash depends on the nonce
+blockAt :: BlockHeight -> Word32 -> Store.BlockData
+blockAt height nonce =
+  Store.BlockData
+    height
+    True
+    0
+    (BlockHeader 1 (fakeBlockHash 0) (fakeTxHash 0).get 1700000000 0x1d00ffff nonce)
+    1000
+    4000
+    []
+    0
+    0
+    0
+
+-- | A transaction of the store paying an amount to one of our addresses,
+-- funded by somebody else, with a fee of 1000
+creditTx :: Ctx -> TxHash -> Store.BlockRef -> Address -> Word64 -> Store.Transaction
+creditTx ctx tid block addr amount = payoutTx ctx tid block [(addr, amount)]
+
+-- | A transaction of the store paying several addresses, funded by somebody
+-- else, with a fee of 1000
+payoutTx :: Ctx -> TxHash -> Store.BlockRef -> [(Address, Word64)] -> Store.Transaction
+payoutTx ctx tid block paid =
+  Store.Transaction
+    { Store.block = block,
+      Store.version = 1,
+      Store.locktime = 0,
+      Store.inputs =
+        [ Store.StoreInput
+            (OutPoint (fakeTxHash 0xee) 0)
+            0xffffffff
+            BS.empty
+            (addressScript ctx (otherAddr 0))
+            (sum (snd <$> paid) + 1000)
+            []
+            (Just (otherAddr 0))
+        ],
+      Store.outputs = [Store.StoreOutput amount (addressScript ctx addr) Nothing (Just addr) | (addr, amount) <- paid],
+      Store.deleted = False,
+      Store.rbf = False,
+      Store.timestamp = 1700000000,
+      Store.txid = tid,
+      Store.size = 226,
+      Store.weight = 904,
+      Store.fee = 1000
+    }
+
+-- | The same transaction, replaced or dropped: the store keeps it, marked
+-- as deleted
+replaced :: Store.Transaction -> Store.Transaction
+replaced (Store.Transaction b v l i o _ r t x s w f) =
+  Store.Transaction b v l i o True r t x s w f

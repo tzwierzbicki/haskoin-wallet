@@ -18,12 +18,12 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 -- | The wallet database. Its tables are those of the latest format version,
--- defined in "Haskoin.Wallet.Schema.V4" and exported again from here: a
+-- defined in "Haskoin.Wallet.Schema.V5" and exported again from here: a
 -- version that changes the tables gets a new schema module, and this module
 -- moves to it.
 module Haskoin.Wallet.Database
   ( module Haskoin.Wallet.Database,
-    module Haskoin.Wallet.Schema.V4,
+    module Haskoin.Wallet.Schema.V5,
   )
 where
 
@@ -44,6 +44,9 @@ import Data.List (find, nub, partition)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, fromJust, fromMaybe, isJust, mapMaybe)
+import qualified Data.Maybe as Maybe
+import Data.Set (Set)
+import qualified Data.Set as Set
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -58,7 +61,7 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.FileIO
-import Haskoin.Wallet.Schema.V4
+import Haskoin.Wallet.Schema.V5
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSigning (parseTxSignData)
 import UnliftIO.Exception (catch, throwIO)
@@ -976,8 +979,10 @@ instance MarshalJSON Network JsonCoin where
         <*> o .: "confirmations"
         <*> o .: "locked"
 
-toJsonCoin :: Network -> Maybe BlockHeight -> DBCoin -> Either String JsonCoin
-toJsonCoin net bestM dbCoin = do
+-- | A coin as the user sees it, locked when one of the pending
+-- transactions spends it
+toJsonCoin :: Network -> Maybe BlockHeight -> Set OutPoint -> DBCoin -> Either String JsonCoin
+toJsonCoin net bestM locked dbCoin = do
   op <- textToOutpoint $ dBCoinOutpoint dbCoin
   ad <-
     maybeToEither "toJsonCoin: Invalid address" $
@@ -992,7 +997,7 @@ toJsonCoin net bestM dbCoin = do
         jsonCoinValue = dBCoinValue dbCoin,
         jsonCoinBlock = br,
         jsonCoinConfirmations = confirmations,
-        jsonCoinLocked = dBCoinLocked dbCoin
+        jsonCoinLocked = op `Set.member` locked
       }
 
 outpointText :: OutPoint -> Text
@@ -1010,7 +1015,8 @@ coinPage ::
   DBAccountId ->
   Page ->
   ExceptT String (DB m) [JsonCoin]
-coinPage net (DBAccountKey wallet accDeriv) (Page lim off) = do
+coinPage net accId@(DBAccountKey wallet accDeriv) (Page lim off) = do
+  locked <- lockedOutpoints accId
   coins <-
     lift . select . from $ \c -> do
       where_ $ do
@@ -1021,7 +1027,7 @@ coinPage net (DBAccountKey wallet accDeriv) (Page lim off) = do
       offset $ fromIntegral off
       return c
   bestM <- lift $ getBest net
-  mapM (liftEither . toJsonCoin net (snd <$> bestM) . entityVal) coins
+  mapM (liftEither . toJsonCoin net (snd <$> bestM) locked . entityVal) coins
 
 -- Spendable coins must be confirmed and not locked
 getSpendableCoins ::
@@ -1030,20 +1036,20 @@ getSpendableCoins ::
   DBAccountId ->
   Natural ->
   ExceptT String (DB m) [Store.Unspent]
-getSpendableCoins net (DBAccountKey wallet accDeriv) minConf = do
+getSpendableCoins net accId@(DBAccountKey wallet accDeriv) minConf = do
   bestM <- lift $ getBest net
+  locked <- lockedOutpoints accId
   coins <- lift . select . from $ \c -> do
     where_ $
       c ^. DBCoinAccountWallet ==. val wallet
         &&. c ^. DBCoinAccountDerivation ==. val accDeriv
-        &&. c ^. DBCoinLocked ==. val False
     return c
   let f c = do
         ref <- liftEither $ S.decode $ dBCoinBlockRef c
         return $ getConfirmations (snd <$> bestM) ref >= minConf
-  spendableCoins <- filterM (f . entityVal) coins
-  let bss = dBCoinBlob . entityVal <$> spendableCoins
-  mapM (liftEither . S.decode) bss
+  confirmedCoins <- filterM (f . entityVal) coins
+  unspents <- mapM (liftEither . S.decode . dBCoinBlob . entityVal) confirmedCoins
+  return $ filter (\unspent -> unspent.outpoint `Set.notMember` locked) unspents
 
 insertCoin ::
   (MonadUnliftIO m) =>
@@ -1063,7 +1069,6 @@ insertCoin (DBAccountKey wallet accDeriv) addr unspent = do
             dBCoinBlockRef = S.encode unspent.block,
             dBCoinBlob = S.encode unspent,
             dBCoinConfirmed = Store.confirmed unspent.block,
-            dBCoinLocked = False,
             dBCoinCreated = time
           }
   P.insert_ newCoin
@@ -1136,15 +1141,6 @@ groupCoins net =
         Just a -> (,[x]) <$> addrToText net a
         _ -> Nothing
 
-setLockCoin :: (MonadUnliftIO m) => OutPoint -> Bool -> DB m Natural
-setLockCoin op locked = do
-  cnt <- updateCount $ \c -> do
-    set c [DBCoinLocked =. val locked]
-    where_ $
-      c ^. DBCoinOutpoint ==. val (outpointText op)
-        &&. c ^. DBCoinLocked ==. val (not locked)
-  return $ fromIntegral cnt
-
 {- Raw Transactions -}
 
 insertRawTx :: (MonadUnliftIO m) => Tx -> DB m ()
@@ -1174,11 +1170,12 @@ missingRawTxs = filterM (fmap not . hasRawTx)
 data TxOnline = TxOnline | TxOffline
   deriving (Eq, Show)
 
--- Returns (TxSignData, isOnline)
+-- | A pending transaction by its nosigHash: its account, its signing data
+-- and whether the user sent it to the network
 getPendingTx ::
   (MonadUnliftIO m) =>
   TxHash ->
-  DB m (Maybe (DBAccountId, TxSignData, TxInfoPending))
+  DB m (Maybe (DBAccountId, TxSignData, Bool))
 getPendingTx pendingHash = do
   let hashT = txHashToHex pendingHash
       key = DBPendingTxKey hashT
@@ -1189,12 +1186,7 @@ getPendingTx pendingHash = do
           tsdM = Json.decode $ BS.fromStrict blob
       return $ do
         tsd <- tsdM
-        let pending =
-              TxInfoPending
-                (nosigHash $ txSignDataTx tsd)
-                (txSignDataSigned tsd)
-                online
-        return (accId, tsd, pending)
+        return (accId, tsd, online)
     _ -> return Nothing
 
 pendingTxPage ::
@@ -1219,30 +1211,48 @@ pendingTxPage ctx accId@(DBAccountKey wallet accDeriv) (Page lim off) = do
   forM tsds $ \(Entity _ res) -> do
     tsd <- liftEither . Json.eitherDecode . BS.fromStrict $ dBPendingTxBlob res
     txInfo <- liftEither $ parseTxSignData net ctx pub tsd
+    conflicted <- lift $ conflictedInputs txInfo
     let pending =
-          TxInfoPending (nosigHash $ txSignDataTx tsd) (txSignDataSigned tsd) (dBPendingTxOnline res)
+          TxInfoPending (nosigHash $ txSignDataTx tsd) (txSignDataSigned tsd) (dBPendingTxOnline res) (not (null conflicted))
     let txInfoP = txInfo {txInfoPending = Just pending}
     lift $ fillTxInfoLabels net txInfoP
 
--- Returns the TxHash and NoSigHash of pending transactions. They are compared
--- during a sync in order to delete pending transactions that are now online.
-pendingTxHashes ::
-  (MonadUnliftIO m) =>
-  DBAccountId ->
-  ExceptT String (DB m) [(TxHash, DBPendingTxId)]
-pendingTxHashes (DBAccountKey wallet accDeriv) = do
-  blobs <-
+-- | A pending transaction as the sync and the coin locks see it
+data PendingTx = PendingTx
+  { pendingTxKey :: !DBPendingTxId,
+    pendingTxData :: !TxSignData,
+    -- | Sent to the network by the user
+    pendingTxOnline :: !Bool
+  }
+
+-- | The pending transactions of an account
+pendingTxs :: (MonadUnliftIO m) => DBAccountId -> ExceptT String (DB m) [PendingTx]
+pendingTxs (DBAccountKey wallet accDeriv) = do
+  rows <-
     lift . select . from $ \p -> do
       where_ $ do
         p ^. DBPendingTxAccountWallet ==. val wallet
           &&. p ^. DBPendingTxAccountDerivation ==. val accDeriv
-      return (p ^. DBPendingTxBlob, p ^. DBPendingTxId)
-  res <- forM blobs $ \(Value blob, Value key) -> do
+      return (p ^. DBPendingTxId, p ^. DBPendingTxBlob, p ^. DBPendingTxOnline)
+  forM rows $ \(Value key, Value blob, Value online) -> do
     tsd <- liftEither . Json.eitherDecode $ BS.fromStrict blob
-    if txSignDataSigned tsd
-      then return [(txHash $ txSignDataTx tsd, key)]
-      else return []
-  return $ concat res
+    return PendingTx {pendingTxKey = key, pendingTxData = tsd, pendingTxOnline = online}
+
+-- | The coins locked by the pending transactions of an account: every
+-- outpoint one of them spends. A coin is locked exactly as long as a
+-- pending transaction spends it; nothing else records it.
+lockedOutpoints :: (MonadUnliftIO m) => DBAccountId -> ExceptT String (DB m) (Set OutPoint)
+lockedOutpoints accId = do
+  pending <- pendingTxs accId
+  return $ Set.fromList [input.outpoint | p <- pending, input <- (txSignDataTx (pendingTxData p)).inputs]
+
+-- | The coins of the wallet that a transaction spends and that are gone,
+-- spent by another transaction: the transaction can no longer be sent
+conflictedInputs :: (MonadUnliftIO m) => TxInfo -> DB m [OutPoint]
+conflictedInputs txInfo = filterM missing outpoints
+  where
+    (outpoints, _, _) = parseTxInfoU txInfo
+    missing outpoint = Maybe.isNothing <$> P.get (DBCoinKey $ outpointText outpoint)
 
 -- Imports a pending transaction, locks coins and locks internal addresses
 importPendingTx ::
@@ -1259,8 +1269,8 @@ importPendingTx net ctx accId tsd@(TxSignData tx _ _ _ _ signed) = do
       bs = BS.toStrict $ Json.encode tsd
   prevM <- lift $ getPendingTx pendingHash
   case prevM of
-    Just (_, TxSignData prevTx _ _ _ _ prevSigned, pending) -> do
-      when (pendingOnline pending) $
+    Just (_, TxSignData prevTx _ _ _ _ prevSigned, online) -> do
+      when online $
         throwError "The transaction is already online"
       when (prevSigned && not signed) $
         throwError "Can not replace a signed transaction with an unsigned one"
@@ -1277,15 +1287,15 @@ importPendingTx net ctx accId tsd@(TxSignData tx _ _ _ _ signed) = do
       unless (involvesWallet txInfoU) $
         throwError "The transaction does not involve this wallet"
       let (outpoints, outIntAddrs, restAddrs) = parseTxInfoU txInfoU
-      -- Verify coins and lock them
+      -- The coins it spends must exist and be free of any other pending
+      -- transaction; storing it is what locks them
+      locked <- lockedOutpoints accId
       forM_ outpoints $ \outpoint -> do
         coinM <- lift $ P.get $ DBCoinKey $ outpointText outpoint
-        case coinM of
-          Just coin -> do
-            when (dBCoinLocked coin) $
-              throwError "A coin referenced by the transaction is locked"
-            lift $ setLockCoin outpoint True
-          _ -> throwError "A coin referenced by the transaction does not exist"
+        when (Maybe.isNothing coinM) $
+          throwError "A coin referenced by the transaction does not exist"
+        when (outpoint `Set.member` locked) $
+          throwError "A coin referenced by the transaction is locked"
       -- Verify addresses and set internal output addresses to busy
       outIntAddrsT <- mapM (liftMaybe "Addrs" . addrToText net . fst) outIntAddrs
       restAddrsT <- mapM (liftMaybe "Addrs" . addrToText net) restAddrs
@@ -1338,15 +1348,15 @@ deletePendingTx ::
   Ctx ->
   TxHash ->
   ExceptT String (DB m) (Natural, Natural)
+-- | Delete a pending transaction, whatever its state: the coins it spent
+-- are free again by its absence, and its change address is freed. Returns
+-- how many coins of the wallet it was holding and how many addresses were
+-- freed. Whether a transaction the user sent may be deleted is for the
+-- command to decide.
 deletePendingTx ctx pendingHash = do
   let key = DBPendingTxKey $ txHashToHex pendingHash
   tsdM <- lift $ getPendingTx pendingHash
   case tsdM of
-    Just (_, _, TxInfoPending _ _ True) -> do
-      throwError
-        "This pending transaction has been sent to the network.\
-        \ Run syncacc to refresh your database."
-    -- We only free coins and addresses if the transaction is offline
     Just (accId, tsd, _) -> do
       acc <- getAccountById accId
       let net = accountNetwork acc
@@ -1355,10 +1365,10 @@ deletePendingTx ctx pendingHash = do
       let (outpoints, outIntAddrs, _) = parseTxInfoU txInfoU
       outIntAddrsT <-
         mapM (liftMaybe "Address" . addrToText net . fst) outIntAddrs
-      freedCoins <- forM outpoints $ \op -> lift $ setLockCoin op False
+      held <- lift $ filterM (fmap isJust . P.get . DBCoinKey . outpointText) outpoints
       freedAddresses <- lift $ setAddrsFree AddrFree outIntAddrsT
       lift $ P.delete key
-      return (sum freedCoins, fromIntegral freedAddresses)
+      return (fromIntegral (length held), fromIntegral freedAddresses)
     _ -> throwError "The pending transaction does not exist"
 
 -- When the pending transaction is online, we just delete it

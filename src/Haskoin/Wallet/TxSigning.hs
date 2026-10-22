@@ -261,7 +261,7 @@ txInfo feeRate analysis coins tx signed =
       txInfoChangeInFee = changeInFee,
       txInfoBlockRef = Store.MemRef 0,
       txInfoConfirmations = 0,
-      txInfoPending = Just $ TxInfoPending (nosigHash tx) signed False,
+      txInfoPending = Just $ TxInfoPending (nosigHash tx) signed False False,
       txInfoDead = False
     }
   where

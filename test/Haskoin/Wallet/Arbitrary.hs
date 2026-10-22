@@ -208,6 +208,7 @@ arbitraryTxInfoPending =
     <$> arbitraryTxHash
     <*> arbitrary
     <*> arbitrary
+    <*> arbitrary
 
 arbitrarySyncRes :: Network -> Ctx -> Gen SyncRes
 arbitrarySyncRes net ctx =
@@ -215,6 +216,8 @@ arbitrarySyncRes net ctx =
     <$> arbitraryDBAccount net ctx
     <*> arbitraryBlockHash
     <*> arbitrary
+    <*> arbitraryNatural
+    <*> arbitraryNatural
     <*> arbitraryNatural
     <*> arbitraryNatural
 

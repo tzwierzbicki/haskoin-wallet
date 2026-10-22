@@ -808,7 +808,9 @@ pendingTxsParser = do
         [r|
 Pending transactions have been created with the `preparetx` command. They are
 either unsigned and waiting to be signed, or signed and waiting to be sent to
-the network.
+the network, or sent and waiting for the network to list them, at which point
+`syncacc` retires them. One reported as conflicted spends a coin that another
+transaction has spent, and can only be deleted.
 |]
 
 {- ReviewTx Parser -}
@@ -878,11 +880,14 @@ deleteTxParser = do
     progDesc "Delete a pending transaction"
       <> footer
         [r|
-A transaction that has been prepared with `preparetx` will lock the coins that
-it has spent to prevent double-spending them. A pending transaction can be
-deleted with `deletetx` to permanently remove it from the database. This will
-also free any coins that have been locked by it. This will only be possible as
-long as the transaction hasn't been signed and sent to the network.
+A transaction that has been prepared with `preparetx` locks the coins it
+spends, so that no other transaction spends them. `deletetx` removes a pending
+transaction from the database and frees its coins. A transaction that was sent
+with `sendtx` can only be deleted, abandoned, when the store no longer knows
+it: dropped from the nodes' mempools, or never accepted. One that the store
+still lists may yet confirm, and `syncacc` retires it once it does. A
+transaction `pendingtxs` reports as conflicted, one of its coins having been
+spent by another transaction, can no longer be sent and should be deleted.
 |]
 
 {- SignTx Parser -}
@@ -955,11 +960,20 @@ Once a transaction is signed, it can be sent to the network. This step is
 irreversible and the transaction will become effective. Make sure everything is
 correct with your transaction before sending it.
 
-A pending transaction of the wallet is sent by its NOSIGHASH and marked as
-online. A signed transaction in a file is sent with --input and the --network
-it is for: it is only checked and uploaded, nothing in the wallet is updated,
-so that a sweep that does not involve this wallet can be sent too. To track a
-transaction of the wallet, `importtx` the file and send it by its nosigHash.
+The transaction is handed to the store, which passes it to the network's
+nodes without checking it, so `sendtx` then waits up to ten seconds for the
+store to see it in its mempool, the only sign that the network accepted it. If
+the store does not see it, nothing is recorded and `sendtx` says so: the
+transaction may have been refused, for a fee below what the nodes relay for
+instance, or may just be slow to come back. Run `sendtx` again later.
+
+A pending transaction of the wallet is sent by its NOSIGHASH and, once seen,
+marked as online; `syncacc` then sends it again should the store lose it, and
+retires it once it is listed. A signed transaction in a file is sent with
+--input and the --network it is for: it is only checked and uploaded, nothing
+in the wallet is updated, so that a sweep that does not involve this wallet
+can be sent too. To track a transaction of the wallet, `importtx` the file and
+send it by its nosigHash.
 |]
 
 {- SyncAcc Parser -}
@@ -973,6 +987,12 @@ syncAccParser = do
         [r|
 The `syncacc` command will download the latest address balances, transactions
 and coins from the network. It will also update the account balances.
+
+It also looks after the pending transactions: one that was sent with `sendtx`
+and that the network now lists is retired; one that was sent but that the store
+no longer knows is sent again, since nodes forget unconfirmed transactions; one
+whose coin was spent by another transaction is reported as conflicted. A signed
+transaction that was never sent is left alone.
 |]
 
 fullOption :: Parser Bool

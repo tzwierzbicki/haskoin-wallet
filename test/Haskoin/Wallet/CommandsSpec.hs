@@ -13,7 +13,9 @@ import Control.Monad.Trans (lift)
 import Data.Default (def)
 import Data.Either
 import qualified Data.Aeson as Json
+import Data.IORef (IORef, modifyIORef, newIORef, readIORef)
 import qualified Data.Map as Map
+import qualified Data.Set as Set
 import Data.Maybe
 import qualified Data.Serialize as S
 import Database.Esqueleto.Legacy hiding (isNothing)
@@ -23,13 +25,14 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Util.Arbitrary
 import Haskoin.Wallet.Arbitrary
 import Haskoin.Wallet.CoinSelection (CoinSelection (..), FeePayer (..))
-import Haskoin.Wallet.Commands (Response (..), cmdSendTx)
+import Haskoin.Wallet.Commands (Response (..), cmdSendTx, deleteTx, sendPending)
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.TxBuilding
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo
+import Haskoin.Wallet.Sync (Store (..), broadcastWith)
 import Haskoin.Wallet.TxSigning (signWalletTx)
 import Haskoin.Wallet.Util
 import System.Random (StdGen, mkStdGen)
@@ -80,6 +83,7 @@ spec = do
           cmdSendTx ctx def Nothing (Just file) (Just btc)
             `shouldReturn` ResponseError "The transaction is not signed"
     testIdentity $ identityTests btc ctx
+    sendingSpec ctx
     describe "Database" $ do
       bestSpec
       accountSpec ctx
@@ -439,9 +443,8 @@ coinSpec ctx =
         dBCoinAccountDerivation dbCoin `shouldBe` "/44'/0'/0'"
         dBCoinAddress dbCoin `shouldBe` head externalAddrsText
         dBCoinConfirmed dbCoin `shouldBe` False
-        dBCoinLocked dbCoin `shouldBe` False
       -- Test JSON coins
-      let jsonCoin1 = forceRight $ toJsonCoin btc Nothing dbCoin
+      let jsonCoin1 = forceRight $ toJsonCoin btc Nothing Set.empty dbCoin
       liftIO $
         jsonCoin1
           `shouldBe` JsonCoin
@@ -513,33 +516,98 @@ coinSpec ctx =
       getSpendableCoins btc accId 0 `dbShouldBeE` [coin1'']
       getSpendableCoins btc accId 1 `dbShouldBeE` [coin1'']
       getSpendableCoins btc accId 2 `dbShouldBeE` []
-      -- Lock the coin
-      lift $ setLockCoin (OutPoint (fakeTxHash 0) 0) True `dbShouldBe` 1
-      coinPage btc accId (Page 5 0)
-        `dbShouldBeE` [ jsonCoin1
-                          { jsonCoinBlock = Store.BlockRef 10 0,
-                            jsonCoinConfirmations = 1,
-                            jsonCoinLocked = True
-                          }
-                      ]
-      getSpendableCoins btc accId 0 `dbShouldBeE` []
-      lift $ setLockCoin (OutPoint (fakeTxHash 0) 0) True `dbShouldBe` 0
-      lift $ setLockCoin (OutPoint (fakeTxHash 0) 0) False `dbShouldBe` 1
-      lift $ setLockCoin (OutPoint (fakeTxHash 0) 0) False `dbShouldBe` 0
-      coinPage btc accId (Page 5 0)
-        `dbShouldBeE` [ jsonCoin1
-                          { jsonCoinBlock = Store.BlockRef 10 0,
-                            jsonCoinConfirmations = 1,
-                            jsonCoinLocked = False
-                          }
-                      ]
-      getSpendableCoins btc accId 0 `dbShouldBeE` [coin1'']
-      getSpendableCoins btc accId 1 `dbShouldBeE` [coin1'']
-      getSpendableCoins btc accId 2 `dbShouldBeE` []
       -- Delete the coin
       refreshCoins btc accId externalAddrs [] `dbShouldBeE` (1, [])
       getSpendableCoins btc accId 0 `dbShouldBeE` []
       coinPage btc accId (Page 5 0) `dbShouldBeE` []
+
+-- | A store that knows the transaction of the signing data, in its mempool
+storeKnowing :: Ctx -> TxSignData -> FakeStore
+storeKnowing ctx tsd =
+  emptyStore {fakeTransactions = [creditTx ctx (txHash (txSignDataTx tsd)) (Store.MemRef 1700000000) (otherAddr 0) 1]}
+
+-- | The store, counting the times it is asked for transactions
+countingAsks :: IORef Int -> Store -> Store
+countingAsks asks store =
+  store
+    { storeTransactions = \tids -> do
+        liftIO $ modifyIORef asks (+ 1)
+        storeTransactions store tids
+    }
+
+-- | A signed payment of 8000 to otherAddr 0 from a coin of 20000 at
+-- externalAddr 0, stored as a pending transaction of the account
+signedPending :: Ctx -> Config -> DBAccountId -> ExceptT String (DB IO) (TxHash, TxSignData)
+signedPending ctx cfg accId = do
+  _ <- genExtAddress ctx cfg accId ""
+  _ <- nextFreeIntAddr ctx cfg accId
+  let fundTx1 = spendingTx ctx [(fakeTxHash 1, 0)] [(externalAddr 0, 20000)]
+      coin1 = storeCoin ctx (txHash fundTx1, 0) (Just 0) (externalAddr 0) 20000
+  lift $ insertRawTx fundTx1
+  _ <- refreshCoins btc accId externalAddrs [coin1]
+  unsigned <- buildTxSignData btc ctx cfg (mkStdGen 0) LeastWaste accId [(otherAddr 0, 8000)] 1 0 SenderPays 0 []
+  (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+  pendingHash <- importPendingTx btc ctx accId signed
+  return (pendingHash, signed)
+
+sendingSpec :: Ctx -> Spec
+sendingSpec ctx =
+  describe "Sending a pending transaction" $ do
+    let cfg = def :: Config
+        pendingOf response = case response of
+          ResponseTx _ info -> txInfoPending info
+          _ -> Nothing
+    it "marks it online once the store sees it, and stores its raw transaction" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        (pendingHash, signed) <- signedPending ctx cfg accId
+        response <- sendPending ctx (const (toStore (storeKnowing ctx signed))) pendingHash
+        liftIO $ pendingOf response `shouldBe` Just (TxInfoPending pendingHash True True False)
+        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
+          `dbShouldBeE` [Just (TxInfoPending pendingHash True True False)]
+        lift $ P.get (DBRawTxKey (txHashToHex (txHash (txSignDataTx signed)))) `dbShouldSatisfy` isJust
+    it "records nothing when the store does not see it, and says so" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        (pendingHash, _) <- signedPending ctx cfg accId
+        lift $
+          dbShouldFailWith "The transaction was handed to the network but the store has not seen it after 10 seconds. It stays signed and not online: run sendtx again later" $
+            sendPending ctx (const (toStore emptyStore)) pendingHash
+        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
+          `dbShouldBeE` [Just (TxInfoPending pendingHash True False False)]
+    it "refuses a transaction that is not signed" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        _ <- genExtAddress ctx cfg accId ""
+        let fundTx1 = spendingTx ctx [(fakeTxHash 1, 0)] [(externalAddr 0, 20000)]
+            coin1 = storeCoin ctx (txHash fundTx1, 0) (Just 0) (externalAddr 0) 20000
+        lift $ insertRawTx fundTx1
+        _ <- refreshCoins btc accId externalAddrs [coin1]
+        unsigned <- buildTxSignData btc ctx cfg (mkStdGen 0) LeastWaste accId [(otherAddr 0, 8000)] 1 0 SenderPays 0 []
+        pendingHash <- importPendingTx btc ctx accId unsigned
+        lift $
+          dbShouldFailWith "The transaction is not signed" $
+            sendPending ctx (const (toStore emptyStore)) pendingHash
+    it "gives up after the asks it is allowed" $ do
+      asks <- newIORef 0
+      let tx = spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 8000)]
+      runExceptT (broadcastWith 1000 3 (countingAsks asks (toStore emptyStore)) tx) `shouldReturn` Right False
+      readIORef asks `shouldReturn` 3
+    it "sees the transaction on the first ask" $ do
+      asks <- newIORef 0
+      let signed = TxSignData (spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 8000)]) [] [] [] Nothing True
+      runExceptT (broadcastWith 1000 3 (countingAsks asks (toStore (storeKnowing ctx signed))) (txSignDataTx signed))
+        `shouldReturn` Right True
+      readIORef asks `shouldReturn` 1
+    it "abandons a sent transaction the store does not know, freeing its coin" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        (pendingHash, _) <- signedPending ctx cfg accId
+        lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
+        (map jsonCoinLocked <$> coinPage btc accId (Page 5 0)) `dbShouldBeE` [True]
+        deleteTx ctx (const (toStore emptyStore)) pendingHash `dbShouldBeE` (1, 1)
+        (map jsonCoinLocked <$> coinPage btc accId (Page 5 0)) `dbShouldBeE` [False]
+        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0)) `dbShouldBeE` []
 
 checkFree :: Int -> Bool -> ExceptT String (DB IO) ()
 checkFree i free =
@@ -576,8 +644,8 @@ pendingTxsSpec ctx cfg =
       -- Insert two coins in the database
       (c, dbCoins) <- refreshCoins btc accId (externalAddrs <> internalAddrs) [coin1, coin2]
       liftIO $ c `shouldBe` 2
-      let jsonCoin1 = forceRight $ toJsonCoin btc Nothing (head dbCoins)
-          jsonCoin2 = forceRight $ toJsonCoin btc Nothing (dbCoins !! 1)
+      let jsonCoin1 = forceRight $ toJsonCoin btc Nothing Set.empty (head dbCoins)
+          jsonCoin2 = forceRight $ toJsonCoin btc Nothing Set.empty (dbCoins !! 1)
       tsd <- buildTxSignData btc ctx cfg gen LeastWaste accId [(otherAddr 0, 8000)] 1 0 SenderPays 1 []
       -- The outputs are compared by amount: the builder shuffles them
       liftIO $
@@ -606,7 +674,7 @@ pendingTxsSpec ctx cfg =
                         jsonCoin1 {jsonCoinLocked = True}
                       ]
       ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
-        `dbShouldBeE` [Just $ TxInfoPending h1 False False]
+        `dbShouldBeE` [Just $ TxInfoPending h1 False False False]
       -- Check address free status
       checkFree 0 False
       checkFree 1 False
@@ -642,8 +710,8 @@ pendingTxsSpec ctx cfg =
                         jsonCoin1 {jsonCoinLocked = True}
                       ]
       ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
-        `dbShouldBeE` [ Just $ TxInfoPending h2 False False,
-                        Just $ TxInfoPending h1 False False
+        `dbShouldBeE` [ Just $ TxInfoPending h2 False False False,
+                        Just $ TxInfoPending h1 False False False
                       ]
       checkFree 0 False
       checkFree 1 False
@@ -659,7 +727,7 @@ pendingTxsSpec ctx cfg =
                         jsonCoin1 {jsonCoinLocked = False}
                       ]
       ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
-        `dbShouldBeE` [Just $ TxInfoPending h2 False False]
+        `dbShouldBeE` [Just $ TxInfoPending h2 False False False]
       checkFree 0 False
       checkFree 1 True
       checkFree 2 False
@@ -688,8 +756,8 @@ pendingTxsSpec ctx cfg =
                         jsonCoin1 {jsonCoinLocked = True}
                       ]
       ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
-        `dbShouldBeE` [ Just $ TxInfoPending h3 False False,
-                        Just $ TxInfoPending h2 False False
+        `dbShouldBeE` [ Just $ TxInfoPending h3 False False False,
+                        Just $ TxInfoPending h2 False False False
                       ]
       checkFree 0 False
       checkFree 1 True
@@ -706,8 +774,8 @@ pendingTxsSpec ctx cfg =
                         jsonCoin1 {jsonCoinLocked = True}
                       ]
       ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
-        `dbShouldBeE` [ Just $ TxInfoPending h3 False False,
-                        Just $ TxInfoPending h2 True False
+        `dbShouldBeE` [ Just $ TxInfoPending h3 False False False,
+                        Just $ TxInfoPending h2 True False False
                       ]
       checkFree 0 False
       checkFree 1 True
@@ -722,19 +790,22 @@ pendingTxsSpec ctx cfg =
         setPendingTxOnline h2 `dbShouldBe` 1
         dbShouldFailWith "The transaction is already online" $
           importPendingTx btc ctx accId tsd2'
-        -- Can not delete an online transaction
-        dbShouldFail $ deletePendingTx ctx h2
+        -- An online transaction is deleted only when the store does not know it
+        dbShouldFailWith "The transaction is in the network's mempool or in the chain: syncacc retires it once it is listed" $
+          deleteTx ctx (const (toStore (storeKnowing ctx tsd2'))) h2
       ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
-        `dbShouldBeE` [ Just $ TxInfoPending h3 False False,
-                        Just $ TxInfoPending h2 True True
+        `dbShouldBeE` [ Just $ TxInfoPending h3 False False False,
+                        Just $ TxInfoPending h2 True True False
                       ]
+      -- Retired by the sync: nothing locks its coin any more (the sync
+      -- deletes the coin itself once the store shows it spent)
       lift $ deletePendingTxOnline $ DBPendingTxKey $ txHashToHex h2
       coinPage btc accId (Page 5 0)
-        `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = True},
+        `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = False},
                         jsonCoin1 {jsonCoinLocked = True}
                       ]
       ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
-        `dbShouldBeE` [Just $ TxInfoPending h3 False False]
+        `dbShouldBeE` [Just $ TxInfoPending h3 False False False]
       checkFree 0 False
       checkFree 1 True
       checkFree 2 False
@@ -771,7 +842,7 @@ pendingTxsSpec ctx cfg =
                 txSignDataSigned = False
               }
       (_, dbCoins3) <- refreshCoins btc accId (externalAddrs <> internalAddrs) [coin1, coin3]
-      let jsonCoin3 = forceRight $ toJsonCoin btc Nothing (head dbCoins3)
+      let jsonCoin3 = forceRight $ toJsonCoin btc Nothing Set.empty (head dbCoins3)
       coinPage btc accId (Page 5 0)
         `dbShouldBeE` [ jsonCoin3 {jsonCoinLocked = False},
                         jsonCoin1 {jsonCoinLocked = True}
@@ -791,9 +862,8 @@ pendingTxsSpec ctx cfg =
                 txSignDataFeeRate = Nothing,
                 txSignDataSigned = False
               }
-      -- The transaction is not being rolled back so we roll it back manually
+      -- The transaction is not being rolled back: the addresses stay
       replicateM_ 10 $ genExtAddress ctx cfg accId ""
-      _ <- lift $ setLockCoin (jsonCoinOutpoint jsonCoin3) False
       coinPage btc accId (Page 5 0)
         `dbShouldBeE` [ jsonCoin3 {jsonCoinLocked = False},
                         jsonCoin1 {jsonCoinLocked = True}

@@ -370,7 +370,7 @@ txInfoPrinter net unit TxInfo {..} =
       | otherwise = mempty
     pending =
       case txInfoPending of
-        Just (TxInfoPending nosigH signed online) ->
+        Just (TxInfoPending nosigH signed online conflicted) ->
           vcat
             [ keyPrinter 9 "NoSigHash"
                 <> formatNoSigTxHash (cs $ txHashToHex nosigH),
@@ -384,6 +384,12 @@ txInfoPrinter net unit TxInfo {..} =
                   keyPrinter 9 "Online"
                     <> text "This transaction is"
                       <+> formatTrue "online"
+                else mempty,
+              if conflicted
+                then
+                  keyPrinter 9 "Conflict"
+                    <> formatFalse "A coin it spends was spent by another transaction"
+                      <+> text "and it can no longer be sent; delete it with deletetx"
                 else mempty
             ]
         _ -> keyPrinter 9 "Confs" <> formatValue (show txInfoConfirmations)
@@ -546,7 +552,7 @@ prettyPrinter unit =
             text "-----END BITCOIN SIGNED MESSAGE-----"
           ]
     ResponseSync xs -> do
-      let f (SyncRes acc bh h t c) =
+      let f (SyncRes acc bh h t c r k) =
             [ accountPrinter unit acc,
               formatTitle "Sync Results:",
               nest 2 $
@@ -554,7 +560,9 @@ prettyPrinter unit =
                   <> formatBlockHash (cs $ blockHashToHex bh),
               nest 2 $ keyPrinter 12 "Best Height" <> formatValue (show h),
               nest 2 $ keyPrinter 12 "Tx updates" <> formatValue (show t),
-              nest 2 $ keyPrinter 12 "Coin updates" <> formatValue (show c)
+              nest 2 $ keyPrinter 12 "Coin updates" <> formatValue (show c),
+              nest 2 $ keyPrinter 12 "Sent again" <> formatValue (show r),
+              nest 2 $ keyPrinter 12 "Conflicted" <> formatValue (show k)
             ]
       renderIO $ vcat $ intercalate [text " "] (f <$> xs)
     ResponseVersion v dbv ->

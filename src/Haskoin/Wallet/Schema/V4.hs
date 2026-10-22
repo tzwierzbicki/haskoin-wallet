@@ -15,10 +15,8 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 
--- | The tables of the database format version 4, the format of hw 0.10 and
--- the latest one: "Haskoin.Wallet.Database" exports them again as the tables
--- of the wallet. They stay here as they are once a later version changes
--- them, so that the step to that version still has them.
+-- | The tables of the database format version 4, kept as they were for the
+-- step to version 5, which reads them: "Haskoin.Wallet.Migration.V5".
 --
 -- Version 4 added the dead column to the transaction summaries: whether the
 -- transaction was replaced or dropped from the network.
