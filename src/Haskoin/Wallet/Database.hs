@@ -1,21 +1,4 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE EmptyDataDecls #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE TupleSections #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE UndecidableInstances #-}
-{-# OPTIONS_GHC -fno-warn-orphans #-}
 
 -- | The wallet database: the connection and its lock, and what every table
 -- shares. The tables are those of the latest format version, defined in
@@ -36,13 +19,13 @@ import Control.Lens ((&), (.~))
 import Control.Monad
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Logger (NoLoggingT, runNoLoggingT)
-import Control.Monad.Reader (MonadTrans (lift), ReaderT)
+import Control.Monad.Reader (ReaderT)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Database.Esqueleto.Legacy as E
 import Database.Persist.SqlBackend.Internal (SqlBackend (..))
-import Database.Persist.Sqlite (Statement (..), extraPragmas, mkSqliteConnectionInfo, runSqlConn, withSqliteConnInfo)
+import Database.Persist.Sqlite (extraPragmas, mkSqliteConnectionInfo, withSqliteConnInfo)
 import Database.Sqlite (Error (..), SqliteException (..))
 import Haskoin
 import Haskoin.Wallet.Config

@@ -1,22 +1,8 @@
-{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TupleSections #-}
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE EmptyDataDecls #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE UndecidableInstances #-}
-{-# OPTIONS_GHC -fno-warn-orphans #-}
 
 -- | The transaction summaries of the wallet: what a transaction means to
 -- an account, with its amounts and the inputs and outputs that are the
@@ -24,11 +10,11 @@
 -- rows in the database, which the sync keeps up to date.
 module Haskoin.Wallet.TxInfo where
 
-import Conduit (MonadUnliftIO, ResourceT, runResourceT)
+import Conduit (MonadUnliftIO)
 import Control.Monad
 import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
-import Control.Monad.Reader (MonadTrans (lift), ReaderT)
+import Control.Monad.Reader (MonadTrans (lift))
 import Control.Monad.Trans.Maybe
 import Data.Aeson
 import qualified Data.Aeson as Json
@@ -36,7 +22,7 @@ import qualified Data.ByteString as BS
 import Data.Either (partitionEithers)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes, fromJust, fromMaybe, isJust, mapMaybe)
+import Data.Maybe (fromMaybe)
 import qualified Data.Serialize as S
 import Data.Text (Text)
 import Data.Time (getCurrentTime)

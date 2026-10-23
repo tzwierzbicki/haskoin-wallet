@@ -1,21 +1,5 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE EmptyDataDecls #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedRecordDot #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE TupleSections #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE UndecidableInstances #-}
-{-# OPTIONS_GHC -fno-warn-orphans #-}
 
 -- | The pending transactions of an account, from preparation to the
 -- network: stored with their signing data, holding the coins they spend,
@@ -23,17 +7,17 @@
 -- commands of hw are thin layers over the functions here.
 module Haskoin.Wallet.PendingTx where
 
-import Conduit (MonadUnliftIO, ResourceT, runResourceT)
+import Conduit (MonadUnliftIO)
 import Control.Arrow (Arrow (second))
 import Control.Monad
 import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
-import Control.Monad.Reader (MonadTrans (lift), ReaderT)
+import Control.Monad.Reader (MonadTrans (lift))
 import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
-import Data.List (find, nub, partition)
+import Data.List (nub, partition)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes, fromJust, fromMaybe, isJust, mapMaybe)
+import Data.Maybe (isJust)
 import qualified Data.Maybe as Maybe
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -165,7 +149,11 @@ conflictedInputs txInfo = filterM missing outpoints
     (outpoints, _, _) = parseTxInfoU txInfo
     missing outpoint = Maybe.isNothing <$> P.get (DBCoinKey $ outpointText outpoint)
 
--- Imports a pending transaction, locks coins and locks internal addresses
+-- | Store a transaction of the account as pending, which locks the coins it
+-- spends and marks its change address busy. Importing a transaction the
+-- account already holds replaces it with the newer version, signed where
+-- it was unsigned; the transaction itself, its inputs and outputs, cannot
+-- change, since the hash identifying it leaves the signatures out.
 importPendingTx ::
   (MonadUnliftIO m) =>
   Network ->
@@ -187,9 +175,11 @@ importPendingTx net ctx accId tsd@(TxSignData tx _ _ _ _ signed) = do
         throwError "Can not replace a signed transaction with an unsigned one"
       when (prevTx == tx) $
         throwError "The transaction already exists"
-      when (not prevSigned && signed) $ do
-        let key = DBPendingTxKey $ txHashToHex pendingHash
-        lift $ P.update key [DBPendingTxBlob P.=. bs]
+      -- What is left is the signed version of an unsigned transaction, or
+      -- another valid signature of a signed one: the wallet holds the
+      -- version imported last
+      let key = DBPendingTxKey $ txHashToHex pendingHash
+      lift $ P.update key [DBPendingTxBlob P.=. bs]
       return pendingHash
     Nothing -> do
       txInfoU <- liftEither $ parseTxSignData net ctx pub tsd
