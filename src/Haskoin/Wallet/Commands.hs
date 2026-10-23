@@ -45,7 +45,7 @@ import Haskoin.Wallet.TxBuilding
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSigning (parseTxSignData, signWalletTx, verifySignedTx)
-import Haskoin.Wallet.TxSweep
+import Haskoin.Wallet.TxSweep (buildSweepSignData, fetchSweepCoins, signTxWithKeys)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import qualified Paths_haskoin_wallet as Paths

@@ -288,7 +288,7 @@ givenCoinsSpec ctx =
       coinsOfTransactions [(fakeTxHash 7, 1)] [storeFunding]
         `shouldBe` Left "Coin 0000000000000000000000000000000000000000000000000000000000000007 1 is unknown to the store"
     it "refuses a coin of a transaction the store reports as deleted" $
-      coinsOfTransactions [(txHash keyFunding, 0)] [storeFunding {Store.deleted = True}]
+      coinsOfTransactions [(txHash keyFunding, 0)] [replaced storeFunding]
         `shouldBe` Left ("Coin " <> fundingHex <> " 0 is unknown to the store")
     it "refuses an output index past the last output" $
       coinsOfTransactions [(txHash keyFunding, 4)] [storeFunding]

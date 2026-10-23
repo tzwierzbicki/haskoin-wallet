@@ -246,10 +246,11 @@ getAccountNames = do
     return $ a ^. DBAccountName
   return $ unValue <$> res
 
+-- | Rename an account. Renaming it to its own name changes nothing.
 renameAccount ::
   (MonadUnliftIO m) => Text -> Text -> ExceptT String (DB m) DBAccount
 renameAccount oldName newName
-  | oldName == newName = throwError "Old and new names are the same"
+  | oldName == newName = snd <$> getAccountByName (Just oldName)
   | otherwise = do
       e <- lift $ existsAccount newName
       if e

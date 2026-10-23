@@ -74,7 +74,7 @@ analysisSpec ctx =
       -- The estimate: 10 bytes, 148 for the input and 34 for each output
       info.txInfoSize `shouldBe` 226
       info.txInfoFeeByte `shouldBe` 44247
-      info.txInfoPending `shouldBe` Just (TxInfoPending nosigHash False False False)
+      info.txInfoPending `shouldBe` Just (TxInfoPending simpleNosigHash False False False)
       -- Without the requested fee rate, no change in the fee can be told
       info.txInfoChangeInFee `shouldBe` Nothing
       -- The wallet's input, with what signing it needs, and its change
@@ -101,7 +101,7 @@ analysisSpec ctx =
       -- estimate assumes: 10 + 148 + 2 * 34
       info.txInfoSize `shouldBe` 226
       info.txInfoFeeByte `shouldBe` 44247
-      info.txInfoPending `shouldBe` Just (TxInfoPending nosigHash True False False)
+      info.txInfoPending `shouldBe` Just (TxInfoPending simpleNosigHash True False False)
     it "reports the change too small for an output that the fee includes" $ do
       -- A coin of 352500 pays 350000 at 10 satoshis per byte: the fee is
       -- 2500, 580 beyond the 10 + 148 + 34 = 192 bytes * 10 = 1920 of the
@@ -125,7 +125,7 @@ analysisSpec ctx =
   where
     unsigned = simpleTransaction ctx
     accountPub = testAccountPub ctx
-    nosigHash = "9b41b3cb7b10bfd1dc3f7f1885ce3623789b1b946d206fd59fb432ad4fdb6d70"
+    simpleNosigHash = "9b41b3cb7b10bfd1dc3f7f1885ce3623789b1b946d206fd59fb432ad4fdb6d70"
 
 {- Signing -}
 

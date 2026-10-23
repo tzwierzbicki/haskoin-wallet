@@ -36,7 +36,7 @@ import Data.Function (on)
 import Data.List (find, nub, nubBy)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, isJust, listToMaybe, mapMaybe)
+import Data.Maybe (isJust, listToMaybe, mapMaybe)
 import Data.String.Conversions (cs)
 import Data.Word (Word64)
 import Haskoin

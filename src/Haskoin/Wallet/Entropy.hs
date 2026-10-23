@@ -9,7 +9,7 @@ import Control.Monad.Except
 import Control.Monad.IO.Class ( MonadIO, liftIO )
 import Data.Bits (Bits (setBit, xor))
 import qualified Data.ByteString as BS
-import Data.List (foldl', nub)
+import Data.List (nub)
 import Data.Text (Text)
 import Data.Word (Word8)
 import Haskoin.Crypto (Mnemonic, toMnemonic, fromMnemonic)
@@ -140,8 +140,13 @@ mergeMnemonicParts mnems
   | length (nub mnems) /= length mnems = Left "Two mnemonics are identical"
   | otherwise = do
       bs <- mapM fromMnemonic mnems
-      let ent = foldl' xorBytes (head bs) (tail bs)
-      toMnemonic ent
+      toMnemonic (xorAll bs)
+
+-- | Several entropies combined into one, each bit the exclusive or of the
+-- corresponding bits. Nothing comes out of an empty list.
+xorAll :: [BS.ByteString] -> BS.ByteString
+xorAll [] = BS.empty
+xorAll (first : rest) = foldl' xorBytes first rest
 
 {- Dice rolls from the user -}
 
@@ -207,7 +212,7 @@ genMnemonic reqEnt reqDice splitIn
       if splitIn > 1
         then do
           ks <- liftIO $ splitEntropy splitIn ent
-          unless (ent == foldl' xorBytes (head ks) (tail ks)) $
+          unless (ent == xorAll ks) $
             throwError "Something went wrong while splitting the keys"
           splitMnems <- liftEither $ mapM toMnemonic ks
           unsplitMnem <- liftEither $ mergeMnemonicParts splitMnems
