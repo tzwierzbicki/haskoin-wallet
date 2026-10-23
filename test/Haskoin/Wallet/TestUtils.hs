@@ -34,6 +34,8 @@ import Haskoin.Wallet.Account (insertAccount, nextAccountDeriv)
 import Haskoin.Wallet.Database (DB, DBAccount, DBAccountId, migrateAll)
 import Haskoin.Wallet.Keys (MnemonicPass (..), signingKey, walletFingerprint)
 import Haskoin.Wallet.Store
+import Haskoin.Wallet.TxSignData (TxSignData (..))
+import Haskoin.Wallet.TxSigning (signWalletTx)
 import Numeric.Natural (Natural)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getTemporaryDirectory, listDirectory, removeDirectoryRecursive)
 import System.FilePath ((</>))
@@ -412,6 +414,11 @@ testAccountXPub = "xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZa
 
 testAccountKey :: XPrvKey
 testAccountKey = fromMaybe (error "testAccountKey") $ xPrvImport btc testAccountXPrv
+
+-- | The signing data signed with the account key of the test wallet, for
+-- the fixtures that need a transaction with real signatures
+signedByWallet :: Ctx -> TxSignData -> TxSignData
+signedByWallet ctx tsd = fst $ forceRight $ signWalletTx btc ctx tsd testAccountKey
 
 testAccountPub :: Ctx -> XPubKey
 testAccountPub ctx = fromMaybe (error "testAccountPub") $ xPubImport btc ctx testAccountXPub

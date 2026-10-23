@@ -766,10 +766,18 @@ realPayoutAllSpentStore ctx =
     payoutRef = Store.TxRef (Store.BlockRef 800000 1) tid
     spendRef n = Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash n)
 
--- | The wallet's own payment from the coin of 'realPaymentStore': 40000 to
--- otherAddr 0 and 9000 of change to internalAddr 0, 1000 of fee
+-- | The wallet's own payment from the coin of 'realPaymentStore', signed:
+-- 40000 to otherAddr 0 and 9000 of change to internalAddr 0, 1000 of fee
 changeSpendTx :: Ctx -> Tx
-changeSpendTx ctx = spendingTx ctx [(realPaymentId ctx, 0)] [(otherAddr 0, 40000), (internalAddr 0, 9000)]
+changeSpendTx ctx =
+  txSignDataTx $
+    signedByWallet ctx $
+      TxSignData
+        (spendingTx ctx [(realPaymentId ctx, 0)] [(otherAddr 0, 40000), (internalAddr 0, 9000)])
+        [realPaymentTx ctx]
+        [Deriv :/ 0 :/ 0]
+        [Deriv :/ 1 :/ 0]
+        Nothing
 
 -- | The payment of 'realPaymentStore' spent by 'changeSpendTx', confirmed
 -- at height 800001: the coin is gone, the change is a coin at internalAddr 0
@@ -874,15 +882,27 @@ fewerTxsStore :: Ctx -> FakeStore
 fewerTxsStore ctx =
   (paymentStore ctx) {fakeBalances = [Store.Balance (externalAddr 0) 50000 0 1 2 50000]}
 
--- | A transaction of ours, signed and waiting to be sent: it pays
--- externalAddr 0 from a fake coin
+-- | The coin of 'pendingTx': 51000 paid to externalAddr 0
+pendingParent :: Ctx -> Tx
+pendingParent ctx = fundingTx ctx 9 [(externalAddr 0, 51000)]
+
+-- | A transaction of ours, signed and waiting to be sent: it moves the coin
+-- of 'pendingParent' back to externalAddr 0, for a fee of 1000
 pendingTx :: Ctx -> Tx
-pendingTx ctx = spendingTx ctx [(fakeTxHash 9, 0)] [(externalAddr 0, 50000)]
+pendingTx ctx =
+  txSignDataTx $
+    signedByWallet ctx $
+      TxSignData
+        (spendingTx ctx [(txHash (pendingParent ctx), 0)] [(externalAddr 0, 50000)])
+        [pendingParent ctx]
+        [Deriv :/ 0 :/ 0]
+        [Deriv :/ 0 :/ 0]
+        Nothing
 
 -- | The coin of 'realPaymentStore' spent to otherAddr 0, with its signing
--- data as the wallet keeps it, marked signed
+-- data as the wallet keeps it, signed
 signedSpend :: Ctx -> TxSignData
-signedSpend ctx = (unsignedSpend ctx) {txSignDataSigned = True}
+signedSpend ctx = signedByWallet ctx (unsignedSpend ctx)
 
 unsignedSpend :: Ctx -> TxSignData
 unsignedSpend ctx =
@@ -892,7 +912,6 @@ unsignedSpend ctx =
     [Deriv :/ 0 :/ 0]
     []
     (Just 10)
-    False
 
 -- | The payment of 'realPaymentStore' spent by somebody else's transaction
 -- 8, confirmed at height 800001: the coin is gone
@@ -939,7 +958,7 @@ pendingRow (DBAccountKey wallet accDeriv) tx =
     { dBPendingTxAccountWallet = wallet,
       dBPendingTxAccountDerivation = accDeriv,
       dBPendingTxNosigHash = txHashToHex (nosigHash tx),
-      dBPendingTxBlob = BS.toStrict $ Json.encode $ TxSignData tx [] [] [] Nothing True,
+      dBPendingTxBlob = BS.toStrict $ Json.encode $ TxSignData tx [] [] [] Nothing,
       dBPendingTxOnline = False,
       dBPendingTxCreated = fixtureTime
     }
@@ -999,4 +1018,4 @@ rawTransactionCount = lift $ P.count ([] :: [P.Filter DBRawTx])
 pendingHashes :: DBAccountId -> ExceptT String (DB IO) [TxHash]
 pendingHashes accId = do
   pending <- pendingTxs accId
-  return [txHash (txSignDataTx (pendingTxData p)) | p <- pending, txSignDataSigned (pendingTxData p)]
+  return [txHash (txSignDataTx (pendingTxData p)) | p <- pending, isSigned (txSignDataTx (pendingTxData p))]

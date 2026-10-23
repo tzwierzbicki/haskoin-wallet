@@ -113,7 +113,6 @@ arbitraryTxSignData net ctx =
     <*> resize 10 (listOf arbitrarySoftPath)
     <*> resize 10 (listOf arbitrarySoftPath)
     <*> arbitraryMaybe arbitraryNatural
-    <*> arbitrary
 
 arbitraryMyOutputs :: Gen MyOutputs
 arbitraryMyOutputs =

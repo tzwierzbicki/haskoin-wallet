@@ -99,7 +99,7 @@ buildTxSignData net ctx cfg gen strategy accId recipients feeByte dust payer min
   found <- fetchWalletCoins net ctx cfg accId (fst <$> recipients) minConf
   built <- liftEither $ buildWalletTx net ctx gen strategy found recipients feeByte dust payer coinControl
   spentFrom <- mapM getRawTx $ nub $ (.outpoint.hash) <$> built.tx.inputs
-  return $ TxSignData built.tx spentFrom built.inputPaths built.outputPaths (Just feeByte) False
+  return $ TxSignData built.tx spentFrom built.inputPaths built.outputPaths (Just feeByte)
 
 -- | Fetch the spendable coins of the account with their derivation paths,
 -- its next free change address, and the paths of the recipients that are
@@ -176,7 +176,10 @@ buildWalletTx net ctx gen strategy found recipients feeByte dust payer coinContr
     let hasChange = chosen.changeAmount > 0
     paid <- lift $ case payer of
       SenderPays -> return recipients
-      RecipientsPay -> recipientsPayFee (payment.amount - chosen.paid) recipients
+      RecipientsPay -> do
+        -- A fee at or above the amount leaves the recipients nothing
+        when (chosen.paid == 0) $ Left "Recipients can't pay for the fee"
+        recipientsPayFee (payment.amount - chosen.paid) recipients
     let outputs = [(fst found.change, chosen.changeAmount) | hasChange] <> (second fromIntegral <$> paid)
     when (any ((< payment.dust) . snd) outputs) $
       throwError "Recipient output is smaller than the dust value"
@@ -196,9 +199,9 @@ buildWalletTx net ctx gen strategy found recipients feeByte dust payer coinContr
           amount = sum $ fromIntegral . snd <$> recipients
         }
     coinPath :: Store.Unspent -> Either String SoftPath
-    coinPath coin =
-      maybeToEither "A chosen coin has no derivation path" $
-        (`Map.lookup` found.coinPaths) =<< coin.address
+    coinPath coin = do
+      addr <- maybeToEither "A chosen coin has no address" coin.address
+      maybeToEither "A chosen coin has no derivation path" $ Map.lookup addr found.coinPaths
 
 -- | The size of the output paying a recipient. An address that cannot be
 -- paid is counted as P2PKH; the builder refuses it further down.

@@ -18,8 +18,7 @@
         "inputpaths": [],
         "outputpaths": [
           "/0/0"
-        ],
-        "signed": false
+        ]
       },
       "expect": "error",
       "error": "There are no private keys to sign",
@@ -46,8 +45,7 @@
         "inputpaths": [],
         "outputpaths": [
           "/0/0"
-        ],
-        "signed": false
+        ]
       },
       "expect": "error",
       "error": "No private key for input 1 (1F83LVL8YKm4ugbNt2ePFVmsyoiHrx4NF7)",
@@ -74,8 +72,7 @@
         "inputpaths": [],
         "outputpaths": [
           "/0/0"
-        ],
-        "signed": false
+        ]
       },
       "expect": "error",
       "error": "No private key for input 0 (18FtYoEJipP5bCJnjgWdeeEbxSvozSjEUA)",
@@ -105,12 +102,11 @@
         "inputpaths": [],
         "outputpaths": [
           "/0/0"
-        ],
-        "signed": true
+        ]
       },
       "expect": "error",
       "error": "The transaction is already signed",
-      "comment": "The signed hw/btc/sweep-credit transaction, marked as signed."
+      "comment": "The signed hw/btc/sweep-credit transaction: every input already carries a signature."
     },
     {
       "name": "edge/sweep-p2sh-unknown-redeem",
@@ -131,8 +127,7 @@
           "010000000129000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0100e1f5050000000017a9148b0d28d6675ca870537c5562461475d47e032c228700000000"
         ],
         "inputpaths": [],
-        "outputpaths": [],
-        "signed": false
+        "outputpaths": []
       },
       "expect": "error",
       "error": "No private key for input 0 (3ENFcYiwpwiBv54iSjPgM33xFsjuw8SBLY)",
@@ -157,8 +152,7 @@
           "01000000012a000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0100e1f50500000000220020c4ad09ac88e583c86e730ad435d2bab0b896b3e7035c5bdfe8785ebc885c9e5b00000000"
         ],
         "inputpaths": [],
-        "outputpaths": [],
-        "signed": false
+        "outputpaths": []
       },
       "expect": "error",
       "error": "Unsupported output script for input 0 (bc1qcjksntygukpusmnnpt2rt546kzufdvl8qdw9hhlg0p0tezzuneds5w7se8)",

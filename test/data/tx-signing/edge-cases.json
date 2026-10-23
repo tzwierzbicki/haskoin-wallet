@@ -19,12 +19,11 @@
         ],
         "outputpaths": [
           "/1/0"
-        ],
-        "signed": true
+        ]
       },
       "expect": "error",
       "error": "The transaction is already signed",
-      "comment": "The TxSignData is already marked as signed (the signed hw/btc/debit transaction)."
+      "comment": "The signed hw/btc/debit transaction: every input already carries a signature."
     },
     {
       "name": "edge/no-inputs",
@@ -38,8 +37,7 @@
         "tx": "01000000000000000000",
         "txinputs": [],
         "inputpaths": [],
-        "outputpaths": [],
-        "signed": false
+        "outputpaths": []
       },
       "expect": "error",
       "error": "The transaction has no inputs",
@@ -61,8 +59,7 @@
         "inputpaths": [
           "/0/0"
         ],
-        "outputpaths": [],
-        "signed": false
+        "outputpaths": []
       },
       "expect": "error",
       "error": "The transaction has no outputs",
@@ -84,8 +81,7 @@
         "inputpaths": [
           "/0/0"
         ],
-        "outputpaths": [],
-        "signed": false
+        "outputpaths": []
       },
       "expect": "error",
       "error": "The transaction spends the same coin twice",
@@ -107,8 +103,7 @@
         ],
         "outputpaths": [
           "/1/0"
-        ],
-        "signed": false
+        ]
       },
       "expect": "error",
       "error": "Referenced input transactions are missing",
@@ -132,8 +127,7 @@
         ],
         "outputpaths": [
           "/1/0"
-        ],
-        "signed": false
+        ]
       },
       "expect": "error",
       "error": "Input derivations don't match the transaction inputs",
@@ -157,8 +151,7 @@
         ],
         "outputpaths": [
           "/1/1"
-        ],
-        "signed": false
+        ]
       },
       "expect": "error",
       "error": "Output derivations don't match the transaction outputs",
@@ -180,8 +173,7 @@
         "inputpaths": [
           "/0/0"
         ],
-        "outputpaths": [],
-        "signed": false
+        "outputpaths": []
       },
       "expect": "error",
       "error": "There are non-standard outputs in the transaction",
@@ -203,8 +195,7 @@
         "inputpaths": [
           "/0/0"
         ],
-        "outputpaths": [],
-        "signed": false
+        "outputpaths": []
       },
       "expect": "error",
       "error": "Fee is negative",
@@ -228,8 +219,7 @@
         ],
         "outputpaths": [
           "/1/0"
-        ],
-        "signed": false
+        ]
       },
       "expect": "error",
       "error": "Input derivations don't match the transaction inputs",
@@ -253,8 +243,7 @@
         ],
         "outputpaths": [
           "/1/4"
-        ],
-        "signed": false
+        ]
       },
       "expect": "error",
       "error": "input 1 (18FtYoEJipP5bCJnjgWdeeEbxSvozSjEUA) does not belong to the wallet",
@@ -278,8 +267,7 @@
         ],
         "outputpaths": [
           "/1/4"
-        ],
-        "signed": false
+        ]
       },
       "expect": "error",
       "error": "Invalid signature for input 1 (18FtYoEJipP5bCJnjgWdeeEbxSvozSjEUA)",
@@ -301,8 +289,7 @@
         "inputpaths": [
           "/0/10"
         ],
-        "outputpaths": [],
-        "signed": false
+        "outputpaths": []
       },
       "expect": "error",
       "error": "input 0 (16jj9LFEK2ULQ9dMkDArv6ud4xVQVbWyfX) is not a P2PKH coin",
@@ -322,8 +309,7 @@
           "01000000011e000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0100e1f50500000000015100000000"
         ],
         "inputpaths": [],
-        "outputpaths": [],
-        "signed": false
+        "outputpaths": []
       },
       "expect": "error",
       "error": "There are non-standard inputs in the transaction",
@@ -346,8 +332,7 @@
           "/0/11",
           "/0/11"
         ],
-        "outputpaths": [],
-        "signed": false
+        "outputpaths": []
       },
       "expect": "error",
       "error": "Input derivations don't match the transaction inputs",
@@ -372,8 +357,7 @@
         "outputpaths": [
           "/1/0",
           "/1/0"
-        ],
-        "signed": false
+        ]
       },
       "expect": "error",
       "error": "Output derivations don't match the transaction outputs",

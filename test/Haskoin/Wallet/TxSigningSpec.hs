@@ -50,7 +50,7 @@ walletSigner ctx v = do
 -- the hw/btc/debit vector of test/data/tx-signing.
 simpleTransaction :: Ctx -> TxSignData
 simpleTransaction ctx =
-  TxSignData tx [simpleFunding ctx] [Deriv :/ 0 :/ 0] [Deriv :/ 1 :/ 0] Nothing False
+  TxSignData tx [simpleFunding ctx] [Deriv :/ 0 :/ 0] [Deriv :/ 1 :/ 0] Nothing
   where
     tx = spendingTx ctx [(txHash (simpleFunding ctx), 0)] [(otherAddr 0, 50000000), (internalAddr 0, 40000000)]
 
@@ -108,7 +108,7 @@ analysisSpec ctx =
       -- transaction. Signing does not change it: the estimated size counts.
       let funding = fundingTx ctx 1 [(externalAddr 0, 352500)]
           tx = spendingTx ctx [(txHash funding, 0)] [(otherAddr 0, 350000)]
-          tsd = TxSignData tx [funding] [Deriv :/ 0 :/ 0] [] (Just 10) False
+          tsd = TxSignData tx [funding] [Deriv :/ 0 :/ 0] [] (Just 10)
       info <- expectRight $ parseTxSignData btc ctx accountPub tsd
       info.txInfoFee `shouldBe` 2500
       info.txInfoChangeInFee `shouldBe` Just 580
@@ -119,7 +119,7 @@ analysisSpec ctx =
       -- A coin of 351920 pays 350000: 1920 of fee, exactly 192 bytes * 10
       let funding = fundingTx ctx 1 [(externalAddr 0, 351920)]
           tx = spendingTx ctx [(txHash funding, 0)] [(otherAddr 0, 350000)]
-          tsd = TxSignData tx [funding] [Deriv :/ 0 :/ 0] [] (Just 10) False
+          tsd = TxSignData tx [funding] [Deriv :/ 0 :/ 0] [] (Just 10)
       info <- expectRight $ parseTxSignData btc ctx accountPub tsd
       info.txInfoChangeInFee `shouldBe` Just 0
   where
@@ -135,7 +135,7 @@ signingSpec ctx =
     it "refuses to sign a transaction without fee" $ do
       -- The coin of 1 BTC is sent in full
       let tx = spendingTx ctx [(txHash (simpleFunding ctx), 0)] [(otherAddr 0, 100000000)]
-          unsigned = TxSignData tx [simpleFunding ctx] [Deriv :/ 0 :/ 0] [] Nothing False
+          unsigned = TxSignData tx [simpleFunding ctx] [Deriv :/ 0 :/ 0] [] Nothing
       signWalletTx btc ctx unsigned testAccountKey `shouldBe` Left "The transaction pays no fee"
 
 {- Verification -}
@@ -222,7 +222,7 @@ walletTransaction ctx = do
         | negate net == toInteger fee = TxInternal
         | otherwise = TxDebit
   return
-    ( TxSignData tx [funding] (pathsOf (fst <$> coins)) (pathsOf (fst <$> outputs)) Nothing False,
+    ( TxSignData tx [funding] (pathsOf (fst <$> coins)) (pathsOf (fst <$> outputs)) Nothing,
       Expected {expectedFee = fee, expectedAmount = net, expectedType = kind}
     )
   where
