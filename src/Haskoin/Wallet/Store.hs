@@ -1,7 +1,5 @@
-{-# LANGUAGE DisambiguateRecordFields #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedRecordDot #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 -- | The store, as the wallet asks it: a record of questions that hw fills
 -- with the web client of a haskoin-store ('webStore') and that the tests
@@ -13,7 +11,7 @@ module Haskoin.Wallet.Store where
 import Control.Concurrent (threadDelay)
 import Control.Monad
 import Control.Monad.Except
-import Control.Monad.Reader (MonadIO (..), MonadTrans (lift))
+import Control.Monad.Reader (MonadIO (..))
 import Data.Default (def)
 import Data.String.Conversions (cs)
 import Haskoin

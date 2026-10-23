@@ -1,27 +1,25 @@
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 {-# OPTIONS_GHC -Wno-ambiguous-fields -fno-warn-orphans #-}
 
--- | The pending transactions of an account: prepared, held, signed in
--- place, sent and deleted
+-- | The pending transactions of an account: imported, held, listed, signed
+-- in place, sent and deleted. The account of these tests holds a coin of
+-- 20000 at its first external address, and its payment is 8000 to an
+-- outside address, with the change at its first internal address. Some
+-- tests give it a second coin, of 10000 at its second external address.
 module Haskoin.Wallet.PendingTxSpec (spec) where
 
 import Conduit (liftIO)
-import Control.Monad
 import Control.Monad.Except
 import Control.Monad.Trans (lift)
 import Data.Default (def)
-import Data.Either
 import Data.IORef (IORef, modifyIORef, newIORef, readIORef)
-import Data.Maybe
-import qualified Data.Set as Set
-import Database.Esqueleto.Legacy hiding (isNothing)
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Address
-import Haskoin.Wallet.BestBlock
 import Haskoin.Wallet.Coin
 import Haskoin.Wallet.CoinSelection (CoinSelection (..), FeePayer (..))
 import Haskoin.Wallet.Config
@@ -33,38 +31,40 @@ import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxBuilding
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData
-import Haskoin.Wallet.TxSigning (signWalletTx)
+import Haskoin.Wallet.TxSigning (signWalletTx, verifySignedTx)
 import Haskoin.Wallet.Util
-import System.Random (StdGen, mkStdGen)
+import Numeric.Natural (Natural)
+import System.Random (mkStdGen)
 import Test.Hspec
 
 spec :: Spec
 spec =
   prepareContext $ \ctx -> do
-    let cfg = def :: Config
-    describe "Pending transactions" $ pendingTxsSpec ctx cfg
+    importingSpec ctx
+    listingSpec ctx
     sendingSpec ctx
-
--- | A fixed seed for the transactions built in these tests
-gen :: StdGen
-gen = mkStdGen 0
-
--- | The signing data with the outputs of its transaction sorted by amount
-unshuffled :: TxSignData -> TxSignData
-unshuffled tsd = tsd {txSignDataTx = sortedOutputs (txSignDataTx tsd)}
-
-checkFree :: Int -> Bool -> ExceptT String (DB IO) ()
-checkFree i free =
-  lift $
-    ( dBAddressFree . entityVal . fromJust
-        <$> P.getBy (UniqueAddress (internalAddrsText !! i))
-    )
-      `dbShouldBe` free
+    deletingSpec ctx
 
 -- | A store that knows the transaction of the signing data, in its mempool
 storeKnowing :: Ctx -> TxSignData -> FakeStore
 storeKnowing ctx tsd =
   emptyStore {fakeTransactions = [creditTx ctx (txHash (txSignDataTx tsd)) (Store.MemRef 1700000000) (otherAddr 0) 1]}
+
+-- | A store that saw the transaction of the signing data and then dropped
+-- it, replaced in its mempool by another transaction: it still lists it,
+-- as deleted
+storeThatDropped :: Ctx -> TxSignData -> FakeStore
+storeThatDropped ctx tsd = known {fakeTransactions = replaced <$> fakeTransactions known}
+  where
+    known = storeKnowing ctx tsd
+
+-- | The store, failing its health check
+unhealthy :: Store -> Store
+unhealthy store = store {storeHealth = throwError "The store is down"}
+
+-- | The store, failing every question about transactions
+notAnswering :: Store -> Store
+notAnswering store = store {storeTransactions = \_ -> throwError "The store is down"}
 
 -- | The store, counting the times it is asked for transactions
 countingAsks :: IORef Int -> Store -> Store
@@ -75,20 +75,255 @@ countingAsks asks store =
         storeTransactions store tids
     }
 
--- | A signed payment of 8000 to otherAddr 0 from a coin of 20000 at
--- externalAddr 0, stored as a pending transaction of the account
-signedPending :: Ctx -> Config -> DBAccountId -> ExceptT String (DB IO) (TxHash, TxSignData)
-signedPending ctx cfg accId = do
+-- | The transaction paying 20000 to externalAddr 0: the one coin of the
+-- account in these tests
+funding :: Ctx -> Tx
+funding ctx = spendingTx ctx [(fakeTxHash 1, 0)] [(externalAddr 0, 20000)]
+
+-- | The transaction paying 10000 to externalAddr 1: the second coin of the
+-- account, in the tests that need two
+secondFunding :: Ctx -> Tx
+secondFunding ctx = spendingTx ctx [(fakeTxHash 2, 0)] [(externalAddr 1, 10000)]
+
+-- | The account with its first external address, its first change address
+-- and the coin of 'funding'
+fundAccount :: Ctx -> Config -> DBAccountId -> ExceptT String (DB IO) ()
+fundAccount ctx cfg accId = do
   _ <- genExtAddress ctx cfg accId ""
   _ <- nextFreeIntAddr ctx cfg accId
-  let fundTx1 = spendingTx ctx [(fakeTxHash 1, 0)] [(externalAddr 0, 20000)]
-      coin1 = storeCoin ctx (txHash fundTx1, 0) (Just 0) (externalAddr 0) 20000
-  lift $ insertRawTx fundTx1
-  _ <- refreshCoins btc accId externalAddrs [coin1]
-  unsigned <- buildTxSignData btc ctx cfg (mkStdGen 0) LeastWaste accId [(otherAddr 0, 8000)] 1 0 SenderPays 0 []
+  lift $ insertRawTx (funding ctx)
+  _ <- refreshCoins btc accId externalAddrs [storeCoin ctx (txHash (funding ctx), 0) (Just 0) (externalAddr 0) 20000]
+  return ()
+
+-- | The account funded as by 'fundAccount', with its second external
+-- address and the coin of 'secondFunding' as well
+fundAccountTwice :: Ctx -> Config -> DBAccountId -> ExceptT String (DB IO) ()
+fundAccountTwice ctx cfg accId = do
+  fundAccount ctx cfg accId
+  _ <- genExtAddress ctx cfg accId ""
+  lift $ insertRawTx (secondFunding ctx)
+  _ <-
+    refreshCoins
+      btc
+      accId
+      externalAddrs
+      [ storeCoin ctx (txHash (funding ctx), 0) (Just 0) (externalAddr 0) 20000,
+        storeCoin ctx (txHash (secondFunding ctx), 0) (Just 0) (externalAddr 1) 10000
+      ]
+  return ()
+
+-- | An unsigned payment of the amount to the address, at 1 satoshi per
+-- byte, from the given coins of the account, or from any of its coins
+payment :: Ctx -> Config -> DBAccountId -> [OutPoint] -> Address -> Natural -> ExceptT String (DB IO) TxSignData
+payment ctx cfg accId chosen to amount =
+  buildTxSignData btc ctx cfg (mkStdGen 0) LeastWaste accId [(to, amount)] 1 0 SenderPays 0 chosen
+
+-- | An unsigned payment of 8000 to otherAddr 0 from the coin of the funded
+-- account, with 11774 of change at internalAddr 0
+unsignedPayment :: Ctx -> Config -> DBAccountId -> ExceptT String (DB IO) TxSignData
+unsignedPayment ctx cfg accId = do
+  fundAccount ctx cfg accId
+  payment ctx cfg accId [] (otherAddr 0) 8000
+
+-- | The payment, signed and stored as a pending transaction of the account
+signedPending :: Ctx -> Config -> DBAccountId -> ExceptT String (DB IO) (TxHash, TxSignData)
+signedPending ctx cfg accId = do
+  unsigned <- unsignedPayment ctx cfg accId
   (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
   pendingHash <- importPendingTx btc ctx accId signed
   return (pendingHash, signed)
+
+-- | The account with two coins and two pending payments: 8000 to otherAddr 0
+-- from the coin of 20000, with 11774 of change at internalAddr 0, then 7000
+-- to otherAddr 1 from the coin of 10000, with 2774 of change at
+-- internalAddr 1. Their hashes, in that order.
+twoPending :: Ctx -> Config -> DBAccountId -> ExceptT String (DB IO) (TxHash, TxHash)
+twoPending ctx cfg accId = do
+  fundAccountTwice ctx cfg accId
+  first <- payment ctx cfg accId [OutPoint (txHash (funding ctx)) 0] (otherAddr 0) 8000
+  firstHash <- importPendingTx btc ctx accId first
+  second <- payment ctx cfg accId [] (otherAddr 1) 7000
+  secondHash <- importPendingTx btc ctx accId second
+  return (firstHash, secondHash)
+
+-- | The coins of the account, by address, and whether a pending transaction
+-- holds each
+lockedCoins :: DBAccountId -> ExceptT String (DB IO) [(Address, Bool)]
+lockedCoins accId = map (\c -> (jsonCoinAddress c, jsonCoinLocked c)) <$> coinPage btc accId (Page 5 0)
+
+-- | The payment signed with SIGHASH_ALL and ANYONECANPAY: a valid signature
+-- that differs from the one hw makes, as another signer could produce. The
+-- signatures of hw itself are deterministic: signing twice gives the same
+-- bytes.
+signedByAnotherSigner :: Ctx -> TxSignData -> Either String TxSignData
+signedByAnotherSigner ctx unsigned = do
+  script <- maybeToEither "The address has no script" $ addressToOutput (externalAddr 0)
+  let coin = SigInput script 20000 (OutPoint (txHash (funding ctx)) 0) (setAnyoneCanPay sigHashAll) Nothing
+      key = (derivePath ctx (Deriv :/ 0 :/ 0 :: SoftPath) testAccountKey).key
+  tx <- signTx btc ctx (txSignDataTx unsigned) [coin] [key]
+  return unsigned {txSignDataTx = tx, txSignDataSigned = True}
+
+importingSpec :: Ctx -> Spec
+importingSpec ctx =
+  describe "Importing a pending transaction" $ do
+    let cfg = def :: Config
+    it "locks the coins it spends and leaves the others free" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        fundAccountTwice ctx cfg accId
+        first <- payment ctx cfg accId [OutPoint (txHash (funding ctx)) 0] (otherAddr 0) 8000
+        _ <- importPendingTx btc ctx accId first
+        held <- lockedCoins accId
+        liftIO $ held `shouldMatchList` [(externalAddr 0, True), (externalAddr 1, False)]
+        -- Only the free coin of 10000 is left to build from
+        lift $
+          dbShouldFailWith "The coins do not cover the amount and the fee" $
+            payment ctx cfg accId [] (otherAddr 1) 12000
+        second <- payment ctx cfg accId [] (otherAddr 1) 7000
+        liftIO $
+          sortedOutputs (txSignDataTx second)
+            `shouldBe` spendingTx ctx [(txHash (secondFunding ctx), 0)] [(internalAddr 1, 2774), (otherAddr 1, 7000)]
+        _ <- importPendingTx btc ctx accId second
+        bothHeld <- lockedCoins accId
+        liftIO $ bothHeld `shouldMatchList` [(externalAddr 0, True), (externalAddr 1, True)]
+        lift $
+          dbShouldFailWith "The coins do not cover the amount and the fee" $
+            payment ctx cfg accId [] (otherAddr 2) 1000
+    it "takes no change address for a transaction without change" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        fundAccount ctx cfg accId
+        -- 19808 to otherAddr 2 leaves exactly the fee of 192 for one input
+        -- and one output at 1 satoshi per byte
+        tsd <- payment ctx cfg accId [] (otherAddr 2) 19808
+        liftIO $ do
+          txSignDataTx tsd `shouldBe` spendingTx ctx [(txHash (funding ctx), 0)] [(otherAddr 2, 19808)]
+          txSignDataOutputPaths tsd `shouldBe` []
+        -- One output, so nothing is shuffled and the hash is fixed
+        importPendingTx btc ctx accId tsd `dbShouldBeE` "720a9cfea170cc699458a97fe34da547dde30d9d54e5210cd88f1b76b139696c"
+        (map jsonCoinLocked <$> coinPage btc accId (Page 5 0)) `dbShouldBeE` [True]
+        (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 0
+    it "holds a payment to an external address of the wallet as an internal transaction" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        fundAccount ctx cfg accId
+        _ <- genExtAddress ctx cfg accId ""
+        tsd <- payment ctx cfg accId [] (externalAddr 1) 8000
+        -- 8000 to the wallet's own /0/1 and the change to /1/0: 226 bytes at
+        -- 1 satoshi per byte leave 11774
+        liftIO $ do
+          sortedOutputs (txSignDataTx tsd)
+            `shouldBe` spendingTx ctx [(txHash (funding ctx), 0)] [(externalAddr 1, 8000), (internalAddr 0, 11774)]
+          txSignDataInputPaths tsd `shouldBe` [Deriv :/ 0 :/ 0]
+          txSignDataOutputPaths tsd `shouldMatchList` [Deriv :/ 0 :/ 1, Deriv :/ 1 :/ 0]
+        pendingHash <- importPendingTx btc ctx accId tsd
+        -- Only the fee leaves the wallet
+        summaries <- pendingTxPage ctx accId (Page 5 0)
+        liftIO $ do
+          map txInfoPending summaries `shouldBe` [Just (TxInfoPending pendingHash False False False)]
+          map txInfoType summaries `shouldBe` [TxInternal]
+          map txInfoAmount summaries `shouldBe` [-226]
+        (map jsonCoinLocked <$> coinPage btc accId (Page 5 0)) `dbShouldBeE` [True]
+        -- The change address is taken
+        (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 1
+    it "replaces the unsigned version with the signed one, and refuses the rest" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        unsigned <- unsignedPayment ctx cfg accId
+        pendingHash <- importPendingTx btc ctx accId unsigned
+        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
+          `dbShouldBeE` [Just (TxInfoPending pendingHash False False False)]
+        lift $
+          dbShouldFailWith "The transaction already exists" $
+            importPendingTx btc ctx accId unsigned
+        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        importPendingTx btc ctx accId signed `dbShouldBeE` pendingHash
+        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
+          `dbShouldBeE` [Just (TxInfoPending pendingHash True False False)]
+        lift $ do
+          dbShouldFailWith "The transaction already exists" $
+            importPendingTx btc ctx accId signed
+          dbShouldFailWith "Can not replace a signed transaction with an unsigned one" $
+            importPendingTx btc ctx accId unsigned
+    it "replaces a signed version with one signed by another signer" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        unsigned <- unsignedPayment ctx cfg accId
+        pendingHash <- importPendingTx btc ctx accId unsigned
+        (byWallet, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        byOther <- liftEither $ signedByAnotherSigner ctx unsigned
+        -- Both versions are valid, with different signatures, so different ids
+        liftIO $ do
+          verifySignedTx btc ctx byOther `shouldBe` Right ()
+          txHash (txSignDataTx byOther) `shouldNotBe` txHash (txSignDataTx byWallet)
+        importPendingTx btc ctx accId byWallet `dbShouldBeE` pendingHash
+        importPendingTx btc ctx accId byOther `dbShouldBeE` pendingHash
+        -- The wallet holds the version imported last: sendtx sends that one
+        stored <- lift $ getPendingTx pendingHash
+        liftIO $ ((\(_, tsd, _) -> tsd) <$> stored) `shouldBe` Just byOther
+    it "refuses a new version of a transaction that is online" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        (pendingHash, signed) <- signedPending ctx cfg accId
+        lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
+        lift $
+          dbShouldFailWith "The transaction is already online" $
+            importPendingTx btc ctx accId signed
+    it "refuses a transaction spending a coin another pending transaction holds" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        _ <- signedPending ctx cfg accId
+        let spend = spendingTx ctx [(txHash (funding ctx), 0)] [(otherAddr 3, 19000)]
+        lift $
+          dbShouldFailWith "A coin referenced by the transaction is locked" $
+            importPendingTx btc ctx accId (TxSignData spend [funding ctx] [Deriv :/ 0 :/ 0] [] Nothing False)
+    it "refuses a transaction spending a coin the wallet does not have" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        fundAccount ctx cfg accId
+        -- A payment to the wallet's first address that the wallet never saw
+        let unseen = spendingTx ctx [(fakeTxHash 3, 0)] [(externalAddr 0, 5000)]
+            spend = spendingTx ctx [(txHash unseen, 0)] [(otherAddr 3, 4000)]
+        lift $
+          dbShouldFailWith "A coin referenced by the transaction does not exist" $
+            importPendingTx btc ctx accId (TxSignData spend [unseen] [Deriv :/ 0 :/ 0] [] Nothing False)
+    it "refuses a transaction paying change to an address the wallet has not generated" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        fundAccount ctx cfg accId
+        -- Change to /1/1, when only /1/0 exists
+        let spend = spendingTx ctx [(txHash (funding ctx), 0)] [(internalAddr 1, 11774), (otherAddr 0, 8000)]
+        lift $
+          dbShouldFailWith "Some referenced addresses do not exist" $
+            importPendingTx btc ctx accId (TxSignData spend [funding ctx] [Deriv :/ 0 :/ 0] [Deriv :/ 1 :/ 1] Nothing False)
+    it "refuses a transaction whose change address another pending transaction holds" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        fundAccountTwice ctx cfg accId
+        first <- payment ctx cfg accId [OutPoint (txHash (funding ctx)) 0] (otherAddr 0) 8000
+        _ <- importPendingTx btc ctx accId first
+        -- The change of the first payment went to /1/0
+        let spend = spendingTx ctx [(txHash (secondFunding ctx), 0)] [(internalAddr 0, 2774), (otherAddr 1, 7000)]
+        lift $
+          dbShouldFailWith "Some of the internal output addresses are not free" $
+            importPendingTx btc ctx accId (TxSignData spend [secondFunding ctx] [Deriv :/ 0 :/ 1] [Deriv :/ 1 :/ 0] Nothing False)
+
+listingSpec :: Ctx -> Spec
+listingSpec ctx =
+  describe "Listing the pending transactions" $ do
+    let cfg = def :: Config
+    it "lists them newest first, a page at a time" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        (first, second) <- twoPending ctx cfg accId
+        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
+          `dbShouldBeE` [Just (TxInfoPending second False False False), Just (TxInfoPending first False False False)]
+        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 1 1))
+          `dbShouldBeE` [Just (TxInfoPending first False False False)]
+    it "lists nothing for an account without any" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        pendingTxPage ctx accId (Page 5 0) `dbShouldBeE` []
 
 sendingSpec :: Ctx -> Spec
 sendingSpec ctx =
@@ -102,7 +337,20 @@ sendingSpec ctx =
         liftIO $ txInfoPending sent `shouldBe` Just (TxInfoPending pendingHash True True False)
         ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
           `dbShouldBeE` [Just (TxInfoPending pendingHash True True False)]
-        lift $ P.get (DBRawTxKey (txHashToHex (txHash (txSignDataTx signed)))) `dbShouldSatisfy` isJust
+        lift (hasRawTx (txHash (txSignDataTx signed))) `dbShouldBeE` True
+    it "sends again a transaction that is already online" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        (pendingHash, signed) <- signedPending ctx cfg accId
+        -- As if sent once, then lost by the store
+        lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
+        lift $ insertRawTx (txSignDataTx signed)
+        published <- liftIO $ newIORef []
+        (_, sent) <- sendPending ctx (const (notingPublished published (toStore (storeKnowing ctx signed)))) pendingHash
+        liftIO $ readIORef published `shouldReturn` [txSignDataTx signed]
+        liftIO $ txInfoPending sent `shouldBe` Just (TxInfoPending pendingHash True True False)
+        -- The raw transaction is stored once, next to the parent of its coin
+        lift (P.count ([] :: [P.Filter DBRawTx])) `dbShouldBeE` 2
     it "records nothing when the store does not see it, and says so" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -112,19 +360,45 @@ sendingSpec ctx =
             sendPending ctx (const (toStore emptyStore)) pendingHash
         ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
           `dbShouldBeE` [Just (TxInfoPending pendingHash True False False)]
+    it "sends nothing when the store is not healthy" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        (pendingHash, _) <- signedPending ctx cfg accId
+        published <- liftIO $ newIORef []
+        lift $
+          dbShouldFailWith "The store is down" $
+            sendPending ctx (const (notingPublished published (unhealthy (toStore emptyStore)))) pendingHash
+        liftIO $ readIORef published `shouldReturn` []
+        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
+          `dbShouldBeE` [Just (TxInfoPending pendingHash True False False)]
     it "refuses a transaction that is not signed" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
-        _ <- genExtAddress ctx cfg accId ""
-        let fundTx1 = spendingTx ctx [(fakeTxHash 1, 0)] [(externalAddr 0, 20000)]
-            coin1 = storeCoin ctx (txHash fundTx1, 0) (Just 0) (externalAddr 0) 20000
-        lift $ insertRawTx fundTx1
-        _ <- refreshCoins btc accId externalAddrs [coin1]
-        unsigned <- buildTxSignData btc ctx cfg (mkStdGen 0) LeastWaste accId [(otherAddr 0, 8000)] 1 0 SenderPays 0 []
+        unsigned <- unsignedPayment ctx cfg accId
         pendingHash <- importPendingTx btc ctx accId unsigned
         lift $
           dbShouldFailWith "The transaction is not signed" $
             sendPending ctx (const (toStore emptyStore)) pendingHash
+    it "refuses a transaction whose signatures do not check out, and leaves it as it is" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        unsigned <- unsignedPayment ctx cfg accId
+        -- A file that says it is signed, with no signature in it
+        let claimed = unsigned {txSignDataSigned = True}
+        pendingHash <- importPendingTx btc ctx accId claimed
+        published <- liftIO $ newIORef []
+        lift $
+          dbShouldFailWith "Invalid signature for input 0 (1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj)" $
+            sendPending ctx (const (notingPublished published (toStore emptyStore))) pendingHash
+        liftIO $ readIORef published `shouldReturn` []
+        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
+          `dbShouldBeE` [Just (TxInfoPending pendingHash True False False)]
+        lift (hasRawTx (txHash (txSignDataTx claimed))) `dbShouldBeE` False
+    it "refuses a transaction the wallet does not hold" $
+      inDatabaseE $
+        lift $
+          dbShouldFailWith "The nosigHash does not exist in the wallet" $
+            sendPending ctx (const (toStore emptyStore)) (fakeTxHash 7)
     it "gives up after the asks it is allowed" $ do
       asks <- newIORef 0
       let tx = spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 8000)]
@@ -136,6 +410,11 @@ sendingSpec ctx =
       runExceptT (broadcastWith 1000 3 (countingAsks asks (toStore (storeKnowing ctx signed))) (txSignDataTx signed))
         `shouldReturn` Right True
       readIORef asks `shouldReturn` 1
+
+deletingSpec :: Ctx -> Spec
+deletingSpec ctx =
+  describe "Deleting a pending transaction" $ do
+    let cfg = def :: Config
     it "abandons a sent transaction the store does not know, freeing its coin" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -151,274 +430,68 @@ sendingSpec ctx =
         ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0)) `dbShouldBeE` []
         -- Its raw transaction went with it; the parent of the coin stays
         lift (P.count ([] :: [P.Filter DBRawTx])) `dbShouldBeE` 1
-
-pendingTxsSpec :: Ctx -> Config -> Spec
-pendingTxsSpec ctx cfg =
-  it "can manage pending transactions" $ do
-    inDatabaseE $ do
-      (accId, _) <- testNewAcc ctx "test"
-      lift $ updateBest btc (fakeBlockHash 0) 0
-      -- Build some test data coins/txs
-      (dBAddressAddress <$> genExtAddress ctx cfg accId "")
-        `dbShouldBeE` head externalAddrsText
-      (dBAddressAddress <$> nextFreeIntAddr ctx cfg accId)
-        `dbShouldBeE` head internalAddrsText
-      checkFree 0 True
-      lift $ setAddrsFree AddrBusy [head internalAddrsText] `dbShouldBe` 1
-      checkFree 0 False
-      -- Two coins of 20000 and 10000, spent at 1 satoshi per byte with no
-      -- dust limit: a transaction with one input pays 226 with two outputs,
-      -- 192 with one
-      let fundTx1 = spendingTx ctx [(fakeTxHash 1, 0)] [(externalAddr 0, 20000)]
-          fundTx2 = spendingTx ctx [(fakeTxHash 1, 1)] [(internalAddr 0, 10000)]
-          coin1 = storeCoin ctx (txHash fundTx1, 0) (Just 0) (externalAddr 0) 20000
-          coin2 = storeCoin ctx (txHash fundTx2, 0) (Just 0) (internalAddr 0) 10000
-      -- Insert the dependent transactions
-      lift $ insertRawTx fundTx1
-      lift $ insertRawTx fundTx2
-      -- Insert two coins in the database
-      refreshed <- refreshCoins btc accId (externalAddrs <> internalAddrs) [coin1, coin2]
-      let dbCoins = insertedCoins refreshed
-      liftIO $ refreshedCount refreshed `shouldBe` 2
-      let jsonCoin1 = forceRight $ toJsonCoin btc Nothing Set.empty (head dbCoins)
-          jsonCoin2 = forceRight $ toJsonCoin btc Nothing Set.empty (dbCoins !! 1)
-      tsd <- buildTxSignData btc ctx cfg gen LeastWaste accId [(otherAddr 0, 8000)] 1 0 SenderPays 1 []
-      -- The outputs are compared by amount: the builder shuffles them
-      liftIO $
-        unshuffled tsd
-          `shouldBe` TxSignData
-            { txSignDataTx =
-                spendingTx
-                  ctx
-                  [(txHash fundTx1, 0)]
-                  [(otherAddr 0, 8000), (internalAddr 1, 11774)],
-              txSignDataInputs = [fundTx1],
-              txSignDataInputPaths = [Deriv :/ 0 :/ 0],
-              txSignDataOutputPaths = [Deriv :/ 1 :/ 1],
-              txSignDataFeeRate = Just 1,
-              txSignDataSigned = False
-            }
-      -- Import the pending transaction
-      checkFree 0 False
-      checkFree 1 True
-      -- The hash depends on the order of the shuffled outputs
-      let h1 = nosigHash (txSignDataTx tsd)
-      importPendingTx btc ctx accId tsd `dbShouldBeE` h1
-      -- Check locked coins
-      coinPage btc accId (Page 5 0)
-        `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = False},
-                        jsonCoin1 {jsonCoinLocked = True}
-                      ]
-      ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
-        `dbShouldBeE` [Just $ TxInfoPending h1 False False False]
-      -- Check address free status
-      checkFree 0 False
-      checkFree 1 False
-      (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 2
-      lift $
-        dbShouldFailWith "The coins do not cover the amount and the fee" $
-          buildTxSignData btc ctx cfg gen LeastWaste accId [(otherAddr 1, 12000)] 1 0 SenderPays 1 []
-      lift $
-        dbShouldFailWith "The transaction already exists" $
-          importPendingTx btc ctx accId tsd
-      -- Create second pending transaction
-      tsd2 <- buildTxSignData btc ctx cfg gen LeastWaste accId [(otherAddr 1, 7000)] 1 0 SenderPays 1 []
-      liftIO $
-        unshuffled tsd2
-          `shouldBe` TxSignData
-            { txSignDataTx =
-                spendingTx
-                  ctx
-                  [(txHash fundTx2, 0)]
-                  [(internalAddr 2, 2774), (otherAddr 1, 7000)],
-              txSignDataInputs = [fundTx2],
-              txSignDataInputPaths = [Deriv :/ 1 :/ 0],
-              txSignDataOutputPaths = [Deriv :/ 1 :/ 2],
-              txSignDataFeeRate = Just 1,
-              txSignDataSigned = False
-            }
-      -- Import the second transaction
-      checkFree 2 True
-      let h2 = nosigHash (txSignDataTx tsd2)
-      importPendingTx btc ctx accId tsd2 `dbShouldBeE` h2
-      coinPage btc accId (Page 5 0)
-        `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = True},
-                        jsonCoin1 {jsonCoinLocked = True}
-                      ]
-      ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
-        `dbShouldBeE` [ Just $ TxInfoPending h2 False False False,
-                        Just $ TxInfoPending h1 False False False
-                      ]
-      checkFree 0 False
-      checkFree 1 False
-      checkFree 2 False
-      (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 3
-      lift $
-        dbShouldFailWith "The coins do not cover the amount and the fee" $
-          buildTxSignData btc ctx cfg gen LeastWaste accId [(otherAddr 2, 1000)] 1 0 SenderPays 1 []
-      -- Delete first transaction
-      deletePendingTx ctx h1 `dbShouldBeE` (1, 1)
-      coinPage btc accId (Page 5 0)
-        `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = True},
-                        jsonCoin1 {jsonCoinLocked = False}
-                      ]
-      ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
-        `dbShouldBeE` [Just $ TxInfoPending h2 False False False]
-      checkFree 0 False
-      checkFree 1 True
-      checkFree 2 False
-      (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 1
-      -- Create transaction with no change
-      tsd3 <- buildTxSignData btc ctx cfg gen LeastWaste accId [(otherAddr 2, 19808)] 1 0 SenderPays 1 []
-      liftIO $
-        unshuffled tsd3
-          `shouldBe` TxSignData
-            { txSignDataTx =
-                spendingTx
-                  ctx
-                  [(txHash fundTx1, 0)]
-                  [(otherAddr 2, 19808)],
-              txSignDataInputs = [fundTx1],
-              txSignDataInputPaths = [Deriv :/ 0 :/ 0],
-              txSignDataOutputPaths = [],
-              txSignDataFeeRate = Just 1,
-              txSignDataSigned = False
-            }
-      -- One output: nothing to shuffle, so the hash is fixed
-      let h3 = "720a9cfea170cc699458a97fe34da547dde30d9d54e5210cd88f1b76b139696c"
-      importPendingTx btc ctx accId tsd3 `dbShouldBeE` h3
-      coinPage btc accId (Page 5 0)
-        `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = True},
-                        jsonCoin1 {jsonCoinLocked = True}
-                      ]
-      ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
-        `dbShouldBeE` [ Just $ TxInfoPending h3 False False False,
-                        Just $ TxInfoPending h2 False False False
-                      ]
-      checkFree 0 False
-      checkFree 1 True
-      checkFree 2 False
-      (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 1
-      -- Import a signed transaction
-      let resE = signWalletTx btc ctx tsd2 (testAccountKey)
-      liftIO $ resE `shouldSatisfy` isRight
-      let tsd2' = fst $ forceRight resE
-      liftIO $ txSignDataSigned tsd2' `shouldBe` True
-      importPendingTx btc ctx accId tsd2' `dbShouldBeE` h2
-      coinPage btc accId (Page 5 0)
-        `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = True},
-                        jsonCoin1 {jsonCoinLocked = True}
-                      ]
-      ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
-        `dbShouldBeE` [ Just $ TxInfoPending h3 False False False,
-                        Just $ TxInfoPending h2 True False False
-                      ]
-      checkFree 0 False
-      checkFree 1 True
-      checkFree 2 False
-      lift $ do
-        dbShouldFailWith "The transaction already exists" $
-          importPendingTx btc ctx accId tsd2'
-        dbShouldFailWith "Can not replace a signed transaction with an unsigned one" $
-          importPendingTx btc ctx accId tsd2
-      -- Set tsd2 to online
-      lift $ do
-        setPendingTxOnline h2 `dbShouldBe` 1
-        dbShouldFailWith "The transaction is already online" $
-          importPendingTx btc ctx accId tsd2'
-        -- An online transaction is deleted only when the store does not know it
-        dbShouldFailWith "The transaction is in the network's mempool or in the chain: syncacc retires it once it is listed" $
-          deleteTx ctx (const (toStore (storeKnowing ctx tsd2'))) h2
-      ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
-        `dbShouldBeE` [ Just $ TxInfoPending h3 False False False,
-                        Just $ TxInfoPending h2 True True False
-                      ]
-      -- Retired by the sync: nothing locks its coin any more (the sync
-      -- deletes the coin itself once the store shows it spent)
-      lift $ deletePendingTxOnline $ DBPendingTxKey $ txHashToHex h2
-      coinPage btc accId (Page 5 0)
-        `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = False},
-                        jsonCoin1 {jsonCoinLocked = True}
-                      ]
-      ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
-        `dbShouldBeE` [Just $ TxInfoPending h3 False False False]
-      checkFree 0 False
-      checkFree 1 True
-      checkFree 2 False
-      -- Check for other errors
-      let fundTx3 = spendingTx ctx [(fakeTxHash 2, 0)] [(externalAddr 8, 30)]
-          coin3 = storeCoin ctx (txHash fundTx3, 0) (Just 0) (externalAddr 8) 30
-      lift $ do
-        dbShouldFailWith "A coin referenced by the transaction is locked" $
-          importPendingTx btc ctx accId $
-            TxSignData
-              { txSignDataTx =
-                  spendingTx
-                    ctx
-                    [(txHash fundTx1, 0)]
-                    [(otherAddr 3, 20)],
-                txSignDataInputs = [fundTx3, fundTx1],
-                txSignDataInputPaths = [Deriv :/ 0 :/ 0],
-                txSignDataOutputPaths = [],
-                txSignDataFeeRate = Nothing,
-                txSignDataSigned = False
-              }
-        dbShouldFailWith "A coin referenced by the transaction does not exist" $
-          importPendingTx btc ctx accId $
-            TxSignData
-              { txSignDataTx =
-                  spendingTx
-                    ctx
-                    [(txHash fundTx3, 0)]
-                    [(otherAddr 3, 20)],
-                txSignDataInputs = [fundTx3, fundTx1],
-                txSignDataInputPaths = [Deriv :/ 0 :/ 8],
-                txSignDataOutputPaths = [],
-                txSignDataFeeRate = Nothing,
-                txSignDataSigned = False
-              }
-      dbCoins3 <- insertedCoins <$> refreshCoins btc accId (externalAddrs <> internalAddrs) [coin1, coin3]
-      let jsonCoin3 = forceRight $ toJsonCoin btc Nothing Set.empty (head dbCoins3)
-      coinPage btc accId (Page 5 0)
-        `dbShouldBeE` [ jsonCoin3 {jsonCoinLocked = False},
-                        jsonCoin1 {jsonCoinLocked = True}
-                      ]
-      lift $
-        dbShouldFailWith "Some referenced addresses do not exist" $
-          importPendingTx btc ctx accId $
-            TxSignData
-              { txSignDataTx =
-                  spendingTx
-                    ctx
-                    [(txHash fundTx3, 0)]
-                    [(internalAddr 1, 5), (otherAddr 3, 25)],
-                txSignDataInputs = [fundTx3],
-                txSignDataInputPaths = [Deriv :/ 0 :/ 8],
-                txSignDataOutputPaths = [Deriv :/ 1 :/ 1],
-                txSignDataFeeRate = Nothing,
-                txSignDataSigned = False
-              }
-      -- The transaction is not being rolled back: the addresses stay
-      replicateM_ 10 $ genExtAddress ctx cfg accId ""
-      coinPage btc accId (Page 5 0)
-        `dbShouldBeE` [ jsonCoin3 {jsonCoinLocked = False},
-                        jsonCoin1 {jsonCoinLocked = True}
-                      ]
-      checkFree 0 False
-      checkFree 1 True
-      checkFree 2 False
-      lift $
-        dbShouldFailWith "Some of the internal output addresses are not free" $
-          importPendingTx btc ctx accId $
-            TxSignData
-              { txSignDataTx =
-                  spendingTx
-                    ctx
-                    [(txHash fundTx3, 0)]
-                    [(internalAddr 2, 1), (otherAddr 3, 25)],
-                txSignDataInputs = [fundTx3],
-                txSignDataInputPaths = [Deriv :/ 0 :/ 8],
-                txSignDataOutputPaths = [Deriv :/ 1 :/ 2],
-                txSignDataFeeRate = Nothing,
-                txSignDataSigned = False
-              }
+    it "abandons a sent transaction the network dropped" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        (pendingHash, signed) <- signedPending ctx cfg accId
+        -- As if sent, then replaced in the mempool by another transaction
+        lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
+        lift $ insertRawTx (txSignDataTx signed)
+        deleteTx ctx (const (toStore (storeThatDropped ctx signed))) pendingHash `dbShouldBeE` (1, 1)
+        (map jsonCoinLocked <$> coinPage btc accId (Page 5 0)) `dbShouldBeE` [False]
+        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0)) `dbShouldBeE` []
+        lift (hasRawTx (txHash (txSignDataTx signed))) `dbShouldBeE` False
+    it "keeps a sent transaction when the store cannot be asked" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        (pendingHash, signed) <- signedPending ctx cfg accId
+        lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
+        lift $ insertRawTx (txSignDataTx signed)
+        lift $
+          dbShouldFailWith "The store is down" $
+            deleteTx ctx (const (notAnswering (toStore emptyStore))) pendingHash
+        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
+          `dbShouldBeE` [Just (TxInfoPending pendingHash True True False)]
+        (map jsonCoinLocked <$> coinPage btc accId (Page 5 0)) `dbShouldBeE` [True]
+        lift (hasRawTx (txHash (txSignDataTx signed))) `dbShouldBeE` True
+    it "deletes a transaction that was never sent without asking the store" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        (pendingHash, _) <- signedPending ctx cfg accId
+        deleteTx ctx (const (notAnswering (unhealthy (toStore emptyStore)))) pendingHash `dbShouldBeE` (1, 1)
+        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0)) `dbShouldBeE` []
+        (map jsonCoinLocked <$> coinPage btc accId (Page 5 0)) `dbShouldBeE` [False]
+    it "keeps a sent transaction the store still lists" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        (pendingHash, signed) <- signedPending ctx cfg accId
+        lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
+        lift $
+          dbShouldFailWith "The transaction is in the network's mempool or in the chain: syncacc retires it once it is listed" $
+            deleteTx ctx (const (toStore (storeKnowing ctx signed))) pendingHash
+        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
+          `dbShouldBeE` [Just (TxInfoPending pendingHash True True False)]
+        (map jsonCoinLocked <$> coinPage btc accId (Page 5 0)) `dbShouldBeE` [True]
+    it "frees the change address for the next transaction" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        (pendingHash, _) <- signedPending ctx cfg accId
+        -- The change went to /1/0
+        (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 1
+        deleteTx ctx (const (toStore emptyStore)) pendingHash `dbShouldBeE` (1, 1)
+        (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 0
+    it "retiring a sent transaction, as the sync does, frees its coin but keeps its change address" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        (pendingHash, _) <- signedPending ctx cfg accId
+        lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
+        lift $ deletePendingTxOnline $ DBPendingTxKey $ txHashToHex pendingHash
+        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0)) `dbShouldBeE` []
+        (map jsonCoinLocked <$> coinPage btc accId (Page 5 0)) `dbShouldBeE` [False]
+        -- The address was used on the chain
+        (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 1
+    it "refuses a transaction the wallet does not hold" $
+      inDatabaseE $
+        lift $
+          dbShouldFailWith "The pending transaction does not exist" $
+            deleteTx ctx (const (toStore emptyStore)) (fakeTxHash 7)

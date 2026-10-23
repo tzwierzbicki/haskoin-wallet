@@ -1,21 +1,4 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE EmptyDataDecls #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedRecordDot #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE TupleSections #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE UndecidableInstances #-}
-{-# OPTIONS_GHC -fno-warn-orphans #-}
 
 -- | The raw transactions the coins come from, which signing needs to know
 -- what each input spends. A raw transaction is kept as long as a coin of
@@ -25,11 +8,11 @@
 -- drops it, once no coin comes from them.
 module Haskoin.Wallet.RawTx where
 
-import Conduit (MonadUnliftIO, ResourceT, runResourceT)
+import Conduit (MonadUnliftIO)
 import Control.Monad
 import Control.Monad.Except
-import Control.Monad.Reader (MonadTrans (lift), ReaderT)
-import Data.Maybe (catMaybes, fromJust, fromMaybe, isJust, mapMaybe)
+import Control.Monad.Reader (MonadTrans (lift))
+import Data.Maybe (isJust)
 import qualified Data.Serialize as S
 import qualified Data.Set as Set
 import Database.Esqueleto.Legacy as E

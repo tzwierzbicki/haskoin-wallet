@@ -1,35 +1,22 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE EmptyDataDecls #-}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE TupleSections #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 -- | The accounts of the wallet: a BIP44 account of a network under a
 -- wallet, with its public key, its balances and its address counts.
 module Haskoin.Wallet.Account where
 
-import Conduit (MonadUnliftIO, ResourceT, runResourceT)
+import Conduit (MonadUnliftIO)
 import Control.Monad (mzero)
 import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
-import Control.Monad.Reader (MonadTrans (lift), ReaderT)
+import Control.Monad.Reader (MonadTrans (lift))
 import Data.Aeson
 import Data.Either (fromRight)
-import Data.List (find, nub, partition)
-import Data.Maybe (catMaybes, fromJust, fromMaybe, isJust, mapMaybe)
+import Data.List (find)
+import Data.Maybe (fromJust, fromMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Time (getCurrentTime)

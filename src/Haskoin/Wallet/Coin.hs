@@ -1,21 +1,8 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE EmptyDataDecls #-}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TupleSections #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE UndecidableInstances #-}
-{-# OPTIONS_GHC -fno-warn-orphans #-}
 
 -- | The coins of an account, the unspent outputs the store knows at its
 -- addresses: kept up to date by the sync, listed for the user and offered
@@ -23,16 +10,16 @@
 -- by a pending transaction.
 module Haskoin.Wallet.Coin where
 
-import Conduit (MonadUnliftIO, ResourceT, runResourceT)
+import Conduit (MonadUnliftIO)
 import Control.Monad
 import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
-import Control.Monad.Reader (MonadTrans (lift), ReaderT)
+import Control.Monad.Reader (MonadTrans (lift))
 import Data.Aeson
-import Data.List (find, nub, partition)
+import Data.List (find)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes, fromJust, fromMaybe, isJust, mapMaybe)
+import Data.Maybe (fromMaybe, mapMaybe)
 import qualified Data.Serialize as S
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -46,7 +33,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.BestBlock
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.PendingTx
-import Haskoin.Wallet.Util (Page (Page), textToAddrE)
+import Haskoin.Wallet.Util (Page (Page))
 import Numeric.Natural (Natural)
 
 {- Coins as the user sees them -}
