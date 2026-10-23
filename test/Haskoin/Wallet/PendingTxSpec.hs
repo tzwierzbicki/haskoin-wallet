@@ -16,6 +16,7 @@ import Control.Monad.Except
 import Control.Monad.Trans (lift)
 import qualified Data.ByteString as BS
 import Data.Default (def)
+import Data.Either (isLeft)
 import Data.IORef (IORef, modifyIORef, newIORef, readIORef)
 import qualified Database.Persist as P
 import Haskoin
@@ -269,8 +270,17 @@ importingSpec ctx =
         importPendingTx btc ctx accId byWallet `dbShouldBeE` pendingHash
         importPendingTx btc ctx accId byOther `dbShouldBeE` pendingHash
         -- The wallet holds the version imported last: sendtx sends that one
-        stored <- lift $ getPendingTx pendingHash
-        liftIO $ ((\(_, tsd, _) -> tsd) <$> stored) `shouldBe` Just byOther
+        stored <- lookupPendingTx pendingHash
+        liftIO $ (pendingTxData <$> stored) `shouldBe` Just byOther
+    it "refuses a transaction pending in another account" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        (otherId, _) <- testNewAcc2 ctx "other"
+        unsigned <- unsignedPayment ctx cfg accId
+        _ <- importPendingTx btc ctx accId unsigned
+        lift $
+          dbShouldFailWith "The transaction is pending in another account" $
+            importPendingTx btc ctx otherId unsigned
     it "refuses a signed transaction whose signatures do not check out" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -357,6 +367,16 @@ listingSpec ctx =
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
         pendingTxPage ctx accId (Page 5 0) `dbShouldBeE` []
+    it "reports a row whose signing data does not decode, instead of hiding it" $
+      inDatabaseE $ do
+        (accId@(DBAccountKey wallet accDeriv), _) <- testNewAcc ctx "test"
+        lift $ P.insert_ $ DBPendingTx wallet accDeriv (txHashToHex (fakeTxHash 7)) "not signing data" False fixtureTime
+        listed <- lift $ runExceptT $ pendingTxPage ctx accId (Page 5 0)
+        deleted <- lift $ runExceptT $ deleteTx ctx (const (toStore emptyStore)) (fakeTxHash 7)
+        liftIO $ do
+          listed `shouldSatisfy` isLeft
+          deleted `shouldSatisfy` isLeft
+          deleted `shouldNotBe` Left noPendingTx
 
 sendingSpec :: Ctx -> Spec
 sendingSpec ctx =
@@ -503,7 +523,8 @@ deletingSpec ctx =
         (accId, _) <- testNewAcc ctx "test"
         (pendingHash, _) <- signedPending ctx cfg accId
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
-        lift $ deletePendingTxOnline $ DBPendingTxKey $ txHashToHex pendingHash
+        held <- requirePendingTx pendingHash
+        lift $ retirePendingTx held
         ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0)) `dbShouldBeE` []
         (map jsonCoinLocked <$> coinPage btc accId (Page 5 0)) `dbShouldBeE` [False]
         -- The address was used on the chain

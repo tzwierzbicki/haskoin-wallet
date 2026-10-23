@@ -193,7 +193,7 @@ sync ctx cfg store net accId full = do
   let seen = Set.fromList $ (.txid) <$> listed
       reached p = isSigned p.pendingTxData.txSignDataTx && txHash p.pendingTxData.txSignDataTx `Set.member` seen
       (done, waiting) = partition reached pending
-  lift $ forM_ done $ deletePendingTxOnline . (.pendingTxKey)
+  lift $ forM_ done retirePendingTx
   let resend = [p.pendingTxData.txSignDataTx | p <- waiting, p.pendingTxOnline]
   forM_ resend $ fromStore . storePublish store
   let pub = accountXPubKey ctx newAcc
