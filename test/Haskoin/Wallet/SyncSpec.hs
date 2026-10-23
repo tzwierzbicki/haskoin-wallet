@@ -350,7 +350,7 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         accId <- account
         -- The change address, /1/0, and the coin to spend
-        _ <- nextFreeIntAddr ctx cfg accId
+        _ <- changeAddress ctx cfg accId
         _ <- syncWith (realPaymentStore ctx) accId
         -- The user prepared, signed and sent the payment, as sendtx leaves
         -- it: pending, online, its raw transaction stored
@@ -452,8 +452,8 @@ spec = prepareContext $ \ctx -> do
         let store = toStore (discoveredStore ctx)
         (e, i) <- discoverAddrs ctx small store (testAccountPub ctx)
         liftIO $ (e, i) `shouldBe` (5, 2)
-        discoverAccGenAddrs ctx small accId AddrExternal (fromIntegral e)
-        discoverAccGenAddrs ctx small accId AddrInternal (fromIntegral i)
+        extendChainTo ctx accId AddrExternal e
+        extendChainTo ctx accId AddrInternal i
         _ <- sync ctx small store btc accId True
         found <- summaries ctx accId
         liftIO $ found `shouldMatchList` [(Just (txHash tx), Store.BlockRef height 1, fromIntegral amount) | (_, amount, height, tx) <- discoveredPayments ctx]
@@ -473,7 +473,7 @@ spec = prepareContext $ \ctx -> do
         accId <- account
         res <- watchWith (paidStore ctx [(externalAddr 3, 50000)]) accId
         liftIO $ (syncResNewAddrs res, dBAccountExternal (syncResAccount res)) `shouldBe` (3, 4)
-        lift (getAddrDeriv btc accId (externalAddr 3)) `dbShouldBeE` Right (Deriv :/ 0 :/ 3)
+        addressPath btc accId (externalAddr 3) `dbShouldBeE` Just (Deriv :/ 0 :/ 3)
         summaries ctx accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
         coins accId `dbShouldBeE` [OutPoint (fakeTxHash 1) 0]
         balances accId `dbShouldBeE` (50000, 0, 1)
@@ -497,15 +497,15 @@ spec = prepareContext $ \ctx -> do
         summaries ctx accId `dbShouldBeE` []
         balances accId `dbShouldBeE` (0, 0, 0)
 
-    it "finds change made by another wallet of the same seed, and keeps the addresses up to it busy" $
+    it "finds change made by another wallet of the same seed" $
       inDatabaseE $ do
         accId <- account
         res <- watchWith (paidStore ctx [(internalAddr 1, 10000)]) accId
         liftIO $ (syncResNewAddrs res, dBAccountInternal (syncResAccount res)) `shouldBe` (2, 2)
         summaries ctx accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 10000)]
         balances accId `dbShouldBeE` (10000, 0, 1)
-        -- The other wallet may use /1/0 as change next: this one does not
-        (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 2
+        -- /1/0 was never used: it is the next change address
+        (dBAddressIndex <$> changeAddress ctx cfg accId) `dbShouldBeE` 0
 
     it "asks about the gap of each chain once when nothing is in it" $
       inDatabaseE $ do

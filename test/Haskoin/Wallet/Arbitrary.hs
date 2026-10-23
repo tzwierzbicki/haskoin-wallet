@@ -75,7 +75,6 @@ arbitraryDBAddress net =
     <*> arbitraryPositive
     <*> arbitraryPositive
     <*> arbitrary
-    <*> arbitrary
     <*> arbitraryUTCTime
 
 arbitraryAddressBalance :: Gen AddressBalance

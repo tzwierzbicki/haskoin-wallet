@@ -354,7 +354,7 @@ commandResponse ctx cfg unit cmd =
     CommandDeleteAcc name net deriv -> cmdDeleteAcc cfg name net deriv
     -- Address management
     CommandReceive nameM labM -> cmdReceive ctx cfg nameM labM
-    CommandAddrs nameM p -> cmdAddrs cfg nameM p
+    CommandAddrs nameM internal p -> cmdAddrs cfg nameM internal p
     CommandLabel nameM i l -> cmdLabel cfg nameM i l
     -- Transaction management
     CommandTxs nameM p -> cmdTxs ctx cfg nameM p
@@ -489,11 +489,11 @@ cmdReceive ctx cfg nameM labelM =
     addr <- genExtAddress ctx cfg accId $ fromMaybe "" labelM
     return $ ResponseAddress acc addr
 
-cmdAddrs :: Config -> Maybe Text -> Page -> IO Response
-cmdAddrs cfg nameM page =
+cmdAddrs :: Config -> Maybe Text -> Bool -> Page -> IO Response
+cmdAddrs cfg nameM internal page =
   runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
-    as <- lift $ addressPage accId page
+    as <- lift $ addressPage accId (if internal then AddrInternal else AddrExternal) page
     return $ ResponseAddresses acc as
 
 cmdLabel :: Config -> Maybe Text -> Natural -> Text -> IO Response
@@ -705,8 +705,8 @@ cmdDiscoverAccount ctx cfg nameM = do
         store = webStore ctx cfg net
     fromStore $ storeHealth store
     (e, i) <- discoverAddrs ctx cfg store pub
-    discoverAccGenAddrs ctx cfg accId AddrExternal $ fromIntegral e
-    discoverAccGenAddrs ctx cfg accId AddrInternal $ fromIntegral i
+    extendChainTo ctx accId AddrExternal e
+    extendChainTo ctx accId AddrInternal i
     -- Perform a full sync after discovery
     res <- sync ctx cfg store net accId True
     return $ ResponseSync [res]

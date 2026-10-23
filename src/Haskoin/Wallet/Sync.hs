@@ -46,10 +46,10 @@ scanChain :: (MonadIO m) => Ctx -> Store -> XPubKey -> SoftPath -> Natural -> Na
 scanChain ctx store pub chain window from = go from from
   where
     go next off = do
-      let addrs = addrsDerivPage ctx chain (Page window off) pub
+      let addrs = chainAddresses ctx pub chain (Page window off)
       bals <- fromStore $ storeBalances store (fst <$> addrs)
       let used = Set.fromList [bal.address | bal <- bals, bal.txs /= 0]
-          usedIndices = [fromIntegral (pathIndex path) | (addr, path) <- addrs, addr `Set.member` used]
+          usedIndices = [fromIntegral i | (addr, i) <- addrs, addr `Set.member` used]
       if null usedIndices
         then return next
         else go (maximum usedIndices + 1) (off + window)
@@ -76,7 +76,7 @@ watchGap ctx cfg store accId = do
       extend addrType = do
         let have = fromIntegral $ dBAccountCount addrType acc
         next <- scanChain ctx store pub (addrDeriv addrType) (configGap cfg) have
-        discoverAccGenAddrs ctx cfg accId addrType (fromIntegral next)
+        extendChainTo ctx accId addrType next
         return (next - have)
   (+) <$> extend AddrExternal <*> extend AddrInternal
 

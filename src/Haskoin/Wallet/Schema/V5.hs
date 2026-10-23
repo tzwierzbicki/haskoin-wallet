@@ -15,10 +15,8 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 
--- | The tables of the database format version 5, the format of hw 0.10 and
--- the latest one: "Haskoin.Wallet.Database" exports them again as the tables
--- of the wallet. They stay here as they are once a later version changes
--- them, so that the step to that version still has them.
+-- | The tables of the database format version 5, kept as they were as the
+-- format the step to version 6 starts from: "Haskoin.Wallet.Migration.V6".
 --
 -- Version 5 dropped the locked column of the coins: whether a coin is spent
 -- by a pending transaction is read from the pending transactions.

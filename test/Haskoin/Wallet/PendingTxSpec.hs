@@ -102,7 +102,7 @@ secondFunding ctx = spendingTx ctx [(fakeTxHash 2, 0)] [(externalAddr 1, 10000)]
 fundAccount :: Ctx -> Config -> DBAccountId -> ExceptT String (DB IO) ()
 fundAccount ctx cfg accId = do
   _ <- genExtAddress ctx cfg accId ""
-  _ <- nextFreeIntAddr ctx cfg accId
+  _ <- changeAddress ctx cfg accId
   lift $ insertRawTx (funding ctx)
   _ <- refreshCoins btc accId externalAddrs [storeCoin ctx (txHash (funding ctx), 0) (Just 0) (externalAddr 0) 20000]
   return ()
@@ -214,7 +214,7 @@ importingSpec ctx =
         -- One output, so nothing is shuffled and the hash is fixed
         importPendingTx btc ctx accId tsd `dbShouldBeE` "720a9cfea170cc699458a97fe34da547dde30d9d54e5210cd88f1b76b139696c"
         (map jsonCoinLocked <$> coinPage btc accId (Page 5 0)) `dbShouldBeE` [True]
-        (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 0
+        (dBAddressIndex <$> changeAddress ctx cfg accId) `dbShouldBeE` 0
     it "holds a payment to an external address of the wallet as an internal transaction" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -237,7 +237,7 @@ importingSpec ctx =
           map txInfoAmount summaries `shouldBe` [-226]
         (map jsonCoinLocked <$> coinPage btc accId (Page 5 0)) `dbShouldBeE` [True]
         -- The change address is taken
-        (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 1
+        (dBAddressIndex <$> changeAddress ctx cfg accId) `dbShouldBeE` 1
     it "replaces the unsigned version with the signed one, and refuses the rest" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -585,9 +585,9 @@ deletingSpec ctx =
         (accId, _) <- testNewAcc ctx "test"
         (pendingHash, _) <- signedPending ctx cfg accId
         -- The change went to /1/0
-        (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 1
+        (dBAddressIndex <$> changeAddress ctx cfg accId) `dbShouldBeE` 1
         deleteTx ctx (const (toStore emptyStore)) pendingHash `dbShouldBeE` (1, 1)
-        (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 0
+        (dBAddressIndex <$> changeAddress ctx cfg accId) `dbShouldBeE` 0
     it "retiring a sent transaction, as the sync does, frees its coin but keeps its change address" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -597,8 +597,10 @@ deletingSpec ctx =
         lift $ retirePendingTx held
         ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0)) `dbShouldBeE` []
         (map jsonCoinLocked <$> coinPage btc accId (Page 5 0)) `dbShouldBeE` [False]
-        -- The address was used on the chain
-        (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 1
+        -- The sync that retires it also records the change paid to /1/0,
+        -- and an address paid on the chain is never used again
+        updateAddressBalances btc [Store.Balance (internalAddr 0) 11774 0 1 1 11774]
+        (dBAddressIndex <$> changeAddress ctx cfg accId) `dbShouldBeE` 1
     it "refuses a transaction the wallet does not hold" $
       inDatabaseE $
         lift $

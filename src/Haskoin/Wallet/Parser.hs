@@ -60,6 +60,7 @@ data Command
       }
   | CommandAddrs
       { commandMaybeAcc :: !(Maybe Text),
+        commandInternal :: !Bool,
         commandPage :: !Page
       }
   | CommandLabel
@@ -560,11 +561,15 @@ receiveParser = do
       <> footer
         [r|
 There are two types of addresses in a BIP-44 wallet: internal and external addresses.
-Internal addresses are not exposed to the user and are managed internally by the
-wallet (mostly for producing change outputs in transactions). The `receive` command
+Internal addresses are managed by the wallet, which pays the change of its
+transactions to them; `addrs --internal` lists them. The `receive` command
 produces external addresses that are meant for receiving payments. Internal addresses
 are derived under the BIP-32 path M/44'/coin'/account'/1/address. External addresses
 use the path M/44'/coin'/account'/0/address.
+
+Every call gives a new address, up to the gap of BIP-44: once the last twenty
+addresses all await a payment, `receive` refuses and one of them is to be
+reused, as listed by `addrs`.
 |]
 
 labelOption :: Parser (Maybe Text)
@@ -582,9 +587,16 @@ addrsParser = do
   let cmd =
         CommandAddrs
           <$> accountOption
+          <*> internalOption
           <*> (Page <$> limitOption <*> offsetOption)
   info cmd $
-    progDesc "List the receiving addresses of an account"
+    progDesc "List the receiving addresses of an account, or its change addresses"
+
+internalOption :: Parser Bool
+internalOption =
+  switch $
+    long "internal"
+      <> help "List the internal addresses, where the change of the account's transactions goes, instead of the receiving ones"
 
 offsetOption :: Parser Natural
 offsetOption =
