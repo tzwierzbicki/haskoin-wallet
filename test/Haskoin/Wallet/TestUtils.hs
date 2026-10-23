@@ -512,6 +512,12 @@ externalAddr2 = testAddress externalAddr2Text
 testAccountXPubBch :: Text
 testAccountXPubBch = "xpub6DXWb36CzdZvWbtSrYQkbxtapXciSuuQYJhtg4ysKAcppi5bjxxHPBNgZRyabXmF1WLotb4wVoqzGB7beYL1SLoHTd4xPCQnFRkXXt2NXTB"
 
+-- | The key of account 0 of the test wallet on the test networks: Bitcoin
+-- testnet, Bitcoin Cash testnet and the regtests all use coin type 1 and
+-- the tpub prefix, so the text is the same on each of them
+testAccountXPubTest :: Text
+testAccountXPubTest = "tpubDCEeDpHvZZ49SMZ4VkifyjwqyJjKVFkbJHzhxZJiQgcMa2vnQnMhyXcu1ZZcReuwrprnxVnJsJGro7xdrEABAtK4AGZGqv2r4H7WytWLbPm"
+
 bchExternalAddrText :: Text
 bchExternalAddrText = "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"
 

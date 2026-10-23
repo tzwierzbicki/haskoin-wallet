@@ -30,7 +30,7 @@ import Haskoin.Wallet.PendingTx
 import Haskoin.Wallet.RawTx
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.TxBuilding
+import Haskoin.Wallet.TxBuilding (buildTxSignData)
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSigning (signWalletTx, verifySignedTx)

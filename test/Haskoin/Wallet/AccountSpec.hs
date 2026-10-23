@@ -8,9 +8,11 @@ module Haskoin.Wallet.AccountSpec (spec) where
 
 import Conduit (liftIO)
 import Control.Monad.Trans (lift)
+import Data.Maybe (fromJust)
 import Haskoin
 import Haskoin.Wallet.Account
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.Keys (walletFingerprint)
 import Haskoin.Wallet.TestUtils
 import Test.Hspec
 
@@ -94,3 +96,19 @@ accountSpec ctx = do
       lift $ getAccountNames `dbShouldBe` ["acc1", "hello world", "acc3"]
       _ <- renameAccount "hello world" "acc2"
       lift $ getAccountNames `dbShouldBe` ["acc1", "acc2", "acc3"]
+  it "refuses a second account with the key of an existing one" $
+    inDatabaseE $ do
+      _ <- testNewAcc ctx "main"
+      lift $
+        dbShouldFailWith "Account main already has this key" $
+          insertAccount btc ctx testFingerprint "again" (testAccountPub ctx)
+  it "holds one test network per account index, since they share their keys" $
+    inDatabaseE $ do
+      -- Bitcoin testnet, Bitcoin Cash testnet and the regtests all use coin
+      -- type 1: account 0 has the same key on each of them
+      let fp = forceRight $ walletFingerprint btcTest ctx testMnemonic
+          key net = fromJust $ xPubImport net ctx testAccountXPubTest
+      _ <- insertAccount btcTest ctx fp "testnet" (key btcTest)
+      lift $
+        dbShouldFailWith "Account testnet on btctest already has this key: the test networks share their account keys, so a wallet holds one of them per account index" $
+          insertAccount bchTest ctx fp "cash testnet" (key bchTest)
