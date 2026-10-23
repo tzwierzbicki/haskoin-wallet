@@ -139,12 +139,18 @@ sendingSpec ctx =
     it "abandons a sent transaction the store does not know, freeing its coin" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
-        (pendingHash, _) <- signedPending ctx cfg accId
+        (pendingHash, signed) <- signedPending ctx cfg accId
+        -- As if sent: online, with its raw transaction stored next to the
+        -- parent of its coin
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
+        lift $ insertRawTx (txSignDataTx signed)
+        lift (P.count ([] :: [P.Filter DBRawTx])) `dbShouldBeE` 2
         (map jsonCoinLocked <$> coinPage btc accId (Page 5 0)) `dbShouldBeE` [True]
         deleteTx ctx (const (toStore emptyStore)) pendingHash `dbShouldBeE` (1, 1)
         (map jsonCoinLocked <$> coinPage btc accId (Page 5 0)) `dbShouldBeE` [False]
         ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0)) `dbShouldBeE` []
+        -- Its raw transaction went with it; the parent of the coin stays
+        lift (P.count ([] :: [P.Filter DBRawTx])) `dbShouldBeE` 1
 
 pendingTxsSpec :: Ctx -> Config -> Spec
 pendingTxsSpec ctx cfg =
@@ -171,8 +177,9 @@ pendingTxsSpec ctx cfg =
       lift $ insertRawTx fundTx1
       lift $ insertRawTx fundTx2
       -- Insert two coins in the database
-      (c, dbCoins) <- refreshCoins btc accId (externalAddrs <> internalAddrs) [coin1, coin2]
-      liftIO $ c `shouldBe` 2
+      refreshed <- refreshCoins btc accId (externalAddrs <> internalAddrs) [coin1, coin2]
+      let dbCoins = insertedCoins refreshed
+      liftIO $ refreshedCount refreshed `shouldBe` 2
       let jsonCoin1 = forceRight $ toJsonCoin btc Nothing Set.empty (head dbCoins)
           jsonCoin2 = forceRight $ toJsonCoin btc Nothing Set.empty (dbCoins !! 1)
       tsd <- buildTxSignData btc ctx cfg gen LeastWaste accId [(otherAddr 0, 8000)] 1 0 SenderPays 1 []
@@ -370,7 +377,7 @@ pendingTxsSpec ctx cfg =
                 txSignDataFeeRate = Nothing,
                 txSignDataSigned = False
               }
-      (_, dbCoins3) <- refreshCoins btc accId (externalAddrs <> internalAddrs) [coin1, coin3]
+      dbCoins3 <- insertedCoins <$> refreshCoins btc accId (externalAddrs <> internalAddrs) [coin1, coin3]
       let jsonCoin3 = forceRight $ toJsonCoin btc Nothing Set.empty (head dbCoins3)
       coinPage btc accId (Page 5 0)
         `dbShouldBeE` [ jsonCoin3 {jsonCoinLocked = False},

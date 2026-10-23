@@ -7,7 +7,6 @@
 module Haskoin.Wallet.CoinSpec (spec) where
 
 import Conduit (liftIO)
-import Control.Arrow (second)
 import Control.Monad.Trans (lift)
 import qualified Data.Set as Set
 import Haskoin
@@ -29,9 +28,10 @@ coinSpec ctx =
       (accId, _) <- testNewAcc ctx "test"
       -- Insert a single coin
       let coin1 = storeCoin ctx (fakeTxHash 0, 0) Nothing (head externalAddrs) 10
-      (c, dbCoin) <- second head <$> refreshCoins btc accId externalAddrs [coin1]
+      refreshed <- refreshCoins btc accId externalAddrs [coin1]
+      let dbCoin = head (insertedCoins refreshed)
       liftIO $ do
-        c `shouldBe` 1
+        refreshedCount refreshed `shouldBe` 1
         dBCoinAccountWallet dbCoin `shouldBe` DBWalletKey testFingerprintText
         dBCoinAccountDerivation dbCoin `shouldBe` "/44'/0'/0'"
         dBCoinAddress dbCoin `shouldBe` head externalAddrsText
@@ -52,10 +52,10 @@ coinSpec ctx =
       getSpendableCoins btc accId 0 `dbShouldBeE` [coin1]
       getSpendableCoins btc accId 1 `dbShouldBeE` []
       -- Nothing should happen when refreshing the same data
-      refreshCoins btc accId externalAddrs [coin1] `dbShouldBeE` (0, [])
+      refreshCoins btc accId externalAddrs [coin1] `dbShouldBeE` Refreshed 0 [] []
       -- Confirm and update the coin
       let coin1' = coin1 {Store.block = Store.BlockRef 1 0} :: Store.Unspent
-      refreshCoins btc accId externalAddrs [coin1'] `dbShouldBeE` (1, [])
+      refreshCoins btc accId externalAddrs [coin1'] `dbShouldBeE` Refreshed 1 [] []
       getSpendableCoins btc accId 0 `dbShouldBeE` [coin1']
       getSpendableCoins btc accId 1 `dbShouldBeE` [coin1']
       getSpendableCoins btc accId 2 `dbShouldBeE` []
@@ -99,7 +99,7 @@ coinSpec ctx =
       getSpendableCoins btc accId 10 `dbShouldBeE` [coin1']
       getSpendableCoins btc accId 11 `dbShouldBeE` []
       let coin1'' = coin1 {Store.block = Store.BlockRef 10 0} :: Store.Unspent
-      refreshCoins btc accId externalAddrs [coin1''] `dbShouldBeE` (1, [])
+      refreshCoins btc accId externalAddrs [coin1''] `dbShouldBeE` Refreshed 1 [] []
       coinPage btc accId (Page 5 0)
         `dbShouldBeE` [ jsonCoin1
                           { jsonCoinBlock = Store.BlockRef 10 0,
@@ -110,6 +110,7 @@ coinSpec ctx =
       getSpendableCoins btc accId 1 `dbShouldBeE` [coin1'']
       getSpendableCoins btc accId 2 `dbShouldBeE` []
       -- Delete the coin
-      refreshCoins btc accId externalAddrs [] `dbShouldBeE` (1, [])
+      deleted <- refreshCoins btc accId externalAddrs []
+      liftIO $ (refreshedCount deleted, dBCoinAddress <$> deletedCoins deleted) `shouldBe` (1, [head externalAddrsText])
       getSpendableCoins btc accId 0 `dbShouldBeE` []
       coinPage btc accId (Page 5 0) `dbShouldBeE` []

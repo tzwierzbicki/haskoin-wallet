@@ -168,7 +168,7 @@ sync ctx cfg store net accId full = do
         <> show countedCoins
         <> " coins for the addresses to update but listed "
         <> show (length unspents)
-  (coinCount, _) <- refreshCoins net accId changedAddrs unspents
+  refreshed <- refreshCoins net accId changedAddrs unspents
   -- The raw transactions the coins come from, which signing needs. A raw
   -- transaction never changes, so the ones already stored are not fetched
   -- again. The store must have every one asked for: it lists the coins.
@@ -198,6 +198,17 @@ sync ctx cfg store net accId full = do
   forM_ resend $ fromStore . storePublish store
   let pub = accountXPubKey ctx newAcc
   conflicted <- filterM (inConflict net pub) waiting
+  -- A raw transaction is kept while a coin comes from it. The parents of
+  -- the coins that are gone and the transactions just retired are dropped,
+  -- unless one of their outputs is still a coin of the wallet, change for
+  -- instance. A full sync looks at every raw transaction instead, which
+  -- also cleans up after the versions of hw that kept them all.
+  goneParents <- liftEither $ mapM parentOf refreshed.deletedCoins
+  let retired = [txHash p.pendingTxData.txSignDataTx | p <- done]
+  _ <-
+    if everything
+      then dropOrphanRawTxs
+      else lift $ dropRawTxsWithoutCoins (nubOrd $ goneParents <> retired)
   lift $ updateBest net (headerHash best.header) best.height
   return $
     SyncRes
@@ -205,10 +216,11 @@ sync ctx cfg store net accId full = do
       (headerHash best.header)
       (fromIntegral best.height)
       (fromIntegral $ length $ filter id $ snd <$> resTxInfo)
-      (fromIntegral coinCount)
+      (fromIntegral refreshed.refreshedCount)
       (fromIntegral $ length resend)
       (fromIntegral $ length conflicted)
   where
+    parentOf coin = (.hash) <$> coinOutpoint coin
     inConflict net' pub p = do
       txInfo <- liftEither $ parseTxSignData net' ctx pub p.pendingTxData
       not . null <$> lift (conflictedInputs txInfo)
