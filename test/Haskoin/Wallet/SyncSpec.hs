@@ -3,9 +3,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The synchronisation of an account, played against a scripted store:
--- payments arriving, confirming, being replaced or dropped, the chain
--- reorganising, a wallet with many coins or many addresses, and the raw
--- transactions fetched only when missing
+-- payments arriving, confirming, being replaced or dropped, a payment the
+-- wallet made, the chain reorganising, a wallet with many coins or many
+-- addresses, the raw transactions fetched only when missing and dropped
+-- when no coin needs them, pending transactions, two accounts, another
+-- network; and the discovery of the used addresses of an account
 module Haskoin.Wallet.SyncSpec (spec) where
 
 import Control.Concurrent (threadDelay)
@@ -17,7 +19,7 @@ import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
 import Data.Default (def)
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef, newIORef, readIORef)
-import Data.List (sort, sortOn)
+import Data.List (find, sort, sortOn)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Text (Text)
@@ -36,7 +38,7 @@ import Haskoin.Wallet.RawTx (hasRawTx, insertRawTx)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.TxInfo (TxInfo (..), TxInfoPending (..), txsPage)
+import Haskoin.Wallet.TxInfo (MyOutputs (..), TxInfo (..), TxInfoPending (..), TxType (..), txsPage)
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.Util (Page (Page))
 import Numeric.Natural (Natural)
@@ -342,6 +344,122 @@ spec = prepareContext $ \ctx -> do
         deleteTx ctx (const (toStore emptyStore)) pendingHash `dbShouldBeE` (0, 0)
         ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0)) `dbShouldBeE` []
 
+    it "follows a payment the wallet made: the coin goes, the change comes, the summary is a debit" $
+      inDatabaseE $ do
+        accId <- account
+        -- The change address, /1/0, and the coin to spend
+        _ <- nextFreeIntAddr ctx cfg accId
+        _ <- syncWith (realPaymentStore ctx) accId
+        -- The user prepared, signed and sent the payment, as sendtx leaves
+        -- it: pending, online, its raw transaction stored
+        lift $ P.insert_ $ pendingRow accId (changeSpendTx ctx)
+        lift (setPendingTxOnline (nosigHash (changeSpendTx ctx))) `dbShouldBeE` 1
+        lift $ insertRawTx (changeSpendTx ctx)
+        -- The store lists it, confirmed
+        res <- syncWith (changeSpentStore ctx) accId
+        liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (1, 2)
+        -- A debit of 41000: 40000 paid and 1000 of fee, 9000 of change to /1/0
+        txInfos <- txsPage ctx accId (Page 5 0)
+        spend <- liftMaybe "The payment has no summary" $ find ((== Just (txHash (changeSpendTx ctx))) . txInfoHash) txInfos
+        liftIO $ do
+          txInfoType spend `shouldBe` TxDebit
+          txInfoAmount spend `shouldBe` -41000
+          txInfoFee spend `shouldBe` 1000
+          Map.toList (txInfoOtherOutputs spend) `shouldBe` [(otherAddr 0, 40000)]
+          Map.toList (Map.map myOutputsPath (txInfoMyOutputs spend)) `shouldBe` [(internalAddr 0, Deriv :/ 1 :/ 0)]
+          Map.keys (txInfoMyInputs spend) `shouldBe` [externalAddr 0]
+          txInfoPending spend `shouldBe` Nothing
+        coins accId `dbShouldBeE` [OutPoint (txHash (changeSpendTx ctx)) 1]
+        balances accId `dbShouldBeE` (9000, 0, 1)
+        pendingHashes accId `dbShouldBeE` []
+        -- The parent of the spent coin is gone; the payment stays, for its change
+        rawTransactionCount `dbShouldBeE` 1
+        lift (hasRawTx (txHash (changeSpendTx ctx))) `dbShouldBeE` True
+
+    it "syncs each account on its own" $
+      inDatabaseE $ do
+        accId <- account
+        (accId2, _) <- testNewAcc2 ctx "second"
+        addr2 <- genExtAddress ctx cfg accId2 ""
+        liftIO $ dBAddressAddress addr2 `shouldBe` externalAddr2Text
+        _ <- syncWith (twoWalletsStore ctx) accId
+        summaries ctx accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
+        summaries ctx accId2 `dbShouldBeE` []
+        balances accId2 `dbShouldBeE` (0, 0, 0)
+        _ <- syncWith (twoWalletsStore ctx) accId2
+        summaries ctx accId2 `dbShouldBeE` [(Just (fakeTxHash 2), Store.BlockRef 800001 1, 30000)]
+        coins accId2 `dbShouldBeE` [OutPoint (fakeTxHash 2) 0]
+        balances accId `dbShouldBeE` (50000, 0, 1)
+        balances accId2 `dbShouldBeE` (30000, 0, 1)
+
+    it "syncs an account on another network, with the best block of that network" $
+      inDatabaseE $ do
+        (accId, acc) <- testNewAccBch ctx "cash"
+        liftIO $ dBAccountXPubKey acc `shouldBe` testAccountXPubBch
+        addr <- genExtAddress ctx cfg accId ""
+        liftIO $ dBAddressAddress addr `shouldBe` bchExternalAddrText
+        res <- sync ctx cfg (toStore (cashPaymentStore ctx)) bch accId False
+        liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (1, 1)
+        summaries ctx accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
+        (map jsonCoinOutpoint <$> coinPage bch accId (Page 5 0)) `dbShouldBeE` [OutPoint (fakeTxHash 1) 0]
+        balances accId `dbShouldBeE` (50000, 0, 1)
+        lift (getBest bch) `dbShouldBeE` Just (headerHash (blockAt 800002 1).header, 800002)
+        lift (getBest btc) `dbShouldBeE` Nothing
+
+  describe "Discovering the addresses of an account" $ do
+    -- A recovery gap of 3 instead of the default 40: the scan looks at
+    -- windows of three addresses, so the ten written-out addresses of the
+    -- test wallet are enough. The gap of new addresses stays at 20 and
+    -- plays no part.
+    let small = cfg {configRecoveryGap = 3}
+        discover store = runExceptT $ discoverAddrs ctx small (toStore store) (testAccountPub ctx)
+        -- A store where the given addresses each have one transaction
+        used addrs = emptyStore {fakeBalances = [Store.Balance addr 1000 0 1 1 1000 | addr <- addrs]}
+
+    it "finds nothing in an empty store, after one window on each chain" $ do
+      asked <- newIORef []
+      let store = notingBalanceRequests asked (toStore emptyStore)
+      runExceptT (discoverAddrs ctx small store (testAccountPub ctx)) `shouldReturn` Right (0, 0)
+      readIORef asked `shouldReturn` [take 3 externalAddrs, take 3 internalAddrs]
+
+    it "counts the addresses up to the last used one on each chain" $
+      discover (used [externalAddr 0, externalAddr 4, internalAddr 1]) `shouldReturn` Right (5, 2)
+
+    it "stops after a window without a used address, so a gap of three hides address 3" $
+      discover (used [externalAddr 3]) `shouldReturn` Right (0, 0)
+
+    it "looks at one more window past the last used address" $ do
+      asked <- newIORef []
+      let store = notingBalanceRequests asked (toStore (used [externalAddr 2]))
+      runExceptT (discoverAddrs ctx small store (testAccountPub ctx)) `shouldReturn` Right (3, 0)
+      readIORef asked `shouldReturn` [take 3 externalAddrs, take 3 (drop 3 externalAddrs), take 3 internalAddrs]
+
+    it "counts an address whose coins are all spent as used" $
+      discover (emptyStore {fakeBalances = [Store.Balance (externalAddr 1) 0 0 0 2 1000]}) `shouldReturn` Right (2, 0)
+
+    it "ignores an address the store lists without transactions" $
+      discover (emptyStore {fakeBalances = [Store.Balance (externalAddr 1) 0 0 0 0 0]}) `shouldReturn` Right (0, 0)
+
+    it "fails when the store fails" $
+      runExceptT (discoverAddrs ctx small ((toStore emptyStore) {storeBalances = \_ -> throwError "The store is down"}) (testAccountPub ctx))
+        `shouldReturn` Left "The store is down"
+
+    it "generates the discovered addresses and syncs them, as discoveracc does" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "main"
+        let store = toStore (discoveredStore ctx)
+        (e, i) <- discoverAddrs ctx small store (testAccountPub ctx)
+        liftIO $ (e, i) `shouldBe` (5, 2)
+        discoverAccGenAddrs ctx small accId AddrExternal (fromIntegral e)
+        discoverAccGenAddrs ctx small accId AddrInternal (fromIntegral i)
+        _ <- sync ctx small store btc accId True
+        found <- summaries ctx accId
+        liftIO $ found `shouldMatchList` [(Just (txHash tx), Store.BlockRef height 1, fromIntegral amount) | (_, amount, height, tx) <- discoveredPayments ctx]
+        held <- coins accId
+        liftIO $ held `shouldMatchList` [OutPoint (txHash tx) 0 | (_, _, _, tx) <- discoveredPayments ctx]
+        balances accId `dbShouldBeE` (80000, 0, 3)
+        rawTransactionCount `dbShouldBeE` 3
+
   describe "Asking the store in parallel" $ do
     it "answers in the order asked, even when later questions finish first" $ do
       -- Question 1 takes 25 milliseconds, question 5 takes 5
@@ -620,7 +738,7 @@ realPayoutFirstSpentStore ctx =
       fakeTxRefs = [(externalAddr 0, [spendRef 8, payoutRef]), (externalAddr 1, [payoutRef])],
       fakeTransactions =
         (realPayoutStore ctx).fakeTransactions
-          <> [spendingStoreTx ctx (fakeTxHash 8) (Store.BlockRef 800001 1) (tid, 0) (externalAddr 0) (otherAddr 1) 49000],
+          <> [spendingStoreTx ctx (fakeTxHash 8) (Store.BlockRef 800001 1) (tid, 0) (externalAddr 0) [(otherAddr 1, 49000)]],
       fakeUnspents = [coinAt ctx tid 1 (Just 800000) (externalAddr 1) 30000]
     }
   where
@@ -640,13 +758,106 @@ realPayoutAllSpentStore ctx =
       fakeTxRefs = [(externalAddr 0, [spendRef 8, payoutRef]), (externalAddr 1, [spendRef 9, payoutRef])],
       fakeTransactions =
         (realPayoutFirstSpentStore ctx).fakeTransactions
-          <> [spendingStoreTx ctx (fakeTxHash 9) (Store.BlockRef 800001 1) (tid, 1) (externalAddr 1) (otherAddr 1) 29000],
+          <> [spendingStoreTx ctx (fakeTxHash 9) (Store.BlockRef 800001 1) (tid, 1) (externalAddr 1) [(otherAddr 1, 29000)]],
       fakeUnspents = []
     }
   where
     tid = realPayoutId ctx
     payoutRef = Store.TxRef (Store.BlockRef 800000 1) tid
     spendRef n = Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash n)
+
+-- | The wallet's own payment from the coin of 'realPaymentStore': 40000 to
+-- otherAddr 0 and 9000 of change to internalAddr 0, 1000 of fee
+changeSpendTx :: Ctx -> Tx
+changeSpendTx ctx = spendingTx ctx [(realPaymentId ctx, 0)] [(otherAddr 0, 40000), (internalAddr 0, 9000)]
+
+-- | The payment of 'realPaymentStore' spent by 'changeSpendTx', confirmed
+-- at height 800001: the coin is gone, the change is a coin at internalAddr 0
+changeSpentStore :: Ctx -> FakeStore
+changeSpentStore ctx =
+  (realPaymentStore ctx)
+    { fakeBalances =
+        [ Store.Balance (externalAddr 0) 0 0 0 2 50000,
+          Store.Balance (internalAddr 0) 9000 0 1 1 9000
+        ],
+      fakeTxRefs =
+        [ (externalAddr 0, [spendRef, paymentRef]),
+          (internalAddr 0, [spendRef])
+        ],
+      fakeTransactions =
+        [ creditTx ctx (realPaymentId ctx) (Store.BlockRef 800000 1) (externalAddr 0) 50000,
+          spendingStoreTx ctx spend (Store.BlockRef 800001 1) (realPaymentId ctx, 0) (externalAddr 0) [(otherAddr 0, 40000), (internalAddr 0, 9000)]
+        ],
+      fakeUnspents = [coinAt ctx spend 1 (Just 800001) (internalAddr 0) 9000],
+      fakeRawTransactions = [(realPaymentId ctx, realPaymentTx ctx), (spend, changeSpendTx ctx)]
+    }
+  where
+    spend = txHash (changeSpendTx ctx)
+    spendRef = Store.TxRef (Store.BlockRef 800001 1) spend
+    paymentRef = Store.TxRef (Store.BlockRef 800000 1) (realPaymentId ctx)
+
+-- | A payment of 50000 to externalAddr 0 of the test wallet, as transaction
+-- 1 at height 800000, and one of 30000 to the first address of the second
+-- wallet, as transaction 2 at height 800001
+twoWalletsStore :: Ctx -> FakeStore
+twoWalletsStore ctx =
+  emptyStore
+    { fakeBalances =
+        [ Store.Balance (externalAddr 0) 50000 0 1 1 50000,
+          Store.Balance externalAddr2 30000 0 1 1 30000
+        ],
+      fakeTxRefs =
+        [ (externalAddr 0, [Store.TxRef (Store.BlockRef 800000 1) (fakeTxHash 1)]),
+          (externalAddr2, [Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 2)])
+        ],
+      fakeTransactions =
+        [ creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000,
+          creditTx ctx (fakeTxHash 2) (Store.BlockRef 800001 1) externalAddr2 30000
+        ],
+      fakeUnspents =
+        [ coinOf ctx (fakeTxHash 1) (Just 800000) (externalAddr 0) 50000,
+          coinOf ctx (fakeTxHash 2) (Just 800001) externalAddr2 30000
+        ],
+      fakeRawTransactions =
+        [ (fakeTxHash 1, fundingTx ctx 1 [(externalAddr 0, 50000)]),
+          (fakeTxHash 2, fundingTx ctx 2 [(externalAddr2, 30000)])
+        ]
+    }
+
+-- | A payment of 50000 to the first address of the Bitcoin Cash account,
+-- as transaction 1, confirmed at height 800000
+cashPaymentStore :: Ctx -> FakeStore
+cashPaymentStore ctx =
+  emptyStore
+    { fakeBalances = [Store.Balance bchExternalAddr 50000 0 1 1 50000],
+      fakeTxRefs = [(bchExternalAddr, [Store.TxRef (Store.BlockRef 800000 1) (fakeTxHash 1)])],
+      fakeTransactions = [creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) bchExternalAddr 50000],
+      fakeUnspents = [coinOf ctx (fakeTxHash 1) (Just 800000) bchExternalAddr 50000],
+      fakeRawTransactions = [(fakeTxHash 1, fundingTx ctx 1 [(bchExternalAddr, 50000)])]
+    }
+
+-- | The payments of 'discoveredStore': the address paid, the amount, the
+-- height of the block, and the raw transaction, listed under its own hash
+discoveredPayments :: Ctx -> [(Address, Word64, Word32, Tx)]
+discoveredPayments ctx =
+  [ (externalAddr 0, 50000, 800000, fundingTx ctx 1 [(externalAddr 0, 50000)]),
+    (externalAddr 4, 20000, 800001, fundingTx ctx 2 [(externalAddr 4, 20000)]),
+    (internalAddr 1, 10000, 800001, fundingTx ctx 3 [(internalAddr 1, 10000)])
+  ]
+
+-- | Payments to three addresses of an account that has not generated any
+-- address yet: externalAddr 0 and 4, and internalAddr 1
+discoveredStore :: Ctx -> FakeStore
+discoveredStore ctx =
+  emptyStore
+    { fakeBalances = [Store.Balance addr amount 0 1 1 amount | (addr, amount, _, _) <- paid],
+      fakeTxRefs = [(addr, [Store.TxRef (Store.BlockRef height 1) (txHash tx)]) | (addr, _, height, tx) <- paid],
+      fakeTransactions = [creditTx ctx (txHash tx) (Store.BlockRef height 1) addr amount | (addr, amount, height, tx) <- paid],
+      fakeUnspents = [coinOf ctx (txHash tx) (Just (fromIntegral height)) addr (fromIntegral amount) | (addr, amount, height, tx) <- paid],
+      fakeRawTransactions = [(txHash tx, tx) | (_, _, _, tx) <- paid]
+    }
+  where
+    paid = discoveredPayments ctx
 
 -- | A store that lists the coin of the payment but has no raw transaction
 -- for it
@@ -698,20 +909,21 @@ spentElsewhereStore ctx =
         ],
       fakeTransactions =
         [ creditTx ctx (realPaymentId ctx) (Store.BlockRef 800000 1) (externalAddr 0) 50000,
-          spendingStoreTx ctx (fakeTxHash 8) (Store.BlockRef 800001 1) (realPaymentId ctx, 0) (externalAddr 0) (otherAddr 1) 49000
+          spendingStoreTx ctx (fakeTxHash 8) (Store.BlockRef 800001 1) (realPaymentId ctx, 0) (externalAddr 0) [(otherAddr 1, 49000)]
         ],
       fakeUnspents = []
     }
 
--- | A transaction of the store spending one coin of ours to another address
-spendingStoreTx :: Ctx -> TxHash -> Store.BlockRef -> (TxHash, Word32) -> Address -> Address -> Word64 -> Store.Transaction
-spendingStoreTx ctx tid block (spentHash, spentIndex) from to amount =
+-- | A transaction of the store spending one coin of ours, paying the given
+-- addresses with a fee of 1000
+spendingStoreTx :: Ctx -> TxHash -> Store.BlockRef -> (TxHash, Word32) -> Address -> [(Address, Word64)] -> Store.Transaction
+spendingStoreTx ctx tid block (spentHash, spentIndex) from paid =
   Store.Transaction
     { Store.block = block,
       Store.version = 1,
       Store.locktime = 0,
-      Store.inputs = [Store.StoreInput (OutPoint spentHash spentIndex) 0xffffffff BS.empty (addressScript ctx from) (amount + 1000) [] (Just from)],
-      Store.outputs = [Store.StoreOutput amount (addressScript ctx to) Nothing (Just to)],
+      Store.inputs = [Store.StoreInput (OutPoint spentHash spentIndex) 0xffffffff BS.empty (addressScript ctx from) (sum (snd <$> paid) + 1000) [] (Just from)],
+      Store.outputs = [Store.StoreOutput amount (addressScript ctx to) Nothing (Just to) | (to, amount) <- paid],
       Store.deleted = False,
       Store.rbf = False,
       Store.timestamp = 1700000000,

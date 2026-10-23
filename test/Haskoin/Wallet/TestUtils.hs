@@ -162,6 +162,18 @@ testNewAcc2 ctx name = do
       pub = deriveXPubKey ctx prv
   insertAccount btc ctx fp name pub
 
+-- | A new Bitcoin Cash account of the test wallet in the database. hw
+-- names a wallet by the fingerprint of its account 0 on the network, so
+-- this account is filed under another wallet than the Bitcoin accounts of
+-- the same mnemonic.
+testNewAccBch :: Ctx -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
+testNewAccBch ctx name = do
+  let fp = forceRight $ walletFingerprint bch ctx testMnemonic
+  d <- lift $ nextAccountDeriv fp bch
+  let prv = forceRight $ signingKey bch ctx testMnemonic d
+      pub = deriveXPubKey ctx prv
+  insertAccount bch ctx fp name pub
+
 {- Test vector files -}
 
 -- Test vectors are stored as JSON files in a directory under test/data (see
@@ -481,6 +493,24 @@ testAccountXPrv2, testAccountXPub2 :: Text
 testAccountXPrv2 = "xprv9yXnZpEVdonEtT3strknsAgso5qq1cwRooo6susmzVmB5E2vvNw1KKRBgvwvNLxXdBHnkEN5R5uXi2QDs3tpkoBbL61NE6bnSbcrvH6keGa"
 testAccountXPub2 = "xpub6CX8yKmPUBLY6w8LztHoEJdcM7gKR5fHB2ihgJHPYqJ9x2N5TvFFs7jfYCX6So9oYyu6eLDTG5dbQWPncv1PYJtXLJ4cwymhoCpeTEmnZFZ"
 
+-- | The first external address of account 0 of the second wallet, /0/0
+externalAddr2Text :: Text
+externalAddr2Text = "1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2"
+
+externalAddr2 :: Address
+externalAddr2 = testAddress externalAddr2Text
+
+-- | The test wallet on Bitcoin Cash: the public key of its account 0,
+-- m/44'/145'/0', and the first external address of that account
+testAccountXPubBch :: Text
+testAccountXPubBch = "xpub6DXWb36CzdZvWbtSrYQkbxtapXciSuuQYJhtg4ysKAcppi5bjxxHPBNgZRyabXmF1WLotb4wVoqzGB7beYL1SLoHTd4xPCQnFRkXXt2NXTB"
+
+bchExternalAddrText :: Text
+bchExternalAddrText = "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"
+
+bchExternalAddr :: Address
+bchExternalAddr = fromMaybe (error "bchExternalAddr") (textToAddr bch bchExternalAddrText)
+
 {- The scripted store -}
 
 -- A store the sync and the commands can be played against without a
@@ -573,6 +603,15 @@ notingBlockRequests asked store =
     { storeBlocksAtHeight = \height -> do
         liftIO $ modifyIORef asked (<> [height])
         storeBlocksAtHeight store height
+    }
+
+-- | The store, noting every list of addresses whose balances it is asked for
+notingBalanceRequests :: IORef [[Address]] -> Store -> Store
+notingBalanceRequests asked store =
+  store
+    { storeBalances = \addrs -> do
+        liftIO $ modifyIORef asked (<> [addrs])
+        storeBalances store addrs
     }
 
 -- | A block of the main chain, whose hash depends on the nonce
