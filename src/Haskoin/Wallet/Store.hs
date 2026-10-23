@@ -18,7 +18,6 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebClient
 import Haskoin.Wallet.Config
-import Haskoin.Wallet.Database
 import Numeric.Natural (Natural)
 import UnliftIO.Async (pooledMapConcurrentlyN)
 
@@ -104,8 +103,8 @@ webStore ctx cfg net =
 
 {- Asking -}
 
--- | Ask the store from inside a database action
-fromStore :: (MonadIO m) => ExceptT String IO a -> ExceptT String (DB m) a
+-- | Ask the store from inside another monad, a database action usually
+fromStore :: (MonadIO m) => ExceptT String IO a -> ExceptT String m a
 fromStore action = ExceptT $ liftIO $ runExceptT action
 
 -- | Ask the store several questions, at most the given number at a time,

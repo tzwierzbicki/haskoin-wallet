@@ -556,7 +556,7 @@ prettyPrinter unit =
             text "-----END BITCOIN SIGNED MESSAGE-----"
           ]
     ResponseSync xs -> do
-      let f (SyncRes acc bh h t c r k) =
+      let f (SyncRes acc bh h t c r k n) =
             [ accountPrinter unit acc,
               formatTitle "Sync Results:",
               nest 2 $
@@ -566,7 +566,8 @@ prettyPrinter unit =
               nest 2 $ keyPrinter 12 "Tx updates" <> formatValue (show t),
               nest 2 $ keyPrinter 12 "Coin updates" <> formatValue (show c),
               nest 2 $ keyPrinter 12 "Sent again" <> formatValue (show r),
-              nest 2 $ keyPrinter 12 "Conflicted" <> formatValue (show k)
+              nest 2 $ keyPrinter 12 "Conflicted" <> formatValue (show k),
+              nest 2 $ keyPrinter 12 "Discovered" <> formatValue (show n)
             ]
       renderIO $ vcat $ intercalate [text " "] (f <$> xs)
     ResponseVersion v dbv ->
