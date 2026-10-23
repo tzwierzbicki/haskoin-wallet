@@ -1,7 +1,5 @@
 {-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE NoFieldSelectors #-}
 {-# LANGUAGE OverloadedRecordDot #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 
 -- | Building the wallet's transactions around the coin selection of
@@ -37,6 +35,7 @@ import Haskoin.Wallet.Coin
 import Haskoin.Wallet.CoinSelection
 import Haskoin.Wallet.Config (Config)
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.PendingTx (changeAddress)
 import Haskoin.Wallet.RawTx
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSize (outputSize, p2pkhOutputSize)
@@ -118,7 +117,7 @@ fetchWalletCoins ::
 fetchWalletCoins net ctx cfg accId recipients minConf = do
   coins <- getSpendableCoins net accId minConf
   coinPaths <- Map.fromList <$> mapM (coinWithPath net accId) coins
-  change <- liftEither . fromDBAddr net =<< nextFreeIntAddr ctx cfg accId
+  change <- liftEither . fromDBAddr net =<< changeAddress ctx cfg accId
   recipientPaths <- walletPaths net accId recipients
   return WalletCoins {coins, coinPaths, change, recipientPaths}
 
@@ -128,7 +127,7 @@ coinWithPath ::
   Network -> DBAccountId -> Store.Unspent -> ExceptT String (DB m) (Address, SoftPath)
 coinWithPath net accId coin = do
   addr <- liftEither $ maybeToEither "A spendable coin has no address" coin.address
-  path <- liftEither =<< lift (getCoinDeriv net accId coin)
+  path <- addressPath net accId addr >>= liftMaybe "A spendable coin has no derivation path"
   return (addr, path)
 
 {- Building -}

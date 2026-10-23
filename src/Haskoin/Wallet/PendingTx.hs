@@ -25,6 +25,7 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Account
 import Haskoin.Wallet.Address
+import Haskoin.Wallet.Config (Config)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.RawTx
 import Haskoin.Wallet.Store
@@ -40,8 +41,9 @@ import Numeric.Natural (Natural)
 data Touched = Touched
   { -- | The coins it spends
     coinsSpent :: ![OutPoint],
-    -- | Its internal addresses, where its change goes
+    -- | Its internal addresses, where its change goes, and their paths
     changeAddresses :: ![Address],
+    changePaths :: ![SoftPath],
     -- | Its other addresses of the wallet, paid or spent from
     otherAddresses :: ![Address]
   }
@@ -51,6 +53,7 @@ touchedBy txInfo =
   Touched
     { coinsSpent = (.outpoint) <$> concatMap myInputsSigInput (Map.elems txInfo.txInfoMyInputs),
       changeAddresses = Map.keys change,
+      changePaths = myOutputsPath <$> Map.elems change,
       otherAddresses = nub $ Map.keys paid <> Map.keys txInfo.txInfoMyInputs
     }
   where
@@ -141,6 +144,20 @@ lockedOutpoints accId = do
   held <- pendingTxs accId
   return $ Set.fromList [input.outpoint | p <- held, input <- (txSignDataTx p.pendingTxData).inputs]
 
+-- | The change addresses the pending transactions of an account pay, as
+-- derivation paths: held as long as a transaction is pending, like the
+-- coins it spends
+reservedChangePaths :: (MonadUnliftIO m) => DBAccountId -> ExceptT String (DB m) [SoftPath]
+reservedChangePaths accId = do
+  held <- pendingTxs accId
+  return $ nub [path | p <- held, path <- p.pendingTxData.txSignDataOutputPaths, isIntPath path]
+
+-- | The change address for a new transaction of the account: the lowest
+-- internal address that no transaction has used and no pending transaction
+-- pays, or the next one of the chain
+changeAddress :: (MonadUnliftIO m) => Ctx -> Config -> DBAccountId -> ExceptT String (DB m) DBAddress
+changeAddress ctx cfg accId = nextChangeAddress ctx cfg accId =<< reservedChangePaths accId
+
 -- | Whether the wallet holds the coin. The coin table is read here rather
 -- than through "Haskoin.Wallet.Coin", which needs this module for the locks.
 coinExists :: (MonadUnliftIO m) => OutPoint -> DB m Bool
@@ -160,7 +177,7 @@ inConflict ctx acc p = do
 {- Importing -}
 
 -- | Store a transaction of the account as pending, which locks the coins it
--- spends and marks its change address busy. A signed transaction must
+-- spends and holds its change address. A signed transaction must
 -- carry valid signatures: they are checked here, so that sending has
 -- nothing left to check. Importing a transaction the account already
 -- holds replaces it with the newer version, signed where it was unsigned;
@@ -214,36 +231,33 @@ insertPendingTx net accId@(DBAccountKey wallet accDeriv) tsd txInfo = do
     inWallet <- lift $ coinExists outpoint
     unless inWallet $ throwError "A coin referenced by the transaction does not exist"
     when (outpoint `Set.member` locked) $ throwError "A coin referenced by the transaction is locked"
-  -- Its addresses must be generated already, and its change addresses free
+  -- Its addresses must be generated already, and its change addresses
+  -- neither used nor paid by another pending transaction
   let addrs = nub $ touched.changeAddresses <> touched.otherAddresses
   known <- walletPaths net accId addrs
   when (Map.size known /= length addrs) $
     throwError "Some referenced addresses do not exist"
-  changeAddrsT <- liftEither $ mapM (addrToTextE net) touched.changeAddresses
-  busy <- lift $ busyAddresses changeAddrsT
-  unless (null busy) $
+  used <- lift . usedAddresses =<< liftEither (mapM (addrToTextE net) touched.changeAddresses)
+  reserved <- reservedChangePaths accId
+  unless (null used && all (`notElem` reserved) touched.changePaths) $
     throwError "Some of the internal output addresses are not free"
-  _ <- lift $ setAddrsFree AddrBusy changeAddrsT
   time <- liftIO getCurrentTime
   lift $ P.insert_ $ DBPendingTx wallet accDeriv (txHashToHex (nosigHash (txSignDataTx tsd))) (blob tsd) False time
 
 {- Deleting and retiring -}
 
--- | Remove a pending transaction, whatever its state: the coins it spent are
--- free again by its absence, and its change addresses are freed, unless the
--- chain has used them. Returns how many coins of the wallet it was holding
--- and how many addresses were freed.
+-- | Remove a pending transaction, whatever its state: the coins it spent and
+-- the change addresses it paid are available again by its absence. Returns
+-- how many coins of the wallet it was holding and how many change
+-- addresses it paid.
 removePendingTx :: (MonadUnliftIO m) => Ctx -> PendingTx -> ExceptT String (DB m) (Natural, Natural)
 removePendingTx ctx held = do
   acc <- getAccountById held.pendingTxAccount
-  let net = accountNetwork acc
-  txInfo <- liftEither $ parseTxSignData net ctx (accountXPubKey ctx acc) held.pendingTxData
+  txInfo <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountXPubKey ctx acc) held.pendingTxData
   let touched = touchedBy txInfo
   heldCoins <- lift $ filterM coinExists touched.coinsSpent
-  changeAddrsT <- liftEither $ mapM (addrToTextE net) touched.changeAddresses
-  freed <- lift $ setAddrsFree AddrFree changeAddrsT
   lift $ P.delete held.pendingTxKey
-  return (fromIntegral (length heldCoins), fromIntegral freed)
+  return (fromIntegral (length heldCoins), fromIntegral (length touched.changeAddresses))
 
 -- | Retire a pending transaction the network has seen, as the sync does:
 -- the row goes and nothing else changes. Its coins are gone, or going with

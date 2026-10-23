@@ -191,7 +191,7 @@ testBip44Vector ctx cfg (mnem, pass, addr0, addr1) = do
   inDatabaseE $ do
     (accId, _) <- insertAccount btc ctx walletFP "test" pub
     extAddr <- genExtAddress ctx cfg accId ""
-    intAddr <- nextFreeIntAddr ctx cfg accId
+    intAddr <- nextChangeAddress ctx cfg accId []
     liftIO $ addr0 `shouldBe` dBAddressAddress extAddr
     liftIO $ addr1 `shouldBe` dBAddressAddress intAddr
   where

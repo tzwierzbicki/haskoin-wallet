@@ -34,9 +34,9 @@ extAddressSpec ctx cfg =
     inDatabaseE $ do
       (accId, _) <- testNewAcc ctx "test"
       -- No addresses yet
-      lift $ bestAddrWithFunds accId AddrInternal `dbShouldBe` Nothing
-      lift $ bestAddrWithFunds accId AddrExternal `dbShouldBe` Nothing
-      lift $ addressPage accId (Page 5 0) `dbShouldBe` []
+      lift $ highestUsedIndex accId AddrInternal `dbShouldBe` Nothing
+      lift $ highestUsedIndex accId AddrExternal `dbShouldBe` Nothing
+      lift $ addressPage accId AddrExternal (Page 5 0) `dbShouldBe` []
       -- Generate external addresses
       ext1 <- genExtAddress ctx cfg accId "Address 1"
       liftIO $ do
@@ -47,8 +47,7 @@ extAddressSpec ctx cfg =
         dBAddressAddress ext1 `shouldBe` head externalAddrsText
         dBAddressLabel ext1 `shouldBe` "Address 1"
         dBAddressInternal ext1 `shouldBe` False
-        dBAddressFree ext1 `shouldBe` False
-      lift $ addressPage accId (Page 5 0) `dbShouldBe` [ext1]
+      lift $ addressPage accId AddrExternal (Page 5 0) `dbShouldBe` [ext1]
       ext2 <- genExtAddress ctx cfg accId "Address 2"
       liftIO $ do
         dBAddressIndex ext2 `shouldBe` 1
@@ -58,42 +57,37 @@ extAddressSpec ctx cfg =
         dBAddressAddress ext2 `shouldBe` externalAddrsText !! 1
         dBAddressLabel ext2 `shouldBe` "Address 2"
         dBAddressInternal ext2 `shouldBe` False
-        dBAddressFree ext2 `shouldBe` False
       -- Test Paging
-      lift $ addressPage accId (Page 5 0) `dbShouldBe` [ext2, ext1]
-      lift $ addressPage accId (Page 1 0) `dbShouldBe` [ext2]
-      lift $ addressPage accId (Page 1 1) `dbShouldBe` [ext1]
-      lift $ addressPage accId (Page 1 2) `dbShouldBe` []
+      lift $ addressPage accId AddrExternal (Page 5 0) `dbShouldBe` [ext2, ext1]
+      lift $ addressPage accId AddrExternal (Page 1 0) `dbShouldBe` [ext2]
+      lift $ addressPage accId AddrExternal (Page 1 1) `dbShouldBe` [ext1]
+      lift $ addressPage accId AddrExternal (Page 1 2) `dbShouldBe` []
       -- Set address labels
       _ <- setAddrLabel accId 0 "test address"
       lift $
-        addressPage accId (Page 5 0)
+        addressPage accId AddrExternal (Page 5 0)
           `dbShouldBe` [ext2, ext1 {dBAddressLabel = "test address"}]
       -- Test the gap
       replicateM_ 18 $ genExtAddress ctx cfg accId "" -- We have 20 addresses
       lift $ dbShouldFail $ genExtAddress ctx cfg accId "" -- fail gap
-      lift $ addressPage accId (Page 100 0) `dbShouldSatisfy` ((== 20) . length)
+      lift $ addressPage accId AddrExternal (Page 100 0) `dbShouldSatisfy` ((== 20) . length)
       updateAddressBalances btc [Store.Balance (externalAddrs !! 2) 0 0 0 1 1]
       updateAddressBalances btc [Store.Balance (externalAddrs !! 4) 0 0 0 1 1]
-      lift $ bestAddrWithFunds accId AddrExternal `dbShouldBe` Just 4
+      lift $ highestUsedIndex accId AddrExternal `dbShouldBe` Just 4
       replicateM_ 5 $ genExtAddress ctx cfg accId "" -- We have 25 addresses
       lift $ dbShouldFail $ genExtAddress ctx cfg accId "" -- fail gap
-      lift $ addressPage accId (Page 100 0) `dbShouldSatisfy` ((== 25) . length)
+      lift $ addressPage accId AddrExternal (Page 100 0) `dbShouldSatisfy` ((== 25) . length)
       -- Test discoverAccGenAddrs
       updateAddressBalances btc [Store.Balance (externalAddrs !! 9) 0 0 0 1 1]
-      discoverAccGenAddrs ctx cfg accId AddrExternal 0
-      lift $ addressPage accId (Page 100 0) `dbShouldSatisfy` ((== 25) . length)
-      discoverAccGenAddrs ctx cfg accId AddrExternal 25
-      lift $ addressPage accId (Page 100 0) `dbShouldSatisfy` ((== 25) . length)
-      discoverAccGenAddrs ctx cfg accId AddrExternal 26
-      lift $ addressPage accId (Page 100 0) `dbShouldSatisfy` ((== 26) . length)
+      extendChainTo ctx accId AddrExternal 0
+      lift $ addressPage accId AddrExternal (Page 100 0) `dbShouldSatisfy` ((== 25) . length)
+      extendChainTo ctx accId AddrExternal 25
+      lift $ addressPage accId AddrExternal (Page 100 0) `dbShouldSatisfy` ((== 25) . length)
+      extendChainTo ctx accId AddrExternal 26
+      lift $ addressPage accId AddrExternal (Page 100 0) `dbShouldSatisfy` ((== 26) . length)
       -- Test getAddrDeriv
-      lift $
-        getAddrDeriv btc accId (head externalAddrs)
-          `dbShouldBe` Right (Deriv :/ 0 :/ 0)
-      lift $
-        getAddrDeriv btc accId (externalAddrs !! 7)
-          `dbShouldBe` Right (Deriv :/ 0 :/ 7)
+      addressPath btc accId (externalAddr 0) `dbShouldBeE` Just (Deriv :/ 0 :/ 0)
+      addressPath btc accId (externalAddr 7) `dbShouldBeE` Just (Deriv :/ 0 :/ 7)
       -- Test accound balances
       acc1 <- lift $ updateAccountBalances accId
       liftIO $ do
@@ -102,7 +96,7 @@ extAddressSpec ctx cfg =
         dBAccountBalanceCoins acc1 `shouldBe` 0
       updateAddressBalances btc [Store.Balance (externalAddrs !! 1) 2 0 1 1 2]
       updateAddressBalances btc [Store.Balance (externalAddrs !! 4) 2 8 2 2 10]
-      _ <- nextFreeIntAddr ctx cfg accId
+      _ <- nextChangeAddress ctx cfg accId []
       updateAddressBalances btc [Store.Balance (head internalAddrs) 3 2 1 1 5]
       acc1' <- lift $ updateAccountBalances accId
       liftIO $ do
@@ -119,44 +113,27 @@ intAddressSpec ctx cfg =
   it "can generate internal addresses" $ do
     inDatabaseE $ do
       (accId, _) <- testNewAcc ctx "test"
-      -- Generate internal addresses
-      int1 <- nextFreeIntAddr ctx cfg accId
+      -- The first change address, generated when there is none
+      int1 <- nextChangeAddress ctx cfg accId []
       liftIO $ do
         dBAddressIndex int1 `shouldBe` 0
         dBAddressAccountWallet int1 `shouldBe` DBWalletKey testFingerprintText
         dBAddressAccountDerivation int1 `shouldBe` "/44'/0'/0'"
         dBAddressDerivation int1 `shouldBe` "/1/0"
-        dBAddressAddress int1 `shouldBe` head internalAddrsText
-        dBAddressLabel int1 `shouldBe` "Internal Address"
+        dBAddressAddress int1 `shouldBe` internalAddrsText !! 0
+        dBAddressLabel int1 `shouldBe` ""
         dBAddressInternal int1 `shouldBe` True
-        dBAddressFree int1 `shouldBe` True
-      -- Test the Free status
-      nextFreeIntAddr ctx cfg accId `dbShouldBeE` int1 -- Should return the same address
-      lift $ setAddrsFree AddrBusy [head internalAddrsText] `dbShouldBe` 1
-      lift $ setAddrsFree AddrBusy [internalAddrsText !! 1] `dbShouldBe` 0
-      (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 1
-      _ <- lift $ setAddrsFree AddrFree [head internalAddrsText]
-      (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 0
-      _ <- lift $ setAddrsFree AddrBusy [internalAddrsText !! 1]
-      (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 0
-      _ <- lift $ setAddrsFree AddrBusy [head internalAddrsText]
-      (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 2
-      _ <- lift $ setAddrsFree AddrBusy [internalAddrsText !! 2]
-      (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 3
-      _ <- lift $ setAddrsFree AddrBusy [internalAddrsText !! 3]
-      (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 4
-      _ <- lift $ setAddrsFree AddrBusy [internalAddrsText !! 4]
-      (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 5
-      _ <- lift $ setAddrsFree AddrFree [internalAddrsText !! 2]
-      _ <- lift $ setAddrsFree AddrFree [internalAddrsText !! 4]
-      (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 2
-      _ <- lift $ setAddrsFree AddrBusy [internalAddrsText !! 2]
-      _ <- lift $ setAddrsFree AddrBusy [internalAddrsText !! 5]
-      (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 4
-      _ <- lift $ setAddrsFree AddrBusy [internalAddrsText !! 4]
-      (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 6
-      -- Test account indices
+      -- The same address while nothing uses it; the next one while a
+      -- pending transaction pays it
+      nextChangeAddress ctx cfg accId [] `dbShouldBeE` int1
+      (dBAddressIndex <$> nextChangeAddress ctx cfg accId [Deriv :/ 1 :/ 0]) `dbShouldBeE` 1
+      -- An address paid on the chain is never used again
+      updateAddressBalances btc [Store.Balance (internalAddr 0) 1000 0 1 1 1000]
+      (dBAddressIndex <$> nextChangeAddress ctx cfg accId []) `dbShouldBeE` 1
+      (dBAddressIndex <$> nextChangeAddress ctx cfg accId [Deriv :/ 1 :/ 1]) `dbShouldBeE` 2
+      -- The lowest available address comes first
+      (dBAddressIndex <$> nextChangeAddress ctx cfg accId [Deriv :/ 1 :/ 2]) `dbShouldBeE` 1
       acc <- getAccountById accId
       liftIO $ do
-        dBAccountInternal acc `shouldBe` 7
+        dBAccountInternal acc `shouldBe` 3
         dBAccountExternal acc `shouldBe` 0
