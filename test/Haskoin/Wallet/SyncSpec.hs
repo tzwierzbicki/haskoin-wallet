@@ -18,10 +18,10 @@ import Control.Monad.Trans (lift)
 import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
 import Data.Default (def)
-import Data.IORef (IORef, atomicModifyIORef', modifyIORef, newIORef, readIORef)
+import Data.IORef (atomicModifyIORef', newIORef, readIORef)
 import Data.List (find, sort, sortOn)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Data.Word (Word32, Word64, Word8)
 import qualified Database.Persist as P
@@ -1017,5 +1017,5 @@ rawTransactionCount = lift $ P.count ([] :: [P.Filter DBRawTx])
 -- | The hashes of the signed pending transactions of the account
 pendingHashes :: DBAccountId -> ExceptT String (DB IO) [TxHash]
 pendingHashes accId = do
-  pending <- pendingTxs accId
-  return [txHash (txSignDataTx (pendingTxData p)) | p <- pending, isSigned (txSignDataTx (pendingTxData p))]
+  rows <- pendingTxs accId
+  return [txHash (txSignDataTx (pendingTxData p)) | p <- rows, isSigned (txSignDataTx (pendingTxData p))]

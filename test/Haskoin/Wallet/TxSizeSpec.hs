@@ -49,24 +49,24 @@ spec = do
   prepareContext $ \ctx -> do
     describe "The size of an input, by the kind of its coin" $ do
       it "is 148 bytes for a P2PKH coin, 180 with an uncompressed key" $ do
-        inputSize (scriptOf p2pkhAddr) `shouldBe` Just (InputSize 148 0)
+        inputSize (scriptOf keyHashAddr) `shouldBe` Just (InputSize 148 0)
         uncompressedKeyInput `shouldBe` InputSize 180 0
       it "is 114 bytes for a P2PK coin" $
         inputSize (PayPK (derivePublicKey ctx (wrapSecKey True sweptKey))) `shouldBe` Just (InputSize 114 0)
       it "is 41 bytes and a 108-byte witness for a P2WPKH coin" $
-        inputSize (scriptOf p2wpkhAddr) `shouldBe` Just (InputSize 41 108)
+        inputSize (scriptOf witnessAddr) `shouldBe` Just (InputSize 41 108)
       it "is 64 bytes and a 108-byte witness for a P2SH-P2WPKH coin" $
-        inputSize (scriptOf p2shAddr) `shouldBe` Just (InputSize 64 108)
+        inputSize (scriptOf scriptAddr) `shouldBe` Just (InputSize 64 108)
       it "is unknown for a coin hw cannot sign" $ do
-        inputSize (scriptOf p2wshAddr) `shouldBe` Nothing
+        inputSize (scriptOf witnessScriptAddr) `shouldBe` Nothing
         inputSize (scriptOf taprootAddr) `shouldBe` Nothing
 
     describe "The size of an output, by its script" $
       it "is 34 bytes for P2PKH, 32 for P2SH, 31 for P2WPKH, 43 for P2WSH and Taproot" $ do
-        outputSize (addressScript ctx p2pkhAddr) `shouldBe` 34
-        outputSize (addressScript ctx p2shAddr) `shouldBe` 32
-        outputSize (addressScript ctx p2wpkhAddr) `shouldBe` 31
-        outputSize (addressScript ctx p2wshAddr) `shouldBe` 43
+        outputSize (addressScript ctx keyHashAddr) `shouldBe` 34
+        outputSize (addressScript ctx scriptAddr) `shouldBe` 32
+        outputSize (addressScript ctx witnessAddr) `shouldBe` 31
+        outputSize (addressScript ctx witnessScriptAddr) `shouldBe` 43
         outputSize (addressScript ctx taprootAddr) `shouldBe` 43
         p2pkhOutputSize `shouldBe` 34
 
@@ -85,8 +85,8 @@ spec = do
     -- The addresses of the swept key of "Haskoin.Wallet.TxSweepSpec", and
     -- the P2WSH and Taproot examples of BIP173 and BIP350
     sweptKey = (.key) . fromJust $ fromWif btc "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU7Bqcefezr"
-    p2pkhAddr = fromJust $ textToAddr btc "18FtYoEJipP5bCJnjgWdeeEbxSvozSjEUA"
-    p2wpkhAddr = fromJust $ textToAddr btc "bc1qf7vmha6hqljyhs405efn0hkwj98gz74v86kel2"
-    p2shAddr = fromJust $ textToAddr btc "3J6JzvfPtYr3GvY37YXbjuTx7ZLedG3C9p"
-    p2wshAddr = fromJust $ textToAddr btc "bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv3"
+    keyHashAddr = fromJust $ textToAddr btc "18FtYoEJipP5bCJnjgWdeeEbxSvozSjEUA"
+    witnessAddr = fromJust $ textToAddr btc "bc1qf7vmha6hqljyhs405efn0hkwj98gz74v86kel2"
+    scriptAddr = fromJust $ textToAddr btc "3J6JzvfPtYr3GvY37YXbjuTx7ZLedG3C9p"
+    witnessScriptAddr = fromJust $ textToAddr btc "bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv3"
     taprootAddr = fromJust $ textToAddr btc "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0"

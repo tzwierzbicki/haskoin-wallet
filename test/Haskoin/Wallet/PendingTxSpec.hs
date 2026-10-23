@@ -14,9 +14,9 @@ module Haskoin.Wallet.PendingTxSpec (spec) where
 import Conduit (liftIO)
 import Control.Monad.Except
 import Control.Monad.Trans (lift)
+import qualified Data.ByteString as BS
 import Data.Default (def)
 import Data.IORef (IORef, modifyIORef, newIORef, readIORef)
-import Data.Word (Word32)
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -59,9 +59,14 @@ storeThatDropped ctx tsd = known {fakeTransactions = replaced <$> fakeTransactio
   where
     known = storeKnowing ctx tsd
 
--- | The transaction with another lock time: altered after signing
-withLockTime :: Word32 -> Tx -> Tx
-withLockTime lockTime tx = Tx tx.version tx.inputs tx.outputs tx.witness lockTime
+-- | The transaction with the signature of its first input damaged: signed
+-- to the eye, but no longer valid
+withBrokenSignature :: Tx -> Tx
+withBrokenSignature tx =
+  case tx.inputs of
+    first : rest ->
+      Tx tx.version (TxIn first.outpoint (BS.reverse first.script) first.sequence : rest) tx.outputs tx.witness tx.locktime
+    [] -> tx
 
 -- | The store, failing its health check
 unhealthy :: Store -> Store
@@ -266,6 +271,29 @@ importingSpec ctx =
         -- The wallet holds the version imported last: sendtx sends that one
         stored <- lift $ getPendingTx pendingHash
         liftIO $ ((\(_, tsd, _) -> tsd) <$> stored) `shouldBe` Just byOther
+    it "refuses a signed transaction whose signatures do not check out" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        unsigned <- unsignedPayment ctx cfg accId
+        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        let broken = signed {txSignDataTx = withBrokenSignature (txSignDataTx signed)}
+        lift $
+          dbShouldFailWith "Invalid signature for input 0 (1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj)" $
+            importPendingTx btc ctx accId broken
+        pendingTxPage ctx accId (Page 5 0) `dbShouldBeE` []
+        (map jsonCoinLocked <$> coinPage btc accId (Page 5 0)) `dbShouldBeE` [False]
+    it "keeps the unsigned version when the signed one does not check out" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        unsigned <- unsignedPayment ctx cfg accId
+        pendingHash <- importPendingTx btc ctx accId unsigned
+        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        let broken = signed {txSignDataTx = withBrokenSignature (txSignDataTx signed)}
+        lift $
+          dbShouldFailWith "Invalid signature for input 0 (1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj)" $
+            importPendingTx btc ctx accId broken
+        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
+          `dbShouldBeE` [Just (TxInfoPending pendingHash False False False)]
     it "refuses a new version of a transaction that is online" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -384,22 +412,6 @@ sendingSpec ctx =
         lift $
           dbShouldFailWith "The transaction is not signed" $
             sendPending ctx (const (toStore emptyStore)) pendingHash
-    it "refuses a transaction whose signatures do not check out, and leaves it as it is" $
-      inDatabaseE $ do
-        (accId, _) <- testNewAcc ctx "test"
-        unsigned <- unsignedPayment ctx cfg accId
-        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
-        -- The signed file, edited by hand: its signatures no longer match
-        let altered = signed {txSignDataTx = withLockTime 1 (txSignDataTx signed)}
-        pendingHash <- importPendingTx btc ctx accId altered
-        published <- liftIO $ newIORef []
-        lift $
-          dbShouldFailWith "Invalid signature for input 0 (1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj)" $
-            sendPending ctx (const (notingPublished published (toStore emptyStore))) pendingHash
-        liftIO $ readIORef published `shouldReturn` []
-        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
-          `dbShouldBeE` [Just (TxInfoPending pendingHash True False False)]
-        lift (hasRawTx (txHash (txSignDataTx altered))) `dbShouldBeE` False
     it "refuses a transaction the wallet does not hold" $
       inDatabaseE $
         lift $

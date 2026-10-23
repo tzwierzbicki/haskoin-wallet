@@ -154,10 +154,12 @@ conflictedInputs txInfo = filterM missing outpoints
     missing outpoint = Maybe.isNothing <$> P.get (DBCoinKey $ outpointText outpoint)
 
 -- | Store a transaction of the account as pending, which locks the coins it
--- spends and marks its change address busy. Importing a transaction the
--- account already holds replaces it with the newer version, signed where
--- it was unsigned; the transaction itself, its inputs and outputs, cannot
--- change, since the hash identifying it leaves the signatures out.
+-- spends and marks its change address busy. A signed transaction must
+-- carry valid signatures: they are checked here, so that sending has
+-- nothing left to check. Importing a transaction the account already
+-- holds replaces it with the newer version, signed where it was unsigned;
+-- the transaction itself, its inputs and outputs, cannot change, since the
+-- hash identifying it leaves the signatures out.
 importPendingTx ::
   (MonadUnliftIO m) =>
   Network ->
@@ -171,6 +173,7 @@ importPendingTx net ctx accId tsd = do
       tx = txSignDataTx tsd
       pendingHash = nosigHash tx
       bs = BS.toStrict $ Json.encode tsd
+  when (isSigned tx) $ liftEither $ verifySignedTx net ctx tsd
   prevM <- lift $ getPendingTx pendingHash
   case prevM of
     Just (_, prev, online) -> do
@@ -279,7 +282,8 @@ setPendingTxOnline nosigH = do
 -- | Send a pending transaction of the wallet and wait for the store to see
 -- it. Once it does, the transaction is marked online, for the sync to send
 -- again should the store lose it, and its raw transaction is stored. If the
--- store does not see it, nothing is recorded and the answer says so.
+-- store does not see it, nothing is recorded and the answer says so. The
+-- signatures were checked when the transaction was imported.
 sendPending ::
   (MonadUnliftIO m) => Ctx -> (Network -> Store) -> TxHash -> ExceptT String (DB m) (DBAccount, TxInfo)
 sendPending ctx storeOn nosigH = do
@@ -294,7 +298,6 @@ sendPending ctx storeOn nosigH = do
       unless (isSigned signedTx) $ throwError "The transaction is not signed"
       txInfo <- liftEither $ parseTxSignData net ctx pub tsd
       txInfoL <- lift $ fillTxInfoLabels net txInfo
-      liftEither $ verifySignedTx net ctx tsd
       fromStore $ storeHealth store
       accepted <- fromStore $ broadcast store signedTx
       unless accepted $ throwError notAccepted

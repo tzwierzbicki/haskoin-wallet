@@ -86,7 +86,7 @@ accountSpec ctx = do
       lift $ dbShouldFail $ getAccountByName Nothing -- There are > 1 accounts
       getAccountById accId3 `dbShouldBeE` acc3
       -- Rename an account
-      lift $ dbShouldFail $ renameAccount "acc2" "acc2"
+      renameAccount "acc2" "acc2" `dbShouldBeE` acc2
       lift $ dbShouldFail $ renameAccount "acc2" "acc3"
       lift $ dbShouldFail $ renameAccount "doesnotexist" "hello world"
       acc2' <- renameAccount "acc2" "hello world"
