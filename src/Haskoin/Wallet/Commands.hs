@@ -41,7 +41,7 @@ import Haskoin.Wallet.PendingTx
 import Haskoin.Wallet.Prompt
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
-import Haskoin.Wallet.TxBuilding
+import Haskoin.Wallet.TxBuilding (buildTxSignData)
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSigning (parseTxSignData, signWalletTx)

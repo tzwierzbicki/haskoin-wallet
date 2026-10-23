@@ -4,13 +4,17 @@
 
 -- | The addresses of an account: external ones to receive with and internal
 -- ones for change, generated along the two chains of the account within
--- the gap of BIP44, with their labels and balances. An internal address is
--- available for change when no transaction has used it and no pending
--- transaction pays it; the pending transactions are read in
--- "Haskoin.Wallet.PendingTx", which asks for the change address with them.
+-- the gap of BIP44, with their labels and balances. The address at index i
+-- of a chain has the derivation path chain/i. An index whose child key is
+-- invalid, which BIP32 says to skip, has no address and no row: the chain
+-- goes on at the next index. An internal address is available for change
+-- when no transaction has used it and no pending transaction pays it; the
+-- pending transactions are read in "Haskoin.Wallet.PendingTx", which asks
+-- for the change address with them.
 module Haskoin.Wallet.Address where
 
 import Conduit (MonadUnliftIO)
+import Control.Exception (evaluate, try)
 import Control.Monad
 import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
@@ -45,7 +49,8 @@ isInternal :: AddrType -> Bool
 isInternal AddrInternal = True
 isInternal AddrExternal = False
 
--- | How many addresses of the chain the account has generated
+-- | The next index of the chain: the indices the account has gone through,
+-- its addresses and the indices skipped for an invalid child key
 dBAccountCount :: AddrType -> DBAccount -> Int
 dBAccountCount AddrInternal = dBAccountInternal
 dBAccountCount AddrExternal = dBAccountExternal
@@ -168,22 +173,27 @@ genNextAddress ctx cfg accId addrType = do
   checkGap cfg accId addrType
   appendAddress ctx accId addrType
 
--- | Generate the addresses of a chain up to the given count, as a scan of
+-- | Generate the addresses of a chain up to the given index, as a scan of
 -- the store found them used: the gap does not apply to used addresses
 extendChainTo :: (MonadUnliftIO m) => Ctx -> DBAccountId -> AddrType -> Natural -> ExceptT String (DB m) ()
-extendChainTo ctx accId addrType total = do
+extendChainTo ctx accId addrType next = do
   acc <- getAccountById accId
-  replicateM_ (fromIntegral total - dBAccountCount addrType acc) $ appendAddress ctx accId addrType
+  when (fromIntegral (dBAccountCount addrType acc) < next) $ do
+    _ <- appendAddress ctx accId addrType
+    extendChainTo ctx accId addrType next
 
--- | Add the next address of a chain to the account, whatever the gap
+-- | Add the next address of a chain to the account, whatever the gap. An
+-- index whose child key is invalid is passed over, as BIP32 asks: the
+-- chain moves on to the next index and the skipped one has no row.
 appendAddress :: (MonadUnliftIO m) => Ctx -> DBAccountId -> AddrType -> ExceptT String (DB m) DBAddress
 appendAddress ctx accId addrType = do
   acc <- getAccountById accId
   let next = dBAccountCount addrType acc
-      (addr, _) = derivePathAddr ctx (accountXPubKey ctx acc) (addrDeriv addrType) (fromIntegral next)
-  row <- insertAddress (accountNetwork acc) accId addrType next addr
+  addrM <- liftIO $ deriveChainAddress ctx (accountXPubKey ctx acc) (addrDeriv addrType) (fromIntegral next)
   lift $ P.update accId [dBAccountField addrType P.=. next + 1]
-  return row
+  case addrM of
+    Just addr -> insertAddress (accountNetwork acc) accId addrType next addr
+    Nothing -> appendAddress ctx accId addrType
 
 -- | Refuse to generate past the gap of BIP44: no more than the gap of unused
 -- addresses beyond the highest used one of the chain
@@ -222,11 +232,11 @@ insertAddress net (DBAccountKey wallet accDeriv) addrType index addr = do
 
 -- | Label a receiving address of the account, by its index
 setAddrLabel :: (MonadUnliftIO m) => DBAccountId -> Int -> Text -> ExceptT String (DB m) DBAddress
-setAddrLabel accId@(DBAccountKey wallet accDeriv) idx label = do
-  acc <- getAccountById accId
-  unless (idx < dBAccountExternal acc) $
-    throwError $ "Address " <> show idx <> " does not exist"
-  lift $ P.updateGet (DBAddressKey wallet accDeriv (pathText $ extDeriv :/ fromIntegral idx)) [DBAddressLabel P.=. label]
+setAddrLabel (DBAccountKey wallet accDeriv) idx label = do
+  let key = DBAddressKey wallet accDeriv (pathText $ extDeriv :/ fromIntegral idx)
+  row <- lift (P.get key) >>= liftMaybe ("Address " <> show idx <> " does not exist")
+  lift $ P.update key [DBAddressLabel P.=. label]
+  return row {dBAddressLabel = label}
 
 {- Addresses in the database -}
 
@@ -340,7 +350,21 @@ addrPath addr = (if dBAddressInternal addr then intDeriv else extDeriv) :/ fromI
 fromDBAddr :: Network -> DBAddress -> Either String (Address, SoftPath)
 fromDBAddr net row = (,) <$> textToAddrE net (dBAddressAddress row) <*> pathFromText (dBAddressDerivation row)
 
--- | A page of the addresses of a chain of the public key, with their indices
-chainAddresses :: Ctx -> XPubKey -> SoftPath -> Page -> [(Address, KeyIndex)]
+-- | The address of a chain at an index, or Nothing when the child key at
+-- that index is invalid: haskoin-core throws for such a key, where BIP32
+-- says to skip the index
+deriveChainAddress :: Ctx -> XPubKey -> SoftPath -> KeyIndex -> IO (Maybe Address)
+deriveChainAddress ctx pub chain i = do
+  derived <- try $ evaluate $ derivePubPath ctx (chain :/ i) pub
+  return $ case derived of
+    Left (DerivationException _) -> Nothing
+    Right child -> Just (xPubAddr ctx child)
+
+-- | A page of the addresses of a chain of the public key, with their
+-- indices; an index with an invalid child key is left out
+chainAddresses :: Ctx -> XPubKey -> SoftPath -> Page -> IO [(Address, KeyIndex)]
 chainAddresses ctx pub chain (Page lim off) =
-  [(addr, i) | (addr, _, i) <- take (fromIntegral lim) (derivePathAddrs ctx pub chain (fromIntegral off))]
+  fmap catMaybes . forM [first .. first + fromIntegral lim - 1] $ \i ->
+    fmap (\addr -> (addr, i)) <$> deriveChainAddress ctx pub chain i
+  where
+    first = fromIntegral off

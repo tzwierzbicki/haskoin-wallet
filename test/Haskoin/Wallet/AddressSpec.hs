@@ -9,6 +9,8 @@ module Haskoin.Wallet.AddressSpec (spec) where
 import Conduit (liftIO)
 import Control.Monad
 import Control.Monad.Trans (lift)
+import qualified Data.Map.Strict as Map
+import qualified Database.Persist as P
 import Data.Default (def)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -27,6 +29,7 @@ spec =
       let cfg = def :: Config
       extAddressSpec ctx cfg
       intAddressSpec ctx cfg
+      holeSpec ctx cfg
 
 extAddressSpec :: Ctx -> Config -> Spec
 extAddressSpec ctx cfg =
@@ -137,3 +140,22 @@ intAddressSpec ctx cfg =
       liftIO $ do
         dBAccountInternal acc `shouldBe` 3
         dBAccountExternal acc `shouldBe` 0
+
+-- A chain with a missing row, as BIP32 leaves one where a child key is
+-- invalid: the count moved on, nothing else happened at that index
+holeSpec :: Ctx -> Config -> Spec
+holeSpec ctx cfg =
+  it "lives with a hole in a chain, as an invalid child key leaves one" $
+    inDatabaseE $ do
+      (accId@(DBAccountKey wallet accDeriv), _) <- testNewAcc ctx "test"
+      replicateM_ 3 $ genExtAddress ctx cfg accId ""
+      _ <- nextChangeAddress ctx cfg accId []
+      _ <- nextChangeAddress ctx cfg accId [Deriv :/ 1 :/ 0]
+      _ <- nextChangeAddress ctx cfg accId [Deriv :/ 1 :/ 0, Deriv :/ 1 :/ 1]
+      lift $ P.delete $ DBAddressKey wallet accDeriv "/0/1"
+      lift $ P.delete $ DBAddressKey wallet accDeriv "/1/1"
+      (map dBAddressIndex <$> lift (addressPage accId AddrExternal (Page 5 0))) `dbShouldBeE` [2, 0]
+      lift $ dbShouldFailWith "Address 1 does not exist" $ setAddrLabel accId 1 "gone"
+      (dBAddressIndex <$> genExtAddress ctx cfg accId "") `dbShouldBeE` 3
+      (dBAddressIndex <$> nextChangeAddress ctx cfg accId [Deriv :/ 1 :/ 0]) `dbShouldBeE` 2
+      (Map.size . fst <$> allAddressesMap btc accId) `dbShouldBeE` 5
