@@ -331,6 +331,17 @@ setAddrsFree free addrs = do
       a ^. DBAddressAddress `in_` valList addrs
         &&. (a ^. DBAddressBalanceTxs ==. val 0)
 
+-- | Those of the addresses that are not free: taken as change by a pending
+-- transaction, or used on the chain
+busyAddresses :: (MonadUnliftIO m) => [Text] -> DB m [Text]
+busyAddresses addrs = do
+  rows <- select . from $ \a -> do
+    where_ $
+      a ^. DBAddressAddress `in_` valList addrs
+        &&. a ^. DBAddressFree ==. val False
+    return $ a ^. DBAddressAddress
+  return $ unValue <$> rows
+
 addressPage :: (MonadUnliftIO m) => DBAccountId -> Page -> DB m [DBAddress]
 addressPage (DBAccountKey wallet accDeriv) (Page lim off) = do
   as <-

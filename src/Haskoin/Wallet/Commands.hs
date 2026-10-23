@@ -569,13 +569,10 @@ cmdReviewTx ctx cfg nameM fp =
 cmdExportTx :: Config -> TxHash -> FilePath -> IO Response
 cmdExportTx cfg nosigH fp =
   runDBResponse cfg $ do
-    pendingTxM <- lift $ getPendingTx nosigH
-    case pendingTxM of
-      Just (_, tsd, _) -> do
-        checkPathFree fp
-        liftIO $ writeJsonFile fp $ Json.toJSON tsd
-        return $ ResponseFile fp
-      _ -> throwError noPendingTx
+    held <- requirePendingTx nosigH
+    checkPathFree fp
+    liftIO $ writeJsonFile fp $ Json.toJSON held.pendingTxData
+    return $ ResponseFile fp
 
 cmdImportTx :: Ctx -> Config -> Maybe Text -> FilePath -> IO Response
 cmdImportTx ctx cfg nameM fp =
@@ -640,10 +637,8 @@ parseSignInput nosigHM inputM outputM =
     (_, Just _, Nothing) ->
       throwError "When using a --input file, also provide a --output file"
     (Just h, _, _) -> do
-      resM <- lift $ getPendingTx h
-      case resM of
-        Just (_, t, online) -> return (t, online)
-        _ -> throwError noPendingTx
+      held <- requirePendingTx h
+      return (held.pendingTxData, held.pendingTxOnline)
     (_, Just i, _) -> do
       exist <- liftIO $ D.doesFileExist i
       unless exist $ throwError "Input file does not exist"
