@@ -144,7 +144,7 @@ signedProblems :: Signed -> TxSignData -> TxInfo -> Problems
 signedProblems expected signedData info =
   check "signed transaction" expected.signedTx (encodeHex $ S.encode tx)
     <> check "txid" expected.signedTxId (txHashToHex $ txHash tx)
-    <> require "the transaction is marked as signed" signedData.txSignDataSigned
+    <> require "every input of the transaction is signed" (isSigned tx)
     <> maybe [] summaryProblems expected.signedSummary
   where
     tx = signedData.txSignDataTx

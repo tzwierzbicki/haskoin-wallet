@@ -16,6 +16,7 @@ import Control.Monad.Except
 import Control.Monad.Trans (lift)
 import Data.Default (def)
 import Data.IORef (IORef, modifyIORef, newIORef, readIORef)
+import Data.Word (Word32)
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -57,6 +58,10 @@ storeThatDropped :: Ctx -> TxSignData -> FakeStore
 storeThatDropped ctx tsd = known {fakeTransactions = replaced <$> fakeTransactions known}
   where
     known = storeKnowing ctx tsd
+
+-- | The transaction with another lock time: altered after signing
+withLockTime :: Word32 -> Tx -> Tx
+withLockTime lockTime tx = Tx tx.version tx.inputs tx.outputs tx.witness lockTime
 
 -- | The store, failing its health check
 unhealthy :: Store -> Store
@@ -161,7 +166,7 @@ signedByAnotherSigner ctx unsigned = do
   let coin = SigInput script 20000 (OutPoint (txHash (funding ctx)) 0) (setAnyoneCanPay sigHashAll) Nothing
       key = (derivePath ctx (Deriv :/ 0 :/ 0 :: SoftPath) testAccountKey).key
   tx <- signTx btc ctx (txSignDataTx unsigned) [coin] [key]
-  return unsigned {txSignDataTx = tx, txSignDataSigned = True}
+  return unsigned {txSignDataTx = tx}
 
 importingSpec :: Ctx -> Spec
 importingSpec ctx =
@@ -276,7 +281,7 @@ importingSpec ctx =
         let spend = spendingTx ctx [(txHash (funding ctx), 0)] [(otherAddr 3, 19000)]
         lift $
           dbShouldFailWith "A coin referenced by the transaction is locked" $
-            importPendingTx btc ctx accId (TxSignData spend [funding ctx] [Deriv :/ 0 :/ 0] [] Nothing False)
+            importPendingTx btc ctx accId (TxSignData spend [funding ctx] [Deriv :/ 0 :/ 0] [] Nothing)
     it "refuses a transaction spending a coin the wallet does not have" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -286,7 +291,7 @@ importingSpec ctx =
             spend = spendingTx ctx [(txHash unseen, 0)] [(otherAddr 3, 4000)]
         lift $
           dbShouldFailWith "A coin referenced by the transaction does not exist" $
-            importPendingTx btc ctx accId (TxSignData spend [unseen] [Deriv :/ 0 :/ 0] [] Nothing False)
+            importPendingTx btc ctx accId (TxSignData spend [unseen] [Deriv :/ 0 :/ 0] [] Nothing)
     it "refuses a transaction paying change to an address the wallet has not generated" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -295,7 +300,7 @@ importingSpec ctx =
         let spend = spendingTx ctx [(txHash (funding ctx), 0)] [(internalAddr 1, 11774), (otherAddr 0, 8000)]
         lift $
           dbShouldFailWith "Some referenced addresses do not exist" $
-            importPendingTx btc ctx accId (TxSignData spend [funding ctx] [Deriv :/ 0 :/ 0] [Deriv :/ 1 :/ 1] Nothing False)
+            importPendingTx btc ctx accId (TxSignData spend [funding ctx] [Deriv :/ 0 :/ 0] [Deriv :/ 1 :/ 1] Nothing)
     it "refuses a transaction whose change address another pending transaction holds" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -306,7 +311,7 @@ importingSpec ctx =
         let spend = spendingTx ctx [(txHash (secondFunding ctx), 0)] [(internalAddr 0, 2774), (otherAddr 1, 7000)]
         lift $
           dbShouldFailWith "Some of the internal output addresses are not free" $
-            importPendingTx btc ctx accId (TxSignData spend [secondFunding ctx] [Deriv :/ 0 :/ 1] [Deriv :/ 1 :/ 0] Nothing False)
+            importPendingTx btc ctx accId (TxSignData spend [secondFunding ctx] [Deriv :/ 0 :/ 1] [Deriv :/ 1 :/ 0] Nothing)
 
 listingSpec :: Ctx -> Spec
 listingSpec ctx =
@@ -383,9 +388,10 @@ sendingSpec ctx =
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
         unsigned <- unsignedPayment ctx cfg accId
-        -- A file that says it is signed, with no signature in it
-        let claimed = unsigned {txSignDataSigned = True}
-        pendingHash <- importPendingTx btc ctx accId claimed
+        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        -- The signed file, edited by hand: its signatures no longer match
+        let altered = signed {txSignDataTx = withLockTime 1 (txSignDataTx signed)}
+        pendingHash <- importPendingTx btc ctx accId altered
         published <- liftIO $ newIORef []
         lift $
           dbShouldFailWith "Invalid signature for input 0 (1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj)" $
@@ -393,11 +399,11 @@ sendingSpec ctx =
         liftIO $ readIORef published `shouldReturn` []
         ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
           `dbShouldBeE` [Just (TxInfoPending pendingHash True False False)]
-        lift (hasRawTx (txHash (txSignDataTx claimed))) `dbShouldBeE` False
+        lift (hasRawTx (txHash (txSignDataTx altered))) `dbShouldBeE` False
     it "refuses a transaction the wallet does not hold" $
       inDatabaseE $
         lift $
-          dbShouldFailWith "The nosigHash does not exist in the wallet" $
+          dbShouldFailWith "The pending transaction does not exist" $
             sendPending ctx (const (toStore emptyStore)) (fakeTxHash 7)
     it "gives up after the asks it is allowed" $ do
       asks <- newIORef 0
@@ -406,8 +412,8 @@ sendingSpec ctx =
       readIORef asks `shouldReturn` 3
     it "sees the transaction on the first ask" $ do
       asks <- newIORef 0
-      let signed = TxSignData (spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 8000)]) [] [] [] Nothing True
-      runExceptT (broadcastWith 1000 3 (countingAsks asks (toStore (storeKnowing ctx signed))) (txSignDataTx signed))
+      let tsd = TxSignData (spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 8000)]) [] [] [] Nothing
+      runExceptT (broadcastWith 1000 3 (countingAsks asks (toStore (storeKnowing ctx tsd))) (txSignDataTx tsd))
         `shouldReturn` Right True
       readIORef asks `shouldReturn` 1
 

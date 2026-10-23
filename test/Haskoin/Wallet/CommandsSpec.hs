@@ -40,7 +40,7 @@ spec = do
   prepareContext $ \ctx -> do
     describe "Sending a transaction from a file" $ do
       -- The checks before anything is uploaded: no network is reached
-      let unsignedSweep = TxSignData (spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 1000)]) [] [] [] (Just 1) False
+      let unsignedSweep = TxSignData (spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 1000)]) [] [] [] (Just 1)
       it "needs a nosigHash or a file" $
         cmdSendTx ctx def Nothing Nothing Nothing
           `shouldReturn` ResponseError "Give the NOSIGHASH of a pending transaction or an --input file"

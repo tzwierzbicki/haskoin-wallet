@@ -200,7 +200,7 @@ buildSweepSignData net ctx gen found sweepTo feeByte dust = do
       outputs = [TxOut amount (marshal ctx script) | (script, amount) <- zip shuffledScripts ((each + remainder) : repeat each)]
       tx = Tx 1 [TxIn c.outpoint BS.empty maxBound | c <- shuffledCoins] outputs [] 0
       inputPaths = pathsOf $ mapMaybe (.address) found.coins
-  return $ TxSignData tx found.transactions inputPaths (pathsOf sweepTo) (Just feeByte) False
+  return $ TxSignData tx found.transactions inputPaths (pathsOf sweepTo) (Just feeByte)
   where
     pathsOf addrs = nub $ mapMaybe (`Map.lookup` found.walletAddrs) addrs
     scriptOf addr = maybeToEither ("Can not pay to " <> addrToString net addr) (addressToOutput addr)
@@ -243,14 +243,14 @@ signTxWithKeys ::
   [SecKey] ->
   Either String (TxSignData, TxInfo)
 signTxWithKeys net ctx tsd accountPub secKeys = do
-  when tsd.txSignDataSigned $ Left "The transaction is already signed"
+  when (isSigned tsd.txSignDataTx) $ Left "The transaction is already signed"
   when (null secKeys) $ Left "There are no private keys to sign"
   info <- parseTxSignData net ctx accountPub tsd
   -- The sweep builder refuses a fee rate of zero; the signer checks the fee itself
   when (info.txInfoFee == 0) $ Left "The transaction pays no fee"
   coins <- inputCoins tsd.txSignDataTx info
   signedTx <- foldM (signCoin net ctx (indexKeys ctx secKeys)) tsd.txSignDataTx (zip [0 ..] coins)
-  let signedData = tsd {txSignDataTx = signedTx, txSignDataSigned = True}
+  let signedData = tsd {txSignDataTx = signedTx}
   verifySignedTx net ctx signedData
   signedInfo <- parseTxSignData net ctx accountPub signedData
   return (signedData, signedInfo)

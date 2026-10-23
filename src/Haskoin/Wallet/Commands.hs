@@ -575,7 +575,7 @@ cmdExportTx cfg nosigH fp =
         checkPathFree fp
         liftIO $ writeJsonFile fp $ Json.toJSON tsd
         return $ ResponseFile fp
-      _ -> throwError "The pending transaction does not exist"
+      _ -> throwError noPendingTx
 
 cmdImportTx :: Ctx -> Config -> Maybe Text -> FilePath -> IO Response
 cmdImportTx ctx cfg nameM fp =
@@ -609,7 +609,7 @@ cmdSignTx ctx cfg nameM nosigHM inputM outputM splitMnemIn =
     (tsd, online) <- parseSignInput nosigHM inputM outputM
     when online $
       throwError "The transaction is already online"
-    when (txSignDataSigned tsd) $
+    when (isSigned (txSignDataTx tsd)) $
       throwError "The transaction is already signed"
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
@@ -643,7 +643,7 @@ parseSignInput nosigHM inputM outputM =
       resM <- lift $ getPendingTx h
       case resM of
         Just (_, t, online) -> return (t, online)
-        _ -> throwError "The nosigHash does not exist in the wallet"
+        _ -> throwError noPendingTx
     (_, Just i, _) -> do
       exist <- liftIO $ D.doesFileExist i
       unless exist $ throwError "Input file does not exist"
@@ -681,7 +681,7 @@ sendTxFile ctx cfg file netM =
     exists <- liftIO $ D.doesFileExist file
     unless exists $ throwError "Input file does not exist"
     tsd <- liftEitherIO (readJsonFile file)
-    unless (txSignDataSigned tsd) $ throwError "The transaction is not signed"
+    unless (isSigned (txSignDataTx tsd)) $ throwError "The transaction is not signed"
     liftEither $ verifySignedTx net ctx tsd
     let store = webStore ctx cfg net
         signedTx = txSignDataTx tsd
@@ -805,7 +805,7 @@ cmdSignSweep ctx cfg nameM nosigHM inputM outputM keysM =
     (tsd, online) <- parseSignInput nosigHM inputM outputM
     when online $
       throwError "The transaction is already online"
-    when (txSignDataSigned tsd) $
+    when (isSigned (txSignDataTx tsd)) $
       throwError "The transaction is already signed"
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc

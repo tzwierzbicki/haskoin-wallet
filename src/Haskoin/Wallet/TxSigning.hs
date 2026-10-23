@@ -60,7 +60,7 @@ parseTxSignData ::
 parseTxSignData net ctx accountPub tsd = do
   coins <- spentCoins ctx tsd
   analysis <- analyze net ctx tsd accountPub coins
-  return $ txInfo tsd.txSignDataFeeRate analysis coins tsd.txSignDataTx tsd.txSignDataSigned
+  return $ txInfo tsd.txSignDataFeeRate analysis coins tsd.txSignDataTx
 
 -- | Check that every input of a signed transaction carries a valid signature
 -- for the coin it spends
@@ -77,15 +77,15 @@ signWalletTx ::
   XPrvKey ->
   Either String (TxSignData, TxInfo)
 signWalletTx net ctx tsd accountKey = do
-  when tsd.txSignDataSigned $ Left "The transaction is already signed"
+  when (isSigned tsd.txSignDataTx) $ Left "The transaction is already signed"
   coins <- spentCoins ctx tsd
   analysis <- analyze net ctx tsd (deriveXPubKey ctx accountKey) coins
   -- The builder refuses a fee rate of zero; the signer checks the fee itself
   when (analysis.fee == 0) $ Left "The transaction pays no fee"
   signedTx <- signInputs net ctx accountKey analysis tsd.txSignDataTx coins
   verifyInputs net ctx signedTx coins
-  let signedData = tsd {txSignDataTx = signedTx, txSignDataSigned = True}
-  return (signedData, txInfo tsd.txSignDataFeeRate analysis coins signedTx True)
+  let signedData = tsd {txSignDataTx = signedTx}
+  return (signedData, txInfo tsd.txSignDataFeeRate analysis coins signedTx)
 
 {- Coins -}
 
@@ -241,8 +241,8 @@ describeInput net i coin =
 -- | The information reported about the transaction. The size of a signed
 -- transaction is that of its bytes; the size of an unsigned one is
 -- estimated from the coins it spends and the outputs it pays.
-txInfo :: Maybe Natural -> Analysis -> [SpentCoin] -> Tx -> Bool -> TxInfo
-txInfo feeRate analysis coins tx signed =
+txInfo :: Maybe Natural -> Analysis -> [SpentCoin] -> Tx -> TxInfo
+txInfo feeRate analysis coins tx =
   TxInfo
     { txInfoHash = if signed then Just (txHash tx) else Nothing,
       txInfoType = txType analysis.amount analysis.fee,
@@ -263,6 +263,7 @@ txInfo feeRate analysis coins tx signed =
       txInfoDead = False
     }
   where
+    signed = isSigned tx
     size
       | signed = fromIntegral $ BS.length $ S.encode tx
       | otherwise = estimatedSize

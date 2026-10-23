@@ -65,6 +65,10 @@ setTxInfoOnline txInfo =
 
 {- Pending transactions in the database -}
 
+-- | The answer to a hash that is not among the pending transactions
+noPendingTx :: String
+noPendingTx = "The pending transaction does not exist"
+
 -- | A pending transaction by its nosigHash: its account, its signing data
 -- and whether the user sent it to the network
 getPendingTx ::
@@ -108,7 +112,7 @@ pendingTxPage ctx accId@(DBAccountKey wallet accDeriv) (Page lim off) = do
     txInfo <- liftEither $ parseTxSignData net ctx pub tsd
     conflicted <- lift $ conflictedInputs txInfo
     let pending =
-          TxInfoPending (nosigHash $ txSignDataTx tsd) (txSignDataSigned tsd) (dBPendingTxOnline res) (not (null conflicted))
+          TxInfoPending (nosigHash $ txSignDataTx tsd) (isSigned (txSignDataTx tsd)) (dBPendingTxOnline res) (not (null conflicted))
     let txInfoP = txInfo {txInfoPending = Just pending}
     lift $ fillTxInfoLabels net txInfoP
 
@@ -161,17 +165,19 @@ importPendingTx ::
   DBAccountId ->
   TxSignData ->
   ExceptT String (DB m) TxHash
-importPendingTx net ctx accId tsd@(TxSignData tx _ _ _ _ signed) = do
+importPendingTx net ctx accId tsd = do
   acc <- getAccountById accId
   let pub = accountXPubKey ctx acc
-      pendingHash = nosigHash $ txSignDataTx tsd
+      tx = txSignDataTx tsd
+      pendingHash = nosigHash tx
       bs = BS.toStrict $ Json.encode tsd
   prevM <- lift $ getPendingTx pendingHash
   case prevM of
-    Just (_, TxSignData prevTx _ _ _ _ prevSigned, online) -> do
+    Just (_, prev, online) -> do
+      let prevTx = txSignDataTx prev
       when online $
         throwError "The transaction is already online"
-      when (prevSigned && not signed) $
+      when (isSigned prevTx && not (isSigned tx)) $
         throwError "Can not replace a signed transaction with an unsigned one"
       when (prevTx == tx) $
         throwError "The transaction already exists"
@@ -254,7 +260,7 @@ deletePendingTx ctx pendingHash = do
       freedAddresses <- lift $ setAddrsFree AddrFree outIntAddrsT
       lift $ P.delete key
       return (fromIntegral (length held), fromIntegral freedAddresses)
-    _ -> throwError "The pending transaction does not exist"
+    _ -> throwError noPendingTx
 
 -- When the pending transaction is online, we just delete it
 deletePendingTxOnline :: (MonadUnliftIO m) => DBPendingTxId -> DB m ()
@@ -279,14 +285,15 @@ sendPending ::
 sendPending ctx storeOn nosigH = do
   tsdM <- lift $ getPendingTx nosigH
   case tsdM of
-    Just (accId, tsd@(TxSignData signedTx _ _ _ _ signed), _) -> do
+    Just (accId, tsd, _) -> do
       acc <- getAccountById accId
       let net = accountNetwork acc
           pub = accountXPubKey ctx acc
           store = storeOn net
+          signedTx = txSignDataTx tsd
+      unless (isSigned signedTx) $ throwError "The transaction is not signed"
       txInfo <- liftEither $ parseTxSignData net ctx pub tsd
       txInfoL <- lift $ fillTxInfoLabels net txInfo
-      unless signed $ throwError "The transaction is not signed"
       liftEither $ verifySignedTx net ctx tsd
       fromStore $ storeHealth store
       accepted <- fromStore $ broadcast store signedTx
@@ -294,7 +301,7 @@ sendPending ctx storeOn nosigH = do
       _ <- lift $ setPendingTxOnline nosigH
       lift $ insertRawTx signedTx
       return (acc, setTxInfoOnline txInfoL)
-    _ -> throwError "The nosigHash does not exist in the wallet"
+    _ -> throwError noPendingTx
 
 -- | Delete a pending transaction, freeing the coins it held. One the user
 -- sent is abandoned only when the store does not know it: a transaction in
@@ -305,7 +312,7 @@ deleteTx ::
 deleteTx ctx storeOn nosigH = do
   pendingM <- lift $ getPendingTx nosigH
   case pendingM of
-    Nothing -> throwError "The pending transaction does not exist"
+    Nothing -> throwError noPendingTx
     Just (accId, tsd, online) -> do
       when online $ do
         acc <- getAccountById accId

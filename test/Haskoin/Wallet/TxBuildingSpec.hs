@@ -214,7 +214,7 @@ recipientTypesSpec ctx =
       built.outputPaths `shouldBe` [Deriv :/ 1 :/ 0]
     it "reports, signs and verifies the payment to every type" $ do
       built <- expectRight $ pay ctx [400000] everyType
-      let tsd = TxSignData built.tx [fundingWorth ctx [400000]] built.inputPaths built.outputPaths (Just 10) False
+      let tsd = TxSignData built.tx [fundingWorth ctx [400000]] built.inputPaths built.outputPaths (Just 10)
       unsignedInfo <- expectRight $ parseTxSignData btc ctx (testAccountPub ctx) tsd
       (unsignedInfo.txInfoSize, unsignedInfo.txInfoFeeByte, unsignedInfo.txInfoChangeInFee) `shouldBe` (375, 10, Just 0)
       (signed, info) <- expectRight $ signWalletTx btc ctx tsd testAccountKey
@@ -410,7 +410,7 @@ errorSpec ctx =
       recipientsPayFor ctx [2000] [(otherAddr 0, 2000)] `shouldBe` Left "Recipient output is smaller than the dust value"
     it "fails when the fee exceeds what a recipient is sent" $
       -- Fee: 226 bytes * 10 = 2260, more than the 1000 sent: nothing is left
-      recipientsPayFor ctx [400000] [(otherAddr 0, 1000)] `shouldBe` Left "Recipient output is smaller than the dust value"
+      recipientsPayFor ctx [400000] [(otherAddr 0, 1000)] `shouldBe` Left "Recipients can't pay for the fee"
     it "fails when a chosen coin has no derivation path" $ do
       -- A coin held by an address that is not in the wallet
       let found = wallet (coinsOf ctx $ fundingTx ctx 1 [(otherAddr 5, 400000)]) []
@@ -424,7 +424,7 @@ errorSpec ctx =
                 Store.script = addressScript ctx (externalAddr 0),
                 Store.address = Nothing
               }
-      build ctx LargestFirst (wallet [coin] []) [(otherAddr 0, 350000)] SenderPays `shouldBe` Left "A chosen coin has no derivation path"
+      build ctx LargestFirst (wallet [coin] []) [(otherAddr 0, 350000)] SenderPays `shouldBe` Left "A chosen coin has no address"
 
 {- With the database -}
 
@@ -470,7 +470,7 @@ databaseSpec ctx =
           txSignDataInputPaths tsd `shouldBe` [Deriv :/ 0 :/ 0]
           txSignDataOutputPaths tsd `shouldBe` [Deriv :/ 1 :/ 0]
           txSignDataFeeRate tsd `shouldBe` Just 10
-          txSignDataSigned tsd `shouldBe` False
+          isSigned (txSignDataTx tsd) `shouldBe` False
     it "fails without recipients" $
       inDatabaseE $ do
         (accId, _) <- fundedAccount ctx cfg

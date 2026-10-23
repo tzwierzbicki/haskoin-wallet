@@ -176,7 +176,7 @@ sweepBuilderSpec ctx =
     it "builds a transaction the sweep signer accepts" $ do
       tsd <- expectRight $ build destinations
       (signed, info) <- expectRight $ signTxWithKeys btc ctx tsd accountPub [sweptKey, walletKey]
-      signed.txSignDataSigned `shouldBe` True
+      isSigned signed.txSignDataTx `shouldBe` True
       -- The wallet receives one of the two outputs (745600) and gives up its coin (500000)
       info.txInfoType `shouldBe` TxCredit
       info.txInfoAmount `shouldBe` 245600
@@ -237,7 +237,7 @@ sweepBuilderSpec ctx =
     it "refuses to sign a sweep without fee" $ do
       -- The wallet's coin of 500000 is swept in full
       let tx = spendingTx ctx [(txHash walletFunding, 0)] [(otherAddr 0, 500000)]
-          unsigned = TxSignData tx [walletFunding] [firstExternal] [] Nothing False
+          unsigned = TxSignData tx [walletFunding] [firstExternal] [] Nothing
       signTxWithKeys btc ctx unsigned accountPub [walletKey] `shouldBe` Left "The transaction pays no fee"
   where
     seed = mkStdGen 0
@@ -427,7 +427,7 @@ sweepIntoWalletSpec ctx =
           `dbShouldBeE` [Just (TxInfoPending pendingHash False False False)]
         coinPage btc accId (Page 5 0) `dbShouldBeE` []
         -- signsweep by nosigHash, with the outside key only
-        (_, pendingTsd, online) <- lift (getPendingTx pendingHash) >>= liftMaybe "The nosigHash does not exist in the wallet"
+        (_, pendingTsd, online) <- lift (getPendingTx pendingHash) >>= liftMaybe "The pending transaction does not exist"
         liftIO $ online `shouldBe` False
         (signed, info) <- liftEither $ signTxWithKeys btc ctx pendingTsd accountPub [sweptKey]
         importPendingTx btc ctx accId signed `dbShouldBeE` pendingHash
@@ -450,7 +450,7 @@ sweepIntoWalletSpec ctx =
         (accId, _) <- testNewAcc ctx "main"
         _ <- genExtAddress ctx def accId ""
         let tx = spendingTx ctx [(txHash keyFunding, 0)] [(otherAddr 0, 90000)]
-            outside = TxSignData tx [keyFunding] [] [] (Just 10) False
+            outside = TxSignData tx [keyFunding] [] [] (Just 10)
         lift $
           dbShouldFailWith "The transaction does not involve this wallet" $
             importPendingTx btc ctx accId outside
