@@ -633,7 +633,7 @@ labelParser = do
           <$> accountOption
           <*> addrIndexArg
           <*> textArg "The new label for the address"
-  info cmd $ progDesc "Set the label of an address"
+  info cmd $ progDesc "Set the label of a receiving address, by its index in addrs"
 
 addrIndexArg :: Parser Natural
 addrIndexArg =
@@ -641,8 +641,8 @@ addrIndexArg =
     metavar "INT"
       <> help
         [r|
-The index of the external address to update. The first address has an index of
-0.
+The index of the receiving address, as `addrs` lists it: the first address has
+the index 0. The change addresses, those of `addrs --internal`, have no label.
 |]
 
 {- Txs Parser -}
@@ -1022,10 +1022,9 @@ fullOption =
       <> help
         [r|
 Force the syncacc command to re-download all the account data instead of only
-the deltas (the data that has changed). This should normally not be required
-unless some information is wrong, for example, when a previous syncacc was
-called on a partially discovered account (the account was missing some
-addresses).
+the deltas (the data that has changed). A full sync also marks as dead the
+transactions the store no longer lists. It should normally not be required: a
+reorganisation of the chain forces one, and `discoveracc` ends with one.
 |]
 
 {- DiscoverAcc Parser -}
@@ -1038,13 +1037,20 @@ discoverAccParser = do
       <> footer
         [r|
 `discoveracc` is typically called when restoring an account in a new wallet.
-Initially, there will be no addresses stored in the account. `discoveracc` will
-scan the blockchain and generate all the addresses (both external and internal)
-that have received coins at some point. The search is stopped when a gap
-(default = 20) of empty addresses is found. A full sync (syncacc --full) is
-run automatically at the end of the `discoveracc` command. When restoring an
-old wallet, it is important to discover it first before generating addresses
-and receiving payments. Otherwise some addresses might be reused.
+Initially, there are no addresses stored in the account. `discoveracc` scans
+the blockchain and generates all the addresses, external and internal, that
+have received coins at some point. The scan of a chain stops at the first
+window of the recovery gap, forty addresses by default (the `recovery-gap` key
+of the configuration file), in which no address has been used. A full sync
+(`syncacc --full`) runs at the end of the command. When restoring an old
+wallet, it is important to discover it first before generating addresses and
+receiving payments. Otherwise some addresses might be reused.
+
+Every `syncacc` already watches the gap of addresses past the ones the
+account has, twenty by default, so a payment to an address the account had
+not generated yet is usually found there. Someone deriving addresses further
+ahead from the account's public key lands beyond that watch: `discoveracc`,
+with its larger gap, is the way to find those addresses.
 |]
 
 {- Backup Parser -}

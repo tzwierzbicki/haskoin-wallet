@@ -642,6 +642,21 @@ blockAt height nonce =
     0
     0
 
+-- | The balance of an address paid once, holding the amount in one
+-- confirmed coin
+paidOnce :: Address -> Word64 -> Store.Balance
+paidOnce addr amount = Store.Balance addr amount 0 1 1 amount
+
+-- | The balance of an address paid once, by a transaction still in the
+-- mempool
+paidInMempool :: Address -> Word64 -> Store.Balance
+paidInMempool addr amount = Store.Balance addr 0 amount 1 1 amount
+
+-- | The balance of an address that received the amount once and spent it
+-- all: two transactions, nothing left
+emptied :: Address -> Word64 -> Store.Balance
+emptied addr amount = Store.Balance addr 0 0 0 2 amount
+
 -- | A transaction of the store paying an amount to one of our addresses,
 -- funded by somebody else, with a fee of 1000
 creditTx :: Ctx -> TxHash -> Store.BlockRef -> Address -> Word64 -> Store.Transaction
