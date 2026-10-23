@@ -81,11 +81,15 @@ instance MarshalJSON Network JsonCoin where
         <*> o .: "confirmations"
         <*> o .: "locked"
 
+-- | The outpoint of a coin row
+coinOutpoint :: DBCoin -> Either String OutPoint
+coinOutpoint = textToOutpoint . dBCoinOutpoint
+
 -- | A coin as the user sees it, locked when one of the pending
 -- transactions spends it
 toJsonCoin :: Network -> Maybe BlockHeight -> Set OutPoint -> DBCoin -> Either String JsonCoin
 toJsonCoin net bestM locked dbCoin = do
-  op <- textToOutpoint $ dBCoinOutpoint dbCoin
+  op <- coinOutpoint dbCoin
   ad <-
     maybeToEither "toJsonCoin: Invalid address" $
       textToAddr net $
@@ -203,21 +207,30 @@ getCoinsByAddr addr = do
     return c
   return $ entityVal <$> coins
 
--- This is the main coin function
--- Either insert, update or delete coins as required. Returns the number of
--- coins that have either been inserted, updated or deleted.
+-- | What a refresh changed: how many coins were inserted, updated or
+-- deleted, and the coins inserted and deleted
+data Refreshed = Refreshed
+  { refreshedCount :: !Int,
+    insertedCoins :: ![DBCoin],
+    deletedCoins :: ![DBCoin]
+  }
+  deriving (Eq, Show)
+
+-- | Bring the coins of the addresses in line with what the store lists:
+-- insert the coins that are new, update those whose block changed, delete
+-- those the store no longer lists
 refreshCoins ::
   (MonadUnliftIO m) =>
   Network ->
   DBAccountId ->
   [Address] ->
   [Store.Unspent] ->
-  ExceptT String (DB m) (Int, [DBCoin])
+  ExceptT String (DB m) Refreshed
 refreshCoins net accId addrsToUpdate allUnspent = do
   let storeMap = groupCoins net allUnspent
   addrsToUpdateE <-
     mapM (liftEither . maybeToEither "Addr" . addrToText net) addrsToUpdate
-  res <- forM addrsToUpdateE $ \addr -> do
+  changes <- forM addrsToUpdateE $ \addr -> do
     let storeCoins = fromMaybe [] $ Map.lookup addr storeMap
     localCoins <- lift $ getCoinsByAddr addr
     let storeOps = outpointText . (.outpoint) <$> storeCoins
@@ -229,8 +242,18 @@ refreshCoins net accId addrsToUpdate allUnspent = do
     lift $ forM_ toDelete deleteCoin
     lift $ forM_ toUpdate updateCoin
     newCoins <- lift $ forM toInsert $ insertCoin accId addr
-    return (length toDelete + length toUpdate + length toInsert, newCoins)
-  return (sum $ fst <$> res, concatMap snd res)
+    return
+      Refreshed
+        { refreshedCount = length toDelete + length toUpdate + length toInsert,
+          insertedCoins = newCoins,
+          deletedCoins = toDelete
+        }
+  return
+    Refreshed
+      { refreshedCount = sum $ refreshedCount <$> changes,
+        insertedCoins = concatMap insertedCoins changes,
+        deletedCoins = concatMap deletedCoins changes
+      }
   where
     f localCoins s =
       let cM = find ((== outpointText s.outpoint) . dBCoinOutpoint) localCoins

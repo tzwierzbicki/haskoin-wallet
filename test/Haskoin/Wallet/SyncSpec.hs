@@ -32,6 +32,7 @@ import Haskoin.Wallet.Coin
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.PendingTx
+import Haskoin.Wallet.RawTx (hasRawTx, insertRawTx)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.TestUtils
@@ -236,6 +237,40 @@ spec = prepareContext $ \ctx -> do
         _ <- sync ctx cfg store btc accId True
         liftIO $ readIORef asked `shouldReturn` [[realPaymentId ctx], [realPaymentId ctx]]
         rawTransactionCount `dbShouldBeE` 1
+
+    it "drops the raw transaction of a coin once the coin is spent" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (realPaymentStore ctx) accId
+        rawTransactionCount `dbShouldBeE` 1
+        _ <- syncWith (spentElsewhereStore ctx) accId
+        coins accId `dbShouldBeE` []
+        rawTransactionCount `dbShouldBeE` 0
+
+    it "keeps the raw transaction of a spent coin while another coin comes from it" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- genExtAddress ctx cfg accId ""
+        _ <- syncWith (realPayoutStore ctx) accId
+        coins accId `dbShouldBeE` [OutPoint (realPayoutId ctx) 0, OutPoint (realPayoutId ctx) 1]
+        rawTransactionCount `dbShouldBeE` 1
+        _ <- syncWith (realPayoutFirstSpentStore ctx) accId
+        coins accId `dbShouldBeE` [OutPoint (realPayoutId ctx) 1]
+        rawTransactionCount `dbShouldBeE` 1
+        _ <- syncWith (realPayoutAllSpentStore ctx) accId
+        coins accId `dbShouldBeE` []
+        rawTransactionCount `dbShouldBeE` 0
+
+    it "drops every raw transaction no coin comes from on a full sync" $
+      inDatabaseE $ do
+        accId <- account
+        -- A raw transaction left behind by an older hw, which no coin comes from
+        lift $ insertRawTx (spendingTx ctx [(fakeTxHash 5, 0)] [(otherAddr 0, 1000)])
+        _ <- syncWith (realPaymentStore ctx) accId
+        rawTransactionCount `dbShouldBeE` 2
+        _ <- sync ctx cfg (toStore (realPaymentStore ctx)) btc accId True
+        rawTransactionCount `dbShouldBeE` 1
+        lift (hasRawTx (realPaymentId ctx)) `dbShouldBeE` True
 
     it "refuses a store that does not return a raw transaction asked for" $
       inDatabaseE $ do
@@ -543,6 +578,75 @@ realPaymentStore ctx =
     }
   where
     tid = realPaymentId ctx
+
+-- | The raw transaction of a payout of 50000 to externalAddr 0 and 30000
+-- to externalAddr 1, and its hash
+realPayoutTx :: Ctx -> Tx
+realPayoutTx ctx = fundingTx ctx 2 [(externalAddr 0, 50000), (externalAddr 1, 30000)]
+
+realPayoutId :: Ctx -> TxHash
+realPayoutId = txHash . realPayoutTx
+
+-- | The payout listed under the hash of its raw transaction, confirmed at
+-- height 800000, both coins unspent
+realPayoutStore :: Ctx -> FakeStore
+realPayoutStore ctx =
+  emptyStore
+    { fakeBalances =
+        [ Store.Balance (externalAddr 0) 50000 0 1 1 50000,
+          Store.Balance (externalAddr 1) 30000 0 1 1 30000
+        ],
+      fakeTxRefs = [(externalAddr 0, [payoutRef]), (externalAddr 1, [payoutRef])],
+      fakeTransactions = [realPayout],
+      fakeUnspents =
+        [ coinAt ctx tid 0 (Just 800000) (externalAddr 0) 50000,
+          coinAt ctx tid 1 (Just 800000) (externalAddr 1) 30000
+        ],
+      fakeRawTransactions = [(tid, realPayoutTx ctx)]
+    }
+  where
+    tid = realPayoutId ctx
+    payoutRef = Store.TxRef (Store.BlockRef 800000 1) tid
+    realPayout = payoutTx ctx tid (Store.BlockRef 800000 1) [(externalAddr 0, 50000), (externalAddr 1, 30000)]
+
+-- | The payout with its first coin spent by transaction 8, at height 800001
+realPayoutFirstSpentStore :: Ctx -> FakeStore
+realPayoutFirstSpentStore ctx =
+  (realPayoutStore ctx)
+    { fakeBalances =
+        [ Store.Balance (externalAddr 0) 0 0 0 2 50000,
+          Store.Balance (externalAddr 1) 30000 0 1 1 30000
+        ],
+      fakeTxRefs = [(externalAddr 0, [spendRef 8, payoutRef]), (externalAddr 1, [payoutRef])],
+      fakeTransactions =
+        (realPayoutStore ctx).fakeTransactions
+          <> [spendingStoreTx ctx (fakeTxHash 8) (Store.BlockRef 800001 1) (tid, 0) (externalAddr 0) (otherAddr 1) 49000],
+      fakeUnspents = [coinAt ctx tid 1 (Just 800000) (externalAddr 1) 30000]
+    }
+  where
+    tid = realPayoutId ctx
+    payoutRef = Store.TxRef (Store.BlockRef 800000 1) tid
+    spendRef n = Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash n)
+
+-- | The payout with both coins spent, by transactions 8 and 9, at height
+-- 800001
+realPayoutAllSpentStore :: Ctx -> FakeStore
+realPayoutAllSpentStore ctx =
+  (realPayoutFirstSpentStore ctx)
+    { fakeBalances =
+        [ Store.Balance (externalAddr 0) 0 0 0 2 50000,
+          Store.Balance (externalAddr 1) 0 0 0 2 30000
+        ],
+      fakeTxRefs = [(externalAddr 0, [spendRef 8, payoutRef]), (externalAddr 1, [spendRef 9, payoutRef])],
+      fakeTransactions =
+        (realPayoutFirstSpentStore ctx).fakeTransactions
+          <> [spendingStoreTx ctx (fakeTxHash 9) (Store.BlockRef 800001 1) (tid, 1) (externalAddr 1) (otherAddr 1) 29000],
+      fakeUnspents = []
+    }
+  where
+    tid = realPayoutId ctx
+    payoutRef = Store.TxRef (Store.BlockRef 800000 1) tid
+    spendRef n = Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash n)
 
 -- | A store that lists the coin of the payment but has no raw transaction
 -- for it

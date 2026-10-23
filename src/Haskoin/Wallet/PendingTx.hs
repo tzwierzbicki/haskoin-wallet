@@ -323,4 +323,8 @@ deleteTx ctx storeOn nosigH = do
         known <- fromStore $ storeTransactions (storeOn (accountNetwork acc)) [txid]
         when (any (\t -> t.txid == txid && not t.deleted) known) $
           throwError "The transaction is in the network's mempool or in the chain: syncacc retires it once it is listed"
-      deletePendingTx ctx nosigH
+      freed <- deletePendingTx ctx nosigH
+      -- The raw transaction stored when it was sent goes with it, unless a
+      -- coin of the wallet comes from it after all
+      when online $ void $ lift $ dropRawTxsWithoutCoins [txHash (txSignDataTx tsd)]
+      return freed
