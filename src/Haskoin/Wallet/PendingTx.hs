@@ -282,6 +282,44 @@ sendPending ctx storeOn nosigH = do
   lift $ insertRawTx signedTx
   return (acc, summary)
 
+-- | What sending a signed transaction from a file did
+data Sent
+  = -- | A pending transaction of the wallet was sent, as by its nosigHash
+    SentPending DBAccount TxInfo
+  | -- | A transaction the wallet does not hold was handed to the store of
+    -- the network
+    SentOutside Network TxHash
+  deriving (Eq, Show)
+
+-- | Send a signed transaction from a file, with the network it is for when
+-- given. One the wallet holds as pending, the file an offline signer
+-- returns, takes the place of the version held and is sent like one sent by
+-- its nosigHash: marked online, its raw transaction stored. One the wallet
+-- does not hold, a sweep of outside coins for instance, is checked against
+-- the coins it spends and handed to the store of the given network, and
+-- nothing in the wallet is updated.
+sendSigned :: (MonadUnliftIO m) => Ctx -> (Network -> Store) -> Maybe Network -> TxSignData -> ExceptT String (DB m) Sent
+sendSigned ctx storeOn netM tsd = do
+  let signedTx = txSignDataTx tsd
+      pendingHash = nosigHash signedTx
+  unless (isSigned signedTx) $ throwError "The transaction is not signed"
+  heldM <- lookupPendingTx pendingHash
+  case heldM of
+    Just held -> do
+      acc <- getAccountById held.pendingTxAccount
+      let net = accountNetwork acc
+      forM_ netM $ \given ->
+        when (given /= net) $ throwError "The transaction is pending in an account of another network"
+      when (held.pendingTxData /= tsd) $ void $ importPendingTx net ctx held.pendingTxAccount tsd
+      uncurry SentPending <$> sendPending ctx storeOn pendingHash
+    Nothing -> do
+      net <- liftMaybe "Give the --network of a transaction the wallet does not hold" netM
+      liftEither $ verifySignedTx net ctx tsd
+      fromStore $ storeHealth (storeOn net)
+      accepted <- fromStore $ broadcast (storeOn net) signedTx
+      unless accepted $ throwError notAccepted
+      return $ SentOutside net (txHash signedTx)
+
 -- | Delete a pending transaction, freeing the coins it held. One the user
 -- sent is abandoned only when the store does not know it: a transaction in
 -- the network's mempool or in the chain may still confirm, and the sync

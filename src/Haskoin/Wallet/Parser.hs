@@ -962,11 +962,17 @@ instance, or may just be slow to come back. Run `sendtx` again later.
 
 A pending transaction of the wallet is sent by its NOSIGHASH and, once seen,
 marked as online; `syncacc` then sends it again should the store lose it, and
-retires it once it is listed. A signed transaction in a file is sent with
---input and the --network it is for: it is only checked and uploaded, nothing
-in the wallet is updated, so that a sweep that does not involve this wallet
-can be sent too. To track a transaction of the wallet, `importtx` the file and
-send it by its nosigHash.
+retires it once it is listed. It is sent again by every `syncacc` for as long
+as the store does not list it: a transaction the network refuses for good, for
+a fee below what the nodes relay for instance, keeps coming back until it is
+deleted with `deletetx`, which frees its coins.
+
+A signed transaction in a file is sent with --input. One the wallet holds as
+pending, the file an offline signer returns, takes the place of the version
+held and is sent as by its NOSIGHASH: marked as online, its raw transaction
+stored. One the wallet does not hold, a sweep of outside coins for instance,
+needs the --network it is for: it is only checked and uploaded, and nothing in
+the wallet is updated.
 |]
 
 {- SyncAcc Parser -}
@@ -981,11 +987,19 @@ syncAccParser = do
 The `syncacc` command will download the latest address balances, transactions
 and coins from the network. It will also update the account balances.
 
+Before that, it looks at the gap of addresses past the ones the account has:
+an address found used there, by someone paying from the account's public key or
+by another wallet of the same seed, is generated along with the ones before it
+and synced like the others.
+
 It also looks after the pending transactions: one that was sent with `sendtx`
 and that the network now lists is retired; one that was sent but that the store
 no longer knows is sent again, since nodes forget unconfirmed transactions; one
 whose coin was spent by another transaction is reported as conflicted. A signed
-transaction that was never sent is left alone.
+transaction that was never sent is left alone. A sent transaction is sent again
+on every sync for as long as the store does not list it, so one the network
+refuses for good, for a fee below what the nodes relay for instance, keeps
+coming back until it is deleted with `deletetx`.
 |]
 
 fullOption :: Parser Bool

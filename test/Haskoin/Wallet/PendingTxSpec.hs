@@ -45,6 +45,7 @@ spec =
     importingSpec ctx
     listingSpec ctx
     sendingSpec ctx
+    sendingFileSpec ctx
     deletingSpec ctx
 
 -- | A store that knows the transaction of the signing data, in its mempool
@@ -448,6 +449,75 @@ sendingSpec ctx =
       runExceptT (broadcastWith 1000 3 (countingAsks asks (toStore (storeKnowing ctx tsd))) (txSignDataTx tsd))
         `shouldReturn` Right True
       readIORef asks `shouldReturn` 1
+
+sendingFileSpec :: Ctx -> Spec
+sendingFileSpec ctx =
+  describe "Sending a signed transaction from a file" $ do
+    let cfg = def :: Config
+    it "sends the signed version of a transaction the wallet holds, and marks it online" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        unsigned <- unsignedPayment ctx cfg accId
+        pendingHash <- importPendingTx btc ctx accId unsigned
+        -- The file the offline signer returns
+        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        sent <- sendSigned ctx (const (toStore (storeKnowing ctx signed))) Nothing signed
+        liftIO $ case sent of
+          SentPending _ info -> txInfoPending info `shouldBe` Just (TxInfoPending pendingHash True True False)
+          SentOutside _ _ -> expectationFailure "A transaction of the wallet was sent as an outside one"
+        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
+          `dbShouldBeE` [Just (TxInfoPending pendingHash True True False)]
+        held <- requirePendingTx pendingHash
+        liftIO $ held.pendingTxData `shouldBe` signed
+        lift (hasRawTx (txHash (txSignDataTx signed))) `dbShouldBeE` True
+    it "refuses a network other than the account's" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        unsigned <- unsignedPayment ctx cfg accId
+        _ <- importPendingTx btc ctx accId unsigned
+        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        lift $
+          dbShouldFailWith "The transaction is pending in an account of another network" $
+            sendSigned ctx (const (toStore emptyStore)) (Just bch) signed
+    it "hands a transaction the wallet does not hold to the store of the given network, and records nothing" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        -- The payment is built but never held, as a file prepared elsewhere
+        -- would be: the next sync catches up with it
+        unsigned <- unsignedPayment ctx cfg accId
+        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        published <- liftIO $ newIORef []
+        sent <- sendSigned ctx (const (notingPublished published (toStore (storeKnowing ctx signed)))) (Just btc) signed
+        liftIO $ case sent of
+          SentOutside net txid -> (net.name, txid) `shouldBe` ("btc", txHash (txSignDataTx signed))
+          SentPending _ _ -> expectationFailure "A transaction the wallet does not hold was sent as pending"
+        liftIO $ readIORef published `shouldReturn` [txSignDataTx signed]
+        pendingTxPage ctx accId (Page 5 0) `dbShouldBeE` []
+        lift (hasRawTx (txHash (txSignDataTx signed))) `dbShouldBeE` False
+    it "needs the network of a transaction the wallet does not hold" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        unsigned <- unsignedPayment ctx cfg accId
+        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        lift $
+          dbShouldFailWith "Give the --network of a transaction the wallet does not hold" $
+            sendSigned ctx (const (toStore emptyStore)) Nothing signed
+    it "refuses a transaction the wallet does not hold whose signatures do not check out" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        unsigned <- unsignedPayment ctx cfg accId
+        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        let broken = signed {txSignDataTx = withBrokenSignature (txSignDataTx signed)}
+        lift $
+          dbShouldFailWith "Invalid signature for input 0 (1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj)" $
+            sendSigned ctx (const (toStore emptyStore)) (Just btc) broken
+    it "refuses an unsigned file" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        unsigned <- unsignedPayment ctx cfg accId
+        lift $
+          dbShouldFailWith "The transaction is not signed" $
+            sendSigned ctx (const (toStore emptyStore)) (Just btc) unsigned
 
 deletingSpec :: Ctx -> Spec
 deletingSpec ctx =
