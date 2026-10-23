@@ -1,12 +1,11 @@
-{-# LANGUAGE DisambiguateRecordFields #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedRecordDot #-}
-{-# LANGUAGE OverloadedStrings #-}
 
--- | Synchronising an account with the store: address discovery, balances,
--- transaction summaries, coins, the raw transactions the coins come from
--- and the pending transactions. The store is asked through the 'Store'
--- record of "Haskoin.Wallet.Store".
+-- | Synchronising an account with the store: the gap of addresses watched,
+-- the balances, the transaction summaries, the coins and the raw
+-- transactions they come from, and the pending transactions; and the
+-- discovery of the used addresses of an account. The store is asked
+-- through the 'Store' record of "Haskoin.Wallet.Store".
 module Haskoin.Wallet.Sync where
 
 import Conduit (MonadUnliftIO)
@@ -17,6 +16,7 @@ import Data.Containers.ListUtils (nubOrd)
 import Data.List (partition, sort)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import Data.Set (Set)
 import qualified Data.Set as Set
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -31,7 +31,6 @@ import Haskoin.Wallet.RawTx
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData
-import Haskoin.Wallet.TxSigning (parseTxSignData)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 
@@ -101,23 +100,15 @@ data SyncRes = SyncRes
 
 -- | Bring an account up to date with the store.
 --
--- An incremental sync looks only at the addresses whose balance changed
--- since the last sync, which is every address a new, confirmed, replaced
--- or dropped transaction touches. A full sync, asked for or forced by a
--- reorganisation of the chain, looks at every address and also marks dead
--- the summaries of transactions the store no longer lists. Every sync first
--- watches the gap of addresses past the ones the account has: a used
--- address found there is generated, with the ones before it, and synced
--- like the others.
-sync ::
-  (MonadUnliftIO m) =>
-  Ctx ->
-  Config ->
-  Store ->
-  Network ->
-  DBAccountId ->
-  Bool ->
-  ExceptT String (DB m) SyncRes
+-- Every sync first watches the gap of addresses past the ones the account
+-- has: a used address found there is generated, with the ones before it,
+-- and synced like the others. An incremental sync then looks only at the
+-- addresses whose balance changed since the last sync, which is every
+-- address a new, confirmed, replaced or dropped transaction touches. A
+-- full sync, asked for or forced by a reorganisation of the chain, looks
+-- at every address and also marks dead the summaries of transactions the
+-- store no longer lists.
+sync :: (MonadUnliftIO m) => Ctx -> Config -> Store -> Network -> DBAccountId -> Bool -> ExceptT String (DB m) SyncRes
 sync ctx cfg store net accId full = do
   fromStore $ storeHealth store
   -- The best block is taken before anything else, so that a block found
@@ -127,120 +118,37 @@ sync ctx cfg store net accId full = do
   -- whether the chain moved
   everything <- if full then return True else chainReorganised store net
   found <- watchGap ctx cfg store accId
-  -- The addresses of the account, with their stored balances
-  (addrPathMap, addrBalMap) <- allAddressesMap net accId
-  storeBals <- fromStore $ storeBalances store (Map.keys addrBalMap)
-  changedBals <-
-    if everything
-      then return storeBals
-      else liftEither $ filterAddresses storeBals addrBalMap
-  let changedAddrs = (.address) <$> changedBals
+  -- The addresses of the account with their stored balances, and those the
+  -- store reports changed
+  (addrPaths, addrBals) <- allAddressesMap net accId
+  storeBals <- fromStore $ storeBalances store (Map.keys addrBals)
+  changedBals <- if everything then return storeBals else liftEither $ filterAddresses storeBals addrBals
   updateAddressBalances net changedBals
-  newAcc <- lift $ updateAccountBalances accId
-  -- Every transaction the store lists for each changed address. A
-  -- transaction touching two of them is listed under both.
-  listedByAddress <- listTxs cfg store net changedBals
-  let listed = concatMap snd listedByAddress
-  -- The summaries already stored, with their blocks
+  acc <- lift $ updateAccountBalances accId
+  -- Their transactions, and the summaries to store or to mark dead
+  listings <- listTxs cfg store net changedBals
   known <- txInfoBlockRefs accId
-  -- What to fetch in full: the listed transactions that are new or whose
-  -- block changed; the unconfirmed summaries, whose transactions may have
-  -- been confirmed, replaced or dropped since the last sync; and every
-  -- transaction of an address that has transactions for the first time. A
-  -- summary is built with the addresses the wallet knows at the time, so a
-  -- transaction that also paid an address generated later, say a batch
-  -- payout from someone deriving the public key, shows that output as
-  -- somebody else's until it is rebuilt.
-  let changed = [r.txid | r <- listed, Map.lookup r.txid known /= Just r.block]
-      unconfirmed = [tid | (tid, ref) <- Map.toList known, not (Store.confirmed ref)]
-      storedCount bal = maybe 0 addrBalanceTxs $ Map.lookup bal.address addrBalMap
-      firstSeen = [r.txid | (bal, refs) <- listedByAddress, storedCount bal == 0, r <- refs]
-      toFetch = nubOrd $ changed <> unconfirmed <> firstSeen
+  let toFetch = transactionsToFetch known addrBals listings
+      listed = concatMap snd listings
   txs <- fromStore $ storeTransactions store toFetch
-  -- A transaction the store reports as deleted, or does not return at all,
-  -- is dead: replaced, dropped from the mempool, or left out by a
-  -- reorganisation. Its summary is marked dead and kept, for the history.
-  -- Dead summaries are not among the known ones, so a transaction the store
-  -- lists again later is fetched and its summary comes back to life.
-  let live = filter (not . (.deleted)) txs
-      alive = Set.fromList $ (.txid) <$> live
-      dead = [tid | tid <- toFetch, tid `Set.notMember` alive, tid `Map.member` known]
-      txInfos = storeToTxInfo addrPathMap (fromIntegral best.height) <$> live
-  resTxInfo <- forM txInfos $ repsertTxInfo net ctx accId
-  lift $ forM_ dead $ markTxInfoDead accId
-  -- After a reorganisation a confirmed transaction may have vanished without
-  -- a trace in the addresses it touched; a full sync lists every
-  -- transaction of every address, so what is not listed is dead
-  when everything $ do
-    let stillListed = Set.fromList $ (.txid) <$> listed
-        vanished = [tid | tid <- Map.keys known, tid `Set.notMember` stillListed]
-    lift $ forM_ vanished $ markTxInfoDead accId
-  -- The coins of the changed addresses, all of them
-  unspents <- fromStore $ storeUnspents store changedAddrs
-  let countedCoins = sum $ (.utxo) <$> changedBals
-  when (fromIntegral (length unspents) /= countedCoins) $
-    throwError $
-      "The store counts "
-        <> show countedCoins
-        <> " coins for the addresses to update but listed "
-        <> show (length unspents)
-  refreshed <- refreshCoins net accId changedAddrs unspents
-  -- The raw transactions the coins come from, which signing needs. A raw
-  -- transaction never changes, so the ones already stored are not fetched
-  -- again. The store must have every one asked for: it lists the coins.
-  let parents = nubOrd $ (.outpoint.hash) <$> unspents
-  missing <- lift $ missingRawTxs parents
-  unless (null missing) $ do
-    rawTxs <- fromStore $ storeRawTransactions store missing
-    when (length rawTxs /= length missing) $
-      throwError $
-        "The store was asked for "
-          <> show (length missing)
-          <> " raw transactions but returned "
-          <> show (length rawTxs)
-    lift $ forM_ rawTxs insertRawTx
-  -- The pending transactions. A signed one the store lists has reached the
-  -- network and is done with. One the user sent that the store does not
-  -- list is sent again: nodes forget unconfirmed transactions, and the
-  -- store may never have accepted it; a signed one the user has not sent is
-  -- left alone. One whose coins are gone conflicts with the transaction
-  -- that spent them, and is counted for the user.
-  pending <- pendingTxs accId
-  let seen = Set.fromList $ (.txid) <$> listed
-      reached p = isSigned p.pendingTxData.txSignDataTx && txHash p.pendingTxData.txSignDataTx `Set.member` seen
-      (done, waiting) = partition reached pending
-  lift $ forM_ done retirePendingTx
-  let resend = [p.pendingTxData.txSignDataTx | p <- waiting, p.pendingTxOnline]
-  forM_ resend $ fromStore . storePublish store
-  let pub = accountXPubKey ctx newAcc
-  conflicted <- filterM (inConflict net pub) waiting
-  -- A raw transaction is kept while a coin comes from it. The parents of
-  -- the coins that are gone and the transactions just retired are dropped,
-  -- unless one of their outputs is still a coin of the wallet, change for
-  -- instance. A full sync looks at every raw transaction instead, which
-  -- also cleans up after the versions of hw that kept them all.
-  goneParents <- liftEither $ mapM parentOf refreshed.deletedCoins
-  let retired = [txHash p.pendingTxData.txSignDataTx | p <- done]
-  _ <-
-    if everything
-      then dropOrphanRawTxs
-      else lift $ dropRawTxsWithoutCoins (nubOrd $ goneParents <> retired)
+  updated <- forM (filter (not . (.deleted)) txs) $ repsertTxInfo net ctx accId . storeToTxInfo addrPaths (fromIntegral best.height)
+  lift $ forM_ (deadTransactions everything known toFetch txs listed) $ markTxInfoDead accId
+  -- The coins, the pending transactions and the raw transactions
+  refreshed <- syncCoins store net accId changedBals
+  (resent, conflicted, retired) <- syncPending ctx store acc accId (Set.fromList $ (.txid) <$> listed)
+  pruneRawTxs everything refreshed retired
   lift $ updateBest net (headerHash best.header) best.height
-  return $
+  return
     SyncRes
-      newAcc
-      (headerHash best.header)
-      (fromIntegral best.height)
-      (fromIntegral $ length $ filter id $ snd <$> resTxInfo)
-      (fromIntegral refreshed.refreshedCount)
-      (fromIntegral $ length resend)
-      (fromIntegral $ length conflicted)
-      found
-  where
-    parentOf coin = (.hash) <$> coinOutpoint coin
-    inConflict net' pub p = do
-      txInfo <- liftEither $ parseTxSignData net' ctx pub p.pendingTxData
-      not . null <$> lift (conflictedInputs txInfo)
+      { syncResAccount = acc,
+        syncResBlockHash = headerHash best.header,
+        syncResBlockHeight = fromIntegral best.height,
+        syncResTxUpdates = fromIntegral $ length $ filter snd updated,
+        syncResCoinUpdates = fromIntegral refreshed.refreshedCount,
+        syncResRebroadcast = resent,
+        syncResConflicted = conflicted,
+        syncResNewAddrs = found
+      }
 
 -- | Whether the chain has moved away from the block of the last sync: that
 -- block is no longer in the main chain at its height. Balances alone do not
@@ -256,47 +164,12 @@ chainReorganised store net = do
       let stillMain b = headerHash b.header == hash && b.main
       return $ not $ any stillMain blocks
 
--- | Every transaction the store lists for each address that has any: as
--- many as it counts in the balance, which a listing cut short would not
--- match. The addresses are not listed together in one request, because the
--- store would merge a transaction listed under two of them into one and
--- the counts could no longer be checked; the listings are asked in
--- parallel instead, as many at a time as the configuration allows.
-listTxs ::
-  (MonadUnliftIO m) =>
-  Config ->
-  Store ->
-  Network ->
-  [Store.Balance] ->
-  ExceptT String (DB m) [(Store.Balance, [Store.TxRef])]
-listTxs cfg store net bals = do
-  let used = filter ((/= 0) . (.txs)) bals
-  listings <-
-    fromStore $
-      inParallel
-        (configParallelRequests cfg)
-        [storeAddressTxs store bal.address (fromIntegral bal.txs) | bal <- used]
-  forM (zip used listings) $ \(bal, refs) -> do
-    when (fromIntegral (length refs) /= bal.txs) $
-      throwError $
-        "The store counts "
-          <> show bal.txs
-          <> " transactions for "
-          <> addrToString net bal.address
-          <> " but listed "
-          <> show (length refs)
-    return (bal, refs)
-
-{- The balances to update -}
+{- The balances -}
 
 -- | The balances that differ from the stored ones: the addresses to update
-filterAddresses ::
-  [Store.Balance] ->
-  Map Address AddressBalance ->
-  Either String [Store.Balance]
+filterAddresses :: [Store.Balance] -> Map Address AddressBalance -> Either String [Store.Balance]
 filterAddresses sBals aMap
-  | sort ((.address) <$> sBals) /= sort (Map.keys aMap) =
-      Left "Sync: addresses do not match"
+  | sort ((.address) <$> sBals) /= sort (Map.keys aMap) = Left "Sync: addresses do not match"
   | otherwise = filterM changed sBals
   where
     -- Whether the store's balance differs from the stored one. The guard
@@ -308,3 +181,109 @@ filterAddresses sBals aMap
           || s.confirmed /= addrBalanceConfirmed b
           || s.unconfirmed /= addrBalanceUnconfirmed b
           || s.utxo /= addrBalanceCoins b
+
+-- | Every transaction the store lists for each address that has any: as
+-- many as it counts in the balance, which a listing cut short would not
+-- match. The addresses are not listed together in one request, because the
+-- store would merge a transaction listed under two of them into one and
+-- the counts could no longer be checked; the listings are asked in
+-- parallel instead, as many at a time as the configuration allows.
+listTxs :: (MonadUnliftIO m) => Config -> Store -> Network -> [Store.Balance] -> ExceptT String (DB m) [(Store.Balance, [Store.TxRef])]
+listTxs cfg store net bals = do
+  let used = filter ((/= 0) . (.txs)) bals
+  listings <- fromStore $ inParallel (configParallelRequests cfg) [storeAddressTxs store bal.address (fromIntegral bal.txs) | bal <- used]
+  forM (zip used listings) $ \(bal, refs) -> do
+    when (fromIntegral (length refs) /= bal.txs) $
+      throwError $
+        "The store counts " <> show bal.txs <> " transactions for " <> addrToString net bal.address <> " but listed " <> show (length refs)
+    return (bal, refs)
+
+{- The summaries -}
+
+-- | What to fetch in full, from the summaries known with their blocks, the
+-- stored balances and the listings of the changed addresses: the listed
+-- transactions that are new or whose block changed; the unconfirmed
+-- summaries, whose transactions may have been confirmed, replaced or
+-- dropped since the last sync; and every transaction of an address that
+-- has transactions for the first time. A summary is built with the
+-- addresses the wallet knows at the time, so a transaction that also paid
+-- an address generated later, say a batch payout from someone deriving the
+-- public key, shows that output as somebody else's until it is rebuilt.
+transactionsToFetch :: Map TxHash Store.BlockRef -> Map Address AddressBalance -> [(Store.Balance, [Store.TxRef])] -> [TxHash]
+transactionsToFetch known addrBals listings = nubOrd $ changed <> unconfirmed <> firstSeen
+  where
+    changed = [r.txid | (_, refs) <- listings, r <- refs, Map.lookup r.txid known /= Just r.block]
+    unconfirmed = [tid | (tid, ref) <- Map.toList known, not (Store.confirmed ref)]
+    storedCount bal = maybe 0 addrBalanceTxs $ Map.lookup bal.address addrBals
+    firstSeen = [r.txid | (bal, refs) <- listings, storedCount bal == 0, r <- refs]
+
+-- | The known transactions that are dead: those fetched that the store
+-- reports deleted or does not return, replaced, dropped from the mempool or
+-- left out by a reorganisation; and, on a full sync, those no address lists
+-- any more, since a reorganisation may remove a confirmed transaction
+-- without a trace in the addresses it touched. Their summaries are marked
+-- dead and kept, for the history, and are no longer known: a transaction
+-- the store lists again later is fetched and comes back to life.
+deadTransactions :: Bool -> Map TxHash Store.BlockRef -> [TxHash] -> [Store.Transaction] -> [Store.TxRef] -> [TxHash]
+deadTransactions everything known fetched txs listed = nubOrd $ gone <> vanished
+  where
+    alive = Set.fromList [t.txid | t <- txs, not t.deleted]
+    gone = [tid | tid <- fetched, tid `Set.notMember` alive, tid `Map.member` known]
+    stillListed = Set.fromList $ (.txid) <$> listed
+    vanished = [tid | everything, tid <- Map.keys known, tid `Set.notMember` stillListed]
+
+{- The coins and their raw transactions -}
+
+-- | The coins of the changed addresses, all of them, which the store must
+-- list as many of as it counts, and the raw transactions they come from,
+-- which signing needs. A raw transaction never changes, so the ones already
+-- stored are not fetched again.
+syncCoins :: (MonadUnliftIO m) => Store -> Network -> DBAccountId -> [Store.Balance] -> ExceptT String (DB m) Refreshed
+syncCoins store net accId changedBals = do
+  let changedAddrs = (.address) <$> changedBals
+      counted = sum $ (.utxo) <$> changedBals
+  unspents <- fromStore $ storeUnspents store changedAddrs
+  when (fromIntegral (length unspents) /= counted) $
+    throwError $
+      "The store counts " <> show counted <> " coins for the addresses to update but listed " <> show (length unspents)
+  refreshed <- refreshCoins net accId changedAddrs unspents
+  missing <- lift $ missingRawTxs $ nubOrd $ (.outpoint.hash) <$> unspents
+  rawTxs <- fromStore $ rawTransactions store missing
+  lift $ forM_ rawTxs insertRawTx
+  return refreshed
+
+-- | Drop the raw transactions no coin needs any more. A raw transaction is
+-- kept while a coin comes from it: the parents of the coins that are gone
+-- and the transactions just retired are dropped, unless one of their
+-- outputs is still a coin of the wallet, change for instance. A full sync
+-- looks at every raw transaction instead, which also cleans up after the
+-- versions of hw that kept them all.
+pruneRawTxs :: (MonadUnliftIO m) => Bool -> Refreshed -> [TxHash] -> ExceptT String (DB m) ()
+pruneRawTxs everything refreshed retired
+  | everything = void dropOrphanRawTxs
+  | otherwise = do
+      goneParents <- liftEither $ mapM (fmap (.hash) . coinOutpoint) refreshed.deletedCoins
+      void $ lift $ dropRawTxsWithoutCoins $ nubOrd $ goneParents <> retired
+
+{- The pending transactions -}
+
+-- | The pending transactions of the account after a sync, given the
+-- transactions the store listed. A signed one the store lists has reached
+-- the network and is retired. One the user sent that the store does not
+-- list is sent again: nodes forget unconfirmed transactions, and the store
+-- may never have accepted it; a signed one the user has not sent is left
+-- alone. One whose coins are gone conflicts with the transaction that spent
+-- them, and is counted for the user. Returns how many were sent again, how
+-- many conflict, and the ids of those retired.
+syncPending :: (MonadUnliftIO m) => Ctx -> Store -> DBAccount -> DBAccountId -> Set TxHash -> ExceptT String (DB m) (Natural, Natural, [TxHash])
+syncPending ctx store acc accId seen = do
+  held <- pendingTxs accId
+  let (done, waiting) = partition reached held
+  lift $ forM_ done retirePendingTx
+  let resend = [txOf p | p <- waiting, p.pendingTxOnline]
+  forM_ resend $ fromStore . storePublish store
+  conflicted <- filterM (inConflict ctx acc) waiting
+  return (fromIntegral (length resend), fromIntegral (length conflicted), txHash . txOf <$> done)
+  where
+    txOf p = p.pendingTxData.txSignDataTx
+    reached p = isSigned (txOf p) && txHash (txOf p) `Set.member` seen

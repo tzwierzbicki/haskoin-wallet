@@ -1,8 +1,6 @@
 {-# LANGUAGE DisambiguateRecordFields #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedRecordDot #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TupleSections #-}
 
 -- | Sweeping the coins of external private keys into the wallet.
 --
@@ -109,16 +107,7 @@ fetchSweepCoins net ctx store accId secKeys sweepFrom given sweepTo = do
       spentFrom = nub $ (.outpoint.hash) <$> coins
   -- The store lists the coins, so it must have every transaction they
   -- come from
-  transactions <-
-    if null spentFrom
-      then return []
-      else fromStore $ storeRawTransactions store spentFrom
-  when (length transactions /= length spentFrom) $
-    throwError $
-      "The store was asked for "
-        <> show (length spentFrom)
-        <> " raw transactions but returned "
-        <> show (length transactions)
+  transactions <- fromStore $ rawTransactions store spentFrom
   walletAddrs <- walletPaths net accId (mapMaybe (.address) coins <> sweepTo)
   let uncompressedAddrs = nub $ uncompressedKeyAddr ctx <$> secKeys
   return SweepCoins {coins, transactions, walletAddrs, uncompressedAddrs}
