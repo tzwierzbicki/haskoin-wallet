@@ -7,8 +7,9 @@
 -- wallet made, the chain reorganising, a wallet with many coins or many
 -- addresses, the raw transactions fetched only when missing and dropped
 -- when no coin needs them, pending transactions, two accounts, another
--- network; the gap of addresses watched past the ones the account has; and
--- the discovery of the used addresses of an account
+-- network; the gap of addresses watched past the ones the account has; the
+-- discovery of the used addresses of an account; and the decisions of a
+-- sync on their own: what to fetch, what is dead, which balances changed
 module Haskoin.Wallet.SyncSpec (spec) where
 
 import Control.Concurrent (threadDelay)
@@ -512,6 +513,75 @@ spec = prepareContext $ \ctx -> do
         asked <- liftIO $ newIORef []
         _ <- sync ctx smallGap (notingBalanceRequests asked (toStore emptyStore)) btc accId False
         liftIO $ readIORef asked `shouldReturn` [take 3 (drop 1 externalAddrs), take 3 internalAddrs, [externalAddr 0]]
+
+  describe "Choosing the transactions to fetch" $ do
+    -- The store lists the payment of 50000 to an address as transaction 1
+    -- in block 800000; the wallet stores a balance with a transaction count
+    let payment = Store.TxRef (Store.BlockRef 800000 1) (fakeTxHash 1)
+        listing addr count refs = (Store.Balance addr 50000 0 1 count 50000, refs)
+        stored addr count = Map.fromList [(addr, AddressBalance 50000 0 1 count 50000)]
+        knownIn block = Map.fromList [(fakeTxHash 1, block)]
+
+    it "fetches a listed transaction it does not know" $
+      transactionsToFetch Map.empty (stored (externalAddr 0) 1) [listing (externalAddr 0) 1 [payment]]
+        `shouldBe` [fakeTxHash 1]
+
+    it "leaves alone a known transaction listed in its block" $
+      transactionsToFetch (knownIn (Store.BlockRef 800000 1)) (stored (externalAddr 0) 1) [listing (externalAddr 0) 1 [payment]]
+        `shouldBe` []
+
+    it "fetches a known transaction again when it moved to another block" $
+      transactionsToFetch (knownIn (Store.BlockRef 800001 3)) (stored (externalAddr 0) 1) [listing (externalAddr 0) 1 [payment]]
+        `shouldBe` [fakeTxHash 1]
+
+    it "fetches the unconfirmed transactions again, listed or not" $
+      transactionsToFetch (knownIn (Store.MemRef 1700000000)) Map.empty []
+        `shouldBe` [fakeTxHash 1]
+
+    it "fetches every transaction of an address that has transactions for the first time" $
+      -- The known payment also paid this address, which its summary does
+      -- not show yet: it is rebuilt along with the new transaction
+      transactionsToFetch (knownIn (Store.BlockRef 800000 1)) (stored (externalAddr 1) 0) [listing (externalAddr 1) 2 [payment, Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 3)]]
+        `shouldMatchList` [fakeTxHash 1, fakeTxHash 3]
+
+    it "names a transaction once when two addresses list it" $
+      transactionsToFetch Map.empty (stored (externalAddr 0) 1 <> stored (externalAddr 1) 1) [listing (externalAddr 0) 1 [payment], listing (externalAddr 1) 1 [payment]]
+        `shouldBe` [fakeTxHash 1]
+
+  describe "Telling the dead transactions" $ do
+    -- Two known transactions; the store still lists the second
+    let known = Map.fromList [(fakeTxHash 1, Store.BlockRef 800000 1), (fakeTxHash 2, Store.BlockRef 800001 1)]
+        alive = creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000
+        listedRef = Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 2)
+
+    it "counts a fetched transaction the store reports deleted as dead" $
+      deadTransactions False known [fakeTxHash 1] [replaced alive] [listedRef] `shouldBe` [fakeTxHash 1]
+
+    it "counts a fetched transaction the store does not return as dead" $
+      deadTransactions False known [fakeTxHash 1] [] [listedRef] `shouldBe` [fakeTxHash 1]
+
+    it "leaves alone a transaction the store returns alive" $
+      deadTransactions False known [fakeTxHash 1] [alive] [listedRef] `shouldBe` []
+
+    it "ignores a fetched transaction it never knew" $
+      deadTransactions False known [fakeTxHash 9] [] [listedRef] `shouldBe` []
+
+    it "counts a known transaction no address lists any more as dead, on a full sync only" $ do
+      deadTransactions True known [] [] [listedRef] `shouldBe` [fakeTxHash 1]
+      deadTransactions False known [] [] [listedRef] `shouldBe` []
+
+  describe "The balances to update" $ do
+    -- externalAddr 0 holds 50000 as stored; externalAddr 1 was empty and
+    -- the store now reports 30000 unconfirmed
+    let stored = Map.fromList [(externalAddr 0, AddressBalance 50000 0 1 1 50000), (externalAddr 1, AddressBalance 0 0 0 0 0)]
+        unchanged = Store.Balance (externalAddr 0) 50000 0 1 1 50000
+        paid = Store.Balance (externalAddr 1) 0 30000 1 1 30000
+
+    it "keeps the addresses whose balance the store reports changed" $
+      filterAddresses [unchanged, paid] stored `shouldBe` Right [paid]
+
+    it "refuses an answer about other addresses than asked" $
+      filterAddresses [unchanged] stored `shouldBe` Left "Sync: addresses do not match"
 
   describe "Asking the store in parallel" $ do
     it "answers in the order asked, even when later questions finish first" $ do
