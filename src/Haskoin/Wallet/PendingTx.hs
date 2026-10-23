@@ -98,17 +98,6 @@ lookupPendingTx pendingHash = do
 requirePendingTx :: (MonadUnliftIO m) => TxHash -> ExceptT String (DB m) PendingTx
 requirePendingTx pendingHash = lookupPendingTx pendingHash >>= liftMaybe noPendingTx
 
--- | The account, signing data and online state of a pending transaction, as
--- a plain lookup outside the error monad: Nothing for a hash that is not
--- pending, or whose row does not decode. The commands use
--- 'lookupPendingTx', which tells the two apart.
-getPendingTx :: (MonadUnliftIO m) => TxHash -> DB m (Maybe (DBAccountId, TxSignData, Bool))
-getPendingTx pendingHash = do
-  found <- runExceptT $ lookupPendingTx pendingHash
-  return $ do
-    p <- either (const Nothing) id found
-    return (p.pendingTxAccount, p.pendingTxData, p.pendingTxOnline)
-
 -- | The rows of an account, newest first: all of them, or a page
 pendingRows :: (MonadUnliftIO m) => DBAccountId -> Maybe Page -> DB m [Entity DBPendingTx]
 pendingRows (DBAccountKey wallet accDeriv) pageM =
@@ -174,23 +163,25 @@ conflictedInputs txInfo = filterM (fmap not . coinExists) (touchedBy txInfo).coi
 importPendingTx :: (MonadUnliftIO m) => Network -> Ctx -> DBAccountId -> TxSignData -> ExceptT String (DB m) TxHash
 importPendingTx net ctx accId tsd = do
   acc <- getAccountById accId
-  let tx = txSignDataTx tsd
-      pendingHash = nosigHash tx
+  heldM <- lookupPendingTx pendingHash
+  forM_ heldM $ \held ->
+    when (held.pendingTxAccount /= accId) $
+      throwError "The transaction is pending in another account"
   txInfo <- liftEither $ parseTxSignData net ctx (accountXPubKey ctx acc) tsd
   when (isSigned tx) $ liftEither $ verifySignedTx net ctx tsd
-  heldM <- lookupPendingTx pendingHash
   case heldM of
-    Just held -> replaceVersion accId held tsd
+    Just held -> replaceVersion held tsd
     Nothing -> insertPendingTx net accId tsd txInfo
   return pendingHash
+  where
+    tx = txSignDataTx tsd
+    pendingHash = nosigHash tx
 
 -- | Replace the version an account holds of a transaction with the one
 -- imported: the signed version of an unsigned transaction, or another
 -- valid signature of a signed one
-replaceVersion :: (MonadUnliftIO m) => DBAccountId -> PendingTx -> TxSignData -> ExceptT String (DB m) ()
-replaceVersion accId held tsd = do
-  when (held.pendingTxAccount /= accId) $
-    throwError "The transaction is pending in another account"
+replaceVersion :: (MonadUnliftIO m) => PendingTx -> TxSignData -> ExceptT String (DB m) ()
+replaceVersion held tsd = do
   when held.pendingTxOnline $
     throwError "The transaction is already online"
   when (isSigned heldTx && not (isSigned tx)) $
@@ -251,8 +242,8 @@ removePendingTx ctx held = do
 -- | Retire a pending transaction the network has seen, as the sync does:
 -- the row goes and nothing else changes. Its coins are gone, or going with
 -- the sync, and its change address was used on the chain, so it stays busy.
-deletePendingTxOnline :: (MonadUnliftIO m) => DBPendingTxId -> DB m ()
-deletePendingTxOnline = P.delete
+retirePendingTx :: (MonadUnliftIO m) => PendingTx -> DB m ()
+retirePendingTx p = P.delete p.pendingTxKey
 
 -- | Mark a pending transaction as sent to the network by the user. The
 -- number of rows changed: one, or none for a hash that is not pending.

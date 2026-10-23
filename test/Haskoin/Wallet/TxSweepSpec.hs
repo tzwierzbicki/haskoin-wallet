@@ -427,9 +427,9 @@ sweepIntoWalletSpec ctx =
           `dbShouldBeE` [Just (TxInfoPending pendingHash False False False)]
         coinPage btc accId (Page 5 0) `dbShouldBeE` []
         -- signsweep by nosigHash, with the outside key only
-        (_, pendingTsd, online) <- lift (getPendingTx pendingHash) >>= liftMaybe "The pending transaction does not exist"
-        liftIO $ online `shouldBe` False
-        (signed, info) <- liftEither $ signTxWithKeys btc ctx pendingTsd accountPub [sweptKey]
+        held <- requirePendingTx pendingHash
+        liftIO $ held.pendingTxOnline `shouldBe` False
+        (signed, info) <- liftEither $ signTxWithKeys btc ctx held.pendingTxData accountPub [sweptKey]
         importPendingTx btc ctx accId signed `dbShouldBeE` pendingHash
         ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
           `dbShouldBeE` [Just (TxInfoPending pendingHash True False False)]
