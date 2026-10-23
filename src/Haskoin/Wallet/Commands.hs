@@ -44,7 +44,7 @@ import Haskoin.Wallet.Sync
 import Haskoin.Wallet.TxBuilding
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData
-import Haskoin.Wallet.TxSigning (parseTxSignData, signWalletTx, verifySignedTx)
+import Haskoin.Wallet.TxSigning (parseTxSignData, signWalletTx)
 import Haskoin.Wallet.TxSweep (buildSweepSignData, fetchSweepCoins, signTxWithKeys)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
@@ -667,25 +667,19 @@ cmdSendTx ctx cfg nosigHM inputM netM =
     (Nothing, Nothing) -> return $ ResponseError "Give the NOSIGHASH of a pending transaction or an --input file"
     (Just _, Just _) -> return $ ResponseError "Can not specify both a NOSIGHASH and an --input file"
 
--- | Send a signed transaction from a file, which need not involve the
--- wallet: it is checked against the coins it spends and uploaded, and
--- nothing in the wallet is updated. A transaction that does involve the
--- wallet is caught up with by the next sync.
+-- | Send a signed transaction from a file: one the wallet holds as pending
+-- like one sent by its nosigHash, one it does not hold to the store of the
+-- given network. See 'sendSigned'.
 sendTxFile :: Ctx -> Config -> FilePath -> Maybe Network -> IO Response
 sendTxFile ctx cfg file netM =
-  catchResponseError $ do
-    net <- maybe (throwError "Give the --network of a transaction sent from a file") return netM
+  runDBResponse cfg $ do
     exists <- liftIO $ D.doesFileExist file
     unless exists $ throwError "Input file does not exist"
     tsd <- liftEitherIO (readJsonFile file)
-    unless (isSigned (txSignDataTx tsd)) $ throwError "The transaction is not signed"
-    liftEither $ verifySignedTx net ctx tsd
-    let store = webStore ctx cfg net
-        signedTx = txSignDataTx tsd
-    storeHealth store
-    accepted <- broadcast store signedTx
-    unless accepted $ throwError notAccepted
-    return $ ResponseSentTx net (txHash signedTx)
+    sent <- sendSigned ctx (webStore ctx cfg) netM tsd
+    return $ case sent of
+      SentPending acc txInfo -> ResponseTx acc txInfo
+      SentOutside net txid -> ResponseSentTx net txid
 
 {- Synchronisation -}
 
