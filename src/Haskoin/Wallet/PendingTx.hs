@@ -151,6 +151,12 @@ coinExists outpoint = isJust <$> P.get (DBCoinKey $ outpointText outpoint)
 conflictedInputs :: (MonadUnliftIO m) => TxInfo -> DB m [OutPoint]
 conflictedInputs txInfo = filterM (fmap not . coinExists) (touchedBy txInfo).coinsSpent
 
+-- | Whether a pending transaction spends a coin of the wallet that is gone
+inConflict :: (MonadUnliftIO m) => Ctx -> DBAccount -> PendingTx -> ExceptT String (DB m) Bool
+inConflict ctx acc p = do
+  txInfo <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountXPubKey ctx acc) p.pendingTxData
+  not . null <$> lift (conflictedInputs txInfo)
+
 {- Importing -}
 
 -- | Store a transaction of the account as pending, which locks the coins it

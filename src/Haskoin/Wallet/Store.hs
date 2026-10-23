@@ -115,6 +115,16 @@ inParallel atATime questions = do
   answers <- liftIO $ pooledMapConcurrentlyN threads runExceptT questions
   liftEither $ sequence answers
 
+-- | The raw transactions with the given ids, which the store must all have
+rawTransactions :: Store -> [TxHash] -> ExceptT String IO [Tx]
+rawTransactions _ [] = return []
+rawTransactions store tids = do
+  txs <- storeRawTransactions store tids
+  when (length txs /= length tids) $
+    throwError $
+      "The store was asked for " <> show (length tids) <> " raw transactions but returned " <> show (length txs)
+  return txs
+
 {- Broadcasting -}
 
 -- | How long 'broadcast' waits for the store to see a transaction, in
