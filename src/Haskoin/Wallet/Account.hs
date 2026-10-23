@@ -9,7 +9,7 @@
 module Haskoin.Wallet.Account where
 
 import Conduit (MonadUnliftIO)
-import Control.Monad (mzero)
+import Control.Monad
 import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Reader (MonadTrans (lift))
@@ -137,8 +137,9 @@ nextAccountDeriv walletFP net = do
 existsAccount :: (MonadUnliftIO m) => Text -> DB m Bool
 existsAccount name = P.existsBy $ UniqueName name
 
-existsXPubKey :: (MonadUnliftIO m) => Network -> Ctx -> XPubKey -> DB m Bool
-existsXPubKey net ctx key = P.existsBy $ UniqueXPubKey $ xPubExport net ctx key
+-- | The account that holds the key, if any
+accountWithKey :: (MonadUnliftIO m) => Network -> Ctx -> XPubKey -> DB m (Maybe DBAccount)
+accountWithKey net ctx key = fmap entityVal <$> P.getBy (UniqueXPubKey $ xPubExport net ctx key)
 
 getWalletOrCreate :: (MonadUnliftIO m) => Fingerprint -> DB m DBWalletId
 getWalletOrCreate fp = do
@@ -158,34 +159,38 @@ insertAccount ::
   ExceptT String (DB m) (DBAccountId, DBAccount)
 insertAccount net ctx walletFP name xpub = do
   existsName <- lift $ existsAccount name
-  if existsName
-    then throwError $ "Account " <> cs name <> " already exists"
-    else do
-      existsKey <- lift $ existsXPubKey net ctx xpub
-      if existsKey
-        then throwError "The XPubKey already exists"
-        else do
-          time <- liftIO getCurrentTime
-          walletId <- lift $ getWalletOrCreate walletFP
-          let path = bip44Deriv net $ fromIntegral $ xPubChild xpub
-              idx = fromIntegral $ xPubIndex xpub
-              account =
-                DBAccount
-                  { dBAccountName = name,
-                    dBAccountWallet = walletId,
-                    dBAccountIndex = idx,
-                    dBAccountNetwork = cs net.name,
-                    dBAccountDerivation = cs $ pathToStr path,
-                    dBAccountExternal = 0,
-                    dBAccountInternal = 0,
-                    dBAccountXPubKey = xPubExport net ctx xpub,
-                    dBAccountBalanceConfirmed = 0,
-                    dBAccountBalanceUnconfirmed = 0,
-                    dBAccountBalanceCoins = 0,
-                    dBAccountCreated = time
-                  }
-          key <- lift $ P.insert account
-          return (key, account)
+  when existsName $ throwError $ "Account " <> cs name <> " already exists"
+  holderM <- lift $ accountWithKey net ctx xpub
+  forM_ holderM $ throwError . keyTaken
+  time <- liftIO getCurrentTime
+  walletId <- lift $ getWalletOrCreate walletFP
+  let path = bip44Deriv net $ fromIntegral $ xPubChild xpub
+      account =
+        DBAccount
+          { dBAccountName = name,
+            dBAccountWallet = walletId,
+            dBAccountIndex = fromIntegral $ xPubIndex xpub,
+            dBAccountNetwork = cs net.name,
+            dBAccountDerivation = cs $ pathToStr path,
+            dBAccountExternal = 0,
+            dBAccountInternal = 0,
+            dBAccountXPubKey = xPubExport net ctx xpub,
+            dBAccountBalanceConfirmed = 0,
+            dBAccountBalanceUnconfirmed = 0,
+            dBAccountBalanceCoins = 0,
+            dBAccountCreated = time
+          }
+  key <- lift $ P.insert account
+  return (key, account)
+  where
+    -- The networks of Bitcoin and Bitcoin Cash have their own coin types;
+    -- the test networks all use coin type 1 and share their account keys
+    keyTaken holder
+      | dBAccountNetwork holder == cs net.name =
+          "Account " <> cs (dBAccountName holder) <> " already has this key"
+      | otherwise =
+          "Account " <> cs (dBAccountName holder) <> " on " <> cs (dBAccountNetwork holder)
+            <> " already has this key: the test networks share their account keys, so a wallet holds one of them per account index"
 
 deleteAccount :: (MonadUnliftIO m) => DBAccountId -> DB m ()
 deleteAccount accId@(DBAccountKey accWallet accDeriv) = do
