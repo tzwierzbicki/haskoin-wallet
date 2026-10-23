@@ -222,6 +222,7 @@ arbitrarySyncRes net ctx =
     <*> arbitraryNatural
     <*> arbitraryNatural
     <*> arbitraryNatural
+    <*> arbitraryNatural
 
 arbitraryResponse :: Network -> Ctx -> Gen Response
 arbitraryResponse net ctx =

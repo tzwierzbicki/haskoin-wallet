@@ -37,39 +37,49 @@ import Numeric.Natural (Natural)
 
 {- Address discovery -}
 
--- | The number of external and internal addresses of an account that have
--- been used, found by scanning the chains of the public key: windows of
--- the recovery gap are checked for addresses with transactions until a whole
--- window has none. The scan therefore stops only after at least a recovery
--- gap of unused addresses, up to twice that many depending on where the
--- last used address falls in its window.
-discoverAddrs ::
-  (MonadIO m) =>
-  Ctx ->
-  Config ->
-  Store ->
-  XPubKey ->
-  ExceptT String m (Natural, Natural)
-discoverAddrs ctx cfg store pub = do
-  let recoveryGap = configRecoveryGap cfg
-  e <- go extDeriv 0 (Page recoveryGap 0)
-  i <- go intDeriv 0 (Page recoveryGap 0)
-  return (fromIntegral e, fromIntegral i)
+-- | The index after the last used address of a chain of the public key,
+-- found by scanning windows of the given size from the given index: the
+-- store is asked which addresses of a window have transactions, and a
+-- window where none has ends the scan. The scan therefore stops only after
+-- at least a window of unused addresses, up to twice that many depending
+-- on where the last used address falls in its window.
+scanChain :: (MonadIO m) => Ctx -> Store -> XPubKey -> SoftPath -> Natural -> Natural -> ExceptT String m Natural
+scanChain ctx store pub chain window from = go from from
   where
-    go path d page@(Page lim off) = do
-      let addrs = addrsDerivPage ctx path page pub
-      bals <- ExceptT $ liftIO $ runExceptT $ storeBalances store (fst <$> addrs)
-      let vBals = filter ((/= 0) . (.txs)) bals
-      if null vBals
-        then return d
-        else do
-          let dMax = findMax addrs $ (.address) <$> vBals
-          go path (dMax + 1) (Page lim (off + lim))
-    -- Find the largest ID amongst the addresses that have a positive balance
-    findMax :: [(Address, SoftPath)] -> [Address] -> Int
-    findMax addrs balAddrs =
-      let fAddrs = filter ((`elem` balAddrs) . fst) addrs
-       in fromIntegral $ maximum $ last . pathToList . snd <$> fAddrs
+    go next off = do
+      let addrs = addrsDerivPage ctx chain (Page window off) pub
+      bals <- fromStore $ storeBalances store (fst <$> addrs)
+      let used = Set.fromList [bal.address | bal <- bals, bal.txs /= 0]
+          usedIndices = [fromIntegral (pathIndex path) | (addr, path) <- addrs, addr `Set.member` used]
+      if null usedIndices
+        then return next
+        else go (maximum usedIndices + 1) (off + window)
+
+-- | The number of external and internal addresses of an account that have
+-- been used, found by scanning both chains from their first address in
+-- windows of the recovery gap
+discoverAddrs :: (MonadIO m) => Ctx -> Config -> Store -> XPubKey -> ExceptT String m (Natural, Natural)
+discoverAddrs ctx cfg store pub =
+  (,) <$> scanChain ctx store pub extDeriv recoveryGap 0 <*> scanChain ctx store pub intDeriv recoveryGap 0
+  where
+    recoveryGap = configRecoveryGap cfg
+
+-- | Generate the addresses of the account that were used without its
+-- knowledge: the gap of addresses past the ones each chain has is asked
+-- about, and a used address found there moves the chain up to and
+-- including it. Someone paying the wallet from its public key, or another
+-- wallet of the same seed, uses addresses this one has not generated yet.
+-- Returns how many addresses were generated.
+watchGap :: (MonadUnliftIO m) => Ctx -> Config -> Store -> DBAccountId -> ExceptT String (DB m) Natural
+watchGap ctx cfg store accId = do
+  acc <- getAccountById accId
+  let pub = accountXPubKey ctx acc
+      extend addrType = do
+        let have = fromIntegral $ dBAccountCount addrType acc
+        next <- scanChain ctx store pub (addrDeriv addrType) (configGap cfg) have
+        discoverAccGenAddrs ctx cfg accId addrType (fromIntegral next)
+        return (next - have)
+  (+) <$> extend AddrExternal <*> extend AddrInternal
 
 {- Synchronisation -}
 
@@ -83,7 +93,9 @@ data SyncRes = SyncRes
     syncResRebroadcast :: !Natural,
     -- | Pending transactions a coin of which was spent by another
     -- transaction
-    syncResConflicted :: !Natural
+    syncResConflicted :: !Natural,
+    -- | Addresses found used past the ones the account had, and generated
+    syncResNewAddrs :: !Natural
   }
   deriving (Eq, Show)
 
@@ -93,7 +105,10 @@ data SyncRes = SyncRes
 -- since the last sync, which is every address a new, confirmed, replaced
 -- or dropped transaction touches. A full sync, asked for or forced by a
 -- reorganisation of the chain, looks at every address and also marks dead
--- the summaries of transactions the store no longer lists.
+-- the summaries of transactions the store no longer lists. Every sync first
+-- watches the gap of addresses past the ones the account has: a used
+-- address found there is generated, with the ones before it, and synced
+-- like the others.
 sync ::
   (MonadUnliftIO m) =>
   Ctx ->
@@ -111,6 +126,7 @@ sync ctx cfg store net accId full = do
   -- A full sync looks at everything anyway: only an incremental one asks
   -- whether the chain moved
   everything <- if full then return True else chainReorganised store net
+  found <- watchGap ctx cfg store accId
   -- The addresses of the account, with their stored balances
   (addrPathMap, addrBalMap) <- allAddressesMap net accId
   storeBals <- fromStore $ storeBalances store (Map.keys addrBalMap)
@@ -219,6 +235,7 @@ sync ctx cfg store net accId full = do
       (fromIntegral refreshed.refreshedCount)
       (fromIntegral $ length resend)
       (fromIntegral $ length conflicted)
+      found
   where
     parentOf coin = (.hash) <$> coinOutpoint coin
     inConflict net' pub p = do

@@ -7,7 +7,8 @@
 -- wallet made, the chain reorganising, a wallet with many coins or many
 -- addresses, the raw transactions fetched only when missing and dropped
 -- when no coin needs them, pending transactions, two accounts, another
--- network; and the discovery of the used addresses of an account
+-- network; the gap of addresses watched past the ones the account has; and
+-- the discovery of the used addresses of an account
 module Haskoin.Wallet.SyncSpec (spec) where
 
 import Control.Concurrent (threadDelay)
@@ -460,6 +461,58 @@ spec = prepareContext $ \ctx -> do
         balances accId `dbShouldBeE` (80000, 0, 3)
         rawTransactionCount `dbShouldBeE` 3
 
+  describe "Watching the gap of addresses" $ do
+    -- A gap of 3 instead of the default 20: the sync looks at the three
+    -- addresses past the ones the account has, on each chain
+    let smallGap = cfg {configGap = 3}
+        watchWith store accId = sync ctx smallGap (toStore store) btc accId False
+
+    it "finds a payment to an address past the ones generated, and generates up to it" $
+      inDatabaseE $ do
+        accId <- account
+        res <- watchWith (paidStore ctx [(externalAddr 3, 50000)]) accId
+        liftIO $ (syncResNewAddrs res, dBAccountExternal (syncResAccount res)) `shouldBe` (3, 4)
+        lift (getAddrDeriv btc accId (externalAddr 3)) `dbShouldBeE` Right (Deriv :/ 0 :/ 3)
+        summaries ctx accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
+        coins accId `dbShouldBeE` [OutPoint (fakeTxHash 1) 0]
+        balances accId `dbShouldBeE` (50000, 0, 1)
+
+    it "keeps looking while each window finds a used address" $
+      inDatabaseE $ do
+        accId <- account
+        res <- watchWith (paidStore ctx [(externalAddr 2, 20000), (externalAddr 5, 30000)]) accId
+        liftIO $ (syncResNewAddrs res, dBAccountExternal (syncResAccount res)) `shouldBe` (5, 6)
+        summaries ctx accId
+          `dbShouldBeE` [ (Just (fakeTxHash 1), Store.BlockRef 800000 1, 20000),
+                          (Just (fakeTxHash 2), Store.BlockRef 800000 2, 30000)
+                        ]
+        balances accId `dbShouldBeE` (50000, 0, 2)
+
+    it "does not look past the gap" $
+      inDatabaseE $ do
+        accId <- account
+        res <- watchWith (paidStore ctx [(externalAddr 4, 50000)]) accId
+        liftIO $ (syncResNewAddrs res, dBAccountExternal (syncResAccount res)) `shouldBe` (0, 1)
+        summaries ctx accId `dbShouldBeE` []
+        balances accId `dbShouldBeE` (0, 0, 0)
+
+    it "finds change made by another wallet of the same seed, and keeps the addresses up to it busy" $
+      inDatabaseE $ do
+        accId <- account
+        res <- watchWith (paidStore ctx [(internalAddr 1, 10000)]) accId
+        liftIO $ (syncResNewAddrs res, dBAccountInternal (syncResAccount res)) `shouldBe` (2, 2)
+        summaries ctx accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 10000)]
+        balances accId `dbShouldBeE` (10000, 0, 1)
+        -- The other wallet may use /1/0 as change next: this one does not
+        (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 2
+
+    it "asks about the gap of each chain once when nothing is in it" $
+      inDatabaseE $ do
+        accId <- account
+        asked <- liftIO $ newIORef []
+        _ <- sync ctx smallGap (notingBalanceRequests asked (toStore emptyStore)) btc accId False
+        liftIO $ readIORef asked `shouldReturn` [take 3 (drop 1 externalAddrs), take 3 internalAddrs, [externalAddr 0]]
+
   describe "Asking the store in parallel" $ do
     it "answers in the order asked, even when later questions finish first" $ do
       -- Question 1 takes 25 milliseconds, question 5 takes 5
@@ -866,6 +919,20 @@ discoveredStore ctx =
     }
   where
     paid = discoveredPayments ctx
+
+-- | Payments of the given amounts to the given addresses, one transaction
+-- each, numbered from 1, all confirmed in block 800000
+paidStore :: Ctx -> [(Address, Word64)] -> FakeStore
+paidStore ctx paid =
+  emptyStore
+    { fakeBalances = [Store.Balance addr amount 0 1 1 amount | (addr, amount, _) <- numbered],
+      fakeTxRefs = [(addr, [Store.TxRef (Store.BlockRef 800000 (fromIntegral n)) (fakeTxHash n)]) | (addr, _, n) <- numbered],
+      fakeTransactions = [creditTx ctx (fakeTxHash n) (Store.BlockRef 800000 (fromIntegral n)) addr amount | (addr, amount, n) <- numbered],
+      fakeUnspents = [coinOf ctx (fakeTxHash n) (Just 800000) addr (fromIntegral amount) | (addr, amount, n) <- numbered],
+      fakeRawTransactions = [(fakeTxHash n, fundingTx ctx n [(addr, fromIntegral amount)]) | (addr, amount, n) <- numbered]
+    }
+  where
+    numbered = [(addr, amount, n) | ((addr, amount), n) <- zip paid [1 :: Word8 ..]]
 
 -- | A store that lists the coin of the payment but has no raw transaction
 -- for it

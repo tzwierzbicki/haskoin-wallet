@@ -213,7 +213,7 @@ instance MarshalJSON Ctx Response where
             "address" .= a
           ]
       ResponseSync xs -> do
-        let f (SyncRes as bb bh tc cc rb ck) =
+        let f (SyncRes as bb bh tc cc rb ck na) =
               object
                 [ "account" .= as,
                   "bestblock" .= bb,
@@ -221,7 +221,8 @@ instance MarshalJSON Ctx Response where
                   "txupdates" .= tc,
                   "coinupdates" .= cc,
                   "rebroadcast" .= rb,
-                  "conflicted" .= ck
+                  "conflicted" .= ck,
+                  "discovered" .= na
                 ]
         object
           [ "type" .= Json.String "sync",
@@ -307,6 +308,7 @@ instance MarshalJSON Ctx Response where
               <*> x .: "coinupdates"
               <*> x .: "rebroadcast"
               <*> x .: "conflicted"
+              <*> x .: "discovered"
           return $ ResponseSync res
         "version" ->
           ResponseVersion
