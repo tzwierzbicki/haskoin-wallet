@@ -40,7 +40,7 @@ import Haskoin.Wallet.RawTx (hasRawTx, insertRawTx)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.TxInfo (ChainStatus (..), MyOutputs (..), TxInfo (..), TxStatus (..), TxSummary (..), TxType (..), txInfoHash, txsPage)
+import Haskoin.Wallet.TxInfo (ChainStatus (..), MyOutputs (..), TxInfo (..), TxSummary (..), TxType (..), txInfoHash, txsPage)
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.Util (Page (Page))
 import Numeric.Natural (Natural)
@@ -1071,25 +1071,6 @@ spentElsewhereStore ctx =
       fakeUnspents = []
     }
 
--- | A transaction of the store spending one coin of ours, paying the given
--- addresses with a fee of 1000
-spendingStoreTx :: Ctx -> TxHash -> Store.BlockRef -> (TxHash, Word32) -> Address -> [(Address, Word64)] -> Store.Transaction
-spendingStoreTx ctx tid block (spentHash, spentIndex) from paid =
-  Store.Transaction
-    { Store.block = block,
-      Store.version = 1,
-      Store.locktime = 0,
-      Store.inputs = [Store.StoreInput (OutPoint spentHash spentIndex) 0xffffffff BS.empty (addressScript ctx from) (sum (snd <$> paid) + 1000) [] (Just from)],
-      Store.outputs = [Store.StoreOutput amount (addressScript ctx to) Nothing (Just to) | (to, amount) <- paid],
-      Store.deleted = False,
-      Store.rbf = False,
-      Store.timestamp = 1700000000,
-      Store.txid = tid,
-      Store.size = 226,
-      Store.weight = 904,
-      Store.fee = 1000
-    }
-
 pendingRow :: DBAccountId -> Tx -> DBPendingTx
 pendingRow (DBAccountKey wallet accDeriv) tx =
   DBPendingTx
@@ -1117,13 +1098,6 @@ sentStore ctx =
 
 -- | The summaries of the account: transaction id, block and amount, in the
 -- order of the transaction ids
--- | The chain status of a listed summary, which is always on the chain
-chainOf :: TxInfo -> ChainStatus
-chainOf info =
-  case txInfoStatus info of
-    OnChain status -> status
-    Pending _ -> error "A listed summary is on the chain"
-
 summaries :: DBAccountId -> ExceptT String (DB IO) [(Maybe TxHash, Store.BlockRef, Integer)]
 summaries accId = do
   txInfos <- txsPage accId (Page 500 0)
