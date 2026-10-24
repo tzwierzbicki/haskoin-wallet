@@ -53,8 +53,6 @@ txsSpec ctx =
       txsPage accId (Page 5 0) `dbShouldBeE` [listedAt (Store.MemRef 0) 0]
       -- Check that confirmations are updated correctly
       lift $ updateBest btc (fakeBlockHash 0) 0
-      getConfirmedTxs accId True `dbShouldBeE` []
-      getConfirmedTxs accId False `dbShouldBeE` [fakeTxHash 0]
       txsPage accId (Page 5 0) `dbShouldBeE` [listedAt (Store.MemRef 0) 0]
       lift (repsertSummary btc accId (fakeTxHash 0) (Store.BlockRef 0 0) emptySummary) `dbShouldBeE` True
       dbInfo' <- lift storedRow >>= liftMaybe "The summary is not stored"
@@ -63,8 +61,6 @@ txsSpec ctx =
         dBTxInfoConfirmed dbInfo' `shouldBe` True
         dBTxInfoCreated dbInfo' `shouldBe` dBTxInfoCreated dbInfo
       txsPage accId (Page 5 0) `dbShouldBeE` [listedAt (Store.BlockRef 0 0) 1]
-      getConfirmedTxs accId True `dbShouldBeE` [fakeTxHash 0]
-      getConfirmedTxs accId False `dbShouldBeE` []
       lift $ updateBest btcTest (fakeBlockHash 0) 10
       lift $ updateBest btc (fakeBlockHash 0) 20
       txsPage accId (Page 5 0) `dbShouldBeE` [listedAt (Store.BlockRef 0 0) 21]
@@ -74,3 +70,7 @@ txsSpec ctx =
         dBTxInfoBlockRef dbInfo'' `shouldBe` S.encode (Store.BlockRef 10 0)
         dBTxInfoConfirmed dbInfo'' `shouldBe` True
       txsPage accId (Page 5 0) `dbShouldBeE` [listedAt (Store.BlockRef 10 0) 11]
+      -- A dead transaction keeps its block but has no confirmations
+      lift $ markTxInfoDead accId (fakeTxHash 0)
+      txsPage accId (Page 5 0)
+        `dbShouldBeE` [TxInfo emptySummary (OnChain (ChainStatus (fakeTxHash 0) (Store.BlockRef 10 0) 0 True))]
