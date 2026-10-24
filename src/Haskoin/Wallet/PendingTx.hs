@@ -125,14 +125,20 @@ pendingTxPage ctx accId page = do
   held <- liftEither . mapM fromRow =<< lift (pendingRows accId (Just page))
   mapM (pendingSummary ctx acc) held
 
+-- | The transaction of the signing data as the account sees it: parsed
+-- against the account's key, with the labels of its addresses
+txInfoOf :: (MonadUnliftIO m) => Ctx -> DBAccount -> TxSignData -> ExceptT String (DB m) TxInfo
+txInfoOf ctx acc tsd = do
+  info <- liftEither $ parseTxSignData ctx (accountXPubKey ctx acc) tsd
+  lift $ fillTxInfoLabels (accountNetwork acc) info
+
 -- | The summary of a pending transaction: the transaction as the wallet
--- sees it, its status as held, and the labels of its addresses
+-- sees it, with its status as held
 pendingSummary :: (MonadUnliftIO m) => Ctx -> DBAccount -> PendingTx -> ExceptT String (DB m) TxInfo
 pendingSummary ctx acc p = do
-  let net = accountNetwork acc
-  info <- liftEither $ parseTxSignData ctx (accountXPubKey ctx acc) p.pendingTxData
+  info <- txInfoOf ctx acc p.pendingTxData
   conflicted <- lift $ conflictedInputs info.txInfoSummary
-  lift $ fillTxInfoLabels net info {txInfoStatus = heldStatus p (not (null conflicted)) info.txInfoStatus}
+  return info {txInfoStatus = heldStatus p (not (null conflicted)) info.txInfoStatus}
 
 -- | The status of a held transaction: what its signing data says, and what
 -- only the database knows, whether the user sent it and whether a coin it
