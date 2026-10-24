@@ -256,11 +256,11 @@ summaryParser net o =
     <*> o .: "feebyte"
     <*> o .:? "changeinfee"
     <*> o .: "size"
-    <*> (mapTextAddr net <$> o .: "myoutputs")
-    <*> (mapTextAddr net <$> o .: "otheroutputs")
+    <*> (mapTextAddr net =<< o .: "myoutputs")
+    <*> (mapTextAddr net =<< o .: "otheroutputs")
     <*> (mapM (unmarshalValue net) =<< o .: "nonstdoutputs")
-    <*> (mapTextAddr net <$> o .: "myinputs")
-    <*> (mapTextAddr net <$> (mapM otherInputValue =<< o .: "otherinputs"))
+    <*> (mapTextAddr net =<< o .: "myinputs")
+    <*> (mapTextAddr net =<< mapM otherInputValue =<< o .: "otherinputs")
     <*> (mapM (unmarshalValue net) =<< o .: "nonstdinputs")
   where
     -- The summaries stored by earlier versions of hw wrote an object per
@@ -316,9 +316,11 @@ statusParser o = do
 {- From the store's transactions -}
 
 -- | The summary of a transaction the store reports, for an account whose
--- addresses are given with their derivation paths
-storeSummary :: Map Address SoftPath -> Store.Transaction -> TxSummary
-storeSummary walletAddrs sTx =
+-- addresses are given with their derivation paths. An output or input at an
+-- address the network cannot write, a SegWit one on Bitcoin Cash for
+-- instance, is kept apart like one that pays no address.
+storeSummary :: Network -> Map Address SoftPath -> Store.Transaction -> TxSummary
+storeSummary net walletAddrs sTx =
   TxSummary
     { summaryType = txType amount fee,
       summaryAmount = amount,
@@ -336,31 +338,33 @@ storeSummary walletAddrs sTx =
   where
     size = fromIntegral sTx.size :: Natural
     fee = fromIntegral sTx.fee :: Natural
-    (outputs, nonStdOut) = outputAddressMap sTx.outputs
-    (inputs, nonStdIn) = inputAddressMap sTx.inputs
+    (outputs, nonStdOut) = outputAddressMap net sTx.outputs
+    (inputs, nonStdIn) = inputAddressMap net sTx.inputs
     myOutputs = Map.intersectionWith (\v path -> MyOutputs v path "") outputs walletAddrs
     myInputs = Map.intersectionWith (\(v, spent) path -> MyInputs v path "" spent) inputs walletAddrs
     amount =
       toInteger (sum $ myOutputsValue <$> Map.elems myOutputs)
         - toInteger (sum $ myInputsValue <$> Map.elems myInputs)
 
--- | The value paid to each address, and the outputs that pay no address
-outputAddressMap :: [Store.StoreOutput] -> (Map Address Natural, [Store.StoreOutput])
-outputAddressMap outs =
+-- | The value paid to each address of the network, and the outputs that
+-- pay no such address
+outputAddressMap :: Network -> [Store.StoreOutput] -> (Map Address Natural, [Store.StoreOutput])
+outputAddressMap net outs =
   (Map.fromListWith (+) rs, ls)
   where
     (ls, rs) = partitionEithers $ f <$> outs
-    f (Store.StoreOutput v _ _ (Just a)) = Right (a, fromIntegral v)
+    f (Store.StoreOutput v _ _ (Just a)) | onNetwork net a = Right (a, fromIntegral v)
     f s = Left s
 
--- | The value spent by each address with the coins it spends, in the order
--- of the inputs, and the inputs that spend no address
-inputAddressMap :: [Store.StoreInput] -> (Map Address (Natural, [OutPoint]), [Store.StoreInput])
-inputAddressMap ins =
+-- | The value spent by each address of the network with the coins it
+-- spends, in the order of the inputs, and the inputs that spend no such
+-- address
+inputAddressMap :: Network -> [Store.StoreInput] -> (Map Address (Natural, [OutPoint]), [Store.StoreInput])
+inputAddressMap net ins =
   (Map.fromListWith addLater rs, ls)
   where
     (ls, rs) = partitionEithers $ f <$> ins
-    f (Store.StoreInput outpoint _ _ _ v _ (Just a)) = Right (a, (fromIntegral v, [outpoint]))
+    f (Store.StoreInput outpoint _ _ _ v _ (Just a)) | onNetwork net a = Right (a, (fromIntegral v, [outpoint]))
     f s = Left s
     addLater (v2, later) (v1, earlier) = (v1 + v2, earlier <> later)
 

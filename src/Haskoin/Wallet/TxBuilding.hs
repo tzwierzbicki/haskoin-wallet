@@ -39,7 +39,7 @@ import Haskoin.Wallet.PendingTx (changeAddress)
 import Haskoin.Wallet.RawTx
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSize (outputSize, p2pkhOutputSize)
-import Haskoin.Wallet.Util (addrToText2, randomShuffle, safeSubtract)
+import Haskoin.Wallet.Util (addrToTextE, randomShuffle, safeSubtract)
 import Numeric.Natural (Natural)
 import System.Random (StdGen, splitGen)
 
@@ -183,12 +183,14 @@ buildWalletTx net ctx gen strategy found recipients feeByte dust payer coinContr
     when (any ((< payment.dust) . snd) outputs) $
       throwError "Recipient output is smaller than the dust value"
     shuffledOutputs <- randomShuffle outputs
-    tx <- lift $ buildAddrTx net ctx ((.outpoint) <$> chosen.selected) =<< mapM (addrToText2 net) shuffledOutputs
+    tx <- lift $ buildAddrTx net ctx ((.outpoint) <$> chosen.selected) =<< mapM recipientText shuffledOutputs
     inputPaths <- lift $ nub <$> mapM coinPath chosen.selected
     let outputPaths =
           nub $ [snd found.change | hasChange] <> mapMaybe ((`Map.lookup` found.recipientPaths) . fst) recipients
     return BuiltTx {tx, spentCoins = chosen.selected, inputPaths, outputPaths}
   where
+    -- The builder of haskoin takes the recipients as address text
+    recipientText (addr, amount) = (,amount) <$> addrToTextE net addr
     payment =
       Payment
         { rates = FeeRates {feeRate = fromIntegral feeByte, longTermFeeRate = longTermRate},

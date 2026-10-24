@@ -14,6 +14,7 @@ import Conduit (liftIO)
 import Control.Monad.Except (ExceptT)
 import Control.Monad.Trans (lift)
 import Data.Aeson (eitherDecode)
+import Data.Aeson.Types (parseEither)
 import qualified Data.ByteString as BS
 import Data.Default (def)
 import Data.Map.Strict (Map)
@@ -118,7 +119,7 @@ account ctx = fst <$> testNewAcc ctx "main"
 
 -- | The summary of a transaction of the store, as the sync builds it
 summarized :: Store.Transaction -> TxSummary
-summarized = storeSummary ourPaths
+summarized = storeSummary btc ourPaths
 
 -- | Store the summary of a transaction for the account, as the sync does
 record :: DBAccountId -> Store.Transaction -> ExceptT String (DB IO) Bool
@@ -208,11 +209,21 @@ summarySpec ctx =
       summaryOtherInputs summary `shouldBe` Map.empty
 
     it "sees an address the account does not have as an outsider's" $ do
-      let summary = storeSummary Map.empty (payment ctx)
+      let summary = storeSummary btc Map.empty (payment ctx)
       involvesWallet summary `shouldBe` False
       summaryAmount summary `shouldBe` 0
       summaryOtherOutputs summary `shouldBe` Map.fromList [(externalAddr 0, 50000)]
       involvesWallet paymentSummary `shouldBe` True
+
+    it "sets apart an output at an address the network cannot write, a SegWit one on Bitcoin Cash" $ do
+      -- The store names the address whatever the network; the summary only
+      -- keeps what the network can write, since that is what it stores
+      let paid = outputTo ctx segwitAddr 30000
+          tx = storeTx (fakeTxHash 9) (Store.BlockRef 800000 4) [inputFrom ctx (fakeTxHash 0xee, 0) (otherAddr 0) 31000] [paid] 1000
+          onBch = storeSummary bch Map.empty tx
+      summaryOtherOutputs onBch `shouldBe` Map.empty
+      summaryNonStdOutputs onBch `shouldBe` [paid]
+      summaryOtherOutputs (storeSummary btc Map.empty tx) `shouldBe` Map.fromList [(segwitAddr, 30000)]
 
 statusSpec :: Spec
 statusSpec =
@@ -339,6 +350,18 @@ jsonSpec =
       unmarshalJSON btc (cs oldPayment) `shouldBe` Just paymentSummary
       unmarshalJSON btc (cs oldSpend)
         `shouldBe` Just spendSummary {summaryMyInputs = Map.fromList [(externalAddr 0, MyInputs 50000 (Deriv :/ 0 :/ 0) "" [])]}
+
+    it "refuses a stored summary with an address that is not one of the network" $ do
+      let json :: String
+          json =
+            [r|{
+              "type": "credit", "amount": 50000, "fee": 1000, "feebyte": 4, "size": 226,
+              "myoutputs": {"nonsense": {"value": 50000, "path": "/0/0", "label": ""}},
+              "otheroutputs": {}, "nonstdoutputs": [], "myinputs": {}, "otherinputs": {}, "nonstdinputs": []
+            }|]
+          parsed :: Either String TxSummary
+          parsed = parseEither (unmarshalValue btc) =<< eitherDecode (cs json)
+      parsed `shouldBe` Left "Error in $: Invalid address nonsense"
 
 storingSpec :: Ctx -> Spec
 storingSpec ctx =
@@ -469,7 +492,7 @@ listingSpec ctx =
         -- A payment to the second wallet's first address
         let otherPaths = Map.fromList [(externalAddr2, Deriv :/ 0 :/ 0)]
             otherPayment = creditTx ctx (fakeTxHash 8) (Store.BlockRef 800000 2) externalAddr2 70000
-        _ <- lift $ repsertSummary btc otherId (fakeTxHash 8) (Store.BlockRef 800000 2) (storeSummary otherPaths otherPayment)
+        _ <- lift $ repsertSummary btc otherId (fakeTxHash 8) (Store.BlockRef 800000 2) (storeSummary btc otherPaths otherPayment)
         listedIds accId (Page 5 0) `dbShouldBeE` [fakeTxHash 1]
         listedIds otherId (Page 5 0) `dbShouldBeE` [fakeTxHash 8]
 

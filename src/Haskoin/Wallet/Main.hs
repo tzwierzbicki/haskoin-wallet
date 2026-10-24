@@ -88,4 +88,4 @@ invalidArgumentsError = do
 {- JSON output -}
 
 jsonPrinter :: Response -> IO ()
-jsonPrinter = C8.putStrLn . encodeJsonPretty
+jsonPrinter = C8.putStr . encodeJsonPretty

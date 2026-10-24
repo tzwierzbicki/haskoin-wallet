@@ -11,6 +11,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -33,9 +34,11 @@ import Control.Monad (forM_, void)
 import Control.Monad.Except
 import Control.Monad.Reader (MonadTrans (lift))
 import Data.Aeson (object, withObject, (.:), (.:?), (.=))
+import Data.Aeson.Types (Parser)
 import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
 import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -45,7 +48,7 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database (DB)
 import Haskoin.Wallet.Schema.V2
-import Haskoin.Wallet.Util (mapAddrText, mapTextAddr, marshalMap, unmarshalMap)
+import Haskoin.Wallet.Util (addrToTextE, textToAddrE)
 import Numeric.Natural (Natural)
 
 {- The transaction summaries of version 2 -}
@@ -391,3 +394,28 @@ accountNetwork acc =
     netByName $
       cs $
         dBAccountNetwork acc
+
+{- Address maps in JSON, as hw 0.9 wrote them -}
+
+-- The inputs and outputs of a summary are keyed by address, written as the
+-- address text of the network. These are the helpers of hw 0.9.4, kept with
+-- their crash on an address the network cannot read or write, so that the
+-- step behaves as hw 0.9 did whatever the live helpers do.
+
+marshalMap :: (MarshalJSON Ctx v) => Network -> Ctx -> Map Address v -> Map Text Json.Value
+marshalMap net ctx m = mapAddrText net $ Map.map (marshalValue ctx) m
+
+unmarshalMap :: (MarshalJSON Ctx v) => Network -> Ctx -> Map Text Json.Value -> Parser (Map Address v)
+unmarshalMap net ctx m = mapTextAddr net <$> (unmarshalValue ctx `mapM` m)
+
+mapAddrText :: Network -> Map Address v -> Map Text v
+mapAddrText net m =
+  either error id $ do
+    let f (a, v) = (,v) <$> addrToTextE net a
+    Map.fromList <$> mapM f (Map.assocs m)
+
+mapTextAddr :: Network -> Map Text v -> Map Address v
+mapTextAddr net m =
+  either error id $ do
+    let f (a, v) = (,v) <$> textToAddrE net a
+    Map.fromList <$> mapM f (Map.assocs m)

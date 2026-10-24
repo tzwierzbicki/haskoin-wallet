@@ -216,6 +216,7 @@ test-suite spec
       Haskoin.Wallet.TxSizeSpec
       Haskoin.Wallet.TxSweepSpec
       Haskoin.Wallet.TxVectors
+      Haskoin.Wallet.UtilSpec
       Paths_haskoin_wallet
   hs-source-dirs:
       test

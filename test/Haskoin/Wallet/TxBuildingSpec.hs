@@ -215,7 +215,7 @@ recipientTypesSpec ctx =
     it "reports, signs and verifies the payment to every type" $ do
       built <- expectRight $ pay ctx [400000] everyType
       let tsd = TxSignData built.tx [fundingWorth ctx [400000]] built.inputPaths built.outputPaths (Just 10)
-      unsignedInfo <- expectRight $ parseTxSignData ctx (testAccountPub ctx) tsd
+      unsignedInfo <- expectRight $ parseTxSignData btc ctx (testAccountPub ctx) tsd
       (unsignedInfo.txInfoSummary.summarySize, unsignedInfo.txInfoSummary.summaryFeeByte, unsignedInfo.txInfoSummary.summaryChangeInFee) `shouldBe` (375, 10, Just 0)
       (signed, info) <- expectRight $ signWalletTx btc ctx tsd testAccountKey
       verifySignedTx btc ctx signed `shouldBe` Right ()

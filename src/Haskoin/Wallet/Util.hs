@@ -1,10 +1,10 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TupleSections #-}
 
+-- | Small helpers with no meaning of their own in the wallet, shared by
+-- modules that should not depend on one another.
 module Haskoin.Wallet.Util where
 
-import Control.Arrow (second)
 import Control.Monad ((<=<))
 import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
@@ -14,11 +14,9 @@ import qualified Data.Aeson.Encode.Pretty as Pretty
 import Data.Aeson.Types (Parser)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
-import Data.List (sortBy)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe)
-import qualified Data.Serialize as S
+import Data.Maybe (isJust)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin
@@ -27,16 +25,10 @@ import System.Random (StdGen, uniformShuffleList)
 
 {- JSON -}
 
--- Pretty printing of JSON documents, as hw writes them to files and to the
--- standard output.
-
+-- | A JSON document as hw writes it, to a file or to the screen: indented
+-- by two spaces and ending with a newline
 encodeJsonPretty :: (JSON.ToJSON a) => a -> BS.ByteString
 encodeJsonPretty =
-  BL.toStrict
-    . Pretty.encodePretty' Pretty.defConfig {Pretty.confIndent = Pretty.Spaces 2}
-
-encodeJsonPrettyLn :: (JSON.ToJSON a) => a -> BS.ByteString
-encodeJsonPrettyLn =
   BL.toStrict
     . Pretty.encodePretty'
       Pretty.defConfig
@@ -46,18 +38,12 @@ encodeJsonPrettyLn =
 
 {- Pages -}
 
--- Paging of lists, for the commands that list addresses, transactions or
--- coins.
-
+-- | A page of a listing: how many items, after skipping how many
 data Page = Page
   { pageLimit :: !Natural,
     pageOffset :: !Natural
   }
   deriving (Eq, Show)
-
-toPage :: Page -> [a] -> [a]
-toPage (Page limit offset) xs =
-  take (fromIntegral limit) $ drop (fromIntegral offset) xs
 
 {- Errors -}
 
@@ -67,8 +53,8 @@ liftEitherIO = liftEither <=< liftIO
 
 {- Addresses -}
 
--- Addresses as text, with an error instead of Nothing, alone or as the
--- first element of a pair or a triple.
+-- Addresses as text, with an error instead of Nothing when the address
+-- cannot be written on the network.
 
 addrToTextE :: Network -> Address -> Either String Text
 addrToTextE net a =
@@ -83,69 +69,18 @@ textToAddrE net a =
 addrToString :: Network -> Address -> String
 addrToString net a = maybe "an address of another network" Text.unpack (addrToText net a)
 
-addrToText2 :: Network -> (Address, v) -> Either String (Text, v)
-addrToText2 net (a, v) = (,v) <$> addrToTextE net a
-
-textToAddr2 :: Network -> (Text, v) -> Either String (Address, v)
-textToAddr2 net (a, v) = (,v) <$> textToAddrE net a
-
-addrToText3 :: Network -> (Address, v, w) -> Either String (Text, v, w)
-addrToText3 net (a, v, w) = (,v,w) <$> addrToTextE net a
-
-textToAddr3 :: Network -> (Text, v, w) -> Either String (Address, v, w)
-textToAddr3 net (a, v, w) = (,v,w) <$> textToAddrE net a
-
-{- Keys -}
-
-xPubChecksum :: Ctx -> XPubKey -> Text
-xPubChecksum ctx = encodeHex . S.encode . xPubFP ctx
-
-{- Lists -}
-
-lastList :: Natural -> [a] -> [a]
-lastList count xs = drop (max 0 $ length xs - fromIntegral count) xs
-
-(!!?) :: [a] -> Natural -> Maybe a
-xs !!? i
-  | fromIntegral i < length xs = Just $ xs !! fromIntegral i
-  | otherwise = Nothing
-
-chunksOf :: Natural -> [a] -> [[a]]
-chunksOf n xs
-  | null xs = []
-  | otherwise =
-      uncurry (:) $ second (chunksOf n) $ splitAt (fromIntegral n) xs
-
-sortDesc :: (Ord a) => [a] -> [a]
-sortDesc = sortBy (flip compare)
-
-{- Text -}
-
-padStart :: Int -> Text -> Text -> Text
-padStart n c t =
-  Text.replicate (fromMaybe 0 $ n `safeSubtract` Text.length t) c <> t
-
-padEnd :: Int -> Text -> Text -> Text
-padEnd n c t =
-  t <> Text.replicate (fromMaybe 0 $ n `safeSubtract` Text.length t) c
-
-dropPatternEnd :: Text -> Text -> Text
-dropPatternEnd p t = fromMaybe t $ Text.stripSuffix p t
-
-chunksOfEnd :: Int -> Text -> [Text]
-chunksOfEnd n t = reverse $ Text.reverse <$> Text.chunksOf n (Text.reverse t)
+-- | Whether the network can write the address: a SegWit address has no
+-- text on Bitcoin Cash, and a CashAddr one none on Bitcoin
+onNetwork :: Network -> Address -> Bool
+onNetwork net = isJust . addrToText net
 
 {- Numbers -}
 
+-- | The difference of two numbers, or Nothing when it would be negative
 safeSubtract :: (Integral a) => a -> a -> Maybe a
 safeSubtract a b
   | b > a = Nothing
   | otherwise = Just $ a - b
-
-{- File paths -}
-
-(</>) :: String -> String -> String
-a </> b = a <> "/" <> b
 
 {- Random -}
 
@@ -157,33 +92,19 @@ randomShuffle xs = state (uniformShuffleList xs)
 {- Address maps in JSON -}
 
 -- Maps keyed by address are written with the address text of the network as
--- the key. Shared by the summaries of every format version, so it lives
--- here rather than with the current summary type.
+-- the key.
 
-marshalMap ::
-  (MarshalJSON Ctx v) =>
-  Network ->
-  Ctx ->
-  Map Address v ->
-  Map Text JSON.Value
-marshalMap net ctx m = mapAddrText net $ Map.map (marshalValue ctx) m
-
-unmarshalMap ::
-  (MarshalJSON Ctx v) =>
-  Network ->
-  Ctx ->
-  Map Text JSON.Value ->
-  Parser (Map Address v)
-unmarshalMap net ctx m = mapTextAddr net <$> (unmarshalValue ctx `mapM` m)
-
+-- | The map with its addresses written as text. An address the network
+-- cannot write is left out: the summary builders keep the outputs at such
+-- addresses apart, as raw outputs, so that none reaches here.
 mapAddrText :: Network -> Map Address v -> Map Text v
-mapAddrText net m =
-  either error id $ do
-    let f (a, v) = (\t -> (t, v)) <$> addrToTextE net a
-    Map.fromList <$> mapM f (Map.assocs m)
+mapAddrText net m = Map.fromList [(t, v) | (a, v) <- Map.assocs m, Just t <- [addrToText net a]]
 
-mapTextAddr :: Network -> Map Text v -> Map Address v
-mapTextAddr net m =
-  either error id $ do
-    let f (a, v) = (\t -> (t, v)) <$> textToAddrE net a
-    Map.fromList <$> mapM f (Map.assocs m)
+-- | The map with its keys read as addresses of the network. The parser
+-- fails on a text that is not one.
+mapTextAddr :: Network -> Map Text v -> Parser (Map Address v)
+mapTextAddr net m = Map.fromList <$> mapM key (Map.assocs m)
+  where
+    key (t, v) = case textToAddr net t of
+      Just a -> return (a, v)
+      Nothing -> fail $ "Invalid address " <> Text.unpack t

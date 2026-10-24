@@ -31,7 +31,7 @@ module Haskoin.Wallet.TxSigning
   )
 where
 
-import Control.Monad (foldM, forM_, unless, when)
+import Control.Monad (foldM, forM_, mfilter, unless, when)
 import qualified Data.ByteString as BS
 import Data.List (nub)
 import Data.Map.Strict (Map)
@@ -51,18 +51,19 @@ import Haskoin.Wallet.TxInfo
   )
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSize (inputSize, outputSize, p2pkhInput, txSize)
-import Haskoin.Wallet.Util (addrToString, safeSubtract)
+import Haskoin.Wallet.Util (addrToString, onNetwork, safeSubtract)
 import Numeric.Natural (Natural)
 
 {- Entry points -}
 
 -- | The transaction of the signing data as the wallet sees it: its summary,
 -- and its status as a transaction in preparation, signed or not. Fails when
--- the signing data is not consistent.
-parseTxSignData :: Ctx -> XPubKey -> TxSignData -> Either String TxInfo
-parseTxSignData ctx accountPub tsd = do
-  coins <- spentCoins ctx tsd
-  summary <- summarize ctx accountPub tsd coins
+-- the signing data is not consistent, or when an input or output is at an
+-- address the network cannot write.
+parseTxSignData :: Network -> Ctx -> XPubKey -> TxSignData -> Either String TxInfo
+parseTxSignData net ctx accountPub tsd = do
+  coins <- spentCoins net ctx tsd
+  summary <- summarize net ctx accountPub tsd coins
   let tx = tsd.txSignDataTx
       txid = if isSigned tx then Just (txHash tx) else Nothing
   return $ TxInfo summary $ Pending $ PendingStatus (nosigHash tx) txid False False
@@ -71,7 +72,7 @@ parseTxSignData ctx accountPub tsd = do
 -- for the coin it spends
 verifySignedTx :: Network -> Ctx -> TxSignData -> Either String ()
 verifySignedTx net ctx tsd = do
-  coins <- spentCoins ctx tsd
+  coins <- spentCoins net ctx tsd
   verifyInputs net ctx tsd.txSignDataTx coins
 
 -- | Sign a transaction of the wallet with its account private key
@@ -84,15 +85,15 @@ signWalletTx ::
 signWalletTx net ctx tsd accountKey = do
   when (isSigned tsd.txSignDataTx) $ Left "The transaction is already signed"
   let accountPub = deriveXPubKey ctx accountKey
-  coins <- spentCoins ctx tsd
-  summary <- summarize ctx accountPub tsd coins
+  coins <- spentCoins net ctx tsd
+  summary <- summarize net ctx accountPub tsd coins
   -- The builder refuses a fee rate of zero; the signer checks the fee itself
   when (summary.summaryFee == 0) $ Left "The transaction pays no fee"
   signedTx <- signInputs net ctx accountKey summary.summaryMyInputs tsd.txSignDataTx coins
   verifyInputs net ctx signedTx coins
   let signedData = tsd {txSignDataTx = signedTx}
   -- Summarized again: the signed transaction has its real size and its id
-  info <- parseTxSignData ctx accountPub signedData
+  info <- parseTxSignData net ctx accountPub signedData
   return (signedData, info)
 
 {- Coins -}
@@ -107,8 +108,8 @@ data SpentCoin = SpentCoin
   }
 
 -- | The coin spent by every input, in the order of the inputs
-spentCoins :: Ctx -> TxSignData -> Either String [SpentCoin]
-spentCoins ctx tsd = mapM spentCoin tsd.txSignDataTx.inputs
+spentCoins :: Network -> Ctx -> TxSignData -> Either String [SpentCoin]
+spentCoins net ctx tsd = mapM spentCoin tsd.txSignDataTx.inputs
   where
     outputs =
       Map.fromList [(txHash tx, tx.outputs) | tx <- tsd.txSignDataInputs]
@@ -119,10 +120,14 @@ spentCoins ctx tsd = mapM spentCoin tsd.txSignDataTx.inputs
         maybe (Left "Referenced input transactions are missing") Right $
           nth op.index =<< Map.lookup op.hash outputs
       script <- either (const nonStandard) Right $ unmarshal ctx txOut.script
-      address <- maybe nonStandard Right $ outputAddress ctx script
+      address <- maybe nonStandard Right $ paidAddress net ctx script
       return SpentCoin {outpoint = op, value = txOut.value, script, address}
     nonStandard = Left "There are non-standard inputs in the transaction"
     nth i xs = listToMaybe $ drop (fromIntegral i) xs
+
+-- | The address an output script pays, when the network can write it
+paidAddress :: Network -> Ctx -> ScriptOutput -> Maybe Address
+paidAddress net ctx script = mfilter (onNetwork net) (outputAddress ctx script)
 
 -- | The signing parameters of a coin: its output script and value, signed
 -- with SIGHASH_ALL (with the FORKID flag on Bitcoin Cash networks)
@@ -141,8 +146,8 @@ walletSigHash net
 -- | The summary of the transaction of the signing data: the inputs and
 -- outputs that are the wallet's, told by the paths, the fee, the amount and
 -- the size, that of the bytes once signed and an estimate before
-summarize :: Ctx -> XPubKey -> TxSignData -> [SpentCoin] -> Either String TxSummary
-summarize ctx accountPub tsd coins = do
+summarize :: Network -> Ctx -> XPubKey -> TxSignData -> [SpentCoin] -> Either String TxSummary
+summarize net ctx accountPub tsd coins = do
   when (null coins) $ Left "The transaction has no inputs"
   when (null tx.outputs) $ Left "The transaction has no outputs"
   when (length (nub outpoints) /= length coins) $
@@ -206,11 +211,11 @@ summarize ctx accountPub tsd coins = do
     tx = tsd.txSignDataTx
     outpoints = (.outpoint) <$> coins
     outputAddress' :: TxOut -> Either String (Address, Natural)
-    outputAddress' txOut =
-      either
-        (const $ Left "There are non-standard outputs in the transaction")
-        (\a -> Right (a, fromIntegral txOut.value))
-        (scriptToAddressBS ctx txOut.script)
+    outputAddress' txOut = do
+      script <- either (const nonStandard) Right $ unmarshal ctx txOut.script
+      address <- maybe nonStandard Right $ paidAddress net ctx script
+      return (address, fromIntegral txOut.value)
+    nonStandard = Left "There are non-standard outputs in the transaction"
     coinsValue :: [SpentCoin] -> Natural
     coinsValue spent = sum $ fromIntegral . (.value) <$> spent
     -- The wallet addresses of the paths, each path once, and all of them

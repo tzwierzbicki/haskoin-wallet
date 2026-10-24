@@ -10,11 +10,11 @@ import Control.Monad.IO.Class ( MonadIO, liftIO )
 import Data.Bits (Bits (setBit, xor))
 import qualified Data.ByteString as BS
 import Data.List (nub)
+import Data.List.Split (chunksOf)
 import Data.Text (Text)
 import Data.Word (Word8)
 import Haskoin.Crypto (Mnemonic, toMnemonic, fromMnemonic)
 import Haskoin.Util (bsToInteger)
-import Haskoin.Wallet.Util (chunksOf)
 import Numeric (showIntAtBase)
 import Numeric.Natural (Natural)
 import qualified System.Console.Haskeline as Haskeline

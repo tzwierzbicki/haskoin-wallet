@@ -129,7 +129,7 @@ pendingTxPage ctx accId page = do
 -- against the account's key, with the labels of its addresses
 txInfoOf :: (MonadUnliftIO m) => Ctx -> DBAccount -> TxSignData -> ExceptT String (DB m) TxInfo
 txInfoOf ctx acc tsd = do
-  info <- liftEither $ parseTxSignData ctx (accountXPubKey ctx acc) tsd
+  info <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountXPubKey ctx acc) tsd
   lift $ fillTxInfoLabels (accountNetwork acc) info
 
 -- | The summary of a pending transaction: the transaction as the wallet
@@ -184,7 +184,7 @@ conflictedInputs summary = filterM (fmap not . coinExists) (touchedBy summary).c
 -- | Whether a pending transaction spends a coin of the wallet that is gone
 inConflict :: (MonadUnliftIO m) => Ctx -> DBAccount -> PendingTx -> ExceptT String (DB m) Bool
 inConflict ctx acc p = do
-  info <- liftEither $ parseTxSignData ctx (accountXPubKey ctx acc) p.pendingTxData
+  info <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountXPubKey ctx acc) p.pendingTxData
   not . null <$> lift (conflictedInputs info.txInfoSummary)
 
 {- Importing -}
@@ -203,7 +203,7 @@ importPendingTx net ctx accId tsd = do
   forM_ heldM $ \held ->
     when (held.pendingTxAccount /= accId) $
       throwError "The transaction is pending in another account"
-  info <- liftEither $ parseTxSignData ctx (accountXPubKey ctx acc) tsd
+  info <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountXPubKey ctx acc) tsd
   when (isSigned tx) $ liftEither $ verifySignedTx net ctx tsd
   case heldM of
     Just held -> replaceVersion held tsd
@@ -266,7 +266,7 @@ insertPendingTx net accId@(DBAccountKey wallet accDeriv) tsd summary = do
 removePendingTx :: (MonadUnliftIO m) => Ctx -> PendingTx -> ExceptT String (DB m) (Natural, Natural)
 removePendingTx ctx held = do
   acc <- getAccountById held.pendingTxAccount
-  txInfo <- liftEither $ parseTxSignData ctx (accountXPubKey ctx acc) held.pendingTxData
+  txInfo <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountXPubKey ctx acc) held.pendingTxData
   let touched = touchedBy txInfo.txInfoSummary
   heldCoins <- lift $ filterM coinExists touched.coinsSpent
   lift $ P.delete held.pendingTxKey

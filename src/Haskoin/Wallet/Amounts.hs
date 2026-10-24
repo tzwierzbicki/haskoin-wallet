@@ -6,10 +6,11 @@ module Haskoin.Wallet.Amounts where
 
 import Control.Arrow (second)
 import Control.Monad (guard)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Read as Read
-import Haskoin.Wallet.Util
+import Haskoin.Wallet.Util (safeSubtract)
 import Numeric.Natural (Natural)
 
 data AmountUnit
@@ -86,3 +87,24 @@ readIntegerAmount unit txt =
   case Text.uncons txt of
     Just ('-', rest) -> negate . toInteger <$> readAmount unit rest
     _ -> toInteger <$> readAmount unit txt
+
+{- Text helpers -}
+
+-- | Pad a text at the start with a character up to a length
+padStart :: Int -> Text -> Text -> Text
+padStart n c t =
+  Text.replicate (fromMaybe 0 $ n `safeSubtract` Text.length t) c <> t
+
+-- | Pad a text at the end with a character up to a length
+padEnd :: Int -> Text -> Text -> Text
+padEnd n c t =
+  t <> Text.replicate (fromMaybe 0 $ n `safeSubtract` Text.length t) c
+
+-- | Drop a suffix from a text, when it ends with it
+dropPatternEnd :: Text -> Text -> Text
+dropPatternEnd p t = fromMaybe t $ Text.stripSuffix p t
+
+-- | Cut a text into pieces of a length, counting from its end, so that the
+-- first piece is the short one
+chunksOfEnd :: Int -> Text -> [Text]
+chunksOfEnd n t = reverse $ Text.reverse <$> Text.chunksOf n (Text.reverse t)
