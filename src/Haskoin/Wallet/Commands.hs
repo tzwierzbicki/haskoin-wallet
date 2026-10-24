@@ -44,7 +44,7 @@ import Haskoin.Wallet.Sync
 import Haskoin.Wallet.TxBuilding (buildTxSignData)
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData
-import Haskoin.Wallet.TxSigning (parseTxSignData, signWalletTx)
+import Haskoin.Wallet.TxSigning (signWalletTx)
 import Haskoin.Wallet.TxSweep (buildSweepSignData, fetchSweepCoins, signTxWithKeys)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
@@ -532,19 +532,17 @@ cmdPrepareTx ctx cfg rcpTxt nameM unit feeByte dust payer minConf strategy fileM
   runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
-        pub = accountXPubKey ctx acc
         cControl = (\(a,b) -> OutPoint a (fromIntegral b)) <$> coins
     rcpts <- liftEither $ mapM (toRecipient net) rcpTxt
     gen <- liftIO initStdGen
     signDat <-
       buildTxSignData net ctx cfg gen strategy accId rcpts feeByte dust payer minConf cControl
-    txInfo <- liftEither $ parseTxSignData ctx pub signDat
-    txInfoL <- lift $ fillTxInfoLabels net txInfo
+    txInfo <- txInfoOf ctx acc signDat
     for_ fileM checkPathFree
     _ <- importPendingTx net ctx accId signDat
     for_ fileM $ \file -> liftIO $ writeJsonFile file $ Json.toJSON signDat
     newAcc <- getAccountById accId
-    return $ ResponseTx newAcc txInfoL
+    return $ ResponseTx newAcc txInfo
   where
     toRecipient net (a, v) = do
       addr <- textToAddrE net a
@@ -563,12 +561,9 @@ cmdReviewTx :: Ctx -> Config -> Maybe Text -> FilePath -> IO Response
 cmdReviewTx ctx cfg nameM fp =
   runDBResponse cfg $ do
     (_, acc) <- getAccountByName nameM
-    let net = accountNetwork acc
-        pub = accountXPubKey ctx acc
     tsd <- liftEitherIO $ readJsonFile fp
-    txInfo <- liftEither $ parseTxSignData ctx pub tsd
-    txInfoL <- lift $ fillTxInfoLabels net txInfo
-    return $ ResponseTx acc txInfoL
+    txInfo <- txInfoOf ctx acc tsd
+    return $ ResponseTx acc txInfo
 
 cmdExportTx :: Config -> TxHash -> FilePath -> IO Response
 cmdExportTx cfg nosigH fp =
@@ -583,12 +578,10 @@ cmdImportTx ctx cfg nameM fp =
   runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
-        pub = accountXPubKey ctx acc
     tsd <- liftEitherIO $ readJsonFile fp
-    txInfo <- liftEither $ parseTxSignData ctx pub tsd
-    txInfoL <- lift $ fillTxInfoLabels net txInfo
+    txInfo <- txInfoOf ctx acc tsd
     _ <- importPendingTx net ctx accId tsd
-    return $ ResponseTx acc txInfoL
+    return $ ResponseTx acc txInfo
 
 cmdDeleteTx :: Ctx -> Config -> TxHash -> IO Response
 cmdDeleteTx ctx cfg nosigH =
@@ -764,15 +757,13 @@ cmdPrepareSweep ctx cfg nameM keysM sweepFromT sweepToT coins outputM feeByte du
   runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
-        pub = accountXPubKey ctx acc
     secKeys <- maybe (return []) (readSecKeys net) keysM
     sweepFrom <- liftEither $ mapM (textToAddrE net) sweepFromT
     sweepTo <- liftEither $ mapM (textToAddrE net) sweepToT
     found <- fetchSweepCoins net ctx (webStore ctx cfg net) accId secKeys sweepFrom coins sweepTo
     gen <- liftIO initStdGen
     tsd <- liftEither $ buildSweepSignData net ctx gen found sweepTo feeByte dust
-    txInfo <- liftEither $ parseTxSignData ctx pub tsd
-    txInfoL <- lift $ fillTxInfoLabels net txInfo
+    txInfo <- txInfoOf ctx acc tsd
     for_ outputM checkPathFree
     if involvesWallet (txInfoSummary txInfo)
       then void $ importPendingTx net ctx accId tsd
@@ -780,7 +771,7 @@ cmdPrepareSweep ctx cfg nameM keysM sweepFromT sweepToT coins outputM feeByte du
         when (isNothing outputM) $
           throwError "The sweep does not involve this wallet: give an --output file to write it to"
     for_ outputM $ \file -> liftIO $ writeJsonFile file $ Json.toJSON tsd
-    return $ ResponseTx acc txInfoL
+    return $ ResponseTx acc txInfo
 
 -- | Sign a sweep with private keys: a pending transaction of the wallet,
 -- by its nosigHash, or one in a file, which need not involve the wallet
