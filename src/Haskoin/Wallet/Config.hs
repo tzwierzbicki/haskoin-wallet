@@ -18,9 +18,9 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Haskoin.Store.WebClient
 import Haskoin.Wallet.FileIO
-import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import qualified System.Directory as D
+import System.FilePath ((</>))
 
 {- The data directory -}
 

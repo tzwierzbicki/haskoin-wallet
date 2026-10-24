@@ -16,7 +16,7 @@ import Haskoin.Wallet.Database (migrateAll)
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxSignData
-import Haskoin.Wallet.Util
+import System.FilePath ((</>))
 import Test.Hspec
 
 identityTests :: Network -> Ctx -> IdentityTests

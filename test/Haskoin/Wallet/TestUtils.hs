@@ -501,6 +501,11 @@ otherAddr i = otherAddrs !! i
 testAddress :: Text -> Address
 testAddress = fromMaybe (error "testAddress") . textToAddr btc
 
+-- | A SegWit address, which Bitcoin writes and Bitcoin Cash cannot: the
+-- P2WPKH example of BIP 173
+segwitAddr :: Address
+segwitAddr = testAddress "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
+
 -- | A second wallet, with its fingerprint and the keys of its account 0
 testMnemonic2 :: MnemonicPass
 testMnemonic2 =

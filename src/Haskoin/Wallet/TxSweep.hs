@@ -234,15 +234,15 @@ signTxWithKeys ::
 signTxWithKeys net ctx tsd accountPub secKeys = do
   when (isSigned tsd.txSignDataTx) $ Left "The transaction is already signed"
   when (null secKeys) $ Left "There are no private keys to sign"
-  info <- parseTxSignData ctx accountPub tsd
+  info <- parseTxSignData net ctx accountPub tsd
   -- The sweep builder refuses a fee rate of zero; the signer checks the fee itself
   when (info.txInfoSummary.summaryFee == 0) $ Left "The transaction pays no fee"
   -- The coin of every input, in the order of the inputs
-  coins <- map (coinSigInput net) <$> spentCoins ctx tsd
+  coins <- map (coinSigInput net) <$> spentCoins net ctx tsd
   signedTx <- foldM (signCoin net ctx (indexKeys ctx secKeys)) tsd.txSignDataTx (zip [0 ..] coins)
   let signedData = tsd {txSignDataTx = signedTx}
   verifySignedTx net ctx signedData
-  signedInfo <- parseTxSignData ctx accountPub signedData
+  signedInfo <- parseTxSignData net ctx accountPub signedData
   return (signedData, signedInfo)
 
 -- | The private keys, indexed by what identifies them in an output script.

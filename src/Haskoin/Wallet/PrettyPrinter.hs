@@ -12,6 +12,7 @@ module Haskoin.Wallet.PrettyPrinter where
 
 import Control.Monad
 import Data.List (intercalate, intersperse)
+import Data.List.Split (chunksOf)
 import qualified Data.Map.Strict as Map
 import Data.String.Conversions (cs)
 import Data.Text (Text)

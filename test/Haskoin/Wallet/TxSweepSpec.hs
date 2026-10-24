@@ -220,7 +220,7 @@ sweepBuilderSpec ctx =
       -- and counts its input as 148 bytes rather than 180: 848 bytes for the
       -- 8800 of fee the builder set on 880
       tsd <- expectRight $ build destinations
-      info <- expectRight $ parseTxSignData ctx accountPub tsd
+      info <- expectRight $ parseTxSignData btc ctx accountPub tsd
       (info.txInfoSummary.summarySize, info.txInfoSummary.summaryFee, info.txInfoSummary.summaryFeeByte, info.txInfoSummary.summaryChangeInFee) `shouldBe` (848, 8800, 10, Nothing)
     it "refuses a fee larger than the coins" $
       buildWith 10000 546 destinations `shouldBe` Left "Could not find a sweep solution: fee is too large"

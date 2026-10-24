@@ -27,7 +27,7 @@ checkPathFree path = do
 {- JSON files -}
 
 writeJsonFile :: FilePath -> Value -> IO ()
-writeJsonFile filePath doc = C8.writeFile filePath $ encodeJsonPrettyLn doc
+writeJsonFile filePath doc = C8.writeFile filePath $ encodeJsonPretty doc
 
 readJsonFile :: (FromJSON a) => FilePath -> IO (Either String a)
 readJsonFile = eitherDecodeFileStrict'
