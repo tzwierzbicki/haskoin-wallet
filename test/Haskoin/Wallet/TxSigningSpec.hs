@@ -7,10 +7,10 @@ import Control.Monad (when)
 import qualified Data.ByteString as BS
 import Data.List (nub)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, isJust, mapMaybe)
+import Data.Maybe (isJust, mapMaybe)
 import Haskoin
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.TxInfo (MyInputs (..), MyOutputs (..), TxInfo (..), TxInfoPending (..), TxType (..))
+import Haskoin.Wallet.TxInfo (MyInputs (..), MyOutputs (..), TxInfo (..), TxSummary (..), TxType (..), txInfoHash)
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSigning
 import Haskoin.Wallet.TxSize (p2pkhInput, p2pkhOutputSize, txSize)
@@ -58,50 +58,38 @@ simpleTransaction ctx =
 simpleFunding :: Ctx -> Tx
 simpleFunding ctx = fundingTx ctx 1 [(externalAddr 0, 100000000)]
 
--- | The output script paying an address, as a signing input carries it
-scriptOf :: Address -> ScriptOutput
-scriptOf = fromMaybe (error "scriptOf: unsupported address") . addressToOutput
-
 analysisSpec :: Ctx -> Spec
 analysisSpec ctx =
   describe "Transaction analysis" $ do
     it "describes an unsigned transaction with an estimated size" $ do
-      info <- expectRight $ parseTxSignData btc ctx accountPub unsigned
-      info.txInfoHash `shouldBe` Nothing
-      info.txInfoType `shouldBe` TxDebit
-      info.txInfoAmount `shouldBe` (-60000000)
-      info.txInfoFee `shouldBe` 10000000
+      info <- expectRight $ parseTxSignData ctx accountPub unsigned
+      txInfoHash info `shouldBe` Nothing
+      info.txInfoSummary.summaryType `shouldBe` TxDebit
+      info.txInfoSummary.summaryAmount `shouldBe` (-60000000)
+      info.txInfoSummary.summaryFee `shouldBe` 10000000
       -- The estimate: 10 bytes, 148 for the input and 34 for each output
-      info.txInfoSize `shouldBe` 226
-      info.txInfoFeeByte `shouldBe` 44247
-      info.txInfoPending `shouldBe` Just (TxInfoPending simpleNosigHash False False False)
+      info.txInfoSummary.summarySize `shouldBe` 226
+      info.txInfoSummary.summaryFeeByte `shouldBe` 44247
+      pendingFlags info `shouldBe` Just ((simpleNosigHash, False, False, False))
       -- Without the requested fee rate, no change in the fee can be told
-      info.txInfoChangeInFee `shouldBe` Nothing
-      -- The wallet's input, with what signing it needs, and its change
-      info.txInfoMyInputs
-        `shouldBe` Map.fromList
-          [ ( externalAddr 0,
-              MyInputs
-                100000000
-                (Deriv :/ 0 :/ 0)
-                ""
-                [SigInput (scriptOf (externalAddr 0)) 100000000 (OutPoint (txHash (simpleFunding ctx)) 0) sigHashAll Nothing]
-            )
-          ]
-      info.txInfoMyOutputs `shouldBe` Map.fromList [(internalAddr 0, MyOutputs 40000000 (Deriv :/ 1 :/ 0) "")]
-      info.txInfoOtherOutputs `shouldBe` Map.fromList [(otherAddr 0, 50000000)]
-      info.txInfoOtherInputs `shouldBe` Map.empty
-      info.txInfoNonStdInputs `shouldBe` []
-      info.txInfoNonStdOutputs `shouldBe` []
+      info.txInfoSummary.summaryChangeInFee `shouldBe` Nothing
+      -- The wallet's input, with the coin it spends, and its change
+      info.txInfoSummary.summaryMyInputs
+        `shouldBe` Map.fromList [(externalAddr 0, MyInputs 100000000 (Deriv :/ 0 :/ 0) "" [OutPoint (txHash (simpleFunding ctx)) 0])]
+      info.txInfoSummary.summaryMyOutputs `shouldBe` Map.fromList [(internalAddr 0, MyOutputs 40000000 (Deriv :/ 1 :/ 0) "")]
+      info.txInfoSummary.summaryOtherOutputs `shouldBe` Map.fromList [(otherAddr 0, 50000000)]
+      info.txInfoSummary.summaryOtherInputs `shouldBe` Map.empty
+      info.txInfoSummary.summaryNonStdInputs `shouldBe` []
+      info.txInfoSummary.summaryNonStdOutputs `shouldBe` []
     it "describes the signed transaction with its real size" $ do
       (signed, _) <- expectRight $ signWalletTx btc ctx unsigned testAccountKey
-      info <- expectRight $ parseTxSignData btc ctx accountPub signed
-      info.txInfoHash `shouldBe` Just "e66b790c73d4e72fe13a07e247e4439bdea210cac2f947040e901f1e0ce59ac2"
+      info <- expectRight $ parseTxSignData ctx accountPub signed
+      txInfoHash info `shouldBe` Just "e66b790c73d4e72fe13a07e247e4439bdea210cac2f947040e901f1e0ce59ac2"
       -- The signature of this transaction is 72 bytes long, which the
       -- estimate assumes: 10 + 148 + 2 * 34
-      info.txInfoSize `shouldBe` 226
-      info.txInfoFeeByte `shouldBe` 44247
-      info.txInfoPending `shouldBe` Just (TxInfoPending simpleNosigHash True False False)
+      info.txInfoSummary.summarySize `shouldBe` 226
+      info.txInfoSummary.summaryFeeByte `shouldBe` 44247
+      pendingFlags info `shouldBe` Just ((simpleNosigHash, True, False, False))
     it "reports the change too small for an output that the fee includes" $ do
       -- A coin of 352500 pays 350000 at 10 satoshis per byte: the fee is
       -- 2500, 580 beyond the 10 + 148 + 34 = 192 bytes * 10 = 1920 of the
@@ -109,19 +97,19 @@ analysisSpec ctx =
       let funding = fundingTx ctx 1 [(externalAddr 0, 352500)]
           tx = spendingTx ctx [(txHash funding, 0)] [(otherAddr 0, 350000)]
           tsd = TxSignData tx [funding] [Deriv :/ 0 :/ 0] [] (Just 10)
-      info <- expectRight $ parseTxSignData btc ctx accountPub tsd
-      info.txInfoFee `shouldBe` 2500
-      info.txInfoChangeInFee `shouldBe` Just 580
+      info <- expectRight $ parseTxSignData ctx accountPub tsd
+      info.txInfoSummary.summaryFee `shouldBe` 2500
+      info.txInfoSummary.summaryChangeInFee `shouldBe` Just 580
       (signed, signedInfo) <- expectRight $ signWalletTx btc ctx tsd testAccountKey
       signed.txSignDataFeeRate `shouldBe` Just 10
-      signedInfo.txInfoChangeInFee `shouldBe` Just 580
+      signedInfo.txInfoSummary.summaryChangeInFee `shouldBe` Just 580
     it "reports no change in the fee when the fee matches the requested rate" $ do
       -- A coin of 351920 pays 350000: 1920 of fee, exactly 192 bytes * 10
       let funding = fundingTx ctx 1 [(externalAddr 0, 351920)]
           tx = spendingTx ctx [(txHash funding, 0)] [(otherAddr 0, 350000)]
           tsd = TxSignData tx [funding] [Deriv :/ 0 :/ 0] [] (Just 10)
-      info <- expectRight $ parseTxSignData btc ctx accountPub tsd
-      info.txInfoChangeInFee `shouldBe` Just 0
+      info <- expectRight $ parseTxSignData ctx accountPub tsd
+      info.txInfoSummary.summaryChangeInFee `shouldBe` Just 0
   where
     unsigned = simpleTransaction ctx
     accountPub = testAccountPub ctx
@@ -178,13 +166,13 @@ propertiesSpec ctx =
                 outputs = length signed.txSignDataTx.outputs
                 estimated = fromIntegral $ txSize (replicate inputs p2pkhInput) (replicate outputs p2pkhOutputSize)
              in verifySignedTx btc ctx signed === Right ()
-                  .&&. info.txInfoFee === expected.expectedFee
-                  .&&. info.txInfoAmount === expected.expectedAmount
-                  .&&. info.txInfoType === expected.expectedType
+                  .&&. info.txInfoSummary.summaryFee === expected.expectedFee
+                  .&&. info.txInfoSummary.summaryAmount === expected.expectedAmount
+                  .&&. info.txInfoSummary.summaryType === expected.expectedType
                   -- The real size: at most the estimate, and at most a few
                   -- bytes per signature below it
-                  .&&. counterexample ("size " <> show info.txInfoSize <> " for an estimate of " <> show estimated)
-                    (info.txInfoSize <= estimated && info.txInfoSize + 3 * fromIntegral inputs >= estimated)
+                  .&&. counterexample ("size " <> show info.txInfoSummary.summarySize <> " for an estimate of " <> show estimated)
+                    (info.txInfoSummary.summarySize <= estimated && info.txInfoSummary.summarySize + 3 * fromIntegral inputs >= estimated)
 
 -- | What the analysis must report for a generated transaction, computed from
 -- the generated amounts

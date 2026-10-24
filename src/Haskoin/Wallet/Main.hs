@@ -5,7 +5,7 @@ import Control.Monad (join)
 import Data.Foldable (forM_)
 import qualified Data.ByteString.Char8 as C8
 import GHC.IO.Encoding (setFileSystemEncoding, setLocaleEncoding, utf8)
-import Haskoin (Ctx, MarshalJSON (..), withContext)
+import Haskoin (withContext)
 import Haskoin.Wallet.Commands (Response, commandResponse)
 import Haskoin.Wallet.Config (Config, databaseFile, initConfig)
 import Haskoin.Wallet.Database (catchDatabaseInUse, runDB)
@@ -34,7 +34,7 @@ clientMain = do
     either die return (join migrated)
     res <- commandResponse ctx cfg unit cmd
     if json
-      then jsonPrinter ctx res
+      then jsonPrinter res
       else prettyPrinter unit res
 
 -- | How the migration talks to the user, on stderr, and backs up the
@@ -86,5 +86,5 @@ invalidArgumentsError = do
 
 {- JSON output -}
 
-jsonPrinter :: Ctx -> Response -> IO ()
-jsonPrinter ctx = C8.putStrLn . encodeJsonPretty . marshalValue ctx
+jsonPrinter :: Response -> IO ()
+jsonPrinter = C8.putStrLn . encodeJsonPretty

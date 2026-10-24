@@ -8,7 +8,7 @@
 --
 -- The wallet only has P2PKH addresses. A 'TxSignData' carries a transaction,
 -- the transactions it spends from and the derivation paths of the wallet's
--- own inputs and outputs. 'parseTxSignData' analyzes it, for the commands
+-- own inputs and outputs. 'parseTxSignData' summarizes it, for the commands
 -- that display or store it, and 'signWalletTx' signs it:
 --
 -- 1. finds the coin spent by every input in the dependent transactions;
@@ -25,6 +25,9 @@ module Haskoin.Wallet.TxSigning
   ( parseTxSignData,
     signWalletTx,
     verifySignedTx,
+    SpentCoin (..),
+    spentCoins,
+    coinSigInput,
   )
 where
 
@@ -37,13 +40,13 @@ import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import qualified Data.Serialize as S
 import Data.Word (Word64)
 import Haskoin
-import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.TxInfo
   ( MyInputs (..),
     MyOutputs (..),
-    OtherInputs (..),
+    PendingStatus (..),
     TxInfo (..),
-    TxInfoPending (..),
+    TxStatus (..),
+    TxSummary (..),
     txType,
   )
 import Haskoin.Wallet.TxSignData
@@ -53,14 +56,16 @@ import Numeric.Natural (Natural)
 
 {- Entry points -}
 
--- | The 'TxInfo' of a transaction to sign, or already signed, as the wallet
--- sees it. Fails when the 'TxSignData' is not consistent.
-parseTxSignData ::
-  Network -> Ctx -> XPubKey -> TxSignData -> Either String TxInfo
-parseTxSignData net ctx accountPub tsd = do
+-- | The transaction of the signing data as the wallet sees it: its summary,
+-- and its status as a transaction in preparation, signed or not. Fails when
+-- the signing data is not consistent.
+parseTxSignData :: Ctx -> XPubKey -> TxSignData -> Either String TxInfo
+parseTxSignData ctx accountPub tsd = do
   coins <- spentCoins ctx tsd
-  analysis <- analyze net ctx tsd accountPub coins
-  return $ txInfo tsd.txSignDataFeeRate analysis coins tsd.txSignDataTx
+  summary <- summarize ctx accountPub tsd coins
+  let tx = tsd.txSignDataTx
+      txid = if isSigned tx then Just (txHash tx) else Nothing
+  return $ TxInfo summary $ Pending $ PendingStatus (nosigHash tx) txid False False
 
 -- | Check that every input of a signed transaction carries a valid signature
 -- for the coin it spends
@@ -78,14 +83,17 @@ signWalletTx ::
   Either String (TxSignData, TxInfo)
 signWalletTx net ctx tsd accountKey = do
   when (isSigned tsd.txSignDataTx) $ Left "The transaction is already signed"
+  let accountPub = deriveXPubKey ctx accountKey
   coins <- spentCoins ctx tsd
-  analysis <- analyze net ctx tsd (deriveXPubKey ctx accountKey) coins
+  summary <- summarize ctx accountPub tsd coins
   -- The builder refuses a fee rate of zero; the signer checks the fee itself
-  when (analysis.fee == 0) $ Left "The transaction pays no fee"
-  signedTx <- signInputs net ctx accountKey analysis tsd.txSignDataTx coins
+  when (summary.summaryFee == 0) $ Left "The transaction pays no fee"
+  signedTx <- signInputs net ctx accountKey summary.summaryMyInputs tsd.txSignDataTx coins
   verifyInputs net ctx signedTx coins
   let signedData = tsd {txSignDataTx = signedTx}
-  return (signedData, txInfo tsd.txSignDataFeeRate analysis coins signedTx)
+  -- Summarized again: the signed transaction has its real size and its id
+  info <- parseTxSignData ctx accountPub signedData
+  return (signedData, info)
 
 {- Coins -}
 
@@ -116,27 +124,30 @@ spentCoins ctx tsd = mapM spentCoin tsd.txSignDataTx.inputs
     nonStandard = Left "There are non-standard inputs in the transaction"
     nth i xs = listToMaybe $ drop (fromIntegral i) xs
 
-{- Analysis -}
+-- | The signing parameters of a coin: its output script and value, signed
+-- with SIGHASH_ALL (with the FORKID flag on Bitcoin Cash networks)
+coinSigInput :: Network -> SpentCoin -> SigInput
+coinSigInput net coin =
+  SigInput coin.script coin.value coin.outpoint (walletSigHash net) Nothing
 
--- | What the wallet knows about the transaction, before signing it
-data Analysis = Analysis
-  { myInputs :: !(Map Address MyInputs),
-    otherInputs :: !(Map Address OtherInputs),
-    myOutputs :: !(Map Address MyOutputs),
-    otherOutputs :: !(Map Address Natural),
-    fee :: !Natural,
-    -- | What the wallet gains (positive) or spends (negative), fee included
-    amount :: !Integer
-  }
+-- | SIGHASH_ALL, with the FORKID flag on Bitcoin Cash networks
+walletSigHash :: Network -> SigHash
+walletSigHash net
+  | isJust net.sigHashForkId = setForkIdFlag sigHashAll
+  | otherwise = sigHashAll
 
-analyze ::
-  Network -> Ctx -> TxSignData -> XPubKey -> [SpentCoin] -> Either String Analysis
-analyze net ctx tsd accountPub coins = do
+{- Summary -}
+
+-- | The summary of the transaction of the signing data: the inputs and
+-- outputs that are the wallet's, told by the paths, the fee, the amount and
+-- the size, that of the bytes once signed and an estimate before
+summarize :: Ctx -> XPubKey -> TxSignData -> [SpentCoin] -> Either String TxSummary
+summarize ctx accountPub tsd coins = do
   when (null coins) $ Left "The transaction has no inputs"
-  when (null tsd.txSignDataTx.outputs) $ Left "The transaction has no outputs"
+  when (null tx.outputs) $ Left "The transaction has no outputs"
   when (length (nub outpoints) /= length coins) $
     Left "The transaction spends the same coin twice"
-  outputs <- mapM outputAddress' tsd.txSignDataTx.outputs
+  outputs <- mapM outputAddress' tx.outputs
   fee <-
     maybe (Left "Fee is negative") Right $
       sum (fromIntegral . (.value) <$> coins) `safeSubtract` sum (snd <$> outputs)
@@ -154,20 +165,45 @@ analyze net ctx tsd accountPub coins = do
       outputsByAddress = Map.fromListWith (+) outputs
       myInputs =
         Map.intersectionWith
-          (\cs path -> MyInputs (coinsValue cs) path "" (coinSigInput net <$> cs))
+          (\spent path -> MyInputs (coinsValue spent) path "" ((.outpoint) <$> spent))
           inputsByAddress
           inputPaths
-      otherInputs =
-        Map.map (\cs -> OtherInputs (coinsValue cs) (coinSigInput net <$> cs)) $
-          inputsByAddress `Map.difference` inputPaths
+      otherInputs = Map.map coinsValue $ inputsByAddress `Map.difference` inputPaths
       myOutputs =
         Map.intersectionWith (\v path -> MyOutputs v path "") outputsByAddress outputPaths
       otherOutputs = outputsByAddress `Map.difference` outputPaths
       amount =
         toInteger (sum $ (.myOutputsValue) <$> myOutputs)
           - toInteger (sum $ (.myInputsValue) <$> myInputs)
-  return Analysis {myInputs, otherInputs, myOutputs, otherOutputs, fee, amount}
+      estimated = estimatedSize coins tx
+      size
+        | isSigned tx = fromIntegral $ BS.length $ S.encode tx
+        | otherwise = estimated
+      -- What the fee pays beyond the requested rate on the size the builder
+      -- estimated, which signing does not change: the change that was not
+      -- worth an output. Only a transaction of the wallet's own coins has
+      -- change folded into its fee; one that spends other coins, a sweep,
+      -- pays what its builder decided and has no change.
+      changeInFee
+        | Map.null otherInputs = (\rate -> fee - min fee (rate * estimated)) <$> tsd.txSignDataFeeRate
+        | otherwise = Nothing
+  return
+    TxSummary
+      { summaryType = txType amount fee,
+        summaryAmount = amount,
+        summaryFee = fee,
+        summaryFeeByte = fee `div` size,
+        summaryChangeInFee = changeInFee,
+        summarySize = size,
+        summaryMyOutputs = myOutputs,
+        summaryOtherOutputs = otherOutputs,
+        summaryNonStdOutputs = [],
+        summaryMyInputs = myInputs,
+        summaryOtherInputs = otherInputs,
+        summaryNonStdInputs = []
+      }
   where
+    tx = tsd.txSignDataTx
     outpoints = (.outpoint) <$> coins
     outputAddress' :: TxOut -> Either String (Address, Natural)
     outputAddress' txOut =
@@ -176,7 +212,7 @@ analyze net ctx tsd accountPub coins = do
         (\a -> Right (a, fromIntegral txOut.value))
         (scriptToAddressBS ctx txOut.script)
     coinsValue :: [SpentCoin] -> Natural
-    coinsValue cs = sum $ fromIntegral . (.value) <$> cs
+    coinsValue spent = sum $ fromIntegral . (.value) <$> spent
     -- The wallet addresses of the paths, each path once, and all of them
     -- present in the transaction
     pathAddresses :: String -> [SoftPath] -> [Address] -> Either String (Map Address SoftPath)
@@ -188,17 +224,14 @@ analyze net ctx tsd accountPub coins = do
         Left err
       return addresses
 
--- | The signing parameters of a coin: its output script and value, signed
--- with SIGHASH_ALL (with the FORKID flag on Bitcoin Cash networks)
-coinSigInput :: Network -> SpentCoin -> SigInput
-coinSigInput net coin =
-  SigInput coin.script coin.value coin.outpoint (walletSigHash net) Nothing
-
--- | SIGHASH_ALL, with the FORKID flag on Bitcoin Cash networks
-walletSigHash :: Network -> SigHash
-walletSigHash net
-  | isJust net.sigHashForkId = setForkIdFlag sigHashAll
-  | otherwise = sigHashAll
+-- | The size the builder estimated, from the kinds of the coins and the
+-- scripts of the outputs. The signing data does not say whether a P2PKH
+-- coin belongs to an uncompressed key, so such a coin is counted for a
+-- compressed one, as is a coin of a kind hw cannot sign.
+estimatedSize :: [SpentCoin] -> Tx -> Natural
+estimatedSize coins tx =
+  fromIntegral $
+    txSize (fromMaybe p2pkhInput . inputSize . (.script) <$> coins) (outputSize . (.script) <$> tx.outputs)
 
 {- Signing -}
 
@@ -206,13 +239,13 @@ walletSigHash net
 -- address. The wallet only signs P2PKH coins. An input that is not the
 -- wallet's is left as it is: it must already be signed.
 signInputs ::
-  Network -> Ctx -> XPrvKey -> Analysis -> Tx -> [SpentCoin] -> Either String Tx
-signInputs net ctx accountKey analysis tx coins =
+  Network -> Ctx -> XPrvKey -> Map Address MyInputs -> Tx -> [SpentCoin] -> Either String Tx
+signInputs net ctx accountKey myInputs tx coins =
   foldM signInput' tx (zip [0 ..] coins)
   where
     signInput' :: Tx -> (Int, SpentCoin) -> Either String Tx
     signInput' partial (i, coin) =
-      case Map.lookup coin.address analysis.myInputs of
+      case Map.lookup coin.address myInputs of
         Just mine
           | isPayPKHash coin.script ->
               signInput net ctx partial i (coinSigInput net coin) (inputKey mine.myInputsPath)
@@ -235,50 +268,3 @@ verifyInputs net ctx tx coins =
 describeInput :: Network -> Int -> SpentCoin -> String
 describeInput net i coin =
   "input " <> show i <> " (" <> addrToString net coin.address <> ")"
-
-{- Result -}
-
--- | The information reported about the transaction. The size of a signed
--- transaction is that of its bytes; the size of an unsigned one is
--- estimated from the coins it spends and the outputs it pays.
-txInfo :: Maybe Natural -> Analysis -> [SpentCoin] -> Tx -> TxInfo
-txInfo feeRate analysis coins tx =
-  TxInfo
-    { txInfoHash = if signed then Just (txHash tx) else Nothing,
-      txInfoType = txType analysis.amount analysis.fee,
-      txInfoAmount = analysis.amount,
-      txInfoMyOutputs = analysis.myOutputs,
-      txInfoOtherOutputs = analysis.otherOutputs,
-      txInfoNonStdOutputs = [],
-      txInfoMyInputs = analysis.myInputs,
-      txInfoOtherInputs = analysis.otherInputs,
-      txInfoNonStdInputs = [],
-      txInfoSize = size,
-      txInfoFee = analysis.fee,
-      txInfoFeeByte = analysis.fee `div` size,
-      txInfoChangeInFee = changeInFee,
-      txInfoBlockRef = Store.MemRef 0,
-      txInfoConfirmations = 0,
-      txInfoPending = Just $ TxInfoPending (nosigHash tx) signed False False,
-      txInfoDead = False
-    }
-  where
-    signed = isSigned tx
-    size
-      | signed = fromIntegral $ BS.length $ S.encode tx
-      | otherwise = estimatedSize
-    -- The size the builder estimated, from the kinds of the coins and the
-    -- scripts of the outputs. The signing data does not say whether a P2PKH
-    -- coin belongs to an uncompressed key, so such a coin is counted for a
-    -- compressed one, as is a coin of a kind hw cannot sign.
-    estimatedSize =
-      fromIntegral $
-        txSize (fromMaybe p2pkhInput . inputSize . (.script) <$> coins) (outputSize . (.script) <$> tx.outputs)
-    -- What the fee pays beyond the requested rate on the size the builder
-    -- estimated, which signing does not change: the change that was not
-    -- worth an output. Only a transaction of the wallet's own coins has
-    -- change folded into its fee; one that spends other coins, a sweep,
-    -- pays what its builder decided and has no change.
-    changeInFee
-      | Map.null analysis.otherInputs = (\rate -> analysis.fee - min analysis.fee (rate * estimatedSize)) <$> feeRate
-      | otherwise = Nothing

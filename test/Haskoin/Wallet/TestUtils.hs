@@ -34,6 +34,7 @@ import Haskoin.Wallet.Account (insertAccount, nextAccountDeriv)
 import Haskoin.Wallet.Database (DB, DBAccount, DBAccountId, migrateAll)
 import Haskoin.Wallet.Keys (MnemonicPass (..), signingKey, walletFingerprint)
 import Haskoin.Wallet.Store
+import Haskoin.Wallet.TxInfo (PendingStatus (..), TxInfo (..), TxStatus (..), pendingSigned)
 import Haskoin.Wallet.TxSignData (TxSignData (..))
 import Haskoin.Wallet.TxSigning (signWalletTx)
 import Numeric.Natural (Natural)
@@ -175,6 +176,16 @@ testNewAccBch ctx name = do
   let prv = forceRight $ signingKey bch ctx testMnemonic d
       pub = deriveXPubKey ctx prv
   insertAccount bch ctx fp name pub
+
+{- Transaction summaries -}
+
+-- | The state of a transaction in preparation: its nosigHash, and whether
+-- it is signed, sent and in conflict. Nothing for a transaction on the chain.
+pendingFlags :: TxInfo -> Maybe (TxHash, Bool, Bool, Bool)
+pendingFlags info =
+  case txInfoStatus info of
+    Pending p -> Just (pendingNosigHash p, pendingSigned p, pendingOnline p, pendingConflicted p)
+    OnChain _ -> Nothing
 
 {- Test vector files -}
 

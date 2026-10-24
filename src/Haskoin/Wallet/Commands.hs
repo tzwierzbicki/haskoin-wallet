@@ -127,8 +127,8 @@ data Response
 jsonError :: String -> Json.Value
 jsonError err = object ["type" .= Json.String "error", "error" .= err]
 
-instance MarshalJSON Ctx Response where
-  marshalValue ctx =
+instance Json.ToJSON Response where
+  toJSON =
     \case
       ResponseError err -> jsonError $ cs err
       ResponseMnemonic e w ws ->
@@ -176,14 +176,14 @@ instance MarshalJSON Ctx Response where
         object
           [ "type" .= Json.String "txs",
             "account" .= a,
-            "txs" .= (marshalValue (accountNetwork a, ctx) <$> txs)
+            "txs" .= (marshalValue (accountNetwork a) <$> txs)
           ]
       ResponseTx a t -> do
         let net = accountNetwork a
         object
           [ "type" .= Json.String "tx",
             "account" .= a,
-            "tx" .= marshalValue (net, ctx) t
+            "tx" .= marshalValue net t
           ]
       ResponseSentTx net h ->
         object
@@ -237,7 +237,9 @@ instance MarshalJSON Ctx Response where
       ResponseRollDice ns e ->
         object
           ["type" .= Json.String "rolldice", "entropysource" .= e, "dice" .= ns]
-  unmarshalValue ctx =
+
+instance Json.FromJSON Response where
+  parseJSON =
     Json.withObject "response" $ \o -> do
       Json.String resType <- o .: "type"
       case resType of
@@ -272,12 +274,12 @@ instance MarshalJSON Ctx Response where
         "txs" -> do
           a <- o .: "account"
           let net = accountNetwork a
-          txs <- mapM (unmarshalValue (net, ctx)) =<< o .: "txs"
+          txs <- mapM (unmarshalValue net) =<< o .: "txs"
           return $ ResponseTxs a txs
         "tx" -> do
           a <- o .: "account"
           let net = accountNetwork a
-          t <- unmarshalValue (net, ctx) =<< o .: "tx"
+          t <- unmarshalValue net =<< o .: "tx"
           return $ ResponseTx a t
         "senttx" -> do
           net <- maybe (fail "Unknown network") return . netByName =<< o .: "network"
@@ -357,7 +359,7 @@ commandResponse ctx cfg unit cmd =
     CommandAddrs nameM internal p -> cmdAddrs cfg nameM internal p
     CommandLabel nameM i l -> cmdLabel cfg nameM i l
     -- Transaction management
-    CommandTxs nameM p -> cmdTxs ctx cfg nameM p
+    CommandTxs nameM p -> cmdTxs cfg nameM p
     CommandPrepareTx rcpts nameM fee dust payer minConf strategy o coins ->
       cmdPrepareTx ctx cfg rcpts nameM unit fee dust payer minConf strategy o coins
     CommandPendingTxs nameM p -> cmdPendingTxs ctx cfg nameM p
@@ -505,11 +507,11 @@ cmdLabel cfg nameM idx lab =
 
 {- Transactions and coins -}
 
-cmdTxs :: Ctx -> Config -> Maybe Text -> Page -> IO Response
-cmdTxs ctx cfg nameM page =
+cmdTxs :: Config -> Maybe Text -> Page -> IO Response
+cmdTxs cfg nameM page =
   runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
-    txInfos <- txsPage ctx accId page
+    txInfos <- txsPage accId page
     return $ ResponseTxs acc txInfos
 
 cmdPrepareTx ::
@@ -536,7 +538,7 @@ cmdPrepareTx ctx cfg rcpTxt nameM unit feeByte dust payer minConf strategy fileM
     gen <- liftIO initStdGen
     signDat <-
       buildTxSignData net ctx cfg gen strategy accId rcpts feeByte dust payer minConf cControl
-    txInfo <- liftEither $ parseTxSignData net ctx pub signDat
+    txInfo <- liftEither $ parseTxSignData ctx pub signDat
     txInfoL <- lift $ fillTxInfoLabels net txInfo
     for_ fileM checkPathFree
     _ <- importPendingTx net ctx accId signDat
@@ -564,7 +566,7 @@ cmdReviewTx ctx cfg nameM fp =
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
     tsd <- liftEitherIO $ readJsonFile fp
-    txInfo <- liftEither $ parseTxSignData net ctx pub tsd
+    txInfo <- liftEither $ parseTxSignData ctx pub tsd
     txInfoL <- lift $ fillTxInfoLabels net txInfo
     return $ ResponseTx acc txInfoL
 
@@ -583,7 +585,7 @@ cmdImportTx ctx cfg nameM fp =
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
     tsd <- liftEitherIO $ readJsonFile fp
-    txInfo <- liftEither $ parseTxSignData net ctx pub tsd
+    txInfo <- liftEither $ parseTxSignData ctx pub tsd
     txInfoL <- lift $ fillTxInfoLabels net txInfo
     _ <- importPendingTx net ctx accId tsd
     return $ ResponseTx acc txInfoL
@@ -769,10 +771,10 @@ cmdPrepareSweep ctx cfg nameM keysM sweepFromT sweepToT coins outputM feeByte du
     found <- fetchSweepCoins net ctx (webStore ctx cfg net) accId secKeys sweepFrom coins sweepTo
     gen <- liftIO initStdGen
     tsd <- liftEither $ buildSweepSignData net ctx gen found sweepTo feeByte dust
-    txInfo <- liftEither $ parseTxSignData net ctx pub tsd
+    txInfo <- liftEither $ parseTxSignData ctx pub tsd
     txInfoL <- lift $ fillTxInfoLabels net txInfo
     for_ outputM checkPathFree
-    if involvesWallet txInfo
+    if involvesWallet (txInfoSummary txInfo)
       then void $ importPendingTx net ctx accId tsd
       else
         when (isNothing outputM) $

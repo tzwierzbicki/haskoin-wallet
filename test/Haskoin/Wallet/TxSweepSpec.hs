@@ -23,7 +23,7 @@ import Haskoin.Wallet.Coin
 import Haskoin.Wallet.PendingTx
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.TxInfo (TxInfo (..), TxInfoPending (..), TxType (..))
+import Haskoin.Wallet.TxInfo (TxInfo (..), TxSummary (..), TxType (..))
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSigning (parseTxSignData)
 import Haskoin.Wallet.TxSweep
@@ -178,8 +178,8 @@ sweepBuilderSpec ctx =
       (signed, info) <- expectRight $ signTxWithKeys btc ctx tsd accountPub [sweptKey, walletKey]
       isSigned signed.txSignDataTx `shouldBe` True
       -- The wallet receives one of the two outputs (745600) and gives up its coin (500000)
-      info.txInfoType `shouldBe` TxCredit
-      info.txInfoAmount `shouldBe` 245600
+      info.txInfoSummary.summaryType `shouldBe` TxCredit
+      info.txInfoSummary.summaryAmount `shouldBe` 245600
     it "matches the size of the signed transaction, part by part" $ do
       tsd <- expectRight $ build destinations
       (signed, _) <- expectRight $ signTxWithKeys btc ctx tsd accountPub [sweptKey, walletKey]
@@ -211,17 +211,17 @@ sweepBuilderSpec ctx =
       ((.value) <$> tsd.txSignDataTx.outputs) `shouldBe` [745555, 745555]
       tsd.txSignDataOutputPaths `shouldBe` []
       (_, info) <- expectRight $ signTxWithKeys btc ctx tsd accountPub [sweptKey, walletKey]
-      info.txInfoFee `shouldBe` 8890
-      Map.toList info.txInfoOtherOutputs `shouldBe` [(otherAddr 0, 745555), (taprootAddr, 745555)]
+      info.txInfoSummary.summaryFee `shouldBe` 8890
+      Map.toList info.txInfoSummary.summaryOtherOutputs `shouldBe` [(otherAddr 0, 745555), (taprootAddr, 745555)]
       -- A sweep has no change: nothing of the fee is change
-      info.txInfoChangeInFee `shouldBe` Nothing
+      info.txInfoSummary.summaryChangeInFee `shouldBe` Nothing
     it "is reported before signing with the size estimated without the keys" $ do
       -- The report cannot know that one coin belongs to an uncompressed key
       -- and counts its input as 148 bytes rather than 180: 848 bytes for the
       -- 8800 of fee the builder set on 880
       tsd <- expectRight $ build destinations
-      info <- expectRight $ parseTxSignData btc ctx accountPub tsd
-      (info.txInfoSize, info.txInfoFee, info.txInfoFeeByte, info.txInfoChangeInFee) `shouldBe` (848, 8800, 10, Nothing)
+      info <- expectRight $ parseTxSignData ctx accountPub tsd
+      (info.txInfoSummary.summarySize, info.txInfoSummary.summaryFee, info.txInfoSummary.summaryFeeByte, info.txInfoSummary.summaryChangeInFee) `shouldBe` (848, 8800, 10, Nothing)
     it "refuses a fee larger than the coins" $
       buildWith 10000 546 destinations `shouldBe` Left "Could not find a sweep solution: fee is too large"
     -- Each destination gets 745600: the dust limit right below, at and
@@ -423,28 +423,28 @@ sweepIntoWalletSpec ctx =
         tsd <- liftEither $ buildSweepSignData btc ctx (mkStdGen 0) found [externalAddr 1, otherAddr 0] 10 546
         let pendingHash = nosigHash tsd.txSignDataTx
         importPendingTx btc ctx accId tsd `dbShouldBeE` pendingHash
-        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
-          `dbShouldBeE` [Just (TxInfoPending pendingHash False False False)]
+        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+          `dbShouldBeE` [Just ((pendingHash, False, False, False))]
         coinPage btc accId (Page 5 0) `dbShouldBeE` []
         -- signsweep by nosigHash, with the outside key only
         held <- requirePendingTx pendingHash
         liftIO $ held.pendingTxOnline `shouldBe` False
         (signed, info) <- liftEither $ signTxWithKeys btc ctx held.pendingTxData accountPub [sweptKey]
         importPendingTx btc ctx accId signed `dbShouldBeE` pendingHash
-        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
-          `dbShouldBeE` [Just (TxInfoPending pendingHash True False False)]
+        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+          `dbShouldBeE` [Just ((pendingHash, True, False, False))]
         -- The wallet receives one of the two outputs: 10 bytes of overhead,
         -- inputs of 148 + 180 + 41 + 64, two P2PKH outputs and 2 + 1 + 1 +
         -- 108 + 108 of witness data make 731 bytes, a fee of 7310, so
         -- (1000000 - 7310) / 2 = 496345 each
-        liftIO $ (info.txInfoType, info.txInfoAmount, info.txInfoFee) `shouldBe` (TxCredit, 496345, 7310)
-        liftIO $ Map.keys info.txInfoMyOutputs `shouldBe` [externalAddr 1]
+        liftIO $ (info.txInfoSummary.summaryType, info.txInfoSummary.summaryAmount, info.txInfoSummary.summaryFee) `shouldBe` (TxCredit, 496345, 7310)
+        liftIO $ Map.keys info.txInfoSummary.summaryMyOutputs `shouldBe` [externalAddr 1]
         -- Paid into the wallet or not, a sweep has no change
-        liftIO $ info.txInfoChangeInFee `shouldBe` Nothing
+        liftIO $ info.txInfoSummary.summaryChangeInFee `shouldBe` Nothing
         -- sendtx marks it online, the sync retires it once the store lists it
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
-        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
-          `dbShouldBeE` [Just (TxInfoPending pendingHash True True False)]
+        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+          `dbShouldBeE` [Just ((pendingHash, True, True, False))]
     it "refuses to keep a transaction that does not involve the wallet" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "main"
