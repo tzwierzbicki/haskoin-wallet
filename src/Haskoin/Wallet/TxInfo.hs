@@ -391,21 +391,6 @@ markTxInfoDead :: (MonadUnliftIO m) => DBAccountId -> TxHash -> DB m ()
 markTxInfoDead (DBAccountKey wallet accDeriv) tid =
   P.update (DBTxInfoKey wallet accDeriv (txHashToHex tid)) [DBTxInfoDead P.=. True]
 
-getConfirmedTxs ::
-  (MonadUnliftIO m) => DBAccountId -> Bool -> ExceptT String (DB m) [TxHash]
-getConfirmedTxs (DBAccountKey wallet accDeriv) confirm = do
-  ts <-
-    lift . select $
-      from $ \t -> do
-        where_ $
-          t ^. DBTxInfoAccountWallet ==. val wallet
-            &&. t ^. DBTxInfoAccountDerivation ==. val accDeriv
-            &&. t ^. DBTxInfoConfirmed ==. val confirm
-        orderBy [asc (t ^. DBTxInfoBlockRef)]
-        return $ t ^. DBTxInfoTxid
-  forM ts $ \(Value t) ->
-    liftEither $ maybeToEither "getConfirmedTxs invalid TxHash" $ hexToTxHash t
-
 -- | Store the summary of a live transaction of the account at its block,
 -- or replace the one stored, which brings a summary marked dead back.
 -- Returns whether the row changed.
@@ -439,7 +424,8 @@ repsertSummary net (DBAccountKey wallet accDeriv) tid ref summary = do
 -- | A page of the account's transactions on the chain, in the order of
 -- their block references as the store encodes them: the mempool first,
 -- then the newest blocks first. Their confirmations are counted from the
--- best block, and the labels of their addresses are those of today.
+-- best block, none for a dead transaction, and the labels of their
+-- addresses are those of today.
 txsPage :: (MonadUnliftIO m) => DBAccountId -> Page -> ExceptT String (DB m) [TxInfo]
 txsPage accId@(DBAccountKey wallet accDeriv) (Page lim off) = do
   acc <- getAccountById accId
@@ -458,7 +444,8 @@ txsPage accId@(DBAccountKey wallet accDeriv) (Page lim off) = do
     tid <- liftEither $ maybeToEither "txsPage: invalid txid" $ hexToTxHash tidT
     ref <- liftEither $ S.decode refBytes
     summary <- liftMaybe "TxInfo unmarshalJSON Failed" $ unmarshalJSON net $ BS.fromStrict blob
-    let status = ChainStatus tid ref (getConfirmations (snd <$> bestM) ref) dead
+    let confirmations = if dead then 0 else getConfirmations (snd <$> bestM) ref
+        status = ChainStatus tid ref confirmations dead
     lift $ fillTxInfoLabels net $ TxInfo summary (OnChain status)
 
 -- | The transaction with the labels of the account's addresses filled in,
