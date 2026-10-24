@@ -29,6 +29,7 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust)
 import qualified Data.Serialize as S
+import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Time (getCurrentTime)
 import Database.Esqueleto.Legacy as E
@@ -443,7 +444,9 @@ txsPage accId@(DBAccountKey wallet accDeriv) (Page lim off) = do
   forM rows $ \(Value tidT, Value refBytes, Value dead, Value blob) -> do
     tid <- liftEither $ maybeToEither "txsPage: invalid txid" $ hexToTxHash tidT
     ref <- liftEither $ S.decode refBytes
-    summary <- liftMaybe "TxInfo unmarshalJSON Failed" $ unmarshalJSON net $ BS.fromStrict blob
+    summary <-
+      liftMaybe ("The stored summary of transaction " <> cs tidT <> " does not decode") $
+        unmarshalJSON net (BS.fromStrict blob)
     let confirmations = if dead then 0 else getConfirmations (snd <$> bestM) ref
         status = ChainStatus tid ref confirmations dead
     lift $ fillTxInfoLabels net $ TxInfo summary (OnChain status)

@@ -34,7 +34,7 @@ import Haskoin.Wallet.Account (insertAccount, nextAccountDeriv)
 import Haskoin.Wallet.Database (DB, DBAccount, DBAccountId, migrateAll)
 import Haskoin.Wallet.Keys (MnemonicPass (..), signingKey, walletFingerprint)
 import Haskoin.Wallet.Store
-import Haskoin.Wallet.TxInfo (PendingStatus (..), TxInfo (..), TxStatus (..), pendingSigned)
+import Haskoin.Wallet.TxInfo (ChainStatus (..), PendingStatus (..), TxInfo (..), TxStatus (..), pendingSigned)
 import Haskoin.Wallet.TxSignData (TxSignData (..))
 import Haskoin.Wallet.TxSigning (signWalletTx)
 import Numeric.Natural (Natural)
@@ -186,6 +186,13 @@ pendingFlags info =
   case txInfoStatus info of
     Pending p -> Just (pendingNosigHash p, pendingSigned p, pendingOnline p, pendingConflicted p)
     OnChain _ -> Nothing
+
+-- | The chain status of a listed transaction, which is always on the chain
+chainOf :: TxInfo -> ChainStatus
+chainOf info =
+  case txInfoStatus info of
+    OnChain status -> status
+    Pending _ -> error "A listed transaction is on the chain"
 
 {- Test vector files -}
 
@@ -677,29 +684,41 @@ creditTx ctx tid block addr amount = payoutTx ctx tid block [(addr, amount)]
 -- else, with a fee of 1000
 payoutTx :: Ctx -> TxHash -> Store.BlockRef -> [(Address, Word64)] -> Store.Transaction
 payoutTx ctx tid block paid =
+  storeTx tid block [inputFrom ctx (fakeTxHash 0xee, 0) (otherAddr 0) (sum (snd <$> paid) + 1000)] (uncurry (outputTo ctx) <$> paid) 1000
+
+-- | A transaction of the store spending one coin of ours, paying the given
+-- addresses with a fee of 1000
+spendingStoreTx :: Ctx -> TxHash -> Store.BlockRef -> (TxHash, Word32) -> Address -> [(Address, Word64)] -> Store.Transaction
+spendingStoreTx ctx tid block spent from paid =
+  storeTx tid block [inputFrom ctx spent from (sum (snd <$> paid) + 1000)] (uncurry (outputTo ctx) <$> paid) 1000
+
+-- | A transaction of the store with the given inputs, outputs and fee,
+-- 226 bytes long, at the given block
+storeTx :: TxHash -> Store.BlockRef -> [Store.StoreInput] -> [Store.StoreOutput] -> Word64 -> Store.Transaction
+storeTx tid block inputs outputs fee =
   Store.Transaction
     { Store.block = block,
       Store.version = 1,
       Store.locktime = 0,
-      Store.inputs =
-        [ Store.StoreInput
-            (OutPoint (fakeTxHash 0xee) 0)
-            0xffffffff
-            BS.empty
-            (addressScript ctx (otherAddr 0))
-            (sum (snd <$> paid) + 1000)
-            []
-            (Just (otherAddr 0))
-        ],
-      Store.outputs = [Store.StoreOutput amount (addressScript ctx addr) Nothing (Just addr) | (addr, amount) <- paid],
+      Store.inputs = inputs,
+      Store.outputs = outputs,
       Store.deleted = False,
       Store.rbf = False,
       Store.timestamp = 1700000000,
       Store.txid = tid,
       Store.size = 226,
       Store.weight = 904,
-      Store.fee = 1000
+      Store.fee = fee
     }
+
+-- | An input of the store spending the coin of an address, worth the amount
+inputFrom :: Ctx -> (TxHash, Word32) -> Address -> Word64 -> Store.StoreInput
+inputFrom ctx (spentHash, spentIndex) from amount =
+  Store.StoreInput (OutPoint spentHash spentIndex) 0xffffffff BS.empty (addressScript ctx from) amount [] (Just from)
+
+-- | An output of the store paying an address
+outputTo :: Ctx -> Address -> Word64 -> Store.StoreOutput
+outputTo ctx to amount = Store.StoreOutput amount (addressScript ctx to) Nothing (Just to)
 
 -- | The same transaction, replaced or dropped: the store keeps it, marked
 -- as deleted
