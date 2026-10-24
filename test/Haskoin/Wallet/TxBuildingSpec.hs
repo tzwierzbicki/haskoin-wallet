@@ -26,7 +26,7 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.RawTx
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxBuilding
-import Haskoin.Wallet.TxInfo (TxInfo (..))
+import Haskoin.Wallet.TxInfo (TxInfo (..), TxSummary (..))
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSigning (parseTxSignData, signWalletTx, verifySignedTx)
 import Numeric.Natural (Natural)
@@ -215,13 +215,13 @@ recipientTypesSpec ctx =
     it "reports, signs and verifies the payment to every type" $ do
       built <- expectRight $ pay ctx [400000] everyType
       let tsd = TxSignData built.tx [fundingWorth ctx [400000]] built.inputPaths built.outputPaths (Just 10)
-      unsignedInfo <- expectRight $ parseTxSignData btc ctx (testAccountPub ctx) tsd
-      (unsignedInfo.txInfoSize, unsignedInfo.txInfoFeeByte, unsignedInfo.txInfoChangeInFee) `shouldBe` (375, 10, Just 0)
+      unsignedInfo <- expectRight $ parseTxSignData ctx (testAccountPub ctx) tsd
+      (unsignedInfo.txInfoSummary.summarySize, unsignedInfo.txInfoSummary.summaryFeeByte, unsignedInfo.txInfoSummary.summaryChangeInFee) `shouldBe` (375, 10, Just 0)
       (signed, info) <- expectRight $ signWalletTx btc ctx tsd testAccountKey
       verifySignedTx btc ctx signed `shouldBe` Right ()
       -- The signature of this transaction is 72 bytes, as estimated
-      (info.txInfoFee, info.txInfoSize, info.txInfoFeeByte) `shouldBe` (3750, 375, 10)
-      Map.toList info.txInfoOtherOutputs
+      (info.txInfoSummary.summaryFee, info.txInfoSummary.summarySize, info.txInfoSummary.summaryFeeByte) `shouldBe` (3750, 375, 10)
+      Map.toList info.txInfoSummary.summaryOtherOutputs
         `shouldBe` [(otherAddr 0, 50000), (scriptAddr, 60000), (witnessAddr, 70000), (witnessScriptAddr, 80000), (taprootAddr, 90000)]
   where
     everyType = [(otherAddr 0, 50000), (scriptAddr, 60000), (witnessAddr, 70000), (witnessScriptAddr, 80000), (taprootAddr, 90000)]

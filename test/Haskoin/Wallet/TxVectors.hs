@@ -74,16 +74,16 @@ data Signed = Signed
   { signedTx :: !Text,
     signedTxId :: !Text,
     -- | A summary of the TxInfo that hw reports with the signed transaction
-    signedSummary :: !(Maybe Summary)
+    signedSummary :: !(Maybe Reported)
   }
 
-data Summary = Summary
-  { summaryType :: !TxType,
-    summaryAmount :: !Integer,
-    summaryFee :: !Natural,
+data Reported = Reported
+  { reportedType :: !TxType,
+    reportedAmount :: !Integer,
+    reportedFee :: !Natural,
     -- | The size of the signed transaction and the fee rate reported with it
-    summarySize :: !Natural,
-    summaryFeeByte :: !Natural
+    reportedSize :: !Natural,
+    reportedFeeByte :: !Natural
   }
 
 instance FromJSON Vector where
@@ -110,10 +110,10 @@ instance FromJSON Signed where
         <*> o .: "txid"
         <*> o .:? "txInfo"
 
-instance FromJSON Summary where
+instance FromJSON Reported where
   parseJSON =
-    withObject "Summary" $ \o ->
-      Summary
+    withObject "Reported" $ \o ->
+      Reported
         <$> o .: "type"
         <*> o .: "amount"
         <*> o .: "fee"
@@ -148,10 +148,10 @@ signedProblems expected signedData info =
     <> maybe [] summaryProblems expected.signedSummary
   where
     tx = signedData.txSignDataTx
-    summaryProblems :: Summary -> Problems
+    summaryProblems :: Reported -> Problems
     summaryProblems s =
-      check "transaction type" s.summaryType info.txInfoType
-        <> check "amount" s.summaryAmount info.txInfoAmount
-        <> check "fee" s.summaryFee info.txInfoFee
-        <> check "size" s.summarySize info.txInfoSize
-        <> check "fee rate" s.summaryFeeByte info.txInfoFeeByte
+      check "transaction type" s.reportedType info.txInfoSummary.summaryType
+        <> check "amount" s.reportedAmount info.txInfoSummary.summaryAmount
+        <> check "fee" s.reportedFee info.txInfoSummary.summaryFee
+        <> check "size" s.reportedSize info.txInfoSummary.summarySize
+        <> check "fee rate" s.reportedFeeByte info.txInfoSummary.summaryFeeByte

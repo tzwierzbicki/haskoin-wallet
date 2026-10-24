@@ -120,19 +120,13 @@ arbitraryMyOutputs =
     <*> arbitrarySoftPath
     <*> arbitraryText
 
-arbitraryMyInputs :: Network -> Ctx -> Gen MyInputs
-arbitraryMyInputs net ctx =
+arbitraryMyInputs :: Gen MyInputs
+arbitraryMyInputs =
   MyInputs
     <$> arbitraryNatural
     <*> arbitrarySoftPath
     <*> arbitraryText
-    <*> resize 10 (listOf $ fst <$> arbitrarySigInput net ctx)
-
-arbitraryOtherInputs :: Network -> Ctx -> Gen OtherInputs
-arbitraryOtherInputs net ctx =
-  OtherInputs
-    <$> arbitraryNatural
-    <*> resize 10 (listOf $ fst <$> arbitrarySigInput net ctx)
+    <*> resize 10 (listOf arbitraryOutPoint)
 
 arbitraryTxType :: Gen TxType
 arbitraryTxType = oneof [pure TxDebit, pure TxInternal, pure TxCredit]
@@ -166,50 +160,33 @@ arbitraryStoreInput net =
         <*> arbitraryMaybe (arbitraryAddress net)
     ]
 
-arbitraryTxInfo :: Network -> Ctx -> Gen TxInfo
-arbitraryTxInfo net ctx =
-  TxInfo
-    <$> arbitraryMaybe arbitraryTxHash
-    <*> arbitraryTxType
+arbitraryTxSummary :: Network -> Gen TxSummary
+arbitraryTxSummary net =
+  TxSummary
+    <$> arbitraryTxType
     <*> arbitrary
-    <*> ( Map.fromList
-            <$> resize
-              10
-              (listOf $ (,) <$> arbitraryAddress net <*> arbitraryMyOutputs)
-        )
-    <*> ( Map.fromList
-            <$> resize
-              10
-              (listOf $ (,) <$> arbitraryAddress net <*> arbitraryNatural)
-        )
-    <*> resize 10 (listOf $ arbitraryStoreOutput net)
-    <*> ( Map.fromList
-            <$> resize
-              10
-              (listOf $ (,) <$> arbitraryAddress net <*> arbitraryMyInputs net ctx)
-        )
-    <*> ( Map.fromList
-            <$> resize
-              10
-              (listOf $ (,) <$> arbitraryAddress net <*> arbitraryOtherInputs net ctx)
-        )
-    <*> resize 10 (listOf $ arbitraryStoreInput net)
-    <*> arbitraryNatural
     <*> arbitraryNatural
     <*> arbitraryNatural
     <*> arbitraryMaybe arbitraryNatural
-    <*> arbitraryBlockRef
     <*> arbitraryNatural
-    <*> arbitraryMaybe arbitraryTxInfoPending
-    <*> arbitrary
+    <*> addressMap arbitraryMyOutputs
+    <*> addressMap arbitraryNatural
+    <*> resize 10 (listOf $ arbitraryStoreOutput net)
+    <*> addressMap arbitraryMyInputs
+    <*> addressMap arbitraryNatural
+    <*> resize 10 (listOf $ arbitraryStoreInput net)
+  where
+    addressMap gen = Map.fromList <$> resize 10 (listOf $ (,) <$> arbitraryAddress net <*> gen)
 
-arbitraryTxInfoPending :: Gen TxInfoPending
-arbitraryTxInfoPending =
-  TxInfoPending
-    <$> arbitraryTxHash
-    <*> arbitrary
-    <*> arbitrary
-    <*> arbitrary
+arbitraryTxStatus :: Gen TxStatus
+arbitraryTxStatus =
+  oneof
+    [ OnChain <$> (ChainStatus <$> arbitraryTxHash <*> arbitraryBlockRef <*> arbitraryNatural <*> arbitrary),
+      Pending <$> (PendingStatus <$> arbitraryTxHash <*> arbitraryMaybe arbitraryTxHash <*> arbitrary <*> arbitrary)
+    ]
+
+arbitraryTxInfo :: Network -> Gen TxInfo
+arbitraryTxInfo net = TxInfo <$> arbitraryTxSummary net <*> arbitraryTxStatus
 
 arbitrarySyncRes :: Network -> Ctx -> Gen SyncRes
 arbitrarySyncRes net ctx =
@@ -244,8 +221,8 @@ arbitraryResponse net ctx =
         <*> resize 20 (listOf $ arbitraryDBAddress net),
       ResponseTxs
         <$> arbitraryDBAccount net ctx
-        <*> resize 20 (listOf $ arbitraryTxInfo net ctx),
-      ResponseTx <$> arbitraryDBAccount net ctx <*> arbitraryTxInfo net ctx,
+        <*> resize 20 (listOf $ arbitraryTxInfo net),
+      ResponseTx <$> arbitraryDBAccount net ctx <*> arbitraryTxInfo net,
       ResponseSentTx <$> arbitraryNetwork <*> arbitraryTxHash,
       ResponseDeleteTx
         <$> arbitraryTxHash

@@ -27,13 +27,13 @@ identityTests net ctx =
           JsonBox $ arbitraryDBAddress btc,
           JsonBox arbitraryAddressBalance,
           JsonBox $ arbitraryTxSignData btc ctx,
-          JsonBox arbitraryConfig
+          JsonBox arbitraryConfig,
+          JsonBox $ arbitraryResponse btc ctx
         ],
       marshalJsonTests =
         [ MarshalJsonBox ((btc,) <$> arbitraryJsonCoin net),
           MarshalJsonBox ((ctx,) <$> arbitraryPubKeyDoc ctx),
-          MarshalJsonBox (((btc, ctx),) <$> arbitraryTxInfo btc ctx),
-          MarshalJsonBox ((ctx,) <$> arbitraryResponse btc ctx)
+          MarshalJsonBox ((btc,) <$> arbitraryTxInfo btc)
         ]
     }
 

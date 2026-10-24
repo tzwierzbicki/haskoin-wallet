@@ -40,7 +40,7 @@ import Haskoin.Wallet.RawTx (hasRawTx, insertRawTx)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.TxInfo (MyOutputs (..), TxInfo (..), TxInfoPending (..), TxType (..), txsPage)
+import Haskoin.Wallet.TxInfo (ChainStatus (..), MyOutputs (..), TxInfo (..), TxStatus (..), TxSummary (..), TxType (..), txInfoHash, txsPage)
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.Util (Page (Page))
 import Numeric.Natural (Natural)
@@ -61,7 +61,7 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         accId <- account
         res <- syncWith (paymentStore ctx) accId
-        summaries ctx accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
+        summaries accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
         coins accId `dbShouldBeE` [OutPoint (fakeTxHash 1) 0]
         lift (getBest btc) `dbShouldBeE` Just (headerHash (blockAt 800002 1).header, 800002)
         balances accId `dbShouldBeE` (50000, 0, 1)
@@ -74,17 +74,17 @@ spec = prepareContext $ \ctx -> do
         _ <- syncWith (paymentStore ctx) accId
         res <- syncWith (paymentStore ctx) accId
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (0, 0)
-        summaries ctx accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
+        summaries accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
 
     it "updates a payment when it confirms" $
       inDatabaseE $ do
         accId <- account
         _ <- syncWith (mempoolStore ctx) accId
-        summaries ctx accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.MemRef 1700000000, 50000)]
+        summaries accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.MemRef 1700000000, 50000)]
         balances accId `dbShouldBeE` (0, 50000, 1)
         res <- syncWith (paymentStore ctx) accId
         liftIO $ syncResTxUpdates res `shouldBe` 1
-        summaries ctx accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
+        summaries accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
         balances accId `dbShouldBeE` (50000, 0, 1)
 
     it "finds an old payment to an address generated after newer transactions were synced" $
@@ -95,7 +95,7 @@ spec = prepareContext $ \ctx -> do
         -- deriving it from the public key
         _ <- genExtAddress ctx cfg accId ""
         _ <- syncWith (oldPaymentStore ctx) accId
-        summaries ctx accId
+        summaries accId
           `dbShouldBeE` [ (Just (fakeTxHash 2), Store.BlockRef 800001 1, 30000),
                         (Just (fakeTxHash 3), Store.BlockRef 800002 1, 20000),
                         (Just (fakeTxHash 4), Store.BlockRef 700000 1, 10000)
@@ -108,14 +108,14 @@ spec = prepareContext $ \ctx -> do
         -- Transaction 5 paid externalAddr 0 and externalAddr 1, but only the
         -- first exists yet: the second output looks like somebody else's
         _ <- syncWith (payoutStore ctx) accId
-        summaries ctx accId `dbShouldBeE` [(Just (fakeTxHash 5), Store.BlockRef 800000 1, 30000)]
-        paidAddresses ctx accId `dbShouldBeE` [["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]]
+        summaries accId `dbShouldBeE` [(Just (fakeTxHash 5), Store.BlockRef 800000 1, 30000)]
+        paidAddresses accId `dbShouldBeE` [["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]]
         coins accId `dbShouldBeE` [OutPoint (fakeTxHash 5) 0]
         _ <- genExtAddress ctx cfg accId ""
         res <- syncWith (payoutSeenStore ctx) accId
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (1, 1)
-        summaries ctx accId `dbShouldBeE` [(Just (fakeTxHash 5), Store.BlockRef 800000 1, 50000)]
-        paidAddresses ctx accId `dbShouldBeE` [["1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]]
+        summaries accId `dbShouldBeE` [(Just (fakeTxHash 5), Store.BlockRef 800000 1, 50000)]
+        paidAddresses accId `dbShouldBeE` [["1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]]
         coins accId `dbShouldBeE` [OutPoint (fakeTxHash 5) 0, OutPoint (fakeTxHash 5) 1]
         balances accId `dbShouldBeE` (50000, 0, 2)
 
@@ -124,8 +124,8 @@ spec = prepareContext $ \ctx -> do
         accId <- account
         _ <- syncWith (mempoolStore ctx) accId
         _ <- syncWith (replacedStore ctx) accId
-        summaries ctx accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.MemRef 1700000000, 50000)]
-        deadSummaries ctx accId `dbShouldBeE` [Just (fakeTxHash 1)]
+        summaries accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.MemRef 1700000000, 50000)]
+        deadSummaries accId `dbShouldBeE` [Just (fakeTxHash 1)]
         coins accId `dbShouldBeE` []
         balances accId `dbShouldBeE` (0, 0, 0)
 
@@ -134,7 +134,7 @@ spec = prepareContext $ \ctx -> do
         accId <- account
         _ <- syncWith (mempoolStore ctx) accId
         _ <- syncWith (forgottenStore ctx) accId
-        deadSummaries ctx accId `dbShouldBeE` [Just (fakeTxHash 1)]
+        deadSummaries accId `dbShouldBeE` [Just (fakeTxHash 1)]
         coins accId `dbShouldBeE` []
 
     it "brings a dead payment back when the store lists it again" $
@@ -144,8 +144,8 @@ spec = prepareContext $ \ctx -> do
         _ <- syncWith (replacedStore ctx) accId
         res <- syncWith (paymentStore ctx) accId
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (1, 1)
-        summaries ctx accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
-        deadSummaries ctx accId `dbShouldBeE` []
+        summaries accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
+        deadSummaries accId `dbShouldBeE` []
         coins accId `dbShouldBeE` [OutPoint (fakeTxHash 1) 0]
         balances accId `dbShouldBeE` (50000, 0, 1)
 
@@ -155,7 +155,7 @@ spec = prepareContext $ \ctx -> do
         _ <- syncWith (paymentStore ctx) accId
         res <- syncWith (movedStore ctx) accId
         liftIO $ syncResTxUpdates res `shouldBe` 1
-        summaries ctx accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800001 3, 50000)]
+        summaries accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800001 3, 50000)]
         lift (getBest btc) `dbShouldBeE` Just (headerHash (blockAt 800003 7).header, 800003)
 
     it "marks a payment a reorganisation left out as dead" $
@@ -163,11 +163,11 @@ spec = prepareContext $ \ctx -> do
         accId <- account
         _ <- syncWith (twoPaymentsStore ctx) accId
         _ <- syncWith (leftOutStore ctx) accId
-        summaries ctx accId
+        summaries accId
           `dbShouldBeE` [ (Just (fakeTxHash 2), Store.BlockRef 800001 1, 30000),
                           (Just (fakeTxHash 3), Store.BlockRef 800002 1, 20000)
                         ]
-        deadSummaries ctx accId `dbShouldBeE` [Just (fakeTxHash 3)]
+        deadSummaries accId `dbShouldBeE` [Just (fakeTxHash 3)]
         coins accId `dbShouldBeE` [OutPoint (fakeTxHash 2) 0]
         balances accId `dbShouldBeE` (30000, 0, 1)
 
@@ -190,7 +190,7 @@ spec = prepareContext $ \ctx -> do
         res <- syncWith (manyCoinsStore ctx) accId
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (200, 200)
         (length <$> coins accId) `dbShouldBeE` 200
-        (length <$> summaries ctx accId) `dbShouldBeE` 200
+        (length <$> summaries accId) `dbShouldBeE` 200
         balances accId `dbShouldBeE` (200000, 0, 200)
 
     it "lists the transactions of more addresses than it asks about at a time" $
@@ -201,7 +201,7 @@ spec = prepareContext $ \ctx -> do
         let twoAtATime = cfg {configParallelRequests = 2}
         res <- sync ctx twoAtATime (toStore (sevenAddressesStore ctx)) btc accId False
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (7, 7)
-        summaries ctx accId
+        summaries accId
           `dbShouldBeE` [ (Just (fakeTxHash 1), Store.BlockRef 800000 1, 1000),
                           (Just (fakeTxHash 2), Store.BlockRef 800000 2, 1000),
                           (Just (fakeTxHash 3), Store.BlockRef 800000 3, 1000),
@@ -210,7 +210,7 @@ spec = prepareContext $ \ctx -> do
                           (Just (fakeTxHash 6), Store.BlockRef 800000 6, 1000),
                           (Just (fakeTxHash 7), Store.BlockRef 800000 7, 1000)
                         ]
-        paidAddresses ctx accId
+        paidAddresses accId
           `dbShouldBeE` [ ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"],
                           ["1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"],
                           ["1Dg6Kg7kQuyiZz41HRWXKUWKRu6ZyEf1Nr"],
@@ -318,8 +318,8 @@ spec = prepareContext $ \ctx -> do
         liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (1, 0)
         liftIO $ readIORef published `shouldReturn` [txSignDataTx (signedSpend ctx)]
         pendingHashes accId `dbShouldBeE` [txHash (txSignDataTx (signedSpend ctx))]
-        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
-          `dbShouldBeE` [Just (TxInfoPending pendingHash True True False)]
+        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+          `dbShouldBeE` [Just ((pendingHash, True, True, False))]
 
     it "leaves alone a signed transaction the user has not sent" $
       inDatabaseE $ do
@@ -340,11 +340,11 @@ spec = prepareContext $ \ctx -> do
         res <- syncWith (spentElsewhereStore ctx) accId
         liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (0, 1)
         coins accId `dbShouldBeE` []
-        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
-          `dbShouldBeE` [Just (TxInfoPending pendingHash False False True)]
+        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+          `dbShouldBeE` [Just ((pendingHash, False, False, True))]
         -- Nothing is left to free but the change address, which it had none of
         deleteTx ctx (const (toStore emptyStore)) pendingHash `dbShouldBeE` (0, 0)
-        ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0)) `dbShouldBeE` []
+        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0)) `dbShouldBeE` []
 
     it "follows a payment the wallet made: the coin goes, the change comes, the summary is a debit" $
       inDatabaseE $ do
@@ -361,16 +361,17 @@ spec = prepareContext $ \ctx -> do
         res <- syncWith (changeSpentStore ctx) accId
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (1, 2)
         -- A debit of 41000: 40000 paid and 1000 of fee, 9000 of change to /1/0
-        txInfos <- txsPage ctx accId (Page 5 0)
+        txInfos <- txsPage accId (Page 5 0)
         spend <- liftMaybe "The payment has no summary" $ find ((== Just (txHash (changeSpendTx ctx))) . txInfoHash) txInfos
+        let summary = txInfoSummary spend
         liftIO $ do
-          txInfoType spend `shouldBe` TxDebit
-          txInfoAmount spend `shouldBe` -41000
-          txInfoFee spend `shouldBe` 1000
-          Map.toList (txInfoOtherOutputs spend) `shouldBe` [(otherAddr 0, 40000)]
-          Map.toList (Map.map myOutputsPath (txInfoMyOutputs spend)) `shouldBe` [(internalAddr 0, Deriv :/ 1 :/ 0)]
-          Map.keys (txInfoMyInputs spend) `shouldBe` [externalAddr 0]
-          txInfoPending spend `shouldBe` Nothing
+          summaryType summary `shouldBe` TxDebit
+          summaryAmount summary `shouldBe` -41000
+          summaryFee summary `shouldBe` 1000
+          Map.toList (summaryOtherOutputs summary) `shouldBe` [(otherAddr 0, 40000)]
+          Map.toList (Map.map myOutputsPath (summaryMyOutputs summary)) `shouldBe` [(internalAddr 0, Deriv :/ 1 :/ 0)]
+          Map.keys (summaryMyInputs summary) `shouldBe` [externalAddr 0]
+          pendingFlags spend `shouldBe` Nothing
         coins accId `dbShouldBeE` [OutPoint (txHash (changeSpendTx ctx)) 1]
         balances accId `dbShouldBeE` (9000, 0, 1)
         pendingHashes accId `dbShouldBeE` []
@@ -385,11 +386,11 @@ spec = prepareContext $ \ctx -> do
         addr2 <- genExtAddress ctx cfg accId2 ""
         liftIO $ dBAddressAddress addr2 `shouldBe` externalAddr2Text
         _ <- syncWith (twoWalletsStore ctx) accId
-        summaries ctx accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
-        summaries ctx accId2 `dbShouldBeE` []
+        summaries accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
+        summaries accId2 `dbShouldBeE` []
         balances accId2 `dbShouldBeE` (0, 0, 0)
         _ <- syncWith (twoWalletsStore ctx) accId2
-        summaries ctx accId2 `dbShouldBeE` [(Just (fakeTxHash 2), Store.BlockRef 800001 1, 30000)]
+        summaries accId2 `dbShouldBeE` [(Just (fakeTxHash 2), Store.BlockRef 800001 1, 30000)]
         coins accId2 `dbShouldBeE` [OutPoint (fakeTxHash 2) 0]
         balances accId `dbShouldBeE` (50000, 0, 1)
         balances accId2 `dbShouldBeE` (30000, 0, 1)
@@ -402,7 +403,7 @@ spec = prepareContext $ \ctx -> do
         liftIO $ dBAddressAddress addr `shouldBe` bchExternalAddrText
         res <- sync ctx cfg (toStore (cashPaymentStore ctx)) bch accId False
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (1, 1)
-        summaries ctx accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
+        summaries accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
         (map jsonCoinOutpoint <$> coinPage bch accId (Page 5 0)) `dbShouldBeE` [OutPoint (fakeTxHash 1) 0]
         balances accId `dbShouldBeE` (50000, 0, 1)
         lift (getBest bch) `dbShouldBeE` Just (headerHash (blockAt 800002 1).header, 800002)
@@ -455,7 +456,7 @@ spec = prepareContext $ \ctx -> do
         extendChainTo ctx accId AddrExternal e
         extendChainTo ctx accId AddrInternal i
         _ <- sync ctx small store btc accId True
-        found <- summaries ctx accId
+        found <- summaries accId
         liftIO $ found `shouldMatchList` [(Just (txHash tx), Store.BlockRef height 1, fromIntegral amount) | (_, amount, height, tx) <- discoveredPayments ctx]
         held <- coins accId
         liftIO $ held `shouldMatchList` [OutPoint (txHash tx) 0 | (_, _, _, tx) <- discoveredPayments ctx]
@@ -474,7 +475,7 @@ spec = prepareContext $ \ctx -> do
         res <- watchWith (paidStore ctx [(externalAddr 3, 50000)]) accId
         liftIO $ (syncResNewAddrs res, dBAccountExternal (syncResAccount res)) `shouldBe` (3, 4)
         addressPath btc accId (externalAddr 3) `dbShouldBeE` Just (Deriv :/ 0 :/ 3)
-        summaries ctx accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
+        summaries accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
         coins accId `dbShouldBeE` [OutPoint (fakeTxHash 1) 0]
         balances accId `dbShouldBeE` (50000, 0, 1)
 
@@ -483,7 +484,7 @@ spec = prepareContext $ \ctx -> do
         accId <- account
         res <- watchWith (paidStore ctx [(externalAddr 2, 20000), (externalAddr 5, 30000)]) accId
         liftIO $ (syncResNewAddrs res, dBAccountExternal (syncResAccount res)) `shouldBe` (5, 6)
-        summaries ctx accId
+        summaries accId
           `dbShouldBeE` [ (Just (fakeTxHash 1), Store.BlockRef 800000 1, 20000),
                           (Just (fakeTxHash 2), Store.BlockRef 800000 2, 30000)
                         ]
@@ -494,7 +495,7 @@ spec = prepareContext $ \ctx -> do
         accId <- account
         res <- watchWith (paidStore ctx [(externalAddr 4, 50000)]) accId
         liftIO $ (syncResNewAddrs res, dBAccountExternal (syncResAccount res)) `shouldBe` (0, 1)
-        summaries ctx accId `dbShouldBeE` []
+        summaries accId `dbShouldBeE` []
         balances accId `dbShouldBeE` (0, 0, 0)
 
     it "finds change made by another wallet of the same seed" $
@@ -502,7 +503,7 @@ spec = prepareContext $ \ctx -> do
         accId <- account
         res <- watchWith (paidStore ctx [(internalAddr 1, 10000)]) accId
         liftIO $ (syncResNewAddrs res, dBAccountInternal (syncResAccount res)) `shouldBe` (2, 2)
-        summaries ctx accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 10000)]
+        summaries accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 10000)]
         balances accId `dbShouldBeE` (10000, 0, 1)
         -- /1/0 was never used: it is the next change address
         (dBAddressIndex <$> changeAddress ctx cfg accId) `dbShouldBeE` 0
@@ -1116,24 +1117,31 @@ sentStore ctx =
 
 -- | The summaries of the account: transaction id, block and amount, in the
 -- order of the transaction ids
-summaries :: Ctx -> DBAccountId -> ExceptT String (DB IO) [(Maybe TxHash, Store.BlockRef, Integer)]
-summaries ctx accId = do
-  txInfos <- txsPage ctx accId (Page 500 0)
-  return $ sortOn (\(h, _, _) -> txHashToHex <$> h) [(txInfoHash t, txInfoBlockRef t, txInfoAmount t) | t <- txInfos]
+-- | The chain status of a listed summary, which is always on the chain
+chainOf :: TxInfo -> ChainStatus
+chainOf info =
+  case txInfoStatus info of
+    OnChain status -> status
+    Pending _ -> error "A listed summary is on the chain"
+
+summaries :: DBAccountId -> ExceptT String (DB IO) [(Maybe TxHash, Store.BlockRef, Integer)]
+summaries accId = do
+  txInfos <- txsPage accId (Page 500 0)
+  return $ sortOn (\(h, _, _) -> txHashToHex <$> h) [(txInfoHash t, chainBlock (chainOf t), summaryAmount (txInfoSummary t)) | t <- txInfos]
 
 -- | The dead summaries of the account, by transaction id
-deadSummaries :: Ctx -> DBAccountId -> ExceptT String (DB IO) [Maybe TxHash]
-deadSummaries ctx accId = do
-  txInfos <- txsPage ctx accId (Page 500 0)
-  return $ sortOn (fmap txHashToHex) [txInfoHash t | t <- txInfos, txInfoDead t]
+deadSummaries :: DBAccountId -> ExceptT String (DB IO) [Maybe TxHash]
+deadSummaries accId = do
+  txInfos <- txsPage accId (Page 500 0)
+  return $ sortOn (fmap txHashToHex) [txInfoHash t | t <- txInfos, chainDead (chainOf t)]
 
 -- | The addresses of ours each summary pays, as sorted texts, in the order
 -- of the transaction ids
-paidAddresses :: Ctx -> DBAccountId -> ExceptT String (DB IO) [[Text]]
-paidAddresses ctx accId = do
-  txInfos <- txsPage ctx accId (Page 500 0)
+paidAddresses :: DBAccountId -> ExceptT String (DB IO) [[Text]]
+paidAddresses accId = do
+  txInfos <- txsPage accId (Page 500 0)
   return
-    [ sort (mapMaybe (addrToText btc) (Map.keys (txInfoMyOutputs t)))
+    [ sort (mapMaybe (addrToText btc) (Map.keys (summaryMyOutputs (txInfoSummary t))))
       | t <- sortOn (fmap txHashToHex . txInfoHash) txInfos
     ]
 

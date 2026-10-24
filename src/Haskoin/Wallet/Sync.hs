@@ -131,7 +131,7 @@ sync ctx cfg store net accId full = do
   let toFetch = transactionsToFetch known addrBals listings
       listed = concatMap snd listings
   txs <- fromStore $ storeTransactions store toFetch
-  updated <- forM (filter (not . (.deleted)) txs) $ repsertTxInfo net ctx accId . storeToTxInfo addrPaths (fromIntegral best.height)
+  updated <- lift $ forM (filter (not . (.deleted)) txs) $ \tx -> repsertSummary net accId tx.txid tx.block (storeSummary addrPaths tx)
   lift $ forM_ (deadTransactions everything known toFetch txs listed) $ markTxInfoDead accId
   -- The coins, the pending transactions and the raw transactions
   refreshed <- syncCoins store net accId changedBals
@@ -143,7 +143,7 @@ sync ctx cfg store net accId full = do
       { syncResAccount = acc,
         syncResBlockHash = headerHash best.header,
         syncResBlockHeight = fromIntegral best.height,
-        syncResTxUpdates = fromIntegral $ length $ filter snd updated,
+        syncResTxUpdates = fromIntegral $ length $ filter id updated,
         syncResCoinUpdates = fromIntegral refreshed.refreshedCount,
         syncResRebroadcast = resent,
         syncResConflicted = conflicted,

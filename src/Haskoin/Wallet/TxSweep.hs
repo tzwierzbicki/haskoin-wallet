@@ -44,7 +44,7 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData
-import Haskoin.Wallet.TxSigning (parseTxSignData, verifySignedTx)
+import Haskoin.Wallet.TxSigning (coinSigInput, parseTxSignData, spentCoins, verifySignedTx)
 import Haskoin.Wallet.TxSize (InputSize, inputSize, outputSize, txSize, uncompressedKeyInput)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
@@ -234,28 +234,16 @@ signTxWithKeys ::
 signTxWithKeys net ctx tsd accountPub secKeys = do
   when (isSigned tsd.txSignDataTx) $ Left "The transaction is already signed"
   when (null secKeys) $ Left "There are no private keys to sign"
-  info <- parseTxSignData net ctx accountPub tsd
+  info <- parseTxSignData ctx accountPub tsd
   -- The sweep builder refuses a fee rate of zero; the signer checks the fee itself
-  when (info.txInfoFee == 0) $ Left "The transaction pays no fee"
-  coins <- inputCoins tsd.txSignDataTx info
+  when (info.txInfoSummary.summaryFee == 0) $ Left "The transaction pays no fee"
+  -- The coin of every input, in the order of the inputs
+  coins <- map (coinSigInput net) <$> spentCoins ctx tsd
   signedTx <- foldM (signCoin net ctx (indexKeys ctx secKeys)) tsd.txSignDataTx (zip [0 ..] coins)
   let signedData = tsd {txSignDataTx = signedTx}
   verifySignedTx net ctx signedData
-  signedInfo <- parseTxSignData net ctx accountPub signedData
+  signedInfo <- parseTxSignData ctx accountPub signedData
   return (signedData, signedInfo)
-
--- | The signing parameters of the coin of every input, in the order of the
--- inputs. The analysis groups them by address; every input has one.
-inputCoins :: Tx -> TxInfo -> Either String [SigInput]
-inputCoins tx info = mapM coinOf tx.inputs
-  where
-    coins =
-      concatMap (.myInputsSigInput) (Map.elems info.txInfoMyInputs)
-        <> concatMap (.otherInputsSigInput) (Map.elems info.txInfoOtherInputs)
-    coinOf :: TxIn -> Either String SigInput
-    coinOf input =
-      maybeToEither "Referenced input transactions are missing" $
-        find ((== input.outpoint) . (.outpoint)) coins
 
 -- | The private keys, indexed by what identifies them in an output script.
 -- Every key is indexed with both encodings of its public key.

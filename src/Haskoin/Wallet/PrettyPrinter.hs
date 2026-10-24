@@ -336,12 +336,10 @@ txInfoPrinter ::
   AmountUnit ->
   TxInfo ->
   Printer
-txInfoPrinter net unit TxInfo {..} =
+txInfoPrinter net unit (TxInfo TxSummary {..} status) =
   vcat
     [ formatTitle (block 9 title) <> text ": " <> total,
-      txid,
-      status,
-      pending,
+      statusPrinter status,
       fee,
       changeInFee,
       internal,
@@ -350,71 +348,35 @@ txInfoPrinter net unit TxInfo {..} =
     ]
   where
     title =
-      case txInfoType of
+      case summaryType of
         TxDebit -> "Debit"
         TxInternal -> "Internal"
         TxCredit -> "Credit"
-    total = integerAmountPrinter unit txInfoAmount
-    fee = keyPrinter 9 "Fee" <> feePrinter unit txInfoFee txInfoFeeByte
+    total = integerAmountPrinter unit summaryAmount
+    fee = keyPrinter 9 "Fee" <> feePrinter unit summaryFee summaryFeeByte
     changeInFee =
-      case txInfoChangeInFee of
+      case summaryChangeInFee of
         Just change
           | change > 0 ->
               keyPrinter 9 "Change"
                 <> amountPrinter unit (fromIntegral change)
                   <+> text "too small for an output, added to the fee"
         _ -> mempty
-    txid =
-      case txInfoHash of
-        Just tid ->
-          keyPrinter 9 "TxHash" <> formatTxHash (cs $ txHashToHex tid)
-        _ -> mempty
-    status
-      | txInfoDead =
-          keyPrinter 9 "Status"
-            <> formatFalse "dead"
-              <+> text "(replaced, or dropped from the network)"
-      | otherwise = mempty
-    pending =
-      case txInfoPending of
-        Just (TxInfoPending nosigH signed online conflicted) ->
-          vcat
-            [ keyPrinter 9 "NoSigHash"
-                <> formatNoSigTxHash (cs $ txHashToHex nosigH),
-              keyPrinter 9 "Signed"
-                <> text "This pending transaction is"
-                  <+> if signed
-                    then formatTrue "signed"
-                    else formatFalse "not signed",
-              if online
-                then
-                  keyPrinter 9 "Online"
-                    <> text "This transaction is"
-                      <+> formatTrue "online"
-                else mempty,
-              if conflicted
-                then
-                  keyPrinter 9 "Conflict"
-                    <> formatFalse "A coin it spends was spent by another transaction"
-                      <+> text "and it can no longer be sent; delete it with deletetx"
-                else mempty
-            ]
-        _ -> keyPrinter 9 "Confs" <> formatValue (show txInfoConfirmations)
     internal
-      | txInfoType /= TxInternal = mempty
+      | summaryType /= TxInternal = mempty
       | otherwise =
           vcat $
             [formatKey "From addresses:"]
               <> ( nest 2 . addrPrinter True
-                     <$> Map.assocs (Map.map g txInfoMyInputs)
+                     <$> Map.assocs (Map.map g summaryMyInputs)
                  )
               <> [formatKey "To addresses:"]
               <> ( nest 2
                      . addrPrinter True
-                     <$> Map.assocs (Map.map f txInfoMyOutputs)
+                     <$> Map.assocs (Map.map f summaryMyOutputs)
                  )
     debit
-      | txInfoType /= TxDebit = mempty
+      | summaryType /= TxDebit = mempty
       | otherwise =
           vcat $
             [formatKey "Sending to addresses:"]
@@ -422,16 +384,16 @@ txInfoPrinter net unit TxInfo {..} =
                      <$> Map.assocs
                        ( Map.map
                            (,Nothing,"")
-                           txInfoOtherOutputs
+                           summaryOtherOutputs
                        )
                  )
     credit
-      | txInfoType /= TxCredit = mempty
+      | summaryType /= TxCredit = mempty
       | otherwise =
           vcat $
             [formatKey "My credited addresses:"]
               <> ( nest 2 . addrPrinter True
-                     <$> Map.assocs (Map.map f txInfoMyOutputs)
+                     <$> Map.assocs (Map.map f summaryMyOutputs)
                  )
     f (MyOutputs v p l) = (v, Just p, cs l)
     g (MyInputs v p l _) = (v, Just p, cs l)
@@ -451,6 +413,47 @@ txInfoPrinter net unit TxInfo {..} =
             then mempty
             else nest 2 $ formatKey "Label:" <+> formatLabel label
         ]
+
+-- | Where the transaction stands: its id when it has one, then its
+-- confirmations on the chain, or its state in preparation
+statusPrinter :: TxStatus -> Printer
+statusPrinter (OnChain status) =
+  vcat
+    [ txHashPrinter (chainTxid status),
+      if chainDead status
+        then
+          keyPrinter 9 "Status"
+            <> formatFalse "dead"
+              <+> text "(replaced, or dropped from the network)"
+        else mempty,
+      keyPrinter 9 "Confs" <> formatValue (show (chainConfirmations status))
+    ]
+statusPrinter (Pending status) =
+  vcat
+    [ maybe mempty txHashPrinter (pendingTxid status),
+      keyPrinter 9 "NoSigHash"
+        <> formatNoSigTxHash (cs $ txHashToHex (pendingNosigHash status)),
+      keyPrinter 9 "Signed"
+        <> text "This pending transaction is"
+          <+> if pendingSigned status
+            then formatTrue "signed"
+            else formatFalse "not signed",
+      if pendingOnline status
+        then
+          keyPrinter 9 "Online"
+            <> text "This transaction is"
+              <+> formatTrue "online"
+        else mempty,
+      if pendingConflicted status
+        then
+          keyPrinter 9 "Conflict"
+            <> formatFalse "A coin it spends was spent by another transaction"
+              <+> text "and it can no longer be sent; delete it with deletetx"
+        else mempty
+    ]
+
+txHashPrinter :: TxHash -> Printer
+txHashPrinter tid = keyPrinter 9 "TxHash" <> formatTxHash (cs $ txHashToHex tid)
 
 feePrinter :: AmountUnit -> Natural -> Natural -> Printer
 feePrinter unit fee feeBytes =

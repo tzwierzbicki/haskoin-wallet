@@ -48,16 +48,16 @@ data Touched = Touched
     otherAddresses :: ![Address]
   }
 
-touchedBy :: TxInfo -> Touched
-touchedBy txInfo =
+touchedBy :: TxSummary -> Touched
+touchedBy summary =
   Touched
-    { coinsSpent = (.outpoint) <$> concatMap myInputsSigInput (Map.elems txInfo.txInfoMyInputs),
+    { coinsSpent = concatMap myInputsOutpoints (Map.elems summary.summaryMyInputs),
       changeAddresses = Map.keys change,
       changePaths = myOutputsPath <$> Map.elems change,
-      otherAddresses = nub $ Map.keys paid <> Map.keys txInfo.txInfoMyInputs
+      otherAddresses = nub $ Map.keys paid <> Map.keys summary.summaryMyInputs
     }
   where
-    (change, paid) = Map.partition (isIntPath . myOutputsPath) txInfo.txInfoMyOutputs
+    (change, paid) = Map.partition (isIntPath . myOutputsPath) summary.summaryMyOutputs
 
 {- Pending transactions in the database -}
 
@@ -126,15 +126,22 @@ pendingTxPage ctx accId page = do
   mapM (pendingSummary ctx acc) held
 
 -- | The summary of a pending transaction: the transaction as the wallet
--- sees it, its pending state and the labels of its addresses
+-- sees it, its status as held, and the labels of its addresses
 pendingSummary :: (MonadUnliftIO m) => Ctx -> DBAccount -> PendingTx -> ExceptT String (DB m) TxInfo
 pendingSummary ctx acc p = do
   let net = accountNetwork acc
-      tx = txSignDataTx p.pendingTxData
-  txInfo <- liftEither $ parseTxSignData net ctx (accountXPubKey ctx acc) p.pendingTxData
-  conflicted <- lift $ conflictedInputs txInfo
-  let pending = TxInfoPending (nosigHash tx) (isSigned tx) p.pendingTxOnline (not (null conflicted))
-  lift $ fillTxInfoLabels net txInfo {txInfoPending = Just pending}
+  info <- liftEither $ parseTxSignData ctx (accountXPubKey ctx acc) p.pendingTxData
+  conflicted <- lift $ conflictedInputs info.txInfoSummary
+  lift $ fillTxInfoLabels net info {txInfoStatus = heldStatus p (not (null conflicted)) info.txInfoStatus}
+
+-- | The status of a held transaction: what its signing data says, and what
+-- only the database knows, whether the user sent it and whether a coin it
+-- spends is gone. The signing data describes a transaction in preparation;
+-- one on the chain is not held and is left as it is.
+heldStatus :: PendingTx -> Bool -> TxStatus -> TxStatus
+heldStatus p conflicted (Pending status) =
+  Pending status {pendingOnline = p.pendingTxOnline, pendingConflicted = conflicted}
+heldStatus _ _ onChain = onChain
 
 -- | The coins locked by the pending transactions of an account: every
 -- outpoint one of them spends. A coin is locked exactly as long as a
@@ -165,14 +172,14 @@ coinExists outpoint = isJust <$> P.get (DBCoinKey $ outpointText outpoint)
 
 -- | The coins of the wallet that a transaction spends and that are gone,
 -- spent by another transaction: the transaction can no longer be sent
-conflictedInputs :: (MonadUnliftIO m) => TxInfo -> DB m [OutPoint]
-conflictedInputs txInfo = filterM (fmap not . coinExists) (touchedBy txInfo).coinsSpent
+conflictedInputs :: (MonadUnliftIO m) => TxSummary -> DB m [OutPoint]
+conflictedInputs summary = filterM (fmap not . coinExists) (touchedBy summary).coinsSpent
 
 -- | Whether a pending transaction spends a coin of the wallet that is gone
 inConflict :: (MonadUnliftIO m) => Ctx -> DBAccount -> PendingTx -> ExceptT String (DB m) Bool
 inConflict ctx acc p = do
-  txInfo <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountXPubKey ctx acc) p.pendingTxData
-  not . null <$> lift (conflictedInputs txInfo)
+  info <- liftEither $ parseTxSignData ctx (accountXPubKey ctx acc) p.pendingTxData
+  not . null <$> lift (conflictedInputs info.txInfoSummary)
 
 {- Importing -}
 
@@ -190,11 +197,11 @@ importPendingTx net ctx accId tsd = do
   forM_ heldM $ \held ->
     when (held.pendingTxAccount /= accId) $
       throwError "The transaction is pending in another account"
-  txInfo <- liftEither $ parseTxSignData net ctx (accountXPubKey ctx acc) tsd
+  info <- liftEither $ parseTxSignData ctx (accountXPubKey ctx acc) tsd
   when (isSigned tx) $ liftEither $ verifySignedTx net ctx tsd
   case heldM of
     Just held -> replaceVersion held tsd
-    Nothing -> insertPendingTx net accId tsd txInfo
+    Nothing -> insertPendingTx net accId tsd info.txInfoSummary
   return pendingHash
   where
     tx = txSignDataTx tsd
@@ -217,13 +224,13 @@ replaceVersion held tsd = do
     tx = txSignDataTx tsd
 
 -- | Store a transaction the account does not hold yet
-insertPendingTx :: (MonadUnliftIO m) => Network -> DBAccountId -> TxSignData -> TxInfo -> ExceptT String (DB m) ()
-insertPendingTx net accId@(DBAccountKey wallet accDeriv) tsd txInfo = do
+insertPendingTx :: (MonadUnliftIO m) => Network -> DBAccountId -> TxSignData -> TxSummary -> ExceptT String (DB m) ()
+insertPendingTx net accId@(DBAccountKey wallet accDeriv) tsd summary = do
   -- A pending transaction is retired when the sync sees it under one of
   -- the wallet's addresses; one touching none would wait forever
-  unless (involvesWallet txInfo) $
+  unless (involvesWallet summary) $
     throwError "The transaction does not involve this wallet"
-  let touched = touchedBy txInfo
+  let touched = touchedBy summary
   -- The coins it spends must exist and be free of any other pending
   -- transaction; storing it is what locks them
   locked <- lockedOutpoints accId
@@ -253,8 +260,8 @@ insertPendingTx net accId@(DBAccountKey wallet accDeriv) tsd txInfo = do
 removePendingTx :: (MonadUnliftIO m) => Ctx -> PendingTx -> ExceptT String (DB m) (Natural, Natural)
 removePendingTx ctx held = do
   acc <- getAccountById held.pendingTxAccount
-  txInfo <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountXPubKey ctx acc) held.pendingTxData
-  let touched = touchedBy txInfo
+  txInfo <- liftEither $ parseTxSignData ctx (accountXPubKey ctx acc) held.pendingTxData
+  let touched = touchedBy txInfo.txInfoSummary
   heldCoins <- lift $ filterM coinExists touched.coinsSpent
   lift $ P.delete held.pendingTxKey
   return (fromIntegral (length heldCoins), fromIntegral (length touched.changeAddresses))
