@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 -- | The addresses of an account: external ones to receive with and internal
@@ -70,7 +71,7 @@ instance ToJSON DBAddress where
     object
       [ "account" .= fromSqlKey (dBAddressAccount addr),
         "index" .= dBAddressIndex addr,
-        "derivation" .= dBAddressDerivation addr,
+        "derivation" .= pathText (addrPath addr),
         "address" .= dBAddressAddress addr,
         "label" .= dBAddressLabel addr,
         "balance"
@@ -90,8 +91,8 @@ instance FromJSON DBAddress where
       bal <- o .: "balance"
       DBAddress
         <$> (toSqlKey <$> o .: "account")
+        <*> o .: "internal"
         <*> o .: "index"
-        <*> o .: "derivation"
         <*> o .: "address"
         <*> o .: "label"
         <*> bal .: "confirmed"
@@ -99,7 +100,6 @@ instance FromJSON DBAddress where
         <*> bal .: "coins"
         <*> bal .: "txs"
         <*> bal .: "received"
-        <*> o .: "internal"
         <*> o .: "created"
 
 -- | The balance of an address as the store reports it
@@ -158,7 +158,7 @@ nextChangeAddress ctx cfg accId reserved = do
       a ^. DBAddressAccount ==. val accId
         &&. a ^. DBAddressInternal ==. val True
         &&. a ^. DBAddressBalanceTxs ==. val 0
-        &&. a ^. DBAddressDerivation `notIn` valList (pathText <$> reserved)
+        &&. a ^. DBAddressIndex `notIn` valList [fromIntegral i | Just (AddrInternal, i) <- chainIndex <$> reserved]
     orderBy [asc $ a ^. DBAddressIndex]
     limit 1
     return a
@@ -221,15 +221,14 @@ insertAddress :: (MonadUnliftIO m) => Network -> DBAccountId -> AddrType -> Int 
 insertAddress net accId addrType index addr = do
   time <- liftIO getCurrentTime
   addrT <- liftEither $ addrToTextE net addr
-  let path = pathText $ addrDeriv addrType :/ fromIntegral index
-      row = DBAddress accId index path addrT "" 0 0 0 0 0 (isInternal addrType) time
+  let row = DBAddress accId (isInternal addrType) index addrT "" 0 0 0 0 0 time
   lift $ P.insert_ row
   return row
 
 -- | Label a receiving address of the account, by its index
 setAddrLabel :: (MonadUnliftIO m) => DBAccountId -> Int -> Text -> ExceptT String (DB m) DBAddress
 setAddrLabel accId idx label = do
-  let key = DBAddressKey accId (pathText $ extDeriv :/ fromIntegral idx)
+  let key = DBAddressKey accId False idx
   row <- lift (P.get key) >>= liftMaybe ("Address " <> show idx <> " does not exist")
   lift $ P.update key [DBAddressLabel P.=. label]
   return row {dBAddressLabel = label}
@@ -300,12 +299,12 @@ allAddressesMap net accId = do
 addressPath :: (MonadUnliftIO m) => Network -> DBAccountId -> Address -> ExceptT String (DB m) (Maybe SoftPath)
 addressPath net accId addr = do
   addrT <- liftEither $ addrToTextE net addr
-  derivM <- lift . selectOne . from $ \a -> do
+  rowM <- lift . selectOne . from $ \a -> do
     where_ $
       a ^. DBAddressAddress ==. val addrT
         &&. a ^. DBAddressAccount ==. val accId
-    return $ a ^. DBAddressDerivation
-  forM derivM $ liftEither . pathFromText . unValue
+    return (a ^. DBAddressInternal, a ^. DBAddressIndex)
+  return $ (\(Value internal, Value index) -> chainPath internal index) <$> rowM
 
 -- | The addresses that belong to the account, with their derivation paths
 walletPaths :: (MonadUnliftIO m) => Network -> DBAccountId -> [Address] -> ExceptT String (DB m) (Map Address SoftPath)
@@ -327,21 +326,29 @@ isIntPath p =
     [1, _] -> True
     _ -> False
 
--- | A derivation path as the rows store it
+-- | A derivation path as JSON and the signing data write it
 pathText :: SoftPath -> Text
 pathText = cs . pathToStr
 
--- | A derivation path as a row stores it
-pathFromText :: Text -> Either String SoftPath
-pathFromText = maybeToEither "The stored derivation path does not parse" . parseSoft . cs
+-- | The derivation path of an address, from its chain and index
+chainPath :: Bool -> Int -> SoftPath
+chainPath internal index = (if internal then intDeriv else extDeriv) :/ fromIntegral index
 
--- | The derivation path of a row, from its chain and index
+-- | The chain and index of a derivation path, for one of the two chains
+chainIndex :: SoftPath -> Maybe (AddrType, KeyIndex)
+chainIndex path =
+  case pathToList path of
+    [0, i] -> Just (AddrExternal, i)
+    [1, i] -> Just (AddrInternal, i)
+    _ -> Nothing
+
+-- | The derivation path of a row
 addrPath :: DBAddress -> SoftPath
-addrPath addr = (if dBAddressInternal addr then intDeriv else extDeriv) :/ fromIntegral (dBAddressIndex addr)
+addrPath addr = chainPath (dBAddressInternal addr) (dBAddressIndex addr)
 
 -- | The address of a row with its derivation path
 fromDBAddr :: Network -> DBAddress -> Either String (Address, SoftPath)
-fromDBAddr net row = (,) <$> textToAddrE net (dBAddressAddress row) <*> pathFromText (dBAddressDerivation row)
+fromDBAddr net row = (,addrPath row) <$> textToAddrE net (dBAddressAddress row)
 
 -- | The address of a chain at an index, or Nothing when the child key at
 -- that index is invalid: haskoin-core throws for such a key, where BIP32

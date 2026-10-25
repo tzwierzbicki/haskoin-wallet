@@ -11,6 +11,7 @@
 module Haskoin.Wallet.Database
   ( module Haskoin.Wallet.Database,
     module Haskoin.Wallet.Schema.V7,
+    module Haskoin.Wallet.Schema.KeyBytes,
   )
 where
 
@@ -20,15 +21,16 @@ import Control.Monad
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Logger (NoLoggingT, runNoLoggingT)
 import Control.Monad.Reader (ReaderT)
+import qualified Data.ByteString as BS
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
-import Data.Text (Text)
 import Database.Esqueleto.Legacy as E
 import Database.Persist.SqlBackend.Internal (SqlBackend (..))
 import Database.Persist.Sqlite (extraPragmas, mkSqliteConnectionInfo, withSqliteConnInfo)
 import Database.Sqlite (Error (..), SqliteException (..))
 import Haskoin
 import Haskoin.Wallet.Config
+import Haskoin.Wallet.Schema.KeyBytes
 import Haskoin.Wallet.Schema.V7
 import UnliftIO.Exception (catch, throwIO)
 
@@ -91,18 +93,36 @@ catchDatabaseInUse action = (Right <$> action) `catch` held
 
 {- The tables -}
 
+-- | The tables of a new database, with their indexes
 globalMigration :: (MonadUnliftIO m) => DB m ()
-globalMigration = void $ runMigrationQuiet migrateAll
+globalMigration = do
+  void $ runMigrationQuiet migrateAll
+  createIndexes
 
-{- Outpoints as text -}
+-- | The indexes persistent cannot declare, after the tables
+createIndexes :: (MonadUnliftIO m) => DB m ()
+createIndexes = forM_ tableIndexes $ \index -> rawExecute index []
 
-outpointText :: OutPoint -> Text
-outpointText = encodeHex . S.encode
+{- Hashes and outpoints as the keys store them -}
 
-textToOutpoint :: Text -> Either String OutPoint
-textToOutpoint t = do
-  bs <- maybeToEither "textToOutpoint: invalid input" $ decodeHex t
-  S.decode bs
+-- | A transaction hash as the keys store it: the 32 bytes of its usual
+-- hexadecimal form, so that a database tool shows the id as hw prints it
+hashBytes :: TxHash -> KeyBytes
+hashBytes = KeyBytes . BS.reverse . S.encode
+
+-- | The transaction hash of a key
+bytesToHash :: KeyBytes -> Either String TxHash
+bytesToHash = S.decode . BS.reverse . keyBytes
+
+-- | An outpoint as the keys store it: its 36 serialized bytes, the hash in
+-- its internal order then the index, so that the coins of one transaction
+-- are a range of keys
+outpointBytes :: OutPoint -> KeyBytes
+outpointBytes = KeyBytes . S.encode
+
+-- | The outpoint of a key
+bytesToOutpoint :: KeyBytes -> Either String OutPoint
+bytesToOutpoint = S.decode . keyBytes
 
 {- Query helpers -}
 

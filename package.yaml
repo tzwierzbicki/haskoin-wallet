@@ -36,6 +36,8 @@ dependencies:
   - Decimal >= 0.5.1
   - entropy >= 0.4.1.6
   - filepath >= 1.4
+  - path-pieces
+  - http-api-data
   - esqueleto >=3.5.10.1
   - haskeline >= 0.7.5.0
   - haskoin-core >= 1.0.4

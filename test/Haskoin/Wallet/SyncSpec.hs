@@ -1078,7 +1078,7 @@ pendingRow :: DBAccountId -> Tx -> DBPendingTx
 pendingRow accId tx =
   DBPendingTx
     { dBPendingTxAccount = accId,
-      dBPendingTxNosigHash = txHashToHex (nosigHash tx),
+      dBPendingTxNosigHash = hashBytes (nosigHash tx),
       dBPendingTxBlob = BS.toStrict $ Json.encode $ TxSignData tx [] [] [] Nothing Nothing,
       dBPendingTxOnline = False,
       dBPendingTxCreated = fixtureTime

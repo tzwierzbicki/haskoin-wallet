@@ -99,7 +99,7 @@ spec = prepareContext $ \ctx ->
       inMemory $ do
         hw08Database allSummaries
         migrateTo2 ctx
-        expected <- liftIO $ schemaCreatedBy V2.migrateAll
+        expected <- liftIO $ schemaCreatedBy (createTables V2.migrateAll)
         databaseSchema `dbShouldBe` expected
 
     it "has nothing to do in a database without transactions" $

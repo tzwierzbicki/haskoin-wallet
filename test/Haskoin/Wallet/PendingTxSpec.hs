@@ -371,7 +371,7 @@ listingSpec ctx =
     it "reports a row whose signing data does not decode, instead of hiding it" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
-        lift $ P.insert_ $ DBPendingTx accId (txHashToHex (fakeTxHash 7)) "not signing data" False fixtureTime
+        lift $ P.insert_ $ DBPendingTx accId (hashBytes (fakeTxHash 7)) "not signing data" False fixtureTime
         listed <- lift $ runExceptT $ pendingTxPage ctx accId (Page 5 0)
         deleted <- lift $ runExceptT $ deleteTx ctx (const (toStore emptyStore)) (fakeTxHash 7)
         liftIO $ do

@@ -70,6 +70,7 @@ library
       Haskoin.Wallet.PrettyPrinter
       Haskoin.Wallet.Prompt
       Haskoin.Wallet.RawTx
+      Haskoin.Wallet.Schema.KeyBytes
       Haskoin.Wallet.Schema.V2
       Haskoin.Wallet.Schema.V3
       Haskoin.Wallet.Schema.V4
@@ -110,12 +111,14 @@ library
     , haskeline >=0.7.5.0
     , haskoin-core >=1.0.4
     , haskoin-store-data >=1.2.2
+    , http-api-data
     , http-types >=0.12.3
     , lens >=4.18.1
     , lens-aeson >=1.1
     , monad-logger >=0.3.40
     , mtl >=2.2.2
     , optparse-applicative >=0.15.1.0
+    , path-pieces
     , persistent >=2.14.5.1
     , persistent-sqlite >=2.13.1.1
     , pretty >=1.1.3.6
@@ -160,12 +163,14 @@ executable hw
     , haskoin-core >=1.0.4
     , haskoin-store-data >=1.2.2
     , haskoin-wallet
+    , http-api-data
     , http-types >=0.12.3
     , lens >=4.18.1
     , lens-aeson >=1.1
     , monad-logger >=0.3.40
     , mtl >=2.2.2
     , optparse-applicative >=0.15.1.0
+    , path-pieces
     , persistent >=2.14.5.1
     , persistent-sqlite >=2.13.1.1
     , pretty >=1.1.3.6
@@ -197,6 +202,7 @@ test-suite spec
       Haskoin.Wallet.CommandsSpec
       Haskoin.Wallet.ConfigSpec
       Haskoin.Wallet.DatabaseLockSpec
+      Haskoin.Wallet.DatabaseSpec
       Haskoin.Wallet.EntropySpec
       Haskoin.Wallet.KeysSpec
       Haskoin.Wallet.MainSpec
@@ -248,12 +254,14 @@ test-suite spec
     , haskoin-store-data >=1.2.2
     , haskoin-wallet
     , hspec >=2.7.1
+    , http-api-data
     , http-types >=0.12.3
     , lens >=4.18.1
     , lens-aeson >=1.1
     , monad-logger >=0.3.40
     , mtl >=2.2.2
     , optparse-applicative >=0.15.1.0
+    , path-pieces
     , persistent >=2.14.5.1
     , persistent-sqlite >=2.13.1.1
     , pretty >=1.1.3.6

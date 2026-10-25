@@ -56,7 +56,7 @@ listed accId addrType page = map dBAddressIndex <$> lift (addressPage accId addr
 
 -- | The index, derivation path, text, label and chain of an address
 addressRow :: DBAddress -> (Int, Text, Text, Text, Bool)
-addressRow a = (dBAddressIndex a, dBAddressDerivation a, dBAddressAddress a, dBAddressLabel a, dBAddressInternal a)
+addressRow a = (dBAddressIndex a, pathText (addrPath a), dBAddressAddress a, dBAddressLabel a, dBAddressInternal a)
 
 balanceOf :: DBAddress -> AddressBalance
 balanceOf a =
@@ -66,7 +66,7 @@ balanceOf a =
 -- three times for 9000 in all, with 5000 confirmed and 300 unconfirmed
 -- left in two coins
 fixtureRow :: DBAddress
-fixtureRow = DBAddress (toSqlKey 1) 3 "/0/3" "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1" "Savings" 5000 300 2 3 9000 False fixtureTime
+fixtureRow = DBAddress (toSqlKey 1) False 3 "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1" "Savings" 5000 300 2 3 9000 fixtureTime
 
 receivingGap, changeGap :: String
 receivingGap = "The last 20 receiving addresses await a payment: reuse one of them, listed by addrs"
@@ -269,7 +269,7 @@ restoringSpec ctx =
         -- A discovery found address 9 used and generated up to it
         extendChainTo ctx accId AddrExternal 10
         updateAddressBalances btc [paidOnce (externalAddr 9) 1000]
-        (dBAddressDerivation <$> genExtAddress ctx cfg accId "") `dbShouldBeE` "/0/10"
+        (pathText . addrPath <$> genExtAddress ctx cfg accId "") `dbShouldBeE` "/0/10"
         -- The discovered addresses count against the gap like the others
         (accId2, _) <- testNewAcc ctx "second"
         extendChainTo ctx accId2 AddrExternal 25
@@ -281,8 +281,8 @@ restoringSpec ctx =
         replicateM_ 3 $ genExtAddress ctx cfg accId ""
         extendChainTo ctx accId AddrInternal 3
         -- The chains moved past index 1 but nothing was stored there
-        lift $ P.delete $ DBAddressKey accId "/0/1"
-        lift $ P.delete $ DBAddressKey accId "/1/1"
+        lift $ P.delete $ DBAddressKey accId False 1
+        lift $ P.delete $ DBAddressKey accId True 1
         listed accId AddrExternal (Page 100 0) `dbShouldBeE` [2, 0]
         listed accId AddrInternal (Page 100 0) `dbShouldBeE` [2, 0]
         (Map.size . fst <$> allAddressesMap btc accId) `dbShouldBeE` 4
@@ -391,17 +391,22 @@ pathSpec =
       isIntPath (Deriv :/ 1) `shouldBe` False
       isIntPath (Deriv :/ 1 :/ 2 :/ 3) `shouldBe` False
 
-    it "writes a path as the rows store it, and reads it back" $ do
+    it "writes a path as JSON and the signing data carry it" $
       pathText (Deriv :/ 0 :/ 7) `shouldBe` "/0/7"
-      pathFromText "/1/3" `shouldBe` Right (Deriv :/ 1 :/ 3)
-      pathFromText "/0'/3" `shouldBe` Left "The stored derivation path does not parse"
-      pathFromText "nonsense" `shouldBe` Left "The stored derivation path does not parse"
 
-    it "reads the path of a row from its index and chain, and the same from its text" $ do
+    it "goes from a chain and an index to the path and back, for the two chains only" $ do
+      chainPath False 7 `shouldBe` Deriv :/ 0 :/ 7
+      chainPath True 3 `shouldBe` Deriv :/ 1 :/ 3
+      chainIndex (Deriv :/ 0 :/ 7) `shouldBe` Just (AddrExternal, 7)
+      chainIndex (Deriv :/ 1 :/ 3) `shouldBe` Just (AddrInternal, 3)
+      chainIndex (Deriv :/ 2 :/ 3) `shouldBe` Nothing
+      chainIndex (Deriv :/ 0 :/ 3 :/ 1) `shouldBe` Nothing
+
+    it "reads the path of a row from its chain and index" $ do
       addrPath fixtureRow `shouldBe` Deriv :/ 0 :/ 3
+      addrPath fixtureRow {dBAddressInternal = True} `shouldBe` Deriv :/ 1 :/ 3
       fromDBAddr btc fixtureRow `shouldBe` Right (externalAddr 3, Deriv :/ 0 :/ 3)
       fromDBAddr btc fixtureRow {dBAddressAddress = "nonsense"} `shouldBe` Left "Invalid Address in textToAddrE"
-      fromDBAddr btc fixtureRow {dBAddressDerivation = "/0'/3"} `shouldBe` Left "The stored derivation path does not parse"
 
 derivingSpec :: Ctx -> Spec
 derivingSpec ctx =

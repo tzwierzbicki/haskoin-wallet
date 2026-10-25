@@ -25,11 +25,11 @@ module Haskoin.Wallet.Migration.TestUtils where
 import Control.Monad.IO.Class (liftIO)
 import Data.IORef (modifyIORef, newIORef, readIORef)
 import Data.Text (Text)
-import Database.Persist.Sql (Migration, Single (..), rawSql, transactionSave)
+import Database.Persist.Sql (Single (..), rawExecute, rawSql, transactionSave)
 import Haskoin (Ctx)
-import Haskoin.Wallet.Database (DB, migrateAll)
+import Haskoin.Wallet.Database (DB, globalMigration)
 import Haskoin.Wallet.Migration (Hooks (..), latestDatabaseVersion, migrateDBTo)
-import Haskoin.Wallet.TestUtils (createTables, inMemory)
+import Haskoin.Wallet.TestUtils (inMemory)
 
 -- | Commit the fixture, as the hw that wrote the database did. A failed
 -- migration rolls its transaction back, which must undo the migration only:
@@ -72,10 +72,15 @@ databaseSchema = do
       []
   return [(name, sql) | (Single name, Single sql) <- rows]
 
--- | The schema of a database created from a schema definition
-schemaCreatedBy :: Migration -> IO [(Text, Text)]
-schemaCreatedBy definition = inMemory $ createTables definition >> databaseSchema
+-- | The schema of a database created by the given setup: the tables of a
+-- version, with its indexes when it has some
+schemaCreatedBy :: DB IO () -> IO [(Text, Text)]
+schemaCreatedBy setup = inMemory $ setup >> databaseSchema
+
+-- | Create the indexes a schema version lists, after its tables
+createIndexesOf :: [Text] -> DB IO ()
+createIndexesOf = mapM_ (\index -> rawExecute index [])
 
 -- | The schema of a database created by this hw
 currentSchema :: IO [(Text, Text)]
-currentSchema = schemaCreatedBy migrateAll
+currentSchema = schemaCreatedBy globalMigration

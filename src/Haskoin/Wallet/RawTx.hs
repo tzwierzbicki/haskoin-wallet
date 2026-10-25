@@ -22,13 +22,13 @@ import Haskoin.Wallet.Database
 
 insertRawTx :: (MonadUnliftIO m) => Tx -> DB m ()
 insertRawTx tx = do
-  let hash = txHashToHex $ txHash tx
+  let hash = hashBytes $ txHash tx
       key = DBRawTxKey hash
   P.repsert key $ DBRawTx hash (S.encode tx)
 
 getRawTx :: (MonadUnliftIO m) => TxHash -> ExceptT String (DB m) Tx
 getRawTx hash = do
-  let key = DBRawTxKey $ txHashToHex hash
+  let key = DBRawTxKey $ hashBytes hash
   txM <- lift $ P.get key
   case txM of
     Just tx -> liftEither . S.decode $ dBRawTxBlob tx
@@ -36,7 +36,7 @@ getRawTx hash = do
 
 -- | Whether the raw transaction is stored
 hasRawTx :: (MonadUnliftIO m) => TxHash -> DB m Bool
-hasRawTx hash = isJust <$> P.get (DBRawTxKey $ txHashToHex hash)
+hasRawTx hash = isJust <$> P.get (DBRawTxKey $ hashBytes hash)
 
 -- | Those of the transactions whose raw transaction is not stored
 missingRawTxs :: (MonadUnliftIO m) => [TxHash] -> DB m [TxHash]
@@ -44,7 +44,7 @@ missingRawTxs = filterM (fmap not . hasRawTx)
 
 -- | Delete the raw transaction, if it is stored
 deleteRawTx :: (MonadUnliftIO m) => TxHash -> DB m ()
-deleteRawTx hash = P.delete (DBRawTxKey $ txHashToHex hash)
+deleteRawTx hash = P.delete (DBRawTxKey $ hashBytes hash)
 
 -- | Drop those of the given raw transactions that no coin comes from, and
 -- say how many went
@@ -55,13 +55,15 @@ dropRawTxsWithoutCoins hashes = do
   return $ length unused
 
 -- | Whether a coin of the wallet, of any account, is an output of the
--- transaction. A coin is stored under the hex of its outpoint, the bytes of
--- the hash first, so the coins of a transaction share a prefix.
+-- transaction. A coin is keyed by the bytes of its outpoint, the hash
+-- first, so the coins of a transaction are a range of keys, from the
+-- lowest index to the highest.
 coinComesFrom :: (MonadUnliftIO m) => TxHash -> DB m Bool
 coinComesFrom hash = do
-  let prefix = encodeHex (S.encode hash)
   found <- selectOne . from $ \c -> do
-    where_ $ c ^. DBCoinOutpoint `like` (val prefix ++. (%))
+    where_ $
+      c ^. DBCoinOutpoint >=. val (outpointBytes (OutPoint hash minBound))
+        &&. c ^. DBCoinOutpoint <=. val (outpointBytes (OutPoint hash maxBound))
     return $ c ^. DBCoinOutpoint
   return $ isJust found
 
@@ -71,9 +73,9 @@ coinComesFrom hash = do
 dropOrphanRawTxs :: (MonadUnliftIO m) => ExceptT String (DB m) Int
 dropOrphanRawTxs = do
   outpoints <- lift . select . from $ \c -> return (c ^. DBCoinOutpoint)
-  parents <- liftEither $ mapM (fmap (.hash) . textToOutpoint . unValue) outpoints
+  parents <- liftEither $ mapM (fmap (.hash) . bytesToOutpoint . unValue) outpoints
   stored <- lift . select . from $ \r -> return (r ^. DBRawTxHash)
-  hashes <- liftEither $ mapM (maybeToEither "dropOrphanRawTxs: invalid hash" . hexToTxHash . unValue) stored
+  hashes <- liftEither $ mapM (bytesToHash . unValue) stored
   let orphans = [hash | hash <- hashes, hash `Set.notMember` Set.fromList parents]
   lift $ forM_ orphans deleteRawTx
   return $ length orphans

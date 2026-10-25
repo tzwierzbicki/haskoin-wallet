@@ -9,13 +9,17 @@
 -- summaries, coins and pending transactions point to. The fingerprint of
 -- the master key of its seed starts unknown: hw learns it from the mnemonic
 -- or from the offline wallet. The confirmed columns of the summaries and
--- the coins, which nothing read, go as well.
+-- the coins, which nothing read, go as well. The keys are made for large
+-- wallets: an address is keyed by its chain and index instead of the text
+-- of its path, and the transaction ids, outpoints, nosigHashes and raw
+-- transaction hashes are the bytes of their hexadecimal text; indexes
+-- persistent cannot declare complete the tables.
 --
 -- The step reads the accounts with the tables of "Haskoin.Wallet.Schema.V6"
 -- and works on those of "Haskoin.Wallet.Schema.V7": the old tables are set
 -- aside, the new ones created, the accounts stored again in the order they
--- were created, the other rows copied under the new ids, and the old
--- tables dropped.
+-- were created, the other rows copied under the new ids and keys, the
+-- indexes created, and the old tables dropped.
 module Haskoin.Wallet.Migration.V7 where
 
 import Conduit (MonadUnliftIO)
@@ -33,13 +37,13 @@ import Haskoin.Wallet.Schema.V7
 migrateDB :: (MonadUnliftIO m) => ExceptT String (DB m) ()
 migrateDB = lift $ do
   olds <- P.selectList [] [P.Asc V6.DBAccountCreated, P.Asc V6.DBAccountNetwork, P.Asc V6.DBAccountIndex]
-  forM_ keyedTables $ \table ->
+  forM_ rebuiltTables $ \table ->
     rawExecute ("alter table " <> table <> " rename to old_" <> table) []
   void $ runMigrationQuiet migrateAll
   forM_ olds $ P.insert_ . account . P.entityVal
-  forM_ copies $ \statement -> rawExecute statement []
+  forM_ (copies <> tableIndexes) $ \statement -> rawExecute statement []
   -- The children first: a parent still referenced cannot be dropped
-  forM_ (reverse keyedTables) $ \table -> rawExecute ("drop table old_" <> table) []
+  forM_ (reverse rebuiltTables) $ \table -> rawExecute ("drop table old_" <> table) []
   rawExecute "drop table d_b_wallet" []
   P.deleteWhere ([] :: [P.Filter DBVersion])
   P.insert_ $ DBVersion 7
@@ -63,30 +67,32 @@ account old =
       dBAccountCreated = V6.dBAccountCreated old
     }
 
--- | The tables keyed by the wallet and the derivation of their account,
--- the accounts first
-keyedTables :: [Text]
-keyedTables = ["d_b_account", "d_b_address", "d_b_tx_info", "d_b_coin", "d_b_pending_tx"]
+-- | The tables whose keys change, the accounts first
+rebuiltTables :: [Text]
+rebuiltTables = ["d_b_account", "d_b_address", "d_b_tx_info", "d_b_coin", "d_b_pending_tx", "d_b_raw_tx"]
 
--- | The rows of the old tables under the new ids, found through the key of
--- their account, unique in the old table and in the new one
+-- | The rows of the old tables under the new ids and keys. The rows of an
+-- account find its id through its key, unique in the old table and in the
+-- new one; the hashes and outpoints, stored as hexadecimal text, become
+-- their bytes.
 copies :: [Text]
 copies =
   [ "insert into d_b_address \
-    \(account, \"index\", derivation, address, label, balance_confirmed, balance_unconfirmed, \
-    \balance_coins, balance_txs, balance_received, internal, created) \
-    \select n.id, o.\"index\", o.derivation, o.address, o.label, o.balance_confirmed, o.balance_unconfirmed, \
-    \o.balance_coins, o.balance_txs, o.balance_received, o.internal, o.created \
+    \(account, internal, \"index\", address, label, balance_confirmed, balance_unconfirmed, \
+    \balance_coins, balance_txs, balance_received, created) \
+    \select n.id, o.internal, o.\"index\", o.address, o.label, o.balance_confirmed, o.balance_unconfirmed, \
+    \o.balance_coins, o.balance_txs, o.balance_received, o.created \
     \from old_d_b_address o " <> throughAccount,
     "insert into d_b_tx_info (account, txid, block_ref, blob, dead, created) \
-    \select n.id, o.txid, o.block_ref, o.blob, o.dead, o.created \
+    \select n.id, unhex(o.txid), o.block_ref, o.blob, o.dead, o.created \
     \from old_d_b_tx_info o " <> throughAccount,
     "insert into d_b_coin (account, outpoint, address, value, block_ref, blob, created) \
-    \select n.id, o.outpoint, o.address, o.value, o.block_ref, o.blob, o.created \
+    \select n.id, unhex(o.outpoint), o.address, o.value, o.block_ref, o.blob, o.created \
     \from old_d_b_coin o " <> throughAccount,
     "insert into d_b_pending_tx (account, nosig_hash, blob, online, created) \
-    \select n.id, o.nosig_hash, o.blob, o.online, o.created \
-    \from old_d_b_pending_tx o " <> throughAccount
+    \select n.id, unhex(o.nosig_hash), o.blob, o.online, o.created \
+    \from old_d_b_pending_tx o " <> throughAccount,
+    "insert into d_b_raw_tx (hash, blob) select unhex(hash), blob from old_d_b_raw_tx"
   ]
   where
     throughAccount =

@@ -94,7 +94,7 @@ noPendingTx = "The pending transaction does not exist"
 -- | The pending transaction with the given nosigHash, if there is one
 lookupPendingTx :: (MonadUnliftIO m) => TxHash -> ExceptT String (DB m) (Maybe PendingTx)
 lookupPendingTx pendingHash = do
-  rowM <- lift $ P.getEntity $ DBPendingTxKey $ txHashToHex pendingHash
+  rowM <- lift $ P.getEntity $ DBPendingTxKey $ hashBytes pendingHash
   liftEither $ mapM fromRow rowM
 
 -- | The pending transaction with the given nosigHash, which must exist
@@ -173,7 +173,7 @@ changeAddress ctx cfg accId = nextChangeAddress ctx cfg accId =<< reservedChange
 -- | Whether the wallet holds the coin. The coin table is read here rather
 -- than through "Haskoin.Wallet.Coin", which needs this module for the locks.
 coinExists :: (MonadUnliftIO m) => OutPoint -> DB m Bool
-coinExists outpoint = isJust <$> P.get (DBCoinKey $ outpointText outpoint)
+coinExists outpoint = isJust <$> P.get (DBCoinKey $ outpointBytes outpoint)
 
 -- | The coins of the wallet that a transaction spends and that are gone,
 -- spent by another transaction: the transaction can no longer be sent
@@ -257,7 +257,7 @@ insertPendingTx net accId tsd summary = do
   unless (null used && all (`notElem` reserved) touched.changePaths) $
     throwError "Some of the internal output addresses are not free"
   time <- liftIO getCurrentTime
-  lift $ P.insert_ $ DBPendingTx accId (txHashToHex (nosigHash (txSignDataTx tsd))) (blob tsd) False time
+  lift $ P.insert_ $ DBPendingTx accId (hashBytes (nosigHash (txSignDataTx tsd))) (blob tsd) False time
 
 {- Deleting and retiring -}
 
@@ -286,7 +286,7 @@ setPendingTxOnline :: (MonadUnliftIO m) => TxHash -> DB m Natural
 setPendingTxOnline nosigH =
   fmap fromIntegral . updateCount $ \p -> do
     set p [DBPendingTxOnline =. val True]
-    where_ $ p ^. DBPendingTxNosigHash ==. val (txHashToHex nosigH)
+    where_ $ p ^. DBPendingTxNosigHash ==. val (hashBytes nosigH)
 
 {- Sending and abandoning -}
 

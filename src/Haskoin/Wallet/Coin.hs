@@ -70,7 +70,7 @@ instance MarshalJSON Network JsonCoin where
 
 -- | The outpoint of a coin row
 coinOutpoint :: DBCoin -> Either String OutPoint
-coinOutpoint = textToOutpoint . dBCoinOutpoint
+coinOutpoint = bytesToOutpoint . dBCoinOutpoint
 
 -- | A coin as the user sees it, locked when one of the pending
 -- transactions spends it
@@ -157,7 +157,7 @@ insertCoin accId addr unspent = do
   let newCoin =
         DBCoin
           { dBCoinAccount = accId,
-            dBCoinOutpoint = outpointText unspent.outpoint,
+            dBCoinOutpoint = outpointBytes unspent.outpoint,
             dBCoinAddress = addr,
             dBCoinValue = unspent.value,
             dBCoinBlockRef = S.encode unspent.block,
@@ -169,7 +169,7 @@ insertCoin accId addr unspent = do
 
 updateCoin :: (MonadUnliftIO m) => Store.Unspent -> DB m ()
 updateCoin unspent = do
-  let key = DBCoinKey $ outpointText unspent.outpoint
+  let key = DBCoinKey $ outpointBytes unspent.outpoint
   P.update
     key
     [ DBCoinBlob P.=. S.encode unspent,
@@ -215,11 +215,11 @@ refreshCoins net accId addrsToUpdate allUnspent = do
   changes <- forM addrsToUpdateE $ \addr -> do
     let storeCoins = fromMaybe [] $ Map.lookup addr storeMap
     localCoins <- lift $ getCoinsByAddr addr
-    let storeOps = outpointText . (.outpoint) <$> storeCoins
+    let storeOps = outpointBytes . (.outpoint) <$> storeCoins
         localOps = dBCoinOutpoint <$> localCoins
         toDelete = filter ((`notElem` storeOps) . dBCoinOutpoint) localCoins
         toInsert =
-          filter ((`notElem` localOps) . outpointText . (.outpoint)) storeCoins
+          filter ((`notElem` localOps) . outpointBytes . (.outpoint)) storeCoins
         toUpdate = filter (f localCoins) storeCoins
     lift $ forM_ toDelete deleteCoin
     lift $ forM_ toUpdate updateCoin
@@ -238,7 +238,7 @@ refreshCoins net accId addrsToUpdate allUnspent = do
       }
   where
     f localCoins s =
-      let cM = find ((== outpointText s.outpoint) . dBCoinOutpoint) localCoins
+      let cM = find ((== outpointBytes s.outpoint) . dBCoinOutpoint) localCoins
        in case cM of
             Just c -> dBCoinBlockRef c /= S.encode s.block
             _ -> False

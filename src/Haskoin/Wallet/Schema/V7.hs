@@ -29,6 +29,15 @@
 -- its addresses, summaries, coins and pending transactions point to. The
 -- confirmed columns of the summaries and the coins, which nothing read, are
 -- gone as well.
+--
+-- The keys are made for large wallets. An address is keyed by its account,
+-- its chain and its index, the order addrs lists it in, and its derivation
+-- path is computed from the two. Transaction ids, outpoints and nosigHashes
+-- are the bytes of the hash, not its hexadecimal text: half the size in
+-- every key and index. The 'tableIndexes' below are the ones persistent cannot
+-- declare: a covering index that serves the ordering of txs and the scan
+-- of the sync without touching the rows, and the account of every coin and
+-- pending transaction, which their keys do not give.
 module Haskoin.Wallet.Schema.V7 where
 
 import Data.ByteString (ByteString)
@@ -36,6 +45,7 @@ import Data.Text (Text)
 import Data.Time (UTCTime)
 import Data.Word (Word64)
 import Database.Persist.TH
+import Haskoin.Wallet.Schema.KeyBytes (KeyBytes)
 
 share
   [mkPersist sqlSettings, mkMigrate "migrateAll"]
@@ -66,8 +76,8 @@ DBAccount
 
 DBAddress
   account DBAccountId
+  internal Bool
   index Int
-  derivation Text
   address Text
   label Text
   balanceConfirmed Word64
@@ -75,16 +85,15 @@ DBAddress
   balanceCoins Word64
   balanceTxs Word64
   balanceReceived Word64
-  internal Bool
   created UTCTime default=CURRENT_TIMESTAMP
-  Primary account derivation
+  Primary account internal index
   UniqueAddress address
   deriving Show
   deriving Eq
 
 DBTxInfo
   account DBAccountId
-  txid Text
+  txid KeyBytes
   blockRef ByteString
   blob ByteString
   dead Bool default=0
@@ -95,7 +104,7 @@ DBTxInfo
 
 DBCoin
   account DBAccountId
-  outpoint Text
+  outpoint KeyBytes
   address Text
   value Word64
   blockRef ByteString
@@ -106,7 +115,7 @@ DBCoin
   deriving Eq
 
 DBRawTx
-  hash Text
+  hash KeyBytes
   blob ByteString
   Primary hash
   deriving Show
@@ -114,7 +123,7 @@ DBRawTx
 
 DBPendingTx
   account DBAccountId
-  nosigHash Text
+  nosigHash KeyBytes
   blob ByteString
   online Bool
   created UTCTime default=CURRENT_TIMESTAMP
@@ -129,3 +138,14 @@ DBBest
   Primary network
   deriving Show
 |]
+
+-- | The indexes of the tables above that persistent cannot declare, created
+-- right after them, for a new database and by the step to this version
+-- alike. A later version that has persistent rebuild one of these tables
+-- loses its indexes and must create them again.
+tableIndexes :: [Text]
+tableIndexes =
+  [ "create index d_b_tx_info_account_block_ref on d_b_tx_info (account, block_ref, txid, dead)",
+    "create index d_b_coin_account on d_b_coin (account)",
+    "create index d_b_pending_tx_account on d_b_pending_tx (account)"
+  ]

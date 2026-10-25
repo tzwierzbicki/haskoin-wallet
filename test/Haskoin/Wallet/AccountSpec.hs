@@ -268,8 +268,8 @@ deletingSpec ctx =
         forM_ [(mainId, externalAddr 0, 1), (otherId, externalAddr2, 2)] $ \(accId, addr, n) -> do
           _ <- genExtAddress ctx def accId ""
           _ <- refreshCoins btc accId [addr] [storeCoin ctx (fakeTxHash n, 0) (Just 800000) addr 1000]
-          lift $ P.insert_ $ DBTxInfo accId (txHashToHex (fakeTxHash n)) (S.encode (Store.BlockRef 800000 1)) "{}" False fixtureTime
-          lift $ P.insert_ $ DBPendingTx accId (txHashToHex (fakeTxHash (n + 2))) "{}" False fixtureTime
+          lift $ P.insert_ $ DBTxInfo accId (hashBytes (fakeTxHash n)) (S.encode (Store.BlockRef 800000 1)) "{}" False fixtureTime
+          lift $ P.insert_ $ DBPendingTx accId (hashBytes (fakeTxHash (n + 2))) "{}" False fixtureTime
         lift $ rowsOf mainId `dbShouldBe` (1, 1, 1, 1)
         lift $ deleteAccount mainId
         lift $ rowsOf mainId `dbShouldBe` (0, 0, 0, 0)
@@ -305,7 +305,7 @@ balanceSpec ctx =
         liftIO $ balances acc `shouldBe` (7000, 300, 3)
   where
     balances acc = (dBAccountBalanceConfirmed acc, dBAccountBalanceUnconfirmed acc, dBAccountBalanceCoins acc)
-    key addr = DBAddressKey (dBAddressAccount addr) (dBAddressDerivation addr)
+    key addr = DBAddressKey (dBAddressAccount addr) (dBAddressInternal addr) (dBAddressIndex addr)
 
 {- The document -}
 

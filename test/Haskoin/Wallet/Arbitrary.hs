@@ -65,8 +65,8 @@ arbitraryDBAddress :: Network -> Gen DBAddress
 arbitraryDBAddress net =
   DBAddress
     <$> (toSqlKey <$> arbitraryPositive)
+    <*> arbitrary
     <*> arbitraryPositive
-    <*> (cs . pathToStr <$> arbitraryDerivPath)
     <*> (fromJust . addrToText net <$> arbitraryAddress net)
     <*> arbitraryText
     <*> arbitraryPositive
@@ -74,7 +74,6 @@ arbitraryDBAddress net =
     <*> arbitraryPositive
     <*> arbitraryPositive
     <*> arbitraryPositive
-    <*> arbitrary
     <*> arbitraryUTCTime
 
 arbitraryAddressBalance :: Gen AddressBalance

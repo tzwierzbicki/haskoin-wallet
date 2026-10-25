@@ -152,7 +152,7 @@ listedLabels accId = do
 
 -- | The row of a transaction of the account
 storedRow :: DBAccountId -> TxHash -> DB IO (Maybe DBTxInfo)
-storedRow accId tid = P.get $ DBTxInfoKey accId (txHashToHex tid)
+storedRow accId tid = P.get $ DBTxInfoKey accId (hashBytes tid)
 
 summarySpec :: Ctx -> Spec
 summarySpec ctx =
@@ -478,7 +478,7 @@ listingSpec ctx =
     it "refuses a stored summary that does not decode, naming the transaction" $
       inDatabaseE $ do
         accId <- account ctx
-        lift $ P.insert_ $ DBTxInfo accId (txHashToHex (fakeTxHash 9)) (S.encode (Store.BlockRef 800000 1)) "nonsense" False fixtureTime
+        lift $ P.insert_ $ DBTxInfo accId (hashBytes (fakeTxHash 9)) (S.encode (Store.BlockRef 800000 1)) "nonsense" False fixtureTime
         lift $
           dbShouldFailWith "The stored summary of transaction 0000000000000000000000000000000000000000000000000000000000000009 does not decode" $
             txsPage accId (Page 5 0)

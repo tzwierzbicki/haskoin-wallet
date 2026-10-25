@@ -49,7 +49,7 @@ spec = prepareContext $ \ctx ->
       inMemory $ do
         hw09Database "0.9"
         migrateTo3 ctx
-        expected <- liftIO $ schemaCreatedBy V3.migrateAll
+        expected <- liftIO $ schemaCreatedBy (createTables V3.migrateAll)
         (lookup "d_b_version" <$> databaseSchema) `dbShouldBe` lookup "d_b_version" expected
 
     it "keeps the transaction summaries and their labels" $
@@ -71,7 +71,7 @@ spec = prepareContext $ \ctx ->
       inMemory $ do
         hw09Database "0.9"
         migrateTo3 ctx
-        expected <- liftIO $ schemaCreatedBy V3.migrateAll
+        expected <- liftIO $ schemaCreatedBy (createTables V3.migrateAll)
         databaseSchema `dbShouldBe` expected
 
     it "refuses a version it does not know" $

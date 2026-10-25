@@ -4,12 +4,15 @@
 -- | The migration to the format version 7: a database of version 6, built
 -- from its tables ("Haskoin.Wallet.Schema.V6"), is migrated to version 7
 -- only and ends without wallets: its accounts have ids, which their rows
--- point to, and the fingerprint of their seed still to be learnt.
+-- point to, the fingerprint of their seed still to be learnt, its hashes
+-- and outpoints as bytes, and the indexes of the version.
 module Haskoin.Wallet.Migration.V7Spec (spec) where
 
 import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
+import Data.ByteString (ByteString)
 import qualified Data.Serialize as S
+import Data.Maybe (fromJust)
 import Data.Text (Text)
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import qualified Database.Persist as P
@@ -69,43 +72,53 @@ spec = prepareContext $ \ctx ->
       inMemory $ do
         version6Database
         migrateTo7 ctx
-        queryRows "select account, derivation, address from d_b_address order by account, derivation"
-          `dbShouldBe` [ [PersistInt64 1, PersistText "/0/0", PersistText "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"],
-                         [PersistInt64 1, PersistText "/1/0", PersistText "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"],
-                         [PersistInt64 2, PersistText "/0/0", PersistText bchExternalAddrText]
+        queryRows "select account, internal, \"index\", address from d_b_address"
+          `dbShouldBe` [ [PersistInt64 1, PersistInt64 0, PersistInt64 0, PersistText "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"],
+                         [PersistInt64 1, PersistInt64 1, PersistInt64 0, PersistText "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"],
+                         [PersistInt64 2, PersistInt64 0, PersistInt64 0, PersistText bchExternalAddrText]
                        ]
-        queryRows "select account, txid from d_b_tx_info" `dbShouldBe` [[PersistInt64 1, PersistText (txHashToHex (fakeTxHash 1))]]
-        queryRows "select account, address from d_b_coin" `dbShouldBe` [[PersistInt64 1, PersistText "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]]
-        queryRows "select account, nosig_hash from d_b_pending_tx" `dbShouldBe` [[PersistInt64 3, PersistText (txHashToHex (fakeTxHash 5))]]
+        queryRows "select account, txid from d_b_tx_info" `dbShouldBe` [[PersistInt64 1, PersistByteString (hexBytes (txHashToHex (fakeTxHash 1)))]]
+        queryRows "select account, outpoint, address from d_b_coin"
+          `dbShouldBe` [[PersistInt64 1, PersistByteString (S.encode (OutPoint (fakeTxHash 1) 0)), PersistText "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]]
+        queryRows "select account, nosig_hash from d_b_pending_tx" `dbShouldBe` [[PersistInt64 3, PersistByteString (hexBytes (txHashToHex (fakeTxHash 5)))]]
 
-    it "keeps the other columns of the rows, except that nothing is confirmed any more" $
+    it "keys the raw transactions by the bytes of their hash, keeping them" $
       inMemory $ do
         version6Database
-        addressesBefore <- queryRows "select \"index\", derivation, address, label, balance_confirmed, balance_unconfirmed, balance_coins, balance_txs, balance_received, internal, created from d_b_address order by address"
-        summariesBefore <- queryRows "select txid, block_ref, blob, dead, created from d_b_tx_info"
-        coinsBefore <- queryRows "select outpoint, address, value, block_ref, blob, created from d_b_coin"
-        pendingBefore <- queryRows "select nosig_hash, blob, online, created from d_b_pending_tx"
         migrateTo7 ctx
-        queryRows "select \"index\", derivation, address, label, balance_confirmed, balance_unconfirmed, balance_coins, balance_txs, balance_received, internal, created from d_b_address order by address"
+        queryRows "select hash, blob from d_b_raw_tx" `dbShouldBe` [[PersistByteString (hexBytes (txHashToHex (fakeTxHash 1))), PersistByteString "raw"]]
+
+    it "keeps the other columns of the rows, except that nothing is confirmed any more and no path is written out" $
+      inMemory $ do
+        version6Database
+        addressesBefore <- queryRows "select \"index\", address, label, balance_confirmed, balance_unconfirmed, balance_coins, balance_txs, balance_received, internal, created from d_b_address"
+        summariesBefore <- queryRows "select block_ref, blob, dead, created from d_b_tx_info"
+        coinsBefore <- queryRows "select address, value, block_ref, blob, created from d_b_coin"
+        pendingBefore <- queryRows "select blob, online, created from d_b_pending_tx"
+        migrateTo7 ctx
+        queryRows "select \"index\", address, label, balance_confirmed, balance_unconfirmed, balance_coins, balance_txs, balance_received, internal, created from d_b_address"
           `dbShouldBe` addressesBefore
-        queryRows "select txid, block_ref, blob, dead, created from d_b_tx_info" `dbShouldBe` summariesBefore
-        queryRows "select outpoint, address, value, block_ref, blob, created from d_b_coin" `dbShouldBe` coinsBefore
-        queryRows "select nosig_hash, blob, online, created from d_b_pending_tx" `dbShouldBe` pendingBefore
+        queryRows "select block_ref, blob, dead, created from d_b_tx_info" `dbShouldBe` summariesBefore
+        queryRows "select address, value, block_ref, blob, created from d_b_coin" `dbShouldBe` coinsBefore
+        queryRows "select blob, online, created from d_b_pending_tx" `dbShouldBe` pendingBefore
+        columnNames "d_b_address"
+          `dbShouldBe` [ "account", "address", "balance_coins", "balance_confirmed", "balance_received", "balance_txs",
+                         "balance_unconfirmed", "created", "index", "internal", "label" ]
         columnNames "d_b_tx_info" `dbShouldBe` ["account", "blob", "block_ref", "created", "dead", "txid"]
         columnNames "d_b_coin" `dbShouldBe` ["account", "address", "blob", "block_ref", "created", "outpoint", "value"]
 
-    it "leaves the raw transactions and the best blocks as they were" $
+    it "leaves the best blocks as they were" $
       inMemory $ do
         version6Database
         original <- tablesRows otherTables
         migrateTo7 ctx
         tablesRows otherTables `dbShouldBe` original
 
-    it "ends with the tables of version 7, the wallets gone" $
+    it "ends with the tables and the indexes of version 7, the wallets gone" $
       inMemory $ do
         version6Database
         migrateTo7 ctx
-        expected <- liftIO $ schemaCreatedBy V7.migrateAll
+        expected <- liftIO $ schemaCreatedBy (createTables V7.migrateAll >> createIndexesOf V7.tableIndexes)
         databaseSchema `dbShouldBe` expected
 
 {- Running the step -}
@@ -124,7 +137,11 @@ columnNames table = do
   return [name | [PersistText name] <- rows]
 
 otherTables :: [Text]
-otherTables = ["d_b_raw_tx", "d_b_best"]
+otherTables = ["d_b_best"]
+
+-- | The bytes of a hexadecimal text, as the step turns the old keys into
+hexBytes :: Text -> ByteString
+hexBytes = fromJust . decodeHex
 
 {- The database of version 6 -}
 

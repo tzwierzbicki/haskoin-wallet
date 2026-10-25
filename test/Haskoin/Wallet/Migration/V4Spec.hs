@@ -64,7 +64,7 @@ spec = prepareContext $ \ctx ->
       inMemory $ do
         version3Database
         migrateTo4 ctx
-        expected <- liftIO $ schemaCreatedBy V4.migrateAll
+        expected <- liftIO $ schemaCreatedBy (createTables V4.migrateAll)
         databaseSchema `dbShouldBe` expected
 
 {- Running the step -}

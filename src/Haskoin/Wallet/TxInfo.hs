@@ -383,8 +383,8 @@ txInfoBlockRefs accId = do
         t ^. DBTxInfoAccount ==. val accId
           &&. t ^. DBTxInfoDead ==. val False
       return (t ^. DBTxInfoTxid, t ^. DBTxInfoBlockRef)
-  entries <- forM rows $ \(Value tidT, Value refBytes) -> do
-    tid <- liftEither $ maybeToEither "txInfoBlockRefs: invalid txid" $ hexToTxHash tidT
+  entries <- forM rows $ \(Value tidBytes, Value refBytes) -> do
+    tid <- liftEither $ bytesToHash tidBytes
     ref <- liftEither $ S.decode refBytes
     return (tid, ref)
   return $ Map.fromList entries
@@ -393,7 +393,7 @@ txInfoBlockRefs accId = do
 -- reports it replaced or dropped. The summary stays, for the history.
 markTxInfoDead :: (MonadUnliftIO m) => DBAccountId -> TxHash -> DB m ()
 markTxInfoDead accId tid =
-  P.update (DBTxInfoKey accId (txHashToHex tid)) [DBTxInfoDead P.=. True]
+  P.update (DBTxInfoKey accId (hashBytes tid)) [DBTxInfoDead P.=. True]
 
 -- | Store the summary of a live transaction of the account at its block,
 -- or replace the one stored, which brings a summary marked dead back.
@@ -402,12 +402,11 @@ repsertSummary ::
   (MonadUnliftIO m) => Network -> DBAccountId -> TxHash -> Store.BlockRef -> TxSummary -> DB m Bool
 repsertSummary net accId tid ref summary = do
   time <- liftIO getCurrentTime
-  let tidT = txHashToHex tid
-      key = DBTxInfoKey accId tidT
+  let key = DBTxInfoKey accId (hashBytes tid)
       row =
         DBTxInfo
           { dBTxInfoAccount = accId,
-            dBTxInfoTxid = tidT,
+            dBTxInfoTxid = hashBytes tid,
             dBTxInfoBlockRef = S.encode ref,
             dBTxInfoBlob = BS.toStrict $ marshalJSON net summary,
             dBTxInfoDead = False,
@@ -441,11 +440,11 @@ txsPage accId (Page lim off) = do
       offset $ fromIntegral off
       return (t ^. DBTxInfoTxid, t ^. DBTxInfoBlockRef, t ^. DBTxInfoDead, t ^. DBTxInfoBlob)
   bestM <- lift $ getBest net
-  forM rows $ \(Value tidT, Value refBytes, Value dead, Value blob) -> do
-    tid <- liftEither $ maybeToEither "txsPage: invalid txid" $ hexToTxHash tidT
+  forM rows $ \(Value tidBytes, Value refBytes, Value dead, Value blob) -> do
+    tid <- liftEither $ bytesToHash tidBytes
     ref <- liftEither $ S.decode refBytes
     summary <-
-      liftMaybe ("The stored summary of transaction " <> cs tidT <> " does not decode") $
+      liftMaybe ("The stored summary of transaction " <> cs (txHashToHex tid) <> " does not decode") $
         unmarshalJSON net (BS.fromStrict blob)
     let confirmations = if dead then 0 else getConfirmations (snd <$> bestM) ref
         status = ChainStatus tid ref confirmations dead
