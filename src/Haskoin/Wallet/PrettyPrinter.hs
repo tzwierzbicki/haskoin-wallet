@@ -299,7 +299,7 @@ accountPrinter unit acc =
           ]
     ]
   where
-    deriv = cs $ dBAccountDerivation acc
+    deriv = pathToStr $ accountPath acc
     net = (accountNetwork acc).name
     utctime = dBAccountCreated acc
     created = formatTime defaultTimeLocale "%d %b %Y" utctime

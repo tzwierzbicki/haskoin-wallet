@@ -51,7 +51,6 @@ arbitraryDBAccount net ctx =
     <$> arbitraryText
     <*> arbitraryPositive
     <*> return (cs net.name)
-    <*> (cs . pathToStr <$> arbitraryDerivPath)
     <*> arbitraryPositive
     <*> arbitraryPositive
     <*> (xPubExport net ctx <$> arbitraryXPubKey ctx)

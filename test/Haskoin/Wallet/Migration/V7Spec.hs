@@ -46,10 +46,10 @@ spec = prepareContext $ \ctx ->
       inMemory $ do
         version6Database
         migrateTo7 ctx
-        queryRows "select id, name, network, derivation, x_pub_key from d_b_account order by id"
-          `dbShouldBe` [ [PersistInt64 1, PersistText "main", PersistText "btc", PersistText "/44'/0'/0'", PersistText testAccountXPub],
-                         [PersistInt64 2, PersistText "cash", PersistText "bch", PersistText "/44'/145'/0'", PersistText testAccountXPubBch],
-                         [PersistInt64 3, PersistText "savings", PersistText "btc", PersistText "/44'/0'/1'", PersistText savingsXPub]
+        queryRows "select id, name, network, x_pub_key from d_b_account order by id"
+          `dbShouldBe` [ [PersistInt64 1, PersistText "main", PersistText "btc", PersistText testAccountXPub],
+                         [PersistInt64 2, PersistText "cash", PersistText "bch", PersistText testAccountXPubBch],
+                         [PersistInt64 3, PersistText "savings", PersistText "btc", PersistText savingsXPub]
                        ]
 
     it "leaves the fingerprint of every seed to be learnt" $

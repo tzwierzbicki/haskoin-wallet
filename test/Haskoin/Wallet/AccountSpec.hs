@@ -92,7 +92,7 @@ creatingSpec ctx =
           dBAccountName acc `shouldBe` "main"
           dBAccountIndex acc `shouldBe` 0
           dBAccountNetwork acc `shouldBe` "btc"
-          dBAccountDerivation acc `shouldBe` "/44'/0'/0'"
+          pathToStr (accountPath acc) `shouldBe` "/44'/0'/0'"
           dBAccountXPubKey acc `shouldBe` testAccountXPub
           dBAccountFingerprint acc `shouldBe` Just "bc560f95"
           (dBAccountExternal acc, dBAccountInternal acc) `shouldBe` (0, 0)
@@ -104,7 +104,7 @@ creatingSpec ctx =
         (_, savings) <- testNewAcc ctx "savings"
         liftIO $ do
           dBAccountIndex savings `shouldBe` 1
-          dBAccountDerivation savings `shouldBe` "/44'/0'/1'"
+          pathToStr (accountPath savings) `shouldBe` "/44'/0'/1'"
           dBAccountXPubKey savings `shouldBe` savingsXPub
 
     it "counts the accounts of a seed by their keys: another seed's, or another network's, do not count" $
@@ -128,7 +128,7 @@ creatingSpec ctx =
     it "records the path of an imported key from its index, with no seed known" $
       inDatabaseE $ do
         (_, acc) <- watchOnly ctx btc 3 "third"
-        liftIO $ (dBAccountIndex acc, dBAccountDerivation acc, dBAccountFingerprint acc) `shouldBe` (3, "/44'/0'/3'", Nothing)
+        liftIO $ (dBAccountIndex acc, pathToStr (accountPath acc), dBAccountFingerprint acc) `shouldBe` (3, "/44'/0'/3'", Nothing)
 
     it "refuses a name already taken" $
       inDatabaseE $ do
@@ -399,7 +399,7 @@ jsonSpec =
 -- | The account main after two receiving and one change address, holding
 -- 5000 confirmed and 300 unconfirmed in two coins
 fixtureAccount :: DBAccount
-fixtureAccount = DBAccount "main" 0 "btc" "/44'/0'/0'" 2 1 testAccountXPub (Just "bc560f95") 5000 300 2 fixtureTime
+fixtureAccount = DBAccount "main" 0 "btc" 2 1 testAccountXPub (Just "bc560f95") 5000 300 2 fixtureTime
 
 accountJson :: String
 accountJson =

@@ -455,8 +455,7 @@ cmdDeleteAcc cfg name net path =
     (accId, acc) <- getAccountByName $ Just name
     unless (accountNetwork acc == net) $
       throwError "The network of the account to delete did not match"
-    accPath <- liftMaybe "HardPath" $ parseHard $ cs $ dBAccountDerivation acc
-    unless (path == accPath) $
+    unless (path == accountPath acc) $
       throwError
         "The full derivation path of the account to delete did not match"
     lift $ deleteAccount accId

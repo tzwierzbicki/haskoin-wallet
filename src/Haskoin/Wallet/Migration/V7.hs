@@ -48,15 +48,14 @@ migrateDB = lift $ do
   P.deleteWhere ([] :: [P.Filter DBVersion])
   P.insert_ $ DBVersion 7
 
--- | An account of version 6 as version 7 stores it: without its wallet,
--- with the fingerprint of its seed still to be learnt
+-- | An account of version 6 as version 7 stores it: without its wallet and
+-- its derivation path, with the fingerprint of its seed still to be learnt
 account :: V6.DBAccount -> DBAccount
 account old =
   DBAccount
     { dBAccountName = V6.dBAccountName old,
       dBAccountIndex = V6.dBAccountIndex old,
       dBAccountNetwork = V6.dBAccountNetwork old,
-      dBAccountDerivation = V6.dBAccountDerivation old,
       dBAccountExternal = V6.dBAccountExternal old,
       dBAccountInternal = V6.dBAccountInternal old,
       dBAccountXPubKey = V6.dBAccountXPubKey old,

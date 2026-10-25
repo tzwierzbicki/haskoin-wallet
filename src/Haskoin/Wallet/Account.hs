@@ -36,7 +36,7 @@ instance ToJSON DBAccount where
       [ "name" .= dBAccountName acc,
         "index" .= dBAccountIndex acc,
         "network" .= dBAccountNetwork acc,
-        "derivation" .= dBAccountDerivation acc,
+        "derivation" .= pathToStr (accountPath acc),
         "external" .= dBAccountExternal acc,
         "internal" .= dBAccountInternal acc,
         "xPubKey" .= dBAccountXPubKey acc,
@@ -57,7 +57,6 @@ instance FromJSON DBAccount where
         <$> o .: "name"
         <*> o .: "index"
         <*> o .: "network"
-        <*> o .: "derivation"
         <*> o .: "external"
         <*> o .: "internal"
         <*> o .: "xPubKey"
@@ -110,6 +109,11 @@ accountXPubKey ctx acc =
   fromMaybe (error "Invalid XPubKey in database") $
     xPubImport (accountNetwork acc) ctx (dBAccountXPubKey acc)
 
+-- | The BIP44 path of the account, m/44'/coin'/index', from its network
+-- and index
+accountPath :: DBAccount -> HardPath
+accountPath acc = bip44Deriv (accountNetwork acc) (accountIndex acc)
+
 -- | The fingerprint of the seed of the account, when hw has learnt it
 accountFingerprint :: DBAccount -> Maybe Fingerprint
 accountFingerprint acc = eitherToMaybe . textToFingerprint =<< dBAccountFingerprint acc
@@ -157,7 +161,6 @@ insertAccount net ctx name xpub fingerprintM = do
           { dBAccountName = name,
             dBAccountIndex = fromIntegral $ xPubIndex xpub,
             dBAccountNetwork = cs net.name,
-            dBAccountDerivation = cs $ pathToStr $ bip44Deriv net (xPubIndex xpub),
             dBAccountExternal = 0,
             dBAccountInternal = 0,
             dBAccountXPubKey = xPubExport net ctx xpub,
