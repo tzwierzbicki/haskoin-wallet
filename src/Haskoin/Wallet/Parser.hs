@@ -782,7 +782,7 @@ minConfOption =
       <> metavar "INT"
       <> value 1
       <> showDefault
-      <> help "Minimum number of confirmations required to spend a coin"
+      <> help "Minimum number of confirmations required to spend a coin; an unconfirmed coin must be change from a transaction of the wallet"
 
 coinSelectionOption :: Parser CoinSelection
 coinSelectionOption =

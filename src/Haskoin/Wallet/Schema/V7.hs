@@ -37,8 +37,10 @@
 -- are the bytes of the hash, not its hexadecimal text: half the size in
 -- every key and index. The 'tableIndexes' below are the ones persistent cannot
 -- declare: a covering index that serves the ordering of txs and the scan
--- of the sync without touching the rows, and the account of every coin and
--- pending transaction, which their keys do not give.
+-- of the sync without touching the rows; the account of every coin and
+-- pending transaction, which their keys do not give; the coins of an
+-- address of an account, which the sync refreshes; and the coins of an
+-- account in the order coins lists them.
 module Haskoin.Wallet.Schema.V7 where
 
 import Data.ByteString (ByteString)
@@ -147,5 +149,7 @@ tableIndexes :: [Text]
 tableIndexes =
   [ "create index d_b_tx_info_account_block_ref on d_b_tx_info (account, block_ref, txid, dead)",
     "create index d_b_coin_account on d_b_coin (account)",
+    "create index d_b_coin_account_address on d_b_coin (account, address)",
+    "create index d_b_coin_account_block_ref on d_b_coin (account, block_ref, outpoint)",
     "create index d_b_pending_tx_account on d_b_pending_tx (account)"
   ]

@@ -2,13 +2,21 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TupleSections #-}
 
 -- | The coins of an account, the unspent outputs the store knows at its
 -- addresses: kept up to date by the sync, listed for the user and offered
--- to the transaction builder when they are confirmed enough and not held
--- by a pending transaction.
-module Haskoin.Wallet.Coin where
+-- to the transaction builder when they can be spent.
+module Haskoin.Wallet.Coin
+  ( JsonCoin (..),
+    coinOutpoint,
+    toJsonCoin,
+    groupCoins,
+    coinPage,
+    spendableCoins,
+    Refreshed (..),
+    refreshCoins,
+  )
+where
 
 import Conduit (MonadUnliftIO)
 import Control.Monad
@@ -16,23 +24,25 @@ import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Reader (MonadTrans (lift))
 import Data.Aeson
-import Data.List (find)
+import Data.Containers.ListUtils (nubOrd)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Maybe (mapMaybe)
 import qualified Data.Serialize as S
 import Data.Set (Set)
 import qualified Data.Set as Set
+import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Time (getCurrentTime)
 import Data.Word (Word64)
-import Database.Esqueleto.Legacy as E
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.BestBlock
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.PendingTx
+import Haskoin.Wallet.PendingTx (lockedOutpoints)
+import Haskoin.Wallet.RawTx (lookupRawTx)
+import Haskoin.Wallet.TxInfo (MyInputs (..), TxSummary (..), liveSummary, ownTransaction)
 import Haskoin.Wallet.Util (Page (Page))
 import Numeric.Natural (Natural)
 
@@ -70,127 +80,129 @@ instance MarshalJSON Network JsonCoin where
 
 -- | The outpoint of a coin row
 coinOutpoint :: DBCoin -> Either String OutPoint
-coinOutpoint = bytesToOutpoint . dBCoinOutpoint
+coinOutpoint row =
+  readStored "A stored coin has an outpoint that does not read" $
+    bytesToOutpoint (dBCoinOutpoint row)
 
--- | A coin as the user sees it, locked when one of the pending
--- transactions spends it
+-- | A coin row as the user sees it: its confirmations counted from the best
+-- block, and locked when a pending transaction spends it
 toJsonCoin :: Network -> Maybe BlockHeight -> Set OutPoint -> DBCoin -> Either String JsonCoin
-toJsonCoin net bestM locked dbCoin = do
-  op <- coinOutpoint dbCoin
-  ad <-
-    maybeToEither "toJsonCoin: Invalid address" $
-      textToAddr net $
-        dBCoinAddress dbCoin
-  br <- S.decode $ dBCoinBlockRef dbCoin
-  let confirmations = getConfirmations bestM br
-  return $
+toJsonCoin net bestM locked row = do
+  outpoint <- coinOutpoint row
+  let addrText = dBCoinAddress row
+      problem what = "The stored coin " <> coinText outpoint <> " has " <> what
+  addr <-
+    maybeToEither (problem $ "an address that does not read: " <> cs addrText) $
+      textToAddr net addrText
+  block <- readStored (problem "a block that does not read") $ S.decode (dBCoinBlockRef row)
+  return
     JsonCoin
-      { jsonCoinOutpoint = op,
-        jsonCoinAddress = ad,
-        jsonCoinValue = dBCoinValue dbCoin,
-        jsonCoinBlock = br,
-        jsonCoinConfirmations = confirmations,
-        jsonCoinLocked = op `Set.member` locked
+      { jsonCoinOutpoint = outpoint,
+        jsonCoinAddress = addr,
+        jsonCoinValue = dBCoinValue row,
+        jsonCoinBlock = block,
+        jsonCoinConfirmations = getConfirmations bestM block,
+        jsonCoinLocked = outpoint `Set.member` locked
       }
 
--- | The coins of the store by the text of their address
-groupCoins :: Network -> [Store.Unspent] -> Map Text [Store.Unspent]
-groupCoins net =
-  Map.fromListWith (<>) . mapMaybe f
+-- | The coin of a row as the store last reported it
+storedUnspent :: DBCoin -> Either String Store.Unspent
+storedUnspent row = do
+  outpoint <- coinOutpoint row
+  readStored ("The stored coin " <> coinText outpoint <> " does not read") $ S.decode (dBCoinBlob row)
+
+-- | A coin in a message: the id of its transaction and its output index
+coinText :: OutPoint -> String
+coinText outpoint = cs (txHashToHex outpoint.hash) <> " " <> show outpoint.index
+
+-- | A value read back from a row, or the given message when it does not read
+readStored :: String -> Either String a -> Either String a
+readStored message = either (const $ Left message) Right
+
+-- | The coins of the store by the text of their address, each coin once,
+-- by its outpoint as the rows key it. A coin without an address, or at one
+-- the network cannot write, is left out.
+groupCoins :: Network -> [Store.Unspent] -> Map Text (Map KeyBytes Store.Unspent)
+groupCoins net coins = Map.fromListWith Map.union (mapMaybe entry coins)
   where
-    f x =
-      case x.address of
-        Just a -> (,[x]) <$> addrToText net a
-        _ -> Nothing
+    entry coin = do
+      addr <- addrToText net =<< coin.address
+      return (addr, Map.singleton (outpointBytes coin.outpoint) coin)
 
-{- Coins in the database -}
+{- Listing -}
 
--- Get all coins in an account, spendable or not
-coinPage ::
-  (MonadUnliftIO m) =>
-  Network ->
-  DBAccountId ->
-  Page ->
-  ExceptT String (DB m) [JsonCoin]
+-- | A page of the coins of the account, spendable or not, in the order of
+-- their block references as the store encodes them: the mempool first,
+-- then the newest blocks first. Coins with the same block reference, the
+-- outputs of one transaction for instance, follow the order of their
+-- outpoints, so that no coin shows on two pages.
+coinPage :: (MonadUnliftIO m) => Network -> DBAccountId -> Page -> ExceptT String (DB m) [JsonCoin]
 coinPage net accId (Page lim off) = do
   locked <- lockedOutpoints accId
-  coins <-
-    lift . select . from $ \c -> do
-      where_ $ do
-        c ^. DBCoinAccount ==. val accId
-      orderBy [asc (c ^. DBCoinBlockRef), desc (c ^. DBCoinCreated)]
-      limit $ fromIntegral lim
-      offset $ fromIntegral off
-      return c
   bestM <- lift $ getBest net
-  mapM (liftEither . toJsonCoin net (snd <$> bestM) locked . entityVal) coins
+  rows <-
+    lift $
+      P.selectList
+        [DBCoinAccount P.==. accId]
+        [P.Asc DBCoinBlockRef, P.Asc DBCoinOutpoint, P.LimitTo (fromIntegral lim), P.OffsetBy (fromIntegral off)]
+  liftEither $ mapM (toJsonCoin net (snd <$> bestM) locked . P.entityVal) rows
 
--- Spendable coins must be confirmed and not locked
-getSpendableCoins ::
-  (MonadUnliftIO m) =>
-  Network ->
-  DBAccountId ->
-  Natural ->
-  ExceptT String (DB m) [Store.Unspent]
-getSpendableCoins net accId minConf = do
+{- Spending -}
+
+-- | The coins the builder may spend: those with at least the confirmations
+-- asked that no pending transaction holds. A coin from a coinbase also
+-- waits until the coinbase matures, and an unconfirmed coin must come from
+-- a transaction the account trusts ('trustedTx'): its own change.
+spendableCoins :: (MonadUnliftIO m) => Network -> DBAccountId -> Natural -> ExceptT String (DB m) [Store.Unspent]
+spendableCoins net accId minConf = do
   bestM <- lift $ getBest net
   locked <- lockedOutpoints accId
-  coins <- lift . select . from $ \c -> do
-    where_ $
-      c ^. DBCoinAccount ==. val accId
-    return c
-  let f c = do
-        ref <- liftEither $ S.decode $ dBCoinBlockRef c
-        return $ getConfirmations (snd <$> bestM) ref >= minConf
-  confirmedCoins <- filterM (f . entityVal) coins
-  unspents <- mapM (liftEither . S.decode . dBCoinBlob . entityVal) confirmedCoins
-  return $ filter (\unspent -> unspent.outpoint `Set.notMember` locked) unspents
+  rows <- lift $ P.selectList [DBCoinAccount P.==. accId] []
+  coins <- liftEither $ mapM (storedUnspent . P.entityVal) rows
+  let confirmations coin = getConfirmations (snd <$> bestM) coin.block
+      spendable coin
+        | confirmations coin == 0 = trustedTx net accId coin.outpoint.hash
+        | confirmations coin < coinbaseMaturity = not <$> isCoinbaseTx coin.outpoint.hash
+        | otherwise = return True
+  filterM spendable [coin | coin <- coins, confirmations coin >= minConf, coin.outpoint `Set.notMember` locked]
 
-insertCoin ::
-  (MonadUnliftIO m) =>
-  DBAccountId ->
-  Text ->
-  Store.Unspent ->
-  DB m DBCoin
-insertCoin accId addr unspent = do
-  time <- liftIO getCurrentTime
-  let newCoin =
-        DBCoin
-          { dBCoinAccount = accId,
-            dBCoinOutpoint = outpointBytes unspent.outpoint,
-            dBCoinAddress = addr,
-            dBCoinValue = unspent.value,
-            dBCoinBlockRef = S.encode unspent.block,
-            dBCoinBlob = S.encode unspent,
-            dBCoinCreated = time
-          }
-  P.insert_ newCoin
-  return newCoin
+-- | The confirmations a coinbase needs before it can be spent: consensus
+-- lets a transaction spend it in the 100th block after its own, so from
+-- the mempool once it has 100
+coinbaseMaturity :: Natural
+coinbaseMaturity = 100
 
-updateCoin :: (MonadUnliftIO m) => Store.Unspent -> DB m ()
-updateCoin unspent = do
-  let key = DBCoinKey $ outpointBytes unspent.outpoint
-  P.update
-    key
-    [ DBCoinBlob P.=. S.encode unspent,
-      DBCoinBlockRef P.=. S.encode unspent.block
-    ]
+-- | Whether the transaction is a coinbase, as the raw transaction stored for
+-- its coins shows. One whose raw transaction is missing counts as an
+-- ordinary transaction: the builder needs the raw transaction of every coin
+-- it spends, and fails without it.
+isCoinbaseTx :: (MonadUnliftIO m) => TxHash -> ExceptT String (DB m) Bool
+isCoinbaseTx tid = maybe False coinbase <$> lookupRawTx tid
+  where
+    -- A coinbase has a single input, which spends nothing
+    coinbase tx = map (.outpoint) tx.inputs == [nullOutPoint]
 
-deleteCoin :: (MonadUnliftIO m) => DBCoin -> DB m ()
-deleteCoin coin =
-  delete . from $ \c ->
-    where_ $
-      c ^. DBCoinOutpoint ==. val (dBCoinOutpoint coin)
+-- | Whether the coins of a transaction of the account can be spent: it is
+-- confirmed, or the account made it from coins that can be spent by this
+-- same rule. Whoever pays the account can replace their transaction until
+-- it confirms, which also undoes every transaction built on it. A
+-- transaction the sync has not stored, or has found dead, is not trusted.
+trustedTx :: (MonadUnliftIO m) => Network -> DBAccountId -> TxHash -> ExceptT String (DB m) Bool
+trustedTx net accId tid = do
+  found <- liveSummary net accId tid
+  case found of
+    Just (block, summary)
+      | Store.confirmed block -> return True
+      | ownTransaction summary -> and <$> mapM (trustedTx net accId) (spentTxs summary)
+    _ -> return False
+  where
+    spentTxs summary =
+      nubOrd [outpoint.hash | input <- Map.elems summary.summaryMyInputs, outpoint <- input.myInputsOutpoints]
 
-getCoinsByAddr :: (MonadUnliftIO m) => Text -> DB m [DBCoin]
-getCoinsByAddr addr = do
-  coins <- select . from $ \c -> do
-    where_ $ c ^. DBCoinAddress ==. val addr
-    return c
-  return $ entityVal <$> coins
+{- Refreshing -}
 
--- | What a refresh changed: how many coins were inserted, updated or
--- deleted, and the coins inserted and deleted
+-- | What a refresh changed: how many coins were inserted, moved to another
+-- block or deleted, and the coins inserted and deleted
 data Refreshed = Refreshed
   { refreshedCount :: !Int,
     insertedCoins :: ![DBCoin],
@@ -198,9 +210,21 @@ data Refreshed = Refreshed
   }
   deriving (Eq, Show)
 
--- | Bring the coins of the addresses in line with what the store lists:
--- insert the coins that are new, update those whose block changed, delete
--- those the store no longer lists
+instance Semigroup Refreshed where
+  a <> b =
+    Refreshed
+      { refreshedCount = a.refreshedCount + b.refreshedCount,
+        insertedCoins = a.insertedCoins <> b.insertedCoins,
+        deletedCoins = a.deletedCoins <> b.deletedCoins
+      }
+
+instance Monoid Refreshed where
+  mempty = Refreshed 0 [] []
+
+-- | Bring the coins of the account at the addresses in line with what the
+-- store lists: insert the coins that are new, move those whose block
+-- changed, delete those the store no longer lists. A coin the store lists
+-- twice is stored once.
 refreshCoins ::
   (MonadUnliftIO m) =>
   Network ->
@@ -208,37 +232,60 @@ refreshCoins ::
   [Address] ->
   [Store.Unspent] ->
   ExceptT String (DB m) Refreshed
-refreshCoins net accId addrsToUpdate allUnspent = do
-  let storeMap = groupCoins net allUnspent
-  addrsToUpdateE <-
-    mapM (liftEither . maybeToEither "Addr" . addrToText net) addrsToUpdate
-  changes <- forM addrsToUpdateE $ \addr -> do
-    let storeCoins = fromMaybe [] $ Map.lookup addr storeMap
-    localCoins <- lift $ getCoinsByAddr addr
-    let storeOps = outpointBytes . (.outpoint) <$> storeCoins
-        localOps = dBCoinOutpoint <$> localCoins
-        toDelete = filter ((`notElem` storeOps) . dBCoinOutpoint) localCoins
-        toInsert =
-          filter ((`notElem` localOps) . outpointBytes . (.outpoint)) storeCoins
-        toUpdate = filter (f localCoins) storeCoins
-    lift $ forM_ toDelete deleteCoin
-    lift $ forM_ toUpdate updateCoin
-    newCoins <- lift $ forM toInsert $ insertCoin accId addr
-    return
-      Refreshed
-        { refreshedCount = length toDelete + length toUpdate + length toInsert,
-          insertedCoins = newCoins,
-          deletedCoins = toDelete
-        }
-  return
-    Refreshed
-      { refreshedCount = sum $ refreshedCount <$> changes,
-        insertedCoins = concatMap insertedCoins changes,
-        deletedCoins = concatMap deletedCoins changes
-      }
+refreshCoins net accId addrs unspents = mconcat <$> mapM refreshAddress addrs
   where
-    f localCoins s =
-      let cM = find ((== outpointBytes s.outpoint) . dBCoinOutpoint) localCoins
-       in case cM of
-            Just c -> dBCoinBlockRef c /= S.encode s.block
-            _ -> False
+    listed = groupCoins net unspents
+    refreshAddress addr = do
+      addrText <-
+        liftMaybe "The coins of an address of another network cannot be refreshed" $
+          addrToText net addr
+      rows <- lift $ P.selectList [DBCoinAccount P.==. accId, DBCoinAddress P.==. addrText] []
+      let stored = Map.fromList [(dBCoinOutpoint row, row) | P.Entity _ row <- rows]
+          current = Map.findWithDefault Map.empty addrText listed
+          gone = Map.elems $ stored `Map.difference` current
+          new = Map.elems $ current `Map.difference` stored
+          moved =
+            [ coin
+              | (coin, row) <- Map.elems (Map.intersectionWith (,) current stored),
+                S.encode coin.block /= dBCoinBlockRef row
+            ]
+      lift $ forM_ gone deleteCoin
+      lift $ forM_ moved moveCoin
+      inserted <- mapM (insertCoin net accId) new
+      return
+        Refreshed
+          { refreshedCount = length gone + length moved + length new,
+            insertedCoins = inserted,
+            deletedCoins = gone
+          }
+
+-- | Store a coin of the account, at the address it pays
+insertCoin :: (MonadUnliftIO m) => Network -> DBAccountId -> Store.Unspent -> ExceptT String (DB m) DBCoin
+insertCoin net accId coin = do
+  addr <-
+    liftMaybe ("The coin " <> coinText coin.outpoint <> " pays no address of the network") $
+      addrToText net =<< coin.address
+  time <- liftIO getCurrentTime
+  let row =
+        DBCoin
+          { dBCoinAccount = accId,
+            dBCoinOutpoint = outpointBytes coin.outpoint,
+            dBCoinAddress = addr,
+            dBCoinValue = coin.value,
+            dBCoinBlockRef = S.encode coin.block,
+            dBCoinBlob = S.encode coin,
+            dBCoinCreated = time
+          }
+  lift $ P.insert_ row
+  return row
+
+-- | Move a stored coin to the block the store now reports for it
+moveCoin :: (MonadUnliftIO m) => Store.Unspent -> DB m ()
+moveCoin coin =
+  P.update
+    (DBCoinKey $ outpointBytes coin.outpoint)
+    [DBCoinBlockRef P.=. S.encode coin.block, DBCoinBlob P.=. S.encode coin]
+
+-- | Delete a stored coin
+deleteCoin :: (MonadUnliftIO m) => DBCoin -> DB m ()
+deleteCoin row = P.delete (DBCoinKey $ dBCoinOutpoint row)

@@ -116,6 +116,14 @@ data MyInputs = MyInputs
 involvesWallet :: TxSummary -> Bool
 involvesWallet summary = not (Map.null (summaryMyInputs summary) && Map.null (summaryMyOutputs summary))
 
+-- | Whether the account made the transaction: every input spends a coin of
+-- the account
+ownTransaction :: TxSummary -> Bool
+ownTransaction summary =
+  not (Map.null (summaryMyInputs summary))
+    && Map.null (summaryOtherInputs summary)
+    && null (summaryNonStdInputs summary)
+
 -- | The type of a transaction, from what the account gains or loses and
 -- the fee: a loss of exactly the fee moved money between its own addresses
 txType :: Integer -> Natural -> TxType
@@ -389,6 +397,23 @@ txInfoBlockRefs accId = do
     return (tid, ref)
   return $ Map.fromList entries
 
+-- | The stored summary of a live transaction of the account, with its
+-- block; nothing when the sync has not stored it or found it dead
+liveSummary ::
+  (MonadUnliftIO m) => Network -> DBAccountId -> TxHash -> ExceptT String (DB m) (Maybe (Store.BlockRef, TxSummary))
+liveSummary net accId tid = do
+  rowM <- lift $ P.get (DBTxInfoKey accId (hashBytes tid))
+  forM (mfilter (not . dBTxInfoDead) rowM) $ \row -> do
+    ref <- liftEither $ S.decode (dBTxInfoBlockRef row)
+    summary <- liftEither $ decodeSummary net tid (dBTxInfoBlob row)
+    return (ref, summary)
+
+-- | A summary as the database stores it
+decodeSummary :: Network -> TxHash -> BS.ByteString -> Either String TxSummary
+decodeSummary net tid blob =
+  maybeToEither ("The stored summary of transaction " <> cs (txHashToHex tid) <> " does not decode") $
+    unmarshalJSON net (BS.fromStrict blob)
+
 -- | Mark the summary of a transaction dead: the store no longer has it, or
 -- reports it replaced or dropped. The summary stays, for the history.
 markTxInfoDead :: (MonadUnliftIO m) => DBAccountId -> TxHash -> DB m ()
@@ -443,9 +468,7 @@ txsPage accId (Page lim off) = do
   forM rows $ \(Value tidBytes, Value refBytes, Value dead, Value blob) -> do
     tid <- liftEither $ bytesToHash tidBytes
     ref <- liftEither $ S.decode refBytes
-    summary <-
-      liftMaybe ("The stored summary of transaction " <> cs (txHashToHex tid) <> " does not decode") $
-        unmarshalJSON net (BS.fromStrict blob)
+    summary <- liftEither $ decodeSummary net tid blob
     let confirmations = if dead then 0 else getConfirmations (snd <$> bestM) ref
         status = ChainStatus tid ref confirmations dead
     lift $ fillTxInfoLabels net $ TxInfo summary (OnChain status)

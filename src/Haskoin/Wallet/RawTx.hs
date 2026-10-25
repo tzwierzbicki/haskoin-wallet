@@ -27,12 +27,13 @@ insertRawTx tx = do
   P.repsert key $ DBRawTx hash (S.encode tx)
 
 getRawTx :: (MonadUnliftIO m) => TxHash -> ExceptT String (DB m) Tx
-getRawTx hash = do
-  let key = DBRawTxKey $ hashBytes hash
-  txM <- lift $ P.get key
-  case txM of
-    Just tx -> liftEither . S.decode $ dBRawTxBlob tx
-    Nothing -> throwError "getRawTx: missing transaction"
+getRawTx hash = lookupRawTx hash >>= liftMaybe "getRawTx: missing transaction"
+
+-- | The raw transaction, if it is stored
+lookupRawTx :: (MonadUnliftIO m) => TxHash -> ExceptT String (DB m) (Maybe Tx)
+lookupRawTx hash = do
+  rowM <- lift $ P.get (DBRawTxKey $ hashBytes hash)
+  forM rowM $ liftEither . S.decode . dBRawTxBlob
 
 -- | Whether the raw transaction is stored
 hasRawTx :: (MonadUnliftIO m) => TxHash -> DB m Bool
