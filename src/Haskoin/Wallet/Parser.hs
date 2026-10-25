@@ -839,7 +839,8 @@ Pending transactions have been created with the `preparetx` command. They are
 either unsigned and waiting to be signed, or signed and waiting to be sent to
 the network, or sent and waiting for the network to list them, at which point
 `sync` retires them. One reported as conflicted spends a coin that another
-transaction has spent, and can only be deleted.
+transaction has spent, or that is gone, as the store answered at the last
+`sync`: it cannot be sent while that lasts, and should be deleted.
 |]
 
 {- ReviewTx Parser -}
@@ -916,7 +917,8 @@ with `sendtx` can only be deleted, abandoned, when the store no longer knows
 it: dropped from the nodes' mempools, or never accepted. One that the store
 still lists may yet confirm, and `sync` retires it once it does. A
 transaction `pendingtxs` reports as conflicted, one of its coins having been
-spent by another transaction, can no longer be sent and should be deleted.
+spent by another transaction or gone, can no longer be sent and should be
+deleted.
 |]
 
 {- SignTx Parser -}
@@ -1038,7 +1040,9 @@ how many unused receiving addresses `receive` hands out.
 It also looks after the pending transactions: one that was sent with `sendtx`
 and that the network now lists is retired; one that was sent but that the store
 no longer knows is sent again, since nodes forget unconfirmed transactions; one
-whose coin was spent by another transaction is reported as conflicted. A signed
+whose coin was spent by another transaction, or is gone, is reported as
+conflicted. The store is asked about every coin a pending transaction spends,
+those of other accounts and those outside the wallet, a sweep's, alike. A signed
 transaction that was never sent is left alone. A sent transaction is sent again
 on every sync for as long as the store does not list it, so one the network
 refuses for good, for a fee below what the nodes relay for instance, keeps

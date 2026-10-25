@@ -28,7 +28,8 @@
 -- transaction of the offline wallet. Every account has a plain id, which
 -- its addresses, summaries, coins and pending transactions point to. The
 -- confirmed columns of the summaries and the coins, which nothing read, are
--- gone as well.
+-- gone as well. A pending transaction keeps whether the store, at the last
+-- sync, found one of its coins spent by another transaction or gone.
 --
 -- The keys are made for large wallets. An address is keyed by its account,
 -- its chain and its index, the order addrs lists it in, and its derivation
@@ -128,6 +129,7 @@ DBPendingTx
   nosigHash KeyBytes
   blob ByteString
   online Bool
+  conflicted Bool default=0
   created UTCTime default=CURRENT_TIMESTAMP
   Primary nosigHash
   deriving Show

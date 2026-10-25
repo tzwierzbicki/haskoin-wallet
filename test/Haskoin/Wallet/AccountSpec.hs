@@ -302,7 +302,7 @@ deletingSpec ctx =
           _ <- genExtAddress ctx def accId ""
           _ <- refreshCoins btc accId [addr] [storeCoin ctx (fakeTxHash n, 0) (Just 800000) addr 1000]
           lift $ P.insert_ $ DBTxInfo accId (hashBytes (fakeTxHash n)) (S.encode (Store.BlockRef 800000 1)) "{}" False fixtureTime
-          lift $ P.insert_ $ DBPendingTx accId (hashBytes (fakeTxHash (n + 2))) "{}" False fixtureTime
+          lift $ P.insert_ $ DBPendingTx accId (hashBytes (fakeTxHash (n + 2))) "{}" False False fixtureTime
         lift $ rowsOf mainId `dbShouldBe` (1, 1, 1, 1)
         lift $ deleteAccount mainId
         lift $ rowsOf mainId `dbShouldBe` (0, 0, 0, 0)

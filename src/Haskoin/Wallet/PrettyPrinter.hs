@@ -456,7 +456,7 @@ statusPrinter (Pending status) =
       if pendingConflicted status
         then
           keyPrinter 9 "Conflict"
-            <> formatFalse "A coin it spends was spent by another transaction"
+            <> formatFalse "A coin it spends was spent by another transaction, or is gone,"
               <+> text "and it can no longer be sent; delete it with deletetx"
         else mempty
     ]

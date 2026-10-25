@@ -47,6 +47,7 @@ spec =
     sendingSpec ctx
     sendingFileSpec ctx
     deletingSpec ctx
+    conflictsSpec ctx
 
 -- | A store that knows the transaction of the signing data, in its mempool
 storeKnowing :: Ctx -> TxSignData -> FakeStore
@@ -404,7 +405,7 @@ listingSpec ctx =
     it "reports a row whose signing data does not decode, instead of hiding it" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
-        lift $ P.insert_ $ DBPendingTx accId (hashBytes (fakeTxHash 7)) "not signing data" False fixtureTime
+        lift $ P.insert_ $ DBPendingTx accId (hashBytes (fakeTxHash 7)) "not signing data" False False fixtureTime
         listed <- lift $ runExceptT $ pendingTxPage ctx accId (Page 5 0)
         deleted <- lift $ runExceptT $ deleteTx ctx (const (toStore emptyStore)) (fakeTxHash 7)
         liftIO $ do
@@ -647,3 +648,25 @@ deletingSpec ctx =
         lift $
           dbShouldFailWith "The pending transaction does not exist" $
             deleteTx ctx (const (toStore emptyStore)) (fakeTxHash 7)
+
+conflictsSpec :: Ctx -> Spec
+conflictsSpec ctx =
+  describe "The conflicts of a transaction, from what the store reports of the coins it spends" $ do
+    -- The coin of 'funding', as the store reports its transaction, and a
+    -- payment from it
+    let parent = creditTx ctx (txHash (funding ctx)) (Store.BlockRef 800000 1) (externalAddr 0) 20000
+        coin = OutPoint (txHash (funding ctx)) 0
+        spend = spendingTx ctx [(txHash (funding ctx), 0)] [(otherAddr 0, 19000)]
+    it "are none while the coins it spends are unspent" $
+      conflictedInputs [parent] spend `shouldBe` []
+    it "are the coins another transaction spends" $
+      conflictedInputs [withSpender 0 (fakeTxHash 8, 0) parent] spend `shouldBe` [coin]
+    it "leave out a coin the transaction itself spends, once the network has it" $
+      conflictedInputs [withSpender 0 (txHash spend, 0) parent] spend `shouldBe` []
+    it "are the coins of a transaction the store dropped" $
+      conflictedInputs [replaced parent] spend `shouldBe` [coin]
+    it "are the coins of a transaction the store does not know" $
+      conflictedInputs [] spend `shouldBe` [coin]
+    it "are the coins past the outputs of their transaction" $
+      conflictedInputs [parent] (spendingTx ctx [(txHash (funding ctx), 1)] [(otherAddr 0, 19000)])
+        `shouldBe` [OutPoint (txHash (funding ctx)) 1]

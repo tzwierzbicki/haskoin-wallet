@@ -161,8 +161,8 @@ data PendingStatus = PendingStatus
     pendingTxid :: !(Maybe TxHash),
     -- | Sent to the network by the user
     pendingOnline :: !Bool,
-    -- | A coin of the account it spends was spent by another transaction,
-    -- so it can no longer be sent
+    -- | A coin it spends was spent by another transaction, or is gone, as
+    -- the store answered at the last sync: it can no longer be sent
     pendingConflicted :: !Bool
   }
   deriving (Eq, Show)

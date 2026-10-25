@@ -129,7 +129,7 @@ data SyncRes = SyncRes
     -- | Transactions the user sent that the store had lost, sent again
     syncResRebroadcast :: !Natural,
     -- | Pending transactions a coin of which was spent by another
-    -- transaction
+    -- transaction, or is gone
     syncResConflicted :: !Natural,
     -- | Addresses found used past the ones the account had, and generated
     syncResNewAddrs :: !Natural
@@ -173,7 +173,7 @@ sync ctx cfg store net accId full = do
   lift $ forM_ (deadTransactions everything known toFetch txs listed) $ markTxInfoDead accId
   -- The coins, the pending transactions and the raw transactions
   refreshed <- syncCoins store net accId changedBals
-  (resent, conflicted, retired) <- syncPending ctx store acc accId (Set.fromList $ (.txid) <$> listed)
+  (resent, conflicted, retired) <- syncPending store accId (Set.fromList $ (.txid) <$> listed)
   pruneRawTxs everything refreshed retired
   lift $ updateBest net (headerHash best.header) best.height
   return
@@ -310,18 +310,37 @@ pruneRawTxs everything refreshed retired
 -- the network and is retired. One the user sent that the store does not
 -- list is sent again: nodes forget unconfirmed transactions, and the store
 -- may never have accepted it; a signed one the user has not sent is left
--- alone. One whose coins are gone conflicts with the transaction that spent
--- them, and is counted for the user. Returns how many were sent again, how
--- many conflict, and the ids of those retired.
-syncPending :: (MonadUnliftIO m) => Ctx -> Store -> DBAccount -> DBAccountId -> Set TxHash -> ExceptT String (DB m) (Natural, Natural, [TxHash])
-syncPending ctx store acc accId seen = do
+-- alone. The store is then asked whether the others can still spend their
+-- coins ('recordConflicts'), and those that cannot are counted for the
+-- user. Returns how many were sent again, how many conflict, and the ids of
+-- those retired.
+syncPending :: (MonadUnliftIO m) => Store -> DBAccountId -> Set TxHash -> ExceptT String (DB m) (Natural, Natural, [TxHash])
+syncPending store accId seen = do
   held <- pendingTxs accId
   let (done, waiting) = partition reached held
   lift $ forM_ done retirePendingTx
   let resend = [txOf p | p <- waiting, p.pendingTxOnline]
   forM_ resend $ fromStore . storePublish store
-  conflicted <- filterM (inConflict ctx acc) waiting
+  conflicted <- recordConflicts store waiting
   return (fromIntegral (length resend), fromIntegral (length conflicted), txHash . txOf <$> done)
   where
-    txOf p = p.pendingTxData.txSignDataTx
     reached p = isSigned (txOf p) && txHash (txOf p) `Set.member` seen
+
+-- | Ask the store about the transactions the coins of the pending
+-- transactions come from, record on each pending transaction whether it is
+-- in conflict ('conflictedInputs'), and return those that are. The answer
+-- is written every time, true or false: a transaction whose rival has
+-- left the network, dropped or undone by a reorganisation, can be sent
+-- again. Without pending transactions, the store is not asked.
+recordConflicts :: (MonadUnliftIO m) => Store -> [PendingTx] -> ExceptT String (DB m) [PendingTx]
+recordConflicts _ [] = return []
+recordConflicts store held = do
+  parents <- fromStore $ storeTransactions store $ nubOrd [input.outpoint.hash | p <- held, input <- (txOf p).inputs]
+  flip filterM held $ \p -> do
+    let conflicted = not $ null $ conflictedInputs parents (txOf p)
+    lift $ setPendingTxConflicted p conflicted
+    return conflicted
+
+-- | The transaction of a pending transaction
+txOf :: PendingTx -> Tx
+txOf p = p.pendingTxData.txSignDataTx

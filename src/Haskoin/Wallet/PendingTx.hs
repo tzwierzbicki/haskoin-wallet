@@ -15,7 +15,7 @@ import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
 import Data.List (nub)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (isJust)
+import Data.Maybe (isJust, listToMaybe)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Time (getCurrentTime)
@@ -67,7 +67,10 @@ data PendingTx = PendingTx
     pendingTxAccount :: !DBAccountId,
     pendingTxData :: !TxSignData,
     -- | Sent to the network by the user
-    pendingTxOnline :: !Bool
+    pendingTxOnline :: !Bool,
+    -- | A coin it spends was spent by another transaction, or is gone, as
+    -- the store answered at the last sync
+    pendingTxConflicted :: !Bool
   }
 
 -- | A row read back. A row whose signing data does not decode is an error,
@@ -80,7 +83,8 @@ fromRow (Entity key row) = do
       { pendingTxKey = key,
         pendingTxAccount = dBPendingTxAccount row,
         pendingTxData = tsd,
-        pendingTxOnline = dBPendingTxOnline row
+        pendingTxOnline = dBPendingTxOnline row,
+        pendingTxConflicted = dBPendingTxConflicted row
       }
 
 -- | The signing data as a row stores it
@@ -136,17 +140,16 @@ txInfoOf ctx acc tsd = do
 pendingSummary :: (MonadUnliftIO m) => Ctx -> DBAccount -> PendingTx -> ExceptT String (DB m) TxInfo
 pendingSummary ctx acc p = do
   info <- txInfoOf ctx acc p.pendingTxData
-  conflicted <- lift $ conflictedInputs info.txInfoSummary
-  return info {txInfoStatus = heldStatus p (not (null conflicted)) info.txInfoStatus}
+  return info {txInfoStatus = heldStatus p info.txInfoStatus}
 
 -- | The status of a held transaction: what its signing data says, and what
--- only the database knows, whether the user sent it and whether a coin it
--- spends is gone. The signing data describes a transaction in preparation;
--- one on the chain is not held and is left as it is.
-heldStatus :: PendingTx -> Bool -> TxStatus -> TxStatus
-heldStatus p conflicted (Pending status) =
-  Pending status {pendingOnline = p.pendingTxOnline, pendingConflicted = conflicted}
-heldStatus _ _ onChain = onChain
+-- only the database knows, whether the user sent it and whether the last
+-- sync found it in conflict. The signing data describes a transaction in
+-- preparation; one on the chain is not held and is left as it is.
+heldStatus :: PendingTx -> TxStatus -> TxStatus
+heldStatus p (Pending status) =
+  Pending status {pendingOnline = p.pendingTxOnline, pendingConflicted = p.pendingTxConflicted}
+heldStatus _ onChain = onChain
 
 -- | The coins locked by the pending transactions of the wallet: every
 -- outpoint one of them spends, whatever its account. A coin is locked
@@ -177,16 +180,27 @@ changeAddress ctx cfg accId = nextChangeAddress ctx cfg accId =<< reservedChange
 coinExists :: (MonadUnliftIO m) => OutPoint -> DB m Bool
 coinExists outpoint = isJust <$> P.get (DBCoinKey $ outpointBytes outpoint)
 
--- | The coins of the wallet that a transaction spends and that are gone,
--- spent by another transaction: the transaction can no longer be sent
-conflictedInputs :: (MonadUnliftIO m) => TxSummary -> DB m [OutPoint]
-conflictedInputs summary = filterM (fmap not . coinExists) (touchedBy summary).coinsSpent
+{- Conflicts -}
 
--- | Whether a pending transaction spends a coin of the wallet that is gone
-inConflict :: (MonadUnliftIO m) => Ctx -> DBAccount -> PendingTx -> ExceptT String (DB m) Bool
-inConflict ctx acc p = do
-  info <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountXPubKey ctx acc) p.pendingTxData
-  not . null <$> lift (conflictedInputs info.txInfoSummary)
+-- | The inputs of a transaction that the network no longer lets it spend,
+-- from what the store reports of the transactions they come from: an
+-- output another transaction spends, or one the store does not know, its
+-- transaction dropped or never seen. The coins of every account count, and
+-- those outside the wallet, a sweep's for instance, alike.
+conflictedInputs :: [Store.Transaction] -> Tx -> [OutPoint]
+conflictedInputs parents tx = filter (not . stillSpendable) ((.outpoint) <$> tx.inputs)
+  where
+    live = Map.fromList [(parent.txid, parent) | parent <- parents, not parent.deleted]
+    stillSpendable :: OutPoint -> Bool
+    stillSpendable outpoint =
+      case Map.lookup outpoint.hash live >>= listToMaybe . drop (fromIntegral outpoint.index) . (.outputs) of
+        -- Unspent, or spent by this very transaction, which the network has
+        Just output -> maybe True ((== txHash tx) . (.txid)) output.spender
+        Nothing -> False
+
+-- | Record whether a pending transaction is in conflict, as the sync found it
+setPendingTxConflicted :: (MonadUnliftIO m) => PendingTx -> Bool -> DB m ()
+setPendingTxConflicted p conflicted = P.update p.pendingTxKey [DBPendingTxConflicted P.=. conflicted]
 
 {- Importing -}
 
@@ -262,7 +276,7 @@ insertPendingTx net accId tsd summary = do
   unless (null used && all (`notElem` reserved) touched.changePaths) $
     throwError "Some of the internal output addresses are not free"
   time <- liftIO getCurrentTime
-  lift $ P.insert_ $ DBPendingTx accId (hashBytes (nosigHash tx)) (blob tsd) False time
+  lift $ P.insert_ $ DBPendingTx accId (hashBytes (nosigHash tx)) (blob tsd) False False time
 
 {- Deleting and retiring -}
 

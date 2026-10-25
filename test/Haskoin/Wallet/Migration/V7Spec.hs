@@ -107,6 +107,12 @@ spec = prepareContext $ \ctx ->
         columnNames "d_b_tx_info" `dbShouldBe` ["account", "blob", "block_ref", "created", "dead", "txid"]
         columnNames "d_b_coin" `dbShouldBe` ["account", "address", "blob", "block_ref", "created", "outpoint", "value"]
 
+    it "starts every pending transaction out of conflict, for the next sync to ask the store" $
+      inMemory $ do
+        version6Database
+        migrateTo7 ctx
+        queryRows "select conflicted from d_b_pending_tx" `dbShouldBe` [[PersistInt64 0]]
+
     it "leaves the best blocks as they were" $
       inMemory $ do
         version6Database

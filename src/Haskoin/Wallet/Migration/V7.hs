@@ -9,7 +9,9 @@
 -- summaries, coins and pending transactions point to. The fingerprint of
 -- the master key of its seed starts unknown: hw learns it from the mnemonic
 -- or from the offline wallet. The confirmed columns of the summaries and
--- the coins, which nothing read, go as well. The keys are made for large
+-- the coins, which nothing read, go as well. A pending transaction keeps
+-- whether the last sync found it in conflict, out of conflict until the
+-- next sync asks the store. The keys are made for large
 -- wallets: an address is keyed by its chain and index instead of the text
 -- of its path, and the transaction ids, outpoints, nosigHashes and raw
 -- transaction hashes are the bytes of their hexadecimal text; indexes

@@ -377,6 +377,7 @@ pendingRow accId tx =
       dBPendingTxNosigHash = hashBytes (nosigHash tx),
       dBPendingTxBlob = BS.toStrict $ encode $ TxSignData tx [] [] [] Nothing Nothing,
       dBPendingTxOnline = False,
+      dBPendingTxConflicted = False,
       dBPendingTxCreated = fixtureTime
     }
 
@@ -750,3 +751,13 @@ outputTo ctx to amount = Store.StoreOutput amount (addressScript ctx to) Nothing
 replaced :: Store.Transaction -> Store.Transaction
 replaced (Store.Transaction b v l i o _ r t x s w f) =
   Store.Transaction b v l i o True r t x s w f
+
+-- | The same transaction with one of its outputs spent, as the store
+-- reports it: by the given input of another transaction
+withSpender :: Word32 -> (TxHash, Word32) -> Store.Transaction -> Store.Transaction
+withSpender index (spender, input) (Store.Transaction b v l i outputs d r t x s w f) =
+  Store.Transaction b v l i (zipWith mark [0 ..] outputs) d r t x s w f
+  where
+    mark n (Store.StoreOutput value script spent addr)
+      | n == index = Store.StoreOutput value script (Just (Store.Spender spender input)) addr
+      | otherwise = Store.StoreOutput value script spent addr

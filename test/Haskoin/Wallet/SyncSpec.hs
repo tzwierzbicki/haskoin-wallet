@@ -344,6 +344,47 @@ spec = prepareContext $ \ctx -> do
         deleteTx ctx (const (toStore emptyStore)) pendingHash `dbShouldBeE` (0, 0)
         ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0)) `dbShouldBeE` []
 
+    it "clears the conflict once the transaction that spent the coin leaves the chain" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (realPaymentStore ctx) accId
+        pendingHash <- importPendingTx btc ctx accId (unsignedSpend ctx)
+        _ <- syncWith (spentElsewhereStore ctx) accId
+        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+          `dbShouldBeE` [Just ((pendingHash, False, False, True))]
+        -- A reorganisation undoes transaction 8: the store lists the coin
+        -- unspent again, and the full sync that follows finds it free
+        res <- sync ctx cfg (toStore (realPaymentStore ctx)) btc accId True
+        liftIO $ syncResConflicted res `shouldBe` 0
+        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+          `dbShouldBeE` [Just ((pendingHash, False, False, False))]
+        coins accId `dbShouldBeE` [OutPoint (realPaymentId ctx) 0]
+
+    it "reports a sweep of another account's coin once the coin is spent elsewhere" $
+      inDatabaseE $ do
+        accId <- account
+        (otherId, _) <- testNewAcc2 ctx "other"
+        _ <- genExtAddress ctx cfg otherId ""
+        _ <- syncWith (realPaymentStore ctx) accId
+        sweepHash <- importPendingTx btc ctx otherId (sweepToOther ctx)
+        -- The sync of the other account is enough: the store is asked
+        -- about the coin, whatever the account it belongs to
+        res <- syncWith (spentElsewhereStore ctx) otherId
+        liftIO $ syncResConflicted res `shouldBe` 1
+        ((pendingFlags <$>) <$> pendingTxPage ctx otherId (Page 5 0))
+          `dbShouldBeE` [Just ((sweepHash, False, False, True))]
+
+    it "reports a sweep of a coin outside the wallet once that coin is spent elsewhere" $
+      inDatabaseE $ do
+        accId <- account
+        sweepHash <- importPendingTx btc ctx accId (outsideSweep ctx)
+        unspent <- syncWith (outsideStore ctx) accId
+        liftIO $ syncResConflicted unspent `shouldBe` 0
+        spent <- syncWith (outsideSpentStore ctx) accId
+        liftIO $ syncResConflicted spent `shouldBe` 1
+        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+          `dbShouldBeE` [Just ((sweepHash, False, False, True))]
+
     it "follows a payment the wallet made: the coin goes, the change comes, the summary is a debit" $
       inDatabaseE $ do
         accId <- account
@@ -1091,7 +1132,8 @@ unsignedSpend ctx =
     Nothing
 
 -- | The payment of 'realPaymentStore' spent by somebody else's transaction
--- 8, confirmed at height 800001: the coin is gone
+-- 8, confirmed at height 800001: the coin is gone, and the store names
+-- transaction 8 as the spender of the payment's output
 spentElsewhereStore :: Ctx -> FakeStore
 spentElsewhereStore ctx =
   (realPaymentStore ctx)
@@ -1104,13 +1146,41 @@ spentElsewhereStore ctx =
           )
         ],
       fakeTransactions =
-        [ creditTx ctx (realPaymentId ctx) (Store.BlockRef 800000 1) (externalAddr 0) 50000,
+        [ withSpender 0 (fakeTxHash 8, 0) $ creditTx ctx (realPaymentId ctx) (Store.BlockRef 800000 1) (externalAddr 0) 50000,
           spendingStoreTx ctx (fakeTxHash 8) (Store.BlockRef 800001 1) (realPaymentId ctx, 0) (externalAddr 0) [(otherAddr 1, 49000)]
         ],
       fakeUnspents = []
     }
 
 -- | The pending transaction has reached the store
+-- | The coin of 'realPaymentStore' swept by the other account, account 0
+-- of the second test wallet, to its first receiving address, less a fee of
+-- 1000
+sweepToOther :: Ctx -> TxSignData
+sweepToOther ctx =
+  TxSignData (spendingTx ctx [(realPaymentId ctx, 0)] [(externalAddr2, 49000)]) [realPaymentTx ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing
+
+-- | A payment of 10000 to somebody else's address, otherAddr 3: a coin
+-- outside the wallet whose key the user holds, on a paper wallet for
+-- instance
+outsidePayment :: Ctx -> Tx
+outsidePayment ctx = fundingTx ctx 9 [(otherAddr 3, 10000)]
+
+-- | The sweep of that coin to the first receiving address of the account,
+-- less a fee of 1000
+outsideSweep :: Ctx -> TxSignData
+outsideSweep ctx =
+  TxSignData (spendingTx ctx [(txHash (outsidePayment ctx), 0)] [(externalAddr 0, 9000)]) [outsidePayment ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing
+
+-- | A store that knows the payment to otherAddr 3, its coin unspent, and
+-- nothing of the account
+outsideStore :: Ctx -> FakeStore
+outsideStore ctx = emptyStore {fakeTransactions = [creditTx ctx (txHash (outsidePayment ctx)) (Store.BlockRef 800000 2) (otherAddr 3) 10000]}
+
+-- | The same store once somebody else's transaction 8 spent that coin
+outsideSpentStore :: Ctx -> FakeStore
+outsideSpentStore ctx = emptyStore {fakeTransactions = withSpender 0 (fakeTxHash 8, 0) <$> (outsideStore ctx).fakeTransactions}
+
 sentStore :: Ctx -> FakeStore
 sentStore ctx =
   (mempoolStore ctx)
