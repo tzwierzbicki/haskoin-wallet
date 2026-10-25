@@ -158,6 +158,21 @@ twoPending ctx cfg accId = do
   secondHash <- importPendingTx btc ctx accId second
   return (firstHash, secondHash)
 
+-- | The other account of these tests, account 0 of the second test wallet,
+-- with its first external address
+otherAccount :: Ctx -> Config -> ExceptT String (DB IO) DBAccountId
+otherAccount ctx cfg = do
+  (otherId, _) <- testNewAcc2 ctx "other"
+  _ <- genExtAddress ctx cfg otherId ""
+  return otherId
+
+-- | A sweep by the other account of the coin of 'funding': the 20000 at the
+-- account's first external address go to the first external address of the
+-- other account, less a fee of 1000
+sweepOfFunding :: Ctx -> TxSignData
+sweepOfFunding ctx =
+  TxSignData (spendingTx ctx [(txHash (funding ctx), 0)] [(externalAddr2, 19000)]) [funding ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing
+
 -- | The coins of the account, by address, and whether a pending transaction
 -- holds each
 lockedCoins :: DBAccountId -> ExceptT String (DB IO) [(Address, Bool)]
@@ -321,6 +336,24 @@ importingSpec ctx =
         lift $
           dbShouldFailWith "A coin referenced by the transaction is locked" $
             importPendingTx btc ctx accId (TxSignData spend [funding ctx] [Deriv :/ 0 :/ 0] [] Nothing Nothing)
+    it "locks the coin of another account it spends, in that account too" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        fundAccount ctx cfg accId
+        otherId <- otherAccount ctx cfg
+        _ <- importPendingTx btc ctx otherId (sweepOfFunding ctx)
+        lockedCoins accId `dbShouldBeE` [(externalAddr 0, True)]
+        lift $
+          dbShouldFailWith "The coins do not cover the amount and the fee" $
+            payment ctx cfg accId [] (otherAddr 0) 8000
+    it "refuses a transaction spending a coin a pending transaction of another account holds" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        _ <- signedPending ctx cfg accId
+        otherId <- otherAccount ctx cfg
+        lift $
+          dbShouldFailWith "A coin referenced by the transaction is locked" $
+            importPendingTx btc ctx otherId (sweepOfFunding ctx)
     it "refuses a transaction spending a coin the wallet does not have" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -601,6 +634,14 @@ deletingSpec ctx =
         -- and an address paid on the chain is never used again
         updateAddressBalances btc [Store.Balance (internalAddr 0) 11774 0 1 1 11774]
         (dBAddressIndex <$> changeAddress ctx cfg accId) `dbShouldBeE` 1
+    it "counts and frees the coin of another account it held" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        fundAccount ctx cfg accId
+        otherId <- otherAccount ctx cfg
+        sweepHash <- importPendingTx btc ctx otherId (sweepOfFunding ctx)
+        deleteTx ctx (const (toStore emptyStore)) sweepHash `dbShouldBeE` (1, 0)
+        lockedCoins accId `dbShouldBeE` [(externalAddr 0, False)]
     it "refuses a transaction the wallet does not hold" $
       inDatabaseE $
         lift $

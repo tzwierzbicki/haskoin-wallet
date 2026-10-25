@@ -138,7 +138,7 @@ spendable accId minConf = sort . map (.outpoint) <$> spendableCoins btc accId mi
 bestAt :: BlockHeight -> ExceptT String (DB IO) ()
 bestAt height = lift $ updateBest btc (fakeBlockHash 1) height
 
--- | A pending transaction of the account spending the first payment
+-- | A pending transaction of an account spending the first payment
 spendingFirst :: Ctx -> DBAccountId -> ExceptT String (DB IO) ()
 spendingFirst ctx accId = lift $ P.insert_ $ pendingRow accId (spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 49000)])
 
@@ -312,6 +312,14 @@ listingSpec ctx =
         spendingFirst ctx accId
         (map (\(o, _, l) -> (o, l)) <$> listed accId (Page 10 0)) `dbShouldBeE` [(thirdCoin, False), (secondCoin, False), (firstCoin, True)]
 
+    it "shows as locked a coin a pending transaction of another account spends" $
+      inDatabaseE $ do
+        accId <- account ctx
+        (otherId, _) <- testNewAcc2 ctx "other"
+        threeCoins ctx accId
+        spendingFirst ctx otherId
+        (map (\(o, _, l) -> (o, l)) <$> listed accId (Page 10 0)) `dbShouldBeE` [(thirdCoin, False), (secondCoin, False), (firstCoin, True)]
+
     it "lists the coins of the account only" $
       inDatabaseE $ do
         accId <- account ctx
@@ -372,6 +380,14 @@ spendableSpec ctx =
         accId <- account ctx
         threeCoins ctx accId
         spendingFirst ctx accId
+        spendable accId 1 `dbShouldBeE` [secondCoin]
+
+    it "holds back a coin a pending transaction of another account spends" $
+      inDatabaseE $ do
+        accId <- account ctx
+        (otherId, _) <- testNewAcc2 ctx "other"
+        threeCoins ctx accId
+        spendingFirst ctx otherId
         spendable accId 1 `dbShouldBeE` [secondCoin]
 
     it "holds back a coinbase until its 100th confirmation" $

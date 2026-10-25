@@ -148,12 +148,14 @@ heldStatus p conflicted (Pending status) =
   Pending status {pendingOnline = p.pendingTxOnline, pendingConflicted = conflicted}
 heldStatus _ _ onChain = onChain
 
--- | The coins locked by the pending transactions of an account: every
--- outpoint one of them spends. A coin is locked exactly as long as a
--- pending transaction spends it; nothing else records it.
-lockedOutpoints :: (MonadUnliftIO m) => DBAccountId -> ExceptT String (DB m) (Set OutPoint)
-lockedOutpoints accId = do
-  held <- pendingTxs accId
+-- | The coins locked by the pending transactions of the wallet: every
+-- outpoint one of them spends, whatever its account. A coin is locked
+-- exactly as long as a pending transaction spends it; nothing else records
+-- it. The transaction of one account can spend the coin of another, a
+-- sweep of its addresses for instance, and the coin is then locked in both.
+lockedOutpoints :: (MonadUnliftIO m) => ExceptT String (DB m) (Set OutPoint)
+lockedOutpoints = do
+  held <- liftEither . mapM fromRow =<< lift (P.selectList [] [])
   return $ Set.fromList [input.outpoint | p <- held, input <- (txSignDataTx p.pendingTxData).inputs]
 
 -- | The change addresses the pending transactions of an account pay, as
@@ -239,13 +241,16 @@ insertPendingTx net accId tsd summary = do
   unless (involvesWallet summary) $
     throwError "The transaction does not involve this wallet"
   let touched = touchedBy summary
-  -- The coins it spends must exist and be free of any other pending
-  -- transaction; storing it is what locks them
-  locked <- lockedOutpoints accId
+      tx = txSignDataTx tsd
+  -- The coins of the account it spends must exist
   forM_ touched.coinsSpent $ \outpoint -> do
     inWallet <- lift $ coinExists outpoint
     unless inWallet $ throwError "A coin referenced by the transaction does not exist"
-    when (outpoint `Set.member` locked) $ throwError "A coin referenced by the transaction is locked"
+  -- No other pending transaction, of any account, may spend one of its
+  -- inputs; storing it is what locks them
+  locked <- lockedOutpoints
+  when (any ((`Set.member` locked) . (.outpoint)) tx.inputs) $
+    throwError "A coin referenced by the transaction is locked"
   -- Its addresses must be generated already, and its change addresses
   -- neither used nor paid by another pending transaction
   let addrs = nub $ touched.changeAddresses <> touched.otherAddresses
@@ -257,20 +262,21 @@ insertPendingTx net accId tsd summary = do
   unless (null used && all (`notElem` reserved) touched.changePaths) $
     throwError "Some of the internal output addresses are not free"
   time <- liftIO getCurrentTime
-  lift $ P.insert_ $ DBPendingTx accId (hashBytes (nosigHash (txSignDataTx tsd))) (blob tsd) False time
+  lift $ P.insert_ $ DBPendingTx accId (hashBytes (nosigHash tx)) (blob tsd) False time
 
 {- Deleting and retiring -}
 
 -- | Remove a pending transaction, whatever its state: the coins it spent and
 -- the change addresses it paid are available again by its absence. Returns
--- how many coins of the wallet it was holding and how many change
--- addresses it paid.
+-- how many coins of the wallet, of any account, it was holding and how many
+-- change addresses it paid.
 removePendingTx :: (MonadUnliftIO m) => Ctx -> PendingTx -> ExceptT String (DB m) (Natural, Natural)
 removePendingTx ctx held = do
   acc <- getAccountById held.pendingTxAccount
   txInfo <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountXPubKey ctx acc) held.pendingTxData
   let touched = touchedBy txInfo.txInfoSummary
-  heldCoins <- lift $ filterM coinExists touched.coinsSpent
+      spent = (.outpoint) <$> (txSignDataTx held.pendingTxData).inputs
+  heldCoins <- lift $ filterM coinExists spent
   lift $ P.delete held.pendingTxKey
   return (fromIntegral (length heldCoins), fromIntegral (length touched.changeAddresses))
 

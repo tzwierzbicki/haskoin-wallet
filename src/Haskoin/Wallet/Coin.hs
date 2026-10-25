@@ -138,7 +138,7 @@ groupCoins net coins = Map.fromListWith Map.union (mapMaybe entry coins)
 -- outpoints, so that no coin shows on two pages.
 coinPage :: (MonadUnliftIO m) => Network -> DBAccountId -> Page -> ExceptT String (DB m) [JsonCoin]
 coinPage net accId (Page lim off) = do
-  locked <- lockedOutpoints accId
+  locked <- lockedOutpoints
   bestM <- lift $ getBest net
   rows <-
     lift $
@@ -156,7 +156,7 @@ coinPage net accId (Page lim off) = do
 spendableCoins :: (MonadUnliftIO m) => Network -> DBAccountId -> Natural -> ExceptT String (DB m) [Store.Unspent]
 spendableCoins net accId minConf = do
   bestM <- lift $ getBest net
-  locked <- lockedOutpoints accId
+  locked <- lockedOutpoints
   rows <- lift $ P.selectList [DBCoinAccount P.==. accId] []
   coins <- liftEither $ mapM (storedUnspent . P.entityVal) rows
   let confirmations coin = getConfirmations (snd <$> bestM) coin.block
