@@ -26,6 +26,8 @@ import Text.Read (readMaybe)
 
 {- Dice rolls and bits -}
 
+-- Kept for reference: the mapping the rolldice command used before it was
+-- removed, the inverse of the one below.
 -- Produces uniformily distributed dice rolls from a random byte
 -- 0,   0x00 -> [6,6,6]
 -- 1,   0x01 -> [6,6,1]
@@ -235,13 +237,3 @@ devRandom :: Natural -> IO BS.ByteString
 devRandom bytes =
   withBinaryFile "/dev/random" ReadMode (`BS.hGet` fromIntegral bytes)
 
--- | Dice rolls drawn from the system entropy, with the name of its source:
--- a byte at a time, each worth up to three rolls, until there are enough
-rollDice :: Natural -> IO ([Natural], Text)
-rollDice n = go [] ""
-  where
-    go rolls source
-      | length rolls >= fromIntegral n = return (take (fromIntegral n) rolls, source)
-      | otherwise = do
-          (source', bytes) <- systemEntropy 1
-          go (concatMap word8ToBase6 (BS.unpack bytes) <> rolls) source'

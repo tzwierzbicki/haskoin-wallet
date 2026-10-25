@@ -238,8 +238,7 @@ arbitraryResponse net ctx =
         <*> (resize 10 $ listOf $ arbitrarySyncRes net ctx),
       ResponseVersion
         <$> arbitraryText
-        <*> arbitraryText,
-      ResponseRollDice <$> resize 20 (listOf arbitraryNatural) <*> arbitraryText
+        <*> arbitraryText
     ]
 
 arbitraryConfig :: Gen Config

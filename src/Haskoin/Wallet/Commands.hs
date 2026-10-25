@@ -125,10 +125,6 @@ data Response
       { responseVersion :: !Text,
         responseDBVersion :: !Text
       }
-  | ResponseRollDice
-      { responseRollDice :: ![Natural],
-        responseEntropySource :: !Text
-      }
   deriving (Eq, Show)
 
 jsonError :: String -> Json.Value
@@ -237,9 +233,6 @@ instance Json.ToJSON Response where
             "version" .= v,
             "dbversion" .= dbv
           ]
-      ResponseRollDice ns e ->
-        object
-          ["type" .= Json.String "rolldice", "entropysource" .= e, "dice" .= ns]
 
 instance Json.FromJSON Response where
   parseJSON =
@@ -310,10 +303,6 @@ instance Json.FromJSON Response where
           ResponseVersion
             <$> o .: "version"
             <*> o .: "dbversion"
-        "rolldice" ->
-          ResponseRollDice
-            <$> o .: "dice"
-            <*> o .: "entropysource"
         _ -> fail "Invalid JSON response type"
 
 
@@ -405,7 +394,6 @@ commandResponse ctx cfg unit cmd =
     CommandPrepareSweep nameM prvKeyM sf st coins outputM f d ->
       cmdPrepareSweep ctx cfg nameM prvKeyM sf st coins outputM f d
     CommandSignSweep nameM h i o k -> cmdSignSweep ctx cfg nameM h i o k
-    CommandRollDice n -> cmdRollDice n
 
 {- Mnemonics and accounts -}
 
@@ -840,10 +828,3 @@ cmdSignMessage ctx cfg addrTxt txtMsg splitMnemIn =
     msgSig <- liftEither $ signMessage ctx addr addrPrvKey.key txtMsg
     return $ ResponseSignMsg txtMsg (cs $ B64.encode msgSig) addrTxt
 
-{- Dice -}
-
--- | Dice rolls for the user, drawn from the system entropy
-cmdRollDice :: Natural -> IO Response
-cmdRollDice n = do
-  (rolls, source) <- rollDice n
-  return $ ResponseRollDice rolls source

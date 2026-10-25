@@ -203,13 +203,6 @@ formatNegAmount = PText [SetColor Foreground Vivid Red]
 formatZeroAmount :: String -> Printer
 formatZeroAmount = PText [SetColor Foreground Vivid White]
 
-formatDice :: String -> Printer
-formatDice =
-  PText
-    [ SetConsoleIntensity BoldIntensity,
-      SetColor Foreground Vivid Yellow
-    ]
-
 formatTrue :: String -> Printer
 formatTrue = PText [SetColor Foreground Vivid Green]
 
@@ -586,9 +579,3 @@ prettyPrinter unit =
           [ formatKey "Software version:" <+> formatValue (cs v),
             formatKey "Database version:" <+> formatValue (cs dbv)
           ]
-    ResponseRollDice ds e ->
-      renderIO . vcat $
-        [ formatKey "System Entropy Source:" <+> formatFilePath (cs e),
-          formatKey "Dice rolls:"
-            <+> mconcat (intersperse (text ", ") (formatDice . show <$> ds))
-        ]

@@ -150,9 +150,6 @@ data Command
         commandOutputFileMaybe :: !(Maybe FilePath),
         commandSecKeysMaybe :: !(Maybe KeySource)
       }
-  | CommandRollDice
-      { commandCount :: !Natural
-      }
   deriving (Eq, Show)
 
 parserMain :: IO (Command, AmountUnit, Bool)
@@ -268,7 +265,6 @@ commandParser =
             command "signmsg" signMsgParser,
             command "preparesweep" prepareSweepParser,
             command "signsweep" signSweepParser,
-            command "rolldice" rollDiceParser,
             hidden
           ]
     ]
@@ -1226,25 +1222,6 @@ prvKeysMaybeOption =
     source "-" = Right KeysOnTerminal
     source file = Right (KeysInFile file)
 
-{- RollDice Parser -}
-
-rollDiceParser :: ParserInfo Command
-rollDiceParser = do
-  let cmd = CommandRollDice <$> diceCountArg
-  info cmd $
-    progDescDoc (offline "Roll 6-sided dice using the systems internal entropy")
-      <> footer
-        [r|
-By default, /dev/random is used on linux machines. The mapping from a byte to
-dice rolls ensures that all dice rolls have the same probability of occuring.
-Bytes 0x00 to 0xfb are used and anything above is dropped.
-|]
-
-diceCountArg :: Parser Natural
-diceCountArg =
-  argument (maybeReader $ readNatural . cs) $
-    metavar "INT"
-      <> help "Number of 6-sided dice to roll"
 
 {- Argument parser helpers -}
 

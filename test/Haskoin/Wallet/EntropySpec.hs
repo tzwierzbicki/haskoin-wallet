@@ -4,7 +4,7 @@
 module Haskoin.Wallet.EntropySpec where
 
 import Control.Exception (evaluate)
-import Control.Monad
+import Control.Monad (forM_)
 import Control.Monad.Trans (liftIO)
 import qualified Data.ByteString as BS
 import Data.Default (def)
