@@ -30,7 +30,8 @@ clientMain = do
     -- Only a command reads the configuration and touches the database:
     -- help and usage errors leave ~/.hw as it is, and a database newer
     -- than this hw still gets help
-    cfg <- either die return =<< initConfig
+    (cfg, warnings) <- either die return =<< initConfig
+    forM_ warnings $ hPutStrLn stderr
     migrated <- catchDatabaseInUse $ runDB cfg (migrateDB (migrationHooks cfg) ctx)
     either die return (join migrated)
     res <- commandResponse ctx cfg unit cmd

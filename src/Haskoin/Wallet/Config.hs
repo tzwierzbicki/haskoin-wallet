@@ -10,9 +10,12 @@ import Control.Monad (unless)
 import Control.Monad.Except (ExceptT, liftEither, runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson
-import Data.Aeson.Types (Parser)
+import qualified Data.Aeson.Key as Key
+import qualified Data.Aeson.KeyMap as KeyMap
+import Data.Aeson.Types (Parser, parseEither)
 import Data.Bifunctor (first)
 import Data.Default
+import Data.List (intercalate, sort)
 import Data.Maybe (fromMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -120,16 +123,38 @@ instance Default Config where
 
 {- Reading the file -}
 
--- | The configuration of a data directory. A directory without a
--- configuration file gets one with the defaults first.
-readConfig :: FilePath -> ExceptT String IO Config
+-- | The configuration of a data directory, with the warnings to show the
+-- user: the keys of the file hw does not know, which it leaves aside. A
+-- directory without a configuration file gets one with the defaults first.
+readConfig :: FilePath -> ExceptT String IO (Config, [String])
 readConfig dir = do
   let file = configFile dir
+      couldNotRead reason = "The configuration file " <> file <> " could not be read: " <> reason
   exists <- liftIO $ D.doesFileExist file
   unless exists $ liftIO $ writeJsonFile file $ toJSON (def :: Config)
-  cfgE <- liftIO $ readJsonFile file
-  liftEither $ first (\reason -> "The configuration file " <> file <> " could not be read: " <> reason) cfgE
+  valueE <- liftIO $ readJsonFile file
+  value <- liftEither $ first couldNotRead valueE
+  cfg <- liftEither $ first couldNotRead $ parseEither parseJSON value
+  return (cfg, configWarnings file value)
 
--- | The configuration of hw, from ~/.hw
-initConfig :: IO (Either String Config)
+-- | A warning naming the keys of the file hw does not know: a key of an
+-- earlier version, or a typo that would otherwise leave a setting at its
+-- default without a word
+configWarnings :: FilePath -> Value -> [String]
+configWarnings file (Object o)
+  | null unknown = []
+  | otherwise = ["The configuration file " <> file <> " has keys hw does not know, left aside: " <> intercalate ", " unknown]
+  where
+    unknown = sort [Key.toString key | key <- KeyMap.keys o, key `notElem` knownKeys]
+configWarnings _ _ = []
+
+-- | The keys of the configuration file: those hw writes
+knownKeys :: [Key]
+knownKeys =
+  case toJSON (def :: Config) of
+    Object o -> KeyMap.keys o
+    _ -> []
+
+-- | The configuration of hw, from ~/.hw, with its warnings
+initConfig :: IO (Either String (Config, [String]))
 initConfig = runExceptT . readConfig =<< hwDataDirectory

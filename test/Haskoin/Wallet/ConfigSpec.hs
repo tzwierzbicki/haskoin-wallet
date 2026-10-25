@@ -71,10 +71,10 @@ directorySpec =
       databaseFileIn "/home/someone/.hw" def {configDatabaseFile = Just "/backups/accounts.sqlite"}
         `shouldBe` "/backups/accounts.sqlite"
 
-    it "gets the default configuration file when it has none" $
+    it "gets the default configuration file when it has none, without a warning" $
       inScratchDirectory $ \dir -> do
         cfg <- runExceptT $ readConfig dir
-        cfg `shouldBe` Right def
+        cfg `shouldBe` Right (def, [])
         written <- readFile (configFile dir)
         decodeValue written `shouldBe` decodeValue defaultFile
 
@@ -82,7 +82,7 @@ directorySpec =
       inScratchDirectory $ \dir -> do
         writeFile (configFile dir) twoRequestsFile
         cfg <- runExceptT $ readConfig dir
-        configParallelRequests <$> cfg `shouldBe` Right 2
+        configParallelRequests . fst <$> cfg `shouldBe` Right 2
         readFile (configFile dir) `shouldReturn` twoRequestsFile
 
     it "refuses a configuration file that does not read, naming it and the reason" $
@@ -90,6 +90,18 @@ directorySpec =
         writeFile (configFile dir) [r|{"gap": 0}|]
         cfg <- runExceptT $ readConfig dir
         cfg `shouldBe` Left ("The configuration file " <> configFile dir <> " could not be read: Error in $: The key \"gap\" must be at least 1")
+
+    it "warns about the keys it does not know, naming the file: those of an earlier hw" $
+      inScratchDirectory $ \dir -> do
+        writeFile (configFile dir) hw09File
+        cfg <- runExceptT $ readConfig dir
+        cfg `shouldBe` Right (def, ["The configuration file " <> configFile dir <> " has keys hw does not know, left aside: recovery-gap, tx-batch"])
+
+    it "warns about a mistyped key, whose setting would otherwise keep its default without a word" $
+      inScratchDirectory $ \dir -> do
+        writeFile (configFile dir) [r|{"gaps": 30}|]
+        cfg <- runExceptT $ readConfig dir
+        cfg `shouldBe` Right (def, ["The configuration file " <> configFile dir <> " has keys hw does not know, left aside: gaps"])
 
 -- | What hw makes of the text of a configuration file
 decodeConfig :: String -> Either String Config
