@@ -2,17 +2,24 @@
 
 -- | The keys of the test wallets, derived from their mnemonics. The shared
 -- wallet of "Haskoin.Wallet.TestUtils" writes its keys and the fingerprint
--- of its seed out in full; these tests tie those values to the derivation. Then the
--- private keys of a sweep, in every format a user may write them.
+-- of its seed out in full; these tests tie those values to the derivation.
+-- Then the keys and the addresses of other wallets, which hw must derive as
+-- they do. Then the private keys of a sweep, in every format a user may
+-- write them.
 module Haskoin.Wallet.KeysSpec where
 
 import Control.Monad (forM_)
+import Control.Monad.Except (ExceptT)
 import Crypto.KDF.PBKDF2 (Parameters (..), fastPBKDF2_SHA512)
 import Data.ByteString (ByteString)
+import Data.Default (def)
 import Data.Maybe (fromJust)
 import Data.Text (Text)
 import Data.Text.Encoding (encodeUtf8)
 import Haskoin
+import Haskoin.Wallet.Account (insertAccount)
+import Haskoin.Wallet.Address (genExtAddress, nextChangeAddress)
+import Haskoin.Wallet.Database (DB, DBAddress (..))
 import Haskoin.Wallet.Keys
 import Haskoin.Wallet.TestUtils
 import Test.Hspec
@@ -20,7 +27,9 @@ import Test.Hspec
 spec :: Spec
 spec = do
   sweepKeysSpec
-  prepareContext $ \ctx ->
+  prepareContext $ \ctx -> do
+    knownWalletsSpec ctx
+    leadingZeroSpec ctx
     describe "Keys of the test wallets" $ do
       it "derives the account key of the test wallet from its mnemonic" $
         xPrvExport btc <$> signingKey btc ctx testMnemonic 0 `shouldBe` Right testAccountXPrv
@@ -177,6 +186,181 @@ otherImplementationsSpec =
     forM_ trezorVectors $ \(name, passphrase, master) ->
       it ("gives the master key Trezor's python-mnemonic gives for " <> name) $
         xPrvExport btc <$> masterKey (withPassphrase passphrase) `shouldBe` Right master
+
+{- The accounts of known wallets -}
+
+-- | A wallet made elsewhere: its mnemonic and its passphrase, and the first
+-- receiving and change addresses of its first Bitcoin account, at
+-- m/44'/0'/0'/0/0 and m/44'/0'/0'/1/0
+data KnownWallet = KnownWallet
+  { knownMnemonic :: Text,
+    knownPassphrase :: Text,
+    knownReceiving :: Text,
+    knownChange :: Text
+  }
+
+-- | Wallets of every mnemonic length, some with a passphrase. They were
+-- added in 2020 without a source. On 2026-10-25 every address was checked
+-- apart from hw, with the pure-Python BIP39 and BIP32 of
+-- test/data/message-signing/tools/btc.py. The last wallet is the one of
+-- iancoleman/bip39 issue 58: its seed is BIP32's test vector 3, whose
+-- master private key starts with a zero byte.
+knownWallets :: [(String, KnownWallet)]
+knownWallets =
+  [ ( "a wallet of 12 words without a passphrase",
+      KnownWallet
+        "modify truck lens identify brief coffee gather volcano fatal together muscle elephant"
+        ""
+        "1KiWbwzHhwH2KdLyreGuJq36SP2pPeGeim"
+        "1BY9FShyC6rnEUdPAVQTX37TFZqEkR1enQ"
+    ),
+    ( "the same words with the passphrase \"password\"",
+      KnownWallet
+        "modify truck lens identify brief coffee gather volcano fatal together muscle elephant"
+        "password"
+        "1Ha18XQ74YfCnuUAjGTF9rnbS7pm1aCzW4"
+        "17SounFZ11k8urp9Pee2FNYjzGU5qwLUfT"
+    ),
+    ( "the same words with the passphrase \"Hello world\", which has a space",
+      KnownWallet
+        "modify truck lens identify brief coffee gather volcano fatal together muscle elephant"
+        "Hello world"
+        "1KpHPSa9eMohQznkddzmHT9AeMAscYe29Y"
+        "16WJrKzdik1HgnoiNiLUW2uGDqry2fSGVx"
+    ),
+    ( "a wallet of 15 words",
+      KnownWallet
+        "fiscal gadget drastic coconut awful crime during common salmon manage random cost evil owner city"
+        ""
+        "131dALC6WxwTZzTsHUsifAJ8bkQdDEeeqJ"
+        "1JHCmBLzDARCdDgn2WwJQr88tGW8V3EyKj"
+    ),
+    ( "a wallet of 18 words",
+      KnownWallet
+        "host mind elephant tone sound apple service tomato subject attend motion stick fuel fan rail bamboo tree build"
+        ""
+        "15nbJ6oHvYiapKu1vBYmyQzVSTjiJNcfuV"
+        "12rMvadbhRxFaUP4FoRUmABa1JEPLrrqHL"
+    ),
+    ( "a wallet of 21 words",
+      KnownWallet
+        "flight skill wisdom mixture patch dirt trouble behind chair glad detect swarm swap truly cruise medal walnut glide wrestle route defy"
+        ""
+        "12uDDJU7BJUxJomzbFt5BW3GnukGZz6Y5t"
+        "1Gv62T4UkLxJ6dnsmNXENMgjBhLzEzJ1Sc"
+    ),
+    ( "a wallet of 24 words",
+      KnownWallet
+        "use turtle trap pause spin venue hazard hope slot april cattle fork stand finish arrest nasty acoustic clog entire course universe evil desert produce"
+        ""
+        "19fJdt5HjJUrmnvKM8fTS43o9aK3NmFZMT"
+        "17Kmofo8651DdydBS7zVVy9JLkixkxj6SK"
+    ),
+    ( "the same words with a passphrase of 256 characters",
+      KnownWallet
+        "use turtle trap pause spin venue hazard hope slot april cattle fork stand finish arrest nasty acoustic clog entire course universe evil desert produce"
+        "nMCm#Qe7u-*LG^99KS%hSNZJh6w&e&w4S&7HA-22^7vDE#F\
+        \@=hNZZZ$M=ZSYG42J8P+U+3sf$xS6YpJf7DemaU#fLEVBW8\
+        \!FmugPj=K=E*KDmUuQh_2%7K2W8@RJ4?Pua2HFCb8$@ZB^p\
+        \s=T=PNFy5APBBdaz_eTq&r&v3hp6P-tTfvNP9J+xfQ-FKZS\
+        \7_?g+P*9MTkpjy*K5=8y+y9db#Sv+b*5bfmV8?@YKrf#AEH\
+        \7!ARqBXMhS7d%GYAxB%RG"
+        "1L1oKPYJ9j3EFX5CcFXz1d3kkAW9Hoh5ic"
+        "1J7jpmP7NVoryofiVSCKMMvMitkCP3U6Qj"
+    ),
+    -- https://github.com/iancoleman/bip39/issues/58
+    ( "the wallet of iancoleman/bip39 issue 58, whose master private key starts with a zero byte",
+      KnownWallet
+        "fruit wave dwarf banana earth journey tattoo true farm silk olive fence"
+        "banana"
+        "17rxURoF96VhmkcEGCj5LNQkmN9HVhWb7F"
+        "16wbbYdecq9QzXdxa58q2dYXJRc8sfkE4J"
+    )
+  ]
+
+-- | The first receiving and change addresses of the first Bitcoin account
+-- of a mnemonic and a passphrase, as hw gives them once the account is in
+-- the database
+firstAddresses :: Ctx -> Text -> Text -> ExceptT String (DB IO) (Text, Text)
+firstAddresses ctx mnemonic passphrase = do
+  key <- liftEither $ signingKey btc ctx (MnemonicPass mnemonic passphrase) 0
+  (accId, _) <- insertAccount btc ctx "known" (deriveXPubKey ctx key) Nothing
+  receiving <- genExtAddress ctx def accId ""
+  change <- nextChangeAddress ctx def accId []
+  return (dBAddressAddress receiving, dBAddressAddress change)
+
+knownWalletsSpec :: Ctx -> Spec
+knownWalletsSpec ctx =
+  describe "The account of a known wallet" $
+    forM_ knownWallets $ \(name, wallet) ->
+      it ("gives the first receiving and change addresses of " <> name) $
+        inDatabaseE $
+          firstAddresses ctx (knownMnemonic wallet) (knownPassphrase wallet)
+            `dbShouldBeE` (knownReceiving wallet, knownChange wallet)
+
+{- Private keys that start with a zero byte -}
+
+-- BIP32's test vectors 3 and 4 check that an implementation keeps the zero
+-- bytes a private key starts with. hw derives every account along hardened
+-- paths, where the child of a private key comes from its 32 bytes, the
+-- leading zeros included.
+
+-- | The seed of BIP32's test vector 3. Its master key starts with a zero
+-- byte, and m/0' is its hardened child. It is the seed of the wallet of
+-- iancoleman/bip39 issue 58 above, and haskoin-core tests it too.
+--
+-- bitpay/bitcore-lib#47 and iancoleman/bip39#58
+-- https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki#test-vector-3
+vector3Seed :: ByteString
+vector3Seed = fromJust $ decodeHex "4b381541583be4423346c643850da4b320e46a87ae3d2a4e6da11eba819cd4acba45d239319ac14f863b8d5ab5a0d0c64d2e8a1e7d1457df2e5a3c51c73235be"
+
+-- | The seed of BIP32's test vector 4. Its key at m/0' starts with a zero
+-- byte, and m/0'/1' is its hardened child. haskoin-core's own tests stop
+-- at vector 3.
+--
+-- btcsuite/btcutil#172
+-- https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki#test-vector-4
+vector4Seed :: ByteString
+vector4Seed = fromJust $ decodeHex "3ddd5602285899a946114506157c7997e5444528f3003f6134712147db19b678"
+
+-- | The private and public keys at a path of a seed
+keysAt :: Ctx -> ByteString -> HardPath -> (Text, Text)
+keysAt ctx seed path = (xPrvExport btc key, xPubExport btc ctx (deriveXPubKey ctx key))
+  where
+    key = derivePath ctx path (makeXPrvKey seed)
+
+leadingZeroSpec :: Ctx -> Spec
+leadingZeroSpec ctx =
+  describe "A private key that starts with a zero byte, in BIP32's test vectors" $ do
+    it "is exported with its zero byte: the master key of vector 3" $
+      keysAt ctx vector3Seed Deriv
+        `shouldBe` ( "xprv9s21ZrQH143K25QhxbucbDDuQ4naNntJRi4KUfWT7xo4EKsHt2QJDu7KXp1A3u7Bi1j8ph3EGsZ9Xvz9dGuVrtHHs7pXeTzjuxBrCmmhgC6",
+                     "xpub661MyMwAqRbcEZVB4dScxMAdx6d4nFc9nvyvH3v4gJL378CSRZiYmhRoP7mBy6gSPSCYk6SzXPTf3ND1cZAceL7SfJ1Z3GC8vBgp2epUt13"
+                   )
+
+    it "gives the hardened child BIP32 gives: m/0' of vector 3" $
+      keysAt ctx vector3Seed (Deriv :| 0)
+        `shouldBe` ( "xprv9uPDJpEQgRQfDcW7BkF7eTya6RPxXeJCqCJGHuCJ4GiRVLzkTXBAJMu2qaMWPrS7AANYqdq6vcBcBUdJCVVFceUvJFjaPdGZ2y9WACViL4L",
+                     "xpub68NZiKmJWnxxS6aaHmn81bvJeTESw724CRDs6HbuccFQN9Ku14VQrADWgqbhhTHBaohPX4CjNLf9fq9MYo6oDaPPLPxSb7gwQN3ih19Zm4Y"
+                   )
+
+    it "has the parent BIP32 gives: the master key of vector 4" $
+      keysAt ctx vector4Seed Deriv
+        `shouldBe` ( "xprv9s21ZrQH143K48vGoLGRPxgo2JNkJ3J3fqkirQC2zVdk5Dgd5w14S7fRDyHH4dWNHUgkvsvNDCkvAwcSHNAQwhwgNMgZhLtQC63zxwhQmRv",
+                     "xpub661MyMwAqRbcGczjuMoRm6dXaLDEhW1u34gKenbeYqAix21mdUKJyuyu5F1rzYGVxyL6tmgBUAEPrEz92mBXjByMRiJdba9wpnN37RLLAXa"
+                   )
+
+    it "is exported with its zero byte: m/0' of vector 4" $
+      keysAt ctx vector4Seed (Deriv :| 0)
+        `shouldBe` ( "xprv9vB7xEWwNp9kh1wQRfCCQMnZUEG21LpbR9NPCNN1dwhiZkjjeGRnaALmPXCX7SgjFTiCTT6bXes17boXtjq3xLpcDjzEuGLQBM5ohqkao9G",
+                     "xpub69AUMk3qDBi3uW1sXgjCmVjJ2G6WQoYSnNHyzkmdCHEhSZ4tBok37xfFEqHd2AddP56Tqp4o56AePAgCjYdvpW2PU2jbUPFKsav5ut6Ch1m"
+                   )
+
+    it "gives the hardened child BIP32 gives: m/0'/1' of vector 4" $
+      keysAt ctx vector4Seed (Deriv :| 0 :| 1)
+        `shouldBe` ( "xprv9xJocDuwtYCMNAo3Zw76WENQeAS6WGXQ55RCy7tDJ8oALr4FWkuVoHJeHVAcAqiZLE7Je3vZJHxspZdFHfnBEjHqU5hG1Jaj32dVoS6XLT1",
+                     "xpub6BJA1jSqiukeaesWfxe6sNK9CCGaujFFSJLomWHprUL9DePQ4JDkM5d88n49sMGJxrhpjazuXYWdMf17C9T5XnxkopaeS7jGk1GyyVziaMt"
+                   )
 
 {- Private keys of a sweep -}
 
