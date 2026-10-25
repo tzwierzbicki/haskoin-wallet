@@ -665,8 +665,8 @@ conflictsSpec ctx =
       conflictedInputs [withSpender 0 (txHash spend, 0) parent] spend `shouldBe` []
     it "are the coins of a transaction the store dropped" $
       conflictedInputs [replaced parent] spend `shouldBe` [coin]
-    it "are the coins of a transaction the store does not know" $
-      conflictedInputs [] spend `shouldBe` [coin]
+    it "leave out the coins of a transaction the store has not seen, which proves nothing yet" $
+      conflictedInputs [] spend `shouldBe` []
     it "are the coins past the outputs of their transaction" $
       conflictedInputs [parent] (spendingTx ctx [(txHash (funding ctx), 1)] [(otherAddr 0, 19000)])
         `shouldBe` [OutPoint (txHash (funding ctx)) 1]

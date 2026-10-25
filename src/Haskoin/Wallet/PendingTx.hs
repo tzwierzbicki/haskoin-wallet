@@ -184,19 +184,26 @@ coinExists outpoint = isJust <$> P.get (DBCoinKey $ outpointBytes outpoint)
 
 -- | The inputs of a transaction that the network no longer lets it spend,
 -- from what the store reports of the transactions they come from: an
--- output another transaction spends, or one the store does not know, its
--- transaction dropped or never seen. The coins of every account count, and
--- those outside the wallet, a sweep's for instance, alike.
+-- output another transaction spends, an output of a transaction the store
+-- has dropped, or an output its transaction does not have. A transaction
+-- the store has not seen proves nothing: it may not have reached the store
+-- yet, or the store may be a new one. The coins of every account count,
+-- and those outside the wallet, a sweep's for instance, alike.
 conflictedInputs :: [Store.Transaction] -> Tx -> [OutPoint]
-conflictedInputs parents tx = filter (not . stillSpendable) ((.outpoint) <$> tx.inputs)
+conflictedInputs parents tx = filter inConflict ((.outpoint) <$> tx.inputs)
   where
-    live = Map.fromList [(parent.txid, parent) | parent <- parents, not parent.deleted]
-    stillSpendable :: OutPoint -> Bool
-    stillSpendable outpoint =
-      case Map.lookup outpoint.hash live >>= listToMaybe . drop (fromIntegral outpoint.index) . (.outputs) of
-        -- Unspent, or spent by this very transaction, which the network has
-        Just output -> maybe True ((== txHash tx) . (.txid)) output.spender
+    known = Map.fromList [(parent.txid, parent) | parent <- parents]
+    inConflict :: OutPoint -> Bool
+    inConflict outpoint =
+      case Map.lookup outpoint.hash known of
         Nothing -> False
+        Just parent
+          | parent.deleted -> True
+          | otherwise ->
+              case listToMaybe (drop (fromIntegral outpoint.index) parent.outputs) of
+                -- Spent by this very transaction, which the network has, is fine
+                Just output -> maybe False ((/= txHash tx) . (.txid)) output.spender
+                Nothing -> True
 
 -- | Record whether a pending transaction is in conflict, as the sync found it
 setPendingTxConflicted :: (MonadUnliftIO m) => PendingTx -> Bool -> DB m ()
