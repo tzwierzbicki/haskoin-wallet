@@ -92,7 +92,7 @@ arbitraryJsonCoin net =
     <*> arbitraryPositive
     <*> arbitraryBlockRef
     <*> arbitraryNatural
-    <*> arbitrary
+    <*> elements [Nothing, Just LockedByTransaction, Just LockedByUser]
     <*> arbitrary
 
 arbitraryPubKeyDoc :: Ctx -> Gen PubKeyDoc

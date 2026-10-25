@@ -1,5 +1,6 @@
 {-# LANGUAGE DisambiguateRecordFields #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -12,15 +13,19 @@
 -- spendable balance of an account and of its addresses.
 module Haskoin.Wallet.Coin
   ( JsonCoin (..),
+    CoinLock (..),
     coinOutpoint,
     toJsonCoin,
     groupCoins,
+    CoinFilter (..),
     coinPage,
     Spending (..),
     spendingOf,
     spendableCoins,
     spendableAtAddresses,
     spendableBalance,
+    lockCoin,
+    unlockCoin,
     Refreshed (..),
     refreshCoins,
   )
@@ -31,15 +36,13 @@ import Control.Monad
 import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Reader (MonadTrans (lift))
-import Data.Aeson (object, withObject, (.:), (.=))
+import Data.Aeson (FromJSON (..), ToJSON (..), Value (String), object, withObject, withText, (.:), (.=))
 import Data.ByteString (ByteString)
 import Data.Containers.ListUtils (nubOrd)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
 import qualified Data.Serialize as S
-import Data.Set (Set)
-import qualified Data.Set as Set
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Time (getCurrentTime)
@@ -50,7 +53,8 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.BestBlock
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.PendingTx (lockedOutpoints)
+import Haskoin.Wallet.Account (accountNetwork, getAccountById)
+import Haskoin.Wallet.PendingTx (lockedOutpoints, userLockedOutpoints)
 import Haskoin.Wallet.RawTx (lookupRawTx)
 import Haskoin.Wallet.TxInfo (MyInputs (..), TxSummary (..), liveSummary, ownTransaction)
 import Haskoin.Wallet.Util (Page (Page))
@@ -64,11 +68,27 @@ data JsonCoin = JsonCoin
     jsonCoinValue :: !Word64,
     jsonCoinBlock :: !Store.BlockRef,
     jsonCoinConfirmations :: !Natural,
-    jsonCoinLocked :: !Bool,
+    -- | What holds it, if anything
+    jsonCoinLock :: !(Maybe CoinLock),
     -- | The builder may spend it now ('canSpend')
     jsonCoinSpendable :: !Bool
   }
   deriving (Eq, Show)
+
+-- | What holds a coin back from spending: a pending transaction that spends
+-- it, or the user, with lockcoin. A coin has one lock at most.
+data CoinLock = LockedByTransaction | LockedByUser
+  deriving (Eq, Show)
+
+instance ToJSON CoinLock where
+  toJSON LockedByTransaction = String "transaction"
+  toJSON LockedByUser = String "user"
+
+instance FromJSON CoinLock where
+  parseJSON = withText "CoinLock" $ \case
+    "transaction" -> return LockedByTransaction
+    "user" -> return LockedByUser
+    other -> fail $ "Unknown coin lock: " <> cs other
 
 instance MarshalJSON Network JsonCoin where
   marshalValue net c =
@@ -78,7 +98,7 @@ instance MarshalJSON Network JsonCoin where
         "value" .= jsonCoinValue c,
         "block" .= jsonCoinBlock c,
         "confirmations" .= jsonCoinConfirmations c,
-        "locked" .= jsonCoinLocked c,
+        "lock" .= jsonCoinLock c,
         "spendable" .= jsonCoinSpendable c
       ]
   unmarshalValue net =
@@ -89,12 +109,11 @@ instance MarshalJSON Network JsonCoin where
         <*> o .: "value"
         <*> o .: "block"
         <*> o .: "confirmations"
-        <*> o .: "locked"
+        <*> o .: "lock"
         <*> o .: "spendable"
 
 -- | A coin row as the user sees it: its confirmations counted from the best
--- block, locked when a pending transaction spends it, and spendable when
--- the builder may spend it now
+-- block, its lock, and spendable when the builder may spend it now
 toJsonCoin :: (MonadUnliftIO m) => Spending -> DBCoin -> ExceptT String (DB m) JsonCoin
 toJsonCoin rules row = do
   outpoint <- liftEither $ coinOutpoint row
@@ -108,7 +127,7 @@ toJsonCoin rules row = do
         jsonCoinValue = dBCoinValue row,
         jsonCoinBlock = block,
         jsonCoinConfirmations = getConfirmations rules.spendingBest block,
-        jsonCoinLocked = outpoint `Set.member` rules.spendingLocked,
+        jsonCoinLock = Map.lookup outpoint rules.spendingLocks,
         jsonCoinSpendable = spendable
       }
 
@@ -190,18 +209,25 @@ groupCoins net ctx coins = Map.fromListWith Map.union (mapMaybe entry coins)
 
 {- Listing -}
 
+-- | Which coins of an account coins lists: all of them, or the locked ones
+data CoinFilter = AllCoins | LockedCoins
+  deriving (Eq, Show)
+
 -- | A page of the coins of the account, spendable or not, in the order of
 -- their block references as the store encodes them: the mempool first,
 -- then the newest blocks first. Coins with the same block reference, the
 -- outputs of one transaction for instance, follow the order of their
 -- outpoints, so that no coin shows on two pages.
-coinPage :: (MonadUnliftIO m) => Network -> DBAccountId -> Page -> ExceptT String (DB m) [JsonCoin]
-coinPage net accId (Page lim off) = do
+coinPage :: (MonadUnliftIO m) => Network -> DBAccountId -> CoinFilter -> Page -> ExceptT String (DB m) [JsonCoin]
+coinPage net accId shown (Page lim off) = do
   rules <- spendingOf net accId
+  let lockedOnly = case shown of
+        AllCoins -> []
+        LockedCoins -> [DBCoinOutpoint P.<-. map outpointBytes (Map.keys rules.spendingLocks)]
   rows <-
     lift $
       P.selectList
-        [DBCoinAccount P.==. accId]
+        ((DBCoinAccount P.==. accId) : lockedOnly)
         [P.Asc DBCoinBlockRef, P.Asc DBCoinOutpoint, P.LimitTo (fromIntegral lim), P.OffsetBy (fromIntegral off)]
   mapM (toJsonCoin rules . P.entityVal) rows
 
@@ -209,30 +235,38 @@ coinPage net accId (Page lim off) = do
 
 -- | What deciding whether the coins of an account can be spent reads once:
 -- the account and its network, the height of the best block, and the
--- coins the pending transactions of the network lock
+-- locks of the coins of the network
 data Spending = Spending
   { spendingNetwork :: !Network,
     spendingAccount :: !DBAccountId,
     spendingBest :: !(Maybe BlockHeight),
-    spendingLocked :: !(Set OutPoint)
+    spendingLocks :: !(Map OutPoint CoinLock)
   }
 
 -- | The spending rules of an account as the database has them now
 spendingOf :: (MonadUnliftIO m) => Network -> DBAccountId -> ExceptT String (DB m) Spending
 spendingOf net accId = do
   bestM <- lift $ getBest net
-  locked <- lockedOutpoints net
-  return Spending {spendingNetwork = net, spendingAccount = accId, spendingBest = snd <$> bestM, spendingLocked = locked}
+  locks <- coinLocks net
+  return Spending {spendingNetwork = net, spendingAccount = accId, spendingBest = snd <$> bestM, spendingLocks = locks}
+
+-- | The locks of the coins of a network: those the pending transactions
+-- spend, and those the user locked
+coinLocks :: (MonadUnliftIO m) => Network -> ExceptT String (DB m) (Map OutPoint CoinLock)
+coinLocks net = do
+  byTransactions <- lockedOutpoints net
+  byUser <- userLockedOutpoints net
+  return $ Map.fromSet (const LockedByTransaction) byTransactions <> Map.fromSet (const LockedByUser) byUser
 
 -- | Whether the builder may spend a coin of the account with at least the
--- given confirmations: no pending transaction holds it, a coin from a
--- coinbase has matured, and an unconfirmed coin comes from a transaction
--- the account trusts ('trustedTx'), its own change. At zero
--- confirmations, this says whether the coin can be spent now: the
--- spendable flag and balances.
+-- given confirmations: nothing locks it, neither a pending transaction nor
+-- the user, a coin from a coinbase has matured, and an unconfirmed coin
+-- comes from a transaction the account trusts ('trustedTx'), its own
+-- change. At zero confirmations, this says whether the coin can be spent
+-- now: the spendable flag and balances.
 canSpend :: (MonadUnliftIO m) => Spending -> Natural -> OutPoint -> Store.BlockRef -> ExceptT String (DB m) Bool
 canSpend rules minConf outpoint block
-  | confirmations < minConf || outpoint `Set.member` rules.spendingLocked = return False
+  | confirmations < minConf || outpoint `Map.member` rules.spendingLocks = return False
   | confirmations == 0 = trustedTx rules.spendingNetwork rules.spendingAccount outpoint.hash
   | confirmations < coinbaseMaturity = not <$> isCoinbaseTx outpoint.hash
   | otherwise = return True
@@ -318,6 +352,56 @@ trustedTx net accId tid = do
     spentTxs summary =
       nubOrd [outpoint.hash | input <- Map.elems summary.summaryMyInputs, outpoint <- input.myInputsOutpoints]
 
+{- Locks of the user -}
+
+-- | Lock a coin of the wallet at the user's request: the builder no longer
+-- offers it, and no pending transaction may spend it, until the user
+-- unlocks it. Only a free coin can be locked: one a pending transaction
+-- holds is refused, and so is one the user locked already. The lock stays
+-- while the coin confirms, and goes with the coin once it is spent.
+-- Returns the account of the coin and the coin as coins shows it.
+lockCoin :: (MonadUnliftIO m) => OutPoint -> ExceptT String (DB m) (DBAccount, JsonCoin)
+lockCoin outpoint = do
+  (net, row) <- walletCoin outpoint
+  locks <- coinLocks net
+  case Map.lookup outpoint locks of
+    Just LockedByTransaction -> throwError "The coin is already locked by a pending transaction"
+    Just LockedByUser -> throwError "The coin is already locked"
+    Nothing -> setLockedByUser outpoint True
+  shownCoin net row
+
+-- | Unlock a coin the user locked. A coin a pending transaction holds is
+-- freed by deleting that transaction instead.
+unlockCoin :: (MonadUnliftIO m) => OutPoint -> ExceptT String (DB m) (DBAccount, JsonCoin)
+unlockCoin outpoint = do
+  (net, row) <- walletCoin outpoint
+  locks <- coinLocks net
+  case Map.lookup outpoint locks of
+    Just LockedByUser -> setLockedByUser outpoint False
+    Just LockedByTransaction -> throwError "The coin is locked by a pending transaction, not by the user: deletetx frees it"
+    Nothing -> throwError "The coin is not locked"
+  shownCoin net row
+
+-- | A coin of the wallet by its outpoint, with the network of its account
+walletCoin :: (MonadUnliftIO m) => OutPoint -> ExceptT String (DB m) (Network, DBCoin)
+walletCoin outpoint = do
+  rowM <- lift $ P.get (DBCoinKey $ outpointBytes outpoint)
+  row <- liftMaybe ("The wallet has no coin " <> coinText outpoint) rowM
+  acc <- getAccountById (dBCoinAccount row)
+  return (accountNetwork acc, row)
+
+setLockedByUser :: (MonadUnliftIO m) => OutPoint -> Bool -> ExceptT String (DB m) ()
+setLockedByUser outpoint locked =
+  lift $ P.update (DBCoinKey $ outpointBytes outpoint) [DBCoinLockedByUser P.=. locked]
+
+-- | A coin as coins shows it now, with its account
+shownCoin :: (MonadUnliftIO m) => Network -> DBCoin -> ExceptT String (DB m) (DBAccount, JsonCoin)
+shownCoin net row = do
+  acc <- getAccountById (dBCoinAccount row)
+  rules <- spendingOf net (dBCoinAccount row)
+  coin <- toJsonCoin rules row
+  return (acc, coin)
+
 {- Refreshing -}
 
 -- | What a refresh changed: how many coins were inserted, moved to another
@@ -393,6 +477,7 @@ insertCoin net accId coin = do
             dBCoinAddress = addr,
             dBCoinValue = coin.value,
             dBCoinBlockRef = S.encode coin.block,
+            dBCoinLockedByUser = False,
             dBCoinCreated = time
           }
   lift $ P.insert_ row

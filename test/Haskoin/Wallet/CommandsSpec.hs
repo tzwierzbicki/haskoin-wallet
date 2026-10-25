@@ -10,12 +10,15 @@ import Data.Default (def)
 import Haskoin
 import Haskoin.Util.Arbitrary
 import Haskoin.Wallet.Arbitrary
-import Haskoin.Wallet.Commands (Response (..), cmdSendTx)
+import Haskoin.Wallet.Address (genExtAddress)
+import Haskoin.Wallet.Coin (CoinLock (..), JsonCoin (..), refreshCoins)
+import Haskoin.Wallet.Commands (Response (..), cmdCoins, cmdLockCoin, cmdSendTx, cmdUnlockCoin)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database (migrateAll)
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxSignData
+import Haskoin.Wallet.Util (Page (Page))
 import System.FilePath ((</>))
 import Test.Hspec
 
@@ -74,4 +77,35 @@ spec = do
           writeJsonFile file $ Json.toJSON signedPayment
           cmdSendTx ctx (walletIn dir) Nothing (Just file) Nothing
             `shouldReturn` ResponseError "Give the --network of a transaction the wallet does not hold"
+    describe "Locking coins, as lockcoin, unlockcoin and coins --locked do" $ do
+      -- A wallet with the account main and two coins at its first address
+      let twoCoins dir =
+            walletInFile (dir </> "wallet.sqlite") $ do
+              (accId, _) <- testNewAcc ctx "main"
+              _ <- genExtAddress ctx def accId ""
+              refreshCoins
+                btc
+                ctx
+                accId
+                [externalAddr 0]
+                [ storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000,
+                  storeCoin ctx (fakeTxHash 2, 0) (Just 800001) (externalAddr 0) 20000
+                ]
+          firstCoin = OutPoint (fakeTxHash 1) 0
+      it "answer with the coin locked by the user, then free again, and refuse a second unlock" $
+        inScratchDirectory $ \dir -> do
+          wallet <- twoCoins dir
+          shownLocks <$> cmdLockCoin wallet firstCoin `shouldReturn` Right [(firstCoin, Just LockedByUser)]
+          shownLocks <$> cmdUnlockCoin wallet firstCoin `shouldReturn` Right [(firstCoin, Nothing)]
+          cmdUnlockCoin wallet firstCoin `shouldReturn` ResponseError "The coin is not locked"
+      it "list only the locked coins with --locked" $
+        inScratchDirectory $ \dir -> do
+          wallet <- twoCoins dir
+          _ <- cmdLockCoin wallet firstCoin
+          shownLocks <$> cmdCoins wallet Nothing True (Page 5 0) `shouldReturn` Right [(firstCoin, Just LockedByUser)]
+          (fmap length . shownLocks <$> cmdCoins wallet Nothing False (Page 5 0)) `shouldReturn` Right 2
     testIdentity $ identityTests btc ctx
+  where
+    -- The coins a response shows, with their locks
+    shownLocks (ResponseCoins _ coins) = Right [(jsonCoinOutpoint coin, jsonCoinLock coin) | coin <- coins]
+    shownLocks other = Left (show other)

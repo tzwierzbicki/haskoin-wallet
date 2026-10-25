@@ -15,6 +15,7 @@ import Control.Monad.Except (ExceptT)
 import Control.Monad.Trans (lift, liftIO)
 import Control.Monad.Trans.Except (runExceptT)
 import Data.Aeson (FromJSON (..), eitherDecodeFileStrict, encode, withObject, (.!=), (.:), (.:?))
+import Data.Default (def)
 import qualified Data.ByteString as BS
 import Data.Either (fromRight, isLeft)
 import Data.IORef (IORef, modifyIORef)
@@ -31,6 +32,7 @@ import Database.Persist.Sqlite (runSqlite)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Account (insertAccount, nextAccount)
+import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database (DB, DBAccount, DBAccountId, DBPendingTx (..), hashBytes, migrateAll)
 import Haskoin.Wallet.Keys (MnemonicPass (..), PublicSeed (..), seedOf, signingKey)
 import Haskoin.Wallet.Store
@@ -75,6 +77,16 @@ inDatabaseE action = inDatabase $ do
 -- | Run an action on a database file, created if missing
 inDatabaseFile :: FilePath -> DB IO a -> IO a
 inDatabaseFile path = runSqlite (cs path)
+
+-- | A wallet in a database file, prepared by the action, and the
+-- configuration that points hw at it, for the tests of the commands
+walletInFile :: FilePath -> ExceptT String (DB IO) a -> IO Config
+walletInFile database prepare = do
+  inDatabaseFile database $ do
+    createTables migrateAll
+    _ <- liftIO . expectRight =<< runExceptT prepare
+    return ()
+  return def {configDatabaseFile = Just database}
 
 -- | Create the tables of a schema: the wallet's ('migrateAll') or an old one
 createTables :: Migration -> DB IO ()

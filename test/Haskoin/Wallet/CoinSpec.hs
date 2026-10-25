@@ -23,7 +23,6 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromJust, listToMaybe)
 import qualified Data.Serialize as S
-import qualified Data.Set as Set
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Database.Persist as P
@@ -46,6 +45,7 @@ spec = prepareContext $ \ctx -> do
   listingSpec ctx
   spendableSpec ctx
   balancesSpec ctx
+  userLocksSpec ctx
   lifeSpec ctx
   rowSpec ctx
   jsonSpec ctx
@@ -129,13 +129,13 @@ storedAt addr = lift $ map P.entityVal <$> P.selectList [DBCoinAddress P.==. add
 
 -- | The coins of the account as coins lists them: outpoint, confirmations
 -- and lock
-listed :: DBAccountId -> Page -> ExceptT String (DB IO) [(OutPoint, Natural, Bool)]
-listed accId page = map (\c -> (jsonCoinOutpoint c, jsonCoinConfirmations c, jsonCoinLocked c)) <$> coinPage btc accId page
+listed :: DBAccountId -> Page -> ExceptT String (DB IO) [(OutPoint, Natural, Maybe CoinLock)]
+listed accId page = map (\c -> (jsonCoinOutpoint c, jsonCoinConfirmations c, jsonCoinLock c)) <$> coinPage btc accId AllCoins page
 
 -- | The coins of the account as coins lists them, and whether each can be
 -- spent now
 spendableFlags :: DBAccountId -> ExceptT String (DB IO) [(OutPoint, Bool)]
-spendableFlags accId = map (\c -> (jsonCoinOutpoint c, jsonCoinSpendable c)) <$> coinPage btc accId (Page 10 0)
+spendableFlags accId = map (\c -> (jsonCoinOutpoint c, jsonCoinSpendable c)) <$> coinPage btc accId AllCoins (Page 10 0)
 
 -- | The outpoints of the coins offered to the builder at a number of
 -- confirmations
@@ -163,7 +163,7 @@ spendingFirstOnCash ctx = do
 -- that spoil one of its columns
 paymentRow :: DBAccountId -> DBCoin
 paymentRow accId =
-  DBCoin accId (outpointBytes firstCoin) "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" 50000 (S.encode (Store.BlockRef 800000 0)) fixtureTime
+  DBCoin accId (outpointBytes firstCoin) "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" 50000 (S.encode (Store.BlockRef 800000 0)) False fixtureTime
 
 -- | The confirmed payment, its script written in other bytes: the
 -- 20-byte hash of the first receiving address pushed with OP_PUSHDATA1
@@ -324,29 +324,29 @@ listingSpec ctx =
         accId <- account ctx
         threeCoins ctx accId
         bestAt 800002
-        listed accId (Page 10 0) `dbShouldBeE` [(thirdCoin, 0, False), (secondCoin, 2, False), (firstCoin, 3, False)]
+        listed accId (Page 10 0) `dbShouldBeE` [(thirdCoin, 0, Nothing), (secondCoin, 2, Nothing), (firstCoin, 3, Nothing)]
 
     it "counts one confirmation for a confirmed coin while the best block is unknown or behind it" $
       inDatabaseE $ do
         accId <- account ctx
         _ <- refresh ctx accId [confirmedPayment ctx]
-        listed accId (Page 10 0) `dbShouldBeE` [(firstCoin, 1, False)]
+        listed accId (Page 10 0) `dbShouldBeE` [(firstCoin, 1, Nothing)]
         bestAt 799990
-        listed accId (Page 10 0) `dbShouldBeE` [(firstCoin, 1, False)]
+        listed accId (Page 10 0) `dbShouldBeE` [(firstCoin, 1, Nothing)]
 
     it "counts from the best block of the account's network, not another's" $
       inDatabaseE $ do
         accId <- account ctx
         _ <- refresh ctx accId [confirmedPayment ctx]
         lift $ updateBest bch (fakeBlockHash 2) 900000
-        listed accId (Page 10 0) `dbShouldBeE` [(firstCoin, 1, False)]
+        listed accId (Page 10 0) `dbShouldBeE` [(firstCoin, 1, Nothing)]
 
     it "shows a coin a pending transaction spends as locked, and the others as free" $
       inDatabaseE $ do
         accId <- account ctx
         threeCoins ctx accId
         spendingFirst ctx accId
-        (map (\(o, _, l) -> (o, l)) <$> listed accId (Page 10 0)) `dbShouldBeE` [(thirdCoin, False), (secondCoin, False), (firstCoin, True)]
+        (map (\(o, _, l) -> (o, l)) <$> listed accId (Page 10 0)) `dbShouldBeE` [(thirdCoin, Nothing), (secondCoin, Nothing), (firstCoin, Just LockedByTransaction)]
 
     it "shows as locked a coin a pending transaction of another account spends" $
       inDatabaseE $ do
@@ -354,14 +354,14 @@ listingSpec ctx =
         (otherId, _) <- testNewAcc2 ctx "other"
         threeCoins ctx accId
         spendingFirst ctx otherId
-        (map (\(o, _, l) -> (o, l)) <$> listed accId (Page 10 0)) `dbShouldBeE` [(thirdCoin, False), (secondCoin, False), (firstCoin, True)]
+        (map (\(o, _, l) -> (o, l)) <$> listed accId (Page 10 0)) `dbShouldBeE` [(thirdCoin, Nothing), (secondCoin, Nothing), (firstCoin, Just LockedByTransaction)]
 
     it "leaves free a coin whose outpoint a pending transaction of the other chain spends" $
       inDatabaseE $ do
         accId <- account ctx
         threeCoins ctx accId
         spendingFirstOnCash ctx
-        (map (\(o, _, l) -> (o, l)) <$> listed accId (Page 10 0)) `dbShouldBeE` [(thirdCoin, False), (secondCoin, False), (firstCoin, False)]
+        (map (\(o, _, l) -> (o, l)) <$> listed accId (Page 10 0)) `dbShouldBeE` [(thirdCoin, Nothing), (secondCoin, Nothing), (firstCoin, Nothing)]
 
     it "marks a confirmed coin as spendable, and one a pending transaction holds as not" $
       inDatabaseE $ do
@@ -389,6 +389,23 @@ listingSpec ctx =
         bestAt 800099
         spendableFlags accId `dbShouldBeE` [(OutPoint (txHash (coinbase ctx)) 0, True)]
 
+    it "shows a coin the user locked as locked by the user" $
+      inDatabaseE $ do
+        accId <- account ctx
+        threeCoins ctx accId
+        _ <- lockCoin secondCoin
+        (map (\(o, _, l) -> (o, l)) <$> listed accId (Page 10 0))
+          `dbShouldBeE` [(thirdCoin, Nothing), (secondCoin, Just LockedByUser), (firstCoin, Nothing)]
+
+    it "lists the locked coins only, of both kinds, when asked" $
+      inDatabaseE $ do
+        accId <- account ctx
+        threeCoins ctx accId
+        spendingFirst ctx accId
+        _ <- lockCoin secondCoin
+        (map (\c -> (jsonCoinOutpoint c, jsonCoinLock c)) <$> coinPage btc accId LockedCoins (Page 10 0))
+          `dbShouldBeE` [(secondCoin, Just LockedByUser), (firstCoin, Just LockedByTransaction)]
+
     it "lists the coins of the account only" $
       inDatabaseE $ do
         accId <- account ctx
@@ -402,7 +419,7 @@ listingSpec ctx =
       inDatabaseE $ do
         (accId, _) <- testNewAccBch ctx "cash"
         _ <- refreshCoins bch ctx accId [bchExternalAddr] [storeCoin ctx (fakeTxHash 5, 0) (Just 800000) bchExternalAddr 10000]
-        (map jsonCoinAddress <$> coinPage bch accId (Page 10 0)) `dbShouldBeE` [bchExternalAddr]
+        (map jsonCoinAddress <$> coinPage bch accId AllCoins (Page 10 0)) `dbShouldBeE` [bchExternalAddr]
 
     it "refuses a stored coin whose address does not read, rather than leaving it out" $
       inDatabaseE $ do
@@ -410,7 +427,7 @@ listingSpec ctx =
         lift $ P.insert_ (paymentRow accId) {dBCoinAddress = "nonsense"}
         lift $
           dbShouldFailWith "The stored coin 0000000000000000000000000000000000000000000000000000000000000001 0 has an address that does not read: nonsense" $
-            coinPage btc accId (Page 10 0)
+            coinPage btc accId AllCoins (Page 10 0)
 
     it "refuses a stored coin whose block does not read" $
       inDatabaseE $ do
@@ -418,7 +435,7 @@ listingSpec ctx =
         lift $ P.insert_ (paymentRow accId) {dBCoinBlockRef = "nonsense"}
         lift $
           dbShouldFailWith "The stored coin 0000000000000000000000000000000000000000000000000000000000000001 0 has a block that does not read" $
-            coinPage btc accId (Page 10 0)
+            coinPage btc accId AllCoins (Page 10 0)
 
 {- Spendable -}
 
@@ -465,6 +482,13 @@ spendableSpec ctx =
         threeCoins ctx accId
         spendingFirstOnCash ctx
         spendable ctx accId 1 `dbShouldBeE` [firstCoin, secondCoin]
+
+    it "holds back a coin the user locked" $
+      inDatabaseE $ do
+        accId <- account ctx
+        threeCoins ctx accId
+        _ <- lockCoin firstCoin
+        spendable ctx accId 1 `dbShouldBeE` [secondCoin]
 
     it "holds back a coinbase until its 100th confirmation" $
       inDatabaseE $ do
@@ -560,6 +584,13 @@ balancesSpec ctx =
           `dbShouldBeE` Map.fromList [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", 20000)]
         spendableBalance btc accId `dbShouldBeE` 20000
 
+    it "leave out a coin the user locked" $
+      inDatabaseE $ do
+        accId <- account ctx
+        threeCoins ctx accId
+        _ <- lockCoin secondCoin
+        spendableBalance btc accId `dbShouldBeE` 50000
+
     it "count the account's own unconfirmed change" $
       inDatabaseE $ do
         accId <- account ctx
@@ -588,6 +619,88 @@ balancesSpec ctx =
         spendableBalance btc accId `dbShouldBeE` 50000
         spendableBalance btc otherId `dbShouldBeE` 10000
 
+{- Locks of the user -}
+
+userLocksSpec :: Ctx -> Spec
+userLocksSpec ctx =
+  describe "The coins the user locks, as lockcoin and unlockcoin do" $ do
+    it "locks a free coin, which shows locked by the user and not spendable" $
+      inDatabaseE $ do
+        accId <- account ctx
+        threeCoins ctx accId
+        (lockState <$> lockCoin secondCoin) `dbShouldBeE` ("main", Just LockedByUser, False)
+
+    it "refuses a coin the wallet does not have" $
+      inDatabaseE $ do
+        accId <- account ctx
+        threeCoins ctx accId
+        lift $
+          dbShouldFailWith "The wallet has no coin 0000000000000000000000000000000000000000000000000000000000000009 0" $
+            lockCoin (OutPoint (fakeTxHash 9) 0)
+
+    it "refuses a coin a pending transaction holds" $
+      inDatabaseE $ do
+        accId <- account ctx
+        threeCoins ctx accId
+        spendingFirst ctx accId
+        lift $ dbShouldFailWith "The coin is already locked by a pending transaction" $ lockCoin firstCoin
+
+    it "refuses a coin the user locked already" $
+      inDatabaseE $ do
+        accId <- account ctx
+        threeCoins ctx accId
+        _ <- lockCoin secondCoin
+        lift $ dbShouldFailWith "The coin is already locked" $ lockCoin secondCoin
+
+    it "unlocks a coin the user locked, which can be spent again" $
+      inDatabaseE $ do
+        accId <- account ctx
+        threeCoins ctx accId
+        _ <- lockCoin secondCoin
+        (lockState <$> unlockCoin secondCoin) `dbShouldBeE` ("main", Nothing, True)
+        spendable ctx accId 1 `dbShouldBeE` [firstCoin, secondCoin]
+
+    it "refuses to unlock a coin that is not locked" $
+      inDatabaseE $ do
+        accId <- account ctx
+        threeCoins ctx accId
+        lift $ dbShouldFailWith "The coin is not locked" $ unlockCoin secondCoin
+
+    it "refuses to unlock a coin a pending transaction holds, which deletetx frees" $
+      inDatabaseE $ do
+        accId <- account ctx
+        threeCoins ctx accId
+        spendingFirst ctx accId
+        lift $
+          dbShouldFailWith "The coin is locked by a pending transaction, not by the user: deletetx frees it" $
+            unlockCoin firstCoin
+
+    it "keeps the lock while the coin confirms" $
+      inDatabaseE $ do
+        accId <- account ctx
+        _ <- refresh ctx accId [payment ctx]
+        _ <- lockCoin firstCoin
+        _ <- refresh ctx accId [confirmedPayment ctx]
+        listed accId (Page 10 0) `dbShouldBeE` [(firstCoin, 1, Just LockedByUser)]
+
+    it "loses the lock with the coin once the store no longer lists it: a coin that comes back comes back free" $
+      inDatabaseE $ do
+        accId <- account ctx
+        _ <- refresh ctx accId [confirmedPayment ctx]
+        _ <- lockCoin firstCoin
+        _ <- refresh ctx accId []
+        _ <- refresh ctx accId [confirmedPayment ctx]
+        listed accId (Page 10 0) `dbShouldBeE` [(firstCoin, 1, Nothing)]
+
+    it "locks a coin whose outpoint a pending transaction of the other chain spends" $
+      inDatabaseE $ do
+        accId <- account ctx
+        threeCoins ctx accId
+        spendingFirstOnCash ctx
+        (lockState <$> lockCoin firstCoin) `dbShouldBeE` ("main", Just LockedByUser, False)
+  where
+    lockState (acc, coin) = (dBAccountName acc, jsonCoinLock coin, jsonCoinSpendable coin)
+
 {- The life of a coin -}
 
 lifeSpec :: Ctx -> Spec
@@ -600,16 +713,16 @@ lifeSpec ctx =
         -- whoever pays can still replace it
         bestAt 799999
         _ <- refresh ctx accId [payment ctx]
-        listed accId (Page 10 0) `dbShouldBeE` [(firstCoin, 0, False)]
+        listed accId (Page 10 0) `dbShouldBeE` [(firstCoin, 0, Nothing)]
         spendable ctx accId 0 `dbShouldBeE` []
         -- It confirms in the next block
         bestAt 800000
         _ <- refresh ctx accId [confirmedPayment ctx]
-        listed accId (Page 10 0) `dbShouldBeE` [(firstCoin, 1, False)]
+        listed accId (Page 10 0) `dbShouldBeE` [(firstCoin, 1, Nothing)]
         spendable ctx accId 1 `dbShouldBeE` [firstCoin]
         -- A payment of the wallet spends it: held, offered no more
         spendingFirst ctx accId
-        listed accId (Page 10 0) `dbShouldBeE` [(firstCoin, 1, True)]
+        listed accId (Page 10 0) `dbShouldBeE` [(firstCoin, 1, Just LockedByTransaction)]
         spendable ctx accId 0 `dbShouldBeE` []
         -- The payment is mined: the store no longer lists the coin
         bestAt 800001
@@ -626,10 +739,13 @@ rowSpec ctx =
         accId <- account ctx
         refreshed <- refresh ctx accId [confirmedPayment ctx]
         row <- liftMaybe "The coin is not stored" $ listToMaybe (insertedCoins refreshed)
-        let rules = Spending btc accId (Just 800002) Set.empty
-            shown = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 False True
+        let rules = Spending btc accId (Just 800002) Map.empty
+            shown = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True
         toJsonCoin rules row `dbShouldBeE` shown
-        toJsonCoin rules {spendingLocked = Set.fromList [firstCoin]} row `dbShouldBeE` shown {jsonCoinLocked = True, jsonCoinSpendable = False}
+        toJsonCoin rules {spendingLocks = Map.fromList [(firstCoin, LockedByTransaction)]} row
+          `dbShouldBeE` shown {jsonCoinLock = Just LockedByTransaction, jsonCoinSpendable = False}
+        toJsonCoin rules {spendingLocks = Map.fromList [(firstCoin, LockedByUser)]} row
+          `dbShouldBeE` shown {jsonCoinLock = Just LockedByUser, jsonCoinSpendable = False}
         toJsonCoin rules {spendingBest = Nothing} row `dbShouldBeE` shown {jsonCoinConfirmations = 1}
 
     it "keeps its outpoint, read back from its key" $
@@ -668,7 +784,7 @@ jsonSpec :: Ctx -> Spec
 jsonSpec _ =
   describe "Coins in JSON" $ do
     it "writes a confirmed and spendable coin as coins prints it, and reads it back" $ do
-      let coin = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 False True
+      let coin = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True
           json :: String
           json =
             [r|{
@@ -677,14 +793,14 @@ jsonSpec _ =
               "value": 50000,
               "block": {"height": 800000, "position": 0},
               "confirmations": 3,
-              "locked": false,
+              "lock": null,
               "spendable": true
             }|]
       eitherDecode (cs json) `shouldBe` Right (marshalValue btc coin)
       unmarshalJSON btc (cs json) `shouldBe` Just coin
 
     it "writes an unconfirmed and locked coin of Bitcoin Cash with its cash address" $ do
-      let coin = JsonCoin (OutPoint (fakeTxHash 5) 1) bchExternalAddr 10000 (Store.MemRef 0) 0 True False
+      let coin = JsonCoin (OutPoint (fakeTxHash 5) 1) bchExternalAddr 10000 (Store.MemRef 0) 0 (Just LockedByTransaction) False
           json :: String
           json =
             [r|{
@@ -693,7 +809,7 @@ jsonSpec _ =
               "value": 10000,
               "block": {"mempool": 0},
               "confirmations": 0,
-              "locked": true,
+              "lock": "transaction",
               "spendable": false
             }|]
       eitherDecode (cs json) `shouldBe` Right (marshalValue bch coin)

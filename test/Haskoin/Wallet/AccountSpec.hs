@@ -8,7 +8,7 @@
 module Haskoin.Wallet.AccountSpec (spec) where
 
 import Control.Monad (forM_)
-import Control.Monad.Except (ExceptT, runExceptT)
+import Control.Monad.Except (ExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans (lift)
 import Data.Aeson (Value, eitherDecode, toJSON)
@@ -26,7 +26,6 @@ import Haskoin.Wallet.Account
 import Haskoin.Wallet.Address (genExtAddress)
 import Haskoin.Wallet.Coin (refreshCoins)
 import Haskoin.Wallet.Commands (Response (..), cmdAccounts, cmdAddrs, cmdExportAcc, cmdImportAcc)
-import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Keys
 import Haskoin.Wallet.PendingTx (importPendingTx)
@@ -332,7 +331,7 @@ balanceSpec ctx =
 
     it "are shown by accounts with the balance the account can spend now" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletIn (dir </> "wallet.sqlite") $ do
+        wallet <- walletInFile (dir </> "wallet.sqlite") $ do
           (accId, _) <- testNewAcc ctx "main"
           _ <- genExtAddress ctx def accId ""
           refreshCoins btc ctx accId [externalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
@@ -340,7 +339,7 @@ balanceSpec ctx =
 
     it "are shown by addrs with the balance each address can spend now" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletIn (dir </> "wallet.sqlite") $ do
+        wallet <- walletInFile (dir </> "wallet.sqlite") $ do
           (accId, _) <- testNewAcc ctx "main"
           _ <- genExtAddress ctx def accId ""
           _ <- genExtAddress ctx def accId ""
@@ -369,7 +368,7 @@ documentSpec ctx =
   describe "The account document, from an offline wallet to an online one" $ do
     it "is written with the key, the network, the name and the fingerprint of the seed" $
       inScratchDirectory $ \dir -> do
-        offline <- walletIn (dir </> "offline.sqlite") (testNewAcc ctx "main")
+        offline <- walletInFile (dir </> "offline.sqlite") (testNewAcc ctx "main")
         let file = dir </> "main.json"
         cmdExportAcc ctx offline (Just "main") file `shouldReturn` ResponseFile file
         written <- readFile file
@@ -377,14 +376,14 @@ documentSpec ctx =
 
     it "creates the account in the online wallet, with the fingerprint" $
       inScratchDirectory $ \dir -> do
-        online <- walletIn (dir </> "online.sqlite") (return ())
+        online <- walletInFile (dir </> "online.sqlite") (return ())
         writeFile (dir </> "main.json") mainDocument
         response <- cmdImportAcc ctx online (dir </> "main.json")
         imported response `shouldBe` Right ("main", "btc", testAccountXPub, Just "bc560f95")
 
     it "records the fingerprint of an account the online wallet has already, and the same document again is refused" $
       inScratchDirectory $ \dir -> do
-        online <- walletIn (dir </> "online.sqlite") (watchOnly ctx btc 0 "main")
+        online <- walletInFile (dir </> "online.sqlite") (watchOnly ctx btc 0 "main")
         writeFile (dir </> "main.json") mainDocument
         response <- cmdImportAcc ctx online (dir </> "main.json")
         imported response `shouldBe` Right ("main", "btc", testAccountXPub, Just "bc560f95")
@@ -392,20 +391,10 @@ documentSpec ctx =
 
     it "reads a document of an earlier hw, which named a wallet instead of the seed" $
       inScratchDirectory $ \dir -> do
-        online <- walletIn (dir </> "online.sqlite") (return ())
+        online <- walletInFile (dir </> "online.sqlite") (return ())
         writeFile (dir </> "old.json") oldDocument
         response <- cmdImportAcc ctx online (dir </> "old.json")
         imported response `shouldBe` Right ("main", "btc", testAccountXPub, Nothing)
-
--- | A wallet in a database file, prepared by the action, and the
--- configuration that points hw at it
-walletIn :: FilePath -> ExceptT String (DB IO) a -> IO Config
-walletIn database prepare = do
-  inDatabaseFile database $ do
-    createTables migrateAll
-    _ <- liftIO . expectRight =<< runExceptT prepare
-    return ()
-  return def {configDatabaseFile = Just database}
 
 -- | What accounts answered: each account by its name, with the balance it
 -- can spend now

@@ -84,8 +84,10 @@ rebuiltTables = ["d_b_account", "d_b_address", "d_b_tx_info", "d_b_coin", "d_b_p
 -- account find its id through its key, unique in the old table and in the
 -- new one; the hashes and outpoints, stored as hexadecimal text, become
 -- their bytes. The columns version 4 drops are left behind, and the new
--- ones take their defaults: no summary is dead and no pending transaction
--- is in conflict.
+-- ones take their defaults: no summary is dead, no pending transaction is
+-- in conflict, and the user has locked no coin. The locked column of
+-- version 3 said which coins the pending transactions held, which version 4
+-- reads from them.
 copies :: [Text]
 copies =
   [ "insert into d_b_address \

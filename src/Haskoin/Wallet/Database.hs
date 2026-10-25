@@ -13,8 +13,8 @@
 -- balances of the addresses, the transaction summaries, the coins, the raw
 -- transactions, the best block, and whether a pending transaction is in
 -- conflict, which only the store can tell. From the user or a signer: the
--- accounts, the labels, the pending transactions and the fingerprint of a
--- seed.
+-- accounts, the labels, the pending transactions, the coins the user locked
+-- and the fingerprint of a seed.
 --
 -- What follows from those facts by the rules of the wallet is computed
 -- when it is read, and stored nowhere: the confirmations, from the best

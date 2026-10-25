@@ -155,7 +155,7 @@ spec = prepareContext $ \ctx ->
           `dbShouldBe` [ "account", "address", "balance_coins", "balance_confirmed", "balance_received", "balance_txs",
                          "balance_unconfirmed", "created", "index", "internal", "label" ]
         columnNames "d_b_tx_info" `dbShouldBe` ["account", "blob", "block_ref", "created", "dead", "txid"]
-        columnNames "d_b_coin" `dbShouldBe` ["account", "address", "block_ref", "created", "outpoint", "value"]
+        columnNames "d_b_coin" `dbShouldBe` ["account", "address", "block_ref", "created", "locked_by_user", "outpoint", "value"]
         columnNames "d_b_pending_tx" `dbShouldBe` ["account", "blob", "conflicted", "created", "nosig_hash", "online"]
 
     it "marks no summary dead: version 3 deleted the summaries of dead transactions" $
@@ -163,6 +163,13 @@ spec = prepareContext $ \ctx ->
         version3Database
         migrateTo4 ctx
         queryRows "select dead from d_b_tx_info" `dbShouldBe` [[PersistInt64 0]]
+
+    it "takes no lock of version 3 for a lock of the user: those were the pending transactions' locks" $
+      inMemory $ do
+        version3Database
+        queryRows "select locked from d_b_coin" `dbShouldBe` [[PersistInt64 1]]
+        migrateTo4 ctx
+        queryRows "select locked_by_user from d_b_coin" `dbShouldBe` [[PersistInt64 0]]
 
     it "starts every pending transaction out of conflict, for the next sync to ask the store" $
       inMemory $ do

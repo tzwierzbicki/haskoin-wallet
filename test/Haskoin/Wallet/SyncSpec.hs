@@ -460,7 +460,7 @@ spec = prepareContext $ \ctx -> do
         res <- sync ctx cfg (toStore (cashPaymentStore ctx)) bch accId False
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (1, 1)
         summaries accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
-        (map jsonCoinOutpoint <$> coinPage bch accId (Page 5 0)) `dbShouldBeE` [OutPoint (fakeTxHash 1) 0]
+        (map jsonCoinOutpoint <$> coinPage bch accId AllCoins (Page 5 0)) `dbShouldBeE` [OutPoint (fakeTxHash 1) 0]
         balances accId `dbShouldBeE` (50000, 0, 1)
         lift (getBest bch) `dbShouldBeE` Just (headerHash (blockAt 800002 1).header, 800002)
         lift (getBest btc) `dbShouldBeE` Nothing
@@ -1236,7 +1236,7 @@ paidAddresses accId = do
 
 -- | The coins of the account, in the order of their outpoints
 coins :: DBAccountId -> ExceptT String (DB IO) [OutPoint]
-coins accId = sortOn show . map jsonCoinOutpoint <$> coinPage btc accId (Page 500 0)
+coins accId = sortOn show . map jsonCoinOutpoint <$> coinPage btc accId AllCoins (Page 500 0)
 
 -- | The confirmed and unconfirmed balances of the account, and its number
 -- of coins

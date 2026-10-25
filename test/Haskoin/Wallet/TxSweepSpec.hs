@@ -425,7 +425,7 @@ sweepIntoWalletSpec ctx =
         importPendingTx btc ctx accId tsd `dbShouldBeE` pendingHash
         ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
           `dbShouldBeE` [Just ((pendingHash, False, False, False))]
-        coinPage btc accId (Page 5 0) `dbShouldBeE` []
+        coinPage btc accId AllCoins (Page 5 0) `dbShouldBeE` []
         -- signsweep by nosigHash, with the outside key only
         held <- requirePendingTx pendingHash
         liftIO $ held.pendingTxOnline `shouldBe` False

@@ -387,7 +387,9 @@ commandResponse ctx cfg unit cmd =
     CommandSignTx nameM h i o s -> cmdSignTx ctx cfg nameM h i o s
     CommandSendTx h i n -> cmdSendTx ctx cfg h i n
     CommandDeleteTx h -> cmdDeleteTx ctx cfg h
-    CommandCoins nameM p -> cmdCoins cfg nameM p
+    CommandCoins nameM locked p -> cmdCoins cfg nameM locked p
+    CommandLockCoin outpoint -> cmdLockCoin cfg outpoint
+    CommandUnlockCoin outpoint -> cmdUnlockCoin cfg outpoint
     -- Import/export commands
     CommandExportAcc nameM f -> cmdExportAcc ctx cfg nameM f
     CommandImportAcc f -> cmdImportAcc ctx cfg f
@@ -691,13 +693,27 @@ parseSignInput nosigHM inputM outputM =
       tsd <- liftEitherIO (readJsonFile i)
       return (tsd, False)
 
-cmdCoins :: Config -> Maybe Text -> Page -> IO Response
-cmdCoins cfg nameM page =
+cmdCoins :: Config -> Maybe Text -> Bool -> Page -> IO Response
+cmdCoins cfg nameM locked page =
   runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
-    coins <- coinPage net accId page
+    coins <- coinPage net accId (if locked then LockedCoins else AllCoins) page
     return $ ResponseCoins acc coins
+
+-- | Lock a coin at the user's request, and show it
+cmdLockCoin :: Config -> OutPoint -> IO Response
+cmdLockCoin cfg outpoint =
+  runDBResponse cfg $ do
+    (acc, coin) <- lockCoin outpoint
+    return $ ResponseCoins acc [coin]
+
+-- | Unlock a coin the user locked, and show it
+cmdUnlockCoin :: Config -> OutPoint -> IO Response
+cmdUnlockCoin cfg outpoint =
+  runDBResponse cfg $ do
+    (acc, coin) <- unlockCoin outpoint
+    return $ ResponseCoins acc [coin]
 
 -- | Send a pending transaction of the wallet, by its nosigHash, or a
 -- signed transaction from a file

@@ -34,8 +34,9 @@
 -- store reported it. Whether a coin is locked and whether a change address
 -- is free are read from the pending transactions, which the locked column
 -- of the coins and the free column of the addresses could only disagree
--- with. A pending transaction keeps whether the store, at the last sync,
--- found one of its coins spent by another transaction or gone.
+-- with; a coin keeps instead whether the user locked it, which only the
+-- user can tell. A pending transaction keeps whether the store, at the last
+-- sync, found one of its coins spent by another transaction or gone.
 --
 -- The keys are made for large wallets. An address is keyed by its account,
 -- its chain and its index, the order addrs lists it in, and its derivation
@@ -117,6 +118,7 @@ DBCoin
   address Text
   value Word64
   blockRef ByteString
+  lockedByUser Bool default=0
   created UTCTime default=CURRENT_TIMESTAMP
   Primary outpoint
   deriving Show

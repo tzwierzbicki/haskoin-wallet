@@ -209,6 +209,10 @@ formatTrue = PText [SetColor Foreground Vivid Green]
 formatFalse :: String -> Printer
 formatFalse = PText [SetColor Foreground Vivid Red]
 
+-- | What the user decided, apart from what hw found: a coin they locked
+formatUserLock :: String -> Printer
+formatUserLock = PText [SetColor Foreground Vivid Magenta]
+
 formatError :: String -> Printer
 formatError = PText [SetColor Foreground Vivid Red]
 
@@ -508,10 +512,12 @@ coinPrinter net unit JsonCoin {..} =
           <+> status
     ]
   where
-    status
-      | jsonCoinLocked = formatFalse "Locked"
-      | jsonCoinSpendable = formatTrue "Spendable"
-      | otherwise = formatFalse "Not spendable yet"
+    status = case jsonCoinLock of
+      Just LockedByTransaction -> formatFalse "Locked by a pending transaction"
+      Just LockedByUser -> formatUserLock "Locked by the user"
+      Nothing
+        | jsonCoinSpendable -> formatTrue "Spendable"
+        | otherwise -> formatFalse "Not spendable yet"
 
 prettyPrinter :: AmountUnit -> Response -> IO ()
 prettyPrinter unit =

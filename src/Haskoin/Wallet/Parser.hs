@@ -7,6 +7,7 @@ module Haskoin.Wallet.Parser where
 import Data.List (find, intercalate)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
+import Data.Word (Word32)
 import Haskoin
 import Haskoin.Wallet.Amounts (AmountUnit (..), readNatural)
 import Haskoin.Wallet.CoinSelection (CoinSelection (..), FeePayer (..))
@@ -119,8 +120,14 @@ data Command
       }
   | CommandCoins
       { commandMaybeAcc :: !(Maybe Text),
+        -- | The locked coins only
+        commandLocked :: !Bool,
         commandPage :: !Page
       }
+  | CommandLockCoin
+      {commandOutPoint :: !OutPoint}
+  | CommandUnlockCoin
+      {commandOutPoint :: !OutPoint}
   | CommandSendTx
       { commandNoSigHashMaybe :: !(Maybe TxHash),
         commandInputFileMaybe :: !(Maybe FilePath),
@@ -240,6 +247,8 @@ commandParser =
             command "sendtx" sendTxParser,
             command "deletetx" deleteTxParser,
             command "coins" coinsParser,
+            command "lockcoin" lockCoinParser,
+            command "unlockcoin" unlockCoinParser,
             hidden
           ],
       hsubparser $
@@ -577,10 +586,11 @@ accountsParser = do
       <> footer
         [r|
 The confirmed and unconfirmed balances are those the store reported at the last
-`sync`. The spendable balance is what the wallet can spend now: the coins no
-pending transaction holds, a coinbase once it has 100 confirmations, and an
-unconfirmed coin only when it is the change of a transaction of the wallet.
-`preparetx` spends that change only with `--minconf 0`.
+`sync`. The spendable balance is what the wallet can spend now: the coins
+neither a pending transaction nor the user locked, a coinbase once it has 100
+confirmations, and an unconfirmed coin only when it is the change of a
+transaction of the wallet. `preparetx` spends all of it, unless `--minconf`
+asks for confirmations.
 |]
 
 {- Receive Parser -}
@@ -794,7 +804,7 @@ minConfOption =
     short 'm'
       <> long "minconf"
       <> metavar "INT"
-      <> value 1
+      <> value 0
       <> showDefault
       <> help "Minimum number of confirmations required to spend a coin; an unconfirmed coin must be change from a transaction of the wallet"
 
@@ -977,19 +987,71 @@ coinsParser = do
   let cmd =
         CommandCoins
           <$> accountOption
+          <*> lockedOption
           <*> (Page <$> limitOption <*> offsetOption)
   info cmd $
     progDesc "List the account coins (unspent outputs)"
       <> footer
         [r|
-These are all the coins in the account. Coins can be locked when preparing new
-transactions. When sending those transactions to the network, the locked coins
-will be spent and removed. Calling `deletetx` will remove a pending transaction
-and free up any locked coins. A coin is spendable when the wallet can spend it
-now: no pending transaction holds it, a coinbase has 100 confirmations, and an
-unconfirmed coin is the change of a transaction of the wallet. One that is not
-spendable yet becomes so once it confirms or, for a coinbase, matures.
+These are all the coins in the account. A coin is locked by a pending
+transaction that spends it, from `preparetx` until the network lists that
+transaction, or until `deletetx` deletes it and frees the coin. A coin can also
+be locked by the user with `lockcoin`, until `unlockcoin`. A coin is spendable
+when the wallet can spend it now: nothing locks it, a coinbase has 100
+confirmations, and an unconfirmed coin is the change of a transaction of the
+wallet. One that is not spendable yet becomes so once it confirms or, for a
+coinbase, matures.
 |]
+
+lockedOption :: Parser Bool
+lockedOption =
+  switch $
+    long "locked"
+      <> help "List only the locked coins: those a pending transaction spends, and those the user locked"
+
+{- LockCoin and UnlockCoin Parsers -}
+
+lockCoinParser :: ParserInfo Command
+lockCoinParser = do
+  let cmd = CommandLockCoin <$> outpointArgs
+  info cmd $
+    progDesc "Lock a coin, so that no transaction spends it"
+      <> footer
+        [r|
+A coin the user locks is held back: `preparetx` does not spend it, coin control
+refuses it, and no imported transaction or sweep may spend it, until
+`unlockcoin` frees it. Only a free coin can be locked: a coin a pending
+transaction spends is locked already, and `deletetx` frees it. The lock stays
+while the coin confirms, and goes with the coin once it is spent elsewhere.
+`coins --locked` lists the locked coins.
+|]
+
+unlockCoinParser :: ParserInfo Command
+unlockCoinParser = do
+  let cmd = CommandUnlockCoin <$> outpointArgs
+  info cmd $
+    progDesc "Unlock a coin locked with lockcoin"
+      <> footer
+        [r|
+Only a coin the user locked with `lockcoin` can be unlocked. A coin a pending
+transaction spends is freed by deleting that transaction with `deletetx`.
+|]
+
+-- | A coin of the wallet: the id of its transaction and its index among
+-- the outputs, as coins lists them
+outpointArgs :: Parser OutPoint
+outpointArgs = OutPoint <$> txHashArg <*> outputIndexArg
+  where
+    txHashArg =
+      argument (maybeReader $ hexToTxHash . cs) $
+        metavar "TXHASH" <> help "The id of the transaction of the coin"
+    outputIndexArg =
+      argument (maybeReader readIndex) $
+        metavar "INDEX" <> help "The index of the coin among the outputs of its transaction"
+    readIndex :: String -> Maybe Word32
+    readIndex s = case readNatural (cs s) of
+      Just n | n <= fromIntegral (maxBound :: Word32) -> Just (fromIntegral n)
+      _ -> Nothing
 
 {- SendTx Parser -}
 

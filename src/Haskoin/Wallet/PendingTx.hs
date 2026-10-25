@@ -166,6 +166,16 @@ lockedOutpoints net = do
   held <- liftEither . mapM fromRow =<< lift (P.selectList [DBPendingTxAccount P.<-. accounts] [])
   return $ Set.fromList [input.outpoint | p <- held, input <- (txSignDataTx p.pendingTxData).inputs]
 
+-- | The coins of the wallet on a network that the user locked with
+-- lockcoin: no pending transaction may spend them, as the builder may not.
+-- The coin table is read here, as in 'coinExists', for the import to
+-- refuse them.
+userLockedOutpoints :: (MonadUnliftIO m) => Network -> ExceptT String (DB m) (Set OutPoint)
+userLockedOutpoints net = do
+  accounts <- lift $ P.selectKeysList [DBAccountNetwork P.==. cs net.name] []
+  rows <- lift $ P.selectList [DBCoinAccount P.<-. accounts, DBCoinLockedByUser P.==. True] []
+  Set.fromList <$> mapM (liftEither . bytesToOutpoint . dBCoinOutpoint . P.entityVal) rows
+
 -- | The change addresses the pending transactions of an account pay, as
 -- derivation paths: held as long as a transaction is pending, like the
 -- coins it spends
@@ -278,10 +288,14 @@ insertPendingTx net accId tsd summary = do
     inWallet <- lift $ coinExists net outpoint
     unless inWallet $ throwError "A coin referenced by the transaction does not exist"
   -- No other pending transaction, of any account, may spend one of its
-  -- inputs; storing it is what locks them
+  -- inputs, nor may it spend a coin the user locked; storing it is what
+  -- locks them
   locked <- lockedOutpoints net
   when (any ((`Set.member` locked) . (.outpoint)) tx.inputs) $
     throwError "A coin referenced by the transaction is locked"
+  lockedByUser <- userLockedOutpoints net
+  when (any ((`Set.member` lockedByUser) . (.outpoint)) tx.inputs) $
+    throwError "A coin referenced by the transaction is locked by the user: unlockcoin frees it"
   -- Its addresses must be generated already, and its change addresses
   -- neither used nor paid by another pending transaction
   let addrs = nub $ touched.changeAddresses <> touched.otherAddresses
