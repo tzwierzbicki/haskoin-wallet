@@ -17,8 +17,6 @@ import Control.Monad (replicateM_)
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans (lift)
-import qualified Data.Aeson as Json
-import qualified Data.ByteString as BS
 import Data.Default (def)
 import Data.IORef (atomicModifyIORef', newIORef, readIORef)
 import Data.List (find, sort, sortOn)
@@ -1110,16 +1108,6 @@ spentElsewhereStore ctx =
           spendingStoreTx ctx (fakeTxHash 8) (Store.BlockRef 800001 1) (realPaymentId ctx, 0) (externalAddr 0) [(otherAddr 1, 49000)]
         ],
       fakeUnspents = []
-    }
-
-pendingRow :: DBAccountId -> Tx -> DBPendingTx
-pendingRow accId tx =
-  DBPendingTx
-    { dBPendingTxAccount = accId,
-      dBPendingTxNosigHash = hashBytes (nosigHash tx),
-      dBPendingTxBlob = BS.toStrict $ Json.encode $ TxSignData tx [] [] [] Nothing Nothing,
-      dBPendingTxOnline = False,
-      dBPendingTxCreated = fixtureTime
     }
 
 -- | The pending transaction has reached the store

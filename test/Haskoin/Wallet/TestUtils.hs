@@ -14,7 +14,7 @@ import Control.Monad (forM, unless, void, when)
 import Control.Monad.Except (ExceptT)
 import Control.Monad.Trans (lift, liftIO)
 import Control.Monad.Trans.Except (runExceptT)
-import Data.Aeson (FromJSON (..), eitherDecodeFileStrict, withObject, (.!=), (.:), (.:?))
+import Data.Aeson (FromJSON (..), eitherDecodeFileStrict, encode, withObject, (.!=), (.:), (.:?))
 import qualified Data.ByteString as BS
 import Data.Either (fromRight, isLeft)
 import Data.IORef (IORef, modifyIORef)
@@ -31,11 +31,11 @@ import Database.Persist.Sqlite (runSqlite)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Account (insertAccount, nextAccount)
-import Haskoin.Wallet.Database (DB, DBAccount, DBAccountId, migrateAll)
+import Haskoin.Wallet.Database (DB, DBAccount, DBAccountId, DBPendingTx (..), hashBytes, migrateAll)
 import Haskoin.Wallet.Keys (MnemonicPass (..), PublicSeed (..), seedOf, signingKey)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.TxInfo (ChainStatus (..), PendingStatus (..), TxInfo (..), TxStatus (..), pendingSigned)
-import Haskoin.Wallet.TxSignData (TxSignData (..))
+import Haskoin.Wallet.TxSignData (TxSignData (..), nosigHash)
 import Haskoin.Wallet.TxSigning (signWalletTx)
 import Numeric.Natural (Natural)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getTemporaryDirectory, listDirectory, removeDirectoryRecursive)
@@ -367,6 +367,18 @@ spendingTx ctx spent paid =
 -- | A transaction funded by a fake outpoint, paying the given addresses
 fundingTx :: Ctx -> Word8 -> [(Address, Natural)] -> Tx
 fundingTx ctx w = spendingTx ctx [(fakeTxHash w, 0)]
+
+-- | A pending transaction of an account as its row holds it: unsigned,
+-- without derivation paths, holding the coins its inputs spend
+pendingRow :: DBAccountId -> Tx -> DBPendingTx
+pendingRow accId tx =
+  DBPendingTx
+    { dBPendingTxAccount = accId,
+      dBPendingTxNosigHash = hashBytes (nosigHash tx),
+      dBPendingTxBlob = BS.toStrict $ encode $ TxSignData tx [] [] [] Nothing Nothing,
+      dBPendingTxOnline = False,
+      dBPendingTxCreated = fixtureTime
+    }
 
 -- | A coin as the store reports it: at the given block height, or unconfirmed
 storeCoin :: Ctx -> (TxHash, Word32) -> Maybe Natural -> Address -> Natural -> Store.Unspent
