@@ -2,12 +2,12 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Bytes as the keys of the database store them, from format version 7
+-- | Bytes as the keys of the database store them, from format version 4
 -- on: a blob in SQLite. Persistent derives text forms for every
 -- single-column key, for web routes and JSON, and plain bytes have none;
 -- this type gives them hexadecimal ones, which hw itself never uses.
 --
--- The type is part of the format of version 7 and of the versions after
+-- The type is part of the format of version 4 and of the versions after
 -- it: its database form never changes. A format that stores keys
 -- differently gets a new type.
 module Haskoin.Wallet.Schema.KeyBytes where

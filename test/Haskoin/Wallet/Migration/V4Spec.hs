@@ -1,17 +1,21 @@
+{-# LANGUAGE DisambiguateRecordFields #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE QuasiQuotes #-}
 
 -- | The migration to the format version 4: a database of version 3, built
--- from its tables ("Haskoin.Wallet.Schema.V3") with the version stored as a
--- number, is migrated to version 4 only and ends with the dead column on
--- its transaction summaries.
+-- from its tables ("Haskoin.Wallet.Schema.V3"), is migrated to version 4
+-- and ends without wallets: its accounts have ids, which their rows point
+-- to, the fingerprint of their seed still to be learnt, its hashes and
+-- outpoints as bytes, the columns whose values are now read elsewhere
+-- gone, and the indexes of the version.
 module Haskoin.Wallet.Migration.V4Spec (spec) where
 
 import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
+import Data.ByteString (ByteString)
+import Data.Maybe (fromJust)
 import qualified Data.Serialize as S
-import Data.String.Conversions (cs)
 import Data.Text (Text)
+import Data.Time (UTCTime (UTCTime), fromGregorian)
 import qualified Database.Persist as P
 import Database.Persist.Sql (PersistValue (..))
 import Haskoin
@@ -23,7 +27,6 @@ import qualified Haskoin.Wallet.Schema.V3 as V3
 import qualified Haskoin.Wallet.Schema.V4 as V4
 import Haskoin.Wallet.TestUtils
 import Test.Hspec
-import Text.RawString.QQ (r)
 
 spec :: Spec
 spec = prepareContext $ \ctx ->
@@ -40,170 +43,166 @@ spec = prepareContext $ \ctx ->
         storedVersions `dbShouldBe` [(PersistInt64 4, "integer")]
         runExceptT databaseVersion `dbShouldBe` Right (Just 4)
 
-    it "adds the dead column to the summaries, false for the existing ones" $
+    it "gives the accounts ids in the order they were created, whatever wallet they were under" $
       inMemory $ do
         version3Database
         migrateTo4 ctx
-        queryRows "select txid, dead from d_b_tx_info" `dbShouldBe` [[PersistText creditTxid, PersistInt64 0]]
+        queryRows "select id, name, network, x_pub_key from d_b_account order by id"
+          `dbShouldBe` [ [PersistInt64 1, PersistText "main", PersistText "btc", PersistText testAccountXPub],
+                         [PersistInt64 2, PersistText "cash", PersistText "bch", PersistText testAccountXPubBch],
+                         [PersistInt64 3, PersistText "savings", PersistText "btc", PersistText savingsXPub]
+                       ]
 
-    it "keeps the summaries, labels included, and their other columns" $
+    it "leaves the fingerprint of every seed to be learnt" $
       inMemory $ do
         version3Database
-        original <- summaryColumns
         migrateTo4 ctx
-        summaryColumns `dbShouldBe` original
+        queryRows "select fingerprint from d_b_account" `dbShouldBe` [[PersistNull], [PersistNull], [PersistNull]]
 
-    it "leaves every other table as it was" $
+    it "keeps the other columns of the accounts" $
+      inMemory $ do
+        version3Database
+        migrateTo4 ctx
+        queryRows "select id, \"index\", external, internal, balance_confirmed, balance_unconfirmed, balance_coins, created from d_b_account"
+          `dbShouldBe` [ [PersistInt64 1, PersistInt64 0, PersistInt64 1, PersistInt64 1, PersistInt64 50000, PersistInt64 0, PersistInt64 1, PersistText "2023-11-01T00:00:00Z"],
+                         [PersistInt64 2, PersistInt64 0, PersistInt64 1, PersistInt64 0, PersistInt64 0, PersistInt64 0, PersistInt64 0, PersistText "2023-11-02T00:00:00Z"],
+                         [PersistInt64 3, PersistInt64 1, PersistInt64 0, PersistInt64 0, PersistInt64 0, PersistInt64 0, PersistInt64 0, PersistText "2023-11-03T00:00:00Z"]
+                       ]
+
+    it "points the addresses, summaries, coins and pending transactions to their account's id" $
+      inMemory $ do
+        version3Database
+        migrateTo4 ctx
+        queryRows "select account, internal, \"index\", address from d_b_address"
+          `dbShouldBe` [ [PersistInt64 1, PersistInt64 0, PersistInt64 0, PersistText "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"],
+                         [PersistInt64 1, PersistInt64 1, PersistInt64 0, PersistText "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"],
+                         [PersistInt64 2, PersistInt64 0, PersistInt64 0, PersistText bchExternalAddrText]
+                       ]
+        queryRows "select account, txid from d_b_tx_info" `dbShouldBe` [[PersistInt64 1, PersistByteString (hexBytes (txHashToHex (fakeTxHash 1)))]]
+        queryRows "select account, outpoint, address from d_b_coin"
+          `dbShouldBe` [[PersistInt64 1, PersistByteString (S.encode (OutPoint (fakeTxHash 1) 0)), PersistText "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]]
+        queryRows "select account, nosig_hash from d_b_pending_tx" `dbShouldBe` [[PersistInt64 3, PersistByteString (hexBytes (txHashToHex (fakeTxHash 5)))]]
+
+    it "keys the raw transactions by the bytes of their hash, keeping them" $
+      inMemory $ do
+        version3Database
+        migrateTo4 ctx
+        queryRows "select hash, blob from d_b_raw_tx" `dbShouldBe` [[PersistByteString (hexBytes (txHashToHex (fakeTxHash 1))), PersistByteString "raw"]]
+
+    it "keeps the other columns of every row, the free change address and the locked coin included" $
+      inMemory $ do
+        version3Database
+        addressesBefore <- queryRows "select \"index\", address, label, balance_confirmed, balance_unconfirmed, balance_coins, balance_txs, balance_received, internal, created from d_b_address"
+        summariesBefore <- queryRows "select block_ref, blob, created from d_b_tx_info"
+        coinsBefore <- queryRows "select address, value, block_ref, created from d_b_coin"
+        pendingBefore <- queryRows "select blob, online, created from d_b_pending_tx"
+        migrateTo4 ctx
+        queryRows "select \"index\", address, label, balance_confirmed, balance_unconfirmed, balance_coins, balance_txs, balance_received, internal, created from d_b_address"
+          `dbShouldBe` addressesBefore
+        queryRows "select block_ref, blob, created from d_b_tx_info" `dbShouldBe` summariesBefore
+        queryRows "select address, value, block_ref, created from d_b_coin" `dbShouldBe` coinsBefore
+        queryRows "select blob, online, created from d_b_pending_tx" `dbShouldBe` pendingBefore
+
+    it "drops the columns whose values are read elsewhere now: paths, confirmed and free flags, locks, and the copy of each coin" $
+      inMemory $ do
+        version3Database
+        migrateTo4 ctx
+        columnNames "d_b_address"
+          `dbShouldBe` [ "account", "address", "balance_coins", "balance_confirmed", "balance_received", "balance_txs",
+                         "balance_unconfirmed", "created", "index", "internal", "label" ]
+        columnNames "d_b_tx_info" `dbShouldBe` ["account", "blob", "block_ref", "created", "dead", "txid"]
+        columnNames "d_b_coin" `dbShouldBe` ["account", "address", "block_ref", "created", "outpoint", "value"]
+        columnNames "d_b_pending_tx" `dbShouldBe` ["account", "blob", "conflicted", "created", "nosig_hash", "online"]
+
+    it "marks no summary dead: version 3 deleted the summaries of dead transactions" $
+      inMemory $ do
+        version3Database
+        migrateTo4 ctx
+        queryRows "select dead from d_b_tx_info" `dbShouldBe` [[PersistInt64 0]]
+
+    it "starts every pending transaction out of conflict, for the next sync to ask the store" $
+      inMemory $ do
+        version3Database
+        migrateTo4 ctx
+        queryRows "select conflicted from d_b_pending_tx" `dbShouldBe` [[PersistInt64 0]]
+
+    it "leaves the best blocks as they were" $
       inMemory $ do
         version3Database
         original <- tablesRows otherTables
         migrateTo4 ctx
         tablesRows otherTables `dbShouldBe` original
 
-    it "ends with the tables of version 4" $
+    it "ends with the tables and the indexes of version 4, the wallets gone" $
       inMemory $ do
         version3Database
         migrateTo4 ctx
-        expected <- liftIO $ schemaCreatedBy (createTables V4.migrateAll)
+        expected <- liftIO $ schemaCreatedBy (createTables V4.migrateAll >> createIndexesOf V4.tableIndexes)
         databaseSchema `dbShouldBe` expected
 
 {- Running the step -}
 
 stepAnnounced :: String
-stepAnnounced = "Migrating the database to version 4: the dead transactions"
+stepAnnounced = "Migrating the database to version 4: the accounts identified by their keys, without wallets"
 
 -- | The migration to version 4, which must succeed
 migrateTo4 :: Ctx -> DB IO ()
 migrateTo4 ctx = migrateToAndCollect 4 ctx `dbShouldBe` (Right (), [stepAnnounced], [3])
 
--- | The columns of the summaries that version 3 had
-summaryColumns :: DB IO [[PersistValue]]
-summaryColumns =
-  queryRows "select account_wallet, account_derivation, txid, block_ref, confirmed, blob, created from d_b_tx_info"
+-- | The columns of a table, by name
+columnNames :: Text -> DB IO [Text]
+columnNames table = do
+  rows <- queryRows $ "select name from pragma_table_info('" <> table <> "') order by name"
+  return [name | [PersistText name] <- rows]
+
+otherTables :: [Text]
+otherTables = ["d_b_best"]
+
+-- | The bytes of a hexadecimal text, as the step turns the old keys into
+hexBytes :: Text -> ByteString
+hexBytes = fromJust . decodeHex
 
 {- The database of version 3 -}
 
--- | A database of version 3 with the test wallet, its Bitcoin account, a
--- labelled address and the labelled summary of a credit
+-- | A database of version 3 with two wallets of the one test seed, as hw
+-- filed them: the Bitcoin wallet 892eb8e4 with the account main, created
+-- first, and savings, created last, and the Bitcoin Cash wallet a1b2c3d4
+-- with the account cash, created in between. main has a receiving address
+-- that was paid and a change address still free, the summary of its
+-- payment and its coin, locked by a pending transaction of the time; cash
+-- has a receiving address; savings holds a pending transaction.
 version3Database :: DB IO ()
 version3Database = do
   createTables V3.migrateAll
   P.insert_ $ V3.DBVersion 3
   P.insert_ $ V3.DBWallet "892eb8e4"
-  P.insert_ btcAccount
-  P.insert_ fixtureAddress
-  P.insert_ creditSummary
-  P.insert_ fixtureBest
+  P.insert_ $ V3.DBWallet "a1b2c3d4"
+  P.insert_ $ account btcWallet "main" 0 "btc" "/44'/0'/0'" 1 1 testAccountXPub 50000 1 fixtureTime
+  P.insert_ $ account bchWallet "cash" 0 "bch" "/44'/145'/0'" 1 0 testAccountXPubBch 0 0 laterTime
+  P.insert_ $ account btcWallet "savings" 1 "btc" "/44'/0'/1'" 0 0 savingsXPub 0 0 latestTime
+  P.insert_ $ address btcWallet "/44'/0'/0'" 0 "/0/0" "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" "salary" 50000 False False
+  P.insert_ $ address btcWallet "/44'/0'/0'" 0 "/1/0" "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn" "" 0 True True
+  P.insert_ $ address bchWallet "/44'/145'/0'" 0 "/0/0" bchExternalAddrText "" 0 False False
+  P.insert_ $
+    V3.DBTxInfo btcWallet "/44'/0'/0'" (txHashToHex (fakeTxHash 1)) (S.encode (Store.BlockRef 800000 3)) True "{\"type\": \"credit\"}" fixtureTime
+  P.insert_ $
+    V3.DBCoin btcWallet "/44'/0'/0'" (encodeHex (S.encode (OutPoint (fakeTxHash 1) 0))) "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" 50000 (S.encode (Store.BlockRef 800000 3)) "coin" True True fixtureTime
+  P.insert_ $ V3.DBRawTx (txHashToHex (fakeTxHash 1)) "raw"
+  P.insert_ $ V3.DBPendingTx btcWallet "/44'/0'/1'" (txHashToHex (fakeTxHash 5)) "{\"tx\": \"\"}" False latestTime
+  P.insert_ $ V3.DBBest "btc" "00000000000000000002a7c4c1e48d76c5a37902165a270156b7a8d72728a054" 800105
   commitFixture
+  where
+    btcWallet = V3.DBWalletKey "892eb8e4"
+    bchWallet = V3.DBWalletKey "a1b2c3d4"
+    account wallet name index net deriv ext int xpub confirmed coins created =
+      V3.DBAccount name wallet index net deriv ext int xpub confirmed 0 coins created
+    address wallet accDeriv index path addr label received internal free =
+      V3.DBAddress index wallet accDeriv path addr label received 0 (if received > 0 then 1 else 0) (if received > 0 then 1 else 0) received internal free fixtureTime
 
-otherTables :: [Text]
-otherTables =
-  [ "d_b_wallet",
-    "d_b_account",
-    "d_b_address",
-    "d_b_coin",
-    "d_b_raw_tx",
-    "d_b_pending_tx",
-    "d_b_best"
-  ]
+-- | The key of the account savings, m/44'/0'/1' of the test seed
+savingsXPub :: Text
+savingsXPub = "xpub6CHK45s4QJWpt9C5kpAnypsE5ratNMWRGE3pZNQgGnxHTvZ1y6E65mSKMmz7V5ZUnVq5JMgq1Qros98GhLMCK7eoDaNo8kjqNdJzD8otqLW"
 
-testWalletKey :: V3.DBWalletId
-testWalletKey = V3.DBWalletKey "892eb8e4"
-
-btcDerivation :: Text
-btcDerivation = "/44'/0'/0'"
-
-btcAccount :: V3.DBAccount
-btcAccount =
-  V3.DBAccount
-    { V3.dBAccountName = "main",
-      V3.dBAccountWallet = testWalletKey,
-      V3.dBAccountIndex = 0,
-      V3.dBAccountNetwork = "btc",
-      V3.dBAccountDerivation = btcDerivation,
-      V3.dBAccountExternal = 1,
-      V3.dBAccountInternal = 0,
-      V3.dBAccountXPubKey = testAccountXPub,
-      V3.dBAccountBalanceConfirmed = 50000,
-      V3.dBAccountBalanceUnconfirmed = 0,
-      V3.dBAccountBalanceCoins = 1,
-      V3.dBAccountCreated = fixtureTime
-    }
-
-fixtureAddress :: V3.DBAddress
-fixtureAddress =
-  V3.DBAddress
-    { V3.dBAddressIndex = 0,
-      V3.dBAddressAccountWallet = testWalletKey,
-      V3.dBAddressAccountDerivation = btcDerivation,
-      V3.dBAddressDerivation = "/0/0",
-      V3.dBAddressAddress = "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj",
-      V3.dBAddressLabel = "salary",
-      V3.dBAddressBalanceConfirmed = 50000,
-      V3.dBAddressBalanceUnconfirmed = 0,
-      V3.dBAddressBalanceCoins = 1,
-      V3.dBAddressBalanceTxs = 1,
-      V3.dBAddressBalanceReceived = 50000,
-      V3.dBAddressInternal = False,
-      V3.dBAddressFree = False,
-      V3.dBAddressCreated = fixtureTime
-    }
-
-fixtureBest :: V3.DBBest
-fixtureBest =
-  V3.DBBest "btc" "00000000000000000002a7c4c1e48d76c5a37902165a270156b7a8d72728a054" 800105
-
-creditTxid :: Text
-creditTxid = "0000000000000000000000000000000000000000000000000000000000000011"
-
--- | 50000 satoshis received on /0/0, labelled "salary", as a version 3
--- database holds it: with the change absorbed into the fee, which hw 0.10
--- added as an optional field
-creditSummary :: V3.DBTxInfo
-creditSummary =
-  V3.DBTxInfo
-    { V3.dBTxInfoAccountWallet = testWalletKey,
-      V3.dBTxInfoAccountDerivation = btcDerivation,
-      V3.dBTxInfoTxid = creditTxid,
-      V3.dBTxInfoBlockRef = S.encode (Store.BlockRef 800000 3),
-      V3.dBTxInfoConfirmed = True,
-      V3.dBTxInfoBlob = cs creditBlob,
-      V3.dBTxInfoCreated = fixtureTime
-    }
-
--- | The summary as a version 3 database holds it
-creditBlob :: String
-creditBlob =
-  [r|{
-    "amount": 50000,
-    "block": {
-        "height": 800000,
-        "position": 3
-    },
-    "changeinfee": null,
-    "confirmations": 12,
-    "fee": 1000,
-    "feebyte": 4,
-    "myinputs": {},
-    "myoutputs": {
-        "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj": {
-            "label": "salary",
-            "path": "/0/0",
-            "value": 50000
-        }
-    },
-    "nonstdinputs": [],
-    "nonstdoutputs": [],
-    "otherinputs": {
-        "1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ": {
-            "value": 100000
-        }
-    },
-    "otheroutputs": {
-        "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU": 49000
-    },
-    "pending": null,
-    "size": 226,
-    "txid": "0000000000000000000000000000000000000000000000000000000000000011",
-    "type": "credit"
-}|]
+laterTime, latestTime :: UTCTime
+laterTime = UTCTime (fromGregorian 2023 11 2) 0
+latestTime = UTCTime (fromGregorian 2023 11 3) 0

@@ -3,9 +3,9 @@
 -- | The migration of hw around its steps: new databases, databases already at
 -- the latest version, databases of a newer hw, and the steps run one after
 -- the other, after one backup. Each step is tested on its own in
--- "Haskoin.Wallet.Migration.V2Spec" and "Haskoin.Wallet.Migration.V3Spec",
--- from the version before it to its version; the copy of the database is
--- tested in "Haskoin.Wallet.BackupSpec".
+-- "Haskoin.Wallet.Migration.V2Spec", "Haskoin.Wallet.Migration.V3Spec" and
+-- "Haskoin.Wallet.Migration.V4Spec", from the version before it to its
+-- version; the copy of the database is tested in "Haskoin.Wallet.BackupSpec".
 module Haskoin.Wallet.MigrationSpec (spec) where
 
 import Control.Monad.Except (runExceptT)

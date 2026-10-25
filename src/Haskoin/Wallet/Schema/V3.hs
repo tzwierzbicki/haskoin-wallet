@@ -16,9 +16,8 @@
 {-# LANGUAGE UndecidableInstances #-}
 
 -- | The tables of the database format version 3: those of version 2, with
--- the version table holding a number. They stay here as they were when
--- version 4 added the dead column to the transaction summaries, so that the
--- step to version 4 still has them.
+-- the version table holding a number. They stay here as they were, as the
+-- format the step to version 4 starts from: "Haskoin.Wallet.Migration.V4".
 --
 -- The entities keep their names, which decide the table names, so this
 -- module is imported qualified next to "Haskoin.Wallet.Database".

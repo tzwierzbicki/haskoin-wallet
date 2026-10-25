@@ -15,11 +15,39 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 
--- | The tables of the database format version 4, kept as they were for the
--- step to version 5, which reads them: "Haskoin.Wallet.Migration.V5".
+-- | The tables of the database format version 4, the latest one:
+-- "Haskoin.Wallet.Database" exports them again as the tables of the wallet.
+-- They stay here as they are once a later version changes them, so that the
+-- step to that version still has them.
 --
--- Version 4 added the dead column to the transaction summaries: whether the
--- transaction was replaced or dropped from the network.
+-- Version 4 dropped the wallets. An account used to be filed under a wallet
+-- named by the fingerprint of the first account of its seed on its network,
+-- which gave one seed a wallet per network. An account is now identified by
+-- its key alone, and carries the fingerprint of the master key of its seed
+-- once hw has learnt it: from the mnemonic, or from a document or a signed
+-- transaction of the offline wallet. Every account has a plain id, which
+-- its addresses, summaries, coins and pending transactions point to. The
+-- confirmed columns of the summaries and the coins, which nothing read, are
+-- gone as well. A summary says whether its transaction is dead, replaced or
+-- dropped from the network, where version 3 deleted it. A coin keeps its
+-- address, which gives its script, and no longer the whole coin as the
+-- store reported it. Whether a coin is locked and whether a change address
+-- is free are read from the pending transactions, which the locked column
+-- of the coins and the free column of the addresses could only disagree
+-- with. A pending transaction keeps whether the store, at the last sync,
+-- found one of its coins spent by another transaction or gone.
+--
+-- The keys are made for large wallets. An address is keyed by its account,
+-- its chain and its index, the order addrs lists it in, and its derivation
+-- path is computed from the two, as the path of an account is from its
+-- network and index. Transaction ids, outpoints and nosigHashes
+-- are the bytes of the hash, not its hexadecimal text: half the size in
+-- every key and index. The 'tableIndexes' below are the ones persistent cannot
+-- declare: a covering index that serves the ordering of txs and the scan
+-- of the sync without touching the rows; the account of every coin and
+-- pending transaction, which their keys do not give; the coins of an
+-- address of an account, which the sync refreshes; and the coins of an
+-- account in the order coins lists them.
 module Haskoin.Wallet.Schema.V4 where
 
 import Data.ByteString (ByteString)
@@ -27,6 +55,7 @@ import Data.Text (Text)
 import Data.Time (UTCTime)
 import Data.Word (Word64)
 import Database.Persist.TH
+import Haskoin.Wallet.Schema.KeyBytes (KeyBytes)
 
 share
   [mkPersist sqlSettings, mkMigrate "migrateAll"]
@@ -37,36 +66,27 @@ DBVersion
   Primary version
   deriving Show
 
-DBWallet
-  fingerprint Text
-  Primary fingerprint
-  deriving Show
-
 DBAccount
   name Text
-  wallet DBWalletId
   index Int
   network Text
-  derivation Text
   external Int
   internal Int
   xPubKey Text
+  fingerprint Text Maybe
   balanceConfirmed Word64
   balanceUnconfirmed Word64
   balanceCoins Word64
-  created UTCTime default=CURRENT_TIME
-  Primary wallet derivation
+  created UTCTime default=CURRENT_TIMESTAMP
   UniqueName name
   UniqueXPubKey xPubKey
-  UniqueNetworkId wallet network index
   deriving Show
   deriving Eq
 
 DBAddress
+  account DBAccountId
+  internal Bool
   index Int
-  accountWallet DBWalletId
-  accountDerivation Text
-  derivation Text
   address Text
   label Text
   balanceConfirmed Word64
@@ -74,61 +94,49 @@ DBAddress
   balanceCoins Word64
   balanceTxs Word64
   balanceReceived Word64
-  internal Bool
-  free Bool
-  created UTCTime default=CURRENT_TIME
-  Primary accountWallet accountDerivation derivation
+  created UTCTime default=CURRENT_TIMESTAMP
+  Primary account internal index
   UniqueAddress address
-  Foreign DBAccount fk_wallet_derivation accountWallet accountDerivation
   deriving Show
   deriving Eq
 
 DBTxInfo
-  accountWallet DBWalletId
-  accountDerivation Text
-  txid Text
+  account DBAccountId
+  txid KeyBytes
   blockRef ByteString
-  confirmed Bool
   blob ByteString
   dead Bool default=0
-  created UTCTime default=CURRENT_TIME
-  Primary accountWallet accountDerivation txid
-  Foreign DBAccount fk_wallet_derivation accountWallet accountDerivation
+  created UTCTime default=CURRENT_TIMESTAMP
+  Primary account txid
   deriving Show
   deriving Eq
 
 DBCoin
-  accountWallet DBWalletId
-  accountDerivation Text
-  outpoint Text
+  account DBAccountId
+  outpoint KeyBytes
   address Text
   value Word64
   blockRef ByteString
-  blob ByteString
-  confirmed Bool
-  locked Bool
-  created UTCTime default=CURRENT_TIME
+  created UTCTime default=CURRENT_TIMESTAMP
   Primary outpoint
-  Foreign DBAccount fk_wallet_derivation accountWallet accountDerivation
   deriving Show
   deriving Eq
 
 DBRawTx
-  hash Text
+  hash KeyBytes
   blob ByteString
   Primary hash
   deriving Show
   deriving Eq
 
 DBPendingTx
-  accountWallet DBWalletId
-  accountDerivation Text
-  nosigHash Text
+  account DBAccountId
+  nosigHash KeyBytes
   blob ByteString
   online Bool
-  created UTCTime default=CURRENT_TIME
+  conflicted Bool default=0
+  created UTCTime default=CURRENT_TIMESTAMP
   Primary nosigHash
-  Foreign DBAccount fk_wallet_derivation accountWallet accountDerivation
   deriving Show
   deriving Eq
 
@@ -139,3 +147,16 @@ DBBest
   Primary network
   deriving Show
 |]
+
+-- | The indexes of the tables above that persistent cannot declare, created
+-- right after them, for a new database and by the step to this version
+-- alike. A later version that has persistent rebuild one of these tables
+-- loses its indexes and must create them again.
+tableIndexes :: [Text]
+tableIndexes =
+  [ "create index d_b_tx_info_account_block_ref on d_b_tx_info (account, block_ref, txid, dead)",
+    "create index d_b_coin_account on d_b_coin (account)",
+    "create index d_b_coin_account_address on d_b_coin (account, address)",
+    "create index d_b_coin_account_block_ref on d_b_coin (account, block_ref, outpoint)",
+    "create index d_b_pending_tx_account on d_b_pending_tx (account)"
+  ]
