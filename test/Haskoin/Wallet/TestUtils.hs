@@ -160,6 +160,18 @@ testSeed, testSeed2 :: Ctx -> PublicSeed
 testSeed ctx = forceRight $ seedOf ctx testMnemonic
 testSeed2 ctx = forceRight $ seedOf ctx testMnemonic2
 
+-- | The test seed as if the child key of its account 1 were invalid. No
+-- seed with such an index is known, the odds being one in 2^127.
+seedWithoutIndex1 :: Ctx -> PublicSeed
+seedWithoutIndex1 ctx =
+  (testSeed ctx) {seedAccountKey = \net index -> if index == 1 then return Nothing else seedAccountKey (testSeed ctx) net index}
+
+-- | The first receiving address of accounts 1 and 2 of the test seed on
+-- Bitcoin; that of account 0 is externalAddr 0
+account1Addr, account2Addr :: Address
+account1Addr = testAddress "17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo"
+account2Addr = testAddress "1CtzLtfkTFgv6tHN4zBHWHtrtCeBdD1KNt"
+
 -- | A new account of the test wallet in the database, with the given name
 testNewAcc :: Ctx -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
 testNewAcc ctx = newAccountOf ctx testMnemonic btc

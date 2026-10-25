@@ -68,11 +68,6 @@ watchOnly ctx net index name = do
 nextIndex :: Ctx -> Network -> PublicSeed -> DB IO Natural
 nextIndex ctx net seed = fst <$> nextAccount net ctx seed
 
--- | The test seed as if the child key of its account 1 were invalid
-seedWithoutIndex1 :: Ctx -> PublicSeed
-seedWithoutIndex1 ctx =
-  (testSeed ctx) {seedAccountKey = \net index -> if index == 1 then return Nothing else seedAccountKey (testSeed ctx) net index}
-
 -- | The names of the accounts as hw lists them, with their fingerprints
 listed :: DB IO [(Text, Maybe Text)]
 listed = map (\(_, a) -> (dBAccountName a, dBAccountFingerprint a)) <$> getAccounts
@@ -129,8 +124,6 @@ creatingSpec ctx =
 
     it "passes over an index whose child key is invalid, as BIP32 asks, like an address" $
       inDatabaseE $ do
-        -- No seed with such an index is known, the odds being one in 2^127:
-        -- this seed is the test seed with its index 1 declared invalid
         _ <- testNewAcc ctx "main"
         lift $ nextIndex ctx btc (seedWithoutIndex1 ctx) `dbShouldBe` 2
 

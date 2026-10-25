@@ -4,7 +4,7 @@
 -- | Synchronising an account with the store: the gap of addresses watched,
 -- the balances, the transaction summaries, the coins and the raw
 -- transactions they come from, and the pending transactions; and the
--- discovery of the used addresses of an account. The store is asked
+-- recovery of the accounts of a seed. The store is asked
 -- through the 'Store' record of "Haskoin.Wallet.Store".
 module Haskoin.Wallet.Sync where
 
@@ -17,6 +17,8 @@ import Data.List (partition, sort)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Set (Set)
+import Data.String.Conversions (cs)
+import Data.Text (Text)
 import qualified Data.Set as Set
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -26,6 +28,7 @@ import Haskoin.Wallet.BestBlock
 import Haskoin.Wallet.Coin
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.Keys (PublicSeed (..))
 import Haskoin.Wallet.PendingTx
 import Haskoin.Wallet.RawTx
 import Haskoin.Wallet.Store
@@ -70,6 +73,50 @@ watchGap ctx cfg store accId = do
         extendChainTo ctx accId addrType next
         return (next - have)
   (+) <$> extend AddrExternal <*> extend AddrInternal
+
+{- Recovering the accounts of a seed -}
+
+-- | The accounts of a seed on a network that were paid, found as BIP44
+-- describes: account after account from index 0, the receiving chain of
+-- each scanned for a used address within the gap. The search ends after
+-- the given number of accounts in a row without one. The standard stops at
+-- the first, but hw creates accounts on an offline signer, where some never
+-- receive anything, so the gap of accounts is the caller's. An account the
+-- wallet has already is passed over without counting, and so is an index
+-- whose child key is invalid. Returns the accounts found, with their keys.
+recoverableAccounts :: (MonadUnliftIO m) => Ctx -> Config -> Store -> Network -> PublicSeed -> Natural -> ExceptT String (DB m) [(Natural, XPubKey)]
+recoverableAccounts ctx cfg store net seed accountGap = go 0 0
+  where
+    go index unpaid
+      | unpaid >= accountGap = return []
+      | otherwise = do
+          keyM <- liftIO $ seedAccountKey seed net index
+          case keyM of
+            Nothing -> go (index + 1) unpaid
+            Just key -> do
+              held <- lift $ accountWithKey net ctx key
+              case held of
+                Just _ -> go (index + 1) unpaid
+                Nothing -> do
+                  paid <- (> 0) <$> scanChain ctx store key extDeriv (configGap cfg) 0
+                  if paid
+                    then ((index, key) :) <$> go (index + 1) 0
+                    else go (index + 1) (unpaid + 1)
+
+-- | Recover the accounts of a seed on a network: those found paid are
+-- created, named after the network and their index, and synced, and every
+-- account of the seed records its fingerprint. Returns the sync of each
+-- account created, in the order of their indices.
+recoverSeed :: (MonadUnliftIO m) => Ctx -> Config -> Store -> Network -> PublicSeed -> Natural -> ExceptT String (DB m) [SyncRes]
+recoverSeed ctx cfg store net seed accountGap = do
+  found <- recoverableAccounts ctx cfg store net seed accountGap
+  created <- forM found $ \(index, key) -> insertAccount net ctx (recoveredName net index) key (Just (seedFingerprint seed))
+  lift $ recordFingerprint ctx seed
+  forM created $ \(accId, _) -> sync ctx cfg store net accId False
+
+-- | The name of a recovered account: the network and the index, as in btc0
+recoveredName :: Network -> Natural -> Text
+recoveredName net index = cs net.name <> cs (show index)
 
 {- Synchronisation -}
 

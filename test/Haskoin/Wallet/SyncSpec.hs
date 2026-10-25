@@ -8,7 +8,7 @@
 -- addresses, the raw transactions fetched only when missing and dropped
 -- when no coin needs them, pending transactions, two accounts, another
 -- network; the gap of addresses watched past the ones the account has; the
--- discovery of the used addresses of an account; and the decisions of a
+-- scan of a chain and the recovery of the accounts of a seed; and the decisions of a
 -- sync on their own: what to fetch, what is dead, which balances changed
 module Haskoin.Wallet.SyncSpec (spec) where
 
@@ -456,6 +456,50 @@ spec = prepareContext $ \ctx -> do
         liftIO $ held `shouldMatchList` [OutPoint (txHash tx) 0 | (_, _, _, tx) <- discoveredPayments ctx]
         balances accId `dbShouldBeE` (80000, 0, 3)
         rawTransactionCount `dbShouldBeE` 3
+
+  describe "Recovering the accounts of a seed" $ do
+    -- Accounts 0 and 2 of the test seed were paid at their first receiving
+    -- address; account 1 and the ones after 2 never were
+    let paidAccounts = paidStore ctx [(externalAddr 0, 50000), (account2Addr, 20000)]
+        found store seed gap = map fst <$> recoverableAccounts ctx cfg (toStore store) btc seed gap
+
+    it "finds the accounts that were paid, looking past a run of unpaid ones as long as the account gap" $
+      inDatabaseE $ do
+        found paidAccounts (testSeed ctx) 2 `dbShouldBeE` [0, 2]
+        found paidAccounts (testSeed ctx) 1 `dbShouldBeE` [0]
+
+    it "stops after the account gap, having looked at one window of the receiving chain of each account" $ do
+      asked <- newIORef []
+      let store = notingBalanceRequests asked (toStore emptyStore)
+      inDatabaseE $ (map fst <$> recoverableAccounts ctx cfg store btc (testSeed ctx) 3) `dbShouldBeE` []
+      windows <- readIORef asked
+      map length windows `shouldBe` [20, 20, 20]
+      map (take 1) windows `shouldBe` [[externalAddr 0], [account1Addr], [account2Addr]]
+
+    it "passes over an account the wallet has already, without counting it" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        found paidAccounts (testSeed ctx) 2 `dbShouldBeE` [2]
+
+    it "passes over an index whose child key is invalid, without counting it" $
+      inDatabaseE $ found paidAccounts (seedWithoutIndex1 ctx) 1 `dbShouldBeE` [0, 2]
+
+    it "creates the accounts found, named after the network and their index, with the fingerprint of the seed, and syncs them" $
+      inDatabaseE $ do
+        results <- recoverSeed ctx cfg (toStore paidAccounts) btc (testSeed ctx) 2
+        liftIO $ map (dBAccountName . syncResAccount) results `shouldBe` ["btc0", "btc2"]
+        liftIO $ map (dBAccountFingerprint . syncResAccount) results `shouldBe` [Just "bc560f95", Just "bc560f95"]
+        liftIO $ map syncResNewAddrs results `shouldBe` [1, 1]
+        (map (dBAccountIndex . snd) <$> lift getAccounts) `dbShouldBeE` [0, 2]
+        accs <- lift getAccounts
+        mapM_ (\((accId, _), (amount, tid)) -> do
+          balances accId `dbShouldBeE` (amount, 0, 1)
+          coins accId `dbShouldBeE` [OutPoint tid 0]) (zip accs [(50000, fakeTxHash 1), (20000, fakeTxHash 2)])
+
+    it "creates nothing for a seed that was never paid" $
+      inDatabaseE $ do
+        recoverSeed ctx cfg (toStore emptyStore) btc (testSeed ctx) 2 `dbShouldBeE` []
+        lift getAccounts `dbShouldBeE` []
 
   describe "Watching the gap of addresses" $ do
     -- A gap of 3 instead of the default 20: the sync looks at the three

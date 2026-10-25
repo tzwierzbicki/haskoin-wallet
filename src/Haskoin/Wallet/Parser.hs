@@ -30,6 +30,11 @@ data Command
         commandNetwork :: !Network,
         commandSplitIn :: !Natural
       }
+  | CommandRecover
+      { commandNetwork :: !Network,
+        commandAccountGap :: !Natural,
+        commandSplitIn :: !Natural
+      }
   | CommandTestAcc
       { commandMaybeAcc :: !(Maybe Text),
         commandSplitIn :: !Natural
@@ -211,6 +216,7 @@ commandParser =
           [ commandGroup "Mnemonic and account management",
             command "mnemonic" mnemonicParser,
             command "createacc" createAccParser,
+            command "recover" recoverParser,
             command "testacc" testAccParser,
             command "renameacc" renameAccParser,
             command "accounts" accountsParser,
@@ -396,6 +402,49 @@ networkOptionWith mods =
     f Nothing =
       Left $ "Invalid network name. Select one of the following: " <> nets
     f (Just res) = Right res
+
+{- Recover Parser -}
+
+recoverParser :: ParserInfo Command
+recoverParser = do
+  let cmd = CommandRecover <$> networkOption <*> accountGapOption <*> splitInOption
+  info cmd $
+    progDescDoc (offline "Recover the accounts of a seed that were paid")
+      <> footer
+        [r|
+`recover` finds the accounts of a seed on a network as BIP44 describes:
+account after account from index 0, the receiving addresses of each one are
+looked up in the store, within the gap, and an account that was paid is
+created, named after the network and its index, btc0 for instance, and synced.
+The search ends after a run of accounts without a payment, ten by default. The
+standard stops at the first one, but hw creates accounts on an offline signer,
+where some may never receive anything, so one empty account is not the end of
+the seed here. Give --account-gap to look further or less far. An account the
+wallet has already is passed over.
+
+The command needs the mnemonic and the network at once. On an air-gapped
+setup, create the accounts on the signer with `createacc`, export them with
+`exportacc`, import them on the online computer and `sync` them instead.
+|]
+
+accountGapOption :: Parser Natural
+accountGapOption =
+  option (eitherReader accountGap) $
+    long "account-gap"
+      <> metavar "INT"
+      <> value 10
+      <> showDefault
+      <> help
+        [r|
+How many accounts in a row without a payment end the search. One is the rule
+of BIP44; more covers accounts created on a signer that were never paid.
+|]
+  where
+    accountGap :: String -> Either String Natural
+    accountGap arg =
+      case readNatural (cs arg) of
+        Just n | n >= 1 -> Right n
+        _ -> Left "The account gap is a number of accounts, at least 1"
 
 {- DeleteAcc Parser -}
 

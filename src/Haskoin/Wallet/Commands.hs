@@ -14,6 +14,7 @@ import Control.Monad.Except
 import Control.Monad.Reader (MonadIO(..), MonadTrans(lift))
 import Data.Aeson (object, (.:), (.=))
 import qualified Data.Aeson as Json
+import Data.Aeson.Types (Parser)
 import qualified Data.ByteString.Base64 as B64
 import Data.Foldable (for_)
 import Data.Maybe (fromMaybe, isJust, isNothing)
@@ -114,6 +115,12 @@ data Response
         responseAddr :: !Text
       }
   | ResponseSync {responseSync :: [SyncRes]}
+  | -- | The accounts of a seed recovered on a network, each with its sync
+    ResponseRecover
+      { responseNetwork :: !Network,
+        responseAccountGap :: !Natural,
+        responseRecovered :: ![SyncRes]
+      }
   | ResponseVersion
       { responseVersion :: !Text,
         responseDBVersion :: !Text
@@ -212,21 +219,17 @@ instance Json.ToJSON Response where
             "signature" .= s,
             "address" .= a
           ]
-      ResponseSync xs -> do
-        let f (SyncRes as bb bh tc cc rb ck na) =
-              object
-                [ "account" .= as,
-                  "bestblock" .= bb,
-                  "bestheight" .= bh,
-                  "txupdates" .= tc,
-                  "coinupdates" .= cc,
-                  "rebroadcast" .= rb,
-                  "conflicted" .= ck,
-                  "discovered" .= na
-                ]
+      ResponseSync xs ->
         object
           [ "type" .= Json.String "sync",
-            "syncres" .= (f <$> xs)
+            "syncres" .= (syncResJson <$> xs)
+          ]
+      ResponseRecover net gap xs ->
+        object
+          [ "type" .= Json.String "recover",
+            "network" .= net.name,
+            "accountgap" .= gap,
+            "syncres" .= (syncResJson <$> xs)
           ]
       ResponseVersion v dbv ->
         object
@@ -299,19 +302,10 @@ instance Json.FromJSON Response where
           s <- o .: "signature"
           a <- o .: "address"
           return $ ResponseSignMsg m s a
-        "sync" -> do
-          xs <- o .: "syncres"
-          res <- forM xs $ \x ->
-            SyncRes
-              <$> x .: "account"
-              <*> x .: "bestblock"
-              <*> x .: "bestheight"
-              <*> x .: "txupdates"
-              <*> x .: "coinupdates"
-              <*> x .: "rebroadcast"
-              <*> x .: "conflicted"
-              <*> x .: "discovered"
-          return $ ResponseSync res
+        "sync" -> ResponseSync <$> (mapM parseSyncRes =<< o .: "syncres")
+        "recover" -> do
+          net <- maybe (fail "Unknown network") return . netByName =<< o .: "network"
+          ResponseRecover net <$> o .: "accountgap" <*> (mapM parseSyncRes =<< o .: "syncres")
         "version" ->
           ResponseVersion
             <$> o .: "version"
@@ -321,6 +315,35 @@ instance Json.FromJSON Response where
             <$> o .: "dice"
             <*> o .: "entropysource"
         _ -> fail "Invalid JSON response type"
+
+
+{- The result of a sync in JSON -}
+
+syncResJson :: SyncRes -> Json.Value
+syncResJson (SyncRes as bb bh tc cc rb ck na) =
+  object
+    [ "account" .= as,
+      "bestblock" .= bb,
+      "bestheight" .= bh,
+      "txupdates" .= tc,
+      "coinupdates" .= cc,
+      "rebroadcast" .= rb,
+      "conflicted" .= ck,
+      "discovered" .= na
+    ]
+
+parseSyncRes :: Json.Value -> Parser SyncRes
+parseSyncRes =
+  Json.withObject "syncres" $ \x ->
+    SyncRes
+      <$> x .: "account"
+      <*> x .: "bestblock"
+      <*> x .: "bestheight"
+      <*> x .: "txupdates"
+      <*> x .: "coinupdates"
+      <*> x .: "rebroadcast"
+      <*> x .: "conflicted"
+      <*> x .: "discovered"
 
 {- Running a command -}
 
@@ -349,6 +372,7 @@ commandResponse ctx cfg unit cmd =
     -- Mnemonic and account management
     CommandMnemonic e d s -> cmdMnemonic e d s
     CommandCreateAcc t n s -> cmdCreateAcc ctx cfg t n s
+    CommandRecover n g s -> cmdRecover ctx cfg n g s
     CommandTestAcc nameM s -> cmdTestAcc ctx cfg nameM s
     CommandRenameAcc old new -> cmdRenameAcc cfg old new
     CommandAccounts nameM -> cmdAccounts cfg nameM
@@ -403,6 +427,18 @@ cmdCreateAcc ctx cfg name net splitMnemIn = do
     -- The accounts of the seed created before hw recorded fingerprints
     lift $ recordFingerprint ctx seed
     return $ ResponseAccount acc
+
+-- | Recover the accounts of a seed that were paid on a network, from its
+-- mnemonic: see "Haskoin.Wallet.Sync".
+cmdRecover :: Ctx -> Config -> Network -> Natural -> Natural -> IO Response
+cmdRecover ctx cfg net accountGap splitMnemIn =
+  runDBResponse cfg $ do
+    let store = webStore ctx cfg net
+    -- The store is needed: an offline computer hears it before the mnemonic is typed
+    fromStore $ storeHealth store
+    mnem <- askMnemonicPass splitMnemIn
+    seed <- liftEither $ seedOf ctx mnem
+    ResponseRecover net accountGap <$> recoverSeed ctx cfg store net seed accountGap
 
 cmdTestAcc :: Ctx -> Config -> Maybe Text -> Natural -> IO Response
 cmdTestAcc ctx cfg nameM splitMnemIn =

@@ -232,6 +232,10 @@ arbitraryResponse net ctx =
         <*> resize 20 (listOf $ arbitraryJsonCoin net),
       ResponseSync
         <$> (resize 10 $ listOf $ arbitrarySyncRes net ctx),
+      ResponseRecover
+        <$> arbitraryNetwork
+        <*> arbitraryNatural
+        <*> (resize 10 $ listOf $ arbitrarySyncRes net ctx),
       ResponseVersion
         <$> arbitraryText
         <*> arbitraryText,

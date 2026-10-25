@@ -269,6 +269,22 @@ naturalPrinter nat
   | nat == 0 = formatZeroAmount $ show nat
   | otherwise = formatPosAmount $ show nat
 
+-- | The accounts synced, each with the results of its sync
+syncResultsPrinter :: AmountUnit -> [SyncRes] -> Printer
+syncResultsPrinter unit xs = vcat $ intercalate [text " "] (f <$> xs)
+  where
+    f (SyncRes acc bh h t c r k n) =
+      [ accountPrinter unit acc,
+        formatTitle "Sync Results:",
+        nest 2 $ keyPrinter 12 "Best Block" <> formatBlockHash (cs $ blockHashToHex bh),
+        nest 2 $ keyPrinter 12 "Best Height" <> formatValue (show h),
+        nest 2 $ keyPrinter 12 "Tx updates" <> formatValue (show t),
+        nest 2 $ keyPrinter 12 "Coin updates" <> formatValue (show c),
+        nest 2 $ keyPrinter 12 "Sent again" <> formatValue (show r),
+        nest 2 $ keyPrinter 12 "Conflicted" <> formatValue (show k),
+        nest 2 $ keyPrinter 12 "Discovered" <> formatValue (show n)
+      ]
+
 accountPrinter :: AmountUnit -> DBAccount -> Printer
 accountPrinter unit acc =
   vcat
@@ -558,21 +574,12 @@ prettyPrinter unit =
             text $ cs s,
             text "-----END BITCOIN SIGNED MESSAGE-----"
           ]
-    ResponseSync xs -> do
-      let f (SyncRes acc bh h t c r k n) =
-            [ accountPrinter unit acc,
-              formatTitle "Sync Results:",
-              nest 2 $
-                keyPrinter 12 "Best Block"
-                  <> formatBlockHash (cs $ blockHashToHex bh),
-              nest 2 $ keyPrinter 12 "Best Height" <> formatValue (show h),
-              nest 2 $ keyPrinter 12 "Tx updates" <> formatValue (show t),
-              nest 2 $ keyPrinter 12 "Coin updates" <> formatValue (show c),
-              nest 2 $ keyPrinter 12 "Sent again" <> formatValue (show r),
-              nest 2 $ keyPrinter 12 "Conflicted" <> formatValue (show k),
-              nest 2 $ keyPrinter 12 "Discovered" <> formatValue (show n)
-            ]
-      renderIO $ vcat $ intercalate [text " "] (f <$> xs)
+    ResponseSync xs -> renderIO $ syncResultsPrinter unit xs
+    ResponseRecover net gap xs
+      | null xs ->
+          renderIO . text $
+            "No account of the seed was paid on " <> net.name <> ": the search ended after " <> show gap <> " accounts in a row without a payment"
+      | otherwise -> renderIO $ syncResultsPrinter unit xs
     ResponseVersion v dbv ->
       renderIO $
         vcat
