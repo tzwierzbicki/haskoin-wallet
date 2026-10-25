@@ -9,7 +9,9 @@
 -- summaries, coins and pending transactions point to. The fingerprint of
 -- the master key of its seed starts unknown: hw learns it from the mnemonic
 -- or from the offline wallet. The confirmed columns of the summaries and
--- the coins, which nothing read, go as well. A pending transaction keeps
+-- the coins, which nothing read, go as well, and so does the copy of the
+-- whole coin that a coin row kept: its columns and its address, which gives
+-- its script, are the coin. A pending transaction keeps
 -- whether the last sync found it in conflict, out of conflict until the
 -- next sync asks the store. The keys are made for large
 -- wallets: an address is keyed by its chain and index instead of the text
@@ -87,8 +89,8 @@ copies =
     "insert into d_b_tx_info (account, txid, block_ref, blob, dead, created) \
     \select n.id, unhex(o.txid), o.block_ref, o.blob, o.dead, o.created \
     \from old_d_b_tx_info o " <> throughAccount,
-    "insert into d_b_coin (account, outpoint, address, value, block_ref, blob, created) \
-    \select n.id, unhex(o.outpoint), o.address, o.value, o.block_ref, o.blob, o.created \
+    "insert into d_b_coin (account, outpoint, address, value, block_ref, created) \
+    \select n.id, unhex(o.outpoint), o.address, o.value, o.block_ref, o.created \
     \from old_d_b_coin o " <> throughAccount,
     "insert into d_b_pending_tx (account, nosig_hash, blob, online, created) \
     \select n.id, unhex(o.nosig_hash), o.blob, o.online, o.created \

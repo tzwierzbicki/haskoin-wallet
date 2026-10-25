@@ -21,7 +21,7 @@ import qualified Data.ByteString as BS
 import Data.List (sort)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (listToMaybe)
+import Data.Maybe (fromJust, listToMaybe)
 import qualified Data.Serialize as S
 import qualified Data.Set as Set
 import Data.String.Conversions (cs)
@@ -108,12 +108,12 @@ thirdCoin = OutPoint (fakeTxHash 3) 0
 -- | The account with the confirmed payment at 800000, the second payment at
 -- 800001 and the third one in the mempool
 threeCoins :: Ctx -> DBAccountId -> ExceptT String (DB IO) ()
-threeCoins ctx accId = void $ refresh accId [confirmedPayment ctx, secondPayment ctx, thirdPayment ctx]
+threeCoins ctx accId = void $ refresh ctx accId [confirmedPayment ctx, secondPayment ctx, thirdPayment ctx]
 
 -- | Refresh the coins of the addresses of these tests with what the store
 -- lists, as the sync does when their balances changed
-refresh :: DBAccountId -> [Store.Unspent] -> ExceptT String (DB IO) Refreshed
-refresh accId = refreshCoins btc accId (Map.keys accountPaths)
+refresh :: Ctx -> DBAccountId -> [Store.Unspent] -> ExceptT String (DB IO) Refreshed
+refresh ctx accId = refreshCoins btc ctx accId (Map.keys accountPaths)
 
 -- | What a refresh changed: how many coins, and the outpoints of those it
 -- inserted and of those it deleted
@@ -139,8 +139,8 @@ spendableFlags accId = map (\c -> (jsonCoinOutpoint c, jsonCoinSpendable c)) <$>
 
 -- | The outpoints of the coins offered to the builder at a number of
 -- confirmations
-spendable :: DBAccountId -> Natural -> ExceptT String (DB IO) [OutPoint]
-spendable accId minConf = sort . map (.outpoint) <$> spendableCoins btc accId minConf
+spendable :: Ctx -> DBAccountId -> Natural -> ExceptT String (DB IO) [OutPoint]
+spendable ctx accId minConf = sort . map (.outpoint) <$> spendableCoins btc ctx accId minConf
 
 -- | The best block of Bitcoin at a height
 bestAt :: BlockHeight -> ExceptT String (DB IO) ()
@@ -161,9 +161,24 @@ spendingFirstOnCash ctx = do
 
 -- | The row of the confirmed payment as a refresh writes it, for the tests
 -- that spoil one of its columns
-paymentRow :: Ctx -> DBAccountId -> DBCoin
-paymentRow ctx accId =
-  DBCoin accId (outpointBytes firstCoin) "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" 50000 (S.encode (Store.BlockRef 800000 0)) (S.encode (confirmedPayment ctx)) fixtureTime
+paymentRow :: DBAccountId -> DBCoin
+paymentRow accId =
+  DBCoin accId (outpointBytes firstCoin) "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" 50000 (S.encode (Store.BlockRef 800000 0)) fixtureTime
+
+-- | The confirmed payment, its script written in other bytes: the
+-- 20-byte hash of the first receiving address pushed with OP_PUSHDATA1
+-- (4c 14) instead of the one-byte push (14). The script means the same and
+-- reads as the same address, but it is not standard: only a miner can put
+-- it in a block, and a signature over the standard script does not spend it.
+oddlyWrittenPayment :: Store.Unspent
+oddlyWrittenPayment =
+  Store.Unspent
+    { Store.block = Store.BlockRef 800000 0,
+      Store.outpoint = firstCoin,
+      Store.value = 50000,
+      Store.script = fromJust (decodeHex "76a94c14c80d55223e2f1061363add2a7b0363c285bf298d88ac"),
+      Store.address = Just (externalAddr 0)
+    }
 
 {- Transactions behind the coins -}
 
@@ -213,65 +228,69 @@ refreshingSpec ctx =
     it "stores a new coin with its account, address, value and block" $
       inDatabaseE $ do
         accId <- account ctx
-        (changes <$> refresh accId [payment ctx]) `dbShouldBeE` (1, [firstCoin], [])
+        (changes <$> refresh ctx accId [payment ctx]) `dbShouldBeE` (1, [firstCoin], [])
         rows <- storedAt "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"
         liftIO $ do
           map (\c -> (dBCoinAccount c, dBCoinValue c, S.decode (dBCoinBlockRef c))) rows `shouldBe` [(accId, 50000, Right (Store.MemRef 0))]
-          map (S.decode . dBCoinBlob) rows `shouldBe` [Right (payment ctx)]
 
     it "changes nothing when the store lists the same coins again" $
       inDatabaseE $ do
         accId <- account ctx
-        _ <- refresh accId [payment ctx]
-        (changes <$> refresh accId [payment ctx]) `dbShouldBeE` (0, [], [])
+        _ <- refresh ctx accId [payment ctx]
+        (changes <$> refresh ctx accId [payment ctx]) `dbShouldBeE` (0, [], [])
 
     it "stores once a coin the store lists twice" $
       inDatabaseE $ do
         accId <- account ctx
-        (changes <$> refresh accId [payment ctx, payment ctx]) `dbShouldBeE` (1, [firstCoin], [])
+        (changes <$> refresh ctx accId [payment ctx, payment ctx]) `dbShouldBeE` (1, [firstCoin], [])
         (map rowOutpoint <$> storedAt "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj") `dbShouldBeE` [firstCoin]
 
     it "moves a coin to the block that confirms it, as the store reports it" $
       inDatabaseE $ do
         accId <- account ctx
-        _ <- refresh accId [payment ctx]
-        (changes <$> refresh accId [confirmedPayment ctx]) `dbShouldBeE` (1, [], [])
+        _ <- refresh ctx accId [payment ctx]
+        (changes <$> refresh ctx accId [confirmedPayment ctx]) `dbShouldBeE` (1, [], [])
         rows <- storedAt "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"
         liftIO $ map (S.decode . dBCoinBlockRef) rows `shouldBe` [Right (Store.BlockRef 800000 0)]
-        spendableCoins btc accId 0 `dbShouldBeE` [confirmedPayment ctx]
+        spendableCoins btc ctx accId 0 `dbShouldBeE` [confirmedPayment ctx]
 
     it "deletes a coin the store no longer lists, as once it is spent" $
       inDatabaseE $ do
         accId <- account ctx
-        _ <- refresh accId [confirmedPayment ctx]
-        (changes <$> refresh accId []) `dbShouldBeE` (1, [], [firstCoin])
+        _ <- refresh ctx accId [confirmedPayment ctx]
+        (changes <$> refresh ctx accId []) `dbShouldBeE` (1, [], [firstCoin])
         storedAt "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" `dbShouldBeE` []
 
     it "keeps the coins of one address apart, deleting only the one that went" $
       inDatabaseE $ do
         accId <- account ctx
-        (changes <$> refresh accId [secondPayment ctx, thirdPayment ctx]) `dbShouldBeE` (2, [secondCoin, thirdCoin], [])
-        (changes <$> refresh accId [thirdPayment ctx]) `dbShouldBeE` (1, [], [secondCoin])
+        (changes <$> refresh ctx accId [secondPayment ctx, thirdPayment ctx]) `dbShouldBeE` (2, [secondCoin, thirdCoin], [])
+        (changes <$> refresh ctx accId [thirdPayment ctx]) `dbShouldBeE` (1, [], [secondCoin])
         (map rowOutpoint <$> storedAt "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg") `dbShouldBeE` [thirdCoin]
 
     it "leaves alone the addresses it is not given, whatever the store lists for them" $
       inDatabaseE $ do
         accId <- account ctx
-        _ <- refresh accId [secondPayment ctx]
+        _ <- refresh ctx accId [secondPayment ctx]
         -- The second address is not refreshed: its coin stays, and the new
         -- one the store lists there is not stored
-        (changes <$> refreshCoins btc accId [externalAddr 0] [payment ctx, thirdPayment ctx]) `dbShouldBeE` (1, [firstCoin], [])
+        (changes <$> refreshCoins btc ctx accId [externalAddr 0] [payment ctx, thirdPayment ctx]) `dbShouldBeE` (1, [firstCoin], [])
         (map fst3 <$> listed accId (Page 10 0)) `dbShouldBeE` [firstCoin, secondCoin]
 
     it "passes over a coin the store lists without an address" $
       inDatabaseE $ do
         accId <- account ctx
-        (changes <$> refresh accId [unaddressed]) `dbShouldBeE` (0, [], [])
+        (changes <$> refresh ctx accId [unaddressed]) `dbShouldBeE` (0, [], [])
+
+    it "passes over a coin whose script is not the standard script of its address" $
+      inDatabaseE $ do
+        accId <- account ctx
+        (changes <$> refresh ctx accId [oddlyWrittenPayment]) `dbShouldBeE` (0, [], [])
 
     it "refuses an address its network cannot write" $
       inDatabaseE $ do
         (accId, _) <- testNewAccBch ctx "cash"
-        lift $ dbShouldFailWith "The coins of an address of another network cannot be refreshed" $ refreshCoins bch accId [segwitAddr] []
+        lift $ dbShouldFailWith "The coins of an address of another network cannot be refreshed" $ refreshCoins bch ctx accId [segwitAddr] []
 
 {- Listing -}
 
@@ -296,7 +315,7 @@ listingSpec ctx =
       inDatabaseE $ do
         accId <- account ctx
         let output i = storeCoin ctx (fakeTxHash 4, i) (Just 800000) (externalAddr 0) 10000
-        _ <- refresh accId [output 2, output 0, output 1]
+        _ <- refresh ctx accId [output 2, output 0, output 1]
         (map fst3 <$> listed accId (Page 10 0)) `dbShouldBeE` [OutPoint (fakeTxHash 4) 0, OutPoint (fakeTxHash 4) 1, OutPoint (fakeTxHash 4) 2]
         (map fst3 <$> listed accId (Page 1 1)) `dbShouldBeE` [OutPoint (fakeTxHash 4) 1]
 
@@ -310,7 +329,7 @@ listingSpec ctx =
     it "counts one confirmation for a confirmed coin while the best block is unknown or behind it" $
       inDatabaseE $ do
         accId <- account ctx
-        _ <- refresh accId [confirmedPayment ctx]
+        _ <- refresh ctx accId [confirmedPayment ctx]
         listed accId (Page 10 0) `dbShouldBeE` [(firstCoin, 1, False)]
         bestAt 799990
         listed accId (Page 10 0) `dbShouldBeE` [(firstCoin, 1, False)]
@@ -318,7 +337,7 @@ listingSpec ctx =
     it "counts from the best block of the account's network, not another's" $
       inDatabaseE $ do
         accId <- account ctx
-        _ <- refresh accId [confirmedPayment ctx]
+        _ <- refresh ctx accId [confirmedPayment ctx]
         lift $ updateBest bch (fakeBlockHash 2) 900000
         listed accId (Page 10 0) `dbShouldBeE` [(firstCoin, 1, False)]
 
@@ -347,7 +366,7 @@ listingSpec ctx =
     it "marks a confirmed coin as spendable, and one a pending transaction holds as not" $
       inDatabaseE $ do
         accId <- account ctx
-        _ <- refresh accId [confirmedPayment ctx, secondPayment ctx]
+        _ <- refresh ctx accId [confirmedPayment ctx, secondPayment ctx]
         spendingFirst ctx accId
         spendableFlags accId `dbShouldBeE` [(secondCoin, True), (firstCoin, False)]
 
@@ -357,14 +376,14 @@ listingSpec ctx =
         summarise accId (thirdPaymentTx ctx)
         summarise accId (firstPaymentTx ctx)
         summarise accId (ownPaymentTx ctx)
-        _ <- refresh accId [thirdPayment ctx, ownChange ctx]
+        _ <- refresh ctx accId [thirdPayment ctx, ownChange ctx]
         (sort <$> spendableFlags accId) `dbShouldBeE` [(thirdCoin, False), (OutPoint (fakeTxHash 8) 1, True)]
 
     it "marks a coinbase as spendable once it has matured" $
       inDatabaseE $ do
         accId <- account ctx
         lift $ insertRawTx (coinbase ctx)
-        _ <- refresh accId [storeCoin ctx (txHash (coinbase ctx), 0) (Just 800000) (externalAddr 0) 312500000]
+        _ <- refresh ctx accId [storeCoin ctx (txHash (coinbase ctx), 0) (Just 800000) (externalAddr 0) 312500000]
         bestAt 800098
         spendableFlags accId `dbShouldBeE` [(OutPoint (txHash (coinbase ctx)) 0, False)]
         bestAt 800099
@@ -374,21 +393,21 @@ listingSpec ctx =
       inDatabaseE $ do
         accId <- account ctx
         (otherId, _) <- testNewAcc2 ctx "other"
-        _ <- refresh accId [confirmedPayment ctx]
-        _ <- refreshCoins btc otherId [externalAddr2] [storeCoin ctx (fakeTxHash 4, 0) (Just 800000) externalAddr2 10000]
+        _ <- refresh ctx accId [confirmedPayment ctx]
+        _ <- refreshCoins btc ctx otherId [externalAddr2] [storeCoin ctx (fakeTxHash 4, 0) (Just 800000) externalAddr2 10000]
         (map fst3 <$> listed accId (Page 10 0)) `dbShouldBeE` [firstCoin]
         (map fst3 <$> listed otherId (Page 10 0)) `dbShouldBeE` [OutPoint (fakeTxHash 4) 0]
 
     it "reads the address of a Bitcoin Cash coin on its network" $
       inDatabaseE $ do
         (accId, _) <- testNewAccBch ctx "cash"
-        _ <- refreshCoins bch accId [bchExternalAddr] [storeCoin ctx (fakeTxHash 5, 0) (Just 800000) bchExternalAddr 10000]
+        _ <- refreshCoins bch ctx accId [bchExternalAddr] [storeCoin ctx (fakeTxHash 5, 0) (Just 800000) bchExternalAddr 10000]
         (map jsonCoinAddress <$> coinPage bch accId (Page 10 0)) `dbShouldBeE` [bchExternalAddr]
 
     it "refuses a stored coin whose address does not read, rather than leaving it out" $
       inDatabaseE $ do
         accId <- account ctx
-        lift $ P.insert_ (paymentRow ctx accId) {dBCoinAddress = "nonsense"}
+        lift $ P.insert_ (paymentRow accId) {dBCoinAddress = "nonsense"}
         lift $
           dbShouldFailWith "The stored coin 0000000000000000000000000000000000000000000000000000000000000001 0 has an address that does not read: nonsense" $
             coinPage btc accId (Page 10 0)
@@ -396,7 +415,7 @@ listingSpec ctx =
     it "refuses a stored coin whose block does not read" $
       inDatabaseE $ do
         accId <- account ctx
-        lift $ P.insert_ (paymentRow ctx accId) {dBCoinBlockRef = "nonsense"}
+        lift $ P.insert_ (paymentRow accId) {dBCoinBlockRef = "nonsense"}
         lift $
           dbShouldFailWith "The stored coin 0000000000000000000000000000000000000000000000000000000000000001 0 has a block that does not read" $
             coinPage btc accId (Page 10 0)
@@ -413,24 +432,24 @@ spendableSpec ctx =
         -- 800002 is the third block for the first payment, the second for
         -- the second payment
         bestAt 800002
-        spendable accId 1 `dbShouldBeE` [firstCoin, secondCoin]
-        spendable accId 2 `dbShouldBeE` [firstCoin, secondCoin]
-        spendable accId 3 `dbShouldBeE` [firstCoin]
-        spendable accId 4 `dbShouldBeE` []
+        spendable ctx accId 1 `dbShouldBeE` [firstCoin, secondCoin]
+        spendable ctx accId 2 `dbShouldBeE` [firstCoin, secondCoin]
+        spendable ctx accId 3 `dbShouldBeE` [firstCoin]
+        spendable ctx accId 4 `dbShouldBeE` []
 
     it "counts one confirmation for a confirmed coin while the best block is unknown" $
       inDatabaseE $ do
         accId <- account ctx
         threeCoins ctx accId
-        spendable accId 1 `dbShouldBeE` [firstCoin, secondCoin]
-        spendable accId 2 `dbShouldBeE` []
+        spendable ctx accId 1 `dbShouldBeE` [firstCoin, secondCoin]
+        spendable ctx accId 2 `dbShouldBeE` []
 
     it "holds back a coin a pending transaction spends" $
       inDatabaseE $ do
         accId <- account ctx
         threeCoins ctx accId
         spendingFirst ctx accId
-        spendable accId 1 `dbShouldBeE` [secondCoin]
+        spendable ctx accId 1 `dbShouldBeE` [secondCoin]
 
     it "holds back a coin a pending transaction of another account spends" $
       inDatabaseE $ do
@@ -438,77 +457,77 @@ spendableSpec ctx =
         (otherId, _) <- testNewAcc2 ctx "other"
         threeCoins ctx accId
         spendingFirst ctx otherId
-        spendable accId 1 `dbShouldBeE` [secondCoin]
+        spendable ctx accId 1 `dbShouldBeE` [secondCoin]
 
     it "offers a coin whose outpoint a pending transaction of the other chain spends" $
       inDatabaseE $ do
         accId <- account ctx
         threeCoins ctx accId
         spendingFirstOnCash ctx
-        spendable accId 1 `dbShouldBeE` [firstCoin, secondCoin]
+        spendable ctx accId 1 `dbShouldBeE` [firstCoin, secondCoin]
 
     it "holds back a coinbase until its 100th confirmation" $
       inDatabaseE $ do
         accId <- account ctx
         lift $ insertRawTx (coinbase ctx)
-        _ <- refresh accId [storeCoin ctx (txHash (coinbase ctx), 0) (Just 800000) (externalAddr 0) 312500000]
+        _ <- refresh ctx accId [storeCoin ctx (txHash (coinbase ctx), 0) (Just 800000) (externalAddr 0) 312500000]
         bestAt 800098
-        spendable accId 1 `dbShouldBeE` []
+        spendable ctx accId 1 `dbShouldBeE` []
         bestAt 800099
-        spendable accId 1 `dbShouldBeE` [OutPoint (txHash (coinbase ctx)) 0]
+        spendable ctx accId 1 `dbShouldBeE` [OutPoint (txHash (coinbase ctx)) 0]
 
     it "holds back an unconfirmed coin someone else pays, even at zero confirmations: they can still replace it" $
       inDatabaseE $ do
         accId <- account ctx
         threeCoins ctx accId
         summarise accId (thirdPaymentTx ctx)
-        spendable accId 0 `dbShouldBeE` [firstCoin, secondCoin]
+        spendable ctx accId 0 `dbShouldBeE` [firstCoin, secondCoin]
 
     it "holds back an unconfirmed coin whose transaction the sync has not stored" $
       inDatabaseE $ do
         accId <- account ctx
-        _ <- refresh accId [thirdPayment ctx]
-        spendable accId 0 `dbShouldBeE` []
+        _ <- refresh ctx accId [thirdPayment ctx]
+        spendable ctx accId 0 `dbShouldBeE` []
 
     it "offers at zero confirmations the unconfirmed change of the account's own payment" $
       inDatabaseE $ do
         accId <- account ctx
         summarise accId (firstPaymentTx ctx)
         summarise accId (ownPaymentTx ctx)
-        _ <- refresh accId [ownChange ctx]
-        spendable accId 0 `dbShouldBeE` [OutPoint (fakeTxHash 8) 1]
-        spendable accId 1 `dbShouldBeE` []
+        _ <- refresh ctx accId [ownChange ctx]
+        spendable ctx accId 0 `dbShouldBeE` [OutPoint (fakeTxHash 8) 1]
+        spendable ctx accId 1 `dbShouldBeE` []
 
     it "holds back the change of a payment that spends an unconfirmed coin someone else paid" $
       inDatabaseE $ do
         accId <- account ctx
         summarise accId (thirdPaymentTx ctx)
         summarise accId (paymentOnThirdTx ctx)
-        _ <- refresh accId [changeOnThird ctx]
-        spendable accId 0 `dbShouldBeE` []
+        _ <- refresh ctx accId [changeOnThird ctx]
+        spendable ctx accId 0 `dbShouldBeE` []
 
     it "offers each coin as the store last reported it" $
       inDatabaseE $ do
         accId <- account ctx
-        _ <- refresh accId [secondPayment ctx]
-        spendableCoins btc accId 1 `dbShouldBeE` [secondPayment ctx]
+        _ <- refresh ctx accId [secondPayment ctx]
+        spendableCoins btc ctx accId 1 `dbShouldBeE` [secondPayment ctx]
 
     it "offers the coins of the account only" $
       inDatabaseE $ do
         accId <- account ctx
         (otherId, _) <- testNewAcc2 ctx "other"
-        _ <- refresh accId [confirmedPayment ctx]
-        _ <- refreshCoins btc otherId [externalAddr2] [storeCoin ctx (fakeTxHash 4, 0) (Just 800000) externalAddr2 10000]
-        spendable accId 0 `dbShouldBeE` [firstCoin]
-        spendable otherId 0 `dbShouldBeE` [OutPoint (fakeTxHash 4) 0]
+        _ <- refresh ctx accId [confirmedPayment ctx]
+        _ <- refreshCoins btc ctx otherId [externalAddr2] [storeCoin ctx (fakeTxHash 4, 0) (Just 800000) externalAddr2 10000]
+        spendable ctx accId 0 `dbShouldBeE` [firstCoin]
+        spendable ctx otherId 0 `dbShouldBeE` [OutPoint (fakeTxHash 4) 0]
 
-    it "refuses a stored coin that does not read" $
+    it "refuses a stored coin whose address does not read, rather than leaving it out" $
       inDatabaseE $ do
         accId <- account ctx
-        lift $ P.insert_ (paymentRow ctx accId) {dBCoinBlob = "nonsense"}
+        lift $ P.insert_ (paymentRow accId) {dBCoinAddress = "nonsense"}
         lift $
-          dbShouldFailWith "The stored coin 0000000000000000000000000000000000000000000000000000000000000001 0 does not read" $
-            spendableCoins btc accId 1
+          dbShouldFailWith "The stored coin 0000000000000000000000000000000000000000000000000000000000000001 0 has an address that does not read: nonsense" $
+            spendableCoins btc ctx accId 1
 
 {- Balances -}
 
@@ -546,7 +565,7 @@ balancesSpec ctx =
         accId <- account ctx
         summarise accId (firstPaymentTx ctx)
         summarise accId (ownPaymentTx ctx)
-        _ <- refresh accId [ownChange ctx]
+        _ <- refresh ctx accId [ownChange ctx]
         spendableAtAddresses btc accId ["17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"] `dbShouldBeE` Map.fromList [("17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", 19000)]
         spendableBalance btc accId `dbShouldBeE` 19000
 
@@ -554,7 +573,7 @@ balancesSpec ctx =
       inDatabaseE $ do
         accId <- account ctx
         lift $ insertRawTx (coinbase ctx)
-        _ <- refresh accId [storeCoin ctx (txHash (coinbase ctx), 0) (Just 800000) (externalAddr 0) 312500000]
+        _ <- refresh ctx accId [storeCoin ctx (txHash (coinbase ctx), 0) (Just 800000) (externalAddr 0) 312500000]
         bestAt 800098
         spendableBalance btc accId `dbShouldBeE` 0
         bestAt 800099
@@ -564,8 +583,8 @@ balancesSpec ctx =
       inDatabaseE $ do
         accId <- account ctx
         (otherId, _) <- testNewAcc2 ctx "other"
-        _ <- refresh accId [confirmedPayment ctx]
-        _ <- refreshCoins btc otherId [externalAddr2] [storeCoin ctx (fakeTxHash 4, 0) (Just 800000) externalAddr2 10000]
+        _ <- refresh ctx accId [confirmedPayment ctx]
+        _ <- refreshCoins btc ctx otherId [externalAddr2] [storeCoin ctx (fakeTxHash 4, 0) (Just 800000) externalAddr2 10000]
         spendableBalance btc accId `dbShouldBeE` 50000
         spendableBalance btc otherId `dbShouldBeE` 10000
 
@@ -580,21 +599,21 @@ lifeSpec ctx =
         -- A payment waits in the mempool: listed, but not offered, since
         -- whoever pays can still replace it
         bestAt 799999
-        _ <- refresh accId [payment ctx]
+        _ <- refresh ctx accId [payment ctx]
         listed accId (Page 10 0) `dbShouldBeE` [(firstCoin, 0, False)]
-        spendable accId 0 `dbShouldBeE` []
+        spendable ctx accId 0 `dbShouldBeE` []
         -- It confirms in the next block
         bestAt 800000
-        _ <- refresh accId [confirmedPayment ctx]
+        _ <- refresh ctx accId [confirmedPayment ctx]
         listed accId (Page 10 0) `dbShouldBeE` [(firstCoin, 1, False)]
-        spendable accId 1 `dbShouldBeE` [firstCoin]
+        spendable ctx accId 1 `dbShouldBeE` [firstCoin]
         -- A payment of the wallet spends it: held, offered no more
         spendingFirst ctx accId
         listed accId (Page 10 0) `dbShouldBeE` [(firstCoin, 1, True)]
-        spendable accId 0 `dbShouldBeE` []
+        spendable ctx accId 0 `dbShouldBeE` []
         -- The payment is mined: the store no longer lists the coin
         bestAt 800001
-        (changes <$> refresh accId []) `dbShouldBeE` (1, [], [firstCoin])
+        (changes <$> refresh ctx accId []) `dbShouldBeE` (1, [], [firstCoin])
         listed accId (Page 10 0) `dbShouldBeE` []
 
 {- A coin row -}
@@ -605,7 +624,7 @@ rowSpec ctx =
     it "shows as coins lists it: outpoint, address, value, block, confirmations from the best block, lock, and whether it can be spent" $
       inDatabaseE $ do
         accId <- account ctx
-        refreshed <- refresh accId [confirmedPayment ctx]
+        refreshed <- refresh ctx accId [confirmedPayment ctx]
         row <- liftMaybe "The coin is not stored" $ listToMaybe (insertedCoins refreshed)
         let rules = Spending btc accId (Just 800002) Set.empty
             shown = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 False True
@@ -616,27 +635,31 @@ rowSpec ctx =
     it "keeps its outpoint, read back from its key" $
       inDatabaseE $ do
         accId <- account ctx
-        refreshed <- refresh accId [secondPayment ctx]
+        refreshed <- refresh ctx accId [secondPayment ctx]
         liftIO $ map coinOutpoint (insertedCoins refreshed) `shouldBe` [Right secondCoin]
 
     it "refuses a key that does not read as an outpoint" $
       inDatabaseE $ do
         accId <- account ctx
-        let row = (paymentRow ctx accId) {dBCoinOutpoint = KeyBytes "nonsense"}
+        let row = (paymentRow accId) {dBCoinOutpoint = KeyBytes "nonsense"}
         liftIO $ coinOutpoint row `shouldBe` Left "A stored coin has an outpoint that does not read"
 
     it "is grouped with the others of its address, as the store lists them" $ do
-      let grouped = Map.map (map (.outpoint) . Map.elems) (groupCoins btc [payment ctx, secondPayment ctx, thirdPayment ctx, unaddressed])
+      let grouped = Map.map (map (.outpoint) . Map.elems) (groupCoins btc ctx [payment ctx, secondPayment ctx, thirdPayment ctx, unaddressed])
       grouped
         `shouldBe` Map.fromList
           [ ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", [firstCoin]),
             ("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", [secondCoin, thirdCoin])
           ]
 
+    it "is left out of the groups when its script is not the standard script of its address" $
+      Map.map (map (.outpoint) . Map.elems) (groupCoins btc ctx [oddlyWrittenPayment, secondPayment ctx])
+        `shouldBe` Map.fromList [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", [secondCoin])]
+
     it "is left out of the groups when the network cannot write its address" $ do
       let segwit = storeCoin ctx (fakeTxHash 6, 0) Nothing segwitAddr 1000
           cash = storeCoin ctx (fakeTxHash 5, 0) Nothing bchExternalAddr 1000
-      Map.map (map (.outpoint) . Map.elems) (groupCoins bch [segwit, cash])
+      Map.map (map (.outpoint) . Map.elems) (groupCoins bch ctx [segwit, cash])
         `shouldBe` Map.fromList [(bchExternalAddrText, [OutPoint (fakeTxHash 5) 0])]
 
 {- JSON -}

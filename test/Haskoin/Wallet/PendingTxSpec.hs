@@ -105,7 +105,7 @@ fundAccount ctx cfg accId = do
   _ <- genExtAddress ctx cfg accId ""
   _ <- changeAddress ctx cfg accId
   lift $ insertRawTx (funding ctx)
-  _ <- refreshCoins btc accId externalAddrs [storeCoin ctx (txHash (funding ctx), 0) (Just 0) (externalAddr 0) 20000]
+  _ <- refreshCoins btc ctx accId externalAddrs [storeCoin ctx (txHash (funding ctx), 0) (Just 0) (externalAddr 0) 20000]
   return ()
 
 -- | The account funded as by 'fundAccount', with its second external
@@ -118,6 +118,7 @@ fundAccountTwice ctx cfg accId = do
   _ <-
     refreshCoins
       btc
+      ctx
       accId
       externalAddrs
       [ storeCoin ctx (txHash (funding ctx), 0) (Just 0) (externalAddr 0) 20000,

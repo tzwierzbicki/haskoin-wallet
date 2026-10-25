@@ -81,7 +81,7 @@ fundedWith :: Ctx -> DBAccountId -> Natural -> ExceptT String (DB IO) Tx
 fundedWith ctx accId amount = do
   _ <- genExtAddress ctx def accId ""
   let funding = fundingTx ctx 1 [(externalAddr 0, amount)]
-  _ <- refreshCoins btc accId externalAddrs [storeCoin ctx (txHash funding, 0) (Just 800000) (externalAddr 0) amount]
+  _ <- refreshCoins btc ctx accId externalAddrs [storeCoin ctx (txHash funding, 0) (Just 800000) (externalAddr 0) amount]
   return funding
 
 -- | The coin of the funding spent to another wallet, 40000 of it, with the
@@ -303,7 +303,7 @@ deletingSpec ctx =
         (otherId, _) <- testNewAcc2 ctx "other"
         forM_ [(mainId, externalAddr 0, 1), (otherId, externalAddr2, 2)] $ \(accId, addr, n) -> do
           _ <- genExtAddress ctx def accId ""
-          _ <- refreshCoins btc accId [addr] [storeCoin ctx (fakeTxHash n, 0) (Just 800000) addr 1000]
+          _ <- refreshCoins btc ctx accId [addr] [storeCoin ctx (fakeTxHash n, 0) (Just 800000) addr 1000]
           lift $ P.insert_ $ DBTxInfo accId (hashBytes (fakeTxHash n)) (S.encode (Store.BlockRef 800000 1)) "{}" False fixtureTime
           lift $ P.insert_ $ DBPendingTx accId (hashBytes (fakeTxHash (n + 2))) "{}" False False fixtureTime
         lift $ rowsOf mainId `dbShouldBe` (1, 1, 1, 1)
@@ -335,7 +335,7 @@ balanceSpec ctx =
         wallet <- walletIn (dir </> "wallet.sqlite") $ do
           (accId, _) <- testNewAcc ctx "main"
           _ <- genExtAddress ctx def accId ""
-          refreshCoins btc accId [externalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
+          refreshCoins btc ctx accId [externalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
         shownSpendable <$> cmdAccounts wallet Nothing `shouldReturn` Right [("main", 50000)]
 
     it "are shown by addrs with the balance each address can spend now" $
@@ -344,7 +344,7 @@ balanceSpec ctx =
           (accId, _) <- testNewAcc ctx "main"
           _ <- genExtAddress ctx def accId ""
           _ <- genExtAddress ctx def accId ""
-          refreshCoins btc accId [externalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
+          refreshCoins btc ctx accId [externalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
         -- Newest first: the second address holds nothing
         addressSpendable <$> cmdAddrs wallet Nothing False (Page 5 0)
           `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", 0), ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", 50000)]

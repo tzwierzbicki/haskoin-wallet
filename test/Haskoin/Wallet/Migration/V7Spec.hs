@@ -88,24 +88,24 @@ spec = prepareContext $ \ctx ->
         migrateTo7 ctx
         queryRows "select hash, blob from d_b_raw_tx" `dbShouldBe` [[PersistByteString (hexBytes (txHashToHex (fakeTxHash 1))), PersistByteString "raw"]]
 
-    it "keeps the other columns of the rows, except that nothing is confirmed any more and no path is written out" $
+    it "keeps the other columns of the rows, except that nothing is confirmed any more, no path is written out and a coin keeps no copy of itself" $
       inMemory $ do
         version6Database
         addressesBefore <- queryRows "select \"index\", address, label, balance_confirmed, balance_unconfirmed, balance_coins, balance_txs, balance_received, internal, created from d_b_address"
         summariesBefore <- queryRows "select block_ref, blob, dead, created from d_b_tx_info"
-        coinsBefore <- queryRows "select address, value, block_ref, blob, created from d_b_coin"
+        coinsBefore <- queryRows "select address, value, block_ref, created from d_b_coin"
         pendingBefore <- queryRows "select blob, online, created from d_b_pending_tx"
         migrateTo7 ctx
         queryRows "select \"index\", address, label, balance_confirmed, balance_unconfirmed, balance_coins, balance_txs, balance_received, internal, created from d_b_address"
           `dbShouldBe` addressesBefore
         queryRows "select block_ref, blob, dead, created from d_b_tx_info" `dbShouldBe` summariesBefore
-        queryRows "select address, value, block_ref, blob, created from d_b_coin" `dbShouldBe` coinsBefore
+        queryRows "select address, value, block_ref, created from d_b_coin" `dbShouldBe` coinsBefore
         queryRows "select blob, online, created from d_b_pending_tx" `dbShouldBe` pendingBefore
         columnNames "d_b_address"
           `dbShouldBe` [ "account", "address", "balance_coins", "balance_confirmed", "balance_received", "balance_txs",
                          "balance_unconfirmed", "created", "index", "internal", "label" ]
         columnNames "d_b_tx_info" `dbShouldBe` ["account", "blob", "block_ref", "created", "dead", "txid"]
-        columnNames "d_b_coin" `dbShouldBe` ["account", "address", "blob", "block_ref", "created", "outpoint", "value"]
+        columnNames "d_b_coin" `dbShouldBe` ["account", "address", "block_ref", "created", "outpoint", "value"]
 
     it "starts every pending transaction out of conflict, for the next sync to ask the store" $
       inMemory $ do

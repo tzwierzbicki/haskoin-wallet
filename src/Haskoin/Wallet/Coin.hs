@@ -1,3 +1,4 @@
+{-# LANGUAGE DisambiguateRecordFields #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedRecordDot #-}
@@ -133,11 +134,28 @@ readBlock :: OutPoint -> ByteString -> Either String Store.BlockRef
 readBlock outpoint bytes =
   readStored (storedProblem outpoint "has a block that does not read") (S.decode bytes)
 
--- | The coin of a row as the store last reported it
-storedUnspent :: DBCoin -> Either String Store.Unspent
-storedUnspent row = do
+-- | The coin of a row as the store reported it, its script given by its
+-- address: the refresh stores only coins whose script is the standard
+-- script of their address ('groupCoins')
+storedUnspent :: Network -> Ctx -> DBCoin -> Either String Store.Unspent
+storedUnspent net ctx row = do
   outpoint <- coinOutpoint row
-  readStored (storedProblem outpoint "does not read") $ S.decode (dBCoinBlob row)
+  addr <- coinAddress net outpoint row
+  block <- readBlock outpoint (dBCoinBlockRef row)
+  script <- maybeToEither (storedProblem outpoint "has an address without a standard script") $ standardScript ctx addr
+  return
+    Store.Unspent
+      { Store.block = block,
+        Store.outpoint = outpoint,
+        Store.value = dBCoinValue row,
+        Store.script = script,
+        Store.address = Just addr
+      }
+
+-- | The standard output script of an address: the one script a coin the
+-- wallet can spend has at it
+standardScript :: Ctx -> Address -> Maybe ByteString
+standardScript ctx addr = marshal ctx <$> addressToOutput addr
 
 -- | What does not read in a stored coin, named by its outpoint
 storedProblem :: OutPoint -> String -> String
@@ -157,13 +175,18 @@ accountCoins accId = lift $ map P.entityVal <$> P.selectList [DBCoinAccount P.==
 
 -- | The coins of the store by the text of their address, each coin once,
 -- by its outpoint as the rows key it. A coin without an address, or at one
--- the network cannot write, is left out.
-groupCoins :: Network -> [Store.Unspent] -> Map Text (Map KeyBytes Store.Unspent)
-groupCoins net coins = Map.fromListWith Map.union (mapMaybe entry coins)
+-- the network cannot write, is left out, and so is one whose script is not
+-- the standard script of its address: the same address in other bytes,
+-- which only a miner can put in a block, and which hw could not sign for.
+-- The rows keep the address alone, which gives the script of every other.
+groupCoins :: Network -> Ctx -> [Store.Unspent] -> Map Text (Map KeyBytes Store.Unspent)
+groupCoins net ctx coins = Map.fromListWith Map.union (mapMaybe entry coins)
   where
     entry coin = do
-      addr <- addrToText net =<< coin.address
-      return (addr, Map.singleton (outpointBytes coin.outpoint) coin)
+      addr <- coin.address
+      guard (standardScript ctx addr == Just coin.script)
+      addrText <- addrToText net addr
+      return (addrText, Map.singleton (outpointBytes coin.outpoint) coin)
 
 {- Listing -}
 
@@ -218,10 +241,10 @@ canSpend rules minConf outpoint block
 
 -- | The coins the builder may spend, with at least the confirmations asked,
 -- as the store last reported them
-spendableCoins :: (MonadUnliftIO m) => Network -> DBAccountId -> Natural -> ExceptT String (DB m) [Store.Unspent]
-spendableCoins net accId minConf = do
+spendableCoins :: (MonadUnliftIO m) => Network -> Ctx -> DBAccountId -> Natural -> ExceptT String (DB m) [Store.Unspent]
+spendableCoins net ctx accId minConf = do
   rules <- spendingOf net accId
-  coins <- liftEither . mapM storedUnspent =<< accountCoins accId
+  coins <- liftEither . mapM (storedUnspent net ctx) =<< accountCoins accId
   filterM (\coin -> canSpend rules minConf coin.outpoint coin.block) coins
 
 -- | The value of the coins of the account that can be spent now, by the
@@ -244,8 +267,7 @@ spendableBalance net accId = do
 
 -- | What the spendable balances read of the coins of an account, at the
 -- given addresses or at all of them: the outpoint, address, value and
--- block of each. The rest of the row, the coin as the store reported it,
--- is the most of its size, and is left unread.
+-- block of each.
 balanceColumns :: (MonadUnliftIO m) => DBAccountId -> Maybe [Text] -> ExceptT String (DB m) [(OutPoint, Text, Word64, Store.BlockRef)]
 balanceColumns accId addrsM = do
   rows <- lift . select . from $ \c -> do
@@ -325,13 +347,14 @@ instance Monoid Refreshed where
 refreshCoins ::
   (MonadUnliftIO m) =>
   Network ->
+  Ctx ->
   DBAccountId ->
   [Address] ->
   [Store.Unspent] ->
   ExceptT String (DB m) Refreshed
-refreshCoins net accId addrs unspents = mconcat <$> mapM refreshAddress addrs
+refreshCoins net ctx accId addrs unspents = mconcat <$> mapM refreshAddress addrs
   where
-    listed = groupCoins net unspents
+    listed = groupCoins net ctx unspents
     refreshAddress addr = do
       addrText <-
         liftMaybe "The coins of an address of another network cannot be refreshed" $
@@ -370,7 +393,6 @@ insertCoin net accId coin = do
             dBCoinAddress = addr,
             dBCoinValue = coin.value,
             dBCoinBlockRef = S.encode coin.block,
-            dBCoinBlob = S.encode coin,
             dBCoinCreated = time
           }
   lift $ P.insert_ row
@@ -378,10 +400,7 @@ insertCoin net accId coin = do
 
 -- | Move a stored coin to the block the store now reports for it
 moveCoin :: (MonadUnliftIO m) => Store.Unspent -> DB m ()
-moveCoin coin =
-  P.update
-    (DBCoinKey $ outpointBytes coin.outpoint)
-    [DBCoinBlockRef P.=. S.encode coin.block, DBCoinBlob P.=. S.encode coin]
+moveCoin coin = P.update (DBCoinKey $ outpointBytes coin.outpoint) [DBCoinBlockRef P.=. S.encode coin.block]
 
 -- | Delete a stored coin
 deleteCoin :: (MonadUnliftIO m) => DBCoin -> DB m ()

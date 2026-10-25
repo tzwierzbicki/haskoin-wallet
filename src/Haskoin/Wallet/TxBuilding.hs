@@ -115,7 +115,7 @@ fetchWalletCoins ::
   Natural ->
   ExceptT String (DB m) WalletCoins
 fetchWalletCoins net ctx cfg accId recipients minConf = do
-  coins <- spendableCoins net accId minConf
+  coins <- spendableCoins net ctx accId minConf
   coinPaths <- Map.fromList <$> mapM (coinWithPath net accId) coins
   change <- liftEither . fromDBAddr net =<< changeAddress ctx cfg accId
   recipientPaths <- walletPaths net accId recipients

@@ -175,7 +175,7 @@ sync ctx cfg store net accId full = do
   updated <- lift $ forM (filter (not . (.deleted)) txs) $ \tx -> repsertSummary net accId tx.txid tx.block (storeSummary net addrPaths tx)
   lift $ forM_ (deadTransactions everything known toFetch txs listed) $ markTxInfoDead accId
   -- The coins, the pending transactions and the raw transactions
-  refreshed <- syncCoins store net accId changedBals
+  refreshed <- syncCoins ctx store net accId changedBals
   (resent, conflicted, retired) <- syncPending store accId (Set.fromList $ (.txid) <$> listed)
   pruneRawTxs everything refreshed retired
   lift $ updateBest net (headerHash best.header) best.height
@@ -282,15 +282,15 @@ deadTransactions everything known fetched txs listed = nubOrd $ gone <> vanished
 -- list as many of as it counts, and the raw transactions they come from,
 -- which signing needs. A raw transaction never changes, so the ones already
 -- stored are not fetched again.
-syncCoins :: (MonadUnliftIO m) => Store -> Network -> DBAccountId -> [Store.Balance] -> ExceptT String (DB m) Refreshed
-syncCoins store net accId changedBals = do
+syncCoins :: (MonadUnliftIO m) => Ctx -> Store -> Network -> DBAccountId -> [Store.Balance] -> ExceptT String (DB m) Refreshed
+syncCoins ctx store net accId changedBals = do
   let changedAddrs = (.address) <$> changedBals
       counted = sum $ (.utxo) <$> changedBals
   unspents <- fromStore $ storeUnspents store changedAddrs
   when (fromIntegral (length unspents) /= counted) $
     throwError $
       "The store counts " <> show counted <> " coins for the addresses to update but listed " <> show (length unspents)
-  refreshed <- refreshCoins net accId changedAddrs unspents
+  refreshed <- refreshCoins net ctx accId changedAddrs unspents
   missing <- lift $ missingRawTxs $ nubOrd $ (.outpoint.hash) <$> unspents
   rawTxs <- fromStore $ rawTransactions store missing
   lift $ forM_ rawTxs insertRawTx

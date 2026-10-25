@@ -28,8 +28,10 @@
 -- transaction of the offline wallet. Every account has a plain id, which
 -- its addresses, summaries, coins and pending transactions point to. The
 -- confirmed columns of the summaries and the coins, which nothing read, are
--- gone as well. A pending transaction keeps whether the store, at the last
--- sync, found one of its coins spent by another transaction or gone.
+-- gone as well. A coin keeps its address, which gives its script, and no
+-- longer the whole coin as the store reported it. A pending transaction
+-- keeps whether the store, at the last sync, found one of its coins spent
+-- by another transaction or gone.
 --
 -- The keys are made for large wallets. An address is keyed by its account,
 -- its chain and its index, the order addrs lists it in, and its derivation
@@ -111,7 +113,6 @@ DBCoin
   address Text
   value Word64
   blockRef ByteString
-  blob ByteString
   created UTCTime default=CURRENT_TIMESTAMP
   Primary outpoint
   deriving Show

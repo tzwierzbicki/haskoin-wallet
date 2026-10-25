@@ -437,7 +437,7 @@ fundedAccount ctx cfg = do
   _ <- genExtAddress ctx cfg accId ""
   let fund = fundingWorth ctx [400000]
   lift $ insertRawTx fund
-  _ <- refreshCoins btc accId [externalAddr 0] [storeCoin ctx (txHash fund, 0) (Just 0) (externalAddr 0) 400000]
+  _ <- refreshCoins btc ctx accId [externalAddr 0] [storeCoin ctx (txHash fund, 0) (Just 0) (externalAddr 0) 400000]
   return (accId, fund)
 
 databaseSpec :: Ctx -> Spec
@@ -476,7 +476,7 @@ databaseSpec ctx =
         (accId, _) <- testNewAcc ctx "test"
         lift $ updateBest btc (fakeBlockHash 0) 0
         _ <- genExtAddress ctx cfg accId ""
-        _ <- refreshCoins btc accId [externalAddr 0] [storeCoin ctx (fakeTxHash 9, 0) (Just 0) (externalAddr 0) 400000]
+        _ <- refreshCoins btc ctx accId [externalAddr 0] [storeCoin ctx (fakeTxHash 9, 0) (Just 0) (externalAddr 0) 400000]
         result <- lift $ runExceptT $ buildTxSignData btc ctx cfg (mkStdGen 0) LargestFirst accId [(otherAddr 0, 350000)] 10 546 SenderPays 1 []
         liftIO $
           result
