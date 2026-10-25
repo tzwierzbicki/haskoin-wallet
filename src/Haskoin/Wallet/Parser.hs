@@ -10,7 +10,7 @@ import Data.Text (Text)
 import Haskoin
 import Haskoin.Wallet.Amounts (AmountUnit (..), readNatural)
 import Haskoin.Wallet.CoinSelection (CoinSelection (..), FeePayer (..))
-import Haskoin.Wallet.Keys (KeySource (..), lastAccountIndex)
+import Haskoin.Wallet.Keys (KeySource (..))
 import Haskoin.Wallet.Util (Page (Page))
 import Numeric.Natural (Natural)
 import Options.Applicative
@@ -28,7 +28,6 @@ data Command
   | CommandCreateAcc
       { commandName :: !Text,
         commandNetwork :: !Network,
-        commandDerivationMaybe :: !(Maybe Natural),
         commandSplitIn :: !Natural
       }
   | CommandTestAcc
@@ -359,7 +358,6 @@ createAccParser = do
         CommandCreateAcc
           <$> textArg "Name of the new account"
           <*> networkOption
-          <*> optional derivationOption
           <*> splitInOption
   info cmd $
     progDescDoc (offline "Create a new account")
@@ -370,7 +368,10 @@ m/44'/coin'/account'. For example, the bitcoin account 0 would be m/44'/0'/0'.
 An account is tied to a private key and thus to a mnemonic. The derived account
 m/44'/0'/0' would be different given two different mnemonics. To help manage
 your accounts in hw, they are identified by a name. The command `createacc` will
-ask for a mnemonic and save the derived public key M/44'/coin'/account' on disk.
+ask for a mnemonic and save the derived public key M/44'/coin'/account' on disk,
+at the first index of the seed without an account on the network. An account
+exported from another wallet comes back with `importacc` at the index of its
+key.
 The private keys are never stored anywhere while using hw. If you are using an
 offline computer, you can then export your account and import it on an online
 computer.
@@ -399,25 +400,6 @@ networkOptionWith mods =
     f Nothing =
       Left $ "Invalid network name. Select one of the following: " <> nets
     f (Just res) = Right res
-
-derivationOption :: Parser Natural
-derivationOption =
-  option (eitherReader accountIndex) $
-    short 'd'
-      <> long "derivation"
-      <> metavar "INT"
-      <> help
-        [r|
-The index of the account, the last part of m/44'/coin'/account', from 0 to
-2147483647. By default, the first index without an account of the seed on the
-network is taken.
-|]
-  where
-    accountIndex :: String -> Either String Natural
-    accountIndex arg =
-      case readNatural (cs arg) of
-        Just index | index <= lastAccountIndex -> Right index
-        _ -> Left $ "An account index is a number from 0 to " <> show lastAccountIndex
 
 {- DeleteAcc Parser -}
 

@@ -106,7 +106,8 @@ askSigningKey net ctx idx mnem@(MnemonicPass m _) accPub = do
   p <- liftIO askPassword1
   master <- liftEither $ masterKey (MnemonicPass m $ cs p)
   let seed = seedOfMaster ctx master
-  if seedAccountKey seed net idx == accPub
+  derivedM <- liftIO $ seedAccountKey seed net idx
+  if derivedM == Just accPub
     then return (seed, accountKey net ctx master idx)
     else do
       liftIO $ putStrLn "The passphrase or the mnemonic did not match the account "

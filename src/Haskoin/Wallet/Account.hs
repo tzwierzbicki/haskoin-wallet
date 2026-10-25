@@ -103,15 +103,21 @@ accountWithKey net ctx key = fmap entityPair <$> P.getBy (UniqueXPubKey $ xPubEx
 entityPair :: Entity a -> (P.Key a, a)
 entityPair e = (entityKey e, entityVal e)
 
--- | The index of the next account of a seed on a network: the smallest one
--- whose key the database does not hold. An account deleted leaves its
--- index free, and creating it again gives the same account.
-nextAccountIndex :: (MonadUnliftIO m) => Network -> Ctx -> PublicSeed -> DB m Natural
-nextAccountIndex net ctx seed = go 0
+-- | The next account of a seed on a network: the lowest index whose key
+-- the database does not hold, with that key. An index whose child key is
+-- invalid, which BIP32 says to skip, is passed over as for an address. An
+-- account deleted leaves its index free, and creating it again gives the
+-- same account.
+nextAccount :: (MonadUnliftIO m) => Network -> Ctx -> PublicSeed -> DB m (Natural, XPubKey)
+nextAccount net ctx seed = go 0
   where
     go i = do
-      held <- accountWithKey net ctx $ seedAccountKey seed net i
-      maybe (return i) (const $ go (i + 1)) held
+      keyM <- liftIO $ seedAccountKey seed net i
+      case keyM of
+        Nothing -> go (i + 1)
+        Just key -> do
+          held <- accountWithKey net ctx key
+          maybe (return (i, key)) (const $ go (i + 1)) held
 
 existsAccount :: (MonadUnliftIO m) => Text -> DB m Bool
 existsAccount name = P.existsBy $ UniqueName name
@@ -267,8 +273,8 @@ recordFingerprint ctx seed = do
   accs <- getAccounts
   forM_ accs $ \(accId, acc) -> do
     let net = accountNetwork acc
-        derived = xPubExport net ctx $ seedAccountKey seed net (accountIndex acc)
-    when (derived == dBAccountXPubKey acc && dBAccountFingerprint acc /= Just fingerprint) $
+    derivedM <- liftIO $ seedAccountKey seed net (accountIndex acc)
+    when (fmap (xPubExport net ctx) derivedM == Just (dBAccountXPubKey acc) && dBAccountFingerprint acc /= Just fingerprint) $
       P.update accId [DBAccountFingerprint P.=. Just fingerprint]
   where
     fingerprint = fingerprintToText $ seedFingerprint seed

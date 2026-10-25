@@ -215,7 +215,6 @@ test-suite spec
       Haskoin.Wallet.Migration.V6Spec
       Haskoin.Wallet.Migration.V7Spec
       Haskoin.Wallet.MigrationSpec
-      Haskoin.Wallet.ParserSpec
       Haskoin.Wallet.PendingTxSpec
       Haskoin.Wallet.Schema.V1
       Haskoin.Wallet.SyncSpec

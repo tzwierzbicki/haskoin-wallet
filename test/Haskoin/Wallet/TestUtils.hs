@@ -30,7 +30,7 @@ import Database.Persist.Sql (Migration, PersistValue, Single (..), rawQuery, raw
 import Database.Persist.Sqlite (runSqlite)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Account (insertAccount, nextAccountIndex)
+import Haskoin.Wallet.Account (insertAccount, nextAccount)
 import Haskoin.Wallet.Database (DB, DBAccount, DBAccountId, migrateAll)
 import Haskoin.Wallet.Keys (MnemonicPass (..), PublicSeed (..), seedOf, signingKey)
 import Haskoin.Wallet.Store
@@ -152,8 +152,8 @@ storedVersions = do
 newAccountOf :: Ctx -> MnemonicPass -> Network -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
 newAccountOf ctx mnem net name = do
   let seed = forceRight $ seedOf ctx mnem
-  index <- lift $ nextAccountIndex net ctx seed
-  insertAccount net ctx name (seedAccountKey seed net index) (Just (seedFingerprint seed))
+  (_, pub) <- lift $ nextAccount net ctx seed
+  insertAccount net ctx name pub (Just (seedFingerprint seed))
 
 -- | The public side of the two test seeds
 testSeed, testSeed2 :: Ctx -> PublicSeed

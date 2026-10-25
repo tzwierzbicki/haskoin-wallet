@@ -348,7 +348,7 @@ commandResponse ctx cfg unit cmd =
   case cmd of
     -- Mnemonic and account management
     CommandMnemonic e d s -> cmdMnemonic e d s
-    CommandCreateAcc t n dM s -> cmdCreateAcc ctx cfg t n dM s
+    CommandCreateAcc t n s -> cmdCreateAcc ctx cfg t n s
     CommandTestAcc nameM s -> cmdTestAcc ctx cfg nameM s
     CommandRenameAcc old new -> cmdRenameAcc cfg old new
     CommandAccounts nameM -> cmdAccounts cfg nameM
@@ -392,16 +392,15 @@ cmdMnemonic ent useDice splitMnemIn =
     (orig, ms, splitMs) <- genMnemonic ent useDice splitMnemIn
     return $ ResponseMnemonic orig (Text.words ms) (Text.words <$> splitMs)
 
-cmdCreateAcc ::
-  Ctx -> Config -> Text -> Network -> Maybe Natural -> Natural -> IO Response
-cmdCreateAcc ctx cfg name net derivM splitMnemIn = do
+cmdCreateAcc :: Ctx -> Config -> Text -> Network -> Natural -> IO Response
+cmdCreateAcc ctx cfg name net splitMnemIn = do
   runDBResponse cfg $ do
     -- Before the user types the mnemonic, not after
     checkNameFree name
     mnem <- askMnemonicPass splitMnemIn
     seed <- liftEither $ seedOf ctx mnem
-    index <- maybe (lift $ nextAccountIndex net ctx seed) return derivM
-    (_, acc) <- insertAccount net ctx name (seedAccountKey seed net index) (Just (seedFingerprint seed))
+    (_, xpub) <- lift $ nextAccount net ctx seed
+    (_, acc) <- insertAccount net ctx name xpub (Just (seedFingerprint seed))
     -- The accounts of the seed created before hw recorded fingerprints
     lift $ recordFingerprint ctx seed
     return $ ResponseAccount acc
@@ -413,7 +412,8 @@ cmdTestAcc ctx cfg nameM splitMnemIn =
     let net = accountNetwork acc
     mnem <- askMnemonicPass splitMnemIn
     seed <- liftEither $ seedOf ctx mnem
-    if seedAccountKey seed net (accountIndex acc) == accountXPubKey ctx acc
+    derivedM <- liftIO $ seedAccountKey seed net (accountIndex acc)
+    if derivedM == Just (accountXPubKey ctx acc)
       then do
         -- The seed is proven: every account of it gets its fingerprint
         lift $ recordFingerprint ctx seed

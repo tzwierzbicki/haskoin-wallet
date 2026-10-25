@@ -24,8 +24,9 @@ spec = do
         xPubExport btc ctx . deriveXPubKey ctx <$> signingKey btc ctx testMnemonic 0 `shouldBe` Right testAccountXPub
       it "derives the fingerprint of the seed from its master public key, the same on every network" $
         fingerprintToText . seedFingerprint <$> seedOf ctx testMnemonic `shouldBe` Right testFingerprintText
-      it "derives the public key of an account from the public side of the seed" $
-        (\seed -> xPubExport btc ctx (seedAccountKey seed btc 0)) <$> seedOf ctx testMnemonic `shouldBe` Right testAccountXPub
+      it "derives the public key of an account from the public side of the seed" $ do
+        seed <- expectRight $ seedOf ctx testMnemonic
+        (fmap (xPubExport btc ctx) <$> seedAccountKey seed btc 0) `shouldReturn` Just testAccountXPub
       it "derives the keys and the fingerprint of the second wallet" $ do
         xPrvExport btc <$> signingKey btc ctx testMnemonic2 0 `shouldBe` Right testAccountXPrv2
         xPubExport btc ctx . deriveXPubKey ctx <$> signingKey btc ctx testMnemonic2 0 `shouldBe` Right testAccountXPub2

@@ -9,6 +9,7 @@
 module Haskoin.Wallet.Keys where
 
 import Control.Applicative ((<|>))
+import Control.Exception (evaluate, try)
 import Data.Maybe (mapMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -25,14 +26,9 @@ data MnemonicPass = MnemonicPass
   deriving (Eq, Show)
 
 -- | The BIP44 path of an account: m/44'/coin'/account', with the coin
--- type of the network. The index is at most 'lastAccountIndex'.
+-- type of the network
 bip44Deriv :: Network -> Natural -> HardPath
 bip44Deriv net a = Deriv :| 44 :| net.bip44Coin :| fromIntegral a
-
--- | The last index an account can have: the accounts are derived hardened,
--- with the indices 0 to 2^31 - 1 that BIP32 gives them
-lastAccountIndex :: Natural
-lastAccountIndex = 2147483647
 
 -- | The index of an account from its public key: the last step of its path
 xPubIndex :: XPubKey -> Natural
@@ -51,6 +47,16 @@ accountKey net ctx master acc = derivePath ctx (bip44Deriv net acc) master
 signingKey :: Network -> Ctx -> MnemonicPass -> Natural -> Either String XPrvKey
 signingKey net ctx mnem acc = (\master -> accountKey net ctx master acc) <$> masterKey mnem
 
+-- | The public key of an account of a seed, or Nothing when the child key
+-- at that index is invalid: haskoin-core throws for such a key, where BIP32
+-- says to skip the index, as "Haskoin.Wallet.Address" does for an address
+accountPubKey :: Network -> Ctx -> XPrvKey -> Natural -> IO (Maybe XPubKey)
+accountPubKey net ctx master index = do
+  derived <- try $ evaluate $ deriveXPubKey ctx $ accountKey net ctx master index
+  return $ case derived of
+    Left (DerivationException _) -> Nothing
+    Right pub -> Just pub
+
 -- | The fingerprint of a seed: the first four bytes of the hash of its
 -- master public key, which PSBTs and output descriptors write before a key
 -- of the seed, as in [bc560f95/44'/0'/0']. The same on every network, and
@@ -62,14 +68,14 @@ masterFingerprint = xPubFP
 
 -- | What a command keeps of a seed once it has the mnemonic: the
 -- fingerprint, and the public key of any of its accounts, derived on
--- demand. The account steps of BIP44 are hardened, so these public keys
--- can only come from the master private key, which stays inside this
--- record and never comes out of it. The private key of an account reaches
--- a command in one way only: as the signing key that
--- "Haskoin.Wallet.Prompt" asks for.
+-- demand, Nothing at an index whose child key is invalid. The account
+-- steps of BIP44 are hardened, so these public keys can only come from the
+-- master private key, which stays inside this record and never comes out
+-- of it. The private key of an account reaches a command in one way only:
+-- as the signing key that "Haskoin.Wallet.Prompt" asks for.
 data PublicSeed = PublicSeed
   { seedFingerprint :: !Fingerprint,
-    seedAccountKey :: Network -> Natural -> XPubKey
+    seedAccountKey :: Network -> Natural -> IO (Maybe XPubKey)
   }
 
 -- | The public side of a seed, from its mnemonic
@@ -81,7 +87,7 @@ seedOfMaster :: Ctx -> XPrvKey -> PublicSeed
 seedOfMaster ctx master =
   PublicSeed
     { seedFingerprint = masterFingerprint ctx (deriveXPubKey ctx master),
-      seedAccountKey = \net index -> deriveXPubKey ctx (accountKey net ctx master index)
+      seedAccountKey = \net index -> accountPubKey net ctx master index
     }
 
 {- Private keys of a sweep -}

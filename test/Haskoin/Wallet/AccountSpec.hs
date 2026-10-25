@@ -48,9 +48,10 @@ spec = prepareContext $ \ctx -> do
 
 {- Fixtures -}
 
--- | The key of an account of the test seed on a network, by index
-keyOf :: Ctx -> Network -> Natural -> XPubKey
-keyOf ctx = seedAccountKey (testSeed ctx)
+-- | The key of an account of a seed on a network, by index, which the
+-- indices of these tests all have
+keyOf :: PublicSeed -> Network -> Natural -> IO XPubKey
+keyOf seed net index = maybe (fail "The child key at this index is invalid") return =<< seedAccountKey seed net index
 
 -- | The key of account 1 of the test seed on Bitcoin, m/44'/0'/1'
 savingsXPub :: Text
@@ -59,7 +60,18 @@ savingsXPub = "xpub6CHK45s4QJWpt9C5kpAnypsE5ratNMWRGE3pZNQgGnxHTvZ1y6E65mSKMmz7V
 -- | An account of the test seed stored without the fingerprint of its
 -- seed, as a document of an earlier hw imports it
 watchOnly :: Ctx -> Network -> Natural -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
-watchOnly ctx net index name = insertAccount net ctx name (keyOf ctx net index) Nothing
+watchOnly ctx net index name = do
+  key <- liftIO $ keyOf (testSeed ctx) net index
+  insertAccount net ctx name key Nothing
+
+-- | The index of the next account of a seed on a network
+nextIndex :: Ctx -> Network -> PublicSeed -> DB IO Natural
+nextIndex ctx net seed = fst <$> nextAccount net ctx seed
+
+-- | The test seed as if the child key of its account 1 were invalid
+seedWithoutIndex1 :: Ctx -> PublicSeed
+seedWithoutIndex1 ctx =
+  (testSeed ctx) {seedAccountKey = \net index -> if index == 1 then return Nothing else seedAccountKey (testSeed ctx) net index}
 
 -- | The names of the accounts as hw lists them, with their fingerprints
 listed :: DB IO [(Text, Maybe Text)]
@@ -111,17 +123,24 @@ creatingSpec ctx =
       inDatabaseE $ do
         _ <- testNewAcc ctx "main"
         _ <- testNewAcc2 ctx "other"
-        lift $ nextAccountIndex btc ctx (testSeed ctx) `dbShouldBe` 1
-        lift $ nextAccountIndex btc ctx (testSeed2 ctx) `dbShouldBe` 1
-        lift $ nextAccountIndex bch ctx (testSeed ctx) `dbShouldBe` 0
+        lift $ nextIndex ctx btc (testSeed ctx) `dbShouldBe` 1
+        lift $ nextIndex ctx btc (testSeed2 ctx) `dbShouldBe` 1
+        lift $ nextIndex ctx bch (testSeed ctx) `dbShouldBe` 0
+
+    it "passes over an index whose child key is invalid, as BIP32 asks, like an address" $
+      inDatabaseE $ do
+        -- No seed with such an index is known, the odds being one in 2^127:
+        -- this seed is the test seed with its index 1 declared invalid
+        _ <- testNewAcc ctx "main"
+        lift $ nextIndex ctx btc (seedWithoutIndex1 ctx) `dbShouldBe` 2
 
     it "takes the smallest index without an account, so that a deleted account comes back as it was" $
       inDatabaseE $ do
         (mainId, _) <- testNewAcc ctx "main"
         _ <- testNewAcc ctx "savings"
-        lift $ nextAccountIndex btc ctx (testSeed ctx) `dbShouldBe` 2
+        lift $ nextIndex ctx btc (testSeed ctx) `dbShouldBe` 2
         lift $ deleteAccount mainId
-        lift $ nextAccountIndex btc ctx (testSeed ctx) `dbShouldBe` 0
+        lift $ nextIndex ctx btc (testSeed ctx) `dbShouldBe` 0
         (_, again) <- testNewAcc ctx "main again"
         liftIO $ dBAccountXPubKey again `shouldBe` testAccountXPub
 
@@ -224,9 +243,17 @@ fingerprintSpec ctx =
         _ <- watchOnly ctx btc 0 "main"
         _ <- watchOnly ctx btc 1 "savings"
         _ <- watchOnly ctx bch 0 "cash"
-        _ <- insertAccount btc ctx "other" (seedAccountKey (testSeed2 ctx) btc 0) Nothing
+        otherKey <- liftIO $ keyOf (testSeed2 ctx) btc 0
+        _ <- insertAccount btc ctx "other" otherKey Nothing
         lift $ recordFingerprint ctx (testSeed ctx)
         lift $ listed `dbShouldBe` [("cash", Just "bc560f95"), ("main", Just "bc560f95"), ("savings", Just "bc560f95"), ("other", Nothing)]
+
+    it "is not recorded on an account at an index the seed cannot derive" $
+      inDatabaseE $ do
+        _ <- watchOnly ctx btc 0 "main"
+        _ <- watchOnly ctx btc 1 "savings"
+        lift $ recordFingerprint ctx (seedWithoutIndex1 ctx)
+        lift $ listed `dbShouldBe` [("main", Just "bc560f95"), ("savings", Nothing)]
 
     it "is learnt from the offline wallet for an account that has none" $
       inDatabaseE $ do
