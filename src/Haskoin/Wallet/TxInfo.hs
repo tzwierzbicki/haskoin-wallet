@@ -464,12 +464,12 @@ txsPage accId (Page lim off) = do
       limit $ fromIntegral lim
       offset $ fromIntegral off
       return (t ^. DBTxInfoTxid, t ^. DBTxInfoBlockRef, t ^. DBTxInfoDead, t ^. DBTxInfoBlob)
-  bestM <- lift $ getBest net
+  heightM <- bestHeight net
   forM rows $ \(Value tidBytes, Value refBytes, Value dead, Value blob) -> do
     tid <- liftEither $ bytesToHash tidBytes
     ref <- liftEither $ S.decode refBytes
     summary <- liftEither $ decodeSummary net tid blob
-    let confirmations = if dead then 0 else getConfirmations (snd <$> bestM) ref
+    let confirmations = if dead then 0 else getConfirmations heightM ref
         status = ChainStatus tid ref confirmations dead
     lift $ fillTxInfoLabels net $ TxInfo summary (OnChain status)
 

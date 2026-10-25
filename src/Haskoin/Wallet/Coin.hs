@@ -246,9 +246,9 @@ data Spending = Spending
 -- | The spending rules of an account as the database has them now
 spendingOf :: (MonadUnliftIO m) => Network -> DBAccountId -> ExceptT String (DB m) Spending
 spendingOf net accId = do
-  bestM <- lift $ getBest net
+  heightM <- bestHeight net
   locks <- coinLocks net
-  return Spending {spendingNetwork = net, spendingAccount = accId, spendingBest = snd <$> bestM, spendingLocks = locks}
+  return Spending {spendingNetwork = net, spendingAccount = accId, spendingBest = heightM, spendingLocks = locks}
 
 -- | The locks of the coins of a network: those the pending transactions
 -- spend, and those the user locked

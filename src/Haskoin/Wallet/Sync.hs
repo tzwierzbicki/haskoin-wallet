@@ -200,7 +200,7 @@ sync ctx cfg store net accId full = do
 -- transactions to other blocks, so a full sync follows.
 chainReorganised :: (MonadUnliftIO m) => Store -> Network -> ExceptT String (DB m) Bool
 chainReorganised store net = do
-  bestM <- lift $ getBest net
+  bestM <- getBest net
   case bestM of
     Nothing -> return False
     Just (hash, height) -> do

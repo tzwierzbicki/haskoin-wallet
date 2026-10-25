@@ -61,10 +61,21 @@ spec = prepareContext $ \ctx -> do
         res <- syncWith (paymentStore ctx) accId
         summaries accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
         coins accId `dbShouldBeE` [OutPoint (fakeTxHash 1) 0]
-        lift (getBest btc) `dbShouldBeE` Just (headerHash (blockAt 800002 1).header, 800002)
+        getBest btc `dbShouldBeE` Just (headerHash (blockAt 800002 1).header, 800002)
         balances accId `dbShouldBeE` (50000, 0, 1)
         rawTransactionCount `dbShouldBeE` 1
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (1, 1)
+
+    it "refuses an incremental sync over a stored best block that does not read, which a full sync stores again" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (paymentStore ctx) accId
+        lift $ P.update (DBBestKey "btc") [DBBestBestBlock P.=. "nonsense"]
+        lift $
+          dbShouldFailWith "The stored best block of btc does not read: sync --full stores it again" $
+            syncWith (paymentStore ctx) accId
+        _ <- sync ctx cfg (toStore (paymentStore ctx)) btc accId True
+        getBest btc `dbShouldBeE` Just (headerHash (blockAt 800002 1).header, 800002)
 
     it "does nothing when nothing changed" $
       inDatabaseE $ do
@@ -160,7 +171,7 @@ spec = prepareContext $ \ctx -> do
         res <- syncWith (movedStore ctx) accId
         liftIO $ syncResTxUpdates res `shouldBe` 1
         summaries accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800001 3, 50000)]
-        lift (getBest btc) `dbShouldBeE` Just (headerHash (blockAt 800003 7).header, 800003)
+        getBest btc `dbShouldBeE` Just (headerHash (blockAt 800003 7).header, 800003)
 
     it "marks a payment a reorganisation left out as dead" $
       inDatabaseE $ do
@@ -502,8 +513,8 @@ spec = prepareContext $ \ctx -> do
         summaries accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
         (map jsonCoinOutpoint <$> coinPage bch accId AllCoins (Page 5 0)) `dbShouldBeE` [OutPoint (fakeTxHash 1) 0]
         balances accId `dbShouldBeE` (50000, 0, 1)
-        lift (getBest bch) `dbShouldBeE` Just (headerHash (blockAt 800002 1).header, 800002)
-        lift (getBest btc) `dbShouldBeE` Nothing
+        getBest bch `dbShouldBeE` Just (headerHash (blockAt 800002 1).header, 800002)
+        getBest btc `dbShouldBeE` Nothing
 
   describe "Scanning a chain for used addresses" $ do
     -- The scan behind the watch of the gap, on the external chain with a
