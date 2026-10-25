@@ -1117,7 +1117,9 @@ watch: raise the `gap` key for one sync to look further. The same key bounds
 how many unused receiving addresses `receive` hands out.
 
 It also looks after the pending transactions: one that was sent with `sendtx`
-and that the network now lists is retired; one that was sent but that the store
+and that the network now lists is retired, even under another id, its
+signatures changed by a miner or made by another signer; one that was sent but
+that the store
 no longer knows is sent again, since nodes forget unconfirmed transactions; one
 whose coin was spent by another transaction, or is gone, is reported as
 conflicted. The store is asked about every coin a pending transaction spends,

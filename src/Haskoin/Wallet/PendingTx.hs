@@ -13,9 +13,10 @@ import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Reader (MonadTrans (lift))
 import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
+import Data.Containers.ListUtils (nubOrd)
 import Data.List (nub)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (listToMaybe)
+import Data.Maybe (listToMaybe, mapMaybe)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.String.Conversions (cs)
@@ -224,6 +225,23 @@ conflictedInputs parents tx = filter inConflict ((.outpoint) <$> tx.inputs)
                 -- Spent by this very transaction, which the network has, is fine
                 Just output -> maybe False ((/= txHash tx) . (.txid)) output.spender
                 Nothing -> True
+
+-- | The transactions other than this one that spend its inputs, as the
+-- store reports the transactions they come from. One of them may be this
+-- very transaction under another id, its signatures changed: a miner can
+-- re-encode them, and another signer makes others. The sync tells by the
+-- nosigHash.
+rivalSpenders :: [Store.Transaction] -> Tx -> [TxHash]
+rivalSpenders parents tx = nubOrd (mapMaybe rival ((.outpoint) <$> tx.inputs))
+  where
+    live = Map.fromList [(parent.txid, parent) | parent <- parents, not parent.deleted]
+    rival :: OutPoint -> Maybe TxHash
+    rival outpoint = do
+      parent <- Map.lookup outpoint.hash live
+      output <- listToMaybe (drop (fromIntegral outpoint.index) parent.outputs)
+      spender <- output.spender
+      guard (spender.txid /= txHash tx)
+      return spender.txid
 
 -- | Record whether a pending transaction is in conflict, as the sync found it
 setPendingTxConflicted :: (MonadUnliftIO m) => PendingTx -> Bool -> DB m ()

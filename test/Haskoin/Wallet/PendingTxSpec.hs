@@ -708,6 +708,14 @@ conflictsSpec ctx =
       conflictedInputs [replaced parent] spend `shouldBe` [coin]
     it "leave out the coins of a transaction the store has not seen, which proves nothing yet" $
       conflictedInputs [] spend `shouldBe` []
+    it "name the other transactions that spend its coins, each once" $ do
+      let twoCoins = spendingTx ctx [(txHash (funding ctx), 0), (txHash (funding ctx), 1)] [(otherAddr 0, 19000)]
+          bothSpent = withSpender 1 (fakeTxHash 8, 1) $ withSpender 0 (fakeTxHash 8, 0) $
+            payoutTx ctx (txHash (funding ctx)) (Store.BlockRef 800000 1) [(externalAddr 0, 20000), (externalAddr 1, 10000)]
+      rivalSpenders [bothSpent] twoCoins `shouldBe` [fakeTxHash 8]
+    it "name no rival while the coins are unspent, or spent by the transaction itself" $ do
+      rivalSpenders [parent] spend `shouldBe` []
+      rivalSpenders [withSpender 0 (txHash spend, 0) parent] spend `shouldBe` []
     it "are the coins past the outputs of their transaction" $
       conflictedInputs [parent] (spendingTx ctx [(txHash (funding ctx), 1)] [(otherAddr 0, 19000)])
         `shouldBe` [OutPoint (txHash (funding ctx)) 1]

@@ -361,6 +361,46 @@ spec = prepareContext $ \ctx -> do
         deleteTx ctx (const (toStore emptyStore)) pendingHash `dbShouldBeE` (0, 0)
         ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0)) `dbShouldBeE` []
 
+    it "retires a sent transaction the network confirmed under another id, its signatures re-encoded by a miner" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (realPaymentStore ctx) accId
+        pendingHash <- importPendingTx btc ctx accId (signedSpend ctx)
+        lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
+        published <- liftIO $ newIORef []
+        res <- sync ctx cfg (notingPublished published $ toStore $ malleatedStore ctx) btc accId False
+        -- Neither in conflict nor sent again: the payment is on the chain
+        liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (0, 0)
+        liftIO $ readIORef published `shouldReturn` []
+        pendingTxPage ctx accId (Page 5 0) `dbShouldBeE` []
+        -- The payment shows under the id the network gave it
+        summaries accId
+          `dbShouldBeE` [ (Just (fakeTxHash 9), Store.BlockRef 800001 1, -50000),
+                          (Just (realPaymentId ctx), Store.BlockRef 800000 1, 50000)
+                        ]
+
+    it "retires an unsigned pending transaction the network has, signed and sent elsewhere" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (realPaymentStore ctx) accId
+        _ <- importPendingTx btc ctx accId (unsignedSpend ctx)
+        res <- syncWith (malleatedStore ctx) accId
+        liftIO $ syncResConflicted res `shouldBe` 0
+        pendingTxPage ctx accId (Page 5 0) `dbShouldBeE` []
+
+    it "asks the store about the parents of the pending transactions, and about a rival only when there is one" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (realPaymentStore ctx) accId
+        _ <- importPendingTx btc ctx accId (unsignedSpend ctx)
+        held <- pendingTxs accId
+        free <- liftIO $ newIORef []
+        _ <- recordStanding (notingTxRequests free $ toStore $ realPaymentStore ctx) held
+        liftIO $ readIORef free `shouldReturn` [[realPaymentId ctx]]
+        rivalled <- liftIO $ newIORef []
+        _ <- recordStanding (notingTxRequests rivalled $ toStore $ spentElsewhereStore ctx) held
+        liftIO $ readIORef rivalled `shouldReturn` [[realPaymentId ctx], [fakeTxHash 8]]
+
     it "clears the conflict once the transaction that spent the coin leaves the chain" $
       inDatabaseE $ do
         accId <- account
@@ -1170,6 +1210,28 @@ spentElsewhereStore ctx =
     }
 
 -- | The pending transaction has reached the store
+-- | The payment of 'realPaymentStore' spent by the transaction of
+-- 'signedSpend' under another id, 9, confirmed at height 800001: a miner
+-- re-encoded its signatures. Its inputs and outputs are those of the
+-- transaction the wallet signed, and so is its nosigHash.
+malleatedStore :: Ctx -> FakeStore
+malleatedStore ctx =
+  (realPaymentStore ctx)
+    { fakeBalances = [Store.Balance (externalAddr 0) 0 0 0 2 50000],
+      fakeTxRefs =
+        [ ( externalAddr 0,
+            [ Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 9),
+              Store.TxRef (Store.BlockRef 800000 1) (realPaymentId ctx)
+            ]
+          )
+        ],
+      fakeTransactions =
+        [ withSpender 0 (fakeTxHash 9, 0) $ creditTx ctx (realPaymentId ctx) (Store.BlockRef 800000 1) (externalAddr 0) 50000,
+          storeTx (fakeTxHash 9) (Store.BlockRef 800001 1) [inputFrom ctx (realPaymentId ctx, 0) (externalAddr 0) 50000] [outputTo ctx (otherAddr 0) 40000] 10000
+        ],
+      fakeUnspents = []
+    }
+
 -- | The coin of 'realPaymentStore' swept by the other account, account 0
 -- of the second test wallet, to its first receiving address, less a fee of
 -- 1000

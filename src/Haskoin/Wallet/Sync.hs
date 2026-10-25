@@ -313,41 +313,54 @@ pruneRawTxs everything refreshed retired
 
 -- | The pending transactions of the account after a sync, given the
 -- transactions the store listed. A signed one the store lists has reached
--- the network and is retired. The store is then asked whether the others
--- can still spend their coins ('recordConflicts'), and those that cannot
--- are counted for the user. One the user sent that the store does not list
--- is sent again, unless it is in conflict, which the network would refuse:
--- nodes forget unconfirmed transactions, and the store may never have
--- accepted it. A signed one the user has not sent is left alone. Returns
--- how many were sent again, how many conflict, and the ids of those
--- retired.
+-- the network and is retired, and so is one the network has under another
+-- id ('recordStanding'). The store is asked whether the others can still
+-- spend their coins, and those that cannot are counted for the user. One
+-- the user sent that the store does not list is sent again, unless it is
+-- in conflict, which the network would refuse: nodes forget unconfirmed
+-- transactions, and the store may never have accepted it. A signed one the
+-- user has not sent is left alone. Returns how many were sent again, how
+-- many conflict, and the ids of those retired.
 syncPending :: (MonadUnliftIO m) => Store -> DBAccountId -> Set TxHash -> ExceptT String (DB m) (Natural, Natural, [TxHash])
 syncPending store accId seen = do
   held <- pendingTxs accId
-  let (done, waiting) = partition reached held
+  let (listed, waiting) = partition reached held
+  (elsewhere, conflicted) <- recordStanding store waiting
+  let done = listed <> elsewhere
+      settled = Set.fromList (pendingTxKey <$> elsewhere <> conflicted)
+      resend = [txOf p | p <- waiting, p.pendingTxOnline, pendingTxKey p `Set.notMember` settled]
   lift $ forM_ done retirePendingTx
-  conflicted <- recordConflicts store waiting
-  let inConflict = Set.fromList (pendingTxKey <$> conflicted)
-      resend = [txOf p | p <- waiting, p.pendingTxOnline, pendingTxKey p `Set.notMember` inConflict]
   forM_ resend $ fromStore . storePublish store
   return (fromIntegral (length resend), fromIntegral (length conflicted), txHash . txOf <$> done)
   where
     reached p = isSigned (txOf p) && txHash (txOf p) `Set.member` seen
 
--- | Ask the store about the transactions the coins of the pending
--- transactions come from, record on each pending transaction whether it is
--- in conflict ('conflictedInputs'), and return those that are. The answer
--- is written every time, true or false: a transaction whose rival has
--- left the network, dropped or undone by a reorganisation, can be sent
--- again. Without pending transactions, the store is not asked.
-recordConflicts :: (MonadUnliftIO m) => Store -> [PendingTx] -> ExceptT String (DB m) [PendingTx]
-recordConflicts _ [] = return []
-recordConflicts store held = do
+-- | Ask the store where the pending transactions stand: about the
+-- transactions their coins come from, and, when another transaction spends
+-- one of those coins, about that transaction too. One whose coins a
+-- transaction with its nosigHash spends is on the network under another
+-- id, its signatures changed: re-encoded by a miner, or made by another
+-- signer, and sent from elsewhere. The others get their conflict recorded
+-- ('conflictedInputs'), true or false every time: a transaction whose
+-- rival has left the network, dropped or undone by a reorganisation, can
+-- be sent again. Without pending transactions the store is not asked, and
+-- without a rival it is asked once. Returns those on the network under
+-- another id, and those in conflict.
+recordStanding :: (MonadUnliftIO m) => Store -> [PendingTx] -> ExceptT String (DB m) ([PendingTx], [PendingTx])
+recordStanding _ [] = return ([], [])
+recordStanding store held = do
   parents <- fromStore $ storeTransactions store $ nubOrd [input.outpoint.hash | p <- held, input <- (txOf p).inputs]
-  flip filterM held $ \p -> do
-    let conflicted = not $ null $ conflictedInputs parents (txOf p)
-    lift $ setPendingTxConflicted p conflicted
-    return conflicted
+  let rivalsOf p = rivalSpenders parents (txOf p)
+      rivals = nubOrd (concatMap rivalsOf held)
+  rivalTxs <- if null rivals then return [] else fromStore (storeTransactions store rivals)
+  let rivalNosigHashes = Map.fromList [(rival.txid, nosigHash (Store.transactionData rival)) | rival <- rivalTxs, not rival.deleted]
+      underAnotherId p = Just (nosigHash (txOf p)) `elem` map (`Map.lookup` rivalNosigHashes) (rivalsOf p)
+      (elsewhere, others) = partition underAnotherId held
+  conflicted <- flip filterM others $ \p -> do
+    let inConflict = not $ null $ conflictedInputs parents (txOf p)
+    lift $ setPendingTxConflicted p inConflict
+    return inConflict
+  return (elsewhere, conflicted)
 
 -- | The transaction of a pending transaction
 txOf :: PendingTx -> Tx

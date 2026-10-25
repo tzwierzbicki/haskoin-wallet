@@ -656,6 +656,15 @@ notingRawRequests asked store =
         storeRawTransactions store tids
     }
 
+-- | The store, noting every list of transactions it is asked for
+notingTxRequests :: IORef [[TxHash]] -> Store -> Store
+notingTxRequests asked store =
+  store
+    { storeTransactions = \tids -> do
+        liftIO $ modifyIORef asked (<> [tids])
+        storeTransactions store tids
+    }
+
 -- | The store, noting every list of addresses whose coins it is asked for
 notingUnspentRequests :: IORef [[Address]] -> Store -> Store
 notingUnspentRequests asked store =
