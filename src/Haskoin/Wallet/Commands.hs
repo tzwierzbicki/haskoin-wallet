@@ -352,7 +352,7 @@ commandResponse ctx cfg unit cmd =
     CommandTestAcc nameM s -> cmdTestAcc ctx cfg nameM s
     CommandRenameAcc old new -> cmdRenameAcc cfg old new
     CommandAccounts nameM -> cmdAccounts cfg nameM
-    CommandSyncAcc nameM full -> cmdSyncAcc ctx cfg nameM full
+    CommandSync nameM full -> cmdSync ctx cfg nameM full
     CommandDeleteAcc name net deriv -> cmdDeleteAcc cfg name net deriv
     -- Address management
     CommandReceive nameM labM -> cmdReceive ctx cfg nameM labM
@@ -375,7 +375,6 @@ commandResponse ctx cfg unit cmd =
     CommandImportTx nameM file -> cmdImportTx ctx cfg nameM file
     -- Backup
     CommandBackup fileM -> cmdBackup cfg fileM
-    CommandDiscoverAcc nameM -> cmdDiscoverAccount ctx cfg nameM
     -- Utilities
     CommandVersion -> cmdVersion cfg
     CommandSignMsg a m s -> cmdSignMessage ctx cfg a m s
@@ -675,8 +674,8 @@ sendTxFile ctx cfg file netM =
 
 {- Synchronisation -}
 
-cmdSyncAcc :: Ctx -> Config -> Maybe Text -> Bool -> IO Response
-cmdSyncAcc ctx cfg nameM full =
+cmdSync :: Ctx -> Config -> Maybe Text -> Bool -> IO Response
+cmdSync ctx cfg nameM full =
   runDBResponse cfg $ do
     accs <-
       case nameM of
@@ -687,21 +686,6 @@ cmdSyncAcc ctx cfg nameM full =
       let net = accountNetwork acc
       sync ctx cfg (webStore ctx cfg net) net accId full
     return $ ResponseSync res
-
-cmdDiscoverAccount :: Ctx -> Config -> Maybe Text -> IO Response
-cmdDiscoverAccount ctx cfg nameM = do
-  runDBResponse cfg $ do
-    (accId, acc) <- getAccountByName nameM
-    let net = accountNetwork acc
-        pub = accountXPubKey ctx acc
-        store = webStore ctx cfg net
-    fromStore $ storeHealth store
-    (e, i) <- discoverAddrs ctx cfg store pub
-    extendChainTo ctx accId AddrExternal e
-    extendChainTo ctx accId AddrInternal i
-    -- Perform a full sync after discovery
-    res <- sync ctx cfg store net accId True
-    return $ ResponseSync [res]
 
 {- Backup and version -}
 

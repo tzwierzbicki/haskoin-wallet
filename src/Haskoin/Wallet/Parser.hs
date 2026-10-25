@@ -121,12 +121,9 @@ data Command
         commandInputFileMaybe :: !(Maybe FilePath),
         commandNetworkMaybe :: !(Maybe Network)
       }
-  | CommandSyncAcc
+  | CommandSync
       { commandMaybeAcc :: !(Maybe Text),
         commandFull :: !Bool
-      }
-  | CommandDiscoverAcc
-      { commandMaybeAcc :: !(Maybe Text)
       }
   | CommandBackup
       {commandBackupFile :: !(Maybe FilePath)}
@@ -217,7 +214,7 @@ commandParser =
             command "testacc" testAccParser,
             command "renameacc" renameAccParser,
             command "accounts" accountsParser,
-            command "syncacc" syncAccParser,
+            command "sync" syncParser,
             command "deleteacc" deleteAccParser,
             metavar "COMMAND",
             style (const "COMMAND --help")
@@ -256,7 +253,6 @@ commandParser =
         mconcat
           [ commandGroup "Backup commands",
             command "backup" backupParser,
-            command "discoveracc" discoverAccParser,
             hidden
           ],
       hsubparser $
@@ -797,7 +793,7 @@ pendingTxsParser = do
 Pending transactions have been created with the `preparetx` command. They are
 either unsigned and waiting to be signed, or signed and waiting to be sent to
 the network, or sent and waiting for the network to list them, at which point
-`syncacc` retires them. One reported as conflicted spends a coin that another
+`sync` retires them. One reported as conflicted spends a coin that another
 transaction has spent, and can only be deleted.
 |]
 
@@ -873,7 +869,7 @@ spends, so that no other transaction spends them. `deletetx` removes a pending
 transaction from the database and frees its coins. A transaction that was sent
 with `sendtx` can only be deleted, abandoned, when the store no longer knows
 it: dropped from the nodes' mempools, or never accepted. One that the store
-still lists may yet confirm, and `syncacc` retires it once it does. A
+still lists may yet confirm, and `sync` retires it once it does. A
 transaction `pendingtxs` reports as conflicted, one of its coins having been
 spent by another transaction, can no longer be sent and should be deleted.
 |]
@@ -956,8 +952,8 @@ transaction may have been refused, for a fee below what the nodes relay for
 instance, or may just be slow to come back. Run `sendtx` again later.
 
 A pending transaction of the wallet is sent by its NOSIGHASH and, once seen,
-marked as online; `syncacc` then sends it again should the store lose it, and
-retires it once it is listed. It is sent again by every `syncacc` for as long
+marked as online; `sync` then sends it again should the store lose it, and
+retires it once it is listed. It is sent again by every `sync` for as long
 as the store does not list it: a transaction the network refuses for good, for
 a fee below what the nodes relay for instance, keeps coming back until it is
 deleted with `deletetx`, which frees its coins.
@@ -970,22 +966,29 @@ needs the --network it is for: it is only checked and uploaded, and nothing in
 the wallet is updated.
 |]
 
-{- SyncAcc Parser -}
+{- Sync Parser -}
 
-syncAccParser :: ParserInfo Command
-syncAccParser = do
-  let cmd = CommandSyncAcc <$> accountOption <*> fullOption
+syncParser :: ParserInfo Command
+syncParser = do
+  let cmd = CommandSync <$> accountOption <*> fullOption
   info cmd $
     progDesc "Download account data from the network"
       <> footer
         [r|
-The `syncacc` command will download the latest address balances, transactions
-and coins from the network. It will also update the account balances.
+The `sync` command will download the latest address balances, transactions and
+coins from the network, for one account or for all of them. It will also update
+the account balances.
 
-Before that, it looks at the gap of addresses past the ones the account has:
-an address found used there, by someone paying from the account's public key or
-by another wallet of the same seed, is generated along with the ones before it
-and synced like the others.
+Before that, it looks at the gap of addresses past the ones the account has,
+twenty by default (the `gap` key of the configuration file): an address found
+used there, by someone paying from the account's public key or by another wallet
+of the same seed, is generated along with the ones before it and synced like
+the others. The scan goes on while a window of the gap has a used address, so
+the first sync of a new account recovers every address its payers used, with
+its transactions and coins. A payer who derived further ahead than the gap,
+another wallet of the seed with a larger gap for instance, lands beyond that
+watch: raise the `gap` key for one sync to look further. The same key bounds
+how many unused receiving addresses `receive` hands out.
 
 It also looks after the pending transactions: one that was sent with `sendtx`
 and that the network now lists is retired; one that was sent but that the store
@@ -1004,36 +1007,10 @@ fullOption =
       <> showDefault
       <> help
         [r|
-Force the syncacc command to re-download all the account data instead of only
-the deltas (the data that has changed). A full sync also marks as dead the
-transactions the store no longer lists. It should normally not be required: a
-reorganisation of the chain forces one, and `discoveracc` ends with one.
-|]
-
-{- DiscoverAcc Parser -}
-
-discoverAccParser :: ParserInfo Command
-discoverAccParser = do
-  let cmd = CommandDiscoverAcc <$> accountOption
-  info cmd $
-    progDesc "Scan the blockchain to generate missing addresses"
-      <> footer
-        [r|
-`discoveracc` is typically called when restoring an account in a new wallet.
-Initially, there are no addresses stored in the account. `discoveracc` scans
-the blockchain and generates all the addresses, external and internal, that
-have received coins at some point. The scan of a chain stops at the first
-window of the recovery gap, forty addresses by default (the `recovery-gap` key
-of the configuration file), in which no address has been used. A full sync
-(`syncacc --full`) runs at the end of the command. When restoring an old
-wallet, it is important to discover it first before generating addresses and
-receiving payments. Otherwise some addresses might be reused.
-
-Every `syncacc` already watches the gap of addresses past the ones the
-account has, twenty by default, so a payment to an address the account had
-not generated yet is usually found there. Someone deriving addresses further
-ahead from the account's public key lands beyond that watch: `discoveracc`,
-with its larger gap, is the way to find those addresses.
+Force the sync to re-download all the account data instead of only the deltas
+(the data that has changed). A full sync also marks as dead the transactions
+the store no longer lists. It should normally not be required: a reorganisation
+of the chain forces one.
 |]
 
 {- Backup Parser -}

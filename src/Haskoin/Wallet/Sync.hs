@@ -34,7 +34,7 @@ import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 
-{- Address discovery -}
+{- The used addresses past the ones the account has -}
 
 -- | The index after the last used address of a chain of the public key,
 -- found by scanning windows of the given size from the given index: the
@@ -53,15 +53,6 @@ scanChain ctx store pub chain window from = go from from
       if null usedIndices
         then return next
         else go (maximum usedIndices + 1) (off + window)
-
--- | The number of external and internal addresses of an account that have
--- been used, found by scanning both chains from their first address in
--- windows of the recovery gap
-discoverAddrs :: (MonadIO m) => Ctx -> Config -> Store -> XPubKey -> ExceptT String m (Natural, Natural)
-discoverAddrs ctx cfg store pub =
-  (,) <$> scanChain ctx store pub extDeriv recoveryGap 0 <*> scanChain ctx store pub intDeriv recoveryGap 0
-  where
-    recoveryGap = configRecoveryGap cfg
 
 -- | Generate the addresses of the account that were used without its
 -- knowledge: the gap of addresses past the ones each chain has is asked

@@ -575,7 +575,7 @@ deletingSpec ctx =
         (pendingHash, signed) <- signedPending ctx cfg accId
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
         lift $
-          dbShouldFailWith "The transaction is in the network's mempool or in the chain: syncacc retires it once it is listed" $
+          dbShouldFailWith "The transaction is in the network's mempool or in the chain: sync retires it once it is listed" $
             deleteTx ctx (const (toStore (storeKnowing ctx signed))) pendingHash
         ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
           `dbShouldBeE` [Just ((pendingHash, True, True, False))]

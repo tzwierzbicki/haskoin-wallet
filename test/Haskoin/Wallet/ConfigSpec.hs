@@ -29,7 +29,7 @@ fileSpec =
     it "reads the default configuration back" $
       decodeConfig defaultFile `shouldBe` Right def
 
-    it "reads a file of hw 0.9: the tx-batch key means nothing now, the parallel requests take their default" $
+    it "reads a file of hw 0.9: the tx-batch and recovery-gap keys mean nothing now, the parallel requests take their default" $
       decodeConfig hw09File `shouldBe` Right def
 
     it "reads the number of parallel requests" $
@@ -104,7 +104,6 @@ defaultFile =
   [r|{
   "host": "https://api.haskoin.com/",
   "gap": 20,
-  "recovery-gap": 40,
   "addr-batch": 100,
   "coin-batch": 100,
   "tx-full-batch": 100,
@@ -112,8 +111,8 @@ defaultFile =
   "database-file": null
 }|]
 
--- | The file hw 0.9 wrote when there was none: a tx-batch key that no
--- longer means anything, and no parallel-requests key
+-- | The file hw 0.9 wrote when there was none: tx-batch and recovery-gap
+-- keys that no longer mean anything, and no parallel-requests key
 hw09File :: String
 hw09File =
   [r|{
@@ -133,7 +132,6 @@ twoRequestsFile =
   [r|{
   "host": "https://api.haskoin.com/",
   "gap": 20,
-  "recovery-gap": 40,
   "addr-batch": 100,
   "coin-batch": 100,
   "tx-full-batch": 100,

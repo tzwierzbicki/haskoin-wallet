@@ -52,11 +52,8 @@ data Config = Config
   { -- | The web address of the haskoin-store that hw asks about the chain
     configHost :: Text,
     -- | The gap of BIP44: how many unused addresses hw generates past the
-    -- last used one of a chain, and watches for payments on a sync
+    -- last used one of a chain, and looks at for payments on a sync
     configGap :: Natural,
-    -- | How many addresses discoveracc asks about at a time: the scan of a
-    -- chain stops at the first batch of them without a used address
-    configRecoveryGap :: Natural,
     -- | How many addresses one request for balances asks about
     configAddrBatch :: Natural,
     -- | How many addresses one request for coins asks about
@@ -78,13 +75,13 @@ instance FromJSON Config where
     withObject "config" $ \o -> do
       -- A key missing from the file, or set to null, takes its default: a
       -- file written by an earlier hw, or trimmed by hand, still reads.
-      -- A key hw no longer has, like the tx-batch of hw 0.9, is ignored.
+      -- A key hw no longer has, like the tx-batch of hw 0.9 or the
+      -- recovery-gap of hw 0.10, is ignored.
       let key name field = o .:? name .!= field (def :: Config)
           count name field = key name field >>= atLeastOne name
       Config
         <$> key "host" configHost
         <*> count "gap" configGap
-        <*> count "recovery-gap" configRecoveryGap
         <*> count "addr-batch" configAddrBatch
         <*> count "coin-batch" configCoinBatch
         <*> count "tx-full-batch" configTxFullBatch
@@ -102,7 +99,6 @@ instance ToJSON Config where
     object
       [ "host" .= configHost cfg,
         "gap" .= configGap cfg,
-        "recovery-gap" .= configRecoveryGap cfg,
         "addr-batch" .= configAddrBatch cfg,
         "coin-batch" .= configCoinBatch cfg,
         "tx-full-batch" .= configTxFullBatch cfg,
@@ -115,7 +111,6 @@ instance Default Config where
     Config
       { configHost = cs (def :: ApiConfig).host,
         configGap = 20,
-        configRecoveryGap = 40,
         configAddrBatch = 100,
         configCoinBatch = 100,
         configTxFullBatch = 100,

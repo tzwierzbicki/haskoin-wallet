@@ -247,7 +247,6 @@ arbitraryConfig =
     <*> count
     <*> count
     <*> count
-    <*> count
     <*> arbitrary
   where
     -- Every count of the configuration is at least one

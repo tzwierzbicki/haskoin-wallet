@@ -409,53 +409,47 @@ spec = prepareContext $ \ctx -> do
         lift (getBest bch) `dbShouldBeE` Just (headerHash (blockAt 800002 1).header, 800002)
         lift (getBest btc) `dbShouldBeE` Nothing
 
-  describe "Discovering the addresses of an account" $ do
-    -- A recovery gap of 3 instead of the default 40: the scan looks at
-    -- windows of three addresses, so the ten written-out addresses of the
-    -- test wallet are enough. The gap of new addresses stays at 20 and
-    -- plays no part.
-    let small = cfg {configRecoveryGap = 3}
-        discover store = runExceptT $ discoverAddrs ctx small (toStore store) (testAccountPub ctx)
+  describe "Scanning a chain for used addresses" $ do
+    -- The scan behind the watch of the gap, on the external chain with a
+    -- window of 3 instead of the default 20: the ten written-out addresses
+    -- of the test wallet are enough
+    let scan store = runExceptT $ scanChain ctx (toStore store) (testAccountPub ctx) extDeriv 3 0
         -- A store where the given addresses each have one transaction
         used addrs = emptyStore {fakeBalances = [Store.Balance addr 1000 0 1 1 1000 | addr <- addrs]}
 
-    it "finds nothing in an empty store, after one window on each chain" $ do
+    it "finds nothing in an empty store, after one window" $ do
       asked <- newIORef []
       let store = notingBalanceRequests asked (toStore emptyStore)
-      runExceptT (discoverAddrs ctx small store (testAccountPub ctx)) `shouldReturn` Right (0, 0)
-      readIORef asked `shouldReturn` [take 3 externalAddrs, take 3 internalAddrs]
+      runExceptT (scanChain ctx store (testAccountPub ctx) extDeriv 3 0) `shouldReturn` Right 0
+      readIORef asked `shouldReturn` [take 3 externalAddrs]
 
-    it "counts the addresses up to the last used one on each chain" $
-      discover (used [externalAddr 0, externalAddr 4, internalAddr 1]) `shouldReturn` Right (5, 2)
+    it "counts the addresses up to the last used one" $
+      scan (used [externalAddr 0, externalAddr 4]) `shouldReturn` Right 5
 
     it "stops after a window without a used address, so a gap of three hides address 3" $
-      discover (used [externalAddr 3]) `shouldReturn` Right (0, 0)
+      scan (used [externalAddr 3]) `shouldReturn` Right 0
 
     it "looks at one more window past the last used address" $ do
       asked <- newIORef []
       let store = notingBalanceRequests asked (toStore (used [externalAddr 2]))
-      runExceptT (discoverAddrs ctx small store (testAccountPub ctx)) `shouldReturn` Right (3, 0)
-      readIORef asked `shouldReturn` [take 3 externalAddrs, take 3 (drop 3 externalAddrs), take 3 internalAddrs]
+      runExceptT (scanChain ctx store (testAccountPub ctx) extDeriv 3 0) `shouldReturn` Right 3
+      readIORef asked `shouldReturn` [take 3 externalAddrs, take 3 (drop 3 externalAddrs)]
 
     it "counts an address whose coins are all spent as used" $
-      discover (emptyStore {fakeBalances = [Store.Balance (externalAddr 1) 0 0 0 2 1000]}) `shouldReturn` Right (2, 0)
+      scan (emptyStore {fakeBalances = [Store.Balance (externalAddr 1) 0 0 0 2 1000]}) `shouldReturn` Right 2
 
     it "ignores an address the store lists without transactions" $
-      discover (emptyStore {fakeBalances = [Store.Balance (externalAddr 1) 0 0 0 0 0]}) `shouldReturn` Right (0, 0)
+      scan (emptyStore {fakeBalances = [Store.Balance (externalAddr 1) 0 0 0 0 0]}) `shouldReturn` Right 0
 
     it "fails when the store fails" $
-      runExceptT (discoverAddrs ctx small ((toStore emptyStore) {storeBalances = \_ -> throwError "The store is down"}) (testAccountPub ctx))
+      runExceptT (scanChain ctx ((toStore emptyStore) {storeBalances = \_ -> throwError "The store is down"}) (testAccountPub ctx) extDeriv 3 0)
         `shouldReturn` Left "The store is down"
 
-    it "generates the discovered addresses and syncs them, as discoveracc does" $
+    it "recovers an account on its first sync, as a restored one is: every used address, its transactions and coins" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "main"
-        let store = toStore (discoveredStore ctx)
-        (e, i) <- discoverAddrs ctx small store (testAccountPub ctx)
-        liftIO $ (e, i) `shouldBe` (5, 2)
-        extendChainTo ctx accId AddrExternal e
-        extendChainTo ctx accId AddrInternal i
-        _ <- sync ctx small store btc accId True
+        res <- sync ctx cfg {configGap = 3} (toStore (discoveredStore ctx)) btc accId False
+        liftIO $ (syncResNewAddrs res, dBAccountExternal (syncResAccount res), dBAccountInternal (syncResAccount res)) `shouldBe` (7, 5, 2)
         found <- summaries accId
         liftIO $ found `shouldMatchList` [(Just (txHash tx), Store.BlockRef height 1, fromIntegral amount) | (_, amount, height, tx) <- discoveredPayments ctx]
         held <- coins accId
