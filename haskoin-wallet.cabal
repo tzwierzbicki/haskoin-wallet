@@ -124,6 +124,7 @@ library
     , text >=1.2.4.0
     , time >=1.12.2
     , transformers >=0.5.6.2
+    , unicode-transforms >=0.4
     , unliftio >=0.2.10
     , unordered-containers >=0.2.10.0
     , wreq >=0.5.3.2
@@ -176,6 +177,7 @@ executable hw
     , text >=1.2.4.0
     , time >=1.12.2
     , transformers >=0.5.6.2
+    , unicode-transforms >=0.4
     , unliftio >=0.2.10
     , unordered-containers >=0.2.10.0
     , wreq >=0.5.3.2
@@ -207,6 +209,7 @@ test-suite spec
       Haskoin.Wallet.Migration.V4Spec
       Haskoin.Wallet.MigrationSpec
       Haskoin.Wallet.PendingTxSpec
+      Haskoin.Wallet.PromptSpec
       Haskoin.Wallet.Schema.V1
       Haskoin.Wallet.SyncSpec
       Haskoin.Wallet.TestUtils
@@ -264,6 +267,7 @@ test-suite spec
     , text >=1.2.4.0
     , time >=1.12.2
     , transformers >=0.5.6.2
+    , unicode-transforms >=0.4
     , unliftio >=0.2.10
     , unordered-containers >=0.2.10.0
     , wreq >=0.5.3.2

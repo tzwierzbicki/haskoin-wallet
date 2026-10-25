@@ -14,6 +14,7 @@ import Data.Maybe (mapMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import Data.Text.Normalize (NormalizationMode (NFKD), normalize)
 import Haskoin
 import Numeric.Natural (Natural)
 
@@ -34,9 +35,24 @@ bip44Deriv net a = Deriv :| 44 :| net.bip44Coin :| fromIntegral a
 xPubIndex :: XPubKey -> Natural
 xPubIndex = fromIntegral . xPubChild
 
--- | The master key of a seed: the root of its accounts on every network
+-- | The master key of a seed: the root of its accounts on every network.
+-- The passphrase is normalized to NFKD, as BIP39 asks, so that it gives the
+-- same seed whatever form its accented letters were typed in, and the seed
+-- other BIP39 wallets derive.
 masterKey :: MnemonicPass -> Either String XPrvKey
-masterKey mnem = makeXPrvKey <$> mnemonicToSeed (mnemonicPass mnem) (mnemonicWords mnem)
+masterKey mnem = typedMasterKey mnem {mnemonicPass = normalizePassphrase (mnemonicPass mnem)}
+
+-- | A passphrase as BIP39 hashes it: in the NFKD normal form, an accented
+-- letter as its letter and its accent
+normalizePassphrase :: Text -> Text
+normalizePassphrase = normalize NFKD
+
+-- | The master key from the passphrase as typed, not normalized: how hw
+-- derived seeds before it followed BIP39 there, which differs for a
+-- passphrase with accents. Only the check of an existing account tries it,
+-- for the accounts hw made then.
+typedMasterKey :: MnemonicPass -> Either String XPrvKey
+typedMasterKey mnem = makeXPrvKey <$> mnemonicToSeed (mnemonicPass mnem) (mnemonicWords mnem)
 
 -- | The signing key of an account under a master key: the key at its BIP44
 -- path

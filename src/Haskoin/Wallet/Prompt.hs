@@ -1,131 +1,243 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | What hw asks the user for on the terminal, typed without echo: the
--- mnemonic of a wallet, whole or in parts, and its passphrase, which give
--- the signing key of an account; and the private keys of a sweep, when
--- they are not in a file.
-module Haskoin.Wallet.Prompt where
+-- | What hw asks the user for on the terminal: the mnemonic of a wallet,
+-- whole or in parts, and its passphrase, which give the signing key of an
+-- account; and the private keys of a sweep, when they are not in a file.
+--
+-- Secrets are typed without echo, as gpg, ssh and sudo take them: nothing
+-- shows on the screen, not even their length. The prompts and the messages
+-- go to stderr, so that they never mix with what a command writes, its
+-- JSON for instance. A question allows three attempts, each mistake told
+-- before the next one, and the end of the input cancels the command.
+module Haskoin.Wallet.Prompt
+  ( Terminal (..),
+    terminal,
+    terminalOn,
+    attempts,
+    cancelled,
+    notUtf8,
+    readMnemonic,
+    askMnemonic,
+    askMnemonicPass,
+    askNewMnemonicPass,
+    askSigningKey,
+    matchAccount,
+    readSecKeys,
+    parseKeys,
+  )
+where
 
+import Control.Exception (bracket_, try)
 import Control.Monad
 import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
-import Data.String.Conversions (cs)
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as C8
+import Data.List (elemIndex)
+import Data.Maybe (fromMaybe)
+import qualified Data.Map.Strict as Map
 import Data.Text (Text)
+import qualified Data.Text as Text
+import Data.Text.Encoding (decodeUtf8')
 import Haskoin
 import Haskoin.Wallet.Entropy (mergeMnemonicParts)
 import Haskoin.Wallet.Keys
 import Numeric.Natural (Natural)
-import qualified System.Console.Haskeline as Haskeline
-import qualified System.Directory as D
 import qualified System.IO as IO
+import System.IO.Error (isDoesNotExistError, isEOFError)
 
 {- The terminal -}
 
-askInputLineHidden :: String -> IO String
-askInputLineHidden message = do
-  inputM <-
-    Haskeline.runInputT Haskeline.defaultSettings $
-      Haskeline.getPassword (Just '*') message
-  maybe
-    (error "No action due to EOF")
-    return
-    inputM
+-- | Where hw asks: a line typed without echo, or why there is none, and a
+-- message for the user
+data Terminal = Terminal
+  { askHidden :: String -> IO (Either String Text),
+    tell :: String -> IO ()
+  }
 
-askInputLine :: String -> IO String
-askInputLine message = do
-  inputM <-
-    Haskeline.runInputT Haskeline.defaultSettings $
-      Haskeline.getInputLine message
-  maybe
-    (error "No action due to EOF")
-    return
-    inputM
+-- | The terminal of the user: stdin, with the prompts and the messages on
+-- stderr
+terminal :: Terminal
+terminal = terminalOn IO.stdin IO.stderr
 
-{- The mnemonic and the passphrase -}
+-- | A terminal reading from one handle and writing to another. The echo of
+-- the input is off while a line is typed, and back as it was afterwards,
+-- whatever happens; the Enter key, not echoed either, gets its new line.
+-- The line is read as bytes up to the new line, a byte that UTF-8 never
+-- uses inside a character, and decoded as UTF-8, whatever the locale: a
+-- passphrase with accents gives the same seed in every terminal, and bytes
+-- that are not UTF-8 are refused rather than read as another passphrase.
+terminalOn :: IO.Handle -> IO.Handle -> Terminal
+terminalOn input output =
+  Terminal
+    { askHidden = \prompt -> do
+        IO.hPutStr output prompt
+        IO.hFlush output
+        echo <- IO.hGetEcho input
+        typed <- bracket_ (IO.hSetEcho input False) (IO.hSetEcho input echo) (try (C8.hGetLine input))
+        IO.hPutStrLn output ""
+        case typed of
+          Right line -> return $ either (const $ Left notUtf8) Right (decodeUtf8' (stripReturn line))
+          Left e
+            | isEOFError e -> return (Left cancelled)
+            | otherwise -> ioError e,
+      tell = IO.hPutStrLn output
+    }
+  where
+    -- A line typed on Windows, or pasted from there, ends with a return
+    stripReturn line = fromMaybe line (BS.stripSuffix "\r" line)
 
-askMnemonicWords :: String -> IO Mnemonic
-askMnemonicWords txt = do
-  mnm <- askInputLineHidden txt
-  case fromMnemonic (cs mnm) of -- validate the mnemonic
-    Right _ -> return $ cs mnm
-    Left _ -> do
-      liftIO $ putStrLn "Invalid mnemonic"
-      askMnemonicWords txt
+-- | A line typed without echo; the end of the input cancels the command
+hidden :: (MonadIO m) => Terminal -> String -> ExceptT String m Text
+hidden term prompt = liftIO (askHidden term prompt) >>= liftEither
 
-askMnemonic :: (MonadError String m, MonadIO m) => Natural -> m MnemonicPass
-askMnemonic splitMnemIn = do
-  mnm <-
-    if splitMnemIn == 1
-      then liftIO $ askMnemonicWords "Enter your mnemonic words: "
-      else do
-        ms <- forM [1 .. splitMnemIn] $ \n ->
-          liftIO $ askMnemonicWords $ "Split mnemonic part #" <> show n <> ": "
-        liftEither $ mergeMnemonicParts ms
-  return
-    MnemonicPass
-      { mnemonicWords = mnm,
-        mnemonicPass = ""
-      }
+-- | The error when the input ends before the answer
+cancelled :: String
+cancelled = "Cancelled: the input ended before the answer"
 
-askMnemonicPass :: (MonadError String m, MonadIO m) => Natural -> m MnemonicPass
-askMnemonicPass splitMnemIn = do
-  mnem <- askMnemonic splitMnemIn
-  passStr <- liftIO askPassword
-  return mnem {mnemonicPass = cs passStr}
+-- | The error when what was typed is not UTF-8 text
+notUtf8 :: String
+notUtf8 = "The input is not UTF-8 text"
 
-askPassword :: IO String
-askPassword = do
-  pass <- askPassword1
-  if null pass
-    then return pass
-    else do
-      pass2 <- askInputLineHidden "Repeat your mnemonic passphrase   : "
-      if pass == pass2
-        then return pass
+-- | The attempts a question allows
+attempts :: Int
+attempts = 3
+
+-- | Ask until an answer is right, 'attempts' times at most: each mistake is
+-- told before the next attempt, and the last one fails the command
+retrying :: (MonadIO m) => Terminal -> ExceptT String m (Either String a) -> ExceptT String m a
+retrying term ask = go attempts
+  where
+    go left = do
+      answer <- ask
+      case answer of
+        Right a -> return a
+        Left mistake
+          | left <= 1 -> throwError mistake
+          | otherwise -> liftIO (tell term mistake) >> go (left - 1)
+
+{- The mnemonic -}
+
+-- | A mnemonic as typed, in its canonical form, the words of the list in
+-- lower case separated by single spaces; or what is wrong with it, without
+-- repeating any of its words, which are secret
+readMnemonic :: Text -> Either String Mnemonic
+readMnemonic typed
+  | length ws `notElem` [12, 15, 18, 21, 24] =
+      Left $ "A mnemonic has 12, 15, 18, 21 or 24 words, not " <> show (length ws)
+  | Just position <- elemIndex False (map (`Map.member` wordListMap) ws) =
+      Left $ "Word " <> show (position + 1) <> " is not a word of the mnemonic list"
+  | otherwise =
+      either (const $ Left "The words do not check out: one of them is mistyped") Right $
+        toMnemonic =<< fromMnemonic (Text.unwords ws)
+  where
+    ws = Text.words (Text.toLower typed)
+
+-- | A mnemonic typed whole, or in the given number of parts that merge
+-- into it, in its canonical form. A mnemonic or a part that does not read
+-- is told and asked again, and so are parts that do not merge.
+askMnemonic :: (MonadIO m) => Terminal -> Natural -> ExceptT String m Mnemonic
+askMnemonic term parts
+  | parts <= 1 = askWords "Mnemonic: "
+  | otherwise =
+      retrying term $
+        mergeMnemonicParts <$> forM [1 .. parts] (\n -> askWords $ "Mnemonic part " <> show n <> " of " <> show parts <> ": ")
+  where
+    askWords prompt = retrying term $ readMnemonic <$> hidden term prompt
+
+-- | A passphrase, typed once; nothing when the seed has none
+askPassphrase :: (MonadIO m) => Terminal -> ExceptT String m Text
+askPassphrase term = hidden term "Passphrase, or nothing if the seed has none: "
+
+-- | The mnemonic and the passphrase of a seed, typed once each, for a
+-- command that checks them: against the accounts, or on the chain
+askMnemonicPass :: (MonadIO m) => Terminal -> Natural -> ExceptT String m MnemonicPass
+askMnemonicPass term parts = MnemonicPass <$> askMnemonic term parts <*> askPassphrase term
+
+-- | The mnemonic and the passphrase of a seed an account is created from,
+-- each typed twice: a typo that the checksum lets through, one time in 16
+-- for 12 words, makes another seed, and an account whose funds the
+-- mnemonic written down could not spend
+askNewMnemonicPass :: (MonadIO m) => Terminal -> Natural -> ExceptT String m MnemonicPass
+askNewMnemonicPass term parts = MnemonicPass <$> confirmedMnemonic <*> confirmedPassphrase
+  where
+    confirmedMnemonic = retrying term $ do
+      first <- askMnemonic term parts
+      liftIO $ tell term "Type the mnemonic again, to check it"
+      second <- askMnemonic term parts
+      return $ if first == second then Right first else Left "The mnemonics do not match"
+    confirmedPassphrase = retrying term $ do
+      first <- askPassphrase term
+      if Text.null first
+        then return (Right first)
         else do
-          putStrLn "The passphrases did not match"
-          askPassword
+          second <- hidden term "Passphrase again: "
+          return $ if first == second then Right first else Left "The passphrases do not match"
 
-askPassword1 :: IO String
-askPassword1 = askInputLineHidden "Mnemonic passphrase or leave empty: "
+{- The signing key of an account -}
 
--- | The signing key of an account from its mnemonic, with the public side
--- of its seed, asking for the passphrase until the key derived matches the
--- public key of the account. The one place a private key comes out of the
--- mnemonic for a command.
-askSigningKey ::
-  (MonadIO m) =>
-  Network ->
-  Ctx ->
-  Natural ->
-  MnemonicPass ->
-  XPubKey ->
-  ExceptT String m (PublicSeed, XPrvKey)
-askSigningKey net ctx idx mnem@(MnemonicPass m _) accPub = do
-  p <- liftIO askPassword1
-  master <- liftEither $ masterKey (MnemonicPass m $ cs p)
-  let seed = seedOfMaster ctx master
-  derivedM <- liftIO $ seedAccountKey seed net idx
-  if derivedM == Just accPub
-    then return (seed, accountKey net ctx master idx)
-    else do
-      liftIO $ putStrLn "The passphrase or the mnemonic did not match the account "
-      askSigningKey net ctx idx mnem accPub
+-- | The signing key of an account from the mnemonic and the passphrase of
+-- its seed, with the public side of the seed. Both are asked again while
+-- the key they give is not the account's: a wrong word the checksum lets
+-- through gives another seed, which no passphrase can fix. The one place a
+-- private key comes out of the mnemonic for a command.
+askSigningKey :: (MonadIO m) => Terminal -> Network -> Ctx -> Natural -> Natural -> XPubKey -> ExceptT String m (PublicSeed, XPrvKey)
+askSigningKey term net ctx parts index accPub =
+  retrying term $ do
+    mnem <- askMnemonicPass term parts
+    maybe (Left "The mnemonic or the passphrase does not match the account") Right
+      <$> matchAccount term net ctx index accPub mnem
+
+-- | The seed and the signing key of an account that a mnemonic and a
+-- passphrase give, if they give its public key. The passphrase is tried
+-- normalized, as BIP39 asks, then, when normalizing changes it, as typed:
+-- hw derived its accounts so before, and the user is told that other
+-- wallets would not find such an account.
+matchAccount :: (MonadIO m) => Terminal -> Network -> Ctx -> Natural -> XPubKey -> MnemonicPass -> ExceptT String m (Maybe (PublicSeed, XPrvKey))
+matchAccount term net ctx index accPub mnem = do
+  normalized <- liftIO . accountOf =<< liftEither (masterKey mnem)
+  case normalized of
+    Just found -> return (Just found)
+    Nothing
+      | normalizePassphrase (mnemonicPass mnem) == mnemonicPass mnem -> return Nothing
+      | otherwise -> do
+          typed <- liftIO . accountOf =<< liftEither (typedMasterKey mnem)
+          forM_ typed $ \_ -> liftIO $ tell term typedPassphraseWarning
+          return typed
+  where
+    accountOf master = do
+      let seed = seedOfMaster ctx master
+      derived <- seedAccountKey seed net index
+      return $
+        if derived == Just accPub
+          then Just (seed, accountKey net ctx master index)
+          else Nothing
+
+-- | What the user is told of an account derived from a passphrase as typed
+typedPassphraseWarning :: String
+typedPassphraseWarning =
+  "This account comes from the passphrase as typed, which hw did not normalize as BIP39 asks: \
+  \other wallets would not find it from this mnemonic and passphrase. \
+  \Moving its funds to an account created now keeps them within reach of any wallet."
 
 {- The private keys of a sweep -}
 
--- | The private keys of a sweep, from where the user keeps them: a file,
--- or typed on the terminal without echo
-readSecKeys :: (MonadIO m) => Network -> KeySource -> ExceptT String m [SecKey]
-readSecKeys net (KeysInFile file) = do
-  exists <- liftIO $ D.doesFileExist file
-  unless exists $ throwError "The private key file does not exist"
-  parseKeys net . cs =<< liftIO (IO.readFile file)
-readSecKeys net KeysOnTerminal = do
-  text <- liftIO $ askInputLineHidden "Private keys (WIF, minikey or hex, separated by spaces): "
-  parseKeys net (cs text)
+-- | The private keys of a sweep, from where the user keeps them: a file of
+-- UTF-8 text, or typed on the terminal without echo
+readSecKeys :: (MonadIO m) => Terminal -> Network -> KeySource -> ExceptT String m [SecKey]
+readSecKeys _ net (KeysInFile file) = do
+  contents <- liftIO $ try (BS.readFile file)
+  case contents of
+    Left e
+      | isDoesNotExistError e -> throwError "The private key file does not exist"
+      | otherwise -> throwError $ "The private key file could not be read: " <> show e
+    Right bytes ->
+      either (const $ throwError "The private key file is not UTF-8 text") (parseKeys net) (decodeUtf8' bytes)
+readSecKeys term net KeysOnTerminal =
+  parseKeys net =<< hidden term "Private keys (WIF, minikey or hex, separated by spaces): "
 
+-- | The private keys of a text, at least one
 parseKeys :: (Monad m) => Network -> Text -> ExceptT String m [SecKey]
 parseKeys net text = do
   keys <- liftEither $ parseSecKeys net text

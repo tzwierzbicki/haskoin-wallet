@@ -31,6 +31,41 @@ spec = do
         xPrvExport btc <$> signingKey btc ctx testMnemonic2 0 `shouldBe` Right testAccountXPrv2
         xPubExport btc ctx . deriveXPubKey ctx <$> signingKey btc ctx testMnemonic2 0 `shouldBe` Right testAccountXPub2
         fingerprintToText . seedFingerprint <$> seedOf ctx testMnemonic2 `shouldBe` Right testFingerprintText2
+  passphraseSpec
+
+{- The passphrase, as BIP39 hashes it -}
+
+-- | The master keys of the words of the test wallet with the passphrase
+-- "café", computed apart from hw with Python's hashlib, hmac and
+-- unicodedata, by the PBKDF2 and HMAC of BIP39 and BIP32; the same script
+-- gives the master key of the official BIP39 vector "abandon … about" with
+-- "TREZOR". The first is from the passphrase in NFKD form, as BIP39 asks;
+-- the second from its composed é as typed, as hw derived it before.
+cafeMasterNormalized, cafeMasterTyped :: Text
+cafeMasterNormalized = "xprv9s21ZrQH143K28mmRktNKJK6miBqMSwxLLpJEZaDyhTf18YbxXC6paThZQypFWYoD3GRxuRJBc9hfdBc3YvrhfVn3gNJMdRFfcvw2Vu91R9"
+cafeMasterTyped = "xprv9s21ZrQH143K2eFJBCPUdcN7HDG1a5nexyyc4qmrmyK8sYEgopcTiFoYD9ADxSrWq8NFLGqCqrUxNrc2XwvFhWVL65iNLpmCSPANrSHPsqw"
+
+-- | The words of the test wallet with a passphrase
+withPassphrase :: Text -> MnemonicPass
+withPassphrase = MnemonicPass (mnemonicWords testMnemonic)
+
+passphraseSpec :: Spec
+passphraseSpec =
+  describe "The passphrase of a seed" $ do
+    it "is normalized to NFKD, as BIP39 asks: the master key of other wallets" $
+      xPrvExport btc <$> masterKey (withPassphrase "caf\233") `shouldBe` Right cafeMasterNormalized
+
+    it "gives the same seed whatever form its accents were typed in" $
+      xPrvExport btc <$> masterKey (withPassphrase "cafe\769") `shouldBe` Right cafeMasterNormalized
+
+    it "splits an accented letter into its letter and its accent" $
+      normalizePassphrase "caf\233" `shouldBe` "cafe\769"
+
+    it "leaves a passphrase of plain ASCII as it is" $
+      normalizePassphrase "correct horse battery staple" `shouldBe` "correct horse battery staple"
+
+    it "can still give the master key hw derived before, from the passphrase as typed" $
+      xPrvExport btc <$> typedMasterKey (withPassphrase "caf\233") `shouldBe` Right cafeMasterTyped
 
 
 {- Private keys of a sweep -}

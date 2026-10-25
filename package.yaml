@@ -58,6 +58,7 @@ dependencies:
   - string-conversions >= 0.4.0.1
   - text >= 1.2.4.0
   - time >= 1.12.2
+  - unicode-transforms >= 0.4
   - transformers >= 0.5.6.2
   - unliftio >= 0.2.10
   - unordered-containers >= 0.2.10.0

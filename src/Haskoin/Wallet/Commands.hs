@@ -418,7 +418,7 @@ cmdCreateAcc ctx cfg name net splitMnemIn = do
   runDBResponse cfg $ do
     -- Before the user types the mnemonic, not after
     checkNameFree name
-    mnem <- askMnemonicPass splitMnemIn
+    mnem <- askNewMnemonicPass terminal splitMnemIn
     seed <- liftEither $ seedOf ctx mnem
     (_, xpub) <- lift $ nextAccount net ctx seed
     created <- insertAccount net ctx name xpub (Just (seedFingerprint seed))
@@ -434,7 +434,8 @@ cmdRecover ctx cfg net accountGap splitMnemIn =
     let store = webStore ctx cfg net
     -- The store is needed: an offline computer hears it before the mnemonic is typed
     fromStore $ storeHealth store
-    mnem <- askMnemonicPass splitMnemIn
+    -- Typed once: a mistyped mnemonic finds no paid account
+    mnem <- askMnemonicPass terminal splitMnemIn
     seed <- liftEither $ seedOf ctx mnem
     ResponseRecover net accountGap <$> recoverSeed ctx cfg store net seed accountGap
 
@@ -443,16 +444,15 @@ cmdTestAcc ctx cfg nameM splitMnemIn =
   runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
-    mnem <- askMnemonicPass splitMnemIn
-    seed <- liftEither $ seedOf ctx mnem
-    derivedM <- liftIO $ seedAccountKey seed net (accountIndex acc)
-    if derivedM == Just (accountXPubKey ctx acc)
-      then do
+    mnem <- askMnemonicPass terminal splitMnemIn
+    matched <- matchAccount terminal net ctx (accountIndex acc) (accountXPubKey ctx acc) mnem
+    case matched of
+      Just (seed, _) -> do
         -- The seed is proven: every account of it gets its fingerprint
         lift $ recordFingerprint ctx seed
         proven <- getAccountById accId
         return $ ResponseAccResult proven True "The mnemonic and passphrase matched the account"
-      else return $ ResponseAccResult acc False "The mnemonic and passphrase did not match the account"
+      Nothing -> return $ ResponseAccResult acc False "The mnemonic and passphrase did not match the account"
 
 cmdImportAcc :: Ctx -> Config -> FilePath -> IO Response
 cmdImportAcc ctx cfg fp =
@@ -658,8 +658,7 @@ cmdSignTx ctx cfg nameM nosigHM inputM outputM splitMnemIn =
         idx = fromIntegral $ dBAccountIndex acc
         accPub = accountXPubKey ctx acc
     for_ outputM checkPathFree
-    mnem <- askMnemonic splitMnemIn
-    (seed, prvKey) <- askSigningKey net ctx idx mnem accPub
+    (seed, prvKey) <- askSigningKey terminal net ctx splitMnemIn idx accPub
     -- The signed data names the seed, for an online wallet to learn it
     let toSign = tsd {txSignDataFingerprint = Just (seedFingerprint seed)}
     (newSignData, txInfo) <- liftEither $ signWalletTx net ctx toSign prvKey
@@ -807,7 +806,7 @@ cmdPrepareSweep ctx cfg nameM keysM sweepFromT sweepToT coins outputM feeByte du
   runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
-    secKeys <- maybe (return []) (readSecKeys net) keysM
+    secKeys <- maybe (return []) (readSecKeys terminal net) keysM
     sweepFrom <- liftEither $ mapM (textToAddrE net) sweepFromT
     sweepTo <- liftEither $ mapM (textToAddrE net) sweepToT
     found <- fetchSweepCoins net ctx (webStore ctx cfg net) accId secKeys sweepFrom coins sweepTo
@@ -846,7 +845,7 @@ cmdSignSweep ctx cfg nameM nosigHM inputM outputM keysM =
         pub = accountXPubKey ctx acc
     for_ outputM checkPathFree
     -- Without a file, the keys are typed: signing cannot do without them
-    secKeys <- readSecKeys net (fromMaybe KeysOnTerminal keysM)
+    secKeys <- readSecKeys terminal net (fromMaybe KeysOnTerminal keysM)
     (newTsd, txInfo) <- liftEither $ signTxWithKeys net ctx tsd pub secKeys
     txInfoL <- lift $ fillTxInfoLabels net txInfo
     when (isJust nosigHM) $ void $ importPendingTx net ctx accId newTsd
@@ -866,8 +865,7 @@ cmdSignMessage ctx cfg addrTxt txtMsg splitMnemIn =
     -- Warn before asking for the mnemonic so that the user can abort. Use
     -- stderr to keep the armored block and the --json output clean.
     liftIO $ mapM_ (hPutStrLn stderr) $ messageWarnings txtMsg
-    mnem <- askMnemonic splitMnemIn
-    (seed, accPrvKey) <- askSigningKey net ctx idx mnem accPub
+    (seed, accPrvKey) <- askSigningKey terminal net ctx splitMnemIn idx accPub
     lift $ recordFingerprint ctx seed
     let addrPrvKey = derivePath ctx (addrPath addrDB) accPrvKey
     msgSig <- liftEither $ signMessage ctx addr addrPrvKey.key txtMsg

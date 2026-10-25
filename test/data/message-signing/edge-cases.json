@@ -1025,13 +1025,13 @@
         "chain": 0,
         "index": 0
       },
-      "address": "1tNv4GaeVfs9qe6HtU1RtnWZd2PW84Sfb",
+      "address": "1MzCKhxAEAooHLt4cYLcxY9m4SQrmMgc2X",
       "message": "passphrase edge case",
       "messageUtf8Hex": "7061737370687261736520656467652063617365",
       "messageHash": "0e89cc2e4b2b15773d22bbb8ab581cce71e50e03d724b0418223a6441a48dd93",
-      "signature": "HxCbKDFYAQkK6eGn2/s5cbQCkU2JAvyvWnhLClDV5C43VOrS+AXlcBXrfMXAF3oRwQEpbtKz1OOp+esbP7B9T5c=",
+      "signature": "ILNk65LQefbpJ2EEiRRRaRmYkag+MiWYGcGXhJminVRGW5bfOumHocmf0SWeucy3tQKO5pSapP3PcXn+Md7QBHI=",
       "warnings": [],
-      "comment": "KNOWN BIP-39 DEVIATION: BIP-39 requires NFKD normalization of the passphrase, but hw passes it to haskoin-core's mnemonicToSeed unchanged and haskoin-core does not normalize (documented in anyToSeed). For this passphrase (ä/ö in NFC form), BIP-39 compliant wallets derive a different key and address. This vector records the current behaviour; it must be updated if normalization is added. Header byte 31 (recovery id 0)."
+      "comment": "BIP-39 requires NFKD normalization of the passphrase, which hw applies before haskoin-core's mnemonicToSeed (haskoin-core does not normalize, as documented in anyToSeed). For this passphrase (ä/ö in NFC form) hw derives the key and address BIP-39 compliant wallets derive; before normalization was added it derived 1tNv4GaeVfs9qe6HtU1RtnWZd2PW84Sfb. Header byte 32 (recovery id 1)."
     }
   ]
 }
