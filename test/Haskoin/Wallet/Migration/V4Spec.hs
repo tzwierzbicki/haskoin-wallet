@@ -9,9 +9,11 @@
 -- gone, and the indexes of the version.
 module Haskoin.Wallet.Migration.V4Spec (spec) where
 
+import Control.Exception (SomeException, try)
 import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.ByteString (ByteString)
+import Data.List (isInfixOf)
 import Data.Maybe (fromJust)
 import qualified Data.Serialize as S
 import Data.Text (Text)
@@ -26,6 +28,7 @@ import Haskoin.Wallet.Migration.TestUtils
 import qualified Haskoin.Wallet.Schema.V3 as V3
 import qualified Haskoin.Wallet.Schema.V4 as V4
 import Haskoin.Wallet.TestUtils
+import System.FilePath ((</>))
 import Test.Hspec
 
 spec :: Spec
@@ -43,6 +46,16 @@ spec = prepareContext $ \ctx ->
         storedVersions `dbShouldBe` [(PersistInt64 4, "integer")]
         runExceptT databaseVersion `dbShouldBe` Right (Just 4)
 
+    it "migrates a database without any account, as a new wallet of version 3 is" $
+      inMemory $ do
+        createTables V3.migrateAll
+        P.insert_ $ V3.DBVersion 3
+        commitFixture
+        migrateTo4 ctx
+        tablesRows ["d_b_account", "d_b_address", "d_b_tx_info", "d_b_coin", "d_b_raw_tx", "d_b_pending_tx"] `dbShouldBe` replicate 6 []
+        expected <- liftIO $ schemaCreatedBy (createTables V4.migrateAll >> createIndexesOf V4.tableIndexes)
+        databaseSchema `dbShouldBe` expected
+
     it "gives the accounts ids in the order they were created, whatever wallet they were under" $
       inMemory $ do
         version3Database
@@ -51,6 +64,18 @@ spec = prepareContext $ \ctx ->
           `dbShouldBe` [ [PersistInt64 1, PersistText "main", PersistText "btc", PersistText testAccountXPub],
                          [PersistInt64 2, PersistText "cash", PersistText "bch", PersistText testAccountXPubBch],
                          [PersistInt64 3, PersistText "savings", PersistText "btc", PersistText savingsXPub]
+                       ]
+
+    it "numbers the accounts created at the same moment by network, then by index" $
+      inMemory $ do
+        version3Database
+        P.updateWhere [] [V3.DBAccountCreated P.=. fixtureTime]
+        commitFixture
+        migrateTo4 ctx
+        queryRows "select id, name from d_b_account order by id"
+          `dbShouldBe` [ [PersistInt64 1, PersistText "cash"],
+                         [PersistInt64 2, PersistText "main"],
+                         [PersistInt64 3, PersistText "savings"]
                        ]
 
     it "leaves the fingerprint of every seed to be learnt" $
@@ -83,6 +108,22 @@ spec = prepareContext $ \ctx ->
           `dbShouldBe` [[PersistInt64 1, PersistByteString (S.encode (OutPoint (fakeTxHash 1) 0)), PersistText "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]]
         queryRows "select account, nosig_hash from d_b_pending_tx" `dbShouldBe` [[PersistInt64 3, PersistByteString (hexBytes (txHashToHex (fakeTxHash 5)))]]
 
+    it "keeps apart the rows of two seeds whose accounts have the same path" $
+      inMemory $ do
+        version3Database
+        anotherSeed
+        migrateTo4 ctx
+        queryRows "select id, name, x_pub_key from d_b_account where id in (1, 4)"
+          `dbShouldBe` [[PersistInt64 1, PersistText "main", PersistText testAccountXPub], [PersistInt64 4, PersistText "other", PersistText testAccountXPub2]]
+        queryRows "select account, address from d_b_address where internal = 0 and account in (1, 4)"
+          `dbShouldBe` [[PersistInt64 1, PersistText "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"], [PersistInt64 4, PersistText externalAddr2Text]]
+        queryRows "select account, txid from d_b_tx_info"
+          `dbShouldBe` [ [PersistInt64 1, PersistByteString (hexBytes (txHashToHex (fakeTxHash 1)))],
+                         [PersistInt64 4, PersistByteString (hexBytes (txHashToHex (fakeTxHash 2)))]
+                       ]
+        queryRows "select account, address from d_b_coin"
+          `dbShouldBe` [[PersistInt64 1, PersistText "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"], [PersistInt64 4, PersistText externalAddr2Text]]
+
     it "keys the raw transactions by the bytes of their hash, keeping them" $
       inMemory $ do
         version3Database
@@ -103,10 +144,13 @@ spec = prepareContext $ \ctx ->
         queryRows "select address, value, block_ref, created from d_b_coin" `dbShouldBe` coinsBefore
         queryRows "select blob, online, created from d_b_pending_tx" `dbShouldBe` pendingBefore
 
-    it "drops the columns whose values are read elsewhere now: paths, confirmed and free flags, locks, and the copy of each coin" $
+    it "drops the wallets and the columns whose values are read elsewhere now: paths, confirmed and free flags, locks, and the copy of each coin" $
       inMemory $ do
         version3Database
         migrateTo4 ctx
+        columnNames "d_b_account"
+          `dbShouldBe` [ "balance_coins", "balance_confirmed", "balance_unconfirmed", "created", "external", "fingerprint",
+                         "id", "index", "internal", "name", "network", "x_pub_key" ]
         columnNames "d_b_address"
           `dbShouldBe` [ "account", "address", "balance_coins", "balance_confirmed", "balance_received", "balance_txs",
                          "balance_unconfirmed", "created", "index", "internal", "label" ]
@@ -132,6 +176,22 @@ spec = prepareContext $ \ctx ->
         original <- tablesRows otherTables
         migrateTo4 ctx
         tablesRows otherTables `dbShouldBe` original
+
+    it "changes nothing when it fails halfway: the database stays at version 3, as it was" $
+      inScratchDirectory $ \dir -> do
+        let file = dir </> "accounts.sqlite"
+        inDatabaseFile file $ do
+          version3Database
+          -- A raw transaction under a key that is not hexadecimal, which no
+          -- hw wrote: the step fails on it, the last of its copies, after it
+          -- has set the old tables aside and filled the new ones
+          P.insert_ $ V3.DBRawTx "not hexadecimal" "raw"
+          commitFixture
+        original <- inDatabaseFile file $ (,) <$> databaseSchema <*> tablesRows version3Tables
+        result <- try (inDatabaseFile file (migrateToAndCollect 4 ctx)) :: IO (Either SomeException (Either String (), [String], [Int]))
+        either show (const "no failure") result `shouldSatisfy` ("NOT NULL constraint failed: d_b_raw_tx.hash" `isInfixOf`)
+        inDatabaseFile file ((,) <$> databaseSchema <*> tablesRows version3Tables) `shouldReturn` original
+        inDatabaseFile file (runExceptT databaseVersion) `shouldReturn` Right (Just 3)
 
     it "ends with the tables and the indexes of version 4, the wallets gone" $
       inMemory $ do
@@ -198,6 +258,28 @@ version3Database = do
       V3.DBAccount name wallet index net deriv ext int xpub confirmed 0 coins created
     address wallet accDeriv index path addr label received internal free =
       V3.DBAddress index wallet accDeriv path addr label received 0 (if received > 0 then 1 else 0) (if received > 0 then 1 else 0) received internal free fixtureTime
+
+-- | Every table of version 3
+version3Tables :: [Text]
+version3Tables = ["d_b_version", "d_b_wallet", "d_b_account", "d_b_address", "d_b_tx_info", "d_b_coin", "d_b_raw_tx", "d_b_pending_tx", "d_b_best"]
+
+-- | The second test seed in its own wallet, 807a5cfb, with the account other
+-- at m/44'/0'/0', the same path as main, created after the others: its
+-- receiving address, paid 10000 by transaction 2, and that coin. Only the
+-- wallet tells its rows from those of main.
+anotherSeed :: DB IO ()
+anotherSeed = do
+  P.insert_ $ V3.DBWallet "807a5cfb"
+  P.insert_ $ V3.DBAccount "other" otherWallet 0 "btc" "/44'/0'/0'" 1 0 testAccountXPub2 10000 0 1 otherTime
+  P.insert_ $ V3.DBAddress 0 otherWallet "/44'/0'/0'" "/0/0" externalAddr2Text "" 10000 0 1 1 10000 False False otherTime
+  P.insert_ $
+    V3.DBTxInfo otherWallet "/44'/0'/0'" (txHashToHex (fakeTxHash 2)) (S.encode (Store.BlockRef 800001 1)) True "{\"type\": \"credit\"}" otherTime
+  P.insert_ $
+    V3.DBCoin otherWallet "/44'/0'/0'" (encodeHex (S.encode (OutPoint (fakeTxHash 2) 0))) externalAddr2Text 10000 (S.encode (Store.BlockRef 800001 1)) "coin" True False otherTime
+  commitFixture
+  where
+    otherWallet = V3.DBWalletKey "807a5cfb"
+    otherTime = UTCTime (fromGregorian 2023 11 4) 0
 
 -- | The key of the account savings, m/44'/0'/1' of the test seed
 savingsXPub :: Text
