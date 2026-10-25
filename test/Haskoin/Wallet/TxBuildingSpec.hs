@@ -471,6 +471,16 @@ databaseSpec ctx =
           txSignDataOutputPaths tsd `shouldBe` [Deriv :/ 1 :/ 0]
           txSignDataFeeRate tsd `shouldBe` Just 10
           isSigned (txSignDataTx tsd) `shouldBe` False
+    it "fails on a coin whose raw transaction is missing, naming it and the full sync that fetches it" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        lift $ updateBest btc (fakeBlockHash 0) 0
+        _ <- genExtAddress ctx cfg accId ""
+        _ <- refreshCoins btc accId [externalAddr 0] [storeCoin ctx (fakeTxHash 9, 0) (Just 0) (externalAddr 0) 400000]
+        result <- lift $ runExceptT $ buildTxSignData btc ctx cfg (mkStdGen 0) LargestFirst accId [(otherAddr 0, 350000)] 10 546 SenderPays 1 []
+        liftIO $
+          result
+            `shouldBe` Left "The raw transaction 0000000000000000000000000000000000000000000000000000000000000009 of a coin is missing: sync --full fetches it"
     it "fails without recipients" $
       inDatabaseE $ do
         (accId, _) <- fundedAccount ctx cfg

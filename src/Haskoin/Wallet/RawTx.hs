@@ -15,6 +15,7 @@ import Control.Monad.Reader (MonadTrans (lift))
 import Data.Maybe (isJust)
 import qualified Data.Serialize as S
 import qualified Data.Set as Set
+import Data.String.Conversions (cs)
 import Database.Esqueleto.Legacy as E
 import qualified Database.Persist as P
 import Haskoin
@@ -26,8 +27,12 @@ insertRawTx tx = do
       key = DBRawTxKey hash
   P.repsert key $ DBRawTx hash (S.encode tx)
 
+-- | The raw transaction a coin comes from, which must be stored. The sync
+-- stores it with the coin; a full sync fetches those that are missing.
 getRawTx :: (MonadUnliftIO m) => TxHash -> ExceptT String (DB m) Tx
-getRawTx hash = lookupRawTx hash >>= liftMaybe "getRawTx: missing transaction"
+getRawTx hash =
+  lookupRawTx hash
+    >>= liftMaybe ("The raw transaction " <> cs (txHashToHex hash) <> " of a coin is missing: sync --full fetches it")
 
 -- | The raw transaction, if it is stored
 lookupRawTx :: (MonadUnliftIO m) => TxHash -> ExceptT String (DB m) (Maybe Tx)

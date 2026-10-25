@@ -8,6 +8,30 @@
 -- "Haskoin.Wallet.Address", "Haskoin.Wallet.Coin", "Haskoin.Wallet.TxInfo",
 -- "Haskoin.Wallet.RawTx", "Haskoin.Wallet.PendingTx" and
 -- "Haskoin.Wallet.BestBlock".
+--
+-- The tables store what hw learnt from outside. From the store: the
+-- balances of the addresses, the transaction summaries, the coins, the raw
+-- transactions, the best block, and whether a pending transaction is in
+-- conflict, which only the store can tell. From the user or a signer: the
+-- accounts, the labels, the pending transactions and the fingerprint of a
+-- seed.
+--
+-- What follows from those facts by the rules of the wallet is computed
+-- when it is read, and stored nowhere: the confirmations, from the best
+-- block; the coins the pending transactions lock, and the change addresses
+-- they hold; whether a coin can be spent, and the spendable balances. A
+-- stored copy would have to be updated by every write that changes what it
+-- depends on, and would show a wrong value as soon as one write forgets.
+--
+-- A new kind of data is placed by the same question: did hw learn it, or
+-- does hw decide it? A computed value may still be stored, so that the
+-- listings stay fast, when one place writes everything it depends on: the
+-- confirmed and unconfirmed totals of an account are the sums of its
+-- address balances, which the sync writes, right before it writes the
+-- totals. The spendable balances depend on writes in many places, the
+-- pending transactions of every account of a network and the best block
+-- among them, and are computed: from the few columns they need, and for
+-- the addresses shown only.
 module Haskoin.Wallet.Database
   ( module Haskoin.Wallet.Database,
     module Haskoin.Wallet.Schema.V7,

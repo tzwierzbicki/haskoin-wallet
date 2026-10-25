@@ -5,10 +5,12 @@
 
 -- | The coins of an account: the unspent outputs the store lists at its
 -- addresses, kept in step by the sync, listed by coins with their
--- confirmations and locks, and offered to the transaction builder when
--- they can be spent: confirmed enough, held by no pending transaction, a
--- coinbase matured, an unconfirmed coin the account's own change. The
--- account of these tests is account 0 of the test wallet on Bitcoin.
+-- confirmations, locks and whether they can be spent, and offered to the
+-- transaction builder when they can: confirmed enough, held by no pending
+-- transaction of their network, a coinbase matured, an unconfirmed coin
+-- the account's own change. The balances the account and its addresses
+-- can spend add up those coins. The account of these tests is account 0
+-- of the test wallet on Bitcoin.
 module Haskoin.Wallet.CoinSpec (spec) where
 
 import Control.Monad (void)
@@ -43,6 +45,7 @@ spec = prepareContext $ \ctx -> do
   refreshingSpec ctx
   listingSpec ctx
   spendableSpec ctx
+  balancesSpec ctx
   lifeSpec ctx
   rowSpec ctx
   jsonSpec ctx
@@ -129,6 +132,11 @@ storedAt addr = lift $ map P.entityVal <$> P.selectList [DBCoinAddress P.==. add
 listed :: DBAccountId -> Page -> ExceptT String (DB IO) [(OutPoint, Natural, Bool)]
 listed accId page = map (\c -> (jsonCoinOutpoint c, jsonCoinConfirmations c, jsonCoinLocked c)) <$> coinPage btc accId page
 
+-- | The coins of the account as coins lists them, and whether each can be
+-- spent now
+spendableFlags :: DBAccountId -> ExceptT String (DB IO) [(OutPoint, Bool)]
+spendableFlags accId = map (\c -> (jsonCoinOutpoint c, jsonCoinSpendable c)) <$> coinPage btc accId (Page 10 0)
+
 -- | The outpoints of the coins offered to the builder at a number of
 -- confirmations
 spendable :: DBAccountId -> Natural -> ExceptT String (DB IO) [OutPoint]
@@ -141,6 +149,15 @@ bestAt height = lift $ updateBest btc (fakeBlockHash 1) height
 -- | A pending transaction of an account spending the first payment
 spendingFirst :: Ctx -> DBAccountId -> ExceptT String (DB IO) ()
 spendingFirst ctx accId = lift $ P.insert_ $ pendingRow accId (spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 49000)])
+
+-- | A pending transaction of a Bitcoin Cash account spending the outpoint of
+-- the first payment: from before the fork, the same transaction would have
+-- the same id on both chains, but its coin on one is not its coin on the
+-- other
+spendingFirstOnCash :: Ctx -> ExceptT String (DB IO) ()
+spendingFirstOnCash ctx = do
+  (cashId, _) <- testNewAccBch ctx "cash"
+  lift $ P.insert_ $ pendingRow cashId (spendingTx ctx [(fakeTxHash 1, 0)] [(bchExternalAddr, 49000)])
 
 -- | The row of the confirmed payment as a refresh writes it, for the tests
 -- that spoil one of its columns
@@ -320,6 +337,39 @@ listingSpec ctx =
         spendingFirst ctx otherId
         (map (\(o, _, l) -> (o, l)) <$> listed accId (Page 10 0)) `dbShouldBeE` [(thirdCoin, False), (secondCoin, False), (firstCoin, True)]
 
+    it "leaves free a coin whose outpoint a pending transaction of the other chain spends" $
+      inDatabaseE $ do
+        accId <- account ctx
+        threeCoins ctx accId
+        spendingFirstOnCash ctx
+        (map (\(o, _, l) -> (o, l)) <$> listed accId (Page 10 0)) `dbShouldBeE` [(thirdCoin, False), (secondCoin, False), (firstCoin, False)]
+
+    it "marks a confirmed coin as spendable, and one a pending transaction holds as not" $
+      inDatabaseE $ do
+        accId <- account ctx
+        _ <- refresh accId [confirmedPayment ctx, secondPayment ctx]
+        spendingFirst ctx accId
+        spendableFlags accId `dbShouldBeE` [(secondCoin, True), (firstCoin, False)]
+
+    it "marks an unconfirmed coin as spendable only when it is the account's own change" $
+      inDatabaseE $ do
+        accId <- account ctx
+        summarise accId (thirdPaymentTx ctx)
+        summarise accId (firstPaymentTx ctx)
+        summarise accId (ownPaymentTx ctx)
+        _ <- refresh accId [thirdPayment ctx, ownChange ctx]
+        (sort <$> spendableFlags accId) `dbShouldBeE` [(thirdCoin, False), (OutPoint (fakeTxHash 8) 1, True)]
+
+    it "marks a coinbase as spendable once it has matured" $
+      inDatabaseE $ do
+        accId <- account ctx
+        lift $ insertRawTx (coinbase ctx)
+        _ <- refresh accId [storeCoin ctx (txHash (coinbase ctx), 0) (Just 800000) (externalAddr 0) 312500000]
+        bestAt 800098
+        spendableFlags accId `dbShouldBeE` [(OutPoint (txHash (coinbase ctx)) 0, False)]
+        bestAt 800099
+        spendableFlags accId `dbShouldBeE` [(OutPoint (txHash (coinbase ctx)) 0, True)]
+
     it "lists the coins of the account only" $
       inDatabaseE $ do
         accId <- account ctx
@@ -390,6 +440,13 @@ spendableSpec ctx =
         spendingFirst ctx otherId
         spendable accId 1 `dbShouldBeE` [secondCoin]
 
+    it "offers a coin whose outpoint a pending transaction of the other chain spends" $
+      inDatabaseE $ do
+        accId <- account ctx
+        threeCoins ctx accId
+        spendingFirstOnCash ctx
+        spendable accId 1 `dbShouldBeE` [firstCoin, secondCoin]
+
     it "holds back a coinbase until its 100th confirmation" $
       inDatabaseE $ do
         accId <- account ctx
@@ -453,6 +510,65 @@ spendableSpec ctx =
           dbShouldFailWith "The stored coin 0000000000000000000000000000000000000000000000000000000000000001 0 does not read" $
             spendableCoins btc accId 1
 
+{- Balances -}
+
+balancesSpec :: Ctx -> Spec
+balancesSpec ctx =
+  describe "The balances the account and its addresses can spend now" $ do
+    it "add up the coins that can be spent, by address" $
+      inDatabaseE $ do
+        accId <- account ctx
+        threeCoins ctx accId
+        summarise accId (thirdPaymentTx ctx)
+        -- The third payment, unconfirmed and someone else's, is left out
+        spendableAtAddresses btc accId ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"]
+          `dbShouldBeE` Map.fromList [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", 50000), ("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", 20000)]
+        spendableBalance btc accId `dbShouldBeE` 70000
+
+    it "are read for the addresses asked for only" $
+      inDatabaseE $ do
+        accId <- account ctx
+        threeCoins ctx accId
+        spendableAtAddresses btc accId ["1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"] `dbShouldBeE` Map.fromList [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", 20000)]
+        spendableAtAddresses btc accId [] `dbShouldBeE` Map.empty
+
+    it "leave out a coin a pending transaction holds" $
+      inDatabaseE $ do
+        accId <- account ctx
+        threeCoins ctx accId
+        spendingFirst ctx accId
+        spendableAtAddresses btc accId ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"]
+          `dbShouldBeE` Map.fromList [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", 20000)]
+        spendableBalance btc accId `dbShouldBeE` 20000
+
+    it "count the account's own unconfirmed change" $
+      inDatabaseE $ do
+        accId <- account ctx
+        summarise accId (firstPaymentTx ctx)
+        summarise accId (ownPaymentTx ctx)
+        _ <- refresh accId [ownChange ctx]
+        spendableAtAddresses btc accId ["17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"] `dbShouldBeE` Map.fromList [("17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", 19000)]
+        spendableBalance btc accId `dbShouldBeE` 19000
+
+    it "count a coinbase once it has matured" $
+      inDatabaseE $ do
+        accId <- account ctx
+        lift $ insertRawTx (coinbase ctx)
+        _ <- refresh accId [storeCoin ctx (txHash (coinbase ctx), 0) (Just 800000) (externalAddr 0) 312500000]
+        bestAt 800098
+        spendableBalance btc accId `dbShouldBeE` 0
+        bestAt 800099
+        spendableBalance btc accId `dbShouldBeE` 312500000
+
+    it "are those of the account only" $
+      inDatabaseE $ do
+        accId <- account ctx
+        (otherId, _) <- testNewAcc2 ctx "other"
+        _ <- refresh accId [confirmedPayment ctx]
+        _ <- refreshCoins btc otherId [externalAddr2] [storeCoin ctx (fakeTxHash 4, 0) (Just 800000) externalAddr2 10000]
+        spendableBalance btc accId `dbShouldBeE` 50000
+        spendableBalance btc otherId `dbShouldBeE` 10000
+
 {- The life of a coin -}
 
 lifeSpec :: Ctx -> Spec
@@ -486,16 +602,16 @@ lifeSpec ctx =
 rowSpec :: Ctx -> Spec
 rowSpec ctx =
   describe "A coin row" $ do
-    it "shows as coins lists it: outpoint, address, value, block, confirmations from the best block, and lock" $
+    it "shows as coins lists it: outpoint, address, value, block, confirmations from the best block, lock, and whether it can be spent" $
       inDatabaseE $ do
         accId <- account ctx
         refreshed <- refresh accId [confirmedPayment ctx]
         row <- liftMaybe "The coin is not stored" $ listToMaybe (insertedCoins refreshed)
-        let shown = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 False
-        liftIO $ do
-          toJsonCoin btc (Just 800002) Set.empty row `shouldBe` Right shown
-          toJsonCoin btc (Just 800002) (Set.fromList [firstCoin]) row `shouldBe` Right shown {jsonCoinLocked = True}
-          toJsonCoin btc Nothing Set.empty row `shouldBe` Right shown {jsonCoinConfirmations = 1}
+        let rules = Spending btc accId (Just 800002) Set.empty
+            shown = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 False True
+        toJsonCoin rules row `dbShouldBeE` shown
+        toJsonCoin rules {spendingLocked = Set.fromList [firstCoin]} row `dbShouldBeE` shown {jsonCoinLocked = True, jsonCoinSpendable = False}
+        toJsonCoin rules {spendingBest = Nothing} row `dbShouldBeE` shown {jsonCoinConfirmations = 1}
 
     it "keeps its outpoint, read back from its key" $
       inDatabaseE $ do
@@ -528,8 +644,8 @@ rowSpec ctx =
 jsonSpec :: Ctx -> Spec
 jsonSpec _ =
   describe "Coins in JSON" $ do
-    it "writes a confirmed coin as coins prints it, and reads it back" $ do
-      let coin = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 False
+    it "writes a confirmed and spendable coin as coins prints it, and reads it back" $ do
+      let coin = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 False True
           json :: String
           json =
             [r|{
@@ -538,13 +654,14 @@ jsonSpec _ =
               "value": 50000,
               "block": {"height": 800000, "position": 0},
               "confirmations": 3,
-              "locked": false
+              "locked": false,
+              "spendable": true
             }|]
       eitherDecode (cs json) `shouldBe` Right (marshalValue btc coin)
       unmarshalJSON btc (cs json) `shouldBe` Just coin
 
     it "writes an unconfirmed and locked coin of Bitcoin Cash with its cash address" $ do
-      let coin = JsonCoin (OutPoint (fakeTxHash 5) 1) bchExternalAddr 10000 (Store.MemRef 0) 0 True
+      let coin = JsonCoin (OutPoint (fakeTxHash 5) 1) bchExternalAddr 10000 (Store.MemRef 0) 0 True False
           json :: String
           json =
             [r|{
@@ -553,7 +670,8 @@ jsonSpec _ =
               "value": 10000,
               "block": {"mempool": 0},
               "confirmations": 0,
-              "locked": true
+              "locked": true,
+              "spendable": false
             }|]
       eitherDecode (cs json) `shouldBe` Right (marshalValue bch coin)
       unmarshalJSON bch (cs json) `shouldBe` Just coin

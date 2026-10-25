@@ -572,7 +572,16 @@ accountCompleter _ = return []
 accountsParser :: ParserInfo Command
 accountsParser = do
   let cmd = CommandAccounts <$> accountOption
-  info cmd $ progDesc "Display account information"
+  info cmd $
+    progDesc "Display account information"
+      <> footer
+        [r|
+The confirmed and unconfirmed balances are those the store reported at the last
+`sync`. The spendable balance is what the wallet can spend now: the coins no
+pending transaction holds, a coinbase once it has 100 confirmations, and an
+unconfirmed coin only when it is the change of a transaction of the wallet.
+`preparetx` spends that change only with `--minconf 0`.
+|]
 
 {- Receive Parser -}
 
@@ -615,6 +624,11 @@ addrsParser = do
           <*> (Page <$> limitOption <*> offsetOption)
   info cmd $
     progDesc "List the receiving addresses of an account, or its change addresses"
+      <> footer
+        [r|
+Each address shows its transactions, what it received, and what it can spend
+now, by the rules `accounts` describes.
+|]
 
 internalOption :: Parser Bool
 internalOption =
@@ -971,7 +985,10 @@ coinsParser = do
 These are all the coins in the account. Coins can be locked when preparing new
 transactions. When sending those transactions to the network, the locked coins
 will be spent and removed. Calling `deletetx` will remove a pending transaction
-and free up any locked coins.
+and free up any locked coins. A coin is spendable when the wallet can spend it
+now: no pending transaction holds it, a coinbase has 100 confirmations, and an
+unconfirmed coin is the change of a transaction of the wallet. One that is not
+spendable yet becomes so once it confirms or, for a coinbase, matures.
 |]
 
 {- SendTx Parser -}
@@ -1044,9 +1061,9 @@ whose coin was spent by another transaction, or is gone, is reported as
 conflicted. The store is asked about every coin a pending transaction spends,
 those of other accounts and those outside the wallet, a sweep's, alike. A signed
 transaction that was never sent is left alone. A sent transaction is sent again
-on every sync for as long as the store does not list it, so one the network
-refuses for good, for a fee below what the nodes relay for instance, keeps
-coming back until it is deleted with `deletetx`.
+on every sync for as long as the store does not list it, unless it is in
+conflict, so one the network refuses for good, for a fee below what the nodes
+relay for instance, keeps coming back until it is deleted with `deletetx`.
 |]
 
 fullOption :: Parser Bool

@@ -266,8 +266,8 @@ naturalPrinter nat
 syncResultsPrinter :: AmountUnit -> [SyncRes] -> Printer
 syncResultsPrinter unit xs = vcat $ intercalate [text " "] (f <$> xs)
   where
-    f (SyncRes acc bh h t c r k n) =
-      [ accountPrinter unit acc,
+    f (SyncRes acc spendable bh h t c r k n) =
+      [ accountPrinter unit acc spendable,
         formatTitle "Sync Results:",
         nest 2 $ keyPrinter 12 "Best Block" <> formatBlockHash (cs $ blockHashToHex bh),
         nest 2 $ keyPrinter 12 "Best Height" <> formatValue (show h),
@@ -278,8 +278,10 @@ syncResultsPrinter unit xs = vcat $ intercalate [text " "] (f <$> xs)
         nest 2 $ keyPrinter 12 "Discovered" <> formatValue (show n)
       ]
 
-accountPrinter :: AmountUnit -> DBAccount -> Printer
-accountPrinter unit acc =
+-- | An account with its balances: those the store reports, and the one it
+-- can spend now
+accountPrinter :: AmountUnit -> DBAccount -> Word64 -> Printer
+accountPrinter unit acc spendable =
   vcat
     [ keyPrinter 11 "Account" <> formatAccount (cs $ dBAccountName acc),
       mconcat [keyPrinter 11 "Fingerprint", formatValue $ maybe "unknown" cs (dBAccountFingerprint acc)],
@@ -303,6 +305,11 @@ accountPrinter unit acc =
           ],
       nest 2 $
         mconcat
+          [ keyPrinter 11 "Spendable",
+            amountPrinter unit spendable
+          ],
+      nest 2 $
+        mconcat
           [ keyPrinter 11 "Coins",
             naturalPrinter $ fromIntegral $ dBAccountBalanceCoins acc
           ]
@@ -313,8 +320,9 @@ accountPrinter unit acc =
     utctime = dBAccountCreated acc
     created = formatTime defaultTimeLocale "%d %b %Y" utctime
 
-addressPrinter :: AmountUnit -> Natural -> DBAddress -> Printer
-addressPrinter unit pad addr =
+-- | An address with what it received and the balance it can spend now
+addressPrinter :: AmountUnit -> Natural -> DBAddress -> Word64 -> Printer
+addressPrinter unit pad addr spendable =
   vcat
     [ mconcat
         [ keyPrinter pad $ cs $ show (dBAddressIndex addr),
@@ -325,18 +333,23 @@ addressPrinter unit pad addr =
         else
           nest 2 $
             mconcat
-              [ keyPrinter 8 "Label",
+              [ keyPrinter 9 "Label",
                 formatLabel $ cs $ dBAddressLabel addr
               ],
       nest 2 $
         mconcat
-          [ keyPrinter 8 "Txs",
+          [ keyPrinter 9 "Txs",
             naturalPrinter $ fromIntegral $ dBAddressBalanceTxs addr
           ],
       nest 2 $
         mconcat
-          [ keyPrinter 8 "Received",
+          [ keyPrinter 9 "Received",
             amountPrinter unit $ dBAddressBalanceReceived addr
+          ],
+      nest 2 $
+        mconcat
+          [ keyPrinter 9 "Spendable",
+            amountPrinter unit spendable
           ]
     ]
 
@@ -492,10 +505,13 @@ coinPrinter net unit JsonCoin {..} =
           <+> formatValue (show jsonCoinConfirmations),
       formatKey (block 7 "Status")
         <> text ":"
-          <+> if jsonCoinLocked
-            then formatFalse "Locked"
-            else formatTrue "Free"
+          <+> status
     ]
+  where
+    status
+      | jsonCoinLocked = formatFalse "Locked"
+      | jsonCoinSpendable = formatTrue "Spendable"
+      | otherwise = formatFalse "Not spendable yet"
 
 prettyPrinter :: AmountUnit -> Response -> IO ()
 prettyPrinter unit =
@@ -511,10 +527,10 @@ prettyPrinter unit =
           nest 2 $ mnemonicPrinter False mnem
         ]
           <> partsPrinter parts
-    ResponseAccount acc -> renderIO $ accountPrinter unit acc
+    ResponseAccount acc spendable -> renderIO $ accountPrinter unit acc spendable
     ResponseAccounts [] -> renderIO $ text "There are no accounts to display"
     ResponseAccounts accs ->
-      renderIO . vcat $ intersperse (text " ") $ accountPrinter unit <$> accs
+      renderIO . vcat $ intersperse (text " ") $ uncurry (accountPrinter unit) <$> accs
     ResponseAccResult _ res txt -> do
       let p =
             if res
@@ -522,14 +538,14 @@ prettyPrinter unit =
               else formatFalse "Failure"
       renderIO . vcat $ [formatKey "Result:" <+> p, text $ cs txt]
     ResponseFile f -> renderIO $ formatKey "File:" <+> formatFilePath f
-    ResponseAddress _ addr -> do
+    ResponseAddress _ addr spendable -> do
       let l = length $ show $ dBAddressIndex addr
-      renderIO $ addressPrinter unit (fromIntegral l) addr
+      renderIO $ addressPrinter unit (fromIntegral l) addr spendable
     ResponseAddresses _ [] ->
       renderIO $ text "There are no addresses to display"
     ResponseAddresses _ addrs -> do
-      let l = length $ show $ maximum $ dBAddressIndex <$> addrs
-      renderIO $ vcat $ addressPrinter unit (fromIntegral l) <$> addrs
+      let l = length $ show $ maximum $ dBAddressIndex . fst <$> addrs
+      renderIO $ vcat $ uncurry (addressPrinter unit (fromIntegral l)) <$> addrs
     ResponseTxs _ [] ->
       renderIO $ text "There are no transactions to display"
     ResponseTxs acc txs -> do

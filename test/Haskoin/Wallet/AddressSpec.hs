@@ -13,6 +13,7 @@ import Control.Monad (replicateM_)
 import Control.Monad.Except (ExceptT)
 import Control.Monad.Trans (lift, liftIO)
 import Data.Aeson (eitherDecode, toJSON)
+import Data.Aeson.Types (parseEither)
 import Data.Default (def)
 import qualified Data.Map.Strict as Map
 import Data.String.Conversions (cs)
@@ -425,8 +426,8 @@ derivingSpec ctx =
 
 jsonSpec :: Spec
 jsonSpec =
-  describe "Addresses in JSON" $
-    it "prints an address as addrs does, and reads it back" $ do
+  describe "Addresses in JSON" $ do
+    it "prints an address as it stores it, and reads it back" $ do
       let json :: String
           json =
             [r|{
@@ -441,3 +442,19 @@ jsonSpec =
             }|]
       eitherDecode (cs json) `shouldBe` Right (toJSON fixtureRow)
       eitherDecode (cs json) `shouldBe` Right fixtureRow
+
+    it "prints an address with the balance it can spend among its balances, as addrs does, and reads it back" $ do
+      let json :: String
+          json =
+            [r|{
+              "account": 1,
+              "index": 3,
+              "derivation": "/0/3",
+              "address": "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1",
+              "label": "Savings",
+              "balance": {"confirmed": 5000, "unconfirmed": 300, "coins": 2, "txs": 3, "received": 9000, "spendable": 4800},
+              "internal": false,
+              "created": "2023-11-01T00:00:00Z"
+            }|]
+      eitherDecode (cs json) `shouldBe` Right (addressWithSpendable fixtureRow 4800)
+      (parseEither parseAddressWithSpendable =<< eitherDecode (cs json)) `shouldBe` Right (fixtureRow, 4800)

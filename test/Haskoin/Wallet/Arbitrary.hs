@@ -93,6 +93,7 @@ arbitraryJsonCoin net =
     <*> arbitraryBlockRef
     <*> arbitraryNatural
     <*> arbitrary
+    <*> arbitrary
 
 arbitraryPubKeyDoc :: Ctx -> Gen PubKeyDoc
 arbitraryPubKeyDoc ctx =
@@ -191,6 +192,7 @@ arbitrarySyncRes :: Network -> Ctx -> Gen SyncRes
 arbitrarySyncRes net ctx =
   SyncRes
     <$> arbitraryDBAccount net ctx
+    <*> arbitraryPositive
     <*> arbitraryBlockHash
     <*> arbitrary
     <*> arbitraryNatural
@@ -207,17 +209,17 @@ arbitraryResponse net ctx =
         <$> arbitraryText
         <*> resize 12 (listOf arbitraryText)
         <*> resize 12 (listOf $ resize 12 $ listOf arbitraryText),
-      ResponseAccount <$> arbitraryDBAccount net ctx,
+      ResponseAccount <$> arbitraryDBAccount net ctx <*> arbitraryPositive,
       ResponseAccResult
         <$> arbitraryDBAccount net ctx
         <*> arbitrary
         <*> arbitraryText,
       ResponseFile <$> (cs <$> arbitraryText),
-      ResponseAccounts <$> resize 20 (listOf $ arbitraryDBAccount net ctx),
-      ResponseAddress <$> arbitraryDBAccount net ctx <*> arbitraryDBAddress net,
+      ResponseAccounts <$> resize 20 (listOf $ (,) <$> arbitraryDBAccount net ctx <*> arbitraryPositive),
+      ResponseAddress <$> arbitraryDBAccount net ctx <*> arbitraryDBAddress net <*> arbitraryPositive,
       ResponseAddresses
         <$> arbitraryDBAccount net ctx
-        <*> resize 20 (listOf $ arbitraryDBAddress net),
+        <*> resize 20 (listOf $ (,) <$> arbitraryDBAddress net <*> arbitraryPositive),
       ResponseTxs
         <$> arbitraryDBAccount net ctx
         <*> resize 20 (listOf $ arbitraryTxInfo net),

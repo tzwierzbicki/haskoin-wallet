@@ -15,6 +15,8 @@ import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Reader (MonadTrans (lift))
 import Data.Aeson
+import Data.Aeson.Types (Pair, Parser)
+import qualified Data.Aeson.Types as Json
 import Data.Char (isControl)
 import Data.List (sortOn)
 import Data.Maybe (fromJust, fromMaybe, isNothing)
@@ -22,6 +24,7 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (getCurrentTime)
+import Data.Word (Word64)
 import Database.Esqueleto.Legacy as E hiding (isNothing)
 import qualified Database.Persist as P
 import Haskoin
@@ -32,24 +35,43 @@ import Numeric.Natural (Natural)
 {- Accounts in JSON -}
 
 instance ToJSON DBAccount where
-  toJSON acc =
-    object
-      [ "name" .= dBAccountName acc,
-        "index" .= dBAccountIndex acc,
-        "network" .= dBAccountNetwork acc,
-        "derivation" .= pathToStr (accountPath acc),
-        "external" .= dBAccountExternal acc,
-        "internal" .= dBAccountInternal acc,
-        "xPubKey" .= dBAccountXPubKey acc,
-        "fingerprint" .= dBAccountFingerprint acc,
-        "balance"
-          .= object
-            [ "confirmed" .= dBAccountBalanceConfirmed acc,
-              "unconfirmed" .= dBAccountBalanceUnconfirmed acc,
-              "coins" .= dBAccountBalanceCoins acc
-            ],
-        "created" .= dBAccountCreated acc
-      ]
+  toJSON acc = object (accountPairs acc [])
+
+-- | An account in JSON with its spendable balance among its balances.
+-- Nothing stores that balance: hw computes it from the coins wherever it
+-- shows the balances of an account ("Haskoin.Wallet.Coin").
+accountWithSpendable :: DBAccount -> Word64 -> Json.Value
+accountWithSpendable acc spendable = object (accountPairs acc ["spendable" .= spendable])
+
+-- | An account and its spendable balance, as 'accountWithSpendable' writes them
+parseAccountWithSpendable :: Json.Value -> Parser (DBAccount, Word64)
+parseAccountWithSpendable value = do
+  acc <- parseJSON value
+  spendable <- withObject "DBAccount" (\o -> o .: "balance" >>= \bal -> bal .: "spendable") value
+  return (acc, spendable)
+
+-- | The keys of an account, with more balances than those it stores when
+-- they are given
+accountPairs :: DBAccount -> [Pair] -> [Pair]
+accountPairs acc moreBalances =
+  [ "name" .= dBAccountName acc,
+    "index" .= dBAccountIndex acc,
+    "network" .= dBAccountNetwork acc,
+    "derivation" .= pathToStr (accountPath acc),
+    "external" .= dBAccountExternal acc,
+    "internal" .= dBAccountInternal acc,
+    "xPubKey" .= dBAccountXPubKey acc,
+    "fingerprint" .= dBAccountFingerprint acc,
+    "balance"
+      .= object
+        ( [ "confirmed" .= dBAccountBalanceConfirmed acc,
+            "unconfirmed" .= dBAccountBalanceUnconfirmed acc,
+            "coins" .= dBAccountBalanceCoins acc
+          ]
+            <> moreBalances
+        ),
+    "created" .= dBAccountCreated acc
+  ]
 
 instance FromJSON DBAccount where
   parseJSON =

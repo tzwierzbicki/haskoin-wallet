@@ -12,24 +12,27 @@ import Control.Monad.Except (ExceptT, runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans (lift)
 import Data.Aeson (Value, eitherDecode, toJSON)
+import Data.Aeson.Types (parseEither)
 import Data.Default (def)
 import Data.Maybe (fromJust)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
+import Data.Word (Word64)
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Account
 import Haskoin.Wallet.Address (genExtAddress)
 import Haskoin.Wallet.Coin (refreshCoins)
-import Haskoin.Wallet.Commands (Response (..), cmdExportAcc, cmdImportAcc)
+import Haskoin.Wallet.Commands (Response (..), cmdAccounts, cmdAddrs, cmdExportAcc, cmdImportAcc)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Keys
 import Haskoin.Wallet.PendingTx (importPendingTx)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxSignData (TxSignData (..))
+import Haskoin.Wallet.Util (Page (Page))
 import Numeric.Natural (Natural)
 import System.FilePath ((</>))
 import Test.Hspec
@@ -327,6 +330,25 @@ balanceSpec ctx =
         acc <- lift $ updateAccountBalances accId
         liftIO $ balances acc `shouldBe` (0, 0, 0)
 
+    it "are shown by accounts with the balance the account can spend now" $
+      inScratchDirectory $ \dir -> do
+        wallet <- walletIn (dir </> "wallet.sqlite") $ do
+          (accId, _) <- testNewAcc ctx "main"
+          _ <- genExtAddress ctx def accId ""
+          refreshCoins btc accId [externalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
+        shownSpendable <$> cmdAccounts wallet Nothing `shouldReturn` Right [("main", 50000)]
+
+    it "are shown by addrs with the balance each address can spend now" $
+      inScratchDirectory $ \dir -> do
+        wallet <- walletIn (dir </> "wallet.sqlite") $ do
+          (accId, _) <- testNewAcc ctx "main"
+          _ <- genExtAddress ctx def accId ""
+          _ <- genExtAddress ctx def accId ""
+          refreshCoins btc accId [externalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
+        -- Newest first: the second address holds nothing
+        addressSpendable <$> cmdAddrs wallet Nothing False (Page 5 0)
+          `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", 0), ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", 50000)]
+
     it "add up those of its addresses" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "main"
@@ -385,10 +407,22 @@ walletIn database prepare = do
     return ()
   return def {configDatabaseFile = Just database}
 
+-- | What accounts answered: each account by its name, with the balance it
+-- can spend now
+shownSpendable :: Response -> Either String [(Text, Word64)]
+shownSpendable (ResponseAccounts shown) = Right [(dBAccountName acc, spendable) | (acc, spendable) <- shown]
+shownSpendable other = Left (show other)
+
+-- | What addrs answered: each address by its text, with the balance it can
+-- spend now
+addressSpendable :: Response -> Either String [(Text, Word64)]
+addressSpendable (ResponseAddresses _ shown) = Right [(dBAddressAddress addr, spendable) | (addr, spendable) <- shown]
+addressSpendable other = Left (show other)
+
 -- | What importacc answered: the account by its name, network, key and
 -- fingerprint, or its refusal
 imported :: Response -> Either String (Text, Text, Text, Maybe Text)
-imported (ResponseAccount acc) = Right (dBAccountName acc, dBAccountNetwork acc, dBAccountXPubKey acc, dBAccountFingerprint acc)
+imported (ResponseAccount acc _) = Right (dBAccountName acc, dBAccountNetwork acc, dBAccountXPubKey acc, dBAccountFingerprint acc)
 imported (ResponseError err) = Left (cs err)
 imported other = Left (show other)
 
@@ -424,6 +458,10 @@ jsonSpec =
       eitherDecode (cs accountJson) `shouldBe` Right (toJSON fixtureAccount)
       eitherDecode (cs accountJson) `shouldBe` Right fixtureAccount
 
+    it "prints an account with the balance it can spend among its balances, as accounts does, and reads it back" $ do
+      eitherDecode (cs spendableJson) `shouldBe` Right (accountWithSpendable fixtureAccount 4800)
+      (parseEither parseAccountWithSpendable =<< eitherDecode (cs spendableJson)) `shouldBe` Right (fixtureAccount, 4800)
+
     it "prints the fingerprint of a seed not known yet as null, and reads it back" $ do
       let unknown = fixtureAccount {dBAccountFingerprint = Nothing}
       eitherDecode (cs unknownSeedJson) `shouldBe` Right (toJSON unknown)
@@ -446,6 +484,22 @@ accountJson =
   "xPubKey": "xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah",
   "fingerprint": "bc560f95",
   "balance": {"confirmed": 5000, "unconfirmed": 300, "coins": 2},
+  "created": "2023-11-01T00:00:00Z"
+}|]
+
+-- | The same account as accounts prints it, with 4800 it can spend now
+spendableJson :: String
+spendableJson =
+  [r|{
+  "name": "main",
+  "index": 0,
+  "network": "btc",
+  "derivation": "/44'/0'/0'",
+  "external": 2,
+  "internal": 1,
+  "xPubKey": "xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah",
+  "fingerprint": "bc560f95",
+  "balance": {"confirmed": 5000, "unconfirmed": 300, "coins": 2, "spendable": 4800},
   "created": "2023-11-01T00:00:00Z"
 }|]
 

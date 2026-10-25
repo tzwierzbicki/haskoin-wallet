@@ -15,9 +15,10 @@ import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
 import Data.List (nub)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (isJust, listToMaybe)
+import Data.Maybe (listToMaybe)
 import Data.Set (Set)
 import qualified Data.Set as Set
+import Data.String.Conversions (cs)
 import Data.Time (getCurrentTime)
 import Database.Esqueleto.Legacy as E
 import qualified Database.Persist as P
@@ -151,14 +152,18 @@ heldStatus p (Pending status) =
   Pending status {pendingOnline = p.pendingTxOnline, pendingConflicted = p.pendingTxConflicted}
 heldStatus _ onChain = onChain
 
--- | The coins locked by the pending transactions of the wallet: every
--- outpoint one of them spends, whatever its account. A coin is locked
--- exactly as long as a pending transaction spends it; nothing else records
--- it. The transaction of one account can spend the coin of another, a
--- sweep of its addresses for instance, and the coin is then locked in both.
-lockedOutpoints :: (MonadUnliftIO m) => ExceptT String (DB m) (Set OutPoint)
-lockedOutpoints = do
-  held <- liftEither . mapM fromRow =<< lift (P.selectList [] [])
+-- | The coins locked by the pending transactions of the wallet on a
+-- network: every outpoint one of them spends, whatever its account. A coin
+-- is locked exactly as long as a pending transaction spends it; nothing
+-- else records it. The transaction of one account can spend the coin of
+-- another, a sweep of its addresses for instance, and the coin is then
+-- locked in both. The network keeps the chains apart: a transaction from
+-- before the Bitcoin Cash fork has the same id on both, and spending its
+-- coin on one chain leaves it free on the other.
+lockedOutpoints :: (MonadUnliftIO m) => Network -> ExceptT String (DB m) (Set OutPoint)
+lockedOutpoints net = do
+  accounts <- lift $ P.selectKeysList [DBAccountNetwork P.==. cs net.name] []
+  held <- liftEither . mapM fromRow =<< lift (P.selectList [DBPendingTxAccount P.<-. accounts] [])
   return $ Set.fromList [input.outpoint | p <- held, input <- (txSignDataTx p.pendingTxData).inputs]
 
 -- | The change addresses the pending transactions of an account pay, as
@@ -175,10 +180,15 @@ reservedChangePaths accId = do
 changeAddress :: (MonadUnliftIO m) => Ctx -> Config -> DBAccountId -> ExceptT String (DB m) DBAddress
 changeAddress ctx cfg accId = nextChangeAddress ctx cfg accId =<< reservedChangePaths accId
 
--- | Whether the wallet holds the coin. The coin table is read here rather
--- than through "Haskoin.Wallet.Coin", which needs this module for the locks.
-coinExists :: (MonadUnliftIO m) => OutPoint -> DB m Bool
-coinExists outpoint = isJust <$> P.get (DBCoinKey $ outpointBytes outpoint)
+-- | Whether the wallet holds the coin on the network: a transaction from
+-- before the Bitcoin Cash fork has the same id on both chains. The coin
+-- table is read here rather than through "Haskoin.Wallet.Coin", which needs
+-- this module for the locks.
+coinExists :: (MonadUnliftIO m) => Network -> OutPoint -> DB m Bool
+coinExists net outpoint = do
+  coinM <- P.get (DBCoinKey $ outpointBytes outpoint)
+  accountM <- join <$> forM coinM (P.get . dBCoinAccount)
+  return $ maybe False ((== cs net.name) . dBAccountNetwork) accountM
 
 {- Conflicts -}
 
@@ -265,11 +275,11 @@ insertPendingTx net accId tsd summary = do
       tx = txSignDataTx tsd
   -- The coins of the account it spends must exist
   forM_ touched.coinsSpent $ \outpoint -> do
-    inWallet <- lift $ coinExists outpoint
+    inWallet <- lift $ coinExists net outpoint
     unless inWallet $ throwError "A coin referenced by the transaction does not exist"
   -- No other pending transaction, of any account, may spend one of its
   -- inputs; storing it is what locks them
-  locked <- lockedOutpoints
+  locked <- lockedOutpoints net
   when (any ((`Set.member` locked) . (.outpoint)) tx.inputs) $
     throwError "A coin referenced by the transaction is locked"
   -- Its addresses must be generated already, and its change addresses
@@ -297,7 +307,7 @@ removePendingTx ctx held = do
   txInfo <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountXPubKey ctx acc) held.pendingTxData
   let touched = touchedBy txInfo.txInfoSummary
       spent = (.outpoint) <$> (txSignDataTx held.pendingTxData).inputs
-  heldCoins <- lift $ filterM coinExists spent
+  heldCoins <- lift $ filterM (coinExists (accountNetwork acc)) spent
   lift $ P.delete held.pendingTxKey
   return (fromIntegral (length heldCoins), fromIntegral (length touched.changeAddresses))
 

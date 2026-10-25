@@ -174,6 +174,14 @@ sweepOfFunding :: Ctx -> TxSignData
 sweepOfFunding ctx =
   TxSignData (spendingTx ctx [(txHash (funding ctx), 0)] [(externalAddr2, 19000)]) [funding ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing
 
+-- | A sweep on Bitcoin Cash of the outpoint of 'funding', to the first
+-- receiving address of a Bitcoin Cash account of the test wallet: as if
+-- 'funding' came from before the fork, when a transaction had the same id
+-- on both chains
+cashSweepOfFunding :: Ctx -> TxSignData
+cashSweepOfFunding ctx =
+  TxSignData (spendingTx ctx [(txHash (funding ctx), 0)] [(bchExternalAddr, 19000)]) [funding ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing
+
 -- | The coins of the account, by address, and whether a pending transaction
 -- holds each
 lockedCoins :: DBAccountId -> ExceptT String (DB IO) [(Address, Bool)]
@@ -355,6 +363,17 @@ importingSpec ctx =
         lift $
           dbShouldFailWith "A coin referenced by the transaction is locked" $
             importPendingTx btc ctx otherId (sweepOfFunding ctx)
+    it "takes a Bitcoin Cash sweep of an outpoint a Bitcoin payment holds: the chains keep their coins apart" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        _ <- signedPending ctx cfg accId
+        (cashId, _) <- testNewAccBch ctx "cash"
+        _ <- genExtAddress ctx cfg cashId ""
+        sweepHash <- importPendingTx bch ctx cashId (cashSweepOfFunding ctx)
+        -- It held no coin of the wallet on Bitcoin Cash, and the Bitcoin
+        -- payment still holds its coin
+        deleteTx ctx (const (toStore emptyStore)) sweepHash `dbShouldBeE` (0, 0)
+        lockedCoins accId `dbShouldBeE` [(externalAddr 0, True)]
     it "refuses a transaction spending a coin the wallet does not have" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"

@@ -74,6 +74,12 @@ spec = prepareContext $ \ctx -> do
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (0, 0)
         summaries accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
 
+    it "reports what the account can spend once synced" $
+      inDatabaseE $ do
+        accId <- account
+        res <- syncWith (realPaymentStore ctx) accId
+        liftIO $ syncResSpendable res `shouldBe` 50000
+
     it "updates a payment when it confirms" $
       inDatabaseE $ do
         accId <- account
@@ -327,6 +333,17 @@ spec = prepareContext $ \ctx -> do
         published <- liftIO $ newIORef []
         res <- sync ctx cfg (notingPublished published $ toStore $ realPaymentStore ctx) btc accId False
         liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (0, 0)
+        liftIO $ readIORef published `shouldReturn` []
+
+    it "does not send again a sent transaction in conflict, which the network would refuse" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (realPaymentStore ctx) accId
+        pendingHash <- importPendingTx btc ctx accId (signedSpend ctx)
+        lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
+        published <- liftIO $ newIORef []
+        res <- sync ctx cfg (notingPublished published $ toStore $ spentElsewhereStore ctx) btc accId False
+        liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (0, 1)
         liftIO $ readIORef published `shouldReturn` []
 
     it "reports a pending transaction whose coin was spent by another transaction" $

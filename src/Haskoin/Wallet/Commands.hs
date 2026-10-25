@@ -5,6 +5,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE TupleSections #-}
 
 module Haskoin.Wallet.Commands where
 
@@ -17,11 +18,14 @@ import qualified Data.Aeson as Json
 import Data.Aeson.Types (Parser)
 import qualified Data.ByteString.Base64 as B64
 import Data.Foldable (for_)
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Version (showVersion)
+import Data.Word (Word64)
 import Database.Persist.Sqlite (transactionUndo)
 import Haskoin
 import Haskoin.Wallet.Account
@@ -65,8 +69,10 @@ data Response
         responseMnemonic :: ![Text],
         responseSplitMnemonic :: ![[Text]]
       }
-  | ResponseAccount
-      { responseAccount :: !DBAccount
+  | -- | An account with the balance it can spend now
+    ResponseAccount
+      { responseAccount :: !DBAccount,
+        responseSpendable :: !Word64
       }
   | ResponseAccResult
       { responseAccount :: !DBAccount,
@@ -76,16 +82,20 @@ data Response
   | ResponseFile
       { responseTxFile :: !FilePath
       }
-  | ResponseAccounts
-      { responseAccounts :: ![DBAccount]
+  | -- | Accounts, each with the balance it can spend now
+    ResponseAccounts
+      { responseAccounts :: ![(DBAccount, Word64)]
       }
-  | ResponseAddress
+  | -- | An address of the account, with the balance it can spend now
+    ResponseAddress
       { responseAccount :: !DBAccount,
-        responseAddress :: !DBAddress
+        responseAddress :: !DBAddress,
+        responseSpendable :: !Word64
       }
-  | ResponseAddresses
+  | -- | Addresses of the account, each with the balance it can spend now
+    ResponseAddresses
       { responseAccount :: !DBAccount,
-        responseAddresses :: ![DBAddress]
+        responseAddresses :: ![(DBAddress, Word64)]
       }
   | ResponseTxs
       { responseAccount :: !DBAccount,
@@ -141,10 +151,10 @@ instance Json.ToJSON Response where
             "mnemonic" .= w,
             "splitmnemonic" .= ws
           ]
-      ResponseAccount a ->
+      ResponseAccount a s ->
         object
           [ "type" .= Json.String "account",
-            "account" .= a
+            "account" .= accountWithSpendable a s
           ]
       ResponseAccResult a b t ->
         object
@@ -161,19 +171,19 @@ instance Json.ToJSON Response where
       ResponseAccounts as ->
         object
           [ "type" .= Json.String "accounts",
-            "accounts" .= as
+            "accounts" .= (uncurry accountWithSpendable <$> as)
           ]
-      ResponseAddress a addr ->
+      ResponseAddress a addr s ->
         object
           [ "type" .= Json.String "address",
             "account" .= a,
-            "address" .= addr
+            "address" .= addressWithSpendable addr s
           ]
       ResponseAddresses a adrs ->
         object
           [ "type" .= Json.String "addresses",
             "account" .= a,
-            "addresses" .= adrs
+            "addresses" .= (uncurry addressWithSpendable <$> adrs)
           ]
       ResponseTxs a txs ->
         object
@@ -246,8 +256,7 @@ instance Json.FromJSON Response where
             <*> o .: "mnemonic"
             <*> o .: "splitmnemonic"
         "account" ->
-          ResponseAccount
-            <$> o .: "account"
+          uncurry ResponseAccount <$> (parseAccountWithSpendable =<< o .: "account")
         "accresult" ->
           ResponseAccResult
             <$> o .: "account"
@@ -257,16 +266,15 @@ instance Json.FromJSON Response where
           ResponseFile
             <$> o .: "file"
         "accounts" ->
-          ResponseAccounts
-            <$> o .: "accounts"
-        "address" ->
-          ResponseAddress
-            <$> o .: "account"
-            <*> o .: "address"
+          ResponseAccounts <$> (mapM parseAccountWithSpendable =<< o .: "accounts")
+        "address" -> do
+          a <- o .: "account"
+          (addr, s) <- parseAddressWithSpendable =<< o .: "address"
+          return $ ResponseAddress a addr s
         "addresses" ->
           ResponseAddresses
             <$> o .: "account"
-            <*> o .: "addresses"
+            <*> (mapM parseAddressWithSpendable =<< o .: "addresses")
         "txs" -> do
           a <- o .: "account"
           let net = accountNetwork a
@@ -309,9 +317,9 @@ instance Json.FromJSON Response where
 {- The result of a sync in JSON -}
 
 syncResJson :: SyncRes -> Json.Value
-syncResJson (SyncRes as bb bh tc cc rb ck na) =
+syncResJson (SyncRes as sp bb bh tc cc rb ck na) =
   object
-    [ "account" .= as,
+    [ "account" .= accountWithSpendable as sp,
       "bestblock" .= bb,
       "bestheight" .= bh,
       "txupdates" .= tc,
@@ -323,10 +331,10 @@ syncResJson (SyncRes as bb bh tc cc rb ck na) =
 
 parseSyncRes :: Json.Value -> Parser SyncRes
 parseSyncRes =
-  Json.withObject "syncres" $ \x ->
-    SyncRes
-      <$> x .: "account"
-      <*> x .: "bestblock"
+  Json.withObject "syncres" $ \x -> do
+    (acc, spendable) <- parseAccountWithSpendable =<< x .: "account"
+    SyncRes acc spendable
+      <$> x .: "bestblock"
       <*> x .: "bestheight"
       <*> x .: "txupdates"
       <*> x .: "coinupdates"
@@ -411,10 +419,10 @@ cmdCreateAcc ctx cfg name net splitMnemIn = do
     mnem <- askMnemonicPass splitMnemIn
     seed <- liftEither $ seedOf ctx mnem
     (_, xpub) <- lift $ nextAccount net ctx seed
-    (_, acc) <- insertAccount net ctx name xpub (Just (seedFingerprint seed))
+    created <- insertAccount net ctx name xpub (Just (seedFingerprint seed))
     -- The accounts of the seed created before hw recorded fingerprints
     lift $ recordFingerprint ctx seed
-    return $ ResponseAccount acc
+    accountResponse created
 
 -- | Recover the accounts of a seed that were paid on a network, from its
 -- mnemonic: see "Haskoin.Wallet.Sync".
@@ -453,8 +461,8 @@ cmdImportAcc ctx cfg fp =
       -- An account the wallet has already, whose document now names its seed
       (Just (accId, held), Just fingerprint) | isNothing (dBAccountFingerprint held) -> do
         learnFingerprint accId fingerprint
-        ResponseAccount <$> getAccountById accId
-      _ -> ResponseAccount . snd <$> insertAccount net ctx name xpub fingerprintM
+        accountResponse . (accId,) =<< getAccountById accId
+      _ -> accountResponse =<< insertAccount net ctx name xpub fingerprintM
 
 cmdExportAcc :: Ctx -> Config -> Maybe Text -> FilePath -> IO Response
 cmdExportAcc ctx cfg nameM file =
@@ -471,8 +479,8 @@ cmdExportAcc ctx cfg nameM file =
 cmdRenameAcc :: Config -> Text -> Text -> IO Response
 cmdRenameAcc cfg oldName newName =
   runDBResponse cfg $ do
-    acc <- renameAccount oldName newName
-    return $ ResponseAccount acc
+    _ <- renameAccount oldName newName
+    accountResponse =<< getAccountByName (Just newName)
 
 cmdDeleteAcc :: Config -> Text -> Network -> HardPath -> IO Response
 cmdDeleteAcc cfg name net path =
@@ -493,34 +501,55 @@ cmdAccounts cfg nameM =
   runDBResponse cfg $ do
     case nameM of
       Just _ -> do
-        (_, acc) <- getAccountByName nameM
-        return $ ResponseAccounts [acc]
+        named <- getAccountByName nameM
+        ResponseAccounts <$> mapM withSpendable [named]
       _ -> do
         accs <- lift getAccounts
-        return $ ResponseAccounts $ snd <$> accs
+        ResponseAccounts <$> mapM withSpendable accs
+
+-- | An account with the balance it can spend now
+withSpendable :: (MonadUnliftIO m) => (DBAccountId, DBAccount) -> ExceptT String (DB m) (DBAccount, Word64)
+withSpendable (accId, acc) = (acc,) <$> spendableBalance (accountNetwork acc) accId
+
+-- | The answer showing an account, with the balance it can spend now
+accountResponse :: (MonadUnliftIO m) => (DBAccountId, DBAccount) -> ExceptT String (DB m) Response
+accountResponse account = uncurry ResponseAccount <$> withSpendable account
 
 {- Addresses -}
+
+-- | The answer showing an address of the account, with the balance it can
+-- spend now
+addressResponse :: (MonadUnliftIO m) => DBAccountId -> DBAccount -> DBAddress -> ExceptT String (DB m) Response
+addressResponse accId acc addr = do
+  balances <- spendableAtAddresses (accountNetwork acc) accId [dBAddressAddress addr]
+  return $ ResponseAddress acc addr (spendableAt balances addr)
+
+-- | What an address can spend now, among the spendable balances read for
+-- it: nothing when it holds no such coin
+spendableAt :: Map Text Word64 -> DBAddress -> Word64
+spendableAt balances addr = Map.findWithDefault 0 (dBAddressAddress addr) balances
 
 cmdReceive :: Ctx -> Config -> Maybe Text -> Maybe Text -> IO Response
 cmdReceive ctx cfg nameM labelM =
   runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     addr <- genExtAddress ctx cfg accId $ fromMaybe "" labelM
-    return $ ResponseAddress acc addr
+    addressResponse accId acc addr
 
 cmdAddrs :: Config -> Maybe Text -> Bool -> Page -> IO Response
 cmdAddrs cfg nameM internal page =
   runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     as <- lift $ addressPage accId (if internal then AddrInternal else AddrExternal) page
-    return $ ResponseAddresses acc as
+    balances <- spendableAtAddresses (accountNetwork acc) accId (dBAddressAddress <$> as)
+    return $ ResponseAddresses acc [(addr, spendableAt balances addr) | addr <- as]
 
 cmdLabel :: Config -> Maybe Text -> Natural -> Text -> IO Response
 cmdLabel cfg nameM idx lab =
   runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     adr <- setAddrLabel accId (fromIntegral idx) lab
-    return $ ResponseAddress acc adr
+    addressResponse accId acc adr
 
 {- Transactions and coins -}
 

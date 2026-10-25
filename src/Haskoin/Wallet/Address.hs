@@ -21,6 +21,8 @@ import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Reader (MonadTrans (lift))
 import Data.Aeson
+import Data.Aeson.Types (Pair, Parser)
+import qualified Data.Aeson.Types as Json
 import Data.List (nub)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -67,23 +69,42 @@ addrDeriv AddrExternal = extDeriv
 {- Addresses in JSON -}
 
 instance ToJSON DBAddress where
-  toJSON addr =
-    object
-      [ "account" .= fromSqlKey (dBAddressAccount addr),
-        "index" .= dBAddressIndex addr,
-        "derivation" .= pathText (addrPath addr),
-        "address" .= dBAddressAddress addr,
-        "label" .= dBAddressLabel addr,
-        "balance"
-          .= AddressBalance
-            (dBAddressBalanceConfirmed addr)
-            (dBAddressBalanceUnconfirmed addr)
-            (dBAddressBalanceCoins addr)
-            (dBAddressBalanceTxs addr)
-            (dBAddressBalanceReceived addr),
-        "internal" .= dBAddressInternal addr,
-        "created" .= dBAddressCreated addr
-      ]
+  toJSON addr = object (addressPairs addr [])
+
+-- | An address in JSON with its spendable balance among its balances.
+-- Nothing stores that balance: hw computes it from the coins wherever it
+-- shows the balances of an address ("Haskoin.Wallet.Coin").
+addressWithSpendable :: DBAddress -> Word64 -> Json.Value
+addressWithSpendable addr spendable = object (addressPairs addr ["spendable" .= spendable])
+
+-- | An address and its spendable balance, as 'addressWithSpendable' writes them
+parseAddressWithSpendable :: Json.Value -> Parser (DBAddress, Word64)
+parseAddressWithSpendable value = do
+  addr <- parseJSON value
+  spendable <- withObject "DBAddress" (\o -> o .: "balance" >>= \bal -> bal .: "spendable") value
+  return (addr, spendable)
+
+-- | The keys of an address, with more balances than those it stores when
+-- they are given
+addressPairs :: DBAddress -> [Pair] -> [Pair]
+addressPairs addr moreBalances =
+  [ "account" .= fromSqlKey (dBAddressAccount addr),
+    "index" .= dBAddressIndex addr,
+    "derivation" .= pathText (addrPath addr),
+    "address" .= dBAddressAddress addr,
+    "label" .= dBAddressLabel addr,
+    "balance" .= object (balancePairs stored <> moreBalances),
+    "internal" .= dBAddressInternal addr,
+    "created" .= dBAddressCreated addr
+  ]
+  where
+    stored =
+      AddressBalance
+        (dBAddressBalanceConfirmed addr)
+        (dBAddressBalanceUnconfirmed addr)
+        (dBAddressBalanceCoins addr)
+        (dBAddressBalanceTxs addr)
+        (dBAddressBalanceReceived addr)
 
 instance FromJSON DBAddress where
   parseJSON =
@@ -116,14 +137,16 @@ data AddressBalance = AddressBalance
   deriving (Show, Read, Eq, Ord)
 
 instance ToJSON AddressBalance where
-  toJSON b =
-    object
-      [ "confirmed" .= addrBalanceConfirmed b,
-        "unconfirmed" .= addrBalanceUnconfirmed b,
-        "coins" .= addrBalanceCoins b,
-        "txs" .= addrBalanceTxs b,
-        "received" .= addrBalanceReceived b
-      ]
+  toJSON = object . balancePairs
+
+balancePairs :: AddressBalance -> [Pair]
+balancePairs b =
+  [ "confirmed" .= addrBalanceConfirmed b,
+    "unconfirmed" .= addrBalanceUnconfirmed b,
+    "coins" .= addrBalanceCoins b,
+    "txs" .= addrBalanceTxs b,
+    "received" .= addrBalanceReceived b
+  ]
 
 instance FromJSON AddressBalance where
   parseJSON =

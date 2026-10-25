@@ -19,6 +19,7 @@ import qualified Data.Map.Strict as Map
 import Data.Set (Set)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
+import Data.Word (Word64)
 import qualified Data.Set as Set
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -122,6 +123,8 @@ recoveredName net index = cs net.name <> cs (show index)
 
 data SyncRes = SyncRes
   { syncResAccount :: !DBAccount,
+    -- | What the account can spend once synced ("Haskoin.Wallet.Coin")
+    syncResSpendable :: !Word64,
     syncResBlockHash :: !BlockHash,
     syncResBlockHeight :: !BlockHeight,
     syncResTxUpdates :: !Natural,
@@ -176,9 +179,12 @@ sync ctx cfg store net accId full = do
   (resent, conflicted, retired) <- syncPending store accId (Set.fromList $ (.txid) <$> listed)
   pruneRawTxs everything refreshed retired
   lift $ updateBest net (headerHash best.header) best.height
+  -- After the best block, which matures the coins of a coinbase
+  spendable <- spendableBalance net accId
   return
     SyncRes
       { syncResAccount = acc,
+        syncResSpendable = spendable,
         syncResBlockHash = headerHash best.header,
         syncResBlockHeight = fromIntegral best.height,
         syncResTxUpdates = fromIntegral $ length $ filter id updated,
@@ -307,21 +313,23 @@ pruneRawTxs everything refreshed retired
 
 -- | The pending transactions of the account after a sync, given the
 -- transactions the store listed. A signed one the store lists has reached
--- the network and is retired. One the user sent that the store does not
--- list is sent again: nodes forget unconfirmed transactions, and the store
--- may never have accepted it; a signed one the user has not sent is left
--- alone. The store is then asked whether the others can still spend their
--- coins ('recordConflicts'), and those that cannot are counted for the
--- user. Returns how many were sent again, how many conflict, and the ids of
--- those retired.
+-- the network and is retired. The store is then asked whether the others
+-- can still spend their coins ('recordConflicts'), and those that cannot
+-- are counted for the user. One the user sent that the store does not list
+-- is sent again, unless it is in conflict, which the network would refuse:
+-- nodes forget unconfirmed transactions, and the store may never have
+-- accepted it. A signed one the user has not sent is left alone. Returns
+-- how many were sent again, how many conflict, and the ids of those
+-- retired.
 syncPending :: (MonadUnliftIO m) => Store -> DBAccountId -> Set TxHash -> ExceptT String (DB m) (Natural, Natural, [TxHash])
 syncPending store accId seen = do
   held <- pendingTxs accId
   let (done, waiting) = partition reached held
   lift $ forM_ done retirePendingTx
-  let resend = [txOf p | p <- waiting, p.pendingTxOnline]
-  forM_ resend $ fromStore . storePublish store
   conflicted <- recordConflicts store waiting
+  let inConflict = Set.fromList (pendingTxKey <$> conflicted)
+      resend = [txOf p | p <- waiting, p.pendingTxOnline, pendingTxKey p `Set.notMember` inConflict]
+  forM_ resend $ fromStore . storePublish store
   return (fromIntegral (length resend), fromIntegral (length conflicted), txHash . txOf <$> done)
   where
     reached p = isSigned (txOf p) && txHash (txOf p) `Set.member` seen
