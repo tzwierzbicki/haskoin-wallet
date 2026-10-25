@@ -10,6 +10,7 @@ import Data.Maybe
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Word
+import Database.Persist.Sql (toSqlKey)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Util.Arbitrary
@@ -48,13 +49,13 @@ arbitraryDBAccount :: Network -> Ctx -> Gen DBAccount
 arbitraryDBAccount net ctx =
   DBAccount
     <$> arbitraryText
-    <*> (DBWalletKey . fingerprintToText <$> arbitraryFingerprint)
     <*> arbitraryPositive
     <*> return (cs net.name)
     <*> (cs . pathToStr <$> arbitraryDerivPath)
     <*> arbitraryPositive
     <*> arbitraryPositive
     <*> (xPubExport net ctx <$> arbitraryXPubKey ctx)
+    <*> arbitraryMaybe (fingerprintToText <$> arbitraryFingerprint)
     <*> arbitraryPositive
     <*> arbitraryPositive
     <*> arbitraryPositive
@@ -63,9 +64,8 @@ arbitraryDBAccount net ctx =
 arbitraryDBAddress :: Network -> Gen DBAddress
 arbitraryDBAddress net =
   DBAddress
-    <$> arbitraryPositive
-    <*> (DBWalletKey . fingerprintToText <$> arbitraryFingerprint)
-    <*> (cs . pathToStr <$> arbitraryDerivPath)
+    <$> (toSqlKey <$> arbitraryPositive)
+    <*> arbitraryPositive
     <*> (cs . pathToStr <$> arbitraryDerivPath)
     <*> (fromJust . addrToText net <$> arbitraryAddress net)
     <*> arbitraryText
@@ -102,7 +102,7 @@ arbitraryPubKeyDoc ctx =
     <$> arbitraryXPubKey ctx
     <*> arbitraryNetwork
     <*> arbitraryText
-    <*> arbitraryFingerprint
+    <*> arbitraryMaybe arbitraryFingerprint
 
 arbitraryTxSignData :: Network -> Ctx -> Gen TxSignData
 arbitraryTxSignData net ctx =
@@ -112,6 +112,7 @@ arbitraryTxSignData net ctx =
     <*> resize 10 (listOf arbitrarySoftPath)
     <*> resize 10 (listOf arbitrarySoftPath)
     <*> arbitraryMaybe arbitraryNatural
+    <*> arbitraryMaybe arbitraryFingerprint
 
 arbitraryMyOutputs :: Gen MyOutputs
 arbitraryMyOutputs =

@@ -98,7 +98,7 @@ buildTxSignData net ctx cfg gen strategy accId recipients feeByte dust payer min
   found <- fetchWalletCoins net ctx cfg accId (fst <$> recipients) minConf
   built <- liftEither $ buildWalletTx net ctx gen strategy found recipients feeByte dust payer coinControl
   spentFrom <- mapM getRawTx $ nub $ (.outpoint.hash) <$> built.tx.inputs
-  return $ TxSignData built.tx spentFrom built.inputPaths built.outputPaths (Just feeByte)
+  return $ TxSignData built.tx spentFrom built.inputPaths built.outputPaths (Just feeByte) Nothing
 
 -- | Fetch the spendable coins of the account with their derivation paths,
 -- its next free change address, and the paths of the recipients that are

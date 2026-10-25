@@ -237,7 +237,7 @@ sweepBuilderSpec ctx =
     it "refuses to sign a sweep without fee" $ do
       -- The wallet's coin of 500000 is swept in full
       let tx = spendingTx ctx [(txHash walletFunding, 0)] [(otherAddr 0, 500000)]
-          unsigned = TxSignData tx [walletFunding] [firstExternal] [] Nothing
+          unsigned = TxSignData tx [walletFunding] [firstExternal] [] Nothing Nothing
       signTxWithKeys btc ctx unsigned accountPub [walletKey] `shouldBe` Left "The transaction pays no fee"
   where
     seed = mkStdGen 0
@@ -450,7 +450,7 @@ sweepIntoWalletSpec ctx =
         (accId, _) <- testNewAcc ctx "main"
         _ <- genExtAddress ctx def accId ""
         let tx = spendingTx ctx [(txHash keyFunding, 0)] [(otherAddr 0, 90000)]
-            outside = TxSignData tx [keyFunding] [] [] (Just 10)
+            outside = TxSignData tx [keyFunding] [] [] (Just 10) Nothing
         lift $
           dbShouldFailWith "The transaction does not involve this wallet" $
             importPendingTx btc ctx accId outside

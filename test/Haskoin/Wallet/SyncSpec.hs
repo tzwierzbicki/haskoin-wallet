@@ -902,6 +902,7 @@ changeSpendTx ctx =
         [Deriv :/ 0 :/ 0]
         [Deriv :/ 1 :/ 0]
         Nothing
+        Nothing
 
 -- | The payment of 'realPaymentStore' spent by 'changeSpendTx', confirmed
 -- at height 800001: the coin is gone, the change is a coin at internalAddr 0
@@ -1036,6 +1037,7 @@ pendingTx ctx =
         [Deriv :/ 0 :/ 0]
         [Deriv :/ 0 :/ 0]
         Nothing
+        Nothing
 
 -- | The coin of 'realPaymentStore' spent to otherAddr 0, with its signing
 -- data as the wallet keeps it, signed
@@ -1050,6 +1052,7 @@ unsignedSpend ctx =
     [Deriv :/ 0 :/ 0]
     []
     (Just 10)
+    Nothing
 
 -- | The payment of 'realPaymentStore' spent by somebody else's transaction
 -- 8, confirmed at height 800001: the coin is gone
@@ -1072,12 +1075,11 @@ spentElsewhereStore ctx =
     }
 
 pendingRow :: DBAccountId -> Tx -> DBPendingTx
-pendingRow (DBAccountKey wallet accDeriv) tx =
+pendingRow accId tx =
   DBPendingTx
-    { dBPendingTxAccountWallet = wallet,
-      dBPendingTxAccountDerivation = accDeriv,
+    { dBPendingTxAccount = accId,
       dBPendingTxNosigHash = txHashToHex (nosigHash tx),
-      dBPendingTxBlob = BS.toStrict $ Json.encode $ TxSignData tx [] [] [] Nothing,
+      dBPendingTxBlob = BS.toStrict $ Json.encode $ TxSignData tx [] [] [] Nothing Nothing,
       dBPendingTxOnline = False,
       dBPendingTxCreated = fixtureTime
     }

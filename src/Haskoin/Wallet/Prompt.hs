@@ -90,25 +90,27 @@ askPassword = do
 askPassword1 :: IO String
 askPassword1 = askInputLineHidden "Mnemonic passphrase or leave empty: "
 
--- | The signing key of an account from its mnemonic, asking for the
--- passphrase until the key derived matches the public key of the account
-askPrvKey ::
+-- | The signing key of an account from its mnemonic, with the public side
+-- of its seed, asking for the passphrase until the key derived matches the
+-- public key of the account. The one place a private key comes out of the
+-- mnemonic for a command.
+askSigningKey ::
   (MonadIO m) =>
   Network ->
   Ctx ->
   Natural ->
   MnemonicPass ->
   XPubKey ->
-  ExceptT String m XPrvKey
-askPrvKey net ctx idx mnem@(MnemonicPass m _) accPub = do
+  ExceptT String m (PublicSeed, XPrvKey)
+askSigningKey net ctx idx mnem@(MnemonicPass m _) accPub = do
   p <- liftIO askPassword1
-  prvKey <- liftEither $ signingKey net ctx (MnemonicPass m $ cs p) idx
-  let xpub = deriveXPubKey ctx prvKey
-  if accPub == xpub
-    then return prvKey
+  master <- liftEither $ masterKey (MnemonicPass m $ cs p)
+  let seed = seedOfMaster ctx master
+  if seedAccountKey seed net idx == accPub
+    then return (seed, accountKey net ctx master idx)
     else do
       liftIO $ putStrLn "The passphrase or the mnemonic did not match the account "
-      askPrvKey net ctx idx mnem accPub
+      askSigningKey net ctx idx mnem accPub
 
 {- The private keys of a sweep -}
 

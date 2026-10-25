@@ -78,7 +78,7 @@ fromRow (Entity key row) = do
   return
     PendingTx
       { pendingTxKey = key,
-        pendingTxAccount = DBAccountKey (dBPendingTxAccountWallet row) (dBPendingTxAccountDerivation row),
+        pendingTxAccount = dBPendingTxAccount row,
         pendingTxData = tsd,
         pendingTxOnline = dBPendingTxOnline row
       }
@@ -103,11 +103,10 @@ requirePendingTx pendingHash = lookupPendingTx pendingHash >>= liftMaybe noPendi
 
 -- | The rows of an account, newest first: all of them, or a page
 pendingRows :: (MonadUnliftIO m) => DBAccountId -> Maybe Page -> DB m [Entity DBPendingTx]
-pendingRows (DBAccountKey wallet accDeriv) pageM =
+pendingRows accId pageM =
   select . from $ \p -> do
     where_ $
-      p ^. DBPendingTxAccountWallet ==. val wallet
-        &&. p ^. DBPendingTxAccountDerivation ==. val accDeriv
+      p ^. DBPendingTxAccount ==. val accId
     orderBy [desc (p ^. DBPendingTxCreated)]
     forM_ pageM $ \(Page lim off) -> do
       limit $ fromIntegral lim
@@ -204,7 +203,10 @@ importPendingTx net ctx accId tsd = do
     when (held.pendingTxAccount /= accId) $
       throwError "The transaction is pending in another account"
   info <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountXPubKey ctx acc) tsd
-  when (isSigned tx) $ liftEither $ verifySignedTx net ctx tsd
+  when (isSigned tx) $ do
+    liftEither $ verifySignedTx net ctx tsd
+    -- The signer names the seed of the account, which this wallet may not know
+    forM_ (txSignDataFingerprint tsd) $ learnFingerprint accId
   case heldM of
     Just held -> replaceVersion held tsd
     Nothing -> insertPendingTx net accId tsd info.txInfoSummary
@@ -231,7 +233,7 @@ replaceVersion held tsd = do
 
 -- | Store a transaction the account does not hold yet
 insertPendingTx :: (MonadUnliftIO m) => Network -> DBAccountId -> TxSignData -> TxSummary -> ExceptT String (DB m) ()
-insertPendingTx net accId@(DBAccountKey wallet accDeriv) tsd summary = do
+insertPendingTx net accId tsd summary = do
   -- A pending transaction is retired when the sync sees it under one of
   -- the wallet's addresses; one touching none would wait forever
   unless (involvesWallet summary) $
@@ -255,7 +257,7 @@ insertPendingTx net accId@(DBAccountKey wallet accDeriv) tsd summary = do
   unless (null used && all (`notElem` reserved) touched.changePaths) $
     throwError "Some of the internal output addresses are not free"
   time <- liftIO getCurrentTime
-  lift $ P.insert_ $ DBPendingTx wallet accDeriv (txHashToHex (nosigHash (txSignDataTx tsd))) (blob tsd) False time
+  lift $ P.insert_ $ DBPendingTx accId (txHashToHex (nosigHash (txSignDataTx tsd))) (blob tsd) False time
 
 {- Deleting and retiring -}
 

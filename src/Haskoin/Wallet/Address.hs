@@ -68,9 +68,8 @@ addrDeriv AddrExternal = extDeriv
 instance ToJSON DBAddress where
   toJSON addr =
     object
-      [ "index" .= dBAddressIndex addr,
-        "wallet" .= dBAddressAccountWallet addr,
-        "account" .= dBAddressAccountDerivation addr,
+      [ "account" .= fromSqlKey (dBAddressAccount addr),
+        "index" .= dBAddressIndex addr,
         "derivation" .= dBAddressDerivation addr,
         "address" .= dBAddressAddress addr,
         "label" .= dBAddressLabel addr,
@@ -90,9 +89,8 @@ instance FromJSON DBAddress where
     withObject "DBAddress" $ \o -> do
       bal <- o .: "balance"
       DBAddress
-        <$> o .: "index"
-        <*> o .: "wallet"
-        <*> o .: "account"
+        <$> (toSqlKey <$> o .: "account")
+        <*> o .: "index"
         <*> o .: "derivation"
         <*> o .: "address"
         <*> o .: "label"
@@ -154,11 +152,10 @@ genExtAddress ctx cfg accId label = do
 -- soon as nothing holds it, so a deleted pending transaction gives its
 -- change address back.
 nextChangeAddress :: (MonadUnliftIO m) => Ctx -> Config -> DBAccountId -> [SoftPath] -> ExceptT String (DB m) DBAddress
-nextChangeAddress ctx cfg accId@(DBAccountKey wallet accDeriv) reserved = do
+nextChangeAddress ctx cfg accId reserved = do
   found <- lift . selectOne . from $ \a -> do
     where_ $
-      a ^. DBAddressAccountWallet ==. val wallet
-        &&. a ^. DBAddressAccountDerivation ==. val accDeriv
+      a ^. DBAddressAccount ==. val accId
         &&. a ^. DBAddressInternal ==. val True
         &&. a ^. DBAddressBalanceTxs ==. val 0
         &&. a ^. DBAddressDerivation `notIn` valList (pathText <$> reserved)
@@ -210,11 +207,10 @@ checkGap cfg accId addrType = do
 
 -- | The highest index of the chain with transactions, if any
 highestUsedIndex :: (MonadUnliftIO m) => DBAccountId -> AddrType -> DB m (Maybe Int)
-highestUsedIndex (DBAccountKey wallet accDeriv) addrType = do
+highestUsedIndex accId addrType = do
   resM <- (flatMaybe <$>) . selectOne . from $ \a -> do
     where_ $
-      a ^. DBAddressAccountWallet ==. val wallet
-        &&. a ^. DBAddressAccountDerivation ==. val accDeriv
+      a ^. DBAddressAccount ==. val accId
         &&. a ^. DBAddressInternal ==. val (isInternal addrType)
         &&. a ^. DBAddressBalanceTxs >. val 0
     return $ max_ $ a ^. DBAddressIndex
@@ -222,18 +218,18 @@ highestUsedIndex (DBAccountKey wallet accDeriv) addrType = do
 
 -- | Store an address of a chain, at its index, without a label or balances
 insertAddress :: (MonadUnliftIO m) => Network -> DBAccountId -> AddrType -> Int -> Address -> ExceptT String (DB m) DBAddress
-insertAddress net (DBAccountKey wallet accDeriv) addrType index addr = do
+insertAddress net accId addrType index addr = do
   time <- liftIO getCurrentTime
   addrT <- liftEither $ addrToTextE net addr
   let path = pathText $ addrDeriv addrType :/ fromIntegral index
-      row = DBAddress index wallet accDeriv path addrT "" 0 0 0 0 0 (isInternal addrType) time
+      row = DBAddress accId index path addrT "" 0 0 0 0 0 (isInternal addrType) time
   lift $ P.insert_ row
   return row
 
 -- | Label a receiving address of the account, by its index
 setAddrLabel :: (MonadUnliftIO m) => DBAccountId -> Int -> Text -> ExceptT String (DB m) DBAddress
-setAddrLabel (DBAccountKey wallet accDeriv) idx label = do
-  let key = DBAddressKey wallet accDeriv (pathText $ extDeriv :/ fromIntegral idx)
+setAddrLabel accId idx label = do
+  let key = DBAddressKey accId (pathText $ extDeriv :/ fromIntegral idx)
   row <- lift (P.get key) >>= liftMaybe ("Address " <> show idx <> " does not exist")
   lift $ P.update key [DBAddressLabel P.=. label]
   return row {dBAddressLabel = label}
@@ -260,7 +256,7 @@ updateAddressBalances net storeBals =
 getAddressByText :: (MonadUnliftIO m) => Text -> ExceptT String (DB m) (DBAccount, DBAddress)
 getAddressByText addrTxt = do
   Entity _ addr <- lift (P.getBy $ UniqueAddress addrTxt) >>= liftMaybe "Address does not exist"
-  acc <- getAccountById $ DBAccountKey (dBAddressAccountWallet addr) (dBAddressAccountDerivation addr)
+  acc <- getAccountById $ dBAddressAccount addr
   return (acc, addr)
 
 -- | Those of the addresses that have transactions on the chain
@@ -275,11 +271,10 @@ usedAddresses addrs = do
 
 -- | A page of the addresses of a chain of the account, newest first
 addressPage :: (MonadUnliftIO m) => DBAccountId -> AddrType -> Page -> DB m [DBAddress]
-addressPage (DBAccountKey wallet accDeriv) addrType (Page lim off) = do
+addressPage accId addrType (Page lim off) = do
   rows <- select . from $ \a -> do
     where_ $
-      a ^. DBAddressAccountWallet ==. val wallet
-        &&. a ^. DBAddressAccountDerivation ==. val accDeriv
+      a ^. DBAddressAccount ==. val accId
         &&. a ^. DBAddressInternal ==. val (isInternal addrType)
     orderBy [desc (a ^. DBAddressIndex)]
     limit $ fromIntegral lim
@@ -289,11 +284,10 @@ addressPage (DBAccountKey wallet accDeriv) addrType (Page lim off) = do
 
 -- | Every address of the account, with its derivation path and its balance
 allAddressesMap :: (MonadUnliftIO m) => Network -> DBAccountId -> ExceptT String (DB m) (Map Address SoftPath, Map Address AddressBalance)
-allAddressesMap net (DBAccountKey wallet accDeriv) = do
+allAddressesMap net accId = do
   rows <- lift . select . from $ \a -> do
     where_ $
-      a ^. DBAddressAccountWallet ==. val wallet
-        &&. a ^. DBAddressAccountDerivation ==. val accDeriv
+      a ^. DBAddressAccount ==. val accId
     return a
   res <- forM rows $ \(Entity _ row) -> do
     (addr, path) <- liftEither $ fromDBAddr net row
@@ -304,13 +298,12 @@ allAddressesMap net (DBAccountKey wallet accDeriv) = do
 -- | The derivation path of an address of the account, or Nothing for an
 -- address that is not the account's
 addressPath :: (MonadUnliftIO m) => Network -> DBAccountId -> Address -> ExceptT String (DB m) (Maybe SoftPath)
-addressPath net (DBAccountKey wallet accDeriv) addr = do
+addressPath net accId addr = do
   addrT <- liftEither $ addrToTextE net addr
   derivM <- lift . selectOne . from $ \a -> do
     where_ $
       a ^. DBAddressAddress ==. val addrT
-        &&. a ^. DBAddressAccountWallet ==. val wallet
-        &&. a ^. DBAddressAccountDerivation ==. val accDeriv
+        &&. a ^. DBAddressAccount ==. val accId
     return $ a ^. DBAddressDerivation
   forM derivM $ liftEither . pathFromText . unValue
 

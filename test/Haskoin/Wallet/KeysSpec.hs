@@ -1,8 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The keys of the test wallets, derived from their mnemonics. The shared
--- wallet of "Haskoin.Wallet.TestUtils" writes its keys and fingerprint out
--- in full; these tests tie those values to the derivation. Then the
+-- wallet of "Haskoin.Wallet.TestUtils" writes its keys and the fingerprint
+-- of its seed out in full; these tests tie those values to the derivation. Then the
 -- private keys of a sweep, in every format a user may write them.
 module Haskoin.Wallet.KeysSpec where
 
@@ -22,12 +22,14 @@ spec = do
         xPrvExport btc <$> signingKey btc ctx testMnemonic 0 `shouldBe` Right testAccountXPrv
       it "derives the account public key of the test wallet" $
         xPubExport btc ctx . deriveXPubKey ctx <$> signingKey btc ctx testMnemonic 0 `shouldBe` Right testAccountXPub
-      it "derives the fingerprint of the test wallet" $
-        fingerprintToText <$> walletFingerprint btc ctx testMnemonic `shouldBe` Right testFingerprintText
+      it "derives the fingerprint of the seed from its master public key, the same on every network" $
+        fingerprintToText . seedFingerprint <$> seedOf ctx testMnemonic `shouldBe` Right testFingerprintText
+      it "derives the public key of an account from the public side of the seed" $
+        (\seed -> xPubExport btc ctx (seedAccountKey seed btc 0)) <$> seedOf ctx testMnemonic `shouldBe` Right testAccountXPub
       it "derives the keys and the fingerprint of the second wallet" $ do
         xPrvExport btc <$> signingKey btc ctx testMnemonic2 0 `shouldBe` Right testAccountXPrv2
         xPubExport btc ctx . deriveXPubKey ctx <$> signingKey btc ctx testMnemonic2 0 `shouldBe` Right testAccountXPub2
-        fingerprintToText <$> walletFingerprint btc ctx testMnemonic2 `shouldBe` Right testFingerprintText2
+        fingerprintToText . seedFingerprint <$> seedOf ctx testMnemonic2 `shouldBe` Right testFingerprintText2
 
 
 {- Private keys of a sweep -}

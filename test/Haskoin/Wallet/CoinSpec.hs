@@ -32,10 +32,8 @@ coinSpec ctx =
       let dbCoin = head (insertedCoins refreshed)
       liftIO $ do
         refreshedCount refreshed `shouldBe` 1
-        dBCoinAccountWallet dbCoin `shouldBe` DBWalletKey testFingerprintText
-        dBCoinAccountDerivation dbCoin `shouldBe` "/44'/0'/0'"
+        dBCoinAccount dbCoin `shouldBe` accId
         dBCoinAddress dbCoin `shouldBe` head externalAddrsText
-        dBCoinConfirmed dbCoin `shouldBe` False
       -- Test JSON coins
       let jsonCoin1 = forceRight $ toJsonCoin btc Nothing Set.empty dbCoin
       liftIO $

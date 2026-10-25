@@ -4,8 +4,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
--- | The accounts of the wallet: a BIP44 account of a network under a
--- wallet, with its public key, its balances and its address counts.
+-- | The accounts of the wallet: a BIP44 account of a network, identified by
+-- its key, with the fingerprint of its seed once hw has learnt it, its
+-- balances and its address counts.
 module Haskoin.Wallet.Account where
 
 import Conduit (MonadUnliftIO)
@@ -14,18 +15,17 @@ import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Reader (MonadTrans (lift))
 import Data.Aeson
-import Data.Either (fromRight)
-import Data.List (find)
-import Data.Maybe (fromJust, fromMaybe)
+import Data.List (sortOn)
+import Data.Maybe (fromJust, fromMaybe, isNothing)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Time (getCurrentTime)
 import Data.Word (Word64)
-import Database.Esqueleto.Legacy as E
+import Database.Esqueleto.Legacy as E hiding (isNothing)
 import qualified Database.Persist as P
 import Haskoin
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Keys (bip44Deriv, xPubIndex)
+import Haskoin.Wallet.Keys (PublicSeed (..), bip44Deriv, xPubIndex)
 import Numeric.Natural (Natural)
 
 {- Accounts in JSON -}
@@ -34,13 +34,13 @@ instance ToJSON DBAccount where
   toJSON acc =
     object
       [ "name" .= dBAccountName acc,
-        "wallet" .= dBAccountWallet acc,
         "index" .= dBAccountIndex acc,
         "network" .= dBAccountNetwork acc,
         "derivation" .= dBAccountDerivation acc,
         "external" .= dBAccountExternal acc,
         "internal" .= dBAccountInternal acc,
         "xPubKey" .= dBAccountXPubKey acc,
+        "fingerprint" .= dBAccountFingerprint acc,
         "balance" .= toJSON (AccountBalance confirm unconfirm coins),
         "created" .= dBAccountCreated acc
       ]
@@ -55,13 +55,13 @@ instance FromJSON DBAccount where
       bal <- o .: "balance"
       DBAccount
         <$> o .: "name"
-        <*> o .: "wallet"
         <*> o .: "index"
         <*> o .: "network"
         <*> o .: "derivation"
         <*> o .: "external"
         <*> o .: "internal"
         <*> o .: "xPubKey"
+        <*> o .:? "fingerprint"
         <*> (bal .: "confirmed")
         <*> (bal .: "unconfirmed")
         <*> (bal .: "coins")
@@ -105,76 +105,63 @@ accountNetwork =
     . cs
     . dBAccountNetwork
 
-accountWallet :: DBAccount -> Fingerprint
-accountWallet acc =
-  let (DBWalletKey walletFP) = dBAccountWallet acc
-   in fromRight (error "Invalid WalletId in database") $
-        textToFingerprint walletFP
-
 accountXPubKey :: Ctx -> DBAccount -> XPubKey
 accountXPubKey ctx acc =
   fromMaybe (error "Invalid XPubKey in database") $
     xPubImport (accountNetwork acc) ctx (dBAccountXPubKey acc)
 
--- | The smallest index not taken: the index of the next account of a
--- wallet on a network
-smallestUnused :: [Natural] -> Natural
-smallestUnused xs = fromJust $ find (not . (`elem` xs)) [0 ..]
+-- | The fingerprint of the seed of the account, when hw has learnt it
+accountFingerprint :: DBAccount -> Maybe Fingerprint
+accountFingerprint acc = eitherToMaybe . textToFingerprint =<< dBAccountFingerprint acc
 
 {- Accounts in the database -}
 
-nextAccountDeriv :: (MonadUnliftIO m) => Fingerprint -> Network -> DB m Natural
-nextAccountDeriv walletFP net = do
-  let walletId = DBWalletKey $ fingerprintToText walletFP
-  idxs <-
-    select . from $ \a -> do
-      where_ $
-        a ^. DBAccountNetwork ==. val (cs net.name)
-          &&. a ^. DBAccountWallet ==. val walletId
-      return $ a ^. DBAccountIndex
-  return $ smallestUnused $ fromIntegral . unValue <$> idxs
+-- | The account that holds the key, if any
+accountWithKey :: (MonadUnliftIO m) => Network -> Ctx -> XPubKey -> DB m (Maybe (DBAccountId, DBAccount))
+accountWithKey net ctx key = fmap entityPair <$> P.getBy (UniqueXPubKey $ xPubExport net ctx key)
+
+entityPair :: Entity a -> (P.Key a, a)
+entityPair e = (entityKey e, entityVal e)
+
+-- | The index of the next account of a seed on a network: the smallest one
+-- whose key the database does not hold. An account deleted leaves its
+-- index free, and creating it again gives the same account.
+nextAccountIndex :: (MonadUnliftIO m) => Network -> Ctx -> PublicSeed -> DB m Natural
+nextAccountIndex net ctx seed = go 0
+  where
+    go i = do
+      held <- accountWithKey net ctx $ seedAccountKey seed net i
+      maybe (return i) (const $ go (i + 1)) held
 
 existsAccount :: (MonadUnliftIO m) => Text -> DB m Bool
 existsAccount name = P.existsBy $ UniqueName name
 
--- | The account that holds the key, if any
-accountWithKey :: (MonadUnliftIO m) => Network -> Ctx -> XPubKey -> DB m (Maybe DBAccount)
-accountWithKey net ctx key = fmap entityVal <$> P.getBy (UniqueXPubKey $ xPubExport net ctx key)
-
-getWalletOrCreate :: (MonadUnliftIO m) => Fingerprint -> DB m DBWalletId
-getWalletOrCreate fp = do
-  let key = DBWalletKey $ fingerprintToText fp
-  walletM <- P.get key
-  case walletM of
-    Just _ -> return key
-    _ -> P.insert $ DBWallet $ fingerprintToText fp
-
+-- | Store an account of a network under a name, from its public key, with
+-- the fingerprint of its seed when known
 insertAccount ::
   (MonadUnliftIO m) =>
   Network ->
   Ctx ->
-  Fingerprint ->
   Text ->
   XPubKey ->
+  Maybe Fingerprint ->
   ExceptT String (DB m) (DBAccountId, DBAccount)
-insertAccount net ctx walletFP name xpub = do
+insertAccount net ctx name xpub fingerprintM = do
   existsName <- lift $ existsAccount name
   when existsName $ throwError $ "Account " <> cs name <> " already exists"
   holderM <- lift $ accountWithKey net ctx xpub
-  forM_ holderM $ throwError . keyTaken
+  forM_ holderM $ throwError . keyTaken . snd
   time <- liftIO getCurrentTime
-  walletId <- lift $ getWalletOrCreate walletFP
-  let path = bip44Deriv net $ fromIntegral $ xPubChild xpub
-      account =
+  let account =
         DBAccount
           { dBAccountName = name,
-            dBAccountWallet = walletId,
             dBAccountIndex = fromIntegral $ xPubIndex xpub,
             dBAccountNetwork = cs net.name,
-            dBAccountDerivation = cs $ pathToStr path,
+            dBAccountDerivation = cs $ pathToStr $ bip44Deriv net (xPubIndex xpub),
             dBAccountExternal = 0,
             dBAccountInternal = 0,
             dBAccountXPubKey = xPubExport net ctx xpub,
+            dBAccountFingerprint = fingerprintToText <$> fingerprintM,
             dBAccountBalanceConfirmed = 0,
             dBAccountBalanceUnconfirmed = 0,
             dBAccountBalanceCoins = 0,
@@ -192,24 +179,14 @@ insertAccount net ctx walletFP name xpub = do
           "Account " <> cs (dBAccountName holder) <> " on " <> cs (dBAccountNetwork holder)
             <> " already has this key: the test networks share their account keys, so a wallet holds one of them per account index"
 
+-- | Delete an account with its addresses, summaries, coins and pending
+-- transactions
 deleteAccount :: (MonadUnliftIO m) => DBAccountId -> DB m ()
-deleteAccount accId@(DBAccountKey accWallet accDeriv) = do
-  delete . from $ \a ->
-    where_ $
-      a ^. DBAddressAccountWallet ==. val accWallet
-        &&. a ^. DBAddressAccountDerivation ==. val accDeriv
-  delete . from $ \t ->
-    where_ $
-      t ^. DBTxInfoAccountWallet ==. val accWallet
-        &&. t ^. DBTxInfoAccountDerivation ==. val accDeriv
-  delete . from $ \c ->
-    where_ $
-      c ^. DBCoinAccountWallet ==. val accWallet
-        &&. c ^. DBCoinAccountDerivation ==. val accDeriv
-  delete . from $ \p ->
-    where_ $
-      p ^. DBPendingTxAccountWallet ==. val accWallet
-        &&. p ^. DBPendingTxAccountDerivation ==. val accDeriv
+deleteAccount accId = do
+  delete . from $ \a -> where_ $ a ^. DBAddressAccount ==. val accId
+  delete . from $ \t -> where_ $ t ^. DBTxInfoAccount ==. val accId
+  delete . from $ \c -> where_ $ c ^. DBCoinAccount ==. val accId
+  delete . from $ \p -> where_ $ p ^. DBPendingTxAccount ==. val accId
   P.delete accId
 
 -- When a name is provided, get that account or throw an error if it doesn't
@@ -235,21 +212,13 @@ getAccountById ::
   (MonadUnliftIO m) => DBAccountId -> ExceptT String (DB m) DBAccount
 getAccountById accId = liftMaybe "Invalid account" =<< lift (P.get accId)
 
+-- | Every account, those of one seed together: by the fingerprint of the
+-- seed, the accounts whose seed is not known yet last, then by network and
+-- index
 getAccounts :: (MonadUnliftIO m) => DB m [(DBAccountId, DBAccount)]
-getAccounts =
-  (go <$>)
-    <$> P.selectList
-      []
-      [P.Asc DBAccountWallet, P.Asc DBAccountNetwork, P.Asc DBAccountIndex]
+getAccounts = sortOn (order . snd) . map entityPair <$> P.selectList [] []
   where
-    go a = (entityKey a, entityVal a)
-
-getAccountNames :: (MonadUnliftIO m) => DB m [Text]
-getAccountNames = do
-  res <- select . from $ \a -> do
-    orderBy [asc $ a ^. DBAccountCreated]
-    return $ a ^. DBAccountName
-  return $ unValue <$> res
+    order acc = (isNothing (dBAccountFingerprint acc), dBAccountFingerprint acc, dBAccountNetwork acc, dBAccountIndex acc)
 
 -- | Rename an account. Renaming it to its own name changes nothing.
 renameAccount ::
@@ -269,55 +238,91 @@ renameAccount oldName newName
             then throwError $ "The account " <> cs oldName <> " does not exist"
             else snd <$> getAccountByName (Just newName)
 
+-- | Add up the balances of the addresses of an account into the account
 updateAccountBalances :: (MonadUnliftIO m) => DBAccountId -> DB m DBAccount
-updateAccountBalances accId@(DBAccountKey wallet accDeriv) = do
+updateAccountBalances accId = do
   confirm <- selectSum DBAddressBalanceConfirmed
   unconfirm <- selectSum DBAddressBalanceUnconfirmed
   coins <- selectSum DBAddressBalanceCoins
   update $ \a -> do
     set
       a
-      [ DBAccountBalanceConfirmed =. val (unpack confirm),
-        DBAccountBalanceUnconfirmed =. val (unpack unconfirm),
-        DBAccountBalanceCoins =. val (unpack coins)
+      [ DBAccountBalanceConfirmed =. val (total confirm),
+        DBAccountBalanceUnconfirmed =. val (total unconfirm),
+        DBAccountBalanceCoins =. val (total coins)
       ]
     where_ $ a ^. DBAccountId ==. val accId
   fromJust <$> P.get accId
   where
-    unpack m = fromMaybe 0 $ unValue $ fromMaybe (Value $ Just 0) m
+    -- Zero when the account has no address yet
+    total = joinMaybe 0 id
     selectSum field =
       selectOne . from $ \a -> do
-        where_ $
-          a ^. DBAddressAccountWallet ==. val wallet
-            &&. a ^. DBAddressAccountDerivation ==. val accDeriv
+        where_ $ a ^. DBAddressAccount ==. val accId
         return $ sum_ $ a ^. field
+
+{- The fingerprint of the seed -}
+
+-- | Record the fingerprint of a seed on each of its accounts in the
+-- database, those whose key the seed derives. A command that holds the
+-- mnemonic does this, so that every account of the seed, on every network,
+-- shows the fingerprint.
+recordFingerprint :: (MonadUnliftIO m) => Ctx -> PublicSeed -> DB m ()
+recordFingerprint ctx seed = do
+  accs <- getAccounts
+  forM_ accs $ \(accId, acc) -> do
+    let net = accountNetwork acc
+        derived = xPubExport net ctx $ seedAccountKey seed net (accountIndex acc)
+    when (derived == dBAccountXPubKey acc && dBAccountFingerprint acc /= Just fingerprint) $
+      P.update accId [DBAccountFingerprint P.=. Just fingerprint]
+  where
+    fingerprint = fingerprintToText $ seedFingerprint seed
+
+-- | Record the fingerprint of the seed of an account as the offline wallet
+-- reports it, in an exported document or with a signed transaction. One
+-- already recorded must be the same.
+learnFingerprint :: (MonadUnliftIO m) => DBAccountId -> Fingerprint -> ExceptT String (DB m) ()
+learnFingerprint accId fingerprint = do
+  acc <- getAccountById accId
+  case dBAccountFingerprint acc of
+    Nothing -> lift $ P.update accId [DBAccountFingerprint P.=. Just reported]
+    Just known
+      | known == reported -> return ()
+      | otherwise ->
+          throwError $
+            "The account " <> cs (dBAccountName acc) <> " is of the seed " <> cs known <> ", not of " <> cs reported
+  where
+    reported = fingerprintToText fingerprint
 
 {- The export document -}
 
 -- | An account as exportacc writes it and importacc reads it: its public
--- key, its network, its name and the fingerprint of its wallet
+-- key, its network, its name and the fingerprint of its seed when known.
+-- The documents of earlier versions of hw carry a wallet id instead, which
+-- is ignored.
 data PubKeyDoc = PubKeyDoc
   { documentPubKey :: !XPubKey,
     documentNetwork :: !Network,
     documentName :: !Text,
-    documentWallet :: !Fingerprint
+    documentFingerprint :: !(Maybe Fingerprint)
   }
   deriving (Eq, Show)
 
 instance MarshalJSON Ctx PubKeyDoc where
   unmarshalValue ctx =
     withObject "pubkeydocument" $ \o -> do
-      net <- maybe mzero return . netByName =<< o .: "network"
+      netName <- o .: "network"
+      net <- maybe (fail $ "Unknown network " <> netName) return $ netByName netName
       PubKeyDoc
         <$> (unmarshalValue (net, ctx) =<< o .: "xpubkey")
         <*> return net
-        <*> (o .: "name")
-        <*> (o .: "wallet")
+        <*> o .: "name"
+        <*> o .:? "fingerprint"
 
-  marshalValue ctx (PubKeyDoc k net name wallet) =
+  marshalValue ctx (PubKeyDoc k net name fingerprint) =
     object
       [ "xpubkey" .= marshalValue (net, ctx) k,
         "network" .= net.name,
         "name" .= name,
-        "wallet" .= wallet
+        "fingerprint" .= fingerprint
       ]

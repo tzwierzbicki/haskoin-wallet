@@ -189,7 +189,7 @@ buildSweepSignData net ctx gen found sweepTo feeByte dust = do
       outputs = [TxOut amount (marshal ctx script) | (script, amount) <- zip shuffledScripts ((each + remainder) : repeat each)]
       tx = Tx 1 [TxIn c.outpoint BS.empty maxBound | c <- shuffledCoins] outputs [] 0
       inputPaths = pathsOf $ mapMaybe (.address) found.coins
-  return $ TxSignData tx found.transactions inputPaths (pathsOf sweepTo) (Just feeByte)
+  return $ TxSignData tx found.transactions inputPaths (pathsOf sweepTo) (Just feeByte) Nothing
   where
     pathsOf addrs = nub $ mapMaybe (`Map.lookup` found.walletAddrs) addrs
     scriptOf addr = maybeToEither ("Can not pay to " <> addrToString net addr) (addressToOutput addr)

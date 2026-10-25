@@ -272,15 +272,15 @@ naturalPrinter nat
 accountPrinter :: AmountUnit -> DBAccount -> Printer
 accountPrinter unit acc =
   vcat
-    [ keyPrinter 8 "Account" <> formatAccount (cs $ dBAccountName acc),
-      mconcat [keyPrinter 8 "Wallet", formatValue $ cs fp],
-      mconcat [keyPrinter 8 "Deriv", formatDeriv deriv],
-      mconcat [keyPrinter 8 "Network", formatValue net],
+    [ keyPrinter 11 "Account" <> formatAccount (cs $ dBAccountName acc),
+      mconcat [keyPrinter 11 "Fingerprint", formatValue $ maybe "unknown" cs (dBAccountFingerprint acc)],
+      mconcat [keyPrinter 11 "Deriv", formatDeriv deriv],
+      mconcat [keyPrinter 11 "Network", formatValue net],
       mconcat
-        [keyPrinter 8 "External", formatValue $ show $ dBAccountExternal acc],
+        [keyPrinter 11 "External", formatValue $ show $ dBAccountExternal acc],
       mconcat
-        [keyPrinter 8 "Internal", formatValue $ show $ dBAccountInternal acc],
-      mconcat [keyPrinter 8 "Created", formatValue created],
+        [keyPrinter 11 "Internal", formatValue $ show $ dBAccountInternal acc],
+      mconcat [keyPrinter 11 "Created", formatValue created],
       formatKey "Balances:",
       nest 2 $
         mconcat
@@ -299,7 +299,6 @@ accountPrinter unit acc =
           ]
     ]
   where
-    DBWalletKey fp = dBAccountWallet acc
     deriv = cs $ dBAccountDerivation acc
     net = (accountNetwork acc).name
     utctime = dBAccountCreated acc

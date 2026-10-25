@@ -43,9 +43,9 @@ spec = do
     describe "Sending a transaction from a file" $ do
       -- The checks before anything is uploaded: no network is reached, and
       -- the wallet is an empty database in a scratch directory
-      let unsignedSweep = TxSignData (spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 1000)]) [] [] [] (Just 1)
+      let unsignedSweep = TxSignData (spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 1000)]) [] [] [] (Just 1) Nothing
           funding = fundingTx ctx 1 [(externalAddr 0, 50000)]
-          signedPayment = signedByWallet ctx $ TxSignData (spendingTx ctx [(txHash funding, 0)] [(otherAddr 0, 40000)]) [funding] [Deriv :/ 0 :/ 0] [] Nothing
+          signedPayment = signedByWallet ctx $ TxSignData (spendingTx ctx [(txHash funding, 0)] [(otherAddr 0, 40000)]) [funding] [Deriv :/ 0 :/ 0] [] Nothing Nothing
           walletIn dir = (def :: Config) {configDatabaseFile = Just (dir </> "accounts.sqlite")}
           -- The tables, which hw creates before it runs a command
           emptyWallet dir = inDatabaseFile (dir </> "accounts.sqlite") (createTables migrateAll)

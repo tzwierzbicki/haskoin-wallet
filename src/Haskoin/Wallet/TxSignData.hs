@@ -4,11 +4,12 @@
 
 -- | The signing data of a transaction: the transaction, the transactions it
 -- spends from, which say what each input is worth, the derivation paths of
--- the wallet's own inputs and outputs, and the fee rate it was built for.
--- The builders produce it, the signers sign it, and the commands write it
--- to files and keep it among the pending transactions of the database, as
--- JSON. Whether the transaction is signed is read from the transaction
--- itself. Before and after signing, it is identified by its 'nosigHash'.
+-- the wallet's own inputs and outputs, the fee rate it was built for, and
+-- the fingerprint of the seed once it has been signed. The builders produce
+-- it, the signers sign it, and the commands write it to files and keep it
+-- among the pending transactions of the database, as JSON. Whether the
+-- transaction is signed is read from the transaction itself. Before and
+-- after signing, it is identified by its 'nosigHash'.
 module Haskoin.Wallet.TxSignData where
 
 import Control.Monad
@@ -26,7 +27,10 @@ data TxSignData = TxSignData
     -- | The fee rate the transaction was built for, in satoshis per byte,
     -- when known: what the fee pays beyond that rate is change that was not
     -- worth an output
-    txSignDataFeeRate :: !(Maybe Natural)
+    txSignDataFeeRate :: !(Maybe Natural),
+    -- | The fingerprint of the seed that signed the transaction, which the
+    -- signer writes so that an online wallet learns the seed of the account
+    txSignDataFingerprint :: !(Maybe Fingerprint)
   }
   deriving (Eq, Show)
 
@@ -45,15 +49,17 @@ instance FromJSON TxSignData where
         <$> o .: "inputpaths"
         <*> o .: "outputpaths"
         <*> o .:? "feerate"
+        <*> o .:? "fingerprint"
 
 instance ToJSON TxSignData where
-  toJSON (TxSignData t i oi op r) =
+  toJSON (TxSignData t i oi op r f) =
     object
       [ "tx" .= encodeHex (S.encode t),
         "txinputs" .= (encodeHex . S.encode <$> i),
         "inputpaths" .= oi,
         "outputpaths" .= op,
-        "feerate" .= r
+        "feerate" .= r,
+        "fingerprint" .= f
       ]
 
 instance MarshalJSON Ctx TxSignData where

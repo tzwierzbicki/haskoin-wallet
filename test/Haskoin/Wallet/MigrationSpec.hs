@@ -39,11 +39,11 @@ spec = prepareContext $ \ctx ->
       inMemory $ do
         createTables migrateAll
         P.insert_ $ DBVersion latestDatabaseVersion
-        P.insert_ $ DBWallet "892eb8e4"
+        P.insert_ $ DBBest "btc" "00000000000000000002a7c4c1e48d76c5a37902165a270156b7a8d72728a054" 800105
         commitFixture
-        original <- (,) <$> databaseSchema <*> tablesRows ["d_b_version", "d_b_wallet"]
+        original <- (,) <$> databaseSchema <*> tablesRows ["d_b_version", "d_b_best"]
         migrateAndCollect ctx `dbShouldBe` (Right (), [], [])
-        ((,) <$> databaseSchema <*> tablesRows ["d_b_version", "d_b_wallet"]) `dbShouldBe` original
+        ((,) <$> databaseSchema <*> tablesRows ["d_b_version", "d_b_best"]) `dbShouldBe` original
 
     it "backs up the database once, then runs the steps one after the other" $
       inMemory $ do

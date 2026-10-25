@@ -320,7 +320,7 @@ importingSpec ctx =
         let spend = spendingTx ctx [(txHash (funding ctx), 0)] [(otherAddr 3, 19000)]
         lift $
           dbShouldFailWith "A coin referenced by the transaction is locked" $
-            importPendingTx btc ctx accId (TxSignData spend [funding ctx] [Deriv :/ 0 :/ 0] [] Nothing)
+            importPendingTx btc ctx accId (TxSignData spend [funding ctx] [Deriv :/ 0 :/ 0] [] Nothing Nothing)
     it "refuses a transaction spending a coin the wallet does not have" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -330,7 +330,7 @@ importingSpec ctx =
             spend = spendingTx ctx [(txHash unseen, 0)] [(otherAddr 3, 4000)]
         lift $
           dbShouldFailWith "A coin referenced by the transaction does not exist" $
-            importPendingTx btc ctx accId (TxSignData spend [unseen] [Deriv :/ 0 :/ 0] [] Nothing)
+            importPendingTx btc ctx accId (TxSignData spend [unseen] [Deriv :/ 0 :/ 0] [] Nothing Nothing)
     it "refuses a transaction paying change to an address the wallet has not generated" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -339,7 +339,7 @@ importingSpec ctx =
         let spend = spendingTx ctx [(txHash (funding ctx), 0)] [(internalAddr 1, 11774), (otherAddr 0, 8000)]
         lift $
           dbShouldFailWith "Some referenced addresses do not exist" $
-            importPendingTx btc ctx accId (TxSignData spend [funding ctx] [Deriv :/ 0 :/ 0] [Deriv :/ 1 :/ 1] Nothing)
+            importPendingTx btc ctx accId (TxSignData spend [funding ctx] [Deriv :/ 0 :/ 0] [Deriv :/ 1 :/ 1] Nothing Nothing)
     it "refuses a transaction whose change address another pending transaction holds" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -350,7 +350,7 @@ importingSpec ctx =
         let spend = spendingTx ctx [(txHash (secondFunding ctx), 0)] [(internalAddr 0, 2774), (otherAddr 1, 7000)]
         lift $
           dbShouldFailWith "Some of the internal output addresses are not free" $
-            importPendingTx btc ctx accId (TxSignData spend [secondFunding ctx] [Deriv :/ 0 :/ 1] [Deriv :/ 1 :/ 0] Nothing)
+            importPendingTx btc ctx accId (TxSignData spend [secondFunding ctx] [Deriv :/ 0 :/ 1] [Deriv :/ 1 :/ 0] Nothing Nothing)
 
 listingSpec :: Ctx -> Spec
 listingSpec ctx =
@@ -370,8 +370,8 @@ listingSpec ctx =
         pendingTxPage ctx accId (Page 5 0) `dbShouldBeE` []
     it "reports a row whose signing data does not decode, instead of hiding it" $
       inDatabaseE $ do
-        (accId@(DBAccountKey wallet accDeriv), _) <- testNewAcc ctx "test"
-        lift $ P.insert_ $ DBPendingTx wallet accDeriv (txHashToHex (fakeTxHash 7)) "not signing data" False fixtureTime
+        (accId, _) <- testNewAcc ctx "test"
+        lift $ P.insert_ $ DBPendingTx accId (txHashToHex (fakeTxHash 7)) "not signing data" False fixtureTime
         listed <- lift $ runExceptT $ pendingTxPage ctx accId (Page 5 0)
         deleted <- lift $ runExceptT $ deleteTx ctx (const (toStore emptyStore)) (fakeTxHash 7)
         liftIO $ do
@@ -445,7 +445,7 @@ sendingSpec ctx =
       readIORef asks `shouldReturn` 3
     it "sees the transaction on the first ask" $ do
       asks <- newIORef 0
-      let tsd = TxSignData (spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 8000)]) [] [] [] Nothing
+      let tsd = TxSignData (spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 8000)]) [] [] [] Nothing Nothing
       runExceptT (broadcastWith 1000 3 (countingAsks asks (toStore (storeKnowing ctx tsd))) (txSignDataTx tsd))
         `shouldReturn` Right True
       readIORef asks `shouldReturn` 1

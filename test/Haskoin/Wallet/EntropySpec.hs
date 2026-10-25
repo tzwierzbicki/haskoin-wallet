@@ -189,14 +189,13 @@ testVectors4 =
 testBip44Vector :: Ctx -> Config -> (Text, Text, Text, Text) -> Assertion
 testBip44Vector ctx cfg (mnem, pass, addr0, addr1) = do
   inDatabaseE $ do
-    (accId, _) <- insertAccount btc ctx walletFP "test" pub
+    (accId, _) <- insertAccount btc ctx "test" pub Nothing
     extAddr <- genExtAddress ctx cfg accId ""
     intAddr <- nextChangeAddress ctx cfg accId []
     liftIO $ addr0 `shouldBe` dBAddressAddress extAddr
     liftIO $ addr1 `shouldBe` dBAddressAddress intAddr
   where
     mnemPass = MnemonicPass mnem pass
-    walletFP = forceRight $ walletFingerprint btc ctx mnemPass
     prv = forceRight $ signingKey btc ctx mnemPass 0
     pub = deriveXPubKey ctx prv
 

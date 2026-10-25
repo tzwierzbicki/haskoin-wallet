@@ -50,7 +50,7 @@ walletSigner ctx v = do
 -- the hw/btc/debit vector of test/data/tx-signing.
 simpleTransaction :: Ctx -> TxSignData
 simpleTransaction ctx =
-  TxSignData tx [simpleFunding ctx] [Deriv :/ 0 :/ 0] [Deriv :/ 1 :/ 0] Nothing
+  TxSignData tx [simpleFunding ctx] [Deriv :/ 0 :/ 0] [Deriv :/ 1 :/ 0] Nothing Nothing
   where
     tx = spendingTx ctx [(txHash (simpleFunding ctx), 0)] [(otherAddr 0, 50000000), (internalAddr 0, 40000000)]
 
@@ -96,7 +96,7 @@ analysisSpec ctx =
       -- transaction. Signing does not change it: the estimated size counts.
       let funding = fundingTx ctx 1 [(externalAddr 0, 352500)]
           tx = spendingTx ctx [(txHash funding, 0)] [(otherAddr 0, 350000)]
-          tsd = TxSignData tx [funding] [Deriv :/ 0 :/ 0] [] (Just 10)
+          tsd = TxSignData tx [funding] [Deriv :/ 0 :/ 0] [] (Just 10) Nothing
       info <- expectRight $ parseTxSignData btc ctx accountPub tsd
       info.txInfoSummary.summaryFee `shouldBe` 2500
       info.txInfoSummary.summaryChangeInFee `shouldBe` Just 580
@@ -107,14 +107,14 @@ analysisSpec ctx =
       -- A coin of 351920 pays 350000: 1920 of fee, exactly 192 bytes * 10
       let funding = fundingTx ctx 1 [(externalAddr 0, 351920)]
           tx = spendingTx ctx [(txHash funding, 0)] [(otherAddr 0, 350000)]
-          tsd = TxSignData tx [funding] [Deriv :/ 0 :/ 0] [] (Just 10)
+          tsd = TxSignData tx [funding] [Deriv :/ 0 :/ 0] [] (Just 10) Nothing
       info <- expectRight $ parseTxSignData btc ctx accountPub tsd
       info.txInfoSummary.summaryChangeInFee `shouldBe` Just 0
     it "refuses an output at an address the network cannot write, a SegWit one on Bitcoin Cash" $ do
       -- The same script is a payment to a SegWit address on Bitcoin, and
       -- one to nobody the review could name on Bitcoin Cash
       let tx = spendingTx ctx [(txHash (simpleFunding ctx), 0)] [(segwitAddr, 50000000), (internalAddr 0, 40000000)]
-          tsd = TxSignData tx [simpleFunding ctx] [Deriv :/ 0 :/ 0] [Deriv :/ 1 :/ 0] Nothing
+          tsd = TxSignData tx [simpleFunding ctx] [Deriv :/ 0 :/ 0] [Deriv :/ 1 :/ 0] Nothing Nothing
       parseTxSignData bch ctx accountPub tsd `shouldBe` Left "There are non-standard outputs in the transaction"
       info <- expectRight $ parseTxSignData btc ctx accountPub tsd
       info.txInfoSummary.summaryOtherOutputs `shouldBe` Map.fromList [(segwitAddr, 50000000)]
@@ -131,7 +131,7 @@ signingSpec ctx =
     it "refuses to sign a transaction without fee" $ do
       -- The coin of 1 BTC is sent in full
       let tx = spendingTx ctx [(txHash (simpleFunding ctx), 0)] [(otherAddr 0, 100000000)]
-          unsigned = TxSignData tx [simpleFunding ctx] [Deriv :/ 0 :/ 0] [] Nothing
+          unsigned = TxSignData tx [simpleFunding ctx] [Deriv :/ 0 :/ 0] [] Nothing Nothing
       signWalletTx btc ctx unsigned testAccountKey `shouldBe` Left "The transaction pays no fee"
 
 {- Verification -}
@@ -218,7 +218,7 @@ walletTransaction ctx = do
         | negate net == toInteger fee = TxInternal
         | otherwise = TxDebit
   return
-    ( TxSignData tx [funding] (pathsOf (fst <$> coins)) (pathsOf (fst <$> outputs)) Nothing,
+    ( TxSignData tx [funding] (pathsOf (fst <$> coins)) (pathsOf (fst <$> outputs)) Nothing Nothing,
       Expected {expectedFee = fee, expectedAmount = net, expectedType = kind}
     )
   where

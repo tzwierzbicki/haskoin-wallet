@@ -15,10 +15,8 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 
--- | The tables of the database format version 6, the format of hw 0.10 and
--- the latest one: "Haskoin.Wallet.Database" exports them again as the tables
--- of the wallet. They stay here as they are once a later version changes
--- them, so that the step to that version still has them.
+-- | The tables of the database format version 6, kept as they were as the
+-- format the step to version 7 starts from: "Haskoin.Wallet.Migration.V7".
 --
 -- Version 6 dropped the free column of the addresses: whether an internal
 -- address is available for change is read from its transactions and from

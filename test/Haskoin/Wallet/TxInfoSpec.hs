@@ -152,7 +152,7 @@ listedLabels accId = do
 
 -- | The row of a transaction of the account
 storedRow :: DBAccountId -> TxHash -> DB IO (Maybe DBTxInfo)
-storedRow (DBAccountKey wallet accDeriv) tid = P.get $ DBTxInfoKey wallet accDeriv (txHashToHex tid)
+storedRow accId tid = P.get $ DBTxInfoKey accId (txHashToHex tid)
 
 summarySpec :: Ctx -> Spec
 summarySpec ctx =
@@ -366,17 +366,16 @@ jsonSpec =
 storingSpec :: Ctx -> Spec
 storingSpec ctx =
   describe "Storing summaries" $ do
-    it "stores a summary at its block, and whether the block confirms it" $
+    it "stores a summary at its block, alive" $
       inDatabaseE $ do
         accId <- account ctx
         record accId (payment ctx) `dbShouldBeE` True
         row <- lift (storedRow accId (fakeTxHash 1)) >>= liftMaybe "The summary is not stored"
         liftIO $ do
           dBTxInfoBlockRef row `shouldBe` S.encode (Store.BlockRef 800000 1)
-          dBTxInfoConfirmed row `shouldBe` True
           dBTxInfoDead row `shouldBe` False
         record accId (paymentAt ctx (Store.MemRef 1700000000)) `dbShouldBeE` True
-        (fmap dBTxInfoConfirmed <$> lift (storedRow accId (fakeTxHash 1))) `dbShouldBeE` Just False
+        (fmap dBTxInfoBlockRef <$> lift (storedRow accId (fakeTxHash 1))) `dbShouldBeE` Just (S.encode (Store.MemRef 1700000000))
 
     it "reports no change when the same summary comes again, and a change when its block moves" $
       inDatabaseE $ do
@@ -478,8 +477,8 @@ listingSpec ctx =
 
     it "refuses a stored summary that does not decode, naming the transaction" $
       inDatabaseE $ do
-        accId@(DBAccountKey wallet accDeriv) <- account ctx
-        lift $ P.insert_ $ DBTxInfo wallet accDeriv (txHashToHex (fakeTxHash 9)) (S.encode (Store.BlockRef 800000 1)) True "nonsense" False fixtureTime
+        accId <- account ctx
+        lift $ P.insert_ $ DBTxInfo accId (txHashToHex (fakeTxHash 9)) (S.encode (Store.BlockRef 800000 1)) "nonsense" False fixtureTime
         lift $
           dbShouldFailWith "The stored summary of transaction 0000000000000000000000000000000000000000000000000000000000000009 does not decode" $
             txsPage accId (Page 5 0)

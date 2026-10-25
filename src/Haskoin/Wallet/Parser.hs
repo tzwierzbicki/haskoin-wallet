@@ -499,9 +499,11 @@ When working in an online/offline environment, you can `importacc` a public key
 file (on an online computer) that was exported with `exportacc` (on an offline
 computer). This will allow the online computer to monitor transactions without
 requiring access to the private keys. The file contains the public key
-derivation M/44'/coin'/account' along with the account name, the network and a
-wallet identifier. The wallet identifier is a fingerprint of the first public
-account derivation M/44'/coin'/0'.
+derivation M/44'/coin'/account' along with the account name, the network and,
+when the exporting wallet knows it, the fingerprint of the seed: the four bytes
+that PSBTs and output descriptors write before a key of the seed, under which
+`accounts` groups the accounts of one seed. Importing the file of an account
+the wallet already has records that fingerprint.
 |]
 
 {- ExportAcc Parser -}
@@ -535,13 +537,6 @@ accountArg desc =
 
 accountCompleter :: String -> IO [String]
 accountCompleter _ = return []
-
-{- TODO: Fix this
-accountCompleter :: String -> IO [String]
-accountCompleter pref = do
-  names <- runDB getAccountNames
-  return $ sort $ nub $ filter (pref `isPrefixOf`) (cs <$> names)
--}
 
 {- Accounts Parser -}
 

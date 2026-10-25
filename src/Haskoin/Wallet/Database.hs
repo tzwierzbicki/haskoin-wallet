@@ -2,7 +2,7 @@
 
 -- | The wallet database: the connection and its lock, and what every table
 -- shares. The tables are those of the latest format version, defined in
--- "Haskoin.Wallet.Schema.V6" and exported again from here: a version that
+-- "Haskoin.Wallet.Schema.V7" and exported again from here: a version that
 -- changes the tables gets a new schema module, and this module moves to it.
 -- Each kind of row has a module of its own: "Haskoin.Wallet.Account",
 -- "Haskoin.Wallet.Address", "Haskoin.Wallet.Coin", "Haskoin.Wallet.TxInfo",
@@ -10,7 +10,7 @@
 -- "Haskoin.Wallet.BestBlock".
 module Haskoin.Wallet.Database
   ( module Haskoin.Wallet.Database,
-    module Haskoin.Wallet.Schema.V6,
+    module Haskoin.Wallet.Schema.V7,
   )
 where
 
@@ -29,7 +29,7 @@ import Database.Persist.Sqlite (extraPragmas, mkSqliteConnectionInfo, withSqlite
 import Database.Sqlite (Error (..), SqliteException (..))
 import Haskoin
 import Haskoin.Wallet.Config
-import Haskoin.Wallet.Schema.V6
+import Haskoin.Wallet.Schema.V7
 import UnliftIO.Exception (catch, throwIO)
 
 {- The connection and its lock -}

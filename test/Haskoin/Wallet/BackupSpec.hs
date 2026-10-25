@@ -61,10 +61,11 @@ spec = do
         inDatabaseFile database $ do
           createTables migrateAll
           P.insert_ $ DBVersion latestDatabaseVersion
-          P.insert_ $ DBWallet "892eb8e4"
+          P.insert_ $ DBBest "btc" "00000000000000000002a7c4c1e48d76c5a37902165a270156b7a8d72728a054" 800105
         cmdBackup (configUsing database) (Just copy) `shouldReturn` ResponseFile copy
         inDatabaseFile copy storedVersions `shouldReturn` [(PersistInt64 (fromIntegral latestDatabaseVersion), "integer")]
-        inDatabaseFile copy (tableRows "d_b_wallet") `shouldReturn` [[PersistText "892eb8e4"]]
+        inDatabaseFile copy (tableRows "d_b_best")
+          `shouldReturn` [[PersistText "btc", PersistText "00000000000000000002a7c4c1e48d76c5a37902165a270156b7a8d72728a054", PersistInt64 800105]]
 
     it "refuses to overwrite a file" $
       inScratchDirectory $ \dir -> do

@@ -18,6 +18,7 @@ import qualified Data.Map.Strict as Map
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Database.Persist as P
+import Database.Persist.Sql (toSqlKey)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Account
@@ -65,7 +66,7 @@ balanceOf a =
 -- three times for 9000 in all, with 5000 confirmed and 300 unconfirmed
 -- left in two coins
 fixtureRow :: DBAddress
-fixtureRow = DBAddress 3 (DBWalletKey "892eb8e4") "/44'/0'/0'" "/0/3" "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1" "Savings" 5000 300 2 3 9000 False fixtureTime
+fixtureRow = DBAddress (toSqlKey 1) 3 "/0/3" "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1" "Savings" 5000 300 2 3 9000 False fixtureTime
 
 receivingGap, changeGap :: String
 receivingGap = "The last 20 receiving addresses await a payment: reuse one of them, listed by addrs"
@@ -83,8 +84,7 @@ receivingSpec ctx =
         liftIO $ do
           addressRow first `shouldBe` (0, "/0/0", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Rent", False)
           addressRow second `shouldBe` (1, "/0/1", "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "", False)
-          dBAddressAccountWallet first `shouldBe` DBWalletKey "892eb8e4"
-          dBAddressAccountDerivation first `shouldBe` "/44'/0'/0'"
+          dBAddressAccount first `shouldBe` accId
           balanceOf first `shouldBe` AddressBalance 0 0 0 0 0
         nextIndices accId `dbShouldBeE` (2, 0)
 
@@ -277,12 +277,12 @@ restoringSpec ctx =
 
     it "lives with a hole in a chain, as an invalid child key leaves one" $
       inDatabaseE $ do
-        accId@(DBAccountKey wallet accDeriv) <- account ctx
+        accId <- account ctx
         replicateM_ 3 $ genExtAddress ctx cfg accId ""
         extendChainTo ctx accId AddrInternal 3
         -- The chains moved past index 1 but nothing was stored there
-        lift $ P.delete $ DBAddressKey wallet accDeriv "/0/1"
-        lift $ P.delete $ DBAddressKey wallet accDeriv "/1/1"
+        lift $ P.delete $ DBAddressKey accId "/0/1"
+        lift $ P.delete $ DBAddressKey accId "/1/1"
         listed accId AddrExternal (Page 100 0) `dbShouldBeE` [2, 0]
         listed accId AddrInternal (Page 100 0) `dbShouldBeE` [2, 0]
         (Map.size . fst <$> allAddressesMap btc accId) `dbShouldBeE` 4
@@ -425,9 +425,8 @@ jsonSpec =
       let json :: String
           json =
             [r|{
+              "account": 1,
               "index": 3,
-              "wallet": "892eb8e4",
-              "account": "/44'/0'/0'",
               "derivation": "/0/3",
               "address": "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1",
               "label": "Savings",

@@ -376,12 +376,11 @@ inputAddressMap net ins =
 -- back to life.
 txInfoBlockRefs ::
   (MonadUnliftIO m) => DBAccountId -> ExceptT String (DB m) (Map TxHash Store.BlockRef)
-txInfoBlockRefs (DBAccountKey wallet accDeriv) = do
+txInfoBlockRefs accId = do
   rows <-
     lift . select . from $ \t -> do
       where_ $
-        t ^. DBTxInfoAccountWallet ==. val wallet
-          &&. t ^. DBTxInfoAccountDerivation ==. val accDeriv
+        t ^. DBTxInfoAccount ==. val accId
           &&. t ^. DBTxInfoDead ==. val False
       return (t ^. DBTxInfoTxid, t ^. DBTxInfoBlockRef)
   entries <- forM rows $ \(Value tidT, Value refBytes) -> do
@@ -393,25 +392,23 @@ txInfoBlockRefs (DBAccountKey wallet accDeriv) = do
 -- | Mark the summary of a transaction dead: the store no longer has it, or
 -- reports it replaced or dropped. The summary stays, for the history.
 markTxInfoDead :: (MonadUnliftIO m) => DBAccountId -> TxHash -> DB m ()
-markTxInfoDead (DBAccountKey wallet accDeriv) tid =
-  P.update (DBTxInfoKey wallet accDeriv (txHashToHex tid)) [DBTxInfoDead P.=. True]
+markTxInfoDead accId tid =
+  P.update (DBTxInfoKey accId (txHashToHex tid)) [DBTxInfoDead P.=. True]
 
 -- | Store the summary of a live transaction of the account at its block,
 -- or replace the one stored, which brings a summary marked dead back.
 -- Returns whether the row changed.
 repsertSummary ::
   (MonadUnliftIO m) => Network -> DBAccountId -> TxHash -> Store.BlockRef -> TxSummary -> DB m Bool
-repsertSummary net (DBAccountKey wallet accDeriv) tid ref summary = do
+repsertSummary net accId tid ref summary = do
   time <- liftIO getCurrentTime
   let tidT = txHashToHex tid
-      key = DBTxInfoKey wallet accDeriv tidT
+      key = DBTxInfoKey accId tidT
       row =
         DBTxInfo
-          { dBTxInfoAccountWallet = wallet,
-            dBTxInfoAccountDerivation = accDeriv,
+          { dBTxInfoAccount = accId,
             dBTxInfoTxid = tidT,
             dBTxInfoBlockRef = S.encode ref,
-            dBTxInfoConfirmed = Store.confirmed ref,
             dBTxInfoBlob = BS.toStrict $ marshalJSON net summary,
             dBTxInfoDead = False,
             dBTxInfoCreated = time
@@ -432,14 +429,13 @@ repsertSummary net (DBAccountKey wallet accDeriv) tid ref summary = do
 -- best block, none for a dead transaction, and the labels of their
 -- addresses are those of today.
 txsPage :: (MonadUnliftIO m) => DBAccountId -> Page -> ExceptT String (DB m) [TxInfo]
-txsPage accId@(DBAccountKey wallet accDeriv) (Page lim off) = do
+txsPage accId (Page lim off) = do
   acc <- getAccountById accId
   let net = accountNetwork acc
   rows <-
     lift . select . from $ \t -> do
       where_ $
-        t ^. DBTxInfoAccountWallet ==. val wallet
-          &&. t ^. DBTxInfoAccountDerivation ==. val accDeriv
+        t ^. DBTxInfoAccount ==. val accId
       orderBy [asc (t ^. DBTxInfoBlockRef)]
       limit $ fromIntegral lim
       offset $ fromIntegral off

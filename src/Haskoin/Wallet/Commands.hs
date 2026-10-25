@@ -397,45 +397,39 @@ cmdCreateAcc ::
 cmdCreateAcc ctx cfg name net derivM splitMnemIn = do
   runDBResponse cfg $ do
     mnem <- askMnemonicPass splitMnemIn
-    walletFP <- liftEither $ walletFingerprint net ctx mnem
-    d <- maybe (lift $ nextAccountDeriv walletFP net) return derivM
-    prvKey <- liftEither $ signingKey net ctx mnem d
-    let xpub = deriveXPubKey ctx prvKey
-    (_, acc) <- insertAccount net ctx walletFP name xpub
+    seed <- liftEither $ seedOf ctx mnem
+    index <- maybe (lift $ nextAccountIndex net ctx seed) return derivM
+    (_, acc) <- insertAccount net ctx name (seedAccountKey seed net index) (Just (seedFingerprint seed))
+    -- The accounts of the seed created before hw recorded fingerprints
+    lift $ recordFingerprint ctx seed
     return $ ResponseAccount acc
 
 cmdTestAcc :: Ctx -> Config -> Maybe Text -> Natural -> IO Response
 cmdTestAcc ctx cfg nameM splitMnemIn =
   runDBResponse cfg $ do
-    (_, acc) <- getAccountByName nameM
+    (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
-        xPubKey = accountXPubKey ctx acc
-        d = accountIndex acc
     mnem <- askMnemonicPass splitMnemIn
-    xPrvKey <- liftEither $ signingKey net ctx mnem d
-    return $
-      if deriveXPubKey ctx xPrvKey == xPubKey
-        then
-          ResponseAccResult
-            { responseAccount = acc,
-              responseResult = True,
-              responseText =
-                "The mnemonic and passphrase matched the account"
-            }
-        else
-          ResponseAccResult
-            { responseAccount = acc,
-              responseResult = False,
-              responseText =
-                "The mnemonic and passphrase did not match the account"
-            }
+    seed <- liftEither $ seedOf ctx mnem
+    if seedAccountKey seed net (accountIndex acc) == accountXPubKey ctx acc
+      then do
+        -- The seed is proven: every account of it gets its fingerprint
+        lift $ recordFingerprint ctx seed
+        proven <- getAccountById accId
+        return $ ResponseAccResult proven True "The mnemonic and passphrase matched the account"
+      else return $ ResponseAccResult acc False "The mnemonic and passphrase did not match the account"
 
 cmdImportAcc :: Ctx -> Config -> FilePath -> IO Response
 cmdImportAcc ctx cfg fp =
   runDBResponse cfg $ do
-    (PubKeyDoc xpub net name wallet) <- liftEitherIO $ readMarshalFile ctx fp
-    (_, acc) <- insertAccount net ctx wallet name xpub
-    return $ ResponseAccount acc
+    PubKeyDoc xpub net name fingerprintM <- liftEitherIO $ readMarshalFile ctx fp
+    heldM <- lift $ accountWithKey net ctx xpub
+    case (heldM, fingerprintM) of
+      -- An account the wallet has already, whose document now names its seed
+      (Just (accId, held), Just fingerprint) | isNothing (dBAccountFingerprint held) -> do
+        learnFingerprint accId fingerprint
+        ResponseAccount <$> getAccountById accId
+      _ -> ResponseAccount . snd <$> insertAccount net ctx name xpub fingerprintM
 
 cmdExportAcc :: Ctx -> Config -> Maybe Text -> FilePath -> IO Response
 cmdExportAcc ctx cfg nameM file =
@@ -445,8 +439,7 @@ cmdExportAcc ctx cfg nameM file =
     let xpub = accountXPubKey ctx acc
         net = accountNetwork acc
         name = dBAccountName acc
-        wallet = accountWallet acc
-        doc = PubKeyDoc xpub net name wallet
+        doc = PubKeyDoc xpub net name (accountFingerprint acc)
     liftIO $ writeMarshalFile ctx file doc
     return $ ResponseFile file
 
@@ -611,8 +604,11 @@ cmdSignTx ctx cfg nameM nosigHM inputM outputM splitMnemIn =
         accPub = accountXPubKey ctx acc
     for_ outputM checkPathFree
     mnem <- askMnemonic splitMnemIn
-    prvKey <- askPrvKey net ctx idx mnem accPub
-    (newSignData, txInfo) <- liftEither $ signWalletTx net ctx tsd prvKey
+    (seed, prvKey) <- askSigningKey net ctx idx mnem accPub
+    -- The signed data names the seed, for an online wallet to learn it
+    let toSign = tsd {txSignDataFingerprint = Just (seedFingerprint seed)}
+    (newSignData, txInfo) <- liftEither $ signWalletTx net ctx toSign prvKey
+    lift $ recordFingerprint ctx seed
     txInfoL <- lift $ fillTxInfoLabels net txInfo
     when (isJust nosigHM) $ void $ importPendingTx net ctx accId newSignData
     for_ outputM $ \o -> liftIO $ writeJsonFile o $ Json.toJSON newSignData
@@ -817,7 +813,8 @@ cmdSignMessage ctx cfg addrTxt txtMsg splitMnemIn =
     -- stderr to keep the armored block and the --json output clean.
     liftIO $ mapM_ (hPutStrLn stderr) $ messageWarnings txtMsg
     mnem <- askMnemonic splitMnemIn
-    accPrvKey <- askPrvKey net ctx idx mnem accPub
+    (seed, accPrvKey) <- askSigningKey net ctx idx mnem accPub
+    lift $ recordFingerprint ctx seed
     let addrPrvKey = derivePath ctx (addrPath addrDB) accPrvKey
     msgSig <- liftEither $ signMessage ctx addr addrPrvKey.key txtMsg
     return $ ResponseSignMsg txtMsg (cs $ B64.encode msgSig) addrTxt

@@ -68,6 +68,7 @@ import qualified Haskoin.Wallet.Migration.V3 as V3
 import qualified Haskoin.Wallet.Migration.V4 as V4
 import qualified Haskoin.Wallet.Migration.V5 as V5
 import qualified Haskoin.Wallet.Migration.V6 as V6
+import qualified Haskoin.Wallet.Migration.V7 as V7
 
 {- The versions and their steps -}
 
@@ -77,13 +78,14 @@ import qualified Haskoin.Wallet.Migration.V6 as V6
 -- version table holds the number itself; version 4 marks dead transactions
 -- instead of deleting their summaries; versions 5 and 6 read the coin locks
 -- and the change addresses from the pending transactions instead of storing
--- them. Whenever the tables or the stored
--- data must change, bump it, add the new tables as a module under
+-- them; version 7 identifies an account by its key alone, with the
+-- fingerprint of its seed once known, instead of filing it under a wallet.
+-- Whenever the tables or the stored data must change, bump it, add the new tables as a module under
 -- "Haskoin.Wallet.Schema" and point "Haskoin.Wallet.Database" at them, and
 -- add the step as a module under "Haskoin.Wallet.Migration", listed in
 -- 'steps'.
 latestDatabaseVersion :: Int
-latestDatabaseVersion = 6
+latestDatabaseVersion = 7
 
 -- | A step from the version before 'stepTo' to 'stepTo'. It leaves the
 -- database as the hw of that version left it: its tables, its data and its
@@ -101,7 +103,8 @@ steps ctx =
     Step 3 "the version stored as a number" V3.migrateDB,
     Step 4 "the dead transactions" V4.migrateDB,
     Step 5 "the coin locks read from the pending transactions" V5.migrateDB,
-    Step 6 "the change addresses read from the pending transactions" V6.migrateDB
+    Step 6 "the change addresses read from the pending transactions" V6.migrateDB,
+    Step 7 "the accounts identified by their keys, without wallets" V7.migrateDB
   ]
 
 {- The version of a database -}

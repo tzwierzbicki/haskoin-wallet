@@ -112,13 +112,12 @@ coinPage ::
   DBAccountId ->
   Page ->
   ExceptT String (DB m) [JsonCoin]
-coinPage net accId@(DBAccountKey wallet accDeriv) (Page lim off) = do
+coinPage net accId (Page lim off) = do
   locked <- lockedOutpoints accId
   coins <-
     lift . select . from $ \c -> do
       where_ $ do
-        c ^. DBCoinAccountWallet ==. val wallet
-          &&. c ^. DBCoinAccountDerivation ==. val accDeriv
+        c ^. DBCoinAccount ==. val accId
       orderBy [asc (c ^. DBCoinBlockRef), desc (c ^. DBCoinCreated)]
       limit $ fromIntegral lim
       offset $ fromIntegral off
@@ -133,13 +132,12 @@ getSpendableCoins ::
   DBAccountId ->
   Natural ->
   ExceptT String (DB m) [Store.Unspent]
-getSpendableCoins net accId@(DBAccountKey wallet accDeriv) minConf = do
+getSpendableCoins net accId minConf = do
   bestM <- lift $ getBest net
   locked <- lockedOutpoints accId
   coins <- lift . select . from $ \c -> do
     where_ $
-      c ^. DBCoinAccountWallet ==. val wallet
-        &&. c ^. DBCoinAccountDerivation ==. val accDeriv
+      c ^. DBCoinAccount ==. val accId
     return c
   let f c = do
         ref <- liftEither $ S.decode $ dBCoinBlockRef c
@@ -154,18 +152,16 @@ insertCoin ::
   Text ->
   Store.Unspent ->
   DB m DBCoin
-insertCoin (DBAccountKey wallet accDeriv) addr unspent = do
+insertCoin accId addr unspent = do
   time <- liftIO getCurrentTime
   let newCoin =
         DBCoin
-          { dBCoinAccountWallet = wallet,
-            dBCoinAccountDerivation = accDeriv,
+          { dBCoinAccount = accId,
             dBCoinOutpoint = outpointText unspent.outpoint,
             dBCoinAddress = addr,
             dBCoinValue = unspent.value,
             dBCoinBlockRef = S.encode unspent.block,
             dBCoinBlob = S.encode unspent,
-            dBCoinConfirmed = Store.confirmed unspent.block,
             dBCoinCreated = time
           }
   P.insert_ newCoin
@@ -177,7 +173,6 @@ updateCoin unspent = do
   P.update
     key
     [ DBCoinBlob P.=. S.encode unspent,
-      DBCoinConfirmed P.=. Store.confirmed unspent.block,
       DBCoinBlockRef P.=. S.encode unspent.block
     ]
 

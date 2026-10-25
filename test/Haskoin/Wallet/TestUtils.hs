@@ -30,9 +30,9 @@ import Database.Persist.Sql (Migration, PersistValue, Single (..), rawQuery, raw
 import Database.Persist.Sqlite (runSqlite)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Account (insertAccount, nextAccountDeriv)
+import Haskoin.Wallet.Account (insertAccount, nextAccountIndex)
 import Haskoin.Wallet.Database (DB, DBAccount, DBAccountId, migrateAll)
-import Haskoin.Wallet.Keys (MnemonicPass (..), signingKey, walletFingerprint)
+import Haskoin.Wallet.Keys (MnemonicPass (..), PublicSeed (..), seedOf, signingKey)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.TxInfo (ChainStatus (..), PendingStatus (..), TxInfo (..), TxStatus (..), pendingSigned)
 import Haskoin.Wallet.TxSignData (TxSignData (..))
@@ -147,35 +147,30 @@ storedVersions = do
   rows <- rawSql "select version, typeof(version) from d_b_version" []
   return [(value, storageClass) | (Single value, Single storageClass) <- rows]
 
+-- | The next account of a seed on a network, stored as createacc stores it:
+-- with the fingerprint of the seed
+newAccountOf :: Ctx -> MnemonicPass -> Network -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
+newAccountOf ctx mnem net name = do
+  let seed = forceRight $ seedOf ctx mnem
+  index <- lift $ nextAccountIndex net ctx seed
+  insertAccount net ctx name (seedAccountKey seed net index) (Just (seedFingerprint seed))
+
+-- | The public side of the two test seeds
+testSeed, testSeed2 :: Ctx -> PublicSeed
+testSeed ctx = forceRight $ seedOf ctx testMnemonic
+testSeed2 ctx = forceRight $ seedOf ctx testMnemonic2
+
 -- | A new account of the test wallet in the database, with the given name
 testNewAcc :: Ctx -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
-testNewAcc ctx name = do
-  let fp = forceRight $ walletFingerprint btc ctx testMnemonic
-  d <- lift $ nextAccountDeriv fp btc
-  let prv = forceRight $ signingKey btc ctx testMnemonic d
-      pub = deriveXPubKey ctx prv
-  insertAccount btc ctx fp name pub
+testNewAcc ctx = newAccountOf ctx testMnemonic btc
 
 -- | A new account of the second test wallet in the database
 testNewAcc2 :: Ctx -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
-testNewAcc2 ctx name = do
-  let fp = forceRight $ walletFingerprint btc ctx testMnemonic2
-  d <- lift $ nextAccountDeriv fp btc
-  let prv = forceRight $ signingKey btc ctx testMnemonic2 d
-      pub = deriveXPubKey ctx prv
-  insertAccount btc ctx fp name pub
+testNewAcc2 ctx = newAccountOf ctx testMnemonic2 btc
 
--- | A new Bitcoin Cash account of the test wallet in the database. hw
--- names a wallet by the fingerprint of its account 0 on the network, so
--- this account is filed under another wallet than the Bitcoin accounts of
--- the same mnemonic.
+-- | A new Bitcoin Cash account of the test wallet in the database
 testNewAccBch :: Ctx -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
-testNewAccBch ctx name = do
-  let fp = forceRight $ walletFingerprint bch ctx testMnemonic
-  d <- lift $ nextAccountDeriv fp bch
-  let prv = forceRight $ signingKey bch ctx testMnemonic d
-      pub = deriveXPubKey ctx prv
-  insertAccount bch ctx fp name pub
+testNewAccBch ctx = newAccountOf ctx testMnemonic bch
 
 {- Transaction summaries -}
 
@@ -419,8 +414,9 @@ testMnemonic =
     "snow senior nerve virus fabric now fringe clip marble interest analyst can"
     "correct horse battery staple"
 
+-- | The fingerprint of the seed of the test wallet: that of its master key
 testFingerprintText :: Text
-testFingerprintText = "892eb8e4"
+testFingerprintText = "bc560f95"
 
 testFingerprint :: Fingerprint
 testFingerprint = forceRight $ textToFingerprint testFingerprintText
@@ -514,7 +510,7 @@ testMnemonic2 =
     "correct horse battery staple"
 
 testFingerprintText2 :: Text
-testFingerprintText2 = "807a5cfb"
+testFingerprintText2 = "4435aa1c"
 
 testFingerprint2 :: Fingerprint
 testFingerprint2 = forceRight $ textToFingerprint testFingerprintText2
