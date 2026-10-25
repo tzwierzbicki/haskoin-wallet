@@ -88,3 +88,4 @@ tests:
       - hspec >= 2.7.1
       - QuickCheck >= 2.13.2
       - HUnit >= 1.6.0.0
+      - crypton >= 1.1
