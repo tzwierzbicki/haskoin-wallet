@@ -10,7 +10,7 @@ import Data.Text (Text)
 import Haskoin
 import Haskoin.Wallet.Amounts (AmountUnit (..), readNatural)
 import Haskoin.Wallet.CoinSelection (CoinSelection (..), FeePayer (..))
-import Haskoin.Wallet.Keys (KeySource (..))
+import Haskoin.Wallet.Keys (KeySource (..), lastAccountIndex)
 import Haskoin.Wallet.Util (Page (Page))
 import Numeric.Natural (Natural)
 import Options.Applicative
@@ -402,16 +402,22 @@ networkOptionWith mods =
 
 derivationOption :: Parser Natural
 derivationOption =
-  option (maybeReader $ readNatural . cs) $
+  option (eitherReader accountIndex) $
     short 'd'
       <> long "derivation"
       <> metavar "INT"
       <> help
         [r|
-Specify a different account derivation to use (the last part of
-m/44'/coin'/account'). By default, account derivations are chosen sequentially
-starting from 0.
+The index of the account, the last part of m/44'/coin'/account', from 0 to
+2147483647. By default, the first index without an account of the seed on the
+network is taken.
 |]
+  where
+    accountIndex :: String -> Either String Natural
+    accountIndex arg =
+      case readNatural (cs arg) of
+        Just index | index <= lastAccountIndex -> Right index
+        _ -> Left $ "An account index is a number from 0 to " <> show lastAccountIndex
 
 {- DeleteAcc Parser -}
 

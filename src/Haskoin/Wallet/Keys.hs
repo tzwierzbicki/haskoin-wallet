@@ -25,9 +25,14 @@ data MnemonicPass = MnemonicPass
   deriving (Eq, Show)
 
 -- | The BIP44 path of an account: m/44'/coin'/account', with the coin
--- type of the network
+-- type of the network. The index is at most 'lastAccountIndex'.
 bip44Deriv :: Network -> Natural -> HardPath
 bip44Deriv net a = Deriv :| 44 :| net.bip44Coin :| fromIntegral a
+
+-- | The last index an account can have: the accounts are derived hardened,
+-- with the indices 0 to 2^31 - 1 that BIP32 gives them
+lastAccountIndex :: Natural
+lastAccountIndex = 2147483647
 
 -- | The index of an account from its public key: the last step of its path
 xPubIndex :: XPubKey -> Natural

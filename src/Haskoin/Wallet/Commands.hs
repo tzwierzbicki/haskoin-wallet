@@ -396,6 +396,8 @@ cmdCreateAcc ::
   Ctx -> Config -> Text -> Network -> Maybe Natural -> Natural -> IO Response
 cmdCreateAcc ctx cfg name net derivM splitMnemIn = do
   runDBResponse cfg $ do
+    -- Before the user types the mnemonic, not after
+    checkNameFree name
     mnem <- askMnemonicPass splitMnemIn
     seed <- liftEither $ seedOf ctx mnem
     index <- maybe (lift $ nextAccountIndex net ctx seed) return derivM

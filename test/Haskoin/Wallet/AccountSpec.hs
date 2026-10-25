@@ -133,7 +133,14 @@ creatingSpec ctx =
     it "refuses a name already taken" $
       inDatabaseE $ do
         _ <- testNewAcc ctx "main"
-        lift $ dbShouldFailWith "Account main already exists" $ watchOnly ctx btc 1 "main"
+        lift $ dbShouldFailWith "The account main already exists" $ watchOnly ctx btc 1 "main"
+
+    it "refuses an empty name, a space at either end, and a line break" $
+      inDatabaseE $ lift $ do
+        dbShouldFailWith "The account name must not be empty" $ watchOnly ctx btc 0 ""
+        dbShouldFailWith "The account name must not start or end with a space" $ watchOnly ctx btc 0 " main"
+        dbShouldFailWith "The account name must not start or end with a space" $ watchOnly ctx btc 0 "main "
+        dbShouldFailWith "The account name must not contain a line break or a control character" $ watchOnly ctx btc 0 "main\nsavings"
 
     it "refuses a key already held, naming its account" $
       inDatabaseE $ do
@@ -200,6 +207,12 @@ namingSpec ctx = do
 
     it "refuses to rename an account that does not exist" $
       inDatabaseE $ lift $ dbShouldFailWith "The account nobody does not exist" $ renameAccount "nobody" "somebody"
+
+    it "holds the new name to the same rules as a first one" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        lift $ dbShouldFailWith "The account name must not be empty" $ renameAccount "main" ""
+        lift $ dbShouldFailWith "The account name must not start or end with a space" $ renameAccount "main" "salary "
 
 {- The fingerprint of the seed -}
 
@@ -333,7 +346,7 @@ documentSpec ctx =
         writeFile (dir </> "main.json") mainDocument
         response <- cmdImportAcc ctx online (dir </> "main.json")
         imported response `shouldBe` Right ("main", "btc", testAccountXPub, Just "bc560f95")
-        cmdImportAcc ctx online (dir </> "main.json") `shouldReturn` ResponseError "Account main already exists"
+        cmdImportAcc ctx online (dir </> "main.json") `shouldReturn` ResponseError "The account main already exists"
 
     it "reads a document of an earlier hw, which named a wallet instead of the seed" $
       inScratchDirectory $ \dir -> do

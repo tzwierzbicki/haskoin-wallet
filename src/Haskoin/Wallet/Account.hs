@@ -15,12 +15,13 @@ import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Reader (MonadTrans (lift))
 import Data.Aeson
+import Data.Char (isControl)
 import Data.List (sortOn)
 import Data.Maybe (fromJust, fromMaybe, isNothing)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
+import qualified Data.Text as Text
 import Data.Time (getCurrentTime)
-import Data.Word (Word64)
 import Database.Esqueleto.Legacy as E hiding (isNothing)
 import qualified Database.Persist as P
 import Haskoin
@@ -41,13 +42,14 @@ instance ToJSON DBAccount where
         "internal" .= dBAccountInternal acc,
         "xPubKey" .= dBAccountXPubKey acc,
         "fingerprint" .= dBAccountFingerprint acc,
-        "balance" .= toJSON (AccountBalance confirm unconfirm coins),
+        "balance"
+          .= object
+            [ "confirmed" .= dBAccountBalanceConfirmed acc,
+              "unconfirmed" .= dBAccountBalanceUnconfirmed acc,
+              "coins" .= dBAccountBalanceCoins acc
+            ],
         "created" .= dBAccountCreated acc
       ]
-    where
-      confirm = dBAccountBalanceConfirmed acc
-      unconfirm = dBAccountBalanceUnconfirmed acc
-      coins = dBAccountBalanceCoins acc
 
 instance FromJSON DBAccount where
   parseJSON =
@@ -65,32 +67,6 @@ instance FromJSON DBAccount where
         <*> (bal .: "unconfirmed")
         <*> (bal .: "coins")
         <*> o .: "created"
-
-data AccountBalance = AccountBalance
-  { -- | confirmed balance
-    accBalanceConfirmed :: !Word64,
-    -- | unconfirmed balance
-    accBalanceUnconfirmed :: !Word64,
-    -- | number of unspent outputs
-    accBalanceCoins :: !Word64
-  }
-  deriving (Show, Read, Eq, Ord)
-
-instance ToJSON AccountBalance where
-  toJSON b =
-    object
-      [ "confirmed" .= accBalanceConfirmed b,
-        "unconfirmed" .= accBalanceUnconfirmed b,
-        "coins" .= accBalanceCoins b
-      ]
-
-instance FromJSON AccountBalance where
-  parseJSON =
-    withObject "accountbalance" $ \o ->
-      AccountBalance
-        <$> o .: "confirmed"
-        <*> o .: "unconfirmed"
-        <*> o .: "coins"
 
 {- The fields of an account -}
 
@@ -140,6 +116,27 @@ nextAccountIndex net ctx seed = go 0
 existsAccount :: (MonadUnliftIO m) => Text -> DB m Bool
 existsAccount name = P.existsBy $ UniqueName name
 
+{- The name of an account -}
+
+-- | The rules of a name: not empty, no line break or other control
+-- character, which could not be typed back, and no space at either end,
+-- which a quoting slip on the command line leaves
+checkAccountName :: Text -> Either String ()
+checkAccountName name
+  | Text.null name = Left "The account name must not be empty"
+  | Text.any isControl name = Left "The account name must not contain a line break or a control character"
+  | Text.strip name /= name = Left "The account name must not start or end with a space"
+  | otherwise = Right ()
+
+-- | Refuse a name that breaks the rules, or that an account has already
+checkNameFree :: (MonadUnliftIO m) => Text -> ExceptT String (DB m) ()
+checkNameFree name = do
+  liftEither $ checkAccountName name
+  taken <- lift $ existsAccount name
+  when taken $ throwError $ "The account " <> cs name <> " already exists"
+
+{- Storing accounts -}
+
 -- | Store an account of a network under a name, from its public key, with
 -- the fingerprint of its seed when known
 insertAccount ::
@@ -151,8 +148,7 @@ insertAccount ::
   Maybe Fingerprint ->
   ExceptT String (DB m) (DBAccountId, DBAccount)
 insertAccount net ctx name xpub fingerprintM = do
-  existsName <- lift $ existsAccount name
-  when existsName $ throwError $ "Account " <> cs name <> " already exists"
+  checkNameFree name
   holderM <- lift $ accountWithKey net ctx xpub
   forM_ holderM $ throwError . keyTaken . snd
   time <- liftIO getCurrentTime
@@ -192,9 +188,8 @@ deleteAccount accId = do
   delete . from $ \p -> where_ $ p ^. DBPendingTxAccount ==. val accId
   P.delete accId
 
--- When a name is provided, get that account or throw an error if it doesn't
--- exist. When no name is provided, return the account only if there is one
--- account.
+-- | The account of a name, which must exist. Without a name, the one
+-- account of the wallet, when it has exactly one.
 getAccountByName ::
   (MonadUnliftIO m) =>
   Maybe Text ->
@@ -223,23 +218,20 @@ getAccounts = sortOn (order . snd) . map entityPair <$> P.selectList [] []
   where
     order acc = (isNothing (dBAccountFingerprint acc), dBAccountFingerprint acc, dBAccountNetwork acc, dBAccountIndex acc)
 
--- | Rename an account. Renaming it to its own name changes nothing.
+-- | Rename an account, to a name that follows the rules and that no account
+-- has. Renaming it to its own name changes nothing.
 renameAccount ::
   (MonadUnliftIO m) => Text -> Text -> ExceptT String (DB m) DBAccount
 renameAccount oldName newName
   | oldName == newName = snd <$> getAccountByName (Just oldName)
   | otherwise = do
-      e <- lift $ existsAccount newName
-      if e
-        then throwError $ "The account " <> cs newName <> " already exists"
-        else do
-          c <-
-            lift . updateCount $ \a -> do
-              set a [DBAccountName =. val newName]
-              where_ $ a ^. DBAccountName ==. val oldName
-          if c == 0
-            then throwError $ "The account " <> cs oldName <> " does not exist"
-            else snd <$> getAccountByName (Just newName)
+      checkNameFree newName
+      renamed <-
+        lift . updateCount $ \a -> do
+          set a [DBAccountName =. val newName]
+          where_ $ a ^. DBAccountName ==. val oldName
+      when (renamed == 0) $ throwError $ "The account " <> cs oldName <> " does not exist"
+      snd <$> getAccountByName (Just newName)
 
 -- | Add up the balances of the addresses of an account into the account
 updateAccountBalances :: (MonadUnliftIO m) => DBAccountId -> DB m DBAccount
