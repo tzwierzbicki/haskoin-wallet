@@ -28,7 +28,7 @@ import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Util (Page (Page))
-import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), MarshalJsonBox (..), testIdentity)
+import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), testIdentity)
 import Haskoin.Wallet.Arbitrary (arbitraryAddressBalance, arbitraryDBAddress)
 import Test.Hspec
 import Text.RawString.QQ (r)

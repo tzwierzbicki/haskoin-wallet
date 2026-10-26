@@ -429,16 +429,32 @@ failureSpec ctx = do
         (errorOf <$> hwJson home ["createacc", "main"] [mnemonicWords testMnemonic]) `shouldReturn` Right "Cancelled: the input ended before the answer"
         (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right []
 
-    -- preparetx takes a change address before it checks the --output path.
-    -- The failure undoes it, with everything else the command wrote.
+    -- preparetx takes a change address before it chooses the coins, which
+    -- do not cover the 100000 satoshis here. The failure undoes it, with
+    -- everything else the command wrote.
     it "leaves nothing of what it wrote before it failed" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        writeFile (home </> "taken.json") ""
-        (errorOf <$> hwJson home ["preparetx", textOf (otherAddr 0), "0.0002", "--output", home </> "taken.json"] [])
-          `shouldReturn` Right (alreadyExists (home </> "taken.json"))
+        (errorOf <$> hwJson home ["preparetx", textOf (otherAddr 0), "0.001"] [])
+          `shouldReturn` Right "The coins do not cover the amount and the fee"
         (addressesOf <$> hwJson home ["addrs", "--internal"] []) `shouldReturn` Right []
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+
+    -- The store of the test home refuses every connection. hw crashed with
+    -- the exception of the web client before, and wrote no JSON.
+    it "tells when the store is out of reach, in its JSON too" $
+      withHome $ \home -> do
+        createMain home
+        (errorOf <$> hwJson home ["sync"] [])
+          `shouldReturn` Right "The store at http://127.0.0.1:1/ could not be reached: the connection failed"
+
+    -- The web client decodes an answer only once hw uses it: hw crashed
+    -- there before, with the error of the decoder
+    it "tells when the store gives an answer it cannot read, as a server that is not a haskoin-store does" $
+      withServerAnswering "not a store" $ \home url -> do
+        createMain home
+        failure <- errorOf <$> hwJson home ["sync"] []
+        failure `shouldSatisfy` either (const False) (Text.isPrefixOf ("The store at " <> Text.pack url <> " gave an answer hw could not read: "))
 
     -- The other command holds the database the whole time: hw waits its
     -- three seconds, then gives up
@@ -800,6 +816,16 @@ paymentSpec ctx =
         (errorOf <$> hwJson home ["preparetx", textOf (otherAddr 0), "0.001"] [])
           `shouldReturn` Right "The coins do not cover the amount and the fee"
 
+    -- The path is checked first: the coins would not cover these 100000
+    -- satoshis either
+    it "is refused an --output file that exists, before it is built" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        writeFile (home </> "taken.json") ""
+        (errorOf <$> hwJson home ["preparetx", textOf (otherAddr 0), "0.001", "--output", home </> "taken.json"] [])
+          `shouldReturn` Right (alreadyExists (home </> "taken.json"))
+        readFile (home </> "taken.json") `shouldReturn` ""
+
 {- Recovering a seed -}
 
 recoverSpec :: Ctx -> Spec
@@ -822,6 +848,7 @@ recoverSpec ctx =
       withHome $ \home -> do
         run <- hw home ["recover"] seedOnce
         runExit run `shouldBe` ExitFailure 1
+        run `shouldSatisfy` printed "The store at http://127.0.0.1:1/ could not be reached: the connection failed"
         run `shouldNotSatisfy` askedMnemonic
 
 {- Sweeping -}

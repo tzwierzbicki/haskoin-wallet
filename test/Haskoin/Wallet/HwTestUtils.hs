@@ -18,6 +18,7 @@ module Haskoin.Wallet.HwTestUtils
     mine,
     inMempool,
     withChain,
+    withServerAnswering,
   )
 where
 
@@ -255,6 +256,19 @@ withChain ctx chain test = do
     withHome $ \home -> do
       useStore home ("http://127.0.0.1:" <> show port <> "/")
       test home ref
+
+-- | Run a test with a home whose hw talks to a server that answers every
+-- question with the same text, as a server that is not a haskoin-store
+-- would. The test gets the address of the server, as config.json has it.
+withServerAnswering :: Text -> (FilePath -> String -> IO a) -> IO a
+withServerAnswering text test =
+  testWithApplication (return answering) $ \port ->
+    withHome $ \home -> do
+      let url = "http://127.0.0.1:" <> show port <> "/"
+      useStore home url
+      test home url
+  where
+    answering _ respond = respond $ responseLBS status200 [] (BL.fromStrict (encodeUtf8 text))
 
 -- | The web API of haskoin-store, as its web client asks it, answering
 -- from a store: the paths, the parameters and the binary encoding of

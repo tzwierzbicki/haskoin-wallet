@@ -586,12 +586,13 @@ cmdPrepareTx ctx cfg rcpTxt nameM unit feeByte dust payer minConf strategy fileM
   runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
+    -- Before the transaction is built, not after
+    for_ fileM checkPathFree
     rcpts <- liftEither $ mapM (toRecipient net) rcpTxt
     gen <- liftIO initStdGen
     signDat <-
       buildTxSignData net ctx cfg gen strategy accId rcpts feeByte dust payer minConf coins
     txInfo <- txInfoOf ctx acc signDat
-    for_ fileM checkPathFree
     _ <- importPendingTx net ctx accId signDat
     for_ fileM $ \file -> liftIO $ writeJsonFile file $ Json.toJSON signDat
     newAcc <- getAccountById accId

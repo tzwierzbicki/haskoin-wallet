@@ -9,15 +9,19 @@
 module Haskoin.Wallet.Store where
 
 import Control.Concurrent (threadDelay)
+import Control.DeepSeq (NFData, force)
+import Control.Exception (ErrorCall (..), Handler (..), catches, evaluate)
 import Control.Monad
 import Control.Monad.Except
 import Control.Monad.Reader (MonadIO (..))
 import Data.Default (def)
 import Data.String.Conversions (cs)
+import Data.Text (Text)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebClient
 import Haskoin.Wallet.Config
+import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..))
 import Numeric.Natural (Natural)
 import UnliftIO.Async (pooledMapConcurrentlyN)
 
@@ -55,13 +59,31 @@ data Store = Store
 
 {- The web client -}
 
--- | A call of the web client, its failure shown as a message
-liftExcept :: (MonadError String m) => ExceptT Store.Except m a -> m a
-liftExcept action = do
-  e <- runExceptT action
-  case e of
-    Right a -> return a
-    Left err -> throwError $ show (err :: Store.Except)
+-- | A call of the web client to the store at the host, every failure shown
+-- as a message: an error the store answered, a store hw could not reach,
+-- or an answer it could not read. The web client decodes an answer only
+-- once it is used, so the answer is read in full here, where its failure
+-- is caught.
+webCall :: (NFData a) => Text -> ExceptT Store.Except IO a -> ExceptT String IO a
+webCall host action =
+  ExceptT $ (answered =<< runExceptT action) `catches` [Handler unreachable, Handler unreadable]
+  where
+    answered (Left err) = return $ Left (show (err :: Store.Except))
+    answered (Right answer) = Right <$> evaluate (force answer)
+    unreachable e = return $ Left (unreachableStore host e)
+    unreadable (ErrorCall reason) =
+      return $ Left ("The store at " <> cs host <> " gave an answer hw could not read: " <> reason)
+
+-- | The message of a store hw could not reach, and why
+unreachableStore :: Text -> HttpException -> String
+unreachableStore host e = "The store at " <> cs host <> " could not be reached: " <> reason
+  where
+    reason = case e of
+      HttpExceptionRequest _ (ConnectionFailure _) -> "the connection failed"
+      HttpExceptionRequest _ ConnectionTimeout -> "the connection timed out"
+      HttpExceptionRequest _ ResponseTimeout -> "it did not answer in time"
+      HttpExceptionRequest _ content -> show content
+      InvalidUrlException url why -> "the address " <> url <> " is not valid: " <> why
 
 -- | The store of hw: the web API of a haskoin-store, with the batch sizes
 -- of the configuration
@@ -91,9 +113,10 @@ webStore ctx cfg net =
           throwError $ "The store returned the wrong transaction id: " <> cs (txHashToHex published)
     }
   where
-    host = ApiConfig net (cs (configHost cfg))
-    call req = liftExcept $ apiCall ctx host req
-    batch size req = liftExcept $ apiBatch ctx size host req
+    host = configHost cfg
+    api = ApiConfig net (cs host)
+    call req = webCall host $ apiCall ctx api req
+    batch size req = webCall host $ apiBatch ctx size api req
     serial (Store.SerialList xs) = xs
     raw (Store.RawResultList xs) = xs
     -- A limit of zero asks the store for everything. Without a limit, the

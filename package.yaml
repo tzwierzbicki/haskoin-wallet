@@ -32,6 +32,7 @@ dependencies:
   - conduit >= 1.3.5
   - containers >= 0.6.2.1
   - data-default >= 0.7.1.1
+  - deepseq >= 1.4
   - directory >= 1.3.6.0
   - Decimal >= 0.5.1
   - entropy >= 0.4.1.6
@@ -41,6 +42,7 @@ dependencies:
   - esqueleto >=3.5.10.1
   - haskoin-core >= 1.0.4
   - haskoin-store-data >= 1.2.2
+  - http-client >= 0.7
   - http-types >= 0.12.3
   - lens >= 4.18.1
   - lens-aeson >= 1.1

@@ -62,9 +62,9 @@ coinAt ctx values = OutPoint (txHash $ fundingWorth ctx values)
 -- external addresses, the change address /1/0, and the recipients that
 -- belong to the wallet with their paths
 wallet :: [Store.Unspent] -> [(Address, SoftPath)] -> WalletCoins
-wallet coins recipients =
+wallet unspents recipients =
   WalletCoins
-    { coins = coins,
+    { coins = unspents,
       coinPaths = Map.fromList [(externalAddr i, Deriv :/ 0 :/ fromIntegral i) | i <- [0 .. 9]],
       change = (internalAddr 0, Deriv :/ 1 :/ 0),
       recipientPaths = Map.fromList recipients
@@ -104,7 +104,7 @@ spends ctx built = ((.value) <$> built.spentCoins, sortOn snd (outputsOf ctx bui
 
 -- | The outputs of a transaction as addresses and amounts, in order
 outputsOf :: Ctx -> Tx -> [(Address, Word64)]
-outputsOf ctx tx = [(forceRight (scriptToAddressBS ctx out.script), out.value) | out <- tx.outputs]
+outputsOf ctx transaction = [(forceRight (scriptToAddressBS ctx out.script), out.value) | out <- transaction.outputs]
 
 -- | The fee a built transaction pays: what its inputs hold beyond its outputs
 feePaid :: BuiltTx -> Word64
