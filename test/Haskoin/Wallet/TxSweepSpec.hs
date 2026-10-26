@@ -279,22 +279,22 @@ givenCoinsSpec :: Ctx -> Spec
 givenCoinsSpec ctx =
   describe "The coins of a sweep given by outpoint" $ do
     it "reads them from their transactions, in the order given" $
-      coinsOfTransactions [(txHash keyFunding, 1), (txHash keyFunding, 0)] [storeFunding]
+      coinsOfTransactions [OutPoint (txHash keyFunding) 1, OutPoint (txHash keyFunding) 0] [storeFunding]
         `shouldBe` Right
           [ storeCoin ctx (txHash keyFunding, 1) (Just 800000) (sweptKeyAddrs !! 1) 200000,
             storeCoin ctx (txHash keyFunding, 0) (Just 800000) (sweptKeyAddrs !! 0) 100000
           ]
     it "refuses a coin of a transaction the store does not know" $
-      coinsOfTransactions [(fakeTxHash 7, 1)] [storeFunding]
+      coinsOfTransactions [OutPoint (fakeTxHash 7) 1] [storeFunding]
         `shouldBe` Left "Coin 0000000000000000000000000000000000000000000000000000000000000007 1 is unknown to the store"
     it "refuses a coin of a transaction the store reports as deleted" $
-      coinsOfTransactions [(txHash keyFunding, 0)] [replaced storeFunding]
+      coinsOfTransactions [OutPoint (txHash keyFunding) 0] [replaced storeFunding]
         `shouldBe` Left ("Coin " <> fundingHex <> " 0 is unknown to the store")
     it "refuses an output index past the last output" $
-      coinsOfTransactions [(txHash keyFunding, 4)] [storeFunding]
+      coinsOfTransactions [OutPoint (txHash keyFunding) 4] [storeFunding]
         `shouldBe` Left ("Coin " <> fundingHex <> " 4 does not exist: the transaction has 4 outputs")
     it "refuses a spent output" $
-      coinsOfTransactions [(txHash keyFunding, 2)] [storeFunding]
+      coinsOfTransactions [OutPoint (txHash keyFunding) 2] [storeFunding]
         `shouldBe` Left ("Coin " <> fundingHex <> " 2 is already spent")
   where
     keyFunding = fundingTx ctx 1 (zip sweptKeyAddrs [100000, 200000, 300000, 400000])
@@ -345,7 +345,7 @@ fetchSpec ctx =
     it "takes the coins given by outpoint from their transactions, each coin once" $
       inDatabaseE $ do
         accId <- account
-        found <- fetchSweepCoins btc ctx (toStore store) accId [] [sweptKeyAddrs !! 0] [(txHash keyFunding, 0), (txHash keyFunding, 3)] [otherAddr 0]
+        found <- fetchSweepCoins btc ctx (toStore store) accId [] [sweptKeyAddrs !! 0] [OutPoint (txHash keyFunding) 0, OutPoint (txHash keyFunding) 3] [otherAddr 0]
         liftIO $ summary found `shouldBe` ([(0, 100000), (3, 400000)], [keyFunding], Map.empty, [])
     it "records the paths of the wallet's addresses among the coins and the destinations" $
       inDatabaseE $ do

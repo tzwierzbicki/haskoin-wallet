@@ -84,8 +84,8 @@ fetchSweepCoins ::
   [SecKey] ->
   -- | The addresses to sweep from
   [Address] ->
-  -- | The coins to sweep, by transaction hash and output index
-  [(TxHash, Natural)] ->
+  -- | The coins to sweep, by outpoint
+  [OutPoint] ->
   -- | The destinations
   [Address] ->
   ExceptT String (DB m) SweepCoins
@@ -101,7 +101,7 @@ fetchSweepCoins net ctx store accId secKeys sweepFrom given sweepTo = do
   parents <-
     if null given
       then return []
-      else fromStore $ storeTransactions store (nub $ fst <$> given)
+      else fromStore $ storeTransactions store (nub $ (.hash) <$> given)
   givenCoins <- liftEither $ coinsOfTransactions given parents
   let coins = nubBy ((==) `on` (.outpoint)) (found <> givenCoins)
       spentFrom = nub $ (.outpoint.hash) <$> coins
@@ -115,22 +115,23 @@ fetchSweepCoins net ctx store accId secKeys sweepFrom given sweepTo = do
 -- | The coins given by outpoint, read from their transactions as the store
 -- reports them: each must be an output of a transaction the store knows,
 -- that is not spent
-coinsOfTransactions :: [(TxHash, Natural)] -> [Store.Transaction] -> Either String [Store.Unspent]
+coinsOfTransactions :: [OutPoint] -> [Store.Transaction] -> Either String [Store.Unspent]
 coinsOfTransactions given parents = mapM coinOf given
   where
-    coinOf (hash, index) = do
-      let name = "Coin " <> cs (txHashToHex hash) <> " " <> show index
+    coinOf :: OutPoint -> Either String Store.Unspent
+    coinOf outpoint = do
+      let name = "Coin " <> cs (txHashToHex outpoint.hash) <> " " <> show outpoint.index
       tx <-
         maybeToEither (name <> " is unknown to the store") $
-          find (\t -> t.txid == hash && not t.deleted) parents
+          find (\t -> t.txid == outpoint.hash && not t.deleted) parents
       output <-
         maybeToEither (name <> " does not exist: the transaction has " <> show (length tx.outputs) <> " outputs") $
-          nth index tx.outputs
+          nth outpoint.index tx.outputs
       when (isJust output.spender) $ Left $ name <> " is already spent"
       return
         Store.Unspent
           { Store.block = tx.block,
-            Store.outpoint = OutPoint hash (fromIntegral index),
+            Store.outpoint = outpoint,
             Store.value = output.value,
             Store.script = output.script,
             Store.address = output.address

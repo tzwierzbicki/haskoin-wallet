@@ -52,7 +52,7 @@ spec = prepareContext $ \ctx -> do
   failureSpec ctx
   backupSpec
   receivingSpec ctx
-  offlineSigningSpec ctx
+  signingSpec ctx
   paymentSpec ctx
   recoverSpec ctx
   sweepSpec ctx
@@ -87,6 +87,14 @@ errorOf :: Response -> Either String Text
 errorOf (ResponseError err) = Right err
 errorOf other = Left (show other)
 
+-- | The refusal of a file that exists already
+alreadyExists :: FilePath -> Text
+alreadyExists file = "Path '" <> Text.pack file <> "' already exists"
+
+-- | Whether hw asked for a mnemonic
+askedMnemonic :: Run -> Bool
+askedMnemonic run = "Mnemonic" `Text.isInfixOf` runErr run
+
 -- | The accounts of an answer: name, index and what each can spend now
 accountsOf :: Response -> Either String [(Text, Int, Word64)]
 accountsOf (ResponseAccount acc spendable) = Right [(dBAccountName acc, dBAccountIndex acc, spendable)]
@@ -99,6 +107,11 @@ accountsOf other = Left (show other)
 keyOf :: Response -> Either String (Text, Int, Text)
 keyOf (ResponseAccount acc _) = Right (dBAccountName acc, dBAccountIndex acc, dBAccountXPubKey acc)
 keyOf other = Left (show other)
+
+-- | The accounts of an answer, with the fingerprints of their seeds
+fingerprintsOf :: Response -> Either String [(Text, Maybe Text)]
+fingerprintsOf (ResponseAccounts accs) = Right [(dBAccountName acc, dBAccountFingerprint acc) | (acc, _) <- accs]
+fingerprintsOf other = Left (show other)
 
 -- | The addresses of an answer, with their labels
 addressesOf :: Response -> Either String [(Text, Text)]
@@ -184,7 +197,7 @@ accountSpec =
         run <- hw home ["createacc", "main"] seedTwice
         runExit run `shouldBe` ExitFailure 1
         run `shouldSatisfy` printed "The account main already exists"
-        runErr run `shouldNotSatisfy` Text.isInfixOf "Mnemonic"
+        run `shouldNotSatisfy` askedMnemonic
 
     it "is checked by testacc against a mnemonic and a passphrase" $
       withHome $ \home -> do
@@ -259,6 +272,17 @@ addressSpec =
         createMain home
         (errorOf <$> hwJson home ["label", "5", "salary"] []) `shouldReturn` Right "Address 5 does not exist"
 
+    -- An address has an index below 2^31. The index 2^64 wrapped around to
+    -- 0, and hw labelled the first address.
+    it "are not labelled at an index no address has, rather than at another one" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        run <- hw home ["label", "18446744073709551616", "salary"] []
+        runExit run `shouldBe` ExitFailure 1
+        runErr run `shouldSatisfy` Text.isInfixOf "cannot parse value `18446744073709551616'"
+        (addressesOf <$> hwJson home ["addrs"] []) `shouldReturn` Right [(externalAddrsText !! 0, "")]
+
     -- The gap of BIP44: a wallet looking for payments stops after twenty
     -- unused addresses, so hw hands out no more until one is paid
     it "are refused past twenty that await a payment" $
@@ -299,6 +323,14 @@ splitSpec =
         fromParts `shouldBe` whole
         (\(_, index, _) -> index) <$> fromParts `shouldBe` Right 0
 
+    -- The rolls are asked once the entropy of the system is read. None are
+    -- typed here, and no mnemonic is made without them.
+    it "asks for dice rolls with --dice, and is not made without them" $
+      withHome $ \home -> do
+        run <- hw home ["mnemonic", "--dice"] []
+        runErr run `shouldSatisfy` Text.isInfixOf "Rolls: "
+        run `shouldSatisfy` printed "Cancelled: the input ended before the answer"
+
 {- Signed messages -}
 
 messageSpec :: Spec
@@ -332,7 +364,7 @@ messageSpec =
         createMain home
         run <- hw home ["signmsg", textOf (otherAddr 0), "hello"] seedOnce
         run `shouldSatisfy` printed "Address does not exist"
-        runErr run `shouldNotSatisfy` Text.isInfixOf "Mnemonic"
+        run `shouldNotSatisfy` askedMnemonic
 
 {- Failures -}
 
@@ -341,12 +373,16 @@ messageSpec =
 unsignedSweep :: Ctx -> TxSignData
 unsignedSweep ctx = TxSignData (spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 1000)]) [] [] [] (Just 1) Nothing
 
--- | A payment signed by the test wallet, which another wallet holds
-signedPayment :: Ctx -> TxSignData
-signedPayment ctx =
-  signedByWallet ctx $ TxSignData (spendingTx ctx [(txHash funding, 0)] [(otherAddr 0, 40000)]) [funding] [Deriv :/ 0 :/ 0] [] Nothing Nothing
+-- | A payment of the test wallet to another wallet, unsigned
+unsignedPayment :: Ctx -> TxSignData
+unsignedPayment ctx =
+  TxSignData (spendingTx ctx [(txHash funding, 0)] [(otherAddr 0, 40000)]) [funding] [Deriv :/ 0 :/ 0] [] Nothing Nothing
   where
     funding = fundingTx ctx 1 [(externalAddr 0, 50000)]
+
+-- | The same payment signed by the test wallet, which another wallet holds
+signedPayment :: Ctx -> TxSignData
+signedPayment ctx = signedByWallet ctx (unsignedPayment ctx)
 
 failureSpec :: Ctx -> Spec
 failureSpec ctx = do
@@ -378,10 +414,31 @@ failureSpec ctx = do
         runErr run `shouldSatisfy` Text.isInfixOf "option --unit: cannot parse value `eur'"
         doesFileExist (home </> ".hw" </> "accounts.sqlite") `shouldReturn` False
 
+    -- An output has an index of 32 bits. The index 2^32 wrapped around to
+    -- 0, and hw spent the first output of the transaction instead.
+    it "is refused a --coin index no output has, rather than spending another coin" $
+      withHome $ \home -> do
+        let coin = Text.unpack (txHashToHex (fakeTxHash 1)) <> " 4294967296"
+        forM_ [["preparetx", textOf (otherAddr 0), "0.0002"], ["preparesweep", "--sweepto", textOf (otherAddr 0)]] $ \command -> do
+          run <- hw home (command <> ["--coin", coin]) []
+          runExit run `shouldBe` ExitFailure 1
+          runErr run `shouldSatisfy` Text.isInfixOf ("option --coin: cannot parse value `" <> Text.pack coin <> "'")
+
     it "is cancelled when the input ends before the answer, and leaves nothing" $
       withHome $ \home -> do
         (errorOf <$> hwJson home ["createacc", "main"] [mnemonicWords testMnemonic]) `shouldReturn` Right "Cancelled: the input ended before the answer"
         (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right []
+
+    -- preparetx takes a change address before it checks the --output path.
+    -- The failure undoes it, with everything else the command wrote.
+    it "leaves nothing of what it wrote before it failed" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        writeFile (home </> "taken.json") ""
+        (errorOf <$> hwJson home ["preparetx", textOf (otherAddr 0), "0.0002", "--output", home </> "taken.json"] [])
+          `shouldReturn` Right (alreadyExists (home </> "taken.json"))
+        (addressesOf <$> hwJson home ["addrs", "--internal"] []) `shouldReturn` Right []
+        (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
 
     -- The other command holds the database the whole time: hw waits its
     -- three seconds, then gives up
@@ -426,6 +483,53 @@ failureSpec ctx = do
         (errorOf <$> hwJson home ["sendtx", "--input", home </> "payment.json"] [])
           `shouldReturn` Right "Give the --network of a transaction the wallet does not hold"
 
+  describe "signtx and signsweep" $ do
+    let nosig = Text.unpack (txHashToHex (fakeTxHash 1))
+    it "need a nosigHash, or an --input file with an --output file" $
+      withHome $ \home ->
+        forM_ ["signtx", "signsweep"] $ \command -> do
+          (errorOf <$> hwJson home [command] [])
+            `shouldReturn` Right "Provide either a NOSIGHASH or both a --input file and a --output file"
+          (errorOf <$> hwJson home [command, nosig, "--input", home </> "unsigned.json", "--output", home </> "signed.json"] [])
+            `shouldReturn` Right "Can not specify both a NOSIGHASH and a --input file"
+          (errorOf <$> hwJson home [command, "--input", home </> "unsigned.json"] [])
+            `shouldReturn` Right "When using a --input file, also provide a --output file"
+
+    it "refuse a missing --input file" $
+      withHome $ \home ->
+        forM_ ["signtx", "signsweep"] $ \command ->
+          (errorOf <$> hwJson home [command, "--input", home </> "missing.json", "--output", home </> "signed.json"] [])
+            `shouldReturn` Right "Input file does not exist"
+
+  -- The mnemonic would be typed for nothing
+  describe "signtx, before it asks for the mnemonic," $ do
+    it "refuses a transaction signed already" $
+      withHome $ \home -> do
+        createMain home
+        writeJsonFile (home </> "payment.json") (Json.toJSON (signedPayment ctx))
+        run <- hw home ["signtx", "--input", home </> "payment.json", "--output", home </> "signed.json"] seedOnce
+        run `shouldSatisfy` printed "The transaction is already signed"
+        run `shouldNotSatisfy` askedMnemonic
+
+    it "refuses a transaction sent already" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", textOf (otherAddr 0), "0.0002"] []
+        _ <- answer home ["signtx", nosig] seedOnce
+        _ <- answer home ["sendtx", nosig] []
+        run <- hw home ["signtx", nosig] seedOnce
+        run `shouldSatisfy` printed "The transaction is already online"
+        run `shouldNotSatisfy` askedMnemonic
+
+    it "refuses an --output file that exists" $
+      withHome $ \home -> do
+        createMain home
+        writeJsonFile (home </> "payment.json") (Json.toJSON (unsignedPayment ctx))
+        writeFile (home </> "signed.json") ""
+        run <- hw home ["signtx", "--input", home </> "payment.json", "--output", home </> "signed.json"] seedOnce
+        run `shouldSatisfy` printed (alreadyExists (home </> "signed.json"))
+        run `shouldNotSatisfy` askedMnemonic
+
 {- Backups and old databases -}
 
 -- | A database of version 3 holding the account main of the test wallet,
@@ -456,7 +560,7 @@ backupSpec =
         createMain home
         writeFile (home </> "copy.sqlite") ""
         (errorOf <$> hwJson home ["backup", home </> "copy.sqlite"] [])
-          `shouldReturn` Right ("Path '" <> Text.pack (home </> "copy.sqlite") <> "' already exists")
+          `shouldReturn` Right (alreadyExists (home </> "copy.sqlite"))
 
     it "is copied by backup into the backups of hw without a file" $
       withHome $ \home -> do
@@ -554,23 +658,50 @@ receivingSpec ctx = do
         (errorOf <$> hwJson home ["preparetx", textOf (otherAddr 0), "0.0004"] [])
           `shouldReturn` Right "The coins do not cover the amount and the fee"
 
-{- Signing offline -}
+{- Signing -}
 
-offlineSigningSpec :: Ctx -> Spec
-offlineSigningSpec ctx =
-  describe "A payment signed offline" $
-    -- The signer holds the account and asks for its mnemonic; the online
-    -- computer holds the same account, imported, and talks to the store.
-    -- 20000 satoshis are paid at 10 satoshis a byte: the transaction of one
-    -- input and two outputs is 226 bytes, so the fee is 2260, and the
-    -- change 50000 - 20000 - 2260 = 27740.
+-- | A signer holding the account main, and an online computer holding the
+-- same account, imported from the signer, and synced with the chain
+signerAndOnline :: FilePath -> FilePath -> IO ()
+signerAndOnline signer online = do
+  createMain signer
+  _ <- answer signer ["exportacc", signer </> "main.json"] []
+  _ <- answer online ["importacc", signer </> "main.json"] []
+  _ <- answer online ["receive"] []
+  void $ answer online ["sync"] []
+
+-- | What the payment of 20000 satoshis spends and pays, as the store sees
+-- it once sent: the coin of the payment to the wallet, and 27740 of change
+paymentSent :: Ctx -> ([OutPoint], [(Word64, Either String Address)])
+paymentSent ctx = ([OutPoint (txHash (payment ctx)) 0], [(20000, Right (otherAddr 0)), (27740, Right (internalAddr 0))])
+
+-- 20000 satoshis are paid at 10 satoshis a byte: the transaction of one
+-- input and two outputs is 226 bytes, so the fee is 2260, and the change
+-- 50000 - 20000 - 2260 = 27740.
+signingSpec :: Ctx -> Spec
+signingSpec ctx = do
+  describe "A payment signed on the same computer" $
+    -- signtx keeps the signed version in the wallet, which sendtx sends: it
+    -- sends no transaction that is not signed
+    it "is prepared, signed and sent by its nosigHash, and confirmed by a sync" $
+      withChain ctx (paidChain ctx) $ \home chain -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", textOf (otherAddr 0), "0.0002"] []
+        signed <- txOf =<< answer home ["signtx", nosig] seedOnce
+        pendingState signed `shouldBe` Just (True, False)
+        sent <- txOf =<< answer home ["sendtx", nosig] []
+        pendingState sent `shouldBe` Just (True, True)
+        published <- inMempool <$> readIORef chain
+        (spendsAndPays ctx <$> published) `shouldBe` [paymentSent ctx]
+        modifyIORef chain mine
+        (accountsOf <$> hwJson home ["sync"] []) `shouldReturn` Right [("main", 0, 27740)]
+
+  -- The signer holds the account and asks for its mnemonic; the online
+  -- computer holds the same account, imported, and talks to the store
+  describe "A payment signed offline" $ do
     it "is prepared online, signed offline, sent online, and confirmed by a sync" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online chain -> do
-        createMain signer
-        _ <- answer signer ["exportacc", signer </> "main.json"] []
-        _ <- answer online ["importacc", signer </> "main.json"] []
-        _ <- answer online ["receive"] []
-        _ <- answer online ["sync"] []
+        signerAndOnline signer online
         prepared <- txOf =<< answer online ["preparetx", textOf (otherAddr 0), "0.0002", "--output", online </> "unsigned.json"] []
         pendingState prepared `shouldBe` Just (False, False)
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 20000)]
@@ -581,12 +712,55 @@ offlineSigningSpec ctx =
         sent <- txOf =<< answer online ["sendtx", "--input", signer </> "signed.json"] []
         pendingState sent `shouldBe` Just (True, True)
         published <- inMempool <$> readIORef chain
-        (spendsAndPays ctx <$> published) `shouldBe` [([OutPoint (txHash (payment ctx)) 0], [(20000, Right (otherAddr 0)), (27740, Right (internalAddr 0))])]
+        (spendsAndPays ctx <$> published) `shouldBe` [paymentSent ctx]
         modifyIORef chain mine
         (accountsOf <$> hwJson online ["sync"] []) `shouldReturn` Right [("main", 0, 27740)]
         (txsOf <$> hwJson online ["pendingtxs"] []) `shouldReturn` Right []
         (txsOf <$> hwJson online ["txs"] []) `shouldReturn` Right [(TxDebit, -22260, Just 1), (TxCredit, 50000, Just 4)]
         (addressesOf <$> hwJson online ["addrs", "--internal"] []) `shouldReturn` Right [(internalAddrsText !! 0, "")]
+
+    -- Prepared without a file, the transaction is written out by exporttx
+    it "is exported by exporttx, signed offline, imported back by importtx, and sent by its nosigHash" $
+      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online chain -> do
+        signerAndOnline signer online
+        nosig <- nosigOf =<< txOf =<< answer online ["preparetx", textOf (otherAddr 0), "0.0002"] []
+        answer online ["exporttx", nosig, online </> "unsigned.json"] [] `shouldReturn` ResponseFile (online </> "unsigned.json")
+        _ <- answer signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
+        imported <- txOf =<< answer online ["importtx", signer </> "signed.json"] []
+        pendingState imported `shouldBe` Just (True, False)
+        sent <- txOf =<< answer online ["sendtx", nosig] []
+        pendingState sent `shouldBe` Just (True, True)
+        published <- inMempool <$> readIORef chain
+        (spendsAndPays ctx <$> published) `shouldBe` [paymentSent ctx]
+
+    -- The signer has no coins: the file carries the transactions the
+    -- payment spends, and the paths of the change
+    it "is shown by reviewtx from its file, as the signer reads it before signing, and not kept" $
+      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+        signerAndOnline signer online
+        _ <- answer online ["preparetx", textOf (otherAddr 0), "0.0002", "--output", online </> "unsigned.json"] []
+        reviewed <- txOf =<< answer signer ["reviewtx", online </> "unsigned.json"] []
+        paidToOthers reviewed `shouldBe` Map.fromList [(otherAddr 0, 20000)]
+        paidToWallet reviewed `shouldBe` Map.fromList [(internalAddr 0, 27740)]
+        summaryFee (txInfoSummary reviewed) `shouldBe` 2260
+        (txsOf <$> hwJson signer ["pendingtxs"] []) `shouldReturn` Right []
+
+    -- The online wallet has the account from a document without the
+    -- fingerprint of its seed, as hw wrote them before it recorded
+    -- fingerprints. bc560f95 is the fingerprint of the test seed.
+    it "names the seed in the signed file, which the online wallet learns as it sends it" $
+      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+        createMain signer
+        writeJsonFile (online </> "main.json") $
+          Json.object ["xpubkey" Json..= testAccountXPub, "network" Json..= ("btc" :: Text), "name" Json..= ("main" :: Text)]
+        _ <- answer online ["importacc", online </> "main.json"] []
+        _ <- answer online ["receive"] []
+        _ <- answer online ["sync"] []
+        (fingerprintsOf <$> hwJson online ["accounts"] []) `shouldReturn` Right [("main", Nothing)]
+        _ <- answer online ["preparetx", textOf (otherAddr 0), "0.0002", "--output", online </> "unsigned.json"] []
+        _ <- answer signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
+        _ <- answer online ["sendtx", "--input", signer </> "signed.json"] []
+        (fingerprintsOf <$> hwJson online ["accounts"] []) `shouldReturn` Right [("main", Just "bc560f95")]
 
 {- Amounts and fees -}
 
@@ -642,6 +816,14 @@ recoverSpec ctx =
         (accountsOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right []
         (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("main", 0, 0)]
 
+    -- The store of the test home refuses every connection, as on an offline
+    -- computer, where the mnemonic would be typed for nothing
+    it "are not looked for when the store is out of reach, which recover asks before the mnemonic" $
+      withHome $ \home -> do
+        run <- hw home ["recover"] seedOnce
+        runExit run `shouldBe` ExitFailure 1
+        run `shouldNotSatisfy` askedMnemonic
+
 {- Sweeping -}
 
 -- | The key of the Bitcoin wiki's "Wallet import format" page, in WIF for
@@ -653,27 +835,73 @@ wikiKeyWif = "KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617"
 wikiAddr :: Address
 wikiAddr = testAddress "1LoVGDgRs9hTfTNJNuXKSpywcbdvwRXpmK"
 
+-- | A coin of 30000 satoshis at the address of the key
+oldCoin :: Ctx -> Tx
+oldCoin ctx = fundingTx ctx 2 [(wikiAddr, 30000)]
+
+-- | A chain whose block 800000 holds the coin of the key
+oldKeyChain :: Ctx -> Chain
+oldKeyChain ctx = Chain 800002 [(oldCoin ctx, Just 800000)]
+
+-- | Write the key to a file in a home, as the user keeps it, with a note
+-- after it, and give its path
+writeKeyFile :: FilePath -> IO FilePath
+writeKeyFile home = do
+  writeFile (home </> "keys.txt") (Text.unpack wikiKeyWif <> " old wallet\n")
+  return (home </> "keys.txt")
+
+-- The coin of 30000 at the address of the key is swept at 10 satoshis a
+-- byte: one input and one output make 192 bytes, a fee of 1920, and 28080
+-- for the destination.
 sweepSpec :: Ctx -> Spec
 sweepSpec ctx =
-  describe "A sweep of an old key" $
-    -- The coin of 30000 at the address of the key goes to the wallet, at 10
-    -- satoshis a byte: one input and one output make 192 bytes, a fee of
-    -- 1920, and 28080 for the wallet
-    it "is prepared by preparesweep, signed by signsweep with the key, sent, and paid to the wallet" $ do
-      let oldCoin = fundingTx ctx 2 [(wikiAddr, 30000)]
-      withChain ctx (Chain 800002 [(oldCoin, Just 800000)]) $ \home chain -> do
+  describe "A sweep of an old key" $ do
+    it "is prepared by preparesweep, signed by signsweep with the key, sent, and paid to the wallet" $
+      withChain ctx (oldKeyChain ctx) $ \home chain -> do
         createMain home
         _ <- answer home ["receive"] []
-        writeFile (home </> "keys.txt") (Text.unpack wikiKeyWif <> " old wallet\n")
-        prepared <- txOf =<< answer home ["preparesweep", "--prvkeys", home </> "keys.txt", "--sweepto", textOf (externalAddr 0)] []
+        keys <- writeKeyFile home
+        prepared <- txOf =<< answer home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0)] []
         pendingState prepared `shouldBe` Just (False, False)
         paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 28080)]
         nosig <- nosigOf prepared
-        signed <- txOf =<< answer home ["signsweep", nosig, "--prvkeys", home </> "keys.txt"] []
+        signed <- txOf =<< answer home ["signsweep", nosig, "--prvkeys", keys] []
         pendingState signed `shouldBe` Just (True, False)
         _ <- answer home ["sendtx", nosig] []
         published <- inMempool <$> readIORef chain
-        (spendsAndPays ctx <$> published) `shouldBe` [([OutPoint (txHash oldCoin) 0], [(28080, Right (externalAddr 0))])]
+        (spendsAndPays ctx <$> published) `shouldBe` [([OutPoint (txHash (oldCoin ctx)) 0], [(28080, Right (externalAddr 0))])]
         modifyIORef chain mine
         (accountsOf <$> hwJson home ["sync"] []) `shouldReturn` Right [("main", 0, 28080)]
+
+    it "that pays outside the wallet is refused without an --output file" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        createMain home
+        keys <- writeKeyFile home
+        (errorOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0)] [])
+          `shouldReturn` Right "The sweep does not involve this wallet: give an --output file to write it to"
+
+    -- The wallet keeps no trace of it: the sweep is signed from its file,
+    -- and sent with the network sendtx cannot read from the wallet
+    it "that pays outside the wallet is written to its file only, signed from it, and sent with its network" $
+      withChain ctx (oldKeyChain ctx) $ \home chain -> do
+        createMain home
+        keys <- writeKeyFile home
+        prepared <- txOf =<< answer home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--output", home </> "sweep.json"] []
+        paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 28080)]
+        (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+        signed <- txOf =<< answer home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.json", "--prvkeys", keys] []
+        pendingState signed `shouldBe` Just (True, False)
+        sent <- answer home ["sendtx", "--input", home </> "signed.json", "--network", "btc"] []
+        published <- inMempool <$> readIORef chain
+        (spendsAndPays ctx <$> published) `shouldBe` [([OutPoint (txHash (oldCoin ctx)) 0], [(28080, Right (otherAddr 0))])]
+        (ResponseSentTx btc . txHash <$> published) `shouldBe` [sent]
+
+    -- The keys would be typed for nothing
+    it "is refused an --output file that exists, before the keys are typed" $
+      withHome $ \home -> do
+        createMain home
+        writeFile (home </> "sweep.json") ""
+        run <- hw home ["preparesweep", "--prvkeys", "-", "--sweepto", textOf (otherAddr 0), "--output", home </> "sweep.json"] []
+        run `shouldSatisfy` printed (alreadyExists (home </> "sweep.json"))
+        runErr run `shouldNotSatisfy` Text.isInfixOf "Private keys"
 

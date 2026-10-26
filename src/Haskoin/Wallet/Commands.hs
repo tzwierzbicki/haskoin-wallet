@@ -552,11 +552,11 @@ cmdAddrs cfg nameM internal page =
     balances <- spendableAtAddresses (accountNetwork acc) accId (dBAddressAddress <$> as)
     return $ ResponseAddresses acc [(addr, spendableAt balances addr) | addr <- as]
 
-cmdLabel :: Config -> Maybe Text -> Natural -> Text -> IO Response
+cmdLabel :: Config -> Maybe Text -> Int -> Text -> IO Response
 cmdLabel cfg nameM idx lab =
   runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
-    adr <- setAddrLabel accId (fromIntegral idx) lab
+    adr <- setAddrLabel accId idx lab
     addressResponse accId acc adr
 
 {- Transactions and coins -}
@@ -580,17 +580,16 @@ cmdPrepareTx ::
   Natural ->
   CoinSelection ->
   Maybe FilePath ->
-  [(TxHash, Natural)] ->
+  [OutPoint] ->
   IO Response
 cmdPrepareTx ctx cfg rcpTxt nameM unit feeByte dust payer minConf strategy fileM coins =
   runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
-        cControl = (\(a,b) -> OutPoint a (fromIntegral b)) <$> coins
     rcpts <- liftEither $ mapM (toRecipient net) rcpTxt
     gen <- liftIO initStdGen
     signDat <-
-      buildTxSignData net ctx cfg gen strategy accId rcpts feeByte dust payer minConf cControl
+      buildTxSignData net ctx cfg gen strategy accId rcpts feeByte dust payer minConf coins
     txInfo <- txInfoOf ctx acc signDat
     for_ fileM checkPathFree
     _ <- importPendingTx net ctx accId signDat
@@ -683,9 +682,9 @@ parseSignInput nosigHM inputM outputM =
   case (nosigHM, inputM, outputM) of
     (Nothing, Nothing, _) ->
       throwError
-        "Provide either a TXHASH or both a --input file and a --output file"
+        "Provide either a NOSIGHASH or both a --input file and a --output file"
     (Just _, Just _, _) ->
-      throwError "Can not specify both a TXHASH and a --input file"
+      throwError "Can not specify both a NOSIGHASH and a --input file"
     (_, Just _, Nothing) ->
       throwError "When using a --input file, also provide a --output file"
     (Just h, _, _) -> do
@@ -802,7 +801,7 @@ cmdPrepareSweep ::
   Maybe KeySource ->
   [Text] ->
   [Text] ->
-  [(TxHash, Natural)] ->
+  [OutPoint] ->
   Maybe FilePath ->
   Natural ->
   Natural ->
@@ -811,6 +810,8 @@ cmdPrepareSweep ctx cfg nameM keysM sweepFromT sweepToT coins outputM feeByte du
   runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
+    -- Before the keys are typed, not after
+    for_ outputM checkPathFree
     secKeys <- maybe (return []) (readSecKeys terminal net) keysM
     sweepFrom <- liftEither $ mapM (textToAddrE net) sweepFromT
     sweepTo <- liftEither $ mapM (textToAddrE net) sweepToT
@@ -818,7 +819,6 @@ cmdPrepareSweep ctx cfg nameM keysM sweepFromT sweepToT coins outputM feeByte du
     gen <- liftIO initStdGen
     tsd <- liftEither $ buildSweepSignData net ctx gen found sweepTo feeByte dust
     txInfo <- txInfoOf ctx acc tsd
-    for_ outputM checkPathFree
     if involvesWallet (txInfoSummary txInfo)
       then void $ importPendingTx net ctx accId tsd
       else

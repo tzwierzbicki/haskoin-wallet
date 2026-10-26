@@ -70,7 +70,7 @@ data Command
       }
   | CommandLabel
       { commandMaybeAcc :: !(Maybe Text),
-        commandAddrIndex :: !Natural,
+        commandAddrIndex :: !Int,
         commandLabel :: !Text
       }
   | CommandTxs
@@ -86,7 +86,7 @@ data Command
         commandMinConf :: !Natural,
         commandCoinSelection :: !CoinSelection,
         commandOutputFileMaybe :: !(Maybe FilePath),
-        commandCoins :: ![(TxHash, Natural)]
+        commandCoins :: ![OutPoint]
       }
   | CommandPendingTxs
       { commandMaybeAcc :: !(Maybe Text),
@@ -145,7 +145,7 @@ data Command
         commandSecKeysMaybe :: !(Maybe KeySource),
         commandSweepFrom :: ![Text],
         commandSweepTo :: ![Text],
-        commandCoins :: ![(TxHash, Natural)],
+        commandCoins :: ![OutPoint],
         commandOutputFileMaybe :: !(Maybe FilePath),
         commandFeeByte :: !Natural,
         commandDust :: !Natural
@@ -674,15 +674,22 @@ labelParser = do
           <*> textArg "The new label for the address"
   info cmd $ progDesc "Set the label of a receiving address, by its index in addrs"
 
-addrIndexArg :: Parser Natural
+addrIndexArg :: Parser Int
 addrIndexArg =
-  argument (maybeReader $ readNatural . cs) $
+  argument (maybeReader readAddrIndex) $
     metavar "INT"
       <> help
         [r|
 The index of the receiving address, as `addrs` lists it: the first address has
 the index 0. The change addresses, those of `addrs --internal`, have no label.
 |]
+  where
+    -- An address is derived at a soft index of BIP32, below 2^31. A larger
+    -- number names no address, rather than wrapping around to another one.
+    readAddrIndex :: String -> Maybe Int
+    readAddrIndex s = case readNatural (cs s) of
+      Just n | n < 2 ^ (31 :: Int) -> Just (fromIntegral n)
+      _ -> Nothing
 
 {- Txs Parser -}
 
@@ -750,16 +757,18 @@ sats) or the --unit option says otherwise. For example, 0.00001, 0.00001btc,
 to 2, and satoshis are whole. Separators such as 1'000 are refused.
 |]
 
-coinOption :: Parser (TxHash, Natural)
+-- | A coin to spend: the id of its transaction and its index among the
+-- outputs, in one argument
+coinOption :: Parser OutPoint
 coinOption =
-  option (maybeReader f) $
+  option (maybeReader coin) $
   short 'c' <>
   long "coin" <>
   metavar "TXHASH INT" <> help "Coin control: specify coins to spend"
   where
-    f s =
+    coin s =
       case words s of
-        [a, b] -> (,) <$> hexToTxHash (cs a) <*> readNatural (cs b)
+        [hash, index] -> OutPoint <$> hexToTxHash (cs hash) <*> readOutputIndex index
         _ -> Nothing
 
 feeOption :: Parser Natural
@@ -1037,12 +1046,15 @@ outpointArgs = OutPoint <$> txHashArg <*> outputIndexArg
       argument (maybeReader $ hexToTxHash . cs) $
         metavar "TXHASH" <> help "The id of the transaction of the coin"
     outputIndexArg =
-      argument (maybeReader readIndex) $
+      argument (maybeReader readOutputIndex) $
         metavar "INDEX" <> help "The index of the coin among the outputs of its transaction"
-    readIndex :: String -> Maybe Word32
-    readIndex s = case readNatural (cs s) of
-      Just n | n <= fromIntegral (maxBound :: Word32) -> Just (fromIntegral n)
-      _ -> Nothing
+
+-- | The index of an output in its transaction, which has 32 bits. A larger
+-- number names no output, rather than wrapping around to another one.
+readOutputIndex :: String -> Maybe Word32
+readOutputIndex s = case readNatural (cs s) of
+  Just n | n <= fromIntegral (maxBound :: Word32) -> Just (fromIntegral n)
+  _ -> Nothing
 
 {- SendTx Parser -}
 
