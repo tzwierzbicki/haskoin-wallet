@@ -34,6 +34,8 @@ import Haskoin.Wallet.TxSignData (TxSignData (..))
 import Haskoin.Wallet.Util (Page (Page))
 import Numeric.Natural (Natural)
 import System.FilePath ((</>))
+import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), MarshalJsonBox (..), testIdentity)
+import Haskoin.Wallet.Arbitrary (arbitraryDBAccount, arbitraryPubKeyDoc)
 import Test.Hspec
 import Text.RawString.QQ (r)
 
@@ -47,6 +49,12 @@ spec = prepareContext $ \ctx -> do
   balanceSpec ctx
   documentSpec ctx
   jsonSpec
+  -- An account and its document read back as they were written
+  testIdentity
+    def
+      { jsonTests = [JsonBox (arbitraryDBAccount btc ctx)],
+        marshalJsonTests = [MarshalJsonBox ((,) ctx <$> arbitraryPubKeyDoc ctx)]
+      }
 
 {- Fixtures -}
 

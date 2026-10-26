@@ -36,6 +36,9 @@ import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo (repsertSummary, storeSummary)
 import Haskoin.Wallet.Util (Page (Page))
 import Numeric.Natural (Natural)
+import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), MarshalJsonBox (..), testIdentity)
+import Data.Default (def)
+import Haskoin.Wallet.Arbitrary (arbitraryJsonCoin)
 import Test.Hspec
 import Text.RawString.QQ (r)
 
@@ -49,6 +52,8 @@ spec = prepareContext $ \ctx -> do
   lifeSpec ctx
   rowSpec ctx
   jsonSpec ctx
+  -- A coin reads back as it was written
+  testIdentity def {marshalJsonTests = [MarshalJsonBox ((,) btc <$> arbitraryJsonCoin btc)]}
 
 {- Fixtures -}
 

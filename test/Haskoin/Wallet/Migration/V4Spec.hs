@@ -290,7 +290,7 @@ anotherSeed = do
 
 -- | The key of the account savings, m/44'/0'/1' of the test seed
 savingsXPub :: Text
-savingsXPub = "xpub6CHK45s4QJWpt9C5kpAnypsE5ratNMWRGE3pZNQgGnxHTvZ1y6E65mSKMmz7V5ZUnVq5JMgq1Qros98GhLMCK7eoDaNo8kjqNdJzD8otqLW"
+savingsXPub = testAccountXPub1
 
 laterTime, latestTime :: UTCTime
 laterTime = UTCTime (fromGregorian 2023 11 2) 0

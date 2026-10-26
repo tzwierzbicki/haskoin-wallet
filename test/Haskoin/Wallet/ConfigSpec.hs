@@ -11,6 +11,8 @@ import Data.Default (def)
 import Data.String.Conversions (cs)
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.TestUtils (inScratchDirectory)
+import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), MarshalJsonBox (..), testIdentity)
+import Haskoin.Wallet.Arbitrary (arbitraryConfig)
 import Test.Hspec
 import Text.RawString.QQ (r)
 
@@ -19,6 +21,8 @@ spec = do
   fileSpec
   keySpec
   directorySpec
+  -- A configuration reads back as it was written
+  testIdentity def {jsonTests = [JsonBox arbitraryConfig]}
 
 fileSpec :: Spec
 fileSpec =

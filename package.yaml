@@ -77,9 +77,11 @@ tests:
   spec:
     main: Spec.hs
     source-dirs: test
+    # The tests of whole workflows run the hw of this build: see
+    # Haskoin.Wallet.HwTestUtils
     verbatim:
       build-tool-depends:
-        hspec-discover:hspec-discover
+        hspec-discover:hspec-discover, haskoin-wallet:hw
     # Threaded: the lock tests hold the database from one thread while
     # another waits on it inside SQLite
     ghc-options: -Wall -threaded
@@ -89,3 +91,7 @@ tests:
       - QuickCheck >= 2.13.2
       - HUnit >= 1.6.0.0
       - crypton >= 1.1
+      - bytes >= 0.17
+      - typed-process >= 0.2.6
+      - wai >= 3.2
+      - warp >= 3.3

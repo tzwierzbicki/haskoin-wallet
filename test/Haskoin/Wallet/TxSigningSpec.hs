@@ -16,6 +16,9 @@ import Haskoin.Wallet.TxSigning
 import Haskoin.Wallet.TxSize (p2pkhInput, p2pkhOutputSize, txSize)
 import Haskoin.Wallet.TxVectors
 import Numeric.Natural (Natural)
+import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), MarshalJsonBox (..), testIdentity)
+import Data.Default (def)
+import Haskoin.Wallet.Arbitrary (arbitraryTxSignData)
 import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck
@@ -32,6 +35,8 @@ spec = do
     signingSpec ctx
     verificationSpec ctx
     propertiesSpec ctx
+    -- The signing data reads back as it was written
+    testIdentity def {jsonTests = [JsonBox (arbitraryTxSignData btc ctx)]}
 
 -- | Sign with the account key, like signtx does. Vectors with sweep keys
 -- belong in test/data/tx-sweep.

@@ -28,6 +28,8 @@ import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Util (Page (Page))
+import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), MarshalJsonBox (..), testIdentity)
+import Haskoin.Wallet.Arbitrary (arbitraryAddressBalance, arbitraryDBAddress)
 import Test.Hspec
 import Text.RawString.QQ (r)
 
@@ -40,6 +42,8 @@ spec = prepareContext $ \ctx -> do
   pathSpec
   derivingSpec ctx
   jsonSpec
+  -- An address and its balance read back as they were written
+  testIdentity def {jsonTests = [JsonBox (arbitraryDBAddress btc), JsonBox arbitraryAddressBalance]}
 
 -- | The account of these tests
 account :: Ctx -> ExceptT String (DB IO) DBAccountId
