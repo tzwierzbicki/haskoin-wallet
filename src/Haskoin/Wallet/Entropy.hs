@@ -1,5 +1,4 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The entropy of a new mnemonic: the entropy of the operating system,
@@ -15,7 +14,8 @@ module Haskoin.Wallet.Entropy
     mergeMnemonicParts,
     systemEntropy,
     entropyAt,
-    checkEntropy,
+    checkSource,
+    hasPattern,
     newMnemonic,
     Sources (..),
     genMnemonic,
@@ -30,14 +30,11 @@ import Control.Monad.Trans (lift)
 import Data.Bifunctor (first)
 import Data.Bits (xor)
 import qualified Data.ByteString as BS
-import Data.ByteString.Short (fromShort)
 import Data.List (group, nub, sort)
 import Data.List.Split (chunksOf)
-import Data.Serialize (encode)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Data.Word (Word32)
-import Haskoin.Crypto (Hash256 (..), Mnemonic, fromMnemonic, sha256, toMnemonic)
+import Haskoin.Crypto (Mnemonic, fromMnemonic, toMnemonic)
 import Numeric.Natural (Natural)
 import System.Directory (doesPathExist)
 import System.Entropy (getEntropy)
@@ -137,8 +134,9 @@ systemEntropy = entropyAt randomDevice
 -- at the path is refused: a plain file there, as a container or a chroot
 -- may have, would give the same bytes to every mnemonic. So is a link to
 -- nothing: a machine with a broken /dev/random needs a look before it
--- makes a mnemonic. A source that fails, or gives bytes that cannot be
--- used, fails the command rather than give a weak mnemonic.
+-- makes a mnemonic. A source that fails, or gives fewer bytes than asked,
+-- fails the command. The bytes themselves are taken as they come: see
+-- 'checkSource'.
 entropyAt :: (MonadIO m) => FilePath -> Natural -> ExceptT String m (Text, BS.ByteString)
 entropyAt path bytes = do
   -- The status of the path itself, a link included, where the stat that
@@ -154,7 +152,9 @@ entropyAt path bytes = do
       device <- isCharacterDevice <$> systemIO (getFileStatus path)
       unless device $ throwError $ path <> " is not a device, so hw does not read it: " <> checkMachine
       (,) (Text.pack path) <$> systemIO (withBinaryFile path ReadMode (`BS.hGet` fromIntegral bytes))
-  (,) source <$> liftEither (checkEntropy bytes entropy)
+  unless (BS.length entropy == fromIntegral bytes) $
+    throwError $ "The operating system gave " <> show (BS.length entropy) <> " bytes of entropy, not " <> show bytes
+  return (source, entropy)
   where
     checkMachine = "check this machine before you make a mnemonic on it"
 
@@ -166,16 +166,22 @@ systemIO io = liftIO (try io) >>= either (throwError . couldNotRead) return
 couldNotRead :: IOException -> String
 couldNotRead e = "The entropy of the system could not be read: " <> show e
 
--- | Bytes of entropy, if they can be used: as many as asked for, and
--- without a pattern that random bytes about never have (see the last
--- section)
-checkEntropy :: Natural -> BS.ByteString -> Either String BS.ByteString
-checkEntropy bytes entropy
-  | BS.length entropy /= fromIntegral bytes =
-      Left $ "The operating system gave " <> show (BS.length entropy) <> " bytes of entropy, not " <> show bytes
-  | hasPattern entropy =
-      Left "The operating system gave bytes with a pattern that random bytes about never have: its entropy is broken"
-  | otherwise = Right entropy
+-- | The bytes read from a source to check it
+sampleSize :: Natural
+sampleSize = 64
+
+-- | The check of a source of entropy, on a sample of its bytes that is
+-- then thrown away: the sample must have no pattern that random bytes
+-- about never have (see the last section). The entropy of a mnemonic is
+-- read afterwards and taken as it comes. Refusing a mnemonic's own
+-- entropy for a pattern would leave out a few of its values, and take a
+-- little from the entropy of all of them; a sample thrown away takes
+-- nothing.
+checkSource :: (Monad m) => (Natural -> ExceptT String m (Text, BS.ByteString)) -> ExceptT String m ()
+checkSource readEntropy = do
+  (_, sample) <- readEntropy sampleSize
+  when (hasPattern sample) $
+    throwError "The operating system gave bytes with a pattern that random bytes about never have: its entropy is broken"
 
 {- A new mnemonic -}
 
@@ -185,42 +191,36 @@ entropySizes = [16, 20 .. 32]
 
 -- | The mnemonic of the entropy of the system, mixed by exclusive or with
 -- the entropy of dice rolls if any, and its parts when random parts of its
--- length split it. With dice, each random part is masked with them first
--- (see 'maskPart'). Both are checked before the user writes them down: the
--- mnemonic must give back its entropy, and the parts the mnemonic. A
--- failure of either would lose the funds sent to its accounts.
+-- length split it. The dice cover the entropy and every random part, each
+-- byte of them used once: the first bytes with the entropy of the system,
+-- then as many with each random part. Mixed so, a value is as random as
+-- the more random of its two sources, and tells nothing of either; a dice
+-- byte used twice would tie the two values it went into together, as a
+-- one-time pad used twice does. Both the mnemonic and its parts are
+-- checked before the user writes them down: the mnemonic must give back
+-- its entropy, and the parts the mnemonic. A failure of either would lose
+-- the funds sent to its accounts.
 newMnemonic :: BS.ByteString -> Maybe BS.ByteString -> [BS.ByteString] -> Either String (Mnemonic, [Mnemonic])
 newMnemonic system diceM randoms = do
-  unless (fromIntegral (BS.length system) `elem` entropySizes) $
-    Left $ "A mnemonic has 16, 20, 24, 28 or 32 bytes of entropy, not " <> show (BS.length system)
-  unless (all ((== BS.length system) . BS.length) randoms) $
+  unless (fromIntegral size `elem` entropySizes) $
+    Left $ "A mnemonic has 16, 20, 24, 28 or 32 bytes of entropy, not " <> show size
+  unless (all ((== size) . BS.length) randoms) $
     Left "A random part of the split does not have as many bytes as the entropy of the system"
-  entropy <- maybe (Right system) mixDice diceM
-  let masked = maybe randoms (\dice -> zipWith (maskPart dice) [1 ..] randoms) diceM
+  (entropy, mixed) <- case diceM of
+    Nothing -> Right (system, randoms)
+    Just dice -> do
+      unless (BS.length dice == size * (1 + length randoms)) $
+        Left "The dice rolls did not give as many bytes as the entropy of the system and its random parts"
+      let piece n = BS.take size (BS.drop (n * size) dice)
+      Right (xorBytes system (piece 0), zipWith (\n random -> xorBytes random (piece n)) [1 ..] randoms)
   mnem <- toMnemonic entropy
-  parts <- if null masked then Right [] else mapM toMnemonic (splitEntropyWith entropy masked)
+  parts <- if null mixed then Right [] else mapM toMnemonic (splitEntropyWith entropy mixed)
   unless (fromMnemonic mnem == Right entropy) $ Left failedCheck
   unless (null parts || mergeMnemonicParts parts == Right mnem) $ Left failedCheck
   return (mnem, parts)
   where
-    mixDice dice
-      | BS.length dice == BS.length system = Right (xorBytes system dice)
-      | otherwise = Left "The dice rolls did not give as many bytes as the entropy of the system"
+    size = BS.length system
     failedCheck = "The new mnemonic failed its check, so hw does not show it: please report this bug"
-
--- | A random part of a split masked with the dice: the part xor the first
--- bytes of the SHA-256 of the dice entropy followed by the number of the
--- part, from 1, as four big-endian bytes. The random parts come from the
--- system alone, so without the mask a predictable system would give away
--- the mnemonic to whoever holds the first part. Masked, a part is
--- unpredictable if either the system or the dice is: a random part xor
--- anything apart from it is as random as the part, and the hash of good
--- dice cannot be told without them. The mask does not weaken the mnemonic
--- itself: knowing the hash of the dice does not give the dice.
-maskPart :: BS.ByteString -> Word32 -> BS.ByteString -> BS.ByteString
-maskPart dice n part = xorBytes part (BS.take (BS.length part) hash)
-  where
-    hash = fromShort (sha256 (dice <> encode n)).get
 
 -- | Where a new mnemonic comes from
 data Sources m = Sources
@@ -236,22 +236,26 @@ data Sources m = Sources
 -- number of parts (one: whole), with the name of the source of its
 -- entropy.
 --
--- The entropy of the system, and the random parts of a split, are read
--- before the dice rolls. The system gives its bytes before it sees a roll,
--- so it cannot choose them to cancel the rolls. The rolls cannot depend on
+-- The source is checked first, on a sample that is thrown away. Then the
+-- entropy of the system, and the random parts of a split, are read before
+-- the dice rolls. The system gives its bytes before it sees a roll, so it
+-- cannot choose them to cancel the rolls. The rolls cannot depend on
 -- bytes the user never sees. So the mix is as strong as the stronger of
--- the two. A source that fails also fails before the user rolls a die. The
--- user is told before the read, which waits while the system gathers its
--- first entropy, on a machine just started for instance.
+-- the two. A source that fails also fails before the user rolls a die.
+-- The dice are asked for the entropy and every random part at once, so
+-- that no roll is used twice. The user is told before the first read,
+-- which waits while the system gathers its first entropy, on a machine
+-- just started for instance.
 genMnemonic :: (Monad m) => Sources m -> Natural -> Natural -> ExceptT String m (Text, Mnemonic, [Mnemonic])
 genMnemonic sources bytes parts = do
   unless (bytes `elem` entropySizes) $
     throwError $ "A mnemonic has 16, 20, 24, 28 or 32 bytes of entropy, not " <> show bytes
   when (parts == 0) $ throwError "A mnemonic comes in one part or more, not 0"
   lift $ say sources "Reading the entropy of the system, which can take a moment while the system gathers it"
+  checkSource (readSystem sources)
   (source, system) <- readSystem sources bytes
   randoms <- replicateM (fromIntegral parts - 1) (snd <$> readSystem sources bytes)
-  diceM <- traverse ($ bytes) (askDice sources)
+  diceM <- traverse ($ (bytes * parts)) (askDice sources)
   (mnem, split) <- liftEither $ newMnemonic system diceM randoms
   return (source, mnem, split)
 
@@ -263,9 +267,10 @@ genMnemonic sources bytes parts = do
 -- the binomial distribution B(m, 1/256) exactly, even for a few bytes. A
 -- broken source gives bytes that simple rules guess far more often: one
 -- byte over and over, a pattern that repeats, a counter. hw guesses each
--- byte by such rules, and counts the most common byte. It refuses the bytes
--- when a test finds a result so unlikely that random bytes would give it,
--- with all the tests together, less than once in 2^40 times.
+-- byte of a sample by such rules, and counts the most common byte. It
+-- refuses the source when a test finds a result so unlikely that random
+-- bytes would give it, with all the tests together, less than once in 2^40
+-- times.
 --
 -- This is the principle of the health tests and of the predictors of NIST
 -- SP 800-90B, "Recommendation for the Entropy Sources Used for Random Bit

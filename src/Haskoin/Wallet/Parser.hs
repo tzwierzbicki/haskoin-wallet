@@ -347,8 +347,8 @@ splitInOption =
         [r|
 The mnemonic is split in different pieces and reconstructed using bitwise xor.
 All the pieces are required for signing. The ordering of the pieces is not
-important. The pieces are made from the system entropy; with --dice, they are
-also masked with the dice rolls, so that they stay secret if either is sound.
+important. The pieces are made from the system entropy. With --dice, hw asks for
+enough rolls to mix with every piece as well, and uses no roll twice.
 |]
   where
     f s =

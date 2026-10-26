@@ -2,14 +2,14 @@
 
 -- | The entropy of a new mnemonic, as "Haskoin.Wallet.Entropy" makes it:
 -- the bits of the dice rolls a user may add, the exclusive or that mixes
--- entropies, the entropy of the system, and the parts a mnemonic is split
--- into and merged back from. Each part alone says nothing of the mnemonic:
--- all of them are needed to merge it back.
+-- entropies, the entropy of the system and the check of its source, and
+-- the parts a mnemonic is split into and merged back from. Each part alone
+-- says nothing of the mnemonic: all of them are needed to merge it back.
 module Haskoin.Wallet.EntropySpec (spec) where
 
 import Control.Exception (evaluate)
 import Control.Monad (forM_)
-import Control.Monad.Except (runExceptT, throwError)
+import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
@@ -17,6 +17,7 @@ import Data.IORef (IORef, modifyIORef, newIORef, readIORef, writeIORef)
 import Data.List (sort)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import Data.Word (Word8)
 import Haskoin (toMnemonic)
 import Haskoin.Util.Arbitrary (arbitraryBSn)
 import Haskoin.Wallet.Entropy
@@ -35,6 +36,8 @@ spec = do
   splitSpec
   mergeSpec
   systemSpec
+  checkSpec
+  patternSpec
   newMnemonicSpec
   generateSpec
 
@@ -67,6 +70,22 @@ zooVote = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo z
 -- | The sizes of entropy, in bytes, that a mnemonic can have
 entropySizes :: [Int]
 entropySizes = [16, 20, 24, 28, 32]
+
+-- | Random bytes, read from /dev/random once, on 2026-10-26: the 64 bytes
+-- of a sample of a sound source, and 32 bytes
+goodSample, randomBytes32 :: BS.ByteString
+goodSample =
+  BS.pack
+    [ 0x5d, 0x51, 0x10, 0x86, 0xbe, 0x8b, 0xbf, 0x2f, 0xa3, 0x2c, 0xdf, 0x3d, 0x16, 0x77, 0x94, 0x68,
+      0xa6, 0x1a, 0x1b, 0x48, 0x20, 0x21, 0x40, 0x18, 0xc8, 0x8f, 0x8e, 0xa3, 0x19, 0xd1, 0xe5, 0x5d,
+      0xda, 0x22, 0x2e, 0xd6, 0x6a, 0xd1, 0xe3, 0x98, 0xe3, 0x41, 0xef, 0xd1, 0x9b, 0x01, 0x6a, 0xbe,
+      0x6d, 0xc8, 0x9e, 0x49, 0x83, 0xf4, 0xe0, 0xec, 0xcc, 0xc9, 0x6a, 0x4d, 0x1c, 0xd6, 0x83, 0x4f
+    ]
+randomBytes32 =
+  BS.pack
+    [ 0x8a, 0x19, 0x1f, 0xe9, 0x25, 0x26, 0x35, 0x0a, 0x2b, 0x5d, 0xe2, 0xd4, 0x3d, 0x8d, 0xdd, 0x9f,
+      0x6e, 0xba, 0xcf, 0x30, 0xd8, 0x26, 0x75, 0x9f, 0xc6, 0xb5, 0x7b, 0xf5, 0xf8, 0x34, 0x3b, 0x08
+    ]
 
 {- The entropy of dice rolls -}
 
@@ -310,131 +329,192 @@ systemSpec = do
         createFileLink (dir </> "nothing") link
         readAt link 16 `shouldReturn` Left (link <> " is a link to nothing, so hw does not read it: check this machine before you make a mnemonic on it")
 
-    -- /dev/zero is a device, but it gives zeros only
-    it "is refused from a device that gives the same byte over and over" $
-      withDevice "/dev/zero" $
-        readAt "/dev/zero" 16 `shouldReturn` Left patterned
-
     -- /dev/null is a device, but it ends at once
     it "is refused from a device that gives fewer bytes than asked for" $
       withDevice "/dev/null" $
         readAt "/dev/null" 16 `shouldReturn` Left "The operating system gave 0 bytes of entropy, not 16"
 
-  describe "Bytes of entropy from the system" $ do
-    it "are taken when there are as many as asked for" $
-      checkEntropy 4 (BS.pack [0x3a, 0x00, 0xc1, 0x7f]) `shouldBe` Right (BS.pack [0x3a, 0x00, 0xc1, 0x7f])
+    -- /dev/zero is a device that gives zeros only. The bytes of a mnemonic
+    -- are taken as they come: refusing some of them would take from the
+    -- entropy of all of them. The source is checked apart, on a sample.
+    it "takes the bytes of a device as they come, zeros included: the source is checked apart" $
+      withDevice "/dev/zero" $
+        readAt "/dev/zero" 16 `shouldReturn` Right ("/dev/zero", 16)
 
-    it "are refused when there are fewer or more than asked for" $ do
-      checkEntropy 16 (BS.pack [0x00 .. 0x0e]) `shouldBe` Left "The operating system gave 15 bytes of entropy, not 16"
-      checkEntropy 16 (BS.pack [0x00 .. 0x10]) `shouldBe` Left "The operating system gave 17 bytes of entropy, not 16"
+{- The check of a source -}
 
-  -- A rule guesses each byte from the ones before, right by chance once in
-  -- 256 times for random bytes: 8 right guesses of the 15 a rule makes in
-  -- 16 bytes are too many, as one byte in 9 of the 16 places
-  describe "Bytes of entropy with a pattern" $ do
-    it "are refused when they are one byte over and over" $ do
-      checkEntropy 16 entropy00 `shouldBe` Left patterned
-      checkEntropy 16 entropyFf `shouldBe` Left patterned
+-- | The refusal of a source that gave bytes with a pattern
+patterned :: String
+patterned = "The operating system gave bytes with a pattern that random bytes about never have: its entropy is broken"
 
-    it "are refused when one byte follows another over and over" $ do
-      checkEntropy 16 (BS.pack [0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]) `shouldBe` Left patterned
-      checkEntropy 16 (BS.pack [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01]) `shouldBe` Left patterned
+-- | A source that gives the given bytes, whatever the number asked, and
+-- notes the number asked
+sourceOf :: IORef [Natural] -> BS.ByteString -> Natural -> ExceptT String IO (Text, BS.ByteString)
+sourceOf asked bytes n = liftIO (modifyIORef asked (<> [n])) >> return ("given", bytes)
 
-    it "are refused when they count up or down, by any step" $ do
-      checkEntropy 16 (BS.pack [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f]) `shouldBe` Left patterned
-      checkEntropy 16 (BS.pack [0x0f, 0x0e, 0x0d, 0x0c, 0x0b, 0x0a, 0x09, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x00]) `shouldBe` Left patterned
-      checkEntropy 16 (BS.pack [0x00, 0x05, 0x0a, 0x0f, 0x14, 0x19, 0x1e, 0x23, 0x28, 0x2d, 0x32, 0x37, 0x3c, 0x41, 0x46, 0x4b]) `shouldBe` Left patterned
+checkSpec :: Spec
+checkSpec =
+  describe "The check of a source of entropy" $ do
+    it "reads a sample of 64 bytes, which it throws away" $ do
+      asked <- newIORef []
+      runExceptT (checkSource (sourceOf asked goodSample)) `shouldReturn` Right ()
+      readIORef asked `shouldReturn` [64]
 
-    it "are refused when they count past 0xff, back from 0x00" $
-      checkEntropy 16 (BS.pack [0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07]) `shouldBe` Left patterned
+    it "refuses a source whose bytes have a pattern" $ do
+      asked <- newIORef []
+      runExceptT (checkSource (sourceOf asked (BS.replicate 64 0x00))) `shouldReturn` Left patterned
+      runExceptT (checkSource (sourceOf asked (BS.pack [0x00 .. 0x3f]))) `shouldReturn` Left patterned
 
-    it "are refused when they count in words of several bytes" $ do
-      checkEntropy 16 (BS.pack [0x00, 0x00, 0x00, 0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00, 0x05, 0x00, 0x06, 0x00, 0x07]) `shouldBe` Left patterned
-      checkEntropy 16 (BS.pack [0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00]) `shouldBe` Left patterned
+    it "takes the device /dev/random" $
+      withDevice "/dev/random" $
+        runExceptT (checkSource (entropyAt "/dev/random")) `shouldReturn` Right ()
 
-    it "are refused when a pattern repeats" $ do
-      checkEntropy 16 (C8.pack "passwordpassword") `shouldBe` Left patterned
-      checkEntropy 16 (BS.pack [0xa7, 0x3c, 0x91, 0x0e, 0xa7, 0x3c, 0x91, 0x0e, 0xa7, 0x3c, 0x91, 0x0e, 0xa7, 0x3c, 0x91, 0x0e]) `shouldBe` Left patterned
+    it "refuses the device /dev/zero" $
+      withDevice "/dev/zero" $
+        runExceptT (checkSource (entropyAt "/dev/zero")) `shouldReturn` Left patterned
 
-    it "are refused when one byte fills most of their places" $
-      checkEntropy 16 (BS.pack [0x00, 0x7a, 0x00, 0x00, 0x3c, 0x00, 0x91, 0x00, 0x00, 0xe4, 0x00, 0x5b, 0x00, 0x00, 0xc8, 0x00]) `shouldBe` Left patterned
+    it "fails as the source fails" $
+      inScratchDirectory $ \dir -> do
+        let file = dir </> "random"
+        BS.writeFile file (BS.pack [0x00 .. 0x3f])
+        runExceptT (checkSource (entropyAt file)) `shouldReturn` notDevice file
 
-    -- One byte in 9 of the 16 places: random bytes have one once in 2^47
-    -- times with the 13 tests; in 8 places, once in 2^38.7 times
-    it "are refused when one byte fills 9 of 16 places, but taken with 8" $ do
-      checkEntropy 16 (BS.pack [0x00, 0x7a, 0x00, 0x00, 0x3c, 0x00, 0x91, 0xe4, 0x00, 0x5b, 0x00, 0x26, 0x00, 0x00, 0xc8, 0x00]) `shouldBe` Left patterned
-      checkEntropy 16 (BS.pack [0x00, 0x7a, 0x91, 0x00, 0x3c, 0x00, 0x00, 0xe4, 0xb0, 0x5b, 0x00, 0x26, 0x00, 0x00, 0xc8, 0x00])
-        `shouldBe` Right (BS.pack [0x00, 0x7a, 0x91, 0x00, 0x3c, 0x00, 0x00, 0xe4, 0xb0, 0x5b, 0x00, 0x26, 0x00, 0x00, 0xc8, 0x00])
-
-    -- Each byte doubled: 8 of the 15 guesses of the byte before are right,
-    -- once in 2^47.7 times with the 13 tests; 7 of them, once in 2^39.7
-    it "are refused when 8 bytes of 16 repeat the one before, but taken with 7" $ do
-      checkEntropy 16 (BS.pack [0x3a, 0x3a, 0x91, 0x91, 0xc4, 0xc4, 0x0e, 0x0e, 0x7b, 0x7b, 0xe2, 0xe2, 0x58, 0x58, 0xd6, 0xd6]) `shouldBe` Left patterned
-      checkEntropy 16 (BS.pack [0x3a, 0x3a, 0x91, 0x91, 0xc4, 0xc4, 0x0e, 0x0e, 0x7b, 0x7b, 0xe2, 0xe2, 0x58, 0x58, 0xd6, 0x17])
-        `shouldBe` Right (BS.pack [0x3a, 0x3a, 0x91, 0x91, 0xc4, 0xc4, 0x0e, 0x0e, 0x7b, 0x7b, 0xe2, 0xe2, 0x58, 0x58, 0xd6, 0x17])
-
-    -- In 32 bytes a rule makes 31 guesses: 9 right ones come once in 2^44
-    -- times with the 13 tests, 8 once in 2^37.5
-    it "are refused when 9 bytes of 32 repeat the one before, but taken with 8" $ do
-      checkEntropy 32 (doubled 9 <> BS.pack [0x3c, 0x19, 0xf0, 0x65, 0x2d, 0x8b, 0x47, 0xb3, 0x5e, 0x70, 0xc9, 0x12, 0xed, 0x84]) `shouldBe` Left patterned
-      checkEntropy 32 (doubled 8 <> BS.pack [0xa7, 0x3c, 0x19, 0xf0, 0x65, 0x2d, 0x8b, 0x47, 0xb3, 0x5e, 0x70, 0xc9, 0x12, 0xed, 0x84, 0x4f])
-        `shouldBe` Right (doubled 8 <> BS.pack [0xa7, 0x3c, 0x19, 0xf0, 0x65, 0x2d, 0x8b, 0x47, 0xb3, 0x5e, 0x70, 0xc9, 0x12, 0xed, 0x84, 0x4f])
-
-    -- The pattern of 8 bytes repeats 7 of them: random bytes do so once in
-    -- 2^53 times, once in 2^49 with the 13 tests. With 6 of them, once in
-    -- 2^43 times, but once in 2^39.5 with the 13 tests: short of the 2^40
-    -- of a refusal.
-    it "are refused when a pattern repeats 7 of its 8 bytes, but taken with 6" $ do
-      checkEntropy 16 (BS.pack [0x3a, 0x91, 0xc4, 0x0e, 0x7b, 0xe2, 0x58, 0xd6, 0x3a, 0x91, 0xc4, 0x0e, 0x7b, 0xe2, 0x58, 0x17]) `shouldBe` Left patterned
-      checkEntropy 16 (BS.pack [0x3a, 0x91, 0xc4, 0x0e, 0x7b, 0xe2, 0x58, 0xd6, 0x3a, 0x91, 0xc4, 0x0e, 0x7b, 0xe2, 0xa5, 0x17])
-        `shouldBe` Right (BS.pack [0x3a, 0x91, 0xc4, 0x0e, 0x7b, 0xe2, 0x58, 0xd6, 0x3a, 0x91, 0xc4, 0x0e, 0x7b, 0xe2, 0xa5, 0x17])
-
-  describe "Random bytes of entropy" $ do
-    -- Read from /dev/random once, on 2026-10-26
-    it "are taken" $ do
-      checkEntropy 16 (BS.pack [0x8b, 0x8d, 0x1e, 0x7b, 0x36, 0x6f, 0xaf, 0xbe, 0xc9, 0xe4, 0x56, 0xdd, 0x26, 0xeb, 0xf9, 0x09])
-        `shouldBe` Right (BS.pack [0x8b, 0x8d, 0x1e, 0x7b, 0x36, 0x6f, 0xaf, 0xbe, 0xc9, 0xe4, 0x56, 0xdd, 0x26, 0xeb, 0xf9, 0x09])
-      checkEntropy 32 randomBytes32 `shouldBe` Right randomBytes32
-
-    -- One byte twice in a row, and one byte three times: random bytes have
-    -- such coincidences often
-    it "are taken with the coincidences random bytes have" $
-      checkEntropy 16 (BS.pack [0x3a, 0x3a, 0xc1, 0x7f, 0x08, 0xe2, 0x5d, 0x91, 0xc1, 0x4b, 0x07, 0xc1, 0xee, 0x26, 0xb0, 0x19])
-        `shouldBe` Right (BS.pack [0x3a, 0x3a, 0xc1, 0x7f, 0x08, 0xe2, 0x5d, 0x91, 0xc1, 0x4b, 0x07, 0xc1, 0xee, 0x26, 0xb0, 0x19])
-
-    -- Each byte chosen from the 256 with the same chance; a false alarm
-    -- comes once in 2^40 times or less
-    modifyMaxSuccess (const 1000) $
-      prop "are taken, whatever their size" $
-        forAll (elements entropySizes >>= uniformBytes) $ \entropy ->
-          checkEntropy (fromIntegral (BS.length entropy)) entropy `shouldBe` Right entropy
+{- Patterns in bytes -}
 
 -- | The first of nine different bytes, each twice in a row
 doubled :: Int -> BS.ByteString
 doubled n = BS.pack $ concatMap (\b -> [b, b]) (take n [0x3a, 0x91, 0xc4, 0x0e, 0x7b, 0xe2, 0x58, 0xd6, 0xa7])
 
--- | The refusal of bytes with a pattern
-patterned :: String
-patterned = "The operating system gave bytes with a pattern that random bytes about never have: its entropy is broken"
+-- | 54 different bytes, in the order the good sample gives them, with one
+-- more at the end
+distinctBytes :: [Word8]
+distinctBytes =
+  [ 0x5d, 0x51, 0x10, 0x86, 0xbe, 0x8b, 0xbf, 0x2f, 0xa3, 0x2c, 0xdf, 0x3d, 0x16, 0x77, 0x94, 0x68, 0xa6, 0x1a,
+    0x1b, 0x48, 0x20, 0x21, 0x40, 0x18, 0xc8, 0x8f, 0x8e, 0x19, 0xd1, 0xe5, 0xda, 0x22, 0x2e, 0xd6, 0x6a, 0xe3,
+    0x98, 0x41, 0xef, 0x9b, 0x01, 0x6d, 0x9e, 0x49, 0x83, 0xf4, 0xe0, 0xec, 0xcc, 0xc9, 0x4d, 0x1c, 0x4f, 0x02
+  ]
 
--- | Random bytes, read from /dev/random once, on 2026-10-26
-randomBytes32 :: BS.ByteString
-randomBytes32 =
-  BS.pack
-    [ 0x8a, 0x19, 0x1f, 0xe9, 0x25, 0x26, 0x35, 0x0a, 0x2b, 0x5d, 0xe2, 0xd4, 0x3d, 0x8d, 0xdd, 0x9f,
-      0x6e, 0xba, 0xcf, 0x30, 0xd8, 0x26, 0x75, 0x9f, 0xc6, 0xb5, 0x7b, 0xf5, 0xf8, 0x34, 0x3b, 0x08
-    ]
+-- | 64 bytes: the first n of the different bytes each twice in a row, then
+-- the next ones once, so that exactly n of the 63 bytes repeat the one
+-- before
+repeating :: Int -> BS.ByteString
+repeating n = BS.pack (concatMap (\b -> [b, b]) (take n distinctBytes) <> take (64 - 2 * n) (drop n distinctBytes))
+
+-- | The good sample with the byte 0x11 put in the given places
+withByteAt :: [Int] -> BS.ByteString
+withByteAt places = BS.pack [if i `elem` places then 0x11 else b | (i, b) <- zip [0 :: Int ..] (BS.unpack goodSample)]
 
 -- | Bytes each chosen from the 256 with the same chance. The arbitrary
 -- bytes of QuickCheck favour small values, and random bytes do not.
 uniformBytes :: Int -> Gen BS.ByteString
 uniformBytes size = BS.pack <$> vectorOf size (chooseEnum (0, 255))
 
+patternSpec :: Spec
+patternSpec = do
+  -- A rule guesses each byte from the ones before, right by chance once in
+  -- 256 times for random bytes. In the sample of 64 bytes hw checks, 11
+  -- right guesses of the 63 a rule makes are too many, as one byte in 12
+  -- of the 64 places. In 16 bytes, 8 of 15 and 9 of 16 are.
+  describe "Bytes with a pattern" $ do
+    it "are one byte over and over" $ do
+      hasPattern (BS.replicate 64 0x00) `shouldBe` True
+      hasPattern entropy00 `shouldBe` True
+      hasPattern entropyFf `shouldBe` True
+
+    it "are one byte following another over and over" $ do
+      hasPattern (BS.pack [0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]) `shouldBe` True
+      hasPattern (BS.pack [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01]) `shouldBe` True
+
+    it "count up or down, by any step" $ do
+      hasPattern (BS.pack [0x00 .. 0x3f]) `shouldBe` True
+      hasPattern (BS.pack [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f]) `shouldBe` True
+      hasPattern (BS.pack [0x0f, 0x0e, 0x0d, 0x0c, 0x0b, 0x0a, 0x09, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x00]) `shouldBe` True
+      hasPattern (BS.pack [0x00, 0x05, 0x0a, 0x0f, 0x14, 0x19, 0x1e, 0x23, 0x28, 0x2d, 0x32, 0x37, 0x3c, 0x41, 0x46, 0x4b]) `shouldBe` True
+
+    it "count past 0xff, back from 0x00" $
+      hasPattern (BS.pack [0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07]) `shouldBe` True
+
+    it "count in words of several bytes" $ do
+      hasPattern (BS.pack [0x00, 0x00, 0x00, 0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00, 0x05, 0x00, 0x06, 0x00, 0x07]) `shouldBe` True
+      hasPattern (BS.pack [0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00]) `shouldBe` True
+
+    it "repeat a pattern" $ do
+      hasPattern (C8.pack "passwordpassword") `shouldBe` True
+      hasPattern (BS.pack [0xa7, 0x3c, 0x91, 0x0e, 0xa7, 0x3c, 0x91, 0x0e, 0xa7, 0x3c, 0x91, 0x0e, 0xa7, 0x3c, 0x91, 0x0e]) `shouldBe` True
+
+    it "have one byte in most of their places" $
+      hasPattern (BS.pack [0x00, 0x7a, 0x00, 0x00, 0x3c, 0x00, 0x91, 0x00, 0x00, 0xe4, 0x00, 0x5b, 0x00, 0x00, 0xc8, 0x00]) `shouldBe` True
+
+    -- As a source stuck on two values gives: 43 zeros and 21 of 0xff
+    it "have two values only, in 64 bytes" $
+      hasPattern (BS.concat (replicate 21 (BS.pack [0x00, 0xff, 0x00])) <> BS.pack [0x00]) `shouldBe` True
+
+    -- Random bytes have a byte doubled 11 times in 64 once in 2^45 times
+    -- with the 13 tests; 10 times, once in 2^39.7: short of the 2^40 of a
+    -- refusal
+    it "repeat the byte before 11 times in 64 bytes, but not 10" $ do
+      hasPattern (repeating 11) `shouldBe` True
+      hasPattern (repeating 10) `shouldBe` False
+
+    -- One byte in 12 of 64 places: once in 2^43 times with the 13 tests;
+    -- in 11 places, once in 2^37
+    it "have one byte in 12 of 64 places, but not 11" $ do
+      hasPattern (withByteAt [1, 5, 9, 14, 20, 27, 33, 38, 44, 51, 57, 62]) `shouldBe` True
+      hasPattern (withByteAt [1, 5, 9, 14, 20, 27, 33, 38, 44, 51, 57]) `shouldBe` False
+
+    -- One byte in 9 of 16 places: once in 2^47 times with the 13 tests;
+    -- in 8 places, once in 2^38.7
+    it "have one byte in 9 of 16 places, but not 8" $ do
+      hasPattern (BS.pack [0x00, 0x7a, 0x00, 0x00, 0x3c, 0x00, 0x91, 0xe4, 0x00, 0x5b, 0x00, 0x26, 0x00, 0x00, 0xc8, 0x00]) `shouldBe` True
+      hasPattern (BS.pack [0x00, 0x7a, 0x91, 0x00, 0x3c, 0x00, 0x00, 0xe4, 0xb0, 0x5b, 0x00, 0x26, 0x00, 0x00, 0xc8, 0x00]) `shouldBe` False
+
+    -- Each byte doubled: 8 of the 15 guesses of the byte before are right,
+    -- once in 2^47.7 times with the 13 tests; 7 of them, once in 2^39.7
+    it "repeat the byte before 8 times in 16 bytes, but not 7" $ do
+      hasPattern (BS.pack [0x3a, 0x3a, 0x91, 0x91, 0xc4, 0xc4, 0x0e, 0x0e, 0x7b, 0x7b, 0xe2, 0xe2, 0x58, 0x58, 0xd6, 0xd6]) `shouldBe` True
+      hasPattern (BS.pack [0x3a, 0x3a, 0x91, 0x91, 0xc4, 0xc4, 0x0e, 0x0e, 0x7b, 0x7b, 0xe2, 0xe2, 0x58, 0x58, 0xd6, 0x17]) `shouldBe` False
+
+    -- In 32 bytes a rule makes 31 guesses: 9 right ones come once in 2^44
+    -- times with the 13 tests, 8 once in 2^37.5
+    it "repeat the byte before 9 times in 32 bytes, but not 8" $ do
+      hasPattern (doubled 9 <> BS.pack [0x3c, 0x19, 0xf0, 0x65, 0x2d, 0x8b, 0x47, 0xb3, 0x5e, 0x70, 0xc9, 0x12, 0xed, 0x84]) `shouldBe` True
+      hasPattern (doubled 8 <> BS.pack [0xa7, 0x3c, 0x19, 0xf0, 0x65, 0x2d, 0x8b, 0x47, 0xb3, 0x5e, 0x70, 0xc9, 0x12, 0xed, 0x84, 0x4f]) `shouldBe` False
+
+    -- The pattern of 8 bytes repeats 7 of them: random bytes do so once in
+    -- 2^53 times, once in 2^49 with the 13 tests. With 6 of them, once in
+    -- 2^43 times, but once in 2^39.5 with the 13 tests: short of the 2^40
+    -- of a refusal.
+    it "repeat 7 of the 8 bytes before, but not 6" $ do
+      hasPattern (BS.pack [0x3a, 0x91, 0xc4, 0x0e, 0x7b, 0xe2, 0x58, 0xd6, 0x3a, 0x91, 0xc4, 0x0e, 0x7b, 0xe2, 0x58, 0x17]) `shouldBe` True
+      hasPattern (BS.pack [0x3a, 0x91, 0xc4, 0x0e, 0x7b, 0xe2, 0x58, 0xd6, 0x3a, 0x91, 0xc4, 0x0e, 0x7b, 0xe2, 0xa5, 0x17]) `shouldBe` False
+
+  describe "Random bytes" $ do
+    it "have no pattern" $ do
+      hasPattern goodSample `shouldBe` False
+      hasPattern randomBytes32 `shouldBe` False
+      hasPattern (BS.pack [0x8b, 0x8d, 0x1e, 0x7b, 0x36, 0x6f, 0xaf, 0xbe, 0xc9, 0xe4, 0x56, 0xdd, 0x26, 0xeb, 0xf9, 0x09]) `shouldBe` False
+
+    -- One byte twice in a row, and one byte three times: random bytes have
+    -- such coincidences often
+    it "have no pattern with the coincidences random bytes have" $
+      hasPattern (BS.pack [0x3a, 0x3a, 0xc1, 0x7f, 0x08, 0xe2, 0x5d, 0x91, 0xc1, 0x4b, 0x07, 0xc1, 0xee, 0x26, 0xb0, 0x19]) `shouldBe` False
+
+    -- Each byte chosen from the 256 with the same chance; a false alarm
+    -- comes once in 2^40 times or less
+    modifyMaxSuccess (const 1000) $
+      prop "have no pattern, whatever their size" $
+        forAll (elements (64 : entropySizes) >>= uniformBytes) $ \bytes ->
+          hasPattern bytes `shouldBe` False
+
 {- A new mnemonic from its entropies -}
 
 -- | The message of a new mnemonic that fails its check
 failedCheck :: String
 failedCheck = "The new mnemonic failed its check, so hw does not show it: please report this bug"
+
+-- | The refusal of dice that do not cover the entropy and its parts
+diceShort :: Either String a
+diceShort = Left "The dice rolls did not give as many bytes as the entropy of the system and its random parts"
 
 newMnemonicSpec :: Spec
 newMnemonicSpec =
@@ -449,48 +529,40 @@ newMnemonicSpec =
       newMnemonic entropyFf Nothing [entropy80] `shouldBe` Right (zooWrong, [legalYellow, letterAbove])
       newMnemonic entropy00 Nothing [entropy7f, entropy80] `shouldBe` Right (abandonAbout, [zooWrong, legalYellow, letterAbove])
 
-    -- With the dice 0x80 x 16, the mask of the first random part is the
-    -- first 16 bytes of SHA-256 (0x80 x 16, 00 00 00 01), computed with
-    -- Python's hashlib: 4747d92e75c2ec0dc5aa6d22b0f5fc76. The random part
-    -- 0x7f x 16 masked is 3838a651..., and the first part, which makes the
-    -- entropy 0xff x 16 with it, c7c759ae.... Their words are from Trezor's
-    -- python-mnemonic.
-    it "masks the random parts of the split with the dice rolls, each with its own number" $ do
-      newMnemonic entropy7f (Just entropy80) [entropy7f]
-        `shouldBe` Right
-          ( zooWrong,
-            [ "sick depart hill tunnel chat effort believe frozen peasant lonely game unit",
-              "deal share nephew betray summer rich twice pelican fruit labor patch basic"
-            ]
-          )
-      newMnemonic entropy7f (Just entropy80) [entropy7f, entropy7f]
-        `shouldBe` Right
-          ( zooWrong,
-            [ "upon cream focus outdoor awake deer dog fade lesson genuine mutual meadow",
-              "deal share nephew betray summer rich twice pelican fruit labor patch basic",
-              "circle amused cover jeans dad lend feature arrest car title snack gorilla"
-            ]
-          )
-
     it "leaves the random parts as they are without dice" $
       newMnemonic entropyFf Nothing [entropy7f] `shouldBe` Right (zooWrong, [letterAbove, legalYellow])
 
-    -- Whatever the mask does to the parts, they must give the mnemonic back
+    -- The dice 0x80 x 16 then 0xff x 16: the first piece goes into the
+    -- entropy, 0x7f xor 0x80 = 0xff, the second into the random part, 0x7f
+    -- xor 0xff = 0x80. The first part makes 0xff with it: 0x7f.
+    it "mixes a piece of the dice with the entropy, and another with each random part" $ do
+      newMnemonic entropy7f (Just (entropy80 <> entropyFf)) [entropy7f]
+        `shouldBe` Right (zooWrong, [legalYellow, letterAbove])
+      newMnemonic entropy7f (Just (entropy80 <> entropyFf <> entropy7f)) [entropy7f, entropy7f]
+        `shouldBe` Right (zooWrong, [legalYellow, letterAbove, abandonAbout])
+
+    -- Dice for the entropy alone would have to go into the parts a second
+    -- time, as a one-time pad never does
+    it "uses no byte of the dice twice: dice that cover the entropy alone are refused with parts" $ do
+      newMnemonic entropy7f (Just entropy80) [entropy7f] `shouldBe` diceShort
+      newMnemonic entropy7f (Just (entropy80 <> entropyFf)) [entropy7f, entropy7f] `shouldBe` diceShort
+
+    it "is refused when the dice rolls do not give as many bytes as the entropy" $ do
+      newMnemonic entropy7f (Just (BS.replicate 15 0x80)) [] `shouldBe` diceShort
+      newMnemonic entropy7f (Just (entropy80 <> entropyFf)) [] `shouldBe` diceShort
+
+    -- Whatever the dice do to the parts, they must give the mnemonic back
     prop "comes in parts that merge back into it, with dice as without" $
-      forAll ((,,) <$> uniformBytes 16 <*> uniformBytes 16 <*> vectorOf 2 (uniformBytes 16)) $ \(system, dice, randoms) -> do
+      forAll ((,,) <$> uniformBytes 16 <*> uniformBytes 48 <*> vectorOf 2 (uniformBytes 16)) $ \(system, dice, randoms) -> do
         (mnem, parts) <- expectRight $ newMnemonic system (Just dice) randoms
         length parts `shouldBe` 3
         mergeMnemonicParts parts `shouldBe` Right mnem
-
-    it "is refused when the dice rolls do not give as many bytes as the system" $
-      newMnemonic entropy7f (Just (BS.replicate 15 0x80)) []
-        `shouldBe` Left "The dice rolls did not give as many bytes as the entropy of the system"
 
     -- Splitting with such a part used to stop the program
     it "is refused when a random part does not have as many bytes as the system" $ do
       newMnemonic entropy7f Nothing [BS.replicate 15 0x80]
         `shouldBe` Left "A random part of the split does not have as many bytes as the entropy of the system"
-      newMnemonic entropy7f (Just entropy80) [entropy80, BS.replicate 20 0x80]
+      newMnemonic entropy7f (Just (entropy80 <> entropyFf <> entropy7f)) [entropy80, BS.replicate 20 0x80]
         `shouldBe` Left "A random part of the split does not have as many bytes as the entropy of the system"
 
     it "is refused for a size of entropy that no mnemonic has, with its size" $
@@ -501,7 +573,6 @@ newMnemonicSpec =
     it "is refused when its parts would not merge back into it" $
       newMnemonic entropy7f Nothing [entropy80, entropy80] `shouldBe` Left failedCheck
 
-
 {- Generating a mnemonic -}
 
 -- | The sources of hw: the entropy of the system, no dice, nothing said
@@ -509,20 +580,20 @@ systemSources :: Sources IO
 systemSources = Sources {readSystem = systemEntropy, askDice = Nothing, say = \_ -> return ()}
 
 -- | Sources that give out the given entropies in order, named "fixed", with
--- the given dice; what they say and do is noted in the log, the entropies
--- as "system", the dice as "dice"
+-- the given dice; what they say and do is noted in the log, a read as
+-- "system" and the dice as "dice", each with the number of bytes asked
 fixedSources :: IORef [String] -> [BS.ByteString] -> Maybe BS.ByteString -> IO (Sources IO)
 fixedSources logged entropies diceM = do
   left <- newIORef entropies
   return
     Sources
-      { readSystem = \_ -> do
-          liftIO $ modifyIORef logged (<> ["system"])
+      { readSystem = \bytes -> do
+          liftIO $ modifyIORef logged (<> ["system " <> show bytes])
           rest <- liftIO $ readIORef left
           case rest of
             [] -> throwError "The fixed entropies ran out"
             entropy : more -> liftIO (writeIORef left more) >> return ("fixed", entropy),
-        askDice = fmap (\dice _ -> liftIO (modifyIORef logged (<> ["dice"])) >> return dice) diceM,
+        askDice = fmap (\dice bytes -> liftIO (modifyIORef logged (<> ["dice " <> show bytes])) >> return dice) diceM,
         say = \message -> modifyIORef logged (<> [message])
       }
 
@@ -584,40 +655,42 @@ generateSpec =
       (_, parts) <- generated 32 2
       map (length . Text.words) parts `shouldBe` [24, 24]
 
-    it "asks for the dice rolls of its number of bytes" $ do
-      asked <- newIORef Nothing
-      let rolls bytes = liftIO (writeIORef asked (Just bytes)) >> return (BS.replicate (fromIntegral bytes) 0x80)
-      _ <- expectRight =<< runExceptT (genMnemonic systemSources {askDice = Just rolls} 24 1)
-      readIORef asked `shouldReturn` Just 24
-
     -- The sources are fixed, so the whole way from them to the mnemonic is
-    -- pinned: the system 0x7f x 16 xor the dice 0x80 x 16 is 0xff x 16
-    it "is the mnemonic of the entropy of the system mixed with the dice rolls" $
-      fromFixed [entropy7f] (Just entropy80) 16 1
-        `shouldReturn` (Right ("fixed", zooWrong, []), [reading, "system", "dice"])
+    -- pinned: the sample is checked and thrown away, then the system 0x7f x
+    -- 16 xor the dice 0x80 x 16 is 0xff x 16
+    it "is the mnemonic of the entropy read after the sample, mixed with the dice rolls" $
+      fromFixed [goodSample, entropy7f] (Just entropy80) 16 1
+        `shouldReturn` (Right ("fixed", zooWrong, []), [reading, "system 64", "system 16", "dice 16"])
 
     it "is the mnemonic of the entropy of the system alone without dice" $
-      fromFixed [entropy7f] Nothing 16 1
-        `shouldReturn` (Right ("fixed", legalYellow, []), [reading, "system"])
+      fromFixed [goodSample, entropy7f] Nothing 16 1
+        `shouldReturn` (Right ("fixed", legalYellow, []), [reading, "system 64", "system 16"])
 
-    -- The first entropy read is the mnemonic's, the next ones the random
-    -- parts; the first part makes the mnemonic with them
+    -- The first entropy read after the sample is the mnemonic's, the next
+    -- ones the random parts; the first part makes the mnemonic with them
     it "reads one more entropy for each part after the first, and splits the mnemonic with them" $
-      fromFixed [entropy7f, entropy80, entropyFf] Nothing 16 3
-        `shouldReturn` (Right ("fixed", legalYellow, [abandonAbout, letterAbove, zooWrong]), [reading, "system", "system", "system"])
+      fromFixed [goodSample, entropy7f, entropy80, entropyFf] Nothing 16 3
+        `shouldReturn` (Right ("fixed", legalYellow, [abandonAbout, letterAbove, zooWrong]), [reading, "system 64", "system 16", "system 16", "system 16"])
 
-    it "masks the parts of a split with the dice rolls" $
-      fromFixed [entropy7f, entropy7f] (Just entropy80) 16 2
-        `shouldReturn`
-          ( Right
-              ( "fixed",
-                zooWrong,
-                [ "sick depart hill tunnel chat effort believe frozen peasant lonely game unit",
-                  "deal share nephew betray summer rich twice pelican fruit labor patch basic"
-                ]
-              ),
-            [reading, "system", "system", "dice"]
-          )
+    -- 32 bytes of dice for 16 bytes of entropy in 2 parts: the first 16
+    -- go into the entropy, the next 16 into the random part
+    it "asks for dice for the entropy and every part at once, and mixes a piece with each" $
+      fromFixed [goodSample, entropy7f, entropy7f] (Just (entropy80 <> entropyFf)) 16 2
+        `shouldReturn` (Right ("fixed", zooWrong, [legalYellow, letterAbove]), [reading, "system 64", "system 16", "system 16", "dice 32"])
+
+    it "asks for the dice rolls of its number of bytes, times its number of parts" $ do
+      asked <- newIORef []
+      let rolls bytes = liftIO (modifyIORef asked (<> [bytes])) >> return (BS.replicate (fromIntegral bytes) 0x80)
+      _ <- expectRight =<< runExceptT (genMnemonic systemSources {askDice = Just rolls} 24 1)
+      _ <- expectRight =<< runExceptT (genMnemonic systemSources {askDice = Just rolls} 16 3)
+      readIORef asked `shouldReturn` [24, 48]
+
+    -- The source is checked on a sample that goes into nothing: the
+    -- mnemonic is not made of it, and a bad sample stops hw before it
+    -- reads the entropy
+    it "is not made when the sample of the source has a pattern" $
+      fromFixed [BS.replicate 64 0x00, entropy7f] Nothing 16 1
+        `shouldReturn` (Left patterned, [reading, "system 64"])
 
     it "is not made when the dice rolls are cancelled" $
       runExceptT (genMnemonic systemSources {askDice = Just (\_ -> throwError "Cancelled: the input ended before the answer")} 16 1)
@@ -637,8 +710,8 @@ generateSpec =
 
     it "is refused for another size of entropy, before any read or dice roll" $
       forM_ [12, 17, 36] $ \bytes ->
-        fromFixed [entropy7f] (Just entropy80) bytes 1
+        fromFixed [goodSample, entropy7f] (Just entropy80) bytes 1
           `shouldReturn` (Left ("A mnemonic has 16, 20, 24, 28 or 32 bytes of entropy, not " <> show bytes), [])
 
     it "is refused in no part, before any read" $
-      fromFixed [entropy7f] Nothing 16 0 `shouldReturn` (Left "A mnemonic comes in one part or more, not 0", [])
+      fromFixed [goodSample, entropy7f] Nothing 16 0 `shouldReturn` (Left "A mnemonic comes in one part or more, not 0", [])
