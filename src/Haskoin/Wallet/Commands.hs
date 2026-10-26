@@ -410,8 +410,13 @@ commandResponse ctx cfg unit cmd =
 cmdMnemonic :: Natural -> Bool -> Natural -> IO Response
 cmdMnemonic ent useDice splitMnemIn =
   catchResponseError $ do
-    let askDice = if useDice then Just (askDiceEntropy terminal) else Nothing
-    (orig, ms, splitMs) <- genMnemonic ent askDice splitMnemIn
+    let sources =
+          Sources
+            { readSystem = systemEntropy,
+              askDice = if useDice then Just (askDiceEntropy terminal) else Nothing,
+              say = tell terminal
+            }
+    (orig, ms, splitMs) <- genMnemonic sources ent splitMnemIn
     return $ ResponseMnemonic orig (Text.words ms) (Text.words <$> splitMs)
 
 cmdCreateAcc :: Ctx -> Config -> Text -> Network -> Natural -> IO Response

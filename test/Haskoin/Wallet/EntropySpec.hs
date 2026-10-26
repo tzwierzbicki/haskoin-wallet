@@ -13,8 +13,7 @@ import Control.Monad.Except (runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
-import Data.Either (isLeft)
-import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.IORef (IORef, modifyIORef, newIORef, readIORef, writeIORef)
 import Data.List (sort)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -23,7 +22,7 @@ import Haskoin.Util.Arbitrary (arbitraryBSn)
 import Haskoin.Wallet.Entropy
 import Haskoin.Wallet.TestUtils (expectRight, inScratchDirectory)
 import Numeric.Natural (Natural)
-import System.Directory (doesPathExist)
+import System.Directory (createFileLink, doesPathExist)
 import System.FilePath ((</>))
 import Test.Hspec
 import Test.Hspec.QuickCheck
@@ -118,6 +117,10 @@ diceSpec =
       diceEntropy 16 (replicate 64 6) `shouldBe` Just entropy00
       diceEntropy 16 (replicate 128 5) `shouldBe` Just entropyFf
 
+    it "has the 32 bytes of a mnemonic of 24 words after 256 bits" $ do
+      diceEntropy 32 (replicate 127 6) `shouldBe` Nothing
+      diceEntropy 32 (replicate 128 6) `shouldBe` Just (BS.replicate 32 0x00)
+
     -- hw reads the faces of a line before it takes any bit of them, so no
     -- command reaches this error
     it "stops the program for a face that no die has" $ do
@@ -207,11 +210,14 @@ mergeSpec =
       mergeMnemonicParts [letterAbove, legalYellow] `shouldBe` Right zooWrong
       mergeMnemonicParts [zooWrong, legalYellow, letterAbove] `shouldBe` Right abandonAbout
 
+    -- A secret of zeros alone is left out: its two parts would be the same
+    -- random part twice, which no merge takes
     prop "merge back into the mnemonic of the entropy they were split from, whatever its size" $
       forAll (elements entropySizes >>= arbitraryBSn) $ \secret ->
-        forAll (arbitraryBSn (BS.length secret)) $ \random -> do
-          parts <- expectRight $ mapM toMnemonic (splitEntropyWith secret [random])
-          mergeMnemonicParts parts `shouldBe` toMnemonic secret
+        BS.any (/= 0) secret ==>
+          forAll (arbitraryBSn (BS.length secret)) $ \random -> do
+            parts <- expectRight $ mapM toMnemonic (splitEntropyWith secret [random])
+            mergeMnemonicParts parts `shouldBe` toMnemonic secret
 
     it "are refused when there are fewer than two" $ do
       mergeMnemonicParts [] `shouldBe` Left "A mnemonic in parts has two parts or more"
@@ -276,6 +282,14 @@ systemSpec = do
       inScratchDirectory $ \dir ->
         readAt (dir </> "random") 16 `shouldReturn` Right ("System.Entropy.getEntropy", 16)
 
+    -- As a container may set up its /dev/random
+    it "comes from the device a link points to, named by the link" $
+      withDevice "/dev/random" $
+        inScratchDirectory $ \dir -> do
+          let link = dir </> "random"
+          createFileLink "/dev/random" link
+          readAt link 16 `shouldReturn` Right (Text.pack link, 16)
+
     -- As a container or a chroot may have one at /dev/random: hw read it
     -- before, and gave every mnemonic its bytes
     it "is refused from a plain file" $
@@ -287,6 +301,14 @@ systemSpec = do
     it "is refused from a directory" $
       inScratchDirectory $ \dir ->
         readAt dir 16 `shouldReturn` notDevice dir
+
+    -- A machine whose /dev/random points to nothing needs a look, as one
+    -- with a plain file there: hw does not fall back to the package quietly
+    it "is refused from a link to nothing, rather than taken from the package" $
+      inScratchDirectory $ \dir -> do
+        let link = dir </> "random"
+        createFileLink (dir </> "nothing") link
+        readAt link 16 `shouldReturn` Left (link <> " is a link to nothing, so hw does not read it: check this machine before you make a mnemonic on it")
 
     -- /dev/zero is a device, but it gives zeros only
     it "is refused from a device that gives the same byte over and over" $
@@ -337,6 +359,27 @@ systemSpec = do
     it "are refused when one byte fills most of their places" $
       checkEntropy 16 (BS.pack [0x00, 0x7a, 0x00, 0x00, 0x3c, 0x00, 0x91, 0x00, 0x00, 0xe4, 0x00, 0x5b, 0x00, 0x00, 0xc8, 0x00]) `shouldBe` Left patterned
 
+    -- One byte in 9 of the 16 places: random bytes have one once in 2^47
+    -- times with the 13 tests; in 8 places, once in 2^38.7 times
+    it "are refused when one byte fills 9 of 16 places, but taken with 8" $ do
+      checkEntropy 16 (BS.pack [0x00, 0x7a, 0x00, 0x00, 0x3c, 0x00, 0x91, 0xe4, 0x00, 0x5b, 0x00, 0x26, 0x00, 0x00, 0xc8, 0x00]) `shouldBe` Left patterned
+      checkEntropy 16 (BS.pack [0x00, 0x7a, 0x91, 0x00, 0x3c, 0x00, 0x00, 0xe4, 0xb0, 0x5b, 0x00, 0x26, 0x00, 0x00, 0xc8, 0x00])
+        `shouldBe` Right (BS.pack [0x00, 0x7a, 0x91, 0x00, 0x3c, 0x00, 0x00, 0xe4, 0xb0, 0x5b, 0x00, 0x26, 0x00, 0x00, 0xc8, 0x00])
+
+    -- Each byte doubled: 8 of the 15 guesses of the byte before are right,
+    -- once in 2^47.7 times with the 13 tests; 7 of them, once in 2^39.7
+    it "are refused when 8 bytes of 16 repeat the one before, but taken with 7" $ do
+      checkEntropy 16 (BS.pack [0x3a, 0x3a, 0x91, 0x91, 0xc4, 0xc4, 0x0e, 0x0e, 0x7b, 0x7b, 0xe2, 0xe2, 0x58, 0x58, 0xd6, 0xd6]) `shouldBe` Left patterned
+      checkEntropy 16 (BS.pack [0x3a, 0x3a, 0x91, 0x91, 0xc4, 0xc4, 0x0e, 0x0e, 0x7b, 0x7b, 0xe2, 0xe2, 0x58, 0x58, 0xd6, 0x17])
+        `shouldBe` Right (BS.pack [0x3a, 0x3a, 0x91, 0x91, 0xc4, 0xc4, 0x0e, 0x0e, 0x7b, 0x7b, 0xe2, 0xe2, 0x58, 0x58, 0xd6, 0x17])
+
+    -- In 32 bytes a rule makes 31 guesses: 9 right ones come once in 2^44
+    -- times with the 13 tests, 8 once in 2^37.5
+    it "are refused when 9 bytes of 32 repeat the one before, but taken with 8" $ do
+      checkEntropy 32 (doubled 9 <> BS.pack [0x3c, 0x19, 0xf0, 0x65, 0x2d, 0x8b, 0x47, 0xb3, 0x5e, 0x70, 0xc9, 0x12, 0xed, 0x84]) `shouldBe` Left patterned
+      checkEntropy 32 (doubled 8 <> BS.pack [0xa7, 0x3c, 0x19, 0xf0, 0x65, 0x2d, 0x8b, 0x47, 0xb3, 0x5e, 0x70, 0xc9, 0x12, 0xed, 0x84, 0x4f])
+        `shouldBe` Right (doubled 8 <> BS.pack [0xa7, 0x3c, 0x19, 0xf0, 0x65, 0x2d, 0x8b, 0x47, 0xb3, 0x5e, 0x70, 0xc9, 0x12, 0xed, 0x84, 0x4f])
+
     -- The pattern of 8 bytes repeats 7 of them: random bytes do so once in
     -- 2^53 times, once in 2^49 with the 13 tests. With 6 of them, once in
     -- 2^43 times, but once in 2^39.5 with the 13 tests: short of the 2^40
@@ -365,6 +408,10 @@ systemSpec = do
       prop "are taken, whatever their size" $
         forAll (elements entropySizes >>= uniformBytes) $ \entropy ->
           checkEntropy (fromIntegral (BS.length entropy)) entropy `shouldBe` Right entropy
+
+-- | The first of nine different bytes, each twice in a row
+doubled :: Int -> BS.ByteString
+doubled n = BS.pack $ concatMap (\b -> [b, b]) (take n [0x3a, 0x91, 0xc4, 0x0e, 0x7b, 0xe2, 0x58, 0xd6, 0xa7])
 
 -- | The refusal of bytes with a pattern
 patterned :: String
@@ -402,30 +449,101 @@ newMnemonicSpec =
       newMnemonic entropyFf Nothing [entropy80] `shouldBe` Right (zooWrong, [legalYellow, letterAbove])
       newMnemonic entropy00 Nothing [entropy7f, entropy80] `shouldBe` Right (abandonAbout, [zooWrong, legalYellow, letterAbove])
 
-    it "splits the entropy mixed with the dice rolls" $
-      newMnemonic entropy7f (Just entropy80) [entropy7f] `shouldBe` Right (zooWrong, [letterAbove, legalYellow])
+    -- With the dice 0x80 x 16, the mask of the first random part is the
+    -- first 16 bytes of SHA-256 (0x80 x 16, 00 00 00 01), computed with
+    -- Python's hashlib: 4747d92e75c2ec0dc5aa6d22b0f5fc76. The random part
+    -- 0x7f x 16 masked is 3838a651..., and the first part, which makes the
+    -- entropy 0xff x 16 with it, c7c759ae.... Their words are from Trezor's
+    -- python-mnemonic.
+    it "masks the random parts of the split with the dice rolls, each with its own number" $ do
+      newMnemonic entropy7f (Just entropy80) [entropy7f]
+        `shouldBe` Right
+          ( zooWrong,
+            [ "sick depart hill tunnel chat effort believe frozen peasant lonely game unit",
+              "deal share nephew betray summer rich twice pelican fruit labor patch basic"
+            ]
+          )
+      newMnemonic entropy7f (Just entropy80) [entropy7f, entropy7f]
+        `shouldBe` Right
+          ( zooWrong,
+            [ "upon cream focus outdoor awake deer dog fade lesson genuine mutual meadow",
+              "deal share nephew betray summer rich twice pelican fruit labor patch basic",
+              "circle amused cover jeans dad lend feature arrest car title snack gorilla"
+            ]
+          )
+
+    it "leaves the random parts as they are without dice" $
+      newMnemonic entropyFf Nothing [entropy7f] `shouldBe` Right (zooWrong, [letterAbove, legalYellow])
+
+    -- Whatever the mask does to the parts, they must give the mnemonic back
+    prop "comes in parts that merge back into it, with dice as without" $
+      forAll ((,,) <$> uniformBytes 16 <*> uniformBytes 16 <*> vectorOf 2 (uniformBytes 16)) $ \(system, dice, randoms) -> do
+        (mnem, parts) <- expectRight $ newMnemonic system (Just dice) randoms
+        length parts `shouldBe` 3
+        mergeMnemonicParts parts `shouldBe` Right mnem
 
     it "is refused when the dice rolls do not give as many bytes as the system" $
       newMnemonic entropy7f (Just (BS.replicate 15 0x80)) []
         `shouldBe` Left "The dice rolls did not give as many bytes as the entropy of the system"
+
+    -- Splitting with such a part used to stop the program
+    it "is refused when a random part does not have as many bytes as the system" $ do
+      newMnemonic entropy7f Nothing [BS.replicate 15 0x80]
+        `shouldBe` Left "A random part of the split does not have as many bytes as the entropy of the system"
+      newMnemonic entropy7f (Just entropy80) [entropy80, BS.replicate 20 0x80]
+        `shouldBe` Left "A random part of the split does not have as many bytes as the entropy of the system"
+
+    it "is refused for a size of entropy that no mnemonic has, with its size" $
+      newMnemonic (BS.replicate 15 0x7f) Nothing [] `shouldBe` Left "A mnemonic has 16, 20, 24, 28 or 32 bytes of entropy, not 15"
 
     -- Two equal random parts would give two equal parts, which no merge
     -- takes: the funds of the mnemonic would be lost
     it "is refused when its parts would not merge back into it" $
       newMnemonic entropy7f Nothing [entropy80, entropy80] `shouldBe` Left failedCheck
 
-    -- The message is haskoin-core's: hw makes mnemonics of the sizes BIP39
-    -- allows only
-    it "is refused for an entropy that no mnemonic has" $
-      newMnemonic (BS.replicate 15 0x7f) Nothing [] `shouldSatisfy` isLeft
 
 {- Generating a mnemonic -}
+
+-- | The sources of hw: the entropy of the system, no dice, nothing said
+systemSources :: Sources IO
+systemSources = Sources {readSystem = systemEntropy, askDice = Nothing, say = \_ -> return ()}
+
+-- | Sources that give out the given entropies in order, named "fixed", with
+-- the given dice; what they say and do is noted in the log, the entropies
+-- as "system", the dice as "dice"
+fixedSources :: IORef [String] -> [BS.ByteString] -> Maybe BS.ByteString -> IO (Sources IO)
+fixedSources logged entropies diceM = do
+  left <- newIORef entropies
+  return
+    Sources
+      { readSystem = \_ -> do
+          liftIO $ modifyIORef logged (<> ["system"])
+          rest <- liftIO $ readIORef left
+          case rest of
+            [] -> throwError "The fixed entropies ran out"
+            entropy : more -> liftIO (writeIORef left more) >> return ("fixed", entropy),
+        askDice = fmap (\dice _ -> liftIO (modifyIORef logged (<> ["dice"])) >> return dice) diceM,
+        say = \message -> modifyIORef logged (<> [message])
+      }
+
+-- | A new mnemonic of fixed entropies and dice, with the log of what the
+-- sources said and did
+fromFixed :: [BS.ByteString] -> Maybe BS.ByteString -> Natural -> Natural -> IO (Either String (Text, Text, [Text]), [String])
+fromFixed entropies diceM bytes parts = do
+  logged <- newIORef []
+  sources <- fixedSources logged entropies diceM
+  result <- runExceptT (genMnemonic sources bytes parts)
+  (,) result <$> readIORef logged
+
+-- | What hw says before it reads the system
+reading :: String
+reading = "Reading the entropy of the system, which can take a moment while the system gathers it"
 
 -- | A new mnemonic of the entropy of the system, without dice rolls; with
 -- its parts when it is split
 generated :: Int -> Int -> IO (Text, [Text])
 generated bytes parts = do
-  (_, mnem, splitMnems) <- expectRight =<< runExceptT (genMnemonic (fromIntegral bytes) Nothing (fromIntegral parts))
+  (_, mnem, splitMnems) <- expectRight =<< runExceptT (genMnemonic systemSources (fromIntegral bytes) (fromIntegral parts))
   return (mnem, splitMnems)
 
 generateSpec :: Spec
@@ -445,8 +563,13 @@ generateSpec =
     -- hw shows the source with the mnemonic
     it "names the source of its entropy, /dev/random where the machine has it" $
       withDevice "/dev/random" $ do
-        (source, _, _) <- expectRight =<< runExceptT (genMnemonic 16 Nothing 1)
+        (source, _, _) <- expectRight =<< runExceptT (genMnemonic systemSources 16 1)
         source `shouldBe` "/dev/random"
+
+    it "names the entropy package as its source where the device is missing" $
+      inScratchDirectory $ \dir -> do
+        (source, _, _) <- expectRight =<< runExceptT (genMnemonic systemSources {readSystem = entropyAt (dir </> "random")} 16 1)
+        source `shouldBe` "System.Entropy.getEntropy"
 
     it "comes without parts when it is not split" $ do
       (_, parts) <- generated 16 1
@@ -463,42 +586,59 @@ generateSpec =
 
     it "asks for the dice rolls of its number of bytes" $ do
       asked <- newIORef Nothing
-      let askDice bytes = liftIO (writeIORef asked (Just bytes)) >> return (BS.replicate (fromIntegral bytes) 0x80)
-      _ <- expectRight =<< runExceptT (genMnemonic 24 (Just askDice) 1)
+      let rolls bytes = liftIO (writeIORef asked (Just bytes)) >> return (BS.replicate (fromIntegral bytes) 0x80)
+      _ <- expectRight =<< runExceptT (genMnemonic systemSources {askDice = Just rolls} 24 1)
       readIORef asked `shouldReturn` Just 24
 
-    -- Rolls that replaced the entropy of the system would give the
-    -- mnemonic of their own entropy, the same every time
-    it "mixes the dice rolls with the entropy of the system: the same rolls give a new mnemonic" $ do
-      let askDice _ = return entropy80
-      (_, first, _) <- expectRight =<< runExceptT (genMnemonic 16 (Just askDice) 1)
-      (_, second, _) <- expectRight =<< runExceptT (genMnemonic 16 (Just askDice) 1)
-      first `shouldNotBe` second
-      first `shouldNotBe` letterAbove
+    -- The sources are fixed, so the whole way from them to the mnemonic is
+    -- pinned: the system 0x7f x 16 xor the dice 0x80 x 16 is 0xff x 16
+    it "is the mnemonic of the entropy of the system mixed with the dice rolls" $
+      fromFixed [entropy7f] (Just entropy80) 16 1
+        `shouldReturn` (Right ("fixed", zooWrong, []), [reading, "system", "dice"])
+
+    it "is the mnemonic of the entropy of the system alone without dice" $
+      fromFixed [entropy7f] Nothing 16 1
+        `shouldReturn` (Right ("fixed", legalYellow, []), [reading, "system"])
+
+    -- The first entropy read is the mnemonic's, the next ones the random
+    -- parts; the first part makes the mnemonic with them
+    it "reads one more entropy for each part after the first, and splits the mnemonic with them" $
+      fromFixed [entropy7f, entropy80, entropyFf] Nothing 16 3
+        `shouldReturn` (Right ("fixed", legalYellow, [abandonAbout, letterAbove, zooWrong]), [reading, "system", "system", "system"])
+
+    it "masks the parts of a split with the dice rolls" $
+      fromFixed [entropy7f, entropy7f] (Just entropy80) 16 2
+        `shouldReturn`
+          ( Right
+              ( "fixed",
+                zooWrong,
+                [ "sick depart hill tunnel chat effort believe frozen peasant lonely game unit",
+                  "deal share nephew betray summer rich twice pelican fruit labor patch basic"
+                ]
+              ),
+            [reading, "system", "system", "dice"]
+          )
 
     it "is not made when the dice rolls are cancelled" $
-      runExceptT (genMnemonic 16 (Just (\_ -> throwError "Cancelled: the input ended before the answer")) 1)
+      runExceptT (genMnemonic systemSources {askDice = Just (\_ -> throwError "Cancelled: the input ended before the answer")} 16 1)
         `shouldReturn` Left "Cancelled: the input ended before the answer"
 
     -- The system gives its bytes before it sees a roll, so it cannot choose
     -- them to cancel the rolls; and a source that fails fails before the
     -- user rolls a die
-    it "reads the entropy of the system before it asks for the dice rolls" $
+    it "reads the entropy of the system before it asks for the dice rolls, and tells the user first" $
       inScratchDirectory $ \dir -> do
         let file = dir </> "random"
         BS.writeFile file (BS.pack [0x00 .. 0x3f])
-        asked <- newIORef False
-        let askDice bytes = liftIO (writeIORef asked True) >> return (BS.replicate (fromIntegral bytes) 0x80)
-        runExceptT (genMnemonicAt file 16 (Just askDice) 1) `shouldReturn` notDevice file
-        readIORef asked `shouldReturn` False
+        logged <- newIORef []
+        sources <- fixedSources logged [] (Just entropy80)
+        runExceptT (genMnemonic sources {readSystem = entropyAt file} 16 1) `shouldReturn` notDevice file
+        readIORef logged `shouldReturn` [reading]
 
-    it "is refused for another size of entropy, before any dice roll" $ do
-      asked <- newIORef False
-      let askDice bytes = liftIO (writeIORef asked True) >> return (BS.replicate (fromIntegral bytes) 0x80)
+    it "is refused for another size of entropy, before any read or dice roll" $
       forM_ [12, 17, 36] $ \bytes ->
-        runExceptT (genMnemonic bytes (Just askDice) 1)
-          `shouldReturn` Left ("A mnemonic has 16, 20, 24, 28 or 32 bytes of entropy, not " <> show bytes)
-      readIORef asked `shouldReturn` False
+        fromFixed [entropy7f] (Just entropy80) bytes 1
+          `shouldReturn` (Left ("A mnemonic has 16, 20, 24, 28 or 32 bytes of entropy, not " <> show bytes), [])
 
-    it "is refused in no part" $
-      runExceptT (genMnemonic 16 Nothing 0) `shouldReturn` Left "A mnemonic comes in one part or more, not 0"
+    it "is refused in no part, before any read" $
+      fromFixed [entropy7f] Nothing 16 0 `shouldReturn` (Left "A mnemonic comes in one part or more, not 0", [])
