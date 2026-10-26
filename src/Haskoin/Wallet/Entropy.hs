@@ -1,81 +1,47 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TupleSections #-}
 
-module Haskoin.Wallet.Entropy where
+-- | The entropy of a new mnemonic: the entropy of the operating system,
+-- mixed with the entropy of dice rolls when the user rolls dice, and the
+-- parts a mnemonic can be split into, all of which are needed to merge it
+-- back.
+module Haskoin.Wallet.Entropy
+  ( diceBits,
+    diceEntropy,
+    xorBytes,
+    xorAll,
+    splitEntropyWith,
+    mergeMnemonicParts,
+    systemEntropy,
+    entropyAt,
+    checkEntropy,
+    newMnemonic,
+    genMnemonic,
+    genMnemonicAt,
+  )
+where
 
-import Control.Monad (replicateM, unless, when)
+import Control.Exception (IOException, try)
+import Control.Monad (replicateM, unless, when, zipWithM)
 import Control.Monad.Except
-import Control.Monad.IO.Class ( MonadIO, liftIO )
-import Data.Bits (Bits (setBit, xor))
+import Control.Monad.IO.Class (MonadIO, liftIO)
+import Data.Bifunctor (first)
+import Data.Bits (xor)
 import qualified Data.ByteString as BS
-import Data.List (nub)
+import Data.List (group, nub, sort)
 import Data.List.Split (chunksOf)
 import Data.Text (Text)
-import Data.Word (Word8)
-import Haskoin.Crypto (Mnemonic, toMnemonic, fromMnemonic)
-import Haskoin.Util (bsToInteger)
-import Numeric (showIntAtBase)
+import qualified Data.Text as Text
+import Haskoin.Crypto (Mnemonic, fromMnemonic, toMnemonic)
 import Numeric.Natural (Natural)
-import qualified System.Console.Haskeline as Haskeline
-import qualified System.Console.Haskeline as Haskline
-import qualified System.Directory as D
+import System.Directory (doesPathExist)
 import System.Entropy (getEntropy)
 import System.IO (IOMode (ReadMode), withBinaryFile)
-import Text.Read (readMaybe)
+import System.Posix.Files (getFileStatus, isCharacterDevice)
 
-{- Dice rolls and bits -}
+{- Dice rolls -}
 
--- Kept for reference: the mapping the rolldice command used before it was
--- removed, the inverse of the one below.
--- Produces uniformily distributed dice rolls from a random byte
--- 0,   0x00 -> [6,6,6]
--- 1,   0x01 -> [6,6,1]
--- 215, 0xd7 -> [5,5,5]
--- 216, 0xd8 -> [6,6]
--- 217, 0xd9 -> [6,1]
--- 251, 0xfb -> [5,5]
--- Anything above 0xfb is dropped
-word8ToBase6 :: Word8 -> [Natural]
-word8ToBase6 w
-  | w > 0xfb = [] -- Drop otherwise we don't have uniform distribution
-  | w > 0xd7 =
-      let res = f <$> encodeBase6 (BS.pack [w - 0xd8])
-       in replicate (2 - length res) 6 <> res
-  | otherwise =
-      let res = f <$> encodeBase6 (BS.pack [w])
-       in replicate (3 - length res) 6 <> res
-  where
-    f :: Char -> Natural
-    f = read . (: [])
-    b6Data :: String
-    b6Data = "612345"
-    b6 :: Int -> Char
-    b6 = (b6Data !!)
-    encodeBase6 :: BS.ByteString -> String
-    encodeBase6 bs
-      | BS.null bs = mempty
-      | otherwise = showIntAtBase 6 b6 (bsToInteger bs) ""
-
--- Produces Bools using base6ToBool. Once 8 Bools have been
--- accumulated, it is transformed to a Word8 using boolsToWord8.
--- Any unused Bools are returned along with the Word8s.
-base6ToWord8 :: [Natural] -> [Bool] -> ([Word8], [Bool])
-base6ToWord8 ns obs
-  | length bs < 8 = ([], bs)
-  | otherwise =
-      let (ws, rest) = f bs []
-       in (boolsToWord8 <$> ws, rest)
-  where
-    bs = concatMap base6ToBool ns <> obs
-    f :: [Bool] -> [[Bool]] -> ([[Bool]], [Bool])
-    f xs acc
-      | length xs < 8 = (acc, xs)
-      | otherwise =
-          let (l, r) = splitAt (length xs - 8) xs
-           in f l ([r] <> acc)
-
--- Produce uniformily distributed bits from dice rolls
+-- Produce uniformly distributed bits from dice rolls
 -- 6 -> [0,0]
 -- 1 -> [0,1]
 -- 2 -> [1,0]
@@ -91,149 +57,220 @@ base6ToBool =
     3 -> [True, True]
     4 -> [False]
     5 -> [True]
-    _ -> error "Invalid base6ToBool"
+    _ -> error "base6ToBool: a die has the faces 1 to 6 only"
 
--- Big Endian
--- [T,F,F,F,F,F,F,F] -> 128
--- [F,F,F,F,F,F,F,T] -> 1
-boolsToWord8 :: [Bool] -> Word8
-boolsToWord8 xs
-  | length xs /= 8 = error "Invalid boolsToWord8"
-  | otherwise =
-      foldl' setBit 0 ys
+-- | The bits of dice rolls, in the order of the rolls
+diceBits :: [Natural] -> [Bool]
+diceBits = concatMap base6ToBool
+
+-- | The entropy of the given number of bytes that dice rolls give, once
+-- they are enough: their first bits, eight to a byte, the first bit the
+-- highest. The bits beyond are not used.
+diceEntropy :: Natural -> [Natural] -> Maybe BS.ByteString
+diceEntropy bytes rolls
+  | length bits < needed = Nothing
+  | otherwise = Just $ BS.pack $ map toByte $ chunksOf 8 (take needed bits)
   where
-    ys = fmap fst $ filter snd $ zip [0 ..] $ reverse xs
+    bits = diceBits rolls
+    needed = 8 * fromIntegral bytes
+    toByte = foldl' (\byte bit -> 2 * byte + if bit then 1 else 0) 0
 
--- Packs bools into a ByteString
-packBools :: [Bool] -> BS.ByteString
-packBools bs
-  | length bs `mod` 8 /= 0 = error "Invalid packBools length"
-  | otherwise = BS.pack $ boolsToWord8 <$> chunksOf 8 bs
+{- The exclusive or of entropies -}
 
-{- Splitting the entropy -}
-
--- Mix entropy of same length by xoring them
+-- | The exclusive or of two entropies, byte by byte. Entropies of different
+-- lengths stop the program: zipping them would drop the bytes of the longer
+-- one, so the callers check the lengths first.
 xorBytes :: BS.ByteString -> BS.ByteString -> BS.ByteString
-xorBytes ent1 ent2
-  | BS.length ent1 == BS.length ent2 =
-      BS.pack $ BS.zipWith xor ent1 ent2
-  | otherwise = error "Entropy is not of the same length"
+xorBytes a b
+  | BS.length a == BS.length b = BS.pack (BS.zipWith xor a b)
+  | otherwise = error "xorBytes: the entropies do not have the same length"
 
--- Split secret s into n parts
--- generate k1 .. k(n-1) randomly
--- compute kn = s xor k1 xor .. xor k(n-1)
--- return k1 .. kn
--- We have the property that s = k1 xor ... xor kn
-splitEntropy :: Natural -> BS.ByteString -> IO [BS.ByteString]
-splitEntropy n secret
-  | n < 2 = error "splitEntropy invalid number"
-  | otherwise = do
-      ks <- replicateM (fromIntegral n - 1) (snd <$> systemEntropy len)
-      return $ splitEntropyWith secret ks
-  where
-    len = fromIntegral $ BS.length secret
-
-splitEntropyWith :: BS.ByteString -> [BS.ByteString] -> [BS.ByteString]
-splitEntropyWith secret ks = foldl' xorBytes secret ks : ks
-
-mergeMnemonicParts :: [Text] -> Either String Mnemonic
-mergeMnemonicParts mnems
-  | length mnems < 2 = Left "Only one mnemonic provided"
-  | length (nub mnems) /= length mnems = Left "Two mnemonics are identical"
-  | otherwise = do
-      bs <- mapM fromMnemonic mnems
-      toMnemonic (xorAll bs)
-
--- | Several entropies combined into one, each bit the exclusive or of the
--- corresponding bits. Nothing comes out of an empty list.
+-- | The exclusive or of entropies of the same length; nothing for none
 xorAll :: [BS.ByteString] -> BS.ByteString
 xorAll [] = BS.empty
-xorAll (first : rest) = foldl' xorBytes first rest
+xorAll (entropy : rest) = foldl' xorBytes entropy rest
 
-{- Dice rolls from the user -}
+{- The parts of a mnemonic -}
 
-askInputDice :: IO Natural
-askInputDice = do
-  inputM <-
-    Haskeline.runInputT Haskline.defaultSettings $
-      Haskeline.getInputLine "Dice roll: "
-  case readMaybe =<< inputM of
-    Just n ->
-      if n `elem` [1 .. 6]
-        then return n
-        else badInput
-    _ -> badInput
+-- | A secret split with random parts of its length: the part that makes the
+-- secret with them, then the random parts. All the parts are needed to
+-- merge the secret back, and any fewer tell nothing of it.
+splitEntropyWith :: BS.ByteString -> [BS.ByteString] -> [BS.ByteString]
+splitEntropyWith secret randoms = xorAll (secret : randoms) : randoms
+
+-- | The mnemonic that parts merge into, whatever their order: the mnemonic
+-- of the exclusive or of their entropies. The parts are two or more, of as
+-- many words, and all different, since two equal parts cancel out. A part
+-- that does not read is named by its position only: its words are secret.
+mergeMnemonicParts :: [Text] -> Either String Mnemonic
+mergeMnemonicParts parts = do
+  when (length parts < 2) $ Left "A mnemonic in parts has two parts or more"
+  entropies <- zipWithM entropyOf [1 :: Int ..] parts
+  when (length (nub (map BS.length entropies)) > 1) $
+    Left "The parts do not have the same number of words"
+  when (length (nub entropies) < length entropies) $
+    Left "Two of the parts are the same, but every part of a mnemonic is different"
+  toMnemonic (xorAll entropies)
   where
-    badInput = do
-      putStrLn "Invalid dice roll. Must be in range [1..6]"
-      askInputDice
+    entropyOf n part = first (const $ "Part " <> show n <> " is not a mnemonic") (fromMnemonic part)
 
--- TODO: Ask the dice rolls in sequences of 5 or so
-getDiceEntropy :: Natural -> IO BS.ByteString
-getDiceEntropy ent = do
-  putStrLn "Enter your dice rolls (from 1 to 6)"
-  f [] []
+{- The entropy of the system -}
+
+-- | The device of the entropy of the system, on the machines that have it
+randomDevice :: FilePath
+randomDevice = "/dev/random"
+
+-- | Random bytes of the operating system, with the name of their source:
+-- the device /dev/random where the machine has it, read directly rather
+-- than through a library, and the entropy package elsewhere
+systemEntropy :: (MonadIO m) => Natural -> ExceptT String m (Text, BS.ByteString)
+systemEntropy = entropyAt randomDevice
+
+-- | Random bytes from the device at the given path, or from the entropy
+-- package when nothing is there. Something else than a character device
+-- at the path is refused: a plain file there, as a container or a chroot
+-- may have, would give the same bytes to every mnemonic. A source that
+-- fails, or gives bytes that cannot be used, fails the command rather than
+-- give a weak mnemonic.
+entropyAt :: (MonadIO m) => FilePath -> Natural -> ExceptT String m (Text, BS.ByteString)
+entropyAt path bytes = do
+  exists <- systemIO $ doesPathExist path
+  (source, entropy) <-
+    if exists
+      then do
+        device <- isCharacterDevice <$> systemIO (getFileStatus path)
+        unless device $
+          throwError $ path <> " is not a device, so hw does not read it: check this machine before you make a mnemonic on it"
+        (,) (Text.pack path) <$> systemIO (withBinaryFile path ReadMode (`BS.hGet` fromIntegral bytes))
+      else (,) "System.Entropy.getEntropy" <$> systemIO (getEntropy (fromIntegral bytes))
+  (,) source <$> liftEither (checkEntropy bytes entropy)
+
+-- | An action of the system that reads entropy, its failure told
+systemIO :: (MonadIO m) => IO a -> ExceptT String m a
+systemIO io = do
+  result <- liftIO (try io)
+  either (\e -> throwError $ "The entropy of the system could not be read: " <> show (e :: IOException)) return result
+
+-- | Bytes of entropy, if they can be used: as many as asked for, and
+-- without a pattern that random bytes about never have (see the last
+-- section)
+checkEntropy :: Natural -> BS.ByteString -> Either String BS.ByteString
+checkEntropy bytes entropy
+  | BS.length entropy /= fromIntegral bytes =
+      Left $ "The operating system gave " <> show (BS.length entropy) <> " bytes of entropy, not " <> show bytes
+  | hasPattern entropy =
+      Left "The operating system gave bytes with a pattern that random bytes about never have: its entropy is broken"
+  | otherwise = Right entropy
+
+{- A new mnemonic -}
+
+-- | The mnemonic of the entropy of the system, mixed by exclusive or with
+-- the entropy of dice rolls if any, and its parts when random parts of its
+-- length split it. Both are checked before the user writes them down: the
+-- mnemonic must give back its entropy, and the parts the mnemonic. A
+-- failure of either would lose the funds sent to its accounts.
+newMnemonic :: BS.ByteString -> Maybe BS.ByteString -> [BS.ByteString] -> Either String (Mnemonic, [Mnemonic])
+newMnemonic system diceM randoms = do
+  entropy <- maybe (Right system) mixDice diceM
+  mnem <- toMnemonic entropy
+  parts <- if null randoms then Right [] else mapM toMnemonic (splitEntropyWith entropy randoms)
+  unless (fromMnemonic mnem == Right entropy) $ Left failedCheck
+  unless (null parts || mergeMnemonicParts parts == Right mnem) $ Left failedCheck
+  return (mnem, parts)
   where
-    f :: [Word8] -> [Bool] -> IO BS.ByteString
-    f res acc
-      | length res == fromIntegral ent =
-          return $ BS.pack res
-      | otherwise = do
-          d <- askInputDice
-          let (ws, bs) = base6ToWord8 [d] acc
-          unless (null ws) $ do
-            putStrLn $
-              show (length res + length ws)
-                <> "/"
-                <> show ent
-                <> " bytes collected"
-          f (ws <> res) bs
+    mixDice dice
+      | BS.length dice == BS.length system = Right (xorBytes system dice)
+      | otherwise = Left "The dice rolls did not give as many bytes as the entropy of the system"
+    failedCheck = "The new mnemonic failed its check, so hw does not show it: please report this bug"
 
-{- Generating a mnemonic -}
-
--- Generate a mnemonic with optional dice entropy and key splitting
+-- | A new mnemonic of the given number of bytes of entropy, in the given
+-- number of parts (one: whole), with the source of its entropy.
+--
+-- The entropy of the system, and the random parts of a split, are read
+-- before the dice rolls, when the given function asks for them. The system
+-- gives its bytes before it sees a roll, so it cannot choose them to cancel
+-- the rolls. The rolls cannot depend on bytes the user never sees. So the
+-- mix is as strong as the stronger of the two. A source that fails also
+-- fails before the user rolls a die.
+--
+-- The dice do not mix into the random parts of a split: the secrecy of the
+-- parts rests on the system alone.
 genMnemonic ::
   (MonadIO m) =>
   Natural ->
-  Bool ->
+  Maybe (Natural -> ExceptT String m BS.ByteString) ->
   Natural ->
   ExceptT String m (Text, Mnemonic, [Mnemonic])
-genMnemonic reqEnt reqDice splitIn
-  | splitIn == 0 = throwError "Invalid split option"
-  | reqEnt `elem` [16, 20 .. 32] = do
-      (origEnt, sysEnt) <- liftIO $ systemEntropy reqEnt
-      ent <-
-        if reqDice
-          then do
-            diceEnt <- liftIO $ getDiceEntropy reqEnt
-            return $ sysEnt `xorBytes` diceEnt
-          else return sysEnt
-      when (BS.length ent /= fromIntegral reqEnt) $
-        throwError "Something went wrong with the entropy size"
-      mnem <- liftEither $ toMnemonic ent
-      if splitIn > 1
-        then do
-          ks <- liftIO $ splitEntropy splitIn ent
-          unless (ent == xorAll ks) $
-            throwError "Something went wrong while splitting the keys"
-          splitMnems <- liftEither $ mapM toMnemonic ks
-          unsplitMnem <- liftEither $ mergeMnemonicParts splitMnems
-          unless (mnem == unsplitMnem) $
-            throwError "Something went wrong while reconstructing the mnemonic"
-          return (origEnt, mnem, splitMnems)
-        else return (origEnt, mnem, [])
-  | otherwise = throwError "The entropy value can only be in [16,20..32]"
+genMnemonic = genMnemonicAt randomDevice
 
-{- The system entropy -}
+-- | A new mnemonic, its entropy read from the device at the given path, or
+-- from the entropy package when nothing is there: see 'genMnemonic'
+genMnemonicAt ::
+  (MonadIO m) =>
+  FilePath ->
+  Natural ->
+  Maybe (Natural -> ExceptT String m BS.ByteString) ->
+  Natural ->
+  ExceptT String m (Text, Mnemonic, [Mnemonic])
+genMnemonicAt path bytes askDice parts = do
+  unless (bytes `elem` [16, 20 .. 32]) $
+    throwError $ "A mnemonic has 16, 20, 24, 28 or 32 bytes of entropy, not " <> show bytes
+  when (parts == 0) $ throwError "A mnemonic comes in one part or more, not 0"
+  (source, system) <- entropyAt path bytes
+  randoms <- replicateM (fromIntegral parts - 1) (snd <$> entropyAt path bytes)
+  diceM <- traverse ($ bytes) askDice
+  (mnem, split) <- liftEither $ newMnemonic system diceM randoms
+  return (source, mnem, split)
 
-systemEntropy :: Natural -> IO (Text, BS.ByteString)
-systemEntropy bytes = do
-  exists <- D.doesFileExist "/dev/random"
-  if exists
-    then ("/dev/random",) <$> devRandom bytes
-    else ("System.Entropy.getEntropy",) <$> getEntropy (fromIntegral bytes)
+{- Patterns in random bytes -}
 
-devRandom :: Natural -> IO BS.ByteString
-devRandom bytes =
-  withBinaryFile "/dev/random" ReadMode (`BS.hGet` fromIntegral bytes)
+-- Random bytes are uniform and independent of one another. So a guess of a
+-- byte from the bytes before it is right with a chance of 1/256, whatever
+-- the rule of the guess, and the number of right guesses among m follows
+-- the binomial distribution B(m, 1/256) exactly, even for a few bytes. A
+-- broken source gives bytes that simple rules guess far more often: one
+-- byte over and over, a pattern that repeats, a counter. hw guesses each
+-- byte by such rules, and counts the most common byte. It refuses the bytes
+-- when a test finds a result so unlikely that random bytes would give it,
+-- with all the tests together, less than once in 2^40 times.
+--
+-- This is the principle of the health tests and of the predictors of NIST
+-- SP 800-90B, "Recommendation for the Entropy Sources Used for Random Bit
+-- Generation" (2018): sections 4.4 and 6.3.7 to 6.3.10. The rate of false
+-- alarms, 2^-40, is the lowest it recommends for its health tests. The tests
+-- are combined by Bonferroni's inequality: the chance that one of N tests
+-- fires is at most N times the chance of the test that fires.
+--
+-- This finds patterns; it does not estimate entropy. Bytes from a generator
+-- with a weak seed look random to it, as to any test.
 
+-- | Whether bytes have a pattern that random bytes have with a chance below
+-- 2^-40: a rule guesses too many of them from the bytes before, or one byte
+-- fills too many of them
+hasPattern :: BS.ByteString -> Bool
+hasPattern entropy = fromIntegral (length chances) * minimum chances < 2 ^^ (-40 :: Int)
+  where
+    chances = mostCommon : map rightGuesses rules
+    rules = map repeatAt [1 .. 8] <> map stepAt [1 .. 4]
+    -- The byte d places back, as a pattern that repeats every d bytes gives
+    repeatAt d i = if i >= d then Just (at (i - d)) else Nothing
+    -- The step seen d places back, taken again, as a counter in words of d
+    -- bytes gives. Bytes wrap around as counters do: 0xff + 1 is 0x00.
+    stepAt d i = if i >= 2 * d then Just (2 * at (i - d) - at (i - 2 * d)) else Nothing
+    -- The chance that random bytes give as many right guesses by a rule
+    rightGuesses rule =
+      let results = [at i == guess | i <- [0 .. size - 1], Just guess <- [rule i]]
+       in atLeast (length results) (length (filter id results))
+    -- The chance that one of the 256 bytes fills as many places in random bytes
+    mostCommon = 256 * atLeast size (maximum (0 : map length (group (sort (BS.unpack entropy)))))
+    at = BS.index entropy
+    size = BS.length entropy
+
+-- | The chance that k or more of m guesses are right when each is right
+-- with a chance of 1/256 apart from the others: the tail of the binomial
+-- distribution B(m, 1/256), the sum of C(m, j) 255^(m-j) / 256^m for j from
+-- k to m, computed exactly
+atLeast :: Int -> Int -> Rational
+atLeast m k = sum [fromInteger (choose j * 255 ^ (m - j)) | j <- [k .. m]] / 256 ^ m
+  where
+    choose j = product [toInteger (m - j + 1) .. toInteger m] `div` product [1 .. toInteger j]

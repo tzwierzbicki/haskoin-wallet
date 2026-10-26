@@ -102,7 +102,6 @@ library
     , entropy >=0.4.1.6
     , esqueleto >=3.5.10.1
     , filepath >=1.4
-    , haskeline >=0.7.5.0
     , haskoin-core >=1.0.4
     , haskoin-store-data >=1.2.2
     , http-api-data
@@ -125,6 +124,7 @@ library
     , time >=1.12.2
     , transformers >=0.5.6.2
     , unicode-transforms >=0.4
+    , unix >=2.7
     , unliftio >=0.2.10
     , unordered-containers >=0.2.10.0
     , wreq >=0.5.3.2
@@ -154,7 +154,6 @@ executable hw
     , entropy >=0.4.1.6
     , esqueleto >=3.5.10.1
     , filepath >=1.4
-    , haskeline >=0.7.5.0
     , haskoin-core >=1.0.4
     , haskoin-store-data >=1.2.2
     , haskoin-wallet
@@ -178,6 +177,7 @@ executable hw
     , time >=1.12.2
     , transformers >=0.5.6.2
     , unicode-transforms >=0.4
+    , unix >=2.7
     , unliftio >=0.2.10
     , unordered-containers >=0.2.10.0
     , wreq >=0.5.3.2
@@ -244,7 +244,6 @@ test-suite spec
     , entropy >=0.4.1.6
     , esqueleto >=3.5.10.1
     , filepath >=1.4
-    , haskeline >=0.7.5.0
     , haskoin-core >=1.0.4
     , haskoin-store-data >=1.2.2
     , haskoin-wallet
@@ -269,6 +268,7 @@ test-suite spec
     , time >=1.12.2
     , transformers >=0.5.6.2
     , unicode-transforms >=0.4
+    , unix >=2.7
     , unliftio >=0.2.10
     , unordered-containers >=0.2.10.0
     , wreq >=0.5.3.2

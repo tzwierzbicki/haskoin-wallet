@@ -34,6 +34,7 @@ spec = prepareContext $ \ctx -> do
   signingSpec ctx
   matchingSpec ctx
   terminalSpec
+  diceSpec
   sweepKeysSpec
 
 {- A scripted terminal -}
@@ -169,7 +170,20 @@ mnemonicSpec =
         `shouldReturn` ( Right testWords,
                          [ "Mnemonic part 1 of 2: ",
                            "Mnemonic part 2 of 2: ",
-                           "Two mnemonics are identical",
+                           "Two of the parts are the same, but every part of a mnemonic is different",
+                           "Mnemonic part 1 of 2: ",
+                           "Mnemonic part 2 of 2: "
+                         ],
+                         []
+                       )
+
+    -- Merging them used to stop hw instead
+    it "asks for the parts again when they do not have the same number of words" $
+      answering [firstPart, Text.unwords (replicate 23 "abandon" <> ["art"]), firstPart, secondPart] (`askMnemonic` 2)
+        `shouldReturn` ( Right testWords,
+                         [ "Mnemonic part 1 of 2: ",
+                           "Mnemonic part 2 of 2: ",
+                           "The parts do not have the same number of words",
                            "Mnemonic part 1 of 2: ",
                            "Mnemonic part 2 of 2: "
                          ],
@@ -336,6 +350,115 @@ terminalSpec =
 
     it "writes a message on its own line" $
       typing "" (\term -> tell term "The passphrases do not match") `shouldReturn` "The passphrases do not match\n"
+
+{- Dice rolls -}
+
+-- | What hw tells before the rolls of one byte: about 5 rolls for its 8
+-- bits, since a roll gives 5/3 bits on average
+diceIntro :: [String]
+diceIntro =
+  [ "Roll a die about 5 times, and type the faces it shows, from 1 to 6",
+    "Type as many faces on a line as you like: they are not shown"
+  ]
+
+-- | The prompt of a line of rolls
+rollsPrompt :: String
+rollsPrompt = "Rolls: "
+
+diceSpec :: Spec
+diceSpec = do
+  describe "A line of dice rolls" $ do
+    it "holds the faces typed, with or without spaces between them" $ do
+      readRolls "3 1 6" `shouldBe` Right [3, 1, 6]
+      readRolls "316" `shouldBe` Right [3, 1, 6]
+      readRolls "  31 6 " `shouldBe` Right [3, 1, 6]
+
+    it "is refused when it holds no roll" $ do
+      readRolls "" `shouldBe` Left "The line has no roll: type the faces the die shows, from 1 to 6"
+      readRolls "   " `shouldBe` Left "The line has no roll: type the faces the die shows, from 1 to 6"
+
+    -- The rolls are secret: the message does not repeat the line
+    it "is refused, none of its rolls taken, when it holds anything else than faces from 1 to 6" $ do
+      readRolls "3 1 7" `shouldBe` Left "The line has something else than faces from 1 to 6: none of its rolls were taken"
+      readRolls "3 0 1" `shouldBe` Left "The line has something else than faces from 1 to 6: none of its rolls were taken"
+      readRolls "3, 1" `shouldBe` Left "The line has something else than faces from 1 to 6: none of its rolls were taken"
+
+  describe "Asking for dice rolls" $ do
+    it "takes the rolls of a byte from one line, without echo" $
+      answering ["6 6 6 1"] (`askDiceEntropy` 1)
+        `shouldReturn` (Right (BS.pack [0x01]), diceIntro <> [rollsPrompt, "Enough rolls: the 8 bits are complete"], [])
+
+    it "takes rolls from several lines, telling after each how many it took and about how many are left" $
+      answering ["6 6", "6 1"] (`askDiceEntropy` 1)
+        `shouldReturn` ( Right (BS.pack [0x01]),
+                         diceIntro
+                           <> [ rollsPrompt,
+                                "2 rolls taken: 4 of the 8 bits, about 3 rolls to go",
+                                rollsPrompt,
+                                "Enough rolls: the 8 bits are complete"
+                              ],
+                         []
+                       )
+
+    it "tells of a single roll as one" $
+      answering ["5", "6 6 6 4"] (`askDiceEntropy` 1)
+        `shouldReturn` ( Right (BS.pack [0x80]),
+                         diceIntro
+                           <> [ rollsPrompt,
+                                "1 roll taken: 1 of the 8 bits, about 5 rolls to go",
+                                rollsPrompt,
+                                "Enough rolls: the 8 bits are complete"
+                              ],
+                         []
+                       )
+
+    it "drops the rolls beyond the bits it needs" $
+      answerOf ["3 3 3 3 1 2 4"] (`askDiceEntropy` 1) `shouldReturn` Right (BS.pack [0xff])
+
+    it "tells what is wrong with a line and asks for it again, taking none of its rolls" $
+      answering ["6 6 7 1", "6 6 6 1"] (`askDiceEntropy` 1)
+        `shouldReturn` ( Right (BS.pack [0x01]),
+                         diceIntro
+                           <> [ rollsPrompt,
+                                "The line has something else than faces from 1 to 6: none of its rolls were taken",
+                                rollsPrompt,
+                                "Enough rolls: the 8 bits are complete"
+                              ],
+                         []
+                       )
+
+    it "fails after three wrong lines in a row, asking no more" $
+      answering ["7", "", "8", "6 6 6 1"] (`askDiceEntropy` 1)
+        `shouldReturn` ( Left "The line has something else than faces from 1 to 6: none of its rolls were taken",
+                         diceIntro
+                           <> [ rollsPrompt,
+                                "The line has something else than faces from 1 to 6: none of its rolls were taken",
+                                rollsPrompt,
+                                "The line has no roll: type the faces the die shows, from 1 to 6",
+                                rollsPrompt
+                              ],
+                         ["6 6 6 1"]
+                       )
+
+    -- The end of the input used to make hw ask for a roll again and again
+    it "is cancelled when the input ends" $
+      answerOf ["6 6"] (`askDiceEntropy` 1) `shouldReturn` Left cancelled
+
+    -- 128 bits: about 77 rolls of 5/3 bits; 64 rolls of two bits suffice
+    it "asks for about 77 rolls for the 16 bytes of a mnemonic of 12 words" $
+      answering [Text.replicate 64 "6"] (`askDiceEntropy` 16)
+        `shouldReturn` ( Right (BS.replicate 16 0x00),
+                         [ "Roll a die about 77 times, and type the faces it shows, from 1 to 6",
+                           "Type as many faces on a line as you like: they are not shown",
+                           rollsPrompt,
+                           "Enough rolls: the 128 bits are complete"
+                         ],
+                         []
+                       )
+
+    it "asks for about 154 rolls for the 32 bytes of a mnemonic of 24 words" $ do
+      (_, shown, _) <- answering [] (`askDiceEntropy` 32)
+      take 1 shown `shouldBe` ["Roll a die about 154 times, and type the faces it shows, from 1 to 6"]
 
 {- The private keys of a sweep -}
 

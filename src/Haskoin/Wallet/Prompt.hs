@@ -3,7 +3,8 @@
 
 -- | What hw asks the user for on the terminal: the mnemonic of a wallet,
 -- whole or in parts, and its passphrase, which give the signing key of an
--- account; and the private keys of a sweep, when they are not in a file.
+-- account; the dice rolls that add to the entropy of a new mnemonic; and
+-- the private keys of a sweep, when they are not in a file.
 --
 -- Secrets are typed without echo, as gpg, ssh and sudo take them: nothing
 -- shows on the screen, not even their length. The prompts and the messages
@@ -23,6 +24,8 @@ module Haskoin.Wallet.Prompt
     askNewMnemonicPass,
     askSigningKey,
     matchAccount,
+    readRolls,
+    askDiceEntropy,
     readSecKeys,
     parseKeys,
   )
@@ -34,6 +37,7 @@ import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
+import Data.Char (digitToInt, isSpace)
 import Data.List (elemIndex)
 import Data.Maybe (fromMaybe)
 import qualified Data.Map.Strict as Map
@@ -41,7 +45,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8')
 import Haskoin
-import Haskoin.Wallet.Entropy (mergeMnemonicParts)
+import Haskoin.Wallet.Entropy (diceBits, diceEntropy, mergeMnemonicParts)
 import Haskoin.Wallet.Keys
 import Numeric.Natural (Natural)
 import qualified System.IO as IO
@@ -220,6 +224,49 @@ typedPassphraseWarning =
   "This account comes from the passphrase as typed, which hw did not normalize as BIP39 asks: \
   \other wallets would not find it from this mnemonic and passphrase. \
   \Moving its funds to an account created now keeps them within reach of any wallet."
+
+{- Dice rolls -}
+
+-- | The faces of a die on a typed line, from 1 to 6, spaces between them or
+-- not; or what is wrong with the line, without repeating it, since the
+-- rolls are secret
+readRolls :: Text -> Either String [Natural]
+readRolls line
+  | Text.null faces = Left "The line has no roll: type the faces the die shows, from 1 to 6"
+  | Text.all (`elem` ['1' .. '6']) faces = Right $ map (fromIntegral . digitToInt) (Text.unpack faces)
+  | otherwise = Left "The line has something else than faces from 1 to 6: none of its rolls were taken"
+  where
+    faces = Text.filter (not . isSpace) line
+
+-- | Entropy of the given number of bytes from a die the user rolls. The
+-- faces are typed without echo, as many on a line as the user likes, and
+-- after each line hw tells how many rolls it took and about how many are
+-- left. A line with anything else than faces is told and typed again.
+askDiceEntropy :: (MonadIO m) => Terminal -> Natural -> ExceptT String m BS.ByteString
+askDiceEntropy term bytes = do
+  say $ "Roll a die about " <> show (rollsFor needed) <> " times, and type the faces it shows, from 1 to 6"
+  say "Type as many faces on a line as you like: they are not shown"
+  collect []
+  where
+    needed = 8 * fromIntegral bytes
+    say = liftIO . tell term
+    collect taken = do
+      line <- retrying term $ readRolls <$> hidden term "Rolls: "
+      let rolled = taken <> line
+          have = length (diceBits rolled)
+      case diceEntropy bytes rolled of
+        Just entropy -> do
+          say $ "Enough rolls: the " <> show needed <> " bits are complete"
+          return entropy
+        Nothing -> do
+          say $ rolls (length line) <> " taken: " <> show have <> " of the " <> show needed <> " bits, about " <> rolls (rollsFor (needed - have)) <> " to go"
+          collect rolled
+    rolls n = show n <> if n == 1 then " roll" else " rolls"
+
+-- | About how many rolls give a number of bits: a roll gives two bits for
+-- four faces of six and one bit for the other two, 5/3 bits on average
+rollsFor :: Int -> Int
+rollsFor bits = (3 * bits + 4) `div` 5
 
 {- The private keys of a sweep -}
 

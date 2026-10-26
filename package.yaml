@@ -39,7 +39,6 @@ dependencies:
   - path-pieces
   - http-api-data
   - esqueleto >=3.5.10.1
-  - haskeline >= 0.7.5.0
   - haskoin-core >= 1.0.4
   - haskoin-store-data >= 1.2.2
   - http-types >= 0.12.3
@@ -59,6 +58,7 @@ dependencies:
   - text >= 1.2.4.0
   - time >= 1.12.2
   - unicode-transforms >= 0.4
+  - unix >= 2.7
   - transformers >= 0.5.6.2
   - unliftio >= 0.2.10
   - unordered-containers >= 0.2.10.0

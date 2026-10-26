@@ -294,9 +294,9 @@ mnemonicParser = do
     progDescDoc (offline "Generate a mnemonic")
       <> footer
         [r|
-Generate a mnemonic using the systems entropy pool. By default it should be
-/dev/random on linux machines. If you use the --dice option, the additional dice
-entropy will be mixed with the system entropy. You should ideally run this
+Generate a mnemonic from the entropy of the operating system, read directly from
+/dev/random where the machine has it. If you use the --dice option, hw then asks
+for dice rolls and mixes their entropy with the system entropy. You should ideally run this
 command on an offline (air-gapped) computer. The mnemonic will NOT be stored on
 disk. It will only be printed to the screen and you should write it down and
 keep it in a secure location. Make multiple copies of your mnemonic. Do not
@@ -332,7 +332,8 @@ diceOption =
       <> help
         [r|
 Provide additional entropy using 6-sided dice. The entropy will be mixed with
-the system entropy.
+the system entropy. Type the faces as many on a line as you like: they are not
+shown, and hw tells how many rolls are left after each line.
 |]
 
 splitInOption :: Parser Natural
