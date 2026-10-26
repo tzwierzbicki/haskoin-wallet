@@ -34,7 +34,7 @@ import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.Util (Page (Page))
 import Numeric.Natural (Natural)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), MarshalJsonBox (..), testIdentity)
-import Haskoin.Wallet.Arbitrary (arbitraryTxInfo)
+import Haskoin.Wallet.Arbitrary (arbitraryMyInputs, arbitraryMyOutputs, arbitraryTxInfo, arbitraryTxSummary, arbitraryTxType)
 import Test.Hspec
 import Text.RawString.QQ (r)
 
@@ -46,8 +46,13 @@ spec = prepareContext $ \ctx -> do
   storingSpec ctx
   listingSpec ctx
   historySpec ctx
-  -- A transaction reads back as it was written
-  testIdentity def {marshalJsonTests = [MarshalJsonBox ((,) btc <$> arbitraryTxInfo btc)]}
+  -- A transaction, its summary and the parts of the summary read back as
+  -- they were written
+  testIdentity
+    def
+      { jsonTests = [JsonBox arbitraryTxType, JsonBox arbitraryMyOutputs, JsonBox arbitraryMyInputs],
+        marshalJsonTests = [MarshalJsonBox ((,) btc <$> arbitraryTxSummary btc), MarshalJsonBox ((,) btc <$> arbitraryTxInfo btc)]
+      }
 
 {- The story -}
 

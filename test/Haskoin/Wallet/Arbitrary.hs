@@ -92,8 +92,11 @@ arbitraryJsonCoin net =
     <*> arbitraryPositive
     <*> arbitraryBlockRef
     <*> arbitraryNatural
-    <*> elements [Nothing, Just LockedByTransaction, Just LockedByUser]
+    <*> arbitraryMaybe arbitraryCoinLock
     <*> arbitrary
+
+arbitraryCoinLock :: Gen CoinLock
+arbitraryCoinLock = elements [LockedByTransaction, LockedByUser]
 
 arbitraryPubKeyDoc :: Ctx -> Gen PubKeyDoc
 arbitraryPubKeyDoc ctx =
@@ -242,6 +245,9 @@ arbitraryResponse net ctx =
         <$> arbitraryText
         <*> arbitraryText
     ]
+
+arbitraryKeyBytes :: Gen KeyBytes
+arbitraryKeyBytes = KeyBytes <$> arbitraryBS
 
 arbitraryConfig :: Gen Config
 arbitraryConfig =

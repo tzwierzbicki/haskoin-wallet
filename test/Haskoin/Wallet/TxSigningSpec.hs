@@ -35,8 +35,12 @@ spec = do
     signingSpec ctx
     verificationSpec ctx
     propertiesSpec ctx
-    -- The signing data reads back as it was written
-    testIdentity def {jsonTests = [JsonBox (arbitraryTxSignData btc ctx)]}
+    -- The signing data reads back as it was written, plain or marshalled
+    testIdentity
+      def
+        { jsonTests = [JsonBox (arbitraryTxSignData btc ctx)],
+          marshalJsonTests = [MarshalJsonBox ((,) ctx <$> arbitraryTxSignData btc ctx)]
+        }
 
 -- | Sign with the account key, like signtx does. Vectors with sweep keys
 -- belong in test/data/tx-sweep.

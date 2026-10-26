@@ -13,12 +13,17 @@ import Database.Persist.Sql (PersistValue (..))
 import Haskoin
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.TestUtils
+import Data.Default (def)
+import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), testIdentity)
+import Haskoin.Wallet.Arbitrary (arbitraryKeyBytes)
 import Test.Hspec
 
 spec :: Spec
 spec = do
   keysSpec
   indexesSpec
+  -- A key reads back as it was written, in its hexadecimal form
+  testIdentity def {jsonTests = [JsonBox arbitraryKeyBytes]}
 
 keysSpec :: Spec
 keysSpec =
