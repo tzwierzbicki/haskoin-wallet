@@ -256,7 +256,7 @@ integerAmountPrinter unit amnt
 integerAmountPrinterWith ::
   (String -> Printer) -> AmountUnit -> Integer -> Printer
 integerAmountPrinterWith f unit amnt =
-  f (cs $ showIntegerAmount unit amnt) <+> unitPrinter unit amnt
+  f (cs $ showAmount unit amnt) <+> unitPrinter unit amnt
 
 unitPrinter :: AmountUnit -> Integer -> Printer
 unitPrinter unit = text . cs . showUnit unit

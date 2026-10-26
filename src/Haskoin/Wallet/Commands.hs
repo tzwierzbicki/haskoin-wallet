@@ -600,9 +600,8 @@ cmdPrepareTx ctx cfg rcpTxt nameM unit feeByte dust payer minConf strategy fileM
   where
     toRecipient net (a, v) = do
       addr <- textToAddrE net a
-      val <- maybeToEither (cs $ badAmnt v) (readAmount unit v)
-      return (addr, val)
-    badAmnt v = "Could not parse the amount " <> v <> " as " <> showUnit unit 1
+      val <- readAmount unit v
+      return (addr, fromIntegral val)
 
 cmdPendingTxs :: Ctx -> Config -> Maybe Text -> Page -> IO Response
 cmdPendingTxs ctx cfg nameM page =

@@ -9,10 +9,10 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Word (Word32)
 import Haskoin
-import Haskoin.Wallet.Amounts (AmountUnit (..), readNatural)
+import Haskoin.Wallet.Amounts (AmountUnit (..), readUnit)
 import Haskoin.Wallet.CoinSelection (CoinSelection (..), FeePayer (..))
 import Haskoin.Wallet.Keys (KeySource (..))
-import Haskoin.Wallet.Util (Page (Page))
+import Haskoin.Wallet.Util (Page (Page), readNatural)
 import Numeric.Natural (Natural)
 import Options.Applicative
 import Options.Applicative.Help.Pretty
@@ -188,28 +188,17 @@ Display the result as JSON. Specify this option at the end of your command.
 |]
 
 unitOption :: Parser AmountUnit
-unitOption = satoshiOption <|> bitOption
-
-satoshiOption :: Parser AmountUnit
-satoshiOption =
-  flag UnitBitcoin UnitSatoshi $
-    short 's'
-      <> long "satoshi"
+unitOption =
+  option (maybeReader (readUnit . cs)) $
+    short 'u'
+      <> long "unit"
+      <> metavar "UNIT"
+      <> value UnitBitcoin
+      <> completeWith ["btc", "bit", "sat"]
       <> help
         [r|
-Use satoshis for parsing and displaying amounts (default: bitcoin). Specify this
-option at the end of your command.
-|]
-
-bitOption :: Parser AmountUnit
-bitOption =
-  flag UnitBitcoin UnitBit $
-    short 'b'
-      <> long "bit"
-      <> help
-        [r|
-Use bits for parsing and displaying amounts (default: bitcoin). Specify this
-option at the end of your command.
+The unit of the amounts shown, and of the amounts typed without a unit: btc, bit
+or sat (default: btc). Specify this option at the end of your command.
 |]
 
 commandParser :: Parser Command
@@ -755,10 +744,10 @@ amountArg =
     metavar "AMOUNT"
       <> help
         [r|
-Recipient amount. By default, amounts are parsed as bitcoins. You can also use the
---satoshi or --bit option to specify amounts in satoshis or bits. For example,
-"0.00001" bitcoins is equivalent to "10.00" bits or "1000" satoshi. Bitcoins can
-have up to 8 decimal places, bits up to 2 and satoshi are whole numbers.
+Recipient amount, in bitcoins unless it ends with a unit (btc, bit, bits, sat or
+sats) or the --unit option says otherwise. For example, 0.00001, 0.00001btc,
+10bits and 1000sat are the same amount. Bitcoins have up to 8 decimals, bits up
+to 2, and satoshis are whole. Separators such as 1'000 are refused.
 |]
 
 coinOption :: Parser (TxHash, Natural)

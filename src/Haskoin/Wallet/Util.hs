@@ -19,6 +19,7 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe (isJust)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import qualified Data.Text.Read as Read
 import Haskoin
 import Numeric.Natural (Natural)
 import System.Random (StdGen, uniformShuffleList)
@@ -81,6 +82,13 @@ safeSubtract :: (Integral a) => a -> a -> Maybe a
 safeSubtract a b
   | b > a = Nothing
   | otherwise = Just $ a - b
+
+-- | A natural number in decimal digits, and nothing else
+readNatural :: Text -> Maybe Natural
+readNatural txt =
+  case Read.decimal txt of
+    Right (n, rest) | Text.null rest -> Just n
+    _ -> Nothing
 
 {- Random -}
 
