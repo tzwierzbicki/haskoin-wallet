@@ -436,7 +436,7 @@ listingSpec ctx =
         accId <- account ctx
         lift $ P.insert_ (paymentRow accId) {dBCoinAddress = "nonsense"}
         lift $
-          dbShouldFailWith "The stored coin 0000000000000000000000000000000000000000000000000000000000000001 0 has an address that does not read: nonsense" $
+          dbShouldFailWith "The stored coin 0000000000000000000000000000000000000000000000000000000000000001:0 has an address that does not read: nonsense" $
             coinPage btc accId AllCoins (Page 10 0)
 
     it "refuses a stored coin whose block does not read" $
@@ -444,7 +444,7 @@ listingSpec ctx =
         accId <- account ctx
         lift $ P.insert_ (paymentRow accId) {dBCoinBlockRef = "nonsense"}
         lift $
-          dbShouldFailWith "The stored coin 0000000000000000000000000000000000000000000000000000000000000001 0 has a block that does not read" $
+          dbShouldFailWith "The stored coin 0000000000000000000000000000000000000000000000000000000000000001:0 has a block that does not read" $
             coinPage btc accId AllCoins (Page 10 0)
 
 {- Spendable -}
@@ -560,7 +560,7 @@ spendableSpec ctx =
         accId <- account ctx
         lift $ P.insert_ (paymentRow accId) {dBCoinAddress = "nonsense"}
         lift $
-          dbShouldFailWith "The stored coin 0000000000000000000000000000000000000000000000000000000000000001 0 has an address that does not read: nonsense" $
+          dbShouldFailWith "The stored coin 0000000000000000000000000000000000000000000000000000000000000001:0 has an address that does not read: nonsense" $
             spendableCoins btc ctx accId 1
 
 {- Balances -}
@@ -645,7 +645,7 @@ userLocksSpec ctx =
         accId <- account ctx
         threeCoins ctx accId
         lift $
-          dbShouldFailWith "The wallet has no coin 0000000000000000000000000000000000000000000000000000000000000009 0" $
+          dbShouldFailWith "The wallet has no coin 0000000000000000000000000000000000000000000000000000000000000009:0" $
             lockCoin (OutPoint (fakeTxHash 9) 0)
 
     it "refuses a coin a pending transaction holds" $

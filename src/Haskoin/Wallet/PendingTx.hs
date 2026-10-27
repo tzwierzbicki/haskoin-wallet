@@ -34,7 +34,7 @@ import Haskoin.Wallet.RawTx
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData
-import Haskoin.Wallet.TxSigning (parseTxSignData, verifySignedTx)
+import Haskoin.Wallet.TxSigning (parseOutsideTxSignData, parseTxSignData, verifySignedTx)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 
@@ -361,18 +361,24 @@ setPendingTxOnline nosigH =
 
 {- Sending and abandoning -}
 
+-- | What sending does last before a transaction goes on the network, for
+-- good: given the transaction and its network, it may stop the sending
+-- with an error. sendtx shows the transaction there and asks the user.
+type BeforeSending m = Network -> TxInfo -> ExceptT String (DB m) ()
+
 -- | Send a pending transaction of the wallet and wait for the store to see
 -- it. Once it does, the transaction is marked online, for the sync to send
 -- again should the store lose it, and its raw transaction is stored. If the
 -- store does not see it, nothing is recorded and the answer says so. The
 -- signatures were checked when the transaction was imported.
-sendPending :: (MonadUnliftIO m) => Ctx -> (Network -> Store) -> TxHash -> ExceptT String (DB m) (DBAccount, TxInfo)
-sendPending ctx storeOn nosigH = do
+sendPending :: (MonadUnliftIO m) => Ctx -> (Network -> Store) -> BeforeSending m -> TxHash -> ExceptT String (DB m) (DBAccount, TxInfo)
+sendPending ctx storeOn beforeSending nosigH = do
   held <- requirePendingTx nosigH
   acc <- getAccountById held.pendingTxAccount
   let signedTx = txSignDataTx held.pendingTxData
       store = storeOn (accountNetwork acc)
   unless (isSigned signedTx) $ throwError "The transaction is not signed"
+  beforeSending (accountNetwork acc) =<< pendingSummary ctx acc held
   -- The summary as it will read once sent, made before anything leaves
   summary <- pendingSummary ctx acc held {pendingTxOnline = True}
   fromStore $ storeHealth store
@@ -435,8 +441,8 @@ data Sent
 -- does not hold, a sweep of outside coins for instance, is checked against
 -- the coins it spends and handed to the store of the given network, and
 -- nothing in the wallet is updated.
-sendSigned :: (MonadUnliftIO m) => Ctx -> (Network -> Store) -> Maybe Network -> TxSignData -> ExceptT String (DB m) Sent
-sendSigned ctx storeOn netM tsd = do
+sendSigned :: (MonadUnliftIO m) => Ctx -> (Network -> Store) -> BeforeSending m -> Maybe Network -> TxSignData -> ExceptT String (DB m) Sent
+sendSigned ctx storeOn beforeSending netM tsd = do
   let signedTx = txSignDataTx tsd
       pendingHash = nosigHash signedTx
   unless (isSigned signedTx) $ throwError "The transaction is not signed"
@@ -448,10 +454,11 @@ sendSigned ctx storeOn netM tsd = do
       forM_ netM $ \given ->
         when (given /= net) $ throwError "The transaction is pending in an account of another network"
       when (held.pendingTxData /= tsd) $ void $ importPendingTx net ctx held.pendingTxAccount tsd
-      uncurry SentPending <$> sendPending ctx storeOn pendingHash
+      uncurry SentPending <$> sendPending ctx storeOn beforeSending pendingHash
     Nothing -> do
       net <- liftMaybe noFileNetwork netM
       liftEither $ verifySignedTx net ctx tsd
+      beforeSending net =<< liftEither (parseOutsideTxSignData net ctx tsd)
       fromStore $ storeHealth (storeOn net)
       accepted <- fromStore $ broadcast (storeOn net) signedTx
       unless accepted $ throwError notAccepted

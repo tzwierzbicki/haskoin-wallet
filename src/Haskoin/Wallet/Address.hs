@@ -274,24 +274,29 @@ updateAddressBalances net storeBals =
         ]
       where_ $ a ^. DBAddressAddress ==. val addrT
 
--- | An address of the wallet, by its text, with its account
+-- | An address of the wallet, however it is written, with its account: see
+-- 'addressesAmong'. An account key is in the wallet once, so an address is
+-- of one account at most.
 getAddressByText :: (MonadUnliftIO m) => Text -> ExceptT String (DB m) (DBAccount, DBAddress)
 getAddressByText addrTxt = do
-  Entity _ addr <- lift (P.getBy $ UniqueAddress addrTxt) >>= liftMaybe "Address does not exist"
-  acc <- getAccountById $ dBAddressAccount addr
-  return (acc, addr)
+  accounts <- lift getAccounts
+  found <- lift $ forM accounts $ \(accId, acc) -> map (acc,) <$> addressesAmong [addrTxt] (accId, acc)
+  case concat found of
+    held : _ -> return held
+    [] -> throwError "Address does not exist"
 
--- | The accounts that have the addresses, each once. Each account reads
--- the addresses on its network, and compares the addresses themselves,
--- not their text: a Bitcoin Cash address finds its account written
--- without its prefix, or in the legacy form of Bitcoin, as well as in
--- the form hw stores. An address the wallet does not have has none.
+-- | The accounts that have the addresses, each once, however the addresses
+-- are written: see 'addressesAmong'. An address the wallet does not have
+-- has none.
 addressAccounts :: (MonadUnliftIO m) => [Text] -> ExceptT String (DB m) [(DBAccountId, DBAccount)]
-addressAccounts addrs = lift $ filterM (hasAddressOf addrs) =<< getAccounts
+addressAccounts addrs = lift $ filterM (fmap (not . null) . addressesAmong addrs) =<< getAccounts
 
--- | Whether the account has one of the addresses, read on its network
-hasAddressOf :: (MonadUnliftIO m) => [Text] -> (DBAccountId, DBAccount) -> DB m Bool
-hasAddressOf addrs (accId, acc) = do
+-- | The addresses of the account among the given ones. The account reads
+-- them on its network, and compares the addresses themselves, not their
+-- text: a Bitcoin Cash address is found written without its prefix, or in
+-- the legacy form of Bitcoin, as well as in the form hw stores.
+addressesAmong :: (MonadUnliftIO m) => [Text] -> (DBAccountId, DBAccount) -> DB m [DBAddress]
+addressesAmong addrs (accId, acc) = do
   let net = accountNetwork acc
       -- The text hw stores for each address the network reads
       stored = mapMaybe (addrToText net <=< textToAddr net) addrs
@@ -299,8 +304,8 @@ hasAddressOf addrs (accId, acc) = do
     where_ $
       a ^. DBAddressAccount ==. val accId
         &&. a ^. DBAddressAddress `in_` valList stored
-    return $ a ^. DBAddressAddress
-  return $ not (null rows)
+    return a
+  return $ entityVal <$> rows
 
 -- | Those of the addresses that have transactions on the chain
 usedAddresses :: (MonadUnliftIO m) => [Text] -> DB m [Text]

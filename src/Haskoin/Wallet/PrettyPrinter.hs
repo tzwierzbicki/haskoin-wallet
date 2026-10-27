@@ -11,9 +11,11 @@
 module Haskoin.Wallet.PrettyPrinter where
 
 import Control.Monad
+import Data.Char (isAlphaNum)
 import Data.List (intercalate, intersperse)
 import Data.List.Split (chunksOf)
 import qualified Data.Map.Strict as Map
+import Data.Maybe (isJust)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -24,6 +26,8 @@ import Haskoin.Wallet.Account
 import Haskoin.Wallet.Amounts
 import Haskoin.Wallet.Coin
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.Keys (KeySource (..))
+import Haskoin.Wallet.Parser (Command (..), PrepareSweep (..), PrepareTx (..), Signing (..))
 import Haskoin.Wallet.Response
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.TxInfo
@@ -100,8 +104,14 @@ rblock n str =
 
 {- Rendering -}
 
+-- | Show the printer on stdout
 renderIO :: Printer -> IO ()
-renderIO cp = go 0 0 cp >> putStrLn ""
+renderIO = renderOn stdout
+
+-- | Show the printer on the handle: stdout for an answer, stderr for what
+-- a command shows before it asks the user
+renderOn :: Handle -> Printer -> IO ()
+renderOn h cp = go 0 0 cp >> hPutStrLn h ""
   where
     go :: Natural -> Natural -> Printer -> IO Natural
     go l n p
@@ -112,24 +122,24 @@ renderIO cp = go 0 0 cp >> putStrLn ""
               l2 <- go l n p1
               go l2 n p2
             PNewline p1 -> do
-              putStrLn ""
-              putStr $ replicate (fromIntegral n) ' '
+              hPutStrLn h ""
+              hPutStr h $ replicate (fromIntegral n) ' '
               go n n p1
             PNest i p1 -> do
-              putStr $ replicate (fromIntegral i) ' '
+              hPutStr h $ replicate (fromIntegral i) ' '
               go (l + i) (n + i) p1
             PText xs s -> do
-              printFormat xs s
+              printFormat h xs s
               return $ l + fromIntegral (length s)
             PEmpty -> return l
             PNonEmpty -> return l
 
-printFormat :: [SGR] -> String -> IO ()
-printFormat sgr str = do
-  support <- hSupportsANSI stdout
-  when support $ setSGR sgr
-  putStr str
-  when support $ setSGR []
+printFormat :: Handle -> [SGR] -> String -> IO ()
+printFormat h sgr str = do
+  support <- hSupportsANSI h
+  when support $ hSetSGR h sgr
+  hPutStr h str
+  when support $ hSetSGR h []
 
 {- Formats -}
 
@@ -509,12 +519,10 @@ feePrinter unit fee feeBytes =
 coinPrinter :: Network -> AmountUnit -> JsonCoin -> Printer
 coinPrinter net unit JsonCoin {..} =
   vcat
-    [ formatKey (block 7 "TxHash")
+    [ -- As --coin, lockcoin and unlockcoin take it
+      formatKey (block 7 "Coin")
         <> text ":"
-          <+> formatTxHash (cs $ txHashToHex jsonCoinOutpoint.hash),
-      formatKey (block 7 "Index")
-        <> text ":"
-          <+> formatValue (show jsonCoinOutpoint.index),
+          <+> formatTxHash (coinText jsonCoinOutpoint),
       formatKey (block 7 "Value")
         <> text ":"
           <+> amountPrinter unit jsonCoinValue,
@@ -619,3 +627,89 @@ prettyPrinter unit =
           [ formatKey "Software version:" <+> formatValue (cs v),
             formatKey "Database version:" <+> formatValue (cs dbv)
           ]
+
+{- Next steps -}
+
+-- | What the user does next after a command of a payment or a sweep,
+-- preparetx, preparesweep, signtx, signsweep, sendtx or sync, below its
+-- answer. In the pretty output only: a script reading the JSON answer knows
+-- its next step.
+printNextSteps :: Command -> Response -> IO ()
+printNextSteps cmd res = do
+  let steps = nextStepsPrinter cmd res
+  unless (isEmptyPrinter steps) $ putStrLn "" >> renderIO steps
+
+-- | The steps the user may take next, after a command of a payment or a
+-- sweep
+nextStepsPrinter :: Command -> Response -> Printer
+nextStepsPrinter cmd res =
+  case (cmd, res) of
+    (CommandPrepareTx opts, ResponseTx _ info)
+      | Just nosig <- nosigOf info ->
+          stepsPrinter
+            [ ("Next, sign it", "hw signtx " <> nosig),
+              case opts.output of
+                Nothing -> ("Or export it, to sign it on an offline computer", "hw exporttx " <> nosig <> " FILE")
+                Just file -> ("Or sign its file on an offline computer", "hw signtx --input " <> shellWord file <> " --output FILE")
+            ]
+    -- The keys of a file at hand for the sweep are the ones to sign it with
+    (CommandPrepareSweep opts, ResponseTx _ info)
+      | Just nosig <- nosigOf info ->
+          stepsPrinter
+            [ ("Next, sign it with the private keys of the coins", "hw signsweep " <> nosig <> keysOption opts.keys),
+              case opts.output of
+                Nothing -> ("Or export it, to sign it where the keys are", "hw exporttx " <> nosig <> " FILE")
+                Just file -> ("Or sign its file where the keys are", "hw signsweep --input " <> shellWord file <> " --output FILE")
+            ]
+    -- A sweep outside the wallet is in its file only
+    (CommandPrepareSweep opts, ResponseOutsideTx _ _)
+      | Just file <- opts.output ->
+          stepsPrinter [("Next, sign its file with the private keys of the coins", "hw signsweep --input " <> shellWord file <> " --output FILE" <> keysOption opts.keys)]
+    (CommandSignTx signing _, ResponseTx _ info) -> afterSigning signing info
+    (CommandSignSweep signing _, ResponseTx _ info) -> afterSigning signing info
+    (CommandSignSweep signing _, ResponseOutsideTx _ info) -> afterSigning signing info
+    (CommandSendTx {}, ResponseTx acc _) ->
+      stepsPrinter [("Next, sync the account to follow the transaction", "hw sync" <> accountOption [acc])]
+    (CommandSync {}, ResponseSync results) ->
+      case filter ((> 0) . syncResConflicted) results of
+        [] -> stepsPrinter [("Next, see the transactions", "hw txs" <> accountOption (syncResAccount <$> results))]
+        conflicted ->
+          stepsPrinter
+            [ ("Next, find the pending transaction in conflict, which can no longer be sent", "hw pendingtxs" <> accountOption (syncResAccount <$> conflicted)),
+              ("Then delete it, to free its coins", "hw deletetx NOSIGHASH")
+            ]
+    _ -> PEmpty
+  where
+    nosigOf info = case txInfoStatus info of
+      Pending status -> Just (cs (txHashToHex (pendingNosigHash status)))
+      OnChain _ -> Nothing
+    -- A transaction signed in the wallet is sent by its nosigHash, one
+    -- signed from a file by the file signed
+    afterSigning signing info
+      | Just nosig <- nosigOf info, isJust signing.nosigHash =
+          stepsPrinter [("Next, send it to the network", "hw sendtx " <> nosig)]
+      | Just file <- signing.output =
+          stepsPrinter [("Next, send its file from the online computer", "hw sendtx --input " <> shellWord file)]
+      | otherwise = PEmpty
+    -- Without a file, signsweep asks for the keys on the terminal
+    keysOption (Just (KeysInFile file)) = " --prvkeys " <> shellWord file
+    keysOption _ = ""
+    -- The account of the next command, named when there is one
+    accountOption [acc] = " --account " <> shellWord (cs (dBAccountName acc))
+    accountOption _ = " --account NAME"
+
+-- | Steps, each with what it does and the command that does it
+stepsPrinter :: [(String, String)] -> Printer
+stepsPrinter steps = vcat [vcat [formatKey (what <> ":"), nest 2 (formatValue command)] | (what, command) <- steps]
+
+-- | A word of a command typed in a shell, quoted when the shell would read
+-- it as more than one word or change it: an account name with a space, for
+-- instance
+shellWord :: String -> String
+shellWord word
+  | not (null word) && all plain word = word
+  | otherwise = "'" <> concatMap quoted word <> "'"
+  where
+    plain c = isAlphaNum c || c `elem` ("-_./:@%+=," :: String)
+    quoted '\'' = "'\\''"
+    quoted c = [c]

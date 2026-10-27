@@ -3,8 +3,9 @@
 
 -- | What hw asks the user for on the terminal: the mnemonic of a wallet,
 -- whole or in parts, and its passphrase, which give the signing key of an
--- account; the dice rolls that add to the entropy of a new mnemonic; and
--- the private keys of a sweep, when they are not in a file.
+-- account; the dice rolls that add to the entropy of a new mnemonic; the
+-- private keys of a sweep, when they are not in a file; and whether to send
+-- a transaction.
 --
 -- Secrets are typed without echo, as gpg, ssh and sudo take them: nothing
 -- shows on the screen, not even their length. The prompts and the messages
@@ -18,6 +19,7 @@ module Haskoin.Wallet.Prompt
     attempts,
     cancelled,
     notUtf8,
+    askYes,
     readMnemonic,
     askMnemonic,
     askMnemonicPass,
@@ -53,10 +55,11 @@ import System.IO.Error (isDoesNotExistError, isEOFError)
 
 {- The terminal -}
 
--- | Where hw asks: a line typed without echo, or why there is none, and a
--- message for the user
+-- | Where hw asks: a line typed without echo, or one typed as usual, or why
+-- there is none, and a message for the user
 data Terminal = Terminal
   { askHidden :: String -> IO (Either String Text),
+    askVisible :: String -> IO (Either String Text),
     tell :: String -> IO ()
   }
 
@@ -66,29 +69,33 @@ terminal :: Terminal
 terminal = terminalOn IO.stdin IO.stderr
 
 -- | A terminal reading from one handle and writing to another. The echo of
--- the input is off while a line is typed, and back as it was afterwards,
+-- a hidden line is off while it is typed, and back as it was afterwards,
 -- whatever happens; the Enter key, not echoed either, gets its new line.
--- The line is read as bytes up to the new line, a byte that UTF-8 never
--- uses inside a character, and decoded as UTF-8, whatever the locale: a
+-- A line is read as bytes up to the new line, a byte that UTF-8 never uses
+-- inside a character, and decoded as UTF-8, whatever the locale: a
 -- passphrase with accents gives the same seed in every terminal, and bytes
 -- that are not UTF-8 are refused rather than read as another passphrase.
 terminalOn :: IO.Handle -> IO.Handle -> Terminal
 terminalOn input output =
   Terminal
-    { askHidden = \prompt -> do
-        IO.hPutStr output prompt
-        IO.hFlush output
-        echo <- IO.hGetEcho input
-        typed <- bracket_ (IO.hSetEcho input False) (IO.hSetEcho input echo) (try (C8.hGetLine input))
-        IO.hPutStrLn output ""
-        case typed of
-          Right line -> return $ either (const $ Left notUtf8) Right (decodeUtf8' (stripReturn line))
-          Left e
-            | isEOFError e -> return (Left cancelled)
-            | otherwise -> ioError e,
+    { askHidden = askLine False,
+      askVisible = askLine True,
       tell = IO.hPutStrLn output
     }
   where
+    askLine shown prompt = do
+      IO.hPutStr output prompt
+      IO.hFlush output
+      echo <- IO.hGetEcho input
+      typed <- bracket_ (IO.hSetEcho input shown) (IO.hSetEcho input echo) (try (C8.hGetLine input))
+      -- A terminal echoes the Enter key of a line shown; nothing else does
+      onTerminal <- IO.hIsTerminalDevice input
+      unless (shown && onTerminal) $ IO.hPutStrLn output ""
+      case typed of
+        Right line -> return $ either (const $ Left notUtf8) Right (decodeUtf8' (stripReturn line))
+        Left e
+          | isEOFError e -> return (Left cancelled)
+          | otherwise -> ioError e
     -- A line typed on Windows, or pasted from there, ends with a return
     stripReturn line = fromMaybe line (BS.stripSuffix "\r" line)
 
@@ -120,6 +127,15 @@ retrying term ask = go attempts
         Left mistake
           | left <= 1 -> throwError mistake
           | otherwise -> liftIO (tell term mistake) >> go (left - 1)
+
+{- Questions -}
+
+-- | Whether the user answers yes to the question: y or yes, in any case.
+-- Any other answer is a no, and the end of the input cancels the command.
+askYes :: (MonadIO m) => Terminal -> String -> ExceptT String m Bool
+askYes term question = do
+  answer <- liftIO (askVisible term (question <> " [y/N] ")) >>= liftEither
+  return $ Text.toLower (Text.strip answer) `elem` ["y", "yes"]
 
 {- The mnemonic -}
 

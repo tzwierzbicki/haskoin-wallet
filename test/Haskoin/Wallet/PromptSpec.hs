@@ -4,11 +4,12 @@
 -- and the passphrase of a seed, once to check them against an account or
 -- the chain, twice to create an account; the signing key of an account,
 -- asked until the mnemonic and the passphrase give it, three attempts at
--- most; and the private keys of a sweep, from a file or typed. A scripted
--- terminal types the lines of each test and keeps what hw shows; the real
--- one is tested on files.
+-- most; the private keys of a sweep, from a file or typed; and a question
+-- to answer yes or no. A scripted terminal types the lines of each test and
+-- keeps what hw shows; the real one is tested on files.
 module Haskoin.Wallet.PromptSpec (spec) where
 
+import Control.Monad (forM_)
 import Control.Monad.Except (ExceptT, runExceptT)
 import qualified Data.ByteString as BS
 import Data.IORef (modifyIORef, newIORef, readIORef, writeIORef)
@@ -36,6 +37,7 @@ spec = prepareContext $ \ctx -> do
   terminalSpec
   diceSpec
   sweepKeysSpec
+  questionSpec
 
 {- A scripted terminal -}
 
@@ -46,14 +48,16 @@ answering :: [Text] -> (Terminal -> ExceptT String IO a) -> IO (Either String a,
 answering lines' question = do
   left <- newIORef lines'
   shown <- newIORef []
-  let term =
+  let typed prompt = do
+        modifyIORef shown (<> [prompt])
+        rest <- readIORef left
+        case rest of
+          [] -> return (Left cancelled)
+          line : more -> writeIORef left more >> return (Right line)
+      term =
         Terminal
-          { askHidden = \prompt -> do
-              modifyIORef shown (<> [prompt])
-              rest <- readIORef left
-              case rest of
-                [] -> return (Left cancelled)
-                line : more -> writeIORef left more >> return (Right line),
+          { askHidden = typed,
+            askVisible = typed,
             tell = \message -> modifyIORef shown (<> [message])
           }
   answer <- runExceptT (question term)
@@ -351,6 +355,13 @@ terminalSpec =
     it "writes a message on its own line" $
       typing "" (\term -> tell term "The passphrases do not match") `shouldReturn` "The passphrases do not match\n"
 
+    -- A file is no terminal: nothing echoes the line, nor its Enter key
+    it "reads a line typed in the open, then goes to a new line when the input is no terminal" $ do
+      answer <- newIORef (Left "not asked")
+      shown <- typing "yes\n" $ \term -> writeIORef answer =<< askVisible term "Send? "
+      readIORef answer `shouldReturn` Right "yes"
+      shown `shouldBe` "Send? \n"
+
 {- Dice rolls -}
 
 -- | What hw tells before the rolls of one byte: about 5 rolls for its 8
@@ -497,3 +508,24 @@ sweepKeysSpec =
 
     it "are cancelled when the input ends" $
       answerOf [] (\term -> readSecKeys term btc KeysOnTerminal) `shouldReturn` Left cancelled
+
+{- Questions -}
+
+questionSpec :: Spec
+questionSpec =
+  describe "A question to answer yes or no" $ do
+    let asking term = askYes term "Send this transaction?"
+    it "is answered yes by y or yes, in any case, with spaces around" $
+      forM_ ["y", "yes", "Y", "YES", " yes "] $ \line ->
+        answerOf [line] asking `shouldReturn` Right True
+
+    it "is answered no by anything else, an empty line included" $
+      forM_ ["", "n", "no", "yess", "send"] $ \line ->
+        answerOf [line] asking `shouldReturn` Right False
+
+    it "shows the question with the answers it takes, no being the one of an empty line" $ do
+      (_, shown, _) <- answering ["y"] asking
+      shown `shouldBe` ["Send this transaction? [y/N] "]
+
+    it "is cancelled by the end of the input" $
+      answerOf [] asking `shouldReturn` Left cancelled

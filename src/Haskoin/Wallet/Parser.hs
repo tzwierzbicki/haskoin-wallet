@@ -68,8 +68,9 @@ data Command
     CommandCoins !(Maybe Text) !Bool !Page
   | CommandLockCoin !OutPoint
   | CommandUnlockCoin !OutPoint
-  | -- | The nosigHash of a pending transaction, or the file of a signed one
-    CommandSendTx !(Maybe TxHash) !(Maybe FilePath)
+  | -- | The nosigHash of a pending transaction, or the file of a signed
+    -- one, and whether to send it without asking
+    CommandSendTx !(Maybe TxHash) !(Maybe FilePath) !Bool
   | -- | The account, or every one, and whether to sync from the start
     CommandSync !(Maybe Text) !Bool
   | -- | The file of the copy, or none for the backups directory of hw
@@ -210,7 +211,7 @@ jsonOption =
       <> long "json"
       <> help
         [r|
-Display the result as JSON. Specify this option at the end of your command.
+Display the result as JSON.
 |]
 
 unitOption :: Parser AmountUnit
@@ -224,7 +225,7 @@ unitOption =
       <> help
         [r|
 The unit of the amounts shown, and of the amounts typed without a unit: btc, bit
-or sat (default: btc). Specify this option at the end of your command.
+or sat (default: btc).
 |]
 
 commandParser :: Parser Command
@@ -692,7 +693,7 @@ limitOption =
 Limit the result set. If the result set is very large, you can specify the
 --limit and --offset options to view the required data. For example, to skip the
 first 20 values and then display the following 10, use --limit=10 and
---offset=20.
+--offset=20. A limit of 0 lists every row.
 |]
 
 {- Label Parser -}
@@ -789,29 +790,24 @@ sats) or the --unit option says otherwise. For example, 0.00001, 0.00001btc,
 to 2, and satoshis are whole. Separators such as 1'000 are refused.
 |]
 
--- | A coin to spend: the id of its transaction and its index among the
--- outputs, in one argument
+-- | A coin to spend, as coins lists it
 coinOption :: Parser OutPoint
 coinOption =
-  option (maybeReader coin) $
-  short 'c' <>
-  long "coin" <>
-  metavar "TXHASH INT" <> help "Coin control: specify coins to spend"
-  where
-    coin s =
-      case words s of
-        [hash, index] -> OutPoint <$> hexToTxHash (cs hash) <*> readOutputIndex index
-        _ -> Nothing
+  option coinReader $
+    short 'c'
+      <> long "coin"
+      <> metavar "TXHASH:INDEX"
+      <> help "Coin control: specify coins to spend"
 
 feeOption :: Parser Natural
 feeOption =
   option (maybeReader $ readNatural . cs) $
     short 'f'
-      <> long "fee"
-      <> metavar "INT"
+      <> long "feerate"
+      <> metavar "SAT/BYTE"
       <> value 10
       <> showDefault
-      <> help "Fee to pay in satoshi/bytes"
+      <> help "The fee rate, in satoshis per byte"
 
 dustOption :: Parser Natural
 dustOption =
@@ -1042,7 +1038,7 @@ lockedOption =
 
 lockCoinParser :: ParserInfo Command
 lockCoinParser = do
-  let cmd = CommandLockCoin <$> outpointArgs
+  let cmd = CommandLockCoin <$> coinArg
   info cmd $
     progDesc "Lock a coin, so that no transaction spends it"
       <> footer
@@ -1057,7 +1053,7 @@ while the coin confirms, and goes with the coin once it is spent elsewhere.
 
 unlockCoinParser :: ParserInfo Command
 unlockCoinParser = do
-  let cmd = CommandUnlockCoin <$> outpointArgs
+  let cmd = CommandUnlockCoin <$> coinArg
   info cmd $
     progDesc "Unlock a coin locked with lockcoin"
       <> footer
@@ -1066,17 +1062,22 @@ Only a coin the user locked with `lockcoin` can be unlocked. A coin a pending
 transaction spends is freed by deleting that transaction with `deletetx`.
 |]
 
--- | A coin of the wallet: the id of its transaction and its index among
--- the outputs, as coins lists them
-outpointArgs :: Parser OutPoint
-outpointArgs = OutPoint <$> txHashArg <*> outputIndexArg
+-- | A coin of the wallet, as coins lists it
+coinArg :: Parser OutPoint
+coinArg =
+  argument coinReader $
+    metavar "TXHASH:INDEX"
+      <> help "The coin: the id of its transaction and its index among the outputs, as coins lists it"
+
+-- | A coin as coins lists it, and as a block explorer often writes it: the
+-- id of its transaction, a colon, and its index among the outputs
+coinReader :: ReadM OutPoint
+coinReader = eitherReader $ \s -> maybe (Left (notACoin s)) Right (readCoin s)
   where
-    txHashArg =
-      argument (maybeReader $ hexToTxHash . cs) $
-        metavar "TXHASH" <> help "The id of the transaction of the coin"
-    outputIndexArg =
-      argument (maybeReader readOutputIndex) $
-        metavar "INDEX" <> help "The index of the coin among the outputs of its transaction"
+    readCoin s = case break (== ':') s of
+      (hash, ':' : index) -> OutPoint <$> hexToTxHash (cs hash) <*> readOutputIndex index
+      _ -> Nothing
+    notACoin s = "The coin " <> s <> " is not valid: write it TXHASH:INDEX, as coins lists it"
 
 -- | The index of an output in its transaction, which has 32 bits. A larger
 -- number names no output, rather than wrapping around to another one.
@@ -1093,13 +1094,15 @@ sendTxParser = do
         CommandSendTx
           <$> optional nosigHashArg
           <*> inputFileMaybeOption
+          <*> yesOption
   info cmd $
     progDesc "Send (upload) a signed transaction to the network"
       <> footer
         [r|
 Once a transaction is signed, it can be sent to the network. This step is
-irreversible and the transaction will become effective. Make sure everything is
-correct with your transaction before sending it.
+irreversible and the transaction will become effective. `sendtx` shows the
+transaction first, as `reviewtx` does, and sends it only if you answer yes.
+--yes sends it without showing it or asking, for a script.
 
 The transaction is handed to the store, which passes it to the network's
 nodes without checking it, so `sendtx` then waits up to ten seconds for the
@@ -1125,6 +1128,14 @@ The network of a file is the one it names, as hw writes them, and that of the
 account of a pending transaction. The file of an earlier hw names none, and is
 prepared again to be sent when the wallet does not hold its transaction.
 |]
+
+-- | Whether sendtx sends without showing the transaction and asking
+yesOption :: Parser Bool
+yesOption =
+  switch $
+    short 'y'
+      <> long "yes"
+      <> help "Send the transaction without showing it and asking first"
 
 {- Sync Parser -}
 

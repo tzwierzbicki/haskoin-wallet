@@ -88,6 +88,7 @@ import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.Migration (databaseVersion, latestDatabaseVersion)
 import Haskoin.Wallet.Parser
 import Haskoin.Wallet.PendingTx
+import Haskoin.Wallet.PrettyPrinter (renderOn, txAnswerPrinter)
 import Haskoin.Wallet.Prompt
 import Haskoin.Wallet.Response
 import Haskoin.Wallet.Store
@@ -135,7 +136,7 @@ commandResponse ctx cfg unit = \case
   CommandDeleteTx nosigH -> cmdDeleteTx ctx cfg nosigH
   CommandPrepareTx opts -> cmdPrepareTx ctx cfg unit opts
   CommandSignTx signing parts -> cmdSignTx ctx cfg signing parts
-  CommandSendTx nosigHM fileM -> cmdSendTx ctx cfg nosigHM fileM
+  CommandSendTx nosigHM fileM yes -> cmdSendTx ctx cfg unit nosigHM fileM yes
   -- Sweeps
   CommandPrepareSweep opts -> cmdPrepareSweep ctx cfg opts
   CommandSignSweep signing keysM -> cmdSignSweep ctx cfg signing keysM
@@ -496,9 +497,10 @@ cmdSignTx ctx cfg signing parts =
 -- | Send a signed transaction: a pending one of the wallet, by its
 -- nosigHash, or the one of a file. One the wallet holds goes on the network
 -- of its account, which the file may only name; one it does not hold goes
--- on the network its file names. See 'sendSigned'.
-cmdSendTx :: Ctx -> Config -> Maybe TxHash -> Maybe FilePath -> IO Response
-cmdSendTx ctx cfg nosigHM fileM =
+-- on the network its file names. See 'sendSigned'. The user sees the
+-- transaction and says whether to send it, unless --yes.
+cmdSendTx :: Ctx -> Config -> AmountUnit -> Maybe TxHash -> Maybe FilePath -> Bool -> IO Response
+cmdSendTx ctx cfg unit nosigHM fileM yes =
   case (nosigHM, fileM) of
     (Just nosigH, Nothing) -> sending $ TxFile Nothing . (.pendingTxData) <$> requirePendingTx nosigH
     (Nothing, Just file) -> sending $ liftEitherIO (readJsonFile file)
@@ -508,10 +510,16 @@ cmdSendTx ctx cfg nosigHM fileM =
     sending readTx =
       runDBResponse cfg $ do
         TxFile netM tsd <- readTx
-        sent <- sendSigned ctx (webStore ctx cfg) netM tsd
+        sent <- sendSigned ctx (webStore ctx cfg) beforeSending netM tsd
         return $ case sent of
           SentPending acc info -> ResponseTx acc info
           SentOutside net txid -> ResponseSentTx net txid
+    -- On stderr, with the question, to keep the --json answer clean
+    beforeSending net info =
+      unless yes $ do
+        liftIO $ renderOn stderr (txAnswerPrinter net unit info)
+        confirmed <- askYes terminal "Send this transaction to the network? This cannot be undone."
+        unless confirmed $ throwError "The transaction was not sent"
 
 {- Sweeps -}
 

@@ -35,11 +35,11 @@ import Data.List (find, nub, nubBy)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isJust, listToMaybe, mapMaybe)
-import Data.String.Conversions (cs)
 import Data.Word (Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Address
+import Haskoin.Wallet.Coin (coinText)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.TxInfo
@@ -122,7 +122,7 @@ coinsOfTransactions given parents = mapM coinOf given
   where
     coinOf :: OutPoint -> Either String Store.Unspent
     coinOf outpoint = do
-      let name = "Coin " <> cs (txHashToHex outpoint.hash) <> " " <> show outpoint.index
+      let name = "Coin " <> coinText outpoint
       tx <-
         maybeToEither (name <> " is unknown to the store") $
           find (\t -> t.txid == outpoint.hash && not t.deleted) parents

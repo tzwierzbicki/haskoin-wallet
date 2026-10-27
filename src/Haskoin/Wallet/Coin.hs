@@ -15,6 +15,7 @@ module Haskoin.Wallet.Coin
   ( JsonCoin (..),
     CoinLock (..),
     coinOutpoint,
+    coinText,
     toJsonCoin,
     groupCoins,
     CoinFilter (..),
@@ -181,9 +182,10 @@ standardScript ctx addr = marshal ctx <$> addressToOutput addr
 storedProblem :: OutPoint -> String -> String
 storedProblem outpoint what = "The stored coin " <> coinText outpoint <> " " <> what
 
--- | A coin in a message: the id of its transaction and its output index
+-- | A coin as hw writes it, and as --coin, lockcoin and unlockcoin take it:
+-- the id of its transaction, a colon, and its index among the outputs
 coinText :: OutPoint -> String
-coinText outpoint = cs (txHashToHex outpoint.hash) <> " " <> show outpoint.index
+coinText outpoint = cs (txHashToHex outpoint.hash) <> ":" <> show outpoint.index
 
 -- | A value read back from a row, or the given message when it does not read
 readStored :: String -> Either String a -> Either String a

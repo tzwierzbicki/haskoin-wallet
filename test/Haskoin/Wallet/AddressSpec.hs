@@ -9,7 +9,7 @@
 -- each chain are written out in "Haskoin.Wallet.TestUtils".
 module Haskoin.Wallet.AddressSpec (spec) where
 
-import Control.Monad (replicateM_)
+import Control.Monad (forM_, replicateM_)
 import Control.Monad.Except (ExceptT)
 import Control.Monad.Trans (lift, liftIO)
 import Data.Aeson (eitherDecode, toJSON)
@@ -330,6 +330,20 @@ databaseSpec ctx =
           found `shouldBe` change
           dBAccountName acc `shouldBe` "main"
         lift $ dbShouldFailWith "Address does not exist" $ getAddressByText "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
+
+    -- bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u is the first
+    -- receiving address of cash, the Bitcoin Cash account of the test
+    -- wallet, as hw stores it. 1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ is the
+    -- same address in the legacy form.
+    it "finds an address of the wallet written without its prefix, or in the legacy form" $
+      inDatabaseE $ do
+        (cashId, _) <- testNewAccBch ctx "cash"
+        stored <- genExtAddress ctx cfg cashId ""
+        forM_ ["qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u", "1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ"] $ \written -> do
+          (acc, found) <- getAddressByText written
+          liftIO $ do
+            found `shouldBe` stored
+            dBAccountName acc `shouldBe` "cash"
 
     -- externalAddr2Text is the first receiving address of the second test
     -- wallet; 1JCq8Aa9 is no address of the wallet

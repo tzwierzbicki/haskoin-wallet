@@ -12,7 +12,7 @@ import Haskoin.Wallet.Database (catchDatabaseInUse, runDB)
 import Haskoin.Wallet.Migration (Hooks (..), migrateDB)
 import Haskoin.Wallet.Backup (backupDatabase, migrationBackupDirectory)
 import Haskoin.Wallet.Parser (parserMain)
-import Haskoin.Wallet.PrettyPrinter (prettyPrinter)
+import Haskoin.Wallet.PrettyPrinter (prettyPrinter, printNextSteps)
 import Haskoin.Wallet.Response (Response (..))
 import Haskoin.Wallet.Util (encodeJsonPretty)
 import System.Environment (getArgs)
@@ -38,7 +38,9 @@ clientMain = do
     res <- commandResponse ctx cfg unit cmd
     if json
       then jsonPrinter res
-      else prettyPrinter unit res
+      else do
+        prettyPrinter unit res
+        printNextSteps cmd res
 
 -- | How the migration talks to the user, on stderr, and backs up the
 -- database before it changes anything

@@ -303,16 +303,16 @@ givenCoinsSpec ctx =
           ]
     it "refuses a coin of a transaction the store does not know" $
       coinsOfTransactions [OutPoint (fakeTxHash 7) 1] [storeFunding]
-        `shouldBe` Left "Coin 0000000000000000000000000000000000000000000000000000000000000007 1 is unknown to the store"
+        `shouldBe` Left "Coin 0000000000000000000000000000000000000000000000000000000000000007:1 is unknown to the store"
     it "refuses a coin of a transaction the store reports as deleted" $
       coinsOfTransactions [OutPoint (txHash keyFunding) 0] [replaced storeFunding]
-        `shouldBe` Left ("Coin " <> fundingHex <> " 0 is unknown to the store")
+        `shouldBe` Left ("Coin " <> fundingHex <> ":0 is unknown to the store")
     it "refuses an output index past the last output" $
       coinsOfTransactions [OutPoint (txHash keyFunding) 4] [storeFunding]
-        `shouldBe` Left ("Coin " <> fundingHex <> " 4 does not exist: the transaction has 4 outputs")
+        `shouldBe` Left ("Coin " <> fundingHex <> ":4 does not exist: the transaction has 4 outputs")
     it "refuses a spent output" $
       coinsOfTransactions [OutPoint (txHash keyFunding) 2] [storeFunding]
-        `shouldBe` Left ("Coin " <> fundingHex <> " 2 is already spent")
+        `shouldBe` Left ("Coin " <> fundingHex <> ":2 is already spent")
   where
     keyFunding = fundingTx ctx 1 (zip sweptKeyAddrs [100000, 200000, 300000, 400000])
     fundingHex = cs $ txHashToHex $ txHash keyFunding
