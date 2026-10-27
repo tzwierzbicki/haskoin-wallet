@@ -331,6 +331,17 @@ databaseSpec ctx =
           dBAccountName acc `shouldBe` "main"
         lift $ dbShouldFailWith "Address does not exist" $ getAddressByText "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
 
+    -- externalAddr2Text is the first receiving address of the second test
+    -- wallet; 1JCq8Aa9 is no address of the wallet
+    it "finds the accounts of addresses by their text, each once, none for an address it does not have" $
+      inDatabaseE $ do
+        accId <- account ctx
+        (otherId, _) <- testNewAcc2 ctx "other"
+        _ <- genExtAddress ctx cfg accId ""
+        _ <- genExtAddress ctx cfg otherId ""
+        (map fst <$> addressAccounts [externalAddr2Text, "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", externalAddr2Text])
+          `dbShouldBeE` [otherId, accId]
+
     it "keeps those of the given addresses that have transactions" $
       inDatabaseE $ do
         accId <- account ctx

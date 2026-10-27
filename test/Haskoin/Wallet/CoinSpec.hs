@@ -51,6 +51,7 @@ spec = prepareContext $ \ctx -> do
   userLocksSpec ctx
   lifeSpec ctx
   rowSpec ctx
+  holdersSpec ctx
   jsonSpec ctx
   -- A coin and its lock read back as they were written
   testIdentity
@@ -739,6 +740,20 @@ lifeSpec ctx =
         listed accId (Page 10 0) `dbShouldBeE` []
 
 {- A coin row -}
+
+-- The first coin is the account's, at its first receiving address; 20000
+-- at the first receiving address of the second test wallet is another
+-- account's; the third coin is none of the wallet
+holdersSpec :: Ctx -> Spec
+holdersSpec ctx =
+  describe "The accounts that hold coins" $
+    it "are those of the coins the wallet holds, each once" $
+      inDatabaseE $ do
+        accId <- account ctx
+        (otherId, _) <- testNewAcc2 ctx "other"
+        _ <- refresh ctx accId [confirmedPayment ctx]
+        _ <- refreshCoins btc ctx otherId [externalAddr2] [storeCoin ctx (fakeTxHash 2, 0) (Just 800001) externalAddr2 20000]
+        (map fst <$> coinAccounts [firstCoin, secondCoin, firstCoin, thirdCoin]) `dbShouldBeE` [accId, otherId]
 
 rowSpec :: Ctx -> Spec
 rowSpec ctx =

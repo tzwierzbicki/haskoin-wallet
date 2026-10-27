@@ -1115,8 +1115,12 @@ A signed transaction in a file is sent with --input. One the wallet holds as
 pending, the file an offline signer returns, takes the place of the version
 held and is sent as by its NOSIGHASH: marked as online, its raw transaction
 stored. One the wallet does not hold, a sweep of outside coins for instance,
-needs the --network it is for: it is only checked and uploaded, and nothing in
-the wallet is updated.
+is only checked and uploaded, and nothing in the wallet is updated.
+
+The network of a file is the one it names, as hw writes them. A --network given
+must be that network, and the network of the account of a pending transaction.
+Only the file of an earlier hw, which names none, needs --network when the
+wallet does not hold its transaction.
 |]
 
 {- Sync Parser -}

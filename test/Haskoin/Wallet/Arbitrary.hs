@@ -106,6 +106,10 @@ arbitraryPubKeyDoc ctx =
     <*> arbitraryText
     <*> arbitraryMaybe arbitraryFingerprint
 
+-- | A transaction file of Bitcoin signing data, on any network or none
+arbitraryTxFile :: Ctx -> Gen TxFile
+arbitraryTxFile ctx = TxFile <$> arbitraryMaybe arbitraryNetwork <*> arbitraryTxSignData btc ctx
+
 arbitraryTxSignData :: Network -> Ctx -> Gen TxSignData
 arbitraryTxSignData net ctx =
   TxSignData

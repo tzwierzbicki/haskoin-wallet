@@ -232,6 +232,55 @@ namingSpec ctx = do
         _ <- testNewAcc ctx "main"
         lift $ dbShouldFailWith "The account nobody does not exist" $ getAccountsByName (Just "nobody")
 
+  describe "Finding accounts by id" $
+    it "gives the accounts of the ids, in their order" $
+      inDatabaseE $ do
+        mainAcc <- testNewAcc ctx "main"
+        savingsAcc <- testNewAcc ctx "savings"
+        getAccountsById [fst savingsAcc, fst mainAcc] `dbShouldBeE` [savingsAcc, mainAcc]
+
+  -- The accounts the data of a command points to, those of the coins it
+  -- spends or of the transaction it reads, among the accounts of the wallet
+  describe "Choosing the account among those the data points to" $ do
+    let refused :: Text -> String
+        refused name = "Not the account " <> cs name
+    it "is the account --account names among them" $
+      inDatabaseE $ do
+        mainAcc <- testNewAcc ctx "main"
+        savingsAcc <- testNewAcc ctx "savings"
+        accountAmong refused (Just "savings") [mainAcc, savingsAcc] `dbShouldBeE` savingsAcc
+
+    it "refuses an account --account names that is not among them" $
+      inDatabaseE $ do
+        mainAcc <- testNewAcc ctx "main"
+        _ <- testNewAcc ctx "savings"
+        lift $ dbShouldFailWith "Not the account savings" $ accountAmong refused (Just "savings") [mainAcc]
+
+    it "refuses a name the wallet does not have" $
+      inDatabaseE $ do
+        mainAcc <- testNewAcc ctx "main"
+        lift $ dbShouldFailWith "The account nobody does not exist" $ accountAmong refused (Just "nobody") [mainAcc]
+
+    it "is the only one among them without --account" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        savingsAcc <- testNewAcc ctx "savings"
+        accountAmong refused Nothing [savingsAcc] `dbShouldBeE` savingsAcc
+
+    it "asks for --account when they are several" $
+      inDatabaseE $ do
+        mainAcc <- testNewAcc ctx "main"
+        savingsAcc <- testNewAcc ctx "savings"
+        lift $ dbShouldFailWith "Specify which account to use" $ accountAmong refused Nothing [mainAcc, savingsAcc]
+
+    it "is the account --account names, or the only one of the wallet, when the data points to none" $
+      inDatabaseE $ do
+        mainAcc <- testNewAcc ctx "main"
+        accountAmong refused Nothing [] `dbShouldBeE` mainAcc
+        savingsAcc <- testNewAcc ctx "savings"
+        accountAmong refused (Just "savings") [] `dbShouldBeE` savingsAcc
+        lift $ dbShouldFailWith "Specify which account to use" $ accountAmong refused Nothing []
+
   describe "Renaming an account" $ do
     it "changes its name and nothing else" $
       inDatabaseE $ do

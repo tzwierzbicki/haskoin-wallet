@@ -9,11 +9,13 @@
 -- it, the signers sign it, and the commands write it to files and keep it
 -- among the pending transactions of the database, as JSON. Whether the
 -- transaction is signed is read from the transaction itself. Before and
--- after signing, it is identified by its 'nosigHash'.
+-- after signing, it is identified by its 'nosigHash'. A file holds it with
+-- the network of the transaction, a 'TxFile'.
 module Haskoin.Wallet.TxSignData where
 
 import Control.Monad
 import Data.Aeson
+import Data.Aeson.Types (Pair)
 import qualified Data.ByteString as BS
 import qualified Data.Serialize as S
 import Haskoin
@@ -52,19 +54,46 @@ instance FromJSON TxSignData where
         <*> o .:? "fingerprint"
 
 instance ToJSON TxSignData where
-  toJSON (TxSignData t i oi op r f) =
-    object
-      [ "tx" .= encodeHex (S.encode t),
-        "txinputs" .= (encodeHex . S.encode <$> i),
-        "inputpaths" .= oi,
-        "outputpaths" .= op,
-        "feerate" .= r,
-        "fingerprint" .= f
-      ]
+  toJSON = object . txSignDataPairs
+
+-- | The keys of signing data in JSON
+txSignDataPairs :: TxSignData -> [Pair]
+txSignDataPairs (TxSignData t i oi op r f) =
+  [ "tx" .= encodeHex (S.encode t),
+    "txinputs" .= (encodeHex . S.encode <$> i),
+    "inputpaths" .= oi,
+    "outputpaths" .= op,
+    "feerate" .= r,
+    "fingerprint" .= f
+  ]
 
 instance MarshalJSON Ctx TxSignData where
   marshalValue _ = toJSON
   unmarshalValue _ = parseJSON
+
+{- Files -}
+
+-- | A transaction file, as preparetx, preparesweep, signtx, signsweep and
+-- exporttx write it: the signing data, with the network of the transaction,
+-- which the transaction itself does not tell. A file of an earlier hw
+-- names no network.
+data TxFile = TxFile
+  { txFileNetwork :: !(Maybe Network),
+    txFileData :: !TxSignData
+  }
+  deriving (Eq, Show)
+
+-- The network is a key among those of the signing data, which an earlier
+-- hw leaves aside
+instance FromJSON TxFile where
+  parseJSON value = TxFile <$> withObject "txfile" network value <*> parseJSON value
+    where
+      network o = do
+        nameM <- o .:? "network"
+        forM nameM $ \name -> maybe (fail ("Unknown network " <> name)) return (netByName name)
+
+instance ToJSON TxFile where
+  toJSON (TxFile netM tsd) = object (maybe [] (\net -> ["network" .= net.name]) netM <> txSignDataPairs tsd)
 
 {- Signatures -}
 

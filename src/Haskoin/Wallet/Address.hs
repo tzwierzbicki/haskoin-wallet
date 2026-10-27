@@ -281,6 +281,13 @@ getAddressByText addrTxt = do
   acc <- getAccountById $ dBAddressAccount addr
   return (acc, addr)
 
+-- | The accounts that have the addresses, written as text, each once. An
+-- address the wallet does not have has none.
+addressAccounts :: (MonadUnliftIO m) => [Text] -> ExceptT String (DB m) [(DBAccountId, DBAccount)]
+addressAccounts addrs = do
+  rows <- lift $ mapM (P.getBy . UniqueAddress) addrs
+  getAccountsById $ nub $ dBAddressAccount . entityVal <$> catMaybes rows
+
 -- | Those of the addresses that have transactions on the chain
 usedAddresses :: (MonadUnliftIO m) => [Text] -> DB m [Text]
 usedAddresses addrs = do

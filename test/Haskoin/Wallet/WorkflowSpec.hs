@@ -31,7 +31,7 @@ import qualified Haskoin.Wallet.Schema.V3 as V3
 import Haskoin.Wallet.Sync (SyncRes (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo
-import Haskoin.Wallet.TxSignData (TxSignData (..))
+import Haskoin.Wallet.TxSignData (TxFile (..), TxSignData (..))
 import Numeric.Natural (Natural)
 import System.Directory (copyFile, doesFileExist)
 import System.Exit (ExitCode (..))
@@ -560,11 +560,12 @@ failureSpec ctx = do
         (errorOf <$> hwJson home ["sendtx", "--input", home </> "sweep.json", "--network", "btc"] [])
           `shouldReturn` Right "The transaction is not signed"
 
-    it "needs the network of a signed transaction the wallet does not hold" $
+    -- The file is written as by an earlier hw, without the network
+    it "needs the --network of a signed transaction the wallet does not hold, when its file names none" $
       withHome $ \home -> do
         Json.encodeFile (home </> "payment.json") (signedPayment ctx)
         (errorOf <$> hwJson home ["sendtx", "--input", home </> "payment.json"] [])
-          `shouldReturn` Right "Give the --network of a transaction the wallet does not hold"
+          `shouldReturn` Right "The file names no network: give the --network of a transaction the wallet does not hold"
 
   describe "signtx and signsweep" $ do
     let nosig = Text.unpack (txHashToHex (fakeTxHash 1))
@@ -602,6 +603,16 @@ failureSpec ctx = do
         _ <- answer home ["sendtx", nosig] []
         run <- hw home ["signtx", nosig] seedOnce
         run `shouldSatisfy` printed "The transaction is already online"
+        run `shouldNotSatisfy` askedMnemonic
+
+    -- The payment is from main
+    it "refuses an --account the transaction does not involve" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "second"] seedTwice
+        Json.encodeFile (home </> "payment.json") (unsignedPayment ctx)
+        run <- hw home ["signtx", "--input", home </> "payment.json", "--output", home </> "signed.json", "--account", "second"] seedOnce
+        run `shouldSatisfy` printed "The transaction does not involve the account second"
         run `shouldNotSatisfy` askedMnemonic
 
     it "refuses an --output file that exists" $
@@ -861,6 +872,7 @@ signingSpec ctx = do
         signerAndOnline signer online
         nosig <- nosigOf =<< txOf =<< answer online ["preparetx", textOf (otherAddr 0), "0.0002"] []
         answer online ["exporttx", nosig, online </> "unsigned.json"] [] `shouldReturn` ResponseFile (online </> "unsigned.json")
+        (fmap txFileNetwork <$> Json.decodeFileStrict (online </> "unsigned.json")) `shouldReturn` Just (Just btc)
         _ <- answer signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
         imported <- txOf =<< answer online ["importtx", signer </> "signed.json"] []
         pendingState imported `shouldBe` Just (True, False)
@@ -868,6 +880,22 @@ signingSpec ctx = do
         pendingState sent `shouldBe` Just (True, True)
         published <- inMempool <$> readIORef chain
         (spendsAndPays ctx <$> published) `shouldBe` [paymentSent ctx]
+
+    -- Both computers have a second account of the test wallet. The file
+    -- names neither the account nor main, the account of the payment: the
+    -- keys of main derive the addresses it spends, and the online wallet
+    -- holds it pending.
+    it "is reviewed, signed and imported back without --account, by wallets of several accounts" $
+      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+        signerAndOnline signer online
+        _ <- answer signer ["createacc", "second"] seedTwice
+        _ <- answer signer ["exportacc", "--account", "second", signer </> "second.json"] []
+        _ <- answer online ["importacc", signer </> "second.json"] []
+        _ <- answer online ["preparetx", textOf (otherAddr 0), "0.0002", "--account", "main", "--output", online </> "unsigned.json"] []
+        (fmap dBAccountName . accountOf <$> hwJson signer ["reviewtx", online </> "unsigned.json"] []) `shouldReturn` Right "main"
+        signed <- txOf =<< answer signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
+        pendingState signed `shouldBe` Just (True, False)
+        (fmap dBAccountName . accountOf <$> hwJson online ["importtx", signer </> "signed.json"] []) `shouldReturn` Right "main"
 
     -- The signer has no coins: the file carries the transactions the
     -- payment spends, and the paths of the change
@@ -932,6 +960,30 @@ paymentSpec ctx =
         synced home
         (errorOf <$> hwJson home ["preparetx", textOf (otherAddr 0), "0.001"] [])
           `shouldReturn` Right "The coins do not cover the amount and the fee"
+
+    -- The coin of the payment is of main, and the wallet has a second
+    -- account. Without --account, hw asked which account to use.
+    it "is from the account of the coins of --coin, without --account" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["createacc", "second"] seedTwice
+        let coin = Text.unpack (txHashToHex (txHash (payment ctx))) <> " 0"
+        (fmap dBAccountName . accountOf <$> hwJson home ["preparetx", textOf (otherAddr 0), "0.0002", "--coin", coin] [])
+          `shouldReturn` Right "main"
+
+    it "is refused an --account that does not hold the coins of --coin" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["createacc", "second"] seedTwice
+        let coin = Text.unpack (txHashToHex (txHash (payment ctx))) <> " 0"
+        (errorOf <$> hwJson home ["preparetx", textOf (otherAddr 0), "0.0002", "--coin", coin, "--account", "second"] [])
+          `shouldReturn` Right "The coins given are not in the account second"
+
+    it "is written to its --output file with the network of its account" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", textOf (otherAddr 0), "0.0002", "--output", home </> "unsigned.json"] []
+        (fmap txFileNetwork <$> Json.decodeFileStrict (home </> "unsigned.json")) `shouldReturn` Just (Just btc)
 
     -- The path is checked first: the coins would not cover these 100000
     -- satoshis either
@@ -1088,6 +1140,39 @@ sweepSpec ctx =
         nosig <- nosigOf =<< txOf =<< answer home ["preparesweep", "--account", "main", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0)] []
         signed <- txOf =<< answer home ["signsweep", nosig, "--prvkeys", keys] []
         pendingState signed `shouldBe` Just (True, False)
+
+    -- The wallet has a second account, and the destination is of main.
+    -- Without --account, hw asked which account to use.
+    it "is of the account it pays, without --account" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        createMain home
+        _ <- answer home ["createacc", "second"] seedTwice
+        _ <- answer home ["receive", "--account", "main"] []
+        keys <- writeKeyFile home
+        (fmap dBAccountName . accountOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0)] [])
+          `shouldReturn` Right "main"
+
+    it "is refused an --account it pays no address of" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        createMain home
+        _ <- answer home ["createacc", "second"] seedTwice
+        _ <- answer home ["receive", "--account", "main"] []
+        keys <- writeKeyFile home
+        (errorOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0), "--account", "second"] [])
+          `shouldReturn` Right "The sweep pays no address of the account second"
+
+    -- The file names btc, the network of the account that prepared it
+    it "that pays outside the wallet is sent on the network its file names, without --network" $
+      withChain ctx (oldKeyChain ctx) $ \home chain -> do
+        createMain home
+        keys <- writeKeyFile home
+        _ <- answer home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--output", home </> "sweep.json"] []
+        _ <- answer home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.json", "--prvkeys", keys] []
+        (errorOf <$> hwJson home ["sendtx", "--input", home </> "signed.json", "--network", "bch"] [])
+          `shouldReturn` Right "The transaction is for btc, not for the --network bch"
+        sent <- answer home ["sendtx", "--input", home </> "signed.json"] []
+        published <- inMempool <$> readIORef chain
+        (ResponseSentTx btc . txHash <$> published) `shouldBe` [sent]
 
 {- Listings -}
 

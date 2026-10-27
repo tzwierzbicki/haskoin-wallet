@@ -56,7 +56,8 @@ module Haskoin.Wallet.Commands
   )
 where
 
-import Control.Monad (forM, join, void, when, unless)
+import Control.Applicative ((<|>))
+import Control.Monad (forM, join, unless, void, when)
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
@@ -361,15 +362,15 @@ cmdPendingTxs ctx cfg account page =
 cmdReviewTx :: Ctx -> Config -> Maybe Text -> FilePath -> IO Response
 cmdReviewTx ctx cfg account file =
   runDBResponse cfg $ do
-    (_, acc) <- getAccountByName account
-    tsd <- liftEitherIO $ readJsonFile file
+    TxFile netM tsd <- liftEitherIO $ readJsonFile file
+    (_, acc) <- transactionAccount ctx account netM tsd
     ResponseTx acc <$> txInfoOf ctx acc tsd
 
 cmdImportTx :: Ctx -> Config -> Maybe Text -> FilePath -> IO Response
 cmdImportTx ctx cfg account file =
   runDBResponse cfg $ do
-    (accId, acc) <- getAccountByName account
-    tsd <- liftEitherIO $ readJsonFile file
+    TxFile netM tsd <- liftEitherIO $ readJsonFile file
+    (accId, acc) <- transactionAccount ctx account netM tsd
     info <- txInfoOf ctx acc tsd
     _ <- importPendingTx (accountNetwork acc) ctx accId tsd
     txAnswer accId info
@@ -379,7 +380,8 @@ cmdExportTx cfg nosigH file =
   runDBResponse cfg $ do
     held <- requirePendingTx nosigH
     checkPathFree file
-    liftEitherIO $ writeJsonFile file held.pendingTxData
+    acc <- getAccountById held.pendingTxAccount
+    liftEitherIO $ writeJsonFile file (TxFile (Just (accountNetwork acc)) held.pendingTxData)
     return $ ResponseFile file
 
 cmdDeleteTx :: Ctx -> Config -> TxHash -> IO Response
@@ -392,9 +394,10 @@ cmdDeleteTx ctx cfg nosigH =
 
 -- Sweeps are prepared and signed like payments, with the helpers here.
 
--- | Write a transaction to the --output file, when there is one
-writeOutput :: Maybe FilePath -> TxSignData -> ExceptT String (DB IO) ()
-writeOutput output tsd = for_ output $ \file -> liftEitherIO $ writeJsonFile file tsd
+-- | Write a transaction of the network to the --output file, when there is
+-- one
+writeOutput :: Network -> Maybe FilePath -> TxSignData -> ExceptT String (DB IO) ()
+writeOutput net output tsd = for_ output $ \file -> liftEitherIO $ writeJsonFile file (TxFile (Just net) tsd)
 
 -- | Keep a transaction just prepared: among the pending transactions of the
 -- account when it involves the account, and in the --output file when there
@@ -407,14 +410,16 @@ keepPrepared ctx accId acc output tsd = do
     else -- Only a sweep can leave the wallet out: a payment spends its coins
       when (isNothing output) $
         throwError "The sweep does not involve this wallet: give an --output file to write it to"
-  writeOutput output tsd
+  writeOutput (accountNetwork acc) output tsd
   txAnswer accId info
 
 -- | Prepare a payment from the account, unsigned
 cmdPrepareTx :: Ctx -> Config -> AmountUnit -> PrepareTx -> IO Response
 cmdPrepareTx ctx cfg unit opts =
   runDBResponse cfg $ do
-    (accId, acc) <- getAccountByName opts.account
+    -- The coins given with --coin name their account
+    holders <- coinAccounts opts.coins
+    (accId, acc) <- accountAmong (\name -> "The coins given are not in the account " <> cs name) opts.account holders
     let net = accountNetwork acc
     -- Before the transaction is built, not after
     for_ opts.output checkPathFree
@@ -434,9 +439,9 @@ cmdPrepareTx ctx cfg unit opts =
 -- --input file is signed by the account --account names, or the only one.
 -- A transaction signed already, or sent, is not signed again, and the
 -- --output file must be free, all before the user types a secret.
-transactionToSign :: Signing -> ExceptT String (DB IO) (DBAccountId, DBAccount, TxSignData)
-transactionToSign signing = do
-  (accId, acc, tsd) <- case (signing.nosigHash, signing.input, signing.output) of
+transactionToSign :: Ctx -> Signing -> ExceptT String (DB IO) (DBAccountId, DBAccount, TxSignData)
+transactionToSign ctx signing = do
+  TxFile netM tsd <- case (signing.nosigHash, signing.input, signing.output) of
     (Nothing, Nothing, _) ->
       throwError "Give the NOSIGHASH of a pending transaction, or an --input file and an --output file"
     (Just _, Just _, _) ->
@@ -447,21 +452,13 @@ transactionToSign signing = do
       held <- requirePendingTx nosigH
       when held.pendingTxOnline $
         throwError "The transaction is already online"
-      unsigned held.pendingTxData
-      acc <- getAccountById held.pendingTxAccount
-      for_ signing.account $ \name ->
-        unless (name == dBAccountName acc) $
-          throwError $ "The transaction is pending in the account " <> cs (dBAccountName acc) <> ", not in " <> cs name
-      return (held.pendingTxAccount, acc, held.pendingTxData)
-    (_, Just file, _) -> do
-      tsd <- liftEitherIO $ readJsonFile file
-      unsigned tsd
-      (accId, acc) <- getAccountByName signing.account
-      return (accId, acc, tsd)
+      return $ TxFile Nothing held.pendingTxData
+    (_, Just file, _) -> liftEitherIO $ readJsonFile file
+  when (isSigned (txSignDataTx tsd)) $
+    throwError "The transaction is already signed"
+  (accId, acc) <- transactionAccount ctx signing.account netM tsd
   for_ signing.output checkPathFree
   return (accId, acc, tsd)
-  where
-    unsigned tsd = when (isSigned (txSignDataTx tsd)) $ throwError "The transaction is already signed"
 
 -- | Keep a transaction just signed: in place of the pending one when it was
 -- given by its nosigHash, and in the --output file when there is one. The
@@ -469,14 +466,14 @@ transactionToSign signing = do
 keepSigned :: Ctx -> Network -> Signing -> DBAccountId -> TxSignData -> TxInfo -> ExceptT String (DB IO) Response
 keepSigned ctx net signing accId signed info = do
   when (isJust signing.nosigHash) $ void $ importPendingTx net ctx accId signed
-  writeOutput signing.output signed
+  writeOutput net signing.output signed
   txAnswer accId =<< lift (fillTxInfoLabels net info)
 
 -- | Sign a transaction of the account with the key of its mnemonic
 cmdSignTx :: Ctx -> Config -> Signing -> Natural -> IO Response
 cmdSignTx ctx cfg signing parts =
   runDBResponse cfg $ do
-    (accId, acc, tsd) <- transactionToSign signing
+    (accId, acc, tsd) <- transactionToSign ctx signing
     let net = accountNetwork acc
     (seed, key) <- askSigningKey terminal net ctx parts (accountIndex acc) (accountXPubKey ctx acc)
     -- The signed data names the seed, for an online wallet to learn it
@@ -487,19 +484,24 @@ cmdSignTx ctx cfg signing parts =
 
 -- | Send a signed transaction: a pending one of the wallet, by its
 -- nosigHash, or the one of a file. One the wallet holds goes on the network
--- of its account, which --network may only name; one it does not hold
--- needs --network. See 'sendSigned'.
+-- of its account, which --network and the file may only name; one it does
+-- not hold goes on the network --network or the file names, which must
+-- agree when both do. See 'sendSigned'.
 cmdSendTx :: Ctx -> Config -> Maybe TxHash -> Maybe FilePath -> Maybe Network -> IO Response
 cmdSendTx ctx cfg nosigHM fileM netM =
   case (nosigHM, fileM) of
-    (Just nosigH, Nothing) -> sending $ (.pendingTxData) <$> requirePendingTx nosigH
+    (Just nosigH, Nothing) -> sending $ TxFile Nothing . (.pendingTxData) <$> requirePendingTx nosigH
     (Nothing, Just file) -> sending $ liftEitherIO (readJsonFile file)
     (Nothing, Nothing) -> return $ ResponseError "Give the NOSIGHASH of a pending transaction or an --input file"
     (Just _, Just _) -> return $ ResponseError "Can not specify both a NOSIGHASH and an --input file"
   where
-    sending signedTx =
+    sending readTx =
       runDBResponse cfg $ do
-        sent <- sendSigned ctx (webStore ctx cfg) netM =<< signedTx
+        TxFile fileNetM tsd <- readTx
+        for_ ((,) <$> netM <*> fileNetM) $ \(given, written) ->
+          unless (given == written) $
+            throwError $ "The transaction is for " <> written.name <> ", not for the --network " <> given.name
+        sent <- sendSigned ctx (webStore ctx cfg) (netM <|> fileNetM) tsd
         return $ case sent of
           SentPending acc info -> ResponseTx acc info
           SentOutside net txid -> ResponseSentTx net txid
@@ -516,7 +518,9 @@ cmdSendTx ctx cfg nosigHM fileM netM =
 cmdPrepareSweep :: Ctx -> Config -> PrepareSweep -> IO Response
 cmdPrepareSweep ctx cfg opts =
   runDBResponse cfg $ do
-    (accId, acc) <- getAccountByName opts.account
+    -- The addresses of the wallet it sweeps to name their account
+    holders <- addressAccounts opts.sweepTo
+    (accId, acc) <- accountAmong (\name -> "The sweep pays no address of the account " <> cs name) opts.account holders
     let net = accountNetwork acc
     -- Before the keys are typed, not after
     for_ opts.output checkPathFree
@@ -533,7 +537,7 @@ cmdPrepareSweep ctx cfg opts =
 cmdSignSweep :: Ctx -> Config -> Signing -> Maybe KeySource -> IO Response
 cmdSignSweep ctx cfg signing keysM =
   runDBResponse cfg $ do
-    (accId, acc, tsd) <- transactionToSign signing
+    (accId, acc, tsd) <- transactionToSign ctx signing
     let net = accountNetwork acc
     -- Without a file, the keys are typed: signing cannot do without them
     keys <- readSecKeys terminal net (fromMaybe KeysOnTerminal keysM)

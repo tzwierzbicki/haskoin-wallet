@@ -234,6 +234,34 @@ getAccountByName Nothing = do
     [] -> throwError "There are no accounts in the wallet"
     _ -> throwError "Specify which account to use"
 
+-- | The account a command acts on, among the accounts its data points to:
+-- the coins it spends or the transaction it reads, for instance. The
+-- account --account names must be one of them, or the command stops with
+-- the refusal of that name. Without --account, the account is the only one
+-- the data points to, and the user is asked for --account when it points
+-- to several. Data that points to no account leaves the choice to
+-- --account, or to the only account of the wallet.
+accountAmong ::
+  (MonadUnliftIO m) =>
+  (Text -> String) ->
+  Maybe Text ->
+  [(DBAccountId, DBAccount)] ->
+  ExceptT String (DB m) (DBAccountId, DBAccount)
+accountAmong refused (Just name) candidates = do
+  named <- getAccountByName (Just name)
+  unless (null candidates || fst named `elem` (fst <$> candidates)) $
+    throwError (refused name)
+  return named
+accountAmong _ Nothing candidates =
+  case candidates of
+    [] -> getAccountByName Nothing
+    [one] -> return one
+    _ -> throwError "Specify which account to use"
+
+-- | The accounts of the ids, each with its id
+getAccountsById :: (MonadUnliftIO m) => [DBAccountId] -> ExceptT String (DB m) [(DBAccountId, DBAccount)]
+getAccountsById = mapM (\accId -> (,) accId <$> getAccountById accId)
+
 -- | The account of the name, or every account without one
 getAccountsByName ::
   (MonadUnliftIO m) =>

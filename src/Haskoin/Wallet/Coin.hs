@@ -26,6 +26,7 @@ module Haskoin.Wallet.Coin
     spendableBalance,
     lockCoin,
     unlockCoin,
+    coinAccounts,
     Refreshed (..),
     refreshCoins,
   )
@@ -41,7 +42,7 @@ import Data.ByteString (ByteString)
 import Data.Containers.ListUtils (nubOrd)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (mapMaybe)
+import Data.Maybe (catMaybes, mapMaybe)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -53,7 +54,7 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.BestBlock
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Account (accountNetwork, getAccountById)
+import Haskoin.Wallet.Account (accountNetwork, getAccountById, getAccountsById)
 import Haskoin.Wallet.PendingTx (lockedOutpoints, userLockedOutpoints)
 import Haskoin.Wallet.RawTx (lookupRawTx)
 import Haskoin.Wallet.TxInfo (MyInputs (..), TxSummary (..), liveSummary, ownTransaction)
@@ -382,6 +383,13 @@ unlockCoin outpoint = do
     Just LockedByTransaction -> throwError "The coin is locked by a pending transaction, not by the user: deletetx frees it"
     Nothing -> throwError "The coin is not locked"
   shownCoin net row
+
+-- | The accounts that hold the coins, each once. A coin the wallet does not
+-- hold has none.
+coinAccounts :: (MonadUnliftIO m) => [OutPoint] -> ExceptT String (DB m) [(DBAccountId, DBAccount)]
+coinAccounts outpoints = do
+  rows <- lift $ mapM (P.get . DBCoinKey . outpointBytes) outpoints
+  getAccountsById $ nubOrd $ dBCoinAccount <$> catMaybes rows
 
 -- | A coin of the wallet by its outpoint, with the network of its account
 walletCoin :: (MonadUnliftIO m) => OutPoint -> ExceptT String (DB m) (Network, DBCoin)

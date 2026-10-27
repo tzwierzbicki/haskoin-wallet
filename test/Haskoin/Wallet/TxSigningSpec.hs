@@ -5,7 +5,10 @@ module Haskoin.Wallet.TxSigningSpec where
 
 import Control.Monad (when)
 import qualified Data.ByteString as BS
-import Data.List (nub)
+import Data.Aeson ((.:), (.=))
+import qualified Data.Aeson as Json
+import Data.Aeson.Types (parseMaybe)
+import Data.List (isInfixOf, nub)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isJust, mapMaybe)
 import Haskoin
@@ -16,9 +19,10 @@ import Haskoin.Wallet.TxSigning
 import Haskoin.Wallet.TxSize (p2pkhInput, p2pkhOutputSize, txSize)
 import Haskoin.Wallet.TxVectors
 import Numeric.Natural (Natural)
+import Data.Text (Text)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), MarshalJsonBox (..), testIdentity)
 import Data.Default (def)
-import Haskoin.Wallet.Arbitrary (arbitraryTxSignData)
+import Haskoin.Wallet.Arbitrary (arbitraryTxFile, arbitraryTxSignData)
 import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck
@@ -35,10 +39,12 @@ spec = do
     signingSpec ctx
     verificationSpec ctx
     propertiesSpec ctx
-    -- The signing data reads back as it was written, plain or marshalled
+    fileSpec ctx
+    -- The signing data and its files read back as they were written, the
+    -- signing data plain or marshalled
     testIdentity
       def
-        { jsonTests = [JsonBox (arbitraryTxSignData btc ctx)],
+        { jsonTests = [JsonBox (arbitraryTxSignData btc ctx), JsonBox (arbitraryTxFile ctx)],
           marshalJsonTests = [MarshalJsonBox ((,) ctx <$> arbitraryTxSignData btc ctx)]
         }
 
@@ -50,6 +56,24 @@ walletSigner ctx v = do
     Left "this is a sweep vector: it belongs in test/data/tx-sweep"
   accountKey <- prefixError "account" $ accountSigningKey v.vecNetwork ctx v.vecAccount
   return $ \c -> signWalletTx v.vecNetwork c v.vecSignData accountKey
+
+{- Files -}
+
+fileSpec :: Ctx -> Spec
+fileSpec ctx =
+  describe "A transaction file" $ do
+    let tsd = simpleTransaction ctx
+    it "names the network of the transaction, which an earlier hw leaves aside" $ do
+      let written = Json.encode (TxFile (Just btc) tsd)
+      (Json.decode written >>= parseMaybe (.: "network")) `shouldBe` Just ("btc" :: Text)
+      Json.eitherDecode written `shouldBe` Right tsd
+
+    it "of an earlier hw names no network" $
+      Json.eitherDecode (Json.encode tsd) `shouldBe` Right (TxFile Nothing tsd)
+
+    it "refuses a network hw does not know" $ do
+      let written = Json.encode (Json.object (("network" .= ("doge" :: Text)) : txSignDataPairs tsd))
+      (Json.eitherDecode written :: Either String TxFile) `shouldSatisfy` either ("Unknown network doge" `isInfixOf`) (const False)
 
 {- Analysis -}
 
