@@ -6,6 +6,7 @@
 -- directory.
 module Haskoin.Wallet.Config where
 
+import Control.Applicative ((<|>))
 import Control.Monad (unless)
 import Control.Monad.Except (ExceptT, liftEither, runExceptT)
 import Control.Monad.IO.Class (liftIO)
@@ -19,6 +20,7 @@ import Data.List (intercalate, sort)
 import Data.Maybe (fromMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
+import Haskoin (Network (..), allNets, btc, netByName)
 import Haskoin.Store.WebClient
 import Haskoin.Wallet.FileIO
 import Numeric.Natural (Natural)
@@ -50,7 +52,8 @@ databaseFile cfg = (`databaseFileIn` cfg) <$> hwDataDirectory
 {- The configuration -}
 
 -- | The settings of hw. Each one has a default, which a new configuration
--- file is written with and which a key missing from the file keeps.
+-- file is written with and which a key missing from the file keeps, but
+-- the default network: a file without it has none.
 data Config = Config
   { -- | The web address of the haskoin-store that hw asks about the chain
     configHost :: Text,
@@ -69,7 +72,10 @@ data Config = Config
     -- is one; a store of your own may allow more.
     configParallelRequests :: Natural,
     -- | The database to work on, instead of accounts.sqlite in ~/.hw
-    configDatabaseFile :: Maybe FilePath
+    configDatabaseFile :: Maybe FilePath,
+    -- | The network of a command that needs one when --network is not
+    -- given, for a user of one network. Without it, --network must be.
+    configDefaultNetwork :: Maybe Network
   }
   deriving (Eq, Show)
 
@@ -90,6 +96,13 @@ instance FromJSON Config where
         <*> count "tx-full-batch" configTxFullBatch
         <*> count "parallel-requests" configParallelRequests
         <*> o .:? "database-file"
+        <*> (traverse networkNamed =<< o .:? "default-network")
+
+-- | The network of a name in the configuration file
+networkNamed :: String -> Parser Network
+networkNamed text = maybe (fail refused) return (netByName text)
+  where
+    refused = "The key \"default-network\" must be a network: " <> intercalate ", " ((.name) <$> allNets)
 
 -- | A count of the configuration cannot be zero: a gap of zero would refuse
 -- every new address, and a batch of zero would ask the store forever
@@ -106,7 +119,8 @@ instance ToJSON Config where
         "coin-batch" .= configCoinBatch cfg,
         "tx-full-batch" .= configTxFullBatch cfg,
         "parallel-requests" .= configParallelRequests cfg,
-        "database-file" .= configDatabaseFile cfg
+        "database-file" .= configDatabaseFile cfg,
+        "default-network" .= ((.name) <$> configDefaultNetwork cfg)
       ]
 
 instance Default Config where
@@ -118,8 +132,18 @@ instance Default Config where
         configCoinBatch = 100,
         configTxFullBatch = 100,
         configParallelRequests = 1,
-        configDatabaseFile = Nothing
+        configDatabaseFile = Nothing,
+        configDefaultNetwork = Just btc
       }
+
+-- | The network of a command that needs one: the one --network names, or
+-- the default network of the configuration, when it has one
+commandNetwork :: Config -> Maybe Network -> Maybe Network
+commandNetwork cfg given = given <|> configDefaultNetwork cfg
+
+-- | The refusal of a command that needs a network and has none
+noNetwork :: String
+noNetwork = "Give the --network, or a default-network in the configuration file"
 
 {- Reading the file -}
 

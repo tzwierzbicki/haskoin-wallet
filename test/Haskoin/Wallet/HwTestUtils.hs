@@ -11,6 +11,7 @@ module Haskoin.Wallet.HwTestUtils
   ( -- * Running hw
     Run (..),
     withHome,
+    setDefaultNetwork,
     hw,
     hwJson,
     -- * The chain of the fake store
@@ -26,6 +27,7 @@ import Control.Monad (filterM, join)
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Aeson as Json
+import qualified Data.Aeson.KeyMap as KeyMap
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.Bytes.Get (runGetL)
@@ -76,11 +78,27 @@ withHome test =
     useStore home "http://127.0.0.1:1/"
     test home
 
--- | Point the hw of a home at a store
+-- | Point the hw of a home at a store, on Bitcoin by default, as the
+-- configuration file hw writes for a new home is
 useStore :: FilePath -> String -> IO ()
 useStore home url = do
   createDirectoryIfMissing True (home </> ".hw")
-  BL.writeFile (home </> ".hw" </> "config.json") (Json.encode (Json.object ["host" Json..= url]))
+  BL.writeFile (configOf home) (Json.encode (Json.object ["host" Json..= url, "default-network" Json..= ("btc" :: Text)]))
+
+-- | The configuration file of a home
+configOf :: FilePath -> FilePath
+configOf home = home </> ".hw" </> "config.json"
+
+-- | Set the default network of the configuration file of a home, or take
+-- it away
+setDefaultNetwork :: FilePath -> Maybe Text -> IO ()
+setDefaultNetwork home netM = do
+  config <- Json.decodeFileStrict (configOf home)
+  case config of
+    Just (Json.Object o) ->
+      Json.encodeFile (configOf home) $
+        Json.Object (maybe (KeyMap.delete "default-network") (KeyMap.insert "default-network" . Json.String) netM o)
+    _ -> fail "The configuration file of the home is not a JSON object"
 
 -- | The hw binary of this build. The one on the PATH may be another
 -- version, so it is never looked up there: it is next to the binary of the

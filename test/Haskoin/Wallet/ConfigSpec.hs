@@ -8,7 +8,9 @@ module Haskoin.Wallet.ConfigSpec (spec) where
 import Control.Monad.Except (runExceptT)
 import Data.Aeson (Value, eitherDecode, toJSON)
 import Data.Default (def)
+import Data.List (isPrefixOf)
 import Data.String.Conversions (cs)
+import Haskoin (bch)
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.TestUtils (inScratchDirectory)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), testIdentity)
@@ -35,7 +37,7 @@ fileSpec =
       decodeConfig defaultFile `shouldBe` Right def
 
     it "reads a file of hw 0.9: the tx-batch and recovery-gap keys mean nothing now, the parallel requests take their default" $
-      decodeConfig hw09File `shouldBe` Right def
+      decodeConfig hw09File `shouldBe` Right withoutNetwork
 
     it "reads the number of parallel requests" $
       configParallelRequests <$> decodeConfig twoRequestsFile `shouldBe` Right 2
@@ -43,14 +45,29 @@ fileSpec =
 keySpec :: Spec
 keySpec =
   describe "A key of the configuration file" $ do
-    it "takes its default when missing, so an empty file is the default configuration" $
-      decodeConfig "{}" `shouldBe` Right def
+    it "takes its default when missing, so an empty file is the default configuration, without a default network" $
+      decodeConfig "{}" `shouldBe` Right withoutNetwork
 
     it "sets its value alone, the others keeping their defaults" $
-      decodeConfig [r|{"gap": 30}|] `shouldBe` Right def {configGap = 30}
+      decodeConfig [r|{"gap": 30}|] `shouldBe` Right withoutNetwork {configGap = 30}
 
     it "takes its default when null" $
-      decodeConfig [r|{"gap": null, "database-file": null}|] `shouldBe` Right def
+      decodeConfig [r|{"gap": null, "database-file": null}|] `shouldBe` Right withoutNetwork
+
+    -- For a user of one network: the commands that need one take it
+    -- without --network
+    it "names the default network of the commands" $
+      configDefaultNetwork <$> decodeConfig [r|{"default-network": "bch"}|] `shouldBe` Right (Just bch)
+
+    -- Unlike the other keys: a file that does not set it has none, and
+    -- --network must be given
+    it "leaves the commands without a default network when missing or null" $ do
+      configDefaultNetwork <$> decodeConfig "{}" `shouldBe` Right Nothing
+      configDefaultNetwork <$> decodeConfig [r|{"default-network": null}|] `shouldBe` Right Nothing
+
+    it "cannot be a network hw does not know" $
+      decodeConfig [r|{"default-network": "doge"}|]
+        `shouldSatisfy` either ("Error in $: The key \"default-network\" must be a network: " `isPrefixOf`) (const False)
 
     it "names the database to work on" $
       configDatabaseFile <$> decodeConfig [r|{"database-file": "/backups/accounts.sqlite"}|]
@@ -108,13 +125,13 @@ directorySpec =
       inScratchDirectory $ \dir -> do
         writeFile (configFile dir) hw09File
         cfg <- runExceptT $ readConfig dir
-        cfg `shouldBe` Right (def, ["The configuration file " <> configFile dir <> " has keys hw does not know, left aside: recovery-gap, tx-batch"])
+        cfg `shouldBe` Right (withoutNetwork, ["The configuration file " <> configFile dir <> " has keys hw does not know, left aside: recovery-gap, tx-batch"])
 
     it "warns about a mistyped key, whose setting would otherwise keep its default without a word" $
       inScratchDirectory $ \dir -> do
         writeFile (configFile dir) [r|{"gaps": 30}|]
         cfg <- runExceptT $ readConfig dir
-        cfg `shouldBe` Right (def, ["The configuration file " <> configFile dir <> " has keys hw does not know, left aside: gaps"])
+        cfg `shouldBe` Right (withoutNetwork, ["The configuration file " <> configFile dir <> " has keys hw does not know, left aside: gaps"])
 
 -- | What hw makes of the text of a configuration file
 decodeConfig :: String -> Either String Config
@@ -123,7 +140,12 @@ decodeConfig = eitherDecode . cs
 decodeValue :: String -> Value
 decodeValue = either error id . eitherDecode . cs
 
--- | The file hw 0.10 writes when there is none
+-- | The default configuration of a file that sets no default network, as
+-- those of earlier versions of hw
+withoutNetwork :: Config
+withoutNetwork = def {configDefaultNetwork = Nothing}
+
+-- | The file hw writes when there is none
 defaultFile :: String
 defaultFile =
   [r|{
@@ -133,7 +155,8 @@ defaultFile =
   "coin-batch": 100,
   "tx-full-batch": 100,
   "parallel-requests": 1,
-  "database-file": null
+  "database-file": null,
+  "default-network": "btc"
 }|]
 
 -- | The file hw 0.9 wrote when there was none: tx-batch and recovery-gap

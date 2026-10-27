@@ -264,6 +264,7 @@ arbitraryConfig =
     <*> count
     <*> count
     <*> arbitrary
+    <*> arbitraryMaybe arbitraryNetwork
   where
     -- Every count of the configuration is at least one
     count = (+ 1) <$> arbitraryNatural

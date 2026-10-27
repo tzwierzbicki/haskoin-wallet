@@ -211,11 +211,12 @@ cmdMnemonic opts =
     (source, mnemonic, parts) <- genMnemonic sources opts.entropy opts.parts
     return $ ResponseMnemonic source (Text.words mnemonic) (Text.words <$> parts)
 
-cmdCreateAcc :: Ctx -> Config -> Text -> Network -> Natural -> IO Response
-cmdCreateAcc ctx cfg name net parts =
+cmdCreateAcc :: Ctx -> Config -> Text -> Maybe Network -> Natural -> IO Response
+cmdCreateAcc ctx cfg name netM parts =
   runDBResponse cfg $ do
     -- Before the user types the mnemonic, not after
     checkNameFree name
+    net <- liftMaybe noNetwork (commandNetwork cfg netM)
     mnem <- askNewMnemonicPass terminal parts
     seed <- liftEither $ seedOf ctx mnem
     (_, xpub) <- lift $ nextAccount net ctx seed
@@ -229,13 +230,14 @@ cmdCreateAcc ctx cfg name net parts =
 cmdRecover :: Ctx -> Config -> Recover -> IO Response
 cmdRecover ctx cfg opts =
   runDBResponse cfg $ do
-    let store = webStore ctx cfg opts.network
+    net <- liftMaybe noNetwork (commandNetwork cfg opts.network)
+    let store = webStore ctx cfg net
     -- An offline computer hears it before the mnemonic is typed
     fromStore $ storeHealth store
     -- Typed once: a mistyped mnemonic finds no paid account
     mnem <- askMnemonicPass terminal opts.parts
     seed <- liftEither $ seedOf ctx mnem
-    ResponseRecover opts.network opts.accountGap <$> recoverSeed ctx cfg store opts.network seed opts.accountGap
+    ResponseRecover net opts.accountGap <$> recoverSeed ctx cfg store net seed opts.accountGap
 
 cmdTestAcc :: Ctx -> Config -> Maybe Text -> Natural -> IO Response
 cmdTestAcc ctx cfg account parts =
@@ -531,7 +533,10 @@ cmdPrepareSweep ctx cfg opts =
     case holders of
       [] -> do
         for_ opts.account $ \name -> getAccountByName (Just name) >> throwError (paysNo name)
-        net <- liftMaybe "Give the --network of a sweep that pays no account of the wallet" opts.network
+        net <-
+          liftMaybe
+            "Give the --network of a sweep that pays no account of the wallet, or a default-network in the configuration file"
+            (commandNetwork cfg opts.network)
         when (isNothing opts.output) $
           throwError "The sweep does not involve this wallet: give an --output file to write it to"
         tsd <- sweepOn net Nothing

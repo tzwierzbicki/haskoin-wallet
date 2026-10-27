@@ -227,6 +227,20 @@ accountSpec =
         run `shouldSatisfy` printed "The account main already exists"
         run `shouldNotSatisfy` askedMnemonic
 
+    -- The configuration file of the test home names btc
+    it "is created on the default network of the configuration file, or on the --network given" $
+      withHome $ \home -> do
+        setDefaultNetwork home (Just "bch")
+        (fmap dBAccountNetwork . accountOf <$> hwJson home ["createacc", "main"] seedTwice) `shouldReturn` Right "bch"
+        (fmap dBAccountNetwork . accountOf <$> hwJson home ["createacc", "second", "--network", "btc"] seedTwice) `shouldReturn` Right "btc"
+
+    it "needs the --network without a default network in the configuration file, before the mnemonic is asked" $
+      withHome $ \home -> do
+        setDefaultNetwork home Nothing
+        run <- hw home ["createacc", "main"] seedTwice
+        run `shouldSatisfy` printed "Give the --network, or a default-network in the configuration file"
+        run `shouldNotSatisfy` askedMnemonic
+
     it "is checked by testacc against a mnemonic and a passphrase" $
       withHome $ \home -> do
         createMain home
@@ -1012,6 +1026,13 @@ recoverSpec ctx =
         (accountsOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right []
         (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("main", 0, 0)]
 
+    it "are not looked for without a --network or a default network in the configuration file, before the mnemonic" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        setDefaultNetwork home Nothing
+        run <- hw home ["recover"] seedOnce
+        run `shouldSatisfy` printed "Give the --network, or a default-network in the configuration file"
+        run `shouldNotSatisfy` askedMnemonic
+
     -- Every account searched is a scan at the store
     it "are looked for with an account gap from 1 to 100" $
       withHome $ \home -> do
@@ -1176,11 +1197,29 @@ sweepSpec ctx =
         (spendsAndPays ctx <$> published) `shouldBe` [([OutPoint (txHash (oldCoin ctx)) 0], [(28080, Right (otherAddr 0))])]
         (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right []
 
-    it "that pays outside the wallet needs the --network it is for" $
+    -- The configuration file of the test home names btc
+    it "that pays outside the wallet is on the default network of the configuration file, without --network" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
         keys <- writeKeyFile home
+        prepared <- answer home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--output", home </> "sweep.json"] []
+        prepared `shouldSatisfy` \case ResponseOutsideTx net _ -> net == btc; _ -> False
+
+    it "that pays outside the wallet needs the --network it is for, without a default network in the configuration file" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        setDefaultNetwork home Nothing
+        keys <- writeKeyFile home
         (errorOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--output", home </> "sweep.json"] [])
-          `shouldReturn` Right "Give the --network of a sweep that pays no account of the wallet"
+          `shouldReturn` Right "Give the --network of a sweep that pays no account of the wallet, or a default-network in the configuration file"
+
+    -- The default network is not a --network given: main is on btc
+    it "that pays the wallet is on the network of its account, whatever the default network" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        setDefaultNetwork home (Just "bch")
+        keys <- writeKeyFile home
+        (fmap dBAccountName . accountOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0)] [])
+          `shouldReturn` Right "main"
 
     it "that pays outside the wallet is refused an --account" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do

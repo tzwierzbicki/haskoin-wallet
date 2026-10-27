@@ -27,9 +27,9 @@ import Text.RawString.QQ (r)
 -- read by name; the others come as arguments of distinct types.
 data Command
   = CommandMnemonic !NewMnemonic
-  | -- | The name of the new account, its network, and the parts the mnemonic
-    -- is typed in
-    CommandCreateAcc !Text !Network !Natural
+  | -- | The name of the new account, its network, unless the default one,
+    -- and the parts the mnemonic is typed in
+    CommandCreateAcc !Text !(Maybe Network) !Natural
   | CommandRecover !Recover
   | -- | The account, and the parts the mnemonic is typed in
     CommandTestAcc !(Maybe Text) !Natural
@@ -94,7 +94,8 @@ data NewMnemonic = NewMnemonic
 
 -- | The options of recover
 data Recover = Recover
-  { network :: !Network,
+  { -- | The network, unless the default one
+    network :: !(Maybe Network),
     -- | The accounts in a row without a payment that end the search
     accountGap :: !Natural,
     -- | The parts the mnemonic is typed in
@@ -378,7 +379,7 @@ createAccParser = do
   let cmd =
         CommandCreateAcc
           <$> textArg "Name of the new account"
-          <*> networkOption
+          <*> networkMaybeOption
           <*> splitInOption
   info cmd $
     progDescDoc (offline "Create a new account")
@@ -398,23 +399,16 @@ offline computer, you can then export your account and import it on an online
 computer.
 |]
 
--- | The network, Bitcoin by default
-networkOption :: Parser Network
-networkOption = networkOptionWith (value btc <> showDefaultWith (.name))
-
--- | The network, when given
+-- | The network, when given. Without it, a command that needs one takes the
+-- default-network of the configuration file.
 networkMaybeOption :: Parser (Maybe Network)
-networkMaybeOption = optional $ networkOptionWith mempty
-
-networkOptionWith :: Mod OptionFields Network -> Parser Network
-networkOptionWith mods =
-  option (eitherReader (f . netByName)) $
+networkMaybeOption =
+  optional . option (eitherReader (f . netByName)) $
     short 'n'
       <> long "network"
       <> metavar "TEXT"
       <> completeWith ((.name) <$> allNets)
-      <> help ("Specify one of the following networks to use: " <> nets)
-      <> mods
+      <> help ("One of the networks " <> nets <> ". Without it, the default-network of the configuration file")
   where
     nets = intercalate ", " ((.name) <$> allNets)
     f :: Maybe Network -> Either String Network
@@ -426,7 +420,7 @@ networkOptionWith mods =
 
 recoverParser :: ParserInfo Command
 recoverParser = do
-  let cmd = CommandRecover <$> (Recover <$> networkOption <*> accountGapOption <*> splitInOption)
+  let cmd = CommandRecover <$> (Recover <$> networkMaybeOption <*> accountGapOption <*> splitInOption)
   info cmd $
     progDescDoc (offline "Recover the accounts of a seed that were paid")
       <> footer
