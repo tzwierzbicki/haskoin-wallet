@@ -382,14 +382,14 @@ sendPending ctx storeOn nosigH = do
   lift $ insertRawTx signedTx
   return (acc, summary)
 
--- | The account of a transaction to sign, review or import, with the
--- network its file names, as 'accountAmong' chooses it. A transaction
--- pending in the wallet is of the account that holds it. Another is of the
--- accounts on its network that it involves: those whose keys derive the
+-- | The account of the wallet a transaction to sign, review or import
+-- involves, as 'accountAmong' chooses it, on the network given, if any. A
+-- transaction pending in the wallet is of the account that holds it.
+-- Another is of the accounts that it involves: those whose keys derive the
 -- addresses it spends or pays, at the paths it gives. One that involves
--- none, a sweep between addresses outside the wallet, is of any account on
--- its network.
-transactionAccount :: (MonadUnliftIO m) => Ctx -> Maybe Text -> Maybe Network -> TxSignData -> ExceptT String (DB m) (DBAccountId, DBAccount)
+-- none, a sweep between addresses outside the wallet, is of no account,
+-- and --account may not name one.
+transactionAccount :: (MonadUnliftIO m) => Ctx -> Maybe Text -> Maybe Network -> TxSignData -> ExceptT String (DB m) (Maybe (DBAccountId, DBAccount))
 transactionAccount ctx nameM netM tsd = do
   heldM <- lookupPendingTx (nosigHash (txSignDataTx tsd))
   case heldM of
@@ -397,22 +397,27 @@ transactionAccount ctx nameM netM tsd = do
       holder <- getAccountById held.pendingTxAccount
       unless (onTxNetwork holder) $
         throwError "The transaction is pending in an account of another network"
-      accountAmong
-        (\name -> "The transaction is pending in the account " <> cs (dBAccountName holder) <> ", not in " <> cs name)
-        nameM
-        [(held.pendingTxAccount, holder)]
+      Just
+        <$> accountAmong
+          (\name -> "The transaction is pending in the account " <> cs (dBAccountName holder) <> ", not in " <> cs name)
+          nameM
+          [(held.pendingTxAccount, holder)]
     Nothing -> do
-      accounts <- filter (onTxNetwork . snd) <$> lift getAccounts
-      forM_ netM $ \net ->
-        when (null accounts) $ throwError $ "The wallet has no account on " <> net.name <> ", the network of the transaction"
-      case filter (involves . snd) accounts of
-        [] -> accountAmong (\name -> "The account " <> cs name <> " is not on the network of the transaction") nameM accounts
-        involved -> accountAmong (\name -> "The transaction does not involve the account " <> cs name) nameM involved
+      involved <- filter (involves . snd) <$> lift getAccounts
+      unless (all (onTxNetwork . snd) involved) $
+        throwError "The transaction involves an account of another network"
+      case involved of
+        [] -> do
+          forM_ nameM $ \name -> getAccountByName (Just name) >> throwError (notInvolved name)
+          return Nothing
+        _ -> Just <$> accountAmong notInvolved nameM involved
   where
     onTxNetwork acc = maybe True (== accountNetwork acc) netM
     involves acc =
       either (const False) (involvesWallet . txInfoSummary) $
         parseTxSignData (accountNetwork acc) ctx (accountXPubKey ctx acc) tsd
+    notInvolved :: Text -> String
+    notInvolved name = "The transaction does not involve the account " <> cs name
 
 -- | What sending a signed transaction from a file did
 data Sent
@@ -445,8 +450,7 @@ sendSigned ctx storeOn netM tsd = do
       when (held.pendingTxData /= tsd) $ void $ importPendingTx net ctx held.pendingTxAccount tsd
       uncurry SentPending <$> sendPending ctx storeOn pendingHash
     Nothing -> do
-      -- The file of an earlier hw names no network, and --network must
-      net <- liftMaybe "The file names no network: give the --network of a transaction the wallet does not hold" netM
+      net <- liftMaybe noFileNetwork netM
       liftEither $ verifySignedTx net ctx tsd
       fromStore $ storeHealth (storeOn net)
       accepted <- fromStore $ broadcast (storeOn net) signedTx

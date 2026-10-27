@@ -92,6 +92,12 @@ instance FromJSON TxFile where
         nameM <- o .:? "network"
         forM nameM $ \name -> maybe (fail ("Unknown network " <> name)) return (netByName name)
 
+-- | The refusal of a file of an earlier hw, which names no network, where
+-- nothing else tells the network of its transaction: such a file is cheap
+-- to prepare again
+noFileNetwork :: String
+noFileNetwork = "The file names no network, as those of an earlier hw: prepare the transaction again"
+
 instance ToJSON TxFile where
   toJSON (TxFile netM tsd) = object (maybe [] (\net -> ["network" .= net.name]) netM <> txSignDataPairs tsd)
 

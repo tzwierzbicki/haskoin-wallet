@@ -44,7 +44,7 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData
-import Haskoin.Wallet.TxSigning (coinSigInput, parseTxSignData, spentCoins, verifySignedTx)
+import Haskoin.Wallet.TxSigning (coinSigInput, parseOutsideTxSignData, parseTxSignData, spentCoins, verifySignedTx)
 import Haskoin.Wallet.TxSize (InputSize, checkFeeRateAndDust, inputSize, outputSize, txSize, uncompressedKeyInput)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
@@ -71,15 +71,17 @@ data SweepCoins = SweepCoins
 -- | Ask the store for the coins to sweep: every coin at the given
 -- addresses and at the addresses of the given keys, and the coins given by
 -- outpoint, each once; and the transactions they come from. The database
--- says which of the addresses involved belong to the wallet. The keys may
--- be absent, when they are kept elsewhere: the sweep is then prepared from
+-- says which of the addresses involved belong to the account, when the
+-- sweep pays one; a sweep outside the wallet has none. The keys may be
+-- absent, when they are kept elsewhere: the sweep is then prepared from
 -- addresses or coins alone.
 fetchSweepCoins ::
   (MonadUnliftIO m) =>
   Network ->
   Ctx ->
   Store ->
-  DBAccountId ->
+  -- | The account the sweep pays, if any
+  Maybe DBAccountId ->
   -- | The private keys, if at hand
   [SecKey] ->
   -- | The addresses to sweep from
@@ -89,7 +91,7 @@ fetchSweepCoins ::
   -- | The destinations
   [Address] ->
   ExceptT String (DB m) SweepCoins
-fetchSweepCoins net ctx store accId secKeys sweepFrom given sweepTo = do
+fetchSweepCoins net ctx store accIdM secKeys sweepFrom given sweepTo = do
   let addresses = nub $ sweepFrom <> concatMap (keyAddresses net ctx) secKeys
   when (null addresses && null given) $
     throwError "No private keys, addresses or coins to sweep from"
@@ -108,7 +110,7 @@ fetchSweepCoins net ctx store accId secKeys sweepFrom given sweepTo = do
   -- The store lists the coins, so it must have every transaction they
   -- come from
   transactions <- fromStore $ rawTransactions store spentFrom
-  walletAddrs <- walletPaths net accId (mapMaybe (.address) coins <> sweepTo)
+  walletAddrs <- maybe (return Map.empty) (\accId -> walletPaths net accId (mapMaybe (.address) coins <> sweepTo)) accIdM
   let uncompressedAddrs = nub $ uncompressedKeyAddr ctx <$> secKeys
   return SweepCoins {coins, transactions, walletAddrs, uncompressedAddrs}
 
@@ -223,19 +225,20 @@ coinInputSize net ctx uncompressedAddrs coin = do
 
 -- | Sign a transaction with the given private keys: every input is signed
 -- with the key that matches the output script of its coin. The account
--- public key only identifies the wallet's own inputs and outputs; the paths
--- of the 'TxSignData' are relative to it.
+-- public key only identifies the wallet's own inputs and outputs, the paths
+-- of the 'TxSignData' being relative to it; a sweep outside the wallet has
+-- no account.
 signTxWithKeys ::
   Network ->
   Ctx ->
   TxSignData ->
-  XPubKey ->
+  Maybe XPubKey ->
   [SecKey] ->
   Either String (TxSignData, TxInfo)
-signTxWithKeys net ctx tsd accountPub secKeys = do
+signTxWithKeys net ctx tsd accountPubM secKeys = do
   when (isSigned tsd.txSignDataTx) $ Left "The transaction is already signed"
   when (null secKeys) $ Left "There are no private keys to sign"
-  info <- parseTxSignData net ctx accountPub tsd
+  info <- parse tsd
   -- The sweep builder refuses a fee rate of zero; the signer checks the fee itself
   when (info.txInfoSummary.summaryFee == 0) $ Left "The transaction pays no fee"
   -- The coin of every input, in the order of the inputs
@@ -243,8 +246,10 @@ signTxWithKeys net ctx tsd accountPub secKeys = do
   signedTx <- foldM (signCoin net ctx (indexKeys ctx secKeys)) tsd.txSignDataTx (zip [0 ..] coins)
   let signedData = tsd {txSignDataTx = signedTx}
   verifySignedTx net ctx signedData
-  signedInfo <- parseTxSignData net ctx accountPub signedData
+  signedInfo <- parse signedData
   return (signedData, signedInfo)
+  where
+    parse = maybe (parseOutsideTxSignData net ctx) (parseTxSignData net ctx) accountPubM
 
 -- | The private keys, indexed by what identifies them in an output script.
 -- Every key is indexed with both encodings of its public key.

@@ -560,6 +560,7 @@ prettyPrinter unit =
     ResponseTx acc txInfo -> do
       let net = accountNetwork acc
       renderIO $ txInfoPrinter net unit txInfo
+    ResponseOutsideTx net txInfo -> renderIO $ txInfoPrinter net unit txInfo
     ResponseSentTx net h ->
       renderIO $
         vcat

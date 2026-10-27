@@ -94,6 +94,16 @@ simpleFunding ctx = fundingTx ctx 1 [(externalAddr 0, 100000000)]
 analysisSpec :: Ctx -> Spec
 analysisSpec ctx =
   describe "Transaction analysis" $ do
+    -- Its paths are those of an account the wallet does not have: the coin
+    -- of 1 BTC and the two outputs are another wallet's
+    it "describes a transaction outside the wallet, every input and output another wallet's" $ do
+      info <- expectRight $ parseOutsideTxSignData btc ctx unsigned
+      info.txInfoSummary.summaryAmount `shouldBe` 0
+      info.txInfoSummary.summaryFee `shouldBe` 10000000
+      info.txInfoSummary.summaryOtherInputs `shouldBe` Map.fromList [(externalAddr 0, 100000000)]
+      info.txInfoSummary.summaryOtherOutputs `shouldBe` Map.fromList [(otherAddr 0, 50000000), (internalAddr 0, 40000000)]
+      (Map.null info.txInfoSummary.summaryMyInputs, Map.null info.txInfoSummary.summaryMyOutputs) `shouldBe` (True, True)
+
     it "describes an unsigned transaction with an estimated size" $ do
       info <- expectRight $ parseTxSignData btc ctx accountPub unsigned
       txInfoHash info `shouldBe` Nothing

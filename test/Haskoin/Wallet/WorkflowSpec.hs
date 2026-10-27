@@ -116,6 +116,18 @@ keyOf :: Response -> Either String (Text, Int, Text)
 keyOf (ResponseAccount acc _) = Right (dBAccountName acc, dBAccountIndex acc, dBAccountXPubKey acc)
 keyOf other = Left (show other)
 
+-- | The address receive hands out to the account, as text
+receiveFor :: FilePath -> String -> IO String
+receiveFor home account = do
+  shown <- addressesOf <$> answer home ["receive", "--account", account] []
+  case shown of
+    Right [(addr, _)] -> return (Text.unpack addr)
+    other -> fail $ "Not an address: " <> show other
+
+-- | The transaction file at the path, as hw wrote it
+readTxFile :: FilePath -> IO TxFile
+readTxFile file = maybe (fail ("Not a transaction file: " <> file)) return =<< Json.decodeFileStrict file
+
 -- | The account an answer shows
 accountOf :: Response -> Either String DBAccount
 accountOf (ResponseAccount acc _) = Right acc
@@ -140,9 +152,10 @@ coinsShown :: Response -> Either String [(OutPoint, Word64, Natural, Maybe CoinL
 coinsShown (ResponseCoins _ coins) = Right [(c.jsonCoinOutpoint, c.jsonCoinValue, c.jsonCoinConfirmations, c.jsonCoinLock, c.jsonCoinSpendable) | c <- coins]
 coinsShown other = Left (show other)
 
--- | The transaction of an answer
+-- | The transaction of an answer, of an account or outside the wallet
 txOf :: Response -> IO TxInfo
 txOf (ResponseTx _ info) = return info
+txOf (ResponseOutsideTx _ info) = return info
 txOf other = fail $ "Not a transaction: " <> show other
 
 -- | The transactions of an answer: type, amount, and confirmations once on
@@ -551,21 +564,21 @@ failureSpec ctx = do
 
     it "refuses a missing file" $
       withHome $ \home ->
-        (errorOf <$> hwJson home ["sendtx", "--input", home </> "missing.json", "--network", "btc"] [])
+        (errorOf <$> hwJson home ["sendtx", "--input", home </> "missing.json"] [])
           `shouldReturn` Right (noSuchFile (home </> "missing.json"))
 
     it "refuses an unsigned transaction" $
       withHome $ \home -> do
         Json.encodeFile (home </> "sweep.json") (unsignedSweep ctx)
-        (errorOf <$> hwJson home ["sendtx", "--input", home </> "sweep.json", "--network", "btc"] [])
+        (errorOf <$> hwJson home ["sendtx", "--input", home </> "sweep.json"] [])
           `shouldReturn` Right "The transaction is not signed"
 
     -- The file is written as by an earlier hw, without the network
-    it "needs the --network of a signed transaction the wallet does not hold, when its file names none" $
+    it "refuses the file of an earlier hw, which names no network, for a transaction the wallet does not hold" $
       withHome $ \home -> do
         Json.encodeFile (home </> "payment.json") (signedPayment ctx)
         (errorOf <$> hwJson home ["sendtx", "--input", home </> "payment.json"] [])
-          `shouldReturn` Right "The file names no network: give the --network of a transaction the wallet does not hold"
+          `shouldReturn` Right "The file names no network, as those of an earlier hw: prepare the transaction again"
 
   describe "signtx and signsweep" $ do
     let nosig = Text.unpack (txHashToHex (fakeTxHash 1))
@@ -831,18 +844,6 @@ signingSpec ctx = do
         (fmap dBAccountFingerprint . accountOf <$> hwJson home ["signtx", nosig] seedOnce)
           `shouldReturn` Right (Just "bc560f95")
 
-    -- sendtx left --network aside for a nosigHash, and sent the transaction
-    it "is sent by its nosigHash only with the --network of its account" $
-      withChain ctx (paidChain ctx) $ \home chain -> do
-        synced home
-        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", textOf (otherAddr 0), "0.0002"] []
-        _ <- answer home ["signtx", nosig] seedOnce
-        (errorOf <$> hwJson home ["sendtx", nosig, "--network", "bch"] [])
-          `shouldReturn` Right "The transaction is pending in an account of another network"
-        (inMempool <$> readIORef chain) `shouldReturn` []
-        sent <- txOf =<< answer home ["sendtx", nosig, "--network", "btc"] []
-        pendingState sent `shouldBe` Just (True, True)
-
   -- The signer holds the account and asks for its mnemonic; the online
   -- computer holds the same account, imported, and talks to the store
   describe "A payment signed offline" $ do
@@ -1084,21 +1085,21 @@ sweepSpec ctx =
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
         createMain home
         keys <- writeKeyFile home
-        (errorOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0)] [])
+        (errorOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--network", "btc"] [])
           `shouldReturn` Right "The sweep does not involve this wallet: give an --output file to write it to"
 
     -- The wallet keeps no trace of it: the sweep is signed from its file,
     -- and sent with the network sendtx cannot read from the wallet
-    it "that pays outside the wallet is written to its file only, signed from it, and sent with its network" $
+    it "that pays outside the wallet is written to its file only, signed from it, and sent on the network it names" $
       withChain ctx (oldKeyChain ctx) $ \home chain -> do
         createMain home
         keys <- writeKeyFile home
-        prepared <- txOf =<< answer home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--output", home </> "sweep.json"] []
+        prepared <- txOf =<< answer home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json"] []
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 28080)]
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
         signed <- txOf =<< answer home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.json", "--prvkeys", keys] []
         pendingState signed `shouldBe` Just (True, False)
-        sent <- answer home ["sendtx", "--input", home </> "signed.json", "--network", "btc"] []
+        sent <- answer home ["sendtx", "--input", home </> "signed.json"] []
         published <- inMempool <$> readIORef chain
         (spendsAndPays ctx <$> published) `shouldBe` [([OutPoint (txHash (oldCoin ctx)) 0], [(28080, Right (otherAddr 0))])]
         (ResponseSentTx btc . txHash <$> published) `shouldBe` [sent]
@@ -1116,7 +1117,7 @@ sweepSpec ctx =
     it "is refused an address that is not one, before the keys are typed" $
       withHome $ \home -> do
         createMain home
-        run <- hw home ["preparesweep", "--prvkeys", "-", "--sweepto", "nonsense"] []
+        run <- hw home ["preparesweep", "--prvkeys", "-", "--sweepto", "nonsense", "--network", "btc", "--output", home </> "sweep.json"] []
         run `shouldSatisfy` printed "The address nonsense is not valid on btc"
         runErr run `shouldNotSatisfy` Text.isInfixOf "Private keys"
 
@@ -1161,18 +1162,112 @@ sweepSpec ctx =
         (errorOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0), "--account", "second"] [])
           `shouldReturn` Right "The sweep pays no address of the account second"
 
-    -- The file names btc, the network of the account that prepared it
-    it "that pays outside the wallet is sent on the network its file names, without --network" $
+    -- With no account at all, hw sweeps as a utility, through files: on the
+    -- --network given, then on the network the file names
+    it "that pays outside the wallet is prepared, signed and sent from files in a wallet without accounts" $
       withChain ctx (oldKeyChain ctx) $ \home chain -> do
+        keys <- writeKeyFile home
+        prepared <- answer home (outsideSweep home keys) []
+        prepared `shouldSatisfy` \case ResponseOutsideTx net _ -> net == btc; _ -> False
+        signed <- txOf =<< answer home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.json", "--prvkeys", keys] []
+        pendingState signed `shouldBe` Just (True, False)
+        _ <- answer home ["sendtx", "--input", home </> "signed.json"] []
+        published <- inMempool <$> readIORef chain
+        (spendsAndPays ctx <$> published) `shouldBe` [([OutPoint (txHash (oldCoin ctx)) 0], [(28080, Right (otherAddr 0))])]
+        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right []
+
+    it "that pays outside the wallet needs the --network it is for" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        keys <- writeKeyFile home
+        (errorOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--output", home </> "sweep.json"] [])
+          `shouldReturn` Right "Give the --network of a sweep that pays no account of the wallet"
+
+    it "that pays outside the wallet is refused an --account" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
         createMain home
         keys <- writeKeyFile home
-        _ <- answer home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--output", home </> "sweep.json"] []
-        _ <- answer home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.json", "--prvkeys", keys] []
-        (errorOf <$> hwJson home ["sendtx", "--input", home </> "signed.json", "--network", "bch"] [])
-          `shouldReturn` Right "The transaction is for btc, not for the --network bch"
-        sent <- answer home ["sendtx", "--input", home </> "signed.json"] []
-        published <- inMempool <$> readIORef chain
-        (ResponseSentTx btc . txHash <$> published) `shouldBe` [sent]
+        (errorOf <$> hwJson home (outsideSweep home keys <> ["--account", "main"]) [])
+          `shouldReturn` Right "The sweep pays no address of the account main"
+
+    it "that pays outside the wallet is reviewed from its file, outside the wallet, on its network" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        keys <- writeKeyFile home
+        _ <- answer home (outsideSweep home keys) []
+        reviewed <- answer home ["reviewtx", home </> "sweep.json"] []
+        reviewed `shouldSatisfy` \case ResponseOutsideTx net _ -> net == btc; _ -> False
+        (paidToOthers <$> txOf reviewed) `shouldReturn` Map.fromList [(otherAddr 0, 28080)]
+
+    it "that pays outside the wallet is not imported by importtx" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        createMain home
+        keys <- writeKeyFile home
+        _ <- answer home (outsideSweep home keys) []
+        (errorOf <$> hwJson home ["importtx", home </> "sweep.json"] [])
+          `shouldReturn` Right "The transaction does not involve this wallet"
+
+    -- No key of the wallet signs it: the mnemonic would be typed for nothing
+    it "that pays outside the wallet is refused by signtx, before the mnemonic is asked" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        createMain home
+        keys <- writeKeyFile home
+        _ <- answer home (outsideSweep home keys) []
+        run <- hw home ["signtx", "--input", home </> "sweep.json", "--output", home </> "signed.json"] seedOnce
+        run `shouldSatisfy` printed "The transaction does not involve this wallet"
+        run `shouldNotSatisfy` askedMnemonic
+
+    it "that pays outside the wallet is refused an --account to sign it" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        createMain home
+        keys <- writeKeyFile home
+        _ <- answer home (outsideSweep home keys) []
+        (errorOf <$> hwJson home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.json", "--prvkeys", keys, "--account", "main"] [])
+          `shouldReturn` Right "The transaction does not involve the account main"
+
+    -- The file of an earlier hw names no network
+    it "that pays outside the wallet is not signed from the file of an earlier hw, which names no network" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        keys <- writeKeyFile home
+        _ <- answer home (outsideSweep home keys) []
+        written <- readTxFile (home </> "sweep.json")
+        Json.encodeFile (home </> "old.json") (txFileData written)
+        (errorOf <$> hwJson home ["signsweep", "--input", home </> "old.json", "--output", home </> "signed.json", "--prvkeys", keys] [])
+          `shouldReturn` Right "The file names no network, as those of an earlier hw: prepare the transaction again"
+
+    -- main and second, two accounts of the test wallet, each with its first
+    -- receiving address
+    it "that pays two accounts asks which one, and is of the one --account names" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        createMain home
+        _ <- answer home ["createacc", "second"] seedTwice
+        mainAddr <- receiveFor home "main"
+        secondAddr <- receiveFor home "second"
+        keys <- writeKeyFile home
+        let sweep = ["preparesweep", "--prvkeys", keys, "--sweepto", mainAddr, "--sweepto", secondAddr]
+        (errorOf <$> hwJson home sweep []) `shouldReturn` Right "Specify which account to use"
+        (fmap dBAccountName . accountOf <$> hwJson home (sweep <> ["--account", "second"]) []) `shouldReturn` Right "second"
+
+    -- main is on Bitcoin, and cash on Bitcoin Cash
+    it "that pays accounts of several networks is refused" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        createMain home
+        _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
+        mainAddr <- receiveFor home "main"
+        cashAddr <- receiveFor home "cash"
+        keys <- writeKeyFile home
+        (errorOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", mainAddr, "--sweepto", cashAddr] [])
+          `shouldReturn` Right "The sweep pays accounts of several networks"
+
+    it "that pays the wallet is refused a --network other than the one of its account" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        keys <- writeKeyFile home
+        (errorOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0), "--network", "bch"] [])
+          `shouldReturn` Right "The sweep pays an account on btc, not on the --network bch"
+  where
+    -- The sweep of the old key to another wallet, written to sweep.json
+    outsideSweep home keys =
+      ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json"]
 
 {- Listings -}
 

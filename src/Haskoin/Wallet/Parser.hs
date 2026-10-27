@@ -68,9 +68,8 @@ data Command
     CommandCoins !(Maybe Text) !Bool !Page
   | CommandLockCoin !OutPoint
   | CommandUnlockCoin !OutPoint
-  | -- | The nosigHash of a pending transaction, or the file of a signed one,
-    -- and the network it is for
-    CommandSendTx !(Maybe TxHash) !(Maybe FilePath) !(Maybe Network)
+  | -- | The nosigHash of a pending transaction, or the file of a signed one
+    CommandSendTx !(Maybe TxHash) !(Maybe FilePath)
   | -- | The account, or every one, and whether to sync from the start
     CommandSync !(Maybe Text) !Bool
   | -- | The file of the copy, or none for the backups directory of hw
@@ -149,6 +148,8 @@ data SignMsg = SignMsg
 -- | The options of preparesweep
 data PrepareSweep = PrepareSweep
   { account :: !(Maybe Text),
+    -- | The network of a sweep that pays no account of the wallet
+    network :: !(Maybe Network),
     -- | The private keys of the addresses swept, if at hand
     keys :: !(Maybe KeySource),
     sweepFrom :: ![Text],
@@ -1088,7 +1089,6 @@ sendTxParser = do
         CommandSendTx
           <$> optional nosigHashArg
           <*> inputFileMaybeOption
-          <*> networkMaybeOption
   info cmd $
     progDesc "Send (upload) a signed transaction to the network"
       <> footer
@@ -1117,10 +1117,9 @@ held and is sent as by its NOSIGHASH: marked as online, its raw transaction
 stored. One the wallet does not hold, a sweep of outside coins for instance,
 is only checked and uploaded, and nothing in the wallet is updated.
 
-The network of a file is the one it names, as hw writes them. A --network given
-must be that network, and the network of the account of a pending transaction.
-Only the file of an earlier hw, which names none, needs --network when the
-wallet does not hold its transaction.
+The network of a file is the one it names, as hw writes them, and that of the
+account of a pending transaction. The file of an earlier hw names none, and is
+prepared again to be sent when the wallet does not hold its transaction.
 |]
 
 {- Sync Parser -}
@@ -1246,6 +1245,7 @@ prepareSweepParser = do
   let options =
         PrepareSweep
           <$> accountOption
+          <*> networkMaybeOption
           <*> prvKeysMaybeOption
           <*> many sweepFromOption
           <*> some sweepToOption -- some: at least one
@@ -1269,10 +1269,14 @@ case for this command is to migrate an old wallet to a new mnemonic. You can
 send the funds to 1 or multiple addresses, in this wallet or not. You can use
 the shorthand format -t ADDR1 -t ADDR2 to specify the --sweepto addresses.
 
-A sweep that pays or spends an address of this wallet is stored as a pending
-transaction, to be signed with `signsweep` by its nosigHash. A sweep that does
-not involve this wallet at all is only written to the --output file, which is
-then required, and signed from that file.
+A sweep that pays an address of this wallet is of the account of that address,
+found without --account unless the sweep pays several accounts, on its network.
+It is stored as a pending transaction, to be signed with `signsweep` by its
+nosigHash, and written to the --output file when one is given.
+
+A sweep that pays no address of this wallet needs no account, even in a wallet
+that has none: hw is then a utility. It needs the --network it is for and an
+--output file, which names the network and is signed from there.
 |]
 
 sweepFromOption :: Parser Text
@@ -1317,7 +1321,8 @@ are passed in a separate --prvkeys file, or typed on the terminal without echo
 with --prvkeys - or when no file is given. The sweep transaction can be
 referenced by its nosigHash if it exists in the wallet, or you can pass it as a
 file with --input and --output, in which case it need not involve this wallet
-at all.
+at all. A sweep outside the wallet needs no account: it is signed on the network
+its file names. The file of an earlier hw names none, and is prepared again.
 |]
 
 -- | The private keys: a file, or - for the terminal

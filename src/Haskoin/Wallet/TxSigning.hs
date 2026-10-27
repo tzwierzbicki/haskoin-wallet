@@ -23,6 +23,7 @@
 -- 5. reports the signed transaction with the 'TxInfo' of the signed bytes.
 module Haskoin.Wallet.TxSigning
   ( parseTxSignData,
+    parseOutsideTxSignData,
     signWalletTx,
     verifySignedTx,
     SpentCoin (..),
@@ -61,9 +62,22 @@ import Numeric.Natural (Natural)
 -- the signing data is not consistent, or when an input or output is at an
 -- address the network cannot write.
 parseTxSignData :: Network -> Ctx -> XPubKey -> TxSignData -> Either String TxInfo
-parseTxSignData net ctx accountPub tsd = do
+parseTxSignData net ctx accountPub = parseAs net ctx (Just accountPub)
+
+-- | The transaction of signing data that involves no account of the
+-- wallet, as a sweep between outside addresses: its summary, as
+-- 'parseTxSignData' gives it, with every input and output another
+-- wallet's. The paths it may have are those of an account the wallet does
+-- not have.
+parseOutsideTxSignData :: Network -> Ctx -> TxSignData -> Either String TxInfo
+parseOutsideTxSignData net ctx = parseAs net ctx Nothing
+
+-- | The transaction of signing data, as the account of the public key
+-- sees it, or as an outsider does without one
+parseAs :: Network -> Ctx -> Maybe XPubKey -> TxSignData -> Either String TxInfo
+parseAs net ctx accountPubM tsd = do
   coins <- spentCoins net ctx tsd
-  summary <- summarize net ctx accountPub tsd coins
+  summary <- summarize net ctx accountPubM tsd coins
   let tx = tsd.txSignDataTx
       txid = if isSigned tx then Just (txHash tx) else Nothing
   return $ TxInfo summary $ Pending $ PendingStatus (nosigHash tx) txid False False
@@ -86,7 +100,7 @@ signWalletTx net ctx tsd accountKey = do
   when (isSigned tsd.txSignDataTx) $ Left "The transaction is already signed"
   let accountPub = deriveXPubKey ctx accountKey
   coins <- spentCoins net ctx tsd
-  summary <- summarize net ctx accountPub tsd coins
+  summary <- summarize net ctx (Just accountPub) tsd coins
   -- The builder refuses a fee rate of zero; the signer checks the fee itself
   when (summary.summaryFee == 0) $ Left "The transaction pays no fee"
   signedTx <- signInputs net ctx accountKey summary.summaryMyInputs tsd.txSignDataTx coins
@@ -144,10 +158,12 @@ walletSigHash net
 {- Summary -}
 
 -- | The summary of the transaction of the signing data: the inputs and
--- outputs that are the wallet's, told by the paths, the fee, the amount and
--- the size, that of the bytes once signed and an estimate before
-summarize :: Network -> Ctx -> XPubKey -> TxSignData -> [SpentCoin] -> Either String TxSummary
-summarize net ctx accountPub tsd coins = do
+-- outputs that are the wallet's, told by the paths and the public key of
+-- the account, the fee, the amount and the size, that of the bytes once
+-- signed and an estimate before. Without the account, no input or output
+-- is the wallet's.
+summarize :: Network -> Ctx -> Maybe XPubKey -> TxSignData -> [SpentCoin] -> Either String TxSummary
+summarize net ctx accountPubM tsd coins = do
   when (null coins) $ Left "The transaction has no inputs"
   when (null tx.outputs) $ Left "The transaction has no outputs"
   when (length (nub outpoints) /= length coins) $
@@ -219,15 +235,17 @@ summarize net ctx accountPub tsd coins = do
     coinsValue :: [SpentCoin] -> Natural
     coinsValue spent = sum $ fromIntegral . (.value) <$> spent
     -- The wallet addresses of the paths, each path once, and all of them
-    -- present in the transaction
+    -- present in the transaction; none without the account
     pathAddresses :: String -> [SoftPath] -> [Address] -> Either String (Map Address SoftPath)
-    pathAddresses err paths present = do
-      let addresses =
-            Map.fromList
-              [(xPubAddr ctx (derivePubPath ctx path accountPub), path) | path <- paths]
-      unless (Map.size addresses == length paths && all (`elem` present) (Map.keys addresses)) $
-        Left err
-      return addresses
+    pathAddresses err paths present = case accountPubM of
+      Nothing -> return Map.empty
+      Just accountPub -> do
+        let addresses =
+              Map.fromList
+                [(xPubAddr ctx (derivePubPath ctx path accountPub), path) | path <- paths]
+        unless (Map.size addresses == length paths && all (`elem` present) (Map.keys addresses)) $
+          Left err
+        return addresses
 
 -- | The size the builder estimated, from the kinds of the coins and the
 -- scripts of the outputs. The signing data does not say whether a P2PKH

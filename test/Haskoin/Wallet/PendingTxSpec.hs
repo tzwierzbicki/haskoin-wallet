@@ -570,13 +570,14 @@ sendingFileSpec ctx =
         liftIO $ readIORef published `shouldReturn` [txSignDataTx signed]
         pendingTxPage ctx accId (Page 5 0) `dbShouldBeE` []
         lift (hasRawTx (txHash (txSignDataTx signed))) `dbShouldBeE` False
-    it "needs the network of a transaction the wallet does not hold" $
+    -- As in the file of an earlier hw
+    it "refuses a transaction the wallet does not hold, without its network" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
         unsigned <- unsignedPayment ctx cfg accId
         (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
         lift $
-          dbShouldFailWith "The file names no network: give the --network of a transaction the wallet does not hold" $
+          dbShouldFailWith "The file names no network, as those of an earlier hw: prepare the transaction again" $
             sendSigned ctx (const (toStore emptyStore)) Nothing signed
     it "refuses a transaction the wallet does not hold whose signatures do not check out" $
       inDatabaseE $ do
@@ -736,14 +737,14 @@ accountOfTxSpec :: Ctx -> Spec
 accountOfTxSpec ctx =
   describe "The account of a transaction to sign, review or import" $ do
     let cfg = def :: Config
-        nameOf = fmap (dBAccountName . snd)
+        nameOf = fmap (fmap (dBAccountName . snd))
     it "is the account that holds it pending" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "main"
         _ <- testNewAcc2 ctx "savings"
         unsigned <- unsignedPayment ctx cfg accId
         _ <- importPendingTx btc ctx accId unsigned
-        nameOf (transactionAccount ctx Nothing Nothing unsigned) `dbShouldBeE` "main"
+        nameOf (transactionAccount ctx Nothing Nothing unsigned) `dbShouldBeE` Just "main"
 
     it "refuses another --account than the one that holds it pending" $
       inDatabaseE $ do
@@ -769,7 +770,7 @@ accountOfTxSpec ctx =
         (accId, _) <- testNewAcc ctx "main"
         _ <- testNewAcc2 ctx "savings"
         unsigned <- unsignedPayment ctx cfg accId
-        nameOf (transactionAccount ctx Nothing Nothing unsigned) `dbShouldBeE` "main"
+        nameOf (transactionAccount ctx Nothing Nothing unsigned) `dbShouldBeE` Just "main"
 
     it "refuses an --account it does not involve" $
       inDatabaseE $ do
@@ -780,27 +781,29 @@ accountOfTxSpec ctx =
           dbShouldFailWith "The transaction does not involve the account savings" $
             transactionAccount ctx (Just "savings") Nothing unsigned
 
-    -- An account on Bitcoin and one on Bitcoin Cash: the network of the
-    -- file chooses between them, and without it the user does
-    it "is the account on the network of its file, when it involves none" $
+    it "refuses a network other than that of the account it involves" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "main"
+        unsigned <- unsignedPayment ctx cfg accId
+        lift $
+          dbShouldFailWith "The transaction involves an account of another network" $
+            transactionAccount ctx Nothing (Just bch) unsigned
+
+    -- An account on Bitcoin and one on Bitcoin Cash, on either network
+    it "is none when it involves no account" $
       inDatabaseE $ do
         _ <- testNewAcc ctx "main"
         _ <- testNewAccBch ctx "cash"
-        nameOf (transactionAccount ctx Nothing (Just bch) (outsideTx ctx)) `dbShouldBeE` "cash"
-        nameOf (transactionAccount ctx Nothing (Just btc) (outsideTx ctx)) `dbShouldBeE` "main"
-        lift $ dbShouldFailWith "Specify which account to use" $ transactionAccount ctx Nothing Nothing (outsideTx ctx)
+        nameOf (transactionAccount ctx Nothing (Just bch) (outsideTx ctx)) `dbShouldBeE` Nothing
+        nameOf (transactionAccount ctx Nothing Nothing (outsideTx ctx)) `dbShouldBeE` Nothing
 
-    it "refuses an --account of another network than its file's, when it involves none" $
-      inDatabaseE $ do
-        _ <- testNewAcc ctx "main"
-        _ <- testNewAccBch ctx "cash"
-        lift $
-          dbShouldFailWith "The account main is not on the network of the transaction" $
-            transactionAccount ctx (Just "main") (Just bch) (outsideTx ctx)
-
-    it "refuses the network of a file when the wallet has no account on it" $
+    it "refuses an --account when it involves no account" $
       inDatabaseE $ do
         _ <- testNewAcc ctx "main"
         lift $
-          dbShouldFailWith "The wallet has no account on btctest, the network of the transaction" $
-            transactionAccount ctx Nothing (Just btcTest) (outsideTx ctx)
+          dbShouldFailWith "The transaction does not involve the account main" $
+            transactionAccount ctx (Just "main") (Just btc) (outsideTx ctx)
+
+    it "is none in a wallet without accounts" $
+      inDatabaseE $
+        nameOf (transactionAccount ctx Nothing (Just btcTest) (outsideTx ctx)) `dbShouldBeE` Nothing

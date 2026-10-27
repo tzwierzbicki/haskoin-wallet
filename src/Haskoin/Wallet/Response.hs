@@ -43,6 +43,9 @@ data Response
     ResponseTxs !DBAccount ![TxInfo]
   | -- | A transaction of the account
     ResponseTx !DBAccount !TxInfo
+  | -- | A transaction outside the wallet, a sweep between outside
+    -- addresses, on its network
+    ResponseOutsideTx !Network !TxInfo
   | -- | A transaction the wallet does not hold, sent on its network
     ResponseSentTx !Network !TxHash
   | -- | A pending transaction deleted, by its nosigHash, with the number of
@@ -83,6 +86,7 @@ instance ToJSON Response where
       typed "addresses" ["account" .= acc, "addresses" .= (uncurry addressWithSpendable <$> addrs)]
     ResponseTxs acc txs -> typed "txs" ["account" .= acc, "txs" .= (marshalValue (accountNetwork acc) <$> txs)]
     ResponseTx acc info -> typed "tx" ["account" .= acc, "tx" .= marshalValue (accountNetwork acc) info]
+    ResponseOutsideTx net info -> typed "outsidetx" ["network" .= net.name, "tx" .= marshalValue net info]
     ResponseSentTx net txid -> typed "senttx" ["network" .= net.name, "txid" .= txid]
     ResponseDeleteTx nosigH coins addrs ->
       typed "deletetx" ["nosighash" .= nosigH, "freedcoins" .= coins, "freedaddrs" .= addrs]
@@ -114,6 +118,9 @@ instance FromJSON Response where
       "tx" -> do
         acc <- o .: "account"
         ResponseTx acc <$> (unmarshalValue (accountNetwork acc) =<< o .: "tx")
+      "outsidetx" -> do
+        net <- network o
+        ResponseOutsideTx net <$> (unmarshalValue net =<< o .: "tx")
       "senttx" -> ResponseSentTx <$> network o <*> o .: "txid"
       "deletetx" -> ResponseDeleteTx <$> o .: "nosighash" <*> o .: "freedcoins" <*> o .: "freedaddrs"
       "coins" -> do
