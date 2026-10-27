@@ -9,6 +9,9 @@
 -- The network charges fees by weight, where the bytes of the witnesses
 -- count a quarter: a transaction with SegWit inputs at a given rate per
 -- byte pays more per virtual byte than that rate.
+--
+-- The fee rate and the dust limit a transaction is built with are checked
+-- here too, for the builders of payments and of sweeps.
 module Haskoin.Wallet.TxSize
   ( InputSize (..),
     inputSize,
@@ -19,12 +22,17 @@ module Haskoin.Wallet.TxSize
     p2pkhOutputSize,
     txSize,
     varIntSize,
+    maxFeeRate,
+    checkFeeRateAndDust,
   )
 where
 
+import Control.Monad (when)
 import qualified Data.ByteString as BS
 import Data.Word (Word64)
 import Haskoin (ScriptOutput (..))
+import Haskoin.Wallet.Amounts (maxMoney)
+import Numeric.Natural (Natural)
 
 {- Inputs -}
 
@@ -114,3 +122,22 @@ varIntSize n
   | n <= 0xffff = 3
   | n <= 0xffffffff = 5
   | otherwise = 9
+
+{- Rates -}
+
+-- | The highest fee rate hw builds a transaction at, in satoshis per byte:
+-- 32 bits, so that a fee, the rate times a size, stays within the 64 bits
+-- of an amount
+maxFeeRate :: Natural
+maxFeeRate = 2 ^ (32 :: Int) - 1
+
+-- | Refuse a fee rate or a dust limit that a transaction cannot be built
+-- with: a rate of zero, which no node relays, a rate above 'maxFeeRate',
+-- or a dust limit above the 21 million bitcoins there will ever be. The
+-- command line takes any number, and the builders count in 64 bits: a
+-- rate of 2^64 wrapped around to zero.
+checkFeeRateAndDust :: Natural -> Natural -> Either String ()
+checkFeeRateAndDust feeByte dust = do
+  when (feeByte == 0) $ Left "The fee rate must be at least 1 satoshi per byte"
+  when (feeByte > maxFeeRate) $ Left $ "The fee rate must be at most " <> show maxFeeRate <> " satoshis per byte"
+  when (toInteger dust > maxMoney) $ Left "The dust limit must be at most the 21 million bitcoins there will ever be"

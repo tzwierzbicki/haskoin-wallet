@@ -38,7 +38,7 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.PendingTx (changeAddress)
 import Haskoin.Wallet.RawTx
 import Haskoin.Wallet.TxSignData
-import Haskoin.Wallet.TxSize (outputSize, p2pkhOutputSize)
+import Haskoin.Wallet.TxSize (checkFeeRateAndDust, outputSize, p2pkhOutputSize)
 import Haskoin.Wallet.Util (addrToTextE, randomShuffle, safeSubtract)
 import Numeric.Natural (Natural)
 import System.Random (StdGen, splitGen)
@@ -165,7 +165,7 @@ buildWalletTx ::
 buildWalletTx net ctx gen strategy found recipients feeByte dust payer coinControl =
   flip evalStateT gen $ do
     when (null recipients) $ throwError "No recipients provided"
-    when (feeByte == 0) $ throwError "The fee rate must be at least 1 satoshi per byte"
+    lift $ checkFeeRateAndDust feeByte dust
     -- The coin selection draws from a generator of its own; the outputs are
     -- shuffled with what is left
     drawGen <- state splitGen

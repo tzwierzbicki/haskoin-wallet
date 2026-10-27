@@ -38,7 +38,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Account
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Util (Page (Page), addrToTextE, textToAddrE)
+import Haskoin.Wallet.Util (Page (Page), addrToTextE, pageBounds, textToAddrE)
 import Numeric.Natural (Natural)
 
 {- The two chains -}
@@ -293,14 +293,15 @@ usedAddresses addrs = do
 
 -- | A page of the addresses of a chain of the account, newest first
 addressPage :: (MonadUnliftIO m) => DBAccountId -> AddrType -> Page -> DB m [DBAddress]
-addressPage accId addrType (Page lim off) = do
+addressPage accId addrType page = do
+  let (lim, off) = pageBounds page
   rows <- select . from $ \a -> do
     where_ $
       a ^. DBAddressAccount ==. val accId
         &&. a ^. DBAddressInternal ==. val (isInternal addrType)
     orderBy [desc (a ^. DBAddressIndex)]
-    limit $ fromIntegral lim
-    offset $ fromIntegral off
+    limit lim
+    offset off
     return a
   return $ entityVal <$> rows
 

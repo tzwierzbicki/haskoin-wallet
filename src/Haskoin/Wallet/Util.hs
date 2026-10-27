@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Small helpers with no meaning of their own in the wallet, shared by
@@ -14,6 +15,7 @@ import qualified Data.Aeson.Encode.Pretty as Pretty
 import Data.Aeson.Types (Parser)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
+import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isJust)
@@ -46,6 +48,15 @@ data Page = Page
   }
   deriving (Eq, Show)
 
+-- | The limit and the offset of a page, as a query of the database takes
+-- them, in 64 bits. A larger number is as good as the largest one, past
+-- every row, rather than wrapping around: an offset of 2^64 read as 0
+-- showed the first page.
+pageBounds :: (Num a) => Page -> (a, a)
+pageBounds (Page lim off) = (bounded lim, bounded off)
+  where
+    bounded n = fromIntegral (min n (fromIntegral (maxBound :: Int64)))
+
 {- Errors -}
 
 -- | The result of an IO action that may fail, as an error of the monad
@@ -61,9 +72,10 @@ addrToTextE :: Network -> Address -> Either String Text
 addrToTextE net a =
   maybeToEither "Invalid Address in addrToTextE" (addrToText net a)
 
+-- | An address as the user types it, which must be one of the network
 textToAddrE :: Network -> Text -> Either String Address
 textToAddrE net a =
-  maybeToEither "Invalid Address in textToAddrE" (textToAddr net a)
+  maybeToEither ("The address " <> Text.unpack a <> " is not valid on " <> net.name) (textToAddr net a)
 
 -- | An address as it is written in a message or on the screen, or a
 -- mention of the mismatch when it cannot be written on the network

@@ -45,7 +45,7 @@ import Haskoin.Wallet.Store
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSigning (coinSigInput, parseTxSignData, spentCoins, verifySignedTx)
-import Haskoin.Wallet.TxSize (InputSize, inputSize, outputSize, txSize, uncompressedKeyInput)
+import Haskoin.Wallet.TxSize (InputSize, checkFeeRateAndDust, inputSize, outputSize, txSize, uncompressedKeyInput)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import System.Random (StdGen)
@@ -177,7 +177,7 @@ buildSweepSignData ::
 buildSweepSignData net ctx gen found sweepTo feeByte dust = do
   when (null found.coins) $ Left "There are no coins to sweep in those addresses"
   when (null sweepTo) $ Left "No addresses to sweep to"
-  when (feeByte == 0) $ Left "The fee rate must be at least 1 satoshi per byte"
+  checkFeeRateAndDust feeByte dust
   scripts <- mapM scriptOf sweepTo
   size <- sweepTxSize net ctx found scripts
   let total = sum $ (.value) <$> found.coins

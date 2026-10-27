@@ -10,6 +10,7 @@ module Haskoin.Wallet.Amounts
     showUnit,
     readAmount,
     showAmount,
+    maxMoney,
   )
 where
 

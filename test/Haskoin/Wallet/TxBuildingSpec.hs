@@ -394,11 +394,22 @@ shuffleSpec ctx =
 errorSpec :: Ctx -> Spec
 errorSpec ctx =
   describe "Errors" $ do
+    -- 350000 paid from a coin of 400000, at a fee rate and a dust limit
+    let payAt feeByte dust =
+          buildWalletTx btc ctx (mkStdGen 0) LargestFirst (wallet (coinsWorth ctx [400000]) []) [(otherAddr 0, 350000)] feeByte dust SenderPays []
     it "fails without recipients" $
       pay ctx [400000] [] `shouldBe` Left "No recipients provided"
     it "fails at a fee rate of zero" $
-      buildWalletTx btc ctx (mkStdGen 0) LargestFirst (wallet (coinsWorth ctx [400000]) []) [(otherAddr 0, 350000)] 0 546 SenderPays []
-        `shouldBe` Left "The fee rate must be at least 1 satoshi per byte"
+      payAt 0 546 `shouldBe` Left "The fee rate must be at least 1 satoshi per byte"
+    -- A rate of 2^64 wrapped around to zero in the 64 bits of the builder
+    it "fails at a fee rate above 2^32 - 1 satoshis per byte" $
+      payAt 4294967296 546 `shouldBe` Left "The fee rate must be at most 4294967295 satoshis per byte"
+    -- 226 bytes at 4294967295 satoshis each, far more than the coin, and
+    -- far less than 2^64
+    it "counts the fee at the highest rate without wrapping around" $
+      payAt 4294967295 546 `shouldBe` Left "The coins do not cover the amount and the fee"
+    it "fails at a dust limit above the 21 million bitcoins there will ever be" $
+      payAt 10 2100000000000001 `shouldBe` Left "The dust limit must be at most the 21 million bitcoins there will ever be"
     it "fails when the coins do not cover the amount and the fee" $
       -- 100000 - 1480 < 350000 + 440
       pay ctx [100000] [(otherAddr 0, 350000)] `shouldBe` Left "The coins do not cover the amount and the fee"

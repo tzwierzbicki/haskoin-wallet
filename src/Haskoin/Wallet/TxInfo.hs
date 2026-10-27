@@ -453,7 +453,8 @@ repsertSummary net accId tid ref summary = do
 -- best block, none for a dead transaction, and the labels of their
 -- addresses are those of today.
 txsPage :: (MonadUnliftIO m) => DBAccountId -> Page -> ExceptT String (DB m) [TxInfo]
-txsPage accId (Page lim off) = do
+txsPage accId page = do
+  let (lim, off) = pageBounds page
   acc <- getAccountById accId
   let net = accountNetwork acc
   rows <-
@@ -461,8 +462,8 @@ txsPage accId (Page lim off) = do
       where_ $
         t ^. DBTxInfoAccount ==. val accId
       orderBy [asc (t ^. DBTxInfoBlockRef)]
-      limit $ fromIntegral lim
-      offset $ fromIntegral off
+      limit lim
+      offset off
       return (t ^. DBTxInfoTxid, t ^. DBTxInfoBlockRef, t ^. DBTxInfoDead, t ^. DBTxInfoBlob)
   heightM <- bestHeight net
   forM rows $ \(Value tidBytes, Value refBytes, Value dead, Value blob) -> do

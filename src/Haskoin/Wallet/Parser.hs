@@ -343,9 +343,9 @@ enough rolls to mix with every piece as well, and uses no roll twice.
     f s =
       case readNatural s of
         Just n ->
-          if n >= 2 && n <= 12
+          if n >= 1 && n <= 12
             then Right n
-            else Left "The --split value has to be between 2 and 12"
+            else Left "The --split value has to be between 1 and 12"
         Nothing -> Left "Could not parse the --split option"
 
 {- CreateAcc Parser -}
@@ -433,14 +433,20 @@ accountGapOption =
       <> help
         [r|
 How many accounts in a row without a payment end the search. One is the rule
-of BIP44; more covers accounts created on a signer that were never paid.
+of BIP44; more covers accounts created on a signer that were never paid. At
+most 100.
 |]
   where
     accountGap :: String -> Either String Natural
     accountGap arg =
       case readNatural (cs arg) of
-        Just n | n >= 1 -> Right n
-        _ -> Left "The account gap is a number of accounts, at least 1"
+        Just n | n >= 1 && n <= maxAccountGap -> Right n
+        _ -> Left $ "The account gap is a number of accounts, from 1 to " <> show maxAccountGap
+    -- Every account searched is a scan of its receiving chain at the store.
+    -- A larger gap keeps recover asking about accounts nobody created: 100
+    -- is ten times the default.
+    maxAccountGap :: Natural
+    maxAccountGap = 100
 
 {- DeleteAcc Parser -}
 

@@ -57,7 +57,7 @@ import Haskoin.Wallet.Account (accountNetwork, getAccountById)
 import Haskoin.Wallet.PendingTx (lockedOutpoints, userLockedOutpoints)
 import Haskoin.Wallet.RawTx (lookupRawTx)
 import Haskoin.Wallet.TxInfo (MyInputs (..), TxSummary (..), liveSummary, ownTransaction)
-import Haskoin.Wallet.Util (Page (Page))
+import Haskoin.Wallet.Util (Page, pageBounds)
 import Numeric.Natural (Natural)
 
 {- Coins as the user sees them -}
@@ -219,7 +219,8 @@ data CoinFilter = AllCoins | LockedCoins
 -- outputs of one transaction for instance, follow the order of their
 -- outpoints, so that no coin shows on two pages.
 coinPage :: (MonadUnliftIO m) => Network -> DBAccountId -> CoinFilter -> Page -> ExceptT String (DB m) [JsonCoin]
-coinPage net accId shown (Page lim off) = do
+coinPage net accId shown page = do
+  let (lim, off) = pageBounds page
   rules <- spendingOf net accId
   let lockedOnly = case shown of
         AllCoins -> []
@@ -228,7 +229,7 @@ coinPage net accId shown (Page lim off) = do
     lift $
       P.selectList
         ((DBCoinAccount P.==. accId) : lockedOnly)
-        [P.Asc DBCoinBlockRef, P.Asc DBCoinOutpoint, P.LimitTo (fromIntegral lim), P.OffsetBy (fromIntegral off)]
+        [P.Asc DBCoinBlockRef, P.Asc DBCoinOutpoint, P.LimitTo lim, P.OffsetBy off]
   mapM (toJsonCoin rules . P.entityVal) rows
 
 {- Spending -}

@@ -652,12 +652,9 @@ cmdSignTx ::
   IO Response
 cmdSignTx ctx cfg nameM nosigHM inputM outputM splitMnemIn =
   runDBResponse cfg $ do
-    (tsd, online) <- parseSignInput nosigHM inputM outputM
-    when online $
-      throwError "The transaction is already online"
+    (tsd, (accId, acc)) <- transactionToSign nameM nosigHM inputM outputM
     when (isSigned (txSignDataTx tsd)) $
       throwError "The transaction is already signed"
-    (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         idx = fromIntegral $ dBAccountIndex acc
         accPub = accountXPubKey ctx acc
@@ -672,27 +669,40 @@ cmdSignTx ctx cfg nameM nosigHM inputM outputM splitMnemIn =
     for_ outputM $ \o -> liftEitherIO $ writeJsonFile o $ Json.toJSON newSignData
     return $ ResponseTx acc txInfoL
 
-parseSignInput ::
+-- | The transaction signtx and signsweep sign, with the account that signs
+-- it. A pending transaction, by its nosigHash, is signed by the account
+-- that holds it: --account may only name that one. The transaction of an
+-- --input file is signed by the account --account names, or the only one.
+-- A transaction already sent is not signed again.
+transactionToSign ::
   (MonadUnliftIO m) =>
+  Maybe Text ->
   Maybe TxHash ->
   Maybe FilePath ->
   Maybe FilePath ->
-  ExceptT String (DB m) (TxSignData, Bool)
-parseSignInput nosigHM inputM outputM =
+  ExceptT String (DB m) (TxSignData, (DBAccountId, DBAccount))
+transactionToSign nameM nosigHM inputM outputM =
   case (nosigHM, inputM, outputM) of
     (Nothing, Nothing, _) ->
-      throwError
-        "Provide either a NOSIGHASH or both a --input file and a --output file"
+      throwError "Give the NOSIGHASH of a pending transaction, or an --input file and an --output file"
     (Just _, Just _, _) ->
-      throwError "Can not specify both a NOSIGHASH and a --input file"
+      throwError "Can not specify both a NOSIGHASH and an --input file"
     (_, Just _, Nothing) ->
-      throwError "When using a --input file, also provide a --output file"
+      throwError "Give an --output file with the --input file"
     (Just h, _, _) -> do
       held <- requirePendingTx h
-      return (held.pendingTxData, held.pendingTxOnline)
+      when held.pendingTxOnline $
+        throwError "The transaction is already online"
+      let accId = held.pendingTxAccount
+      acc <- getAccountById accId
+      forM_ nameM $ \name ->
+        when (name /= dBAccountName acc) $
+          throwError $ "The transaction is pending in the account " <> cs (dBAccountName acc) <> ", not in " <> cs name
+      return (held.pendingTxData, (accId, acc))
     (_, Just i, _) -> do
       tsd <- liftEitherIO (readJsonFile i)
-      return (tsd, False)
+      account <- getAccountByName nameM
+      return (tsd, account)
 
 cmdCoins :: Config -> Maybe Text -> Bool -> Page -> IO Response
 cmdCoins cfg nameM locked page =
@@ -778,8 +788,9 @@ cmdBackup cfg fileM =
 cmdVersion :: Config -> IO Response
 cmdVersion cfg =
   runDBResponse cfg $ do
-    dbVersion <- databaseVersion
-    return $ ResponseVersion (cs $ showVersion Paths.version) (maybe "none" (cs . show) dbVersion)
+    -- Every command migrates the database first, which gives it a version
+    dbVersion <- liftMaybe "The database has no format version" =<< databaseVersion
+    return $ ResponseVersion (cs $ showVersion Paths.version) (cs (show dbVersion))
 
 {- Sweeps -}
 
@@ -808,9 +819,9 @@ cmdPrepareSweep ctx cfg nameM keysM sweepFromT sweepToT coins outputM feeByte du
     let net = accountNetwork acc
     -- Before the keys are typed, not after
     for_ outputM checkPathFree
-    secKeys <- maybe (return []) (readSecKeys terminal net) keysM
     sweepFrom <- liftEither $ mapM (textToAddrE net) sweepFromT
     sweepTo <- liftEither $ mapM (textToAddrE net) sweepToT
+    secKeys <- maybe (return []) (readSecKeys terminal net) keysM
     found <- fetchSweepCoins net ctx (webStore ctx cfg net) accId secKeys sweepFrom coins sweepTo
     gen <- liftIO initStdGen
     tsd <- liftEither $ buildSweepSignData net ctx gen found sweepTo feeByte dust
@@ -836,12 +847,9 @@ cmdSignSweep ::
   IO Response
 cmdSignSweep ctx cfg nameM nosigHM inputM outputM keysM =
   runDBResponse cfg $ do
-    (tsd, online) <- parseSignInput nosigHM inputM outputM
-    when online $
-      throwError "The transaction is already online"
+    (tsd, (accId, acc)) <- transactionToSign nameM nosigHM inputM outputM
     when (isSigned (txSignDataTx tsd)) $
       throwError "The transaction is already signed"
-    (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
     for_ outputM checkPathFree

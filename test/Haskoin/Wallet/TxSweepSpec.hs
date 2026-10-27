@@ -234,6 +234,15 @@ sweepBuilderSpec ctx =
       buildWith 10 745601 destinations `shouldBe` Left "Outputs are smaller than the dust value"
     it "refuses a fee rate of zero" $
       buildWith 0 546 destinations `shouldBe` Left "The fee rate must be at least 1 satoshi per byte"
+    -- A rate of 2^64 wrapped around to zero, and others to any fee
+    it "refuses a fee rate above 2^32 - 1 satoshis per byte" $
+      buildWith 4294967296 546 destinations `shouldBe` Left "The fee rate must be at most 4294967295 satoshis per byte"
+    -- 880 bytes at 4294967295 satoshis each, far more than the coins, and
+    -- far less than 2^64
+    it "counts the fee at the highest rate without wrapping around" $
+      buildWith 4294967295 546 destinations `shouldBe` Left "Could not find a sweep solution: fee is too large"
+    it "refuses a dust limit above the 21 million bitcoins there will ever be" $
+      buildWith 10 2100000000000001 destinations `shouldBe` Left "The dust limit must be at most the 21 million bitcoins there will ever be"
     it "refuses to sign a sweep without fee" $ do
       -- The wallet's coin of 500000 is swept in full
       let tx = spendingTx ctx [(txHash walletFunding, 0)] [(otherAddr 0, 500000)]

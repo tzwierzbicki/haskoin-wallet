@@ -9,6 +9,7 @@ import Control.Monad.Except (runExceptT)
 import Control.Monad.State (evalState, execState)
 import Data.Aeson (object, (.=))
 import Data.Aeson.Types (parseEither)
+import Data.Int (Int64)
 import Data.List (sort)
 import qualified Data.Map.Strict as Map
 import Data.String.Conversions (cs)
@@ -23,6 +24,7 @@ import Text.RawString.QQ (r)
 spec :: Spec
 spec = do
   jsonSpec
+  pageSpec
   errorSpec
   addressSpec
   numberSpec
@@ -59,11 +61,11 @@ addressSpec =
       addrToTextE btc (externalAddr 0) `shouldBe` Right "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"
       textToAddrE btc "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" `shouldBe` Right (externalAddr 0)
 
-    it "is not read from a text that is no address" $
-      textToAddrE btc "nonsense" `shouldBe` Left "Invalid Address in textToAddrE"
+    it "is not read from a text that is no address, which is named" $
+      textToAddrE btc "nonsense" `shouldBe` Left "The address nonsense is not valid on btc"
 
     it "is not read from the form of another network" $
-      textToAddrE btc bchExternalAddrText `shouldBe` Left "Invalid Address in textToAddrE"
+      textToAddrE btc bchExternalAddrText `shouldBe` Left ("The address " <> cs bchExternalAddrText <> " is not valid on btc")
 
     it "has a form on both Bitcoin and Bitcoin Cash when it pays a public key hash" $ do
       -- The same hash, written the way of each network
@@ -79,6 +81,17 @@ addressSpec =
     it "is written in a message as its text, or as an address of another network" $ do
       addrToString btc segwitAddr `shouldBe` "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
       addrToString bch segwitAddr `shouldBe` "an address of another network"
+
+pageSpec :: Spec
+pageSpec =
+  describe "A page of a listing, as the database takes it" $ do
+    it "has the limit and the offset typed" $
+      pageBounds (Page 5 20) `shouldBe` (5 :: Int64, 20)
+
+    -- Larger, they wrapped around: an offset of 2^64 showed the first page,
+    -- and a limit of 2^64 + 1 a single row
+    it "stops at the largest number of 64 bits, past every row, rather than wrapping around" $
+      pageBounds (Page (2 ^ (64 :: Int)) (2 ^ (64 :: Int))) `shouldBe` (9223372036854775807 :: Int64, 9223372036854775807)
 
 numberSpec :: Spec
 numberSpec =

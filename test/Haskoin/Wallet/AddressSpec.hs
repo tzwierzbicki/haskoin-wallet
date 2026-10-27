@@ -411,7 +411,7 @@ pathSpec =
       addrPath fixtureRow `shouldBe` Deriv :/ 0 :/ 3
       addrPath fixtureRow {dBAddressInternal = True} `shouldBe` Deriv :/ 1 :/ 3
       fromDBAddr btc fixtureRow `shouldBe` Right (externalAddr 3, Deriv :/ 0 :/ 3)
-      fromDBAddr btc fixtureRow {dBAddressAddress = "nonsense"} `shouldBe` Left "Invalid Address in textToAddrE"
+      fromDBAddr btc fixtureRow {dBAddressAddress = "nonsense"} `shouldBe` Left "The address nonsense is not valid on btc"
 
 derivingSpec :: Ctx -> Spec
 derivingSpec ctx =

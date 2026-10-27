@@ -51,6 +51,7 @@ spec = prepareContext $ \ctx -> do
   failureSpec ctx
   backupSpec
   receivingSpec ctx
+  listingSpec ctx
   signingSpec ctx
   paymentSpec ctx
   recoverSpec ctx
@@ -326,6 +327,16 @@ splitSpec =
         fromParts `shouldBe` whole
         (\(_, index, _) -> index) <$> fromParts `shouldBe` Right 0
 
+    -- One part is the whole mnemonic, as without --split
+    it "comes in 1 to 12 parts" $
+      withHome $ \home -> do
+        whole <- answer home ["mnemonic", "--split", "1"] []
+        whole `shouldSatisfy` \case ResponseMnemonic _ ws [] -> length ws == 12; _ -> False
+        forM_ ["0", "13"] $ \parts -> do
+          run <- hw home ["mnemonic", "--split", parts] []
+          runExit run `shouldBe` ExitFailure 1
+          runErr run `shouldSatisfy` Text.isInfixOf "The --split value has to be between 1 and 12"
+
     -- The rolls are asked once the entropy of the system is read. None are
     -- typed here, and no mnemonic is made without them.
     it "asks for dice rolls with --dice, and is not made without them" $
@@ -432,6 +443,15 @@ failureSpec ctx = do
         (errorOf <$> hwJson home ["createacc", "main"] [mnemonicWords testMnemonic]) `shouldReturn` Right "Cancelled: the input ended before the answer"
         (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right []
 
+    -- A rate of 2^64 wrapped around to zero: preparetx made a transaction
+    -- without fee, which signtx refused
+    it "refuses a fee rate past 32 bits, rather than wrapping around" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["preparetx", textOf (otherAddr 0), "0.0002", "--fee", "18446744073709551616"] [])
+          `shouldReturn` Right "The fee rate must be at most 4294967295 satoshis per byte"
+        (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+
     -- preparetx takes a change address before it chooses the coins, which
     -- do not cover the 100000 satoshis here. The failure undoes it, with
     -- everything else the command wrote.
@@ -534,11 +554,11 @@ failureSpec ctx = do
       withHome $ \home ->
         forM_ ["signtx", "signsweep"] $ \command -> do
           (errorOf <$> hwJson home [command] [])
-            `shouldReturn` Right "Provide either a NOSIGHASH or both a --input file and a --output file"
+            `shouldReturn` Right "Give the NOSIGHASH of a pending transaction, or an --input file and an --output file"
           (errorOf <$> hwJson home [command, nosig, "--input", home </> "unsigned.json", "--output", home </> "signed.json"] [])
-            `shouldReturn` Right "Can not specify both a NOSIGHASH and a --input file"
+            `shouldReturn` Right "Can not specify both a NOSIGHASH and an --input file"
           (errorOf <$> hwJson home [command, "--input", home </> "unsigned.json"] [])
-            `shouldReturn` Right "When using a --input file, also provide a --output file"
+            `shouldReturn` Right "Give an --output file with the --input file"
 
     it "refuse a missing --input file" $
       withHome $ \home ->
@@ -733,7 +753,7 @@ paymentSent ctx = ([OutPoint (txHash (payment ctx)) 0], [(20000, Right (otherAdd
 -- 50000 - 20000 - 2260 = 27740.
 signingSpec :: Ctx -> Spec
 signingSpec ctx = do
-  describe "A payment signed on the same computer" $
+  describe "A payment signed on the same computer" $ do
     -- signtx keeps the signed version in the wallet, which sendtx sends: it
     -- sends no transaction that is not signed
     it "is prepared, signed and sent by its nosigHash, and confirmed by a sync" $
@@ -748,6 +768,27 @@ signingSpec ctx = do
         (spendsAndPays ctx <$> published) `shouldBe` [paymentSent ctx]
         modifyIORef chain mine
         (accountsOf <$> hwJson home ["sync"] []) `shouldReturn` Right [("main", 0, 27740)]
+
+    -- The wallet has two accounts of the test seed, and the payment is
+    -- pending in main. Without --account, hw asked which account to use.
+    it "is signed by the account that holds it, without --account" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["createacc", "second"] seedTwice
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", textOf (otherAddr 0), "0.0002", "--account", "main"] []
+        signed <- txOf =<< answer home ["signtx", nosig] seedOnce
+        pendingState signed `shouldBe` Just (True, False)
+
+    -- The mnemonic of second would be typed for nothing: its key cannot
+    -- sign what main holds
+    it "is refused an --account that does not hold it, before the mnemonic is asked" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["createacc", "second"] seedTwice
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", textOf (otherAddr 0), "0.0002", "--account", "main"] []
+        run <- hw home ["signtx", nosig, "--account", "second"] seedOnce
+        run `shouldSatisfy` printed "The transaction is pending in the account main, not in second"
+        run `shouldNotSatisfy` askedMnemonic
 
   -- The signer holds the account and asks for its mnemonic; the online
   -- computer holds the same account, imported, and talks to the store
@@ -879,6 +920,17 @@ recoverSpec ctx =
         (accountsOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right []
         (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("main", 0, 0)]
 
+    -- Every account searched is a scan at the store
+    it "are looked for with an account gap from 1 to 100" $
+      withHome $ \home -> do
+        forM_ ["0", "101"] $ \gap -> do
+          run <- hw home ["recover", "--account-gap", gap] seedOnce
+          runExit run `shouldBe` ExitFailure 1
+          runErr run `shouldSatisfy` Text.isInfixOf "The account gap is a number of accounts, from 1 to 100"
+        -- 100 is taken: recover goes on to the store, out of reach here
+        run <- hw home ["recover", "--account-gap", "100"] seedOnce
+        run `shouldSatisfy` printed "The store at http://127.0.0.1:1/ could not be reached: the connection failed"
+
     -- The store of the test home refuses every connection, as on an offline
     -- computer, where the mnemonic would be typed for nothing
     it "are not looked for when the store is out of reach, which recover asks before the mnemonic" $
@@ -969,3 +1021,64 @@ sweepSpec ctx =
         run `shouldSatisfy` printed (alreadyExists (home </> "sweep.json"))
         runErr run `shouldNotSatisfy` Text.isInfixOf "Private keys"
 
+    -- The keys would be typed for nothing
+    it "is refused an address that is not one, before the keys are typed" $
+      withHome $ \home -> do
+        createMain home
+        run <- hw home ["preparesweep", "--prvkeys", "-", "--sweepto", "nonsense"] []
+        run `shouldSatisfy` printed "The address nonsense is not valid on btc"
+        runErr run `shouldNotSatisfy` Text.isInfixOf "Private keys"
+
+    -- A rate of 2^64 wrapped around to zero, and others to any fee
+    it "is refused a fee rate past 32 bits, rather than wrapping around" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        keys <- writeKeyFile home
+        (errorOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0), "--fee", "18446744073709551616"] [])
+          `shouldReturn` Right "The fee rate must be at most 4294967295 satoshis per byte"
+
+    -- The wallet has two accounts of the test seed, and the sweep is
+    -- pending in main
+    it "is signed by the account that holds it, without --account" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        createMain home
+        _ <- answer home ["createacc", "second"] seedTwice
+        _ <- answer home ["receive", "--account", "main"] []
+        keys <- writeKeyFile home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparesweep", "--account", "main", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0)] []
+        signed <- txOf =<< answer home ["signsweep", nosig, "--prvkeys", keys] []
+        pendingState signed `shouldBe` Just (True, False)
+
+{- Listings -}
+
+-- | How many rows a listing shows
+rowsOf :: Response -> Either String Int
+rowsOf (ResponseAddresses _ addrs) = Right (length addrs)
+rowsOf (ResponseTxs _ txs) = Right (length txs)
+rowsOf (ResponseCoins _ coins) = Right (length coins)
+rowsOf other = Left (show other)
+
+-- | The listings, each with one row in a synced home with a payment
+-- prepared: the address paid, the payment received, its coin, and the
+-- payment prepared
+listings :: [String]
+listings = ["addrs", "txs", "coins", "pendingtxs"]
+
+listingSpec :: Ctx -> Spec
+listingSpec ctx =
+  describe "A listing" $ do
+    -- 2^64 wrapped around to 0
+    it "shows nothing at an offset past 64 bits, rather than the first page" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", textOf (otherAddr 0), "0.0002"] []
+        forM_ listings $ \listing ->
+          (rowsOf <$> hwJson home [listing, "--offset", "18446744073709551616"] []) `shouldReturn` Right 0
+
+    -- 2^64 + 1 wrapped around to 1, and showed one address of the three
+    it "shows every row with a limit past 64 bits, rather than wrapping around" $
+      withHome $ \home -> do
+        createMain home
+        replicateM_ 3 $ answer home ["receive"] []
+        (rowsOf <$> hwJson home ["addrs", "--limit", "18446744073709551617"] []) `shouldReturn` Right 3

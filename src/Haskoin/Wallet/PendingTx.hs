@@ -114,9 +114,10 @@ pendingRows accId pageM =
     where_ $
       p ^. DBPendingTxAccount ==. val accId
     orderBy [desc (p ^. DBPendingTxCreated)]
-    forM_ pageM $ \(Page lim off) -> do
-      limit $ fromIntegral lim
-      offset $ fromIntegral off
+    forM_ pageM $ \page -> do
+      let (lim, off) = pageBounds page
+      limit lim
+      offset off
     return p
 
 -- | The pending transactions of an account, newest first
