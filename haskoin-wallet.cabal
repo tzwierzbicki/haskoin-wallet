@@ -203,6 +203,7 @@ test-suite spec
       Haskoin.Wallet.DatabaseLockSpec
       Haskoin.Wallet.DatabaseSpec
       Haskoin.Wallet.EntropySpec
+      Haskoin.Wallet.FileIOSpec
       Haskoin.Wallet.HwTestUtils
       Haskoin.Wallet.KeysSpec
       Haskoin.Wallet.MainSpec

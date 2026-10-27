@@ -54,7 +54,6 @@ import Haskoin.Wallet.TxSweep (buildSweepSignData, fetchSweepCoins, signTxWithKe
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import qualified Paths_haskoin_wallet as Paths
-import qualified System.Directory as D
 import System.IO (hPutStrLn, stderr)
 import System.Random (initStdGen)
 
@@ -481,7 +480,7 @@ cmdExportAcc ctx cfg nameM file =
         net = accountNetwork acc
         name = dBAccountName acc
         doc = PubKeyDoc xpub net name (accountFingerprint acc)
-    liftIO $ writeMarshalFile ctx file doc
+    liftEitherIO $ writeMarshalFile ctx file doc
     return $ ResponseFile file
 
 cmdRenameAcc :: Config -> Text -> Text -> IO Response
@@ -594,7 +593,7 @@ cmdPrepareTx ctx cfg rcpTxt nameM unit feeByte dust payer minConf strategy fileM
       buildTxSignData net ctx cfg gen strategy accId rcpts feeByte dust payer minConf coins
     txInfo <- txInfoOf ctx acc signDat
     _ <- importPendingTx net ctx accId signDat
-    for_ fileM $ \file -> liftIO $ writeJsonFile file $ Json.toJSON signDat
+    for_ fileM $ \file -> liftEitherIO $ writeJsonFile file $ Json.toJSON signDat
     newAcc <- getAccountById accId
     return $ ResponseTx newAcc txInfo
   where
@@ -623,7 +622,7 @@ cmdExportTx cfg nosigH fp =
   runDBResponse cfg $ do
     held <- requirePendingTx nosigH
     checkPathFree fp
-    liftIO $ writeJsonFile fp $ Json.toJSON held.pendingTxData
+    liftEitherIO $ writeJsonFile fp $ Json.toJSON held.pendingTxData
     return $ ResponseFile fp
 
 cmdImportTx :: Ctx -> Config -> Maybe Text -> FilePath -> IO Response
@@ -670,7 +669,7 @@ cmdSignTx ctx cfg nameM nosigHM inputM outputM splitMnemIn =
     lift $ recordFingerprint ctx seed
     txInfoL <- lift $ fillTxInfoLabels net txInfo
     when (isJust nosigHM) $ void $ importPendingTx net ctx accId newSignData
-    for_ outputM $ \o -> liftIO $ writeJsonFile o $ Json.toJSON newSignData
+    for_ outputM $ \o -> liftEitherIO $ writeJsonFile o $ Json.toJSON newSignData
     return $ ResponseTx acc txInfoL
 
 parseSignInput ::
@@ -692,8 +691,6 @@ parseSignInput nosigHM inputM outputM =
       held <- requirePendingTx h
       return (held.pendingTxData, held.pendingTxOnline)
     (_, Just i, _) -> do
-      exist <- liftIO $ D.doesFileExist i
-      unless exist $ throwError "Input file does not exist"
       tsd <- liftEitherIO (readJsonFile i)
       return (tsd, False)
 
@@ -737,8 +734,6 @@ cmdSendTx ctx cfg nosigHM inputM netM =
 sendTxFile :: Ctx -> Config -> FilePath -> Maybe Network -> IO Response
 sendTxFile ctx cfg file netM =
   runDBResponse cfg $ do
-    exists <- liftIO $ D.doesFileExist file
-    unless exists $ throwError "Input file does not exist"
     tsd <- liftEitherIO (readJsonFile file)
     sent <- sendSigned ctx (webStore ctx cfg) netM tsd
     return $ case sent of
@@ -773,9 +768,9 @@ cmdBackup cfg fileM =
     copy <- case fileM of
       Just file -> do
         checkPathFree file
-        liftIO $ copyDatabase database file
+        liftEitherIO $ copyDatabase database file
         return file
-      Nothing -> liftIO $ do
+      Nothing -> liftEitherIO $ do
         directory <- backupDirectory
         backupDatabase database directory latestDatabaseVersion
     return $ ResponseFile copy
@@ -825,7 +820,7 @@ cmdPrepareSweep ctx cfg nameM keysM sweepFromT sweepToT coins outputM feeByte du
       else
         when (isNothing outputM) $
           throwError "The sweep does not involve this wallet: give an --output file to write it to"
-    for_ outputM $ \file -> liftIO $ writeJsonFile file $ Json.toJSON tsd
+    for_ outputM $ \file -> liftEitherIO $ writeJsonFile file $ Json.toJSON tsd
     return $ ResponseTx acc txInfo
 
 -- | Sign a sweep with private keys: a pending transaction of the wallet,
@@ -855,7 +850,7 @@ cmdSignSweep ctx cfg nameM nosigHM inputM outputM keysM =
     (newTsd, txInfo) <- liftEither $ signTxWithKeys net ctx tsd pub secKeys
     txInfoL <- lift $ fillTxInfoLabels net txInfo
     when (isJust nosigHM) $ void $ importPendingTx net ctx accId newTsd
-    for_ outputM $ \o -> liftIO $ writeJsonFile o $ Json.toJSON newTsd
+    for_ outputM $ \o -> liftEitherIO $ writeJsonFile o $ Json.toJSON newTsd
     return $ ResponseTx acc txInfoL
 
 {- Signed messages -}

@@ -35,7 +35,7 @@ spec = do
           createTables V2.migrateAll
           P.insert_ $ V2.DBVersion "0.9"
           P.insert_ $ V2.DBWallet "892eb8e4"
-        copy <- backupDatabase database backups 2
+        copy <- either fail return =<< backupDatabase database backups 2
         takeDirectory copy `shouldBe` backups
         takeFileName copy `shouldSatisfy` \name -> "accounts-version-2-" `isPrefixOf` name && ".sqlite" `isSuffixOf` name
         inDatabaseFile copy storedVersions `shouldReturn` [(PersistText "0.9", "text")]
@@ -50,8 +50,18 @@ spec = do
           createTables V2.migrateAll
           P.insert_ $ V2.DBVersion "0.9"
           transactionSave
-          liftIO $ backupDatabase database (dir </> "backups") 2
+          liftIO $ either fail return =<< backupDatabase database (dir </> "backups") 2
         inDatabaseFile copy storedVersions `shouldReturn` [(PersistText "0.9", "text")]
+
+    -- A file stands where the directory would go
+    it "is not made when its directory cannot be created, and says why" $
+      inScratchDirectory $ \dir -> do
+        let database = dir </> "accounts.sqlite"
+            backups = dir </> "taken" </> "backups"
+        inDatabaseFile database $ createTables migrateAll
+        writeFile (dir </> "taken") ""
+        backupDatabase database backups 2
+          `shouldReturn` Left ("The directory " <> backups <> " could not be created: not a directory")
 
   describe "The backup command" $ do
     it "copies the database to the given file" $
@@ -75,6 +85,14 @@ spec = do
         _ <- cmdBackup (configUsing database) (Just copy)
         cmdBackup (configUsing database) (Just copy)
           `shouldReturn` ResponseError (cs $ "Path '" <> copy <> "' already exists")
+
+    it "says why it could not copy the database into a directory that does not exist" $
+      inScratchDirectory $ \dir -> do
+        let database = dir </> "accounts.sqlite"
+            copy = dir </> "missing" </> "copy.sqlite"
+        inDatabaseFile database $ createTables migrateAll
+        cmdBackup (configUsing database) (Just copy)
+          `shouldReturn` ResponseError (cs $ "The database could not be copied to " <> copy <> ": the file could not be created")
 
 -- | The configuration of an hw whose database is the given file
 configUsing :: FilePath -> Config

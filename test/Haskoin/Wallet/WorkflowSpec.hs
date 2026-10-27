@@ -28,7 +28,6 @@ import Haskoin.Wallet.Arbitrary (arbitraryResponse)
 import Haskoin.Wallet.Coin (CoinLock (..), JsonCoin (..))
 import Haskoin.Wallet.Commands (Response (..))
 import Haskoin.Wallet.Database (DBAccount (..), DBAddress (..), databaseInUse, runDBWith)
-import Haskoin.Wallet.FileIO (writeJsonFile)
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (MnemonicPass (..))
 import qualified Haskoin.Wallet.Schema.V3 as V3
@@ -90,6 +89,10 @@ errorOf other = Left (show other)
 -- | The refusal of a file that exists already
 alreadyExists :: FilePath -> Text
 alreadyExists file = "Path '" <> Text.pack file <> "' already exists"
+
+-- | The refusal of a file to read that does not exist
+noSuchFile :: FilePath -> Text
+noSuchFile file = "The file " <> Text.pack file <> " could not be read: no such file or directory"
 
 -- | Whether hw asked for a mnemonic
 askedMnemonic :: Run -> Bool
@@ -456,6 +459,32 @@ failureSpec ctx = do
         failure <- errorOf <$> hwJson home ["sync"] []
         failure `shouldSatisfy` either (const False) (Text.isPrefixOf ("The store at " <> Text.pack url <> " gave an answer hw could not read: "))
 
+    -- hw crashed with the exception of the system before, and wrote no JSON
+    it "tells when a file it reads does not exist, naming it" $
+      withHome $ \home -> do
+        createMain home
+        forM_ ["reviewtx", "importtx", "importacc"] $ \command ->
+          (errorOf <$> hwJson home [command, home </> "missing.json"] [])
+            `shouldReturn` Right (noSuchFile (home </> "missing.json"))
+
+    it "tells when a file it writes has no directory to go in, naming it" $
+      withHome $ \home -> do
+        createMain home
+        let file = home </> "missing" </> "main.json"
+        (errorOf <$> hwJson home ["exportacc", file] [])
+          `shouldReturn` Right ("The file " <> Text.pack file <> " could not be written: no such file or directory")
+
+    -- preparetx writes its file last, once the transaction is pending and
+    -- its change address taken: the failure undoes both
+    it "keeps nothing of a transaction whose file could not be written" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        let file = home </> "missing" </> "unsigned.json"
+        (errorOf <$> hwJson home ["preparetx", textOf (otherAddr 0), "0.0002", "--output", file] [])
+          `shouldReturn` Right ("The file " <> Text.pack file <> " could not be written: no such file or directory")
+        (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+        (addressesOf <$> hwJson home ["addrs", "--internal"] []) `shouldReturn` Right []
+
     -- The other command holds the database the whole time: hw waits its
     -- three seconds, then gives up
     it "waits for another command that holds the database, and says so when it does not finish" $
@@ -485,17 +514,17 @@ failureSpec ctx = do
     it "refuses a missing file" $
       withHome $ \home ->
         (errorOf <$> hwJson home ["sendtx", "--input", home </> "missing.json", "--network", "btc"] [])
-          `shouldReturn` Right "Input file does not exist"
+          `shouldReturn` Right (noSuchFile (home </> "missing.json"))
 
     it "refuses an unsigned transaction" $
       withHome $ \home -> do
-        writeJsonFile (home </> "sweep.json") (Json.toJSON (unsignedSweep ctx))
+        Json.encodeFile (home </> "sweep.json") (unsignedSweep ctx)
         (errorOf <$> hwJson home ["sendtx", "--input", home </> "sweep.json", "--network", "btc"] [])
           `shouldReturn` Right "The transaction is not signed"
 
     it "needs the network of a signed transaction the wallet does not hold" $
       withHome $ \home -> do
-        writeJsonFile (home </> "payment.json") (Json.toJSON (signedPayment ctx))
+        Json.encodeFile (home </> "payment.json") (signedPayment ctx)
         (errorOf <$> hwJson home ["sendtx", "--input", home </> "payment.json"] [])
           `shouldReturn` Right "Give the --network of a transaction the wallet does not hold"
 
@@ -515,14 +544,14 @@ failureSpec ctx = do
       withHome $ \home ->
         forM_ ["signtx", "signsweep"] $ \command ->
           (errorOf <$> hwJson home [command, "--input", home </> "missing.json", "--output", home </> "signed.json"] [])
-            `shouldReturn` Right "Input file does not exist"
+            `shouldReturn` Right (noSuchFile (home </> "missing.json"))
 
   -- The mnemonic would be typed for nothing
   describe "signtx, before it asks for the mnemonic," $ do
     it "refuses a transaction signed already" $
       withHome $ \home -> do
         createMain home
-        writeJsonFile (home </> "payment.json") (Json.toJSON (signedPayment ctx))
+        Json.encodeFile (home </> "payment.json") (signedPayment ctx)
         run <- hw home ["signtx", "--input", home </> "payment.json", "--output", home </> "signed.json"] seedOnce
         run `shouldSatisfy` printed "The transaction is already signed"
         run `shouldNotSatisfy` askedMnemonic
@@ -540,7 +569,7 @@ failureSpec ctx = do
     it "refuses an --output file that exists" $
       withHome $ \home -> do
         createMain home
-        writeJsonFile (home </> "payment.json") (Json.toJSON (unsignedPayment ctx))
+        Json.encodeFile (home </> "payment.json") (unsignedPayment ctx)
         writeFile (home </> "signed.json") ""
         run <- hw home ["signtx", "--input", home </> "payment.json", "--output", home </> "signed.json"] seedOnce
         run `shouldSatisfy` printed (alreadyExists (home </> "signed.json"))
@@ -577,6 +606,14 @@ backupSpec =
         writeFile (home </> "copy.sqlite") ""
         (errorOf <$> hwJson home ["backup", home </> "copy.sqlite"] [])
           `shouldReturn` Right (alreadyExists (home </> "copy.sqlite"))
+
+    -- hw crashed with the exception of SQLite before
+    it "is not copied into a directory that does not exist, and hw says so" $
+      withHome $ \home -> do
+        createMain home
+        let copy = home </> "missing" </> "copy.sqlite"
+        (errorOf <$> hwJson home ["backup", copy] [])
+          `shouldReturn` Right ("The database could not be copied to " <> Text.pack copy <> ": the file could not be created")
 
     it "is copied by backup into the backups of hw without a file" $
       withHome $ \home -> do
@@ -767,7 +804,7 @@ signingSpec ctx = do
     it "names the seed in the signed file, which the online wallet learns as it sends it" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         createMain signer
-        writeJsonFile (online </> "main.json") $
+        Json.encodeFile (online </> "main.json") $
           Json.object ["xpubkey" Json..= testAccountXPub, "network" Json..= ("btc" :: Text), "name" Json..= ("main" :: Text)]
         _ <- answer online ["importacc", online </> "main.json"] []
         _ <- answer online ["receive"] []

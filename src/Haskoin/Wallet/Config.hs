@@ -129,12 +129,11 @@ instance Default Config where
 readConfig :: FilePath -> ExceptT String IO (Config, [String])
 readConfig dir = do
   let file = configFile dir
-      couldNotRead reason = "The configuration file " <> file <> " could not be read: " <> reason
+      refused reason = "The configuration file " <> file <> " could not be read: " <> reason
   exists <- liftIO $ D.doesFileExist file
-  unless exists $ liftIO $ writeJsonFile file $ toJSON (def :: Config)
-  valueE <- liftIO $ readJsonFile file
-  value <- liftEither $ first couldNotRead valueE
-  cfg <- liftEither $ first couldNotRead $ parseEither parseJSON value
+  unless exists $ liftEither =<< liftIO (writeJsonFile file $ toJSON (def :: Config))
+  value <- liftEither =<< liftIO (readJsonFile file)
+  cfg <- liftEither $ first refused $ parseEither parseJSON value
   return (cfg, configWarnings file value)
 
 -- | A warning naming the keys of the file hw does not know: a key of an

@@ -48,7 +48,8 @@ migrationHooks cfg =
       backup = \version -> do
         database <- databaseFile cfg
         directory <- migrationBackupDirectory
-        copy <- backupDatabase database directory version
+        -- Without its backup, the database is not migrated
+        copy <- either die return =<< backupDatabase database directory version
         hPutStrLn stderr $ "The database at version " <> show version <> " was backed up to " <> copy
     }
 

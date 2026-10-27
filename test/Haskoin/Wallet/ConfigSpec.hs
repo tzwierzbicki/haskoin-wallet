@@ -13,6 +13,7 @@ import Haskoin.Wallet.Config
 import Haskoin.Wallet.TestUtils (inScratchDirectory)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), testIdentity)
 import Haskoin.Wallet.Arbitrary (arbitraryConfig)
+import System.Directory (createDirectory)
 import Test.Hspec
 import Text.RawString.QQ (r)
 
@@ -94,6 +95,14 @@ directorySpec =
         writeFile (configFile dir) [r|{"gap": 0}|]
         cfg <- runExceptT $ readConfig dir
         cfg `shouldBe` Left ("The configuration file " <> configFile dir <> " could not be read: Error in $: The key \"gap\" must be at least 1")
+
+    -- A directory stands where the file goes: hw crashed there before, with
+    -- the exception of the system
+    it "says why it could not write the configuration file it lacks" $
+      inScratchDirectory $ \dir -> do
+        createDirectory (configFile dir)
+        cfg <- runExceptT $ readConfig dir
+        cfg `shouldBe` Left ("The file " <> configFile dir <> " could not be written: is a directory")
 
     it "warns about the keys it does not know, naming the file: those of an earlier hw" $
       inScratchDirectory $ \dir -> do
