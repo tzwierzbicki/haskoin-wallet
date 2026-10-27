@@ -988,9 +988,11 @@ signTxParser = do
 The next step after preparing a transaction is to sign it. This step can happen
 on an offline computer if you export the unsigned transaction to a file. If the
 transaction is stored in the wallet, it can be signed by using its nosigHash.
-This will sign and replace the transaction in-place. Otherwise, you must specify
-the --input file of the unsigned transaction and the --output file where the
-signed transaction will be saved. The transaction still hasn't been uploaded to
+This will sign and replace the transaction in-place. Otherwise, give the --input
+file of the unsigned transaction, and the --output file to write the signed one
+to. Without --output, hw asks to replace the --input file with the signed
+transaction, before it asks for the mnemonic: the unsigned file is of no use
+once the transaction is signed. The transaction still hasn't been uploaded to
 the network. You may inspect it using either the `reviewtx` or the `pendingtxs`
 command. The transaction can then be sent to the network with `sendtx` or
 deleted with `deletetx`.
@@ -1340,9 +1342,11 @@ coins of this transaction are not from this wallet, the private keys for signing
 are passed in a separate --prvkeys file, or typed on the terminal without echo
 with --prvkeys - or when no file is given. The sweep transaction can be
 referenced by its nosigHash if it exists in the wallet, or you can pass it as a
-file with --input and --output, in which case it need not involve this wallet
-at all. A sweep outside the wallet needs no account: it is signed on the network
-its file names. The file of an earlier hw names none, and is prepared again.
+file with --input, in which case it need not involve this wallet at all. The
+signed transaction goes to the --output file or, without one, replaces the
+--input file if you agree, as hw asks before the keys. A sweep outside the
+wallet needs no account: it is signed on the network its file names. The file
+of an earlier hw names none, and is prepared again.
 |]
 
 -- | The private keys: a file, or - for the terminal

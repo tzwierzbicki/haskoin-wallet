@@ -442,49 +442,73 @@ cmdPrepareTx ctx cfg unit opts =
       satoshis <- readAmount unit amount
       return (paid, fromIntegral satoshis)
 
+-- | The file a signed transaction is written to, besides the wallet that
+-- holds it
+data SignedFile
+  = -- | None: the pending transaction signed by its nosigHash is enough
+    NoSignedFile
+  | -- | The --output file, which must be free
+    NewFile FilePath
+  | -- | The --input file without --output, which the user agreed to
+    -- replace: the unsigned transaction is of no use once signed
+    ReplacedFile FilePath
+
 -- | The transaction signtx and signsweep sign, with the network its file
--- names and the account of the wallet it involves, if any: see
--- 'transactionAccount'. A transaction signed already, or sent, is not
--- signed again, and the --output file must be free, all before the user
--- types a secret.
+-- names, the account of the wallet it involves, if any (see
+-- 'transactionAccount'), and the file to write it to once signed. A
+-- transaction signed already, or sent, is not signed again; the --output
+-- file must be free, and the --input file is replaced only if the user
+-- agrees, all before the user types a secret.
 transactionToSign ::
   Ctx ->
   Signing ->
-  ExceptT String (DB IO) (Maybe (DBAccountId, DBAccount), Maybe Network, TxSignData)
+  ExceptT String (DB IO) (Maybe (DBAccountId, DBAccount), Maybe Network, TxSignData, SignedFile)
 transactionToSign ctx signing = do
-  TxFile netM tsd <- case (signing.nosigHash, signing.input, signing.output) of
-    (Nothing, Nothing, _) ->
-      throwError "Give the NOSIGHASH of a pending transaction, or an --input file and an --output file"
-    (Just _, Just _, _) ->
+  TxFile netM tsd <- case (signing.nosigHash, signing.input) of
+    (Nothing, Nothing) ->
+      throwError "Give the NOSIGHASH of a pending transaction, or an --input file"
+    (Just _, Just _) ->
       throwError "Can not specify both a NOSIGHASH and an --input file"
-    (_, Just _, Nothing) ->
-      throwError "Give an --output file with the --input file"
-    (Just nosigH, _, _) -> do
+    (Just nosigH, _) -> do
       held <- requirePendingTx nosigH
       when held.pendingTxOnline $
         throwError "The transaction is already online"
       return $ TxFile Nothing held.pendingTxData
-    (_, Just file, _) -> liftEitherIO $ readJsonFile file
+    (_, Just file) -> liftEitherIO $ readJsonFile file
   when (isSigned (txSignDataTx tsd)) $
     throwError "The transaction is already signed"
   accountM <- transactionAccount ctx signing.account netM tsd
-  for_ signing.output checkPathFree
-  return (accountM, netM, tsd)
+  signedFile <- case (signing.input, signing.output) of
+    (_, Just file) -> NewFile file <$ checkPathFree file
+    (Just file, Nothing) -> do
+      replacing <- askYes terminal ("Replace " <> file <> " with the signed transaction? Give an --output file to write it elsewhere.")
+      unless replacing $ throwError "The transaction was not signed: give an --output file to write it to"
+      return (ReplacedFile file)
+    (Nothing, Nothing) -> return NoSignedFile
+  return (accountM, netM, tsd, signedFile)
+
+-- | Write a transaction just signed to its file, if any
+writeSigned :: Network -> SignedFile -> TxSignData -> ExceptT String (DB IO) ()
+writeSigned net signedFile signed =
+  case signedFile of
+    NoSignedFile -> return ()
+    NewFile file -> liftEitherIO $ writeJsonFile file (TxFile (Just net) signed)
+    ReplacedFile file -> liftEitherIO $ replaceJsonFile file (TxFile (Just net) signed)
 
 -- | Keep a transaction just signed: in place of the pending one when it was
--- given by its nosigHash, and in the --output file when there is one. The
--- answer shows it, with the labels of its addresses.
-keepSigned :: Ctx -> Network -> Signing -> DBAccountId -> TxSignData -> TxInfo -> ExceptT String (DB IO) Response
-keepSigned ctx net signing accId signed info = do
+-- given by its nosigHash, and in its file when there is one. The answer
+-- shows it, with the labels of its addresses.
+keepSigned :: Ctx -> Network -> Signing -> SignedFile -> DBAccountId -> TxSignData -> TxInfo -> ExceptT String (DB IO) Response
+keepSigned ctx net signing signedFile accId signed info = do
   when (isJust signing.nosigHash) $ void $ importPendingTx net ctx accId signed
-  writeOutput net signing.output signed
+  writeSigned net signedFile signed
   txAnswer accId =<< lift (fillTxInfoLabels net info)
 
 -- | Sign a transaction of the account with the key of its mnemonic
 cmdSignTx :: Ctx -> Config -> Signing -> Natural -> IO Response
 cmdSignTx ctx cfg signing parts =
   runDBResponse cfg $ do
-    (accountM, _, tsd) <- transactionToSign ctx signing
+    (accountM, _, tsd, signedFile) <- transactionToSign ctx signing
     (accId, acc) <- liftMaybe notInWallet accountM
     let net = accountNetwork acc
     (seed, key) <- askSigningKey terminal net ctx parts (accountIndex acc) (accountXPubKey ctx acc)
@@ -492,7 +516,7 @@ cmdSignTx ctx cfg signing parts =
     let named = tsd {txSignDataFingerprint = Just (seedFingerprint seed)}
     (signed, info) <- liftEither $ signWalletTx net ctx named key
     lift $ recordFingerprint ctx seed
-    keepSigned ctx net signing accId signed info
+    keepSigned ctx net signing signedFile accId signed info
 
 -- | Send a signed transaction: a pending one of the wallet, by its
 -- nosigHash, or the one of a file. One the wallet holds goes on the network
@@ -578,22 +602,23 @@ cmdPrepareSweep ctx cfg opts =
 
 -- | Sign a sweep with private keys: a pending transaction of the wallet,
 -- by its nosigHash, or one in a file. A sweep outside the wallet is signed
--- on the network its file names, from its file to another.
+-- on the network its file names, from its file to another, or in its
+-- place.
 cmdSignSweep :: Ctx -> Config -> Signing -> Maybe KeySource -> IO Response
 cmdSignSweep ctx cfg signing keysM =
   runDBResponse cfg $ do
-    (accountM, netM, tsd) <- transactionToSign ctx signing
+    (accountM, netM, tsd, signedFile) <- transactionToSign ctx signing
     case accountM of
       Just (accId, acc) -> do
         let net = accountNetwork acc
         keys <- keysOn net
         (signed, info) <- liftEither $ signTxWithKeys net ctx tsd (Just (accountXPubKey ctx acc)) keys
-        keepSigned ctx net signing accId signed info
+        keepSigned ctx net signing signedFile accId signed info
       Nothing -> do
         net <- liftMaybe noFileNetwork netM
         keys <- keysOn net
         (signed, info) <- liftEither $ signTxWithKeys net ctx tsd Nothing keys
-        writeOutput net signing.output signed
+        writeSigned net signedFile signed
         return $ ResponseOutsideTx net info
   where
     -- Without a file, the keys are typed: signing cannot do without them

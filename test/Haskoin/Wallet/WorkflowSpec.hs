@@ -19,6 +19,7 @@ import Data.List (isInfixOf, sortOn)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
+import qualified Data.ByteString as BS
 import Data.Word (Word64)
 import qualified Database.Persist as P
 import Haskoin
@@ -31,7 +32,7 @@ import qualified Haskoin.Wallet.Schema.V3 as V3
 import Haskoin.Wallet.Sync (SyncRes (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo
-import Haskoin.Wallet.TxSignData (TxFile (..), TxSignData (..))
+import Haskoin.Wallet.TxSignData (TxFile (..), TxSignData (..), isSigned)
 import Numeric.Natural (Natural)
 import System.Directory (copyFile, doesFileExist)
 import System.Exit (ExitCode (..))
@@ -624,21 +625,77 @@ failureSpec ctx = do
 
   describe "signtx and signsweep" $ do
     let nosig = Text.unpack (txHashToHex (fakeTxHash 1))
-    it "need a nosigHash, or an --input file with an --output file" $
+    it "need a nosigHash or an --input file, not both" $
       withHome $ \home ->
         forM_ ["signtx", "signsweep"] $ \command -> do
           (errorOf <$> hwJson home [command] [])
-            `shouldReturn` Right "Give the NOSIGHASH of a pending transaction, or an --input file and an --output file"
+            `shouldReturn` Right "Give the NOSIGHASH of a pending transaction, or an --input file"
           (errorOf <$> hwJson home [command, nosig, "--input", home </> "unsigned.json", "--output", home </> "signed.json"] [])
             `shouldReturn` Right "Can not specify both a NOSIGHASH and an --input file"
-          (errorOf <$> hwJson home [command, "--input", home </> "unsigned.json"] [])
-            `shouldReturn` Right "Give an --output file with the --input file"
 
     it "refuse a missing --input file" $
       withHome $ \home ->
         forM_ ["signtx", "signsweep"] $ \command ->
           (errorOf <$> hwJson home [command, "--input", home </> "missing.json", "--output", home </> "signed.json"] [])
             `shouldReturn` Right (noSuchFile (home </> "missing.json"))
+
+  -- The unsigned file is of no use once the transaction is signed
+  describe "signtx and signsweep with an --input file and no --output file" $ do
+    let question file = "Replace " <> Text.pack file <> " with the signed transaction? Give an --output file to write it elsewhere. [y/N] "
+    it "replace the --input file with the signed transaction when the user agrees" $
+      withHome $ \home -> do
+        createMain home
+        Json.encodeFile (home </> "payment.json") (unsignedPayment ctx)
+        signed <- txOf =<< answer home ["signtx", "--input", home </> "payment.json"] (["y"] <> seedOnce)
+        pendingState signed `shouldBe` Just (True, False)
+        written <- readTxFile (home </> "payment.json")
+        isSigned (txSignDataTx (txFileData written)) `shouldBe` True
+
+    it "ask whether to replace the --input file, naming --output" $
+      withHome $ \home -> do
+        createMain home
+        Json.encodeFile (home </> "payment.json") (unsignedPayment ctx)
+        run <- hw home ["signtx", "--input", home </> "payment.json"] (["y"] <> seedOnce)
+        runErr run `shouldSatisfy` Text.isInfixOf (question (home </> "payment.json"))
+
+    -- The mnemonic would be typed for nothing
+    it "ask before the mnemonic, and leave the file as it was when the user does not agree" $
+      withHome $ \home -> do
+        createMain home
+        Json.encodeFile (home </> "payment.json") (unsignedPayment ctx)
+        original <- BS.readFile (home </> "payment.json")
+        run <- hw home ["signtx", "--input", home </> "payment.json"] (["n"] <> seedOnce)
+        run `shouldSatisfy` printed "The transaction was not signed: give an --output file to write it to"
+        run `shouldNotSatisfy` askedMnemonic
+        BS.readFile (home </> "payment.json") `shouldReturn` original
+
+    it "do not ask with --output, and leave the --input file as it was" $
+      withHome $ \home -> do
+        createMain home
+        Json.encodeFile (home </> "payment.json") (unsignedPayment ctx)
+        original <- BS.readFile (home </> "payment.json")
+        run <- hw home ["signtx", "--input", home </> "payment.json", "--output", home </> "signed.json"] seedOnce
+        runErr run `shouldNotSatisfy` Text.isInfixOf "Replace "
+        BS.readFile (home </> "payment.json") `shouldReturn` original
+
+    -- The keys would be typed for nothing
+    it "ask before the keys of a sweep" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        keys <- writeKeyFile home
+        _ <- answer home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json"] []
+        run <- hw home ["signsweep", "--input", home </> "sweep.json", "--prvkeys", "-"] ["n", wikiKeyWif]
+        run `shouldSatisfy` printed "The transaction was not signed: give an --output file to write it to"
+        runErr run `shouldNotSatisfy` Text.isInfixOf "Private keys"
+
+    -- In a wallet without accounts: the file is all there is of the sweep
+    it "sign a sweep outside the wallet in place of its file, which is sent from there" $
+      withChain ctx (oldKeyChain ctx) $ \home chain -> do
+        keys <- writeKeyFile home
+        _ <- answer home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json"] []
+        _ <- answer home ["signsweep", "--input", home </> "sweep.json", "--prvkeys", keys] ["y"]
+        _ <- answer home ["sendtx", "--input", home </> "sweep.json", "--yes"] []
+        published <- inMempool <$> readIORef chain
+        (spendsAndPays ctx <$> published) `shouldBe` [([OutPoint (txHash (oldCoin ctx)) 0], [(28080, Right (otherAddr 0))])]
 
   -- The mnemonic would be typed for nothing
   describe "signtx, before it asks for the mnemonic," $ do
@@ -1518,7 +1575,7 @@ nextStepSpec ctx =
         synced home
         run <- hw home ["preparetx", textOf (otherAddr 0), "0.0002", "--output", home </> "unsigned.json"] []
         nosig <- onePendingNosig home
-        run `shouldSatisfy` showsCommand ("hw signtx --input " <> Text.pack (home </> "unsigned.json") <> " --output FILE")
+        run `shouldSatisfy` showsCommand ("hw signtx --input " <> Text.pack (home </> "unsigned.json") <> "\n")
         run `shouldSatisfy` showsCommand ("hw signtx " <> nosig)
 
     it "is to send the transaction signtx signed in the wallet, by its nosigHash" $
@@ -1534,6 +1591,13 @@ nextStepSpec ctx =
         _ <- answer online ["preparetx", textOf (otherAddr 0), "0.0002", "--output", online </> "unsigned.json"] []
         run <- hw signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
         run `shouldSatisfy` showsCommand ("hw sendtx --input " <> Text.pack (signer </> "signed.json"))
+
+    it "is to send the --input file signtx replaced with the signed transaction" $
+      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+        signerAndOnline signer online
+        _ <- answer online ["preparetx", textOf (otherAddr 0), "0.0002", "--output", online </> "unsigned.json"] []
+        run <- hw signer ["signtx", "--input", online </> "unsigned.json"] (["y"] <> seedOnce)
+        run `shouldSatisfy` showsCommand ("hw sendtx --input " <> Text.pack (online </> "unsigned.json"))
 
     it "is to sync the account of the transaction sendtx sent" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -1583,14 +1647,14 @@ nextStepSpec ctx =
         createMain home
         _ <- answer home ["receive"] []
         run <- hw home ["preparesweep", "--sweepfrom", textOf wikiAddr, "--sweepto", textOf (externalAddr 0), "--output", home </> "sweep.json"] []
-        run `shouldSatisfy` showsCommand ("hw signsweep --input " <> Text.pack (home </> "sweep.json") <> " --output FILE")
+        run `shouldSatisfy` showsCommand ("hw signsweep --input " <> Text.pack (home </> "sweep.json") <> "\n")
 
     -- In a wallet without accounts, the sweep is in its file only
     it "is to sign the file of a sweep outside the wallet with the keys of its file" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
         keys <- writeKeyFile home
         run <- hw home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json"] []
-        run `shouldSatisfy` showsCommand ("hw signsweep --input " <> Text.pack (home </> "sweep.json") <> " --output FILE --prvkeys " <> Text.pack keys)
+        run `shouldSatisfy` showsCommand ("hw signsweep --input " <> Text.pack (home </> "sweep.json") <> " --prvkeys " <> Text.pack keys)
 
     it "is to send the sweep signsweep signed in the wallet, by its nosigHash" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do

@@ -10,6 +10,7 @@
 
 module Haskoin.Wallet.PrettyPrinter where
 
+import Control.Applicative ((<|>))
 import Control.Monad
 import Data.Char (isAlphaNum)
 import Data.List (intercalate, intersperse)
@@ -650,7 +651,7 @@ nextStepsPrinter cmd res =
             [ ("Next, sign it", "hw signtx " <> nosig),
               case opts.output of
                 Nothing -> ("Or export it, to sign it on an offline computer", "hw exporttx " <> nosig <> " FILE")
-                Just file -> ("Or sign its file on an offline computer", "hw signtx --input " <> shellWord file <> " --output FILE")
+                Just file -> ("Or sign its file on an offline computer", "hw signtx --input " <> shellWord file)
             ]
     -- The keys of a file at hand for the sweep are the ones to sign it with
     (CommandPrepareSweep opts, ResponseTx _ info)
@@ -659,12 +660,12 @@ nextStepsPrinter cmd res =
             [ ("Next, sign it with the private keys of the coins", "hw signsweep " <> nosig <> keysOption opts.keys),
               case opts.output of
                 Nothing -> ("Or export it, to sign it where the keys are", "hw exporttx " <> nosig <> " FILE")
-                Just file -> ("Or sign its file where the keys are", "hw signsweep --input " <> shellWord file <> " --output FILE")
+                Just file -> ("Or sign its file where the keys are", "hw signsweep --input " <> shellWord file)
             ]
     -- A sweep outside the wallet is in its file only
     (CommandPrepareSweep opts, ResponseOutsideTx _ _)
       | Just file <- opts.output ->
-          stepsPrinter [("Next, sign its file with the private keys of the coins", "hw signsweep --input " <> shellWord file <> " --output FILE" <> keysOption opts.keys)]
+          stepsPrinter [("Next, sign its file with the private keys of the coins", "hw signsweep --input " <> shellWord file <> keysOption opts.keys)]
     (CommandSignTx signing _, ResponseTx _ info) -> afterSigning signing info
     (CommandSignSweep signing _, ResponseTx _ info) -> afterSigning signing info
     (CommandSignSweep signing _, ResponseOutsideTx _ info) -> afterSigning signing info
@@ -684,11 +685,12 @@ nextStepsPrinter cmd res =
       Pending status -> Just (cs (txHashToHex (pendingNosigHash status)))
       OnChain _ -> Nothing
     -- A transaction signed in the wallet is sent by its nosigHash, one
-    -- signed from a file by the file signed
+    -- signed from a file by the file signed: the --output file, or the
+    -- --input file it replaced
     afterSigning signing info
       | Just nosig <- nosigOf info, isJust signing.nosigHash =
           stepsPrinter [("Next, send it to the network", "hw sendtx " <> nosig)]
-      | Just file <- signing.output =
+      | Just file <- signing.output <|> signing.input =
           stepsPrinter [("Next, send its file from the online computer", "hw sendtx --input " <> shellWord file)]
       | otherwise = PEmpty
     -- Without a file, signsweep asks for the keys on the terminal

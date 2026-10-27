@@ -4,12 +4,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The files hw reads and writes: JSON documents, written pretty-printed
--- so that a user can read them, at a path that must be free. A file that
--- cannot be read or written is a message naming it, with the reason the
--- system gives, never an exception.
+-- so that a user can read them, at a path that must be free, or in place of
+-- a file the user agreed to replace. A file that cannot be read or written
+-- is a message naming it, with the reason the system gives, never an
+-- exception.
 module Haskoin.Wallet.FileIO where
 
-import Control.Exception (try)
+import Control.Exception (onException, try)
 import Control.Monad
 import Control.Monad.Except
 import Control.Monad.Reader (MonadIO (..))
@@ -22,6 +23,8 @@ import GHC.IO.Exception (IOException (..))
 import Haskoin
 import Haskoin.Wallet.Util
 import qualified System.Directory as D
+import System.FilePath (takeDirectory, takeFileName)
+import System.IO (hClose, openBinaryTempFile)
 
 {- Paths -}
 
@@ -55,6 +58,17 @@ couldNotWrite file reason = "The file " <> file <> " could not be written: " <> 
 -- | Write a JSON document to a file, or say why it could not be written
 writeJsonFile :: (ToJSON a) => FilePath -> a -> IO (Either String ())
 writeJsonFile file doc = first (couldNotWrite file) <$> systemReason (C8.writeFile file (encodeJsonPretty doc))
+
+-- | Replace a file with a JSON document, or say why it could not be
+-- replaced. The document is written to a new file next to it first, which
+-- then takes its place: a write that fails leaves the file as it was.
+replaceJsonFile :: (ToJSON a) => FilePath -> a -> IO (Either String ())
+replaceJsonFile file doc = first (couldNotWrite file) <$> systemReason replace
+  where
+    replace = do
+      (new, h) <- openBinaryTempFile (takeDirectory file) (takeFileName file)
+      let write = C8.hPut h (encodeJsonPretty doc) >> hClose h >> D.renameFile new file
+      write `onException` (hClose h >> D.removeFile new)
 
 -- | Read a JSON document from a file, or say why it could not be read: the
 -- system could not read the file, or it is not the document expected
