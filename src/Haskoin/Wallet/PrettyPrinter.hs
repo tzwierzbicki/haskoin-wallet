@@ -357,14 +357,28 @@ addressPrinter unit pad addr spendable =
           ]
     ]
 
-txInfoPrinter ::
+-- | A transaction of a listing, on the network of the account listed
+txInfoPrinter :: Network -> AmountUnit -> TxInfo -> Printer
+txInfoPrinter = transactionPrinter False
+
+-- | The one transaction a command answers with, naming its network. The
+-- user sees which coins it moves: private keys, coins and the legacy
+-- addresses of Bitcoin Cash read the same on Bitcoin, and a sweep outside
+-- the wallet is on the network of its file.
+txAnswerPrinter :: Network -> AmountUnit -> TxInfo -> Printer
+txAnswerPrinter = transactionPrinter True
+
+-- | A transaction, with its network when the first argument says so
+transactionPrinter ::
+  Bool ->
   Network ->
   AmountUnit ->
   TxInfo ->
   Printer
-txInfoPrinter net unit (TxInfo TxSummary {..} status) =
+transactionPrinter showNetwork net unit (TxInfo TxSummary {..} status) =
   vcat
     [ formatTitle (block 9 title) <> text ": " <> total,
+      network,
       statusPrinter status,
       fee,
       changeInFee,
@@ -379,6 +393,9 @@ txInfoPrinter net unit (TxInfo TxSummary {..} status) =
         TxInternal -> "Internal"
         TxCredit -> "Credit"
     total = integerAmountPrinter unit summaryAmount
+    network
+      | showNetwork = keyPrinter 9 "Network" <> formatValue net.name
+      | otherwise = mempty
     fee = keyPrinter 9 "Fee" <> feePrinter unit summaryFee summaryFeeByte
     changeInFee =
       case summaryChangeInFee of
@@ -559,8 +576,8 @@ prettyPrinter unit =
       renderIO $ vcat $ intersperse (text " ") $ txInfoPrinter net unit <$> txs
     ResponseTx acc txInfo -> do
       let net = accountNetwork acc
-      renderIO $ txInfoPrinter net unit txInfo
-    ResponseOutsideTx net txInfo -> renderIO $ txInfoPrinter net unit txInfo
+      renderIO $ txAnswerPrinter net unit txInfo
+    ResponseOutsideTx net txInfo -> renderIO $ txAnswerPrinter net unit txInfo
     ResponseSentTx net h ->
       renderIO $
         vcat

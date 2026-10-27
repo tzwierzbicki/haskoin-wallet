@@ -342,6 +342,27 @@ databaseSpec ctx =
         (map fst <$> addressAccounts [externalAddr2Text, "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", externalAddr2Text])
           `dbShouldBeE` [otherId, accId]
 
+    -- bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u is the first
+    -- receiving address of cash, the Bitcoin Cash account of the test
+    -- wallet, as hw stores it. 1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ is the
+    -- same address in the legacy form.
+    it "finds the account of a Bitcoin Cash address written without its prefix, or in the legacy form" $
+      inDatabaseE $ do
+        (cashId, _) <- testNewAccBch ctx "cash"
+        _ <- genExtAddress ctx cfg cashId ""
+        (map fst <$> addressAccounts ["qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"]) `dbShouldBeE` [cashId]
+        (map fst <$> addressAccounts ["1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ"]) `dbShouldBeE` [cashId]
+
+    -- 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj is the first receiving address of
+    -- main, on Bitcoin, and
+    -- bitcoincash:qryq64fz8ch3qcfk8twj57crv0pgt0ef353f374c3t the same
+    -- address on Bitcoin Cash, which Bitcoin does not read
+    it "reads an address on the network of each account: a Bitcoin account has no Bitcoin Cash address" $
+      inDatabaseE $ do
+        accId <- account ctx
+        _ <- genExtAddress ctx cfg accId ""
+        addressAccounts ["bitcoincash:qryq64fz8ch3qcfk8twj57crv0pgt0ef353f374c3t"] `dbShouldBeE` []
+
     it "keeps those of the given addresses that have transactions" $
       inDatabaseE $ do
         accId <- account ctx

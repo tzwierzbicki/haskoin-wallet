@@ -75,6 +75,8 @@ data Config = Config
     configDatabaseFile :: Maybe FilePath,
     -- | The network of a command that needs one when --network is not
     -- given, for a user of one network. Without it, --network must be.
+    -- A sweep that pays no account of the wallet does not take it: it
+    -- needs its --network.
     configDefaultNetwork :: Maybe Network
   }
   deriving (Eq, Show)

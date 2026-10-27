@@ -523,7 +523,10 @@ cmdSendTx ctx cfg nosigHM fileM =
 -- among its pending transactions to be signed by its nosigHash. One that
 -- pays no address of the wallet involves no account: hw is then a utility,
 -- which writes the sweep to a file, on the --network given, to be signed
--- from there.
+-- from there. That --network must be given: the default network of the
+-- configuration does not apply. The keys, the coins and the legacy
+-- addresses of Bitcoin Cash read the same on Bitcoin, so a wrong guess
+-- would sweep the coins of the other chain.
 cmdPrepareSweep :: Ctx -> Config -> PrepareSweep -> IO Response
 cmdPrepareSweep ctx cfg opts =
   runDBResponse cfg $ do
@@ -535,8 +538,8 @@ cmdPrepareSweep ctx cfg opts =
         for_ opts.account $ \name -> getAccountByName (Just name) >> throwError (paysNo name)
         net <-
           liftMaybe
-            "Give the --network of a sweep that pays no account of the wallet, or a default-network in the configuration file"
-            (commandNetwork cfg opts.network)
+            "Give the --network of a sweep that pays no account of the wallet: the default-network of the configuration file does not apply to it"
+            opts.network
         when (isNothing opts.output) $
           throwError "The sweep does not involve this wallet: give an --output file to write it to"
         tsd <- sweepOn net Nothing

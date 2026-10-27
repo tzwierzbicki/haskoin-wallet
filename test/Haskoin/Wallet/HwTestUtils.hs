@@ -35,7 +35,7 @@ import Data.Bytes.Put (runPutL)
 import Data.Bytes.Serial (Serial, deserialize, serialize)
 import Data.IORef (IORef, modifyIORef, newIORef, readIORef)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, listToMaybe)
 import qualified Data.Serialize as S
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -266,11 +266,11 @@ chainStore ctx ref =
 {- The fake store -}
 
 -- | Run a test with a home whose hw talks to a fake store, which serves the
--- chain held in the reference it gives the test
+-- chain held in the reference it gives the test, on every network
 withChain :: Ctx -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
 withChain ctx chain test = do
   ref <- newIORef chain
-  testWithApplication (return (storeApp ctx btc (chainStore ctx ref))) $ \port ->
+  testWithApplication (return (storeApp ctx (chainStore ctx ref))) $ \port ->
     withHome $ \home -> do
       useStore home ("http://127.0.0.1:" <> show port <> "/")
       test home ref
@@ -290,9 +290,11 @@ withServerAnswering text test =
 
 -- | The web API of haskoin-store, as its web client asks it, answering
 -- from a store: the paths, the parameters and the binary encoding of
--- haskoin-store-data. A question it does not know is a 404.
-storeApp :: Ctx -> Network -> Store -> Application
-storeApp ctx net store req respond = do
+-- haskoin-store-data. A question it does not know is a 404. The store is
+-- the same on every network, as the coins of a key from before the fork
+-- of Bitcoin Cash are on both chains.
+storeApp :: Ctx -> Store -> Application
+storeApp ctx store req respond = do
   answer <- runExceptT route
   respond $ case answer of
     Right body -> responseLBS status200 [(hContentType, "application/octet-stream")] body
@@ -318,6 +320,9 @@ storeApp ctx net store req respond = do
         storePublish store tx
         return $ encoded (Store.TxId (txHash tx))
       (method, path) -> throwError $ "The fake store does not answer " <> show method <> " " <> show path
+    -- The network the web client names first in the path, which reads
+    -- the addresses of the question
+    net = fromMaybe btc (netByName . Text.unpack =<< listToMaybe (pathInfo req))
     encoded :: (Serial a) => a -> BL.ByteString
     encoded = runPutL . serialize
     fromPath :: (Param p) => Text -> ExceptT String IO p

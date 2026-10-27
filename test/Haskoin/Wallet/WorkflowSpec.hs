@@ -1197,19 +1197,15 @@ sweepSpec ctx =
         (spendsAndPays ctx <$> published) `shouldBe` [([OutPoint (txHash (oldCoin ctx)) 0], [(28080, Right (otherAddr 0))])]
         (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right []
 
-    -- The configuration file of the test home names btc
-    it "that pays outside the wallet is on the default network of the configuration file, without --network" $
+    -- The configuration file of the test home names btc, and the key has a
+    -- coin on Bitcoin. Keys, coins and the legacy addresses of Bitcoin Cash
+    -- read the same on Bitcoin: the default network could sweep the coins
+    -- of another chain than the one meant.
+    it "that pays outside the wallet needs the --network it is for, whatever the default network" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        keys <- writeKeyFile home
-        prepared <- answer home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--output", home </> "sweep.json"] []
-        prepared `shouldSatisfy` \case ResponseOutsideTx net _ -> net == btc; _ -> False
-
-    it "that pays outside the wallet needs the --network it is for, without a default network in the configuration file" $
-      withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        setDefaultNetwork home Nothing
         keys <- writeKeyFile home
         (errorOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--output", home </> "sweep.json"] [])
-          `shouldReturn` Right "Give the --network of a sweep that pays no account of the wallet, or a default-network in the configuration file"
+          `shouldReturn` Right "Give the --network of a sweep that pays no account of the wallet: the default-network of the configuration file does not apply to it"
 
     -- The default network is not a --network given: main is on btc
     it "that pays the wallet is on the network of its account, whatever the default network" $
@@ -1220,6 +1216,29 @@ sweepSpec ctx =
         keys <- writeKeyFile home
         (fmap dBAccountName . accountOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0)] [])
           `shouldReturn` Right "main"
+
+    -- cash is the Bitcoin Cash account of the test wallet. hw stores its
+    -- first receiving address as
+    -- bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u. The store has
+    -- the coin of the key on Bitcoin Cash too.
+    it "that pays the wallet finds its account by a Bitcoin Cash address written without its prefix" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
+        _ <- receiveFor home "cash"
+        keys <- writeKeyFile home
+        (fmap dBAccountName . accountOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", "qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"] [])
+          `shouldReturn` Right "cash"
+
+    -- 1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ is the same address of cash in the
+    -- legacy form, which Bitcoin reads too. The sweep is of cash all the
+    -- same, rather than outside the wallet on the default network btc.
+    it "that pays the wallet finds its account by a Bitcoin Cash address in the legacy form" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
+        _ <- receiveFor home "cash"
+        keys <- writeKeyFile home
+        (fmap dBAccountName . accountOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", "1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ"] [])
+          `shouldReturn` Right "cash"
 
     it "that pays outside the wallet is refused an --account" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do

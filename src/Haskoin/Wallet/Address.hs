@@ -26,7 +26,7 @@ import qualified Data.Aeson.Types as Json
 import Data.List (nub)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, mapMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Time (getCurrentTime)
@@ -281,12 +281,26 @@ getAddressByText addrTxt = do
   acc <- getAccountById $ dBAddressAccount addr
   return (acc, addr)
 
--- | The accounts that have the addresses, written as text, each once. An
--- address the wallet does not have has none.
+-- | The accounts that have the addresses, each once. Each account reads
+-- the addresses on its network, and compares the addresses themselves,
+-- not their text: a Bitcoin Cash address finds its account written
+-- without its prefix, or in the legacy form of Bitcoin, as well as in
+-- the form hw stores. An address the wallet does not have has none.
 addressAccounts :: (MonadUnliftIO m) => [Text] -> ExceptT String (DB m) [(DBAccountId, DBAccount)]
-addressAccounts addrs = do
-  rows <- lift $ mapM (P.getBy . UniqueAddress) addrs
-  getAccountsById $ nub $ dBAddressAccount . entityVal <$> catMaybes rows
+addressAccounts addrs = lift $ filterM (hasAddressOf addrs) =<< getAccounts
+
+-- | Whether the account has one of the addresses, read on its network
+hasAddressOf :: (MonadUnliftIO m) => [Text] -> (DBAccountId, DBAccount) -> DB m Bool
+hasAddressOf addrs (accId, acc) = do
+  let net = accountNetwork acc
+      -- The text hw stores for each address the network reads
+      stored = mapMaybe (addrToText net <=< textToAddr net) addrs
+  rows <- select . from $ \a -> do
+    where_ $
+      a ^. DBAddressAccount ==. val accId
+        &&. a ^. DBAddressAddress `in_` valList stored
+    return $ a ^. DBAddressAddress
+  return $ not (null rows)
 
 -- | Those of the addresses that have transactions on the chain
 usedAddresses :: (MonadUnliftIO m) => [Text] -> DB m [Text]

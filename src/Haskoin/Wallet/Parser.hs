@@ -402,13 +402,23 @@ computer.
 -- | The network, when given. Without it, a command that needs one takes the
 -- default-network of the configuration file.
 networkMaybeOption :: Parser (Maybe Network)
-networkMaybeOption =
+networkMaybeOption = networkOptionWith "Without it, the default-network of the configuration file"
+
+-- | The network of a sweep, when given. A sweep that pays an account of the
+-- wallet is on the network of that account. One that pays none needs it.
+sweepNetworkOption :: Parser (Maybe Network)
+sweepNetworkOption =
+  networkOptionWith "Needed by a sweep that pays no account of this wallet: the default-network of the configuration file does not apply to it"
+
+-- | The network, when given, with the help of the command about it
+networkOptionWith :: String -> Parser (Maybe Network)
+networkOptionWith without =
   optional . option (eitherReader (f . netByName)) $
     short 'n'
       <> long "network"
       <> metavar "TEXT"
       <> completeWith ((.name) <$> allNets)
-      <> help ("One of the networks " <> nets <> ". Without it, the default-network of the configuration file")
+      <> help ("One of the networks " <> nets <> ". " <> without)
   where
     nets = intercalate ", " ((.name) <$> allNets)
     f :: Maybe Network -> Either String Network
@@ -1239,7 +1249,7 @@ prepareSweepParser = do
   let options =
         PrepareSweep
           <$> accountOption
-          <*> networkMaybeOption
+          <*> sweepNetworkOption
           <*> prvKeysMaybeOption
           <*> many sweepFromOption
           <*> some sweepToOption -- some: at least one
@@ -1265,12 +1275,17 @@ the shorthand format -t ADDR1 -t ADDR2 to specify the --sweepto addresses.
 
 A sweep that pays an address of this wallet is of the account of that address,
 found without --account unless the sweep pays several accounts, on its network.
-It is stored as a pending transaction, to be signed with `signsweep` by its
-nosigHash, and written to the --output file when one is given.
+The address finds its account however it is written: a Bitcoin Cash address
+with or without its prefix, or in its legacy form. The sweep is stored as a
+pending transaction, to be signed with `signsweep` by its nosigHash, and
+written to the --output file when one is given.
 
 A sweep that pays no address of this wallet needs no account, even in a wallet
 that has none: hw is then a utility. It needs the --network it is for and an
---output file, which names the network and is signed from there.
+--output file, which names the network and is signed from there. The
+default-network of the configuration file does not apply to it. Private keys,
+coins and the legacy addresses of Bitcoin Cash read the same on Bitcoin, so a
+wrong guess would sweep the coins of the other chain.
 |]
 
 sweepFromOption :: Parser Text
