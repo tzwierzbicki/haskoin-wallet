@@ -31,7 +31,9 @@ import Data.Maybe (fromMaybe, isJust)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
-import Data.Time (getCurrentTime)
+import Data.Time (UTCTime, getCurrentTime)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
+import Data.Word (Word64)
 import Database.Esqueleto.Legacy as E
 import qualified Database.Persist as P
 import Haskoin
@@ -146,6 +148,11 @@ data TxStatus
 data ChainStatus = ChainStatus
   { chainTxid :: !TxHash,
     chainBlock :: !Store.BlockRef,
+    -- | The time the store gives the transaction: when it first saw it in
+    -- its mempool, or, for one it first saw in a block, the time of that
+    -- block. Nothing for a summary stored without it, before hw kept it,
+    -- until the next sync fetches the transaction again.
+    chainTime :: !(Maybe UTCTime),
     chainConfirmations :: !Natural,
     -- | The transaction is no longer valid: replaced, or dropped from the
     -- network. Its summary is kept, so that the history shows what happened.
@@ -284,6 +291,7 @@ statusPairs :: TxStatus -> [Pair]
 statusPairs (OnChain status) =
   [ "txid" .= chainTxid status,
     "block" .= chainBlock status,
+    "time" .= chainTime status,
     "confirmations" .= chainConfirmations status,
     "dead" .= chainDead status,
     "pending" .= Json.Null
@@ -291,6 +299,7 @@ statusPairs (OnChain status) =
 statusPairs (Pending status) =
   [ "txid" .= pendingTxid status,
     "block" .= Store.MemRef 0,
+    "time" .= Json.Null,
     "confirmations" .= (0 :: Natural),
     "dead" .= False,
     "pending"
@@ -318,6 +327,7 @@ statusParser o = do
         ChainStatus
           <$> o .: "txid"
           <*> o .: "block"
+          <*> o .:? "time"
           <*> o .:? "confirmations" .!= 0
           <*> o .:? "dead" .!= False
 
@@ -397,6 +407,21 @@ txInfoBlockRefs accId = do
     return (tid, ref)
   return $ Map.fromList entries
 
+-- | The live summaries of an account without their time, stored before hw
+-- kept it, as the step to version 4 of the database copied them: the sync
+-- fetches their transactions again to learn it. An index holds these rows
+-- alone, so that asking costs nothing once every summary has its time.
+untimedSummaries :: (MonadUnliftIO m) => DBAccountId -> ExceptT String (DB m) [TxHash]
+untimedSummaries accId = do
+  rows <-
+    lift . select . from $ \t -> do
+      where_ $
+        t ^. DBTxInfoAccount ==. val accId
+          &&. isNothing (t ^. DBTxInfoTime)
+          &&. t ^. DBTxInfoDead ==. val False
+      return (t ^. DBTxInfoTxid)
+  liftEither $ mapM (bytesToHash . unValue) rows
+
 -- | The stored summary of a live transaction of the account, with its
 -- block; nothing when the sync has not stored it or found it dead
 liveSummary ::
@@ -420,22 +445,27 @@ markTxInfoDead :: (MonadUnliftIO m) => DBAccountId -> TxHash -> DB m ()
 markTxInfoDead accId tid =
   P.update (DBTxInfoKey accId (hashBytes tid)) [DBTxInfoDead P.=. True]
 
+-- | The time the store gives a transaction, in seconds since 1970
+storeTime :: Word64 -> UTCTime
+storeTime = posixSecondsToUTCTime . fromIntegral
+
 -- | Store the summary of a live transaction of the account at its block,
--- or replace the one stored, which brings a summary marked dead back.
--- Returns whether the row changed.
+-- with the time the store gives it, or replace the one stored, which
+-- brings a summary marked dead back. Returns whether the row changed.
 repsertSummary ::
-  (MonadUnliftIO m) => Network -> DBAccountId -> TxHash -> Store.BlockRef -> TxSummary -> DB m Bool
-repsertSummary net accId tid ref summary = do
-  time <- liftIO getCurrentTime
+  (MonadUnliftIO m) => Network -> DBAccountId -> TxHash -> Store.BlockRef -> UTCTime -> TxSummary -> DB m Bool
+repsertSummary net accId tid ref time summary = do
+  now <- liftIO getCurrentTime
   let key = DBTxInfoKey accId (hashBytes tid)
       row =
         DBTxInfo
           { dBTxInfoAccount = accId,
             dBTxInfoTxid = hashBytes tid,
             dBTxInfoBlockRef = S.encode ref,
+            dBTxInfoTime = Just time,
             dBTxInfoBlob = BS.toStrict $ marshalJSON net summary,
             dBTxInfoDead = False,
-            dBTxInfoCreated = time
+            dBTxInfoCreated = now
           }
   prevM <- P.get key
   case prevM of
@@ -464,14 +494,14 @@ txsPage accId page = do
       orderBy [asc (t ^. DBTxInfoBlockRef)]
       limit lim
       offset off
-      return (t ^. DBTxInfoTxid, t ^. DBTxInfoBlockRef, t ^. DBTxInfoDead, t ^. DBTxInfoBlob)
+      return (t ^. DBTxInfoTxid, t ^. DBTxInfoBlockRef, t ^. DBTxInfoTime, t ^. DBTxInfoDead, t ^. DBTxInfoBlob)
   heightM <- bestHeight net
-  forM rows $ \(Value tidBytes, Value refBytes, Value dead, Value blob) -> do
+  forM rows $ \(Value tidBytes, Value refBytes, Value time, Value dead, Value blob) -> do
     tid <- liftEither $ bytesToHash tidBytes
     ref <- liftEither $ S.decode refBytes
     summary <- liftEither $ decodeSummary net tid blob
     let confirmations = if dead then 0 else getConfirmations heightM ref
-        status = ChainStatus tid ref confirmations dead
+        status = ChainStatus tid ref time confirmations dead
     lift $ fillTxInfoLabels net $ TxInfo summary (OnChain status)
 
 -- | The transaction with the labels of the account's addresses filled in,

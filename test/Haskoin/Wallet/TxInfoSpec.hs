@@ -13,7 +13,8 @@ module Haskoin.Wallet.TxInfoSpec (spec) where
 import Conduit (liftIO)
 import Control.Monad.Except (ExceptT)
 import Control.Monad.Trans (lift)
-import Data.Aeson (eitherDecode)
+import Data.Aeson (Object, Value (Null), eitherDecode)
+import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Aeson.Types (parseEither)
 import qualified Data.ByteString as BS
 import Data.Default (def)
@@ -132,7 +133,7 @@ summarized = storeSummary btc ourPaths
 
 -- | Store the summary of a transaction for the account, as the sync does
 record :: DBAccountId -> Store.Transaction -> ExceptT String (DB IO) Bool
-record accId tx = lift $ repsertSummary btc accId tx.txid tx.block (summarized tx)
+record accId tx = lift $ repsertSummary btc accId tx.txid tx.block (storeTime tx.timestamp) (summarized tx)
 
 -- | The id of each listed transaction, in the order of the listing
 listedIds :: DBAccountId -> Page -> ExceptT String (DB IO) [TxHash]
@@ -238,7 +239,7 @@ statusSpec :: Spec
 statusSpec =
   describe "The status of a transaction" $ do
     it "knows the id of a transaction on the chain" $
-      txInfoHash (TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) 3 False))) `shouldBe` Just (fakeTxHash 2)
+      txInfoHash (TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 3 False))) `shouldBe` Just (fakeTxHash 2)
 
     it "gives a transaction in preparation its id once it is signed" $ do
       let unsigned = PendingStatus (fakeTxHash 7) Nothing False False
@@ -250,7 +251,7 @@ jsonSpec :: Spec
 jsonSpec =
   describe "Transactions in JSON" $ do
     it "writes a transaction on the chain as txs prints it, and reads it back" $ do
-      let info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) 3 False))
+      let info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 3 False))
           json :: String
           json =
             [r|{
@@ -275,12 +276,20 @@ jsonSpec =
               "otherinputs": {},
               "nonstdinputs": [],
               "block": {"height": 800001, "position": 1},
+              "time": "2023-11-14T22:13:20Z",
               "confirmations": 3,
               "dead": false,
               "pending": null
             }|]
       eitherDecode (cs json) `shouldBe` Right (marshalValue btc info)
       unmarshalJSON btc (cs json) `shouldBe` Just info
+
+    -- Stored before hw kept the time, until the next sync
+    it "writes a transaction on the chain without its time as null" $ do
+      let info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) Nothing 3 False))
+      unmarshalJSON btc (marshalJSON btc info) `shouldBe` Just info
+      let written = eitherDecode (marshalJSON btc info) :: Either String Object
+      (KeyMap.lookup "time" <$> written) `shouldBe` Right (Just Null)
 
     it "writes a transaction in preparation with its state, and the block of one that is nowhere yet" $ do
       let info = TxInfo paymentSummary (Pending (PendingStatus (fakeTxHash 7) (Just (fakeTxHash 1)) True False))
@@ -301,6 +310,7 @@ jsonSpec =
               "otherinputs": {"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU": 51000},
               "nonstdinputs": [],
               "block": {"mempool": 0},
+              "time": null,
               "confirmations": 0,
               "dead": false,
               "pending": {
@@ -398,6 +408,25 @@ storingSpec ctx =
         (fmap dBTxInfoCreated <$> lift (storedRow accId (fakeTxHash 1))) `dbShouldBeE` (dBTxInfoCreated <$> first)
         listedBlocks accId `dbShouldBeE` [(Store.BlockRef 800000 1, 1)]
 
+    it "stores the time the store gives the transaction" $
+      inDatabaseE $ do
+        accId <- account ctx
+        _ <- record accId (payment ctx)
+        (fmap dBTxInfoTime <$> lift (storedRow accId (fakeTxHash 1))) `dbShouldBeE` Just (Just seenTime)
+
+    -- Summaries of version 3 of the database, as the migration copied them
+    it "tells the live summaries without their time, for the sync to fetch them again" $
+      inDatabaseE $ do
+        accId <- account ctx
+        _ <- record accId (payment ctx)
+        _ <- record accId (spend ctx)
+        _ <- record accId (creditTx ctx (fakeTxHash 3) (Store.BlockRef 800002 1) (externalAddr 0) 20000)
+        let untime tid = lift $ P.update (DBTxInfoKey accId (hashBytes tid)) [DBTxInfoTime P.=. Nothing]
+        untime (fakeTxHash 1)
+        untime (fakeTxHash 3)
+        lift $ markTxInfoDead accId (fakeTxHash 3)
+        untimedSummaries accId `dbShouldBeE` [fakeTxHash 1]
+
     it "maps the live transactions to their blocks, leaving the dead ones out" $
       inDatabaseE $ do
         accId <- account ctx
@@ -466,13 +495,19 @@ listingSpec ctx =
         lift $ updateBest btc (fakeBlockHash 0) 800001
         listedBlocks accId `dbShouldBeE` [(Store.MemRef 1700000000, 0), (Store.BlockRef 800002 1, 1), (Store.BlockRef 800000 1, 2)]
 
+    it "lists each transaction with the time the store gives it" $
+      inDatabaseE $ do
+        accId <- account ctx
+        _ <- record accId (payment ctx)
+        (map (chainTime . chainOf) <$> txsPage accId (Page 5 0)) `dbShouldBeE` [Just seenTime]
+
     it "gives a dead transaction no confirmations, and keeps its block" $
       inDatabaseE $ do
         accId <- account ctx
         _ <- record accId (payment ctx)
         lift $ updateBest btc (fakeBlockHash 0) 800002
         lift $ markTxInfoDead accId (fakeTxHash 1)
-        (map chainOf <$> txsPage accId (Page 5 0)) `dbShouldBeE` [ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) 0 True]
+        (map chainOf <$> txsPage accId (Page 5 0)) `dbShouldBeE` [ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 0 True]
 
     it "fills in the labels of the account's addresses as they are today" $
       inDatabaseE $ do
@@ -487,7 +522,7 @@ listingSpec ctx =
     it "refuses a stored summary that does not decode, naming the transaction" $
       inDatabaseE $ do
         accId <- account ctx
-        lift $ P.insert_ $ DBTxInfo accId (hashBytes (fakeTxHash 9)) (S.encode (Store.BlockRef 800000 1)) "nonsense" False fixtureTime
+        lift $ P.insert_ $ DBTxInfo accId (hashBytes (fakeTxHash 9)) (S.encode (Store.BlockRef 800000 1)) (Just seenTime) "nonsense" False fixtureTime
         lift $
           dbShouldFailWith "The stored summary of transaction 0000000000000000000000000000000000000000000000000000000000000009 does not decode" $
             txsPage accId (Page 5 0)
@@ -500,7 +535,7 @@ listingSpec ctx =
         -- A payment to the second wallet's first address
         let otherPaths = Map.fromList [(externalAddr2, Deriv :/ 0 :/ 0)]
             otherPayment = creditTx ctx (fakeTxHash 8) (Store.BlockRef 800000 2) externalAddr2 70000
-        _ <- lift $ repsertSummary btc otherId (fakeTxHash 8) (Store.BlockRef 800000 2) (storeSummary btc otherPaths otherPayment)
+        _ <- lift $ repsertSummary btc otherId (fakeTxHash 8) (Store.BlockRef 800000 2) seenTime (storeSummary btc otherPaths otherPayment)
         listedIds accId (Page 5 0) `dbShouldBeE` [fakeTxHash 1]
         listedIds otherId (Page 5 0) `dbShouldBeE` [fakeTxHash 8]
 
@@ -518,18 +553,18 @@ historySpec ctx =
         record accId (spend ctx) `dbShouldBeE` True
         lift $ updateBest btc (fakeBlockHash 0) 800002
         txsPage accId (Page 5 0)
-          `dbShouldBeE` [ TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) 2 False)),
-                        TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) 3 False))
+          `dbShouldBeE` [ TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)),
+                        TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False))
                       ]
         -- A reorganisation leaves the spending out: the payment stands
         lift $ markTxInfoDead accId (fakeTxHash 2)
         txsPage accId (Page 5 0)
-          `dbShouldBeE` [ TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) 0 True)),
-                        TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) 3 False))
+          `dbShouldBeE` [ TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 0 True)),
+                        TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False))
                       ]
         -- The spending is mined again, in the next block
         record accId (spendAt ctx (Store.BlockRef 800002 4)) `dbShouldBeE` True
         txsPage accId (Page 5 0)
-          `dbShouldBeE` [ TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800002 4) 1 False)),
-                        TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) 3 False))
+          `dbShouldBeE` [ TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800002 4) (Just seenTime) 1 False)),
+                        TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False))
                       ]

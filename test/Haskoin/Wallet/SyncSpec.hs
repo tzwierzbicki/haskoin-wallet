@@ -85,6 +85,23 @@ spec = prepareContext $ \ctx -> do
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (0, 0)
         summaries accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
 
+    it "stores the time the store gives each transaction" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (paymentStore ctx) accId
+        (map (chainTime . chainOf) <$> txsPage accId (Page 5 0)) `dbShouldBeE` [Just seenTime]
+
+    -- As the step to version 4 of the database left it: the balances are
+    -- unchanged, and no address is listed
+    it "fetches again a transaction whose summary has no time, and stores its time" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (paymentStore ctx) accId
+        lift $ P.update (DBTxInfoKey accId (hashBytes (fakeTxHash 1))) [DBTxInfoTime P.=. Nothing]
+        res <- syncWith (paymentStore ctx) accId
+        liftIO $ syncResTxUpdates res `shouldBe` 1
+        (map (chainTime . chainOf) <$> txsPage accId (Page 5 0)) `dbShouldBeE` [Just seenTime]
+
     it "reports what the account can spend once synced" $
       inDatabaseE $ do
         accId <- account
@@ -669,29 +686,35 @@ spec = prepareContext $ \ctx -> do
         knownIn block = Map.fromList [(fakeTxHash 1, block)]
 
     it "fetches a listed transaction it does not know" $
-      transactionsToFetch Map.empty (stored (externalAddr 0) 1) [listing (externalAddr 0) 1 [payment]]
+      transactionsToFetch Map.empty [] (stored (externalAddr 0) 1) [listing (externalAddr 0) 1 [payment]]
         `shouldBe` [fakeTxHash 1]
 
     it "leaves alone a known transaction listed in its block" $
-      transactionsToFetch (knownIn (Store.BlockRef 800000 1)) (stored (externalAddr 0) 1) [listing (externalAddr 0) 1 [payment]]
+      transactionsToFetch (knownIn (Store.BlockRef 800000 1)) [] (stored (externalAddr 0) 1) [listing (externalAddr 0) 1 [payment]]
         `shouldBe` []
 
     it "fetches a known transaction again when it moved to another block" $
-      transactionsToFetch (knownIn (Store.BlockRef 800001 3)) (stored (externalAddr 0) 1) [listing (externalAddr 0) 1 [payment]]
+      transactionsToFetch (knownIn (Store.BlockRef 800001 3)) [] (stored (externalAddr 0) 1) [listing (externalAddr 0) 1 [payment]]
         `shouldBe` [fakeTxHash 1]
 
     it "fetches the unconfirmed transactions again, listed or not" $
-      transactionsToFetch (knownIn (Store.MemRef 1700000000)) Map.empty []
+      transactionsToFetch (knownIn (Store.MemRef 1700000000)) [] Map.empty []
         `shouldBe` [fakeTxHash 1]
 
     it "fetches every transaction of an address that has transactions for the first time" $
       -- The known payment also paid this address, which its summary does
       -- not show yet: it is rebuilt along with the new transaction
-      transactionsToFetch (knownIn (Store.BlockRef 800000 1)) (stored (externalAddr 1) 0) [listing (externalAddr 1) 2 [payment, Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 3)]]
+      transactionsToFetch (knownIn (Store.BlockRef 800000 1)) [] (stored (externalAddr 1) 0) [listing (externalAddr 1) 2 [payment, Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 3)]]
         `shouldMatchList` [fakeTxHash 1, fakeTxHash 3]
 
+    -- As the step to version 4 of the database copied it, before hw kept
+    -- the time
+    it "fetches a summary without its time again, its address unchanged" $
+      transactionsToFetch (knownIn (Store.BlockRef 800000 1)) [fakeTxHash 1] (stored (externalAddr 0) 1) []
+        `shouldBe` [fakeTxHash 1]
+
     it "names a transaction once when two addresses list it" $
-      transactionsToFetch Map.empty (stored (externalAddr 0) 1 <> stored (externalAddr 1) 1) [listing (externalAddr 0) 1 [payment], listing (externalAddr 1) 1 [payment]]
+      transactionsToFetch Map.empty [] (stored (externalAddr 0) 1 <> stored (externalAddr 1) 1) [listing (externalAddr 0) 1 [payment], listing (externalAddr 1) 1 [payment]]
         `shouldBe` [fakeTxHash 1]
 
   describe "Telling the dead transactions" $ do

@@ -188,7 +188,7 @@ arbitraryTxSummary net =
 arbitraryTxStatus :: Gen TxStatus
 arbitraryTxStatus =
   oneof
-    [ OnChain <$> (ChainStatus <$> arbitraryTxHash <*> arbitraryBlockRef <*> arbitraryNatural <*> arbitrary),
+    [ OnChain <$> (ChainStatus <$> arbitraryTxHash <*> arbitraryBlockRef <*> arbitraryMaybe arbitraryUTCTime <*> arbitraryNatural <*> arbitrary),
       Pending <$> (PendingStatus <$> arbitraryTxHash <*> arbitraryMaybe arbitraryTxHash <*> arbitrary <*> arbitrary)
     ]
 

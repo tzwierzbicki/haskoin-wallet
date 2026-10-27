@@ -33,7 +33,7 @@ import Haskoin.Wallet.Coin
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.RawTx (insertRawTx)
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.TxInfo (repsertSummary, storeSummary)
+import Haskoin.Wallet.TxInfo (repsertSummary, storeSummary, storeTime)
 import Haskoin.Wallet.Util (Page (Page))
 import Numeric.Natural (Natural)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), MarshalJsonBox (..), testIdentity)
@@ -194,7 +194,7 @@ oddlyWrittenPayment =
 
 -- | Store the summary of a transaction of the store, as the sync does
 summarise :: DBAccountId -> Store.Transaction -> ExceptT String (DB IO) ()
-summarise accId tx = void $ lift $ repsertSummary btc accId tx.txid tx.block (storeSummary btc accountPaths tx)
+summarise accId tx = void $ lift $ repsertSummary btc accId tx.txid tx.block (storeTime tx.timestamp) (storeSummary btc accountPaths tx)
 
 -- | Transaction 1 confirmed at 800000: someone else pays the first payment
 firstPaymentTx :: Ctx -> Store.Transaction

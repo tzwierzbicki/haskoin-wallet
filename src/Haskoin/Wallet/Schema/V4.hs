@@ -29,7 +29,10 @@
 -- its addresses, summaries, coins and pending transactions point to. The
 -- confirmed columns of the summaries and the coins, which nothing read, are
 -- gone as well. A summary says whether its transaction is dead, replaced or
--- dropped from the network, where version 3 deleted it. A coin keeps its
+-- dropped from the network, where version 3 deleted it, and the time the
+-- store gives its transaction: when the store first saw it, in its mempool
+-- or in a block. A summary of version 3 has no time until the next sync
+-- fetches its transaction again. A coin keeps its
 -- address, which gives its script, and no longer the whole coin as the
 -- store reported it. Whether a coin is locked and whether a change address
 -- is free are read from the pending transactions, which the locked column
@@ -45,7 +48,8 @@
 -- are the bytes of the hash, not its hexadecimal text: half the size in
 -- every key and index. The 'tableIndexes' below are the ones persistent cannot
 -- declare: a covering index that serves the ordering of txs and the scan
--- of the sync without touching the rows; the account of every coin and
+-- of the sync without touching the rows; the summaries without their time,
+-- which only a database of version 3 had; the account of every coin and
 -- pending transaction, which their keys do not give; the coins of an
 -- address of an account, which the sync refreshes; and the coins of an
 -- account in the order coins lists them.
@@ -105,6 +109,7 @@ DBTxInfo
   account DBAccountId
   txid KeyBytes
   blockRef ByteString
+  time UTCTime Maybe
   blob ByteString
   dead Bool default=0
   created UTCTime default=CURRENT_TIMESTAMP
@@ -157,6 +162,7 @@ DBBest
 tableIndexes :: [Text]
 tableIndexes =
   [ "create index d_b_tx_info_account_block_ref on d_b_tx_info (account, block_ref, txid, dead)",
+    "create index d_b_tx_info_untimed on d_b_tx_info (account) where time is null",
     "create index d_b_coin_account on d_b_coin (account)",
     "create index d_b_coin_account_address on d_b_coin (account, address)",
     "create index d_b_coin_account_block_ref on d_b_coin (account, block_ref, outpoint)",

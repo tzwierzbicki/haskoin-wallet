@@ -154,7 +154,7 @@ spec = prepareContext $ \ctx ->
         columnNames "d_b_address"
           `dbShouldBe` [ "account", "address", "balance_coins", "balance_confirmed", "balance_received", "balance_txs",
                          "balance_unconfirmed", "created", "index", "internal", "label" ]
-        columnNames "d_b_tx_info" `dbShouldBe` ["account", "blob", "block_ref", "created", "dead", "txid"]
+        columnNames "d_b_tx_info" `dbShouldBe` ["account", "blob", "block_ref", "created", "dead", "time", "txid"]
         columnNames "d_b_coin" `dbShouldBe` ["account", "address", "block_ref", "created", "locked_by_user", "outpoint", "value"]
         columnNames "d_b_pending_tx" `dbShouldBe` ["account", "blob", "conflicted", "created", "nosig_hash", "online"]
 
@@ -163,6 +163,13 @@ spec = prepareContext $ \ctx ->
         version3Database
         migrateTo4 ctx
         queryRows "select dead from d_b_tx_info" `dbShouldBe` [[PersistInt64 0]]
+
+    -- Version 3 kept no time: the next sync fetches the transactions again
+    it "gives the summaries no time" $
+      inMemory $ do
+        version3Database
+        migrateTo4 ctx
+        queryRows "select time from d_b_tx_info" `dbShouldBe` [[PersistNull]]
 
     it "takes no lock of version 3 for a lock of the user: those were the pending transactions' locks" $
       inMemory $ do

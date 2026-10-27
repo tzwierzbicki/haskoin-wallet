@@ -19,6 +19,7 @@ import Data.List (isInfixOf, sortOn)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
+import Data.Time (UTCTime)
 import qualified Data.ByteString as BS
 import Data.Word (Word64)
 import qualified Database.Persist as P
@@ -1436,8 +1437,20 @@ rowsOf other = Left (show other)
 listings :: [String]
 listings = ["addrs", "txs", "coins", "pendingtxs"]
 
+-- | The time of each transaction an answer lists
+timesOf :: Response -> Either String [Maybe UTCTime]
+timesOf (ResponseTxs _ infos) = Right (chainTime . chainOf <$> infos)
+timesOf other = Left (show other)
+
 listingSpec :: Ctx -> Spec
-listingSpec ctx =
+listingSpec ctx = do
+  -- The fake store gives every transaction the time 1700000000
+  describe "The history txs lists" $
+    it "gives each transaction the time the store gives it" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        (timesOf <$> hwJson home ["txs"] []) `shouldReturn` Right [Just seenTime]
+
   describe "A listing" $ do
     -- 2^64 wrapped around to 0
     it "shows nothing at an offset past 64 bits, rather than the first page" $

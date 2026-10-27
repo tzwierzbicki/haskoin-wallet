@@ -169,10 +169,12 @@ sync ctx cfg store net accId full = do
   -- Their transactions, and the summaries to store or to mark dead
   listings <- listTxs cfg store net changedBals
   known <- txInfoBlockRefs accId
-  let toFetch = transactionsToFetch known addrBals listings
+  untimed <- untimedSummaries accId
+  let toFetch = transactionsToFetch known untimed addrBals listings
       listed = concatMap snd listings
   txs <- fromStore $ storeTransactions store toFetch
-  updated <- lift $ forM (filter (not . (.deleted)) txs) $ \tx -> repsertSummary net accId tx.txid tx.block (storeSummary net addrPaths tx)
+  updated <- lift $ forM (filter (not . (.deleted)) txs) $ \tx ->
+    repsertSummary net accId tx.txid tx.block (storeTime tx.timestamp) (storeSummary net addrPaths tx)
   lift $ forM_ (deadTransactions everything known toFetch txs listed) $ markTxInfoDead accId
   -- The coins, the pending transactions and the raw transactions
   refreshed <- syncCoins ctx store net accId changedBals
@@ -245,16 +247,18 @@ listTxs cfg store net bals = do
 {- The summaries -}
 
 -- | What to fetch in full, from the summaries known with their blocks, the
--- stored balances and the listings of the changed addresses: the listed
--- transactions that are new or whose block changed; the unconfirmed
--- summaries, whose transactions may have been confirmed, replaced or
--- dropped since the last sync; and every transaction of an address that
--- has transactions for the first time. A summary is built with the
--- addresses the wallet knows at the time, so a transaction that also paid
--- an address generated later, say a batch payout from someone deriving the
--- public key, shows that output as somebody else's until it is rebuilt.
-transactionsToFetch :: Map TxHash Store.BlockRef -> Map Address AddressBalance -> [(Store.Balance, [Store.TxRef])] -> [TxHash]
-transactionsToFetch known addrBals listings = nubOrd $ changed <> unconfirmed <> firstSeen
+-- summaries without their time, the stored balances and the listings of
+-- the changed addresses: the listed transactions that are new or whose
+-- block changed; the unconfirmed summaries, whose transactions may have
+-- been confirmed, replaced or dropped since the last sync; the summaries
+-- without their time, stored before hw kept it, whatever their addresses;
+-- and every transaction of an address that has transactions for the first
+-- time. A summary is built with the addresses the wallet knows at the
+-- time, so a transaction that also paid an address generated later, say a
+-- batch payout from someone deriving the public key, shows that output as
+-- somebody else's until it is rebuilt.
+transactionsToFetch :: Map TxHash Store.BlockRef -> [TxHash] -> Map Address AddressBalance -> [(Store.Balance, [Store.TxRef])] -> [TxHash]
+transactionsToFetch known untimed addrBals listings = nubOrd $ changed <> unconfirmed <> untimed <> firstSeen
   where
     changed = [r.txid | (_, refs) <- listings, r <- refs, Map.lookup r.txid known /= Just r.block]
     unconfirmed = [tid | (tid, ref) <- Map.toList known, not (Store.confirmed ref)]

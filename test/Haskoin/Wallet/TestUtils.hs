@@ -96,6 +96,11 @@ createTables = void . runMigrationQuiet
 fixtureTime :: UTCTime
 fixtureTime = UTCTime (fromGregorian 2023 11 1) 0
 
+-- | The time the test stores give their transactions, 1700000000 seconds
+-- after 1970: 14 Nov 2023 22:13:20 UTC
+seenTime :: UTCTime
+seenTime = UTCTime (fromGregorian 2023 11 14) (22 * 3600 + 13 * 60 + 20)
+
 -- | Run a test in a fresh directory under the temporary directory, removed
 -- afterwards, for the tests that need database files
 inScratchDirectory :: (FilePath -> IO a) -> IO a

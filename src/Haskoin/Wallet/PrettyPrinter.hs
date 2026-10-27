@@ -474,6 +474,11 @@ statusPrinter :: TxStatus -> Printer
 statusPrinter (OnChain status) =
   vcat
     [ txHashPrinter (chainTxid status),
+      -- In UTC: the time the store first saw the transaction, in its mempool
+      -- or in a block; none for a summary the next sync has to fetch again
+      case chainTime status of
+        Just time -> keyPrinter 9 "Time" <> formatValue (formatTime defaultTimeLocale "%d %b %Y %H:%M:%S UTC" time)
+        Nothing -> mempty,
       if chainDead status
         then
           keyPrinter 9 "Status"
