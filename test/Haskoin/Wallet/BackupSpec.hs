@@ -11,10 +11,11 @@ import Data.Time (LocalTime (..), TimeOfDay (..), ZonedTime (..), fromGregorian,
 import qualified Database.Persist as P
 import Database.Persist.Sql (PersistValue (..), transactionSave)
 import Haskoin.Wallet.Backup (backupDatabase, backupName)
-import Haskoin.Wallet.Commands (Response (..), cmdBackup)
+import Haskoin.Wallet.Commands (cmdBackup)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
+import Haskoin.Wallet.Response (Response (..))
 import Haskoin.Wallet.TestUtils
 import qualified Haskoin.Wallet.Schema.V2 as V2
 import System.FilePath (takeDirectory, takeFileName, (</>))

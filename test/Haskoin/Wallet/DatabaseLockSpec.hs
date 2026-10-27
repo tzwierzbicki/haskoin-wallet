@@ -12,9 +12,10 @@ import Data.Default (def)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Database.Persist.Sql (Single (..), rawExecute, rawSql)
-import Haskoin.Wallet.Commands (Response (..), cmdVersion)
+import Haskoin.Wallet.Commands (cmdVersion)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.Response (Response (..))
 import Haskoin.Wallet.TestUtils (inScratchDirectory)
 import System.FilePath ((</>))
 import Test.Hspec

@@ -234,6 +234,14 @@ getAccountByName Nothing = do
     [] -> throwError "There are no accounts in the wallet"
     _ -> throwError "Specify which account to use"
 
+-- | The account of the name, or every account without one
+getAccountsByName ::
+  (MonadUnliftIO m) =>
+  Maybe Text ->
+  ExceptT String (DB m) [(DBAccountId, DBAccount)]
+getAccountsByName (Just name) = (: []) <$> getAccountByName (Just name)
+getAccountsByName Nothing = lift getAccounts
+
 getAccountById ::
   (MonadUnliftIO m) => DBAccountId -> ExceptT String (DB m) DBAccount
 getAccountById accId = liftMaybe "Invalid account" =<< lift (P.get accId)

@@ -1,3 +1,5 @@
+{-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE NoFieldSelectors #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
@@ -18,146 +20,168 @@ import Options.Applicative
 import Options.Applicative.Help.Pretty
 import Text.RawString.QQ (r)
 
-{- Command Parsers -}
+{- Commands -}
 
+-- | A command of hw, with its options. Options that could be taken for one
+-- another, being many or of the same type, come in a record of their own,
+-- read by name; the others come as arguments of distinct types.
 data Command
-  = CommandMnemonic
-      { commandEntropy :: !Natural,
-        commandUseDice :: !Bool,
-        commandSplitIn :: !Natural
-      }
-  | CommandCreateAcc
-      { commandName :: !Text,
-        commandNetwork :: !Network,
-        commandSplitIn :: !Natural
-      }
-  | CommandRecover
-      { commandNetwork :: !Network,
-        commandAccountGap :: !Natural,
-        commandSplitIn :: !Natural
-      }
-  | CommandTestAcc
-      { commandMaybeAcc :: !(Maybe Text),
-        commandSplitIn :: !Natural
-      }
-  | CommandImportAcc
-      { commandFilePath :: !FilePath
-      }
-  | CommandExportAcc
-      { commandMaybeAcc :: !(Maybe Text),
-        commandFilePath :: !FilePath
-      }
-  | CommandRenameAcc
-      { commandOldName :: !Text,
-        commandNewName :: !Text
-      }
-  | CommandAccounts
-      { commandMaybeAcc :: !(Maybe Text)
-      }
-  | CommandDeleteAcc
-      { commandName :: !Text,
-        commandNetwork :: !Network,
-        commandDerivation :: !HardPath
-      }
-  | CommandReceive
-      { commandMaybeAcc :: !(Maybe Text),
-        commandMaybeLabel :: !(Maybe Text)
-      }
-  | CommandAddrs
-      { commandMaybeAcc :: !(Maybe Text),
-        commandInternal :: !Bool,
-        commandPage :: !Page
-      }
-  | CommandLabel
-      { commandMaybeAcc :: !(Maybe Text),
-        commandAddrIndex :: !Int,
-        commandLabel :: !Text
-      }
-  | CommandTxs
-      { commandMaybeAcc :: !(Maybe Text),
-        commandPage :: !Page
-      }
-  | CommandPrepareTx
-      { commandRecipients :: ![(Text, Text)],
-        commandMaybeAcc :: !(Maybe Text),
-        commandFeeByte :: !Natural,
-        commandDust :: !Natural,
-        commandFeePayer :: !FeePayer,
-        commandMinConf :: !Natural,
-        commandCoinSelection :: !CoinSelection,
-        commandOutputFileMaybe :: !(Maybe FilePath),
-        commandCoins :: ![OutPoint]
-      }
-  | CommandPendingTxs
-      { commandMaybeAcc :: !(Maybe Text),
-        commandPage :: !Page
-      }
-  | CommandReviewTx
-      { commandMaybeAcc :: !(Maybe Text),
-        commandFilePath :: !FilePath
-      }
-  | CommandImportTx
-      { commandMaybeAcc :: !(Maybe Text),
-        commandFilePath :: !FilePath
-      }
-  | CommandExportTx
-      { commandNoSigHash :: !TxHash,
-        commandFilePath :: !FilePath
-      }
-  | CommandDeleteTx
-      {commandNoSigHash :: !TxHash}
-  | CommandSignTx
-      { commandMaybeAcc :: !(Maybe Text),
-        commandNoSigHashMaybe :: !(Maybe TxHash),
-        commandInputFileMaybe :: !(Maybe FilePath),
-        commandOutputFileMaybe :: !(Maybe FilePath),
-        commandSplitIn :: !Natural
-      }
-  | CommandSignMsg
-      { commandAddress :: !Text,
-        commandMessage :: !Text,
-        commandSplitIn :: !Natural
-      }
-  | CommandCoins
-      { commandMaybeAcc :: !(Maybe Text),
-        -- | The locked coins only
-        commandLocked :: !Bool,
-        commandPage :: !Page
-      }
-  | CommandLockCoin
-      {commandOutPoint :: !OutPoint}
-  | CommandUnlockCoin
-      {commandOutPoint :: !OutPoint}
-  | CommandSendTx
-      { commandNoSigHashMaybe :: !(Maybe TxHash),
-        commandInputFileMaybe :: !(Maybe FilePath),
-        commandNetworkMaybe :: !(Maybe Network)
-      }
-  | CommandSync
-      { commandMaybeAcc :: !(Maybe Text),
-        commandFull :: !Bool
-      }
-  | CommandBackup
-      {commandBackupFile :: !(Maybe FilePath)}
+  = CommandMnemonic !NewMnemonic
+  | -- | The name of the new account, its network, and the parts the mnemonic
+    -- is typed in
+    CommandCreateAcc !Text !Network !Natural
+  | CommandRecover !Recover
+  | -- | The account, and the parts the mnemonic is typed in
+    CommandTestAcc !(Maybe Text) !Natural
+  | -- | The account document to import
+    CommandImportAcc !FilePath
+  | -- | The account, and the file to write its document to
+    CommandExportAcc !(Maybe Text) !FilePath
+  | CommandRenameAcc !RenameAcc
+  | -- | The account, or every one
+    CommandAccounts !(Maybe Text)
+  | -- | The name of the account, with its network and its path to confirm
+    -- the deletion
+    CommandDeleteAcc !Text !Network !HardPath
+  | CommandReceive !Receive
+  | -- | The account, whether its change addresses, and the page
+    CommandAddrs !(Maybe Text) !Bool !Page
+  | -- | The account, the index of the receiving address, and its label
+    CommandLabel !(Maybe Text) !Int !Text
+  | -- | The account, and the page
+    CommandTxs !(Maybe Text) !Page
+  | CommandPrepareTx !PrepareTx
+  | -- | The account, and the page
+    CommandPendingTxs !(Maybe Text) !Page
+  | -- | The account, and the transaction file
+    CommandReviewTx !(Maybe Text) !FilePath
+  | -- | The account, and the transaction file
+    CommandImportTx !(Maybe Text) !FilePath
+  | -- | The nosigHash of the pending transaction, and the file to write it to
+    CommandExportTx !TxHash !FilePath
+  | -- | The nosigHash of the pending transaction
+    CommandDeleteTx !TxHash
+  | -- | What to sign, and the parts the mnemonic is typed in
+    CommandSignTx !Signing !Natural
+  | CommandSignMsg !SignMsg
+  | -- | The account, whether the locked coins only, and the page
+    CommandCoins !(Maybe Text) !Bool !Page
+  | CommandLockCoin !OutPoint
+  | CommandUnlockCoin !OutPoint
+  | -- | The nosigHash of a pending transaction, or the file of a signed one,
+    -- and the network it is for
+    CommandSendTx !(Maybe TxHash) !(Maybe FilePath) !(Maybe Network)
+  | -- | The account, or every one, and whether to sync from the start
+    CommandSync !(Maybe Text) !Bool
+  | -- | The file of the copy, or none for the backups directory of hw
+    CommandBackup !(Maybe FilePath)
   | CommandVersion
-  | CommandPrepareSweep
-      { commandMaybeAcc :: !(Maybe Text),
-        commandSecKeysMaybe :: !(Maybe KeySource),
-        commandSweepFrom :: ![Text],
-        commandSweepTo :: ![Text],
-        commandCoins :: ![OutPoint],
-        commandOutputFileMaybe :: !(Maybe FilePath),
-        commandFeeByte :: !Natural,
-        commandDust :: !Natural
-      }
-  | CommandSignSweep
-      { commandMaybeAcc :: !(Maybe Text),
-        commandNoSigHashMaybe :: !(Maybe TxHash),
-        commandInputFileMaybe :: !(Maybe FilePath),
-        commandOutputFileMaybe :: !(Maybe FilePath),
-        commandSecKeysMaybe :: !(Maybe KeySource)
-      }
+  | CommandPrepareSweep !PrepareSweep
+  | -- | What to sign, and the file of the private keys, typed on the
+    -- terminal without one
+    CommandSignSweep !Signing !(Maybe KeySource)
   deriving (Eq, Show)
+
+-- | The options of mnemonic
+data NewMnemonic = NewMnemonic
+  { -- | The bytes of entropy
+    entropy :: !Natural,
+    -- | Whether dice rolls are mixed in
+    dice :: !Bool,
+    -- | The parts the mnemonic is split in
+    parts :: !Natural
+  }
+  deriving (Eq, Show)
+
+-- | The options of recover
+data Recover = Recover
+  { network :: !Network,
+    -- | The accounts in a row without a payment that end the search
+    accountGap :: !Natural,
+    -- | The parts the mnemonic is typed in
+    parts :: !Natural
+  }
+  deriving (Eq, Show)
+
+-- | The options of renameacc
+data RenameAcc = RenameAcc
+  { old :: !Text,
+    new :: !Text
+  }
+  deriving (Eq, Show)
+
+-- | The options of receive
+data Receive = Receive
+  { account :: !(Maybe Text),
+    label :: !(Maybe Text)
+  }
+  deriving (Eq, Show)
+
+-- | The options of preparetx
+data PrepareTx = PrepareTx
+  { -- | The addresses paid, each with its amount as typed
+    recipients :: ![(Text, Text)],
+    account :: !(Maybe Text),
+    -- | The fee rate, in satoshis per byte
+    feeByte :: !Natural,
+    -- | The dust limit, in satoshis
+    dust :: !Natural,
+    feePayer :: !FeePayer,
+    -- | The confirmations a coin needs to be spent
+    minConf :: !Natural,
+    strategy :: !CoinSelection,
+    output :: !(Maybe FilePath),
+    -- | The coins to spend, instead of choosing them
+    coins :: ![OutPoint]
+  }
+  deriving (Eq, Show)
+
+-- | The options of signmsg
+data SignMsg = SignMsg
+  { -- | The address of the wallet that signs
+    address :: !Text,
+    message :: !Text,
+    -- | The parts the mnemonic is typed in
+    parts :: !Natural
+  }
+  deriving (Eq, Show)
+
+-- | The options of preparesweep
+data PrepareSweep = PrepareSweep
+  { account :: !(Maybe Text),
+    -- | The private keys of the addresses swept, if at hand
+    keys :: !(Maybe KeySource),
+    sweepFrom :: ![Text],
+    sweepTo :: ![Text],
+    -- | The coins swept, by outpoint
+    coins :: ![OutPoint],
+    output :: !(Maybe FilePath),
+    -- | The fee rate, in satoshis per byte
+    feeByte :: !Natural,
+    -- | The dust limit, in satoshis
+    dust :: !Natural
+  }
+  deriving (Eq, Show)
+
+-- | What signtx and signsweep sign, and where the signed transaction goes:
+-- a pending transaction by its nosigHash, or an --input file signed to an
+-- --output file
+data Signing = Signing
+  { account :: !(Maybe Text),
+    nosigHash :: !(Maybe TxHash),
+    input :: !(Maybe FilePath),
+    output :: !(Maybe FilePath)
+  }
+  deriving (Eq, Show)
+
+-- | What signtx and signsweep sign
+signingOptions :: Parser Signing
+signingOptions =
+  Signing
+    <$> accountOption
+    <*> optional nosigHashArg
+    <*> inputFileMaybeOption
+    <*> outputFileMaybeOption
 
 parserMain :: IO (Command, AmountUnit, Bool)
 parserMain =
@@ -276,9 +300,7 @@ mnemonicParser :: ParserInfo Command
 mnemonicParser = do
   let cmd =
         CommandMnemonic
-          <$> entropyOption
-          <*> diceOption
-          <*> splitInOption
+          <$> (NewMnemonic <$> entropyOption <*> diceOption <*> splitInOption)
   info cmd $
     progDescDoc (offline "Generate a mnemonic")
       <> footer
@@ -403,7 +425,7 @@ networkOptionWith mods =
 
 recoverParser :: ParserInfo Command
 recoverParser = do
-  let cmd = CommandRecover <$> networkOption <*> accountGapOption <*> splitInOption
+  let cmd = CommandRecover <$> (Recover <$> networkOption <*> accountGapOption <*> splitInOption)
   info cmd $
     progDescDoc (offline "Recover the accounts of a seed that were paid")
       <> footer
@@ -559,8 +581,7 @@ renameAccParser :: ParserInfo Command
 renameAccParser = do
   let cmd =
         CommandRenameAcc
-          <$> accountArg "Old account name"
-          <*> textArg "New account name"
+          <$> (RenameAcc <$> accountArg "Old account name" <*> textArg "New account name")
   info cmd $ progDesc "Rename an account"
 
 accountArg :: String -> Parser Text
@@ -595,7 +616,7 @@ asks for confirmations.
 receiveParser :: ParserInfo Command
 receiveParser = do
   let cmd =
-        CommandReceive <$> accountOption <*> labelOption
+        CommandReceive <$> (Receive <$> accountOption <*> labelOption)
   info cmd $
     progDesc "Get a new address for receiving a payment"
       <> footer
@@ -711,8 +732,8 @@ txsParser = do
 
 prepareTxParser :: ParserInfo Command
 prepareTxParser = do
-  let cmd =
-        CommandPrepareTx
+  let options =
+        PrepareTx
           <$> some recipientArg
           <*> accountOption
           <*> feeOption
@@ -722,7 +743,7 @@ prepareTxParser = do
           <*> coinSelectionOption
           <*> outputFileMaybeOption
           <*> many coinOption
-  info cmd $
+  info (CommandPrepareTx <$> options) $
     progDesc "Prepare an unsigned transaction for making a payment"
       <> footer
         [r|
@@ -957,10 +978,7 @@ signTxParser :: ParserInfo Command
 signTxParser = do
   let cmd =
         CommandSignTx
-          <$> accountOption
-          <*> optional nosigHashArg
-          <*> inputFileMaybeOption
-          <*> outputFileMaybeOption
+          <$> signingOptions
           <*> splitInOption
   info cmd $
     progDescDoc (offline "Sign a transaction")
@@ -1186,9 +1204,7 @@ signMsgParser :: ParserInfo Command
 signMsgParser = do
   let cmd =
         CommandSignMsg
-          <$> signAddressArg
-          <*> signMsgArg
-          <*> splitInOption
+          <$> (SignMsg <$> signAddressArg <*> signMsgArg <*> splitInOption)
   info cmd $
     progDescDoc (offline "Sign a user-defined message")
       <> footer
@@ -1223,8 +1239,8 @@ The message to be signed
 
 prepareSweepParser :: ParserInfo Command
 prepareSweepParser = do
-  let cmd =
-        CommandPrepareSweep
+  let options =
+        PrepareSweep
           <$> accountOption
           <*> prvKeysMaybeOption
           <*> many sweepFromOption
@@ -1233,7 +1249,7 @@ prepareSweepParser = do
           <*> outputFileMaybeOption
           <*> feeOption
           <*> dustOption
-  info cmd $
+  info (CommandPrepareSweep <$> options) $
     progDesc "Prepare a transaction to sweep funds"
       <> footer
         [r|
@@ -1285,10 +1301,7 @@ signSweepParser :: ParserInfo Command
 signSweepParser = do
   let cmd =
         CommandSignSweep
-          <$> accountOption
-          <*> optional nosigHashArg
-          <*> inputFileMaybeOption
-          <*> outputFileMaybeOption
+          <$> signingOptions
           <*> prvKeysMaybeOption
   info cmd $
     progDesc "Sign a sweep transaction"

@@ -1,3 +1,5 @@
+{-# LANGUAGE DuplicateRecordFields #-}
+
 module Haskoin.Wallet
   ( module Amounts,
     module CoinSelection,
@@ -16,6 +18,7 @@ module Haskoin.Wallet
     module Keys,
     module Prompt,
     module Parser,
+    module Response,
     module TxBuilding,
     module TxInfo,
     module TxSignData,
@@ -39,6 +42,7 @@ import Haskoin.Wallet.Parser as Parser
 import Haskoin.Wallet.PendingTx as PendingTx
 import Haskoin.Wallet.Prompt as Prompt
 import Haskoin.Wallet.RawTx as RawTx
+import Haskoin.Wallet.Response as Response
 import Haskoin.Wallet.Store as Store
 import Haskoin.Wallet.TxBuilding as TxBuilding
 import Haskoin.Wallet.TxInfo as TxInfo

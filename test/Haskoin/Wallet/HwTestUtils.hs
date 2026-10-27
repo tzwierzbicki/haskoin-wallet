@@ -41,7 +41,7 @@ import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebCommon (HeightParam (..), LimitParam (..), Param (..))
-import Haskoin.Wallet.Commands (Response)
+import Haskoin.Wallet.Response (Response)
 import Haskoin.Wallet.Store (Store (..))
 import Haskoin.Wallet.TestUtils (addressScript, blockAt, otherAddr)
 import Network.HTTP.Types (hContentType, status200, status404)

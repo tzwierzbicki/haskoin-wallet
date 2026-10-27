@@ -25,10 +25,11 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Account
 import Haskoin.Wallet.Address (genExtAddress)
 import Haskoin.Wallet.Coin (refreshCoins)
-import Haskoin.Wallet.Commands (Response (..), cmdAccounts, cmdAddrs, cmdExportAcc, cmdImportAcc)
+import Haskoin.Wallet.Commands (cmdAccounts, cmdAddrs, cmdExportAcc, cmdImportAcc)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Keys
 import Haskoin.Wallet.PendingTx (importPendingTx)
+import Haskoin.Wallet.Response (Response (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxSignData (TxSignData (..))
 import Haskoin.Wallet.Util (Page (Page))

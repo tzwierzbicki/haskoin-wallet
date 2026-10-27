@@ -26,7 +26,7 @@ import Haskoin
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), testIdentity)
 import Haskoin.Wallet.Arbitrary (arbitraryResponse)
 import Haskoin.Wallet.Coin (CoinLock (..), JsonCoin (..))
-import Haskoin.Wallet.Commands (Response (..))
+import Haskoin.Wallet.Response (Response (..))
 import Haskoin.Wallet.Database (DBAccount (..), DBAddress (..), databaseInUse, runDBWith)
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (MnemonicPass (..))

@@ -53,7 +53,7 @@ couldNotWrite file reason = "The file " <> file <> " could not be written: " <> 
 {- JSON files -}
 
 -- | Write a JSON document to a file, or say why it could not be written
-writeJsonFile :: FilePath -> Value -> IO (Either String ())
+writeJsonFile :: (ToJSON a) => FilePath -> a -> IO (Either String ())
 writeJsonFile file doc = first (couldNotWrite file) <$> systemReason (C8.writeFile file (encodeJsonPretty doc))
 
 -- | Read a JSON document from a file, or say why it could not be read: the

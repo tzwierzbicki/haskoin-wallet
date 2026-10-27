@@ -1,22 +1,67 @@
-{-# LANGUAGE CPP #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE OverloadedRecordDot #-}
-{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE OverloadedStrings #-}
 
-module Haskoin.Wallet.Commands where
+-- | The commands of hw. Each reads what it needs from the database, the
+-- store and the user, and answers with a 'Response'. A command runs in one
+-- transaction of the database: one that fails leaves the database as it
+-- was, and answers with its error. An answer that shows an account reads it
+-- once the command is done, so that it shows what the command changed.
+module Haskoin.Wallet.Commands
+  ( commandResponse,
 
-import Conduit (MonadUnliftIO)
-import Control.Monad
-import Control.Monad.Except
-import Control.Monad.Reader (MonadIO(..), MonadTrans(lift))
-import Data.Aeson (object, (.:), (.=))
-import qualified Data.Aeson as Json
-import Data.Aeson.Types (Parser)
+    -- * Mnemonics and accounts
+    cmdMnemonic,
+    cmdCreateAcc,
+    cmdRecover,
+    cmdTestAcc,
+    cmdImportAcc,
+    cmdExportAcc,
+    cmdRenameAcc,
+    cmdDeleteAcc,
+    cmdAccounts,
+
+    -- * Addresses
+    cmdReceive,
+    cmdAddrs,
+    cmdLabel,
+
+    -- * Coins
+    cmdCoins,
+    cmdLockCoin,
+    cmdUnlockCoin,
+
+    -- * Transactions
+    cmdTxs,
+    cmdPendingTxs,
+    cmdReviewTx,
+    cmdImportTx,
+    cmdExportTx,
+    cmdDeleteTx,
+
+    -- * Payments: preparing, signing and sending
+    cmdPrepareTx,
+    cmdSignTx,
+    cmdSendTx,
+
+    -- * Sweeps
+    cmdPrepareSweep,
+    cmdSignSweep,
+
+    -- * Sync, messages, backups and version
+    cmdSync,
+    cmdSignMsg,
+    cmdBackup,
+    cmdVersion,
+  )
+where
+
+import Control.Monad (forM, join, void, when, unless)
+import Control.Monad.Except (ExceptT, runExceptT, throwError)
+import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Class (lift)
 import qualified Data.ByteString.Base64 as B64
+import Data.Either (isLeft)
 import Data.Foldable (for_)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -30,10 +75,9 @@ import Database.Persist.Sqlite (transactionUndo)
 import Haskoin
 import Haskoin.Wallet.Account
 import Haskoin.Wallet.Address
-import Haskoin.Wallet.Amounts
+import Haskoin.Wallet.Amounts (AmountUnit, readAmount)
 import Haskoin.Wallet.Backup (backupDatabase, backupDirectory, copyDatabase)
 import Haskoin.Wallet.Coin
-import Haskoin.Wallet.CoinSelection (CoinSelection, FeePayer)
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Entropy
@@ -44,6 +88,7 @@ import Haskoin.Wallet.Migration (databaseVersion, latestDatabaseVersion)
 import Haskoin.Wallet.Parser
 import Haskoin.Wallet.PendingTx
 import Haskoin.Wallet.Prompt
+import Haskoin.Wallet.Response
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.TxBuilding (buildTxSignData)
@@ -57,659 +102,231 @@ import qualified Paths_haskoin_wallet as Paths
 import System.IO (hPutStrLn, stderr)
 import System.Random (initStdGen)
 
-{- Responses -}
-
-data Response
-  = ResponseError
-      { responseError :: !Text
-      }
-  | ResponseMnemonic
-      { responseEntropySource :: !Text,
-        responseMnemonic :: ![Text],
-        responseSplitMnemonic :: ![[Text]]
-      }
-  | -- | An account with the balance it can spend now
-    ResponseAccount
-      { responseAccount :: !DBAccount,
-        responseSpendable :: !Word64
-      }
-  | ResponseAccResult
-      { responseAccount :: !DBAccount,
-        responseResult :: !Bool,
-        responseText :: !Text
-      }
-  | ResponseFile
-      { responseTxFile :: !FilePath
-      }
-  | -- | Accounts, each with the balance it can spend now
-    ResponseAccounts
-      { responseAccounts :: ![(DBAccount, Word64)]
-      }
-  | -- | An address of the account, with the balance it can spend now
-    ResponseAddress
-      { responseAccount :: !DBAccount,
-        responseAddress :: !DBAddress,
-        responseSpendable :: !Word64
-      }
-  | -- | Addresses of the account, each with the balance it can spend now
-    ResponseAddresses
-      { responseAccount :: !DBAccount,
-        responseAddresses :: ![(DBAddress, Word64)]
-      }
-  | ResponseTxs
-      { responseAccount :: !DBAccount,
-        responseTxs :: ![TxInfo]
-      }
-  | ResponseTx
-      { responseAccount :: !DBAccount,
-        responsePendingTx :: !TxInfo
-      }
-  | -- | A transaction sent from a file, on its network
-    ResponseSentTx
-      { responseNetwork :: !Network,
-        responseTxHash :: !TxHash
-      }
-  | ResponseDeleteTx
-      { responseNoSigHash :: !TxHash,
-        responseFreedCoins :: !Natural,
-        responseFreedAddrs :: !Natural
-      }
-  | ResponseCoins
-      { responseAccount :: !DBAccount,
-        responseCoins :: ![JsonCoin]
-      }
-  | ResponseSignMsg
-      { responseMessage :: !Text,
-        responseSig :: !Text,
-        responseAddr :: !Text
-      }
-  | ResponseSync {responseSync :: [SyncRes]}
-  | -- | The accounts of a seed recovered on a network, each with its sync
-    ResponseRecover
-      { responseNetwork :: !Network,
-        responseAccountGap :: !Natural,
-        responseRecovered :: ![SyncRes]
-      }
-  | ResponseVersion
-      { responseVersion :: !Text,
-        responseDBVersion :: !Text
-      }
-  deriving (Eq, Show)
-
-jsonError :: String -> Json.Value
-jsonError err = object ["type" .= Json.String "error", "error" .= err]
-
-instance Json.ToJSON Response where
-  toJSON =
-    \case
-      ResponseError err -> jsonError $ cs err
-      ResponseMnemonic e w ws ->
-        object
-          [ "type" .= Json.String "mnemonic",
-            "entropysource" .= e,
-            "mnemonic" .= w,
-            "splitmnemonic" .= ws
-          ]
-      ResponseAccount a s ->
-        object
-          [ "type" .= Json.String "account",
-            "account" .= accountWithSpendable a s
-          ]
-      ResponseAccResult a b t ->
-        object
-          [ "type" .= Json.String "accresult",
-            "account" .= a,
-            "result" .= b,
-            "text" .= t
-          ]
-      ResponseFile f ->
-        object
-          [ "type" .= Json.String "file",
-            "file" .= f
-          ]
-      ResponseAccounts as ->
-        object
-          [ "type" .= Json.String "accounts",
-            "accounts" .= (uncurry accountWithSpendable <$> as)
-          ]
-      ResponseAddress a addr s ->
-        object
-          [ "type" .= Json.String "address",
-            "account" .= a,
-            "address" .= addressWithSpendable addr s
-          ]
-      ResponseAddresses a adrs ->
-        object
-          [ "type" .= Json.String "addresses",
-            "account" .= a,
-            "addresses" .= (uncurry addressWithSpendable <$> adrs)
-          ]
-      ResponseTxs a txs ->
-        object
-          [ "type" .= Json.String "txs",
-            "account" .= a,
-            "txs" .= (marshalValue (accountNetwork a) <$> txs)
-          ]
-      ResponseTx a t -> do
-        let net = accountNetwork a
-        object
-          [ "type" .= Json.String "tx",
-            "account" .= a,
-            "tx" .= marshalValue net t
-          ]
-      ResponseSentTx net h ->
-        object
-          [ "type" .= Json.String "senttx",
-            "network" .= net.name,
-            "txid" .= h
-          ]
-      ResponseDeleteTx h c a ->
-        object
-          [ "type" .= Json.String "deletetx",
-            "nosighash" .= h,
-            "freedcoins" .= c,
-            "freedaddrs" .= a
-          ]
-      ResponseCoins a coins -> do
-        let net = accountNetwork a
-        object
-          [ "type" .= Json.String "coins",
-            "account" .= a,
-            "coins" .= (marshalValue net <$> coins)
-          ]
-      ResponseSignMsg m s a -> do
-        object
-          [ "type" .= Json.String "signmsg",
-            "message" .= m,
-            "signature" .= s,
-            "address" .= a
-          ]
-      ResponseSync xs ->
-        object
-          [ "type" .= Json.String "sync",
-            "syncres" .= (syncResJson <$> xs)
-          ]
-      ResponseRecover net gap xs ->
-        object
-          [ "type" .= Json.String "recover",
-            "network" .= net.name,
-            "accountgap" .= gap,
-            "syncres" .= (syncResJson <$> xs)
-          ]
-      ResponseVersion v dbv ->
-        object
-          [ "type" .= Json.String "version",
-            "version" .= v,
-            "dbversion" .= dbv
-          ]
-
-instance Json.FromJSON Response where
-  parseJSON =
-    Json.withObject "response" $ \o -> do
-      Json.String resType <- o .: "type"
-      case resType of
-        "error" -> ResponseError <$> o .: "error"
-        "mnemonic" ->
-          ResponseMnemonic
-            <$> o .: "entropysource"
-            <*> o .: "mnemonic"
-            <*> o .: "splitmnemonic"
-        "account" ->
-          uncurry ResponseAccount <$> (parseAccountWithSpendable =<< o .: "account")
-        "accresult" ->
-          ResponseAccResult
-            <$> o .: "account"
-            <*> o .: "result"
-            <*> o .: "text"
-        "file" ->
-          ResponseFile
-            <$> o .: "file"
-        "accounts" ->
-          ResponseAccounts <$> (mapM parseAccountWithSpendable =<< o .: "accounts")
-        "address" -> do
-          a <- o .: "account"
-          (addr, s) <- parseAddressWithSpendable =<< o .: "address"
-          return $ ResponseAddress a addr s
-        "addresses" ->
-          ResponseAddresses
-            <$> o .: "account"
-            <*> (mapM parseAddressWithSpendable =<< o .: "addresses")
-        "txs" -> do
-          a <- o .: "account"
-          let net = accountNetwork a
-          txs <- mapM (unmarshalValue net) =<< o .: "txs"
-          return $ ResponseTxs a txs
-        "tx" -> do
-          a <- o .: "account"
-          let net = accountNetwork a
-          t <- unmarshalValue net =<< o .: "tx"
-          return $ ResponseTx a t
-        "senttx" -> do
-          net <- maybe (fail "Unknown network") return . netByName =<< o .: "network"
-          ResponseSentTx net <$> o .: "txid"
-        "deletetx" ->
-          ResponseDeleteTx
-            <$> o .: "nosighash"
-            <*> o .: "freedcoins"
-            <*> o .: "freedaddrs"
-        "coins" -> do
-          a <- o .: "account"
-          xs <- o .: "coins"
-          coins <- mapM (unmarshalValue (accountNetwork a)) xs
-          return $ ResponseCoins a coins
-        "signmsg" -> do
-          m <- o .: "message"
-          s <- o .: "signature"
-          a <- o .: "address"
-          return $ ResponseSignMsg m s a
-        "sync" -> ResponseSync <$> (mapM parseSyncRes =<< o .: "syncres")
-        "recover" -> do
-          net <- maybe (fail "Unknown network") return . netByName =<< o .: "network"
-          ResponseRecover net <$> o .: "accountgap" <*> (mapM parseSyncRes =<< o .: "syncres")
-        "version" ->
-          ResponseVersion
-            <$> o .: "version"
-            <*> o .: "dbversion"
-        _ -> fail "Invalid JSON response type"
-
-
-{- The result of a sync in JSON -}
-
-syncResJson :: SyncRes -> Json.Value
-syncResJson (SyncRes as sp bb bh tc cc rb ck na) =
-  object
-    [ "account" .= accountWithSpendable as sp,
-      "bestblock" .= bb,
-      "bestheight" .= bh,
-      "txupdates" .= tc,
-      "coinupdates" .= cc,
-      "rebroadcast" .= rb,
-      "conflicted" .= ck,
-      "discovered" .= na
-    ]
-
-parseSyncRes :: Json.Value -> Parser SyncRes
-parseSyncRes =
-  Json.withObject "syncres" $ \x -> do
-    (acc, spendable) <- parseAccountWithSpendable =<< x .: "account"
-    SyncRes acc spendable
-      <$> x .: "bestblock"
-      <*> x .: "bestheight"
-      <*> x .: "txupdates"
-      <*> x .: "coinupdates"
-      <*> x .: "rebroadcast"
-      <*> x .: "conflicted"
-      <*> x .: "discovered"
-
 {- Running a command -}
 
-runDBResponse ::
-  (MonadUnliftIO m) => Config -> ExceptT String (DB m) Response -> m Response
+-- | The answer of hw to a command
+commandResponse :: Ctx -> Config -> AmountUnit -> Command -> IO Response
+commandResponse ctx cfg unit = \case
+  -- Mnemonics and accounts
+  CommandMnemonic opts -> cmdMnemonic opts
+  CommandCreateAcc name net parts -> cmdCreateAcc ctx cfg name net parts
+  CommandRecover opts -> cmdRecover ctx cfg opts
+  CommandTestAcc account parts -> cmdTestAcc ctx cfg account parts
+  CommandImportAcc file -> cmdImportAcc ctx cfg file
+  CommandExportAcc account file -> cmdExportAcc ctx cfg account file
+  CommandRenameAcc opts -> cmdRenameAcc cfg opts
+  CommandDeleteAcc name net path -> cmdDeleteAcc cfg name net path
+  CommandAccounts account -> cmdAccounts cfg account
+  -- Addresses
+  CommandReceive opts -> cmdReceive ctx cfg opts
+  CommandAddrs account internal page -> cmdAddrs cfg account internal page
+  CommandLabel account index label -> cmdLabel cfg account index label
+  -- Coins
+  CommandCoins account locked page -> cmdCoins cfg account locked page
+  CommandLockCoin outpoint -> cmdLockCoin cfg outpoint
+  CommandUnlockCoin outpoint -> cmdUnlockCoin cfg outpoint
+  -- Transactions
+  CommandTxs account page -> cmdTxs cfg account page
+  CommandPendingTxs account page -> cmdPendingTxs ctx cfg account page
+  CommandReviewTx account file -> cmdReviewTx ctx cfg account file
+  CommandImportTx account file -> cmdImportTx ctx cfg account file
+  CommandExportTx nosigH file -> cmdExportTx cfg nosigH file
+  CommandDeleteTx nosigH -> cmdDeleteTx ctx cfg nosigH
+  CommandPrepareTx opts -> cmdPrepareTx ctx cfg unit opts
+  CommandSignTx signing parts -> cmdSignTx ctx cfg signing parts
+  CommandSendTx nosigHM fileM netM -> cmdSendTx ctx cfg nosigHM fileM netM
+  -- Sweeps
+  CommandPrepareSweep opts -> cmdPrepareSweep ctx cfg opts
+  CommandSignSweep signing keysM -> cmdSignSweep ctx cfg signing keysM
+  -- Sync, messages, backups and version
+  CommandSync account full -> cmdSync ctx cfg account full
+  CommandSignMsg opts -> cmdSignMsg ctx cfg opts
+  CommandBackup fileM -> cmdBackup cfg fileM
+  CommandVersion -> cmdVersion cfg
+
+-- | Run a command in one transaction of the database, which no other
+-- command changes meanwhile. What a command wrote before it failed is
+-- undone.
+runDBResponse :: Config -> ExceptT String (DB IO) Response -> IO Response
 runDBResponse cfg action = do
   result <- catchDatabaseInUse $ runDB cfg $ do
-    resE <- runExceptT action
-    case resE of
-      Left err -> do
-        transactionUndo -- Roll back the current sqlite transaction
-        return $ ResponseError $ cs err
-      Right res -> return res
-  return $ either (ResponseError . cs) id result
+    answer <- runExceptT action
+    when (isLeft answer) transactionUndo
+    return answer
+  return $ answered (join result)
 
-catchResponseError :: (Monad m) => ExceptT String m Response -> m Response
-catchResponseError m = do
-  resE <- runExceptT m
-  case resE of
-    Left err -> return $ ResponseError $ cs err
-    Right res -> return res
+-- | Run a command that needs no database
+runResponse :: ExceptT String IO Response -> IO Response
+runResponse action = answered <$> runExceptT action
 
-commandResponse :: Ctx -> Config -> AmountUnit -> Command -> IO Response
-commandResponse ctx cfg unit cmd =
-  case cmd of
-    -- Mnemonic and account management
-    CommandMnemonic e d s -> cmdMnemonic e d s
-    CommandCreateAcc t n s -> cmdCreateAcc ctx cfg t n s
-    CommandRecover n g s -> cmdRecover ctx cfg n g s
-    CommandTestAcc nameM s -> cmdTestAcc ctx cfg nameM s
-    CommandRenameAcc old new -> cmdRenameAcc cfg old new
-    CommandAccounts nameM -> cmdAccounts cfg nameM
-    CommandSync nameM full -> cmdSync ctx cfg nameM full
-    CommandDeleteAcc name net deriv -> cmdDeleteAcc cfg name net deriv
-    -- Address management
-    CommandReceive nameM labM -> cmdReceive ctx cfg nameM labM
-    CommandAddrs nameM internal p -> cmdAddrs cfg nameM internal p
-    CommandLabel nameM i l -> cmdLabel cfg nameM i l
-    -- Transaction management
-    CommandTxs nameM p -> cmdTxs cfg nameM p
-    CommandPrepareTx rcpts nameM fee dust payer minConf strategy o coins ->
-      cmdPrepareTx ctx cfg rcpts nameM unit fee dust payer minConf strategy o coins
-    CommandPendingTxs nameM p -> cmdPendingTxs ctx cfg nameM p
-    CommandSignTx nameM h i o s -> cmdSignTx ctx cfg nameM h i o s
-    CommandSendTx h i n -> cmdSendTx ctx cfg h i n
-    CommandDeleteTx h -> cmdDeleteTx ctx cfg h
-    CommandCoins nameM locked p -> cmdCoins cfg nameM locked p
-    CommandLockCoin outpoint -> cmdLockCoin cfg outpoint
-    CommandUnlockCoin outpoint -> cmdUnlockCoin cfg outpoint
-    -- Import/export commands
-    CommandExportAcc nameM f -> cmdExportAcc ctx cfg nameM f
-    CommandImportAcc f -> cmdImportAcc ctx cfg f
-    CommandReviewTx nameM file -> cmdReviewTx ctx cfg nameM file
-    CommandExportTx h f -> cmdExportTx cfg h f
-    CommandImportTx nameM file -> cmdImportTx ctx cfg nameM file
-    -- Backup
-    CommandBackup fileM -> cmdBackup cfg fileM
-    -- Utilities
-    CommandVersion -> cmdVersion cfg
-    CommandSignMsg a m s -> cmdSignMessage ctx cfg a m s
-    CommandPrepareSweep nameM prvKeyM sf st coins outputM f d ->
-      cmdPrepareSweep ctx cfg nameM prvKeyM sf st coins outputM f d
-    CommandSignSweep nameM h i o k -> cmdSignSweep ctx cfg nameM h i o k
+-- | The answer of a command, or its error
+answered :: Either String Response -> Response
+answered = either (ResponseError . cs) id
 
-{- Mnemonics and accounts -}
+{- Answers -}
 
-cmdMnemonic :: Natural -> Bool -> Natural -> IO Response
-cmdMnemonic ent useDice splitMnemIn =
-  catchResponseError $ do
-    let sources =
-          Sources
-            { readSystem = systemEntropy,
-              askDice = if useDice then Just (askDiceEntropy terminal) else Nothing,
-              say = tell terminal
-            }
-    (orig, ms, splitMs) <- genMnemonic sources ent splitMnemIn
-    return $ ResponseMnemonic orig (Text.words ms) (Text.words <$> splitMs)
-
-cmdCreateAcc :: Ctx -> Config -> Text -> Network -> Natural -> IO Response
-cmdCreateAcc ctx cfg name net splitMnemIn = do
-  runDBResponse cfg $ do
-    -- Before the user types the mnemonic, not after
-    checkNameFree name
-    mnem <- askNewMnemonicPass terminal splitMnemIn
-    seed <- liftEither $ seedOf ctx mnem
-    (_, xpub) <- lift $ nextAccount net ctx seed
-    created <- insertAccount net ctx name xpub (Just (seedFingerprint seed))
-    -- The accounts of the seed created before hw recorded fingerprints
-    lift $ recordFingerprint ctx seed
-    accountResponse created
-
--- | Recover the accounts of a seed that were paid on a network, from its
--- mnemonic: see "Haskoin.Wallet.Sync".
-cmdRecover :: Ctx -> Config -> Network -> Natural -> Natural -> IO Response
-cmdRecover ctx cfg net accountGap splitMnemIn =
-  runDBResponse cfg $ do
-    let store = webStore ctx cfg net
-    -- The store is needed: an offline computer hears it before the mnemonic is typed
-    fromStore $ storeHealth store
-    -- Typed once: a mistyped mnemonic finds no paid account
-    mnem <- askMnemonicPass terminal splitMnemIn
-    seed <- liftEither $ seedOf ctx mnem
-    ResponseRecover net accountGap <$> recoverSeed ctx cfg store net seed accountGap
-
-cmdTestAcc :: Ctx -> Config -> Maybe Text -> Natural -> IO Response
-cmdTestAcc ctx cfg nameM splitMnemIn =
-  runDBResponse cfg $ do
-    (accId, acc) <- getAccountByName nameM
-    let net = accountNetwork acc
-    mnem <- askMnemonicPass terminal splitMnemIn
-    matched <- matchAccount terminal net ctx (accountIndex acc) (accountXPubKey ctx acc) mnem
-    case matched of
-      Just (seed, _) -> do
-        -- The seed is proven: every account of it gets its fingerprint
-        lift $ recordFingerprint ctx seed
-        proven <- getAccountById accId
-        return $ ResponseAccResult proven True "The mnemonic and passphrase matched the account"
-      Nothing -> return $ ResponseAccResult acc False "The mnemonic and passphrase did not match the account"
-
-cmdImportAcc :: Ctx -> Config -> FilePath -> IO Response
-cmdImportAcc ctx cfg fp =
-  runDBResponse cfg $ do
-    PubKeyDoc xpub net name fingerprintM <- liftEitherIO $ readMarshalFile ctx fp
-    heldM <- lift $ accountWithKey net ctx xpub
-    case (heldM, fingerprintM) of
-      -- An account the wallet has already, whose document now names its seed
-      (Just (accId, held), Just fingerprint) | isNothing (dBAccountFingerprint held) -> do
-        learnFingerprint accId fingerprint
-        accountResponse . (accId,) =<< getAccountById accId
-      _ -> accountResponse =<< insertAccount net ctx name xpub fingerprintM
-
-cmdExportAcc :: Ctx -> Config -> Maybe Text -> FilePath -> IO Response
-cmdExportAcc ctx cfg nameM file =
-  runDBResponse cfg $ do
-    (_, acc) <- getAccountByName nameM
-    checkPathFree file
-    let xpub = accountXPubKey ctx acc
-        net = accountNetwork acc
-        name = dBAccountName acc
-        doc = PubKeyDoc xpub net name (accountFingerprint acc)
-    liftEitherIO $ writeMarshalFile ctx file doc
-    return $ ResponseFile file
-
-cmdRenameAcc :: Config -> Text -> Text -> IO Response
-cmdRenameAcc cfg oldName newName =
-  runDBResponse cfg $ do
-    _ <- renameAccount oldName newName
-    accountResponse =<< getAccountByName (Just newName)
-
-cmdDeleteAcc :: Config -> Text -> Network -> HardPath -> IO Response
-cmdDeleteAcc cfg name net path =
-  runDBResponse cfg $ do
-    (accId, acc) <- getAccountByName $ Just name
-    unless (accountNetwork acc == net) $
-      throwError "The network of the account to delete did not match"
-    unless (path == accountPath acc) $
-      throwError
-        "The full derivation path of the account to delete did not match"
-    lift $ deleteAccount accId
-    return $
-      ResponseAccResult acc True $
-        "The account " <> name <> " has been deleted"
-
-cmdAccounts :: Config -> Maybe Text -> IO Response
-cmdAccounts cfg nameM =
-  runDBResponse cfg $ do
-    case nameM of
-      Just _ -> do
-        named <- getAccountByName nameM
-        ResponseAccounts <$> mapM withSpendable [named]
-      _ -> do
-        accs <- lift getAccounts
-        ResponseAccounts <$> mapM withSpendable accs
-
--- | An account with the balance it can spend now
-withSpendable :: (MonadUnliftIO m) => (DBAccountId, DBAccount) -> ExceptT String (DB m) (DBAccount, Word64)
-withSpendable (accId, acc) = (acc,) <$> spendableBalance (accountNetwork acc) accId
-
--- | The answer showing an account, with the balance it can spend now
-accountResponse :: (MonadUnliftIO m) => (DBAccountId, DBAccount) -> ExceptT String (DB m) Response
-accountResponse account = uncurry ResponseAccount <$> withSpendable account
-
-{- Addresses -}
-
--- | The answer showing an address of the account, with the balance it can
--- spend now
-addressResponse :: (MonadUnliftIO m) => DBAccountId -> DBAccount -> DBAddress -> ExceptT String (DB m) Response
-addressResponse accId acc addr = do
-  balances <- spendableAtAddresses (accountNetwork acc) accId [dBAddressAddress addr]
-  return $ ResponseAddress acc addr (spendableAt balances addr)
+-- | An account, with the balance it can spend now
+withSpendable :: (DBAccountId, DBAccount) -> ExceptT String (DB IO) (DBAccount, Word64)
+withSpendable (accId, acc) = (,) acc <$> spendableBalance (accountNetwork acc) accId
 
 -- | What an address can spend now, among the spendable balances read for
 -- it: nothing when it holds no such coin
 spendableAt :: Map Text Word64 -> DBAddress -> Word64
 spendableAt balances addr = Map.findWithDefault 0 (dBAddressAddress addr) balances
 
-cmdReceive :: Ctx -> Config -> Maybe Text -> Maybe Text -> IO Response
-cmdReceive ctx cfg nameM labelM =
+-- | The answer showing an account, with the balance it can spend now
+accountAnswer :: DBAccountId -> ExceptT String (DB IO) Response
+accountAnswer accId = do
+  acc <- getAccountById accId
+  uncurry ResponseAccount <$> withSpendable (accId, acc)
+
+-- | The answer showing an address of the account, with the balance it can
+-- spend now
+addressAnswer :: DBAccountId -> DBAddress -> ExceptT String (DB IO) Response
+addressAnswer accId addr = do
+  acc <- getAccountById accId
+  balances <- spendableAtAddresses (accountNetwork acc) accId [dBAddressAddress addr]
+  return $ ResponseAddress acc addr (spendableAt balances addr)
+
+-- | The answer showing a transaction of the account
+txAnswer :: DBAccountId -> TxInfo -> ExceptT String (DB IO) Response
+txAnswer accId info = do
+  acc <- getAccountById accId
+  return $ ResponseTx acc info
+
+{- Mnemonics and accounts -}
+
+-- | A new mnemonic, from the entropy of the system, mixed with dice rolls
+-- with --dice
+cmdMnemonic :: NewMnemonic -> IO Response
+cmdMnemonic opts =
+  runResponse $ do
+    let sources =
+          Sources
+            { readSystem = systemEntropy,
+              askDice = if opts.dice then Just (askDiceEntropy terminal) else Nothing,
+              say = tell terminal
+            }
+    (source, mnemonic, parts) <- genMnemonic sources opts.entropy opts.parts
+    return $ ResponseMnemonic source (Text.words mnemonic) (Text.words <$> parts)
+
+cmdCreateAcc :: Ctx -> Config -> Text -> Network -> Natural -> IO Response
+cmdCreateAcc ctx cfg name net parts =
   runDBResponse cfg $ do
-    (accId, acc) <- getAccountByName nameM
-    addr <- genExtAddress ctx cfg accId $ fromMaybe "" labelM
-    addressResponse accId acc addr
+    -- Before the user types the mnemonic, not after
+    checkNameFree name
+    mnem <- askNewMnemonicPass terminal parts
+    seed <- liftEither $ seedOf ctx mnem
+    (_, xpub) <- lift $ nextAccount net ctx seed
+    (accId, _) <- insertAccount net ctx name xpub (Just (seedFingerprint seed))
+    -- The accounts of the seed created before hw recorded fingerprints
+    lift $ recordFingerprint ctx seed
+    accountAnswer accId
+
+-- | Recover the accounts of a seed that were paid on a network, from its
+-- mnemonic: see "Haskoin.Wallet.Sync".
+cmdRecover :: Ctx -> Config -> Recover -> IO Response
+cmdRecover ctx cfg opts =
+  runDBResponse cfg $ do
+    let store = webStore ctx cfg opts.network
+    -- An offline computer hears it before the mnemonic is typed
+    fromStore $ storeHealth store
+    -- Typed once: a mistyped mnemonic finds no paid account
+    mnem <- askMnemonicPass terminal opts.parts
+    seed <- liftEither $ seedOf ctx mnem
+    ResponseRecover opts.network opts.accountGap <$> recoverSeed ctx cfg store opts.network seed opts.accountGap
+
+cmdTestAcc :: Ctx -> Config -> Maybe Text -> Natural -> IO Response
+cmdTestAcc ctx cfg account parts =
+  runDBResponse cfg $ do
+    (accId, acc) <- getAccountByName account
+    mnem <- askMnemonicPass terminal parts
+    matched <- matchAccount terminal (accountNetwork acc) ctx (accountIndex acc) (accountXPubKey ctx acc) mnem
+    -- A seed proven gives its fingerprint to every account of it
+    for_ matched $ \(seed, _) -> lift $ recordFingerprint ctx seed
+    tested <- getAccountById accId
+    return $ case matched of
+      Just _ -> ResponseAccResult tested True "The mnemonic and passphrase matched the account"
+      Nothing -> ResponseAccResult tested False "The mnemonic and passphrase did not match the account"
+
+cmdImportAcc :: Ctx -> Config -> FilePath -> IO Response
+cmdImportAcc ctx cfg file =
+  runDBResponse cfg $ do
+    PubKeyDoc xpub net name fingerprintM <- liftEitherIO $ readMarshalFile ctx file
+    heldM <- lift $ accountWithKey net ctx xpub
+    accId <- case (heldM, fingerprintM) of
+      -- An account the wallet has already, whose document now names its seed
+      (Just (heldId, held), Just fingerprint) | isNothing (dBAccountFingerprint held) -> do
+        learnFingerprint heldId fingerprint
+        return heldId
+      _ -> fst <$> insertAccount net ctx name xpub fingerprintM
+    accountAnswer accId
+
+cmdExportAcc :: Ctx -> Config -> Maybe Text -> FilePath -> IO Response
+cmdExportAcc ctx cfg account file =
+  runDBResponse cfg $ do
+    (_, acc) <- getAccountByName account
+    checkPathFree file
+    let doc = PubKeyDoc (accountXPubKey ctx acc) (accountNetwork acc) (dBAccountName acc) (accountFingerprint acc)
+    liftEitherIO $ writeMarshalFile ctx file doc
+    return $ ResponseFile file
+
+cmdRenameAcc :: Config -> RenameAcc -> IO Response
+cmdRenameAcc cfg opts =
+  runDBResponse cfg $ do
+    _ <- renameAccount opts.old opts.new
+    accountAnswer . fst =<< getAccountByName (Just opts.new)
+
+-- | Delete an account, given its network and its path too, which must be
+-- those of the account
+cmdDeleteAcc :: Config -> Text -> Network -> HardPath -> IO Response
+cmdDeleteAcc cfg name net path =
+  runDBResponse cfg $ do
+    (accId, acc) <- getAccountByName (Just name)
+    unless (accountNetwork acc == net) $
+      throwError "The network of the account to delete did not match"
+    unless (path == accountPath acc) $
+      throwError "The full derivation path of the account to delete did not match"
+    lift $ deleteAccount accId
+    return $ ResponseAccResult acc True ("The account " <> name <> " has been deleted")
+
+cmdAccounts :: Config -> Maybe Text -> IO Response
+cmdAccounts cfg account =
+  runDBResponse cfg $ do
+    accs <- getAccountsByName account
+    ResponseAccounts <$> mapM withSpendable accs
+
+{- Addresses -}
+
+cmdReceive :: Ctx -> Config -> Receive -> IO Response
+cmdReceive ctx cfg opts =
+  runDBResponse cfg $ do
+    (accId, _) <- getAccountByName opts.account
+    addr <- genExtAddress ctx cfg accId (fromMaybe "" opts.label)
+    addressAnswer accId addr
 
 cmdAddrs :: Config -> Maybe Text -> Bool -> Page -> IO Response
-cmdAddrs cfg nameM internal page =
+cmdAddrs cfg account internal page =
   runDBResponse cfg $ do
-    (accId, acc) <- getAccountByName nameM
-    as <- lift $ addressPage accId (if internal then AddrInternal else AddrExternal) page
-    balances <- spendableAtAddresses (accountNetwork acc) accId (dBAddressAddress <$> as)
-    return $ ResponseAddresses acc [(addr, spendableAt balances addr) | addr <- as]
+    (accId, acc) <- getAccountByName account
+    addrs <- lift $ addressPage accId (if internal then AddrInternal else AddrExternal) page
+    balances <- spendableAtAddresses (accountNetwork acc) accId (dBAddressAddress <$> addrs)
+    return $ ResponseAddresses acc [(addr, spendableAt balances addr) | addr <- addrs]
 
 cmdLabel :: Config -> Maybe Text -> Int -> Text -> IO Response
-cmdLabel cfg nameM idx lab =
+cmdLabel cfg account index label =
   runDBResponse cfg $ do
-    (accId, acc) <- getAccountByName nameM
-    adr <- setAddrLabel accId idx lab
-    addressResponse accId acc adr
+    (accId, _) <- getAccountByName account
+    addr <- setAddrLabel accId index label
+    addressAnswer accId addr
 
-{- Transactions and coins -}
-
-cmdTxs :: Config -> Maybe Text -> Page -> IO Response
-cmdTxs cfg nameM page =
-  runDBResponse cfg $ do
-    (accId, acc) <- getAccountByName nameM
-    txInfos <- txsPage accId page
-    return $ ResponseTxs acc txInfos
-
-cmdPrepareTx ::
-  Ctx ->
-  Config ->
-  [(Text, Text)] ->
-  Maybe Text ->
-  AmountUnit ->
-  Natural ->
-  Natural ->
-  FeePayer ->
-  Natural ->
-  CoinSelection ->
-  Maybe FilePath ->
-  [OutPoint] ->
-  IO Response
-cmdPrepareTx ctx cfg rcpTxt nameM unit feeByte dust payer minConf strategy fileM coins =
-  runDBResponse cfg $ do
-    (accId, acc) <- getAccountByName nameM
-    let net = accountNetwork acc
-    -- Before the transaction is built, not after
-    for_ fileM checkPathFree
-    rcpts <- liftEither $ mapM (toRecipient net) rcpTxt
-    gen <- liftIO initStdGen
-    signDat <-
-      buildTxSignData net ctx cfg gen strategy accId rcpts feeByte dust payer minConf coins
-    txInfo <- txInfoOf ctx acc signDat
-    _ <- importPendingTx net ctx accId signDat
-    for_ fileM $ \file -> liftEitherIO $ writeJsonFile file $ Json.toJSON signDat
-    newAcc <- getAccountById accId
-    return $ ResponseTx newAcc txInfo
-  where
-    toRecipient net (a, v) = do
-      addr <- textToAddrE net a
-      val <- readAmount unit v
-      return (addr, fromIntegral val)
-
-cmdPendingTxs :: Ctx -> Config -> Maybe Text -> Page -> IO Response
-cmdPendingTxs ctx cfg nameM page =
-  runDBResponse cfg $ do
-    (accId, acc) <- getAccountByName nameM
-    txInfos <- pendingTxPage ctx accId page
-    return $ ResponseTxs acc txInfos
-
-cmdReviewTx :: Ctx -> Config -> Maybe Text -> FilePath -> IO Response
-cmdReviewTx ctx cfg nameM fp =
-  runDBResponse cfg $ do
-    (_, acc) <- getAccountByName nameM
-    tsd <- liftEitherIO $ readJsonFile fp
-    txInfo <- txInfoOf ctx acc tsd
-    return $ ResponseTx acc txInfo
-
-cmdExportTx :: Config -> TxHash -> FilePath -> IO Response
-cmdExportTx cfg nosigH fp =
-  runDBResponse cfg $ do
-    held <- requirePendingTx nosigH
-    checkPathFree fp
-    liftEitherIO $ writeJsonFile fp $ Json.toJSON held.pendingTxData
-    return $ ResponseFile fp
-
-cmdImportTx :: Ctx -> Config -> Maybe Text -> FilePath -> IO Response
-cmdImportTx ctx cfg nameM fp =
-  runDBResponse cfg $ do
-    (accId, acc) <- getAccountByName nameM
-    let net = accountNetwork acc
-    tsd <- liftEitherIO $ readJsonFile fp
-    txInfo <- txInfoOf ctx acc tsd
-    _ <- importPendingTx net ctx accId tsd
-    return $ ResponseTx acc txInfo
-
-cmdDeleteTx :: Ctx -> Config -> TxHash -> IO Response
-cmdDeleteTx ctx cfg nosigH =
-  runDBResponse cfg $ do
-    (coins, addrs) <- deleteTx ctx (webStore ctx cfg) nosigH
-    return $ ResponseDeleteTx nosigH coins addrs
-
-cmdSignTx ::
-  Ctx ->
-  Config ->
-  Maybe Text ->
-  Maybe TxHash ->
-  Maybe FilePath ->
-  Maybe FilePath ->
-  Natural ->
-  IO Response
-cmdSignTx ctx cfg nameM nosigHM inputM outputM splitMnemIn =
-  runDBResponse cfg $ do
-    (tsd, (accId, acc)) <- transactionToSign nameM nosigHM inputM outputM
-    when (isSigned (txSignDataTx tsd)) $
-      throwError "The transaction is already signed"
-    let net = accountNetwork acc
-        idx = fromIntegral $ dBAccountIndex acc
-        accPub = accountXPubKey ctx acc
-    for_ outputM checkPathFree
-    (seed, prvKey) <- askSigningKey terminal net ctx splitMnemIn idx accPub
-    -- The signed data names the seed, for an online wallet to learn it
-    let toSign = tsd {txSignDataFingerprint = Just (seedFingerprint seed)}
-    (newSignData, txInfo) <- liftEither $ signWalletTx net ctx toSign prvKey
-    lift $ recordFingerprint ctx seed
-    txInfoL <- lift $ fillTxInfoLabels net txInfo
-    when (isJust nosigHM) $ void $ importPendingTx net ctx accId newSignData
-    for_ outputM $ \o -> liftEitherIO $ writeJsonFile o $ Json.toJSON newSignData
-    return $ ResponseTx acc txInfoL
-
--- | The transaction signtx and signsweep sign, with the account that signs
--- it. A pending transaction, by its nosigHash, is signed by the account
--- that holds it: --account may only name that one. The transaction of an
--- --input file is signed by the account --account names, or the only one.
--- A transaction already sent is not signed again.
-transactionToSign ::
-  (MonadUnliftIO m) =>
-  Maybe Text ->
-  Maybe TxHash ->
-  Maybe FilePath ->
-  Maybe FilePath ->
-  ExceptT String (DB m) (TxSignData, (DBAccountId, DBAccount))
-transactionToSign nameM nosigHM inputM outputM =
-  case (nosigHM, inputM, outputM) of
-    (Nothing, Nothing, _) ->
-      throwError "Give the NOSIGHASH of a pending transaction, or an --input file and an --output file"
-    (Just _, Just _, _) ->
-      throwError "Can not specify both a NOSIGHASH and an --input file"
-    (_, Just _, Nothing) ->
-      throwError "Give an --output file with the --input file"
-    (Just h, _, _) -> do
-      held <- requirePendingTx h
-      when held.pendingTxOnline $
-        throwError "The transaction is already online"
-      let accId = held.pendingTxAccount
-      acc <- getAccountById accId
-      forM_ nameM $ \name ->
-        when (name /= dBAccountName acc) $
-          throwError $ "The transaction is pending in the account " <> cs (dBAccountName acc) <> ", not in " <> cs name
-      return (held.pendingTxData, (accId, acc))
-    (_, Just i, _) -> do
-      tsd <- liftEitherIO (readJsonFile i)
-      account <- getAccountByName nameM
-      return (tsd, account)
+{- Coins -}
 
 cmdCoins :: Config -> Maybe Text -> Bool -> Page -> IO Response
-cmdCoins cfg nameM locked page =
+cmdCoins cfg account locked page =
   runDBResponse cfg $ do
-    (accId, acc) <- getAccountByName nameM
-    let net = accountNetwork acc
-    coins <- coinPage net accId (if locked then LockedCoins else AllCoins) page
+    (accId, acc) <- getAccountByName account
+    coins <- coinPage (accountNetwork acc) accId (if locked then LockedCoins else AllCoins) page
     return $ ResponseCoins acc coins
 
 -- | Lock a coin at the user's request, and show it
@@ -726,46 +343,230 @@ cmdUnlockCoin cfg outpoint =
     (acc, coin) <- unlockCoin outpoint
     return $ ResponseCoins acc [coin]
 
--- | Send a pending transaction of the wallet, by its nosigHash, or a
--- signed transaction from a file
+{- Transactions -}
+
+cmdTxs :: Config -> Maybe Text -> Page -> IO Response
+cmdTxs cfg account page =
+  runDBResponse cfg $ do
+    (accId, acc) <- getAccountByName account
+    ResponseTxs acc <$> txsPage accId page
+
+cmdPendingTxs :: Ctx -> Config -> Maybe Text -> Page -> IO Response
+cmdPendingTxs ctx cfg account page =
+  runDBResponse cfg $ do
+    (accId, acc) <- getAccountByName account
+    ResponseTxs acc <$> pendingTxPage ctx accId page
+
+-- | Show the transaction of a file, as the account sees it, without keeping it
+cmdReviewTx :: Ctx -> Config -> Maybe Text -> FilePath -> IO Response
+cmdReviewTx ctx cfg account file =
+  runDBResponse cfg $ do
+    (_, acc) <- getAccountByName account
+    tsd <- liftEitherIO $ readJsonFile file
+    ResponseTx acc <$> txInfoOf ctx acc tsd
+
+cmdImportTx :: Ctx -> Config -> Maybe Text -> FilePath -> IO Response
+cmdImportTx ctx cfg account file =
+  runDBResponse cfg $ do
+    (accId, acc) <- getAccountByName account
+    tsd <- liftEitherIO $ readJsonFile file
+    info <- txInfoOf ctx acc tsd
+    _ <- importPendingTx (accountNetwork acc) ctx accId tsd
+    txAnswer accId info
+
+cmdExportTx :: Config -> TxHash -> FilePath -> IO Response
+cmdExportTx cfg nosigH file =
+  runDBResponse cfg $ do
+    held <- requirePendingTx nosigH
+    checkPathFree file
+    liftEitherIO $ writeJsonFile file held.pendingTxData
+    return $ ResponseFile file
+
+cmdDeleteTx :: Ctx -> Config -> TxHash -> IO Response
+cmdDeleteTx ctx cfg nosigH =
+  runDBResponse cfg $ do
+    (coins, addrs) <- deleteTx ctx (webStore ctx cfg) nosigH
+    return $ ResponseDeleteTx nosigH coins addrs
+
+{- Payments: preparing, signing and sending -}
+
+-- Sweeps are prepared and signed like payments, with the helpers here.
+
+-- | Write a transaction to the --output file, when there is one
+writeOutput :: Maybe FilePath -> TxSignData -> ExceptT String (DB IO) ()
+writeOutput output tsd = for_ output $ \file -> liftEitherIO $ writeJsonFile file tsd
+
+-- | Keep a transaction just prepared: among the pending transactions of the
+-- account when it involves the account, and in the --output file when there
+-- is one. The answer shows it.
+keepPrepared :: Ctx -> DBAccountId -> DBAccount -> Maybe FilePath -> TxSignData -> ExceptT String (DB IO) Response
+keepPrepared ctx accId acc output tsd = do
+  info <- txInfoOf ctx acc tsd
+  if involvesWallet (txInfoSummary info)
+    then void $ importPendingTx (accountNetwork acc) ctx accId tsd
+    else -- Only a sweep can leave the wallet out: a payment spends its coins
+      when (isNothing output) $
+        throwError "The sweep does not involve this wallet: give an --output file to write it to"
+  writeOutput output tsd
+  txAnswer accId info
+
+-- | Prepare a payment from the account, unsigned
+cmdPrepareTx :: Ctx -> Config -> AmountUnit -> PrepareTx -> IO Response
+cmdPrepareTx ctx cfg unit opts =
+  runDBResponse cfg $ do
+    (accId, acc) <- getAccountByName opts.account
+    let net = accountNetwork acc
+    -- Before the transaction is built, not after
+    for_ opts.output checkPathFree
+    recipients <- liftEither $ mapM (recipient net) opts.recipients
+    gen <- liftIO initStdGen
+    tsd <- buildTxSignData net ctx cfg gen opts.strategy accId recipients opts.feeByte opts.dust opts.feePayer opts.minConf opts.coins
+    keepPrepared ctx accId acc opts.output tsd
+  where
+    recipient net (addr, amount) = do
+      paid <- textToAddrE net addr
+      satoshis <- readAmount unit amount
+      return (paid, fromIntegral satoshis)
+
+-- | The transaction signtx and signsweep sign, with the account that signs
+-- it. A pending transaction, by its nosigHash, is signed by the account
+-- that holds it: --account may only name that one. The transaction of an
+-- --input file is signed by the account --account names, or the only one.
+-- A transaction signed already, or sent, is not signed again, and the
+-- --output file must be free, all before the user types a secret.
+transactionToSign :: Signing -> ExceptT String (DB IO) (DBAccountId, DBAccount, TxSignData)
+transactionToSign signing = do
+  (accId, acc, tsd) <- case (signing.nosigHash, signing.input, signing.output) of
+    (Nothing, Nothing, _) ->
+      throwError "Give the NOSIGHASH of a pending transaction, or an --input file and an --output file"
+    (Just _, Just _, _) ->
+      throwError "Can not specify both a NOSIGHASH and an --input file"
+    (_, Just _, Nothing) ->
+      throwError "Give an --output file with the --input file"
+    (Just nosigH, _, _) -> do
+      held <- requirePendingTx nosigH
+      when held.pendingTxOnline $
+        throwError "The transaction is already online"
+      unsigned held.pendingTxData
+      acc <- getAccountById held.pendingTxAccount
+      for_ signing.account $ \name ->
+        unless (name == dBAccountName acc) $
+          throwError $ "The transaction is pending in the account " <> cs (dBAccountName acc) <> ", not in " <> cs name
+      return (held.pendingTxAccount, acc, held.pendingTxData)
+    (_, Just file, _) -> do
+      tsd <- liftEitherIO $ readJsonFile file
+      unsigned tsd
+      (accId, acc) <- getAccountByName signing.account
+      return (accId, acc, tsd)
+  for_ signing.output checkPathFree
+  return (accId, acc, tsd)
+  where
+    unsigned tsd = when (isSigned (txSignDataTx tsd)) $ throwError "The transaction is already signed"
+
+-- | Keep a transaction just signed: in place of the pending one when it was
+-- given by its nosigHash, and in the --output file when there is one. The
+-- answer shows it, with the labels of its addresses.
+keepSigned :: Ctx -> Network -> Signing -> DBAccountId -> TxSignData -> TxInfo -> ExceptT String (DB IO) Response
+keepSigned ctx net signing accId signed info = do
+  when (isJust signing.nosigHash) $ void $ importPendingTx net ctx accId signed
+  writeOutput signing.output signed
+  txAnswer accId =<< lift (fillTxInfoLabels net info)
+
+-- | Sign a transaction of the account with the key of its mnemonic
+cmdSignTx :: Ctx -> Config -> Signing -> Natural -> IO Response
+cmdSignTx ctx cfg signing parts =
+  runDBResponse cfg $ do
+    (accId, acc, tsd) <- transactionToSign signing
+    let net = accountNetwork acc
+    (seed, key) <- askSigningKey terminal net ctx parts (accountIndex acc) (accountXPubKey ctx acc)
+    -- The signed data names the seed, for an online wallet to learn it
+    let named = tsd {txSignDataFingerprint = Just (seedFingerprint seed)}
+    (signed, info) <- liftEither $ signWalletTx net ctx named key
+    lift $ recordFingerprint ctx seed
+    keepSigned ctx net signing accId signed info
+
+-- | Send a signed transaction: a pending one of the wallet, by its
+-- nosigHash, or the one of a file. One the wallet holds goes on the network
+-- of its account, which --network may only name; one it does not hold
+-- needs --network. See 'sendSigned'.
 cmdSendTx :: Ctx -> Config -> Maybe TxHash -> Maybe FilePath -> Maybe Network -> IO Response
-cmdSendTx ctx cfg nosigHM inputM netM =
-  case (nosigHM, inputM) of
-    (Just nosigH, Nothing) -> runDBResponse cfg $ do
-      (acc, txInfo) <- sendPending ctx (webStore ctx cfg) nosigH
-      return $ ResponseTx acc txInfo
-    (Nothing, Just file) -> sendTxFile ctx cfg file netM
+cmdSendTx ctx cfg nosigHM fileM netM =
+  case (nosigHM, fileM) of
+    (Just nosigH, Nothing) -> sending $ (.pendingTxData) <$> requirePendingTx nosigH
+    (Nothing, Just file) -> sending $ liftEitherIO (readJsonFile file)
     (Nothing, Nothing) -> return $ ResponseError "Give the NOSIGHASH of a pending transaction or an --input file"
     (Just _, Just _) -> return $ ResponseError "Can not specify both a NOSIGHASH and an --input file"
+  where
+    sending signedTx =
+      runDBResponse cfg $ do
+        sent <- sendSigned ctx (webStore ctx cfg) netM =<< signedTx
+        return $ case sent of
+          SentPending acc info -> ResponseTx acc info
+          SentOutside net txid -> ResponseSentTx net txid
 
--- | Send a signed transaction from a file: one the wallet holds as pending
--- like one sent by its nosigHash, one it does not hold to the store of the
--- given network. See 'sendSigned'.
-sendTxFile :: Ctx -> Config -> FilePath -> Maybe Network -> IO Response
-sendTxFile ctx cfg file netM =
+{- Sweeps -}
+
+-- | Sweep coins to the destinations: the coins at the given addresses and
+-- at the addresses of the given private keys, and the coins given by
+-- outpoint. The keys are not needed here, only to sign: a sweep can be
+-- prepared from addresses or coins alone. A sweep that pays or spends an
+-- address of the wallet waits among its pending transactions, to be signed
+-- by its nosigHash; one that does not involve the wallet can only be
+-- written to a file, to be signed from there.
+cmdPrepareSweep :: Ctx -> Config -> PrepareSweep -> IO Response
+cmdPrepareSweep ctx cfg opts =
   runDBResponse cfg $ do
-    tsd <- liftEitherIO (readJsonFile file)
-    sent <- sendSigned ctx (webStore ctx cfg) netM tsd
-    return $ case sent of
-      SentPending acc txInfo -> ResponseTx acc txInfo
-      SentOutside net txid -> ResponseSentTx net txid
+    (accId, acc) <- getAccountByName opts.account
+    let net = accountNetwork acc
+    -- Before the keys are typed, not after
+    for_ opts.output checkPathFree
+    sweepFrom <- liftEither $ mapM (textToAddrE net) opts.sweepFrom
+    sweepTo <- liftEither $ mapM (textToAddrE net) opts.sweepTo
+    keys <- maybe (return []) (readSecKeys terminal net) opts.keys
+    found <- fetchSweepCoins net ctx (webStore ctx cfg net) accId keys sweepFrom opts.coins sweepTo
+    gen <- liftIO initStdGen
+    tsd <- liftEither $ buildSweepSignData net ctx gen found sweepTo opts.feeByte opts.dust
+    keepPrepared ctx accId acc opts.output tsd
 
-{- Synchronisation -}
+-- | Sign a sweep with private keys: a pending transaction of the wallet,
+-- by its nosigHash, or one in a file, which need not involve the wallet
+cmdSignSweep :: Ctx -> Config -> Signing -> Maybe KeySource -> IO Response
+cmdSignSweep ctx cfg signing keysM =
+  runDBResponse cfg $ do
+    (accId, acc, tsd) <- transactionToSign signing
+    let net = accountNetwork acc
+    -- Without a file, the keys are typed: signing cannot do without them
+    keys <- readSecKeys terminal net (fromMaybe KeysOnTerminal keysM)
+    (signed, info) <- liftEither $ signTxWithKeys net ctx tsd (accountXPubKey ctx acc) keys
+    keepSigned ctx net signing accId signed info
+
+{- Sync, messages, backups and version -}
 
 cmdSync :: Ctx -> Config -> Maybe Text -> Bool -> IO Response
-cmdSync ctx cfg nameM full =
+cmdSync ctx cfg account full =
   runDBResponse cfg $ do
-    accs <-
-      case nameM of
-        Just _ -> (:[]) <$> getAccountByName nameM
-        _ -> lift getAccounts
+    accs <- getAccountsByName account
     when (null accs) $ throwError "There are no accounts in the wallet"
-    res <- forM accs $ \(accId, acc) -> do
+    results <- forM accs $ \(accId, acc) -> do
       let net = accountNetwork acc
       sync ctx cfg (webStore ctx cfg net) net accId full
-    return $ ResponseSync res
+    return $ ResponseSync results
 
-{- Backup and version -}
+-- | Sign a message with the key of an address of the wallet
+cmdSignMsg :: Ctx -> Config -> SignMsg -> IO Response
+cmdSignMsg ctx cfg opts =
+  runDBResponse cfg $ do
+    (acc, addrDB) <- getAddressByText opts.address
+    let net = accountNetwork acc
+    addr <- liftEither $ textToAddrE net opts.address
+    -- Warned before the mnemonic is asked, so that the user can stop. On
+    -- stderr, to keep the armored block and the --json output clean.
+    liftIO $ mapM_ (hPutStrLn stderr) $ messageWarnings opts.message
+    (seed, accountPrvKey) <- askSigningKey terminal net ctx opts.parts (accountIndex acc) (accountXPubKey ctx acc)
+    lift $ recordFingerprint ctx seed
+    let addrKey = derivePath ctx (addrPath addrDB) accountPrvKey
+    signature <- liftEither $ signMessage ctx addr addrKey.key opts.message
+    return $ ResponseSignMsg opts.message (cs (B64.encode signature)) opts.address
 
 -- | Copy the database to the given file, which must not exist, or into the
 -- backups directory of hw under a name carrying the format version and the
@@ -773,7 +574,7 @@ cmdSync ctx cfg nameM full =
 -- migrates it first.
 cmdBackup :: Config -> Maybe FilePath -> IO Response
 cmdBackup cfg fileM =
-  catchResponseError $ do
+  runResponse $ do
     database <- liftIO $ databaseFile cfg
     copy <- case fileM of
       Just file -> do
@@ -790,93 +591,4 @@ cmdVersion cfg =
   runDBResponse cfg $ do
     -- Every command migrates the database first, which gives it a version
     dbVersion <- liftMaybe "The database has no format version" =<< databaseVersion
-    return $ ResponseVersion (cs $ showVersion Paths.version) (cs (show dbVersion))
-
-{- Sweeps -}
-
--- | Sweep coins to the destinations: the coins at the given addresses and
--- at the addresses of the given private keys, and the coins given by
--- outpoint. The keys are not needed here, only to sign: a sweep can be
--- prepared from addresses or coins alone. A sweep that pays or spends an
--- address of the wallet waits among its pending transactions, to be signed
--- by its nosigHash; one that does not involve the wallet can only be
--- written to a file, to be signed from there.
-cmdPrepareSweep ::
-  Ctx ->
-  Config ->
-  Maybe Text ->
-  Maybe KeySource ->
-  [Text] ->
-  [Text] ->
-  [OutPoint] ->
-  Maybe FilePath ->
-  Natural ->
-  Natural ->
-  IO Response
-cmdPrepareSweep ctx cfg nameM keysM sweepFromT sweepToT coins outputM feeByte dust =
-  runDBResponse cfg $ do
-    (accId, acc) <- getAccountByName nameM
-    let net = accountNetwork acc
-    -- Before the keys are typed, not after
-    for_ outputM checkPathFree
-    sweepFrom <- liftEither $ mapM (textToAddrE net) sweepFromT
-    sweepTo <- liftEither $ mapM (textToAddrE net) sweepToT
-    secKeys <- maybe (return []) (readSecKeys terminal net) keysM
-    found <- fetchSweepCoins net ctx (webStore ctx cfg net) accId secKeys sweepFrom coins sweepTo
-    gen <- liftIO initStdGen
-    tsd <- liftEither $ buildSweepSignData net ctx gen found sweepTo feeByte dust
-    txInfo <- txInfoOf ctx acc tsd
-    if involvesWallet (txInfoSummary txInfo)
-      then void $ importPendingTx net ctx accId tsd
-      else
-        when (isNothing outputM) $
-          throwError "The sweep does not involve this wallet: give an --output file to write it to"
-    for_ outputM $ \file -> liftEitherIO $ writeJsonFile file $ Json.toJSON tsd
-    return $ ResponseTx acc txInfo
-
--- | Sign a sweep with private keys: a pending transaction of the wallet,
--- by its nosigHash, or one in a file, which need not involve the wallet
-cmdSignSweep ::
-  Ctx ->
-  Config ->
-  Maybe Text ->
-  Maybe TxHash ->
-  Maybe FilePath ->
-  Maybe FilePath ->
-  Maybe KeySource ->
-  IO Response
-cmdSignSweep ctx cfg nameM nosigHM inputM outputM keysM =
-  runDBResponse cfg $ do
-    (tsd, (accId, acc)) <- transactionToSign nameM nosigHM inputM outputM
-    when (isSigned (txSignDataTx tsd)) $
-      throwError "The transaction is already signed"
-    let net = accountNetwork acc
-        pub = accountXPubKey ctx acc
-    for_ outputM checkPathFree
-    -- Without a file, the keys are typed: signing cannot do without them
-    secKeys <- readSecKeys terminal net (fromMaybe KeysOnTerminal keysM)
-    (newTsd, txInfo) <- liftEither $ signTxWithKeys net ctx tsd pub secKeys
-    txInfoL <- lift $ fillTxInfoLabels net txInfo
-    when (isJust nosigHM) $ void $ importPendingTx net ctx accId newTsd
-    for_ outputM $ \o -> liftEitherIO $ writeJsonFile o $ Json.toJSON newTsd
-    return $ ResponseTx acc txInfoL
-
-{- Signed messages -}
-
-cmdSignMessage :: Ctx -> Config -> Text -> Text -> Natural -> IO Response
-cmdSignMessage ctx cfg addrTxt txtMsg splitMnemIn =
-  runDBResponse cfg $ do
-    (acc, addrDB) <- getAddressByText addrTxt
-    let accPub = accountXPubKey ctx acc
-        net = accountNetwork acc
-        idx = fromIntegral $ dBAccountIndex acc
-    addr <- liftEither $ textToAddrE net addrTxt
-    -- Warn before asking for the mnemonic so that the user can abort. Use
-    -- stderr to keep the armored block and the --json output clean.
-    liftIO $ mapM_ (hPutStrLn stderr) $ messageWarnings txtMsg
-    (seed, accPrvKey) <- askSigningKey terminal net ctx splitMnemIn idx accPub
-    lift $ recordFingerprint ctx seed
-    let addrPrvKey = derivePath ctx (addrPath addrDB) accPrvKey
-    msgSig <- liftEither $ signMessage ctx addr addrPrvKey.key txtMsg
-    return $ ResponseSignMsg txtMsg (cs $ B64.encode msgSig) addrTxt
-
+    return $ ResponseVersion (cs (showVersion Paths.version)) (cs (show dbVersion))

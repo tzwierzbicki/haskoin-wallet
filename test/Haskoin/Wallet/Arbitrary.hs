@@ -17,7 +17,7 @@ import Haskoin.Util.Arbitrary
 import Haskoin.Wallet.Account
 import Haskoin.Wallet.Address
 import Haskoin.Wallet.Coin
-import Haskoin.Wallet.Commands
+import Haskoin.Wallet.Response
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Sync

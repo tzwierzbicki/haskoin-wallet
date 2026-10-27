@@ -67,6 +67,7 @@ library
       Haskoin.Wallet.PrettyPrinter
       Haskoin.Wallet.Prompt
       Haskoin.Wallet.RawTx
+      Haskoin.Wallet.Response
       Haskoin.Wallet.Schema.KeyBytes
       Haskoin.Wallet.Schema.V2
       Haskoin.Wallet.Schema.V3
