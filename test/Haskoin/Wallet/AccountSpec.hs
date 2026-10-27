@@ -210,6 +210,28 @@ namingSpec ctx = do
         _ <- testNewAcc ctx "main"
         lift $ dbShouldFailWith "The account nobody does not exist" $ getAccountByName (Just "nobody")
 
+  -- As accounts and sync take them, with --account or without
+  describe "Finding the accounts of a name" $ do
+    it "is the account of the name" $
+      inDatabaseE $ do
+        mainAcc <- testNewAcc ctx "main"
+        _ <- testNewAcc ctx "savings"
+        getAccountsByName (Just "main") `dbShouldBeE` [mainAcc]
+
+    it "is every account without a name" $
+      inDatabaseE $ do
+        mainAcc <- testNewAcc ctx "main"
+        savingsAcc <- testNewAcc ctx "savings"
+        getAccountsByName Nothing `dbShouldBeE` [mainAcc, savingsAcc]
+
+    it "is none without a name in an empty wallet" $
+      inDatabaseE $ getAccountsByName Nothing `dbShouldBeE` []
+
+    it "knows no account of a name it does not have" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        lift $ dbShouldFailWith "The account nobody does not exist" $ getAccountsByName (Just "nobody")
+
   describe "Renaming an account" $ do
     it "changes its name and nothing else" $
       inDatabaseE $ do

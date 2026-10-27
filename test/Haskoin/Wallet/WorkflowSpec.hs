@@ -14,7 +14,6 @@ import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Monad (forM_, replicateM_, void)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Aeson as Json
-import Data.Default (def)
 import Data.IORef (modifyIORef, readIORef)
 import Data.List (isInfixOf, sortOn)
 import qualified Data.Map.Strict as Map
@@ -23,8 +22,6 @@ import qualified Data.Text as Text
 import Data.Word (Word64)
 import qualified Database.Persist as P
 import Haskoin
-import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), testIdentity)
-import Haskoin.Wallet.Arbitrary (arbitraryResponse)
 import Haskoin.Wallet.Coin (CoinLock (..), JsonCoin (..))
 import Haskoin.Wallet.Response (Response (..))
 import Haskoin.Wallet.Database (DBAccount (..), DBAddress (..), databaseInUse, runDBWith)
@@ -56,8 +53,6 @@ spec = prepareContext $ \ctx -> do
   paymentSpec ctx
   recoverSpec ctx
   sweepSpec ctx
-  -- An answer of hw reads back as it was written, as --json writes it
-  testIdentity def {jsonTests = [JsonBox (arbitraryResponse btc ctx)]}
 
 {- Typing and answers -}
 
@@ -81,6 +76,15 @@ answer home args typed = do
 -- | Create the account main of the test wallet in a home
 createMain :: FilePath -> IO ()
 createMain home = void $ answer home ["createacc", "main"] seedTwice
+
+-- | Import the account main of the test wallet in a home, from a document
+-- without the fingerprint of its seed, as hw wrote them before it recorded
+-- fingerprints
+importWithoutFingerprint :: FilePath -> IO ()
+importWithoutFingerprint home = do
+  Json.encodeFile (home </> "main.json") $
+    Json.object ["xpubkey" Json..= testAccountXPub, "network" Json..= ("btc" :: Text), "name" Json..= ("main" :: Text)]
+  void $ answer home ["importacc", home </> "main.json"] []
 
 -- | The error of an answer
 errorOf :: Response -> Either String Text
@@ -111,6 +115,13 @@ accountsOf other = Left (show other)
 keyOf :: Response -> Either String (Text, Int, Text)
 keyOf (ResponseAccount acc _) = Right (dBAccountName acc, dBAccountIndex acc, dBAccountXPubKey acc)
 keyOf other = Left (show other)
+
+-- | The account an answer shows
+accountOf :: Response -> Either String DBAccount
+accountOf (ResponseAccount acc _) = Right acc
+accountOf (ResponseAddress acc _ _) = Right acc
+accountOf (ResponseTx acc _) = Right acc
+accountOf other = Left (show other)
 
 -- | The accounts of an answer, with the fingerprints of their seeds
 fingerprintsOf :: Response -> Either String [(Text, Maybe Text)]
@@ -250,6 +261,13 @@ addressSpec =
         createMain home
         forM_ (take 3 externalAddrsText) $ \expected ->
           (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [(expected, "")]
+
+    -- The answer read the account before the address was taken, and showed
+    -- none counted
+    it "are counted in the account receive shows" $
+      withHome $ \home -> do
+        createMain home
+        (fmap dBAccountExternal . accountOf <$> hwJson home ["receive"] []) `shouldReturn` Right 1
 
     it "take the label given to receive" $
       withHome $ \home -> do
@@ -790,6 +808,30 @@ signingSpec ctx = do
         run `shouldSatisfy` printed "The transaction is pending in the account main, not in second"
         run `shouldNotSatisfy` askedMnemonic
 
+    -- The account came from a document without the fingerprint of its
+    -- seed, which signtx records. The answer read the account before, and
+    -- showed none.
+    it "shows the account with the seed signtx recorded" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        importWithoutFingerprint home
+        _ <- answer home ["receive"] []
+        _ <- answer home ["sync"] []
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", textOf (otherAddr 0), "0.0002"] []
+        (fmap dBAccountFingerprint . accountOf <$> hwJson home ["signtx", nosig] seedOnce)
+          `shouldReturn` Right (Just "bc560f95")
+
+    -- sendtx left --network aside for a nosigHash, and sent the transaction
+    it "is sent by its nosigHash only with the --network of its account" $
+      withChain ctx (paidChain ctx) $ \home chain -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", textOf (otherAddr 0), "0.0002"] []
+        _ <- answer home ["signtx", nosig] seedOnce
+        (errorOf <$> hwJson home ["sendtx", nosig, "--network", "bch"] [])
+          `shouldReturn` Right "The transaction is pending in an account of another network"
+        (inMempool <$> readIORef chain) `shouldReturn` []
+        sent <- txOf =<< answer home ["sendtx", nosig, "--network", "btc"] []
+        pendingState sent `shouldBe` Just (True, True)
+
   -- The signer holds the account and asks for its mnemonic; the online
   -- computer holds the same account, imported, and talks to the store
   describe "A payment signed offline" $ do
@@ -840,14 +882,11 @@ signingSpec ctx = do
         (txsOf <$> hwJson signer ["pendingtxs"] []) `shouldReturn` Right []
 
     -- The online wallet has the account from a document without the
-    -- fingerprint of its seed, as hw wrote them before it recorded
-    -- fingerprints. bc560f95 is the fingerprint of the test seed.
+    -- fingerprint of its seed. bc560f95 is the fingerprint of the test seed.
     it "names the seed in the signed file, which the online wallet learns as it sends it" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         createMain signer
-        Json.encodeFile (online </> "main.json") $
-          Json.object ["xpubkey" Json..= testAccountXPub, "network" Json..= ("btc" :: Text), "name" Json..= ("main" :: Text)]
-        _ <- answer online ["importacc", online </> "main.json"] []
+        importWithoutFingerprint online
         _ <- answer online ["receive"] []
         _ <- answer online ["sync"] []
         (fingerprintsOf <$> hwJson online ["accounts"] []) `shouldReturn` Right [("main", Nothing)]
