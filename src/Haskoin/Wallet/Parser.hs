@@ -142,7 +142,11 @@ data PrepareTx = PrepareTx
     spendFrom :: ![Text],
     -- | Whether a fee rate above 100 satoshis per byte is taken without
     -- asking (--yes)
-    yes :: !Bool
+    yes :: !Bool,
+    -- | Whether the change goes back to an address the payment spends
+    -- from (--changeback) or to a new change address (--newchange), when
+    -- the command says. Otherwise the configuration file says.
+    changeBack :: !(Maybe Bool)
   }
   deriving (Eq, Show)
 
@@ -821,6 +825,7 @@ prepareTxParser = do
           <*> many coinOption
           <*> many spendFromOption
           <*> highFeeYesOption
+          <*> changeBackOption
   info (CommandPrepareTx <$> options) $
     progDesc "Prepare an unsigned transaction for making a payment"
       <> footer
@@ -845,7 +850,23 @@ transaction with why; when none can be spent, nothing is prepared.
 A fee rate above 100 satoshis per byte, ten times the default, is more often a
 typo than a choice, so `preparetx` asks before it takes one. --yes takes it
 without asking, for a script.
+
+Change: the change goes to a new change address, unless --changeback sends it
+back to an address the payment spends from. Some banks only accept payments from
+addresses they have checked, and the change keeps the funds at such an address.
+When the coins come from several addresses, `preparetx` lists them as `balances`
+does, the largest first, and asks which one gets the change. With --spendfrom
+and one address, the change goes back to it without a question. The key
+change-back of the configuration file makes --changeback the default, and
+--newchange then sends the change of one payment to a new change address.
 |]
+
+-- | Where the change of preparetx goes, when the command says
+changeBackOption :: Parser (Maybe Bool)
+changeBackOption =
+  optional $
+    flag' True (long "changeback" <> help "Send the change back to an address the payment spends from")
+      <|> flag' False (long "newchange" <> help "Send the change to a new change address, whatever the configuration file says")
 
 -- | A recipient of preparetx, ADDRESS:AMOUNT
 paymentArg :: Parser Text

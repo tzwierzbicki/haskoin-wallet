@@ -27,6 +27,7 @@ module Haskoin.Wallet.Coin
     spendableAtAddresses,
     spendableBalance,
     coinBalancePage,
+    coinBalancesAt,
     lockCoin,
     unlockCoin,
     coinAccounts,
@@ -329,16 +330,35 @@ spendableBalance net accId = do
 -- shows on two pages. The order adds up every coin of the account, in one
 -- query; the spendable values are read for the page only.
 coinBalancePage :: (MonadUnliftIO m) => Network -> DBAccountId -> Page -> ExceptT String (DB m) [(DBAddress, CoinBalance)]
-coinBalancePage net accId page = do
-  let (lim, off) = pageBounds page
+coinBalancePage net accId page = coinBalances net accId Nothing (Just page)
+
+-- | Those of the given addresses of the account that hold coins, each with
+-- the balance of its coins, in the order of 'coinBalancePage'
+coinBalancesAt :: (MonadUnliftIO m) => Network -> DBAccountId -> [Text] -> ExceptT String (DB m) [(DBAddress, CoinBalance)]
+coinBalancesAt net accId addrs = coinBalances net accId (Just addrs) Nothing
+
+-- | The addresses of the account that hold coins, each with the balance of
+-- its coins, the largest total first: at the given addresses or at all of
+-- them, a page of them or all of them
+coinBalances ::
+  (MonadUnliftIO m) =>
+  Network ->
+  DBAccountId ->
+  Maybe [Text] ->
+  Maybe Page ->
+  ExceptT String (DB m) [(DBAddress, CoinBalance)]
+coinBalances net accId addrsM pageM = do
   rows <- lift . select . from $ \(c `InnerJoin` a) -> do
     on $ c ^. DBCoinAccount ==. a ^. DBAddressAccount &&. c ^. DBCoinAddress ==. a ^. DBAddressAddress
     where_ $ c ^. DBCoinAccount ==. val accId
+    forM_ addrsM $ \addrs -> where_ $ c ^. DBCoinAddress `in_` valList addrs
     groupBy (a ^. DBAddressAccount, a ^. DBAddressInternal, a ^. DBAddressIndex)
     let total = sum_ (c ^. DBCoinValue)
     orderBy [desc total, asc (a ^. DBAddressInternal), asc (a ^. DBAddressIndex)]
-    limit lim
-    offset off
+    forM_ pageM $ \page -> do
+      let (lim, off) = pageBounds page
+      limit lim
+      offset off
     return (a, total)
   -- An address of the page holds a coin at least, so its total is never null
   let held = [(P.entityVal a, fromMaybe 0 total) | (a, Value total) <- rows]

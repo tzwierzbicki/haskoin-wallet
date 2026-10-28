@@ -383,6 +383,11 @@ coinBalancePrinter unit pad addr balance =
       ("Unspendable", amountPrinter unit $ coinBalanceUnspendable balance)
     ]
 
+-- | Addresses as balances lists them, their paths aligned. preparetx
+-- --changeback shows the addresses it can send the change back to this way.
+coinBalancesPrinter :: AmountUnit -> [(DBAddress, CoinBalance)] -> Printer
+coinBalancesPrinter unit addrs = vcat $ uncurry (coinBalancePrinter unit (pathWidth (fst <$> addrs))) <$> addrs
+
 -- | A transaction of a listing, on the network of the account listed
 txInfoPrinter :: Network -> AmountUnit -> TxInfo -> Printer
 txInfoPrinter = transactionPrinter False
@@ -614,8 +619,7 @@ prettyPrinter unit =
       renderIO $ vcat $ uncurry (addressPrinter unit (pathWidth (fst <$> addrs))) <$> addrs
     ResponseBalances _ [] ->
       renderIO $ text "There are no addresses with coins to display"
-    ResponseBalances _ addrs ->
-      renderIO $ vcat $ uncurry (coinBalancePrinter unit (pathWidth (fst <$> addrs))) <$> addrs
+    ResponseBalances _ addrs -> renderIO $ coinBalancesPrinter unit addrs
     ResponseTxs _ [] ->
       renderIO $ text "There are no transactions to display"
     ResponseTxs acc txs -> do

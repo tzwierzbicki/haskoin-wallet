@@ -31,7 +31,7 @@ import Haskoin.Wallet.PendingTx
 import Haskoin.Wallet.RawTx
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.TxBuilding (buildTxSignData)
+import Haskoin.Wallet.TxBuilding (ChangeTo (..), buildTxSignData)
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSigning (signWalletTx, verifySignedTx)
@@ -145,7 +145,7 @@ fundAccountTwice ctx cfg accId = do
 -- byte, from the given coins of the account, or from any of its coins
 payment :: Ctx -> Config -> DBAccountId -> [OutPoint] -> Address -> Natural -> ExceptT String (DB IO) TxSignData
 payment ctx cfg accId chosen to amount =
-  buildTxSignData btc ctx cfg (mkStdGen 0) LeastWaste accId [(to, amount)] 1 0 SenderPays 0 chosen
+  buildTxSignData btc ctx cfg (mkStdGen 0) LeastWaste accId [(to, amount)] 1 0 SenderPays 0 chosen NewChangeAddress
 
 -- | An unsigned payment of 8000 to otherAddr 0 from the coin of the funded
 -- account, with 11774 of change at internalAddr 0

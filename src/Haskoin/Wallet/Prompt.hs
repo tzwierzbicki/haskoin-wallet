@@ -4,9 +4,10 @@
 -- | What hw asks the user for on the terminal: the mnemonic of a wallet,
 -- whole or in parts, and its passphrase, which give the signing key of an
 -- account; the dice rolls that add to the entropy of a new mnemonic; the
--- private keys of a sweep, when they are not in a file; and the answer to a
+-- private keys of a sweep, when they are not in a file; the answer to a
 -- yes-or-no question, such as whether to send a transaction or to take a
--- high fee rate.
+-- high fee rate; and a choice among a few, such as the address the change
+-- of a payment goes back to.
 --
 -- Secrets are typed without echo, as gpg, ssh and sudo take them: nothing
 -- shows on the screen, not even their length. The prompts and the messages
@@ -21,6 +22,7 @@ module Haskoin.Wallet.Prompt
     cancelled,
     notUtf8,
     askYes,
+    askChoice,
     readMnemonic,
     askMnemonic,
     askMnemonicPass,
@@ -41,8 +43,8 @@ import Control.Monad.IO.Class (MonadIO (liftIO))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
 import Data.Char (digitToInt, isSpace)
-import Data.List (elemIndex)
-import Data.Maybe (fromMaybe)
+import Data.List (elemIndex, intercalate)
+import Data.Maybe (fromMaybe, listToMaybe)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -137,6 +139,23 @@ askYes :: (MonadIO m) => Terminal -> String -> ExceptT String m Bool
 askYes term question = do
   answer <- liftIO (askVisible term (question <> " [y/N] ")) >>= liftEither
   return $ Text.toLower (Text.strip answer) `elem` ["y", "yes"]
+
+-- | One of the choices, each with the answers that pick it, the first of
+-- them shown. An empty answer picks the first choice. An answer that picks
+-- none is a mistake, and the end of the input cancels the command.
+askChoice :: (MonadIO m) => Terminal -> String -> [([Text], a)] -> ExceptT String m a
+askChoice _ _ [] = throwError "There is nothing to choose from"
+askChoice term question choices@((firstNames, firstChoice) : _) =
+  retrying term $ do
+    answer <- liftIO (askVisible term (question <> " [" <> shown firstNames <> "] ")) >>= liftEither
+    return $ picked (Text.strip answer)
+  where
+    picked "" = Right firstChoice
+    picked answer =
+      case [choice | (names, choice) <- choices, answer `elem` names] of
+        choice : _ -> Right choice
+        [] -> Left $ "Type one of " <> intercalate ", " (shown . fst <$> choices) <> ", or nothing for " <> shown firstNames
+    shown names = maybe "" Text.unpack (listToMaybe names)
 
 {- The mnemonic -}
 

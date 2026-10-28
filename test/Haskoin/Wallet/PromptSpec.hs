@@ -512,7 +512,7 @@ sweepKeysSpec =
 {- Questions -}
 
 questionSpec :: Spec
-questionSpec =
+questionSpec = do
   describe "A question to answer yes or no" $ do
     let asking term = askYes term "Send this transaction?"
     it "is answered yes by y or yes, in any case, with spaces around" $
@@ -526,6 +526,39 @@ questionSpec =
     it "shows the question with the answers it takes, no being the one of an empty line" $ do
       (_, shown, _) <- answering ["y"] asking
       shown `shouldBe` ["Send this transaction? [y/N] "]
+
+    it "is cancelled by the end of the input" $
+      answerOf [] asking `shouldReturn` Left cancelled
+
+  describe "A question to pick one of a few choices" $ do
+    -- Two addresses, each picked by its path or by its text
+    let choices = [(["/0/3", "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1"], 3 :: Int), (["/0/5", "1MZuimSXigp8oqxkVUvZofqHNtVjdcdAqc"], 5)]
+        asking term = askChoice term "Which address gets the change?" choices
+    it "takes the choice an answer names, with spaces around" $ do
+      answerOf ["/0/5"] asking `shouldReturn` Right 5
+      answerOf [" /0/3 "] asking `shouldReturn` Right 3
+
+    it "takes a choice by any of its names" $
+      answerOf ["1MZuimSXigp8oqxkVUvZofqHNtVjdcdAqc"] asking `shouldReturn` Right 5
+
+    it "takes the first choice for an empty line" $
+      answerOf [""] asking `shouldReturn` Right 3
+
+    it "shows the question with the first choice, which an empty line takes" $ do
+      (_, shown, _) <- answering ["/0/5"] asking
+      shown `shouldBe` ["Which address gets the change? [/0/3] "]
+
+    it "tells an answer that names no choice, and asks again" $ do
+      (answer, shown, _) <- answering ["/0/4", "/0/5"] asking
+      answer `shouldBe` Right 5
+      shown
+        `shouldBe` [ "Which address gets the change? [/0/3] ",
+                     "Type one of /0/3, /0/5, or nothing for /0/3",
+                     "Which address gets the change? [/0/3] "
+                   ]
+
+    it "fails after three answers that name no choice" $
+      answerOf ["/0/4", "/0/6", "/0/7"] asking `shouldReturn` Left "Type one of /0/3, /0/5, or nothing for /0/3"
 
     it "is cancelled by the end of the input" $
       answerOf [] asking `shouldReturn` Left cancelled

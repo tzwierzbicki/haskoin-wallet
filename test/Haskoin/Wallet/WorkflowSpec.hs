@@ -60,6 +60,7 @@ spec = prepareContext $ \ctx -> do
   highFeeSpec ctx
   sendAllSpec ctx
   coinControlSpec ctx
+  changeBackSpec ctx
   pendingListSpec ctx
   balancesListSpec ctx
   nextStepSpec ctx
@@ -1976,6 +1977,63 @@ coinControlSpec ctx =
         sendAll <- answer home ["preparesendall", textOf (otherAddr 0), "--spendfrom", textOf (externalAddr 0)] []
         paidToOthers <$> txOf sendAll `shouldReturn` Map.fromList [(otherAddr 0, 48080)]
         leftOf sendAll `shouldBe` Right [(OutPoint (txHash (twoAddressesTx ctx)) 1, 30000, NotGiven)]
+
+{- The change sent back -}
+
+-- A payment of 20000 from the coin of 50000 leaves 27740 of change. One of
+-- 60000 needs the coins at both addresses, 80000: two inputs and two
+-- outputs make 374 bytes, a fee of 3740, and 16260 of change.
+changeBackSpec :: Ctx -> Spec
+changeBackSpec ctx =
+  describe "The change of preparetx sent back" $ do
+    let chain = confirmedChain (twoAddressesTx ctx)
+        fromBoth = ["preparetx", fixedTo (otherAddr 0) "0.0006", "--changeback"]
+    it "goes to the one address the payment spends from, without a question" $
+      withChain ctx chain $ \home _ -> do
+        synced home
+        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spendfrom", textOf (externalAddr 0), "--changeback"] []
+        paidToWallet <$> txOf prepared `shouldReturn` Map.fromList [(externalAddr 0, 27740)]
+
+    it "goes to the address whose path the user types, among those the payment spends from" $
+      withChain ctx chain $ \home _ -> do
+        synced home
+        prepared <- answer home fromBoth ["/0/1"]
+        paidToWallet <$> txOf prepared `shouldReturn` Map.fromList [(externalAddr 1, 16260)]
+
+    it "goes to the address with the largest total when the user types nothing" $
+      withChain ctx chain $ \home _ -> do
+        synced home
+        prepared <- answer home fromBoth [""]
+        paidToWallet <$> txOf prepared `shouldReturn` Map.fromList [(externalAddr 0, 16260)]
+
+    it "is asked for with the addresses listed as balances lists them, the largest first" $
+      withChain ctx chain $ \home _ -> do
+        synced home
+        run <- hw home fromBoth ["/0/1"]
+        runErr run `shouldSatisfy` Text.isInfixOf "The payment spends coins at 2 addresses. Its change can go back to any of them:\n/0/0: "
+        runErr run `shouldSatisfy` Text.isInfixOf ("/0/0: " <> externalAddrsText !! 0 <> "\n  Total      : 0.00050000 btc")
+        runErr run `shouldSatisfy` Text.isInfixOf ("/0/1: " <> externalAddrsText !! 1 <> "\n  Total      : 0.00030000 btc")
+        runErr run `shouldSatisfy` Text.isInfixOf "Which address gets the change? Type its path [/0/0]"
+
+    it "goes back without --changeback when the configuration file says so" $
+      withChain ctx chain $ \home _ -> do
+        synced home
+        setChangeBack home True
+        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spendfrom", textOf (externalAddr 0)] []
+        paidToWallet <$> txOf prepared `shouldReturn` Map.fromList [(externalAddr 0, 27740)]
+
+    it "goes to a new change address with --newchange, whatever the configuration file says" $
+      withChain ctx chain $ \home _ -> do
+        synced home
+        setChangeBack home True
+        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spendfrom", textOf (externalAddr 0), "--newchange"] []
+        paidToWallet <$> txOf prepared `shouldReturn` Map.fromList [(internalAddr 0, 27740)]
+
+    it "cannot go back and to a new change address at once" $
+      withHome $ \home -> do
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--changeback", "--newchange"] []
+        runExit run `shouldBe` ExitFailure 1
+        runErr run `shouldSatisfy` Text.isInfixOf "Invalid option `--newchange'"
 
 {- Pending transactions -}
 

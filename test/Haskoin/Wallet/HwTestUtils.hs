@@ -12,6 +12,7 @@ module Haskoin.Wallet.HwTestUtils
     Run (..),
     withHome,
     setDefaultNetwork,
+    setChangeBack,
     hw,
     hwJson,
     -- * The chain of the fake store
@@ -92,12 +93,20 @@ configOf home = home </> ".hw" </> "config.json"
 -- | Set the default network of the configuration file of a home, or take
 -- it away
 setDefaultNetwork :: FilePath -> Maybe Text -> IO ()
-setDefaultNetwork home netM = do
+setDefaultNetwork home netM =
+  editConfig home $ maybe (KeyMap.delete "default-network") (KeyMap.insert "default-network" . Json.String) netM
+
+-- | Set whether preparetx sends the change back to an address it spends
+-- from without --changeback, in the configuration file of a home
+setChangeBack :: FilePath -> Bool -> IO ()
+setChangeBack home on = editConfig home (KeyMap.insert "change-back" (Json.Bool on))
+
+-- | Change the keys of the configuration file of a home
+editConfig :: FilePath -> (Json.Object -> Json.Object) -> IO ()
+editConfig home edit = do
   config <- Json.decodeFileStrict (configOf home)
   case config of
-    Just (Json.Object o) ->
-      Json.encodeFile (configOf home) $
-        Json.Object (maybe (KeyMap.delete "default-network") (KeyMap.insert "default-network" . Json.String) netM o)
+    Just (Json.Object o) -> Json.encodeFile (configOf home) (Json.Object (edit o))
     _ -> fail "The configuration file of the home is not a JSON object"
 
 -- | The hw binary of this build. The one on the PATH may be another

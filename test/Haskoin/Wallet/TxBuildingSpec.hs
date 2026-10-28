@@ -8,8 +8,10 @@
 -- "Haskoin.Wallet.CoinSelectionSpec".
 module Haskoin.Wallet.TxBuildingSpec where
 
+import Control.Monad.Except (throwError)
 import Control.Monad.Trans (lift, liftIO)
 import Control.Monad.Trans.Except (ExceptT, runExceptT)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Default (def)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as Map
@@ -17,6 +19,7 @@ import Data.Maybe (fromJust)
 import Data.Word (Word32, Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.Account (getAccountById)
 import Haskoin.Wallet.Address
 import Haskoin.Wallet.BestBlock
 import Haskoin.Wallet.Coin
@@ -45,6 +48,7 @@ spec =
     shuffleSpec ctx
     errorSpec ctx
     databaseSpec ctx
+    changeBackSpec ctx
 
 -- Every test pays from coins of the test wallet, funded by one synthetic
 -- transaction, at 10 satoshis per byte with a dust limit of 546. The sizes
@@ -59,22 +63,25 @@ coinAt :: Ctx -> [Natural] -> Word32 -> OutPoint
 coinAt ctx values = OutPoint (txHash $ fundingWorth ctx values)
 
 -- | The wallet as the builder sees it: the coins, the paths of the first ten
--- external addresses, the change address /1/0, and the recipients that
--- belong to the wallet with their paths
+-- external addresses, and the recipients that belong to the wallet with
+-- their paths
 wallet :: [Store.Unspent] -> [(Address, SoftPath)] -> WalletCoins
 wallet unspents recipients =
   WalletCoins
     { coins = unspents,
       coinPaths = Map.fromList [(externalAddr i, Deriv :/ 0 :/ fromIntegral i) | i <- [0 .. 9]],
-      change = (internalAddr 0, Deriv :/ 1 :/ 0),
       recipientPaths = Map.fromList recipients
     }
+
+-- | The change address of the builds: /1/0
+firstChange :: (Address, SoftPath)
+firstChange = (internalAddr 0, Deriv :/ 1 :/ 0)
 
 -- | Build with the seed 0 and the given strategy, wallet, recipients and
 -- payer, at 10 satoshis per byte with a dust limit of 546
 build :: Ctx -> CoinSelection -> WalletCoins -> [(Address, Natural)] -> FeePayer -> Either String BuiltTx
 build ctx strategy found recipients payer =
-  buildWalletTx btc ctx (mkStdGen 0) strategy found recipients 10 546 payer []
+  buildWalletTx btc ctx (mkStdGen 0) strategy found firstChange recipients 10 546 payer []
 
 -- | Pay recipients of other wallets from coins worth the given amounts, the
 -- largest coins first, the sender paying the fee
@@ -90,12 +97,12 @@ recipientsPayFor ctx values recipients =
 -- | Like 'pay', spending exactly the coins at the given indices
 payFrom :: Ctx -> [Natural] -> [Word32] -> [(Address, Natural)] -> Either String BuiltTx
 payFrom ctx values indices recipients =
-  buildWalletTx btc ctx (mkStdGen 0) LargestFirst (wallet (coinsWorth ctx values) []) recipients 10 546 SenderPays (coinAt ctx values <$> indices)
+  buildWalletTx btc ctx (mkStdGen 0) LargestFirst (wallet (coinsWorth ctx values) []) firstChange recipients 10 546 SenderPays (coinAt ctx values <$> indices)
 
 -- | Like 'pay', with the given seed and strategy
 payWith :: Ctx -> Int -> CoinSelection -> [Natural] -> [(Address, Natural)] -> Either String BuiltTx
 payWith ctx seed strategy values recipients =
-  buildWalletTx btc ctx (mkStdGen seed) strategy (wallet (coinsWorth ctx values) []) recipients 10 546 SenderPays []
+  buildWalletTx btc ctx (mkStdGen seed) strategy (wallet (coinsWorth ctx values) []) firstChange recipients 10 546 SenderPays []
 
 -- | What a built transaction spends and pays: the amounts of its inputs, in
 -- order, and its outputs by amount, since the builder shuffles them
@@ -396,7 +403,7 @@ errorSpec ctx =
   describe "Errors" $ do
     -- 350000 paid from a coin of 400000, at a fee rate and a dust limit
     let payAt feeByte dust =
-          buildWalletTx btc ctx (mkStdGen 0) LargestFirst (wallet (coinsWorth ctx [400000]) []) [(otherAddr 0, 350000)] feeByte dust SenderPays []
+          buildWalletTx btc ctx (mkStdGen 0) LargestFirst (wallet (coinsWorth ctx [400000]) []) firstChange [(otherAddr 0, 350000)] feeByte dust SenderPays []
     it "fails without recipients" $
       pay ctx [400000] [] `shouldBe` Left "No recipients provided"
     it "fails at a fee rate of zero" $
@@ -442,38 +449,44 @@ errorSpec ctx =
 -- | An account of the test wallet with its first external address, holding
 -- a coin of 400000 confirmed at height 0, the best block
 fundedAccount :: Ctx -> Config -> ExceptT String (DB IO) (DBAccountId, Tx)
-fundedAccount ctx cfg = do
+fundedAccount ctx cfg = fundedAt ctx cfg [400000]
+
+-- | An account of the test wallet holding a coin of each value at its
+-- external addresses in order, /0/0 first, confirmed at height 0, the best
+-- block, and paid by 'fundingWorth'
+fundedAt :: Ctx -> Config -> [Natural] -> ExceptT String (DB IO) (DBAccountId, Tx)
+fundedAt ctx cfg values = do
   (accId, _) <- testNewAcc ctx "test"
   lift $ updateBest btc (fakeBlockHash 0) 0
-  _ <- genExtAddress ctx cfg accId ""
-  let fund = fundingWorth ctx [400000]
+  mapM_ (const $ genExtAddress ctx cfg accId "") values
+  let fund = fundingWorth ctx values
+      addrs = externalAddr <$> [0 .. length values - 1]
   lift $ insertRawTx fund
-  _ <- refreshCoins btc ctx accId [externalAddr 0] [storeCoin ctx (txHash fund, 0) (Just 0) (externalAddr 0) 400000]
+  _ <- refreshCoins btc ctx accId addrs [storeCoin ctx (txHash fund, i) (Just 0) addr value | (i, addr, value) <- zip3 [0 ..] addrs values]
   return (accId, fund)
 
 databaseSpec :: Ctx -> Spec
 databaseSpec ctx =
   describe "With the database" $ do
     let cfg = def :: Config
-    it "fetches the coins with their paths, the change address and the wallet recipients" $
+    it "fetches the coins with their paths and the wallet recipients" $
       inDatabaseE $ do
         (accId, fund) <- fundedAccount ctx cfg
-        found <- fetchWalletCoins btc ctx cfg accId [otherAddr 0, externalAddr 0] 1
+        found <- fetchWalletCoins btc ctx accId [otherAddr 0, externalAddr 0] 1
         liftIO $ do
           found.coins `shouldBe` [storeCoin ctx (txHash fund, 0) (Just 0) (externalAddr 0) 400000]
           found.coinPaths `shouldBe` Map.fromList [(externalAddr 0, Deriv :/ 0 :/ 0)]
-          found.change `shouldBe` (internalAddr 0, Deriv :/ 1 :/ 0)
           found.recipientPaths `shouldBe` Map.fromList [(externalAddr 0, Deriv :/ 0 :/ 0)]
     it "leaves out the coins without enough confirmations" $
       inDatabaseE $ do
         (accId, _) <- fundedAccount ctx cfg
         -- The coin at the best block has one confirmation
-        found <- fetchWalletCoins btc ctx cfg accId [] 2
+        found <- fetchWalletCoins btc ctx accId [] 2
         liftIO $ found.coins `shouldBe` []
     it "builds the signing data with the transactions spent from" $
       inDatabaseE $ do
         (accId, fund) <- fundedAccount ctx cfg
-        tsd <- buildTxSignData btc ctx cfg (mkStdGen 0) LargestFirst accId [(otherAddr 0, 350000)] 10 546 SenderPays 1 []
+        tsd <- buildTxSignData btc ctx cfg (mkStdGen 0) LargestFirst accId [(otherAddr 0, 350000)] 10 546 SenderPays 1 [] NewChangeAddress
         liftIO $ do
           sortedOutputs (txSignDataTx tsd)
             `shouldBe` spendingTx ctx [(txHash fund, 0)] [(internalAddr 0, 47740), (otherAddr 0, 350000)]
@@ -488,12 +501,89 @@ databaseSpec ctx =
         lift $ updateBest btc (fakeBlockHash 0) 0
         _ <- genExtAddress ctx cfg accId ""
         _ <- refreshCoins btc ctx accId [externalAddr 0] [storeCoin ctx (fakeTxHash 9, 0) (Just 0) (externalAddr 0) 400000]
-        result <- lift $ runExceptT $ buildTxSignData btc ctx cfg (mkStdGen 0) LargestFirst accId [(otherAddr 0, 350000)] 10 546 SenderPays 1 []
+        result <- lift $ runExceptT $ buildTxSignData btc ctx cfg (mkStdGen 0) LargestFirst accId [(otherAddr 0, 350000)] 10 546 SenderPays 1 [] NewChangeAddress
         liftIO $
           result
             `shouldBe` Left "The raw transaction 0000000000000000000000000000000000000000000000000000000000000009 of a coin is missing: sync --full fetches it"
     it "fails without recipients" $
       inDatabaseE $ do
         (accId, _) <- fundedAccount ctx cfg
-        result <- lift $ runExceptT $ buildTxSignData btc ctx cfg (mkStdGen 0) LargestFirst accId [] 10 546 SenderPays 1 []
+        result <- lift $ runExceptT $ buildTxSignData btc ctx cfg (mkStdGen 0) LargestFirst accId [] 10 546 SenderPays 1 [] NewChangeAddress
         liftIO $ result `shouldBe` Left "No recipients provided"
+
+{- Sending the change back -}
+
+-- | A payment of the amount to otherAddr 0 from the account, by the largest
+-- coins first, at 10 satoshis per byte with a dust limit of 546
+payBack :: Ctx -> Config -> DBAccountId -> Natural -> ChangeTo IO -> ExceptT String (DB IO) TxSignData
+payBack ctx cfg accId amount =
+  buildTxSignData btc ctx cfg (mkStdGen 0) LargestFirst accId [(otherAddr 0, amount)] 10 546 SenderPays 1 []
+
+-- | Send the change back to the given address, keeping the addresses it
+-- was offered
+pickingAndKeeping :: IORef [Address] -> Address -> ChangeTo IO
+pickingAndKeeping offered picked = ChangeBack $ \addrs -> liftIO (writeIORef offered addrs) >> return picked
+
+changeBackSpec :: Ctx -> Spec
+changeBackSpec ctx = do
+  describe "The change sent back to an address the payment spends from" $ do
+    let cfg = def :: Config
+    -- Fee: 10 + 2 * 148 + 2 * 34 = 374 bytes * 10 = 3740
+    -- Change: 30000 + 20000 - 40000 - 3740 = 6260
+    it "goes to the address picked, with its path" $
+      inDatabaseE $ do
+        (accId, _) <- fundedAt ctx cfg [30000, 20000]
+        offered <- liftIO $ newIORef []
+        tsd <- payBack ctx cfg accId 40000 (pickingAndKeeping offered (externalAddr 1))
+        liftIO $ do
+          sortOn snd (outputsOf ctx (txSignDataTx tsd)) `shouldBe` [(externalAddr 1, 6260), (otherAddr 0, 40000)]
+          txSignDataOutputPaths tsd `shouldBe` [Deriv :/ 0 :/ 1]
+
+    it "is picked among the addresses the coins of the payment come from" $
+      inDatabaseE $ do
+        (accId, _) <- fundedAt ctx cfg [30000, 20000]
+        offered <- liftIO $ newIORef []
+        _ <- payBack ctx cfg accId 40000 (pickingAndKeeping offered (externalAddr 1))
+        liftIO $ readIORef offered `shouldReturn` [externalAddr 0, externalAddr 1]
+
+    -- The coin of 30000 alone pays 20000: the coin at /0/1 is not spent
+    it "is not picked at an address whose coins the payment does not spend" $
+      inDatabaseE $ do
+        (accId, _) <- fundedAt ctx cfg [30000, 20000]
+        offered <- liftIO $ newIORef []
+        _ <- payBack ctx cfg accId 20000 (pickingAndKeeping offered (externalAddr 0))
+        liftIO $ readIORef offered `shouldReturn` [externalAddr 0]
+
+    it "takes no new change address" $
+      inDatabaseE $ do
+        (accId, _) <- fundedAccount ctx cfg
+        offered <- liftIO $ newIORef []
+        _ <- payBack ctx cfg accId 350000 (pickingAndKeeping offered (externalAddr 0))
+        (dBAccountInternal <$> getAccountById accId) `dbShouldBeE` 0
+
+    it "is refused at an address the payment does not spend from" $
+      inDatabaseE $ do
+        (accId, _) <- fundedAccount ctx cfg
+        offered <- liftIO $ newIORef []
+        result <- lift $ runExceptT $ payBack ctx cfg accId 350000 (pickingAndKeeping offered (externalAddr 1))
+        liftIO $ result `shouldBe` Left "The change can only go back to an address the payment spends from"
+
+    -- Fee: 10 + 148 + 34 = 192 bytes * 10 = 1920, and 400000 - 1920 = 398080
+    it "is not asked for by a payment without change" $
+      inDatabaseE $ do
+        (accId, _) <- fundedAccount ctx cfg
+        tsd <- payBack ctx cfg accId 398080 (ChangeBack (const $ throwError "The change address was asked for"))
+        liftIO $ outputsOf ctx (txSignDataTx tsd) `shouldBe` [(otherAddr 0, 398080)]
+
+  describe "The change address of a payment" $ do
+    let cfg = def :: Config
+    it "is not taken by a payment without change" $
+      inDatabaseE $ do
+        (accId, _) <- fundedAccount ctx cfg
+        _ <- payBack ctx cfg accId 398080 NewChangeAddress
+        (dBAccountInternal <$> getAccountById accId) `dbShouldBeE` 0
+
+    it "must be given to assemble a payment with change" $ do
+      chosen <- expectRight $ choosePayment ctx (mkStdGen 0) LargestFirst (wallet (coinsWorth ctx [400000]) []) [(otherAddr 0, 350000)] 10 546 SenderPays []
+      (.tx) <$> assemblePayment btc ctx (wallet (coinsWorth ctx [400000]) []) chosen Nothing
+        `shouldBe` Left "The payment has change, and no address for it"

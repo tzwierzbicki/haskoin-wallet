@@ -69,6 +69,11 @@ keySpec =
       decodeConfig [r|{"default-network": "doge"}|]
         `shouldSatisfy` either ("Error in $: The key \"default-network\" must be a network: " `isPrefixOf`) (const False)
 
+    -- A new file does not: the change of a payment goes to a new change
+    -- address unless --changeback says otherwise
+    it "sends the change of preparetx back to an address it spends from" $
+      configChangeBack <$> decodeConfig [r|{"change-back": true}|] `shouldBe` Right True
+
     it "names the database to work on" $
       configDatabaseFile <$> decodeConfig [r|{"database-file": "/backups/accounts.sqlite"}|]
         `shouldBe` Right (Just "/backups/accounts.sqlite")
@@ -156,7 +161,8 @@ defaultFile =
   "tx-full-batch": 100,
   "parallel-requests": 1,
   "database-file": null,
-  "default-network": "btc"
+  "default-network": "btc",
+  "change-back": false
 }|]
 
 -- | The file hw 0.9 wrote when there was none: tx-batch and recovery-gap

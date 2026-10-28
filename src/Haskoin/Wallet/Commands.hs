@@ -91,12 +91,12 @@ import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.Migration (databaseVersion, latestDatabaseVersion)
 import Haskoin.Wallet.Parser
 import Haskoin.Wallet.PendingTx
-import Haskoin.Wallet.PrettyPrinter (renderOn, txAnswerPrinter)
+import Haskoin.Wallet.PrettyPrinter (coinBalancesPrinter, renderOn, txAnswerPrinter)
 import Haskoin.Wallet.Prompt
 import Haskoin.Wallet.Response
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
-import Haskoin.Wallet.TxBuilding (buildTxSignData)
+import Haskoin.Wallet.TxBuilding (ChangeTo (..), buildTxSignData)
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSigning (parseOutsideTxSignData, signWalletTx)
@@ -518,9 +518,27 @@ cmdPrepareTx ctx cfg unit opts =
           unspendable <- unspendableCoins net ctx accId opts.minConf
           (chosen, held) <- liftEither $ chosenCoins opts.coins spendFrom spendable unspendable
           return ((.outpoint) <$> chosen, leftCoins [] held [])
+    let changeTo
+          | fromMaybe (configChangeBack cfg) opts.changeBack = ChangeBack (changeBackTo unit net accId)
+          | otherwise = NewChangeAddress
     gen <- liftIO initStdGen
-    tsd <- buildTxSignData net ctx cfg gen opts.strategy accId recipients opts.feeByte opts.dust opts.feePayer opts.minConf control
+    tsd <- buildTxSignData net ctx cfg gen opts.strategy accId recipients opts.feeByte opts.dust opts.feePayer opts.minConf control changeTo
     preparedAnswer ctx accId acc opts.output tsd left
+
+-- | The address the change of a payment goes back to, among the addresses
+-- its coins come from: the only one, or the one the user picks. They are
+-- listed as balances lists them, the largest total first, and the first is
+-- the default. The list and the question go to stderr, to keep the --json
+-- answer clean.
+changeBackTo :: AmountUnit -> Network -> DBAccountId -> [Address] -> ExceptT String (DB IO) Address
+changeBackTo _ _ _ [addr] = return addr
+changeBackTo unit net accId addrs = do
+  held <- coinBalancesAt net accId =<< liftEither (mapM (addrToTextE net) addrs)
+  liftIO $ do
+    tell terminal $ "The payment spends coins at " <> show (length held) <> " addresses. Its change can go back to any of them:"
+    renderOn stderr (coinBalancesPrinter unit held)
+  chosen <- askChoice terminal "Which address gets the change? Type its path" [([pathText (addrPath a), dBAddressAddress a], a) | (a, _) <- held]
+  liftEither $ textToAddrE net (dBAddressAddress chosen)
 
 -- | Prepare a transaction sending the coins of the account to the
 -- recipients, unsigned, with no change: all the coins it can spend now, or

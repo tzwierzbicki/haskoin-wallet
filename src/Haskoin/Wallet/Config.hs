@@ -77,7 +77,11 @@ data Config = Config
     -- given, for a user of one network. Without it, --network must be.
     -- A sweep that pays no account of the wallet does not take it: it
     -- needs its --network.
-    configDefaultNetwork :: Maybe Network
+    configDefaultNetwork :: Maybe Network,
+    -- | Whether preparetx sends the change back to an address the payment
+    -- spends from, as --changeback does, rather than to a new change
+    -- address. --newchange overrides it for one payment.
+    configChangeBack :: Bool
   }
   deriving (Eq, Show)
 
@@ -99,6 +103,7 @@ instance FromJSON Config where
         <*> count "parallel-requests" configParallelRequests
         <*> o .:? "database-file"
         <*> (traverse networkNamed =<< o .:? "default-network")
+        <*> key "change-back" configChangeBack
 
 -- | The network of a name in the configuration file
 networkNamed :: String -> Parser Network
@@ -122,7 +127,8 @@ instance ToJSON Config where
         "tx-full-batch" .= configTxFullBatch cfg,
         "parallel-requests" .= configParallelRequests cfg,
         "database-file" .= configDatabaseFile cfg,
-        "default-network" .= ((.name) <$> configDefaultNetwork cfg)
+        "default-network" .= ((.name) <$> configDefaultNetwork cfg),
+        "change-back" .= configChangeBack cfg
       ]
 
 instance Default Config where
@@ -135,7 +141,8 @@ instance Default Config where
         configTxFullBatch = 100,
         configParallelRequests = 1,
         configDatabaseFile = Nothing,
-        configDefaultNetwork = Just btc
+        configDefaultNetwork = Just btc,
+        configChangeBack = False
       }
 
 -- | The network of a command that needs one: the one --network names, or

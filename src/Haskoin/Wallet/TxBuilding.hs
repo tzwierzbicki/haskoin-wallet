@@ -6,14 +6,21 @@
 -- "Haskoin.Wallet.CoinSelection".
 --
 -- 'buildTxSignData' is the entry point of preparetx. It fetches what the
--- builder needs from the database ('fetchWalletCoins'), builds the
--- transaction ('buildWalletTx', which is pure), and fetches the transactions
--- the chosen coins come from.
+-- builder needs from the database ('fetchWalletCoins'), chooses the coins
+-- ('choosePayment'), finds the change address once it knows the coins
+-- ('ChangeTo'), assembles the transaction ('assemblePayment'), and fetches
+-- the transactions the chosen coins come from. 'buildWalletTx' does the
+-- two pure steps at once, with a change address given in advance.
 module Haskoin.Wallet.TxBuilding
   ( BuiltTx (..),
     WalletCoins (..),
+    ChosenPayment (..),
+    ChangeTo (..),
     buildTxSignData,
     buildWalletTx,
+    choosePayment,
+    assemblePayment,
+    spentAddresses,
     fetchWalletCoins,
     coinWithPath,
     recipientOutputSize,
@@ -53,12 +60,31 @@ data WalletCoins = WalletCoins
     coins :: ![Store.Unspent],
     -- | The derivation path of every address holding one of the coins
     coinPaths :: !(Map Address SoftPath),
-    -- | The next free change address of the account, with its path
-    change :: !(Address, SoftPath),
     -- | The recipients that are addresses of the account, with their paths
     recipientPaths :: !(Map Address SoftPath)
   }
   deriving (Eq, Show)
+
+-- | A payment whose coins are chosen, before its outputs are assembled
+-- around the address of its change
+data ChosenPayment = ChosenPayment
+  { -- | The coins, the change and the fee
+    selection :: !Selection,
+    -- | The recipients with what they get, less their share of the fee
+    -- when they pay it
+    paidRecipients :: ![(Address, Natural)],
+    -- | What is left of the generator, which shuffles the outputs
+    outputGen :: !StdGen
+  }
+  deriving (Show)
+
+-- | Where the change of a payment goes
+data ChangeTo m
+  = -- | The next free change address of the account
+    NewChangeAddress
+  | -- | Back to one of the addresses the payment spends from, which the
+    -- function picks among them once the coins are chosen
+    ChangeBack ([Address] -> ExceptT String (DB m) Address)
 
 -- | A transaction built by the wallet, before the transactions it spends
 -- from are fetched
@@ -74,7 +100,8 @@ data BuiltTx = BuiltTx
 {- Fetching from the database -}
 
 -- | The signing data of a transaction paying the recipients from the
--- account's coins
+-- account's coins. The change address is found only for a payment with
+-- change, once its coins are chosen.
 buildTxSignData ::
   (MonadUnliftIO m) =>
   Network ->
@@ -94,34 +121,47 @@ buildTxSignData ::
   Natural ->
   -- | Coin control: the coins to spend, instead of choosing them
   [OutPoint] ->
+  ChangeTo m ->
   ExceptT String (DB m) TxSignData
-buildTxSignData net ctx cfg gen strategy accId recipients feeByte dust payer minConf coinControl = do
+buildTxSignData net ctx cfg gen strategy accId recipients feeByte dust payer minConf coinControl changeTo = do
   when (null recipients) $ throwError "No recipients provided"
-  found <- fetchWalletCoins net ctx cfg accId (fst <$> recipients) minConf
-  built <- liftEither $ buildWalletTx net ctx gen strategy found recipients feeByte dust payer coinControl
+  found <- fetchWalletCoins net ctx accId (fst <$> recipients) minConf
+  chosen <- liftEither $ choosePayment ctx gen strategy found recipients feeByte dust payer coinControl
+  change <-
+    if chosen.selection.changeAmount > 0
+      then Just <$> changeFor found.coinPaths chosen
+      else return Nothing
+  built <- liftEither $ assemblePayment net ctx found chosen change
   spentFrom <- mapM getRawTx $ nub $ (.outpoint.hash) <$> built.tx.inputs
   return $ TxSignData built.tx spentFrom built.inputPaths built.outputPaths (Just feeByte) Nothing
+  where
+    -- The change address, given the paths of the addresses of the coins
+    changeFor paths chosen = case changeTo of
+      NewChangeAddress -> liftEither . fromDBAddr net =<< changeAddress ctx cfg accId
+      ChangeBack pick -> do
+        addr <- pick (spentAddresses chosen)
+        path <-
+          liftMaybe "The change can only go back to an address the payment spends from" $
+            Map.lookup addr paths
+        return (addr, path)
 
 -- | Fetch the spendable coins of the account with their derivation paths,
--- its next free change address, and the paths of the recipients that are
--- its own addresses
+-- and the paths of the recipients that are its own addresses
 fetchWalletCoins ::
   (MonadUnliftIO m) =>
   Network ->
   Ctx ->
-  Config ->
   DBAccountId ->
   -- | The recipients
   [Address] ->
   -- | Minimum confirmations of the coins
   Natural ->
   ExceptT String (DB m) WalletCoins
-fetchWalletCoins net ctx cfg accId recipients minConf = do
+fetchWalletCoins net ctx accId recipients minConf = do
   coins <- spendableCoins net ctx accId minConf
   coinPaths <- Map.fromList <$> mapM (coinWithPath net accId) coins
-  change <- liftEither . fromDBAddr net =<< changeAddress ctx cfg accId
   recipientPaths <- walletPaths net accId recipients
-  return WalletCoins {coins, coinPaths, change, recipientPaths}
+  return WalletCoins {coins, coinPaths, recipientPaths}
 
 -- | The address of a coin of the account, with its derivation path
 coinWithPath ::
@@ -141,15 +181,38 @@ coinWithPath net accId coin = do
 longTermRate :: Word64
 longTermRate = 10
 
--- | Build a transaction paying the recipients from the wallet's coins. The
--- coins are chosen by the strategy, or are exactly those under coin control.
--- The change goes to the change address, or to the fee when it is below the
--- dust limit, and the outputs are shuffled. When the recipients pay the fee,
--- it is deducted from their amounts in equal parts, the first recipient also
--- paying the remainder. A fee rate of zero is refused: the network would not
--- relay the transaction.
+-- | Build a transaction paying the recipients from the wallet's coins, its
+-- change, if any, at the given change address: 'choosePayment', then
+-- 'assemblePayment'
 buildWalletTx ::
   Network ->
+  Ctx ->
+  StdGen ->
+  CoinSelection ->
+  WalletCoins ->
+  -- | The change address, with its path
+  (Address, SoftPath) ->
+  -- | The recipients and their amounts
+  [(Address, Natural)] ->
+  -- | Fee per byte
+  Natural ->
+  -- | Dust
+  Natural ->
+  FeePayer ->
+  -- | Coin control: the coins to spend, instead of choosing them
+  [OutPoint] ->
+  Either String BuiltTx
+buildWalletTx net ctx gen strategy found change recipients feeByte dust payer coinControl = do
+  chosen <- choosePayment ctx gen strategy found recipients feeByte dust payer coinControl
+  assemblePayment net ctx found chosen (Just change)
+
+-- | Choose the coins of a payment to the recipients among the wallet's
+-- coins: by the strategy, or exactly those under coin control. When the
+-- recipients pay the fee, it is deducted from their amounts in equal parts,
+-- the first recipient also paying the remainder. A fee rate of zero is
+-- refused: the network would not relay the transaction. So is a recipient
+-- paid less than the dust limit.
+choosePayment ::
   Ctx ->
   StdGen ->
   CoinSelection ->
@@ -163,36 +226,27 @@ buildWalletTx ::
   FeePayer ->
   -- | Coin control: the coins to spend, instead of choosing them
   [OutPoint] ->
-  Either String BuiltTx
-buildWalletTx net ctx gen strategy found recipients feeByte dust payer coinControl =
-  flip evalStateT gen $ do
-    when (null recipients) $ throwError "No recipients provided"
-    lift $ checkFeeRateAndDust feeByte dust
-    -- The coin selection draws from a generator of its own; the outputs are
-    -- shuffled with what is left
-    drawGen <- state splitGen
-    chosen <- lift $ case coinControl of
-      [] -> selectCoins strategy drawGen payment found.coins
-      _ -> spendCoins payment =<< controlledCoins found.coins coinControl
-    let hasChange = chosen.changeAmount > 0
-    paid <- lift $ case payer of
-      SenderPays -> return recipients
-      RecipientsPay -> do
-        -- A fee at or above the amount leaves the recipients nothing
-        when (chosen.paid == 0) $ Left "Recipients can't pay for the fee"
-        recipientsPayFee (payment.amount - chosen.paid) recipients
-    let outputs = [(fst found.change, chosen.changeAmount) | hasChange] <> (second fromIntegral <$> paid)
-    when (any ((< payment.dust) . snd) outputs) $
-      throwError "Recipient output is smaller than the dust value"
-    shuffledOutputs <- randomShuffle outputs
-    tx <- lift $ buildAddrTx net ctx ((.outpoint) <$> chosen.selected) =<< mapM recipientText shuffledOutputs
-    inputPaths <- lift $ nub <$> mapM coinPath chosen.selected
-    let outputPaths =
-          nub $ [snd found.change | hasChange] <> mapMaybe ((`Map.lookup` found.recipientPaths) . fst) recipients
-    return BuiltTx {tx, spentCoins = chosen.selected, inputPaths, outputPaths}
+  Either String ChosenPayment
+choosePayment ctx gen strategy found recipients feeByte dust payer coinControl = do
+  when (null recipients) $ Left "No recipients provided"
+  checkFeeRateAndDust feeByte dust
+  -- The coin selection draws from a generator of its own; the outputs are
+  -- shuffled with what is left
+  let (drawGen, outputGen) = splitGen gen
+  selection <- case coinControl of
+    [] -> selectCoins strategy drawGen payment found.coins
+    _ -> spendCoins payment =<< controlledCoins found.coins coinControl
+  paidRecipients <- case payer of
+    SenderPays -> return recipients
+    RecipientsPay -> do
+      -- A fee at or above the amount leaves the recipients nothing
+      when (selection.paid == 0) $ Left "Recipients can't pay for the fee"
+      recipientsPayFee (payment.amount - selection.paid) recipients
+  -- The change is never below the dust limit: below it, it goes to the fee
+  when (any ((< dust) . snd) paidRecipients) $
+    Left "Recipient output is smaller than the dust value"
+  return ChosenPayment {selection, paidRecipients, outputGen}
   where
-    -- The builder of haskoin takes the recipients as address text
-    recipientText (addr, amount) = (,amount) <$> addrToTextE net addr
     payment =
       Payment
         { rates = FeeRates {feeRate = fromIntegral feeByte, longTermFeeRate = longTermRate},
@@ -201,6 +255,33 @@ buildWalletTx net ctx gen strategy found recipients feeByte dust payer coinContr
           outputSizes = recipientOutputSize ctx . fst <$> recipients,
           amount = sum $ fromIntegral . snd <$> recipients
         }
+
+-- | The addresses the chosen coins come from, each once, in the order of
+-- the coins
+spentAddresses :: ChosenPayment -> [Address]
+spentAddresses chosen = nub $ mapMaybe (.address) chosen.selection.selected
+
+-- | The transaction of a payment whose coins are chosen: its recipients,
+-- and its change at the given address, in an order drawn at random. A
+-- payment with change needs the address; one without ignores it. Every
+-- output to the wallet, the change and a recipient of the account, has its
+-- derivation path, and so has every input.
+assemblePayment :: Network -> Ctx -> WalletCoins -> ChosenPayment -> Maybe (Address, SoftPath) -> Either String BuiltTx
+assemblePayment net ctx found chosen changeM = do
+  change <- case (chosen.selection.changeAmount, changeM) of
+    (0, _) -> Right []
+    (amount, Just (addr, path)) -> Right [((addr, amount), path)]
+    (_, Nothing) -> Left "The payment has change, and no address for it"
+  let outputs = (fst <$> change) <> (second fromIntegral <$> chosen.paidRecipients)
+      shuffledOutputs = evalState (randomShuffle outputs) chosen.outputGen
+  tx <- buildAddrTx net ctx ((.outpoint) <$> chosen.selection.selected) =<< mapM recipientText shuffledOutputs
+  inputPaths <- nub <$> mapM coinPath chosen.selection.selected
+  let outputPaths =
+        nub $ (snd <$> change) <> mapMaybe ((`Map.lookup` found.recipientPaths) . fst) chosen.paidRecipients
+  return BuiltTx {tx, spentCoins = chosen.selection.selected, inputPaths, outputPaths}
+  where
+    -- The builder of haskoin takes the recipients as address text
+    recipientText (addr, amount) = (,amount) <$> addrToTextE net addr
     coinPath :: Store.Unspent -> Either String SoftPath
     coinPath coin = do
       addr <- maybeToEither "A chosen coin has no address" coin.address
