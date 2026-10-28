@@ -84,6 +84,27 @@ parseAddressWithSpendable value = do
   spendable <- withObject "DBAddress" (\o -> o .: "balance" >>= \bal -> bal .: "spendable") value
   return (addr, spendable)
 
+-- | An address in JSON with the balance of its coins among its balances:
+-- the total, the spendable and the unspendable values, as balances shows
+-- them
+addressWithCoinBalance :: DBAddress -> CoinBalance -> Json.Value
+addressWithCoinBalance addr balance =
+  object $
+    addressPairs
+      addr
+      [ "total" .= coinBalanceTotal balance,
+        "spendable" .= coinBalanceSpendable balance,
+        "unspendable" .= coinBalanceUnspendable balance
+      ]
+
+-- | An address and the balance of its coins, as 'addressWithCoinBalance'
+-- writes them. The unspendable value follows from the other two.
+parseAddressWithCoinBalance :: Json.Value -> Parser (DBAddress, CoinBalance)
+parseAddressWithCoinBalance value = do
+  addr <- parseJSON value
+  balance <- withObject "DBAddress" (\o -> o .: "balance" >>= \bal -> CoinBalance <$> bal .: "total" <*> bal .: "spendable") value
+  return (addr, balance)
+
 -- | The keys of an address, with more balances than those it stores when
 -- they are given
 addressPairs :: DBAddress -> [Pair] -> [Pair]
@@ -157,6 +178,20 @@ instance FromJSON AddressBalance where
         <*> o .: "coins"
         <*> o .: "txs"
         <*> o .: "received"
+
+-- | The balance of the coins at an address: the value of all of them, and
+-- of those that can be spent now. hw computes it from the coins it stores
+-- ("Haskoin.Wallet.Coin"), where the store reports 'AddressBalance'.
+data CoinBalance = CoinBalance
+  { coinBalanceTotal :: !Word64,
+    coinBalanceSpendable :: !Word64
+  }
+  deriving (Show, Eq)
+
+-- | The value of the coins at the address that cannot be spent now: those
+-- a pending transaction or the user locks, and those not spendable yet
+coinBalanceUnspendable :: CoinBalance -> Word64
+coinBalanceUnspendable balance = coinBalanceTotal balance - coinBalanceSpendable balance
 
 {- Generating addresses -}
 

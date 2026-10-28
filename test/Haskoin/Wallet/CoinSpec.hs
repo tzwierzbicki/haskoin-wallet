@@ -9,8 +9,9 @@
 -- transaction builder when they can: confirmed enough, held by no pending
 -- transaction of their network, a coinbase matured, an unconfirmed coin
 -- the account's own change. The balances the account and its addresses
--- can spend add up those coins. The account of these tests is account 0
--- of the test wallet on Bitcoin.
+-- can spend add up those coins, and so does the balance of the coins at
+-- each address that balances lists. The account of these tests is account
+-- 0 of the test wallet on Bitcoin.
 module Haskoin.Wallet.CoinSpec (spec) where
 
 import Control.Monad (void)
@@ -29,6 +30,7 @@ import Data.Text (Text)
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.Address (AddrType (..), CoinBalance (..), addrPath, extendChainTo, pathText)
 import Haskoin.Wallet.BestBlock (updateBest)
 import Haskoin.Wallet.Coin
 import Haskoin.Wallet.Database
@@ -50,6 +52,7 @@ spec = prepareContext $ \ctx -> do
   listingSpec ctx
   spendableSpec ctx
   balancesSpec ctx
+  coinBalanceSpec ctx
   userLocksSpec ctx
   lifeSpec ctx
   rowSpec ctx
@@ -656,6 +659,100 @@ balancesSpec ctx =
         _ <- refreshCoins btc ctx otherId [externalAddr2] [storeCoin ctx (fakeTxHash 4, 0) (Just 800000) externalAddr2 10000]
         spendableBalance btc accId `dbShouldBeE` 50000
         spendableBalance btc otherId `dbShouldBeE` 10000
+
+{- The balance of the coins at each address -}
+
+-- | The account of these tests with the addresses of 'accountPaths' stored,
+-- as the sync stores them before their coins
+accountWithAddresses :: Ctx -> ExceptT String (DB IO) DBAccountId
+accountWithAddresses ctx = do
+  accId <- account ctx
+  extendChainTo ctx accId AddrExternal 2
+  extendChainTo ctx accId AddrInternal 2
+  return accId
+
+-- | A page of the addresses of the account that hold coins, as balances
+-- lists them: each by its derivation path, with the balance of its coins
+balancesListed :: DBAccountId -> Page -> ExceptT String (DB IO) [(Text, CoinBalance)]
+balancesListed accId page = map (\(addr, balance) -> (pathText (addrPath addr), balance)) <$> coinBalancePage btc accId page
+
+-- | A confirmed coin of a value at an address, paid by a transaction
+paidAt :: Ctx -> Word8 -> Address -> Natural -> Store.Unspent
+paidAt ctx tx addr = storeCoin ctx (fakeTxHash tx, 0) (Just 800000) addr
+
+coinBalanceSpec :: Ctx -> Spec
+coinBalanceSpec ctx =
+  describe "The balance of the coins at each address, as balances lists it" $ do
+    it "shows an address with two coins once, with the value of both" $
+      inDatabaseE $ do
+        accId <- accountWithAddresses ctx
+        _ <- refresh ctx accId [secondPayment ctx, paidAt ctx 4 (externalAddr 1) 15000]
+        -- 20000 + 15000, both confirmed
+        balancesListed accId (Page 10 0) `dbShouldBeE` [("/0/1", CoinBalance 35000 35000)]
+
+    -- The third payment is unconfirmed and someone else's
+    it "counts a coin that cannot be spent yet in the total, not as spendable" $
+      inDatabaseE $ do
+        accId <- accountWithAddresses ctx
+        _ <- refresh ctx accId [secondPayment ctx, thirdPayment ctx]
+        balancesListed accId (Page 10 0) `dbShouldBeE` [("/0/1", CoinBalance 50000 20000)]
+
+    it "counts the coins a pending transaction or the user locks in the total, not as spendable" $
+      inDatabaseE $ do
+        accId <- accountWithAddresses ctx
+        _ <- refresh ctx accId [confirmedPayment ctx, secondPayment ctx]
+        spendingFirst ctx accId
+        _ <- lockCoin secondCoin
+        balancesListed accId (Page 10 0) `dbShouldBeE` [("/0/0", CoinBalance 50000 0), ("/0/1", CoinBalance 20000 0)]
+
+    it "counts a coinbase in the total, and as spendable once it has matured" $
+      inDatabaseE $ do
+        accId <- accountWithAddresses ctx
+        lift $ insertRawTx (coinbase ctx)
+        _ <- refresh ctx accId [storeCoin ctx (txHash (coinbase ctx), 0) (Just 800000) (externalAddr 0) 312500000]
+        bestAt 800098
+        balancesListed accId (Page 10 0) `dbShouldBeE` [("/0/0", CoinBalance 312500000 0)]
+        bestAt 800099
+        balancesListed accId (Page 10 0) `dbShouldBeE` [("/0/0", CoinBalance 312500000 312500000)]
+
+    it "leaves out an address whose coins are all spent" $
+      inDatabaseE $ do
+        accId <- accountWithAddresses ctx
+        _ <- refresh ctx accId [confirmedPayment ctx, secondPayment ctx]
+        -- The store no longer lists the first payment
+        _ <- refresh ctx accId [secondPayment ctx]
+        balancesListed accId (Page 10 0) `dbShouldBeE` [("/0/1", CoinBalance 20000 20000)]
+
+    it "lists the largest total first, change addresses among the receiving ones" $
+      inDatabaseE $ do
+        accId <- accountWithAddresses ctx
+        _ <- refresh ctx accId [confirmedPayment ctx, secondPayment ctx, paidAt ctx 4 (internalAddr 0) 90000]
+        balancesListed accId (Page 10 0)
+          `dbShouldBeE` [("/1/0", CoinBalance 90000 90000), ("/0/0", CoinBalance 50000 50000), ("/0/1", CoinBalance 20000 20000)]
+
+    it "lists the addresses with the same total in the order of their paths, receiving addresses first" $
+      inDatabaseE $ do
+        accId <- accountWithAddresses ctx
+        _ <- refresh ctx accId [paidAt ctx 4 (internalAddr 0) 20000, paidAt ctx 5 (externalAddr 1) 20000, paidAt ctx 6 (externalAddr 0) 20000]
+        balancesListed accId (Page 10 0)
+          `dbShouldBeE` [("/0/0", CoinBalance 20000 20000), ("/0/1", CoinBalance 20000 20000), ("/1/0", CoinBalance 20000 20000)]
+
+    it "shows a page of the addresses" $
+      inDatabaseE $ do
+        accId <- accountWithAddresses ctx
+        _ <- refresh ctx accId [confirmedPayment ctx, secondPayment ctx, paidAt ctx 4 (internalAddr 0) 90000]
+        -- The second and third of 90000, 50000 and 20000
+        balancesListed accId (Page 2 1) `dbShouldBeE` [("/0/0", CoinBalance 50000 50000), ("/0/1", CoinBalance 20000 20000)]
+
+    it "are those of the account only" $
+      inDatabaseE $ do
+        accId <- accountWithAddresses ctx
+        (otherId, _) <- testNewAcc2 ctx "other"
+        extendChainTo ctx otherId AddrExternal 1
+        _ <- refresh ctx accId [confirmedPayment ctx]
+        _ <- refreshCoins btc ctx otherId [externalAddr2] [storeCoin ctx (fakeTxHash 4, 0) (Just 800000) externalAddr2 10000]
+        balancesListed accId (Page 10 0) `dbShouldBeE` [("/0/0", CoinBalance 50000 50000)]
+        balancesListed otherId (Page 10 0) `dbShouldBeE` [("/0/0", CoinBalance 10000 10000)]
 
 {- Locks of the user -}
 

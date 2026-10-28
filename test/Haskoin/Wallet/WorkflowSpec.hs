@@ -24,6 +24,7 @@ import qualified Data.ByteString as BS
 import Data.Word (Word64)
 import qualified Database.Persist as P
 import Haskoin
+import Haskoin.Wallet.Address (CoinBalance (..), coinBalanceUnspendable)
 import Haskoin.Wallet.Coin (CoinLock (..), JsonCoin (..), LeftCoin (..), LeftReason (..))
 import Haskoin.Wallet.Response (Response (..))
 import Haskoin.Wallet.Database (DBAccount (..), DBAddress (..), databaseInUse, runDBWith)
@@ -44,7 +45,7 @@ import UnliftIO.Async (async, wait)
 spec :: Spec
 spec = prepareContext $ \ctx -> do
   accountSpec
-  addressSpec
+  addressSpec ctx
   splitSpec
   messageSpec
   failureSpec ctx
@@ -60,6 +61,7 @@ spec = prepareContext $ \ctx -> do
   sendAllSpec ctx
   coinControlSpec ctx
   pendingListSpec ctx
+  balancesListSpec ctx
   nextStepSpec ctx
 
 {- Typing and answers -}
@@ -300,8 +302,8 @@ accountSpec =
 
 {- Addresses -}
 
-addressSpec :: Spec
-addressSpec =
+addressSpec :: Ctx -> Spec
+addressSpec ctx =
   describe "The addresses of an account" $ do
     it "are handed out by receive in the order of the receiving chain" $
       withHome $ \home -> do
@@ -328,6 +330,37 @@ addressSpec =
         (addressesOf <$> hwJson home ["addrs"] [])
           `shouldReturn` Right [(externalAddrsText !! 2, ""), (externalAddrsText !! 1, ""), (externalAddrsText !! 0, "")]
         (addressesOf <$> hwJson home ["addrs", "--limit", "1", "--offset", "1"] []) `shouldReturn` Right [(externalAddrsText !! 1, "")]
+
+    it "are shown by addrs under their derivation paths" $
+      withHome $ \home -> do
+        createMain home
+        replicateM_ 2 $ answer home ["receive"] []
+        run <- hw home ["addrs"] []
+        runOut run `shouldSatisfy` Text.isInfixOf ("/0/1: " <> externalAddrsText !! 1)
+        runOut run `shouldSatisfy` Text.isInfixOf ("/0/0: " <> externalAddrsText !! 0)
+
+    -- The path /0/9 is padded to the width of /0/10
+    it "are aligned by addrs when their paths differ in length" $
+      withHome $ \home -> do
+        createMain home
+        replicateM_ 11 $ answer home ["receive"] []
+        run <- hw home ["addrs", "--limit", "2"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "/0/10: "
+        runOut run `shouldSatisfy` Text.isInfixOf ("/0/9 : " <> externalAddrsText !! 9)
+
+    -- The payment of 20000 pays its change to the first change address
+    it "are shown by addrs --internal under their paths on the change chain" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002"] []
+        run <- hw home ["addrs", "--internal"] []
+        runOut run `shouldSatisfy` Text.isInfixOf ("/1/0: " <> internalAddrsText !! 0)
+
+    it "are shown by receive under their derivation paths" $
+      withHome $ \home -> do
+        createMain home
+        run <- hw home ["receive"] []
+        runOut run `shouldSatisfy` Text.isInfixOf ("/0/0: " <> externalAddrsText !! 0)
 
     it "are named by label, by their index" $
       withHome $ \home -> do
@@ -1485,16 +1518,17 @@ sweepSpec ctx =
 -- | How many rows a listing shows
 rowsOf :: Response -> Either String Int
 rowsOf (ResponseAddresses _ addrs) = Right (length addrs)
+rowsOf (ResponseBalances _ addrs) = Right (length addrs)
 rowsOf (ResponseTxs _ txs) = Right (length txs)
 rowsOf (ResponsePendingTxs _ held) = Right (length held)
 rowsOf (ResponseCoins _ coins) = Right (length coins)
 rowsOf other = Left (show other)
 
 -- | The listings, each with one row in a synced home with a payment
--- prepared: the address paid, the payment received, its coin, and the
--- payment prepared
+-- prepared: the address paid, the payment received, its coin, the payment
+-- prepared, and the address that holds the coin
 listings :: [String]
-listings = ["addrs", "txs", "coins", "pendingtxs"]
+listings = ["addrs", "txs", "coins", "pendingtxs", "balances"]
 
 -- | The time of each transaction an answer lists
 timesOf :: Response -> Either String [Maybe UTCTime]
@@ -2027,6 +2061,57 @@ pendingListSpec ctx =
         synced home
         run <- hw home ["pendingtxs"] []
         runOut run `shouldSatisfy` Text.isInfixOf "There are no pending transactions"
+
+{- Balances -}
+
+-- | The addresses balances lists, each by its text, with the total, the
+-- spendable and the unspendable balances of its coins
+balancesOf :: Response -> Either String [(Text, Word64, Word64, Word64)]
+balancesOf (ResponseBalances _ addrs) =
+  Right [(dBAddressAddress addr, coinBalanceTotal b, coinBalanceSpendable b, coinBalanceUnspendable b) | (addr, b) <- addrs]
+balancesOf other = Left (show other)
+
+balancesListSpec :: Ctx -> Spec
+balancesListSpec ctx =
+  describe "The addresses balances lists" $ do
+    -- The second receiving address holds nothing
+    it "are those that hold coins, each with the value of its coins and what it can spend" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["receive"] []
+        (balancesOf <$> hwJson home ["balances"] []) `shouldReturn` Right [(externalAddrsText !! 0, 50000, 50000, 0)]
+
+    it "count the coin a pending payment spends as unspendable" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002"] []
+        (balancesOf <$> hwJson home ["balances"] []) `shouldReturn` Right [(externalAddrsText !! 0, 50000, 0, 50000)]
+
+    -- The payment of 20000 spends the coin of 50000 and leaves 27740 of
+    -- change at the first change address
+    it "include the change addresses" $
+      withChain ctx (paidChain ctx) $ \home chain -> do
+        nosig <- paymentSigned home
+        _ <- answer home ["sendtx", nosig, "--yes"] []
+        modifyIORef chain mine
+        _ <- answer home ["sync"] []
+        (balancesOf <$> hwJson home ["balances"] []) `shouldReturn` Right [(internalAddrsText !! 0, 27740, 27740, 0)]
+
+    it "show the path of each address, then its total, spendable and unspendable balances" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002"] []
+        run <- hw home ["balances"] []
+        runOut run `shouldSatisfy` Text.isInfixOf ("/0/0: " <> externalAddrsText !! 0)
+        runOut run `shouldSatisfy` Text.isInfixOf "Total      : 0.00050000 btc"
+        runOut run `shouldSatisfy` Text.isInfixOf "Spendable  : 0.00000000 btc"
+        runOut run `shouldSatisfy` Text.isInfixOf "Unspendable: 0.00050000 btc"
+
+    it "are none before a payment, which balances says" $
+      withHome $ \home -> do
+        createMain home
+        run <- hw home ["balances"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "There are no addresses with coins to display"
 
 {- Next steps -}
 

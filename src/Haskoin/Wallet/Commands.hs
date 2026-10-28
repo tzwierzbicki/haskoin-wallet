@@ -24,6 +24,7 @@ module Haskoin.Wallet.Commands
     -- * Addresses
     cmdReceive,
     cmdAddrs,
+    cmdBalances,
     cmdLabel,
 
     -- * Coins
@@ -135,6 +136,7 @@ commandResponse ctx cfg unit = \case
   -- Addresses
   CommandReceive opts -> cmdReceive ctx cfg opts
   CommandAddrs account internal page -> cmdAddrs cfg account internal page
+  CommandBalances account page -> cmdBalances cfg account page
   CommandLabel account index label -> cmdLabel cfg account index label
   -- Coins
   CommandCoins account locked page -> cmdCoins cfg account locked page
@@ -330,6 +332,14 @@ cmdAddrs cfg account internal page =
     addrs <- lift $ addressPage accId (if internal then AddrInternal else AddrExternal) page
     balances <- spendableAtAddresses (accountNetwork acc) accId (dBAddressAddress <$> addrs)
     return $ ResponseAddresses acc [(addr, spendableAt balances addr) | addr <- addrs]
+
+-- | The addresses of the account that hold coins, receiving and change
+-- addresses alike, each with the balance of its coins
+cmdBalances :: Config -> Maybe Text -> Page -> IO Response
+cmdBalances cfg account page =
+  runDBResponse cfg $ do
+    (accId, acc) <- getAccountByName account
+    ResponseBalances acc <$> coinBalancePage (accountNetwork acc) accId page
 
 cmdLabel :: Config -> Maybe Text -> Int -> Text -> IO Response
 cmdLabel cfg account index label =

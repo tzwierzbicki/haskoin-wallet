@@ -9,6 +9,7 @@ import Control.Monad.IO.Class (liftIO)
 import qualified Data.ByteString as BS
 import qualified Data.Serialize as S
 import Data.Text (Text)
+import qualified Data.Text as Text
 import Database.Persist.Sql (PersistValue (..))
 import Haskoin
 import Haskoin.Wallet.Database
@@ -58,6 +59,19 @@ indexesSpec =
         globalMigration
         plan <- queryPlan "select outpoint, address, value, block_ref from d_b_coin where account = 1 and address in ('1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj', '1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg')"
         liftIO $ plan `shouldBe` ["SEARCH d_b_coin USING INDEX d_b_coin_account_address (account=? AND address=?)"]
+
+    -- The order of balances needs the total of every address of the account.
+    -- SQLite walks the coins by account or by address, as its statistics
+    -- tell, from the index either way.
+    it "add up the coins of each address of an account without reading the coins, as balances orders them" $
+      inMemory $ do
+        globalMigration
+        plan <-
+          queryPlan
+            "select a.*, sum(c.value) from d_b_coin c inner join d_b_address a on c.account = a.account and c.address = a.address \
+            \where c.account = 1 group by a.account, a.internal, a.\"index\" \
+            \order by sum(c.value) desc, a.internal, a.\"index\" limit 5 offset 0"
+        liftIO $ plan `shouldSatisfy` any ("SEARCH c USING COVERING INDEX d_b_coin_account_address " `Text.isPrefixOf`)
 
     it "give the coins of an account in the order coins lists them, without sorting them" $
       inMemory $ do

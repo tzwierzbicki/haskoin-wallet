@@ -26,6 +26,7 @@ module Haskoin.Wallet.Coin
     unspendableCoins,
     spendableAtAddresses,
     spendableBalance,
+    coinBalancePage,
     lockCoin,
     unlockCoin,
     coinAccounts,
@@ -50,20 +51,21 @@ import Data.Containers.ListUtils (nubOrd)
 import Data.List (intercalate, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes, mapMaybe)
+import Data.Maybe (catMaybes, fromMaybe, mapMaybe)
 import Data.Ord (Down (..))
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Time (getCurrentTime)
 import Data.Word (Word64)
-import Database.Esqueleto.Legacy (Value (..), from, in_, select, val, valList, where_, (==.), (^.))
+import Database.Esqueleto.Legacy (InnerJoin (..), Value (..), asc, desc, from, groupBy, in_, limit, offset, on, orderBy, select, sum_, val, valList, where_, (&&.), (==.), (^.))
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.BestBlock
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Account (accountNetwork, getAccountById, getAccountsById)
+import Haskoin.Wallet.Address (CoinBalance (..))
 import Haskoin.Wallet.PendingTx (lockedOutpoints, userLockedOutpoints)
 import Haskoin.Wallet.RawTx (lookupRawTx)
 import Haskoin.Wallet.TxInfo (MyInputs (..), TxSummary (..), liveSummary, ownTransaction)
@@ -320,6 +322,28 @@ spendableBalance net accId = do
   rules <- spendingOf net accId
   coins <- balanceColumns accId Nothing
   sum . map snd <$> spendableValues rules coins
+
+-- | A page of the addresses of the account that hold coins, each with the
+-- balance of its coins, the largest total first. Addresses with the same
+-- total follow the order of their derivation paths, so that no address
+-- shows on two pages. The order adds up every coin of the account, in one
+-- query; the spendable values are read for the page only.
+coinBalancePage :: (MonadUnliftIO m) => Network -> DBAccountId -> Page -> ExceptT String (DB m) [(DBAddress, CoinBalance)]
+coinBalancePage net accId page = do
+  let (lim, off) = pageBounds page
+  rows <- lift . select . from $ \(c `InnerJoin` a) -> do
+    on $ c ^. DBCoinAccount ==. a ^. DBAddressAccount &&. c ^. DBCoinAddress ==. a ^. DBAddressAddress
+    where_ $ c ^. DBCoinAccount ==. val accId
+    groupBy (a ^. DBAddressAccount, a ^. DBAddressInternal, a ^. DBAddressIndex)
+    let total = sum_ (c ^. DBCoinValue)
+    orderBy [desc total, asc (a ^. DBAddressInternal), asc (a ^. DBAddressIndex)]
+    limit lim
+    offset off
+    return (a, total)
+  -- An address of the page holds a coin at least, so its total is never null
+  let held = [(P.entityVal a, fromMaybe 0 total) | (a, Value total) <- rows]
+  spendable <- spendableAtAddresses net accId (dBAddressAddress . fst <$> held)
+  return [(addr, CoinBalance total (Map.findWithDefault 0 (dBAddressAddress addr) spendable)) | (addr, total) <- held]
 
 -- | What the spendable balances read of the coins of an account, at the
 -- given addresses or at all of them: the outpoint, address, value and

@@ -13,7 +13,7 @@ import Data.Text (Text)
 import Data.Word (Word64)
 import Haskoin
 import Haskoin.Wallet.Account (accountNetwork, accountWithSpendable, parseAccountWithSpendable)
-import Haskoin.Wallet.Address (addressWithSpendable, parseAddressWithSpendable)
+import Haskoin.Wallet.Address (CoinBalance, addressWithCoinBalance, addressWithSpendable, parseAddressWithCoinBalance, parseAddressWithSpendable)
 import Haskoin.Wallet.Coin (JsonCoin, LeftCoin)
 import Haskoin.Wallet.Database (DBAccount, DBAddress)
 import Haskoin.Wallet.Sync (SyncRes (..))
@@ -39,6 +39,9 @@ data Response
     ResponseAddress !DBAccount !DBAddress !Word64
   | -- | Addresses of the account, each with the balance it can spend now
     ResponseAddresses !DBAccount ![(DBAddress, Word64)]
+  | -- | Addresses of the account that hold coins, each with the balance of
+    -- its coins
+    ResponseBalances !DBAccount ![(DBAddress, CoinBalance)]
   | -- | Transactions of the account
     ResponseTxs !DBAccount ![TxInfo]
   | -- | Pending transactions, each with its account: those of the account
@@ -92,6 +95,8 @@ instance ToJSON Response where
       typed "address" ["account" .= acc, "address" .= addressWithSpendable addr spendable]
     ResponseAddresses acc addrs ->
       typed "addresses" ["account" .= acc, "addresses" .= (uncurry addressWithSpendable <$> addrs)]
+    ResponseBalances acc addrs ->
+      typed "balances" ["account" .= acc, "addresses" .= (uncurry addressWithCoinBalance <$> addrs)]
     ResponseTxs acc txs -> typed "txs" ["account" .= acc, "txs" .= (marshalValue (accountNetwork acc) <$> txs)]
     ResponsePendingTxs asked held ->
       typed "pendingtxs" ["account" .= asked, "txs" .= [object ["account" .= acc, "tx" .= marshalValue (accountNetwork acc) info] | (acc, info) <- held]]
@@ -124,6 +129,7 @@ instance FromJSON Response where
         acc <- o .: "account"
         uncurry (ResponseAddress acc) <$> (parseAddressWithSpendable =<< o .: "address")
       "addresses" -> ResponseAddresses <$> o .: "account" <*> (mapM parseAddressWithSpendable =<< o .: "addresses")
+      "balances" -> ResponseBalances <$> o .: "account" <*> (mapM parseAddressWithCoinBalance =<< o .: "addresses")
       "txs" -> do
         acc <- o .: "account"
         ResponseTxs acc <$> (mapM (unmarshalValue (accountNetwork acc)) =<< o .: "txs")

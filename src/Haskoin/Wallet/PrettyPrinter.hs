@@ -25,6 +25,7 @@ import Data.Time.Format
 import Data.Word
 import Haskoin
 import Haskoin.Wallet.Account
+import Haskoin.Wallet.Address (CoinBalance (..), addrPath, coinBalanceUnspendable, pathText)
 import Haskoin.Wallet.Amounts
 import Haskoin.Wallet.Coin
 import Haskoin.Wallet.Database
@@ -340,37 +341,46 @@ accountPrinter unit acc spendable =
     utctime = dBAccountCreated acc
     created = formatTime defaultTimeLocale "%d %b %Y" utctime
 
--- | An address with what it received and the balance it can spend now
+-- | An address after its derivation path, which tells receiving and change
+-- addresses apart, with its label and the given details below it. The path
+-- is padded to the given width, that of the longest path listed
+-- ('pathWidth'). Each detail is a name and a value, the names padded to the
+-- longest one.
+addressLines :: Natural -> DBAddress -> [(Text, Printer)] -> Printer
+addressLines pad addr details =
+  vcat $
+    (keyPrinter pad (pathText (addrPath addr)) <> formatAddress True (cs $ dBAddressAddress addr))
+      : [nest 2 (keyPrinter width name <> value) | (name, value) <- labelled <> details]
+  where
+    label = dBAddressLabel addr
+    labelled = [("Label", formatLabel (cs label)) | not (Text.null label)]
+    width = fromIntegral $ maximum (Text.length . fst <$> ("Label", PEmpty) : details)
+
+-- | The width of the longest derivation path of the addresses listed
+pathWidth :: [DBAddress] -> Natural
+pathWidth addrs = fromIntegral $ maximum (0 : (Text.length . pathText . addrPath <$> addrs))
+
+-- | An address as addrs shows it: its transactions, what it received, and
+-- the balance it can spend now
 addressPrinter :: AmountUnit -> Natural -> DBAddress -> Word64 -> Printer
 addressPrinter unit pad addr spendable =
-  vcat
-    [ mconcat
-        [ keyPrinter pad $ cs $ show (dBAddressIndex addr),
-          formatAddress True $ cs $ dBAddressAddress addr
-        ],
-      if Text.null $ dBAddressLabel addr
-        then PEmpty
-        else
-          nest 2 $
-            mconcat
-              [ keyPrinter 9 "Label",
-                formatLabel $ cs $ dBAddressLabel addr
-              ],
-      nest 2 $
-        mconcat
-          [ keyPrinter 9 "Txs",
-            naturalPrinter $ fromIntegral $ dBAddressBalanceTxs addr
-          ],
-      nest 2 $
-        mconcat
-          [ keyPrinter 9 "Received",
-            amountPrinter unit $ dBAddressBalanceReceived addr
-          ],
-      nest 2 $
-        mconcat
-          [ keyPrinter 9 "Spendable",
-            amountPrinter unit spendable
-          ]
+  addressLines
+    pad
+    addr
+    [ ("Txs", naturalPrinter $ fromIntegral $ dBAddressBalanceTxs addr),
+      ("Received", amountPrinter unit $ dBAddressBalanceReceived addr),
+      ("Spendable", amountPrinter unit spendable)
+    ]
+
+-- | An address as balances shows it: the balance of its coins
+coinBalancePrinter :: AmountUnit -> Natural -> DBAddress -> CoinBalance -> Printer
+coinBalancePrinter unit pad addr balance =
+  addressLines
+    pad
+    addr
+    [ ("Total", amountPrinter unit $ coinBalanceTotal balance),
+      ("Spendable", amountPrinter unit $ coinBalanceSpendable balance),
+      ("Unspendable", amountPrinter unit $ coinBalanceUnspendable balance)
     ]
 
 -- | A transaction of a listing, on the network of the account listed
@@ -596,14 +606,16 @@ prettyPrinter unit =
               else formatFalse "Failure"
       renderIO . vcat $ [formatKey "Result:" <+> p, text $ cs txt]
     ResponseFile f -> renderIO $ formatKey "File:" <+> formatFilePath f
-    ResponseAddress _ addr spendable -> do
-      let l = length $ show $ dBAddressIndex addr
-      renderIO $ addressPrinter unit (fromIntegral l) addr spendable
+    ResponseAddress _ addr spendable ->
+      renderIO $ addressPrinter unit (pathWidth [addr]) addr spendable
     ResponseAddresses _ [] ->
       renderIO $ text "There are no addresses to display"
-    ResponseAddresses _ addrs -> do
-      let l = length $ show $ maximum $ dBAddressIndex . fst <$> addrs
-      renderIO $ vcat $ uncurry (addressPrinter unit (fromIntegral l)) <$> addrs
+    ResponseAddresses _ addrs ->
+      renderIO $ vcat $ uncurry (addressPrinter unit (pathWidth (fst <$> addrs))) <$> addrs
+    ResponseBalances _ [] ->
+      renderIO $ text "There are no addresses with coins to display"
+    ResponseBalances _ addrs ->
+      renderIO $ vcat $ uncurry (coinBalancePrinter unit (pathWidth (fst <$> addrs))) <$> addrs
     ResponseTxs _ [] ->
       renderIO $ text "There are no transactions to display"
     ResponseTxs acc txs -> do

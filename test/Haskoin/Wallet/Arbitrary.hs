@@ -75,6 +75,14 @@ arbitraryDBAddress net =
     <*> arbitraryPositive
     <*> arbitraryUTCTime
 
+-- | The balance of the coins at an address: what can be spent now is part
+-- of the total
+arbitraryCoinBalance :: Gen CoinBalance
+arbitraryCoinBalance = do
+  spendable <- choose (0, 2100000000000000)
+  unspendable <- choose (0, 2100000000000000)
+  return $ CoinBalance (spendable + unspendable) spendable
+
 arbitraryAddressBalance :: Gen AddressBalance
 arbitraryAddressBalance =
   AddressBalance
@@ -234,6 +242,9 @@ arbitraryResponse net ctx =
       ResponseAddresses
         <$> arbitraryDBAccount net ctx
         <*> resize 20 (listOf $ (,) <$> arbitraryDBAddress net <*> arbitraryPositive),
+      ResponseBalances
+        <$> arbitraryDBAccount net ctx
+        <*> resize 20 (listOf $ (,) <$> arbitraryDBAddress net <*> arbitraryCoinBalance),
       ResponsePendingTxs
         <$> arbitraryMaybe (arbitraryDBAccount net ctx)
         <*> resize 20 (listOf $ (,) <$> arbitraryDBAccount net ctx <*> arbitraryTxInfo net),

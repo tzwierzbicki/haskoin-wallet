@@ -47,6 +47,8 @@ data Command
   | CommandReceive !Receive
   | -- | The account, whether its change addresses, and the page
     CommandAddrs !(Maybe Text) !Bool !Page
+  | -- | The account, and the page
+    CommandBalances !(Maybe Text) !Page
   | -- | The account, the index of the receiving address, and its label
     CommandLabel !(Maybe Text) !Int !Text
   | -- | The account, and the page
@@ -293,6 +295,7 @@ commandParser =
           [ commandGroup "Address management",
             command "receive" receiveParser,
             command "addrs" addrsParser,
+            command "balances" balancesParser,
             command "label" labelParser,
             hidden
           ],
@@ -704,8 +707,9 @@ addrsParser = do
     progDesc "List the receiving addresses of an account, or its change addresses"
       <> footer
         [r|
-Each address shows its transactions, what it received, and what it can spend
-now, by the rules `accounts` describes.
+Each address shows its derivation path, /0/i for a receiving address and /1/i
+for a change address of --internal, then its transactions, what it received,
+and what it can spend now, by the rules `accounts` describes.
 |]
 
 internalOption :: Parser Bool
@@ -740,6 +744,27 @@ first 20 values and then display the following 10, use --limit=10 and
 --offset=20. A limit of 0 lists every row.
 |]
 
+{- Balances Parser -}
+
+balancesParser :: ParserInfo Command
+balancesParser = do
+  let cmd =
+        CommandBalances
+          <$> accountOption
+          <*> (Page <$> limitOption <*> offsetOption)
+  info cmd $
+    progDesc "List the addresses of an account that hold coins, with their balances"
+      <> footer
+        [r|
+`balances` lists the receiving and change addresses that hold coins, the largest
+total first. Each shows its derivation path, /0/i for a receiving address and
+/1/i for a change address, and three balances. The total is the value of all
+its coins. The spendable balance is what it can spend now, by the rules
+`accounts` describes. The unspendable balance is the rest: the coins a pending
+transaction or the user locks, an unconfirmed payment from another wallet, and
+a coinbase before 100 confirmations. `coins` tells which of these each coin is.
+|]
+
 {- Label Parser -}
 
 labelParser :: ParserInfo Command
@@ -749,7 +774,7 @@ labelParser = do
           <$> accountOption
           <*> addrIndexArg
           <*> textArg "The new label for the address"
-  info cmd $ progDesc "Set the label of a receiving address, by its index in addrs"
+  info cmd $ progDesc "Set the label of a receiving address, by its index: the i of /0/i in addrs"
 
 addrIndexArg :: Parser Int
 addrIndexArg =
@@ -757,8 +782,9 @@ addrIndexArg =
     metavar "INT"
       <> help
         [r|
-The index of the receiving address, as `addrs` lists it: the first address has
-the index 0. The change addresses, those of `addrs --internal`, have no label.
+The index of the receiving address, the last number of its path /0/i as `addrs`
+lists it: the first address, /0/0, has the index 0. The change addresses, those
+of `addrs --internal`, have no label.
 |]
   where
     -- An address is derived at a soft index of BIP32, below 2^31. A larger

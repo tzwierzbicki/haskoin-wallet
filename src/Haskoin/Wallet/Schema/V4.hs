@@ -51,8 +51,9 @@
 -- of the sync without touching the rows; the summaries without their time,
 -- which only a database of version 3 had; the account of every coin and
 -- pending transaction, which their keys do not give; the coins of an
--- address of an account, which the sync refreshes; and the coins of an
--- account in the order coins lists them.
+-- address of an account with their values, which the sync refreshes and
+-- balances adds up without touching the rows; and the coins of an account
+-- in the order coins lists them.
 module Haskoin.Wallet.Schema.V4 where
 
 import Data.ByteString (ByteString)
@@ -164,7 +165,7 @@ tableIndexes =
   [ "create index d_b_tx_info_account_block_ref on d_b_tx_info (account, block_ref, txid, dead)",
     "create index d_b_tx_info_untimed on d_b_tx_info (account) where time is null",
     "create index d_b_coin_account on d_b_coin (account)",
-    "create index d_b_coin_account_address on d_b_coin (account, address)",
+    "create index d_b_coin_account_address on d_b_coin (account, address, value)",
     "create index d_b_coin_account_block_ref on d_b_coin (account, block_ref, outpoint)",
     "create index d_b_pending_tx_account on d_b_pending_tx (account)"
   ]
