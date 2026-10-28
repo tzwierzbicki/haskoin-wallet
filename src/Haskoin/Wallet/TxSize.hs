@@ -11,7 +11,8 @@
 -- byte pays more per virtual byte than that rate.
 --
 -- The fee rate and the dust limit a transaction is built with are checked
--- here too, for the builders of payments and of sweeps.
+-- here too, for the builders of payments and of sweeps, beside the default
+-- fee rate and the rate above which hw asks the user first.
 module Haskoin.Wallet.TxSize
   ( InputSize (..),
     inputSize,
@@ -22,6 +23,8 @@ module Haskoin.Wallet.TxSize
     p2pkhOutputSize,
     txSize,
     varIntSize,
+    defaultFeeRate,
+    highFeeRate,
     maxFeeRate,
     checkFeeRateAndDust,
   )
@@ -124,6 +127,20 @@ varIntSize n
   | otherwise = 9
 
 {- Rates -}
+
+-- | The fee rate of preparetx and preparesweep without --feerate, in
+-- satoshis per byte
+defaultFeeRate :: Natural
+defaultFeeRate = 10
+
+-- | The highest fee rate preparetx and preparesweep take without asking, in
+-- satoshis per byte: ten times the default. A rate above it is more often
+-- a typo than a choice, such as 1000 for 100, so the user confirms it, or
+-- gives --yes. Fees have gone higher at the busiest times of Bitcoin, so a
+-- higher rate is not refused. The help of --feerate, --yes, preparetx and
+-- preparesweep names this rate.
+highFeeRate :: Natural
+highFeeRate = 100
 
 -- | The highest fee rate hw builds a transaction at, in satoshis per byte:
 -- 32 bits, so that a fee, the rate times a size, stays within the 64 bits

@@ -14,6 +14,7 @@ import Haskoin
 import Haskoin.Wallet.Amounts (AmountUnit (..), readUnit)
 import Haskoin.Wallet.CoinSelection (CoinSelection (..), FeePayer (..))
 import Haskoin.Wallet.Keys (KeySource (..))
+import Haskoin.Wallet.TxSize (defaultFeeRate)
 import Haskoin.Wallet.Util (Page (Page), readNatural)
 import Numeric.Natural (Natural)
 import Options.Applicative
@@ -133,7 +134,10 @@ data PrepareTx = PrepareTx
     strategy :: !CoinSelection,
     output :: !(Maybe FilePath),
     -- | The coins to spend, instead of choosing them
-    coins :: ![OutPoint]
+    coins :: ![OutPoint],
+    -- | Whether a fee rate above 100 satoshis per byte is taken without
+    -- asking (--yes)
+    yes :: !Bool
   }
   deriving (Eq, Show)
 
@@ -162,7 +166,10 @@ data PrepareSweep = PrepareSweep
     -- | The fee rate, in satoshis per byte
     feeByte :: !Natural,
     -- | The dust limit, in satoshis
-    dust :: !Natural
+    dust :: !Natural,
+    -- | Whether a fee rate above 100 satoshis per byte is taken without
+    -- asking (--yes)
+    yes :: !Bool
   }
   deriving (Eq, Show)
 
@@ -749,6 +756,7 @@ prepareTxParser = do
           <*> coinSelectionOption
           <*> outputFileMaybeOption
           <*> many coinOption
+          <*> highFeeYesOption
   info (CommandPrepareTx <$> options) $
     progDesc "Prepare an unsigned transaction for making a payment"
       <> footer
@@ -764,6 +772,10 @@ spent by it will be locked to prevent spending them twice. If you change your
 mind about sending this transaction, you can call `deletetx` to remove it and
 free up the locked coins. All the pending transactions are referenced by their
 noSigHash (a hash of the transaction without its signatures).
+
+A fee rate above 100 satoshis per byte, ten times the default, is more often a
+typo than a choice, so `preparetx` asks before it takes one. --yes takes it
+without asking, for a script.
 |]
 
 recipientArg :: Parser (Text, Text)
@@ -805,9 +817,13 @@ feeOption =
     short 'f'
       <> long "feerate"
       <> metavar "SAT/BYTE"
-      <> value 10
+      <> value defaultFeeRate
       <> showDefault
-      <> help "The fee rate, in satoshis per byte"
+      <> help "The fee rate, in satoshis per byte. hw asks before it takes one above 100."
+
+-- | Whether preparetx and preparesweep take a high fee rate without asking
+highFeeYesOption :: Parser Bool
+highFeeYesOption = yesOption "Take a fee rate above 100 satoshis per byte without asking"
 
 dustOption :: Parser Natural
 dustOption =
@@ -1096,7 +1112,7 @@ sendTxParser = do
         CommandSendTx
           <$> optional nosigHashArg
           <*> inputFileMaybeOption
-          <*> yesOption
+          <*> yesOption "Send the transaction without showing it and asking first"
   info cmd $
     progDesc "Send (upload) a signed transaction to the network"
       <> footer
@@ -1131,13 +1147,14 @@ account of a pending transaction. The file of an earlier hw names none, and is
 prepared again to be sent when the wallet does not hold its transaction.
 |]
 
--- | Whether sendtx sends without showing the transaction and asking
-yesOption :: Parser Bool
-yesOption =
+-- | --yes, which answers yes to the question of a command without asking
+-- it, for a script. The help says what the command then does.
+yesOption :: String -> Parser Bool
+yesOption what =
   switch $
     short 'y'
       <> long "yes"
-      <> help "Send the transaction without showing it and asking first"
+      <> help what
 
 {- Sync Parser -}
 
@@ -1270,6 +1287,7 @@ prepareSweepParser = do
           <*> outputFileMaybeOption
           <*> feeOption
           <*> dustOption
+          <*> highFeeYesOption
   info (CommandPrepareSweep <$> options) $
     progDesc "Prepare a transaction to sweep funds"
       <> footer
@@ -1299,6 +1317,10 @@ that has none: hw is then a utility. It needs the --network it is for and an
 default-network of the configuration file does not apply to it. Private keys,
 coins and the legacy addresses of Bitcoin Cash read the same on Bitcoin, so a
 wrong guess would sweep the coins of the other chain.
+
+A fee rate above 100 satoshis per byte, ten times the default, is more often a
+typo than a choice, so `preparesweep` asks before it takes one, and before the
+private keys are typed. --yes takes it without asking, for a script.
 |]
 
 sweepFromOption :: Parser Text

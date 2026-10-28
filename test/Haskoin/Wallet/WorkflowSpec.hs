@@ -56,6 +56,7 @@ spec = prepareContext $ \ctx -> do
   recoverSpec ctx
   sweepSpec ctx
   confirmationSpec ctx
+  highFeeSpec ctx
   nextStepSpec ctx
 
 {- Typing and answers -}
@@ -1556,6 +1557,82 @@ confirmationSpec ctx =
         nosig <- paymentSigned home
         (errorOf <$> hwJson home ["sendtx", nosig] []) `shouldReturn` Right "Cancelled: the input ended before the answer"
         (inMempool <$> readIORef chain) `shouldReturn` []
+
+{- A high fee rate -}
+
+-- | The question of preparetx and preparesweep at 101 satoshis per byte
+highFeeQuestion :: Text
+highFeeQuestion = "The fee rate of 101 satoshis per byte is above 100, the most hw takes without asking. Prepare the transaction anyway? [y/N] "
+
+-- | The refusal of a high fee rate the user does not take
+highFeeRefused :: Text
+highFeeRefused = "The transaction was not prepared: give a lower --feerate"
+
+-- The payment of 20000 satoshis is 226 bytes: its fee is 22600 at 100
+-- satoshis a byte, and 22826 at 101. The sweep of the coin of 30000 of the
+-- old key is 192 bytes: its fee is 19392 at 101, which leaves 10608 for the
+-- destination. Where nothing is typed, a question would cancel the command.
+highFeeSpec :: Ctx -> Spec
+highFeeSpec ctx =
+  describe "A fee rate above 100 satoshis per byte" $ do
+    it "is not asked about at 100, the highest rate taken without asking" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        prepared <- txOf =<< answer home ["preparetx", textOf (otherAddr 0), "0.0002", "--feerate", "100"] []
+        let summary = txInfoSummary prepared
+        (summaryFee summary, summaryFeeByte summary) `shouldBe` (22600, 100)
+
+    it "is asked about by preparetx on stderr" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home ["preparetx", textOf (otherAddr 0), "0.0002", "--feerate", "101"] ["y"]
+        runErr run `shouldSatisfy` Text.isInfixOf highFeeQuestion
+
+    it "is taken by preparetx when the user answers yes" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        prepared <- txOf =<< answer home ["preparetx", textOf (otherAddr 0), "0.0002", "--feerate", "101"] ["y"]
+        let summary = txInfoSummary prepared
+        (summaryFee summary, summaryFeeByte summary) `shouldBe` (22826, 101)
+
+    it "makes preparetx prepare nothing when the user answers anything else" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["preparetx", textOf (otherAddr 0), "0.0002", "--feerate", "101"] ["n"])
+          `shouldReturn` Right highFeeRefused
+        (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+
+    it "is taken by preparetx without asking with --yes" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        prepared <- txOf =<< answer home ["preparetx", textOf (otherAddr 0), "0.0002", "--feerate", "101", "--yes"] []
+        summaryFeeByte (txInfoSummary prepared) `shouldBe` 101
+
+    -- The keys would be typed for nothing
+    it "is asked about by preparesweep before the private keys are typed" $
+      withHome $ \home -> do
+        createMain home
+        run <- hw home ["preparesweep", "--prvkeys", "-", "--sweepto", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--feerate", "101"] ["n"]
+        runErr run `shouldSatisfy` Text.isInfixOf highFeeQuestion
+        run `shouldSatisfy` printed highFeeRefused
+        runErr run `shouldNotSatisfy` Text.isInfixOf "Private keys"
+        doesFileExist (home </> "sweep.json") `shouldReturn` False
+
+    it "is taken by preparesweep when the user answers yes" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        keys <- writeKeyFile home
+        prepared <- txOf =<< answer home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0), "--feerate", "101"] ["y"]
+        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 10608)]
+
+    it "is taken by preparesweep without asking with --yes" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        keys <- writeKeyFile home
+        prepared <- txOf =<< answer home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0), "--feerate", "101", "--yes"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 10608)]
 
 {- Next steps -}
 

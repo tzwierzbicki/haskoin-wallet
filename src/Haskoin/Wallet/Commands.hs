@@ -97,6 +97,7 @@ import Haskoin.Wallet.TxBuilding (buildTxSignData)
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSigning (parseOutsideTxSignData, signWalletTx)
+import Haskoin.Wallet.TxSize (checkFeeRateAndDust, highFeeRate)
 import Haskoin.Wallet.TxSweep (buildSweepSignData, fetchSweepCoins, signTxWithKeys)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
@@ -422,6 +423,20 @@ keepPrepared ctx accId acc output tsd = do
   writeOutput (accountNetwork acc) output tsd
   txAnswer accId info
 
+-- | Ask before preparing a transaction at a fee rate above 'highFeeRate',
+-- unless --yes: a rate that high is more often a typo than a choice. A fee
+-- rate or a dust limit no transaction can be built with is refused first,
+-- without a question.
+confirmFeeRate :: Bool -> Natural -> Natural -> ExceptT String (DB IO) ()
+confirmFeeRate yes feeByte dust = do
+  liftEither $ checkFeeRateAndDust feeByte dust
+  when (feeByte > highFeeRate && not yes) $ do
+    accepted <-
+      askYes terminal $
+        "The fee rate of " <> show feeByte <> " satoshis per byte is above " <> show highFeeRate
+          <> ", the most hw takes without asking. Prepare the transaction anyway?"
+    unless accepted $ throwError "The transaction was not prepared: give a lower --feerate"
+
 -- | Prepare a payment from the account, unsigned
 cmdPrepareTx :: Ctx -> Config -> AmountUnit -> PrepareTx -> IO Response
 cmdPrepareTx ctx cfg unit opts =
@@ -433,6 +448,7 @@ cmdPrepareTx ctx cfg unit opts =
     -- Before the transaction is built, not after
     for_ opts.output checkPathFree
     recipients <- liftEither $ mapM (recipient net) opts.recipients
+    confirmFeeRate opts.yes opts.feeByte opts.dust
     gen <- liftIO initStdGen
     tsd <- buildTxSignData net ctx cfg gen opts.strategy accId recipients opts.feeByte opts.dust opts.feePayer opts.minConf opts.coins
     keepPrepared ctx accId acc opts.output tsd
@@ -595,6 +611,8 @@ cmdPrepareSweep ctx cfg opts =
     sweepOn net accIdM = do
       sweepFrom <- liftEither $ mapM (textToAddrE net) opts.sweepFrom
       sweepTo <- liftEither $ mapM (textToAddrE net) opts.sweepTo
+      -- Before the keys are typed, not after
+      confirmFeeRate opts.yes opts.feeByte opts.dust
       keys <- maybe (return []) (readSecKeys terminal net) opts.keys
       found <- fetchSweepCoins net ctx (webStore ctx cfg net) accIdM keys sweepFrom opts.coins sweepTo
       gen <- liftIO initStdGen

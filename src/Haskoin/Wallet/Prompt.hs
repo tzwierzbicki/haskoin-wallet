@@ -4,8 +4,9 @@
 -- | What hw asks the user for on the terminal: the mnemonic of a wallet,
 -- whole or in parts, and its passphrase, which give the signing key of an
 -- account; the dice rolls that add to the entropy of a new mnemonic; the
--- private keys of a sweep, when they are not in a file; and whether to send
--- a transaction.
+-- private keys of a sweep, when they are not in a file; and the answer to a
+-- yes-or-no question, such as whether to send a transaction or to take a
+-- high fee rate.
 --
 -- Secrets are typed without echo, as gpg, ssh and sudo take them: nothing
 -- shows on the screen, not even their length. The prompts and the messages
