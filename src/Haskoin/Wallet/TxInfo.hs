@@ -170,7 +170,10 @@ data PendingStatus = PendingStatus
     pendingOnline :: !Bool,
     -- | A coin it spends was spent by another transaction, or is gone, as
     -- the store answered at the last sync: it can no longer be sent
-    pendingConflicted :: !Bool
+    pendingConflicted :: !Bool,
+    -- | When the wallet started holding it, as it was prepared or imported:
+    -- none for a transaction the wallet does not hold, read from a file
+    pendingCreated :: !(Maybe UTCTime)
   }
   deriving (Eq, Show)
 
@@ -307,7 +310,8 @@ statusPairs (Pending status) =
         [ "nosighash" .= pendingNosigHash status,
           "signed" .= pendingSigned status,
           "online" .= pendingOnline status,
-          "conflicted" .= pendingConflicted status
+          "conflicted" .= pendingConflicted status,
+          "created" .= pendingCreated status
         ]
   ]
 
@@ -322,6 +326,7 @@ statusParser o = do
           <*> o .:? "txid"
           <*> p .: "online"
           <*> p .:? "conflicted" .!= False
+          <*> p .:? "created"
     Nothing ->
       fmap OnChain $
         ChainStatus

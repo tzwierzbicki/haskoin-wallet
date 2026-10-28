@@ -13,7 +13,7 @@ module Haskoin.Wallet.TxInfoSpec (spec) where
 import Conduit (liftIO)
 import Control.Monad.Except (ExceptT)
 import Control.Monad.Trans (lift)
-import Data.Aeson (Object, Value (Null), eitherDecode)
+import Data.Aeson (Object, Value (Null, Object), eitherDecode, encode)
 import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Aeson.Types (parseEither)
 import qualified Data.ByteString as BS
@@ -242,10 +242,23 @@ statusSpec =
       txInfoHash (TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 3 False))) `shouldBe` Just (fakeTxHash 2)
 
     it "gives a transaction in preparation its id once it is signed" $ do
-      let unsigned = PendingStatus (fakeTxHash 7) Nothing False False
-          signed = PendingStatus (fakeTxHash 7) (Just (fakeTxHash 2)) False False
+      let unsigned = PendingStatus (fakeTxHash 7) Nothing False False Nothing
+          signed = PendingStatus (fakeTxHash 7) (Just (fakeTxHash 2)) False False Nothing
       (pendingSigned unsigned, txInfoHash (TxInfo spendSummary (Pending unsigned))) `shouldBe` (False, Nothing)
       (pendingSigned signed, txInfoHash (TxInfo spendSummary (Pending signed))) `shouldBe` (True, Just (fakeTxHash 2))
+
+-- | The pending status of a transaction as written in JSON
+pendingOf :: Object -> Either String Object
+pendingOf written = case KeyMap.lookup "pending" written of
+  Just (Object status) -> Right status
+  _ -> Left "No pending status"
+
+-- | A transaction as written in JSON, without the creation time of its
+-- pending status, as hw wrote it before it kept the time
+withoutCreated :: Object -> Object
+withoutCreated written = case KeyMap.lookup "pending" written of
+  Just (Object status) -> KeyMap.insert "pending" (Object (KeyMap.delete "created" status)) written
+  _ -> written
 
 jsonSpec :: Spec
 jsonSpec =
@@ -292,7 +305,7 @@ jsonSpec =
       (KeyMap.lookup "time" <$> written) `shouldBe` Right (Just Null)
 
     it "writes a transaction in preparation with its state, and the block of one that is nowhere yet" $ do
-      let info = TxInfo paymentSummary (Pending (PendingStatus (fakeTxHash 7) (Just (fakeTxHash 1)) True False))
+      let info = TxInfo paymentSummary (Pending (PendingStatus (fakeTxHash 7) (Just (fakeTxHash 1)) True False (Just seenTime)))
           json :: String
           json =
             [r|{
@@ -317,11 +330,23 @@ jsonSpec =
                 "nosighash": "0000000000000000000000000000000000000000000000000000000000000007",
                 "signed": true,
                 "online": true,
-                "conflicted": false
+                "conflicted": false,
+                "created": "2023-11-14T22:13:20Z"
               }
             }|]
       eitherDecode (cs json) `shouldBe` Right (marshalValue btc info)
       unmarshalJSON btc (cs json) `shouldBe` Just info
+
+    -- One the wallet does not hold, read from a file, has none
+    it "writes no creation time for a transaction in preparation that has none as null" $ do
+      let info = TxInfo paymentSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing))
+      unmarshalJSON btc (marshalJSON btc info) `shouldBe` Just info
+      (KeyMap.lookup "created" <$> (pendingOf =<< eitherDecode (marshalJSON btc info))) `shouldBe` Right (Just Null)
+
+    -- As hw wrote it before it kept the time
+    it "reads a transaction in preparation without its creation time" $ do
+      let info = TxInfo paymentSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing))
+      (unmarshalJSON btc . encode . Object . withoutCreated <$> eitherDecode (marshalJSON btc info)) `shouldBe` Right (Just info)
 
     it "reads the summaries stored by earlier versions of hw" $ do
       -- Those blobs carried the status too, wrote the inputs of others as

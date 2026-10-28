@@ -41,6 +41,9 @@ data Response
     ResponseAddresses !DBAccount ![(DBAddress, Word64)]
   | -- | Transactions of the account
     ResponseTxs !DBAccount ![TxInfo]
+  | -- | Pending transactions, each with its account: those of the account
+    -- asked for, or of every account when none is
+    ResponsePendingTxs !(Maybe DBAccount) ![(DBAccount, TxInfo)]
   | -- | A transaction of the account
     ResponseTx !DBAccount !TxInfo
   | -- | A transaction of the account just prepared by preparetx or
@@ -90,6 +93,8 @@ instance ToJSON Response where
     ResponseAddresses acc addrs ->
       typed "addresses" ["account" .= acc, "addresses" .= (uncurry addressWithSpendable <$> addrs)]
     ResponseTxs acc txs -> typed "txs" ["account" .= acc, "txs" .= (marshalValue (accountNetwork acc) <$> txs)]
+    ResponsePendingTxs asked held ->
+      typed "pendingtxs" ["account" .= asked, "txs" .= [object ["account" .= acc, "tx" .= marshalValue (accountNetwork acc) info] | (acc, info) <- held]]
     ResponseTx acc info -> typed "tx" ["account" .= acc, "tx" .= marshalValue (accountNetwork acc) info]
     ResponsePrepared acc info left ->
       typed "prepared" ["account" .= acc, "tx" .= marshalValue (accountNetwork acc) info, "left" .= left]
@@ -125,6 +130,7 @@ instance FromJSON Response where
       "tx" -> do
         acc <- o .: "account"
         ResponseTx acc <$> (unmarshalValue (accountNetwork acc) =<< o .: "tx")
+      "pendingtxs" -> ResponsePendingTxs <$> o .: "account" <*> (mapM heldTx =<< o .: "txs")
       "prepared" -> do
         acc <- o .: "account"
         ResponsePrepared acc <$> (unmarshalValue (accountNetwork acc) =<< o .: "tx") <*> o .: "left"
@@ -143,6 +149,10 @@ instance FromJSON Response where
       _ -> fail "Invalid JSON response type"
     where
       network o = maybe (fail "Unknown network") return . netByName =<< o .: "network"
+      -- A pending transaction with its account, which names its network
+      heldTx = withObject "pending transaction" $ \entry -> do
+        acc <- entry .: "account"
+        (,) acc <$> (unmarshalValue (accountNetwork acc) =<< entry .: "tx")
 
 -- | The sync of an account in JSON, with what the account can spend now
 syncResJson :: SyncRes -> Value

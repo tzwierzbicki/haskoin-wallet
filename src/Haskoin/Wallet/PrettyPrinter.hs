@@ -20,6 +20,7 @@ import Data.Maybe (isJust)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import Data.Time (UTCTime)
 import Data.Time.Format
 import Data.Word
 import Haskoin
@@ -195,6 +196,10 @@ formatMnemonic split =
 formatAddress :: Bool -> String -> Printer
 formatAddress False = PText [SetColor Foreground Dull White]
 formatAddress True = PText [SetColor Foreground Vivid White]
+
+-- | A time as the listings show it, to the second, in UTC
+timeText :: UTCTime -> String
+timeText = formatTime defaultTimeLocale "%d %b %Y %H:%M:%S UTC"
 
 formatTxHash :: String -> Printer
 formatTxHash = PText [SetColor Foreground Dull White]
@@ -477,7 +482,7 @@ statusPrinter (OnChain status) =
       -- In UTC: the time the store first saw the transaction, in its mempool
       -- or in a block; none for a summary the next sync has to fetch again
       case chainTime status of
-        Just time -> keyPrinter 9 "Time" <> formatValue (formatTime defaultTimeLocale "%d %b %Y %H:%M:%S UTC" time)
+        Just time -> keyPrinter 9 "Time" <> formatValue (timeText time)
         Nothing -> mempty,
       if chainDead status
         then
@@ -492,6 +497,9 @@ statusPrinter (Pending status) =
     [ maybe mempty txHashPrinter (pendingTxid status),
       keyPrinter 9 "NoSigHash"
         <> formatNoSigTxHash (cs $ txHashToHex (pendingNosigHash status)),
+      case pendingCreated status of
+        Just time -> keyPrinter 9 "Created" <> formatValue (timeText time)
+        Nothing -> mempty,
       keyPrinter 9 "Signed"
         <> text "This pending transaction is"
           <+> if pendingSigned status
@@ -601,6 +609,21 @@ prettyPrinter unit =
     ResponseTxs acc txs -> do
       let net = accountNetwork acc
       renderIO $ vcat $ intersperse (text " ") $ txInfoPrinter net unit <$> txs
+    ResponsePendingTxs asked [] ->
+      renderIO . text $ case asked of
+        Just acc -> "There are no pending transactions in the account " <> cs (dBAccountName acc)
+        Nothing -> "There are no pending transactions"
+    -- Listing every account, each transaction names its own
+    ResponsePendingTxs asked held ->
+      renderIO $ vcat $ intersperse (text " ") $ pendingPrinter <$> held
+      where
+        pendingPrinter (acc, info) =
+          vcat
+            [ case asked of
+                Nothing -> keyPrinter 9 "Account" <> formatAccount (cs (dBAccountName acc))
+                Just _ -> mempty,
+              txInfoPrinter (accountNetwork acc) unit info
+            ]
     ResponseTx acc txInfo -> do
       let net = accountNetwork acc
       renderIO $ txAnswerPrinter net unit txInfo

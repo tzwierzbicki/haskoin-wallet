@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE TupleSections #-}
 
 -- | The pending transactions of an account, from preparation to the
 -- network: stored with their signing data, holding the coins they spend,
@@ -21,7 +22,7 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.String.Conversions (cs)
 import Data.Text (Text)
-import Data.Time (getCurrentTime)
+import Data.Time (UTCTime, getCurrentTime)
 import Database.Esqueleto.Legacy as E
 import qualified Database.Persist as P
 import Haskoin
@@ -73,7 +74,10 @@ data PendingTx = PendingTx
     pendingTxOnline :: !Bool,
     -- | A coin it spends was spent by another transaction, or is gone, as
     -- the store answered at the last sync
-    pendingTxConflicted :: !Bool
+    pendingTxConflicted :: !Bool,
+    -- | When it was prepared or imported. A new version of it, signed for
+    -- instance, keeps the time.
+    pendingTxCreated :: !UTCTime
   }
 
 -- | A row read back. A row whose signing data does not decode is an error,
@@ -87,7 +91,8 @@ fromRow (Entity key row) = do
         pendingTxAccount = dBPendingTxAccount row,
         pendingTxData = tsd,
         pendingTxOnline = dBPendingTxOnline row,
-        pendingTxConflicted = dBPendingTxConflicted row
+        pendingTxConflicted = dBPendingTxConflicted row,
+        pendingTxCreated = dBPendingTxCreated row
       }
 
 -- | The signing data as a row stores it
@@ -108,12 +113,13 @@ lookupPendingTx pendingHash = do
 requirePendingTx :: (MonadUnliftIO m) => TxHash -> ExceptT String (DB m) PendingTx
 requirePendingTx pendingHash = lookupPendingTx pendingHash >>= liftMaybe noPendingTx
 
--- | The rows of an account, newest first: all of them, or a page
-pendingRows :: (MonadUnliftIO m) => DBAccountId -> Maybe Page -> DB m [Entity DBPendingTx]
-pendingRows accId pageM =
+-- | The rows of an account, or of every account, newest first: all of
+-- them, or a page
+pendingRows :: (MonadUnliftIO m) => Maybe DBAccountId -> Maybe Page -> DB m [Entity DBPendingTx]
+pendingRows accIdM pageM =
   select . from $ \p -> do
-    where_ $
-      p ^. DBPendingTxAccount ==. val accId
+    forM_ accIdM $ \accId ->
+      where_ $ p ^. DBPendingTxAccount ==. val accId
     orderBy [desc (p ^. DBPendingTxCreated)]
     forM_ pageM $ \page -> do
       let (lim, off) = pageBounds page
@@ -123,14 +129,20 @@ pendingRows accId pageM =
 
 -- | The pending transactions of an account, newest first
 pendingTxs :: (MonadUnliftIO m) => DBAccountId -> ExceptT String (DB m) [PendingTx]
-pendingTxs accId = liftEither . mapM fromRow =<< lift (pendingRows accId Nothing)
+pendingTxs accId = liftEither . mapM fromRow =<< lift (pendingRows (Just accId) Nothing)
 
 -- | A page of the pending transactions of an account, as summaries
 pendingTxPage :: (MonadUnliftIO m) => Ctx -> DBAccountId -> Page -> ExceptT String (DB m) [TxInfo]
-pendingTxPage ctx accId page = do
-  acc <- getAccountById accId
-  held <- liftEither . mapM fromRow =<< lift (pendingRows accId (Just page))
-  mapM (pendingSummary ctx acc) held
+pendingTxPage ctx accId page = map snd <$> pendingPage ctx (Just accId) page
+
+-- | A page of the pending transactions of an account, or of every account,
+-- newest first, each as a summary with its account
+pendingPage :: (MonadUnliftIO m) => Ctx -> Maybe DBAccountId -> Page -> ExceptT String (DB m) [(DBAccount, TxInfo)]
+pendingPage ctx accIdM page = do
+  held <- liftEither . mapM fromRow =<< lift (pendingRows accIdM (Just page))
+  forM held $ \p -> do
+    acc <- getAccountById p.pendingTxAccount
+    (acc,) <$> pendingSummary ctx acc p
 
 -- | The transaction of the signing data as the account sees it: parsed
 -- against the account's key, with the labels of its addresses
@@ -147,12 +159,18 @@ pendingSummary ctx acc p = do
   return info {txInfoStatus = heldStatus p info.txInfoStatus}
 
 -- | The status of a held transaction: what its signing data says, and what
--- only the database knows, whether the user sent it and whether the last
--- sync found it in conflict. The signing data describes a transaction in
--- preparation; one on the chain is not held and is left as it is.
+-- only the database knows, whether the user sent it, whether the last sync
+-- found it in conflict, and when it was created. The signing data
+-- describes a transaction in preparation; one on the chain is not held and
+-- is left as it is.
 heldStatus :: PendingTx -> TxStatus -> TxStatus
 heldStatus p (Pending status) =
-  Pending status {pendingOnline = p.pendingTxOnline, pendingConflicted = p.pendingTxConflicted}
+  Pending
+    status
+      { pendingOnline = p.pendingTxOnline,
+        pendingConflicted = p.pendingTxConflicted,
+        pendingCreated = Just p.pendingTxCreated
+      }
 heldStatus _ onChain = onChain
 
 -- | The coins locked by the pending transactions of the wallet on a

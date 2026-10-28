@@ -1009,9 +1009,13 @@ pendingTxsParser = do
           <$> accountOption
           <*> (Page <$> limitOption <*> offsetOption)
   info cmd $
-    progDesc "Display the pending transactions of an account"
+    progDesc "Display the pending transactions of the wallet, or of an account"
       <> footer
         [r|
+`pendingtxs` lists the pending transactions of every account, newest first,
+each with its account, or only those of the --account given. Each shows when it
+was created.
+
 Pending transactions have been created with the `preparetx` command. They are
 either unsigned and waiting to be signed, or signed and waiting to be sent to
 the network, or sent and waiting for the network to list them, at which point

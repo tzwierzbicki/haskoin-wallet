@@ -196,7 +196,7 @@ arbitraryTxStatus :: Gen TxStatus
 arbitraryTxStatus =
   oneof
     [ OnChain <$> (ChainStatus <$> arbitraryTxHash <*> arbitraryBlockRef <*> arbitraryMaybe arbitraryUTCTime <*> arbitraryNatural <*> arbitrary),
-      Pending <$> (PendingStatus <$> arbitraryTxHash <*> arbitraryMaybe arbitraryTxHash <*> arbitrary <*> arbitrary)
+      Pending <$> (PendingStatus <$> arbitraryTxHash <*> arbitraryMaybe arbitraryTxHash <*> arbitrary <*> arbitrary <*> arbitraryMaybe arbitraryUTCTime)
     ]
 
 arbitraryTxInfo :: Network -> Gen TxInfo
@@ -234,6 +234,9 @@ arbitraryResponse net ctx =
       ResponseAddresses
         <$> arbitraryDBAccount net ctx
         <*> resize 20 (listOf $ (,) <$> arbitraryDBAddress net <*> arbitraryPositive),
+      ResponsePendingTxs
+        <$> arbitraryMaybe (arbitraryDBAccount net ctx)
+        <*> resize 20 (listOf $ (,) <$> arbitraryDBAccount net ctx <*> arbitraryTxInfo net),
       ResponseTxs
         <$> arbitraryDBAccount net ctx
         <*> resize 20 (listOf $ arbitraryTxInfo net),

@@ -80,7 +80,9 @@ parseAs net ctx accountPubM tsd = do
   summary <- summarize net ctx accountPubM tsd coins
   let tx = tsd.txSignDataTx
       txid = if isSigned tx then Just (txHash tx) else Nothing
-  return $ TxInfo summary $ Pending $ PendingStatus (nosigHash tx) txid False False
+  -- What only the database knows, the wallet's own state, is filled in
+  -- for a transaction it holds
+  return $ TxInfo summary $ Pending $ PendingStatus (nosigHash tx) txid False False Nothing
 
 -- | Check that every input of a signed transaction carries a valid signature
 -- for the coin it spends

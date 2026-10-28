@@ -19,7 +19,7 @@ import Data.List (isInfixOf, sortOn)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Data.Time (UTCTime)
+import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import qualified Data.ByteString as BS
 import Data.Word (Word64)
 import qualified Database.Persist as P
@@ -59,6 +59,7 @@ spec = prepareContext $ \ctx -> do
   highFeeSpec ctx
   sendAllSpec ctx
   coinControlSpec ctx
+  pendingListSpec ctx
   nextStepSpec ctx
 
 {- Typing and answers -}
@@ -170,11 +171,16 @@ txOf other = fail $ "Not a transaction: " <> show other
 -- | The transactions of an answer: type, amount, and confirmations once on
 -- the chain
 txsOf :: Response -> Either String [(TxType, Integer, Maybe Natural)]
-txsOf (ResponseTxs _ infos) = Right [(summaryType (txInfoSummary i), summaryAmount (txInfoSummary i), confirmations (txInfoStatus i)) | i <- infos]
+txsOf (ResponseTxs _ infos) = Right (txRow <$> infos)
+txsOf (ResponsePendingTxs _ held) = Right (txRow . snd <$> held)
+txsOf other = Left (show other)
+
+-- | A transaction as 'txsOf' gives it
+txRow :: TxInfo -> (TxType, Integer, Maybe Natural)
+txRow i = (summaryType (txInfoSummary i), summaryAmount (txInfoSummary i), confirmations (txInfoStatus i))
   where
     confirmations (OnChain status) = Just (chainConfirmations status)
     confirmations (Pending _) = Nothing
-txsOf other = Left (show other)
 
 -- | The state of a transaction in preparation: signed, and online
 pendingState :: TxInfo -> Maybe (Bool, Bool)
@@ -1480,6 +1486,7 @@ sweepSpec ctx =
 rowsOf :: Response -> Either String Int
 rowsOf (ResponseAddresses _ addrs) = Right (length addrs)
 rowsOf (ResponseTxs _ txs) = Right (length txs)
+rowsOf (ResponsePendingTxs _ held) = Right (length held)
 rowsOf (ResponseCoins _ coins) = Right (length coins)
 rowsOf other = Left (show other)
 
@@ -1549,7 +1556,7 @@ onePendingState :: FilePath -> IO (Maybe (Bool, Bool))
 onePendingState home = do
   listed <- hwJson home ["pendingtxs"] []
   case listed of
-    ResponseTxs _ [info] -> return (pendingState info)
+    ResponsePendingTxs _ [(_, info)] -> return (pendingState info)
     other -> fail $ "Not one pending transaction: " <> show other
 
 -- | The question of sendtx
@@ -1936,6 +1943,91 @@ coinControlSpec ctx =
         paidToOthers <$> txOf sendAll `shouldReturn` Map.fromList [(otherAddr 0, 48080)]
         leftOf sendAll `shouldBe` Right [(OutPoint (txHash (twoAddressesTx ctx)) 1, 30000, NotGiven)]
 
+{- Pending transactions -}
+
+-- | A chain whose block 800000 holds the payment to main and the coin of the
+-- old key
+paymentAndKeyChain :: Ctx -> Chain
+paymentAndKeyChain ctx = Chain 800002 [(payment ctx, Just 800000), (oldCoin ctx, Just 800000)]
+
+-- | A home with the accounts main and second, main holding a payment, and
+-- second a sweep of the old key, prepared after it
+twoAccountsPending :: FilePath -> IO ()
+twoAccountsPending home = do
+  createMain home
+  _ <- answer home ["createacc", "second"] seedTwice
+  _ <- answer home ["receive", "--account", "main"] []
+  _ <- answer home ["sync"] []
+  _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--account", "main"] []
+  secondAddr <- receiveFor home "second"
+  keys <- writeKeyFile home
+  void $ answer home ["preparesweep", "--prvkeys", keys, "--sweepto", secondAddr] []
+
+-- | The account pendingtxs was asked for, and the account of each pending
+-- transaction it lists
+pendingAccountsOf :: Response -> Either String (Maybe Text, [Text])
+pendingAccountsOf (ResponsePendingTxs asked held) = Right (dBAccountName <$> asked, dBAccountName . fst <$> held)
+pendingAccountsOf other = Left (show other)
+
+-- | When each pending transaction pendingtxs lists was created
+createdTimesOf :: Response -> Either String [Maybe UTCTime]
+createdTimesOf (ResponsePendingTxs _ held) = Right (created . snd <$> held)
+  where
+    created info = case txInfoStatus info of
+      Pending status -> pendingCreated status
+      OnChain _ -> Nothing
+createdTimesOf other = Left (show other)
+
+pendingListSpec :: Ctx -> Spec
+pendingListSpec ctx =
+  describe "The pending transactions pendingtxs lists" $ do
+    it "are those of every account without --account, newest first, each with its account" $
+      withChain ctx (paymentAndKeyChain ctx) $ \home _ -> do
+        twoAccountsPending home
+        (pendingAccountsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right (Nothing, ["second", "main"])
+
+    it "are those of the account of --account only" $
+      withChain ctx (paymentAndKeyChain ctx) $ \home _ -> do
+        twoAccountsPending home
+        (pendingAccountsOf <$> hwJson home ["pendingtxs", "--account", "main"] []) `shouldReturn` Right (Just "main", ["main"])
+
+    it "show their account when listed for every account" $
+      withChain ctx (paymentAndKeyChain ctx) $ \home _ -> do
+        twoAccountsPending home
+        run <- hw home ["pendingtxs"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "Account  : second"
+        runOut run `shouldSatisfy` Text.isInfixOf "Account  : main"
+
+    it "do not show their account when listed for one account" $
+      withChain ctx (paymentAndKeyChain ctx) $ \home _ -> do
+        twoAccountsPending home
+        run <- hw home ["pendingtxs", "--account", "main"] []
+        runOut run `shouldNotSatisfy` Text.isInfixOf "Account  :"
+
+    -- The time is the wallet's clock when preparetx ran, within a second
+    it "have the time they were created" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        started <- getCurrentTime
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002"] []
+        ended <- getCurrentTime
+        times <- createdTimesOf <$> hwJson home ["pendingtxs"] []
+        let duringRun time = addUTCTime (-1) started <= time && time <= addUTCTime 1 ended
+        (fmap (fmap duringRun) <$> times) `shouldBe` Right [Just True]
+
+    it "show the time they were created" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002"] []
+        run <- hw home ["pendingtxs"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "Created  : "
+
+    it "are none, which pendingtxs says" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home ["pendingtxs"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "There are no pending transactions"
+
 {- Next steps -}
 
 -- | The nosigHash of the one pending transaction of a home
@@ -1943,7 +2035,7 @@ onePendingNosig :: FilePath -> IO Text
 onePendingNosig home = do
   listed <- hwJson home ["pendingtxs"] []
   case listed of
-    ResponseTxs _ [info] -> Text.pack <$> nosigOf info
+    ResponsePendingTxs _ [(_, info)] -> Text.pack <$> nosigOf info
     other -> fail $ "Not one pending transaction: " <> show other
 
 -- | Whether the output of a run shows the command

@@ -18,6 +18,7 @@ import qualified Data.ByteString as BS
 import Data.Default (def)
 import Data.Either (isLeft)
 import Data.IORef (IORef, modifyIORef, newIORef, readIORef)
+import Data.Time (UTCTime)
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -188,6 +189,19 @@ otherAccount ctx cfg = do
 sweepOfFunding :: Ctx -> TxSignData
 sweepOfFunding ctx =
   TxSignData (spendingTx ctx [(txHash (funding ctx), 0)] [(externalAddr2, 19000)]) [funding ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing
+
+-- | A sweep by the other account of the coin of 'secondFunding': the 10000
+-- at the account's second external address go to the first external
+-- address of the other account, less a fee of 1000
+sweepOfSecondFunding :: Ctx -> TxSignData
+sweepOfSecondFunding ctx =
+  TxSignData (spendingTx ctx [(txHash (secondFunding ctx), 0)] [(externalAddr2, 9000)]) [secondFunding ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing
+
+-- | When a transaction in preparation was created, if the wallet holds it
+createdOf :: TxInfo -> Maybe UTCTime
+createdOf info = case txInfoStatus info of
+  Pending status -> pendingCreated status
+  OnChain _ -> Nothing
 
 -- | A sweep on Bitcoin Cash of the outpoint of 'funding', to the first
 -- receiving address of a Bitcoin Cash account of the test wallet: as if
@@ -457,6 +471,43 @@ listingSpec ctx =
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
         pendingTxPage ctx accId (Page 5 0) `dbShouldBeE` []
+
+    -- The account test pays from its first coin, then the other account
+    -- holds a sweep of the second coin of test to its first address
+    it "lists those of every account, newest first, each with its account" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        otherId <- otherAccount ctx cfg
+        fundAccountTwice ctx cfg accId
+        paid <- importPendingTx btc ctx accId =<< payment ctx cfg accId [OutPoint (txHash (funding ctx)) 0] (otherAddr 0) 8000
+        swept <- importPendingTx btc ctx otherId (sweepOfSecondFunding ctx)
+        (map (\(acc, info) -> (dBAccountName acc, pendingFlags info)) <$> pendingPage ctx Nothing (Page 5 0))
+          `dbShouldBeE` [("other", Just (swept, False, False, False)), ("test", Just (paid, False, False, False))]
+        (map (\(acc, info) -> (dBAccountName acc, pendingFlags info)) <$> pendingPage ctx (Just otherId) (Page 5 0))
+          `dbShouldBeE` [("other", Just (swept, False, False, False))]
+
+    it "gives each the time it was created" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        unsigned <- unsignedPayment ctx cfg accId
+        lift $ P.insert_ $ DBPendingTx accId (hashBytes (nosigHash unsigned.txSignDataTx)) (blob unsigned) False False fixtureTime
+        (map createdOf <$> pendingTxPage ctx accId (Page 5 0)) `dbShouldBeE` [Just fixtureTime]
+
+    it "keeps the time it was created when a signed version takes its place" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        unsigned <- unsignedPayment ctx cfg accId
+        lift $ P.insert_ $ DBPendingTx accId (hashBytes (nosigHash unsigned.txSignDataTx)) (blob unsigned) False False fixtureTime
+        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        _ <- importPendingTx btc ctx accId signed
+        (map createdOf <$> pendingTxPage ctx accId (Page 5 0)) `dbShouldBeE` [Just fixtureTime]
+
+    -- As a file of an offline signer would be
+    it "knows no creation time for signing data the wallet does not hold" $
+      inDatabaseE $ do
+        (accId, acc) <- testNewAcc ctx "test"
+        unsigned <- unsignedPayment ctx cfg accId
+        (createdOf <$> txInfoOf ctx acc unsigned) `dbShouldBeE` Nothing
     it "reports a row whose signing data does not decode, instead of hiding it" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"

@@ -371,9 +371,12 @@ cmdTxs cfg account page =
 
 cmdPendingTxs :: Ctx -> Config -> Maybe Text -> Page -> IO Response
 cmdPendingTxs ctx cfg account page =
-  runDBResponse cfg $ do
-    (accId, acc) <- getAccountByName account
-    ResponseTxs acc <$> pendingTxPage ctx accId page
+  runDBResponse cfg $
+    case account of
+      Nothing -> ResponsePendingTxs Nothing <$> pendingPage ctx Nothing page
+      Just _ -> do
+        (accId, acc) <- getAccountByName account
+        ResponsePendingTxs (Just acc) <$> pendingPage ctx (Just accId) page
 
 -- | Show the transaction of a file, as the account it involves sees it, or
 -- as outside the wallet, without keeping it
