@@ -24,7 +24,7 @@ import qualified Data.ByteString as BS
 import Data.Word (Word64)
 import qualified Database.Persist as P
 import Haskoin
-import Haskoin.Wallet.Coin (CoinLock (..), JsonCoin (..))
+import Haskoin.Wallet.Coin (CoinLock (..), JsonCoin (..), LeftCoin (..), LeftReason (..))
 import Haskoin.Wallet.Response (Response (..))
 import Haskoin.Wallet.Database (DBAccount (..), DBAddress (..), databaseInUse, runDBWith)
 import Haskoin.Wallet.HwTestUtils
@@ -33,7 +33,6 @@ import qualified Haskoin.Wallet.Schema.V3 as V3
 import Haskoin.Wallet.Sync (SyncRes (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo
-import Haskoin.Wallet.TxSendAll (LeftCoin (..), LeftReason (..))
 import Haskoin.Wallet.TxSignData (TxFile (..), TxSignData (..), isSigned)
 import Numeric.Natural (Natural)
 import System.Directory (copyFile, doesFileExist)
@@ -59,6 +58,7 @@ spec = prepareContext $ \ctx -> do
   confirmationSpec ctx
   highFeeSpec ctx
   sendAllSpec ctx
+  coinControlSpec ctx
   nextStepSpec ctx
 
 {- Typing and answers -}
@@ -140,6 +140,7 @@ accountOf :: Response -> Either String DBAccount
 accountOf (ResponseAccount acc _) = Right acc
 accountOf (ResponseAddress acc _ _) = Right acc
 accountOf (ResponseTx acc _) = Right acc
+accountOf (ResponsePrepared acc _ _) = Right acc
 accountOf other = Left (show other)
 
 -- | The accounts of an answer, with the fingerprints of their seeds
@@ -162,7 +163,7 @@ coinsShown other = Left (show other)
 -- | The transaction of an answer, of an account or outside the wallet
 txOf :: Response -> IO TxInfo
 txOf (ResponseTx _ info) = return info
-txOf (ResponseSendAll _ info _) = return info
+txOf (ResponsePrepared _ info _) = return info
 txOf (ResponseOutsideTx _ info) = return info
 txOf other = fail $ "Not a transaction: " <> show other
 
@@ -1110,7 +1111,7 @@ paymentSpec ctx =
         _ <- answer home ["createacc", "second"] seedTwice
         let coin = Text.unpack (txHashToHex (txHash (payment ctx))) <> ":0"
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coin, "--account", "second"] [])
-          `shouldReturn` Right "The coins given are not in the account second"
+          `shouldReturn` Right "The coins or addresses given are not in the account second"
 
     it "is written to its --output file with the network of its account" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -1704,10 +1705,10 @@ confirmedChain tx = Chain 800002 [(tx, Just 800000)]
 coinArg :: Tx -> Int -> String
 coinArg tx i = Text.unpack (txHashToHex (txHash tx)) <> ":" <> show i
 
--- | The coins preparesendall leaves in the account, as its answer lists
--- them: outpoint, value and why
+-- | The coins preparetx or preparesendall leaves in the account, as its
+-- answer lists them: outpoint, value and why
 leftOf :: Response -> Either String [(OutPoint, Word64, LeftReason)]
-leftOf (ResponseSendAll _ _ left) = Right [(c.leftCoinOutpoint, c.leftCoinValue, c.leftCoinReason) | c <- left]
+leftOf (ResponsePrepared _ _ left) = Right [(c.leftCoinOutpoint, c.leftCoinValue, c.leftCoinReason) | c <- left]
 leftOf other = Left (show other)
 
 -- | The question of preparesendall about the three dust coins
@@ -1843,7 +1844,97 @@ sendAllSpec ctx = do
       withChain ctx (confirmedChain (dustCoinsTx ctx)) $ \home _ -> do
         synced home
         (errorOf <$> hwJson home ["preparesendall", textOf (otherAddr 0), "--coin", coinArg (dustCoinsTx ctx) 1, "--leavedust"] [])
-          `shouldReturn` Right "The coins given with --coin are all sent: give --spenddust or --leavedust without --coin"
+          `shouldReturn` Right "The coins chosen with --coin or --spendfrom are all sent: give --spenddust or --leavedust without them"
+
+{- Coin control -}
+
+-- | Coins of 50000 satoshis at the first receiving address of the test
+-- wallet, and 30000 at the second
+twoAddressesTx :: Ctx -> Tx
+twoAddressesTx ctx = fundingTx ctx 7 [(externalAddr 0, 50000), (externalAddr 1, 30000)]
+
+-- | A coin of 50000 satoshis at the first receiving address of cash, the
+-- Bitcoin Cash account of the test wallet
+cashCoinTx :: Ctx -> Tx
+cashCoinTx ctx = fundingTx ctx 8 [(bchExternalAddr, 50000)]
+
+-- A payment of 20000 from the coin of 50000 makes one input and two
+-- outputs, 226 bytes: a fee of 2260, and 27740 of change. Sending all of the
+-- coin of 50000 makes 192 bytes: a fee of 1920, and 48080 for the address.
+coinControlSpec :: Ctx -> Spec
+coinControlSpec ctx =
+  describe "Coin control" $ do
+    it "spends the coins at the address of --spendfrom, and only them" $
+      withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
+        synced home
+        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spendfrom", textOf (externalAddr 0)] []
+        paidToWallet <$> txOf prepared `shouldReturn` Map.fromList [(internalAddr 0, 27740)]
+        leftOf prepared `shouldBe` Right []
+
+    -- 1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ is the first receiving address of
+    -- cash in the legacy form; hw stores it as
+    -- bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u. The wallet has
+    -- main too: the address names the account.
+    it "finds the account of a --spendfrom address however it is written" $
+      withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
+        createMain home
+        _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
+        _ <- receiveFor home "cash"
+        _ <- answer home ["sync"] []
+        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spendfrom", "1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ"] []
+        (dBAccountName <$> accountOf prepared) `shouldBe` Right "cash"
+        paidToOthers <$> txOf prepared `shouldReturn` Map.fromList [(otherAddr 0, 20000)]
+
+    it "spends the coins chosen that can be spent, and lists the others with why" $
+      withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
+        synced home
+        _ <- answer home ["lockcoin", coinArg (twoAddressesTx ctx) 1] []
+        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (twoAddressesTx ctx) 0, "--coin", coinArg (twoAddressesTx ctx) 1] []
+        paidToWallet <$> txOf prepared `shouldReturn` Map.fromList [(internalAddr 0, 27740)]
+        leftOf prepared `shouldBe` Right [(OutPoint (txHash (twoAddressesTx ctx)) 1, 30000, Locked LockedByUser)]
+
+    -- 30000 satoshis are 0.0003 bitcoins
+    it "shows the coins chosen that cannot be spent after the transaction" $
+      withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
+        synced home
+        _ <- answer home ["lockcoin", coinArg (twoAddressesTx ctx) 1] []
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (twoAddressesTx ctx) 0, "--coin", coinArg (twoAddressesTx ctx) 1] []
+        let (transaction, staying) = Text.breakOn "Staying in the account:" (runOut run)
+        transaction `shouldSatisfy` Text.isInfixOf "NoSigHash"
+        staying `shouldSatisfy` Text.isInfixOf (Text.pack (coinArg (twoAddressesTx ctx) 1) <> " 0.00030000 btc, you locked it")
+
+    it "prepares nothing when none of the coins chosen can be spent, and tells why" $
+      withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
+        synced home
+        _ <- answer home ["lockcoin", coinArg (twoAddressesTx ctx) 1] []
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (twoAddressesTx ctx) 1] [])
+          `shouldReturn` Right ("None of the coins chosen can be spent now: " <> Text.pack (coinArg (twoAddressesTx ctx) 1) <> ", you locked it")
+        (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+
+    it "is refused a --spendfrom address that is not in the account" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spendfrom", textOf (otherAddr 1)] [])
+          `shouldReturn` Right "The address 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ is not in the account main"
+
+    it "is refused a --coin the account does not have" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        let unknown = Text.unpack (txHashToHex (fakeTxHash 9)) <> ":0"
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", unknown] [])
+          `shouldReturn` Right ("The account has no coin " <> Text.pack unknown)
+
+    it "lists nothing left in the account without coin control" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        (leftOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002"] []) `shouldReturn` Right []
+
+    it "makes preparesendall send the coins at --spendfrom, listing the others as not chosen" $
+      withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
+        synced home
+        sendAll <- answer home ["preparesendall", textOf (otherAddr 0), "--spendfrom", textOf (externalAddr 0)] []
+        paidToOthers <$> txOf sendAll `shouldReturn` Map.fromList [(otherAddr 0, 48080)]
+        leftOf sendAll `shouldBe` Right [(OutPoint (txHash (twoAddressesTx ctx)) 1, 30000, NotGiven)]
 
 {- Next steps -}
 

@@ -31,6 +31,11 @@ module Haskoin.Wallet.Coin
     coinAccounts,
     Refreshed (..),
     refreshCoins,
+    LeftReason (..),
+    LeftCoin (..),
+    leftReasonText,
+    leftCoins,
+    chosenCoins,
   )
 where
 
@@ -42,9 +47,11 @@ import Control.Monad.Reader (MonadTrans (lift))
 import Data.Aeson (FromJSON (..), ToJSON (..), Value (String), object, withObject, withText, (.:), (.=))
 import Data.ByteString (ByteString)
 import Data.Containers.ListUtils (nubOrd)
+import Data.List (intercalate, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, mapMaybe)
+import Data.Ord (Down (..))
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -512,3 +519,121 @@ moveCoin coin = P.update (DBCoinKey $ outpointBytes coin.outpoint) [DBCoinBlockR
 -- | Delete a stored coin
 deleteCoin :: (MonadUnliftIO m) => DBCoin -> DB m ()
 deleteCoin row = P.delete (DBCoinKey $ dBCoinOutpoint row)
+
+{- The coins a transaction leaves -}
+
+-- | Why a transaction just prepared leaves a coin of the account: a coin
+-- that coin control chose, or, for a send-all, any coin of the account
+data LeftReason
+  = -- | Worth less than the fee to spend it, and left as the user chose
+    WorthLessThanFee
+  | -- | Locked, by the user or by a pending transaction
+    Locked !CoinLock
+  | -- | Not confirmed enough yet, or a coinbase not yet mature
+    NotSpendableYet
+  | -- | Spendable, but not among the coins chosen with --coin or --spendfrom
+    NotGiven
+  deriving (Eq, Show)
+
+instance ToJSON LeftReason where
+  toJSON = String . cs . reasonName
+
+instance FromJSON LeftReason where
+  parseJSON = withText "LeftReason" $ \name ->
+    case filter ((== cs name) . reasonName) leftReasons of
+      [reason] -> return reason
+      _ -> fail $ "Unknown reason a coin stays in the account: " <> cs name
+
+-- | Every reason, in the order the answer lists the coins in
+leftReasons :: [LeftReason]
+leftReasons = [WorthLessThanFee, Locked LockedByUser, Locked LockedByTransaction, NotSpendableYet, NotGiven]
+
+-- | The name of a reason in JSON
+reasonName :: LeftReason -> String
+reasonName = \case
+  WorthLessThanFee -> "dust"
+  Locked LockedByUser -> "lockedbyuser"
+  Locked LockedByTransaction -> "lockedbytransaction"
+  NotSpendableYet -> "notspendableyet"
+  NotGiven -> "notgiven"
+
+-- | A reason as the user reads it
+leftReasonText :: LeftReason -> String
+leftReasonText = \case
+  WorthLessThanFee -> "worth less than its fee"
+  Locked LockedByUser -> "you locked it"
+  Locked LockedByTransaction -> "a pending transaction spends it"
+  NotSpendableYet -> "not spendable yet"
+  NotGiven -> "not chosen with --coin or --spendfrom"
+
+-- | Why a coin the builder may not spend stays, from its lock: without one,
+-- it is not spendable yet
+lockReason :: Maybe CoinLock -> LeftReason
+lockReason = maybe NotSpendableYet Locked
+
+-- | A coin of the account a transaction leaves in it, and why
+data LeftCoin = LeftCoin
+  { leftCoinOutpoint :: !OutPoint,
+    leftCoinValue :: !Word64,
+    leftCoinReason :: !LeftReason
+  }
+  deriving (Eq, Show)
+
+instance ToJSON LeftCoin where
+  toJSON coin =
+    object
+      [ "outpoint" .= leftCoinOutpoint coin,
+        "value" .= leftCoinValue coin,
+        "reason" .= leftCoinReason coin
+      ]
+
+instance FromJSON LeftCoin where
+  parseJSON = withObject "LeftCoin" $ \o ->
+    LeftCoin <$> o .: "outpoint" <*> o .: "value" <*> o .: "reason"
+
+-- | The coins of the account a transaction leaves, by reason in the order
+-- of 'leftReasons', the largest first: the dust coins left, the coins the
+-- builder may not spend with their locks, and the spendable coins not
+-- chosen with coin control
+leftCoins :: [Store.Unspent] -> [(Store.Unspent, Maybe CoinLock)] -> [Store.Unspent] -> [LeftCoin]
+leftCoins dustLeft unspendable notGiven =
+  concat [sortOn (Down . leftCoinValue) [left | left <- everyLeft, leftCoinReason left == reason] | reason <- leftReasons]
+  where
+    everyLeft =
+      [leftOf WorthLessThanFee coin | coin <- dustLeft]
+        <> [leftOf (lockReason lock) coin | (coin, lock) <- unspendable]
+        <> [leftOf NotGiven coin | coin <- notGiven]
+    leftOf :: LeftReason -> Store.Unspent -> LeftCoin
+    leftOf reason coin = LeftCoin coin.outpoint coin.value reason
+
+{- Coin control -}
+
+-- | The coins that coin control chose among the coins of the account, by
+-- their outpoints and by the addresses that hold them: those the builder
+-- may spend now, and the others, each with its lock. The addresses count,
+-- not their text. An outpoint the account does not hold is refused, and so
+-- is a choice none of whose coins can be spent, with why.
+chosenCoins ::
+  -- | The outpoints chosen
+  [OutPoint] ->
+  -- | The addresses chosen
+  [Address] ->
+  -- | The coins the builder may spend, from 'spendableCoins'
+  [Store.Unspent] ->
+  -- | The others, from 'unspendableCoins'
+  [(Store.Unspent, Maybe CoinLock)] ->
+  Either String ([Store.Unspent], [(Store.Unspent, Maybe CoinLock)])
+chosenCoins outpoints addrs spendable unspendable = do
+  forM_ outpoints $ \outpoint ->
+    unless (outpoint `elem` held) $ Left $ "The account has no coin " <> coinText outpoint
+  when (null chosenSpendable) $
+    Left $ case chosenHeld of
+      [] -> "The addresses chosen with --spendfrom hold no coins"
+      _ -> "None of the coins chosen can be spent now: " <> intercalate "; " (heldText <$> chosenHeld)
+  return (chosenSpendable, chosenHeld)
+  where
+    held = (.outpoint) <$> (spendable <> (fst <$> unspendable))
+    chosen coin = coin.outpoint `elem` outpoints || maybe False (`elem` addrs) coin.address
+    chosenSpendable = filter chosen spendable
+    chosenHeld = filter (chosen . fst) unspendable
+    heldText (coin, lock) = coinText coin.outpoint <> ", " <> leftReasonText (lockReason lock)

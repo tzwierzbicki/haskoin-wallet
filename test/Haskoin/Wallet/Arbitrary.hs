@@ -22,7 +22,6 @@ import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.TxInfo
-import Haskoin.Wallet.TxSendAll (LeftCoin (..), LeftReason (..))
 import Haskoin.Wallet.TxSignData
 import Numeric.Natural
 import Test.QuickCheck
@@ -239,7 +238,7 @@ arbitraryResponse net ctx =
         <$> arbitraryDBAccount net ctx
         <*> resize 20 (listOf $ arbitraryTxInfo net),
       ResponseTx <$> arbitraryDBAccount net ctx <*> arbitraryTxInfo net,
-      ResponseSendAll
+      ResponsePrepared
         <$> arbitraryDBAccount net ctx
         <*> arbitraryTxInfo net
         <*> resize 20 (listOf arbitraryLeftCoin),

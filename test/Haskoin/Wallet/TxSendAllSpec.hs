@@ -3,22 +3,18 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The parts of preparesendall that read no database: the dust coins, the
--- amounts each recipient gets from the coins, the transaction, the report on
--- the dust coins and the coins it leaves in the account. The recipients as
--- typed, and how what remains is shared, are in
--- "Haskoin.Wallet.RecipientSpec", and the command as the user runs it in
+-- amounts each recipient gets from the coins, the transaction and the report
+-- on the dust coins. The recipients as typed, and how what remains is shared,
+-- are in "Haskoin.Wallet.RecipientSpec", the coins left in the account in
+-- "Haskoin.Wallet.CoinSpec", and the command as the user runs it in
 -- "Haskoin.Wallet.WorkflowSpec".
 module Haskoin.Wallet.TxSendAllSpec where
 
-import Data.Aeson ((.=))
-import qualified Data.Aeson as Json
 import Data.List (sortOn)
 import qualified Data.Map.Strict as Map
-import Data.Text (Text)
 import Data.Word (Word32, Word64, Word8)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Coin (CoinLock (..))
 import Haskoin.Wallet.Recipient (Share (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxBuilding (BuiltTx (..))
@@ -34,7 +30,6 @@ spec =
     amountSpec ctx
     buildSpec ctx
     reportSpec ctx
-    stayingSpec ctx
 
 -- Every test pays at 10 satoshis per byte with a dust limit of 546. The
 -- sizes are those of the builder: 10 bytes of frame, 148 per input and 34
@@ -200,46 +195,3 @@ reportSpec ctx =
     it "tells of a coin worth less than its fee at any rate" $
       (dustReportLines (oneDustReport ctx 148) !! 1)
         `shouldBe` "  0000000000000000000000000000000000000000000000000000000000000002:0  148 sat, worth less than its fee at any rate"
-
-{- What stays in the account -}
-
-stayingSpec :: Ctx -> Spec
-stayingSpec ctx =
-  describe "The coins a send-all leaves in the account" $ do
-    it "are none when it sends every coin" $
-      leftCoins [] [] [] `shouldBe` []
-
-    -- The dust coins left, the coins the builder may not spend, and a coin
-    -- not given with --coin
-    it "are listed by reason, the largest coins first" $
-      leftCoins
-        [coin ctx 2 0 900, coin ctx 2 1 1200]
-        [(coin ctx 3 0 5000, Nothing), (coin ctx 3 1 20000, Just LockedByTransaction), (coin ctx 3 2 30000, Just LockedByUser)]
-        [coin ctx 4 0 40000]
-        `shouldBe` [ LeftCoin (OutPoint (fakeTxHash 2) 1) 1200 WorthLessThanFee,
-                     LeftCoin (OutPoint (fakeTxHash 2) 0) 900 WorthLessThanFee,
-                     LeftCoin (OutPoint (fakeTxHash 3) 2) 30000 (Locked LockedByUser),
-                     LeftCoin (OutPoint (fakeTxHash 3) 1) 20000 (Locked LockedByTransaction),
-                     LeftCoin (OutPoint (fakeTxHash 3) 0) 5000 NotSpendableYet,
-                     LeftCoin (OutPoint (fakeTxHash 4) 0) 40000 NotGiven
-                   ]
-
-    it "are written in JSON with their outpoint, their value and why they stay" $
-      Json.toJSON (LeftCoin (OutPoint (fakeTxHash 2) 0) 900 WorthLessThanFee)
-        `shouldBe` Json.object
-          [ "outpoint" .= Json.object ["txid" .= ("0000000000000000000000000000000000000000000000000000000000000002" :: Text), "index" .= (0 :: Int)],
-            "value" .= (900 :: Int),
-            "reason" .= ("dust" :: Text)
-          ]
-
-    it "name each reason in JSON" $
-      (Json.toJSON <$> [WorthLessThanFee, Locked LockedByUser, Locked LockedByTransaction, NotSpendableYet, NotGiven])
-        `shouldBe` (Json.String <$> ["dust", "lockedbyuser", "lockedbytransaction", "notspendableyet", "notgiven"])
-
-    it "read each reason back from its JSON name" $
-      (Json.fromJSON . Json.String <$> ["dust", "lockedbyuser", "lockedbytransaction", "notspendableyet", "notgiven"])
-        `shouldBe` (Json.Success <$> [WorthLessThanFee, Locked LockedByUser, Locked LockedByTransaction, NotSpendableYet, NotGiven])
-
-    it "refuse a reason they do not know" $
-      (Json.fromJSON (Json.String "lost") :: Json.Result LeftReason)
-        `shouldBe` Json.Error "Unknown reason a coin stays in the account: lost"

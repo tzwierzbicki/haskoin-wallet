@@ -136,6 +136,8 @@ data PrepareTx = PrepareTx
     output :: !(Maybe FilePath),
     -- | The coins to spend, instead of choosing them
     coins :: ![OutPoint],
+    -- | The addresses whose coins to spend, instead of choosing them
+    spendFrom :: ![Text],
     -- | Whether a fee rate above 100 satoshis per byte is taken without
     -- asking (--yes)
     yes :: !Bool
@@ -157,6 +159,8 @@ data PrepareSendAll = PrepareSendAll
     output :: !(Maybe FilePath),
     -- | The coins to send, instead of all of them
     coins :: ![OutPoint],
+    -- | The addresses whose coins to send, instead of all of them
+    spendFrom :: ![Text],
     -- | What to do with the coins worth less than their fee, or Nothing to
     -- ask the user
     dustCoins :: !(Maybe DustCoins),
@@ -789,6 +793,7 @@ prepareTxParser = do
           <*> coinSelectionOption
           <*> outputFileMaybeOption
           <*> many coinOption
+          <*> many spendFromOption
           <*> highFeeYesOption
   info (CommandPrepareTx <$> options) $
     progDesc "Prepare an unsigned transaction for making a payment"
@@ -805,6 +810,11 @@ spent by it will be locked to prevent spending them twice. If you change your
 mind about sending this transaction, you can call `deletetx` to remove it and
 free up the locked coins. All the pending transactions are referenced by their
 noSigHash (a hash of the transaction without its signatures).
+
+Coin control: --coin spends the coins given, and --spendfrom the coins at the
+addresses given, all of those that can be spent, and only them. A coin chosen
+that cannot be spent, locked or not confirmed enough yet, is listed after the
+transaction with why; when none can be spent, nothing is prepared.
 
 A fee rate above 100 satoshis per byte, ten times the default, is more often a
 typo than a choice, so `preparetx` asks before it takes one. --yes takes it
@@ -840,6 +850,7 @@ prepareSendAllParser = do
           <*> minConfOption
           <*> outputFileMaybeOption
           <*> many coinOption
+          <*> many spendFromOption
           <*> dustCoinsOption
           <*> highFeeYesOption
   info (CommandPrepareSendAll <$> options) $
@@ -863,10 +874,11 @@ lowers what the addresses get. Whether a coin is dust depends on the fee rate.
 means, and asks whether to spend them too. Any answer but yes leaves them in
 the account. --spenddust or --leavedust answers for a script.
 
---coin sends the coins given, all of them, dust included, and only them. The
-answer lists every coin the transaction leaves in the account, after it, each
-with why: worth less than its fee, locked by you or by a pending transaction,
-not spendable yet, or not given with --coin.
+--coin sends the coins given, and --spendfrom the coins at the addresses given,
+all of those that can be spent, dust included, and only them. The answer lists
+every coin the transaction leaves in the account, after it, each with why: worth
+less than its fee, locked by you or by a pending transaction, not spendable yet,
+or not chosen with --coin or --spendfrom.
 
 A fee rate above 100 satoshis per byte, ten times the default, is more often a
 typo than a choice, so `preparesendall` asks before it takes one. --yes takes
@@ -890,6 +902,14 @@ dustCoinsOption =
   optional $
     flag' SpendDust (long "spenddust" <> help "Spend the coins worth less than their fee too, without asking")
       <|> flag' LeaveDust (long "leavedust" <> help "Leave the coins worth less than their fee in the account, without asking")
+
+-- | An address of the account whose coins to spend
+spendFromOption :: Parser Text
+spendFromOption =
+  strOption $
+    long "spendfrom"
+      <> metavar "ADDRESS"
+      <> help "Coin control: spend the coins at this address of the account, all those that can be spent"
 
 -- | A coin to spend, as coins lists it
 coinOption :: Parser OutPoint

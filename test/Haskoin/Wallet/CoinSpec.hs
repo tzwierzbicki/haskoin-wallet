@@ -16,7 +16,8 @@ module Haskoin.Wallet.CoinSpec (spec) where
 import Control.Monad (void)
 import Control.Monad.Except (ExceptT)
 import Control.Monad.Trans (lift, liftIO)
-import Data.Aeson (eitherDecode)
+import Data.Aeson (eitherDecode, (.=))
+import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
 import Data.List (sort, sortOn)
 import Data.Map.Strict (Map)
@@ -35,6 +36,7 @@ import Haskoin.Wallet.RawTx (insertRawTx)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo (repsertSummary, storeSummary, storeTime)
 import Haskoin.Wallet.Util (Page (Page))
+import Data.Word (Word32, Word8)
 import Numeric.Natural (Natural)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), MarshalJsonBox (..), testIdentity)
 import Data.Default (def)
@@ -53,6 +55,8 @@ spec = prepareContext $ \ctx -> do
   rowSpec ctx
   holdersSpec ctx
   jsonSpec ctx
+  leftSpec ctx
+  chosenSpec ctx
   -- A coin and its lock read back as they were written
   testIdentity
     def
@@ -862,3 +866,92 @@ jsonSpec _ =
             }|]
       eitherDecode (cs json) `shouldBe` Right (marshalValue bch coin)
       unmarshalJSON bch (cs json) `shouldBe` Just coin
+
+{- The coins a transaction leaves -}
+
+-- | A confirmed coin of the test wallet: an output of a fake transaction, at
+-- the external address of the same index
+unspentAt :: Ctx -> Word8 -> Word32 -> Natural -> Store.Unspent
+unspentAt ctx w i = storeCoin ctx (fakeTxHash w, i) (Just 800000) (externalAddr (fromIntegral i))
+
+leftSpec :: Ctx -> Spec
+leftSpec ctx =
+  describe "The coins a transaction leaves in the account" $ do
+    it "are none when it leaves none" $
+      leftCoins [] [] [] `shouldBe` []
+
+    -- The dust coins left, the coins the builder may not spend, and a coin
+    -- not chosen with coin control
+    it "are listed by reason, the largest coins first" $
+      leftCoins
+        [unspentAt ctx 2 0 900, unspentAt ctx 2 1 1200]
+        [(unspentAt ctx 3 0 5000, Nothing), (unspentAt ctx 3 1 20000, Just LockedByTransaction), (unspentAt ctx 3 2 30000, Just LockedByUser)]
+        [unspentAt ctx 4 0 40000]
+        `shouldBe` [ LeftCoin (OutPoint (fakeTxHash 2) 1) 1200 WorthLessThanFee,
+                     LeftCoin (OutPoint (fakeTxHash 2) 0) 900 WorthLessThanFee,
+                     LeftCoin (OutPoint (fakeTxHash 3) 2) 30000 (Locked LockedByUser),
+                     LeftCoin (OutPoint (fakeTxHash 3) 1) 20000 (Locked LockedByTransaction),
+                     LeftCoin (OutPoint (fakeTxHash 3) 0) 5000 NotSpendableYet,
+                     LeftCoin (OutPoint (fakeTxHash 4) 0) 40000 NotGiven
+                   ]
+
+    it "tell the user why each stays" $
+      (leftReasonText <$> [WorthLessThanFee, Locked LockedByUser, Locked LockedByTransaction, NotSpendableYet, NotGiven])
+        `shouldBe` ["worth less than its fee", "you locked it", "a pending transaction spends it", "not spendable yet", "not chosen with --coin or --spendfrom"]
+
+    it "are written in JSON with their outpoint, their value and why they stay" $
+      Json.toJSON (LeftCoin (OutPoint (fakeTxHash 2) 0) 900 WorthLessThanFee)
+        `shouldBe` Json.object
+          [ "outpoint" .= Json.object ["txid" .= ("0000000000000000000000000000000000000000000000000000000000000002" :: Text), "index" .= (0 :: Int)],
+            "value" .= (900 :: Int),
+            "reason" .= ("dust" :: Text)
+          ]
+
+    it "name each reason in JSON" $
+      (Json.toJSON <$> [WorthLessThanFee, Locked LockedByUser, Locked LockedByTransaction, NotSpendableYet, NotGiven])
+        `shouldBe` (Json.String <$> ["dust", "lockedbyuser", "lockedbytransaction", "notspendableyet", "notgiven"])
+
+    it "read each reason back from its JSON name" $
+      (Json.fromJSON . Json.String <$> ["dust", "lockedbyuser", "lockedbytransaction", "notspendableyet", "notgiven"])
+        `shouldBe` (Json.Success <$> [WorthLessThanFee, Locked LockedByUser, Locked LockedByTransaction, NotSpendableYet, NotGiven])
+
+    it "refuse a reason they do not know" $
+      (Json.fromJSON (Json.String "lost") :: Json.Result LeftReason)
+        `shouldBe` Json.Error "Unknown reason a coin stays in the account: lost"
+
+{- Coin control -}
+
+-- The builder may spend 50000 at /0/0 and 30000 at /0/1. It may not spend
+-- 20000 at /0/0, which the user locked, nor 5000 at /0/1, not confirmed
+-- enough.
+chosenSpec :: Ctx -> Spec
+chosenSpec ctx =
+  describe "The coins that coin control chooses" $ do
+    it "are the coins given by outpoint" $
+      choose [OutPoint (fakeTxHash 1) 0] [] `shouldBe` Right ([fifty], [])
+
+    it "are every coin at an address given, those the builder may not spend with their locks" $
+      choose [] [externalAddr 0] `shouldBe` Right ([fifty], [(twentyLocked, Just LockedByUser)])
+
+    it "are the coins of the outpoints and of the addresses together" $
+      choose [OutPoint (fakeTxHash 1) 1] [externalAddr 0] `shouldBe` Right ([fifty, thirty], [(twentyLocked, Just LockedByUser)])
+
+    it "keep a coin given by outpoint that the builder may not spend, with why" $
+      choose [OutPoint (fakeTxHash 1) 0, OutPoint (fakeTxHash 2) 1] [] `shouldBe` Right ([fifty], [(fiveUnconfirmed, Nothing)])
+
+    it "are refused an outpoint the account does not hold" $
+      choose [OutPoint (fakeTxHash 9) 0] []
+        `shouldBe` Left "The account has no coin 0000000000000000000000000000000000000000000000000000000000000009:0"
+
+    it "are refused when none can be spent, with why" $
+      choose [OutPoint (fakeTxHash 2) 0, OutPoint (fakeTxHash 2) 1] []
+        `shouldBe` Left "None of the coins chosen can be spent now: 0000000000000000000000000000000000000000000000000000000000000002:0, you locked it; 0000000000000000000000000000000000000000000000000000000000000002:1, not spendable yet"
+
+    it "are refused when the addresses given hold no coins" $
+      choose [] [externalAddr 5] `shouldBe` Left "The addresses chosen with --spendfrom hold no coins"
+  where
+    fifty = unspentAt ctx 1 0 50000
+    thirty = unspentAt ctx 1 1 30000
+    twentyLocked = unspentAt ctx 2 0 20000
+    fiveUnconfirmed = unspentAt ctx 2 1 5000
+    choose outpoints addrs = chosenCoins outpoints addrs [fifty, thirty] [(twentyLocked, Just LockedByUser), (fiveUnconfirmed, Nothing)]

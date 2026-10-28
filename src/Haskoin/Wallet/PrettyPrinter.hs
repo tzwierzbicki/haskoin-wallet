@@ -32,7 +32,6 @@ import Haskoin.Wallet.Parser (Command (..), PrepareSendAll (..), PrepareSweep (.
 import Haskoin.Wallet.Response
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.TxInfo
-import Haskoin.Wallet.TxSendAll (LeftCoin (..), LeftReason (..))
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import System.Console.ANSI
@@ -523,8 +522,9 @@ feePrinter unit fee feeBytes =
       <+> text "sat/bytes"
     <> text ")"
 
--- | The coins a send-all leaves in the account, one a line, each with why:
--- the coin as --coin and lockcoin take it, and its value
+-- | The coins a transaction just prepared leaves in the account, one a
+-- line, each with why: the coin as --coin and lockcoin take it, and its
+-- value
 leftCoinsPrinter :: AmountUnit -> [LeftCoin] -> Printer
 leftCoinsPrinter unit left =
   vcat $ formatTitle "Staying in the account:" : (nest 2 . leftCoinPrinter <$> left)
@@ -533,13 +533,7 @@ leftCoinsPrinter unit left =
       formatTxHash (coinText coin.leftCoinOutpoint)
         <+> amountPrinter unit coin.leftCoinValue
         <> text ","
-          <+> text (reasonText coin.leftCoinReason)
-    reasonText = \case
-      WorthLessThanFee -> "worth less than its fee"
-      Locked LockedByUser -> "you locked it"
-      Locked LockedByTransaction -> "a pending transaction spends it"
-      NotSpendableYet -> "not spendable yet"
-      NotGiven -> "not given with --coin"
+          <+> text (leftReasonText coin.leftCoinReason)
 
 coinPrinter :: Network -> AmountUnit -> JsonCoin -> Printer
 coinPrinter net unit JsonCoin {..} =
@@ -611,7 +605,7 @@ prettyPrinter unit =
       let net = accountNetwork acc
       renderIO $ txAnswerPrinter net unit txInfo
     -- The coins left in the account below the transaction, apart from it
-    ResponseSendAll acc txInfo left -> do
+    ResponsePrepared acc txInfo left -> do
       let net = accountNetwork acc
       renderIO $ txAnswerPrinter net unit txInfo
       unless (null left) $ putStrLn "" >> renderIO (leftCoinsPrinter unit left)
@@ -674,9 +668,9 @@ printNextSteps cmd res = do
 nextStepsPrinter :: Command -> Response -> Printer
 nextStepsPrinter cmd res =
   case (cmd, res) of
-    (CommandPrepareTx opts, ResponseTx _ info)
+    (CommandPrepareTx opts, ResponsePrepared _ info _)
       | Just nosig <- nosigOf info -> afterPreparing opts.output nosig
-    (CommandPrepareSendAll opts, ResponseSendAll _ info _)
+    (CommandPrepareSendAll opts, ResponsePrepared _ info _)
       | Just nosig <- nosigOf info -> afterPreparing opts.output nosig
     -- The keys of a file at hand for the sweep are the ones to sign it with
     (CommandPrepareSweep opts, ResponseTx _ info)

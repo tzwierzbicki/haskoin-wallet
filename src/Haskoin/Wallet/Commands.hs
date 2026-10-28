@@ -95,7 +95,7 @@ import Haskoin.Wallet.Prompt
 import Haskoin.Wallet.Response
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
-import Haskoin.Wallet.TxBuilding (buildTxSignData, controlledCoins)
+import Haskoin.Wallet.TxBuilding (buildTxSignData)
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSigning (parseOutsideTxSignData, signWalletTx)
@@ -107,7 +107,6 @@ import Haskoin.Wallet.TxSendAll
     dustReport,
     dustReportLines,
     isDustCoin,
-    leftCoins,
     sendAllAmounts,
   )
 import Haskoin.Wallet.TxSize (checkFeeRateAndDust, highFeeRate)
@@ -456,58 +455,92 @@ confirmFeeRate yes feeByte dust = do
           <> ", the most hw takes without asking. Prepare the transaction anyway?"
     unless accepted $ throwError "The transaction was not prepared: give a lower --feerate"
 
--- | Prepare a payment from the account, unsigned
+-- | Keep a transaction of the account just prepared, as 'keepPrepared'
+-- does, and answer with the coins it leaves in the account, and why
+preparedAnswer :: Ctx -> DBAccountId -> DBAccount -> Maybe FilePath -> TxSignData -> [LeftCoin] -> ExceptT String (DB IO) Response
+preparedAnswer ctx accId acc output tsd left = do
+  info <- storePrepared ctx accId acc output tsd
+  -- The account as the transaction leaves it
+  held <- getAccountById accId
+  return $ ResponsePrepared held info left
+
+-- | The account a transaction is prepared from, with the addresses that
+-- coin control chose, read on its network. The coins of --coin and the
+-- addresses of --spendfrom name their account; otherwise it is the account
+-- of --account, or the only one. Each --spendfrom address must be one of
+-- the account: the address counts, not its text, so a Bitcoin Cash address
+-- is found without its prefix, or in its legacy form.
+controlledAccount :: Maybe Text -> [OutPoint] -> [Text] -> ExceptT String (DB IO) (DBAccountId, DBAccount, [Address])
+controlledAccount account outpoints spendFrom = do
+  byCoin <- coinAccounts outpoints
+  byAddress <- accountsHolding (\net -> mapMaybe (textToAddr net) spendFrom)
+  (accId, acc) <- accountAmong (\name -> "The coins or addresses given are not in the account " <> cs name) account (nub (byCoin <> byAddress))
+  let net = accountNetwork acc
+  addrs <- forM spendFrom $ \typed -> do
+    addr <- liftEither $ textToAddrE net typed
+    path <- addressPath net accId addr
+    when (isNothing path) $
+      throwError $ "The address " <> cs typed <> " is not in the account " <> cs (dBAccountName acc)
+    return addr
+  return (accId, acc, addrs)
+
+-- | Prepare a payment from the account, unsigned. Coin control spends the
+-- coins of --coin and those at the addresses of --spendfrom, all of those
+-- that can be spent, and only them; the answer lists the coins it chose and
+-- cannot spend, and why.
 cmdPrepareTx :: Ctx -> Config -> AmountUnit -> PrepareTx -> IO Response
 cmdPrepareTx ctx cfg unit opts =
   runDBResponse cfg $ do
-    -- The coins given with --coin name their account
-    holders <- coinAccounts opts.coins
-    (accId, acc) <- accountAmong (\name -> "The coins given are not in the account " <> cs name) opts.account holders
+    (accId, acc, spendFrom) <- controlledAccount opts.account opts.coins opts.spendFrom
     let net = accountNetwork acc
     -- Before the transaction is built, not after
     for_ opts.output checkPathFree
     recipients <- liftEither $ mapM (readPayment net unit) opts.recipients
     confirmFeeRate opts.yes opts.feeByte opts.dust
+    (control, left) <-
+      if null opts.coins && null spendFrom
+        then return ([], [])
+        else do
+          spendable <- spendableCoins net ctx accId opts.minConf
+          unspendable <- unspendableCoins net ctx accId opts.minConf
+          (chosen, held) <- liftEither $ chosenCoins opts.coins spendFrom spendable unspendable
+          return ((.outpoint) <$> chosen, leftCoins [] held [])
     gen <- liftIO initStdGen
-    tsd <- buildTxSignData net ctx cfg gen opts.strategy accId recipients opts.feeByte opts.dust opts.feePayer opts.minConf opts.coins
-    keepPrepared ctx accId acc opts.output tsd
+    tsd <- buildTxSignData net ctx cfg gen opts.strategy accId recipients opts.feeByte opts.dust opts.feePayer opts.minConf control
+    preparedAnswer ctx accId acc opts.output tsd left
 
 -- | Prepare a transaction sending the coins of the account to the
 -- recipients, unsigned, with no change: all the coins it can spend now, or
--- those given with --coin. Without --coin, the coins worth less than their
--- fee are spent or left as the user answers, or as --spenddust or
--- --leavedust says. The answer lists every coin left in the account, and
--- why. See "Haskoin.Wallet.TxSendAll".
+-- those that coin control chose, as for preparetx. Without coin control,
+-- the coins worth less than their fee are spent or left as the user
+-- answers, or as --spenddust or --leavedust says. The answer lists every
+-- coin left in the account, and why. See "Haskoin.Wallet.TxSendAll".
 cmdPrepareSendAll :: Ctx -> Config -> AmountUnit -> PrepareSendAll -> IO Response
 cmdPrepareSendAll ctx cfg unit opts =
   runDBResponse cfg $ do
-    -- The coins given with --coin name their account
-    holders <- coinAccounts opts.coins
-    (accId, acc) <- accountAmong (\name -> "The coins given are not in the account " <> cs name) opts.account holders
+    (accId, acc, spendFrom) <- controlledAccount opts.account opts.coins opts.spendFrom
     let net = accountNetwork acc
+        controlled = not (null opts.coins && null spendFrom)
     -- Before the transaction is built, not after
     for_ opts.output checkPathFree
     recipients <- liftEither $ mapM (readRecipient net unit) opts.recipients
     liftEither $ checkSharing recipients
-    unless (null opts.coins || isNothing opts.dustCoins) $
-      throwError "The coins given with --coin are all sent: give --spenddust or --leavedust without --coin"
+    when (controlled && isJust opts.dustCoins) $
+      throwError "The coins chosen with --coin or --spendfrom are all sent: give --spenddust or --leavedust without them"
     confirmFeeRate opts.yes opts.feeByte opts.dust
     spendable <- spendableCoins net ctx accId opts.minConf
     unspendable <- unspendableCoins net ctx accId opts.minConf
     (sent, left) <-
-      if null opts.coins
+      if controlled
         then do
+          (sent, _) <- liftEither $ chosenCoins opts.coins spendFrom spendable unspendable
+          return (sent, leftCoins [] unspendable (notSent sent spendable))
+        else do
           sent <- coinsWithDust recipients (not (null unspendable)) spendable
           return (sent, leftCoins (notSent sent spendable) unspendable [])
-        else do
-          sent <- liftEither $ controlledCoins spendable opts.coins
-          return (sent, leftCoins [] unspendable (notSent sent spendable))
     gen <- liftIO initStdGen
     tsd <- buildSendAllSignData net ctx gen accId sent recipients opts.feeByte opts.dust
-    info <- storePrepared ctx accId acc opts.output tsd
-    -- The account as the transaction leaves it
-    held <- getAccountById accId
-    return $ ResponseSendAll held info left
+    preparedAnswer ctx accId acc opts.output tsd left
   where
     -- The spendable coins the transaction does not send
     notSent sent = filter (`notElem` sent)

@@ -1,4 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -14,7 +13,8 @@
 -- is a dust coin: spending it lowers what the recipients get. Whether a coin
 -- is dust depends on the rate. preparesendall asks the user whether to spend
 -- the dust coins too, after telling what each choice costs ('dustReport').
--- Its answer lists every coin left in the account, and why ('leftCoins').
+-- Its answer lists every coin left in the account, and why
+-- ("Haskoin.Wallet.Coin".'leftCoins').
 module Haskoin.Wallet.TxSendAll
   ( isDustCoin,
     sendAllFee,
@@ -26,9 +26,6 @@ module Haskoin.Wallet.TxSendAll
     dustReport,
     dustReportLines,
     dustQuestion,
-    LeftReason (..),
-    LeftCoin (..),
-    leftCoins,
   )
 where
 
@@ -36,18 +33,15 @@ import Conduit (MonadUnliftIO)
 import Control.Monad (when)
 import Control.Monad.Except
 import Control.Monad.State (evalState)
-import Data.Aeson (FromJSON (..), ToJSON (..), Value (String), object, withObject, withText, (.:), (.=))
 import Data.List (nub, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
 import Data.Ord (Down (..))
-import qualified Data.Text as Text
-import Data.Word (Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Address (walletPaths)
-import Haskoin.Wallet.Coin (CoinLock (..), coinText)
+import Haskoin.Wallet.Coin (coinText)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.RawTx (getRawTx)
 import Haskoin.Wallet.Recipient (Share (..), shareAmounts)
@@ -243,74 +237,3 @@ dustQuestion :: DustReport -> String
 dustQuestion report
   | length report.dustCoins == 1 = "Spend it too?"
   | otherwise = "Spend them too?"
-
-{- What stays in the account -}
-
--- | Why a send-all leaves a coin of the account
-data LeftReason
-  = -- | Worth less than the fee to spend it, and left as the user chose
-    WorthLessThanFee
-  | -- | Locked, by the user or by a pending transaction
-    Locked !CoinLock
-  | -- | Not confirmed enough yet, or a coinbase not yet mature
-    NotSpendableYet
-  | -- | Spendable, but not among the coins given with --coin
-    NotGiven
-  deriving (Eq, Show)
-
-instance ToJSON LeftReason where
-  toJSON = String . Text.pack . reasonName
-
-instance FromJSON LeftReason where
-  parseJSON = withText "LeftReason" $ \name ->
-    case filter ((== Text.unpack name) . reasonName) leftReasons of
-      [reason] -> return reason
-      _ -> fail $ "Unknown reason a coin stays in the account: " <> Text.unpack name
-
--- | Every reason, in the order the answer lists the coins in
-leftReasons :: [LeftReason]
-leftReasons = [WorthLessThanFee, Locked LockedByUser, Locked LockedByTransaction, NotSpendableYet, NotGiven]
-
--- | The name of a reason in JSON
-reasonName :: LeftReason -> String
-reasonName = \case
-  WorthLessThanFee -> "dust"
-  Locked LockedByUser -> "lockedbyuser"
-  Locked LockedByTransaction -> "lockedbytransaction"
-  NotSpendableYet -> "notspendableyet"
-  NotGiven -> "notgiven"
-
--- | A coin of the account a send-all leaves in it, and why
-data LeftCoin = LeftCoin
-  { leftCoinOutpoint :: !OutPoint,
-    leftCoinValue :: !Word64,
-    leftCoinReason :: !LeftReason
-  }
-  deriving (Eq, Show)
-
-instance ToJSON LeftCoin where
-  toJSON coin =
-    object
-      [ "outpoint" .= leftCoinOutpoint coin,
-        "value" .= leftCoinValue coin,
-        "reason" .= leftCoinReason coin
-      ]
-
-instance FromJSON LeftCoin where
-  parseJSON = withObject "LeftCoin" $ \o ->
-    LeftCoin <$> o .: "outpoint" <*> o .: "value" <*> o .: "reason"
-
--- | The coins of the account a send-all leaves, by reason in the order of
--- 'leftReasons', the largest first: the dust coins left, the coins the
--- builder may not spend with their locks, and the spendable coins not
--- given with --coin
-leftCoins :: [Store.Unspent] -> [(Store.Unspent, Maybe CoinLock)] -> [Store.Unspent] -> [LeftCoin]
-leftCoins dustLeft unspendable notGiven =
-  concat [sortOn (Down . leftCoinValue) [left | left <- everyLeft, leftCoinReason left == reason] | reason <- leftReasons]
-  where
-    everyLeft =
-      [leftOf WorthLessThanFee coin | coin <- dustLeft]
-        <> [leftOf (maybe NotSpendableYet Locked lock) coin | (coin, lock) <- unspendable]
-        <> [leftOf NotGiven coin | coin <- notGiven]
-    leftOf :: LeftReason -> Store.Unspent -> LeftCoin
-    leftOf reason coin = LeftCoin coin.outpoint coin.value reason
