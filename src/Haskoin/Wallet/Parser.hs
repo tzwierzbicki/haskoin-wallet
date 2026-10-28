@@ -122,8 +122,8 @@ data Receive = Receive
 
 -- | The options of preparetx
 data PrepareTx = PrepareTx
-  { -- | The addresses paid, each with its amount as typed
-    recipients :: ![(Text, Text)],
+  { -- | The addresses paid, each with its amount, as typed: ADDRESS:AMOUNT
+    recipients :: ![Text],
     account :: !(Maybe Text),
     -- | The fee rate, in satoshis per byte
     feeByte :: !Natural,
@@ -778,7 +778,7 @@ prepareTxParser :: ParserInfo Command
 prepareTxParser = do
   let options =
         PrepareTx
-          <$> some recipientArg
+          <$> some paymentArg
           <*> accountOption
           <*> feeOption
           <*> dustOption
@@ -809,28 +809,20 @@ typo than a choice, so `preparetx` asks before it takes one. --yes takes it
 without asking, for a script.
 |]
 
-recipientArg :: Parser (Text, Text)
-recipientArg = (,) <$> addressArg <*> amountArg
-
-addressArg :: Parser Text
-addressArg =
+-- | A recipient of preparetx, ADDRESS:AMOUNT
+paymentArg :: Parser Text
+paymentArg =
   strArgument $
-    metavar "ADDRESS"
+    metavar "ADDRESS:AMOUNT"
       <> help
         [r|
-Recipient address. You can provide multiple "ADDRESS AMOUNT" pairs. 
-|]
-
-amountArg :: Parser Text
-amountArg =
-  strArgument $
-    metavar "AMOUNT"
-      <> help
-        [r|
-Recipient amount, in bitcoins unless it ends with a unit (btc, bit, bits, sat or
-sats) or the --unit option says otherwise. For example, 0.00001, 0.00001btc,
-10bits and 1000sat are the same amount. Bitcoins have up to 8 decimals, bits up
-to 2, and satoshis are whole. Separators such as 1'000 are refused.
+A recipient and the amount it gets after a colon, one for each recipient. The
+amount is in bitcoins unless it ends with a unit (btc, bit, bits, sat or sats)
+or the --unit option says otherwise: ADDRESS:0.00001, ADDRESS:0.00001btc,
+ADDRESS:10bits and ADDRESS:1000sat pay the same amount. Bitcoins have up to 8
+decimals, bits up to 2, and satoshis are whole. Separators such as 1'000 are
+refused. A Bitcoin Cash address can keep its prefix, as in
+bitcoincash:qp...:0.001.
 |]
 
 {- PrepareSendAll Parser -}
@@ -886,7 +878,8 @@ sendAllRecipientArg =
       <> help
         [r|
 An address that shares what remains, or an address and the amount it gets,
-ADDRESS:AMOUNT. Give at least one address without an amount.
+ADDRESS:AMOUNT, the amount written as for `preparetx`. Give at least one
+address without an amount.
 |]
 
 -- | What to do with the coins worth less than their fee, without asking

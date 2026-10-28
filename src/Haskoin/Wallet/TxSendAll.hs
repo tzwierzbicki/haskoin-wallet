@@ -16,9 +16,7 @@
 -- the dust coins too, after telling what each choice costs ('dustReport').
 -- Its answer lists every coin left in the account, and why ('leftCoins').
 module Haskoin.Wallet.TxSendAll
-  ( Share (..),
-    readRecipient,
-    checkSharing,
+  ( checkSharing,
     isDustCoin,
     sendAllFee,
     sendAllAmounts,
@@ -45,54 +43,26 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
 import Data.Ord (Down (..))
-import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Word (Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Address (walletPaths)
-import Haskoin.Wallet.Amounts (AmountUnit, readAmount)
 import Haskoin.Wallet.Coin (CoinLock (..), coinText)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.RawTx (getRawTx)
+import Haskoin.Wallet.Recipient (Share (..))
 import Haskoin.Wallet.TxBuilding (BuiltTx (..), coinWithPath, recipientOutputSize)
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSize (checkFeeRateAndDust, p2pkhInput, p2pkhInputSize, p2pkhOutputSize, txSize)
-import Haskoin.Wallet.Util (addrToTextE, randomShuffle, textToAddrE)
+import Haskoin.Wallet.Util (addrToTextE, randomShuffle)
 import Numeric.Natural (Natural)
 import System.Random (StdGen)
 
 {- Recipients -}
 
--- | What a recipient of a send-all gets
-data Share
-  = -- | The amount the user fixed, in satoshis
-    Fixed !Natural
-  | -- | A part of what remains once the fixed amounts and the fee are paid
-    Remainder
-  deriving (Eq, Show)
-
--- | A recipient as typed: an address, which shares what remains, or an
--- address and its amount after a colon, ADDRESS:AMOUNT. The amount is in
--- the unit given, unless it names one. The whole text is read as an address
--- first, since a Bitcoin Cash address may begin with its prefix and a
--- colon, as bitcoincash:qp…; otherwise the amount is what follows the last
--- colon.
-readRecipient :: Network -> AmountUnit -> Text -> Either String (Address, Share)
-readRecipient net unit typed =
-  case textToAddrE net typed of
-    Right addr -> Right (addr, Remainder)
-    Left notAnAddress
-      | Text.null beforeColon -> Left notAnAddress
-      | otherwise -> do
-          addr <- textToAddrE net (Text.dropEnd 1 beforeColon)
-          satoshis <- readAmount unit amount
-          return (addr, Fixed (fromIntegral satoshis))
-  where
-    -- The text up to and with the last colon, and what follows it
-    (beforeColon, amount) = Text.breakOnEnd (Text.pack ":") typed
-
--- | Refuse recipients that leave no one to receive what remains
+-- | Refuse recipients that leave no one to receive what remains. The
+-- recipients as typed are read by "Haskoin.Wallet.Recipient".
 checkSharing :: [(Address, Share)] -> Either String ()
 checkSharing recipients =
   unless (Remainder `elem` (snd <$> recipients)) $

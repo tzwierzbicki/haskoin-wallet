@@ -2,10 +2,11 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | The parts of preparesendall that read no database: the recipients as
--- typed, the dust coins, the amounts each recipient gets, the transaction,
--- the report on the dust coins and the coins it leaves in the account. The
--- command as the user runs it is in "Haskoin.Wallet.WorkflowSpec".
+-- | The parts of preparesendall that read no database: the recipients that
+-- share what remains, the dust coins, the amounts each recipient gets, the
+-- transaction, the report on the dust coins and the coins it leaves in the
+-- account. The recipients as typed are in "Haskoin.Wallet.RecipientSpec",
+-- and the command as the user runs it in "Haskoin.Wallet.WorkflowSpec".
 module Haskoin.Wallet.TxSendAllSpec where
 
 import Data.Aeson ((.=))
@@ -16,8 +17,8 @@ import Data.Text (Text)
 import Data.Word (Word32, Word64, Word8)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Amounts (AmountUnit (..))
 import Haskoin.Wallet.Coin (CoinLock (..))
+import Haskoin.Wallet.Recipient (Share (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxBuilding (BuiltTx (..))
 import Haskoin.Wallet.TxSendAll
@@ -88,38 +89,11 @@ oneDustReport ctx value = dustReport ctx 10 546 [(otherAddr 0, Remainder)] (twoC
 
 {- Recipients -}
 
+-- The recipients as typed are read by "Haskoin.Wallet.Recipient"
 recipientSpec :: Spec
 recipientSpec =
-  describe "A recipient of preparesendall as typed" $ do
-    it "is an address alone, which shares what remains" $
-      readRecipient btc UnitBitcoin "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU" `shouldBe` Right (otherAddr 0, Remainder)
-
-    it "is an address and the amount it gets after a colon, in the unit given" $
-      readRecipient btc UnitBitcoin "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:0.0003" `shouldBe` Right (otherAddr 0, Fixed 30000)
-
-    it "takes the unit typed after the amount" $
-      readRecipient btc UnitBitcoin "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:30000sat" `shouldBe` Right (otherAddr 0, Fixed 30000)
-
-    -- The example address of the CashAddr specification
-    it "is a Bitcoin Cash address with its prefix and its colon" $
-      readRecipient bch UnitBitcoin "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"
-        `shouldBe` Right (testAddress "1BpEi6DfDAUFd7GtittLSdBeYJvcoaVggu", Remainder)
-
-    it "is a Bitcoin Cash address with its prefix, and its amount after the last colon" $
-      readRecipient bch UnitBitcoin "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a:0.001"
-        `shouldBe` Right (testAddress "1BpEi6DfDAUFd7GtittLSdBeYJvcoaVggu", Fixed 100000)
-
-    it "is refused when it is not an address" $
-      readRecipient btc UnitBitcoin "nonsense" `shouldBe` Left "The address nonsense is not valid on btc"
-
-    it "is refused when what comes before its colon is not an address" $
-      readRecipient btc UnitBitcoin "nonsense:0.001" `shouldBe` Left "The address nonsense is not valid on btc"
-
-    it "is refused an amount that is not a number" $
-      readRecipient btc UnitBitcoin "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:1,5"
-        `shouldBe` Left "The amount 1,5 is not a number: write digits, with a point before the decimals"
-
-    it "leaves no one to receive what remains when every address has an amount" $
+  describe "The recipients of a send-all" $ do
+    it "leave no one to receive what remains when every address has an amount" $
       checkSharing [(otherAddr 0, Fixed 30000), (otherAddr 1, Fixed 20000)]
         `shouldBe` Left "Give at least one address without an amount, to receive what remains once the fixed amounts and the fee are paid"
 

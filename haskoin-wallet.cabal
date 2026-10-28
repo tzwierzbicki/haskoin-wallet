@@ -67,6 +67,7 @@ library
       Haskoin.Wallet.PrettyPrinter
       Haskoin.Wallet.Prompt
       Haskoin.Wallet.RawTx
+      Haskoin.Wallet.Recipient
       Haskoin.Wallet.Response
       Haskoin.Wallet.Schema.KeyBytes
       Haskoin.Wallet.Schema.V2
@@ -217,6 +218,7 @@ test-suite spec
       Haskoin.Wallet.MigrationSpec
       Haskoin.Wallet.PendingTxSpec
       Haskoin.Wallet.PromptSpec
+      Haskoin.Wallet.RecipientSpec
       Haskoin.Wallet.ResponseSpec
       Haskoin.Wallet.Schema.V1
       Haskoin.Wallet.StoreSpec

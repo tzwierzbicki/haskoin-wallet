@@ -78,7 +78,7 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Account
 import Haskoin.Wallet.Address
-import Haskoin.Wallet.Amounts (AmountUnit, readAmount)
+import Haskoin.Wallet.Amounts (AmountUnit)
 import Haskoin.Wallet.Backup (backupDatabase, backupDirectory, copyDatabase)
 import Haskoin.Wallet.Coin
 import Haskoin.Wallet.Config
@@ -99,9 +99,9 @@ import Haskoin.Wallet.TxBuilding (buildTxSignData, controlledCoins)
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSigning (parseOutsideTxSignData, signWalletTx)
+import Haskoin.Wallet.Recipient (Share, readPayment, readRecipient)
 import Haskoin.Wallet.TxSendAll
   ( DustReport,
-    Share,
     buildSendAllSignData,
     checkSharing,
     dustQuestion,
@@ -109,7 +109,6 @@ import Haskoin.Wallet.TxSendAll
     dustReportLines,
     isDustCoin,
     leftCoins,
-    readRecipient,
     sendAllAmounts,
   )
 import Haskoin.Wallet.TxSize (checkFeeRateAndDust, highFeeRate)
@@ -468,16 +467,11 @@ cmdPrepareTx ctx cfg unit opts =
     let net = accountNetwork acc
     -- Before the transaction is built, not after
     for_ opts.output checkPathFree
-    recipients <- liftEither $ mapM (recipient net) opts.recipients
+    recipients <- liftEither $ mapM (readPayment net unit) opts.recipients
     confirmFeeRate opts.yes opts.feeByte opts.dust
     gen <- liftIO initStdGen
     tsd <- buildTxSignData net ctx cfg gen opts.strategy accId recipients opts.feeByte opts.dust opts.feePayer opts.minConf opts.coins
     keepPrepared ctx accId acc opts.output tsd
-  where
-    recipient net (addr, amount) = do
-      paid <- textToAddrE net addr
-      satoshis <- readAmount unit amount
-      return (paid, fromIntegral satoshis)
 
 -- | Prepare a transaction sending the coins of the account to the
 -- recipients, unsigned, with no change: all the coins it can spend now, or
