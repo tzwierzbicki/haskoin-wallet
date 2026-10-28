@@ -289,17 +289,29 @@ getAddressByText addrTxt = do
 -- are written: see 'addressesAmong'. An address the wallet does not have
 -- has none.
 addressAccounts :: (MonadUnliftIO m) => [Text] -> ExceptT String (DB m) [(DBAccountId, DBAccount)]
-addressAccounts addrs = lift $ filterM (fmap (not . null) . addressesAmong addrs) =<< getAccounts
+addressAccounts addrs = accountsHolding (\net -> mapMaybe (textToAddr net) addrs)
+
+-- | The accounts that have some of the addresses each account reads on its
+-- network, each once: the addresses of a text that reads differently on
+-- each network, such as a recipient with its amount
+accountsHolding :: (MonadUnliftIO m) => (Network -> [Address]) -> ExceptT String (DB m) [(DBAccountId, DBAccount)]
+accountsHolding readOn = lift $ filterM holds =<< getAccounts
+  where
+    holds held@(_, acc) = not . null <$> storedAmong (readOn (accountNetwork acc)) held
 
 -- | The addresses of the account among the given ones. The account reads
 -- them on its network, and compares the addresses themselves, not their
 -- text: a Bitcoin Cash address is found written without its prefix, or in
 -- the legacy form of Bitcoin, as well as in the form hw stores.
 addressesAmong :: (MonadUnliftIO m) => [Text] -> (DBAccountId, DBAccount) -> DB m [DBAddress]
-addressesAmong addrs (accId, acc) = do
+addressesAmong addrs held@(_, acc) = storedAmong (mapMaybe (textToAddr (accountNetwork acc)) addrs) held
+
+-- | The addresses of the account among the given addresses of its network
+storedAmong :: (MonadUnliftIO m) => [Address] -> (DBAccountId, DBAccount) -> DB m [DBAddress]
+storedAmong addrs (accId, acc) = do
   let net = accountNetwork acc
-      -- The text hw stores for each address the network reads
-      stored = mapMaybe (addrToText net <=< textToAddr net) addrs
+      -- The text hw stores for each address
+      stored = mapMaybe (addrToText net) addrs
   rows <- select . from $ \a -> do
     where_ $
       a ^. DBAddressAccount ==. val accId

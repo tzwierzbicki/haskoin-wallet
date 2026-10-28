@@ -1260,6 +1260,34 @@ sweepSpec ctx =
         run `shouldSatisfy` printed "The address nonsense is not valid on btc"
         runErr run `shouldNotSatisfy` Text.isInfixOf "Private keys"
 
+    -- One input and two outputs make 226 bytes, a fee of 2260: 30000 - 10000
+    -- - 2260 = 17740 for the address without an amount
+    it "pays a --sweepto address its fixed amount, and what remains to the address without one" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        keys <- writeKeyFile home
+        prepared <- txOf =<< answer home ["preparesweep", "--prvkeys", keys, "--sweepto", fixedTo (otherAddr 0) "0.0001", "--sweepto", textOf (externalAddr 0)] []
+        paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 10000)]
+        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 17740)]
+
+    it "is of the account of a --sweepto address that has an amount" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        keys <- writeKeyFile home
+        prepared <- answer home ["preparesweep", "--prvkeys", keys, "--sweepto", fixedTo (externalAddr 0) "0.0001", "--sweepto", textOf (otherAddr 0)] []
+        (dBAccountName <$> accountOf prepared) `shouldBe` Right "main"
+        paidToWallet <$> txOf prepared `shouldReturn` Map.fromList [(externalAddr 0, 10000)]
+
+    -- The keys would be typed for nothing
+    it "is refused --sweepto addresses that all have an amount, before the keys are typed" $
+      withHome $ \home -> do
+        createMain home
+        run <- hw home ["preparesweep", "--prvkeys", "-", "--sweepto", fixedTo (otherAddr 0) "0.0001", "--network", "btc", "--output", home </> "sweep.json"] []
+        run `shouldSatisfy` printed "Give at least one address without an amount, to receive what remains once the fixed amounts and the fee are paid"
+        runErr run `shouldNotSatisfy` Text.isInfixOf "Private keys"
+
     -- A rate of 2^64 wrapped around to zero, and others to any fee
     it "is refused a fee rate past 32 bits, rather than wrapping around" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do

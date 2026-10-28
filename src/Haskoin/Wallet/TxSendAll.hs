@@ -16,8 +16,7 @@
 -- the dust coins too, after telling what each choice costs ('dustReport').
 -- Its answer lists every coin left in the account, and why ('leftCoins').
 module Haskoin.Wallet.TxSendAll
-  ( checkSharing,
-    isDustCoin,
+  ( isDustCoin,
     sendAllFee,
     sendAllAmounts,
     SendAllCoins (..),
@@ -34,11 +33,11 @@ module Haskoin.Wallet.TxSendAll
 where
 
 import Conduit (MonadUnliftIO)
-import Control.Monad (unless, when)
+import Control.Monad (when)
 import Control.Monad.Except
 import Control.Monad.State (evalState)
 import Data.Aeson (FromJSON (..), ToJSON (..), Value (String), object, withObject, withText, (.:), (.=))
-import Data.List (mapAccumL, nub, sortOn)
+import Data.List (nub, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
@@ -51,22 +50,13 @@ import Haskoin.Wallet.Address (walletPaths)
 import Haskoin.Wallet.Coin (CoinLock (..), coinText)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.RawTx (getRawTx)
-import Haskoin.Wallet.Recipient (Share (..))
+import Haskoin.Wallet.Recipient (Share (..), shareAmounts)
 import Haskoin.Wallet.TxBuilding (BuiltTx (..), coinWithPath, recipientOutputSize)
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSize (checkFeeRateAndDust, p2pkhInput, p2pkhInputSize, p2pkhOutputSize, txSize)
 import Haskoin.Wallet.Util (addrToTextE, randomShuffle)
 import Numeric.Natural (Natural)
 import System.Random (StdGen)
-
-{- Recipients -}
-
--- | Refuse recipients that leave no one to receive what remains. The
--- recipients as typed are read by "Haskoin.Wallet.Recipient".
-checkSharing :: [(Address, Share)] -> Either String ()
-checkSharing recipients =
-  unless (Remainder `elem` (snd <$> recipients)) $
-    Left "Give at least one address without an amount, to receive what remains once the fixed amounts and the fee are paid"
 
 {- Dust coins -}
 
@@ -98,39 +88,11 @@ sendAllFee :: Ctx -> Natural -> [Store.Unspent] -> [Address] -> Natural
 sendAllFee ctx feeByte coins recipients =
   feeByte * fromIntegral (txSize [p2pkhInput | _ <- coins] (recipientOutputSize ctx <$> recipients))
 
--- | The amount of each recipient, in their order, when the coins pay them
--- and the fee at the rate: the fixed amounts as typed, and what remains
--- shared equally among the others, the first of them also getting what does
--- not divide. The recipients without an amount pay the fee. Nothing is
--- built when an output would be below the dust limit, or when the coins do
--- not cover the fixed amounts and the fee.
+-- | The amount of each recipient when the coins pay them and their fee at
+-- the rate: see 'shareAmounts'
 sendAllAmounts :: Ctx -> Natural -> Natural -> [Store.Unspent] -> [(Address, Share)] -> Either String [(Address, Natural)]
-sendAllAmounts ctx feeByte dust coins recipients = do
-  checkSharing recipients
-  when (any (< dust) fixedAmounts) $
-    Left $ "A fixed amount is below the dust limit of " <> show dust <> " satoshis"
-  when (total < fixedTotal + fee) $
-    Left $
-      "The coins, " <> show total <> " satoshis, do not cover the fixed amounts, "
-        <> show fixedTotal
-        <> ", and the fee, "
-        <> show fee
-  when (each < dust) $
-    Left $
-      "What remains for each address without an amount, " <> show each
-        <> " satoshis, is below the dust limit of "
-        <> show dust
-  -- What does not divide goes to the first address without an amount
-  return $ snd $ mapAccumL give extra recipients
-  where
-    total = valueOf coins
-    fee = sendAllFee ctx feeByte coins (fst <$> recipients)
-    fixedAmounts = [amount | (_, Fixed amount) <- recipients]
-    fixedTotal = sum fixedAmounts
-    sharing = length [() | (_, Remainder) <- recipients]
-    (each, extra) = (total - fixedTotal - fee) `quotRem` fromIntegral sharing
-    give left (addr, Fixed amount) = (left, (addr, amount))
-    give left (addr, Remainder) = (0, (addr, each + left))
+sendAllAmounts ctx feeByte dust coins recipients =
+  shareAmounts (valueOf coins) (sendAllFee ctx feeByte coins (fst <$> recipients)) dust recipients
 
 {- Building -}
 

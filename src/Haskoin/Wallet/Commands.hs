@@ -67,7 +67,7 @@ import Data.Foldable (for_)
 import Data.List (nub, partition)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, isJust, isNothing)
+import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -99,11 +99,10 @@ import Haskoin.Wallet.TxBuilding (buildTxSignData, controlledCoins)
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSigning (parseOutsideTxSignData, signWalletTx)
-import Haskoin.Wallet.Recipient (Share, readPayment, readRecipient)
+import Haskoin.Wallet.Recipient (Share, checkSharing, readPayment, readRecipient, recipientAddress)
 import Haskoin.Wallet.TxSendAll
   ( DustReport,
     buildSendAllSignData,
-    checkSharing,
     dustQuestion,
     dustReport,
     dustReportLines,
@@ -154,7 +153,7 @@ commandResponse ctx cfg unit = \case
   CommandSignTx signing parts -> cmdSignTx ctx cfg signing parts
   CommandSendTx nosigHM fileM yes -> cmdSendTx ctx cfg unit nosigHM fileM yes
   -- Sweeps
-  CommandPrepareSweep opts -> cmdPrepareSweep ctx cfg opts
+  CommandPrepareSweep opts -> cmdPrepareSweep ctx cfg unit opts
   CommandSignSweep signing keysM -> cmdSignSweep ctx cfg signing keysM
   -- Sync, messages, backups and version
   CommandSync account full -> cmdSync ctx cfg account full
@@ -652,13 +651,16 @@ cmdSendTx ctx cfg unit nosigHM fileM yes =
 -- from there. That --network must be given: the default network of the
 -- configuration does not apply. The keys, the coins and the legacy
 -- addresses of Bitcoin Cash read the same on Bitcoin, so a wrong guess
--- would sweep the coins of the other chain.
-cmdPrepareSweep :: Ctx -> Config -> PrepareSweep -> IO Response
-cmdPrepareSweep ctx cfg opts =
+-- would sweep the coins of the other chain. A destination is an address,
+-- or an address and its amount, as for preparesendall.
+cmdPrepareSweep :: Ctx -> Config -> AmountUnit -> PrepareSweep -> IO Response
+cmdPrepareSweep ctx cfg unit opts =
   runDBResponse cfg $ do
     -- Before the keys are typed, not after
     for_ opts.output checkPathFree
-    holders <- addressAccounts opts.sweepTo
+    -- The account of a destination is found by its address, an amount after
+    -- it or not, before the network to read the amounts on is known
+    holders <- accountsHolding (\net -> mapMaybe (recipientAddress net) opts.sweepTo)
     case holders of
       [] -> do
         for_ opts.account $ \name -> getAccountByName (Just name) >> throwError (paysNo name)
@@ -688,11 +690,12 @@ cmdPrepareSweep ctx cfg opts =
     -- The sweep on the network, which the account it pays, if any, knows
     sweepOn net accIdM = do
       sweepFrom <- liftEither $ mapM (textToAddrE net) opts.sweepFrom
-      sweepTo <- liftEither $ mapM (textToAddrE net) opts.sweepTo
+      sweepTo <- liftEither $ mapM (readRecipient net unit) opts.sweepTo
       -- Before the keys are typed, not after
+      liftEither $ checkSharing sweepTo
       confirmFeeRate opts.yes opts.feeByte opts.dust
       keys <- maybe (return []) (readSecKeys terminal net) opts.keys
-      found <- fetchSweepCoins net ctx (webStore ctx cfg net) accIdM keys sweepFrom opts.coins sweepTo
+      found <- fetchSweepCoins net ctx (webStore ctx cfg net) accIdM keys sweepFrom opts.coins (fst <$> sweepTo)
       gen <- liftIO initStdGen
       liftEither $ buildSweepSignData net ctx gen found sweepTo opts.feeByte opts.dust
 

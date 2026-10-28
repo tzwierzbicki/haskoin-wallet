@@ -189,6 +189,8 @@ data PrepareSweep = PrepareSweep
     -- | The private keys of the addresses swept, if at hand
     keys :: !(Maybe KeySource),
     sweepFrom :: ![Text],
+    -- | The destinations as typed: an address, or an address and its
+    -- amount, ADDRESS:AMOUNT
     sweepTo :: ![Text],
     -- | The coins swept, by outpoint
     coins :: ![OutPoint],
@@ -1391,6 +1393,12 @@ case for this command is to migrate an old wallet to a new mnemonic. You can
 send the funds to 1 or multiple addresses, in this wallet or not. You can use
 the shorthand format -t ADDR1 -t ADDR2 to specify the --sweepto addresses.
 
+A --sweepto address can be given an amount after a colon, ADDRESS:AMOUNT,
+written as for `preparetx`, which it gets as typed. The addresses without an
+amount share what remains in equal parts, and they pay the fee: give at least
+one. When what remains does not cover the fee, nothing is prepared: a fixed
+amount is never cut. This is how `preparesendall` shares the coins too.
+
 A sweep that pays an address of this wallet is of the account of that address,
 found without --account unless the sweep pays several accounts, on its network.
 The address finds its account however it is written: a Bitcoin Cash address
@@ -1431,8 +1439,8 @@ sweepToOption =
   strOption $
     short 't'
       <> long "sweepto"
-      <> metavar "ADDRESS"
-      <> help "Addresses to sweep to"
+      <> metavar "ADDRESS[:AMOUNT]"
+      <> help "An address to sweep to, which shares what remains, or an address and the amount it gets, ADDRESS:AMOUNT"
 
 {- SignSweep Parser -}
 

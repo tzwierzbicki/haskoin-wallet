@@ -41,6 +41,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Address
 import Haskoin.Wallet.Coin (coinText)
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.Recipient (Share, shareAmounts)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData
@@ -158,19 +159,20 @@ uncompressedKeyAddr ctx key = pubKeyAddr ctx $ derivePublicKey ctx (wrapSecKey F
 {- Building -}
 
 -- | The sweep transaction and its signing data: all the coins spent to the
--- destinations, both in random order, with what is left after the estimated
--- fee split evenly between the destinations. The signing data carries the
--- transactions the coins come from and the paths of the wallet's own
--- addresses among the coins and the destinations, which may be none: a
--- sweep need not involve the wallet, but only one that does can wait among
--- its pending transactions.
+-- destinations, both in random order. The destinations with a fixed amount
+-- get it, and what is left after the estimated fee is split evenly between
+-- the others ('shareAmounts'). The signing data carries the transactions
+-- the coins come from and the paths of the wallet's own addresses among the
+-- coins and the destinations, which may be none: a sweep need not involve
+-- the wallet, but only one that does can wait among its pending
+-- transactions.
 buildSweepSignData ::
   Network ->
   Ctx ->
   StdGen ->
   SweepCoins ->
-  -- | The destinations
-  [Address] ->
+  -- | The destinations, with what each gets
+  [(Address, Share)] ->
   -- | Fee per byte
   Natural ->
   -- | Dust
@@ -180,19 +182,17 @@ buildSweepSignData net ctx gen found sweepTo feeByte dust = do
   when (null found.coins) $ Left "There are no coins to sweep in those addresses"
   when (null sweepTo) $ Left "No addresses to sweep to"
   checkFeeRateAndDust feeByte dust
-  scripts <- mapM scriptOf sweepTo
+  scripts <- mapM (scriptOf . fst) sweepTo
   size <- sweepTxSize net ctx found scripts
   let total = sum $ (.value) <$> found.coins
       fee = fromIntegral feeByte * size
-  when (total < fee) $ Left "Could not find a sweep solution: fee is too large"
-  let (each, remainder) = (total - fee) `quotRem` fromIntegral (length sweepTo)
-  when (each < fromIntegral dust) $ Left "Outputs are smaller than the dust value"
-  let (shuffledCoins, shuffledScripts) =
-        evalState ((,) <$> randomShuffle found.coins <*> randomShuffle scripts) gen
-      outputs = [TxOut amount (marshal ctx script) | (script, amount) <- zip shuffledScripts ((each + remainder) : repeat each)]
+  amounts <- shareAmounts (fromIntegral total) (fromIntegral fee) dust sweepTo
+  let (shuffledCoins, shuffledOutputs) =
+        evalState ((,) <$> randomShuffle found.coins <*> randomShuffle (zip scripts (snd <$> amounts))) gen
+      outputs = [TxOut (fromIntegral amount) (marshal ctx script) | (script, amount) <- shuffledOutputs]
       tx = Tx 1 [TxIn c.outpoint BS.empty maxBound | c <- shuffledCoins] outputs [] 0
       inputPaths = pathsOf $ mapMaybe (.address) found.coins
-  return $ TxSignData tx found.transactions inputPaths (pathsOf sweepTo) (Just feeByte) Nothing
+  return $ TxSignData tx found.transactions inputPaths (pathsOf (fst <$> sweepTo)) (Just feeByte) Nothing
   where
     pathsOf addrs = nub $ mapMaybe (`Map.lookup` found.walletAddrs) addrs
     scriptOf addr = maybeToEither ("Can not pay to " <> addrToString net addr) (addressToOutput addr)

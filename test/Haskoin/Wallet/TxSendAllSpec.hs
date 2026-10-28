@@ -2,11 +2,12 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | The parts of preparesendall that read no database: the recipients that
--- share what remains, the dust coins, the amounts each recipient gets, the
--- transaction, the report on the dust coins and the coins it leaves in the
--- account. The recipients as typed are in "Haskoin.Wallet.RecipientSpec",
--- and the command as the user runs it in "Haskoin.Wallet.WorkflowSpec".
+-- | The parts of preparesendall that read no database: the dust coins, the
+-- amounts each recipient gets from the coins, the transaction, the report on
+-- the dust coins and the coins it leaves in the account. The recipients as
+-- typed, and how what remains is shared, are in
+-- "Haskoin.Wallet.RecipientSpec", and the command as the user runs it in
+-- "Haskoin.Wallet.WorkflowSpec".
 module Haskoin.Wallet.TxSendAllSpec where
 
 import Data.Aeson ((.=))
@@ -29,7 +30,6 @@ import Test.Hspec
 spec :: Spec
 spec =
   prepareContext $ \ctx -> do
-    recipientSpec
     dustCoinSpec ctx
     amountSpec ctx
     buildSpec ctx
@@ -87,16 +87,6 @@ threeDustReport ctx othersStaying =
 oneDustReport :: Ctx -> Natural -> DustReport
 oneDustReport ctx value = dustReport ctx 10 546 [(otherAddr 0, Remainder)] (twoCoins ctx) [coin ctx 2 0 value] False
 
-{- Recipients -}
-
--- The recipients as typed are read by "Haskoin.Wallet.Recipient"
-recipientSpec :: Spec
-recipientSpec =
-  describe "The recipients of a send-all" $ do
-    it "leave no one to receive what remains when every address has an amount" $
-      checkSharing [(otherAddr 0, Fixed 30000), (otherAddr 1, Fixed 20000)]
-        `shouldBe` Left "Give at least one address without an amount, to receive what remains once the fixed amounts and the fee are paid"
-
 {- Dust coins -}
 
 dustCoinSpec :: Ctx -> Spec
@@ -115,47 +105,18 @@ dustCoinSpec ctx =
 
 -- One input of 50000 and one of 30000, 80000 in all. To one address, the
 -- transaction is 10 + 2 * 148 + 34 = 340 bytes, a fee of 3400; to two, it
--- is 374 bytes, a fee of 3740.
+-- is 374 bytes, a fee of 3740. How the rest is shared is in
+-- "Haskoin.Wallet.RecipientSpec".
 amountSpec :: Ctx -> Spec
 amountSpec ctx =
   describe "The amounts of a send-all" $ do
-    it "gives an address without an amount everything but the fee" $
+    it "give an address without an amount everything but the fee of the coins" $
       amounts ctx (twoCoins ctx) [(otherAddr 0, Remainder)] `shouldBe` Right [(otherAddr 0, 76600)]
 
     -- 80000 - 30000 - 3740 = 46260
-    it "gives a fixed amount as typed, the fee paid by the address without one" $
+    it "give a fixed amount as typed, the fee of the coins paid by the address without one" $
       amounts ctx (twoCoins ctx) [(otherAddr 0, Fixed 30000), (otherAddr 1, Remainder)]
         `shouldBe` Right [(otherAddr 0, 30000), (otherAddr 1, 46260)]
-
-    -- 80000 - 3740 = 76260, 38130 each
-    it "shares what remains equally among the addresses without an amount" $
-      amounts ctx (twoCoins ctx) [(otherAddr 0, Remainder), (otherAddr 1, Remainder)]
-        `shouldBe` Right [(otherAddr 0, 38130), (otherAddr 1, 38130)]
-
-    -- Three outputs make 10 + 2 * 148 + 3 * 34 = 408 bytes, a fee of 4080:
-    -- 80001 - 20000 - 4080 = 55921, 27960 each and the satoshi left to the
-    -- first
-    it "gives what does not divide to the first address without an amount" $
-      amounts ctx [coin ctx 1 0 50001, coin ctx 1 1 30000] [(otherAddr 0, Fixed 20000), (otherAddr 1, Remainder), (otherAddr 2, Remainder)]
-        `shouldBe` Right [(otherAddr 0, 20000), (otherAddr 1, 27961), (otherAddr 2, 27960)]
-
-    -- 80000 of coins for 80000 fixed and 3740 of fee
-    it "fails, cutting no fixed amount, when the coins do not cover the fixed amounts and the fee" $
-      amounts ctx (twoCoins ctx) [(otherAddr 0, Fixed 80000), (otherAddr 1, Remainder)]
-        `shouldBe` Left "The coins, 80000 satoshis, do not cover the fixed amounts, 80000, and the fee, 3740"
-
-    -- 80000 - 76000 - 3740 = 260
-    it "fails when what remains for an address without an amount is below the dust limit" $
-      amounts ctx (twoCoins ctx) [(otherAddr 0, Fixed 76000), (otherAddr 1, Remainder)]
-        `shouldBe` Left "What remains for each address without an amount, 260 satoshis, is below the dust limit of 546"
-
-    it "fails for a fixed amount below the dust limit" $
-      amounts ctx (twoCoins ctx) [(otherAddr 0, Fixed 545), (otherAddr 1, Remainder)]
-        `shouldBe` Left "A fixed amount is below the dust limit of 546 satoshis"
-
-    it "fails without an address to receive what remains" $
-      amounts ctx (twoCoins ctx) [(otherAddr 0, Fixed 30000)]
-        `shouldBe` Left "Give at least one address without an amount, to receive what remains once the fixed amounts and the fee are paid"
 
 {- The transaction -}
 
