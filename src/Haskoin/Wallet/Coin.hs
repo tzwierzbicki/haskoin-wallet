@@ -23,6 +23,7 @@ module Haskoin.Wallet.Coin
     Spending (..),
     spendingOf,
     spendableCoins,
+    unspendableCoins,
     spendableAtAddresses,
     spendableBalance,
     lockCoin,
@@ -284,6 +285,16 @@ spendableCoins net ctx accId minConf = do
   rules <- spendingOf net accId
   coins <- liftEither . mapM (storedUnspent net ctx) =<< accountCoins accId
   filterM (\coin -> canSpend rules minConf coin.outpoint coin.block) coins
+
+-- | The coins the builder may not spend with at least the confirmations
+-- asked, the others of 'spendableCoins', each with its lock. A coin without
+-- a lock is not confirmed enough yet, or is a coinbase not yet mature.
+unspendableCoins :: (MonadUnliftIO m) => Network -> Ctx -> DBAccountId -> Natural -> ExceptT String (DB m) [(Store.Unspent, Maybe CoinLock)]
+unspendableCoins net ctx accId minConf = do
+  rules <- spendingOf net accId
+  coins <- liftEither . mapM (storedUnspent net ctx) =<< accountCoins accId
+  held <- filterM (\coin -> not <$> canSpend rules minConf coin.outpoint coin.block) coins
+  return [(coin, Map.lookup coin.outpoint rules.spendingLocks) | coin <- held]
 
 -- | The value of the coins of the account that can be spent now, by the
 -- text of their address, for the given addresses only: the index of the

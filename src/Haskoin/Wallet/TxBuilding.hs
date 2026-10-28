@@ -15,6 +15,9 @@ module Haskoin.Wallet.TxBuilding
     buildTxSignData,
     buildWalletTx,
     fetchWalletCoins,
+    coinWithPath,
+    recipientOutputSize,
+    controlledCoins,
   )
 where
 

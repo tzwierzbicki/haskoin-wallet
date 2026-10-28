@@ -18,6 +18,7 @@ import Haskoin.Wallet.Coin (JsonCoin)
 import Haskoin.Wallet.Database (DBAccount, DBAddress)
 import Haskoin.Wallet.Sync (SyncRes (..))
 import Haskoin.Wallet.TxInfo (TxInfo)
+import Haskoin.Wallet.TxSendAll (LeftCoin)
 import Numeric.Natural (Natural)
 
 data Response
@@ -43,6 +44,9 @@ data Response
     ResponseTxs !DBAccount ![TxInfo]
   | -- | A transaction of the account
     ResponseTx !DBAccount !TxInfo
+  | -- | A transaction sending the coins of the account, with the coins it
+    -- leaves in the account and why
+    ResponseSendAll !DBAccount !TxInfo ![LeftCoin]
   | -- | A transaction outside the wallet, a sweep between outside
     -- addresses, on its network
     ResponseOutsideTx !Network !TxInfo
@@ -86,6 +90,8 @@ instance ToJSON Response where
       typed "addresses" ["account" .= acc, "addresses" .= (uncurry addressWithSpendable <$> addrs)]
     ResponseTxs acc txs -> typed "txs" ["account" .= acc, "txs" .= (marshalValue (accountNetwork acc) <$> txs)]
     ResponseTx acc info -> typed "tx" ["account" .= acc, "tx" .= marshalValue (accountNetwork acc) info]
+    ResponseSendAll acc info left ->
+      typed "sendall" ["account" .= acc, "tx" .= marshalValue (accountNetwork acc) info, "left" .= left]
     ResponseOutsideTx net info -> typed "outsidetx" ["network" .= net.name, "tx" .= marshalValue net info]
     ResponseSentTx net txid -> typed "senttx" ["network" .= net.name, "txid" .= txid]
     ResponseDeleteTx nosigH coins addrs ->
@@ -118,6 +124,9 @@ instance FromJSON Response where
       "tx" -> do
         acc <- o .: "account"
         ResponseTx acc <$> (unmarshalValue (accountNetwork acc) =<< o .: "tx")
+      "sendall" -> do
+        acc <- o .: "account"
+        ResponseSendAll acc <$> (unmarshalValue (accountNetwork acc) =<< o .: "tx") <*> o .: "left"
       "outsidetx" -> do
         net <- network o
         ResponseOutsideTx net <$> (unmarshalValue net =<< o .: "tx")

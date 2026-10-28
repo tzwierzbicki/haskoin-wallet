@@ -22,6 +22,7 @@ import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.TxInfo
+import Haskoin.Wallet.TxSendAll (LeftCoin (..), LeftReason (..))
 import Haskoin.Wallet.TxSignData
 import Numeric.Natural
 import Test.QuickCheck
@@ -97,6 +98,13 @@ arbitraryJsonCoin net =
 
 arbitraryCoinLock :: Gen CoinLock
 arbitraryCoinLock = elements [LockedByTransaction, LockedByUser]
+
+arbitraryLeftCoin :: Gen LeftCoin
+arbitraryLeftCoin =
+  LeftCoin
+    <$> arbitraryOutPoint
+    <*> arbitraryPositive
+    <*> elements [WorthLessThanFee, Locked LockedByUser, Locked LockedByTransaction, NotSpendableYet, NotGiven]
 
 arbitraryPubKeyDoc :: Ctx -> Gen PubKeyDoc
 arbitraryPubKeyDoc ctx =
@@ -231,6 +239,10 @@ arbitraryResponse net ctx =
         <$> arbitraryDBAccount net ctx
         <*> resize 20 (listOf $ arbitraryTxInfo net),
       ResponseTx <$> arbitraryDBAccount net ctx <*> arbitraryTxInfo net,
+      ResponseSendAll
+        <$> arbitraryDBAccount net ctx
+        <*> arbitraryTxInfo net
+        <*> resize 20 (listOf arbitraryLeftCoin),
       ResponseOutsideTx net <$> arbitraryTxInfo net,
       ResponseSentTx <$> arbitraryNetwork <*> arbitraryTxHash,
       ResponseDeleteTx

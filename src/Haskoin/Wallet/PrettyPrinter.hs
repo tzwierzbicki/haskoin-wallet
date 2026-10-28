@@ -28,10 +28,11 @@ import Haskoin.Wallet.Amounts
 import Haskoin.Wallet.Coin
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Keys (KeySource (..))
-import Haskoin.Wallet.Parser (Command (..), PrepareSweep (..), PrepareTx (..), Signing (..))
+import Haskoin.Wallet.Parser (Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..))
 import Haskoin.Wallet.Response
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.TxInfo
+import Haskoin.Wallet.TxSendAll (LeftCoin (..), LeftReason (..))
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import System.Console.ANSI
@@ -522,6 +523,24 @@ feePrinter unit fee feeBytes =
       <+> text "sat/bytes"
     <> text ")"
 
+-- | The coins a send-all leaves in the account, one a line, each with why:
+-- the coin as --coin and lockcoin take it, and its value
+leftCoinsPrinter :: AmountUnit -> [LeftCoin] -> Printer
+leftCoinsPrinter unit left =
+  vcat $ formatTitle "Staying in the account:" : (nest 2 . leftCoinPrinter <$> left)
+  where
+    leftCoinPrinter coin =
+      formatTxHash (coinText coin.leftCoinOutpoint)
+        <+> amountPrinter unit coin.leftCoinValue
+        <> text ","
+          <+> text (reasonText coin.leftCoinReason)
+    reasonText = \case
+      WorthLessThanFee -> "worth less than its fee"
+      Locked LockedByUser -> "you locked it"
+      Locked LockedByTransaction -> "a pending transaction spends it"
+      NotSpendableYet -> "not spendable yet"
+      NotGiven -> "not given with --coin"
+
 coinPrinter :: Network -> AmountUnit -> JsonCoin -> Printer
 coinPrinter net unit JsonCoin {..} =
   vcat
@@ -591,6 +610,11 @@ prettyPrinter unit =
     ResponseTx acc txInfo -> do
       let net = accountNetwork acc
       renderIO $ txAnswerPrinter net unit txInfo
+    -- The coins left in the account below the transaction, apart from it
+    ResponseSendAll acc txInfo left -> do
+      let net = accountNetwork acc
+      renderIO $ txAnswerPrinter net unit txInfo
+      unless (null left) $ putStrLn "" >> renderIO (leftCoinsPrinter unit left)
     ResponseOutsideTx net txInfo -> renderIO $ txAnswerPrinter net unit txInfo
     ResponseSentTx net h ->
       renderIO $
@@ -637,8 +661,8 @@ prettyPrinter unit =
 {- Next steps -}
 
 -- | What the user does next after a command of a payment or a sweep,
--- preparetx, preparesweep, signtx, signsweep, sendtx or sync, below its
--- answer. In the pretty output only: a script reading the JSON answer knows
+-- preparetx, preparesendall, preparesweep, signtx, signsweep, sendtx or
+-- sync, below its answer. In the pretty output only: a script reading the JSON answer knows
 -- its next step.
 printNextSteps :: Command -> Response -> IO ()
 printNextSteps cmd res = do
@@ -651,13 +675,9 @@ nextStepsPrinter :: Command -> Response -> Printer
 nextStepsPrinter cmd res =
   case (cmd, res) of
     (CommandPrepareTx opts, ResponseTx _ info)
-      | Just nosig <- nosigOf info ->
-          stepsPrinter
-            [ ("Next, sign it", "hw signtx " <> nosig),
-              case opts.output of
-                Nothing -> ("Or export it, to sign it on an offline computer", "hw exporttx " <> nosig <> " FILE")
-                Just file -> ("Or sign its file on an offline computer", "hw signtx --input " <> shellWord file)
-            ]
+      | Just nosig <- nosigOf info -> afterPreparing opts.output nosig
+    (CommandPrepareSendAll opts, ResponseSendAll _ info _)
+      | Just nosig <- nosigOf info -> afterPreparing opts.output nosig
     -- The keys of a file at hand for the sweep are the ones to sign it with
     (CommandPrepareSweep opts, ResponseTx _ info)
       | Just nosig <- nosigOf info ->
@@ -689,6 +709,15 @@ nextStepsPrinter cmd res =
     nosigOf info = case txInfoStatus info of
       Pending status -> Just (cs (txHashToHex (pendingNosigHash status)))
       OnChain _ -> Nothing
+    -- A payment of the wallet is signed with its mnemonic, here or on an
+    -- offline computer
+    afterPreparing output nosig =
+      stepsPrinter
+        [ ("Next, sign it", "hw signtx " <> nosig),
+          case output of
+            Nothing -> ("Or export it, to sign it on an offline computer", "hw exporttx " <> nosig <> " FILE")
+            Just file -> ("Or sign its file on an offline computer", "hw signtx --input " <> shellWord file)
+        ]
     -- A transaction signed in the wallet is sent by its nosigHash, one
     -- signed from a file by the file signed: the --output file, or the
     -- --input file it replaced

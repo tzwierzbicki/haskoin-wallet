@@ -41,6 +41,7 @@ module Haskoin.Wallet.Commands
 
     -- * Payments: preparing, signing and sending
     cmdPrepareTx,
+    cmdPrepareSendAll,
     cmdSignTx,
     cmdSendTx,
 
@@ -63,7 +64,7 @@ import Control.Monad.Trans.Class (lift)
 import qualified Data.ByteString.Base64 as B64
 import Data.Either (isLeft)
 import Data.Foldable (for_)
-import Data.List (nub)
+import Data.List (nub, partition)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust, isNothing)
@@ -74,6 +75,7 @@ import Data.Version (showVersion)
 import Data.Word (Word64)
 import Database.Persist.Sqlite (transactionUndo)
 import Haskoin
+import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Account
 import Haskoin.Wallet.Address
 import Haskoin.Wallet.Amounts (AmountUnit, readAmount)
@@ -93,10 +95,23 @@ import Haskoin.Wallet.Prompt
 import Haskoin.Wallet.Response
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
-import Haskoin.Wallet.TxBuilding (buildTxSignData)
+import Haskoin.Wallet.TxBuilding (buildTxSignData, controlledCoins)
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSigning (parseOutsideTxSignData, signWalletTx)
+import Haskoin.Wallet.TxSendAll
+  ( DustReport,
+    Share,
+    buildSendAllSignData,
+    checkSharing,
+    dustQuestion,
+    dustReport,
+    dustReportLines,
+    isDustCoin,
+    leftCoins,
+    readRecipient,
+    sendAllAmounts,
+  )
 import Haskoin.Wallet.TxSize (checkFeeRateAndDust, highFeeRate)
 import Haskoin.Wallet.TxSweep (buildSweepSignData, fetchSweepCoins, signTxWithKeys)
 import Haskoin.Wallet.Util
@@ -136,6 +151,7 @@ commandResponse ctx cfg unit = \case
   CommandExportTx nosigH file -> cmdExportTx cfg nosigH file
   CommandDeleteTx nosigH -> cmdDeleteTx ctx cfg nosigH
   CommandPrepareTx opts -> cmdPrepareTx ctx cfg unit opts
+  CommandPrepareSendAll opts -> cmdPrepareSendAll ctx cfg unit opts
   CommandSignTx signing parts -> cmdSignTx ctx cfg signing parts
   CommandSendTx nosigHM fileM yes -> cmdSendTx ctx cfg unit nosigHM fileM yes
   -- Sweeps
@@ -417,11 +433,16 @@ writeOutput net output tsd = for_ output $ \file -> liftEitherIO $ writeJsonFile
 -- transactions, and in the --output file when there is one. The answer
 -- shows it.
 keepPrepared :: Ctx -> DBAccountId -> DBAccount -> Maybe FilePath -> TxSignData -> ExceptT String (DB IO) Response
-keepPrepared ctx accId acc output tsd = do
+keepPrepared ctx accId acc output tsd = txAnswer accId =<< storePrepared ctx accId acc output tsd
+
+-- | Keep a transaction of the account just prepared, as 'keepPrepared'
+-- does, and give its summary
+storePrepared :: Ctx -> DBAccountId -> DBAccount -> Maybe FilePath -> TxSignData -> ExceptT String (DB IO) TxInfo
+storePrepared ctx accId acc output tsd = do
   info <- txInfoOf ctx acc tsd
   _ <- importPendingTx (accountNetwork acc) ctx accId tsd
   writeOutput (accountNetwork acc) output tsd
-  txAnswer accId info
+  return info
 
 -- | Ask before preparing a transaction at a fee rate above 'highFeeRate',
 -- unless --yes: a rate that high is more often a typo than a choice. A fee
@@ -457,6 +478,69 @@ cmdPrepareTx ctx cfg unit opts =
       paid <- textToAddrE net addr
       satoshis <- readAmount unit amount
       return (paid, fromIntegral satoshis)
+
+-- | Prepare a transaction sending the coins of the account to the
+-- recipients, unsigned, with no change: all the coins it can spend now, or
+-- those given with --coin. Without --coin, the coins worth less than their
+-- fee are spent or left as the user answers, or as --spenddust or
+-- --leavedust says. The answer lists every coin left in the account, and
+-- why. See "Haskoin.Wallet.TxSendAll".
+cmdPrepareSendAll :: Ctx -> Config -> AmountUnit -> PrepareSendAll -> IO Response
+cmdPrepareSendAll ctx cfg unit opts =
+  runDBResponse cfg $ do
+    -- The coins given with --coin name their account
+    holders <- coinAccounts opts.coins
+    (accId, acc) <- accountAmong (\name -> "The coins given are not in the account " <> cs name) opts.account holders
+    let net = accountNetwork acc
+    -- Before the transaction is built, not after
+    for_ opts.output checkPathFree
+    recipients <- liftEither $ mapM (readRecipient net unit) opts.recipients
+    liftEither $ checkSharing recipients
+    unless (null opts.coins || isNothing opts.dustCoins) $
+      throwError "The coins given with --coin are all sent: give --spenddust or --leavedust without --coin"
+    confirmFeeRate opts.yes opts.feeByte opts.dust
+    spendable <- spendableCoins net ctx accId opts.minConf
+    unspendable <- unspendableCoins net ctx accId opts.minConf
+    (sent, left) <-
+      if null opts.coins
+        then do
+          sent <- coinsWithDust recipients (not (null unspendable)) spendable
+          return (sent, leftCoins (notSent sent spendable) unspendable [])
+        else do
+          sent <- liftEither $ controlledCoins spendable opts.coins
+          return (sent, leftCoins [] unspendable (notSent sent spendable))
+    gen <- liftIO initStdGen
+    tsd <- buildSendAllSignData net ctx gen accId sent recipients opts.feeByte opts.dust
+    info <- storePrepared ctx accId acc opts.output tsd
+    -- The account as the transaction leaves it
+    held <- getAccountById accId
+    return $ ResponseSendAll held info left
+  where
+    -- The spendable coins the transaction does not send
+    notSent sent = filter (`notElem` sent)
+    -- The spendable coins, with or without the dust coins. They are left
+    -- without a question when spending them too would leave too little for
+    -- the recipients, and when the other coins cannot pay the recipients
+    -- either, which the builder then tells.
+    coinsWithDust :: [(Address, Share)] -> Bool -> [Store.Unspent] -> ExceptT String (DB IO) [Store.Unspent]
+    coinsWithDust recipients othersStay spendable
+      | null dust || null worth = return spendable
+      | otherwise =
+          case opts.dustCoins of
+            Just SpendDust -> return spendable
+            Just LeaveDust -> return worth
+            Nothing
+              | isLeft (paying spendable) || isLeft (paying worth) -> return worth
+              | otherwise -> askAboutDust (dustReport ctx opts.feeByte opts.dust recipients worth dust othersStay)
+      where
+        (dust, worth) = partition (isDustCoin opts.feeByte) spendable
+        paying coins = sendAllAmounts ctx opts.feeByte opts.dust coins recipients
+        -- On stderr, with the question, to keep the --json answer clean
+        askAboutDust :: DustReport -> ExceptT String (DB IO) [Store.Unspent]
+        askAboutDust report = do
+          liftIO $ mapM_ (tell terminal) (dustReportLines report)
+          spending <- askYes terminal (dustQuestion report)
+          return $ if spending then spendable else worth
 
 -- | The file a signed transaction is written to, besides the wallet that
 -- holds it

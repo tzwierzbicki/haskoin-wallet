@@ -52,6 +52,7 @@ data Command
   | -- | The account, and the page
     CommandTxs !(Maybe Text) !Page
   | CommandPrepareTx !PrepareTx
+  | CommandPrepareSendAll !PrepareSendAll
   | -- | The account, and the page
     CommandPendingTxs !(Maybe Text) !Page
   | -- | The account, and the transaction file
@@ -139,6 +140,35 @@ data PrepareTx = PrepareTx
     -- asking (--yes)
     yes :: !Bool
   }
+  deriving (Eq, Show)
+
+-- | The options of preparesendall
+data PrepareSendAll = PrepareSendAll
+  { -- | The recipients as typed: an address, or an address and its amount,
+    -- ADDRESS:AMOUNT
+    recipients :: ![Text],
+    account :: !(Maybe Text),
+    -- | The fee rate, in satoshis per byte
+    feeByte :: !Natural,
+    -- | The dust limit, in satoshis
+    dust :: !Natural,
+    -- | The confirmations a coin needs to be sent
+    minConf :: !Natural,
+    output :: !(Maybe FilePath),
+    -- | The coins to send, instead of all of them
+    coins :: ![OutPoint],
+    -- | What to do with the coins worth less than their fee, or Nothing to
+    -- ask the user
+    dustCoins :: !(Maybe DustCoins),
+    -- | Whether a fee rate above 100 satoshis per byte is taken without
+    -- asking (--yes)
+    yes :: !Bool
+  }
+  deriving (Eq, Show)
+
+-- | What preparesendall does with the coins worth less than the fee to
+-- spend them
+data DustCoins = SpendDust | LeaveDust
   deriving (Eq, Show)
 
 -- | The options of signmsg
@@ -265,6 +295,7 @@ commandParser =
           [ commandGroup "Transaction management",
             command "txs" txsParser,
             command "preparetx" prepareTxParser,
+            command "preparesendall" prepareSendAllParser,
             command "pendingtxs" pendingTxsParser,
             command "signtx" signTxParser,
             command "sendtx" sendTxParser,
@@ -801,6 +832,69 @@ sats) or the --unit option says otherwise. For example, 0.00001, 0.00001btc,
 10bits and 1000sat are the same amount. Bitcoins have up to 8 decimals, bits up
 to 2, and satoshis are whole. Separators such as 1'000 are refused.
 |]
+
+{- PrepareSendAll Parser -}
+
+prepareSendAllParser :: ParserInfo Command
+prepareSendAllParser = do
+  let options =
+        PrepareSendAll
+          <$> some sendAllRecipientArg
+          <*> accountOption
+          <*> feeOption
+          <*> dustOption
+          <*> minConfOption
+          <*> outputFileMaybeOption
+          <*> many coinOption
+          <*> dustCoinsOption
+          <*> highFeeYesOption
+  info (CommandPrepareSendAll <$> options) $
+    progDesc "Prepare an unsigned transaction sending all the coins of an account"
+      <> footer
+        [r|
+`preparesendall` prepares a transaction that sends every coin the account can
+spend now to the addresses given, with no change: the spendable balance that
+`accounts` shows. Like `preparetx`, it needs no mnemonic, and the transaction
+waits among the pending transactions to be signed with `signtx`.
+
+An address can be given an amount after a colon, ADDRESS:AMOUNT, which it gets
+as typed. The addresses without an amount share what remains in equal parts,
+and they pay the fee: give at least one. When what remains does not cover the
+fee, nothing is prepared: a fixed amount is never cut. A Bitcoin Cash address
+can keep its prefix, as in bitcoincash:qp...:0.001.
+
+A coin worth no more than the fee to spend it is a dust coin: spending it
+lowers what the addresses get. Whether a coin is dust depends on the fee rate.
+`preparesendall` lists the dust coins with what spending them or leaving them
+means, and asks whether to spend them too. Any answer but yes leaves them in
+the account. --spenddust or --leavedust answers for a script.
+
+--coin sends the coins given, all of them, dust included, and only them. The
+answer lists every coin the transaction leaves in the account, after it, each
+with why: worth less than its fee, locked by you or by a pending transaction,
+not spendable yet, or not given with --coin.
+
+A fee rate above 100 satoshis per byte, ten times the default, is more often a
+typo than a choice, so `preparesendall` asks before it takes one. --yes takes
+it without asking, for a script.
+|]
+
+sendAllRecipientArg :: Parser Text
+sendAllRecipientArg =
+  strArgument $
+    metavar "ADDRESS[:AMOUNT]"
+      <> help
+        [r|
+An address that shares what remains, or an address and the amount it gets,
+ADDRESS:AMOUNT. Give at least one address without an amount.
+|]
+
+-- | What to do with the coins worth less than their fee, without asking
+dustCoinsOption :: Parser (Maybe DustCoins)
+dustCoinsOption =
+  optional $
+    flag' SpendDust (long "spenddust" <> help "Spend the coins worth less than their fee too, without asking")
+      <|> flag' LeaveDust (long "leavedust" <> help "Leave the coins worth less than their fee in the account, without asking")
 
 -- | A coin to spend, as coins lists it
 coinOption :: Parser OutPoint

@@ -18,7 +18,7 @@ import Control.Monad.Except (ExceptT)
 import Control.Monad.Trans (lift, liftIO)
 import Data.Aeson (eitherDecode)
 import qualified Data.ByteString as BS
-import Data.List (sort)
+import Data.List (sort, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromJust, listToMaybe)
@@ -151,6 +151,11 @@ spendableFlags accId = map (\c -> (jsonCoinOutpoint c, jsonCoinSpendable c)) <$>
 -- confirmations
 spendable :: Ctx -> DBAccountId -> Natural -> ExceptT String (DB IO) [OutPoint]
 spendable ctx accId minConf = sort . map (.outpoint) <$> spendableCoins btc ctx accId minConf
+
+-- | The outpoints of the coins the builder may not spend at a number of
+-- confirmations, with their locks
+unspendable :: Ctx -> DBAccountId -> Natural -> ExceptT String (DB IO) [(OutPoint, Maybe CoinLock)]
+unspendable ctx accId minConf = sortOn fst . map (\(coin, lock) -> (coin.outpoint, lock)) <$> unspendableCoins btc ctx accId minConf
 
 -- | The best block of Bitcoin at a height
 bestAt :: BlockHeight -> ExceptT String (DB IO) ()
@@ -562,6 +567,25 @@ spendableSpec ctx =
         lift $
           dbShouldFailWith "The stored coin 0000000000000000000000000000000000000000000000000000000000000001:0 has an address that does not read: nonsense" $
             spendableCoins btc ctx accId 1
+
+    -- A pending transaction spends the first coin, the user locked the
+    -- second, and the third is in the mempool, paid by someone else
+    it "holds back the others, each with its lock, which the third coin has none of" $
+      inDatabaseE $ do
+        accId <- account ctx
+        threeCoins ctx accId
+        spendingFirst ctx accId
+        _ <- lockCoin secondCoin
+        unspendable ctx accId 1 `dbShouldBeE` [(firstCoin, Just LockedByTransaction), (secondCoin, Just LockedByUser), (thirdCoin, Nothing)]
+
+    -- 800002 is the third block for the first payment, the second for the
+    -- second payment
+    it "holds back the coins below the confirmations asked, without a lock" $
+      inDatabaseE $ do
+        accId <- account ctx
+        threeCoins ctx accId
+        bestAt 800002
+        unspendable ctx accId 3 `dbShouldBeE` [(secondCoin, Nothing), (thirdCoin, Nothing)]
 
 {- Balances -}
 
