@@ -399,7 +399,13 @@ txInfoPrinter = transactionPrinter False
 txAnswerPrinter :: Network -> AmountUnit -> TxInfo -> Printer
 txAnswerPrinter = transactionPrinter True
 
--- | A transaction, with its network when the first argument says so
+-- | A transaction, with its network when the first argument says so. Every
+-- transaction shows the same sections, each when it has addresses: the
+-- addresses it spends from, those it sends to, and for a payment, the
+-- change it sends back to the wallet. The addresses of the wallet show
+-- their derivation paths and labels. An address another wallet spends
+-- from shows no amount: that wallet's coins are nothing to this one, and
+-- the change it keeps is left out.
 transactionPrinter ::
   Bool ->
   Network ->
@@ -413,9 +419,9 @@ transactionPrinter showNetwork net unit (TxInfo TxSummary {..} status) =
       statusPrinter status,
       fee,
       changeInFee,
-      internal,
-      debit,
-      credit
+      section "Spent from:" spentFrom,
+      section "Sending to:" sendingTo,
+      section "Change to:" changeTo
     ]
   where
     title =
@@ -436,57 +442,36 @@ transactionPrinter showNetwork net unit (TxInfo TxSummary {..} status) =
                 <> amountPrinter unit (fromIntegral change)
                   <+> text "too small for an output, added to the fee"
         _ -> mempty
-    internal
-      | summaryType /= TxInternal = mempty
-      | otherwise =
-          vcat $
-            [formatKey "From addresses:"]
-              <> ( nest 2 . addrPrinter True
-                     <$> Map.assocs (Map.map g summaryMyInputs)
-                 )
-              <> [formatKey "To addresses:"]
-              <> ( nest 2
-                     . addrPrinter True
-                     <$> Map.assocs (Map.map f summaryMyOutputs)
-                 )
-    debit
-      | summaryType /= TxDebit = mempty
-      | otherwise =
-          vcat $
-            [formatKey "Sending to addresses:"]
-              <> ( nest 2 . addrPrinter False
-                     <$> Map.assocs
-                       ( Map.map
-                           (,Nothing,"")
-                           summaryOtherOutputs
-                       )
-                 )
-    credit
-      | summaryType /= TxCredit = mempty
-      | otherwise =
-          vcat $
-            [formatKey "My credited addresses:"]
-              <> ( nest 2 . addrPrinter True
-                     <$> Map.assocs (Map.map f summaryMyOutputs)
-                 )
-    f (MyOutputs v p l) = (v, Just p, cs l)
-    g (MyInputs v p l _) = (v, Just p, cs l)
-    addrPrinter isMine (a, (v, pathM, label)) =
+    -- Every input, those of the wallet first
+    spentFrom =
+      [walletAddress formatZeroAmount a v p (cs l) | (a, MyInputs v p l _) <- Map.assocs summaryMyInputs]
+        <> [formatAddress False (addrToString net a) | a <- Map.keys summaryOtherInputs]
+    toWallet = [walletAddress formatPosAmount a v p (cs l) | (a, MyOutputs v p l) <- Map.assocs summaryMyOutputs]
+    toOthers = [otherAddress a v | (a, v) <- Map.assocs summaryOtherOutputs]
+    -- What a payment sends back to the wallet is its change. In a payment
+    -- the wallet receives, the outputs to others are the change of the
+    -- payer, left out. Between the addresses of the wallet, no output can
+    -- be told to be the change.
+    (sendingTo, changeTo) =
+      case summaryType of
+        TxDebit -> (toOthers, toWallet)
+        TxCredit -> (toWallet, [])
+        TxInternal -> (toWallet <> toOthers, [])
+    section heading rows
+      | null rows = mempty
+      | otherwise = vcat (formatKey heading : (nest 2 <$> rows))
+    -- An address of the wallet and its value, with its path and its label
+    walletAddress amountFormat a v p label =
       vcat
-        [ formatAddress isMine (addrToString net a)
-            <> text ":"
-              <+> if isMine
-                then integerAmountPrinterWith formatPosAmount unit (fromIntegral v)
-                else integerAmountPrinterWith formatZeroAmount unit (fromIntegral v),
-          case pathM of
-            Just p ->
-              nest 2 $
-                formatKey "Path:" <+> formatDeriv (pathToStr p)
-            _ -> mempty,
+        [ formatAddress True (addrToString net a) <> text ":" <+> integerAmountPrinterWith amountFormat unit (fromIntegral v),
+          nest 2 $ formatKey "Path:" <+> formatDeriv (pathToStr p),
           if null label
             then mempty
             else nest 2 $ formatKey "Label:" <+> formatLabel label
         ]
+    -- An address of another wallet and its value
+    otherAddress a v =
+      formatAddress False (addrToString net a) <> text ":" <+> integerAmountPrinterWith formatZeroAmount unit (fromIntegral v)
 
 -- | Where the transaction stands: its id when it has one, then its
 -- confirmations on the chain, or its state in preparation

@@ -61,6 +61,7 @@ spec = prepareContext $ \ctx -> do
   sendAllSpec ctx
   coinControlSpec ctx
   changeBackSpec ctx
+  layoutSpec ctx
   pendingListSpec ctx
   balancesListSpec ctx
   nextStepSpec ctx
@@ -2035,9 +2036,87 @@ changeBackSpec ctx =
         runExit run `shouldBe` ExitFailure 1
         runErr run `shouldSatisfy` Text.isInfixOf "Invalid option `--newchange'"
 
-{- Pending transactions -}
+{- Transactions as hw shows them -}
 
--- | A chain whose block 800000 holds the payment to main and the coin of the
+-- | A payment of 50000 to the first receiving address of the test wallet,
+-- from another wallet that keeps 70000 of change at an address of its own.
+-- The store gives its input 121000, so that its fee is 1000. The payer
+-- spends from otherAddr 0.
+paymentWithPayerChange :: Ctx -> Tx
+paymentWithPayerChange ctx = fundingTx ctx 9 [(externalAddr 0, 50000), (otherAddr 1, 70000)]
+
+-- | What hw shows of the payment of 20000 prepared in a synced home
+shownPayment :: FilePath -> [String] -> IO Text
+shownPayment home options = runOut <$> hw home (["preparetx", fixedTo (otherAddr 0) "0.0002"] <> options) []
+
+-- The payment of 20000 spends the coin of 50000 at /0/0, and leaves 27740
+-- of change
+layoutSpec :: Ctx -> Spec
+layoutSpec ctx =
+  describe "A transaction as hw shows it" $ do
+    it "shows the addresses of the wallet a payment spends from, with their paths" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        shown <- shownPayment home []
+        shown `shouldSatisfy` Text.isInfixOf "Spent from:\n  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj: 0.00050000 btc\n    Path: /0/0\n"
+
+    it "shows the labels of the addresses of the wallet" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["label", "0", "salary"] []
+        shown <- shownPayment home []
+        shown `shouldSatisfy` Text.isInfixOf "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj: 0.00050000 btc\n    Path: /0/0\n    Label: salary\n"
+
+    it "shows the recipients of a payment" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        shown <- shownPayment home []
+        shown `shouldSatisfy` Text.isInfixOf "Sending to:\n  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU: 0.00020000 btc\n"
+
+    it "shows the change of a payment, at its change address" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        shown <- shownPayment home []
+        shown `shouldSatisfy` Text.isInfixOf "Change to:\n  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn: 0.00027740 btc\n    Path: /1/0\n"
+
+    it "shows the change a payment sends back to the address it spends from" $
+      withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
+        synced home
+        shown <- shownPayment home ["--spendfrom", textOf (externalAddr 0), "--changeback"]
+        shown `shouldSatisfy` Text.isInfixOf "Change to:\n  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj: 0.00027740 btc\n    Path: /0/0\n"
+
+    -- The payer's coins are worth 121000, nothing to the wallet
+    it "shows the addresses the payer of a payment received spends from, without their amounts, in txs" $
+      withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
+        synced home
+        listed <- runOut <$> hw home ["txs"] []
+        listed `shouldSatisfy` Text.isInfixOf "Spent from:\n  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\n"
+
+    it "shows the address of the wallet a payment received is sent to, in txs" $
+      withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
+        synced home
+        listed <- runOut <$> hw home ["txs"] []
+        listed `shouldSatisfy` Text.isInfixOf "Sending to:\n  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj: 0.00050000 btc\n    Path: /0/0\n"
+
+    it "does not show the change the payer of a payment received keeps" $
+      withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
+        synced home
+        listed <- runOut <$> hw home ["txs"] []
+        listed `shouldNotSatisfy` Text.isInfixOf (Text.pack (textOf (otherAddr 1)))
+
+    -- Paying the second receiving address from the first leaves 27740 of
+    -- change at /1/0: both outputs are the wallet's, and neither can be told
+    -- to be the change
+    it "shows every output of a transaction between addresses of the wallet as sent to, none as change" $
+      withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
+        synced home
+        shown <- runOut <$> hw home ["preparetx", fixedTo (externalAddr 1) "0.0002", "--spendfrom", textOf (externalAddr 0)] []
+        let (_, sent) = Text.breakOn "Sending to:" shown
+        shown `shouldSatisfy` Text.isPrefixOf "Internal"
+        sent `shouldSatisfy` Text.isInfixOf "  1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg: 0.00020000 btc\n    Path: /0/1\n"
+        sent `shouldSatisfy` Text.isInfixOf "  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn: 0.00027740 btc\n    Path: /1/0\n"
+        shown `shouldNotSatisfy` Text.isInfixOf "Change to:"
+
 -- old key
 paymentAndKeyChain :: Ctx -> Chain
 paymentAndKeyChain ctx = Chain 800002 [(payment ctx, Just 800000), (oldCoin ctx, Just 800000)]
