@@ -142,7 +142,7 @@ buildSendAllSignData net ctx gen accId coins recipients feeByte dust = do
   recipientPaths <- walletPaths net accId (fst <$> recipients)
   built <- liftEither $ buildSendAll net ctx gen SendAllCoins {coins, coinPaths, recipientPaths} recipients feeByte dust
   spentFrom <- mapM getRawTx $ nub $ (.outpoint.hash) <$> built.tx.inputs
-  return $ TxSignData built.tx spentFrom built.inputPaths built.outputPaths (Just feeByte) Nothing
+  return $ TxSignData built.tx spentFrom built.inputPaths built.outputPaths (Just feeByte) Nothing []
 
 {- The question about dust coins -}
 

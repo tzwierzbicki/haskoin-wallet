@@ -45,6 +45,7 @@ module Haskoin.Wallet.Commands
     cmdPrepareSendAll,
     cmdSignTx,
     cmdSendTx,
+    cmdBumpFee,
 
     -- * Sweeps
     cmdPrepareSweep,
@@ -91,12 +92,14 @@ import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.Migration (databaseVersion, latestDatabaseVersion)
 import Haskoin.Wallet.Parser
 import Haskoin.Wallet.PendingTx
+import Haskoin.Wallet.RawTx (getRawTx)
 import Haskoin.Wallet.PrettyPrinter (coinBalancesPrinter, renderOn, txAnswerPrinter)
 import Haskoin.Wallet.Prompt
 import Haskoin.Wallet.Response
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
-import Haskoin.Wallet.TxBuilding (ChangeTo (..), buildTxSignData)
+import Haskoin.Wallet.TxBuilding (ChangeTo (..), buildTxSignData, coinWithPath)
+import Haskoin.Wallet.TxBumpFee
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSigning (parseOutsideTxSignData, signWalletTx)
@@ -153,6 +156,7 @@ commandResponse ctx cfg unit = \case
   CommandPrepareSendAll opts -> cmdPrepareSendAll ctx cfg unit opts
   CommandSignTx signing parts -> cmdSignTx ctx cfg signing parts
   CommandSendTx nosigHM fileM yes -> cmdSendTx ctx cfg unit nosigHM fileM yes
+  CommandBumpFee opts -> cmdBumpFee ctx cfg opts
   -- Sweeps
   CommandPrepareSweep opts -> cmdPrepareSweep ctx cfg unit opts
   CommandSignSweep signing keysM -> cmdSignSweep ctx cfg signing keysM
@@ -701,6 +705,61 @@ cmdSendTx ctx cfg unit nosigHM fileM yes =
         liftIO $ renderOn stderr (txAnswerPrinter net unit info)
         confirmed <- askYes terminal "Send this transaction to the network? This cannot be undone."
         unless confirmed $ throwError "The transaction was not sent"
+
+-- | Prepare the replacement of a stuck transaction of the account at a
+-- higher fee rate, as "Haskoin.Wallet.TxBumpFee" builds it. hw asks before
+-- it replaces the transactions that spend the change of the stuck one, and
+-- before it adds coins of the account, unless --yes. Every refusal comes
+-- before any question: the replacement is built first, and asked about
+-- after. The answer is that of preparetx.
+cmdBumpFee :: Ctx -> Config -> BumpFee -> IO Response
+cmdBumpFee ctx cfg opts =
+  runDBResponse cfg $ do
+    -- Before anything is asked, not after
+    for_ opts.output checkPathFree
+    holders <- transactionAccounts opts.bumped
+    when (null holders) $
+      throwError $ "The wallet has no transaction " <> cs (txHashToHex opts.bumped)
+    (accId, acc) <- accountAmong (\name -> "The transaction is not in the account " <> cs name) opts.account holders
+    let net = accountNetwork acc
+        store = webStore ctx cfg net
+    unless net.replaceByFee $
+      throwError "Bitcoin Cash replaces no transaction: its nodes keep the first one they see"
+    stuck <- stuckTransaction ctx store accId acc opts.bumped
+    liftEither $ checkReplaceable stuck
+    when (opts.feeByte < minimumRate stuck) $
+      throwError $
+        "The transaction pays " <> show stuck.sentSummary.summaryFeeByte
+          <> " sat/byte: give a --feerate of at least "
+          <> show (minimumRate stuck)
+    children <- spendingChildren ctx store accId acc [stuck]
+    refuseSpentElsewhere net accId (stuck : children)
+    plan <- bumpPlan net ctx accId (stuck : children)
+    gen <- liftIO initStdGen
+    -- The network takes no replacement that adds an unconfirmed coin
+    confirmed <- spendableCoins net ctx accId 1
+    candidates <- forM confirmed $ \coin -> (\(addr, path) -> (coin, addr, path)) <$> coinWithPath net accId coin
+    toAdd <- liftEither $ coinsToAdd ctx gen plan candidates opts.feeByte opts.dust
+    addedParents <- mapM getRawTx $ nub [coin.outpoint.hash | (coin, _, _) <- toAdd]
+    tsd <- buildBump ctx cfg net accId gen plan (toAdd, addedParents) opts.feeByte opts.dust
+    info <- txInfoOf ctx acc tsd
+    liftEither $ checkBumpFee plan info.txInfoSummary
+    -- The questions, once nothing can refuse the replacement any more. A
+    -- change address the replacement took is given back if the answer is
+    -- no, with everything else the command did.
+    confirmFeeRate opts.yes opts.feeByte opts.dust
+    unless (null children) $ do
+      liftIO $ mapM_ (tell terminal) (childrenLines children)
+      agreed <- agreedTo (childrenQuestion children)
+      unless agreed $ throwError "The transaction was not replaced"
+    unless (null toAdd) $ do
+      liftIO $ mapM_ (tell terminal) (addedLines opts.feeByte toAdd)
+      agreed <- agreedTo (addedQuestion toAdd)
+      unless agreed $ throwError "The transaction was not replaced"
+    preparedAnswer ctx accId acc opts.output tsd []
+  where
+    -- On stderr, with what it is about, to keep the --json answer clean
+    agreedTo question = if opts.yes then return True else askYes terminal question
 
 {- Sweeps -}
 

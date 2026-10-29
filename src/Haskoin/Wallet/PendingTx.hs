@@ -17,7 +17,7 @@ import qualified Data.ByteString as BS
 import Data.Containers.ListUtils (nubOrd)
 import Data.List (nub)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (listToMaybe, mapMaybe)
+import Data.Maybe (catMaybes, isJust, listToMaybe, mapMaybe)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.String.Conversions (cs)
@@ -229,9 +229,11 @@ coinExists net outpoint = do
 -- has dropped, or an output its transaction does not have. A transaction
 -- the store has not seen proves nothing: it may not have reached the store
 -- yet, or the store may be a new one. The coins of every account count,
--- and those outside the wallet, a sweep's for instance, alike.
-conflictedInputs :: [Store.Transaction] -> Tx -> [OutPoint]
-conflictedInputs parents tx = filter inConflict ((.outpoint) <$> tx.inputs)
+-- and those outside the wallet, a sweep's for instance, alike. A coin spent
+-- by one of the given transactions, those a replacement replaces while
+-- they are not in a block, is no conflict either.
+conflictedInputs :: [Store.Transaction] -> Set TxHash -> Tx -> [OutPoint]
+conflictedInputs parents replaced tx = filter inConflict ((.outpoint) <$> tx.inputs)
   where
     known = Map.fromList [(parent.txid, parent) | parent <- parents]
     inConflict :: OutPoint -> Bool
@@ -242,8 +244,9 @@ conflictedInputs parents tx = filter inConflict ((.outpoint) <$> tx.inputs)
           | parent.deleted -> True
           | otherwise ->
               case listToMaybe (drop (fromIntegral outpoint.index) parent.outputs) of
-                -- Spent by this very transaction, which the network has, is fine
-                Just output -> maybe False ((/= txHash tx) . (.txid)) output.spender
+                -- Spent by this very transaction, which the network has, or
+                -- by one it replaces, is fine
+                Just output -> maybe False (\spender -> spender.txid /= txHash tx && spender.txid `Set.notMember` replaced) output.spender
                 Nothing -> True
 
 -- | The transactions other than this one that spend its inputs, as the
@@ -290,7 +293,7 @@ importPendingTx net ctx accId tsd = do
     forM_ (txSignDataFingerprint tsd) $ learnFingerprint accId
   case heldM of
     Just held -> replaceVersion held tsd
-    Nothing -> insertPendingTx net accId tsd info.txInfoSummary
+    Nothing -> insertPendingTx net accId tsd info.txInfoSummary =<< replacedBy ctx accId tsd
   return pendingHash
   where
     tx = txSignDataTx tsd
@@ -312,9 +315,13 @@ replaceVersion held tsd = do
     heldTx = txSignDataTx held.pendingTxData
     tx = txSignDataTx tsd
 
--- | Store a transaction the account does not hold yet
-insertPendingTx :: (MonadUnliftIO m) => Network -> DBAccountId -> TxSignData -> TxSummary -> ExceptT String (DB m) ()
-insertPendingTx net accId tsd summary = do
+-- | Store a transaction the account does not hold yet. A replacement takes
+-- over what the transactions it replaces hold: the coins they spend, gone
+-- from the coins of the account once they are on the network, and locked by
+-- them while they are pending; and the addresses of the wallet they pay,
+-- its change address among them.
+insertPendingTx :: (MonadUnliftIO m) => Network -> DBAccountId -> TxSignData -> TxSummary -> Replaced -> ExceptT String (DB m) ()
+insertPendingTx net accId tsd summary replaced = do
   -- A pending transaction is retired when the sync sees it under one of
   -- the wallet's addresses; one touching none would wait forever
   unless (involvesWallet summary) $
@@ -322,13 +329,16 @@ insertPendingTx net accId tsd summary = do
   let touched = touchedBy summary
       tx = txSignDataTx tsd
   -- The coins of the account it spends must exist
-  forM_ touched.coinsSpent $ \outpoint -> do
-    inWallet <- lift $ coinExists net outpoint
-    unless inWallet $ throwError "A coin referenced by the transaction does not exist"
+  forM_ touched.coinsSpent $ \outpoint ->
+    unless (outpoint `Set.member` replaced.replacedSpent) $ do
+      inWallet <- lift $ coinExists net outpoint
+      unless inWallet $ throwError "A coin referenced by the transaction does not exist"
   -- No other pending transaction, of any account, may spend one of its
   -- inputs, nor may it spend a coin the user locked; storing it is what
   -- locks them
-  locked <- lockedOutpoints net
+  let heldByReplaced = Set.fromList [input.outpoint | p <- replaced.replacedRows, input <- (txSignDataTx p.pendingTxData).inputs]
+      pathsOfReplaced = [path | p <- replaced.replacedRows, path <- p.pendingTxData.txSignDataOutputPaths]
+  locked <- (`Set.difference` heldByReplaced) <$> lockedOutpoints net
   when (any ((`Set.member` locked) . (.outpoint)) tx.inputs) $
     throwError "A coin referenced by the transaction is locked"
   lockedByUser <- userLockedOutpoints net
@@ -340,12 +350,56 @@ insertPendingTx net accId tsd summary = do
   known <- walletPaths net accId addrs
   when (Map.size known /= length addrs) $
     throwError "Some referenced addresses do not exist"
-  used <- lift . usedAddresses =<< liftEither (mapM (addrToTextE net) touched.changeAddresses)
-  reserved <- reservedChangePaths accId
+  used <- lift . usedAddresses =<< liftEither (mapM (addrToTextE net) (filter (`notElem` replaced.replacedPaid) touched.changeAddresses))
+  reserved <- filter (`notElem` pathsOfReplaced) <$> reservedChangePaths accId
   unless (null used && all (`notElem` reserved) touched.changePaths) $
     throwError "Some of the internal output addresses are not free"
   time <- liftIO getCurrentTime
   lift $ P.insert_ $ DBPendingTx accId (hashBytes (nosigHash tx)) (blob tsd) False False time
+
+{- Replacements -}
+
+-- | What the transactions a replacement replaces hold in its account: the
+-- coins they spend, the addresses of the wallet they pay, and the rows of
+-- those still pending. Each is a transaction of the account not yet in a
+-- block: pending and sent, or on the network. One the network dropped,
+-- whose summary the sync marked dead, holds nothing any more. A
+-- transaction that replaces none holds nothing either.
+data Replaced = Replaced
+  { replacedSpent :: !(Set OutPoint),
+    replacedPaid :: ![Address],
+    replacedRows :: ![PendingTx]
+  }
+
+-- | What the transactions the signing data replaces hold in the account.
+-- One in a block, or not of the account, is refused: it cannot be replaced.
+replacedBy :: (MonadUnliftIO m) => Ctx -> DBAccountId -> TxSignData -> ExceptT String (DB m) Replaced
+replacedBy ctx accId tsd = do
+  acc <- getAccountById accId
+  let net = accountNetwork acc
+  held <- pendingTxs accId
+  found <- forM tsd.txSignDataReplaces $ \tid ->
+    case [p | p <- held, txHash (txSignDataTx p.pendingTxData) == tid] of
+      p : _ -> do
+        info <- liftEither $ parseTxSignData net ctx (accountXPubKey ctx acc) p.pendingTxData
+        return $ Just (info.txInfoSummary, Just p)
+      [] -> do
+        live <- liveSummary net accId tid
+        case live of
+          Just (block, summary)
+            | Store.confirmed block -> throwError $ "The transaction " <> cs (txHashToHex tid) <> " it replaces is in a block already: delete this replacement with deletetx"
+            | otherwise -> return $ Just (summary, Nothing)
+          Nothing -> do
+            dead <- lift $ isJust <$> P.get (DBTxInfoKey accId (hashBytes tid))
+            unless dead $ throwError $ "The transaction " <> cs (txHashToHex tid) <> " it replaces is not one of the account"
+            return Nothing
+  let summaries = fst <$> catMaybes found
+  return
+    Replaced
+      { replacedSpent = Set.fromList [outpoint | s <- summaries, input <- Map.elems s.summaryMyInputs, outpoint <- input.myInputsOutpoints],
+        replacedPaid = nub $ concatMap (Map.keys . (.summaryMyOutputs)) summaries,
+        replacedRows = mapMaybe snd (catMaybes found)
+      }
 
 {- Deleting and retiring -}
 
@@ -396,6 +450,9 @@ sendPending ctx storeOn beforeSending nosigH = do
   let signedTx = txSignDataTx held.pendingTxData
       store = storeOn (accountNetwork acc)
   unless (isSigned signedTx) $ throwError "The transaction is not signed"
+  -- A replacement may no longer replace anything: a transaction it
+  -- replaces confirmed
+  replaced <- replacedBy ctx held.pendingTxAccount held.pendingTxData
   beforeSending (accountNetwork acc) =<< pendingSummary ctx acc held
   -- The summary as it will read once sent, made before anything leaves
   summary <- pendingSummary ctx acc held {pendingTxOnline = True}
@@ -404,6 +461,11 @@ sendPending ctx storeOn beforeSending nosigH = do
   unless accepted $ throwError notAccepted
   _ <- lift $ setPendingTxOnline nosigH
   lift $ insertRawTx signedTx
+  -- The pending transactions it replaces are gone from the network once it
+  -- spreads, and the sync would send them again. Their raw transactions go
+  -- with them, unless a coin of the wallet comes from one after all.
+  lift $ forM_ replaced.replacedRows retirePendingTx
+  void $ lift $ dropRawTxsWithoutCoins [txHash (txSignDataTx p.pendingTxData) | p <- replaced.replacedRows]
   return (acc, summary)
 
 -- | The account of the wallet a transaction to sign, review or import

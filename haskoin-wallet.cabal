@@ -76,6 +76,7 @@ library
       Haskoin.Wallet.Store
       Haskoin.Wallet.Sync
       Haskoin.Wallet.TxBuilding
+      Haskoin.Wallet.TxBumpFee
       Haskoin.Wallet.TxInfo
       Haskoin.Wallet.TxSendAll
       Haskoin.Wallet.TxSignData
@@ -225,6 +226,7 @@ test-suite spec
       Haskoin.Wallet.SyncSpec
       Haskoin.Wallet.TestUtils
       Haskoin.Wallet.TxBuildingSpec
+      Haskoin.Wallet.TxBumpFeeSpec
       Haskoin.Wallet.TxInfoSpec
       Haskoin.Wallet.TxSendAllSpec
       Haskoin.Wallet.TxSigningSpec

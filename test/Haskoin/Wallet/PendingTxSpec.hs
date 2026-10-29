@@ -18,6 +18,7 @@ import qualified Data.ByteString as BS
 import Data.Default (def)
 import Data.Either (isLeft)
 import Data.IORef (IORef, modifyIORef, newIORef, readIORef)
+import qualified Data.Set as Set
 import Data.Time (UTCTime)
 import qualified Database.Persist as P
 import Haskoin
@@ -188,14 +189,14 @@ otherAccount ctx cfg = do
 -- other account, less a fee of 1000
 sweepOfFunding :: Ctx -> TxSignData
 sweepOfFunding ctx =
-  TxSignData (spendingTx ctx [(txHash (funding ctx), 0)] [(externalAddr2, 19000)]) [funding ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing
+  TxSignData (spendingTx ctx [(txHash (funding ctx), 0)] [(externalAddr2, 19000)]) [funding ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing []
 
 -- | A sweep by the other account of the coin of 'secondFunding': the 10000
 -- at the account's second external address go to the first external
 -- address of the other account, less a fee of 1000
 sweepOfSecondFunding :: Ctx -> TxSignData
 sweepOfSecondFunding ctx =
-  TxSignData (spendingTx ctx [(txHash (secondFunding ctx), 0)] [(externalAddr2, 9000)]) [secondFunding ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing
+  TxSignData (spendingTx ctx [(txHash (secondFunding ctx), 0)] [(externalAddr2, 9000)]) [secondFunding ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing []
 
 -- | When a transaction in preparation was created, if the wallet holds it
 createdOf :: TxInfo -> Maybe UTCTime
@@ -209,7 +210,7 @@ createdOf info = case txInfoStatus info of
 -- on both chains
 cashSweepOfFunding :: Ctx -> TxSignData
 cashSweepOfFunding ctx =
-  TxSignData (spendingTx ctx [(txHash (funding ctx), 0)] [(bchExternalAddr, 19000)]) [funding ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing
+  TxSignData (spendingTx ctx [(txHash (funding ctx), 0)] [(bchExternalAddr, 19000)]) [funding ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing []
 
 -- | Whether a pending transaction holds the coin
 transactionLocked :: JsonCoin -> Bool
@@ -379,7 +380,7 @@ importingSpec ctx =
         let spend = spendingTx ctx [(txHash (funding ctx), 0)] [(otherAddr 3, 19000)]
         lift $
           dbShouldFailWith "A coin referenced by the transaction is locked" $
-            importPendingTx btc ctx accId (TxSignData spend [funding ctx] [Deriv :/ 0 :/ 0] [] Nothing Nothing)
+            importPendingTx btc ctx accId (TxSignData spend [funding ctx] [Deriv :/ 0 :/ 0] [] Nothing Nothing [])
     it "locks the coin of another account it spends, in that account too" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -417,7 +418,7 @@ importingSpec ctx =
         let spend = spendingTx ctx [(txHash (funding ctx), 0)] [(otherAddr 3, 19000)]
         lift $
           dbShouldFailWith "A coin referenced by the transaction is locked by the user: unlockcoin frees it" $
-            importPendingTx btc ctx accId (TxSignData spend [funding ctx] [Deriv :/ 0 :/ 0] [] Nothing Nothing)
+            importPendingTx btc ctx accId (TxSignData spend [funding ctx] [Deriv :/ 0 :/ 0] [] Nothing Nothing [])
     it "refuses under coin control a coin the user locked" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -435,7 +436,7 @@ importingSpec ctx =
             spend = spendingTx ctx [(txHash unseen, 0)] [(otherAddr 3, 4000)]
         lift $
           dbShouldFailWith "A coin referenced by the transaction does not exist" $
-            importPendingTx btc ctx accId (TxSignData spend [unseen] [Deriv :/ 0 :/ 0] [] Nothing Nothing)
+            importPendingTx btc ctx accId (TxSignData spend [unseen] [Deriv :/ 0 :/ 0] [] Nothing Nothing [])
     it "refuses a transaction paying change to an address the wallet has not generated" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -444,7 +445,7 @@ importingSpec ctx =
         let spend = spendingTx ctx [(txHash (funding ctx), 0)] [(internalAddr 1, 11774), (otherAddr 0, 8000)]
         lift $
           dbShouldFailWith "Some referenced addresses do not exist" $
-            importPendingTx btc ctx accId (TxSignData spend [funding ctx] [Deriv :/ 0 :/ 0] [Deriv :/ 1 :/ 1] Nothing Nothing)
+            importPendingTx btc ctx accId (TxSignData spend [funding ctx] [Deriv :/ 0 :/ 0] [Deriv :/ 1 :/ 1] Nothing Nothing [])
     it "refuses a transaction whose change address another pending transaction holds" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -455,7 +456,7 @@ importingSpec ctx =
         let spend = spendingTx ctx [(txHash (secondFunding ctx), 0)] [(internalAddr 0, 2774), (otherAddr 1, 7000)]
         lift $
           dbShouldFailWith "Some of the internal output addresses are not free" $
-            importPendingTx btc ctx accId (TxSignData spend [secondFunding ctx] [Deriv :/ 0 :/ 1] [Deriv :/ 1 :/ 0] Nothing Nothing)
+            importPendingTx btc ctx accId (TxSignData spend [secondFunding ctx] [Deriv :/ 0 :/ 1] [Deriv :/ 1 :/ 0] Nothing Nothing [])
 
 listingSpec :: Ctx -> Spec
 listingSpec ctx =
@@ -606,7 +607,7 @@ sendingSpec ctx =
       readIORef asks `shouldReturn` 3
     it "sees the transaction on the first ask" $ do
       asks <- newIORef 0
-      let tsd = TxSignData (spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 8000)]) [] [] [] Nothing Nothing
+      let tsd = TxSignData (spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 8000)]) [] [] [] Nothing Nothing []
       runExceptT (broadcastWith 1000 3 (countingAsks asks (toStore (storeKnowing ctx tsd))) (txSignDataTx tsd))
         `shouldReturn` Right True
       readIORef asks `shouldReturn` 1
@@ -806,15 +807,18 @@ conflictsSpec ctx =
         coin = OutPoint (txHash (funding ctx)) 0
         spend = spendingTx ctx [(txHash (funding ctx), 0)] [(otherAddr 0, 19000)]
     it "are none while the coins it spends are unspent" $
-      conflictedInputs [parent] spend `shouldBe` []
+      conflictedInputs [parent] Set.empty spend `shouldBe` []
     it "are the coins another transaction spends" $
-      conflictedInputs [withSpender 0 (fakeTxHash 8, 0) parent] spend `shouldBe` [coin]
+      conflictedInputs [withSpender 0 (fakeTxHash 8, 0) parent] Set.empty spend `shouldBe` [coin]
     it "leave out a coin the transaction itself spends, once the network has it" $
-      conflictedInputs [withSpender 0 (txHash spend, 0) parent] spend `shouldBe` []
+      conflictedInputs [withSpender 0 (txHash spend, 0) parent] Set.empty spend `shouldBe` []
     it "are the coins of a transaction the store dropped" $
-      conflictedInputs [replaced parent] spend `shouldBe` [coin]
+      conflictedInputs [replaced parent] Set.empty spend `shouldBe` [coin]
+    -- A replacement spends the coins of the transaction it replaces
+    it "leave out a coin spent by a transaction it replaces" $
+      conflictedInputs [withSpender 0 (fakeTxHash 8, 0) parent] (Set.singleton (fakeTxHash 8)) spend `shouldBe` []
     it "leave out the coins of a transaction the store has not seen, which proves nothing yet" $
-      conflictedInputs [] spend `shouldBe` []
+      conflictedInputs [] Set.empty spend `shouldBe` []
     it "name the other transactions that spend its coins, each once" $ do
       let twoCoins = spendingTx ctx [(txHash (funding ctx), 0), (txHash (funding ctx), 1)] [(otherAddr 0, 19000)]
           bothSpent = withSpender 1 (fakeTxHash 8, 1) $ withSpender 0 (fakeTxHash 8, 0) $
@@ -824,7 +828,7 @@ conflictsSpec ctx =
       rivalSpenders [parent] spend `shouldBe` []
       rivalSpenders [withSpender 0 (txHash spend, 0) parent] spend `shouldBe` []
     it "are the coins past the outputs of their transaction" $
-      conflictedInputs [parent] (spendingTx ctx [(txHash (funding ctx), 1)] [(otherAddr 0, 19000)])
+      conflictedInputs [parent] Set.empty (spendingTx ctx [(txHash (funding ctx), 1)] [(otherAddr 0, 19000)])
         `shouldBe` [OutPoint (txHash (funding ctx)) 1]
 
 {- The account of a transaction -}
@@ -832,7 +836,7 @@ conflictsSpec ctx =
 -- | A transaction between two addresses outside the wallet, as a sweep of
 -- keys kept elsewhere to another wallet is: it involves no account
 outsideTx :: Ctx -> TxSignData
-outsideTx ctx = TxSignData (spendingTx ctx [(txHash parent, 0)] [(otherAddr 0, 9000)]) [parent] [] [] Nothing Nothing
+outsideTx ctx = TxSignData (spendingTx ctx [(txHash parent, 0)] [(otherAddr 0, 9000)]) [parent] [] [] Nothing Nothing []
   where
     parent = spendingTx ctx [(fakeTxHash 9, 0)] [(otherAddr 1, 10000)]
 

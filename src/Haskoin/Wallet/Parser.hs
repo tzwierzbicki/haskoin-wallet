@@ -75,6 +75,7 @@ data Command
   | -- | The nosigHash of a pending transaction, or the file of a signed
     -- one, and whether to send it without asking
     CommandSendTx !(Maybe TxHash) !(Maybe FilePath) !Bool
+  | CommandBumpFee !BumpFee
   | -- | The account, or every one, and whether to sync from the start
     CommandSync !(Maybe Text) !Bool
   | -- | The file of the copy, or none for the backups directory of hw
@@ -147,6 +148,21 @@ data PrepareTx = PrepareTx
     -- from (--changeback) or to a new change address (--newchange), when
     -- the command says. Otherwise the configuration file says.
     changeBack :: !(Maybe Bool)
+  }
+  deriving (Eq, Show)
+
+-- | The options of bumpfee
+data BumpFee = BumpFee
+  { -- | The transaction to replace, by its id
+    bumped :: !TxHash,
+    account :: !(Maybe Text),
+    -- | The fee rate of the replacement, in satoshis per byte
+    feeByte :: !Natural,
+    -- | The dust limit, in satoshis
+    dust :: !Natural,
+    output :: !(Maybe FilePath),
+    -- | Whether every question is answered yes (--yes)
+    yes :: !Bool
   }
   deriving (Eq, Show)
 
@@ -312,6 +328,7 @@ commandParser =
             command "pendingtxs" pendingTxsParser,
             command "signtx" signTxParser,
             command "sendtx" sendTxParser,
+            command "bumpfee" bumpFeeParser,
             command "deletetx" deleteTxParser,
             command "coins" coinsParser,
             command "lockcoin" lockCoinParser,
@@ -1266,6 +1283,59 @@ readOutputIndex :: String -> Maybe Word32
 readOutputIndex s = case readNatural (cs s) of
   Just n | n <= fromIntegral (maxBound :: Word32) -> Just (fromIntegral n)
   _ -> Nothing
+
+{- BumpFee Parser -}
+
+bumpFeeParser :: ParserInfo Command
+bumpFeeParser = do
+  let options =
+        BumpFee
+          <$> bumpedArg
+          <*> accountOption
+          <*> replacementFeeOption
+          <*> dustOption
+          <*> outputFileMaybeOption
+          <*> yesOption "Answer yes to every question: a fee rate above 100 satoshis per byte, the coins to add, the transactions to replace with the stuck one"
+  info (CommandBumpFee <$> options) $
+    progDesc "Prepare a transaction that replaces a stuck one, at a higher fee rate"
+      <> footer
+        [r|
+`bumpfee` prepares a transaction that replaces a transaction of the account the
+network has not confirmed yet, paying a higher fee, as BIP 125 allows on
+Bitcoin. The replacement spends the same coins and pays the recipients the same
+amounts: the higher fee comes out of the change. When the change cannot pay it,
+hw offers to add confirmed coins of the account. A transaction of the account
+that spends the change of the stuck one would be removed with it: hw offers to
+replace both with one transaction that pays the recipients of both. The
+replacement is a pending transaction: sign it with `signtx` and send it with
+`sendtx`, which drops from the pending transactions those it replaces. Bitcoin
+Cash replaces no transaction.
+
+A replacement that never confirms was refused by the network, which tells hw
+nothing: it must also pay the fees of transactions hw cannot see, such as a
+recipient's spend of the payment. Delete it with `deletetx`, `sync`, and bump
+again at a higher fee rate. A transaction sent before hw marked its
+transactions replaceable cannot be bumped. A transaction that pays several
+addresses of the wallet besides its recipients, its change among them, gets one
+change output in its replacement, holding what those outputs held.
+|]
+
+-- | The transaction bumpfee replaces
+bumpedArg :: Parser TxHash
+bumpedArg =
+  argument (maybeReader $ hexToTxHash . cs) $
+    metavar "TXID"
+      <> help "The id of the transaction to replace, as txs or pendingtxs shows it"
+
+-- | The fee rate of a replacement, which has no default: it must be above
+-- the rate of the transaction it replaces
+replacementFeeOption :: Parser Natural
+replacementFeeOption =
+  option (maybeReader $ readNatural . cs) $
+    short 'f'
+      <> long "feerate"
+      <> metavar "SAT/BYTE"
+      <> help "The fee rate of the replacement, in satoshis per byte, above that of the transaction it replaces. hw asks before it takes one above 100."
 
 {- SendTx Parser -}
 

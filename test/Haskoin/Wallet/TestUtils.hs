@@ -401,7 +401,7 @@ pendingRow accId tx =
   DBPendingTx
     { dBPendingTxAccount = accId,
       dBPendingTxNosigHash = hashBytes (nosigHash tx),
-      dBPendingTxBlob = BS.toStrict $ encode $ TxSignData tx [] [] [] Nothing Nothing,
+      dBPendingTxBlob = BS.toStrict $ encode $ TxSignData tx [] [] [] Nothing Nothing [],
       dBPendingTxOnline = False,
       dBPendingTxConflicted = False,
       dBPendingTxCreated = fixtureTime

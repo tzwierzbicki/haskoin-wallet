@@ -96,7 +96,7 @@ fundedWith ctx accId amount = do
 -- signing data naming a seed as a signer writes it
 paymentOf :: Ctx -> Tx -> Fingerprint -> TxSignData
 paymentOf ctx funding fingerprint =
-  TxSignData (spendingTx ctx [(txHash funding, 0)] [(otherAddr 0, 40000)]) [funding] [Deriv :/ 0 :/ 0] [] Nothing (Just fingerprint)
+  TxSignData (spendingTx ctx [(txHash funding, 0)] [(otherAddr 0, 40000)]) [funding] [Deriv :/ 0 :/ 0] [] Nothing (Just fingerprint) []
 
 {- Creating -}
 

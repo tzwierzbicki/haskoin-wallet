@@ -32,7 +32,11 @@ data TxSignData = TxSignData
     txSignDataFeeRate :: !(Maybe Natural),
     -- | The fingerprint of the seed that signed the transaction, which the
     -- signer writes so that an online wallet learns the seed of the account
-    txSignDataFingerprint :: !(Maybe Fingerprint)
+    txSignDataFingerprint :: !(Maybe Fingerprint),
+    -- | The ids of the transactions of the account it replaces, as bumpfee
+    -- prepares it: a stuck transaction, and those that spend its change.
+    -- None for any other transaction.
+    txSignDataReplaces :: ![TxHash]
   }
   deriving (Eq, Show)
 
@@ -52,13 +56,16 @@ instance FromJSON TxSignData where
         <*> o .: "outputpaths"
         <*> o .:? "feerate"
         <*> o .:? "fingerprint"
+        <*> o .:? "replaces" .!= []
 
 instance ToJSON TxSignData where
   toJSON = object . txSignDataPairs
 
--- | The keys of signing data in JSON
+-- | The keys of signing data in JSON. The transactions replaced are
+-- written only for a replacement, so that the file of any other transaction
+-- is as an earlier hw wrote it.
 txSignDataPairs :: TxSignData -> [Pair]
-txSignDataPairs (TxSignData t i oi op r f) =
+txSignDataPairs (TxSignData t i oi op r f rs) =
   [ "tx" .= encodeHex (S.encode t),
     "txinputs" .= (encodeHex . S.encode <$> i),
     "inputpaths" .= oi,
@@ -66,6 +73,7 @@ txSignDataPairs (TxSignData t i oi op r f) =
     "feerate" .= r,
     "fingerprint" .= f
   ]
+    <> ["replaces" .= rs | not (null rs)]
 
 instance MarshalJSON Ctx TxSignData where
   marshalValue _ = toJSON

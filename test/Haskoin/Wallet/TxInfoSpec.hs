@@ -242,8 +242,8 @@ statusSpec =
       txInfoHash (TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 3 False))) `shouldBe` Just (fakeTxHash 2)
 
     it "gives a transaction in preparation its id once it is signed" $ do
-      let unsigned = PendingStatus (fakeTxHash 7) Nothing False False Nothing
-          signed = PendingStatus (fakeTxHash 7) (Just (fakeTxHash 2)) False False Nothing
+      let unsigned = PendingStatus (fakeTxHash 7) Nothing False False Nothing []
+          signed = PendingStatus (fakeTxHash 7) (Just (fakeTxHash 2)) False False Nothing []
       (pendingSigned unsigned, txInfoHash (TxInfo spendSummary (Pending unsigned))) `shouldBe` (False, Nothing)
       (pendingSigned signed, txInfoHash (TxInfo spendSummary (Pending signed))) `shouldBe` (True, Just (fakeTxHash 2))
 
@@ -305,7 +305,7 @@ jsonSpec =
       (KeyMap.lookup "time" <$> written) `shouldBe` Right (Just Null)
 
     it "writes a transaction in preparation with its state, and the block of one that is nowhere yet" $ do
-      let info = TxInfo paymentSummary (Pending (PendingStatus (fakeTxHash 7) (Just (fakeTxHash 1)) True False (Just seenTime)))
+      let info = TxInfo paymentSummary (Pending (PendingStatus (fakeTxHash 7) (Just (fakeTxHash 1)) True False (Just seenTime) []))
           json :: String
           json =
             [r|{
@@ -331,7 +331,8 @@ jsonSpec =
                 "signed": true,
                 "online": true,
                 "conflicted": false,
-                "created": "2023-11-14T22:13:20Z"
+                "created": "2023-11-14T22:13:20Z",
+                "replaces": []
               }
             }|]
       eitherDecode (cs json) `shouldBe` Right (marshalValue btc info)
@@ -339,13 +340,13 @@ jsonSpec =
 
     -- One the wallet does not hold, read from a file, has none
     it "writes no creation time for a transaction in preparation that has none as null" $ do
-      let info = TxInfo paymentSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing))
+      let info = TxInfo paymentSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing []))
       unmarshalJSON btc (marshalJSON btc info) `shouldBe` Just info
       (KeyMap.lookup "created" <$> (pendingOf =<< eitherDecode (marshalJSON btc info))) `shouldBe` Right (Just Null)
 
     -- As hw wrote it before it kept the time
     it "reads a transaction in preparation without its creation time" $ do
-      let info = TxInfo paymentSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing))
+      let info = TxInfo paymentSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing []))
       (unmarshalJSON btc . encode . Object . withoutCreated <$> eitherDecode (marshalJSON btc info)) `shouldBe` Right (Just info)
 
     it "reads the summaries stored by earlier versions of hw" $ do

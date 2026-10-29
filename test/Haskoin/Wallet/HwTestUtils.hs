@@ -162,6 +162,22 @@ data Chain = Chain
 mine :: Chain -> Chain
 mine (Chain height txs) = Chain (height + 1) [(tx, Just (fromMaybe (height + 1) block)) | (tx, block) <- txs]
 
+-- | The chain without the transactions of the mempool that spend a coin the
+-- transaction spends, and those that spend theirs: a node of Bitcoin Core
+-- takes a replacement in their place, as long as it pays more
+withoutConflicts :: Tx -> Chain -> Chain
+withoutConflicts tx chain = chain {chainTxs = [entry | entry@(t, _) <- chain.chainTxs, txHash t `notElem` evicted]}
+  where
+    mempool = [t | (t, Nothing) <- chain.chainTxs]
+    spends :: [OutPoint] -> Tx -> Bool
+    spends spent t = any ((`elem` spent) . (.outpoint)) t.inputs
+    direct = [txHash t | t <- mempool, spends ((.outpoint) <$> tx.inputs) t]
+    evicted = grow direct
+    grow :: [TxHash] -> [TxHash]
+    grow ids =
+      let more = [txHash t | t <- mempool, txHash t `notElem` ids, any ((`elem` ids) . (.outpoint.hash)) t.inputs]
+       in if null more then ids else grow (ids <> more)
+
 -- | The transactions of the mempool: what hw sent to the network, until the
 -- chain is mined
 inMempool :: Chain -> [Tx]
@@ -265,7 +281,11 @@ chainStore ctx ref =
       storeUnspents = \addrs -> (\chain -> [coin | coin <- unspentsOf ctx chain, maybe False (`elem` addrs) coin.address]) <$> now,
       storeRawTransactions = \tids -> (\chain -> [tx | tid <- tids, (tx, _) <- chain.chainTxs, txHash tx == tid]) <$> now,
       storePublish = \tx -> liftIO $ modifyIORef ref $ \chain ->
-        if any ((== txHash tx) . txHash . fst) chain.chainTxs then chain else chain {chainTxs = chain.chainTxs <> [(tx, Nothing)]}
+        if any ((== txHash tx) . txHash . fst) chain.chainTxs
+          then chain
+          else
+            let kept = withoutConflicts tx chain
+             in kept {chainTxs = kept.chainTxs <> [(tx, Nothing)]}
     }
   where
     now = liftIO (readIORef ref)

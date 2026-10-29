@@ -173,7 +173,10 @@ data PendingStatus = PendingStatus
     pendingConflicted :: !Bool,
     -- | When the wallet started holding it, as it was prepared or imported:
     -- none for a transaction the wallet does not hold, read from a file
-    pendingCreated :: !(Maybe UTCTime)
+    pendingCreated :: !(Maybe UTCTime),
+    -- | The ids of the transactions it replaces, for a replacement bumpfee
+    -- prepared
+    pendingReplaces :: ![TxHash]
   }
   deriving (Eq, Show)
 
@@ -311,7 +314,8 @@ statusPairs (Pending status) =
           "signed" .= pendingSigned status,
           "online" .= pendingOnline status,
           "conflicted" .= pendingConflicted status,
-          "created" .= pendingCreated status
+          "created" .= pendingCreated status,
+          "replaces" .= pendingReplaces status
         ]
   ]
 
@@ -327,6 +331,7 @@ statusParser o = do
           <*> p .: "online"
           <*> p .:? "conflicted" .!= False
           <*> p .:? "created"
+          <*> p .:? "replaces" .!= []
     Nothing ->
       fmap OnChain $
         ChainStatus

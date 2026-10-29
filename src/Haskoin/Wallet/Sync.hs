@@ -360,8 +360,12 @@ recordStanding store held = do
   let rivalNosigHashes = Map.fromList [(rival.txid, nosigHash (Store.transactionData rival)) | rival <- rivalTxs, not rival.deleted]
       underAnotherId p = Just (nosigHash (txOf p)) `elem` map (`Map.lookup` rivalNosigHashes) (rivalsOf p)
       (elsewhere, others) = partition underAnotherId held
+      -- A replacement spends the coins of the transactions it replaces, as
+      -- long as those are not in a block
+      unconfirmedRivals = Set.fromList [rival.txid | rival <- rivalTxs, not rival.deleted, not (Store.confirmed rival.block)]
+      replacing p = Set.fromList p.pendingTxData.txSignDataReplaces `Set.intersection` unconfirmedRivals
   conflicted <- flip filterM others $ \p -> do
-    let inConflict = not $ null $ conflictedInputs parents (txOf p)
+    let inConflict = not $ null $ conflictedInputs parents (replacing p) (txOf p)
     lift $ setPendingTxConflicted p inConflict
     return inConflict
   return (elsewhere, conflicted)

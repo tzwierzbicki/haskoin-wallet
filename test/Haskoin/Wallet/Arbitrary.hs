@@ -134,6 +134,7 @@ arbitraryTxSignData net ctx =
     <*> resize 10 (listOf arbitrarySoftPath)
     <*> arbitraryMaybe arbitraryNatural
     <*> arbitraryMaybe arbitraryFingerprint
+    <*> resize 3 (listOf arbitraryTxHash)
 
 arbitraryMyOutputs :: Gen MyOutputs
 arbitraryMyOutputs =
@@ -204,7 +205,7 @@ arbitraryTxStatus :: Gen TxStatus
 arbitraryTxStatus =
   oneof
     [ OnChain <$> (ChainStatus <$> arbitraryTxHash <*> arbitraryBlockRef <*> arbitraryMaybe arbitraryUTCTime <*> arbitraryNatural <*> arbitrary),
-      Pending <$> (PendingStatus <$> arbitraryTxHash <*> arbitraryMaybe arbitraryTxHash <*> arbitrary <*> arbitrary <*> arbitraryMaybe arbitraryUTCTime)
+      Pending <$> (PendingStatus <$> arbitraryTxHash <*> arbitraryMaybe arbitraryTxHash <*> arbitrary <*> arbitrary <*> arbitraryMaybe arbitraryUTCTime <*> resize 3 (listOf arbitraryTxHash))
     ]
 
 arbitraryTxInfo :: Network -> Gen TxInfo

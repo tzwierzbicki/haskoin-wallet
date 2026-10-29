@@ -1070,7 +1070,7 @@ changeSpendTx ctx =
         [Deriv :/ 0 :/ 0]
         [Deriv :/ 1 :/ 0]
         Nothing
-        Nothing
+        Nothing []
 
 -- | The payment of 'realPaymentStore' spent by 'changeSpendTx', confirmed
 -- at height 800001: the coin is gone, the change is a coin at internalAddr 0
@@ -1205,7 +1205,7 @@ pendingTx ctx =
         [Deriv :/ 0 :/ 0]
         [Deriv :/ 0 :/ 0]
         Nothing
-        Nothing
+        Nothing []
 
 -- | The coin of 'realPaymentStore' spent to otherAddr 0, with its signing
 -- data as the wallet keeps it, signed
@@ -1220,7 +1220,7 @@ unsignedSpend ctx =
     [Deriv :/ 0 :/ 0]
     []
     (Just 10)
-    Nothing
+    Nothing []
 
 -- | The payment of 'realPaymentStore' spent by somebody else's transaction
 -- 8, confirmed at height 800001: the coin is gone, and the store names
@@ -1271,7 +1271,7 @@ malleatedStore ctx =
 -- 1000
 sweepToOther :: Ctx -> TxSignData
 sweepToOther ctx =
-  TxSignData (spendingTx ctx [(realPaymentId ctx, 0)] [(externalAddr2, 49000)]) [realPaymentTx ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing
+  TxSignData (spendingTx ctx [(realPaymentId ctx, 0)] [(externalAddr2, 49000)]) [realPaymentTx ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing []
 
 -- | A payment of 10000 to somebody else's address, otherAddr 3: a coin
 -- outside the wallet whose key the user holds, on a paper wallet for
@@ -1283,7 +1283,7 @@ outsidePayment ctx = fundingTx ctx 9 [(otherAddr 3, 10000)]
 -- less a fee of 1000
 outsideSweep :: Ctx -> TxSignData
 outsideSweep ctx =
-  TxSignData (spendingTx ctx [(txHash (outsidePayment ctx), 0)] [(externalAddr 0, 9000)]) [outsidePayment ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing
+  TxSignData (spendingTx ctx [(txHash (outsidePayment ctx), 0)] [(externalAddr 0, 9000)]) [outsidePayment ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing []
 
 -- | A store that knows the payment to otherAddr 3, its coin unspent, and
 -- nothing of the account

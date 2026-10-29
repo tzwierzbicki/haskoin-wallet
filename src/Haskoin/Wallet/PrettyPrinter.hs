@@ -30,7 +30,7 @@ import Haskoin.Wallet.Amounts
 import Haskoin.Wallet.Coin
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Keys (KeySource (..))
-import Haskoin.Wallet.Parser (Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..))
+import Haskoin.Wallet.Parser (BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..))
 import Haskoin.Wallet.Response
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.TxInfo
@@ -500,6 +500,7 @@ statusPrinter (Pending status) =
       case pendingCreated status of
         Just time -> keyPrinter 9 "Created" <> formatValue (timeText time)
         Nothing -> mempty,
+      vcat [keyPrinter 9 "Replaces" <> formatTxHash (cs $ txHashToHex replaced) | replaced <- pendingReplaces status],
       keyPrinter 9 "Signed"
         <> text "This pending transaction is"
           <+> if pendingSigned status
@@ -695,6 +696,8 @@ nextStepsPrinter cmd res =
     (CommandPrepareTx opts, ResponsePrepared _ info _)
       | Just nosig <- nosigOf info -> afterPreparing opts.output nosig
     (CommandPrepareSendAll opts, ResponsePrepared _ info _)
+      | Just nosig <- nosigOf info -> afterPreparing opts.output nosig
+    (CommandBumpFee opts, ResponsePrepared _ info _)
       | Just nosig <- nosigOf info -> afterPreparing opts.output nosig
     -- The keys of a file at hand for the sweep are the ones to sign it with
     (CommandPrepareSweep opts, ResponseTx _ info)
