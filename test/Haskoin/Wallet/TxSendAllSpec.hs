@@ -134,6 +134,14 @@ buildSpec ctx =
       built <- expectRight $ build ctx (found (twoCoins ctx) [(externalAddr 3, Deriv :/ 0 :/ 3)]) [(externalAddr 3, Remainder)]
       built.outputPaths `shouldBe` [Deriv :/ 0 :/ 3]
 
+    it "marks every input replaceable on Bitcoin" $ do
+      built <- expectRight $ build ctx (found (twoCoins ctx) []) [(otherAddr 0, Remainder)]
+      ((.sequence) <$> built.tx.inputs) `shouldBe` [0xfffffffd, 0xfffffffd]
+
+    it "keeps every input final on Bitcoin Cash" $ do
+      built <- expectRight $ buildSendAll bch ctx (mkStdGen 0) (found (twoCoins ctx) []) [(otherAddr 0, Remainder)] 10 546
+      ((.sequence) <$> built.tx.inputs) `shouldBe` [0xffffffff, 0xffffffff]
+
     it "is refused without coins to send" $
       build ctx (found [] []) [(otherAddr 0, Remainder)] `shouldBe` Left "There are no coins to send"
 

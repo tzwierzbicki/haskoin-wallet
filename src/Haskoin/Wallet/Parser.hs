@@ -840,7 +840,10 @@ The new transaction is not signed. The next step will be to sign it. Any coins
 spent by it will be locked to prevent spending them twice. If you change your
 mind about sending this transaction, you can call `deletetx` to remove it and
 free up the locked coins. All the pending transactions are referenced by their
-noSigHash (a hash of the transaction without its signatures).
+noSigHash (a hash of the transaction without its signatures). On Bitcoin, the
+transaction is marked replaceable (BIP 125): until it confirms, a transaction
+spending the same coins at a higher fee can take its place. Bitcoin Cash
+replaces no transaction.
 
 Coin control: --coin spends the coins given, and --spendfrom the coins at the
 addresses given, all of those that can be spent, and only them. A coin chosen

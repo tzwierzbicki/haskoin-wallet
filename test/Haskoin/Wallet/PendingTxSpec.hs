@@ -251,7 +251,7 @@ importingSpec ctx =
         second <- payment ctx cfg accId [] (otherAddr 1) 7000
         liftIO $
           sortedOutputs (txSignDataTx second)
-            `shouldBe` spendingTx ctx [(txHash (secondFunding ctx), 0)] [(internalAddr 1, 2774), (otherAddr 1, 7000)]
+            `shouldBe` replaceableTx ctx [(txHash (secondFunding ctx), 0)] [(internalAddr 1, 2774), (otherAddr 1, 7000)]
         _ <- importPendingTx btc ctx accId second
         bothHeld <- lockedCoins accId
         liftIO $ bothHeld `shouldMatchList` [(externalAddr 0, True), (externalAddr 1, True)]
@@ -266,10 +266,12 @@ importingSpec ctx =
         -- and one output at 1 satoshi per byte
         tsd <- payment ctx cfg accId [] (otherAddr 2) 19808
         liftIO $ do
-          txSignDataTx tsd `shouldBe` spendingTx ctx [(txHash (funding ctx), 0)] [(otherAddr 2, 19808)]
+          txSignDataTx tsd `shouldBe` replaceableTx ctx [(txHash (funding ctx), 0)] [(otherAddr 2, 19808)]
           txSignDataOutputPaths tsd `shouldBe` []
-        -- One output, so nothing is shuffled and the hash is fixed
-        importPendingTx btc ctx accId tsd `dbShouldBeE` "720a9cfea170cc699458a97fe34da547dde30d9d54e5210cd88f1b76b139696c"
+        -- One output, so nothing is shuffled and the hash is fixed. Computed
+        -- apart from hw from the parts of the two transactions; with final
+        -- sequences instead, the same computation gives 720a9cfe…696c.
+        importPendingTx btc ctx accId tsd `dbShouldBeE` "afc69158e620551785282f353d2414e178f589b36d5fe8b512100d38d90b596c"
         (map transactionLocked <$> coinPage btc accId AllCoins (Page 5 0)) `dbShouldBeE` [True]
         (dBAddressIndex <$> changeAddress ctx cfg accId) `dbShouldBeE` 0
     it "holds a payment to an external address of the wallet as an internal transaction" $
@@ -282,7 +284,7 @@ importingSpec ctx =
         -- 1 satoshi per byte leave 11774
         liftIO $ do
           sortedOutputs (txSignDataTx tsd)
-            `shouldBe` spendingTx ctx [(txHash (funding ctx), 0)] [(externalAddr 1, 8000), (internalAddr 0, 11774)]
+            `shouldBe` replaceableTx ctx [(txHash (funding ctx), 0)] [(externalAddr 1, 8000), (internalAddr 0, 11774)]
           txSignDataInputPaths tsd `shouldBe` [Deriv :/ 0 :/ 0]
           txSignDataOutputPaths tsd `shouldMatchList` [Deriv :/ 0 :/ 1, Deriv :/ 1 :/ 0]
         pendingHash <- importPendingTx btc ctx accId tsd

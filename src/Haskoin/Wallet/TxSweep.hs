@@ -190,7 +190,7 @@ buildSweepSignData net ctx gen found sweepTo feeByte dust = do
   let (shuffledCoins, shuffledOutputs) =
         evalState ((,) <$> randomShuffle found.coins <*> randomShuffle (zip scripts (snd <$> amounts))) gen
       outputs = [TxOut (fromIntegral amount) (marshal ctx script) | (script, amount) <- shuffledOutputs]
-      tx = Tx 1 [TxIn c.outpoint BS.empty maxBound | c <- shuffledCoins] outputs [] 0
+      tx = Tx 1 [TxIn c.outpoint BS.empty (inputSequence net) | c <- shuffledCoins] outputs [] 0
       inputPaths = pathsOf $ mapMaybe (.address) found.coins
   return $ TxSignData tx found.transactions inputPaths (pathsOf (fst <$> sweepTo)) (Just feeByte) Nothing
   where

@@ -381,6 +381,15 @@ spendingTx ctx spent paid =
   where
     payment (addr, amount) = TxOut (fromIntegral amount) (addressScript ctx addr)
 
+-- | A transaction as hw builds it on Bitcoin, spending the outpoints and
+-- paying the addresses: as 'spendingTx', with every input marked
+-- replaceable by the sequence 0xfffffffd of BIP 125
+replaceableTx :: Ctx -> [(TxHash, Word32)] -> [(Address, Natural)] -> Tx
+replaceableTx ctx spent paid =
+  Tx 1 [TxIn (OutPoint h i) BS.empty 0xfffffffd | (h, i) <- spent] (payment <$> paid) [] 0
+  where
+    payment (addr, amount) = TxOut (fromIntegral amount) (addressScript ctx addr)
+
 -- | A transaction funded by a fake outpoint, paying the given addresses
 fundingTx :: Ctx -> Word8 -> [(Address, Natural)] -> Tx
 fundingTx ctx w = spendingTx ctx [(fakeTxHash w, 0)]

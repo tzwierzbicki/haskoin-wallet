@@ -182,24 +182,26 @@ sweepBuilderSpec ctx =
       -- The wallet receives one of the two outputs (745600) and gives up its coin (500000)
       info.txInfoSummary.summaryType `shouldBe` TxCredit
       info.txInfoSummary.summaryAmount `shouldBe` 245600
-    it "matches the size of the signed transaction, part by part" $ do
+    it "estimates the size of the signed transaction part by part, every signature counted as 72 bytes" $ do
       tsd <- expectRight $ build destinations
       (signed, _) <- expectRight $ signTxWithKeys btc ctx tsd (Just accountPub) [sweptKey, walletKey]
       let tx = signed.txSignDataTx
           legacy = tx {witness = []}
-      -- Signed, the transaction is the 880 bytes estimated, every signature
-      -- being 72 bytes: 659 bytes outside the witnesses and 221 of witness
-      -- data. The inputs, in the order the builder shuffled them, are the
-      -- P2WPKH coin (empty script), the uncompressed P2PKH one (139-byte
-      -- script), the P2SH-P2WPKH one (23) and the two compressed P2PKH ones
-      -- (107); the witness of a SegWit input holds the signature and the
-      -- public key with a length byte each (72 + 33 + 2).
+      -- The estimate is 880 bytes: 659 outside the witnesses and 221 of
+      -- witness data, every signature counted as 72 bytes. A signature is
+      -- 72 bytes or 71, as its values fall, and three of these five are 71:
+      -- signed, the transaction is 877 bytes, 658 outside the witnesses and
+      -- 219 of witness data. The inputs, in the order the builder shuffled
+      -- them, are the P2WPKH coin (empty script, a witness of 71 + 33 + 2
+      -- with its two length bytes), the uncompressed P2PKH one (a script of
+      -- 1 + 71 + 1 + 65), the P2SH-P2WPKH one (a script of 23, a witness of
+      -- 71 + 33 + 2) and the two compressed P2PKH ones (1 + 72 + 1 + 33).
       ( BS.length (S.encode tx),
         BS.length (S.encode legacy),
         BS.length . (.script) <$> tx.inputs,
         (\stack -> length stack + sum (BS.length <$> stack)) <$> tx.witness
         )
-        `shouldBe` (880, 659, [0, 139, 23, 107, 107], [107, 0, 107, 0, 0])
+        `shouldBe` (877, 658, [0, 138, 23, 107, 107], [106, 0, 106, 0, 0])
     -- Outside the wallet, the coin of the wallet and the output it is paid
     -- are another wallet's too; the fee is the 8800 of the 880 bytes
     it "is signed without an account, every input and output another wallet's" $ do
@@ -213,6 +215,15 @@ sweepBuilderSpec ctx =
         `shouldBe` Left "There are no coins to sweep in those addresses"
     it "refuses to sweep without destinations" $
       build [] `shouldBe` Left "No addresses to sweep to"
+    it "marks every input replaceable on Bitcoin" $ do
+      tsd <- expectRight $ build destinations
+      ((.sequence) <$> tsd.txSignDataTx.inputs) `shouldBe` replicate 5 0xfffffffd
+    -- A coin at the first receiving address of cash, swept to another
+    -- address of the wallet on Bitcoin Cash
+    it "keeps every input final on Bitcoin Cash" $ do
+      let cashCoin = storeCoin ctx (fakeTxHash 8, 0) (Just 800000) bchExternalAddr 50000
+      tsd <- expectRight $ buildSweepSignData bch ctx seed (SweepCoins [cashCoin] [] Map.empty []) [(bchExternalAddr, Remainder)] 10 546
+      ((.sequence) <$> tsd.txSignDataTx.inputs) `shouldBe` [0xffffffff]
     it "builds a sweep to addresses outside the wallet, P2PKH and Taproot, which the signer accepts" $ do
       -- 10 bytes of overhead, the inputs (581), a P2PKH output (34), a
       -- Taproot output (43) and the witness data (221): 889 bytes, a fee of

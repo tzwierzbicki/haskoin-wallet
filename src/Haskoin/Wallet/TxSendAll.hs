@@ -48,7 +48,7 @@ import Haskoin.Wallet.Recipient (Share (..), shareAmounts)
 import Haskoin.Wallet.TxBuilding (BuiltTx (..), coinWithPath, recipientOutputSize)
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSize (checkFeeRateAndDust, p2pkhInput, p2pkhInputSize, p2pkhOutputSize, txSize)
-import Haskoin.Wallet.Util (addrToTextE, randomShuffle)
+import Haskoin.Wallet.Util (addrToTextE, randomShuffle, withInputSequence)
 import Numeric.Natural (Natural)
 import System.Random (StdGen)
 
@@ -109,7 +109,7 @@ buildSendAll net ctx gen found recipients feeByte dust = do
   checkFeeRateAndDust feeByte dust
   when (null found.coins) $ Left "There are no coins to send"
   amounts <- sendAllAmounts ctx feeByte dust found.coins recipients
-  tx <- buildAddrTx net ctx ((.outpoint) <$> found.coins) =<< mapM outputText (evalState (randomShuffle amounts) gen)
+  tx <- withInputSequence net <$> (buildAddrTx net ctx ((.outpoint) <$> found.coins) =<< mapM outputText (evalState (randomShuffle amounts) gen))
   inputPaths <- nub <$> mapM coinPath found.coins
   let outputPaths = nub $ mapMaybe ((`Map.lookup` found.recipientPaths) . fst) recipients
   return BuiltTx {tx, spentCoins = found.coins, inputPaths, outputPaths}

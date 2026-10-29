@@ -48,7 +48,7 @@ import Haskoin.Wallet.PendingTx (changeAddress)
 import Haskoin.Wallet.RawTx
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSize (checkFeeRateAndDust, outputSize, p2pkhOutputSize)
-import Haskoin.Wallet.Util (addrToTextE, randomShuffle, safeSubtract)
+import Haskoin.Wallet.Util (addrToTextE, randomShuffle, safeSubtract, withInputSequence)
 import Numeric.Natural (Natural)
 import System.Random (StdGen, splitGen)
 
@@ -274,7 +274,7 @@ assemblePayment net ctx found chosen changeM = do
     (_, Nothing) -> Left "The payment has change, and no address for it"
   let outputs = (fst <$> change) <> (second fromIntegral <$> chosen.paidRecipients)
       shuffledOutputs = evalState (randomShuffle outputs) chosen.outputGen
-  tx <- buildAddrTx net ctx ((.outpoint) <$> chosen.selection.selected) =<< mapM recipientText shuffledOutputs
+  tx <- withInputSequence net <$> (buildAddrTx net ctx ((.outpoint) <$> chosen.selection.selected) =<< mapM recipientText shuffledOutputs)
   inputPaths <- nub <$> mapM coinPath chosen.selection.selected
   let outputPaths =
         nub $ (snd <$> change) <> mapMaybe ((`Map.lookup` found.recipientPaths) . fst) chosen.paidRecipients

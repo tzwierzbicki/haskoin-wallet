@@ -130,10 +130,15 @@ transactionSpec ctx =
       feePaid built `shouldBe` 2260
       built.inputPaths `shouldBe` [Deriv :/ 0 :/ 0]
       built.outputPaths `shouldBe` [Deriv :/ 1 :/ 0]
-    it "is a version 1 transaction with final sequences and no lock time" $ do
+    it "is a version 1 transaction with its inputs marked replaceable and no lock time" $ do
       built <- expectRight $ pay ctx [400000] [(otherAddr 0, 350000)]
       sortedOutputs built.tx
-        `shouldBe` spendingTx ctx [(txHash (fundingWorth ctx [400000]), 0)] [(internalAddr 0, 47740), (otherAddr 0, 350000)]
+        `shouldBe` replaceableTx ctx [(txHash (fundingWorth ctx [400000]), 0)] [(internalAddr 0, 47740), (otherAddr 0, 350000)]
+    it "keeps every input final on Bitcoin Cash" $ do
+      let cashCoin = storeCoin ctx (fakeTxHash 8, 0) (Just 800000) bchExternalAddr 400000
+          cashWallet = WalletCoins {coins = [cashCoin], coinPaths = Map.fromList [(bchExternalAddr, Deriv :/ 0 :/ 0)], recipientPaths = Map.empty}
+      built <- expectRight $ buildWalletTx bch ctx (mkStdGen 0) LargestFirst cashWallet firstChange [(otherAddr 0, 350000)] 10 546 SenderPays []
+      ((.sequence) <$> built.tx.inputs) `shouldBe` [0xffffffff]
     it "pays several recipients" $ do
       -- Fee: 10 + 148 + 3 * 34 = 260 bytes * 10 = 2600
       -- Change: 400000 - 150000 - 100000 - 2600 = 147400
@@ -489,7 +494,7 @@ databaseSpec ctx =
         tsd <- buildTxSignData btc ctx cfg (mkStdGen 0) LargestFirst accId [(otherAddr 0, 350000)] 10 546 SenderPays 1 [] NewChangeAddress
         liftIO $ do
           sortedOutputs (txSignDataTx tsd)
-            `shouldBe` spendingTx ctx [(txHash fund, 0)] [(internalAddr 0, 47740), (otherAddr 0, 350000)]
+            `shouldBe` replaceableTx ctx [(txHash fund, 0)] [(internalAddr 0, 47740), (otherAddr 0, 350000)]
           txSignDataInputs tsd `shouldBe` [fund]
           txSignDataInputPaths tsd `shouldBe` [Deriv :/ 0 :/ 0]
           txSignDataOutputPaths tsd `shouldBe` [Deriv :/ 1 :/ 0]

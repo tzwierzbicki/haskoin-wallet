@@ -22,6 +22,7 @@ import Data.Maybe (isJust)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Read as Read
+import Data.Word (Word32)
 import Haskoin
 import Numeric.Natural (Natural)
 import System.Random (StdGen, uniformShuffleList)
@@ -108,6 +109,27 @@ readNatural txt =
 -- Fisher-Yates shuffle of the random library, for the transaction builders
 randomShuffle :: (MonadState StdGen m) => [a] -> m [a]
 randomShuffle xs = state (uniformShuffleList xs)
+
+{- Inputs -}
+
+-- | The sequence of every input of the transactions hw builds. On Bitcoin,
+-- 0xfffffffd marks the transaction replaceable (BIP 125): while it is
+-- unconfirmed, a transaction spending the same coins at a higher fee may
+-- take its place. Bitcoin Core 28.0 and later replace any transaction, but
+-- older nodes, and the store hw reads the chain from, replace only the
+-- transactions marked so. Bitcoin Cash replaces no transaction, so its
+-- inputs keep the final sequence. Either way, a transaction of version 1
+-- has no relative lock time, and a lock time of 0 locks nothing.
+inputSequence :: Network -> Word32
+inputSequence net
+  | net.replaceByFee = 0xfffffffd
+  | otherwise = maxBound
+
+-- | The transaction with the sequence of 'inputSequence' on every input:
+-- the builder of haskoin gives every input the final sequence
+withInputSequence :: Network -> Tx -> Tx
+withInputSequence net (Tx version inputs outputs witness locktime) =
+  Tx version [TxIn input.outpoint input.script (inputSequence net) | input <- inputs] outputs witness locktime
 
 {- Address maps in JSON -}
 

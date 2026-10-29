@@ -29,6 +29,7 @@ spec = do
   addressSpec
   numberSpec
   shuffleSpec
+  sequenceSpec
   addressMapSpec
 
 jsonSpec :: Spec
@@ -102,6 +103,21 @@ numberSpec =
 
     it "is nothing when the difference would be negative, where a natural number would throw" $
       safeSubtract (3 :: Natural) 5 `shouldBe` Nothing
+
+sequenceSpec :: Spec
+sequenceSpec =
+  describe "The sequence of the inputs of the transactions hw builds" $ do
+    -- 0xfffffffd, the highest sequence BIP 125 reads as replaceable
+    it "marks a transaction of Bitcoin, or of its test networks, replaceable" $
+      inputSequence <$> [btc, btcTest, btcRegTest] `shouldBe` [0xfffffffd, 0xfffffffd, 0xfffffffd]
+
+    it "is final on Bitcoin Cash, which replaces no transaction" $
+      inputSequence <$> [bch, bchTest, bchRegTest] `shouldBe` [0xffffffff, 0xffffffff, 0xffffffff]
+
+    it "is set on every input of a transaction, which keeps all the rest" $ do
+      let final = Tx 1 [TxIn (OutPoint (fakeTxHash 1) 0) "\x51" maxBound, TxIn (OutPoint (fakeTxHash 2) 3) "" maxBound] [TxOut 1000 "\x6a"] [] 7
+      withInputSequence btc final
+        `shouldBe` Tx 1 [TxIn (OutPoint (fakeTxHash 1) 0) "\x51" 0xfffffffd, TxIn (OutPoint (fakeTxHash 2) 3) "" 0xfffffffd] [TxOut 1000 "\x6a"] [] 7
 
 shuffleSpec :: Spec
 shuffleSpec =
