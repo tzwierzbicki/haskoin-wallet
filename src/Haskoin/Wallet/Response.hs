@@ -5,7 +5,7 @@
 -- | The answer of hw to a command, which the pretty printer shows to the
 -- user and --json writes for scripts. In JSON, an answer is an object that
 -- names its type, and reads back as the answer it was.
-module Haskoin.Wallet.Response (Response (..)) where
+module Haskoin.Wallet.Response (Response (..), responseFailed) where
 
 import Data.Aeson
 import Data.Aeson.Types (Pair, Parser)
@@ -67,6 +67,9 @@ data Response
   | -- | A signed message, its signature in base64, and the address that
     -- signed it
     ResponseSignMsg !Text !Text !Text
+  | -- | A message, a signature in base64, the address it is said to be
+    -- signed from, and whether it is
+    ResponseVerifyMsg !Text !Text !Text !Bool
   | -- | The sync of each account
     ResponseSync ![SyncRes]
   | -- | The accounts of a seed recovered on a network, searched with the
@@ -110,6 +113,8 @@ instance ToJSON Response where
     ResponseCoins acc coins -> typed "coins" ["account" .= acc, "coins" .= (marshalValue (accountNetwork acc) <$> coins)]
     ResponseSignMsg message signature addr ->
       typed "signmsg" ["message" .= message, "signature" .= signature, "address" .= addr]
+    ResponseVerifyMsg message signature addr valid ->
+      typed "verifymsg" ["message" .= message, "signature" .= signature, "address" .= addr, "valid" .= valid]
     ResponseSync results -> typed "sync" ["syncres" .= (syncResJson <$> results)]
     ResponseRecover net gap results ->
       typed "recover" ["network" .= net.name, "accountgap" .= gap, "syncres" .= (syncResJson <$> results)]
@@ -149,6 +154,7 @@ instance FromJSON Response where
         acc <- o .: "account"
         ResponseCoins acc <$> (mapM (unmarshalValue (accountNetwork acc)) =<< o .: "coins")
       "signmsg" -> ResponseSignMsg <$> o .: "message" <*> o .: "signature" <*> o .: "address"
+      "verifymsg" -> ResponseVerifyMsg <$> o .: "message" <*> o .: "signature" <*> o .: "address" <*> o .: "valid"
       "sync" -> ResponseSync <$> (mapM parseSyncRes =<< o .: "syncres")
       "recover" -> ResponseRecover <$> network o <*> o .: "accountgap" <*> (mapM parseSyncRes =<< o .: "syncres")
       "version" -> ResponseVersion <$> o .: "version" <*> o .: "dbversion"
@@ -186,3 +192,10 @@ parseSyncRes =
       <*> o .: "rebroadcast"
       <*> o .: "conflicted"
       <*> o .: "discovered"
+
+-- | Whether the answer is a failure, which hw exits with: an error, or a
+-- signature found not valid, so that a script can tell from the exit code
+responseFailed :: Response -> Bool
+responseFailed (ResponseError _) = True
+responseFailed (ResponseVerifyMsg _ _ _ valid) = not valid
+responseFailed _ = False

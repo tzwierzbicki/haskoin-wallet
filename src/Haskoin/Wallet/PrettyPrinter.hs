@@ -573,11 +573,15 @@ coinPrinter net unit JsonCoin {..} =
         | otherwise -> formatFalse "Not spendable yet"
 
 prettyPrinter :: AmountUnit -> Response -> IO ()
-prettyPrinter unit =
+prettyPrinter unit res = do
+  responsePrinter unit res
+  when (responseFailed res) exitFailure
+
+responsePrinter :: AmountUnit -> Response -> IO ()
+responsePrinter unit =
   \case
-    ResponseError err -> do
+    ResponseError err ->
       renderIO . mconcat $ [formatError "Error: ", text $ cs err]
-      exitFailure
     ResponseMnemonic orig mnem parts ->
       renderIO . vcat $
         [ formatTitle "System Entropy Source",
@@ -664,6 +668,17 @@ prettyPrinter unit =
             text $ cs s,
             text "-----END BITCOIN SIGNED MESSAGE-----"
           ]
+    ResponseVerifyMsg _ _ addr valid ->
+      renderIO . vcat $
+        if valid
+          then
+            [ formatKey "Signature:" <+> formatTrue "Valid",
+              text $ "The key of " <> cs addr <> " signed this message"
+            ]
+          else
+            [ formatKey "Signature:" <+> formatFalse "Invalid",
+              text $ "This is not a signature of this message by the key of " <> cs addr
+            ]
     ResponseSync xs -> renderIO $ syncResultsPrinter unit xs
     ResponseRecover net gap xs
       | null xs ->

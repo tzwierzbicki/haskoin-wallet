@@ -48,6 +48,7 @@ spec = prepareContext $ \ctx -> do
   addressSpec ctx
   splitSpec
   messageSpec
+  verifySpec
   failureSpec ctx
   backupSpec
   receivingSpec ctx
@@ -452,20 +453,12 @@ splitSpec =
 messageSpec :: Spec
 messageSpec =
   describe "A message signed by signmsg" $ do
-    -- The signature of the address /0/0 of the test wallet, checked apart
-    -- from hw with the pure-Python verifier of the message-signing vectors
-    -- (test/data/message-signing/tools/btc.py): it recovers the key of the
-    -- address from it
     it "is signed by the key of an address of the wallet, from its mnemonic" $
       withHome $ \home -> do
         createMain home
         _ <- answer home ["receive"] []
         signed <- hwJson home ["signmsg", textOf (externalAddr 0), "hello"] seedOnce
-        signed
-          `shouldBe` ResponseSignMsg
-            "hello"
-            "IJ6CSrFWDRjgP/CfS+0UTM6ziJ2pil12tGj0xLBzPTEGeN2FipE7Y/tWxGnLliGzRObBxkgxKXQEZEgCmoeWeMo="
-            (externalAddrsText !! 0)
+        signed `shouldBe` ResponseSignMsg "hello" helloSignature (externalAddrsText !! 0)
 
     -- cash is the Bitcoin Cash account of the test wallet. hw stores the
     -- address /0/0 of cash as
@@ -498,6 +491,52 @@ messageSpec =
         run <- hw home ["signmsg", textOf (otherAddr 0), "hello"] seedOnce
         run `shouldSatisfy` printed "Address does not exist"
         run `shouldNotSatisfy` askedMnemonic
+
+{- Verified messages -}
+
+verifySpec :: Spec
+verifySpec =
+  describe "A signature checked by verifymsg" $ do
+    it "is valid for the message as signed, without the wallet" $
+      withHome $ \home ->
+        hwJson home ["verifymsg", textOf (externalAddr 0), Text.unpack helloSignature, "hello"] []
+          `shouldReturn` ResponseVerifyMsg "hello" helloSignature (externalAddrsText !! 0) True
+
+    it "is invalid for a changed message, and hw exits with a failure" $
+      withHome $ \home -> do
+        run <- hw home ["verifymsg", textOf (externalAddr 0), Text.unpack helloSignature, "hello!"] []
+        runExit run `shouldBe` ExitFailure 1
+        run `shouldSatisfy` printed "Invalid"
+        hwJson home ["verifymsg", textOf (externalAddr 0), Text.unpack helloSignature, "hello!"] []
+          `shouldReturn` ResponseVerifyMsg "hello!" helloSignature (externalAddrsText !! 0) False
+
+    it "warns about the whitespace of a message found invalid" $
+      withHome $ \home -> do
+        run <- hw home ["verifymsg", textOf (externalAddr 0), Text.unpack helloSignature, "hello "] []
+        run `shouldSatisfy` printed "Warning: The message has leading or trailing whitespace"
+
+    -- The signature of Bitcoin Core's rpc_signmessagewithprivkey test, by a
+    -- regtest key: its P2PKH address reads on testnet
+    it "reads the address on the network given, the default one otherwise" $
+      withHome $ \home -> do
+        let signature = "INbVnW4e6PeRmsv2Qgu8NuopvrVjkcxob+sX8OcZG0SALhWybUjzMLPdAsXI46YZGb0KQTRii+wWIQzRpG/U+S0="
+            address = "mpLQjfK79b7CCV4VMJWEWAj5Mpx8Up5zxB"
+            message = "This is just a test message"
+        hwJson home ["verifymsg", address, signature, message, "--network", "btctest"] []
+          `shouldReturn` ResponseVerifyMsg (Text.pack message) (Text.pack signature) (Text.pack address) True
+        (errorOf <$> hwJson home ["verifymsg", address, signature, message] [])
+          `shouldReturn` Right "The address mpLQjfK79b7CCV4VMJWEWAj5Mpx8Up5zxB is not valid on btc"
+
+    -- The refusals of Bitcoin Core's message_verify test
+    it "refuses an address that is not P2PKH" $
+      withHome $ \home ->
+        (errorOf <$> hwJson home ["verifymsg", "3B5fQsEXEaV8v6U3ejYc8XaKXAkyQj2MjV", "signature should be irrelevant", "message too"] [])
+          `shouldReturn` Right "The address is not a P2PKH address: a message can only be signed from one"
+
+    it "refuses a signature that is not in base64" $
+      withHome $ \home ->
+        (errorOf <$> hwJson home ["verifymsg", "1KqbBpLy5FARmTPD4VZnDDpYjkUvkr82Pm", "invalid signature, not in base64 encoding", "message should be irrelevant"] [])
+          `shouldReturn` Right "The signature is not in base64"
 
 {- Failures -}
 

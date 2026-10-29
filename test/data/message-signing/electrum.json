@@ -1,5 +1,5 @@
 {
-  "description": "Message signing vectors from the Electrum test suite.",
+  "description": "Message signing vectors from the Electrum test suite, and its verification cases.",
   "vectors": [
     {
       "name": "electrum/test_signmessage_legacy_address",
@@ -41,6 +41,85 @@
       "source": "Electrum tests/test_bitcoin.py, test_signmessage_segwit_witness_v0_address",
       "sourceUrl": "https://github.com/spesmilo/electrum/blob/0f7f1857b872/tests/test_bitcoin.py#L238-L251",
       "comment": "Electrum signs for SegWit addresses using the plain compressed-key header (31/32), so the signature equals the P2PKH signature of the same key. The P2PKH address is not from the source: it was derived from the key."
+    }
+  ],
+  "verification": [
+    {
+      "name": "electrum/verify/uncompressed",
+      "network": "btc",
+      "address": "1GPHVTY8UD9my6jyP4tb2TYJwUbDetyNC6",
+      "message": "Electrum",
+      "signature": "HBQdYfv7kOrxmRewLJnG7sV6KlU71O04hUnE4tai97p7Pg+D+yKaWXsdGgHTrKw90caQMo/D6b//qX50ge9P9iI=",
+      "result": "valid",
+      "source": "Electrum test_bitcoin.py test_signmessage_legacy_address",
+      "sourceUrl": "https://github.com/spesmilo/electrum/blob/0f7f1857b872/tests/test_bitcoin.py#L206-L227",
+      "comment": "The uncompressed key of the test (WIF 5Hxn5C4SQuiV6e62A1MtZmbSeQyrLFhu5uYks62pU5VBUygK2KD): header byte 28."
+    },
+    {
+      "name": "electrum/verify/other-key",
+      "network": "btc",
+      "address": "15hETetDmcXm1mM4sEf7U2KXC9hDHFMSzz",
+      "message": "Chancellor on brink of second bailout for banks",
+      "signature": "HBQdYfv7kOrxmRewLJnG7sV6KlU71O04hUnE4tai97p7Pg+D+yKaWXsdGgHTrKw90caQMo/D6b//qX50ge9P9iI=",
+      "result": "invalid",
+      "source": "Electrum test_bitcoin.py test_signmessage_legacy_address",
+      "sourceUrl": "https://github.com/spesmilo/electrum/blob/0f7f1857b872/tests/test_bitcoin.py#L206-L227",
+      "comment": "The signature of the uncompressed key, of another message, checked against the address of the compressed key."
+    },
+    {
+      "name": "electrum/verify/not-a-signature",
+      "network": "btc",
+      "address": "15hETetDmcXm1mM4sEf7U2KXC9hDHFMSzz",
+      "message": "Chancellor on brink of second bailout for banks",
+      "signature": "d3Jvbmc=",
+      "result": "refused",
+      "source": "Electrum test_bitcoin.py test_signmessage_legacy_address",
+      "sourceUrl": "https://github.com/spesmilo/electrum/blob/0f7f1857b872/tests/test_bitcoin.py#L206-L227",
+      "comment": "The bytes \"wrong\" as a signature, in base64: 5 bytes, not 65."
+    },
+    {
+      "name": "electrum/verify/p2sh-p2wpkh",
+      "network": "btc",
+      "address": "3DYoBqQ5N6dADzyQjy9FT1Ls4amiYVaqTG",
+      "message": "Electrum",
+      "signature": "HyFaND+87TtVbRhkTfT3mPNBCQcJ32XXtNZGW8sFldJsNpOPCegEmdcCf5Thy18hdMH88GLxZLkOby/EwVUuSeA=",
+      "result": "refused",
+      "source": "Electrum test_bitcoin.py test_signmessage_segwit_witness_v0_address",
+      "sourceUrl": "https://github.com/spesmilo/electrum/blob/0f7f1857b872/tests/test_bitcoin.py#L238-L251",
+      "comment": "Electrum signs for its SegWit addresses with the plain compressed-key header byte and verifies them. The format does not sign from a P2SH address: hw refuses the address."
+    },
+    {
+      "name": "electrum/verify/p2wpkh",
+      "network": "btc",
+      "address": "bc1qq2tmmcngng78nllq2pvrkchcdukemtj56uyue0",
+      "message": "Electrum",
+      "signature": "HyFaND+87TtVbRhkTfT3mPNBCQcJ32XXtNZGW8sFldJsNpOPCegEmdcCf5Thy18hdMH88GLxZLkOby/EwVUuSeA=",
+      "result": "refused",
+      "source": "Electrum test_bitcoin.py test_signmessage_segwit_witness_v0_address",
+      "sourceUrl": "https://github.com/spesmilo/electrum/blob/0f7f1857b872/tests/test_bitcoin.py#L238-L251",
+      "comment": "The same signature for the P2WPKH address of the key: hw refuses the address."
+    },
+    {
+      "name": "electrum/verify/trezor-p2sh-p2wpkh",
+      "network": "btc",
+      "address": "3L6TyTisPBmrDAj6RoKmDzNnj4eQi54gD2",
+      "message": "This is an example of a signed message.",
+      "signature": "I3RN5FFvrFwUCAgBVmRRajL+rZTeiXdc7H4k28JP4TMHWsCTAcTMjhl76ktkgWYdW46b8Z2Le4o4Ls21PC7gdQ0=",
+      "result": "refused",
+      "source": "Electrum test_bitcoin.py test_signmessage_segwit_witness_v0_address_test_we_also_accept_sigs_from_trezor",
+      "sourceUrl": "https://github.com/spesmilo/electrum/blob/0f7f1857b872/tests/test_bitcoin.py#L253-L272",
+      "comment": "A Trezor signature with the BIP-137 header byte 35, for P2SH-P2WPKH, which Electrum accepts: hw refuses the address."
+    },
+    {
+      "name": "electrum/verify/trezor-p2wpkh",
+      "network": "btc",
+      "address": "bc1qannfxke2tfd4l7vhepehpvt05y83v3qsf6nfkk",
+      "message": "This is an example of a signed message.",
+      "signature": "KLVddgDZ6afipJFV3fPP2455bCB/qrgzAQ+kH7eCiIm8R89iNIp6qgkjwIMqWJ+rVB6PEutU+3EckOIwfw9msZQ=",
+      "result": "refused",
+      "source": "Electrum test_bitcoin.py test_signmessage_segwit_witness_v0_address_test_we_also_accept_sigs_from_trezor",
+      "sourceUrl": "https://github.com/spesmilo/electrum/blob/0f7f1857b872/tests/test_bitcoin.py#L253-L272",
+      "comment": "A Trezor signature with the BIP-137 header byte 40, for P2WPKH: hw refuses the address."
     }
   ]
 }

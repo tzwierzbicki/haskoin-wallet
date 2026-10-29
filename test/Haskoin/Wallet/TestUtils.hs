@@ -596,6 +596,14 @@ testAccountXPub2 = "xpub6CX8yKmPUBLY6w8LztHoEJdcM7gKR5fHB2ihgJHPYqJ9x2N5TvFFs7jf
 externalAddr2Text :: Text
 externalAddr2Text = "1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2"
 
+-- | The signature of the message "hello" by the address /0/0 of the test
+-- wallet, as signmsg gives it, checked apart from hw with the pure-Python
+-- verifier of the message-signing vectors
+-- (test/data/message-signing/tools/btc.py): it recovers the key of the
+-- address from it
+helloSignature :: Text
+helloSignature = "IJ6CSrFWDRjgP/CfS+0UTM6ziJ2pil12tGj0xLBzPTEGeN2FipE7Y/tWxGnLliGzRObBxkgxKXQEZEgCmoeWeMo="
+
 externalAddr2 :: Address
 externalAddr2 = testAddress externalAddr2Text
 

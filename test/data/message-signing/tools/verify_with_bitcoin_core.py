@@ -10,6 +10,10 @@ network connections, RPC on localhost only) and stops it at the end. Regtest
 only accepts regtest addresses, so each vector's address is converted to the
 regtest P2PKH address with the same public key hash. Messages are sent over
 JSON-RPC, so they arrive byte for byte (newlines, NUL bytes, long messages).
+
+The verification vectors are checked too: a valid one must be accepted, an
+invalid one must be rejected, and a refused one must not be accepted (Core
+answers some with an error, others with false).
 """
 
 import base64
@@ -54,19 +58,34 @@ def verify_all(rpc, directory):
     failures = []
     for filename in sorted(f for f in os.listdir(directory) if f.endswith(".json")):
         with open(os.path.join(directory, filename), encoding="utf-8") as f:
-            vectors = json.load(f).get("vectors", [])
+            doc = json.load(f)
+        vectors, verification = doc.get("vectors", []), doc.get("verification", [])
         file_failures = []
         for v in vectors:
-            regtest_address = btc.base58check_encode(b"\x6f" + btc.p2pkh_hash(v["address"]))
-            message = v["message"] * v.get("messageRepeat", 1)
-            valid = rpc.call("verifymessage", regtest_address, v["signature"], message)
+            valid = verify(rpc, v)
             # "differ" vectors sign other bytes than the message: Core must reject them
             expected = v.get("expect", "match") != "differ"
             if valid is not expected:
                 file_failures.append(f"{filename}: {v['name']}: verifymessage returned {valid}")
-        print(f"{filename}: {len(vectors)} vectors, {'ok' if not file_failures else 'FAILED'}")
+        for v in verification:
+            valid = verify(rpc, v)
+            accepted = {"valid": valid is True, "invalid": valid is False, "refused": valid is not True}
+            if not accepted[v["result"]]:
+                file_failures.append(f"{filename}: {v['name']}: verifymessage returned {valid}")
+        print(f"{filename}: {len(vectors) + len(verification)} vectors, {'ok' if not file_failures else 'FAILED'}")
         failures += file_failures
     return failures
+
+
+def verify(rpc, v):
+    """Core's answer for a vector: True, False, or an error message. An
+    address that is not P2PKH is given as it is: Core refuses it either way."""
+    try:
+        address = btc.base58check_encode(b"\x6f" + btc.p2pkh_hash(v["address"]))
+    except ValueError:
+        address = v["address"]
+    message = v["message"] * v.get("messageRepeat", 1)
+    return rpc.call("verifymessage", address, v["signature"], message)
 
 
 class RPC:

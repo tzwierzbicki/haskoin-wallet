@@ -1,7 +1,7 @@
 module Haskoin.Wallet.Main where
 
 import Control.Exception (IOException, try)
-import Control.Monad (join)
+import Control.Monad (join, when)
 import Data.Foldable (forM_)
 import qualified Data.ByteString.Char8 as C8
 import GHC.IO.Encoding (setFileSystemEncoding, setLocaleEncoding, utf8)
@@ -13,7 +13,7 @@ import Haskoin.Wallet.Migration (Hooks (..), migrateDB)
 import Haskoin.Wallet.Backup (backupDatabase, migrationBackupDirectory)
 import Haskoin.Wallet.Parser (parserMain)
 import Haskoin.Wallet.PrettyPrinter (prettyPrinter, printNextSteps)
-import Haskoin.Wallet.Response (Response (..))
+import Haskoin.Wallet.Response (Response (..), responseFailed)
 import Haskoin.Wallet.Util (encodeJsonPretty)
 import System.Environment (getArgs)
 import System.Exit (die, exitFailure)
@@ -92,11 +92,9 @@ invalidArgumentsError = do
 
 {- JSON output -}
 
--- | The answer in JSON on stdout. An error exits with a failure, as the
--- pretty printer does, so that a script can tell it from the exit code.
+-- | The answer in JSON on stdout. A failure exits as one, as the pretty
+-- printer does, so that a script can tell it from the exit code.
 jsonPrinter :: Response -> IO ()
 jsonPrinter res = do
   C8.putStr (encodeJsonPretty res)
-  case res of
-    ResponseError {} -> exitFailure
-    _ -> return ()
+  when (responseFailed res) exitFailure

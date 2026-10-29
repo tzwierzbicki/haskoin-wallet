@@ -30,13 +30,18 @@ python3 verify_with_bitcoin_core.py /path/to/bitcoin/bin ..
 derives every key (from WIF, raw secrets or BIP-39 mnemonics) and its address,
 and recovers the public key from every signature. Mnemonic keys are derived
 with and without BIP-39 NFKD normalization, which detects the known deviation
-documented in `edge/passphrase-unicode`. It does not check the expected
-`warnings`, which are hw's own behaviour: `MessageSigningSpec.hs` does.
+documented in `edge/passphrase-unicode`. For every verification vector it
+gives the verdict hw must give: `valid`, `invalid` or `refused`. It does not
+check the expected `warnings`, which are hw's own behaviour:
+`MessageSigningSpec.hs` does.
 
 `verify_with_bitcoin_core.py` passes every vector to `verifymessage` over
 JSON-RPC, so messages arrive byte for byte. Each address is converted to the
 regtest address with the same public key hash. Vectors expected to `differ`
-must be rejected; all others must be accepted.
+must be rejected; all others must be accepted. Of the verification vectors,
+the `valid` ones must be accepted, the `invalid` ones rejected, and the
+`refused` ones not accepted (Core answers some with an error, others with
+false, where hw refuses the address or the signature).
 
 ## Add a vector
 
@@ -44,8 +49,9 @@ The vectors were originally produced by generator scripts (removed in October
 2026 to avoid maintaining them). To add one:
 
 1. Compute the expected values with hw's library, for example in `stack ghci`
-   with `signedMessageHash` and `signMessage` from `Haskoin.Wallet.MessageSigning`,
-   or with the `hw signmsg` command on a temporary `HOME`.
+   with `signedMessageHash`, `signMessage` and `verifyMessage` from
+   `Haskoin.Wallet.MessageSigning`, or with the `hw signmsg` and `hw verifymsg`
+   commands on a temporary `HOME`.
 2. Add it to the JSON file by hand, following the format in `../README.md`.
    A non-ASCII message needs its `messageUtf8Hex`, and every signing vector
    needs its `warnings`.

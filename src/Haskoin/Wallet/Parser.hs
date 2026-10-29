@@ -68,6 +68,7 @@ data Command
   | -- | What to sign, and the parts the mnemonic is typed in
     CommandSignTx !Signing !Natural
   | CommandSignMsg !SignMsg
+  | CommandVerifyMsg !VerifyMsg
   | -- | The account, whether the locked coins only, and the page
     CommandCoins !(Maybe Text) !Bool !Page
   | CommandLockCoin !OutPoint
@@ -204,6 +205,18 @@ data SignMsg = SignMsg
     message :: !Text,
     -- | The parts the mnemonic is typed in
     parts :: !Natural
+  }
+  deriving (Eq, Show)
+
+-- | The options of verifymsg
+data VerifyMsg = VerifyMsg
+  { -- | The address the message is said to be signed from
+    address :: !Text,
+    -- | The signature, in base64
+    signature :: !Text,
+    message :: !Text,
+    -- | The network the address is read on, when given
+    network :: !(Maybe Network)
   }
   deriving (Eq, Show)
 
@@ -356,6 +369,7 @@ commandParser =
           [ commandGroup "Utilities",
             command "version" versionParser,
             command "signmsg" signMsgParser,
+            command "verifymsg" verifyMsgParser,
             command "preparesweep" prepareSweepParser,
             command "signsweep" signSweepParser,
             hidden
@@ -1514,6 +1528,53 @@ signMsgArg =
       <> help
         [r|
 The message to be signed
+|]
+
+{- VerifyMsg Parser -}
+
+verifyMsgParser :: ParserInfo Command
+verifyMsgParser = do
+  let cmd =
+        CommandVerifyMsg
+          <$> (VerifyMsg <$> verifyAddressArg <*> signatureArg <*> verifyMsgArg <*> networkMaybeOption)
+  info cmd $
+    progDesc "Verify a signed message"
+      <> footer
+        [r|
+Check that a message was signed by the key of an address, from the signature
+that signmsg, Bitcoin Core or another wallet gave for it. The address must be
+a P2PKH address, the only kind the Bitcoin Signed Message format signs from,
+and the message must be given exactly as it was signed: a single changed byte
+makes the signature invalid. The address can be of any wallet; the network
+only says how to read it. When the signature is not valid, hw says so and
+exits with a failure, so that a script can tell.
+|]
+
+verifyAddressArg :: Parser Text
+verifyAddressArg =
+  strArgument $
+    metavar "ADDRESS"
+      <> help
+        [r|
+The address the message is said to be signed from
+|]
+
+signatureArg :: Parser Text
+signatureArg =
+  strArgument $
+    metavar "SIGNATURE"
+      <> help
+        [r|
+The signature in base64, as signmsg writes it
+|]
+
+verifyMsgArg :: Parser Text
+verifyMsgArg =
+  strArgument $
+    metavar "TEXT"
+      <> help
+        [r|
+The message, exactly as it was signed
 |]
 
 {- PrepareSweep Parser -}

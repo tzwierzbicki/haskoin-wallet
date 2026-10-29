@@ -1,5 +1,5 @@
 {
-  "description": "Message signing vectors from bitcoinjs-message (fixtures and README).",
+  "description": "Message signing vectors from bitcoinjs-message (fixtures and README), and its verification fixtures. Signatures given in hex upstream are written in base64, the form hw takes.",
   "hashVectors": [
     {
       "name": "bitcoinjs-message/magicHash/empty",
@@ -50,6 +50,151 @@
       "source": "bitcoinjs-message README.md, signing example",
       "sourceUrl": "https://github.com/bitcoinjs/bitcoinjs-message/blob/c43430f4c03c/README.md",
       "comment": "Produces recovery id 0 (header 31)."
+    }
+  ],
+  "verification": [
+    {
+      "name": "bitcoinjs-message/verify/uncompressed",
+      "network": "btc",
+      "address": "16UwLL9Risc3QfPqBUvKofHmBQ7wMtjvM",
+      "message": "vires is numeris",
+      "signature": "G8JawPtQOrybrSP1WHQnQPr67B9S3qrxBrl1mlzoTJOSHEpmnF7D3+t+LX0Xei9J20B5AIdPbeL3AaTBZ4N3bY0=",
+      "result": "valid",
+      "source": "bitcoinjs-message fixtures.json valid.verify",
+      "sourceUrl": "https://github.com/bitcoinjs/bitcoinjs-message/blob/c43430f4c03c/test/fixtures.json",
+      "comment": "The key d = 1 (the generator point), uncompressed: header byte 27."
+    },
+    {
+      "name": "bitcoinjs-message/verify/compressed",
+      "network": "btc",
+      "address": "1PMycacnJaSqwwJqjawXBErnLsZ7RkXUAs",
+      "message": "vires is numeris",
+      "signature": "H8JawPtQOrybrSP1WHQnQPr67B9S3qrxBrl1mlzoTJOSHEpmnF7D3+t+LX0Xei9J20B5AIdPbeL3AaTBZ4N3bY0=",
+      "result": "valid",
+      "source": "bitcoinjs-message fixtures.json valid.verify",
+      "sourceUrl": "https://github.com/bitcoinjs/bitcoinjs-message/blob/c43430f4c03c/test/fixtures.json",
+      "comment": "The key d = 1, compressed: header byte 31. Same r and s as the uncompressed signature."
+    },
+    {
+      "name": "bitcoinjs-message/verify/p2sh-p2wpkh",
+      "network": "btc",
+      "address": "3JvL6Ymt8MVWiCNHC7oWU6nLeHNJKLZGLN",
+      "message": "vires is numeris",
+      "signature": "JF8nHqFr3K2UKYahhX3soVeoW8W1ECNbr0wfck7lzyXjCS5Q16Ek45zyBuy1Fiy9sTPKVgsqqOuPvbycuVSSVl8=",
+      "result": "refused",
+      "source": "bitcoinjs-message fixtures.json valid.verify",
+      "sourceUrl": "https://github.com/bitcoinjs/bitcoinjs-message/blob/c43430f4c03c/test/fixtures.json",
+      "comment": "bitcoinjs-message verifies SegWit signatures with the BIP-137 header bytes (36 here, for P2SH-P2WPKH). The Bitcoin Signed Message format does not sign from a P2SH address: hw refuses the address."
+    },
+    {
+      "name": "bitcoinjs-message/verify/p2wpkh",
+      "network": "btc",
+      "address": "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
+      "message": "vires is numeris",
+      "signature": "KF8nHqFr3K2UKYahhX3soVeoW8W1ECNbr0wfck7lzyXjCS5Q16Ek45zyBuy1Fiy9sTPKVgsqqOuPvbycuVSSVl8=",
+      "result": "refused",
+      "source": "bitcoinjs-message fixtures.json valid.verify",
+      "sourceUrl": "https://github.com/bitcoinjs/bitcoinjs-message/blob/c43430f4c03c/test/fixtures.json",
+      "comment": "BIP-137 header byte 40, for P2WPKH. The format does not sign from a SegWit address: hw refuses the address."
+    },
+    {
+      "name": "bitcoinjs-message/verify/wrong-message",
+      "network": "btc",
+      "address": "16UwLL9Risc3QfPqBUvKofHmBQ7wMtjvM",
+      "message": "foobar",
+      "signature": "G8JawPtQOrybrSP1WHQnQPr67B9S3qrxBrl1mlzoTJOSHEpmnF7D3+t+LX0Xei9J20B5AIdPbeL3AaTBZ4N3bY0=",
+      "result": "invalid",
+      "source": "bitcoinjs-message fixtures.json invalid.verify",
+      "sourceUrl": "https://github.com/bitcoinjs/bitcoinjs-message/blob/c43430f4c03c/test/fixtures.json",
+      "comment": "\"will fail for the wrong message\"."
+    },
+    {
+      "name": "bitcoinjs-message/verify/wrong-address",
+      "network": "btc",
+      "address": "1111111111111111111114oLvT2",
+      "message": "vires is numeris",
+      "signature": "H8JawPtQOrybrSP1WHQnQPr67B9S3qrxBrl1mlzoTJOSHEpmnF7D3+t+LX0Xei9J20B5AIdPbeL3AaTBZ4N3bY0=",
+      "result": "invalid",
+      "source": "bitcoinjs-message fixtures.json invalid.verify",
+      "sourceUrl": "https://github.com/bitcoinjs/bitcoinjs-message/blob/c43430f4c03c/test/fixtures.json",
+      "comment": "\"will fail for the wrong address\": the P2PKH address of the all-zero hash."
+    },
+    {
+      "name": "bitcoinjs-message/verify/uncompressed-address-compressed-signature",
+      "network": "btc",
+      "address": "16UwLL9Risc3QfPqBUvKofHmBQ7wMtjvM",
+      "message": "vires is numeris",
+      "signature": "H8JawPtQOrybrSP1WHQnQPr67B9S3qrxBrl1mlzoTJOSHEpmnF7D3+t+LX0Xei9J20B5AIdPbeL3AaTBZ4N3bY0=",
+      "result": "invalid",
+      "source": "bitcoinjs-message fixtures.json invalid.verify",
+      "sourceUrl": "https://github.com/bitcoinjs/bitcoinjs-message/blob/c43430f4c03c/test/fixtures.json",
+      "comment": "\"does not cross verify\": the header byte says the key is compressed, so the recovered key gives the compressed address, not this one."
+    },
+    {
+      "name": "bitcoinjs-message/verify/compressed-address-uncompressed-signature",
+      "network": "btc",
+      "address": "1PMycacnJaSqwwJqjawXBErnLsZ7RkXUAs",
+      "message": "vires is numeris",
+      "signature": "G8JawPtQOrybrSP1WHQnQPr67B9S3qrxBrl1mlzoTJOSHEpmnF7D3+t+LX0Xei9J20B5AIdPbeL3AaTBZ4N3bY0=",
+      "result": "invalid",
+      "source": "bitcoinjs-message fixtures.json invalid.verify",
+      "sourceUrl": "https://github.com/bitcoinjs/bitcoinjs-message/blob/c43430f4c03c/test/fixtures.json",
+      "comment": "\"does not cross verify\": the header byte says the key is uncompressed."
+    },
+    {
+      "name": "bitcoinjs-message/verify/header-43",
+      "network": "btc",
+      "address": "16UwLL9Risc3QfPqBUvKofHmBQ7wMtjvM",
+      "message": "vires is numeris",
+      "signature": "K5h86t5qME/Fgjqzj5n8PF93Ki0+ieoFkx4nJhBfxTueYB/DIx81lixxT8vOXJW0J0lu3Hros9Euk3kddil5W2I=",
+      "result": "invalid",
+      "source": "bitcoinjs-message fixtures.json invalid.signature",
+      "sourceUrl": "https://github.com/bitcoinjs/bitcoinjs-message/blob/c43430f4c03c/test/fixtures.json",
+      "comment": "\"Invalid signature parameter\": 65 bytes with the header byte 43, outside 27 to 34, which recovers no key. The address and the message are not in the source: the signature is invalid for any."
+    },
+    {
+      "name": "bitcoinjs-message/verify/68-bytes",
+      "network": "btc",
+      "address": "16UwLL9Risc3QfPqBUvKofHmBQ7wMtjvM",
+      "message": "vires is numeris",
+      "signature": "HJh86t5qME/Fgjqzj5n8PF93Ki0+ieoFkx4nJhBfxTueYB/DIx81lixxT8vOXJW0J0lu3Hros9Euk3kddil5W2IAAAA=",
+      "result": "refused",
+      "source": "bitcoinjs-message fixtures.json invalid.signature",
+      "sourceUrl": "https://github.com/bitcoinjs/bitcoinjs-message/blob/c43430f4c03c/test/fixtures.json",
+      "comment": "\"Invalid signature length\": 68 bytes. The address and the message are not in the source."
+    },
+    {
+      "name": "bitcoinjs-message/verify/59-bytes",
+      "network": "btc",
+      "address": "16UwLL9Risc3QfPqBUvKofHmBQ7wMtjvM",
+      "message": "vires is numeris",
+      "signature": "HJh86t5qME/Fgjqzj5n8PF93Ki0+ieoFkx4nJhBfxTueYB/DIx81lixxT8vOXJW0J0lu3Hros9Euk3k=",
+      "result": "refused",
+      "source": "bitcoinjs-message fixtures.json invalid.signature",
+      "sourceUrl": "https://github.com/bitcoinjs/bitcoinjs-message/blob/c43430f4c03c/test/fixtures.json",
+      "comment": "\"Invalid signature length\": 59 bytes. The address and the message are not in the source."
+    },
+    {
+      "name": "bitcoinjs-message/verify/extra-entropy-0",
+      "network": "btc",
+      "address": "1HZwkjkeaoZfTSaJxDw6aKkxp45agDiEzN",
+      "message": "vires is numeris",
+      "signature": "HMzQ6VfHpu+frKdemK6xcxpJaCLp0xNlpAzsAGPWZhMKE3i1nDLveuFOjPZ4vk20Y7wP4rJ6rJWvCNJ0EZRoGZ0=",
+      "result": "valid",
+      "source": "bitcoinjs-message fixtures.json randomSig",
+      "sourceUrl": "https://github.com/bitcoinjs/bitcoinjs-message/blob/c43430f4c03c/test/fixtures.json",
+      "comment": "A signature with extra entropy in its nonce (the sigData of the fixture), which hw cannot reproduce. The uncompressed WIF 5KYZdUEo39z3FPrtuX2QbbwGnNP5zTd7yyr2SC1j299sBCnWjss is the key of the README example; its uncompressed P2PKH address is not in the source and was derived from the WIF."
+    },
+    {
+      "name": "bitcoinjs-message/verify/extra-entropy-1",
+      "network": "btc",
+      "address": "1HZwkjkeaoZfTSaJxDw6aKkxp45agDiEzN",
+      "message": "vires is numeris",
+      "signature": "G9b9KZWgwjh3Ye5z3p+JMNrgZFaMl6QZVwYHuOQcKUSEXYh8a8lrV2/AFlc31+O181Xrj2iZ62YFFgZDl1GsDh0=",
+      "result": "valid",
+      "source": "bitcoinjs-message fixtures.json randomSig",
+      "sourceUrl": "https://github.com/bitcoinjs/bitcoinjs-message/blob/c43430f4c03c/test/fixtures.json",
+      "comment": "The second randomSig signature of the same key, with other extra entropy: header byte 27."
     }
   ]
 }

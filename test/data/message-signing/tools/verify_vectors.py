@@ -5,10 +5,13 @@ Usage: verify_vectors.py VECTOR_DIR
 
 Uses only btc.py (pure Python, no hw or haskoin-core code). For every vector it
 checks the message bytes and hash, derives the key's address, and recovers the
-public key from the signature. Exits with an error if anything is wrong.
+public key from the signature. For every verification vector it gives the
+verdict the way hw must: valid, invalid, or refused. Exits with an error if
+anything is wrong.
 """
 
 import base64
+import binascii
 import json
 import os
 import sys
@@ -26,10 +29,10 @@ def main():
             doc = json.load(f)
         problems = []
         for kind, check in (("hashVectors", hash_vector_problems), ("vectors", vector_problems),
-                            ("rejected", rejected_problems)):
+                            ("rejected", rejected_problems), ("verification", verification_problems)):
             for v in doc.get(kind, []):
                 problems += named(v, safely(check, v))
-        count = sum(len(doc.get(k, [])) for k in ("hashVectors", "vectors", "rejected"))
+        count = sum(len(doc.get(k, [])) for k in ("hashVectors", "vectors", "rejected", "verification"))
         status = "ok" if not problems else f"{len(problems)} problem{'s' if len(problems) > 1 else ''}"
         print(f"{filename}: {count} vectors, {status}")
         all_problems += [f"{filename}: {p}" for p in problems]
@@ -125,6 +128,28 @@ def rejected_problems(v):
     if wanted and kind != wanted:
         return [f"the address is a {kind} address, not {wanted}"]
     return []
+
+
+def verification_problems(v):
+    """The verdict of a verification vector: refused when the address is not
+    P2PKH or the signature is not 65 bytes in base64, else valid when the
+    signature recovers the key of the address, compressed or not as its header
+    byte says, else invalid"""
+    problems = message_problems(v)
+    try:
+        address_hash = btc.p2pkh_hash(v["address"])
+        signature = base64.b64decode(v["signature"], validate=True)
+        if len(signature) != 65:
+            raise ValueError(f"the signature has {len(signature)} bytes")
+    except (ValueError, binascii.Error):
+        verdict = "refused"
+    else:
+        recovered = btc.recover_pubkey(signature, message_bytes(v))
+        valid = recovered is not None and btc.hash160(btc.serialize_pubkey(*recovered)) == address_hash
+        verdict = "valid" if valid else "invalid"
+    if verdict != v["result"]:
+        problems.append(f"expected {v['result']}, got {verdict}")
+    return problems
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 {
-  "description": "Message signing vectors from the Trezor firmware device tests. The Trezor test mnemonic is 12 x \"all\" with no passphrase. Excluded: Groestlcoin and Decred (different hash functions) and BIP-137 SegWit headers (35-42), which hw does not produce.",
+  "description": "Message signing vectors from the Trezor firmware device tests, and the verification vectors of its verifymessage tests. Signatures given in hex upstream are written in base64, the form hw takes.",
   "vectors": [
     {
       "name": "trezor/bitcoin/p2pkh",
@@ -151,6 +151,177 @@
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signmessage.py, case \"p2pkh long message\" (Bitcoin, m/44h/0h/0h/0/0)",
       "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_signmessage.py",
       "comment": "Trezor test mnemonic (12 x \"all\"), no passphrase. Signature converted from hex to base64. Trezor path m/44h/0h/0h/0/0 is hw account 0, chain 0, index 0. The message is \"VeryLongMessage!\" repeated 64 times (1024 bytes, 3-byte length prefix)."
+    }
+  ],
+  "verification": [
+    {
+      "name": "trezor/verify/long-message",
+      "network": "btc",
+      "address": "14LmW5k4ssUrtbAB4255zdqv3b4w1TuX9e",
+      "message": "VeryLongMessage!",
+      "messageRepeat": 64,
+      "signature": "IF/3lcKa73U4+LO9suit0NByKtYwoUC2rv1QSlqJXL2GfLsAmBr8UO3QOYIR6NfDBLuO+kYRgbwK+mfqSnIKie0=",
+      "result": "valid",
+      "source": "Trezor test_verifymessage.py test_message_long_legacy",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_verifymessage.py",
+      "comment": "A message of 1024 bytes."
+    },
+    {
+      "name": "trezor/verify/testnet",
+      "network": "btctest",
+      "address": "mirio8q3gtv7fhdnmb3TpZ4EuafdzSs7zL",
+      "message": "This is an example of a signed message.",
+      "signature": "IJ4j7fDk5H/x3sJ/Ms14xQ507wGO6Kat81rhfHqbDdlvSLST/X26sD77b0OcY4PJUjs7vF8afRWKavkKsVTpvoA=",
+      "result": "valid",
+      "source": "Trezor test_verifymessage.py test_message_testnet",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_verifymessage.py",
+      "comment": "The Trezor test key on testnet: the same key and signature as trezor/verify/trezor-key, with the testnet address."
+    },
+    {
+      "name": "trezor/verify/uncompressed",
+      "network": "btc",
+      "address": "1JwSSubhmg6iPtRjtyqhUYYH7bZg3Lfy1T",
+      "message": "This is an example of a signed message.",
+      "signature": "G6d+Aanhe6FYuWLP718T3+1nb/wrS62iTlj3hEWLUrl0IUcNAB1T1YgM9eEOdvAr4+gL8h4YOYy9QejDtK90yMI=",
+      "result": "valid",
+      "source": "Trezor test_verifymessage.py test_message_verify",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_verifymessage.py",
+      "comment": "\"uncompressed pubkey - OK\": header byte 27."
+    },
+    {
+      "name": "trezor/verify/uncompressed-wrong-signature",
+      "network": "btc",
+      "address": "1JwSSubhmg6iPtRjtyqhUYYH7bZg3Lfy1T",
+      "message": "This is an example of a signed message.",
+      "signature": "G6d+Aanhe6FYuWLP718T3+1nb/wrS62iTlj3hEWLUrl0IUcNAB1T1YgM9eEOdvAr4+gL8h4YOYy9QejDtK90yAA=",
+      "result": "invalid",
+      "source": "Trezor test_verifymessage.py test_message_verify",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_verifymessage.py",
+      "comment": "\"uncompressed pubkey - FAIL - wrong sig\": the last byte of s changed."
+    },
+    {
+      "name": "trezor/verify/uncompressed-wrong-message",
+      "network": "btc",
+      "address": "1JwSSubhmg6iPtRjtyqhUYYH7bZg3Lfy1T",
+      "message": "This is an example of a signed message!",
+      "signature": "G6d+Aanhe6FYuWLP718T3+1nb/wrS62iTlj3hEWLUrl0IUcNAB1T1YgM9eEOdvAr4+gL8h4YOYy9QejDtK90yMI=",
+      "result": "invalid",
+      "source": "Trezor test_verifymessage.py test_message_verify",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_verifymessage.py",
+      "comment": "\"uncompressed pubkey - FAIL - wrong msg\": the final period changed to an exclamation mark."
+    },
+    {
+      "name": "trezor/verify/compressed",
+      "network": "btc",
+      "address": "1C7zdTfnkzmr13HfA2vNm5SJYRK6nEKyq8",
+      "message": "This is an example of a signed message.",
+      "signature": "H0Tj5GH3yp9XxHLOGighTfHeHa3vtlUaMtGQe4DHTVofv9baq6Et2MsGaZzj9pQfvg85V7WALRMHYYEEbnQeqq8=",
+      "result": "valid",
+      "source": "Trezor test_verifymessage.py test_message_verify",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_verifymessage.py",
+      "comment": "\"compressed pubkey - OK\": header byte 31."
+    },
+    {
+      "name": "trezor/verify/compressed-wrong-signature",
+      "network": "btc",
+      "address": "1C7zdTfnkzmr13HfA2vNm5SJYRK6nEKyq8",
+      "message": "This is an example of a signed message.",
+      "signature": "H0Tj5GH3yp9XxHLOGighTfHeHa3vtlUaMtGQe4DHTVofv9baq6Et2MsGaZzj9pQfvg85V7WALRMHYYEEbnQeqgA=",
+      "result": "invalid",
+      "source": "Trezor test_verifymessage.py test_message_verify",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_verifymessage.py",
+      "comment": "\"compressed pubkey - FAIL - wrong sig\": the last byte of s changed."
+    },
+    {
+      "name": "trezor/verify/compressed-wrong-message",
+      "network": "btc",
+      "address": "1C7zdTfnkzmr13HfA2vNm5SJYRK6nEKyq8",
+      "message": "This is an example of a signed message!",
+      "signature": "H0Tj5GH3yp9XxHLOGighTfHeHa3vtlUaMtGQe4DHTVofv9baq6Et2MsGaZzj9pQfvg85V7WALRMHYYEEbnQeqq8=",
+      "result": "invalid",
+      "source": "Trezor test_verifymessage.py test_message_verify",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_verifymessage.py",
+      "comment": "\"compressed pubkey - FAIL - wrong msg\"."
+    },
+    {
+      "name": "trezor/verify/trezor-key",
+      "network": "btc",
+      "address": "14LmW5k4ssUrtbAB4255zdqv3b4w1TuX9e",
+      "message": "This is an example of a signed message.",
+      "signature": "IJ4j7fDk5H/x3sJ/Ms14xQ507wGO6Kat81rhfHqbDdlvSLST/X26sD77b0OcY4PJUjs7vF8afRWKavkKsVTpvoA=",
+      "result": "valid",
+      "source": "Trezor test_verifymessage.py test_message_verify",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_verifymessage.py",
+      "comment": "\"trezor pubkey - OK\": the signature of the Trezor test key (the path m/44h/0h/0h/0/0 of the mnemonic 12 x \"all\"), header byte 32."
+    },
+    {
+      "name": "trezor/verify/trezor-key-wrong-signature",
+      "network": "btc",
+      "address": "14LmW5k4ssUrtbAB4255zdqv3b4w1TuX9e",
+      "message": "This is an example of a signed message.",
+      "signature": "IJ4j7fDk5H/x3sJ/Ms14xQ507wGO6Kat81rhfHqbDdlvSLST/X26sD77b0OcY4PJUjs7vF8afRWKavkKsVTpvgA=",
+      "result": "invalid",
+      "source": "Trezor test_verifymessage.py test_message_verify",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_verifymessage.py",
+      "comment": "\"trezor pubkey - FAIL - wrong sig\": the last byte of s changed."
+    },
+    {
+      "name": "trezor/verify/trezor-key-wrong-message",
+      "network": "btc",
+      "address": "14LmW5k4ssUrtbAB4255zdqv3b4w1TuX9e",
+      "message": "This is an example of a signed message!",
+      "signature": "IJ4j7fDk5H/x3sJ/Ms14xQ507wGO6Kat81rhfHqbDdlvSLST/X26sD77b0OcY4PJUjs7vF8afRWKavkKsVTpvoA=",
+      "result": "invalid",
+      "source": "Trezor test_verifymessage.py test_message_verify",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_verifymessage.py",
+      "comment": "\"trezor pubkey - FAIL - wrong msg\"."
+    },
+    {
+      "name": "trezor/verify/bitcoin-cash",
+      "network": "bch",
+      "address": "bitcoincash:qqj22md58nm09vpwsw82fyletkxkq36zxyxh322pru",
+      "message": "This is an example of a signed message.",
+      "signature": "IJ4j7fDk5H/x3sJ/Ms14xQ507wGO6Kat81rhfHqbDdlvSLST/X26sD77b0OcY4PJUjs7vF8afRWKavkKsVTpvoA=",
+      "result": "valid",
+      "source": "Trezor test_verifymessage.py test_message_verify_bcash",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_verifymessage.py",
+      "comment": "The Trezor test key and its signature, with the address in CashAddr form: Bitcoin Cash uses the same format and prefix."
+    },
+    {
+      "name": "trezor/verify/bitcoind-unicode",
+      "network": "btc",
+      "address": "1KzXE97kV7DrpxCViCN3HbGbiKhzzPM7TQ",
+      "message": "žluťoučký kůň úpěl ďábelské ódy",
+      "messageUtf8Hex": "c5be6c75c5a56f75c48d6bc3bd206bc5afc58820c3ba70c49b6c20c48fc3a162656c736bc3a920c3b36479",
+      "signature": "HMaU8PI5Ad/jYDeJFC82o/xYLQ1cDschXPLM1kHk43IoUE89TcPuoou9v12ifEnUY1wJcATZ8ih1DM2Dao4UYMA=",
+      "result": "valid",
+      "source": "Trezor test_verifymessage.py test_verify_bitcoind",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_verifymessage.py",
+      "comment": "A signature made by bitcoind with an uncompressed key (header byte 28) over a Czech message in NFC form."
+    },
+    {
+      "name": "trezor/verify/nfc-message",
+      "network": "btc",
+      "address": "14LmW5k4ssUrtbAB4255zdqv3b4w1TuX9e",
+      "message": "Příšerně žluťoučký kůň úpěl ďábelské ódy zákeřný učeň běží podél zóny úlů",
+      "messageUtf8Hex": "50c599c3adc5a165726ec49b20c5be6c75c5a56f75c48d6bc3bd206bc5afc58820c3ba70c49b6c20c48fc3a162656c736bc3a920c3b36479207ac3a16b65c5996ec3bd2075c48d65c5882062c49bc5bec3ad20706f64c3a96c207ac3b36e7920c3ba6cc5af",
+      "signature": "INDsAu2NqN8j5/6eaA54Z8wpAxL+HJcHSdgwbdrRoe2kHGp3GxPUld0iWxOwqdD5FamE7j0HA/kih7+ACfu599Y=",
+      "result": "valid",
+      "source": "Trezor test_verifymessage.py test_verify_utf",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_verifymessage.py",
+      "comment": "The signature of the Trezor test key over Czech words in NFC form, the bytes Trezor signs after normalizing the message."
+    },
+    {
+      "name": "trezor/verify/nfkd-message",
+      "network": "btc",
+      "address": "14LmW5k4ssUrtbAB4255zdqv3b4w1TuX9e",
+      "message": "Příšerně žluťoučký kůň úpěl ďábelské ódy zákeřný učeň běží podél zóny úlů",
+      "messageUtf8Hex": "5072cc8c69cc8173cc8c65726e65cc8c207acc8c6c7574cc8c6f7563cc8c6b79cc81206b75cc8a6ecc8c2075cc817065cc8c6c2064cc8c61cc8162656c736b65cc81206fcc816479207a61cc816b6572cc8c6e79cc81207563cc8c656ecc8c206265cc8c7acc8c69cc8120706f6465cc816c207a6fcc816e792075cc816c75cc8a",
+      "signature": "INDsAu2NqN8j5/6eaA54Z8wpAxL+HJcHSdgwbdrRoe2kHGp3GxPUld0iWxOwqdD5FamE7j0HA/kih7+ACfu599Y=",
+      "result": "invalid",
+      "source": "Trezor test_verifymessage.py test_verify_utf",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_verifymessage.py",
+      "comment": "EXPECTED TO BE INVALID, THIS IS NORMAL. The same words with their accents decomposed (NFKD). Trezor normalizes a message to NFC before hashing it, so it verifies this spelling too; hw verifies the bytes as given, like Bitcoin Core, and these are the bytes of another message."
     }
   ]
 }

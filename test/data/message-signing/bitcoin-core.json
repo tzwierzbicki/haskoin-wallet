@@ -1,5 +1,5 @@
 {
-  "description": "Message signing vectors from the Bitcoin Core test suite (unit and functional tests).",
+  "description": "Message signing vectors from the Bitcoin Core test suite (unit and functional tests), and the verification vectors of its message_verify unit test.",
   "vectors": [
     {
       "name": "bitcoin-core/unit/message_sign",
@@ -26,6 +26,74 @@
       "source": "Bitcoin Core test/functional/rpc_signmessagewithprivkey.py",
       "sourceUrl": "https://github.com/bitcoin/bitcoin/blob/924f4c4ac78b/test/functional/rpc_signmessagewithprivkey.py#L29-L40",
       "comment": "Regtest WIF key and P2PKH address. Regtest uses the testnet address and WIF prefixes."
+    }
+  ],
+  "verification": [
+    {
+      "name": "bitcoin-core/verify/p2sh-address",
+      "network": "btc",
+      "address": "3B5fQsEXEaV8v6U3ejYc8XaKXAkyQj2MjV",
+      "message": "message too",
+      "signature": "signature should be irrelevant",
+      "result": "refused",
+      "source": "Bitcoin Core util_tests.cpp message_verify",
+      "sourceUrl": "https://github.com/bitcoin/bitcoin/blob/924f4c4ac78b/src/test/util_tests.cpp#L1547-L1597",
+      "comment": "ERR_ADDRESS_NO_KEY: a P2SH address has no key to sign with. The signature is not even read."
+    },
+    {
+      "name": "bitcoin-core/verify/not-base64",
+      "network": "btc",
+      "address": "1KqbBpLy5FARmTPD4VZnDDpYjkUvkr82Pm",
+      "message": "message should be irrelevant",
+      "signature": "invalid signature, not in base64 encoding",
+      "result": "refused",
+      "source": "Bitcoin Core util_tests.cpp message_verify",
+      "sourceUrl": "https://github.com/bitcoin/bitcoin/blob/924f4c4ac78b/src/test/util_tests.cpp#L1547-L1597",
+      "comment": "ERR_MALFORMED_SIGNATURE: the signature is not base64."
+    },
+    {
+      "name": "bitcoin-core/verify/zero-signature",
+      "network": "btc",
+      "address": "1KqbBpLy5FARmTPD4VZnDDpYjkUvkr82Pm",
+      "message": "message should be irrelevant",
+      "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "result": "invalid",
+      "source": "Bitcoin Core util_tests.cpp message_verify",
+      "sourceUrl": "https://github.com/bitcoin/bitcoin/blob/924f4c4ac78b/src/test/util_tests.cpp#L1547-L1597",
+      "comment": "ERR_PUBKEY_NOT_RECOVERED: 65 zero bytes. The header byte 0 is outside 27 to 34, and r = 0 is outside the curve order: no key can be recovered, so the signature is not valid for any address."
+    },
+    {
+      "name": "bitcoin-core/verify/not-signed",
+      "network": "btc",
+      "address": "15CRxFdyRpGZLW9w8HnHvVduizdL5jKNbs",
+      "message": "I never signed this",
+      "signature": "IPojfrX2dfPnH26UegfbGQQLrdK844DlHq5157/P6h57WyuS/Qsl+h/WSVGDF4MUi4rWSswW38oimDYfNNUBUOk=",
+      "result": "invalid",
+      "source": "Bitcoin Core util_tests.cpp message_verify",
+      "sourceUrl": "https://github.com/bitcoin/bitcoin/blob/924f4c4ac78b/src/test/util_tests.cpp#L1547-L1597",
+      "comment": "ERR_NOT_SIGNED: the signature of \"Trust no one\" (the message_sign vector) checked against another message recovers another key."
+    },
+    {
+      "name": "bitcoin-core/verify/ok",
+      "network": "btc",
+      "address": "15CRxFdyRpGZLW9w8HnHvVduizdL5jKNbs",
+      "message": "Trust no one",
+      "signature": "IPojfrX2dfPnH26UegfbGQQLrdK844DlHq5157/P6h57WyuS/Qsl+h/WSVGDF4MUi4rWSswW38oimDYfNNUBUOk=",
+      "result": "valid",
+      "source": "Bitcoin Core util_tests.cpp message_verify",
+      "sourceUrl": "https://github.com/bitcoin/bitcoin/blob/924f4c4ac78b/src/test/util_tests.cpp#L1547-L1597",
+      "comment": "The signature of the message_sign vector, verified."
+    },
+    {
+      "name": "bitcoin-core/verify/crafted",
+      "network": "btc",
+      "address": "11canuhp9X2NocwCq7xNrQYTmUgZAnLK3",
+      "message": "Trust me",
+      "signature": "IIcaIENoYW5jZWxsb3Igb24gYnJpbmsgb2Ygc2Vjb25kIGJhaWxvdXQgZm9yIGJhbmtzIAaHRtbCeDZINyavx14=",
+      "result": "valid",
+      "source": "Bitcoin Core util_tests.cpp message_verify",
+      "sourceUrl": "https://github.com/bitcoin/bitcoin/blob/924f4c4ac78b/src/test/util_tests.cpp#L1547-L1597",
+      "comment": "A crafted signature: r and s are the text \"Chancellor on brink of second bailout for banks\" with padding, and the address is the one of the key they recover. Nobody holds that key, yet the signature is valid: the verifier can only check that the recovered key is the key of the address."
     }
   ]
 }

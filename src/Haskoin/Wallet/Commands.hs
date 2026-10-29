@@ -54,6 +54,7 @@ module Haskoin.Wallet.Commands
     -- * Sync, messages, backups and version
     cmdSync,
     cmdSignMsg,
+    cmdVerifyMsg,
     cmdBackup,
     cmdVersion,
   )
@@ -63,7 +64,6 @@ import Control.Monad (forM, join, unless, void, when)
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
-import qualified Data.ByteString.Base64 as B64
 import Data.Either (isLeft)
 import Data.Foldable (for_)
 import Data.List (nub, partition)
@@ -163,6 +163,7 @@ commandResponse ctx cfg unit = \case
   -- Sync, messages, backups and version
   CommandSync account full -> cmdSync ctx cfg account full
   CommandSignMsg opts -> cmdSignMsg ctx cfg opts
+  CommandVerifyMsg opts -> cmdVerifyMsg ctx cfg opts
   CommandBackup fileM -> cmdBackup cfg fileM
   CommandVersion -> cmdVersion cfg
 
@@ -896,12 +897,25 @@ cmdSignMsg ctx cfg opts =
     addr <- liftEither $ textToAddrE net opts.address
     -- Warned before the mnemonic is asked, so that the user can stop. On
     -- stderr, to keep the armored block and the --json output clean.
-    liftIO $ mapM_ (hPutStrLn stderr) $ messageWarnings opts.message
+    liftIO $ mapM_ (hPutStrLn stderr) $ signingWarnings opts.message
     (seed, accountPrvKey) <- askSigningKey terminal net ctx opts.parts (accountIndex acc) (accountXPubKey ctx acc)
     lift $ recordFingerprint ctx seed
     let addrKey = derivePath ctx (addrPath addrDB) accountPrvKey
     signature <- liftEither $ signMessage ctx addr addrKey.key opts.message
-    return $ ResponseSignMsg opts.message (cs (B64.encode signature)) opts.address
+    return $ ResponseSignMsg opts.message (encodeSignature signature) opts.address
+
+-- | Check a signed message: whether the key of the address signed it. The
+-- wallet is not needed: the address can be anyone's.
+cmdVerifyMsg :: Ctx -> Config -> VerifyMsg -> IO Response
+cmdVerifyMsg ctx cfg opts =
+  runResponse $ do
+    net <- liftMaybe noNetwork (commandNetwork cfg opts.network)
+    addr <- liftEither $ textToAddrE net opts.address
+    valid <- liftEither $ verifyMessage ctx addr opts.signature opts.message
+    -- A message that is hard to copy exactly may be why the signature does
+    -- not check out. On stderr, to keep the --json answer clean.
+    unless valid $ liftIO $ mapM_ (hPutStrLn stderr) $ messageWarnings opts.message
+    return $ ResponseVerifyMsg opts.message opts.signature opts.address valid
 
 -- | Copy the database to the given file, which must not exist, or into the
 -- backups directory of hw under a name carrying the format version and the
