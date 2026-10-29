@@ -29,6 +29,8 @@ module Haskoin.Wallet.Prompt
     askNewMnemonicPass,
     askSigningKey,
     matchAccount,
+    typedPassphraseCreated,
+    typedPassphraseRecovered,
     readRolls,
     askDiceEntropy,
     readSecKeys,
@@ -260,6 +262,21 @@ typedPassphraseWarning =
   "This account comes from the passphrase as typed, which hw did not normalize as BIP39 asks: \
   \other wallets would not find it from this mnemonic and passphrase. \
   \Moving its funds to an account created now keeps them within reach of any wallet."
+
+-- | What the user is told when createacc keeps to the seed of the
+-- passphrase as typed, the one the accounts of the wallet are of
+typedPassphraseCreated :: String
+typedPassphraseCreated =
+  "The accounts of this seed come from the passphrase as typed, which hw did not normalize as BIP39 asks, \
+  \and so does this one, to keep them together: other wallets would not find it from this mnemonic and passphrase."
+
+-- | What the user is told when recover finds accounts from the passphrase
+-- as typed
+typedPassphraseRecovered :: String
+typedPassphraseRecovered =
+  "The accounts found come from the passphrase as typed, which hw did not normalize as BIP39 asks: \
+  \other wallets would not find them from this mnemonic and passphrase. \
+  \Moving their funds to an account created now keeps them within reach of any wallet."
 
 {- Dice rolls -}
 

@@ -466,6 +466,12 @@ key.
 The private keys are never stored anywhere while using hw. If you are using an
 offline computer, you can then export your account and import it on an online
 computer.
+
+A passphrase with accents, or other letters outside ASCII, is normalized as
+BIP39 asks, so that other wallets derive the same seed from it. hw did not
+normalize it before: an account made then comes from another seed. When the
+wallet has such an account of the mnemonic and none of the normalized seed,
+`createacc` keeps to that seed, and says so.
 |]
 
 -- | The network, when given. Without it, a command that needs one takes the
@@ -517,6 +523,11 @@ wallet has already is passed over.
 The command needs the mnemonic and the network at once. On an air-gapped
 setup, create the accounts on the signer with `createacc`, export them with
 `exportacc`, import them on the online computer and `sync` them instead.
+
+A passphrase with accents, or other letters outside ASCII, is normalized as
+BIP39 asks. hw did not normalize it before: when nothing is found, `recover`
+also looks for the accounts it derived then, from the passphrase as typed, and
+says so when it finds some, since other wallets would not.
 |]
 
 accountGapOption :: Parser Natural

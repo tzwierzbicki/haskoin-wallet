@@ -98,6 +98,15 @@ data PublicSeed = PublicSeed
 seedOf :: Ctx -> MnemonicPass -> Either String PublicSeed
 seedOf ctx mnem = seedOfMaster ctx <$> masterKey mnem
 
+-- | The public side of the seed hw derived before it normalized the
+-- passphrase, from the passphrase as typed ('typedMasterKey'): Nothing
+-- when normalizing leaves the passphrase as it is, since that seed is then
+-- the one of 'seedOf'
+typedSeedOf :: Ctx -> MnemonicPass -> Either String (Maybe PublicSeed)
+typedSeedOf ctx mnem
+  | normalizePassphrase (mnemonicPass mnem) == mnemonicPass mnem = Right Nothing
+  | otherwise = Just . seedOfMaster ctx <$> typedMasterKey mnem
+
 -- | The public side of a seed, from its master key
 seedOfMaster :: Ctx -> XPrvKey -> PublicSeed
 seedOfMaster ctx master =

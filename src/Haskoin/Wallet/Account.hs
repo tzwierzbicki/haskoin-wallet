@@ -141,6 +141,14 @@ nextAccount net ctx seed = go 0
           held <- accountWithKey net ctx key
           maybe (return (i, key)) (const $ go (i + 1)) held
 
+-- | Whether an account of the wallet is of the seed: one derives from it,
+-- on its network at its index
+seedHasAccount :: (MonadUnliftIO m) => Ctx -> PublicSeed -> DB m Bool
+seedHasAccount ctx seed = do
+  accounts <- getAccounts
+  derived <- forM accounts $ \(_, acc) -> liftIO $ seedAccountKey seed (accountNetwork acc) (accountIndex acc)
+  return $ or [key == Just (accountXPubKey ctx acc) | ((_, acc), key) <- zip accounts derived]
+
 existsAccount :: (MonadUnliftIO m) => Text -> DB m Bool
 existsAccount name = P.existsBy $ UniqueName name
 

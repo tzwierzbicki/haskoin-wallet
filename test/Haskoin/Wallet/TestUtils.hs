@@ -183,6 +183,23 @@ seedWithoutIndex1 :: Ctx -> PublicSeed
 seedWithoutIndex1 ctx =
   (testSeed ctx) {seedAccountKey = \net index -> if index == 1 then return Nothing else seedAccountKey (testSeed ctx) net index}
 
+-- | The test wallet with the passphrase "café", its é composed as a keyboard
+-- types it, which NFKD splits into e and an accent: the seed BIP39 derives,
+-- and the one hw derived before it normalized the passphrase. For each, the
+-- fingerprint of the seed and the first receiving address of its account 0
+-- on Bitcoin, derived by haskoin-core alone and by the Python tool of the
+-- message-signing vectors, which agree.
+cafePassphrase :: Text
+cafePassphrase = "caf\233"
+
+cafeNormalizedFingerprint, cafeTypedFingerprint :: Text
+cafeNormalizedFingerprint = "a3a04db1"
+cafeTypedFingerprint = "aa280627"
+
+cafeNormalizedAddr, cafeTypedAddr :: Address
+cafeNormalizedAddr = testAddress "1MNgmi8rv8tie1QdPowAu1ywKiNAbL2RPj"
+cafeTypedAddr = testAddress "1N24hDMGThGAPhKVrd7fNWdtE4uHsNf3UL"
+
 -- | The first receiving address of accounts 1 and 2 of the test seed on
 -- Bitcoin; that of account 0 is externalAddr 0
 account1Addr, account2Addr :: Address

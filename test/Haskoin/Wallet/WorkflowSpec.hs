@@ -55,6 +55,7 @@ spec = prepareContext $ \ctx -> do
   signingSpec ctx
   paymentSpec ctx
   recoverSpec ctx
+  passphraseSpec ctx
   sweepSpec ctx
   confirmationSpec ctx
   highFeeSpec ctx
@@ -1194,6 +1195,21 @@ recoverSpec ctx =
         run `shouldSatisfy` printed "Give the --network, or a default-network in the configuration file"
         run `shouldNotSatisfy` askedMnemonic
 
+    -- The chain pays the account hw derived before it normalized the
+    -- passphrase, where BIP39 gives another seed
+    it "are looked for from the passphrase as typed when the normalized one has none, which recover says" $
+      withChain ctx (chainPaying ctx cafeTypedAddr) $ \home _ -> do
+        run <- hw home ["recover"] cafeOnce
+        runErr run `shouldSatisfy` Text.isInfixOf "The accounts found come from the passphrase as typed"
+        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("btc0", 0, 50000)]
+        (fingerprintsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("btc0", Just cafeTypedFingerprint)]
+
+    it "are those of the normalized passphrase, as BIP39 derives them, without a word about the other" $
+      withChain ctx (chainPaying ctx cafeNormalizedAddr) $ \home _ -> do
+        run <- hw home ["recover"] cafeOnce
+        runErr run `shouldNotSatisfy` Text.isInfixOf "as typed"
+        (fingerprintsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("btc0", Just cafeNormalizedFingerprint)]
+
     -- Every account searched is a scan at the store
     it "are looked for with an account gap from 1 to 100" $
       withHome $ \home -> do
@@ -1213,6 +1229,47 @@ recoverSpec ctx =
         runExit run `shouldBe` ExitFailure 1
         run `shouldSatisfy` printed "The store at http://127.0.0.1:1/ could not be reached: the connection failed"
         run `shouldNotSatisfy` askedMnemonic
+
+{- The passphrase as typed -}
+
+-- | The words of the test wallet with the passphrase "café", typed once, or
+-- twice each as createacc asks
+cafeOnce, cafeTwice :: [Text]
+cafeOnce = [mnemonicWords testMnemonic, cafePassphrase]
+cafeTwice = [mnemonicWords testMnemonic, mnemonicWords testMnemonic, cafePassphrase, cafePassphrase]
+
+-- | A chain whose block 800000 pays 50000 to the address
+chainPaying :: Ctx -> Address -> Chain
+chainPaying ctx addr = Chain 800002 [(fundingTx ctx 1 [(addr, 50000)], Just 800000)]
+
+passphraseSpec :: Ctx -> Spec
+passphraseSpec ctx =
+  describe "An account created from a passphrase with accents" $ do
+    it "is of the seed BIP39 derives, when the wallet has no account of the passphrase as typed" $
+      withHome $ \home -> do
+        run <- hw home ["createacc", "main"] cafeTwice
+        runErr run `shouldNotSatisfy` Text.isInfixOf "as typed"
+        (fingerprintsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("main", Just cafeNormalizedFingerprint)]
+
+    -- btc0 was recovered from the passphrase as typed
+    it "is of the seed of the passphrase as typed when the wallet has an account of it and none of the other, which createacc says" $
+      withChain ctx (chainPaying ctx cafeTypedAddr) $ \home _ -> do
+        _ <- answer home ["recover"] cafeOnce
+        run <- hw home ["createacc", "second"] cafeTwice
+        runErr run `shouldSatisfy` Text.isInfixOf "to keep them together"
+        (fmap sort . accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("btc0", 0, 50000), ("second", 1, 0)]
+        (fmap sort . fingerprintsOf <$> hwJson home ["accounts"] [])
+          `shouldReturn` Right [("btc0", Just cafeTypedFingerprint), ("second", Just cafeTypedFingerprint)]
+
+    -- main is of the seed of BIP39, btc0 of the passphrase as typed
+    it "is of the seed BIP39 derives when the wallet has accounts of both seeds" $
+      withChain ctx (chainPaying ctx cafeTypedAddr) $ \home _ -> do
+        _ <- answer home ["createacc", "main"] cafeTwice
+        _ <- answer home ["recover"] cafeOnce
+        run <- hw home ["createacc", "third"] cafeTwice
+        runErr run `shouldNotSatisfy` Text.isInfixOf "as typed"
+        (fmap sort . fingerprintsOf <$> hwJson home ["accounts"] [])
+          `shouldReturn` Right [("btc0", Just cafeTypedFingerprint), ("main", Just cafeNormalizedFingerprint), ("third", Just cafeNormalizedFingerprint)]
 
 {- Sweeping -}
 

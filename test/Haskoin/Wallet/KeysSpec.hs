@@ -30,6 +30,7 @@ spec = do
   prepareContext $ \ctx -> do
     knownWalletsSpec ctx
     leadingZeroSpec ctx
+    typedSeedSpec ctx
     describe "Keys of the test wallets" $ do
       it "derives the account key of the test wallet from its mnemonic" $
         xPrvExport btc <$> signingKey btc ctx testMnemonic 0 `shouldBe` Right testAccountXPrv
@@ -46,6 +47,21 @@ spec = do
         fingerprintToText . seedFingerprint <$> seedOf ctx testMnemonic2 `shouldBe` Right testFingerprintText2
   passphraseSpec
   otherImplementationsSpec
+
+{- The seed hw derived before, from the passphrase as typed -}
+
+typedSeedSpec :: Ctx -> Spec
+typedSeedSpec ctx =
+  describe "The seed of the passphrase as typed" $ do
+    it "is the one hw derived before, for a passphrase normalizing changes" $
+      fmap (fmap (fingerprintToText . seedFingerprint)) (typedSeedOf ctx (withPassphrase cafePassphrase))
+        `shouldBe` Right (Just cafeTypedFingerprint)
+
+    it "is none for a passphrase normalizing leaves as it is, which gives the seed of BIP39" $
+      fmap (fmap (fingerprintToText . seedFingerprint)) (typedSeedOf ctx testMnemonic) `shouldBe` Right Nothing
+
+    it "is not the seed BIP39 derives from the same passphrase" $
+      fmap (fingerprintToText . seedFingerprint) (seedOf ctx (withPassphrase cafePassphrase)) `shouldBe` Right cafeNormalizedFingerprint
 
 {- The passphrase, as BIP39 hashes it -}
 

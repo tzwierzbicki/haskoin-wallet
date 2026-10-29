@@ -239,15 +239,36 @@ cmdCreateAcc ctx cfg name netM parts =
     checkNameFree name
     net <- liftMaybe noNetwork (commandNetwork cfg netM)
     mnem <- askNewMnemonicPass terminal parts
-    seed <- liftEither $ seedOf ctx mnem
+    seed <- seedToCreateWith ctx mnem
     (_, xpub) <- lift $ nextAccount net ctx seed
     (accId, _) <- insertAccount net ctx name xpub (Just (seedFingerprint seed))
     -- The accounts of the seed created before hw recorded fingerprints
     lift $ recordFingerprint ctx seed
     accountAnswer accId
 
+-- | The seed createacc derives the account from: the one BIP39 derives
+-- from the mnemonic and the passphrase. For a passphrase that normalizing
+-- changes, hw derived another seed before, from the passphrase as typed.
+-- When the wallet has an account of that seed and none of the other, the
+-- new account is of it too, so that one seed keeps one set of accounts,
+-- and the user is told.
+seedToCreateWith :: Ctx -> MnemonicPass -> ExceptT String (DB IO) PublicSeed
+seedToCreateWith ctx mnem = do
+  seed <- liftEither $ seedOf ctx mnem
+  typedM <- liftEither $ typedSeedOf ctx mnem
+  case typedM of
+    Nothing -> return seed
+    Just typed -> do
+      ofNormalized <- lift $ seedHasAccount ctx seed
+      ofTyped <- lift $ seedHasAccount ctx typed
+      if ofTyped && not ofNormalized
+        then liftIO (tell terminal typedPassphraseCreated) >> return typed
+        else return seed
+
 -- | Recover the accounts of a seed that were paid on a network, from its
--- mnemonic: see "Haskoin.Wallet.Sync".
+-- mnemonic: see "Haskoin.Wallet.Sync". When none is found and normalizing
+-- changes the passphrase, the accounts hw derived before, from the
+-- passphrase as typed, are looked for too, and the user is told of those.
 cmdRecover :: Ctx -> Config -> Recover -> IO Response
 cmdRecover ctx cfg opts =
   runDBResponse cfg $ do
@@ -258,7 +279,15 @@ cmdRecover ctx cfg opts =
     -- Typed once: a mistyped mnemonic finds no paid account
     mnem <- askMnemonicPass terminal opts.parts
     seed <- liftEither $ seedOf ctx mnem
-    ResponseRecover net opts.accountGap <$> recoverSeed ctx cfg store net seed opts.accountGap
+    found <- recoverSeed ctx cfg store net seed opts.accountGap
+    typedM <- liftEither $ typedSeedOf ctx mnem
+    fromTyped <- case typedM of
+      Just typed | null found -> do
+        results <- recoverSeed ctx cfg store net typed opts.accountGap
+        unless (null results) $ liftIO $ tell terminal typedPassphraseRecovered
+        return results
+      _ -> return []
+    return $ ResponseRecover net opts.accountGap (found <> fromTyped)
 
 cmdTestAcc :: Ctx -> Config -> Maybe Text -> Natural -> IO Response
 cmdTestAcc ctx cfg account parts =
