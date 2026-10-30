@@ -19,6 +19,11 @@
 -- the real fee rate: the recipients are not charged for consolidating. The
 -- sizes are those of P2PKH inputs and outputs, the only ones the wallet
 -- creates.
+--
+-- Under coin control, the user chooses the coins. 'spendCoins' spends every
+-- chosen coin, whatever the strategy. With --select, 'selectCoins' takes
+-- the chosen coins as its candidates instead, and treats them as it treats
+-- every coin of the account.
 module Haskoin.Wallet.CoinSelection
   ( CoinSelection (..),
     FeePayer (..),
@@ -43,7 +48,9 @@ import System.Random (StdGen)
 
 {- Types -}
 
--- | How the coins to spend are chosen
+-- | How the coins to spend are selected among the candidates: the
+-- spendable coins of the account, or the coins chosen with coin control
+-- and --select
 data CoinSelection
   = -- | The proposal with the least waste among the strategies below and an
     -- exact match without change, like Bitcoin Core
@@ -113,7 +120,8 @@ paymentSize :: Payment -> Int -> Bool -> Word64
 paymentSize payment inputs hasChange =
   txSize (replicate inputs p2pkhInput) (payment.outputSizes <> [p2pkhOutputSize | hasChange])
 
--- | Choose the coins of a payment among the candidates
+-- | Select the coins of a payment among the candidates: the spendable coins
+-- of the account, or the coins chosen with coin control and --select
 selectCoins ::
   CoinSelection ->
   -- | The randomness of the random draw
@@ -138,12 +146,13 @@ selectCoins strategy gen payment candidates
     largestFirst = greedy payment . sortOn (Down . (.value))
     smallestFirst = greedy payment . sortOn (.value)
 
--- | Spend exactly the given coins, under coin control. They must cover the
--- payment; a coin worth less than the fee of its input is spent all the same.
+-- | Spend exactly the given coins, under coin control without --select.
+-- The strategy does not apply. The coins must cover the payment; a coin
+-- worth less than the fee of its input is spent all the same.
 spendCoins :: Payment -> [Store.Unspent] -> Either String Selection
 spendCoins payment coins
   | sum (covers payment <$> coins) < fromIntegral (target payment) =
-      Left "The selected coins do not cover the amount and the fee"
+      Left "The chosen coins do not cover the amount and the fee"
   | otherwise = Right $ selectionOf payment coins
 
 {- Values and the split -}

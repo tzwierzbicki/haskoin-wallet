@@ -61,7 +61,7 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.PendingTx (PendingTx (..), changeAddress, lookupPendingTx, pendingTxs)
 import Haskoin.Wallet.RawTx (lookupRawTx)
 import Haskoin.Wallet.Store (Store, fromStore, rawTransactions)
-import Haskoin.Wallet.TxBuilding (BuiltTx (..), ChosenPayment (..), WalletCoins (..), assemblePayment, choosePayment)
+import Haskoin.Wallet.TxBuilding (BuiltTx (..), ChosenPayment (..), CoinControl (..), WalletCoins (..), assemblePayment, choosePayment)
 import Haskoin.Wallet.TxInfo (MyInputs (..), TxInfo (..), TxSummary (..), liveSummary, ownTransaction, txInfoBlockRefs)
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSigning (parseTxSignData)
@@ -335,7 +335,7 @@ walletCoinsOf plan added =
 -- and the coins added
 chooseBump :: Ctx -> StdGen -> BumpPlan -> [(Store.Unspent, Address, SoftPath)] -> Natural -> Natural -> Either String ChosenPayment
 chooseBump ctx gen plan added feeByte dust =
-  choosePayment ctx gen LargestFirst found plan.planRecipients feeByte dust SenderPays ((.outpoint) <$> found.coins)
+  choosePayment ctx gen LargestFirst found plan.planRecipients feeByte dust SenderPays (SpendChosen ((.outpoint) <$> found.coins))
   where
     found = walletCoinsOf plan added
 

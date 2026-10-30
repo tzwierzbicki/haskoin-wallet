@@ -104,7 +104,7 @@ import Haskoin.Wallet.Prompt
 import Haskoin.Wallet.Response
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
-import Haskoin.Wallet.TxBuilding (ChangeTo (..), buildTxSignData, coinWithPath)
+import Haskoin.Wallet.TxBuilding (ChangeTo (..), CoinControl (..), buildTxSignData, coinWithPath)
 import Haskoin.Wallet.TxBumpFee
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData
@@ -582,26 +582,33 @@ controlledAccount account outpoints spendFrom = do
 
 -- | Prepare a payment from the account, unsigned. Coin control spends the
 -- coins of --coin and those at the addresses of --spendfrom, all of those
--- that can be spent, and only them; the answer lists the coins it chose and
--- cannot spend, and why.
+-- that can be spent, and only them. With --select, the strategy selects
+-- among them instead, as it does among every coin of the account without
+-- coin control. The answer lists the coins chosen that cannot be spent, and
+-- why. The chosen coins --select does not need are not listed, like the
+-- coins a selection leaves without coin control.
 cmdPrepareTx :: Ctx -> Config -> AmountUnit -> PrepareTx -> IO Response
 cmdPrepareTx ctx cfg unit opts =
   runDBResponse cfg $ do
     (accId, acc, spendFrom) <- controlledAccount opts.account opts.coins opts.spendFrom
     let net = accountNetwork acc
+        controlled = not (null opts.coins && null spendFrom)
+    when (opts.select && not controlled) $
+      throwError "--select needs coins to select among: give --coin or --spendfrom"
     -- Before the transaction is built, not after
     for_ opts.output checkPathFree
     recipients <- liftEither $ mapM (readPayment net unit) opts.recipients
     feeByte <- chooseFeeRate cfg (webStore ctx cfg net) 1 opts.feeRate
     confirmFeeRate opts.yes feeByte opts.dust
     (control, left) <-
-      if null opts.coins && null spendFrom
-        then return ([], [])
+      if not controlled
+        then return (NoCoinControl, [])
         else do
           spendable <- spendableCoins net ctx accId opts.minConf
           unspendable <- unspendableCoins net ctx accId opts.minConf
           (chosen, held) <- liftEither $ chosenCoins opts.coins spendFrom spendable unspendable
-          return ((.outpoint) <$> chosen, leftCoins [] held [])
+          let outpoints = (.outpoint) <$> chosen
+          return (if opts.select then SelectAmongChosen outpoints else SpendChosen outpoints, leftCoins [] held [])
     let changeTo
           | fromMaybe (configChangeBack cfg) opts.changeBack = ChangeBack (changeBackTo unit net accId)
           | otherwise = NewChangeAddress

@@ -143,10 +143,13 @@ data PrepareTx = PrepareTx
     minConf :: !Natural,
     strategy :: !CoinSelection,
     output :: !(Maybe FilePath),
-    -- | The coins to spend, instead of choosing them
+    -- | Coin control: the coins chosen by their outpoints (--coin)
     coins :: ![OutPoint],
-    -- | The addresses whose coins to spend, instead of choosing them
+    -- | Coin control: the addresses whose coins are chosen (--spendfrom)
     spendFrom :: ![Text],
+    -- | Whether the strategy selects among the chosen coins (--select),
+    -- instead of every one of them being spent
+    select :: !Bool,
     -- | Whether a fee rate above 100 satoshis per byte is taken without
     -- asking (--yes)
     yes :: !Bool,
@@ -943,6 +946,7 @@ prepareTxParser = do
           <*> outputFileMaybeOption
           <*> many coinOption
           <*> many spendFromOption
+          <*> selectOption
           <*> highFeeYesOption
           <*> changeBackOption
   info (CommandPrepareTx <$> options) $
@@ -964,9 +968,14 @@ confirms, bumpfee can replace it with one that pays a higher fee. Bitcoin Cash
 does not replace transactions.
 
 Coin control: --coin and --spendfrom choose the coins to spend. preparetx then
-spends every one of them that can be spent, and no other. The chosen coins
-that cannot be spent, because they are locked or not confirmed enough, are
-listed with the reason. When none can be spent, nothing is prepared.
+spends every one of them that can be spent, and no other, whatever --strategy
+says. With --select, it spends only what the payment needs among them: the
+strategy selects among the chosen coins as it selects among all the coins of
+the account without coin control, and a chosen coin worth less than its fee
+stays. The chosen coins that cannot be spent, because they are locked or not
+confirmed enough, are listed with the reason, with or without --select. The
+list tells such a coin from one that --select left because the payment did
+not need it. When none can be spent, nothing is prepared.
 
 Change: the change goes to a new change address, unless --changeback sends it
 back to an address the payment spends from. Some banks accept payments only
@@ -1083,6 +1092,14 @@ spendFromOption =
       <> metavar "ADDRESS"
       <> help "Coin control: spend the coins at this address of the account. Repeat for several addresses."
 
+-- | Whether the strategy selects among the coins of coin control, instead
+-- of every one of them being spent
+selectOption :: Parser Bool
+selectOption =
+  switch $
+    long "select"
+      <> help "Coin control: spend only what the payment needs among the coins of --coin and --spendfrom, as --strategy selects them, instead of every one of them"
+
 -- | A coin to spend, as coins lists it
 coinOption :: Parser OutPoint
 coinOption = coinOptionWith "Coin control: spend this coin, as coins lists it. Repeat for several coins."
@@ -1152,11 +1169,13 @@ coinSelectionOption =
       <> completeWith (strategyName <$> strategies)
       <> help
         [r|
-How the coins to spend are chosen. least-waste tries the other strategies and
+How the coins to spend are selected. least-waste tries the other strategies and
 an exact match without change, and keeps the coins that waste the least fee,
 now and later, as Bitcoin Core does. random-draw spends coins in random order.
 largest-first spends the fewest coins, for the lowest fee now. smallest-first
-spends the smallest coins first, to consolidate them.
+spends the smallest coins first, to consolidate them. With --coin or
+--spendfrom, every chosen coin is spent and the strategy does not apply,
+unless --select has it select among the chosen coins.
 |]
   where
     strategies = [LeastWaste, RandomDraw, LargestFirst, SmallestFirst]

@@ -11,11 +11,16 @@
 -- ('ChangeTo'), assembles the transaction ('assemblePayment'), and fetches
 -- the transactions the chosen coins come from. 'buildWalletTx' does the
 -- two pure steps at once, with a change address given in advance.
+--
+-- 'CoinControl' says whether the user chose the coins of the payment, and
+-- what becomes of the coins chosen: every one is spent, or the strategy
+-- selects among them as it does among the coins of the account.
 module Haskoin.Wallet.TxBuilding
   ( BuiltTx (..),
     WalletCoins (..),
     ChosenPayment (..),
     ChangeTo (..),
+    CoinControl (..),
     buildTxSignData,
     buildWalletTx,
     choosePayment,
@@ -97,6 +102,21 @@ data BuiltTx = BuiltTx
   }
   deriving (Eq, Show)
 
+-- | Coin control: whether the user chose the coins of a payment, and what
+-- the builder does with the coins chosen
+data CoinControl
+  = -- | No coin control: the strategy selects among every spendable coin
+    -- of the account
+    NoCoinControl
+  | -- | Every chosen coin is spent, whatever the strategy, even one worth
+    -- less than the fee of its input
+    SpendChosen ![OutPoint]
+  | -- | The strategy selects among the chosen coins as it does among every
+    -- coin without coin control (--select): only what the payment needs is
+    -- spent, and a chosen coin worth less than the fee of its input is left
+    SelectAmongChosen ![OutPoint]
+  deriving (Eq, Show)
+
 {- Fetching from the database -}
 
 -- | The signing data of a transaction paying the recipients from the
@@ -119,8 +139,7 @@ buildTxSignData ::
   FeePayer ->
   -- | Minimum confirmations of the coins
   Natural ->
-  -- | Coin control: the coins to spend, instead of choosing them
-  [OutPoint] ->
+  CoinControl ->
   ChangeTo m ->
   ExceptT String (DB m) TxSignData
 buildTxSignData net ctx cfg gen strategy accId recipients feeByte dust payer minConf coinControl changeTo = do
@@ -199,15 +218,14 @@ buildWalletTx ::
   -- | Dust
   Natural ->
   FeePayer ->
-  -- | Coin control: the coins to spend, instead of choosing them
-  [OutPoint] ->
+  CoinControl ->
   Either String BuiltTx
 buildWalletTx net ctx gen strategy found change recipients feeByte dust payer coinControl = do
   chosen <- choosePayment ctx gen strategy found recipients feeByte dust payer coinControl
   assemblePayment net ctx found chosen (Just change)
 
 -- | Choose the coins of a payment to the recipients among the wallet's
--- coins: by the strategy, or exactly those under coin control. When the
+-- coins: by the strategy, or as coin control says ('CoinControl'). When the
 -- recipients pay the fee, it is deducted from their amounts in equal parts,
 -- the first recipient also paying the remainder. A fee rate of zero is
 -- refused: the network would not relay the transaction. So is a recipient
@@ -224,8 +242,7 @@ choosePayment ::
   -- | Dust
   Natural ->
   FeePayer ->
-  -- | Coin control: the coins to spend, instead of choosing them
-  [OutPoint] ->
+  CoinControl ->
   Either String ChosenPayment
 choosePayment ctx gen strategy found recipients feeByte dust payer coinControl = do
   when (null recipients) $ Left "No recipients provided"
@@ -234,8 +251,9 @@ choosePayment ctx gen strategy found recipients feeByte dust payer coinControl =
   -- shuffled with what is left
   let (drawGen, outputGen) = splitGen gen
   selection <- case coinControl of
-    [] -> selectCoins strategy drawGen payment found.coins
-    _ -> spendCoins payment =<< controlledCoins found.coins coinControl
+    NoCoinControl -> selectCoins strategy drawGen payment found.coins
+    SpendChosen chosen -> spendCoins payment =<< controlledCoins found.coins chosen
+    SelectAmongChosen chosen -> selectCoins strategy drawGen payment =<< controlledCoins found.coins chosen
   paidRecipients <- case payer of
     SenderPays -> return recipients
     RecipientsPay -> do
@@ -293,10 +311,12 @@ recipientOutputSize :: Ctx -> Address -> Word64
 recipientOutputSize ctx addr =
   maybe p2pkhOutputSize (outputSize . marshal ctx) (addressToOutput addr)
 
--- | The coins under coin control, which must all be spendable
+-- | The coins chosen under coin control, among the spendable coins of the
+-- account. Every chosen coin must be one of them: the command checks it
+-- first, and tells which are not and why.
 controlledCoins :: [Store.Unspent] -> [OutPoint] -> Either String [Store.Unspent]
 controlledCoins coins control
-  | length controlled < length (nub control) = Left "Selected coin does not exist or is not spendable"
+  | length controlled < length (nub control) = Left "A chosen coin does not exist or is not spendable"
   | otherwise = Right controlled
   where
     controlled = filter ((`elem` control) . (.outpoint)) coins

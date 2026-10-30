@@ -253,14 +253,16 @@ hw fees --network bch
 **`hw preparetx ADDRESS:AMOUNT...`** prepares a payment, unsigned, and keeps it
 as a pending transaction. It needs no mnemonic. `--feerate` takes a number or
 `low`, `median` or `high`. `--recipientpay` takes the fee out of the amounts
-paid. `--coin` and `--spendfrom` choose the coins to spend. `--changeback`
-sends the change back to an address the payment spends from. `--output` also
-writes the transaction to a file.
+paid. `--coin` and `--spendfrom` choose the coins to spend, every one of them.
+`--select` spends only what the payment needs among them, as `--strategy`
+selects them. `--changeback` sends the change back to an address the payment
+spends from. `--output` also writes the transaction to a file.
 
 ```console
 hw preparetx ADDRESS:0.0005 --feerate median
 hw preparetx ADDRESS1:10000sat ADDRESS2:250bits --feerate 5
 hw preparetx ADDRESS:0.01 --spendfrom MYADDRESS --changeback --feerate low
+hw preparetx ADDRESS:0.01 --spendfrom MYADDRESS --select --feerate low
 hw preparetx ADDRESS:0.01 --recipientpay --feerate high --output unsigned.json
 ```
 

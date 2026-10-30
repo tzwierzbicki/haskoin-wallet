@@ -211,6 +211,10 @@ paidToOthers = summaryOtherOutputs . txInfoSummary
 paidToWallet :: TxInfo -> Map.Map Address Natural
 paidToWallet = fmap myOutputsValue . summaryMyOutputs . txInfoSummary
 
+-- | What a transaction spends from the wallet, by address
+spentFromWallet :: TxInfo -> Map.Map Address Natural
+spentFromWallet = fmap myInputsValue . summaryMyInputs . txInfoSummary
+
 -- | The text of an address of the tests
 textOf :: Address -> String
 textOf = maybe (error "textOf") Text.unpack . addrToText btc
@@ -2151,6 +2155,44 @@ coinControlSpec ctx =
         prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spendfrom", textOf (externalAddr 0), "--feerate", "10"] []
         paidToWallet <$> txOf prepared `shouldReturn` Map.fromList [(internalAddr 0, 27740)]
         leftOf prepared `shouldBe` Right []
+
+    -- Both coins at the address, 80000: two inputs and two outputs make 374
+    -- bytes, a fee of 3740, and 56260 of change. Smallest first would spend
+    -- the coin of 30000 alone.
+    it "spends every coin at the --spendfrom address, whatever --strategy says" $
+      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+        synced home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spendfrom", textOf (externalAddr 0), "--strategy", "smallest-first", "--feerate", "10"] []
+        spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 80000)]
+        paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 56260)]
+
+    -- The coin of 30000 pays 20000 alone: 226 bytes, a fee of 2260, and
+    -- 7740 of change. The coin of 50000 stays, and is not listed.
+    it "spends only what the payment needs among them with --select, as --strategy says" $
+      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+        synced home
+        answered <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spendfrom", textOf (externalAddr 0), "--select", "--strategy", "smallest-first", "--feerate", "10"] []
+        prepared <- txOf answered
+        spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 30000)]
+        paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 7740)]
+        leftOf answered `shouldBe` Right []
+
+    -- The coin of 30000 is locked, so smallest first spends the one of
+    -- 50000: 27740 of change. The list says why the one of 30000 was not
+    -- taken.
+    it "lists the chosen coins that cannot be spent with --select too, with why" $
+      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+        synced home
+        _ <- answer home ["lockcoin", coinArg (twoCoinsTx ctx) 1] []
+        answered <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spendfrom", textOf (externalAddr 0), "--select", "--strategy", "smallest-first", "--feerate", "10"] []
+        paidToWallet <$> txOf answered `shouldReturn` Map.fromList [(internalAddr 0, 27740)]
+        leftOf answered `shouldBe` Right [(OutPoint (txHash (twoCoinsTx ctx)) 1, 30000, Locked LockedByUser)]
+
+    it "refuses --select without --coin or --spendfrom" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--select", "--feerate", "10"] [])
+          `shouldReturn` Right "--select needs coins to select among: give --coin or --spendfrom"
 
     -- 1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ is the first receiving address of
     -- cash in the legacy form; hw stores it as
