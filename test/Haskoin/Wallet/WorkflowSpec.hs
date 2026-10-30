@@ -774,6 +774,80 @@ signedPayment ctx = signedByWallet ctx (unsignedPayment ctx)
 
 failureSpec :: Ctx -> Spec
 failureSpec ctx = do
+  describe "The help" $ do
+    it "of a command is shown with --help, and hw exits with success" $
+      withHome $ \home -> do
+        run <- hw home ["signtx", "--help"] []
+        runExit run `shouldBe` ExitSuccess
+        runOut run `shouldSatisfy` Text.isPrefixOf "Usage: hw signtx"
+        runOut run `shouldSatisfy` Text.isInfixOf "-i,--input FILENAME"
+
+    it "of the program lists the commands by group with --help" $
+      withHome $ \home -> do
+        run <- hw home ["--help"] []
+        runExit run `shouldBe` ExitSuccess
+        runOut run `shouldSatisfy` Text.isPrefixOf "Usage: hw "
+        runOut run `shouldSatisfy` Text.isInfixOf "Payments\n  fees "
+
+    it "marks the commands that ask for a mnemonic or private keys with !" $
+      withHome $ \home -> do
+        run <- hw home ["--help"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "! Generate a new mnemonic"
+        runOut run `shouldSatisfy` (not . Text.isInfixOf "! Send a signed transaction")
+
+    it "has no colour codes when written to a pipe" $
+      withHome $ \home -> do
+        run <- hw home ["--help"] []
+        runOut run `shouldSatisfy` (not . Text.isInfixOf "\ESC")
+
+    -- --unit and --json go before or after the command, and --help too
+    it "of a command is shown with --help after its options" $
+      withHome $ \home -> do
+        run <- hw home ["--unit", "sat", "sync", "--json", "--help"] []
+        runExit run `shouldBe` ExitSuccess
+        runOut run `shouldSatisfy` Text.isPrefixOf "Usage: hw sync"
+
+    it "of a command is shown when it is typed alone and needs arguments, as a failure" $
+      withHome $ \home -> do
+        run <- hw home ["preparetx"] []
+        runExit run `shouldBe` ExitFailure 1
+        runErr run `shouldSatisfy` Text.isPrefixOf "Usage: hw preparetx"
+        runErr run `shouldSatisfy` Text.isInfixOf "Available options:"
+
+    it "of the program is shown when nothing is typed, as a failure" $
+      withHome $ \home -> do
+        run <- hw home [] []
+        runExit run `shouldBe` ExitFailure 1
+        runErr run `shouldSatisfy` Text.isInfixOf "Mnemonics and accounts"
+
+    it "is not shown for a --help after --, which is an argument" $
+      withHome $ \home -> do
+        run <- hw home ["label", "0", "--", "--help"] []
+        runExit run `shouldBe` ExitFailure 1
+        run `shouldSatisfy` printed "There are no accounts in the wallet"
+
+  describe "A command line hw cannot parse" $ do
+    it "names the unknown command, and suggests the closest one" $
+      withHome $ \home -> do
+        run <- hw home ["preparetxx"] []
+        runExit run `shouldBe` ExitFailure 1
+        runErr run `shouldSatisfy` Text.isInfixOf "Invalid argument `preparetxx'"
+        runErr run `shouldSatisfy` Text.isInfixOf "Did you mean this?\n    preparetx"
+
+    it "says what is wrong with the value of an option, then the usage of the command" $
+      withHome $ \home -> do
+        run <- hw home ["mnemonic", "--split", "20"] []
+        runExit run `shouldBe` ExitFailure 1
+        runErr run `shouldSatisfy` Text.isInfixOf "option --split: The --split value has to be between 1 and 12"
+        runErr run `shouldSatisfy` Text.isInfixOf "Usage: hw mnemonic"
+
+    it "says what a command misses" $
+      withHome $ \home -> do
+        run <- hw home ["exporttx", Text.unpack (txHashToHex (fakeTxHash 1))] []
+        runExit run `shouldBe` ExitFailure 1
+        runErr run `shouldSatisfy` Text.isInfixOf "Missing: FILENAME"
+        runErr run `shouldSatisfy` Text.isInfixOf "Usage: hw exporttx NOSIGHASH FILENAME"
+
   describe "A command that fails" $ do
     it "exits with 1, and tells why" $
       withHome $ \home -> do

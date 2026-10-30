@@ -64,6 +64,9 @@ library
       Haskoin.Wallet.Migration.V3
       Haskoin.Wallet.Migration.V4
       Haskoin.Wallet.Parser
+      Haskoin.Wallet.Parser.Args
+      Haskoin.Wallet.Parser.Help
+      Haskoin.Wallet.Parser.Run
       Haskoin.Wallet.PendingTx
       Haskoin.Wallet.PrettyPrinter
       Haskoin.Wallet.Prompt
@@ -122,6 +125,8 @@ library
     , persistent >=2.14.5.1
     , persistent-sqlite >=2.13.1.1
     , pretty >=1.1.3.6
+    , prettyprinter >=1.7
+    , prettyprinter-ansi-terminal >=1.1
     , random >=1.1
     , raw-strings-qq >=1.1
     , secp256k1-haskell >=1.1.0
@@ -177,6 +182,8 @@ executable hw
     , persistent >=2.14.5.1
     , persistent-sqlite >=2.13.1.1
     , pretty >=1.1.3.6
+    , prettyprinter >=1.7
+    , prettyprinter-ansi-terminal >=1.1
     , random >=1.1
     , raw-strings-qq >=1.1
     , secp256k1-haskell >=1.1.0
@@ -219,6 +226,7 @@ test-suite spec
       Haskoin.Wallet.Migration.V3Spec
       Haskoin.Wallet.Migration.V4Spec
       Haskoin.Wallet.MigrationSpec
+      Haskoin.Wallet.ParserSpec
       Haskoin.Wallet.PendingTxSpec
       Haskoin.Wallet.PromptSpec
       Haskoin.Wallet.RecipientSpec
@@ -279,6 +287,8 @@ test-suite spec
     , persistent >=2.14.5.1
     , persistent-sqlite >=2.13.1.1
     , pretty >=1.1.3.6
+    , prettyprinter >=1.7
+    , prettyprinter-ansi-terminal >=1.1
     , random >=1.1
     , raw-strings-qq >=1.1
     , secp256k1-haskell >=1.1.0

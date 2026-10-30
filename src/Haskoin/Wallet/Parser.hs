@@ -4,24 +4,28 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
 
+-- | The command line of hw: its commands, each with its options and its
+-- help, and the options that go with any command. A command is a
+-- 'CommandSpec'. Each of its options is made once, as the row of the help
+-- that describes it and the parser that reads it, with the builders of
+-- "Haskoin.Wallet.Parser.Args". "Haskoin.Wallet.Parser.Run" runs the
+-- command line, and "Haskoin.Wallet.Parser.Help" lays out the help.
 module Haskoin.Wallet.Parser where
 
-import Data.Char (isSpace)
-import Data.List (find, intercalate, isPrefixOf)
-import Data.List.Split (splitWhen)
+import Control.Applicative (Alternative (..), optional)
+import Data.List (find, intercalate)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Word (Word32)
 import Haskoin
 import Haskoin.Wallet.Amounts (AmountUnit (..), readUnit)
 import Haskoin.Wallet.CoinSelection (CoinSelection (..), FeePayer (..))
-import Haskoin.Wallet.Keys (KeySource (..))
 import Haskoin.Wallet.FeeRates (FeeRateChoice, readFeeRateChoice)
+import Haskoin.Wallet.Keys (KeySource (..))
+import Haskoin.Wallet.Parser.Args
+import Haskoin.Wallet.Parser.Run (runProgram)
 import Haskoin.Wallet.Util (Page (Page), readNatural)
 import Numeric.Natural (Natural)
-import Options.Applicative
-import Options.Applicative.Help.Chunk (extractChunk, paragraph, stringChunk, unChunk, vcatChunks, vsepChunks)
-import Options.Applicative.Help.Pretty
 import Text.RawString.QQ (r)
 
 {- Commands -}
@@ -272,7 +276,7 @@ data Signing = Signing
   deriving (Eq, Show)
 
 -- | What signtx and signsweep sign
-signingOptions :: Parser Signing
+signingOptions :: Args Signing
 signingOptions =
   Signing
     <$> txAccountOption
@@ -280,24 +284,32 @@ signingOptions =
     <*> inputFileMaybeOption
     <*> outputFileMaybeOption
 
-parserMain :: IO (Command, AmountUnit, Bool)
-parserMain =
-  customExecParser
-    (prefs $ showHelpOnEmpty <> helpIndent 25)
-    programParser
+{- The program -}
 
-programParser :: ParserInfo (Command, AmountUnit, Bool)
-programParser = do
-  let cmd = (,,) <$> (commandParser <**> helper) <*> unitOption <*> jsonOption
-  info cmd $
-    fullDesc
-      <> progDesc
+-- | The command typed, with the unit of its amounts and whether it answers
+-- in JSON. A request for help, and a command line that cannot be parsed,
+-- print what they have to and leave.
+parserMain :: IO (Command, AmountUnit, Bool)
+parserMain = do
+  (cmd, (unit, json)) <- runProgram program
+  return (cmd, unit, json)
+
+-- | hw: its commands by group, the options every command takes, and the
+-- help of the program
+program :: Program Command (AmountUnit, Bool)
+program =
+  Program
+    { name = "hw",
+      -- COMMAND --help, rather than COMMAND, tells how to get the help of
+      -- a command
+      commandUsage = "COMMAND --help",
+      intro =
         [r|
 hw is a BIP44 wallet for Bitcoin and Bitcoin Cash. It stores public keys
 only. The commands marked ! ask for a mnemonic or private keys. Run them on an
 offline computer if you can.
-|]
-      <> footerParagraphs
+|],
+      details =
         [r|
 A payment takes three steps:
 
@@ -315,16 +327,79 @@ such as the server, the default network and the address gap, are in
 ~/.hw/config.json.
 
 Type hw COMMAND --help for the help of a command.
-|]
+|],
+      globals = (,) <$> unitOption <*> jsonOption,
+      groups =
+        [ CommandGroup
+            "Mnemonics and accounts"
+            [ mnemonicCommand,
+              createAccCommand,
+              recoverCommand,
+              testAccCommand,
+              exportAccCommand,
+              importAccCommand,
+              accountsCommand,
+              renameAccCommand,
+              deleteAccCommand,
+              syncCommand
+            ],
+          CommandGroup
+            "Addresses"
+            [ receiveCommand,
+              addrsCommand,
+              balancesCommand,
+              labelCommand
+            ],
+          CommandGroup
+            "Coins"
+            [ coinsCommand,
+              lockCoinCommand,
+              unlockCoinCommand
+            ],
+          CommandGroup
+            "Payments"
+            [ feesCommand,
+              prepareTxCommand,
+              prepareSendAllCommand,
+              signTxCommand,
+              sendTxCommand,
+              bumpFeeCommand
+            ],
+          CommandGroup
+            "Transactions"
+            [ txsCommand,
+              pendingTxsCommand,
+              reviewTxCommand,
+              exportTxCommand,
+              importTxCommand,
+              deleteTxCommand
+            ],
+          CommandGroup
+            "Sweeps"
+            [ prepareSweepCommand,
+              signSweepCommand
+            ],
+          CommandGroup
+            "Messages"
+            [ signMsgCommand,
+              verifyMsgCommand
+            ],
+          CommandGroup
+            "The wallet"
+            [ backupCommand,
+              versionCommand
+            ]
+        ]
+    }
 
-jsonOption :: Parser Bool
+jsonOption :: Args Bool
 jsonOption =
   switch $
     short 'j'
       <> long "json"
       <> help "Print the answer as JSON, for scripts. Questions and warnings go to stderr."
 
-unitOption :: Parser AmountUnit
+unitOption :: Args AmountUnit
 unitOption =
   option (maybeReader (readUnit . cs)) $
     short 'u'
@@ -338,115 +413,15 @@ The unit of the amounts shown, and of the amounts typed without a unit: btc,
 bit or sat (default: btc). A bit is 100 satoshis.
 |]
 
-commandParser :: Parser Command
-commandParser =
-  asum
-    [ hsubparser $
-        mconcat
-          [ commandGroup "Mnemonics and accounts",
-            command "mnemonic" mnemonicParser,
-            command "createacc" createAccParser,
-            command "recover" recoverParser,
-            command "testacc" testAccParser,
-            command "exportacc" exportAccParser,
-            command "importacc" importAccParser,
-            command "accounts" accountsParser,
-            command "renameacc" renameAccParser,
-            command "deleteacc" deleteAccParser,
-            command "sync" syncParser,
-            metavar "COMMAND",
-            style (const "COMMAND --help")
-          ],
-      hsubparser $
-        mconcat
-          [ commandGroup "Addresses",
-            command "receive" receiveParser,
-            command "addrs" addrsParser,
-            command "balances" balancesParser,
-            command "label" labelParser,
-            hidden
-          ],
-      hsubparser $
-        mconcat
-          [ commandGroup "Coins",
-            command "coins" coinsParser,
-            command "lockcoin" lockCoinParser,
-            command "unlockcoin" unlockCoinParser,
-            hidden
-          ],
-      hsubparser $
-        mconcat
-          [ commandGroup "Payments",
-            command "fees" feesParser,
-            command "preparetx" prepareTxParser,
-            command "preparesendall" prepareSendAllParser,
-            command "signtx" signTxParser,
-            command "sendtx" sendTxParser,
-            command "bumpfee" bumpFeeParser,
-            hidden
-          ],
-      hsubparser $
-        mconcat
-          [ commandGroup "Transactions",
-            command "txs" txsParser,
-            command "pendingtxs" pendingTxsParser,
-            command "reviewtx" reviewTxParser,
-            command "exporttx" exportTxParser,
-            command "importtx" importTxParser,
-            command "deletetx" deleteTxParser,
-            hidden
-          ],
-      hsubparser $
-        mconcat
-          [ commandGroup "Sweeps",
-            command "preparesweep" prepareSweepParser,
-            command "signsweep" signSweepParser,
-            hidden
-          ],
-      hsubparser $
-        mconcat
-          [ commandGroup "Messages",
-            command "signmsg" signMsgParser,
-            command "verifymsg" verifyMsgParser,
-            hidden
-          ],
-      hsubparser $
-        mconcat
-          [ commandGroup "The wallet",
-            command "backup" backupParser,
-            command "version" versionParser,
-            hidden
-          ]
-    ]
+{- mnemonic -}
 
--- | The description of a command that asks for a mnemonic or private keys,
--- marked with a red !, and reflowed as progDesc does
-offline :: String -> Maybe Doc
-offline s = Just $ annotate (color Red) "! " <> extractChunk (paragraph s)
-
--- | A footer of several paragraphs, separated by blank lines. The footer
--- of optparse-applicative would reflow them all into one. Each paragraph
--- is reflowed to the width of the terminal, except one whose lines all
--- start with a space, such as a list or an example, which is kept as
--- written.
-footerParagraphs :: String -> InfoMod a
-footerParagraphs text = footerDoc . unChunk . vsepChunks $ block <$> blocks
-  where
-    blocks = filter (not . null) $ splitWhen (all isSpace) (lines text)
-    block ls
-      | all (" " `isPrefixOf`) ls = vcatChunks (stringChunk <$> ls)
-      | otherwise = paragraph (unwords ls)
-
-{- Mnemonic Parser -}
-
-mnemonicParser :: ParserInfo Command
-mnemonicParser = do
-  let cmd =
-        CommandMnemonic
-          <$> (NewMnemonic <$> entropyOption <*> diceOption <*> splitInOption)
-  info cmd $
-    progDescDoc (offline "Generate a new mnemonic")
-      <> footerParagraphs
+mnemonicCommand :: CommandSpec Command
+mnemonicCommand =
+  CommandSpec
+    { name = "mnemonic",
+      offline = True,
+      summary = "Generate a new mnemonic",
+      details =
         [r|
 hw prints the mnemonic and stores nothing. Write it down and keep copies in
 safe places, away from computers and phones. Whoever has the mnemonic can
@@ -460,9 +435,13 @@ if you can.
 With --split, hw prints several parts instead of one mnemonic. The commands
 that ask for the mnemonic then need every part, in any order, with the same
 --split.
-|]
+|],
+      args =
+        CommandMnemonic
+          <$> (NewMnemonic <$> entropyOption <*> diceOption <*> splitInOption)
+    }
 
-entropyOption :: Parser Natural
+entropyOption :: Args Natural
 entropyOption =
   option (maybeReader f) $
     short 'e'
@@ -478,7 +457,7 @@ entropyOption =
       | s `elem` valid = fromIntegral <$> readNatural (cs s)
       | otherwise = Nothing
 
-diceOption :: Parser Bool
+diceOption :: Args Bool
 diceOption =
   switch $
     short 'd'
@@ -491,7 +470,7 @@ hw tells how many rolls are left after each line.
 |]
 
 -- | The parts mnemonic splits the mnemonic into
-splitInOption :: Parser Natural
+splitInOption :: Args Natural
 splitInOption =
   partsOption
     [r|
@@ -501,12 +480,12 @@ part, and uses no roll twice.
 |]
 
 -- | The parts a mnemonic is typed in, when mnemonic --split made it
-mnemonicPartsOption :: Parser Natural
+mnemonicPartsOption :: Args Natural
 mnemonicPartsOption =
   partsOption "The number of parts of the mnemonic, when mnemonic --split made it. hw asks for each part."
 
 -- | The --split option, with the help of the command about it
-partsOption :: String -> Parser Natural
+partsOption :: String -> Args Natural
 partsOption what =
   option (eitherReader $ f . cs) $
     short 's'
@@ -524,18 +503,15 @@ partsOption what =
             else Left "The --split value has to be between 1 and 12"
         Nothing -> Left "Could not parse the --split option"
 
-{- CreateAcc Parser -}
+{- createacc -}
 
-createAccParser :: ParserInfo Command
-createAccParser = do
-  let cmd =
-        CommandCreateAcc
-          <$> textArg "NAME" "The name of the new account"
-          <*> networkMaybeOption
-          <*> mnemonicPartsOption
-  info cmd $
-    progDescDoc (offline "Create an account from a mnemonic")
-      <> footerParagraphs
+createAccCommand :: CommandSpec Command
+createAccCommand =
+  CommandSpec
+    { name = "createacc",
+      offline = True,
+      summary = "Create an account from a mnemonic",
+      details =
         [r|
 createacc asks for the mnemonic and the passphrase, each twice to catch a
 typo. It derives the account key m/44'/coin'/index' and stores only its public
@@ -550,21 +526,27 @@ A passphrase with accents or other non-ASCII letters is normalized as BIP39
 asks, so that other wallets find the same seed. Older versions of hw did not
 normalize it. If the wallet has accounts of this mnemonic made that way, and
 none of the normalized seed, createacc keeps to the old seed and says so.
-|]
+|],
+      args =
+        CommandCreateAcc
+          <$> textArg "NAME" "The name of the new account"
+          <*> networkMaybeOption
+          <*> mnemonicPartsOption
+    }
 
 -- | The network, when given. Without it, a command that needs one takes the
 -- default-network of the configuration file.
-networkMaybeOption :: Parser (Maybe Network)
+networkMaybeOption :: Args (Maybe Network)
 networkMaybeOption = networkOptionWith "Without it, the default-network of the configuration file."
 
 -- | The network of a sweep, when given. A sweep that pays an account of the
 -- wallet is on the network of that account. One that pays none needs it.
-sweepNetworkOption :: Parser (Maybe Network)
+sweepNetworkOption :: Args (Maybe Network)
 sweepNetworkOption =
   networkOptionWith "Needed by a sweep that pays no account of this wallet. The default-network of the configuration file does not apply to it."
 
 -- | The network, when given, with the help of the command about it
-networkOptionWith :: String -> Parser (Maybe Network)
+networkOptionWith :: String -> Args (Maybe Network)
 networkOptionWith without =
   optional . option (eitherReader (f . netByName)) $
     short 'n'
@@ -579,14 +561,15 @@ networkOptionWith without =
       Left $ "Invalid network name. Select one of the following: " <> nets
     f (Just res) = Right res
 
-{- Recover Parser -}
+{- recover -}
 
-recoverParser :: ParserInfo Command
-recoverParser = do
-  let cmd = CommandRecover <$> (Recover <$> networkMaybeOption <*> accountGapOption <*> mnemonicPartsOption)
-  info cmd $
-    progDescDoc (offline "Find the accounts of a mnemonic that were paid")
-      <> footerParagraphs
+recoverCommand :: CommandSpec Command
+recoverCommand =
+  CommandSpec
+    { name = "recover",
+      offline = True,
+      summary = "Find the accounts of a mnemonic that were paid",
+      details =
         [r|
 recover asks for the mnemonic, then searches the network for the accounts of
 its seed that were paid. It checks the accounts in order from index 0, and
@@ -605,9 +588,13 @@ instead. Copy them with exportacc and importacc, and run sync.
 hw normalizes a passphrase as BIP39 asks, and older versions did not. When
 nothing is found, recover also tries the passphrase as typed. It says so if
 that finds accounts.
-|]
+|],
+      args =
+        CommandRecover
+          <$> (Recover <$> networkMaybeOption <*> accountGapOption <*> mnemonicPartsOption)
+    }
 
-accountGapOption :: Parser Natural
+accountGapOption :: Args Natural
 accountGapOption =
   option (eitherReader accountGap) $
     long "account-gap"
@@ -632,18 +619,15 @@ paid.
     maxAccountGap :: Natural
     maxAccountGap = 100
 
-{- DeleteAcc Parser -}
+{- deleteacc -}
 
-deleteAccParser :: ParserInfo Command
-deleteAccParser = do
-  let cmd =
-        CommandDeleteAcc
-          <$> textArg "NAME" "The name of the account to delete"
-          <*> networkArg
-          <*> fullDerivationOption
-  info cmd $
-    progDesc "Delete an account from the wallet"
-      <> footerParagraphs
+deleteAccCommand :: CommandSpec Command
+deleteAccCommand =
+  CommandSpec
+    { name = "deleteacc",
+      offline = False,
+      summary = "Delete an account from the wallet",
+      details =
         [r|
 deleteacc removes the account with its addresses, labels, transactions, coins
 and pending transactions. The NETWORK and the DERIVPATH must be those of the
@@ -651,15 +635,21 @@ account, as accounts shows them. They confirm which account to delete.
 
 The funds stay on the chain, and the mnemonic can still spend them. The labels
 are lost.
-|]
+|],
+      args =
+        CommandDeleteAcc
+          <$> textArg "NAME" "The name of the account to delete"
+          <*> networkArg
+          <*> fullDerivationOption
+    }
 
-fullDerivationOption :: Parser HardPath
+fullDerivationOption :: Args HardPath
 fullDerivationOption =
   argument (maybeReader parseHard) $
     metavar "DERIVPATH"
       <> help "The derivation path of the account, as accounts shows it. Quote it for the shell, as in \"/44'/0'/3'\"."
 
-networkArg :: Parser Network
+networkArg :: Args Network
 networkArg =
   argument (eitherReader (f . netByName)) $
     metavar "NETWORK"
@@ -672,39 +662,42 @@ networkArg =
       Left $ "Invalid network name. Select one of the following: " <> nets
     f (Just res) = Right res
 
-{- TestAcc Parser -}
+{- testacc -}
 
-testAccParser :: ParserInfo Command
-testAccParser = do
-  let cmd =
-        CommandTestAcc
-          <$> accountOption
-          <*> mnemonicPartsOption
-  info cmd $
-    progDescDoc (offline "Check a mnemonic and passphrase against an account")
-      <> footerParagraphs
+testAccCommand :: CommandSpec Command
+testAccCommand =
+  CommandSpec
+    { name = "testacc",
+      offline = True,
+      summary = "Check a mnemonic and passphrase against an account",
+      details =
         [r|
 testacc asks for the mnemonic and the passphrase, and checks that they give
 the public key of the account. Use it to test a mnemonic you wrote down,
 before you rely on it. Nothing is signed. When they match, hw records the
 fingerprint of the seed, which accounts shows.
-|]
+|],
+      args =
+        CommandTestAcc
+          <$> accountOption
+          <*> mnemonicPartsOption
+    }
 
 -- | The account of a command, which the wallet's only account is without it
-accountOption :: Parser (Maybe Text)
+accountOption :: Args (Maybe Text)
 accountOption = accountOptionWith "The account to use. Needed only when the wallet has more than one."
 
 -- | The account of a command that acts on every account without it
-onlyAccountOption :: Parser (Maybe Text)
+onlyAccountOption :: Args (Maybe Text)
 onlyAccountOption = accountOptionWith "Only this account. Without it, every account."
 
 -- | The account of a transaction, which hw finds in the transaction when
 -- it can
-txAccountOption :: Parser (Maybe Text)
+txAccountOption :: Args (Maybe Text)
 txAccountOption = accountOptionWith "The account of the transaction. Needed only when hw cannot tell it from the transaction."
 
 -- | The --account option, with the help of the command about it
-accountOptionWith :: String -> Parser (Maybe Text)
+accountOptionWith :: String -> Args (Maybe Text)
 accountOptionWith what =
   optional . strOption $
     short 'a'
@@ -713,19 +706,22 @@ accountOptionWith what =
       <> completer (mkCompleter accountCompleter)
       <> help what
 
-{- ImportAcc Parser -}
+{- importacc -}
 
-importAccParser :: ParserInfo Command
-importAccParser = do
-  let cmd =
+importAccCommand :: CommandSpec Command
+importAccCommand =
+  CommandSpec
+    { name = "importacc",
+      offline = False,
+      summary = "Add an account from a file written by exportacc",
+      details = importExportAccDetails,
+      args =
         CommandImportAcc
           <$> fileArgument "The account file, written by exportacc"
-  info cmd $
-    progDesc "Add an account from a file written by exportacc"
-      <> footerParagraphs importExportAccFooter
+    }
 
-importExportAccFooter :: String
-importExportAccFooter =
+importExportAccDetails :: String
+importExportAccDetails =
   [r|
 exportacc writes an account to a file: its public key M/44'/coin'/index', its
 name, its network and, when hw knows it, the fingerprint of its seed. The file
@@ -739,29 +735,37 @@ Importing the file of an account the wallet has already records the
 fingerprint, when the wallet did not know it.
 |]
 
-{- ExportAcc Parser -}
+{- exportacc -}
 
-exportAccParser :: ParserInfo Command
-exportAccParser = do
-  let cmd =
+exportAccCommand :: CommandSpec Command
+exportAccCommand =
+  CommandSpec
+    { name = "exportacc",
+      offline = False,
+      summary = "Write the public key of an account to a file",
+      details = importExportAccDetails,
+      args =
         CommandExportAcc
           <$> accountOption
           <*> fileArgument "The file to write. It must not exist yet."
-  info cmd $
-    progDesc "Write the public key of an account to a file"
-      <> footerParagraphs importExportAccFooter
+    }
 
-{- RenameAcc Parser -}
+{- renameacc -}
 
-renameAccParser :: ParserInfo Command
-renameAccParser = do
-  let cmd =
+renameAccCommand :: CommandSpec Command
+renameAccCommand =
+  CommandSpec
+    { name = "renameacc",
+      offline = False,
+      summary = "Rename an account",
+      details = "",
+      args =
         CommandRenameAcc
           <$> (RenameAcc <$> accountArg "OLD" "The current name of the account" <*> textArg "NEW" "The new name")
-  info cmd $ progDesc "Rename an account"
+    }
 
 -- | The name of an account, as an argument
-accountArg :: String -> String -> Parser Text
+accountArg :: String -> String -> Args Text
 accountArg name desc =
   argument str $
     metavar name
@@ -771,14 +775,15 @@ accountArg name desc =
 accountCompleter :: String -> IO [String]
 accountCompleter _ = return []
 
-{- Accounts Parser -}
+{- accounts -}
 
-accountsParser :: ParserInfo Command
-accountsParser = do
-  let cmd = CommandAccounts <$> onlyAccountOption
-  info cmd $
-    progDesc "Show the accounts and their balances"
-      <> footerParagraphs
+accountsCommand :: CommandSpec Command
+accountsCommand =
+  CommandSpec
+    { name = "accounts",
+      offline = False,
+      summary = "Show the accounts and their balances",
+      details =
         [r|
 Each account shows the fingerprint of its seed when known, its derivation
 path, its network, and how many receiving (external) and change (internal)
@@ -790,17 +795,19 @@ the coins locked by a pending transaction or by lockcoin, the coinbase coins
 with fewer than 100 confirmations, and the unconfirmed payments from other
 wallets. The unconfirmed change of the wallet's own transactions counts.
 preparetx can spend all of it, unless --minconf asks for confirmations.
-|]
+|],
+      args = CommandAccounts <$> onlyAccountOption
+    }
 
-{- Receive Parser -}
+{- receive -}
 
-receiveParser :: ParserInfo Command
-receiveParser = do
-  let cmd =
-        CommandReceive <$> (Receive <$> accountOption <*> labelOption)
-  info cmd $
-    progDesc "Get a new address to receive a payment"
-      <> footerParagraphs
+receiveCommand :: CommandSpec Command
+receiveCommand =
+  CommandSpec
+    { name = "receive",
+      offline = False,
+      summary = "Get a new address to receive a payment",
+      details =
         [r|
 Each call gives the next receiving address of the account, at the path
 M/44'/coin'/index'/0/i. The wallet pays the change of its transactions to other
@@ -811,9 +818,11 @@ of the configuration file says. A wallet restored from the mnemonic stops
 looking after that many unused addresses, and would miss later payments. Once that many
 addresses await a payment, receive refuses. Give out one of them again. addrs
 lists them.
-|]
+|],
+      args = CommandReceive <$> (Receive <$> accountOption <*> labelOption)
+    }
 
-labelOption :: Parser (Maybe Text)
+labelOption :: Args (Maybe Text)
 labelOption =
   optional . strOption $
     short 'l'
@@ -821,32 +830,35 @@ labelOption =
       <> metavar "LABEL"
       <> help "A label for the address, to recognize the payment later"
 
-{- Addrs Parser -}
+{- addrs -}
 
-addrsParser :: ParserInfo Command
-addrsParser = do
-  let cmd =
-        CommandAddrs
-          <$> accountOption
-          <*> internalOption
-          <*> (Page <$> limitOption <*> offsetOption)
-  info cmd $
-    progDesc "List the receiving addresses of an account, or its change addresses"
-      <> footerParagraphs
+addrsCommand :: CommandSpec Command
+addrsCommand =
+  CommandSpec
+    { name = "addrs",
+      offline = False,
+      summary = "List the receiving addresses of an account, or its change addresses",
+      details =
         [r|
 The newest addresses come first. Each shows its derivation path, /0/i for a
 receiving address and /1/i for a change address, and its label. Then come its
 number of transactions, what it received, and what it can spend now, as
 accounts describes.
-|]
+|],
+      args =
+        CommandAddrs
+          <$> accountOption
+          <*> internalOption
+          <*> (Page <$> limitOption <*> offsetOption)
+    }
 
-internalOption :: Parser Bool
+internalOption :: Args Bool
 internalOption =
   switch $
     long "internal"
       <> help "List the change addresses instead of the receiving ones"
 
-offsetOption :: Parser Natural
+offsetOption :: Args Natural
 offsetOption =
   option (maybeReader $ readNatural . cs) $
     short 'o'
@@ -856,7 +868,7 @@ offsetOption =
       <> showDefault
       <> help "How many rows to skip first. --limit 10 --offset 20 shows rows 21 to 30."
 
-limitOption :: Parser Natural
+limitOption :: Args Natural
 limitOption =
   option (maybeReader $ readNatural . cs) $
     short 'l'
@@ -866,17 +878,15 @@ limitOption =
       <> showDefault
       <> help "How many rows to show. 0 shows them all."
 
-{- Balances Parser -}
+{- balances -}
 
-balancesParser :: ParserInfo Command
-balancesParser = do
-  let cmd =
-        CommandBalances
-          <$> accountOption
-          <*> (Page <$> limitOption <*> offsetOption)
-  info cmd $
-    progDesc "List the addresses of an account that hold coins"
-      <> footerParagraphs
+balancesCommand :: CommandSpec Command
+balancesCommand =
+  CommandSpec
+    { name = "balances",
+      offline = False,
+      summary = "List the addresses of an account that hold coins",
+      details =
         [r|
 balances lists the receiving and change addresses that hold coins, the
 largest total first. Each shows its derivation path, /0/i for a receiving
@@ -886,20 +896,30 @@ accounts describes. The unspendable amount is the rest. It counts the coins
 locked by a pending transaction or by lockcoin, the unconfirmed payments from
 other wallets, and the coinbase coins with fewer than 100 confirmations.
 coins tells which applies to each coin.
-|]
+|],
+      args =
+        CommandBalances
+          <$> accountOption
+          <*> (Page <$> limitOption <*> offsetOption)
+    }
 
-{- Label Parser -}
+{- label -}
 
-labelParser :: ParserInfo Command
-labelParser = do
-  let cmd =
+labelCommand :: CommandSpec Command
+labelCommand =
+  CommandSpec
+    { name = "label",
+      offline = False,
+      summary = "Set the label of a receiving address",
+      details = "",
+      args =
         CommandLabel
           <$> accountOption
           <*> addrIndexArg
           <*> textArg "LABEL" "The new label"
-  info cmd $ progDesc "Set the label of a receiving address"
+    }
 
-addrIndexArg :: Parser Int
+addrIndexArg :: Args Int
 addrIndexArg =
   argument (maybeReader readAddrIndex) $
     metavar "INDEX"
@@ -916,45 +936,35 @@ addrs. The first address has the index 0. Change addresses have no label.
       Just n | n < 2 ^ (31 :: Int) -> Just (fromIntegral n)
       _ -> Nothing
 
-{- Txs Parser -}
+{- txs -}
 
-txsParser :: ParserInfo Command
-txsParser = do
-  let cmd =
-        CommandTxs
-          <$> accountOption
-          <*> (Page <$> limitOption <*> offsetOption)
-  info cmd $
-    progDesc "List the transactions of an account"
-      <> footerParagraphs
+txsCommand :: CommandSpec Command
+txsCommand =
+  CommandSpec
+    { name = "txs",
+      offline = False,
+      summary = "List the transactions of an account",
+      details =
         [r|
 The list is as of the last sync. Unconfirmed transactions come first, then
 the newest. The transactions you prepared, and those you sent that sync has
 not seen yet, are in pendingtxs.
-|]
+|],
+      args =
+        CommandTxs
+          <$> accountOption
+          <*> (Page <$> limitOption <*> offsetOption)
+    }
 
-{- PrepareTx Parser -}
+{- preparetx -}
 
-prepareTxParser :: ParserInfo Command
-prepareTxParser = do
-  let options =
-        PrepareTx
-          <$> some paymentArg
-          <*> payingAccountOption
-          <*> feeOption
-          <*> dustOption
-          <*> rcptPayOption
-          <*> minConfOption
-          <*> coinSelectionOption
-          <*> outputFileMaybeOption
-          <*> many coinOption
-          <*> many spendFromOption
-          <*> selectOption
-          <*> highFeeYesOption
-          <*> changeBackOption
-  info (CommandPrepareTx <$> options) $
-    progDesc "Prepare a payment, without signing it"
-      <> footerParagraphs
+prepareTxCommand :: CommandSpec Command
+prepareTxCommand =
+  CommandSpec
+    { name = "preparetx",
+      offline = False,
+      summary = "Prepare a payment, without signing it",
+      details =
         [r|
 A payment takes three steps. preparetx builds the transaction, unsigned. It
 needs no mnemonic, so it can run on an online computer. signtx then signs it,
@@ -992,22 +1002,40 @@ change of one payment to a new change address.
 A fee rate above 100 satoshis per byte is more often a typo than a choice, so
 preparetx asks before it takes one. --yes takes it without asking, for
 scripts.
-|]
+|],
+      args =
+        CommandPrepareTx
+          <$> ( PrepareTx
+                  <$> some paymentArg
+                  <*> payingAccountOption
+                  <*> feeOption
+                  <*> dustOption
+                  <*> rcptPayOption
+                  <*> minConfOption
+                  <*> coinSelectionOption
+                  <*> outputFileMaybeOption
+                  <*> many coinOption
+                  <*> many spendFromOption
+                  <*> selectOption
+                  <*> highFeeYesOption
+                  <*> changeBackOption
+              )
+    }
 
 -- | The account a payment spends from, which coin control can tell
-payingAccountOption :: Parser (Maybe Text)
+payingAccountOption :: Args (Maybe Text)
 payingAccountOption =
   accountOptionWith "The account to pay from. Needed only when the wallet has more than one, and no --coin or --spendfrom tells it."
 
 -- | Where the change of preparetx goes, when the command says
-changeBackOption :: Parser (Maybe Bool)
+changeBackOption :: Args (Maybe Bool)
 changeBackOption =
   optional $
     flag' True (long "changeback" <> help "Send the change back to an address the payment spends from")
       <|> flag' False (long "newchange" <> help "Send the change to a new change address, even when the configuration file sets change-back")
 
 -- | A recipient of preparetx, ADDRESS:AMOUNT
-paymentArg :: Parser Text
+paymentArg :: Args Text
 paymentArg =
   strArgument $
     metavar "ADDRESS:AMOUNT"
@@ -1021,25 +1049,15 @@ such as 1'000 are refused. A Bitcoin Cash address can keep its prefix, as in
 bitcoincash:qp...:0.001.
 |]
 
-{- PrepareSendAll Parser -}
+{- preparesendall -}
 
-prepareSendAllParser :: ParserInfo Command
-prepareSendAllParser = do
-  let options =
-        PrepareSendAll
-          <$> some sendAllRecipientArg
-          <*> payingAccountOption
-          <*> feeOption
-          <*> dustOption
-          <*> minConfOption
-          <*> outputFileMaybeOption
-          <*> many coinOption
-          <*> many spendFromOption
-          <*> dustCoinsOption
-          <*> highFeeYesOption
-  info (CommandPrepareSendAll <$> options) $
-    progDesc "Prepare a payment of all the coins of an account"
-      <> footerParagraphs
+prepareSendAllCommand :: CommandSpec Command
+prepareSendAllCommand =
+  CommandSpec
+    { name = "preparesendall",
+      offline = False,
+      summary = "Prepare a payment of all the coins of an account",
+      details =
         [r|
 preparesendall prepares a transaction that sends every coin the account can
 spend now, with no change. That is the spendable balance accounts shows. Like
@@ -1067,9 +1085,24 @@ not chosen with --coin or --spendfrom.
 A fee rate above 100 satoshis per byte is more often a typo than a choice, so
 preparesendall asks before it takes one. --yes takes it without asking, for
 scripts.
-|]
+|],
+      args =
+        CommandPrepareSendAll
+          <$> ( PrepareSendAll
+                  <$> some sendAllRecipientArg
+                  <*> payingAccountOption
+                  <*> feeOption
+                  <*> dustOption
+                  <*> minConfOption
+                  <*> outputFileMaybeOption
+                  <*> many coinOption
+                  <*> many spendFromOption
+                  <*> dustCoinsOption
+                  <*> highFeeYesOption
+              )
+    }
 
-sendAllRecipientArg :: Parser Text
+sendAllRecipientArg :: Args Text
 sendAllRecipientArg =
   strArgument $
     metavar "ADDRESS[:AMOUNT]"
@@ -1081,14 +1114,14 @@ without an amount.
 |]
 
 -- | What to do with the coins worth less than their fee, without asking
-dustCoinsOption :: Parser (Maybe DustCoins)
+dustCoinsOption :: Args (Maybe DustCoins)
 dustCoinsOption =
   optional $
     flag' SpendDust (long "spenddust" <> help "Spend the coins worth less than their fee too, without asking")
       <|> flag' LeaveDust (long "leavedust" <> help "Leave the coins worth less than their fee in the account, without asking")
 
 -- | An address of the account whose coins to spend
-spendFromOption :: Parser Text
+spendFromOption :: Args Text
 spendFromOption =
   strOption $
     long "spendfrom"
@@ -1097,22 +1130,22 @@ spendFromOption =
 
 -- | Whether the strategy selects among the coins of coin control, instead
 -- of every one of them being spent
-selectOption :: Parser Bool
+selectOption :: Args Bool
 selectOption =
   switch $
     long "select"
       <> help "Coin control: spend only what the payment needs among the coins of --coin and --spendfrom, as --strategy selects them, instead of every one of them"
 
 -- | A coin to spend, as coins lists it
-coinOption :: Parser OutPoint
+coinOption :: Args OutPoint
 coinOption = coinOptionWith "Coin control: spend this coin, as coins lists it. Repeat for several coins."
 
 -- | A coin to sweep, by its outpoint
-sweepCoinOption :: Parser OutPoint
+sweepCoinOption :: Args OutPoint
 sweepCoinOption = coinOptionWith "A coin to sweep: the id of its transaction, a colon, and its index among the outputs. Repeat for several coins."
 
 -- | The --coin option, with the help of the command about it
-coinOptionWith :: String -> Parser OutPoint
+coinOptionWith :: String -> Args OutPoint
 coinOptionWith what =
   option coinReader $
     short 'c'
@@ -1122,7 +1155,7 @@ coinOptionWith what =
 
 -- | The fee rate, when given: a number of satoshis per byte, or a level
 -- of the rates recent blocks paid
-feeOption :: Parser (Maybe FeeRateChoice)
+feeOption :: Args (Maybe FeeRateChoice)
 feeOption =
   optional . option (eitherReader readFeeRateChoice) $
     short 'f'
@@ -1132,10 +1165,10 @@ feeOption =
       <> help "The fee rate in satoshis per byte, or low, median or high for that rate of recent blocks, as fees shows them. Without it, hw shows those rates and asks, median by default. A rate above 100 needs a confirmation."
 
 -- | Whether preparetx and preparesweep take a high fee rate without asking
-highFeeYesOption :: Parser Bool
+highFeeYesOption :: Args Bool
 highFeeYesOption = yesOption "Take a fee rate above 100 satoshis per byte without asking"
 
-dustOption :: Parser Natural
+dustOption :: Args Natural
 dustOption =
   option (maybeReader $ readNatural . cs) $
     short 'd'
@@ -1145,14 +1178,14 @@ dustOption =
       <> showDefault
       <> help "The smallest output, in satoshis. A smaller payment is refused, and smaller change goes to the fee."
 
-rcptPayOption :: Parser FeePayer
+rcptPayOption :: Args FeePayer
 rcptPayOption =
   flag SenderPays RecipientsPay $
     short 'r'
       <> long "recipientpay"
       <> help "The recipients pay the fee, in equal shares taken from their amounts"
 
-minConfOption :: Parser Natural
+minConfOption :: Args Natural
 minConfOption =
   option (maybeReader $ readNatural . cs) $
     short 'm'
@@ -1162,7 +1195,7 @@ minConfOption =
       <> showDefault
       <> help "The confirmations a coin needs to be spent. At 0, the unconfirmed change of the wallet's own transactions is spent, but no unconfirmed payment from others."
 
-coinSelectionOption :: Parser CoinSelection
+coinSelectionOption :: Args CoinSelection
 coinSelectionOption =
   option (eitherReader f) $
     long "strategy"
@@ -1194,7 +1227,7 @@ strategyName RandomDraw = "random-draw"
 strategyName LargestFirst = "largest-first"
 strategyName SmallestFirst = "smallest-first"
 
-outputFileMaybeOption :: Parser (Maybe FilePath)
+outputFileMaybeOption :: Args (Maybe FilePath)
 outputFileMaybeOption =
   optional . strOption $
     short 'o'
@@ -1203,17 +1236,15 @@ outputFileMaybeOption =
       <> action "file"
       <> help "Write the transaction to this file. It must not exist yet."
 
-{- PendingTxs Parser -}
+{- pendingtxs -}
 
-pendingTxsParser :: ParserInfo Command
-pendingTxsParser = do
-  let cmd =
-        CommandPendingTxs
-          <$> onlyAccountOption
-          <*> (Page <$> limitOption <*> offsetOption)
-  info cmd $
-    progDesc "List the pending transactions"
-      <> footerParagraphs
+pendingTxsCommand :: CommandSpec Command
+pendingTxsCommand =
+  CommandSpec
+    { name = "pendingtxs",
+      offline = False,
+      summary = "List the pending transactions",
+      details =
         [r|
 A pending transaction is one that preparetx, preparesendall, bumpfee or
 preparesweep made, or that importtx added. It is unsigned, signed, or sent.
@@ -1224,41 +1255,52 @@ pending transaction by its nosigHash.
 A transaction marked conflicted spends a coin that another transaction has
 spent, or that is gone, as the server said at the last sync. It cannot be sent
 while that lasts. Delete it with deletetx, which frees its coins.
-|]
+|],
+      args =
+        CommandPendingTxs
+          <$> onlyAccountOption
+          <*> (Page <$> limitOption <*> offsetOption)
+    }
 
-{- ReviewTx Parser -}
+{- reviewtx -}
 
-reviewTxParser :: ParserInfo Command
-reviewTxParser = do
-  let cmd =
-        CommandReviewTx
-          <$> txAccountOption
-          <*> fileArgument "The transaction file to show"
-  info cmd $
-    progDesc "Show the transaction in a file"
-      <> footerParagraphs
+reviewTxCommand :: CommandSpec Command
+reviewTxCommand =
+  CommandSpec
+    { name = "reviewtx",
+      offline = False,
+      summary = "Show the transaction in a file",
+      details =
         [r|
 reviewtx shows a transaction file as its account sees it, and changes nothing
 in the wallet. The file comes from preparetx --output, exporttx, signtx or
 preparesweep. Use it to check a transaction before you sign it, or before you
 send it. A transaction that involves no account, such as a sweep to addresses
 outside the wallet, is shown on the network its file names.
-|]
+|],
+      args =
+        CommandReviewTx
+          <$> txAccountOption
+          <*> fileArgument "The transaction file to show"
+    }
 
-{- ExportTx Parser -}
+{- exporttx -}
 
-exportTxParser :: ParserInfo Command
-exportTxParser = do
-  let cmd =
+exportTxCommand :: CommandSpec Command
+exportTxCommand =
+  CommandSpec
+    { name = "exporttx",
+      offline = False,
+      summary = "Write a pending transaction to a file",
+      details = importExportTxDetails,
+      args =
         CommandExportTx
           <$> nosigHashArg
           <*> fileArgument "The file to write. It must not exist yet."
-  info cmd $
-    progDesc "Write a pending transaction to a file"
-      <> footerParagraphs importExportTxFooter
+    }
 
-importExportTxFooter :: String
-importExportTxFooter =
+importExportTxDetails :: String
+importExportTxDetails =
   [r|
 exporttx writes a pending transaction to a file, signed or not, to carry it to
 an offline computer. The transaction is named by its nosigHash, a hash of the
@@ -1273,32 +1315,36 @@ signatures are checked first.
 sendtx --input sends a signed file without importtx.
 |]
 
-nosigHashArg :: Parser TxHash
+nosigHashArg :: Args TxHash
 nosigHashArg =
   argument (maybeReader $ hexToTxHash . cs) $
     metavar "NOSIGHASH"
       <> help "The nosigHash of a pending transaction, as pendingtxs shows it"
 
-{- ImportTx Parser -}
+{- importtx -}
 
-importTxParser :: ParserInfo Command
-importTxParser = do
-  let cmd =
+importTxCommand :: CommandSpec Command
+importTxCommand =
+  CommandSpec
+    { name = "importtx",
+      offline = False,
+      summary = "Add a transaction file to the pending transactions",
+      details = importExportTxDetails,
+      args =
         CommandImportTx
           <$> txAccountOption
           <*> fileArgument "The transaction file to add"
-  info cmd $
-    progDesc "Add a transaction file to the pending transactions"
-      <> footerParagraphs importExportTxFooter
+    }
 
-{- DeleteTx Parser -}
+{- deletetx -}
 
-deleteTxParser :: ParserInfo Command
-deleteTxParser = do
-  let cmd = CommandDeleteTx <$> nosigHashArg
-  info cmd $
-    progDesc "Delete a pending transaction and free its coins"
-      <> footerParagraphs
+deleteTxCommand :: CommandSpec Command
+deleteTxCommand =
+  CommandSpec
+    { name = "deletetx",
+      offline = False,
+      summary = "Delete a pending transaction and free its coins",
+      details =
         [r|
 deletetx removes a pending transaction from the wallet. The coins it spends
 can then be spent again, and its change address is free again.
@@ -1310,19 +1356,19 @@ sync retires it.
 
 Delete a transaction that pendingtxs marks as conflicted. One of its coins was
 spent by another transaction, or is gone, so it can no longer be sent.
-|]
+|],
+      args = CommandDeleteTx <$> nosigHashArg
+    }
 
-{- SignTx Parser -}
+{- signtx -}
 
-signTxParser :: ParserInfo Command
-signTxParser = do
-  let cmd =
-        CommandSignTx
-          <$> signingOptions
-          <*> mnemonicPartsOption
-  info cmd $
-    progDescDoc (offline "Sign a pending transaction or a transaction file")
-      <> footerParagraphs
+signTxCommand :: CommandSpec Command
+signTxCommand =
+  CommandSpec
+    { name = "signtx",
+      offline = True,
+      summary = "Sign a pending transaction or a transaction file",
+      details =
         [r|
 signtx asks for the mnemonic and the passphrase of the account, and signs the
 transaction. It asks again while they do not match the account.
@@ -1335,9 +1381,14 @@ unsigned file is of no use once signed. It asks this before the mnemonic.
 
 Signing sends nothing. Check the transaction with reviewtx or pendingtxs.
 Then send it with sendtx, or delete it with deletetx.
-|]
+|],
+      args =
+        CommandSignTx
+          <$> signingOptions
+          <*> mnemonicPartsOption
+    }
 
-inputFileMaybeOption :: Parser (Maybe FilePath)
+inputFileMaybeOption :: Args (Maybe FilePath)
 inputFileMaybeOption =
   optional . strOption $
     short 'i'
@@ -1346,18 +1397,15 @@ inputFileMaybeOption =
       <> action "file"
       <> help "Read the transaction from this file"
 
-{- Coins Parser -}
+{- coins -}
 
-coinsParser :: ParserInfo Command
-coinsParser = do
-  let cmd =
-        CommandCoins
-          <$> accountOption
-          <*> lockedOption
-          <*> (Page <$> limitOption <*> offsetOption)
-  info cmd $
-    progDesc "List the coins of an account"
-      <> footerParagraphs
+coinsCommand :: CommandSpec Command
+coinsCommand =
+  CommandSpec
+    { name = "coins",
+      offline = False,
+      summary = "List the coins of an account",
+      details =
         [r|
 A coin is an unspent output of a transaction, written TXHASH:INDEX. The
 unconfirmed coins come first, then the newest.
@@ -1370,22 +1418,29 @@ confirm, or for a coinbase, once it matures.
 A pending transaction locks the coins it spends, until the network lists it or
 deletetx deletes it. You can also lock a coin yourself with lockcoin, until
 unlockcoin.
-|]
+|],
+      args =
+        CommandCoins
+          <$> accountOption
+          <*> lockedOption
+          <*> (Page <$> limitOption <*> offsetOption)
+    }
 
-lockedOption :: Parser Bool
+lockedOption :: Args Bool
 lockedOption =
   switch $
     long "locked"
       <> help "List only the locked coins: those a pending transaction spends, and those locked with lockcoin"
 
-{- LockCoin and UnlockCoin Parsers -}
+{- lockcoin and unlockcoin -}
 
-lockCoinParser :: ParserInfo Command
-lockCoinParser = do
-  let cmd = CommandLockCoin <$> coinArg
-  info cmd $
-    progDesc "Keep a coin from being spent"
-      <> footerParagraphs
+lockCoinCommand :: CommandSpec Command
+lockCoinCommand =
+  CommandSpec
+    { name = "lockcoin",
+      offline = False,
+      summary = "Keep a coin from being spent",
+      details =
         [r|
 A locked coin is held back. preparetx and preparesendall do not spend it, and
 --coin refuses it. No imported transaction or sweep may spend it either.
@@ -1395,21 +1450,26 @@ Only a free coin can be locked. A coin that a pending transaction spends is
 locked already, and deletetx frees it. The lock stays while the coin confirms,
 and goes with the coin once it is spent elsewhere. coins --locked lists the
 locked coins.
-|]
+|],
+      args = CommandLockCoin <$> coinArg
+    }
 
-unlockCoinParser :: ParserInfo Command
-unlockCoinParser = do
-  let cmd = CommandUnlockCoin <$> coinArg
-  info cmd $
-    progDesc "Unlock a coin locked with lockcoin"
-      <> footerParagraphs
+unlockCoinCommand :: CommandSpec Command
+unlockCoinCommand =
+  CommandSpec
+    { name = "unlockcoin",
+      offline = False,
+      summary = "Unlock a coin locked with lockcoin",
+      details =
         [r|
 Only a coin locked with lockcoin can be unlocked. A coin that a pending
 transaction spends is freed by deleting that transaction with deletetx.
-|]
+|],
+      args = CommandUnlockCoin <$> coinArg
+    }
 
 -- | A coin of the wallet, as coins lists it
-coinArg :: Parser OutPoint
+coinArg :: Args OutPoint
 coinArg =
   argument coinReader $
     metavar "TXHASH:INDEX"
@@ -1432,21 +1492,15 @@ readOutputIndex s = case readNatural (cs s) of
   Just n | n <= fromIntegral (maxBound :: Word32) -> Just (fromIntegral n)
   _ -> Nothing
 
-{- BumpFee Parser -}
+{- bumpfee -}
 
-bumpFeeParser :: ParserInfo Command
-bumpFeeParser = do
-  let options =
-        BumpFee
-          <$> bumpedArg
-          <*> txAccountOption
-          <*> replacementFeeOption
-          <*> dustOption
-          <*> outputFileMaybeOption
-          <*> yesOption "Answer yes to every question: a fee rate above 100 satoshis per byte, adding coins, and replacing the transactions that spend the change"
-  info (CommandBumpFee <$> options) $
-    progDesc "Replace a stuck payment with one that pays a higher fee"
-      <> footerParagraphs
+bumpFeeCommand :: CommandSpec Command
+bumpFeeCommand =
+  CommandSpec
+    { name = "bumpfee",
+      offline = False,
+      summary = "Replace a stuck payment with one that pays a higher fee",
+      details =
         [r|
 bumpfee prepares a transaction that replaces a payment of the account that
 the network has not confirmed yet. The replacement pays a higher fee, as BIP
@@ -1472,10 +1526,21 @@ replaceable cannot. Neither can one that spends coins of another wallet, such
 as a sweep. Bitcoin Cash does not replace transactions. When the stuck
 transaction pays several addresses of the wallet besides its recipients, its
 change among them, the replacement gets one change output for all of them.
-|]
+|],
+      args =
+        CommandBumpFee
+          <$> ( BumpFee
+                  <$> bumpedArg
+                  <*> txAccountOption
+                  <*> replacementFeeOption
+                  <*> dustOption
+                  <*> outputFileMaybeOption
+                  <*> yesOption "Answer yes to every question: a fee rate above 100 satoshis per byte, adding coins, and replacing the transactions that spend the change"
+              )
+    }
 
 -- | The transaction bumpfee replaces
-bumpedArg :: Parser TxHash
+bumpedArg :: Args TxHash
 bumpedArg =
   argument (maybeReader $ hexToTxHash . cs) $
     metavar "TXID"
@@ -1483,7 +1548,7 @@ bumpedArg =
 
 -- | The fee rate of a replacement, when given, as for preparetx: it must be
 -- above the rate of the transaction it replaces
-replacementFeeOption :: Parser (Maybe FeeRateChoice)
+replacementFeeOption :: Args (Maybe FeeRateChoice)
 replacementFeeOption =
   optional . option (eitherReader readFeeRateChoice) $
     short 'f'
@@ -1492,18 +1557,15 @@ replacementFeeOption =
       <> completeWith ["low", "median", "high"]
       <> help "The fee rate of the replacement in satoshis per byte, or low, median or high for that rate of recent blocks, as fees shows them. It must be above the rate of the transaction replaced. Without it, hw shows those rates and asks. A rate above 100 needs a confirmation."
 
-{- SendTx Parser -}
+{- sendtx -}
 
-sendTxParser :: ParserInfo Command
-sendTxParser = do
-  let cmd =
-        CommandSendTx
-          <$> optional nosigHashArg
-          <*> inputFileMaybeOption
-          <*> yesOption "Send without showing the transaction and asking first"
-  info cmd $
-    progDesc "Send a signed transaction to the network"
-      <> footerParagraphs
+sendTxCommand :: CommandSpec Command
+sendTxCommand =
+  CommandSpec
+    { name = "sendtx",
+      offline = False,
+      summary = "Send a signed transaction to the network",
+      details =
         [r|
 Sending cannot be undone. sendtx shows the transaction, as reviewtx does, and
 sends it only if you answer yes. --yes sends it without showing it or asking,
@@ -1529,25 +1591,32 @@ the transaction and sends it, and changes nothing in the wallet.
 A file names its network. A file from an earlier hw names none. It can be
 sent only when the wallet holds its transaction. Otherwise, prepare the
 transaction again.
-|]
+|],
+      args =
+        CommandSendTx
+          <$> optional nosigHashArg
+          <*> inputFileMaybeOption
+          <*> yesOption "Send without showing the transaction and asking first"
+    }
 
 -- | --yes, which answers yes to the question of a command without asking
 -- it, for a script. The help says what the command then does.
-yesOption :: String -> Parser Bool
+yesOption :: String -> Args Bool
 yesOption what =
   switch $
     short 'y'
       <> long "yes"
       <> help what
 
-{- Sync Parser -}
+{- sync -}
 
-syncParser :: ParserInfo Command
-syncParser = do
-  let cmd = CommandSync <$> onlyAccountOption <*> fullOption
-  info cmd $
-    progDesc "Update the accounts from the network"
-      <> footerParagraphs
+syncCommand :: CommandSpec Command
+syncCommand =
+  CommandSpec
+    { name = "sync",
+      offline = False,
+      summary = "Update the accounts from the network",
+      details =
         [r|
 sync asks the server for the latest balances, transactions and coins of the
 accounts.
@@ -1572,9 +1641,11 @@ A sent transaction is sent again on every sync while the server does not list
 it, unless it is conflicted. So one the network refuses for good, for a fee
 below what the nodes relay for example, keeps coming back. Delete it with
 deletetx.
-|]
+|],
+      args = CommandSync <$> onlyAccountOption <*> fullOption
+    }
 
-fullOption :: Parser Bool
+fullOption :: Args Bool
 fullOption =
   switch $
     long "full"
@@ -1585,16 +1656,15 @@ sync also marks as dead the transactions the server no longer lists. It is
 rarely needed, since a reorganization of the chain triggers one by itself.
 |]
 
-{- Backup Parser -}
+{- backup -}
 
-backupParser :: ParserInfo Command
-backupParser = do
-  let cmd =
-        CommandBackup
-          <$> optional (fileArgument "The file to copy the database to. It must not exist yet. Without it, the copy goes to ~/.hw/backups.")
-  info cmd $
-    progDesc "Copy the wallet database to a backup file"
-      <> footerParagraphs
+backupCommand :: CommandSpec Command
+backupCommand =
+  CommandSpec
+    { name = "backup",
+      offline = False,
+      summary = "Copy the wallet database to a backup file",
+      details =
         [r|
 The copy holds the whole wallet: accounts, addresses, labels, coins,
 transactions and pending transactions. It holds no private key. Without a
@@ -1605,23 +1675,33 @@ To restore a backup, replace ~/.hw/accounts.sqlite with the copy, or point
 database-file in ~/.hw/config.json to it. Then run any command. A copy made by
 an older hw is upgraded, after hw backs it up again to ~/.hw/migration-backups.
 A copy made by a newer hw is refused.
-|]
+|],
+      args =
+        CommandBackup
+          <$> optional (fileArgument "The file to copy the database to. It must not exist yet. Without it, the copy goes to ~/.hw/backups.")
+    }
 
-{- Version Parser -}
+{- version -}
 
-versionParser :: ParserInfo Command
-versionParser = do
-  let cmd = pure CommandVersion
-  info cmd $ progDesc "Show the version of hw and of its database format"
+versionCommand :: CommandSpec Command
+versionCommand =
+  CommandSpec
+    { name = "version",
+      offline = False,
+      summary = "Show the version of hw and of its database format",
+      details = "",
+      args = pure CommandVersion
+    }
 
-{- Fees Parser -}
+{- fees -}
 
-feesParser :: ParserInfo Command
-feesParser = do
-  let cmd = CommandFees <$> networkMaybeOption
-  info cmd $
-    progDesc "Show the fee rates of recent blocks"
-      <> footerParagraphs
+feesCommand :: CommandSpec Command
+feesCommand =
+  CommandSpec
+    { name = "fees",
+      offline = False,
+      summary = "Show the fee rates of recent blocks",
+      details =
         [r|
 fees reads the latest six blocks that hold fee-paying transactions. It shows
 three rates, in satoshis per byte:
@@ -1642,18 +1722,19 @@ helps.
 preparetx, preparesendall, bumpfee and preparesweep show the same rates, and
 ask which to take when --feerate is not given. --feerate low, median or high
 takes one without asking.
-|]
+|],
+      args = CommandFees <$> networkMaybeOption
+    }
 
-{- SignMsg Parser -}
+{- signmsg -}
 
-signMsgParser :: ParserInfo Command
-signMsgParser = do
-  let cmd =
-        CommandSignMsg
-          <$> (SignMsg <$> signAddressArg <*> signMsgArg <*> mnemonicPartsOption)
-  info cmd $
-    progDescDoc (offline "Sign a message with the key of an address")
-      <> footerParagraphs
+signMsgCommand :: CommandSpec Command
+signMsgCommand =
+  CommandSpec
+    { name = "signmsg",
+      offline = True,
+      summary = "Sign a message with the key of an address",
+      details =
         [r|
 signmsg asks for the mnemonic of the account of the ADDRESS, and signs the
 message with the key of that address. The signature uses the Bitcoin Signed
@@ -1666,31 +1747,33 @@ would then fail to verify.
 
 Save the output, the armored block or the --json answer, to a file. verifymsg
 --input can then check it.
-|]
+|],
+      args =
+        CommandSignMsg
+          <$> (SignMsg <$> signAddressArg <*> signMsgArg <*> mnemonicPartsOption)
+    }
 
-signAddressArg :: Parser Text
+signAddressArg :: Args Text
 signAddressArg =
   strArgument $
     metavar "ADDRESS"
       <> help "The address whose key signs. It must be an address of this wallet."
 
-signMsgArg :: Parser Text
+signMsgArg :: Args Text
 signMsgArg =
   strArgument $
     metavar "MESSAGE"
       <> help "The message to sign. Quote it if it has spaces."
 
-{- VerifyMsg Parser -}
+{- verifymsg -}
 
-verifyMsgParser :: ParserInfo Command
-verifyMsgParser = do
-  let source =
-        (Given <$> verifyAddressArg <*> signatureArg <*> verifyMsgArg)
-          <|> (FromFile <$> signedMessageFileOption)
-      cmd = CommandVerifyMsg <$> (VerifyMsg <$> source <*> networkMaybeOption)
-  info cmd $
-    progDesc "Check the signature of a message"
-      <> footerParagraphs
+verifyMsgCommand :: CommandSpec Command
+verifyMsgCommand =
+  CommandSpec
+    { name = "verifymsg",
+      offline = False,
+      summary = "Check the signature of a message",
+      details =
         [r|
 verifymsg checks that the key of ADDRESS signed MESSAGE, from the SIGNATURE
 that signmsg, Bitcoin Core or another wallet gave. The address can be anyone's.
@@ -1706,9 +1789,15 @@ its armored block, which other wallets write too, or its --json answer. In a
 block, the message is everything between the first marker and the signature
 marker, exactly as it is. After the signature marker come the address, then
 the signature.
-|]
+|],
+      args = CommandVerifyMsg <$> (VerifyMsg <$> source <*> networkMaybeOption)
+    }
+  where
+    source =
+      (Given <$> verifyAddressArg <*> signatureArg <*> verifyMsgArg)
+        <|> (FromFile <$> signedMessageFileOption)
 
-signedMessageFileOption :: Parser FilePath
+signedMessageFileOption :: Args FilePath
 signedMessageFileOption =
   strOption $
     short 'i'
@@ -1717,44 +1806,33 @@ signedMessageFileOption =
       <> action "file"
       <> help "Read the address, the signature and the message from this file: the output of signmsg, as its armored block or its --json answer"
 
-verifyAddressArg :: Parser Text
+verifyAddressArg :: Args Text
 verifyAddressArg =
   strArgument $
     metavar "ADDRESS"
       <> help "The address the message is said to be signed by"
 
-signatureArg :: Parser Text
+signatureArg :: Args Text
 signatureArg =
   strArgument $
     metavar "SIGNATURE"
       <> help "The signature in base64, as signmsg writes it"
 
-verifyMsgArg :: Parser Text
+verifyMsgArg :: Args Text
 verifyMsgArg =
   strArgument $
     metavar "MESSAGE"
       <> help "The message, exactly as it was signed"
 
-{- PrepareSweep Parser -}
+{- preparesweep -}
 
-prepareSweepParser :: ParserInfo Command
-prepareSweepParser = do
-  let options =
-        PrepareSweep
-          <$> accountOptionWith "The account the sweep pays. Needed only when the --sweepto addresses are in several accounts."
-          <*> sweepNetworkOption
-          <*> prvKeysMaybeOption
-          <*> many sweepFromOption
-          <*> addressFileOption
-          <*> some sweepToOption -- some: at least one
-          <*> many sweepCoinOption
-          <*> outputFileMaybeOption
-          <*> feeOption
-          <*> dustOption
-          <*> highFeeYesOption
-  info (CommandPrepareSweep <$> options) $
-    progDesc "Prepare a transaction that moves coins from outside the wallet"
-      <> footerParagraphs
+prepareSweepCommand :: CommandSpec Command
+prepareSweepCommand =
+  CommandSpec
+    { name = "preparesweep",
+      offline = False,
+      summary = "Prepare a transaction that moves coins from outside the wallet",
+      details =
         [r|
 A sweep moves coins whose private keys you hold, from an old wallet for
 example, to new addresses. preparesweep takes every coin at the --sweepfrom
@@ -1788,9 +1866,25 @@ Bitcoin, so a wrong guess would sweep the coins of the other chain.
 A fee rate above 100 satoshis per byte is more often a typo than a choice, so
 preparesweep asks before it takes one. It asks before the private keys are
 typed. --yes takes it without asking, for scripts.
-|]
+|],
+      args =
+        CommandPrepareSweep
+          <$> ( PrepareSweep
+                  <$> accountOptionWith "The account the sweep pays. Needed only when the --sweepto addresses are in several accounts."
+                  <*> sweepNetworkOption
+                  <*> prvKeysMaybeOption
+                  <*> many sweepFromOption
+                  <*> addressFileOption
+                  <*> some sweepToOption -- some: at least one
+                  <*> many sweepCoinOption
+                  <*> outputFileMaybeOption
+                  <*> feeOption
+                  <*> dustOption
+                  <*> highFeeYesOption
+              )
+    }
 
-sweepFromOption :: Parser Text
+sweepFromOption :: Args Text
 sweepFromOption =
   strOption $
     short 'w'
@@ -1798,7 +1892,7 @@ sweepFromOption =
       <> metavar "ADDRESS"
       <> help "An address whose coins to sweep. Repeat for several addresses."
 
-addressFileOption :: Parser (Maybe FilePath)
+addressFileOption :: Args (Maybe FilePath)
 addressFileOption =
   optional . strOption $
     long "addressfile"
@@ -1806,7 +1900,7 @@ addressFileOption =
       <> action "file"
       <> help "A file of addresses whose coins to sweep, separated by spaces or line breaks"
 
-sweepToOption :: Parser Text
+sweepToOption :: Args Text
 sweepToOption =
   strOption $
     short 't'
@@ -1814,17 +1908,15 @@ sweepToOption =
       <> metavar "ADDRESS[:AMOUNT]"
       <> help "A destination that shares what remains, or ADDRESS:AMOUNT for a fixed amount. Repeat for several destinations."
 
-{- SignSweep Parser -}
+{- signsweep -}
 
-signSweepParser :: ParserInfo Command
-signSweepParser = do
-  let cmd =
-        CommandSignSweep
-          <$> signingOptions
-          <*> prvKeysMaybeOption
-  info cmd $
-    progDescDoc (offline "Sign a sweep with the private keys of its coins")
-      <> footerParagraphs
+signSweepCommand :: CommandSpec Command
+signSweepCommand =
+  CommandSpec
+    { name = "signsweep",
+      offline = True,
+      summary = "Sign a sweep with the private keys of its coins",
+      details =
         [r|
 signsweep signs a sweep that preparesweep made. Its coins are not the
 wallet's, so signing needs their private keys. Give them in a --prvkeys file.
@@ -1839,10 +1931,15 @@ It asks this before the keys.
 A sweep that pays no account of this wallet needs no account here either. It
 is signed on the network its file names. A file from an earlier hw names
 none, and must be prepared again.
-|]
+|],
+      args =
+        CommandSignSweep
+          <$> signingOptions
+          <*> prvKeysMaybeOption
+    }
 
 -- | The private keys: a file, or - for the terminal
-prvKeysMaybeOption :: Parser (Maybe KeySource)
+prvKeysMaybeOption :: Args (Maybe KeySource)
 prvKeysMaybeOption =
   optional . option (eitherReader source) $
     short 'k'
@@ -1854,17 +1951,16 @@ prvKeysMaybeOption =
     source "-" = Right KeysOnTerminal
     source file = Right (KeysInFile file)
 
-
-{- Argument parser helpers -}
+{- Argument helpers -}
 
 -- | A text argument, with its name in the usage line and its help
-textArg :: String -> String -> Parser Text
+textArg :: String -> String -> Args Text
 textArg name desc =
   argument str $
     metavar name
       <> help desc
 
-fileArgument :: String -> Parser FilePath
+fileArgument :: String -> Args FilePath
 fileArgument desc =
   strArgument $
     metavar "FILENAME"
