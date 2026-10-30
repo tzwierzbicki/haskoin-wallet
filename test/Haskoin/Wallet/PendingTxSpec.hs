@@ -36,7 +36,6 @@ import Haskoin.Wallet.TxBuilding (ChangeTo (..), CoinControl (..), buildTxSignDa
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSigning (signWalletTx, verifySignedTx)
-import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import System.Random (mkStdGen)
 import Test.Hspec
@@ -221,7 +220,7 @@ transactionLocked c = jsonCoinLock c == Just LockedByTransaction
 -- | The coins of the account, by address, and whether a pending transaction
 -- holds each
 lockedCoins :: DBAccountId -> ExceptT String (DB IO) [(Address, Bool)]
-lockedCoins accId = map (\c -> (jsonCoinAddress c, transactionLocked c)) <$> coinPage btc accId AllCoins (Page 5 0)
+lockedCoins accId = map (\c -> (jsonCoinAddress c, transactionLocked c)) <$> coinsAfter btc accId AllCoins Nothing Nothing
 
 -- | The payment signed with SIGHASH_ALL and ANYONECANPAY: a valid signature
 -- that differs from the one hw makes, as another signer could produce. The
@@ -275,7 +274,7 @@ importingSpec ctx =
         -- apart from hw from the parts of the two transactions; with final
         -- sequences instead, the same computation gives 720a9cfe…696c.
         importPendingTx btc ctx accId tsd `dbShouldBeE` "afc69158e620551785282f353d2414e178f589b36d5fe8b512100d38d90b596c"
-        (map transactionLocked <$> coinPage btc accId AllCoins (Page 5 0)) `dbShouldBeE` [True]
+        (map transactionLocked <$> coinsAfter btc accId AllCoins Nothing Nothing) `dbShouldBeE` [True]
         (dBAddressIndex <$> changeAddress ctx cfg accId) `dbShouldBeE` 0
     it "holds a payment to an external address of the wallet as an internal transaction" $
       inDatabaseE $ do
@@ -292,12 +291,12 @@ importingSpec ctx =
           txSignDataOutputPaths tsd `shouldMatchList` [Deriv :/ 0 :/ 1, Deriv :/ 1 :/ 0]
         pendingHash <- importPendingTx btc ctx accId tsd
         -- Only the fee leaves the wallet
-        summaries <- pendingTxPage ctx accId (Page 5 0)
+        summaries <- pendingTxsAfter ctx accId Nothing Nothing
         liftIO $ do
           map pendingFlags summaries `shouldBe` [Just ((pendingHash, False, False, False))]
           map (summaryType . txInfoSummary) summaries `shouldBe` [TxInternal]
           map (summaryAmount . txInfoSummary) summaries `shouldBe` [-226]
-        (map transactionLocked <$> coinPage btc accId AllCoins (Page 5 0)) `dbShouldBeE` [True]
+        (map transactionLocked <$> coinsAfter btc accId AllCoins Nothing Nothing) `dbShouldBeE` [True]
         -- The change address is taken
         (dBAddressIndex <$> changeAddress ctx cfg accId) `dbShouldBeE` 1
     it "replaces the unsigned version with the signed one, and refuses the rest" $
@@ -305,14 +304,14 @@ importingSpec ctx =
         (accId, _) <- testNewAcc ctx "test"
         unsigned <- unsignedPayment ctx cfg accId
         pendingHash <- importPendingTx btc ctx accId unsigned
-        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, False, False, False))]
         lift $
           dbShouldFailWith "The transaction already exists" $
             importPendingTx btc ctx accId unsigned
         (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
         importPendingTx btc ctx accId signed `dbShouldBeE` pendingHash
-        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, False, False))]
         lift $ do
           dbShouldFailWith "The transaction already exists" $
@@ -353,8 +352,8 @@ importingSpec ctx =
         lift $
           dbShouldFailWith "Invalid signature for input 0 (1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj)" $
             importPendingTx btc ctx accId broken
-        pendingTxPage ctx accId (Page 5 0) `dbShouldBeE` []
-        (map transactionLocked <$> coinPage btc accId AllCoins (Page 5 0)) `dbShouldBeE` [False]
+        pendingTxsAfter ctx accId Nothing Nothing `dbShouldBeE` []
+        (map transactionLocked <$> coinsAfter btc accId AllCoins Nothing Nothing) `dbShouldBeE` [False]
     it "keeps the unsigned version when the signed one does not check out" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -365,7 +364,7 @@ importingSpec ctx =
         lift $
           dbShouldFailWith "Invalid signature for input 0 (1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj)" $
             importPendingTx btc ctx accId broken
-        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, False, False, False))]
     it "refuses a new version of a transaction that is online" $
       inDatabaseE $ do
@@ -464,18 +463,29 @@ listingSpec :: Ctx -> Spec
 listingSpec ctx =
   describe "Listing the pending transactions" $ do
     let cfg = def :: Config
-    it "lists them newest first, a page at a time" $
+    it "lists them newest first, and after a given one when asked" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
         (first, second) <- twoPending ctx cfg accId
-        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((second, False, False, False)), Just ((first, False, False, False))]
-        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 1 1))
+        since <- heldSince (Just accId) second
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId (Just (since, second)) (Just 1))
           `dbShouldBeE` [Just ((first, False, False, False))]
+
+    it "tells since when the account holds a transaction, for --after, and refuses one of another account" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        otherId <- otherAccount ctx cfg
+        (first, _) <- twoPending ctx cfg accId
+        since <- heldSince (Just accId) first
+        heldSince Nothing first `dbShouldBeE` since
+        lift $ dbShouldFailWith "The pending transaction is not in the account" $ heldSince (Just otherId) first
+        lift $ dbShouldFailWith "The pending transaction does not exist" $ heldSince Nothing (fakeTxHash 9)
     it "lists nothing for an account without any" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
-        pendingTxPage ctx accId (Page 5 0) `dbShouldBeE` []
+        pendingTxsAfter ctx accId Nothing Nothing `dbShouldBeE` []
 
     -- The account test pays from its first coin, then the other account
     -- holds a sweep of the second coin of test to its first address
@@ -486,9 +496,9 @@ listingSpec ctx =
         fundAccountTwice ctx cfg accId
         paid <- importPendingTx btc ctx accId =<< payment ctx cfg accId [OutPoint (txHash (funding ctx)) 0] (otherAddr 0) 8000
         swept <- importPendingTx btc ctx otherId (sweepOfSecondFunding ctx)
-        (map (\(acc, info) -> (dBAccountName acc, pendingFlags info)) <$> pendingPage ctx Nothing (Page 5 0))
+        (map (\(acc, info) -> (dBAccountName acc, pendingFlags info)) <$> pendingAfter ctx Nothing Nothing Nothing)
           `dbShouldBeE` [("other", Just (swept, False, False, False)), ("test", Just (paid, False, False, False))]
-        (map (\(acc, info) -> (dBAccountName acc, pendingFlags info)) <$> pendingPage ctx (Just otherId) (Page 5 0))
+        (map (\(acc, info) -> (dBAccountName acc, pendingFlags info)) <$> pendingAfter ctx (Just otherId) Nothing Nothing)
           `dbShouldBeE` [("other", Just (swept, False, False, False))]
 
     it "gives each the time it was created" $
@@ -496,7 +506,7 @@ listingSpec ctx =
         (accId, _) <- testNewAcc ctx "test"
         unsigned <- unsignedPayment ctx cfg accId
         lift $ P.insert_ $ DBPendingTx accId (hashBytes (nosigHash unsigned.txSignDataTx)) (blob unsigned) False False fixtureTime
-        (map createdOf <$> pendingTxPage ctx accId (Page 5 0)) `dbShouldBeE` [Just fixtureTime]
+        (map createdOf <$> pendingTxsAfter ctx accId Nothing Nothing) `dbShouldBeE` [Just fixtureTime]
 
     it "keeps the time it was created when a signed version takes its place" $
       inDatabaseE $ do
@@ -505,7 +515,7 @@ listingSpec ctx =
         lift $ P.insert_ $ DBPendingTx accId (hashBytes (nosigHash unsigned.txSignDataTx)) (blob unsigned) False False fixtureTime
         (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
         _ <- importPendingTx btc ctx accId signed
-        (map createdOf <$> pendingTxPage ctx accId (Page 5 0)) `dbShouldBeE` [Just fixtureTime]
+        (map createdOf <$> pendingTxsAfter ctx accId Nothing Nothing) `dbShouldBeE` [Just fixtureTime]
 
     -- As a file of an offline signer would be
     it "knows no creation time for signing data the wallet does not hold" $
@@ -517,7 +527,7 @@ listingSpec ctx =
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
         lift $ P.insert_ $ DBPendingTx accId (hashBytes (fakeTxHash 7)) "not signing data" False False fixtureTime
-        listed <- lift $ runExceptT $ pendingTxPage ctx accId (Page 5 0)
+        listed <- lift $ runExceptT $ pendingTxsAfter ctx accId Nothing Nothing
         deleted <- lift $ runExceptT $ deleteTx ctx (const (toStore emptyStore)) (fakeTxHash 7)
         liftIO $ do
           listed `shouldSatisfy` isLeft
@@ -534,7 +544,7 @@ sendingSpec ctx =
         (pendingHash, signed) <- signedPending ctx cfg accId
         (_, sent) <- sendPending ctx (const (toStore (storeKnowing ctx signed))) withoutAsking pendingHash
         liftIO $ pendingFlags sent `shouldBe` Just ((pendingHash, True, True, False))
-        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, True, False))]
         lift (hasRawTx (txHash (txSignDataTx signed))) `dbShouldBeE` True
     it "sends again a transaction that is already online" $
@@ -557,7 +567,7 @@ sendingSpec ctx =
         lift $
           dbShouldFailWith "The transaction was handed to the network but the store has not seen it after 10 seconds. It stays signed and not online: run sendtx again later" $
             sendPending ctx (const (toStore emptyStore)) withoutAsking pendingHash
-        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, False, False))]
     it "sends nothing when the store is not healthy" $
       inDatabaseE $ do
@@ -568,7 +578,7 @@ sendingSpec ctx =
           dbShouldFailWith "The store is down" $
             sendPending ctx (const (notingPublished published (unhealthy (toStore emptyStore)))) withoutAsking pendingHash
         liftIO $ readIORef published `shouldReturn` []
-        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, False, False))]
     it "refuses a transaction that is not signed" $
       inDatabaseE $ do
@@ -600,7 +610,7 @@ sendingSpec ctx =
           dbShouldFailWith "The transaction was not sent" $
             sendPending ctx (const (notingPublished published (toStore (storeKnowing ctx signed)))) refusing pendingHash
         liftIO $ readIORef published `shouldReturn` []
-        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, False, False))]
     it "gives up after the asks it is allowed" $ do
       asks <- newIORef 0
@@ -629,7 +639,7 @@ sendingFileSpec ctx =
         liftIO $ case sent of
           SentPending _ info -> pendingFlags info `shouldBe` Just ((pendingHash, True, True, False))
           SentOutside _ _ -> expectationFailure "A transaction of the wallet was sent as an outside one"
-        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, True, False))]
         held <- requirePendingTx pendingHash
         liftIO $ held.pendingTxData `shouldBe` signed
@@ -656,7 +666,7 @@ sendingFileSpec ctx =
           SentOutside net txid -> (net.name, txid) `shouldBe` ("btc", txHash (txSignDataTx signed))
           SentPending _ _ -> expectationFailure "A transaction the wallet does not hold was sent as pending"
         liftIO $ readIORef published `shouldReturn` [txSignDataTx signed]
-        pendingTxPage ctx accId (Page 5 0) `dbShouldBeE` []
+        pendingTxsAfter ctx accId Nothing Nothing `dbShouldBeE` []
         lift (hasRawTx (txHash (txSignDataTx signed))) `dbShouldBeE` False
     -- The payment is never held, as a file prepared elsewhere: its nosigHash
     -- is that of its transaction
@@ -717,10 +727,10 @@ deletingSpec ctx =
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
         lift $ insertRawTx (txSignDataTx signed)
         lift (P.count ([] :: [P.Filter DBRawTx])) `dbShouldBeE` 2
-        (map transactionLocked <$> coinPage btc accId AllCoins (Page 5 0)) `dbShouldBeE` [True]
+        (map transactionLocked <$> coinsAfter btc accId AllCoins Nothing Nothing) `dbShouldBeE` [True]
         deleteTx ctx (const (toStore emptyStore)) pendingHash `dbShouldBeE` (1, 1)
-        (map transactionLocked <$> coinPage btc accId AllCoins (Page 5 0)) `dbShouldBeE` [False]
-        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0)) `dbShouldBeE` []
+        (map transactionLocked <$> coinsAfter btc accId AllCoins Nothing Nothing) `dbShouldBeE` [False]
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing) `dbShouldBeE` []
         -- Its raw transaction went with it; the parent of the coin stays
         lift (P.count ([] :: [P.Filter DBRawTx])) `dbShouldBeE` 1
     it "abandons a sent transaction the network dropped" $
@@ -731,8 +741,8 @@ deletingSpec ctx =
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
         lift $ insertRawTx (txSignDataTx signed)
         deleteTx ctx (const (toStore (storeThatDropped ctx signed))) pendingHash `dbShouldBeE` (1, 1)
-        (map transactionLocked <$> coinPage btc accId AllCoins (Page 5 0)) `dbShouldBeE` [False]
-        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0)) `dbShouldBeE` []
+        (map transactionLocked <$> coinsAfter btc accId AllCoins Nothing Nothing) `dbShouldBeE` [False]
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing) `dbShouldBeE` []
         lift (hasRawTx (txHash (txSignDataTx signed))) `dbShouldBeE` False
     it "keeps a sent transaction when the store cannot be asked" $
       inDatabaseE $ do
@@ -743,17 +753,17 @@ deletingSpec ctx =
         lift $
           dbShouldFailWith "The store is down" $
             deleteTx ctx (const (notAnswering (toStore emptyStore))) pendingHash
-        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, True, False))]
-        (map transactionLocked <$> coinPage btc accId AllCoins (Page 5 0)) `dbShouldBeE` [True]
+        (map transactionLocked <$> coinsAfter btc accId AllCoins Nothing Nothing) `dbShouldBeE` [True]
         lift (hasRawTx (txHash (txSignDataTx signed))) `dbShouldBeE` True
     it "deletes a transaction that was never sent without asking the store" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
         (pendingHash, _) <- signedPending ctx cfg accId
         deleteTx ctx (const (notAnswering (unhealthy (toStore emptyStore)))) pendingHash `dbShouldBeE` (1, 1)
-        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0)) `dbShouldBeE` []
-        (map transactionLocked <$> coinPage btc accId AllCoins (Page 5 0)) `dbShouldBeE` [False]
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing) `dbShouldBeE` []
+        (map transactionLocked <$> coinsAfter btc accId AllCoins Nothing Nothing) `dbShouldBeE` [False]
     it "keeps a sent transaction the store still lists" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -762,9 +772,9 @@ deletingSpec ctx =
         lift $
           dbShouldFailWith "The transaction is in the network's mempool or in the chain: sync retires it once it is listed" $
             deleteTx ctx (const (toStore (storeKnowing ctx signed))) pendingHash
-        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, True, False))]
-        (map transactionLocked <$> coinPage btc accId AllCoins (Page 5 0)) `dbShouldBeE` [True]
+        (map transactionLocked <$> coinsAfter btc accId AllCoins Nothing Nothing) `dbShouldBeE` [True]
     it "frees the change address for the next transaction" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -780,8 +790,8 @@ deletingSpec ctx =
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
         held <- requirePendingTx pendingHash
         lift $ retirePendingTx held
-        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0)) `dbShouldBeE` []
-        (map transactionLocked <$> coinPage btc accId AllCoins (Page 5 0)) `dbShouldBeE` [False]
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing) `dbShouldBeE` []
+        (map transactionLocked <$> coinsAfter btc accId AllCoins Nothing Nothing) `dbShouldBeE` [False]
         -- The sync that retires it also records the change paid to /1/0,
         -- and an address paid on the chain is never used again
         updateAddressBalances btc [Store.Balance (internalAddr 0) 11774 0 1 1 11774]

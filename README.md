@@ -47,6 +47,7 @@ database `accounts.sqlite` and the settings `config.json`:
 | `parallel-requests` | `1` | How many requests go to the server at once. The public server takes one. |
 | `addr-batch`, `coin-batch`, `tx-full-batch` | `100` | How many addresses, coins or transactions one request asks about |
 | `database-file` | `null` | Another database, instead of `~/.hw/accounts.sqlite` |
+| `pager` | `null` | The pager a listing goes through on a terminal, instead of `less` or `PAGER`. `""` is none. |
 
 The networks are `btc`, `bch`, `btctest`, `bchtest4`, `bchtest`, `btcreg` and
 `bchreg`. `hw` warns about a key it does not know.
@@ -58,11 +59,23 @@ commands in magenta in the list ask for a mnemonic or private keys. Run them on
 an offline computer if you can. When the help is not shown on a terminal, or
 with `NO_COLOR` set, they are marked `!` instead.
 
-Two options work with every command, before or after it:
+Three options work with every command, before or after it:
 
 - `--unit btc|bit|sat` sets the unit of the amounts shown, and of the amounts
   typed without a unit. The default is `btc`. A bit is 100 satoshis.
 - `--json` prints the answer as JSON. Questions and warnings go to stderr.
+- `--no-pager` prints a listing as it is, through no pager.
+
+On a terminal, a listing such as `hw txs` goes through `less`. The arrow keys
+scroll it, `/` searches it and `q` quits it. A listing that fits on the screen
+is shown as it is. `HW_PAGER`, the key `pager` of `config.json` or `PAGER`
+name another pager. Scripts read a listing a page at a time with `--max`, then
+`--after` the last row they got.
+
+```console
+hw txs --max 20 --json
+hw txs --max 20 --after TXID --json
+```
 
 The examples below write `ADDRESS`, `NOSIGHASH`, `TXID` and `TXHASH` where you
 put your own values.
@@ -206,18 +219,18 @@ hw receive --label "invoice 42"
 
 **`hw addrs`** lists the receiving addresses, the newest first, or the change
 addresses with `--internal`. Each shows its path, label, transactions, what it
-received and what it can spend. Listings show 5 rows unless `--limit` says
-otherwise. `--limit 0` shows them all.
+received and what it can spend.
 
 ```console
-hw addrs --limit 20
-hw addrs --internal --limit 10 --offset 10
+hw addrs
+hw addrs --internal
+hw addrs --max 10 --after ADDRESS
 ```
 
 **`hw balances`** lists the addresses that hold coins, the largest total first.
 
 ```console
-hw balances --limit 0
+hw balances
 ```
 
 **`hw label INDEX LABEL`** sets the label of the receiving address at
@@ -234,7 +247,7 @@ tells whether it is spendable or locked. **`hw lockcoin`** keeps a coin from
 being spent, and **`hw unlockcoin`** frees it again.
 
 ```console
-hw coins --limit 0
+hw coins
 hw lockcoin TXHASH:1
 hw coins --locked
 hw unlockcoin TXHASH:1
@@ -309,7 +322,8 @@ hw sendtx NOSIGHASH
 **`hw txs`** lists the transactions of an account, as of the last sync.
 
 ```console
-hw txs --limit 20
+hw txs
+hw txs --max 20 --after TXID
 ```
 
 **`hw pendingtxs`** lists the pending transactions: prepared, signed, or sent

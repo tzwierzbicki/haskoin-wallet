@@ -19,14 +19,15 @@ module Haskoin.Wallet.Coin
     toJsonCoin,
     groupCoins,
     CoinFilter (..),
-    coinPage,
+    coinsAfter,
+    coinBlock,
     Spending (..),
     spendingOf,
     spendableCoins,
     unspendableCoins,
     spendableAtAddresses,
     spendableBalance,
-    coinBalancePage,
+    coinBalancesAfter,
     coinBalancesAt,
     lockCoin,
     unlockCoin,
@@ -59,7 +60,7 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Time (getCurrentTime)
 import Data.Word (Word64)
-import Database.Esqueleto.Legacy (InnerJoin (..), Value (..), asc, desc, from, groupBy, in_, limit, offset, on, orderBy, select, sum_, val, valList, where_, (&&.), (==.), (^.))
+import Database.Esqueleto.Legacy (InnerJoin (..), Value (..), asc, desc, from, groupBy, having, in_, just, limit, on, orderBy, select, sum_, val, valList, where_, (&&.), (<.), (==.), (>.), (^.), (||.))
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -70,7 +71,7 @@ import Haskoin.Wallet.Address (CoinBalance (..))
 import Haskoin.Wallet.PendingTx (lockedOutpoints, userLockedOutpoints)
 import Haskoin.Wallet.RawTx (lookupRawTx)
 import Haskoin.Wallet.TxInfo (MyInputs (..), TxSummary (..), liveSummary, ownTransaction)
-import Haskoin.Wallet.Util (Page, pageBounds)
+import Haskoin.Wallet.Util (rowLimit)
 import Numeric.Natural (Natural)
 
 {- Coins as the user sees them -}
@@ -227,24 +228,42 @@ groupCoins net ctx coins = Map.fromListWith Map.union (mapMaybe entry coins)
 data CoinFilter = AllCoins | LockedCoins
   deriving (Eq, Show)
 
--- | A page of the coins of the account, spendable or not, in the order of
--- their block references as the store encodes them: the mempool first,
--- then the newest blocks first. Coins with the same block reference, the
--- outputs of one transaction for instance, follow the order of their
--- outpoints, so that no coin shows on two pages.
-coinPage :: (MonadUnliftIO m) => Network -> DBAccountId -> CoinFilter -> Page -> ExceptT String (DB m) [JsonCoin]
-coinPage net accId shown page = do
-  let (lim, off) = pageBounds page
+-- | The coins of the account, spendable or not, in the order of their
+-- block references as the store encodes them: the mempool first, then the
+-- newest blocks first. Coins with the same block reference, the outputs of
+-- one transaction for instance, follow the order of their outpoints, so
+-- that the order is settled. Those after the coin given, by its block and
+-- its outpoint, or the first ones, up to the count, or all of them.
+coinsAfter :: (MonadUnliftIO m) => Network -> DBAccountId -> CoinFilter -> Maybe (Store.BlockRef, OutPoint) -> Maybe Natural -> ExceptT String (DB m) [JsonCoin]
+coinsAfter net accId shown afterM countM = do
   rules <- spendingOf net accId
   let lockedOnly = case shown of
         AllCoins -> []
         LockedCoins -> [DBCoinOutpoint P.<-. map outpointBytes (Map.keys rules.spendingLocks)]
+      -- From the block of the coin given on, which the index on the block
+      -- references finds, and past the coin itself within that block
+      after = case afterM of
+        Nothing -> []
+        Just (block, outpoint) ->
+          let blockBytes = S.encode block
+           in (DBCoinBlockRef P.>=. blockBytes)
+                : ([DBCoinBlockRef P.>. blockBytes] P.||. [DBCoinOutpoint P.>. outpointBytes outpoint])
+      count = maybe [] (\n -> [P.LimitTo (rowLimit n)]) countM
   rows <-
     lift $
       P.selectList
-        ((DBCoinAccount P.==. accId) : lockedOnly)
-        [P.Asc DBCoinBlockRef, P.Asc DBCoinOutpoint, P.LimitTo lim, P.OffsetBy off]
+        ((DBCoinAccount P.==. accId) : lockedOnly <> after)
+        ([P.Asc DBCoinBlockRef, P.Asc DBCoinOutpoint] <> count)
   mapM (toJsonCoin rules . P.entityVal) rows
+
+-- | The block of a coin of the account, the one --after names, or why
+-- there is none
+coinBlock :: (MonadUnliftIO m) => DBAccountId -> OutPoint -> ExceptT String (DB m) Store.BlockRef
+coinBlock accId outpoint = do
+  rowM <- lift $ P.get (DBCoinKey (outpointBytes outpoint))
+  case rowM of
+    Just row | dBCoinAccount row == accId -> liftEither $ readBlock outpoint (dBCoinBlockRef row)
+    _ -> throwError $ "The coin " <> coinText outpoint <> " is not in the account"
 
 {- Spending -}
 
@@ -324,41 +343,50 @@ spendableBalance net accId = do
   coins <- balanceColumns accId Nothing
   sum . map snd <$> spendableValues rules coins
 
--- | A page of the addresses of the account that hold coins, each with the
--- balance of its coins, the largest total first. Addresses with the same
--- total follow the order of their derivation paths, so that no address
--- shows on two pages. The order adds up every coin of the account, in one
--- query; the spendable values are read for the page only.
-coinBalancePage :: (MonadUnliftIO m) => Network -> DBAccountId -> Page -> ExceptT String (DB m) [(DBAddress, CoinBalance)]
-coinBalancePage net accId page = coinBalances net accId Nothing (Just page)
+-- | The addresses of the account that hold coins, each with the balance
+-- of its coins, the largest total first. Addresses with the same total
+-- follow the order of their derivation paths, so that the order is
+-- settled. Those after the address given, with its balance, or the first
+-- ones, up to the count, or all of them. The order adds up every coin of
+-- the account, in one query; the spendable values are read for the
+-- addresses listed only.
+coinBalancesAfter :: (MonadUnliftIO m) => Network -> DBAccountId -> Maybe (DBAddress, CoinBalance) -> Maybe Natural -> ExceptT String (DB m) [(DBAddress, CoinBalance)]
+coinBalancesAfter net accId = coinBalances net accId Nothing
 
 -- | Those of the given addresses of the account that hold coins, each with
--- the balance of its coins, in the order of 'coinBalancePage'
+-- the balance of its coins, in the order of 'coinBalancesAfter'
 coinBalancesAt :: (MonadUnliftIO m) => Network -> DBAccountId -> [Text] -> ExceptT String (DB m) [(DBAddress, CoinBalance)]
-coinBalancesAt net accId addrs = coinBalances net accId (Just addrs) Nothing
+coinBalancesAt net accId addrs = coinBalances net accId (Just addrs) Nothing Nothing
 
 -- | The addresses of the account that hold coins, each with the balance of
 -- its coins, the largest total first: at the given addresses or at all of
--- them, a page of them or all of them
+-- them, after the given one or from the first, up to the count or all of
+-- them
 coinBalances ::
   (MonadUnliftIO m) =>
   Network ->
   DBAccountId ->
   Maybe [Text] ->
-  Maybe Page ->
+  Maybe (DBAddress, CoinBalance) ->
+  Maybe Natural ->
   ExceptT String (DB m) [(DBAddress, CoinBalance)]
-coinBalances net accId addrsM pageM = do
+coinBalances net accId addrsM afterM countM = do
   rows <- lift . select . from $ \(c `InnerJoin` a) -> do
     on $ c ^. DBCoinAccount ==. a ^. DBAddressAccount &&. c ^. DBCoinAddress ==. a ^. DBAddressAddress
     where_ $ c ^. DBCoinAccount ==. val accId
     forM_ addrsM $ \addrs -> where_ $ c ^. DBCoinAddress `in_` valList addrs
     groupBy (a ^. DBAddressAccount, a ^. DBAddressInternal, a ^. DBAddressIndex)
     let total = sum_ (c ^. DBCoinValue)
+    -- After the address given: a smaller total, or the same total and a
+    -- path after its own
+    forM_ afterM $ \(addr, balance) -> do
+      let given = just (val (coinBalanceTotal balance))
+          pathAfter =
+            a ^. DBAddressInternal >. val (dBAddressInternal addr)
+              ||. (a ^. DBAddressInternal ==. val (dBAddressInternal addr) &&. a ^. DBAddressIndex >. val (dBAddressIndex addr))
+      having $ total <. given ||. (total ==. given &&. pathAfter)
     orderBy [desc total, asc (a ^. DBAddressInternal), asc (a ^. DBAddressIndex)]
-    forM_ pageM $ \page -> do
-      let (lim, off) = pageBounds page
-      limit lim
-      offset off
+    forM_ countM $ limit . rowLimit
     return (a, total)
   -- An address of the page holds a coin at least, so its total is never null
   let held = [(P.entityVal a, fromMaybe 0 total) | (a, Value total) <- rows]

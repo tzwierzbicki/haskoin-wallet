@@ -1,6 +1,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 
 -- | The commands of hw. Each reads what it needs from the database, the
 -- store and the user, and answers with a 'Response'. A command runs in one
@@ -9,6 +10,15 @@
 -- once the command is done, so that it shows what the command changed.
 module Haskoin.Wallet.Commands
   ( commandResponse,
+    commandListing,
+
+    -- * Listings
+    accountsListing,
+    addrsListing,
+    balancesListing,
+    coinsListing,
+    txsListing,
+    pendingTxsListing,
 
     -- * Mnemonics and accounts
     cmdMnemonic,
@@ -69,7 +79,7 @@ import qualified Data.Aeson as Json
 import Data.Bifunctor (first)
 import Data.Either (isLeft)
 import Data.Foldable (for_)
-import Data.List (intercalate, nub, partition, sortOn)
+import Data.List (genericTake, intercalate, nub, partition, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
@@ -94,6 +104,7 @@ import Haskoin.Wallet.Entropy
 import Haskoin.Wallet.FeeRates
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Keys
+import Haskoin.Wallet.Listing
 import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.Migration (databaseVersion, latestDatabaseVersion)
 import Haskoin.Wallet.Parser
@@ -144,16 +155,16 @@ commandResponse ctx cfg unit = \case
   CommandAccounts account -> cmdAccounts cfg account
   -- Addresses
   CommandReceive opts -> cmdReceive ctx cfg opts
-  CommandAddrs account internal page -> cmdAddrs cfg account internal page
-  CommandBalances account page -> cmdBalances cfg account page
+  CommandAddrs account internal paging -> cmdAddrs cfg account internal paging
+  CommandBalances account paging -> cmdBalances cfg account paging
   CommandLabel account index label -> cmdLabel cfg account index label
   -- Coins
-  CommandCoins account locked page -> cmdCoins cfg account locked page
+  CommandCoins account locked paging -> cmdCoins cfg account locked paging
   CommandLockCoin outpoint -> cmdLockCoin cfg outpoint
   CommandUnlockCoin outpoint -> cmdUnlockCoin cfg outpoint
   -- Transactions
-  CommandTxs account page -> cmdTxs cfg account page
-  CommandPendingTxs account page -> cmdPendingTxs ctx cfg account page
+  CommandTxs account paging -> cmdTxs cfg account paging
+  CommandPendingTxs account paging -> cmdPendingTxs ctx cfg account paging
   CommandReviewTx account file -> cmdReviewTx ctx cfg account file
   CommandImportTx account file -> cmdImportTx ctx cfg account file
   CommandExportTx nosigH file -> cmdExportTx cfg nosigH file
@@ -173,6 +184,18 @@ commandResponse ctx cfg unit = \case
   CommandVerifyMsg opts -> cmdVerifyMsg ctx cfg opts
   CommandBackup fileM -> cmdBackup cfg fileM
   CommandVersion -> cmdVersion cfg
+
+-- | The listing of a command that lists, which the screen reads chunk by
+-- chunk, or Nothing for a command that answers at once
+commandListing :: Ctx -> Command -> Maybe (ExceptT String (DB IO) Listing)
+commandListing ctx = \case
+  CommandAccounts account -> Just $ accountsListing account
+  CommandAddrs account internal paging -> Just $ addrsListing account internal paging
+  CommandBalances account paging -> Just $ balancesListing account paging
+  CommandCoins account locked paging -> Just $ coinsListing account locked paging
+  CommandTxs account paging -> Just $ txsListing account paging
+  CommandPendingTxs account paging -> Just $ pendingTxsListing ctx account paging
+  _ -> Nothing
 
 -- | Run a command in one transaction of the database, which no other
 -- command changes meanwhile. What a command wrote before it failed is
@@ -352,10 +375,25 @@ cmdDeleteAcc cfg name net path =
     return $ ResponseAccResult acc True ("The account " <> name <> " has been deleted")
 
 cmdAccounts :: Config -> Maybe Text -> IO Response
-cmdAccounts cfg account =
-  runDBResponse cfg $ do
-    accs <- getAccountsByName account
-    ResponseAccounts <$> mapM withSpendable accs
+cmdAccounts cfg account = readListing cfg (accountsListing account)
+
+-- | The accounts, each with the balance it can spend now, in the order
+-- 'getAccounts' gives them: an account names the one to go on after
+accountsListing :: Maybe Text -> ExceptT String (DB IO) Listing
+accountsListing account =
+  return
+    Listing
+      { listingStart = Nothing,
+        listingMax = Nothing,
+        listingRows = \afterM countM -> do
+          accs <- getAccountsByName account
+          let following = case afterM of
+                Nothing -> accs
+                Just name -> drop 1 $ dropWhile ((/= name) . dBAccountName . snd) accs
+          mapM withSpendable $ maybe id genericTake countM following,
+        listingCursor = Right . dBAccountName . fst,
+        listingAnswer = ResponseAccounts
+      }
 
 {- Addresses -}
 
@@ -366,21 +404,53 @@ cmdReceive ctx cfg opts =
     addr <- genExtAddress ctx cfg accId (fromMaybe "" opts.label)
     addressAnswer accId addr
 
-cmdAddrs :: Config -> Maybe Text -> Bool -> Page -> IO Response
-cmdAddrs cfg account internal page =
-  runDBResponse cfg $ do
-    (accId, acc) <- getAccountByName account
-    addrs <- lift $ addressPage accId (if internal then AddrInternal else AddrExternal) page
-    balances <- spendableAtAddresses (accountNetwork acc) accId (dBAddressAddress <$> addrs)
-    return $ ResponseAddresses acc [(addr, spendableAt balances addr) | addr <- addrs]
+cmdAddrs :: Config -> Maybe Text -> Bool -> Paging Text -> IO Response
+cmdAddrs cfg account internal paging = readListing cfg (addrsListing account internal paging)
+
+-- | The addresses of a chain of the account, newest first, each with the
+-- balance it can spend now. An address names the one to go on after.
+addrsListing :: Maybe Text -> Bool -> Paging Text -> ExceptT String (DB IO) Listing
+addrsListing account internal paging = do
+  (accId, acc) <- getAccountByName account
+  let net = accountNetwork acc
+      addrType = if internal then AddrInternal else AddrExternal
+  start <- forM paging.pagingAfter $ fmap dBAddressIndex . listedAddress net accId addrType
+  return
+    Listing
+      { listingStart = start,
+        listingMax = paging.pagingMax,
+        listingRows = \afterM countM -> do
+          addrs <- lift $ addressesAfter accId addrType afterM countM
+          balances <- spendableAtAddresses net accId (dBAddressAddress <$> addrs)
+          return [(addr, spendableAt balances addr) | addr <- addrs],
+        listingCursor = Right . dBAddressIndex . fst,
+        listingAnswer = ResponseAddresses acc
+      }
+
+cmdBalances :: Config -> Maybe Text -> Paging Text -> IO Response
+cmdBalances cfg account paging = readListing cfg (balancesListing account paging)
 
 -- | The addresses of the account that hold coins, receiving and change
--- addresses alike, each with the balance of its coins
-cmdBalances :: Config -> Maybe Text -> Page -> IO Response
-cmdBalances cfg account page =
-  runDBResponse cfg $ do
-    (accId, acc) <- getAccountByName account
-    ResponseBalances acc <$> coinBalancePage (accountNetwork acc) accId page
+-- addresses alike, each with the balance of its coins. An address names
+-- the one to go on after, with the balance it holds now.
+balancesListing :: Maybe Text -> Paging Text -> ExceptT String (DB IO) Listing
+balancesListing account paging = do
+  (accId, acc) <- getAccountByName account
+  let net = accountNetwork acc
+  start <- forM paging.pagingAfter $ \text -> do
+    _ <- liftEither $ textToAddrE net text
+    held <- coinBalancesAt net accId [text]
+    case held of
+      [row] -> return row
+      _ -> throwError $ "The address " <> cs text <> " holds no coins in the account"
+  return
+    Listing
+      { listingStart = start,
+        listingMax = paging.pagingMax,
+        listingRows = coinBalancesAfter net accId,
+        listingCursor = Right,
+        listingAnswer = ResponseBalances acc
+      }
 
 cmdLabel :: Config -> Maybe Text -> Int -> Text -> IO Response
 cmdLabel cfg account index label =
@@ -391,12 +461,24 @@ cmdLabel cfg account index label =
 
 {- Coins -}
 
-cmdCoins :: Config -> Maybe Text -> Bool -> Page -> IO Response
-cmdCoins cfg account locked page =
-  runDBResponse cfg $ do
-    (accId, acc) <- getAccountByName account
-    coins <- coinPage (accountNetwork acc) accId (if locked then LockedCoins else AllCoins) page
-    return $ ResponseCoins acc coins
+cmdCoins :: Config -> Maybe Text -> Bool -> Paging OutPoint -> IO Response
+cmdCoins cfg account locked paging = readListing cfg (coinsListing account locked paging)
+
+-- | The coins of the account, or its locked ones, in the order coins
+-- lists them. A coin names the one to go on after, with its block.
+coinsListing :: Maybe Text -> Bool -> Paging OutPoint -> ExceptT String (DB IO) Listing
+coinsListing account locked paging = do
+  (accId, acc) <- getAccountByName account
+  let shown = if locked then LockedCoins else AllCoins
+  start <- forM paging.pagingAfter $ \outpoint -> (,outpoint) <$> coinBlock accId outpoint
+  return
+    Listing
+      { listingStart = start,
+        listingMax = paging.pagingMax,
+        listingRows = coinsAfter (accountNetwork acc) accId shown,
+        listingCursor = \coin -> Right (jsonCoinBlock coin, jsonCoinOutpoint coin),
+        listingAnswer = ResponseCoins acc
+      }
 
 -- | Lock a coin at the user's request, and show it
 cmdLockCoin :: Config -> OutPoint -> IO Response
@@ -414,20 +496,47 @@ cmdUnlockCoin cfg outpoint =
 
 {- Transactions -}
 
-cmdTxs :: Config -> Maybe Text -> Page -> IO Response
-cmdTxs cfg account page =
-  runDBResponse cfg $ do
-    (accId, acc) <- getAccountByName account
-    ResponseTxs acc <$> txsPage accId page
+cmdTxs :: Config -> Maybe Text -> Paging TxHash -> IO Response
+cmdTxs cfg account paging = readListing cfg (txsListing account paging)
 
-cmdPendingTxs :: Ctx -> Config -> Maybe Text -> Page -> IO Response
-cmdPendingTxs ctx cfg account page =
-  runDBResponse cfg $
-    case account of
-      Nothing -> ResponsePendingTxs Nothing <$> pendingPage ctx Nothing page
-      Just _ -> do
-        (accId, acc) <- getAccountByName account
-        ResponsePendingTxs (Just acc) <$> pendingPage ctx (Just accId) page
+-- | The transactions of the account on the chain, in the order txs lists
+-- them. A transaction names the one to go on after, with its block.
+txsListing :: Maybe Text -> Paging TxHash -> ExceptT String (DB IO) Listing
+txsListing account paging = do
+  (accId, acc) <- getAccountByName account
+  start <- forM paging.pagingAfter $ \tid -> (,tid) <$> txBlock accId tid
+  return
+    Listing
+      { listingStart = start,
+        listingMax = paging.pagingMax,
+        listingRows = txsAfter accId,
+        listingCursor = \info -> case txInfoStatus info of
+          OnChain status -> Right (chainBlock status, chainTxid status)
+          Pending _ -> Left "txs lists transactions of the chain only",
+        listingAnswer = ResponseTxs acc
+      }
+
+cmdPendingTxs :: Ctx -> Config -> Maybe Text -> Paging TxHash -> IO Response
+cmdPendingTxs ctx cfg account paging = readListing cfg (pendingTxsListing ctx account paging)
+
+-- | The pending transactions of the account, or of every account, newest
+-- first. A nosigHash names the one to go on after, with the time it was
+-- created.
+pendingTxsListing :: Ctx -> Maybe Text -> Paging TxHash -> ExceptT String (DB IO) Listing
+pendingTxsListing ctx account paging = do
+  asked <- forM account $ \_ -> getAccountByName account
+  let accIdM = fst <$> asked
+  start <- forM paging.pagingAfter $ \nosigH -> (,nosigH) <$> heldSince accIdM nosigH
+  return
+    Listing
+      { listingStart = start,
+        listingMax = paging.pagingMax,
+        listingRows = pendingAfter ctx accIdM,
+        listingCursor = \(_, info) -> case txInfoStatus info of
+          Pending status | Just created <- pendingCreated status -> Right (created, pendingNosigHash status)
+          _ -> Left "pendingtxs lists the transactions the wallet holds only",
+        listingAnswer = ResponsePendingTxs (snd <$> asked)
+      }
 
 -- | Show the transaction of a file, as the account it involves sees it, or
 -- as outside the wallet, without keeping it

@@ -30,7 +30,6 @@ import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSigning (parseTxSignData)
 import Haskoin.Wallet.TxSweep
 import Haskoin.Wallet.TxVectors
-import Haskoin.Wallet.Util (Page (Page))
 import System.Random (mkStdGen)
 import Test.Hspec
 
@@ -473,15 +472,15 @@ sweepIntoWalletSpec ctx =
         tsd <- liftEither $ buildSweepSignData btc ctx (mkStdGen 0) found [(externalAddr 1, Remainder), (otherAddr 0, Remainder)] 10 546
         let pendingHash = nosigHash tsd.txSignDataTx
         importPendingTx btc ctx accId tsd `dbShouldBeE` pendingHash
-        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, False, False, False))]
-        coinPage btc accId AllCoins (Page 5 0) `dbShouldBeE` []
+        coinsAfter btc accId AllCoins Nothing Nothing `dbShouldBeE` []
         -- signsweep by nosigHash, with the outside key only
         held <- requirePendingTx pendingHash
         liftIO $ held.pendingTxOnline `shouldBe` False
         (signed, info) <- liftEither $ signTxWithKeys btc ctx held.pendingTxData (Just accountPub) [sweptKey]
         importPendingTx btc ctx accId signed `dbShouldBeE` pendingHash
-        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, False, False))]
         -- The wallet receives one of the two outputs: 10 bytes of overhead,
         -- inputs of 148 + 180 + 41 + 64, two P2PKH outputs and 2 + 1 + 1 +
@@ -493,7 +492,7 @@ sweepIntoWalletSpec ctx =
         liftIO $ info.txInfoSummary.summaryChangeInFee `shouldBe` Nothing
         -- sendtx marks it online, the sync retires it once the store lists it
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
-        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, True, False))]
     it "refuses to keep a transaction that does not involve the wallet" $
       inDatabaseE $ do

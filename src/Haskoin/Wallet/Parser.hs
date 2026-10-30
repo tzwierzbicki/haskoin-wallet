@@ -24,7 +24,8 @@ import Haskoin.Wallet.FeeRates (FeeRateChoice, readFeeRateChoice)
 import Haskoin.Wallet.Keys (KeySource (..))
 import Haskoin.Wallet.Parser.Args
 import Haskoin.Wallet.Parser.Run (runProgram)
-import Haskoin.Wallet.Util (Page (Page), readNatural)
+import Haskoin.Wallet.Listing (Paging (..))
+import Haskoin.Wallet.Util (readNatural)
 import Numeric.Natural (Natural)
 import Text.RawString.QQ (r)
 
@@ -53,17 +54,17 @@ data Command
     CommandDeleteAcc !Text !Network !HardPath
   | CommandReceive !Receive
   | -- | The account, whether its change addresses, and the page
-    CommandAddrs !(Maybe Text) !Bool !Page
+    CommandAddrs !(Maybe Text) !Bool !(Paging Text)
   | -- | The account, and the page
-    CommandBalances !(Maybe Text) !Page
+    CommandBalances !(Maybe Text) !(Paging Text)
   | -- | The account, the index of the receiving address, and its label
     CommandLabel !(Maybe Text) !Int !Text
   | -- | The account, and the page
-    CommandTxs !(Maybe Text) !Page
+    CommandTxs !(Maybe Text) !(Paging TxHash)
   | CommandPrepareTx !PrepareTx
   | CommandPrepareSendAll !PrepareSendAll
   | -- | The account, and the page
-    CommandPendingTxs !(Maybe Text) !Page
+    CommandPendingTxs !(Maybe Text) !(Paging TxHash)
   | -- | The account, and the transaction file
     CommandReviewTx !(Maybe Text) !FilePath
   | -- | The account, and the transaction file
@@ -78,7 +79,7 @@ data Command
   | CommandSignMsg !SignMsg
   | CommandVerifyMsg !VerifyMsg
   | -- | The account, whether the locked coins only, and the page
-    CommandCoins !(Maybe Text) !Bool !Page
+    CommandCoins !(Maybe Text) !Bool !(Paging OutPoint)
   | CommandLockCoin !OutPoint
   | CommandUnlockCoin !OutPoint
   | -- | The nosigHash of a pending transaction, or the file of a signed
@@ -286,17 +287,26 @@ signingOptions =
 
 {- The program -}
 
--- | The command typed, with the unit of its amounts and whether it answers
--- in JSON. A request for help, and a command line that cannot be parsed,
--- print what they have to and leave.
-parserMain :: IO (Command, AmountUnit, Bool)
-parserMain = do
-  (cmd, (unit, json)) <- runProgram program
-  return (cmd, unit, json)
+-- | The options that go with any command
+data GlobalOptions = GlobalOptions
+  { -- | The unit of the amounts shown and typed
+    globalUnit :: !AmountUnit,
+    -- | Answer in JSON
+    globalJson :: !Bool,
+    -- | Print a listing as it is, through no pager
+    globalNoPager :: !Bool
+  }
+  deriving (Eq, Show)
+
+-- | The command typed, with the options that go with any command. A
+-- request for help, and a command line that cannot be parsed, print what
+-- they have to and leave.
+parserMain :: IO (Command, GlobalOptions)
+parserMain = runProgram program
 
 -- | hw: its commands by group, the options every command takes, and the
 -- help of the program
-program :: Program Command (AmountUnit, Bool)
+program :: Program Command GlobalOptions
 program =
   Program
     { name = "hw",
@@ -321,13 +331,17 @@ it to the online computer with exportacc and importacc. Then carry each
 transaction between them with preparetx --output, signtx --input and sendtx
 --input.
 
-The options --unit and --json go before or after the command. The settings,
-such as the server, the default network and the address gap, are in
-~/.hw/config.json.
+On a terminal, a listing such as `txs` goes through less: scroll it, search
+it with /, and quit it with q. One that fits on the screen is shown as it
+is.
+
+The options --unit, --json and --no-pager go before or after the command.
+The settings, such as the server, the default network, the address gap and
+the pager, are in ~/.hw/config.json.
 
 Type hw COMMAND --help for the help of a command.
 |],
-      globals = (,) <$> unitOption <*> jsonOption,
+      globals = GlobalOptions <$> unitOption <*> jsonOption <*> noPagerOption,
       groups =
         [ CommandGroup
             "Mnemonics and accounts"
@@ -397,6 +411,16 @@ jsonOption =
     short 'j'
       <> long "json"
       <> help "Print the answer as JSON, for scripts. Questions and warnings go to stderr."
+
+noPagerOption :: Args Bool
+noPagerOption =
+  switch $
+    long "no-pager"
+      <> help
+        [r|
+Print a listing as it is. On a terminal, it goes through less otherwise, or
+through the pager that HW_PAGER, the key pager of config.json or PAGER names.
+|]
 
 unitOption :: Args AmountUnit
 unitOption =
@@ -848,7 +872,7 @@ number of transactions, what it received, and what it can spend now, as
         CommandAddrs
           <$> accountOption
           <*> internalOption
-          <*> (Page <$> limitOption <*> offsetOption)
+          <*> pagingOptions (afterOption "ADDRESS" str "Start after this address")
     }
 
 internalOption :: Args Bool
@@ -857,25 +881,32 @@ internalOption =
     long "internal"
       <> help "List the change addresses instead of the receiving ones"
 
-offsetOption :: Args Natural
-offsetOption =
-  option (maybeReader $ readNatural . cs) $
-    short 'o'
-      <> long "offset"
-      <> metavar "INT"
-      <> value 0
-      <> showDefault
-      <> help "How many rows to skip first. --limit 10 --offset 20 shows rows 21 to 30."
+-- | The options that page a listing: the row to start after, as the
+-- listing shows it, and how many rows to show at most. A script reads a
+-- listing a page at a time with them. Without them, every row is shown.
+pagingOptions :: Args (Maybe after) -> Args (Paging after)
+pagingOptions after = Paging <$> after <*> maxOption
 
-limitOption :: Args Natural
-limitOption =
-  option (maybeReader $ readNatural . cs) $
-    short 'l'
-      <> long "limit"
+-- | The --after option of a listing: the row to start after, read as the
+-- listing shows it, with the help that names the row
+afterOption :: String -> ReadM after -> String -> Args (Maybe after)
+afterOption name reader what =
+  optional . option reader $
+    long "after"
+      <> metavar name
+      <> help (what <> ", to read the listing --max rows at a time")
+
+maxOption :: Args (Maybe Natural)
+maxOption =
+  optional . option (maybeReader $ readCount . cs) $
+    long "max"
       <> metavar "INT"
-      <> value 5
-      <> showDefault
-      <> help "How many rows to show. 0 shows them all."
+      <> help "How many rows to show at most. Every row without it."
+  where
+    -- A listing of no row at all is not asked for
+    readCount s = case readNatural s of
+      Just n | n > 0 -> Just n
+      _ -> Nothing
 
 {- balances -}
 
@@ -899,7 +930,7 @@ other wallets, and the coinbase coins with fewer than 100 confirmations.
       args =
         CommandBalances
           <$> accountOption
-          <*> (Page <$> limitOption <*> offsetOption)
+          <*> pagingOptions (afterOption "ADDRESS" str "Start after this address")
     }
 
 {- label -}
@@ -952,7 +983,7 @@ not seen yet, are in pendingtxs.
       args =
         CommandTxs
           <$> accountOption
-          <*> (Page <$> limitOption <*> offsetOption)
+          <*> pagingOptions (afterOption "TXID" (maybeReader $ hexToTxHash . cs) "Start after this transaction")
     }
 
 {- preparetx -}
@@ -1268,7 +1299,7 @@ while that lasts. Delete it with deletetx, which frees its coins.
       args =
         CommandPendingTxs
           <$> onlyAccountOption
-          <*> (Page <$> limitOption <*> offsetOption)
+          <*> pagingOptions (afterOption "NOSIGHASH" (maybeReader $ hexToTxHash . cs) "Start after this pending transaction")
     }
 
 {- reviewtx -}
@@ -1432,7 +1463,7 @@ unlockcoin.
         CommandCoins
           <$> accountOption
           <*> lockedOption
-          <*> (Page <$> limitOption <*> offsetOption)
+          <*> pagingOptions (afterOption "TXHASH:INDEX" coinReader "Start after this coin")
     }
 
 lockedOption :: Args Bool

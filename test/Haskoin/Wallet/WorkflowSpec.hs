@@ -364,13 +364,15 @@ addressSpec ctx =
         createMain home
         (addressesOf <$> hwJson home ["receive", "--label", "rent"] []) `shouldReturn` Right [(externalAddrsText !! 0, "rent")]
 
-    it "are listed by addrs newest first, a page at a time" $
+    it "are listed by addrs newest first, and after a given one when asked" $
       withHome $ \home -> do
         createMain home
         replicateM_ 3 $ answer home ["receive"] []
         (addressesOf <$> hwJson home ["addrs"] [])
           `shouldReturn` Right [(externalAddrsText !! 2, ""), (externalAddrsText !! 1, ""), (externalAddrsText !! 0, "")]
-        (addressesOf <$> hwJson home ["addrs", "--limit", "1", "--offset", "1"] []) `shouldReturn` Right [(externalAddrsText !! 1, "")]
+        (addressesOf <$> hwJson home ["addrs", "--max", "1"] []) `shouldReturn` Right [(externalAddrsText !! 2, "")]
+        (addressesOf <$> hwJson home ["addrs", "--max", "1", "--after", Text.unpack (externalAddrsText !! 2)] [])
+          `shouldReturn` Right [(externalAddrsText !! 1, "")]
 
     it "are shown by addrs under their derivation paths" $
       withHome $ \home -> do
@@ -385,7 +387,7 @@ addressSpec ctx =
       withHome $ \home -> do
         createMain home
         replicateM_ 11 $ answer home ["receive"] []
-        run <- hw home ["addrs", "--limit", "2"] []
+        run <- hw home ["addrs", "--max", "2"] []
         runOut run `shouldSatisfy` Text.isInfixOf "/0/10: "
         runOut run `shouldSatisfy` Text.isInfixOf ("/0/9 : " <> externalAddrsText !! 9)
 
@@ -2189,6 +2191,16 @@ rowsOf (ResponsePendingTxs _ held) = Right (length held)
 rowsOf (ResponseCoins _ coins) = Right (length coins)
 rowsOf other = Left (show other)
 
+-- | What names each row of a listing, as --after takes it: the address,
+-- the coin, the txid or the nosigHash
+keysOf :: Response -> Either String [String]
+keysOf (ResponseAddresses _ addrs) = Right (Text.unpack . dBAddressAddress . fst <$> addrs)
+keysOf (ResponseBalances _ addrs) = Right (Text.unpack . dBAddressAddress . fst <$> addrs)
+keysOf (ResponseTxs _ infos) = Right [Text.unpack (txHashToHex (chainTxid status)) | info <- infos, OnChain status <- [txInfoStatus info]]
+keysOf (ResponsePendingTxs _ held) = Right [Text.unpack (txHashToHex (pendingNosigHash status)) | (_, info) <- held, Pending status <- [txInfoStatus info]]
+keysOf (ResponseCoins _ coins) = Right [Text.unpack (txHashToHex outpoint.hash) <> ":" <> show outpoint.index | coin <- coins, let outpoint = jsonCoinOutpoint coin]
+keysOf other = Left (show other)
+
 -- | The listings, each with one row in a synced home with a payment
 -- prepared: the address paid, the payment received, its coin, the payment
 -- prepared, and the address that holds the coin
@@ -2210,34 +2222,39 @@ listingSpec ctx = do
         (timesOf <$> hwJson home ["txs"] []) `shouldReturn` Right [Just seenTime]
 
   describe "A listing" $ do
-    -- 2^64 wrapped around to 0
-    it "shows nothing at an offset past 64 bits, rather than the first page" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
-        synced home
-        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"] []
-        forM_ listings $ \listing ->
-          (rowsOf <$> hwJson home [listing, "--offset", "18446744073709551616"] []) `shouldReturn` Right 0
-
-    -- Six addresses, one more than the default limit
-    it "shows every row with a limit of 0" $
+    it "shows every row without --max" $
       withHome $ \home -> do
         createMain home
         replicateM_ 6 (answer home ["receive"] [])
-        (rowsOf <$> hwJson home ["addrs", "--limit", "0"] []) `shouldReturn` Right 6
+        (rowsOf <$> hwJson home ["addrs"] []) `shouldReturn` Right 6
 
-    it "shows the row of each listing with a limit of 0, rather than none" $
+    it "shows the row of each listing" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"] []
         forM_ listings $ \listing ->
-          (rowsOf <$> hwJson home [listing, "--limit", "0"] []) `shouldReturn` Right 1
+          (rowsOf <$> hwJson home [listing] []) `shouldReturn` Right 1
 
     -- 2^64 + 1 wrapped around to 1, and showed one address of the three
-    it "shows every row with a limit past 64 bits, rather than wrapping around" $
+    it "shows every row with a --max past 64 bits, rather than wrapping around" $
       withHome $ \home -> do
         createMain home
         replicateM_ 3 $ answer home ["receive"] []
-        (rowsOf <$> hwJson home ["addrs", "--limit", "18446744073709551617"] []) `shouldReturn` Right 3
+        (rowsOf <$> hwJson home ["addrs", "--max", "18446744073709551617"] []) `shouldReturn` Right 3
+
+    it "refuses a --max of 0" $
+      withHome $ \home -> do
+        createMain home
+        run <- hw home ["addrs", "--max", "0"] []
+        runExit run `shouldBe` ExitFailure 1
+        runErr run `shouldSatisfy` Text.isInfixOf "option --max: cannot parse value `0'"
+
+    it "refuses to start after a row that is not in it" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        (errorOf <$> hwJson home ["addrs", "--after", Text.unpack (internalAddrsText !! 0)] [])
+          `shouldReturn` Right ("The address " <> internalAddrsText !! 0 <> " is not a receiving address of the account")
 
     -- second is an account of its own, without any row
     it "shows the rows of the account of --account only" $
@@ -2251,16 +2268,17 @@ listingSpec ctx = do
 
     -- Two of each: the addresses /0/0 and /0/1, the two payments to them,
     -- their coins, and a payment prepared from each coin
-    it "shows --limit rows of each listing, after the first --offset rows" $
+    it "shows --max rows of each listing, then the rows after the one --after names" $
       withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (payment ctx) 0, "--feerate", "10"] []
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--coin", coinArg (newerPayment ctx) 0, "--feerate", "10"] []
         forM_ listings $ \listing -> do
-          (rowsOf <$> hwJson home [listing] []) `shouldReturn` Right 2
-          (rowsOf <$> hwJson home [listing, "--limit", "1"] []) `shouldReturn` Right 1
-          (rowsOf <$> hwJson home [listing, "--offset", "1"] []) `shouldReturn` Right 1
-          (rowsOf <$> hwJson home [listing, "--offset", "2"] []) `shouldReturn` Right 0
+          keys <- either fail return . keysOf =<< hwJson home [listing] []
+          length keys `shouldBe` 2
+          (keysOf <$> hwJson home [listing, "--max", "1"] []) `shouldReturn` Right [keys !! 0]
+          (keysOf <$> hwJson home [listing, "--after", keys !! 0] []) `shouldReturn` Right [keys !! 1]
+          (rowsOf <$> hwJson home [listing, "--after", keys !! 1] []) `shouldReturn` Right 0
 
 {- Sending -}
 
@@ -2899,7 +2917,7 @@ bumpFeeSpec ctx = do
         replacement <- signAndSend home nosig
         modifyIORef chain mine
         (accountsOf <$> hwJson home ["sync"] []) `shouldReturn` Right [("main", 0, 25480)]
-        history <- hwJson home ["txs", "--limit", "0"] []
+        history <- hwJson home ["txs"] []
         (filter (\(tid, _, _) -> tid `elem` [stuck, replacement]) <$> historyOf history)
           `shouldSatisfy` either (const False) (\rows -> sort rows == sort [(stuck, True, 0), (replacement, False, 1)])
 

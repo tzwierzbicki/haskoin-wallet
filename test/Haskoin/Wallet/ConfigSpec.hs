@@ -162,7 +162,8 @@ defaultFile =
   "parallel-requests": 1,
   "database-file": null,
   "default-network": "btc",
-  "change-back": false
+  "change-back": false,
+  "pager": null
 }|]
 
 -- | The file hw 0.9 wrote when there was none: tx-batch and recovery-gap

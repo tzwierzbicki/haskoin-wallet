@@ -23,7 +23,7 @@ import Control.Monad.Reader (MonadTrans (lift))
 import Data.Aeson
 import Data.Aeson.Types (Pair, Parser)
 import qualified Data.Aeson.Types as Json
-import Data.List (nub)
+import Data.List (genericTake, nub)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, mapMaybe)
@@ -38,7 +38,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Account
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Util (Page (Page), addrToTextE, pageBounds, textToAddrE)
+import Haskoin.Wallet.Util (addrToTextE, rowLimit, textToAddrE)
 import Numeric.Natural (Natural)
 
 {- The two chains -}
@@ -364,19 +364,34 @@ usedAddresses addrs = do
     return $ a ^. DBAddressAddress
   return $ unValue <$> rows
 
--- | A page of the addresses of a chain of the account, newest first
-addressPage :: (MonadUnliftIO m) => DBAccountId -> AddrType -> Page -> DB m [DBAddress]
-addressPage accId addrType page = do
-  let (lim, off) = pageBounds page
+-- | The addresses of a chain of the account, newest first: those after
+-- the index given, or the first ones, up to the count, or all of them
+addressesAfter :: (MonadUnliftIO m) => DBAccountId -> AddrType -> Maybe Int -> Maybe Natural -> DB m [DBAddress]
+addressesAfter accId addrType afterM countM = do
   rows <- select . from $ \a -> do
     where_ $
       a ^. DBAddressAccount ==. val accId
         &&. a ^. DBAddressInternal ==. val (isInternal addrType)
+    forM_ afterM $ \index -> where_ $ a ^. DBAddressIndex <. val index
     orderBy [desc (a ^. DBAddressIndex)]
-    limit lim
-    offset off
+    forM_ countM $ limit . rowLimit
     return a
   return $ entityVal <$> rows
+
+-- | The row of an address of the account on the chain, the one --after
+-- names, or why there is none
+listedAddress :: (MonadUnliftIO m) => Network -> DBAccountId -> AddrType -> Text -> ExceptT String (DB m) DBAddress
+listedAddress net accId addrType text = do
+  _ <- liftEither $ textToAddrE net text
+  rowM <- lift $ P.getBy (UniqueAddress text)
+  case rowM of
+    Just (Entity _ row)
+      | dBAddressAccount row == accId && dBAddressInternal row == isInternal addrType -> return row
+    _ -> throwError $ "The address " <> cs text <> " is not a " <> kind <> " address of the account"
+  where
+    kind = case addrType of
+      AddrExternal -> "receiving"
+      AddrInternal -> "change"
 
 -- | Every address of the account, with its derivation path and its balance
 allAddressesMap :: (MonadUnliftIO m) => Network -> DBAccountId -> ExceptT String (DB m) (Map Address SoftPath, Map Address AddressBalance)
@@ -457,11 +472,10 @@ deriveChainAddress ctx pub chain i = do
     Left (DerivationException _) -> Nothing
     Right child -> Just (xPubAddr ctx child)
 
--- | A page of the addresses of a chain of the public key, with their
--- indices; an index with an invalid child key is left out
-chainAddresses :: Ctx -> XPubKey -> SoftPath -> Page -> IO [(Address, KeyIndex)]
-chainAddresses ctx pub chain (Page lim off) =
-  fmap catMaybes . forM [first .. first + fromIntegral lim - 1] $ \i ->
+-- | The addresses of a chain of the public key from an index, as many as
+-- asked, with their indices; an index with an invalid child key is left
+-- out
+chainAddresses :: Ctx -> XPubKey -> SoftPath -> Natural -> Natural -> IO [(Address, KeyIndex)]
+chainAddresses ctx pub chain firstIndex howMany =
+  fmap catMaybes . forM (genericTake howMany [fromIntegral firstIndex ..]) $ \i ->
     fmap (\addr -> (addr, i)) <$> deriveChainAddress ctx pub chain i
-  where
-    first = fromIntegral off

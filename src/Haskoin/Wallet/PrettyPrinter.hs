@@ -21,7 +21,7 @@ module Haskoin.Wallet.PrettyPrinter where
 import Control.Applicative ((<|>))
 import Control.Monad
 import Data.Char (isAlphaNum, toUpper)
-import Data.List (intercalate, intersperse)
+import Data.List (intercalate, intersperse, nub)
 import Data.List.Split (chunksOf)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isJust)
@@ -35,7 +35,7 @@ import Data.Time.Format
 import Data.Word
 import Haskoin
 import Haskoin.Wallet.Account
-import Haskoin.Wallet.Address (CoinBalance (..), addrPath, coinBalanceUnspendable, pathText)
+import Haskoin.Wallet.Address (CoinBalance (..), addrPath, chainPath, coinBalanceUnspendable, pathText)
 import Haskoin.Wallet.Amounts
 import Haskoin.Wallet.Coin
 import Haskoin.Wallet.Database
@@ -407,10 +407,16 @@ prettyPrinter unit res = do
   when (responseFailed res) exitFailure
 
 responsePrinter :: AmountUnit -> Response -> IO ()
-responsePrinter unit =
-  \case
-    ResponseError err ->
-      renderIO $ styled Failure "Error:" <+> pretty err
+responsePrinter unit answer =
+  case answer of
+    -- The listings, which the screen reads in chunks ('rowsPrinter')
+    ResponseAccounts {} -> listing
+    ResponseAddresses {} -> listing
+    ResponseBalances {} -> listing
+    ResponseTxs {} -> listing
+    ResponsePendingTxs {} -> listing
+    ResponseCoins {} -> listing
+    ResponseError err -> renderIO $ errorDoc err
     ResponseMnemonic orig mnem parts ->
       renderIO . vcat $
         [ styled Title "System Entropy Source",
@@ -420,9 +426,6 @@ responsePrinter unit =
         ]
           <> partsPrinter parts
     ResponseAccount acc spendable -> renderIO $ accountPrinter unit acc spendable
-    ResponseAccounts [] -> renderIO $ text "There are no accounts to display"
-    ResponseAccounts accs ->
-      renderIO . vcat $ intersperse mempty $ uncurry (accountPrinter unit) <$> accs
     ResponseAccResult _ res txt -> do
       let p =
             if res
@@ -432,30 +435,6 @@ responsePrinter unit =
     ResponseFile f -> renderIO $ styled Field "File:" <+> styled UserText f
     ResponseAddress _ addr spendable ->
       renderIO $ addressPrinter unit (pathWidth [addr]) addr spendable
-    ResponseAddresses _ [] ->
-      renderIO $ text "There are no addresses to display"
-    ResponseAddresses _ addrs ->
-      renderIO $ vcat $ uncurry (addressPrinter unit (pathWidth (fst <$> addrs))) <$> addrs
-    ResponseBalances _ [] ->
-      renderIO $ text "There are no addresses with coins to display"
-    ResponseBalances _ addrs -> renderIO $ coinBalancesPrinter unit addrs
-    ResponseTxs _ [] ->
-      renderIO $ text "There are no transactions to display"
-    ResponseTxs acc txs -> do
-      let net = accountNetwork acc
-      renderIO $ vcat $ intersperse mempty $ txInfoPrinter net unit <$> txs
-    ResponsePendingTxs asked [] ->
-      renderIO . text $ case asked of
-        Just acc -> "There are no pending transactions in the account " <> cs (dBAccountName acc)
-        Nothing -> "There are no pending transactions"
-    -- Listing every account, each transaction names its own
-    ResponsePendingTxs asked held ->
-      renderIO $ vcat $ intersperse mempty $ pendingPrinter <$> held
-      where
-        pendingPrinter (acc, info) =
-          vcat $
-            [field 9 "Account" <> pretty (dBAccountName acc) `withStyle` Account | Nothing <- [asked]]
-              <> [txInfoPrinter (accountNetwork acc) unit info]
     ResponseTx acc txInfo -> do
       let net = accountNetwork acc
       renderIO $ txAnswerPrinter net unit txInfo
@@ -478,11 +457,6 @@ responsePrinter unit =
             indent 2 $ styled Field "Freed coins:" <+> text (show c),
             indent 2 $ styled Field "Freed internal addresses:" <+> text (show a)
           ]
-    ResponseCoins _ [] ->
-      renderIO $ text "There are no coins to display"
-    ResponseCoins acc coins -> do
-      let net = accountNetwork acc
-      renderIO $ vcat $ intersperse mempty $ coinPrinter net unit <$> coins
     -- As it is, byte for byte: verifymsg --input reads it back, and other
     -- wallets check the message exactly
     ResponseSignMsg m s a ->
@@ -513,6 +487,8 @@ responsePrinter unit =
           [ styled Field "Software version:" <+> pretty v,
             styled Field "Database version:" <+> pretty dbv
           ]
+  where
+    listing = forM_ (rowsPrinter unit answer) (renderIO . listingDoc)
 
 -- | The fee rates recent blocks paid, with how fresh they are: the age of
 -- the latest of those blocks, which also tells when the network is slow.
@@ -564,6 +540,81 @@ agoText now time
 printNextSteps :: Command -> Response -> IO ()
 printNextSteps cmd res =
   forM_ (nextStepsPrinter cmd res) $ \steps -> putStrLn "" >> renderIO steps
+
+-- | A failure, as an answer or a listing reports it
+errorDoc :: Text -> Doc Style
+errorDoc err = styled Failure "Error:" <+> pretty err
+
+{- Listings -}
+
+-- | The rows of a listing, as the screen shows them
+data Rows = Rows
+  { -- | What to say when the listing has no row at all
+    rowsNone :: Doc Style,
+    -- | A document per row
+    rowsDocs :: [Doc Style],
+    -- | Whether a blank line sets the rows apart
+    rowsApart :: Bool
+  }
+
+-- | The rows of an answer that lists, or Nothing for an answer that does
+-- not. The screen reads a listing in chunks, so the paths of its
+-- addresses are padded to the longest path of the account on the chains
+-- listed, the same for every chunk, rather than to the longest one shown.
+rowsPrinter :: AmountUnit -> Response -> Maybe Rows
+rowsPrinter unit = \case
+  ResponseAccounts accs ->
+    Just $ Rows (text "There are no accounts to display") (uncurry (accountPrinter unit) <$> accs) True
+  ResponseAddresses acc addrs ->
+    let pad = longestPathWidth acc (nub (dBAddressInternal . fst <$> addrs))
+     in Just $ Rows (text "There are no addresses to display") (uncurry (addressPrinter unit pad) <$> addrs) False
+  ResponseBalances acc addrs ->
+    let pad = longestPathWidth acc [False, True]
+     in Just $ Rows (text "There are no addresses with coins to display") (uncurry (coinBalancePrinter unit pad) <$> addrs) False
+  ResponseTxs acc txs ->
+    Just $ Rows (text "There are no transactions to display") (txInfoPrinter (accountNetwork acc) unit <$> txs) True
+  -- Listing every account, each transaction names its own
+  ResponsePendingTxs asked held ->
+    let none = case asked of
+          Just acc -> "There are no pending transactions in the account " <> cs (dBAccountName acc)
+          Nothing -> "There are no pending transactions"
+        pendingPrinter (acc, info) =
+          vcat $
+            [field 9 "Account" <> pretty (dBAccountName acc) `withStyle` Account | Nothing <- [asked]]
+              <> [txInfoPrinter (accountNetwork acc) unit info]
+     in Just $ Rows (text none) (pendingPrinter <$> held) True
+  ResponseCoins acc coins ->
+    Just $ Rows (text "There are no coins to display") (coinPrinter (accountNetwork acc) unit <$> coins) True
+  _ -> Nothing
+
+-- | The width of the longest derivation path of the account on the
+-- chains, False for the receiving one and True for the change one: that
+-- of its newest address there
+longestPathWidth :: DBAccount -> [Bool] -> Natural
+longestPathWidth acc chains = fromIntegral $ maximum (0 : (width <$> chains))
+  where
+    width internal =
+      let count = if internal then dBAccountInternal acc else dBAccountExternal acc
+       in if count == 0 then 0 else Text.length (pathText (chainPath internal (count - 1)))
+
+-- | A whole listing: its rows, or what to say when it has none
+listingDoc :: Rows -> Doc Style
+listingDoc (Rows none [] _) = none
+listingDoc (Rows _ docs apart) = vcat (if apart then intersperse mempty docs else docs)
+
+-- | A chunk of a listing, the first one or a later one. The first chunk
+-- of a listing without rows says so. A later chunk of a listing whose
+-- rows are set apart starts with the blank line that sets it apart from
+-- the chunk before. An answer that is not a listing is a failure here.
+chunkDoc :: AmountUnit -> Bool -> Response -> Doc Style
+chunkDoc unit first answer =
+  case rowsPrinter unit answer of
+    Just rows
+      | first -> listingDoc rows
+      | otherwise -> vcat ([mempty | rowsApart rows] <> [listingDoc rows])
+    Nothing -> case answer of
+      ResponseError err -> errorDoc err
+      _ -> errorDoc "The answer is not a listing"
 
 -- | The steps the user may take next, after a command of a payment or a
 -- sweep, if any. Each step is a command line, styled as the help shows

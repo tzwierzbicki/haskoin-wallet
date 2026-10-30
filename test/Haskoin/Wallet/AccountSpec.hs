@@ -32,7 +32,7 @@ import Haskoin.Wallet.PendingTx (importPendingTx)
 import Haskoin.Wallet.Response (Response (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxSignData (TxSignData (..))
-import Haskoin.Wallet.Util (Page (Page))
+import Haskoin.Wallet.Listing (Paging (..))
 import Numeric.Natural (Natural)
 import System.FilePath ((</>))
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), MarshalJsonBox (..), testIdentity)
@@ -425,7 +425,7 @@ balanceSpec ctx =
           _ <- genExtAddress ctx def accId ""
           refreshCoins btc ctx accId [externalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
         -- Newest first: the second address holds nothing
-        addressSpendable <$> cmdAddrs wallet Nothing False (Page 5 0)
+        addressSpendable <$> cmdAddrs wallet Nothing False (Paging Nothing Nothing)
           `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", 0), ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", 50000)]
 
     it "add up those of its addresses" $

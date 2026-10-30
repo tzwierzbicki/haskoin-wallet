@@ -24,7 +24,7 @@ import Text.RawString.QQ (r)
 spec :: Spec
 spec = do
   jsonSpec
-  pageSpec
+  rowsSpec
   errorSpec
   addressSpec
   addressFileSpec
@@ -110,16 +110,15 @@ addressFileSpec =
         <> "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\n"
         <> "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ two on a line\n"
 
-pageSpec :: Spec
-pageSpec =
-  describe "A page of a listing, as the database takes it" $ do
-    it "has the limit and the offset typed" $
-      pageBounds (Page 5 20) `shouldBe` (5 :: Int64, 20)
+rowsSpec :: Spec
+rowsSpec =
+  describe "A count of rows, as the database takes it" $ do
+    it "is the count typed" $
+      rowLimit 5 `shouldBe` (5 :: Int64)
 
-    -- Larger, they wrapped around: an offset of 2^64 showed the first page,
-    -- and a limit of 2^64 + 1 a single row
+    -- Larger, it wrapped around: a count of 2^64 + 1 gave a single row
     it "stops at the largest number of 64 bits, past every row, rather than wrapping around" $
-      pageBounds (Page (2 ^ (64 :: Int)) (2 ^ (64 :: Int))) `shouldBe` (9223372036854775807 :: Int64, 9223372036854775807)
+      rowLimit (2 ^ (64 :: Int) + 1) `shouldBe` (9223372036854775807 :: Int64)
 
 numberSpec :: Spec
 numberSpec =

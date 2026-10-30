@@ -81,7 +81,10 @@ data Config = Config
     -- | Whether preparetx sends the change back to an address the payment
     -- spends from, as --changeback does, rather than to a new change
     -- address. --newchange overrides it for one payment.
-    configChangeBack :: Bool
+    configChangeBack :: Bool,
+    -- | The command a listing goes through on a terminal, instead of less
+    -- or the PAGER of the environment. The empty string is no pager.
+    configPager :: Maybe Text
   }
   deriving (Eq, Show)
 
@@ -104,6 +107,7 @@ instance FromJSON Config where
         <*> o .:? "database-file"
         <*> (traverse networkNamed =<< o .:? "default-network")
         <*> key "change-back" configChangeBack
+        <*> o .:? "pager"
 
 -- | The network of a name in the configuration file
 networkNamed :: String -> Parser Network
@@ -128,7 +132,8 @@ instance ToJSON Config where
         "parallel-requests" .= configParallelRequests cfg,
         "database-file" .= configDatabaseFile cfg,
         "default-network" .= ((.name) <$> configDefaultNetwork cfg),
-        "change-back" .= configChangeBack cfg
+        "change-back" .= configChangeBack cfg,
+        "pager" .= configPager cfg
       ]
 
 instance Default Config where
@@ -142,7 +147,8 @@ instance Default Config where
         configParallelRequests = 1,
         configDatabaseFile = Nothing,
         configDefaultNetwork = Just btc,
-        configChangeBack = False
+        configChangeBack = False,
+        configPager = Nothing
       }
 
 -- | The network of a command that needs one: the one --network names, or

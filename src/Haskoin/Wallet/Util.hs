@@ -40,23 +40,13 @@ encodeJsonPretty =
           Pretty.confTrailingNewline = True
         }
 
-{- Pages -}
+{- Rows -}
 
--- | A page of a listing: how many items, after skipping how many
-data Page = Page
-  { pageLimit :: !Natural,
-    pageOffset :: !Natural
-  }
-  deriving (Eq, Show)
-
--- | The limit and the offset of a page, as a query of the database takes
--- them, in 64 bits. A larger number is as good as the largest one, past
--- every row, rather than wrapping around: an offset of 2^64 read as 0
--- showed the first page.
-pageBounds :: (Num a) => Page -> (a, a)
-pageBounds (Page lim off) = (bounded lim, bounded off)
-  where
-    bounded n = fromIntegral (min n (fromIntegral (maxBound :: Int64)))
+-- | A count of rows as a query of the database takes it, in 64 bits. A
+-- larger count is as good as the largest one, past every row, rather than
+-- wrapping around: 2^64 + 1 read as 1 gave a single row.
+rowLimit :: (Num a) => Natural -> a
+rowLimit n = fromIntegral (min n (fromIntegral (maxBound :: Int64)))
 
 {- Errors -}
 

@@ -70,14 +70,35 @@ indexesSpec =
           queryPlan
             "select a.*, sum(c.value) from d_b_coin c inner join d_b_address a on c.account = a.account and c.address = a.address \
             \where c.account = 1 group by a.account, a.internal, a.\"index\" \
-            \order by sum(c.value) desc, a.internal, a.\"index\" limit 5 offset 0"
+            \having sum(c.value) < 50000 or (sum(c.value) = 50000 and (a.internal > 0 or (a.internal = 0 and a.\"index\" > 1))) \
+            \order by sum(c.value) desc, a.internal, a.\"index\" limit 100"
         liftIO $ plan `shouldSatisfy` any ("SEARCH c USING COVERING INDEX d_b_coin_account_address " `Text.isPrefixOf`)
 
     it "give the coins of an account in the order coins lists them, without sorting them" $
       inMemory $ do
         globalMigration
-        plan <- queryPlan "select * from d_b_coin where account = 1 order by block_ref, outpoint limit 10 offset 20"
+        plan <- queryPlan "select * from d_b_coin where account = 1 order by block_ref, outpoint limit 100"
         liftIO $ plan `shouldBe` ["SEARCH d_b_coin USING INDEX d_b_coin_account_block_ref (account=?)"]
+
+    -- A chunk of coins starts where the one before ended: at its last block
+    -- in the index, then past its last coin
+    it "find the coins after a given one from the index, without sorting them" $
+      inMemory $ do
+        globalMigration
+        plan <-
+          queryPlan
+            "select * from d_b_coin where account = 1 and block_ref >= x'0001' and (block_ref > x'0001' or outpoint > x'ff') \
+            \order by block_ref, outpoint limit 100"
+        liftIO $ plan `shouldBe` ["SEARCH d_b_coin USING INDEX d_b_coin_account_block_ref (account=? AND block_ref>?)"]
+
+    it "find the transactions after a given one from the index, without sorting them" $
+      inMemory $ do
+        globalMigration
+        plan <-
+          queryPlan
+            "select txid, block_ref, time, dead, blob from d_b_tx_info where account = 1 and block_ref >= x'0001' and (block_ref > x'0001' or txid > x'ff') \
+            \order by block_ref, txid limit 100"
+        liftIO $ plan `shouldBe` ["SEARCH d_b_tx_info USING INDEX d_b_tx_info_account_block_ref (account=? AND block_ref>?)"]
 
 -- | The steps SQLite takes to answer a query
 queryPlan :: Text -> DB IO [Text]

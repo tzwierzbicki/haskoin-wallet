@@ -487,23 +487,31 @@ repsertSummary net accId tid ref time summary = do
       P.insert_ row
       return True
 
--- | A page of the account's transactions on the chain, in the order of
--- their block references as the store encodes them: the mempool first,
--- then the newest blocks first. Their confirmations are counted from the
--- best block, none for a dead transaction, and the labels of their
--- addresses are those of today.
-txsPage :: (MonadUnliftIO m) => DBAccountId -> Page -> ExceptT String (DB m) [TxInfo]
-txsPage accId page = do
-  let (lim, off) = pageBounds page
+-- | The account's transactions on the chain, in the order of their block
+-- references as the store encodes them: the mempool first, then the newest
+-- blocks first, and those with the same block reference by their ids, so
+-- that the order is settled. Those after the transaction given, by its
+-- block and its id, or the first ones, up to the count, or all of them.
+-- Their confirmations are counted from the best block, none for a dead
+-- transaction, and the labels of their addresses are those of today.
+txsAfter :: (MonadUnliftIO m) => DBAccountId -> Maybe (Store.BlockRef, TxHash) -> Maybe Natural -> ExceptT String (DB m) [TxInfo]
+txsAfter accId afterM countM = do
   acc <- getAccountById accId
   let net = accountNetwork acc
   rows <-
     lift . select . from $ \t -> do
       where_ $
         t ^. DBTxInfoAccount ==. val accId
-      orderBy [asc (t ^. DBTxInfoBlockRef)]
-      limit lim
-      offset off
+      -- From the block of the transaction given on, which the index on
+      -- the block references finds, and past the transaction itself
+      -- within that block
+      forM_ afterM $ \(block, tid) -> do
+        let blockBytes = val (S.encode block)
+        where_ $
+          t ^. DBTxInfoBlockRef >=. blockBytes
+            &&. (t ^. DBTxInfoBlockRef >. blockBytes ||. t ^. DBTxInfoTxid >. val (hashBytes tid))
+      orderBy [asc (t ^. DBTxInfoBlockRef), asc (t ^. DBTxInfoTxid)]
+      forM_ countM $ limit . rowLimit
       return (t ^. DBTxInfoTxid, t ^. DBTxInfoBlockRef, t ^. DBTxInfoTime, t ^. DBTxInfoDead, t ^. DBTxInfoBlob)
   heightM <- bestHeight net
   forM rows $ \(Value tidBytes, Value refBytes, Value time, Value dead, Value blob) -> do
@@ -513,6 +521,14 @@ txsPage accId page = do
     let confirmations = if dead then 0 else getConfirmations heightM ref
         status = ChainStatus tid ref time confirmations dead
     lift $ fillTxInfoLabels net $ TxInfo summary (OnChain status)
+
+-- | The block of a transaction of the account, the one --after names, or
+-- why there is none
+txBlock :: (MonadUnliftIO m) => DBAccountId -> TxHash -> ExceptT String (DB m) Store.BlockRef
+txBlock accId tid = do
+  rowM <- lift $ P.get (DBTxInfoKey accId (hashBytes tid))
+  row <- liftMaybe ("The transaction " <> cs (txHashToHex tid) <> " is not in the account") rowM
+  liftEither $ S.decode (dBTxInfoBlockRef row)
 
 -- | The transaction with the labels of the account's addresses filled in,
 -- as the database has them now

@@ -32,7 +32,6 @@ import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo
-import Haskoin.Wallet.Util (Page (Page))
 import Numeric.Natural (Natural)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), MarshalJsonBox (..), testIdentity)
 import Haskoin.Wallet.Arbitrary (arbitraryMyInputs, arbitraryMyOutputs, arbitraryTxInfo, arbitraryTxSummary, arbitraryTxType)
@@ -136,24 +135,24 @@ record :: DBAccountId -> Store.Transaction -> ExceptT String (DB IO) Bool
 record accId tx = lift $ repsertSummary btc accId tx.txid tx.block (storeTime tx.timestamp) (summarized tx)
 
 -- | The id of each listed transaction, in the order of the listing
-listedIds :: DBAccountId -> Page -> ExceptT String (DB IO) [TxHash]
-listedIds accId page = map (chainTxid . chainOf) <$> txsPage accId page
+listedIds :: DBAccountId -> Maybe (Store.BlockRef, TxHash) -> Maybe Natural -> ExceptT String (DB IO) [TxHash]
+listedIds accId afterM countM = map (chainTxid . chainOf) <$> txsAfter accId afterM countM
 
 -- | The block and the confirmations of each listed transaction
 listedBlocks :: DBAccountId -> ExceptT String (DB IO) [(Store.BlockRef, Natural)]
 listedBlocks accId = do
-  infos <- txsPage accId (Page 10 0)
+  infos <- txsAfter accId Nothing Nothing
   return [(chainBlock (chainOf info), chainConfirmations (chainOf info)) | info <- infos]
 
 -- | Whether each listed transaction is dead
 listedDead :: DBAccountId -> ExceptT String (DB IO) [Bool]
-listedDead accId = map (chainDead . chainOf) <$> txsPage accId (Page 10 0)
+listedDead accId = map (chainDead . chainOf) <$> txsAfter accId Nothing Nothing
 
 -- | The labels of the account's inputs and of its outputs in each listed
 -- transaction
 listedLabels :: DBAccountId -> ExceptT String (DB IO) [([Text], [Text])]
 listedLabels accId = do
-  infos <- txsPage accId (Page 10 0)
+  infos <- txsAfter accId Nothing Nothing
   return
     [ (myInputsLabel <$> Map.elems summary.summaryMyInputs, myOutputsLabel <$> Map.elems summary.summaryMyOutputs)
       | info <- infos,
@@ -495,15 +494,25 @@ listingSpec ctx =
       inDatabaseE $ do
         accId <- account ctx
         fourPayments accId
-        listedIds accId (Page 10 0) `dbShouldBeE` [fakeTxHash 4, fakeTxHash 3, fakeTxHash 2, fakeTxHash 1]
+        listedIds accId Nothing Nothing `dbShouldBeE` [fakeTxHash 4, fakeTxHash 3, fakeTxHash 2, fakeTxHash 1]
 
-    it "lists them a page at a time" $
+    it "lists them a page at a time, each page after the last transaction of the one before" $
       inDatabaseE $ do
         accId <- account ctx
         fourPayments accId
-        listedIds accId (Page 2 0) `dbShouldBeE` [fakeTxHash 4, fakeTxHash 3]
-        listedIds accId (Page 2 2) `dbShouldBeE` [fakeTxHash 2, fakeTxHash 1]
-        listedIds accId (Page 2 4) `dbShouldBeE` []
+        listedIds accId Nothing (Just 2) `dbShouldBeE` [fakeTxHash 4, fakeTxHash 3]
+        listedIds accId (Just (Store.BlockRef 800001 0, fakeTxHash 3)) (Just 2) `dbShouldBeE` [fakeTxHash 2, fakeTxHash 1]
+        listedIds accId (Just (Store.BlockRef 800000 1, fakeTxHash 1)) (Just 2) `dbShouldBeE` []
+
+    it "names the block of a transaction of the account, for --after, and refuses one the account does not have" $
+      inDatabaseE $ do
+        accId <- account ctx
+        fourPayments accId
+        txBlock accId (fakeTxHash 3) `dbShouldBeE` Store.BlockRef 800001 0
+        txBlock accId (fakeTxHash 4) `dbShouldBeE` Store.MemRef 1700000000
+        lift $
+          dbShouldFailWith "The transaction 0000000000000000000000000000000000000000000000000000000000000005 is not in the account" $
+            txBlock accId (fakeTxHash 5)
 
     it "counts the confirmations from the best block, one when it is unknown or behind, none in the mempool" $
       inDatabaseE $ do
@@ -525,7 +534,7 @@ listingSpec ctx =
       inDatabaseE $ do
         accId <- account ctx
         _ <- record accId (payment ctx)
-        (map (chainTime . chainOf) <$> txsPage accId (Page 5 0)) `dbShouldBeE` [Just seenTime]
+        (map (chainTime . chainOf) <$> txsAfter accId Nothing Nothing) `dbShouldBeE` [Just seenTime]
 
     it "gives a dead transaction no confirmations, and keeps its block" $
       inDatabaseE $ do
@@ -533,7 +542,7 @@ listingSpec ctx =
         _ <- record accId (payment ctx)
         lift $ updateBest btc (fakeBlockHash 0) 800002
         lift $ markTxInfoDead accId (fakeTxHash 1)
-        (map chainOf <$> txsPage accId (Page 5 0)) `dbShouldBeE` [ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 0 True]
+        (map chainOf <$> txsAfter accId Nothing Nothing) `dbShouldBeE` [ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 0 True]
 
     it "fills in the labels of the account's addresses as they are today" $
       inDatabaseE $ do
@@ -551,7 +560,7 @@ listingSpec ctx =
         lift $ P.insert_ $ DBTxInfo accId (hashBytes (fakeTxHash 9)) (S.encode (Store.BlockRef 800000 1)) (Just seenTime) "nonsense" False fixtureTime
         lift $
           dbShouldFailWith "The stored summary of transaction 0000000000000000000000000000000000000000000000000000000000000009 does not decode" $
-            txsPage accId (Page 5 0)
+            txsAfter accId Nothing Nothing
 
     it "lists the transactions of the account alone" $
       inDatabaseE $ do
@@ -562,8 +571,8 @@ listingSpec ctx =
         let otherPaths = Map.fromList [(externalAddr2, Deriv :/ 0 :/ 0)]
             otherPayment = creditTx ctx (fakeTxHash 8) (Store.BlockRef 800000 2) externalAddr2 70000
         _ <- lift $ repsertSummary btc otherId (fakeTxHash 8) (Store.BlockRef 800000 2) seenTime (storeSummary btc otherPaths otherPayment)
-        listedIds accId (Page 5 0) `dbShouldBeE` [fakeTxHash 1]
-        listedIds otherId (Page 5 0) `dbShouldBeE` [fakeTxHash 8]
+        listedIds accId Nothing Nothing `dbShouldBeE` [fakeTxHash 1]
+        listedIds otherId Nothing Nothing `dbShouldBeE` [fakeTxHash 8]
 
 historySpec :: Ctx -> Spec
 historySpec ctx =
@@ -578,19 +587,19 @@ historySpec ctx =
         record accId (payment ctx) `dbShouldBeE` True
         record accId (spend ctx) `dbShouldBeE` True
         lift $ updateBest btc (fakeBlockHash 0) 800002
-        txsPage accId (Page 5 0)
+        txsAfter accId Nothing Nothing
           `dbShouldBeE` [ TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)),
                         TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False))
                       ]
         -- A reorganisation leaves the spending out: the payment stands
         lift $ markTxInfoDead accId (fakeTxHash 2)
-        txsPage accId (Page 5 0)
+        txsAfter accId Nothing Nothing
           `dbShouldBeE` [ TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 0 True)),
                         TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False))
                       ]
         -- The spending is mined again, in the next block
         record accId (spendAt ctx (Store.BlockRef 800002 4)) `dbShouldBeE` True
-        txsPage accId (Page 5 0)
+        txsAfter accId Nothing Nothing
           `dbShouldBeE` [ TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800002 4) (Just seenTime) 1 False)),
                         TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False))
                       ]

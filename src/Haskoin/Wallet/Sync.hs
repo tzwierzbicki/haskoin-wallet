@@ -50,7 +50,7 @@ scanChain :: (MonadIO m) => Ctx -> Store -> XPubKey -> SoftPath -> Natural -> Na
 scanChain ctx store pub chain window from = go from from
   where
     go next off = do
-      addrs <- liftIO $ chainAddresses ctx pub chain (Page window off)
+      addrs <- liftIO $ chainAddresses ctx pub chain off window
       bals <- fromStore $ storeBalances store (fst <$> addrs)
       let used = Set.fromList [bal.address | bal <- bals, bal.txs /= 0]
           usedIndices = [fromIntegral i | (addr, i) <- addrs, addr `Set.member` used]

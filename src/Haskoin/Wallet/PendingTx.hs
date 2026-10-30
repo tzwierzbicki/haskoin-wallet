@@ -113,36 +113,51 @@ lookupPendingTx pendingHash = do
 requirePendingTx :: (MonadUnliftIO m) => TxHash -> ExceptT String (DB m) PendingTx
 requirePendingTx pendingHash = lookupPendingTx pendingHash >>= liftMaybe noPendingTx
 
--- | The rows of an account, or of every account, newest first: all of
--- them, or a page
-pendingRows :: (MonadUnliftIO m) => Maybe DBAccountId -> Maybe Page -> DB m [Entity DBPendingTx]
-pendingRows accIdM pageM =
+-- | The rows of an account, or of every account, newest first, and those
+-- created at the same time by their nosigHashes, so that the order is
+-- settled: those after the transaction given, by when it was created and
+-- its nosigHash, or the first ones, up to the count, or all of them
+pendingRows :: (MonadUnliftIO m) => Maybe DBAccountId -> Maybe (UTCTime, TxHash) -> Maybe Natural -> DB m [Entity DBPendingTx]
+pendingRows accIdM afterM countM =
   select . from $ \p -> do
     forM_ accIdM $ \accId ->
       where_ $ p ^. DBPendingTxAccount ==. val accId
-    orderBy [desc (p ^. DBPendingTxCreated)]
-    forM_ pageM $ \page -> do
-      let (lim, off) = pageBounds page
-      limit lim
-      offset off
+    forM_ afterM $ \(created, nosigH) ->
+      where_ $
+        p ^. DBPendingTxCreated <=. val created
+          &&. (p ^. DBPendingTxCreated <. val created ||. p ^. DBPendingTxNosigHash <. val (hashBytes nosigH))
+    orderBy [desc (p ^. DBPendingTxCreated), desc (p ^. DBPendingTxNosigHash)]
+    forM_ countM $ limit . rowLimit
     return p
 
 -- | The pending transactions of an account, newest first
 pendingTxs :: (MonadUnliftIO m) => DBAccountId -> ExceptT String (DB m) [PendingTx]
-pendingTxs accId = liftEither . mapM fromRow =<< lift (pendingRows (Just accId) Nothing)
+pendingTxs accId = liftEither . mapM fromRow =<< lift (pendingRows (Just accId) Nothing Nothing)
 
--- | A page of the pending transactions of an account, as summaries
-pendingTxPage :: (MonadUnliftIO m) => Ctx -> DBAccountId -> Page -> ExceptT String (DB m) [TxInfo]
-pendingTxPage ctx accId page = map snd <$> pendingPage ctx (Just accId) page
+-- | The pending transactions of an account as summaries, newest first:
+-- those after the transaction given, or the first ones, up to the count,
+-- or all of them
+pendingTxsAfter :: (MonadUnliftIO m) => Ctx -> DBAccountId -> Maybe (UTCTime, TxHash) -> Maybe Natural -> ExceptT String (DB m) [TxInfo]
+pendingTxsAfter ctx accId afterM countM = map snd <$> pendingAfter ctx (Just accId) afterM countM
 
--- | A page of the pending transactions of an account, or of every account,
--- newest first, each as a summary with its account
-pendingPage :: (MonadUnliftIO m) => Ctx -> Maybe DBAccountId -> Page -> ExceptT String (DB m) [(DBAccount, TxInfo)]
-pendingPage ctx accIdM page = do
-  held <- liftEither . mapM fromRow =<< lift (pendingRows accIdM (Just page))
+-- | The pending transactions of an account, or of every account, newest
+-- first, each as a summary with its account: those after the transaction
+-- given, or the first ones, up to the count, or all of them
+pendingAfter :: (MonadUnliftIO m) => Ctx -> Maybe DBAccountId -> Maybe (UTCTime, TxHash) -> Maybe Natural -> ExceptT String (DB m) [(DBAccount, TxInfo)]
+pendingAfter ctx accIdM afterM countM = do
+  held <- liftEither . mapM fromRow =<< lift (pendingRows accIdM afterM countM)
   forM held $ \p -> do
     acc <- getAccountById p.pendingTxAccount
     (acc,) <$> pendingSummary ctx acc p
+
+-- | Since when the account, or any account, holds the pending transaction,
+-- the one --after names, or why it does not
+heldSince :: (MonadUnliftIO m) => Maybe DBAccountId -> TxHash -> ExceptT String (DB m) UTCTime
+heldSince accIdM nosigH = do
+  p <- requirePendingTx nosigH
+  case accIdM of
+    Just accId | p.pendingTxAccount /= accId -> throwError "The pending transaction is not in the account"
+    _ -> return p.pendingTxCreated
 
 -- | The transaction of the signing data as the account sees it: parsed
 -- against the account's key, with the labels of its addresses

@@ -38,9 +38,8 @@ import Haskoin.Wallet.RawTx (hasRawTx, insertRawTx)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.TxInfo (ChainStatus (..), MyOutputs (..), TxInfo (..), TxSummary (..), TxType (..), txInfoHash, txsPage)
+import Haskoin.Wallet.TxInfo (ChainStatus (..), MyOutputs (..), TxInfo (..), TxSummary (..), TxType (..), txInfoHash, txsAfter)
 import Haskoin.Wallet.TxSignData
-import Haskoin.Wallet.Util (Page (Page))
 import Numeric.Natural (Natural)
 import Test.Hspec
 
@@ -89,7 +88,7 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         accId <- account
         _ <- syncWith (paymentStore ctx) accId
-        (map (chainTime . chainOf) <$> txsPage accId (Page 5 0)) `dbShouldBeE` [Just seenTime]
+        (map (chainTime . chainOf) <$> txsAfter accId Nothing Nothing) `dbShouldBeE` [Just seenTime]
 
     -- As the step to version 4 of the database left it: the balances are
     -- unchanged, and no address is listed
@@ -100,7 +99,7 @@ spec = prepareContext $ \ctx -> do
         lift $ P.update (DBTxInfoKey accId (hashBytes (fakeTxHash 1))) [DBTxInfoTime P.=. Nothing]
         res <- syncWith (paymentStore ctx) accId
         liftIO $ syncResTxUpdates res `shouldBe` 1
-        (map (chainTime . chainOf) <$> txsPage accId (Page 5 0)) `dbShouldBeE` [Just seenTime]
+        (map (chainTime . chainOf) <$> txsAfter accId Nothing Nothing) `dbShouldBeE` [Just seenTime]
 
     it "reports what the account can spend once synced" $
       inDatabaseE $ do
@@ -350,7 +349,7 @@ spec = prepareContext $ \ctx -> do
         liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (1, 0)
         liftIO $ readIORef published `shouldReturn` [txSignDataTx (signedSpend ctx)]
         pendingHashes accId `dbShouldBeE` [txHash (txSignDataTx (signedSpend ctx))]
-        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, True, False))]
 
     it "leaves alone a signed transaction the user has not sent" $
@@ -383,11 +382,11 @@ spec = prepareContext $ \ctx -> do
         res <- syncWith (spentElsewhereStore ctx) accId
         liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (0, 1)
         coins accId `dbShouldBeE` []
-        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, False, False, True))]
         -- Nothing is left to free but the change address, which it had none of
         deleteTx ctx (const (toStore emptyStore)) pendingHash `dbShouldBeE` (0, 0)
-        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0)) `dbShouldBeE` []
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing) `dbShouldBeE` []
 
     it "retires a sent transaction the network confirmed under another id, its signatures re-encoded by a miner" $
       inDatabaseE $ do
@@ -400,7 +399,7 @@ spec = prepareContext $ \ctx -> do
         -- Neither in conflict nor sent again: the payment is on the chain
         liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (0, 0)
         liftIO $ readIORef published `shouldReturn` []
-        pendingTxPage ctx accId (Page 5 0) `dbShouldBeE` []
+        pendingTxsAfter ctx accId Nothing Nothing `dbShouldBeE` []
         -- The payment shows under the id the network gave it
         summaries accId
           `dbShouldBeE` [ (Just (fakeTxHash 9), Store.BlockRef 800001 1, -50000),
@@ -414,7 +413,7 @@ spec = prepareContext $ \ctx -> do
         _ <- importPendingTx btc ctx accId (unsignedSpend ctx)
         res <- syncWith (malleatedStore ctx) accId
         liftIO $ syncResConflicted res `shouldBe` 0
-        pendingTxPage ctx accId (Page 5 0) `dbShouldBeE` []
+        pendingTxsAfter ctx accId Nothing Nothing `dbShouldBeE` []
 
     it "asks the store about the parents of the pending transactions, and about a rival only when there is one" $
       inDatabaseE $ do
@@ -435,13 +434,13 @@ spec = prepareContext $ \ctx -> do
         _ <- syncWith (realPaymentStore ctx) accId
         pendingHash <- importPendingTx btc ctx accId (unsignedSpend ctx)
         _ <- syncWith (spentElsewhereStore ctx) accId
-        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, False, False, True))]
         -- A reorganisation undoes transaction 8: the store lists the coin
         -- unspent again, and the full sync that follows finds it free
         res <- sync ctx cfg (toStore (realPaymentStore ctx)) btc accId True
         liftIO $ syncResConflicted res `shouldBe` 0
-        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, False, False, False))]
         coins accId `dbShouldBeE` [OutPoint (realPaymentId ctx) 0]
 
@@ -456,7 +455,7 @@ spec = prepareContext $ \ctx -> do
         -- about the coin, whatever the account it belongs to
         res <- syncWith (spentElsewhereStore ctx) otherId
         liftIO $ syncResConflicted res `shouldBe` 1
-        ((pendingFlags <$>) <$> pendingTxPage ctx otherId (Page 5 0))
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx otherId Nothing Nothing)
           `dbShouldBeE` [Just ((sweepHash, False, False, True))]
 
     it "reports a sweep of a coin outside the wallet once that coin is spent elsewhere" $
@@ -467,7 +466,7 @@ spec = prepareContext $ \ctx -> do
         liftIO $ syncResConflicted unspent `shouldBe` 0
         spent <- syncWith (outsideSpentStore ctx) accId
         liftIO $ syncResConflicted spent `shouldBe` 1
-        ((pendingFlags <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((sweepHash, False, False, True))]
 
     it "follows a payment the wallet made: the coin goes, the change comes, the summary is a debit" $
@@ -485,7 +484,7 @@ spec = prepareContext $ \ctx -> do
         res <- syncWith (changeSpentStore ctx) accId
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (1, 2)
         -- A debit of 41000: 40000 paid and 1000 of fee, 9000 of change to /1/0
-        txInfos <- txsPage accId (Page 5 0)
+        txInfos <- txsAfter accId Nothing Nothing
         spend <- liftMaybe "The payment has no summary" $ find ((== Just (txHash (changeSpendTx ctx))) . txInfoHash) txInfos
         let summary = txInfoSummary spend
         liftIO $ do
@@ -528,7 +527,7 @@ spec = prepareContext $ \ctx -> do
         res <- sync ctx cfg (toStore (cashPaymentStore ctx)) bch accId False
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (1, 1)
         summaries accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
-        (map jsonCoinOutpoint <$> coinPage bch accId AllCoins (Page 5 0)) `dbShouldBeE` [OutPoint (fakeTxHash 1) 0]
+        (map jsonCoinOutpoint <$> coinsAfter bch accId AllCoins Nothing Nothing) `dbShouldBeE` [OutPoint (fakeTxHash 1) 0]
         balances accId `dbShouldBeE` (50000, 0, 1)
         getBest bch `dbShouldBeE` Just (headerHash (blockAt 800002 1).header, 800002)
         getBest btc `dbShouldBeE` Nothing
@@ -1321,20 +1320,20 @@ sentStore ctx =
 -- order of the transaction ids
 summaries :: DBAccountId -> ExceptT String (DB IO) [(Maybe TxHash, Store.BlockRef, Integer)]
 summaries accId = do
-  txInfos <- txsPage accId (Page 500 0)
+  txInfos <- txsAfter accId Nothing Nothing
   return $ sortOn (\(h, _, _) -> txHashToHex <$> h) [(txInfoHash t, chainBlock (chainOf t), summaryAmount (txInfoSummary t)) | t <- txInfos]
 
 -- | The dead summaries of the account, by transaction id
 deadSummaries :: DBAccountId -> ExceptT String (DB IO) [Maybe TxHash]
 deadSummaries accId = do
-  txInfos <- txsPage accId (Page 500 0)
+  txInfos <- txsAfter accId Nothing Nothing
   return $ sortOn (fmap txHashToHex) [txInfoHash t | t <- txInfos, chainDead (chainOf t)]
 
 -- | The addresses of ours each summary pays, as sorted texts, in the order
 -- of the transaction ids
 paidAddresses :: DBAccountId -> ExceptT String (DB IO) [[Text]]
 paidAddresses accId = do
-  txInfos <- txsPage accId (Page 500 0)
+  txInfos <- txsAfter accId Nothing Nothing
   return
     [ sort (mapMaybe (addrToText btc) (Map.keys (summaryMyOutputs (txInfoSummary t))))
       | t <- sortOn (fmap txHashToHex . txInfoHash) txInfos
@@ -1342,7 +1341,7 @@ paidAddresses accId = do
 
 -- | The coins of the account, in the order of their outpoints
 coins :: DBAccountId -> ExceptT String (DB IO) [OutPoint]
-coins accId = sortOn show . map jsonCoinOutpoint <$> coinPage btc accId AllCoins (Page 500 0)
+coins accId = sortOn show . map jsonCoinOutpoint <$> coinsAfter btc accId AllCoins Nothing Nothing
 
 -- | The confirmed and unconfirmed balances of the account, and its number
 -- of coins

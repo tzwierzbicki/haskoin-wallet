@@ -27,7 +27,7 @@ import Haskoin.Wallet.Address
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.Util (Page (Page))
+import Numeric.Natural (Natural)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), testIdentity)
 import Haskoin.Wallet.Arbitrary (arbitraryAddressBalance, arbitraryDBAddress)
 import Test.Hspec
@@ -56,8 +56,8 @@ nextIndices accId = do
   return (dBAccountExternal acc, dBAccountInternal acc)
 
 -- | The indices of a page of a chain of the account, as addrs lists them
-listed :: DBAccountId -> AddrType -> Page -> ExceptT String (DB IO) [Int]
-listed accId addrType page = map dBAddressIndex <$> lift (addressPage accId addrType page)
+listed :: DBAccountId -> AddrType -> Maybe Int -> Maybe Natural -> ExceptT String (DB IO) [Int]
+listed accId addrType afterM countM = map dBAddressIndex <$> lift (addressesAfter accId addrType afterM countM)
 
 -- | The index, derivation path, text, label and chain of an address
 addressRow :: DBAddress -> (Int, Text, Text, Text, Bool)
@@ -144,7 +144,7 @@ receivingSpec ctx =
         replicateM_ 3 $ genExtAddress ctx cfg accId ""
         labelled <- setAddrLabel accId 1 "Savings"
         liftIO $ addressRow labelled `shouldBe` (1, "/0/1", "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "Savings", False)
-        (map dBAddressLabel <$> lift (addressPage accId AddrExternal (Page 5 0))) `dbShouldBeE` ["", "Savings", ""]
+        (map dBAddressLabel <$> lift (addressesAfter accId AddrExternal Nothing Nothing)) `dbShouldBeE` ["", "Savings", ""]
 
     it "refuses to label an address the account has not reached" $
       inDatabaseE $ do
@@ -158,8 +158,8 @@ receivingSpec ctx =
         _ <- nextChangeAddress ctx cfg accId []
         _ <- genExtAddress ctx cfg accId ""
         _ <- setAddrLabel accId 0 "Rent"
-        (map dBAddressLabel <$> lift (addressPage accId AddrExternal (Page 5 0))) `dbShouldBeE` ["Rent"]
-        (map dBAddressLabel <$> lift (addressPage accId AddrInternal (Page 5 0))) `dbShouldBeE` [""]
+        (map dBAddressLabel <$> lift (addressesAfter accId AddrExternal Nothing Nothing)) `dbShouldBeE` ["Rent"]
+        (map dBAddressLabel <$> lift (addressesAfter accId AddrInternal Nothing Nothing)) `dbShouldBeE` [""]
 
     it "gives a Bitcoin Cash account addresses in the cash address format" $
       inDatabaseE $ do
@@ -254,8 +254,8 @@ restoringSpec ctx =
         accId <- account ctx
         extendChainTo ctx accId AddrExternal 30
         extendChainTo ctx accId AddrInternal 3
-        listed accId AddrExternal (Page 100 0) `dbShouldBeE` [29, 28 .. 0]
-        listed accId AddrInternal (Page 100 0) `dbShouldBeE` [2, 1, 0]
+        listed accId AddrExternal Nothing Nothing `dbShouldBeE` [29, 28 .. 0]
+        listed accId AddrInternal Nothing Nothing `dbShouldBeE` [2, 1, 0]
         addressPath btc accId (externalAddr 9) `dbShouldBeE` Just (Deriv :/ 0 :/ 9)
         addressPath btc accId (internalAddr 2) `dbShouldBeE` Just (Deriv :/ 1 :/ 2)
         nextIndices accId `dbShouldBeE` (30, 3)
@@ -288,8 +288,8 @@ restoringSpec ctx =
         -- The chains moved past index 1 but nothing was stored there
         lift $ P.delete $ DBAddressKey accId False 1
         lift $ P.delete $ DBAddressKey accId True 1
-        listed accId AddrExternal (Page 100 0) `dbShouldBeE` [2, 0]
-        listed accId AddrInternal (Page 100 0) `dbShouldBeE` [2, 0]
+        listed accId AddrExternal Nothing Nothing `dbShouldBeE` [2, 0]
+        listed accId AddrInternal Nothing Nothing `dbShouldBeE` [2, 0]
         (Map.size . fst <$> allAddressesMap btc accId) `dbShouldBeE` 4
         lift $ dbShouldFailWith "Address 1 does not exist" $ setAddrLabel accId 1 "gone"
         -- The chains go on after it, and the change skips to an address that exists
@@ -308,7 +308,7 @@ databaseSpec ctx =
         updateAddressBalances btc [Store.Balance (externalAddr 0) 5000 300 2 3 9000]
         -- An address the wallet does not have is passed over
         updateAddressBalances btc [paidOnce (otherAddr 0) 1000]
-        rows <- lift $ addressPage accId AddrExternal (Page 5 0)
+        rows <- lift $ addressesAfter accId AddrExternal Nothing Nothing
         liftIO $ map balanceOf rows `shouldBe` [AddressBalance 0 0 0 0 0, AddressBalance 5000 300 2 3 9000]
 
     it "sums the balances of the addresses into the account's" $
@@ -385,16 +385,32 @@ databaseSpec ctx =
         lift (usedAddresses ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"])
           `dbShouldBeE` ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]
 
-    it "lists the addresses of a chain newest first, a page at a time" $
+    it "lists the addresses of a chain newest first, after a given one when asked" $
       inDatabaseE $ do
         accId <- account ctx
         replicateM_ 3 $ genExtAddress ctx cfg accId ""
         _ <- nextChangeAddress ctx cfg accId []
-        listed accId AddrExternal (Page 5 0) `dbShouldBeE` [2, 1, 0]
-        listed accId AddrExternal (Page 2 0) `dbShouldBeE` [2, 1]
-        listed accId AddrExternal (Page 2 2) `dbShouldBeE` [0]
-        listed accId AddrExternal (Page 2 3) `dbShouldBeE` []
-        listed accId AddrInternal (Page 5 0) `dbShouldBeE` [0]
+        listed accId AddrExternal Nothing Nothing `dbShouldBeE` [2, 1, 0]
+        listed accId AddrExternal Nothing (Just 2) `dbShouldBeE` [2, 1]
+        listed accId AddrExternal (Just 1) (Just 2) `dbShouldBeE` [0]
+        listed accId AddrExternal (Just 0) Nothing `dbShouldBeE` []
+        listed accId AddrInternal Nothing Nothing `dbShouldBeE` [0]
+
+    it "names the row of an address of the account on its chain, for --after, and refuses one of the other chain" $
+      inDatabaseE $ do
+        accId <- account ctx
+        replicateM_ 2 $ genExtAddress ctx cfg accId ""
+        _ <- nextChangeAddress ctx cfg accId []
+        (dBAddressIndex <$> listedAddress btc accId AddrExternal "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg") `dbShouldBeE` 1
+        lift $
+          dbShouldFailWith "The address 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg is not a change address of the account" $
+            listedAddress btc accId AddrInternal "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"
+        lift $
+          dbShouldFailWith "The address 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU is not a receiving address of the account" $
+            listedAddress btc accId AddrExternal "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
+        lift $
+          dbShouldFailWith "The address nothing is not valid on btc" $
+            listedAddress btc accId AddrExternal "nothing"
 
     it "maps every address of the account to its path and its balance" $
       inDatabaseE $ do
@@ -423,7 +439,7 @@ databaseSpec ctx =
         addressPath btc accId (internalAddr 0) `dbShouldBeE` Just (Deriv :/ 1 :/ 0)
         addressPath btc accId externalAddr2 `dbShouldBeE` Nothing
         addressPath btc accId (otherAddr 0) `dbShouldBeE` Nothing
-        listed accId AddrExternal (Page 5 0) `dbShouldBeE` [0]
+        listed accId AddrExternal Nothing Nothing `dbShouldBeE` [0]
 
     it "keeps the account's addresses with their paths, once each" $
       inDatabaseE $ do
@@ -470,9 +486,9 @@ derivingSpec ctx =
       deriveChainAddress ctx (testAccountPub ctx) intDeriv 0 `shouldReturn` Just (internalAddr 0)
 
     it "lists a window of a chain with the indices" $ do
-      chainAddresses ctx (testAccountPub ctx) extDeriv (Page 3 2)
+      chainAddresses ctx (testAccountPub ctx) extDeriv 2 3
         `shouldReturn` [(externalAddr 2, 2), (externalAddr 3, 3), (externalAddr 4, 4)]
-      chainAddresses ctx (testAccountPub ctx) intDeriv (Page 0 5) `shouldReturn` []
+      chainAddresses ctx (testAccountPub ctx) intDeriv 5 0 `shouldReturn` []
 
 jsonSpec :: Spec
 jsonSpec =
