@@ -17,9 +17,9 @@ where
 import Data.List (find, isPrefixOf, isSuffixOf)
 import Haskoin.Wallet.Parser.Args
 import Haskoin.Wallet.Parser.Help
+import Haskoin.Wallet.Style (Output, Style, outputOf, putDoc)
 import qualified Options.Applicative as O
 import Prettyprinter (Doc)
-import Prettyprinter.Render.Terminal (AnsiStyle)
 import System.Environment (getArgs)
 import System.Exit (ExitCode (..), exitWith)
 import System.IO (Handle, stderr, stdout)
@@ -33,11 +33,13 @@ runProgram program = do
   args <- getArgs
   case requestOf (programValueOptions program) args of
     -- As optparse-applicative did: the help, as a failure
-    NothingTyped -> leave stderr (ExitFailure 1) (programHelp program)
+    NothingTyped -> leave stderr (ExitFailure 1) (`programHelp` program)
     HelpOf word -> leave stdout ExitSuccess (helpOf word)
     Parse -> parse args
   where
-    helpOf word = maybe (programHelp program) (commandHelp program) (word >>= commandNamed program)
+    helpOf word output = case word >>= commandNamed program of
+      Just c -> commandHelp program c
+      Nothing -> programHelp output program
 
     parse args =
       case O.execParserPure O.defaultPrefs (programInfo program) args of
@@ -51,15 +53,20 @@ runProgram program = do
           case command of
             -- As optparse-applicative did: a command typed alone that
             -- needs arguments gets its help, as a failure
-            Just c | typedAlone c args -> leave stderr code (commandHelp program c)
-            _ -> leave stderr code (usageError parserHelp program command)
+            Just c | typedAlone c args -> leave stderr code (const (commandHelp program c))
+            _ -> leave stderr code (const (usageError parserHelp program command))
 
     typedAlone :: CommandSpec cmd -> [String] -> Bool
     typedAlone c args = dropWhile (/= c.name) args == [c.name]
 
--- | Print the document on the handle, and leave with the code
-leave :: Handle -> ExitCode -> Doc AnsiStyle -> IO a
-leave h code doc = putHelp h doc >> exitWith code
+-- | Print the document on the handle, styled or plain as the handle
+-- takes it, and leave with the code. The document may differ between the
+-- two, as the list of commands does.
+leave :: Handle -> ExitCode -> (Output -> Doc Style) -> IO a
+leave h code doc = do
+  output <- outputOf h
+  putDoc h output (doc output)
+  exitWith code
 
 -- | What the arguments ask for, before they are parsed
 data Request

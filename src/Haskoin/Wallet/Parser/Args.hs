@@ -88,8 +88,8 @@ instance Alternative Args where
   -- The default many and some are defined by each other, and would build
   -- the usage and the rows without end. Repeated or not, an option has one
   -- row.
-  many a = Args (Optional a.usage) a.rows (many a.parser)
-  some a = a {parser = some a.parser}
+  many a = Args (Optional (Repeated a.usage)) a.rows (many a.parser)
+  some a = Args (Repeated a.usage) a.rows (some a.parser)
 
 -- | One usage or the other. A branch with nothing to type, a pure value,
 -- makes the other optional: that is what 'optional' builds.
@@ -109,8 +109,10 @@ data Usage
     Sequence Usage Usage
   | -- | One or the other
     Choice Usage Usage
-  | -- | Left out, or given, once or more
+  | -- | Left out, or given
     Optional Usage
+  | -- | Given once or more
+    Repeated Usage
   deriving (Eq, Show)
 
 -- | What the help says of one option, flag or argument
@@ -278,8 +280,13 @@ data Program cmd opts = Program
   { name :: String,
     -- | What stands for the command in the usage line
     commandUsage :: String,
-    -- | What the program does, shown under the usage line
+    -- | What the program does, at the top of its help
     intro :: String,
+    -- | The commands whose name is also an everyday word, such as coins.
+    -- The help takes such a word for the command only in backticks:
+    -- `coins`. It takes the name of another command for the command
+    -- wherever it is.
+    everydayNames :: [String],
     -- | The paragraphs under the list of commands, as the details of a
     -- command
     details :: String,

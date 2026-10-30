@@ -1,13 +1,14 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 
 -- | The command line of hw, before anything runs: the usage lines its help
--- shows, and what the arguments ask for
+-- shows, the commands its texts name, and what the arguments ask for
 module Haskoin.Wallet.ParserSpec (spec) where
 
 import Haskoin.Wallet.Parser (program)
 import Haskoin.Wallet.Parser.Args (Args (..), CommandSpec (..))
-import Haskoin.Wallet.Parser.Help (usageParts)
+import Haskoin.Wallet.Parser.Help (mentionedCommands, usageParts)
 import Haskoin.Wallet.Parser.Run (Request (..), commandNamed, requestOf)
+import Haskoin.Wallet.Style (renderPlain)
 import Test.Hspec
 
 spec :: Spec
@@ -16,21 +17,35 @@ spec = do
     it "puts an option that may be left out in brackets, its names separated by a bar" $
       usageOf "receive" `shouldBe` "[-a|--account NAME] [-l|--label LABEL]"
 
-    -- The argument is repeated, the coins may be, and the strategy has a
-    -- default: an argument shows once, an option with a default in brackets
+    -- The recipients and the coins may be repeated, and the strategy has a
+    -- default
     it "lists the options of preparetx as they are typed" $
       usageOf "preparetx"
-        `shouldBe` "ADDRESS:AMOUNT [-a|--account NAME] [-f|--feerate RATE] [-d|--dust SATOSHIS] [-r|--recipientpay] [-m|--minconf INT] [--strategy STRATEGY] [-o|--output FILENAME] [-c|--coin TXHASH:INDEX] [--spendfrom ADDRESS] [--select] [-y|--yes] [--changeback | --newchange]"
+        `shouldBe` "ADDRESS:AMOUNT... [-a|--account NAME] [-f|--feerate RATE] [-d|--dust SATOSHIS] [-r|--recipientpay] [-m|--minconf INT] [--strategy STRATEGY] [-o|--output FILENAME] [-c|--coin TXHASH:INDEX]... [--spendfrom ADDRESS]... [--select] [-y|--yes] [--changeback | --newchange]"
+
+    it "follows what may be given several times with ..., after the brackets of an optional one" $
+      usageOf "preparesendall"
+        `shouldBe` "ADDRESS[:AMOUNT]... [-a|--account NAME] [-f|--feerate RATE] [-d|--dust SATOSHIS] [-m|--minconf INT] [-o|--output FILENAME] [-c|--coin TXHASH:INDEX]... [--spendfrom ADDRESS]... [--spenddust | --leavedust] [-y|--yes]"
 
     it "puts a choice in parentheses, and a required option with two names too" $
       usageOf "verifymsg" `shouldBe` "(ADDRESS SIGNATURE MESSAGE | (-i|--input FILENAME)) [-n|--network NETWORK]"
 
     it "shows an option that has to be given at least once as required" $
       usageOf "preparesweep"
-        `shouldBe` "[-a|--account NAME] [-n|--network NETWORK] [-k|--prvkeys FILENAME] [-w|--sweepfrom ADDRESS] [--addressfile FILENAME] (-t|--sweepto ADDRESS[:AMOUNT]) [-c|--coin TXHASH:INDEX] [-o|--output FILENAME] [-f|--feerate RATE] [-d|--dust SATOSHIS] [-y|--yes]"
+        `shouldBe` "[-a|--account NAME] [-n|--network NETWORK] [-k|--prvkeys FILENAME] [-w|--sweepfrom ADDRESS]... [--addressfile FILENAME] (-t|--sweepto ADDRESS[:AMOUNT])... [-c|--coin TXHASH:INDEX]... [-o|--output FILENAME] [-f|--feerate RATE] [-d|--dust SATOSHIS] [-y|--yes]"
 
     it "is empty for a command without options" $
       usageOf "version" `shouldBe` ""
+
+  describe "The commands a text of the help names" $ do
+    it "are those named in it, in its order" $
+      mentionedCommands program "Sign it with signtx, then send it with sendtx." `shouldBe` ["signtx", "sendtx"]
+
+    it "are each named once, however often the text names them" $
+      mentionedCommands program "signtx, then sendtx, then signtx again" `shouldBe` ["signtx", "sendtx"]
+
+    it "include a command named by an everyday word only when it is in backticks" $
+      mentionedCommands program "The coins of the last sync, as `coins` lists them." `shouldBe` ["coins"]
 
   describe "What the arguments ask for" $ do
     it "is the help of the command named, with --help anywhere before --" $
@@ -52,7 +67,7 @@ spec = do
       requestOf unitOptions [] `shouldBe` NothingTyped
   where
     usageOf name = case commandNamed program name of
-      Just command -> unwords (usageParts command.args.usage)
+      Just command -> unwords (map renderPlain (usageParts command.args.usage))
       Nothing -> error $ "hw has no command " <> name
     -- The options of hw that take a value
     unitOptions = ["-u", "--unit"]

@@ -54,8 +54,9 @@ The networks are `btc`, `bch`, `btctest`, `bchtest4`, `bchtest`, `btcreg` and
 ## Usage
 
 `hw --help` lists the commands, and `hw COMMAND --help` explains one. The
-commands marked `!` in the list ask for a mnemonic or private keys. Run them on
-an offline computer if you can.
+commands in magenta in the list ask for a mnemonic or private keys. Run them on
+an offline computer if you can. When the help is not shown on a terminal, or
+with `NO_COLOR` set, they are marked `!` instead.
 
 Two options work with every command, before or after it:
 

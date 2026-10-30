@@ -775,23 +775,37 @@ signedPayment ctx = signedByWallet ctx (unsignedPayment ctx)
 failureSpec :: Ctx -> Spec
 failureSpec ctx = do
   describe "The help" $ do
-    it "of a command is shown with --help, and hw exits with success" $
+    it "of a command is shown with --help, its summary first, and hw exits with success" $
       withHome $ \home -> do
         run <- hw home ["signtx", "--help"] []
         runExit run `shouldBe` ExitSuccess
-        runOut run `shouldSatisfy` Text.isPrefixOf "Usage: hw signtx"
-        runOut run `shouldSatisfy` Text.isInfixOf "-i,--input FILENAME"
+        runOut run `shouldSatisfy` Text.isPrefixOf "Sign a pending transaction or a transaction file\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "Usage: hw signtx"
+        runOut run `shouldSatisfy` Text.isInfixOf "-i, --input FILENAME"
+
+    it "of a command that asks for a mnemonic says to run it on an offline computer" $
+      withHome $ \home -> do
+        run <- hw home ["signtx", "--help"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "This command asks for a mnemonic or private keys.\nRun it on an offline computer if you can.\n"
+
+    -- The text of preparetx names them in this order
+    it "of a command ends with the commands its text names" $
+      withHome $ \home -> do
+        run <- hw home ["preparetx", "--help"] []
+        runOut run `shouldSatisfy` Text.isSuffixOf "See also: signtx, sendtx, pendingtxs, deletetx, bumpfee\n"
 
     it "of the program lists the commands by group with --help" $
       withHome $ \home -> do
         run <- hw home ["--help"] []
         runExit run `shouldBe` ExitSuccess
-        runOut run `shouldSatisfy` Text.isPrefixOf "Usage: hw "
+        runOut run `shouldSatisfy` Text.isInfixOf "Usage: hw COMMAND"
         runOut run `shouldSatisfy` Text.isInfixOf "Payments\n  fees "
 
-    it "marks the commands that ask for a mnemonic or private keys with !" $
+    -- In a pipe, the help has no colours to show them
+    it "marks the commands that ask for a mnemonic or private keys with ! when plain" $
       withHome $ \home -> do
         run <- hw home ["--help"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "The commands marked ! ask for a mnemonic or private keys."
         runOut run `shouldSatisfy` Text.isInfixOf "! Generate a new mnemonic"
         runOut run `shouldSatisfy` (not . Text.isInfixOf "! Send a signed transaction")
 
@@ -805,14 +819,14 @@ failureSpec ctx = do
       withHome $ \home -> do
         run <- hw home ["--unit", "sat", "sync", "--json", "--help"] []
         runExit run `shouldBe` ExitSuccess
-        runOut run `shouldSatisfy` Text.isPrefixOf "Usage: hw sync"
+        runOut run `shouldSatisfy` Text.isInfixOf "Usage: hw sync"
 
     it "of a command is shown when it is typed alone and needs arguments, as a failure" $
       withHome $ \home -> do
         run <- hw home ["preparetx"] []
         runExit run `shouldBe` ExitFailure 1
-        runErr run `shouldSatisfy` Text.isPrefixOf "Usage: hw preparetx"
-        runErr run `shouldSatisfy` Text.isInfixOf "Available options:"
+        runErr run `shouldSatisfy` Text.isPrefixOf "Prepare a payment, without signing it\n"
+        runErr run `shouldSatisfy` Text.isInfixOf "Options:"
 
     it "of the program is shown when nothing is typed, as a failure" $
       withHome $ \home -> do
@@ -838,8 +852,13 @@ failureSpec ctx = do
       withHome $ \home -> do
         run <- hw home ["mnemonic", "--split", "20"] []
         runExit run `shouldBe` ExitFailure 1
-        runErr run `shouldSatisfy` Text.isInfixOf "option --split: The --split value has to be between 1 and 12"
+        runErr run `shouldSatisfy` Text.isInfixOf "Error: option --split: The --split value has to be between 1 and 12"
         runErr run `shouldSatisfy` Text.isInfixOf "Usage: hw mnemonic"
+
+    it "ends with the help to read" $
+      withHome $ \home -> do
+        run <- hw home ["mnemonic", "--split", "20"] []
+        runErr run `shouldSatisfy` Text.isSuffixOf "Type hw mnemonic --help for the help of mnemonic.\n"
 
     it "says what a command misses" $
       withHome $ \home -> do

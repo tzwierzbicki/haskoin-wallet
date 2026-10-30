@@ -300,15 +300,14 @@ program :: Program Command (AmountUnit, Bool)
 program =
   Program
     { name = "hw",
-      -- COMMAND --help, rather than COMMAND, tells how to get the help of
-      -- a command
-      commandUsage = "COMMAND --help",
+      commandUsage = "COMMAND",
+      -- The help adds which commands to run on an offline computer
       intro =
         [r|
 hw is a BIP44 wallet for Bitcoin and Bitcoin Cash. It stores public keys
-only. The commands marked ! ask for a mnemonic or private keys. Run them on an
-offline computer if you can.
+only.
 |],
+      everydayNames = ["mnemonic", "recover", "accounts", "sync", "receive", "balances", "label", "coins", "fees", "backup", "version"],
       details =
         [r|
 A payment takes three steps:
@@ -482,7 +481,7 @@ part, and uses no roll twice.
 -- | The parts a mnemonic is typed in, when mnemonic --split made it
 mnemonicPartsOption :: Args Natural
 mnemonicPartsOption =
-  partsOption "The number of parts of the mnemonic, when mnemonic --split made it. hw asks for each part."
+  partsOption "The number of parts of the mnemonic, when `mnemonic` --split made it. hw asks for each part."
 
 -- | The --split option, with the help of the command about it
 partsOption :: String -> Args Natural
@@ -571,7 +570,7 @@ recoverCommand =
       summary = "Find the accounts of a mnemonic that were paid",
       details =
         [r|
-recover asks for the mnemonic, then searches the network for the accounts of
+`recover` asks for the mnemonic, then searches the network for the accounts of
 its seed that were paid. It checks the accounts in order from index 0, and
 asks the server about the receiving addresses of each. Each account that was
 paid is added, named after the network and its index, such as btc0, and
@@ -581,12 +580,12 @@ The search stops after --account-gap accounts in a row without a payment.
 BIP44 stops at the first such account. hw looks further, since accounts
 created on an offline computer may never have been paid.
 
-recover needs the mnemonic and the server at the same time. To keep the
+`recover` needs the mnemonic and the server at the same time. To keep the
 mnemonic offline, create the accounts on the offline computer with createacc
-instead. Copy them with exportacc and importacc, and run sync.
+instead. Copy them with exportacc and importacc, and run `sync`.
 
 hw normalizes a passphrase as BIP39 asks, and older versions did not. When
-nothing is found, recover also tries the passphrase as typed. It says so if
+nothing is found, `recover` also tries the passphrase as typed. It says so if
 that finds accounts.
 |],
       args =
@@ -631,7 +630,7 @@ deleteAccCommand =
         [r|
 deleteacc removes the account with its addresses, labels, transactions, coins
 and pending transactions. The NETWORK and the DERIVPATH must be those of the
-account, as accounts shows them. They confirm which account to delete.
+account, as `accounts` shows them. They confirm which account to delete.
 
 The funds stay on the chain, and the mnemonic can still spend them. The labels
 are lost.
@@ -647,7 +646,7 @@ fullDerivationOption :: Args HardPath
 fullDerivationOption =
   argument (maybeReader parseHard) $
     metavar "DERIVPATH"
-      <> help "The derivation path of the account, as accounts shows it. Quote it for the shell, as in \"/44'/0'/3'\"."
+      <> help "The derivation path of the account, as `accounts` shows it. Quote it for the shell, as in \"/44'/0'/3'\"."
 
 networkArg :: Args Network
 networkArg =
@@ -675,7 +674,7 @@ testAccCommand =
 testacc asks for the mnemonic and the passphrase, and checks that they give
 the public key of the account. Use it to test a mnemonic you wrote down,
 before you rely on it. Nothing is signed. When they match, hw records the
-fingerprint of the seed, which accounts shows.
+fingerprint of the seed, which `accounts` shows.
 |],
       args =
         CommandTestAcc
@@ -730,7 +729,7 @@ then watch it and prepare its payments without the mnemonic. This is how an
 online computer works with an offline signer.
 
 The fingerprint is the four bytes that PSBTs and output descriptors write
-before a key of the seed. accounts groups the accounts of one seed by it.
+before a key of the seed. `accounts` groups the accounts of one seed by it.
 Importing the file of an account the wallet has already records the
 fingerprint, when the wallet did not know it.
 |]
@@ -813,10 +812,10 @@ Each call gives the next receiving address of the account, at the path
 M/44'/coin'/index'/0/i. The wallet pays the change of its transactions to other
 addresses, at M/44'/coin'/index'/1/i. addrs --internal lists them.
 
-receive gives out at most 20 unused addresses in a row, or as many as the gap
+`receive` gives out at most 20 unused addresses in a row, or as many as the gap
 of the configuration file says. A wallet restored from the mnemonic stops
 looking after that many unused addresses, and would miss later payments. Once that many
-addresses await a payment, receive refuses. Give out one of them again. addrs
+addresses await a payment, `receive` refuses. Give out one of them again. addrs
 lists them.
 |],
       args = CommandReceive <$> (Receive <$> accountOption <*> labelOption)
@@ -843,7 +842,7 @@ addrsCommand =
 The newest addresses come first. Each shows its derivation path, /0/i for a
 receiving address and /1/i for a change address, and its label. Then come its
 number of transactions, what it received, and what it can spend now, as
-accounts describes.
+`accounts` describes.
 |],
       args =
         CommandAddrs
@@ -888,14 +887,14 @@ balancesCommand =
       summary = "List the addresses of an account that hold coins",
       details =
         [r|
-balances lists the receiving and change addresses that hold coins, the
+`balances` lists the receiving and change addresses that hold coins, the
 largest total first. Each shows its derivation path, /0/i for a receiving
 address and /1/i for a change address, and three amounts. The total is the
 value of all its coins. The spendable amount is what it can spend now, as
-accounts describes. The unspendable amount is the rest. It counts the coins
+`accounts` describes. The unspendable amount is the rest. It counts the coins
 locked by a pending transaction or by lockcoin, the unconfirmed payments from
 other wallets, and the coinbase coins with fewer than 100 confirmations.
-coins tells which applies to each coin.
+`coins` tells which applies to each coin.
 |],
       args =
         CommandBalances
@@ -947,7 +946,7 @@ txsCommand =
       details =
         [r|
 The list is as of the last sync. Unconfirmed transactions come first, then
-the newest. The transactions you prepared, and those you sent that sync has
+the newest. The transactions you prepared, and those you sent that `sync` has
 not seen yet, are in pendingtxs.
 |],
       args =
@@ -1060,7 +1059,7 @@ prepareSendAllCommand =
       details =
         [r|
 preparesendall prepares a transaction that sends every coin the account can
-spend now, with no change. That is the spendable balance accounts shows. Like
+spend now, with no change. That is the spendable balance `accounts` shows. Like
 preparetx, it needs no mnemonic. The transaction waits among the pending
 transactions for signtx.
 
@@ -1138,7 +1137,7 @@ selectOption =
 
 -- | A coin to spend, as coins lists it
 coinOption :: Args OutPoint
-coinOption = coinOptionWith "Coin control: spend this coin, as coins lists it. Repeat for several coins."
+coinOption = coinOptionWith "Coin control: spend this coin, as `coins` lists it. Repeat for several coins."
 
 -- | A coin to sweep, by its outpoint
 sweepCoinOption :: Args OutPoint
@@ -1162,7 +1161,7 @@ feeOption =
       <> long "feerate"
       <> metavar "RATE"
       <> completeWith ["low", "median", "high"]
-      <> help "The fee rate in satoshis per byte, or low, median or high for that rate of recent blocks, as fees shows them. Without it, hw shows those rates and asks, median by default. A rate above 100 needs a confirmation."
+      <> help "The fee rate in satoshis per byte, or low, median or high for that rate of recent blocks, as `fees` shows them. Without it, hw shows those rates and asks, median by default. A rate above 100 needs a confirmation."
 
 -- | Whether preparetx and preparesweep take a high fee rate without asking
 highFeeYesOption :: Args Bool
@@ -1248,7 +1247,7 @@ pendingTxsCommand =
         [r|
 A pending transaction is one that preparetx, preparesendall, bumpfee or
 preparesweep made, or that importtx added. It is unsigned, signed, or sent.
-sync retires it once the network lists it. The newest come first, each with
+`sync` retires it once the network lists it. The newest come first, each with
 its account, its nosigHash and when it was created. The other commands name a
 pending transaction by its nosigHash.
 
@@ -1352,7 +1351,7 @@ can then be spent again, and its change address is free again.
 A transaction sent with sendtx can be deleted only once the server no longer
 knows it. That happens when the nodes dropped it from their mempools, or never
 accepted it. While the server lists it, it may still confirm, and the next
-sync retires it.
+`sync` retires it.
 
 Delete a transaction that pendingtxs marks as conflicted. One of its coins was
 spent by another transaction, or is gone, so it can no longer be sent.
@@ -1448,7 +1447,7 @@ unlockcoin frees it.
 
 Only a free coin can be locked. A coin that a pending transaction spends is
 locked already, and deletetx frees it. The lock stays while the coin confirms,
-and goes with the coin once it is spent elsewhere. coins --locked lists the
+and goes with the coin once it is spent elsewhere. `coins` --locked lists the
 locked coins.
 |],
       args = CommandLockCoin <$> coinArg
@@ -1473,7 +1472,7 @@ coinArg :: Args OutPoint
 coinArg =
   argument coinReader $
     metavar "TXHASH:INDEX"
-      <> help "The coin, as coins lists it: the id of its transaction, a colon, and its index among the outputs"
+      <> help "The coin, as `coins` lists it: the id of its transaction, a colon, and its index among the outputs"
 
 -- | A coin as coins lists it, and as a block explorer often writes it: the
 -- id of its transaction, a colon, and its index among the outputs
@@ -1519,7 +1518,7 @@ transactions.
 The network does not tell hw when it refuses a replacement. A replacement
 must also pay the fees of transactions hw cannot see, such as a recipient's
 spend of the payment. When a replacement never confirms, delete it with
-deletetx, run sync, and bump again at a higher fee rate.
+deletetx, run `sync`, and bump again at a higher fee rate.
 
 Some transactions cannot be bumped. One sent before hw marked its transactions
 replaceable cannot. Neither can one that spends coins of another wallet, such
@@ -1555,7 +1554,7 @@ replacementFeeOption =
       <> long "feerate"
       <> metavar "RATE"
       <> completeWith ["low", "median", "high"]
-      <> help "The fee rate of the replacement in satoshis per byte, or low, median or high for that rate of recent blocks, as fees shows them. It must be above the rate of the transaction replaced. Without it, hw shows those rates and asks. A rate above 100 needs a confirmation."
+      <> help "The fee rate of the replacement in satoshis per byte, or low, median or high for that rate of recent blocks, as `fees` shows them. It must be above the rate of the transaction replaced. Without it, hw shows those rates and asks. A rate above 100 needs a confirmation."
 
 {- sendtx -}
 
@@ -1579,7 +1578,7 @@ transaction, for a fee below what the nodes relay for example. Or it may just
 be slow. Run sendtx again later.
 
 Give a pending transaction by its NOSIGHASH. Once the server sees it, it is
-marked as sent. sync then sends it again whenever the server loses it, and
+marked as sent. `sync` then sends it again whenever the server loses it, and
 retires it once the network lists it. A transaction the network refuses for
 good is sent again on every sync, until you delete it with deletetx.
 
@@ -1618,19 +1617,19 @@ syncCommand =
       summary = "Update the accounts from the network",
       details =
         [r|
-sync asks the server for the latest balances, transactions and coins of the
+`sync` asks the server for the latest balances, transactions and coins of the
 accounts.
 
 It first looks for used addresses past the ones each account has, as far as
 the gap of the configuration file, 20 by default. Someone paying to the
 account's public key, or another wallet of the same seed, may have used them.
-sync adds each used address it finds, with the ones before it. It keeps
+`sync` adds each used address it finds, with the ones before it. It keeps
 looking while it finds more, so the first sync of an account finds every
 address used so far. It misses an address that comes after more unused ones in
 a row than the gap. Raise the gap for one sync to look further. The same gap
-limits how many unused addresses hw receive gives out.
+limits how many unused addresses hw `receive` gives out.
 
-sync also checks the pending transactions. One the network lists is retired,
+`sync` also checks the pending transactions. One the network lists is retired,
 even under another id, as when a miner or another signer changed its
 signatures. One you sent that the server no longer knows is sent again, since
 nodes forget unconfirmed transactions. One whose coin another transaction

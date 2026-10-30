@@ -78,6 +78,7 @@ library
       Haskoin.Wallet.Schema.V3
       Haskoin.Wallet.Schema.V4
       Haskoin.Wallet.Store
+      Haskoin.Wallet.Style
       Haskoin.Wallet.Sync
       Haskoin.Wallet.TxBuilding
       Haskoin.Wallet.TxBumpFee
