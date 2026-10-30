@@ -241,6 +241,9 @@ data PrepareSweep = PrepareSweep
     -- | The private keys of the addresses swept, if at hand
     keys :: !(Maybe KeySource),
     sweepFrom :: ![Text],
+    -- | A file of more addresses to sweep from, for more of them than the
+    -- command line takes
+    addressFile :: !(Maybe FilePath),
     -- | The destinations as typed: an address, or an address and its
     -- amount, ADDRESS:AMOUNT
     sweepTo :: ![Text],
@@ -1742,6 +1745,7 @@ prepareSweepParser = do
           <*> sweepNetworkOption
           <*> prvKeysMaybeOption
           <*> many sweepFromOption
+          <*> addressFileOption
           <*> some sweepToOption -- some: at least one
           <*> many sweepCoinOption
           <*> outputFileMaybeOption
@@ -1754,8 +1758,10 @@ prepareSweepParser = do
         [r|
 A sweep moves coins whose private keys you hold, from an old wallet for
 example, to new addresses. preparesweep takes every coin at the --sweepfrom
-addresses, every coin at the addresses of the --prvkeys keys, and the --coin
-coins. Give any of the three.
+addresses and at those of an --addressfile file, every coin at the addresses
+of the --prvkeys keys, and the --coin coins. Give any of them. The file holds
+addresses separated by spaces or line breaks, as a --prvkeys file holds keys:
+an old wallet may have more addresses than a command line takes.
 
 The private keys are needed only to sign, with signsweep, so they can stay on
 another computer. Without them, hw counts every key as compressed, so the fee
@@ -1795,10 +1801,10 @@ sweepFromOption =
 addressFileOption :: Parser (Maybe FilePath)
 addressFileOption =
   optional . strOption $
-    long "addrfile"
+    long "addressfile"
       <> metavar "FILENAME"
       <> action "file"
-      <> help "File containing addresses to sweep from"
+      <> help "A file of addresses whose coins to sweep, separated by spaces or line breaks"
 
 sweepToOption :: Parser Text
 sweepToOption =

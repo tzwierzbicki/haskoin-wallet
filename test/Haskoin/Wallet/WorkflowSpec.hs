@@ -1731,6 +1731,15 @@ oldCoin ctx = fundingTx ctx 2 [(wikiAddr, 30000)]
 oldKeyChain :: Ctx -> Chain
 oldKeyChain ctx = Chain 800002 [(oldCoin ctx, Just 800000)]
 
+-- | A coin of 20000 satoshis at the first address of the second wallet,
+-- another old wallet
+otherOldCoin :: Ctx -> Tx
+otherOldCoin ctx = fundingTx ctx 11 [(externalAddr2, 20000)]
+
+-- | A chain whose block 800000 holds the coins of both old wallets
+twoOldWalletsChain :: Ctx -> Chain
+twoOldWalletsChain ctx = Chain 800002 [(oldCoin ctx, Just 800000), (otherOldCoin ctx, Just 800000)]
+
 -- | Write the key to a file in a home, as the user keeps it, with a note
 -- after it, and give its path
 writeKeyFile :: FilePath -> IO FilePath
@@ -1769,6 +1778,40 @@ sweepSpec ctx =
         _ <- answer home ["receive"] []
         prepared <- txOf =<< answer home ["preparesweep", "--coin", coinArg (oldCoin ctx) 0, "--sweepto", textOf (externalAddr 0), "--feerate", "10"] []
         paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 28080)]
+
+    it "takes the coins of the addresses of the --addressfile file" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        writeFile (home </> "addresses.txt") (textOf wikiAddr <> " old wallet\n")
+        prepared <- txOf =<< answer home ["preparesweep", "--addressfile", home </> "addresses.txt", "--sweepto", textOf (externalAddr 0), "--feerate", "10"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 28080)]
+
+    -- Two inputs and one output make 340 bytes, a fee of 3400: 30000 +
+    -- 20000 - 3400 = 46600
+    it "takes the coins of the --addressfile addresses along with those of --sweepfrom" $
+      withChain ctx (twoOldWalletsChain ctx) $ \home _ -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        writeFile (home </> "addresses.txt") (Text.unpack externalAddr2Text <> "\n")
+        prepared <- txOf =<< answer home ["preparesweep", "--sweepfrom", textOf wikiAddr, "--addressfile", home </> "addresses.txt", "--sweepto", textOf (externalAddr 0), "--feerate", "10"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 46600)]
+
+    -- The keys would be typed for nothing
+    it "is refused an --addressfile file that does not exist, before the keys are typed" $
+      withHome $ \home -> do
+        createMain home
+        run <- hw home ["preparesweep", "--prvkeys", "-", "--addressfile", home </> "addresses.txt", "--sweepto", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--feerate", "10"] []
+        run `shouldSatisfy` printed (noSuchFile (home </> "addresses.txt"))
+        runErr run `shouldNotSatisfy` Text.isInfixOf "Private keys"
+
+    -- The last letter of the address on the third line is wrong
+    it "is refused a line of the --addressfile file with words but no address, which is named" $
+      withHome $ \home -> do
+        createMain home
+        writeFile (home </> "addresses.txt") ("# The old wallet\n" <> textOf wikiAddr <> "\n1LoVGDgRs9hTfTNJNuXKSpywcbdvwRXpmX old wallet\n")
+        (errorOf <$> hwJson home ["preparesweep", "--addressfile", home </> "addresses.txt", "--sweepto", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--feerate", "10"] [])
+          `shouldReturn` Right "No address on line 3: 1LoVGDgRs9hTfTNJNuXKSpywcbdvwRXpmX old wallet"
 
     it "is refused when what remains for the destination is below the --dust limit" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do

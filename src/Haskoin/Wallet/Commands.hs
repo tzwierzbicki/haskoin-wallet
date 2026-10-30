@@ -859,16 +859,16 @@ cmdBumpFee ctx cfg opts =
 
 {- Sweeps -}
 
--- | Sweep coins to the destinations: the coins at the given addresses and
--- at the addresses of the given private keys, and the coins given by
--- outpoint. The keys are not needed here, only to sign: a sweep can be
--- prepared from addresses or coins alone. A sweep that pays an address of
--- the wallet is of the account of that address, on its network, and waits
--- among its pending transactions to be signed by its nosigHash. One that
--- pays no address of the wallet involves no account: hw is then a utility,
--- which writes the sweep to a file, on the --network given, to be signed
--- from there. That --network must be given: the default network of the
--- configuration does not apply. The keys, the coins and the legacy
+-- | Sweep coins to the destinations: the coins at the given addresses,
+-- typed or in a file, at the addresses of the given private keys, and the
+-- coins given by outpoint. The keys are not needed here, only to sign: a
+-- sweep can be prepared from addresses or coins alone. A sweep that pays an
+-- address of the wallet is of the account of that address, on its network,
+-- and waits among its pending transactions to be signed by its nosigHash.
+-- One that pays no address of the wallet involves no account: hw is then a
+-- utility, which writes the sweep to a file, on the --network given, to be
+-- signed from there. That --network must be given: the default network of
+-- the configuration does not apply. The keys, the coins and the legacy
 -- addresses of Bitcoin Cash read the same on Bitcoin, so a wrong guess
 -- would sweep the coins of the other chain. A destination is an address,
 -- or an address and its amount, as for preparesendall.
@@ -908,16 +908,21 @@ cmdPrepareSweep ctx cfg unit opts =
     paysNo name = "The sweep pays no address of the account " <> cs name
     -- The sweep on the network, which the account it pays, if any, knows
     sweepOn net accIdM = do
-      sweepFrom <- liftEither $ mapM (textToAddrE net) opts.sweepFrom
+      -- The addresses, the file and the destinations are checked before
+      -- the keys are typed, not after
+      typed <- liftEither $ mapM (textToAddrE net) opts.sweepFrom
+      listed <- maybe (return []) (addressesOfFile net) opts.addressFile
       sweepTo <- liftEither $ mapM (readRecipient net unit) opts.sweepTo
-      -- Before the keys are typed, not after
       liftEither $ checkSharing sweepTo
       feeByte <- chooseFeeRate cfg (webStore ctx cfg net) 1 opts.feeRate
       confirmFeeRate opts.yes feeByte opts.dust
       keys <- maybe (return []) (readSecKeys terminal net) opts.keys
-      found <- fetchSweepCoins net ctx (webStore ctx cfg net) accIdM keys sweepFrom opts.coins (fst <$> sweepTo)
+      found <- fetchSweepCoins net ctx (webStore ctx cfg net) accIdM keys (typed <> listed) opts.coins (fst <$> sweepTo)
       gen <- liftIO initStdGen
       liftEither $ buildSweepSignData net ctx gen found sweepTo feeByte opts.dust
+    -- The addresses of the --addressfile file, read on the network of the
+    -- sweep
+    addressesOfFile net file = liftEither . parseAddresses net =<< liftEitherIO (readTextFile file)
 
 -- | Sign a sweep with private keys: a pending transaction of the wallet,
 -- by its nosigHash, or one in a file. A sweep outside the wallet is signed

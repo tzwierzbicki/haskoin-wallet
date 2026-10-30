@@ -27,6 +27,7 @@ spec = do
   pageSpec
   errorSpec
   addressSpec
+  addressFileSpec
   numberSpec
   shuffleSpec
   sequenceSpec
@@ -82,6 +83,32 @@ addressSpec =
     it "is written in a message as its text, or as an address of another network" $ do
       addrToString btc segwitAddr `shouldBe` "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
       addrToString bch segwitAddr `shouldBe` "an address of another network"
+
+-- The file format of --addressfile, which is the one of a --prvkeys file
+addressFileSpec :: Spec
+addressFileSpec =
+  describe "The addresses of a file" $ do
+    it "are every address of every line, with comments and labels around them" $
+      parseAddresses btc addressFile `shouldBe` Right [externalAddr 0, otherAddr 0, externalAddr 1, otherAddr 1]
+
+    it "are none in an empty file" $
+      parseAddresses btc "" `shouldBe` Right []
+
+    -- The last letter of the address is wrong
+    it "are refused with a line that has words but no address, which is named" $
+      parseAddresses btc "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\n\n1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLk old wallet\n"
+        `shouldBe` Left "No address on line 3: 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLk old wallet"
+
+    it "are refused with an address written for another network" $
+      parseAddresses btc bchExternalAddrText `shouldBe` Left ("No address on line 1: " <> cs bchExternalAddrText)
+  where
+    addressFile =
+      "# The addresses of the old wallet\n"
+        <> "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj first address\n"
+        <> "\n"
+        <> "  # indented comment\n"
+        <> "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\n"
+        <> "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ two on a line\n"
 
 pageSpec :: Spec
 pageSpec =

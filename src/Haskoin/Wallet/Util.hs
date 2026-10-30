@@ -18,7 +18,7 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (isJust)
+import Data.Maybe (isJust, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Read as Read
@@ -78,6 +78,12 @@ textToAddrE :: Network -> Text -> Either String Address
 textToAddrE net a =
   maybeToEither ("The address " <> Text.unpack a <> " is not valid on " <> net.name) (textToAddr net a)
 
+-- | The addresses of a text, as an --addressfile file holds them: every
+-- word that is an address of the network, on any line, as 'wordsOfLines'
+-- reads them
+parseAddresses :: Network -> Text -> Either String [Address]
+parseAddresses net = wordsOfLines "address" (textToAddr net)
+
 -- | An address as it is written in a message or on the screen, or a
 -- mention of the mismatch when it cannot be written on the network
 addrToString :: Network -> Address -> String
@@ -87,6 +93,24 @@ addrToString net a = maybe "an address of another network" Text.unpack (addrToTe
 -- text on Bitcoin Cash, and a CashAddr one none on Bitcoin
 onNetwork :: Network -> Address -> Bool
 onNetwork net = isJust . addrToText net
+
+{- Files of words -}
+
+-- | The items of a text, as a file of private keys or of addresses holds
+-- them: every word that reads as one, on any line. A line starting with #
+-- is a comment. A line with words but no item is an error naming the line,
+-- so that a mistyped item alone on its line is not passed over. Another
+-- word on the line of an item is a label, left alone. The name of an item,
+-- "private key" or "address", is for the error.
+wordsOfLines :: String -> (Text -> Maybe a) -> Text -> Either String [a]
+wordsOfLines name readWord text = concat <$> mapM itemsOf (zip [1 :: Int ..] (Text.lines text))
+  where
+    itemsOf (number, line)
+      | null (Text.words line) || "#" `Text.isPrefixOf` Text.stripStart line = Right []
+      | null items = Left $ "No " <> name <> " on line " <> show number <> ": " <> Text.unpack line
+      | otherwise = Right items
+      where
+        items = mapMaybe readWord (Text.words line)
 
 {- Numbers -}
 

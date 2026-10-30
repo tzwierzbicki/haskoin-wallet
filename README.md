@@ -344,10 +344,10 @@ hw deletetx NOSIGHASH
 ### Sweeps
 
 **`hw preparesweep`** prepares a transaction that moves coins from outside the
-wallet: the coins at `--sweepfrom` addresses, at the addresses of `--prvkeys`
-keys, or given with `--coin`. The keys are needed only to sign, with
-**`hw signsweep`**. A sweep that pays an address of this wallet is kept as a
-pending transaction.
+wallet: the coins at `--sweepfrom` addresses or at those of an `--addressfile`
+file, at the addresses of `--prvkeys` keys, or given with `--coin`. The keys
+are needed only to sign, with **`hw signsweep`**. A sweep that pays an address
+of this wallet is kept as a pending transaction.
 
 ```console
 hw preparesweep --sweepfrom OLDADDRESS --sweepto MYADDRESS --feerate median

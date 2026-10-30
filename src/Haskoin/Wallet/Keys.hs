@@ -10,12 +10,11 @@ module Haskoin.Wallet.Keys where
 
 import Control.Applicative ((<|>))
 import Control.Exception (evaluate, try)
-import Data.Maybe (mapMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
-import qualified Data.Text as Text
 import Data.Text.Normalize (NormalizationMode (NFKD), normalize)
 import Haskoin
+import Haskoin.Wallet.Util (wordsOfLines)
 import Numeric.Natural (Natural)
 
 {- The keys of an account -}
@@ -136,15 +135,6 @@ parseSecKey net word = wif <|> mini <|> hex
     hex = secKey =<< decodeHex word
 
 -- | The private keys of a text, as a key file or a typed line holds them:
--- every word that is a key, on any line; a line starting with # is a
--- comment, and a line with words but no key is an error, so that a
--- mistyped key is not passed over.
+-- every word that is a key, on any line, as 'wordsOfLines' reads them
 parseSecKeys :: Network -> Text -> Either String [SecKey]
-parseSecKeys net text = concat <$> mapM keysOf (zip [1 :: Int ..] (Text.lines text))
-  where
-    keysOf (number, line)
-      | null (Text.words line) || "#" `Text.isPrefixOf` Text.stripStart line = Right []
-      | null keys = Left $ "No private key on line " <> show number <> ": " <> Text.unpack line
-      | otherwise = Right keys
-      where
-        keys = mapMaybe (parseSecKey net) (Text.words line)
+parseSecKeys net = wordsOfLines "private key" (parseSecKey net)
