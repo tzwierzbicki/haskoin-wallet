@@ -6,7 +6,9 @@
 
 module Haskoin.Wallet.Parser where
 
-import Data.List (find, intercalate)
+import Data.Char (isSpace)
+import Data.List (find, intercalate, isPrefixOf)
+import Data.List.Split (splitWhen)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Word (Word32)
@@ -18,6 +20,7 @@ import Haskoin.Wallet.FeeRates (FeeRateChoice, readFeeRateChoice)
 import Haskoin.Wallet.Util (Page (Page), readNatural)
 import Numeric.Natural (Natural)
 import Options.Applicative
+import Options.Applicative.Help.Chunk (extractChunk, paragraph, stringChunk, unChunk, vcatChunks, vsepChunks)
 import Options.Applicative.Help.Pretty
 import Text.RawString.QQ (r)
 
@@ -266,7 +269,7 @@ data Signing = Signing
 signingOptions :: Parser Signing
 signingOptions =
   Signing
-    <$> accountOption
+    <$> txAccountOption
     <*> optional nosigHashArg
     <*> inputFileMaybeOption
     <*> outputFileMaybeOption
@@ -284,9 +287,28 @@ programParser = do
     fullDesc
       <> progDesc
         [r|
-hw is a BIP-44 command-line wallet for bitcoin and bitcoin-cash. It allows
-sensitive commands (!) to be run on a separate offline computer. For more
-information on a command, type "hw COMMAND --help".
+hw is a BIP44 wallet for Bitcoin and Bitcoin Cash. It stores public keys
+only. The commands marked ! ask for a mnemonic or private keys. Run them on an
+offline computer if you can.
+|]
+      <> footerParagraphs
+        [r|
+A payment takes three steps:
+
+  hw preparetx ADDRESS:AMOUNT    prepare it, without any key
+  hw signtx NOSIGHASH            sign it with the mnemonic
+  hw sendtx NOSIGHASH            send it to the network
+
+To sign on an offline computer, create the account there with createacc. Copy
+it to the online computer with exportacc and importacc. Then carry each
+transaction between them with preparetx --output, signtx --input and sendtx
+--input.
+
+The options --unit and --json go before or after the command. The settings,
+such as the server, the default network and the address gap, are in
+~/.hw/config.json.
+
+Type hw COMMAND --help for the help of a command.
 |]
 
 jsonOption :: Parser Bool
@@ -294,10 +316,7 @@ jsonOption =
   switch $
     short 'j'
       <> long "json"
-      <> help
-        [r|
-Display the result as JSON.
-|]
+      <> help "Print the answer as JSON, for scripts. Questions and warnings go to stderr."
 
 unitOption :: Parser AmountUnit
 unitOption =
@@ -309,8 +328,8 @@ unitOption =
       <> completeWith ["btc", "bit", "sat"]
       <> help
         [r|
-The unit of the amounts shown, and of the amounts typed without a unit: btc, bit
-or sat (default: btc).
+The unit of the amounts shown, and of the amounts typed without a unit: btc,
+bit or sat (default: btc). A bit is 100 satoshis.
 |]
 
 commandParser :: Parser Command
@@ -318,21 +337,23 @@ commandParser =
   asum
     [ hsubparser $
         mconcat
-          [ commandGroup "Mnemonic and account management",
+          [ commandGroup "Mnemonics and accounts",
             command "mnemonic" mnemonicParser,
             command "createacc" createAccParser,
             command "recover" recoverParser,
             command "testacc" testAccParser,
-            command "renameacc" renameAccParser,
+            command "exportacc" exportAccParser,
+            command "importacc" importAccParser,
             command "accounts" accountsParser,
-            command "sync" syncParser,
+            command "renameacc" renameAccParser,
             command "deleteacc" deleteAccParser,
+            command "sync" syncParser,
             metavar "COMMAND",
             style (const "COMMAND --help")
           ],
       hsubparser $
         mconcat
-          [ commandGroup "Address management",
+          [ commandGroup "Addresses",
             command "receive" receiveParser,
             command "addrs" addrsParser,
             command "balances" balancesParser,
@@ -341,16 +362,7 @@ commandParser =
           ],
       hsubparser $
         mconcat
-          [ commandGroup "Transaction management",
-            command "txs" txsParser,
-            command "fees" feesParser,
-            command "preparetx" prepareTxParser,
-            command "preparesendall" prepareSendAllParser,
-            command "pendingtxs" pendingTxsParser,
-            command "signtx" signTxParser,
-            command "sendtx" sendTxParser,
-            command "bumpfee" bumpFeeParser,
-            command "deletetx" deleteTxParser,
+          [ commandGroup "Coins",
             command "coins" coinsParser,
             command "lockcoin" lockCoinParser,
             command "unlockcoin" unlockCoinParser,
@@ -358,34 +370,66 @@ commandParser =
           ],
       hsubparser $
         mconcat
-          [ commandGroup "Import/export commands",
-            command "exportacc" exportAccParser,
-            command "importacc" importAccParser,
+          [ commandGroup "Payments",
+            command "fees" feesParser,
+            command "preparetx" prepareTxParser,
+            command "preparesendall" prepareSendAllParser,
+            command "signtx" signTxParser,
+            command "sendtx" sendTxParser,
+            command "bumpfee" bumpFeeParser,
+            hidden
+          ],
+      hsubparser $
+        mconcat
+          [ commandGroup "Transactions",
+            command "txs" txsParser,
+            command "pendingtxs" pendingTxsParser,
             command "reviewtx" reviewTxParser,
             command "exporttx" exportTxParser,
             command "importtx" importTxParser,
+            command "deletetx" deleteTxParser,
             hidden
           ],
       hsubparser $
         mconcat
-          [ commandGroup "Backup commands",
-            command "backup" backupParser,
-            hidden
-          ],
-      hsubparser $
-        mconcat
-          [ commandGroup "Utilities",
-            command "version" versionParser,
-            command "signmsg" signMsgParser,
-            command "verifymsg" verifyMsgParser,
+          [ commandGroup "Sweeps",
             command "preparesweep" prepareSweepParser,
             command "signsweep" signSweepParser,
+            hidden
+          ],
+      hsubparser $
+        mconcat
+          [ commandGroup "Messages",
+            command "signmsg" signMsgParser,
+            command "verifymsg" verifyMsgParser,
+            hidden
+          ],
+      hsubparser $
+        mconcat
+          [ commandGroup "The wallet",
+            command "backup" backupParser,
+            command "version" versionParser,
             hidden
           ]
     ]
 
-offline :: Doc -> Maybe Doc
-offline s = Just $ annotate (color Red) "! " <> s
+-- | The description of a command that asks for a mnemonic or private keys,
+-- marked with a red !, and reflowed as progDesc does
+offline :: String -> Maybe Doc
+offline s = Just $ annotate (color Red) "! " <> extractChunk (paragraph s)
+
+-- | A footer of several paragraphs, separated by blank lines. The footer
+-- of optparse-applicative would reflow them all into one. Each paragraph
+-- is reflowed to the width of the terminal, except one whose lines all
+-- start with a space, such as a list or an example, which is kept as
+-- written.
+footerParagraphs :: String -> InfoMod a
+footerParagraphs text = footerDoc . unChunk . vsepChunks $ block <$> blocks
+  where
+    blocks = filter (not . null) $ splitWhen (all isSpace) (lines text)
+    block ls
+      | all (" " `isPrefixOf`) ls = vcatChunks (stringChunk <$> ls)
+      | otherwise = paragraph (unwords ls)
 
 {- Mnemonic Parser -}
 
@@ -395,18 +439,21 @@ mnemonicParser = do
         CommandMnemonic
           <$> (NewMnemonic <$> entropyOption <*> diceOption <*> splitInOption)
   info cmd $
-    progDescDoc (offline "Generate a mnemonic")
-      <> footer
+    progDescDoc (offline "Generate a new mnemonic")
+      <> footerParagraphs
         [r|
-Generate a mnemonic from the entropy of the operating system, read directly from
-/dev/random where the machine has it. If you use the --dice option, hw then asks
-for dice rolls and mixes their entropy with the system entropy. You should ideally run this
-command on an offline (air-gapped) computer. The mnemonic will NOT be stored on
-disk. It will only be printed to the screen and you should write it down and
-keep it in a secure location. Make multiple copies of your mnemonic. Do not
-store your mnemonic on a digital medium. If you lose your mnemonic, you lose
-your funds. If you choose to use the --split option, the mnemonic will be split
-into different pieces such that ALL the pieces will be required for signing.
+hw prints the mnemonic and stores nothing. Write it down and keep copies in
+safe places, away from computers and phones. Whoever has the mnemonic can
+spend the funds. If you lose it, the funds are lost.
+
+The entropy comes from the operating system, read from /dev/random where the
+machine has it. With --dice, hw also mixes in rolls of a die, so that you do
+not have to trust the system alone. Run this command on an offline computer
+if you can.
+
+With --split, hw prints several parts instead of one mnemonic. The commands
+that ask for the mnemonic then need every part, in any order, with the same
+--split.
 |]
 
 entropyOption :: Parser Natural
@@ -418,10 +465,7 @@ entropyOption =
       <> value 16
       <> showDefault
       <> completeWith valid
-      <> help
-        [r|
-Amount of entropy to use in bytes. Valid values are 16, 20, 24, 28 or 32.
-|]
+      <> help "The bytes of entropy: 16, 20, 24, 28 or 32, for a mnemonic of 12, 15, 18, 21 or 24 words"
   where
     valid = ["16", "20", "24", "28", "32"]
     f s
@@ -435,25 +479,36 @@ diceOption =
       <> long "dice"
       <> help
         [r|
-Provide additional entropy using 6-sided dice. The entropy will be mixed with
-the system entropy. Type the faces as many on a line as you like: they are not
-shown, and hw tells how many rolls are left after each line.
+Mix rolls of a six-sided die into the entropy of the system. hw asks for the
+rolls. Type the faces, as many on a line as you like. They are not shown, and
+hw tells how many rolls are left after each line.
 |]
 
+-- | The parts mnemonic splits the mnemonic into
 splitInOption :: Parser Natural
 splitInOption =
+  partsOption
+    [r|
+Split the mnemonic into INT parts, from 1 to 12. All the parts are needed to
+rebuild it, in any order. With --dice, hw asks for enough rolls for every
+part, and uses no roll twice.
+|]
+
+-- | The parts a mnemonic is typed in, when mnemonic --split made it
+mnemonicPartsOption :: Parser Natural
+mnemonicPartsOption =
+  partsOption "The number of parts of the mnemonic, when mnemonic --split made it. hw asks for each part."
+
+-- | The --split option, with the help of the command about it
+partsOption :: String -> Parser Natural
+partsOption what =
   option (eitherReader $ f . cs) $
     short 's'
       <> long "split"
       <> metavar "INT"
       <> value 1
-      <> help
-        [r|
-The mnemonic is split in different pieces and reconstructed using bitwise xor.
-All the pieces are required for signing. The ordering of the pieces is not
-important. The pieces are made from the system entropy. With --dice, hw asks for
-enough rolls to mix with every piece as well, and uses no roll twice.
-|]
+      <> showDefault
+      <> help what
   where
     f s =
       case readNatural s of
@@ -469,43 +524,38 @@ createAccParser :: ParserInfo Command
 createAccParser = do
   let cmd =
         CommandCreateAcc
-          <$> textArg "Name of the new account"
+          <$> textArg "NAME" "The name of the new account"
           <*> networkMaybeOption
-          <*> splitInOption
+          <*> mnemonicPartsOption
   info cmd $
-    progDescDoc (offline "Create a new account")
-      <> footer
+    progDescDoc (offline "Create an account from a mnemonic")
+      <> footerParagraphs
         [r|
-An account corresponds to the BIP-32 extended key derivation
-m/44'/coin'/account'. For example, the bitcoin account 0 would be m/44'/0'/0'.
-An account is tied to a private key and thus to a mnemonic. The derived account
-m/44'/0'/0' would be different given two different mnemonics. To help manage
-your accounts in hw, they are identified by a name. The command `createacc` will
-ask for a mnemonic and save the derived public key M/44'/coin'/account' on disk,
-at the first index of the seed without an account on the network. An account
-exported from another wallet comes back with `importacc` at the index of its
-key.
-The private keys are never stored anywhere while using hw. If you are using an
-offline computer, you can then export your account and import it on an online
-computer.
+createacc asks for the mnemonic and the passphrase, each twice to catch a
+typo. It derives the account key m/44'/coin'/index' and stores only its public
+key. It takes the first index of the seed that has no account in the wallet
+on that network. For example, the first Bitcoin account is m/44'/0'/0'.
 
-A passphrase with accents, or other letters outside ASCII, is normalized as
-BIP39 asks, so that other wallets derive the same seed from it. hw did not
-normalize it before: an account made then comes from another seed. When the
-wallet has such an account of the mnemonic and none of the normalized seed,
-`createacc` keeps to that seed, and says so.
+The private keys are never stored. To keep them on an offline computer,
+create the account there. Then copy it to an online computer with exportacc
+and importacc.
+
+A passphrase with accents or other non-ASCII letters is normalized as BIP39
+asks, so that other wallets find the same seed. Older versions of hw did not
+normalize it. If the wallet has accounts of this mnemonic made that way, and
+none of the normalized seed, createacc keeps to the old seed and says so.
 |]
 
 -- | The network, when given. Without it, a command that needs one takes the
 -- default-network of the configuration file.
 networkMaybeOption :: Parser (Maybe Network)
-networkMaybeOption = networkOptionWith "Without it, the default-network of the configuration file"
+networkMaybeOption = networkOptionWith "Without it, the default-network of the configuration file."
 
 -- | The network of a sweep, when given. A sweep that pays an account of the
 -- wallet is on the network of that account. One that pays none needs it.
 sweepNetworkOption :: Parser (Maybe Network)
 sweepNetworkOption =
-  networkOptionWith "Needed by a sweep that pays no account of this wallet: the default-network of the configuration file does not apply to it"
+  networkOptionWith "Needed by a sweep that pays no account of this wallet. The default-network of the configuration file does not apply to it."
 
 -- | The network, when given, with the help of the command about it
 networkOptionWith :: String -> Parser (Maybe Network)
@@ -513,9 +563,9 @@ networkOptionWith without =
   optional . option (eitherReader (f . netByName)) $
     short 'n'
       <> long "network"
-      <> metavar "TEXT"
+      <> metavar "NETWORK"
       <> completeWith ((.name) <$> allNets)
-      <> help ("One of the networks " <> nets <> ". " <> without)
+      <> help ("The network: " <> nets <> ". " <> without)
   where
     nets = intercalate ", " ((.name) <$> allNets)
     f :: Maybe Network -> Either String Network
@@ -527,29 +577,28 @@ networkOptionWith without =
 
 recoverParser :: ParserInfo Command
 recoverParser = do
-  let cmd = CommandRecover <$> (Recover <$> networkMaybeOption <*> accountGapOption <*> splitInOption)
+  let cmd = CommandRecover <$> (Recover <$> networkMaybeOption <*> accountGapOption <*> mnemonicPartsOption)
   info cmd $
-    progDescDoc (offline "Recover the accounts of a seed that were paid")
-      <> footer
+    progDescDoc (offline "Find the accounts of a mnemonic that were paid")
+      <> footerParagraphs
         [r|
-`recover` finds the accounts of a seed on a network as BIP44 describes:
-account after account from index 0, the receiving addresses of each one are
-looked up in the store, within the gap, and an account that was paid is
-created, named after the network and its index, btc0 for instance, and synced.
-The search ends after a run of accounts without a payment, ten by default. The
-standard stops at the first one, but hw creates accounts on an offline signer,
-where some may never receive anything, so one empty account is not the end of
-the seed here. Give --account-gap to look further or less far. An account the
-wallet has already is passed over.
+recover asks for the mnemonic, then searches the network for the accounts of
+its seed that were paid. It checks the accounts in order from index 0, and
+asks the server about the receiving addresses of each. Each account that was
+paid is added, named after the network and its index, such as btc0, and
+synced. Accounts the wallet has already are skipped.
 
-The command needs the mnemonic and the network at once. On an air-gapped
-setup, create the accounts on the signer with `createacc`, export them with
-`exportacc`, import them on the online computer and `sync` them instead.
+The search stops after --account-gap accounts in a row without a payment.
+BIP44 stops at the first such account. hw looks further, since accounts
+created on an offline computer may never have been paid.
 
-A passphrase with accents, or other letters outside ASCII, is normalized as
-BIP39 asks. hw did not normalize it before: when nothing is found, `recover`
-also looks for the accounts it derived then, from the passphrase as typed, and
-says so when it finds some, since other wallets would not.
+recover needs the mnemonic and the server at the same time. To keep the
+mnemonic offline, create the accounts on the offline computer with createacc
+instead. Copy them with exportacc and importacc, and run sync.
+
+hw normalizes a passphrase as BIP39 asks, and older versions did not. When
+nothing is found, recover also tries the passphrase as typed. It says so if
+that finds accounts.
 |]
 
 accountGapOption :: Parser Natural
@@ -561,9 +610,9 @@ accountGapOption =
       <> showDefault
       <> help
         [r|
-How many accounts in a row without a payment end the search. One is the rule
-of BIP44; more covers accounts created on a signer that were never paid. At
-most 100.
+How many accounts in a row without a payment end the search, from 1 to 100.
+BIP44 uses 1. A larger gap finds accounts created on a signer that were never
+paid.
 |]
   where
     accountGap :: String -> Either String Natural
@@ -583,33 +632,33 @@ deleteAccParser :: ParserInfo Command
 deleteAccParser = do
   let cmd =
         CommandDeleteAcc
-          <$> textArg "Name of the account to delete"
+          <$> textArg "NAME" "The name of the account to delete"
           <*> networkArg
           <*> fullDerivationOption
   info cmd $
-    progDesc "Delete an account"
-      <> footer
+    progDesc "Delete an account from the wallet"
+      <> footerParagraphs
         [r|
-Delete an account from the wallet. You must specify the name, the network and
-the full derivation path as confirmation to delete an account.
+deleteacc removes the account with its addresses, labels, transactions, coins
+and pending transactions. The NETWORK and the DERIVPATH must be those of the
+account, as accounts shows them. They confirm which account to delete.
+
+The funds stay on the chain, and the mnemonic can still spend them. The labels
+are lost.
 |]
 
 fullDerivationOption :: Parser HardPath
 fullDerivationOption =
   argument (maybeReader parseHard) $
     metavar "DERIVPATH"
-      <> help
-        [r|
-Specify the full derivation path of the account to delete. For example:
-/44'/0'/3'.
-|]
+      <> help "The derivation path of the account, as accounts shows it. Quote it for the shell, as in \"/44'/0'/3'\"."
 
 networkArg :: Parser Network
 networkArg =
   argument (eitherReader (f . netByName)) $
     metavar "NETWORK"
       <> completeWith ((.name) <$> allNets)
-      <> help ("Specify the network of the account to delete: " <> nets)
+      <> help ("The network of the account: " <> nets)
   where
     nets = intercalate ", " ((.name) <$> allNets)
     f :: Maybe Network -> Either String Network
@@ -624,26 +673,39 @@ testAccParser = do
   let cmd =
         CommandTestAcc
           <$> accountOption
-          <*> splitInOption
+          <*> mnemonicPartsOption
   info cmd $
-    progDescDoc (offline "Check the validity of your mnemonic/passphrase")
-      <> footer
+    progDescDoc (offline "Check a mnemonic and passphrase against an account")
+      <> footerParagraphs
         [r|
-`testacc` will prompt for your mnemonic/passphrase and check that the derived
-public key M/44'/coin'/account' matches with the account stored on disk.
+testacc asks for the mnemonic and the passphrase, and checks that they give
+the public key of the account. Use it to test a mnemonic you wrote down,
+before you rely on it. Nothing is signed. When they match, hw records the
+fingerprint of the seed, which accounts shows.
 |]
 
+-- | The account of a command, which the wallet's only account is without it
 accountOption :: Parser (Maybe Text)
-accountOption =
+accountOption = accountOptionWith "The account to use. Needed only when the wallet has more than one."
+
+-- | The account of a command that acts on every account without it
+onlyAccountOption :: Parser (Maybe Text)
+onlyAccountOption = accountOptionWith "Only this account. Without it, every account."
+
+-- | The account of a transaction, which hw finds in the transaction when
+-- it can
+txAccountOption :: Parser (Maybe Text)
+txAccountOption = accountOptionWith "The account of the transaction. Needed only when hw cannot tell it from the transaction."
+
+-- | The --account option, with the help of the command about it
+accountOptionWith :: String -> Parser (Maybe Text)
+accountOptionWith what =
   optional . strOption $
     short 'a'
       <> long "account"
-      <> metavar "TEXT"
+      <> metavar "NAME"
       <> completer (mkCompleter accountCompleter)
-      <> help
-        [r|
-Specify the account name if the wallet has more than one account.
-|]
+      <> help what
 
 {- ImportAcc Parser -}
 
@@ -651,23 +713,24 @@ importAccParser :: ParserInfo Command
 importAccParser = do
   let cmd =
         CommandImportAcc
-          <$> fileArgument "Path to the account file"
+          <$> fileArgument "The account file, written by exportacc"
   info cmd $
-    progDesc "Import an account file"
-      <> footer importExportAccFooter
+    progDesc "Add an account from a file written by exportacc"
+      <> footerParagraphs importExportAccFooter
 
 importExportAccFooter :: String
 importExportAccFooter =
   [r|
-When working in an online/offline environment, you can `importacc` a public key
-file (on an online computer) that was exported with `exportacc` (on an offline
-computer). This will allow the online computer to monitor transactions without
-requiring access to the private keys. The file contains the public key
-derivation M/44'/coin'/account' along with the account name, the network and,
-when the exporting wallet knows it, the fingerprint of the seed: the four bytes
-that PSBTs and output descriptors write before a key of the seed, under which
-`accounts` groups the accounts of one seed. Importing the file of an account
-the wallet already has records that fingerprint.
+exportacc writes an account to a file: its public key M/44'/coin'/index', its
+name, its network and, when hw knows it, the fingerprint of its seed. The file
+holds no private key. importacc adds the account to another wallet, which can
+then watch it and prepare its payments without the mnemonic. This is how an
+online computer works with an offline signer.
+
+The fingerprint is the four bytes that PSBTs and output descriptors write
+before a key of the seed. accounts groups the accounts of one seed by it.
+Importing the file of an account the wallet has already records the
+fingerprint, when the wallet did not know it.
 |]
 
 {- ExportAcc Parser -}
@@ -677,10 +740,10 @@ exportAccParser = do
   let cmd =
         CommandExportAcc
           <$> accountOption
-          <*> fileArgument "File where the account data will be saved"
+          <*> fileArgument "The file to write. It must not exist yet."
   info cmd $
-    progDesc "Export account data to a file"
-      <> footer importExportAccFooter
+    progDesc "Write the public key of an account to a file"
+      <> footerParagraphs importExportAccFooter
 
 {- RenameAcc Parser -}
 
@@ -688,13 +751,14 @@ renameAccParser :: ParserInfo Command
 renameAccParser = do
   let cmd =
         CommandRenameAcc
-          <$> (RenameAcc <$> accountArg "Old account name" <*> textArg "New account name")
+          <$> (RenameAcc <$> accountArg "OLD" "The current name of the account" <*> textArg "NEW" "The new name")
   info cmd $ progDesc "Rename an account"
 
-accountArg :: String -> Parser Text
-accountArg desc =
+-- | The name of an account, as an argument
+accountArg :: String -> String -> Parser Text
+accountArg name desc =
   argument str $
-    metavar "TEXT"
+    metavar name
       <> completer (mkCompleter accountCompleter)
       <> help desc
 
@@ -705,17 +769,21 @@ accountCompleter _ = return []
 
 accountsParser :: ParserInfo Command
 accountsParser = do
-  let cmd = CommandAccounts <$> accountOption
+  let cmd = CommandAccounts <$> onlyAccountOption
   info cmd $
-    progDesc "Display account information"
-      <> footer
+    progDesc "Show the accounts and their balances"
+      <> footerParagraphs
         [r|
-The confirmed and unconfirmed balances are those the store reported at the last
-`sync`. The spendable balance is what the wallet can spend now: the coins
-neither a pending transaction nor the user locked, a coinbase once it has 100
-confirmations, and an unconfirmed coin only when it is the change of a
-transaction of the wallet. `preparetx` spends all of it, unless `--minconf`
-asks for confirmations.
+Each account shows the fingerprint of its seed when known, its derivation
+path, its network, and how many receiving (external) and change (internal)
+addresses it has. The accounts of one seed come together.
+
+The confirmed and unconfirmed balances are those the server gave at the last
+sync. The spendable balance is what the account can spend now. It leaves out
+the coins locked by a pending transaction or by lockcoin, the coinbase coins
+with fewer than 100 confirmations, and the unconfirmed payments from other
+wallets. The unconfirmed change of the wallet's own transactions counts.
+preparetx can spend all of it, unless --minconf asks for confirmations.
 |]
 
 {- Receive Parser -}
@@ -725,19 +793,18 @@ receiveParser = do
   let cmd =
         CommandReceive <$> (Receive <$> accountOption <*> labelOption)
   info cmd $
-    progDesc "Get a new address for receiving a payment"
-      <> footer
+    progDesc "Get a new address to receive a payment"
+      <> footerParagraphs
         [r|
-There are two types of addresses in a BIP-44 wallet: internal and external addresses.
-Internal addresses are managed by the wallet, which pays the change of its
-transactions to them; `addrs --internal` lists them. The `receive` command
-produces external addresses that are meant for receiving payments. Internal addresses
-are derived under the BIP-32 path M/44'/coin'/account'/1/address. External addresses
-use the path M/44'/coin'/account'/0/address.
+Each call gives the next receiving address of the account, at the path
+M/44'/coin'/index'/0/i. The wallet pays the change of its transactions to other
+addresses, at M/44'/coin'/index'/1/i. addrs --internal lists them.
 
-Every call gives a new address, up to the gap of BIP-44: once the last twenty
-addresses all await a payment, `receive` refuses and one of them is to be
-reused, as listed by `addrs`.
+receive gives out at most 20 unused addresses in a row, or as many as the gap
+of the configuration file says. A wallet restored from the mnemonic stops
+looking after that many unused addresses, and would miss later payments. Once that many
+addresses await a payment, receive refuses. Give out one of them again. addrs
+lists them.
 |]
 
 labelOption :: Parser (Maybe Text)
@@ -745,8 +812,8 @@ labelOption =
   optional . strOption $
     short 'l'
       <> long "label"
-      <> metavar "TEXT"
-      <> help "Specify a label for the address"
+      <> metavar "LABEL"
+      <> help "A label for the address, to recognize the payment later"
 
 {- Addrs Parser -}
 
@@ -759,18 +826,19 @@ addrsParser = do
           <*> (Page <$> limitOption <*> offsetOption)
   info cmd $
     progDesc "List the receiving addresses of an account, or its change addresses"
-      <> footer
+      <> footerParagraphs
         [r|
-Each address shows its derivation path, /0/i for a receiving address and /1/i
-for a change address of --internal, then its transactions, what it received,
-and what it can spend now, by the rules `accounts` describes.
+The newest addresses come first. Each shows its derivation path, /0/i for a
+receiving address and /1/i for a change address, and its label. Then come its
+number of transactions, what it received, and what it can spend now, as
+accounts describes.
 |]
 
 internalOption :: Parser Bool
 internalOption =
   switch $
     long "internal"
-      <> help "List the internal addresses, where the change of the account's transactions goes, instead of the receiving ones"
+      <> help "List the change addresses instead of the receiving ones"
 
 offsetOption :: Parser Natural
 offsetOption =
@@ -780,7 +848,7 @@ offsetOption =
       <> metavar "INT"
       <> value 0
       <> showDefault
-      <> help "Offset the result set"
+      <> help "How many rows to skip first. --limit 10 --offset 20 shows rows 21 to 30."
 
 limitOption :: Parser Natural
 limitOption =
@@ -790,13 +858,7 @@ limitOption =
       <> metavar "INT"
       <> value 5
       <> showDefault
-      <> help
-        [r|
-Limit the result set. If the result set is very large, you can specify the
---limit and --offset options to view the required data. For example, to skip the
-first 20 values and then display the following 10, use --limit=10 and
---offset=20. A limit of 0 lists every row.
-|]
+      <> help "How many rows to show. 0 shows them all."
 
 {- Balances Parser -}
 
@@ -807,16 +869,17 @@ balancesParser = do
           <$> accountOption
           <*> (Page <$> limitOption <*> offsetOption)
   info cmd $
-    progDesc "List the addresses of an account that hold coins, with their balances"
-      <> footer
+    progDesc "List the addresses of an account that hold coins"
+      <> footerParagraphs
         [r|
-`balances` lists the receiving and change addresses that hold coins, the largest
-total first. Each shows its derivation path, /0/i for a receiving address and
-/1/i for a change address, and three balances. The total is the value of all
-its coins. The spendable balance is what it can spend now, by the rules
-`accounts` describes. The unspendable balance is the rest: the coins a pending
-transaction or the user locks, an unconfirmed payment from another wallet, and
-a coinbase before 100 confirmations. `coins` tells which of these each coin is.
+balances lists the receiving and change addresses that hold coins, the
+largest total first. Each shows its derivation path, /0/i for a receiving
+address and /1/i for a change address, and three amounts. The total is the
+value of all its coins. The spendable amount is what it can spend now, as
+accounts describes. The unspendable amount is the rest. It counts the coins
+locked by a pending transaction or by lockcoin, the unconfirmed payments from
+other wallets, and the coinbase coins with fewer than 100 confirmations.
+coins tells which applies to each coin.
 |]
 
 {- Label Parser -}
@@ -827,18 +890,17 @@ labelParser = do
         CommandLabel
           <$> accountOption
           <*> addrIndexArg
-          <*> textArg "The new label for the address"
-  info cmd $ progDesc "Set the label of a receiving address, by its index: the i of /0/i in addrs"
+          <*> textArg "LABEL" "The new label"
+  info cmd $ progDesc "Set the label of a receiving address"
 
 addrIndexArg :: Parser Int
 addrIndexArg =
   argument (maybeReader readAddrIndex) $
-    metavar "INT"
+    metavar "INDEX"
       <> help
         [r|
-The index of the receiving address, the last number of its path /0/i as `addrs`
-lists it: the first address, /0/0, has the index 0. The change addresses, those
-of `addrs --internal`, have no label.
+The index i of the receiving address, the last number of its path /0/i in
+addrs. The first address has the index 0. Change addresses have no label.
 |]
   where
     -- An address is derived at a soft index of BIP32, below 2^31. A larger
@@ -856,7 +918,14 @@ txsParser = do
         CommandTxs
           <$> accountOption
           <*> (Page <$> limitOption <*> offsetOption)
-  info cmd $ progDesc "Display the transactions of an account"
+  info cmd $
+    progDesc "List the transactions of an account"
+      <> footerParagraphs
+        [r|
+The list is as of the last sync. Unconfirmed transactions come first, then
+the newest. The transactions you prepared, and those you sent that sync has
+not seen yet, are in pendingtxs.
+|]
 
 {- PrepareTx Parser -}
 
@@ -865,7 +934,7 @@ prepareTxParser = do
   let options =
         PrepareTx
           <$> some paymentArg
-          <*> accountOption
+          <*> payingAccountOption
           <*> feeOption
           <*> dustOption
           <*> rcptPayOption
@@ -877,49 +946,53 @@ prepareTxParser = do
           <*> highFeeYesOption
           <*> changeBackOption
   info (CommandPrepareTx <$> options) $
-    progDesc "Prepare an unsigned transaction for making a payment"
-      <> footer
+    progDesc "Prepare a payment, without signing it"
+      <> footerParagraphs
         [r|
-In hw, sending a transaction happens in separate steps. First, an unsigned
-transaction is prepared using `preparetx`. No mnemonic or private keys are
-required for this step and `preparetx` can be run on an online computer. The new
-transaction will be stored in the local wallet database as a "pending"
-transaction but it can also be exported as a file using the --output option. The
-pending transactions can be inspected either with `reviewtx` or `pendingtxs`.
-The new transaction is not signed. The next step will be to sign it. Any coins
-spent by it will be locked to prevent spending them twice. If you change your
-mind about sending this transaction, you can call `deletetx` to remove it and
-free up the locked coins. All the pending transactions are referenced by their
-noSigHash (a hash of the transaction without its signatures). On Bitcoin, the
-transaction is marked replaceable (BIP 125): until it confirms, a transaction
-spending the same coins at a higher fee can take its place. Bitcoin Cash
-replaces no transaction.
+A payment takes three steps. preparetx builds the transaction, unsigned. It
+needs no mnemonic, so it can run on an online computer. signtx then signs it,
+on an offline computer if you like, and sendtx sends it to the network.
 
-Coin control: --coin spends the coins given, and --spendfrom the coins at the
-addresses given, all of those that can be spent, and only them. A coin chosen
-that cannot be spent, locked or not confirmed enough yet, is listed after the
-transaction with why; when none can be spent, nothing is prepared.
+The new transaction is kept as a pending transaction, which pendingtxs lists.
+--output also writes it to a file, to carry to an offline computer. A pending
+transaction is named by its nosigHash, a hash of the transaction without its
+signatures. It stays the same once the transaction is signed. The coins it
+spends stay locked while it is pending. deletetx deletes it and frees them.
 
-A fee rate above 100 satoshis per byte, ten times the default, is more often a
-typo than a choice, so `preparetx` asks before it takes one. --yes takes it
-without asking, for a script.
+On Bitcoin, the transaction is marked replaceable (BIP 125). Until it
+confirms, bumpfee can replace it with one that pays a higher fee. Bitcoin Cash
+does not replace transactions.
+
+Coin control: --coin and --spendfrom choose the coins to spend. preparetx then
+spends every one of them that can be spent, and no other. The chosen coins
+that cannot be spent, because they are locked or not confirmed enough, are
+listed with the reason. When none can be spent, nothing is prepared.
 
 Change: the change goes to a new change address, unless --changeback sends it
-back to an address the payment spends from. Some banks only accept payments from
-addresses they have checked, and the change keeps the funds at such an address.
-When the coins come from several addresses, `preparetx` lists them as `balances`
-does, the largest first, and asks which one gets the change. With --spendfrom
-and one address, the change goes back to it without a question. The key
-change-back of the configuration file makes --changeback the default, and
---newchange then sends the change of one payment to a new change address.
+back to an address the payment spends from. Some banks accept payments only
+from addresses they have checked, and --changeback keeps the funds at such an
+address. When the coins come from several addresses, preparetx lists them and
+asks which one gets the change. With a single --spendfrom address, the change
+goes back to it without a question. Setting change-back to true in the
+configuration file makes --changeback the default. --newchange then sends the
+change of one payment to a new change address.
+
+A fee rate above 100 satoshis per byte is more often a typo than a choice, so
+preparetx asks before it takes one. --yes takes it without asking, for
+scripts.
 |]
+
+-- | The account a payment spends from, which coin control can tell
+payingAccountOption :: Parser (Maybe Text)
+payingAccountOption =
+  accountOptionWith "The account to pay from. Needed only when the wallet has more than one, and no --coin or --spendfrom tells it."
 
 -- | Where the change of preparetx goes, when the command says
 changeBackOption :: Parser (Maybe Bool)
 changeBackOption =
   optional $
     flag' True (long "changeback" <> help "Send the change back to an address the payment spends from")
-      <|> flag' False (long "newchange" <> help "Send the change to a new change address, whatever the configuration file says")
+      <|> flag' False (long "newchange" <> help "Send the change to a new change address, even when the configuration file sets change-back")
 
 -- | A recipient of preparetx, ADDRESS:AMOUNT
 paymentArg :: Parser Text
@@ -928,12 +1001,11 @@ paymentArg =
     metavar "ADDRESS:AMOUNT"
       <> help
         [r|
-A recipient and the amount it gets after a colon, one for each recipient. The
-amount is in bitcoins unless it ends with a unit (btc, bit, bits, sat or sats)
-or the --unit option says otherwise: ADDRESS:0.00001, ADDRESS:0.00001btc,
-ADDRESS:10bits and ADDRESS:1000sat pay the same amount. Bitcoins have up to 8
-decimals, bits up to 2, and satoshis are whole. Separators such as 1'000 are
-refused. A Bitcoin Cash address can keep its prefix, as in
+A recipient and the amount it gets. Repeat for several recipients. The amount
+is in bitcoins, or in the --unit given, unless it ends with btc, bit, bits, sat
+or sats. ADDRESS:0.00001, ADDRESS:10bits and ADDRESS:1000sat pay the same.
+Bitcoins take up to 8 decimals, bits up to 2, and satoshis none. Separators
+such as 1'000 are refused. A Bitcoin Cash address can keep its prefix, as in
 bitcoincash:qp...:0.001.
 |]
 
@@ -944,7 +1016,7 @@ prepareSendAllParser = do
   let options =
         PrepareSendAll
           <$> some sendAllRecipientArg
-          <*> accountOption
+          <*> payingAccountOption
           <*> feeOption
           <*> dustOption
           <*> minConfOption
@@ -954,35 +1026,35 @@ prepareSendAllParser = do
           <*> dustCoinsOption
           <*> highFeeYesOption
   info (CommandPrepareSendAll <$> options) $
-    progDesc "Prepare an unsigned transaction sending all the coins of an account"
-      <> footer
+    progDesc "Prepare a payment of all the coins of an account"
+      <> footerParagraphs
         [r|
-`preparesendall` prepares a transaction that sends every coin the account can
-spend now to the addresses given, with no change: the spendable balance that
-`accounts` shows. Like `preparetx`, it needs no mnemonic, and the transaction
-waits among the pending transactions to be signed with `signtx`.
+preparesendall prepares a transaction that sends every coin the account can
+spend now, with no change. That is the spendable balance accounts shows. Like
+preparetx, it needs no mnemonic. The transaction waits among the pending
+transactions for signtx.
 
-An address can be given an amount after a colon, ADDRESS:AMOUNT, which it gets
-as typed. The addresses without an amount share what remains in equal parts,
-and they pay the fee: give at least one. When what remains does not cover the
-fee, nothing is prepared: a fixed amount is never cut. A Bitcoin Cash address
-can keep its prefix, as in bitcoincash:qp...:0.001.
+A recipient given with an amount, ADDRESS:AMOUNT, gets exactly that amount.
+The recipients without an amount share the rest in equal parts, and they pay
+the fee. So give at least one of them. When the rest does not cover the fee,
+nothing is prepared. A fixed amount is never cut.
 
-A coin worth no more than the fee to spend it is a dust coin: spending it
-lowers what the addresses get. Whether a coin is dust depends on the fee rate.
-`preparesendall` lists the dust coins with what spending them or leaving them
-means, and asks whether to spend them too. Any answer but yes leaves them in
-the account. --spenddust or --leavedust answers for a script.
+A coin worth no more than the fee to spend it is a dust coin. Spending it
+lowers what the recipients get. Whether a coin is dust depends on the fee
+rate. preparesendall lists the dust coins, tells what spending or leaving them
+means, and asks whether to spend them. Any answer but yes leaves them in the
+account. --spenddust or --leavedust answers in advance, for scripts.
 
---coin sends the coins given, and --spendfrom the coins at the addresses given,
-all of those that can be spent, dust included, and only them. The answer lists
-every coin the transaction leaves in the account, after it, each with why: worth
-less than its fee, locked by you or by a pending transaction, not spendable yet,
-or not chosen with --coin or --spendfrom.
+--coin and --spendfrom send only the coins chosen, every one that can be
+spent, dust included. --spenddust and --leavedust do not apply then.
 
-A fee rate above 100 satoshis per byte, ten times the default, is more often a
-typo than a choice, so `preparesendall` asks before it takes one. --yes takes
-it without asking, for a script.
+The answer lists every coin the transaction leaves in the account, with the
+reason: dust, locked by you or by a pending transaction, not spendable yet, or
+not chosen with --coin or --spendfrom.
+
+A fee rate above 100 satoshis per byte is more often a typo than a choice, so
+preparesendall asks before it takes one. --yes takes it without asking, for
+scripts.
 |]
 
 sendAllRecipientArg :: Parser Text
@@ -991,9 +1063,9 @@ sendAllRecipientArg =
     metavar "ADDRESS[:AMOUNT]"
       <> help
         [r|
-An address that shares what remains, or an address and the amount it gets,
-ADDRESS:AMOUNT, the amount written as for `preparetx`. Give at least one
-address without an amount.
+A recipient that shares what remains, or ADDRESS:AMOUNT for a fixed amount,
+written as for preparetx. Repeat for several recipients. Give at least one
+without an amount.
 |]
 
 -- | What to do with the coins worth less than their fee, without asking
@@ -1009,16 +1081,24 @@ spendFromOption =
   strOption $
     long "spendfrom"
       <> metavar "ADDRESS"
-      <> help "Coin control: spend the coins at this address of the account, all those that can be spent"
+      <> help "Coin control: spend the coins at this address of the account. Repeat for several addresses."
 
 -- | A coin to spend, as coins lists it
 coinOption :: Parser OutPoint
-coinOption =
+coinOption = coinOptionWith "Coin control: spend this coin, as coins lists it. Repeat for several coins."
+
+-- | A coin to sweep, by its outpoint
+sweepCoinOption :: Parser OutPoint
+sweepCoinOption = coinOptionWith "A coin to sweep: the id of its transaction, a colon, and its index among the outputs. Repeat for several coins."
+
+-- | The --coin option, with the help of the command about it
+coinOptionWith :: String -> Parser OutPoint
+coinOptionWith what =
   option coinReader $
     short 'c'
       <> long "coin"
       <> metavar "TXHASH:INDEX"
-      <> help "Coin control: specify coins to spend"
+      <> help what
 
 -- | The fee rate, when given: a number of satoshis per byte, or a level
 -- of the rates recent blocks paid
@@ -1029,7 +1109,7 @@ feeOption =
       <> long "feerate"
       <> metavar "RATE"
       <> completeWith ["low", "median", "high"]
-      <> help "The fee rate, in satoshis per byte, or low, median or high: that one of the rates recent blocks paid, which fees shows. Without it, hw shows those rates and asks. hw asks before it takes one above 100."
+      <> help "The fee rate in satoshis per byte, or low, median or high for that rate of recent blocks, as fees shows them. Without it, hw shows those rates and asks, median by default. A rate above 100 needs a confirmation."
 
 -- | Whether preparetx and preparesweep take a high fee rate without asking
 highFeeYesOption :: Parser Bool
@@ -1040,17 +1120,17 @@ dustOption =
   option (maybeReader $ readNatural . cs) $
     short 'd'
       <> long "dust"
-      <> metavar "INT"
+      <> metavar "SATOSHIS"
       <> value 546
       <> showDefault
-      <> help "Amount (in satoshi) below which an output is considered dust"
+      <> help "The smallest output, in satoshis. A smaller payment is refused, and smaller change goes to the fee."
 
 rcptPayOption :: Parser FeePayer
 rcptPayOption =
   flag SenderPays RecipientsPay $
     short 'r'
       <> long "recipientpay"
-      <> help "The transaction fee will be deducted from the recipient amounts"
+      <> help "The recipients pay the fee, in equal shares taken from their amounts"
 
 minConfOption :: Parser Natural
 minConfOption =
@@ -1060,7 +1140,7 @@ minConfOption =
       <> metavar "INT"
       <> value 0
       <> showDefault
-      <> help "Minimum number of confirmations required to spend a coin; an unconfirmed coin must be change from a transaction of the wallet"
+      <> help "The confirmations a coin needs to be spent. At 0, the unconfirmed change of the wallet's own transactions is spent, but no unconfirmed payment from others."
 
 coinSelectionOption :: Parser CoinSelection
 coinSelectionOption =
@@ -1072,10 +1152,10 @@ coinSelectionOption =
       <> completeWith (strategyName <$> strategies)
       <> help
         [r|
-How the coins to spend are chosen. least-waste keeps, among the strategies
-below and an exact match without change, the coins that waste the least fee
-now and later, like Bitcoin Core. random-draw spends coins in random order.
-largest-first spends the fewest coins, for the smallest fee. smallest-first
+How the coins to spend are chosen. least-waste tries the other strategies and
+an exact match without change, and keeps the coins that waste the least fee,
+now and later, as Bitcoin Core does. random-draw spends coins in random order.
+largest-first spends the fewest coins, for the lowest fee now. smallest-first
 spends the smallest coins first, to consolidate them.
 |]
   where
@@ -1099,7 +1179,7 @@ outputFileMaybeOption =
       <> long "output"
       <> metavar "FILENAME"
       <> action "file"
-      <> help "Write the result to this file"
+      <> help "Write the transaction to this file. It must not exist yet."
 
 {- PendingTxs Parser -}
 
@@ -1107,22 +1187,21 @@ pendingTxsParser :: ParserInfo Command
 pendingTxsParser = do
   let cmd =
         CommandPendingTxs
-          <$> accountOption
+          <$> onlyAccountOption
           <*> (Page <$> limitOption <*> offsetOption)
   info cmd $
-    progDesc "Display the pending transactions of the wallet, or of an account"
-      <> footer
+    progDesc "List the pending transactions"
+      <> footerParagraphs
         [r|
-`pendingtxs` lists the pending transactions of every account, newest first,
-each with its account, or only those of the --account given. Each shows when it
-was created.
+A pending transaction is one that preparetx, preparesendall, bumpfee or
+preparesweep made, or that importtx added. It is unsigned, signed, or sent.
+sync retires it once the network lists it. The newest come first, each with
+its account, its nosigHash and when it was created. The other commands name a
+pending transaction by its nosigHash.
 
-Pending transactions have been created with the `preparetx` command. They are
-either unsigned and waiting to be signed, or signed and waiting to be sent to
-the network, or sent and waiting for the network to list them, at which point
-`sync` retires them. One reported as conflicted spends a coin that another
-transaction has spent, or that is gone, as the store answered at the last
-`sync`: it cannot be sent while that lasts, and should be deleted.
+A transaction marked conflicted spends a coin that another transaction has
+spent, or that is gone, as the server said at the last sync. It cannot be sent
+while that lasts. Delete it with deletetx, which frees its coins.
 |]
 
 {- ReviewTx Parser -}
@@ -1131,15 +1210,17 @@ reviewTxParser :: ParserInfo Command
 reviewTxParser = do
   let cmd =
         CommandReviewTx
-          <$> accountOption
-          <*> fileArgument "Path to the transaction file to review"
+          <$> txAccountOption
+          <*> fileArgument "The transaction file to show"
   info cmd $
-    progDesc "Review a transaction file"
-      <> footer
+    progDesc "Show the transaction in a file"
+      <> footerParagraphs
         [r|
-Review a pending transaction file that has been created with the --output option
-of the `preparetx` command or the `exporttx` command. You can review a
-transaction file this way before signing it on an offline computer for example.
+reviewtx shows a transaction file as its account sees it, and changes nothing
+in the wallet. The file comes from preparetx --output, exporttx, signtx or
+preparesweep. Use it to check a transaction before you sign it, or before you
+send it. A transaction that involves no account, such as a sweep to addresses
+outside the wallet, is shown on the network its file names.
 |]
 
 {- ExportTx Parser -}
@@ -1149,27 +1230,32 @@ exportTxParser = do
   let cmd =
         CommandExportTx
           <$> nosigHashArg
-          <*> fileArgument "File where the transaction data will be saved"
+          <*> fileArgument "The file to write. It must not exist yet."
   info cmd $
-    progDesc "Export pending transaction data to a file"
-      <> footer importExportTxFooter
+    progDesc "Write a pending transaction to a file"
+      <> footerParagraphs importExportTxFooter
 
 importExportTxFooter :: String
 importExportTxFooter =
   [r|
-A transaction that has been prepared with `preparetx` can be exported to a file
-so that it can be signed on an offline computer. The transaction is identified
-by its nosigHash (a hash of the transaction without its signatures) as this
-identifier doesn't change when the transaction is unsigned or signed. Once
-signed, you can `importtx` the transaction back into the computer that
-prepared the transaction. 
+exporttx writes a pending transaction to a file, signed or not, to carry it to
+an offline computer. The transaction is named by its nosigHash, a hash of the
+transaction without its signatures. It stays the same once the transaction is
+signed. The file names the network of the transaction.
+
+importtx adds the transaction of a file to the pending transactions of its
+account, and locks the coins it spends. When the wallet holds it already, the
+file takes its place, as when an offline computer returns it signed. The
+signatures are checked first.
+
+sendtx --input sends a signed file without importtx.
 |]
 
 nosigHashArg :: Parser TxHash
 nosigHashArg =
   argument (maybeReader $ hexToTxHash . cs) $
     metavar "NOSIGHASH"
-      <> help "The nosigHash of the transaction"
+      <> help "The nosigHash of a pending transaction, as pendingtxs shows it"
 
 {- ImportTx Parser -}
 
@@ -1177,11 +1263,11 @@ importTxParser :: ParserInfo Command
 importTxParser = do
   let cmd =
         CommandImportTx
-          <$> accountOption
-          <*> fileArgument "Path to the transaction file to import"
+          <$> txAccountOption
+          <*> fileArgument "The transaction file to add"
   info cmd $
-    progDesc "Import a pending transaction"
-      <> footer importExportTxFooter
+    progDesc "Add a transaction file to the pending transactions"
+      <> footerParagraphs importExportTxFooter
 
 {- DeleteTx Parser -}
 
@@ -1189,18 +1275,19 @@ deleteTxParser :: ParserInfo Command
 deleteTxParser = do
   let cmd = CommandDeleteTx <$> nosigHashArg
   info cmd $
-    progDesc "Delete a pending transaction"
-      <> footer
+    progDesc "Delete a pending transaction and free its coins"
+      <> footerParagraphs
         [r|
-A transaction that has been prepared with `preparetx` locks the coins it
-spends, so that no other transaction spends them. `deletetx` removes a pending
-transaction from the database and frees its coins. A transaction that was sent
-with `sendtx` can only be deleted, abandoned, when the store no longer knows
-it: dropped from the nodes' mempools, or never accepted. One that the store
-still lists may yet confirm, and `sync` retires it once it does. A
-transaction `pendingtxs` reports as conflicted, one of its coins having been
-spent by another transaction or gone, can no longer be sent and should be
-deleted.
+deletetx removes a pending transaction from the wallet. The coins it spends
+can then be spent again, and its change address is free again.
+
+A transaction sent with sendtx can be deleted only once the server no longer
+knows it. That happens when the nodes dropped it from their mempools, or never
+accepted it. While the server lists it, it may still confirm, and the next
+sync retires it.
+
+Delete a transaction that pendingtxs marks as conflicted. One of its coins was
+spent by another transaction, or is gone, so it can no longer be sent.
 |]
 
 {- SignTx Parser -}
@@ -1210,22 +1297,22 @@ signTxParser = do
   let cmd =
         CommandSignTx
           <$> signingOptions
-          <*> splitInOption
+          <*> mnemonicPartsOption
   info cmd $
-    progDescDoc (offline "Sign a transaction")
-      <> footer
+    progDescDoc (offline "Sign a pending transaction or a transaction file")
+      <> footerParagraphs
         [r|
-The next step after preparing a transaction is to sign it. This step can happen
-on an offline computer if you export the unsigned transaction to a file. If the
-transaction is stored in the wallet, it can be signed by using its nosigHash.
-This will sign and replace the transaction in-place. Otherwise, give the --input
-file of the unsigned transaction, and the --output file to write the signed one
-to. Without --output, hw asks to replace the --input file with the signed
-transaction, before it asks for the mnemonic: the unsigned file is of no use
-once the transaction is signed. The transaction still hasn't been uploaded to
-the network. You may inspect it using either the `reviewtx` or the `pendingtxs`
-command. The transaction can then be sent to the network with `sendtx` or
-deleted with `deletetx`.
+signtx asks for the mnemonic and the passphrase of the account, and signs the
+transaction. It asks again while they do not match the account.
+
+Give a pending transaction by its NOSIGHASH. The signed transaction then takes
+its place in the wallet. Or give a transaction file with --input, on an
+offline computer for example. The signed transaction then goes to the --output
+file. Without --output, hw offers to replace the --input file, since the
+unsigned file is of no use once signed. It asks this before the mnemonic.
+
+Signing sends nothing. Check the transaction with reviewtx or pendingtxs.
+Then send it with sendtx, or delete it with deletetx.
 |]
 
 inputFileMaybeOption :: Parser (Maybe FilePath)
@@ -1235,7 +1322,7 @@ inputFileMaybeOption =
       <> long "input"
       <> metavar "FILENAME"
       <> action "file"
-      <> help "Read the input from this file"
+      <> help "Read the transaction from this file"
 
 {- Coins Parser -}
 
@@ -1247,24 +1334,27 @@ coinsParser = do
           <*> lockedOption
           <*> (Page <$> limitOption <*> offsetOption)
   info cmd $
-    progDesc "List the account coins (unspent outputs)"
-      <> footer
+    progDesc "List the coins of an account"
+      <> footerParagraphs
         [r|
-These are all the coins in the account. A coin is locked by a pending
-transaction that spends it, from `preparetx` until the network lists that
-transaction, or until `deletetx` deletes it and frees the coin. A coin can also
-be locked by the user with `lockcoin`, until `unlockcoin`. A coin is spendable
-when the wallet can spend it now: nothing locks it, a coinbase has 100
-confirmations, and an unconfirmed coin is the change of a transaction of the
-wallet. One that is not spendable yet becomes so once it confirms or, for a
-coinbase, matures.
+A coin is an unspent output of a transaction, written TXHASH:INDEX. The
+unconfirmed coins come first, then the newest.
+
+A coin is spendable when the wallet can spend it now. Nothing locks it, a
+coinbase coin has 100 confirmations, and an unconfirmed coin is the change of
+a transaction of the wallet. The other coins become spendable once they
+confirm, or for a coinbase, once it matures.
+
+A pending transaction locks the coins it spends, until the network lists it or
+deletetx deletes it. You can also lock a coin yourself with lockcoin, until
+unlockcoin.
 |]
 
 lockedOption :: Parser Bool
 lockedOption =
   switch $
     long "locked"
-      <> help "List only the locked coins: those a pending transaction spends, and those the user locked"
+      <> help "List only the locked coins: those a pending transaction spends, and those locked with lockcoin"
 
 {- LockCoin and UnlockCoin Parsers -}
 
@@ -1272,15 +1362,17 @@ lockCoinParser :: ParserInfo Command
 lockCoinParser = do
   let cmd = CommandLockCoin <$> coinArg
   info cmd $
-    progDesc "Lock a coin, so that no transaction spends it"
-      <> footer
+    progDesc "Keep a coin from being spent"
+      <> footerParagraphs
         [r|
-A coin the user locks is held back: `preparetx` does not spend it, coin control
-refuses it, and no imported transaction or sweep may spend it, until
-`unlockcoin` frees it. Only a free coin can be locked: a coin a pending
-transaction spends is locked already, and `deletetx` frees it. The lock stays
-while the coin confirms, and goes with the coin once it is spent elsewhere.
-`coins --locked` lists the locked coins.
+A locked coin is held back. preparetx and preparesendall do not spend it, and
+--coin refuses it. No imported transaction or sweep may spend it either.
+unlockcoin frees it.
+
+Only a free coin can be locked. A coin that a pending transaction spends is
+locked already, and deletetx frees it. The lock stays while the coin confirms,
+and goes with the coin once it is spent elsewhere. coins --locked lists the
+locked coins.
 |]
 
 unlockCoinParser :: ParserInfo Command
@@ -1288,10 +1380,10 @@ unlockCoinParser = do
   let cmd = CommandUnlockCoin <$> coinArg
   info cmd $
     progDesc "Unlock a coin locked with lockcoin"
-      <> footer
+      <> footerParagraphs
         [r|
-Only a coin the user locked with `lockcoin` can be unlocked. A coin a pending
-transaction spends is freed by deleting that transaction with `deletetx`.
+Only a coin locked with lockcoin can be unlocked. A coin that a pending
+transaction spends is freed by deleting that transaction with deletetx.
 |]
 
 -- | A coin of the wallet, as coins lists it
@@ -1299,7 +1391,7 @@ coinArg :: Parser OutPoint
 coinArg =
   argument coinReader $
     metavar "TXHASH:INDEX"
-      <> help "The coin: the id of its transaction and its index among the outputs, as coins lists it"
+      <> help "The coin, as coins lists it: the id of its transaction, a colon, and its index among the outputs"
 
 -- | A coin as coins lists it, and as a block explorer often writes it: the
 -- id of its transaction, a colon, and its index among the outputs
@@ -1325,33 +1417,39 @@ bumpFeeParser = do
   let options =
         BumpFee
           <$> bumpedArg
-          <*> accountOption
+          <*> txAccountOption
           <*> replacementFeeOption
           <*> dustOption
           <*> outputFileMaybeOption
-          <*> yesOption "Answer yes to every question: a fee rate above 100 satoshis per byte, the coins to add, the transactions to replace with the stuck one"
+          <*> yesOption "Answer yes to every question: a fee rate above 100 satoshis per byte, adding coins, and replacing the transactions that spend the change"
   info (CommandBumpFee <$> options) $
-    progDesc "Prepare a transaction that replaces a stuck one, at a higher fee rate"
-      <> footer
+    progDesc "Replace a stuck payment with one that pays a higher fee"
+      <> footerParagraphs
         [r|
-`bumpfee` prepares a transaction that replaces a transaction of the account the
-network has not confirmed yet, paying a higher fee, as BIP 125 allows on
-Bitcoin. The replacement spends the same coins and pays the recipients the same
-amounts: the higher fee comes out of the change. When the change cannot pay it,
-hw offers to add confirmed coins of the account. A transaction of the account
-that spends the change of the stuck one would be removed with it: hw offers to
-replace both with one transaction that pays the recipients of both. The
-replacement is a pending transaction: sign it with `signtx` and send it with
-`sendtx`, which drops from the pending transactions those it replaces. Bitcoin
-Cash replaces no transaction.
+bumpfee prepares a transaction that replaces a payment of the account that
+the network has not confirmed yet. The replacement pays a higher fee, as BIP
+125 allows on Bitcoin. It spends the same coins and pays the recipients the
+same amounts. The higher fee comes out of the change.
 
-A replacement that never confirms was refused by the network, which tells hw
-nothing: it must also pay the fees of transactions hw cannot see, such as a
-recipient's spend of the payment. Delete it with `deletetx`, `sync`, and bump
-again at a higher fee rate. A transaction sent before hw marked its
-transactions replaceable cannot be bumped. A transaction that pays several
-addresses of the wallet besides its recipients, its change among them, gets one
-change output in its replacement, holding what those outputs held.
+When the change cannot pay the higher fee, hw offers to add confirmed coins of
+the account. Another transaction of the account may spend the change of the
+stuck one. Replacing the stuck one would remove it too, so hw offers to
+replace both with one transaction that pays the recipients of both.
+
+The replacement is a pending transaction. Sign it with signtx and send it with
+sendtx. sendtx then drops the transactions it replaces from the pending
+transactions.
+
+The network does not tell hw when it refuses a replacement. A replacement
+must also pay the fees of transactions hw cannot see, such as a recipient's
+spend of the payment. When a replacement never confirms, delete it with
+deletetx, run sync, and bump again at a higher fee rate.
+
+Some transactions cannot be bumped. One sent before hw marked its transactions
+replaceable cannot. Neither can one that spends coins of another wallet, such
+as a sweep. Bitcoin Cash does not replace transactions. When the stuck
+transaction pays several addresses of the wallet besides its recipients, its
+change among them, the replacement gets one change output for all of them.
 |]
 
 -- | The transaction bumpfee replaces
@@ -1370,7 +1468,7 @@ replacementFeeOption =
       <> long "feerate"
       <> metavar "RATE"
       <> completeWith ["low", "median", "high"]
-      <> help "The fee rate of the replacement, in satoshis per byte, above that of the transaction it replaces, or low, median or high: that one of the rates recent blocks paid, which fees shows. Without it, hw shows those rates and asks. hw asks before it takes one above 100."
+      <> help "The fee rate of the replacement in satoshis per byte, or low, median or high for that rate of recent blocks, as fees shows them. It must be above the rate of the transaction replaced. Without it, hw shows those rates and asks. A rate above 100 needs a confirmation."
 
 {- SendTx Parser -}
 
@@ -1380,39 +1478,35 @@ sendTxParser = do
         CommandSendTx
           <$> optional nosigHashArg
           <*> inputFileMaybeOption
-          <*> yesOption "Send the transaction without showing it and asking first"
+          <*> yesOption "Send without showing the transaction and asking first"
   info cmd $
-    progDesc "Send (upload) a signed transaction to the network"
-      <> footer
+    progDesc "Send a signed transaction to the network"
+      <> footerParagraphs
         [r|
-Once a transaction is signed, it can be sent to the network. This step is
-irreversible and the transaction will become effective. `sendtx` shows the
-transaction first, as `reviewtx` does, and sends it only if you answer yes.
---yes sends it without showing it or asking, for a script.
+Sending cannot be undone. sendtx shows the transaction, as reviewtx does, and
+sends it only if you answer yes. --yes sends it without showing it or asking,
+for scripts.
 
-The transaction is handed to the store, which passes it to the network's
-nodes without checking it, so `sendtx` then waits up to ten seconds for the
-store to see it in its mempool, the only sign that the network accepted it. If
-the store does not see it, nothing is recorded and `sendtx` says so: the
-transaction may have been refused, for a fee below what the nodes relay for
-instance, or may just be slow to come back. Run `sendtx` again later.
+The server passes the transaction to the nodes without checking it. sendtx
+then waits up to ten seconds for the server to see it in its mempool. That is
+the only sign that the network accepted it. If the server does not see it,
+nothing is recorded, and sendtx says so. The network may have refused the
+transaction, for a fee below what the nodes relay for example. Or it may just
+be slow. Run sendtx again later.
 
-A pending transaction of the wallet is sent by its NOSIGHASH and, once seen,
-marked as online; `sync` then sends it again should the store lose it, and
-retires it once it is listed. It is sent again by every `sync` for as long
-as the store does not list it: a transaction the network refuses for good, for
-a fee below what the nodes relay for instance, keeps coming back until it is
-deleted with `deletetx`, which frees its coins.
+Give a pending transaction by its NOSIGHASH. Once the server sees it, it is
+marked as sent. sync then sends it again whenever the server loses it, and
+retires it once the network lists it. A transaction the network refuses for
+good is sent again on every sync, until you delete it with deletetx.
 
-A signed transaction in a file is sent with --input. One the wallet holds as
-pending, the file an offline signer returns, takes the place of the version
-held and is sent as by its NOSIGHASH: marked as online, its raw transaction
-stored. One the wallet does not hold, a sweep of outside coins for instance,
-is only checked and uploaded, and nothing in the wallet is updated.
+Give a signed file with --input, such as the one an offline computer returns.
+When the wallet holds its transaction as pending, the file takes its place and
+is sent as above. Otherwise, a sweep of outside coins for example, hw checks
+the transaction and sends it, and changes nothing in the wallet.
 
-The network of a file is the one it names, as hw writes them, and that of the
-account of a pending transaction. The file of an earlier hw names none, and is
-prepared again to be sent when the wallet does not hold its transaction.
+A file names its network. A file from an earlier hw names none. It can be
+sent only when the wallet holds its transaction. Otherwise, prepare the
+transaction again.
 |]
 
 -- | --yes, which answers yes to the question of a command without asking
@@ -1428,51 +1522,45 @@ yesOption what =
 
 syncParser :: ParserInfo Command
 syncParser = do
-  let cmd = CommandSync <$> accountOption <*> fullOption
+  let cmd = CommandSync <$> onlyAccountOption <*> fullOption
   info cmd $
-    progDesc "Download account data from the network"
-      <> footer
+    progDesc "Update the accounts from the network"
+      <> footerParagraphs
         [r|
-The `sync` command will download the latest address balances, transactions and
-coins from the network, for one account or for all of them. It will also update
-the account balances.
+sync asks the server for the latest balances, transactions and coins of the
+accounts.
 
-Before that, it looks at the gap of addresses past the ones the account has,
-twenty by default (the `gap` key of the configuration file): an address found
-used there, by someone paying from the account's public key or by another wallet
-of the same seed, is generated along with the ones before it and synced like
-the others. The scan goes on while a window of the gap has a used address, so
-the first sync of a new account recovers every address its payers used, with
-its transactions and coins. A payer who derived further ahead than the gap,
-another wallet of the seed with a larger gap for instance, lands beyond that
-watch: raise the `gap` key for one sync to look further. The same key bounds
-how many unused receiving addresses `receive` hands out.
+It first looks for used addresses past the ones each account has, as far as
+the gap of the configuration file, 20 by default. Someone paying to the
+account's public key, or another wallet of the same seed, may have used them.
+sync adds each used address it finds, with the ones before it. It keeps
+looking while it finds more, so the first sync of an account finds every
+address used so far. It misses an address that comes after more unused ones in
+a row than the gap. Raise the gap for one sync to look further. The same gap
+limits how many unused addresses hw receive gives out.
 
-It also looks after the pending transactions: one that was sent with `sendtx`
-and that the network now lists is retired, even under another id, its
-signatures changed by a miner or made by another signer; one that was sent but
-that the store
-no longer knows is sent again, since nodes forget unconfirmed transactions; one
-whose coin was spent by another transaction, or is gone, is reported as
-conflicted. The store is asked about every coin a pending transaction spends,
-those of other accounts and those outside the wallet, a sweep's, alike. A signed
-transaction that was never sent is left alone. A sent transaction is sent again
-on every sync for as long as the store does not list it, unless it is in
-conflict, so one the network refuses for good, for a fee below what the nodes
-relay for instance, keeps coming back until it is deleted with `deletetx`.
+sync also checks the pending transactions. One the network lists is retired,
+even under another id, as when a miner or another signer changed its
+signatures. One you sent that the server no longer knows is sent again, since
+nodes forget unconfirmed transactions. One whose coin another transaction
+spent, or that is gone, is marked conflicted. A signed transaction you never
+sent is left alone.
+
+A sent transaction is sent again on every sync while the server does not list
+it, unless it is conflicted. So one the network refuses for good, for a fee
+below what the nodes relay for example, keeps coming back. Delete it with
+deletetx.
 |]
 
 fullOption :: Parser Bool
 fullOption =
   switch $
     long "full"
-      <> showDefault
       <> help
         [r|
-Force the sync to re-download all the account data instead of only the deltas
-(the data that has changed). A full sync also marks as dead the transactions
-the store no longer lists. It should normally not be required: a reorganisation
-of the chain forces one.
+Download all the account data again, instead of only what changed. A full
+sync also marks as dead the transactions the server no longer lists. It is
+rarely needed, since a reorganization of the chain triggers one by itself.
 |]
 
 {- Backup Parser -}
@@ -1481,19 +1569,20 @@ backupParser :: ParserInfo Command
 backupParser = do
   let cmd =
         CommandBackup
-          <$> optional (fileArgument "File to copy the database to (default: a file in ~/.hw/backups)")
+          <$> optional (fileArgument "The file to copy the database to. It must not exist yet. Without it, the copy goes to ~/.hw/backups.")
   info cmd $
     progDesc "Copy the wallet database to a backup file"
-      <> footer
+      <> footerParagraphs
         [r|
-Without a file, the copy goes to ~/.hw/backups, named after the format version
-of the database and the time of the copy. The copy is complete: accounts,
-addresses, labels, coins, transactions and pending transactions.
+The copy holds the whole wallet: accounts, addresses, labels, coins,
+transactions and pending transactions. It holds no private key. Without a
+FILENAME, the copy goes to ~/.hw/backups, named after the format version of the
+database and the time.
 
 To restore a backup, replace ~/.hw/accounts.sqlite with the copy, or point
-"database-file" in ~/.hw/config.json to it, then run any command. A copy made
-by an older hw is migrated first, after being backed up again into
-~/.hw/migration-backups. A copy made by a newer hw is refused.
+database-file in ~/.hw/config.json to it. Then run any command. A copy made by
+an older hw is upgraded, after hw backs it up again to ~/.hw/migration-backups.
+A copy made by a newer hw is refused.
 |]
 
 {- Version Parser -}
@@ -1501,7 +1590,7 @@ by an older hw is migrated first, after being backed up again into
 versionParser :: ParserInfo Command
 versionParser = do
   let cmd = pure CommandVersion
-  info cmd $ progDesc "Display the version of hw"
+  info cmd $ progDesc "Show the version of hw and of its database format"
 
 {- Fees Parser -}
 
@@ -1509,20 +1598,28 @@ feesParser :: ParserInfo Command
 feesParser = do
   let cmd = CommandFees <$> networkMaybeOption
   info cmd $
-    progDesc "Show the fee rates recent blocks paid"
-      <> footer
+    progDesc "Show the fee rates of recent blocks"
+      <> footerParagraphs
         [r|
-Show what the transactions of the latest blocks paid, in satoshis per byte,
-at three levels: the low rate, below which a quarter of their bytes paid
-less; the median, below which half did; and the high rate, below which nine
-tenths did. They give some perspective on what to pay: the high rate almost
-surely gets into the next block, and the low one usually does when the
-network is calm. The age of the latest block says how fresh they are: a
-block mined an hour ago means a slow network, and rates that may be low.
-The rates are what got into blocks, not how long transactions waited: after
-a quiet spell, a sudden backlog makes them too low for a while, and bumpfee
-is then the remedy. preparetx, preparesendall, bumpfee and preparesweep
-show the same rates and ask which to take when --feerate is not given.
+fees reads the latest six blocks that hold fee-paying transactions. It shows
+three rates, in satoshis per byte:
+
+  low      a quarter of the bytes in those blocks paid less
+  median   half of the bytes paid less
+  high     nine tenths of the bytes paid less
+
+The high rate almost surely gets into the next block. The low rate usually
+does when the network is calm. The age of the latest block tells how fresh
+the rates are. A block mined an hour ago means a slow network, and rates that
+may be too low.
+
+The rates show what got into blocks, not how long transactions waited. After
+a quiet spell, a sudden backlog makes them too low for a while. bumpfee then
+helps.
+
+preparetx, preparesendall, bumpfee and preparesweep show the same rates, and
+ask which to take when --feerate is not given. --feerate low, median or high
+takes one without asking.
 |]
 
 {- SignMsg Parser -}
@@ -1531,38 +1628,35 @@ signMsgParser :: ParserInfo Command
 signMsgParser = do
   let cmd =
         CommandSignMsg
-          <$> (SignMsg <$> signAddressArg <*> signMsgArg <*> splitInOption)
+          <$> (SignMsg <$> signAddressArg <*> signMsgArg <*> mnemonicPartsOption)
   info cmd $
-    progDescDoc (offline "Sign a user-defined message")
-      <> footer
+    progDescDoc (offline "Sign a message with the key of an address")
+      <> footerParagraphs
         [r|
-Sign a user-defined message using the private key associated with a given
-address. The signature uses the Bitcoin Signed Message format (the legacy
-format of BIP-322), which can be verified by Bitcoin Core and other wallets.
-The message is signed exactly as provided. A warning is shown when it contains
-leading or trailing whitespace or line breaks, as these are easily altered
-when copying the message and the signature would then fail to verify. The
-output, the armored block or the --json answer, can be saved to a file and
-checked with verifymsg --input.
+signmsg asks for the mnemonic of the account of the ADDRESS, and signs the
+message with the key of that address. The signature uses the Bitcoin Signed
+Message format, the legacy format of BIP 322. Bitcoin Core and other wallets
+can verify it.
+
+The message is signed exactly as given. hw warns about spaces or line breaks
+at its start or end. Copying a message easily changes them, and the signature
+would then fail to verify.
+
+Save the output, the armored block or the --json answer, to a file. verifymsg
+--input can then check it.
 |]
 
 signAddressArg :: Parser Text
 signAddressArg =
   strArgument $
     metavar "ADDRESS"
-      <> help
-        [r|
-Sign a message using the private key of this address
-|]
+      <> help "The address whose key signs. It must be an address of this wallet."
 
 signMsgArg :: Parser Text
 signMsgArg =
   strArgument $
-    metavar "TEXT"
-      <> help
-        [r|
-The message to be signed
-|]
+    metavar "MESSAGE"
+      <> help "The message to sign. Quote it if it has spaces."
 
 {- VerifyMsg Parser -}
 
@@ -1573,22 +1667,23 @@ verifyMsgParser = do
           <|> (FromFile <$> signedMessageFileOption)
       cmd = CommandVerifyMsg <$> (VerifyMsg <$> source <*> networkMaybeOption)
   info cmd $
-    progDesc "Verify a signed message"
-      <> footer
+    progDesc "Check the signature of a message"
+      <> footerParagraphs
         [r|
-Check that a message was signed by the key of an address, from the signature
-that signmsg, Bitcoin Core or another wallet gave for it. The address must be
-a P2PKH address, the only kind the Bitcoin Signed Message format signs from,
-and the message must be given exactly as it was signed: a single changed byte
-makes the signature invalid. The address can be of any wallet; the network
-only says how to read it. When the signature is not valid, hw says so and
-exits with a failure, so that a script can tell.
+verifymsg checks that the key of ADDRESS signed MESSAGE, from the SIGNATURE
+that signmsg, Bitcoin Core or another wallet gave. The address can be anyone's.
+It must be a P2PKH address, the only kind this format signs with. The
+--network only tells hw how to read it.
 
-With --input, the three values are read from a file holding the output of
-signmsg: its armored block, as other wallets write it too, or its --json
-answer. In a block, the message is everything between the first marker and
-the signature marker, exactly as it is. The signature part holds the address,
-then the signature.
+Give the message exactly as it was signed. A single changed byte makes the
+signature invalid. When it is invalid, hw says so and exits with an error, so
+that a script can tell.
+
+With --input, hw reads the three from a file holding the output of signmsg:
+its armored block, which other wallets write too, or its --json answer. In a
+block, the message is everything between the first marker and the signature
+marker, exactly as it is. After the signature marker come the address, then
+the signature.
 |]
 
 signedMessageFileOption :: Parser FilePath
@@ -1604,28 +1699,19 @@ verifyAddressArg :: Parser Text
 verifyAddressArg =
   strArgument $
     metavar "ADDRESS"
-      <> help
-        [r|
-The address the message is said to be signed from
-|]
+      <> help "The address the message is said to be signed by"
 
 signatureArg :: Parser Text
 signatureArg =
   strArgument $
     metavar "SIGNATURE"
-      <> help
-        [r|
-The signature in base64, as signmsg writes it
-|]
+      <> help "The signature in base64, as signmsg writes it"
 
 verifyMsgArg :: Parser Text
 verifyMsgArg =
   strArgument $
-    metavar "TEXT"
-      <> help
-        [r|
-The message, exactly as it was signed
-|]
+    metavar "MESSAGE"
+      <> help "The message, exactly as it was signed"
 
 {- PrepareSweep Parser -}
 
@@ -1633,55 +1719,50 @@ prepareSweepParser :: ParserInfo Command
 prepareSweepParser = do
   let options =
         PrepareSweep
-          <$> accountOption
+          <$> accountOptionWith "The account the sweep pays. Needed only when the --sweepto addresses are in several accounts."
           <*> sweepNetworkOption
           <*> prvKeysMaybeOption
           <*> many sweepFromOption
           <*> some sweepToOption -- some: at least one
-          <*> many coinOption
+          <*> many sweepCoinOption
           <*> outputFileMaybeOption
           <*> feeOption
           <*> dustOption
           <*> highFeeYesOption
   info (CommandPrepareSweep <$> options) $
-    progDesc "Prepare a transaction to sweep funds"
-      <> footer
+    progDesc "Prepare a transaction that moves coins from outside the wallet"
+      <> footerParagraphs
         [r|
-`preparesweep` will prepare a transaction that sweeps coins that are not in
-this wallet: every coin found at the --sweepfrom addresses, every coin found at
-the addresses of the private keys given with --prvkeys, and the coins given
-with --coin. Give any of the three. The private keys are not needed to prepare
-the sweep, only to sign it with `signsweep`, so they can stay on another
-computer; when given, in a file or typed on the terminal with --prvkeys -, they
-can be in WIF, minikey or hexadecimal format, and the fee of a coin of an
-uncompressed key is estimated exactly. The typical use
-case for this command is to migrate an old wallet to a new mnemonic. You can
-send the funds to 1 or multiple addresses, in this wallet or not. You can use
-the shorthand format -t ADDR1 -t ADDR2 to specify the --sweepto addresses.
+A sweep moves coins whose private keys you hold, from an old wallet for
+example, to new addresses. preparesweep takes every coin at the --sweepfrom
+addresses, every coin at the addresses of the --prvkeys keys, and the --coin
+coins. Give any of the three.
 
-A --sweepto address can be given an amount after a colon, ADDRESS:AMOUNT,
-written as for `preparetx`, which it gets as typed. The addresses without an
-amount share what remains in equal parts, and they pay the fee: give at least
-one. When what remains does not cover the fee, nothing is prepared: a fixed
-amount is never cut. This is how `preparesendall` shares the coins too.
+The private keys are needed only to sign, with signsweep, so they can stay on
+another computer. Without them, hw counts every key as compressed, so the fee
+of a coin of an uncompressed key comes out a little low.
 
-A sweep that pays an address of this wallet is of the account of that address,
-found without --account unless the sweep pays several accounts, on its network.
-The address finds its account however it is written: a Bitcoin Cash address
-with or without its prefix, or in its legacy form. The sweep is stored as a
-pending transaction, to be signed with `signsweep` by its nosigHash, and
-written to the --output file when one is given.
+Give each destination with --sweepto, as ADDRESS or ADDRESS:AMOUNT, written as
+for preparetx. An address with an amount gets exactly that amount. The
+addresses without one share the rest in equal parts, and they pay the fee. So
+give at least one of them. When the rest does not cover the fee, nothing is
+prepared. preparesendall shares the coins the same way.
 
-A sweep that pays no address of this wallet needs no account, even in a wallet
-that has none: hw is then a utility. It needs the --network it is for and an
---output file, which names the network and is signed from there. The
-default-network of the configuration file does not apply to it. Private keys,
-coins and the legacy addresses of Bitcoin Cash read the same on Bitcoin, so a
-wrong guess would sweep the coins of the other chain.
+A sweep that pays an address of this wallet belongs to the account of that
+address, on its network. hw finds the account however the address is written,
+such as a Bitcoin Cash address with or without its prefix, or in its legacy
+form. The sweep is kept as a pending transaction, to sign with signsweep by
+its nosigHash. --output also writes it to a file.
 
-A fee rate above 100 satoshis per byte, ten times the default, is more often a
-typo than a choice, so `preparesweep` asks before it takes one, and before the
-private keys are typed. --yes takes it without asking, for a script.
+A sweep that pays no address of this wallet needs no account, even in a
+wallet that has none. It needs --network and --output, and is signed from the
+file. The default-network of the configuration file does not apply. Private
+keys, coins and the legacy addresses of Bitcoin Cash read the same on
+Bitcoin, so a wrong guess would sweep the coins of the other chain.
+
+A fee rate above 100 satoshis per byte is more often a typo than a choice, so
+preparesweep asks before it takes one. It asks before the private keys are
+typed. --yes takes it without asking, for scripts.
 |]
 
 sweepFromOption :: Parser Text
@@ -1690,7 +1771,7 @@ sweepFromOption =
     short 'w'
       <> long "sweepfrom"
       <> metavar "ADDRESS"
-      <> help "Addresses to sweep the coins from"
+      <> help "An address whose coins to sweep. Repeat for several addresses."
 
 addressFileOption :: Parser (Maybe FilePath)
 addressFileOption =
@@ -1706,7 +1787,7 @@ sweepToOption =
     short 't'
       <> long "sweepto"
       <> metavar "ADDRESS[:AMOUNT]"
-      <> help "An address to sweep to, which shares what remains, or an address and the amount it gets, ADDRESS:AMOUNT"
+      <> help "A destination that shares what remains, or ADDRESS:AMOUNT for a fixed amount. Repeat for several destinations."
 
 {- SignSweep Parser -}
 
@@ -1717,19 +1798,22 @@ signSweepParser = do
           <$> signingOptions
           <*> prvKeysMaybeOption
   info cmd $
-    progDesc "Sign a sweep transaction"
-      <> footer
+    progDescDoc (offline "Sign a sweep with the private keys of its coins")
+      <> footerParagraphs
         [r|
-Sign a transaction that was prepared with the `preparesweep` command. As the
-coins of this transaction are not from this wallet, the private keys for signing
-are passed in a separate --prvkeys file, or typed on the terminal without echo
-with --prvkeys - or when no file is given. The sweep transaction can be
-referenced by its nosigHash if it exists in the wallet, or you can pass it as a
-file with --input, in which case it need not involve this wallet at all. The
-signed transaction goes to the --output file or, without one, replaces the
---input file if you agree, as hw asks before the keys. A sweep outside the
-wallet needs no account: it is signed on the network its file names. The file
-of an earlier hw names none, and is prepared again.
+signsweep signs a sweep that preparesweep made. Its coins are not the
+wallet's, so signing needs their private keys. Give them in a --prvkeys file.
+Or type them on the terminal, where they are not shown, with --prvkeys - or
+without --prvkeys.
+
+Give a pending sweep by its NOSIGHASH. The signed sweep then takes its place
+in the wallet. Or give a sweep file with --input. The signed sweep then goes
+to the --output file. Without --output, hw offers to replace the --input file.
+It asks this before the keys.
+
+A sweep that pays no account of this wallet needs no account here either. It
+is signed on the network its file names. A file from an earlier hw names
+none, and must be prepared again.
 |]
 
 -- | The private keys: a file, or - for the terminal
@@ -1740,7 +1824,7 @@ prvKeysMaybeOption =
       <> long "prvkeys"
       <> metavar "FILENAME"
       <> action "file"
-      <> help "File with the private keys in WIF, minikey or hex format, one or more per line; - to type them on the terminal"
+      <> help "A file of private keys in WIF, minikey or hex format, separated by spaces or line breaks. Give - to type them on the terminal instead."
   where
     source "-" = Right KeysOnTerminal
     source file = Right (KeysInFile file)
@@ -1748,10 +1832,11 @@ prvKeysMaybeOption =
 
 {- Argument parser helpers -}
 
-textArg :: String -> Parser Text
-textArg desc =
+-- | A text argument, with its name in the usage line and its help
+textArg :: String -> String -> Parser Text
+textArg name desc =
   argument str $
-    metavar "TEXT"
+    metavar name
       <> help desc
 
 fileArgument :: String -> Parser FilePath
