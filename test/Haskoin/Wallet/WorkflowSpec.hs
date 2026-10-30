@@ -527,6 +527,62 @@ verifySpec =
         (errorOf <$> hwJson home ["verifymsg", address, signature, message] [])
           `shouldReturn` Right "The address mpLQjfK79b7CCV4VMJWEWAj5Mpx8Up5zxB is not valid on btc"
 
+    it "reads the block signmsg printed, saved in a file" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        signed <- hw home ["signmsg", textOf (externalAddr 0), "hello"] seedOnce
+        Text.lines (runOut signed)
+          `shouldBe` [ "-----BEGIN BITCOIN SIGNED MESSAGE-----",
+                       "hello",
+                       "-----BEGIN BITCOIN SIGNATURE-----",
+                       externalAddrsText !! 0,
+                       helloSignature,
+                       "-----END BITCOIN SIGNATURE-----"
+                     ]
+        let file = home </> "signed.txt"
+        writeFile file (Text.unpack (runOut signed))
+        hwJson home ["verifymsg", "--input", file] []
+          `shouldReturn` ResponseVerifyMsg "hello" helloSignature (externalAddrsText !! 0) True
+
+    it "refuses a file that holds no block" $
+      withHome $ \home -> do
+        let file = home </> "plain.txt"
+        writeFile file "hello\n"
+        (errorOf <$> hwJson home ["verifymsg", "--input", file] [])
+          `shouldReturn` Right (Text.pack $ "The file " <> file <> " could not be read: no \"-----BEGIN BITCOIN SIGNED MESSAGE-----\" line")
+
+    it "reads a message of several lines, with its whitespace, from the block" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        let message = "two lines, \nand a trailing space "
+        signed <- hw home ["signmsg", textOf (externalAddr 0), message] seedOnce
+        let file = home </> "signed.txt"
+        writeFile file (Text.unpack (runOut signed))
+        checked <- hwJson home ["verifymsg", "--input", file] []
+        case checked of
+          ResponseVerifyMsg m _ a valid -> (m, a, valid) `shouldBe` (Text.pack message, externalAddrsText !! 0, True)
+          other -> expectationFailure $ "Not a verifymsg answer: " <> show other
+
+    it "reads the --json answer of signmsg, saved in a file" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        signed <- hw home ["signmsg", textOf (externalAddr 0), "hello", "--json"] seedOnce
+        let file = home </> "signed.json"
+        writeFile file (Text.unpack (runOut signed))
+        hwJson home ["verifymsg", "--input", file] []
+          `shouldReturn` ResponseVerifyMsg "hello" helloSignature (externalAddrsText !! 0) True
+
+    it "refuses a file holding another answer of hw" $
+      withHome $ \home -> do
+        run <- hw home ["version", "--json"] []
+        let file = home </> "version.json"
+        writeFile file (Text.unpack (runOut run))
+        (errorOf <$> hwJson home ["verifymsg", "--input", file] [])
+          `shouldReturn` Right (Text.pack $ "The file " <> file <> " holds an answer of hw, but not one of signmsg")
+
     -- The refusals of Bitcoin Core's message_verify test
     it "refuses an address that is not P2PKH" $
       withHome $ \home ->

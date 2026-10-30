@@ -64,6 +64,8 @@ import Control.Monad (forM, join, unless, void, when)
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
+import qualified Data.Aeson as Json
+import Data.Bifunctor (first)
 import Data.Either (isLeft)
 import Data.Foldable (for_)
 import Data.List (nub, partition)
@@ -73,6 +75,7 @@ import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import Data.Text.Encoding (encodeUtf8)
 import Data.Version (showVersion)
 import Data.Word (Word64)
 import Database.Persist.Sqlite (transactionUndo)
@@ -909,13 +912,30 @@ cmdSignMsg ctx cfg opts =
 cmdVerifyMsg :: Ctx -> Config -> VerifyMsg -> IO Response
 cmdVerifyMsg ctx cfg opts =
   runResponse $ do
+    (address, signature, message) <- case opts.source of
+      Given address signature message -> return (address, signature, message)
+      FromFile file -> signedMessageFromFile file
     net <- liftMaybe noNetwork (commandNetwork cfg opts.network)
-    addr <- liftEither $ textToAddrE net opts.address
-    valid <- liftEither $ verifyMessage ctx addr opts.signature opts.message
+    addr <- liftEither $ textToAddrE net address
+    valid <- liftEither $ verifyMessage ctx addr signature message
     -- A message that is hard to copy exactly may be why the signature does
     -- not check out. On stderr, to keep the --json answer clean.
-    unless valid $ liftIO $ mapM_ (hPutStrLn stderr) $ messageWarnings opts.message
-    return $ ResponseVerifyMsg opts.message opts.signature opts.address valid
+    unless valid $ liftIO $ mapM_ (hPutStrLn stderr) $ messageWarnings message
+    return $ ResponseVerifyMsg message signature address valid
+
+-- | The address, the signature and the message of the output of signmsg
+-- saved in a file: its --json answer when the file holds JSON, else its
+-- armored block
+signedMessageFromFile :: FilePath -> ExceptT String IO (Text, Text, Text)
+signedMessageFromFile file = do
+  content <- liftEitherIO $ readTextFile file
+  if "{" `Text.isPrefixOf` Text.stripStart content
+    then do
+      answer <- liftEither $ first (couldNotRead file) $ Json.eitherDecodeStrict' (encodeUtf8 content)
+      case answer of
+        ResponseSignMsg message signature address -> return (address, signature, message)
+        _ -> throwError $ "The file " <> file <> " holds an answer of hw, but not one of signmsg"
+    else liftEither $ first (couldNotRead file) $ readSignedMessageBlock content
 
 -- | Copy the database to the given file, which must not exist, or into the
 -- backups directory of hw under a name carrying the format version and the

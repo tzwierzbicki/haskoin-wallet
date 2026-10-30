@@ -19,6 +19,8 @@ import Data.Aeson.Types (parseEither)
 import Data.Bifunctor (first)
 import qualified Data.ByteString.Char8 as C8
 import Data.Char (toLower)
+import Data.Text (Text)
+import Data.Text.Encoding (decodeUtf8')
 import GHC.IO.Exception (IOException (..))
 import Haskoin
 import Haskoin.Wallet.Util
@@ -76,6 +78,14 @@ readJsonFile :: (FromJSON a) => FilePath -> IO (Either String a)
 readJsonFile file = do
   bytes <- systemReason (C8.readFile file)
   return $ first (couldNotRead file) (eitherDecodeStrict' =<< bytes)
+
+-- | Read a text file as UTF-8, or say why it could not be read
+readTextFile :: FilePath -> IO (Either String Text)
+readTextFile file = do
+  bytes <- systemReason (C8.readFile file)
+  return $ first (couldNotRead file) (decoded =<< bytes)
+  where
+    decoded = either (const $ Left "The file is not UTF-8 text") Right . decodeUtf8'
 
 writeMarshalFile :: (MarshalJSON s a) => s -> FilePath -> a -> IO (Either String ())
 writeMarshalFile s file a = writeJsonFile file $ marshalValue s a

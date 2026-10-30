@@ -178,6 +178,63 @@ secp256k1Order :: Integer
 secp256k1Order =
   0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 
+{- The armored block -}
+
+-- | The lines of the block signmsg prints: the message between a marker
+-- and the signature marker, then the address and the signature. The
+-- markers are those of Sparrow and of the block Bitcoin users have passed
+-- around since Bitcoin-Qt, so that other wallets read it.
+signedMessageBlock :: Text -> Text -> Text -> [Text]
+signedMessageBlock address signature message =
+  [ "-----BEGIN BITCOIN SIGNED MESSAGE-----",
+    message,
+    "-----BEGIN BITCOIN SIGNATURE-----",
+    address,
+    signature,
+    "-----END BITCOIN SIGNATURE-----"
+  ]
+
+-- | The address, the signature and the message of an armored block, such
+-- as signmsg prints, or why the text is not one. A marker line is five dashes, words and five dashes:
+-- the message is every line between the BEGIN ... SIGNED MESSAGE marker and
+-- the BEGIN ... SIGNATURE marker, taken as it is, line endings included.
+-- The signature part, up to the END marker, holds the address and then the
+-- signature, which may be wrapped on several lines; its blank lines and
+-- "Key: value" headers, which some wallets write, are passed over. Text
+-- outside the markers, such as a quoting email, is left aside. hw 0.10
+-- printed the markers "BEGIN SIGNATURE" and "END BITCOIN SIGNED MESSAGE",
+-- which read as well. A message holding a marker line itself cannot be told
+-- from the end of the message.
+readSignedMessageBlock :: Text -> Either String (Text, Text, Text)
+readSignedMessageBlock content =
+  case break (isMarker beginsMessage) (Text.splitOn "\n" content) of
+    (_, []) -> Left "no \"-----BEGIN BITCOIN SIGNED MESSAGE-----\" line"
+    (_, _ : afterBegin) ->
+      case break (isMarker beginsSignature) afterBegin of
+        (_, []) -> Left "no \"-----BEGIN BITCOIN SIGNATURE-----\" line after the message"
+        (messageLines, _ : afterSignature) ->
+          case filter isValue (takeWhile (not . isMarker ends) afterSignature) of
+            address : signatureLines@(_ : _) ->
+              Right (Text.strip address, Text.concat (Text.strip <$> signatureLines), Text.intercalate "\n" messageLines)
+            _ -> Left "the signature part of the block must hold the address, then the signature"
+  where
+    beginsMessage ws = take 1 ws == ["BEGIN"] && drop (length ws - 2) ws == ["SIGNED", "MESSAGE"]
+    beginsSignature ws = take 1 ws == ["BEGIN"] && drop (length ws - 1) ws == ["SIGNATURE"]
+    ends ws = take 1 ws == ["END"]
+    isMarker kind line = maybe False kind (markerWords line)
+    isValue line = not (Text.null (Text.strip line)) && not (isHeader line)
+    -- "Version: Bitcoin-qt (1.0)": a first word ending with a colon. No
+    -- address or base64 signature ends a word so.
+    isHeader line = case Text.words line of
+      w : _ -> ":" `Text.isSuffixOf` w
+      [] -> False
+
+-- | The words of a marker line, between its dashes: Nothing for any other line
+markerWords :: Text -> Maybe [Text]
+markerWords line = do
+  inner <- Text.stripSuffix "-----" =<< Text.stripPrefix "-----" (Text.strip line)
+  return (Text.words inner)
+
 {- Warnings -}
 
 -- | Warnings for messages that are hard to reproduce exactly. A verifier must

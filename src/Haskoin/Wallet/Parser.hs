@@ -208,13 +208,17 @@ data SignMsg = SignMsg
   }
   deriving (Eq, Show)
 
+-- | What verifymsg checks: the address the message is said to be signed
+-- from, the signature in base64 and the message, given as they are or in a
+-- file holding the output of signmsg
+data SignedMessageSource
+  = Given !Text !Text !Text
+  | FromFile !FilePath
+  deriving (Eq, Show)
+
 -- | The options of verifymsg
 data VerifyMsg = VerifyMsg
-  { -- | The address the message is said to be signed from
-    address :: !Text,
-    -- | The signature, in base64
-    signature :: !Text,
-    message :: !Text,
+  { source :: !SignedMessageSource,
     -- | The network the address is read on, when given
     network :: !(Maybe Network)
   }
@@ -1509,7 +1513,9 @@ address. The signature uses the Bitcoin Signed Message format (the legacy
 format of BIP-322), which can be verified by Bitcoin Core and other wallets.
 The message is signed exactly as provided. A warning is shown when it contains
 leading or trailing whitespace or line breaks, as these are easily altered
-when copying the message and the signature would then fail to verify.
+when copying the message and the signature would then fail to verify. The
+output, the armored block or the --json answer, can be saved to a file and
+checked with verifymsg --input.
 |]
 
 signAddressArg :: Parser Text
@@ -1534,9 +1540,10 @@ The message to be signed
 
 verifyMsgParser :: ParserInfo Command
 verifyMsgParser = do
-  let cmd =
-        CommandVerifyMsg
-          <$> (VerifyMsg <$> verifyAddressArg <*> signatureArg <*> verifyMsgArg <*> networkMaybeOption)
+  let source =
+        (Given <$> verifyAddressArg <*> signatureArg <*> verifyMsgArg)
+          <|> (FromFile <$> signedMessageFileOption)
+      cmd = CommandVerifyMsg <$> (VerifyMsg <$> source <*> networkMaybeOption)
   info cmd $
     progDesc "Verify a signed message"
       <> footer
@@ -1548,7 +1555,22 @@ and the message must be given exactly as it was signed: a single changed byte
 makes the signature invalid. The address can be of any wallet; the network
 only says how to read it. When the signature is not valid, hw says so and
 exits with a failure, so that a script can tell.
+
+With --input, the three values are read from a file holding the output of
+signmsg: its armored block, as other wallets write it too, or its --json
+answer. In a block, the message is everything between the first marker and
+the signature marker, exactly as it is. The signature part holds the address,
+then the signature.
 |]
+
+signedMessageFileOption :: Parser FilePath
+signedMessageFileOption =
+  strOption $
+    short 'i'
+      <> long "input"
+      <> metavar "FILENAME"
+      <> action "file"
+      <> help "Read the address, the signature and the message from this file: the output of signmsg, as its armored block or its --json answer"
 
 verifyAddressArg :: Parser Text
 verifyAddressArg =

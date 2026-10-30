@@ -20,6 +20,7 @@ import Data.Maybe (isJust)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import Haskoin.Wallet.MessageSigning (signedMessageBlock)
 import Data.Time (UTCTime)
 import Data.Time.Format
 import Data.Word
@@ -658,16 +659,8 @@ responsePrinter unit =
     ResponseCoins acc coins -> do
       let net = accountNetwork acc
       renderIO $ vcat $ intersperse (text " ") $ coinPrinter net unit <$> coins
-    ResponseSignMsg m s a -> do
-      renderIO $
-        vcat
-          [ text "-----BEGIN BITCOIN SIGNED MESSAGE-----",
-            text $ cs m,
-            text "-----BEGIN SIGNATURE-----",
-            text $ cs a,
-            text $ cs s,
-            text "-----END BITCOIN SIGNED MESSAGE-----"
-          ]
+    ResponseSignMsg m s a ->
+      renderIO . vcat $ text . cs <$> signedMessageBlock a s m
     ResponseVerifyMsg _ _ addr valid ->
       renderIO . vcat $
         if valid

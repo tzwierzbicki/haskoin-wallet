@@ -39,6 +39,7 @@ spec =
       forM_ files $ vectorFileSpec vectorCount (fileProblems ctx)
       coverageSpec files
     verifySpec ctx
+    blockSpec
     propertiesSpec ctx
 
 {- Vector files -}
@@ -332,6 +333,57 @@ verifySpec ctx =
         `shouldBe` Left "The signature must be 65 bytes, not 64"
   where
     signatureOf header r s = encodeSignature $ BS.cons header (toBytes32 r <> toBytes32 s)
+
+-- | The armored block signmsg prints, written and read back
+blockSpec :: Spec
+blockSpec =
+  describe "The armored block of a signed message" $ do
+    it "is printed with the markers Sparrow and other wallets read" $
+      signedMessageBlock addr helloSignature "hello"
+        `shouldBe` [ "-----BEGIN BITCOIN SIGNED MESSAGE-----",
+                     "hello",
+                     "-----BEGIN BITCOIN SIGNATURE-----",
+                     addr,
+                     helloSignature,
+                     "-----END BITCOIN SIGNATURE-----"
+                   ]
+
+    prop "is read back as it was written, whatever the message" $
+      forAll arbitraryText $ \message ->
+        readSignedMessageBlock (Text.unlines (signedMessageBlock addr helloSignature message))
+          == Right (addr, helloSignature, message)
+
+    it "reads the block hw 0.10 printed, with its own markers" $
+      readSignedMessageBlock
+        (Text.unlines ["-----BEGIN BITCOIN SIGNED MESSAGE-----", "hello", "-----BEGIN SIGNATURE-----", addr, helloSignature, "-----END BITCOIN SIGNED MESSAGE-----"])
+        `shouldBe` Right (addr, helloSignature, "hello")
+
+    -- The warning about line endings then tells the user what happened
+    it "keeps the lines of the message as they are: a block saved with CRLF line endings holds another message" $
+      readSignedMessageBlock
+        "-----BEGIN BITCOIN SIGNED MESSAGE-----\r\n  two \r\nlines \r\n\r\n-----BEGIN BITCOIN SIGNATURE-----\r\nADDRESS\r\nSIGNATURE\r\n-----END BITCOIN SIGNATURE-----\r\n"
+        `shouldBe` Right ("ADDRESS", "SIGNATURE", "  two \r\nlines \r\n\r")
+
+    it "passes over the blank lines, the headers and the wrapping of the signature part" $ do
+      let (firstHalf, secondHalf) = Text.splitAt 44 helloSignature
+      readSignedMessageBlock
+        (Text.unlines ["-----BEGIN BITCOIN SIGNED MESSAGE-----", "hello", "-----BEGIN BITCOIN SIGNATURE-----", "Version: Bitcoin-qt (1.0)", "", addr, "", firstHalf, secondHalf, "-----END BITCOIN SIGNATURE-----"])
+        `shouldBe` Right (addr, helloSignature, "hello")
+
+    it "leaves aside the text around the block" $
+      readSignedMessageBlock
+        (Text.unlines ["Here is my proof:", "", "-----BEGIN BITCOIN SIGNED MESSAGE-----", "hello", "-----BEGIN BITCOIN SIGNATURE-----", addr, helloSignature, "-----END BITCOIN SIGNATURE-----", "", "Regards"])
+        `shouldBe` Right (addr, helloSignature, "hello")
+
+    it "refuses text without the three parts of a block" $ do
+      readSignedMessageBlock "hello"
+        `shouldBe` Left "no \"-----BEGIN BITCOIN SIGNED MESSAGE-----\" line"
+      readSignedMessageBlock "-----BEGIN BITCOIN SIGNED MESSAGE-----\nhello\n"
+        `shouldBe` Left "no \"-----BEGIN BITCOIN SIGNATURE-----\" line after the message"
+      readSignedMessageBlock (Text.unlines ["-----BEGIN BITCOIN SIGNED MESSAGE-----", "hello", "-----BEGIN BITCOIN SIGNATURE-----", addr, "-----END BITCOIN SIGNATURE-----"])
+        `shouldBe` Left "the signature part of the block must hold the address, then the signature"
+  where
+    addr = externalAddrsText !! 0
 
 propertiesSpec :: Ctx -> Spec
 propertiesSpec ctx =
