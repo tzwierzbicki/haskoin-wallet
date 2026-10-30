@@ -582,6 +582,17 @@ testMnemonic2 =
     "boring auction demand filter frog accuse company exchange rely slogan trim typical"
     "correct horse battery staple"
 
+-- | The words of the test mnemonic in two parts, as mnemonic --split 2
+-- prints them. The second part is the words of 'testMnemonic2'. The first
+-- is the mnemonic of the entropy of the test mnemonic xor that of the
+-- second part, computed apart from hw with the BIP39 functions of
+-- haskoin-core.
+testMnemonicParts :: [Text]
+testMnemonicParts =
+  [ "stamp snap purity pepper arrange notable inform grass crazy salad thought slide",
+    "boring auction demand filter frog accuse company exchange rely slogan trim typical"
+  ]
+
 testFingerprintText2 :: Text
 testFingerprintText2 = "4435aa1c"
 

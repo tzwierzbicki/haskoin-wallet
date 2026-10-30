@@ -19,6 +19,7 @@ import Data.List (findIndex, isInfixOf, sort, sortOn)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
+import Data.Text.Encoding (encodeUtf8)
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import qualified Data.ByteString as BS
 import Data.Word (Word64)
@@ -27,7 +28,7 @@ import Haskoin
 import Haskoin.Wallet.Address (CoinBalance (..), coinBalanceUnspendable)
 import Haskoin.Wallet.Coin (CoinLock (..), JsonCoin (..), LeftCoin (..), LeftReason (..))
 import Haskoin.Wallet.Response (Response (..))
-import Haskoin.Wallet.Database (DBAccount (..), DBAddress (..), databaseInUse, runDBWith)
+import Haskoin.Wallet.Database (DBAccount (..), DBAddress (..), DBRawTx, databaseInUse, runDBWith)
 import Haskoin.Wallet.FeeRates (FeeRates (..))
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (MnemonicPass (..))
@@ -56,6 +57,7 @@ spec = prepareContext $ \ctx -> do
   listingSpec ctx
   signingSpec ctx
   paymentSpec ctx
+  minConfSpec ctx
   recoverSpec ctx
   passphraseSpec ctx
   sweepSpec ctx
@@ -81,6 +83,11 @@ seedOnce = [mnemonicWords testMnemonic, mnemonicPass testMnemonic]
 -- | The same, typed twice each, as createacc asks for them
 seedTwice :: [Text]
 seedTwice = [mnemonicWords testMnemonic, mnemonicWords testMnemonic, mnemonicPass testMnemonic, mnemonicPass testMnemonic]
+
+-- | The words of the test wallet in their two parts, then its passphrase,
+-- typed once each, as a command with --split 2 asks for them
+partsOnce :: [Text]
+partsOnce = testMnemonicParts <> [mnemonicPass testMnemonic]
 
 -- | The answer of hw with --json, which must not be an error
 answer :: FilePath -> [String] -> [Text] -> IO Response
@@ -247,6 +254,12 @@ accountSpec =
         createMain home
         (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("main", 0, 0)]
 
+    it "is listed alone by accounts --account" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "second"] seedTwice
+        (accountsOf <$> hwJson home ["accounts", "--account", "second"] []) `shouldReturn` Right [("second", 1, 0)]
+
     it "takes the next index of a seed that has an account already" $
       withHome $ \home -> do
         createMain home
@@ -281,6 +294,23 @@ accountSpec =
         matched `shouldSatisfy` \case ResponseAccResult _ True _ -> True; _ -> False
         missed <- hwJson home ["testacc"] [mnemonicWords testMnemonic, "wrong passphrase"]
         missed `shouldSatisfy` \case ResponseAccResult _ False "The mnemonic and passphrase did not match the account" -> True; _ -> False
+
+    -- other is of the second seed, and main of the first
+    it "is checked by testacc --account, whose seed is the one to type" $
+      withHome $ \home -> do
+        createMain home
+        let second = [mnemonicWords testMnemonic2, mnemonicPass testMnemonic2]
+        _ <- answer home ["createacc", "other"] (concatMap (replicate 2) second)
+        matched <- hwJson home ["testacc", "--account", "other"] second
+        matched `shouldSatisfy` \case ResponseAccResult acc True _ -> dBAccountName acc == "other"; _ -> False
+        missed <- hwJson home ["testacc", "--account", "other"] seedOnce
+        missed `shouldSatisfy` \case ResponseAccResult _ False _ -> True; _ -> False
+
+    it "is checked by testacc --split against the parts of its mnemonic" $
+      withHome $ \home -> do
+        createMain home
+        matched <- hwJson home ["testacc", "--split", "2"] partsOnce
+        matched `shouldSatisfy` \case ResponseAccResult _ True _ -> True; _ -> False
 
     it "is renamed by renameacc" $
       withHome $ \home -> do
@@ -380,6 +410,17 @@ addressSpec ctx =
         (addressesOf <$> hwJson home ["label", "1", "salary"] []) `shouldReturn` Right [(externalAddrsText !! 1, "salary")]
         (addressesOf <$> hwJson home ["addrs"] []) `shouldReturn` Right [(externalAddrsText !! 1, "salary"), (externalAddrsText !! 0, "")]
 
+    -- 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo is the first receiving address of
+    -- second, account 1 of the seed
+    it "are named by label in the account of --account" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        _ <- answer home ["createacc", "second"] seedTwice
+        _ <- answer home ["receive", "--account", "second"] []
+        (addressesOf <$> hwJson home ["label", "0", "rent", "--account", "second"] []) `shouldReturn` Right [("17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "rent")]
+        (addressesOf <$> hwJson home ["addrs", "--account", "main"] []) `shouldReturn` Right [(externalAddrsText !! 0, "")]
+
     it "are not labelled beyond the ones the account reached" $
       withHome $ \home -> do
         createMain home
@@ -421,6 +462,19 @@ splitSpec =
         whole `shouldSatisfy` \case ResponseMnemonic "/dev/random" ws [] -> length ws == 12; _ -> False
         long <- answer home ["mnemonic", "--entropy", "32"] []
         long `shouldSatisfy` \case ResponseMnemonic _ ws [] -> length ws == 24; _ -> False
+
+    -- BIP39 adds a word of 11 bits for every 4 bytes of entropy
+    it "has 15, 18 and 21 words for 20, 24 and 28 bytes of --entropy" $
+      withHome $ \home ->
+        forM_ [("20", 15), ("24", 18), ("28", 21)] $ \(bytes, count) -> do
+          generated <- answer home ["mnemonic", "--entropy", bytes] []
+          generated `shouldSatisfy` \case ResponseMnemonic _ ws [] -> length ws == count; _ -> False
+
+    it "is refused an --entropy other than 16, 20, 24, 28 or 32 bytes" $
+      withHome $ \home -> do
+        run <- hw home ["mnemonic", "--entropy", "17"] []
+        runExit run `shouldBe` ExitFailure 1
+        runErr run `shouldSatisfy` Text.isInfixOf "option --entropy: cannot parse value `17'"
 
     -- Any of the parts alone says nothing of the mnemonic: all of them make
     -- the account, as the mnemonic does
@@ -497,6 +551,15 @@ feesSpec ctx =
               `shouldBe` ("btc", 9, 12, 118, 800000, 800001)
           other -> expectationFailure $ "Not a fees answer: " <> show other
 
+    -- The configuration file of the test home names btc, and the fake store
+    -- serves the same chain on every network
+    it "are those of the --network given" $
+      withChain ctx (feesChain ctx) $ \home _ -> do
+        answered <- answer home ["fees", "--network", "bch"] []
+        case answered of
+          ResponseFees net _ -> net.name `shouldBe` "bch"
+          other -> expectationFailure $ "Not a fees answer: " <> show other
+
     it "are shown by preparetx without --feerate, which asks which to take, the median by default" $
       withChain ctx (feesChain ctx) $ \home _ -> do
         synced home
@@ -547,6 +610,14 @@ messageSpec =
         createMain home
         _ <- answer home ["receive"] []
         signed <- hwJson home ["signmsg", textOf (externalAddr 0), "hello"] seedOnce
+        signed `shouldBe` ResponseSignMsg "hello" helloSignature (externalAddrsText !! 0)
+
+    -- A signature of the key is always the same
+    it "is signed from the parts of the mnemonic with --split" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        signed <- hwJson home ["signmsg", textOf (externalAddr 0), "hello", "--split", "2"] partsOnce
         signed `shouldBe` ResponseSignMsg "hello" helloSignature (externalAddrsText !! 0)
 
     -- cash is the Bitcoin Cash account of the test wallet. hw stores the
@@ -1063,6 +1134,26 @@ receivingSpec ctx = do
         (accountsOf <$> hwJson home ["sync"] []) `shouldReturn` Right [("main", 0, 50000)]
         (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("main", 0, 50000)]
 
+    -- 50000 satoshis are 0.0005 bitcoins and 500 bits
+    it "is shown by accounts in bitcoins, or in the unit of --unit" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        (printed "0.00050000 btc" <$> hw home ["accounts"] []) `shouldReturn` True
+        (printed "50000 sats" <$> hw home ["accounts", "--unit", "sat"] []) `shouldReturn` True
+        (printed "500.00 bits" <$> hw home ["accounts", "--unit", "bit"] []) `shouldReturn` True
+
+    -- The help says the two options go before or after the command
+    it "is shown in the unit of --unit given before the command" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        (printed "50000 sats" <$> hw home ["--unit", "sat", "accounts"] []) `shouldReturn` True
+
+    it "is answered in JSON with --json given before the command" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home ["--json", "accounts"] []
+        (accountsOf <$> Json.eitherDecodeStrict (encodeUtf8 (runOut run))) `shouldBe` Right (Right [("main", 0, 50000)])
+
     it "is listed by txs, with its confirmations" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
@@ -1119,6 +1210,34 @@ receivingSpec ctx = do
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0004", "--feerate", "10"] [])
           `shouldReturn` Right "The coins do not cover the amount and the fee"
 
+  describe "A sync" $ do
+    -- The chain pays main: a sync of second alone leaves main as it was
+    it "updates only the account of --account" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        _ <- answer home ["createacc", "second"] seedTwice
+        (accountsOf <$> hwJson home ["sync", "--account", "second"] []) `shouldReturn` Right [("second", 1, 0)]
+        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("main", 0, 0), ("second", 1, 0)]
+
+    -- The database lost the transaction the coin of the payment comes
+    -- from, which signing needs. No balance changed, so only a full sync
+    -- looks at the coin again.
+    it "fetches with --full the raw transaction of a coin the database lost, as preparetx asks" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        dropRawTxs home
+        let missing = "The raw transaction " <> txHashToHex (txHash (payment ctx)) <> " of a coin is missing: sync --full fetches it"
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"] []) `shouldReturn` Right missing
+        _ <- answer home ["sync", "--full"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"] []
+        spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 50000)]
+
+-- | Drop every raw transaction from the database of a home, as a database
+-- that lost them
+dropRawTxs :: FilePath -> IO ()
+dropRawTxs home = runDBWith 100 (home </> ".hw" </> "accounts.sqlite") $ P.deleteWhere ([] :: [P.Filter DBRawTx])
+
 {- Signing -}
 
 -- | A signer holding the account main, and an online computer holding the
@@ -1156,6 +1275,13 @@ signingSpec ctx = do
         (spendsAndPays ctx <$> published) `shouldBe` [paymentSent ctx]
         modifyIORef chain mine
         (accountsOf <$> hwJson home ["sync"] []) `shouldReturn` Right [("main", 0, 27740)]
+
+    it "is signed from the parts of the mnemonic with signtx --split" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"] []
+        signed <- txOf =<< answer home ["signtx", nosig, "--split", "2"] partsOnce
+        pendingState signed `shouldBe` Just (True, False)
 
     -- The wallet has two accounts of the test seed, and the payment is
     -- pending in main. Without --account, hw asked which account to use.
@@ -1256,6 +1382,17 @@ signingSpec ctx = do
         summaryFee (txInfoSummary reviewed) `shouldBe` 2260
         (txsOf <$> hwJson signer ["pendingtxs"] []) `shouldReturn` Right []
 
+    -- The payment is from main
+    it "is refused by reviewtx and importtx for an --account the transaction does not involve" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "second"] seedTwice
+        Json.encodeFile (home </> "payment.json") (unsignedPayment ctx)
+        forM_ ["reviewtx", "importtx"] $ \command ->
+          (errorOf <$> hwJson home [command, home </> "payment.json", "--account", "second"] [])
+            `shouldReturn` Right "The transaction does not involve the account second"
+        (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+
     -- The online wallet has the account from a document without the
     -- fingerprint of its seed. bc560f95 is the fingerprint of the test seed.
     it "names the seed in the signed file, which the online wallet learns as it sends it" $
@@ -1316,6 +1453,41 @@ paymentSpec ctx =
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 17740)]
         paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 30000)]
 
+    -- 999 satoshis are less than the 1000 of --dust, and more than the 546
+    -- of the default
+    it "is refused a payment below the --dust limit" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "999sat", "--dust", "1000", "--feerate", "10"] [])
+          `shouldReturn` Right "Recipient output is smaller than the dust value"
+
+    -- A payment of 30000 from the coin of 50000 leaves 50000 - 30000 - 2260
+    -- = 17740 of change, less than the 20000 of --dust: the fee is all the
+    -- rest, 50000 - 30000 = 20000
+    it "gives the fee a change below the --dust limit" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0003", "--dust", "20000", "--feerate", "10"] []
+        paidToWallet prepared `shouldBe` Map.empty
+        feeOf prepared `shouldBe` 20000
+
+    -- The coins of 50000 and 30000 are both at /0/0, and either pays 20000
+    -- alone. Each payment is deleted, which frees its coin for the next.
+    it "spends the coins in the order of --strategy" $
+      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+        synced home
+        forM_ [("largest-first", 50000), ("smallest-first", 30000)] $ \(strategy, spent) -> do
+          prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--strategy", strategy, "--feerate", "10"] []
+          spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, spent)]
+          nosig <- nosigOf prepared
+          void $ answer home ["deletetx", nosig] []
+
+    it "is refused a --strategy it does not know, with the ones it knows" $
+      withHome $ \home -> do
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--strategy", "biggest", "--feerate", "10"] []
+        runExit run `shouldBe` ExitFailure 1
+        runErr run `shouldSatisfy` Text.isInfixOf "option --strategy: Invalid strategy. Select one of the following: least-waste, random-draw, largest-first, smallest-first"
+
     it "is refused for more than the coins of the account" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
@@ -1356,6 +1528,75 @@ paymentSpec ctx =
           `shouldReturn` Right (alreadyExists (home </> "taken.json"))
         readFile (home </> "taken.json") `shouldReturn` ""
 
+{- The confirmations of the coins spent -}
+
+-- | A payment of 30000 satoshis from another wallet to the second
+-- receiving address of the test wallet
+newerPayment :: Ctx -> Tx
+newerPayment ctx = fundingTx ctx 10 [(externalAddr 1, 30000)]
+
+-- | The paid chain with the newer payment in its best block, 800002: the
+-- coin of 50000 has 3 confirmations, and the coin of 30000 has 1
+olderAndNewerChain :: Ctx -> Chain
+olderAndNewerChain ctx = Chain 800002 [(payment ctx, Just 800000), (newerPayment ctx, Just 800002)]
+
+-- A payment of 20000 from the coin of 50000 makes one input and two
+-- outputs, 226 bytes: a fee of 2260 at 10 satoshis a byte, and 27740 of
+-- change. The coin of the paid chain is in block 800000, two below the best
+-- block: 3 confirmations.
+minConfSpec :: Ctx -> Spec
+minConfSpec ctx =
+  describe "The confirmations preparetx asks of its coins with --minconf" $ do
+    it "spends a coin with as many confirmations as --minconf asks" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--minconf", "3", "--feerate", "10"] []
+        spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 50000)]
+
+    it "is refused when no coin has as many confirmations as --minconf asks, and prepares nothing" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--minconf", "4", "--feerate", "10"] [])
+          `shouldReturn` Right "The coins do not cover the amount and the fee"
+        (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+
+    -- Smallest first would spend the coin of 30000 alone, but it has 1
+    -- confirmation
+    it "chooses only among the coins with as many confirmations as --minconf asks" $
+      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+        synced home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--minconf", "2", "--strategy", "smallest-first", "--feerate", "10"] []
+        spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 50000)]
+
+    -- The payment sent spends the coin of 50000 and leaves 27740 of change
+    -- in the mempool, the only coin of the account
+    it "spends the unconfirmed change of the wallet's own payment without --minconf" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        _ <- sentPayment home
+        _ <- answer home ["sync"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--feerate", "10"] []
+        spentFromWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 27740)]
+
+    it "does not spend the unconfirmed change of the wallet's own payment with --minconf 1" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        _ <- sentPayment home
+        _ <- answer home ["sync"] []
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--minconf", "1", "--feerate", "10"] [])
+          `shouldReturn` Right "The coins do not cover the amount and the fee"
+
+    it "lists a coin of --coin with fewer confirmations than --minconf asks as not spendable yet" $
+      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+        synced home
+        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (payment ctx) 0, "--coin", coinArg (newerPayment ctx) 0, "--minconf", "2", "--feerate", "10"] []
+        spentFromWallet <$> txOf prepared `shouldReturn` Map.fromList [(externalAddr 0, 50000)]
+        leftOf prepared `shouldBe` Right [(OutPoint (txHash (newerPayment ctx)) 0, 30000, NotSpendableYet)]
+
+    it "is refused a --minconf that is not a whole number" $
+      withHome $ \home -> do
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--minconf", "1.5", "--feerate", "10"] []
+        runExit run `shouldBe` ExitFailure 1
+        runErr run `shouldSatisfy` Text.isInfixOf "option --minconf: cannot parse value `1.5'"
+
 {- Recovering a seed -}
 
 recoverSpec :: Ctx -> Spec
@@ -1365,6 +1606,22 @@ recoverSpec ctx =
       withChain ctx (paidChain ctx) $ \home _ -> do
         (accountsOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right [("btc0", 0, 50000)]
         (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("btc0", 0, 50000)]
+
+    it "are found from the parts of the mnemonic with --split" $
+      withChain ctx (paidChain ctx) $ \home _ ->
+        (accountsOf <$> hwJson home ["recover", "--split", "2"] partsOnce) `shouldReturn` Right [("btc0", 0, 50000)]
+
+    -- The chain pays account 1 only. Account 0 is one without a payment.
+    it "are looked for until --account-gap accounts in a row without a payment" $
+      withChain ctx (chainPaying ctx account1Addr) $ \home _ -> do
+        (accountsOf <$> hwJson home ["recover", "--account-gap", "1"] seedOnce) `shouldReturn` Right []
+        (accountsOf <$> hwJson home ["recover", "--account-gap", "2"] seedOnce) `shouldReturn` Right [("btc1", 1, 50000)]
+
+    -- The configuration file of the test home names btc. The chain pays the
+    -- first receiving address of account 0 of the seed on Bitcoin Cash.
+    it "are looked for on the --network given" $
+      withChain ctx (chainPaying ctx bchExternalAddr) $ \home _ ->
+        (accountsOf <$> hwJson home ["recover", "--network", "bch"] seedOnce) `shouldReturn` Right [("bch0", 0, 50000)]
 
     it "leave out an account the wallet has" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -1503,6 +1760,23 @@ sweepSpec ctx =
         (spendsAndPays ctx <$> published) `shouldBe` [([OutPoint (txHash (oldCoin ctx)) 0], [(28080, Right (externalAddr 0))])]
         modifyIORef chain mine
         (accountsOf <$> hwJson home ["sync"] []) `shouldReturn` Right [("main", 0, 28080)]
+
+    -- Without the key, hw counts it as compressed, which it is: the sweep
+    -- is the same 192 bytes
+    it "takes the coin of --coin, without its key or its address" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        prepared <- txOf =<< answer home ["preparesweep", "--coin", coinArg (oldCoin ctx) 0, "--sweepto", textOf (externalAddr 0), "--feerate", "10"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 28080)]
+
+    it "is refused when what remains for the destination is below the --dust limit" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        keys <- writeKeyFile home
+        (errorOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0), "--dust", "30000", "--feerate", "10"] [])
+          `shouldReturn` Right "What remains for each address without an amount, 28080 satoshis, is below the dust limit of 30000"
 
     it "that pays outside the wallet is refused without an --output file" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
@@ -1818,6 +2092,29 @@ listingSpec ctx = do
         replicateM_ 3 $ answer home ["receive"] []
         (rowsOf <$> hwJson home ["addrs", "--limit", "18446744073709551617"] []) `shouldReturn` Right 3
 
+    -- second is an account of its own, without any row
+    it "shows the rows of the account of --account only" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"] []
+        _ <- answer home ["createacc", "second"] seedTwice
+        forM_ listings $ \listing -> do
+          (rowsOf <$> hwJson home [listing, "--account", "main"] []) `shouldReturn` Right 1
+          (rowsOf <$> hwJson home [listing, "--account", "second"] []) `shouldReturn` Right 0
+
+    -- Two of each: the addresses /0/0 and /0/1, the two payments to them,
+    -- their coins, and a payment prepared from each coin
+    it "shows --limit rows of each listing, after the first --offset rows" $
+      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (payment ctx) 0, "--feerate", "10"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--coin", coinArg (newerPayment ctx) 0, "--feerate", "10"] []
+        forM_ listings $ \listing -> do
+          (rowsOf <$> hwJson home [listing] []) `shouldReturn` Right 2
+          (rowsOf <$> hwJson home [listing, "--limit", "1"] []) `shouldReturn` Right 1
+          (rowsOf <$> hwJson home [listing, "--offset", "1"] []) `shouldReturn` Right 1
+          (rowsOf <$> hwJson home [listing, "--offset", "2"] []) `shouldReturn` Right 0
+
 {- Sending -}
 
 -- | A home synced with the paid chain, with the payment of 20000 to the
@@ -2082,6 +2379,44 @@ sendAllSpec ctx = do
       withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
         synced home
         (errorOf <$> hwJson home ["preparesendall", textOf (otherAddr 0), "--feerate", "101"] ["n"]) `shouldReturn` Right highFeeRefused
+
+    -- 340 bytes at 101 satoshis a byte are a fee of 34340, which leaves
+    -- 80000 - 34340 = 45660 for the address
+    it "are sent at a fee rate above 100 satoshis per byte without asking with --yes" $
+      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+        synced home
+        prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--feerate", "101", "--yes"] []
+        paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 45660)]
+
+    -- The wallet has two accounts, and the coins are of main
+    it "are those of the account of --account" $
+      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+        synced home
+        _ <- answer home ["createacc", "second"] seedTwice
+        prepared <- answer home ["preparesendall", textOf (otherAddr 0), "--account", "main", "--feerate", "10"] []
+        (dBAccountName <$> accountOf prepared) `shouldBe` Right "main"
+        paidToOthers <$> txOf prepared `shouldReturn` Map.fromList [(otherAddr 0, 76600)]
+
+    it "are not sent when what remains for the address is below the --dust limit" $
+      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["preparesendall", textOf (otherAddr 0), "--dust", "80000", "--feerate", "10"] [])
+          `shouldReturn` Right "What remains for each address without an amount, 76600 satoshis, is below the dust limit of 80000"
+
+    -- The coin of 50000 has 3 confirmations, and the coin of 30000 has 1.
+    -- The coin of 50000 alone makes 192 bytes, a fee of 1920.
+    it "stay in the account with fewer confirmations than --minconf asks, which the answer lists" $
+      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+        synced home
+        sendAll <- answer home ["preparesendall", textOf (otherAddr 0), "--minconf", "2", "--feerate", "10"] []
+        paidToOthers <$> txOf sendAll `shouldReturn` Map.fromList [(otherAddr 0, 48080)]
+        leftOf sendAll `shouldBe` Right [(OutPoint (txHash (newerPayment ctx)) 0, 30000, NotSpendableYet)]
+
+    it "are written to the --output file with the network of their account" $
+      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparesendall", textOf (otherAddr 0), "--output", home </> "unsigned.json", "--feerate", "10"] []
+        (fmap txFileNetwork <$> Json.decodeFileStrict (home </> "unsigned.json")) `shouldReturn` Just (Just btc)
 
   describe "The coins worth less than their fee, sent by preparesendall or not" $ do
     it "are listed on stderr with what spending them or leaving them means, and asked about" $
@@ -2383,6 +2718,16 @@ bumpFeeSpec ctx = do
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
           `shouldBe` (Map.fromList [(otherAddr 0, 20000)], Map.fromList [(internalAddr 0, 25480)], 4520)
 
+    -- At 100 satoshis a byte, the 226 bytes pay 22600 and leave 50000 -
+    -- 20000 - 22600 = 7400 of change, less than the 10000 of --dust: the fee
+    -- is all the rest, 50000 - 20000 = 30000
+    it "gives the fee a change below the --dust limit" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        stuck <- sentPayment home
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--feerate", "100", "--dust", "10000"] []
+        (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
+          `shouldBe` (Map.fromList [(otherAddr 0, 20000)], Map.empty, 30000)
+
     it "is replaced once the sync has found it on the network" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         stuck <- sentPayment home
@@ -2478,6 +2823,15 @@ bumpFeeSpec ctx = do
         stuck <- sentPayment home
         (errorOf <$> hwJson home ["bumpfee", stuck, "--feerate", "120"] ["n"])
           `shouldReturn` Right "The transaction was not prepared: give a lower --feerate"
+
+    -- 226 bytes at 120 satoshis a byte are a fee of 27120, which leaves
+    -- 50000 - 20000 - 27120 = 2880 of change. Nothing is typed: a question
+    -- would cancel the command.
+    it "is replaced at a fee rate above 100 satoshis per byte without asking with --yes" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        stuck <- sentPayment home
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--feerate", "120", "--yes"] []
+        (paidToWallet bumped, feeOf bumped) `shouldBe` (Map.fromList [(internalAddr 0, 2880)], 27120)
 
     it "is not stuck before it is sent" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -2634,6 +2988,14 @@ bumpFeeSpec ctx = do
         stuck <- stuckPayment home
         (errorOf <$> hwJson home ["bumpfee", stuck, "--feerate", "60"] ["n"]) `shouldReturn` Right "The transaction was not replaced"
 
+    -- Nothing is typed: a question would cancel the command
+    it "takes a confirmed coin of the account without asking with --yes" $
+      withChain ctx chain $ \home _ -> do
+        stuck <- stuckPayment home
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--feerate", "60", "--yes"] []
+        (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
+          `shouldBe` (Map.fromList [(otherAddr 0, 40000)], Map.fromList [(internalAddr 0, 17560)], 22440)
+
   -- The second payment, of 10000, spends the change of 27740 of the first
   -- and leaves 15480 of change at /1/1. One transaction of one input and
   -- three outputs, 260 bytes, replaces both at 20 satoshis a byte: it pays
@@ -2664,6 +3026,15 @@ bumpFeeSpec ctx = do
       withChain ctx (paidChain ctx) $ \home _ -> do
         (stuck, _) <- withSecond home
         (errorOf <$> hwJson home ["bumpfee", stuck, "--feerate", "20"] ["n"]) `shouldReturn` Right "The transaction was not replaced"
+
+    -- Nothing is typed: a question would cancel the command
+    it "is replaced with that payment without asking with --yes" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        (stuck, second) <- withSecond home
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--feerate", "20", "--yes"] []
+        (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
+          `shouldBe` (Map.fromList [(otherAddr 0, 20000), (otherAddr 1, 10000)], Map.fromList [(internalAddr 1, 14800)], 5200)
+        replacesOf bumped `shouldBe` [stuck, second]
 
 {- Transactions as hw shows them -}
 
