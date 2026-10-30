@@ -1,9 +1,18 @@
 {-# LANGUAGE LambdaCase #-}
 
--- | How hw styles what it prints on a terminal. A document names what each
--- of its parts is, such as a command or an option, with the 'Style'
--- annotations of prettyprinter. The theme here says how each one looks.
--- Off a terminal, or with NO_COLOR set, the document is printed plain.
+-- | How hw styles what it prints on a terminal, in its help and in the
+-- answers of its commands. A document names what each of its parts is,
+-- such as a command or an amount, with the 'Style' annotations of
+-- prettyprinter. The theme here says how each one looks. Off a terminal,
+-- or with NO_COLOR set, the document is printed plain.
+--
+-- A colour means one thing everywhere. Cyan is a command, and magenta is
+-- secret: a command that asks for a mnemonic or private keys, or the
+-- mnemonic itself. Green is an option, an amount coming in, or a state as
+-- it should be. Red is an amount going out, or something wrong. Yellow
+-- waits for something. Faint is secondary, such as the name of a field,
+-- and bold is a title or a name. The text itself keeps the colour of the
+-- terminal.
 --
 -- The colours are the dull ANSI ones. Most terminal themes make them
 -- readable on a light background as well as on a dark one, which the vivid
@@ -47,8 +56,30 @@ data Style
     Metavar
   | -- | What is there for completeness, such as a default
     Muted
-  | -- | What went wrong
+  | -- | What went wrong: an error, or a state such as a transaction in
+    -- conflict
     Failure
+  | -- | The name of a field of an answer, such as Fee:
+    Field
+  | -- | An account, by its name
+    Account
+  | -- | The words of a mnemonic. They are secret, as the commands that ask
+    -- for them are offline.
+    Secret
+  | -- | The nosigHash of a pending transaction, by which the commands name
+    -- it
+    NoSigHash
+  | -- | What the user wrote or chose: a label, a file
+    UserText
+  | -- | An amount the wallet gets or holds
+    Incoming
+  | -- | An amount the wallet pays
+    Outgoing
+  | -- | A state as it should be: signed, spendable, valid
+    Good
+  | -- | A state that waits for something, often the user: not signed,
+    -- locked, not confirmed yet
+    Waiting
   deriving (Eq, Show)
 
 -- | How each part looks on a terminal
@@ -65,9 +96,20 @@ sgrOf = \case
   -- a dark background, dark grey on a light one. A metavar stands out less
   -- than the text around it. Underlined, it differs from a muted part.
   Metavar -> [SetConsoleIntensity FaintIntensity, SetUnderlining SingleUnderline]
-  Muted -> [SetConsoleIntensity FaintIntensity]
+  Muted -> [faint]
   Failure -> [foreground Red]
+  -- The name is less than its value, as a metavar is less than the text
+  Field -> [faint]
+  Account -> [bold]
+  Secret -> [bold, foreground Magenta]
+  NoSigHash -> [bold]
+  UserText -> [SetItalicized True]
+  Incoming -> [foreground Green]
+  Outgoing -> [foreground Red]
+  Good -> [foreground Green]
+  Waiting -> [foreground Yellow]
   where
+    faint = SetConsoleIntensity FaintIntensity
     bold = SetConsoleIntensity BoldIntensity
     foreground = SetColor Foreground Dull
 

@@ -19,6 +19,7 @@ module Haskoin.Wallet.Parser.Help
     usageError,
     usageParts,
     mentionedCommands,
+    commandName,
   )
 where
 
