@@ -41,12 +41,14 @@ import qualified Data.Serialize as S
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
+import Data.Time.Clock.POSIX (getPOSIXTime)
+import Data.Word (Word32)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebCommon (HeightParam (..), LimitParam (..), Param (..))
 import Haskoin.Wallet.Response (Response)
 import Haskoin.Wallet.Store (Store (..))
-import Haskoin.Wallet.TestUtils (addressScript, blockAt, otherAddr)
+import Haskoin.Wallet.TestUtils (addressScript, blockAt, blockMinedAt, otherAddr)
 import Network.HTTP.Types (hContentType, status200, status404)
 import Network.Wai (Application, pathInfo, queryString, requestMethod, responseLBS, strictRequestBody)
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -268,13 +270,21 @@ storeTxOf ctx chain (tx, ref) =
     size = fromIntegral (BS.length (S.encode tx))
 
 -- | The store of a chain held in a reference: each answer reads the chain
--- as it is then, and a transaction handed to the network joins its mempool
-chainStore :: Ctx -> IORef Chain -> Store
-chainStore ctx ref =
+-- as it is then, and a transaction handed to the network joins its mempool.
+-- The latest blocks it lists are timed from the given Unix time of its
+-- best block, ten minutes apart, and hold the fees of their transactions:
+-- what the fee rates are read from. The other block questions answer with
+-- untimed blocks, whose hashes the sync keeps, so that time does not move
+-- the chain under it.
+chainStore :: Ctx -> IORef Chain -> Word32 -> Store
+chainStore ctx ref bestTime =
   Store
     { storeHealth = return (),
       storeBestBlock = (\chain -> blockOf chain.chainHeight) <$> now,
       storeBlocksAtHeight = \height -> (\chain -> [blockOf height | height <= chain.chainHeight]) <$> now,
+      storeLatestBlocks = (\chain -> timedBlock chain <$> latestHeights chain) <$> now,
+      storeBlockTransactions = \hash ->
+        (\chain -> [storeTxOf ctx chain p | height <- latestHeights chain, headerHash (timedBlock chain height).header == hash, p@(_, Store.BlockRef h _) <- placed chain, h == height]) <$> now,
       storeBalances = \addrs -> (\chain -> balanceOf ctx chain <$> addrs) <$> now,
       storeAddressTxs = \addr count -> (\chain -> (if count == 0 then id else take (fromIntegral count)) (refsOf ctx chain addr)) <$> now,
       storeTransactions = \tids -> (\chain -> [storeTxOf ctx chain p | tid <- tids, p@(tx, _) <- placed chain, txHash tx == tid]) <$> now,
@@ -291,6 +301,12 @@ chainStore ctx ref =
     now = liftIO (readIORef ref)
     -- A block of the main chain, its hash its own at each height
     blockOf height = blockAt height (fromIntegral height)
+    -- The hundred latest heights, newest first, as the store lists them
+    latestHeights :: Chain -> [BlockHeight]
+    latestHeights chain = [chain.chainHeight, chain.chainHeight - 1 .. max 1 (chain.chainHeight - 99)]
+    timedBlock chain height =
+      let fees = sum [(storeTxOf ctx chain p).fee | p@(_, Store.BlockRef h _) <- placed chain, h == height]
+       in blockMinedAt height (fromIntegral height) (bestTime - 600 * fromIntegral (chain.chainHeight - height)) fees
 
 {- The fake store -}
 
@@ -299,7 +315,9 @@ chainStore ctx ref =
 withChain :: Ctx -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
 withChain ctx chain test = do
   ref <- newIORef chain
-  testWithApplication (return (storeApp ctx (chainStore ctx ref))) $ \port ->
+  -- The best block was mined three minutes before the test
+  bestTime <- subtract 180 . floor <$> getPOSIXTime
+  testWithApplication (return (storeApp ctx (chainStore ctx ref bestTime))) $ \port ->
     withHome $ \home -> do
       useStore home ("http://127.0.0.1:" <> show port <> "/")
       test home ref
@@ -333,6 +351,10 @@ storeApp ctx store req respond = do
     route = case (requestMethod req, drop 1 (pathInfo req)) of
       ("GET", ["health"]) -> encoded healthy <$ storeHealth store
       ("GET", ["block", "best"]) -> encoded <$> storeBestBlock store
+      ("GET", ["block", "latest"]) -> encoded . Store.SerialList <$> storeLatestBlocks store
+      ("GET", ["transactions", "block", h]) -> do
+        hash <- fromPath h
+        encoded . Store.SerialList <$> storeBlockTransactions store hash
       ("GET", ["block", "height", h]) -> do
         HeightParam height <- fromPath h
         encoded . Store.SerialList <$> storeBlocksAtHeight store (fromIntegral height)

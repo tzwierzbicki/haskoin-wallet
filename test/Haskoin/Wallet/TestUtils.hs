@@ -635,6 +635,10 @@ data FakeStore = FakeStore
   { fakeBest :: Store.BlockData,
     -- | The blocks at each height, for the reorganisation check
     fakeBlocks :: [Store.BlockData],
+    -- | The latest blocks, newest first, for the fee rates
+    fakeLatestBlocks :: [Store.BlockData],
+    -- | The transactions of the latest blocks, by block hash
+    fakeBlockTxs :: [(BlockHash, [Store.Transaction])],
     -- | Addresses not listed have an empty balance
     fakeBalances :: [Store.Balance],
     -- | The transactions of each address, newest first
@@ -656,6 +660,8 @@ toStore fake =
       storeBestBlock = return fake.fakeBest,
       storeBlocksAtHeight = \height ->
         return $ filter ((== height) . (.height)) fake.fakeBlocks,
+      storeLatestBlocks = return fake.fakeLatestBlocks,
+      storeBlockTransactions = \hash -> return $ fromMaybe [] (lookup hash fake.fakeBlockTxs),
       storeBalances = \addrs ->
         return [fromMaybe (Store.Balance a 0 0 0 0 0) (find ((== a) . (.address)) fake.fakeBalances) | a <- addrs],
       storeAddressTxs = \addr count ->
@@ -675,6 +681,8 @@ emptyStore =
   FakeStore
     { fakeBest = blockAt 800002 1,
       fakeBlocks = [blockAt 800002 1],
+      fakeLatestBlocks = [],
+      fakeBlockTxs = [],
       fakeBalances = [],
       fakeTxRefs = [],
       fakeTransactions = [],
@@ -738,17 +746,22 @@ notingBalanceRequests asked store =
 
 -- | A block of the main chain, whose hash depends on the nonce
 blockAt :: BlockHeight -> Word32 -> Store.BlockData
-blockAt height nonce =
+blockAt height nonce = blockMinedAt height nonce 1700000000 0
+
+-- | A block of the main chain, whose hash depends on the nonce, mined at
+-- the Unix time, holding transactions paying the fees in all
+blockMinedAt :: BlockHeight -> Word32 -> Word32 -> Word64 -> Store.BlockData
+blockMinedAt height nonce time fees =
   Store.BlockData
     height
     True
     0
-    (BlockHeader 1 (fakeBlockHash 0) (fakeTxHash 0).get 1700000000 0x1d00ffff nonce)
+    (BlockHeader 1 (fakeBlockHash 0) (fakeTxHash 0).get time 0x1d00ffff nonce)
     1000
     4000
     []
     0
-    0
+    fees
     0
 
 -- | The balance of an address paid once, holding the amount in one

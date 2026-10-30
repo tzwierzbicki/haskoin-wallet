@@ -54,6 +54,7 @@ library
       Haskoin.Wallet.Config
       Haskoin.Wallet.Database
       Haskoin.Wallet.Entropy
+      Haskoin.Wallet.FeeRates
       Haskoin.Wallet.FileIO
       Haskoin.Wallet.Keys
       Haskoin.Wallet.Main
@@ -207,6 +208,7 @@ test-suite spec
       Haskoin.Wallet.DatabaseLockSpec
       Haskoin.Wallet.DatabaseSpec
       Haskoin.Wallet.EntropySpec
+      Haskoin.Wallet.FeeRatesSpec
       Haskoin.Wallet.FileIOSpec
       Haskoin.Wallet.HwTestUtils
       Haskoin.Wallet.KeysSpec

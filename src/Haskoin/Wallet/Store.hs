@@ -38,6 +38,11 @@ data Store = Store
     storeBestBlock :: ExceptT String IO Store.BlockData,
     -- | The blocks the store knows at a height, in the main chain or not
     storeBlocksAtHeight :: BlockHeight -> ExceptT String IO [Store.BlockData],
+    -- | The latest blocks of the main chain, newest first: a hundred at
+    -- most, without their lists of transactions
+    storeLatestBlocks :: ExceptT String IO [Store.BlockData],
+    -- | The transactions of a block, in their order in it
+    storeBlockTransactions :: BlockHash -> ExceptT String IO [Store.Transaction],
     -- | The balance of each of the addresses, including its transaction
     -- and coin counts
     storeBalances :: [Address] -> ExceptT String IO [Store.Balance],
@@ -97,6 +102,8 @@ webStore ctx cfg net =
       storeBestBlock = call (GetBlockBest def),
       storeBlocksAtHeight = \height ->
         serial <$> call (GetBlockHeight (HeightParam (fromIntegral height)) def),
+      storeLatestBlocks = serial <$> call (GetBlockLatest (NoTx True)),
+      storeBlockTransactions = \hash -> serial <$> call (GetTxsBlock hash),
       storeBalances = \addrs ->
         serial <$> batch (configAddrBatch cfg) (GetAddrsBalance addrs),
       storeAddressTxs = \addr count ->

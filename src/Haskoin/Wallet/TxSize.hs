@@ -23,7 +23,6 @@ module Haskoin.Wallet.TxSize
     p2pkhOutputSize,
     txSize,
     varIntSize,
-    defaultFeeRate,
     highFeeRate,
     maxFeeRate,
     checkFeeRateAndDust,
@@ -128,17 +127,12 @@ varIntSize n
 
 {- Rates -}
 
--- | The fee rate of preparetx and preparesweep without --feerate, in
--- satoshis per byte
-defaultFeeRate :: Natural
-defaultFeeRate = 10
-
 -- | The highest fee rate preparetx and preparesweep take without asking, in
--- satoshis per byte: ten times the default. A rate above it is more often
--- a typo than a choice, such as 1000 for 100, so the user confirms it, or
--- gives --yes. Fees have gone higher at the busiest times of Bitcoin, so a
--- higher rate is not refused. The help of --feerate, --yes, preparetx and
--- preparesweep names this rate.
+-- satoshis per byte. A rate above it is more often a typo than a choice,
+-- such as 1000 for 100, so the user confirms it, or gives --yes. Fees have
+-- gone higher at the busiest times of Bitcoin, so a higher rate is not
+-- refused. The help of --feerate, --yes, preparetx and preparesweep names
+-- this rate.
 highFeeRate :: Natural
 highFeeRate = 100
 

@@ -14,7 +14,7 @@ import Haskoin
 import Haskoin.Wallet.Amounts (AmountUnit (..), readUnit)
 import Haskoin.Wallet.CoinSelection (CoinSelection (..), FeePayer (..))
 import Haskoin.Wallet.Keys (KeySource (..))
-import Haskoin.Wallet.TxSize (defaultFeeRate)
+import Haskoin.Wallet.FeeRates (FeeRateChoice, readFeeRateChoice)
 import Haskoin.Wallet.Util (Page (Page), readNatural)
 import Numeric.Natural (Natural)
 import Options.Applicative
@@ -67,6 +67,7 @@ data Command
     CommandDeleteTx !TxHash
   | -- | What to sign, and the parts the mnemonic is typed in
     CommandSignTx !Signing !Natural
+  | CommandFees !(Maybe Network)
   | CommandSignMsg !SignMsg
   | CommandVerifyMsg !VerifyMsg
   | -- | The account, whether the locked coins only, and the page
@@ -129,8 +130,9 @@ data PrepareTx = PrepareTx
   { -- | The addresses paid, each with its amount, as typed: ADDRESS:AMOUNT
     recipients :: ![Text],
     account :: !(Maybe Text),
-    -- | The fee rate, in satoshis per byte
-    feeByte :: !Natural,
+    -- | The fee rate: a number of satoshis per byte or a level of the
+    -- rates recent blocks paid, or none to ask the user from those rates
+    feeRate :: !(Maybe FeeRateChoice),
     -- | The dust limit, in satoshis
     dust :: !Natural,
     feePayer :: !FeePayer,
@@ -157,8 +159,8 @@ data BumpFee = BumpFee
   { -- | The transaction to replace, by its id
     bumped :: !TxHash,
     account :: !(Maybe Text),
-    -- | The fee rate of the replacement, in satoshis per byte
-    feeByte :: !Natural,
+    -- | The fee rate of the replacement, as for preparetx
+    feeRate :: !(Maybe FeeRateChoice),
     -- | The dust limit, in satoshis
     dust :: !Natural,
     output :: !(Maybe FilePath),
@@ -173,8 +175,9 @@ data PrepareSendAll = PrepareSendAll
     -- ADDRESS:AMOUNT
     recipients :: ![Text],
     account :: !(Maybe Text),
-    -- | The fee rate, in satoshis per byte
-    feeByte :: !Natural,
+    -- | The fee rate: a number of satoshis per byte or a level of the
+    -- rates recent blocks paid, or none to ask the user from those rates
+    feeRate :: !(Maybe FeeRateChoice),
     -- | The dust limit, in satoshis
     dust :: !Natural,
     -- | The confirmations a coin needs to be sent
@@ -238,8 +241,8 @@ data PrepareSweep = PrepareSweep
     -- | The coins swept, by outpoint
     coins :: ![OutPoint],
     output :: !(Maybe FilePath),
-    -- | The fee rate, in satoshis per byte
-    feeByte :: !Natural,
+    -- | The fee rate, as for preparetx
+    feeRate :: !(Maybe FeeRateChoice),
     -- | The dust limit, in satoshis
     dust :: !Natural,
     -- | Whether a fee rate above 100 satoshis per byte is taken without
@@ -340,6 +343,7 @@ commandParser =
         mconcat
           [ commandGroup "Transaction management",
             command "txs" txsParser,
+            command "fees" feesParser,
             command "preparetx" prepareTxParser,
             command "preparesendall" prepareSendAllParser,
             command "pendingtxs" pendingTxsParser,
@@ -1016,15 +1020,16 @@ coinOption =
       <> metavar "TXHASH:INDEX"
       <> help "Coin control: specify coins to spend"
 
-feeOption :: Parser Natural
+-- | The fee rate, when given: a number of satoshis per byte, or a level
+-- of the rates recent blocks paid
+feeOption :: Parser (Maybe FeeRateChoice)
 feeOption =
-  option (maybeReader $ readNatural . cs) $
+  optional . option (eitherReader readFeeRateChoice) $
     short 'f'
       <> long "feerate"
-      <> metavar "SAT/BYTE"
-      <> value defaultFeeRate
-      <> showDefault
-      <> help "The fee rate, in satoshis per byte. hw asks before it takes one above 100."
+      <> metavar "RATE"
+      <> completeWith ["low", "median", "high"]
+      <> help "The fee rate, in satoshis per byte, or low, median or high: that one of the rates recent blocks paid, which fees shows. Without it, hw shows those rates and asks. hw asks before it takes one above 100."
 
 -- | Whether preparetx and preparesweep take a high fee rate without asking
 highFeeYesOption :: Parser Bool
@@ -1356,15 +1361,16 @@ bumpedArg =
     metavar "TXID"
       <> help "The id of the transaction to replace, as txs or pendingtxs shows it"
 
--- | The fee rate of a replacement, which has no default: it must be above
--- the rate of the transaction it replaces
-replacementFeeOption :: Parser Natural
+-- | The fee rate of a replacement, when given, as for preparetx: it must be
+-- above the rate of the transaction it replaces
+replacementFeeOption :: Parser (Maybe FeeRateChoice)
 replacementFeeOption =
-  option (maybeReader $ readNatural . cs) $
+  optional . option (eitherReader readFeeRateChoice) $
     short 'f'
       <> long "feerate"
-      <> metavar "SAT/BYTE"
-      <> help "The fee rate of the replacement, in satoshis per byte, above that of the transaction it replaces. hw asks before it takes one above 100."
+      <> metavar "RATE"
+      <> completeWith ["low", "median", "high"]
+      <> help "The fee rate of the replacement, in satoshis per byte, above that of the transaction it replaces, or low, median or high: that one of the rates recent blocks paid, which fees shows. Without it, hw shows those rates and asks. hw asks before it takes one above 100."
 
 {- SendTx Parser -}
 
@@ -1496,6 +1502,28 @@ versionParser :: ParserInfo Command
 versionParser = do
   let cmd = pure CommandVersion
   info cmd $ progDesc "Display the version of hw"
+
+{- Fees Parser -}
+
+feesParser :: ParserInfo Command
+feesParser = do
+  let cmd = CommandFees <$> networkMaybeOption
+  info cmd $
+    progDesc "Show the fee rates recent blocks paid"
+      <> footer
+        [r|
+Show what the transactions of the latest blocks paid, in satoshis per byte,
+at three levels: the low rate, below which a quarter of their bytes paid
+less; the median, below which half did; and the high rate, below which nine
+tenths did. They give some perspective on what to pay: the high rate almost
+surely gets into the next block, and the low one usually does when the
+network is calm. The age of the latest block says how fresh they are: a
+block mined an hour ago means a slow network, and rates that may be low.
+The rates are what got into blocks, not how long transactions waited: after
+a quiet spell, a sudden backlog makes them too low for a while, and bumpfee
+is then the remedy. preparetx, preparesendall, bumpfee and preparesweep
+show the same rates and ask which to take when --feerate is not given.
+|]
 
 {- SignMsg Parser -}
 

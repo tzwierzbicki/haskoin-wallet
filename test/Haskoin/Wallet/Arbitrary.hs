@@ -20,6 +20,7 @@ import Haskoin.Wallet.Coin
 import Haskoin.Wallet.Response
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.FeeRates (FeeRates (..))
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData
@@ -272,6 +273,7 @@ arbitraryResponse net ctx =
         <$> arbitraryNetwork
         <*> arbitraryNatural
         <*> (resize 10 $ listOf $ arbitrarySyncRes net ctx),
+      ResponseFees net <$> arbitraryFeeRates,
       ResponseVersion
         <$> arbitraryText
         <*> arbitraryText
@@ -295,3 +297,7 @@ arbitraryConfig =
   where
     -- Every count of the configuration is at least one
     count = (+ 1) <$> arbitraryNatural
+
+-- | The fee rates recent blocks paid, as fees answers them
+arbitraryFeeRates :: Gen FeeRates
+arbitraryFeeRates = FeeRates <$> arbitraryNatural <*> arbitraryNatural <*> arbitraryNatural <*> arbitrary <*> arbitrary <*> arbitrary

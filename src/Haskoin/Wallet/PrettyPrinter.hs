@@ -12,7 +12,7 @@ module Haskoin.Wallet.PrettyPrinter where
 
 import Control.Applicative ((<|>))
 import Control.Monad
-import Data.Char (isAlphaNum)
+import Data.Char (isAlphaNum, toUpper)
 import Data.List (intercalate, intersperse)
 import Data.List.Split (chunksOf)
 import qualified Data.Map.Strict as Map
@@ -20,8 +20,10 @@ import Data.Maybe (isJust)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import Haskoin.Wallet.FeeRates (FeeRates (..), levelName, rateAt)
 import Haskoin.Wallet.MessageSigning (signedMessageBlock)
-import Data.Time (UTCTime)
+import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Time.Format
 import Data.Word
 import Haskoin
@@ -678,12 +680,50 @@ responsePrinter unit =
           renderIO . text $
             "No account of the seed was paid on " <> net.name <> ": the search ended after " <> show gap <> " accounts in a row without a payment"
       | otherwise -> renderIO $ syncResultsPrinter unit xs
+    ResponseFees net rates -> do
+      now <- getCurrentTime
+      renderIO $ vcat [formatKey "Network:" <+> formatValue (cs net.name), feeRatesPrinter now rates]
     ResponseVersion v dbv ->
       renderIO $
         vcat
           [ formatKey "Software version:" <+> formatValue (cs v),
             formatKey "Database version:" <+> formatValue (cs dbv)
           ]
+
+-- | The fee rates recent blocks paid, with how fresh they are: the age of
+-- the latest of those blocks, which also tells when the network is slow
+feeRatesPrinter :: UTCTime -> FeeRates -> Printer
+feeRatesPrinter now rates =
+  vcat
+    [ text $ "Fee rates paid in " <> blocks <> " (satoshis per byte):",
+      nest 2 . vcat $
+        [ formatKey (block 8 (levelTitle level <> ":")) <+> formatValue (show (rateAt level rates))
+          | level <- [minBound .. maxBound]
+        ],
+      text $ "The latest of these blocks was mined " <> agoText now (posixSecondsToUTCTime (fromIntegral rates.ratesLatestTime)) <> "."
+    ]
+  where
+    blocks
+      | rates.ratesFromHeight == rates.ratesToHeight = "block " <> show rates.ratesToHeight
+      | otherwise = "blocks " <> show rates.ratesFromHeight <> " to " <> show rates.ratesToHeight
+    levelTitle level = case Text.unpack (levelName level) of
+      c : rest -> toUpper c : rest
+      [] -> []
+
+-- | How long before now a time was, in round words: "3 minutes ago",
+-- "2 hours ago", "5 days ago". A time to come reads as just past.
+agoText :: UTCTime -> UTCTime -> String
+agoText now time
+  | seconds < 60 = "less than a minute ago"
+  | minutes < 120 = count minutes "minute"
+  | hours < 48 = count hours "hour"
+  | otherwise = count days "day"
+  where
+    seconds = max 0 (floor (diffUTCTime now time)) :: Integer
+    minutes = seconds `div` 60
+    hours = minutes `div` 60
+    days = hours `div` 24
+    count n unit = show n <> " " <> unit <> (if n == 1 then "" else "s") <> " ago"
 
 {- Next steps -}
 

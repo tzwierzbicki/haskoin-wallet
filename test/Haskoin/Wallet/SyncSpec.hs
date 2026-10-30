@@ -792,6 +792,8 @@ paymentStore ctx =
   FakeStore
     { fakeBest = blockAt 800002 1,
       fakeBlocks = [blockAt 800002 1],
+      fakeLatestBlocks = [],
+      fakeBlockTxs = [],
       fakeBalances = [Store.Balance (externalAddr 0) 50000 0 1 1 50000],
       fakeTxRefs = [(externalAddr 0, [Store.TxRef (Store.BlockRef 800000 1) (fakeTxHash 1)])],
       fakeTransactions = [creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000],
@@ -832,6 +834,8 @@ twoPaymentsStore ctx =
   FakeStore
     { fakeBest = blockAt 800002 1,
       fakeBlocks = [blockAt 800002 1],
+      fakeLatestBlocks = [],
+      fakeBlockTxs = [],
       fakeBalances = [Store.Balance (externalAddr 0) 50000 0 2 2 50000],
       fakeTxRefs =
         [ ( externalAddr 0,
@@ -884,6 +888,8 @@ payoutStore ctx =
   FakeStore
     { fakeBest = blockAt 800002 1,
       fakeBlocks = [blockAt 800002 1],
+      fakeLatestBlocks = [],
+      fakeBlockTxs = [],
       fakeBalances = [Store.Balance (externalAddr 0) 30000 0 1 1 30000],
       fakeTxRefs = [(externalAddr 0, [Store.TxRef (Store.BlockRef 800000 1) (fakeTxHash 5)])],
       fakeTransactions = [payoutTx ctx (fakeTxHash 5) (Store.BlockRef 800000 1) [(externalAddr 0, 30000), (externalAddr 1, 20000)]],
@@ -941,6 +947,8 @@ manyCoinsStore ctx =
   FakeStore
     { fakeBest = blockAt 800002 1,
       fakeBlocks = [blockAt 800002 1],
+      fakeLatestBlocks = [],
+      fakeBlockTxs = [],
       fakeBalances = [Store.Balance (externalAddr 0) 200000 0 200 200 200000],
       fakeTxRefs = [(externalAddr 0, [Store.TxRef (Store.BlockRef 800000 (fromIntegral i)) (fakeTxHash i) | i <- indexes])],
       fakeTransactions = [creditTx ctx (fakeTxHash i) (Store.BlockRef 800000 (fromIntegral i)) (externalAddr 0) 1000 | i <- indexes],
@@ -958,6 +966,8 @@ sevenAddressesStore ctx =
   FakeStore
     { fakeBest = blockAt 800002 1,
       fakeBlocks = [blockAt 800002 1],
+      fakeLatestBlocks = [],
+      fakeBlockTxs = [],
       fakeBalances = [Store.Balance addr 1000 0 1 1 1000 | (_, addr) <- payments],
       fakeTxRefs = [(addr, [Store.TxRef (Store.BlockRef 800000 (fromIntegral i)) (fakeTxHash i)]) | (i, addr) <- payments],
       fakeTransactions = [creditTx ctx (fakeTxHash i) (Store.BlockRef 800000 (fromIntegral i)) addr 1000 | (i, addr) <- payments],

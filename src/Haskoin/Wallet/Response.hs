@@ -16,6 +16,7 @@ import Haskoin.Wallet.Account (accountNetwork, accountWithSpendable, parseAccoun
 import Haskoin.Wallet.Address (CoinBalance, addressWithCoinBalance, addressWithSpendable, parseAddressWithCoinBalance, parseAddressWithSpendable)
 import Haskoin.Wallet.Coin (JsonCoin, LeftCoin)
 import Haskoin.Wallet.Database (DBAccount, DBAddress)
+import Haskoin.Wallet.FeeRates (FeeRates)
 import Haskoin.Wallet.Sync (SyncRes (..))
 import Haskoin.Wallet.TxInfo (TxInfo)
 import Numeric.Natural (Natural)
@@ -75,6 +76,8 @@ data Response
   | -- | The accounts of a seed recovered on a network, searched with the
     -- gap of accounts, each with its sync
     ResponseRecover !Network !Natural ![SyncRes]
+  | -- | The fee rates recent blocks paid, on the network asked
+    ResponseFees !Network !FeeRates
   | -- | The version of hw, and the format version of its database
     ResponseVersion !Text !Text
   deriving (Eq, Show)
@@ -118,6 +121,7 @@ instance ToJSON Response where
     ResponseSync results -> typed "sync" ["syncres" .= (syncResJson <$> results)]
     ResponseRecover net gap results ->
       typed "recover" ["network" .= net.name, "accountgap" .= gap, "syncres" .= (syncResJson <$> results)]
+    ResponseFees net rates -> typed "fees" ["network" .= net.name, "feerates" .= rates]
     ResponseVersion version dbVersion -> typed "version" ["version" .= version, "dbversion" .= dbVersion]
 
 instance FromJSON Response where
@@ -157,6 +161,7 @@ instance FromJSON Response where
       "verifymsg" -> ResponseVerifyMsg <$> o .: "message" <*> o .: "signature" <*> o .: "address" <*> o .: "valid"
       "sync" -> ResponseSync <$> (mapM parseSyncRes =<< o .: "syncres")
       "recover" -> ResponseRecover <$> network o <*> o .: "accountgap" <*> (mapM parseSyncRes =<< o .: "syncres")
+      "fees" -> ResponseFees <$> network o <*> o .: "feerates"
       "version" -> ResponseVersion <$> o .: "version" <*> o .: "dbversion"
       _ -> fail "Invalid JSON response type"
     where

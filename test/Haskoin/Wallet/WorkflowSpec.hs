@@ -28,6 +28,7 @@ import Haskoin.Wallet.Address (CoinBalance (..), coinBalanceUnspendable)
 import Haskoin.Wallet.Coin (CoinLock (..), JsonCoin (..), LeftCoin (..), LeftReason (..))
 import Haskoin.Wallet.Response (Response (..))
 import Haskoin.Wallet.Database (DBAccount (..), DBAddress (..), databaseInUse, runDBWith)
+import Haskoin.Wallet.FeeRates (FeeRates (..))
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (MnemonicPass (..))
 import qualified Haskoin.Wallet.Schema.V3 as V3
@@ -64,6 +65,7 @@ spec = prepareContext $ \ctx -> do
   coinControlSpec ctx
   changeBackSpec ctx
   bumpFeeSpec ctx
+  feesSpec ctx
   layoutSpec ctx
   pendingListSpec ctx
   balancesListSpec ctx
@@ -357,7 +359,7 @@ addressSpec ctx =
     it "are shown by addrs --internal under their paths on the change chain" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"] []
         run <- hw home ["addrs", "--internal"] []
         runOut run `shouldSatisfy` Text.isInfixOf ("/1/0: " <> internalAddrsText !! 0)
 
@@ -447,6 +449,89 @@ splitSpec =
         run <- hw home ["mnemonic", "--dice"] []
         runErr run `shouldSatisfy` Text.isInfixOf "Rolls: "
         run `shouldSatisfy` printed "Cancelled: the input ended before the answer"
+
+{- Fee rates -}
+
+-- | A chain whose latest two blocks hold three transactions: one paying
+-- the wallet, of 85 bytes and a fee of 1000 satoshis (11.76 per byte);
+-- one of two outputs, of 119 bytes and 1000 satoshis (8.40 per byte); and
+-- one spending the latter, of 85 bytes and 10000 satoshis (117.65 per
+-- byte). The sizes follow from the serialization: 4 bytes of version, 41
+-- per input, 34 per P2PKH output, 4 of lock time, and a count byte each
+-- for the inputs and the outputs. Sorted by rate, the 289 bytes reach a
+-- quarter within the 119 at 8.40, half within the next 85 at 11.76, and
+-- nine tenths within the last 85 at 117.65: rounded up, 9, 12 and 118.
+feesChain :: Ctx -> Chain
+feesChain ctx =
+  Chain
+    800001
+    [ (fundingTx ctx 1 [(externalAddr 0, 50000)], Just 800000),
+      (twoOutputs, Just 800001),
+      (spendingTx ctx [(txHash twoOutputs, 0)] [(otherAddr 2, 50000)], Just 800001)
+    ]
+  where
+    twoOutputs = fundingTx ctx 2 [(otherAddr 1, 60000), (otherAddr 1, 70000)]
+
+feesSpec :: Ctx -> Spec
+feesSpec ctx =
+  describe "The fee rates recent blocks paid" $ do
+    it "are listed by fees, with the blocks they come from and the age of the latest" $
+      withChain ctx (feesChain ctx) $ \home _ -> do
+        run <- hw home ["fees"] []
+        forM_
+          [ "Fee rates paid in blocks 800000 to 800001 (satoshis per byte):",
+            "Low:     9",
+            "Median:  12",
+            "High:    118",
+            "The latest of these blocks was mined 3 minutes ago."
+          ]
+          $ \line -> run `shouldSatisfy` printed line
+        answered <- answer home ["fees"] []
+        case answered of
+          ResponseFees net rates ->
+            (net.name, rates.rateLow, rates.rateMedian, rates.rateHigh, rates.ratesFromHeight, rates.ratesToHeight)
+              `shouldBe` ("btc", 9, 12, 118, 800000, 800001)
+          other -> expectationFailure $ "Not a fees answer: " <> show other
+
+    it "are shown by preparetx without --feerate, which asks which to take, the median by default" $
+      withChain ctx (feesChain ctx) $ \home _ -> do
+        synced home
+        let file = home </> "unsigned.json"
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", file] [""]
+        run `shouldSatisfy` printed "Median:  12"
+        run `shouldSatisfy` printed "Which fee rate? Type low, median or high [median]"
+        (txSignDataFeeRate . txFileData <$> readTxFile file) `shouldReturn` Just 12
+
+    it "are taken at the level typed" $
+      withChain ctx (feesChain ctx) $ \home _ -> do
+        synced home
+        let file = home </> "unsigned.json"
+        _ <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", file] ["high", "y"]
+        (txSignDataFeeRate . txFileData <$> readTxFile file) `shouldReturn` Just 118
+
+    it "are taken at the level of --feerate without asking" $
+      withChain ctx (feesChain ctx) $ \home _ -> do
+        synced home
+        let file = home </> "unsigned.json"
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", file, "--feerate", "low"] []
+        run `shouldSatisfy` printed "The low rate recent blocks paid: 9 satoshis per byte"
+        run `shouldNotSatisfy` printed "Which fee rate?"
+        (txSignDataFeeRate . txFileData <$> readTxFile file) `shouldReturn` Just 9
+
+    it "stop preparetx without --feerate when the store cannot be reached: hw never guesses a rate" $
+      withHome $ \home -> do
+        createMain home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002"] [])
+          `shouldReturn` Right "The store at http://127.0.0.1:1/ could not be reached: the connection failed. Give a --feerate to go on without the rates recent blocks paid"
+
+    it "are offered to bumpfee only above what a replacement must pay" $
+      withChain ctx (feesChain ctx) $ \home _ -> do
+        stuck <- sentPayment home
+        let file = home </> "replacement.json"
+        run <- hw home ["bumpfee", stuck, "--output", file] [""]
+        run `shouldSatisfy` printed "The transaction pays 10 satoshis per byte: a replacement must pay at least 11"
+        run `shouldSatisfy` printed "Which fee rate? Type median or high [median]"
+        (txSignDataFeeRate . txFileData <$> readTxFile file) `shouldReturn` Just 12
 
 {- Signed messages -}
 
@@ -632,7 +717,7 @@ failureSpec ctx = do
     it "refuses an amount, with its reason" $
       withHome $ \home -> do
         createMain home
-        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "1.5sat"] [])
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "1.5sat", "--feerate", "10"] [])
           `shouldReturn` Right "The amount 1.5sat has decimals, but an amount in sats is whole"
 
     it "is refused an option it does not know, before the database is touched" $
@@ -647,7 +732,7 @@ failureSpec ctx = do
     it "is refused a --coin index no output has, rather than spending another coin" $
       withHome $ \home -> do
         let coin = Text.unpack (txHashToHex (fakeTxHash 1)) <> ":4294967296"
-        forM_ [["preparetx", fixedTo (otherAddr 0) "0.0002"], ["preparesweep", "--sweepto", textOf (otherAddr 0)]] $ \command -> do
+        forM_ [["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"], ["preparesweep", "--sweepto", textOf (otherAddr 0), "--feerate", "10"]] $ \command -> do
           run <- hw home (command <> ["--coin", coin]) []
           runExit run `shouldBe` ExitFailure 1
           runErr run `shouldSatisfy` Text.isInfixOf ("option --coin: The coin " <> Text.pack coin <> " is not valid: write it TXHASH:INDEX, as coins lists it")
@@ -657,7 +742,7 @@ failureSpec ctx = do
     it "is refused a --coin written as two words" $
       withHome $ \home -> do
         let hash = Text.unpack (txHashToHex (fakeTxHash 1))
-        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", hash, "0"] []
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", hash, "0", "--feerate", "10"] []
         runExit run `shouldBe` ExitFailure 1
         runErr run `shouldSatisfy` Text.isInfixOf ("option --coin: The coin " <> Text.pack hash <> " is not valid: write it TXHASH:INDEX, as coins lists it")
 
@@ -681,7 +766,7 @@ failureSpec ctx = do
     it "leaves nothing of what it wrote before it failed" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.001"] [])
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.001", "--feerate", "10"] [])
           `shouldReturn` Right "The coins do not cover the amount and the fee"
         (addressesOf <$> hwJson home ["addrs", "--internal"] []) `shouldReturn` Right []
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
@@ -723,7 +808,7 @@ failureSpec ctx = do
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         let file = home </> "missing" </> "unsigned.json"
-        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", file] [])
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", file, "--feerate", "10"] [])
           `shouldReturn` Right ("The file " <> Text.pack file <> " could not be written: no such file or directory")
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
         (addressesOf <$> hwJson home ["addrs", "--internal"] []) `shouldReturn` Right []
@@ -831,7 +916,7 @@ failureSpec ctx = do
     it "ask before the keys of a sweep" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
         keys <- writeKeyFile home
-        _ <- answer home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json"] []
+        _ <- answer home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--feerate", "10"] []
         run <- hw home ["signsweep", "--input", home </> "sweep.json", "--prvkeys", "-"] ["n", wikiKeyWif]
         run `shouldSatisfy` printed "The transaction was not signed: give an --output file to write it to"
         runErr run `shouldNotSatisfy` Text.isInfixOf "Private keys"
@@ -840,7 +925,7 @@ failureSpec ctx = do
     it "sign a sweep outside the wallet in place of its file, which is sent from there" $
       withChain ctx (oldKeyChain ctx) $ \home chain -> do
         keys <- writeKeyFile home
-        _ <- answer home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json"] []
+        _ <- answer home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--feerate", "10"] []
         _ <- answer home ["signsweep", "--input", home </> "sweep.json", "--prvkeys", keys] ["y"]
         _ <- answer home ["sendtx", "--input", home </> "sweep.json", "--yes"] []
         published <- inMempool <$> readIORef chain
@@ -859,7 +944,7 @@ failureSpec ctx = do
     it "refuses a transaction sent already" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002"] []
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"] []
         _ <- answer home ["signtx", nosig] seedOnce
         _ <- answer home ["sendtx", nosig, "--yes"] []
         run <- hw home ["signtx", nosig] seedOnce
@@ -1027,7 +1112,7 @@ receivingSpec ctx = do
       withChain ctx chain $ \home _ -> do
         synced home
         _ <- answer home ("lockcoin" : coinArgs) []
-        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0004"] [])
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0004", "--feerate", "10"] [])
           `shouldReturn` Right "The coins do not cover the amount and the fee"
 
 {- Signing -}
@@ -1058,7 +1143,7 @@ signingSpec ctx = do
     it "is prepared, signed and sent by its nosigHash, and confirmed by a sync" $
       withChain ctx (paidChain ctx) $ \home chain -> do
         synced home
-        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002"] []
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"] []
         signed <- txOf =<< answer home ["signtx", nosig] seedOnce
         pendingState signed `shouldBe` Just (True, False)
         sent <- txOf =<< answer home ["sendtx", nosig, "--yes"] []
@@ -1074,7 +1159,7 @@ signingSpec ctx = do
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["createacc", "second"] seedTwice
-        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--account", "main"] []
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--account", "main", "--feerate", "10"] []
         signed <- txOf =<< answer home ["signtx", nosig] seedOnce
         pendingState signed `shouldBe` Just (True, False)
 
@@ -1084,7 +1169,7 @@ signingSpec ctx = do
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["createacc", "second"] seedTwice
-        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--account", "main"] []
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--account", "main", "--feerate", "10"] []
         run <- hw home ["signtx", nosig, "--account", "second"] seedOnce
         run `shouldSatisfy` printed "The transaction is pending in the account main, not in second"
         run `shouldNotSatisfy` askedMnemonic
@@ -1097,7 +1182,7 @@ signingSpec ctx = do
         importWithoutFingerprint home
         _ <- answer home ["receive"] []
         _ <- answer home ["sync"] []
-        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002"] []
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"] []
         (fmap dBAccountFingerprint . accountOf <$> hwJson home ["signtx", nosig] seedOnce)
           `shouldReturn` Right (Just "bc560f95")
 
@@ -1107,7 +1192,7 @@ signingSpec ctx = do
     it "is prepared online, signed offline, sent online, and confirmed by a sync" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online chain -> do
         signerAndOnline signer online
-        prepared <- txOf =<< answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json"] []
+        prepared <- txOf =<< answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json", "--feerate", "10"] []
         pendingState prepared `shouldBe` Just (False, False)
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 20000)]
         paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 27740)]
@@ -1128,7 +1213,7 @@ signingSpec ctx = do
     it "is exported by exporttx, signed offline, imported back by importtx, and sent by its nosigHash" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online chain -> do
         signerAndOnline signer online
-        nosig <- nosigOf =<< txOf =<< answer online ["preparetx", fixedTo (otherAddr 0) "0.0002"] []
+        nosig <- nosigOf =<< txOf =<< answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"] []
         answer online ["exporttx", nosig, online </> "unsigned.json"] [] `shouldReturn` ResponseFile (online </> "unsigned.json")
         (fmap txFileNetwork <$> Json.decodeFileStrict (online </> "unsigned.json")) `shouldReturn` Just (Just btc)
         _ <- answer signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
@@ -1149,7 +1234,7 @@ signingSpec ctx = do
         _ <- answer signer ["createacc", "second"] seedTwice
         _ <- answer signer ["exportacc", "--account", "second", signer </> "second.json"] []
         _ <- answer online ["importacc", signer </> "second.json"] []
-        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--account", "main", "--output", online </> "unsigned.json"] []
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--account", "main", "--output", online </> "unsigned.json", "--feerate", "10"] []
         (fmap dBAccountName . accountOf <$> hwJson signer ["reviewtx", online </> "unsigned.json"] []) `shouldReturn` Right "main"
         signed <- txOf =<< answer signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
         pendingState signed `shouldBe` Just (True, False)
@@ -1160,7 +1245,7 @@ signingSpec ctx = do
     it "is shown by reviewtx from its file, as the signer reads it before signing, and not kept" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
-        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json"] []
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json", "--feerate", "10"] []
         reviewed <- txOf =<< answer signer ["reviewtx", online </> "unsigned.json"] []
         paidToOthers reviewed `shouldBe` Map.fromList [(otherAddr 0, 20000)]
         paidToWallet reviewed `shouldBe` Map.fromList [(internalAddr 0, 27740)]
@@ -1176,7 +1261,7 @@ signingSpec ctx = do
         _ <- answer online ["receive"] []
         _ <- answer online ["sync"] []
         (fingerprintsOf <$> hwJson online ["accounts"] []) `shouldReturn` Right [("main", Nothing)]
-        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json"] []
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json", "--feerate", "10"] []
         _ <- answer signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
         _ <- answer online ["sendtx", "--input", signer </> "signed.json", "--yes"] []
         (fingerprintsOf <$> hwJson online ["accounts"] []) `shouldReturn` Right [("main", Just "bc560f95")]
@@ -1192,7 +1277,7 @@ paymentSpec ctx =
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         forM_ [("0.0002", []), ("20000", ["--unit", "sat"]), ("0.0002btc", []), ("200bits", []), ("0.0002btc", ["--unit", "sat"])] $ \(amount, unit) -> do
-          prepared <- txOf =<< answer home (["preparetx", fixedTo (otherAddr 0) amount] <> unit) []
+          prepared <- txOf =<< answer home (["preparetx", fixedTo (otherAddr 0) amount, "--feerate", "10"] <> unit) []
           paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 20000)]
           nosig <- nosigOf prepared
           void $ answer home ["deletetx", nosig] []
@@ -1200,14 +1285,14 @@ paymentSpec ctx =
     it "pays each recipient the amount after its address" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", fixedTo (otherAddr 1) "0.0001"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", fixedTo (otherAddr 1) "0.0001", "--feerate", "10"] []
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 20000), (otherAddr 1, 10000)]
 
     -- As the recipients were typed before, the amount in a word of its own
     it "is refused a recipient without an amount, with how to write one" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        (errorOf <$> hwJson home ["preparetx", textOf (otherAddr 0), "0.0002"] [])
+        (errorOf <$> hwJson home ["preparetx", textOf (otherAddr 0), "0.0002", "--feerate", "10"] [])
           `shouldReturn` Right "The recipient 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU has no amount: write it ADDRESS:AMOUNT, as in 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:0.001"
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
 
@@ -1223,14 +1308,14 @@ paymentSpec ctx =
     it "takes the fee from the recipient with --recipientpay" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--recipientpay"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--recipientpay", "--feerate", "10"] []
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 17740)]
         paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 30000)]
 
     it "is refused for more than the coins of the account" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.001"] [])
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.001", "--feerate", "10"] [])
           `shouldReturn` Right "The coins do not cover the amount and the fee"
 
     -- The coin of the payment is of main, and the wallet has a second
@@ -1240,7 +1325,7 @@ paymentSpec ctx =
         synced home
         _ <- answer home ["createacc", "second"] seedTwice
         let coin = Text.unpack (txHashToHex (txHash (payment ctx))) <> ":0"
-        (fmap dBAccountName . accountOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coin] [])
+        (fmap dBAccountName . accountOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coin, "--feerate", "10"] [])
           `shouldReturn` Right "main"
 
     it "is refused an --account that does not hold the coins of --coin" $
@@ -1248,13 +1333,13 @@ paymentSpec ctx =
         synced home
         _ <- answer home ["createacc", "second"] seedTwice
         let coin = Text.unpack (txHashToHex (txHash (payment ctx))) <> ":0"
-        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coin, "--account", "second"] [])
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coin, "--account", "second", "--feerate", "10"] [])
           `shouldReturn` Right "The coins or addresses given are not in the account second"
 
     it "is written to its --output file with the network of its account" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", home </> "unsigned.json"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", home </> "unsigned.json", "--feerate", "10"] []
         (fmap txFileNetwork <$> Json.decodeFileStrict (home </> "unsigned.json")) `shouldReturn` Just (Just btc)
 
     -- The path is checked first: the coins would not cover these 100000
@@ -1263,7 +1348,7 @@ paymentSpec ctx =
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         writeFile (home </> "taken.json") ""
-        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.001", "--output", home </> "taken.json"] [])
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.001", "--output", home </> "taken.json", "--feerate", "10"] [])
           `shouldReturn` Right (alreadyExists (home </> "taken.json"))
         readFile (home </> "taken.json") `shouldReturn` ""
 
@@ -1403,7 +1488,7 @@ sweepSpec ctx =
         createMain home
         _ <- answer home ["receive"] []
         keys <- writeKeyFile home
-        prepared <- txOf =<< answer home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0)] []
+        prepared <- txOf =<< answer home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0), "--feerate", "10"] []
         pendingState prepared `shouldBe` Just (False, False)
         paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 28080)]
         nosig <- nosigOf prepared
@@ -1419,7 +1504,7 @@ sweepSpec ctx =
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
         createMain home
         keys <- writeKeyFile home
-        (errorOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--network", "btc"] [])
+        (errorOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--network", "btc", "--feerate", "10"] [])
           `shouldReturn` Right "The sweep does not involve this wallet: give an --output file to write it to"
 
     -- The wallet keeps no trace of it: the sweep is signed from its file,
@@ -1428,7 +1513,7 @@ sweepSpec ctx =
       withChain ctx (oldKeyChain ctx) $ \home chain -> do
         createMain home
         keys <- writeKeyFile home
-        prepared <- txOf =<< answer home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json"] []
+        prepared <- txOf =<< answer home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--feerate", "10"] []
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 28080)]
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
         signed <- txOf =<< answer home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.json", "--prvkeys", keys] []
@@ -1443,7 +1528,7 @@ sweepSpec ctx =
       withHome $ \home -> do
         createMain home
         writeFile (home </> "sweep.json") ""
-        run <- hw home ["preparesweep", "--prvkeys", "-", "--sweepto", textOf (otherAddr 0), "--output", home </> "sweep.json"] []
+        run <- hw home ["preparesweep", "--prvkeys", "-", "--sweepto", textOf (otherAddr 0), "--output", home </> "sweep.json", "--feerate", "10"] []
         run `shouldSatisfy` printed (alreadyExists (home </> "sweep.json"))
         runErr run `shouldNotSatisfy` Text.isInfixOf "Private keys"
 
@@ -1451,7 +1536,7 @@ sweepSpec ctx =
     it "is refused an address that is not one, before the keys are typed" $
       withHome $ \home -> do
         createMain home
-        run <- hw home ["preparesweep", "--prvkeys", "-", "--sweepto", "nonsense", "--network", "btc", "--output", home </> "sweep.json"] []
+        run <- hw home ["preparesweep", "--prvkeys", "-", "--sweepto", "nonsense", "--network", "btc", "--output", home </> "sweep.json", "--feerate", "10"] []
         run `shouldSatisfy` printed "The address nonsense is not valid on btc"
         runErr run `shouldNotSatisfy` Text.isInfixOf "Private keys"
 
@@ -1462,7 +1547,7 @@ sweepSpec ctx =
         createMain home
         _ <- answer home ["receive"] []
         keys <- writeKeyFile home
-        prepared <- txOf =<< answer home ["preparesweep", "--prvkeys", keys, "--sweepto", fixedTo (otherAddr 0) "0.0001", "--sweepto", textOf (externalAddr 0)] []
+        prepared <- txOf =<< answer home ["preparesweep", "--prvkeys", keys, "--sweepto", fixedTo (otherAddr 0) "0.0001", "--sweepto", textOf (externalAddr 0), "--feerate", "10"] []
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 10000)]
         paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 17740)]
 
@@ -1471,7 +1556,7 @@ sweepSpec ctx =
         createMain home
         _ <- answer home ["receive"] []
         keys <- writeKeyFile home
-        prepared <- answer home ["preparesweep", "--prvkeys", keys, "--sweepto", fixedTo (externalAddr 0) "0.0001", "--sweepto", textOf (otherAddr 0)] []
+        prepared <- answer home ["preparesweep", "--prvkeys", keys, "--sweepto", fixedTo (externalAddr 0) "0.0001", "--sweepto", textOf (otherAddr 0), "--feerate", "10"] []
         (dBAccountName <$> accountOf prepared) `shouldBe` Right "main"
         paidToWallet <$> txOf prepared `shouldReturn` Map.fromList [(externalAddr 0, 10000)]
 
@@ -1479,7 +1564,7 @@ sweepSpec ctx =
     it "is refused --sweepto addresses that all have an amount, before the keys are typed" $
       withHome $ \home -> do
         createMain home
-        run <- hw home ["preparesweep", "--prvkeys", "-", "--sweepto", fixedTo (otherAddr 0) "0.0001", "--network", "btc", "--output", home </> "sweep.json"] []
+        run <- hw home ["preparesweep", "--prvkeys", "-", "--sweepto", fixedTo (otherAddr 0) "0.0001", "--network", "btc", "--output", home </> "sweep.json", "--feerate", "10"] []
         run `shouldSatisfy` printed "Give at least one address without an amount, to receive what remains once the fixed amounts and the fee are paid"
         runErr run `shouldNotSatisfy` Text.isInfixOf "Private keys"
 
@@ -1500,7 +1585,7 @@ sweepSpec ctx =
         _ <- answer home ["createacc", "second"] seedTwice
         _ <- answer home ["receive", "--account", "main"] []
         keys <- writeKeyFile home
-        nosig <- nosigOf =<< txOf =<< answer home ["preparesweep", "--account", "main", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0)] []
+        nosig <- nosigOf =<< txOf =<< answer home ["preparesweep", "--account", "main", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0), "--feerate", "10"] []
         signed <- txOf =<< answer home ["signsweep", nosig, "--prvkeys", keys] []
         pendingState signed `shouldBe` Just (True, False)
 
@@ -1512,7 +1597,7 @@ sweepSpec ctx =
         _ <- answer home ["createacc", "second"] seedTwice
         _ <- answer home ["receive", "--account", "main"] []
         keys <- writeKeyFile home
-        (fmap dBAccountName . accountOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0)] [])
+        (fmap dBAccountName . accountOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0), "--feerate", "10"] [])
           `shouldReturn` Right "main"
 
     it "is refused an --account it pays no address of" $
@@ -1521,7 +1606,7 @@ sweepSpec ctx =
         _ <- answer home ["createacc", "second"] seedTwice
         _ <- answer home ["receive", "--account", "main"] []
         keys <- writeKeyFile home
-        (errorOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0), "--account", "second"] [])
+        (errorOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0), "--account", "second", "--feerate", "10"] [])
           `shouldReturn` Right "The sweep pays no address of the account second"
 
     -- With no account at all, hw sweeps as a utility, through files: on the
@@ -1545,7 +1630,7 @@ sweepSpec ctx =
     it "that pays outside the wallet needs the --network it is for, whatever the default network" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
         keys <- writeKeyFile home
-        (errorOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--output", home </> "sweep.json"] [])
+        (errorOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--output", home </> "sweep.json", "--feerate", "10"] [])
           `shouldReturn` Right "Give the --network of a sweep that pays no account of the wallet: the default-network of the configuration file does not apply to it"
 
     -- The default network is not a --network given: main is on btc
@@ -1555,7 +1640,7 @@ sweepSpec ctx =
         _ <- answer home ["receive"] []
         setDefaultNetwork home (Just "bch")
         keys <- writeKeyFile home
-        (fmap dBAccountName . accountOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0)] [])
+        (fmap dBAccountName . accountOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0), "--feerate", "10"] [])
           `shouldReturn` Right "main"
 
     -- cash is the Bitcoin Cash account of the test wallet. hw stores its
@@ -1567,7 +1652,7 @@ sweepSpec ctx =
         _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
         _ <- receiveFor home "cash"
         keys <- writeKeyFile home
-        (fmap dBAccountName . accountOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", "qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"] [])
+        (fmap dBAccountName . accountOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", "qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u", "--feerate", "10"] [])
           `shouldReturn` Right "cash"
 
     -- 1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ is the same address of cash in the
@@ -1578,7 +1663,7 @@ sweepSpec ctx =
         _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
         _ <- receiveFor home "cash"
         keys <- writeKeyFile home
-        (fmap dBAccountName . accountOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", "1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ"] [])
+        (fmap dBAccountName . accountOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", "1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ", "--feerate", "10"] [])
           `shouldReturn` Right "cash"
 
     it "that pays outside the wallet is refused an --account" $
@@ -1641,7 +1726,7 @@ sweepSpec ctx =
         mainAddr <- receiveFor home "main"
         secondAddr <- receiveFor home "second"
         keys <- writeKeyFile home
-        let sweep = ["preparesweep", "--prvkeys", keys, "--sweepto", mainAddr, "--sweepto", secondAddr]
+        let sweep = ["preparesweep", "--prvkeys", keys, "--sweepto", mainAddr, "--sweepto", secondAddr, "--feerate", "10"]
         (errorOf <$> hwJson home sweep []) `shouldReturn` Right "Specify which account to use"
         (fmap dBAccountName . accountOf <$> hwJson home (sweep <> ["--account", "second"]) []) `shouldReturn` Right "second"
 
@@ -1653,7 +1738,7 @@ sweepSpec ctx =
         mainAddr <- receiveFor home "main"
         cashAddr <- receiveFor home "cash"
         keys <- writeKeyFile home
-        (errorOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", mainAddr, "--sweepto", cashAddr] [])
+        (errorOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", mainAddr, "--sweepto", cashAddr, "--feerate", "10"] [])
           `shouldReturn` Right "The sweep pays accounts of several networks"
 
     it "that pays the wallet is refused a --network other than the one of its account" $
@@ -1661,12 +1746,12 @@ sweepSpec ctx =
         createMain home
         _ <- answer home ["receive"] []
         keys <- writeKeyFile home
-        (errorOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0), "--network", "bch"] [])
+        (errorOf <$> hwJson home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0), "--network", "bch", "--feerate", "10"] [])
           `shouldReturn` Right "The sweep pays an account on btc, not on the --network bch"
   where
     -- The sweep of the old key to another wallet, written to sweep.json
     outsideSweep home keys =
-      ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json"]
+      ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--feerate", "10"]
 
 {- Listings -}
 
@@ -1704,7 +1789,7 @@ listingSpec ctx = do
     it "shows nothing at an offset past 64 bits, rather than the first page" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"] []
         forM_ listings $ \listing ->
           (rowsOf <$> hwJson home [listing, "--offset", "18446744073709551616"] []) `shouldReturn` Right 0
 
@@ -1718,7 +1803,7 @@ listingSpec ctx = do
     it "shows the row of each listing with a limit of 0, rather than none" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"] []
         forM_ listings $ \listing ->
           (rowsOf <$> hwJson home [listing, "--limit", "0"] []) `shouldReturn` Right 1
 
@@ -1736,7 +1821,7 @@ listingSpec ctx = do
 paymentSigned :: FilePath -> IO String
 paymentSigned home = do
   synced home
-  nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002"] []
+  nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"] []
   _ <- answer home ["signtx", nosig] seedOnce
   return nosig
 
@@ -1784,7 +1869,7 @@ confirmationSpec ctx =
     it "keeps the unsigned version of a file signed offline that the user does not send" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online chain -> do
         signerAndOnline signer online
-        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json"] []
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json", "--feerate", "10"] []
         _ <- answer signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
         (errorOf <$> hwJson online ["sendtx", "--input", signer </> "signed.json"] ["no"]) `shouldReturn` Right "The transaction was not sent"
         (inMempool <$> readIORef chain) `shouldReturn` []
@@ -1924,7 +2009,7 @@ sendAllSpec ctx = do
     it "all go to the address, which pays the fee, with no change" $
       withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
         synced home
-        sendAll <- answer home ["preparesendall", textOf (otherAddr 0)] []
+        sendAll <- answer home ["preparesendall", textOf (otherAddr 0), "--feerate", "10"] []
         prepared <- txOf sendAll
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 76600)]
         paidToWallet prepared `shouldBe` Map.empty
@@ -1933,46 +2018,46 @@ sendAllSpec ctx = do
     it "give the fixed amounts as typed, and what remains to the address without one" $
       withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
         synced home
-        prepared <- txOf =<< answer home ["preparesendall", fixedTo (otherAddr 0) "0.0003", textOf (otherAddr 1)] []
+        prepared <- txOf =<< answer home ["preparesendall", fixedTo (otherAddr 0) "0.0003", textOf (otherAddr 1), "--feerate", "10"] []
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 30000), (otherAddr 1, 46260)]
 
     it "share what remains equally among the addresses without an amount" $
       withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
         synced home
-        prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), textOf (otherAddr 1)] []
+        prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), textOf (otherAddr 1), "--feerate", "10"] []
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 38130), (otherAddr 1, 38130)]
 
     it "prepare nothing when they do not cover the fixed amounts and the fee" $
       withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
         synced home
-        (errorOf <$> hwJson home ["preparesendall", fixedTo (otherAddr 0) "0.0008", textOf (otherAddr 1)] [])
+        (errorOf <$> hwJson home ["preparesendall", fixedTo (otherAddr 0) "0.0008", textOf (otherAddr 1), "--feerate", "10"] [])
           `shouldReturn` Right "The coins, 80000 satoshis, do not cover the fixed amounts, 80000, and the fee, 3740"
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
 
     it "need an address without an amount to receive what remains" $
       withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
         synced home
-        (errorOf <$> hwJson home ["preparesendall", fixedTo (otherAddr 0) "0.0003"] [])
+        (errorOf <$> hwJson home ["preparesendall", fixedTo (otherAddr 0) "0.0003", "--feerate", "10"] [])
           `shouldReturn` Right "Give at least one address without an amount, to receive what remains once the fixed amounts and the fee are paid"
 
     it "are those of --coin only, sent in full" $
       withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
         synced home
-        prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--coin", coinArg (twoCoinsTx ctx) 0] []
+        prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--coin", coinArg (twoCoinsTx ctx) 0, "--feerate", "10"] []
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 48080)]
         paidToWallet prepared `shouldBe` Map.empty
 
     it "not given with --coin stay in the account, which the answer lists" $
       withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
         synced home
-        (leftOf <$> hwJson home ["preparesendall", textOf (otherAddr 0), "--coin", coinArg (twoCoinsTx ctx) 0] [])
+        (leftOf <$> hwJson home ["preparesendall", textOf (otherAddr 0), "--coin", coinArg (twoCoinsTx ctx) 0, "--feerate", "10"] [])
           `shouldReturn` Right [(OutPoint (txHash (twoCoinsTx ctx)) 1, 30000, NotGiven)]
 
     it "stay in the account when the user locked them, which the answer lists" $
       withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
         synced home
         _ <- answer home ["lockcoin", coinArg (twoCoinsTx ctx) 1] []
-        sendAll <- answer home ["preparesendall", textOf (otherAddr 0)] []
+        sendAll <- answer home ["preparesendall", textOf (otherAddr 0), "--feerate", "10"] []
         paidToOthers <$> txOf sendAll `shouldReturn` Map.fromList [(otherAddr 0, 48080)]
         leftOf sendAll `shouldBe` Right [(OutPoint (txHash (twoCoinsTx ctx)) 1, 30000, Locked LockedByUser)]
 
@@ -1981,7 +2066,7 @@ sendAllSpec ctx = do
       withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
         synced home
         _ <- answer home ["lockcoin", coinArg (twoCoinsTx ctx) 1] []
-        run <- hw home ["preparesendall", textOf (otherAddr 0)] []
+        run <- hw home ["preparesendall", textOf (otherAddr 0), "--feerate", "10"] []
         -- The transaction, then the coins staying, then the next steps
         let (beforeSteps, steps) = Text.breakOn "Next, sign it" (runOut run)
             (transaction, staying) = Text.breakOn "Staying in the account:" beforeSteps
@@ -1998,7 +2083,7 @@ sendAllSpec ctx = do
     it "are listed on stderr with what spending them or leaving them means, and asked about" $
       withChain ctx (confirmedChain (dustCoinsTx ctx)) $ \home _ -> do
         synced home
-        run <- hw home ["preparesendall", textOf (otherAddr 0)] ["n"]
+        run <- hw home ["preparesendall", textOf (otherAddr 0), "--feerate", "10"] ["n"]
         runErr run `shouldSatisfy` Text.isInfixOf "3 coins cost more to spend than they are worth at 10 sat/byte, 1480 sat each:"
         runErr run `shouldSatisfy` Text.isInfixOf "What remains for the addresses without an amount is 74806 sat instead of 76600, 1794 less, and the account is empty."
         runErr run `shouldSatisfy` Text.isInfixOf dustQuestion
@@ -2006,19 +2091,19 @@ sendAllSpec ctx = do
     it "stay in the account when the user answers anything but yes" $
       withChain ctx (confirmedChain (dustCoinsTx ctx)) $ \home _ -> do
         synced home
-        prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0)] ["n"]
+        prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--feerate", "10"] ["n"]
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 76600)]
 
     it "are sent too when the user answers yes" $
       withChain ctx (confirmedChain (dustCoinsTx ctx)) $ \home _ -> do
         synced home
-        prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0)] ["y"]
+        prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--feerate", "10"] ["y"]
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 74806)]
 
     it "stay in the account without a question with --leavedust, which the answer lists" $
       withChain ctx (confirmedChain (dustCoinsTx ctx)) $ \home _ -> do
         synced home
-        sendAll <- answer home ["preparesendall", textOf (otherAddr 0), "--leavedust"] []
+        sendAll <- answer home ["preparesendall", textOf (otherAddr 0), "--leavedust", "--feerate", "10"] []
         paidToOthers <$> txOf sendAll `shouldReturn` Map.fromList [(otherAddr 0, 76600)]
         let dustCoin i = OutPoint (txHash (dustCoinsTx ctx)) i
         leftOf sendAll `shouldBe` Right [(dustCoin 2, 1200, WorthLessThanFee), (dustCoin 3, 900, WorthLessThanFee), (dustCoin 4, 546, WorthLessThanFee)]
@@ -2026,20 +2111,20 @@ sendAllSpec ctx = do
     it "are sent too without a question with --spenddust" $
       withChain ctx (confirmedChain (dustCoinsTx ctx)) $ \home _ -> do
         synced home
-        prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--spenddust"] []
+        prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--spenddust", "--feerate", "10"] []
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 74806)]
 
     -- The coins of 30000 and 900: 340 bytes, a fee of 3400, and 30900 - 3400
     it "are sent without a question when given with --coin" $
       withChain ctx (confirmedChain (dustCoinsTx ctx)) $ \home _ -> do
         synced home
-        prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--coin", coinArg (dustCoinsTx ctx) 1, "--coin", coinArg (dustCoinsTx ctx) 3] []
+        prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--coin", coinArg (dustCoinsTx ctx) 1, "--coin", coinArg (dustCoinsTx ctx) 3, "--feerate", "10"] []
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 27500)]
 
     it "are not left or spent by choice with --coin, whose coins are all sent" $
       withChain ctx (confirmedChain (dustCoinsTx ctx)) $ \home _ -> do
         synced home
-        (errorOf <$> hwJson home ["preparesendall", textOf (otherAddr 0), "--coin", coinArg (dustCoinsTx ctx) 1, "--leavedust"] [])
+        (errorOf <$> hwJson home ["preparesendall", textOf (otherAddr 0), "--coin", coinArg (dustCoinsTx ctx) 1, "--leavedust", "--feerate", "10"] [])
           `shouldReturn` Right "The coins chosen with --coin or --spendfrom are all sent: give --spenddust or --leavedust without them"
 
 {- Coin control -}
@@ -2063,7 +2148,7 @@ coinControlSpec ctx =
     it "spends the coins at the address of --spendfrom, and only them" $
       withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
         synced home
-        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spendfrom", textOf (externalAddr 0)] []
+        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spendfrom", textOf (externalAddr 0), "--feerate", "10"] []
         paidToWallet <$> txOf prepared `shouldReturn` Map.fromList [(internalAddr 0, 27740)]
         leftOf prepared `shouldBe` Right []
 
@@ -2077,7 +2162,7 @@ coinControlSpec ctx =
         _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
         _ <- receiveFor home "cash"
         _ <- answer home ["sync"] []
-        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spendfrom", "1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ"] []
+        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spendfrom", "1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ", "--feerate", "10"] []
         (dBAccountName <$> accountOf prepared) `shouldBe` Right "cash"
         paidToOthers <$> txOf prepared `shouldReturn` Map.fromList [(otherAddr 0, 20000)]
 
@@ -2085,7 +2170,7 @@ coinControlSpec ctx =
       withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
         synced home
         _ <- answer home ["lockcoin", coinArg (twoAddressesTx ctx) 1] []
-        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (twoAddressesTx ctx) 0, "--coin", coinArg (twoAddressesTx ctx) 1] []
+        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (twoAddressesTx ctx) 0, "--coin", coinArg (twoAddressesTx ctx) 1, "--feerate", "10"] []
         paidToWallet <$> txOf prepared `shouldReturn` Map.fromList [(internalAddr 0, 27740)]
         leftOf prepared `shouldBe` Right [(OutPoint (txHash (twoAddressesTx ctx)) 1, 30000, Locked LockedByUser)]
 
@@ -2094,7 +2179,7 @@ coinControlSpec ctx =
       withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
         synced home
         _ <- answer home ["lockcoin", coinArg (twoAddressesTx ctx) 1] []
-        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (twoAddressesTx ctx) 0, "--coin", coinArg (twoAddressesTx ctx) 1] []
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (twoAddressesTx ctx) 0, "--coin", coinArg (twoAddressesTx ctx) 1, "--feerate", "10"] []
         let (transaction, staying) = Text.breakOn "Staying in the account:" (runOut run)
         transaction `shouldSatisfy` Text.isInfixOf "NoSigHash"
         staying `shouldSatisfy` Text.isInfixOf (Text.pack (coinArg (twoAddressesTx ctx) 1) <> " 0.00030000 btc, you locked it")
@@ -2103,32 +2188,32 @@ coinControlSpec ctx =
       withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
         synced home
         _ <- answer home ["lockcoin", coinArg (twoAddressesTx ctx) 1] []
-        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (twoAddressesTx ctx) 1] [])
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (twoAddressesTx ctx) 1, "--feerate", "10"] [])
           `shouldReturn` Right ("None of the coins chosen can be spent now: " <> Text.pack (coinArg (twoAddressesTx ctx) 1) <> ", you locked it")
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
 
     it "is refused a --spendfrom address that is not in the account" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spendfrom", textOf (otherAddr 1)] [])
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spendfrom", textOf (otherAddr 1), "--feerate", "10"] [])
           `shouldReturn` Right "The address 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ is not in the account main"
 
     it "is refused a --coin the account does not have" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         let unknown = Text.unpack (txHashToHex (fakeTxHash 9)) <> ":0"
-        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", unknown] [])
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", unknown, "--feerate", "10"] [])
           `shouldReturn` Right ("The account has no coin " <> Text.pack unknown)
 
     it "lists nothing left in the account without coin control" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        (leftOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002"] []) `shouldReturn` Right []
+        (leftOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"] []) `shouldReturn` Right []
 
     it "makes preparesendall send the coins at --spendfrom, listing the others as not chosen" $
       withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
         synced home
-        sendAll <- answer home ["preparesendall", textOf (otherAddr 0), "--spendfrom", textOf (externalAddr 0)] []
+        sendAll <- answer home ["preparesendall", textOf (otherAddr 0), "--spendfrom", textOf (externalAddr 0), "--feerate", "10"] []
         paidToOthers <$> txOf sendAll `shouldReturn` Map.fromList [(otherAddr 0, 48080)]
         leftOf sendAll `shouldBe` Right [(OutPoint (txHash (twoAddressesTx ctx)) 1, 30000, NotGiven)]
 
@@ -2141,11 +2226,11 @@ changeBackSpec :: Ctx -> Spec
 changeBackSpec ctx =
   describe "The change of preparetx sent back" $ do
     let chain = confirmedChain (twoAddressesTx ctx)
-        fromBoth = ["preparetx", fixedTo (otherAddr 0) "0.0006", "--changeback"]
+        fromBoth = ["preparetx", fixedTo (otherAddr 0) "0.0006", "--changeback", "--feerate", "10"]
     it "goes to the one address the payment spends from, without a question" $
       withChain ctx chain $ \home _ -> do
         synced home
-        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spendfrom", textOf (externalAddr 0), "--changeback"] []
+        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spendfrom", textOf (externalAddr 0), "--changeback", "--feerate", "10"] []
         paidToWallet <$> txOf prepared `shouldReturn` Map.fromList [(externalAddr 0, 27740)]
 
     it "goes to the address whose path the user types, among those the payment spends from" $
@@ -2173,19 +2258,19 @@ changeBackSpec ctx =
       withChain ctx chain $ \home _ -> do
         synced home
         setChangeBack home True
-        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spendfrom", textOf (externalAddr 0)] []
+        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spendfrom", textOf (externalAddr 0), "--feerate", "10"] []
         paidToWallet <$> txOf prepared `shouldReturn` Map.fromList [(externalAddr 0, 27740)]
 
     it "goes to a new change address with --newchange, whatever the configuration file says" $
       withChain ctx chain $ \home _ -> do
         synced home
         setChangeBack home True
-        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spendfrom", textOf (externalAddr 0), "--newchange"] []
+        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spendfrom", textOf (externalAddr 0), "--newchange", "--feerate", "10"] []
         paidToWallet <$> txOf prepared `shouldReturn` Map.fromList [(internalAddr 0, 27740)]
 
     it "cannot go back and to a new change address at once" $
       withHome $ \home -> do
-        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--changeback", "--newchange"] []
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--changeback", "--newchange", "--feerate", "10"] []
         runExit run `shouldBe` ExitFailure 1
         runErr run `shouldSatisfy` Text.isInfixOf "Invalid option `--newchange'"
 
@@ -2307,7 +2392,7 @@ bumpFeeSpec ctx = do
     it "takes the higher fee from the change it sent back to the address it spends from" $
       withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
         synced home
-        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spendfrom", textOf (externalAddr 0), "--changeback"] []
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spendfrom", textOf (externalAddr 0), "--changeback", "--feerate", "10"] []
         stuck <- signAndSend home nosig
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--feerate", "20"] []
         paidToWallet bumped `shouldBe` Map.fromList [(externalAddr 0, 25480)]
@@ -2317,7 +2402,7 @@ bumpFeeSpec ctx = do
     it "keeps what it pays another address of the wallet" $
       withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
         synced home
-        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (externalAddr 1) "0.0002", "--spendfrom", textOf (externalAddr 0)] []
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (externalAddr 1) "0.0002", "--spendfrom", textOf (externalAddr 0), "--feerate", "10"] []
         stuck <- signAndSend home nosig
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--feerate", "20"] []
         paidToWallet bumped `shouldBe` Map.fromList [(externalAddr 1, 20000), (internalAddr 0, 25480)]
@@ -2408,7 +2493,7 @@ bumpFeeSpec ctx = do
         _ <- answer home ["receive", "--account", "main"] []
         secondAddr <- receiveFor home "second"
         _ <- answer home ["sync"] []
-        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", secondAddr <> ":0.0002", "--account", "main"] []
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", secondAddr <> ":0.0002", "--account", "main", "--feerate", "10"] []
         stuck <- signAndSend home nosig
         [sent] <- inMempool <$> readIORef chain
         index <- maybe (fail "The payment does not pay second") return $ findIndex ((== Right account1Addr) . scriptToAddressBS ctx . (.script)) sent.outputs
@@ -2447,7 +2532,7 @@ bumpFeeSpec ctx = do
     it "has its replacement exported, signed offline, imported back and sent, which retires it" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
-        nosig <- nosigOf =<< txOf =<< answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json"] []
+        nosig <- nosigOf =<< txOf =<< answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json", "--feerate", "10"] []
         _ <- answer signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
         _ <- answer online ["importtx", signer </> "signed.json"] []
         stuck <- txidOf =<< txOf =<< answer online ["sendtx", nosig, "--yes"] []
@@ -2485,7 +2570,7 @@ bumpFeeSpec ctx = do
     let chain = confirmedChain (twoAddressesTx ctx)
         stuckPayment home = do
           synced home
-          nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0004", "--spendfrom", textOf (externalAddr 0)] []
+          nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0004", "--spendfrom", textOf (externalAddr 0), "--feerate", "10"] []
           signAndSend home nosig
     it "takes a confirmed coin of the account, as the user agrees" $
       withChain ctx chain $ \home _ -> do
@@ -2515,7 +2600,7 @@ bumpFeeSpec ctx = do
     let withSecond home = do
           stuck <- sentPayment home
           _ <- answer home ["sync"] []
-          nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 1) "0.0001"] []
+          nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--feerate", "10"] []
           second <- signAndSend home nosig
           return (stuck, second)
     it "is replaced with that payment, as the user agrees, by one that pays the recipients of both" $
@@ -2549,7 +2634,7 @@ paymentWithPayerChange ctx = fundingTx ctx 9 [(externalAddr 0, 50000), (otherAdd
 
 -- | What hw shows of the payment of 20000 prepared in a synced home
 shownPayment :: FilePath -> [String] -> IO Text
-shownPayment home options = runOut <$> hw home (["preparetx", fixedTo (otherAddr 0) "0.0002"] <> options) []
+shownPayment home options = runOut <$> hw home (["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"] <> options) []
 
 -- The payment of 20000 spends the coin of 50000 at /0/0, and leaves 27740
 -- of change
@@ -2612,7 +2697,7 @@ layoutSpec ctx =
     it "shows every output of a transaction between addresses of the wallet as sent to, none as change" $
       withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
         synced home
-        shown <- runOut <$> hw home ["preparetx", fixedTo (externalAddr 1) "0.0002", "--spendfrom", textOf (externalAddr 0)] []
+        shown <- runOut <$> hw home ["preparetx", fixedTo (externalAddr 1) "0.0002", "--spendfrom", textOf (externalAddr 0), "--feerate", "10"] []
         let (_, sent) = Text.breakOn "Sending to:" shown
         shown `shouldSatisfy` Text.isPrefixOf "Internal"
         sent `shouldSatisfy` Text.isInfixOf "  1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg: 0.00020000 btc\n    Path: /0/1\n"
@@ -2631,10 +2716,10 @@ twoAccountsPending home = do
   _ <- answer home ["createacc", "second"] seedTwice
   _ <- answer home ["receive", "--account", "main"] []
   _ <- answer home ["sync"] []
-  _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--account", "main"] []
+  _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--account", "main", "--feerate", "10"] []
   secondAddr <- receiveFor home "second"
   keys <- writeKeyFile home
-  void $ answer home ["preparesweep", "--prvkeys", keys, "--sweepto", secondAddr] []
+  void $ answer home ["preparesweep", "--prvkeys", keys, "--sweepto", secondAddr, "--feerate", "10"] []
 
 -- | The account pendingtxs was asked for, and the account of each pending
 -- transaction it lists
@@ -2682,7 +2767,7 @@ pendingListSpec ctx =
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         started <- getCurrentTime
-        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"] []
         ended <- getCurrentTime
         times <- createdTimesOf <$> hwJson home ["pendingtxs"] []
         let duringRun time = addUTCTime (-1) started <= time && time <= addUTCTime 1 ended
@@ -2691,7 +2776,7 @@ pendingListSpec ctx =
     it "show the time they were created" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"] []
         run <- hw home ["pendingtxs"] []
         runOut run `shouldSatisfy` Text.isInfixOf "Created  : "
 
@@ -2723,7 +2808,7 @@ balancesListSpec ctx =
     it "count the coin a pending payment spends as unspendable" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"] []
         (balancesOf <$> hwJson home ["balances"] []) `shouldReturn` Right [(externalAddrsText !! 0, 50000, 0, 50000)]
 
     -- The payment of 20000 spends the coin of 50000 and leaves 27740 of
@@ -2739,7 +2824,7 @@ balancesListSpec ctx =
     it "show the path of each address, then its total, spendable and unspendable balances" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"] []
         run <- hw home ["balances"] []
         runOut run `shouldSatisfy` Text.isInfixOf ("/0/0: " <> externalAddrsText !! 0)
         runOut run `shouldSatisfy` Text.isInfixOf "Total      : 0.00050000 btc"
@@ -2773,7 +2858,7 @@ nextStepSpec ctx =
     it "is to sign the transaction preparetx made, or to export it to sign it offline" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002"] []
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"] []
         nosig <- onePendingNosig home
         run `shouldSatisfy` showsCommand ("hw signtx " <> nosig)
         run `shouldSatisfy` showsCommand ("hw exporttx " <> nosig <> " FILE")
@@ -2781,7 +2866,7 @@ nextStepSpec ctx =
     it "is to sign the file preparetx wrote on an offline computer, or the transaction here" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", home </> "unsigned.json"] []
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", home </> "unsigned.json", "--feerate", "10"] []
         nosig <- onePendingNosig home
         run `shouldSatisfy` showsCommand ("hw signtx --input " <> Text.pack (home </> "unsigned.json") <> "\n")
         run `shouldSatisfy` showsCommand ("hw signtx " <> nosig)
@@ -2789,7 +2874,7 @@ nextStepSpec ctx =
     it "is to sign the transaction preparesendall made, or to export it to sign it offline" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        run <- hw home ["preparesendall", textOf (otherAddr 0)] []
+        run <- hw home ["preparesendall", textOf (otherAddr 0), "--feerate", "10"] []
         nosig <- onePendingNosig home
         run `shouldSatisfy` showsCommand ("hw signtx " <> nosig)
         run `shouldSatisfy` showsCommand ("hw exporttx " <> nosig <> " FILE")
@@ -2797,21 +2882,21 @@ nextStepSpec ctx =
     it "is to send the transaction signtx signed in the wallet, by its nosigHash" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002"] []
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"] []
         run <- hw home ["signtx", nosig] seedOnce
         run `shouldSatisfy` showsCommand ("hw sendtx " <> Text.pack nosig)
 
     it "is to send the file signtx signed offline, from the online computer" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
-        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json"] []
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json", "--feerate", "10"] []
         run <- hw signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
         run `shouldSatisfy` showsCommand ("hw sendtx --input " <> Text.pack (signer </> "signed.json"))
 
     it "is to send the --input file signtx replaced with the signed transaction" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
-        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json"] []
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json", "--feerate", "10"] []
         run <- hw signer ["signtx", "--input", online </> "unsigned.json"] (["y"] <> seedOnce)
         run `shouldSatisfy` showsCommand ("hw sendtx --input " <> Text.pack (online </> "unsigned.json"))
 
@@ -2843,7 +2928,7 @@ nextStepSpec ctx =
         createMain home
         _ <- answer home ["receive"] []
         keys <- writeKeyFile home
-        run <- hw home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0)] []
+        run <- hw home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0), "--feerate", "10"] []
         nosig <- onePendingNosig home
         run `shouldSatisfy` showsCommand ("hw signsweep " <> nosig <> " --prvkeys " <> Text.pack keys)
         run `shouldSatisfy` showsCommand ("hw exporttx " <> nosig <> " FILE")
@@ -2854,7 +2939,7 @@ nextStepSpec ctx =
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
         createMain home
         _ <- answer home ["receive"] []
-        run <- hw home ["preparesweep", "--sweepfrom", textOf wikiAddr, "--sweepto", textOf (externalAddr 0)] []
+        run <- hw home ["preparesweep", "--sweepfrom", textOf wikiAddr, "--sweepto", textOf (externalAddr 0), "--feerate", "10"] []
         nosig <- onePendingNosig home
         run `shouldSatisfy` showsCommand ("hw signsweep " <> nosig <> "\n")
 
@@ -2862,14 +2947,14 @@ nextStepSpec ctx =
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
         createMain home
         _ <- answer home ["receive"] []
-        run <- hw home ["preparesweep", "--sweepfrom", textOf wikiAddr, "--sweepto", textOf (externalAddr 0), "--output", home </> "sweep.json"] []
+        run <- hw home ["preparesweep", "--sweepfrom", textOf wikiAddr, "--sweepto", textOf (externalAddr 0), "--output", home </> "sweep.json", "--feerate", "10"] []
         run `shouldSatisfy` showsCommand ("hw signsweep --input " <> Text.pack (home </> "sweep.json") <> "\n")
 
     -- In a wallet without accounts, the sweep is in its file only
     it "is to sign the file of a sweep outside the wallet with the keys of its file" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
         keys <- writeKeyFile home
-        run <- hw home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json"] []
+        run <- hw home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--feerate", "10"] []
         run `shouldSatisfy` showsCommand ("hw signsweep --input " <> Text.pack (home </> "sweep.json") <> " --prvkeys " <> Text.pack keys)
 
     it "is to send the sweep signsweep signed in the wallet, by its nosigHash" $
@@ -2877,14 +2962,14 @@ nextStepSpec ctx =
         createMain home
         _ <- answer home ["receive"] []
         keys <- writeKeyFile home
-        nosig <- nosigOf =<< txOf =<< answer home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0)] []
+        nosig <- nosigOf =<< txOf =<< answer home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0), "--feerate", "10"] []
         run <- hw home ["signsweep", nosig, "--prvkeys", keys] []
         run `shouldSatisfy` showsCommand ("hw sendtx " <> Text.pack nosig)
 
     it "is to send the file of a sweep outside the wallet that signsweep signed" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
         keys <- writeKeyFile home
-        _ <- answer home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json"] []
+        _ <- answer home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--feerate", "10"] []
         run <- hw home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.json", "--prvkeys", keys] []
         run `shouldSatisfy` showsCommand ("hw sendtx --input " <> Text.pack (home </> "signed.json"))
 
@@ -2899,5 +2984,5 @@ nextStepSpec ctx =
     it "is not shown with --json, whose output is the answer alone" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--json"] []
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--json", "--feerate", "10"] []
         run `shouldNotSatisfy` showsCommand "hw signtx"
