@@ -26,7 +26,7 @@ import Data.Char (isSpace)
 import Data.List (isPrefixOf, isSuffixOf, nub)
 import Data.List.Split (splitWhen)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes, fromMaybe, mapMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isNothing, mapMaybe)
 import qualified Data.Set as Set
 import Haskoin.Wallet.Parser.Args
 import Haskoin.Wallet.Style
@@ -49,7 +49,8 @@ helpRow =
     { names = [Short 'h', Long "help"],
       metavar = Nothing,
       help = Just "Show this help text",
-      defaultShown = Nothing
+      defaultShown = Nothing,
+      subheading = Nothing
     }
 
 {- The help -}
@@ -61,7 +62,7 @@ programHelp output program =
   sections $
     [ Just (fillSep (proseWords known program.intro <> offlineLegend output)),
       Just (programUsage program),
-      Just (titled "Options:" (map (optionRow known) (program.globals.rows <> [helpRow])))
+      Just (optionsSection known program.globals.rows)
     ]
       <> map (Just . groupRows) program.groups
       <> [paragraphs known program.details]
@@ -79,7 +80,7 @@ commandHelp program command =
     [ Just (vcat (annotate Title (paragraph command.summary) : offlineNote)),
       Just (commandUsage program command),
       titledIfAny "Arguments:" (map (optionRow known) arguments),
-      Just (titled "Options:" (map (optionRow known) (options <> [helpRow]))),
+      Just (optionsSection known options),
       paragraphs known command.details,
       seeAlso (commandNamed program) (filter (/= command.name) (mentionedCommands program command.details))
     ]
@@ -155,6 +156,20 @@ titledIfAny heading rows = Just (titled heading rows)
 -- options
 partitionRows :: [OptDoc] -> ([OptDoc], [OptDoc])
 partitionRows rows = (filter (null . (.names)) rows, filter (not . null . (.names)) rows)
+
+-- | The options: those without a subheading, then -h, --help, then each
+-- subheading with its options under it. The subheadings come in the order
+-- of their first option.
+optionsSection :: KnownWords -> [OptDoc] -> Doc Style
+optionsSection known options =
+  sections (Just general : map (Just . subsection) subheadings)
+  where
+    general = titled "Options:" (map (optionRow known) (filter (isNothing . (.subheading)) options <> [helpRow]))
+    subheadings = nub (mapMaybe (.subheading) options)
+    subsection title =
+      vcat $
+        indent 2 (annotate Subheading (pretty title))
+          : map (optionRow known) (filter ((== Just title) . (.subheading)) options)
 
 -- | A row of the help: the names of an option, or of a command, padded to
 -- 'nameWidth', then its help, wrapped under itself. Names too wide for the
@@ -331,7 +346,7 @@ required usage = case usage of
   Choice _ _ -> parenthesized (bare usage)
   _ -> bare usage
   where
-    parenthesized d = muted "(" <> d <> muted ")"
+    parenthesized d = "(" <> d <> ")"
 
 -- | A usage without the parentheses around it
 bare :: Usage -> Doc Style
@@ -339,11 +354,11 @@ bare = \case
   NoUsage -> mempty
   Item doc -> itemDoc doc
   Sequence a b -> hsep (usageParts (Sequence a b))
-  Choice a b -> concatWith (\x y -> x <+> muted "|" <+> y) (map required (alternatives (Choice a b)))
+  Choice a b -> concatWith (\x y -> x <+> "|" <+> y) (map required (alternatives (Choice a b)))
   -- [-c|--coin TXHASH:INDEX]..., rather than [-c|--coin TXHASH:INDEX...]
-  Optional (Repeated inner) -> muted "[" <> bare inner <> muted "]..."
-  Optional inner -> muted "[" <> bare inner <> muted "]"
-  Repeated inner -> required inner <> muted "..."
+  Optional (Repeated inner) -> "[" <> bare inner <> "]..."
+  Optional inner -> "[" <> bare inner <> "]"
+  Repeated inner -> required inner <> "..."
 
 alternatives :: Usage -> [Usage]
 alternatives (Choice a b) = alternatives a <> alternatives b
@@ -356,8 +371,5 @@ itemDoc doc = hsep (namesPart <> metavarPart)
   where
     namesPart
       | null doc.names = []
-      | otherwise = [concatWith (\a b -> a <> muted "|" <> b) (map (annotate Option . pretty . nameText) doc.names)]
+      | otherwise = [concatWith (\a b -> a <> "|" <> b) (map (annotate Option . pretty . nameText) doc.names)]
     metavarPart = [annotate Metavar (pretty v) | Just v <- [doc.metavar]]
-
-muted :: Doc Style -> Doc Style
-muted = annotate Muted

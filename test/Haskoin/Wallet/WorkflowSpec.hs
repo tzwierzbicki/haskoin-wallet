@@ -788,6 +788,17 @@ failureSpec ctx = do
         run <- hw home ["signtx", "--help"] []
         runOut run `shouldSatisfy` Text.isInfixOf "This command asks for a mnemonic or private keys.\nRun it on an offline computer if you can.\n"
 
+    it "of a command lists its options under their subheadings" $
+      withHome $ \home -> do
+        run <- hw home ["preparetx", "--help"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "\n\n  Change\n      --changeback "
+
+    -- --help is the last of them, and Fee the first subheading of preparetx
+    it "of a command lists the options without a subheading first" $
+      withHome $ \home -> do
+        run <- hw home ["preparetx", "--help"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "Show this help text\n\n  Fee\n  -f, --feerate RATE "
+
     -- The text of preparetx names them in this order
     it "of a command ends with the commands its text names" $
       withHome $ \home -> do

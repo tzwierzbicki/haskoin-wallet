@@ -41,6 +41,7 @@ module Haskoin.Wallet.Parser.Args
     completeWith,
     completer,
     action,
+    optionGroup,
 
     -- * Reading a value, from optparse-applicative
     ReadM,
@@ -123,7 +124,10 @@ data OptDoc = OptDoc
     metavar :: Maybe String,
     help :: Maybe String,
     -- | Its default, as the help shows it
-    defaultShown :: Maybe String
+    defaultShown :: Maybe String,
+    -- | The subheading it is listed under among the options, when it has
+    -- one: see 'optionGroup'
+    subheading :: Maybe String
   }
   deriving (Eq, Show)
 
@@ -135,11 +139,12 @@ instance Semigroup OptDoc where
       { names = a.names <> b.names,
         metavar = b.metavar <|> a.metavar,
         help = b.help <|> a.help,
-        defaultShown = b.defaultShown <|> a.defaultShown
+        defaultShown = b.defaultShown <|> a.defaultShown,
+        subheading = b.subheading <|> a.subheading
       }
 
 instance Monoid OptDoc where
-  mempty = OptDoc {names = [], metavar = Nothing, help = Nothing, defaultShown = Nothing}
+  mempty = OptDoc {names = [], metavar = Nothing, help = Nothing, defaultShown = Nothing, subheading = Nothing}
 
 -- | A name of an option: -a, or --account
 data Name = Short Char | Long String
@@ -247,6 +252,15 @@ completer c = mempty {optparse = O.completer c}
 -- | A completion action of bash, such as "file"
 action :: (O.HasCompleter f) => String -> Mod f a
 action a = mempty {optparse = O.action a}
+
+{- Subheadings -}
+
+-- | List the options under a subheading of the help, after the options
+-- without one. An option under a subheading already stays under it.
+optionGroup :: String -> Args a -> Args a
+optionGroup title args = args {rows = map under args.rows}
+  where
+    under doc = doc {subheading = doc.subheading <|> Just title}
 
 {- A command, and the program -}
 

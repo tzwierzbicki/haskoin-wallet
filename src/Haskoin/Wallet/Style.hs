@@ -32,6 +32,8 @@ data Style
     Title
   | -- | The heading of a section, such as Options:
     Heading
+  | -- | A heading inside a section, such as one over some of the options
+    Subheading
   | -- | A command of hw
     Command
   | -- | A command that asks for a mnemonic or private keys, to run on an
@@ -43,8 +45,7 @@ data Style
     Option
   | -- | What stands for a value to type, such as FILENAME
     Metavar
-  | -- | What is there for completeness: a default, or the brackets of a
-    -- usage line
+  | -- | What is there for completeness, such as a default
     Muted
   | -- | What went wrong
     Failure
@@ -55,11 +56,15 @@ sgrOf :: Style -> [SGR]
 sgrOf = \case
   Title -> [bold]
   Heading -> [bold, SetUnderlining SingleUnderline]
+  Subheading -> [bold]
   Command -> [foreground Cyan]
   OfflineCommand -> [foreground Magenta]
   OfflineNote -> [foreground Magenta]
   Option -> [foreground Green]
-  Metavar -> [SetUnderlining SingleUnderline]
+  -- Faint dims the colour of the text, whatever the theme: light grey on
+  -- a dark background, dark grey on a light one. A metavar stands out less
+  -- than the text around it. Underlined, it differs from a muted part.
+  Metavar -> [SetConsoleIntensity FaintIntensity, SetUnderlining SingleUnderline]
   Muted -> [SetConsoleIntensity FaintIntensity]
   Failure -> [foreground Red]
   where

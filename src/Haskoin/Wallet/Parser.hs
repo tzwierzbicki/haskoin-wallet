@@ -1007,19 +1007,29 @@ scripts.
           <$> ( PrepareTx
                   <$> some paymentArg
                   <*> payingAccountOption
-                  <*> feeOption
+                  <*> underFee feeOption
                   <*> dustOption
-                  <*> rcptPayOption
-                  <*> minConfOption
-                  <*> coinSelectionOption
+                  <*> underFee rcptPayOption
+                  <*> underCoins minConfOption
+                  <*> underCoins coinSelectionOption
                   <*> outputFileMaybeOption
-                  <*> many coinOption
-                  <*> many spendFromOption
-                  <*> selectOption
-                  <*> highFeeYesOption
-                  <*> changeBackOption
+                  <*> underCoins (many coinOption)
+                  <*> underCoins (many spendFromOption)
+                  <*> underCoins selectOption
+                  <*> underFee highFeeYesOption
+                  <*> optionGroup "Change" changeBackOption
               )
     }
+
+-- | The options of the fee of a payment or a sweep, under their
+-- subheading of the help
+underFee :: Args a -> Args a
+underFee = optionGroup "Fee"
+
+-- | The options that choose the coins a payment spends, under their
+-- subheading of the help
+underCoins :: Args a -> Args a
+underCoins = optionGroup "Coins"
 
 -- | The account a payment spends from, which coin control can tell
 payingAccountOption :: Args (Maybe Text)
@@ -1090,14 +1100,14 @@ scripts.
           <$> ( PrepareSendAll
                   <$> some sendAllRecipientArg
                   <*> payingAccountOption
-                  <*> feeOption
+                  <*> underFee feeOption
                   <*> dustOption
-                  <*> minConfOption
+                  <*> underCoins minConfOption
                   <*> outputFileMaybeOption
-                  <*> many coinOption
-                  <*> many spendFromOption
-                  <*> dustCoinsOption
-                  <*> highFeeYesOption
+                  <*> underCoins (many coinOption)
+                  <*> underCoins (many spendFromOption)
+                  <*> underCoins dustCoinsOption
+                  <*> underFee highFeeYesOption
               )
     }
 
@@ -1871,17 +1881,22 @@ typed. --yes takes it without asking, for scripts.
           <$> ( PrepareSweep
                   <$> accountOptionWith "The account the sweep pays. Needed only when the --sweepto addresses are in several accounts."
                   <*> sweepNetworkOption
-                  <*> prvKeysMaybeOption
-                  <*> many sweepFromOption
-                  <*> addressFileOption
+                  <*> underCoinsSwept prvKeysMaybeOption
+                  <*> underCoinsSwept (many sweepFromOption)
+                  <*> underCoinsSwept addressFileOption
                   <*> some sweepToOption -- some: at least one
-                  <*> many sweepCoinOption
+                  <*> underCoinsSwept (many sweepCoinOption)
                   <*> outputFileMaybeOption
-                  <*> feeOption
+                  <*> underFee feeOption
                   <*> dustOption
-                  <*> highFeeYesOption
+                  <*> underFee highFeeYesOption
               )
     }
+
+-- | The options that tell which coins a sweep takes, under their
+-- subheading of the help
+underCoinsSwept :: Args a -> Args a
+underCoinsSwept = optionGroup "Coins swept"
 
 sweepFromOption :: Args Text
 sweepFromOption =
