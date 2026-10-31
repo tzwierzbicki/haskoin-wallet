@@ -405,13 +405,13 @@ hw verifymsg ADDRESS SIGNATURE "I control this address"
 ### The wallet
 
 **`hw backup`** copies the database, to a file you name or into
-`~/.hw/backups`. **`hw version`** shows the version of `hw` and of its
+`~/.hw/backups`. **`hw --version`** shows the version of `hw` and of its
 database format.
 
 ```console
 hw backup
 hw backup ~/hw-2026-10-30.sqlite
-hw version
+hw --version
 ```
 
 To restore a backup, replace `~/.hw/accounts.sqlite` with the copy, or point

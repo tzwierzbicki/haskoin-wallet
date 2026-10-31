@@ -34,9 +34,6 @@ spec = do
       usageOf "preparesweep"
         `shouldBe` "[-a|--account NAME] [-n|--network NETWORK] [-k|--key-file FILENAME] [-w|--sweep-from ADDRESS]... [--address-file FILENAME] (-t|--sweep-to ADDRESS[:AMOUNT])... [-c|--coin TXID:INDEX]... [-o|--output FILENAME] [-f|--fee-rate RATE] [--dust-limit SATOSHIS] [-y|--yes]"
 
-    it "is empty for a command without options" $
-      usageOf "version" `shouldBe` ""
-
   describe "The commands a text of the help names" $ do
     it "are those named in it, in its order" $
       mentionedCommands program "Sign it with signtx, then send it with sendtx." `shouldBe` ["signtx", "sendtx"]
@@ -65,6 +62,16 @@ spec = do
 
     it "is the help of the program when nothing is typed" $
       requestOf unitOptions [] `shouldBe` NothingTyped
+
+    it "is the version of the program, with --version and no command" $
+      requestOf unitOptions ["--version"] `shouldBe` Version
+
+    -- No command takes --version: the parser refuses it
+    it "leaves a --version after a command to the parser" $
+      requestOf unitOptions ["sync", "--version"] `shouldBe` Parse
+
+    it "is the help, with both --help and --version" $
+      requestOf unitOptions ["--version", "--help"] `shouldBe` HelpOf Nothing
   where
     usageOf name = case commandNamed program name of
       Just command -> unwords (map renderPlain (usageParts command.args.usage))

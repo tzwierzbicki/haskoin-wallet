@@ -292,6 +292,8 @@ data CommandGroup a = CommandGroup
 -- options.
 data Program cmd opts = Program
   { name :: String,
+    -- | What --version prints, in lines separated by newlines
+    version :: String,
     -- | What stands for the command in the usage line
     commandUsage :: String,
     -- | What the program does, at the top of its help

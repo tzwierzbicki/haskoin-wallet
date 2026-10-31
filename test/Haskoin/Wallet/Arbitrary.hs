@@ -275,10 +275,7 @@ arbitraryResponse net ctx =
         <$> arbitraryNetwork
         <*> arbitraryNatural
         <*> (resize 10 $ listOf $ arbitrarySyncRes net ctx),
-      ResponseFees net <$> arbitraryFeeRates,
-      ResponseVersion
-        <$> arbitraryText
-        <*> arbitraryText
+      ResponseFees net <$> arbitraryFeeRates
     ]
 
 arbitraryKeyBytes :: Gen KeyBytes

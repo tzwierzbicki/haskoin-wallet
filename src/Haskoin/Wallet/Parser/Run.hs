@@ -4,7 +4,8 @@
 -- have optparse-applicative parse the arguments, and report what is wrong
 -- with them. The help is shown before anything is parsed. -h or --help
 -- anywhere before a -- shows the help of the command named first, or of
--- the program when none is.
+-- the program when none is. --version before a -- shows the version of
+-- the program, when no command is named.
 module Haskoin.Wallet.Parser.Run
   ( runProgram,
     Request (..),
@@ -15,19 +16,20 @@ module Haskoin.Wallet.Parser.Run
 where
 
 import Data.List (find, isPrefixOf, isSuffixOf)
+import Data.Maybe (isNothing)
 import Haskoin.Wallet.Parser.Args
 import Haskoin.Wallet.Parser.Help
 import Haskoin.Wallet.Style (Output, Style, outputOf, putDoc)
 import qualified Options.Applicative as O
-import Prettyprinter (Doc)
+import Prettyprinter (Doc, pretty)
 import System.Environment (getArgs)
 import System.Exit (ExitCode (..), exitWith)
 import System.IO (Handle, stderr, stdout)
 
 -- | Parse the command line of the program: the command, and the options
--- that go with any command. A request for help, a command typed alone
--- that needs arguments, and a command line that cannot be parsed print
--- what they have to, and leave.
+-- that go with any command. A request for help or for the version, a
+-- command typed alone that needs arguments, and a command line that
+-- cannot be parsed print what they have to, and leave.
 runProgram :: Program cmd opts -> IO (cmd, opts)
 runProgram program = do
   args <- getArgs
@@ -35,6 +37,7 @@ runProgram program = do
     -- As optparse-applicative did: the help, as a failure
     NothingTyped -> leave stderr (ExitFailure 1) (`programHelp` program)
     HelpOf word -> leave stdout ExitSuccess (helpOf word)
+    Version -> leave stdout ExitSuccess (const (pretty program.version))
     Parse -> parse args
   where
     helpOf word output = case word >>= commandNamed program of
@@ -74,20 +77,28 @@ data Request
     NothingTyped
   | -- | The help of the command named, or of the program when none is
     HelpOf (Maybe String)
+  | -- | The version of the program
+    Version
   | -- | A run: the arguments are parsed
     Parse
   deriving (Eq, Show)
 
 -- | What the arguments ask for. -h or --help before a -- asks for help.
--- The first argument takes the value of the options that take one, to
--- tell the command named from such a value.
+-- --version before a -- asks for the version, when no command is named.
+-- It is an option of the program, and no command takes it. The first
+-- argument takes the value of the options that take one, to tell the
+-- command named from such a value.
 requestOf :: [String] -> [String] -> Request
 requestOf valueOptions args
   | null args = NothingTyped
   -- The shell completes the words typed so far, --help among them maybe
   | any isCompletion args = Parse
-  | any (`elem` ["-h", "--help"]) (takeWhile (/= "--") args) = HelpOf (commandWord valueOptions args)
+  | typed ["-h", "--help"] = HelpOf command
+  | typed ["--version"] && isNothing command = Version
   | otherwise = Parse
+  where
+    typed names = any (`elem` names) (takeWhile (/= "--") args)
+    command = commandWord valueOptions args
 
 -- | Whether the argument is one the completion script of
 -- optparse-applicative passes

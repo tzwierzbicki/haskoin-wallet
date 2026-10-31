@@ -34,8 +34,8 @@ clientMain = do
   withContext $ \ctx -> do
     (cmd, GlobalOptions unit json noPager) <- parserMain
     -- Only a command reads the configuration and touches the database:
-    -- help and usage errors leave ~/.hw as it is, and a database newer
-    -- than this hw still gets help
+    -- help, --version and usage errors leave ~/.hw as it is, and a
+    -- database newer than this hw still gets help
     (cfg, warnings) <- either die return =<< initConfig
     forM_ warnings $ hPutStrLn stderr
     migrated <- catchDatabaseInUse $ runDB cfg (migrateDB (migrationHooks cfg) ctx)

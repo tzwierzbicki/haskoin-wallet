@@ -12,6 +12,7 @@ module Haskoin.Wallet.WorkflowSpec (spec) where
 
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Monad (forM_, replicateM_, void)
+import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Aeson as Json
 import Data.IORef (modifyIORef, readIORef)
@@ -32,6 +33,7 @@ import Haskoin.Wallet.Database (DBAccount (..), DBAddress (..), DBRawTx, databas
 import Haskoin.Wallet.FeeRates (FeeRates (..))
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (MnemonicPass (..))
+import Haskoin.Wallet.Migration (databaseVersion)
 import qualified Haskoin.Wallet.Schema.V3 as V3
 import Haskoin.Wallet.Sync (SyncRes (..))
 import Haskoin.Wallet.TestUtils
@@ -735,8 +737,8 @@ verifySpec =
 
     it "refuses a file holding another answer of hw" $
       withHome $ \home -> do
-        run <- hw home ["version", "--json"] []
-        let file = home </> "version.json"
+        run <- hw home ["mnemonic", "--json"] []
+        let file = home </> "mnemonic.json"
         writeFile file (Text.unpack (runOut run))
         (errorOf <$> hwJson home ["verifymsg", "--input", file] [])
           `shouldReturn` Right (Text.pack $ "The file " <> file <> " holds an answer of hw, but not one of signmsg")
@@ -823,6 +825,12 @@ failureSpec ctx = do
         run <- hw home ["--help"] []
         runOut run `shouldSatisfy` (not . Text.isInfixOf "\ESC")
 
+    -- The help of every option starts at column 28
+    it "of the program lists --version under --help" $
+      withHome $ \home -> do
+        run <- hw home ["--help"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "  -h, --help                Show this help text\n      --version             Show the version of hw\n"
+
     -- --unit and --json go before or after the command, and --help too
     it "of a command is shown with --help after its options" $
       withHome $ \home -> do
@@ -850,6 +858,24 @@ failureSpec ctx = do
         run <- hw home ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "--", "--help"] []
         runExit run `shouldBe` ExitFailure 1
         run `shouldSatisfy` printed "Address does not exist"
+
+  describe "The version" $ do
+    it "of hw and of its database format is shown with --version, and hw exits with success" $
+      withHome $ \home -> do
+        run <- hw home ["--version"] []
+        runExit run `shouldBe` ExitSuccess
+        runOut run `shouldBe` "Software version: 0.10.0\nDatabase version: 4\n"
+
+    it "is shown without touching the database" $
+      withHome $ \home -> do
+        _ <- hw home ["--version"] []
+        doesFileExist (home </> ".hw" </> "accounts.sqlite") `shouldReturn` False
+
+    it "is not an option of a command, which refuses it" $
+      withHome $ \home -> do
+        run <- hw home ["sync", "--version"] []
+        runExit run `shouldBe` ExitFailure 1
+        runErr run `shouldSatisfy` Text.isInfixOf "Invalid option `--version'"
 
   describe "A command line hw cannot parse" $ do
     it "names the unknown command, and suggests the closest one" $
@@ -1206,7 +1232,7 @@ backupSpec =
         runErr run `shouldSatisfy` Text.isInfixOf "The database at version 3 was backed up to"
         (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("main", 0, 0)]
         (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [(externalAddrsText !! 0, "")]
-        hwJson home ["version"] [] `shouldReturn` ResponseVersion "0.10.0" "4"
+        runDBWith 100 (home </> ".hw" </> "accounts.sqlite") (runExceptT databaseVersion) `shouldReturn` Right (Just 4)
   where
     shownFile (ResponseFile file) = Right file
     shownFile other = Left (show other)

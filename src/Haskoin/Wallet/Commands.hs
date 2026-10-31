@@ -61,13 +61,12 @@ module Haskoin.Wallet.Commands
     cmdPrepareSweep,
     cmdSignSweep,
 
-    -- * Sync, messages, backups and version
+    -- * Sync, messages and backups
     cmdSync,
     cmdFees,
     cmdSignMsg,
     cmdVerifyMsg,
     cmdBackup,
-    cmdVersion,
   )
 where
 
@@ -88,7 +87,6 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (getCurrentTime)
 import Data.Text.Encoding (encodeUtf8)
-import Data.Version (showVersion)
 import Data.Word (Word64)
 import Database.Persist.Sqlite (transactionUndo)
 import Haskoin
@@ -106,7 +104,7 @@ import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Keys
 import Haskoin.Wallet.Listing
 import Haskoin.Wallet.MessageSigning
-import Haskoin.Wallet.Migration (databaseVersion, latestDatabaseVersion)
+import Haskoin.Wallet.Migration (latestDatabaseVersion)
 import Haskoin.Wallet.Parser
 import Haskoin.Wallet.PendingTx
 import Haskoin.Wallet.PrettyPrinter (feeRatesPrinter, coinBalancesPrinter, renderOn, txAnswerPrinter)
@@ -133,7 +131,6 @@ import Haskoin.Wallet.TxSize (checkFeeRateAndDust, highFeeRate)
 import Haskoin.Wallet.TxSweep (buildSweepSignData, fetchSweepCoins, signTxWithKeys)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
-import qualified Paths_haskoin_wallet as Paths
 import System.IO (hPutStrLn, stderr)
 import System.Random (initStdGen)
 
@@ -176,13 +173,12 @@ commandResponse ctx cfg unit = \case
   -- Sweeps
   CommandPrepareSweep opts -> cmdPrepareSweep ctx cfg unit opts
   CommandSignSweep signing keysM -> cmdSignSweep ctx cfg signing keysM
-  -- Sync, messages, backups and version
+  -- Sync, messages and backups
   CommandSync account full -> cmdSync ctx cfg account full
   CommandFees netM -> cmdFees ctx cfg netM
   CommandSignMsg opts -> cmdSignMsg ctx cfg opts
   CommandVerifyMsg opts -> cmdVerifyMsg ctx cfg opts
   CommandBackup fileM -> cmdBackup cfg fileM
-  CommandVersion -> cmdVersion cfg
 
 -- | The listing of a command that lists, which the screen reads chunk by
 -- chunk, or Nothing for a command that answers at once
@@ -1088,7 +1084,7 @@ cmdSignSweep ctx cfg signing keysM =
     -- Without a file, the keys are typed: signing cannot do without them
     keysOn net = readSecKeys terminal net (fromMaybe KeysOnTerminal keysM)
 
-{- Sync, messages, backups and version -}
+{- Sync, messages and backups -}
 
 cmdSync :: Ctx -> Config -> Maybe Text -> Bool -> IO Response
 cmdSync ctx cfg account full =
@@ -1161,10 +1157,3 @@ cmdBackup cfg fileM =
         directory <- backupDirectory
         backupDatabase database directory latestDatabaseVersion
     return $ ResponseFile copy
-
-cmdVersion :: Config -> IO Response
-cmdVersion cfg =
-  runDBResponse cfg $ do
-    -- Every command migrates the database first, which gives it a version
-    dbVersion <- liftMaybe "The database has no format version" =<< databaseVersion
-    return $ ResponseVersion (cs (showVersion Paths.version)) (cs (show dbVersion))

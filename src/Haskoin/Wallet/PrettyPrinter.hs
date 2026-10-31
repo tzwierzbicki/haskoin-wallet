@@ -498,12 +498,6 @@ responsePrinter unit answer =
     ResponseFees net rates -> do
       now <- getCurrentTime
       renderIO $ vcat [styled Field "Network:" <+> text net.name, feeRatesPrinter now rates]
-    ResponseVersion v dbv ->
-      renderIO $
-        vcat
-          [ styled Field "Software version:" <+> pretty v,
-            styled Field "Database version:" <+> pretty dbv
-          ]
   where
     listing = forM_ (rowsPrinter unit answer) (renderIO . listingDoc)
 

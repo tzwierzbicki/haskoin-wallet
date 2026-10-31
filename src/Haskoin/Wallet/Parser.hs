@@ -16,17 +16,20 @@ import Control.Applicative (Alternative (..), optional)
 import Data.List (find, intercalate)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
+import Data.Version (showVersion)
 import Data.Word (Word32)
 import Haskoin
 import Haskoin.Wallet.Amounts (AmountUnit (..), readUnit)
 import Haskoin.Wallet.CoinSelection (CoinSelection (..), FeePayer (..))
 import Haskoin.Wallet.FeeRates (FeeRateChoice, readFeeRateChoice)
 import Haskoin.Wallet.Keys (KeySource (..))
+import Haskoin.Wallet.Migration (latestDatabaseVersion)
 import Haskoin.Wallet.Parser.Args
 import Haskoin.Wallet.Parser.Run (runProgram)
 import Haskoin.Wallet.Listing (Paging (..))
 import Haskoin.Wallet.Util (readNatural)
 import Numeric.Natural (Natural)
+import qualified Paths_haskoin_wallet as Paths
 import Text.RawString.QQ (r)
 
 {- Commands -}
@@ -90,7 +93,6 @@ data Command
     CommandSync !(Maybe Text) !Bool
   | -- | The file of the copy, or none for the backups directory of hw
     CommandBackup !(Maybe FilePath)
-  | CommandVersion
   | CommandPrepareSweep !PrepareSweep
   | -- | What to sign, and the file of the private keys, typed on the
     -- terminal without one
@@ -318,6 +320,14 @@ program :: Program Command GlobalOptions
 program =
   Program
     { name = "hw",
+      -- The database has the format of this hw: every command migrates it
+      -- first, and refuses one of a newer hw
+      version =
+        intercalate
+          "\n"
+          [ "Software version: " <> showVersion Paths.version,
+            "Database version: " <> show latestDatabaseVersion
+          ],
       commandUsage = "COMMAND",
       -- The help adds which commands to run on an offline computer
       intro =
@@ -325,7 +335,7 @@ program =
 hw is a BIP44 wallet for Bitcoin and Bitcoin Cash. It stores public keys
 only.
 |],
-      everydayNames = ["mnemonic", "recover", "accounts", "sync", "receive", "addresses", "balances", "label", "coins", "fees", "backup", "version"],
+      everydayNames = ["mnemonic", "recover", "accounts", "sync", "receive", "addresses", "balances", "label", "coins", "fees", "backup"],
       details =
         [r|
 A payment takes three steps:
@@ -410,8 +420,7 @@ Type hw COMMAND --help for the help of a command.
             ],
           CommandGroup
             "The wallet"
-            [ backupCommand,
-              versionCommand
+            [ backupCommand
             ]
         ]
     }
@@ -1747,18 +1756,6 @@ A copy made by a newer hw is refused.
       args =
         CommandBackup
           <$> optional (fileArgument "The file to copy the database to. It must not exist yet. Without it, the copy goes to ~/.hw/backups.")
-    }
-
-{- version -}
-
-versionCommand :: CommandSpec Command
-versionCommand =
-  CommandSpec
-    { name = "version",
-      offline = False,
-      summary = "Show the version of hw and of its database format",
-      details = "",
-      args = pure CommandVersion
     }
 
 {- fees -}

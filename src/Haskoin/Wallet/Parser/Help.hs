@@ -54,6 +54,17 @@ helpRow =
       subheading = Nothing
     }
 
+-- | The row of --version, which the help of the program lists
+versionRow :: String -> OptDoc
+versionRow programName =
+  OptDoc
+    { names = [Long "version"],
+      metavar = Nothing,
+      help = Just ("Show the version of " <> programName),
+      defaultShown = Nothing,
+      subheading = Nothing
+    }
+
 {- The help -}
 
 -- | The help of the program: what it does, its usage, its options, its
@@ -63,7 +74,7 @@ programHelp output program =
   sections $
     [ Just (fillSep (proseWords known program.intro <> offlineLegend output)),
       Just (programUsage program),
-      Just (optionsSection known program.globals.rows)
+      Just (optionsSection known [helpRow, versionRow program.name] program.globals.rows)
     ]
       <> map (Just . groupRows) program.groups
       <> [paragraphs known program.details]
@@ -81,7 +92,7 @@ commandHelp program command =
     [ Just (vcat (annotate Title (paragraph command.summary) : offlineNote)),
       Just (commandUsage program command),
       titledIfAny "Arguments:" (map (optionRow known) arguments),
-      Just (optionsSection known options),
+      Just (optionsSection known [helpRow] options),
       paragraphs known command.details,
       seeAlso (commandNamed program) (filter (/= command.name) (mentionedCommands program command.details))
     ]
@@ -130,8 +141,9 @@ programUsage :: Program cmd opts -> Doc Style
 programUsage program =
   vcat
     [ usageLine (pretty program.name) (annotate Metavar (pretty program.commandUsage) : usageParts program.globals.usage),
-      -- Under the first, as a second way to call the program
-      indent 7 (pretty program.name <+> annotate Metavar (pretty program.commandUsage) <+> annotate Option "--help")
+      -- Under the first, as other ways to call the program
+      indent 7 (pretty program.name <+> annotate Metavar (pretty program.commandUsage) <+> annotate Option "--help"),
+      indent 7 (pretty program.name <+> annotate Option "--version")
     ]
 
 commandUsage :: Program cmd opts -> CommandSpec cmd -> Doc Style
@@ -158,14 +170,15 @@ titledIfAny heading rows = Just (titled heading rows)
 partitionRows :: [OptDoc] -> ([OptDoc], [OptDoc])
 partitionRows rows = (filter (null . (.names)) rows, filter (not . null . (.names)) rows)
 
--- | The options: those without a subheading, then -h, --help, then each
--- subheading with its options under it. The subheadings come in the order
--- of their first option.
-optionsSection :: KnownWords -> [OptDoc] -> Doc Style
-optionsSection known options =
+-- | The options: those without a subheading, then the rows of the options
+-- the runner answers itself (-h, --help, and --version for the program),
+-- then each subheading with its options under it. The subheadings come in
+-- the order of their first option.
+optionsSection :: KnownWords -> [OptDoc] -> [OptDoc] -> Doc Style
+optionsSection known runnerRows options =
   sections (Just general : map (Just . subsection) subheadings)
   where
-    general = titled "Options:" (map (optionRow known) (filter (isNothing . (.subheading)) options <> [helpRow]))
+    general = titled "Options:" (map (optionRow known) (filter (isNothing . (.subheading)) options <> runnerRows))
     subheadings = nub (mapMaybe (.subheading) options)
     subsection title =
       vcat $

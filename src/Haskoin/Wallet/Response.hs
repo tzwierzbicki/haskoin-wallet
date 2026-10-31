@@ -79,8 +79,6 @@ data Response
     ResponseRecover !Network !Natural ![SyncRes]
   | -- | The fee rates recent blocks paid, on the network asked
     ResponseFees !Network !FeeRates
-  | -- | The version of hw, and the format version of its database
-    ResponseVersion !Text !Text
   deriving (Eq, Show)
 
 {- JSON -}
@@ -124,7 +122,6 @@ instance ToJSON Response where
     ResponseRecover net gap results ->
       typed "recover" ["network" .= net.name, "accountgap" .= gap, "syncres" .= (syncResJson <$> results)]
     ResponseFees net rates -> typed "fees" ["network" .= net.name, "feerates" .= rates]
-    ResponseVersion version dbVersion -> typed "version" ["version" .= version, "dbversion" .= dbVersion]
 
 instance FromJSON Response where
   parseJSON = withObject "response" $ \o -> do
@@ -164,7 +161,6 @@ instance FromJSON Response where
       "sync" -> ResponseSync <$> (mapM parseSyncRes =<< o .: "syncres") <*> (mapM parseNotSynced =<< o .: "notsynced")
       "recover" -> ResponseRecover <$> network o <*> o .: "accountgap" <*> (mapM parseSyncRes =<< o .: "syncres")
       "fees" -> ResponseFees <$> network o <*> o .: "feerates"
-      "version" -> ResponseVersion <$> o .: "version" <*> o .: "dbversion"
       _ -> fail "Invalid JSON response type"
     where
       network o = maybe (fail "Unknown network") return . netByName =<< o .: "network"

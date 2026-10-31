@@ -12,9 +12,10 @@ import Data.Default (def)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Database.Persist.Sql (Single (..), rawExecute, rawSql)
-import Haskoin.Wallet.Commands (cmdVersion)
+import Haskoin.Wallet.Commands (cmdRenameAcc)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.Parser (RenameAcc (..))
 import Haskoin.Wallet.Response (Response (..))
 import Haskoin.Wallet.TestUtils (inScratchDirectory)
 import System.FilePath ((</>))
@@ -67,7 +68,7 @@ spec =
           liftIO $ takeMVar release
         takeMVar held
         -- The command waits its full 'busyTimeout' before answering
-        cmdVersion (def :: Config) {configDatabaseFile = Just database}
+        cmdRenameAcc (def :: Config) {configDatabaseFile = Just database} (RenameAcc "main" "savings")
           `shouldReturn` ResponseError (cs databaseInUse)
         putMVar release ()
         wait holder
