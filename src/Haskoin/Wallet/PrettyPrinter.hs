@@ -125,21 +125,29 @@ amountIn style unit amnt = maybe id annotate style (pretty (showAmount unit amnt
 
 {- Printing responses -}
 
--- | The words of a mnemonic, four on a line, each after its number
-mnemonicPrinter :: [Text] -> Doc Style
-mnemonicPrinter ws =
-  vcat $ hcat . fmap formatWord <$> chunksOf 4 (zip ([1 ..] :: [Natural]) ws)
-  where
-    formatWord (i, w) = styled Field (block 4 (show i <> ".")) <> styled Secret (block 10 (cs w))
+{- Mnemonics -}
 
-partsPrinter :: [[Text]] -> [Doc Style]
-partsPrinter xs =
-  concatMap formatPart $ zip ([1 ..] :: [Natural]) xs
+-- | A new mnemonic: what it is and where its entropy came from, then its
+-- words, or with --parts its parts only, a blank line between them. The
+-- whole mnemonic is not shown with its parts: whoever reads the screen
+-- would have the seed.
+mnemonicDoc :: Text -> [Text] -> [[Text]] -> Doc Style
+mnemonicDoc source ws parts =
+  case parts of
+    [] -> vcat [heading, wordsDoc ws]
+    _ -> vcat . intersperse mempty $ heading : [vcat [text ("Part " <> show i), wordsDoc part] | (i, part) <- zip [1 :: Natural ..] parts]
   where
-    formatPart (i, ws) =
-      [ styled Title ("Private Mnemonic Part #" <> show i),
-        indent 2 $ mnemonicPrinter ws
-      ]
+    heading = text ("Mnemonic of " <> show (length ws) <> " words" <> inParts <> ",") <+> styled Muted ("from " <> cs source)
+    inParts = if null parts then "" else " in " <> show (length parts) <> " parts"
+
+-- | The words of a mnemonic, four on a line, each after its number, in
+-- columns. A word of the BIP39 list has at most 8 letters.
+wordsDoc :: [Text] -> Doc Style
+wordsDoc ws = indent 2 . vcat $ cellsLine . map cell <$> chunksOf 4 (zip [1 :: Natural ..] ws)
+  where
+    cell (i, w) =
+      let number = rblock 2 (show i) <> "."
+       in (12, number <> " " <> cs w, styled Field number <+> styled Secret (cs w))
 
 {- Accounts -}
 
@@ -689,14 +697,7 @@ responsePrinter unit view answer =
     ResponsePendingTxs {} -> listing
     ResponseCoins {} -> listing
     ResponseError err -> renderIO $ errorDoc err
-    ResponseMnemonic orig mnem parts ->
-      renderIO . vcat $
-        [ styled Title "System Entropy Source",
-          indent 2 $ styled UserText (cs orig),
-          styled Title "Private Mnemonic",
-          indent 2 $ mnemonicPrinter mnem
-        ]
-          <> partsPrinter parts
+    ResponseMnemonic source ws parts -> renderIO $ mnemonicDoc source ws parts
     ResponseAccount acc spendable -> renderIO =<< listedAccountDoc Verbose unit acc spendable
     -- In green when the command did what it was asked, in red otherwise
     ResponseAccResult _ res txt -> renderIO $ styled (if res then Good else Failure) (cs txt)

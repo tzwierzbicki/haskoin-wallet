@@ -498,6 +498,15 @@ splitSpec =
         long <- answer home ["mnemonic", "--entropy", "32"] []
         long `shouldSatisfy` \case ResponseMnemonic _ ws [] -> length ws == 24; _ -> False
 
+    -- A heading, then each part under its name: 11 lines, and more if the
+    -- whole mnemonic were printed too
+    it "prints its parts only with --parts, not the whole mnemonic" $
+      withHome $ \home -> do
+        run <- hw home ["mnemonic", "--parts", "2"] []
+        let shown = Text.lines (runOut run)
+        take 3 shown `shouldBe` ["Mnemonic of 12 words in 2 parts, from /dev/random", "", "Part 1"]
+        length shown `shouldBe` 11
+
     -- BIP39 adds a word of 11 bits for every 4 bytes of entropy
     it "has 15, 18 and 21 words for 20, 24 and 28 bytes of --entropy" $
       withHome $ \home ->

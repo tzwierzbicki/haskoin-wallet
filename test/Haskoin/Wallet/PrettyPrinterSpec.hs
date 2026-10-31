@@ -10,12 +10,14 @@
 module Haskoin.Wallet.PrettyPrinterSpec (spec) where
 
 import qualified Data.Map.Strict as Map
+import qualified Data.Text as Text
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Address (CoinBalance (..))
 import Haskoin.Wallet.Amounts (AmountUnit (..))
 import Haskoin.Wallet.Coin (CoinLock (..), JsonCoin (..))
 import Haskoin.Wallet.Database (DBAccount (..))
+import Haskoin.Wallet.Keys (MnemonicPass (..))
 import Haskoin.Wallet.PrettyPrinter
 import Haskoin.Wallet.Sync (SyncRes (..))
 import Haskoin.Wallet.TestUtils
@@ -33,6 +35,33 @@ spec = do
   balanceSpec
   coinSpec
   syncSpec
+  mnemonicSpec
+
+mnemonicSpec :: Spec
+mnemonicSpec =
+  describe "A new mnemonic as hw shows it" $ do
+    it "says how many words it has and where its entropy came from, then numbers its words four on a line, in columns" $
+      renderedLines (mnemonicDoc "/dev/random" (Text.words (mnemonicWords testMnemonic)) [])
+        `shouldBe` [ "Mnemonic of 12 words, from /dev/random",
+                     "   1. snow       2. senior     3. nerve      4. virus",
+                     "   5. fabric     6. now        7. fringe     8. clip",
+                     "   9. marble    10. interest  11. analyst   12. can"
+                   ]
+
+    it "shows its parts only, each numbered from 1, a blank line between them, and not the whole mnemonic" $
+      renderedLines (mnemonicDoc "/dev/random" (Text.words (mnemonicWords testMnemonic)) (Text.words <$> testMnemonicParts))
+        `shouldBe` [ "Mnemonic of 12 words in 2 parts, from /dev/random",
+                     "",
+                     "Part 1",
+                     "   1. stamp      2. snap       3. purity     4. pepper",
+                     "   5. arrange    6. notable    7. inform     8. grass",
+                     "   9. crazy     10. salad     11. thought   12. slide",
+                     "",
+                     "Part 2",
+                     "   1. boring     2. auction    3. demand     4. filter",
+                     "   5. frog       6. accuse     7. company    8. exchange",
+                     "   9. rely      10. slogan    11. trim      12. typical"
+                   ]
 
 accountSpec :: Spec
 accountSpec =
