@@ -358,8 +358,8 @@ statusLines (Pending status) =
   [ field 9 (if pendingSigned status then "TxHash" else "NoSigHash")
       <> styled PendingHash (cs $ txHashToHex (pendingShownHash status))
   ]
-    <> [field 9 "Created" <> text (timeText time) | Just time <- [pendingCreated status]]
     <> [field 9 "Replaces" <> text (cs $ txHashToHex replaced) | replaced <- pendingReplaces status]
+    <> [field 9 "Created" <> text (timeText time) | Just time <- [pendingCreated status]]
     -- An unsigned transaction waits for signtx
     <> [ field 9 "Signed"
            <> "This pending transaction is"
