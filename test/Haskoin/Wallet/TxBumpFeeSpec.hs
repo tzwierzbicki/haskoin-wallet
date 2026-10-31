@@ -27,10 +27,10 @@ spec = prepareContext $ \ctx -> do
   fundingSpec ctx
   reducedLinesSpec
 
--- | A payment of the account of 2260 of fee for its 226 bytes, which
--- spends the coin of 50000 at /0/0
-paymentSummary :: TxSummary
-paymentSummary =
+-- | The stuck payment that bumpfee replaces: a payment of the account of
+-- 2260 of fee for its 226 bytes, which spends the coin of 50000 at /0/0
+stuckSummary :: TxSummary
+stuckSummary =
   TxSummary
     { summaryType = TxDebit,
       summaryAmount = -22260,
@@ -51,7 +51,7 @@ payment :: Ctx -> Bool -> Sent
 payment ctx marked =
   Sent
     { sentTx = (if marked then replaceableTx else spendingTx) ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 20000), (internalAddr 0, 27740)],
-      sentSummary = paymentSummary,
+      sentSummary = stuckSummary,
       sentParents = []
     }
 
@@ -66,7 +66,7 @@ replaceableSpec ctx =
         `shouldBe` Left "The transaction is not marked replaceable (BIP 125): the store would keep showing it in place of its replacement until a block confirms one of them"
 
     it "is not one that spends a coin of another wallet" $ do
-      let received = (payment ctx True) {sentSummary = paymentSummary {summaryOtherInputs = Map.fromList [(otherAddr 1, 30000)]}}
+      let received = (payment ctx True) {sentSummary = stuckSummary {summaryOtherInputs = Map.fromList [(otherAddr 1, 30000)]}}
       checkReplaceable received
         `shouldBe` Left "Only a payment from the coins of the account can be replaced: this transaction spends coins of another wallet"
 
@@ -79,7 +79,7 @@ feeSpec ctx =
 
     -- 2261 for 226 bytes is a little above 10 a byte
     it "is at a rate above that of a transaction that pays a fraction more" $
-      minimumRate (payment ctx True) {sentSummary = paymentSummary {summaryFee = 2261}} `shouldBe` 11
+      minimumRate (payment ctx True) {sentSummary = stuckSummary {summaryFee = 2261}} `shouldBe` 11
 
     -- 2260 replaced, and 226 bytes at 1 satoshi a byte: 2486
     it "pays the fees of the transactions it replaces, and its own size at 1 satoshi a byte" $ do
@@ -89,7 +89,7 @@ feeSpec ctx =
   where
     plan :: Natural -> BumpPlan
     plan fees = BumpPlan [] [] Map.empty [] Map.empty Nothing fees []
-    paid fee size = paymentSummary {summaryFee = fee, summarySize = size}
+    paid fee size = stuckSummary {summaryFee = fee, summarySize = size}
 
 {- What pays the fee the change cannot -}
 
@@ -120,7 +120,7 @@ sendAllPlan ctx =
 oneRecipientPlan :: Ctx -> BumpPlan
 oneRecipientPlan ctx = (sendAllPlan ctx) {planRecipients = [(otherAddr 0, 48080)], planFees = 1920}
 
--- | The plan of the payment of 20000 of 'paymentSummary', with its change
+-- | The plan of the payment of 20000 of 'stuckSummary', with its change
 -- of 27740 at /1/0
 paymentPlan :: Ctx -> BumpPlan
 paymentPlan ctx = (sendAllPlan ctx) {planRecipients = [(otherAddr 0, 20000)], planChange = Just (internalAddr 0, Deriv :/ 1 :/ 0), planFees = 2260}

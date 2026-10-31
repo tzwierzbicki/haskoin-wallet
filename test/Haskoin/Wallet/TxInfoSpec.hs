@@ -78,47 +78,8 @@ spendAt ctx ref = spendingStoreTx ctx (fakeTxHash 2) ref (fakeTxHash 1, 0) (exte
 spend :: Ctx -> Store.Transaction
 spend ctx = spendAt ctx (Store.BlockRef 800001 1)
 
--- | What the payment means to the account: 226 bytes, so 4 satoshis per
--- byte of fee
-paymentSummary :: TxSummary
-paymentSummary =
-  TxSummary
-    { summaryType = TxCredit,
-      summaryAmount = 50000,
-      summaryFee = 1000,
-      summaryFeeByte = 4,
-      summaryChangeInFee = Nothing,
-      summarySize = 226,
-      summaryMyOutputs = Map.fromList [(externalAddr 0, MyOutputs 50000 (Deriv :/ 0 :/ 0) "")],
-      summaryOtherOutputs = Map.empty,
-      summaryNonStdOutputs = [],
-      summaryMyInputs = Map.empty,
-      summaryOtherInputs = Map.fromList [(otherAddr 0, 51000)],
-      summaryNonStdInputs = []
-    }
-
--- | What spending it means to the account: the 40000 and the fee leave
-spendSummary :: TxSummary
-spendSummary =
-  TxSummary
-    { summaryType = TxDebit,
-      summaryAmount = -41000,
-      summaryFee = 1000,
-      summaryFeeByte = 4,
-      summaryChangeInFee = Nothing,
-      summarySize = 226,
-      summaryMyOutputs = Map.fromList [(internalAddr 0, MyOutputs 9000 (Deriv :/ 1 :/ 0) "")],
-      summaryOtherOutputs = Map.fromList [(otherAddr 0, 40000)],
-      summaryNonStdOutputs = [],
-      summaryMyInputs = Map.fromList [(externalAddr 0, MyInputs 50000 (Deriv :/ 0 :/ 0) "" [OutPoint (fakeTxHash 1) 0])],
-      summaryOtherInputs = Map.empty,
-      summaryNonStdInputs = []
-    }
-
--- | The summaries once the receiving address is labelled "Rent"
-paymentToRent, spendFromRent :: TxSummary
-paymentToRent = paymentSummary {summaryMyOutputs = Map.fromList [(externalAddr 0, MyOutputs 50000 (Deriv :/ 0 :/ 0) "Rent")]}
-spendFromRent = spendSummary {summaryMyInputs = Map.fromList [(externalAddr 0, MyInputs 50000 (Deriv :/ 0 :/ 0) "Rent" [OutPoint (fakeTxHash 1) 0])]}
+-- What the payment and the spending mean to the account are
+-- 'paymentSummary' and 'spendSummary', shared in TestUtils
 
 {- Helpers -}
 

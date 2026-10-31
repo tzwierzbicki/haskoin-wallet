@@ -14,6 +14,8 @@ module Haskoin.Wallet.HwTestUtils
     setDefaultNetwork,
     setChangeBack,
     hw,
+    hwWithEnv,
+    centralEurope,
     hwJson,
     -- * The chain of the fake store
     Chain (..),
@@ -132,17 +134,28 @@ hwBinary = do
 -- no locale, as cron jobs and containers run it. A run longer than a
 -- minute fails the test.
 hw :: FilePath -> [String] -> [Text] -> IO Run
-hw home args typed = do
+hw = hwWithEnv []
+
+-- | Run hw as 'hw' does, with these variables added to its environment:
+-- TZ, for instance, to show the times on a clock the test knows
+hwWithEnv :: [(String, String)] -> FilePath -> [String] -> [Text] -> IO Run
+hwWithEnv extra home args typed = do
   binary <- hwBinary
   let process =
         setStdin (byteStringInput (BL.fromStrict (encodeUtf8 (Text.unlines typed))))
-          . setEnv [("HOME", home)]
+          . setEnv (("HOME", home) : extra)
           . setWorkingDir home
           $ proc binary args
   done <- timeout 60000000 (readProcess process)
   case done of
     Nothing -> fail $ "hw " <> unwords args <> " did not finish within a minute"
     Just (code, out, err) -> return $ Run code (decodeUtf8 (BL.toStrict out)) (decodeUtf8 (BL.toStrict err))
+
+-- | The time zone of Central Europe, for TZ, written as POSIX rules that
+-- need no zone files: CET, an hour ahead of UTC, and CEST, two hours
+-- ahead, from the last Sunday of March to the last Sunday of October
+centralEurope :: String
+centralEurope = "CET-1CEST,M3.5.0,M10.5.0/3"
 
 -- | Run hw with --json, and its answer, which must read as one
 hwJson :: FilePath -> [String] -> [Text] -> IO Response

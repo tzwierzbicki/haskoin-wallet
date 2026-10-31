@@ -3008,7 +3008,7 @@ bumpFeeSpec ctx = do
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
         replacesOf bumped `shouldBe` [stuck]
         run <- hw home ["pendingtxs"] []
-        runOut run `shouldSatisfy` Text.isInfixOf ("Replaces : " <> Text.pack stuck)
+        runOut run `shouldSatisfy` Text.isInfixOf ("\n  replaces " <> Text.pack stuck <> "\n")
 
     it "gives way to its replacement once sent: the history shows it dead, and the replacement confirmed" $
       withChain ctx (paidChain ctx) $ \home chain -> do
@@ -3445,51 +3445,96 @@ layoutSpec ctx =
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         shown <- shownPayment home []
-        shown `shouldSatisfy` Text.isInfixOf "Spent from:\n  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj: 0.00050000 btc\n    Path: /0/0\n"
+        shown `shouldSatisfy` Text.isInfixOf "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0\n"
 
     it "shows the labels of the addresses of the wallet" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "salary"] []
         shown <- shownPayment home []
-        shown `shouldSatisfy` Text.isInfixOf "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj: 0.00050000 btc\n    Path: /0/0\n    Label: salary\n"
+        shown `shouldSatisfy` Text.isInfixOf "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0  \"salary\"\n"
 
     it "shows the recipients of a payment" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         shown <- shownPayment home []
-        shown `shouldSatisfy` Text.isInfixOf "Sending to:\n  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU: 0.00020000 btc\n"
+        shown `shouldSatisfy` Text.isInfixOf "  To       : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00020000 btc\n"
 
     it "shows the change of a payment, at its change address" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         shown <- shownPayment home []
-        shown `shouldSatisfy` Text.isInfixOf "Change to:\n  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn: 0.00027740 btc\n    Path: /1/0\n"
+        shown `shouldSatisfy` Text.isInfixOf "  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  /1/0\n"
 
     it "shows the change a payment sends back to the address it spends from" $
       withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
         synced home
         shown <- shownPayment home ["--spend-from", textOf (externalAddr 0), "--change-back"]
-        shown `shouldSatisfy` Text.isInfixOf "Change to:\n  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj: 0.00027740 btc\n    Path: /0/0\n"
+        shown `shouldSatisfy` Text.isInfixOf "  Change   : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00027740 btc  /0/0\n"
 
     -- The payer's coins are worth 121000, nothing to the wallet
-    it "shows the addresses the payer of a payment received spends from, without their amounts, in txs" $
+    it "shows the addresses the payer of a payment received spends from, without their amounts, in txs --verbose" $
       withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
         synced home
-        listed <- runOut <$> hw home ["txs"] []
-        listed `shouldSatisfy` Text.isInfixOf "Spent from:\n  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\n"
+        listed <- runOut <$> hw home ["txs", "--verbose"] []
+        listed `shouldSatisfy` Text.isInfixOf "  From     : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\n"
 
-    it "shows the address of the wallet a payment received is sent to, in txs" $
+    it "shows the address of the wallet a payment received is sent to, with its path, in txs --verbose" $
       withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
         synced home
-        listed <- runOut <$> hw home ["txs"] []
-        listed `shouldSatisfy` Text.isInfixOf "Sending to:\n  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj: 0.00050000 btc\n    Path: /0/0\n"
+        listed <- runOut <$> hw home ["txs", "--verbose"] []
+        listed `shouldSatisfy` Text.isInfixOf "  To       : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0\n"
 
-    it "does not show the change the payer of a payment received keeps" $
+    it "shows the address of the wallet a payment received is paid at, in txs" $
       withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
         synced home
         listed <- runOut <$> hw home ["txs"] []
-        listed `shouldNotSatisfy` Text.isInfixOf (Text.pack (textOf (otherAddr 1)))
+        listed `shouldSatisfy` Text.isInfixOf "\n  at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\n"
+
+    it "does not show the change the payer of a payment received keeps, in either view" $
+      withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
+        synced home
+        compact <- runOut <$> hw home ["txs"] []
+        verbose <- runOut <$> hw home ["txs", "--verbose"] []
+        compact `shouldNotSatisfy` Text.isInfixOf (Text.pack (textOf (otherAddr 1)))
+        verbose `shouldNotSatisfy` Text.isInfixOf (Text.pack (textOf (otherAddr 1)))
+
+    it "lists each transaction in three lines without --verbose" $
+      withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
+        synced home
+        listed <- runOut <$> hw home ["txs"] []
+        length (Text.lines listed) `shouldBe` 3
+
+    -- The two payments, three lines each, and a blank line between them
+    it "sets the transactions apart with a blank line without --verbose" $
+      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+        synced home
+        listed <- runOut <$> hw home ["txs"] []
+        map Text.null (Text.lines listed) `shouldBe` [False, False, False, True, False, False, False]
+
+    -- The store saw the payment at 22:13:20 UTC, 23:13:20 in Central
+    -- Europe in November
+    it "shows the time of a transaction in the time zone of the computer, to the minute" $
+      withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
+        synced home
+        listed <- runOut <$> hwWithEnv [("TZ", centralEurope)] home ["txs"] []
+        listed `shouldSatisfy` Text.isPrefixOf "14 Nov 2023 23:13  Incoming"
+
+    it "shows the time of a transaction to the second, with its time zone, in txs --verbose" $
+      withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
+        synced home
+        listed <- runOut <$> hwWithEnv [("TZ", centralEurope)] home ["txs", "--verbose"] []
+        listed `shouldSatisfy` Text.isInfixOf "  Time     : 14 Nov 2023 23:13:20 CET\n"
+
+    -- A zone an hour ahead of UTC, and two hours ahead in its summer time,
+    -- from 10 to 20 November. 22:13:20 UTC on 14 November is then 00:13:20
+    -- the next day. Today's offset would give 23:13, unless the tests run
+    -- in that summer time.
+    it "shows the time of a transaction with the offset of its day, summer time or not" $
+      withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
+        synced home
+        listed <- runOut <$> hwWithEnv [("TZ", "XST-1XDT,J314/0,J324/0")] home ["txs"] []
+        listed `shouldSatisfy` Text.isPrefixOf "15 Nov 2023 00:13  Incoming"
 
     -- Paying the second receiving address from the first leaves 27740 of
     -- change at /1/0: both outputs are the wallet's, and neither can be told
@@ -3498,11 +3543,12 @@ layoutSpec ctx =
       withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
         synced home
         shown <- runOut <$> hw home ["preparetx", fixedTo (externalAddr 1) "0.0002", "--spend-from", textOf (externalAddr 0), "--fee-rate", "10"] []
-        let (_, sent) = Text.breakOn "Sending to:" shown
-        shown `shouldSatisfy` Text.isPrefixOf "Internal"
-        sent `shouldSatisfy` Text.isInfixOf "  1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg: 0.00020000 btc\n    Path: /0/1\n"
-        sent `shouldSatisfy` Text.isInfixOf "  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn: 0.00027740 btc\n    Path: /1/0\n"
-        shown `shouldNotSatisfy` Text.isInfixOf "Change to:"
+        let firstLine = Text.takeWhile (/= '\n') shown
+            (_, sent) = Text.breakOn "  To       : " shown
+        firstLine `shouldSatisfy` Text.isInfixOf "  Internal  "
+        sent `shouldSatisfy` Text.isInfixOf "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg  0.00020000 btc  /0/1\n"
+        sent `shouldSatisfy` Text.isInfixOf "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  /1/0\n"
+        shown `shouldNotSatisfy` Text.isInfixOf "  Change   : "
 
 -- old key
 paymentAndKeyChain :: Ctx -> Chain
@@ -3553,14 +3599,35 @@ pendingListSpec ctx =
       withChain ctx (paymentAndKeyChain ctx) $ \home _ -> do
         twoAccountsPending home
         run <- hw home ["pendingtxs"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "Account  : second"
-        runOut run `shouldSatisfy` Text.isInfixOf "Account  : main"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  account second, "
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  account main, "
+
+    it "show their account as a field with --verbose when listed for every account" $
+      withChain ctx (paymentAndKeyChain ctx) $ \home _ -> do
+        twoAccountsPending home
+        run <- hw home ["pendingtxs", "--verbose"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  Account  : second\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  Account  : main\n"
 
     it "do not show their account when listed for one account" $
       withChain ctx (paymentAndKeyChain ctx) $ \home _ -> do
         twoAccountsPending home
         run <- hw home ["pendingtxs", "--account", "main"] []
-        runOut run `shouldNotSatisfy` Text.isInfixOf "Account  :"
+        runOut run `shouldNotSatisfy` Text.isInfixOf "account main"
+
+    it "take three lines each without --verbose" $
+      withChain ctx (paymentAndKeyChain ctx) $ \home _ -> do
+        twoAccountsPending home
+        run <- hw home ["pendingtxs", "--account", "main"] []
+        length (Text.lines (runOut run)) `shouldBe` 3
+
+    -- The payment of main and the sweep of second, three lines each, and a
+    -- blank line between them
+    it "are set apart by a blank line without --verbose" $
+      withChain ctx (paymentAndKeyChain ctx) $ \home _ -> do
+        twoAccountsPending home
+        run <- hw home ["pendingtxs"] []
+        map Text.null (Text.lines (runOut run)) `shouldBe` [False, False, False, True, False, False, False]
 
     -- The time is the wallet's clock when preparetx ran, within a second
     it "have the time they were created" $
@@ -3578,14 +3645,14 @@ pendingListSpec ctx =
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         run <- hw home ["pendingtxs"] []
-        runOut run `shouldSatisfy` Text.isInfixOf ("NoSigHash: " <> Text.pack nosig)
+        runOut run `shouldSatisfy` Text.isInfixOf ("\n  " <> Text.pack nosig <> "\n")
 
     it "show a signed transaction by its txid" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         _ <- paymentSigned home
         txid <- txidOf =<< onePendingTx home
         run <- hw home ["pendingtxs"] []
-        runOut run `shouldSatisfy` Text.isInfixOf ("TxHash   : " <> Text.pack txid)
+        runOut run `shouldSatisfy` Text.isInfixOf ("\n  " <> Text.pack txid <> "\n")
 
     it "hide the nosigHash of a signed transaction" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -3593,12 +3660,12 @@ pendingListSpec ctx =
         run <- hw home ["pendingtxs"] []
         runOut run `shouldNotSatisfy` Text.isInfixOf (Text.pack nosig)
 
-    it "show the time they were created" $
+    it "show the time they were created to the second with --verbose" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
-        run <- hw home ["pendingtxs"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "Created  : "
+        run <- hw home ["pendingtxs", "--verbose"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  Created  : "
 
     it "are none, which pendingtxs says" $
       withChain ctx (paidChain ctx) $ \home _ -> do

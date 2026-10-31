@@ -20,12 +20,13 @@ import qualified Data.ByteString as BS
 import Data.Either (fromRight, isLeft)
 import Data.IORef (IORef, modifyIORef)
 import Data.List (find, isSuffixOf, sort, sortOn)
+import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Data.Time (UTCTime (UTCTime), fromGregorian)
+import Data.Time (TimeZone (..), UTCTime (UTCTime), ZonedTime, fromGregorian, utcToZonedTime)
 import Data.Word (Word32, Word64, Word8)
 import Database.Persist.Sql (Migration, PersistValue, Single (..), rawQuery, rawSql, runMigrationQuiet)
 import Database.Persist.Sqlite (runSqlite)
@@ -36,10 +37,12 @@ import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database (DB, DBAccount, DBAccountId, DBPendingTx (..), hashBytes, migrateAll)
 import Haskoin.Wallet.Keys (MnemonicPass (..), PublicSeed (..), seedOf, signingKey)
 import Haskoin.Wallet.Store
-import Haskoin.Wallet.TxInfo (ChainStatus (..), PendingStatus (..), TxInfo (..), TxStatus (..), pendingSigned)
+import Haskoin.Wallet.Style (Style, renderPlain)
+import Haskoin.Wallet.TxInfo (ChainStatus (..), MyInputs (..), MyOutputs (..), PendingStatus (..), TxInfo (..), TxStatus (..), TxSummary (..), TxType (..), pendingSigned)
 import Haskoin.Wallet.TxSignData (TxSignData (..), nosigHash)
 import Haskoin.Wallet.TxSigning (signWalletTx)
 import Numeric.Natural (Natural)
+import Prettyprinter (Doc)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getTemporaryDirectory, listDirectory, removeDirectoryRecursive)
 import System.FilePath ((</>))
 import Test.Hspec
@@ -100,6 +103,15 @@ fixtureTime = UTCTime (fromGregorian 2023 11 1) 0
 -- after 1970: 14 Nov 2023 22:13:20 UTC
 seenTime :: UTCTime
 seenTime = UTCTime (fromGregorian 2023 11 14) (22 * 3600 + 13 * 60 + 20)
+
+-- | 'seenTime' on a clock of Central Europe, an hour ahead of UTC in
+-- November: 14 Nov 2023 23:13:20 CET
+seenTimeInCet :: ZonedTime
+seenTimeInCet = utcToZonedTime (TimeZone 60 False "CET") seenTime
+
+-- | The lines of a document of hw, without its colours
+renderedLines :: Doc Style -> [String]
+renderedLines = lines . renderPlain
 
 -- | Run a test in a fresh directory under the temporary directory, removed
 -- afterwards, for the tests that need database files
@@ -219,6 +231,53 @@ testNewAccBch :: Ctx -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
 testNewAccBch ctx = newAccountOf ctx testMnemonic bch
 
 {- Transaction summaries -}
+
+-- The story of these summaries is that of TxInfoSpec: a payment of 50000
+-- received at the first receiving address of the test account, then spent:
+-- 40000 to an outside address, 9000 of change to its first change
+-- address, and 1000 of fee.
+
+-- | What the payment means to the account: 226 bytes, so 4 satoshis per
+-- byte of fee
+paymentSummary :: TxSummary
+paymentSummary =
+  TxSummary
+    { summaryType = TxCredit,
+      summaryAmount = 50000,
+      summaryFee = 1000,
+      summaryFeeByte = 4,
+      summaryChangeInFee = Nothing,
+      summarySize = 226,
+      summaryMyOutputs = Map.fromList [(externalAddr 0, MyOutputs 50000 (Deriv :/ 0 :/ 0) "")],
+      summaryOtherOutputs = Map.empty,
+      summaryNonStdOutputs = [],
+      summaryMyInputs = Map.empty,
+      summaryOtherInputs = Map.fromList [(otherAddr 0, 51000)],
+      summaryNonStdInputs = []
+    }
+
+-- | What spending it means to the account: the 40000 and the fee leave
+spendSummary :: TxSummary
+spendSummary =
+  TxSummary
+    { summaryType = TxDebit,
+      summaryAmount = -41000,
+      summaryFee = 1000,
+      summaryFeeByte = 4,
+      summaryChangeInFee = Nothing,
+      summarySize = 226,
+      summaryMyOutputs = Map.fromList [(internalAddr 0, MyOutputs 9000 (Deriv :/ 1 :/ 0) "")],
+      summaryOtherOutputs = Map.fromList [(otherAddr 0, 40000)],
+      summaryNonStdOutputs = [],
+      summaryMyInputs = Map.fromList [(externalAddr 0, MyInputs 50000 (Deriv :/ 0 :/ 0) "" [OutPoint (fakeTxHash 1) 0])],
+      summaryOtherInputs = Map.empty,
+      summaryNonStdInputs = []
+    }
+
+-- | The summaries once the receiving address is labelled "Rent"
+paymentToRent, spendFromRent :: TxSummary
+paymentToRent = paymentSummary {summaryMyOutputs = Map.fromList [(externalAddr 0, MyOutputs 50000 (Deriv :/ 0 :/ 0) "Rent")]}
+spendFromRent = spendSummary {summaryMyInputs = Map.fromList [(externalAddr 0, MyInputs 50000 (Deriv :/ 0 :/ 0) "Rent" [OutPoint (fakeTxHash 1) 0])]}
 
 -- | The state of a transaction in preparation: its nosigHash, and whether
 -- it is signed, sent and in conflict. Nothing for a transaction on the chain.

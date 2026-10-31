@@ -325,19 +325,26 @@ hw sendtx TXID                              # the txid of the replacement
 
 ### Transactions
 
-**`hw txs`** lists the transactions of an account, as of the last sync.
+**`hw txs`** lists the transactions of an account, as of the last sync. Each
+takes three lines. The first gives its time, in the time zone of the computer,
+its type, its amount and its status. The second gives the address paid, and
+the third the txid. An unconfirmed transaction shows its fee rate. `--verbose`
+shows every address with its amount, path and label, and the fee.
 
 ```console
 hw txs
+hw txs --verbose
 hw txs --max 20 --after TXID
 ```
 
 **`hw pendingtxs`** lists the pending transactions: prepared, signed, or sent
-and not yet seen by `sync`. Each is shown by its nosigHash until it is signed,
-then by its txid. A conflicted one can no longer be sent.
+and not yet seen by `sync`. They take three lines each, as in `txs`. Each is
+shown by its nosigHash until it is signed, then by its txid. A conflicted one
+can no longer be sent.
 
 ```console
 hw pendingtxs
+hw pendingtxs --verbose
 ```
 
 **`hw reviewtx FILE`** shows the transaction in a file, without changing the

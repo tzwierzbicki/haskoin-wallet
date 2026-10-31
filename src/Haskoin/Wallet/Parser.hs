@@ -61,12 +61,13 @@ data Command
   | -- | The account, and the page
     CommandBalances !(Maybe Text) !(Paging Text)
   | CommandLabel !Label
-  | -- | The account, and the page
-    CommandTxs !(Maybe Text) !(Paging TxHash)
+  | -- | The account, how much of each transaction to show, and the page
+    CommandTxs !(Maybe Text) !TxView !(Paging TxHash)
   | CommandPrepareTx !PrepareTx
   | CommandPrepareSendAll !PrepareSendAll
-  | -- | The account, and the page
-    CommandPendingTxs !(Maybe Text) !(Paging TxHash)
+  | -- | The account, or every one, how much of each transaction to show,
+    -- and the page
+    CommandPendingTxs !(Maybe Text) !TxView !(Paging TxHash)
   | -- | The account, and the transaction file
     CommandReviewTx !(Maybe Text) !FilePath
   | -- | The account, and the transaction file
@@ -98,6 +99,18 @@ data Command
     -- terminal without one
     CommandSignSweep !Signing !(Maybe KeySource)
   deriving (Eq, Show)
+
+-- | How much a listing of transactions shows of each one: three lines, or
+-- every detail with --verbose
+data TxView = Compact | Verbose
+  deriving (Eq, Show)
+
+-- | How much of each transaction the command lists: as asked of txs and
+-- pendingtxs. The other commands list no transactions.
+txViewOf :: Command -> TxView
+txViewOf (CommandTxs _ view _) = view
+txViewOf (CommandPendingTxs _ view _) = view
+txViewOf _ = Compact
 
 -- | The options of mnemonic
 data NewMnemonic = NewMnemonic
@@ -987,12 +1000,30 @@ txsCommand =
 The list is as of the last sync. Unconfirmed transactions come first, then
 the newest. The transactions you prepared, and those you sent that `sync` has
 not seen yet, are in pendingtxs.
+
+Each transaction takes three lines. The first gives its time, its type, its
+amount and its status. The time is in the time zone of the computer. The type
+is Outgoing, Incoming, or Internal for a transaction between addresses of the
+account. The amount includes the fee. The status gives the confirmations. An
+unconfirmed transaction shows its fee rate instead, which tells how soon a
+block may take it. A dead one was replaced, or dropped from the network. The
+second line gives the address paid, the largest when there are several. The
+third gives the txid.
 |],
       args =
         CommandTxs
           <$> accountOption
+          <*> txViewOption
           <*> pagingOptions (afterOption "TXID" (maybeReader $ hexToTxHash . cs) "Start after this transaction")
     }
+
+-- | The --verbose flag of the listings of transactions
+txViewOption :: Args TxView
+txViewOption =
+  flag Compact Verbose $
+    short 'v'
+      <> long "verbose"
+      <> help "Show every detail of each transaction: each address it spends from or pays, with its amount, path and label, and the fee."
 
 {- preparetx -}
 
@@ -1298,10 +1329,16 @@ pendingTxsCommand =
         [r|
 A pending transaction is one that preparetx, preparesendall, bumpfee or
 preparesweep made, or that importtx added. It is unsigned, signed, or sent.
-`sync` retires it once the network lists it. The newest come first, each with
-its account, its hash and when it was created. The hash is the nosigHash of an
-unsigned transaction, and the txid of a signed one. The other commands name a
-pending transaction by that hash. The nosigHash of a signed one works too.
+`sync` retires it once the network lists it. The newest come first.
+
+Each takes three lines, as in `txs`. The first gives the time it was created,
+its type, its amount and its status: not signed, signed and not sent, or sent,
+with its fee rate. The second gives the address paid, after the account when
+every account is listed. A replacement that bumpfee made then names the
+transactions it replaces. The last line gives the hash of the transaction. It
+is the nosigHash of an unsigned transaction, and the txid of a signed one. The
+other commands name a pending transaction by that hash. The nosigHash of a
+signed one works too.
 
 A transaction marked conflicted spends a coin that another transaction has
 spent, or that is gone, as the server said at the last sync. It cannot be sent
@@ -1310,6 +1347,7 @@ while that lasts. Delete it with deletetx, which frees its coins.
       args =
         CommandPendingTxs
           <$> onlyAccountOption
+          <*> txViewOption
           <*> pagingOptions (afterOption "HASH" (maybeReader $ hexToTxHash . cs) "Start after this pending transaction")
     }
 

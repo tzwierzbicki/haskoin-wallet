@@ -235,6 +235,7 @@ test-suite spec
       Haskoin.Wallet.PagerSpec
       Haskoin.Wallet.ParserSpec
       Haskoin.Wallet.PendingTxSpec
+      Haskoin.Wallet.PrettyPrinterSpec
       Haskoin.Wallet.PromptSpec
       Haskoin.Wallet.RecipientSpec
       Haskoin.Wallet.ResponseSpec

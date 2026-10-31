@@ -107,7 +107,7 @@ import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
 import Haskoin.Wallet.Parser
 import Haskoin.Wallet.PendingTx
-import Haskoin.Wallet.PrettyPrinter (feeRatesPrinter, coinBalancesPrinter, renderOn, txAnswerPrinter)
+import Haskoin.Wallet.PrettyPrinter (feeRatesPrinter, coinBalancesPrinter, renderOn, txAnswerDoc)
 import Haskoin.Wallet.Prompt
 import Haskoin.Wallet.Response
 import Haskoin.Wallet.Store
@@ -159,8 +159,8 @@ commandResponse ctx cfg unit = \case
   CommandLockCoin outpoint -> cmdLockCoin cfg outpoint
   CommandUnlockCoin outpoint -> cmdUnlockCoin cfg outpoint
   -- Transactions
-  CommandTxs account paging -> cmdTxs cfg account paging
-  CommandPendingTxs account paging -> cmdPendingTxs ctx cfg account paging
+  CommandTxs account _ paging -> cmdTxs cfg account paging
+  CommandPendingTxs account _ paging -> cmdPendingTxs ctx cfg account paging
   CommandReviewTx account file -> cmdReviewTx ctx cfg account file
   CommandImportTx account file -> cmdImportTx ctx cfg account file
   CommandExportTx named file -> cmdExportTx cfg named file
@@ -188,8 +188,8 @@ commandListing ctx = \case
   CommandAddresses account internal paging -> Just $ addressesListing account internal paging
   CommandBalances account paging -> Just $ balancesListing account paging
   CommandCoins account locked paging -> Just $ coinsListing account locked paging
-  CommandTxs account paging -> Just $ txsListing account paging
-  CommandPendingTxs account paging -> Just $ pendingTxsListing ctx account paging
+  CommandTxs account _ paging -> Just $ txsListing account paging
+  CommandPendingTxs account _ paging -> Just $ pendingTxsListing ctx account paging
   _ -> Nothing
 
 -- | Run a command in one transaction of the database, which no other
@@ -898,7 +898,7 @@ cmdSendTx ctx cfg unit namedM fileM yes =
     -- On stderr, with the question, to keep the --json answer clean
     beforeSending net info =
       unless yes $ do
-        liftIO $ renderOn stderr (txAnswerPrinter net unit info)
+        liftIO $ renderOn stderr =<< txAnswerDoc net unit info
         confirmed <- askYes terminal "Send this transaction to the network? This cannot be undone."
         unless confirmed $ throwError "The transaction was not sent"
 
