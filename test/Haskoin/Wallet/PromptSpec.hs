@@ -254,11 +254,11 @@ newSeedSpec =
     it "is cancelled when the input ends" $
       answerOf [testWords, testWords, testPassphrase] (`askNewMnemonicPass` 1) `shouldReturn` Left cancelled
 
-{- A seed typed once, as recover and testacc ask for it -}
+{- A seed typed once, as recover and checkmnemonic ask for it -}
 
 seedOnceSpec :: Spec
 seedOnceSpec =
-  describe "Asking for a seed to check, as recover and testacc do" $
+  describe "Asking for a seed to check, as recover and checkmnemonic do" $
     it "takes the mnemonic and the passphrase once each" $
       answering [testWords, testPassphrase] (`askMnemonicPass` 1)
         `shouldReturn` (Right testMnemonic, [mnemonicPrompt, passphrasePrompt], [])

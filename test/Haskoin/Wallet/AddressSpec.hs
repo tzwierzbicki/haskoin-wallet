@@ -55,7 +55,7 @@ nextIndices accId = do
   acc <- getAccountById accId
   return (dBAccountExternal acc, dBAccountInternal acc)
 
--- | The indices of a page of a chain of the account, as addrs lists them
+-- | The indices of a page of a chain of the account, as `addresses` lists them
 listed :: DBAccountId -> AddrType -> Maybe Int -> Maybe Natural -> ExceptT String (DB IO) [Int]
 listed accId addrType afterM countM = map dBAddressIndex <$> lift (addressesAfter accId addrType afterM countM)
 
@@ -74,7 +74,7 @@ fixtureRow :: DBAddress
 fixtureRow = DBAddress (toSqlKey 1) False 3 "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1" "Savings" 5000 300 2 3 9000 fixtureTime
 
 receivingGap, changeGap :: String
-receivingGap = "The last 20 receiving addresses await a payment: reuse one of them, listed by addrs"
+receivingGap = "The last 20 receiving addresses await a payment: reuse one of them, listed by hw addresses"
 changeGap = "The last 20 change addresses are held by pending transactions: send or delete some of them"
 
 receivingSpec :: Ctx -> Spec
@@ -138,7 +138,7 @@ receivingSpec ctx =
         replicateM_ 20 $ nextChangeAddress ctx cfg other held
         lift $ dbShouldFailWith changeGap $ nextChangeAddress ctx cfg other held
 
-    it "labels a receiving address by its index, as label does" $
+    it "labels a receiving address by its index, as receive --label does" $
       inDatabaseE $ do
         accId <- account ctx
         replicateM_ 3 $ genExtAddress ctx cfg accId ""
@@ -160,6 +160,21 @@ receivingSpec ctx =
         _ <- setAddrLabel accId 0 "Rent"
         (map dBAddressLabel <$> lift (addressesAfter accId AddrExternal Nothing Nothing)) `dbShouldBeE` ["Rent"]
         (map dBAddressLabel <$> lift (addressesAfter accId AddrInternal Nothing Nothing)) `dbShouldBeE` [""]
+
+    -- 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg is the receiving address /0/1
+    it "labels a receiving address given by its text, as label does" $
+      inDatabaseE $ do
+        accId <- account ctx
+        replicateM_ 3 $ genExtAddress ctx cfg accId ""
+        labelled <- labelAddress "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg" "Savings"
+        liftIO $ addressRow labelled `shouldBe` (1, "/0/1", "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "Savings", False)
+
+    -- 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn is the first change address
+    it "refuses to label a change address given by its text" $
+      inDatabaseE $ do
+        accId <- account ctx
+        _ <- nextChangeAddress ctx cfg accId []
+        lift $ dbShouldFailWith "A change address takes no label. Only a receiving address does." $ labelAddress "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn" "Rent"
 
     it "gives a Bitcoin Cash account addresses in the cash address format" $
       inDatabaseE $ do
@@ -509,7 +524,7 @@ jsonSpec =
       eitherDecode (cs json) `shouldBe` Right (toJSON fixtureRow)
       eitherDecode (cs json) `shouldBe` Right fixtureRow
 
-    it "prints an address with the balance it can spend among its balances, as addrs does, and reads it back" $ do
+    it "prints an address with the balance it can spend among its balances, as hw addresses does, and reads it back" $ do
       let json :: String
           json =
             [r|{

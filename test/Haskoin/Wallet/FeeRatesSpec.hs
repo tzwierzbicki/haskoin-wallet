@@ -91,7 +91,7 @@ storeSpec =
     hashOf :: Store.BlockData -> BlockHash
     hashOf block = headerHash block.header
 
--- | The --feerate option, read
+-- | The --fee-rate option, read
 choiceSpec :: Spec
 choiceSpec =
   describe "A fee rate choice" $ do

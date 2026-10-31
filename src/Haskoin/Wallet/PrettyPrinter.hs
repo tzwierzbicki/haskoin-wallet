@@ -225,7 +225,7 @@ addressLines pad addr details =
 pathWidth :: [DBAddress] -> Natural
 pathWidth addrs = fromIntegral $ maximum (0 : (Text.length . pathText . addrPath <$> addrs))
 
--- | An address as addrs shows it: its transactions, what it received, and
+-- | An address as `addresses` shows it: its transactions, what it received, and
 -- the balance it can spend now
 addressPrinter :: AmountUnit -> Natural -> DBAddress -> Word64 -> Doc Style
 addressPrinter unit pad addr spendable =
@@ -253,7 +253,7 @@ coinBalancePrinter unit pad addr balance =
     unspendable v = amountIn (Just Waiting) unit (fromIntegral v)
 
 -- | Addresses as balances lists them, their paths aligned. preparetx
--- --changeback shows the addresses it can send the change back to this way.
+-- --change-back shows the addresses it can send the change back to this way.
 coinBalancesPrinter :: AmountUnit -> [(DBAddress, CoinBalance)] -> Doc Style
 coinBalancesPrinter unit addrs = vcat $ uncurry (coinBalancePrinter unit (pathWidth (fst <$> addrs))) <$> addrs
 
@@ -698,7 +698,7 @@ nextStepsPrinter cmd res =
           stepsPrinter [("Next, send its file from the online computer", hwLine "sendtx" [optionWord "--input", fileWord file])]
       | otherwise = Nothing
     -- Without a file, signsweep asks for the keys on the terminal
-    keysArgs (Just (KeysInFile file)) = [optionWord "--prvkeys", fileWord file]
+    keysArgs (Just (KeysInFile file)) = [optionWord "--key-file", fileWord file]
     keysArgs _ = []
     -- The account of the next command, named when there is one
     accountArgs [acc] = [optionWord "--account", styled Account (shellWord (cs (dBAccountName acc)))]

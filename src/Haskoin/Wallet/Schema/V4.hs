@@ -42,9 +42,9 @@
 -- sync, found one of its coins spent by another transaction or gone.
 --
 -- The keys are made for large wallets. An address is keyed by its account,
--- its chain and its index, the order addrs lists it in, and its derivation
--- path is computed from the two, as the path of an account is from its
--- network and index. Transaction ids, outpoints and nosigHashes
+-- its chain and its index, the order `addresses` lists it in, and its
+-- derivation path is computed from the two, as the path of an account is
+-- from its network and index. Transaction ids, outpoints and nosigHashes
 -- are the bytes of the hash, not its hexadecimal text: half the size in
 -- every key and index. The 'tableIndexes' below are the ones persistent cannot
 -- declare: a covering index that serves the ordering of txs and the scan

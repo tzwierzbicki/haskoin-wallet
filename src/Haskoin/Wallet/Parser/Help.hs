@@ -39,9 +39,9 @@ import qualified Prettyprinter.Render.String as String
 {- The layout -}
 
 -- | The columns the names of an option are padded to. With the indent of
--- the rows and a space, its help starts at column 28.
+-- the rows and two spaces, its help starts at column 28.
 nameWidth :: Int
-nameWidth = 25
+nameWidth = 24
 
 -- | The row of -h, --help, which every help lists
 helpRow :: OptDoc
@@ -174,9 +174,10 @@ optionsSection known options =
 
 -- | A row of the help: the names of an option, or of a command, padded to
 -- 'nameWidth', then its help, wrapped under itself. Names too wide for the
--- padding put the help on the next line.
+-- padding put the help on the next line. Two spaces part the names from the
+-- help, so that the help never runs into a metavar.
 row :: Doc Style -> Doc Style -> Doc Style
-row names description = indent 2 (fillBreak nameWidth names <+> align description)
+row names description = indent 2 (fillBreak nameWidth names <> "  " <> align description)
 
 optionRow :: KnownWords -> OptDoc -> Doc Style
 optionRow known doc = row (rowNames doc) (fillSep (proseWords known (fromMaybe "" doc.help) <> defaultShown))
@@ -356,7 +357,7 @@ bare = \case
   Item doc -> itemDoc doc
   Sequence a b -> hsep (usageParts (Sequence a b))
   Choice a b -> concatWith (\x y -> x <+> "|" <+> y) (map required (alternatives (Choice a b)))
-  -- [-c|--coin TXHASH:INDEX]..., rather than [-c|--coin TXHASH:INDEX...]
+  -- [-c|--coin TXID:INDEX]..., rather than [-c|--coin TXID:INDEX...]
   Optional (Repeated inner) -> "[" <> bare inner <> "]..."
   Optional inner -> "[" <> bare inner <> "]"
   Repeated inner -> required inner <> "..."

@@ -41,7 +41,7 @@ data Command
     CommandCreateAcc !Text !(Maybe Network) !Natural
   | CommandRecover !Recover
   | -- | The account, and the parts the mnemonic is typed in
-    CommandTestAcc !(Maybe Text) !Natural
+    CommandCheckMnemonic !(Maybe Text) !Natural
   | -- | The account document to import
     CommandImportAcc !FilePath
   | -- | The account, and the file to write its document to
@@ -54,11 +54,10 @@ data Command
     CommandDeleteAcc !Text !Network !HardPath
   | CommandReceive !Receive
   | -- | The account, whether its change addresses, and the page
-    CommandAddrs !(Maybe Text) !Bool !(Paging Text)
+    CommandAddresses !(Maybe Text) !Bool !(Paging Text)
   | -- | The account, and the page
     CommandBalances !(Maybe Text) !(Paging Text)
-  | -- | The account, the index of the receiving address, and its label
-    CommandLabel !(Maybe Text) !Int !Text
+  | CommandLabel !Label
   | -- | The account, and the page
     CommandTxs !(Maybe Text) !(Paging TxHash)
   | CommandPrepareTx !PrepareTx
@@ -134,6 +133,14 @@ data Receive = Receive
   }
   deriving (Eq, Show)
 
+-- | The options of label
+data Label = Label
+  { -- | The receiving address, as typed. It names its account too.
+    address :: !Text,
+    label :: !Text
+  }
+  deriving (Eq, Show)
+
 -- | The options of preparetx
 data PrepareTx = PrepareTx
   { -- | The addresses paid, each with its amount, as typed: ADDRESS:AMOUNT
@@ -151,7 +158,7 @@ data PrepareTx = PrepareTx
     output :: !(Maybe FilePath),
     -- | Coin control: the coins chosen by their outpoints (--coin)
     coins :: ![OutPoint],
-    -- | Coin control: the addresses whose coins are chosen (--spendfrom)
+    -- | Coin control: the addresses whose coins are chosen (--spend-from)
     spendFrom :: ![Text],
     -- | Whether the strategy selects among the chosen coins (--select),
     -- instead of every one of them being spent
@@ -160,7 +167,7 @@ data PrepareTx = PrepareTx
     -- asking (--yes)
     yes :: !Bool,
     -- | Whether the change goes back to an address the payment spends
-    -- from (--changeback) or to a new change address (--newchange), when
+    -- from (--change-back) or to a new change address (--new-change), when
     -- the command says. Otherwise the configuration file says.
     changeBack :: !(Maybe Bool)
   }
@@ -318,7 +325,7 @@ program =
 hw is a BIP44 wallet for Bitcoin and Bitcoin Cash. It stores public keys
 only.
 |],
-      everydayNames = ["mnemonic", "recover", "accounts", "sync", "receive", "balances", "label", "coins", "fees", "backup", "version"],
+      everydayNames = ["mnemonic", "recover", "accounts", "sync", "receive", "addresses", "balances", "label", "coins", "fees", "backup", "version"],
       details =
         [r|
 A payment takes three steps:
@@ -352,7 +359,7 @@ Type hw COMMAND --help for the help of a command.
             [ mnemonicCommand,
               createAccCommand,
               recoverCommand,
-              testAccCommand,
+              checkMnemonicCommand,
               exportAccCommand,
               importAccCommand,
               accountsCommand,
@@ -363,7 +370,7 @@ Type hw COMMAND --help for the help of a command.
           CommandGroup
             "Addresses"
             [ receiveCommand,
-              addrsCommand,
+              addressesCommand,
               balancesCommand,
               labelCommand
             ],
@@ -459,9 +466,9 @@ machine has it. With --dice, hw also mixes in rolls of a die, so that you do
 not have to trust the system alone. Run this command on an offline computer
 if you can.
 
-With --split, hw prints several parts instead of one mnemonic. The commands
+With --parts, hw prints several parts instead of one mnemonic. The commands
 that ask for the mnemonic then need every part, in any order, with the same
---split.
+--parts.
 |],
       args =
         CommandMnemonic
@@ -506,17 +513,17 @@ rebuild it, in any order. With --dice, hw asks for enough rolls for every
 part, and uses no roll twice.
 |]
 
--- | The parts a mnemonic is typed in, when mnemonic --split made it
+-- | The parts a mnemonic is typed in, when mnemonic --parts made it
 mnemonicPartsOption :: Args Natural
 mnemonicPartsOption =
-  partsOption "The number of parts of the mnemonic, when `mnemonic` --split made it. hw asks for each part."
+  partsOption "The number of parts of the mnemonic, when `mnemonic` --parts made it. hw asks for each part."
 
--- | The --split option, with the help of the command about it
+-- | The --parts option, with the help of the command about it
 partsOption :: String -> Args Natural
 partsOption what =
   option (eitherReader $ f . cs) $
-    short 's'
-      <> long "split"
+    short 'p'
+      <> long "parts"
       <> metavar "INT"
       <> value 1
       <> showDefault
@@ -527,8 +534,8 @@ partsOption what =
         Just n ->
           if n >= 1 && n <= 12
             then Right n
-            else Left "The --split value has to be between 1 and 12"
-        Nothing -> Left "Could not parse the --split option"
+            else Left "The --parts value has to be between 1 and 12"
+        Nothing -> Left "Could not parse the --parts option"
 
 {- createacc -}
 
@@ -689,23 +696,23 @@ networkArg =
       Left $ "Invalid network name. Select one of the following: " <> nets
     f (Just res) = Right res
 
-{- testacc -}
+{- checkmnemonic -}
 
-testAccCommand :: CommandSpec Command
-testAccCommand =
+checkMnemonicCommand :: CommandSpec Command
+checkMnemonicCommand =
   CommandSpec
-    { name = "testacc",
+    { name = "checkmnemonic",
       offline = True,
       summary = "Check a mnemonic and passphrase against an account",
       details =
         [r|
-testacc asks for the mnemonic and the passphrase, and checks that they give
-the public key of the account. Use it to test a mnemonic you wrote down,
+checkmnemonic asks for the mnemonic and the passphrase, and checks that they
+give the public key of the account. Use it to test a mnemonic you wrote down,
 before you rely on it. Nothing is signed. When they match, hw records the
 fingerprint of the seed, which `accounts` shows.
 |],
       args =
-        CommandTestAcc
+        CommandCheckMnemonic
           <$> accountOption
           <*> mnemonicPartsOption
     }
@@ -821,7 +828,7 @@ sync. The spendable balance is what the account can spend now. It leaves out
 the coins locked by a pending transaction or by lockcoin, the coinbase coins
 with fewer than 100 confirmations, and the unconfirmed payments from other
 wallets. The unconfirmed change of the wallet's own transactions counts.
-preparetx can spend all of it, unless --minconf asks for confirmations.
+preparetx can spend all of it, unless --min-conf asks for confirmations.
 |],
       args = CommandAccounts <$> onlyAccountOption
     }
@@ -838,13 +845,13 @@ receiveCommand =
         [r|
 Each call gives the next receiving address of the account, at the path
 M/44'/coin'/index'/0/i. The wallet pays the change of its transactions to other
-addresses, at M/44'/coin'/index'/1/i. addrs --internal lists them.
+addresses, at M/44'/coin'/index'/1/i. `addresses` --change lists them.
 
 `receive` gives out at most 20 unused addresses in a row, or as many as the gap
 of the configuration file says. A wallet restored from the mnemonic stops
 looking after that many unused addresses, and would miss later payments. Once that many
-addresses await a payment, `receive` refuses. Give out one of them again. addrs
-lists them.
+addresses await a payment, `receive` refuses. Give out one of them again.
+`addresses` lists them.
 |],
       args = CommandReceive <$> (Receive <$> accountOption <*> labelOption)
     }
@@ -857,12 +864,12 @@ labelOption =
       <> metavar "LABEL"
       <> help "A label for the address, to recognize the payment later"
 
-{- addrs -}
+{- addresses -}
 
-addrsCommand :: CommandSpec Command
-addrsCommand =
+addressesCommand :: CommandSpec Command
+addressesCommand =
   CommandSpec
-    { name = "addrs",
+    { name = "addresses",
       offline = False,
       summary = "List the receiving addresses of an account, or its change addresses",
       details =
@@ -873,16 +880,16 @@ number of transactions, what it received, and what it can spend now, as
 `accounts` describes.
 |],
       args =
-        CommandAddrs
+        CommandAddresses
           <$> accountOption
-          <*> internalOption
+          <*> changeAddressesOption
           <*> pagingOptions (afterOption "ADDRESS" str "Start after this address")
     }
 
-internalOption :: Args Bool
-internalOption =
+changeAddressesOption :: Args Bool
+changeAddressesOption =
   switch $
-    long "internal"
+    long "change"
       <> help "List the change addresses instead of the receiving ones"
 
 -- | The options that page a listing: the row to start after, as the
@@ -948,27 +955,15 @@ labelCommand =
       details = "",
       args =
         CommandLabel
-          <$> accountOption
-          <*> addrIndexArg
-          <*> textArg "LABEL" "The new label"
+          <$> (Label <$> labelledAddressArg <*> textArg "LABEL" "The new label")
     }
 
-addrIndexArg :: Args Int
-addrIndexArg =
-  argument (maybeReader readAddrIndex) $
-    metavar "INDEX"
-      <> help
-        [r|
-The index i of the receiving address, the last number of its path /0/i in
-addrs. The first address has the index 0. Change addresses have no label.
-|]
-  where
-    -- An address is derived at a soft index of BIP32, below 2^31. A larger
-    -- number names no address, rather than wrapping around to another one.
-    readAddrIndex :: String -> Maybe Int
-    readAddrIndex s = case readNatural (cs s) of
-      Just n | n < 2 ^ (31 :: Int) -> Just (fromIntegral n)
-      _ -> Nothing
+-- | The address to label, which also tells its account
+labelledAddressArg :: Args Text
+labelledAddressArg =
+  strArgument $
+    metavar "ADDRESS"
+      <> help "A receiving address of the wallet, as `addresses` lists it. Change addresses take no label."
 
 {- txs -}
 
@@ -1015,7 +1010,7 @@ On Bitcoin, the transaction is marked replaceable (BIP 125). Until it
 confirms, bumpfee can replace it with one that pays a higher fee. Bitcoin Cash
 does not replace transactions.
 
-Coin control: --coin and --spendfrom choose the coins to spend. preparetx then
+Coin control: --coin and --spend-from choose the coins to spend. preparetx then
 spends every one of them that can be spent, and no other, whatever --strategy
 says. With --select, it spends only what the payment needs among them: the
 strategy selects among the chosen coins as it selects among all the coins of
@@ -1025,13 +1020,13 @@ confirmed enough, are listed with the reason, with or without --select. The
 list tells such a coin from one that --select left because the payment did
 not need it. When none can be spent, nothing is prepared.
 
-Change: the change goes to a new change address, unless --changeback sends it
+Change: the change goes to a new change address, unless --change-back sends it
 back to an address the payment spends from. Some banks accept payments only
-from addresses they have checked, and --changeback keeps the funds at such an
+from addresses they have checked, and --change-back keeps the funds at such an
 address. When the coins come from several addresses, preparetx lists them and
-asks which one gets the change. With a single --spendfrom address, the change
+asks which one gets the change. With a single --spend-from address, the change
 goes back to it without a question. Setting change-back to true in the
-configuration file makes --changeback the default. --newchange then sends the
+configuration file makes --change-back the default. --new-change then sends the
 change of one payment to a new change address.
 
 A fee rate above 100 satoshis per byte is more often a typo than a choice, so
@@ -1070,14 +1065,14 @@ underCoins = optionGroup "Coins"
 -- | The account a payment spends from, which coin control can tell
 payingAccountOption :: Args (Maybe Text)
 payingAccountOption =
-  accountOptionWith "The account to pay from. Needed only when the wallet has more than one, and no --coin or --spendfrom tells it."
+  accountOptionWith "The account to pay from. Needed only when the wallet has more than one, and no --coin or --spend-from tells it."
 
 -- | Where the change of preparetx goes, when the command says
 changeBackOption :: Args (Maybe Bool)
 changeBackOption =
   optional $
-    flag' True (long "changeback" <> help "Send the change back to an address the payment spends from")
-      <|> flag' False (long "newchange" <> help "Send the change to a new change address, even when the configuration file sets change-back")
+    flag' True (long "change-back" <> help "Send the change back to an address the payment spends from")
+      <|> flag' False (long "new-change" <> help "Send the change to a new change address, even when the configuration file sets change-back")
 
 -- | A recipient of preparetx, ADDRESS:AMOUNT
 paymentArg :: Args Text
@@ -1118,14 +1113,14 @@ A coin worth no more than the fee to spend it is a dust coin. Spending it
 lowers what the recipients get. Whether a coin is dust depends on the fee
 rate. preparesendall lists the dust coins, tells what spending or leaving them
 means, and asks whether to spend them. Any answer but yes leaves them in the
-account. --spenddust or --leavedust answers in advance, for scripts.
+account. --spend-dust or --leave-dust answers in advance, for scripts.
 
---coin and --spendfrom send only the coins chosen, every one that can be
-spent, dust included. --spenddust and --leavedust do not apply then.
+--coin and --spend-from send only the coins chosen, every one that can be
+spent, dust included. --spend-dust and --leave-dust do not apply then.
 
 The answer lists every coin the transaction leaves in the account, with the
 reason: dust, locked by you or by a pending transaction, not spendable yet, or
-not chosen with --coin or --spendfrom.
+not chosen with --coin or --spend-from.
 
 A fee rate above 100 satoshis per byte is more often a typo than a choice, so
 preparesendall asks before it takes one. --yes takes it without asking, for
@@ -1162,14 +1157,14 @@ without an amount.
 dustCoinsOption :: Args (Maybe DustCoins)
 dustCoinsOption =
   optional $
-    flag' SpendDust (long "spenddust" <> help "Spend the coins worth less than their fee too, without asking")
-      <|> flag' LeaveDust (long "leavedust" <> help "Leave the coins worth less than their fee in the account, without asking")
+    flag' SpendDust (long "spend-dust" <> help "Spend the coins worth less than their fee too, without asking")
+      <|> flag' LeaveDust (long "leave-dust" <> help "Leave the coins worth less than their fee in the account, without asking")
 
 -- | An address of the account whose coins to spend
 spendFromOption :: Args Text
 spendFromOption =
   strOption $
-    long "spendfrom"
+    long "spend-from"
       <> metavar "ADDRESS"
       <> help "Coin control: spend the coins at this address of the account. Repeat for several addresses."
 
@@ -1179,7 +1174,7 @@ selectOption :: Args Bool
 selectOption =
   switch $
     long "select"
-      <> help "Coin control: spend only what the payment needs among the coins of --coin and --spendfrom, as --strategy selects them, instead of every one of them"
+      <> help "Coin control: spend only what the payment needs among the coins of --coin and --spend-from, as --strategy selects them, instead of every one of them"
 
 -- | A coin to spend, as coins lists it
 coinOption :: Args OutPoint
@@ -1195,7 +1190,7 @@ coinOptionWith what =
   option coinReader $
     short 'c'
       <> long "coin"
-      <> metavar "TXHASH:INDEX"
+      <> metavar "TXID:INDEX"
       <> help what
 
 -- | The fee rate, when given: a number of satoshis per byte, or a level
@@ -1204,7 +1199,7 @@ feeOption :: Args (Maybe FeeRateChoice)
 feeOption =
   optional . option (eitherReader readFeeRateChoice) $
     short 'f'
-      <> long "feerate"
+      <> long "fee-rate"
       <> metavar "RATE"
       <> completeWith ["low", "median", "high"]
       <> help "The fee rate in satoshis per byte, or low, median or high for that rate of recent blocks, as `fees` shows them. Without it, hw shows those rates and asks, median by default. A rate above 100 needs a confirmation."
@@ -1213,11 +1208,12 @@ feeOption =
 highFeeYesOption :: Args Bool
 highFeeYesOption = yesOption "Take a fee rate above 100 satoshis per byte without asking"
 
+-- | The dust limit. It has no short name. Few payments change it, and -d
+-- is --dice.
 dustOption :: Args Natural
 dustOption =
   option (maybeReader $ readNatural . cs) $
-    short 'd'
-      <> long "dust"
+    long "dust-limit"
       <> metavar "SATOSHIS"
       <> value 546
       <> showDefault
@@ -1227,14 +1223,14 @@ rcptPayOption :: Args FeePayer
 rcptPayOption =
   flag SenderPays RecipientsPay $
     short 'r'
-      <> long "recipientpay"
+      <> long "recipients-pay"
       <> help "The recipients pay the fee, in equal shares taken from their amounts"
 
 minConfOption :: Args Natural
 minConfOption =
   option (maybeReader $ readNatural . cs) $
     short 'm'
-      <> long "minconf"
+      <> long "min-conf"
       <> metavar "INT"
       <> value 0
       <> showDefault
@@ -1255,7 +1251,7 @@ an exact match without change, and keeps the coins that waste the least fee,
 now and later, as Bitcoin Core does. random-draw spends coins in random order.
 largest-first spends the fewest coins, for the lowest fee now. smallest-first
 spends the smallest coins first, to consolidate them. With --coin or
---spendfrom, every chosen coin is spent and the strategy does not apply,
+--spend-from, every chosen coin is spent and the strategy does not apply,
 unless --select has it select among the chosen coins.
 |]
   where
@@ -1469,7 +1465,7 @@ coinsCommand =
       summary = "List the coins of an account",
       details =
         [r|
-A coin is an unspent output of a transaction, written TXHASH:INDEX. The
+A coin is an unspent output of a transaction, written TXID:INDEX. The
 unconfirmed coins come first, then the newest.
 
 A coin is spendable when the wallet can spend it now. Nothing locks it, a
@@ -1485,7 +1481,7 @@ unlockcoin.
         CommandCoins
           <$> accountOption
           <*> lockedOption
-          <*> pagingOptions (afterOption "TXHASH:INDEX" coinReader "Start after this coin")
+          <*> pagingOptions (afterOption "TXID:INDEX" coinReader "Start after this coin")
     }
 
 lockedOption :: Args Bool
@@ -1534,7 +1530,7 @@ transaction spends is freed by deleting that transaction with deletetx.
 coinArg :: Args OutPoint
 coinArg =
   argument coinReader $
-    metavar "TXHASH:INDEX"
+    metavar "TXID:INDEX"
       <> help "The coin, as `coins` lists it: the id of its transaction, a colon, and its index among the outputs"
 
 -- | A coin as coins lists it, and as a block explorer often writes it: the
@@ -1545,7 +1541,7 @@ coinReader = eitherReader $ \s -> maybe (Left (notACoin s)) Right (readCoin s)
     readCoin s = case break (== ':') s of
       (hash, ':' : index) -> OutPoint <$> hexToTxHash (cs hash) <*> readOutputIndex index
       _ -> Nothing
-    notACoin s = "The coin " <> s <> " is not valid: write it TXHASH:INDEX, as coins lists it"
+    notACoin s = "The coin " <> s <> " is not valid: write it TXID:INDEX, as coins lists it"
 
 -- | The index of an output in its transaction, which has 32 bits. A larger
 -- number names no output, rather than wrapping around to another one.
@@ -1619,7 +1615,7 @@ replacementFeeOption :: Args (Maybe FeeRateChoice)
 replacementFeeOption =
   optional . option (eitherReader readFeeRateChoice) $
     short 'f'
-      <> long "feerate"
+      <> long "fee-rate"
       <> metavar "RATE"
       <> completeWith ["low", "median", "high"]
       <> help "The fee rate of the replacement in satoshis per byte, or low, median or high for that rate of recent blocks, as `fees` shows them. It must be above the rate of the transaction replaced. Without it, hw shows those rates and asks. A rate above 100 needs a confirmation."
@@ -1792,7 +1788,7 @@ a quiet spell, a sudden backlog makes them too low for a while. bumpfee then
 helps.
 
 preparetx, preparesendall, bumpfee and preparesweep show the same rates, and
-ask which to take when --feerate is not given. --feerate low, median or high
+ask which to take when --fee-rate is not given. --fee-rate low, median or high
 takes one without asking.
 |],
       args = CommandFees <$> networkMaybeOption
@@ -1907,17 +1903,18 @@ prepareSweepCommand =
       details =
         [r|
 A sweep moves coins whose private keys you hold, from an old wallet for
-example, to new addresses. preparesweep takes every coin at the --sweepfrom
-addresses and at those of an --addressfile file, every coin at the addresses
-of the --prvkeys keys, and the --coin coins. Give any of them. The file holds
-addresses separated by spaces or line breaks, as a --prvkeys file holds keys:
-an old wallet may have more addresses than a command line takes.
+example, to new addresses. preparesweep takes every coin at the --sweep-from
+addresses and at those listed in the --address-file, every coin at the
+addresses of the keys in the --key-file, and the --coin coins. Give any of
+them. The --address-file holds addresses separated by spaces or line breaks,
+as the --key-file holds keys. An old wallet may have more addresses than a
+command line takes.
 
 The private keys are needed only to sign, with signsweep, so they can stay on
 another computer. Without them, hw counts every key as compressed, so the fee
 of a coin of an uncompressed key comes out a little low.
 
-Give each destination with --sweepto, as ADDRESS or ADDRESS:AMOUNT, written as
+Give each destination with --sweep-to, as ADDRESS or ADDRESS:AMOUNT, written as
 for preparetx. An address with an amount gets exactly that amount. The
 addresses without one share the rest in equal parts, and they pay the fee. So
 give at least one of them. When the rest does not cover the fee, nothing is
@@ -1942,7 +1939,7 @@ typed. --yes takes it without asking, for scripts.
       args =
         CommandPrepareSweep
           <$> ( PrepareSweep
-                  <$> accountOptionWith "The account the sweep pays. Needed only when the --sweepto addresses are in several accounts."
+                  <$> accountOptionWith "The account the sweep pays. Needed only when the --sweep-to addresses are in several accounts."
                   <*> sweepNetworkOption
                   <*> underCoinsSwept prvKeysMaybeOption
                   <*> underCoinsSwept (many sweepFromOption)
@@ -1965,14 +1962,14 @@ sweepFromOption :: Args Text
 sweepFromOption =
   strOption $
     short 'w'
-      <> long "sweepfrom"
+      <> long "sweep-from"
       <> metavar "ADDRESS"
       <> help "An address whose coins to sweep. Repeat for several addresses."
 
 addressFileOption :: Args (Maybe FilePath)
 addressFileOption =
   optional . strOption $
-    long "addressfile"
+    long "address-file"
       <> metavar "FILENAME"
       <> action "file"
       <> help "A file of addresses whose coins to sweep, separated by spaces or line breaks"
@@ -1981,7 +1978,7 @@ sweepToOption :: Args Text
 sweepToOption =
   strOption $
     short 't'
-      <> long "sweepto"
+      <> long "sweep-to"
       <> metavar "ADDRESS[:AMOUNT]"
       <> help "A destination that shares what remains, or ADDRESS:AMOUNT for a fixed amount. Repeat for several destinations."
 
@@ -1996,9 +1993,9 @@ signSweepCommand =
       details =
         [r|
 signsweep signs a sweep that preparesweep made. Its coins are not the
-wallet's, so signing needs their private keys. Give them in a --prvkeys file.
-Or type them on the terminal, where they are not shown, with --prvkeys - or
-without --prvkeys.
+wallet's, so signing needs their private keys. Give the file that holds them
+with --key-file. Or type them on the terminal, where they are not shown, with
+--key-file - or without --key-file.
 
 Give a pending sweep by its NOSIGHASH. The signed sweep then takes its place
 in the wallet, shown by its txid. Or give a sweep file with --input. The
@@ -2020,7 +2017,7 @@ prvKeysMaybeOption :: Args (Maybe KeySource)
 prvKeysMaybeOption =
   optional . option (eitherReader source) $
     short 'k'
-      <> long "prvkeys"
+      <> long "key-file"
       <> metavar "FILENAME"
       <> action "file"
       <> help "A file of private keys in WIF, minikey or hex format, separated by spaces or line breaks. Give - to type them on the terminal instead."

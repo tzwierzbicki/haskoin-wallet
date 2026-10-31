@@ -277,7 +277,7 @@ data BumpPlan = BumpPlan
 
 -- | The plan of the replacement of the transactions. The change of a
 -- transaction is what it pays the wallet on the change chain, or back to
--- an address it spends from, as --changeback does. What it pays another
+-- an address it spends from, as --change-back does. What it pays another
 -- address of the wallet is a payment, which the replacement keeps.
 bumpPlan :: (MonadUnliftIO m) => Network -> Ctx -> DBAccountId -> [Sent] -> ExceptT String (DB m) BumpPlan
 bumpPlan net ctx accId sents = do
@@ -369,7 +369,7 @@ data PaidBy
   = -- | One of them alone, by its position among them, from 0
     OneRecipient !Int
   | -- | All of them, in equal shares, the first also paying the remainder,
-    -- as --recipientpay of preparetx has them pay
+    -- as --recipients-pay of preparetx has them pay
     AllRecipients
   deriving (Eq, Show)
 
@@ -511,7 +511,7 @@ checkBumpFee plan summary =
         <> show needed
         <> ": the fees of the transactions it replaces, and its own "
         <> show summary.summarySize
-        <> " bytes. Give a --feerate of at least "
+        <> " bytes. Give a --fee-rate of at least "
         <> show ((needed + summary.summarySize - 1) `div` summary.summarySize)
   where
     needed = plan.planFees + incrementalRate * summary.summarySize

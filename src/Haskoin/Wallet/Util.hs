@@ -68,7 +68,7 @@ textToAddrE :: Network -> Text -> Either String Address
 textToAddrE net a =
   maybeToEither ("The address " <> Text.unpack a <> " is not valid on " <> net.name) (textToAddr net a)
 
--- | The addresses of a text, as an --addressfile file holds them: every
+-- | The addresses of a text, as an --address-file holds them: every
 -- word that is an address of the network, on any line, as 'wordsOfLines'
 -- reads them
 parseAddresses :: Network -> Text -> Either String [Address]

@@ -25,7 +25,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Account
 import Haskoin.Wallet.Address (genExtAddress)
 import Haskoin.Wallet.Coin (refreshCoins)
-import Haskoin.Wallet.Commands (cmdAccounts, cmdAddrs, cmdExportAcc, cmdImportAcc)
+import Haskoin.Wallet.Commands (cmdAccounts, cmdAddresses, cmdExportAcc, cmdImportAcc)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Keys
 import Haskoin.Wallet.PendingTx (importPendingTx)
@@ -417,7 +417,7 @@ balanceSpec ctx =
           refreshCoins btc ctx accId [externalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
         shownSpendable <$> cmdAccounts wallet Nothing `shouldReturn` Right [("main", 50000)]
 
-    it "are shown by addrs with the balance each address can spend now" $
+    it "are shown by hw addresses with the balance each address can spend now" $
       inScratchDirectory $ \dir -> do
         wallet <- walletInFile (dir </> "wallet.sqlite") $ do
           (accId, _) <- testNewAcc ctx "main"
@@ -425,7 +425,7 @@ balanceSpec ctx =
           _ <- genExtAddress ctx def accId ""
           refreshCoins btc ctx accId [externalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
         -- Newest first: the second address holds nothing
-        addressSpendable <$> cmdAddrs wallet Nothing False (Paging Nothing Nothing)
+        addressSpendable <$> cmdAddresses wallet Nothing False (Paging Nothing Nothing)
           `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", 0), ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", 50000)]
 
     it "add up those of its addresses" $
@@ -482,8 +482,8 @@ shownSpendable :: Response -> Either String [(Text, Word64)]
 shownSpendable (ResponseAccounts shown) = Right [(dBAccountName acc, spendable) | (acc, spendable) <- shown]
 shownSpendable other = Left (show other)
 
--- | What addrs answered: each address by its text, with the balance it can
--- spend now
+-- | What `addresses` answered: each address by its text, with the balance it
+-- can spend now
 addressSpendable :: Response -> Either String [(Text, Word64)]
 addressSpendable (ResponseAddresses _ shown) = Right [(dBAddressAddress addr, spendable) | (addr, spendable) <- shown]
 addressSpendable other = Left (show other)

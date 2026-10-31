@@ -582,7 +582,7 @@ testMnemonic2 =
     "boring auction demand filter frog accuse company exchange rely slogan trim typical"
     "correct horse battery staple"
 
--- | The words of the test mnemonic in two parts, as mnemonic --split 2
+-- | The words of the test mnemonic in two parts, as mnemonic --parts 2
 -- prints them. The second part is the words of 'testMnemonic2'. The first
 -- is the mnemonic of the entropy of the test mnemonic xor that of the
 -- second part, computed apart from hw with the BIP39 functions of

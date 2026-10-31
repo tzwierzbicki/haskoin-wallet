@@ -87,7 +87,7 @@ hw mnemonic                                 # write the words down
 hw createacc main                           # type the mnemonic and passphrase
 hw receive --label "first deposit"          # give this address to the payer
 hw sync                                     # once the payment is sent
-hw preparetx ADDRESS:0.0005 --feerate median
+hw preparetx ADDRESS:0.0005 --fee-rate median
 hw signtx NOSIGHASH                         # type the mnemonic again
 hw sendtx TXID                              # the txid signtx shows
 hw sync
@@ -114,7 +114,7 @@ On the online computer, import the account and prepare a payment to a file:
 ```console
 hw importacc vault.json
 hw sync
-hw preparetx ADDRESS:0.01 --feerate median --output unsigned.json
+hw preparetx ADDRESS:0.01 --fee-rate median --output unsigned.json
 ```
 
 Back on the offline computer, check the transaction and sign it:
@@ -135,12 +135,12 @@ hw sync
 
 **`hw mnemonic`** prints a new mnemonic, made from the entropy of the
 operating system, and stores nothing. `--entropy 32` gives 24 words instead of
-12. `--dice` mixes in rolls of a die. `--split N` prints N parts, which are all
+12. `--dice` mixes in rolls of a die. `--parts N` prints N parts, which are all
 needed to rebuild the mnemonic.
 
 ```console
 hw mnemonic --entropy 32 --dice
-hw mnemonic --split 3
+hw mnemonic --parts 3
 ```
 
 **`hw createacc NAME`** creates an account from a mnemonic and passphrase,
@@ -150,7 +150,7 @@ index of the seed on the network.
 ```console
 hw createacc savings
 hw createacc cash --network bch
-hw createacc vault --split 3
+hw createacc vault --parts 3
 ```
 
 **`hw recover`** finds the accounts of a mnemonic that were paid. It adds
@@ -162,11 +162,11 @@ needs the mnemonic and the server at the same time.
 hw recover --network btc --account-gap 20
 ```
 
-**`hw testacc`** checks that a mnemonic and passphrase give the public key of
-an account. Use it to test a mnemonic you wrote down. Nothing is signed.
+**`hw checkmnemonic`** checks that a mnemonic and passphrase give the public
+key of an account. Use it to test a mnemonic you wrote down. Nothing is signed.
 
 ```console
-hw testacc --account savings
+hw checkmnemonic --account savings
 ```
 
 **`hw exportacc FILE`** writes the public key of an account to a file, and
@@ -221,14 +221,14 @@ hw sync --account savings --full
 hw receive --label "invoice 42"
 ```
 
-**`hw addrs`** lists the receiving addresses, the newest first, or the change
-addresses with `--internal`. Each shows its path, label, transactions, what it
-received and what it can spend.
+**`hw addresses`** lists the receiving addresses, the newest first, or the
+change addresses with `--change`. Each shows its path, label, transactions,
+what it received and what it can spend.
 
 ```console
-hw addrs
-hw addrs --internal
-hw addrs --max 10 --after ADDRESS
+hw addresses
+hw addresses --change
+hw addresses --max 10 --after ADDRESS
 ```
 
 **`hw balances`** lists the addresses that hold coins, the largest total first.
@@ -237,16 +237,16 @@ hw addrs --max 10 --after ADDRESS
 hw balances
 ```
 
-**`hw label INDEX LABEL`** sets the label of the receiving address at
-`/0/INDEX`.
+**`hw label ADDRESS LABEL`** sets the label of a receiving address. The
+address tells its account. Change addresses take no label.
 
 ```console
-hw label 3 "rent from Bob"
+hw label ADDRESS "rent from Bob"
 ```
 
 ### Coins
 
-**`hw coins`** lists the coins of an account, each as `TXHASH:INDEX`, and
+**`hw coins`** lists the coins of an account, each as `TXID:INDEX`, and
 tells whether it is spendable or locked. **`hw lockcoin`** keeps a coin from
 being spent, and **`hw unlockcoin`** frees it again.
 
@@ -260,7 +260,7 @@ hw unlockcoin TXHASH:1
 ### Payments
 
 **`hw fees`** shows the low, median and high fee rates of the latest six
-blocks, in satoshis per byte. The commands that take `--feerate` show the same
+blocks, in satoshis per byte. The commands that take `--fee-rate` show the same
 rates and ask when you give none.
 
 ```console
@@ -269,30 +269,30 @@ hw fees --network bch
 ```
 
 **`hw preparetx ADDRESS:AMOUNT...`** prepares a payment, unsigned, and keeps it
-as a pending transaction. It needs no mnemonic. `--feerate` takes a number or
-`low`, `median` or `high`. `--recipientpay` takes the fee out of the amounts
-paid. `--coin` and `--spendfrom` choose the coins to spend, every one of them.
+as a pending transaction. It needs no mnemonic. `--fee-rate` takes a number or
+`low`, `median` or `high`. `--recipients-pay` takes the fee out of the amounts
+paid. `--coin` and `--spend-from` choose the coins to spend, every one of them.
 `--select` spends only what the payment needs among them, as `--strategy`
-selects them. `--changeback` sends the change back to an address the payment
+selects them. `--change-back` sends the change back to an address the payment
 spends from. `--output` also writes the transaction to a file.
 
 ```console
-hw preparetx ADDRESS:0.0005 --feerate median
-hw preparetx ADDRESS1:10000sat ADDRESS2:250bits --feerate 5
-hw preparetx ADDRESS:0.01 --spendfrom MYADDRESS --changeback --feerate low
-hw preparetx ADDRESS:0.01 --spendfrom MYADDRESS --select --feerate low
-hw preparetx ADDRESS:0.01 --recipientpay --feerate high --output unsigned.json
+hw preparetx ADDRESS:0.0005 --fee-rate median
+hw preparetx ADDRESS1:10000sat ADDRESS2:250bits --fee-rate 5
+hw preparetx ADDRESS:0.01 --spend-from MYADDRESS --change-back --fee-rate low
+hw preparetx ADDRESS:0.01 --spend-from MYADDRESS --select --fee-rate low
+hw preparetx ADDRESS:0.01 --recipients-pay --fee-rate high --output unsigned.json
 ```
 
 **`hw preparesendall ADDRESS[:AMOUNT]...`** prepares a payment of every coin
 the account can spend, with no change. An address with an amount gets that
 amount. The addresses without one share the rest and pay the fee. hw asks
-whether to spend the coins worth less than their fee, unless `--spenddust` or
-`--leavedust` answers.
+whether to spend the coins worth less than their fee, unless `--spend-dust` or
+`--leave-dust` answers.
 
 ```console
-hw preparesendall ADDRESS --feerate low
-hw preparesendall ADDRESS1:0.1 ADDRESS2 --feerate median --leavedust
+hw preparesendall ADDRESS --fee-rate low
+hw preparesendall ADDRESS1:0.1 ADDRESS2 --fee-rate median --leave-dust
 ```
 
 **`hw signtx`** signs a pending transaction by its nosigHash, or a transaction
@@ -318,7 +318,7 @@ to take what is missing from what the recipients receive, asking which of them
 pays. Sign and send the replacement like any payment.
 
 ```console
-hw bumpfee TXID --feerate high
+hw bumpfee TXID --fee-rate high
 hw signtx NOSIGHASH
 hw sendtx TXID                              # the txid of the replacement
 ```
@@ -367,14 +367,15 @@ hw deletetx HASH
 ### Sweeps
 
 **`hw preparesweep`** prepares a transaction that moves coins from outside the
-wallet: the coins at `--sweepfrom` addresses or at those of an `--addressfile`
-file, at the addresses of `--prvkeys` keys, or given with `--coin`. The keys
+wallet: the coins at `--sweep-from` addresses or at those listed in an
+`--address-file`, at the addresses of the keys in a `--key-file`, or given with
+`--coin`. The keys
 are needed only to sign, with **`hw signsweep`**. A sweep that pays an address
 of this wallet is kept as a pending transaction.
 
 ```console
-hw preparesweep --sweepfrom OLDADDRESS --sweepto MYADDRESS --feerate median
-hw signsweep NOSIGHASH --prvkeys keys.txt
+hw preparesweep --sweep-from OLDADDRESS --sweep-to MYADDRESS --fee-rate median
+hw signsweep NOSIGHASH --key-file keys.txt
 hw sendtx TXID
 ```
 
@@ -382,12 +383,12 @@ A sweep that pays no address of this wallet needs `--network` and `--output`,
 and no account. It goes from file to file:
 
 ```console
-hw preparesweep --prvkeys keys.txt --sweepto ADDRESS --network btc --feerate median --output sweep.json
-hw signsweep --input sweep.json --prvkeys keys.txt --output signed.json
+hw preparesweep --key-file keys.txt --sweep-to ADDRESS --network btc --fee-rate median --output sweep.json
+hw signsweep --input sweep.json --key-file keys.txt --output signed.json
 hw sendtx --input signed.json
 ```
 
-`--prvkeys -` types the keys on the terminal instead of reading a file.
+`--key-file -` types the keys on the terminal instead of reading a file.
 
 ### Messages
 
@@ -426,7 +427,7 @@ To restore a backup, replace `~/.hw/accounts.sqlite` with the copy, or point
 - **The mnemonic is the only key to the funds.** `hw` never stores it. Without
   the database, the mnemonic still spends the funds, and `recover` finds the
   accounts again. Without the mnemonic, the funds are lost.
-- **Give the same `--split` to every command that asks for a split mnemonic.**
+- **Give the same `--parts` to every command that asks for a split mnemonic.**
   `hw` then asks for each part.
 - **The database and the account files are private.** They hold no private
   key. But the public keys in them reveal every address and balance of your
@@ -443,7 +444,7 @@ To restore a backup, replace `~/.hw/accounts.sqlite` with the copy, or point
 - **`receive` stops after 20 unused addresses in a row.** A wallet restored
   from the mnemonic would not look further. Reuse one of them, or raise `gap`
   in the configuration file.
-- **Choosing a fee rate needs the server.** Without `--feerate`, `hw` reads the
+- **Choosing a fee rate needs the server.** Without `--fee-rate`, `hw` reads the
   rates of recent blocks, and stops if it cannot reach the server. A rate above
   100 satoshis per byte asks for a confirmation, since it is more often a typo.
 - **The addresses of `hw` are legacy P2PKH.** They start with `1` on Bitcoin.
@@ -488,7 +489,7 @@ not lost, but take care when you move them:
   than one mnemonic. The first account of a second mnemonic comes out as
   `/44'/0'/1'` instead of `/44'/0'/0'`. Write down the derivation path of each
   account you use, so that you can find it again.
-- Version 0.7.0 derives the wrong account from a `--split` mnemonic. Use the
+- Version 0.7.0 derives the wrong account from a split mnemonic. Use the
   0.7.0 binary to move the funds to a new account created with 0.10.
 
 [BIP39]: https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki

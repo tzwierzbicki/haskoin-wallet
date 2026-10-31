@@ -70,7 +70,7 @@ keySpec =
         `shouldSatisfy` either ("Error in $: The key \"default-network\" must be a network: " `isPrefixOf`) (const False)
 
     -- A new file does not: the change of a payment goes to a new change
-    -- address unless --changeback says otherwise
+    -- address unless --change-back says otherwise
     it "sends the change of preparetx back to an address it spends from" $
       configChangeBack <$> decodeConfig [r|{"change-back": true}|] `shouldBe` Right True
 

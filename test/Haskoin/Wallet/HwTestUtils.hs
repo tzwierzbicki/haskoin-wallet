@@ -100,7 +100,7 @@ setDefaultNetwork home netM =
   editConfig home $ maybe (KeyMap.delete "default-network") (KeyMap.insert "default-network" . Json.String) netM
 
 -- | Set whether preparetx sends the change back to an address it spends
--- from without --changeback, in the configuration file of a home
+-- from without --change-back, in the configuration file of a home
 setChangeBack :: FilePath -> Bool -> IO ()
 setChangeBack home on = editConfig home (KeyMap.insert "change-back" (Json.Bool on))
 

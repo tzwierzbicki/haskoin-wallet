@@ -3,7 +3,7 @@
 -- | A recipient as the user types it on the command line: an address, or an
 -- address and its amount after a colon, ADDRESS:AMOUNT. preparetx needs the
 -- amount of every recipient ('readPayment'). preparesendall and the
--- --sweepto addresses of preparesweep also take an address without one,
+-- --sweep-to addresses of preparesweep also take an address without one,
 -- which receives a part of what remains once the others and the fee are
 -- paid ('readRecipient', 'shareAmounts').
 module Haskoin.Wallet.Recipient

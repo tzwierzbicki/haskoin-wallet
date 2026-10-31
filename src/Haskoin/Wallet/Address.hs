@@ -260,7 +260,7 @@ checkGap cfg accId addrType = do
       allowed = maybe 0 (+ 1) usedM + fromIntegral gap
   when (dBAccountCount addrType acc >= allowed) $
     throwError $ case addrType of
-      AddrExternal -> "The last " <> show gap <> " receiving addresses await a payment: reuse one of them, listed by addrs"
+      AddrExternal -> "The last " <> show gap <> " receiving addresses await a payment: reuse one of them, listed by hw addresses"
       AddrInternal -> "The last " <> show gap <> " change addresses are held by pending transactions: send or delete some of them"
 
 -- | The highest index of the chain with transactions, if any
@@ -290,6 +290,16 @@ setAddrLabel accId idx label = do
   row <- lift (P.get key) >>= liftMaybe ("Address " <> show idx <> " does not exist")
   lift $ P.update key [DBAddressLabel P.=. label]
   return row {dBAddressLabel = label}
+
+-- | Label a receiving address of the wallet, written in any form
+-- 'getAddressByText' reads. The address tells its account. A change
+-- address takes no label.
+labelAddress :: (MonadUnliftIO m) => Text -> Text -> ExceptT String (DB m) DBAddress
+labelAddress addrTxt label = do
+  (_, addr) <- getAddressByText addrTxt
+  when (dBAddressInternal addr) $
+    throwError "A change address takes no label. Only a receiving address does."
+  setAddrLabel (dBAddressAccount addr) (dBAddressIndex addr) label
 
 {- Addresses in the database -}
 

@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The recipients as the user types them, ADDRESS:AMOUNT for preparetx,
--- and also an address alone for preparesendall and the --sweepto addresses
+-- and also an address alone for preparesendall and the --sweep-to addresses
 -- of preparesweep; and what each recipient gets of the coins
 module Haskoin.Wallet.RecipientSpec (spec) where
 

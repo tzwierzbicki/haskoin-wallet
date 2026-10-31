@@ -1014,7 +1014,7 @@ leftSpec ctx =
 
     it "tell the user why each stays" $
       (leftReasonText <$> [WorthLessThanFee, Locked LockedByUser, Locked LockedByTransaction, NotSpendableYet, NotGiven])
-        `shouldBe` ["worth less than its fee", "you locked it", "a pending transaction spends it", "not spendable yet", "not chosen with --coin or --spendfrom"]
+        `shouldBe` ["worth less than its fee", "you locked it", "a pending transaction spends it", "not spendable yet", "not chosen with --coin or --spend-from"]
 
     it "are written in JSON with their outpoint, their value and why they stay" $
       Json.toJSON (LeftCoin (OutPoint (fakeTxHash 2) 0) 900 WorthLessThanFee)
@@ -1065,7 +1065,7 @@ chosenSpec ctx =
         `shouldBe` Left "None of the coins chosen can be spent now: 0000000000000000000000000000000000000000000000000000000000000002:0, you locked it; 0000000000000000000000000000000000000000000000000000000000000002:1, not spendable yet"
 
     it "are refused when the addresses given hold no coins" $
-      choose [] [externalAddr 5] `shouldBe` Left "The addresses chosen with --spendfrom hold no coins"
+      choose [] [externalAddr 5] `shouldBe` Left "The addresses chosen with --spend-from hold no coins"
   where
     fifty = unspentAt ctx 1 0 50000
     thirty = unspentAt ctx 1 1 30000

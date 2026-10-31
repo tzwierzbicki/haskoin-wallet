@@ -14,7 +14,7 @@ module Haskoin.Wallet.Commands
 
     -- * Listings
     accountsListing,
-    addrsListing,
+    addressesListing,
     balancesListing,
     coinsListing,
     txsListing,
@@ -24,7 +24,7 @@ module Haskoin.Wallet.Commands
     cmdMnemonic,
     cmdCreateAcc,
     cmdRecover,
-    cmdTestAcc,
+    cmdCheckMnemonic,
     cmdImportAcc,
     cmdExportAcc,
     cmdRenameAcc,
@@ -33,7 +33,7 @@ module Haskoin.Wallet.Commands
 
     -- * Addresses
     cmdReceive,
-    cmdAddrs,
+    cmdAddresses,
     cmdBalances,
     cmdLabel,
 
@@ -146,7 +146,7 @@ commandResponse ctx cfg unit = \case
   CommandMnemonic opts -> cmdMnemonic opts
   CommandCreateAcc name net parts -> cmdCreateAcc ctx cfg name net parts
   CommandRecover opts -> cmdRecover ctx cfg opts
-  CommandTestAcc account parts -> cmdTestAcc ctx cfg account parts
+  CommandCheckMnemonic account parts -> cmdCheckMnemonic ctx cfg account parts
   CommandImportAcc file -> cmdImportAcc ctx cfg file
   CommandExportAcc account file -> cmdExportAcc ctx cfg account file
   CommandRenameAcc opts -> cmdRenameAcc cfg opts
@@ -154,9 +154,9 @@ commandResponse ctx cfg unit = \case
   CommandAccounts account -> cmdAccounts cfg account
   -- Addresses
   CommandReceive opts -> cmdReceive ctx cfg opts
-  CommandAddrs account internal paging -> cmdAddrs cfg account internal paging
+  CommandAddresses account internal paging -> cmdAddresses cfg account internal paging
   CommandBalances account paging -> cmdBalances cfg account paging
-  CommandLabel account index label -> cmdLabel cfg account index label
+  CommandLabel opts -> cmdLabel cfg opts
   -- Coins
   CommandCoins account locked paging -> cmdCoins cfg account locked paging
   CommandLockCoin outpoint -> cmdLockCoin cfg outpoint
@@ -189,7 +189,7 @@ commandResponse ctx cfg unit = \case
 commandListing :: Ctx -> Command -> Maybe (ExceptT String (DB IO) Listing)
 commandListing ctx = \case
   CommandAccounts account -> Just $ accountsListing account
-  CommandAddrs account internal paging -> Just $ addrsListing account internal paging
+  CommandAddresses account internal paging -> Just $ addressesListing account internal paging
   CommandBalances account paging -> Just $ balancesListing account paging
   CommandCoins account locked paging -> Just $ coinsListing account locked paging
   CommandTxs account paging -> Just $ txsListing account paging
@@ -319,8 +319,8 @@ cmdRecover ctx cfg opts =
       _ -> return []
     return $ ResponseRecover net opts.accountGap (found <> fromTyped)
 
-cmdTestAcc :: Ctx -> Config -> Maybe Text -> Natural -> IO Response
-cmdTestAcc ctx cfg account parts =
+cmdCheckMnemonic :: Ctx -> Config -> Maybe Text -> Natural -> IO Response
+cmdCheckMnemonic ctx cfg account parts =
   runDBResponse cfg $ do
     (accId, acc) <- getAccountByName account
     mnem <- askMnemonicPass terminal parts
@@ -403,13 +403,13 @@ cmdReceive ctx cfg opts =
     addr <- genExtAddress ctx cfg accId (fromMaybe "" opts.label)
     addressAnswer accId addr
 
-cmdAddrs :: Config -> Maybe Text -> Bool -> Paging Text -> IO Response
-cmdAddrs cfg account internal paging = readListing cfg (addrsListing account internal paging)
+cmdAddresses :: Config -> Maybe Text -> Bool -> Paging Text -> IO Response
+cmdAddresses cfg account internal paging = readListing cfg (addressesListing account internal paging)
 
 -- | The addresses of a chain of the account, newest first, each with the
 -- balance it can spend now. An address names the one to go on after.
-addrsListing :: Maybe Text -> Bool -> Paging Text -> ExceptT String (DB IO) Listing
-addrsListing account internal paging = do
+addressesListing :: Maybe Text -> Bool -> Paging Text -> ExceptT String (DB IO) Listing
+addressesListing account internal paging = do
   (accId, acc) <- getAccountByName account
   let net = accountNetwork acc
       addrType = if internal then AddrInternal else AddrExternal
@@ -451,12 +451,11 @@ balancesListing account paging = do
         listingAnswer = ResponseBalances acc
       }
 
-cmdLabel :: Config -> Maybe Text -> Int -> Text -> IO Response
-cmdLabel cfg account index label =
+cmdLabel :: Config -> Label -> IO Response
+cmdLabel cfg opts =
   runDBResponse cfg $ do
-    (accId, _) <- getAccountByName account
-    addr <- setAddrLabel accId index label
-    addressAnswer accId addr
+    addr <- labelAddress opts.address opts.label
+    addressAnswer (dBAddressAccount addr) addr
 
 {- Coins -}
 
@@ -620,25 +619,25 @@ confirmFeeRate yes feeByte dust = do
       askYes terminal $
         "The fee rate of " <> show feeByte <> " satoshis per byte is above " <> show highFeeRate
           <> ", the most hw takes without asking. Prepare the transaction anyway?"
-    unless accepted $ throwError "The transaction was not prepared: give a lower --feerate"
+    unless accepted $ throwError "The transaction was not prepared: give a lower --fee-rate"
 
 -- | The fee rate of a transaction, in satoshis per byte: the number given,
 -- or one of the rates recent blocks paid, read from the store: the level
 -- given, or the one the user picks, the median by default. A rate below
 -- the lowest the transaction can pay, which a replacement has, is not
 -- offered. The rates and the question go to stderr, to keep the --json
--- answer clean. hw never guesses a rate: without a --feerate, a store that
+-- answer clean. hw never guesses a rate: without a --fee-rate, a store that
 -- cannot be reached stops the command.
 chooseFeeRate :: Config -> Store -> Natural -> Maybe FeeRateChoice -> ExceptT String (DB IO) Natural
 chooseFeeRate _ _ _ (Just (FeeRateOf rate)) = return rate
 chooseFeeRate cfg store lowest choice = do
-  rates <- fromStore $ withExceptT (<> ". Give a --feerate to go on without the rates recent blocks paid") $ recentFeeRates (configParallelRequests cfg) store
+  rates <- fromStore $ withExceptT (<> ". Give a --fee-rate to go on without the rates recent blocks paid") $ recentFeeRates (configParallelRequests cfg) store
   let offered = [(level, rateAt level rates) | level <- [minBound .. maxBound], rateAt level rates >= lowest]
       offeredNames = case [cs (levelName level) | (level, _) <- offered] of
         [name] -> name
         names -> intercalate ", " (init names) <> " or " <> last names
   when (null offered) $
-    throwError $ "The rates recent blocks paid are all below " <> show lowest <> " satoshis per byte: give a --feerate of at least " <> show lowest
+    throwError $ "The rates recent blocks paid are all below " <> show lowest <> " satoshis per byte: give a --fee-rate of at least " <> show lowest
   case choice of
     Just (FeeLevelOf level) -> do
       rate <- liftMaybe (levelTooLow level rates) (lookup level offered)
@@ -653,7 +652,7 @@ chooseFeeRate cfg store lowest choice = do
   where
     levelTooLow level rates =
       "The " <> cs (levelName level) <> " rate recent blocks paid, " <> show (rateAt level rates)
-        <> " satoshis per byte, is below " <> show lowest <> ": give a --feerate of at least " <> show lowest
+        <> " satoshis per byte, is below " <> show lowest <> ": give a --fee-rate of at least " <> show lowest
 
 -- | Show the fee rates recent blocks paid on the network, read from the
 -- store. No wallet is needed.
@@ -675,8 +674,8 @@ preparedAnswer ctx accId acc output tsd left = do
 
 -- | The account a transaction is prepared from, with the addresses that
 -- coin control chose, read on its network. The coins of --coin and the
--- addresses of --spendfrom name their account; otherwise it is the account
--- of --account, or the only one. Each --spendfrom address must be one of
+-- addresses of --spend-from name their account; otherwise it is the account
+-- of --account, or the only one. Each --spend-from address must be one of
 -- the account: the address counts, not its text, so a Bitcoin Cash address
 -- is found without its prefix, or in its legacy form.
 controlledAccount :: Maybe Text -> [OutPoint] -> [Text] -> ExceptT String (DB IO) (DBAccountId, DBAccount, [Address])
@@ -694,7 +693,7 @@ controlledAccount account outpoints spendFrom = do
   return (accId, acc, addrs)
 
 -- | Prepare a payment from the account, unsigned. Coin control spends the
--- coins of --coin and those at the addresses of --spendfrom, all of those
+-- coins of --coin and those at the addresses of --spend-from, all of those
 -- that can be spent, and only them. With --select, the strategy selects
 -- among them instead, as it does among every coin of the account without
 -- coin control. The answer lists the coins chosen that cannot be spent, and
@@ -707,7 +706,7 @@ cmdPrepareTx ctx cfg unit opts =
     let net = accountNetwork acc
         controlled = not (null opts.coins && null spendFrom)
     when (opts.select && not controlled) $
-      throwError "--select needs coins to select among: give --coin or --spendfrom"
+      throwError "--select needs coins to select among: give --coin or --spend-from"
     -- Before the transaction is built, not after
     for_ opts.output checkPathFree
     recipients <- liftEither $ mapM (readPayment net unit) opts.recipients
@@ -748,7 +747,7 @@ changeBackTo unit net accId addrs = do
 -- recipients, unsigned, with no change: all the coins it can spend now, or
 -- those that coin control chose, as for preparetx. Without coin control,
 -- the coins worth less than their fee are spent or left as the user
--- answers, or as --spenddust or --leavedust says. The answer lists every
+-- answers, or as --spend-dust or --leave-dust says. The answer lists every
 -- coin left in the account, and why. See "Haskoin.Wallet.TxSendAll".
 cmdPrepareSendAll :: Ctx -> Config -> AmountUnit -> PrepareSendAll -> IO Response
 cmdPrepareSendAll ctx cfg unit opts =
@@ -761,7 +760,7 @@ cmdPrepareSendAll ctx cfg unit opts =
     recipients <- liftEither $ mapM (readRecipient net unit) opts.recipients
     liftEither $ checkSharing recipients
     when (controlled && isJust opts.dustCoins) $
-      throwError "The coins chosen with --coin or --spendfrom are all sent: give --spenddust or --leavedust without them"
+      throwError "The coins chosen with --coin or --spend-from are all sent: give --spend-dust or --leave-dust without them"
     feeByte <- chooseFeeRate cfg (webStore ctx cfg net) 1 opts.feeRate
     confirmFeeRate opts.yes feeByte opts.dust
     spendable <- spendableCoins net ctx accId opts.minConf
@@ -941,7 +940,7 @@ cmdBumpFee ctx cfg opts =
     when (feeByte < minimumRate stuck) $
       throwError $
         "The transaction pays " <> show stuck.sentSummary.summaryFeeByte
-          <> " sat/byte: give a --feerate of at least "
+          <> " sat/byte: give a --fee-rate of at least "
           <> show (minimumRate stuck)
     children <- spendingChildren ctx store accId acc [stuck]
     refuseSpentElsewhere net accId (stuck : children)
@@ -1061,7 +1060,7 @@ cmdPrepareSweep ctx cfg unit opts =
       found <- fetchSweepCoins net ctx (webStore ctx cfg net) accIdM keys (typed <> listed) opts.coins (fst <$> sweepTo)
       gen <- liftIO initStdGen
       liftEither $ buildSweepSignData net ctx gen found sweepTo feeByte opts.dust
-    -- The addresses of the --addressfile file, read on the network of the
+    -- The addresses of the --address-file, read on the network of the
     -- sweep
     addressesOfFile net file = liftEither . parseAddresses net =<< liftEitherIO (readTextFile file)
 

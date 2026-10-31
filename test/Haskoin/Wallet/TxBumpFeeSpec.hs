@@ -85,7 +85,7 @@ feeSpec ctx =
     it "pays the fees of the transactions it replaces, and its own size at 1 satoshi a byte" $ do
       checkBumpFee (plan 2260) (paid 2486 226) `shouldBe` Right ()
       checkBumpFee (plan 2260) (paid 2485 226)
-        `shouldBe` Left "The replacement pays 2485 satoshis of fee, and must pay 2486: the fees of the transactions it replaces, and its own 226 bytes. Give a --feerate of at least 11"
+        `shouldBe` Left "The replacement pays 2485 satoshis of fee, and must pay 2486: the fees of the transactions it replaces, and its own 226 bytes. Give a --fee-rate of at least 11"
   where
     plan :: Natural -> BumpPlan
     plan fees = BumpPlan [] [] Map.empty [] Map.empty Nothing fees []
@@ -175,7 +175,7 @@ reductionSpec ctx =
 
     -- At 11 satoshis a byte, the third recipient keeps 7140 paying alone,
     -- and 7314 paying its share
-    it "leaves no recipient below the --dust limit" $
+    it "leaves no recipient below the --dust-limit" $
       reductions ctx (sendAllPlan ctx) 11 7300
         `shouldBe` Right
           [ way (OneRecipient 0) 260 (29740, 10000, 7400),

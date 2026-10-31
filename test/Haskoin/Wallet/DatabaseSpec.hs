@@ -54,7 +54,7 @@ indexesSpec =
         plan <- queryPlan "select * from d_b_coin where account = 1 and address = '1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj'"
         liftIO $ plan `shouldBe` ["SEARCH d_b_coin USING INDEX d_b_coin_account_address (account=? AND address=?)"]
 
-    it "find the coins of the addresses addrs shows, for their spendable balances" $
+    it "find the coins of the addresses hw addresses shows, for their spendable balances" $
       inMemory $ do
         globalMigration
         plan <- queryPlan "select outpoint, address, value, block_ref from d_b_coin where account = 1 and address in ('1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj', '1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg')"

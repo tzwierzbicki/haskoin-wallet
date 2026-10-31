@@ -79,8 +79,8 @@ data Config = Config
     -- needs its --network.
     configDefaultNetwork :: Maybe Network,
     -- | Whether preparetx sends the change back to an address the payment
-    -- spends from, as --changeback does, rather than to a new change
-    -- address. --newchange overrides it for one payment.
+    -- spends from, as --change-back does, rather than to a new change
+    -- address. --new-change overrides it for one payment.
     configChangeBack :: Bool,
     -- | The command a listing goes through on a terminal, instead of less
     -- or the PAGER of the environment. The empty string is no pager.

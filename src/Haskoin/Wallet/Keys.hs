@@ -120,7 +120,7 @@ seedOfMaster ctx master =
 data KeySource
   = -- | A file with one or more keys per line
     KeysInFile !FilePath
-  | -- | Typed on the terminal without echo, asked for with --prvkeys -
+  | -- | Typed on the terminal without echo, asked for with --key-file -
     KeysOnTerminal
   deriving (Eq, Show)
 

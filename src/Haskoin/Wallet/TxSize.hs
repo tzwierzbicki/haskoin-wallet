@@ -131,7 +131,7 @@ varIntSize n
 -- satoshis per byte. A rate above it is more often a typo than a choice,
 -- such as 1000 for 100, so the user confirms it, or gives --yes. Fees have
 -- gone higher at the busiest times of Bitcoin, so a higher rate is not
--- refused. The help of --feerate, --yes, preparetx and preparesweep names
+-- refused. The help of --fee-rate, --yes, preparetx and preparesweep names
 -- this rate.
 highFeeRate :: Natural
 highFeeRate = 100

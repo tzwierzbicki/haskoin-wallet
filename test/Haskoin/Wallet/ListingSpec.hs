@@ -8,7 +8,7 @@ import Data.IORef (modifyIORef, newIORef, readIORef)
 import Data.Text (Text)
 import Haskoin
 import Haskoin.Wallet.Address (genExtAddress)
-import Haskoin.Wallet.Commands (addrsListing)
+import Haskoin.Wallet.Commands (addressesListing)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Listing (Paging (..), streamListing)
@@ -73,7 +73,7 @@ walletWithAddresses ctx dir count =
 streamed :: Config -> Paging Text -> (Int -> Bool) -> IO [(Either String (), (Bool, [Int]))]
 streamed wallet paging keepReading = do
   seen <- newIORef []
-  result <- streamListing wallet (addrsListing Nothing False paging) $ \first answer -> do
+  result <- streamListing wallet (addressesListing Nothing False paging) $ \first answer -> do
     let rows = case answer of
           ResponseAddresses _ addrs -> dBAddressIndex . fst <$> addrs
           _ -> []

@@ -21,18 +21,18 @@ spec = do
     -- default
     it "lists the options of preparetx as they are typed" $
       usageOf "preparetx"
-        `shouldBe` "ADDRESS:AMOUNT... [-a|--account NAME] [-f|--feerate RATE] [-d|--dust SATOSHIS] [-r|--recipientpay] [-m|--minconf INT] [--strategy STRATEGY] [-o|--output FILENAME] [-c|--coin TXHASH:INDEX]... [--spendfrom ADDRESS]... [--select] [-y|--yes] [--changeback | --newchange]"
+        `shouldBe` "ADDRESS:AMOUNT... [-a|--account NAME] [-f|--fee-rate RATE] [--dust-limit SATOSHIS] [-r|--recipients-pay] [-m|--min-conf INT] [--strategy STRATEGY] [-o|--output FILENAME] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS]... [--select] [-y|--yes] [--change-back | --new-change]"
 
     it "follows what may be given several times with ..., after the brackets of an optional one" $
       usageOf "preparesendall"
-        `shouldBe` "ADDRESS[:AMOUNT]... [-a|--account NAME] [-f|--feerate RATE] [-d|--dust SATOSHIS] [-m|--minconf INT] [-o|--output FILENAME] [-c|--coin TXHASH:INDEX]... [--spendfrom ADDRESS]... [--spenddust | --leavedust] [-y|--yes]"
+        `shouldBe` "ADDRESS[:AMOUNT]... [-a|--account NAME] [-f|--fee-rate RATE] [--dust-limit SATOSHIS] [-m|--min-conf INT] [-o|--output FILENAME] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS]... [--spend-dust | --leave-dust] [-y|--yes]"
 
     it "puts a choice in parentheses, and a required option with two names too" $
       usageOf "verifymsg" `shouldBe` "(ADDRESS SIGNATURE MESSAGE | (-i|--input FILENAME)) [-n|--network NETWORK]"
 
     it "shows an option that has to be given at least once as required" $
       usageOf "preparesweep"
-        `shouldBe` "[-a|--account NAME] [-n|--network NETWORK] [-k|--prvkeys FILENAME] [-w|--sweepfrom ADDRESS]... [--addressfile FILENAME] (-t|--sweepto ADDRESS[:AMOUNT])... [-c|--coin TXHASH:INDEX]... [-o|--output FILENAME] [-f|--feerate RATE] [-d|--dust SATOSHIS] [-y|--yes]"
+        `shouldBe` "[-a|--account NAME] [-n|--network NETWORK] [-k|--key-file FILENAME] [-w|--sweep-from ADDRESS]... [--address-file FILENAME] (-t|--sweep-to ADDRESS[:AMOUNT])... [-c|--coin TXID:INDEX]... [-o|--output FILENAME] [-f|--fee-rate RATE] [--dust-limit SATOSHIS] [-y|--yes]"
 
     it "is empty for a command without options" $
       usageOf "version" `shouldBe` ""

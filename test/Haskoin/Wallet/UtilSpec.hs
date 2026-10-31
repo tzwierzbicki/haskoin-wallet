@@ -84,7 +84,7 @@ addressSpec =
       addrToString btc segwitAddr `shouldBe` "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
       addrToString bch segwitAddr `shouldBe` "an address of another network"
 
--- The file format of --addressfile, which is the one of a --prvkeys file
+-- The file format of --address-file, which is the one of --key-file
 addressFileSpec :: Spec
 addressFileSpec =
   describe "The addresses of a file" $ do

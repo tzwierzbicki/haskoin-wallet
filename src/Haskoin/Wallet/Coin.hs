@@ -603,7 +603,7 @@ data LeftReason
     Locked !CoinLock
   | -- | Not confirmed enough yet, or a coinbase not yet mature
     NotSpendableYet
-  | -- | Spendable, but not among the coins chosen with --coin or --spendfrom
+  | -- | Spendable, but not among the coins chosen with --coin or --spend-from
     NotGiven
   deriving (Eq, Show)
 
@@ -636,7 +636,7 @@ leftReasonText = \case
   Locked LockedByUser -> "you locked it"
   Locked LockedByTransaction -> "a pending transaction spends it"
   NotSpendableYet -> "not spendable yet"
-  NotGiven -> "not chosen with --coin or --spendfrom"
+  NotGiven -> "not chosen with --coin or --spend-from"
 
 -- | Why a coin the builder may not spend stays, from its lock: without one,
 -- it is not spendable yet
@@ -700,7 +700,7 @@ chosenCoins outpoints addrs spendable unspendable = do
     unless (outpoint `elem` held) $ Left $ "The account has no coin " <> coinText outpoint
   when (null chosenSpendable) $
     Left $ case chosenHeld of
-      [] -> "The addresses chosen with --spendfrom hold no coins"
+      [] -> "The addresses chosen with --spend-from hold no coins"
       _ -> "None of the coins chosen can be spent now: " <> intercalate "; " (heldText <$> chosenHeld)
   return (chosenSpendable, chosenHeld)
   where
