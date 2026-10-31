@@ -40,7 +40,7 @@ dependencies:
   - path-pieces
   - http-api-data
   - esqueleto >=3.5.10.1
-  - haskoin-core >= 1.0.4
+  - haskoin-core >= 1.4.0
   - haskoin-store-data >= 1.2.2
   - http-client >= 0.7
   - http-types >= 0.12.3
