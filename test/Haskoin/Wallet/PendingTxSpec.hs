@@ -44,6 +44,7 @@ spec :: Spec
 spec =
   prepareContext $ \ctx -> do
     importingSpec ctx
+    namingSpec ctx
     listingSpec ctx
     sendingSpec ctx
     sendingFileSpec ctx
@@ -465,19 +466,30 @@ listingSpec ctx =
         (first, second) <- twoPending ctx cfg accId
         ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((second, False, False, False)), Just ((first, False, False, False))]
-        since <- heldSince (Just accId) second
-        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId (Just (since, second)) (Just 1))
+        cursor <- pendingCursor (Just accId) second
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId (Just cursor) (Just 1))
           `dbShouldBeE` [Just ((first, False, False, False))]
 
-    it "tells since when the account holds a transaction, for --after, and refuses one of another account" $
+    it "tells where --after goes on after a transaction, and refuses one of another account" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
         otherId <- otherAccount ctx cfg
         (first, _) <- twoPending ctx cfg accId
-        since <- heldSince (Just accId) first
-        heldSince Nothing first `dbShouldBeE` since
-        lift $ dbShouldFailWith "The pending transaction is not in the account" $ heldSince (Just otherId) first
-        lift $ dbShouldFailWith "The pending transaction does not exist" $ heldSince Nothing (fakeTxHash 9)
+        cursor <- pendingCursor (Just accId) first
+        pendingCursor Nothing first `dbShouldBeE` cursor
+        lift $ dbShouldFailWith "The pending transaction is not in the account" $ pendingCursor (Just otherId) first
+        lift $ dbShouldFailWith "The pending transaction does not exist" $ pendingCursor Nothing (fakeTxHash 9)
+
+    -- The listing is ordered by the nosigHash, whichever hash names the
+    -- transaction
+    it "goes on after a signed transaction named by its txid, at its creation time and its nosigHash" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        unsigned <- unsignedPayment ctx cfg accId
+        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        let key = nosigHash unsigned.txSignDataTx
+        lift $ P.insert_ $ DBPendingTx accId (hashBytes key) (blob signed) False False fixtureTime
+        pendingCursor (Just accId) (txHash signed.txSignDataTx) `dbShouldBeE` (fixtureTime, key)
     it "lists nothing for an account without any" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -530,6 +542,23 @@ listingSpec ctx =
           deleted `shouldSatisfy` isLeft
           deleted `shouldNotBe` Left noPendingTx
 
+-- pendingtxs shows an unsigned transaction by its nosigHash, and a signed
+-- one by its txid. The commands take either.
+namingSpec :: Ctx -> Spec
+namingSpec ctx =
+  describe "A pending transaction named by a command" $ do
+    let cfg = def :: Config
+    it "is found by its txid once signed" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        (_, signed) <- signedPending ctx cfg accId
+        ((.pendingTxData) <$> requirePendingTx (txHash signed.txSignDataTx)) `dbShouldBeE` signed
+    it "is still found by its nosigHash once signed" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        (pendingHash, signed) <- signedPending ctx cfg accId
+        ((.pendingTxData) <$> requirePendingTx pendingHash) `dbShouldBeE` signed
+
 sendingSpec :: Ctx -> Spec
 sendingSpec ctx =
   describe "Sending a pending transaction" $ do
@@ -543,6 +572,14 @@ sendingSpec ctx =
         ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, True, False))]
         lift (hasRawTx (txHash (txSignDataTx signed))) `dbShouldBeE` True
+    -- The row is keyed by the nosigHash, which marking it online must use
+    it "marks a transaction named by its txid online" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        (pendingHash, signed) <- signedPending ctx cfg accId
+        _ <- sendPending ctx (const (toStore (storeKnowing ctx signed))) withoutAsking (txHash signed.txSignDataTx)
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
+          `dbShouldBeE` [Just ((pendingHash, True, True, False))]
     it "sends again a transaction that is already online" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -771,6 +808,13 @@ deletingSpec ctx =
         ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, True, False))]
         (map transactionLocked <$> coinsAfter btc accId AllCoins Nothing Nothing) `dbShouldBeE` [True]
+    -- The coin of 20000 it spends, and its change address
+    it "deletes a signed transaction named by its txid" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        (_, signed) <- signedPending ctx cfg accId
+        deleteTx ctx (const (toStore emptyStore)) (txHash signed.txSignDataTx) `dbShouldBeE` (1, 1)
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing) `dbShouldBeE` []
     it "frees the change address for the next transaction" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"

@@ -66,9 +66,9 @@ data Style
   | -- | The words of a mnemonic. They are secret, as the commands that ask
     -- for them are offline.
     Secret
-  | -- | The nosigHash of a pending transaction, by which the commands name
-    -- it
-    NoSigHash
+  | -- | The hash by which the commands name a pending transaction: its
+    -- nosigHash, or its txid once it is signed
+    PendingHash
   | -- | What the user wrote or chose: a label, a file
     UserText
   | -- | An amount the wallet gets or holds
@@ -102,7 +102,7 @@ sgrOf = \case
   Field -> [faint]
   Account -> [bold]
   Secret -> [bold, foreground Magenta]
-  NoSigHash -> [bold]
+  PendingHash -> [bold]
   UserText -> [SetItalicized True]
   Incoming -> [foreground Green]
   Outgoing -> [foreground Red]

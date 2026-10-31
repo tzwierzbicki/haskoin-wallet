@@ -884,7 +884,7 @@ failureSpec ctx = do
         run <- hw home ["exporttx", Text.unpack (txHashToHex (fakeTxHash 1))] []
         runExit run `shouldBe` ExitFailure 1
         runErr run `shouldSatisfy` Text.isInfixOf "Missing: FILENAME"
-        runErr run `shouldSatisfy` Text.isInfixOf "Usage: hw exporttx NOSIGHASH FILENAME"
+        runErr run `shouldSatisfy` Text.isInfixOf "Usage: hw exporttx HASH FILENAME"
 
   describe "A command that fails" $ do
     it "exits with 1, and tells why" $
@@ -1019,14 +1019,14 @@ failureSpec ctx = do
         run `shouldSatisfy` printed (Text.pack databaseInUse)
 
   describe "sendtx from a file" $ do
-    it "needs a nosigHash or a file" $
+    it "needs a txid or a file" $
       withHome $ \home ->
-        (errorOf <$> hwJson home ["sendtx"] []) `shouldReturn` Right "Give the NOSIGHASH of a pending transaction or an --input file"
+        (errorOf <$> hwJson home ["sendtx"] []) `shouldReturn` Right "Give the TXID of a pending transaction or an --input file"
 
-    it "takes a nosigHash or a file, not both" $
+    it "takes a txid or a file, not both" $
       withHome $ \home ->
         (errorOf <$> hwJson home ["sendtx", Text.unpack (txHashToHex (fakeTxHash 1)), "--input", home </> "sweep.json"] [])
-          `shouldReturn` Right "Can not specify both a NOSIGHASH and an --input file"
+          `shouldReturn` Right "Can not specify both a TXID and an --input file"
 
     it "refuses a missing file" $
       withHome $ \home ->
@@ -1393,6 +1393,14 @@ signerAndOnline signer online = do
 paymentSent :: Ctx -> ([OutPoint], [(Word64, Either String Address)])
 paymentSent ctx = ([OutPoint (txHash (payment ctx)) 0], [(20000, Right (otherAddr 0)), (27740, Right (internalAddr 0))])
 
+-- | What deletetx answers: the nosigHash and the txid of the transaction
+-- deleted, as typed, and how many coins and change addresses it freed
+deletedOf :: Response -> Either String (String, Maybe String, Natural, Natural)
+deletedOf (ResponseDeleteTx nosigH txidM coins addrs) = Right (hex nosigH, hex <$> txidM, coins, addrs)
+  where
+    hex = Text.unpack . txHashToHex
+deletedOf other = Left (show other)
+
 -- 20000 satoshis are paid at 10 satoshis a byte: the transaction of one
 -- input and two outputs is 226 bytes, so the fee is 2260, and the change
 -- 50000 - 20000 - 2260 = 27740.
@@ -1413,6 +1421,34 @@ signingSpec ctx = do
         (spendsAndPays ctx <$> published) `shouldBe` [paymentSent ctx]
         modifyIORef chain mine
         (accountsOf <$> hwJson home ["sync"] []) `shouldReturn` Right [("main", 0, 27740)]
+
+    -- The answer of sendtx reads as once sent: what the wallet holds tells
+    -- whether it marked the transaction online
+    it "is sent by the txid signtx shows, and marked online" $
+      withChain ctx (paidChain ctx) $ \home chain -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"] []
+        txid <- txidOf =<< txOf =<< answer home ["signtx", nosig] seedOnce
+        _ <- answer home ["sendtx", txid, "--yes"] []
+        published <- inMempool <$> readIORef chain
+        (spendsAndPays ctx <$> published) `shouldBe` [paymentSent ctx]
+        onePendingState home `shouldReturn` Just (True, True)
+
+    -- It held the coin of 50000 and the change address
+    it "is deleted by its txid once signed, and deletetx answers with both its hashes" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        nosig <- paymentSigned home
+        txid <- txidOf =<< onePendingTx home
+        (deletedOf <$> hwJson home ["deletetx", txid] []) `shouldReturn` Right (nosig, Just txid, 1, 1)
+        (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+
+    -- As pendingtxs showed it, even when named by its nosigHash
+    it "is shown by deletetx by its txid once signed" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        nosig <- paymentSigned home
+        txid <- txidOf =<< onePendingTx home
+        run <- hw home ["deletetx", nosig] []
+        runOut run `shouldSatisfy` Text.isInfixOf ("Deleted: " <> Text.pack txid)
 
     it "is signed from the parts of the mnemonic with signtx --split" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -2224,12 +2260,12 @@ rowsOf (ResponseCoins _ coins) = Right (length coins)
 rowsOf other = Left (show other)
 
 -- | What names each row of a listing, as --after takes it: the address,
--- the coin, the txid or the nosigHash
+-- the coin, the txid, or the hash of a pending transaction as shown
 keysOf :: Response -> Either String [String]
 keysOf (ResponseAddresses _ addrs) = Right (Text.unpack . dBAddressAddress . fst <$> addrs)
 keysOf (ResponseBalances _ addrs) = Right (Text.unpack . dBAddressAddress . fst <$> addrs)
 keysOf (ResponseTxs _ infos) = Right [Text.unpack (txHashToHex (chainTxid status)) | info <- infos, OnChain status <- [txInfoStatus info]]
-keysOf (ResponsePendingTxs _ held) = Right [Text.unpack (txHashToHex (pendingNosigHash status)) | (_, info) <- held, Pending status <- [txInfoStatus info]]
+keysOf (ResponsePendingTxs _ held) = Right [Text.unpack (txHashToHex (pendingShownHash status)) | (_, info) <- held, Pending status <- [txInfoStatus info]]
 keysOf (ResponseCoins _ coins) = Right [Text.unpack (txHashToHex outpoint.hash) <> ":" <> show outpoint.index | coin <- coins, let outpoint = jsonCoinOutpoint coin]
 keysOf other = Left (show other)
 
@@ -2312,6 +2348,17 @@ listingSpec ctx = do
           (keysOf <$> hwJson home [listing, "--after", keys !! 0] []) `shouldReturn` Right [keys !! 1]
           (rowsOf <$> hwJson home [listing, "--after", keys !! 1] []) `shouldReturn` Right 0
 
+    -- The two payments of the test before, signed. The newer is listed
+    -- first.
+    it "shows the pending transactions after the signed one --after names by its txid" $
+      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+        synced home
+        older <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (payment ctx) 0, "--feerate", "10"] []
+        newer <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--coin", coinArg (newerPayment ctx) 0, "--feerate", "10"] []
+        olderId <- txidOf =<< txOf =<< answer home ["signtx", older] seedOnce
+        newerId <- txidOf =<< txOf =<< answer home ["signtx", newer] seedOnce
+        (keysOf <$> hwJson home ["pendingtxs", "--after", newerId] []) `shouldReturn` Right [olderId]
+
 {- Sending -}
 
 -- | A home synced with the paid chain, with the payment of 20000 to the
@@ -2323,13 +2370,17 @@ paymentSigned home = do
   _ <- answer home ["signtx", nosig] seedOnce
   return nosig
 
--- | The state of the one pending transaction of a home: signed, and online
-onePendingState :: FilePath -> IO (Maybe (Bool, Bool))
-onePendingState home = do
+-- | The one pending transaction of a home
+onePendingTx :: FilePath -> IO TxInfo
+onePendingTx home = do
   listed <- hwJson home ["pendingtxs"] []
   case listed of
-    ResponsePendingTxs _ [(_, info)] -> return (pendingState info)
+    ResponsePendingTxs _ [(_, info)] -> return info
     other -> fail $ "Not one pending transaction: " <> show other
+
+-- | The state of the one pending transaction of a home: signed, and online
+onePendingState :: FilePath -> IO (Maybe (Bool, Bool))
+onePendingState home = pendingState <$> onePendingTx home
 
 -- | The question of sendtx
 sendQuestion :: Text
@@ -3046,6 +3097,14 @@ bumpFeeSpec ctx = do
         (errorOf <$> hwJson home ["bumpfee", stuck, "--feerate", "30"] [])
           `shouldReturn` Right ("A replacement of the transaction is pending: " <> Text.pack nosig <> ". Send it, or delete it with deletetx")
 
+    it "names its pending replacement by its txid once signed" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        stuck <- sentPayment home
+        nosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--feerate", "20"] []
+        txid <- txidOf =<< txOf =<< answer home ["signtx", nosig] seedOnce
+        (errorOf <$> hwJson home ["bumpfee", stuck, "--feerate", "30"] [])
+          `shouldReturn` Right ("A replacement of the transaction is pending: " <> Text.pack txid <> ". Send it, or delete it with deletetx")
+
     it "is not replaced again once the sync has found it on the network either" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         stuck <- sentPayment home
@@ -3496,6 +3555,26 @@ pendingListSpec ctx =
         let duringRun time = addUTCTime (-1) started <= time && time <= addUTCTime 1 ended
         (fmap (fmap duringRun) <$> times) `shouldBe` Right [Just True]
 
+    it "show an unsigned transaction by its nosigHash" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"] []
+        run <- hw home ["pendingtxs"] []
+        runOut run `shouldSatisfy` Text.isInfixOf ("NoSigHash: " <> Text.pack nosig)
+
+    it "show a signed transaction by its txid" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        _ <- paymentSigned home
+        txid <- txidOf =<< onePendingTx home
+        run <- hw home ["pendingtxs"] []
+        runOut run `shouldSatisfy` Text.isInfixOf ("TxHash   : " <> Text.pack txid)
+
+    it "hide the nosigHash of a signed transaction" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        nosig <- paymentSigned home
+        run <- hw home ["pendingtxs"] []
+        runOut run `shouldNotSatisfy` Text.isInfixOf (Text.pack nosig)
+
     it "show the time they were created" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
@@ -3564,11 +3643,7 @@ balancesListSpec ctx =
 
 -- | The nosigHash of the one pending transaction of a home
 onePendingNosig :: FilePath -> IO Text
-onePendingNosig home = do
-  listed <- hwJson home ["pendingtxs"] []
-  case listed of
-    ResponsePendingTxs _ [(_, info)] -> Text.pack <$> nosigOf info
-    other -> fail $ "Not one pending transaction: " <> show other
+onePendingNosig home = Text.pack <$> (nosigOf =<< onePendingTx home)
 
 -- | Whether the output of a run shows the command
 showsCommand :: Text -> Run -> Bool
@@ -3602,12 +3677,13 @@ nextStepSpec ctx =
         run `shouldSatisfy` showsCommand ("hw signtx " <> nosig)
         run `shouldSatisfy` showsCommand ("hw exporttx " <> nosig <> " FILE")
 
-    it "is to send the transaction signtx signed in the wallet, by its nosigHash" $
+    it "is to send the transaction signtx signed in the wallet, by its txid" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--feerate", "10"] []
         run <- hw home ["signtx", nosig] seedOnce
-        run `shouldSatisfy` showsCommand ("hw sendtx " <> Text.pack nosig)
+        txid <- txidOf =<< onePendingTx home
+        run `shouldSatisfy` showsCommand ("hw sendtx " <> Text.pack txid)
 
     it "is to send the file signtx signed offline, from the online computer" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
@@ -3643,7 +3719,7 @@ nextStepSpec ctx =
         modifyIORef chain $ \c -> c {chainTxs = c.chainTxs <> [(other, Nothing)]}
         run <- hw home ["sync"] []
         run `shouldSatisfy` showsCommand "hw pendingtxs --account main"
-        run `shouldSatisfy` showsCommand "hw deletetx NOSIGHASH"
+        run `shouldSatisfy` showsCommand "hw deletetx HASH"
 
     -- The key of the old wallet is in a file, and the sweep pays main
     it "is to sign the sweep preparesweep made with the keys of its file, or to export it to sign it where the keys are" $
@@ -3680,14 +3756,15 @@ nextStepSpec ctx =
         run <- hw home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--feerate", "10"] []
         run `shouldSatisfy` showsCommand ("hw signsweep --input " <> Text.pack (home </> "sweep.json") <> " --prvkeys " <> Text.pack keys)
 
-    it "is to send the sweep signsweep signed in the wallet, by its nosigHash" $
+    it "is to send the sweep signsweep signed in the wallet, by its txid" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
         createMain home
         _ <- answer home ["receive"] []
         keys <- writeKeyFile home
         nosig <- nosigOf =<< txOf =<< answer home ["preparesweep", "--prvkeys", keys, "--sweepto", textOf (externalAddr 0), "--feerate", "10"] []
         run <- hw home ["signsweep", nosig, "--prvkeys", keys] []
-        run `shouldSatisfy` showsCommand ("hw sendtx " <> Text.pack nosig)
+        txid <- txidOf =<< onePendingTx home
+        run `shouldSatisfy` showsCommand ("hw sendtx " <> Text.pack txid)
 
     it "is to send the file of a sweep outside the wallet that signsweep signed" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do

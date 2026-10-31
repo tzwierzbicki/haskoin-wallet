@@ -15,7 +15,7 @@ import Control.Monad.Reader (MonadTrans (lift))
 import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
 import Data.Containers.ListUtils (nubOrd)
-import Data.List (nub)
+import Data.List (find, nub)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, isJust, listToMaybe, mapMaybe)
 import Data.Set (Set)
@@ -109,9 +109,30 @@ lookupPendingTx pendingHash = do
   rowM <- lift $ P.getEntity $ DBPendingTxKey $ hashBytes pendingHash
   liftEither $ mapM fromRow rowM
 
--- | The pending transaction with the given nosigHash, which must exist
+-- | The pending transaction a command names, if there is one: by its
+-- nosigHash, or by its id once it is signed, as hw shows it then. The rows
+-- are keyed by the nosigHash. An id is looked for among all the rows, which
+-- are few: the sync retires a transaction once the network lists it.
+findPendingTx :: (MonadUnliftIO m) => TxHash -> ExceptT String (DB m) (Maybe PendingTx)
+findPendingTx named = do
+  byNosig <- lookupPendingTx named
+  case byNosig of
+    Just held -> return (Just held)
+    Nothing -> do
+      held <- liftEither . mapM fromRow =<< lift (pendingRows Nothing Nothing Nothing)
+      return $ find (signedWithId named) held
+
+-- | The pending transaction a command names, which must exist: by its
+-- nosigHash, or by its id once it is signed
 requirePendingTx :: (MonadUnliftIO m) => TxHash -> ExceptT String (DB m) PendingTx
-requirePendingTx pendingHash = lookupPendingTx pendingHash >>= liftMaybe noPendingTx
+requirePendingTx named = findPendingTx named >>= liftMaybe noPendingTx
+
+-- | Whether the pending transaction is signed and has the id. An unsigned
+-- transaction has no id yet: the hash of its bytes changes once signed.
+signedWithId :: TxHash -> PendingTx -> Bool
+signedWithId tid p = isSigned tx && txHash tx == tid
+  where
+    tx = txSignDataTx p.pendingTxData
 
 -- | The rows of an account, or of every account, newest first, and those
 -- created at the same time by their nosigHashes, so that the order is
@@ -150,14 +171,16 @@ pendingAfter ctx accIdM afterM countM = do
     acc <- getAccountById p.pendingTxAccount
     (acc,) <$> pendingSummary ctx acc p
 
--- | Since when the account, or any account, holds the pending transaction,
--- the one --after names, or why it does not
-heldSince :: (MonadUnliftIO m) => Maybe DBAccountId -> TxHash -> ExceptT String (DB m) UTCTime
-heldSince accIdM nosigH = do
-  p <- requirePendingTx nosigH
+-- | Where the listing goes on after the pending transaction --after names,
+-- by either of its hashes: when it was created, and its nosigHash, which
+-- orders the transactions created at the same time. Or why the account, or
+-- any account, does not hold it.
+pendingCursor :: (MonadUnliftIO m) => Maybe DBAccountId -> TxHash -> ExceptT String (DB m) (UTCTime, TxHash)
+pendingCursor accIdM named = do
+  p <- requirePendingTx named
   case accIdM of
     Just accId | p.pendingTxAccount /= accId -> throwError "The pending transaction is not in the account"
-    _ -> return p.pendingTxCreated
+    _ -> return (p.pendingTxCreated, nosigHash (txSignDataTx p.pendingTxData))
 
 -- | The transaction of the signing data as the account sees it: parsed
 -- against the account's key, with the labels of its addresses
@@ -457,10 +480,11 @@ type BeforeSending m = Network -> TxInfo -> ExceptT String (DB m) ()
 -- it. Once it does, the transaction is marked online, for the sync to send
 -- again should the store lose it, and its raw transaction is stored. If the
 -- store does not see it, nothing is recorded and the answer says so. The
--- signatures were checked when the transaction was imported.
+-- signatures were checked when the transaction was imported. The
+-- transaction is named by either of its hashes.
 sendPending :: (MonadUnliftIO m) => Ctx -> (Network -> Store) -> BeforeSending m -> TxHash -> ExceptT String (DB m) (DBAccount, TxInfo)
-sendPending ctx storeOn beforeSending nosigH = do
-  held <- requirePendingTx nosigH
+sendPending ctx storeOn beforeSending named = do
+  held <- requirePendingTx named
   acc <- getAccountById held.pendingTxAccount
   let signedTx = txSignDataTx held.pendingTxData
       store = storeOn (accountNetwork acc)
@@ -474,7 +498,7 @@ sendPending ctx storeOn beforeSending nosigH = do
   fromStore $ storeHealth store
   accepted <- fromStore $ broadcast store signedTx
   unless accepted $ throwError notAccepted
-  _ <- lift $ setPendingTxOnline nosigH
+  _ <- lift $ setPendingTxOnline (nosigHash signedTx)
   lift $ insertRawTx signedTx
   -- The pending transactions it replaces are gone from the network once it
   -- spreads, and the sync would send them again. Their raw transactions go
@@ -522,7 +546,7 @@ transactionAccount ctx nameM netM tsd = do
 
 -- | What sending a signed transaction from a file did
 data Sent
-  = -- | A pending transaction of the wallet was sent, as by its nosigHash
+  = -- | A pending transaction of the wallet was sent, as by its hash
     SentPending DBAccount TxInfo
   | -- | A transaction the wallet does not hold was handed to the store of
     -- the network
@@ -532,7 +556,7 @@ data Sent
 -- | Send a signed transaction from a file, with the network it is for when
 -- given. One the wallet holds as pending, the file an offline signer
 -- returns, takes the place of the version held and is sent like one sent by
--- its nosigHash: marked online, its raw transaction stored. One the wallet
+-- its hash: marked online, its raw transaction stored. One the wallet
 -- does not hold, a sweep of outside coins for instance, is checked against
 -- the coins it spends and handed to the store of the given network, and
 -- nothing in the wallet is updated.
@@ -559,13 +583,13 @@ sendSigned ctx storeOn beforeSending netM tsd = do
       unless accepted $ throwError notAccepted
       return $ SentOutside net (txHash signedTx)
 
--- | Delete a pending transaction, freeing the coins it held. One the user
--- sent is abandoned only when the store does not know it: a transaction in
--- the network's mempool or in the chain may still confirm, and the sync
--- retires it once it is listed.
+-- | Delete a pending transaction, named by either of its hashes, freeing
+-- the coins it held. One the user sent is abandoned only when the store
+-- does not know it: a transaction in the network's mempool or in the chain
+-- may still confirm, and the sync retires it once it is listed.
 deleteTx :: (MonadUnliftIO m) => Ctx -> (Network -> Store) -> TxHash -> ExceptT String (DB m) (Natural, Natural)
-deleteTx ctx storeOn nosigH = do
-  held <- requirePendingTx nosigH
+deleteTx ctx storeOn named = do
+  held <- requirePendingTx named
   let txid = txHash (txSignDataTx held.pendingTxData)
   when held.pendingTxOnline $ do
     acc <- getAccountById held.pendingTxAccount

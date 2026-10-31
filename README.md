@@ -77,8 +77,8 @@ hw txs --max 20 --json
 hw txs --max 20 --after TXID --json
 ```
 
-The examples below write `ADDRESS`, `NOSIGHASH`, `TXID` and `TXHASH` where you
-put your own values.
+The examples below write `ADDRESS`, `NOSIGHASH`, `TXID`, `HASH` and `TXHASH`
+where you put your own values.
 
 ### A first payment
 
@@ -89,13 +89,15 @@ hw receive --label "first deposit"          # give this address to the payer
 hw sync                                     # once the payment is sent
 hw preparetx ADDRESS:0.0005 --feerate median
 hw signtx NOSIGHASH                         # type the mnemonic again
-hw sendtx NOSIGHASH
+hw sendtx TXID                              # the txid signtx shows
 hw sync
 ```
 
 `preparetx` prints the nosigHash of the new transaction, and the commands to
 run next. A nosigHash is a hash of the transaction without its signatures. It
-names the transaction from preparation to sending.
+names the transaction until it is signed. `signtx` then prints its txid, the id
+the network knows it by, and `pendingtxs` shows the txid from then on. The
+commands take either hash.
 
 ### Signing on an offline computer
 
@@ -305,7 +307,7 @@ hw signtx --input unsigned.json --output signed.json
 up to ten seconds for the server to see it.
 
 ```console
-hw sendtx NOSIGHASH
+hw sendtx TXID
 hw sendtx --input signed.json
 ```
 
@@ -318,7 +320,7 @@ pays. Sign and send the replacement like any payment.
 ```console
 hw bumpfee TXID --feerate high
 hw signtx NOSIGHASH
-hw sendtx NOSIGHASH
+hw sendtx TXID                              # the txid of the replacement
 ```
 
 ### Transactions
@@ -331,7 +333,8 @@ hw txs --max 20 --after TXID
 ```
 
 **`hw pendingtxs`** lists the pending transactions: prepared, signed, or sent
-and not yet seen by `sync`. A conflicted one can no longer be sent.
+and not yet seen by `sync`. Each is shown by its nosigHash until it is signed,
+then by its txid. A conflicted one can no longer be sent.
 
 ```console
 hw pendingtxs
@@ -344,7 +347,7 @@ wallet.
 hw reviewtx unsigned.json
 ```
 
-**`hw exporttx NOSIGHASH FILE`** writes a pending transaction to a file.
+**`hw exporttx HASH FILE`** writes a pending transaction to a file.
 **`hw importtx FILE`** adds a transaction file to the pending transactions, or
 replaces the pending one with its signed version.
 
@@ -353,11 +356,12 @@ hw exporttx NOSIGHASH unsigned.json
 hw importtx signed.json
 ```
 
-**`hw deletetx NOSIGHASH`** deletes a pending transaction and frees its coins.
-A transaction you sent can be deleted only once the server no longer knows it.
+**`hw deletetx HASH`** deletes a pending transaction and frees its coins. Name
+it by its nosigHash, or by its txid once it is signed. A transaction you sent
+can be deleted only once the server no longer knows it.
 
 ```console
-hw deletetx NOSIGHASH
+hw deletetx HASH
 ```
 
 ### Sweeps
@@ -371,7 +375,7 @@ of this wallet is kept as a pending transaction.
 ```console
 hw preparesweep --sweepfrom OLDADDRESS --sweepto MYADDRESS --feerate median
 hw signsweep NOSIGHASH --prvkeys keys.txt
-hw sendtx NOSIGHASH
+hw sendtx TXID
 ```
 
 A sweep that pays no address of this wallet needs `--network` and `--output`,

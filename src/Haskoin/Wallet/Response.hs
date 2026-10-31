@@ -60,9 +60,9 @@ data Response
     ResponseOutsideTx !Network !TxInfo
   | -- | A transaction the wallet does not hold, sent on its network
     ResponseSentTx !Network !TxHash
-  | -- | A pending transaction deleted, by its nosigHash, with the number of
-    -- coins and of addresses it held
-    ResponseDeleteTx !TxHash !Natural !Natural
+  | -- | A pending transaction deleted, by its nosigHash and its id if it
+    -- was signed, with the number of coins and of addresses it held
+    ResponseDeleteTx !TxHash !(Maybe TxHash) !Natural !Natural
   | -- | Coins of the account
     ResponseCoins !DBAccount ![JsonCoin]
   | -- | A signed message, its signature in base64, and the address that
@@ -112,8 +112,8 @@ instance ToJSON Response where
       typed "prepared" ["account" .= acc, "tx" .= marshalValue (accountNetwork acc) info, "left" .= left]
     ResponseOutsideTx net info -> typed "outsidetx" ["network" .= net.name, "tx" .= marshalValue net info]
     ResponseSentTx net txid -> typed "senttx" ["network" .= net.name, "txid" .= txid]
-    ResponseDeleteTx nosigH coins addrs ->
-      typed "deletetx" ["nosighash" .= nosigH, "freedcoins" .= coins, "freedaddrs" .= addrs]
+    ResponseDeleteTx nosigH txidM coins addrs ->
+      typed "deletetx" ["nosighash" .= nosigH, "txid" .= txidM, "freedcoins" .= coins, "freedaddrs" .= addrs]
     ResponseCoins acc coins -> typed "coins" ["account" .= acc, "coins" .= (marshalValue (accountNetwork acc) <$> coins)]
     ResponseSignMsg message signature addr ->
       typed "signmsg" ["message" .= message, "signature" .= signature, "address" .= addr]
@@ -155,7 +155,7 @@ instance FromJSON Response where
         net <- network o
         ResponseOutsideTx net <$> (unmarshalValue net =<< o .: "tx")
       "senttx" -> ResponseSentTx <$> network o <*> o .: "txid"
-      "deletetx" -> ResponseDeleteTx <$> o .: "nosighash" <*> o .: "freedcoins" <*> o .: "freedaddrs"
+      "deletetx" -> ResponseDeleteTx <$> o .: "nosighash" <*> o .:? "txid" <*> o .: "freedcoins" <*> o .: "freedaddrs"
       "coins" -> do
         acc <- o .: "account"
         ResponseCoins acc <$> (mapM (unmarshalValue (accountNetwork acc)) =<< o .: "coins")

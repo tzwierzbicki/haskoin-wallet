@@ -69,9 +69,10 @@ data Command
     CommandReviewTx !(Maybe Text) !FilePath
   | -- | The account, and the transaction file
     CommandImportTx !(Maybe Text) !FilePath
-  | -- | The nosigHash of the pending transaction, and the file to write it to
+  | -- | The pending transaction, by either of its hashes, and the file to
+    -- write it to
     CommandExportTx !TxHash !FilePath
-  | -- | The nosigHash of the pending transaction
+  | -- | The pending transaction, by either of its hashes
     CommandDeleteTx !TxHash
   | -- | What to sign, and the parts the mnemonic is typed in
     CommandSignTx !Signing !Natural
@@ -82,8 +83,8 @@ data Command
     CommandCoins !(Maybe Text) !Bool !(Paging OutPoint)
   | CommandLockCoin !OutPoint
   | CommandUnlockCoin !OutPoint
-  | -- | The nosigHash of a pending transaction, or the file of a signed
-    -- one, and whether to send it without asking
+  | -- | A pending transaction, by its txid or its nosigHash, or the file
+    -- of a signed one, and whether to send it without asking
     CommandSendTx !(Maybe TxHash) !(Maybe FilePath) !Bool
   | CommandBumpFee !BumpFee
   | -- | The account, or every one, and whether to sync from the start
@@ -324,7 +325,10 @@ A payment takes three steps:
 
   hw preparetx ADDRESS:AMOUNT    prepare it, without any key
   hw signtx NOSIGHASH            sign it with the mnemonic
-  hw sendtx NOSIGHASH            send it to the network
+  hw sendtx TXID                 send it to the network
+
+preparetx shows the nosigHash of the new transaction. signtx shows its txid,
+the id the network knows it by.
 
 To sign on an offline computer, create the account there with createacc. Copy
 it to the online computer with exportacc and importacc. Then carry each
@@ -1003,8 +1007,9 @@ on an offline computer if you like, and sendtx sends it to the network.
 The new transaction is kept as a pending transaction, which pendingtxs lists.
 --output also writes it to a file, to carry to an offline computer. A pending
 transaction is named by its nosigHash, a hash of the transaction without its
-signatures. It stays the same once the transaction is signed. The coins it
-spends stay locked while it is pending. deletetx deletes it and frees them.
+signatures. Once signed, it is shown by its txid instead, and the commands
+take either hash. The coins it spends stay locked while it is pending.
+deletetx deletes it and frees them.
 
 On Bitcoin, the transaction is marked replaceable (BIP 125). Until it
 confirms, bumpfee can replace it with one that pays a higher fee. Bitcoin Cash
@@ -1289,8 +1294,9 @@ pendingTxsCommand =
 A pending transaction is one that preparetx, preparesendall, bumpfee or
 preparesweep made, or that importtx added. It is unsigned, signed, or sent.
 `sync` retires it once the network lists it. The newest come first, each with
-its account, its nosigHash and when it was created. The other commands name a
-pending transaction by its nosigHash.
+its account, its hash and when it was created. The hash is the nosigHash of an
+unsigned transaction, and the txid of a signed one. The other commands name a
+pending transaction by that hash. The nosigHash of a signed one works too.
 
 A transaction marked conflicted spends a coin that another transaction has
 spent, or that is gone, as the server said at the last sync. It cannot be sent
@@ -1299,7 +1305,7 @@ while that lasts. Delete it with deletetx, which frees its coins.
       args =
         CommandPendingTxs
           <$> onlyAccountOption
-          <*> pagingOptions (afterOption "NOSIGHASH" (maybeReader $ hexToTxHash . cs) "Start after this pending transaction")
+          <*> pagingOptions (afterOption "HASH" (maybeReader $ hexToTxHash . cs) "Start after this pending transaction")
     }
 
 {- reviewtx -}
@@ -1335,7 +1341,7 @@ exportTxCommand =
       details = importExportTxDetails,
       args =
         CommandExportTx
-          <$> nosigHashArg
+          <$> pendingHashArg
           <*> fileArgument "The file to write. It must not exist yet."
     }
 
@@ -1343,9 +1349,8 @@ importExportTxDetails :: String
 importExportTxDetails =
   [r|
 exporttx writes a pending transaction to a file, signed or not, to carry it to
-an offline computer. The transaction is named by its nosigHash, a hash of the
-transaction without its signatures. It stays the same once the transaction is
-signed. The file names the network of the transaction.
+an offline computer. Name it by the hash pendingtxs shows: its nosigHash, or
+its txid once it is signed. The file names the network of the transaction.
 
 importtx adds the transaction of a file to the pending transactions of its
 account, and locks the coins it spends. When the wallet holds it already, the
@@ -1355,11 +1360,27 @@ signatures are checked first.
 sendtx --input sends a signed file without importtx.
 |]
 
+-- | A pending transaction to sign, by its nosigHash
 nosigHashArg :: Args TxHash
 nosigHashArg =
   argument (maybeReader $ hexToTxHash . cs) $
     metavar "NOSIGHASH"
       <> help "The nosigHash of a pending transaction, as pendingtxs shows it"
+
+-- | A pending transaction, by either of its hashes
+pendingHashArg :: Args TxHash
+pendingHashArg =
+  argument (maybeReader $ hexToTxHash . cs) $
+    metavar "HASH"
+      <> help "A pending transaction, by the hash pendingtxs shows: its nosigHash, or its txid once it is signed"
+
+-- | A signed pending transaction to send, by its txid. Its nosigHash works
+-- too, as the user may have noted it before signing.
+signedTxidArg :: Args TxHash
+signedTxidArg =
+  argument (maybeReader $ hexToTxHash . cs) $
+    metavar "TXID"
+      <> help "The txid of a signed pending transaction, as signtx and pendingtxs show it. Its nosigHash works too."
 
 {- importtx -}
 
@@ -1397,7 +1418,7 @@ accepted it. While the server lists it, it may still confirm, and the next
 Delete a transaction that pendingtxs marks as conflicted. One of its coins was
 spent by another transaction, or is gone, so it can no longer be sent.
 |],
-      args = CommandDeleteTx <$> nosigHashArg
+      args = CommandDeleteTx <$> pendingHashArg
     }
 
 {- signtx -}
@@ -1414,10 +1435,11 @@ signtx asks for the mnemonic and the passphrase of the account, and signs the
 transaction. It asks again while they do not match the account.
 
 Give a pending transaction by its NOSIGHASH. The signed transaction then takes
-its place in the wallet. Or give a transaction file with --input, on an
-offline computer for example. The signed transaction then goes to the --output
-file. Without --output, hw offers to replace the --input file, since the
-unsigned file is of no use once signed. It asks this before the mnemonic.
+its place in the wallet, shown by its txid. Or give a transaction file with
+--input, on an offline computer for example. The signed transaction then goes
+to the --output file. Without --output, hw offers to replace the --input file,
+since the unsigned file is of no use once signed. It asks this before the
+mnemonic.
 
 Signing sends nothing. Check the transaction with reviewtx or pendingtxs.
 Then send it with sendtx, or delete it with deletetx.
@@ -1623,10 +1645,11 @@ nothing is recorded, and sendtx says so. The network may have refused the
 transaction, for a fee below what the nodes relay for example. Or it may just
 be slow. Run sendtx again later.
 
-Give a pending transaction by its NOSIGHASH. Once the server sees it, it is
-marked as sent. `sync` then sends it again whenever the server loses it, and
-retires it once the network lists it. A transaction the network refuses for
-good is sent again on every sync, until you delete it with deletetx.
+Give a pending transaction by its TXID, as signtx and pendingtxs show it. Its
+nosigHash works too. Once the server sees it, it is marked as sent. `sync`
+then sends it again whenever the server loses it, and retires it once the
+network lists it. A transaction the network refuses for good is sent again on
+every sync, until you delete it with deletetx.
 
 Give a signed file with --input, such as the one an offline computer returns.
 When the wallet holds its transaction as pending, the file takes its place and
@@ -1639,7 +1662,7 @@ transaction again.
 |],
       args =
         CommandSendTx
-          <$> optional nosigHashArg
+          <$> optional signedTxidArg
           <*> inputFileMaybeOption
           <*> yesOption "Send without showing the transaction and asking first"
     }
@@ -1978,9 +2001,9 @@ Or type them on the terminal, where they are not shown, with --prvkeys - or
 without --prvkeys.
 
 Give a pending sweep by its NOSIGHASH. The signed sweep then takes its place
-in the wallet. Or give a sweep file with --input. The signed sweep then goes
-to the --output file. Without --output, hw offers to replace the --input file.
-It asks this before the keys.
+in the wallet, shown by its txid. Or give a sweep file with --input. The
+signed sweep then goes to the --output file. Without --output, hw offers to
+replace the --input file. It asks this before the keys.
 
 A sweep that pays no account of this wallet needs no account here either. It
 is signed on the network its file names. A file from an earlier hw names

@@ -71,7 +71,7 @@ import Haskoin.Wallet.Coin (coinText)
 import Haskoin.Wallet.CoinSelection (CoinSelection (..), FeePayer (..), Selection (..))
 import Haskoin.Wallet.Config (Config)
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.PendingTx (PendingTx (..), changeAddress, lookupPendingTx, pendingTxs)
+import Haskoin.Wallet.PendingTx (PendingTx (..), changeAddress, lookupPendingTx, pendingTxs, signedWithId)
 import Haskoin.Wallet.RawTx (getRawTx, lookupRawTx)
 import Haskoin.Wallet.Store (Store, fromStore, rawTransactions)
 import Haskoin.Wallet.TxBuilding (BuiltTx (..), ChosenPayment (..), CoinControl (..), WalletCoins (..), assemblePayment, choosePayment, recipientsPayFee)
@@ -115,9 +115,7 @@ transactionAccounts tid = do
 
 -- | The signed pending transaction of the account with the id, sent or not
 sentPending :: (MonadUnliftIO m) => DBAccountId -> TxHash -> ExceptT String (DB m) (Maybe PendingTx)
-sentPending accId tid = find withId <$> pendingTxs accId
-  where
-    withId p = isSigned (txSignDataTx (pendingTxData p)) && txHash (txSignDataTx (pendingTxData p)) == tid
+sentPending accId tid = find (signedWithId tid) <$> pendingTxs accId
 
 -- | The pending transaction of the account that replaces the transaction,
 -- if any
@@ -139,7 +137,7 @@ stuckTransaction ctx store accId acc tid = do
     throwError $
       if r.pendingTxOnline
         then "The transaction is replaced by " <> hex (txHash (txSignDataTx r.pendingTxData)) <> ", which is sent: bump that one instead"
-        else "A replacement of the transaction is pending: " <> hex (nosigHash (txSignDataTx r.pendingTxData)) <> ". Send it, or delete it with deletetx"
+        else "A replacement of the transaction is pending: " <> hex (shownHash (txSignDataTx r.pendingTxData)) <> ". Send it, or delete it with deletetx"
   byNosig <- lookupPendingTx tid
   bySignedId <- sentPending accId tid
   case catMaybes [byNosig, bySignedId] of

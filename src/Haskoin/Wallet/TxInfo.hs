@@ -185,6 +185,11 @@ data PendingStatus = PendingStatus
 pendingSigned :: PendingStatus -> Bool
 pendingSigned = isJust . pendingTxid
 
+-- | The hash hw shows for a transaction in preparation: its nosigHash
+-- until it is signed, then its id. The commands take either hash.
+pendingShownHash :: PendingStatus -> TxHash
+pendingShownHash status = fromMaybe (pendingNosigHash status) (pendingTxid status)
+
 -- | A transaction as hw reports it: what it means to the account, and
 -- where it stands
 data TxInfo = TxInfo

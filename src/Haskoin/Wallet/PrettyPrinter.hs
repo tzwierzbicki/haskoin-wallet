@@ -24,7 +24,7 @@ import Data.Char (isAlphaNum, toUpper)
 import Data.List (intercalate, intersperse, nub)
 import Data.List.Split (chunksOf)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (isJust)
+import Data.Maybe (fromMaybe, isJust)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -352,9 +352,12 @@ statusLines (OnChain status) =
        | chainDead status
        ]
     <> [field 9 "Confs" <> confirmationsPrinter (chainConfirmations status)]
+-- A transaction in preparation shows one hash, the one to name it by: its
+-- nosigHash until it is signed, then its id, which the network will know.
 statusLines (Pending status) =
-  [txHashPrinter txid | Just txid <- [pendingTxid status]]
-    <> [field 9 "NoSigHash" <> styled NoSigHash (cs $ txHashToHex (pendingNosigHash status))]
+  [ field 9 (if pendingSigned status then "TxHash" else "NoSigHash")
+      <> styled PendingHash (cs $ txHashToHex (pendingShownHash status))
+  ]
     <> [field 9 "Created" <> text (timeText time) | Just time <- [pendingCreated status]]
     <> [field 9 "Replaces" <> text (cs $ txHashToHex replaced) | replaced <- pendingReplaces status]
     -- An unsigned transaction waits for signtx
@@ -460,10 +463,11 @@ responsePrinter unit answer =
           [ styled Field "Sent:" <+> text (cs $ txHashToHex h),
             indent 2 $ styled Field "Network:" <+> text net.name
           ]
-    ResponseDeleteTx h c a ->
+    -- By the hash pendingtxs showed: the id of a signed transaction
+    ResponseDeleteTx nosigH txidM c a ->
       renderIO $
         vcat
-          [ styled Field "Deleted:" <+> styled NoSigHash (cs $ txHashToHex h),
+          [ styled Field "Deleted:" <+> styled PendingHash (cs $ txHashToHex (fromMaybe nosigH txidM)),
             indent 2 $ styled Field "Freed coins:" <+> text (show c),
             indent 2 $ styled Field "Freed internal addresses:" <+> text (show a)
           ]
@@ -636,18 +640,18 @@ nextStepsPrinter :: Command -> Response -> Maybe (Doc Style)
 nextStepsPrinter cmd res =
   case (cmd, res) of
     (CommandPrepareTx opts, ResponsePrepared _ info _)
-      | Just nosig <- nosigOf info -> afterPreparing opts.output nosig
+      | Just shown <- shownOf info -> afterPreparing opts.output shown
     (CommandPrepareSendAll opts, ResponsePrepared _ info _)
-      | Just nosig <- nosigOf info -> afterPreparing opts.output nosig
+      | Just shown <- shownOf info -> afterPreparing opts.output shown
     (CommandBumpFee opts, ResponsePrepared _ info _)
-      | Just nosig <- nosigOf info -> afterPreparing opts.output nosig
+      | Just shown <- shownOf info -> afterPreparing opts.output shown
     -- The keys of a file at hand for the sweep are the ones to sign it with
     (CommandPrepareSweep opts, ResponseTx _ info)
-      | Just nosig <- nosigOf info ->
+      | Just shown <- shownOf info ->
           stepsPrinter
-            [ ("Next, sign it with the private keys of the coins", hwLine "signsweep" (nosigWord nosig : keysArgs opts.keys)),
+            [ ("Next, sign it with the private keys of the coins", hwLine "signsweep" (pendingHashWord shown : keysArgs opts.keys)),
               case opts.output of
-                Nothing -> ("Or export it, to sign it where the keys are", hwLine "exporttx" [nosigWord nosig, metavarWord "FILE"])
+                Nothing -> ("Or export it, to sign it where the keys are", hwLine "exporttx" [pendingHashWord shown, metavarWord "FILE"])
                 Just file -> ("Or sign its file where the keys are", hwLine "signsweep" [optionWord "--input", fileWord file])
             ]
     -- A sweep outside the wallet is in its file only
@@ -667,28 +671,29 @@ nextStepsPrinter cmd res =
             conflicted ->
               stepsPrinter
                 [ ("Next, find the pending transaction in conflict, which can no longer be sent", hwLine "pendingtxs" (accountArgs (syncResAccount <$> conflicted))),
-                  ("Then delete it, to free its coins", hwLine "deletetx" [metavarWord "NOSIGHASH"])
+                  ("Then delete it, to free its coins", hwLine "deletetx" [metavarWord "HASH"])
                 ]
     _ -> Nothing
   where
-    nosigOf info = case txInfoStatus info of
-      Pending status -> Just (cs (txHashToHex (pendingNosigHash status)))
+    -- The hash of a transaction in preparation, as its answer shows it
+    shownOf info = case txInfoStatus info of
+      Pending status -> Just (cs (txHashToHex (pendingShownHash status)))
       OnChain _ -> Nothing
     -- A payment of the wallet is signed with its mnemonic, here or on an
     -- offline computer
-    afterPreparing output nosig =
+    afterPreparing output shown =
       stepsPrinter
-        [ ("Next, sign it", hwLine "signtx" [nosigWord nosig]),
+        [ ("Next, sign it", hwLine "signtx" [pendingHashWord shown]),
           case output of
-            Nothing -> ("Or export it, to sign it on an offline computer", hwLine "exporttx" [nosigWord nosig, metavarWord "FILE"])
+            Nothing -> ("Or export it, to sign it on an offline computer", hwLine "exporttx" [pendingHashWord shown, metavarWord "FILE"])
             Just file -> ("Or sign its file on an offline computer", hwLine "signtx" [optionWord "--input", fileWord file])
         ]
-    -- A transaction signed in the wallet is sent by its nosigHash, one
+    -- A transaction signed in the wallet is sent by its id, one
     -- signed from a file by the file signed: the --output file, or the
     -- --input file it replaced
     afterSigning signing info
-      | Just nosig <- nosigOf info, isJust signing.nosigHash =
-          stepsPrinter [("Next, send it to the network", hwLine "sendtx" [nosigWord nosig])]
+      | Just shown <- shownOf info, isJust signing.nosigHash =
+          stepsPrinter [("Next, send it to the network", hwLine "sendtx" [pendingHashWord shown])]
       | Just file <- signing.output <|> signing.input =
           stepsPrinter [("Next, send its file from the online computer", hwLine "sendtx" [optionWord "--input", fileWord file])]
       | otherwise = Nothing
@@ -720,8 +725,9 @@ optionWord = styled Option
 metavarWord :: String -> Doc Style
 metavarWord = styled Metavar
 
-nosigWord :: String -> Doc Style
-nosigWord = styled NoSigHash
+-- | The hash that names a pending transaction
+pendingHashWord :: String -> Doc Style
+pendingHashWord = styled PendingHash
 
 fileWord :: String -> Doc Style
 fileWord = styled UserText . shellWord

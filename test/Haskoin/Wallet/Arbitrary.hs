@@ -262,6 +262,7 @@ arbitraryResponse net ctx =
       ResponseSentTx <$> arbitraryNetwork <*> arbitraryTxHash,
       ResponseDeleteTx
         <$> arbitraryTxHash
+        <*> arbitraryMaybe arbitraryTxHash
         <*> arbitraryNatural
         <*> arbitraryNatural,
       ResponseCoins

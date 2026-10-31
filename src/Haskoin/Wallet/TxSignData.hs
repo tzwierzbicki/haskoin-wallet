@@ -9,8 +9,9 @@
 -- it, the signers sign it, and the commands write it to files and keep it
 -- among the pending transactions of the database, as JSON. Whether the
 -- transaction is signed is read from the transaction itself. Before and
--- after signing, it is identified by its 'nosigHash'. A file holds it with
--- the network of the transaction, a 'TxFile'.
+-- after signing, the database keys it by its 'nosigHash'. hw shows it by
+-- its 'shownHash'. A file holds it with the network of the transaction, a
+-- 'TxFile'.
 module Haskoin.Wallet.TxSignData where
 
 import Control.Monad
@@ -128,3 +129,9 @@ isSigned tx = not (null tx.inputs) && and (zipWith signedInput tx.inputs witness
 -- the witnesses, which changes the hash of a SegWit transaction once signed.)
 nosigHash :: Tx -> TxHash
 nosigHash tx = nosigTxHash tx {witness = []}
+
+-- | The hash hw shows for a transaction in preparation: its nosigHash until
+-- it is signed, then its id, which the network and the explorers know. The
+-- commands take either hash.
+shownHash :: Tx -> TxHash
+shownHash tx = if isSigned tx then txHash tx else nosigHash tx

@@ -166,12 +166,12 @@ commandResponse ctx cfg unit = \case
   CommandPendingTxs account paging -> cmdPendingTxs ctx cfg account paging
   CommandReviewTx account file -> cmdReviewTx ctx cfg account file
   CommandImportTx account file -> cmdImportTx ctx cfg account file
-  CommandExportTx nosigH file -> cmdExportTx cfg nosigH file
-  CommandDeleteTx nosigH -> cmdDeleteTx ctx cfg nosigH
+  CommandExportTx named file -> cmdExportTx cfg named file
+  CommandDeleteTx named -> cmdDeleteTx ctx cfg named
   CommandPrepareTx opts -> cmdPrepareTx ctx cfg unit opts
   CommandPrepareSendAll opts -> cmdPrepareSendAll ctx cfg unit opts
   CommandSignTx signing parts -> cmdSignTx ctx cfg signing parts
-  CommandSendTx nosigHM fileM yes -> cmdSendTx ctx cfg unit nosigHM fileM yes
+  CommandSendTx namedM fileM yes -> cmdSendTx ctx cfg unit namedM fileM yes
   CommandBumpFee opts -> cmdBumpFee ctx cfg opts
   -- Sweeps
   CommandPrepareSweep opts -> cmdPrepareSweep ctx cfg unit opts
@@ -519,13 +519,13 @@ cmdPendingTxs :: Ctx -> Config -> Maybe Text -> Paging TxHash -> IO Response
 cmdPendingTxs ctx cfg account paging = readListing cfg (pendingTxsListing ctx account paging)
 
 -- | The pending transactions of the account, or of every account, newest
--- first. A nosigHash names the one to go on after, with the time it was
--- created.
+-- first. The one to go on after is named by either of its hashes. The
+-- listing goes on after the time it was created and its nosigHash.
 pendingTxsListing :: Ctx -> Maybe Text -> Paging TxHash -> ExceptT String (DB IO) Listing
 pendingTxsListing ctx account paging = do
   asked <- forM account $ \_ -> getAccountByName account
   let accIdM = fst <$> asked
-  start <- forM paging.pagingAfter $ \nosigH -> (,nosigH) <$> heldSince accIdM nosigH
+  start <- forM paging.pagingAfter (pendingCursor accIdM)
   return
     Listing
       { listingStart = start,
@@ -560,19 +560,24 @@ cmdImportTx ctx cfg account file =
     txAnswer accId info
 
 cmdExportTx :: Config -> TxHash -> FilePath -> IO Response
-cmdExportTx cfg nosigH file =
+cmdExportTx cfg named file =
   runDBResponse cfg $ do
-    held <- requirePendingTx nosigH
+    held <- requirePendingTx named
     checkPathFree file
     acc <- getAccountById held.pendingTxAccount
     liftEitherIO $ writeJsonFile file (TxFile (Just (accountNetwork acc)) held.pendingTxData)
     return $ ResponseFile file
 
+-- | Delete a pending transaction, named by either of its hashes. The
+-- answer gives both, whichever the user typed.
 cmdDeleteTx :: Ctx -> Config -> TxHash -> IO Response
-cmdDeleteTx ctx cfg nosigH =
+cmdDeleteTx ctx cfg named =
   runDBResponse cfg $ do
-    (coins, addrs) <- deleteTx ctx (webStore ctx cfg) nosigH
-    return $ ResponseDeleteTx nosigH coins addrs
+    held <- requirePendingTx named
+    let tx = txSignDataTx held.pendingTxData
+        txidM = if isSigned tx then Just (txHash tx) else Nothing
+    (coins, addrs) <- deleteTx ctx (webStore ctx cfg) (nosigHash tx)
+    return $ ResponseDeleteTx (nosigHash tx) txidM coins addrs
 
 {- Payments: preparing, signing and sending -}
 
@@ -875,18 +880,18 @@ cmdSignTx ctx cfg signing parts =
     lift $ recordFingerprint ctx seed
     keepSigned ctx net signing signedFile accId signed info
 
--- | Send a signed transaction: a pending one of the wallet, by its
--- nosigHash, or the one of a file. One the wallet holds goes on the network
--- of its account, which the file may only name; one it does not hold goes
--- on the network its file names. See 'sendSigned'. The user sees the
--- transaction and says whether to send it, unless --yes.
+-- | Send a signed transaction: a pending one of the wallet, by its id or
+-- its nosigHash, or the one of a file. One the wallet holds goes on the
+-- network of its account, which the file may only name; one it does not
+-- hold goes on the network its file names. See 'sendSigned'. The user sees
+-- the transaction and says whether to send it, unless --yes.
 cmdSendTx :: Ctx -> Config -> AmountUnit -> Maybe TxHash -> Maybe FilePath -> Bool -> IO Response
-cmdSendTx ctx cfg unit nosigHM fileM yes =
-  case (nosigHM, fileM) of
-    (Just nosigH, Nothing) -> sending $ TxFile Nothing . (.pendingTxData) <$> requirePendingTx nosigH
+cmdSendTx ctx cfg unit namedM fileM yes =
+  case (namedM, fileM) of
+    (Just named, Nothing) -> sending $ TxFile Nothing . (.pendingTxData) <$> requirePendingTx named
     (Nothing, Just file) -> sending $ liftEitherIO (readJsonFile file)
-    (Nothing, Nothing) -> return $ ResponseError "Give the NOSIGHASH of a pending transaction or an --input file"
-    (Just _, Just _) -> return $ ResponseError "Can not specify both a NOSIGHASH and an --input file"
+    (Nothing, Nothing) -> return $ ResponseError "Give the TXID of a pending transaction or an --input file"
+    (Just _, Just _) -> return $ ResponseError "Can not specify both a TXID and an --input file"
   where
     sending readTx =
       runDBResponse cfg $ do
