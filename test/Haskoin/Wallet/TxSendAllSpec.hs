@@ -16,6 +16,8 @@ import Data.Word (Word32, Word64, Word8)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Recipient (Share (..))
+import Haskoin.Wallet.Amounts (AmountUnit (..))
+import Haskoin.Wallet.PrettyPrinter (dustReportDoc)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxBuilding (BuiltTx (..))
 import Haskoin.Wallet.TxSendAll
@@ -169,19 +171,28 @@ reportSpec ctx =
     it "tells the highest fee rate at which the dust coins alone can be sent later" $
       (threeDustReport ctx False).laterRate `shouldBe` Just 4
 
-    it "lists the dust coins, the largest first, each with the rates it is worth spending at" $
-      dustReportLines (threeDustReport ctx False)
-        `shouldBe` [ "3 coins cost more to spend than they are worth at 10 sat/byte, 1480 sat each:",
-                     "  0000000000000000000000000000000000000000000000000000000000000002:0  1200 sat, worth spending at 8 sat/byte or less",
-                     "  0000000000000000000000000000000000000000000000000000000000000002:1  900 sat, worth spending at 6 sat/byte or less",
-                     "  0000000000000000000000000000000000000000000000000000000000000002:2  546 sat, worth spending at 3 sat/byte or less",
-                     "Spending them adds 4440 sat of fee for 2646 sat of coins. What remains for the addresses without an amount is 74806 sat instead of 76600, 1794 less, and the account is empty.",
-                     "Leaving them, the account keeps 2646 sat. Once the other coins are gone, they can only be spent together, at 4 sat/byte or less."
+    -- In bitcoins, the unit by default: 1480 satoshis are 0.00001480 btc
+    it "lists the dust coins, the largest first, each with its value and the rates it is worth spending at, then what spending and leaving them does" $
+      renderedLines (dustReportDoc UnitBitcoin (threeDustReport ctx False))
+        `shouldBe` [ "3 coins cost more to spend than they are worth at 10 sat/byte, 0.00001480 btc each:",
+                     "",
+                     "    0.00001200 btc  worth spending at 8 sat/byte or less",
+                     "  0000000000000000000000000000000000000000000000000000000000000002:0",
+                     "",
+                     "    0.00000900 btc  worth spending at 6 sat/byte or less",
+                     "  0000000000000000000000000000000000000000000000000000000000000002:1",
+                     "",
+                     "    0.00000546 btc  worth spending at 3 sat/byte or less",
+                     "  0000000000000000000000000000000000000000000000000000000000000002:2",
+                     "",
+                     "Spending them adds 0.00004440 btc of fee for 0.00002646 btc of coins. What remains for the addresses without an amount is 0.00074806 btc instead of 0.00076600 btc, 0.00001794 btc less, and the account is empty.",
+                     "Leaving them, the account keeps 0.00002646 btc. Once the other coins are gone, they can only be spent together, at 4 sat/byte or less."
                    ]
 
+    -- In satoshis, as --unit sat asks
     it "does not call the account empty when other coins stay in it" $
-      (dustReportLines (threeDustReport ctx True) !! 4)
-        `shouldBe` "Spending them adds 4440 sat of fee for 2646 sat of coins. What remains for the addresses without an amount is 74806 sat instead of 76600, 1794 less."
+      (renderedLines (dustReportDoc UnitSatoshi (threeDustReport ctx True)) !! 11)
+        `shouldBe` "Spending them adds 4440 sats of fee for 2646 sats of coins. What remains for the addresses without an amount is 74806 sats instead of 76600 sats, 1794 sats less."
 
     it "asks whether to spend them too" $
       dustQuestion (threeDustReport ctx False) `shouldBe` "Spend them too?"
@@ -190,16 +201,17 @@ reportSpec ctx =
     -- least 546 at up to (1200 - 546) / 192 = 3 satoshis a byte
     it "tells of one dust coin in the singular" $ do
       let report = oneDustReport ctx 1200
-      (dustReportLines report !! 0) `shouldBe` "1 coin costs more to spend than it is worth at 10 sat/byte, 1480 sat:"
-      (dustReportLines report !! 3) `shouldBe` "Leaving it, the account keeps 1200 sat. Once the other coins are gone, it can only be spent at 3 sat/byte or less."
+          shown = renderedLines (dustReportDoc UnitSatoshi report)
+      (shown !! 0) `shouldBe` "1 coin costs more to spend than it is worth at 10 sat/byte, 1480 sats:"
+      (shown !! 6) `shouldBe` "Leaving it, the account keeps 1200 sats. Once the other coins are gone, it can only be spent at 3 sat/byte or less."
       dustQuestion report `shouldBe` "Spend it too?"
 
     -- At 1 satoshi a byte, the 192 bytes leave 600 - 192 = 408
     it "tells when the dust coins can never be spent alone" $
-      (dustReportLines (oneDustReport ctx 600) !! 3)
-        `shouldBe` "Leaving it, the account keeps 600 sat. Once the other coins are gone, it can never be spent: any fee would leave less than 546 sat."
+      (renderedLines (dustReportDoc UnitSatoshi (oneDustReport ctx 600)) !! 6)
+        `shouldBe` "Leaving it, the account keeps 600 sats. Once the other coins are gone, it can never be spent: any fee would leave less than 546 sats."
 
     -- Its input costs 148 at 1 satoshi a byte
     it "tells of a coin worth less than its fee at any rate" $
-      (dustReportLines (oneDustReport ctx 148) !! 1)
-        `shouldBe` "  0000000000000000000000000000000000000000000000000000000000000002:0  148 sat, worth less than its fee at any rate"
+      (renderedLines (dustReportDoc UnitSatoshi (oneDustReport ctx 148)) !! 2)
+        `shouldBe` "           148 sats  worth less than its fee at any rate"

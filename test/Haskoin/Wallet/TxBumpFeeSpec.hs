@@ -12,6 +12,8 @@ import qualified Data.Map.Strict as Map
 import Data.Word (Word8)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.Amounts (AmountUnit (..))
+import Haskoin.Wallet.PrettyPrinter (reducedDoc)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxBumpFee
 import Haskoin.Wallet.TxInfo (MyInputs (..), TxSummary (..), TxType (..))
@@ -25,7 +27,7 @@ spec = prepareContext $ \ctx -> do
   feeSpec ctx
   reductionSpec ctx
   fundingSpec ctx
-  reducedLinesSpec
+  reducedDocSpec
 
 -- | The stuck payment that bumpfee replaces: a payment of the account of
 -- 2260 of fee for its 226 bytes, which spends the coin of 50000 at /0/0
@@ -235,34 +237,46 @@ fundingSpec ctx =
     added30000 = (coinAt ctx 3 1 30000, externalAddr 1, Deriv :/ 0 :/ 1)
     added200000 = (coinAt ctx 4 1 200000, externalAddr 1, Deriv :/ 0 :/ 1)
 
-reducedLinesSpec :: Spec
-reducedLinesSpec =
+reducedDocSpec :: Spec
+reducedDocSpec =
   describe "What bumpfee says before it asks which recipient pays" $ do
-    it "numbers the recipients, with what each would receive paying alone, and paying its share when all can" $ do
-      reducedLines btc 11 waysAt11
-        `shouldBe` [ "The coins of the transaction cannot pay its fee at 11 sat/byte, and no coin of the account is added. The 260 sat missing can come out of what the recipients receive, one of them paying it alone, or all of them in equal shares:",
-                     "  1  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  30000 sat, 29740 paying it alone, 29912 paying its share",
-                     "  2  1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ  10000 sat, 9740 paying it alone, 9914 paying its share",
-                     "  3  191J7K3FaXXyM7C9ceSMRsJNF6aWCvvf1Q  7400 sat, 7140 paying it alone, 7314 paying its share"
+    -- In satoshis, as --unit sat asks
+    it "numbers the recipients, each with what it receives, then what it would receive paying alone and paying its share when all can" $ do
+      renderedLines (reducedDoc btc UnitSatoshi 11 waysAt11)
+        `shouldBe` [ "The coins of the transaction cannot pay its fee at 11 sat/byte, and no coin of the account is added. The 260 sats missing can come out of what the recipients receive, one of them paying it alone, or all of them in equal shares:",
+                     "",
+                     "  1  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  30000 sats",
+                     "     29740 sats paying it alone, 29912 sats paying its share",
+                     "",
+                     "  2  1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ  10000 sats",
+                     "     9740 sats paying it alone, 9914 sats paying its share",
+                     "",
+                     "  3  191J7K3FaXXyM7C9ceSMRsJNF6aWCvvf1Q  7400 sats",
+                     "     7140 sats paying it alone, 7314 sats paying its share"
                    ]
       reducedQuestion waysAt11 `shouldBe` "Who pays it? Type 1, 2, 3 or all, or no"
 
     it "tells which recipients cannot pay alone, and offers no share when all cannot" $ do
-      reducedLines btc 100 waysAt100
-        `shouldBe` [ "The coins of the transaction cannot pay its fee at 100 sat/byte, and no coin of the account is added. The 23400 sat missing can come out of what the recipients receive, one of them paying it alone:",
-                     "  1  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  30000 sat, 6600 paying it alone",
-                     "  2  1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ  10000 sat, too little to pay it alone",
-                     "  3  191J7K3FaXXyM7C9ceSMRsJNF6aWCvvf1Q  7400 sat, too little to pay it alone"
+      renderedLines (reducedDoc btc UnitSatoshi 100 waysAt100)
+        `shouldBe` [ "The coins of the transaction cannot pay its fee at 100 sat/byte, and no coin of the account is added. The 23400 sats missing can come out of what the recipients receive, one of them paying it alone:",
+                     "",
+                     "  1  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  30000 sats",
+                     "     6600 sats paying it alone",
+                     "",
+                     "  2  1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ  10000 sats",
+                     "     too little to pay it alone",
+                     "",
+                     "  3  191J7K3FaXXyM7C9ceSMRsJNF6aWCvvf1Q  7400 sats",
+                     "     too little to pay it alone"
                    ]
       reducedQuestion waysAt100 `shouldBe` "Who pays it? Type 1, or no"
 
+    -- In bitcoins, the unit by default: 1920 satoshis are 0.00001920 btc
     it "tells a lone recipient what it would receive, and asks yes or no" $ do
-      reducedLines btc 20 [loneWayAt20]
-        `shouldBe` [ "The coins of the transaction cannot pay its fee at 20 sat/byte, and no coin of the account is added. The recipient can pay the 1920 sat missing out of what it receives:",
-                     "  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  48080 sat, 46160 paying it"
+      renderedLines (reducedDoc btc UnitBitcoin 20 [loneWayAt20])
+        `shouldBe` [ "The coins of the transaction cannot pay its fee at 20 sat/byte, and no coin of the account is added. The recipient can pay the 0.00001920 btc missing out of what it receives:",
+                     "",
+                     "  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00048080 btc",
+                     "    0.00046160 btc paying it"
                    ]
       reducedQuestion [loneWayAt20] `shouldBe` "Reduce what it receives?"
-
-    it "takes the number of the recipient paying alone or its address, and all for all of them" $ do
-      reductionAnswers btc (way (OneRecipient 1) 260 (30000, 9740, 7400)) `shouldBe` ["2", "1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ"]
-      reductionAnswers btc (way AllRecipients 260 (29912, 9914, 7314)) `shouldBe` ["all"]

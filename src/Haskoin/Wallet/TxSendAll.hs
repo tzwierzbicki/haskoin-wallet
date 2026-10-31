@@ -24,8 +24,10 @@ module Haskoin.Wallet.TxSendAll
     buildSendAllSignData,
     DustReport (..),
     dustReport,
-    dustReportLines,
     dustQuestion,
+    inputFee,
+    valueOf,
+    worthSpendingUpTo,
   )
 where
 
@@ -41,7 +43,6 @@ import Data.Ord (Down (..))
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Address (walletPaths)
-import Haskoin.Wallet.Coin (coinText)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.RawTx (getRawTx)
 import Haskoin.Wallet.Recipient (Share (..), shareAmounts)
@@ -198,39 +199,6 @@ dustReport ctx feeByte dust recipients worth dustCoins othersStay =
     laterRate
       | dustValue >= dust + aloneSize = Just ((dustValue - dust) `div` aloneSize)
       | otherwise = Nothing
-
--- | The report as preparesendall shows it, before its question
-dustReportLines :: DustReport -> [String]
-dustReportLines report = [header] <> (coinLine <$> report.dustCoins) <> [spent, left]
-  where
-    count = length report.dustCoins
-    one = count == 1
-    them = if one then "it" else "them"
-    rateText = show report.rate <> " sat/byte"
-    header
-      | one = "1 coin costs more to spend than it is worth at " <> rateText <> ", " <> show (inputFee report.rate) <> " sat:"
-      | otherwise = show count <> " coins cost more to spend than they are worth at " <> rateText <> ", " <> show (inputFee report.rate) <> " sat each:"
-    coinLine coin = "  " <> coinText coin.outpoint <> "  " <> show coin.value <> " sat, " <> worthText coin
-    worthText coin = case worthSpendingUpTo coin of
-      0 -> "worth less than its fee at any rate"
-      upTo -> "worth spending at " <> show upTo <> " sat/byte or less"
-    dustValue = valueOf report.dustCoins
-    spent =
-      "Spending " <> them <> " adds " <> show report.addedFee <> " sat of fee for " <> show dustValue
-        <> " sat of coins. What remains for the addresses without an amount is "
-        <> show report.withDust
-        <> " sat instead of "
-        <> show report.withoutDust
-        <> ", "
-        <> show (report.withoutDust - report.withDust)
-        <> " less"
-        <> (if report.othersStay then "." else ", and the account is empty.")
-    left = "Leaving " <> them <> ", the account keeps " <> show dustValue <> " sat. Once the other coins are gone, " <> later
-    later = case report.laterRate of
-      Just upTo
-        | one -> "it can only be spent at " <> show upTo <> " sat/byte or less."
-        | otherwise -> "they can only be spent together, at " <> show upTo <> " sat/byte or less."
-      Nothing -> (if one then "it" else "they") <> " can never be spent: any fee would leave less than " <> show report.dustLimit <> " sat."
 
 -- | The question after the report
 dustQuestion :: DustReport -> String

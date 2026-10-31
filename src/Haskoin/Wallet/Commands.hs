@@ -107,7 +107,7 @@ import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
 import Haskoin.Wallet.Parser
 import Haskoin.Wallet.PendingTx
-import Haskoin.Wallet.PrettyPrinter (feeRatesPrinter, coinBalancesPrinter, renderOn, txAnswerDoc)
+import Haskoin.Wallet.PrettyPrinter (addedCoinsDoc, childrenDoc, coinBalancesPrinter, dustReportDoc, feeRatesDoc, reducedDoc, renderOn, txAnswerDoc)
 import Haskoin.Wallet.Prompt
 import Haskoin.Wallet.Response
 import Haskoin.Wallet.Store
@@ -123,7 +123,6 @@ import Haskoin.Wallet.TxSendAll
     buildSendAllSignData,
     dustQuestion,
     dustReport,
-    dustReportLines,
     isDustCoin,
     sendAllAmounts,
   )
@@ -169,7 +168,7 @@ commandResponse ctx cfg unit = \case
   CommandPrepareSendAll opts -> cmdPrepareSendAll ctx cfg unit opts
   CommandSignTx signing parts -> cmdSignTx ctx cfg signing parts
   CommandSendTx namedM fileM yes -> cmdSendTx ctx cfg unit namedM fileM yes
-  CommandBumpFee opts -> cmdBumpFee ctx cfg opts
+  CommandBumpFee opts -> cmdBumpFee ctx cfg unit opts
   -- Sweeps
   CommandPrepareSweep opts -> cmdPrepareSweep ctx cfg unit opts
   CommandSignSweep signing keysM -> cmdSignSweep ctx cfg signing keysM
@@ -624,9 +623,9 @@ confirmFeeRate yes feeByte dust = do
 -- offered. The rates and the question go to stderr, to keep the --json
 -- answer clean. hw never guesses a rate: without a --fee-rate, a store that
 -- cannot be reached stops the command.
-chooseFeeRate :: Config -> Store -> Natural -> Maybe FeeRateChoice -> ExceptT String (DB IO) Natural
-chooseFeeRate _ _ _ (Just (FeeRateOf rate)) = return rate
-chooseFeeRate cfg store lowest choice = do
+chooseFeeRate :: Config -> Network -> Store -> Natural -> Maybe FeeRateChoice -> ExceptT String (DB IO) Natural
+chooseFeeRate _ _ _ _ (Just (FeeRateOf rate)) = return rate
+chooseFeeRate cfg net store lowest choice = do
   rates <- fromStore $ withExceptT (<> ". Give a --fee-rate to go on without the rates recent blocks paid") $ recentFeeRates (configParallelRequests cfg) store
   let offered = [(level, rateAt level rates) | level <- [minBound .. maxBound], rateAt level rates >= lowest]
       offeredNames = case [cs (levelName level) | (level, _) <- offered] of
@@ -641,7 +640,7 @@ chooseFeeRate cfg store lowest choice = do
       return rate
     _ -> do
       now <- liftIO getCurrentTime
-      liftIO $ renderOn stderr (feeRatesPrinter now rates)
+      liftIO $ renderOn stderr (feeRatesDoc net now rates)
       -- The median first: it is the default
       let choices = [([levelName level], rate) | (level, rate) <- sortOn ((/= Median) . fst) offered]
       askChoice terminal ("Which fee rate? Type " <> offeredNames) choices
@@ -706,7 +705,7 @@ cmdPrepareTx ctx cfg unit opts =
     -- Before the transaction is built, not after
     for_ opts.output checkPathFree
     recipients <- liftEither $ mapM (readPayment net unit) opts.recipients
-    feeByte <- chooseFeeRate cfg (webStore ctx cfg net) 1 opts.feeRate
+    feeByte <- chooseFeeRate cfg net (webStore ctx cfg net) 1 opts.feeRate
     confirmFeeRate opts.yes feeByte opts.dust
     (control, left) <-
       if not controlled
@@ -757,7 +756,7 @@ cmdPrepareSendAll ctx cfg unit opts =
     liftEither $ checkSharing recipients
     when (controlled && isJust opts.dustCoins) $
       throwError "The coins chosen with --coin or --spend-from are all sent: give --spend-dust or --leave-dust without them"
-    feeByte <- chooseFeeRate cfg (webStore ctx cfg net) 1 opts.feeRate
+    feeByte <- chooseFeeRate cfg net (webStore ctx cfg net) 1 opts.feeRate
     confirmFeeRate opts.yes feeByte opts.dust
     spendable <- spendableCoins net ctx accId opts.minConf
     unspendable <- unspendableCoins net ctx accId opts.minConf
@@ -795,7 +794,7 @@ cmdPrepareSendAll ctx cfg unit opts =
         -- On stderr, with the question, to keep the --json answer clean
         askAboutDust :: DustReport -> ExceptT String (DB IO) [Store.Unspent]
         askAboutDust report = do
-          liftIO $ mapM_ (tell terminal) (dustReportLines report)
+          liftIO $ renderOn stderr (dustReportDoc unit report)
           spending <- askYes terminal (dustQuestion report)
           return $ if spending then spendable else worth
 
@@ -910,8 +909,8 @@ cmdSendTx ctx cfg unit namedM fileM yes =
 -- which of several does, --yes or not. Every refusal comes before any
 -- question: the replacement of every way to pay the fee is built first,
 -- and asked about after. The answer is that of preparetx.
-cmdBumpFee :: Ctx -> Config -> BumpFee -> IO Response
-cmdBumpFee ctx cfg opts =
+cmdBumpFee :: Ctx -> Config -> AmountUnit -> BumpFee -> IO Response
+cmdBumpFee ctx cfg unit opts =
   runDBResponse cfg $ do
     -- Before anything is asked, not after
     for_ opts.output checkPathFree
@@ -932,7 +931,7 @@ cmdBumpFee ctx cfg opts =
           "The transaction pays " <> show stuck.sentSummary.summaryFeeByte
             <> " satoshis per byte: a replacement must pay at least "
             <> show (minimumRate stuck)
-    feeByte <- chooseFeeRate cfg store (minimumRate stuck) opts.feeRate
+    feeByte <- chooseFeeRate cfg net store (minimumRate stuck) opts.feeRate
     when (feeByte < minimumRate stuck) $
       throwError $
         "The transaction pays " <> show stuck.sentSummary.summaryFeeByte
@@ -956,10 +955,10 @@ cmdBumpFee ctx cfg opts =
     -- with everything else the command did.
     confirmFeeRate opts.yes feeByte opts.dust
     unless (null children) $ do
-      liftIO $ mapM_ (tell terminal) (childrenLines children)
+      liftIO $ renderOn stderr (childrenDoc children)
       agreed <- if opts.yes then return True else askYes terminal (childrenQuestion children)
       unless agreed $ throwError "The transaction was not replaced"
-    tsd <- agreedFunding net feeByte opts.yes built
+    tsd <- agreedFunding net unit feeByte opts.yes built
     preparedAnswer ctx accId acc opts.output tsd []
 
 -- | The replacement of the funding the user agrees to, among those built,
@@ -968,8 +967,8 @@ cmdBumpFee ctx cfg opts =
 -- first, then the recipients: whether the lone one pays, or which of
 -- several does, or all of them, a choice --yes does not make. None agreed,
 -- the transaction stays as it is.
-agreedFunding :: Network -> Natural -> Bool -> [(Funding, TxSignData)] -> ExceptT String (DB IO) TxSignData
-agreedFunding net feeByte yes built =
+agreedFunding :: Network -> AmountUnit -> Natural -> Bool -> [(Funding, TxSignData)] -> ExceptT String (DB IO) TxSignData
+agreedFunding net unit feeByte yes built =
   case built of
     (ChangePays, tsd) : _ -> return tsd
     _ -> do
@@ -980,12 +979,12 @@ agreedFunding net feeByte yes built =
     agreedTo question = if yes then return True else askYes terminal question
     offerCoins [] = return Nothing
     offerCoins ((added, tsd) : _) = do
-      liftIO $ mapM_ (tell terminal) (addedLines feeByte added)
+      liftIO $ renderOn stderr (addedCoinsDoc net unit feeByte added)
       agreed <- agreedTo (addedQuestion added)
       return $ if agreed then Just tsd else Nothing
     offerReductions [] = return Nothing
     offerReductions ways@((way, tsd) : _) = do
-      liftIO $ mapM_ (tell terminal) (reducedLines net feeByte (fst <$> ways))
+      liftIO $ renderOn stderr (reducedDoc net unit feeByte (fst <$> ways))
       case way.reductionRecipients of
         [_] -> do
           agreed <- agreedTo (reducedQuestion (fst <$> ways))
@@ -1050,7 +1049,7 @@ cmdPrepareSweep ctx cfg unit opts =
       listed <- maybe (return []) (addressesOfFile net) opts.addressFile
       sweepTo <- liftEither $ mapM (readRecipient net unit) opts.sweepTo
       liftEither $ checkSharing sweepTo
-      feeByte <- chooseFeeRate cfg (webStore ctx cfg net) 1 opts.feeRate
+      feeByte <- chooseFeeRate cfg net (webStore ctx cfg net) 1 opts.feeRate
       confirmFeeRate opts.yes feeByte opts.dust
       keys <- maybe (return []) (readSecKeys terminal net) opts.keys
       found <- fetchSweepCoins net ctx (webStore ctx cfg net) accIdM keys (typed <> listed) opts.coins (fst <$> sweepTo)

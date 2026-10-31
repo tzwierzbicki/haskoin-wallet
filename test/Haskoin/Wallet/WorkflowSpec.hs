@@ -248,6 +248,10 @@ spendsAndPays ctx tx = ((.outpoint) <$> tx.inputs, sortOn fst [(out.value, scrip
 printed :: Text -> Run -> Bool
 printed text run = text `Text.isInfixOf` (runOut run <> runErr run)
 
+-- | Whether hw printed the sentence, wrapped over lines or not
+printedSentence :: Text -> Run -> Bool
+printedSentence sentence run = sentence `Text.isInfixOf` Text.unwords (Text.lines (runOut run <> runErr run))
+
 {- An account -}
 
 accountSpec :: Spec
@@ -369,6 +373,12 @@ accountSpec =
         (errorOf <$> hwJson home ["deleteacc", "main", "btc", "/44'/0'/1'"] [])
           `shouldReturn` Right "The full derivation path of the account to delete did not match"
         (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("main", 0, 0)]
+
+    it "is written to the file exportacc names, which exportacc says" $
+      withHome $ \home -> do
+        createMain home
+        run <- hw home ["exportacc", home </> "main.json"] []
+        runOut run `shouldBe` "Written to " <> Text.pack (home </> "main.json") <> "\n"
 
     -- As an offline signer hands its accounts to an online computer
     it "is exported to a file by exportacc, and imported from it in another wallet by importacc" $
@@ -581,11 +591,9 @@ feesSpec ctx =
       withChain ctx (feesChain ctx) $ \home _ -> do
         run <- hw home ["fees"] []
         forM_
-          [ "Fee rates paid in blocks 800000 to 800001 (satoshis per byte):",
-            "Low:     9",
-            "Median:  12",
-            "High:    118",
-            "The latest of these blocks was mined 3 minutes ago."
+          [ "Fee rates of btc, from blocks 800000 to 800001\n",
+            "  low 9, median 12, high 118 sat/byte\n",
+            "  the latest block was mined 3 minutes ago\n"
           ]
           $ \line -> run `shouldSatisfy` printed line
         answered <- answer home ["fees"] []
@@ -609,7 +617,7 @@ feesSpec ctx =
         synced home
         let file = home </> "unsigned.json"
         run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", file] [""]
-        run `shouldSatisfy` printed "Median:  12"
+        run `shouldSatisfy` printed "low 9, median 12, high 118 sat/byte"
         run `shouldSatisfy` printed "Which fee rate? Type low, median or high [median]"
         (txSignDataFeeRate . txFileData <$> readTxFile file) `shouldReturn` Just 12
 
@@ -701,16 +709,18 @@ messageSpec =
 verifySpec :: Spec
 verifySpec =
   describe "A signature checked by verifymsg" $ do
-    it "is valid for the message as signed, without the wallet" $
-      withHome $ \home ->
+    it "is valid for the message as signed, without the wallet, which hw says in one line" $
+      withHome $ \home -> do
         hwJson home ["verifymsg", textOf (externalAddr 0), Text.unpack helloSignature, "hello"] []
           `shouldReturn` ResponseVerifyMsg "hello" helloSignature (externalAddrsText !! 0) True
+        run <- hw home ["verifymsg", textOf (externalAddr 0), Text.unpack helloSignature, "hello"] []
+        runOut run `shouldBe` "The key of " <> externalAddrsText !! 0 <> " signed this message\n"
 
-    it "is invalid for a changed message, and hw exits with a failure" $
+    it "is invalid for a changed message, and hw says so and exits with a failure" $
       withHome $ \home -> do
         run <- hw home ["verifymsg", textOf (externalAddr 0), Text.unpack helloSignature, "hello!"] []
         runExit run `shouldBe` ExitFailure 1
-        run `shouldSatisfy` printed "Invalid"
+        runOut run `shouldBe` "This is not a signature of this message by the key of " <> externalAddrsText !! 0 <> "\n"
         hwJson home ["verifymsg", textOf (externalAddr 0), Text.unpack helloSignature, "hello!"] []
           `shouldReturn` ResponseVerifyMsg "hello!" helloSignature (externalAddrsText !! 0) False
 
@@ -2686,9 +2696,9 @@ sendAllSpec ctx = do
         run <- hw home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "10"] []
         -- The transaction, then the coins staying, then the next steps
         let (beforeSteps, steps) = Text.breakOn "Next, sign it" (runOut run)
-            (transaction, staying) = Text.breakOn "Staying in the account:" beforeSteps
+            (transaction, staying) = Text.breakOn "in the account:" beforeSteps
         transaction `shouldSatisfy` Text.isInfixOf "NoSigHash"
-        staying `shouldSatisfy` Text.isInfixOf (Text.pack (coinArg (twoCoinsTx ctx) 1) <> " 0.00030000 btc, you locked it")
+        staying `shouldSatisfy` Text.isInfixOf ("\n    0.00030000 btc  you locked it\n  " <> Text.pack (coinArg (twoCoinsTx ctx) 1) <> "\n")
         steps `shouldSatisfy` Text.isInfixOf "hw signtx"
 
     it "are sent at a fee rate above 100 satoshis per byte only if the user takes it" $
@@ -2739,8 +2749,8 @@ sendAllSpec ctx = do
       withChain ctx (confirmedChain (dustCoinsTx ctx)) $ \home _ -> do
         synced home
         run <- hw home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "10"] ["n"]
-        runErr run `shouldSatisfy` Text.isInfixOf "3 coins cost more to spend than they are worth at 10 sat/byte, 1480 sat each:"
-        runErr run `shouldSatisfy` Text.isInfixOf "What remains for the addresses without an amount is 74806 sat instead of 76600, 1794 less, and the account is empty."
+        run `shouldSatisfy` printedSentence "3 coins cost more to spend than they are worth at 10 sat/byte, 0.00001480 btc each:"
+        run `shouldSatisfy` printedSentence "What remains for the addresses without an amount is 0.00074806 btc instead of 0.00076600 btc, 0.00001794 btc less, and the account is empty."
         runErr run `shouldSatisfy` Text.isInfixOf dustQuestion
 
     it "stay in the account when the user answers anything but yes" $
@@ -2873,9 +2883,9 @@ coinControlSpec ctx =
         synced home
         _ <- answer home ["lockcoin", coinArg (twoAddressesTx ctx) 1] []
         run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (twoAddressesTx ctx) 0, "--coin", coinArg (twoAddressesTx ctx) 1, "--fee-rate", "10"] []
-        let (transaction, staying) = Text.breakOn "Staying in the account:" (runOut run)
+        let (transaction, staying) = Text.breakOn "in the account:" (runOut run)
         transaction `shouldSatisfy` Text.isInfixOf "NoSigHash"
-        staying `shouldSatisfy` Text.isInfixOf (Text.pack (coinArg (twoAddressesTx ctx) 1) <> " 0.00030000 btc, you locked it")
+        staying `shouldSatisfy` Text.isInfixOf ("\n    0.00030000 btc  you locked it\n  " <> Text.pack (coinArg (twoAddressesTx ctx) 1) <> "\n")
 
     it "prepares nothing when none of the coins chosen can be spent, and tells why" $
       withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
@@ -3303,8 +3313,8 @@ bumpFeeSpec ctx = do
       withChain ctx chain $ \home _ -> do
         stuck <- stuckPayment home
         run <- hw home ["bumpfee", stuck, "--fee-rate", "60"] ["y"]
-        runErr run `shouldSatisfy` Text.isInfixOf "The coins of the transaction cannot pay its fee at 60 sat/byte, and this coin of the account would:"
-        runErr run `shouldSatisfy` Text.isInfixOf (Text.pack (coinArg (twoAddressesTx ctx) 1) <> "  30000 sat at /0/1")
+        run `shouldSatisfy` printedSentence "The coins of the transaction cannot pay its fee at 60 sat/byte, and this coin of the account would:"
+        runErr run `shouldSatisfy` Text.isInfixOf ("\n    0.00030000 btc  at " <> externalAddrsText !! 1 <> "  /0/1\n  " <> Text.pack (coinArg (twoAddressesTx ctx) 1) <> "\n")
         runErr run `shouldSatisfy` Text.isInfixOf "Add it? [y/N]"
 
     -- Without the coin, the replacement of 192 bytes pays 11520 and has no
@@ -3321,8 +3331,8 @@ bumpFeeSpec ctx = do
         stuck <- stuckPayment home
         run <- hw home ["bumpfee", stuck, "--fee-rate", "60"] ["n", "n"]
         runErr run `shouldSatisfy` Text.isInfixOf "Add it? [y/N]"
-        runErr run `shouldSatisfy` Text.isInfixOf "The coins of the transaction cannot pay its fee at 60 sat/byte, and no coin of the account is added. The recipient can pay the 1520 sat missing out of what it receives:"
-        runErr run `shouldSatisfy` Text.isInfixOf (Text.pack (textOf (otherAddr 0)) <> "  40000 sat, 38480 paying it")
+        run `shouldSatisfy` printedSentence "The coins of the transaction cannot pay its fee at 60 sat/byte, and no coin of the account is added. The recipient can pay the 0.00001520 btc missing out of what it receives:"
+        runErr run `shouldSatisfy` Text.isInfixOf ("\n  " <> Text.pack (textOf (otherAddr 0)) <> "  0.00040000 btc\n    0.00038480 btc paying it\n")
         runErr run `shouldSatisfy` Text.isInfixOf "Reduce what it receives? [y/N]"
 
     it "is not replaced when the user wants neither the coin added nor the recipient paying" $
@@ -3359,8 +3369,8 @@ bumpFeeSpec ctx = do
       withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
         stuck <- sentAll home
         run <- hw home ["bumpfee", stuck, "--fee-rate", "20"] ["y"]
-        runErr run `shouldSatisfy` Text.isInfixOf "The coins of the transaction cannot pay its fee at 20 sat/byte, and no coin of the account is added. The recipient can pay the 3400 sat missing out of what it receives:"
-        runErr run `shouldSatisfy` Text.isInfixOf (Text.pack (textOf (otherAddr 0)) <> "  76600 sat, 73200 paying it")
+        run `shouldSatisfy` printedSentence "The coins of the transaction cannot pay its fee at 20 sat/byte, and no coin of the account is added. The recipient can pay the 0.00003400 btc missing out of what it receives:"
+        runErr run `shouldSatisfy` Text.isInfixOf ("\n  " <> Text.pack (textOf (otherAddr 0)) <> "  0.00076600 btc\n    0.00073200 btc paying it\n")
         runErr run `shouldSatisfy` Text.isInfixOf "Reduce what it receives? [y/N]"
 
     it "is not replaced when the user does not want the recipient to pay" $
@@ -3416,9 +3426,10 @@ bumpFeeSpec ctx = do
       withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
         stuck <- sentAll home
         run <- hw home ["bumpfee", stuck, "--fee-rate", "20"] ["no"]
-        runErr run `shouldSatisfy` Text.isInfixOf "The 3740 sat missing can come out of what the recipients receive, one of them paying it alone, or all of them in equal shares:"
-        runErr run `shouldSatisfy` Text.isInfixOf (Text.pack (textOf (otherAddr 0)) <> "  46260 sat, 42520 paying it alone, 44390 paying its share")
-        runErr run `shouldSatisfy` Text.isInfixOf (Text.pack (textOf (otherAddr 1)) <> "  30000 sat, 26260 paying it alone, 28130 paying its share")
+        run `shouldSatisfy` printedSentence "The 0.00003740 btc missing can come out of what the recipients receive, one of them paying it alone, or all of them in equal shares:"
+        -- Numbered in the order of the outputs, which the test does not pin
+        runErr run `shouldSatisfy` Text.isInfixOf ("  " <> Text.pack (textOf (otherAddr 0)) <> "  0.00046260 btc\n     0.00042520 btc paying it alone, 0.00044390 btc paying its share\n")
+        runErr run `shouldSatisfy` Text.isInfixOf ("  " <> Text.pack (textOf (otherAddr 1)) <> "  0.00030000 btc\n     0.00026260 btc paying it alone, 0.00028130 btc paying its share\n")
         runErr run `shouldSatisfy` Text.isInfixOf "Who pays it? Type 1, 2 or all, or no [no]"
 
     it "is not replaced when nobody pays, which an empty answer says" $

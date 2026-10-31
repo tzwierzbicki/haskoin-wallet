@@ -20,11 +20,11 @@ module Haskoin.Wallet.PrettyPrinter where
 
 import Control.Applicative ((<|>))
 import Control.Monad
-import Data.Char (isAlphaNum, toUpper)
+import Data.Char (isAlphaNum)
 import Data.List (intercalate, intersperse, nub, sortOn)
 import Data.List.Split (chunksOf)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, isJust, isNothing)
+import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe)
 import Data.Ord (Down (..))
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -35,6 +35,7 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Time.Format
 import Data.Word
 import Haskoin
+import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Account
 import Haskoin.Wallet.Address (CoinBalance (..), addrPath, chainPath, coinBalanceUnspendable, pathText)
 import Haskoin.Wallet.Amounts
@@ -49,10 +50,12 @@ import Haskoin.Wallet.Parser.Run (commandNamed)
 import Haskoin.Wallet.Response
 import Haskoin.Wallet.Style
 import Haskoin.Wallet.Sync
+import Haskoin.Wallet.TxBumpFee (PaidBy (..), Reduction (..), Sent, sentId)
 import Haskoin.Wallet.TxInfo
+import Haskoin.Wallet.TxSendAll (DustReport (..), inputFee, valueOf, worthSpendingUpTo)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
-import Prettyprinter (Doc, align, annotate, hcat, hsep, indent, pretty, vcat, (<+>))
+import Prettyprinter (Doc, align, annotate, fillSep, hcat, hsep, indent, pretty, vcat, (<+>))
 import System.Exit
 import System.IO
 
@@ -666,18 +669,147 @@ cellsLine cells = hcat (intersperse "  " (padded cells))
     padded [(_, _, doc)] = [doc]
     padded ((width, content, doc) : rest) = (doc <> pretty (replicate (width - length content) ' ')) : padded rest
 
--- | The coins a transaction just prepared leaves in the account, one a
--- line, each with why: the coin as --coin and lockcoin take it, and its
--- value
-leftCoinsPrinter :: AmountUnit -> [LeftCoin] -> Doc Style
-leftCoinsPrinter unit left =
-  vcat $ styled Title "Staying in the account:" : (indent 2 . leftCoinPrinter <$> left)
+-- | The coins a transaction just prepared leaves in the account, each with
+-- why, a blank line between them
+leftCoinsDoc :: AmountUnit -> [LeftCoin] -> Doc Style
+leftCoinsDoc unit left =
+  vcat . intersperse mempty $
+    text (counted (fromIntegral (length left)) "coin stays" "coins stay" <> " in the account:")
+      : [questionCoinDoc unit coin.leftCoinOutpoint (fromIntegral coin.leftCoinValue) (text (leftReasonText coin.leftCoinReason)) | coin <- left]
+
+{- The questions of preparesendall and bumpfee -}
+
+-- The reports the commands show on stderr before they ask. A sentence
+-- wraps at the width of the screen, as the help does. A coin takes two
+-- lines, as in a listing: its value with what is said of it, then the coin
+-- itself, as --coin takes it. The amounts are in the unit asked for.
+
+-- | A sentence of words and amounts, wrapped at the width of the screen
+sentence :: [Doc Style] -> Doc Style
+sentence = fillSep
+
+-- | The words of a text, for a sentence
+wordsOf :: String -> [Doc Style]
+wordsOf = map pretty . words
+
+-- | A coin in a question: its value, then what is said of it, then the
+-- coin as --coin and lockcoin take it
+questionCoinDoc :: AmountUnit -> OutPoint -> Natural -> Doc Style -> Doc Style
+questionCoinDoc unit outpoint value said =
+  vcat
+    [ columns [amountCell (Just Incoming) "" unit (fromIntegral value), said],
+      indent 2 (styled Muted (coinText outpoint))
+    ]
+
+-- | A fee rate, in satoshis per byte
+rateDoc :: Natural -> Doc Style
+rateDoc feeByte = text (show feeByte <> " sat/byte")
+
+-- | The report on the coins worth less than their fee, as preparesendall
+-- shows it before its question: the coins, each with the rates it is worth
+-- spending at, then what spending them and leaving them does
+dustReportDoc :: AmountUnit -> DustReport -> Doc Style
+dustReportDoc unit report =
+  vcat . intersperse mempty $ [header] <> (dustCoinDoc <$> report.dustCoins) <> [vcat [spent, left]]
   where
-    leftCoinPrinter coin =
-      text (coinText coin.leftCoinOutpoint)
-        <+> neutralAmount unit (fromIntegral coin.leftCoinValue)
-        <> ","
-        <+> text (leftReasonText coin.leftCoinReason)
+    count = length report.dustCoins
+    one = count == 1
+    them = if one then "it" else "them"
+    amount v = neutralAmount unit (fromIntegral v)
+    header
+      | one = sentence $ wordsOf "1 coin costs more to spend than it is worth at" <> [rateDoc report.rate <> ",", amount (inputFee report.rate) <> ":"]
+      | otherwise = sentence $ wordsOf (show count <> " coins cost more to spend than they are worth at") <> [rateDoc report.rate <> ",", amount (inputFee report.rate)] <> wordsOf "each:"
+    dustCoinDoc coin = questionCoinDoc unit coin.outpoint (fromIntegral coin.value) (worth coin)
+    worth coin = case worthSpendingUpTo coin of
+      0 -> "worth less than its fee at any rate"
+      upTo -> "worth spending at" <+> rateDoc upTo <+> "or less"
+    dustValue = valueOf report.dustCoins
+    spent =
+      sentence $
+        wordsOf ("Spending " <> them <> " adds")
+          <> [amount report.addedFee]
+          <> wordsOf "of fee for"
+          <> [amount dustValue]
+          <> wordsOf "of coins. What remains for the addresses without an amount is"
+          <> [amount report.withDust]
+          <> wordsOf "instead of"
+          <> [amount report.withoutDust <> ",", amount (report.withoutDust - report.withDust)]
+          <> wordsOf ("less" <> if report.othersStay then "." else ", and the account is empty.")
+    left =
+      sentence $
+        wordsOf ("Leaving " <> them <> ", the account keeps")
+          <> [amount dustValue <> "."]
+          <> wordsOf "Once the other coins are gone,"
+          <> later
+    later = case report.laterRate of
+      Just upTo
+        | one -> wordsOf "it can only be spent at" <> [rateDoc upTo] <> wordsOf "or less."
+        | otherwise -> wordsOf "they can only be spent together, at" <> [rateDoc upTo] <> wordsOf "or less."
+      Nothing -> wordsOf ((if one then "it" else "they") <> " can never be spent: any fee would leave less than") <> [amount report.dustLimit <> "."]
+
+-- | What bumpfee says of the transactions that spend the change of the one
+-- to replace, before it asks to replace them all
+childrenDoc :: [Sent] -> Doc Style
+childrenDoc children =
+  vcat $
+    sentence (wordsOf "Replacing the transaction removes those of the account that spend its change:")
+      : [indent 2 (styled Muted (cs (txHashToHex (sentId child)))) | child <- children]
+
+-- | What bumpfee says of the coins to add, before it asks to add them: each
+-- with the address that holds it and its path
+addedCoinsDoc :: Network -> AmountUnit -> Natural -> [(Store.Unspent, Address, SoftPath)] -> Doc Style
+addedCoinsDoc net unit feeByte added =
+  vcat . intersperse mempty $
+    header : [questionCoinDoc unit coin.outpoint (fromIntegral coin.value) (held addr path) | (coin, addr, path) <- added]
+  where
+    them = if length added == 1 then "this coin" else "these coins"
+    header = sentence $ wordsOf "The coins of the transaction cannot pay its fee at" <> [rateDoc feeByte <> ","] <> wordsOf ("and " <> them <> " of the account would:")
+    held addr path = columns ["at" <+> text (addrToString net addr), styled Muted (pathToStr path)]
+
+-- | What bumpfee says of the ways the recipients can pay, those of
+-- 'reductions', before it asks which: each recipient, numbered when there
+-- are several, with what it receives, then what it would receive paying
+-- alone, and its share when all can pay, a blank line between them
+reducedDoc :: Network -> AmountUnit -> Natural -> [Reduction] -> Doc Style
+reducedDoc _ _ _ [] = mempty
+reducedDoc net unit feeByte ways@(way : _) =
+  vcat . intersperse mempty $ header : rows
+  where
+    amount v = neutralAmount unit (fromIntegral v)
+    missing = [amount way.reductionMissing, "missing"]
+    recipients = [(addr, before) | (addr, before, _) <- way.reductionRecipients]
+    several = length recipients > 1
+    -- What each recipient gets paying it alone, by its position, when it can
+    alone = Map.fromList [(i, after) | w <- ways, OneRecipient i <- [w.reductionPaidBy], (_, _, after) <- [w.reductionRecipients !! i]]
+    -- What each gets paying its share, when all can
+    shares = listToMaybe [[after | (_, _, after) <- w.reductionRecipients] | w <- ways, w.reductionPaidBy == AllRecipients]
+    header =
+      sentence $
+        wordsOf "The coins of the transaction cannot pay its fee at"
+          <> [rateDoc feeByte <> ","]
+          <> wordsOf "and no coin of the account is added."
+          <> who
+    who
+      | several =
+          wordsOf "The" <> missing <> wordsOf ("can come out of what the recipients receive, one of them paying it alone" <> maybe ":" (const ", or all of them in equal shares:") shares)
+      | otherwise = wordsOf "The recipient can pay the" <> missing <> wordsOf "out of what it receives:"
+    -- The numbers of the recipients, padded to the widest, and what each
+    -- would receive under its address
+    width = length (show (length recipients))
+    rows
+      | several =
+          [ vcat
+              [ indent 2 (columns [text (rblock (fromIntegral width) (show (i + 1))), text (addrToString net addr), amount before]),
+                indent (4 + width) (commaList (aloneDoc i : shareDoc i))
+              ]
+            | (i, (addr, before)) <- zip [0 :: Int ..] recipients
+          ]
+      | otherwise =
+          [ vcat [indent 2 (columns [text (addrToString net addr), amount before]), indent 4 (amount after <+> "paying it")]
+            | (addr, before, after) <- way.reductionRecipients
+          ]
+    aloneDoc i = maybe "too little to pay it alone" (\after -> amount after <+> "paying it alone") (Map.lookup i alone)
+    shareDoc i = [amount (afters !! i) <+> "paying its share" | Just afters <- [shares]]
 
 -- | Print the answer of a command. A listing shows each element in the
 -- view given.
@@ -701,7 +833,7 @@ responsePrinter unit view answer =
     ResponseAccount acc spendable -> renderIO =<< listedAccountDoc Verbose unit acc spendable
     -- In green when the command did what it was asked, in red otherwise
     ResponseAccResult _ res txt -> renderIO $ styled (if res then Good else Failure) (cs txt)
-    ResponseFile f -> renderIO $ styled Field "File:" <+> styled UserText f
+    ResponseFile f -> renderIO $ "Written to" <+> styled UserText f
     ResponseAddress _ addr spendable ->
       renderIO =<< listedAddressDoc Verbose unit (pathWidth [addr]) addr spendable
     ResponseTx acc txInfo ->
@@ -709,13 +841,13 @@ responsePrinter unit view answer =
     -- The coins left in the account below the transaction, apart from it
     ResponsePrepared acc txInfo left -> do
       renderIO =<< txAnswerDoc (accountNetwork acc) unit txInfo
-      unless (null left) $ putStrLn "" >> renderIO (leftCoinsPrinter unit left)
+      unless (null left) $ putStrLn "" >> renderIO (leftCoinsDoc unit left)
     ResponseOutsideTx net txInfo -> renderIO =<< txAnswerDoc net unit txInfo
     ResponseSentTx net h ->
       renderIO $
         vcat
-          [ styled Field "Sent:" <+> text (cs $ txHashToHex h),
-            indent 2 $ styled Field "Network:" <+> text net.name
+          [ field 9 "Sent" <> text (cs $ txHashToHex h),
+            indent 2 $ field 9 "Network" <> text net.name
           ]
     -- By the hash pendingtxs showed: the id of a signed transaction. The
     -- coins it spent are free to spend again, and the change addresses it
@@ -734,17 +866,12 @@ responsePrinter unit view answer =
     -- wallets check the message exactly
     ResponseSignMsg m s a ->
       Text.putStr . Text.unlines $ signedMessageBlock a s m
+    -- In green when the signature is valid, in red otherwise
     ResponseVerifyMsg _ _ addr valid ->
-      renderIO . vcat $
+      renderIO $
         if valid
-          then
-            [ styled Field "Signature:" <+> styled Good "Valid",
-              text $ "The key of " <> cs addr <> " signed this message"
-            ]
-          else
-            [ styled Field "Signature:" <+> styled Failure "Invalid",
-              text $ "This is not a signature of this message by the key of " <> cs addr
-            ]
+          then styled Good ("The key of " <> cs addr <> " signed this message")
+          else styled Failure ("This is not a signature of this message by the key of " <> cs addr)
     -- The accounts not synced last, where the user sees them
     ResponseSync xs notSynced ->
       renderIO . vcat . intersperse mempty $
@@ -756,23 +883,20 @@ responsePrinter unit view answer =
       | otherwise -> renderIO $ syncResultsPrinter unit xs
     ResponseFees net rates -> do
       now <- getCurrentTime
-      renderIO $ vcat [styled Field "Network:" <+> text net.name, feeRatesPrinter now rates]
+      renderIO $ feeRatesDoc net now rates
   where
     listing = mapM_ (renderIO . listingDoc) =<< rowsPrinter unit view answer
 
--- | The fee rates recent blocks paid, with how fresh they are: the age of
--- the latest of those blocks, which also tells when the network is slow.
--- A latest block mined an hour ago or more waits: its rates may be too
--- low, as the help of fees says.
-feeRatesPrinter :: UTCTime -> FeeRates -> Doc Style
-feeRatesPrinter now rates =
+-- | The fee rates recent blocks paid on the network, with how fresh they
+-- are: the age of the latest of those blocks, which also tells when the
+-- network is slow. A latest block mined an hour ago or more waits: its
+-- rates may be too low, as the help of fees says.
+feeRatesDoc :: Network -> UTCTime -> FeeRates -> Doc Style
+feeRatesDoc net now rates =
   vcat
-    [ text $ "Fee rates paid in " <> blocks <> " (satoshis per byte):",
-      indent 2 . vcat $
-        [ styled Field (block 8 (levelTitle level <> ":")) <+> text (show (rateAt level rates))
-          | level <- [minBound .. maxBound]
-        ],
-      "The latest of these blocks was mined" <+> age <> "."
+    [ text ("Fee rates of " <> net.name <> ", from " <> blocks),
+      indent 2 $ commaList [text (cs (levelName level)) <+> text (show (rateAt level rates)) | level <- [minBound .. maxBound]] <+> "sat/byte",
+      indent 2 $ "the latest block was mined" <+> age
     ]
   where
     latest = posixSecondsToUTCTime (fromIntegral rates.ratesLatestTime)
@@ -782,9 +906,6 @@ feeRatesPrinter now rates =
     blocks
       | rates.ratesFromHeight == rates.ratesToHeight = "block " <> show rates.ratesToHeight
       | otherwise = "blocks " <> show rates.ratesFromHeight <> " to " <> show rates.ratesToHeight
-    levelTitle level = case Text.unpack (levelName level) of
-      c : rest -> toUpper c : rest
-      [] -> []
 
 -- | How long before now a time was, in round words: "3 minutes ago",
 -- "2 hours ago", "5 days ago". A time to come reads as just past.

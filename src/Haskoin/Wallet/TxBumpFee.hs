@@ -38,11 +38,9 @@ module Haskoin.Wallet.TxBumpFee
     buildBump,
     incrementalRate,
     checkBumpFee,
-    childrenLines,
+    sentId,
     childrenQuestion,
-    addedLines,
     addedQuestion,
-    reducedLines,
     reducedQuestion,
     reductionAnswers,
   )
@@ -518,63 +516,17 @@ checkBumpFee plan summary =
 
 {- What bumpfee asks -}
 
--- | What bumpfee says of the transactions that spend the change of the one
--- to replace, before it asks to replace them all
-childrenLines :: [Sent] -> [String]
-childrenLines children =
-  ("Replacing the transaction removes those of the account that spend its change:" :)
-    ["  " <> hex (sentId child) | child <- children]
-
--- | The question after 'childrenLines'
+-- | The question after 'childrenDoc' of the printer
 childrenQuestion :: [Sent] -> String
 childrenQuestion [_] = "Replace both with one transaction that pays the recipients of both?"
 childrenQuestion _ = "Replace them all with one transaction that pays all their recipients?"
 
--- | What bumpfee says of the coins to add, before it asks to add them
-addedLines :: Natural -> [(Store.Unspent, Address, SoftPath)] -> [String]
-addedLines feeByte added =
-  ("The coins of the transaction cannot pay its fee at " <> show feeByte <> " sat/byte, and " <> them <> " of the account would:" :)
-    ["  " <> coinText coin.outpoint <> "  " <> show coin.value <> " sat at " <> pathToStr path | (coin, _, path) <- added]
-  where
-    them = if length added == 1 then "this coin" else "these coins"
-
--- | The question after 'addedLines'
+-- | The question after 'addedCoinsDoc' of the printer
 addedQuestion :: [(Store.Unspent, Address, SoftPath)] -> String
 addedQuestion [_] = "Add it?"
 addedQuestion _ = "Add them?"
 
--- | What bumpfee says of the ways the recipients can pay, those of
--- 'reductions', before it asks which: each recipient, numbered when there
--- are several, with what it receives, what it would receive paying alone,
--- and its share when all can pay
-reducedLines :: Network -> Natural -> [Reduction] -> [String]
-reducedLines _ _ [] = []
-reducedLines net feeByte ways@(way : _) = header : rows
-  where
-    missing = show way.reductionMissing <> " sat missing"
-    recipients = [(addr, before) | (addr, before, _) <- way.reductionRecipients]
-    several = length recipients > 1
-    -- What each recipient gets paying it alone, by its position, when it can
-    alone = Map.fromList [(i, after) | w <- ways, OneRecipient i <- [w.reductionPaidBy], (_, _, after) <- [w.reductionRecipients !! i]]
-    -- What each gets paying its share, when all can
-    shares = listToMaybe [[after | (_, _, after) <- w.reductionRecipients] | w <- ways, w.reductionPaidBy == AllRecipients]
-    header =
-      "The coins of the transaction cannot pay its fee at " <> show feeByte <> " sat/byte, and no coin of the account is added. " <> who
-    who
-      | several =
-          "The " <> missing <> " can come out of what the recipients receive, one of them paying it alone"
-            <> maybe ":" (const ", or all of them in equal shares:") shares
-      | otherwise = "The recipient can pay the " <> missing <> " out of what it receives:"
-    rows
-      | several =
-          [ "  " <> show (i + 1) <> "  " <> addrToString net addr <> "  " <> show before <> " sat" <> aloneText i <> shareText i
-            | (i, (addr, before)) <- zip [0 :: Int ..] recipients
-          ]
-      | otherwise = ["  " <> addrToString net addr <> "  " <> show before <> " sat, " <> show after <> " paying it" | (addr, before, after) <- way.reductionRecipients]
-    aloneText i = maybe ", too little to pay it alone" (\after -> ", " <> show after <> " paying it alone") (Map.lookup i alone)
-    shareText i = maybe "" (\afters -> ", " <> show (afters !! i) <> " paying its share") shares
-
--- | The question after 'reducedLines': whether the lone recipient pays, or
+-- | The question after 'reducedDoc' of the printer: whether the lone recipient pays, or
 -- which of several does, by the names of the ways
 reducedQuestion :: [Reduction] -> String
 reducedQuestion ways = case ways of
