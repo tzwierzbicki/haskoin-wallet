@@ -1548,9 +1548,14 @@ the network has not confirmed yet. The replacement pays a higher fee, as BIP
 same amounts. The higher fee comes out of the change.
 
 When the change cannot pay the higher fee, hw offers to add confirmed coins of
-the account. Another transaction of the account may spend the change of the
-stuck one. Replacing the stuck one would remove it too, so hw offers to
-replace both with one transaction that pays the recipients of both.
+the account. When none would do, or when you decline them, hw offers to take
+what is missing from what the recipients receive instead: one of them pays it
+alone, or all of them pay it in equal shares, the first also paying the
+remainder. hw asks which, and leaves no recipient below the dust limit.
+
+Another transaction of the account may spend the change of the stuck one.
+Replacing the stuck one would remove it too, so hw offers to replace both with
+one transaction that pays the recipients of both.
 
 The replacement is a pending transaction. Sign it with signtx and send it with
 sendtx. sendtx then drops the transactions it replaces from the pending
@@ -1575,7 +1580,7 @@ change among them, the replacement gets one change output for all of them.
                   <*> replacementFeeOption
                   <*> dustOption
                   <*> outputFileMaybeOption
-                  <*> yesOption "Answer yes to every question: a fee rate above 100 satoshis per byte, adding coins, and replacing the transactions that spend the change"
+                  <*> yesOption "Answer yes to every question: a fee rate above 100 satoshis per byte, adding coins, reducing what a lone recipient receives, and replacing the transactions that spend the change. Which of several recipients pays is still asked."
               )
     }
 

@@ -109,7 +109,6 @@ import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.Migration (databaseVersion, latestDatabaseVersion)
 import Haskoin.Wallet.Parser
 import Haskoin.Wallet.PendingTx
-import Haskoin.Wallet.RawTx (getRawTx)
 import Haskoin.Wallet.PrettyPrinter (feeRatesPrinter, coinBalancesPrinter, renderOn, txAnswerPrinter)
 import Haskoin.Wallet.Prompt
 import Haskoin.Wallet.Response
@@ -906,9 +905,11 @@ cmdSendTx ctx cfg unit nosigHM fileM yes =
 -- | Prepare the replacement of a stuck transaction of the account at a
 -- higher fee rate, as "Haskoin.Wallet.TxBumpFee" builds it. hw asks before
 -- it replaces the transactions that spend the change of the stuck one, and
--- before it adds coins of the account, unless --yes. Every refusal comes
--- before any question: the replacement is built first, and asked about
--- after. The answer is that of preparetx.
+-- before it adds coins of the account, unless --yes. When no coin is
+-- added, it asks before the recipients pay out of what they receive, and
+-- which of several does, --yes or not. Every refusal comes before any
+-- question: the replacement of every way to pay the fee is built first,
+-- and asked about after. The answer is that of preparetx.
 cmdBumpFee :: Ctx -> Config -> BumpFee -> IO Response
 cmdBumpFee ctx cfg opts =
   runDBResponse cfg $ do
@@ -944,27 +945,53 @@ cmdBumpFee ctx cfg opts =
     -- The network takes no replacement that adds an unconfirmed coin
     confirmed <- spendableCoins net ctx accId 1
     candidates <- forM confirmed $ \coin -> (\(addr, path) -> (coin, addr, path)) <$> coinWithPath net accId coin
-    toAdd <- liftEither $ coinsToAdd ctx gen plan candidates feeByte opts.dust
-    addedParents <- mapM getRawTx $ nub [coin.outpoint.hash | (coin, _, _) <- toAdd]
-    tsd <- buildBump ctx cfg net accId gen plan (toAdd, addedParents) feeByte opts.dust
-    info <- txInfoOf ctx acc tsd
-    liftEither $ checkBumpFee plan info.txInfoSummary
+    offered <- liftEither $ fundings ctx gen plan candidates feeByte opts.dust
+    built <- forM offered $ \funding -> do
+      tsd <- buildBump ctx cfg net accId gen plan funding feeByte opts.dust
+      info <- txInfoOf ctx acc tsd
+      liftEither $ checkBumpFee plan info.txInfoSummary
+      return (funding, tsd)
     -- The questions, once nothing can refuse the replacement any more. A
-    -- change address the replacement took is given back if the answer is
-    -- no, with everything else the command did.
+    -- change address a replacement took is given back if the answer is no,
+    -- with everything else the command did.
     confirmFeeRate opts.yes feeByte opts.dust
     unless (null children) $ do
       liftIO $ mapM_ (tell terminal) (childrenLines children)
-      agreed <- agreedTo (childrenQuestion children)
+      agreed <- if opts.yes then return True else askYes terminal (childrenQuestion children)
       unless agreed $ throwError "The transaction was not replaced"
-    unless (null toAdd) $ do
-      liftIO $ mapM_ (tell terminal) (addedLines feeByte toAdd)
-      agreed <- agreedTo (addedQuestion toAdd)
-      unless agreed $ throwError "The transaction was not replaced"
+    tsd <- agreedFunding net feeByte opts.yes built
     preparedAnswer ctx accId acc opts.output tsd []
+
+-- | The replacement of the funding the user agrees to, among those built,
+-- each told on stderr with what it is about, to keep the --json answer
+-- clean. The change needs no agreement. The coins to add are asked about
+-- first, then the recipients: whether the lone one pays, or which of
+-- several does, or all of them, a choice --yes does not make. None agreed,
+-- the transaction stays as it is.
+agreedFunding :: Network -> Natural -> Bool -> [(Funding, TxSignData)] -> ExceptT String (DB IO) TxSignData
+agreedFunding net feeByte yes built =
+  case built of
+    (ChangePays, tsd) : _ -> return tsd
+    _ -> do
+      fromCoins <- offerCoins [(added, tsd) | (CoinsAdded added, tsd) <- built]
+      fromRecipients <- maybe (offerReductions [(way, tsd) | (RecipientsReduced way, tsd) <- built]) (return . Just) fromCoins
+      liftMaybe "The transaction was not replaced" fromRecipients
   where
-    -- On stderr, with what it is about, to keep the --json answer clean
-    agreedTo question = if opts.yes then return True else askYes terminal question
+    agreedTo question = if yes then return True else askYes terminal question
+    offerCoins [] = return Nothing
+    offerCoins ((added, tsd) : _) = do
+      liftIO $ mapM_ (tell terminal) (addedLines feeByte added)
+      agreed <- agreedTo (addedQuestion added)
+      return $ if agreed then Just tsd else Nothing
+    offerReductions [] = return Nothing
+    offerReductions ways@((way, tsd) : _) = do
+      liftIO $ mapM_ (tell terminal) (reducedLines net feeByte (fst <$> ways))
+      case way.reductionRecipients of
+        [_] -> do
+          agreed <- agreedTo (reducedQuestion (fst <$> ways))
+          return $ if agreed then Just tsd else Nothing
+        -- No is the default: an empty answer keeps the transaction
+        _ -> askChoice terminal (reducedQuestion (fst <$> ways)) ((["no", "n"], Nothing) : [(reductionAnswers net w, Just t) | (w, t) <- ways])
 
 {- Sweeps -}
 

@@ -310,8 +310,10 @@ hw sendtx --input signed.json
 ```
 
 **`hw bumpfee TXID`** prepares a replacement of an unconfirmed payment that
-pays a higher fee, on Bitcoin only. The extra fee comes out of the change. Sign
-and send the replacement like any payment.
+pays a higher fee, on Bitcoin only. The extra fee comes out of the change. When
+the change cannot pay it, `hw` offers to add confirmed coins of the account, or
+to take what is missing from what the recipients receive, asking which of them
+pays. Sign and send the replacement like any payment.
 
 ```console
 hw bumpfee TXID --feerate high

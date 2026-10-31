@@ -3180,10 +3180,28 @@ bumpFeeSpec ctx = do
         runErr run `shouldSatisfy` Text.isInfixOf (Text.pack (coinArg (twoAddressesTx ctx) 1) <> "  30000 sat at /0/1")
         runErr run `shouldSatisfy` Text.isInfixOf "Add it? [y/N]"
 
-    it "is not replaced when the user does not want the coin" $
+    -- Without the coin, the replacement of 192 bytes pays 11520 and has no
+    -- change: the recipient pays the 40000 + 11520 - 50000 = 1520 missing
+    it "takes the higher fee from what the recipient receives when the user declines the coin, as the user agrees" $
       withChain ctx chain $ \home _ -> do
         stuck <- stuckPayment home
-        (errorOf <$> hwJson home ["bumpfee", stuck, "--feerate", "60"] ["n"]) `shouldReturn` Right "The transaction was not replaced"
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--feerate", "60"] ["n", "y"]
+        (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
+          `shouldBe` (Map.fromList [(otherAddr 0, 38480)], Map.empty, 11520)
+
+    it "offers the recipient once the coin is declined" $
+      withChain ctx chain $ \home _ -> do
+        stuck <- stuckPayment home
+        run <- hw home ["bumpfee", stuck, "--feerate", "60"] ["n", "n"]
+        runErr run `shouldSatisfy` Text.isInfixOf "Add it? [y/N]"
+        runErr run `shouldSatisfy` Text.isInfixOf "The coins of the transaction cannot pay its fee at 60 sat/byte, and no coin of the account is added. The recipient can pay the 1520 sat missing out of what it receives:"
+        runErr run `shouldSatisfy` Text.isInfixOf (Text.pack (textOf (otherAddr 0)) <> "  40000 sat, 38480 paying it")
+        runErr run `shouldSatisfy` Text.isInfixOf "Reduce what it receives? [y/N]"
+
+    it "is not replaced when the user wants neither the coin added nor the recipient paying" $
+      withChain ctx chain $ \home _ -> do
+        stuck <- stuckPayment home
+        (errorOf <$> hwJson home ["bumpfee", stuck, "--feerate", "60"] ["n", "n"]) `shouldReturn` Right "The transaction was not replaced"
 
     -- Nothing is typed: a question would cancel the command
     it "takes a confirmed coin of the account without asking with --yes" $
@@ -3192,6 +3210,101 @@ bumpFeeSpec ctx = do
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--feerate", "60", "--yes"] []
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
           `shouldBe` (Map.fromList [(otherAddr 0, 40000)], Map.fromList [(internalAddr 0, 17560)], 22440)
+
+  -- The send-all of the coins of 50000 and 30000 pays 76600 to one address
+  -- at 10 satoshis a byte, 3400 for its 340 bytes, with no change, and
+  -- leaves no coin in the account. At 20 satoshis a byte, its replacement
+  -- pays 6800: the address pays the 76600 + 6800 - 80000 = 3400 missing,
+  -- and receives 73200.
+  describe "A stuck send-all, whose recipient alone can pay the higher fee" $ do
+    let sentAll home = do
+          synced home
+          nosig <- nosigOf =<< txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--feerate", "10"] []
+          signAndSend home nosig
+    it "is replaced by one that takes the higher fee from what the recipient receives, as the user agrees" $
+      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+        stuck <- sentAll home
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--feerate", "20"] ["y"]
+        (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
+          `shouldBe` (Map.fromList [(otherAddr 0, 73200)], Map.empty, 6800)
+
+    it "names the recipient and what it would receive when it asks" $
+      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+        stuck <- sentAll home
+        run <- hw home ["bumpfee", stuck, "--feerate", "20"] ["y"]
+        runErr run `shouldSatisfy` Text.isInfixOf "The coins of the transaction cannot pay its fee at 20 sat/byte, and no coin of the account is added. The recipient can pay the 3400 sat missing out of what it receives:"
+        runErr run `shouldSatisfy` Text.isInfixOf (Text.pack (textOf (otherAddr 0)) <> "  76600 sat, 73200 paying it")
+        runErr run `shouldSatisfy` Text.isInfixOf "Reduce what it receives? [y/N]"
+
+    it "is not replaced when the user does not want the recipient to pay" $
+      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+        stuck <- sentAll home
+        (errorOf <$> hwJson home ["bumpfee", stuck, "--feerate", "20"] ["n"]) `shouldReturn` Right "The transaction was not replaced"
+
+    -- Nothing is typed: a question would cancel the command
+    it "takes the higher fee from what the recipient receives without asking with --yes" $
+      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+        stuck <- sentAll home
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--feerate", "20", "--yes"] []
+        (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
+          `shouldBe` (Map.fromList [(otherAddr 0, 73200)], Map.empty, 6800)
+
+    -- At 250 satoshis a byte, the 340 bytes pay 85000, more than the 80000
+    -- of the coins: 76600 + 85000 - 80000 = 81600 are missing. Nothing is
+    -- typed: the rate above 100 is not even asked about.
+    it "is refused when the recipient cannot pay either, before any question" $
+      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+        stuck <- sentAll home
+        run <- hw home ["bumpfee", stuck, "--feerate", "250"] []
+        run `shouldSatisfy` printed "The coins of the transaction cannot pay its fee at 250 sat/byte, and no confirmed coins of the account would. The recipient cannot pay the 81600 satoshis missing without being left with less than the dust limit of 546 satoshis"
+        runErr run `shouldNotSatisfy` Text.isInfixOf "Reduce what it receives?"
+        runErr run `shouldNotSatisfy` Text.isInfixOf "Prepare the transaction anyway"
+
+  -- The send-all to two addresses, 30000 to the second and the 80000 -
+  -- 30000 - 3740 = 46260 that remain to the first, pays 3740 for its 374
+  -- bytes. At 20 satoshis a byte, its replacement pays 7480: 3740 are
+  -- missing, which one of them pays alone, or each pays 1870 of. The
+  -- outputs are in an order drawn at random, so the recipient is picked by
+  -- its address, and the lines are checked without their numbers.
+  describe "A stuck send-all to several recipients" $ do
+    let sentAll home = do
+          synced home
+          nosig <- nosigOf =<< txOf =<< answer home ["preparesendall", textOf (otherAddr 0), fixedTo (otherAddr 1) "0.0003", "--feerate", "10"] []
+          signAndSend home nosig
+    it "is replaced by one that takes the higher fee from the recipient the user picks" $
+      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+        stuck <- sentAll home
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--feerate", "20"] [Text.pack (textOf (otherAddr 1))]
+        (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
+          `shouldBe` (Map.fromList [(otherAddr 0, 46260), (otherAddr 1, 26260)], Map.empty, 7480)
+
+    it "is replaced by one that takes the higher fee from all the recipients in equal shares, when the user says all" $
+      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+        stuck <- sentAll home
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--feerate", "20"] ["all"]
+        (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
+          `shouldBe` (Map.fromList [(otherAddr 0, 44390), (otherAddr 1, 28130)], Map.empty, 7480)
+
+    it "lists the recipients with what each would receive, and asks which pays" $
+      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+        stuck <- sentAll home
+        run <- hw home ["bumpfee", stuck, "--feerate", "20"] ["no"]
+        runErr run `shouldSatisfy` Text.isInfixOf "The 3740 sat missing can come out of what the recipients receive, one of them paying it alone, or all of them in equal shares:"
+        runErr run `shouldSatisfy` Text.isInfixOf (Text.pack (textOf (otherAddr 0)) <> "  46260 sat, 42520 paying it alone, 44390 paying its share")
+        runErr run `shouldSatisfy` Text.isInfixOf (Text.pack (textOf (otherAddr 1)) <> "  30000 sat, 26260 paying it alone, 28130 paying its share")
+        runErr run `shouldSatisfy` Text.isInfixOf "Who pays it? Type 1, 2 or all, or no [no]"
+
+    it "is not replaced when nobody pays, which an empty answer says" $
+      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+        stuck <- sentAll home
+        (errorOf <$> hwJson home ["bumpfee", stuck, "--feerate", "20"] [""]) `shouldReturn` Right "The transaction was not replaced"
+
+    -- --yes answers yes, and this is no yes-or-no question
+    it "still asks which recipient pays with --yes" $
+      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+        stuck <- sentAll home
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--feerate", "20", "--yes"] [Text.pack (textOf (otherAddr 1))]
+        paidToOthers bumped `shouldBe` Map.fromList [(otherAddr 0, 46260), (otherAddr 1, 26260)]
 
   -- The second payment, of 10000, spends the change of 27740 of the first
   -- and leaves 15480 of change at /1/1. One transaction of one input and

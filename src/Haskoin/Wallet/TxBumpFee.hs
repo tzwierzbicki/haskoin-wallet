@@ -1,13 +1,17 @@
 {-# LANGUAGE DisambiguateRecordFields #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 
 -- | Replacing a stuck transaction of the account with one that pays a
 -- higher fee (BIP 125), as bumpfee prepares it. The replacement spends the
 -- coins of the stuck transaction and pays its recipients the same amounts:
 -- the higher fee comes out of its change. When the change cannot pay it,
 -- confirmed coins of the account are added, as the user agrees: the network
--- takes no replacement that adds a coin it has not confirmed. A transaction
+-- takes no replacement that adds a coin it has not confirmed. When no coin
+-- of the account would do, or the user wants none added, the recipients
+-- pay what is missing out of what they receive, as the user agrees: one of
+-- them alone, or all of them in equal shares ('reductions'). A transaction
 -- of the account that spends the change of the stuck one dies with it, so
 -- the replacement then replaces both, paying the recipients of both, as the
 -- user agrees.
@@ -26,6 +30,11 @@ module Haskoin.Wallet.TxBumpFee
     BumpPlan (..),
     bumpPlan,
     coinsToAdd,
+    PaidBy (..),
+    Reduction (..),
+    reductions,
+    Funding (..),
+    fundings,
     buildBump,
     incrementalRate,
     checkBumpFee,
@@ -33,6 +42,9 @@ module Haskoin.Wallet.TxBumpFee
     childrenQuestion,
     addedLines,
     addedQuestion,
+    reducedLines,
+    reducedQuestion,
+    reductionAnswers,
   )
 where
 
@@ -41,14 +53,15 @@ import Control.Monad
 import Control.Monad.Except
 import Control.Monad.Reader (MonadTrans (lift))
 import Data.Containers.ListUtils (nubOrd)
-import Data.Either (isRight)
-import Data.List (find, inits, sortOn)
+import Data.Either (fromRight, isRight)
+import Data.List (find, inits, intercalate, nub, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, isJust, isNothing, listToMaybe, mapMaybe)
 import Data.Ord (Down (..))
 import qualified Data.Set as Set
 import Data.String.Conversions (cs)
+import Data.Text (Text)
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -59,12 +72,14 @@ import Haskoin.Wallet.CoinSelection (CoinSelection (..), FeePayer (..), Selectio
 import Haskoin.Wallet.Config (Config)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.PendingTx (PendingTx (..), changeAddress, lookupPendingTx, pendingTxs)
-import Haskoin.Wallet.RawTx (lookupRawTx)
+import Haskoin.Wallet.RawTx (getRawTx, lookupRawTx)
 import Haskoin.Wallet.Store (Store, fromStore, rawTransactions)
-import Haskoin.Wallet.TxBuilding (BuiltTx (..), ChosenPayment (..), CoinControl (..), WalletCoins (..), assemblePayment, choosePayment)
+import Haskoin.Wallet.TxBuilding (BuiltTx (..), ChosenPayment (..), CoinControl (..), WalletCoins (..), assemblePayment, choosePayment, recipientsPayFee)
 import Haskoin.Wallet.TxInfo (MyInputs (..), TxInfo (..), TxSummary (..), liveSummary, ownTransaction, txInfoBlockRefs)
+import Haskoin.Wallet.TxSendAll (sendAllFee)
 import Haskoin.Wallet.TxSignData
 import Haskoin.Wallet.TxSigning (parseTxSignData)
+import Haskoin.Wallet.Util (addrToString, safeSubtract)
 import Numeric.Natural (Natural)
 import System.Random (StdGen)
 
@@ -341,18 +356,109 @@ chooseBump ctx gen plan added feeByte dust =
 
 -- | The coins to add for the replacement to pay its recipients and its fee:
 -- the largest first, as few as do, among the candidates. None when the
--- coins of the plan do. Refused when even all the candidates do not.
-coinsToAdd :: Ctx -> StdGen -> BumpPlan -> [(Store.Unspent, Address, SoftPath)] -> Natural -> Natural -> Either String [(Store.Unspent, Address, SoftPath)]
+-- coins of the plan do. Nothing when even all the candidates do not.
+coinsToAdd :: Ctx -> StdGen -> BumpPlan -> [(Store.Unspent, Address, SoftPath)] -> Natural -> Natural -> Maybe [(Store.Unspent, Address, SoftPath)]
 coinsToAdd ctx gen plan candidates feeByte dust
-  | covers [] = Right []
-  | otherwise =
-      maybeToEither noCoins $ find covers (drop 1 (inits (sortOn (\(coin, _, _) -> Down coin.value) candidates)))
+  | covers [] = Just []
+  | otherwise = find covers (drop 1 (inits (sortOn (\(coin, _, _) -> Down coin.value) candidates)))
   where
     covers added = isRight (chooseBump ctx gen plan added feeByte dust)
+
+{- The recipients paying -}
+
+-- | Which recipients pay what the coins cannot
+data PaidBy
+  = -- | One of them alone, by its position among them, from 0
+    OneRecipient !Int
+  | -- | All of them, in equal shares, the first also paying the remainder,
+    -- as --recipientpay of preparetx has them pay
+    AllRecipients
+  deriving (Eq, Show)
+
+-- | The recipients paying what the coins of the transactions replaced
+-- cannot of the fee of the replacement, one way. The replacement then
+-- spends the coins in full, with no change, and adds none.
+data Reduction = Reduction
+  { reductionPaidBy :: !PaidBy,
+    -- | What the coins cannot pay, in satoshis
+    reductionMissing :: !Natural,
+    -- | Each recipient, with what the transactions replaced pay it and what
+    -- the replacement pays it
+    reductionRecipients :: ![(Address, Natural, Natural)]
+  }
+  deriving (Eq, Show)
+
+-- | The ways the recipients can pay what the coins of the plan cannot of
+-- the fee at the rate, with no coin added: each of them alone, in their
+-- order, then all of them in equal shares; those that leave no recipient
+-- below the dust limit. A lone recipient has one way. Refused when the
+-- coins pay the fee as they are, or when no way is left.
+reductions :: Ctx -> BumpPlan -> Natural -> Natural -> Either String [Reduction]
+reductions ctx plan feeByte dust = do
+  when (total >= amount + fee) $
+    Left "The coins of the transaction pay its fee: the recipients have nothing to pay"
+  let missing = amount + fee - total
+      ways = mapMaybe (reductionBy missing) ([OneRecipient i | several, i <- [0 .. count - 1]] <> [AllRecipients])
+  when (null ways) $ Left (cannot missing)
+  return ways
+  where
+    recipients = plan.planRecipients
+    count = length recipients
+    several = count > 1
+    total = sum [fromIntegral coin.value | coin <- plan.planCoins]
+    amount = sum (snd <$> recipients)
+    -- The replacement spends the coins in full, with no change: its fee is
+    -- that of a send-all
+    fee = sendAllFee ctx feeByte plan.planCoins (fst <$> recipients)
+    -- What each recipient gets paying the missing amount one way, when none
+    -- is left below the dust limit
+    reductionBy missing paidBy = do
+      after <- case paidBy of
+        OneRecipient i -> sequence [(addr,) <$> (if j == i then value `safeSubtract` missing else Just value) | (j, (addr, value)) <- zip [0 ..] recipients]
+        AllRecipients -> either (const Nothing) Just (recipientsPayFee (fromIntegral missing) recipients)
+      guard $ all ((>= dust) . snd) after
+      return
+        Reduction
+          { reductionPaidBy = paidBy,
+            reductionMissing = missing,
+            reductionRecipients = [(addr, before, afterwards) | ((addr, before), (_, afterwards)) <- zip recipients after]
+          }
+    cannot missing
+      | several =
+          "The recipients cannot pay the " <> show missing <> " satoshis missing, together or alone, without one being left with less than the dust limit of " <> show dust <> " satoshis"
+      | otherwise =
+          "The recipient cannot pay the " <> show missing <> " satoshis missing without being left with less than the dust limit of " <> show dust <> " satoshis"
+
+{- Funding -}
+
+-- | What pays the fee of the replacement, beyond the fees of the
+-- transactions replaced
+data Funding
+  = -- | Their change, which nothing needs to be asked about
+    ChangePays
+  | -- | Confirmed coins of the account, added as the user agrees
+    CoinsAdded ![(Store.Unspent, Address, SoftPath)]
+  | -- | The recipients, out of what they receive, one way, as the user
+    -- agrees
+    RecipientsReduced !Reduction
+  deriving (Eq, Show)
+
+-- | The fundings of the replacement at the fee rate, in the order bumpfee
+-- offers them: the change alone, when it pays; otherwise the coins of the
+-- account to add, when some would do, then each way the recipients can
+-- pay. Refused when nothing pays: neither the coins, nor the recipients.
+fundings :: Ctx -> StdGen -> BumpPlan -> [(Store.Unspent, Address, SoftPath)] -> Natural -> Natural -> Either String [Funding]
+fundings ctx gen plan candidates feeByte dust =
+  case (coinsToAdd ctx gen plan candidates feeByte dust, reductions ctx plan feeByte dust) of
+    (Just [], _) -> Right [ChangePays]
+    (Just added, reduced) -> Right (CoinsAdded added : (RecipientsReduced <$> fromRight [] reduced))
+    (Nothing, Right reduced) -> Right (RecipientsReduced <$> reduced)
+    (Nothing, Left cannot) -> Left (noCoins <> ". " <> cannot)
+  where
     noCoins = "The coins of the transaction cannot pay its fee at " <> show feeByte <> " sat/byte, and no confirmed coins of the account would"
 
 -- | The signing data of the replacement at the fee rate, from the coins of
--- the plan and the coins added, with the transactions those come from. Its
+-- the plan and its funding, with the transactions those come from. Its
 -- change goes to the change address of the plan, or to a new change
 -- address when the transactions replaced had no change.
 buildBump ::
@@ -363,16 +469,20 @@ buildBump ::
   DBAccountId ->
   StdGen ->
   BumpPlan ->
-  -- | The coins added, with their addresses and paths, and their transactions
-  ([(Store.Unspent, Address, SoftPath)], [Tx]) ->
+  Funding ->
   -- | Fee per byte
   Natural ->
   -- | Dust
   Natural ->
   ExceptT String (DB m) TxSignData
-buildBump ctx cfg net accId gen plan (added, addedParents) feeByte dust = do
-  let found = walletCoinsOf plan added
-  chosen <- liftEither $ chooseBump ctx gen plan added feeByte dust
+buildBump ctx cfg net accId gen plan funding feeByte dust = do
+  let (funded, added) = case funding of
+        ChangePays -> (plan, [])
+        CoinsAdded extra -> (plan, extra)
+        RecipientsReduced reduction -> (reducedPlan reduction, [])
+      found = walletCoinsOf funded added
+  addedParents <- mapM getRawTx $ nub [coin.outpoint.hash | (coin, _, _) <- added]
+  chosen <- liftEither $ chooseBump ctx gen funded added feeByte dust
   change <-
     if chosen.selection.changeAmount > 0
       then Just <$> maybe newChange return plan.planChange
@@ -381,6 +491,9 @@ buildBump ctx cfg net accId gen plan (added, addedParents) feeByte dust = do
   return $ TxSignData built.tx (nubOrd (plan.planParents <> addedParents)) built.inputPaths built.outputPaths (Just feeByte) Nothing plan.planReplaces
   where
     newChange = liftEither . fromDBAddr net =<< changeAddress ctx cfg accId
+    -- The plan with the recipients paid what the reduction leaves them
+    reducedPlan :: Reduction -> BumpPlan
+    reducedPlan reduction = plan {planRecipients = [(addr, after) | (addr, _, after) <- reduction.reductionRecipients]}
 
 -- | The satoshis per byte a replacement pays for its own size, beyond the
 -- fees of what it replaces, for the network to relay it: the incremental
@@ -431,6 +544,61 @@ addedLines feeByte added =
 addedQuestion :: [(Store.Unspent, Address, SoftPath)] -> String
 addedQuestion [_] = "Add it?"
 addedQuestion _ = "Add them?"
+
+-- | What bumpfee says of the ways the recipients can pay, those of
+-- 'reductions', before it asks which: each recipient, numbered when there
+-- are several, with what it receives, what it would receive paying alone,
+-- and its share when all can pay
+reducedLines :: Network -> Natural -> [Reduction] -> [String]
+reducedLines _ _ [] = []
+reducedLines net feeByte ways@(way : _) = header : rows
+  where
+    missing = show way.reductionMissing <> " sat missing"
+    recipients = [(addr, before) | (addr, before, _) <- way.reductionRecipients]
+    several = length recipients > 1
+    -- What each recipient gets paying it alone, by its position, when it can
+    alone = Map.fromList [(i, after) | w <- ways, OneRecipient i <- [w.reductionPaidBy], (_, _, after) <- [w.reductionRecipients !! i]]
+    -- What each gets paying its share, when all can
+    shares = listToMaybe [[after | (_, _, after) <- w.reductionRecipients] | w <- ways, w.reductionPaidBy == AllRecipients]
+    header =
+      "The coins of the transaction cannot pay its fee at " <> show feeByte <> " sat/byte, and no coin of the account is added. " <> who
+    who
+      | several =
+          "The " <> missing <> " can come out of what the recipients receive, one of them paying it alone"
+            <> maybe ":" (const ", or all of them in equal shares:") shares
+      | otherwise = "The recipient can pay the " <> missing <> " out of what it receives:"
+    rows
+      | several =
+          [ "  " <> show (i + 1) <> "  " <> addrToString net addr <> "  " <> show before <> " sat" <> aloneText i <> shareText i
+            | (i, (addr, before)) <- zip [0 :: Int ..] recipients
+          ]
+      | otherwise = ["  " <> addrToString net addr <> "  " <> show before <> " sat, " <> show after <> " paying it" | (addr, before, after) <- way.reductionRecipients]
+    aloneText i = maybe ", too little to pay it alone" (\after -> ", " <> show after <> " paying it alone") (Map.lookup i alone)
+    shareText i = maybe "" (\afters -> ", " <> show (afters !! i) <> " paying its share") shares
+
+-- | The question after 'reducedLines': whether the lone recipient pays, or
+-- which of several does, by the names of the ways
+reducedQuestion :: [Reduction] -> String
+reducedQuestion ways = case ways of
+  way : _ | length way.reductionRecipients == 1 -> "Reduce what it receives?"
+  _ -> "Who pays it? Type " <> offered <> ", or no"
+  where
+    offered = case wayName <$> ways of
+      [one] -> one
+      names -> intercalate ", " (init names) <> " or " <> last names
+
+-- | The name of a way, as the question offers it: the number of the
+-- recipient paying alone, from 1, or all
+wayName :: Reduction -> String
+wayName way = case way.reductionPaidBy of
+  OneRecipient i -> show (i + 1)
+  AllRecipients -> "all"
+
+-- | The answers that pick a way among several: its name, or the address of
+-- the recipient paying alone
+reductionAnswers :: Network -> Reduction -> [Text]
+reductionAnswers net way =
+  cs (wayName way) : [cs (addrToString net addr) | OneRecipient i <- [way.reductionPaidBy], (addr, _, _) <- take 1 (drop i way.reductionRecipients)]
 
 -- | A transaction id as hw writes it
 hex :: TxHash -> String
