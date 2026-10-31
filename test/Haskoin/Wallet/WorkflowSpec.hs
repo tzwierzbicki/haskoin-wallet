@@ -268,6 +268,28 @@ accountSpec =
         _ <- answer home ["createacc", "second"] seedTwice
         (accountsOf <$> hwJson home ["accounts", "--account", "second"] []) `shouldReturn` Right [("second", 1, 0)]
 
+    -- Nothing has paid the accounts: nothing to spend, and no coins
+    it "is listed by accounts in two lines, a blank line between accounts" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "second"] seedTwice
+        run <- hw home ["accounts"] []
+        runOut run `shouldBe` "main  btc  /44'/0'/0'\n  spendable 0.00000000 btc, no coins\n\nsecond  btc  /44'/0'/1'\n  spendable 0.00000000 btc, no coins\n"
+
+    it "is listed by accounts --verbose with the fingerprint of its seed" $
+      withHome $ \home -> do
+        createMain home
+        run <- hw home ["accounts", "--verbose"] []
+        runOut run `shouldSatisfy` Text.isInfixOf ("\n  Fingerprint: " <> testFingerprintText <> "\n")
+
+    -- The time is in the time zone of the computer, Central Europe here
+    it "is listed by accounts --verbose with the time it was created, to the second" $
+      withHome $ \home -> do
+        createMain home
+        run <- hwWithEnv [("TZ", centralEurope)] home ["accounts", "--verbose"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  Created    : "
+        runOut run `shouldSatisfy` (\out -> " CET\n" `Text.isInfixOf` out || " CEST\n" `Text.isInfixOf` out)
+
     it "takes the next index of a seed that has an account already" $
       withHome $ \home -> do
         createMain home
@@ -333,6 +355,12 @@ accountSpec =
         deleted `shouldSatisfy` \case ResponseAccResult _ True "The account main has been deleted" -> True; _ -> False
         (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right []
 
+    it "is deleted by deleteacc, which says so in one line" $
+      withHome $ \home -> do
+        createMain home
+        run <- hw home ["deleteacc", "main", "btc", "/44'/0'/0'"] []
+        runOut run `shouldBe` "The account main has been deleted\n"
+
     it "is not deleted for a network or a path that is not its own" $
       withHome $ \home -> do
         createMain home
@@ -387,8 +415,15 @@ addressSpec ctx =
         createMain home
         replicateM_ 2 $ answer home ["receive"] []
         run <- hw home ["addresses"] []
-        runOut run `shouldSatisfy` Text.isInfixOf ("/0/1: " <> externalAddrsText !! 1)
-        runOut run `shouldSatisfy` Text.isInfixOf ("/0/0: " <> externalAddrsText !! 0)
+        runOut run `shouldSatisfy` Text.isInfixOf ("/0/1  " <> externalAddrsText !! 1)
+        runOut run `shouldSatisfy` Text.isInfixOf ("/0/0  " <> externalAddrsText !! 0)
+
+    it "are listed by hw addresses in two lines each, a blank line between them" $
+      withHome $ \home -> do
+        createMain home
+        replicateM_ 2 $ answer home ["receive"] []
+        run <- hw home ["addresses"] []
+        map Text.null (Text.lines (runOut run)) `shouldBe` [False, False, True, False, False]
 
     -- The path /0/9 is padded to the width of /0/10
     it "are aligned by hw addresses when their paths differ in length" $
@@ -396,8 +431,8 @@ addressSpec ctx =
         createMain home
         replicateM_ 11 $ answer home ["receive"] []
         run <- hw home ["addresses", "--max", "2"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "/0/10: "
-        runOut run `shouldSatisfy` Text.isInfixOf ("/0/9 : " <> externalAddrsText !! 9)
+        runOut run `shouldSatisfy` Text.isInfixOf "/0/10  "
+        runOut run `shouldSatisfy` Text.isInfixOf ("/0/9   " <> externalAddrsText !! 9)
 
     -- The payment of 20000 pays its change to the first change address
     it "are shown by hw addresses --change under their paths on the change chain" $
@@ -405,13 +440,13 @@ addressSpec ctx =
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         run <- hw home ["addresses", "--change"] []
-        runOut run `shouldSatisfy` Text.isInfixOf ("/1/0: " <> internalAddrsText !! 0)
+        runOut run `shouldSatisfy` Text.isInfixOf ("/1/0  " <> internalAddrsText !! 0)
 
-    it "are shown by receive under their derivation paths" $
+    it "are shown by receive under their derivation paths, with every detail" $
       withHome $ \home -> do
         createMain home
         run <- hw home ["receive"] []
-        runOut run `shouldSatisfy` Text.isInfixOf ("/0/0: " <> externalAddrsText !! 0)
+        runOut run `shouldSatisfy` Text.isPrefixOf ("/0/0  " <> externalAddrsText !! 0 <> "\n  Transactions: 0\n")
 
     it "are named by label, given by their text" $
       withHome $ \home -> do
@@ -1364,8 +1399,7 @@ receivingSpec ctx = do
         _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
         run <- hw home ["sync"] []
         runExit run `shouldBe` ExitFailure 1
-        run `shouldSatisfy` printed "Account   : cash"
-        run `shouldSatisfy` printed "Not synced: The store at http://127.0.0.1:"
+        run `shouldSatisfy` printed "cash  bch  /44'/145'/0'\n  not synced: The store at http://127.0.0.1:"
 
     -- The chain pays main: a sync of second alone leaves main as it was
     it "updates only the account of --account" $
@@ -1466,7 +1500,14 @@ signingSpec ctx = do
         nosig <- paymentSigned home
         txid <- txidOf =<< onePendingTx home
         run <- hw home ["deletetx", nosig] []
-        runOut run `shouldSatisfy` Text.isInfixOf ("Deleted: " <> Text.pack txid)
+        runOut run `shouldSatisfy` Text.isInfixOf ("Deleted  : " <> Text.pack txid)
+
+    -- The payment spends one coin and pays its change to one change address
+    it "says what deletetx freed: the coins it spent, and the change addresses it paid" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        nosig <- paymentSigned home
+        run <- hw home ["deletetx", nosig] []
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  Freed    : 1 coin, 1 change address\n"
 
     it "is signed from the parts of the mnemonic with signtx --parts" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -2892,9 +2933,9 @@ changeBackSpec ctx =
       withChain ctx chain $ \home _ -> do
         synced home
         run <- hw home fromBoth ["/0/1"]
-        runErr run `shouldSatisfy` Text.isInfixOf "The payment spends coins at 2 addresses. Its change can go back to any of them:\n/0/0: "
-        runErr run `shouldSatisfy` Text.isInfixOf ("/0/0: " <> externalAddrsText !! 0 <> "\n  Total      : 0.00050000 btc")
-        runErr run `shouldSatisfy` Text.isInfixOf ("/0/1: " <> externalAddrsText !! 1 <> "\n  Total      : 0.00030000 btc")
+        runErr run `shouldSatisfy` Text.isInfixOf "The payment spends coins at 2 addresses. Its change can go back to any of them:\n/0/0  "
+        runErr run `shouldSatisfy` Text.isInfixOf ("/0/0  " <> externalAddrsText !! 0 <> "\n  total 0.00050000 btc")
+        runErr run `shouldSatisfy` Text.isInfixOf ("/0/1  " <> externalAddrsText !! 1 <> "\n  total 0.00030000 btc")
         runErr run `shouldSatisfy` Text.isInfixOf "Which address gets the change? Type its path [/0/0]"
 
     it "goes back without --change-back when the configuration file says so" $
@@ -3713,10 +3754,7 @@ balancesListSpec ctx =
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         run <- hw home ["balances"] []
-        runOut run `shouldSatisfy` Text.isInfixOf ("/0/0: " <> externalAddrsText !! 0)
-        runOut run `shouldSatisfy` Text.isInfixOf "Total      : 0.00050000 btc"
-        runOut run `shouldSatisfy` Text.isInfixOf "Spendable  : 0.00000000 btc"
-        runOut run `shouldSatisfy` Text.isInfixOf "Unspendable: 0.00050000 btc"
+        runOut run `shouldSatisfy` Text.isInfixOf ("/0/0  " <> externalAddrsText !! 0 <> "\n  total 0.00050000 btc, spendable 0.00000000 btc, unspendable 0.00050000 btc\n")
 
     it "are none before a payment, which balances says" $
       withHome $ \home -> do

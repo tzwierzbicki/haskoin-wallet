@@ -148,10 +148,10 @@ commandResponse ctx cfg unit = \case
   CommandExportAcc account file -> cmdExportAcc ctx cfg account file
   CommandRenameAcc opts -> cmdRenameAcc cfg opts
   CommandDeleteAcc name net path -> cmdDeleteAcc cfg name net path
-  CommandAccounts account -> cmdAccounts cfg account
+  CommandAccounts account _ -> cmdAccounts cfg account
   -- Addresses
   CommandReceive opts -> cmdReceive ctx cfg opts
-  CommandAddresses account internal paging -> cmdAddresses cfg account internal paging
+  CommandAddresses account internal _ paging -> cmdAddresses cfg account internal paging
   CommandBalances account paging -> cmdBalances cfg account paging
   CommandLabel opts -> cmdLabel cfg opts
   -- Coins
@@ -184,8 +184,8 @@ commandResponse ctx cfg unit = \case
 -- chunk, or Nothing for a command that answers at once
 commandListing :: Ctx -> Command -> Maybe (ExceptT String (DB IO) Listing)
 commandListing ctx = \case
-  CommandAccounts account -> Just $ accountsListing account
-  CommandAddresses account internal paging -> Just $ addressesListing account internal paging
+  CommandAccounts account _ -> Just $ accountsListing account
+  CommandAddresses account internal _ paging -> Just $ addressesListing account internal paging
   CommandBalances account paging -> Just $ balancesListing account paging
   CommandCoins account locked paging -> Just $ coinsListing account locked paging
   CommandTxs account _ paging -> Just $ txsListing account paging

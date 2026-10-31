@@ -43,7 +43,7 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.FeeRates (FeeRates (..), levelName, rateAt)
 import Haskoin.Wallet.Keys (KeySource (..))
 import Haskoin.Wallet.MessageSigning (signedMessageBlock)
-import Haskoin.Wallet.Parser (BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), TxView (..), program)
+import Haskoin.Wallet.Parser (BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), View (..), program)
 import Haskoin.Wallet.Parser.Help (commandName)
 import Haskoin.Wallet.Parser.Run (commandNamed)
 import Haskoin.Wallet.Response
@@ -101,11 +101,6 @@ rblock n str =
 countPrinter :: Natural -> Doc Style
 countPrinter = text . show
 
--- | A number of confirmations: none yet waits for the network
-confirmationsPrinter :: Natural -> Doc Style
-confirmationsPrinter 0 = styled Waiting "0"
-confirmationsPrinter n = text (show n)
-
 {- Amounts -}
 
 -- | An amount the wallet holds or gets, in green unless zero
@@ -146,113 +141,210 @@ partsPrinter xs =
         indent 2 $ mnemonicPrinter ws
       ]
 
--- | The accounts synced, each with the results of its sync
-syncResultsPrinter :: AmountUnit -> [SyncRes] -> Doc Style
-syncResultsPrinter unit xs = vcat $ intercalate [mempty] (f <$> xs)
-  where
-    f (SyncRes acc spendable bh h t c r k n) =
-      [ accountPrinter unit acc spendable,
-        styled Title "Sync Results:",
-        indent 2 $ field 12 "Best Block" <> styled Muted (cs $ blockHashToHex bh),
-        indent 2 $ field 12 "Best Height" <> text (show h),
-        indent 2 $ field 12 "Tx updates" <> text (show t),
-        indent 2 $ field 12 "Coin updates" <> text (show c),
-        indent 2 $ field 12 "Sent again" <> text (show r),
-        indent 2 $ field 12 "Conflicted" <> conflicted k,
-        indent 2 $ field 12 "Discovered" <> text (show n)
-      ]
-    -- A conflicted transaction can no longer be sent
-    conflicted 0 = text "0"
-    conflicted k = styled Failure (show k)
+{- Accounts -}
 
--- | The accounts the sync left out, each with the failure of its store
-notSyncedPrinter :: [(DBAccount, Text)] -> Doc Style
-notSyncedPrinter accs = vcat $ intercalate [mempty] (f <$> accs)
-  where
-    f (acc, failure) =
-      [ field 10 "Account" <> pretty (dBAccountName acc) `withStyle` Account,
-        field 10 "Network" <> text (accountNetwork acc).name,
-        field 10 "Not synced" <> styled Failure (cs failure)
-      ]
+-- | An account as a listing shows it, in the view asked for, the time it
+-- was created in the time zone of the computer
+listedAccountDoc :: View -> AmountUnit -> DBAccount -> Word64 -> IO (Doc Style)
+listedAccountDoc view unit acc spendable = do
+  created <- utcToLocalZonedTime (dBAccountCreated acc)
+  return $ case view of
+    Compact -> compactAccountDoc unit acc spendable
+    Verbose -> verboseAccountDoc unit created acc spendable
 
--- | An account with its balances: those the store reports, and the one it
--- can spend now
-accountPrinter :: AmountUnit -> DBAccount -> Word64 -> Doc Style
-accountPrinter unit acc spendable =
-  vcat
-    [ field 11 "Account" <> pretty (dBAccountName acc) `withStyle` Account,
-      field 11 "Fingerprint" <> maybe (styled Muted "unknown") pretty (dBAccountFingerprint acc),
-      field 11 "Deriv" <> text deriv,
-      field 11 "Network" <> text net,
-      field 11 "External" <> text (show $ dBAccountExternal acc),
-      field 11 "Internal" <> text (show $ dBAccountInternal acc),
-      field 11 "Created" <> text created,
-      styled Field "Balances:",
-      indent 2 $ field 11 "Confirmed" <> amountPrinter unit (dBAccountBalanceConfirmed acc),
-      indent 2 $ field 11 "Unconfirmed" <> amountPrinter unit (dBAccountBalanceUnconfirmed acc),
-      indent 2 $ field 11 "Spendable" <> amountPrinter unit spendable,
-      indent 2 $ field 11 "Coins" <> countPrinter (fromIntegral $ dBAccountBalanceCoins acc)
+-- | The first line of an account: its name, its network and its
+-- derivation path, the three things deleteacc asks for
+accountLine :: DBAccount -> Doc Style
+accountLine acc =
+  columns
+    [ pretty (dBAccountName acc) `withStyle` Account,
+      text (accountNetwork acc).name,
+      text (pathToStr (accountPath acc))
     ]
+
+-- | An account in two lines: its first line, then what it can spend now,
+-- what is unconfirmed when anything is, and how many coins it holds
+compactAccountDoc :: AmountUnit -> DBAccount -> Word64 -> Doc Style
+compactAccountDoc unit acc spendable =
+  vcat [accountLine acc, indent 2 (commaList (spendable' : unconfirmed <> [coins]))]
   where
-    deriv = pathToStr $ accountPath acc
-    net = (accountNetwork acc).name
-    utctime = dBAccountCreated acc
-    created = formatTime defaultTimeLocale "%d %b %Y" utctime
+    spendable' = "spendable" <+> amountPrinter unit spendable
+    unconfirmed = ["unconfirmed" <+> amountPrinter unit v | let v = dBAccountBalanceUnconfirmed acc, v > 0]
+    coins = text (counted (fromIntegral (dBAccountBalanceCoins acc)) "coin" "coins")
+
+-- | An account with every detail: its first line, then its fields
+verboseAccountDoc :: AmountUnit -> ZonedTime -> DBAccount -> Word64 -> Doc Style
+verboseAccountDoc unit created acc spendable =
+  vcat $
+    accountLine acc
+      : ( indent 2
+            <$> [ field 11 "Fingerprint" <> maybe (styled Muted "unknown") pretty (dBAccountFingerprint acc),
+                  field 11 "Addresses" <> text (show (dBAccountExternal acc) <> " receiving, " <> show (dBAccountInternal acc) <> " change"),
+                  field 11 "Created" <> text (secondText created),
+                  field 11 "Confirmed" <> amountPrinter unit (dBAccountBalanceConfirmed acc),
+                  field 11 "Unconfirmed" <> amountPrinter unit (dBAccountBalanceUnconfirmed acc),
+                  field 11 "Spendable" <> amountPrinter unit spendable,
+                  field 11 "Coins" <> countPrinter (fromIntegral (dBAccountBalanceCoins acc))
+                ]
+        )
 
 -- | The document in the style
 withStyle :: Doc Style -> Style -> Doc Style
 withStyle doc style = annotate style doc
 
--- | An address after its derivation path, which tells receiving and change
--- addresses apart, with its label and the given details below it. The path
--- is padded to the given width, that of the longest path listed
--- ('pathWidth'). Each detail is a name and a value, the names padded to the
--- longest one.
-addressLines :: Natural -> DBAddress -> [(Text, Doc Style)] -> Doc Style
-addressLines pad addr details =
-  vcat $
-    (field pad (pathText (addrPath addr)) <> pretty (dBAddressAddress addr))
-      : [indent 2 (field width name <> value) | (name, value) <- labelled <> details]
+-- | Cells side by side, two spaces apart
+columns :: [Doc Style] -> Doc Style
+columns = hcat . intersperse "  "
+
+-- | Items one after the other, a comma between them
+commaList :: [Doc Style] -> Doc Style
+commaList = hcat . intersperse ", "
+
+-- | A count with its noun: "no coins", "1 coin", "3 coins"
+counted :: Natural -> String -> String -> String
+counted 0 _ plural = "no " <> plural
+counted 1 singular _ = "1 " <> singular
+counted n _ plural = show n <> " " <> plural
+
+{- Syncs -}
+
+-- | The accounts synced, each with the results of its sync, a blank line
+-- between them
+syncResultsPrinter :: AmountUnit -> [SyncRes] -> Doc Style
+syncResultsPrinter unit results = vcat . intersperse mempty $ syncResultDoc unit <$> results
+
+-- | An account synced: its two lines as accounts shows them, the block it
+-- is synced to, and what changed, one kind of change a line. What did not
+-- change is left out, and a sync that changed nothing says so.
+syncResultDoc :: AmountUnit -> SyncRes -> Doc Style
+syncResultDoc unit result =
+  vcat $ compactAccountDoc unit (syncResAccount result) (syncResSpendable result) : (indent 2 <$> synced : changes)
   where
-    label = dBAddressLabel addr
-    labelled = [("Label", pretty label `withStyle` UserText) | not (Text.null label)]
-    width = fromIntegral $ maximum (Text.length . fst <$> ("Label", mempty) : details)
+    synced
+      | null changes = "synced at block" <+> height <> ", nothing new"
+      | otherwise = "synced at block" <+> height
+    height = text (show (syncResBlockHeight result))
+    changes = updated <> sentAgain <> conflicted <> found
+    updated = case (syncResTxUpdates result, syncResCoinUpdates result) of
+      (0, 0) -> []
+      (t, 0) -> [text (counted t "transaction" "transactions") <+> "updated"]
+      (0, c) -> [text (counted c "coin" "coins") <+> "updated"]
+      (t, c) -> [text (counted t "transaction" "transactions" <> " and " <> counted c "coin" "coins") <+> "updated"]
+    sentAgain = [text (counted r "transaction" "transactions") <+> "sent again" | let r = syncResRebroadcast result, r > 0]
+    -- A conflicted transaction can no longer be sent
+    conflicted = [styled Failure (counted k "pending transaction" "pending transactions" <> " conflicted") | let k = syncResConflicted result, k > 0]
+    found = [text (counted n "new address" "new addresses") <+> "found" | let n = syncResNewAddrs result, n > 0]
+
+-- | The accounts the sync left out, each with the failure of its store, a
+-- blank line between them
+notSyncedPrinter :: [(DBAccount, Text)] -> Doc Style
+notSyncedPrinter accs = vcat . intersperse mempty $ notSyncedDoc <$> accs
+
+notSyncedDoc :: (DBAccount, Text) -> Doc Style
+notSyncedDoc (acc, failure) =
+  vcat [accountLine acc, indent 2 (styled Failure "not synced:" <+> pretty failure)]
+
+{- Addresses -}
+
+-- | An address as addresses lists it, in the view asked for, the time it
+-- was created in the time zone of the computer. Its path is padded to the
+-- given width, that of the longest path listed ('pathWidth').
+listedAddressDoc :: View -> AmountUnit -> Natural -> DBAddress -> Word64 -> IO (Doc Style)
+listedAddressDoc view unit pad addr spendable = do
+  created <- utcToLocalZonedTime (dBAddressCreated addr)
+  return $ case view of
+    Compact -> compactAddressDoc unit pad addr spendable
+    Verbose -> verboseAddressDoc unit pad created addr spendable
+
+-- | The first line of an address: its derivation path, which tells
+-- receiving and change addresses apart, padded to the width given, then
+-- the address and its label
+addressLine :: Natural -> DBAddress -> Doc Style
+addressLine pad addr =
+  columns $
+    [text (block pad (cs (pathText (addrPath addr)))), pretty (dBAddressAddress addr)]
+      <> [labelWord label | let label = dBAddressLabel addr, not (Text.null label)]
+
+-- | An address in two lines: its first line, then what it can spend now
+-- and what it received in how many transactions, or that it is unused
+compactAddressDoc :: AmountUnit -> Natural -> DBAddress -> Word64 -> Doc Style
+compactAddressDoc unit pad addr spendable =
+  vcat [addressLine pad addr, indent 2 activity]
+  where
+    txs = fromIntegral (dBAddressBalanceTxs addr)
+    activity
+      | txs == 0 = styled Muted "unused"
+      | otherwise =
+          commaList
+            [ "spendable" <+> amountPrinter unit spendable,
+              "received" <+> amountPrinter unit (dBAddressBalanceReceived addr) <+> "in" <+> text (counted txs "transaction" "transactions")
+            ]
+
+-- | An address with every detail: its first line, then its fields
+verboseAddressDoc :: AmountUnit -> Natural -> ZonedTime -> DBAddress -> Word64 -> Doc Style
+verboseAddressDoc unit pad created addr spendable =
+  vcat $
+    addressLine pad addr
+      : ( indent 2
+            <$> [ field 12 "Transactions" <> countPrinter (fromIntegral (dBAddressBalanceTxs addr)),
+                  field 12 "Received" <> amountPrinter unit (dBAddressBalanceReceived addr),
+                  field 12 "Confirmed" <> amountPrinter unit (dBAddressBalanceConfirmed addr),
+                  field 12 "Unconfirmed" <> amountPrinter unit (dBAddressBalanceUnconfirmed addr),
+                  field 12 "Spendable" <> amountPrinter unit spendable,
+                  field 12 "Coins" <> countPrinter (fromIntegral (dBAddressBalanceCoins addr)),
+                  field 12 "Created" <> text (secondText created)
+                ]
+        )
 
 -- | The width of the longest derivation path of the addresses listed
 pathWidth :: [DBAddress] -> Natural
 pathWidth addrs = fromIntegral $ maximum (0 : (Text.length . pathText . addrPath <$> addrs))
 
--- | An address as `addresses` shows it: its transactions, what it received, and
--- the balance it can spend now
-addressPrinter :: AmountUnit -> Natural -> DBAddress -> Word64 -> Doc Style
-addressPrinter unit pad addr spendable =
-  addressLines
-    pad
-    addr
-    [ ("Txs", countPrinter $ fromIntegral $ dBAddressBalanceTxs addr),
-      ("Received", amountPrinter unit $ dBAddressBalanceReceived addr),
-      ("Spendable", amountPrinter unit spendable)
-    ]
-
--- | An address as balances shows it: the balance of its coins. What it
--- cannot spend yet waits.
-coinBalancePrinter :: AmountUnit -> Natural -> DBAddress -> CoinBalance -> Doc Style
-coinBalancePrinter unit pad addr balance =
-  addressLines
-    pad
-    addr
-    [ ("Total", amountPrinter unit $ coinBalanceTotal balance),
-      ("Spendable", amountPrinter unit $ coinBalanceSpendable balance),
-      ("Unspendable", unspendable (coinBalanceUnspendable balance))
+-- | An address as balances shows it: its first line, then the value of
+-- its coins, what it can spend now, and the rest, which waits
+coinBalanceDoc :: AmountUnit -> Natural -> DBAddress -> CoinBalance -> Doc Style
+coinBalanceDoc unit pad addr balance =
+  vcat
+    [ addressLine pad addr,
+      indent 2 $
+        commaList
+          [ "total" <+> amountPrinter unit (coinBalanceTotal balance),
+            "spendable" <+> amountPrinter unit (coinBalanceSpendable balance),
+            "unspendable" <+> unspendable (coinBalanceUnspendable balance)
+          ]
     ]
   where
     unspendable 0 = neutralAmount unit 0
     unspendable v = amountIn (Just Waiting) unit (fromIntegral v)
 
--- | Addresses as balances lists them, their paths aligned. preparetx
--- --change-back shows the addresses it can send the change back to this way.
+-- | Addresses as balances lists them, their paths aligned, a blank line
+-- between them. preparetx --change-back shows the addresses it can send
+-- the change back to this way.
 coinBalancesPrinter :: AmountUnit -> [(DBAddress, CoinBalance)] -> Doc Style
-coinBalancesPrinter unit addrs = vcat $ uncurry (coinBalancePrinter unit (pathWidth (fst <$> addrs))) <$> addrs
+coinBalancesPrinter unit addrs = vcat . intersperse mempty $ uncurry (coinBalanceDoc unit (pathWidth (fst <$> addrs))) <$> addrs
+
+{- Coins -}
+
+-- | A coin in three lines: its value with its state and its
+-- confirmations, the address that holds it, and the coin itself, as
+-- lockcoin and --coin take it
+coinDoc :: Network -> AmountUnit -> JsonCoin -> Doc Style
+coinDoc net unit JsonCoin {..} =
+  vcat
+    [ columns [amountCell (Just Incoming) "" unit (fromIntegral jsonCoinValue), commaList [state, confirmations]],
+      indent 2 ("at" <+> text (addrToString net jsonCoinAddress)),
+      indent 2 (styled Muted (coinText jsonCoinOutpoint))
+    ]
+  where
+    state = case jsonCoinLock of
+      Just LockedByTransaction -> styled Waiting "locked by a pending transaction"
+      Just LockedByUser -> styled Waiting "locked by you"
+      Nothing
+        | jsonCoinSpendable -> styled Good "spendable"
+        | otherwise -> styled Waiting "not spendable yet"
+    confirmations
+      | jsonCoinConfirmations == 0 = styled Waiting "unconfirmed"
+      | otherwise = text (confirmationsText jsonCoinConfirmations)
 
 {- Transactions -}
 
@@ -264,7 +356,7 @@ coinBalancesPrinter unit addrs = vcat $ uncurry (coinBalancePrinter unit (pathWi
 -- | A transaction as a listing shows it, in the view asked for, with its
 -- time in the time zone of the computer. A listing of every account names
 -- the account of each transaction.
-listedTxDoc :: TxView -> Network -> AmountUnit -> Maybe DBAccount -> TxInfo -> IO (Doc Style)
+listedTxDoc :: View -> Network -> AmountUnit -> Maybe DBAccount -> TxInfo -> IO (Doc Style)
 listedTxDoc view net unit accountM info = do
   time <- localTxTime info
   return $ case view of
@@ -334,21 +426,25 @@ typeWord = \case
   TxInternal -> "Internal"
 
 -- | What a transaction adds to the account or takes from it, with its
--- sign, green when it comes in and red when it goes out. The number is
--- right-aligned in a column wide enough for 9 999 bitcoins in any unit,
--- and the unit is padded to its plural, so that the amounts of a listing
--- line up. A larger amount pushes the rest of its line.
+-- sign, green when it comes in and red when it goes out
 amountColumn :: AmountUnit -> Integer -> Doc Style
-amountColumn unit amnt =
-  maybe id annotate style (pretty (rblock 14 number))
+amountColumn unit amnt = amountCell style sign unit amnt
+  where
+    (style, sign)
+      | amnt > 0 = (Just Incoming, "+")
+      | amnt < 0 = (Just Outgoing, "")
+      | otherwise = (Nothing, "")
+
+-- | An amount in a column: its number after the sign given, right-aligned
+-- in a column wide enough for 9 999 bitcoins in any unit, in the style if
+-- any, then its unit padded to its plural, so that the amounts of a
+-- listing line up. A larger amount pushes the rest of its line.
+amountCell :: Maybe Style -> String -> AmountUnit -> Integer -> Doc Style
+amountCell style sign unit amnt =
+  maybe id annotate style (pretty (rblock 14 (sign <> cs (showAmount unit amnt))))
     <+> pretty (block unitWidth (cs (showUnit unit amnt)))
   where
-    number = (if amnt > 0 then "+" else "") <> cs (showAmount unit amnt)
     unitWidth = fromIntegral (Text.length (showUnit unit 2))
-    style
-      | amnt > 0 = Just Incoming
-      | amnt < 0 = Just Outgoing
-      | otherwise = Nothing
 
 -- | Where a transaction stands, in a few words. One that waits shows its
 -- fee rate, which tells how soon a block may take it: unconfirmed, or in
@@ -369,8 +465,7 @@ statusWords feeByte = \case
     rate = ", " <> text (show feeByte <> " sat/byte")
 
 confirmationsText :: Natural -> String
-confirmationsText 1 = "1 confirmation"
-confirmationsText n = show n <> " confirmations"
+confirmationsText n = counted n "confirmation" "confirmations"
 
 -- | A transaction in three lines: its first line, whom it pays, and the
 -- hash to name it by. A replacement that bumpfee prepared also names the
@@ -434,11 +529,11 @@ verboseTxDoc net unit named time info@(TxInfo summary status) =
   where
     from = spentFrom summary
     (to, change) = paidTo summary
-    columns = addressColumns net unit (from <> to <> change)
+    widths = addressColumns net unit (from <> to <> change)
     -- What the wallet receives is green. What it spends, and what others
     -- receive, is neither in nor out of the account.
     section name ownStyle rows =
-      [field 9 name <> align (vcat (addressRow net unit columns ownStyle <$> rows)) | not (null rows)]
+      [field 9 name <> align (vcat (addressRow net unit widths ownStyle <$> rows)) | not (null rows)]
 
 -- | The fields that say where a transaction stands: the hash to name it
 -- by, its time to the second with its time zone, and what its first line
@@ -538,20 +633,20 @@ valueText unit v = cs (showAmount unit (fromIntegral v) <> " " <> showUnit unit 
 -- right-aligned, then for an address of the wallet, its path and its
 -- label. The value of an address of the wallet is in the style given.
 addressRow :: Network -> AmountUnit -> AddressColumns -> Maybe Style -> TxAddress -> Doc Style
-addressRow net unit columns ownStyle row =
+addressRow net unit widths ownStyle row =
   cellsLine $
-    [(addressColumn columns, address, text address)]
-      <> [(valueColumn columns, value, valueDoc value) | Just v <- [txAddressValue row], let value = valueText unit v]
+    [(addressColumn widths, address, text address)]
+      <> [(valueColumn widths, value, valueDoc value) | Just v <- [txAddressValue row], let value = valueText unit v]
       <> case txAddressOwn row of
         Just (path, label) ->
-          (pathColumn columns, pathToStr path, styled Muted (pathToStr path))
+          (pathColumn widths, pathToStr path, styled Muted (pathToStr path))
             : [(0, "", labelWord label) | not (Text.null label)]
         Nothing -> []
   where
     address = addrToString net (txAddress row)
     style = if isJust (txAddressOwn row) then ownStyle else Nothing
     -- Right-aligned, so that the points line up
-    valueDoc value = pretty (replicate (valueColumn columns - length value) ' ') <> maybe id annotate style (pretty value)
+    valueDoc value = pretty (replicate (valueColumn widths - length value) ' ') <> maybe id annotate style (pretty value)
 
 -- | Cells side by side, two spaces apart, each with the width of its
 -- column and its text. Each is padded to the width of its column, but the
@@ -576,33 +671,14 @@ leftCoinsPrinter unit left =
         <> ","
         <+> text (leftReasonText coin.leftCoinReason)
 
-coinPrinter :: Network -> AmountUnit -> JsonCoin -> Doc Style
-coinPrinter net unit JsonCoin {..} =
-  vcat
-    [ -- As --coin, lockcoin and unlockcoin take it
-      coinField "Coin" <+> text (coinText jsonCoinOutpoint),
-      coinField "Value" <+> amountPrinter unit jsonCoinValue,
-      coinField "Address" <+> text (addrToString net jsonCoinAddress),
-      coinField "Confs" <+> confirmationsPrinter jsonCoinConfirmations,
-      coinField "Status" <+> status
-    ]
-  where
-    coinField name = styled Field (block 7 name <> ":")
-    status = case jsonCoinLock of
-      Just LockedByTransaction -> styled Waiting "Locked by a pending transaction"
-      Just LockedByUser -> styled Waiting "Locked by the user"
-      Nothing
-        | jsonCoinSpendable -> styled Good "Spendable"
-        | otherwise -> styled Waiting "Not spendable yet"
-
--- | Print the answer of a command. A listing of transactions shows each
--- one in the view given.
-prettyPrinter :: AmountUnit -> TxView -> Response -> IO ()
+-- | Print the answer of a command. A listing shows each element in the
+-- view given.
+prettyPrinter :: AmountUnit -> View -> Response -> IO ()
 prettyPrinter unit view res = do
   responsePrinter unit view res
   when (responseFailed res) exitFailure
 
-responsePrinter :: AmountUnit -> TxView -> Response -> IO ()
+responsePrinter :: AmountUnit -> View -> Response -> IO ()
 responsePrinter unit view answer =
   case answer of
     -- The listings, which the screen reads in chunks ('rowsPrinter')
@@ -621,16 +697,12 @@ responsePrinter unit view answer =
           indent 2 $ mnemonicPrinter mnem
         ]
           <> partsPrinter parts
-    ResponseAccount acc spendable -> renderIO $ accountPrinter unit acc spendable
-    ResponseAccResult _ res txt -> do
-      let p =
-            if res
-              then styled Good "Success"
-              else styled Failure "Failure"
-      renderIO . vcat $ [styled Field "Result:" <+> p, pretty txt]
+    ResponseAccount acc spendable -> renderIO =<< listedAccountDoc Verbose unit acc spendable
+    -- In green when the command did what it was asked, in red otherwise
+    ResponseAccResult _ res txt -> renderIO $ styled (if res then Good else Failure) (cs txt)
     ResponseFile f -> renderIO $ styled Field "File:" <+> styled UserText f
     ResponseAddress _ addr spendable ->
-      renderIO $ addressPrinter unit (pathWidth [addr]) addr spendable
+      renderIO =<< listedAddressDoc Verbose unit (pathWidth [addr]) addr spendable
     ResponseTx acc txInfo ->
       renderIO =<< txAnswerDoc (accountNetwork acc) unit txInfo
     -- The coins left in the account below the transaction, apart from it
@@ -644,14 +716,19 @@ responsePrinter unit view answer =
           [ styled Field "Sent:" <+> text (cs $ txHashToHex h),
             indent 2 $ styled Field "Network:" <+> text net.name
           ]
-    -- By the hash pendingtxs showed: the id of a signed transaction
-    ResponseDeleteTx nosigH txidM c a ->
+    -- By the hash pendingtxs showed: the id of a signed transaction. The
+    -- coins it spent are free to spend again, and the change addresses it
+    -- paid are free for the next transaction.
+    ResponseDeleteTx nosigH txidM coins addrs ->
       renderIO $
         vcat
-          [ styled Field "Deleted:" <+> styled PendingHash (cs $ txHashToHex (fromMaybe nosigH txidM)),
-            indent 2 $ styled Field "Freed coins:" <+> text (show c),
-            indent 2 $ styled Field "Freed internal addresses:" <+> text (show a)
+          [ field 9 "Deleted" <> styled PendingHash (cs $ txHashToHex (fromMaybe nosigH txidM)),
+            indent 2 $ field 9 "Freed" <> freed
           ]
+      where
+        freed = case [counted coins "coin" "coins" | coins > 0] <> [counted addrs "change address" "change addresses" | addrs > 0] of
+          [] -> text "nothing"
+          parts -> text (intercalate ", " parts)
     -- As it is, byte for byte: verifymsg --input reads it back, and other
     -- wallets check the message exactly
     ResponseSignMsg m s a ->
@@ -750,21 +827,23 @@ data Rows = Rows
   }
 
 -- | The rows of an answer that lists, or Nothing for an answer that does
--- not. The screen reads a listing in chunks, so the paths of its
--- addresses are padded to the longest path of the account on the chains
--- listed, the same for every chunk, rather than to the longest one shown.
--- The transactions show in the view given, their times in the time zone
--- of the computer, a blank line between them in both views.
-rowsPrinter :: AmountUnit -> TxView -> Response -> IO (Maybe Rows)
+-- not, a blank line between them. The screen reads a listing in chunks,
+-- so the paths of its addresses are padded to the longest path of the
+-- account on the chains listed, the same for every chunk, rather than to
+-- the longest one shown. The accounts, addresses and transactions show in
+-- the view given, their times in the time zone of the computer.
+rowsPrinter :: AmountUnit -> View -> Response -> IO (Maybe Rows)
 rowsPrinter unit view = \case
-  ResponseAccounts accs ->
-    return . Just $ Rows (text "There are no accounts to display") (uncurry (accountPrinter unit) <$> accs) True
-  ResponseAddresses acc addrs ->
+  ResponseAccounts accs -> do
+    docs <- mapM (uncurry (listedAccountDoc view unit)) accs
+    return . Just $ Rows (text "There are no accounts to display") docs True
+  ResponseAddresses acc addrs -> do
     let pad = longestPathWidth acc (nub (dBAddressInternal . fst <$> addrs))
-     in return . Just $ Rows (text "There are no addresses to display") (uncurry (addressPrinter unit pad) <$> addrs) False
+    docs <- mapM (uncurry (listedAddressDoc view unit pad)) addrs
+    return . Just $ Rows (text "There are no addresses to display") docs True
   ResponseBalances acc addrs ->
     let pad = longestPathWidth acc [False, True]
-     in return . Just $ Rows (text "There are no addresses with coins to display") (uncurry (coinBalancePrinter unit pad) <$> addrs) False
+     in return . Just $ Rows (text "There are no addresses with coins to display") (uncurry (coinBalanceDoc unit pad) <$> addrs) True
   ResponseTxs acc txs -> do
     docs <- mapM (listedTxDoc view (accountNetwork acc) unit Nothing) txs
     return . Just $ Rows (text "There are no transactions to display") docs True
@@ -777,7 +856,7 @@ rowsPrinter unit view = \case
     docs <- mapM (\(acc, info) -> listedTxDoc view (accountNetwork acc) unit (named acc) info) held
     return . Just $ Rows (text none) docs True
   ResponseCoins acc coins ->
-    return . Just $ Rows (text "There are no coins to display") (coinPrinter (accountNetwork acc) unit <$> coins) True
+    return . Just $ Rows (text "There are no coins to display") (coinDoc (accountNetwork acc) unit <$> coins) True
   _ -> return Nothing
 
 -- | The width of the longest derivation path of the account on the
@@ -799,7 +878,7 @@ listingDoc (Rows _ docs apart) = vcat (if apart then intersperse mempty docs els
 -- of a listing without rows says so. A later chunk of a listing whose
 -- rows are set apart starts with the blank line that sets it apart from
 -- the chunk before. An answer that is not a listing is a failure here.
-chunkDoc :: AmountUnit -> TxView -> Bool -> Response -> IO (Doc Style)
+chunkDoc :: AmountUnit -> View -> Bool -> Response -> IO (Doc Style)
 chunkDoc unit view first answer = do
   rowsM <- rowsPrinter unit view answer
   return $ case rowsM of

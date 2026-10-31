@@ -50,24 +50,25 @@ data Command
   | -- | The account, and the file to write its document to
     CommandExportAcc !(Maybe Text) !FilePath
   | CommandRenameAcc !RenameAcc
-  | -- | The account, or every one
-    CommandAccounts !(Maybe Text)
+  | -- | The account, or every one, and how much of each to show
+    CommandAccounts !(Maybe Text) !View
   | -- | The name of the account, with its network and its path to confirm
     -- the deletion
     CommandDeleteAcc !Text !Network !HardPath
   | CommandReceive !Receive
-  | -- | The account, whether its change addresses, and the page
-    CommandAddresses !(Maybe Text) !Bool !(Paging Text)
+  | -- | The account, whether its change addresses, how much of each
+    -- address to show, and the page
+    CommandAddresses !(Maybe Text) !Bool !View !(Paging Text)
   | -- | The account, and the page
     CommandBalances !(Maybe Text) !(Paging Text)
   | CommandLabel !Label
   | -- | The account, how much of each transaction to show, and the page
-    CommandTxs !(Maybe Text) !TxView !(Paging TxHash)
+    CommandTxs !(Maybe Text) !View !(Paging TxHash)
   | CommandPrepareTx !PrepareTx
   | CommandPrepareSendAll !PrepareSendAll
   | -- | The account, or every one, how much of each transaction to show,
     -- and the page
-    CommandPendingTxs !(Maybe Text) !TxView !(Paging TxHash)
+    CommandPendingTxs !(Maybe Text) !View !(Paging TxHash)
   | -- | The account, and the transaction file
     CommandReviewTx !(Maybe Text) !FilePath
   | -- | The account, and the transaction file
@@ -100,17 +101,19 @@ data Command
     CommandSignSweep !Signing !(Maybe KeySource)
   deriving (Eq, Show)
 
--- | How much a listing of transactions shows of each one: three lines, or
--- every detail with --verbose
-data TxView = Compact | Verbose
+-- | How much a listing shows of each element: a few lines, or every
+-- detail with --verbose
+data View = Compact | Verbose
   deriving (Eq, Show)
 
--- | How much of each transaction the command lists: as asked of txs and
--- pendingtxs. The other commands list no transactions.
-txViewOf :: Command -> TxView
-txViewOf (CommandTxs _ view _) = view
-txViewOf (CommandPendingTxs _ view _) = view
-txViewOf _ = Compact
+-- | How much of each element the command lists, as asked of accounts,
+-- addresses, txs and pendingtxs. The other commands have one view.
+viewOf :: Command -> View
+viewOf (CommandAccounts _ view) = view
+viewOf (CommandAddresses _ _ view _) = view
+viewOf (CommandTxs _ view _) = view
+viewOf (CommandPendingTxs _ view _) = view
+viewOf _ = Compact
 
 -- | The options of mnemonic
 data NewMnemonic = NewMnemonic
@@ -841,18 +844,25 @@ accountsCommand =
       summary = "Show the accounts and their balances",
       details =
         [r|
-Each account shows the fingerprint of its seed when known, its derivation
-path, its network, and how many receiving (external) and change (internal)
-addresses it has. The accounts of one seed come together.
+Each account takes two lines. The first gives its name, its network and its
+derivation path, as deleteacc asks for them. The second gives what it can
+spend, what is unconfirmed, and how many coins it holds. The accounts of one
+seed come together.
 
-The confirmed and unconfirmed balances are those the server gave at the last
-sync. The spendable balance is what the account can spend now. It leaves out
-the coins locked by a pending transaction or by lockcoin, the coinbase coins
-with fewer than 100 confirmations, and the unconfirmed payments from other
-wallets. The unconfirmed change of the wallet's own transactions counts.
-preparetx can spend all of it, unless --min-conf asks for confirmations.
+The spendable balance is what the account can spend now. It leaves out the
+coins locked by a pending transaction or by lockcoin, the coinbase coins with
+fewer than 100 confirmations, and the unconfirmed payments from other wallets.
+The unconfirmed change of the wallet's own transactions counts. preparetx can
+spend all of it, unless --min-conf asks for confirmations.
+
+--verbose adds the fingerprint of the seed when known, how many receiving and
+change addresses the account has, when it was created, and the confirmed and
+unconfirmed balances the server gave at the last sync.
 |],
-      args = CommandAccounts <$> onlyAccountOption
+      args =
+        CommandAccounts
+          <$> onlyAccountOption
+          <*> verboseOption "Show every detail of each account: the fingerprint of its seed, its addresses, when it was created, and each of its balances."
     }
 
 {- receive -}
@@ -896,15 +906,20 @@ addressesCommand =
       summary = "List the receiving addresses of an account, or its change addresses",
       details =
         [r|
-The newest addresses come first. Each shows its derivation path, /0/i for a
-receiving address and /1/i for a change address, and its label. Then come its
-number of transactions, what it received, and what it can spend now, as
-`accounts` describes.
+The newest addresses come first. Each takes two lines. The first gives its
+derivation path, /0/i for a receiving address and /1/i for a change address,
+the address and its label. The second gives what it can spend now, as
+`accounts` describes, and what it received in how many transactions. An
+address no transaction has paid yet is unused.
+
+--verbose adds the confirmed and unconfirmed balances of the address, how many
+coins it holds, and when it was created.
 |],
       args =
         CommandAddresses
           <$> accountOption
           <*> changeAddressesOption
+          <*> verboseOption "Show every detail of each address: its transactions, what it received, its balances, its coins, and when it was created."
           <*> pagingOptions (afterOption "ADDRESS" str "Start after this address")
     }
 
@@ -952,13 +967,14 @@ balancesCommand =
       details =
         [r|
 `balances` lists the receiving and change addresses that hold coins, the
-largest total first. Each shows its derivation path, /0/i for a receiving
-address and /1/i for a change address, and three amounts. The total is the
-value of all its coins. The spendable amount is what it can spend now, as
-`accounts` describes. The unspendable amount is the rest. It counts the coins
-locked by a pending transaction or by lockcoin, the unconfirmed payments from
-other wallets, and the coinbase coins with fewer than 100 confirmations.
-`coins` tells which applies to each coin.
+largest total first. Each takes two lines. The first gives its derivation
+path, /0/i for a receiving address and /1/i for a change address, the address
+and its label. The second gives three amounts. The total is the value of all
+its coins. The spendable amount is what it can spend now, as `accounts`
+describes. The unspendable amount is the rest. It counts the coins locked by a
+pending transaction or by lockcoin, the unconfirmed payments from other
+wallets, and the coinbase coins with fewer than 100 confirmations. `coins`
+tells which applies to each coin.
 |],
       args =
         CommandBalances
@@ -1013,17 +1029,20 @@ third gives the txid.
       args =
         CommandTxs
           <$> accountOption
-          <*> txViewOption
+          <*> verboseOption txVerboseHelp
           <*> pagingOptions (afterOption "TXID" (maybeReader $ hexToTxHash . cs) "Start after this transaction")
     }
 
--- | The --verbose flag of the listings of transactions
-txViewOption :: Args TxView
-txViewOption =
+-- | The --verbose flag of a listing, with the help of the command about it
+verboseOption :: String -> Args View
+verboseOption what =
   flag Compact Verbose $
     short 'v'
       <> long "verbose"
-      <> help "Show every detail of each transaction: each address it spends from or pays, with its amount, path and label, and the fee."
+      <> help what
+
+txVerboseHelp :: String
+txVerboseHelp = "Show every detail of each transaction: each address it spends from or pays, with its amount, path and label, and the fee."
 
 {- preparetx -}
 
@@ -1347,7 +1366,7 @@ while that lasts. Delete it with deletetx, which frees its coins.
       args =
         CommandPendingTxs
           <$> onlyAccountOption
-          <*> txViewOption
+          <*> verboseOption txVerboseHelp
           <*> pagingOptions (afterOption "HASH" (maybeReader $ hexToTxHash . cs) "Start after this pending transaction")
     }
 
@@ -1513,7 +1532,9 @@ coinsCommand =
       details =
         [r|
 A coin is an unspent output of a transaction, written TXID:INDEX. The
-unconfirmed coins come first, then the newest.
+unconfirmed coins come first, then the newest. Each takes three lines: its
+value with its state and its confirmations, the address that holds it, and the
+coin itself, as lockcoin and --coin take it.
 
 A coin is spendable when the wallet can spend it now. Nothing locks it, a
 coinbase coin has 100 confirmations, and an unconfirmed coin is the change of
@@ -1730,7 +1751,8 @@ syncCommand =
       details =
         [r|
 `sync` asks the server for the latest balances, transactions and coins of the
-accounts.
+accounts. For each account, it shows its balances as `accounts` does, the
+block it is synced to, and what changed.
 
 It first looks for used addresses past the ones each account has, as far as
 the gap of the configuration file, 20 by default. Someone paying to the

@@ -28,15 +28,17 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (TimeZone (..), UTCTime (UTCTime), ZonedTime, fromGregorian, utcToZonedTime)
 import Data.Word (Word32, Word64, Word8)
-import Database.Persist.Sql (Migration, PersistValue, Single (..), rawQuery, rawSql, runMigrationQuiet)
+import Database.Persist.Sql (Migration, PersistValue, Single (..), rawQuery, rawSql, runMigrationQuiet, toSqlKey)
 import Database.Persist.Sqlite (runSqlite)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Account (insertAccount, nextAccount)
 import Haskoin.Wallet.Config (Config (..))
-import Haskoin.Wallet.Database (DB, DBAccount, DBAccountId, DBPendingTx (..), hashBytes, migrateAll)
+import Haskoin.Wallet.Coin (JsonCoin (..))
+import Haskoin.Wallet.Database (DB, DBAccount (..), DBAccountId, DBAddress (..), DBPendingTx (..), hashBytes, migrateAll)
 import Haskoin.Wallet.Keys (MnemonicPass (..), PublicSeed (..), seedOf, signingKey)
 import Haskoin.Wallet.Store
+import Haskoin.Wallet.Sync (SyncRes (..))
 import Haskoin.Wallet.Style (Style, renderPlain)
 import Haskoin.Wallet.TxInfo (ChainStatus (..), MyInputs (..), MyOutputs (..), PendingStatus (..), TxInfo (..), TxStatus (..), TxSummary (..), TxType (..), pendingSigned)
 import Haskoin.Wallet.TxSignData (TxSignData (..), nosigHash)
@@ -229,6 +231,34 @@ testNewAcc2 ctx = newAccountOf ctx testMnemonic2 btc
 -- | A new Bitcoin Cash account of the test wallet in the database
 testNewAccBch :: Ctx -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
 testNewAccBch ctx = newAccountOf ctx testMnemonic bch
+
+{- Rows of the wallet -}
+
+-- | The account main of the test wallet as its row holds it: account 0 of
+-- the test mnemonic on Bitcoin, with 12 receiving and 3 change addresses,
+-- 0.05 btc confirmed and 0.001 btc unconfirmed in 3 coins, created at
+-- 'seenTime'
+mainAccountRow :: DBAccount
+mainAccountRow = DBAccount "main" 0 "btc" 12 3 testAccountXPub (Just testFingerprintText) 5000000 100000 3 seenTime
+
+-- | The first receiving address of that account as its row holds it,
+-- labelled "Invoice 42": paid 50000 in one transaction, which it still
+-- holds in one coin, created at 'seenTime'
+paidAddressRow :: DBAddress
+paidAddressRow = DBAddress (toSqlKey 1) False 0 (externalAddrsText !! 0) "Invoice 42" 50000 0 1 1 50000 seenTime
+
+-- | Its second receiving address, which nothing has paid
+unusedAddressRow :: DBAddress
+unusedAddressRow = DBAddress (toSqlKey 1) False 1 (externalAddrsText !! 1) "" 0 0 0 0 0 seenTime
+
+-- | The coin of 50000 at the first receiving address as coins lists it:
+-- in block 800000, 3 confirmations deep, free and spendable
+spendableCoinRow :: JsonCoin
+spendableCoinRow = JsonCoin (OutPoint (fakeTxHash 1) 0) (externalAddr 0) 50000 (Store.BlockRef 800000 1) 3 Nothing True
+
+-- | A sync of main that found nothing new, at block 800002
+quietSync :: SyncRes
+quietSync = SyncRes mainAccountRow 5000000 (fakeBlockHash 2) 800002 0 0 0 0 0
 
 {- Transaction summaries -}
 

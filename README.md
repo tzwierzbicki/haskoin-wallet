@@ -178,12 +178,16 @@ hw exportacc --account vault vault.json     # on the offline computer
 hw importacc vault.json                     # on the online computer
 ```
 
-**`hw accounts`** shows the accounts with their balances. The spendable
-balance leaves out locked coins, coinbase coins not yet mature, and
-unconfirmed payments from other wallets.
+**`hw accounts`** shows the accounts with their balances. Each takes two
+lines: its name, network and derivation path, then what it can spend, what is
+unconfirmed and how many coins it holds. The spendable balance leaves out
+locked coins, coinbase coins not yet mature, and unconfirmed payments from
+other wallets. `--verbose` adds the fingerprint of the seed, the addresses,
+when the account was created, and its confirmed and unconfirmed balances.
 
 ```console
 hw accounts
+hw accounts --verbose
 hw accounts --account savings --unit sat
 ```
 
@@ -203,8 +207,9 @@ hw deleteacc savings btc "/44'/0'/0'"
 
 **`hw sync`** updates the accounts from the server: balances, transactions,
 coins and pending transactions. It also finds addresses that another wallet
-of the same seed used. Run it before you prepare a payment and after you send
-one. `--full` downloads everything again, which is rarely needed. When the
+of the same seed used. For each account, it shows its balances, the block it
+is synced to, and what changed. Run it before you prepare a payment and after
+you send one. `--full` downloads everything again, which is rarely needed. When the
 server does not answer for a network, `sync` leaves out the accounts of that
 network and says why, and still syncs the others.
 
@@ -222,12 +227,14 @@ hw receive --label "invoice 42"
 ```
 
 **`hw addresses`** lists the receiving addresses, the newest first, or the
-change addresses with `--change`. Each shows its path, label, transactions,
-what it received and what it can spend.
+change addresses with `--change`. Each takes two lines: its path, the address
+and its label, then what it can spend and what it received, or that it is
+unused. `--verbose` adds its balances, its coins and when it was created.
 
 ```console
 hw addresses
 hw addresses --change
+hw addresses --verbose
 hw addresses --max 10 --after ADDRESS
 ```
 
@@ -246,9 +253,10 @@ hw label ADDRESS "rent from Bob"
 
 ### Coins
 
-**`hw coins`** lists the coins of an account, each as `TXID:INDEX`, and
-tells whether it is spendable or locked. **`hw lockcoin`** keeps a coin from
-being spent, and **`hw unlockcoin`** frees it again.
+**`hw coins`** lists the coins of an account. Each takes three lines: its
+value with its state, spendable or locked, and its confirmations; the address
+that holds it; and the coin as `TXID:INDEX`. **`hw lockcoin`** keeps a coin
+from being spent, and **`hw unlockcoin`** frees it again.
 
 ```console
 hw coins

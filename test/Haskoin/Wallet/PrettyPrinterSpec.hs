@@ -1,17 +1,23 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | How hw shows a transaction: its first line, the compact view that txs
--- and pendingtxs list by default, and the verbose view of --verbose and of
--- the commands that answer with one transaction. The transactions are
+-- | How hw shows what it lists and answers with: a transaction, an
+-- account, an address, a coin, a sync. Each has a compact view, the one
+-- the listings show by default, and some a verbose view, that of --verbose
+-- and of the commands that answer with one element. The transactions are
 -- those of the shared story of TestUtils, a payment of 50000 received at
--- /0/0 and then spent, shown at 'seenTimeInCet'.
+-- /0/0 and then spent, and the rows are those of the account main, shown
+-- at 'seenTimeInCet'.
 module Haskoin.Wallet.PrettyPrinterSpec (spec) where
 
 import qualified Data.Map.Strict as Map
 import Haskoin
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.Address (CoinBalance (..))
 import Haskoin.Wallet.Amounts (AmountUnit (..))
-import Haskoin.Wallet.PrettyPrinter (compactTxDoc, headlineDoc, txAnswerDoc, verboseTxDoc)
+import Haskoin.Wallet.Coin (CoinLock (..), JsonCoin (..))
+import Haskoin.Wallet.Database (DBAccount (..))
+import Haskoin.Wallet.PrettyPrinter
+import Haskoin.Wallet.Sync (SyncRes (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo
 import Test.Hspec
@@ -22,6 +28,140 @@ spec = do
   compactSpec
   verboseSpec
   answerSpec
+  accountSpec
+  addressSpec
+  balanceSpec
+  coinSpec
+  syncSpec
+
+accountSpec :: Spec
+accountSpec =
+  describe "An account as hw shows it" $ do
+    -- 5000000 satoshis spendable, 100000 unconfirmed
+    it "gives its name, network and path, then what it can spend, what is unconfirmed and its coins" $
+      renderedLines (compactAccountDoc UnitBitcoin mainAccountRow 5000000)
+        `shouldBe` [ "main  btc  /44'/0'/0'",
+                     "  spendable 0.05000000 btc, unconfirmed 0.00100000 btc, 3 coins"
+                   ]
+
+    it "leaves out the unconfirmed balance when there is none, and says an empty account has no coins" $
+      renderedLines (compactAccountDoc UnitBitcoin mainAccountRow {dBAccountBalanceUnconfirmed = 0, dBAccountBalanceCoins = 0} 0)
+        `shouldBe` [ "main  btc  /44'/0'/0'",
+                     "  spendable 0.00000000 btc, no coins"
+                   ]
+
+    it "gives every detail with --verbose, the time it was created on the clock given" $
+      renderedLines (verboseAccountDoc UnitBitcoin seenTimeInCet mainAccountRow 5000000)
+        `shouldBe` [ "main  btc  /44'/0'/0'",
+                     "  Fingerprint: bc560f95",
+                     "  Addresses  : 12 receiving, 3 change",
+                     "  Created    : 14 Nov 2023 23:13:20 CET",
+                     "  Confirmed  : 0.05000000 btc",
+                     "  Unconfirmed: 0.00100000 btc",
+                     "  Spendable  : 0.05000000 btc",
+                     "  Coins      : 3"
+                   ]
+
+    it "says the fingerprint is unknown when hw has not learnt it" $
+      (renderedLines (verboseAccountDoc UnitBitcoin seenTimeInCet mainAccountRow {dBAccountFingerprint = Nothing} 5000000) !! 1)
+        `shouldBe` "  Fingerprint: unknown"
+
+addressSpec :: Spec
+addressSpec =
+  describe "An address as hw shows it" $ do
+    it "gives its path, the address and its label, then what it can spend and what it received" $
+      renderedLines (compactAddressDoc UnitBitcoin 4 paidAddressRow 50000)
+        `shouldBe` [ "/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Invoice 42\"",
+                     "  spendable 0.00050000 btc, received 0.00050000 btc in 1 transaction"
+                   ]
+
+    it "says an address no transaction has paid is unused" $
+      renderedLines (compactAddressDoc UnitBitcoin 4 unusedAddressRow 0)
+        `shouldBe` [ "/0/1  1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg",
+                     "  unused"
+                   ]
+
+    -- A path of 5 characters, such as /0/10, is listed too
+    it "pads its path to the width given, so that the addresses line up" $
+      (renderedLines (compactAddressDoc UnitBitcoin 5 unusedAddressRow 0) !! 0)
+        `shouldBe` "/0/1   1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"
+
+    it "gives every detail with --verbose, the time it was created on the clock given" $
+      renderedLines (verboseAddressDoc UnitBitcoin 4 seenTimeInCet paidAddressRow 50000)
+        `shouldBe` [ "/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Invoice 42\"",
+                     "  Transactions: 1",
+                     "  Received    : 0.00050000 btc",
+                     "  Confirmed   : 0.00050000 btc",
+                     "  Unconfirmed : 0.00000000 btc",
+                     "  Spendable   : 0.00050000 btc",
+                     "  Coins       : 1",
+                     "  Created     : 14 Nov 2023 23:13:20 CET"
+                   ]
+
+balanceSpec :: Spec
+balanceSpec =
+  describe "An address as balances shows it" $
+    -- 80000 in coins, of which 50000 can be spent now: 30000 cannot
+    it "gives its path, the address and its label, then its total, spendable and unspendable balances" $
+      renderedLines (coinBalanceDoc UnitBitcoin 4 paidAddressRow (CoinBalance 80000 50000))
+        `shouldBe` [ "/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Invoice 42\"",
+                     "  total 0.00080000 btc, spendable 0.00050000 btc, unspendable 0.00030000 btc"
+                   ]
+
+coinSpec :: Spec
+coinSpec =
+  describe "A coin as hw shows it" $ do
+    it "gives its value, its state and its confirmations, then its address, then the coin as lockcoin takes it" $
+      renderedLines (coinDoc btc UnitBitcoin spendableCoinRow)
+        `shouldBe` [ "    0.00050000 btc  spendable, 3 confirmations",
+                     "  at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj",
+                     "  0000000000000000000000000000000000000000000000000000000000000001:0"
+                   ]
+
+    it "says a coin a pending transaction spends is locked by it" $
+      (renderedLines (coinDoc btc UnitBitcoin spendableCoinRow {jsonCoinLock = Just LockedByTransaction, jsonCoinSpendable = False}) !! 0)
+        `shouldBe` "    0.00050000 btc  locked by a pending transaction, 3 confirmations"
+
+    it "says a coin locked with lockcoin is locked by you" $
+      (renderedLines (coinDoc btc UnitBitcoin spendableCoinRow {jsonCoinLock = Just LockedByUser, jsonCoinSpendable = False}) !! 0)
+        `shouldBe` "    0.00050000 btc  locked by you, 3 confirmations"
+
+    it "says a free coin the wallet cannot spend yet is not spendable yet, and an unconfirmed one unconfirmed" $
+      (renderedLines (coinDoc btc UnitBitcoin spendableCoinRow {jsonCoinBlock = Store.MemRef 1700000000, jsonCoinConfirmations = 0, jsonCoinSpendable = False}) !! 0)
+        `shouldBe` "    0.00050000 btc  not spendable yet, unconfirmed"
+
+syncSpec :: Spec
+syncSpec =
+  describe "The sync of an account as hw shows it" $ do
+    it "gives the account as accounts does, the block it is synced to, and each kind of change on a line" $
+      renderedLines (syncResultDoc UnitBitcoin quietSync {syncResTxUpdates = 2, syncResCoinUpdates = 3, syncResRebroadcast = 1, syncResConflicted = 1, syncResNewAddrs = 4})
+        `shouldBe` [ "main  btc  /44'/0'/0'",
+                     "  spendable 0.05000000 btc, unconfirmed 0.00100000 btc, 3 coins",
+                     "  synced at block 800002",
+                     "  2 transactions and 3 coins updated",
+                     "  1 transaction sent again",
+                     "  1 pending transaction conflicted",
+                     "  4 new addresses found"
+                   ]
+
+    it "says nothing new when nothing changed" $
+      renderedLines (syncResultDoc UnitBitcoin quietSync)
+        `shouldBe` [ "main  btc  /44'/0'/0'",
+                     "  spendable 0.05000000 btc, unconfirmed 0.00100000 btc, 3 coins",
+                     "  synced at block 800002, nothing new"
+                   ]
+
+    it "counts the transactions updated alone when no coin was" $
+      drop 2 (renderedLines (syncResultDoc UnitBitcoin quietSync {syncResTxUpdates = 1}))
+        `shouldBe` [ "  synced at block 800002",
+                     "  1 transaction updated"
+                   ]
+
+    it "gives an account left out with why its store failed" $
+      renderedLines (notSyncedDoc (mainAccountRow, "The store at http://127.0.0.1:1/ did not answer"))
+        `shouldBe` [ "main  btc  /44'/0'/0'",
+                     "  not synced: The store at http://127.0.0.1:1/ did not answer"
+                   ]
 
 headlineSpec :: Spec
 headlineSpec =

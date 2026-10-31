@@ -16,7 +16,7 @@ import Haskoin.Wallet.Listing (Listing, streamListing)
 import Haskoin.Wallet.Pager (pagerCommand, withPager, writeDoc)
 import Haskoin.Wallet.Migration (Hooks (..), migrateDB)
 import Haskoin.Wallet.Backup (backupDatabase, migrationBackupDirectory)
-import Haskoin.Wallet.Parser (GlobalOptions (..), TxView, parserMain, txViewOf)
+import Haskoin.Wallet.Parser (GlobalOptions (..), View, parserMain, viewOf)
 import Haskoin.Wallet.PrettyPrinter (chunkDoc, errorDoc, prettyPrinter, printNextSteps)
 import Haskoin.Wallet.Response (Response (..), responseFailed)
 import Haskoin.Wallet.Util (encodeJsonPretty)
@@ -43,19 +43,19 @@ clientMain = do
     case commandListing ctx cmd of
       Just listing | not json -> do
         pager <- pagerCommand noPager cfg
-        printListing cfg pager unit (txViewOf cmd) listing
+        printListing cfg pager unit (viewOf cmd) listing
       _ -> do
         res <- commandResponse ctx cfg unit cmd
         if json
           then jsonPrinter res
           else do
-            prettyPrinter unit (txViewOf cmd) res
+            prettyPrinter unit (viewOf cmd) res
             printNextSteps cmd res
 
 -- | Print a listing on the screen, chunk by chunk, through the pager when
 -- there is one, its transactions in the view given. A listing that fails
 -- exits as a failure, as an answer does.
-printListing :: Config -> Maybe String -> AmountUnit -> TxView -> ExceptT String (DB IO) Listing -> IO ()
+printListing :: Config -> Maybe String -> AmountUnit -> View -> ExceptT String (DB IO) Listing -> IO ()
 printListing cfg pager unit view listing = do
   failed <- withPager pager $ \h output -> do
     let write = writeDoc h output
