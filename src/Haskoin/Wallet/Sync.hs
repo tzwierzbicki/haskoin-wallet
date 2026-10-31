@@ -12,7 +12,8 @@ import Conduit (MonadUnliftIO)
 import Control.Monad
 import Control.Monad.Except
 import Control.Monad.Reader (MonadIO (..), MonadTrans (lift))
-import Data.Containers.ListUtils (nubOrd)
+import Data.Containers.ListUtils (nubOrd, nubOrdOn)
+import Data.Either (partitionEithers)
 import Data.List (partition, sort)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -138,6 +139,27 @@ data SyncRes = SyncRes
     syncResNewAddrs :: !Natural
   }
   deriving (Eq, Show)
+
+-- | Sync the accounts, each with the store of its network. The store of
+-- each network is first asked whether it is up. The accounts of a network
+-- whose store is down are not synced, and the others are. One store out of
+-- service then does not hold back the accounts of the other networks.
+-- Returns the syncs, and the accounts not synced with the failure of their
+-- store, both in the order of the accounts.
+syncAccounts :: (MonadUnliftIO m) => Ctx -> Config -> (Network -> Store) -> [(DBAccountId, DBAccount)] -> Bool -> ExceptT String (DB m) ([SyncRes], [(DBAccount, String)])
+syncAccounts ctx cfg storeOn accs full = do
+  failures <- liftIO $ forM networks $ \net -> (,) net.name <$> healthFailure (storeOn net)
+  results <- forM accs $ \(accId, acc) -> do
+    let net = accountNetwork acc
+    case join (lookup net.name failures) of
+      Just failure -> return $ Left (acc, failure)
+      Nothing -> Right <$> sync ctx cfg (storeOn net) net accId full
+  let (notSynced, synced) = partitionEithers results
+  return (synced, notSynced)
+  where
+    -- Network has no Ord instance, so the networks are told apart by name
+    networks = nubOrdOn (.name) (accountNetwork . snd <$> accs)
+    healthFailure store = either Just (const Nothing) <$> runExceptT (storeHealth store)
 
 -- | Bring an account up to date with the store.
 --

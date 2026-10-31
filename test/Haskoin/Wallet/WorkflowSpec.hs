@@ -131,9 +131,15 @@ askedMnemonic run = "Mnemonic" `Text.isInfixOf` runErr run
 accountsOf :: Response -> Either String [(Text, Int, Word64)]
 accountsOf (ResponseAccount acc spendable) = Right [(dBAccountName acc, dBAccountIndex acc, spendable)]
 accountsOf (ResponseAccounts accs) = Right [(dBAccountName acc, dBAccountIndex acc, spendable) | (acc, spendable) <- accs]
-accountsOf (ResponseSync results) = Right [(dBAccountName (syncResAccount s), dBAccountIndex (syncResAccount s), syncResSpendable s) | s <- results]
-accountsOf (ResponseRecover _ _ results) = accountsOf (ResponseSync results)
+accountsOf (ResponseSync results _) = Right [(dBAccountName (syncResAccount s), dBAccountIndex (syncResAccount s), syncResSpendable s) | s <- results]
+accountsOf (ResponseRecover _ _ results) = accountsOf (ResponseSync results [])
 accountsOf other = Left (show other)
+
+-- | The accounts a sync left out, each by name with the failure of its
+-- store
+notSyncedOf :: Response -> Either String [(Text, Text)]
+notSyncedOf (ResponseSync _ notSynced) = Right [(dBAccountName acc, failure) | (acc, failure) <- notSynced]
+notSyncedOf other = Left (show other)
 
 -- | The account of an answer, with its index and its public key
 keyOf :: Response -> Either String (Text, Int, Text)
@@ -953,20 +959,22 @@ failureSpec ctx = do
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
 
     -- The store of the test home refuses every connection. hw crashed with
-    -- the exception of the web client before, and wrote no JSON.
+    -- the exception of the web client before, and wrote no JSON. The sync
+    -- leaves the account out, with the failure of its store.
     it "tells when the store is out of reach, in its JSON too" $
       withHome $ \home -> do
         createMain home
-        (errorOf <$> hwJson home ["sync"] [])
-          `shouldReturn` Right "The store at http://127.0.0.1:1/ could not be reached: the connection failed"
+        (notSyncedOf <$> hwJson home ["sync"] [])
+          `shouldReturn` Right [("main", "The store at http://127.0.0.1:1/ could not be reached: the connection failed")]
 
     -- The web client decodes an answer only once hw uses it: hw crashed
     -- there before, with the error of the decoder
     it "tells when the store gives an answer it cannot read, as a server that is not a haskoin-store does" $
       withServerAnswering "not a store" $ \home url -> do
         createMain home
-        failure <- errorOf <$> hwJson home ["sync"] []
-        failure `shouldSatisfy` either (const False) (Text.isPrefixOf ("The store at " <> Text.pack url <> " gave an answer hw could not read: "))
+        notSynced <- notSyncedOf <$> hwJson home ["sync"] []
+        (map fst <$> notSynced) `shouldBe` Right ["main"]
+        (map snd <$> notSynced) `shouldSatisfy` either (const False) (all (Text.isPrefixOf ("The store at " <> Text.pack url <> " gave an answer hw could not read: ")))
 
     -- hw crashed with the exception of the system before, and wrote no JSON
     it "tells when a file it reads does not exist, naming it" $
@@ -1317,6 +1325,30 @@ receivingSpec ctx = do
           `shouldReturn` Right "The coins do not cover the amount and the fee"
 
   describe "A sync" $ do
+    -- The store answers every question about Bitcoin Cash with the error
+    -- page of a proxy, as when the store behind the proxy is down. hw
+    -- failed the whole sync before, with the error StringError "could not
+    -- decode error". The chain pays main 50000.
+    it "syncs the accounts whose store is up, and leaves out those whose store is down, with the failure of their store" $
+      withChainDownOn ctx [bch] (paidChain ctx) $ \home _ -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
+        answered <- hwJson home ["sync"] []
+        accountsOf answered `shouldBe` Right [("main", 0, 50000)]
+        (map fst <$> notSyncedOf answered) `shouldBe` Right ["cash"]
+        (map snd <$> notSyncedOf answered)
+          `shouldSatisfy` either (const False) (all (\failure -> "The store at http://127.0.0.1:" `Text.isPrefixOf` failure && "/ answered with an error hw could not read" `Text.isSuffixOf` failure))
+
+    it "exits with 1 when it left out an account, and prints why" $
+      withChainDownOn ctx [bch] (paidChain ctx) $ \home _ -> do
+        createMain home
+        _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
+        run <- hw home ["sync"] []
+        runExit run `shouldBe` ExitFailure 1
+        run `shouldSatisfy` printed "Account   : cash"
+        run `shouldSatisfy` printed "Not synced: The store at http://127.0.0.1:"
+
     -- The chain pays main: a sync of second alone leaves main as it was
     it "updates only the account of --account" $
       withChain ctx (paidChain ctx) $ \home _ -> do

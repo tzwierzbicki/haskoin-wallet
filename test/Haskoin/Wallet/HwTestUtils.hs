@@ -20,6 +20,7 @@ module Haskoin.Wallet.HwTestUtils
     mine,
     inMempool,
     withChain,
+    withChainDownOn,
     withServerAnswering,
   )
 where
@@ -49,7 +50,7 @@ import Haskoin.Store.WebCommon (HeightParam (..), LimitParam (..), Param (..))
 import Haskoin.Wallet.Response (Response)
 import Haskoin.Wallet.Store (Store (..))
 import Haskoin.Wallet.TestUtils (addressScript, blockAt, blockMinedAt, otherAddr)
-import Network.HTTP.Types (hContentType, status200, status404)
+import Network.HTTP.Types (hContentType, status200, status404, status502)
 import Network.Wai (Application, pathInfo, queryString, requestMethod, responseLBS, strictRequestBody)
 import Network.Wai.Handler.Warp (testWithApplication)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
@@ -313,14 +314,27 @@ chainStore ctx ref bestTime =
 -- | Run a test with a home whose hw talks to a fake store, which serves the
 -- chain held in the reference it gives the test, on every network
 withChain :: Ctx -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
-withChain ctx chain test = do
+withChain ctx = withChainDownOn ctx []
+
+-- | 'withChain', with the store down on the given networks
+withChainDownOn :: Ctx -> [Network] -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
+withChainDownOn ctx downs chain test = do
   ref <- newIORef chain
   -- The best block was mined three minutes before the test
   bestTime <- subtract 180 . floor <$> getPOSIXTime
-  testWithApplication (return (storeApp ctx (chainStore ctx ref bestTime))) $ \port ->
+  testWithApplication (return (downOn downs (storeApp ctx (chainStore ctx ref bestTime)))) $ \port ->
     withHome $ \home -> do
       useStore home ("http://127.0.0.1:" <> show port <> "/")
       test home ref
+
+-- | The server, down on the given networks: every question about one of
+-- them gets the error page of a proxy in front of a store that does not
+-- answer
+downOn :: [Network] -> Application -> Application
+downOn downs app req respond
+  | any (\net -> [Text.pack net.name] == take 1 (pathInfo req)) downs =
+      respond $ responseLBS status502 [] "<html><body><h1>502 Bad Gateway</h1></body></html>"
+  | otherwise = app req respond
 
 -- | Run a test with a home whose hw talks to a server that answers every
 -- question with the same text, as a server that is not a haskoin-store

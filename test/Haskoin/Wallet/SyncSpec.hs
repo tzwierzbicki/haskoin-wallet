@@ -532,6 +532,38 @@ spec = prepareContext $ \ctx -> do
         getBest bch `dbShouldBeE` Just (headerHash (blockAt 800002 1).header, 800002)
         getBest btc `dbShouldBeE` Nothing
 
+  describe "Syncing the accounts of several networks" $ do
+    -- The account main on btc and the account cash on bch, each with its
+    -- first receiving address
+    let accounts = do
+          mainId <- account
+          (cashId, _) <- testNewAccBch ctx "cash"
+          _ <- genExtAddress ctx cfg cashId ""
+          main <- getAccountById mainId
+          cash <- getAccountById cashId
+          return [(mainId, main), (cashId, cash)]
+        names results = [(dBAccountName acc, failure) | (acc, failure) <- results]
+
+    -- The store of bch pays cash 50000 in block 800000
+    it "syncs the accounts whose store is up, and leaves out those whose store is down, with the failure of their store" $
+      inDatabaseE $ do
+        accs@[(mainId, _), (cashId, _)] <- accounts
+        let storeOn net
+              | net == bch = toStore (cashPaymentStore ctx)
+              | otherwise = unhealthy (toStore (paymentStore ctx))
+        (synced, notSynced) <- syncAccounts ctx cfg storeOn accs False
+        liftIO $ map (dBAccountName . syncResAccount) synced `shouldBe` ["cash"]
+        liftIO $ names notSynced `shouldBe` [("main", "The store is down")]
+        summaries cashId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
+        summaries mainId `dbShouldBeE` []
+
+    it "leaves out every account when every store is down, in the order of the accounts, rather than failing" $
+      inDatabaseE $ do
+        accs <- accounts
+        (synced, notSynced) <- syncAccounts ctx cfg (const (unhealthy (toStore emptyStore))) accs False
+        liftIO $ map syncResAccount synced `shouldBe` []
+        liftIO $ names notSynced `shouldBe` [("main", "The store is down"), ("cash", "The store is down")]
+
   describe "Scanning a chain for used addresses" $ do
     -- The scan behind the watch of the gap, on the external chain with a
     -- window of 3 instead of the default 20: the ten written-out addresses

@@ -73,11 +73,22 @@ webCall :: (NFData a) => Text -> ExceptT Store.Except IO a -> ExceptT String IO 
 webCall host action =
   ExceptT $ (answered =<< runExceptT action) `catches` [Handler unreachable, Handler unreadable]
   where
-    answered (Left err) = return $ Left (show (err :: Store.Except))
+    answered (Left err) = return $ Left (storeError host err)
     answered (Right answer) = Right <$> evaluate (force answer)
     unreachable e = return $ Left (unreachableStore host e)
     unreadable (ErrorCall reason) =
       return $ Left ("The store at " <> cs host <> " gave an answer hw could not read: " <> reason)
+
+-- | The message of an error the store answered. The web client reads the
+-- error from the body of the answer. A body it cannot read comes as the
+-- error "could not decode error". The error page of a proxy in front of a
+-- store that is down is such a body.
+storeError :: Text -> Store.Except -> String
+storeError host err = "The store at " <> cs host <> " answered with an error" <> what
+  where
+    what = case err of
+      Store.StringError "could not decode error" -> " hw could not read"
+      _ -> ": " <> show err
 
 -- | The message of a store hw could not reach, and why
 unreachableStore :: Text -> HttpException -> String

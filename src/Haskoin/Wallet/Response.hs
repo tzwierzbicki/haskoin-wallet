@@ -71,8 +71,9 @@ data Response
   | -- | A message, a signature in base64, the address it is said to be
     -- signed from, and whether it is
     ResponseVerifyMsg !Text !Text !Text !Bool
-  | -- | The sync of each account
-    ResponseSync ![SyncRes]
+  | -- | The sync of each account synced, and the accounts not synced, each
+    -- with the failure of its store
+    ResponseSync ![SyncRes] ![(DBAccount, Text)]
   | -- | The accounts of a seed recovered on a network, searched with the
     -- gap of accounts, each with its sync
     ResponseRecover !Network !Natural ![SyncRes]
@@ -118,7 +119,8 @@ instance ToJSON Response where
       typed "signmsg" ["message" .= message, "signature" .= signature, "address" .= addr]
     ResponseVerifyMsg message signature addr valid ->
       typed "verifymsg" ["message" .= message, "signature" .= signature, "address" .= addr, "valid" .= valid]
-    ResponseSync results -> typed "sync" ["syncres" .= (syncResJson <$> results)]
+    ResponseSync results notSynced ->
+      typed "sync" ["syncres" .= (syncResJson <$> results), "notsynced" .= (notSyncedJson <$> notSynced)]
     ResponseRecover net gap results ->
       typed "recover" ["network" .= net.name, "accountgap" .= gap, "syncres" .= (syncResJson <$> results)]
     ResponseFees net rates -> typed "fees" ["network" .= net.name, "feerates" .= rates]
@@ -159,7 +161,7 @@ instance FromJSON Response where
         ResponseCoins acc <$> (mapM (unmarshalValue (accountNetwork acc)) =<< o .: "coins")
       "signmsg" -> ResponseSignMsg <$> o .: "message" <*> o .: "signature" <*> o .: "address"
       "verifymsg" -> ResponseVerifyMsg <$> o .: "message" <*> o .: "signature" <*> o .: "address" <*> o .: "valid"
-      "sync" -> ResponseSync <$> (mapM parseSyncRes =<< o .: "syncres")
+      "sync" -> ResponseSync <$> (mapM parseSyncRes =<< o .: "syncres") <*> (mapM parseNotSynced =<< o .: "notsynced")
       "recover" -> ResponseRecover <$> network o <*> o .: "accountgap" <*> (mapM parseSyncRes =<< o .: "syncres")
       "fees" -> ResponseFees <$> network o <*> o .: "feerates"
       "version" -> ResponseVersion <$> o .: "version" <*> o .: "dbversion"
@@ -185,6 +187,13 @@ syncResJson (SyncRes acc spendable best height txs coins rebroadcast conflicted 
       "discovered" .= discovered
     ]
 
+-- | An account not synced in JSON, with the failure of its store
+notSyncedJson :: (DBAccount, Text) -> Value
+notSyncedJson (acc, failure) = object ["account" .= acc, "error" .= failure]
+
+parseNotSynced :: Value -> Parser (DBAccount, Text)
+parseNotSynced = withObject "notsynced" $ \o -> (,) <$> o .: "account" <*> o .: "error"
+
 parseSyncRes :: Value -> Parser SyncRes
 parseSyncRes =
   withObject "syncres" $ \o -> do
@@ -198,9 +207,11 @@ parseSyncRes =
       <*> o .: "conflicted"
       <*> o .: "discovered"
 
--- | Whether the answer is a failure, which hw exits with: an error, or a
--- signature found not valid, so that a script can tell from the exit code
+-- | Whether the answer is a failure, which hw exits with: an error, a
+-- signature found not valid, or a sync that left accounts out, so that a
+-- script can tell from the exit code
 responseFailed :: Response -> Bool
 responseFailed (ResponseError _) = True
 responseFailed (ResponseVerifyMsg _ _ _ valid) = not valid
+responseFailed (ResponseSync _ notSynced) = not (null notSynced)
 responseFailed _ = False

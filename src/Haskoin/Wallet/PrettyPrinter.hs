@@ -168,6 +168,16 @@ syncResultsPrinter unit xs = vcat $ intercalate [mempty] (f <$> xs)
     conflicted 0 = text "0"
     conflicted k = styled Failure (show k)
 
+-- | The accounts the sync left out, each with the failure of its store
+notSyncedPrinter :: [(DBAccount, Text)] -> Doc Style
+notSyncedPrinter accs = vcat $ intercalate [mempty] (f <$> accs)
+  where
+    f (acc, failure) =
+      [ field 10 "Account" <> pretty (dBAccountName acc) `withStyle` Account,
+        field 10 "Network" <> text (accountNetwork acc).name,
+        field 10 "Not synced" <> styled Failure (cs failure)
+      ]
+
 -- | An account with its balances: those the store reports, and the one it
 -- can spend now
 accountPrinter :: AmountUnit -> DBAccount -> Word64 -> Doc Style
@@ -472,7 +482,10 @@ responsePrinter unit answer =
             [ styled Field "Signature:" <+> styled Failure "Invalid",
               text $ "This is not a signature of this message by the key of " <> cs addr
             ]
-    ResponseSync xs -> renderIO $ syncResultsPrinter unit xs
+    -- The accounts not synced last, where the user sees them
+    ResponseSync xs notSynced ->
+      renderIO . vcat . intersperse mempty $
+        [syncResultsPrinter unit xs | not (null xs)] <> [notSyncedPrinter notSynced | not (null notSynced)]
     ResponseRecover net gap xs
       | null xs ->
           renderIO . text $
@@ -646,14 +659,16 @@ nextStepsPrinter cmd res =
     (CommandSignSweep signing _, ResponseOutsideTx _ info) -> afterSigning signing info
     (CommandSendTx {}, ResponseTx acc _) ->
       stepsPrinter [("Next, sync the account to follow the transaction", hwLine "sync" (accountArgs [acc]))]
-    (CommandSync {}, ResponseSync results) ->
-      case filter ((> 0) . syncResConflicted) results of
-        [] -> stepsPrinter [("Next, see the transactions", hwLine "txs" (accountArgs (syncResAccount <$> results)))]
-        conflicted ->
-          stepsPrinter
-            [ ("Next, find the pending transaction in conflict, which can no longer be sent", hwLine "pendingtxs" (accountArgs (syncResAccount <$> conflicted))),
-              ("Then delete it, to free its coins", hwLine "deletetx" [metavarWord "NOSIGHASH"])
-            ]
+    -- A sync that synced no account has nothing new to see
+    (CommandSync {}, ResponseSync results _)
+      | not (null results) ->
+          case filter ((> 0) . syncResConflicted) results of
+            [] -> stepsPrinter [("Next, see the transactions", hwLine "txs" (accountArgs (syncResAccount <$> results)))]
+            conflicted ->
+              stepsPrinter
+                [ ("Next, find the pending transaction in conflict, which can no longer be sent", hwLine "pendingtxs" (accountArgs (syncResAccount <$> conflicted))),
+                  ("Then delete it, to free its coins", hwLine "deletetx" [metavarWord "NOSIGHASH"])
+                ]
     _ -> Nothing
   where
     nosigOf info = case txInfoStatus info of

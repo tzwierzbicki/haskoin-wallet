@@ -202,7 +202,9 @@ hw deleteacc savings btc "/44'/0'/0'"
 **`hw sync`** updates the accounts from the server: balances, transactions,
 coins and pending transactions. It also finds addresses that another wallet
 of the same seed used. Run it before you prepare a payment and after you send
-one. `--full` downloads everything again, which is rarely needed.
+one. `--full` downloads everything again, which is rarely needed. When the
+server does not answer for a network, `sync` leaves out the accounts of that
+network and says why, and still syncs the others.
 
 ```console
 hw sync

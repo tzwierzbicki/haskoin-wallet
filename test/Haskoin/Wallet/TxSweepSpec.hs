@@ -4,7 +4,6 @@
 
 module Haskoin.Wallet.TxSweepSpec where
 
-import Control.Monad.Except (throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans (lift)
 import qualified Data.ByteString as BS
@@ -23,7 +22,6 @@ import Haskoin.Wallet.Address
 import Haskoin.Wallet.Coin
 import Haskoin.Wallet.PendingTx
 import Haskoin.Wallet.Recipient (Share (..))
-import Haskoin.Wallet.Store
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo (TxInfo (..), TxSummary (..), TxType (..))
 import Haskoin.Wallet.TxSignData
@@ -427,10 +425,9 @@ fetchSpec ctx =
     it "refuses a store that is not healthy" $
       inDatabaseE $ do
         accId <- account
-        let unhealthy = (toStore store) {storeHealth = throwError "The indexer health check has failed"}
         lift $
-          dbShouldFailWith "The indexer health check has failed" $
-            fetchSweepCoins btc ctx unhealthy (Just accId) [] [sweptKeyAddrs !! 0] [] [otherAddr 0]
+          dbShouldFailWith "The store is down" $
+            fetchSweepCoins btc ctx (unhealthy (toStore store)) (Just accId) [] [sweptKeyAddrs !! 0] [] [otherAddr 0]
   where
     -- The test wallet with its first two external addresses
     account = do

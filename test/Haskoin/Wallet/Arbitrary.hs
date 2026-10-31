@@ -268,7 +268,8 @@ arbitraryResponse net ctx =
         <$> arbitraryDBAccount net ctx
         <*> resize 20 (listOf $ arbitraryJsonCoin net),
       ResponseSync
-        <$> (resize 10 $ listOf $ arbitrarySyncRes net ctx),
+        <$> (resize 10 $ listOf $ arbitrarySyncRes net ctx)
+        <*> (resize 10 $ listOf $ (,) <$> arbitraryDBAccount net ctx <*> arbitraryText),
       ResponseRecover
         <$> arbitraryNetwork
         <*> arbitraryNatural

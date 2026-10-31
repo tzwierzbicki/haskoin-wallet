@@ -30,8 +30,15 @@ spec =
     it "gives the answer of the store" $
       called (return [5, 7]) `shouldReturn` Right [5, 7]
 
-    it "fails with the error the store answered" $
-      called (throwError Store.ServerError) `shouldReturn` Left "ServerError"
+    it "fails with the error the store answered, naming the store" $
+      called (throwError Store.ServerError)
+        `shouldReturn` Left "The store at http://store.test/ answered with an error: ServerError"
+
+    -- The web client fails with this error on an error page that is not
+    -- the JSON of an error of haskoin-store: hw showed it as it is before
+    it "fails with an error it could not read, as the error page of a proxy in front of a store that is down" $
+      called (throwError (Store.StringError "could not decode error"))
+        `shouldReturn` Left "The store at http://store.test/ answered with an error hw could not read"
 
     it "fails when the connection to the store fails" $
       called (failingWith (ConnectionFailure (toException (userError "Connection refused"))))

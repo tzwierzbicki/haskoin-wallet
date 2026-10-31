@@ -11,7 +11,7 @@ module Haskoin.Wallet.TestUtils where
 import Conduit (runConduit, sinkList, (.|))
 import Control.Exception (finally)
 import Control.Monad (forM, unless, void, when)
-import Control.Monad.Except (ExceptT)
+import Control.Monad.Except (ExceptT, throwError)
 import Control.Monad.Trans (lift, liftIO)
 import Control.Monad.Trans.Except (runExceptT)
 import Data.Aeson (FromJSON (..), eitherDecodeFileStrict, encode, withObject, (.!=), (.:), (.:?))
@@ -700,6 +700,10 @@ emptyStore =
       fakeUnspents = [],
       fakeRawTransactions = []
     }
+
+-- | The store, failing its health check
+unhealthy :: Store -> Store
+unhealthy store = store {storeHealth = throwError "The store is down"}
 
 -- | The store, noting every transaction handed to it for the network
 notingPublished :: IORef [Tx] -> Store -> Store

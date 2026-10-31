@@ -86,10 +86,6 @@ withBrokenSignature tx =
       Tx tx.version (TxIn first.outpoint (BS.reverse first.script) first.sequence : rest) tx.outputs tx.witness tx.locktime
     [] -> tx
 
--- | The store, failing its health check
-unhealthy :: Store -> Store
-unhealthy store = store {storeHealth = throwError "The store is down"}
-
 -- | The store, failing every question about transactions
 notAnswering :: Store -> Store
 notAnswering store = store {storeTransactions = \_ -> throwError "The store is down"}

@@ -1064,10 +1064,8 @@ cmdSync ctx cfg account full =
   runDBResponse cfg $ do
     accs <- getAccountsByName account
     when (null accs) $ throwError "There are no accounts in the wallet"
-    results <- forM accs $ \(accId, acc) -> do
-      let net = accountNetwork acc
-      sync ctx cfg (webStore ctx cfg net) net accId full
-    return $ ResponseSync results
+    (results, notSynced) <- syncAccounts ctx cfg (webStore ctx cfg) accs full
+    return $ ResponseSync results [(acc, cs failure) | (acc, failure) <- notSynced]
 
 -- | Sign a message with the key of an address of the wallet
 cmdSignMsg :: Ctx -> Config -> SignMsg -> IO Response

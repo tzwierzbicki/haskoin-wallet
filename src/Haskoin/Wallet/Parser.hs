@@ -1681,6 +1681,10 @@ A sent transaction is sent again on every sync while the server does not list
 it, unless it is conflicted. So one the network refuses for good, for a fee
 below what the nodes relay for example, keeps coming back. Delete it with
 deletetx.
+
+When the server does not answer for a network, `sync` leaves out the accounts
+of that network and says why. It still syncs the other accounts, then exits
+with 1.
 |],
       args = CommandSync <$> onlyAccountOption <*> fullOption
     }
