@@ -11,7 +11,7 @@ import Control.Monad (forM_)
 import Control.Monad.Except (ExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans (lift)
-import Data.Aeson (Value, eitherDecode, toJSON)
+import Data.Aeson (eitherDecode, toJSON)
 import Data.Aeson.Types (parseEither)
 import Data.Default (def)
 import Data.Maybe (fromJust)
@@ -28,6 +28,7 @@ import Haskoin.Wallet.Database.Coin (refreshCoins)
 import Haskoin.Wallet.Commands (cmdAccounts, cmdAddresses, cmdExportAcc, cmdImportAcc)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Keys
+import Haskoin.Wallet.Labels (AccountImport (..), ImportReport (..))
 import Haskoin.Wallet.Database.PendingTx (importPendingTx)
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.TestUtils
@@ -447,35 +448,42 @@ balanceSpec ctx =
 
 documentSpec :: Ctx -> Spec
 documentSpec ctx =
-  describe "The account document, from an offline wallet to an online one" $ do
-    it "is written with the key, the network, the name and the fingerprint of the seed" $
+  describe "The account file, from an offline wallet to an online one" $ do
+    it "is written as the record of the key, with the name, the origin of the seed and the network" $
       inScratchDirectory $ \dir -> do
         offline <- walletInFile (dir </> "offline.sqlite") (testNewAcc ctx "main")
-        let file = dir </> "main.json"
+        let file = dir </> "main.jsonl"
         cmdExportAcc ctx offline (Just "main") file `shouldReturn` ResponseFile file
-        written <- readFile file
-        decodeValue written `shouldBe` decodeValue mainDocument
+        readFile file `shouldReturn` mainRecord <> "\n"
 
     it "creates the account in the online wallet, with the fingerprint" $
       inScratchDirectory $ \dir -> do
         online <- walletInFile (dir </> "online.sqlite") (return ())
-        writeFile (dir </> "main.json") mainDocument
-        response <- cmdImportAcc ctx online (dir </> "main.json")
+        writeFile (dir </> "main.jsonl") (mainRecord <> "\n")
+        response <- cmdImportAcc ctx online Nothing (dir </> "main.jsonl")
         imported response `shouldBe` Right ("main", "btc", testAccountXPub, Just "bc560f95")
 
-    it "records the fingerprint of an account the online wallet has already, and the same document again is refused" $
+    it "records the fingerprint of an account the online wallet has already, and the same file again changes nothing" $
       inScratchDirectory $ \dir -> do
         online <- walletInFile (dir </> "online.sqlite") (watchOnly ctx btc 0 "main")
-        writeFile (dir </> "main.json") mainDocument
-        response <- cmdImportAcc ctx online (dir </> "main.json")
+        writeFile (dir </> "main.jsonl") (mainRecord <> "\n")
+        response <- cmdImportAcc ctx online Nothing (dir </> "main.jsonl")
         imported response `shouldBe` Right ("main", "btc", testAccountXPub, Just "bc560f95")
-        cmdImportAcc ctx online (dir </> "main.json") `shouldReturn` ResponseError "The account main already exists"
+        again <- cmdImportAcc ctx online Nothing (dir </> "main.jsonl")
+        imported again `shouldBe` Right ("main", "btc", testAccountXPub, Just "bc560f95")
+
+    it "reads the document of an earlier hw, with the fingerprint of the seed" $
+      inScratchDirectory $ \dir -> do
+        online <- walletInFile (dir </> "online.sqlite") (return ())
+        writeFile (dir </> "main.json") mainDocument
+        response <- cmdImportAcc ctx online Nothing (dir </> "main.json")
+        imported response `shouldBe` Right ("main", "btc", testAccountXPub, Just "bc560f95")
 
     it "reads a document of an earlier hw, which named a wallet instead of the seed" $
       inScratchDirectory $ \dir -> do
         online <- walletInFile (dir </> "online.sqlite") (return ())
         writeFile (dir </> "old.json") oldDocument
-        response <- cmdImportAcc ctx online (dir </> "old.json")
+        response <- cmdImportAcc ctx online Nothing (dir </> "old.json")
         imported response `shouldBe` Right ("main", "btc", testAccountXPub, Nothing)
 
 -- | What accounts answered: each account by its name, with the balance it
@@ -490,14 +498,28 @@ addressSpendable :: Response -> Either String [(Text, Word64)]
 addressSpendable (ResponseAddresses _ shown) = Right [(dBAddressAddress addr, spendable) | (addr, spendable) <- shown]
 addressSpendable other = Left (show other)
 
--- | What importacc answered: the account by its name, network, key and
--- fingerprint, or its refusal
+-- | What importacc answered for the one account of a file: the account by
+-- its name, network, key and fingerprint, or its refusal
 imported :: Response -> Either String (Text, Text, Text, Maybe Text)
-imported (ResponseAccount acc _) = Right (dBAccountName acc, dBAccountNetwork acc, dBAccountXPubKey acc, dBAccountFingerprint acc)
+imported (ResponseImport report) =
+  case reportAccounts report of
+    [AccountCreated acc] -> Right (fields acc)
+    [AccountKept acc _] -> Right (fields acc)
+    [AccountRenamed _ acc] -> Right (fields acc)
+    [AccountRefused _ why] -> Left (cs why)
+    other -> Left (show other)
+  where
+    fields acc = (dBAccountName acc, dBAccountNetwork acc, dBAccountXPubKey acc, dBAccountFingerprint acc)
 imported (ResponseError err) = Left (cs err)
 imported other = Left (show other)
 
--- | The document of the account main of the test seed, as exportacc writes it
+-- | The record of the key of the account main of the test seed, as
+-- exportacc writes it
+mainRecord :: String
+mainRecord = "{\"type\":\"xpub\",\"ref\":\"xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah\",\"label\":\"main\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\"}"
+
+-- | The document of the account main of the test seed, as exportacc wrote
+-- it before hw took the format of BIP 329
 mainDocument :: String
 mainDocument =
   [r|{
@@ -516,9 +538,6 @@ oldDocument =
   "name": "main",
   "wallet": "892eb8e4"
 }|]
-
-decodeValue :: String -> Value
-decodeValue = either error id . eitherDecode . cs
 
 {- JSON -}
 

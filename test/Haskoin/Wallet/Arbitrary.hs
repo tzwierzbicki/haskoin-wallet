@@ -20,6 +20,7 @@ import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.Labels (AccountImport (..), ImportReport (..))
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..))
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.Database.TxInfo
@@ -254,6 +255,7 @@ arbitraryResponse net ctx =
         <*> arbitrary
         <*> arbitraryText,
       ResponseFile <$> (cs <$> arbitraryText),
+      ResponseImport <$> arbitraryImportReport net ctx,
       ResponseAccounts <$> resize 20 (listOf $ (,) <$> arbitraryDBAccount net ctx <*> arbitraryPositive),
       ResponseAddress <$> arbitraryDBAccount net ctx <*> arbitraryDBAddress net <*> arbitraryPositive,
       ResponseAddresses
@@ -292,6 +294,33 @@ arbitraryResponse net ctx =
         <*> arbitraryNatural
         <*> (resize 10 $ listOf $ arbitrarySyncRes net ctx),
       ResponseFees net <$> arbitraryFeeRates
+    ]
+
+-- | What importacc did with a file
+arbitraryImportReport :: Network -> Ctx -> Gen ImportReport
+arbitraryImportReport net ctx =
+  ImportReport
+    <$> resize 5 (listOf (arbitraryAccountImport net ctx))
+    <*> arbitraryNatural
+    <*> arbitraryNatural
+    <*> arbitraryNatural
+    <*> arbitraryNatural
+    <*> arbitraryNatural
+    <*> arbitraryNatural
+    <*> arbitraryNatural
+    <*> arbitraryNatural
+    <*> arbitraryNatural
+    <*> arbitraryNatural
+    <*> resize 5 (listOf arbitraryNatural)
+
+-- | What became of an account a file names
+arbitraryAccountImport :: Network -> Ctx -> Gen AccountImport
+arbitraryAccountImport net ctx =
+  oneof
+    [ AccountCreated <$> arbitraryDBAccount net ctx,
+      AccountKept <$> arbitraryDBAccount net ctx <*> arbitraryMaybe arbitraryText,
+      AccountRenamed <$> arbitraryText <*> arbitraryDBAccount net ctx,
+      AccountRefused <$> arbitraryText <*> arbitraryText
     ]
 
 arbitraryKeyBytes :: Gen KeyBytes

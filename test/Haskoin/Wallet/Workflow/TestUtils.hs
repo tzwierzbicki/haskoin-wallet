@@ -90,6 +90,7 @@ import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.Database (DBAccount (..), DBAddress (..))
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (MnemonicPass (..))
+import Haskoin.Wallet.Labels (ImportReport (..), importedAccount)
 import qualified Haskoin.Wallet.Schema.V3 as V3
 import Haskoin.Wallet.Sync (SyncRes (..))
 import Haskoin.Wallet.TestUtils
@@ -243,9 +244,14 @@ notSyncedOf :: Response -> Either String [(Text, Text)]
 notSyncedOf (ResponseSync _ notSynced) = Right [(dBAccountName acc, failure) | (acc, failure) <- notSynced]
 notSyncedOf other = Left (show other)
 
--- | The account of an answer, with its index and its public key
+-- | The account of an answer, with its index and its public key: the one
+-- account importacc created or found, for an import
 keyOf :: Response -> Either String (Text, Int, Text)
 keyOf (ResponseAccount acc _) = Right (dBAccountName acc, dBAccountIndex acc, dBAccountXPubKey acc)
+keyOf (ResponseImport report) =
+  case importedAccount <$> reportAccounts report of
+    [Just acc] -> Right (dBAccountName acc, dBAccountIndex acc, dBAccountXPubKey acc)
+    other -> Left (show other)
 keyOf other = Left (show other)
 
 -- | The account an answer shows

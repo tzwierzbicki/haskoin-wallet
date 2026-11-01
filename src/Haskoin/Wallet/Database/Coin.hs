@@ -16,6 +16,7 @@ module Haskoin.Wallet.Database.Coin
     CoinLock (..),
     coinOutpoint,
     coinText,
+    readBlock,
     toJsonCoin,
     groupCoins,
     CoinFilter (..),
@@ -33,6 +34,8 @@ module Haskoin.Wallet.Database.Coin
     coinBalancesAt,
     lockCoin,
     unlockCoin,
+    setLockedByUser,
+    userLockedCoins,
     coinAccounts,
     Refreshed (..),
     refreshCoins,
@@ -563,6 +566,12 @@ walletCoin outpoint = do
 setLockedByUser :: (MonadUnliftIO m) => OutPoint -> Bool -> ExceptT String (DB m) ()
 setLockedByUser outpoint locked =
   lift $ P.update (DBCoinKey $ outpointBytes outpoint) [DBCoinLockedByUser P.=. locked]
+
+-- | The coins of the account the user locked, in the order of their
+-- outpoints: what exportacc writes
+userLockedCoins :: (MonadUnliftIO m) => DBAccountId -> DB m [DBCoin]
+userLockedCoins accId =
+  map P.entityVal <$> P.selectList [DBCoinAccount P.==. accId, DBCoinLockedByUser P.==. True] [P.Asc DBCoinOutpoint]
 
 -- | A coin as coins shows it now, with its account
 shownCoin :: (MonadUnliftIO m) => Network -> DBCoin -> ExceptT String (DB m) (DBAccount, JsonCoin)

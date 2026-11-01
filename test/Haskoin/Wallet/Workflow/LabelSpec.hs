@@ -4,18 +4,24 @@
 -- preparesweep, carried in its file to the signer and back, kept through
 -- sending and the sync, taken by the replacement bumpfee prepares, changed
 -- by label, and shown by txs and pendingtxs. And the labels of the
--- account's addresses, carried in the file for the signer to show.
+-- account's addresses, carried in the file for the signer to show. Last,
+-- the accounts with their labels and locks in the BIP 329 file exportacc
+-- writes and importacc reads, from hw or from another wallet.
 module Haskoin.Wallet.Workflow.LabelSpec (spec) where
 
 import Data.IORef (modifyIORef)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
+import qualified Data.Text.IO as TextIO
 import Haskoin
+import Haskoin.Wallet.Bip329 (Line (..), Record (..), RecordType (..), readLines)
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.Database (DBAccount (..))
+import Haskoin.Wallet.Database.Coin (CoinLock (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.HwTestUtils
+import Haskoin.Wallet.Labels (AccountImport (..), ImportReport (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData (..))
 import Haskoin.Wallet.Workflow.TestUtils
@@ -32,6 +38,7 @@ spec = prepareContext $ \ctx -> do
   historySpec ctx
   labelCommandSpec ctx
   shownSpec ctx
+  exportImportSpec ctx
 
 -- | The transactions of the history, each by its id, with its label
 historyLabels :: Response -> Either String [(String, Text)]
@@ -394,3 +401,158 @@ shownSpec ctx =
         synced home
         run <- hw home ["label", paidTxid ctx, "Salary"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  Account  : main\n  Network  : btc\n  Label    : \"Salary\"\n"
+
+{- The accounts and labels in a file -}
+
+-- | A home synced with the paid chain, its payment labelled "Salary", the
+-- address it paid labelled "Wages", a second receiving address labelled
+-- "From Bob" and a third one handed out without a label, and the coin of
+-- the payment locked
+labelledHome :: Ctx -> FilePath -> IO ()
+labelledHome ctx home = do
+  synced home
+  _ <- answer home ["label", paidTxid ctx, "Salary"] []
+  _ <- answer home ["label", textOf (externalAddr 0), "Wages"] []
+  _ <- answer home ["receive", "--label", "From Bob"] []
+  _ <- answer home ["receive"] []
+  _ <- answer home ["lockcoin", coinArg (payment ctx) 0] []
+  return ()
+
+-- | The lines exportacc writes for that home: the key of main, its two
+-- labelled addresses, the payment, 1000 of fee for 50000 received, three
+-- blocks deep and so without a height, and its coin, locked
+labelledLines :: Ctx -> [Text]
+labelledLines ctx =
+  [ "{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\"}",
+    "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Wages\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"keypath\":\"/0/0\"}",
+    "{\"type\":\"addr\",\"ref\":\"1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg\",\"label\":\"From Bob\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"keypath\":\"/0/1\"}",
+    "{\"type\":\"tx\",\"ref\":\"" <> txid <> "\",\"label\":\"Salary\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"fee\":1000,\"value\":50000}",
+    "{\"type\":\"output\",\"ref\":\"" <> txid <> ":0\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"spendable\":false,\"keypath\":\"/0/0\",\"value\":50000}"
+  ]
+  where
+    txid = Text.pack (paidTxid ctx)
+
+-- | The records of a file hw wrote, in order
+recordsOf :: FilePath -> IO [Record]
+recordsOf file = do
+  content <- TextIO.readFile file
+  return [r | (_, Right (LineRecord r)) <- readLines content]
+
+-- | What became of each account importacc answered for, by name
+accountsImported :: Response -> Either String [(Text, String)]
+accountsImported (ResponseImport report) = Right (describe' <$> reportAccounts report)
+  where
+    describe' (AccountCreated acc) = (dBAccountName acc, "created")
+    describe' (AccountKept acc _) = (dBAccountName acc, "kept")
+    describe' (AccountRenamed was acc) = (dBAccountName acc, "renamed from " <> Text.unpack was)
+    describe' (AccountRefused name _) = (name, "refused")
+accountsImported other = Left (show other)
+
+exportImportSpec :: Ctx -> Spec
+exportImportSpec ctx =
+  describe "The accounts and labels in a file of BIP 329" $ do
+    it "are written by exportacc, the key of the account first, then its labelled addresses, its labelled transactions and its locked coins" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        labelledHome ctx home
+        _ <- answer home ["exportacc", home </> "labels.jsonl"] []
+        (Text.lines <$> TextIO.readFile (home </> "labels.jsonl")) `shouldReturn` labelledLines ctx
+
+    it "are written for every account without --account, each key before the labels of its account" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        labelledHome ctx home
+        _ <- answer home ["createacc", "second"] seedTwice
+        _ <- answer home ["receive", "--account", "second", "--label", "Savings"] []
+        _ <- answer home ["exportacc", home </> "labels.jsonl"] []
+        records <- recordsOf (home </> "labels.jsonl")
+        [(recordType r, recordLabel r) | r <- records, recordType r `elem` [XpubRecord, AddrRecord]]
+          `shouldBe` [(XpubRecord, Just "main"), (AddrRecord, Just "Wages"), (AddrRecord, Just "From Bob"), (XpubRecord, Just "second"), (AddrRecord, Just "Savings")]
+
+    it "include the label of a signed pending transaction, by its txid" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--label", "Rent"] []
+        txid <- txidOf =<< txOf =<< answer home ["signtx", nosig] seedOnce
+        _ <- answer home ["exportacc", home </> "labels.jsonl"] []
+        records <- recordsOf (home </> "labels.jsonl")
+        [(recordRef r, recordLabel r) | r <- records, recordType r == TxRecord] `shouldBe` [(Text.pack txid, Just "Rent")]
+
+    -- The wallet is lost with its computer. recover finds the account from
+    -- the mnemonic, as btc0, with the one address the chain paid. The file
+    -- gives the account its name and its labels back, the labelled address
+    -- nobody paid among them. The unlabelled one nobody paid is gone, until
+    -- receive hands it out again.
+    it "are read back by importacc into the account recovered from the mnemonic, give or take the unused addresses without a label" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        labelledHome ctx home
+        _ <- answer home ["exportacc", home </> "labels.jsonl"] []
+        _ <- answer home ["deleteacc", "main", "btc", "/44'/0'/0'"] []
+        _ <- answer home ["recover"] seedOnce
+        (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [(externalAddrsText !! 0, "")]
+        (accountsImported <$> hwJson home ["importacc", home </> "labels.jsonl"] []) `shouldReturn` Right [("main", "renamed from btc0")]
+        (fingerprintsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("main", Just "bc560f95")]
+        -- Nothing to spend: the coin is locked again
+        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("main", 0, 0)]
+        (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [(externalAddrsText !! 1, "From Bob"), (externalAddrsText !! 0, "Wages")]
+        (fmap (lookup (paidTxid ctx)) . historyLabels <$> hwJson home ["txs"] []) `shouldReturn` Right (Just "Salary")
+        (coinsShown <$> hwJson home ["coins"] []) `shouldReturn` Right [(OutPoint (txHash (payment ctx)) 0, 50000, 3, Just LockedByUser, False)]
+
+    -- A wallet that never synced: the account is created, its addresses
+    -- derived, and the transaction labelled by the origin of its account,
+    -- but the coin is not there to lock
+    it "are shown by importacc account by account, then the labels and locks set, then what to do for the rest" $
+      withChain ctx (paidChain ctx) $ \home _ -> withHome $ \fresh -> do
+        labelledHome ctx home
+        _ <- answer home ["exportacc", home </> "labels.jsonl"] []
+        run <- hw fresh ["importacc", home </> "labels.jsonl"] []
+        runOut run
+          `shouldBe` Text.unlines
+            [ "main  btc  /44'/0'/0'",
+              "  created",
+              "",
+              "Labels set: 2 addresses, 1 transaction",
+              "Not in the wallet yet: 1 coin",
+              "",
+              "Next, sync the wallet, for the addresses, transactions and coins the file labels:",
+              "  hw sync",
+              "Then import the file again, for the labels it could not place:",
+              "  hw importacc " <> Text.pack (home </> "labels.jsonl")
+            ]
+
+    it "place what the wallet did not have once it is synced and the file imported again" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        labelledHome ctx home
+        _ <- answer home ["exportacc", home </> "labels.jsonl"] []
+        _ <- answer home ["deleteacc", "main", "btc", "/44'/0'/0'"] []
+        _ <- answer home ["importacc", home </> "labels.jsonl"] []
+        _ <- answer home ["sync"] []
+        run <- hw home ["importacc", home </> "labels.jsonl"] []
+        runOut run `shouldBe` "main  btc  /44'/0'/0'\n  already in the wallet\n\nLabels set: 2 addresses, 1 transaction\nCoins locked: 1\n"
+        (coinsShown <$> hwJson home ["coins"] []) `shouldReturn` Right [(OutPoint (txHash (payment ctx)) 0, 50000, 3, Just LockedByUser, False)]
+
+    -- As Sparrow writes them: the account named by its origin alone, with
+    -- its hardened steps marked h, and the labels of inputs and coins too
+    it "are read from a file of another wallet, which names the account by its origin and keeps labels hw does not" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        let txid = Text.pack (paidTxid ctx)
+        TextIO.writeFile (home </> "sparrow.jsonl") $
+          Text.unlines
+            [ "{\"type\":\"tx\",\"ref\":\"" <> txid <> "\",\"label\":\"Salary\",\"origin\":\"pkh([bc560f95/44h/0h/0h])\"}",
+              "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Wages\"}",
+              "{\"type\":\"output\",\"ref\":\"" <> txid <> ":0\",\"label\":\"Salary (received)\",\"spendable\":false}",
+              "{\"type\":\"input\",\"ref\":\"" <> txid <> ":0\",\"label\":\"Payer (input)\"}"
+            ]
+        run <- hw home ["importacc", home </> "sparrow.jsonl"] []
+        runOut run `shouldBe` "Labels set: 1 address, 1 transaction\nCoins locked: 1\nLeft aside: 1 record hw keeps no label for\n"
+        (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [(externalAddrsText !! 0, "Wages")]
+        (fmap (lookup (paidTxid ctx)) . historyLabels <$> hwJson home ["txs"] []) `shouldReturn` Right (Just "Salary")
+
+    -- The file of another wallet names no network for its key
+    it "create the account of a key of another wallet on the --network given, and refuse it without a network" $
+      withHome $ \home -> do
+        setDefaultNetwork home Nothing
+        TextIO.writeFile (home </> "other.jsonl") ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"BIP39\"}\n")
+        run <- hw home ["importacc", home </> "other.jsonl"] []
+        runOut run `shouldBe` "BIP39\n  not imported: Give the --network, or a default-network in the configuration file\n\nLabels set: none\n"
+        (accountsImported <$> hwJson home ["importacc", home </> "other.jsonl", "--network", "btc"] []) `shouldReturn` Right [("BIP39", "created")]
+        (fingerprintsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("BIP39", Nothing)]

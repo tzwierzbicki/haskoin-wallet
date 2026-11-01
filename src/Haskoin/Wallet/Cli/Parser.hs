@@ -59,9 +59,10 @@ data Command
   | CommandRecover !Recover
   | -- | The account, and the parts the mnemonic is typed in
     CommandCheckMnemonic !(Maybe Text) !Natural
-  | -- | The account document to import
-    CommandImportAcc !FilePath
-  | -- | The account, and the file to write its document to
+  | -- | The network of a key the file places on none, unless the default
+    -- one, and the file of accounts and labels to import
+    CommandImportAcc !(Maybe Network) !FilePath
+  | -- | The account, or every one, and the file to write them to
     CommandExportAcc !(Maybe Text) !FilePath
   | CommandRenameAcc !RenameAcc
   | -- | The account, or every one, and how much of each to show
@@ -816,26 +817,46 @@ importAccCommand =
   CommandSpec
     { name = "importacc",
       offline = False,
-      summary = "Add an account from a file written by exportacc",
+      summary = "Add the accounts and labels of a file",
       details = importExportAccDetails,
       args =
         CommandImportAcc
-          <$> fileArgument "The account file, written by exportacc"
+          <$> importNetworkOption
+          <*> fileArgument "A file in the format of BIP 329: the file exportacc wrote, or one another wallet exported"
     }
+
+-- | The network of the accounts a file of another wallet creates, which
+-- names none
+importNetworkOption :: Args (Maybe Network)
+importNetworkOption =
+  networkOptionWith "For an account the file names no network for, as a file of another wallet does. Without it, the default-network of the configuration file."
 
 importExportAccDetails :: String
 importExportAccDetails =
   [r|
-exportacc writes an account to a file: its public key M/44'/coin'/index', its
-name, its network and, when hw knows it, the fingerprint of its seed. The file
-holds no private key. importacc adds the account to another wallet, which can
-then watch it and prepare its payments without the mnemonic. This is how an
-online computer works with an offline signer.
+exportacc writes the accounts to a file, with their labels, in the format of
+BIP 329, which other wallets read and write. An account goes in as its public
+key M/44'/coin'/index', its name, its network and, when hw knows it, the
+fingerprint of its seed. Then come the labels of its receiving addresses and
+of its transactions, and the coins locked with lockcoin. The file holds no
+private key. Without --account, every account goes in the file.
+
+importacc reads such a file, from hw or from another wallet. An account the
+wallet does not have is added, named after the label of its key. The wallet
+can then watch it and prepare its payments without the mnemonic: this is how
+an online computer works with an offline signer. An account the wallet has
+learns the fingerprint of its seed, and takes the name a file of hw gives it.
+
+The labels and the locks of the file are set on the addresses, transactions
+and coins the wallet has. An address the wallet has not generated yet is
+derived from the path the file gives, and a transaction the file places in an
+account is labelled before `sync` fetches it. What hw cannot place is counted in
+the answer: run `sync`, then importacc again. The labels of inputs, of coins and
+of change addresses are left aside, since hw keeps none.
 
 The fingerprint is the four bytes that PSBTs and output descriptors write
-before a key of the seed. `accounts` groups the accounts of one seed by it.
-Importing the file of an account the wallet has already records the
-fingerprint, when the wallet did not know it.
+before a key of the seed. Each record of the file names its account by it, as
+in pkh([bc560f95/44'/0'/0']). `accounts` groups the accounts of one seed by it.
 |]
 
 {- exportacc -}
@@ -845,11 +866,11 @@ exportAccCommand =
   CommandSpec
     { name = "exportacc",
       offline = False,
-      summary = "Write the public key of an account to a file",
+      summary = "Write the accounts and their labels to a file",
       details = importExportAccDetails,
       args =
         CommandExportAcc
-          <$> accountOption
+          <$> onlyAccountOption
           <*> fileArgument "The file to write. It must not exist yet."
     }
 

@@ -368,10 +368,11 @@ learnFingerprint accId fingerprint = do
 
 {- The export document -}
 
--- | An account as exportacc writes it and importacc reads it: its public
--- key, its network, its name and the fingerprint of its seed when known.
--- The documents of earlier versions of hw carry a wallet id instead, which
--- is ignored.
+-- | An account as exportacc wrote it before hw took the format of BIP 329
+-- ("Haskoin.Wallet.Labels"), which importacc still reads: its public key,
+-- its network, its name and the fingerprint of its seed when known. The
+-- documents of earlier versions of hw carry a wallet id instead, which is
+-- ignored.
 data PubKeyDoc = PubKeyDoc
   { documentPubKey :: !XPubKey,
     documentNetwork :: !Network,

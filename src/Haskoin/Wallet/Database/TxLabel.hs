@@ -9,6 +9,7 @@
 module Haskoin.Wallet.Database.TxLabel where
 
 import Conduit (MonadUnliftIO)
+import Data.Either (rights)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Database.Persist as P
@@ -18,6 +19,13 @@ import Haskoin.Wallet.Database
 -- | The label of a transaction of the account, or none
 txLabel :: (MonadUnliftIO m) => DBAccountId -> TxHash -> DB m Text
 txLabel accId tid = maybe "" dBTxLabelLabel <$> P.get (DBTxLabelKey accId (hashBytes tid))
+
+-- | Every label of a transaction of the account, by transaction, in the
+-- order of the ids: what exportacc writes
+accountTxLabels :: (MonadUnliftIO m) => DBAccountId -> DB m [(TxHash, Text)]
+accountTxLabels accId = do
+  rows <- P.selectList [DBTxLabelAccount P.==. accId] [P.Asc DBTxLabelTxid]
+  return $ rights [(\tid -> (tid, dBTxLabelLabel row)) <$> bytesToHash (dBTxLabelTxid row) | P.Entity _ row <- rows]
 
 -- | Give a transaction of the account a label, in place of the one it had.
 -- An empty label removes it.

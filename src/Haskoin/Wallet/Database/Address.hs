@@ -365,6 +365,19 @@ storedAmong addrs (accId, acc) = do
     return a
   return $ entityVal <$> rows
 
+-- | The receiving addresses of the account that have a label, in the order
+-- of the chain: what exportacc writes
+labelledAddresses :: (MonadUnliftIO m) => DBAccountId -> DB m [DBAddress]
+labelledAddresses accId = do
+  rows <- select . from $ \a -> do
+    where_ $
+      a ^. DBAddressAccount ==. val accId
+        &&. a ^. DBAddressInternal ==. val False
+        &&. a ^. DBAddressLabel !=. val ""
+    orderBy [asc (a ^. DBAddressIndex)]
+    return a
+  return $ entityVal <$> rows
+
 -- | Those of the addresses that have transactions on the chain
 usedAddresses :: (MonadUnliftIO m) => [Text] -> DB m [Text]
 usedAddresses addrs = do

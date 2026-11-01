@@ -17,6 +17,8 @@ license:        PublicDomain
 license-file:   UNLICENSE
 build-type:     Simple
 extra-source-files:
+    test/data/bip329/bip-0329.jsonl
+    test/data/bip329/README.md
     test/data/message-signing/bitcoin-core.json
     test/data/message-signing/bitcoinjs-message.json
     test/data/message-signing/edge-cases.json
@@ -45,6 +47,7 @@ library
       Haskoin.Wallet
       Haskoin.Wallet.Amounts
       Haskoin.Wallet.Backup
+      Haskoin.Wallet.Bip329
       Haskoin.Wallet.Cli.Completion
       Haskoin.Wallet.Cli.Listing
       Haskoin.Wallet.Cli.Pager
@@ -71,6 +74,7 @@ library
       Haskoin.Wallet.Entropy
       Haskoin.Wallet.FileIO
       Haskoin.Wallet.Keys
+      Haskoin.Wallet.Labels
       Haskoin.Wallet.Main
       Haskoin.Wallet.MessageSigning
       Haskoin.Wallet.Migration
@@ -214,6 +218,7 @@ test-suite spec
       Haskoin.Wallet.AmountsSpec
       Haskoin.Wallet.Arbitrary
       Haskoin.Wallet.BackupSpec
+      Haskoin.Wallet.Bip329Spec
       Haskoin.Wallet.Cli.CompletionSpec
       Haskoin.Wallet.Cli.ListingSpec
       Haskoin.Wallet.Cli.PagerSpec
@@ -235,6 +240,7 @@ test-suite spec
       Haskoin.Wallet.FileIOSpec
       Haskoin.Wallet.HwTestUtils
       Haskoin.Wallet.KeysSpec
+      Haskoin.Wallet.LabelsSpec
       Haskoin.Wallet.MainSpec
       Haskoin.Wallet.MessageSigningSpec
       Haskoin.Wallet.Migration.TestUtils

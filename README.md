@@ -184,13 +184,13 @@ On the offline computer, create the account and export its public key:
 ```console
 hw mnemonic --dice
 hw createacc vault
-hw exportacc --account vault vault.json
+hw exportacc --account vault vault.jsonl
 ```
 
 On the online computer, import the account and prepare a payment to a file:
 
 ```console
-hw importacc vault.json
+hw importacc vault.jsonl
 hw sync
 hw preparetx ADDRESS:0.01 --fee-rate median --output unsigned.json
 ```
@@ -247,13 +247,30 @@ key of an account. Use it to test a mnemonic you wrote down. Nothing is signed.
 hw checkmnemonic --account savings
 ```
 
-**`hw exportacc FILE`** writes the public key of an account to a file, and
-**`hw importacc FILE`** adds it to another wallet. The file holds no private
-key.
+**`hw exportacc FILE`** writes the accounts and their labels to a file, and
+**`hw importacc FILE`** adds them to another wallet. The file is in the
+format of [BIP 329](https://github.com/bitcoin/bips/blob/master/bip-0329.mediawiki),
+which other wallets read and write. An account goes in as its public key,
+its name, its network and the fingerprint of its seed, then the labels of its
+receiving addresses and transactions, and the coins locked with `lockcoin`.
+The file holds no private key. `--account` writes one account instead of all
+of them.
+
+`importacc` creates the accounts the wallet does not have, named after the
+label of their key, and renames those it has when the file is one of `hw`,
+since other wallets label a key with the name of its signer. It sets the labels and locks on
+what the wallet has, labels a transaction before `sync` fetches it when the
+file says which account it is of, and derives an address from the path the
+file gives. What it cannot place, it counts: run `sync`, then `importacc`
+again. A file from another wallet names no network for its keys, so give
+`--network`, or set a default network. Labels of inputs, coins and change
+addresses are left aside, since `hw` keeps none.
 
 ```console
-hw exportacc --account vault vault.json     # on the offline computer
-hw importacc vault.json                     # on the online computer
+hw exportacc --account vault vault.jsonl    # on the offline computer
+hw importacc vault.jsonl                    # on the online computer
+hw exportacc labels.jsonl                   # every account, for another wallet
+hw importacc sparrow-labels.jsonl --network btc
 ```
 
 **`hw accounts`** shows the accounts with their balances. Each takes two

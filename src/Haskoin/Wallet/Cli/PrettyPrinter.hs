@@ -43,6 +43,7 @@ import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..), levelName, rateAt)
 import Haskoin.Wallet.Keys (KeySource (..))
+import Haskoin.Wallet.Labels (AccountImport (..), ImportReport (..), reportNeedsSync)
 import Haskoin.Wallet.MessageSigning (signedMessageText)
 import Haskoin.Wallet.Cli.Parser (BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), View (..), program)
 import Haskoin.Wallet.Cli.Parser.Help (commandName)
@@ -254,6 +255,45 @@ notSyncedPrinter accs = vcat . intersperse mempty $ notSyncedDoc <$> accs
 notSyncedDoc :: (DBAccount, Text) -> Doc Style
 notSyncedDoc (acc, failure) =
   vcat [accountLine acc, indent 2 (styled Failure "not synced:" <+> pretty failure)]
+
+{- Imports -}
+
+-- | What importacc did with a file: each account the file names, with what
+-- became of it, a blank line between them, then the labels and locks set,
+-- what the file labels that the wallet does not have yet, what hw keeps no
+-- label for, and the lines that are not records
+importDoc :: ImportReport -> Doc Style
+importDoc report = vcat . intersperse mempty $ (accountImportDoc <$> reportAccounts report) <> [vcat summary]
+  where
+    summary =
+      [labelsLine]
+        <> [text ("Coins locked: " <> show n) | let n = reportCoinsLocked report, n > 0]
+        <> [text ("Coins unlocked: " <> show n) | let n = reportCoinsUnlocked report, n > 0]
+        <> ["Not in the wallet yet:" <+> commaList (text <$> missing) | not (null missing)]
+        <> ["Left aside:" <+> commaList (text <$> aside) | not (null aside)]
+        <> [styled Failure "Lines that are not records:" <+> text (intercalate ", " (show <$> reportUnreadable report)) | not (null (reportUnreadable report))]
+    labelsLine = case countedIf (reportAddressLabels report) "address" "addresses" <> countedIf (reportTxLabels report) "transaction" "transactions" of
+      [] -> "Labels set:" <+> styled Muted "none"
+      parts -> "Labels set:" <+> commaList (text <$> parts)
+    missing =
+      countedIf (reportAddressesMissing report) "address" "addresses"
+        <> countedIf (reportTxsMissing report) "transaction" "transactions"
+        <> countedIf (reportCoinsMissing report) "coin" "coins"
+    aside =
+      [counted n "record" "records" <> " of accounts the wallet does not have" | let n = reportOtherAccounts report, n > 0]
+        <> [counted n "label" "labels" <> " of change addresses" | let n = reportChangeAddresses report, n > 0]
+        <> [counted n "record" "records" <> " hw keeps no label for" | let n = reportNotKept report, n > 0]
+    -- A count with its noun, when there is anything to count
+    countedIf n singular plural = [counted n singular plural | n > 0]
+
+-- | An account a file names, as accounts shows it, and what became of it
+accountImportDoc :: AccountImport -> Doc Style
+accountImportDoc = \case
+  AccountCreated acc -> vcat [accountLine acc, indent 2 (styled Good "created")]
+  AccountKept acc Nothing -> vcat [accountLine acc, indent 2 "already in the wallet"]
+  AccountKept acc (Just why) -> vcat [accountLine acc, indent 2 ("already in the wallet, and keeps its name:" <+> pretty why)]
+  AccountRenamed was acc -> vcat [accountLine acc, indent 2 ("renamed from" <+> pretty was `withStyle` Account)]
+  AccountRefused name why -> vcat [pretty name `withStyle` Account, indent 2 (styled Failure "not imported:" <+> pretty why)]
 
 {- Addresses -}
 
@@ -874,6 +914,7 @@ responsePrinter unit view answer =
     -- In green when the command did what it was asked, in red otherwise
     ResponseAccResult _ res txt -> renderIO $ styled (if res then Good else Failure) (cs txt)
     ResponseFile f -> renderIO $ "Written to" <+> styled UserText f
+    ResponseImport report -> renderIO $ importDoc report
     ResponseAddress _ addr spendable ->
       renderIO =<< listedAddressDoc Verbose unit (pathWidth [addr]) addr spendable
     ResponseTx acc txInfo ->
@@ -1083,6 +1124,13 @@ nextStepsPrinter cmd res =
     (CommandSignSweep signing _, ResponseOutsideTx _ info) -> afterSigning signing info
     (CommandSendTx {}, ResponseTx acc _) ->
       stepsPrinter [("Next, sync the account to follow the transaction", hwLine "sync" (accountArgs [acc]))]
+    -- The file labels things the wallet may not have yet
+    (CommandImportAcc _ file, ResponseImport report)
+      | reportNeedsSync report ->
+          stepsPrinter
+            [ ("Next, sync the wallet, for the addresses, transactions and coins the file labels", hwLine "sync" []),
+              ("Then import the file again, for the labels it could not place", hwLine "importacc" [fileWord file])
+            ]
     -- A sync that synced no account has nothing new to see
     (CommandSync {}, ResponseSync results _)
       | not (null results) ->

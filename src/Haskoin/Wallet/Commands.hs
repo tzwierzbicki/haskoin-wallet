@@ -95,6 +95,7 @@ import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Amounts (AmountUnit)
 import Haskoin.Wallet.Backup (backupDatabase, backupDirectory, copyDatabase)
+import Haskoin.Wallet.Bip329 (recordsText)
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
@@ -102,6 +103,7 @@ import Haskoin.Wallet.Entropy
 import Haskoin.Wallet.Tx.FeeRates
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Keys
+import Haskoin.Wallet.Labels (accountRecords, importFile)
 import Haskoin.Wallet.Cli.Listing
 import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
@@ -143,7 +145,7 @@ commandResponse ctx cfg unit = \case
   CommandCreateAcc name net parts -> cmdCreateAcc ctx cfg name net parts
   CommandRecover opts -> cmdRecover ctx cfg opts
   CommandCheckMnemonic account parts -> cmdCheckMnemonic ctx cfg account parts
-  CommandImportAcc file -> cmdImportAcc ctx cfg file
+  CommandImportAcc netM file -> cmdImportAcc ctx cfg netM file
   CommandExportAcc account file -> cmdExportAcc ctx cfg account file
   CommandRenameAcc opts -> cmdRenameAcc cfg opts
   CommandDeleteAcc name net path -> cmdDeleteAcc cfg name net path
@@ -327,26 +329,25 @@ cmdCheckMnemonic ctx cfg account parts =
       Just _ -> ResponseAccResult tested True "The mnemonic and passphrase matched the account"
       Nothing -> ResponseAccResult tested False "The mnemonic and passphrase did not match the account"
 
-cmdImportAcc :: Ctx -> Config -> FilePath -> IO Response
-cmdImportAcc ctx cfg file =
+-- | Add the accounts of a BIP 329 file and set the labels it carries, as
+-- "Haskoin.Wallet.Labels" reads it. The answer says what became of each
+-- account, and what the file labels that the wallet does not have yet.
+cmdImportAcc :: Ctx -> Config -> Maybe Network -> FilePath -> IO Response
+cmdImportAcc ctx cfg netM file =
   runDBResponse cfg $ do
-    PubKeyDoc xpub net name fingerprintM <- liftEitherIO $ readMarshalFile ctx file
-    heldM <- lift $ accountWithKey net ctx xpub
-    accId <- case (heldM, fingerprintM) of
-      -- An account the wallet has already, whose document now names its seed
-      (Just (heldId, held), Just fingerprint) | isNothing (dBAccountFingerprint held) -> do
-        learnFingerprint heldId fingerprint
-        return heldId
-      _ -> fst <$> insertAccount net ctx name xpub fingerprintM
-    accountAnswer accId
+    content <- liftEitherIO $ readTextFile file
+    ResponseImport <$> importFile ctx (commandNetwork cfg netM) content
 
+-- | Write the account, or every account, to a BIP 329 file with its labels
+-- and the coins the user locked
 cmdExportAcc :: Ctx -> Config -> Maybe Text -> FilePath -> IO Response
 cmdExportAcc ctx cfg account file =
   runDBResponse cfg $ do
-    (_, acc) <- getAccountByName account
+    accs <- getAccountsByName account
+    when (null accs) $ throwError "There are no accounts in the wallet"
     checkPathFree file
-    let doc = PubKeyDoc (accountXPubKey ctx acc) (accountNetwork acc) (dBAccountName acc) (accountFingerprint acc)
-    liftEitherIO $ writeMarshalFile ctx file doc
+    records <- concat <$> mapM (accountRecords ctx) accs
+    liftEitherIO $ writeTextFile file (recordsText records)
     return $ ResponseFile file
 
 cmdRenameAcc :: Config -> RenameAcc -> IO Response

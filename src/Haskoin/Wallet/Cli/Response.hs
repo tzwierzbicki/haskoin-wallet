@@ -16,6 +16,7 @@ import Haskoin.Wallet.Database.Account (accountNetwork, accountWithSpendable, pa
 import Haskoin.Wallet.Database.Address (CoinBalance, addressWithCoinBalance, addressWithSpendable, parseAddressWithCoinBalance, parseAddressWithSpendable)
 import Haskoin.Wallet.Database.Coin (JsonCoin, LeftCoin)
 import Haskoin.Wallet.Database (DBAccount, DBAddress)
+import Haskoin.Wallet.Labels (ImportReport, parseReport, reportPairs)
 import Haskoin.Wallet.Tx.FeeRates (FeeRates)
 import Haskoin.Wallet.Sync (SyncRes (..))
 import Haskoin.Wallet.Database.TxInfo (TxInfo)
@@ -34,6 +35,9 @@ data Response
     ResponseAccResult !DBAccount !Bool !Text
   | -- | The file the command wrote
     ResponseFile !FilePath
+  | -- | What importacc did with a file: the accounts it names, the labels
+    -- and locks set, and what it could not place
+    ResponseImport !ImportReport
   | -- | Accounts, each with the balance it can spend now
     ResponseAccounts ![(DBAccount, Word64)]
   | -- | An address of the account, with the balance it can spend now
@@ -98,6 +102,7 @@ instance ToJSON Response where
     ResponseAccount acc spendable -> typed "account" ["account" .= accountWithSpendable acc spendable]
     ResponseAccResult acc result text -> typed "accresult" ["account" .= acc, "result" .= result, "text" .= text]
     ResponseFile file -> typed "file" ["file" .= file]
+    ResponseImport report -> typed "import" (reportPairs report)
     ResponseAccounts accs -> typed "accounts" ["accounts" .= (uncurry accountWithSpendable <$> accs)]
     ResponseAddress acc addr spendable ->
       typed "address" ["account" .= acc, "address" .= addressWithSpendable addr spendable]
@@ -136,6 +141,7 @@ instance FromJSON Response where
       "account" -> uncurry ResponseAccount <$> (parseAccountWithSpendable =<< o .: "account")
       "accresult" -> ResponseAccResult <$> o .: "account" <*> o .: "result" <*> o .: "text"
       "file" -> ResponseFile <$> o .: "file"
+      "import" -> ResponseImport <$> parseReport o
       "accounts" -> ResponseAccounts <$> (mapM parseAccountWithSpendable =<< o .: "accounts")
       "address" -> do
         acc <- o .: "account"
