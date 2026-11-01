@@ -399,6 +399,43 @@ messageSpec =
         run `shouldSatisfy` printed "Address does not exist"
         run `shouldNotSatisfy` askedMnemonic
 
+    -- The block signmsg prints, line for line
+    it "is written to the --output file as its armored block, and hw says where" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        let file = home </> "signed.txt"
+        run <- hw home ["signmsg", textOf (externalAddr 0), "hello", "--output", file] seedOnce
+        runOut run `shouldBe` "Written to " <> Text.pack file <> "\n"
+        (Text.pack <$> readFile file)
+          `shouldReturn` Text.unlines
+            [ "-----BEGIN BITCOIN SIGNED MESSAGE-----",
+              "hello",
+              "-----BEGIN BITCOIN SIGNATURE-----",
+              externalAddrsText !! 0,
+              helloSignature,
+              "-----END BITCOIN SIGNATURE-----"
+            ]
+
+    it "is answered in --json by the --output file it was written to" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        let file = home </> "signed.txt"
+        hwJson home ["signmsg", textOf (externalAddr 0), "hello", "--output", file] seedOnce
+          `shouldReturn` ResponseFile file
+
+    it "is refused for an --output file that exists, before the mnemonic is asked, and the file is kept" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        let file = home </> "signed.txt"
+        writeFile file "kept\n"
+        run <- hw home ["signmsg", textOf (externalAddr 0), "hello", "--output", file] seedOnce
+        run `shouldSatisfy` printed (alreadyExists file)
+        run `shouldNotSatisfy` askedMnemonic
+        readFile file `shouldReturn` "kept\n"
+
 {- Verified messages -}
 
 verifySpec :: Spec
@@ -451,6 +488,15 @@ verifySpec =
                      ]
         let file = home </> "signed.txt"
         writeFile file (Text.unpack (runOut signed))
+        hwJson home ["verifymsg", "--input", file] []
+          `shouldReturn` ResponseVerifyMsg "hello" helloSignature (externalAddrsText !! 0) True
+
+    it "reads the file signmsg --output wrote" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        let file = home </> "signed.txt"
+        _ <- hw home ["signmsg", textOf (externalAddr 0), "hello", "--output", file] seedOnce
         hwJson home ["verifymsg", "--input", file] []
           `shouldReturn` ResponseVerifyMsg "hello" helloSignature (externalAddrsText !! 0) True
 

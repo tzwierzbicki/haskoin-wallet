@@ -472,9 +472,10 @@ setPendingTxOnline nosigH =
 {- Sending and abandoning -}
 
 -- | What sending does last before a transaction goes on the network, for
--- good: given the transaction and its network, it may stop the sending
--- with an error. sendtx shows the transaction there and asks the user.
-type BeforeSending m = Network -> TxInfo -> ExceptT String (DB m) ()
+-- good: given the transaction, its network, and its account when the
+-- wallet holds it, it may stop the sending with an error. sendtx shows the
+-- transaction there and asks the user.
+type BeforeSending m = Network -> Maybe DBAccount -> TxInfo -> ExceptT String (DB m) ()
 
 -- | Send a pending transaction of the wallet and wait for the store to see
 -- it. Once it does, the transaction is marked online, for the sync to send
@@ -492,7 +493,7 @@ sendPending ctx storeOn beforeSending named = do
   -- A replacement may no longer replace anything: a transaction it
   -- replaces confirmed
   replaced <- replacedBy ctx held.pendingTxAccount held.pendingTxData
-  beforeSending (accountNetwork acc) =<< pendingSummary ctx acc held
+  beforeSending (accountNetwork acc) (Just acc) =<< pendingSummary ctx acc held
   -- The summary as it will read once sent, made before anything leaves
   summary <- pendingSummary ctx acc held {pendingTxOnline = True}
   fromStore $ storeHealth store
@@ -577,7 +578,7 @@ sendSigned ctx storeOn beforeSending netM tsd = do
     Nothing -> do
       net <- liftMaybe noFileNetwork netM
       liftEither $ verifySignedTx net ctx tsd
-      beforeSending net =<< liftEither (parseOutsideTxSignData net ctx tsd)
+      beforeSending net Nothing =<< liftEither (parseOutsideTxSignData net ctx tsd)
       fromStore $ storeHealth (storeOn net)
       accepted <- fromStore $ broadcast (storeOn net) signedTx
       unless accepted $ throwError notAccepted

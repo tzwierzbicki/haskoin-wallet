@@ -383,10 +383,18 @@ verboseSpec =
 
 answerSpec :: Spec
 answerSpec =
-  describe "The transaction a command answers with" $
+  describe "The transaction a command answers with" $ do
     -- A transaction read from a file has no time, so the clock of the
     -- computer plays no part
-    it "names its network below its first line" $ do
-      let info = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing []))
-      shown <- txAnswerDoc btc UnitBitcoin info
+    let info = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing []))
+
+    it "names its network below its first line, outside the wallet" $ do
+      shown <- txAnswerDoc btc Nothing UnitBitcoin info
       (renderedLines shown !! 1) `shouldBe` "  Network  : btc"
+
+    it "names its account, then its network, below its first line" $ do
+      shown <- txAnswerDoc btc (Just mainAccountRow) UnitBitcoin info
+      take 2 (drop 1 (renderedLines shown))
+        `shouldBe` [ "  Account  : main",
+                     "  Network  : btc"
+                   ]

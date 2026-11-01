@@ -258,7 +258,9 @@ data SignMsg = SignMsg
     address :: !Text,
     message :: !Text,
     -- | The parts the mnemonic is typed in
-    parts :: !Natural
+    parts :: !Natural,
+    -- | The file the armored block is written to, instead of the screen
+    output :: !(Maybe FilePath)
   }
   deriving (Eq, Show)
 
@@ -1408,11 +1410,12 @@ reviewTxCommand =
       summary = "Show the transaction in a file",
       details =
         [r|
-reviewtx shows a transaction file as its account sees it, and changes nothing
-in the wallet. The file comes from preparetx --output, exporttx, signtx or
-preparesweep. Use it to check a transaction before you sign it, or before you
-send it. A transaction that involves no account, such as a sweep to addresses
-outside the wallet, is shown on the network its file names.
+reviewtx shows a transaction file as its account sees it, and names that
+account. It changes nothing in the wallet. The file comes from preparetx
+--output, exporttx, signtx or preparesweep. Use it to check a transaction
+before you sign it, or before you send it. A transaction that involves no
+account, such as a sweep to addresses outside the wallet, is shown on the
+network its file names.
 |],
       args =
         CommandReviewTx
@@ -1904,12 +1907,13 @@ The message is signed exactly as given. hw warns about spaces or line breaks
 at its start or end. Copying a message easily changes them, and the signature
 would then fail to verify.
 
-Save the output, the armored block or the --json answer, to a file. verifymsg
---input can then check it.
+With --output, hw writes the armored block to a file instead of printing it.
+verifymsg --input can then check the file. It also reads the --json answer,
+saved to a file.
 |],
       args =
         CommandSignMsg
-          <$> (SignMsg <$> signAddressArg <*> signMsgArg <*> mnemonicPartsOption)
+          <$> (SignMsg <$> signAddressArg <*> signMsgArg <*> mnemonicPartsOption <*> signedMessageOutputOption)
     }
 
 signAddressArg :: Args Text
@@ -1924,6 +1928,17 @@ signMsgArg =
   strArgument $
     metavar "MESSAGE"
       <> help "The message to sign. Quote it if it has spaces."
+
+-- | The file to write the armored block to. It is -o, as the file of a
+-- transaction is in the other commands.
+signedMessageOutputOption :: Args (Maybe FilePath)
+signedMessageOutputOption =
+  optional . strOption $
+    short 'o'
+      <> long "output"
+      <> metavar "FILENAME"
+      <> fileCompletion
+      <> help "Write the armored block to this file instead of printing it. It must not exist yet."
 
 {- verifymsg -}
 

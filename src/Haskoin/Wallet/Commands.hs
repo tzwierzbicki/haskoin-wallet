@@ -895,9 +895,9 @@ cmdSendTx ctx cfg unit namedM fileM yes =
           SentPending acc info -> ResponseTx acc info
           SentOutside net txid -> ResponseSentTx net txid
     -- On stderr, with the question, to keep the --json answer clean
-    beforeSending net info =
+    beforeSending net accountM info =
       unless yes $ do
-        liftIO $ renderOn stderr =<< txAnswerDoc net unit info
+        liftIO $ renderOn stderr =<< txAnswerDoc net accountM unit info
         confirmed <- askYes terminal "Send this transaction to the network? This cannot be undone."
         unless confirmed $ throwError "The transaction was not sent"
 
@@ -1093,10 +1093,13 @@ cmdSync ctx cfg account full =
     (results, notSynced) <- syncAccounts ctx cfg (webStore ctx cfg) accs full
     return $ ResponseSync results [(acc, cs failure) | (acc, failure) <- notSynced]
 
--- | Sign a message with the key of an address of the wallet
+-- | Sign a message with the key of an address of the wallet. The answer is
+-- the signed message, or the --output file its armored block went to.
 cmdSignMsg :: Ctx -> Config -> SignMsg -> IO Response
 cmdSignMsg ctx cfg opts =
   runDBResponse cfg $ do
+    -- Before the mnemonic is asked, not after
+    for_ opts.output checkPathFree
     (acc, addrDB) <- getAddressByText opts.address
     let net = accountNetwork acc
     addr <- liftEither $ textToAddrE net opts.address
@@ -1106,8 +1109,12 @@ cmdSignMsg ctx cfg opts =
     (seed, accountPrvKey) <- askSigningKey terminal net ctx opts.parts (accountIndex acc) (accountXPubKey ctx acc)
     lift $ recordFingerprint ctx seed
     let addrKey = derivePath ctx (addrPath addrDB) accountPrvKey
-    signature <- liftEither $ signMessage ctx addr addrKey.key opts.message
-    return $ ResponseSignMsg opts.message (encodeSignature signature) opts.address
+    signature <- encodeSignature <$> liftEither (signMessage ctx addr addrKey.key opts.message)
+    case opts.output of
+      Nothing -> return $ ResponseSignMsg opts.message signature opts.address
+      Just file -> do
+        liftEitherIO $ writeTextFile file (signedMessageText opts.address signature opts.message)
+        return $ ResponseFile file
 
 -- | Check a signed message: whether the key of the address signed it. The
 -- wallet is not needed: the address can be anyone's.

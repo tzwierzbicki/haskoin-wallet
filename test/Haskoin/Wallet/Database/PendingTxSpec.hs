@@ -53,17 +53,17 @@ spec =
     accountOfTxSpec ctx
 
 -- | Nothing before sending: the transaction goes on, as with sendtx --yes
-withoutAsking :: (Monad m) => Network -> TxInfo -> ExceptT String m ()
-withoutAsking _ _ = return ()
+withoutAsking :: (Monad m) => Network -> Maybe DBAccount -> TxInfo -> ExceptT String m ()
+withoutAsking _ _ _ = return ()
 
 -- | A step before sending that refuses, as the user who answers no
-refusing :: (Monad m) => Network -> TxInfo -> ExceptT String m ()
-refusing _ _ = throwError "The transaction was not sent"
+refusing :: (Monad m) => Network -> Maybe DBAccount -> TxInfo -> ExceptT String m ()
+refusing _ _ _ = throwError "The transaction was not sent"
 
 -- | A step before sending that notes the network and the flags of the
 -- transaction it is given, then lets it go
-noting :: (MonadIO m) => IORef [(String, Maybe (TxHash, Bool, Bool, Bool))] -> Network -> TxInfo -> ExceptT String m ()
-noting seen net info = liftIO $ modifyIORef seen (<> [(net.name, pendingFlags info)])
+noting :: (MonadIO m) => IORef [(String, Maybe (TxHash, Bool, Bool, Bool))] -> Network -> Maybe DBAccount -> TxInfo -> ExceptT String m ()
+noting seen net _ info = liftIO $ modifyIORef seen (<> [(net.name, pendingFlags info)])
 
 -- | A store that knows the transaction of the signing data, in its mempool
 storeKnowing :: Ctx -> TxSignData -> FakeStore

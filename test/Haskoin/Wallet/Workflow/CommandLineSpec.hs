@@ -572,6 +572,27 @@ commandLineSpec ctx = do
         run <- hw home ("--bash-completion-enriched" : tabAfter ["importtx", "doc"]) []
         runOut run `shouldBe` "docs/\n"
 
+    it "offers the files after --output of signmsg, through the script of bash" $
+      withHome $ \home -> do
+        createDirectory (home </> "docs")
+        writeFile (home </> "doc.json") ""
+        bashCompletion home ["signmsg", "--output", "doc"] `shouldReturn` ["doc.json", "docs/"]
+
+    -- zsh and fish keep --output=doc one word
+    it "offers the files after --output= of signmsg in the same word, --output= before each" $
+      withHome $ \home -> do
+        createDirectory (home </> "docs")
+        writeFile (home </> "doc.json") ""
+        run <- hw home ("--bash-completion-enriched" : tabAfter ["signmsg", "--output=doc"]) []
+        runOut run `shouldBe` "--output=doc.json\n--output=docs/\n"
+
+    it "offers the addresses after the --output file of signmsg" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        run <- hw home (tabAfter ["signmsg", "--output", "signed.txt", "1KEn"]) []
+        runOut run `shouldBe` "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\n"
+
     -- The script of optparse-applicative added a / to any value that
     -- names a directory, an account named src for instance
     it "writes a script for fish that offers the lines hw prints, by the name given, as they are" $

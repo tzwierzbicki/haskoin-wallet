@@ -431,8 +431,8 @@ hw pendingtxs
 hw pendingtxs --verbose
 ```
 
-**`hw reviewtx FILE`** shows the transaction in a file, without changing the
-wallet.
+**`hw reviewtx FILE`** shows the transaction in a file and the account it
+belongs to, without changing the wallet.
 
 ```console
 hw reviewtx unsigned.json
@@ -484,11 +484,12 @@ hw sendtx --input signed.json
 ### Messages
 
 **`hw signmsg ADDRESS MESSAGE`** signs a message with the key of an address of
-the wallet. **`hw verifymsg`** checks a signature from `hw`, Bitcoin Core or
-another wallet, from any P2PKH address.
+the wallet. `--output` writes the signed message to a file instead of printing
+it. **`hw verifymsg`** checks a signature from `hw`, Bitcoin Core or another
+wallet, from any P2PKH address.
 
 ```console
-hw signmsg MYADDRESS "I control this address" > signed.txt
+hw signmsg MYADDRESS "I control this address" --output signed.txt
 hw verifymsg --input signed.txt
 hw verifymsg ADDRESS SIGNATURE "I control this address"
 ```

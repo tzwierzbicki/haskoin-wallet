@@ -194,6 +194,11 @@ signedMessageBlock address signature message =
     "-----END BITCOIN SIGNATURE-----"
   ]
 
+-- | The block as signmsg prints it, or writes it to its --output file:
+-- its lines, each ending with a line break
+signedMessageText :: Text -> Text -> Text -> Text
+signedMessageText address signature message = Text.unlines (signedMessageBlock address signature message)
+
 -- | The address, the signature and the message of an armored block, such
 -- as signmsg prints, or why the text is not one. A marker line is five dashes, words and five dashes:
 -- the message is every line between the BEGIN ... SIGNED MESSAGE marker and

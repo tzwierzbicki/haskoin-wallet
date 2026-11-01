@@ -222,6 +222,14 @@ signingSpec ctx = do
         (txsOf <$> hwJson signer ["pendingtxs"] []) `shouldReturn` Right []
 
     -- The payment is from main
+    it "is shown by reviewtx with the name of its account" $
+      withHome $ \home -> do
+        createMain home
+        Json.encodeFile (home </> "payment.json") (unsignedPayment ctx)
+        run <- hw home ["reviewtx", home </> "payment.json"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  Account  : main\n"
+
+    -- The payment is from main
     it "is refused by reviewtx and importtx for an --account the transaction does not involve" $
       withHome $ \home -> do
         createMain home
@@ -430,6 +438,13 @@ confirmationSpec ctx =
         run <- hw home ["sendtx", nosig] ["y"]
         runErr run `shouldSatisfy` Text.isInfixOf "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
         runErr run `shouldSatisfy` Text.isInfixOf sendQuestion
+
+    -- The payment is from main, as reviewtx shows it
+    it "names the account of the transaction it shows" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        nosig <- paymentSigned home
+        run <- hw home ["sendtx", nosig] ["n"]
+        runErr run `shouldSatisfy` Text.isInfixOf "\n  Account  : main\n"
 
     it "sends it when the user answers yes, the --json answer kept clean" $
       withChain ctx (paidChain ctx) $ \home chain -> do

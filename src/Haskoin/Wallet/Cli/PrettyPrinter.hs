@@ -43,7 +43,7 @@ import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..), levelName, rateAt)
 import Haskoin.Wallet.Keys (KeySource (..))
-import Haskoin.Wallet.MessageSigning (signedMessageBlock)
+import Haskoin.Wallet.MessageSigning (signedMessageText)
 import Haskoin.Wallet.Cli.Parser (BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), View (..), program)
 import Haskoin.Wallet.Cli.Parser.Help (commandName)
 import Haskoin.Wallet.Cli.Parser.Run (commandNamed)
@@ -373,17 +373,22 @@ listedTxDoc view net unit accountM info = do
   return $ case view of
     Compact -> compactTxDoc net unit accountM time info
     Verbose -> verboseTxDoc net unit [accountField acc | Just acc <- [accountM]] time info
-  where
-    accountField acc = field 9 "Account" <> pretty (dBAccountName acc) `withStyle` Account
+
+-- | The account of a transaction, as a field of the verbose view
+accountField :: DBAccount -> Doc Style
+accountField acc = field 9 "Account" <> pretty (dBAccountName acc) `withStyle` Account
 
 -- | The one transaction a command answers with, with every detail, naming
--- its network. The user sees which coins it moves: private keys, coins and
--- the legacy addresses of Bitcoin Cash read the same on Bitcoin, and a
--- sweep outside the wallet is on the network of its file.
-txAnswerDoc :: Network -> AmountUnit -> TxInfo -> IO (Doc Style)
-txAnswerDoc net unit info = do
+-- its account when it is one of the wallet, and its network. The user sees
+-- whose coins it moves, and which coins: private keys, coins and the legacy
+-- addresses of Bitcoin Cash read the same on Bitcoin, and a sweep outside
+-- the wallet is on the network of its file.
+txAnswerDoc :: Network -> Maybe DBAccount -> AmountUnit -> TxInfo -> IO (Doc Style)
+txAnswerDoc net accountM unit info = do
   time <- localTxTime info
-  return $ verboseTxDoc net unit [field 9 "Network" <> text net.name] time info
+  return $ verboseTxDoc net unit named time info
+  where
+    named = [accountField acc | Just acc <- [accountM]] <> [field 9 "Network" <> text net.name]
 
 -- | The time a transaction shows: when the store first saw it, for one on
 -- the chain, or when the wallet started holding it, for one in
@@ -837,12 +842,12 @@ responsePrinter unit view answer =
     ResponseAddress _ addr spendable ->
       renderIO =<< listedAddressDoc Verbose unit (pathWidth [addr]) addr spendable
     ResponseTx acc txInfo ->
-      renderIO =<< txAnswerDoc (accountNetwork acc) unit txInfo
+      renderIO =<< txAnswerDoc (accountNetwork acc) (Just acc) unit txInfo
     -- The coins left in the account below the transaction, apart from it
     ResponsePrepared acc txInfo left -> do
-      renderIO =<< txAnswerDoc (accountNetwork acc) unit txInfo
+      renderIO =<< txAnswerDoc (accountNetwork acc) (Just acc) unit txInfo
       unless (null left) $ putStrLn "" >> renderIO (leftCoinsDoc unit left)
-    ResponseOutsideTx net txInfo -> renderIO =<< txAnswerDoc net unit txInfo
+    ResponseOutsideTx net txInfo -> renderIO =<< txAnswerDoc net Nothing unit txInfo
     ResponseSentTx net h ->
       renderIO $
         vcat
@@ -862,10 +867,9 @@ responsePrinter unit view answer =
         freed = case [counted coins "coin" "coins" | coins > 0] <> [counted addrs "change address" "change addresses" | addrs > 0] of
           [] -> text "nothing"
           parts -> text (intercalate ", " parts)
-    -- As it is, byte for byte: verifymsg --input reads it back, and other
-    -- wallets check the message exactly
-    ResponseSignMsg m s a ->
-      Text.putStr . Text.unlines $ signedMessageBlock a s m
+    -- As it is, byte for byte, as signmsg --output writes it: verifymsg
+    -- --input reads it back, and other wallets check the message exactly
+    ResponseSignMsg m s a -> Text.putStr $ signedMessageText a s m
     -- In green when the signature is valid, in red otherwise
     ResponseVerifyMsg _ _ addr valid ->
       renderIO $
