@@ -37,7 +37,7 @@ import Data.Word
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Account
-import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath, chainPath, coinBalanceUnspendable, pathText)
+import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath, chainPath, coinBalanceUnspendable, isIntPath, pathText)
 import Haskoin.Wallet.Amounts
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Database
@@ -269,18 +269,26 @@ listedAddressDoc view unit pad addr spendable = do
 
 -- | The first line of an address: its derivation path, which tells
 -- receiving and change addresses apart, padded to the width given, then
--- the address and its label
-addressLine :: Natural -> DBAddress -> Doc Style
-addressLine pad addr =
+-- the address and its label. In a listing of addresses of both kinds, a
+-- change address says so in place of a label, which it never has.
+addressLine :: Bool -> Natural -> DBAddress -> Doc Style
+addressLine mixed pad addr =
   columns $
     [text (block pad (cs (pathText (addrPath addr)))), pretty (dBAddressAddress addr)]
       <> [labelWord label | let label = dBAddressLabel addr, not (Text.null label)]
+      <> [changeWord | mixed, dBAddressInternal addr]
+
+-- | What marks a change address where a label would go: the user cannot
+-- label one, and hw knows which addresses are change
+changeWord :: Doc Style
+changeWord = styled Muted "change address"
 
 -- | An address in two lines: its first line, then what it can spend now
--- and what it received in how many transactions, or that it is unused
+-- and what it received in how many transactions, or that it is unused.
+-- addresses lists one kind of address at a time, so none is marked.
 compactAddressDoc :: AmountUnit -> Natural -> DBAddress -> Word64 -> Doc Style
 compactAddressDoc unit pad addr spendable =
-  vcat [addressLine pad addr, indent 2 activity]
+  vcat [addressLine False pad addr, indent 2 activity]
   where
     txs = fromIntegral (dBAddressBalanceTxs addr)
     activity
@@ -295,7 +303,7 @@ compactAddressDoc unit pad addr spendable =
 verboseAddressDoc :: AmountUnit -> Natural -> ZonedTime -> DBAddress -> Word64 -> Doc Style
 verboseAddressDoc unit pad created addr spendable =
   vcat $
-    addressLine pad addr
+    addressLine False pad addr
       : ( indent 2
             <$> [ field 12 "Transactions" <> countPrinter (fromIntegral (dBAddressBalanceTxs addr)),
                   field 12 "Received" <> amountPrinter unit (dBAddressBalanceReceived addr),
@@ -311,12 +319,13 @@ verboseAddressDoc unit pad created addr spendable =
 pathWidth :: [DBAddress] -> Natural
 pathWidth addrs = fromIntegral $ maximum (0 : (Text.length . pathText . addrPath <$> addrs))
 
--- | An address as balances shows it: its first line, then the value of
+-- | An address as balances shows it: its first line, with a change
+-- address marked as one among the receiving addresses, then the value of
 -- its coins, what it can spend now, and the rest, which waits
 coinBalanceDoc :: AmountUnit -> Natural -> DBAddress -> CoinBalance -> Doc Style
 coinBalanceDoc unit pad addr balance =
   vcat
-    [ addressLine pad addr,
+    [ addressLine True pad addr,
       indent 2 $
         commaList
           [ "total" <+> amountPrinter unit (coinBalanceTotal balance),
@@ -337,16 +346,16 @@ coinBalancesPrinter unit addrs = vcat . intersperse mempty $ uncurry (coinBalanc
 {- Coins -}
 
 -- | A coin in three lines: its value with its state and its
--- confirmations, the address that holds it with its label, and the coin
--- itself, as lockcoin and --coin take it. A coin that shows the label of
--- its transaction has it on a line of its own, below the first, as a
--- transaction does.
+-- confirmations, the address that holds it with its label, or marked as a
+-- change address, and the coin itself, as lockcoin and --coin take it. A
+-- coin that shows the label of its transaction has it on a line of its
+-- own, below the first, as a transaction does.
 coinDoc :: Network -> AmountUnit -> JsonCoin -> Doc Style
 coinDoc net unit JsonCoin {..} =
   vcat $
     [columns [amountCell (Just Incoming) "" unit (fromIntegral jsonCoinValue), commaList [state, confirmations]]]
       <> [indent 2 (labelWord jsonCoinTxLabel) | not (Text.null jsonCoinTxLabel)]
-      <> [ indent 2 (hsep $ ["at", text (addrToString net jsonCoinAddress)] <> [labelWord jsonCoinAddressLabel | not (Text.null jsonCoinAddressLabel)]),
+      <> [ indent 2 (hsep $ ["at", text (addrToString net jsonCoinAddress)] <> [labelWord jsonCoinAddressLabel | not (Text.null jsonCoinAddressLabel)] <> [changeWord | jsonCoinChange]),
            indent 2 (styled Muted (coinText jsonCoinOutpoint))
          ]
   where
@@ -519,7 +528,10 @@ payeeLine net accountM summary =
     more [] = []
     more others = ["and", text (show (length others)), "more"]
     addressWords row =
-      hsep $ text (addrToString net (txAddress row)) : [labelWord label | Just (_, label) <- [txAddressOwn row], not (Text.null label)]
+      hsep $
+        text (addrToString net (txAddress row))
+          : [labelWord label | Just (_, label) <- [txAddressOwn row], not (Text.null label)]
+          <> [changeWord | Just (path, _) <- [txAddressOwn row], isIntPath path]
 
 -- | The label of an address or of a transaction, quoted, which sets it
 -- apart on a line
@@ -538,7 +550,8 @@ hashWord (Pending status) = styled PendingHash (cs (txHashToHex (pendingShownHas
 -- its network in an answer. Its label, if any, follows them. Every address
 -- it spends from or pays is on a line of its own, with its value, and those
 -- of the wallet with their paths and labels, in columns. An address of the
--- wallet it spends from ends with the labels its coins show, if any.
+-- wallet it spends from ends with the labels its coins show, if any. A
+-- change address is marked as one, except under Change, which says it.
 verboseTxDoc :: Network -> AmountUnit -> [Doc Style] -> Maybe ZonedTime -> TxInfo -> Doc Style
 verboseTxDoc net unit named time info@(TxInfo summary status label inputLabels) =
   vcat $
@@ -548,9 +561,9 @@ verboseTxDoc net unit named time info@(TxInfo summary status label inputLabels) 
               <> [field 9 "Label" <> labelWord label | not (Text.null label)]
               <> statusFields time status
               <> [feeField unit summary]
-              <> section "From" Nothing from
-              <> section "To" (Just Incoming) to
-              <> section "Change" (Just Incoming) change
+              <> section "From" Nothing True from
+              <> section "To" (Just Incoming) True to
+              <> section "Change" (Just Incoming) False change
         )
   where
     from = spentFrom inputLabels summary
@@ -558,8 +571,8 @@ verboseTxDoc net unit named time info@(TxInfo summary status label inputLabels) 
     widths = addressColumns net unit (from <> to <> change)
     -- What the wallet receives is green. What it spends, and what others
     -- receive, is neither in nor out of the account.
-    section name ownStyle rows =
-      [field 9 name <> align (vcat (addressRow net unit widths ownStyle <$> rows)) | not (null rows)]
+    section name ownStyle marked rows =
+      [field 9 name <> align (vcat (addressRow net unit widths ownStyle marked <$> rows)) | not (null rows)]
 
 -- | The fields that say where a transaction stands: the hash to name it
 -- by, its time to the second with its time zone, and what its first line
@@ -663,10 +676,11 @@ valueText unit v = cs (showAmount unit (fromIntegral v) <> " " <> showUnit unit 
 
 -- | An address of a transaction on one line: the address, its value
 -- right-aligned, then for an address of the wallet, its path and its
--- label, then the labels its coins show, after the word "from". The value
--- of an address of the wallet is in the style given.
-addressRow :: Network -> AmountUnit -> AddressColumns -> Maybe Style -> TxAddress -> Doc Style
-addressRow net unit widths ownStyle row =
+-- label, or that it is a change address when marked, then the labels its
+-- coins show, after the word "from". The value of an address of the
+-- wallet is in the style given.
+addressRow :: Network -> AmountUnit -> AddressColumns -> Maybe Style -> Bool -> TxAddress -> Doc Style
+addressRow net unit widths ownStyle marked row =
   cellsLine $
     [(addressColumn widths, address, text address)]
       <> [(valueColumn widths, value, valueDoc value) | Just v <- [txAddressValue row], let value = valueText unit v]
@@ -674,6 +688,7 @@ addressRow net unit widths ownStyle row =
         Just (path, label) ->
           (pathColumn widths, pathToStr path, styled Muted (pathToStr path))
             : [(0, "", labelWord label) | not (Text.null label)]
+            <> [(0, "", changeWord) | marked, isIntPath path]
             <> [(0, "", styled Muted "from" <+> commaList (labelWord <$> spentLabels)) | let spentLabels = txAddressCoinLabels row, not (null spentLabels)]
         Nothing -> []
   where

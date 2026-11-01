@@ -660,8 +660,12 @@ relabelAddresses labelOf info =
 
 -- | The label of an address of the wallet, or none
 addressLabel :: (MonadUnliftIO m) => Network -> Address -> DB m Text
-addressLabel net addr =
-  fmap (fromMaybe "") . runMaybeT $ do
+addressLabel net addr = maybe "" dBAddressLabel <$> walletAddressRow net addr
+
+-- | The row of an address of the wallet, if the wallet has it
+walletAddressRow :: (MonadUnliftIO m) => Network -> Address -> DB m (Maybe DBAddress)
+walletAddressRow net addr =
+  runMaybeT $ do
     addrT <- hoistMaybe $ addrToText net addr
     Entity _ row <- MaybeT $ P.getBy (UniqueAddress addrT)
-    return $ dBAddressLabel row
+    return row

@@ -1010,7 +1010,8 @@ balancesCommand =
 `balances` lists the receiving and change addresses that hold coins, the
 largest total first. Each takes two lines. The first gives its derivation
 path, /0/i for a receiving address and /1/i for a change address, the address
-and its label. The second gives three amounts. The total is the value of all
+and its label, or that it is a change address. The second gives three amounts.
+The total is the value of all
 its coins. The spendable amount is what it can spend now, as `accounts`
 describes. The unspendable amount is the rest. It counts the coins locked by a
 pending transaction or by lockcoin, the unconfirmed payments from other
@@ -1634,7 +1635,8 @@ label, and the coin itself, as lockcoin and --coin take it.
 A coin paid by a transaction you labelled shows the label on a line of its
 own, below the first, as txs does. The change of a payment you made shows no
 label: the label says what the payment was for, not what its change is. Coins
-have no labels of their own.
+have no labels of their own. A coin at a change address says so, where the
+label of the address would be.
 
 A coin is spendable when the wallet can spend it now. Nothing locks it, a
 coinbase coin has 100 confirmations, and an unconfirmed coin is the change of

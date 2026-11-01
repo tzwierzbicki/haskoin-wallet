@@ -16,7 +16,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Address (CoinBalance (..))
 import Haskoin.Wallet.Amounts (AmountUnit (..))
 import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..))
-import Haskoin.Wallet.Database (DBAccount (..))
+import Haskoin.Wallet.Database (DBAccount (..), DBAddress (..))
 import Haskoin.Wallet.Keys (MnemonicPass (..))
 import Haskoin.Wallet.Cli.PrettyPrinter
 import Haskoin.Wallet.Sync (SyncRes (..))
@@ -129,13 +129,22 @@ addressSpec =
 
 balanceSpec :: Spec
 balanceSpec =
-  describe "An address as balances shows it" $
+  describe "An address as balances shows it" $ do
     -- 80000 in coins, of which 50000 can be spent now: 30000 cannot
     it "gives its path, the address and its label, then its total, spendable and unspendable balances" $
       renderedLines (coinBalanceDoc UnitBitcoin 4 paidAddressRow (CoinBalance 80000 50000))
         `shouldBe` [ "/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Invoice 42\"",
                      "  total 0.00080000 btc, spendable 0.00050000 btc, unspendable 0.00030000 btc"
                    ]
+
+    -- balances lists both kinds of addresses, where a change address takes
+    -- no label. addresses lists one kind at a time, and says nothing.
+    it "says a change address is one, where its label would be, which addresses does not" $ do
+      let changeRow = paidAddressRow {dBAddressInternal = True, dBAddressAddress = internalAddrsText !! 0, dBAddressLabel = ""}
+      (renderedLines (coinBalanceDoc UnitBitcoin 4 changeRow (CoinBalance 80000 50000)) !! 0)
+        `shouldBe` "/1/0  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  change address"
+      (renderedLines (compactAddressDoc UnitBitcoin 4 changeRow 50000) !! 0)
+        `shouldBe` "/1/0  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"
 
 coinSpec :: Spec
 coinSpec =
@@ -156,6 +165,12 @@ coinSpec =
                      "  at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj \"Wages\"",
                      "  0000000000000000000000000000000000000000000000000000000000000001:0"
                    ]
+
+    -- 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn is the first change address, which
+    -- takes no label
+    it "says a coin at a change address is at one, where the label of the address would be" $
+      (renderedLines (coinDoc btc UnitBitcoin spendableCoinRow {jsonCoinAddress = internalAddr 0, jsonCoinChange = True}) !! 1)
+        `shouldBe` "  at 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn change address"
 
     it "says a coin a pending transaction spends is locked by it" $
       (renderedLines (coinDoc btc UnitBitcoin spendableCoinRow {jsonCoinLock = Just LockedByTransaction, jsonCoinSpendable = False}) !! 0)
@@ -363,6 +378,21 @@ verboseSpec =
       let info = TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" (Map.fromList [(fakeTxHash 1, "Salary")])
       (renderedLines (verboseTxDoc btc UnitBitcoin [] (Just seenTimeInCet) info) !! 4)
         `shouldBe` "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0  \"Rent\"  from \"Salary\""
+
+    -- The spending from the first change address, 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn
+    it "marks a change address spent from as one, where its label would be" $ do
+      let fromChange = spendSummary {summaryMyInputs = Map.fromList [(internalAddr 0, MyInputs 50000 (Deriv :/ 1 :/ 0) "" [OutPoint (fakeTxHash 1) 0])]}
+          info = TxInfo fromChange (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
+      (renderedLines (verboseTxDoc btc UnitBitcoin [] (Just seenTimeInCet) info) !! 4)
+        `shouldBe` "  From     : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00050000 btc  /1/0  change address"
+
+    -- A transfer of the account to its first change address, which the
+    -- compact view names as the address paid
+    it "marks a change address an internal transaction pays as one" $ do
+      let toChange = spendSummary {summaryType = TxInternal, summaryOtherOutputs = Map.empty}
+          info = TxInfo toChange (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
+      (renderedLines (compactTxDoc btc UnitBitcoin Nothing (Just seenTimeInCet) info) !! 1)
+        `shouldBe` "  to 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn change address"
 
     it "ends an address spent from without a label of its own with the labels of its coins" $ do
       let info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" (Map.fromList [(fakeTxHash 1, "Salary")])

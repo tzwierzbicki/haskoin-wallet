@@ -260,7 +260,7 @@ layoutSpec ctx =
 
     -- Paying the second receiving address from the first leaves 27740 of
     -- change at /1/0: both outputs are the wallet's, and neither can be told
-    -- to be the change
+    -- to be the change of the payment. The one at a change address says so.
     it "shows every output of a transaction between addresses of the wallet as sent to, none as change" $
       withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
         synced home
@@ -269,7 +269,7 @@ layoutSpec ctx =
             (_, sent) = Text.breakOn "  To       : " shown
         firstLine `shouldSatisfy` Text.isInfixOf "  Internal  "
         sent `shouldSatisfy` Text.isInfixOf "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg  0.00020000 btc  /0/1\n"
-        sent `shouldSatisfy` Text.isInfixOf "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  /1/0\n"
+        sent `shouldSatisfy` Text.isInfixOf "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  /1/0  change address\n"
         shown `shouldNotSatisfy` Text.isInfixOf "  Change   : "
 
 -- old key

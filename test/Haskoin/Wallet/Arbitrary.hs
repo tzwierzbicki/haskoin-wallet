@@ -105,6 +105,7 @@ arbitraryJsonCoin net =
     <*> arbitrary
     <*> arbitraryText
     <*> arbitraryText
+    <*> arbitrary
 
 arbitraryCoinLock :: Gen CoinLock
 arbitraryCoinLock = elements [LockedByTransaction, LockedByUser]

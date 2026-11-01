@@ -76,7 +76,7 @@ import Haskoin.Wallet.Database.Account (accountNetwork, getAccountById, getAccou
 import Haskoin.Wallet.Database.Address (CoinBalance (..))
 import Haskoin.Wallet.Database.PendingTx (lockedOutpoints, userLockedOutpoints)
 import Haskoin.Wallet.Database.RawTx (lookupRawTx)
-import Haskoin.Wallet.Database.TxInfo (MyInputs (..), TxSummary (..), addressLabel, coinLabel, coinLabels, liveSummary, ownTransaction)
+import Haskoin.Wallet.Database.TxInfo (MyInputs (..), TxSummary (..), coinLabel, coinLabels, liveSummary, ownTransaction, walletAddressRow)
 import Haskoin.Wallet.Util (rowLimit)
 import Numeric.Natural (Natural)
 
@@ -96,7 +96,9 @@ data JsonCoin = JsonCoin
     -- ('coinLabel'), or none
     jsonCoinTxLabel :: !Text,
     -- | The label of the address that holds it, or none
-    jsonCoinAddressLabel :: !Text
+    jsonCoinAddressLabel :: !Text,
+    -- | Whether the address that holds it is a change address
+    jsonCoinChange :: !Bool
   }
   deriving (Eq, Show)
 
@@ -126,7 +128,8 @@ instance MarshalJSON Network JsonCoin where
         "lock" .= jsonCoinLock c,
         "spendable" .= jsonCoinSpendable c,
         "txlabel" .= jsonCoinTxLabel c,
-        "addresslabel" .= jsonCoinAddressLabel c
+        "addresslabel" .= jsonCoinAddressLabel c,
+        "change" .= jsonCoinChange c
       ]
   unmarshalValue net =
     withObject "JsonCoin" $ \o ->
@@ -140,10 +143,11 @@ instance MarshalJSON Network JsonCoin where
         <*> o .: "spendable"
         <*> o .:? "txlabel" .!= ""
         <*> o .:? "addresslabel" .!= ""
+        <*> o .:? "change" .!= False
 
 -- | A coin row as the user sees it: its confirmations counted from the best
 -- block, its lock, spendable when the builder may spend it now, the label
--- it shows and the label of its address
+-- it shows, and the label and the kind of its address
 toJsonCoin :: (MonadUnliftIO m) => Spending -> DBCoin -> ExceptT String (DB m) JsonCoin
 toJsonCoin rules row = do
   outpoint <- liftEither $ coinOutpoint row
@@ -151,7 +155,7 @@ toJsonCoin rules row = do
   block <- liftEither $ readBlock outpoint (dBCoinBlockRef row)
   spendable <- canSpend rules 0 outpoint block
   label <- lift $ coinLabel rules.spendingNetwork (dBCoinAccount row) outpoint.hash
-  addrLabel <- lift $ addressLabel rules.spendingNetwork addr
+  addrRowM <- lift $ walletAddressRow rules.spendingNetwork addr
   return
     JsonCoin
       { jsonCoinOutpoint = outpoint,
@@ -162,7 +166,8 @@ toJsonCoin rules row = do
         jsonCoinLock = Map.lookup outpoint rules.spendingLocks,
         jsonCoinSpendable = spendable,
         jsonCoinTxLabel = label,
-        jsonCoinAddressLabel = addrLabel
+        jsonCoinAddressLabel = maybe "" dBAddressLabel addrRowM,
+        jsonCoinChange = maybe False dBAddressInternal addrRowM
       }
 
 -- | The labels the coins show ('coinLabel'), by the transaction that paid

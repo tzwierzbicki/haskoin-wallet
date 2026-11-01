@@ -335,10 +335,11 @@ hw label ADDRESS "rent from Bob"
 
 **`hw coins`** lists the coins of an account. Each takes three lines: its
 value with its state, spendable or locked, and its confirmations; the address
-that holds it, with its label; and the coin as `TXID:INDEX`. A coin paid by a
-transaction you labelled shows the label on a line of its own, below the
-first, as `txs` does. The change of a payment you made shows no label: the
-label says what the payment was for, not what its change is.
+that holds it, with its label, or `change address` when it is one; and the
+coin as `TXID:INDEX`. A coin paid by a transaction you labelled shows the
+label on a line of its own, below the first, as `txs` does. The change of a
+payment you made shows no label: the label says what the payment was for, not
+what its change is.
 **`hw lockcoin`** keeps a coin from being spent, and **`hw unlockcoin`** frees
 it again.
 
@@ -425,8 +426,10 @@ its type, its amount and its status. The second gives the address paid, and
 the third the txid. An unconfirmed transaction shows its fee rate. A
 transaction with a label shows it on a line of its own, below the first.
 `--verbose` shows the label as a field, every address with its amount, path and
-label, and the fee. An address the transaction spends from ends with the labels
-of the coins spent, as `coins` shows them, after the word `from`.
+label, and the fee. A change address the transaction spends from or pays says
+`change address` in place of a label. An address the transaction spends from
+ends with the labels of the coins spent, as `coins` shows them, after the word
+`from`.
 
 ```console
 hw txs

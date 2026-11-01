@@ -28,6 +28,7 @@ spec = prepareContext $ \ctx -> do
   fileSpec ctx
   addressLabelsSpec ctx
   coinLabelsSpec ctx
+  changeAddressSpec ctx
   historySpec ctx
   labelCommandSpec ctx
   shownSpec ctx
@@ -277,6 +278,27 @@ coinLabelsSpec ctx =
         _ <- answer online ["label", paidTxid ctx, "Salary"] []
         imported <- txOf =<< answer online ["importtx", signer </> "signed.json"] []
         txInfoInputLabels imported `shouldBe` Map.fromList [(txHash (payment ctx), "Salary")]
+
+-- The change of the payment of 20000, 27740, goes to the first change
+-- address, 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn, which takes no label
+changeAddressSpec :: Ctx -> Spec
+changeAddressSpec ctx =
+  describe "A change address" $ do
+    it "is said to be one in coins, where the label of the address would be" $
+      withChain ctx (paidChain ctx) $ \home chain -> do
+        _ <- sentWithLabel home "Rent"
+        modifyIORef chain mine
+        _ <- answer home ["sync"] []
+        run <- hw home ["coins"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  at 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn change address\n"
+
+    it "is said to be one by a transaction that spends from it" $
+      withChain ctx (paidChain ctx) $ \home chain -> do
+        _ <- sentWithLabel home "Rent"
+        modifyIORef chain mine
+        _ <- answer home ["sync"] []
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--fee-rate", "10"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  From     : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  /1/0  change address\n"
 
 historySpec :: Ctx -> Spec
 historySpec ctx =

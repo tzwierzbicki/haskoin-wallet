@@ -439,6 +439,17 @@ listingSpec ctx =
         lift $ setTxLabel accId (fakeTxHash 8) "Rent"
         (map (\c -> (jsonCoinOutpoint c, jsonCoinTxLabel c)) <$> coinsAfter btc accId AllCoins Nothing Nothing) `dbShouldBeE` [(OutPoint (fakeTxHash 8) 1, "")]
 
+    -- The first payment is at the first receiving address, and the change
+    -- of transaction 8 at the first change address. The unconfirmed change
+    -- is listed first.
+    it "tells a coin at a change address from one at a receiving address" $
+      inDatabaseE $ do
+        accId <- account ctx
+        extendChainTo ctx accId AddrExternal 1
+        extendChainTo ctx accId AddrInternal 1
+        _ <- refresh ctx accId [confirmedPayment ctx, ownChange ctx]
+        (map (\c -> (jsonCoinOutpoint c, jsonCoinChange c)) <$> coinsAfter btc accId AllCoins Nothing Nothing) `dbShouldBeE` [(OutPoint (fakeTxHash 8) 1, True), (firstCoin, False)]
+
     it "shows a coin the user locked as locked by the user" $
       inDatabaseE $ do
         accId <- account ctx
@@ -927,7 +938,7 @@ rowSpec ctx =
         refreshed <- refresh ctx accId [confirmedPayment ctx]
         row <- liftMaybe "The coin is not stored" $ listToMaybe (insertedCoins refreshed)
         let rules = Spending btc accId (Just 800002) Map.empty
-            shown = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True "" ""
+            shown = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True "" "" False
         toJsonCoin rules row `dbShouldBeE` shown
         toJsonCoin rules {spendingLocks = Map.fromList [(firstCoin, LockedByTransaction)]} row
           `dbShouldBeE` shown {jsonCoinLock = Just LockedByTransaction, jsonCoinSpendable = False}
@@ -971,7 +982,7 @@ jsonSpec :: Ctx -> Spec
 jsonSpec _ =
   describe "Coins in JSON" $ do
     it "writes a confirmed and spendable coin as coins prints it, and reads it back" $ do
-      let coin = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True "" ""
+      let coin = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True "" "" False
           json :: String
           json =
             [r|{
@@ -983,13 +994,14 @@ jsonSpec _ =
               "lock": null,
               "spendable": true,
               "txlabel": "",
-              "addresslabel": ""
+              "addresslabel": "",
+              "change": false
             }|]
       eitherDecode (cs json) `shouldBe` Right (marshalValue btc coin)
       unmarshalJSON btc (cs json) `shouldBe` Just coin
 
     it "writes an unconfirmed and locked coin of Bitcoin Cash with its cash address" $ do
-      let coin = JsonCoin (OutPoint (fakeTxHash 5) 1) bchExternalAddr 10000 (Store.MemRef 0) 0 (Just LockedByTransaction) False "" ""
+      let coin = JsonCoin (OutPoint (fakeTxHash 5) 1) bchExternalAddr 10000 (Store.MemRef 0) 0 (Just LockedByTransaction) False "" "" False
           json :: String
           json =
             [r|{
@@ -1001,7 +1013,8 @@ jsonSpec _ =
               "lock": "transaction",
               "spendable": false,
               "txlabel": "",
-              "addresslabel": ""
+              "addresslabel": "",
+              "change": false
             }|]
       eitherDecode (cs json) `shouldBe` Right (marshalValue bch coin)
       unmarshalJSON bch (cs json) `shouldBe` Just coin
