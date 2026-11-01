@@ -645,8 +645,8 @@ coinLabels net accId tids = do
   return $ Map.fromList [(tid, label) | (tid, label) <- labelled, not (Text.null label)]
 
 -- | The transaction with the labels of the account's addresses, those it
--- spends from and those it pays, as the function gives them: from the
--- database, or from the file that carried the transaction
+-- spends from and those it pays, as the function gives them from the
+-- database
 relabelAddresses :: (Applicative f) => (Address -> f Text) -> TxInfo -> f TxInfo
 relabelAddresses labelOf info =
   rebuild
@@ -657,6 +657,17 @@ relabelAddresses labelOf info =
     rebuild outputs inputs = info {txInfoSummary = summary {summaryMyOutputs = outputs, summaryMyInputs = inputs}}
     labelOutput o label = o {myOutputsLabel = label}
     labelInput i label = i {myInputsLabel = label}
+
+-- | The transaction with the labels of the account's addresses, those it
+-- spends from and those it pays, as the function gives them by the path
+-- of each: from the file that carried the transaction
+relabelPaths :: (SoftPath -> Text) -> TxInfo -> TxInfo
+relabelPaths labelOf info =
+  info {txInfoSummary = summary {summaryMyOutputs = outputs, summaryMyInputs = inputs}}
+  where
+    summary = txInfoSummary info
+    outputs = Map.map (\o -> o {myOutputsLabel = labelOf (myOutputsPath o)}) (summaryMyOutputs summary)
+    inputs = Map.map (\i -> i {myInputsLabel = labelOf (myInputsPath i)}) (summaryMyInputs summary)
 
 -- | The label of an address of the wallet, or none
 addressLabel :: (MonadUnliftIO m) => Network -> Address -> DB m Text

@@ -102,40 +102,47 @@ fileSpec ctx =
     -- As an earlier hw wrote it, for a transaction whose addresses have no
     -- label
     it "labels no address, but for the account's addresses that have a label" $
-      (Json.decode (Json.encode (plainTxFile (Just btc) tsd)) >>= parseMaybe (.: "addresslabels")) `shouldBe` (Nothing :: Maybe (Map.Map Text Text))
+      (Json.decode (Json.encode (plainTxFile (Just btc) tsd)) >>= parseMaybe (.: "pathlabels")) `shouldBe` (Nothing :: Maybe (Map.Map Text Text))
 
-    -- The coin spent is at the account's first receiving address
-    it "carries the labels of the account's addresses by address, and reads back" $ do
-      let labelled = TxFile (Just btc) tsd (Map.fromList [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Salary")]) Map.empty
+    -- The coin spent is at the account's first receiving address, /0/0.
+    -- The file names the path, never the address.
+    it "carries the labels of the account's addresses by their paths, and reads back" $ do
+      let labelled = TxFile (Just btc) tsd (Map.fromList [("/0/0", "Salary")]) Map.empty
           written = Json.encode labelled
-      (Json.decode written >>= parseMaybe (.: "addresslabels")) `shouldBe` Just (Map.fromList [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Salary")] :: Map.Map Text Text)
+      (Json.decode written >>= parseMaybe (.: "pathlabels")) `shouldBe` Just (Map.fromList [("/0/0", "Salary")] :: Map.Map Text Text)
       Json.eitherDecode written `shouldBe` Right labelled
 
     it "of an earlier hw labels no address" $
-      (txFileAddressLabels <$> Json.eitherDecode (Json.encode (Json.object (txSignDataPairs tsd)))) `shouldBe` Right Map.empty
+      (txFilePathLabels <$> Json.eitherDecode (Json.encode (Json.object (txSignDataPairs tsd)))) `shouldBe` Right Map.empty
 
-    -- The coin spent is at the first receiving address, and the change goes
-    -- to the first change address, which the file does not label
+    -- A label can name a path only: one at an address is not a label of
+    -- the file, however much the address is the account's
+    it "refuses a label at something that is not a path" $ do
+      let written = Json.encode (Json.object (("pathlabels" .= Map.fromList [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" :: Text, "Salary" :: Text)]) : txSignDataPairs tsd))
+      (Json.eitherDecode written :: Either String TxFile) `shouldSatisfy` either ("Invalid path 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" `isInfixOf`) (const False)
+
+    -- The coin spent is at the first receiving address, /0/0, and the
+    -- change goes to the first change address, /1/0, which the file does
+    -- not label
     it "is read as its account sees it, with the labels it carries" $ do
-      let labelled = TxFile (Just btc) tsd (Map.fromList [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Salary")]) Map.empty
+      let labelled = TxFile (Just btc) tsd (Map.fromList [("/0/0", "Salary")]) Map.empty
       info <- expectRight $ parseTxFile btc ctx (testAccountPub ctx) labelled
       fmap (.myInputsLabel) info.txInfoSummary.summaryMyInputs `shouldBe` Map.fromList [(externalAddr 0, "Salary")]
       fmap (.myOutputsLabel) info.txInfoSummary.summaryMyOutputs `shouldBe` Map.fromList [(internalAddr 0, "")]
 
-    -- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU is the other wallet's address the
-    -- transaction pays. 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg is the account's
-    -- second receiving address, which the transaction does not touch.
-    it "is read without the labels of addresses the account does not have in the transaction" $ do
-      let labelled = TxFile (Just btc) tsd (Map.fromList [("1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "Not mine"), ("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "Elsewhere")]) Map.empty
+    -- /0/1 is the account's second receiving address and /1/3 its fourth
+    -- change address. The transaction touches neither.
+    it "is read without the labels of paths the transaction does not touch" $ do
+      let labelled = TxFile (Just btc) tsd (Map.fromList [("/0/1", "Elsewhere"), ("/1/3", "Other change")]) Map.empty
       info <- expectRight $ parseTxFile btc ctx (testAccountPub ctx) labelled
       fmap (.myInputsLabel) info.txInfoSummary.summaryMyInputs `shouldBe` Map.fromList [(externalAddr 0, "")]
       fmap (.myOutputsLabel) info.txInfoSummary.summaryMyOutputs `shouldBe` Map.fromList [(internalAddr 0, "")]
 
-    -- The change address has no label, so the file leaves it out
-    it "is written with the labels of the account's addresses that have one" $ do
+    -- The change address, /1/0, has no label, so the file leaves it out
+    it "is written with the labels of the account's addresses that have one, by their paths" $ do
       info <- expectRight $ parseTxSignData btc ctx (testAccountPub ctx) tsd
       let salaried = info {txInfoSummary = info.txInfoSummary {summaryMyInputs = Map.map (\i -> i {myInputsLabel = "Salary"}) info.txInfoSummary.summaryMyInputs}}
-      txFileAddressLabels (labelledTxFile btc salaried tsd) `shouldBe` Map.fromList [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Salary")]
+      txFilePathLabels (labelledTxFile btc salaried tsd) `shouldBe` Map.fromList [("/0/0", "Salary")]
 
     -- As an earlier hw wrote it, for a transaction whose coins show no label
     it "labels no coin, but for the coins that show a label" $

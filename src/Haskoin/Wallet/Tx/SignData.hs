@@ -12,7 +12,7 @@
 -- transaction is signed is read from the transaction itself. Before and
 -- after signing, the database keys it by its 'nosigHash'. hw shows it by
 -- its 'shownHash'. A file holds it with the network of the transaction and
--- the labels of the account's addresses in it, a 'TxFile'.
+-- the labels of the account's addresses in it, by their paths, a 'TxFile'.
 module Haskoin.Wallet.Tx.SignData where
 
 import Control.Monad
@@ -25,7 +25,7 @@ import qualified Data.Serialize as S
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin
-import Haskoin.Wallet.Util (parseTxidLabels, txidLabelsJson)
+import Haskoin.Wallet.Util (parsePathLabels, parseTxidLabels, pathLabelsJson, txidLabelsJson)
 import Numeric.Natural (Natural)
 
 data TxSignData = TxSignData
@@ -99,23 +99,26 @@ instance MarshalJSON Ctx TxSignData where
 
 {- Files -}
 
--- | The labels of addresses, by address as the network writes it. Only
--- the addresses that have a label are listed.
-type AddressLabels = Map Text Text
+-- | The labels of the account's addresses, by their paths in the account,
+-- such as /0/5: the paths the signing data gives for the account's inputs
+-- and outputs. A label can only name a path, so it can only land on an
+-- address the reader derives itself from the account's key, never on
+-- another wallet's. Only the addresses that have a label are listed.
+type PathLabels = Map SoftPath Text
 
 -- | A transaction file, as preparetx, preparesweep, signtx, signsweep and
 -- exporttx write it: the signing data, with the network of the transaction,
 -- which the transaction itself does not tell, and the labels the wallet
 -- that wrote the file had: those of the account's addresses the
--- transaction spends from or pays, and those the coins it spends show, by
--- the transaction that paid each (see
+-- transaction spends from or pays, by their paths, and those the coins it
+-- spends show, by the transaction that paid each (see
 -- 'Haskoin.Wallet.Database.TxInfo.coinLabel'). An offline computer has no
 -- labels of its own, so it shows those of the file. A file of an earlier
 -- hw names no network and carries no label.
 data TxFile = TxFile
   { txFileNetwork :: !(Maybe Network),
     txFileData :: !TxSignData,
-    txFileAddressLabels :: !AddressLabels,
+    txFilePathLabels :: !PathLabels,
     txFileInputLabels :: !(Map TxHash Text)
   }
   deriving (Eq, Show)
@@ -132,7 +135,7 @@ instance FromJSON TxFile where
     TxFile
       <$> withObject "txfile" network value
       <*> parseJSON value
-      <*> withObject "txfile" (\o -> o .:? "addresslabels" .!= Map.empty) value
+      <*> withObject "txfile" (\o -> maybe (return Map.empty) parsePathLabels =<< o .:? "pathlabels") value
       <*> withObject "txfile" (\o -> maybe (return Map.empty) parseTxidLabels =<< o .:? "inputlabels") value
     where
       network o = do
@@ -148,11 +151,11 @@ noFileNetwork = "The file names no network, as those of an earlier hw: prepare t
 -- The labels are written only when there are some, so that the file of a
 -- transaction without any is as an earlier hw wrote it
 instance ToJSON TxFile where
-  toJSON (TxFile netM tsd addresses inputs) =
+  toJSON (TxFile netM tsd paths inputs) =
     object $
       maybe [] (\net -> ["network" .= net.name]) netM
         <> txSignDataPairs tsd
-        <> ["addresslabels" .= addresses | not (Map.null addresses)]
+        <> ["pathlabels" .= pathLabelsJson paths | not (Map.null paths)]
         <> ["inputlabels" .= txidLabelsJson inputs | not (Map.null inputs)]
 
 {- Signatures -}

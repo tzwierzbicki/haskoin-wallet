@@ -23,7 +23,8 @@
 -- 5. reports the signed transaction with the 'TxInfo' of the signed bytes.
 --
 -- A transaction file carries the labels of the account's addresses in the
--- transaction, and those of the transactions its coins come from.
+-- transaction, by their paths, and those of the transactions its coins
+-- come from.
 -- 'parseTxFile' reads a file with them, 'labelsFromFile' puts them on a
 -- 'TxInfo', and 'labelledTxFile' writes them from one.
 module Haskoin.Wallet.Tx.Signing
@@ -42,7 +43,6 @@ where
 
 import Control.Monad (foldM, forM_, mfilter, unless, when)
 import qualified Data.ByteString as BS
-import Data.Functor.Identity (runIdentity)
 import Data.List (nub)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -59,7 +59,7 @@ import Haskoin.Wallet.Database.TxInfo
     TxInfo (..),
     TxStatus (..),
     TxSummary (..),
-    relabelAddresses,
+    relabelPaths,
     spentTxids,
     txType,
   )
@@ -104,32 +104,32 @@ parseAs net ctx accountPubM tsd = do
 -- has none of its own
 parseTxFile :: Network -> Ctx -> XPubKey -> TxFile -> Either String TxInfo
 parseTxFile net ctx accountPub file =
-  labelsFromFile net file <$> parseTxSignData net ctx accountPub (txFileData file)
+  labelsFromFile file <$> parseTxSignData net ctx accountPub (txFileData file)
 
 -- | The transaction with its labels as a file carries them: those of the
--- account's addresses, and those the coins it spends show. An address or
--- a coin the file does not label has none. A label at an address, or of
--- a transaction, the account does not have in the transaction is left
+-- account's addresses, by their paths, and those the coins it spends show.
+-- An address or a coin the file does not label has none. A label at a
+-- path, or of a transaction, that the transaction does not touch is left
 -- aside.
-labelsFromFile :: Network -> TxFile -> TxInfo -> TxInfo
-labelsFromFile net file info =
-  (runIdentity (relabelAddresses (pure . labelOf) info))
+labelsFromFile :: TxFile -> TxInfo -> TxInfo
+labelsFromFile file info =
+  (relabelPaths labelOf info)
     { txInfoInputLabels = Map.restrictKeys (txFileInputLabels file) (Set.fromList (spentTxids (txInfoSummary info)))
     }
   where
-    labelOf addr = fromMaybe "" (addrToText net addr >>= (`Map.lookup` txFileAddressLabels file))
+    labelOf path = Map.findWithDefault "" path (txFilePathLabels file)
 
 -- | The file of a transaction of the account, with its labels as the
--- summary has them: those of its addresses that have one, and those the
--- coins it spends show
+-- summary has them: those of its addresses that have one, by their paths,
+-- and those the coins it spends show
 labelledTxFile :: Network -> TxInfo -> TxSignData -> TxFile
 labelledTxFile net info tsd = TxFile (Just net) tsd (Map.fromList labelled) (txInfoInputLabels info)
   where
     summary = txInfoSummary info
     mine =
-      [(addr, i.myInputsLabel) | (addr, i) <- Map.toList summary.summaryMyInputs]
-        <> [(addr, o.myOutputsLabel) | (addr, o) <- Map.toList summary.summaryMyOutputs]
-    labelled = [(written, label) | (addr, label) <- mine, not (Text.null label), Just written <- [addrToText net addr]]
+      [(i.myInputsPath, i.myInputsLabel) | i <- Map.elems summary.summaryMyInputs]
+        <> [(o.myOutputsPath, o.myOutputsLabel) | o <- Map.elems summary.summaryMyOutputs]
+    labelled = [(path, label) | (path, label) <- mine, not (Text.null label)]
 
 -- | Check that every input of a signed transaction carries a valid signature
 -- for the coin it spends

@@ -149,19 +149,20 @@ fileSpec ctx =
         txInfoLabel imported `shouldBe` "Rent of October"
 
 -- The payment of the paid chain is at the first receiving address,
--- 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj, which the transaction of these tests
--- spends. Its change goes to the first change address, which takes no
--- label.
+-- 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj at /0/0, which the transaction of
+-- these tests spends. Its change goes to the first change address, which
+-- takes no label. The file names the path of a labelled address, never
+-- the address.
 addressLabelsSpec :: Ctx -> Spec
 addressLabelsSpec ctx =
   describe "The labels of the account's addresses in a transaction file" $ do
-    it "go with the transaction to its --output file, by address, those that have one" $
+    it "go with the transaction to its --output file, by their paths, those that have one" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["label", textOf (externalAddr 0), "Salary"] []
         let file = home </> "unsigned.json"
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--output", file] []
-        (txFileAddressLabels <$> readTxFile file) `shouldReturn` Map.fromList [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Salary")]
+        (txFilePathLabels <$> readTxFile file) `shouldReturn` Map.fromList [("/0/0", "Salary")]
 
     -- The address is labelled after the transaction is prepared
     it "are those of the wallet when exporttx writes the file" $
@@ -171,7 +172,7 @@ addressLabelsSpec ctx =
         _ <- answer home ["label", textOf (externalAddr 0), "Salary"] []
         let file = home </> "exported.json"
         _ <- answer home ["exporttx", nosig, file] []
-        (txFileAddressLabels <$> readTxFile file) `shouldReturn` Map.fromList [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Salary")]
+        (txFilePathLabels <$> readTxFile file) `shouldReturn` Map.fromList [("/0/0", "Salary")]
 
     it "are those of the wallet when signtx signs a pending transaction, shown and written to its --output file" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -181,7 +182,7 @@ addressLabelsSpec ctx =
         let file = home </> "signed.json"
         signed <- txOf =<< answer home ["signtx", nosig, "--output", file] seedOnce
         addressLabelsOf signed `shouldBe` Map.fromList [(externalAddr 0, "Salary"), (internalAddr 0, "")]
-        (txFileAddressLabels <$> readTxFile file) `shouldReturn` Map.fromList [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Salary")]
+        (txFilePathLabels <$> readTxFile file) `shouldReturn` Map.fromList [("/0/0", "Salary")]
 
     -- The address is relabelled after the file is written
     it "are shown by reviewtx in place of the wallet's own" $
@@ -209,7 +210,7 @@ addressLabelsSpec ctx =
         _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json", "--fee-rate", "10"] []
         signed <- txOf =<< answer signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
         addressLabelsOf signed `shouldBe` Map.fromList [(externalAddr 0, "Salary"), (internalAddr 0, "")]
-        (txFileAddressLabels <$> readTxFile (signer </> "signed.json")) `shouldReturn` Map.fromList [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Salary")]
+        (txFilePathLabels <$> readTxFile (signer </> "signed.json")) `shouldReturn` Map.fromList [("/0/0", "Salary")]
 
     -- The address is relabelled while the file is away to be signed
     it "give way to the wallet's own when importtx takes the signed file back" $

@@ -882,7 +882,7 @@ keepSigned ctx net signing signedFile accId file signed info = do
   labelled <-
     if fromWallet
       then lift (fillTxInfoLabels net accId info)
-      else return (labelsFromFile net file info)
+      else return (labelsFromFile file info)
   when fromWallet $ void $ importPendingTx net ctx accId signed
   writeSigned signedFile (labelledTxFile net labelled signed)
   txAnswer accId labelled

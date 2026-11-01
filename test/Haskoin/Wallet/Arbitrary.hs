@@ -132,13 +132,13 @@ arbitraryPubKeyDoc ctx =
     <*> arbitraryMaybe arbitraryFingerprint
 
 -- | A transaction file of Bitcoin signing data, on any network or none,
--- with the labels of some addresses and transactions or none
+-- with the labels of some paths and transactions or none
 arbitraryTxFile :: Ctx -> Gen TxFile
 arbitraryTxFile ctx =
   TxFile
     <$> arbitraryMaybe arbitraryNetwork
     <*> arbitraryTxSignData btc ctx
-    <*> (Map.fromList <$> resize 5 (listOf ((,) <$> arbitraryText <*> arbitraryText)))
+    <*> (Map.fromList <$> resize 5 (listOf ((,) <$> arbitrarySoftPath <*> arbitraryText)))
     <*> arbitraryTxidLabels
 
 arbitraryTxSignData :: Network -> Ctx -> Gen TxSignData
