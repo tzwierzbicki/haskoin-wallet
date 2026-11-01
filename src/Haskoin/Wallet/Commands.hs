@@ -36,6 +36,7 @@ module Haskoin.Wallet.Commands
     cmdAddresses,
     cmdBalances,
     cmdLabel,
+    cmdCheckAddr,
 
     -- * Coins
     cmdCoins,
@@ -155,6 +156,7 @@ commandResponse ctx cfg unit = \case
   CommandAddresses account internal _ paging -> cmdAddresses cfg account internal paging
   CommandBalances account paging -> cmdBalances cfg account paging
   CommandLabel opts -> cmdLabel ctx cfg opts
+  CommandCheckAddr account addrType index -> cmdCheckAddr ctx cfg account addrType index
   -- Coins
   CommandCoins account locked paging -> cmdCoins cfg account locked paging
   CommandLockCoin outpoint -> cmdLockCoin cfg outpoint
@@ -456,6 +458,24 @@ cmdLabel ctx cfg opts =
         addr <- labelAddress typed opts.label
         addressAnswer (dBAddressAccount addr) addr
       LabelledTx named -> ResponseLabelledTxs <$> labelTransaction ctx named opts.label
+
+-- | Show the address of the account at an index of one of its chains,
+-- derived from the public key of the account: what an offline computer
+-- shows to check an address the online computer gave out. The wallet need
+-- not have the address, and nothing is generated or stored. When it has
+-- it, its label is shown too.
+cmdCheckAddr :: Ctx -> Config -> Maybe Text -> AddrType -> KeyIndex -> IO Response
+cmdCheckAddr ctx cfg account addrType index =
+  runDBResponse cfg $ do
+    (accId, acc) <- getAccountByName account
+    let path = addrDeriv addrType :/ index
+    addrM <- liftIO $ deriveChainAddress ctx (accountXPubKey ctx acc) (addrDeriv addrType) index
+    -- BIP32 says to skip an index whose child key is invalid, so the chain
+    -- has no address there: see "Haskoin.Wallet.Database.Address"
+    addr <- liftMaybe ("There is no address at " <> cs (pathText path) <> ": the key at that index is invalid, and the chain skips it") addrM
+    addrText <- liftEither $ addrToTextE (accountNetwork acc) addr
+    label <- lift $ addressLabelAt accId addrType index
+    return $ ResponseCheckAddr acc path addrText label
 
 {- Coins -}
 

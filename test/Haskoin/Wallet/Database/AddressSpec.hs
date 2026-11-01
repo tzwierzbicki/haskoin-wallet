@@ -335,6 +335,17 @@ databaseSpec ctx =
         acc <- lift $ updateAccountBalances accId
         liftIO $ (dBAccountBalanceConfirmed acc, dBAccountBalanceUnconfirmed acc, dBAccountBalanceCoins acc) `shouldBe` (7000, 700, 3)
 
+    -- The wallet has the receiving addresses /0/0 and /0/1 only
+    it "gives the label of an address by its chain and index, and none for an address the wallet does not have" $
+      inDatabaseE $ do
+        accId <- account ctx
+        _ <- genExtAddress ctx cfg accId "Savings"
+        _ <- genExtAddress ctx cfg accId ""
+        lift (addressLabelAt accId AddrExternal 0) `dbShouldBeE` "Savings"
+        lift (addressLabelAt accId AddrExternal 1) `dbShouldBeE` ""
+        lift (addressLabelAt accId AddrExternal 5) `dbShouldBeE` ""
+        lift (addressLabelAt accId AddrInternal 0) `dbShouldBeE` ""
+
     it "finds an address of the wallet by its text, with its account" $
       inDatabaseE $ do
         accId <- account ctx
@@ -483,6 +494,19 @@ pathSpec =
       chainIndex (Deriv :/ 1 :/ 3) `shouldBe` Just (AddrInternal, 3)
       chainIndex (Deriv :/ 2 :/ 3) `shouldBe` Nothing
       chainIndex (Deriv :/ 0 :/ 3 :/ 1) `shouldBe` Nothing
+
+    it "reads the path of an address as the user types it, on either chain, up to the last index before the hardened ones" $ do
+      readChainPath "/0/3" `shouldBe` Right (AddrExternal, 3)
+      readChainPath "/1/2" `shouldBe` Right (AddrInternal, 2)
+      readChainPath "/0/0" `shouldBe` Right (AddrExternal, 0)
+      -- 2^31 - 1: BIP32 keeps 2^31 and above for hardened steps
+      readChainPath "/0/2147483647" `shouldBe` Right (AddrExternal, 2147483647)
+
+    -- A hardened step, one step or three, a third chain, no leading slash,
+    -- an index of 2^31 or more, and 4294967296, which is 0 in 32 bits
+    it "refuses every other path, naming the two forms" $
+      forM_ ["/2/3", "/0/3'", "/0", "/0/3/1", "0/3", "m/0/3", "M/0/3", "/0/-1", "/0/2147483648", "/0/4294967296", "/0/", "/00/3", "/0/3 ", "", "abc"] $ \typed ->
+        readChainPath typed `shouldBe` Left ("The path " <> cs typed <> " is not that of an address: /0/i is the receiving address i, and /1/i the change address i")
 
     it "reads the path of a row from its chain and index" $ do
       addrPath fixtureRow `shouldBe` Deriv :/ 0 :/ 3

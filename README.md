@@ -209,6 +209,16 @@ hw sendtx --input signed.json
 hw sync
 ```
 
+Before you give out an address, check it on the offline computer. An online
+computer that was tampered with can show an address of its own in place of
+one of the account. The offline computer holds the same account and derives
+the same addresses, without the mnemonic.
+
+```console
+hw receive                                  # on the online computer: /0/7 and the address
+hw checkaddr /0/7                           # on the offline computer: the same address?
+```
+
 ### Mnemonics and accounts
 
 **`hw mnemonic`** prints a new mnemonic, made from the entropy of the
@@ -346,6 +356,17 @@ removes the label.
 
 ```console
 hw label ADDRESS "rent from Bob"
+```
+
+**`hw checkaddr PATH`** shows the address of an account at a derivation path,
+`/0/i` for the receiving address `i` and `/1/i` for the change address `i`,
+derived from the public key. It needs no mnemonic and no server, hands out
+no address, and stores nothing. Run it on the offline computer to check an
+address the online computer gave out. Any other path is refused.
+
+```console
+hw checkaddr /0/7
+hw checkaddr /1/2 --account vault
 ```
 
 ### Coins
@@ -576,6 +597,9 @@ To restore a backup, replace `~/.hw/accounts.sqlite` with the copy, or point
 - **The database and the account files are private.** They hold no private
   key. But the public keys in them reveal every address and balance of your
   accounts.
+- **An online computer can show a wrong address.** One that was tampered with
+  shows an address of its own, and the payer pays the attacker. Check an
+  address with `checkaddr` on the offline computer before you give it out.
 - **A pending transaction locks its coins.** They stay locked until `sync` sees
   the transaction on the network, or until `deletetx` deletes it. Delete the
   transactions you abandon.

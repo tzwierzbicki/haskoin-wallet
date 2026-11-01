@@ -355,6 +355,18 @@ verboseAddressDoc unit pad created addr spendable =
                 ]
         )
 
+-- | The address at a path of the account, as checkaddr shows it: its
+-- path, the address and its label when the wallet has one, as the first
+-- line of addresses, then its account and network. The user compares the
+-- address with the one the online computer showed.
+checkAddrDoc :: DBAccount -> SoftPath -> Text -> Text -> Doc Style
+checkAddrDoc acc path addr label =
+  vcat
+    [ columns $ [text (cs (pathText path)), pretty addr] <> [labelWord label | not (Text.null label)],
+      indent 2 (accountField acc),
+      indent 2 (field 9 "Network" <> text (accountNetwork acc).name)
+    ]
+
 -- | The width of the longest derivation path of the addresses listed
 pathWidth :: [DBAddress] -> Natural
 pathWidth addrs = fromIntegral $ maximum (0 : (Text.length . pathText . addrPath <$> addrs))
@@ -917,6 +929,7 @@ responsePrinter unit view answer =
     ResponseImport report -> renderIO $ importDoc report
     ResponseAddress _ addr spendable ->
       renderIO =<< listedAddressDoc Verbose unit (pathWidth [addr]) addr spendable
+    ResponseCheckAddr acc path addr label -> renderIO $ checkAddrDoc acc path addr label
     ResponseTx acc txInfo ->
       renderIO =<< txAnswerDoc (accountNetwork acc) (Just acc) unit txInfo
     -- Each account's view of the transaction, a blank line between them

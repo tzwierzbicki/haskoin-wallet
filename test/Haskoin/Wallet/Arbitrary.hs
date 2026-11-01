@@ -62,6 +62,11 @@ arbitraryDBAccount net ctx =
     <*> arbitraryPositive
     <*> arbitraryUTCTime
 
+-- | The path of an address on one of the two chains of an account: /0/i
+-- or /1/i, with i below 2^31
+arbitraryChainPath :: Gen SoftPath
+arbitraryChainPath = chainPath <$> arbitrary <*> choose (0, 0x7fffffff)
+
 arbitraryDBAddress :: Network -> Gen DBAddress
 arbitraryDBAddress net =
   DBAddress
@@ -264,6 +269,11 @@ arbitraryResponse net ctx =
       ResponseBalances
         <$> arbitraryDBAccount net ctx
         <*> resize 20 (listOf $ (,) <$> arbitraryDBAddress net <*> arbitraryCoinBalance),
+      ResponseCheckAddr
+        <$> arbitraryDBAccount net ctx
+        <*> arbitraryChainPath
+        <*> (fromJust . addrToText net <$> arbitraryAddress net)
+        <*> arbitraryText,
       ResponsePendingTxs
         <$> arbitraryMaybe (arbitraryDBAccount net ctx)
         <*> resize 20 (listOf $ (,) <$> arbitraryDBAccount net ctx <*> arbitraryTxInfo net),

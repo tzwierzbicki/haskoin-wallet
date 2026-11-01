@@ -31,6 +31,9 @@ spec = do
       usageOf "preparesendall"
         `shouldBe` "ADDRESS[:AMOUNT]... [-a|--account NAME] [-f|--fee-rate RATE] [--dust-limit SATOSHIS] [-m|--min-conf INT] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS]... [--spend-dust | --leave-dust] [-y|--yes]"
 
+    it "puts the argument of checkaddr before its option" $
+      usageOf "checkaddr" `shouldBe` "PATH [-a|--account NAME]"
+
     it "puts a choice in parentheses, and a required option with two names too" $
       usageOf "verifymsg" `shouldBe` "(ADDRESS SIGNATURE MESSAGE | (-i|--input FILENAME)) [-n|--network NETWORK]"
 

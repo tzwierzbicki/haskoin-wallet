@@ -271,6 +271,7 @@ fingerprintsOf other = Left (show other)
 addressesOf :: Response -> Either String [(Text, Text)]
 addressesOf (ResponseAddress _ addr _) = Right [(dBAddressAddress addr, dBAddressLabel addr)]
 addressesOf (ResponseAddresses _ addrs) = Right [(dBAddressAddress addr, dBAddressLabel addr) | (addr, _) <- addrs]
+addressesOf (ResponseCheckAddr _ _ addr label) = Right [(addr, label)]
 addressesOf other = Left (show other)
 
 -- | The coins of an answer: outpoint, value, confirmations, lock, and

@@ -39,7 +39,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Util (addrToTextE, rowLimit, textToAddrE)
+import Haskoin.Wallet.Util (addrToTextE, readNatural, rowLimit, textToAddrE)
 import Numeric.Natural (Natural)
 
 {- The two chains -}
@@ -302,6 +302,12 @@ labelAddress addrTxt label = do
     throwError "A change address takes no label. Only a receiving address does."
   setAddrLabel (dBAddressAccount addr) (dBAddressIndex addr) label
 
+-- | The label of the address of the account at an index of a chain: none
+-- when the wallet has no row for it, or the row has no label
+addressLabelAt :: (MonadUnliftIO m) => DBAccountId -> AddrType -> KeyIndex -> DB m Text
+addressLabelAt accId addrType index =
+  maybe "" dBAddressLabel <$> P.get (DBAddressKey accId (isInternal addrType) (fromIntegral index))
+
 {- Addresses in the database -}
 
 -- | Store the balances the store reports
@@ -489,6 +495,23 @@ chainIndex path =
     [0, i] -> Just (AddrExternal, i)
     [1, i] -> Just (AddrInternal, i)
     _ -> Nothing
+
+-- | The chain and index of a path the user types, written as addresses
+-- shows a path: /0/i for the receiving address i, /1/i for the change
+-- address i. Every other text is refused, with the two forms: a hardened
+-- step, a third step, another chain, or an index of 2^31 or more, which
+-- BIP32 keeps for hardened steps. The index is read here and not by the
+-- path parser of haskoin-core, which reads it as a 32-bit number modulo
+-- 2^32, and would take /0/4294967296 for /0/0.
+readChainPath :: Text -> Either String (AddrType, KeyIndex)
+readChainPath text =
+  case Text.splitOn "/" text of
+    ["", chain, index]
+      | Just addrType <- lookup chain [("0", AddrExternal), ("1", AddrInternal)],
+        Just i <- readNatural index,
+        i < 0x80000000 ->
+          Right (addrType, fromIntegral i)
+    _ -> Left $ "The path " <> cs text <> " is not that of an address: /0/i is the receiving address i, and /1/i the change address i"
 
 -- | The derivation path of a row
 addrPath :: DBAddress -> SoftPath

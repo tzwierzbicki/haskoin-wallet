@@ -127,6 +127,19 @@ addressSpec =
                      "  Created     : 14 Nov 2023 23:13:20 CET"
                    ]
 
+    -- The address /0/3 of main, which the wallet has not handed out, so
+    -- it has no label
+    it "gives the address checkaddr derives under its path, then its account and network" $
+      renderedLines (checkAddrDoc mainAccountRow (Deriv :/ 0 :/ 3) "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1" "")
+        `shouldBe` [ "/0/3  1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1",
+                     "  Account  : main",
+                     "  Network  : btc"
+                   ]
+
+    it "shows the label of the address checkaddr derives when the wallet has one" $
+      (renderedLines (checkAddrDoc mainAccountRow (Deriv :/ 0 :/ 3) "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1" "Savings") !! 0)
+        `shouldBe` "/0/3  1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1  \"Savings\""
+
 balanceSpec :: Spec
 balanceSpec =
   describe "An address as balances shows it" $ do

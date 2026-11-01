@@ -34,6 +34,7 @@ import Haskoin.Wallet.Cli.Completion
     pendingHashes,
     walletAddresses,
   )
+import Haskoin.Wallet.Database.Address (AddrType, readChainPath)
 import Haskoin.Wallet.Tx.FeeRates (FeeRateChoice, readFeeRateChoice)
 import Haskoin.Wallet.Keys (KeySource (..))
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
@@ -77,6 +78,8 @@ data Command
   | -- | The account, and the page
     CommandBalances !(Maybe Text) !(Paging Text)
   | CommandLabel !Label
+  | -- | The account, and the chain and index of the address to show
+    CommandCheckAddr !(Maybe Text) !AddrType !KeyIndex
   | -- | The account, how much of each transaction to show, and the page
     CommandTxs !(Maybe Text) !View !(Paging TxHash)
   | CommandPrepareTx !PrepareTx
@@ -443,7 +446,8 @@ Type hw COMMAND --help for the help of a command.
             [ receiveCommand,
               addressesCommand,
               balancesCommand,
-              labelCommand
+              labelCommand,
+              checkAddrCommand
             ],
           CommandGroup
             "Coins"
@@ -1084,6 +1088,45 @@ labelledArg =
     metavar "ADDRESS|TXID"
       <> completer (mkCompleter labelTargets)
       <> help "A receiving address of the wallet, as `addresses` lists it, or a transaction, by its txid or the hash pendingtxs shows. Change addresses take no label."
+
+{- checkaddr -}
+
+checkAddrCommand :: CommandSpec Command
+checkAddrCommand =
+  CommandSpec
+    { name = "checkaddr",
+      offline = False,
+      summary = "Show the address of an account at a derivation path",
+      details =
+        [r|
+checkaddr derives the address at PATH from the public key of the account, and
+shows it. It asks for no mnemonic and nothing of the server, so it runs on an
+offline computer as well as online. It hands out no address and stores
+nothing.
+
+Use it on the offline computer to check an address the online computer gave
+out. An online computer that was tampered with can show an address of its own
+in place of one of the account, and the payer would pay the attacker. The
+offline computer holds the same account, since createacc made it there, and
+derives the same addresses. Run `receive` online, then checkaddr on the offline
+computer with the path `receive` showed, and compare the two addresses letter
+for letter.
+
+The path is as `receive` and `addresses` show it: /0/i for the receiving
+address i, and /1/i for the change address i. Any other path is refused. Give
+payers the addresses `receive` hands out, which stay within the gap. An address
+the wallet has is shown with its label.
+|],
+      args = (\(addrType, index) account -> CommandCheckAddr account addrType index) <$> chainPathArg <*> accountOption
+    }
+
+-- | The path of an address on one of the two chains of the account, read
+-- as addresses shows it
+chainPathArg :: Args (AddrType, KeyIndex)
+chainPathArg =
+  argument (eitherReader (readChainPath . cs)) $
+    metavar "PATH"
+      <> help "The derivation path of the address, as `receive` and `addresses` show it: /0/i for the receiving address i, /1/i for the change address i"
 
 {- txs -}
 
