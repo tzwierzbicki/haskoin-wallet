@@ -437,6 +437,30 @@ untimedSummaries accId = do
       return (t ^. DBTxInfoTxid)
   liftEither $ mapM (bytesToHash . unValue) rows
 
+-- | The live transactions of the account in the mempool, with their
+-- summaries, by their ids, up to the count. The index on the block
+-- references finds them: a mempool reference sorts before every block
+-- reference, as the listings rely on.
+mempoolSummaries :: (MonadUnliftIO m) => Network -> DBAccountId -> Natural -> ExceptT String (DB m) [(TxHash, TxSummary)]
+mempoolSummaries net accId atMost = do
+  rows <-
+    lift . select . from $ \t -> do
+      where_ $
+        t ^. DBTxInfoAccount ==. val accId
+          &&. t ^. DBTxInfoBlockRef <. val firstBlock
+          &&. t ^. DBTxInfoDead ==. val False
+      orderBy [asc (t ^. DBTxInfoTxid)]
+      limit (rowLimit atMost)
+      return (t ^. DBTxInfoTxid, t ^. DBTxInfoBlob)
+  forM rows $ \(Value tidBytes, Value blob) -> do
+    tid <- liftEither $ bytesToHash tidBytes
+    summary <- liftEither $ decodeSummary net tid blob
+    return (tid, summary)
+  where
+    -- The first block reference in the order of the references: the
+    -- highest block comes first
+    firstBlock = S.encode (Store.BlockRef maxBound maxBound)
+
 -- | The stored summary of a live transaction of the account, with its
 -- block; nothing when the sync has not stored it or found it dead
 liveSummary ::

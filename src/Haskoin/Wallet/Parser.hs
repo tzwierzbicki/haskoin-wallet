@@ -28,6 +28,7 @@ import Haskoin.Wallet.Completion
     coinsToSpend,
     coinsToUnlock,
     hashesToSign,
+    idsToBump,
     idsToSend,
     pendingHashes,
     receivingAddresses,
@@ -1020,7 +1021,7 @@ labelledAddressArg :: Args Text
 labelledAddressArg =
   strArgument $
     metavar "ADDRESS"
-      <> completer (listIOCompleter receivingAddresses)
+      <> completer (mkCompleter receivingAddresses)
       <> help "A receiving address of the wallet, as `addresses` lists it. Change addresses take no label."
 
 {- txs -}
@@ -1245,7 +1246,7 @@ spendFromOption =
   strOption $
     long "spend-from"
       <> metavar "ADDRESS"
-      <> completer (listIOCompleter addressesToSpendFrom)
+      <> completer (mkCompleter addressesToSpendFrom)
       <> help "Coin control: spend the coins at this address of the account. Repeat for several addresses."
 
 -- | Whether the strategy selects among the coins of coin control, instead
@@ -1261,7 +1262,7 @@ coinOption :: Args OutPoint
 coinOption =
   coinOptionWith
     "Coin control: spend this coin, as `coins` lists it. Repeat for several coins."
-    (completer (listIOCompleter coinsToSpend))
+    (completer (mkCompleter coinsToSpend))
 
 -- | A coin to sweep, by its outpoint. The wallet does not hold it, and
 -- has none to offer.
@@ -1454,7 +1455,7 @@ nosigHashArg :: Args TxHash
 nosigHashArg =
   argument (maybeReader $ hexToTxHash . cs) $
     metavar "NOSIGHASH"
-      <> completer (listIOCompleter hashesToSign)
+      <> completer (mkCompleter hashesToSign)
       <> help "The nosigHash of a pending transaction, as pendingtxs shows it"
 
 -- | A pending transaction, by either of its hashes
@@ -1462,7 +1463,7 @@ pendingHashArg :: Args TxHash
 pendingHashArg =
   argument (maybeReader $ hexToTxHash . cs) $
     metavar "HASH"
-      <> completer (listIOCompleter pendingHashes)
+      <> completer (mkCompleter pendingHashes)
       <> help "A pending transaction, by the hash pendingtxs shows: its nosigHash, or its txid once it is signed"
 
 -- | A signed pending transaction to send, by its txid. Its nosigHash works
@@ -1471,7 +1472,7 @@ signedTxidArg :: Args TxHash
 signedTxidArg =
   argument (maybeReader $ hexToTxHash . cs) $
     metavar "TXID"
-      <> completer (listIOCompleter idsToSend)
+      <> completer (mkCompleter idsToSend)
       <> help "The txid of a signed pending transaction, as signtx and pendingtxs show it. Its nosigHash works too."
 
 {- importtx -}
@@ -1626,11 +1627,11 @@ transaction spends is freed by deleting that transaction with deletetx.
 
 -- | A coin of the wallet, as coins lists it, with the coins the shell
 -- offers for it
-coinArg :: IO [String] -> Args OutPoint
+coinArg :: (String -> IO [String]) -> Args OutPoint
 coinArg offered =
   argument coinReader $
     metavar "TXID:INDEX"
-      <> completer (listIOCompleter offered)
+      <> completer (mkCompleter offered)
       <> help "The coin, as `coins` lists it: the id of its transaction, a colon, and its index among the outputs"
 
 -- | A coin as coins lists it, and as a block explorer often writes it: the
@@ -1707,6 +1708,7 @@ bumpedArg :: Args TxHash
 bumpedArg =
   argument (maybeReader $ hexToTxHash . cs) $
     metavar "TXID"
+      <> completer (mkCompleter idsToBump)
       <> help "The id of the transaction to replace, as txs or pendingtxs shows it"
 
 -- | The fee rate of a replacement, when given, as for preparetx: it must be
@@ -1914,7 +1916,7 @@ signAddressArg :: Args Text
 signAddressArg =
   strArgument $
     metavar "ADDRESS"
-      <> completer (listIOCompleter walletAddresses)
+      <> completer (mkCompleter walletAddresses)
       <> help "The address whose key signs. It must be an address of this wallet."
 
 signMsgArg :: Args Text

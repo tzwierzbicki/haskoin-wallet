@@ -29,6 +29,7 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, mapMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
+import qualified Data.Text as Text
 import Data.Time (getCurrentTime)
 import Data.Word (Word64)
 import Database.Esqueleto.Legacy as E
@@ -373,6 +374,18 @@ usedAddresses addrs = do
         &&. a ^. DBAddressBalanceTxs >. val 0
     return $ a ^. DBAddressAddress
   return $ unValue <$> rows
+
+-- | The text of at most the given number of addresses of the account on
+-- the chain that start with the text, oldest first, as the shell offers
+-- them. A Bitcoin Cash address is typed without its prefix, so the text
+-- is matched after the colon of the stored address when it has one.
+addressesStarting :: (MonadUnliftIO m) => DBAccountId -> AddrType -> Text -> Natural -> DB m [Text]
+addressesStarting accId addrType start atMost = do
+  rows <-
+    rawSql
+      "select address from d_b_address where account = ? and internal = ? and substr(address, instr(address, ':') + 1, ?) = ? order by \"index\" limit ?"
+      [P.toPersistValue accId, P.toPersistValue (isInternal addrType), P.toPersistValue (Text.length start), P.toPersistValue start, P.toPersistValue (rowLimit atMost :: Int)]
+  return (unSingle <$> rows)
 
 -- | The addresses of a chain of the account, newest first: those after
 -- the index given, or the first ones, up to the count, or all of them

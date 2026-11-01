@@ -44,13 +44,20 @@ offered what it takes:
 - The hashes of your pending transactions. `signtx` offers those to sign,
   `sendtx` those signed and not sent yet, and `exporttx` and `deletetx` all of
   them.
+- The transactions `bumpfee` can replace: your own payments on Bitcoin that
+  are not in a block yet.
 - Your coins. `lockcoin` offers the free ones, `unlockcoin` those you locked,
   and `--coin` those you can spend now.
 - Your addresses. `label` offers the receiving addresses, `signmsg` all of
   them, and `--spend-from` those that hold coins you can spend now.
 
-After `--account`, `--coin` and `--spend-from` offer the coins and addresses of
-that account only.
+After `--account`, `bumpfee`, `--coin` and `--spend-from` offer the
+transactions, coins and addresses of that account only.
+
+`hw` offers at most 20 values for a word. When more of them start with what
+you typed, it offers none: type more of the value, or copy it from a listing.
+Only the values that match are read, so a large wallet completes as fast as a
+small one.
 
 Your shell needs a small script for it, which `hw` writes. Set it up once for
 your shell, then open a new terminal.

@@ -1153,6 +1153,88 @@ failureSpec ctx = do
         run <- hw home (tabAfter ["preparetx", "--account", "my\\ savings", "--coin", take 4 paidCoin]) []
         runOut run `shouldBe` offeredCoin
 
+    -- Twenty-one payments to the first receiving address, one coin each
+    let manyCoins n = Chain 800002 [(fundingTx ctx i [(externalAddr 0, 1000)], Just 800000) | i <- [1 .. n]]
+        coinOf i = Text.unpack (txHashToHex (txHash (fundingTx ctx i [(externalAddr 0, 1000)])))
+
+    it "offers nothing when more than twenty coins start with the word typed" $
+      withChain ctx (manyCoins 21) $ \home _ -> do
+        synced home
+        run <- hw home (tabAfter ["lockcoin", ""]) []
+        Text.lines (runOut run) `shouldSatisfy` all (Text.isPrefixOf "-")
+
+    it "offers twenty coins" $
+      withChain ctx (manyCoins 20) $ \home _ -> do
+        synced home
+        run <- hw home (tabAfter ["lockcoin", ""]) []
+        length (filter (not . Text.isPrefixOf "-") (Text.lines (runOut run))) `shouldBe` 20
+
+    -- The eight digits typed are those of one of the twenty-one
+    it "offers the coins that start with the word typed, among more than twenty" $
+      withChain ctx (manyCoins 21) $ \home _ -> do
+        synced home
+        run <- hw home (tabAfter ["lockcoin", take 8 (coinOf 7)]) []
+        runOut run `shouldBe` Text.pack (coinOf 7) <> "\\:0\n"
+
+    -- The first receiving address is paid, and twenty more are given out
+    it "offers nothing when more than twenty addresses start with the word typed" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        replicateM_ 20 (answer home ["receive"] [])
+        run <- hw home (tabAfter ["label", "1"]) []
+        runOut run `shouldBe` ""
+
+    it "offers twenty addresses" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        replicateM_ 19 (answer home ["receive"] [])
+        run <- hw home (tabAfter ["label", "1"]) []
+        length (Text.lines (runOut run)) `shouldBe` 20
+
+    it "offers the addresses that start with the word typed, among more than twenty" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        replicateM_ 20 (answer home ["receive"] [])
+        run <- hw home (tabAfter ["label", "1KEn"]) []
+        runOut run `shouldBe` "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\n"
+
+    it "offers the id of a payment the account sent after bumpfee" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        txid <- sentPayment home
+        run <- hw home (tabAfter ["bumpfee", take 4 txid]) []
+        runOut run `shouldBe` Text.pack txid <> "\n"
+
+    it "does not offer a payment not sent yet after bumpfee" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        _ <- paymentSigned home
+        txid <- txidOf =<< onePendingTx home
+        run <- hw home (tabAfter ["bumpfee", take 4 txid]) []
+        runOut run `shouldBe` ""
+
+    -- The sync finds the payment in the mempool and retires it from the
+    -- pending transactions: it is in the history then
+    it "offers a sent payment the sync found in the mempool after bumpfee" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        txid <- sentPayment home
+        _ <- hw home ["sync"] []
+        run <- hw home (tabAfter ["bumpfee", take 4 txid]) []
+        runOut run `shouldBe` Text.pack txid <> "\n"
+
+    it "does not offer a payment in a block after bumpfee, which nothing can replace" $
+      withChain ctx (paidChain ctx) $ \home chain -> do
+        txid <- sentPayment home
+        modifyIORef chain mine
+        _ <- hw home ["sync"] []
+        run <- hw home (tabAfter ["bumpfee", take 4 txid]) []
+        runOut run `shouldBe` ""
+
+    -- Only its sender can replace the payment received
+    it "does not offer a payment received after bumpfee" $
+      withChain ctx (Chain 800002 [(payment ctx, Nothing)]) $ \home _ -> do
+        synced home
+        run <- hw home (tabAfter ["bumpfee", take 4 paidTxid]) []
+        runOut run `shouldBe` ""
+
     -- bash breaks --account=main into --account, = and main
     it "reads the account of --account=NAME among the words typed, as bash breaks it" $
       withChain ctx (paidChain ctx) $ \home _ -> do

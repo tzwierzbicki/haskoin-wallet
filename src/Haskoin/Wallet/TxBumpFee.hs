@@ -24,6 +24,7 @@ module Haskoin.Wallet.TxBumpFee
     transactionAccounts,
     stuckTransaction,
     checkReplaceable,
+    marksReplaceable,
     minimumRate,
     spendingChildren,
     refuseSpentElsewhere,
@@ -185,8 +186,13 @@ rawTxs store tids = do
 checkReplaceable :: Sent -> Either String ()
 checkReplaceable s = do
   unless (ownTransaction s.sentSummary) $ Left notOwnPayment
-  unless (any ((< 0xfffffffe) . (.sequence)) s.sentTx.inputs) $
+  unless (marksReplaceable s.sentTx) $
     Left "The transaction is not marked replaceable (BIP 125): the store would keep showing it in place of its replacement until a block confirms one of them"
+
+-- | Whether a transaction marks itself replaceable (BIP 125): an input of
+-- it has a sequence below 0xfffffffe
+marksReplaceable :: Tx -> Bool
+marksReplaceable transaction = any ((< 0xfffffffe) . (.sequence)) transaction.inputs
 
 -- | The refusal of a transaction that spends coins of another wallet: a
 -- payment the account receives, or a sweep

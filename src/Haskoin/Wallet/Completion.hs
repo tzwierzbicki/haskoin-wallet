@@ -1,18 +1,22 @@
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | What the shell completes from the wallet: the names of the accounts,
 -- the hashes of the pending transactions at each step from preparetx to
--- sendtx, the coins and the addresses. Each command is offered what it
--- takes. The shell runs hw at each Tab, so a completion reads the database
--- and changes nothing. It writes no configuration file and creates no
--- database. It migrates nothing, writes nothing, and does not wait for
--- another command. When it cannot read the database, the shell offers
--- nothing for the word.
+-- sendtx, the transactions bumpfee replaces, the coins and the addresses.
+-- Each command is offered what it takes, and only when few enough values
+-- match what was typed: see 'offeredAtMost'. The shell runs hw at each
+-- Tab, so a completion reads the database and changes nothing. It writes
+-- no configuration file and creates no database. It migrates nothing,
+-- writes nothing, and does not wait for another command. When it cannot
+-- read the database, the shell offers nothing for the word.
 module Haskoin.Wallet.Completion
-  ( accountNames,
+  ( offeredAtMost,
+    accountNames,
     hashesToSign,
     idsToSend,
     pendingHashes,
+    idsToBump,
     coinsToLock,
     coinsToUnlock,
     coinsToSpend,
@@ -25,34 +29,60 @@ module Haskoin.Wallet.Completion
 where
 
 import Control.Monad (forM)
-import Control.Monad.Except (runExceptT)
-import Data.Containers.ListUtils (nubOrd)
+import Control.Monad.Except (ExceptT, runExceptT)
+import Data.Char (isHexDigit)
 import Data.Either (fromRight, rights)
-import Data.List (stripPrefix)
+import Data.List (isPrefixOf, stripPrefix)
+import qualified Data.Map.Strict as Map
 import Data.Maybe (isNothing)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Haskoin (Network, Tx, addrToText, txHashToHex)
+import Haskoin (Network (..), Tx, TxHash, txHash, txHashToHex)
 import Haskoin.Wallet.Account (accountNetwork, getAccountByName, getAccountNames, getAccounts)
-import Haskoin.Wallet.Address (AddrType (..), addressesAfter)
-import Haskoin.Wallet.Coin (CoinFilter (..), CoinLock (..), JsonCoin (..), coinText, coinsAfter)
+import Haskoin.Wallet.Address (AddrType (..), addressesStarting)
+import Haskoin.Wallet.Coin (CoinLock (..), JsonCoin (..), coinAddressesStarting, coinText, coinsStarting, spendableAtAddresses, spendingOf, toJsonCoin)
 import Haskoin.Wallet.Config (configAsItIs, databaseFileIn)
-import Haskoin.Wallet.Database (DB, DBAccount, DBAccountId, DBAddress (..), runDBReadOnly)
+import Haskoin.Wallet.Database (DB, DBAccount, DBAccountId, runDBReadOnly)
 import Haskoin.Wallet.Migration (databaseVersion, latestDatabaseVersion)
 import Haskoin.Wallet.Parser.Completion (completionParts)
-import Haskoin.Wallet.PendingTx (PendingTx (..), fromRow, pendingRows)
+import Haskoin.Wallet.PendingTx (PendingTx (..), fromRow, pendingRows, pendingTxs)
+import Haskoin.Wallet.RawTx (lookupRawTx)
+import Haskoin.Wallet.TxBumpFee (marksReplaceable)
+import Haskoin.Wallet.TxInfo (mempoolSummaries, ownTransaction)
 import Haskoin.Wallet.TxSignData (TxSignData (..), isSigned, shownHash)
+import Numeric.Natural (Natural)
 import qualified System.Directory as D
 import System.Environment (getArgs)
 import UnliftIO.Exception (handleAny)
+
+{- How many -}
+
+-- | How many values the shell is offered at most for a word. Among more,
+-- the user would not pick one from the list, and types more of the value
+-- instead, or copies it from a listing. The database is asked for one
+-- more than this, to know when there are too many, and for no more: a Tab
+-- costs a large wallet no more than a small one.
+offeredAtMost :: Int
+offeredAtMost = 20
+
+-- | How many values the database is asked for: one more than are offered
+askedFor :: Natural
+askedFor = fromIntegral offeredAtMost + 1
+
+-- | The values, when they are few enough to offer: none past
+-- 'offeredAtMost'
+fewEnough :: [a] -> [a]
+fewEnough values
+  | length (take (offeredAtMost + 1) values) > offeredAtMost = []
+  | otherwise = values
+
+{- Accounts -}
 
 -- | The names of the accounts, for --account and the arguments that name
 -- an account
 accountNames :: IO [String]
 accountNames = readForCompletion (map cs <$> getAccountNames)
-
-{- The account typed -}
 
 -- | The account named among the words typed before the one to complete,
 -- if any. The shell passes hw those words as its arguments.
@@ -89,102 +119,152 @@ accountsNamed (Just name) = either (const []) pure <$> runExceptT (getAccountByN
 
 -- | The nosigHashes of the pending transactions to sign, for signtx and
 -- signsweep: those neither signed nor sent, as the two refuse the others
-hashesToSign :: IO [String]
-hashesToSign = shownHashesOf (\p -> not (isSigned (txOf p)) && not (pendingTxOnline p))
+hashesToSign :: String -> IO [String]
+hashesToSign = shownHashesOf (\p -> not (isSigned (txOf p)) && not p.pendingTxOnline)
 
 -- | The ids of the pending transactions to send, for sendtx: those signed
 -- and not sent yet. The sync sends one again should the network lose it.
 -- One in conflict is left out: the network refuses it, and deletetx
 -- frees its coins.
-idsToSend :: IO [String]
-idsToSend = shownHashesOf (\p -> isSigned (txOf p) && not (pendingTxOnline p) && not (pendingTxConflicted p))
+idsToSend :: String -> IO [String]
+idsToSend = shownHashesOf (\p -> isSigned (txOf p) && not p.pendingTxOnline && not p.pendingTxConflicted)
 
 -- | The hash of every pending transaction, for exporttx and deletetx
-pendingHashes :: IO [String]
+pendingHashes :: String -> IO [String]
 pendingHashes = shownHashesOf (const True)
 
 -- | The pending transactions that pass the test, by the hash pendingtxs
--- shows: the nosigHash until a transaction is signed, then its id. A row
--- that does not read is left out.
-shownHashesOf :: (PendingTx -> Bool) -> IO [String]
-shownHashesOf keep = readForCompletion $ do
+-- shows: the nosigHash until a transaction is signed, then its id. The
+-- pending transactions are few, since the sync retires them, so they are
+-- all read, and those that start with the word typed kept. A row that
+-- does not read is left out.
+shownHashesOf :: (PendingTx -> Bool) -> String -> IO [String]
+shownHashesOf keep typed = readForCompletion $ do
   held <- rights . map fromRow <$> pendingRows Nothing Nothing Nothing
-  return [cs (txHashToHex (shownHash (txOf p))) | p <- held, keep p]
+  return $ fewEnough [hash | p <- held, keep p, let hash = hexOf (shownHash (txOf p)), typed `isPrefixOf` hash]
 
 -- | The transaction a pending transaction holds
 txOf :: PendingTx -> Tx
 txOf = txSignDataTx . pendingTxData
 
+hexOf :: TxHash -> String
+hexOf = cs . txHashToHex
+
+{- The transactions to replace -}
+
+-- | The ids of the transactions bumpfee replaces, for its TXID, as it
+-- checks them: on a network that replaces transactions, those the account
+-- sent and that are still pending, and those of its history that are in
+-- the mempool and its own payments. One replaced already is left out, and
+-- one marked not replaceable when hw holds its bytes to tell. They are
+-- few, since the network confirms or drops them: those of the account
+-- named, or of every account, are all read.
+idsToBump :: String -> IO [String]
+idsToBump typed = do
+  named <- typedAccount
+  readForCompletion $ do
+    accounts <- accountsNamed named
+    found <- forM [held | held@(_, acc) <- accounts, (accountNetwork acc).replaceByFee] $ \(accId, acc) ->
+      fromRight [] <$> runExceptT (replaceableOf (accountNetwork acc) accId)
+    return $ fewEnough [hash | tid <- concat found, let hash = hexOf tid, typed `isPrefixOf` hash]
+
+-- | The transactions of the account bumpfee replaces, by their ids
+replaceableOf :: Network -> DBAccountId -> ExceptT String (DB IO) [TxHash]
+replaceableOf net accId = do
+  held <- pendingTxs accId
+  let replaced = concatMap (txSignDataReplaces . pendingTxData) held
+      sent = [tx | p <- held, p.pendingTxOnline, not p.pendingTxConflicted, let tx = txOf p, isSigned tx, marksReplaceable tx]
+      sentIds = [txHash tx | tx <- sent, txHash tx `notElem` replaced]
+  inMempool <- mempoolSummaries net accId askedFor
+  own <- forM [tid | (tid, summary) <- inMempool, ownTransaction summary, tid `notElem` replaced, tid `notElem` sentIds] $ \tid -> do
+    rawM <- lookupRawTx tid
+    return [tid | maybe True marksReplaceable rawM]
+  return (sentIds <> concat own)
+
 {- The coins -}
 
 -- | The coins free to lock, for lockcoin: those nothing locks, neither a
 -- pending transaction nor the user, as lockcoin refuses the others
-coinsToLock :: IO [String]
+coinsToLock :: String -> IO [String]
 coinsToLock = coinsWhere (isNothing . jsonCoinLock)
 
 -- | The coins the user locked, for unlockcoin, the only ones it frees
-coinsToUnlock :: IO [String]
+coinsToUnlock :: String -> IO [String]
 coinsToUnlock = coinsWhere ((== Just LockedByUser) . jsonCoinLock)
 
 -- | The coins that can be spent now, for --coin. Coin control refuses a
 -- choice none of whose coins can be spent.
-coinsToSpend :: IO [String]
+coinsToSpend :: String -> IO [String]
 coinsToSpend = coinsWhere jsonCoinSpendable
 
--- | The coins that pass the test, as coins lists them: TXID:INDEX
-coinsWhere :: (JsonCoin -> Bool) -> IO [String]
-coinsWhere keep = do
+-- | The coins that start with the word typed and pass the test, as coins
+-- lists them: TXID:INDEX. Among more than 'offeredAtMost' that start
+-- with the word, locked or not, none.
+coinsWhere :: (JsonCoin -> Bool) -> String -> IO [String]
+coinsWhere keep typed = do
   named <- typedAccount
   readForCompletion $ do
-    coins <- walletCoins named
+    coins <- fewEnough <$> walletCoinsStarting named typed
     return [coinText (jsonCoinOutpoint coin) | (_, coin) <- coins, keep coin]
 
--- | The coins of the account named, or of every account, as coins lists
--- them, each with the network of its account. Whether a coin is locked,
--- and whether it can be spent now, are those of the listing.
-walletCoins :: Maybe Text -> DB IO [(Network, JsonCoin)]
-walletCoins named = do
+-- | The coins of the account named, or of every account, that start with
+-- the word typed, as coins lists them: the hexadecimal digits of the word
+-- are matched in the database, which gives one more than 'offeredAtMost'
+-- of them at most from each account, and a colon and an index after the
+-- digits are matched here, among those. Whether a coin is locked, and
+-- whether it can be spent now, are those of the listing.
+walletCoinsStarting :: Maybe Text -> String -> DB IO [(Network, JsonCoin)]
+walletCoinsStarting named typed = do
   accounts <- accountsNamed named
   fmap concat . forM accounts $ \(accId, acc) -> do
     let net = accountNetwork acc
-    coins <- fromRight [] <$> runExceptT (coinsAfter net accId AllCoins Nothing Nothing)
-    return [(net, coin) | coin <- coins]
+    rows <- fewEnough <$> coinsStarting accId (takeWhile isHexDigit (take 64 typed)) askedFor
+    listed <- fromRight [] <$> runExceptT (spendingOf net accId >>= \rules -> mapM (toJsonCoin rules) rows)
+    return [(net, coin) | coin <- listed, typed `isPrefixOf` coinText (jsonCoinOutpoint coin)]
 
 {- The addresses -}
 
 -- | The receiving addresses, for label: a change address takes no label
-receivingAddresses :: IO [String]
+receivingAddresses :: String -> IO [String]
 receivingAddresses = addressesOf [AddrExternal]
 
 -- | Every address of the wallet, for signmsg, which signs with the key of
 -- any of them
-walletAddresses :: IO [String]
+walletAddresses :: String -> IO [String]
 walletAddresses = addressesOf [AddrExternal, AddrInternal]
 
 -- | The addresses of the chains given, of the account named or of every
--- account
-addressesOf :: [AddrType] -> IO [String]
-addressesOf chains = do
+-- account, that start with the word typed: the database gives one more
+-- than 'offeredAtMost' of them at most from each chain of each account
+addressesOf :: [AddrType] -> String -> IO [String]
+addressesOf chains typed = do
   named <- typedAccount
   readForCompletion $ do
     accounts <- accountsNamed named
-    rows <- concat <$> sequence [addressesAfter accId chain Nothing Nothing | (accId, _) <- accounts, chain <- chains]
-    return (offeredAddress . dBAddressAddress <$> rows)
+    found <- concat <$> sequence [addressesStarting accId chain (cs typed) askedFor | (accId, _) <- accounts, chain <- chains]
+    return $ fewEnough (offeredAddress <$> found)
 
--- | The addresses that hold coins that can be spent now, for --spend-from.
--- Coin control refuses addresses that hold none.
-addressesToSpendFrom :: IO [String]
-addressesToSpendFrom = do
+-- | The addresses that hold coins that can be spent now, for --spend-from,
+-- among the addresses that hold coins and start with the word typed. Coin
+-- control refuses addresses that hold none.
+addressesToSpendFrom :: String -> IO [String]
+addressesToSpendFrom typed = do
   named <- typedAccount
   readForCompletion $ do
-    coins <- walletCoins named
-    return $ nubOrd [offeredAddress addr | (net, coin) <- coins, jsonCoinSpendable coin, Just addr <- [addrToText net (jsonCoinAddress coin)]]
+    accounts <- accountsNamed named
+    found <- forM accounts $ \(accId, acc) -> do
+      candidates <- fewEnough <$> coinAddressesStarting accId (cs typed) askedFor
+      spendable <- fromRight Map.empty <$> runExceptT (spendableAtAddresses (accountNetwork acc) accId candidates)
+      return (Map.keys spendable)
+    return $ fewEnough (offeredAddress <$> concat found)
 
 -- | An address as the shell offers it. A Bitcoin Cash address goes without
 -- its prefix, such as bitcoincash:, because bash splits a word at a colon.
 -- hw finds the address written either way.
 offeredAddress :: Text -> String
 offeredAddress = cs . snd . Text.breakOnEnd ":"
+
+{- Reading the database -}
 
 -- | Run a read of the wallet database for the shell, or give nothing. The
 -- database is the one hw works on: ~/.hw/accounts.sqlite, or the file

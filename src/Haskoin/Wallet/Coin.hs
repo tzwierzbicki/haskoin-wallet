@@ -20,6 +20,8 @@ module Haskoin.Wallet.Coin
     groupCoins,
     CoinFilter (..),
     coinsAfter,
+    coinsStarting,
+    coinAddressesStarting,
     coinBlock,
     Spending (..),
     spendingOf,
@@ -57,7 +59,10 @@ import Data.Maybe (catMaybes, fromMaybe, mapMaybe)
 import Data.Ord (Down (..))
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
+import Data.Char (toUpper)
 import Data.Text (Text)
+import qualified Data.Text as Text
+import Database.Persist.Sql (Single (..), rawSql)
 import Data.Time (getCurrentTime)
 import Data.Word (Word64)
 import Database.Esqueleto.Legacy (InnerJoin (..), Value (..), asc, desc, from, groupBy, having, in_, just, limit, on, orderBy, select, sum_, val, valList, where_, (&&.), (<.), (==.), (>.), (^.), (||.))
@@ -255,6 +260,45 @@ coinsAfter net accId shown afterM countM = do
         ((DBCoinAccount P.==. accId) : lockedOnly <> after)
         ([P.Asc DBCoinBlockRef, P.Asc DBCoinOutpoint] <> count)
   mapM (toJsonCoin rules . P.entityVal) rows
+
+-- | At most the given number of coin rows of the account whose transaction
+-- id, as hw shows it, starts with the hexadecimal digits, by their
+-- outpoints: for the shell. The key holds the id in the reverse order of
+-- its digits, so the whole bytes typed are matched on the tail of the id
+-- in the key, and a last digit alone on the byte before.
+coinsStarting :: (MonadUnliftIO m) => DBAccountId -> String -> Natural -> DB m [DBCoin]
+coinsStarting accId digits atMost = do
+  rows <-
+    rawSql
+      (cs ("select ?? from d_b_coin where account = ?" <> conditions <> " order by outpoint limit ?"))
+      (P.toPersistValue accId : parameters <> [P.toPersistValue (rowLimit atMost :: Int)])
+  return (P.entityVal <$> rows)
+  where
+    typed = map toUpper digits
+    bytes = length typed `div` 2
+    -- The digits of the whole bytes, those of each byte together, in the
+    -- order of the key, as hex() writes them
+    wholeBytes = concat (reverse (pairs (take (2 * bytes) typed)))
+    lastDigit = drop (2 * bytes) typed
+    conditions =
+      concat [" and hex(substr(outpoint, ?, ?)) = ?" | bytes > 0]
+        <> concat [" and substr(hex(substr(outpoint, ?, 1)), 1, 1) = ?" | not (null lastDigit)]
+    parameters =
+      concat [[P.toPersistValue (33 - bytes), P.toPersistValue bytes, P.toPersistValue wholeBytes] | bytes > 0]
+        <> concat [[P.toPersistValue (32 - bytes), P.toPersistValue lastDigit] | not (null lastDigit)]
+    pairs (a : b : more) = [a, b] : pairs more
+    pairs _ = []
+
+-- | The text of at most the given number of addresses of the account that
+-- hold a coin and start with the text, as 'addressesStarting' matches it:
+-- for the shell
+coinAddressesStarting :: (MonadUnliftIO m) => DBAccountId -> Text -> Natural -> DB m [Text]
+coinAddressesStarting accId start atMost = do
+  rows <-
+    rawSql
+      "select distinct address from d_b_coin where account = ? and substr(address, instr(address, ':') + 1, ?) = ? order by address limit ?"
+      [P.toPersistValue accId, P.toPersistValue (Text.length start), P.toPersistValue start, P.toPersistValue (rowLimit atMost :: Int)]
+  return (unSingle <$> rows)
 
 -- | The block of a coin of the account, the one --after names, or why
 -- there is none
