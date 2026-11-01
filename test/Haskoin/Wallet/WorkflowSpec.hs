@@ -1153,6 +1153,13 @@ failureSpec ctx = do
         run <- hw home (tabAfter ["preparetx", "--account", "my\\ savings", "--coin", take 4 paidCoin]) []
         runOut run `shouldBe` offeredCoin
 
+    -- bash breaks --account=main into --account, = and main
+    it "reads the account of --account=NAME among the words typed, as bash breaks it" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home (tabAfter ["preparetx", "--account", "=", "main", "--coin", take 4 paidCoin]) []
+        runOut run `shouldBe` offeredCoin
+
     -- The account second has no coins
     it "offers only the coins of the account named with --account after --coin" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -1214,6 +1221,14 @@ failureSpec ctx = do
       withHome $ \home -> do
         createMain home
         bashCompletion home ["txs", "--account", ""] `shouldReturn` ["main"]
+
+    -- bash breaks --account=m into --account, = and m, and inserts the
+    -- name in place of the m
+    it "offers the account names after --account=, which bash breaks at the =, through the script of bash" $
+      withHome $ \home -> do
+        createMain home
+        bashCompletion home ["txs", "--account", "=", "m"] `shouldReturn` ["main"]
+        bashCompletion home ["txs", "--account", "="] `shouldReturn` ["main"]
 
     -- The script of optparse-applicative expanded a* to the files of the
     -- directory it matches, axb here

@@ -23,6 +23,7 @@ import Control.Monad (forM)
 import Data.List (isPrefixOf, sort)
 import qualified System.Directory as D
 import System.Environment (getArgs)
+import Text.Read (readMaybe)
 import UnliftIO.Exception (handleAny)
 
 {- The script of bash -}
@@ -74,17 +75,44 @@ bashScriptName [] = Nothing
 -- its characters: my\ savings, or TXID\: once bash has completed a coin
 -- up to its colon. They are taken out, as the shell takes them out of
 -- the command it runs.
-completionParts :: [String] -> (Maybe String, [String], [String])
-completionParts ("--bash-completion-index" : i : rest) = (Just i, ws, os)
+--
+-- bash breaks a word at its =, so that --account=main comes as --account,
+-- = and main. The = is taken out: the value follows the option as a word
+-- of its own, which optparse-applicative reads the same, and the index
+-- moves with the words. An = that is the word to complete stands for an
+-- empty value, since bash inserts what completes it after the =.
+completionParts :: [String] -> (Maybe Int, [String], [String])
+completionParts args = (index', words', others)
   where
-    (_, ws, os) = completionParts rest
-completionParts ("--bash-completion-word" : w : rest) = (i, unescaped w : ws, os)
+    (indexM, typed, others) = partsOf args
+    (words', index') = withoutEquals (readMaybe =<< indexM) (map unescaped typed)
+    partsOf ("--bash-completion-index" : i : rest) = (Just i, ws, os)
+      where
+        (_, ws, os) = partsOf rest
+    partsOf ("--bash-completion-word" : w : rest) = (i, w : ws, os)
+      where
+        (i, ws, os) = partsOf rest
+    partsOf (a : rest) = (i, ws, a : os)
+      where
+        (i, ws, os) = partsOf rest
+    partsOf [] = (Nothing, [], [])
+
+-- | The words without the = bash broke a word at, after an option, with
+-- the index of the word to complete moved along: see 'completionParts'
+withoutEquals :: Maybe Int -> [String] -> ([String], Maybe Int)
+withoutEquals index = go 0
   where
-    (i, ws, os) = completionParts rest
-completionParts (a : rest) = (i, ws, a : os)
-  where
-    (i, ws, os) = completionParts rest
-completionParts [] = (Nothing, [], [])
+    go position (option : "=" : rest)
+      | "--" `isPrefixOf` option =
+          let (ws, indexLeft) = go (position + 2) rest
+           in case index of
+                -- The = is the word to complete: an empty value
+                Just i | i == position + 1 -> (option : "" : ws, indexLeft)
+                -- The = is before the word to complete, which moves up
+                Just i | i > position + 1 -> (option : ws, subtract 1 <$> indexLeft)
+                _ -> (option : ws, indexLeft)
+    go position (w : rest) = let (ws, indexLeft) = go (position + 1) rest in (w : ws, indexLeft)
+    go _ [] = ([], index)
 
 -- | A word as the shell typed it, without the backslashes that escape its
 -- characters: my\ savings is my savings

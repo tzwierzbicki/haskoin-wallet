@@ -77,11 +77,24 @@ spec = do
   describe "The words of a shell completion" $ do
     it "are read without the backslashes the shell typed to escape a space or a colon" $
       completionParts ["--bash-completion-index", "2", "--bash-completion-word", "hw", "--bash-completion-word", "my\\ savings", "--bash-completion-word", "0a1a\\:"]
-        `shouldBe` (Just "2", ["hw", "my savings", "0a1a:"], [])
+        `shouldBe` (Just 2, ["hw", "my savings", "0a1a:"], [])
 
     it "are read the same from zsh and fish, which ask for descriptions" $
       completionParts ["--bash-completion-enriched", "--bash-completion-index", "1", "--bash-completion-word", "hw", "--bash-completion-word", "my\\ savings"]
-        `shouldBe` (Just "1", ["hw", "my savings"], ["--bash-completion-enriched"])
+        `shouldBe` (Just 1, ["hw", "my savings"], ["--bash-completion-enriched"])
+
+    -- bash breaks --account=main at the =, into three words
+    it "are joined where bash broke a word at the = of --option=value, the index moved along" $
+      completionParts (wordsTyped 6 ["hw", "preparetx", "--account", "=", "main", "--coin", ""])
+        `shouldBe` (Just 5, ["hw", "preparetx", "--account", "main", "--coin", ""], [])
+
+    it "complete the value after the = bash broke a word at" $
+      completionParts (wordsTyped 4 ["hw", "txs", "--account", "=", "m"])
+        `shouldBe` (Just 3, ["hw", "txs", "--account", "m"], [])
+
+    it "complete an empty value for an = under the cursor, after which bash inserts the value" $
+      completionParts (wordsTyped 3 ["hw", "txs", "--account", "="])
+        `shouldBe` (Just 3, ["hw", "txs", "--account", ""], [])
 
     it "ask for the script of bash with the name to run hw by" $
       requestOf unitOptions ["--bash-completion-script", "/usr/local/bin/hw"] `shouldBe` BashScript "/usr/local/bin/hw"
@@ -91,3 +104,7 @@ spec = do
       Nothing -> error $ "hw has no command " <> name
     -- The options of hw that take a value
     unitOptions = ["-u", "--unit"]
+    -- The arguments the script of bash passes for the words, with the
+    -- index of the one to complete
+    wordsTyped :: Int -> [String] -> [String]
+    wordsTyped index typed = ["--bash-completion-index", show index] <> concatMap (\w -> ["--bash-completion-word", w]) typed

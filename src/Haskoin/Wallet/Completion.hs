@@ -45,7 +45,6 @@ import Haskoin.Wallet.PendingTx (PendingTx (..), fromRow, pendingRows)
 import Haskoin.Wallet.TxSignData (TxSignData (..), isSigned, shownHash)
 import qualified System.Directory as D
 import System.Environment (getArgs)
-import Text.Read (readMaybe)
 import UnliftIO.Exception (handleAny)
 
 -- | The names of the accounts, for --account and the arguments that name
@@ -61,13 +60,14 @@ typedAccount :: IO (Maybe Text)
 typedAccount = do
   (indexM, typed, _) <- completionParts <$> getArgs
   return $ do
-    index <- readMaybe =<< indexM
+    index <- indexM
     -- The words before the one to complete, without the name of hw
     accountNamed (drop 1 (take index typed))
 
 -- | The account the words name with --account or -a, as optparse reads
 -- them: --account NAME, --account=NAME, -a NAME or -aNAME. Words after --
--- are arguments.
+-- are arguments. bash breaks --account=NAME into words, which
+-- 'completionParts' joins again; zsh and fish pass it whole.
 accountNamed :: [String] -> Maybe Text
 accountNamed = go . takeWhile (/= "--")
   where

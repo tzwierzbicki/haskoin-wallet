@@ -28,7 +28,6 @@ import Prettyprinter (Doc, pretty)
 import System.Environment (getArgs, getProgName)
 import System.Exit (ExitCode (..), exitSuccess, exitWith)
 import System.IO (Handle, stderr, stdout)
-import Text.Read (readMaybe)
 
 -- | Parse the command line of the program: the command, and the options
 -- that go with any command. A request for help or for the version, a
@@ -130,7 +129,7 @@ isCompletion arg = "--bash-completion-" `isPrefixOf` arg || "-completion-script"
 -- as they are.
 completionRequest :: Program cmd opts -> [String] -> ([String], String)
 completionRequest program args = fromMaybe (args, "") $ do
-  index <- readMaybe =<< indexM
+  index <- indexM
   let (words', index', valueOption) = splitAttachedValue program index typed
   return (others <> completionArgs index' words', valueOption)
   where
