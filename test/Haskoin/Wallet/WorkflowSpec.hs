@@ -1008,6 +1008,28 @@ failureSpec ctx = do
         run <- hw home (tabAfter ["txs", "-am"]) []
         runOut run `shouldBe` "-amain\n"
 
+    -- zsh and fish keep --account=m one word, which the name offered
+    -- replaces whole
+    it "offers the names of the accounts after --account= in the same word, --account= before each" $
+      withHome $ \home -> do
+        createMain home
+        run <- hw home ("--bash-completion-enriched" : tabAfter ["txs", "--account=m"]) []
+        runOut run `shouldBe` "--account=main\n"
+
+    it "offers every name after --account= alone" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "second"] seedTwice
+        run <- hw home ("--bash-completion-enriched" : tabAfter ["txs", "--account="]) []
+        runOut run `shouldBe` "--account=main\n--account=second\n"
+
+    -- txs has --verbose, which takes no value
+    it "offers nothing after the = of an option that takes no value" $
+      withHome $ \home -> do
+        createMain home
+        run <- hw home ("--bash-completion-enriched" : tabAfter ["txs", "--verbose=m"]) []
+        runOut run `shouldBe` ""
+
     -- bash completes my savings up to its space, which it escapes
     it "offers a name with a space after the space bash escaped, escaped for bash again" $
       withHome $ \home -> do
@@ -1338,11 +1360,32 @@ failureSpec ctx = do
         writeFile (home </> "doc.json") ""
         bashCompletion home ["importtx", "doc"] `shouldReturn` ["doc.json", "docs/"]
 
-    it "offers a directory without a / to zsh and fish, which mark it themselves" $
+    it "offers a directory with a / to zsh and fish too" $
       withHome $ \home -> do
         createDirectory (home </> "docs")
         run <- hw home ("--bash-completion-enriched" : tabAfter ["importtx", "doc"]) []
-        runOut run `shouldBe` "docs\n"
+        runOut run `shouldBe` "docs/\n"
+
+    -- The script of optparse-applicative added a / to any value that
+    -- names a directory, an account named src for instance
+    it "writes a script for fish that offers the lines hw prints, by the name given, as they are" $
+      withHome $ \home -> do
+        run <- hw home ["--fish-completion-script", "/opt/bin/hw"] []
+        runOut run
+          `shouldBe` Text.unlines
+            [ "function _hw",
+              "    set -l words (commandline --tokenize --current-process)",
+              "    # The words before the cursor, counted: the index of the one to complete",
+              "    set -l index (count (commandline --tokenize --cut-at-cursor --current-process))",
+              "    set -l request --bash-completion-enriched --bash-completion-index $index",
+              "    for word in $words",
+              "        set -a request --bash-completion-word $word",
+              "    end",
+              "    /opt/bin/hw $request",
+              "end",
+              "",
+              "complete --no-files --command hw --arguments '(_hw)'"
+            ]
 
     -- .hw is the directory of hw in the home. The options of importtx are
     -- offered with the files for an empty word, as for any first argument.

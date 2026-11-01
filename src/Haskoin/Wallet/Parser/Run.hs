@@ -16,7 +16,6 @@ module Haskoin.Wallet.Parser.Run
 where
 
 import Control.Applicative (empty, (<|>))
-import Control.Monad (guard)
 import Data.List (find, isPrefixOf, isSuffixOf)
 import Data.Maybe (fromMaybe, isNothing, listToMaybe)
 import Haskoin.Wallet.Parser.Args
@@ -42,6 +41,7 @@ runProgram program = do
     HelpOf word -> leave stdout ExitSuccess (helpOf word)
     Version -> leave stdout ExitSuccess (const (pretty program.version))
     BashScript name -> putStr (bashScript program.name name) >> exitSuccess
+    FishScript name -> putStr (fishScript program.name name) >> exitSuccess
     Parse -> parse args
   where
     helpOf word output = case word >>= commandNamed program of
@@ -96,6 +96,9 @@ data Request
   | -- | The script that has bash complete the program, which runs the
     -- program by the name given
     BashScript String
+  | -- | The script that has fish complete the program, which runs the
+    -- program by the name given
+    FishScript String
   | -- | A run: the arguments are parsed
     Parse
   deriving (Eq, Show)
@@ -109,6 +112,7 @@ requestOf :: [String] -> [String] -> Request
 requestOf valueOptions args
   | null args = NothingTyped
   | Just name <- bashScriptName args = BashScript name
+  | Just name <- fishScriptName args = FishScript name
   -- The shell completes the words typed so far, --help among them maybe
   | any isCompletion args = Parse
   | typed ["-h", "--help"] = HelpOf command
@@ -135,24 +139,42 @@ completionRequest program args = fromMaybe (args, "") $ do
   where
     (indexM, typed, others) = completionParts args
 
--- | The words typed, with a value typed against its short option made a
--- word of its own: -amai becomes -a and mai. optparse-applicative
+-- | The words typed, with a value typed against its option made a word of
+-- its own: -amai becomes -a and mai, and --account=mai becomes --account
+-- and mai, as zsh and fish keep that word whole. optparse-applicative
 -- completes a value only as a word of its own. Also the index of the word
--- to complete among them, and the option to put back before each word
--- offered: -a, or nothing when no value was split.
+-- to complete among them, and what to put back before each word offered,
+-- since the word offered replaces the whole word typed: -a or --account=,
+-- or nothing when no value was split.
 splitAttachedValue :: Program cmd opts -> Int -> [String] -> ([String], Int, String)
 splitAttachedValue program index typed = fromMaybe (typed, index, "") $ do
-  '-' : letter : typedValue@(_ : _) <- listToMaybe (drop index typed)
+  word <- listToMaybe (drop index typed)
   -- The command named before the word, without the name of the program
   let command = commandWord (programValueOptions program) (drop 1 (take index typed)) >>= commandNamed program
-  guard (letter `elem` valueLetters program command)
-  let split = take index typed <> [['-', letter], typedValue] <> drop (index + 1) typed
-  return (split, index + 1, ['-', letter])
+  (optionWord, typedValue, before) <- attachedValue (valueNames program command) word
+  let split = take index typed <> [optionWord, typedValue] <> drop (index + 1) typed
+  return (split, index + 1, before)
 
--- | The short names of the options that take a value: those of the
--- options of the program, and those of the command, when one is named
-valueLetters :: Program cmd opts -> Maybe (CommandSpec cmd) -> [Char]
-valueLetters program command = [c | row <- rows, Just _ <- [row.metavar], Short c <- row.names]
+-- | The option and the value typed against it that the word holds, when
+-- the option is one of those that take a value, with what to put back
+-- before each value offered: -amai is -a, mai and -a; --account=mai is
+-- --account, mai and --account=. A short option alone is a word to
+-- complete among the options, not a value.
+attachedValue :: [Name] -> String -> Maybe (String, String, String)
+attachedValue names word = case word of
+  '-' : '-' : rest
+    | (longName, '=' : typedValue) <- break (== '=') rest,
+      Long longName `elem` names ->
+        Just ("--" <> longName, typedValue, "--" <> longName <> "=")
+  '-' : letter : typedValue@(_ : _)
+    | Short letter `elem` names ->
+        Just (['-', letter], typedValue, ['-', letter])
+  _ -> Nothing
+
+-- | The names of the options that take a value: those of the options of
+-- the program, and those of the command, when one is named
+valueNames :: Program cmd opts -> Maybe (CommandSpec cmd) -> [Name]
+valueNames program command = [name | row <- rows, Just _ <- [row.metavar], name <- row.names]
   where
     rows = program.globals.rows <> maybe [] (.args.rows) command
 

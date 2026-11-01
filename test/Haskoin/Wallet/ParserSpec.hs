@@ -98,6 +98,13 @@ spec = do
 
     it "ask for the script of bash with the name to run hw by" $
       requestOf unitOptions ["--bash-completion-script", "/usr/local/bin/hw"] `shouldBe` BashScript "/usr/local/bin/hw"
+
+    it "ask for the script of fish with the name to run hw by" $
+      requestOf unitOptions ["--fish-completion-script", "/usr/local/bin/hw"] `shouldBe` FishScript "/usr/local/bin/hw"
+
+    -- zsh's script is the one of optparse-applicative
+    it "leave the script of zsh to the parser" $
+      requestOf unitOptions ["--zsh-completion-script", "hw"] `shouldBe` Parse
   where
     usageOf name = case commandNamed program name of
       Just command -> unwords (map renderPlain (usageParts command.args.usage))

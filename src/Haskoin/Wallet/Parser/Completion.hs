@@ -1,16 +1,19 @@
 -- | The shell completion of a program, around the one of
--- optparse-applicative: the script of bash, the words of a request as the
--- shell typed them, and the completion of a file name.
+-- optparse-applicative: the scripts of bash and fish, the words of a
+-- request as the shell typed them, and the completion of a file name.
 --
--- The scripts of zsh and fish are those of optparse-applicative. The
--- script of bash is hw's own. The one of optparse-applicative expands the
--- words typed as patterns, so that s* became the files of the directory,
--- and registers the program with -o filenames, which adds a / to a value
--- that is also the name of a directory, an account named src for
--- instance.
+-- The script of zsh is the one of optparse-applicative. The scripts of
+-- bash and fish are hw's own. The ones of optparse-applicative added a /
+-- to a value that is also the name of a directory, an account named src
+-- for instance: bash's registered the program with -o filenames, and
+-- fish's tested each value. The one of bash also expanded the words typed
+-- as patterns, so that s* became the files of the directory. zsh adds a
+-- / to such a value too, and takes it out when the command runs.
 module Haskoin.Wallet.Parser.Completion
   ( bashScript,
     bashScriptName,
+    fishScript,
+    fishScriptName,
     completionParts,
     completionArgs,
     enrichedRequest,
@@ -22,7 +25,6 @@ where
 import Control.Monad (forM)
 import Data.List (isPrefixOf, sort)
 import qualified System.Directory as D
-import System.Environment (getArgs)
 import Text.Read (readMaybe)
 import UnliftIO.Exception (handleAny)
 
@@ -62,9 +64,45 @@ bashScript program name =
 -- | The name the arguments ask the script of bash to run the program by,
 -- when they ask for the script
 bashScriptName :: [String] -> Maybe String
-bashScriptName ("--bash-completion-script" : name : _) = Just name
-bashScriptName (_ : rest) = bashScriptName rest
-bashScriptName [] = Nothing
+bashScriptName = scriptNameAfter "--bash-completion-script"
+
+{- The script of fish -}
+
+-- | The script that has fish complete the program, printed for
+-- --fish-completion-script. As the one of bash, it runs the program by
+-- the name given at each Tab, with the index of the word to complete and
+-- the words typed, and offers the lines the program prints. fish asks
+-- for a description with each word, as it shows one after a tab.
+fishScript :: String -> String -> String
+fishScript program name =
+  unlines
+    [ "function " <> function,
+      "    set -l words (commandline --tokenize --current-process)",
+      "    # The words before the cursor, counted: the index of the one to complete",
+      "    set -l index (count (commandline --tokenize --cut-at-cursor --current-process))",
+      "    set -l request --bash-completion-enriched --bash-completion-index $index",
+      "    for word in $words",
+      "        set -a request --bash-completion-word $word",
+      "    end",
+      "    " <> name <> " $request",
+      "end",
+      "",
+      "complete --no-files --command " <> program <> " --arguments '(" <> function <> ")'"
+    ]
+  where
+    function = "_" <> program
+
+-- | The name the arguments ask the script of fish to run the program by,
+-- when they ask for the script
+fishScriptName :: [String] -> Maybe String
+fishScriptName = scriptNameAfter "--fish-completion-script"
+
+-- | The name after the option that asks for a script, when the arguments
+-- hold it
+scriptNameAfter :: String -> [String] -> Maybe String
+scriptNameAfter option (word : name : _) | word == option = Just name
+scriptNameAfter option (_ : rest) = scriptNameAfter option rest
+scriptNameAfter _ [] = Nothing
 
 {- The words of a request -}
 
@@ -149,17 +187,15 @@ escapedForBash = concatMap escape
 -- | The files and directories whose path starts with the word typed, for
 -- a FILENAME argument, as the shell lists them for a command of its own.
 -- A hidden file is offered only to a word that starts with a dot, as the
--- shell does. For bash, a directory ends with a /, and the script of hw
--- puts no space after it, so that the path goes on into it. zsh and fish
--- mark a directory themselves.
+-- shell does. A directory ends with a /. The script of bash puts no space
+-- after it, so that the path goes on into it.
 completeFile :: String -> IO [String]
 completeFile typed = handleAny (const (return [])) $ do
-  enriched <- enrichedRequest <$> getArgs
   entries <- D.listDirectory (if null dir then "." else dir)
   let names = [name | name <- entries, start `isPrefixOf` name, hidden start || not (hidden name)]
   forM (sort names) $ \name -> do
     isDirectory <- D.doesDirectoryExist (dir <> name)
-    return $ dir <> name <> (if isDirectory && not enriched then "/" else "")
+    return $ dir <> name <> (if isDirectory then "/" else "")
   where
     -- The word up to its last slash, and the start of a name after it
     (dir, start) = let (revStart, revDir) = break (== '/') (reverse typed) in (reverse revDir, reverse revStart)
