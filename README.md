@@ -455,7 +455,8 @@ hw label TXID ""                            # removes the label
 ```
 
 **`hw reviewtx FILE`** shows the transaction in a file and the account it
-belongs to, without changing the wallet.
+belongs to, without changing the wallet. The labels it shows are those the
+file carries, so an offline computer sees the labels of the online wallet.
 
 ```console
 hw reviewtx unsigned.json
@@ -463,7 +464,10 @@ hw reviewtx unsigned.json
 
 **`hw exporttx HASH FILE`** writes a pending transaction to a file.
 **`hw importtx FILE`** adds a transaction file to the pending transactions, or
-replaces the pending one with its signed version.
+replaces the pending one with its signed version. A transaction file carries
+the label of the transaction and the labels of the account's addresses in it,
+as the wallet has them when it writes the file. `importtx` keeps the labels of
+the wallet.
 
 ```console
 hw exporttx NOSIGHASH unsigned.json

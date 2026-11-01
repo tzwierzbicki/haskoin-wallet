@@ -55,6 +55,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     paidToOthers,
     paidToWallet,
     spentFromWallet,
+    addressLabelsOf,
     spendsAndPays,
     readTxFile,
     -- * Payments and chains
@@ -332,6 +333,13 @@ paidToWallet = fmap myOutputsValue . summaryMyOutputs . txInfoSummary
 -- | What a transaction spends from the wallet, by address
 spentFromWallet :: TxInfo -> Map.Map Address Natural
 spentFromWallet = fmap myInputsValue . summaryMyInputs . txInfoSummary
+
+-- | The labels of the wallet's addresses in a transaction, those it spends
+-- from and those it pays, by address
+addressLabelsOf :: TxInfo -> Map.Map Address Text
+addressLabelsOf info = Map.union (myInputsLabel <$> summaryMyInputs summary) (myOutputsLabel <$> summaryMyOutputs summary)
+  where
+    summary = txInfoSummary info
 
 -- | What a transaction spends and pays: its outpoints, and its outputs by
 -- amount, with their addresses

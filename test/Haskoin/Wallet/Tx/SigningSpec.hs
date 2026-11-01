@@ -64,12 +64,12 @@ fileSpec ctx =
   describe "A transaction file" $ do
     let tsd = simpleTransaction ctx
     it "names the network of the transaction, which an earlier hw leaves aside" $ do
-      let written = Json.encode (TxFile (Just btc) tsd)
+      let written = Json.encode (TxFile (Just btc) tsd noAddressLabels)
       (Json.decode written >>= parseMaybe (.: "network")) `shouldBe` Just ("btc" :: Text)
       Json.eitherDecode written `shouldBe` Right tsd
 
     it "of an earlier hw names no network" $
-      Json.eitherDecode (Json.encode tsd) `shouldBe` Right (TxFile Nothing tsd)
+      Json.eitherDecode (Json.encode tsd) `shouldBe` Right (TxFile Nothing tsd noAddressLabels)
 
     -- As an earlier hw wrote it, for any transaction but a replacement
     it "names no transaction replaced, but for a replacement" $
@@ -98,6 +98,44 @@ fileSpec ctx =
     it "refuses a network hw does not know" $ do
       let written = Json.encode (Json.object (("network" .= ("doge" :: Text)) : txSignDataPairs tsd))
       (Json.eitherDecode written :: Either String TxFile) `shouldSatisfy` either ("Unknown network doge" `isInfixOf`) (const False)
+
+    -- As an earlier hw wrote it, for a transaction whose addresses have no
+    -- label
+    it "labels no address, but for the account's addresses that have a label" $
+      (Json.decode (Json.encode (TxFile (Just btc) tsd noAddressLabels)) >>= parseMaybe (.: "addresslabels")) `shouldBe` (Nothing :: Maybe (Map.Map Text Text))
+
+    -- The coin spent is at the account's first receiving address
+    it "carries the labels of the account's addresses by address, and reads back" $ do
+      let labelled = TxFile (Just btc) tsd (Map.fromList [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Salary")])
+          written = Json.encode labelled
+      (Json.decode written >>= parseMaybe (.: "addresslabels")) `shouldBe` Just (Map.fromList [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Salary")] :: Map.Map Text Text)
+      Json.eitherDecode written `shouldBe` Right labelled
+
+    it "of an earlier hw labels no address" $
+      (txFileAddressLabels <$> Json.eitherDecode (Json.encode (Json.object (txSignDataPairs tsd)))) `shouldBe` Right Map.empty
+
+    -- The coin spent is at the first receiving address, and the change goes
+    -- to the first change address, which the file does not label
+    it "is read as its account sees it, with the labels it carries" $ do
+      let labelled = TxFile (Just btc) tsd (Map.fromList [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Salary")])
+      info <- expectRight $ parseTxFile btc ctx (testAccountPub ctx) labelled
+      fmap (.myInputsLabel) info.txInfoSummary.summaryMyInputs `shouldBe` Map.fromList [(externalAddr 0, "Salary")]
+      fmap (.myOutputsLabel) info.txInfoSummary.summaryMyOutputs `shouldBe` Map.fromList [(internalAddr 0, "")]
+
+    -- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU is the other wallet's address the
+    -- transaction pays. 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg is the account's
+    -- second receiving address, which the transaction does not touch.
+    it "is read without the labels of addresses the account does not have in the transaction" $ do
+      let labelled = TxFile (Just btc) tsd (Map.fromList [("1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "Not mine"), ("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "Elsewhere")])
+      info <- expectRight $ parseTxFile btc ctx (testAccountPub ctx) labelled
+      fmap (.myInputsLabel) info.txInfoSummary.summaryMyInputs `shouldBe` Map.fromList [(externalAddr 0, "")]
+      fmap (.myOutputsLabel) info.txInfoSummary.summaryMyOutputs `shouldBe` Map.fromList [(internalAddr 0, "")]
+
+    -- The change address has no label, so the file leaves it out
+    it "is written with the labels of the account's addresses that have one" $ do
+      info <- expectRight $ parseTxSignData btc ctx (testAccountPub ctx) tsd
+      let salaried = info {txInfoSummary = info.txInfoSummary {summaryMyInputs = Map.map (\i -> i {myInputsLabel = "Salary"}) info.txInfoSummary.summaryMyInputs}}
+      txFileAddressLabels (labelledTxFile btc salaried tsd) `shouldBe` Map.fromList [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Salary")]
 
 {- Analysis -}
 

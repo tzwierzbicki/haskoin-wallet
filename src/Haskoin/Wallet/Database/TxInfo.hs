@@ -597,12 +597,19 @@ txidsStarting accId digits atMost = do
 -- | The transaction with the labels of the account's addresses filled in,
 -- as the database has them now
 fillTxInfoLabels :: (MonadUnliftIO m) => Network -> TxInfo -> DB m TxInfo
-fillTxInfoLabels net info = do
-  outputs <- Map.traverseWithKey (\addr o -> labelOutput o <$> addressLabel net addr) (summaryMyOutputs summary)
-  inputs <- Map.traverseWithKey (\addr i -> labelInput i <$> addressLabel net addr) (summaryMyInputs summary)
-  return info {txInfoSummary = summary {summaryMyOutputs = outputs, summaryMyInputs = inputs}}
+fillTxInfoLabels net = relabelAddresses (addressLabel net)
+
+-- | The transaction with the labels of the account's addresses, those it
+-- spends from and those it pays, as the function gives them: from the
+-- database, or from the file that carried the transaction
+relabelAddresses :: (Applicative f) => (Address -> f Text) -> TxInfo -> f TxInfo
+relabelAddresses labelOf info =
+  rebuild
+    <$> Map.traverseWithKey (\addr o -> labelOutput o <$> labelOf addr) (summaryMyOutputs summary)
+    <*> Map.traverseWithKey (\addr i -> labelInput i <$> labelOf addr) (summaryMyInputs summary)
   where
     summary = txInfoSummary info
+    rebuild outputs inputs = info {txInfoSummary = summary {summaryMyOutputs = outputs, summaryMyInputs = inputs}}
     labelOutput o label = o {myOutputsLabel = label}
     labelInput i label = i {myInputsLabel = label}
 

@@ -1467,6 +1467,10 @@ account. It changes nothing in the wallet. The file comes from preparetx
 before you sign it, or before you send it. A transaction that involves no
 account, such as a sweep to addresses outside the wallet, is shown on the
 network its file names.
+
+The labels reviewtx shows, the transaction's and those of its addresses, are
+the ones the file carries, as the wallet that wrote it had them. They are not
+those of this wallet, which an offline computer does not have.
 |],
       args =
         CommandReviewTx
@@ -1494,12 +1498,16 @@ importExportTxDetails =
   [r|
 exporttx writes a pending transaction to a file, signed or not, to carry it to
 an offline computer. Name it by the hash pendingtxs shows: its nosigHash, or
-its txid once it is signed. The file names the network of the transaction.
+its txid once it is signed. The file names the network of the transaction. It
+carries the label of the transaction, and the labels of the account's
+addresses in it as the wallet has them when it writes the file, for the
+offline computer to show.
 
 importtx adds the transaction of a file to the pending transactions of its
 account, and locks the coins it spends. When the wallet holds it already, the
 file takes its place, as when an offline computer returns it signed. The
-signatures are checked first.
+signatures are checked first. The wallet keeps its own labels, and shows the
+transaction with them.
 
 sendtx --input sends a signed file without importtx.
 |]
@@ -1586,7 +1594,8 @@ its place in the wallet, shown by its txid. Or give a transaction file with
 --input, on an offline computer for example. The signed transaction then goes
 to the --output file. Without --output, hw offers to replace the --input file,
 since the unsigned file is of no use once signed. It asks this before the
-mnemonic.
+mnemonic. A transaction of a file is shown with the labels the file carries,
+which go on to the signed file.
 
 Signing sends nothing. Check the transaction with reviewtx or pendingtxs.
 Then send it with sendtx, or delete it with deletetx.
@@ -2159,7 +2168,8 @@ with --key-file. Or type them on the terminal, where they are not shown, with
 Give a pending sweep by its NOSIGHASH. The signed sweep then takes its place
 in the wallet, shown by its txid. Or give a sweep file with --input. The
 signed sweep then goes to the --output file. Without --output, hw offers to
-replace the --input file. It asks this before the keys.
+replace the --input file. It asks this before the keys. A sweep of a file is
+shown with the labels the file carries, which go on to the signed file.
 
 A sweep that pays no account of this wallet needs no account here either. It
 is signed on the network its file names. A file from an earlier hw names

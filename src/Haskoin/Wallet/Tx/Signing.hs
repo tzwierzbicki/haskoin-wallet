@@ -21,9 +21,16 @@
 -- 4. verifies every input of the signed transaction against the output
 --    script of its coin;
 -- 5. reports the signed transaction with the 'TxInfo' of the signed bytes.
+--
+-- A transaction file carries the labels of the account's addresses in the
+-- transaction. 'parseTxFile' reads a file with them, 'labelAddressesFromFile'
+-- puts them on a 'TxInfo', and 'labelledTxFile' writes them from one.
 module Haskoin.Wallet.Tx.Signing
   ( parseTxSignData,
     parseOutsideTxSignData,
+    parseTxFile,
+    labelAddressesFromFile,
+    labelledTxFile,
     signWalletTx,
     verifySignedTx,
     SpentCoin (..),
@@ -34,11 +41,13 @@ where
 
 import Control.Monad (foldM, forM_, mfilter, unless, when)
 import qualified Data.ByteString as BS
+import Data.Functor.Identity (runIdentity)
 import Data.List (nub)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import qualified Data.Serialize as S
+import qualified Data.Text as Text
 import Data.Word (Word64)
 import Haskoin
 import Haskoin.Wallet.Database.TxInfo
@@ -48,6 +57,7 @@ import Haskoin.Wallet.Database.TxInfo
     TxInfo (..),
     TxStatus (..),
     TxSummary (..),
+    relabelAddresses,
     txType,
   )
 import Haskoin.Wallet.Tx.SignData
@@ -83,6 +93,35 @@ parseAs net ctx accountPubM tsd = do
   -- What only the database knows, the wallet's own state, is filled in
   -- for a transaction it holds
   return $ TxInfo summary (Pending (PendingStatus (nosigHash tx) txid False False Nothing tsd.txSignDataReplaces)) tsd.txSignDataLabel
+
+{- Files -}
+
+-- | The transaction of a file as the account sees it, with the labels of
+-- its addresses as the file carries them, not as this wallet has them: an
+-- offline computer has none of its own
+parseTxFile :: Network -> Ctx -> XPubKey -> TxFile -> Either String TxInfo
+parseTxFile net ctx accountPub file =
+  labelAddressesFromFile net (txFileAddressLabels file) <$> parseTxSignData net ctx accountPub (txFileData file)
+
+-- | The transaction with the labels of the account's addresses as a file
+-- carries them. An address the file does not label has none, and a label
+-- at an address the account does not have in the transaction is left
+-- aside.
+labelAddressesFromFile :: Network -> AddressLabels -> TxInfo -> TxInfo
+labelAddressesFromFile net labels = runIdentity . relabelAddresses (pure . labelOf)
+  where
+    labelOf addr = fromMaybe "" (addrToText net addr >>= (`Map.lookup` labels))
+
+-- | The file of a transaction of the account, with the labels of its
+-- addresses as the summary has them, those that have one
+labelledTxFile :: Network -> TxInfo -> TxSignData -> TxFile
+labelledTxFile net info tsd = TxFile (Just net) tsd (Map.fromList labelled)
+  where
+    summary = txInfoSummary info
+    mine =
+      [(addr, i.myInputsLabel) | (addr, i) <- Map.toList summary.summaryMyInputs]
+        <> [(addr, o.myOutputsLabel) | (addr, o) <- Map.toList summary.summaryMyOutputs]
+    labelled = [(written, label) | (addr, label) <- mine, not (Text.null label), Just written <- [addrToText net addr]]
 
 -- | Check that every input of a signed transaction carries a valid signature
 -- for the coin it spends
