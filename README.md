@@ -97,8 +97,10 @@ nothing in it, and it does not wait for another `hw` command, such as a long
 
 bash splits a word at a colon. So a Bitcoin Cash address is offered without
 its prefix, such as `bitcoincash:`, and `hw` reads it either way. A coin of a
-transaction that paid you several coins completes up to its colon in bash.
-Type the index of the coin after it.
+transaction that paid you several coins completes up to its colon in bash,
+which bash writes `\:`. Press Tab again to list the coins, or type the index.
+The backslash goes when the command runs, as it does in a name with a space,
+`my\ savings`.
 
 ### Configuration
 

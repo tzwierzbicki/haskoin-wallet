@@ -66,7 +66,7 @@ runProgram program = do
             Just c | typedAlone c args -> leave stderr code (const (commandHelp program c))
             _ -> leave stderr code (const (usageError parserHelp program command))
       where
-        (parsedArgs, valueOption) = splitAttachedValue program args
+        (parsedArgs, valueOption) = completionRequest program args
         -- Each word offered for a value typed against its short option
         -- replaces the option and the value both
         withValueOption offered
@@ -119,36 +119,63 @@ requestOf valueOptions args
 isCompletion :: String -> Bool
 isCompletion arg = "--bash-completion-" `isPrefixOf` arg || "-completion-script" `isSuffixOf` arg
 
--- | The arguments of a shell completion, with a value typed against its
--- short option made a word of its own: -amai becomes -a and mai.
--- optparse-applicative completes a value only as a word of its own. Also
--- the option, to put back before each word offered: -a, or nothing when no
--- value was split. The arguments of anything else are left as they are.
-splitAttachedValue :: Program cmd opts -> [String] -> ([String], String)
-splitAttachedValue program args = fromMaybe (args, "") $ do
+-- | The arguments optparse-applicative gets for a shell completion, with
+-- the words as 'completionParts' reads them, and the short option to put
+-- back before each word it offers. The arguments of anything else are left
+-- as they are.
+completionRequest :: Program cmd opts -> [String] -> ([String], String)
+completionRequest program args = fromMaybe (args, "") $ do
   index <- readMaybe =<< indexM
+  let (words', index', valueOption) = splitAttachedValue program index typed
+  return (others <> completionArgs index' words', valueOption)
+  where
+    (indexM, typed, others) = completionParts args
+
+-- | The words typed, with a value typed against its short option made a
+-- word of its own: -amai becomes -a and mai. optparse-applicative
+-- completes a value only as a word of its own. Also the index of the word
+-- to complete among them, and the option to put back before each word
+-- offered: -a, or nothing when no value was split.
+splitAttachedValue :: Program cmd opts -> Int -> [String] -> ([String], Int, String)
+splitAttachedValue program index typed = fromMaybe (typed, index, "") $ do
   '-' : letter : typedValue@(_ : _) <- listToMaybe (drop index typed)
   -- The command named before the word, without the name of the program
   let command = commandWord (programValueOptions program) (drop 1 (take index typed)) >>= commandNamed program
   guard (letter `elem` valueLetters program command)
   let split = take index typed <> [['-', letter], typedValue] <> drop (index + 1) typed
-  return (others <> completionArgs (index + 1) split, ['-', letter])
-  where
-    (indexM, typed, others) = completionParts args
+  return (split, index + 1, ['-', letter])
 
 -- | The arguments of a shell completion, apart: the index of the word to
--- complete, the words typed, in order, and the other arguments
+-- complete, the words typed, in order, and the other arguments.
+--
+-- The script of bash passes each word as typed, with the backslashes that
+-- escape its characters: my\ savings, or TXID\: once bash has completed a
+-- coin up to its colon. They are taken out, as bash takes them out of the
+-- command it runs. Only the words of bash are changed. The scripts of zsh
+-- and fish ask for descriptions with --bash-completion-enriched, and hw
+-- was not tried with them.
 completionParts :: [String] -> (Maybe String, [String], [String])
-completionParts ("--bash-completion-index" : i : rest) = (Just i, ws, os)
+completionParts args = (indexM, if fromBash then map unescaped typed else typed, others)
   where
-    (_, ws, os) = completionParts rest
-completionParts ("--bash-completion-word" : w : rest) = (i, w : ws, os)
-  where
-    (i, ws, os) = completionParts rest
-completionParts (a : rest) = (i, ws, a : os)
-  where
-    (i, ws, os) = completionParts rest
-completionParts [] = (Nothing, [], [])
+    (indexM, typed, others) = partsOf args
+    fromBash = "--bash-completion-enriched" `notElem` others
+    partsOf ("--bash-completion-index" : i : rest) = (Just i, ws, os)
+      where
+        (_, ws, os) = partsOf rest
+    partsOf ("--bash-completion-word" : w : rest) = (i, w : ws, os)
+      where
+        (i, ws, os) = partsOf rest
+    partsOf (a : rest) = (i, ws, a : os)
+      where
+        (i, ws, os) = partsOf rest
+    partsOf [] = (Nothing, [], [])
+
+-- | A word as bash typed it, without the backslashes that escape its
+-- characters: my\ savings is my savings
+unescaped :: String -> String
+unescaped ('\\' : c : rest) = c : unescaped rest
+unescaped (c : rest) = c : unescaped rest
+unescaped [] = []
 
 -- | The arguments that ask to complete the word of the index among the
 -- words typed

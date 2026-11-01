@@ -1008,6 +1008,13 @@ failureSpec ctx = do
         run <- hw home (tabAfter ["txs", "-am"]) []
         runOut run `shouldBe` "-amain\n"
 
+    -- bash completes my savings up to its space, which it escapes
+    it "offers a name with a space after the space bash escaped" $
+      withHome $ \home -> do
+        _ <- answer home ["createacc", "my savings"] seedTwice
+        run <- hw home (tabAfter ["txs", "--account", "my\\ s"]) []
+        runOut run `shouldBe` "my savings\n"
+
     -- hw runs without a locale here. The name is passed to the database
     -- rather than typed, as the arguments of the tests may not take an
     -- accent.
@@ -1104,6 +1111,22 @@ failureSpec ctx = do
         _ <- answer home ["lockcoin", paidCoin] []
         run <- hw home (tabAfter ["preparetx", "--coin", take 4 paidCoin]) []
         runOut run `shouldBe` ""
+
+    -- bash completes the two coins up to their colon, which it escapes
+    it "offers the coins of a transaction after the colon bash escaped" $ do
+      let twoCoins = fundingTx ctx 1 [(externalAddr 0, 50000), (externalAddr 0, 20000)]
+          txid = Text.unpack (txHashToHex (txHash twoCoins))
+      withChain ctx (Chain 800002 [(twoCoins, Just 800000)]) $ \home _ -> do
+        synced home
+        run <- hw home (tabAfter ["lockcoin", txid <> "\\:"]) []
+        runOut run `shouldBe` Text.pack (txid <> ":0\n" <> txid <> ":1\n")
+
+    it "reads an account name bash escaped among the words typed" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["renameacc", "main", "my savings"] []
+        run <- hw home (tabAfter ["preparetx", "--account", "my\\ savings", "--coin", take 4 paidCoin]) []
+        runOut run `shouldBe` Text.pack paidCoin <> "\n"
 
     -- The account second has no coins
     it "offers only the coins of the account named with --account after --coin" $
