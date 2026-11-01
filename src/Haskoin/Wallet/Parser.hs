@@ -376,6 +376,13 @@ The options --unit, --json and --no-pager go before or after the command.
 The settings, such as the server, the default network, the address gap and
 the pager, are in ~/.hw/config.json.
 
+The Tab key completes the commands and options once the shell has a script
+for it, which hw writes. In bash, add this line to ~/.bashrc:
+
+  source <(hw --bash-completion-script hw)
+
+The README explains it for zsh and fish.
+
 Type hw COMMAND --help for the help of a command.
 |],
       globals = GlobalOptions <$> unitOption <*> jsonOption <*> noPagerOption,

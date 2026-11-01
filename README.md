@@ -33,6 +33,49 @@ stack install
 `stack install` copies `hw` to `~/.local/bin`. Put that directory on your
 `PATH`, then check the install with `hw --help`.
 
+### Completion
+
+The Tab key can complete what you type after `hw`. It completes the commands,
+the options, and the values `hw` knows in advance, such as units, networks and
+file names. Your shell needs a small script for it, which `hw` writes. Set it
+up once for your shell, then open a new terminal.
+
+**bash.** Add this line to `~/.bashrc`:
+
+```bash
+source <(hw --bash-completion-script hw)
+```
+
+**zsh.** Write the script to a directory of your own:
+
+```console
+mkdir -p ~/.zfunc
+hw --zsh-completion-script hw > ~/.zfunc/_hw
+```
+
+Then add this directory to `fpath` in `~/.zshrc`, before `compinit` runs. With
+Oh My Zsh, that is before the line that loads `oh-my-zsh.sh`. Without such a
+framework, run `compinit` yourself:
+
+```zsh
+fpath=(~/.zfunc $fpath)
+autoload -Uz compinit && compinit
+```
+
+**fish.** Write the script where fish looks for completions:
+
+```console
+mkdir -p ~/.config/fish/completions
+hw --fish-completion-script hw > ~/.config/fish/completions/hw.fish
+```
+
+To check it, type `hw prepare` and press Tab. bash needs Tab twice. The shell
+lists `preparesendall`, `preparesweep` and `preparetx`.
+
+The script asks `hw` what to complete at each Tab. A newer `hw` completes its
+new commands and options with the same script. The script finds `hw` by its
+name, so `hw` must be on your `PATH`.
+
 ### Configuration
 
 On its first command, `hw` creates the directory `~/.hw`. It holds the
