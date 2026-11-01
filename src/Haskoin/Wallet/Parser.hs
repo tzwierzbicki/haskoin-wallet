@@ -21,7 +21,18 @@ import Data.Word (Word32)
 import Haskoin
 import Haskoin.Wallet.Amounts (AmountUnit (..), readUnit)
 import Haskoin.Wallet.CoinSelection (CoinSelection (..), FeePayer (..))
-import Haskoin.Wallet.Completion (accountNames, hashesToSign, idsToSend, pendingHashes)
+import Haskoin.Wallet.Completion
+  ( accountNames,
+    addressesToSpendFrom,
+    coinsToLock,
+    coinsToSpend,
+    coinsToUnlock,
+    hashesToSign,
+    idsToSend,
+    pendingHashes,
+    receivingAddresses,
+    walletAddresses,
+  )
 import Haskoin.Wallet.FeeRates (FeeRateChoice, readFeeRateChoice)
 import Haskoin.Wallet.Keys (KeySource (..))
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
@@ -377,9 +388,10 @@ The options --unit, --json and --no-pager go before or after the command.
 The settings, such as the server, the default network, the address gap and
 the pager, are in ~/.hw/config.json.
 
-The Tab key completes the commands, the options, the account names and the
-hashes of the pending transactions once the shell has a script for it, which
-hw writes. In bash, add this line to ~/.bashrc:
+The Tab key completes the commands, the options, and what the wallet holds:
+account names, the hashes of pending transactions, coins and addresses. The
+shell needs a script for it, which hw writes. In bash, add this line to
+~/.bashrc:
 
   source <(hw --bash-completion-script hw)
 
@@ -1007,6 +1019,7 @@ labelledAddressArg :: Args Text
 labelledAddressArg =
   strArgument $
     metavar "ADDRESS"
+      <> completer (listIOCompleter receivingAddresses)
       <> help "A receiving address of the wallet, as `addresses` lists it. Change addresses take no label."
 
 {- txs -}
@@ -1231,6 +1244,7 @@ spendFromOption =
   strOption $
     long "spend-from"
       <> metavar "ADDRESS"
+      <> completer (listIOCompleter addressesToSpendFrom)
       <> help "Coin control: spend the coins at this address of the account. Repeat for several addresses."
 
 -- | Whether the strategy selects among the coins of coin control, instead
@@ -1243,19 +1257,25 @@ selectOption =
 
 -- | A coin to spend, as coins lists it
 coinOption :: Args OutPoint
-coinOption = coinOptionWith "Coin control: spend this coin, as `coins` lists it. Repeat for several coins."
+coinOption =
+  coinOptionWith
+    "Coin control: spend this coin, as `coins` lists it. Repeat for several coins."
+    (completer (listIOCompleter coinsToSpend))
 
--- | A coin to sweep, by its outpoint
+-- | A coin to sweep, by its outpoint. The wallet does not hold it, and
+-- has none to offer.
 sweepCoinOption :: Args OutPoint
-sweepCoinOption = coinOptionWith "A coin to sweep: the id of its transaction, a colon, and its index among the outputs. Repeat for several coins."
+sweepCoinOption = coinOptionWith "A coin to sweep: the id of its transaction, a colon, and its index among the outputs. Repeat for several coins." mempty
 
--- | The --coin option, with the help of the command about it
-coinOptionWith :: String -> Args OutPoint
-coinOptionWith what =
+-- | The --coin option, with the help of the command about it and how the
+-- shell completes it
+coinOptionWith :: String -> Mod OptionFields OutPoint -> Args OutPoint
+coinOptionWith what completion =
   option coinReader $
     short 'c'
       <> long "coin"
       <> metavar "TXID:INDEX"
+      <> completion
       <> help what
 
 -- | The fee rate, when given: a number of satoshis per byte, or a level
@@ -1586,7 +1606,7 @@ locked already, and deletetx frees it. The lock stays while the coin confirms,
 and goes with the coin once it is spent elsewhere. `coins` --locked lists the
 locked coins.
 |],
-      args = CommandLockCoin <$> coinArg
+      args = CommandLockCoin <$> coinArg coinsToLock
     }
 
 unlockCoinCommand :: CommandSpec Command
@@ -1600,14 +1620,16 @@ unlockCoinCommand =
 Only a coin locked with lockcoin can be unlocked. A coin that a pending
 transaction spends is freed by deleting that transaction with deletetx.
 |],
-      args = CommandUnlockCoin <$> coinArg
+      args = CommandUnlockCoin <$> coinArg coinsToUnlock
     }
 
--- | A coin of the wallet, as coins lists it
-coinArg :: Args OutPoint
-coinArg =
+-- | A coin of the wallet, as coins lists it, with the coins the shell
+-- offers for it
+coinArg :: IO [String] -> Args OutPoint
+coinArg offered =
   argument coinReader $
     metavar "TXID:INDEX"
+      <> completer (listIOCompleter offered)
       <> help "The coin, as `coins` lists it: the id of its transaction, a colon, and its index among the outputs"
 
 -- | A coin as coins lists it, and as a block explorer often writes it: the
@@ -1891,6 +1913,7 @@ signAddressArg :: Args Text
 signAddressArg =
   strArgument $
     metavar "ADDRESS"
+      <> completer (listIOCompleter walletAddresses)
       <> help "The address whose key signs. It must be an address of this wallet."
 
 signMsgArg :: Args Text

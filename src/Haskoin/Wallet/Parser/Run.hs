@@ -12,6 +12,7 @@ module Haskoin.Wallet.Parser.Run
     requestOf,
     commandWord,
     commandNamed,
+    completionParts,
   )
 where
 

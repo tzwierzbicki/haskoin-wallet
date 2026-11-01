@@ -36,12 +36,24 @@ stack install
 ### Completion
 
 The Tab key can complete what you type after `hw`. It completes the commands,
-the options, the names of your accounts, and the values `hw` knows in advance,
-such as units, networks and file names. It also completes the hashes of your
-pending transactions. `signtx` offers those to sign, `sendtx` those signed and
-not sent yet, and `exporttx` and `deletetx` all of them. Your shell needs a
-small script for it, which `hw` writes. Set it up once for your shell, then
-open a new terminal.
+the options, and the values `hw` knows in advance, such as units, networks and
+file names. It also completes what your wallet holds, and each command is
+offered what it takes:
+
+- The names of your accounts.
+- The hashes of your pending transactions. `signtx` offers those to sign,
+  `sendtx` those signed and not sent yet, and `exporttx` and `deletetx` all of
+  them.
+- Your coins. `lockcoin` offers the free ones, `unlockcoin` those you locked,
+  and `--coin` those you can spend now.
+- Your addresses. `label` offers the receiving addresses, `signmsg` all of
+  them, and `--spend-from` those that hold coins you can spend now.
+
+After `--account`, `--coin` and `--spend-from` offer the coins and addresses of
+that account only.
+
+Your shell needs a small script for it, which `hw` writes. Set it up once for
+your shell, then open a new terminal.
 
 **bash.** Add this line to `~/.bashrc`:
 
@@ -79,9 +91,14 @@ The script asks `hw` what to complete at each Tab. A newer `hw` completes its
 new commands and options with the same script. The script finds `hw` by its
 name, so `hw` must be on your `PATH`.
 
-To complete an account name or a hash, `hw` reads your database. It changes
+To complete what your wallet holds, `hw` reads your database. It changes
 nothing in it, and it does not wait for another `hw` command, such as a long
 `sync`.
+
+bash splits a word at a colon. So a Bitcoin Cash address is offered without
+its prefix, such as `bitcoincash:`, and `hw` reads it either way. A coin of a
+transaction that paid you several coins completes up to its colon in bash.
+Type the index of the coin after it.
 
 ### Configuration
 

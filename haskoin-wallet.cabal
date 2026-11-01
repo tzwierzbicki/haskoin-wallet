@@ -217,6 +217,7 @@ test-suite spec
       Haskoin.Wallet.BestBlockSpec
       Haskoin.Wallet.CoinSelectionSpec
       Haskoin.Wallet.CoinSpec
+      Haskoin.Wallet.CompletionSpec
       Haskoin.Wallet.ConfigSpec
       Haskoin.Wallet.DatabaseLockSpec
       Haskoin.Wallet.DatabaseSpec

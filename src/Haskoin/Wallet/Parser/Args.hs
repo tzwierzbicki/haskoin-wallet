@@ -24,6 +24,7 @@ module Haskoin.Wallet.Parser.Args
 
     -- * Building an option, a flag or an argument
     Mod,
+    OptionFields,
     option,
     strOption,
     switch,
@@ -60,7 +61,7 @@ where
 import Control.Applicative (Alternative (..))
 import Data.Maybe (isJust)
 import Data.String (IsString)
-import Options.Applicative (ReadM, eitherReader, listIOCompleter, maybeReader, str)
+import Options.Applicative (OptionFields, ReadM, eitherReader, listIOCompleter, maybeReader, str)
 import qualified Options.Applicative as O
 
 {- The options of a command -}

@@ -1063,6 +1063,104 @@ failureSpec ctx = do
         run <- hw home (tabAfter ["exporttx", take 4 txid]) []
         runOut run `shouldBe` Text.pack txid <> "\n"
 
+    -- The coin of the paid chain, as coins lists it
+    let paidCoin = Text.unpack (txHashToHex (txHash (payment ctx))) <> ":0"
+
+    it "offers the coins free to lock after lockcoin" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home (tabAfter ["lockcoin", take 4 paidCoin]) []
+        runOut run `shouldBe` Text.pack paidCoin <> "\n"
+
+    it "does not offer a coin the user locked after lockcoin" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["lockcoin", paidCoin] []
+        run <- hw home (tabAfter ["lockcoin", take 4 paidCoin]) []
+        runOut run `shouldBe` ""
+
+    it "offers the coins the user locked after unlockcoin" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["lockcoin", paidCoin] []
+        run <- hw home (tabAfter ["unlockcoin", take 4 paidCoin]) []
+        runOut run `shouldBe` Text.pack paidCoin <> "\n"
+
+    it "does not offer a free coin after unlockcoin" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home (tabAfter ["unlockcoin", take 4 paidCoin]) []
+        runOut run `shouldBe` ""
+
+    it "offers the coins that can be spent now after --coin" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home (tabAfter ["preparetx", "--coin", take 4 paidCoin]) []
+        runOut run `shouldBe` Text.pack paidCoin <> "\n"
+
+    it "does not offer a locked coin after --coin" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["lockcoin", paidCoin] []
+        run <- hw home (tabAfter ["preparetx", "--coin", take 4 paidCoin]) []
+        runOut run `shouldBe` ""
+
+    -- The account second has no coins
+    it "offers only the coins of the account named with --account after --coin" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["createacc", "second"] seedTwice
+        run <- hw home (tabAfter ["preparetx", "--account", "second", "--coin", take 4 paidCoin]) []
+        runOut run `shouldBe` ""
+
+    it "offers the receiving addresses after label" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        run <- hw home (tabAfter ["label", "1KEn"]) []
+        runOut run `shouldBe` "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\n"
+
+    -- The payment of preparetx sends its change to the first change
+    -- address, 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn
+    it "does not offer a change address after label" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        run <- hw home (tabAfter ["label", "17Ki"]) []
+        runOut run `shouldBe` ""
+
+    it "offers the change addresses too after signmsg" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        run <- hw home (tabAfter ["signmsg", "17Ki"]) []
+        runOut run `shouldBe` "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn\n"
+
+    -- The paid chain pays the first receiving address
+    it "offers the addresses that hold coins that can be spent now after --spend-from" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home (tabAfter ["preparetx", "--spend-from", "1KEn"]) []
+        runOut run `shouldBe` "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\n"
+
+    -- The second receiving address, 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg, is
+    -- given out and paid nothing
+    it "does not offer an address without coins that can be spent now after --spend-from" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["receive"] []
+        run <- hw home (tabAfter ["preparetx", "--spend-from", "1AVj"]) []
+        runOut run `shouldBe` ""
+
+    -- hw stores it as bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u,
+    -- and finds it without the prefix
+    it "offers a Bitcoin Cash address without its prefix, as bash would split the word at the colon" $
+      withHome $ \home -> do
+        _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
+        _ <- answer home ["receive"] []
+        run <- hw home (tabAfter ["label", "q"]) []
+        runOut run `shouldBe` "qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u\n"
+
     -- A command holds the database from its first statement to its last,
     -- as a sync does while it waits on the store
     it "offers the names of the accounts while a command holds the database" $
