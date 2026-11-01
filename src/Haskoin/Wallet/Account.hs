@@ -290,6 +290,10 @@ getAccounts = sortOn (order . snd) . map entityPair <$> P.selectList [] []
   where
     order acc = (isNothing (dBAccountFingerprint acc), dBAccountFingerprint acc, dBAccountNetwork acc, dBAccountIndex acc)
 
+-- | The names of the accounts, in the order of their characters
+getAccountNames :: (MonadUnliftIO m) => DB m [Text]
+getAccountNames = map (dBAccountName . entityVal) <$> P.selectList [] [P.Asc DBAccountName]
+
 -- | Rename an account, to a name that follows the rules and that no account
 -- has. Renaming it to its own name changes nothing.
 renameAccount ::

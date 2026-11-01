@@ -196,3 +196,15 @@ knownKeys =
 -- | The configuration of hw, from ~/.hw, with its warnings
 initConfig :: IO (Either String (Config, [String]))
 initConfig = runExceptT . readConfig =<< hwDataDirectory
+
+-- | The configuration of a data directory as it stands, for a reader that
+-- must change nothing. It is the defaults when there is no file, and
+-- Nothing when the file cannot be read. Unlike 'readConfig', it writes no
+-- file and leaves out the warnings.
+configAsItIs :: FilePath -> IO (Maybe Config)
+configAsItIs dir = do
+  let file = configFile dir
+  exists <- D.doesFileExist file
+  if exists
+    then either (const Nothing) Just . (>>= parseEither parseJSON) <$> readJsonFile file
+    else return (Just def)

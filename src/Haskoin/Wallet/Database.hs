@@ -50,12 +50,13 @@ import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Database.Esqueleto.Legacy as E
 import Database.Persist.SqlBackend.Internal (SqlBackend (..))
-import Database.Persist.Sqlite (extraPragmas, mkSqliteConnectionInfo, withSqliteConnInfo)
+import Database.Persist.Sqlite (SqliteConnectionInfo, extraPragmas, fkEnabled, mkSqliteConnectionInfo, walEnabled, withSqliteConnInfo)
 import Database.Sqlite (Error (..), SqliteException (..))
 import Haskoin
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Schema.KeyBytes
 import Haskoin.Wallet.Schema.V4
+import System.Directory (makeAbsolute)
 import UnliftIO.Exception (catch, throwIO)
 
 {- The connection and its lock -}
@@ -114,6 +115,48 @@ catchDatabaseInUse action = (Right <$> action) `catch` held
       SqliteException ErrorBusy _ _ -> return $ Left databaseInUse
       SqliteException ErrorLocked _ _ -> return $ Left databaseInUse
       _ -> throwIO failure
+
+{- Reading without changing anything -}
+
+-- | Run a read of a database file that exists, for a caller that must
+-- change nothing, such as the completion of the shell. The connection
+-- does not create the file, refuses every write, and runs no migration. It
+-- does not take the lock of the commands. A read runs alongside them, since
+-- every hw database is in WAL mode: persistent sets it as hw opens one.
+runDBReadOnly :: (MonadUnliftIO m) => FilePath -> DB m a -> m a
+runDBReadOnly dbFile action = do
+  uri <- liftIO $ fileUri dbFile
+  runResourceT . runNoLoggingT $
+    withSqliteConnInfo (connection uri) (runSqlConn action)
+  where
+    -- mode=rw opens only a file that exists. The connection could write,
+    -- but query_only refuses it. A read-only connection would leave the
+    -- -wal and -shm files of SQLite behind, which this one removes as it
+    -- closes. persistent is kept from setting the journal mode, which is a
+    -- write, and the foreign keys, which only writes check.
+    connection :: String -> SqliteConnectionInfo
+    connection uri =
+      mkSqliteConnectionInfo (cs (uri <> "?mode=rw"))
+        & walEnabled .~ False
+        & fkEnabled .~ False
+        & extraPragmas .~ ["PRAGMA query_only = ON;", "PRAGMA busy_timeout = " <> cs (show readOnlyBusyTimeout) <> ";"]
+
+-- | How long a read waits while SQLite holds the file alone, in
+-- milliseconds. A writer does not hold it, only a checkpoint or a recovery
+-- for a moment. The wait is short, as the shell waits for the answer.
+readOnlyBusyTimeout :: Int
+readOnlyBusyTimeout = 100
+
+-- | The file as a URI for SQLite, which then reads the options of the
+-- connection after a ?: file:// and the absolute path. The characters a
+-- URI gives a meaning, % ? and #, are written as their codes.
+fileUri :: FilePath -> IO String
+fileUri file = ("file://" <>) . concatMap escape <$> makeAbsolute file
+  where
+    escape '%' = "%25"
+    escape '?' = "%3f"
+    escape '#' = "%23"
+    escape c = [c]
 
 {- The tables -}
 

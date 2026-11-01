@@ -26,6 +26,7 @@ import qualified Data.ByteString as BS
 import Data.Word (Word64)
 import qualified Database.Persist as P
 import Haskoin
+import Haskoin.Wallet.Account (renameAccount)
 import Haskoin.Wallet.Address (CoinBalance (..), coinBalanceUnspendable)
 import Haskoin.Wallet.Coin (CoinLock (..), JsonCoin (..), LeftCoin (..), LeftReason (..))
 import Haskoin.Wallet.Response (Response (..))
@@ -40,7 +41,7 @@ import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData (TxFile (..), TxSignData (..), isSigned)
 import Numeric.Natural (Natural)
-import System.Directory (copyFile, doesFileExist)
+import System.Directory (copyFile, doesDirectoryExist, doesFileExist, listDirectory, removeDirectoryRecursive)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import Test.Hspec
@@ -965,29 +966,97 @@ failureSpec ctx = do
         runErr run `shouldSatisfy` Text.isInfixOf "Missing: NEW"
 
   describe "The completion the shell asks for" $ do
-    -- What the bash script of hw runs when Tab is pressed after
-    -- hw txs -atest3 --js: the index of the word to complete, then the
-    -- words typed
     it "offers an option of every command after the command" $
       withHome $ \home -> do
-        run <- hw home ["--bash-completion-index", "3", "--bash-completion-word", "hw", "--bash-completion-word", "txs", "--bash-completion-word", "-atest3", "--bash-completion-word", "--js"] []
+        run <- hw home (tabAfter ["txs", "-atest3", "--js"]) []
         runOut run `shouldBe` "--json\n"
 
     it "offers --help after the command" $
       withHome $ \home -> do
-        run <- hw home ["--bash-completion-index", "2", "--bash-completion-word", "hw", "--bash-completion-word", "txs", "--bash-completion-word", "--he"] []
+        run <- hw home (tabAfter ["txs", "--he"]) []
         runOut run `shouldBe` "--help\n"
 
     it "offers --version right after hw" $
       withHome $ \home -> do
-        run <- hw home ["--bash-completion-index", "1", "--bash-completion-word", "hw", "--bash-completion-word", "--v"] []
+        run <- hw home (tabAfter ["--v"]) []
         runOut run `shouldBe` "--version\n"
 
     -- txs has --verbose
     it "does not offer --version after a command, which refuses it" $
       withHome $ \home -> do
-        run <- hw home ["--bash-completion-index", "2", "--bash-completion-word", "hw", "--bash-completion-word", "txs", "--bash-completion-word", "--v"] []
+        run <- hw home (tabAfter ["txs", "--v"]) []
         runOut run `shouldBe` "--verbose\n"
+
+    it "offers the names of the accounts that start with the word typed after --account" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "second"] seedTwice
+        run <- hw home (tabAfter ["txs", "--account", "s"]) []
+        runOut run `shouldBe` "second\n"
+
+    it "offers the names of the accounts for an argument that names one" $
+      withHome $ \home -> do
+        createMain home
+        run <- hw home (tabAfter ["renameacc", "m"]) []
+        runOut run `shouldBe` "main\n"
+
+    -- Each name replaces the word typed, the option with the start of the
+    -- name
+    it "offers the names of the accounts after -a in the same word, -a before each" $
+      withHome $ \home -> do
+        createMain home
+        run <- hw home (tabAfter ["txs", "-am"]) []
+        runOut run `shouldBe` "-amain\n"
+
+    -- hw runs without a locale here. The name is passed to the database
+    -- rather than typed, as the arguments of the tests may not take an
+    -- accent.
+    it "offers a name with accents as it is" $
+      withHome $ \home -> do
+        createMain home
+        _ <- inDatabaseFile (home </> ".hw" </> "accounts.sqlite") (runExceptT (renameAccount "main" "épargne"))
+        run <- hw home (tabAfter ["txs", "--account", ""]) []
+        runOut run `shouldBe` "épargne\n"
+
+    -- A command holds the database from its first statement to its last,
+    -- as a sync does while it waits on the store
+    it "offers the names of the accounts while a command holds the database" $
+      withHome $ \home -> do
+        createMain home
+        held <- newEmptyMVar
+        release <- newEmptyMVar
+        holder <- async $ runDBWith 100 (home </> ".hw" </> "accounts.sqlite") $ do
+          liftIO $ putMVar held ()
+          liftIO $ takeMVar release
+        takeMVar held
+        run <- hw home (tabAfter ["txs", "--account", ""]) []
+        putMVar release ()
+        wait holder
+        runOut run `shouldBe` "main\n"
+
+    it "leaves the files of hw as they were" $
+      withHome $ \home -> do
+        createMain home
+        let database = home </> ".hw" </> "accounts.sqlite"
+        stored <- BS.readFile database
+        _ <- hw home (tabAfter ["txs", "--account", ""]) []
+        BS.readFile database `shouldReturn` stored
+        sort <$> listDirectory (home </> ".hw") `shouldReturn` ["accounts.sqlite", "config.json"]
+
+    it "offers nothing, and creates nothing, in a home where hw never ran" $
+      withHome $ \home -> do
+        removeDirectoryRecursive (home </> ".hw")
+        run <- hw home (tabAfter ["txs", "--account", ""]) []
+        runOut run `shouldBe` ""
+        doesDirectoryExist (home </> ".hw") `shouldReturn` False
+
+    -- The next command migrates it
+    it "offers nothing from a database of an older version, which it leaves at that version" $
+      withHome $ \home -> do
+        version3Main (home </> ".hw" </> "accounts.sqlite")
+        run <- hw home (tabAfter ["txs", "--account", ""]) []
+        runOut run `shouldBe` ""
+        runDBWith 100 (home </> ".hw" </> "accounts.sqlite") (runExceptT databaseVersion) `shouldReturn` Right (Just 3)
 
   describe "A command that fails" $ do
     it "exits with 1, and tells why" $

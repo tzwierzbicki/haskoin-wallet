@@ -17,6 +17,7 @@ module Haskoin.Wallet.HwTestUtils
     hwWithEnv,
     centralEurope,
     hwJson,
+    tabAfter,
     -- * The chain of the fake store
     Chain (..),
     mine,
@@ -150,6 +151,12 @@ hwWithEnv extra home args typed = do
   case done of
     Nothing -> fail $ "hw " <> unwords args <> " did not finish within a minute"
     Just (code, out, err) -> return $ Run code (decodeUtf8 (BL.toStrict out)) (decodeUtf8 (BL.toStrict err))
+
+-- | The arguments the completion script of bash passes hw when Tab is
+-- pressed after the words typed after hw. They are the index of the last
+-- word, the one to complete, then every word, hw first.
+tabAfter :: [String] -> [String]
+tabAfter typed = ["--bash-completion-index", show (length typed)] <> concatMap (\w -> ["--bash-completion-word", w]) ("hw" : typed)
 
 -- | The time zone of Central Europe, for TZ, written as POSIX rules that
 -- need no zone files: CET, an hour ahead of UTC, and CEST, two hours

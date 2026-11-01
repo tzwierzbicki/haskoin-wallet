@@ -48,7 +48,7 @@ module Haskoin.Wallet.Parser.Args
     str,
     maybeReader,
     eitherReader,
-    mkCompleter,
+    listIOCompleter,
 
     -- * A command, and the program
     CommandSpec (..),
@@ -60,7 +60,7 @@ where
 import Control.Applicative (Alternative (..))
 import Data.Maybe (isJust)
 import Data.String (IsString)
-import Options.Applicative (ReadM, eitherReader, maybeReader, mkCompleter, str)
+import Options.Applicative (ReadM, eitherReader, listIOCompleter, maybeReader, str)
 import qualified Options.Applicative as O
 
 {- The options of a command -}

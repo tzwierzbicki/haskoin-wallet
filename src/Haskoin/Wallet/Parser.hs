@@ -21,6 +21,7 @@ import Data.Word (Word32)
 import Haskoin
 import Haskoin.Wallet.Amounts (AmountUnit (..), readUnit)
 import Haskoin.Wallet.CoinSelection (CoinSelection (..), FeePayer (..))
+import Haskoin.Wallet.Completion (accountNames)
 import Haskoin.Wallet.FeeRates (FeeRateChoice, readFeeRateChoice)
 import Haskoin.Wallet.Keys (KeySource (..))
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
@@ -376,8 +377,9 @@ The options --unit, --json and --no-pager go before or after the command.
 The settings, such as the server, the default network, the address gap and
 the pager, are in ~/.hw/config.json.
 
-The Tab key completes the commands and options once the shell has a script
-for it, which hw writes. In bash, add this line to ~/.bashrc:
+The Tab key completes the commands, the options and the account names once
+the shell has a script for it, which hw writes. In bash, add this line to
+~/.bashrc:
 
   source <(hw --bash-completion-script hw)
 
@@ -704,7 +706,7 @@ are lost.
 |],
       args =
         CommandDeleteAcc
-          <$> textArg "NAME" "The name of the account to delete"
+          <$> accountArg "NAME" "The name of the account to delete"
           <*> networkArg
           <*> fullDerivationOption
     }
@@ -769,7 +771,7 @@ accountOptionWith what =
     short 'a'
       <> long "account"
       <> metavar "NAME"
-      <> completer (mkCompleter accountCompleter)
+      <> completer (listIOCompleter accountNames)
       <> help what
 
 {- importacc -}
@@ -835,11 +837,8 @@ accountArg :: String -> String -> Args Text
 accountArg name desc =
   argument str $
     metavar name
-      <> completer (mkCompleter accountCompleter)
+      <> completer (listIOCompleter accountNames)
       <> help desc
-
-accountCompleter :: String -> IO [String]
-accountCompleter _ = return []
 
 {- accounts -}
 

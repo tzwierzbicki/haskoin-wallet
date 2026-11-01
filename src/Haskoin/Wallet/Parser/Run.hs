@@ -16,16 +16,18 @@ module Haskoin.Wallet.Parser.Run
 where
 
 import Control.Applicative (empty, (<|>))
+import Control.Monad (guard)
 import Data.List (find, isPrefixOf, isSuffixOf)
-import Data.Maybe (isNothing)
+import Data.Maybe (fromMaybe, isNothing, listToMaybe)
 import Haskoin.Wallet.Parser.Args
 import Haskoin.Wallet.Parser.Help
 import Haskoin.Wallet.Style (Output, Style, outputOf, putDoc)
 import qualified Options.Applicative as O
 import Prettyprinter (Doc, pretty)
-import System.Environment (getArgs)
-import System.Exit (ExitCode (..), exitWith)
+import System.Environment (getArgs, getProgName)
+import System.Exit (ExitCode (..), exitSuccess, exitWith)
 import System.IO (Handle, stderr, stdout)
+import Text.Read (readMaybe)
 
 -- | Parse the command line of the program: the command, and the options
 -- that go with any command. A request for help or for the version, a
@@ -46,11 +48,14 @@ runProgram program = do
       Nothing -> programHelp output program
 
     parse args =
-      case O.execParserPure parserPrefs (programInfo program) args of
+      case O.execParserPure parserPrefs (programInfo program) parsedArgs of
         O.Success result -> return result
         -- The shell asked what completes a word: optparse-applicative
-        -- answers and leaves
-        O.CompletionInvoked completion -> O.handleParseResult (O.CompletionInvoked completion)
+        -- answers, and hw leaves
+        O.CompletionInvoked completion -> do
+          offered <- O.execCompletion completion =<< getProgName
+          putStr (withValueOption offered)
+          exitSuccess
         O.Failure failure -> do
           let (parserHelp, code, _) = O.execFailure failure program.name
               command = commandWord (programValueOptions program) args >>= commandNamed program
@@ -59,6 +64,13 @@ runProgram program = do
             -- needs arguments gets its help, as a failure
             Just c | typedAlone c args -> leave stderr code (const (commandHelp program c))
             _ -> leave stderr code (const (usageError parserHelp program command))
+      where
+        (parsedArgs, valueOption) = splitAttachedValue program args
+        -- Each word offered for a value typed against its short option
+        -- replaces the option and the value both
+        withValueOption offered
+          | null valueOption = offered
+          | otherwise = unlines (map (valueOption <>) (lines offered))
 
     typedAlone :: CommandSpec cmd -> [String] -> Bool
     typedAlone c args = dropWhile (/= c.name) args == [c.name]
@@ -105,6 +117,49 @@ requestOf valueOptions args
 -- optparse-applicative passes
 isCompletion :: String -> Bool
 isCompletion arg = "--bash-completion-" `isPrefixOf` arg || "-completion-script" `isSuffixOf` arg
+
+-- | The arguments of a shell completion, with a value typed against its
+-- short option made a word of its own: -amai becomes -a and mai.
+-- optparse-applicative completes a value only as a word of its own. Also
+-- the option, to put back before each word offered: -a, or nothing when no
+-- value was split. The arguments of anything else are left as they are.
+splitAttachedValue :: Program cmd opts -> [String] -> ([String], String)
+splitAttachedValue program args = fromMaybe (args, "") $ do
+  index <- readMaybe =<< indexM
+  '-' : letter : typedValue@(_ : _) <- listToMaybe (drop index typed)
+  -- The command named before the word, without the name of the program
+  let command = commandWord (programValueOptions program) (drop 1 (take index typed)) >>= commandNamed program
+  guard (letter `elem` valueLetters program command)
+  let split = take index typed <> [['-', letter], typedValue] <> drop (index + 1) typed
+  return (others <> completionArgs (index + 1) split, ['-', letter])
+  where
+    (indexM, typed, others) = completionParts args
+
+-- | The arguments of a shell completion, apart: the index of the word to
+-- complete, the words typed, in order, and the other arguments
+completionParts :: [String] -> (Maybe String, [String], [String])
+completionParts ("--bash-completion-index" : i : rest) = (Just i, ws, os)
+  where
+    (_, ws, os) = completionParts rest
+completionParts ("--bash-completion-word" : w : rest) = (i, w : ws, os)
+  where
+    (i, ws, os) = completionParts rest
+completionParts (a : rest) = (i, ws, a : os)
+  where
+    (i, ws, os) = completionParts rest
+completionParts [] = (Nothing, [], [])
+
+-- | The arguments that ask to complete the word of the index among the
+-- words typed
+completionArgs :: Int -> [String] -> [String]
+completionArgs index typed = ["--bash-completion-index", show index] <> concatMap (\w -> ["--bash-completion-word", w]) typed
+
+-- | The short names of the options that take a value: those of the
+-- options of the program, and those of the command, when one is named
+valueLetters :: Program cmd opts -> Maybe (CommandSpec cmd) -> [Char]
+valueLetters program command = [c | row <- rows, Just _ <- [row.metavar], Short c <- row.names]
+  where
+    rows = program.globals.rows <> maybe [] (.args.rows) command
 
 -- | The command named by the arguments: the first word before -- that is
 -- neither an option nor the value of one of the options that take one

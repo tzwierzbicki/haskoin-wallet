@@ -51,6 +51,7 @@ library
       Haskoin.Wallet.Coin
       Haskoin.Wallet.CoinSelection
       Haskoin.Wallet.Commands
+      Haskoin.Wallet.Completion
       Haskoin.Wallet.Config
       Haskoin.Wallet.Database
       Haskoin.Wallet.Entropy

@@ -36,9 +36,10 @@ stack install
 ### Completion
 
 The Tab key can complete what you type after `hw`. It completes the commands,
-the options, and the values `hw` knows in advance, such as units, networks and
-file names. Your shell needs a small script for it, which `hw` writes. Set it
-up once for your shell, then open a new terminal.
+the options, the names of your accounts, and the values `hw` knows in advance,
+such as units, networks and file names. Your shell needs a small script for
+it, which `hw` writes. Set it up once for your shell, then open a new
+terminal.
 
 **bash.** Add this line to `~/.bashrc`:
 
@@ -75,6 +76,10 @@ lists `preparesendall`, `preparesweep` and `preparetx`.
 The script asks `hw` what to complete at each Tab. A newer `hw` completes its
 new commands and options with the same script. The script finds `hw` by its
 name, so `hw` must be on your `PATH`.
+
+To complete the name of an account, `hw` reads your database. It changes
+nothing in it, and it does not wait for another `hw` command, such as a long
+`sync`.
 
 ### Configuration
 
