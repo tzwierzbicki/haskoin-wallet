@@ -240,7 +240,7 @@ def path_key_hashes(v):
 
 def vector_problems(v):
     if "signed" not in v:
-        return []  # hw's error messages are checked by TxSigningSpec.hs only
+        return []  # hw's error messages are checked by Tx/SigningSpec.hs only
     tsd, expected = v["txSignData"], v["signed"]
     tx = parse_tx(bytes.fromhex(expected["tx"]))
     problems = []

@@ -15,7 +15,7 @@
 -- A version spec sees its two versions and nothing else. Rows are read with
 -- the entities of its schema modules, never those of "Haskoin.Wallet.Database",
 -- and stored data is parsed and compared with the types frozen in the step
--- module that wrote it, never with "Haskoin.Wallet.TxInfo" or any other live
+-- module that wrote it, never with "Haskoin.Wallet.Database.TxInfo" or any other live
 -- type. Only the orchestrator spec, "Haskoin.Wallet.MigrationSpec", may use
 -- the live tables and 'latestDatabaseVersion', since the whole migration is
 -- its scope. A spec that reaches the live code breaks the day a later

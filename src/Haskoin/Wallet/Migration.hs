@@ -31,7 +31,7 @@
 -- The rule behind all of this: a step and its spec see versions N-1 and N
 -- and nothing else. They use the schema modules of those versions and the
 -- types frozen in the step modules, never the live code: no entity of
--- "Haskoin.Wallet.Database", no type of "Haskoin.Wallet.TxInfo", no
+-- "Haskoin.Wallet.Database", no type of "Haskoin.Wallet.Database.TxInfo", no
 -- 'latestDatabaseVersion'. The live code moves on with every version, and
 -- anything that reaches it from a step or a spec breaks the day version
 -- N+1 changes it.

@@ -17,8 +17,8 @@ import Data.Maybe (fromJust)
 import Data.Text (Text)
 import Data.Text.Encoding (encodeUtf8)
 import Haskoin
-import Haskoin.Wallet.Account (insertAccount)
-import Haskoin.Wallet.Address (genExtAddress, nextChangeAddress)
+import Haskoin.Wallet.Database.Account (insertAccount)
+import Haskoin.Wallet.Database.Address (genExtAddress, nextChangeAddress)
 import Haskoin.Wallet.Database (DB, DBAddress (..))
 import Haskoin.Wallet.Keys
 import Haskoin.Wallet.TestUtils

@@ -14,16 +14,16 @@ import Database.Persist.Sql (toSqlKey)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Util.Arbitrary
-import Haskoin.Wallet.Account
-import Haskoin.Wallet.Address
-import Haskoin.Wallet.Coin
-import Haskoin.Wallet.Response
+import Haskoin.Wallet.Database.Account
+import Haskoin.Wallet.Database.Address
+import Haskoin.Wallet.Database.Coin
+import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.FeeRates (FeeRates (..))
+import Haskoin.Wallet.Tx.FeeRates (FeeRates (..))
 import Haskoin.Wallet.Sync
-import Haskoin.Wallet.TxInfo
-import Haskoin.Wallet.TxSignData
+import Haskoin.Wallet.Database.TxInfo
+import Haskoin.Wallet.Tx.SignData
 import Numeric.Natural
 import Test.QuickCheck
 

@@ -21,4 +21,4 @@ the coin it spends
 derives the wallet's addresses from the `account` and the paths to check the
 `txInfo` type, amount and fee. The `signed` transaction of a known-bug vector
 (`expect: error` with `signed`) is verified as well. Error messages are hw's
-own behaviour and are only checked by `TxSigningSpec.hs`.
+own behaviour and are only checked by `Tx/SigningSpec.hs`.

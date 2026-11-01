@@ -32,17 +32,17 @@ import Database.Persist.Sql (Migration, PersistValue, Single (..), rawQuery, raw
 import Database.Persist.Sqlite (runSqlite)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Account (insertAccount, nextAccount)
+import Haskoin.Wallet.Database.Account (insertAccount, nextAccount)
 import Haskoin.Wallet.Config (Config (..))
-import Haskoin.Wallet.Coin (JsonCoin (..))
+import Haskoin.Wallet.Database.Coin (JsonCoin (..))
 import Haskoin.Wallet.Database (DB, DBAccount (..), DBAccountId, DBAddress (..), DBPendingTx (..), hashBytes, migrateAll)
 import Haskoin.Wallet.Keys (MnemonicPass (..), PublicSeed (..), seedOf, signingKey)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync (SyncRes (..))
-import Haskoin.Wallet.Style (Style, renderPlain)
-import Haskoin.Wallet.TxInfo (ChainStatus (..), MyInputs (..), MyOutputs (..), PendingStatus (..), TxInfo (..), TxStatus (..), TxSummary (..), TxType (..), pendingSigned)
-import Haskoin.Wallet.TxSignData (TxSignData (..), nosigHash)
-import Haskoin.Wallet.TxSigning (signWalletTx)
+import Haskoin.Wallet.Cli.Style (Style, renderPlain)
+import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), MyInputs (..), MyOutputs (..), PendingStatus (..), TxInfo (..), TxStatus (..), TxSummary (..), TxType (..), pendingSigned)
+import Haskoin.Wallet.Tx.SignData (TxSignData (..), nosigHash)
+import Haskoin.Wallet.Tx.Signing (signWalletTx)
 import Numeric.Natural (Natural)
 import Prettyprinter (Doc)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getTemporaryDirectory, listDirectory, removeDirectoryRecursive)

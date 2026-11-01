@@ -9,7 +9,7 @@ import Data.Aeson (Value, object, (.=))
 import Data.List (isPrefixOf)
 import Data.Text (Text)
 import Haskoin (btc)
-import Haskoin.Wallet.Coin (JsonCoin)
+import Haskoin.Wallet.Database.Coin (JsonCoin)
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.TestUtils (inScratchDirectory)
 import System.Directory (createDirectory, getPermissions, listDirectory, setOwnerWritable, setPermissions)

@@ -51,7 +51,7 @@ import Data.Word (Word32)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebCommon (HeightParam (..), LimitParam (..), Param (..))
-import Haskoin.Wallet.Response (Response)
+import Haskoin.Wallet.Cli.Response (Response)
 import Haskoin.Wallet.Store (Store (..))
 import Haskoin.Wallet.TestUtils (addressScript, blockAt, blockMinedAt, otherAddr)
 import Network.HTTP.Types (hContentType, status200, status404, status502)

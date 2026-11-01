@@ -91,34 +91,34 @@ import Data.Word (Word64)
 import Database.Persist.Sqlite (transactionUndo)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Account
-import Haskoin.Wallet.Address
+import Haskoin.Wallet.Database.Account
+import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Amounts (AmountUnit)
 import Haskoin.Wallet.Backup (backupDatabase, backupDirectory, copyDatabase)
-import Haskoin.Wallet.Coin
+import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Entropy
-import Haskoin.Wallet.FeeRates
+import Haskoin.Wallet.Tx.FeeRates
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Keys
-import Haskoin.Wallet.Listing
+import Haskoin.Wallet.Cli.Listing
 import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
-import Haskoin.Wallet.Parser
-import Haskoin.Wallet.PendingTx
-import Haskoin.Wallet.PrettyPrinter (addedCoinsDoc, childrenDoc, coinBalancesPrinter, dustReportDoc, feeRatesDoc, reducedDoc, renderOn, txAnswerDoc)
-import Haskoin.Wallet.Prompt
-import Haskoin.Wallet.Response
+import Haskoin.Wallet.Cli.Parser
+import Haskoin.Wallet.Database.PendingTx
+import Haskoin.Wallet.Cli.PrettyPrinter (addedCoinsDoc, childrenDoc, coinBalancesPrinter, dustReportDoc, feeRatesDoc, reducedDoc, renderOn, txAnswerDoc)
+import Haskoin.Wallet.Cli.Prompt
+import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
-import Haskoin.Wallet.TxBuilding (ChangeTo (..), CoinControl (..), buildTxSignData, coinWithPath)
-import Haskoin.Wallet.TxBumpFee
-import Haskoin.Wallet.TxInfo
-import Haskoin.Wallet.TxSignData
-import Haskoin.Wallet.TxSigning (parseOutsideTxSignData, signWalletTx)
-import Haskoin.Wallet.Recipient (Share, checkSharing, readPayment, readRecipient, recipientAddress)
-import Haskoin.Wallet.TxSendAll
+import Haskoin.Wallet.Tx.Building (ChangeTo (..), CoinControl (..), buildTxSignData, coinWithPath)
+import Haskoin.Wallet.Tx.BumpFee
+import Haskoin.Wallet.Database.TxInfo
+import Haskoin.Wallet.Tx.SignData
+import Haskoin.Wallet.Tx.Signing (parseOutsideTxSignData, signWalletTx)
+import Haskoin.Wallet.Tx.Recipient (Share, checkSharing, readPayment, readRecipient, recipientAddress)
+import Haskoin.Wallet.Tx.SendAll
   ( DustReport,
     buildSendAllSignData,
     dustQuestion,
@@ -126,8 +126,8 @@ import Haskoin.Wallet.TxSendAll
     isDustCoin,
     sendAllAmounts,
   )
-import Haskoin.Wallet.TxSize (checkFeeRateAndDust, highFeeRate)
-import Haskoin.Wallet.TxSweep (buildSweepSignData, fetchSweepCoins, signTxWithKeys)
+import Haskoin.Wallet.Tx.Size (checkFeeRateAndDust, highFeeRate)
+import Haskoin.Wallet.Tx.Sweep (buildSweepSignData, fetchSweepCoins, signTxWithKeys)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import System.IO (hPutStrLn, stderr)
@@ -743,7 +743,7 @@ changeBackTo unit net accId addrs = do
 -- those that coin control chose, as for preparetx. Without coin control,
 -- the coins worth less than their fee are spent or left as the user
 -- answers, or as --spend-dust or --leave-dust says. The answer lists every
--- coin left in the account, and why. See "Haskoin.Wallet.TxSendAll".
+-- coin left in the account, and why. See "Haskoin.Wallet.Tx.SendAll".
 cmdPrepareSendAll :: Ctx -> Config -> AmountUnit -> PrepareSendAll -> IO Response
 cmdPrepareSendAll ctx cfg unit opts =
   runDBResponse cfg $ do
@@ -902,7 +902,7 @@ cmdSendTx ctx cfg unit namedM fileM yes =
         unless confirmed $ throwError "The transaction was not sent"
 
 -- | Prepare the replacement of a stuck transaction of the account at a
--- higher fee rate, as "Haskoin.Wallet.TxBumpFee" builds it. hw asks before
+-- higher fee rate, as "Haskoin.Wallet.Tx.BumpFee" builds it. hw asks before
 -- it replaces the transactions that spend the change of the stuck one, and
 -- before it adds coins of the account, unless --yes. When no coin is
 -- added, it asks before the recipients pay out of what they receive, and

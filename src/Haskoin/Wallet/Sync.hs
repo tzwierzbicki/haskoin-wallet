@@ -24,18 +24,18 @@ import Data.Word (Word64)
 import qualified Data.Set as Set
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Account
-import Haskoin.Wallet.Address
-import Haskoin.Wallet.BestBlock
-import Haskoin.Wallet.Coin
+import Haskoin.Wallet.Database.Account
+import Haskoin.Wallet.Database.Address
+import Haskoin.Wallet.Database.BestBlock
+import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Keys (PublicSeed (..))
-import Haskoin.Wallet.PendingTx
-import Haskoin.Wallet.RawTx
+import Haskoin.Wallet.Database.PendingTx
+import Haskoin.Wallet.Database.RawTx
 import Haskoin.Wallet.Store
-import Haskoin.Wallet.TxInfo
-import Haskoin.Wallet.TxSignData
+import Haskoin.Wallet.Database.TxInfo
+import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 
@@ -124,7 +124,7 @@ recoveredName net index = cs net.name <> cs (show index)
 
 data SyncRes = SyncRes
   { syncResAccount :: !DBAccount,
-    -- | What the account can spend once synced ("Haskoin.Wallet.Coin")
+    -- | What the account can spend once synced ("Haskoin.Wallet.Database.Coin")
     syncResSpendable :: !Word64,
     syncResBlockHash :: !BlockHash,
     syncResBlockHeight :: !BlockHeight,

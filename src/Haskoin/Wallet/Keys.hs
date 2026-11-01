@@ -64,7 +64,7 @@ signingKey net ctx mnem acc = (\master -> accountKey net ctx master acc) <$> mas
 
 -- | The public key of an account of a seed, or Nothing when the child key
 -- at that index is invalid: haskoin-core throws for such a key, where BIP32
--- says to skip the index, as "Haskoin.Wallet.Address" does for an address
+-- says to skip the index, as "Haskoin.Wallet.Database.Address" does for an address
 accountPubKey :: Network -> Ctx -> XPrvKey -> Natural -> IO (Maybe XPubKey)
 accountPubKey net ctx master index = do
   derived <- try $ evaluate $ deriveXPubKey ctx $ accountKey net ctx master index
@@ -87,7 +87,7 @@ masterFingerprint = xPubFP
 -- steps of BIP44 are hardened, so these public keys can only come from the
 -- master private key, which stays inside this record and never comes out
 -- of it. The private key of an account reaches a command in one way only:
--- as the signing key that "Haskoin.Wallet.Prompt" asks for.
+-- as the signing key that "Haskoin.Wallet.Cli.Prompt" asks for.
 data PublicSeed = PublicSeed
   { seedFingerprint :: !Fingerprint,
     seedAccountKey :: Network -> Natural -> IO (Maybe XPubKey)

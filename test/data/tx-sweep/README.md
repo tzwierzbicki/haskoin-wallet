@@ -1,8 +1,8 @@
 # Sweep signing test vectors
 
-Test vectors for `signsweep` (`signTxWithKeys` in `Haskoin.Wallet.TxSweep`):
+Test vectors for `signsweep` (`signTxWithKeys` in `Haskoin.Wallet.Tx.Sweep`):
 coins of external private keys, swept with those keys. They are loaded by
-`test/Haskoin/Wallet/TxSweepSpec.hs`. Every `.json` file in this directory is
+`test/Haskoin/Wallet/Tx/SweepSpec.hs`. Every `.json` file in this directory is
 tested, so new vectors can be added without changing the test code.
 
 The format is the one of [../tx-signing](../tx-signing/README.md). Every

@@ -26,25 +26,25 @@ module Haskoin.Wallet
   )
 where
 
-import Haskoin.Wallet.Account as Account
-import Haskoin.Wallet.Address as Address
+import Haskoin.Wallet.Database.Account as Account
+import Haskoin.Wallet.Database.Address as Address
 import Haskoin.Wallet.Amounts as Amounts
-import Haskoin.Wallet.BestBlock as BestBlock
-import Haskoin.Wallet.Coin as Coin
-import Haskoin.Wallet.CoinSelection as CoinSelection
+import Haskoin.Wallet.Database.BestBlock as BestBlock
+import Haskoin.Wallet.Database.Coin as Coin
+import Haskoin.Wallet.Tx.CoinSelection as CoinSelection
 import Haskoin.Wallet.Commands as Commands
 import Haskoin.Wallet.Config as Config
 import Haskoin.Wallet.Database as Database
 import Haskoin.Wallet.Entropy as Entropy
 import Haskoin.Wallet.FileIO as FileIO
 import Haskoin.Wallet.Keys as Keys
-import Haskoin.Wallet.Parser as Parser
-import Haskoin.Wallet.PendingTx as PendingTx
-import Haskoin.Wallet.Prompt as Prompt
-import Haskoin.Wallet.RawTx as RawTx
-import Haskoin.Wallet.Response as Response
+import Haskoin.Wallet.Cli.Parser as Parser
+import Haskoin.Wallet.Database.PendingTx as PendingTx
+import Haskoin.Wallet.Cli.Prompt as Prompt
+import Haskoin.Wallet.Database.RawTx as RawTx
+import Haskoin.Wallet.Cli.Response as Response
 import Haskoin.Wallet.Store as Store
-import Haskoin.Wallet.TxBuilding as TxBuilding
-import Haskoin.Wallet.TxInfo as TxInfo
-import Haskoin.Wallet.TxSignData as TxSignData
+import Haskoin.Wallet.Tx.Building as TxBuilding
+import Haskoin.Wallet.Database.TxInfo as TxInfo
+import Haskoin.Wallet.Tx.SignData as TxSignData
 import Haskoin.Wallet.Util as Util

@@ -15,8 +15,8 @@ import Database.Persist.Sql (Single (..), rawExecute, rawSql)
 import Haskoin.Wallet.Commands (cmdRenameAcc)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Parser (RenameAcc (..))
-import Haskoin.Wallet.Response (Response (..))
+import Haskoin.Wallet.Cli.Parser (RenameAcc (..))
+import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.TestUtils (inScratchDirectory)
 import System.FilePath ((</>))
 import Test.Hspec

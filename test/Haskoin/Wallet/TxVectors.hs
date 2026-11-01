@@ -2,9 +2,9 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Transaction signing test vectors, shared by "Haskoin.Wallet.TxSigningSpec"
+-- | Transaction signing test vectors, shared by "Haskoin.Wallet.Tx.SigningSpec"
 -- (wallet transactions, signed with the account key) and
--- "Haskoin.Wallet.TxSweepSpec" (sweeps, signed with external keys). The
+-- "Haskoin.Wallet.Tx.SweepSpec" (sweeps, signed with external keys). The
 -- vectors live in JSON files (see test/data/tx-signing/README.md for the
 -- format); a spec gives the directory and the signer to use.
 module Haskoin.Wallet.TxVectors where
@@ -16,8 +16,8 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.TxInfo
-import Haskoin.Wallet.TxSignData
+import Haskoin.Wallet.Database.TxInfo
+import Haskoin.Wallet.Tx.SignData
 import Numeric.Natural (Natural)
 import Test.Hspec
 

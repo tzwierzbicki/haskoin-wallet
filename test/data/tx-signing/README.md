@@ -1,7 +1,7 @@
 # Transaction signing test vectors
 
-Test vectors for `signtx` (`signWalletTx` in `Haskoin.Wallet.TxSigning`). They
-are loaded by `test/Haskoin/Wallet/TxSigningSpec.hs`. Every `.json` file in this
+Test vectors for `signtx` (`signWalletTx` in `Haskoin.Wallet.Tx.Signing`). They
+are loaded by `test/Haskoin/Wallet/Tx/SigningSpec.hs`. Every `.json` file in this
 directory is tested, so new vectors can be added without changing the test code.
 Sweep vectors, signed with external keys, are in [../tx-sweep](../tx-sweep/README.md)
 in the same format.

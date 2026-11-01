@@ -43,55 +43,55 @@ source-repository head
 library
   exposed-modules:
       Haskoin.Wallet
-      Haskoin.Wallet.Account
-      Haskoin.Wallet.Address
       Haskoin.Wallet.Amounts
       Haskoin.Wallet.Backup
-      Haskoin.Wallet.BestBlock
-      Haskoin.Wallet.Coin
-      Haskoin.Wallet.CoinSelection
+      Haskoin.Wallet.Cli.Completion
+      Haskoin.Wallet.Cli.Listing
+      Haskoin.Wallet.Cli.Pager
+      Haskoin.Wallet.Cli.Parser
+      Haskoin.Wallet.Cli.Parser.Args
+      Haskoin.Wallet.Cli.Parser.Completion
+      Haskoin.Wallet.Cli.Parser.Help
+      Haskoin.Wallet.Cli.Parser.Run
+      Haskoin.Wallet.Cli.PrettyPrinter
+      Haskoin.Wallet.Cli.Prompt
+      Haskoin.Wallet.Cli.Response
+      Haskoin.Wallet.Cli.Style
       Haskoin.Wallet.Commands
-      Haskoin.Wallet.Completion
       Haskoin.Wallet.Config
       Haskoin.Wallet.Database
+      Haskoin.Wallet.Database.Account
+      Haskoin.Wallet.Database.Address
+      Haskoin.Wallet.Database.BestBlock
+      Haskoin.Wallet.Database.Coin
+      Haskoin.Wallet.Database.PendingTx
+      Haskoin.Wallet.Database.RawTx
+      Haskoin.Wallet.Database.TxInfo
       Haskoin.Wallet.Entropy
-      Haskoin.Wallet.FeeRates
       Haskoin.Wallet.FileIO
       Haskoin.Wallet.Keys
-      Haskoin.Wallet.Listing
       Haskoin.Wallet.Main
       Haskoin.Wallet.MessageSigning
       Haskoin.Wallet.Migration
       Haskoin.Wallet.Migration.V2
       Haskoin.Wallet.Migration.V3
       Haskoin.Wallet.Migration.V4
-      Haskoin.Wallet.Pager
-      Haskoin.Wallet.Parser
-      Haskoin.Wallet.Parser.Args
-      Haskoin.Wallet.Parser.Completion
-      Haskoin.Wallet.Parser.Help
-      Haskoin.Wallet.Parser.Run
-      Haskoin.Wallet.PendingTx
-      Haskoin.Wallet.PrettyPrinter
-      Haskoin.Wallet.Prompt
-      Haskoin.Wallet.RawTx
-      Haskoin.Wallet.Recipient
-      Haskoin.Wallet.Response
       Haskoin.Wallet.Schema.KeyBytes
       Haskoin.Wallet.Schema.V2
       Haskoin.Wallet.Schema.V3
       Haskoin.Wallet.Schema.V4
       Haskoin.Wallet.Store
-      Haskoin.Wallet.Style
       Haskoin.Wallet.Sync
-      Haskoin.Wallet.TxBuilding
-      Haskoin.Wallet.TxBumpFee
-      Haskoin.Wallet.TxInfo
-      Haskoin.Wallet.TxSendAll
-      Haskoin.Wallet.TxSignData
-      Haskoin.Wallet.TxSigning
-      Haskoin.Wallet.TxSize
-      Haskoin.Wallet.TxSweep
+      Haskoin.Wallet.Tx.Building
+      Haskoin.Wallet.Tx.BumpFee
+      Haskoin.Wallet.Tx.CoinSelection
+      Haskoin.Wallet.Tx.FeeRates
+      Haskoin.Wallet.Tx.Recipient
+      Haskoin.Wallet.Tx.SendAll
+      Haskoin.Wallet.Tx.SignData
+      Haskoin.Wallet.Tx.Signing
+      Haskoin.Wallet.Tx.Size
+      Haskoin.Wallet.Tx.Sweep
       Haskoin.Wallet.Util
   other-modules:
       Paths_haskoin_wallet
@@ -210,24 +210,29 @@ test-suite spec
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   other-modules:
-      Haskoin.Wallet.AccountSpec
-      Haskoin.Wallet.AddressSpec
       Haskoin.Wallet.AmountsSpec
       Haskoin.Wallet.Arbitrary
       Haskoin.Wallet.BackupSpec
-      Haskoin.Wallet.BestBlockSpec
-      Haskoin.Wallet.CoinSelectionSpec
-      Haskoin.Wallet.CoinSpec
-      Haskoin.Wallet.CompletionSpec
+      Haskoin.Wallet.Cli.CompletionSpec
+      Haskoin.Wallet.Cli.ListingSpec
+      Haskoin.Wallet.Cli.PagerSpec
+      Haskoin.Wallet.Cli.ParserSpec
+      Haskoin.Wallet.Cli.PrettyPrinterSpec
+      Haskoin.Wallet.Cli.PromptSpec
+      Haskoin.Wallet.Cli.ResponseSpec
       Haskoin.Wallet.ConfigSpec
+      Haskoin.Wallet.Database.AccountSpec
+      Haskoin.Wallet.Database.AddressSpec
+      Haskoin.Wallet.Database.BestBlockSpec
+      Haskoin.Wallet.Database.CoinSpec
+      Haskoin.Wallet.Database.PendingTxSpec
+      Haskoin.Wallet.Database.TxInfoSpec
       Haskoin.Wallet.DatabaseLockSpec
       Haskoin.Wallet.DatabaseSpec
       Haskoin.Wallet.EntropySpec
-      Haskoin.Wallet.FeeRatesSpec
       Haskoin.Wallet.FileIOSpec
       Haskoin.Wallet.HwTestUtils
       Haskoin.Wallet.KeysSpec
-      Haskoin.Wallet.ListingSpec
       Haskoin.Wallet.MainSpec
       Haskoin.Wallet.MessageSigningSpec
       Haskoin.Wallet.Migration.TestUtils
@@ -235,27 +240,30 @@ test-suite spec
       Haskoin.Wallet.Migration.V3Spec
       Haskoin.Wallet.Migration.V4Spec
       Haskoin.Wallet.MigrationSpec
-      Haskoin.Wallet.PagerSpec
-      Haskoin.Wallet.ParserSpec
-      Haskoin.Wallet.PendingTxSpec
-      Haskoin.Wallet.PrettyPrinterSpec
-      Haskoin.Wallet.PromptSpec
-      Haskoin.Wallet.RecipientSpec
-      Haskoin.Wallet.ResponseSpec
       Haskoin.Wallet.Schema.V1
       Haskoin.Wallet.StoreSpec
       Haskoin.Wallet.SyncSpec
       Haskoin.Wallet.TestUtils
-      Haskoin.Wallet.TxBuildingSpec
-      Haskoin.Wallet.TxBumpFeeSpec
-      Haskoin.Wallet.TxInfoSpec
-      Haskoin.Wallet.TxSendAllSpec
-      Haskoin.Wallet.TxSigningSpec
-      Haskoin.Wallet.TxSizeSpec
-      Haskoin.Wallet.TxSweepSpec
+      Haskoin.Wallet.Tx.BuildingSpec
+      Haskoin.Wallet.Tx.BumpFeeSpec
+      Haskoin.Wallet.Tx.CoinSelectionSpec
+      Haskoin.Wallet.Tx.FeeRatesSpec
+      Haskoin.Wallet.Tx.RecipientSpec
+      Haskoin.Wallet.Tx.SendAllSpec
+      Haskoin.Wallet.Tx.SigningSpec
+      Haskoin.Wallet.Tx.SizeSpec
+      Haskoin.Wallet.Tx.SweepSpec
       Haskoin.Wallet.TxVectors
       Haskoin.Wallet.UtilSpec
-      Haskoin.Wallet.WorkflowSpec
+      Haskoin.Wallet.Workflow.AccountSpec
+      Haskoin.Wallet.Workflow.BumpFeeSpec
+      Haskoin.Wallet.Workflow.CommandLineSpec
+      Haskoin.Wallet.Workflow.OutputSpec
+      Haskoin.Wallet.Workflow.PaymentSpec
+      Haskoin.Wallet.Workflow.SendAllSpec
+      Haskoin.Wallet.Workflow.SigningSpec
+      Haskoin.Wallet.Workflow.SweepSpec
+      Haskoin.Wallet.Workflow.TestUtils
       Paths_haskoin_wallet
   hs-source-dirs:
       test
