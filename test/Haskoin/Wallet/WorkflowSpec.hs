@@ -958,6 +958,37 @@ failureSpec ctx = do
         runErr run `shouldSatisfy` Text.isInfixOf "Missing: FILENAME"
         runErr run `shouldSatisfy` Text.isInfixOf "Usage: hw exporttx HASH FILENAME"
 
+    it "says what a command misses, even when an option of every command follows" $
+      withHome $ \home -> do
+        run <- hw home ["renameacc", "old", "--json"] []
+        runExit run `shouldBe` ExitFailure 1
+        runErr run `shouldSatisfy` Text.isInfixOf "Missing: NEW"
+
+  describe "The completion the shell asks for" $ do
+    -- What the bash script of hw runs when Tab is pressed after
+    -- hw txs -atest3 --js: the index of the word to complete, then the
+    -- words typed
+    it "offers an option of every command after the command" $
+      withHome $ \home -> do
+        run <- hw home ["--bash-completion-index", "3", "--bash-completion-word", "hw", "--bash-completion-word", "txs", "--bash-completion-word", "-atest3", "--bash-completion-word", "--js"] []
+        runOut run `shouldBe` "--json\n"
+
+    it "offers --help after the command" $
+      withHome $ \home -> do
+        run <- hw home ["--bash-completion-index", "2", "--bash-completion-word", "hw", "--bash-completion-word", "txs", "--bash-completion-word", "--he"] []
+        runOut run `shouldBe` "--help\n"
+
+    it "offers --version right after hw" $
+      withHome $ \home -> do
+        run <- hw home ["--bash-completion-index", "1", "--bash-completion-word", "hw", "--bash-completion-word", "--v"] []
+        runOut run `shouldBe` "--version\n"
+
+    -- txs has --verbose
+    it "does not offer --version after a command, which refuses it" $
+      withHome $ \home -> do
+        run <- hw home ["--bash-completion-index", "2", "--bash-completion-word", "hw", "--bash-completion-word", "txs", "--bash-completion-word", "--v"] []
+        runOut run `shouldBe` "--verbose\n"
+
   describe "A command that fails" $ do
     it "exits with 1, and tells why" $
       withHome $ \home -> do

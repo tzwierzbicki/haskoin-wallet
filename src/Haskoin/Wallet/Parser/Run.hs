@@ -15,6 +15,7 @@ module Haskoin.Wallet.Parser.Run
   )
 where
 
+import Control.Applicative (empty, (<|>))
 import Data.List (find, isPrefixOf, isSuffixOf)
 import Data.Maybe (isNothing)
 import Haskoin.Wallet.Parser.Args
@@ -45,7 +46,7 @@ runProgram program = do
       Nothing -> programHelp output program
 
     parse args =
-      case O.execParserPure O.defaultPrefs (programInfo program) args of
+      case O.execParserPure parserPrefs (programInfo program) args of
         O.Success result -> return result
         -- The shell asked what completes a word: optparse-applicative
         -- answers and leaves
@@ -124,12 +125,32 @@ commandNamed program word = find ((== word) . (.name)) (concatMap (.commands) pr
 programValueOptions :: Program cmd opts -> [String]
 programValueOptions program = [nameText n | row <- program.globals.rows, Just _ <- [row.metavar], n <- row.names]
 
+-- | How optparse-applicative parses. After the command, it reads the
+-- options of the command and the options that go with any command
+-- together. The shell then completes both kinds there. A command that
+-- misses an argument also says so when such an option follows it.
+parserPrefs :: O.ParserPrefs
+parserPrefs = O.prefs O.subparserInline
+
 -- | The parser optparse-applicative runs: the command, by its name, and
--- the options that go with any command, before or after it
+-- the options that go with any command, before or after it.
+--
+-- It also knows -h, --help and --version, only so that the shell
+-- completes them. 'requestOf' finds them before anything is parsed. They
+-- are hidden, so that no error of the parser names them.
 programInfo :: Program cmd opts -> O.ParserInfo (cmd, opts)
-programInfo program = O.info ((,) <$> commands <*> program.globals.parser) mempty
+programInfo program = O.info (run <|> versionAlone) mempty
   where
+    run = (,) <$> commands <*> program.globals.parser <* helpFlag
     commands =
       O.subparser $
         mconcat [O.command c.name (O.info c.args.parser mempty) | group <- program.groups, c <- group.commands]
           <> O.metavar program.commandUsage
+    -- Never read: -h and --help before -- are found first, and after --
+    -- they are arguments
+    helpFlag = O.switch (O.short 'h' <> O.long "help" <> O.hidden)
+    -- An alternative to the command and the other options. The parser
+    -- drops it once one of them is typed, so the shell completes
+    -- --version only right after hw. The parser reads it only before a
+    -- command, and then fails.
+    versionAlone = O.flag' () (O.long "version" <> O.hidden) *> empty
