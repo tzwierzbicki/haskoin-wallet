@@ -14,9 +14,10 @@ import Control.Monad.Except
 import Control.Monad.Reader (MonadIO (..), MonadTrans (lift))
 import Data.Containers.ListUtils (nubOrd, nubOrdOn)
 import Data.Either (partitionEithers)
-import Data.List (partition, sort)
+import Data.List (find, partition, sort)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import Data.Maybe (isNothing)
 import Data.Set (Set)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -340,24 +341,25 @@ pruneRawTxs everything refreshed retired
 -- | The pending transactions of the account after a sync, given the
 -- transactions the store listed. A signed one the store lists has reached
 -- the network and is retired, and so is one the network has under another
--- id ('recordStanding'). The store is asked whether the others can still
--- spend their coins, and those that cannot are counted for the user. One
--- the user sent that the store does not list is sent again, unless it is
--- in conflict, which the network would refuse: nodes forget unconfirmed
--- transactions, and the store may never have accepted it. A signed one the
--- user has not sent is left alone. Returns how many were sent again, how
--- many conflict, and the ids of those retired.
+-- id ('recordStanding'). Each takes its label to the id the network has it
+-- under. The store is asked whether the others can still spend their
+-- coins, and those that cannot are counted for the user. One the user sent
+-- that the store does not list is sent again, unless it is in conflict,
+-- which the network would refuse: nodes forget unconfirmed transactions,
+-- and the store may never have accepted it. A signed one the user has not
+-- sent is left alone. Returns how many were sent again, how many conflict,
+-- and the ids of those retired.
 syncPending :: (MonadUnliftIO m) => Store -> DBAccountId -> Set TxHash -> ExceptT String (DB m) (Natural, Natural, [TxHash])
 syncPending store accId seen = do
   held <- pendingTxs accId
   let (listed, waiting) = partition reached held
   (elsewhere, conflicted) <- recordStanding store waiting
-  let done = listed <> elsewhere
-      settled = Set.fromList (pendingTxKey <$> elsewhere <> conflicted)
+  let done = [(p, txHash (txOf p)) | p <- listed] <> elsewhere
+      settled = Set.fromList (pendingTxKey <$> (fst <$> elsewhere) <> conflicted)
       resend = [txOf p | p <- waiting, p.pendingTxOnline, pendingTxKey p `Set.notMember` settled]
-  lift $ forM_ done retirePendingTx
+  lift $ forM_ done $ uncurry retirePendingTx
   forM_ resend $ fromStore . storePublish store
-  return (fromIntegral (length resend), fromIntegral (length conflicted), txHash . txOf <$> done)
+  return (fromIntegral (length resend), fromIntegral (length conflicted), txHash . txOf . fst <$> done)
   where
     reached p = isSigned (txOf p) && txHash (txOf p) `Set.member` seen
 
@@ -371,8 +373,8 @@ syncPending store accId seen = do
 -- rival has left the network, dropped or undone by a reorganisation, can
 -- be sent again. Without pending transactions the store is not asked, and
 -- without a rival it is asked once. Returns those on the network under
--- another id, and those in conflict.
-recordStanding :: (MonadUnliftIO m) => Store -> [PendingTx] -> ExceptT String (DB m) ([PendingTx], [PendingTx])
+-- another id, each with that id, and those in conflict.
+recordStanding :: (MonadUnliftIO m) => Store -> [PendingTx] -> ExceptT String (DB m) ([(PendingTx, TxHash)], [PendingTx])
 recordStanding _ [] = return ([], [])
 recordStanding store held = do
   parents <- fromStore $ storeTransactions store $ nubOrd [input.outpoint.hash | p <- held, input <- (txOf p).inputs]
@@ -380,8 +382,10 @@ recordStanding store held = do
       rivals = nubOrd (concatMap rivalsOf held)
   rivalTxs <- if null rivals then return [] else fromStore (storeTransactions store rivals)
   let rivalNosigHashes = Map.fromList [(rival.txid, nosigHash (Store.transactionData rival)) | rival <- rivalTxs, not rival.deleted]
-      underAnotherId p = Just (nosigHash (txOf p)) `elem` map (`Map.lookup` rivalNosigHashes) (rivalsOf p)
-      (elsewhere, others) = partition underAnotherId held
+      -- The id of the rival that is this very transaction, signed otherwise
+      anotherId p = find (\rival -> Map.lookup rival rivalNosigHashes == Just (nosigHash (txOf p))) (rivalsOf p)
+      elsewhere = [(p, networkId) | p <- held, Just networkId <- [anotherId p]]
+      others = [p | p <- held, isNothing (anotherId p)]
       -- A replacement spends the coins of the transactions it replaces, as
       -- long as those are not in a block
       unconfirmedRivals = Set.fromList [rival.txid | rival <- rivalTxs, not rival.deleted, not (Store.confirmed rival.block)]

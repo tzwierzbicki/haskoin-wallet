@@ -24,6 +24,7 @@ import Test.Hspec
 spec :: Spec
 spec = prepareContext $ \ctx -> do
   replaceableSpec ctx
+  labelSpec ctx
   feeSpec ctx
   reductionSpec ctx
   fundingSpec ctx
@@ -54,7 +55,8 @@ payment ctx marked =
   Sent
     { sentTx = (if marked then replaceableTx else spendingTx) ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 20000), (internalAddr 0, 27740)],
       sentSummary = stuckSummary,
-      sentParents = []
+      sentParents = [],
+      sentLabel = ""
     }
 
 replaceableSpec :: Ctx -> Spec
@@ -71,6 +73,21 @@ replaceableSpec ctx =
       let received = (payment ctx True) {sentSummary = stuckSummary {summaryOtherInputs = Map.fromList [(otherAddr 1, 30000)]}}
       checkReplaceable received
         `shouldBe` Left "Only a payment from the coins of the account can be replaced: this transaction spends coins of another wallet"
+
+labelSpec :: Ctx -> Spec
+labelSpec ctx =
+  describe "The label of a replacement" $ do
+    let labelled label = (payment ctx True) {sentLabel = label}
+    it "is the label of the transaction it replaces" $
+      replacementLabel [labelled "Rent"] `shouldBe` "Rent"
+
+    -- The stuck payment comes first, then the transactions that spend its
+    -- change, which the replacement pays the recipients of too
+    it "is the labels of the transactions it replaces, the stuck one first, each once, a semicolon between them" $
+      replacementLabel [labelled "Rent", labelled "Groceries", labelled "", labelled "Rent"] `shouldBe` "Rent; Groceries"
+
+    it "is none when none of them has a label" $
+      replacementLabel [labelled "", labelled ""] `shouldBe` ""
 
 feeSpec :: Ctx -> Spec
 feeSpec ctx =
@@ -90,7 +107,7 @@ feeSpec ctx =
         `shouldBe` Left "The replacement pays 2485 satoshis of fee, and must pay 2486: the fees of the transactions it replaces, and its own 226 bytes. Give a --fee-rate of at least 11"
   where
     plan :: Natural -> BumpPlan
-    plan fees = BumpPlan [] [] Map.empty [] Map.empty Nothing fees []
+    plan fees = BumpPlan [] [] Map.empty [] Map.empty Nothing fees [] ""
     paid fee size = stuckSummary {summaryFee = fee, summarySize = size}
 
 {- What pays the fee the change cannot -}
@@ -114,7 +131,8 @@ sendAllPlan ctx =
       planRecipientPaths = Map.empty,
       planChange = Nothing,
       planFees = 2600,
-      planReplaces = [fakeTxHash 2]
+      planReplaces = [fakeTxHash 2],
+      planLabel = ""
     }
 
 -- | The plan of a send-all of the same coin to one address, 48080: 192

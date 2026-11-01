@@ -22,6 +22,7 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.String.Conversions (cs)
 import Data.Text (Text)
+import qualified Data.Text as Text
 import Data.Time (UTCTime, getCurrentTime)
 import Database.Esqueleto.Legacy as E
 import qualified Database.Persist as P
@@ -34,6 +35,7 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.RawTx
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Database.TxInfo
+import Haskoin.Wallet.Database.TxLabel (setTxLabel)
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Signing (parseOutsideTxSignData, parseTxSignData, verifySignedTx)
 import Haskoin.Wallet.Util
@@ -339,7 +341,9 @@ importPendingTx net ctx accId tsd = do
 
 -- | Replace the version an account holds of a transaction with the one
 -- imported: the signed version of an unsigned transaction, or another
--- valid signature of a signed one
+-- valid signature of a signed one. The label held stays, as the user may
+-- have changed it since the file was written. The label of the file is
+-- taken only when the transaction held has none.
 replaceVersion :: (MonadUnliftIO m) => PendingTx -> TxSignData -> ExceptT String (DB m) ()
 replaceVersion held tsd = do
   when held.pendingTxOnline $
@@ -348,10 +352,12 @@ replaceVersion held tsd = do
     throwError "Can not replace a signed transaction with an unsigned one"
   when (heldTx == tx) $
     throwError "The transaction already exists"
-  lift $ P.update held.pendingTxKey [DBPendingTxBlob P.=. blob tsd]
+  lift $ P.update held.pendingTxKey [DBPendingTxBlob P.=. blob tsd {txSignDataLabel = label}]
   where
     heldTx = txSignDataTx held.pendingTxData
     tx = txSignDataTx tsd
+    heldLabel = held.pendingTxData.txSignDataLabel
+    label = if Text.null heldLabel then tsd.txSignDataLabel else heldLabel
 
 -- | Store a transaction the account does not hold yet. A replacement takes
 -- over what the transactions it replaces hold: the coins they spend, gone
@@ -455,11 +461,50 @@ removePendingTx ctx held = do
   lift $ P.delete held.pendingTxKey
   return (fromIntegral (length heldCoins), fromIntegral (length touched.changeAddresses))
 
--- | Retire a pending transaction the network has seen, as the sync does:
--- the row goes and nothing else changes. Its coins are gone, or going with
--- the sync, and its change address was used on the chain, so it stays busy.
-retirePendingTx :: (MonadUnliftIO m) => PendingTx -> DB m ()
-retirePendingTx p = P.delete p.pendingTxKey
+-- | Retire a pending transaction the network has under the id given, as
+-- the sync does: the row goes, and its label, if any, goes to the
+-- transaction of that id in the account. The id is that of its signed
+-- version, unless the network has it signed otherwise. Its coins are gone,
+-- or going with the sync, and its change address was used on the chain,
+-- so it stays busy.
+retirePendingTx :: (MonadUnliftIO m) => PendingTx -> TxHash -> DB m ()
+retirePendingTx p networkId = do
+  let label = p.pendingTxData.txSignDataLabel
+  unless (Text.null label) $ setTxLabel p.pendingTxAccount networkId label
+  P.delete p.pendingTxKey
+
+{- Labels -}
+
+-- | Give a pending transaction a label, in place of the one it had. An
+-- empty label removes it.
+setPendingTxLabel :: (MonadUnliftIO m) => PendingTx -> Text -> DB m ()
+setPendingTxLabel p label =
+  P.update p.pendingTxKey [DBPendingTxBlob P.=. blob p.pendingTxData {txSignDataLabel = label}]
+
+-- | Label a transaction of the wallet, or remove its label with an empty
+-- one. A pending transaction is named by either of its hashes, and keeps
+-- the label in its signing data, which carries it to the network. A
+-- transaction on the network is named by its id. It is labelled in every
+-- account whose history holds it, both ends of a payment between two
+-- accounts for instance. Returns the transaction as each account sees it.
+labelTransaction :: (MonadUnliftIO m) => Ctx -> TxHash -> Text -> ExceptT String (DB m) [(DBAccount, TxInfo)]
+labelTransaction ctx named label = do
+  pendingM <- findPendingTx named
+  case pendingM of
+    Just held -> do
+      lift $ setPendingTxLabel held label
+      acc <- getAccountById held.pendingTxAccount
+      info <- pendingSummary ctx acc held {pendingTxData = held.pendingTxData {txSignDataLabel = label}}
+      return [(acc, info)]
+    Nothing -> do
+      accounts <- lift getAccounts
+      found <- fmap catMaybes . forM accounts $ \(accId, acc) ->
+        fmap (accId,acc,) <$> storedTxInfo accId named
+      when (null found) $
+        throwError $ "The wallet has no transaction " <> cs (txHashToHex named)
+      forM found $ \(accId, acc, info) -> do
+        lift $ setTxLabel accId named label
+        return (acc, info {txInfoLabel = label})
 
 -- | Mark a pending transaction as sent to the network by the user. The
 -- number of rows changed: one, or none for a hash that is not pending.
@@ -502,9 +547,10 @@ sendPending ctx storeOn beforeSending named = do
   _ <- lift $ setPendingTxOnline (nosigHash signedTx)
   lift $ insertRawTx signedTx
   -- The pending transactions it replaces are gone from the network once it
-  -- spreads, and the sync would send them again. Their raw transactions go
-  -- with them, unless a coin of the wallet comes from one after all.
-  lift $ forM_ replaced.replacedRows retirePendingTx
+  -- spreads, and the sync would send them again. Their labels stay with
+  -- their ids, for the history to show them dead. Their raw transactions
+  -- go with them, unless a coin of the wallet comes from one after all.
+  lift $ forM_ replaced.replacedRows $ \p -> retirePendingTx p (txHash (txSignDataTx p.pendingTxData))
   void $ lift $ dropRawTxsWithoutCoins [txHash (txSignDataTx p.pendingTxData) | p <- replaced.replacedRows]
   return (acc, summary)
 
@@ -573,7 +619,9 @@ sendSigned ctx storeOn beforeSending netM tsd = do
       let net = accountNetwork acc
       forM_ netM $ \given ->
         when (given /= net) $ throwError "The transaction is pending in an account of another network"
-      when (held.pendingTxData /= tsd) $ void $ importPendingTx net ctx held.pendingTxAccount tsd
+      -- A label that differs is no new version: the label held stays
+      when (held.pendingTxData /= tsd {txSignDataLabel = held.pendingTxData.txSignDataLabel}) $
+        void $ importPendingTx net ctx held.pendingTxAccount tsd
       uncurry SentPending <$> sendPending ctx storeOn beforeSending pendingHash
     Nothing -> do
       net <- liftMaybe noFileNetwork netM

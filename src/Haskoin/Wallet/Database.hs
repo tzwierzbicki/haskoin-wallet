@@ -6,8 +6,8 @@
 -- changes the tables gets a new schema module, and this module moves to it.
 -- Each kind of row has a module of its own: "Haskoin.Wallet.Database.Account",
 -- "Haskoin.Wallet.Database.Address", "Haskoin.Wallet.Database.Coin", "Haskoin.Wallet.Database.TxInfo",
--- "Haskoin.Wallet.Database.RawTx", "Haskoin.Wallet.Database.PendingTx" and
--- "Haskoin.Wallet.Database.BestBlock".
+-- "Haskoin.Wallet.Database.TxLabel", "Haskoin.Wallet.Database.RawTx",
+-- "Haskoin.Wallet.Database.PendingTx" and "Haskoin.Wallet.Database.BestBlock".
 --
 -- The tables store what hw learnt from outside. From the store: the
 -- balances of the addresses, the transaction summaries, the coins, the raw

@@ -30,8 +30,8 @@ import Haskoin.Wallet.Cli.Completion
     hashesToSign,
     idsToBump,
     idsToSend,
+    labelTargets,
     pendingHashes,
-    receivingAddresses,
     walletAddresses,
   )
 import Haskoin.Wallet.Tx.FeeRates (FeeRateChoice, readFeeRateChoice)
@@ -167,11 +167,24 @@ data Receive = Receive
 
 -- | The options of label
 data Label = Label
-  { -- | The receiving address, as typed. It names its account too.
-    address :: !Text,
+  { -- | What to label. It names its account too.
+    labelled :: !Labelled,
+    -- | The new label. An empty one removes the label.
     label :: !Text
   }
   deriving (Eq, Show)
+
+-- | What label labels: a transaction, by its txid, or while it is pending
+-- by either of its hashes; or a receiving address, as typed
+data Labelled
+  = LabelledTx !TxHash
+  | LabelledAddress !Text
+  deriving (Eq, Show)
+
+-- | What a word typed for label names. A hash has 64 hexadecimal digits,
+-- which no address has, so any other word is an address.
+readLabelled :: String -> Labelled
+readLabelled word = maybe (LabelledAddress (cs word)) LabelledTx (hexToTxHash (cs word))
 
 -- | The options of preparetx
 data PrepareTx = PrepareTx
@@ -188,6 +201,8 @@ data PrepareTx = PrepareTx
     minConf :: !Natural,
     strategy :: !CoinSelection,
     output :: !(Maybe FilePath),
+    -- | The label of the transaction (--label)
+    label :: !(Maybe Text),
     -- | Coin control: the coins chosen by their outpoints (--coin)
     coins :: ![OutPoint],
     -- | Coin control: the addresses whose coins are chosen (--spend-from)
@@ -234,6 +249,8 @@ data PrepareSendAll = PrepareSendAll
     -- | The confirmations a coin needs to be sent
     minConf :: !Natural,
     output :: !(Maybe FilePath),
+    -- | The label of the transaction (--label)
+    label :: !(Maybe Text),
     -- | The coins to send, instead of all of them
     coins :: ![OutPoint],
     -- | The addresses whose coins to send, instead of all of them
@@ -297,6 +314,8 @@ data PrepareSweep = PrepareSweep
     -- | The coins swept, by outpoint
     coins :: ![OutPoint],
     output :: !(Maybe FilePath),
+    -- | The label of the sweep (--label)
+    label :: !(Maybe Text),
     -- | The fee rate, as for preparetx
     feeRate :: !(Maybe FeeRateChoice),
     -- | The dust limit, in satoshis
@@ -1011,20 +1030,38 @@ labelCommand =
   CommandSpec
     { name = "label",
       offline = False,
-      summary = "Set the label of a receiving address",
-      details = "",
+      summary = "Set the label of a receiving address or of a transaction",
+      details =
+        [r|
+`label` gives a receiving address or a transaction a label, in place of the
+one it had. An empty LABEL, "", removes it.
+
+The label of an address names the payments it receives. `addresses`,
+`balances` and the transactions that pay the address show it. A change
+address takes no label.
+
+The label of a transaction shows on a line of its own in txs and pendingtxs,
+and as a Label field with --verbose. preparetx, preparesendall and preparesweep
+take one with --label. A pending transaction is named by the hash pendingtxs
+shows, its nosigHash or its txid once signed. Its label goes with it to the
+files of exporttx and --output, and stays once the network has it. bumpfee
+gives a replacement the labels of the transactions it replaces. A transaction
+on the network is named by its txid, as txs shows it. It gets the label in
+every account that has it, such as both ends of a payment between two
+accounts.
+|],
       args =
         CommandLabel
-          <$> (Label <$> labelledAddressArg <*> textArg "LABEL" "The new label")
+          <$> (Label <$> labelledArg <*> textArg "LABEL" "The new label, or \"\" to remove it")
     }
 
--- | The address to label, which also tells its account
-labelledAddressArg :: Args Text
-labelledAddressArg =
-  strArgument $
-    metavar "ADDRESS"
-      <> completer (mkCompleter receivingAddresses)
-      <> help "A receiving address of the wallet, as `addresses` lists it. Change addresses take no label."
+-- | The address or the transaction to label, which also tells its account
+labelledArg :: Args Labelled
+labelledArg =
+  argument (readLabelled <$> str) $
+    metavar "ADDRESS|TXID"
+      <> completer (mkCompleter labelTargets)
+      <> help "A receiving address of the wallet, as `addresses` lists it, or a transaction, by its txid or the hash pendingtxs shows. Change addresses take no label."
 
 {- txs -}
 
@@ -1045,7 +1082,8 @@ amount and its status. The time is in the time zone of the computer. The type
 is Outgoing, Incoming, or Internal for a transaction between addresses of the
 account. The amount includes the fee. The status gives the confirmations. An
 unconfirmed transaction shows its fee rate instead, which tells how soon a
-block may take it. A dead one was replaced, or dropped from the network. The
+block may take it. A dead one was replaced, or dropped from the network. A
+transaction with a label shows it next, on a line of its own: see `label`. The
 second line gives the address paid, the largest when there are several. The
 third gives the txid.
 |],
@@ -1065,7 +1103,7 @@ verboseOption what =
       <> help what
 
 txVerboseHelp :: String
-txVerboseHelp = "Show every detail of each transaction: each address it spends from or pays, with its amount, path and label, and the fee."
+txVerboseHelp = "Show every detail of each transaction: its label, each address it spends from or pays, with its amount, path and label, and the fee."
 
 {- preparetx -}
 
@@ -1126,6 +1164,7 @@ scripts.
                   <*> underCoins minConfOption
                   <*> underCoins coinSelectionOption
                   <*> outputFileMaybeOption
+                  <*> txLabelOption
                   <*> underCoins (many coinOption)
                   <*> underCoins (many spendFromOption)
                   <*> underCoins selectOption
@@ -1217,6 +1256,7 @@ scripts.
                   <*> dustOption
                   <*> underCoins minConfOption
                   <*> outputFileMaybeOption
+                  <*> txLabelOption
                   <*> underCoins (many coinOption)
                   <*> underCoins (many spendFromOption)
                   <*> underCoins dustCoinsOption
@@ -1366,6 +1406,16 @@ outputFileMaybeOption =
       <> fileCompletion
       <> help "Write the transaction to this file. It must not exist yet."
 
+-- | The label of a transaction to prepare. -l labels an address for
+-- receive, and a transaction here: one letter, one meaning.
+txLabelOption :: Args (Maybe Text)
+txLabelOption =
+  optional . strOption $
+    short 'l'
+      <> long "label"
+      <> metavar "LABEL"
+      <> help "A label for the transaction, to recognize it later. It goes with the transaction to its --output file, and stays once the network has it."
+
 {- pendingtxs -}
 
 pendingTxsCommand :: CommandSpec Command
@@ -1382,12 +1432,13 @@ preparesweep made, or that importtx added. It is unsigned, signed, or sent.
 
 Each takes three lines, as in `txs`. The first gives the time it was created,
 its type, its amount and its status: not signed, signed and not sent, or sent,
-with its fee rate. The second gives the address paid, after the account when
-every account is listed. A replacement that bumpfee made then names the
-transactions it replaces. The last line gives the hash of the transaction. It
-is the nosigHash of an unsigned transaction, and the txid of a signed one. The
-other commands name a pending transaction by that hash. The nosigHash of a
-signed one works too.
+with its fee rate. A transaction with a label shows it next, on a line of its
+own. The second gives the address paid, after the account when every account
+is listed. A replacement that bumpfee made then names the transactions it
+replaces. The last line gives the hash of the transaction. It is the nosigHash
+of an unsigned transaction, and the txid of a signed one. The other commands
+name a pending transaction by that hash. The nosigHash of a signed one works
+too.
 
 A transaction marked conflicted spends a coin that another transaction has
 spent, or that is gone, as the server said at the last sync. It cannot be sent
@@ -2054,6 +2105,7 @@ typed. --yes takes it without asking, for scripts.
                   <*> some sweepToOption -- some: at least one
                   <*> underCoinsSwept (many sweepCoinOption)
                   <*> outputFileMaybeOption
+                  <*> txLabelOption
                   <*> underFee feeOption
                   <*> dustOption
                   <*> underFee highFeeYesOption

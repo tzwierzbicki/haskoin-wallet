@@ -50,6 +50,9 @@ data Response
     ResponsePendingTxs !(Maybe DBAccount) ![(DBAccount, TxInfo)]
   | -- | A transaction of the account
     ResponseTx !DBAccount !TxInfo
+  | -- | A transaction just labelled, as each account that holds it sees it:
+    -- the account of a pending one, or every account whose history has it
+    ResponseLabelledTxs ![(DBAccount, TxInfo)]
   | -- | A transaction of the account just prepared by preparetx or
     -- preparesendall, with the coins it leaves in the account and why: the
     -- coins that coin control chose and could not spend, and for a
@@ -104,8 +107,9 @@ instance ToJSON Response where
       typed "balances" ["account" .= acc, "addresses" .= (uncurry addressWithCoinBalance <$> addrs)]
     ResponseTxs acc txs -> typed "txs" ["account" .= acc, "txs" .= (marshalValue (accountNetwork acc) <$> txs)]
     ResponsePendingTxs asked held ->
-      typed "pendingtxs" ["account" .= asked, "txs" .= [object ["account" .= acc, "tx" .= marshalValue (accountNetwork acc) info] | (acc, info) <- held]]
+      typed "pendingtxs" ["account" .= asked, "txs" .= (heldTxJson <$> held)]
     ResponseTx acc info -> typed "tx" ["account" .= acc, "tx" .= marshalValue (accountNetwork acc) info]
+    ResponseLabelledTxs held -> typed "labelledtxs" ["txs" .= (heldTxJson <$> held)]
     ResponsePrepared acc info left ->
       typed "prepared" ["account" .= acc, "tx" .= marshalValue (accountNetwork acc) info, "left" .= left]
     ResponseOutsideTx net info -> typed "outsidetx" ["network" .= net.name, "tx" .= marshalValue net info]
@@ -145,6 +149,7 @@ instance FromJSON Response where
         acc <- o .: "account"
         ResponseTx acc <$> (unmarshalValue (accountNetwork acc) =<< o .: "tx")
       "pendingtxs" -> ResponsePendingTxs <$> o .: "account" <*> (mapM heldTx =<< o .: "txs")
+      "labelledtxs" -> ResponseLabelledTxs <$> (mapM heldTx =<< o .: "txs")
       "prepared" -> do
         acc <- o .: "account"
         ResponsePrepared acc <$> (unmarshalValue (accountNetwork acc) =<< o .: "tx") <*> o .: "left"
@@ -164,10 +169,15 @@ instance FromJSON Response where
       _ -> fail "Invalid JSON response type"
     where
       network o = maybe (fail "Unknown network") return . netByName =<< o .: "network"
-      -- A pending transaction with its account, which names its network
-      heldTx = withObject "pending transaction" $ \entry -> do
+      -- A transaction with its account, which names its network
+      heldTx = withObject "transaction of an account" $ \entry -> do
         acc <- entry .: "account"
         (,) acc <$> (unmarshalValue (accountNetwork acc) =<< entry .: "tx")
+
+-- | A transaction with its account in JSON, in a list of transactions of
+-- several accounts
+heldTxJson :: (DBAccount, TxInfo) -> Value
+heldTxJson (acc, info) = object ["account" .= acc, "tx" .= marshalValue (accountNetwork acc) info]
 
 -- | The sync of an account in JSON, with what the account can spend now
 syncResJson :: SyncRes -> Value

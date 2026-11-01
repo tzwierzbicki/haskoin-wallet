@@ -67,6 +67,7 @@ library
       Haskoin.Wallet.Database.PendingTx
       Haskoin.Wallet.Database.RawTx
       Haskoin.Wallet.Database.TxInfo
+      Haskoin.Wallet.Database.TxLabel
       Haskoin.Wallet.Entropy
       Haskoin.Wallet.FileIO
       Haskoin.Wallet.Keys
@@ -227,6 +228,7 @@ test-suite spec
       Haskoin.Wallet.Database.CoinSpec
       Haskoin.Wallet.Database.PendingTxSpec
       Haskoin.Wallet.Database.TxInfoSpec
+      Haskoin.Wallet.Database.TxLabelSpec
       Haskoin.Wallet.DatabaseLockSpec
       Haskoin.Wallet.DatabaseSpec
       Haskoin.Wallet.EntropySpec
@@ -258,6 +260,7 @@ test-suite spec
       Haskoin.Wallet.Workflow.AccountSpec
       Haskoin.Wallet.Workflow.BumpFeeSpec
       Haskoin.Wallet.Workflow.CommandLineSpec
+      Haskoin.Wallet.Workflow.LabelSpec
       Haskoin.Wallet.Workflow.OutputSpec
       Haskoin.Wallet.Workflow.PaymentSpec
       Haskoin.Wallet.Workflow.SendAllSpec

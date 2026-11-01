@@ -50,6 +50,8 @@ offered what it takes:
   and `--coin` those you can spend now.
 - Your addresses. `label` offers the receiving addresses, `signmsg` all of
   them, and `--spend-from` those that hold coins you can spend now.
+- Your transactions. `label` offers them by their txid, and the pending ones
+  by the hash `pendingtxs` shows.
 
 After `--account`, `bumpfee`, `--coin` and `--spend-from` offer the
 transactions, coins and addresses of that account only.
@@ -321,7 +323,9 @@ hw balances
 ```
 
 **`hw label ADDRESS LABEL`** sets the label of a receiving address. The
-address tells its account. Change addresses take no label.
+address tells its account. Change addresses take no label. `label` labels a
+transaction too: see [Transactions](#transactions). An empty label, `""`,
+removes the label.
 
 ```console
 hw label ADDRESS "rent from Bob"
@@ -358,10 +362,12 @@ as a pending transaction. It needs no mnemonic. `--fee-rate` takes a number or
 paid. `--coin` and `--spend-from` choose the coins to spend, every one of them.
 `--select` spends only what the payment needs among them, as `--strategy`
 selects them. `--change-back` sends the change back to an address the payment
-spends from. `--output` also writes the transaction to a file.
+spends from. `--output` also writes the transaction to a file. `--label` gives
+the transaction a label, which goes with it to its file and stays once the
+network has it.
 
 ```console
-hw preparetx ADDRESS:0.0005 --fee-rate median
+hw preparetx ADDRESS:0.0005 --fee-rate median --label "rent of October"
 hw preparetx ADDRESS1:10000sat ADDRESS2:250bits --fee-rate 5
 hw preparetx ADDRESS:0.01 --spend-from MYADDRESS --change-back --fee-rate low
 hw preparetx ADDRESS:0.01 --spend-from MYADDRESS --select --fee-rate low
@@ -412,8 +418,10 @@ hw sendtx TXID                              # the txid of the replacement
 **`hw txs`** lists the transactions of an account, as of the last sync. Each
 takes three lines. The first gives its time, in the time zone of the computer,
 its type, its amount and its status. The second gives the address paid, and
-the third the txid. An unconfirmed transaction shows its fee rate. `--verbose`
-shows every address with its amount, path and label, and the fee.
+the third the txid. An unconfirmed transaction shows its fee rate. A
+transaction with a label shows it on a line of its own, below the first.
+`--verbose` shows the label as a field, every address with its amount, path and
+label, and the fee.
 
 ```console
 hw txs
@@ -429,6 +437,21 @@ can no longer be sent.
 ```console
 hw pendingtxs
 hw pendingtxs --verbose
+```
+
+**`hw label TXID LABEL`** sets the label of a transaction. Name a pending one
+by the hash `pendingtxs` shows, and one of the history by its txid. A pending
+transaction keeps its label in its file, through signing on an offline
+computer, and in the history once the network has it. A label set while the
+file is away stays when the signed file comes back. `preparetx`,
+`preparesendall` and `preparesweep` take a `--label`, and `bumpfee` gives a
+replacement the labels of the transactions it replaces. A transaction between
+two accounts of the wallet gets the label in both.
+
+```console
+hw label NOSIGHASH "rent of October"
+hw label TXID "salary"
+hw label TXID ""                            # removes the label
 ```
 
 **`hw reviewtx FILE`** shows the transaction in a file and the account it

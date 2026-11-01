@@ -421,7 +421,7 @@ secondText = formatTime defaultTimeLocale "%d %b %Y %H:%M:%S %Z"
 -- and where it stands. Its columns line up from one transaction to the
 -- next.
 headlineDoc :: AmountUnit -> Maybe ZonedTime -> TxInfo -> Doc Style
-headlineDoc unit time (TxInfo summary status) =
+headlineDoc unit time (TxInfo summary status _) =
   hcat
     [ maybe (styled Muted (block minuteWidth "time unknown")) (text . minuteText) time,
       "  ",
@@ -484,12 +484,16 @@ confirmationsText :: Natural -> String
 confirmationsText n = counted n "confirmation" "confirmations"
 
 -- | A transaction in three lines: its first line, whom it pays, and the
--- hash to name it by. A replacement that bumpfee prepared also names the
--- transactions it replaces, before its hash.
+-- hash to name it by. A transaction the user labelled shows its label
+-- below its first line, on a line of its own: the label says what the
+-- transaction is for, better than any of its numbers. A replacement that
+-- bumpfee prepared also names the transactions it replaces, before its
+-- hash.
 compactTxDoc :: Network -> AmountUnit -> Maybe DBAccount -> Maybe ZonedTime -> TxInfo -> Doc Style
-compactTxDoc net unit accountM time info@(TxInfo summary status) =
+compactTxDoc net unit accountM time info@(TxInfo summary status label) =
   vcat $
     [headlineDoc unit time info]
+      <> [indent 2 (labelWord label) | not (Text.null label)]
       <> (indent 2 <$> payeeLine net accountM summary)
       <> [indent 2 ("replaces" <+> text (cs (txHashToHex replaced))) | Pending p <- [status], replaced <- pendingReplaces p]
       <> [indent 2 (hashWord status)]
@@ -514,7 +518,8 @@ payeeLine net accountM summary =
     addressWords row =
       hsep $ text (addrToString net (txAddress row)) : [labelWord label | Just (_, label) <- [txAddressOwn row], not (Text.null label)]
 
--- | The label of an address, quoted, which sets it apart on a line
+-- | The label of an address or of a transaction, quoted, which sets it
+-- apart on a line
 labelWord :: Text -> Doc Style
 labelWord label = styled UserText ("\"" <> cs label <> "\"")
 
@@ -527,15 +532,16 @@ hashWord (Pending status) = styled PendingHash (cs (txHashToHex (pendingShownHas
 
 -- | A transaction with every detail: its first line, then its fields. The
 -- lines given come first: its account in a listing of every account, or
--- its network in an answer. Every address it spends from or pays is on a
--- line of its own, with its value, and those of the wallet with their
--- paths and labels, in columns.
+-- its network in an answer. Its label, if any, follows them. Every address
+-- it spends from or pays is on a line of its own, with its value, and those
+-- of the wallet with their paths and labels, in columns.
 verboseTxDoc :: Network -> AmountUnit -> [Doc Style] -> Maybe ZonedTime -> TxInfo -> Doc Style
-verboseTxDoc net unit named time info@(TxInfo summary status) =
+verboseTxDoc net unit named time info@(TxInfo summary status label) =
   vcat $
     headlineDoc unit time info
       : ( indent 2
             <$> named
+              <> [field 9 "Label" <> labelWord label | not (Text.null label)]
               <> statusFields time status
               <> [feeField unit summary]
               <> section "From" Nothing from
@@ -843,6 +849,9 @@ responsePrinter unit view answer =
       renderIO =<< listedAddressDoc Verbose unit (pathWidth [addr]) addr spendable
     ResponseTx acc txInfo ->
       renderIO =<< txAnswerDoc (accountNetwork acc) (Just acc) unit txInfo
+    -- Each account's view of the transaction, a blank line between them
+    ResponseLabelledTxs held ->
+      renderIO . vcat . intersperse mempty =<< mapM (\(acc, txInfo) -> txAnswerDoc (accountNetwork acc) (Just acc) unit txInfo) held
     -- The coins left in the account below the transaction, apart from it
     ResponsePrepared acc txInfo left -> do
       renderIO =<< txAnswerDoc (accountNetwork acc) (Just acc) unit txInfo

@@ -1,10 +1,13 @@
 {-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 -- | The command line of hw, before anything runs: the usage lines its help
--- shows, the commands its texts name, and what the arguments ask for
+-- shows, what label takes, the commands its texts name, and what the
+-- arguments ask for
 module Haskoin.Wallet.Cli.ParserSpec (spec) where
 
-import Haskoin.Wallet.Cli.Parser (program)
+import Haskoin (txHashToHex)
+import Haskoin.Wallet.Cli.Parser (Labelled (..), program, readLabelled)
 import Haskoin.Wallet.Cli.Parser.Args (Args (..), CommandSpec (..))
 import Haskoin.Wallet.Cli.Parser.Help (mentionedCommands, usageParts)
 import Haskoin.Wallet.Cli.Parser.Completion (completionParts)
@@ -22,18 +25,28 @@ spec = do
     -- default
     it "lists the options of preparetx as they are typed" $
       usageOf "preparetx"
-        `shouldBe` "ADDRESS:AMOUNT... [-a|--account NAME] [-f|--fee-rate RATE] [--dust-limit SATOSHIS] [-r|--recipients-pay] [-m|--min-conf INT] [--strategy STRATEGY] [-o|--output FILENAME] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS]... [--select] [-y|--yes] [--change-back | --new-change]"
+        `shouldBe` "ADDRESS:AMOUNT... [-a|--account NAME] [-f|--fee-rate RATE] [--dust-limit SATOSHIS] [-r|--recipients-pay] [-m|--min-conf INT] [--strategy STRATEGY] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS]... [--select] [-y|--yes] [--change-back | --new-change]"
 
     it "follows what may be given several times with ..., after the brackets of an optional one" $
       usageOf "preparesendall"
-        `shouldBe` "ADDRESS[:AMOUNT]... [-a|--account NAME] [-f|--fee-rate RATE] [--dust-limit SATOSHIS] [-m|--min-conf INT] [-o|--output FILENAME] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS]... [--spend-dust | --leave-dust] [-y|--yes]"
+        `shouldBe` "ADDRESS[:AMOUNT]... [-a|--account NAME] [-f|--fee-rate RATE] [--dust-limit SATOSHIS] [-m|--min-conf INT] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS]... [--spend-dust | --leave-dust] [-y|--yes]"
 
     it "puts a choice in parentheses, and a required option with two names too" $
       usageOf "verifymsg" `shouldBe` "(ADDRESS SIGNATURE MESSAGE | (-i|--input FILENAME)) [-n|--network NETWORK]"
 
     it "shows an option that has to be given at least once as required" $
       usageOf "preparesweep"
-        `shouldBe` "[-a|--account NAME] [-n|--network NETWORK] [-k|--key-file FILENAME] [-w|--sweep-from ADDRESS]... [--address-file FILENAME] (-t|--sweep-to ADDRESS[:AMOUNT])... [-c|--coin TXID:INDEX]... [-o|--output FILENAME] [-f|--fee-rate RATE] [--dust-limit SATOSHIS] [-y|--yes]"
+        `shouldBe` "[-a|--account NAME] [-n|--network NETWORK] [-k|--key-file FILENAME] [-w|--sweep-from ADDRESS]... [--address-file FILENAME] (-t|--sweep-to ADDRESS[:AMOUNT])... [-c|--coin TXID:INDEX]... [-o|--output FILENAME] [-l|--label LABEL] [-f|--fee-rate RATE] [--dust-limit SATOSHIS] [-y|--yes]"
+
+  describe "What label labels" $ do
+    it "is a transaction for a word of 64 hexadecimal digits" $
+      case readLabelled "ab00000000000000000000000000000000000000000000000000000000000001" of
+        LabelledTx tid -> txHashToHex tid `shouldBe` "ab00000000000000000000000000000000000000000000000000000000000001"
+        other -> expectationFailure $ "Not a transaction: " <> show other
+
+    it "is an address, as typed, for any other word" $ do
+      readLabelled "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" `shouldBe` LabelledAddress "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"
+      readLabelled "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u" `shouldBe` LabelledAddress "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"
 
   describe "The commands a text of the help names" $ do
     it "are those named in it, in its order" $

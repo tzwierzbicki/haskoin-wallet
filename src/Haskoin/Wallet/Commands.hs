@@ -152,7 +152,7 @@ commandResponse ctx cfg unit = \case
   CommandReceive opts -> cmdReceive ctx cfg opts
   CommandAddresses account internal _ paging -> cmdAddresses cfg account internal paging
   CommandBalances account paging -> cmdBalances cfg account paging
-  CommandLabel opts -> cmdLabel cfg opts
+  CommandLabel opts -> cmdLabel ctx cfg opts
   -- Coins
   CommandCoins account locked paging -> cmdCoins cfg account locked paging
   CommandLockCoin outpoint -> cmdLockCoin cfg outpoint
@@ -446,11 +446,15 @@ balancesListing account paging = do
         listingAnswer = ResponseBalances acc
       }
 
-cmdLabel :: Config -> Label -> IO Response
-cmdLabel cfg opts =
-  runDBResponse cfg $ do
-    addr <- labelAddress opts.address opts.label
-    addressAnswer (dBAddressAccount addr) addr
+-- | Label a receiving address, or a transaction: see 'labelTransaction'
+cmdLabel :: Ctx -> Config -> Label -> IO Response
+cmdLabel ctx cfg opts =
+  runDBResponse cfg $
+    case opts.labelled of
+      LabelledAddress typed -> do
+        addr <- labelAddress typed opts.label
+        addressAnswer (dBAddressAccount addr) addr
+      LabelledTx named -> ResponseLabelledTxs <$> labelTransaction ctx named opts.label
 
 {- Coins -}
 
@@ -587,6 +591,11 @@ notInWallet = "The transaction does not involve this wallet"
 writeOutput :: Network -> Maybe FilePath -> TxSignData -> ExceptT String (DB IO) ()
 writeOutput net output tsd = for_ output $ \file -> liftEitherIO $ writeJsonFile file (TxFile (Just net) tsd)
 
+-- | The signing data of a transaction just prepared, with the label of
+-- --label, if given
+withLabel :: Maybe Text -> TxSignData -> TxSignData
+withLabel labelM tsd = tsd {txSignDataLabel = fromMaybe noLabel labelM}
+
 -- | Keep a transaction of the account just prepared: among its pending
 -- transactions, and in the --output file when there is one. The answer
 -- shows it.
@@ -721,7 +730,7 @@ cmdPrepareTx ctx cfg unit opts =
           | otherwise = NewChangeAddress
     gen <- liftIO initStdGen
     tsd <- buildTxSignData net ctx cfg gen opts.strategy accId recipients feeByte opts.dust opts.feePayer opts.minConf control changeTo
-    preparedAnswer ctx accId acc opts.output tsd left
+    preparedAnswer ctx accId acc opts.output (withLabel opts.label tsd) left
 
 -- | The address the change of a payment goes back to, among the addresses
 -- its coins come from: the only one, or the one the user picks. They are
@@ -770,7 +779,7 @@ cmdPrepareSendAll ctx cfg unit opts =
           return (sent, leftCoins (notSent sent spendable) unspendable [])
     gen <- liftIO initStdGen
     tsd <- buildSendAllSignData net ctx gen accId sent recipients feeByte opts.dust
-    preparedAnswer ctx accId acc opts.output tsd left
+    preparedAnswer ctx accId acc opts.output (withLabel opts.label tsd) left
   where
     -- The spendable coins the transaction does not send
     notSent sent = filter (`notElem` sent)
@@ -1054,7 +1063,7 @@ cmdPrepareSweep ctx cfg unit opts =
       keys <- maybe (return []) (readSecKeys terminal net) opts.keys
       found <- fetchSweepCoins net ctx (webStore ctx cfg net) accIdM keys (typed <> listed) opts.coins (fst <$> sweepTo)
       gen <- liftIO initStdGen
-      liftEither $ buildSweepSignData net ctx gen found sweepTo feeByte opts.dust
+      withLabel opts.label <$> liftEither (buildSweepSignData net ctx gen found sweepTo feeByte opts.dust)
     -- The addresses of the --address-file, read on the network of the
     -- sweep
     addressesOfFile net file = liftEither . parseAddresses net =<< liftEitherIO (readTextFile file)

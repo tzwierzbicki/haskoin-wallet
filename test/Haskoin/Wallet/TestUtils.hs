@@ -41,7 +41,7 @@ import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync (SyncRes (..))
 import Haskoin.Wallet.Cli.Style (Style, renderPlain)
 import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), MyInputs (..), MyOutputs (..), PendingStatus (..), TxInfo (..), TxStatus (..), TxSummary (..), TxType (..), pendingSigned)
-import Haskoin.Wallet.Tx.SignData (TxSignData (..), nosigHash)
+import Haskoin.Wallet.Tx.SignData (TxSignData (..), noLabel, nosigHash)
 import Haskoin.Wallet.Tx.Signing (signWalletTx)
 import Numeric.Natural (Natural)
 import Prettyprinter (Doc)
@@ -501,13 +501,13 @@ fundingTx :: Ctx -> Word8 -> [(Address, Natural)] -> Tx
 fundingTx ctx w = spendingTx ctx [(fakeTxHash w, 0)]
 
 -- | A pending transaction of an account as its row holds it: unsigned,
--- without derivation paths, holding the coins its inputs spend
+-- without derivation paths or label, holding the coins its inputs spend
 pendingRow :: DBAccountId -> Tx -> DBPendingTx
 pendingRow accId tx =
   DBPendingTx
     { dBPendingTxAccount = accId,
       dBPendingTxNosigHash = hashBytes (nosigHash tx),
-      dBPendingTxBlob = BS.toStrict $ encode $ TxSignData tx [] [] [] Nothing Nothing [],
+      dBPendingTxBlob = BS.toStrict $ encode $ TxSignData tx [] [] [] Nothing Nothing [] noLabel,
       dBPendingTxOnline = False,
       dBPendingTxConflicted = False,
       dBPendingTxCreated = fixtureTime

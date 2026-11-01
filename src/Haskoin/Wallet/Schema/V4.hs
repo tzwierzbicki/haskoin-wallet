@@ -39,7 +39,11 @@
 -- of the coins and the free column of the addresses could only disagree
 -- with; a coin keeps instead whether the user locked it, which only the
 -- user can tell. A pending transaction keeps whether the store, at the last
--- sync, found one of its coins spent by another transaction or gone.
+-- sync, found one of its coins spent by another transaction or gone. The
+-- labels the user gives the transactions of an account on the network have
+-- a table of their own, by account and txid, which the sync never touches:
+-- a summary it rewrites or marks dead keeps its label. A pending
+-- transaction keeps its label in its signing data until then.
 --
 -- The keys are made for large wallets. An address is keyed by its account,
 -- its chain and its index, the order `addresses` lists it in, and its
@@ -114,6 +118,14 @@ DBTxInfo
   blob ByteString
   dead Bool default=0
   created UTCTime default=CURRENT_TIMESTAMP
+  Primary account txid
+  deriving Show
+  deriving Eq
+
+DBTxLabel
+  account DBAccountId
+  txid KeyBytes
+  label Text
   Primary account txid
   deriving Show
   deriving Eq

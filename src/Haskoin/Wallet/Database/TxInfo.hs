@@ -24,7 +24,8 @@ import Data.Aeson
 import qualified Data.Aeson as Json
 import Data.Aeson.Types (Pair, Parser)
 import qualified Data.ByteString as BS
-import Data.Either (partitionEithers)
+import Data.Char (toUpper)
+import Data.Either (partitionEithers, rights)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust)
@@ -41,6 +42,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.BestBlock
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.Database.TxLabel (txLabel)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 
@@ -190,11 +192,14 @@ pendingSigned = isJust . pendingTxid
 pendingShownHash :: PendingStatus -> TxHash
 pendingShownHash status = fromMaybe (pendingNosigHash status) (pendingTxid status)
 
--- | A transaction as hw reports it: what it means to the account, and
--- where it stands
+-- | A transaction as hw reports it: what it means to the account, where it
+-- stands, and the label the user gave it
 data TxInfo = TxInfo
   { txInfoSummary :: !TxSummary,
-    txInfoStatus :: !TxStatus
+    txInfoStatus :: !TxStatus,
+    -- | The label of the transaction, or none: in its signing data while it
+    -- is pending, then in the labels of the account
+    txInfoLabel :: !Text
   }
   deriving (Eq, Show)
 
@@ -208,9 +213,9 @@ txInfoHash info =
 
 {- JSON -}
 
--- The summary and the status are written as one flat object, the same for a
--- transaction on the chain and one in preparation, and addresses are
--- written as the text of the network.
+-- The summary, the status and the label are written as one flat object, the
+-- same for a transaction on the chain and one in preparation, and addresses
+-- are written as the text of the network.
 
 instance Json.ToJSON MyOutputs where
   toJSON (MyOutputs v p l) =
@@ -252,10 +257,10 @@ instance MarshalJSON Network TxSummary where
   unmarshalValue net = withObject "TxSummary" (summaryParser net)
 
 instance MarshalJSON Network TxInfo where
-  marshalValue net (TxInfo summary status) =
-    object $ summaryPairs net summary <> statusPairs status
+  marshalValue net (TxInfo summary status label) =
+    object $ summaryPairs net summary <> statusPairs status <> ["label" .= label]
   unmarshalValue net =
-    withObject "TxInfo" $ \o -> TxInfo <$> summaryParser net o <*> statusParser o
+    withObject "TxInfo" $ \o -> TxInfo <$> summaryParser net o <*> statusParser o <*> o .:? "label" .!= ""
 
 summaryPairs :: Network -> TxSummary -> [Pair]
 summaryPairs net s =
@@ -521,8 +526,7 @@ repsertSummary net accId tid ref time summary = do
 -- blocks first, and those with the same block reference by their ids, so
 -- that the order is settled. Those after the transaction given, by its
 -- block and its id, or the first ones, up to the count, or all of them.
--- Their confirmations are counted from the best block, none for a dead
--- transaction, and the labels of their addresses are those of today.
+-- Each is as 'chainTxInfo' reports it.
 txsAfter :: (MonadUnliftIO m) => DBAccountId -> Maybe (Store.BlockRef, TxHash) -> Maybe Natural -> ExceptT String (DB m) [TxInfo]
 txsAfter accId afterM countM = do
   acc <- getAccountById accId
@@ -541,15 +545,34 @@ txsAfter accId afterM countM = do
             &&. (t ^. DBTxInfoBlockRef >. blockBytes ||. t ^. DBTxInfoTxid >. val (hashBytes tid))
       orderBy [asc (t ^. DBTxInfoBlockRef), asc (t ^. DBTxInfoTxid)]
       forM_ countM $ limit . rowLimit
-      return (t ^. DBTxInfoTxid, t ^. DBTxInfoBlockRef, t ^. DBTxInfoTime, t ^. DBTxInfoDead, t ^. DBTxInfoBlob)
+      return t
   heightM <- bestHeight net
-  forM rows $ \(Value tidBytes, Value refBytes, Value time, Value dead, Value blob) -> do
-    tid <- liftEither $ bytesToHash tidBytes
-    ref <- liftEither $ S.decode refBytes
-    summary <- liftEither $ decodeSummary net tid blob
-    let confirmations = if dead then 0 else getConfirmations heightM ref
-        status = ChainStatus tid ref time confirmations dead
-    lift $ fillTxInfoLabels net $ TxInfo summary (OnChain status)
+  forM rows $ chainTxInfo net heightM . entityVal
+
+-- | A transaction of the account on the chain, as txs shows it, if the
+-- account has it, dead or alive
+storedTxInfo :: (MonadUnliftIO m) => DBAccountId -> TxHash -> ExceptT String (DB m) (Maybe TxInfo)
+storedTxInfo accId tid = do
+  acc <- getAccountById accId
+  let net = accountNetwork acc
+  rowM <- lift $ P.get (DBTxInfoKey accId (hashBytes tid))
+  heightM <- bestHeight net
+  forM rowM $ chainTxInfo net heightM
+
+-- | The stored summary of a transaction on the chain as hw reports it. Its
+-- confirmations are counted from the best height given, none for a dead
+-- transaction. Its label and the labels of its addresses are those of
+-- today.
+chainTxInfo :: (MonadUnliftIO m) => Network -> Maybe BlockHeight -> DBTxInfo -> ExceptT String (DB m) TxInfo
+chainTxInfo net heightM row = do
+  tid <- liftEither $ bytesToHash (dBTxInfoTxid row)
+  ref <- liftEither $ S.decode (dBTxInfoBlockRef row)
+  summary <- liftEither $ decodeSummary net tid (dBTxInfoBlob row)
+  let dead = dBTxInfoDead row
+      confirmations = if dead then 0 else getConfirmations heightM ref
+      status = ChainStatus tid ref (dBTxInfoTime row) confirmations dead
+  label <- lift $ txLabel (dBTxInfoAccount row) tid
+  lift $ fillTxInfoLabels net $ TxInfo summary (OnChain status) label
 
 -- | The block of a transaction of the account, the one --after names, or
 -- why there is none
@@ -558,6 +581,18 @@ txBlock accId tid = do
   rowM <- lift $ P.get (DBTxInfoKey accId (hashBytes tid))
   row <- liftMaybe ("The transaction " <> cs (txHashToHex tid) <> " is not in the account") rowM
   liftEither $ S.decode (dBTxInfoBlockRef row)
+
+-- | At most the given number of ids of the account's transactions on the
+-- chain that start with the hexadecimal digits, in the order of their ids:
+-- for the shell. The key holds the bytes of an id in the order hw shows
+-- them, so hex() writes its digits as they are typed, in capitals.
+txidsStarting :: (MonadUnliftIO m) => DBAccountId -> String -> Natural -> DB m [TxHash]
+txidsStarting accId digits atMost = do
+  rows <-
+    rawSql
+      "select txid from d_b_tx_info where account = ? and substr(hex(txid), 1, ?) = ? order by txid limit ?"
+      [P.toPersistValue accId, P.toPersistValue (length digits), P.toPersistValue (map toUpper digits), P.toPersistValue (rowLimit atMost :: Int)]
+  return $ rights (bytesToHash . unSingle <$> rows)
 
 -- | The transaction with the labels of the account's addresses filled in,
 -- as the database has them now

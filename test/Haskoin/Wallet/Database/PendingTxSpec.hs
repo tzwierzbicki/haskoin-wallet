@@ -4,14 +4,15 @@
 {-# LANGUAGE TupleSections #-}
 {-# OPTIONS_GHC -Wno-ambiguous-fields -fno-warn-orphans #-}
 
--- | The pending transactions of an account: imported, held, listed, signed
--- in place, sent and deleted. The account of these tests holds a coin of
+-- | The pending transactions of an account: imported, held, labelled,
+-- listed, signed in place, sent and deleted. The account of these tests holds a coin of
 -- 20000 at its first external address, and its payment is 8000 to an
 -- outside address, with the change at its first internal address. Some
 -- tests give it a second coin, of 10000 at its second external address.
 module Haskoin.Wallet.Database.PendingTxSpec (spec) where
 
 import Conduit (MonadIO, liftIO)
+import Control.Monad (forM_)
 import Control.Monad.Except
 import Control.Monad.Trans (lift)
 import qualified Data.ByteString as BS
@@ -34,6 +35,7 @@ import Haskoin.Wallet.Store
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.Building (ChangeTo (..), CoinControl (..), buildTxSignData)
 import Haskoin.Wallet.Database.TxInfo
+import Haskoin.Wallet.Database.TxLabel (txLabel)
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Signing (signWalletTx, verifySignedTx)
 import Numeric.Natural (Natural)
@@ -45,6 +47,7 @@ spec =
   prepareContext $ \ctx -> do
     importingSpec ctx
     namingSpec ctx
+    labellingSpec ctx
     listingSpec ctx
     sendingSpec ctx
     sendingFileSpec ctx
@@ -187,14 +190,14 @@ otherAccount ctx cfg = do
 -- other account, less a fee of 1000
 sweepOfFunding :: Ctx -> TxSignData
 sweepOfFunding ctx =
-  TxSignData (spendingTx ctx [(txHash (funding ctx), 0)] [(externalAddr2, 19000)]) [funding ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing []
+  TxSignData (spendingTx ctx [(txHash (funding ctx), 0)] [(externalAddr2, 19000)]) [funding ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing [] noLabel
 
 -- | A sweep by the other account of the coin of 'secondFunding': the 10000
 -- at the account's second external address go to the first external
 -- address of the other account, less a fee of 1000
 sweepOfSecondFunding :: Ctx -> TxSignData
 sweepOfSecondFunding ctx =
-  TxSignData (spendingTx ctx [(txHash (secondFunding ctx), 0)] [(externalAddr2, 9000)]) [secondFunding ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing []
+  TxSignData (spendingTx ctx [(txHash (secondFunding ctx), 0)] [(externalAddr2, 9000)]) [secondFunding ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing [] noLabel
 
 -- | When a transaction in preparation was created, if the wallet holds it
 createdOf :: TxInfo -> Maybe UTCTime
@@ -208,7 +211,7 @@ createdOf info = case txInfoStatus info of
 -- on both chains
 cashSweepOfFunding :: Ctx -> TxSignData
 cashSweepOfFunding ctx =
-  TxSignData (spendingTx ctx [(txHash (funding ctx), 0)] [(bchExternalAddr, 19000)]) [funding ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing []
+  TxSignData (spendingTx ctx [(txHash (funding ctx), 0)] [(bchExternalAddr, 19000)]) [funding ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing [] noLabel
 
 -- | Whether a pending transaction holds the coin
 transactionLocked :: JsonCoin -> Bool
@@ -331,6 +334,25 @@ importingSpec ctx =
         -- The wallet holds the version imported last: sendtx sends that one
         stored <- lookupPendingTx pendingHash
         liftIO $ (pendingTxData <$> stored) `shouldBe` Just byOther
+    -- The user may change the label while the file is away to be signed
+    it "keeps the label held when a signed version comes in with another label" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        unsigned <- unsignedPayment ctx cfg accId
+        pendingHash <- importPendingTx btc ctx accId unsigned {txSignDataLabel = "Rent of October"}
+        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned {txSignDataLabel = "Rent"} testAccountKey
+        _ <- importPendingTx btc ctx accId signed
+        ((.pendingTxData.txSignDataLabel) <$> requirePendingTx pendingHash) `dbShouldBeE` "Rent of October"
+
+    it "takes the label of a signed version when the version held has none" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        unsigned <- unsignedPayment ctx cfg accId
+        pendingHash <- importPendingTx btc ctx accId unsigned
+        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned {txSignDataLabel = "Rent"} testAccountKey
+        _ <- importPendingTx btc ctx accId signed
+        ((.pendingTxData.txSignDataLabel) <$> requirePendingTx pendingHash) `dbShouldBeE` "Rent"
+
     it "refuses a transaction pending in another account" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -378,7 +400,7 @@ importingSpec ctx =
         let spend = spendingTx ctx [(txHash (funding ctx), 0)] [(otherAddr 3, 19000)]
         lift $
           dbShouldFailWith "A coin referenced by the transaction is locked" $
-            importPendingTx btc ctx accId (TxSignData spend [funding ctx] [Deriv :/ 0 :/ 0] [] Nothing Nothing [])
+            importPendingTx btc ctx accId (TxSignData spend [funding ctx] [Deriv :/ 0 :/ 0] [] Nothing Nothing [] noLabel)
     it "locks the coin of another account it spends, in that account too" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -416,7 +438,7 @@ importingSpec ctx =
         let spend = spendingTx ctx [(txHash (funding ctx), 0)] [(otherAddr 3, 19000)]
         lift $
           dbShouldFailWith "A coin referenced by the transaction is locked by the user: unlockcoin frees it" $
-            importPendingTx btc ctx accId (TxSignData spend [funding ctx] [Deriv :/ 0 :/ 0] [] Nothing Nothing [])
+            importPendingTx btc ctx accId (TxSignData spend [funding ctx] [Deriv :/ 0 :/ 0] [] Nothing Nothing [] noLabel)
     it "refuses under coin control a coin the user locked" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -434,7 +456,7 @@ importingSpec ctx =
             spend = spendingTx ctx [(txHash unseen, 0)] [(otherAddr 3, 4000)]
         lift $
           dbShouldFailWith "A coin referenced by the transaction does not exist" $
-            importPendingTx btc ctx accId (TxSignData spend [unseen] [Deriv :/ 0 :/ 0] [] Nothing Nothing [])
+            importPendingTx btc ctx accId (TxSignData spend [unseen] [Deriv :/ 0 :/ 0] [] Nothing Nothing [] noLabel)
     it "refuses a transaction paying change to an address the wallet has not generated" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -443,7 +465,7 @@ importingSpec ctx =
         let spend = spendingTx ctx [(txHash (funding ctx), 0)] [(internalAddr 1, 11774), (otherAddr 0, 8000)]
         lift $
           dbShouldFailWith "Some referenced addresses do not exist" $
-            importPendingTx btc ctx accId (TxSignData spend [funding ctx] [Deriv :/ 0 :/ 0] [Deriv :/ 1 :/ 1] Nothing Nothing [])
+            importPendingTx btc ctx accId (TxSignData spend [funding ctx] [Deriv :/ 0 :/ 0] [Deriv :/ 1 :/ 1] Nothing Nothing [] noLabel)
     it "refuses a transaction whose change address another pending transaction holds" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -454,7 +476,7 @@ importingSpec ctx =
         let spend = spendingTx ctx [(txHash (secondFunding ctx), 0)] [(internalAddr 0, 2774), (otherAddr 1, 7000)]
         lift $
           dbShouldFailWith "Some of the internal output addresses are not free" $
-            importPendingTx btc ctx accId (TxSignData spend [secondFunding ctx] [Deriv :/ 0 :/ 1] [Deriv :/ 1 :/ 0] Nothing Nothing [])
+            importPendingTx btc ctx accId (TxSignData spend [secondFunding ctx] [Deriv :/ 0 :/ 1] [Deriv :/ 1 :/ 0] Nothing Nothing [] noLabel)
 
 listingSpec :: Ctx -> Spec
 listingSpec ctx =
@@ -559,6 +581,63 @@ namingSpec ctx =
         (pendingHash, signed) <- signedPending ctx cfg accId
         ((.pendingTxData) <$> requirePendingTx pendingHash) `dbShouldBeE` signed
 
+labellingSpec :: Ctx -> Spec
+labellingSpec ctx =
+  describe "Labelling a transaction" $ do
+    let cfg = def :: Config
+        -- The accounts of a labelling answer, by name, each with the label
+        -- of its transaction
+        labelsOf answered = [(dBAccountName acc, txInfoLabel info) | (acc, info) <- answered]
+    it "keeps the label of a pending transaction in its signing data, which its file carries" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        unsigned <- unsignedPayment ctx cfg accId
+        pendingHash <- importPendingTx btc ctx accId unsigned
+        (labelsOf <$> labelTransaction ctx pendingHash "Rent") `dbShouldBeE` [("test", "Rent")]
+        ((.pendingTxData.txSignDataLabel) <$> requirePendingTx pendingHash) `dbShouldBeE` "Rent"
+
+    it "finds a signed pending transaction by its txid" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        (pendingHash, signed) <- signedPending ctx cfg accId
+        _ <- labelTransaction ctx (txHash signed.txSignDataTx) "Rent"
+        ((.pendingTxData.txSignDataLabel) <$> requirePendingTx pendingHash) `dbShouldBeE` "Rent"
+
+    it "removes the label of a pending transaction with an empty one" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        unsigned <- unsignedPayment ctx cfg accId
+        pendingHash <- importPendingTx btc ctx accId unsigned {txSignDataLabel = "Rent"}
+        (labelsOf <$> labelTransaction ctx pendingHash "") `dbShouldBeE` [("test", "")]
+        ((.pendingTxData.txSignDataLabel) <$> requirePendingTx pendingHash) `dbShouldBeE` ""
+
+    -- A payment from one account of the wallet to the other is in the
+    -- history of both
+    it "labels a transaction of the history in every account that has it" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        (otherId, _) <- testNewAcc2 ctx "other"
+        forM_ [accId, otherId] $ \holder ->
+          lift $ repsertSummary btc holder (fakeTxHash 5) (Store.BlockRef 800000 1) fixtureTime paymentSummary
+        labelled <- labelTransaction ctx (fakeTxHash 5) "To savings"
+        liftIO $ labelsOf labelled `shouldMatchList` [("test", "To savings"), ("other", "To savings")]
+        lift (txLabel accId (fakeTxHash 5)) `dbShouldBeE` "To savings"
+        lift (txLabel otherId (fakeTxHash 5)) `dbShouldBeE` "To savings"
+
+    it "labels a transaction of the history in no account that does not have it" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        (otherId, _) <- testNewAcc2 ctx "other"
+        _ <- lift $ repsertSummary btc accId (fakeTxHash 5) (Store.BlockRef 800000 1) fixtureTime paymentSummary
+        (labelsOf <$> labelTransaction ctx (fakeTxHash 5) "Salary") `dbShouldBeE` [("test", "Salary")]
+        lift (txLabel otherId (fakeTxHash 5)) `dbShouldBeE` ""
+
+    it "refuses a transaction the wallet does not have" $
+      inDatabase $ do
+        _ <- runExceptT $ testNewAcc ctx "test"
+        dbShouldFailWith "The wallet has no transaction 0000000000000000000000000000000000000000000000000000000000000005" $
+          labelTransaction ctx (fakeTxHash 5) "Rent"
+
 sendingSpec :: Ctx -> Spec
 sendingSpec ctx =
   describe "Sending a pending transaction" $ do
@@ -652,7 +731,7 @@ sendingSpec ctx =
       readIORef asks `shouldReturn` 3
     it "sees the transaction on the first ask" $ do
       asks <- newIORef 0
-      let tsd = TxSignData (spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 8000)]) [] [] [] Nothing Nothing []
+      let tsd = TxSignData (spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 8000)]) [] [] [] Nothing Nothing [] noLabel
       runExceptT (broadcastWith 1000 3 (countingAsks asks (toStore (storeKnowing ctx tsd))) (txSignDataTx tsd))
         `shouldReturn` Right True
       readIORef asks `shouldReturn` 1
@@ -677,6 +756,18 @@ sendingFileSpec ctx =
         held <- requirePendingTx pendingHash
         liftIO $ held.pendingTxData `shouldBe` signed
         lift (hasRawTx (txHash (txSignDataTx signed))) `dbShouldBeE` True
+    -- The user may change the label while the file is away to be signed
+    it "sends a file whose label differs from the one held, keeping the label held" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        unsigned <- unsignedPayment ctx cfg accId
+        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        pendingHash <- importPendingTx btc ctx accId signed {txSignDataLabel = "Rent of October"}
+        sent <- sendSigned ctx (const (toStore (storeKnowing ctx signed))) withoutAsking Nothing signed {txSignDataLabel = "Rent"}
+        liftIO $ case sent of
+          SentPending _ info -> (pendingFlags info, txInfoLabel info) `shouldBe` (Just (pendingHash, True, True, False), "Rent of October")
+          SentOutside _ _ -> expectationFailure "A transaction of the wallet was sent as an outside one"
+
     it "refuses a network other than the account's" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -829,13 +920,31 @@ deletingSpec ctx =
         (pendingHash, _) <- signedPending ctx cfg accId
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
         held <- requirePendingTx pendingHash
-        lift $ retirePendingTx held
+        lift $ retirePendingTx held (txHash (txSignDataTx held.pendingTxData))
         ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing) `dbShouldBeE` []
         (map transactionLocked <$> coinsAfter btc accId AllCoins Nothing Nothing) `dbShouldBeE` [False]
         -- The sync that retires it also records the change paid to /1/0,
         -- and an address paid on the chain is never used again
         updateAddressBalances btc [Store.Balance (internalAddr 0) 11774 0 1 1 11774]
         (dBAddressIndex <$> changeAddress ctx cfg accId) `dbShouldBeE` 1
+    -- A miner may re-encode the signatures: the network has it as 9
+    it "retiring a labelled transaction gives its label to the id the network has it under" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        (pendingHash, _) <- signedPending ctx cfg accId
+        _ <- labelTransaction ctx pendingHash "Rent"
+        held <- requirePendingTx pendingHash
+        lift $ retirePendingTx held (fakeTxHash 9)
+        lift (txLabel accId (fakeTxHash 9)) `dbShouldBeE` "Rent"
+
+    it "retiring a transaction without a label labels nothing" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        (pendingHash, signed) <- signedPending ctx cfg accId
+        held <- requirePendingTx pendingHash
+        lift $ retirePendingTx held (txHash signed.txSignDataTx)
+        lift (tableRows "d_b_tx_label") `dbShouldBeE` []
+
     it "counts and frees the coin of another account it held" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -888,7 +997,7 @@ conflictsSpec ctx =
 -- | A transaction between two addresses outside the wallet, as a sweep of
 -- keys kept elsewhere to another wallet is: it involves no account
 outsideTx :: Ctx -> TxSignData
-outsideTx ctx = TxSignData (spendingTx ctx [(txHash parent, 0)] [(otherAddr 0, 9000)]) [parent] [] [] Nothing Nothing []
+outsideTx ctx = TxSignData (spendingTx ctx [(txHash parent, 0)] [(otherAddr 0, 9000)]) [parent] [] [] Nothing Nothing [] noLabel
   where
     parent = spendingTx ctx [(fakeTxHash 9, 0)] [(otherAddr 1, 10000)]
 

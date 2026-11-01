@@ -39,6 +39,7 @@ import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), MyOutputs (..), TxInfo (..), TxSummary (..), TxType (..), txInfoHash, txsAfter)
+import Haskoin.Wallet.Database.TxLabel (txLabel)
 import Haskoin.Wallet.Tx.SignData
 import Numeric.Natural (Natural)
 import Test.Hspec
@@ -336,6 +337,15 @@ spec = prepareContext $ \ctx -> do
         pendingHashes accId `dbShouldBeE` []
         liftIO $ syncResRebroadcast res `shouldBe` 0
 
+    it "gives the label of a pending transaction it retires to that transaction in the history" $
+      inDatabaseE $ do
+        accId <- account
+        lift $ P.insert_ $ pendingRow accId (pendingTx ctx)
+        held <- requirePendingTx (txHash (pendingTx ctx))
+        lift $ setPendingTxLabel held "Back to myself"
+        _ <- syncWith (sentStore ctx) accId
+        (map txInfoLabel <$> txsAfter accId Nothing Nothing) `dbShouldBeE` ["Back to myself"]
+
     it "sends again a transaction the user sent that the store lost" $
       inDatabaseE $ do
         accId <- account
@@ -405,6 +415,15 @@ spec = prepareContext $ \ctx -> do
           `dbShouldBeE` [ (Just (fakeTxHash 9), Store.BlockRef 800001 1, -50000),
                           (Just (realPaymentId ctx), Store.BlockRef 800000 1, 50000)
                         ]
+
+    it "gives the label of a transaction the network has under another id to that id" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (realPaymentStore ctx) accId
+        pendingHash <- importPendingTx btc ctx accId (signedSpend ctx) {txSignDataLabel = "Rent"}
+        lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
+        _ <- syncWith (malleatedStore ctx) accId
+        lift (txLabel accId (fakeTxHash 9)) `dbShouldBeE` "Rent"
 
     it "retires an unsigned pending transaction the network has, signed and sent elsewhere" $
       inDatabaseE $ do
@@ -1111,7 +1130,7 @@ changeSpendTx ctx =
         [Deriv :/ 0 :/ 0]
         [Deriv :/ 1 :/ 0]
         Nothing
-        Nothing []
+        Nothing [] noLabel
 
 -- | The payment of 'realPaymentStore' spent by 'changeSpendTx', confirmed
 -- at height 800001: the coin is gone, the change is a coin at internalAddr 0
@@ -1246,7 +1265,7 @@ pendingTx ctx =
         [Deriv :/ 0 :/ 0]
         [Deriv :/ 0 :/ 0]
         Nothing
-        Nothing []
+        Nothing [] noLabel
 
 -- | The coin of 'realPaymentStore' spent to otherAddr 0, with its signing
 -- data as the wallet keeps it, signed
@@ -1261,7 +1280,7 @@ unsignedSpend ctx =
     [Deriv :/ 0 :/ 0]
     []
     (Just 10)
-    Nothing []
+    Nothing [] noLabel
 
 -- | The payment of 'realPaymentStore' spent by somebody else's transaction
 -- 8, confirmed at height 800001: the coin is gone, and the store names
@@ -1312,7 +1331,7 @@ malleatedStore ctx =
 -- 1000
 sweepToOther :: Ctx -> TxSignData
 sweepToOther ctx =
-  TxSignData (spendingTx ctx [(realPaymentId ctx, 0)] [(externalAddr2, 49000)]) [realPaymentTx ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing []
+  TxSignData (spendingTx ctx [(realPaymentId ctx, 0)] [(externalAddr2, 49000)]) [realPaymentTx ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing [] noLabel
 
 -- | A payment of 10000 to somebody else's address, otherAddr 3: a coin
 -- outside the wallet whose key the user holds, on a paper wallet for
@@ -1324,7 +1343,7 @@ outsidePayment ctx = fundingTx ctx 9 [(otherAddr 3, 10000)]
 -- less a fee of 1000
 outsideSweep :: Ctx -> TxSignData
 outsideSweep ctx =
-  TxSignData (spendingTx ctx [(txHash (outsidePayment ctx), 0)] [(externalAddr 0, 9000)]) [outsidePayment ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing []
+  TxSignData (spendingTx ctx [(txHash (outsidePayment ctx), 0)] [(externalAddr 0, 9000)]) [outsidePayment ctx] [] [Deriv :/ 0 :/ 0] Nothing Nothing [] noLabel
 
 -- | A store that knows the payment to otherAddr 3, its coin unspent, and
 -- nothing of the account

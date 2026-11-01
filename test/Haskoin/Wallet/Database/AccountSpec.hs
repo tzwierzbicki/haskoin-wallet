@@ -31,7 +31,7 @@ import Haskoin.Wallet.Keys
 import Haskoin.Wallet.Database.PendingTx (importPendingTx)
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.Tx.SignData (TxSignData (..))
+import Haskoin.Wallet.Tx.SignData (TxSignData (..), noLabel)
 import Haskoin.Wallet.Cli.Listing (Paging (..))
 import Numeric.Natural (Natural)
 import System.FilePath ((</>))
@@ -96,7 +96,7 @@ fundedWith ctx accId amount = do
 -- signing data naming a seed as a signer writes it
 paymentOf :: Ctx -> Tx -> Fingerprint -> TxSignData
 paymentOf ctx funding fingerprint =
-  TxSignData (spendingTx ctx [(txHash funding, 0)] [(otherAddr 0, 40000)]) [funding] [Deriv :/ 0 :/ 0] [] Nothing (Just fingerprint) []
+  TxSignData (spendingTx ctx [(txHash funding, 0)] [(otherAddr 0, 40000)]) [funding] [Deriv :/ 0 :/ 0] [] Nothing (Just fingerprint) [] noLabel
 
 {- Creating -}
 
@@ -376,7 +376,7 @@ listingSpec ctx =
 deletingSpec :: Ctx -> Spec
 deletingSpec ctx =
   describe "Deleting an account" $
-    it "deletes it with its addresses, summaries, coins and pending transactions, and nothing of another account" $
+    it "deletes it with its addresses, summaries, labels of transactions, coins and pending transactions, and nothing of another account" $
       inDatabaseE $ do
         (mainId, _) <- testNewAcc ctx "main"
         (otherId, _) <- testNewAcc2 ctx "other"
@@ -384,17 +384,19 @@ deletingSpec ctx =
           _ <- genExtAddress ctx def accId ""
           _ <- refreshCoins btc ctx accId [addr] [storeCoin ctx (fakeTxHash n, 0) (Just 800000) addr 1000]
           lift $ P.insert_ $ DBTxInfo accId (hashBytes (fakeTxHash n)) (S.encode (Store.BlockRef 800000 1)) (Just fixtureTime) "{}" False fixtureTime
+          lift $ P.insert_ $ DBTxLabel accId (hashBytes (fakeTxHash n)) "rent"
           lift $ P.insert_ $ DBPendingTx accId (hashBytes (fakeTxHash (n + 2))) "{}" False False fixtureTime
-        lift $ rowsOf mainId `dbShouldBe` (1, 1, 1, 1)
+        lift $ rowsOf mainId `dbShouldBe` (1, 1, 1, 1, 1)
         lift $ deleteAccount mainId
-        lift $ rowsOf mainId `dbShouldBe` (0, 0, 0, 0)
-        lift $ rowsOf otherId `dbShouldBe` (1, 1, 1, 1)
+        lift $ rowsOf mainId `dbShouldBe` (0, 0, 0, 0, 0)
+        lift $ rowsOf otherId `dbShouldBe` (1, 1, 1, 1, 1)
         lift $ (map fst <$> listed) `dbShouldBe` ["other"]
   where
     rowsOf accId =
-      (,,,)
+      (,,,,)
         <$> P.count [DBAddressAccount P.==. accId]
         <*> P.count [DBTxInfoAccount P.==. accId]
+        <*> P.count [DBTxLabelAccount P.==. accId]
         <*> P.count [DBCoinAccount P.==. accId]
         <*> P.count [DBPendingTxAccount P.==. accId]
 

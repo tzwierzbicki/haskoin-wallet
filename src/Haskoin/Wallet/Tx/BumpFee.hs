@@ -30,6 +30,7 @@ module Haskoin.Wallet.Tx.BumpFee
     refuseSpentElsewhere,
     BumpPlan (..),
     bumpPlan,
+    replacementLabel,
     coinsToAdd,
     PaidBy (..),
     Reduction (..),
@@ -61,6 +62,7 @@ import Data.Ord (Down (..))
 import qualified Data.Set as Set
 import Data.String.Conversions (cs)
 import Data.Text (Text)
+import qualified Data.Text as Text
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -75,6 +77,7 @@ import Haskoin.Wallet.Database.RawTx (getRawTx, lookupRawTx)
 import Haskoin.Wallet.Store (Store, fromStore, rawTransactions)
 import Haskoin.Wallet.Tx.Building (BuiltTx (..), ChosenPayment (..), CoinControl (..), WalletCoins (..), assemblePayment, choosePayment, recipientsPayFee)
 import Haskoin.Wallet.Database.TxInfo (MyInputs (..), TxInfo (..), TxSummary (..), liveSummary, ownTransaction, txInfoBlockRefs)
+import Haskoin.Wallet.Database.TxLabel (txLabel)
 import Haskoin.Wallet.Tx.SendAll (sendAllFee)
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Signing (parseTxSignData)
@@ -90,7 +93,9 @@ data Sent = Sent
   { sentTx :: !Tx,
     sentSummary :: !TxSummary,
     -- | The transactions its coins come from
-    sentParents :: ![Tx]
+    sentParents :: ![Tx],
+    -- | The label the user gave it, or none
+    sentLabel :: !Text
   }
   deriving (Eq, Show)
 
@@ -152,20 +157,23 @@ stuckTransaction ctx store accId acc tid = do
           -- Before the transactions of its coins are fetched: those of a
           -- payment received are the payer's
           | not (ownTransaction summary) -> throwError notOwnPayment
-          | otherwise -> historySent store tid summary
+          | otherwise -> historySent store accId tid summary
 
--- | A pending transaction the user sent, as bumpfee replaces it
+-- | A pending transaction the user sent, as bumpfee replaces it, with the
+-- label of its signing data
 pendingSent :: (MonadUnliftIO m) => Ctx -> DBAccount -> PendingTx -> ExceptT String (DB m) Sent
 pendingSent ctx acc p = do
   info <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountXPubKey ctx acc) p.pendingTxData
-  return $ Sent (txSignDataTx p.pendingTxData) info.txInfoSummary p.pendingTxData.txSignDataInputs
+  return $ Sent (txSignDataTx p.pendingTxData) info.txInfoSummary p.pendingTxData.txSignDataInputs p.pendingTxData.txSignDataLabel
 
--- | A transaction of the history, as bumpfee replaces it
-historySent :: (MonadUnliftIO m) => Store -> TxHash -> TxSummary -> ExceptT String (DB m) Sent
-historySent store tid summary = do
+-- | A transaction of the account's history, as bumpfee replaces it, with
+-- the label the account gives it
+historySent :: (MonadUnliftIO m) => Store -> DBAccountId -> TxHash -> TxSummary -> ExceptT String (DB m) Sent
+historySent store accId tid summary = do
   raw <- liftMaybe ("The store has no transaction " <> hex tid) . listToMaybe =<< rawTxs store [tid]
   parents <- rawTxs store $ nubOrd [input.outpoint.hash | input <- raw.inputs]
-  return $ Sent raw summary parents
+  label <- lift $ txLabel accId tid
+  return $ Sent raw summary parents label
 
 -- | The raw transactions: those the wallet keeps, and the others from the
 -- store
@@ -239,7 +247,7 @@ spendingChildren ctx store accId acc parents = go (sentId <$> parents) []
             "The pending transaction " <> hex (nosigHash (txSignDataTx p.pendingTxData))
               <> " spends the change of the transaction: send it, or delete it with deletetx, before replacing them"
         pendingSent ctx acc p
-      fromHistory <- forM history $ \(tid, summary) -> historySent store tid summary
+      fromHistory <- forM history $ \(tid, summary) -> historySent store accId tid summary
       let known = Set.fromList (sentId <$> parents <> found)
           new = Map.elems $ Map.fromList [(sentId s, s) | s <- fromPending <> fromHistory, sentId s `Set.notMember` known]
       go (sentId <$> new) (found <> new)
@@ -266,7 +274,7 @@ refuseSpentElsewhere net accId sents = do
 -- one first: the coins they spend, but those one of them pays another,
 -- with the transactions they come from and the paths of their addresses;
 -- what they pay, but their change and what one of them pays another; the
--- address of their change, if any; and the fees they paid.
+-- address of their change, if any; the fees they paid; and their labels.
 data BumpPlan = BumpPlan
   { planCoins :: ![Store.Unspent],
     planParents :: ![Tx],
@@ -275,7 +283,9 @@ data BumpPlan = BumpPlan
     planRecipientPaths :: !(Map Address SoftPath),
     planChange :: !(Maybe (Address, SoftPath)),
     planFees :: !Natural,
-    planReplaces :: ![TxHash]
+    planReplaces :: ![TxHash],
+    -- | The label of the replacement: see 'replacementLabel'
+    planLabel :: !Text
   }
   deriving (Eq, Show)
 
@@ -316,11 +326,18 @@ bumpPlan net ctx accId sents = do
         planRecipientPaths = paths,
         planChange = listToMaybe [change | (s, addr, _) <- paid, Just change <- [changeOf s addr]],
         planFees = sum ((.sentSummary.summaryFee) <$> sents),
-        planReplaces = sentId <$> sents
+        planReplaces = sentId <$> sents,
+        planLabel = replacementLabel sents
       }
   where
     addressOf :: TxOut -> Either String Address
     addressOf out = either (const $ Left "A transaction replaced pays an output without an address") Right (scriptToAddressBS ctx out.script)
+
+-- | The label of a replacement: the labels of the transactions it
+-- replaces, the stuck one first, each label once, a semicolon between
+-- them. The replacement pays the recipients of all of them.
+replacementLabel :: [Sent] -> Text
+replacementLabel sents = Text.intercalate "; " (nubOrd [s.sentLabel | s <- sents, not (Text.null s.sentLabel)])
 
 -- | The coin of an output of a transaction of the wallet, in the block of
 -- that transaction
@@ -490,7 +507,7 @@ buildBump ctx cfg net accId gen plan funding feeByte dust = do
       then Just <$> maybe newChange return plan.planChange
       else return Nothing
   built <- liftEither $ assemblePayment net ctx found chosen change
-  return $ TxSignData built.tx (nubOrd (plan.planParents <> addedParents)) built.inputPaths built.outputPaths (Just feeByte) Nothing plan.planReplaces
+  return $ TxSignData built.tx (nubOrd (plan.planParents <> addedParents)) built.inputPaths built.outputPaths (Just feeByte) Nothing plan.planReplaces plan.planLabel
   where
     newChange = liftEither . fromDBAddr net =<< changeAddress ctx cfg accId
     -- The plan with the recipients paid what the reduction leaves them

@@ -426,6 +426,19 @@ commandLineSpec ctx = do
         run <- hw home (tabAfter ["label", "1KEn"]) []
         runOut run `shouldBe` "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\n"
 
+    it "offers the id of a transaction of the history after label" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home (tabAfter ["label", take 4 paidTxid]) []
+        runOut run `shouldBe` Text.pack paidTxid <> "\n"
+
+    it "offers a pending transaction by the hash pendingtxs shows after label" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        _ <- paymentSigned home
+        txid <- txidOf =<< onePendingTx home
+        run <- hw home (tabAfter ["label", take 4 txid]) []
+        runOut run `shouldBe` Text.pack txid <> "\n"
+
     it "offers the id of a payment the account sent after bumpfee" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         txid <- sentPayment home

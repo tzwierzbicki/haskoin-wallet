@@ -52,7 +52,7 @@ spec = prepareContext $ \ctx ->
         P.insert_ $ V3.DBVersion 3
         commitFixture
         migrateTo4 ctx
-        tablesRows ["d_b_account", "d_b_address", "d_b_tx_info", "d_b_coin", "d_b_raw_tx", "d_b_pending_tx"] `dbShouldBe` replicate 6 []
+        tablesRows ["d_b_account", "d_b_address", "d_b_tx_info", "d_b_tx_label", "d_b_coin", "d_b_raw_tx", "d_b_pending_tx"] `dbShouldBe` replicate 7 []
         expected <- liftIO $ schemaCreatedBy (createTables V4.migrateAll >> createIndexesOf V4.tableIndexes)
         databaseSchema `dbShouldBe` expected
 
@@ -157,6 +157,13 @@ spec = prepareContext $ \ctx ->
         columnNames "d_b_tx_info" `dbShouldBe` ["account", "blob", "block_ref", "created", "dead", "time", "txid"]
         columnNames "d_b_coin" `dbShouldBe` ["account", "address", "block_ref", "created", "locked_by_user", "outpoint", "value"]
         columnNames "d_b_pending_tx" `dbShouldBe` ["account", "blob", "conflicted", "created", "nosig_hash", "online"]
+
+    it "gives the transactions a table of labels, empty: version 3 had none" $
+      inMemory $ do
+        version3Database
+        migrateTo4 ctx
+        columnNames "d_b_tx_label" `dbShouldBe` ["account", "label", "txid"]
+        tableRows "d_b_tx_label" `dbShouldBe` []
 
     it "marks no summary dead: version 3 deleted the summaries of dead transactions" $
       inMemory $ do

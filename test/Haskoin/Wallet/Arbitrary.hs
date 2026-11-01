@@ -136,6 +136,7 @@ arbitraryTxSignData net ctx =
     <*> arbitraryMaybe arbitraryNatural
     <*> arbitraryMaybe arbitraryFingerprint
     <*> resize 3 (listOf arbitraryTxHash)
+    <*> arbitraryText
 
 arbitraryMyOutputs :: Gen MyOutputs
 arbitraryMyOutputs =
@@ -210,7 +211,7 @@ arbitraryTxStatus =
     ]
 
 arbitraryTxInfo :: Network -> Gen TxInfo
-arbitraryTxInfo net = TxInfo <$> arbitraryTxSummary net <*> arbitraryTxStatus
+arbitraryTxInfo net = TxInfo <$> arbitraryTxSummary net <*> arbitraryTxStatus <*> arbitraryText
 
 arbitrarySyncRes :: Network -> Ctx -> Gen SyncRes
 arbitrarySyncRes net ctx =
@@ -254,6 +255,7 @@ arbitraryResponse net ctx =
         <$> arbitraryDBAccount net ctx
         <*> resize 20 (listOf $ arbitraryTxInfo net),
       ResponseTx <$> arbitraryDBAccount net ctx <*> arbitraryTxInfo net,
+      ResponseLabelledTxs <$> resize 3 (listOf $ (,) <$> arbitraryDBAccount net ctx <*> arbitraryTxInfo net),
       ResponsePrepared
         <$> arbitraryDBAccount net ctx
         <*> arbitraryTxInfo net

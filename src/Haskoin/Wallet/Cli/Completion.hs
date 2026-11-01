@@ -3,7 +3,8 @@
 
 -- | What the shell completes from the wallet: the names of the accounts,
 -- the hashes of the pending transactions at each step from preparetx to
--- sendtx, the transactions bumpfee replaces, the coins and the addresses.
+-- sendtx, the transactions bumpfee replaces, the coins, the addresses, and
+-- what label labels.
 -- Each command is offered what it takes, and only when few enough values
 -- match what was typed: see 'offeredAtMost'. The shell runs hw at each
 -- Tab, so a completion reads the database and changes nothing. It writes
@@ -20,7 +21,7 @@ module Haskoin.Wallet.Cli.Completion
     coinsToLock,
     coinsToUnlock,
     coinsToSpend,
-    receivingAddresses,
+    labelTargets,
     walletAddresses,
     addressesToSpendFrom,
     accountNamed,
@@ -32,7 +33,7 @@ import Control.Monad (forM)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Data.Char (isHexDigit)
 import Data.Either (fromRight, rights)
-import Data.List (isPrefixOf, stripPrefix)
+import Data.List (isPrefixOf, nub, stripPrefix)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isNothing)
 import Data.String.Conversions (cs)
@@ -49,7 +50,7 @@ import Haskoin.Wallet.Cli.Parser.Completion (completionParts)
 import Haskoin.Wallet.Database.PendingTx (PendingTx (..), fromRow, pendingRows, pendingTxs)
 import Haskoin.Wallet.Database.RawTx (lookupRawTx)
 import Haskoin.Wallet.Tx.BumpFee (marksReplaceable)
-import Haskoin.Wallet.Database.TxInfo (mempoolSummaries, ownTransaction)
+import Haskoin.Wallet.Database.TxInfo (mempoolSummaries, ownTransaction, txidsStarting)
 import Haskoin.Wallet.Tx.SignData (TxSignData (..), isSigned, shownHash)
 import Numeric.Natural (Natural)
 import qualified System.Directory as D
@@ -222,11 +223,27 @@ walletCoinsStarting named typed = do
     listed <- fromRight [] <$> runExceptT (spendingOf net accId >>= \rules -> mapM (toJsonCoin rules) rows)
     return [(net, coin) | coin <- listed, typed `isPrefixOf` coinText (jsonCoinOutpoint coin)]
 
-{- The addresses -}
+{- What label labels -}
 
--- | The receiving addresses, for label: a change address takes no label
-receivingAddresses :: String -> IO [String]
-receivingAddresses = addressesOf [AddrExternal]
+-- | What label labels, for its first argument, among what starts with the
+-- word typed: the receiving addresses, since a change address takes no
+-- label; the pending transactions, by the hash pendingtxs shows; and the
+-- transactions of the history, by their ids. label takes no --account, so
+-- every account counts. Among more than 'offeredAtMost' of them all, none.
+labelTargets :: String -> IO [String]
+labelTargets typed = readForCompletion $ do
+  accounts <- getAccounts
+  addresses <- concat <$> sequence [addressesStarting accId AddrExternal (cs typed) askedFor | (accId, _) <- accounts]
+  held <- rights . map fromRow <$> pendingRows Nothing Nothing Nothing
+  let pending = [hash | p <- held, let hash = hexOf (shownHash (txOf p)), typed `isPrefixOf` hash]
+  -- A word that is no hexadecimal number starts no txid
+  history <-
+    if all isHexDigit typed
+      then concat <$> sequence [txidsStarting accId typed askedFor | (accId, _) <- accounts]
+      else return []
+  return $ fewEnough (nub ((offeredAddress <$> addresses) <> pending <> (hexOf <$> history)))
+
+{- The addresses -}
 
 -- | Every address of the wallet, for signmsg, which signs with the key of
 -- any of them

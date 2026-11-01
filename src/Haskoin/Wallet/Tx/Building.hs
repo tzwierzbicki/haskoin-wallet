@@ -153,7 +153,7 @@ buildTxSignData net ctx cfg gen strategy accId recipients feeByte dust payer min
       else return Nothing
   built <- liftEither $ assemblePayment net ctx found chosen change
   spentFrom <- mapM getRawTx $ nub $ (.outpoint.hash) <$> built.tx.inputs
-  return $ TxSignData built.tx spentFrom built.inputPaths built.outputPaths (Just feeByte) Nothing []
+  return $ TxSignData built.tx spentFrom built.inputPaths built.outputPaths (Just feeByte) Nothing [] noLabel
   where
     -- The change address, given the paths of the addresses of the coins
     changeFor paths chosen = case changeTo of

@@ -4,9 +4,10 @@
 
 -- | The signing data of a transaction: the transaction, the transactions it
 -- spends from, which say what each input is worth, the derivation paths of
--- the wallet's own inputs and outputs, the fee rate it was built for, and
--- the fingerprint of the seed once it has been signed. The builders produce
--- it, the signers sign it, and the commands write it to files and keep it
+-- the wallet's own inputs and outputs, the fee rate it was built for, the
+-- fingerprint of the seed once it has been signed, and the label the user
+-- gave it. The builders produce it, the signers sign it, and the commands
+-- write it to files and keep it
 -- among the pending transactions of the database, as JSON. Whether the
 -- transaction is signed is read from the transaction itself. Before and
 -- after signing, the database keys it by its 'nosigHash'. hw shows it by
@@ -19,6 +20,8 @@ import Data.Aeson
 import Data.Aeson.Types (Pair)
 import qualified Data.ByteString as BS
 import qualified Data.Serialize as S
+import Data.Text (Text)
+import qualified Data.Text as Text
 import Haskoin
 import Numeric.Natural (Natural)
 
@@ -37,9 +40,18 @@ data TxSignData = TxSignData
     -- | The ids of the transactions of the account it replaces, as bumpfee
     -- prepares it: a stuck transaction, and those that spend its change.
     -- None for any other transaction.
-    txSignDataReplaces :: ![TxHash]
+    txSignDataReplaces :: ![TxHash],
+    -- | The label the user gave the transaction, or none. Nothing signs
+    -- it: it is the user's note, which goes with the transaction to its
+    -- file, and to the wallet's history once the network has it.
+    txSignDataLabel :: !Text
   }
   deriving (Eq, Show)
+
+-- | The label of a transaction the user has not labelled, as the builders
+-- make it
+noLabel :: Text
+noLabel = Text.empty
 
 {- JSON -}
 
@@ -58,15 +70,16 @@ instance FromJSON TxSignData where
         <*> o .:? "feerate"
         <*> o .:? "fingerprint"
         <*> o .:? "replaces" .!= []
+        <*> o .:? "label" .!= ""
 
 instance ToJSON TxSignData where
   toJSON = object . txSignDataPairs
 
 -- | The keys of signing data in JSON. The transactions replaced are
--- written only for a replacement, so that the file of any other transaction
--- is as an earlier hw wrote it.
+-- written only for a replacement, and the label only when there is one, so
+-- that the file of any other transaction is as an earlier hw wrote it.
 txSignDataPairs :: TxSignData -> [Pair]
-txSignDataPairs (TxSignData t i oi op r f rs) =
+txSignDataPairs (TxSignData t i oi op r f rs l) =
   [ "tx" .= encodeHex (S.encode t),
     "txinputs" .= (encodeHex . S.encode <$> i),
     "inputpaths" .= oi,
@@ -75,6 +88,7 @@ txSignDataPairs (TxSignData t i oi op r f rs) =
     "fingerprint" .= f
   ]
     <> ["replaces" .= rs | not (null rs)]
+    <> ["label" .= l | not (Text.null l)]
 
 instance MarshalJSON Ctx TxSignData where
   marshalValue _ = toJSON

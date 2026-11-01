@@ -22,7 +22,7 @@ import Haskoin.Wallet.Database (DBAccount (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData (..), isSigned)
+import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData (..), isSigned, noLabel)
 import Haskoin.Wallet.Workflow.TestUtils
 import Numeric.Natural (Natural)
 import System.Exit (ExitCode (..))
@@ -259,12 +259,12 @@ signingSpec ctx = do
 -- | A transaction of the test wallet, unsigned, as a sweep of a coin it
 -- does not hold leaves it
 unsignedSweep :: Ctx -> TxSignData
-unsignedSweep ctx = TxSignData (spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 1000)]) [] [] [] (Just 1) Nothing []
+unsignedSweep ctx = TxSignData (spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 1000)]) [] [] [] (Just 1) Nothing [] noLabel
 
 -- | A payment of the test wallet to another wallet, unsigned
 unsignedPayment :: Ctx -> TxSignData
 unsignedPayment ctx =
-  TxSignData (spendingTx ctx [(txHash funding, 0)] [(otherAddr 0, 40000)]) [funding] [Deriv :/ 0 :/ 0] [] Nothing Nothing []
+  TxSignData (spendingTx ctx [(txHash funding, 0)] [(otherAddr 0, 40000)]) [funding] [Deriv :/ 0 :/ 0] [] Nothing Nothing [] noLabel
   where
     funding = fundingTx ctx 1 [(externalAddr 0, 50000)]
 

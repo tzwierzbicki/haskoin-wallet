@@ -19,11 +19,12 @@
 -- the whole coin that a coin row kept: its columns and its address, which
 -- gives its script, are the coin. A pending transaction keeps whether the
 -- last sync found it in conflict, out of conflict until the next sync asks
--- the store. The keys are made for large wallets: an address is keyed by
--- its chain and index instead of the text of its path, and the transaction
--- ids, outpoints, nosigHashes and raw transaction hashes are the bytes of
--- their hexadecimal text; indexes persistent cannot declare complete the
--- tables.
+-- the store. The labels of the transactions, which version 3 did not have,
+-- get a table of their own, empty. The keys are made for large wallets: an
+-- address is keyed by its chain and index instead of the text of its path,
+-- and the transaction ids, outpoints, nosigHashes and raw transaction
+-- hashes are the bytes of their hexadecimal text; indexes persistent cannot
+-- declare complete the tables.
 --
 -- The step reads the accounts with the tables of "Haskoin.Wallet.Schema.V3"
 -- and works on those of "Haskoin.Wallet.Schema.V4": the old tables are set
