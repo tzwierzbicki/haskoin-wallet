@@ -41,7 +41,7 @@ import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.TxSignData (TxFile (..), TxSignData (..), isSigned)
 import Numeric.Natural (Natural)
-import System.Directory (copyFile, doesDirectoryExist, doesFileExist, listDirectory, removeDirectoryRecursive)
+import System.Directory (copyFile, createDirectory, doesDirectoryExist, doesFileExist, listDirectory, removeDirectoryRecursive)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import Test.Hspec
@@ -1009,11 +1009,11 @@ failureSpec ctx = do
         runOut run `shouldBe` "-amain\n"
 
     -- bash completes my savings up to its space, which it escapes
-    it "offers a name with a space after the space bash escaped" $
+    it "offers a name with a space after the space bash escaped, escaped for bash again" $
       withHome $ \home -> do
         _ <- answer home ["createacc", "my savings"] seedTwice
         run <- hw home (tabAfter ["txs", "--account", "my\\ s"]) []
-        runOut run `shouldBe` "my savings\n"
+        runOut run `shouldBe` "my\\ savings\n"
 
     -- hw runs without a locale here. The name is passed to the database
     -- rather than typed, as the arguments of the tests may not take an
@@ -1063,6 +1063,28 @@ failureSpec ctx = do
         run <- hw home (tabAfter ["sendtx", take 4 txid]) []
         runOut run `shouldBe` ""
 
+    -- Another transaction of the mempool spends the coin of the payment,
+    -- which the sync finds
+    it "does not offer a transaction in conflict after sendtx, which the network would refuse" $
+      withChain ctx (paidChain ctx) $ \home chain -> do
+        _ <- paymentSigned home
+        let other = spendingTx ctx [(txHash (payment ctx), 0)] [(otherAddr 1, 40000)]
+        modifyIORef chain $ \c -> c {chainTxs = c.chainTxs <> [(other, Nothing)]}
+        _ <- hw home ["sync"] []
+        txid <- txidOf =<< onePendingTx home
+        run <- hw home (tabAfter ["sendtx", take 4 txid]) []
+        runOut run `shouldBe` ""
+
+    it "offers a transaction in conflict after deletetx, which frees its coins" $
+      withChain ctx (paidChain ctx) $ \home chain -> do
+        _ <- paymentSigned home
+        let other = spendingTx ctx [(txHash (payment ctx), 0)] [(otherAddr 1, 40000)]
+        modifyIORef chain $ \c -> c {chainTxs = c.chainTxs <> [(other, Nothing)]}
+        _ <- hw home ["sync"] []
+        txid <- txidOf =<< onePendingTx home
+        run <- hw home (tabAfter ["deletetx", take 4 txid]) []
+        runOut run `shouldBe` Text.pack txid <> "\n"
+
     it "offers a pending transaction after exporttx by the hash pendingtxs shows, its id once signed" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         _ <- paymentSigned home
@@ -1070,14 +1092,17 @@ failureSpec ctx = do
         run <- hw home (tabAfter ["exporttx", take 4 txid]) []
         runOut run `shouldBe` Text.pack txid <> "\n"
 
-    -- The coin of the paid chain, as coins lists it
-    let paidCoin = Text.unpack (txHashToHex (txHash (payment ctx))) <> ":0"
+    -- The coin of the paid chain, as coins lists it, TXID:0, and as it is
+    -- offered to bash, which inserts a word as it is: TXID\:0
+    let paidTxid = Text.unpack (txHashToHex (txHash (payment ctx)))
+        paidCoin = paidTxid <> ":0"
+        offeredCoin = Text.pack paidTxid <> "\\:0\n"
 
     it "offers the coins free to lock after lockcoin" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         run <- hw home (tabAfter ["lockcoin", take 4 paidCoin]) []
-        runOut run `shouldBe` Text.pack paidCoin <> "\n"
+        runOut run `shouldBe` offeredCoin
 
     it "does not offer a coin the user locked after lockcoin" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -1091,7 +1116,7 @@ failureSpec ctx = do
         synced home
         _ <- answer home ["lockcoin", paidCoin] []
         run <- hw home (tabAfter ["unlockcoin", take 4 paidCoin]) []
-        runOut run `shouldBe` Text.pack paidCoin <> "\n"
+        runOut run `shouldBe` offeredCoin
 
     it "does not offer a free coin after unlockcoin" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -1103,7 +1128,7 @@ failureSpec ctx = do
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         run <- hw home (tabAfter ["preparetx", "--coin", take 4 paidCoin]) []
-        runOut run `shouldBe` Text.pack paidCoin <> "\n"
+        runOut run `shouldBe` offeredCoin
 
     it "does not offer a locked coin after --coin" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -1119,14 +1144,14 @@ failureSpec ctx = do
       withChain ctx (Chain 800002 [(twoCoins, Just 800000)]) $ \home _ -> do
         synced home
         run <- hw home (tabAfter ["lockcoin", txid <> "\\:"]) []
-        runOut run `shouldBe` Text.pack (txid <> ":0\n" <> txid <> ":1\n")
+        runOut run `shouldBe` Text.pack (txid <> "\\:0\n" <> txid <> "\\:1\n")
 
     it "reads an account name bash escaped among the words typed" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["renameacc", "main", "my savings"] []
         run <- hw home (tabAfter ["preparetx", "--account", "my\\ savings", "--coin", take 4 paidCoin]) []
-        runOut run `shouldBe` Text.pack paidCoin <> "\n"
+        runOut run `shouldBe` offeredCoin
 
     -- The account second has no coins
     it "offers only the coins of the account named with --account after --coin" $
@@ -1183,6 +1208,54 @@ failureSpec ctx = do
         _ <- answer home ["receive"] []
         run <- hw home (tabAfter ["label", "q"]) []
         runOut run `shouldBe` "qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u\n"
+
+    -- bash passes the word after a space as an empty word
+    it "offers the account names after a space, through the script of bash" $
+      withHome $ \home -> do
+        createMain home
+        bashCompletion home ["txs", "--account", ""] `shouldReturn` ["main"]
+
+    -- The script of optparse-applicative expanded a* to the files of the
+    -- directory it matches, axb here
+    it "passes a word with a star to hw as typed, and escapes the star of the name offered, through the script of bash" $
+      withHome $ \home -> do
+        _ <- answer home ["createacc", "a*b"] seedTwice
+        createDirectory (home </> "axb")
+        bashCompletion home ["txs", "--account", "a*"] `shouldReturn` ["a\\*b"]
+
+    -- bash inserts a word as it is, and would take my savings for two
+    it "escapes a space in a name for bash" $
+      withHome $ \home -> do
+        _ <- answer home ["createacc", "my savings"] seedTwice
+        bashCompletion home ["txs", "--account", "my"] `shouldReturn` ["my\\ savings"]
+
+    it "does not escape a name for zsh and fish, which quote a word themselves" $
+      withHome $ \home -> do
+        _ <- answer home ["createacc", "my savings"] seedTwice
+        run <- hw home ("--bash-completion-enriched" : tabAfter ["txs", "--account", "my"]) []
+        runOut run `shouldBe` "my savings\n"
+
+    it "offers a directory with a / for a FILENAME, and a file without, through the script of bash" $
+      withHome $ \home -> do
+        createDirectory (home </> "docs")
+        writeFile (home </> "doc.json") ""
+        bashCompletion home ["importtx", "doc"] `shouldReturn` ["doc.json", "docs/"]
+
+    it "offers a directory without a / to zsh and fish, which mark it themselves" $
+      withHome $ \home -> do
+        createDirectory (home </> "docs")
+        run <- hw home ("--bash-completion-enriched" : tabAfter ["importtx", "doc"]) []
+        runOut run `shouldBe` "docs\n"
+
+    -- .hw is the directory of hw in the home. The options of importtx are
+    -- offered with the files for an empty word, as for any first argument.
+    it "offers a hidden file for a FILENAME only to a word that starts with a dot" $
+      withHome $ \home -> do
+        createDirectory (home </> "docs")
+        run <- hw home (tabAfter ["importtx", ""]) []
+        Text.lines (runOut run) `shouldSatisfy` (\offered -> "docs/" `elem` offered && ".hw/" `notElem` offered)
+        dotted <- hw home (tabAfter ["importtx", "."]) []
+        runOut dotted `shouldBe` ".hw/\n"
 
     -- A command holds the database from its first statement to its last,
     -- as a sync does while it waits on the store

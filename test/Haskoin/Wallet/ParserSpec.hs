@@ -7,7 +7,8 @@ module Haskoin.Wallet.ParserSpec (spec) where
 import Haskoin.Wallet.Parser (program)
 import Haskoin.Wallet.Parser.Args (Args (..), CommandSpec (..))
 import Haskoin.Wallet.Parser.Help (mentionedCommands, usageParts)
-import Haskoin.Wallet.Parser.Run (Request (..), commandNamed, completionParts, requestOf)
+import Haskoin.Wallet.Parser.Completion (completionParts)
+import Haskoin.Wallet.Parser.Run (Request (..), commandNamed, requestOf)
 import Haskoin.Wallet.Style (renderPlain)
 import Test.Hspec
 
@@ -74,13 +75,16 @@ spec = do
       requestOf unitOptions ["--version", "--help"] `shouldBe` HelpOf Nothing
 
   describe "The words of a shell completion" $ do
-    it "are read without the backslashes bash typed to escape a space or a colon" $
+    it "are read without the backslashes the shell typed to escape a space or a colon" $
       completionParts ["--bash-completion-index", "2", "--bash-completion-word", "hw", "--bash-completion-word", "my\\ savings", "--bash-completion-word", "0a1a\\:"]
         `shouldBe` (Just "2", ["hw", "my savings", "0a1a:"], [])
 
-    it "are read as they are from zsh and fish, which ask for descriptions" $
+    it "are read the same from zsh and fish, which ask for descriptions" $
       completionParts ["--bash-completion-enriched", "--bash-completion-index", "1", "--bash-completion-word", "hw", "--bash-completion-word", "my\\ savings"]
-        `shouldBe` (Just "1", ["hw", "my\\ savings"], ["--bash-completion-enriched"])
+        `shouldBe` (Just "1", ["hw", "my savings"], ["--bash-completion-enriched"])
+
+    it "ask for the script of bash with the name to run hw by" $
+      requestOf unitOptions ["--bash-completion-script", "/usr/local/bin/hw"] `shouldBe` BashScript "/usr/local/bin/hw"
   where
     usageOf name = case commandNamed program name of
       Just command -> unwords (map renderPlain (usageParts command.args.usage))

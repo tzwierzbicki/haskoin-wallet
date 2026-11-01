@@ -68,6 +68,7 @@ library
       Haskoin.Wallet.Pager
       Haskoin.Wallet.Parser
       Haskoin.Wallet.Parser.Args
+      Haskoin.Wallet.Parser.Completion
       Haskoin.Wallet.Parser.Help
       Haskoin.Wallet.Parser.Run
       Haskoin.Wallet.PendingTx

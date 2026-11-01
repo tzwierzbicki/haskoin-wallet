@@ -26,8 +26,9 @@ where
 
 import Control.Monad (forM)
 import Control.Monad.Except (runExceptT)
+import Data.Containers.ListUtils (nubOrd)
 import Data.Either (fromRight, rights)
-import Data.List (nub, stripPrefix)
+import Data.List (stripPrefix)
 import Data.Maybe (isNothing)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -39,7 +40,7 @@ import Haskoin.Wallet.Coin (CoinFilter (..), CoinLock (..), JsonCoin (..), coinT
 import Haskoin.Wallet.Config (configAsItIs, databaseFileIn)
 import Haskoin.Wallet.Database (DB, DBAccount, DBAccountId, DBAddress (..), runDBReadOnly)
 import Haskoin.Wallet.Migration (databaseVersion, latestDatabaseVersion)
-import Haskoin.Wallet.Parser.Run (completionParts)
+import Haskoin.Wallet.Parser.Completion (completionParts)
 import Haskoin.Wallet.PendingTx (PendingTx (..), fromRow, pendingRows)
 import Haskoin.Wallet.TxSignData (TxSignData (..), isSigned, shownHash)
 import qualified System.Directory as D
@@ -93,8 +94,10 @@ hashesToSign = shownHashesOf (\p -> not (isSigned (txOf p)) && not (pendingTxOnl
 
 -- | The ids of the pending transactions to send, for sendtx: those signed
 -- and not sent yet. The sync sends one again should the network lose it.
+-- One in conflict is left out: the network refuses it, and deletetx
+-- frees its coins.
 idsToSend :: IO [String]
-idsToSend = shownHashesOf (\p -> isSigned (txOf p) && not (pendingTxOnline p))
+idsToSend = shownHashesOf (\p -> isSigned (txOf p) && not (pendingTxOnline p) && not (pendingTxConflicted p))
 
 -- | The hash of every pending transaction, for exporttx and deletetx
 pendingHashes :: IO [String]
@@ -175,7 +178,7 @@ addressesToSpendFrom = do
   named <- typedAccount
   readForCompletion $ do
     coins <- walletCoins named
-    return $ nub [offeredAddress addr | (net, coin) <- coins, jsonCoinSpendable coin, Just addr <- [addrToText net (jsonCoinAddress coin)]]
+    return $ nubOrd [offeredAddress addr | (net, coin) <- coins, jsonCoinSpendable coin, Just addr <- [addrToText net (jsonCoinAddress coin)]]
 
 -- | An address as the shell offers it. A Bitcoin Cash address goes without
 -- its prefix, such as bitcoincash:, because bash splits a word at a colon.

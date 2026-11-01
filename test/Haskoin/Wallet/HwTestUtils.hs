@@ -18,6 +18,7 @@ module Haskoin.Wallet.HwTestUtils
     centralEurope,
     hwJson,
     tabAfter,
+    bashCompletion,
     -- * The chain of the fake store
     Chain (..),
     mine,
@@ -58,7 +59,7 @@ import Network.Wai (Application, pathInfo, queryString, requestMethod, responseL
 import Network.Wai.Handler.Warp (testWithApplication)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.Environment (getExecutablePath)
-import System.Exit (ExitCode)
+import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
 import System.Process.Typed (byteStringInput, proc, readProcess, setEnv, setStdin, setWorkingDir)
 import System.Timeout (timeout)
@@ -157,6 +158,28 @@ hwWithEnv extra home args typed = do
 -- word, the one to complete, then every word, hw first.
 tabAfter :: [String] -> [String]
 tabAfter typed = ["--bash-completion-index", show (length typed)] <> concatMap (\w -> ["--bash-completion-word", w]) ("hw" : typed)
+
+-- | What the completion script of bash offers for the words typed after
+-- hw, with the cursor at the end of the last one: bash sources the script
+-- from the hw binary of this build, in the home, and lists what the
+-- script put in COMPREPLY, one a line
+bashCompletion :: FilePath -> [String] -> IO [Text]
+bashCompletion home typed = do
+  binary <- hwBinary
+  let script =
+        unlines
+          [ "source <(\"$1\" --bash-completion-script \"$1\")",
+            "shift",
+            "COMP_WORDS=(hw \"$@\")",
+            "COMP_CWORD=$#",
+            "_hw",
+            "printf '%s\\n' \"${COMPREPLY[@]}\""
+          ]
+      process = setEnv [("HOME", home)] . setWorkingDir home $ proc "bash" ("-c" : script : "bash" : binary : typed)
+  (code, out, err) <- readProcess process
+  case code of
+    ExitSuccess -> return $ filter (not . Text.null) $ Text.lines (decodeUtf8 (BL.toStrict out))
+    _ -> fail $ "The completion script of bash failed: " <> Text.unpack (decodeUtf8 (BL.toStrict err))
 
 -- | The time zone of Central Europe, for TZ, written as POSIX rules that
 -- need no zone files: CET, an hour ahead of UTC, and CEST, two hours

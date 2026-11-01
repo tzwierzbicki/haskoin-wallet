@@ -12,7 +12,6 @@ module Haskoin.Wallet.Parser.Run
     requestOf,
     commandWord,
     commandNamed,
-    completionParts,
   )
 where
 
@@ -21,6 +20,7 @@ import Control.Monad (guard)
 import Data.List (find, isPrefixOf, isSuffixOf)
 import Data.Maybe (fromMaybe, isNothing, listToMaybe)
 import Haskoin.Wallet.Parser.Args
+import Haskoin.Wallet.Parser.Completion
 import Haskoin.Wallet.Parser.Help
 import Haskoin.Wallet.Style (Output, Style, outputOf, putDoc)
 import qualified Options.Applicative as O
@@ -42,6 +42,7 @@ runProgram program = do
     NothingTyped -> leave stderr (ExitFailure 1) (`programHelp` program)
     HelpOf word -> leave stdout ExitSuccess (helpOf word)
     Version -> leave stdout ExitSuccess (const (pretty program.version))
+    BashScript name -> putStr (bashScript program.name name) >> exitSuccess
     Parse -> parse args
   where
     helpOf word output = case word >>= commandNamed program of
@@ -51,11 +52,11 @@ runProgram program = do
     parse args =
       case O.execParserPure parserPrefs (programInfo program) parsedArgs of
         O.Success result -> return result
-        -- The shell asked what completes a word: optparse-applicative
-        -- answers, and hw leaves
+        -- The shell asked what completes a word, or for the script of zsh
+        -- or fish: optparse-applicative answers, and hw leaves
         O.CompletionInvoked completion -> do
-          offered <- O.execCompletion completion =<< getProgName
-          putStr (withValueOption offered)
+          answer <- O.execCompletion completion =<< getProgName
+          putStr (if scriptRequest then answer else unlines (map offered (lines answer)))
           exitSuccess
         O.Failure failure -> do
           let (parserHelp, code, _) = O.execFailure failure program.name
@@ -67,11 +68,11 @@ runProgram program = do
             _ -> leave stderr code (const (usageError parserHelp program command))
       where
         (parsedArgs, valueOption) = completionRequest program args
-        -- Each word offered for a value typed against its short option
-        -- replaces the option and the value both
-        withValueOption offered
-          | null valueOption = offered
-          | otherwise = unlines (map (valueOption <>) (lines offered))
+        scriptRequest = any ("-completion-script" `isSuffixOf`) args
+        -- A word offered, as the shell inserts it: escaped for bash, and
+        -- after the short option when the value was typed against it,
+        -- since the word replaces the option and the value both
+        offered word = valueOption <> (if enrichedRequest args then word else escapedForBash word)
 
     typedAlone :: CommandSpec cmd -> [String] -> Bool
     typedAlone c args = dropWhile (/= c.name) args == [c.name]
@@ -93,6 +94,9 @@ data Request
     HelpOf (Maybe String)
   | -- | The version of the program
     Version
+  | -- | The script that has bash complete the program, which runs the
+    -- program by the name given
+    BashScript String
   | -- | A run: the arguments are parsed
     Parse
   deriving (Eq, Show)
@@ -105,6 +109,7 @@ data Request
 requestOf :: [String] -> [String] -> Request
 requestOf valueOptions args
   | null args = NothingTyped
+  | Just name <- bashScriptName args = BashScript name
   -- The shell completes the words typed so far, --help among them maybe
   | any isCompletion args = Parse
   | typed ["-h", "--help"] = HelpOf command
@@ -144,43 +149,6 @@ splitAttachedValue program index typed = fromMaybe (typed, index, "") $ do
   guard (letter `elem` valueLetters program command)
   let split = take index typed <> [['-', letter], typedValue] <> drop (index + 1) typed
   return (split, index + 1, ['-', letter])
-
--- | The arguments of a shell completion, apart: the index of the word to
--- complete, the words typed, in order, and the other arguments.
---
--- The script of bash passes each word as typed, with the backslashes that
--- escape its characters: my\ savings, or TXID\: once bash has completed a
--- coin up to its colon. They are taken out, as bash takes them out of the
--- command it runs. Only the words of bash are changed. The scripts of zsh
--- and fish ask for descriptions with --bash-completion-enriched, and hw
--- was not tried with them.
-completionParts :: [String] -> (Maybe String, [String], [String])
-completionParts args = (indexM, if fromBash then map unescaped typed else typed, others)
-  where
-    (indexM, typed, others) = partsOf args
-    fromBash = "--bash-completion-enriched" `notElem` others
-    partsOf ("--bash-completion-index" : i : rest) = (Just i, ws, os)
-      where
-        (_, ws, os) = partsOf rest
-    partsOf ("--bash-completion-word" : w : rest) = (i, w : ws, os)
-      where
-        (i, ws, os) = partsOf rest
-    partsOf (a : rest) = (i, ws, a : os)
-      where
-        (i, ws, os) = partsOf rest
-    partsOf [] = (Nothing, [], [])
-
--- | A word as bash typed it, without the backslashes that escape its
--- characters: my\ savings is my savings
-unescaped :: String -> String
-unescaped ('\\' : c : rest) = c : unescaped rest
-unescaped (c : rest) = c : unescaped rest
-unescaped [] = []
-
--- | The arguments that ask to complete the word of the index among the
--- words typed
-completionArgs :: Int -> [String] -> [String]
-completionArgs index typed = ["--bash-completion-index", show index] <> concatMap (\w -> ["--bash-completion-word", w]) typed
 
 -- | The short names of the options that take a value: those of the
 -- options of the program, and those of the command, when one is named

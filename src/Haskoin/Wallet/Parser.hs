@@ -37,6 +37,7 @@ import Haskoin.Wallet.FeeRates (FeeRateChoice, readFeeRateChoice)
 import Haskoin.Wallet.Keys (KeySource (..))
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
 import Haskoin.Wallet.Parser.Args
+import Haskoin.Wallet.Parser.Completion (completeFile)
 import Haskoin.Wallet.Parser.Run (runProgram)
 import Haskoin.Wallet.Listing (Paging (..))
 import Haskoin.Wallet.Util (readNatural)
@@ -1359,7 +1360,7 @@ outputFileMaybeOption =
     short 'o'
       <> long "output"
       <> metavar "FILENAME"
-      <> action "file"
+      <> fileCompletion
       <> help "Write the transaction to this file. It must not exist yet."
 
 {- pendingtxs -}
@@ -1547,7 +1548,7 @@ inputFileMaybeOption =
     short 'i'
       <> long "input"
       <> metavar "FILENAME"
-      <> action "file"
+      <> fileCompletion
       <> help "Read the transaction from this file"
 
 {- coins -}
@@ -1960,7 +1961,7 @@ signedMessageFileOption =
     short 'i'
       <> long "input"
       <> metavar "FILENAME"
-      <> action "file"
+      <> fileCompletion
       <> help "Read the address, the signature and the message from this file: the output of signmsg, as its armored block or its --json answer"
 
 verifyAddressArg :: Args Text
@@ -2060,7 +2061,7 @@ addressFileOption =
   optional . strOption $
     long "address-file"
       <> metavar "FILENAME"
-      <> action "file"
+      <> fileCompletion
       <> help "A file of addresses whose coins to sweep, separated by spaces or line breaks"
 
 sweepToOption :: Args Text
@@ -2108,7 +2109,7 @@ prvKeysMaybeOption =
     short 'k'
       <> long "key-file"
       <> metavar "FILENAME"
-      <> action "file"
+      <> fileCompletion
       <> help "A file of private keys in WIF, minikey or hex format, separated by spaces or line breaks. Give - to type them on the terminal instead."
   where
     source "-" = Right KeysOnTerminal
@@ -2127,5 +2128,9 @@ fileArgument :: String -> Args FilePath
 fileArgument desc =
   strArgument $
     metavar "FILENAME"
-      <> action "file"
+      <> fileCompletion
       <> help desc
+
+-- | The shell completes a file name with the files and directories
+fileCompletion :: (HasCompleter f) => Mod f a
+fileCompletion = completer (mkCompleter completeFile)

@@ -41,7 +41,7 @@ module Haskoin.Wallet.Parser.Args
     showDefaultWith,
     completeWith,
     completer,
-    action,
+    HasCompleter,
     optionGroup,
 
     -- * Reading a value, from optparse-applicative
@@ -50,6 +50,7 @@ module Haskoin.Wallet.Parser.Args
     maybeReader,
     eitherReader,
     listIOCompleter,
+    mkCompleter,
 
     -- * A command, and the program
     CommandSpec (..),
@@ -61,7 +62,7 @@ where
 import Control.Applicative (Alternative (..))
 import Data.Maybe (isJust)
 import Data.String (IsString)
-import Options.Applicative (OptionFields, ReadM, eitherReader, listIOCompleter, maybeReader, str)
+import Options.Applicative (HasCompleter, OptionFields, ReadM, eitherReader, listIOCompleter, maybeReader, mkCompleter, str)
 import qualified Options.Applicative as O
 
 {- The options of a command -}
@@ -249,10 +250,6 @@ completeWith xs = mempty {optparse = O.completeWith xs}
 
 completer :: (O.HasCompleter f) => O.Completer -> Mod f a
 completer c = mempty {optparse = O.completer c}
-
--- | A completion action of bash, such as "file"
-action :: (O.HasCompleter f) => String -> Mod f a
-action a = mempty {optparse = O.action a}
 
 {- Subheadings -}
 
