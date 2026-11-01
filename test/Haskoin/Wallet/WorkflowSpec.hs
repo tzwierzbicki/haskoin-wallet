@@ -1018,6 +1018,51 @@ failureSpec ctx = do
         run <- hw home (tabAfter ["txs", "--account", ""]) []
         runOut run `shouldBe` "épargne\n"
 
+    -- preparetx shows the nosigHash of the transaction it prepares
+    it "offers the nosigHash of a transaction to sign after signtx" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        run <- hw home (tabAfter ["signtx", take 4 nosig]) []
+        runOut run `shouldBe` Text.pack nosig <> "\n"
+
+    -- Once signed, the transaction is shown by its id, which would be
+    -- offered
+    it "does not offer a signed transaction after signtx" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        _ <- paymentSigned home
+        txid <- txidOf =<< onePendingTx home
+        run <- hw home (tabAfter ["signtx", take 4 txid]) []
+        runOut run `shouldBe` ""
+
+    it "offers the id of a signed transaction after sendtx" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        _ <- paymentSigned home
+        txid <- txidOf =<< onePendingTx home
+        run <- hw home (tabAfter ["sendtx", take 4 txid]) []
+        runOut run `shouldBe` Text.pack txid <> "\n"
+
+    it "does not offer a transaction not signed yet after sendtx" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        run <- hw home (tabAfter ["sendtx", take 4 nosig]) []
+        runOut run `shouldBe` ""
+
+    -- The sync sends it again should the network lose it
+    it "does not offer a transaction sent already after sendtx" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        txid <- sentPayment home
+        run <- hw home (tabAfter ["sendtx", take 4 txid]) []
+        runOut run `shouldBe` ""
+
+    it "offers a pending transaction after exporttx by the hash pendingtxs shows, its id once signed" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        _ <- paymentSigned home
+        txid <- txidOf =<< onePendingTx home
+        run <- hw home (tabAfter ["exporttx", take 4 txid]) []
+        runOut run `shouldBe` Text.pack txid <> "\n"
+
     -- A command holds the database from its first statement to its last,
     -- as a sync does while it waits on the store
     it "offers the names of the accounts while a command holds the database" $

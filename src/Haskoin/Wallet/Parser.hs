@@ -21,7 +21,7 @@ import Data.Word (Word32)
 import Haskoin
 import Haskoin.Wallet.Amounts (AmountUnit (..), readUnit)
 import Haskoin.Wallet.CoinSelection (CoinSelection (..), FeePayer (..))
-import Haskoin.Wallet.Completion (accountNames)
+import Haskoin.Wallet.Completion (accountNames, hashesToSign, idsToSend, pendingHashes)
 import Haskoin.Wallet.FeeRates (FeeRateChoice, readFeeRateChoice)
 import Haskoin.Wallet.Keys (KeySource (..))
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
@@ -377,9 +377,9 @@ The options --unit, --json and --no-pager go before or after the command.
 The settings, such as the server, the default network, the address gap and
 the pager, are in ~/.hw/config.json.
 
-The Tab key completes the commands, the options and the account names once
-the shell has a script for it, which hw writes. In bash, add this line to
-~/.bashrc:
+The Tab key completes the commands, the options, the account names and the
+hashes of the pending transactions once the shell has a script for it, which
+hw writes. In bash, add this line to ~/.bashrc:
 
   source <(hw --bash-completion-script hw)
 
@@ -1433,6 +1433,7 @@ nosigHashArg :: Args TxHash
 nosigHashArg =
   argument (maybeReader $ hexToTxHash . cs) $
     metavar "NOSIGHASH"
+      <> completer (listIOCompleter hashesToSign)
       <> help "The nosigHash of a pending transaction, as pendingtxs shows it"
 
 -- | A pending transaction, by either of its hashes
@@ -1440,6 +1441,7 @@ pendingHashArg :: Args TxHash
 pendingHashArg =
   argument (maybeReader $ hexToTxHash . cs) $
     metavar "HASH"
+      <> completer (listIOCompleter pendingHashes)
       <> help "A pending transaction, by the hash pendingtxs shows: its nosigHash, or its txid once it is signed"
 
 -- | A signed pending transaction to send, by its txid. Its nosigHash works
@@ -1448,6 +1450,7 @@ signedTxidArg :: Args TxHash
 signedTxidArg =
   argument (maybeReader $ hexToTxHash . cs) $
     metavar "TXID"
+      <> completer (listIOCompleter idsToSend)
       <> help "The txid of a signed pending transaction, as signtx and pendingtxs show it. Its nosigHash works too."
 
 {- importtx -}
