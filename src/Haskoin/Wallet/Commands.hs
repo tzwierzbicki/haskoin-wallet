@@ -116,7 +116,7 @@ import Haskoin.Wallet.Tx.Building (ChangeTo (..), CoinControl (..), buildTxSignD
 import Haskoin.Wallet.Tx.BumpFee
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Tx.SignData
-import Haskoin.Wallet.Tx.Signing (labelAddressesFromFile, labelledTxFile, parseOutsideTxSignData, parseTxFile, signWalletTx)
+import Haskoin.Wallet.Tx.Signing (labelledTxFile, labelsFromFile, parseOutsideTxSignData, parseTxFile, signWalletTx)
 import Haskoin.Wallet.Tx.Recipient (Share, checkSharing, readPayment, readRecipient, recipientAddress)
 import Haskoin.Wallet.Tx.SendAll
   ( DustReport,
@@ -542,7 +542,7 @@ pendingTxsListing ctx account paging = do
 cmdReviewTx :: Ctx -> Config -> Maybe Text -> FilePath -> IO Response
 cmdReviewTx ctx cfg account file =
   runDBResponse cfg $ do
-    txFile@(TxFile netM tsd _) <- liftEitherIO $ readJsonFile file
+    txFile@(TxFile netM tsd _ _) <- liftEitherIO $ readJsonFile file
     accountM <- transactionAccount ctx account netM tsd
     case accountM of
       Just (_, acc) -> ResponseTx acc <$> liftEither (parseTxFile (accountNetwork acc) ctx (accountXPubKey ctx acc) txFile)
@@ -556,7 +556,7 @@ cmdReviewTx ctx cfg account file =
 cmdImportTx :: Ctx -> Config -> Maybe Text -> FilePath -> IO Response
 cmdImportTx ctx cfg account file =
   runDBResponse cfg $ do
-    TxFile netM tsd _ <- liftEitherIO $ readJsonFile file
+    TxFile netM tsd _ _ <- liftEitherIO $ readJsonFile file
     (accId, acc) <- liftMaybe notInWallet =<< transactionAccount ctx account netM tsd
     pendingHash <- importPendingTx (accountNetwork acc) ctx accId tsd
     txAnswer accId =<< pendingSummary ctx acc =<< requirePendingTx pendingHash
@@ -569,7 +569,7 @@ cmdExportTx ctx cfg named file =
     held <- requirePendingTx named
     checkPathFree file
     acc <- getAccountById held.pendingTxAccount
-    info <- txInfoOf ctx acc held.pendingTxData
+    info <- txInfoOf ctx (held.pendingTxAccount, acc) held.pendingTxData
     liftEitherIO $ writeJsonFile file (labelledTxFile (accountNetwork acc) info held.pendingTxData)
     return $ ResponseFile file
 
@@ -613,7 +613,7 @@ keepPrepared ctx accId acc output tsd = txAnswer accId =<< storePrepared ctx acc
 -- does, and give its summary
 storePrepared :: Ctx -> DBAccountId -> DBAccount -> Maybe FilePath -> TxSignData -> ExceptT String (DB IO) TxInfo
 storePrepared ctx accId acc output tsd = do
-  info <- txInfoOf ctx acc tsd
+  info <- txInfoOf ctx (accId, acc) tsd
   _ <- importPendingTx (accountNetwork acc) ctx accId tsd
   writeOutput (accountNetwork acc) output info tsd
   return info
@@ -731,7 +731,8 @@ cmdPrepareTx ctx cfg unit opts =
           unspendable <- unspendableCoins net ctx accId opts.minConf
           (chosen, held) <- liftEither $ chosenCoins opts.coins spendFrom spendable unspendable
           let outpoints = (.outpoint) <$> chosen
-          return (if opts.select then SelectAmongChosen outpoints else SpendChosen outpoints, leftCoins [] held [])
+          labels <- lift $ labelsOfCoins net accId (fst <$> held)
+          return (if opts.select then SelectAmongChosen outpoints else SpendChosen outpoints, leftCoins labels [] held [])
     let changeTo
           | fromMaybe (configChangeBack cfg) opts.changeBack = ChangeBack (changeBackTo unit net accId)
           | otherwise = NewChangeAddress
@@ -776,14 +777,15 @@ cmdPrepareSendAll ctx cfg unit opts =
     confirmFeeRate opts.yes feeByte opts.dust
     spendable <- spendableCoins net ctx accId opts.minConf
     unspendable <- unspendableCoins net ctx accId opts.minConf
+    labels <- lift $ labelsOfCoins net accId (spendable <> (fst <$> unspendable))
     (sent, left) <-
       if controlled
         then do
           (sent, _) <- liftEither $ chosenCoins opts.coins spendFrom spendable unspendable
-          return (sent, leftCoins [] unspendable (notSent sent spendable))
+          return (sent, leftCoins labels [] unspendable (notSent sent spendable))
         else do
-          sent <- coinsWithDust feeByte recipients (not (null unspendable)) spendable
-          return (sent, leftCoins (notSent sent spendable) unspendable [])
+          sent <- coinsWithDust labels feeByte recipients (not (null unspendable)) spendable
+          return (sent, leftCoins labels (notSent sent spendable) unspendable [])
     gen <- liftIO initStdGen
     tsd <- buildSendAllSignData net ctx gen accId sent recipients feeByte opts.dust
     preparedAnswer ctx accId acc opts.output (withLabel opts.label tsd) left
@@ -794,8 +796,8 @@ cmdPrepareSendAll ctx cfg unit opts =
     -- without a question when spending them too would leave too little for
     -- the recipients, and when the other coins cannot pay the recipients
     -- either, which the builder then tells.
-    coinsWithDust :: Natural -> [(Address, Share)] -> Bool -> [Store.Unspent] -> ExceptT String (DB IO) [Store.Unspent]
-    coinsWithDust feeByte recipients othersStay spendable
+    coinsWithDust :: Map TxHash Text -> Natural -> [(Address, Share)] -> Bool -> [Store.Unspent] -> ExceptT String (DB IO) [Store.Unspent]
+    coinsWithDust labels feeByte recipients othersStay spendable
       | null dust || null worth = return spendable
       | otherwise =
           case opts.dustCoins of
@@ -810,7 +812,7 @@ cmdPrepareSendAll ctx cfg unit opts =
         -- On stderr, with the question, to keep the --json answer clean
         askAboutDust :: DustReport -> ExceptT String (DB IO) [Store.Unspent]
         askAboutDust report = do
-          liftIO $ renderOn stderr (dustReportDoc unit report)
+          liftIO $ renderOn stderr (dustReportDoc unit labels report)
           spending <- askYes terminal (dustQuestion report)
           return $ if spending then spendable else worth
 
@@ -838,7 +840,7 @@ transactionToSign ::
   Signing ->
   ExceptT String (DB IO) (Maybe (DBAccountId, DBAccount), TxFile, SignedFile)
 transactionToSign ctx signing = do
-  txFile@(TxFile netM tsd _) <- case (signing.nosigHash, signing.input) of
+  txFile@(TxFile netM tsd _ _) <- case (signing.nosigHash, signing.input) of
     (Nothing, Nothing) ->
       throwError "Give the NOSIGHASH of a pending transaction, or an --input file"
     (Just _, Just _) ->
@@ -847,7 +849,7 @@ transactionToSign ctx signing = do
       held <- requirePendingTx nosigH
       when held.pendingTxOnline $
         throwError "The transaction is already online"
-      return $ TxFile Nothing held.pendingTxData noAddressLabels
+      return $ plainTxFile Nothing held.pendingTxData
     (_, Just file) -> liftEitherIO $ readJsonFile file
   when (isSigned (txSignDataTx tsd)) $
     throwError "The transaction is already signed"
@@ -871,16 +873,15 @@ writeSigned signedFile signed =
 
 -- | Keep a transaction just signed: in place of the pending one when it was
 -- given by its nosigHash, and in its file when there is one. The answer
--- shows it with the labels of its addresses: the wallet's for a pending
--- transaction, and those the --input file carries for a transaction of a
--- file, which go on to the signed file. The file is what an offline
--- computer has.
-keepSigned :: Ctx -> Network -> Signing -> SignedFile -> DBAccountId -> AddressLabels -> TxSignData -> TxInfo -> ExceptT String (DB IO) Response
-keepSigned ctx net signing signedFile accId fileLabels signed info = do
+-- shows it with its labels: the wallet's for a pending transaction, and
+-- those the --input file carries for a transaction of a file, which go on
+-- to the signed file. The file is what an offline computer has.
+keepSigned :: Ctx -> Network -> Signing -> SignedFile -> DBAccountId -> TxFile -> TxSignData -> TxInfo -> ExceptT String (DB IO) Response
+keepSigned ctx net signing signedFile accId file signed info = do
   labelled <-
     if fromWallet
-      then lift (fillTxInfoLabels net info)
-      else return (labelAddressesFromFile net fileLabels info)
+      then lift (fillTxInfoLabels net accId info)
+      else return (labelsFromFile net file info)
   when fromWallet $ void $ importPendingTx net ctx accId signed
   writeSigned signedFile (labelledTxFile net labelled signed)
   txAnswer accId labelled
@@ -891,15 +892,15 @@ keepSigned ctx net signing signedFile accId fileLabels signed info = do
 cmdSignTx :: Ctx -> Config -> Signing -> Natural -> IO Response
 cmdSignTx ctx cfg signing parts =
   runDBResponse cfg $ do
-    (accountM, TxFile _ tsd fileLabels, signedFile) <- transactionToSign ctx signing
+    (accountM, file, signedFile) <- transactionToSign ctx signing
     (accId, acc) <- liftMaybe notInWallet accountM
     let net = accountNetwork acc
     (seed, key) <- askSigningKey terminal net ctx parts (accountIndex acc) (accountXPubKey ctx acc)
     -- The signed data names the seed, for an online wallet to learn it
-    let named = tsd {txSignDataFingerprint = Just (seedFingerprint seed)}
+    let named = (txFileData file) {txSignDataFingerprint = Just (seedFingerprint seed)}
     (signed, info) <- liftEither $ signWalletTx net ctx named key
     lift $ recordFingerprint ctx seed
-    keepSigned ctx net signing signedFile accId fileLabels signed info
+    keepSigned ctx net signing signedFile accId file signed info
 
 -- | Send a signed transaction: a pending one of the wallet, by its id or
 -- its nosigHash, or the one of a file. One the wallet holds goes on the
@@ -909,7 +910,7 @@ cmdSignTx ctx cfg signing parts =
 cmdSendTx :: Ctx -> Config -> AmountUnit -> Maybe TxHash -> Maybe FilePath -> Bool -> IO Response
 cmdSendTx ctx cfg unit namedM fileM yes =
   case (namedM, fileM) of
-    (Just named, Nothing) -> sending $ (\held -> TxFile Nothing held.pendingTxData noAddressLabels) <$> requirePendingTx named
+    (Just named, Nothing) -> sending $ plainTxFile Nothing . (.pendingTxData) <$> requirePendingTx named
     (Nothing, Just file) -> sending $ liftEitherIO (readJsonFile file)
     (Nothing, Nothing) -> return $ ResponseError "Give the TXID of a pending transaction or an --input file"
     (Just _, Just _) -> return $ ResponseError "Can not specify both a TXID and an --input file"
@@ -918,7 +919,7 @@ cmdSendTx ctx cfg unit namedM fileM yes =
     -- wallet holds it
     sending readTx =
       runDBResponse cfg $ do
-        TxFile netM tsd _ <- readTx
+        TxFile netM tsd _ _ <- readTx
         sent <- sendSigned ctx (webStore ctx cfg) beforeSending netM tsd
         return $ case sent of
           SentPending acc info -> ResponseTx acc info
@@ -972,11 +973,12 @@ cmdBumpFee ctx cfg unit opts =
     gen <- liftIO initStdGen
     -- The network takes no replacement that adds an unconfirmed coin
     confirmed <- spendableCoins net ctx accId 1
+    labels <- lift $ labelsOfCoins net accId confirmed
     candidates <- forM confirmed $ \coin -> (\(addr, path) -> (coin, addr, path)) <$> coinWithPath net accId coin
     offered <- liftEither $ fundings ctx gen plan candidates feeByte opts.dust
     built <- forM offered $ \funding -> do
       tsd <- buildBump ctx cfg net accId gen plan funding feeByte opts.dust
-      info <- txInfoOf ctx acc tsd
+      info <- txInfoOf ctx (accId, acc) tsd
       liftEither $ checkBumpFee plan info.txInfoSummary
       return (funding, tsd)
     -- The questions, once nothing can refuse the replacement any more. A
@@ -987,17 +989,17 @@ cmdBumpFee ctx cfg unit opts =
       liftIO $ renderOn stderr (childrenDoc children)
       agreed <- if opts.yes then return True else askYes terminal (childrenQuestion children)
       unless agreed $ throwError "The transaction was not replaced"
-    tsd <- agreedFunding net unit feeByte opts.yes built
+    tsd <- agreedFunding net unit labels feeByte opts.yes built
     preparedAnswer ctx accId acc opts.output tsd []
 
 -- | The replacement of the funding the user agrees to, among those built,
 -- each told on stderr with what it is about, to keep the --json answer
 -- clean. The change needs no agreement. The coins to add are asked about
--- first, then the recipients: whether the lone one pays, or which of
--- several does, or all of them, a choice --yes does not make. None agreed,
--- the transaction stays as it is.
-agreedFunding :: Network -> AmountUnit -> Natural -> Bool -> [(Funding, TxSignData)] -> ExceptT String (DB IO) TxSignData
-agreedFunding net unit feeByte yes built =
+-- first, with the labels they show, then the recipients: whether the lone
+-- one pays, or which of several does, or all of them, a choice --yes does
+-- not make. None agreed, the transaction stays as it is.
+agreedFunding :: Network -> AmountUnit -> Map TxHash Text -> Natural -> Bool -> [(Funding, TxSignData)] -> ExceptT String (DB IO) TxSignData
+agreedFunding net unit labels feeByte yes built =
   case built of
     (ChangePays, tsd) : _ -> return tsd
     _ -> do
@@ -1008,7 +1010,7 @@ agreedFunding net unit feeByte yes built =
     agreedTo question = if yes then return True else askYes terminal question
     offerCoins [] = return Nothing
     offerCoins ((added, tsd) : _) = do
-      liftIO $ renderOn stderr (addedCoinsDoc net unit feeByte added)
+      liftIO $ renderOn stderr (addedCoinsDoc net unit labels feeByte added)
       agreed <- agreedTo (addedQuestion added)
       return $ if agreed then Just tsd else Nothing
     offerReductions [] = return Nothing
@@ -1095,13 +1097,13 @@ cmdPrepareSweep ctx cfg unit opts =
 cmdSignSweep :: Ctx -> Config -> Signing -> Maybe KeySource -> IO Response
 cmdSignSweep ctx cfg signing keysM =
   runDBResponse cfg $ do
-    (accountM, TxFile netM tsd fileLabels, signedFile) <- transactionToSign ctx signing
+    (accountM, file@(TxFile netM tsd _ _), signedFile) <- transactionToSign ctx signing
     case accountM of
       Just (accId, acc) -> do
         let net = accountNetwork acc
         keys <- keysOn net
         (signed, info) <- liftEither $ signTxWithKeys net ctx tsd (Just (accountXPubKey ctx acc)) keys
-        keepSigned ctx net signing signedFile accId fileLabels signed info
+        keepSigned ctx net signing signedFile accId file signed info
       Nothing -> do
         net <- liftMaybe noFileNetwork netM
         keys <- keysOn net

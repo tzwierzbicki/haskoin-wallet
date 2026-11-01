@@ -37,6 +37,7 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.RawTx (insertRawTx)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Database.TxInfo (repsertSummary, storeSummary, storeTime)
+import Haskoin.Wallet.Database.TxLabel (setTxLabel)
 import Data.Word (Word32, Word8)
 import Numeric.Natural (Natural)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), MarshalJsonBox (..), testIdentity)
@@ -420,6 +421,23 @@ listingSpec ctx =
         spendableFlags accId `dbShouldBeE` [(OutPoint (txHash (coinbase ctx)) 0, False)]
         bestAt 800099
         spendableFlags accId `dbShouldBeE` [(OutPoint (txHash (coinbase ctx)) 0, True)]
+
+    it "shows on a coin the label of the payment that paid it" $
+      inDatabaseE $ do
+        accId <- account ctx
+        _ <- refresh ctx accId [confirmedPayment ctx]
+        summarise accId (firstPaymentTx ctx)
+        lift $ setTxLabel accId (fakeTxHash 1) "Salary"
+        (map (\c -> (jsonCoinOutpoint c, jsonCoinTxLabel c)) <$> coinsAfter btc accId AllCoins Nothing Nothing) `dbShouldBeE` [(firstCoin, "Salary")]
+
+    -- The label says what the payment was for, not what its change is
+    it "shows no label on the change of a payment the account made, whatever its label" $
+      inDatabaseE $ do
+        accId <- account ctx
+        _ <- refresh ctx accId [ownChange ctx]
+        summarise accId (ownPaymentTx ctx)
+        lift $ setTxLabel accId (fakeTxHash 8) "Rent"
+        (map (\c -> (jsonCoinOutpoint c, jsonCoinTxLabel c)) <$> coinsAfter btc accId AllCoins Nothing Nothing) `dbShouldBeE` [(OutPoint (fakeTxHash 8) 1, "")]
 
     it "shows a coin the user locked as locked by the user" $
       inDatabaseE $ do
@@ -909,7 +927,7 @@ rowSpec ctx =
         refreshed <- refresh ctx accId [confirmedPayment ctx]
         row <- liftMaybe "The coin is not stored" $ listToMaybe (insertedCoins refreshed)
         let rules = Spending btc accId (Just 800002) Map.empty
-            shown = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True
+            shown = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True "" ""
         toJsonCoin rules row `dbShouldBeE` shown
         toJsonCoin rules {spendingLocks = Map.fromList [(firstCoin, LockedByTransaction)]} row
           `dbShouldBeE` shown {jsonCoinLock = Just LockedByTransaction, jsonCoinSpendable = False}
@@ -953,7 +971,7 @@ jsonSpec :: Ctx -> Spec
 jsonSpec _ =
   describe "Coins in JSON" $ do
     it "writes a confirmed and spendable coin as coins prints it, and reads it back" $ do
-      let coin = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True
+      let coin = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True "" ""
           json :: String
           json =
             [r|{
@@ -963,13 +981,15 @@ jsonSpec _ =
               "block": {"height": 800000, "position": 0},
               "confirmations": 3,
               "lock": null,
-              "spendable": true
+              "spendable": true,
+              "txlabel": "",
+              "addresslabel": ""
             }|]
       eitherDecode (cs json) `shouldBe` Right (marshalValue btc coin)
       unmarshalJSON btc (cs json) `shouldBe` Just coin
 
     it "writes an unconfirmed and locked coin of Bitcoin Cash with its cash address" $ do
-      let coin = JsonCoin (OutPoint (fakeTxHash 5) 1) bchExternalAddr 10000 (Store.MemRef 0) 0 (Just LockedByTransaction) False
+      let coin = JsonCoin (OutPoint (fakeTxHash 5) 1) bchExternalAddr 10000 (Store.MemRef 0) 0 (Just LockedByTransaction) False "" ""
           json :: String
           json =
             [r|{
@@ -979,7 +999,9 @@ jsonSpec _ =
               "block": {"mempool": 0},
               "confirmations": 0,
               "lock": "transaction",
-              "spendable": false
+              "spendable": false,
+              "txlabel": "",
+              "addresslabel": ""
             }|]
       eitherDecode (cs json) `shouldBe` Right (marshalValue bch coin)
       unmarshalJSON bch (cs json) `shouldBe` Just coin
@@ -995,21 +1017,22 @@ leftSpec :: Ctx -> Spec
 leftSpec ctx =
   describe "The coins a transaction leaves in the account" $ do
     it "are none when it leaves none" $
-      leftCoins [] [] [] `shouldBe` []
+      leftCoins Map.empty [] [] [] `shouldBe` []
 
     -- The dust coins left, the coins the builder may not spend, and a coin
     -- not chosen with coin control
     it "are listed by reason, the largest coins first" $
       leftCoins
+        Map.empty
         [unspentAt ctx 2 0 900, unspentAt ctx 2 1 1200]
         [(unspentAt ctx 3 0 5000, Nothing), (unspentAt ctx 3 1 20000, Just LockedByTransaction), (unspentAt ctx 3 2 30000, Just LockedByUser)]
         [unspentAt ctx 4 0 40000]
-        `shouldBe` [ LeftCoin (OutPoint (fakeTxHash 2) 1) 1200 WorthLessThanFee,
-                     LeftCoin (OutPoint (fakeTxHash 2) 0) 900 WorthLessThanFee,
-                     LeftCoin (OutPoint (fakeTxHash 3) 2) 30000 (Locked LockedByUser),
-                     LeftCoin (OutPoint (fakeTxHash 3) 1) 20000 (Locked LockedByTransaction),
-                     LeftCoin (OutPoint (fakeTxHash 3) 0) 5000 NotSpendableYet,
-                     LeftCoin (OutPoint (fakeTxHash 4) 0) 40000 NotGiven
+        `shouldBe` [ LeftCoin (OutPoint (fakeTxHash 2) 1) 1200 WorthLessThanFee "",
+                     LeftCoin (OutPoint (fakeTxHash 2) 0) 900 WorthLessThanFee "",
+                     LeftCoin (OutPoint (fakeTxHash 3) 2) 30000 (Locked LockedByUser) "",
+                     LeftCoin (OutPoint (fakeTxHash 3) 1) 20000 (Locked LockedByTransaction) "",
+                     LeftCoin (OutPoint (fakeTxHash 3) 0) 5000 NotSpendableYet "",
+                     LeftCoin (OutPoint (fakeTxHash 4) 0) 40000 NotGiven ""
                    ]
 
     it "tell the user why each stays" $
@@ -1017,11 +1040,12 @@ leftSpec ctx =
         `shouldBe` ["worth less than its fee", "you locked it", "a pending transaction spends it", "not spendable yet", "not chosen with --coin or --spend-from"]
 
     it "are written in JSON with their outpoint, their value and why they stay" $
-      Json.toJSON (LeftCoin (OutPoint (fakeTxHash 2) 0) 900 WorthLessThanFee)
+      Json.toJSON (LeftCoin (OutPoint (fakeTxHash 2) 0) 900 WorthLessThanFee "")
         `shouldBe` Json.object
           [ "outpoint" .= Json.object ["txid" .= ("0000000000000000000000000000000000000000000000000000000000000002" :: Text), "index" .= (0 :: Int)],
             "value" .= (900 :: Int),
-            "reason" .= ("dust" :: Text)
+            "reason" .= ("dust" :: Text),
+            "txlabel" .= ("" :: Text)
           ]
 
     it "name each reason in JSON" $

@@ -25,6 +25,7 @@ import qualified Data.Aeson as Json
 import Data.Aeson.Types (Pair, Parser)
 import qualified Data.ByteString as BS
 import Data.Char (toUpper)
+import Data.Containers.ListUtils (nubOrd)
 import Data.Either (partitionEithers, rights)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -32,6 +33,7 @@ import Data.Maybe (fromMaybe, isJust)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
+import qualified Data.Text as Text
 import Data.Time (UTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Word (Word64)
@@ -193,13 +195,18 @@ pendingShownHash :: PendingStatus -> TxHash
 pendingShownHash status = fromMaybe (pendingNosigHash status) (pendingTxid status)
 
 -- | A transaction as hw reports it: what it means to the account, where it
--- stands, and the label the user gave it
+-- stands, the label the user gave it, and the labels the coins it spends
+-- show
 data TxInfo = TxInfo
   { txInfoSummary :: !TxSummary,
     txInfoStatus :: !TxStatus,
     -- | The label of the transaction, or none: in its signing data while it
     -- is pending, then in the labels of the account
-    txInfoLabel :: !Text
+    txInfoLabel :: !Text,
+    -- | The labels the coins of the account it spends show ('coinLabel'),
+    -- by the transaction that paid each, those that have one. Filled in
+    -- from the database, or from the file that carried the transaction.
+    txInfoInputLabels :: !(Map TxHash Text)
   }
   deriving (Eq, Show)
 
@@ -257,10 +264,15 @@ instance MarshalJSON Network TxSummary where
   unmarshalValue net = withObject "TxSummary" (summaryParser net)
 
 instance MarshalJSON Network TxInfo where
-  marshalValue net (TxInfo summary status label) =
-    object $ summaryPairs net summary <> statusPairs status <> ["label" .= label]
+  marshalValue net (TxInfo summary status label inputs) =
+    object $ summaryPairs net summary <> statusPairs status <> ["label" .= label, "inputlabels" .= txidLabelsJson inputs]
   unmarshalValue net =
-    withObject "TxInfo" $ \o -> TxInfo <$> summaryParser net o <*> statusParser o <*> o .:? "label" .!= ""
+    withObject "TxInfo" $ \o ->
+      TxInfo
+        <$> summaryParser net o
+        <*> statusParser o
+        <*> o .:? "label" .!= ""
+        <*> (maybe (return Map.empty) parseTxidLabels =<< o .:? "inputlabels")
 
 summaryPairs :: Network -> TxSummary -> [Pair]
 summaryPairs net s =
@@ -572,7 +584,7 @@ chainTxInfo net heightM row = do
       confirmations = if dead then 0 else getConfirmations heightM ref
       status = ChainStatus tid ref (dBTxInfoTime row) confirmations dead
   label <- lift $ txLabel (dBTxInfoAccount row) tid
-  lift $ fillTxInfoLabels net $ TxInfo summary (OnChain status) label
+  lift $ fillTxInfoLabels net (dBTxInfoAccount row) $ TxInfo summary (OnChain status) label Map.empty
 
 -- | The block of a transaction of the account, the one --after names, or
 -- why there is none
@@ -594,10 +606,43 @@ txidsStarting accId digits atMost = do
       [P.toPersistValue accId, P.toPersistValue (length digits), P.toPersistValue (map toUpper digits), P.toPersistValue (rowLimit atMost :: Int)]
   return $ rights (bytesToHash . unSingle <$> rows)
 
--- | The transaction with the labels of the account's addresses filled in,
--- as the database has them now
-fillTxInfoLabels :: (MonadUnliftIO m) => Network -> TxInfo -> DB m TxInfo
-fillTxInfoLabels net = relabelAddresses (addressLabel net)
+-- | The transaction with its labels filled in as the database has them
+-- now: those of the account's addresses, and those the coins it spends
+-- show, by the transaction that paid each (see 'coinLabel')
+fillTxInfoLabels :: (MonadUnliftIO m) => Network -> DBAccountId -> TxInfo -> DB m TxInfo
+fillTxInfoLabels net accId info = do
+  labelled <- relabelAddresses (addressLabel net) info
+  inputLabels <- coinLabels net accId (spentTxids (txInfoSummary info))
+  return labelled {txInfoInputLabels = inputLabels}
+
+-- | The transactions the coins of the account a transaction spends come
+-- from, each once
+spentTxids :: TxSummary -> [TxHash]
+spentTxids summary = nubOrd [outpoint.hash | input <- Map.elems (summaryMyInputs summary), outpoint <- myInputsOutpoints input]
+
+-- | The label a coin of the transaction shows: the label of the
+-- transaction, which paid the coin to the account or moved it between its
+-- own addresses. The change of a payment the account made shows none: the
+-- label says what the payment was for, not what its change is. None
+-- either without a label, or when the account has no such transaction.
+coinLabel :: (MonadUnliftIO m) => Network -> DBAccountId -> TxHash -> DB m Text
+coinLabel net accId tid = do
+  label <- txLabel accId tid
+  if Text.null label
+    then return ""
+    else do
+      rowM <- P.get (DBTxInfoKey accId (hashBytes tid))
+      let summaryM = decodeSummary net tid . dBTxInfoBlob =<< maybe (Left "no such transaction") Right rowM
+      return $ case summaryM of
+        Right summary | summaryType summary /= TxDebit -> label
+        _ -> ""
+
+-- | The labels the coins of the transactions show ('coinLabel'), by
+-- transaction, those that have one
+coinLabels :: (MonadUnliftIO m) => Network -> DBAccountId -> [TxHash] -> DB m (Map TxHash Text)
+coinLabels net accId tids = do
+  labelled <- forM (nubOrd tids) $ \tid -> (,) tid <$> coinLabel net accId tid
+  return $ Map.fromList [(tid, label) | (tid, label) <- labelled, not (Text.null label)]
 
 -- | The transaction with the labels of the account's addresses, those it
 -- spends from and those it pays, as the function gives them: from the

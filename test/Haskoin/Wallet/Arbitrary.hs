@@ -103,6 +103,8 @@ arbitraryJsonCoin net =
     <*> arbitraryNatural
     <*> arbitraryMaybe arbitraryCoinLock
     <*> arbitrary
+    <*> arbitraryText
+    <*> arbitraryText
 
 arbitraryCoinLock :: Gen CoinLock
 arbitraryCoinLock = elements [LockedByTransaction, LockedByUser]
@@ -113,6 +115,11 @@ arbitraryLeftCoin =
     <$> arbitraryOutPoint
     <*> arbitraryPositive
     <*> elements [WorthLessThanFee, Locked LockedByUser, Locked LockedByTransaction, NotSpendableYet, NotGiven]
+    <*> arbitraryText
+
+-- | The labels of a few transactions, by id
+arbitraryTxidLabels :: Gen (Map.Map TxHash Text)
+arbitraryTxidLabels = Map.fromList <$> resize 3 (listOf ((,) <$> arbitraryTxHash <*> arbitraryText))
 
 arbitraryPubKeyDoc :: Ctx -> Gen PubKeyDoc
 arbitraryPubKeyDoc ctx =
@@ -123,13 +130,14 @@ arbitraryPubKeyDoc ctx =
     <*> arbitraryMaybe arbitraryFingerprint
 
 -- | A transaction file of Bitcoin signing data, on any network or none,
--- with the labels of some addresses or none
+-- with the labels of some addresses and transactions or none
 arbitraryTxFile :: Ctx -> Gen TxFile
 arbitraryTxFile ctx =
   TxFile
     <$> arbitraryMaybe arbitraryNetwork
     <*> arbitraryTxSignData btc ctx
     <*> (Map.fromList <$> resize 5 (listOf ((,) <$> arbitraryText <*> arbitraryText)))
+    <*> arbitraryTxidLabels
 
 arbitraryTxSignData :: Network -> Ctx -> Gen TxSignData
 arbitraryTxSignData net ctx =
@@ -216,7 +224,7 @@ arbitraryTxStatus =
     ]
 
 arbitraryTxInfo :: Network -> Gen TxInfo
-arbitraryTxInfo net = TxInfo <$> arbitraryTxSummary net <*> arbitraryTxStatus <*> arbitraryText
+arbitraryTxInfo net = TxInfo <$> arbitraryTxSummary net <*> arbitraryTxStatus <*> arbitraryText <*> arbitraryTxidLabels
 
 arbitrarySyncRes :: Network -> Ctx -> Gen SyncRes
 arbitrarySyncRes net ctx =

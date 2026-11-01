@@ -335,8 +335,12 @@ hw label ADDRESS "rent from Bob"
 
 **`hw coins`** lists the coins of an account. Each takes three lines: its
 value with its state, spendable or locked, and its confirmations; the address
-that holds it; and the coin as `TXID:INDEX`. **`hw lockcoin`** keeps a coin
-from being spent, and **`hw unlockcoin`** frees it again.
+that holds it, with its label; and the coin as `TXID:INDEX`. A coin paid by a
+transaction you labelled shows the label on a line of its own, below the
+first, as `txs` does. The change of a payment you made shows no label: the
+label says what the payment was for, not what its change is.
+**`hw lockcoin`** keeps a coin from being spent, and **`hw unlockcoin`** frees
+it again.
 
 ```console
 hw coins
@@ -421,7 +425,8 @@ its type, its amount and its status. The second gives the address paid, and
 the third the txid. An unconfirmed transaction shows its fee rate. A
 transaction with a label shows it on a line of its own, below the first.
 `--verbose` shows the label as a field, every address with its amount, path and
-label, and the fee.
+label, and the fee. An address the transaction spends from ends with the labels
+of the coins spent, as `coins` shows them, after the word `from`.
 
 ```console
 hw txs
@@ -465,9 +470,9 @@ hw reviewtx unsigned.json
 **`hw exporttx HASH FILE`** writes a pending transaction to a file.
 **`hw importtx FILE`** adds a transaction file to the pending transactions, or
 replaces the pending one with its signed version. A transaction file carries
-the label of the transaction and the labels of the account's addresses in it,
-as the wallet has them when it writes the file. `importtx` keeps the labels of
-the wallet.
+the label of the transaction, the labels of the account's addresses in it, and
+the labels of the coins it spends, as the wallet has them when it writes the
+file. `importtx` keeps the labels of the wallet.
 
 ```console
 hw exporttx NOSIGHASH unsigned.json

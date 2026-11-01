@@ -337,15 +337,18 @@ coinBalancesPrinter unit addrs = vcat . intersperse mempty $ uncurry (coinBalanc
 {- Coins -}
 
 -- | A coin in three lines: its value with its state and its
--- confirmations, the address that holds it, and the coin itself, as
--- lockcoin and --coin take it
+-- confirmations, the address that holds it with its label, and the coin
+-- itself, as lockcoin and --coin take it. A coin that shows the label of
+-- its transaction has it on a line of its own, below the first, as a
+-- transaction does.
 coinDoc :: Network -> AmountUnit -> JsonCoin -> Doc Style
 coinDoc net unit JsonCoin {..} =
-  vcat
-    [ columns [amountCell (Just Incoming) "" unit (fromIntegral jsonCoinValue), commaList [state, confirmations]],
-      indent 2 ("at" <+> text (addrToString net jsonCoinAddress)),
-      indent 2 (styled Muted (coinText jsonCoinOutpoint))
-    ]
+  vcat $
+    [columns [amountCell (Just Incoming) "" unit (fromIntegral jsonCoinValue), commaList [state, confirmations]]]
+      <> [indent 2 (labelWord jsonCoinTxLabel) | not (Text.null jsonCoinTxLabel)]
+      <> [ indent 2 (hsep $ ["at", text (addrToString net jsonCoinAddress)] <> [labelWord jsonCoinAddressLabel | not (Text.null jsonCoinAddressLabel)]),
+           indent 2 (styled Muted (coinText jsonCoinOutpoint))
+         ]
   where
     state = case jsonCoinLock of
       Just LockedByTransaction -> styled Waiting "locked by a pending transaction"
@@ -421,7 +424,7 @@ secondText = formatTime defaultTimeLocale "%d %b %Y %H:%M:%S %Z"
 -- and where it stands. Its columns line up from one transaction to the
 -- next.
 headlineDoc :: AmountUnit -> Maybe ZonedTime -> TxInfo -> Doc Style
-headlineDoc unit time (TxInfo summary status _) =
+headlineDoc unit time (TxInfo summary status _ _) =
   hcat
     [ maybe (styled Muted (block minuteWidth "time unknown")) (text . minuteText) time,
       "  ",
@@ -490,7 +493,7 @@ confirmationsText n = counted n "confirmation" "confirmations"
 -- bumpfee prepared also names the transactions it replaces, before its
 -- hash.
 compactTxDoc :: Network -> AmountUnit -> Maybe DBAccount -> Maybe ZonedTime -> TxInfo -> Doc Style
-compactTxDoc net unit accountM time info@(TxInfo summary status label) =
+compactTxDoc net unit accountM time info@(TxInfo summary status label _) =
   vcat $
     [headlineDoc unit time info]
       <> [indent 2 (labelWord label) | not (Text.null label)]
@@ -534,9 +537,10 @@ hashWord (Pending status) = styled PendingHash (cs (txHashToHex (pendingShownHas
 -- lines given come first: its account in a listing of every account, or
 -- its network in an answer. Its label, if any, follows them. Every address
 -- it spends from or pays is on a line of its own, with its value, and those
--- of the wallet with their paths and labels, in columns.
+-- of the wallet with their paths and labels, in columns. An address of the
+-- wallet it spends from ends with the labels its coins show, if any.
 verboseTxDoc :: Network -> AmountUnit -> [Doc Style] -> Maybe ZonedTime -> TxInfo -> Doc Style
-verboseTxDoc net unit named time info@(TxInfo summary status label) =
+verboseTxDoc net unit named time info@(TxInfo summary status label inputLabels) =
   vcat $
     headlineDoc unit time info
       : ( indent 2
@@ -549,7 +553,7 @@ verboseTxDoc net unit named time info@(TxInfo summary status label) =
               <> section "Change" (Just Incoming) change
         )
   where
-    from = spentFrom summary
+    from = spentFrom inputLabels summary
     (to, change) = paidTo summary
     widths = addressColumns net unit (from <> to <> change)
     -- What the wallet receives is green. What it spends, and what others
@@ -604,15 +608,21 @@ data TxAddress = TxAddress
     -- spends from: that wallet's coins are nothing to this one.
     txAddressValue :: !(Maybe Natural),
     -- | The derivation path and the label of an address of the wallet
-    txAddressOwn :: !(Maybe (SoftPath, Text))
+    txAddressOwn :: !(Maybe (SoftPath, Text)),
+    -- | The labels the coins spent from an address of the wallet show,
+    -- each once. None for an address paid.
+    txAddressCoinLabels :: ![Text]
   }
 
 -- | The addresses a transaction spends from: those of the wallet with
--- what they spend, then those of other wallets
-spentFrom :: TxSummary -> [TxAddress]
-spentFrom summary =
-  [TxAddress a (Just v) (Just (p, l)) | (a, MyInputs v p l _) <- Map.assocs (summaryMyInputs summary)]
-    <> [TxAddress a Nothing Nothing | a <- Map.keys (summaryOtherInputs summary)]
+-- what they spend and the labels their coins show, then those of other
+-- wallets
+spentFrom :: Map.Map TxHash Text -> TxSummary -> [TxAddress]
+spentFrom inputLabels summary =
+  [TxAddress a (Just v) (Just (p, l)) (coinLabelsOf outpoints) | (a, MyInputs v p l outpoints) <- Map.assocs (summaryMyInputs summary)]
+    <> [TxAddress a Nothing Nothing [] | a <- Map.keys (summaryOtherInputs summary)]
+  where
+    coinLabelsOf outpoints = nub [label | outpoint <- outpoints, Just label <- [Map.lookup outpoint.hash inputLabels]]
 
 -- | The addresses a transaction pays, and the change it sends back to the
 -- wallet. What a payment sends back to the wallet is its change. In a
@@ -626,8 +636,8 @@ paidTo summary =
     TxCredit -> (toWallet, [])
     TxInternal -> (toWallet <> toOthers, [])
   where
-    toWallet = [TxAddress a (Just v) (Just (p, l)) | (a, MyOutputs v p l) <- Map.assocs (summaryMyOutputs summary)]
-    toOthers = [TxAddress a (Just v) Nothing | (a, v) <- Map.assocs (summaryOtherOutputs summary)]
+    toWallet = [TxAddress a (Just v) (Just (p, l)) [] | (a, MyOutputs v p l) <- Map.assocs (summaryMyOutputs summary)]
+    toOthers = [TxAddress a (Just v) Nothing [] | (a, v) <- Map.assocs (summaryOtherOutputs summary)]
 
 -- | The widths of the columns of the addresses of a transaction, each that
 -- of its widest cell
@@ -653,7 +663,8 @@ valueText unit v = cs (showAmount unit (fromIntegral v) <> " " <> showUnit unit 
 
 -- | An address of a transaction on one line: the address, its value
 -- right-aligned, then for an address of the wallet, its path and its
--- label. The value of an address of the wallet is in the style given.
+-- label, then the labels its coins show, after the word "from". The value
+-- of an address of the wallet is in the style given.
 addressRow :: Network -> AmountUnit -> AddressColumns -> Maybe Style -> TxAddress -> Doc Style
 addressRow net unit widths ownStyle row =
   cellsLine $
@@ -663,6 +674,7 @@ addressRow net unit widths ownStyle row =
         Just (path, label) ->
           (pathColumn widths, pathToStr path, styled Muted (pathToStr path))
             : [(0, "", labelWord label) | not (Text.null label)]
+            <> [(0, "", styled Muted "from" <+> commaList (labelWord <$> spentLabels)) | let spentLabels = txAddressCoinLabels row, not (null spentLabels)]
         Nothing -> []
   where
     address = addrToString net (txAddress row)
@@ -686,7 +698,7 @@ leftCoinsDoc :: AmountUnit -> [LeftCoin] -> Doc Style
 leftCoinsDoc unit left =
   vcat . intersperse mempty $
     text (counted (fromIntegral (length left)) "coin stays" "coins stay" <> " in the account:")
-      : [questionCoinDoc unit coin.leftCoinOutpoint (fromIntegral coin.leftCoinValue) (text (leftReasonText coin.leftCoinReason)) | coin <- left]
+      : [questionCoinDoc unit coin.leftCoinOutpoint (fromIntegral coin.leftCoinValue) coin.leftCoinTxLabel (text (leftReasonText coin.leftCoinReason)) | coin <- left]
 
 {- The questions of preparesendall and bumpfee -}
 
@@ -704,13 +716,13 @@ wordsOf :: String -> [Doc Style]
 wordsOf = map pretty . words
 
 -- | A coin in a question: its value, then what is said of it, then the
--- coin as --coin and lockcoin take it
-questionCoinDoc :: AmountUnit -> OutPoint -> Natural -> Doc Style -> Doc Style
-questionCoinDoc unit outpoint value said =
-  vcat
-    [ columns [amountCell (Just Incoming) "" unit (fromIntegral value), said],
-      indent 2 (styled Muted (coinText outpoint))
-    ]
+-- label it shows if any, then the coin as --coin and lockcoin take it
+questionCoinDoc :: AmountUnit -> OutPoint -> Natural -> Text -> Doc Style -> Doc Style
+questionCoinDoc unit outpoint value label said =
+  vcat $
+    [columns [amountCell (Just Incoming) "" unit (fromIntegral value), said]]
+      <> [indent 2 (labelWord label) | not (Text.null label)]
+      <> [indent 2 (styled Muted (coinText outpoint))]
 
 -- | A fee rate, in satoshis per byte
 rateDoc :: Natural -> Doc Style
@@ -718,9 +730,10 @@ rateDoc feeByte = text (show feeByte <> " sat/byte")
 
 -- | The report on the coins worth less than their fee, as preparesendall
 -- shows it before its question: the coins, each with the rates it is worth
--- spending at, then what spending them and leaving them does
-dustReportDoc :: AmountUnit -> DustReport -> Doc Style
-dustReportDoc unit report =
+-- spending at and the label it shows among those given, then what
+-- spending them and leaving them does
+dustReportDoc :: AmountUnit -> Map.Map TxHash Text -> DustReport -> Doc Style
+dustReportDoc unit labels report =
   vcat . intersperse mempty $ [header] <> (dustCoinDoc <$> report.dustCoins) <> [vcat [spent, left]]
   where
     count = length report.dustCoins
@@ -730,7 +743,7 @@ dustReportDoc unit report =
     header
       | one = sentence $ wordsOf "1 coin costs more to spend than it is worth at" <> [rateDoc report.rate <> ",", amount (inputFee report.rate) <> ":"]
       | otherwise = sentence $ wordsOf (show count <> " coins cost more to spend than they are worth at") <> [rateDoc report.rate <> ",", amount (inputFee report.rate)] <> wordsOf "each:"
-    dustCoinDoc coin = questionCoinDoc unit coin.outpoint (fromIntegral coin.value) (worth coin)
+    dustCoinDoc coin = questionCoinDoc unit coin.outpoint (fromIntegral coin.value) (Map.findWithDefault "" coin.outpoint.hash labels) (worth coin)
     worth coin = case worthSpendingUpTo coin of
       0 -> "worth less than its fee at any rate"
       upTo -> "worth spending at" <+> rateDoc upTo <+> "or less"
@@ -767,11 +780,12 @@ childrenDoc children =
       : [indent 2 (styled Muted (cs (txHashToHex (sentId child)))) | child <- children]
 
 -- | What bumpfee says of the coins to add, before it asks to add them: each
--- with the address that holds it and its path
-addedCoinsDoc :: Network -> AmountUnit -> Natural -> [(Store.Unspent, Address, SoftPath)] -> Doc Style
-addedCoinsDoc net unit feeByte added =
+-- with the address that holds it and its path, and the label it shows
+-- among those given
+addedCoinsDoc :: Network -> AmountUnit -> Map.Map TxHash Text -> Natural -> [(Store.Unspent, Address, SoftPath)] -> Doc Style
+addedCoinsDoc net unit labels feeByte added =
   vcat . intersperse mempty $
-    header : [questionCoinDoc unit coin.outpoint (fromIntegral coin.value) (held addr path) | (coin, addr, path) <- added]
+    header : [questionCoinDoc unit coin.outpoint (fromIntegral coin.value) (Map.findWithDefault "" coin.outpoint.hash labels) (held addr path) | (coin, addr, path) <- added]
   where
     them = if length added == 1 then "this coin" else "these coins"
     header = sentence $ wordsOf "The coins of the transaction cannot pay its fee at" <> [rateDoc feeByte <> ","] <> wordsOf ("and " <> them <> " of the account would:")

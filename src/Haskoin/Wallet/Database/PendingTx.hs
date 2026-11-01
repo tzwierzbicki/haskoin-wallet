@@ -185,17 +185,17 @@ pendingCursor accIdM named = do
     _ -> return (p.pendingTxCreated, nosigHash (txSignDataTx p.pendingTxData))
 
 -- | The transaction of the signing data as the account sees it: parsed
--- against the account's key, with the labels of its addresses
-txInfoOf :: (MonadUnliftIO m) => Ctx -> DBAccount -> TxSignData -> ExceptT String (DB m) TxInfo
-txInfoOf ctx acc tsd = do
+-- against the account's key, with its labels as the wallet has them
+txInfoOf :: (MonadUnliftIO m) => Ctx -> (DBAccountId, DBAccount) -> TxSignData -> ExceptT String (DB m) TxInfo
+txInfoOf ctx (accId, acc) tsd = do
   info <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountXPubKey ctx acc) tsd
-  lift $ fillTxInfoLabels (accountNetwork acc) info
+  lift $ fillTxInfoLabels (accountNetwork acc) accId info
 
 -- | The summary of a pending transaction: the transaction as the wallet
 -- sees it, with its status as held
 pendingSummary :: (MonadUnliftIO m) => Ctx -> DBAccount -> PendingTx -> ExceptT String (DB m) TxInfo
 pendingSummary ctx acc p = do
-  info <- txInfoOf ctx acc p.pendingTxData
+  info <- txInfoOf ctx (p.pendingTxAccount, acc) p.pendingTxData
   return info {txInfoStatus = heldStatus p info.txInfoStatus}
 
 -- | The status of a held transaction: what its signing data says, and what

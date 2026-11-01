@@ -1103,7 +1103,7 @@ verboseOption what =
       <> help what
 
 txVerboseHelp :: String
-txVerboseHelp = "Show every detail of each transaction: its label, each address it spends from or pays, with its amount, path and label, and the fee."
+txVerboseHelp = "Show every detail of each transaction: its label, each address it spends from or pays, with its amount, path and label, the labels of the coins spent as `coins` shows them, and the fee."
 
 {- preparetx -}
 
@@ -1468,9 +1468,10 @@ before you sign it, or before you send it. A transaction that involves no
 account, such as a sweep to addresses outside the wallet, is shown on the
 network its file names.
 
-The labels reviewtx shows, the transaction's and those of its addresses, are
-the ones the file carries, as the wallet that wrote it had them. They are not
-those of this wallet, which an offline computer does not have.
+The labels reviewtx shows, the transaction's, those of its addresses and those
+of the coins it spends, are the ones the file carries, as the wallet that
+wrote it had them. They are not those of this wallet, which an offline
+computer does not have.
 |],
       args =
         CommandReviewTx
@@ -1499,9 +1500,9 @@ importExportTxDetails =
 exporttx writes a pending transaction to a file, signed or not, to carry it to
 an offline computer. Name it by the hash pendingtxs shows: its nosigHash, or
 its txid once it is signed. The file names the network of the transaction. It
-carries the label of the transaction, and the labels of the account's
-addresses in it as the wallet has them when it writes the file, for the
-offline computer to show.
+carries the label of the transaction, the labels of the account's addresses in
+it, and the labels of the coins it spends, as the wallet has them when it
+writes the file, for the offline computer to show.
 
 importtx adds the transaction of a file to the pending transactions of its
 account, and locks the coins it spends. When the wallet holds it already, the
@@ -1627,8 +1628,13 @@ coinsCommand =
         [r|
 A coin is an unspent output of a transaction, written TXID:INDEX. The
 unconfirmed coins come first, then the newest. Each takes three lines: its
-value with its state and its confirmations, the address that holds it, and the
-coin itself, as lockcoin and --coin take it.
+value with its state and its confirmations, the address that holds it with its
+label, and the coin itself, as lockcoin and --coin take it.
+
+A coin paid by a transaction you labelled shows the label on a line of its
+own, below the first, as txs does. The change of a payment you made shows no
+label: the label says what the payment was for, not what its change is. Coins
+have no labels of their own.
 
 A coin is spendable when the wallet can spend it now. Nothing locks it, a
 coinbase coin has 100 confirmations, and an unconfirmed coin is the change of

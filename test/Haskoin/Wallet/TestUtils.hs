@@ -254,7 +254,7 @@ unusedAddressRow = DBAddress (toSqlKey 1) False 1 (externalAddrsText !! 1) "" 0 
 -- | The coin of 50000 at the first receiving address as coins lists it:
 -- in block 800000, 3 confirmations deep, free and spendable
 spendableCoinRow :: JsonCoin
-spendableCoinRow = JsonCoin (OutPoint (fakeTxHash 1) 0) (externalAddr 0) 50000 (Store.BlockRef 800000 1) 3 Nothing True
+spendableCoinRow = JsonCoin (OutPoint (fakeTxHash 1) 0) (externalAddr 0) 50000 (Store.BlockRef 800000 1) 3 Nothing True "" ""
 
 -- | A sync of main that found nothing new, at block 800002
 quietSync :: SyncRes

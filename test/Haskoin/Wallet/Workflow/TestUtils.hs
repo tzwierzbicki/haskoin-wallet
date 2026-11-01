@@ -44,6 +44,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     fingerprintsOf,
     addressesOf,
     coinsShown,
+    coinLabelsShown,
     leftOf,
     txOf,
     txsOf,
@@ -271,6 +272,12 @@ addressesOf other = Left (show other)
 coinsShown :: Response -> Either String [(OutPoint, Word64, Natural, Maybe CoinLock, Bool)]
 coinsShown (ResponseCoins _ coins) = Right [(c.jsonCoinOutpoint, c.jsonCoinValue, c.jsonCoinConfirmations, c.jsonCoinLock, c.jsonCoinSpendable) | c <- coins]
 coinsShown other = Left (show other)
+
+-- | The coins of an answer with the label each shows, that of the
+-- transaction that paid it
+coinLabelsShown :: Response -> Either String [(OutPoint, Text)]
+coinLabelsShown (ResponseCoins _ coins) = Right [(c.jsonCoinOutpoint, c.jsonCoinTxLabel) | c <- coins]
+coinLabelsShown other = Left (show other)
 
 -- | The coins preparetx or preparesendall leaves in the account, as its
 -- answer lists them: outpoint, value and why

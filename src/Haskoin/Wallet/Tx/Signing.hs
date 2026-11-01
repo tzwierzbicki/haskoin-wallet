@@ -23,13 +23,14 @@
 -- 5. reports the signed transaction with the 'TxInfo' of the signed bytes.
 --
 -- A transaction file carries the labels of the account's addresses in the
--- transaction. 'parseTxFile' reads a file with them, 'labelAddressesFromFile'
--- puts them on a 'TxInfo', and 'labelledTxFile' writes them from one.
+-- transaction, and those of the transactions its coins come from.
+-- 'parseTxFile' reads a file with them, 'labelsFromFile' puts them on a
+-- 'TxInfo', and 'labelledTxFile' writes them from one.
 module Haskoin.Wallet.Tx.Signing
   ( parseTxSignData,
     parseOutsideTxSignData,
     parseTxFile,
-    labelAddressesFromFile,
+    labelsFromFile,
     labelledTxFile,
     signWalletTx,
     verifySignedTx,
@@ -47,6 +48,7 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import qualified Data.Serialize as S
+import qualified Data.Set as Set
 import qualified Data.Text as Text
 import Data.Word (Word64)
 import Haskoin
@@ -58,6 +60,7 @@ import Haskoin.Wallet.Database.TxInfo
     TxStatus (..),
     TxSummary (..),
     relabelAddresses,
+    spentTxids,
     txType,
   )
 import Haskoin.Wallet.Tx.SignData
@@ -92,30 +95,35 @@ parseAs net ctx accountPubM tsd = do
       txid = if isSigned tx then Just (txHash tx) else Nothing
   -- What only the database knows, the wallet's own state, is filled in
   -- for a transaction it holds
-  return $ TxInfo summary (Pending (PendingStatus (nosigHash tx) txid False False Nothing tsd.txSignDataReplaces)) tsd.txSignDataLabel
+  return $ TxInfo summary (Pending (PendingStatus (nosigHash tx) txid False False Nothing tsd.txSignDataReplaces)) tsd.txSignDataLabel Map.empty
 
 {- Files -}
 
--- | The transaction of a file as the account sees it, with the labels of
--- its addresses as the file carries them, not as this wallet has them: an
--- offline computer has none of its own
+-- | The transaction of a file as the account sees it, with its labels as
+-- the file carries them, not as this wallet has them: an offline computer
+-- has none of its own
 parseTxFile :: Network -> Ctx -> XPubKey -> TxFile -> Either String TxInfo
 parseTxFile net ctx accountPub file =
-  labelAddressesFromFile net (txFileAddressLabels file) <$> parseTxSignData net ctx accountPub (txFileData file)
+  labelsFromFile net file <$> parseTxSignData net ctx accountPub (txFileData file)
 
--- | The transaction with the labels of the account's addresses as a file
--- carries them. An address the file does not label has none, and a label
--- at an address the account does not have in the transaction is left
+-- | The transaction with its labels as a file carries them: those of the
+-- account's addresses, and those the coins it spends show. An address or
+-- a coin the file does not label has none. A label at an address, or of
+-- a transaction, the account does not have in the transaction is left
 -- aside.
-labelAddressesFromFile :: Network -> AddressLabels -> TxInfo -> TxInfo
-labelAddressesFromFile net labels = runIdentity . relabelAddresses (pure . labelOf)
+labelsFromFile :: Network -> TxFile -> TxInfo -> TxInfo
+labelsFromFile net file info =
+  (runIdentity (relabelAddresses (pure . labelOf) info))
+    { txInfoInputLabels = Map.restrictKeys (txFileInputLabels file) (Set.fromList (spentTxids (txInfoSummary info)))
+    }
   where
-    labelOf addr = fromMaybe "" (addrToText net addr >>= (`Map.lookup` labels))
+    labelOf addr = fromMaybe "" (addrToText net addr >>= (`Map.lookup` txFileAddressLabels file))
 
--- | The file of a transaction of the account, with the labels of its
--- addresses as the summary has them, those that have one
+-- | The file of a transaction of the account, with its labels as the
+-- summary has them: those of its addresses that have one, and those the
+-- coins it spends show
 labelledTxFile :: Network -> TxInfo -> TxSignData -> TxFile
-labelledTxFile net info tsd = TxFile (Just net) tsd (Map.fromList labelled)
+labelledTxFile net info tsd = TxFile (Just net) tsd (Map.fromList labelled) (txInfoInputLabels info)
   where
     summary = txInfoSummary info
     mine =

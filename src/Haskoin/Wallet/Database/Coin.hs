@@ -40,6 +40,7 @@ module Haskoin.Wallet.Database.Coin
     LeftCoin (..),
     leftReasonText,
     leftCoins,
+    labelsOfCoins,
     chosenCoins,
   )
 where
@@ -49,7 +50,7 @@ import Control.Monad
 import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Reader (MonadTrans (lift))
-import Data.Aeson (FromJSON (..), ToJSON (..), Value (String), object, withObject, withText, (.:), (.=))
+import Data.Aeson ((.:?), (.!=), FromJSON (..), ToJSON (..), Value (String), object, withObject, withText, (.:), (.=))
 import Data.ByteString (ByteString)
 import Data.Containers.ListUtils (nubOrd)
 import Data.List (intercalate, sortOn)
@@ -75,7 +76,7 @@ import Haskoin.Wallet.Database.Account (accountNetwork, getAccountById, getAccou
 import Haskoin.Wallet.Database.Address (CoinBalance (..))
 import Haskoin.Wallet.Database.PendingTx (lockedOutpoints, userLockedOutpoints)
 import Haskoin.Wallet.Database.RawTx (lookupRawTx)
-import Haskoin.Wallet.Database.TxInfo (MyInputs (..), TxSummary (..), liveSummary, ownTransaction)
+import Haskoin.Wallet.Database.TxInfo (MyInputs (..), TxSummary (..), addressLabel, coinLabel, coinLabels, liveSummary, ownTransaction)
 import Haskoin.Wallet.Util (rowLimit)
 import Numeric.Natural (Natural)
 
@@ -90,7 +91,12 @@ data JsonCoin = JsonCoin
     -- | What holds it, if anything
     jsonCoinLock :: !(Maybe CoinLock),
     -- | The builder may spend it now ('canSpend')
-    jsonCoinSpendable :: !Bool
+    jsonCoinSpendable :: !Bool,
+    -- | The label of the transaction that paid it, when the coin shows it
+    -- ('coinLabel'), or none
+    jsonCoinTxLabel :: !Text,
+    -- | The label of the address that holds it, or none
+    jsonCoinAddressLabel :: !Text
   }
   deriving (Eq, Show)
 
@@ -118,7 +124,9 @@ instance MarshalJSON Network JsonCoin where
         "block" .= jsonCoinBlock c,
         "confirmations" .= jsonCoinConfirmations c,
         "lock" .= jsonCoinLock c,
-        "spendable" .= jsonCoinSpendable c
+        "spendable" .= jsonCoinSpendable c,
+        "txlabel" .= jsonCoinTxLabel c,
+        "addresslabel" .= jsonCoinAddressLabel c
       ]
   unmarshalValue net =
     withObject "JsonCoin" $ \o ->
@@ -130,15 +138,20 @@ instance MarshalJSON Network JsonCoin where
         <*> o .: "confirmations"
         <*> o .: "lock"
         <*> o .: "spendable"
+        <*> o .:? "txlabel" .!= ""
+        <*> o .:? "addresslabel" .!= ""
 
 -- | A coin row as the user sees it: its confirmations counted from the best
--- block, its lock, and spendable when the builder may spend it now
+-- block, its lock, spendable when the builder may spend it now, the label
+-- it shows and the label of its address
 toJsonCoin :: (MonadUnliftIO m) => Spending -> DBCoin -> ExceptT String (DB m) JsonCoin
 toJsonCoin rules row = do
   outpoint <- liftEither $ coinOutpoint row
   addr <- liftEither $ coinAddress rules.spendingNetwork outpoint row
   block <- liftEither $ readBlock outpoint (dBCoinBlockRef row)
   spendable <- canSpend rules 0 outpoint block
+  label <- lift $ coinLabel rules.spendingNetwork (dBCoinAccount row) outpoint.hash
+  addrLabel <- lift $ addressLabel rules.spendingNetwork addr
   return
     JsonCoin
       { jsonCoinOutpoint = outpoint,
@@ -147,8 +160,15 @@ toJsonCoin rules row = do
         jsonCoinBlock = block,
         jsonCoinConfirmations = getConfirmations rules.spendingBest block,
         jsonCoinLock = Map.lookup outpoint rules.spendingLocks,
-        jsonCoinSpendable = spendable
+        jsonCoinSpendable = spendable,
+        jsonCoinTxLabel = label,
+        jsonCoinAddressLabel = addrLabel
       }
+
+-- | The labels the coins show ('coinLabel'), by the transaction that paid
+-- each, for what lists them
+labelsOfCoins :: (MonadUnliftIO m) => Network -> DBAccountId -> [Store.Unspent] -> DB m (Map TxHash Text)
+labelsOfCoins net accId coins = coinLabels net accId ((.outpoint.hash) <$> coins)
 
 {- Coin rows -}
 
@@ -691,7 +711,9 @@ lockReason = maybe NotSpendableYet Locked
 data LeftCoin = LeftCoin
   { leftCoinOutpoint :: !OutPoint,
     leftCoinValue :: !Word64,
-    leftCoinReason :: !LeftReason
+    leftCoinReason :: !LeftReason,
+    -- | The label the coin shows ('coinLabel'), or none
+    leftCoinTxLabel :: !Text
   }
   deriving (Eq, Show)
 
@@ -700,19 +722,21 @@ instance ToJSON LeftCoin where
     object
       [ "outpoint" .= leftCoinOutpoint coin,
         "value" .= leftCoinValue coin,
-        "reason" .= leftCoinReason coin
+        "reason" .= leftCoinReason coin,
+        "txlabel" .= leftCoinTxLabel coin
       ]
 
 instance FromJSON LeftCoin where
   parseJSON = withObject "LeftCoin" $ \o ->
-    LeftCoin <$> o .: "outpoint" <*> o .: "value" <*> o .: "reason"
+    LeftCoin <$> o .: "outpoint" <*> o .: "value" <*> o .: "reason" <*> o .:? "txlabel" .!= ""
 
 -- | The coins of the account a transaction leaves, by reason in the order
 -- of 'leftReasons', the largest first: the dust coins left, the coins the
 -- builder may not spend with their locks, and the spendable coins not
--- chosen with coin control
-leftCoins :: [Store.Unspent] -> [(Store.Unspent, Maybe CoinLock)] -> [Store.Unspent] -> [LeftCoin]
-leftCoins dustLeft unspendable notGiven =
+-- chosen with coin control. Each shows its label, among those given
+-- ('labelsOfCoins').
+leftCoins :: Map TxHash Text -> [Store.Unspent] -> [(Store.Unspent, Maybe CoinLock)] -> [Store.Unspent] -> [LeftCoin]
+leftCoins labels dustLeft unspendable notGiven =
   concat [sortOn (Down . leftCoinValue) [left | left <- everyLeft, leftCoinReason left == reason] | reason <- leftReasons]
   where
     everyLeft =
@@ -720,7 +744,7 @@ leftCoins dustLeft unspendable notGiven =
         <> [leftOf (lockReason lock) coin | (coin, lock) <- unspendable]
         <> [leftOf NotGiven coin | coin <- notGiven]
     leftOf :: LeftReason -> Store.Unspent -> LeftCoin
-    leftOf reason coin = LeftCoin coin.outpoint coin.value reason
+    leftOf reason coin = LeftCoin coin.outpoint coin.value reason (Map.findWithDefault "" coin.outpoint.hash labels)
 
 {- Coin control -}
 

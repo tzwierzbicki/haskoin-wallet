@@ -552,7 +552,7 @@ listingSpec ctx =
       inDatabaseE $ do
         (accId, acc) <- testNewAcc ctx "test"
         unsigned <- unsignedPayment ctx cfg accId
-        (createdOf <$> txInfoOf ctx acc unsigned) `dbShouldBeE` Nothing
+        (createdOf <$> txInfoOf ctx (accId, acc) unsigned) `dbShouldBeE` Nothing
     it "reports a row whose signing data does not decode, instead of hiding it" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"

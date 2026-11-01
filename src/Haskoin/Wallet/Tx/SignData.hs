@@ -25,6 +25,7 @@ import qualified Data.Serialize as S
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin
+import Haskoin.Wallet.Util (parseTxidLabels, txidLabelsJson)
 import Numeric.Natural (Natural)
 
 data TxSignData = TxSignData
@@ -102,24 +103,27 @@ instance MarshalJSON Ctx TxSignData where
 -- the addresses that have a label are listed.
 type AddressLabels = Map Text Text
 
--- | The labels of a file that labels no address, as an earlier hw wrote
--- every file
-noAddressLabels :: AddressLabels
-noAddressLabels = Map.empty
-
 -- | A transaction file, as preparetx, preparesweep, signtx, signsweep and
 -- exporttx write it: the signing data, with the network of the transaction,
--- which the transaction itself does not tell, and the labels of the
--- account's addresses the transaction spends from or pays, as the wallet
--- that wrote the file had them. An offline computer has no labels of its
--- own, so it shows those of the file. A file of an earlier hw names no
--- network and labels no address.
+-- which the transaction itself does not tell, and the labels the wallet
+-- that wrote the file had: those of the account's addresses the
+-- transaction spends from or pays, and those the coins it spends show, by
+-- the transaction that paid each (see
+-- 'Haskoin.Wallet.Database.TxInfo.coinLabel'). An offline computer has no
+-- labels of its own, so it shows those of the file. A file of an earlier
+-- hw names no network and carries no label.
 data TxFile = TxFile
   { txFileNetwork :: !(Maybe Network),
     txFileData :: !TxSignData,
-    txFileAddressLabels :: !AddressLabels
+    txFileAddressLabels :: !AddressLabels,
+    txFileInputLabels :: !(Map TxHash Text)
   }
   deriving (Eq, Show)
+
+-- | A file that carries no label, as a pending transaction given by its
+-- hash is read, and as an earlier hw wrote every file
+plainTxFile :: Maybe Network -> TxSignData -> TxFile
+plainTxFile netM tsd = TxFile netM tsd Map.empty Map.empty
 
 -- The network and the labels are keys among those of the signing data,
 -- which an earlier hw leaves aside
@@ -128,7 +132,8 @@ instance FromJSON TxFile where
     TxFile
       <$> withObject "txfile" network value
       <*> parseJSON value
-      <*> withObject "txfile" (\o -> o .:? "addresslabels" .!= noAddressLabels) value
+      <*> withObject "txfile" (\o -> o .:? "addresslabels" .!= Map.empty) value
+      <*> withObject "txfile" (\o -> maybe (return Map.empty) parseTxidLabels =<< o .:? "inputlabels") value
     where
       network o = do
         nameM <- o .:? "network"
@@ -143,11 +148,12 @@ noFileNetwork = "The file names no network, as those of an earlier hw: prepare t
 -- The labels are written only when there are some, so that the file of a
 -- transaction without any is as an earlier hw wrote it
 instance ToJSON TxFile where
-  toJSON (TxFile netM tsd labels) =
+  toJSON (TxFile netM tsd addresses inputs) =
     object $
       maybe [] (\net -> ["network" .= net.name]) netM
         <> txSignDataPairs tsd
-        <> ["addresslabels" .= labels | not (Map.null labels)]
+        <> ["addresslabels" .= addresses | not (Map.null addresses)]
+        <> ["inputlabels" .= txidLabelsJson inputs | not (Map.null inputs)]
 
 {- Signatures -}
 

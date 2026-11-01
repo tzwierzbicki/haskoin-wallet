@@ -6,7 +6,7 @@
 -- modules that should not depend on one another.
 module Haskoin.Wallet.Util where
 
-import Control.Monad ((<=<))
+import Control.Monad (forM, (<=<))
 import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.State (MonadState (..))
@@ -164,3 +164,18 @@ mapTextAddr net m = Map.fromList <$> mapM key (Map.assocs m)
     key (t, v) = case textToAddr net t of
       Just a -> return (a, v)
       Nothing -> fail $ "Invalid address " <> Text.unpack t
+
+-- | The labels of transactions by their ids, as hw writes them in JSON: an
+-- object of txid to label
+txidLabelsJson :: Map TxHash Text -> JSON.Value
+txidLabelsJson = JSON.toJSON . Map.mapKeys txHashToHex
+
+-- | The labels of transactions by their ids, read back from
+-- 'txidLabelsJson'
+parseTxidLabels :: JSON.Value -> Parser (Map TxHash Text)
+parseTxidLabels value = do
+  byHex <- JSON.parseJSON value
+  fmap Map.fromList . forM (Map.assocs byHex) $ \(hex, label) ->
+    case hexToTxHash hex of
+      Just tid -> return (tid, label :: Text)
+      Nothing -> fail $ "Invalid txid " <> Text.unpack hex
