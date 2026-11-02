@@ -145,9 +145,9 @@ sweepSpec ctx =
         prepared <- txOf =<< answer home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--fee-rate", "10"] []
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 28080)]
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
-        signed <- txOf =<< answer home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.json", "--key-file", keys] []
+        signed <- txOf =<< answer home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.psbt", "--key-file", keys] []
         pendingState signed `shouldBe` Just (True, False)
-        sent <- answer home ["sendtx", "--input", home </> "signed.json", "--yes"] []
+        sent <- answer home ["sendtx", "--input", home </> "signed.psbt", "--yes"] []
         published <- inMempool <$> readIORef chain
         (spendsAndPays ctx <$> published) `shouldBe` [([OutPoint (txHash (oldCoin ctx)) 0], [(28080, Right (otherAddr 0))])]
         (ResponseSentTx btc . txHash <$> published) `shouldBe` [sent]
@@ -245,9 +245,9 @@ sweepSpec ctx =
         keys <- writeKeyFile home
         prepared <- answer home (outsideSweep home keys) []
         prepared `shouldSatisfy` \case ResponseOutsideTx net _ -> net == btc; _ -> False
-        signed <- txOf =<< answer home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.json", "--key-file", keys] []
+        signed <- txOf =<< answer home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.psbt", "--key-file", keys] []
         pendingState signed `shouldBe` Just (True, False)
-        _ <- answer home ["sendtx", "--input", home </> "signed.json", "--yes"] []
+        _ <- answer home ["sendtx", "--input", home </> "signed.psbt", "--yes"] []
         published <- inMempool <$> readIORef chain
         (spendsAndPays ctx <$> published) `shouldBe` [([OutPoint (txHash (oldCoin ctx)) 0], [(28080, Right (otherAddr 0))])]
         (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right []
@@ -324,7 +324,7 @@ sweepSpec ctx =
         createMain home
         keys <- writeKeyFile home
         _ <- answer home (outsideSweep home keys) []
-        run <- hw home ["signtx", "--input", home </> "sweep.json", "--output", home </> "signed.json"] seedOnce
+        run <- hw home ["signtx", "--input", home </> "sweep.json", "--output", home </> "signed.psbt"] seedOnce
         run `shouldSatisfy` printed "The transaction does not involve this wallet"
         run `shouldNotSatisfy` askedMnemonic
 
@@ -333,7 +333,7 @@ sweepSpec ctx =
         createMain home
         keys <- writeKeyFile home
         _ <- answer home (outsideSweep home keys) []
-        (errorOf <$> hwJson home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.json", "--key-file", keys, "--account", "main"] [])
+        (errorOf <$> hwJson home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.psbt", "--key-file", keys, "--account", "main"] [])
           `shouldReturn` Right "The transaction does not involve the account main"
 
     -- The file of an earlier hw names no network
@@ -341,9 +341,9 @@ sweepSpec ctx =
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
         keys <- writeKeyFile home
         _ <- answer home (outsideSweep home keys) []
-        written <- readTxFile (home </> "sweep.json")
+        written <- readTxFile ctx (home </> "sweep.json")
         Json.encodeFile (home </> "old.json") (txFileData written)
-        (errorOf <$> hwJson home ["signsweep", "--input", home </> "old.json", "--output", home </> "signed.json", "--key-file", keys] [])
+        (errorOf <$> hwJson home ["signsweep", "--input", home </> "old.json", "--output", home </> "signed.psbt", "--key-file", keys] [])
           `shouldReturn` Right "The file names no network, as those of an earlier hw: prepare the transaction again"
 
     -- main and second, two accounts of the test wallet, each with its first

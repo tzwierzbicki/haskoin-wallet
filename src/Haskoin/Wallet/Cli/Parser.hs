@@ -1185,9 +1185,9 @@ needs no mnemonic, so it can run on an online computer. signtx then signs it,
 on an offline computer if you like, and sendtx sends it to the network.
 
 The new transaction is kept as a pending transaction, which pendingtxs lists.
---output also writes it to a file, to carry to an offline computer. A pending
-transaction is named by its nosigHash, a hash of the transaction without its
-signatures. Once signed, it is shown by its txid instead, and the commands
+--output also writes it to a file, a PSBT (BIP 174), to carry to an offline
+computer. A pending transaction is named by its nosigHash, a hash of the
+transaction without its signatures. Once signed, it is shown by its txid instead, and the commands
 take either hash. The coins it spends stay locked while it is pending.
 deletetx deletes it and frees them.
 
@@ -1486,7 +1486,7 @@ outputFileMaybeOption =
       <> long "output"
       <> metavar "FILENAME"
       <> fileCompletion
-      <> help "Write the transaction to this file. It must not exist yet."
+      <> help "Write the transaction to this file, as a PSBT (BIP 174). It must not exist yet."
 
 -- | The label of a transaction to prepare. -l labels an address for
 -- receive, and a transaction here: one letter, one meaning.
@@ -1545,10 +1545,10 @@ reviewTxCommand =
         [r|
 reviewtx shows a transaction file as its account sees it, and names that
 account. It changes nothing in the wallet. The file comes from preparetx
---output, exporttx, signtx or preparesweep. Use it to check a transaction
-before you sign it, or before you send it. A transaction that involves no
-account, such as a sweep to addresses outside the wallet, is shown on the
-network its file names.
+--output, exporttx, signtx or preparesweep: a PSBT (BIP 174), or the JSON
+file of an earlier hw. Use it to check a transaction before you sign it, or
+before you send it. A transaction that involves no account, such as a sweep
+to addresses outside the wallet, is shown on the network its file names.
 
 The labels reviewtx shows, the transaction's, those of its addresses and those
 of the coins it spends, are the ones the file carries, as the wallet that
@@ -1581,10 +1581,18 @@ importExportTxDetails =
   [r|
 exporttx writes a pending transaction to a file, signed or not, to carry it to
 an offline computer. Name it by the hash pendingtxs shows: its nosigHash, or
-its txid once it is signed. The file names the network of the transaction. It
-carries the label of the transaction, the labels of the account's addresses in
-it, and the labels of the coins it spends, as the wallet has them when it
-writes the file, for the offline computer to show.
+its txid once it is signed.
+
+The file is a PSBT, the format of BIP 174 that Bitcoin Core and most wallets
+read. It carries the transaction, the whole transaction each of its coins
+comes from, the keys of the account in it with their derivation paths, and
+the signatures once signed. What is hw's own goes in the proprietary fields
+of the format, under the identifier hw, which other software leaves aside:
+the network of the transaction, the fee rate it was built for, the
+transactions a replacement replaces, the label of the transaction, the
+labels of the account's addresses in it, and the labels of the coins it
+spends, as the wallet has them when it writes the file, for the offline
+computer to show. bitcoin-cli decodepsbt shows the file too.
 
 importtx adds the transaction of a file to the pending transactions of its
 account, and locks the coins it spends. When the wallet holds it already, the

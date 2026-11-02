@@ -38,6 +38,7 @@ module Haskoin.Wallet.Tx.Signing
     SpentCoin (..),
     spentCoins,
     coinSigInput,
+    walletSigHash,
   )
 where
 

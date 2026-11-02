@@ -113,8 +113,10 @@ type PathLabels = Map SoftPath Text
 -- transaction spends from or pays, by their paths, and those the coins it
 -- spends show, by the transaction that paid each (see
 -- 'Haskoin.Wallet.Database.TxInfo.coinLabel'). An offline computer has no
--- labels of its own, so it shows those of the file. A file of an earlier
--- hw names no network and carries no label.
+-- labels of its own, so it shows those of the file. On disk, the file is a
+-- PSBT: "Haskoin.Wallet.Tx.PsbtFile" writes it and reads it. The JSON
+-- below is the file of an earlier hw, which is still read; one from before
+-- the network and the labels names no network and carries no label.
 data TxFile = TxFile
   { txFileNetwork :: !(Maybe Network),
     txFileData :: !TxSignData,

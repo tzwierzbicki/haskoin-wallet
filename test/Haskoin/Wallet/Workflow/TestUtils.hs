@@ -77,14 +77,16 @@ module Haskoin.Wallet.Workflow.TestUtils
 where
 
 import Control.Monad (void)
-import qualified Data.Aeson as Json
+import qualified Data.ByteString as BS
 import Data.List (sortOn)
 import qualified Data.Map.Strict as Map
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Word (Word64)
 import qualified Database.Persist as P
 import Haskoin
+import Haskoin.Wallet.Bip174 (decodePsbt)
 import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..), LeftCoin (..), LeftReason (..))
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.Database (DBAccount (..), DBAddress (..))
@@ -95,6 +97,7 @@ import qualified Haskoin.Wallet.Schema.V3 as V3
 import Haskoin.Wallet.Sync (SyncRes (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Database.TxInfo
+import Haskoin.Wallet.Tx.PsbtFile (FileAccount (..), psbtTxFile)
 import Haskoin.Wallet.Tx.SignData (TxFile (..))
 import Numeric.Natural (Natural)
 import System.FilePath ((</>))
@@ -360,9 +363,19 @@ addressLabelsOf info = Map.union (myInputsLabel <$> summaryMyInputs summary) (my
 spendsAndPays :: Ctx -> Tx -> ([OutPoint], [(Word64, Either String Address)])
 spendsAndPays ctx tx = ((.outpoint) <$> tx.inputs, sortOn fst [(out.value, scriptToAddressBS ctx out.script) | out <- tx.outputs])
 
--- | The transaction file at the path, as hw wrote it
-readTxFile :: FilePath -> IO TxFile
-readTxFile file = maybe (fail ("Not a transaction file: " <> file)) return =<< Json.decodeFileStrict file
+-- | The transaction file at the path, as hw wrote it: a PSBT, read with
+-- the paths of the first account of the test wallet, or of the second
+-- wallet's
+readTxFile :: Ctx -> FilePath -> IO TxFile
+readTxFile ctx file = do
+  bytes <- BS.readFile file
+  either (\reason -> fail ("Not a transaction file: " <> file <> ": " <> reason)) return $
+    psbtTxFile ctx accounts =<< decodePsbt bytes
+  where
+    accounts =
+      [ FileAccount (testAccountPub ctx) "m/44'/0'/0'" (Just testFingerprint),
+        FileAccount (fromMaybe (error "readTxFile") (xPubImport btc ctx testAccountXPub2)) "m/44'/0'/0'" (Just testFingerprint2)
+      ]
 
 {- Payments and chains -}
 

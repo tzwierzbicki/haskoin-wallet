@@ -594,7 +594,7 @@ verifySpec =
         createMain home
         _ <- answer home ["receive"] []
         signed <- hw home ["signmsg", textOf (externalAddr 0), "hello", "--json"] seedOnce
-        let file = home </> "signed.json"
+        let file = home </> "signed.psbt"
         writeFile file (Text.unpack (runOut signed))
         hwJson home ["verifymsg", "--input", file] []
           `shouldReturn` ResponseVerifyMsg "hello" helloSignature (externalAddrsText !! 0) True

@@ -6,7 +6,6 @@
 -- less than their fee, sent or left.
 module Haskoin.Wallet.Workflow.SendAllSpec (spec) where
 
-import qualified Data.Aeson as Json
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -150,8 +149,8 @@ sendAllSpec ctx = do
     it "are written to the --output file with the network of their account" $
       withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
         synced home
-        _ <- answer home ["preparesendall", textOf (otherAddr 0), "--output", home </> "unsigned.json", "--fee-rate", "10"] []
-        (fmap txFileNetwork <$> Json.decodeFileStrict (home </> "unsigned.json")) `shouldReturn` Just (Just btc)
+        _ <- answer home ["preparesendall", textOf (otherAddr 0), "--output", home </> "unsigned.psbt", "--fee-rate", "10"] []
+        (txFileNetwork <$> readTxFile ctx (home </> "unsigned.psbt")) `shouldReturn` Just btc
 
   describe "The coins worth less than their fee, sent by preparesendall or not" $ do
     it "are listed on stderr with what spending them or leaving them means, and asked about" $

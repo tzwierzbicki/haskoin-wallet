@@ -950,3 +950,13 @@ withSpender index (spender, input) (Store.Transaction b v l i outputs d r t x s 
     mark n (Store.StoreOutput value script spent addr)
       | n == index = Store.StoreOutput value script (Just (Store.Spender spender input)) addr
       | otherwise = Store.StoreOutput value script spent addr
+
+{- Bytes -}
+
+-- | The bytes a hexadecimal literal writes
+hexBytes :: Text -> BS.ByteString
+hexBytes text = fromMaybe (error ("Not hex: " <> cs text)) (decodeHex text)
+
+-- | The fingerprint a hexadecimal literal writes
+fingerprintOf :: Text -> Fingerprint
+fingerprintOf = forceRight . textToFingerprint

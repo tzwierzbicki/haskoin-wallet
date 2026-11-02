@@ -468,9 +468,9 @@ nextStepSpec ctx =
     it "is to sign the file preparetx wrote on an offline computer, or the transaction here" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", home </> "unsigned.json", "--fee-rate", "10"] []
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", home </> "unsigned.psbt", "--fee-rate", "10"] []
         nosig <- onePendingNosig home
-        run `shouldSatisfy` showsCommand ("hw signtx --input " <> Text.pack (home </> "unsigned.json") <> "\n")
+        run `shouldSatisfy` showsCommand ("hw signtx --input " <> Text.pack (home </> "unsigned.psbt") <> "\n")
         run `shouldSatisfy` showsCommand ("hw signtx " <> nosig)
 
     it "is to sign the transaction preparesendall made, or to export it to sign it offline" $
@@ -492,16 +492,16 @@ nextStepSpec ctx =
     it "is to send the file signtx signed offline, from the online computer" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
-        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json", "--fee-rate", "10"] []
-        run <- hw signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
-        run `shouldSatisfy` showsCommand ("hw sendtx --input " <> Text.pack (signer </> "signed.json"))
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        run <- hw signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
+        run `shouldSatisfy` showsCommand ("hw sendtx --input " <> Text.pack (signer </> "signed.psbt"))
 
     it "is to send the --input file signtx replaced with the signed transaction" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
-        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json", "--fee-rate", "10"] []
-        run <- hw signer ["signtx", "--input", online </> "unsigned.json"] (["y"] <> seedOnce)
-        run `shouldSatisfy` showsCommand ("hw sendtx --input " <> Text.pack (online </> "unsigned.json"))
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        run <- hw signer ["signtx", "--input", online </> "unsigned.psbt"] (["y"] <> seedOnce)
+        run `shouldSatisfy` showsCommand ("hw sendtx --input " <> Text.pack (online </> "unsigned.psbt"))
 
     it "is to sync the account of the transaction sendtx sent" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -574,8 +574,8 @@ nextStepSpec ctx =
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
         keys <- writeKeyFile home
         _ <- answer home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--fee-rate", "10"] []
-        run <- hw home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.json", "--key-file", keys] []
-        run `shouldSatisfy` showsCommand ("hw sendtx --input " <> Text.pack (home </> "signed.json"))
+        run <- hw home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.psbt", "--key-file", keys] []
+        run `shouldSatisfy` showsCommand ("hw sendtx --input " <> Text.pack (home </> "signed.psbt"))
 
     -- The name with a space would be two words for the shell
     it "quotes an account name the shell would split" $

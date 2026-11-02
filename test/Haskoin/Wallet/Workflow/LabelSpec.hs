@@ -100,7 +100,7 @@ preparingSpec ctx =
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
         let file = home </> "sweep.json"
         _ <- answer home ["preparesweep", "--coin", coinArg (oldCoin ctx) 0, "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", file, "--fee-rate", "10", "-l", "Old wallet"] []
-        (txSignDataLabel . txFileData <$> readTxFile file) `shouldReturn` "Old wallet"
+        (txSignDataLabel . txFileData <$> readTxFile ctx file) `shouldReturn` "Old wallet"
 
 fileSpec :: Ctx -> Spec
 fileSpec ctx =
@@ -108,44 +108,44 @@ fileSpec ctx =
     it "goes with the transaction to its --output file" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        let file = home </> "unsigned.json"
+        let file = home </> "unsigned.psbt"
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--output", file, "--label", "Rent"] []
-        (txSignDataLabel . txFileData <$> readTxFile file) `shouldReturn` "Rent"
+        (txSignDataLabel . txFileData <$> readTxFile ctx file) `shouldReturn` "Rent"
 
     it "goes with the transaction to the file of exporttx" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--label", "Rent"] []
-        let file = home </> "exported.json"
+        let file = home </> "exported.psbt"
         _ <- answer home ["exporttx", nosig, file] []
-        (txSignDataLabel . txFileData <$> readTxFile file) `shouldReturn` "Rent"
+        (txSignDataLabel . txFileData <$> readTxFile ctx file) `shouldReturn` "Rent"
 
     it "comes back from an offline signer with the signed transaction, which sendtx sends with it" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
-        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json", "--fee-rate", "10", "--label", "Rent"] []
-        _ <- answer signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
-        (txSignDataLabel . txFileData <$> readTxFile (signer </> "signed.json")) `shouldReturn` "Rent"
-        sent <- txOf =<< answer online ["sendtx", "--input", signer </> "signed.json", "--yes"] []
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10", "--label", "Rent"] []
+        _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
+        (txSignDataLabel . txFileData <$> readTxFile ctx (signer </> "signed.psbt")) `shouldReturn` "Rent"
+        sent <- txOf =<< answer online ["sendtx", "--input", signer </> "signed.psbt", "--yes"] []
         txInfoLabel sent `shouldBe` "Rent"
 
     -- The user changes the label while the file is away to be signed
     it "gives way to the label the online computer holds when the signed file comes back" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
-        nosig <- nosigOf =<< txOf =<< answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json", "--fee-rate", "10", "--label", "Rent"] []
-        _ <- answer signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
+        nosig <- nosigOf =<< txOf =<< answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10", "--label", "Rent"] []
+        _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
         _ <- answer online ["label", nosig, "Rent of October"] []
-        sent <- txOf =<< answer online ["sendtx", "--input", signer </> "signed.json", "--yes"] []
+        sent <- txOf =<< answer online ["sendtx", "--input", signer </> "signed.psbt", "--yes"] []
         txInfoLabel sent `shouldBe` "Rent of October"
 
     it "gives way to the label the online computer holds in the answer of importtx too" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
-        nosig <- nosigOf =<< txOf =<< answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json", "--fee-rate", "10", "--label", "Rent"] []
-        _ <- answer signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
+        nosig <- nosigOf =<< txOf =<< answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10", "--label", "Rent"] []
+        _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
         _ <- answer online ["label", nosig, "Rent of October"] []
-        imported <- txOf =<< answer online ["importtx", signer </> "signed.json"] []
+        imported <- txOf =<< answer online ["importtx", signer </> "signed.psbt"] []
         txInfoLabel imported `shouldBe` "Rent of October"
 
 -- The payment of the paid chain is at the first receiving address,
@@ -160,9 +160,9 @@ addressLabelsSpec ctx =
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["label", textOf (externalAddr 0), "Salary"] []
-        let file = home </> "unsigned.json"
+        let file = home </> "unsigned.psbt"
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--output", file] []
-        (txFilePathLabels <$> readTxFile file) `shouldReturn` Map.fromList [("/0/0", "Salary")]
+        (txFilePathLabels <$> readTxFile ctx file) `shouldReturn` Map.fromList [("/0/0", "Salary")]
 
     -- The address is labelled after the transaction is prepared
     it "are those of the wallet when exporttx writes the file" $
@@ -170,26 +170,26 @@ addressLabelsSpec ctx =
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         _ <- answer home ["label", textOf (externalAddr 0), "Salary"] []
-        let file = home </> "exported.json"
+        let file = home </> "exported.psbt"
         _ <- answer home ["exporttx", nosig, file] []
-        (txFilePathLabels <$> readTxFile file) `shouldReturn` Map.fromList [("/0/0", "Salary")]
+        (txFilePathLabels <$> readTxFile ctx file) `shouldReturn` Map.fromList [("/0/0", "Salary")]
 
     it "are those of the wallet when signtx signs a pending transaction, shown and written to its --output file" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         _ <- answer home ["label", textOf (externalAddr 0), "Salary"] []
-        let file = home </> "signed.json"
+        let file = home </> "signed.psbt"
         signed <- txOf =<< answer home ["signtx", nosig, "--output", file] seedOnce
         addressLabelsOf signed `shouldBe` Map.fromList [(externalAddr 0, "Salary"), (internalAddr 0, "")]
-        (txFilePathLabels <$> readTxFile file) `shouldReturn` Map.fromList [("/0/0", "Salary")]
+        (txFilePathLabels <$> readTxFile ctx file) `shouldReturn` Map.fromList [("/0/0", "Salary")]
 
     -- The address is relabelled after the file is written
     it "are shown by reviewtx in place of the wallet's own" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["label", textOf (externalAddr 0), "Salary"] []
-        let file = home </> "unsigned.json"
+        let file = home </> "unsigned.psbt"
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--output", file] []
         _ <- answer home ["label", textOf (externalAddr 0), "Wages"] []
         reviewed <- txOf =<< answer home ["reviewtx", file] []
@@ -199,38 +199,38 @@ addressLabelsSpec ctx =
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
         _ <- answer online ["label", textOf (externalAddr 0), "Salary"] []
-        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json", "--fee-rate", "10"] []
-        run <- hw signer ["reviewtx", online </> "unsigned.json"] []
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        run <- hw signer ["reviewtx", online </> "unsigned.psbt"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0  \"Salary\"\n"
 
     it "are shown by signtx --input on the offline signer, and go on to the signed file" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
         _ <- answer online ["label", textOf (externalAddr 0), "Salary"] []
-        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json", "--fee-rate", "10"] []
-        signed <- txOf =<< answer signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        signed <- txOf =<< answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
         addressLabelsOf signed `shouldBe` Map.fromList [(externalAddr 0, "Salary"), (internalAddr 0, "")]
-        (txFilePathLabels <$> readTxFile (signer </> "signed.json")) `shouldReturn` Map.fromList [("/0/0", "Salary")]
+        (txFilePathLabels <$> readTxFile ctx (signer </> "signed.psbt")) `shouldReturn` Map.fromList [("/0/0", "Salary")]
 
     -- The address is relabelled while the file is away to be signed
     it "give way to the wallet's own when importtx takes the signed file back" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
         _ <- answer online ["label", textOf (externalAddr 0), "Salary"] []
-        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json", "--fee-rate", "10"] []
-        _ <- answer signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
         _ <- answer online ["label", textOf (externalAddr 0), "Wages"] []
-        imported <- txOf =<< answer online ["importtx", signer </> "signed.json"] []
+        imported <- txOf =<< answer online ["importtx", signer </> "signed.psbt"] []
         addressLabelsOf imported `shouldBe` Map.fromList [(externalAddr 0, "Wages"), (internalAddr 0, "")]
 
     it "give way to the wallet's own when sendtx --input sends the signed file" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
         _ <- answer online ["label", textOf (externalAddr 0), "Salary"] []
-        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json", "--fee-rate", "10"] []
-        _ <- answer signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
         _ <- answer online ["label", textOf (externalAddr 0), "Wages"] []
-        sent <- txOf =<< answer online ["sendtx", "--input", signer </> "signed.json", "--yes"] []
+        sent <- txOf =<< answer online ["sendtx", "--input", signer </> "signed.psbt", "--yes"] []
         addressLabelsOf sent `shouldBe` Map.fromList [(externalAddr 0, "Wages"), (internalAddr 0, "")]
 
 -- The coin of the paid chain is the output 0 of the payment, 50000 at
@@ -264,27 +264,27 @@ coinLabelsSpec ctx =
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["label", paidTxid ctx, "Salary"] []
-        let file = home </> "unsigned.json"
+        let file = home </> "unsigned.psbt"
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--output", file] []
-        (txFileInputLabels <$> readTxFile file) `shouldReturn` Map.fromList [(txHash (payment ctx), "Salary")]
+        (txFileInputLabels <$> readTxFile ctx file) `shouldReturn` Map.fromList [(txHash (payment ctx), "Salary")]
 
     it "ends the address spent from in reviewtx on the offline signer, after the label of the address" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
         _ <- answer online ["label", paidTxid ctx, "Salary"] []
         _ <- answer online ["label", textOf (externalAddr 0), "Wages"] []
-        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json", "--fee-rate", "10"] []
-        run <- hw signer ["reviewtx", online </> "unsigned.json"] []
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        run <- hw signer ["reviewtx", online </> "unsigned.psbt"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0  \"Wages\"  from \"Salary\"\n"
 
     -- The label is given while the file is away
     it "is the wallet's own in the answer of importtx, not the file's" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
-        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json", "--fee-rate", "10"] []
-        _ <- answer signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
         _ <- answer online ["label", paidTxid ctx, "Salary"] []
-        imported <- txOf =<< answer online ["importtx", signer </> "signed.json"] []
+        imported <- txOf =<< answer online ["importtx", signer </> "signed.psbt"] []
         txInfoInputLabels imported `shouldBe` Map.fromList [(txHash (payment ctx), "Salary")]
 
 -- The change of the payment of 20000, 27740, goes to the first change

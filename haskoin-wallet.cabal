@@ -47,6 +47,7 @@ library
       Haskoin.Wallet
       Haskoin.Wallet.Amounts
       Haskoin.Wallet.Backup
+      Haskoin.Wallet.Bip174
       Haskoin.Wallet.Bip329
       Haskoin.Wallet.Cli.Completion
       Haskoin.Wallet.Cli.Listing
@@ -92,6 +93,7 @@ library
       Haskoin.Wallet.Tx.CoinSelection
       Haskoin.Wallet.Tx.FeeRates
       Haskoin.Wallet.Tx.LockTime
+      Haskoin.Wallet.Tx.PsbtFile
       Haskoin.Wallet.Tx.Recipient
       Haskoin.Wallet.Tx.SendAll
       Haskoin.Wallet.Tx.SignData
@@ -219,6 +221,7 @@ test-suite spec
       Haskoin.Wallet.AmountsSpec
       Haskoin.Wallet.Arbitrary
       Haskoin.Wallet.BackupSpec
+      Haskoin.Wallet.Bip174Spec
       Haskoin.Wallet.Bip329Spec
       Haskoin.Wallet.Cli.CompletionSpec
       Haskoin.Wallet.Cli.ListingSpec
@@ -258,6 +261,7 @@ test-suite spec
       Haskoin.Wallet.Tx.CoinSelectionSpec
       Haskoin.Wallet.Tx.FeeRatesSpec
       Haskoin.Wallet.Tx.LockTimeSpec
+      Haskoin.Wallet.Tx.PsbtFileSpec
       Haskoin.Wallet.Tx.RecipientSpec
       Haskoin.Wallet.Tx.SendAllSpec
       Haskoin.Wallet.Tx.SigningSpec

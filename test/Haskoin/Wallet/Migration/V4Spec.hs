@@ -12,9 +12,7 @@ module Haskoin.Wallet.Migration.V4Spec (spec) where
 import Control.Exception (SomeException, try)
 import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
-import Data.ByteString (ByteString)
 import Data.List (isInfixOf)
-import Data.Maybe (fromJust)
 import qualified Data.Serialize as S
 import Data.Text (Text)
 import Data.Time (UTCTime (UTCTime), fromGregorian)
@@ -238,10 +236,6 @@ columnNames :: Text -> DB IO [Text]
 columnNames table = do
   rows <- queryRows $ "select name from pragma_table_info('" <> table <> "') order by name"
   return [name | [PersistText name] <- rows]
-
--- | The bytes of a hexadecimal text, as the step turns the old keys into
-hexBytes :: Text -> ByteString
-hexBytes = fromJust . decodeHex
 
 {- The database of version 3 -}
 

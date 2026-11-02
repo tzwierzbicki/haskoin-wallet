@@ -161,14 +161,14 @@ signingSpec ctx = do
     it "is prepared online, signed offline, sent online, and confirmed by a sync" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online chain -> do
         signerAndOnline signer online
-        prepared <- txOf =<< answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json", "--fee-rate", "10"] []
+        prepared <- txOf =<< answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
         pendingState prepared `shouldBe` Just (False, False)
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 20000)]
         paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 27740)]
         summaryFee (txInfoSummary prepared) `shouldBe` 2260
-        signed <- txOf =<< answer signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
+        signed <- txOf =<< answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
         pendingState signed `shouldBe` Just (True, False)
-        sent <- txOf =<< answer online ["sendtx", "--input", signer </> "signed.json", "--yes"] []
+        sent <- txOf =<< answer online ["sendtx", "--input", signer </> "signed.psbt", "--yes"] []
         pendingState sent `shouldBe` Just (True, True)
         published <- inMempool <$> readIORef chain
         (spendsAndPays ctx <$> published) `shouldBe` [paymentSent ctx]
@@ -183,10 +183,12 @@ signingSpec ctx = do
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online chain -> do
         signerAndOnline signer online
         nosig <- nosigOf =<< txOf =<< answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
-        answer online ["exporttx", nosig, online </> "unsigned.json"] [] `shouldReturn` ResponseFile (online </> "unsigned.json")
-        (fmap txFileNetwork <$> Json.decodeFileStrict (online </> "unsigned.json")) `shouldReturn` Just (Just btc)
-        _ <- answer signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
-        imported <- txOf =<< answer online ["importtx", signer </> "signed.json"] []
+        answer online ["exporttx", nosig, online </> "unsigned.psbt"] [] `shouldReturn` ResponseFile (online </> "unsigned.psbt")
+        -- The file is a PSBT (BIP 174), by its first five bytes
+        BS.take 5 <$> BS.readFile (online </> "unsigned.psbt") `shouldReturn` "psbt\xff"
+        (txFileNetwork <$> readTxFile ctx (online </> "unsigned.psbt")) `shouldReturn` Just btc
+        _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
+        imported <- txOf =<< answer online ["importtx", signer </> "signed.psbt"] []
         pendingState imported `shouldBe` Just (True, False)
         sent <- txOf =<< answer online ["sendtx", nosig, "--yes"] []
         pendingState sent `shouldBe` Just (True, True)
@@ -203,19 +205,19 @@ signingSpec ctx = do
         _ <- answer signer ["createacc", "second"] seedTwice
         _ <- answer signer ["exportacc", "--account", "second", signer </> "second.json"] []
         _ <- answer online ["importacc", signer </> "second.json"] []
-        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--account", "main", "--output", online </> "unsigned.json", "--fee-rate", "10"] []
-        (fmap dBAccountName . accountOf <$> hwJson signer ["reviewtx", online </> "unsigned.json"] []) `shouldReturn` Right "main"
-        signed <- txOf =<< answer signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--account", "main", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        (fmap dBAccountName . accountOf <$> hwJson signer ["reviewtx", online </> "unsigned.psbt"] []) `shouldReturn` Right "main"
+        signed <- txOf =<< answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
         pendingState signed `shouldBe` Just (True, False)
-        (fmap dBAccountName . accountOf <$> hwJson online ["importtx", signer </> "signed.json"] []) `shouldReturn` Right "main"
+        (fmap dBAccountName . accountOf <$> hwJson online ["importtx", signer </> "signed.psbt"] []) `shouldReturn` Right "main"
 
     -- The signer has no coins: the file carries the transactions the
     -- payment spends, and the paths of the change
     it "is shown by reviewtx from its file, as the signer reads it before signing, and not kept" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
-        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json", "--fee-rate", "10"] []
-        reviewed <- txOf =<< answer signer ["reviewtx", online </> "unsigned.json"] []
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        reviewed <- txOf =<< answer signer ["reviewtx", online </> "unsigned.psbt"] []
         paidToOthers reviewed `shouldBe` Map.fromList [(otherAddr 0, 20000)]
         paidToWallet reviewed `shouldBe` Map.fromList [(internalAddr 0, 27740)]
         summaryFee (txInfoSummary reviewed) `shouldBe` 2260
@@ -249,9 +251,9 @@ signingSpec ctx = do
         _ <- answer online ["receive"] []
         _ <- answer online ["sync"] []
         (fingerprintsOf <$> hwJson online ["accounts"] []) `shouldReturn` Right [("main", Nothing)]
-        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json", "--fee-rate", "10"] []
-        _ <- answer signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
-        _ <- answer online ["sendtx", "--input", signer </> "signed.json", "--yes"] []
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
+        _ <- answer online ["sendtx", "--input", signer </> "signed.psbt", "--yes"] []
         (fingerprintsOf <$> hwJson online ["accounts"] []) `shouldReturn` Right [("main", Just "bc560f95")]
 
 {- The files of signtx, signsweep and sendtx -}
@@ -311,13 +313,13 @@ inputFileSpec ctx = do
         forM_ ["signtx", "signsweep"] $ \command -> do
           (errorOf <$> hwJson home [command] [])
             `shouldReturn` Right "Give the NOSIGHASH of a pending transaction, or an --input file"
-          (errorOf <$> hwJson home [command, nosig, "--input", home </> "unsigned.json", "--output", home </> "signed.json"] [])
+          (errorOf <$> hwJson home [command, nosig, "--input", home </> "unsigned.psbt", "--output", home </> "signed.psbt"] [])
             `shouldReturn` Right "Can not specify both a NOSIGHASH and an --input file"
 
     it "refuse a missing --input file" $
       withHome $ \home ->
         forM_ ["signtx", "signsweep"] $ \command ->
-          (errorOf <$> hwJson home [command, "--input", home </> "missing.json", "--output", home </> "signed.json"] [])
+          (errorOf <$> hwJson home [command, "--input", home </> "missing.json", "--output", home </> "signed.psbt"] [])
             `shouldReturn` Right (noSuchFile (home </> "missing.json"))
 
   -- The unsigned file is of no use once the transaction is signed
@@ -329,7 +331,7 @@ inputFileSpec ctx = do
         Json.encodeFile (home </> "payment.json") (unsignedPayment ctx)
         signed <- txOf =<< answer home ["signtx", "--input", home </> "payment.json"] (["y"] <> seedOnce)
         pendingState signed `shouldBe` Just (True, False)
-        written <- readTxFile (home </> "payment.json")
+        written <- readTxFile ctx (home </> "payment.json")
         isSigned (txSignDataTx (txFileData written)) `shouldBe` True
 
     it "ask whether to replace the --input file, naming --output" $
@@ -355,7 +357,7 @@ inputFileSpec ctx = do
         createMain home
         Json.encodeFile (home </> "payment.json") (unsignedPayment ctx)
         original <- BS.readFile (home </> "payment.json")
-        run <- hw home ["signtx", "--input", home </> "payment.json", "--output", home </> "signed.json"] seedOnce
+        run <- hw home ["signtx", "--input", home </> "payment.json", "--output", home </> "signed.psbt"] seedOnce
         runErr run `shouldNotSatisfy` Text.isInfixOf "Replace "
         BS.readFile (home </> "payment.json") `shouldReturn` original
 
@@ -384,7 +386,7 @@ inputFileSpec ctx = do
       withHome $ \home -> do
         createMain home
         Json.encodeFile (home </> "payment.json") (signedPayment ctx)
-        run <- hw home ["signtx", "--input", home </> "payment.json", "--output", home </> "signed.json"] seedOnce
+        run <- hw home ["signtx", "--input", home </> "payment.json", "--output", home </> "signed.psbt"] seedOnce
         run `shouldSatisfy` printed "The transaction is already signed"
         run `shouldNotSatisfy` askedMnemonic
 
@@ -404,7 +406,7 @@ inputFileSpec ctx = do
         createMain home
         _ <- answer home ["createacc", "second"] seedTwice
         Json.encodeFile (home </> "payment.json") (unsignedPayment ctx)
-        run <- hw home ["signtx", "--input", home </> "payment.json", "--output", home </> "signed.json", "--account", "second"] seedOnce
+        run <- hw home ["signtx", "--input", home </> "payment.json", "--output", home </> "signed.psbt", "--account", "second"] seedOnce
         run `shouldSatisfy` printed "The transaction does not involve the account second"
         run `shouldNotSatisfy` askedMnemonic
 
@@ -412,9 +414,9 @@ inputFileSpec ctx = do
       withHome $ \home -> do
         createMain home
         Json.encodeFile (home </> "payment.json") (unsignedPayment ctx)
-        writeFile (home </> "signed.json") ""
-        run <- hw home ["signtx", "--input", home </> "payment.json", "--output", home </> "signed.json"] seedOnce
-        run `shouldSatisfy` printed (alreadyExists (home </> "signed.json"))
+        writeFile (home </> "signed.psbt") ""
+        run <- hw home ["signtx", "--input", home </> "payment.json", "--output", home </> "signed.psbt"] seedOnce
+        run `shouldSatisfy` printed (alreadyExists (home </> "signed.psbt"))
         run `shouldNotSatisfy` askedMnemonic
 
 {- Sending -}
@@ -466,9 +468,9 @@ confirmationSpec ctx =
     it "keeps the unsigned version of a file signed offline that the user does not send" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online chain -> do
         signerAndOnline signer online
-        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json", "--fee-rate", "10"] []
-        _ <- answer signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
-        (errorOf <$> hwJson online ["sendtx", "--input", signer </> "signed.json"] ["no"]) `shouldReturn` Right "The transaction was not sent"
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
+        (errorOf <$> hwJson online ["sendtx", "--input", signer </> "signed.psbt"] ["no"]) `shouldReturn` Right "The transaction was not sent"
         (inMempool <$> readIORef chain) `shouldReturn` []
         onePendingState online `shouldReturn` Just (False, False)
 

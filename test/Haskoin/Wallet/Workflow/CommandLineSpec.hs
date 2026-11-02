@@ -787,7 +787,7 @@ commandLineSpec ctx = do
     it "keeps nothing of a transaction whose file could not be written" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        let file = home </> "missing" </> "unsigned.json"
+        let file = home </> "missing" </> "unsigned.psbt"
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", file, "--fee-rate", "10"] [])
           `shouldReturn` Right ("The file " <> Text.pack file <> " could not be written: no such file or directory")
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []

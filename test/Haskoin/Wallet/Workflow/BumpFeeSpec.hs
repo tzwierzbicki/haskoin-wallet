@@ -312,14 +312,14 @@ bumpFeeSpec ctx = do
     it "has its replacement exported, signed offline, imported back and sent, which retires it" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
-        nosig <- nosigOf =<< txOf =<< answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.json", "--fee-rate", "10"] []
-        _ <- answer signer ["signtx", "--input", online </> "unsigned.json", "--output", signer </> "signed.json"] seedOnce
-        _ <- answer online ["importtx", signer </> "signed.json"] []
+        nosig <- nosigOf =<< txOf =<< answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
+        _ <- answer online ["importtx", signer </> "signed.psbt"] []
         stuck <- txidOf =<< txOf =<< answer online ["sendtx", nosig, "--yes"] []
         bumpNosig <- nosigOf =<< txOf =<< answer online ["bumpfee", stuck, "--fee-rate", "20", "--output", online </> "bump.json"] []
-        signed <- txOf =<< answer signer ["signtx", "--input", online </> "bump.json", "--output", signer </> "bump-signed.json"] seedOnce
+        signed <- txOf =<< answer signer ["signtx", "--input", online </> "bump.json", "--output", signer </> "bump-signed.psbt"] seedOnce
         replacesOf signed `shouldBe` [stuck]
-        _ <- answer online ["importtx", signer </> "bump-signed.json"] []
+        _ <- answer online ["importtx", signer </> "bump-signed.psbt"] []
         _ <- answer online ["sendtx", bumpNosig, "--yes"] []
         (pendingNosigsOf <$> hwJson online ["pendingtxs"] []) `shouldReturn` Right [bumpNosig]
 

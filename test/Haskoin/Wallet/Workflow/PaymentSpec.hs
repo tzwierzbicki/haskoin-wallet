@@ -94,34 +94,34 @@ feesSpec ctx =
     it "are shown by preparetx without --fee-rate, which asks which to take, the median by default" $
       withChain ctx (feesChain ctx) $ \home _ -> do
         synced home
-        let file = home </> "unsigned.json"
+        let file = home </> "unsigned.psbt"
         run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", file] [""]
         run `shouldSatisfy` printed "low 9, median 12, high 118 sat/byte"
         run `shouldSatisfy` printed "Which fee rate? Type low, median, high or a number of satoshis per byte [median]"
-        (txSignDataFeeRate . txFileData <$> readTxFile file) `shouldReturn` Just 12
+        (txSignDataFeeRate . txFileData <$> readTxFile ctx file) `shouldReturn` Just 12
 
     it "are taken at the level typed" $
       withChain ctx (feesChain ctx) $ \home _ -> do
         synced home
-        let file = home </> "unsigned.json"
+        let file = home </> "unsigned.psbt"
         _ <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", file] ["high", "y"]
-        (txSignDataFeeRate . txFileData <$> readTxFile file) `shouldReturn` Just 118
+        (txSignDataFeeRate . txFileData <$> readTxFile ctx file) `shouldReturn` Just 118
 
     it "are not the only answer: a number typed is the fee rate taken" $
       withChain ctx (feesChain ctx) $ \home _ -> do
         synced home
-        let file = home </> "unsigned.json"
+        let file = home </> "unsigned.psbt"
         _ <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", file] ["15"]
-        (txSignDataFeeRate . txFileData <$> readTxFile file) `shouldReturn` Just 15
+        (txSignDataFeeRate . txFileData <$> readTxFile ctx file) `shouldReturn` Just 15
 
     it "are taken at the level of --fee-rate without asking" $
       withChain ctx (feesChain ctx) $ \home _ -> do
         synced home
-        let file = home </> "unsigned.json"
+        let file = home </> "unsigned.psbt"
         run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", file, "--fee-rate", "low"] []
         run `shouldSatisfy` printed "The low rate recent blocks paid: 9 satoshis per byte"
         run `shouldNotSatisfy` printed "Which fee rate?"
-        (txSignDataFeeRate . txFileData <$> readTxFile file) `shouldReturn` Just 9
+        (txSignDataFeeRate . txFileData <$> readTxFile ctx file) `shouldReturn` Just 9
 
     it "stop preparetx without --fee-rate when the store cannot be reached: hw never guesses a rate" $
       withHome $ \home -> do
@@ -136,7 +136,7 @@ feesSpec ctx =
         run <- hw home ["bumpfee", stuck, "--output", file] [""]
         run `shouldSatisfy` printed "The transaction pays 10 satoshis per byte: a replacement must pay at least 11"
         run `shouldSatisfy` printed "Which fee rate? Type median, high or a number of satoshis per byte [median]"
-        (txSignDataFeeRate . txFileData <$> readTxFile file) `shouldReturn` Just 12
+        (txSignDataFeeRate . txFileData <$> readTxFile ctx file) `shouldReturn` Just 12
 
     it "are offered to bumpfee beside a number, asked again when below what a replacement must pay" $
       withChain ctx (feesChain ctx) $ \home _ -> do
@@ -144,7 +144,7 @@ feesSpec ctx =
         let file = home </> "replacement.json"
         run <- hw home ["bumpfee", stuck, "--output", file] ["10", "11"]
         run `shouldSatisfy` printed "The fee rate must be at least 11 satoshis per byte"
-        (txSignDataFeeRate . txFileData <$> readTxFile file) `shouldReturn` Just 11
+        (txSignDataFeeRate . txFileData <$> readTxFile ctx file) `shouldReturn` Just 11
 
     -- The one transaction of the paid chain pays 1000 satoshis for 85
     -- bytes, 11.76 per byte: every level is 12. The payment pays 20 per
@@ -158,7 +158,7 @@ feesSpec ctx =
         let file = home </> "replacement.json"
         run <- hw home ["bumpfee", stuck, "--output", file] ["25"]
         run `shouldSatisfy` printed "Which fee rate? Type a number of satoshis per byte, at least 21:"
-        (txSignDataFeeRate . txFileData <$> readTxFile file) `shouldReturn` Just 25
+        (txSignDataFeeRate . txFileData <$> readTxFile ctx file) `shouldReturn` Just 25
 
 {- Receiving -}
 
@@ -437,8 +437,8 @@ paymentSpec ctx =
     it "is written to its --output file with the network of its account" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", home </> "unsigned.json", "--fee-rate", "10"] []
-        (fmap txFileNetwork <$> Json.decodeFileStrict (home </> "unsigned.json")) `shouldReturn` Just (Just btc)
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", home </> "unsigned.psbt", "--fee-rate", "10"] []
+        (txFileNetwork <$> readTxFile ctx (home </> "unsigned.psbt")) `shouldReturn` Just btc
 
     -- The path is checked first: the coins would not cover these 100000
     -- satoshis either

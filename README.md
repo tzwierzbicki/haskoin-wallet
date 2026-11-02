@@ -192,20 +192,23 @@ On the online computer, import the account and prepare a payment to a file:
 ```console
 hw importacc vault.jsonl
 hw sync
-hw preparetx ADDRESS:0.01 --fee-rate median --output unsigned.json
+hw preparetx ADDRESS:0.01 --fee-rate median --output unsigned.psbt
 ```
 
 Back on the offline computer, check the transaction and sign it:
 
 ```console
-hw reviewtx unsigned.json
-hw signtx --input unsigned.json --output signed.json
+hw reviewtx unsigned.psbt
+hw signtx --input unsigned.psbt --output signed.psbt
 ```
+
+The file is a PSBT, the format of BIP 174, so Bitcoin Core's `decodepsbt` and
+other wallets show it too.
 
 On the online computer, send it:
 
 ```console
-hw sendtx --input signed.json
+hw sendtx --input signed.psbt
 hw sync
 ```
 
@@ -418,7 +421,7 @@ hw preparetx ADDRESS:0.0005 --fee-rate median --label "rent of October"
 hw preparetx ADDRESS1:10000sat ADDRESS2:250bits --fee-rate 5
 hw preparetx ADDRESS:0.01 --spend-from MYADDRESS --change-back --fee-rate low
 hw preparetx ADDRESS:0.01 --spend-from MYADDRESS --select --fee-rate low
-hw preparetx ADDRESS:0.01 --recipients-pay --fee-rate high --output unsigned.json
+hw preparetx ADDRESS:0.01 --recipients-pay --fee-rate high --output unsigned.psbt
 ```
 
 **`hw preparesendall ADDRESS[:AMOUNT]...`** prepares a payment of every coin
@@ -437,7 +440,7 @@ file. It asks for the mnemonic and passphrase of the account.
 
 ```console
 hw signtx NOSIGHASH
-hw signtx --input unsigned.json --output signed.json
+hw signtx --input unsigned.psbt --output signed.psbt
 ```
 
 **`hw sendtx`** shows a signed transaction, asks, and sends it. It then waits
@@ -445,7 +448,7 @@ up to ten seconds for the server to see it.
 
 ```console
 hw sendtx TXID
-hw sendtx --input signed.json
+hw sendtx --input signed.psbt
 ```
 
 **`hw bumpfee TXID`** prepares a replacement of an unconfirmed payment that
@@ -509,19 +512,28 @@ belongs to, without changing the wallet. The labels it shows are those the
 file carries, so an offline computer sees the labels of the online wallet.
 
 ```console
-hw reviewtx unsigned.json
+hw reviewtx unsigned.psbt
 ```
 
 **`hw exporttx HASH FILE`** writes a pending transaction to a file.
 **`hw importtx FILE`** adds a transaction file to the pending transactions, or
-replaces the pending one with its signed version. A transaction file carries
-the label of the transaction, the labels of the account's addresses in it, and
-the labels of the coins it spends, as the wallet has them when it writes the
-file. `importtx` keeps the labels of the wallet.
+replaces the pending one with its signed version.
+
+A transaction file is a PSBT (BIP 174). Its standard fields carry the
+transaction, the whole transaction each coin comes from, the keys of the
+account in the inputs and outputs with their derivation paths, the sighash to
+sign with and, once signed, the signatures. What is hw's own goes in the
+proprietary fields of the format, under the identifier `hw`, which other
+software leaves aside: the network, the fee rate the transaction was built
+for, the transactions a replacement replaces, the label of the transaction,
+the labels of the account's addresses in it, and the labels of the coins it
+spends, as the wallet has them when it writes the file. `importtx` keeps the
+labels of the wallet. The commands still read the JSON files of an earlier
+`hw`.
 
 ```console
-hw exporttx NOSIGHASH unsigned.json
-hw importtx signed.json
+hw exporttx NOSIGHASH unsigned.psbt
+hw importtx signed.psbt
 ```
 
 **`hw deletetx HASH`** deletes a pending transaction and frees its coins. Name
@@ -551,9 +563,9 @@ A sweep that pays no address of this wallet needs `--network` and `--output`,
 and no account. It goes from file to file:
 
 ```console
-hw preparesweep --key-file keys.txt --sweep-to ADDRESS --network btc --fee-rate median --output sweep.json
-hw signsweep --input sweep.json --key-file keys.txt --output signed.json
-hw sendtx --input signed.json
+hw preparesweep --key-file keys.txt --sweep-to ADDRESS --network btc --fee-rate median --output sweep.psbt
+hw signsweep --input sweep.psbt --key-file keys.txt --output signed.psbt
+hw sendtx --input signed.psbt
 ```
 
 `--key-file -` types the keys on the terminal instead of reading a file.

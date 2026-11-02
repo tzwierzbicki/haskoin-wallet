@@ -3,11 +3,11 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | The files hw reads and writes: JSON documents, written pretty-printed
--- so that a user can read them, at a path that must be free, or in place of
--- a file the user agreed to replace. A file that cannot be read or written
--- is a message naming it, with the reason the system gives, never an
--- exception.
+-- | The files hw reads and writes: the bytes of a transaction file, and
+-- JSON documents, written pretty-printed so that a user can read them, at a
+-- path that must be free, or in place of a file the user agreed to replace.
+-- A file that cannot be read or written is a message naming it, with the
+-- reason the system gives, never an exception.
 module Haskoin.Wallet.FileIO where
 
 import Control.Exception (onException, try)
@@ -17,6 +17,7 @@ import Control.Monad.Reader (MonadIO (..))
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Bifunctor (first)
+import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as C8
 import Data.Char (toLower)
 import Data.Text (Text)
@@ -55,29 +56,44 @@ couldNotRead file reason = "The file " <> file <> " could not be read: " <> reas
 couldNotWrite :: FilePath -> String -> String
 couldNotWrite file reason = "The file " <> file <> " could not be written: " <> reason
 
+{- Files of bytes -}
+
+-- | Write bytes to a file, or say why they could not be written
+writeFileBytes :: FilePath -> ByteString -> IO (Either String ())
+writeFileBytes file bytes = first (couldNotWrite file) <$> systemReason (C8.writeFile file bytes)
+
+-- | Replace a file with bytes, or say why it could not be replaced. The
+-- bytes are written to a new file next to it first, which then takes its
+-- place: a write that fails leaves the file as it was.
+replaceFileBytes :: FilePath -> ByteString -> IO (Either String ())
+replaceFileBytes file bytes = first (couldNotWrite file) <$> systemReason replace
+  where
+    replace = do
+      (new, h) <- openBinaryTempFile (takeDirectory file) (takeFileName file)
+      let write = C8.hPut h bytes >> hClose h >> D.renameFile new file
+      write `onException` (hClose h >> D.removeFile new)
+
+-- | Read the bytes of a file, or say why they could not be read
+readFileBytes :: FilePath -> IO (Either String ByteString)
+readFileBytes file = first (couldNotRead file) <$> systemReason (C8.readFile file)
+
 {- JSON files -}
 
 -- | Write a JSON document to a file, or say why it could not be written
 writeJsonFile :: (ToJSON a) => FilePath -> a -> IO (Either String ())
-writeJsonFile file doc = first (couldNotWrite file) <$> systemReason (C8.writeFile file (encodeJsonPretty doc))
+writeJsonFile file doc = writeFileBytes file (encodeJsonPretty doc)
 
 -- | Replace a file with a JSON document, or say why it could not be
--- replaced. The document is written to a new file next to it first, which
--- then takes its place: a write that fails leaves the file as it was.
+-- replaced: see 'replaceFileBytes'
 replaceJsonFile :: (ToJSON a) => FilePath -> a -> IO (Either String ())
-replaceJsonFile file doc = first (couldNotWrite file) <$> systemReason replace
-  where
-    replace = do
-      (new, h) <- openBinaryTempFile (takeDirectory file) (takeFileName file)
-      let write = C8.hPut h (encodeJsonPretty doc) >> hClose h >> D.renameFile new file
-      write `onException` (hClose h >> D.removeFile new)
+replaceJsonFile file doc = replaceFileBytes file (encodeJsonPretty doc)
 
 -- | Read a JSON document from a file, or say why it could not be read: the
 -- system could not read the file, or it is not the document expected
 readJsonFile :: (FromJSON a) => FilePath -> IO (Either String a)
 readJsonFile file = do
-  bytes <- systemReason (C8.readFile file)
-  return $ first (couldNotRead file) (eitherDecodeStrict' =<< bytes)
+  bytes <- readFileBytes file
+  return $ bytes >>= first (couldNotRead file) . eitherDecodeStrict'
 
 {- Text files -}
 
