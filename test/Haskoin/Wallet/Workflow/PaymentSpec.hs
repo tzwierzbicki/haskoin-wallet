@@ -97,7 +97,7 @@ feesSpec ctx =
         let file = home </> "unsigned.json"
         run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", file] [""]
         run `shouldSatisfy` printed "low 9, median 12, high 118 sat/byte"
-        run `shouldSatisfy` printed "Which fee rate? Type low, median or high [median]"
+        run `shouldSatisfy` printed "Which fee rate? Type low, median, high or a number of satoshis per byte [median]"
         (txSignDataFeeRate . txFileData <$> readTxFile file) `shouldReturn` Just 12
 
     it "are taken at the level typed" $
@@ -106,6 +106,13 @@ feesSpec ctx =
         let file = home </> "unsigned.json"
         _ <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", file] ["high", "y"]
         (txSignDataFeeRate . txFileData <$> readTxFile file) `shouldReturn` Just 118
+
+    it "are not the only answer: a number typed is the fee rate taken" $
+      withChain ctx (feesChain ctx) $ \home _ -> do
+        synced home
+        let file = home </> "unsigned.json"
+        _ <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", file] ["15"]
+        (txSignDataFeeRate . txFileData <$> readTxFile file) `shouldReturn` Just 15
 
     it "are taken at the level of --fee-rate without asking" $
       withChain ctx (feesChain ctx) $ \home _ -> do
@@ -128,8 +135,30 @@ feesSpec ctx =
         let file = home </> "replacement.json"
         run <- hw home ["bumpfee", stuck, "--output", file] [""]
         run `shouldSatisfy` printed "The transaction pays 10 satoshis per byte: a replacement must pay at least 11"
-        run `shouldSatisfy` printed "Which fee rate? Type median or high [median]"
+        run `shouldSatisfy` printed "Which fee rate? Type median, high or a number of satoshis per byte [median]"
         (txSignDataFeeRate . txFileData <$> readTxFile file) `shouldReturn` Just 12
+
+    it "are offered to bumpfee beside a number, asked again when below what a replacement must pay" $
+      withChain ctx (feesChain ctx) $ \home _ -> do
+        stuck <- sentPayment home
+        let file = home </> "replacement.json"
+        run <- hw home ["bumpfee", stuck, "--output", file] ["10", "11"]
+        run `shouldSatisfy` printed "The fee rate must be at least 11 satoshis per byte"
+        (txSignDataFeeRate . txFileData <$> readTxFile file) `shouldReturn` Just 11
+
+    -- The one transaction of the paid chain pays 1000 satoshis for 85
+    -- bytes, 11.76 per byte: every level is 12. The payment pays 20 per
+    -- byte, so a replacement must pay 21.
+    it "leave bumpfee asking for a number when all are below what a replacement must pay" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "20"] []
+        _ <- answer home ["signtx", nosig] seedOnce
+        stuck <- txidOf =<< txOf =<< answer home ["sendtx", nosig, "--yes"] []
+        let file = home </> "replacement.json"
+        run <- hw home ["bumpfee", stuck, "--output", file] ["25"]
+        run `shouldSatisfy` printed "Which fee rate? Type a number of satoshis per byte, at least 21:"
+        (txSignDataFeeRate . txFileData <$> readTxFile file) `shouldReturn` Just 25
 
 {- Receiving -}
 

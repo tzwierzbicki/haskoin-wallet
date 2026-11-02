@@ -1408,7 +1408,7 @@ feeOption =
       <> long "fee-rate"
       <> metavar "RATE"
       <> completeWith ["low", "median", "high"]
-      <> help "The fee rate in satoshis per byte, or low, median or high for that rate of recent blocks, as `fees` shows them. Without it, hw shows those rates and asks, median by default. A rate above 100 needs a confirmation."
+      <> help "The fee rate in satoshis per byte, or low, median or high for that rate of recent blocks, as `fees` shows them. Without it, hw shows those rates and asks for a level or a number, median by default. A rate above 100 needs a confirmation."
 
 -- | Whether preparetx and preparesendall take a high fee rate, and prepare
 -- while the wallet is behind the chain, without asking
@@ -1876,7 +1876,7 @@ replacementFeeOption =
       <> long "fee-rate"
       <> metavar "RATE"
       <> completeWith ["low", "median", "high"]
-      <> help "The fee rate of the replacement in satoshis per byte, or low, median or high for that rate of recent blocks, as `fees` shows them. It must be above the rate of the transaction replaced. Without it, hw shows those rates and asks. A rate above 100 needs a confirmation."
+      <> help "The fee rate of the replacement in satoshis per byte, or low, median or high for that rate of recent blocks, as `fees` shows them. It must be above the rate of the transaction replaced. Without it, hw shows those rates and asks for a level or a number. A rate above 100 needs a confirmation."
 
 {- sendtx -}
 

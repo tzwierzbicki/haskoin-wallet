@@ -4,8 +4,9 @@
 -- and the passphrase of a seed, once to check them against an account or
 -- the chain, twice to create an account; the signing key of an account,
 -- asked until the mnemonic and the passphrase give it, three attempts at
--- most; the private keys of a sweep, from a file or typed; and a question
--- to answer yes or no. A scripted terminal types the lines of each test and
+-- most; the private keys of a sweep, from a file or typed; and the
+-- questions: yes or no, a pick among choices, and an answer read as typed.
+-- A scripted terminal types the lines of each test and
 -- keeps what hw shows; the real one is tested on files.
 module Haskoin.Wallet.Cli.PromptSpec (spec) where
 
@@ -559,6 +560,27 @@ questionSpec = do
 
     it "fails after three answers that name no choice" $
       answerOf ["/0/4", "/0/6", "/0/7"] asking `shouldReturn` Left "Type one of /0/3, /0/5, or nothing for /0/3"
+
+    it "is cancelled by the end of the input" $
+      answerOf [] asking `shouldReturn` Left cancelled
+
+  describe "A question whose answer is read as typed" $ do
+    -- A reader that takes a number up to 10, as a fee rate question takes
+    -- a number above the lowest rate
+    let upToTen typed = case reads (Text.unpack typed) of
+          [(n, "")] | n <= (10 :: Int) -> Right n
+          _ -> Left "Type a number up to 10"
+        asking term = askAnswer term "How many? " upToTen
+    it "reads the answer without the spaces around it" $
+      answerOf [" 7 "] asking `shouldReturn` Right 7
+
+    it "tells the mistake the reader finds, and asks again" $ do
+      (answer, shown, _) <- answering ["11", "7"] asking
+      answer `shouldBe` Right 7
+      shown `shouldBe` ["How many? ", "Type a number up to 10", "How many? "]
+
+    it "fails after three answers the reader refuses" $
+      answerOf ["11", "12", "13"] asking `shouldReturn` Left "Type a number up to 10"
 
     it "is cancelled by the end of the input" $
       answerOf [] asking `shouldReturn` Left cancelled

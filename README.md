@@ -392,7 +392,8 @@ hw unlockcoin TXHASH:1
 
 **`hw fees`** shows the low, median and high fee rates of the latest six
 blocks, in satoshis per byte. The commands that take `--fee-rate` show the same
-rates and ask when you give none.
+rates and ask when you give none. Type a level, or a number of satoshis per
+byte.
 
 ```console
 hw fees

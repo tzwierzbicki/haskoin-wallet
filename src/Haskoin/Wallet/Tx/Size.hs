@@ -26,6 +26,7 @@ module Haskoin.Wallet.Tx.Size
     highFeeRate,
     maxFeeRate,
     checkFeeRateAndDust,
+    checkFeeRate,
   )
 where
 
@@ -143,12 +144,18 @@ maxFeeRate :: Natural
 maxFeeRate = 2 ^ (32 :: Int) - 1
 
 -- | Refuse a fee rate or a dust limit that a transaction cannot be built
--- with: a rate of zero, which no node relays, a rate above 'maxFeeRate',
--- or a dust limit above the 21 million bitcoins there will ever be. The
--- command line takes any number, and the builders count in 64 bits: a
--- rate of 2^64 wrapped around to zero.
+-- with: a rate 'checkFeeRate' refuses, or a dust limit above the 21
+-- million bitcoins there will ever be. The command line takes any number,
+-- and the builders count in 64 bits: a rate of 2^64 wrapped around to
+-- zero.
 checkFeeRateAndDust :: Natural -> Natural -> Either String ()
 checkFeeRateAndDust feeByte dust = do
+  checkFeeRate feeByte
+  when (toInteger dust > maxMoney) $ Left "The dust limit must be at most the 21 million bitcoins there will ever be"
+
+-- | Refuse a fee rate that a transaction cannot be built with: zero,
+-- which no node relays, or above 'maxFeeRate'
+checkFeeRate :: Natural -> Either String ()
+checkFeeRate feeByte = do
   when (feeByte == 0) $ Left "The fee rate must be at least 1 satoshi per byte"
   when (feeByte > maxFeeRate) $ Left $ "The fee rate must be at most " <> show maxFeeRate <> " satoshis per byte"
-  when (toInteger dust > maxMoney) $ Left "The dust limit must be at most the 21 million bitcoins there will ever be"

@@ -79,7 +79,7 @@ import qualified Data.Aeson as Json
 import Data.Bifunctor (first)
 import Data.Either (isLeft)
 import Data.Foldable (for_)
-import Data.List (genericTake, intercalate, nub, partition, sortOn)
+import Data.List (genericTake, nub, partition)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
@@ -704,36 +704,31 @@ lockTimeHeight yes net = do
     Right heightM -> return heightM
 
 -- | The fee rate of a transaction, in satoshis per byte: the number given,
--- or one of the rates recent blocks paid, read from the store: the level
--- given, or the one the user picks, the median by default. A rate below
--- the lowest the transaction can pay, which a replacement has, is not
--- offered. The rates and the question go to stderr, to keep the --json
--- answer clean. hw never guesses a rate: without a --fee-rate, a store that
--- cannot be reached stops the command.
+-- or one of the rates recent blocks paid, read from the store, at the
+-- level given. Without either, hw shows those rates and asks, taking a
+-- level or a number as --fee-rate does, the median by default. A rate
+-- below the lowest the transaction can pay, which a replacement has, is
+-- not offered, and a number below it is asked again. The rates and the
+-- question go to stderr, to keep the --json answer clean. hw never
+-- guesses a rate: without a --fee-rate, a store that cannot be reached
+-- stops the command.
 chooseFeeRate :: Config -> Network -> Store -> Natural -> Maybe FeeRateChoice -> ExceptT String (DB IO) Natural
 chooseFeeRate _ _ _ _ (Just (FeeRateOf rate)) = return rate
 chooseFeeRate cfg net store lowest choice = do
   rates <- fromStore $ withExceptT (<> ". Give a --fee-rate to go on without the rates recent blocks paid") $ recentFeeRates (configParallelRequests cfg) store
-  let offered = [(level, rateAt level rates) | level <- [minBound .. maxBound], rateAt level rates >= lowest]
-      offeredNames = case [cs (levelName level) | (level, _) <- offered] of
-        [name] -> name
-        names -> intercalate ", " (init names) <> " or " <> last names
-  when (null offered) $
-    throwError $ "The rates recent blocks paid are all below " <> show lowest <> " satoshis per byte: give a --fee-rate of at least " <> show lowest
   case choice of
     Just (FeeLevelOf level) -> do
-      rate <- liftMaybe (levelTooLow level rates) (lookup level offered)
+      let rate = rateAt level rates
+      when (rate < lowest) $ throwError (levelTooLow level rate)
       liftIO . tell terminal $ "The " <> cs (levelName level) <> " rate recent blocks paid: " <> show rate <> " satoshis per byte"
       return rate
     _ -> do
       now <- liftIO getCurrentTime
       liftIO $ renderOn stderr (feeRatesDoc net now rates)
-      -- The median first: it is the default
-      let choices = [([levelName level], rate) | (level, rate) <- sortOn ((/= Median) . fst) offered]
-      askChoice terminal ("Which fee rate? Type " <> offeredNames) choices
+      askAnswer terminal (feeRateQuestion lowest rates) (feeRateAnswer lowest rates)
   where
-    levelTooLow level rates =
-      "The " <> cs (levelName level) <> " rate recent blocks paid, " <> show (rateAt level rates)
+    levelTooLow level rate =
+      "The " <> cs (levelName level) <> " rate recent blocks paid, " <> show rate
         <> " satoshis per byte, is below " <> show lowest <> ": give a --fee-rate of at least " <> show lowest
 
 -- | Show the fee rates recent blocks paid on the network, read from the

@@ -6,13 +6,15 @@
 -- a high rate, read from the transactions of the latest blocks of the
 -- store. They are what got into blocks, not how long transactions waited:
 -- after a quiet spell, a sudden backlog makes them too low for a while,
--- and bumpfee is then the remedy.
+-- and bumpfee is then the remedy. The question of the fee rate, which
+-- offers them beside a number, is here too.
 module Haskoin.Wallet.Tx.FeeRates where
 
 import Control.Monad (when)
 import Control.Monad.Except (ExceptT, throwError)
 import Data.Aeson (FromJSON (..), ToJSON (..), object, withObject, (.:), (.=))
-import Data.List (sortOn)
+import Data.List (intercalate, sortOn)
+import Data.Maybe (listToMaybe)
 import Data.Ord (comparing)
 import Data.Ratio ((%))
 import Data.Text (Text)
@@ -22,6 +24,7 @@ import Data.List (maximumBy)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Store
+import Haskoin.Wallet.Tx.Size (checkFeeRate)
 import Haskoin.Wallet.Util (readNatural)
 import Numeric.Natural (Natural)
 
@@ -99,6 +102,72 @@ readFeeRateChoice text =
   case [level | level <- [minBound .. maxBound], levelName level == Text.pack text] of
     level : _ -> Right (FeeLevelOf level)
     [] -> maybe (Left "Give a number of satoshis per byte, or low, median or high") (Right . FeeRateOf) (readNatural (Text.pack text))
+
+{- The question -}
+
+-- | The levels a transaction that must pay at least the given rate can
+-- take: those whose rate is that high, from the lowest
+offeredLevels :: Natural -> FeeRates -> [FeeLevel]
+offeredLevels lowest rates = [level | level <- [minBound .. maxBound], rateAt level rates >= lowest]
+
+-- | The level an empty answer takes among those offered: the median, or
+-- the lowest level offered when the median is not. None when no level is
+-- offered.
+defaultLevel :: [FeeLevel] -> Maybe FeeLevel
+defaultLevel offered
+  | Median `elem` offered = Just Median
+  | otherwise = listToMaybe offered
+
+-- | The question of the fee rate of a transaction that must pay at least
+-- the given rate. It takes the same answers as --fee-rate: a level
+-- offered or a number. When no level is offered, it asks for a number
+-- alone, and has no default.
+feeRateQuestion :: Natural -> FeeRates -> String
+feeRateQuestion lowest rates =
+  case defaultLevel offered of
+    Just level -> "Which fee rate? Type " <> orList (map levelString offered <> [aNumber]) <> " [" <> levelString level <> "] "
+    Nothing -> "Which fee rate? Type " <> aNumber <> ", at least " <> show lowest <> ": "
+  where
+    offered = offeredLevels lowest rates
+    orList names = intercalate ", " (init names) <> " or " <> last names
+
+-- | The fee rate an answer to 'feeRateQuestion' picks: a level offered,
+-- a number of at least the lowest rate, or the default level for an empty
+-- answer. Any other answer is a mistake, told with what to type instead.
+feeRateAnswer :: Natural -> FeeRates -> Text -> Either String Natural
+feeRateAnswer lowest rates typed
+  | Text.null typed = maybe (Left whatToType) (Right . (`rateAt` rates)) (defaultLevel offered)
+  | otherwise =
+      case readFeeRateChoice (Text.unpack typed) of
+        Right (FeeRateOf rate)
+          | rate < lowest -> Left $ "The fee rate must be at least " <> perByte lowest
+          | otherwise -> rate <$ checkFeeRate rate
+        Right (FeeLevelOf level)
+          | level `elem` offered -> Right (rateAt level rates)
+          | otherwise ->
+              Left $
+                "The " <> levelString level <> " rate is " <> perByte (rateAt level rates)
+                  <> ", and the fee rate must be at least "
+                  <> show lowest
+        Left _ -> Left whatToType
+  where
+    offered = offeredLevels lowest rates
+    whatToType = case defaultLevel offered of
+      Just level -> "Type " <> intercalate ", " (map levelString offered <> [aNumber]) <> ", or nothing for " <> levelString level
+      Nothing -> "Type " <> aNumber <> ", at least " <> show lowest
+
+-- | What the fee rate question calls a rate typed as a number
+aNumber :: String
+aNumber = "a number of satoshis per byte"
+
+-- | The name of a level, as a question shows it
+levelString :: FeeLevel -> String
+levelString = Text.unpack . levelName
+
+-- | A fee rate in words: 1 satoshi per byte, 2 satoshis per byte
+perByte :: Natural -> String
+perByte 1 = "1 satoshi per byte"
+perByte rate = show rate <> " satoshis per byte"
 
 {- Computing them -}
 

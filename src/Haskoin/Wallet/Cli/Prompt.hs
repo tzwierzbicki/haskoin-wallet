@@ -6,8 +6,9 @@
 -- account; the dice rolls that add to the entropy of a new mnemonic; the
 -- private keys of a sweep, when they are not in a file; the answer to a
 -- yes-or-no question, such as whether to send a transaction or to take a
--- high fee rate; and a choice among a few, such as the address the change
--- of a payment goes back to.
+-- high fee rate; a choice among a few, such as the address the change of
+-- a payment goes back to; and an answer read as it is typed, such as a fee
+-- rate.
 --
 -- Secrets are typed without echo, as gpg, ssh and sudo take them: nothing
 -- shows on the screen, not even their length. The prompts and the messages
@@ -22,6 +23,7 @@ module Haskoin.Wallet.Cli.Prompt
     cancelled,
     notUtf8,
     askYes,
+    askAnswer,
     askChoice,
     readMnemonic,
     askMnemonic,
@@ -142,15 +144,22 @@ askYes term question = do
   answer <- liftIO (askVisible term (question <> " [y/N] ")) >>= liftEither
   return $ Text.toLower (Text.strip answer) `elem` ["y", "yes"]
 
+-- | What the reader makes of the answer to a prompt, without the spaces
+-- around it. An answer it refuses is a mistake, told with the reason it
+-- gives, and the end of the input cancels the command.
+askAnswer :: (MonadIO m) => Terminal -> String -> (Text -> Either String a) -> ExceptT String m a
+askAnswer term prompt reader =
+  retrying term $ do
+    answer <- liftIO (askVisible term prompt) >>= liftEither
+    return $ reader (Text.strip answer)
+
 -- | One of the choices, each with the answers that pick it, the first of
 -- them shown. An empty answer picks the first choice. An answer that picks
 -- none is a mistake, and the end of the input cancels the command.
 askChoice :: (MonadIO m) => Terminal -> String -> [([Text], a)] -> ExceptT String m a
 askChoice _ _ [] = throwError "There is nothing to choose from"
 askChoice term question choices@((firstNames, firstChoice) : _) =
-  retrying term $ do
-    answer <- liftIO (askVisible term (question <> " [" <> shown firstNames <> "] ")) >>= liftEither
-    return $ picked (Text.strip answer)
+  askAnswer term (question <> " [" <> shown firstNames <> "] ") picked
   where
     picked "" = Right firstChoice
     picked answer =
