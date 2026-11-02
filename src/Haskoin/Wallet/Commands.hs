@@ -641,7 +641,7 @@ data TxFileRead = TxFileRead !TxFile !(Maybe Psbt)
 -- derivation records name (see "Haskoin.Wallet.Tx.PsbtFile"). A
 -- transaction alone, in hexadecimal, as Bitcoin Core's finalizepsbt gives
 -- it, is read with the signing data the wallet holds for it, which it
--- must. Anything else is the JSON file of an earlier hw.
+-- must. Anything else is refused.
 readTxFileIn :: Ctx -> FilePath -> ExceptT String (DB IO) TxFileRead
 readTxFileIn ctx file = do
   bytes <- liftEitherIO $ readFileBytes file
@@ -654,7 +654,7 @@ readTxFileIn ctx file = do
         else
           if isHexText text
             then fromRawTx =<< refused (maybe (Left "Not the hexadecimal of a transaction") S.decode (decodeHex (cs text)))
-            else (`TxFileRead` Nothing) <$> refused (Json.eitherDecodeStrict' bytes)
+            else throwError (couldNotRead file "Not a PSBT, in bytes or in base64 text, nor the hexadecimal of a transaction")
   where
     refused :: Either String a -> ExceptT String (DB IO) a
     refused = liftEither . first (couldNotRead file)
@@ -1018,7 +1018,7 @@ transactionToSign ctx signing = do
 -- | Write a transaction just signed to its file, if any, with the keys of
 -- its account when it has one: into the PSBT the --input file held, which
 -- keeps every field of it, or as a new PSBT for a transaction that came
--- from the wallet or from the JSON file of an earlier hw
+-- from the wallet
 writeSigned :: Ctx -> Maybe DBAccount -> Maybe Psbt -> SignedFile -> TxFile -> ExceptT String (DB IO) ()
 writeSigned ctx accM sourceM signedFile signed =
   case signedFile of

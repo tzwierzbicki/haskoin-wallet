@@ -5,10 +5,10 @@ module Haskoin.Wallet.Tx.SigningSpec where
 
 import Control.Monad (when)
 import qualified Data.ByteString as BS
-import Data.Aeson ((.:), (.=))
+import Data.Aeson ((.:))
 import qualified Data.Aeson as Json
 import Data.Aeson.Types (parseMaybe)
-import Data.List (isInfixOf, nub)
+import Data.List (nub)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isJust, mapMaybe)
 import Haskoin
@@ -22,7 +22,7 @@ import Numeric.Natural (Natural)
 import Data.Text (Text)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), MarshalJsonBox (..), testIdentity)
 import Data.Default (def)
-import Haskoin.Wallet.Arbitrary (arbitraryTxFile, arbitraryTxSignData)
+import Haskoin.Wallet.Arbitrary (arbitraryTxSignData)
 import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck
@@ -40,11 +40,10 @@ spec = do
     verificationSpec ctx
     propertiesSpec ctx
     fileSpec ctx
-    -- The signing data and its files read back as they were written, the
-    -- signing data plain or marshalled
+    -- The signing data reads back as it was written, plain or marshalled
     testIdentity
       def
-        { jsonTests = [JsonBox (arbitraryTxSignData btc ctx), JsonBox (arbitraryTxFile ctx)],
+        { jsonTests = [JsonBox (arbitraryTxSignData btc ctx)],
           marshalJsonTests = [MarshalJsonBox ((,) ctx <$> arbitraryTxSignData btc ctx)]
         }
 
@@ -57,21 +56,12 @@ walletSigner ctx v = do
   accountKey <- prefixError "account" $ accountSigningKey v.vecNetwork ctx v.vecAccount
   return $ \c -> signWalletTx v.vecNetwork c v.vecSignData accountKey
 
-{- Files -}
+{- The signing data in JSON, and the files -}
 
 fileSpec :: Ctx -> Spec
-fileSpec ctx =
-  describe "A transaction file" $ do
+fileSpec ctx = do
+  describe "The signing data in JSON, as the database keeps it," $ do
     let tsd = simpleTransaction ctx
-    it "names the network of the transaction, which an earlier hw leaves aside" $ do
-      let written = Json.encode (plainTxFile (Just btc) tsd)
-      (Json.decode written >>= parseMaybe (.: "network")) `shouldBe` Just ("btc" :: Text)
-      Json.eitherDecode written `shouldBe` Right tsd
-
-    it "of an earlier hw names no network" $
-      Json.eitherDecode (Json.encode tsd) `shouldBe` Right (plainTxFile Nothing tsd)
-
-    -- As an earlier hw wrote it, for any transaction but a replacement
     it "names no transaction replaced, but for a replacement" $
       (Json.decode (Json.encode tsd) >>= parseMaybe (.: "replaces")) `shouldBe` (Nothing :: Maybe [TxHash])
 
@@ -82,7 +72,6 @@ fileSpec ctx =
         `shouldBe` Just ["0000000000000000000000000000000000000000000000000000000000000003", "0000000000000000000000000000000000000000000000000000000000000004" :: Text]
       Json.eitherDecode written `shouldBe` Right replacement
 
-    -- As an earlier hw wrote it, for any transaction the user did not label
     it "holds no label, but for a transaction the user labelled" $
       (Json.decode (Json.encode tsd) >>= parseMaybe (.: "label")) `shouldBe` (Nothing :: Maybe Text)
 
@@ -92,35 +81,10 @@ fileSpec ctx =
       (Json.decode written >>= parseMaybe (.: "label")) `shouldBe` Just ("Rent of October" :: Text)
       Json.eitherDecode written `shouldBe` Right labelled
 
-    it "of an earlier hw, without a label, is read as a transaction without one" $
-      (txSignDataLabel <$> Json.eitherDecode (Json.encode (Json.object (txSignDataPairs tsd)))) `shouldBe` Right ""
-
-    it "refuses a network hw does not know" $ do
-      let written = Json.encode (Json.object (("network" .= ("doge" :: Text)) : txSignDataPairs tsd))
-      (Json.eitherDecode written :: Either String TxFile) `shouldSatisfy` either ("Unknown network doge" `isInfixOf`) (const False)
-
-    -- As an earlier hw wrote it, for a transaction whose addresses have no
-    -- label
-    it "labels no address, but for the account's addresses that have a label" $
-      (Json.decode (Json.encode (plainTxFile (Just btc) tsd)) >>= parseMaybe (.: "pathlabels")) `shouldBe` (Nothing :: Maybe (Map.Map Text Text))
-
-    -- The coin spent is at the account's first receiving address, /0/0.
-    -- The file names the path, never the address.
-    it "carries the labels of the account's addresses by their paths, and reads back" $ do
-      let labelled = TxFile (Just btc) tsd (Map.fromList [("/0/0", "Salary")]) Map.empty
-          written = Json.encode labelled
-      (Json.decode written >>= parseMaybe (.: "pathlabels")) `shouldBe` Just (Map.fromList [("/0/0", "Salary")] :: Map.Map Text Text)
-      Json.eitherDecode written `shouldBe` Right labelled
-
-    it "of an earlier hw labels no address" $
-      (txFilePathLabels <$> Json.eitherDecode (Json.encode (Json.object (txSignDataPairs tsd)))) `shouldBe` Right Map.empty
-
-    -- A label can name a path only: one at an address is not a label of
-    -- the file, however much the address is the account's
-    it "refuses a label at something that is not a path" $ do
-      let written = Json.encode (Json.object (("pathlabels" .= Map.fromList [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" :: Text, "Salary" :: Text)]) : txSignDataPairs tsd))
-      (Json.eitherDecode written :: Either String TxFile) `shouldSatisfy` either ("Invalid path 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" `isInfixOf`) (const False)
-
+  -- The labels a file carries name paths of the account, never addresses:
+  -- "Haskoin.Wallet.Tx.PsbtFile" puts them on the derivation records
+  describe "A transaction file" $ do
+    let tsd = simpleTransaction ctx
     -- The coin spent is at the first receiving address, /0/0, and the
     -- change goes to the first change address, /1/0, which the file does
     -- not label
@@ -143,19 +107,6 @@ fileSpec ctx =
       info <- expectRight $ parseTxSignData btc ctx (testAccountPub ctx) tsd
       let salaried = info {txInfoSummary = info.txInfoSummary {summaryMyInputs = Map.map (\i -> i {myInputsLabel = "Salary"}) info.txInfoSummary.summaryMyInputs}}
       txFilePathLabels (labelledTxFile btc salaried tsd) `shouldBe` Map.fromList [("/0/0", "Salary")]
-
-    -- As an earlier hw wrote it, for a transaction whose coins show no label
-    it "labels no coin, but for the coins that show a label" $
-      (Json.decode (Json.encode (plainTxFile (Just btc) tsd)) >>= parseMaybe (.: "inputlabels")) `shouldBe` (Nothing :: Maybe (Map.Map Text Text))
-
-    it "carries the labels the coins it spends show, by the id of the transaction that paid each, and reads back" $ do
-      let labelled = TxFile (Just btc) tsd Map.empty (Map.fromList [(fakeTxHash 3, "Salary")])
-          written = Json.encode labelled
-      (Json.decode written >>= parseMaybe (.: "inputlabels")) `shouldBe` Just (Map.fromList [("0000000000000000000000000000000000000000000000000000000000000003", "Salary")] :: Map.Map Text Text)
-      Json.eitherDecode written `shouldBe` Right labelled
-
-    it "of an earlier hw labels no coin" $
-      (txFileInputLabels <$> Json.eitherDecode (Json.encode (Json.object (txSignDataPairs tsd)))) `shouldBe` Right Map.empty
 
     -- The coin spent is of the funding transaction. Transaction 3 is not
     -- spent, so its label is left aside.

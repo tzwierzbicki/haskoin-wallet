@@ -850,7 +850,7 @@ sendingFileSpec ctx =
           dbShouldFailWith "The transaction was not sent" $
             sendSigned ctx (const (notingPublished published (toStore (storeKnowing ctx signed)))) refusing (Just btc) (Just btc) signed
         liftIO $ readIORef published `shouldReturn` []
-    -- As in the file of an earlier hw
+    -- As in a file of another wallet
     it "refuses a transaction the wallet does not hold, without its network" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"

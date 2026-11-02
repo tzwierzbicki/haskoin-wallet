@@ -231,8 +231,8 @@ signingSpec ctx = do
     it "is shown by reviewtx with the name of its account" $
       withHome $ \home -> do
         createMain home
-        Json.encodeFile (home </> "payment.json") (unsignedPayment ctx)
-        run <- hw home ["reviewtx", home </> "payment.json"] []
+        writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
+        run <- hw home ["reviewtx", home </> "payment.psbt"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  Account  : main\n"
 
     -- The payment is from main
@@ -240,9 +240,9 @@ signingSpec ctx = do
       withHome $ \home -> do
         createMain home
         _ <- answer home ["createacc", "second"] seedTwice
-        Json.encodeFile (home </> "payment.json") (unsignedPayment ctx)
+        writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
         forM_ ["reviewtx", "importtx"] $ \command ->
-          (errorOf <$> hwJson home [command, home </> "payment.json", "--account", "second"] [])
+          (errorOf <$> hwJson home [command, home </> "payment.psbt", "--account", "second"] [])
             `shouldReturn` Right "The transaction does not involve the account second"
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
 
@@ -380,11 +380,6 @@ foreignFileSpec ctx =
 
 {- The files of signtx, signsweep and sendtx -}
 
--- | A transaction of the test wallet, unsigned, as a sweep of a coin it
--- does not hold leaves it
-unsignedSweep :: Ctx -> TxSignData
-unsignedSweep ctx = TxSignData (spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 1000)]) [] [] [] (Just 1) Nothing [] noLabel
-
 -- | A payment of the test wallet to another wallet, unsigned
 unsignedPayment :: Ctx -> TxSignData
 unsignedPayment ctx =
@@ -407,7 +402,7 @@ inputFileSpec ctx = do
 
     it "takes a txid or a file, not both" $
       withHome $ \home ->
-        (errorOf <$> hwJson home ["sendtx", Text.unpack (txHashToHex (fakeTxHash 1)), "--input", home </> "sweep.json"] [])
+        (errorOf <$> hwJson home ["sendtx", Text.unpack (txHashToHex (fakeTxHash 1)), "--input", home </> "sweep.psbt"] [])
           `shouldReturn` Right "Can not specify both a TXID and an --input file"
 
     it "refuses a missing file" $
@@ -417,17 +412,17 @@ inputFileSpec ctx = do
 
     it "refuses an unsigned transaction" $
       withHome $ \home -> do
-        Json.encodeFile (home </> "sweep.json") (unsignedSweep ctx)
-        (errorOf <$> hwJson home ["sendtx", "--input", home </> "sweep.json"] [])
+        writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
+        (errorOf <$> hwJson home ["sendtx", "--input", home </> "payment.psbt"] [])
           `shouldReturn` Right "The transaction is not signed"
 
-    -- The file is written as by an earlier hw, without the network, and
-    -- the configuration names no default network
-    it "refuses the file of an earlier hw, which names no network, for a transaction the wallet does not hold, without a default network" $
+    -- The file is written as another wallet writes it, without the
+    -- network, and the configuration names no default network
+    it "refuses a file of another wallet, which names no network, for a transaction the wallet does not hold, without a default network" $
       withHome $ \home -> do
         setDefaultNetwork home Nothing
-        Json.encodeFile (home </> "payment.json") (signedPayment ctx)
-        (errorOf <$> hwJson home ["sendtx", "--input", home </> "payment.json"] [])
+        writeOtherWalletTxFile ctx (home </> "payment.psbt") (signedPayment ctx)
+        (errorOf <$> hwJson home ["sendtx", "--input", home </> "payment.psbt"] [])
           `shouldReturn` Right "The file names no network, as a file of another wallet does, and involves no account of this wallet: give the --network, or a default-network in the configuration file"
 
   describe "signtx and signsweep" $ do
@@ -452,38 +447,38 @@ inputFileSpec ctx = do
     it "replace the --input file with the signed transaction when the user agrees" $
       withHome $ \home -> do
         createMain home
-        Json.encodeFile (home </> "payment.json") (unsignedPayment ctx)
-        signed <- txOf =<< answer home ["signtx", "--input", home </> "payment.json"] (["y"] <> seedOnce)
+        writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
+        signed <- txOf =<< answer home ["signtx", "--input", home </> "payment.psbt"] (["y"] <> seedOnce)
         pendingState signed `shouldBe` Just (True, False)
-        written <- readTxFile ctx (home </> "payment.json")
+        written <- readTxFile ctx (home </> "payment.psbt")
         isSigned (txSignDataTx (txFileData written)) `shouldBe` True
 
     it "ask whether to replace the --input file, naming --output" $
       withHome $ \home -> do
         createMain home
-        Json.encodeFile (home </> "payment.json") (unsignedPayment ctx)
-        run <- hw home ["signtx", "--input", home </> "payment.json"] (["y"] <> seedOnce)
-        runErr run `shouldSatisfy` Text.isInfixOf (question (home </> "payment.json"))
+        writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
+        run <- hw home ["signtx", "--input", home </> "payment.psbt"] (["y"] <> seedOnce)
+        runErr run `shouldSatisfy` Text.isInfixOf (question (home </> "payment.psbt"))
 
     -- The mnemonic would be typed for nothing
     it "ask before the mnemonic, and leave the file as it was when the user does not agree" $
       withHome $ \home -> do
         createMain home
-        Json.encodeFile (home </> "payment.json") (unsignedPayment ctx)
-        original <- BS.readFile (home </> "payment.json")
-        run <- hw home ["signtx", "--input", home </> "payment.json"] (["n"] <> seedOnce)
+        writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
+        original <- BS.readFile (home </> "payment.psbt")
+        run <- hw home ["signtx", "--input", home </> "payment.psbt"] (["n"] <> seedOnce)
         run `shouldSatisfy` printed "The transaction was not signed: give an --output file to write it to"
         run `shouldNotSatisfy` askedMnemonic
-        BS.readFile (home </> "payment.json") `shouldReturn` original
+        BS.readFile (home </> "payment.psbt") `shouldReturn` original
 
     it "do not ask with --output, and leave the --input file as it was" $
       withHome $ \home -> do
         createMain home
-        Json.encodeFile (home </> "payment.json") (unsignedPayment ctx)
-        original <- BS.readFile (home </> "payment.json")
-        run <- hw home ["signtx", "--input", home </> "payment.json", "--output", home </> "signed.psbt"] seedOnce
+        writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
+        original <- BS.readFile (home </> "payment.psbt")
+        run <- hw home ["signtx", "--input", home </> "payment.psbt", "--output", home </> "signed.psbt"] seedOnce
         runErr run `shouldNotSatisfy` Text.isInfixOf "Replace "
-        BS.readFile (home </> "payment.json") `shouldReturn` original
+        BS.readFile (home </> "payment.psbt") `shouldReturn` original
 
     -- The keys would be typed for nothing
     it "ask before the keys of a sweep" $
@@ -509,8 +504,8 @@ inputFileSpec ctx = do
     it "refuses a transaction signed already" $
       withHome $ \home -> do
         createMain home
-        Json.encodeFile (home </> "payment.json") (signedPayment ctx)
-        run <- hw home ["signtx", "--input", home </> "payment.json", "--output", home </> "signed.psbt"] seedOnce
+        writeTxFile ctx (home </> "payment.psbt") (signedPayment ctx)
+        run <- hw home ["signtx", "--input", home </> "payment.psbt", "--output", home </> "signed.psbt"] seedOnce
         run `shouldSatisfy` printed "The transaction is already signed"
         run `shouldNotSatisfy` askedMnemonic
 
@@ -529,17 +524,17 @@ inputFileSpec ctx = do
       withHome $ \home -> do
         createMain home
         _ <- answer home ["createacc", "second"] seedTwice
-        Json.encodeFile (home </> "payment.json") (unsignedPayment ctx)
-        run <- hw home ["signtx", "--input", home </> "payment.json", "--output", home </> "signed.psbt", "--account", "second"] seedOnce
+        writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
+        run <- hw home ["signtx", "--input", home </> "payment.psbt", "--output", home </> "signed.psbt", "--account", "second"] seedOnce
         run `shouldSatisfy` printed "The transaction does not involve the account second"
         run `shouldNotSatisfy` askedMnemonic
 
     it "refuses an --output file that exists" $
       withHome $ \home -> do
         createMain home
-        Json.encodeFile (home </> "payment.json") (unsignedPayment ctx)
+        writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
         writeFile (home </> "signed.psbt") ""
-        run <- hw home ["signtx", "--input", home </> "payment.json", "--output", home </> "signed.psbt"] seedOnce
+        run <- hw home ["signtx", "--input", home </> "payment.psbt", "--output", home </> "signed.psbt"] seedOnce
         run `shouldSatisfy` printed (alreadyExists (home </> "signed.psbt"))
         run `shouldNotSatisfy` askedMnemonic
 

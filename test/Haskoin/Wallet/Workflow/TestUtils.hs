@@ -59,6 +59,8 @@ module Haskoin.Wallet.Workflow.TestUtils
     addressLabelsOf,
     spendsAndPays,
     readTxFile,
+    writeTxFile,
+    writeOtherWalletTxFile,
     -- * Payments and chains
     payment,
     paidChain,
@@ -96,8 +98,8 @@ import qualified Haskoin.Wallet.Schema.V3 as V3
 import Haskoin.Wallet.Sync (SyncRes (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Database.TxInfo
-import Haskoin.Wallet.Tx.PsbtFile (FileAccount (..), psbtTxFile)
-import Haskoin.Wallet.Tx.SignData (TxFile (..))
+import Haskoin.Wallet.Tx.PsbtFile (FileAccount (..), hwIdentifier, networkField, psbtTxFile, txFilePsbt)
+import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData)
 import Numeric.Natural (Natural)
 import System.FilePath ((</>))
 
@@ -362,6 +364,12 @@ addressLabelsOf info = Map.union (myInputsLabel <$> summaryMyInputs summary) (my
 spendsAndPays :: Ctx -> Tx -> ([OutPoint], [(Word64, Either String Address)])
 spendsAndPays ctx tx = ((.outpoint) <$> tx.inputs, sortOn fst [(out.value, scriptToAddressBS ctx out.script) | out <- tx.outputs])
 
+-- | The first account of the test wallet, and that of the second wallet,
+-- as the derivation records of their files name their keys
+mainFileAccount, otherFileAccount :: Ctx -> FileAccount
+mainFileAccount ctx = FileAccount (testAccountPub ctx) "m/44'/0'/0'" (Just testFingerprint) btc
+otherFileAccount ctx = FileAccount (fromMaybe (error "otherFileAccount") (xPubImport btc ctx testAccountXPub2)) "m/44'/0'/0'" (Just testFingerprint2) btc
+
 -- | The transaction file at the path, as hw wrote it: a PSBT, read with
 -- the paths of the first account of the test wallet, or of the second
 -- wallet's
@@ -369,12 +377,27 @@ readTxFile :: Ctx -> FilePath -> IO TxFile
 readTxFile ctx file = do
   bytes <- BS.readFile file
   either (\reason -> fail ("Not a transaction file: " <> file <> ": " <> reason)) return $
-    psbtTxFile ctx accounts =<< decodePsbt bytes
-  where
-    accounts =
-      [ FileAccount (testAccountPub ctx) "m/44'/0'/0'" (Just testFingerprint) btc,
-        FileAccount (fromMaybe (error "readTxFile") (xPubImport btc ctx testAccountXPub2)) "m/44'/0'/0'" (Just testFingerprint2) btc
-      ]
+    psbtTxFile ctx [mainFileAccount ctx, otherFileAccount ctx] =<< decodePsbt bytes
+
+-- | Write the signing data of a transaction at the path, as hw writes a
+-- file: a PSBT on Bitcoin, with the keys of the first account of the test
+-- wallet in its derivation records, and without labels
+writeTxFile :: Ctx -> FilePath -> TxSignData -> IO ()
+writeTxFile ctx file tsd = BS.writeFile file . encodePsbt =<< psbtOnBitcoin ctx tsd
+
+-- | Write the signing data of a transaction at the path as a file of
+-- another wallet names it: the PSBT of 'writeTxFile' without the field of
+-- hw that names the network
+writeOtherWalletTxFile :: Ctx -> FilePath -> TxSignData -> IO ()
+writeOtherWalletTxFile ctx file tsd = do
+  psbt <- psbtOnBitcoin ctx tsd
+  let globals = Map.delete (proprietaryKey (Proprietary hwIdentifier networkField BS.empty)) psbt.globals
+  BS.writeFile file (encodePsbt (Psbt psbt.version psbt.unsignedTx globals psbt.inputs psbt.outputs))
+
+-- | The PSBT of the signing data on Bitcoin, with the keys of the first
+-- account of the test wallet, as 'writeTxFile' writes it
+psbtOnBitcoin :: Ctx -> TxSignData -> IO Psbt
+psbtOnBitcoin ctx tsd = expectRight (txFilePsbt ctx (Just (mainFileAccount ctx)) (TxFile (Just btc) tsd Map.empty Map.empty))
 
 {- Payments and chains -}
 

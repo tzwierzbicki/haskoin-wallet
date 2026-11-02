@@ -6,7 +6,6 @@
 -- signsweep, into the wallet or elsewhere.
 module Haskoin.Wallet.Workflow.SweepSpec (spec) where
 
-import qualified Data.Aeson as Json
 import Data.IORef (modifyIORef, readIORef)
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as Text
@@ -336,16 +335,16 @@ sweepSpec ctx =
         (errorOf <$> hwJson home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.psbt", "--key-file", keys, "--account", "main"] [])
           `shouldReturn` Right "The transaction does not involve the account main"
 
-    -- The file of an earlier hw names no network, and the configuration
+    -- A file of another wallet names no network, and the configuration
     -- names no default network
-    it "that pays outside the wallet is not signed from the file of an earlier hw, which names no network, without a default network" $
+    it "that pays outside the wallet is not signed from a file of another wallet, which names no network, without a default network" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
         setDefaultNetwork home Nothing
         keys <- writeKeyFile home
         _ <- answer home (outsideSweep home keys) []
         written <- readTxFile ctx (home </> "sweep.json")
-        Json.encodeFile (home </> "old.json") (txFileData written)
-        (errorOf <$> hwJson home ["signsweep", "--input", home </> "old.json", "--output", home </> "signed.psbt", "--key-file", keys] [])
+        writeOtherWalletTxFile ctx (home </> "other.psbt") (txFileData written)
+        (errorOf <$> hwJson home ["signsweep", "--input", home </> "other.psbt", "--output", home </> "signed.psbt", "--key-file", keys] [])
           `shouldReturn` Right "The file names no network, as a file of another wallet does, and involves no account of this wallet: give the --network, or a default-network in the configuration file"
 
     -- main and second, two accounts of the test wallet, each with its first

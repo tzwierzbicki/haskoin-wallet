@@ -1556,10 +1556,10 @@ reviewTxCommand =
         [r|
 reviewtx shows a transaction file as its account sees it, and names that
 account. It changes nothing in the wallet. The file comes from preparetx
---output, exporttx, signtx or preparesweep: a PSBT (BIP 174), or the JSON
-file of an earlier hw. Use it to check a transaction before you sign it, or
-before you send it. A transaction that involves no account, such as a sweep
-to addresses outside the wallet, is shown on the network its file names.
+--output, exporttx, signtx or preparesweep: a PSBT (BIP 174). Use it to
+check a transaction before you sign it, or before you send it. A transaction
+that involves no account, such as a sweep to addresses outside the wallet,
+is shown on the network its file names.
 
 A file of another wallet, Bitcoin Core, Sparrow or Electrum for example, is
 shown the same way: a PSBT in bytes, or in base64 text, of version 0 or of
@@ -1955,9 +1955,9 @@ The file is a PSBT, in bytes or in base64 text, as another wallet or a
 hardware wallet returns it, finalized or not. The signed transaction alone,
 in hexadecimal as Bitcoin Core's finalizepsbt gives it, is sent too, when the
 wallet holds its transaction. A file hw wrote names its network. One of
-another wallet or of an earlier hw names none: when the wallet holds its
-transaction, the account tells it; otherwise give --network, or a
-default-network in the configuration file.
+another wallet names none: when the wallet holds its transaction, the
+account tells it; otherwise give --network, or a default-network in the
+configuration file.
 |],
       args =
         CommandSendTx
@@ -2315,9 +2315,8 @@ replace the --input file. It asks this before the keys. A sweep of a file is
 shown with the labels the file carries, which go on to the signed file.
 
 A sweep that pays no account of this wallet needs no account here either. It
-is signed on the network its file names. A file of another wallet, or of an
-earlier hw, names none: give --network, or a default-network in the
-configuration file.
+is signed on the network its file names. A file of another wallet names
+none: give --network, or a default-network in the configuration file.
 |],
       args =
         CommandSignSweep

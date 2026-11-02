@@ -157,18 +157,3 @@ parseTxidLabels value = do
     case hexToTxHash hex of
       Just tid -> return (tid, label :: Text)
       Nothing -> fail $ "Invalid txid " <> Text.unpack hex
-
--- | The labels of the addresses of an account by their paths, as hw writes
--- them in JSON: an object of path, such as /0/5, to label
-pathLabelsJson :: Map SoftPath Text -> JSON.Value
-pathLabelsJson = JSON.toJSON . Map.mapKeys (Text.pack . pathToStr)
-
--- | The labels of addresses by their paths, read back from
--- 'pathLabelsJson'
-parsePathLabels :: JSON.Value -> Parser (Map SoftPath Text)
-parsePathLabels value = do
-  byText <- JSON.parseJSON value
-  fmap Map.fromList . forM (Map.assocs byText) $ \(text, label) ->
-    case parseSoft (Text.unpack text) of
-      Just path -> return (path, label :: Text)
-      Nothing -> fail $ "Invalid path " <> Text.unpack text

@@ -7,8 +7,8 @@
 -- the wallet's own inputs and outputs, the fee rate it was built for, the
 -- fingerprint of the seed once it has been signed, and the label the user
 -- gave it. The builders produce it, the signers sign it, and the commands
--- write it to files and keep it
--- among the pending transactions of the database, as JSON. Whether the
+-- keep it among the pending transactions of the database, as JSON, and
+-- write it to files, as PSBTs. Whether the
 -- transaction is signed is read from the transaction itself. Before and
 -- after signing, the database keys it by its 'nosigHash'. hw shows it by
 -- its 'shownHash'. A file holds it with the network of the transaction and
@@ -17,7 +17,6 @@ module Haskoin.Wallet.Tx.SignData where
 
 import Control.Monad
 import Data.Aeson
-import Data.Aeson.Types (Pair)
 import qualified Data.ByteString as BS
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -25,7 +24,6 @@ import qualified Data.Serialize as S
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin
-import Haskoin.Wallet.Util (parsePathLabels, parseTxidLabels, pathLabelsJson, txidLabelsJson)
 import Numeric.Natural (Natural)
 
 data TxSignData = TxSignData
@@ -56,10 +54,10 @@ data TxSignData = TxSignData
 noLabel :: Text
 noLabel = Text.empty
 
-{- JSON -}
+{- JSON, as the database keeps it -}
 
--- The files and database rows of older versions of hw carry a "signed"
--- flag as well. It is ignored: the transaction says whether it is signed.
+-- The rows of older versions of hw carry a "signed" flag as well. It is
+-- ignored: the transaction says whether it is signed.
 
 instance FromJSON TxSignData where
   parseJSON =
@@ -75,23 +73,20 @@ instance FromJSON TxSignData where
         <*> o .:? "replaces" .!= []
         <*> o .:? "label" .!= ""
 
+-- The transactions replaced are written only for a replacement, and the
+-- label only when there is one
 instance ToJSON TxSignData where
-  toJSON = object . txSignDataPairs
-
--- | The keys of signing data in JSON. The transactions replaced are
--- written only for a replacement, and the label only when there is one, so
--- that the file of any other transaction is as an earlier hw wrote it.
-txSignDataPairs :: TxSignData -> [Pair]
-txSignDataPairs (TxSignData t i oi op r f rs l) =
-  [ "tx" .= encodeHex (S.encode t),
-    "txinputs" .= (encodeHex . S.encode <$> i),
-    "inputpaths" .= oi,
-    "outputpaths" .= op,
-    "feerate" .= r,
-    "fingerprint" .= f
-  ]
-    <> ["replaces" .= rs | not (null rs)]
-    <> ["label" .= l | not (Text.null l)]
+  toJSON (TxSignData t i oi op r f rs l) =
+    object $
+      [ "tx" .= encodeHex (S.encode t),
+        "txinputs" .= (encodeHex . S.encode <$> i),
+        "inputpaths" .= oi,
+        "outputpaths" .= op,
+        "feerate" .= r,
+        "fingerprint" .= f
+      ]
+        <> ["replaces" .= rs | not (null rs)]
+        <> ["label" .= l | not (Text.null l)]
 
 instance MarshalJSON Ctx TxSignData where
   marshalValue _ = toJSON
@@ -114,9 +109,8 @@ type PathLabels = Map SoftPath Text
 -- spends show, by the transaction that paid each (see
 -- 'Haskoin.Wallet.Database.TxInfo.coinLabel'). An offline computer has no
 -- labels of its own, so it shows those of the file. On disk, the file is a
--- PSBT: "Haskoin.Wallet.Tx.PsbtFile" writes it and reads it. The JSON
--- below is the file of an earlier hw, which is still read; one from before
--- the network and the labels names no network and carries no label.
+-- PSBT: "Haskoin.Wallet.Tx.PsbtFile" writes it and reads it. A file of
+-- another wallet names no network and carries no label.
 data TxFile = TxFile
   { txFileNetwork :: !(Maybe Network),
     txFileData :: !TxSignData,
@@ -126,39 +120,15 @@ data TxFile = TxFile
   deriving (Eq, Show)
 
 -- | A file that carries no label, as a pending transaction given by its
--- hash is read, and as an earlier hw wrote every file
+-- hash is read
 plainTxFile :: Maybe Network -> TxSignData -> TxFile
 plainTxFile netM tsd = TxFile netM tsd Map.empty Map.empty
 
--- The network and the labels are keys among those of the signing data,
--- which an earlier hw leaves aside
-instance FromJSON TxFile where
-  parseJSON value =
-    TxFile
-      <$> withObject "txfile" network value
-      <*> parseJSON value
-      <*> withObject "txfile" (\o -> maybe (return Map.empty) parsePathLabels =<< o .:? "pathlabels") value
-      <*> withObject "txfile" (\o -> maybe (return Map.empty) parseTxidLabels =<< o .:? "inputlabels") value
-    where
-      network o = do
-        nameM <- o .:? "network"
-        forM nameM $ \name -> maybe (fail ("Unknown network " <> name)) return (netByName name)
-
 -- | The refusal of a file that names no network, as a file of another
--- wallet or of an earlier hw, where nothing else tells the network of its
--- transaction: no account of the wallet it involves, and no --network
+-- wallet, where nothing else tells the network of its transaction: no
+-- account of the wallet it involves, and no --network
 noFileNetwork :: String
 noFileNetwork = "The file names no network, as a file of another wallet does, and involves no account of this wallet: give the --network, or a default-network in the configuration file"
-
--- The labels are written only when there are some, so that the file of a
--- transaction without any is as an earlier hw wrote it
-instance ToJSON TxFile where
-  toJSON (TxFile netM tsd paths inputs) =
-    object $
-      maybe [] (\net -> ["network" .= net.name]) netM
-        <> txSignDataPairs tsd
-        <> ["pathlabels" .= pathLabelsJson paths | not (Map.null paths)]
-        <> ["inputlabels" .= txidLabelsJson inputs | not (Map.null inputs)]
 
 {- Signatures -}
 

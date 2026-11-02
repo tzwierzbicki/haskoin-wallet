@@ -534,8 +534,7 @@ software leaves aside: the network, the fee rate the transaction was built
 for, the transactions a replacement replaces, the label of the transaction,
 the labels of the account's addresses in it, and the labels of the coins it
 spends, as the wallet has them when it writes the file. `importtx` keeps the
-labels of the wallet. The commands still read the JSON files of an earlier
-`hw`.
+labels of the wallet.
 
 The files of other wallets are read the same way, in bytes or in the base64
 text Bitcoin Core and HWI give, in version 0 of the format or in version 2
