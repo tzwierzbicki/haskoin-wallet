@@ -19,7 +19,8 @@
 --    key derived from the path of its address. An input that is not the
 --    wallet's must already be signed;
 -- 4. verifies every input of the signed transaction against the output
---    script of its coin;
+--    script of its coin, and that every signature has the sighash the
+--    wallet signs with;
 -- 5. reports the signed transaction with the 'TxInfo' of the signed bytes.
 --
 -- A transaction file carries the labels of the account's addresses in the
@@ -39,10 +40,12 @@ module Haskoin.Wallet.Tx.Signing
     spentCoins,
     coinSigInput,
     walletSigHash,
+    sigHashName,
   )
 where
 
 import Control.Monad (foldM, forM_, mfilter, unless, when)
+import Data.Bits ((.&.))
 import qualified Data.ByteString as BS
 import Data.List (nub)
 import Data.Map.Strict (Map)
@@ -51,7 +54,7 @@ import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import qualified Data.Serialize as S
 import qualified Data.Set as Set
 import qualified Data.Text as Text
-import Data.Word (Word64)
+import Data.Word (Word32, Word64)
 import Haskoin
 import Haskoin.Wallet.Database.TxInfo
   ( MyInputs (..),
@@ -205,6 +208,18 @@ walletSigHash net
   | isJust net.sigHashForkId = setForkIdFlag sigHashAll
   | otherwise = sigHashAll
 
+-- | The name of a sighash, as Bitcoin Core shows it: ALL, NONE or SINGLE,
+-- with ANYONECANPAY and FORKID after a bar when their flags are set, and
+-- the number of one that is none of these
+sigHashName :: SigHash -> String
+sigHashName sh = base <> concat ["|ANYONECANPAY" | anyoneCanPay sh] <> concat ["|FORKID" | hasForkIdFlag sh]
+  where
+    base = case sh .&. 0x1f of
+      1 -> "ALL"
+      2 -> "NONE"
+      3 -> "SINGLE"
+      _ -> show (fromIntegral sh :: Word32)
+
 {- Summary -}
 
 -- | The summary of the transaction of the signing data: the inputs and
@@ -332,12 +347,35 @@ signInputs net ctx accountKey myInputs tx coins =
     inputKey path = wrapSecKey True (derivePath ctx path accountKey).key
 
 -- | Check every input of the signed transaction against the output script
--- of its coin
+-- of its coin, and that every signature in it has the sighash the wallet
+-- signs with. Another signer can give a valid signature with another
+-- sighash, which commits to less than the whole transaction: with NONE,
+-- anyone could change where the coins go once the transaction is out.
 verifyInputs :: Network -> Ctx -> Tx -> [SpentCoin] -> Either String ()
 verifyInputs net ctx tx coins =
-  forM_ (zip [0 ..] coins) $ \(i, coin) ->
+  forM_ (zip3 [0 ..] coins stacks) $ \(i, coin, stack) -> do
     unless (verifyStdInput net ctx tx i coin.script coin.value) $
       Left $ "Invalid signature for " <> describeInput net i coin
+    forM_ (inputSigHashes net ctx (tx.inputs !! i) stack) $ \sh ->
+      unless (sh == walletSigHash net) $
+        Left $ "The signature of " <> describeInput net i coin <> " has the sighash " <> sigHashName sh <> ", not " <> sigHashName (walletSigHash net)
+  where
+    stacks = tx.witness <> repeat []
+
+-- | The sighash of every signature of an input: those of its script when
+-- it is a standard one, and those of the items of its witness that are
+-- signatures. A script or an item that is no signature has none; the
+-- verification against the coin is what says whether the input is signed.
+inputSigHashes :: Network -> Ctx -> TxIn -> WitnessStack -> [SigHash]
+inputSigHashes net ctx input stack = ofScript <> ofWitness
+  where
+    ofScript = maybe [] signaturesOf (eitherToMaybe (unmarshal (net, ctx) input.script))
+    ofWitness = [sh | item <- stack, Just (TxSignature _ sh) <- [eitherToMaybe (decodeTxSig net ctx item)]]
+    signaturesOf :: ScriptInput -> [SigHash]
+    signaturesOf scriptInput = case scriptInput of
+      RegularInput simple -> ofSimple simple
+      ScriptHashInput simple _ -> ofSimple simple
+    ofSimple simple = [sh | TxSignature _ sh <- case simple of SpendPK s -> [s]; SpendPKHash s _ -> [s]; SpendMulSig ss -> ss]
 
 describeInput :: Network -> Int -> SpentCoin -> String
 describeInput net i coin =

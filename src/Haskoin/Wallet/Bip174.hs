@@ -39,9 +39,13 @@ module Haskoin.Wallet.Bip174
     nonWitnessUtxo,
     insertNonWitnessUtxo,
     witnessUtxo,
+    partialSignatures,
     hasPartialSignatures,
+    insertPartialSignature,
+    deletePartialSignatures,
     sigHashType,
     insertSigHashType,
+    deleteSigHashType,
     inputDerivations,
     insertInputDerivation,
     finalScriptSig,
@@ -552,10 +556,26 @@ insertNonWitnessUtxo = insertPlainField nonWitnessUtxoType . S.encode
 witnessUtxo :: PsbtMap -> Either String (Maybe TxOut)
 witnessUtxo = traverse (first ("The witness output " <>) . decodeTxOut) . plainField witnessUtxoType
 
--- | Whether the input carries a signature that is not final:
--- PSBT_IN_PARTIAL_SIG
+-- | The signatures of the input that are not final, by the public key each
+-- is of, in the order of the map: PSBT_IN_PARTIAL_SIG. A signature is as
+-- it goes in a script, with its sighash byte last.
+partialSignatures :: Ctx -> PsbtMap -> Either String [(PublicKey, ByteString)]
+partialSignatures ctx m =
+  forM [(key, value) | (key, value) <- Map.toAscList m, key.psbtKeyType == partialSigType] $ \(key, value) -> do
+    public <- first (const ("The key " <> showKey key <> " is not a public key")) (unmarshal ctx key.psbtKeyData)
+    return (public, value)
+
+-- | Whether the input carries a signature that is not final
 hasPartialSignatures :: PsbtMap -> Bool
 hasPartialSignatures = any ((== partialSigType) . psbtKeyType) . Map.keys
+
+insertPartialSignature :: Ctx -> PublicKey -> ByteString -> PsbtMap -> PsbtMap
+insertPartialSignature ctx public = Map.insert (PsbtKey partialSigType (marshal ctx public))
+
+-- | The map without its signatures that are not final, as a finalizer
+-- leaves it
+deletePartialSignatures :: PsbtMap -> PsbtMap
+deletePartialSignatures = Map.filterWithKey (\key _ -> key.psbtKeyType /= partialSigType)
 
 -- | The sighash the input is to be signed with: PSBT_IN_SIGHASH_TYPE
 sigHashType :: PsbtMap -> Either String (Maybe SigHash)
@@ -563,6 +583,11 @@ sigHashType = traverse (fmap fromIntegral . first ("The sighash type " <>) . dec
 
 insertSigHashType :: SigHash -> PsbtMap -> PsbtMap
 insertSigHashType = insertPlainField sigHashTypeType . word32le . fromIntegral
+
+-- | The map without the sighash the input was to be signed with, as a
+-- finalizer leaves it
+deleteSigHashType :: PsbtMap -> PsbtMap
+deleteSigHashType = Map.delete (PsbtKey sigHashTypeType BS.empty)
 
 -- | The input script of a signed input: PSBT_IN_FINAL_SCRIPTSIG
 finalScriptSig :: PsbtMap -> Maybe ByteString

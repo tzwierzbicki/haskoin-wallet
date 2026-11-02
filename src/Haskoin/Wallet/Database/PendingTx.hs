@@ -8,6 +8,7 @@
 module Haskoin.Wallet.Database.PendingTx where
 
 import Conduit (MonadUnliftIO)
+import Control.Applicative ((<|>))
 import Control.Monad
 import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
@@ -37,7 +38,7 @@ import Haskoin.Wallet.Store
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Database.TxLabel (setTxLabel)
 import Haskoin.Wallet.Tx.SignData
-import Haskoin.Wallet.Tx.Signing (parseOutsideTxSignData, parseTxSignData, verifySignedTx)
+import Haskoin.Wallet.Tx.Signing (SpentCoin (..), parseOutsideTxSignData, parseTxSignData, spentCoins, verifySignedTx)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 
@@ -316,9 +317,10 @@ setPendingTxConflicted p conflicted = P.update p.pendingTxKey [DBPendingTxConfli
 -- spends and holds its change address. A signed transaction must
 -- carry valid signatures: they are checked here, so that sending has
 -- nothing left to check. Importing a transaction the account already
--- holds replaces it with the newer version, signed where it was unsigned;
--- the transaction itself, its inputs and outputs, cannot change, since the
--- hash identifying it leaves the signatures out.
+-- holds replaces it with the newer version, signed where it was unsigned,
+-- as 'heldVersion' merges it; the transaction itself, its inputs and
+-- outputs, cannot change, since the hash identifying it leaves the
+-- signatures out.
 importPendingTx :: (MonadUnliftIO m) => Network -> Ctx -> DBAccountId -> TxSignData -> ExceptT String (DB m) TxHash
 importPendingTx net ctx accId tsd = do
   acc <- getAccountById accId
@@ -326,24 +328,42 @@ importPendingTx net ctx accId tsd = do
   forM_ heldM $ \held ->
     when (held.pendingTxAccount /= accId) $
       throwError "The transaction is pending in another account"
-  info <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountXPubKey ctx acc) tsd
+  let imported = maybe tsd (`heldVersion` tsd) heldM
+  info <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountXPubKey ctx acc) imported
   when (isSigned tx) $ do
-    liftEither $ verifySignedTx net ctx tsd
+    liftEither $ verifySignedTx net ctx imported
     -- The signer names the seed of the account, which this wallet may not know
-    forM_ (txSignDataFingerprint tsd) $ learnFingerprint accId
+    forM_ (txSignDataFingerprint imported) $ learnFingerprint accId
   case heldM of
-    Just held -> replaceVersion held tsd
-    Nothing -> insertPendingTx net accId tsd info.txInfoSummary =<< replacedBy ctx accId tsd
+    Just held -> replaceVersion held imported
+    Nothing -> insertPendingTx net accId imported info.txInfoSummary =<< replacedBy ctx accId imported
   return pendingHash
   where
     tx = txSignDataTx tsd
     pendingHash = nosigHash tx
 
+-- | The version a file brings of a transaction the account holds: the
+-- transaction as the file has it, signed where the one held was not, and
+-- the seed the file names, when it does. All else is as held: the paths of
+-- the account's addresses, the fee rate, the transactions replaced, and
+-- the label, unless the one held is empty. A file signed and finalized by
+-- other software names no key of its signed inputs, and a file another
+-- wallet prepared carries none of hw's fields: the wallet knows them. The
+-- label held stays, as the user may have changed it since the file was
+-- written.
+heldVersion :: PendingTx -> TxSignData -> TxSignData
+heldVersion held tsd =
+  held.pendingTxData
+    { txSignDataTx = tsd.txSignDataTx,
+      txSignDataFingerprint = tsd.txSignDataFingerprint <|> held.pendingTxData.txSignDataFingerprint,
+      txSignDataLabel = if Text.null heldLabel then tsd.txSignDataLabel else heldLabel
+    }
+  where
+    heldLabel = held.pendingTxData.txSignDataLabel
+
 -- | Replace the version an account holds of a transaction with the one
--- imported: the signed version of an unsigned transaction, or another
--- valid signature of a signed one. The label held stays, as the user may
--- have changed it since the file was written. The label of the file is
--- taken only when the transaction held has none.
+-- imported, as 'heldVersion' merges it: the signed version of an unsigned
+-- transaction, or another valid signature of a signed one
 replaceVersion :: (MonadUnliftIO m) => PendingTx -> TxSignData -> ExceptT String (DB m) ()
 replaceVersion held tsd = do
   when held.pendingTxOnline $
@@ -352,12 +372,10 @@ replaceVersion held tsd = do
     throwError "Can not replace a signed transaction with an unsigned one"
   when (heldTx == tx) $
     throwError "The transaction already exists"
-  lift $ P.update held.pendingTxKey [DBPendingTxBlob P.=. blob tsd {txSignDataLabel = label}]
+  lift $ P.update held.pendingTxKey [DBPendingTxBlob P.=. blob tsd]
   where
     heldTx = txSignDataTx held.pendingTxData
     tx = txSignDataTx tsd
-    heldLabel = held.pendingTxData.txSignDataLabel
-    label = if Text.null heldLabel then tsd.txSignDataLabel else heldLabel
 
 -- | Store a transaction the account does not hold yet. A replacement takes
 -- over what the transactions it replaces hold: the coins they spend, gone
@@ -554,14 +572,16 @@ sendPending ctx storeOn beforeSending named = do
   void $ lift $ dropRawTxsWithoutCoins [txHash (txSignDataTx p.pendingTxData) | p <- replaced.replacedRows]
   return (acc, summary)
 
--- | The account of the wallet a transaction to sign, review or import
--- involves, as 'accountAmong' chooses it, on the network given, if any. A
--- transaction pending in the wallet is of the account that holds it.
--- Another is of the accounts that it involves: those whose keys derive the
--- addresses it spends or pays, at the paths it gives. One that involves
--- none, a sweep between addresses outside the wallet, is of no account,
--- and --account may not name one.
-transactionAccount :: (MonadUnliftIO m) => Ctx -> Maybe Text -> Maybe Network -> TxSignData -> ExceptT String (DB m) (Maybe (DBAccountId, DBAccount))
+-- | The account of a transaction to sign, review or import, and its
+-- signing data with the paths of that account's addresses it leaves out,
+-- as 'withWalletPaths' fills them in. The account is the one that holds
+-- the transaction pending, which --account may only repeat; a file of
+-- another network than the holder's is refused. Otherwise it is one of the
+-- accounts the transaction involves: those whose keys derive the addresses
+-- it spends or pays, at the paths it gives or the wallet knows. One that
+-- involves none, a sweep between addresses outside the wallet, is of no
+-- account, and --account may not name one.
+transactionAccount :: (MonadUnliftIO m) => Ctx -> Maybe Text -> Maybe Network -> TxSignData -> ExceptT String (DB m) (Maybe (DBAccountId, DBAccount), TxSignData)
 transactionAccount ctx nameM netM tsd = do
   heldM <- lookupPendingTx (nosigHash (txSignDataTx tsd))
   case heldM of
@@ -569,27 +589,52 @@ transactionAccount ctx nameM netM tsd = do
       holder <- getAccountById held.pendingTxAccount
       unless (onTxNetwork holder) $
         throwError "The transaction is pending in an account of another network"
-      Just
-        <$> accountAmong
+      chosen <-
+        accountAmong
           (\name -> "The transaction is pending in the account " <> cs (dBAccountName holder) <> ", not in " <> cs name)
           nameM
           [(held.pendingTxAccount, holder)]
+      (Just chosen,) <$> withWalletPaths ctx chosen tsd
     Nothing -> do
-      involved <- filter (involves . snd) <$> lift getAccounts
-      unless (all (onTxNetwork . snd) involved) $
+      accounts <- lift getAccounts
+      completed <- forM accounts $ \account -> (account,) <$> withWalletPaths ctx account tsd
+      let involved = [(account, completedTsd) | (account, completedTsd) <- completed, involves (snd account) completedTsd]
+      unless (all (onTxNetwork . snd . fst) involved) $
         throwError "The transaction involves an account of another network"
       case involved of
         [] -> do
           forM_ nameM $ \name -> getAccountByName (Just name) >> throwError (notInvolved name)
-          return Nothing
-        _ -> Just <$> accountAmong notInvolved nameM involved
+          return (Nothing, tsd)
+        _ -> do
+          chosen <- accountAmong notInvolved nameM (fst <$> involved)
+          return (Just chosen, maybe tsd snd (find ((== fst chosen) . fst . fst) involved))
   where
     onTxNetwork acc = maybe True (== accountNetwork acc) netM
-    involves acc =
+    involves acc completedTsd =
       either (const False) (involvesWallet . txInfoSummary) $
-        parseTxSignData (accountNetwork acc) ctx (accountXPubKey ctx acc) tsd
+        parseTxSignData (accountNetwork acc) ctx (accountXPubKey ctx acc) completedTsd
     notInvolved :: Text -> String
     notInvolved name = "The transaction does not involve the account " <> cs name
+
+-- | The signing data with the paths of the account's addresses in the
+-- transaction that it leaves out. A file signed and finalized by other
+-- software names no key of its signed inputs, as the spec lets a
+-- finalizer clear them, and a file another wallet prepared may name no
+-- key of an output of the account. The wallet knows its own addresses,
+-- so it fills the paths in. Signing data whose coins cannot be found is
+-- left as it is: parsing it says why.
+withWalletPaths :: (MonadUnliftIO m) => Ctx -> (DBAccountId, DBAccount) -> TxSignData -> ExceptT String (DB m) TxSignData
+withWalletPaths ctx (accId, acc) tsd = do
+  let net = accountNetwork acc
+      spent = either (const []) (map (.address)) (spentCoins net ctx tsd)
+      paid = [addr | out <- tsd.txSignDataTx.outputs, Right script <- [unmarshal ctx out.script], Just addr <- [outputAddress ctx script], onNetwork net addr]
+  known <- walletPaths net accId (spent <> paid)
+  let pathsOf addrs listed = nubOrd (listed <> mapMaybe (`Map.lookup` known) addrs)
+  return
+    tsd
+      { txSignDataInputPaths = pathsOf spent tsd.txSignDataInputPaths,
+        txSignDataOutputPaths = pathsOf paid tsd.txSignDataOutputPaths
+      }
 
 -- | What sending a signed transaction from a file did
 data Sent
@@ -600,15 +645,17 @@ data Sent
     SentOutside Network TxHash
   deriving (Eq, Show)
 
--- | Send a signed transaction from a file, with the network it is for when
--- given. One the wallet holds as pending, the file an offline signer
--- returns, takes the place of the version held and is sent like one sent by
--- its hash: marked online, its raw transaction stored. One the wallet
--- does not hold, a sweep of outside coins for instance, is checked against
--- the coins it spends and handed to the store of the given network, and
+-- | Send a signed transaction from a file, with the network the file is
+-- for when something names it, and the network to send on when the wallet
+-- does not hold the transaction and the file names none. One the wallet
+-- holds as pending, the file an offline signer returns, takes the place
+-- of the version held, as 'heldVersion' merges it, and is sent like one
+-- sent by its hash: marked online, its raw transaction stored. One the
+-- wallet does not hold, a sweep of outside coins for instance, is checked
+-- against the coins it spends and handed to the store of the network, and
 -- nothing in the wallet is updated.
-sendSigned :: (MonadUnliftIO m) => Ctx -> (Network -> Store) -> BeforeSending m -> Maybe Network -> TxSignData -> ExceptT String (DB m) Sent
-sendSigned ctx storeOn beforeSending netM tsd = do
+sendSigned :: (MonadUnliftIO m) => Ctx -> (Network -> Store) -> BeforeSending m -> Maybe Network -> Maybe Network -> TxSignData -> ExceptT String (DB m) Sent
+sendSigned ctx storeOn beforeSending netM fallbackM tsd = do
   let signedTx = txSignDataTx tsd
       pendingHash = nosigHash signedTx
   unless (isSigned signedTx) $ throwError "The transaction is not signed"
@@ -620,11 +667,12 @@ sendSigned ctx storeOn beforeSending netM tsd = do
       forM_ netM $ \given ->
         when (given /= net) $ throwError "The transaction is pending in an account of another network"
       -- A label that differs is no new version: the label held stays
-      when (held.pendingTxData /= tsd {txSignDataLabel = held.pendingTxData.txSignDataLabel}) $
+      let version = heldVersion held tsd
+      when (version {txSignDataLabel = held.pendingTxData.txSignDataLabel} /= held.pendingTxData) $
         void $ importPendingTx net ctx held.pendingTxAccount tsd
       uncurry SentPending <$> sendPending ctx storeOn beforeSending pendingHash
     Nothing -> do
-      net <- liftMaybe noFileNetwork netM
+      net <- liftMaybe noFileNetwork fallbackM
       liftEither $ verifySignedTx net ctx tsd
       beforeSending net Nothing =<< liftEither (parseOutsideTxSignData net ctx tsd)
       fromStore $ storeHealth (storeOn net)

@@ -11,6 +11,8 @@ module Haskoin.Wallet.Workflow.SigningSpec (spec) where
 import Control.Monad (forM_, void)
 import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Base64 as Base64
+import qualified Data.Serialize as S
 import Data.IORef (modifyIORef, readIORef)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
@@ -25,6 +27,7 @@ import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData (..), isSigned, noLabel)
 import Haskoin.Wallet.Workflow.TestUtils
 import Numeric.Natural (Natural)
+import System.Directory (copyFile)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import Test.Hspec
@@ -33,6 +36,7 @@ spec :: Spec
 spec = prepareContext $ \ctx -> do
   signingSpec ctx
   inputFileSpec ctx
+  foreignFileSpec ctx
   confirmationSpec ctx
 
 {- Signing -}
@@ -256,6 +260,108 @@ signingSpec ctx = do
         _ <- answer online ["sendtx", "--input", signer </> "signed.psbt", "--yes"] []
         (fingerprintsOf <$> hwJson online ["accounts"] []) `shouldReturn` Right [("main", Just "bc560f95")]
 
+    -- A hardware wallet signs only the records that name its own seed
+    it "says when it writes a file that names the keys without the seed's fingerprint, and no more once it has learnt it" $
+      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+        createMain signer
+        importWithoutFingerprint online
+        _ <- answer online ["receive"] []
+        _ <- answer online ["sync"] []
+        prepared <- hw online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        runExit prepared `shouldBe` ExitSuccess
+        runErr prepared `shouldSatisfy` Text.isInfixOf "The wallet does not know the fingerprint of the seed, so the file names the keys by the account's own key, which a hardware wallet does not sign. The wallet learns the fingerprint when signtx or signmsg signs with the seed, when importtx or sendtx takes a file signtx signed, or when importacc gives the origin of the account."
+        _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
+        imported <- txOf =<< answer online ["importtx", signer </> "signed.psbt"] []
+        nosig <- nosigOf imported
+        exported <- hw online ["exporttx", nosig, online </> "exported.psbt"] []
+        runExit exported `shouldBe` ExitSuccess
+        runErr exported `shouldBe` ""
+
+{- The files of other wallets -}
+
+-- | A file Bitcoin Core wrote, copied from test/data/psbt/core into a
+-- home: see test/data/psbt/README.md
+coreFile :: FilePath -> FilePath -> IO FilePath
+coreFile home name = do
+  copyFile ("test/data/psbt/core" </> name) (home </> name)
+  return (home </> name)
+
+-- | The files of other wallets, and the forms a file takes: base64 text,
+-- and the transaction alone in hexadecimal
+foreignFileSpec :: Ctx -> Spec
+foreignFileSpec ctx =
+  describe "A file of another wallet" $ do
+    -- Core prepared 1 BTC from the coin of 50 BTC of /0/0 to another
+    -- wallet, with the change at /1/0 and a fee of 2250. The signed file
+    -- is the one Core accepts, pinned in TestUtils.
+    it "prepared by Bitcoin Core for the account is shown, and signed into that file, which is base64 text as Core gives it" $
+      withHome $ \home -> do
+        createMain home
+        prepared <- coreFile home "core-prepared.psbt"
+        shown <- txOf =<< answer home ["reviewtx", prepared] []
+        pendingState shown `shouldBe` Just (False, False)
+        paidToOthers shown `shouldBe` Map.fromList [(testAddress "1GfJmWwG2JUjrvQ6WjVfwaWpPgtbHDhSdE", 100000000)]
+        paidToWallet shown `shouldBe` Map.fromList [(internalAddr 0, 4899997750)]
+        feeOf shown `shouldBe` 2250
+        signed <- txOf =<< answer home ["signtx", "--input", prepared, "--output", home </> "signed.psbt"] seedOnce
+        pendingState signed `shouldBe` Just (True, False)
+        (Base64.encode <$> BS.readFile (home </> "signed.psbt")) `shouldReturn` corePreparedSignedText
+
+    -- Core prepared 2.5 BTC of a wallet of its own to another address of
+    -- that wallet, with a fee of 2250
+    it "prepared by Bitcoin Core for another wallet is shown on the --network given, or on the default network, and refused without one" $
+      withHome $ \home -> do
+        createMain home
+        setDefaultNetwork home Nothing
+        outside <- coreFile home "core-outside.psbt"
+        (errorOf <$> hwJson home ["reviewtx", outside] [])
+          `shouldReturn` Right "The file names no network, as a file of another wallet does, and involves no account of this wallet: give the --network, or a default-network in the configuration file"
+        shown <- hwJson home ["reviewtx", outside, "--network", "btc"] []
+        case shown of
+          ResponseOutsideTx net info -> do
+            net.name `shouldBe` "btc"
+            feeOf info `shouldBe` 2250
+            paidToOthers info `shouldBe` Map.fromList [(testAddress "13tJFzYnF13gRMh6Z6eb44mLD9e9R8sHeZ", 250000000), (testAddress "1588dPBmgVnvS2N3BE5YHXUqXcb468zpsz", 4749997750)]
+          other -> expectationFailure ("Not a transaction outside the wallet: " <> show other)
+        setDefaultNetwork home (Just "btc")
+        byDefault <- hwJson home ["reviewtx", outside] []
+        case byDefault of
+          ResponseOutsideTx net _ -> net.name `shouldBe` "btc"
+          other -> expectationFailure ("Not a transaction outside the wallet: " <> show other)
+
+    it "written by hw names its network, which --network may only repeat" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", home </> "unsigned.psbt", "--fee-rate", "10"] []
+        (errorOf <$> hwJson home ["reviewtx", home </> "unsigned.psbt", "--network", "bch"] [])
+          `shouldReturn` Right "The file is on btc, not on the --network bch"
+        (fmap dBAccountName . accountOf <$> hwJson home ["reviewtx", home </> "unsigned.psbt", "--network", "btc"] []) `shouldReturn` Right "main"
+
+    -- Bitcoin Core's finalizepsbt gives the transaction alone, in hexadecimal
+    it "holding the signed transaction alone is sent when the wallet holds the transaction, and refused otherwise" $
+      withChain ctx (paidChain ctx) $ \home chain -> do
+        nosig <- paymentSigned home
+        _ <- answer home ["exporttx", nosig, home </> "signed.psbt"] []
+        signed <- readTxFile ctx (home </> "signed.psbt")
+        writeFile (home </> "signed.hex") (Text.unpack (encodeHex (S.encode (txSignDataTx (txFileData signed)))) <> "\n")
+        sent <- txOf =<< answer home ["sendtx", "--input", home </> "signed.hex", "--yes"] []
+        pendingState sent `shouldBe` Just (True, True)
+        published <- inMempool <$> readIORef chain
+        (spendsAndPays ctx <$> published) `shouldBe` [paymentSent ctx]
+        writeFile (home </> "other.hex") (Text.unpack (encodeHex (S.encode (txSignDataTx (signedPayment ctx)))))
+        (errorOf <$> hwJson home ["sendtx", "--input", home </> "other.hex"] [])
+          `shouldReturn` Right "The file holds a transaction alone, which the wallet does not hold as pending: hw needs the whole transaction each of its coins comes from, which a PSBT carries"
+
+    it "in base64 text, as Bitcoin Core and HWI give a PSBT, is read like its bytes" $
+      withChain ctx (paidChain ctx) $ \home chain -> do
+        nosig <- paymentSigned home
+        _ <- answer home ["exporttx", nosig, home </> "signed.psbt"] []
+        BS.writeFile (home </> "signed.txt") . (<> "\n") . Base64.encode =<< BS.readFile (home </> "signed.psbt")
+        sent <- txOf =<< answer home ["sendtx", "--input", home </> "signed.txt", "--yes"] []
+        pendingState sent `shouldBe` Just (True, True)
+        published <- inMempool <$> readIORef chain
+        (spendsAndPays ctx <$> published) `shouldBe` [paymentSent ctx]
+
 {- The files of signtx, signsweep and sendtx -}
 
 -- | A transaction of the test wallet, unsigned, as a sweep of a coin it
@@ -299,12 +405,14 @@ inputFileSpec ctx = do
         (errorOf <$> hwJson home ["sendtx", "--input", home </> "sweep.json"] [])
           `shouldReturn` Right "The transaction is not signed"
 
-    -- The file is written as by an earlier hw, without the network
-    it "refuses the file of an earlier hw, which names no network, for a transaction the wallet does not hold" $
+    -- The file is written as by an earlier hw, without the network, and
+    -- the configuration names no default network
+    it "refuses the file of an earlier hw, which names no network, for a transaction the wallet does not hold, without a default network" $
       withHome $ \home -> do
+        setDefaultNetwork home Nothing
         Json.encodeFile (home </> "payment.json") (signedPayment ctx)
         (errorOf <$> hwJson home ["sendtx", "--input", home </> "payment.json"] [])
-          `shouldReturn` Right "The file names no network, as those of an earlier hw: prepare the transaction again"
+          `shouldReturn` Right "The file names no network, as a file of another wallet does, and involves no account of this wallet: give the --network, or a default-network in the configuration file"
 
   describe "signtx and signsweep" $ do
     let nosig = Text.unpack (txHashToHex (fakeTxHash 1))

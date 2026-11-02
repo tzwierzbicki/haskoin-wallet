@@ -5,16 +5,21 @@
 -- and in its own, how it reads a file back, and what it refuses.
 module Haskoin.Wallet.Tx.PsbtFileSpec (spec) where
 
+import Control.Monad (forM_)
 import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
+import qualified Data.Serialize as S
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin
 import Haskoin.Wallet.Bip174
+import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.PsbtFile
 import Haskoin.Wallet.Tx.SignData
+import Haskoin.Wallet.Tx.Signing (parseOutsideTxSignData, parseTxFile, signWalletTx, verifySignedTx)
+import System.FilePath ((</>))
 import Test.Hspec
 
 {- Fixtures -}
@@ -41,12 +46,12 @@ paymentFile ctx = TxFile (Just btc) (payment ctx) Map.empty Map.empty
 -- | The first account of the test wallet, m/44'/0'/0', with the fingerprint
 -- of its seed known, and with it unknown
 knownSeed, unknownSeed :: Ctx -> FileAccount
-knownSeed ctx = FileAccount (testAccountPub ctx) "m/44'/0'/0'" (Just testFingerprint)
+knownSeed ctx = FileAccount (testAccountPub ctx) "m/44'/0'/0'" (Just testFingerprint) btc
 unknownSeed ctx = (knownSeed ctx) {fileAccountFingerprint = Nothing}
 
 -- | The first account of the second test wallet
 otherWallet :: Ctx -> FileAccount
-otherWallet ctx = FileAccount (fromMaybe (error "otherWallet") (xPubImport btc ctx testAccountXPub2)) "m/44'/0'/0'" (Just testFingerprint2)
+otherWallet ctx = FileAccount (fromMaybe (error "otherWallet") (xPubImport btc ctx testAccountXPub2)) "m/44'/0'/0'" (Just testFingerprint2) btc
 
 -- | The file as hw writes it for the account
 written :: Ctx -> FileAccount -> TxFile -> IO Psbt
@@ -55,6 +60,10 @@ written ctx acc file = expectRight (txFilePsbt ctx (Just acc) file)
 -- | The file as hw reads it back for the accounts
 readBack :: Ctx -> [FileAccount] -> Psbt -> IO TxFile
 readBack ctx accounts psbt = expectRight (psbtTxFile ctx accounts psbt)
+
+-- | A file Bitcoin Core wrote, in test/data/psbt/core, in base64 text
+coreFile :: FilePath -> IO Psbt
+coreFile name = expectRight . decodePsbtBase64 =<< BS.readFile ("test/data/psbt/core" </> name)
 
 -- | The map of the input, or of the output, at the index
 inputAt, outputAt :: Int -> Psbt -> PsbtMap
@@ -74,7 +83,18 @@ hwField subtype = lookupProprietary hwIdentifier (fromIntegral subtype)
 spec :: Spec
 spec = prepareContext $ \ctx -> do
   writingSpec ctx
+  signingIntoSpec ctx
   readingSpec ctx
+
+-- | The payment signed by the test wallet, naming its seed, as signtx
+-- hands it to the file
+signedWithSeed :: Ctx -> TxSignData
+signedWithSeed ctx = (signedByWallet ctx (payment ctx)) {txSignDataFingerprint = Just testFingerprint}
+
+-- | The file hw writes for the unsigned payment, with the seed known:
+-- the one Bitcoin Core signed for the vectors in test/data/psbt/core
+unsignedPaymentText :: BS.ByteString
+unsignedPaymentText = "cHNidP8BAHcCAAAAARtCW1G6d8iktJ6tfcrZ9/NlRYpWG/bQVr97AifbJolaAAAAAAD9////AmDqAAAAAAAAGXapFLy24qoWpyVllUiRDXoCBBTL/mXfiKwwdQAAAAAAABl2qRRFWqUMJmMUF3HrrCCW43gzkRIn1oisADUMAAX8Amh3AANidGMF/AJodwEICgAAAAAAAAAAAQBVAQAAAAEBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/////wGghgEAAAAAABl2qRTIDVUiPi8QYTY63Sp7A2PChb8pjYisAAAAAAEDBAEAAAAiBgMvZDcCIlbIVOAJDn1si2XpZgbvf0BTmeDwGHyTCXrA+Ri8Vg+VLAAAgAAAAIAAAACAAAAAAAAAAAAAACICA3by5wZFjddWc7oZuO/YQu/d2bwK5B4xM53/z5F7bbbrGLxWD5UsAACAAAAAgAAAAIABAAAAAAAAAAA="
 
 {- Writing -}
 
@@ -151,11 +171,14 @@ writingSpec ctx =
       hwField replacesField psbt.psbtGlobals `shouldBe` Nothing
       hwField labelField psbt.psbtGlobals `shouldBe` Nothing
 
-    it "writes the account's key in the global map when the seed is known, and none otherwise" $ do
+    -- The file names no key of the account beyond those of its addresses
+    -- in the transaction: the user chose not to put the account's key in it
+    it "writes no key of the account in the global map, whether the seed is known or not" $ do
       known <- written ctx (knownSeed ctx) (paymentFile ctx)
       unknown <- written ctx (unknownSeed ctx) (paymentFile ctx)
-      xpubRecords btc ctx known.psbtGlobals `shouldBe` Right [(testAccountPub ctx, Derivation testFingerprint "m/44'/0'/0'")]
+      xpubRecords btc ctx known.psbtGlobals `shouldBe` Right []
       xpubRecords btc ctx unknown.psbtGlobals `shouldBe` Right []
+      Map.keys known.psbtGlobals `shouldBe` [proprietaryKey (Proprietary "hw" 0 ""), proprietaryKey (Proprietary "hw" 1 "")]
 
     it "writes the labels of the account's addresses on their inputs and outputs, and the label a coin shows on its input" $ do
       let labelled = TxFile (Just btc) (payment ctx) (Map.fromList [("/0/0", "Salary"), ("/1/0", "Change")]) (Map.fromList [(txHash (funding ctx), "From work")])
@@ -188,15 +211,73 @@ writingSpec ctx =
 
     -- Bitcoin Core 25.0 decodes this file as the payment: its one input
     -- with the funding transaction, SIGHASH_ALL and the derivation
-    -- m/44'/0'/0'/0/0 of the key 032f64..., its change output with the
-    -- derivation m/44'/0'/0'/1/0, a fee of 0.0001, the account's xpub at
-    -- m/44'/0'/0' of the master key bc560f95, and two proprietary fields
-    -- of the identifier 6877 ("hw"): the network "btc" and the fee rate 10.
-    -- analyzepsbt names the signer as the next role. See
-    -- test/data/psbt/README.md.
+    -- m/44'/0'/0'/0/0 of the key 032f64... from the master key bc560f95,
+    -- its change output with the derivation m/44'/0'/0'/1/0, a fee of
+    -- 0.0001, no global xpub, and two proprietary fields of the identifier
+    -- 6877 ("hw"): the network "btc" and the fee rate 10. analyzepsbt
+    -- names the signer as the next role. See test/data/psbt/README.md.
     it "is this file, for the payment of the test wallet" $ do
       psbt <- written ctx (knownSeed ctx) (paymentFile ctx)
-      encodePsbtBase64 psbt `shouldBe` "cHNidP8BAHcCAAAAARtCW1G6d8iktJ6tfcrZ9/NlRYpWG/bQVr97AifbJolaAAAAAAD9////AmDqAAAAAAAAGXapFLy24qoWpyVllUiRDXoCBBTL/mXfiKwwdQAAAAAAABl2qRRFWqUMJmMUF3HrrCCW43gzkRIn1oisADUMAE8BBIiyHgNVuD70gAAAABK990NGk+UwynxHP7qUG12/zLjt8wEdccnpS/XXP3xXA3XWzkgJoagF3bdbeT7i2QxRLb+Npe8w6ZCTDqjcNI5pELxWD5UsAACAAAAAgAAAAIAF/AJodwADYnRjBfwCaHcBCAoAAAAAAAAAAAEAVQEAAAABAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP////8BoIYBAAAAAAAZdqkUyA1VIj4vEGE2Ot0qewNjwoW/KY2IrAAAAAABAwQBAAAAIgYDL2Q3AiJWyFTgCQ59bItl6WYG739AU5ng8Bh8kwl6wPkYvFYPlSwAAIAAAACAAAAAgAAAAAAAAAAAAAAiAgN28ucGRY3XVnO6Gbjv2ELv3dm8CuQeMTOd/8+Re2226xi8Vg+VLAAAgAAAAIAAAACAAQAAAAAAAAAA"
+      encodePsbtBase64 psbt `shouldBe` unsignedPaymentText
+
+{- Signing into a file -}
+
+signingIntoSpec :: Ctx -> Spec
+signingIntoSpec ctx =
+  describe "The PSBT of a transaction signed into the PSBT it was read from" $ do
+    -- The property the two writers share: for a file hw wrote, signing
+    -- into it gives the file hw writes for the signed transaction
+    it "is the file hw writes for the signed transaction, when the file was hw's own" $ do
+      let signed = signedWithSeed ctx
+      forM_ [knownSeed ctx, unknownSeed ctx] $ \acc -> do
+        source <- written ctx acc (paymentFile ctx)
+        fromScratch <- written ctx acc (paymentFile ctx) {txFileData = signed}
+        signedPsbt ctx (Just acc) source (paymentFile ctx) {txFileData = signed} `shouldBe` Right fromScratch
+
+    it "keeps every field of the file it did not write: a key hw does not know in each map, and a field of another wallet" $ do
+      source <- written ctx (knownSeed ctx) (paymentFile ctx)
+      let foreign' = Map.insert (PsbtKey 0x20 "") "global" . insertProprietary "other" 7 "theirs"
+          withForeign = source {psbtGlobals = foreign' source.psbtGlobals, psbtInputs = foreign' <$> source.psbtInputs, psbtOutputs = foreign' <$> source.psbtOutputs}
+      signed <- expectRight $ signedPsbt ctx (Just (knownSeed ctx)) withForeign (paymentFile ctx) {txFileData = signedWithSeed ctx}
+      Map.lookup (PsbtKey 0x20 "") signed.psbtGlobals `shouldBe` Just "global"
+      lookupProprietary "other" 7 signed.psbtGlobals `shouldBe` Just "theirs"
+      map (Map.lookup (PsbtKey 0x20 "")) signed.psbtInputs `shouldBe` [Just "global"]
+      map (lookupProprietary "other" 7) signed.psbtOutputs `shouldBe` [Just "theirs", Just "theirs"]
+
+    it "writes the final script of a signed input, and drops its sighash type and its partial signatures" $ do
+      source <- written ctx (knownSeed ctx) (paymentFile ctx)
+      let key = forceRight (unmarshal ctx (hexBytes "032f6437022256c854e0090e7d6c8b65e96606ef7f405399e0f0187c93097ac0f9")) :: PublicKey
+          withPartial = source {psbtInputs = [insertPartialSignature ctx key "a signature of another signer" (inputAt 0 source)]}
+          signedTsd = signedWithSeed ctx
+      signed <- expectRight $ signedPsbt ctx (Just (knownSeed ctx)) withPartial (paymentFile ctx) {txFileData = signedTsd}
+      finalScriptSig (inputAt 0 signed) `shouldBe` Just (signedTsd.txSignDataTx.inputs !! 0).script
+      sigHashType (inputAt 0 signed) `shouldBe` Right Nothing
+      hasPartialSignatures (inputAt 0 signed) `shouldBe` False
+      nonWitnessUtxo (inputAt 0 signed) `shouldBe` Right (Just (funding ctx))
+
+    it "names the keys of the account by the seed the signer names, where the file named them by the account's own key" $ do
+      source <- written ctx (unknownSeed ctx) (paymentFile ctx)
+      signed <- expectRight $ signedPsbt ctx (Just (unknownSeed ctx)) source (paymentFile ctx) {txFileData = signedWithSeed ctx}
+      records <- shownDerivations ctx (inputDerivations ctx) (inputAt 0 signed)
+      records `shouldBe` [("032f6437022256c854e0090e7d6c8b65e96606ef7f405399e0f0187c93097ac0f9", Derivation testFingerprint "m/44'/0'/0'/0/0")]
+      change <- shownDerivations ctx (outputDerivations ctx) (outputAt 1 signed)
+      change `shouldBe` [("0376f2e706458dd75673ba19b8efd842efddd9bc0ae41e31339dffcf917b6db6eb", Derivation testFingerprint "m/44'/0'/0'/1/0")]
+
+    it "names the network in the field of hw when the file has none, and leaves the field as it is otherwise" $ do
+      source <- written ctx (knownSeed ctx) (paymentFile ctx)
+      let withoutNetwork = source {psbtGlobals = Map.delete (proprietaryKey (Proprietary hwIdentifier networkField "")) source.psbtGlobals}
+          signedOn net = signedPsbt ctx (Just (knownSeed ctx)) withoutNetwork (TxFile net (signedWithSeed ctx) Map.empty Map.empty)
+      (hwField networkField . (.psbtGlobals) <$> signedOn (Just btc)) `shouldBe` Right (Just "btc")
+      (hwField networkField . (.psbtGlobals) <$> signedOn Nothing) `shouldBe` Right Nothing
+      onCash <- expectRight $ signedPsbt ctx (Just (knownSeed ctx)) source (TxFile (Just bch) (signedWithSeed ctx) Map.empty Map.empty)
+      hwField networkField onCash.psbtGlobals `shouldBe` Just "btc"
+
+    it "refuses a transaction that is not the one of the file" $ do
+      source <- written ctx (knownSeed ctx) (paymentFile ctx)
+      let otherTx = builtTx ctx 800001 [(txHash (funding ctx), 0)] [(otherAddr 0, 60000), (internalAddr 0, 30000)]
+          other = (signedByWallet ctx (payment ctx) {txSignDataTx = otherTx}) {txSignDataFingerprint = Just testFingerprint}
+      signedPsbt ctx (Just (knownSeed ctx)) source (paymentFile ctx) {txFileData = other}
+        `shouldBe` Left "The transaction signed is not the one of the file"
 
 {- Reading -}
 
@@ -255,11 +336,118 @@ readingSpec ctx =
       psbtTxFile ctx [knownSeed ctx] psbt {psbtInputs = [insertNonWitnessUtxo (fundingTx ctx 2 [(externalAddr 0, 100000)]) (inputAt 0 psbt)]}
         `shouldBe` Left "The previous transaction of input 0 is not the one it spends"
 
-    it "refuses an input with partial signatures that is not finalized" $ do
+    -- Bitcoin Core 25.0 signed the file hw writes for the payment without
+    -- finalizing it, as a hardware wallet does: see test/data/psbt/core.
+    -- The final script is the one Core builds when it finalizes the same
+    -- file: the signature, then the key.
+    it "finalizes an input another signer left with a partial signature of the coin's key, as Core finalizes it" $ do
+      psbt <- coreFile "hw-payment-partial.psbt"
+      file <- readBack ctx [knownSeed ctx] psbt
+      let input = file.txFileData.txSignDataTx.inputs !! 0
+      encodeHex input.script `shouldBe` "473044022074f111ce88a136dea1259050e9a564a9a021d07e5bc9e35710f4768da5b1b9a502200fbdf1799186f1bb53be566c1f529be81f44d4c461521d9ef5f1495a951f24b70121032f6437022256c854e0090e7d6c8b65e96606ef7f405399e0f0187c93097ac0f9"
+      isSigned file.txFileData.txSignDataTx `shouldBe` True
+      file.txFileData.txSignDataInputPaths `shouldBe` ["/0/0"]
+      file.txFileData.txSignDataFingerprint `shouldBe` Just testFingerprint
+      verifySignedTx btc ctx file.txFileData `shouldBe` Right ()
+
+    -- The same file signed and finalized by Core, which clears the
+    -- derivation records of the input it finalized: the account is found
+    -- by its change output. The transaction is the one Core's finalizepsbt
+    -- gives.
+    it "reads the transaction of an input another signer finalized, which names no key of the account any more" $ do
+      psbt <- coreFile "hw-payment-finalized.psbt"
+      file <- readBack ctx [knownSeed ctx] psbt
+      encodeHex (S.encode file.txFileData.txSignDataTx)
+        `shouldBe` "02000000011b425b51ba77c8a4b49ead7dcad9f7f365458a561bf6d056bf7b0227db26895a000000006a473044022074f111ce88a136dea1259050e9a564a9a021d07e5bc9e35710f4768da5b1b9a502200fbdf1799186f1bb53be566c1f529be81f44d4c461521d9ef5f1495a951f24b70121032f6437022256c854e0090e7d6c8b65e96606ef7f405399e0f0187c93097ac0f9fdffffff0260ea0000000000001976a914bcb6e2aa16a725659548910d7a020414cbfe65df88ac30750000000000001976a914455aa50c2663141771ebac2096e37833911227d688ac00350c00"
+      file.txFileData.txSignDataInputPaths `shouldBe` []
+      file.txFileData.txSignDataOutputPaths `shouldBe` ["/1/0"]
+      file.txFileData.txSignDataFingerprint `shouldBe` Just testFingerprint
+      file.txFileData.txSignDataFeeRate `shouldBe` Just 10
+      verifySignedTx btc ctx file.txFileData `shouldBe` Right ()
+
+    -- The key of the second wallet at m/44'/0'/0'/0/0 is not the coin's
+    it "leaves an input with a partial signature of another key unsigned" $ do
       psbt <- written ctx (knownSeed ctx) (paymentFile ctx)
-      let partial = Map.insert (PsbtKey 0x02 (hexBytes "032f6437022256c854e0090e7d6c8b65e96606ef7f405399e0f0187c93097ac0f9")) "a signature" (inputAt 0 psbt)
-      psbtTxFile ctx [knownSeed ctx] psbt {psbtInputs = [partial]}
-        `shouldBe` Left "Input 0 carries partial signatures and is not finalized: finalize it with the software that signed it"
+      let other = forceRight (unmarshal ctx (hexBytes "02b31089d88f43ba74b787dad983c54486772e2d5c7b432e1bbf16591d698912c8")) :: PublicKey
+          partial = insertPartialSignature ctx other "a signature" (inputAt 0 psbt)
+      file <- readBack ctx [knownSeed ctx] psbt {psbtInputs = [partial]}
+      isSigned file.txFileData.txSignDataTx `shouldBe` False
+      file.txFileData.txSignDataTx `shouldBe` paymentTx ctx
+
+    it "refuses an input to be signed with a sighash hw does not sign with, naming both" $ do
+      psbt <- written ctx (knownSeed ctx) (paymentFile ctx)
+      let asking sh = psbt {psbtInputs = [insertSigHashType sh (inputAt 0 psbt)]}
+      psbtTxFile ctx [knownSeed ctx] (asking 0x02) `shouldBe` Left "Input 0 is to be signed with the sighash NONE: hw signs with ALL on btc"
+      psbtTxFile ctx [knownSeed ctx] (asking 0x83) `shouldBe` Left "Input 0 is to be signed with the sighash SINGLE|ANYONECANPAY: hw signs with ALL on btc"
+      psbtTxFile ctx [knownSeed ctx] (asking 0x41) `shouldBe` Left "Input 0 is to be signed with the sighash ALL|FORKID: hw signs with ALL on btc"
+
+    it "accepts ALL with FORKID for an account on Bitcoin Cash, and an input without a sighash" $ do
+      let cash = (knownSeed ctx) {fileAccountNetwork = bch}
+      psbt <- written ctx cash (paymentFile ctx) {txFileNetwork = Just bch}
+      sigHashType (inputAt 0 psbt) `shouldBe` Right (Just 0x41)
+      file <- readBack ctx [cash] psbt
+      file.txFileData.txSignDataInputPaths `shouldBe` ["/0/0"]
+      psbtTxFile ctx [knownSeed ctx] psbt `shouldBe` Left "Input 0 is to be signed with the sighash ALL|FORKID: hw signs with ALL on btc"
+      without <- readBack ctx [knownSeed ctx] psbt {psbtInputs = [deleteSigHashType (inputAt 0 psbt)]}
+      without.txFileData.txSignDataInputPaths `shouldBe` ["/0/0"]
+
+    it "refuses, for a transaction outside the wallet, a sighash other than ALL, with FORKID only on the network the file names" $ do
+      let sweep = TxFile (Just btc) (TxSignData (paymentTx ctx) [funding ctx] [] [] (Just 10) Nothing [] noLabel) Map.empty Map.empty
+      psbt <- expectRight $ txFilePsbt ctx Nothing sweep
+      let asking sh = psbt {psbtInputs = [insertSigHashType sh (inputAt 0 psbt)]}
+          unnamed p = p {psbtGlobals = Map.delete (proprietaryKey (Proprietary hwIdentifier networkField "")) p.psbtGlobals}
+      psbtTxFile ctx [] (asking 0x41) `shouldBe` Left "Input 0 is to be signed with the sighash ALL|FORKID: hw signs with ALL on btc"
+      psbtTxFile ctx [] (unnamed (asking 0x02)) `shouldBe` Left "Input 0 is to be signed with the sighash NONE: hw signs with ALL, or ALL|FORKID on Bitcoin Cash"
+      (txFileNetwork <$> psbtTxFile ctx [] (unnamed (asking 0x41))) `shouldBe` Right Nothing
+
+    -- Bitcoin Core 25.0 prepared this payment for the account, which it
+    -- watches by the descriptor of the account's key: 1 BTC from the coin
+    -- of 50 BTC mined to /0/0 on regtest, to another wallet, with the
+    -- change at /1/0 and a fee of 2250 satoshis. Its records name the keys
+    -- by the seed. It carries no field of hw: no network, no fee rate.
+    it "reads a file Bitcoin Core prepared for the account, and tells the account the seed" $ do
+      psbt <- coreFile "core-prepared.psbt"
+      forM_ [knownSeed ctx, unknownSeed ctx] $ \acc -> do
+        file <- readBack ctx [otherWallet ctx, acc] psbt
+        file.txFileNetwork `shouldBe` Nothing
+        file.txFileData.txSignDataInputPaths `shouldBe` ["/0/0"]
+        file.txFileData.txSignDataOutputPaths `shouldBe` ["/1/0"]
+        file.txFileData.txSignDataFingerprint `shouldBe` Just testFingerprint
+        file.txFileData.txSignDataFeeRate `shouldBe` Nothing
+        file.txFileData.txSignDataReplaces `shouldBe` []
+        file.txFileData.txSignDataLabel `shouldBe` ""
+        map txHash file.txFileData.txSignDataInputs `shouldBe` ["fede72ccadbf9f16f826e3078578b0660526a37b48d4f894ab26f4cf5a95e89c"]
+        info <- expectRight $ parseTxFile btc ctx (testAccountPub ctx) file
+        info.txInfoSummary.summaryFee `shouldBe` 2250
+        info.txInfoSummary.summaryOtherOutputs `shouldBe` Map.fromList [(testAddress "1GfJmWwG2JUjrvQ6WjVfwaWpPgtbHDhSdE", 100000000)]
+        Map.keys info.txInfoSummary.summaryMyOutputs `shouldBe` [internalAddr 0]
+        Map.keys info.txInfoSummary.summaryMyInputs `shouldBe` [externalAddr 0]
+
+    -- hw signs it with the key of the test wallet and writes the signatures
+    -- into Core's file. Bitcoin Core 25.0 finds this file complete with
+    -- analyzepsbt, extracts the transaction with finalizepsbt, and accepts
+    -- it with testmempoolaccept on the regtest chain the coin is on.
+    it "signs a file Bitcoin Core prepared into that file, as the file Core accepts" $ do
+      psbt <- coreFile "core-prepared.psbt"
+      file <- readBack ctx [knownSeed ctx] psbt
+      (signed, _) <- expectRight $ signWalletTx btc ctx file.txFileData testAccountKey
+      written' <- expectRight $ signedPsbt ctx (Just (knownSeed ctx)) psbt (TxFile (Just btc) signed Map.empty Map.empty)
+      encodePsbtBase64 written' `shouldBe` corePreparedSignedText
+
+    -- Bitcoin Core 25.0 prepared this payment of 2.5 BTC of another wallet
+    -- of its own, with the change at a second address of that wallet and a
+    -- fee of 2250 satoshis
+    it "reads a file Bitcoin Core prepared for another wallet as outside the wallet" $ do
+      psbt <- coreFile "core-outside.psbt"
+      file <- readBack ctx [knownSeed ctx, otherWallet ctx] psbt
+      file.txFileNetwork `shouldBe` Nothing
+      file.txFileData.txSignDataInputPaths `shouldBe` []
+      file.txFileData.txSignDataOutputPaths `shouldBe` []
+      file.txFileData.txSignDataFingerprint `shouldBe` Nothing
+      info <- expectRight $ parseOutsideTxSignData btc ctx file.txFileData
+      info.txInfoSummary.summaryFee `shouldBe` 2250
+      info.txInfoSummary.summaryOtherOutputs `shouldBe` Map.fromList [(testAddress "13tJFzYnF13gRMh6Z6eb44mLD9e9R8sHeZ", 250000000), (testAddress "1588dPBmgVnvS2N3BE5YHXUqXcb468zpsz", 4749997750)]
+      Map.keys info.txInfoSummary.summaryOtherInputs `shouldBe` [testAddress "157L9V7wdL7pYt2nndN5NN5DMynh1HdYhF"]
 
     it "names no network when the file has no network field" $ do
       psbt <- written ctx (knownSeed ctx) (paymentFile ctx)

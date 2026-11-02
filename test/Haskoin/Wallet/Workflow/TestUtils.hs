@@ -373,8 +373,8 @@ readTxFile ctx file = do
     psbtTxFile ctx accounts =<< decodePsbt bytes
   where
     accounts =
-      [ FileAccount (testAccountPub ctx) "m/44'/0'/0'" (Just testFingerprint),
-        FileAccount (fromMaybe (error "readTxFile") (xPubImport btc ctx testAccountXPub2)) "m/44'/0'/0'" (Just testFingerprint2)
+      [ FileAccount (testAccountPub ctx) "m/44'/0'/0'" (Just testFingerprint) btc,
+        FileAccount (fromMaybe (error "readTxFile") (xPubImport btc ctx testAccountXPub2)) "m/44'/0'/0'" (Just testFingerprint2) btc
       ]
 
 {- Payments and chains -}

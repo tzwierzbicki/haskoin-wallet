@@ -203,7 +203,13 @@ hw signtx --input unsigned.psbt --output signed.psbt
 ```
 
 The file is a PSBT, the format of BIP 174, so Bitcoin Core's `decodepsbt` and
-other wallets show it too.
+other wallets show it too. A hardware wallet, through HWI, or Bitcoin Core
+with the keys can sign it in place of the offline computer, and `sendtx
+--input` takes the signed file back, finalized or not. The file names the
+keys by the fingerprint of the seed, which a hardware wallet needs to find
+its own: the wallet knows it once it created the account, signed with it, or
+imported it with its origin. `preparetx` says so when it writes a file
+without it.
 
 On the online computer, send it:
 
@@ -530,6 +536,21 @@ the labels of the account's addresses in it, and the labels of the coins it
 spends, as the wallet has them when it writes the file. `importtx` keeps the
 labels of the wallet. The commands still read the JSON files of an earlier
 `hw`.
+
+The files of other wallets are read the same way, in bytes or in the base64
+text Bitcoin Core and HWI give. `importtx` and `sendtx --input` take a file
+another signer returned, finalized or not: `hw` finalizes the signature of a
+P2PKH coin of the account itself, and keeps from the version it holds what
+such a file leaves out, the paths of its signed inputs, the fee rate and the
+label. `sendtx --input` also takes the signed transaction alone, in
+hexadecimal as Core's `finalizepsbt` gives it, when the wallet holds the
+transaction. `signtx --input` signs a file Bitcoin Core, Sparrow or Electrum
+prepared for an account of the wallet, with the sighash ALL only and only
+when every input that is not the account's is signed already, and the
+signed file keeps every field of it. Such a file names no network: the
+account it involves tells it. A file that involves no account of the wallet,
+for `reviewtx`, `sendtx` or `signsweep`, needs `--network`, or the
+`default-network` of the configuration file.
 
 ```console
 hw exporttx NOSIGHASH unsigned.psbt

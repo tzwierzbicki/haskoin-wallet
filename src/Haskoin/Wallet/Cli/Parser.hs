@@ -87,8 +87,9 @@ data Command
   | -- | The account, or every one, how much of each transaction to show,
     -- and the page
     CommandPendingTxs !(Maybe Text) !View !(Paging TxHash)
-  | -- | The account, and the transaction file
-    CommandReviewTx !(Maybe Text) !FilePath
+  | -- | The account, the transaction file, and the network of a file that
+    -- names none and involves no account
+    CommandReviewTx !(Maybe Text) !FilePath !(Maybe Network)
   | -- | The account, and the transaction file
     CommandImportTx !(Maybe Text) !FilePath
   | -- | The pending transaction, by either of its hashes, and the file to
@@ -106,17 +107,19 @@ data Command
   | CommandLockCoin !OutPoint
   | CommandUnlockCoin !OutPoint
   | -- | A pending transaction, by its txid or its nosigHash, or the file
-    -- of a signed one, and whether to send it without asking
-    CommandSendTx !(Maybe TxHash) !(Maybe FilePath) !Bool
+    -- of a signed one, whether to send it without asking, and the network
+    -- of a file that names none and that the wallet does not hold
+    CommandSendTx !(Maybe TxHash) !(Maybe FilePath) !Bool !(Maybe Network)
   | CommandBumpFee !BumpFee
   | -- | The account, or every one, and whether to sync from the start
     CommandSync !(Maybe Text) !Bool
   | -- | The file of the copy, or none for the backups directory of hw
     CommandBackup !(Maybe FilePath)
   | CommandPrepareSweep !PrepareSweep
-  | -- | What to sign, and the file of the private keys, typed on the
-    -- terminal without one
-    CommandSignSweep !Signing !(Maybe KeySource)
+  | -- | What to sign, the file of the private keys, typed on the terminal
+    -- without one, and the network of a file that names none and involves
+    -- no account
+    CommandSignSweep !Signing !(Maybe KeySource) !(Maybe Network)
   deriving (Eq, Show)
 
 -- | How much a listing shows of each element: a few lines, or every
@@ -652,6 +655,14 @@ networkMaybeOption = networkOptionWith "Without it, the default-network of the c
 sweepNetworkOption :: Args (Maybe Network)
 sweepNetworkOption =
   networkOptionWith "Needed by a sweep that pays no account of this wallet. The default-network of the configuration file does not apply to it."
+
+-- | The network of a transaction file, when given. A file hw wrote names
+-- its network, and a file that involves an account of the wallet is on
+-- the network of that account. A file of another wallet that involves
+-- none needs it.
+fileNetworkOption :: Args (Maybe Network)
+fileNetworkOption =
+  networkOptionWith "For a file that names no network and involves no account of this wallet, as a file of another wallet does. Without it, the default-network of the configuration file."
 
 -- | The network, when given, with the help of the command about it
 networkOptionWith :: String -> Args (Maybe Network)
@@ -1550,6 +1561,11 @@ file of an earlier hw. Use it to check a transaction before you sign it, or
 before you send it. A transaction that involves no account, such as a sweep
 to addresses outside the wallet, is shown on the network its file names.
 
+A file of another wallet, Bitcoin Core, Sparrow or Electrum for example, is
+shown the same way: a PSBT in bytes, or in base64 text. Such a file names no
+network. The account it involves tells it. One that involves no account
+needs --network, or the default-network of the configuration file.
+
 The labels reviewtx shows, the transaction's, those of its addresses and those
 of the coins it spends, are the ones the file carries, as the wallet that
 wrote it had them. They are not those of this wallet, which an offline
@@ -1559,6 +1575,7 @@ computer does not have.
         CommandReviewTx
           <$> txAccountOption
           <*> fileArgument "The transaction file to show"
+          <*> fileNetworkOption
     }
 
 {- exporttx -}
@@ -1599,6 +1616,14 @@ account, and locks the coins it spends. When the wallet holds it already, the
 file takes its place, as when an offline computer returns it signed. The
 signatures are checked first. The wallet keeps its own labels, and shows the
 transaction with them.
+
+A file another wallet or a hardware wallet signed is imported the same way,
+in bytes or in base64 text, finalized or not: hw finalizes the signature of
+a P2PKH coin of the account itself. What the file leaves out, the paths of
+the account's addresses once the signatures are final, the fee rate and the
+label, the wallet keeps from the version it holds. A file another wallet
+prepared for an account of this wallet is imported too, and signed with
+signtx.
 
 sendtx --input sends a signed file without importtx.
 |]
@@ -1687,6 +1712,11 @@ to the --output file. Without --output, hw offers to replace the --input file,
 since the unsigned file is of no use once signed. It asks this before the
 mnemonic. A transaction of a file is shown with the labels the file carries,
 which go on to the signed file.
+
+A file another wallet prepared for the account, Bitcoin Core, Sparrow or
+Electrum for example, is signed the same way, in bytes or in base64 text.
+The signed file keeps every field of it. hw signs with the sighash ALL only,
+and only when every input that is not the account's is signed already.
 
 Signing sends nothing. Check the transaction with reviewtx or pendingtxs.
 Then send it with sendtx, or delete it with deletetx.
@@ -1918,15 +1948,20 @@ When the wallet holds its transaction as pending, the file takes its place and
 is sent as above. Otherwise, a sweep of outside coins for example, hw checks
 the transaction and sends it, and changes nothing in the wallet.
 
-A file names its network. A file from an earlier hw names none. It can be
-sent only when the wallet holds its transaction. Otherwise, prepare the
-transaction again.
+The file is a PSBT, in bytes or in base64 text, as another wallet or a
+hardware wallet returns it, finalized or not. The signed transaction alone,
+in hexadecimal as Bitcoin Core's finalizepsbt gives it, is sent too, when the
+wallet holds its transaction. A file hw wrote names its network. One of
+another wallet or of an earlier hw names none: when the wallet holds its
+transaction, the account tells it; otherwise give --network, or a
+default-network in the configuration file.
 |],
       args =
         CommandSendTx
           <$> optional signedTxidArg
           <*> inputFileMaybeOption
           <*> yesOption "Send without showing the transaction and asking first"
+          <*> fileNetworkOption
     }
 
 -- | --yes, which answers yes to the question of a command without asking
@@ -2277,13 +2312,15 @@ replace the --input file. It asks this before the keys. A sweep of a file is
 shown with the labels the file carries, which go on to the signed file.
 
 A sweep that pays no account of this wallet needs no account here either. It
-is signed on the network its file names. A file from an earlier hw names
-none, and must be prepared again.
+is signed on the network its file names. A file of another wallet, or of an
+earlier hw, names none: give --network, or a default-network in the
+configuration file.
 |],
       args =
         CommandSignSweep
           <$> signingOptions
           <*> prvKeysMaybeOption
+          <*> fileNetworkOption
     }
 
 -- | The private keys: a file, or - for the terminal

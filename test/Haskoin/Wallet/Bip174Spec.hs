@@ -171,6 +171,11 @@ rolesSpec vectors =
 emptyTx :: Tx
 emptyTx = Tx 0 [] [] [] 0
 
+-- | The signature of the first signer of the BIP on the first input, as
+-- Bitcoin Core decodes its PSBT
+firstSignature :: Text
+firstSignature = "3044022074018ad4180097b873323c0015720b3684cc8123891048e7dbcd9b55ad679c99022073d369b740e3eb53dcefa33823c8070514ca55a7dd9544f157c167913261118c01"
+
 -- | The global map of the PSBT of 'emptyTx': the key of the unsigned
 -- transaction, one byte of type 0x00, and the ten bytes of the transaction
 emptyTxEntry :: Text
@@ -314,6 +319,29 @@ fieldsSpec ctx vectors =
       unsigned <- psbtOfVector (vectors.valid !! 0)
       hasPartialSignatures (inputAt 0 partial) `shouldBe` True
       hasPartialSignatures (inputAt 0 unsigned) `shouldBe` False
+
+    -- The first signer of the BIP signs the first input with the key
+    -- 029583bf..., with SIGHASH_ALL, the last byte 01 of the signature
+    it "read the partial signatures of an input: the public key, and the signature with its sighash byte" $ do
+      psbt <- psbtOfVector (firstSigner vectors)
+      records <- expectRight (partialSignatures ctx (inputAt 0 psbt))
+      [(encodeHex (marshal ctx key), encodeHex signature) | (key, signature) <- records]
+        `shouldBe` [("029583bf39ae0a609747ad199addd634fa6108559d6c5cd39b4c2183f1ab96e07f", firstSignature)]
+      partialSignatures ctx (inputAt 0 (updater vectors `seq` psbt)) `shouldSatisfy` (not . null . either (const []) id)
+
+    it "write a partial signature under the type 0x02 with the public key, and drop them all as a finalizer does" $ do
+      let key = forceRight (unmarshal ctx (hexBytes "029583bf39ae0a609747ad199addd634fa6108559d6c5cd39b4c2183f1ab96e07f")) :: PublicKey
+          m = insertPartialSignature ctx key (hexBytes firstSignature) (insertSigHashType 1 Map.empty)
+      Map.toList m
+        `shouldBe` [ (PsbtKey 0x02 (hexBytes "029583bf39ae0a609747ad199addd634fa6108559d6c5cd39b4c2183f1ab96e07f"), hexBytes firstSignature),
+                     (PsbtKey 0x03 "", hexBytes "01000000")
+                   ]
+      Map.toList (deletePartialSignatures m) `shouldBe` [(PsbtKey 0x03 "", hexBytes "01000000")]
+
+    it "drop the sighash type of an input as a finalizer does, and nothing else" $ do
+      let m = insertSigHashType 1 (insertNonWitnessUtxo emptyTx Map.empty)
+      Map.keys (deleteSigHashType m) `shouldBe` [PsbtKey 0x00 ""]
+      deleteSigHashType Map.empty `shouldBe` Map.empty
 
     it "read the final script and witness of a signed input" $ do
       psbt <- psbtOfVector (finalizer vectors)

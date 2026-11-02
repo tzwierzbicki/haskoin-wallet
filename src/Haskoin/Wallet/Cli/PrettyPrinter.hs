@@ -1145,8 +1145,8 @@ nextStepsPrinter cmd res =
       | Just file <- opts.output ->
           stepsPrinter [("Next, sign its file with the private keys of the coins", hwLine "signsweep" ([optionWord "--input", fileWord file] <> keysArgs opts.keys))]
     (CommandSignTx signing _, ResponseTx _ info) -> afterSigning signing info
-    (CommandSignSweep signing _, ResponseTx _ info) -> afterSigning signing info
-    (CommandSignSweep signing _, ResponseOutsideTx _ info) -> afterSigning signing info
+    (CommandSignSweep signing _ _, ResponseTx _ info) -> afterSigning signing info
+    (CommandSignSweep signing _ _, ResponseOutsideTx _ info) -> afterSigning signing info
     (CommandSendTx {}, ResponseTx acc _) ->
       stepsPrinter [("Next, sync the account to follow the transaction", hwLine "sync" (accountArgs [acc]))]
     -- The file labels things the wallet may not have yet

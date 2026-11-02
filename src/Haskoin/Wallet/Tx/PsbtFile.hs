@@ -24,10 +24,20 @@
 -- the records name, and gives the paths of the first one with a record,
 -- relative to it, as the signing data wants them. A signed input keeps its
 -- derivation records, which the spec lets a finalizer clear, so that the
--- signed file still says which inputs are the account's.
+-- signed file still says which inputs are the account's. The file carries
+-- no key of the account beyond those of its addresses in the transaction.
+--
+-- A file of another wallet is read the same way. An input it signed but
+-- did not finalize, as a hardware wallet leaves it, is finalized here when
+-- the coin is a P2PKH one and the signature is of its key. A file that
+-- asks for a sighash hw does not sign with is refused, as the spec wants.
+-- When hw signs a file of another wallet, 'signedPsbt' writes the
+-- signatures into that file and keeps every other field of it, known to
+-- hw or not, as the spec wants a signer to do.
 module Haskoin.Wallet.Tx.PsbtFile
   ( FileAccount (..),
     txFilePsbt,
+    signedPsbt,
     psbtTxFile,
 
     -- * The fields of hw
@@ -47,10 +57,10 @@ import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Containers.ListUtils (nubOrd, nubOrdOn)
-import Data.List (stripPrefix)
+import Data.List (sortOn, stripPrefix)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (listToMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -60,7 +70,7 @@ import Data.Word (Word64)
 import Haskoin
 import Haskoin.Wallet.Bip174
 import Haskoin.Wallet.Tx.SignData
-import Haskoin.Wallet.Tx.Signing (walletSigHash)
+import Haskoin.Wallet.Tx.Signing (sigHashName, walletSigHash)
 import Numeric.Natural (Natural)
 
 -- | The keys of an account, as the derivation records of its files name
@@ -70,7 +80,9 @@ data FileAccount = FileAccount
     -- | The path of the account from the seed, m/44'/coin'/index'
     fileAccountPath :: !HardPath,
     -- | The fingerprint of the seed, when the wallet has learnt it
-    fileAccountFingerprint :: !(Maybe Fingerprint)
+    fileAccountFingerprint :: !(Maybe Fingerprint),
+    -- | The network of the account, which says the sighash it signs with
+    fileAccountNetwork :: !Network
   }
   deriving (Eq, Show)
 
@@ -169,10 +181,6 @@ txFilePsbt ctx accountM file = do
             <> [insertProprietary hwIdentifier feeRateField bytes | Just bytes <- [feeRateM]]
             <> [insertProprietary hwIdentifier replacesField (BS.concat (S.encode <$> tsd.txSignDataReplaces)) | not (null tsd.txSignDataReplaces)]
             <> [insertProprietary hwIdentifier labelField (encodeUtf8 tsd.txSignDataLabel) | not (Text.null tsd.txSignDataLabel)]
-            <> [ insertXpubRecord net ctx acc.fileAccountXPub (Derivation fingerprint (toGeneric acc.fileAccountPath))
-                 | Just acc <- [accountM],
-                   Just fingerprint <- [fingerprintM]
-               ]
   return (psbtOf tx) {psbtGlobals = globals, psbtInputs = inputs, psbtOutputs = outputs}
 
 -- | The map of an input: the transaction its coin comes from, the sighash
@@ -204,6 +212,59 @@ addressFields insertDerivation file key =
   insertDerivation key.addressPublic key.addressDerivation
     : [insertProprietary hwIdentifier addressLabelField (encodeUtf8 label) | Just label <- [Map.lookup key.addressPath file.txFilePathLabels]]
 
+{- Signing into a file -}
+
+-- | The PSBT of a transaction just signed, written into the PSBT its file
+-- was read from, as the spec wants a signer to work: every field of that
+-- file stays, known to hw or not. Each input signed gets its final script
+-- and witness, and loses the sighash it was to be signed with and the
+-- signatures that were not final. The derivation records that named the
+-- keys of the account by the account's own key, when the wallet did not
+-- know the seed, are rewritten from the seed the signer names. The network
+-- goes in hw's field when the file has none. The transaction signed must
+-- be the file's.
+signedPsbt :: Ctx -> Maybe FileAccount -> Psbt -> TxFile -> Either String Psbt
+signedPsbt ctx accountM source file = do
+  let tsd = file.txFileData
+      tx = tsd.txSignDataTx
+  unless (nosigHash tx == nosigHash source.psbtTx) $
+    Left "The transaction signed is not the one of the file"
+  let stacks = tx.witness <> repeat []
+      signed = zipWith3 signedInput tx.inputs stacks source.psbtInputs
+      fingerprintM = tsd.txSignDataFingerprint <|> (fileAccountFingerprint =<< accountM)
+  inputs <- forM signed $ \m -> maybe (return m) (\(acc, fp) -> fromSeed (inputDerivations ctx) (insertInputDerivation ctx) acc fp m) ((,) <$> accountM <*> fingerprintM)
+  outputs <- forM source.psbtOutputs $ \m -> maybe (return m) (\(acc, fp) -> fromSeed (outputDerivations ctx) (insertOutputDerivation ctx) acc fp m) ((,) <$> accountM <*> fingerprintM)
+  let globals = case (file.txFileNetwork, lookupProprietary hwIdentifier networkField source.psbtGlobals) of
+        (Just net, Nothing) -> insertProprietary hwIdentifier networkField (cs net.name) source.psbtGlobals
+        _ -> source.psbtGlobals
+  return source {psbtGlobals = globals, psbtInputs = inputs, psbtOutputs = outputs}
+  where
+    -- The map of an input as the signed transaction has it: as it was
+    -- while the input is unsigned
+    signedInput :: TxIn -> WitnessStack -> PsbtMap -> PsbtMap
+    signedInput input stack m
+      | BS.null input.script && null stack = m
+      | otherwise =
+          foldr ($) (deleteSigHashType (deletePartialSignatures m)) $
+            [insertFinalScriptSig input.script | not (BS.null input.script)]
+              <> [insertFinalScriptWitness stack | not (null stack)]
+    -- The records of the map that name a key by the account's own key,
+    -- named by the seed and the full path instead
+    fromSeed ::
+      (PsbtMap -> Either String [(PublicKey, Derivation)]) ->
+      (PublicKey -> Derivation -> PsbtMap -> PsbtMap) ->
+      FileAccount ->
+      Fingerprint ->
+      PsbtMap ->
+      Either String PsbtMap
+    fromSeed records insert acc fingerprint m = do
+      found <- records m
+      return $
+        foldr
+          (\(public, d) -> insert public (Derivation fingerprint (listToPath (pathToList acc.fileAccountPath <> pathToList d.derivationPath))))
+          m
+          [(public, d) | (public, d) <- found, d.derivationFingerprint == xPubFP ctx acc.fileAccountXPub]
+
 {- Reading -}
 
 -- | What the derivation records of a PSBT say of an account: the paths of
@@ -211,7 +272,8 @@ addressFields insertDerivation file key =
 -- order; the fingerprint of its seed when the records carry it; and the
 -- labels of those addresses
 data AccountMatch = AccountMatch
-  { matchInputPaths :: ![SoftPath],
+  { matchAccount :: !FileAccount,
+    matchInputPaths :: ![SoftPath],
     matchOutputPaths :: ![SoftPath],
     matchFingerprint :: !(Maybe Fingerprint),
     matchLabels :: !(Map SoftPath Text)
@@ -220,36 +282,63 @@ data AccountMatch = AccountMatch
 -- | The transaction file of a PSBT, as the signing data of hw holds it,
 -- with its paths relative to the account among those given that the
 -- derivation records name: the first with a record on an input, or else
--- on an output. A PSBT that names none of them is read without paths, as a
--- transaction outside the wallet. Every input must carry the whole
--- transaction its coin comes from, and a signed input must be finalized.
+-- on an output, those on the network the file names coming first. A PSBT
+-- that names none of them is read without paths, as a transaction outside
+-- the wallet. Every input must carry the whole transaction its coin comes
+-- from. An input signed but not finalized is finalized when hw can, as
+-- 'finalizedScriptSig' says, and stays unsigned otherwise. An input to be
+-- signed with a sighash hw does not sign with is refused: that of the
+-- account's network, or ALL, with FORKID on Bitcoin Cash, when no account
+-- is involved.
 psbtTxFile :: Ctx -> [FileAccount] -> Psbt -> Either String TxFile
 psbtTxFile ctx accounts psbt = do
-  tx <- psbtTransaction psbt
-  let stacks = tx.witness <> repeat []
-  parents <- forM (zip3 [0 :: Int ..] tx.inputs (zip stacks psbt.psbtInputs)) $ \(i, input, (stack, m)) -> do
+  extracted <- psbtTransaction psbt
+  let stacks = extracted.witness <> repeat []
+  coins <- forM (zip3 [0 :: Int ..] extracted.inputs (zip stacks psbt.psbtInputs)) $ \(i, input, (stack, m)) -> do
     let place = "Input " <> show i
-    when (hasPartialSignatures m && BS.null input.script && null stack) $
-      Left (place <> " carries partial signatures and is not finalized: finalize it with the software that signed it")
     parentM <- nonWitnessUtxo m
     parent <- maybe (Left (place <> " has no previous transaction: hw needs the whole transaction each coin comes from")) Right parentM
     unless (txHash parent == input.outpoint.hash) $
       Left ("The previous transaction of input " <> show i <> " is not the one it spends")
-    return parent
+    coin <-
+      maybe (Left (place <> " spends an output its previous transaction does not have")) Right $
+        listToMaybe (drop (fromIntegral input.outpoint.index) parent.outputs)
+    scriptSig <-
+      if BS.null input.script && null stack
+        then fromMaybe BS.empty <$> finalizedScriptSig ctx coin m
+        else return input.script
+    asked <- first ((place <> ": ") <>) (sigHashType m)
+    return (parent, TxIn input.outpoint scriptSig input.sequence, asked)
+  let tx = Tx extracted.version [input | (_, input, _) <- coins] extracted.outputs extracted.witness extracted.locktime
+      askedSigHashes = [(i, sh) | (i, (_, _, Just sh)) <- zip [0 :: Int ..] coins]
   netM <- traverse networkOf (lookupProprietary hwIdentifier networkField psbt.psbtGlobals)
   feeRateM <- traverse feeRateOf (lookupProprietary hwIdentifier feeRateField psbt.psbtGlobals)
   replaces <- maybe (Right []) replacesOf (lookupProprietary hwIdentifier replacesField psbt.psbtGlobals)
   label <- maybe (Right noLabel) (textOf "The label of the transaction") (lookupProprietary hwIdentifier labelField psbt.psbtGlobals)
   matches <- mapM (accountMatch ctx netM psbt) accounts
-  let chosen =
-        listToMaybe [m | m <- matches, not (null m.matchInputPaths)]
-          <|> listToMaybe [m | m <- matches, not (null m.matchOutputPaths)]
+  let onFileNetwork :: AccountMatch -> Bool
+      onFileNetwork m = maybe True (== m.matchAccount.fileAccountNetwork) netM
+      candidates =
+        sortOn (not . onFileNetwork) $
+          [m | m <- matches, not (null m.matchInputPaths)]
+            <> [m | m <- matches, null m.matchInputPaths, not (null m.matchOutputPaths)]
+      signsWith :: AccountMatch -> Maybe Network
+      signsWith m = Just m.matchAccount.fileAccountNetwork
+  chosen <- case candidates of
+    [] -> do
+      forM_ askedSigHashes $ \(i, sh) -> unless (acceptableSigHash netM sh) $ Left (sigHashRefusal i sh netM)
+      return Nothing
+    first' : _ -> case filter (\m -> all (acceptableSigHash (signsWith m) . snd) askedSigHashes) candidates of
+      m : _ -> return (Just m)
+      [] -> case [(i, sh) | (i, sh) <- askedSigHashes, not (acceptableSigHash (signsWith first') sh)] of
+        (i, sh) : _ -> Left (sigHashRefusal i sh (signsWith first'))
+        [] -> return (Just first')
   coinLabels <- forM (zip tx.inputs psbt.psbtInputs) $ \(input, m) ->
     fmap (\text -> (input.outpoint.hash, text)) <$> traverse (textOf "The label of a coin") (lookupProprietary hwIdentifier coinLabelField m)
   let tsd =
         TxSignData
           { txSignDataTx = tx,
-            txSignDataInputs = nubOrdOn txHash parents,
+            txSignDataInputs = nubOrdOn txHash [parent | (parent, _, _) <- coins],
             txSignDataInputPaths = maybe [] (.matchInputPaths) chosen,
             txSignDataOutputPaths = maybe [] (.matchOutputPaths) chosen,
             txSignDataFeeRate = feeRateM,
@@ -265,6 +354,39 @@ psbtTxFile ctx accounts psbt = do
         txFileInputLabels = firstOfEach (mapMaybe id coinLabels)
       }
 
+-- | The input script of a P2PKH coin whose input carries the signature of
+-- its key among the signatures that are not final: the signature, then
+-- the key, as the finalizer of the spec builds it. Nothing for any other
+-- input, which stays unsigned: hw finalizes what it signs itself, and
+-- nothing else. Whether the signature is good is checked where the signed
+-- transaction is verified.
+finalizedScriptSig :: Ctx -> TxOut -> PsbtMap -> Either String (Maybe ByteString)
+finalizedScriptSig ctx coin m = do
+  signatures <- partialSignatures ctx m
+  return $ case unmarshal ctx coin.script of
+    Right (PayPKHash hash) ->
+      listToMaybe
+        [ S.encode (Script [opPushData signature, opPushData (marshal ctx public)])
+          | (public, signature) <- signatures,
+            addressHash (marshal ctx public) == hash
+        ]
+    _ -> Nothing
+
+-- | Whether hw signs with the sighash: that of the network when known,
+-- else ALL, with or without FORKID
+acceptableSigHash :: Maybe Network -> SigHash -> Bool
+acceptableSigHash netM sh = case netM of
+  Just net -> sh == walletSigHash net
+  Nothing -> sh == sigHashAll || sh == setForkIdFlag sigHashAll
+
+-- | The refusal of an input to be signed with a sighash hw does not sign
+-- with
+sigHashRefusal :: Int -> SigHash -> Maybe Network -> String
+sigHashRefusal i sh netM =
+  "Input " <> show i <> " is to be signed with the sighash " <> sigHashName sh <> ": hw signs with " <> case netM of
+    Just net -> sigHashName (walletSigHash net) <> " on " <> net.name
+    Nothing -> "ALL, or ALL|FORKID on Bitcoin Cash"
+
 -- | What the records of the PSBT say of the account
 accountMatch :: Ctx -> Maybe Network -> Psbt -> FileAccount -> Either String AccountMatch
 accountMatch ctx netM psbt acc = do
@@ -279,7 +401,8 @@ accountMatch ctx netM psbt acc = do
       found = concat (inputs <> outputs)
   return
     AccountMatch
-      { matchInputPaths = nubOrd [path | (path, _, _) <- concat inputs],
+      { matchAccount = acc,
+        matchInputPaths = nubOrd [path | (path, _, _) <- concat inputs],
         matchOutputPaths = nubOrd [path | (path, _, _) <- concat outputs],
         matchFingerprint = listToMaybe ([fingerprint | (_, Just fingerprint, _) <- found] <> ofAccount),
         matchLabels = firstOfEach [(path, label) | (path, _, Just label) <- found]

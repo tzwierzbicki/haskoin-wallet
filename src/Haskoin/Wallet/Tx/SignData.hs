@@ -144,11 +144,11 @@ instance FromJSON TxFile where
         nameM <- o .:? "network"
         forM nameM $ \name -> maybe (fail ("Unknown network " <> name)) return (netByName name)
 
--- | The refusal of a file of an earlier hw, which names no network, where
--- nothing else tells the network of its transaction: such a file is cheap
--- to prepare again
+-- | The refusal of a file that names no network, as a file of another
+-- wallet or of an earlier hw, where nothing else tells the network of its
+-- transaction: no account of the wallet it involves, and no --network
 noFileNetwork :: String
-noFileNetwork = "The file names no network, as those of an earlier hw: prepare the transaction again"
+noFileNetwork = "The file names no network, as a file of another wallet does, and involves no account of this wallet: give the --network, or a default-network in the configuration file"
 
 -- The labels are written only when there are some, so that the file of a
 -- transaction without any is as an earlier hw wrote it

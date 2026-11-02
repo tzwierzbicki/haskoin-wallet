@@ -24,6 +24,7 @@ import Data.Time (UTCTime)
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.Bip174 (decodePsbtBase64)
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Tx.CoinSelection (CoinSelection (..), FeePayer (..))
@@ -37,6 +38,7 @@ import Haskoin.Wallet.Tx.Building (ChangeTo (..), CoinControl (..), buildTxSignD
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Database.TxLabel (txLabel)
 import Haskoin.Wallet.Tx.SignData
+import Haskoin.Wallet.Tx.PsbtFile (FileAccount (..), psbtTxFile)
 import Haskoin.Wallet.Tx.Signing (signWalletTx, verifySignedTx)
 import Numeric.Natural (Natural)
 import System.Random (mkStdGen)
@@ -222,17 +224,17 @@ transactionLocked c = jsonCoinLock c == Just LockedByTransaction
 lockedCoins :: DBAccountId -> ExceptT String (DB IO) [(Address, Bool)]
 lockedCoins accId = map (\c -> (jsonCoinAddress c, transactionLocked c)) <$> coinsAfter btc accId AllCoins Nothing Nothing
 
--- | The payment signed with SIGHASH_ALL and ANYONECANPAY: a valid signature
--- that differs from the one hw makes, as another signer could produce. The
--- signatures of hw itself are deterministic: signing twice gives the same
--- bytes.
-signedByAnotherSigner :: Ctx -> TxSignData -> Either String TxSignData
-signedByAnotherSigner ctx unsigned = do
-  script <- maybeToEither "The address has no script" $ addressToOutput (externalAddr 0)
-  let coin = SigInput script 20000 (OutPoint (txHash (funding ctx)) 0) (setAnyoneCanPay sigHashAll) Nothing
-      key = (derivePath ctx (Deriv :/ 0 :/ 0 :: SoftPath) testAccountKey).key
-  tx <- signTx btc ctx (txSignDataTx unsigned) [coin] [key]
-  return unsigned {txSignDataTx = tx}
+-- | The payment of 'unsignedPayment' as Bitcoin Core 25.0 signed and
+-- finalized the file hw writes for it, in
+-- test/data/psbt/core/pending-payment-finalized.psbt: another signer's
+-- signature, which differs from the one hw makes, and no derivation record
+-- on the input, which Core clears when it finalizes an input. The file is
+-- read as importtx reads it, for the test account.
+corePayment :: Ctx -> IO TxSignData
+corePayment ctx = do
+  text <- BS.readFile "test/data/psbt/core/pending-payment-finalized.psbt"
+  file <- expectRight $ psbtTxFile ctx [FileAccount (testAccountPub ctx) "m/44'/0'/0'" (Just testFingerprint) btc] =<< decodePsbtBase64 text
+  return (txFileData file)
 
 importingSpec :: Ctx -> Spec
 importingSpec ctx =
@@ -326,16 +328,39 @@ importingSpec ctx =
         unsigned <- unsignedPayment ctx cfg accId
         pendingHash <- importPendingTx btc ctx accId unsigned
         (byWallet, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
-        byOther <- liftEither $ signedByAnotherSigner ctx unsigned
+        byCore <- liftIO $ corePayment ctx
         -- Both versions are valid, with different signatures, so different ids
         liftIO $ do
-          verifySignedTx btc ctx byOther `shouldBe` Right ()
-          txHash (txSignDataTx byOther) `shouldNotBe` txHash (txSignDataTx byWallet)
+          verifySignedTx btc ctx byCore `shouldBe` Right ()
+          -- The id Bitcoin Core gives the signed transaction with decoderawtransaction
+          txHash (txSignDataTx byCore) `shouldBe` "5e56f64882174577d459b3350a592658854a45813389796017e48a6abe94d584"
+          txHash (txSignDataTx byCore) `shouldNotBe` txHash (txSignDataTx byWallet)
         importPendingTx btc ctx accId byWallet `dbShouldBeE` pendingHash
-        importPendingTx btc ctx accId byOther `dbShouldBeE` pendingHash
+        importPendingTx btc ctx accId byCore `dbShouldBeE` pendingHash
         -- The wallet holds the version imported last: sendtx sends that one
         stored <- lookupPendingTx pendingHash
-        liftIO $ (pendingTxData <$> stored) `shouldBe` Just byOther
+        liftIO $ (txSignDataTx . pendingTxData <$> stored) `shouldBe` Just (txSignDataTx byCore)
+    -- Core clears the derivation records of the input it finalized: the
+    -- file names no path of the input, and the wallet knows it
+    it "takes the signatures of a version finalized by other software, and keeps the paths and the label held" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        unsigned <- unsignedPayment ctx cfg accId
+        pendingHash <- importPendingTx btc ctx accId unsigned {txSignDataLabel = "Rent"}
+        byCore <- liftIO $ corePayment ctx
+        liftIO $ txSignDataInputPaths byCore `shouldBe` []
+        importPendingTx btc ctx accId byCore `dbShouldBeE` pendingHash
+        held <- requirePendingTx pendingHash
+        liftIO $ do
+          txSignDataTx held.pendingTxData `shouldBe` txSignDataTx byCore
+          txSignDataInputPaths held.pendingTxData `shouldBe` [Deriv :/ 0 :/ 0]
+          txSignDataOutputPaths held.pendingTxData `shouldBe` [Deriv :/ 1 :/ 0]
+          txSignDataLabel held.pendingTxData `shouldBe` "Rent"
+          txSignDataFingerprint held.pendingTxData `shouldBe` Just testFingerprint
+        -- The payment is still the account's: 8000 sent and the fee of 226
+        -- paid, 8226 out of the wallet
+        summaries <- pendingTxsAfter ctx accId Nothing Nothing
+        liftIO $ map (summaryAmount . txInfoSummary) summaries `shouldBe` [-8226]
     -- The user may change the label while the file is away to be signed
     it "keeps the label held when a signed version comes in with another label" $
       inDatabaseE $ do
@@ -749,7 +774,7 @@ sendingFileSpec ctx =
         pendingHash <- importPendingTx btc ctx accId unsigned
         -- The file the offline signer returns
         (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
-        sent <- sendSigned ctx (const (toStore (storeKnowing ctx signed))) withoutAsking Nothing signed
+        sent <- sendSigned ctx (const (toStore (storeKnowing ctx signed))) withoutAsking Nothing Nothing signed
         liftIO $ case sent of
           SentPending _ info -> pendingFlags info `shouldBe` Just ((pendingHash, True, True, False))
           SentOutside _ _ -> expectationFailure "A transaction of the wallet was sent as an outside one"
@@ -765,10 +790,22 @@ sendingFileSpec ctx =
         unsigned <- unsignedPayment ctx cfg accId
         (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
         pendingHash <- importPendingTx btc ctx accId signed {txSignDataLabel = "Rent of October"}
-        sent <- sendSigned ctx (const (toStore (storeKnowing ctx signed))) withoutAsking Nothing signed {txSignDataLabel = "Rent"}
+        sent <- sendSigned ctx (const (toStore (storeKnowing ctx signed))) withoutAsking Nothing Nothing signed {txSignDataLabel = "Rent"}
         liftIO $ case sent of
           SentPending _ info -> (pendingFlags info, txInfoLabel info) `shouldBe` (Just (pendingHash, True, True, False), "Rent of October")
           SentOutside _ _ -> expectationFailure "A transaction of the wallet was sent as an outside one"
+
+    -- As a file of another wallet, which names no network: --network or
+    -- the configuration file says it
+    it "hands a transaction the wallet does not hold to the store of the network given for a file that names none" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        unsigned <- unsignedPayment ctx cfg accId
+        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        sent <- sendSigned ctx (const (toStore (storeKnowing ctx signed))) withoutAsking Nothing (Just btc) signed
+        liftIO $ case sent of
+          SentOutside net txid -> (net.name, txid) `shouldBe` ("btc", txHash (txSignDataTx signed))
+          SentPending _ _ -> expectationFailure "A transaction the wallet does not hold was sent as pending"
 
     it "refuses a network other than the account's" $
       inDatabaseE $ do
@@ -778,7 +815,7 @@ sendingFileSpec ctx =
         (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
         lift $
           dbShouldFailWith "The transaction is pending in an account of another network" $
-            sendSigned ctx (const (toStore emptyStore)) withoutAsking (Just bch) signed
+            sendSigned ctx (const (toStore emptyStore)) withoutAsking (Just bch) (Just bch) signed
     it "hands a transaction the wallet does not hold to the store of the given network, and records nothing" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -787,7 +824,7 @@ sendingFileSpec ctx =
         unsigned <- unsignedPayment ctx cfg accId
         (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
         published <- liftIO $ newIORef []
-        sent <- sendSigned ctx (const (notingPublished published (toStore (storeKnowing ctx signed)))) withoutAsking (Just btc) signed
+        sent <- sendSigned ctx (const (notingPublished published (toStore (storeKnowing ctx signed)))) withoutAsking (Just btc) (Just btc) signed
         liftIO $ case sent of
           SentOutside net txid -> (net.name, txid) `shouldBe` ("btc", txHash (txSignDataTx signed))
           SentPending _ _ -> expectationFailure "A transaction the wallet does not hold was sent as pending"
@@ -802,7 +839,7 @@ sendingFileSpec ctx =
         unsigned <- unsignedPayment ctx cfg accId
         (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
         seen <- liftIO $ newIORef []
-        _ <- sendSigned ctx (const (toStore (storeKnowing ctx signed))) (noting seen) (Just btc) signed
+        _ <- sendSigned ctx (const (toStore (storeKnowing ctx signed))) (noting seen) (Just btc) (Just btc) signed
         liftIO $ readIORef seen `shouldReturn` [("btc", Just (nosigHash (txSignDataTx signed), True, False, False))]
     it "sends nothing when the step before sending refuses a transaction the wallet does not hold" $
       inDatabaseE $ do
@@ -812,7 +849,7 @@ sendingFileSpec ctx =
         published <- liftIO $ newIORef []
         lift $
           dbShouldFailWith "The transaction was not sent" $
-            sendSigned ctx (const (notingPublished published (toStore (storeKnowing ctx signed)))) refusing (Just btc) signed
+            sendSigned ctx (const (notingPublished published (toStore (storeKnowing ctx signed)))) refusing (Just btc) (Just btc) signed
         liftIO $ readIORef published `shouldReturn` []
     -- As in the file of an earlier hw
     it "refuses a transaction the wallet does not hold, without its network" $
@@ -821,8 +858,8 @@ sendingFileSpec ctx =
         unsigned <- unsignedPayment ctx cfg accId
         (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
         lift $
-          dbShouldFailWith "The file names no network, as those of an earlier hw: prepare the transaction again" $
-            sendSigned ctx (const (toStore emptyStore)) withoutAsking Nothing signed
+          dbShouldFailWith "The file names no network, as a file of another wallet does, and involves no account of this wallet: give the --network, or a default-network in the configuration file" $
+            sendSigned ctx (const (toStore emptyStore)) withoutAsking Nothing Nothing signed
     it "refuses a transaction the wallet does not hold whose signatures do not check out" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -831,14 +868,14 @@ sendingFileSpec ctx =
         let broken = signed {txSignDataTx = withBrokenSignature (txSignDataTx signed)}
         lift $
           dbShouldFailWith "Invalid signature for input 0 (1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj)" $
-            sendSigned ctx (const (toStore emptyStore)) withoutAsking (Just btc) broken
+            sendSigned ctx (const (toStore emptyStore)) withoutAsking (Just btc) (Just btc) broken
     it "refuses an unsigned file" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
         unsigned <- unsignedPayment ctx cfg accId
         lift $
           dbShouldFailWith "The transaction is not signed" $
-            sendSigned ctx (const (toStore emptyStore)) withoutAsking (Just btc) unsigned
+            sendSigned ctx (const (toStore emptyStore)) withoutAsking (Just btc) (Just btc) unsigned
 
 deletingSpec :: Ctx -> Spec
 deletingSpec ctx =
@@ -1009,7 +1046,7 @@ accountOfTxSpec :: Ctx -> Spec
 accountOfTxSpec ctx =
   describe "The account of a transaction to sign, review or import" $ do
     let cfg = def :: Config
-        nameOf = fmap (fmap (dBAccountName . snd))
+        nameOf = fmap (fmap (dBAccountName . snd) . fst)
     it "is the account that holds it pending" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "main"
@@ -1043,6 +1080,20 @@ accountOfTxSpec ctx =
         _ <- testNewAcc2 ctx "savings"
         unsigned <- unsignedPayment ctx cfg accId
         nameOf (transactionAccount ctx Nothing Nothing unsigned) `dbShouldBeE` Just "main"
+
+    -- As a file signed and finalized by other software, which names no key
+    -- of its signed inputs, or a file another wallet prepared, which may
+    -- name no key of an output
+    it "is the account whose addresses it spends when it names no path of its inputs, and fills the paths in from the wallet" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "main"
+        _ <- testNewAcc2 ctx "savings"
+        unsigned <- unsignedPayment ctx cfg accId
+        (chosen, completed) <- transactionAccount ctx Nothing Nothing unsigned {txSignDataInputPaths = [], txSignDataOutputPaths = []}
+        liftIO $ do
+          (dBAccountName . snd <$> chosen) `shouldBe` Just "main"
+          txSignDataInputPaths completed `shouldBe` [Deriv :/ 0 :/ 0]
+          txSignDataOutputPaths completed `shouldBe` [Deriv :/ 1 :/ 0]
 
     it "refuses an --account it does not involve" $
       inDatabaseE $ do

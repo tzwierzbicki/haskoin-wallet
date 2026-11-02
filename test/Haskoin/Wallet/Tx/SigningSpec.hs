@@ -185,6 +185,18 @@ simpleTransaction ctx =
 simpleFunding :: Ctx -> Tx
 simpleFunding ctx = fundingTx ctx 1 [(externalAddr 0, 100000000)]
 
+-- | The simple transaction signed with SIGHASH_ALL and ANYONECANPAY, as
+-- another signer could sign it: a valid signature that does not commit to
+-- the whole transaction
+signedWithAnyoneCanPay :: Ctx -> Either String TxSignData
+signedWithAnyoneCanPay ctx = do
+  script <- maybeToEither "The address has no script" $ addressToOutput (externalAddr 0)
+  let unsigned = simpleTransaction ctx
+      coin = SigInput script 100000000 (OutPoint (txHash (simpleFunding ctx)) 0) (setAnyoneCanPay sigHashAll) Nothing
+      key = (derivePath ctx (Deriv :/ 0 :/ 0 :: SoftPath) testAccountKey).key
+  tx <- signTx btc ctx unsigned.txSignDataTx [coin] [key]
+  return unsigned {txSignDataTx = tx}
+
 analysisSpec :: Ctx -> Spec
 analysisSpec ctx =
   describe "Transaction analysis" $ do
@@ -295,6 +307,11 @@ verificationSpec ctx =
     it "rejects a transaction without signatures" $ do
       signed <- signedTransaction
       verifySignedTx btc ctx (withoutSignatures signed) `shouldBe` Left invalidInput0
+    -- Another signer can sign with ANYONECANPAY, a valid signature that
+    -- commits to its own input alone, and with NONE to no output at all
+    it "refuses a signature with a sighash other than ALL, naming both" $ do
+      signed <- expectRight $ signedWithAnyoneCanPay ctx
+      verifySignedTx btc ctx signed `shouldBe` Left "The signature of input 0 (1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj) has the sighash ALL|ANYONECANPAY, not ALL"
   where
     signedTransaction = fst <$> expectRight (signWalletTx btc ctx (simpleTransaction ctx) testAccountKey)
     invalidInput0 = "Invalid signature for input 0 (1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj)"
