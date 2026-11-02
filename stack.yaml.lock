@@ -5,33 +5,50 @@
 
 packages:
 - completed:
-    commit: 51e936a2377b63fbfc5897fb057d0b31928339ed
+    commit: cf153b59f88a5eab55105447b5aed45bef8bebcc
     git: https://github.com/jprupp/haskoin-core.git
     name: haskoin-core
     pantry-tree:
-      sha256: fb6707970e936a29e02027fc70daa77ec97827c3f67c3ea5b1ae447acab2e2d2
-      size: 7358
+      sha256: aa9278a700367440c26867e792b0c534586515894b0fcee763e6122f53e2b607
+      size: 7416
     version: 1.4.0
   original:
-    commit: 51e936a2377b63fbfc5897fb057d0b31928339ed
+    commit: cf153b59f88a5eab55105447b5aed45bef8bebcc
     git: https://github.com/jprupp/haskoin-core.git
 - completed:
-    hackage: haskoin-store-data-1.6.3@sha256:39edfd4e3c71c9755666be5a5921323c33895fba6d2ec414990e224ba5f08260,2509
+    commit: 940fbf20ba57e4adcb1ccf02c16e044948119dcd
+    git: https://github.com/jprupp/haskoin-store.git
+    name: haskoin-store-data
     pantry-tree:
-      sha256: 5fa65c3531905ba0270661f203210acd937b361bfb170f75c4f7e0df14b9dd47
-      size: 571
+      sha256: baa71991137e53d86994ab3347c62f346570697d662ba0be95cfc09a3c031209
+      size: 624
+    subdir: data
+    version: 1.6.3
   original:
-    hackage: haskoin-store-data-1.6.3@sha256:39edfd4e3c71c9755666be5a5921323c33895fba6d2ec414990e224ba5f08260,2509
+    commit: 940fbf20ba57e4adcb1ccf02c16e044948119dcd
+    git: https://github.com/jprupp/haskoin-store.git
+    subdir: data
 - completed:
-    hackage: secp256k1-haskell-1.5.0@sha256:009a0d57651a0f4eeeafd2b480a45fbc049015252fe92388ae4bb2115f765430,2077
+    commit: ac04713831a43754b5317c4c61fc199b9d006eaa
+    git: https://github.com/jprupp/secp256k1-haskell.git
+    name: secp256k1-haskell
     pantry-tree:
-      sha256: 3c3cbc95e94347d2d37c3a74e3703fd0b65161bfe353e37caa3cf8ddf2018463
-      size: 881
+      sha256: 9928e29e45ad093835bf77c2d133e7352e194520ba227117db056b86b73c4745
+      size: 1243
+    version: 1.7.0
   original:
-    hackage: secp256k1-haskell-1.5.0@sha256:009a0d57651a0f4eeeafd2b480a45fbc049015252fe92388ae4bb2115f765430,2077
+    commit: ac04713831a43754b5317c4c61fc199b9d006eaa
+    git: https://github.com/jprupp/secp256k1-haskell.git
+- completed:
+    hackage: base16-2.0@sha256:3cfa8002b7fd079be0552a116f27073e895b62a56d7a1cb7dd4f7a5ea3c8f6ae,3089
+    pantry-tree:
+      sha256: f9f7257c23f33cd2b9a837ec8b495d5880a6f2b5745b33f10b0aa450d22b5cbf
+      size: 1826
+  original:
+    hackage: base16-2.0
 snapshots:
 - completed:
-    sha256: 6a751c3fdab86bdc1605c9983f0bceebb072f7ffecef2eaa3be3f8ff19807a47
-    size: 774375
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/nightly/2026/8/31.yaml
-  original: nightly-2026-08-31
+    sha256: 5a365a790387c6fee9c1158c97f3701fdb34e523ba85730c8f0e45e1c4c30a7b
+    size: 780550
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/nightly/2026/10/28.yaml
+  original: nightly-2026-10-28

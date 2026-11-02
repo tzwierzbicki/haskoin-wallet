@@ -86,7 +86,6 @@ import qualified Data.Text as Text
 import Data.Word (Word64)
 import qualified Database.Persist as P
 import Haskoin
-import Haskoin.Wallet.Bip174 (decodePsbt)
 import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..), LeftCoin (..), LeftReason (..))
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.Database (DBAccount (..), DBAddress (..))

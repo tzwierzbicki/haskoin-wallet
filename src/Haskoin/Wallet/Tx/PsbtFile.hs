@@ -68,7 +68,6 @@ import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
 import Data.Word (Word64)
 import Haskoin
-import Haskoin.Wallet.Bip174
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Signing (sigHashName, walletSigHash)
 import Numeric.Natural (Natural)
@@ -181,7 +180,7 @@ txFilePsbt ctx accountM file = do
             <> [insertProprietary hwIdentifier feeRateField bytes | Just bytes <- [feeRateM]]
             <> [insertProprietary hwIdentifier replacesField (BS.concat (S.encode <$> tsd.txSignDataReplaces)) | not (null tsd.txSignDataReplaces)]
             <> [insertProprietary hwIdentifier labelField (encodeUtf8 tsd.txSignDataLabel) | not (Text.null tsd.txSignDataLabel)]
-  return (psbtOf tx) {psbtGlobals = globals, psbtInputs = inputs, psbtOutputs = outputs}
+  return $ Psbt (psbtOf tx).unsignedTx globals inputs outputs
 
 -- | The map of an input: the transaction its coin comes from, the sighash
 -- to sign it with while it is unsigned, its final script and witness once
@@ -227,17 +226,17 @@ signedPsbt :: Ctx -> Maybe FileAccount -> Psbt -> TxFile -> Either String Psbt
 signedPsbt ctx accountM source file = do
   let tsd = file.txFileData
       tx = tsd.txSignDataTx
-  unless (nosigHash tx == nosigHash source.psbtTx) $
+  unless (nosigHash tx == nosigHash source.unsignedTx) $
     Left "The transaction signed is not the one of the file"
   let stacks = tx.witness <> repeat []
-      signed = zipWith3 signedInput tx.inputs stacks source.psbtInputs
+      signed = zipWith3 signedInput tx.inputs stacks source.inputs
       fingerprintM = tsd.txSignDataFingerprint <|> (fileAccountFingerprint =<< accountM)
   inputs <- forM signed $ \m -> maybe (return m) (\(acc, fp) -> fromSeed (inputDerivations ctx) (insertInputDerivation ctx) acc fp m) ((,) <$> accountM <*> fingerprintM)
-  outputs <- forM source.psbtOutputs $ \m -> maybe (return m) (\(acc, fp) -> fromSeed (outputDerivations ctx) (insertOutputDerivation ctx) acc fp m) ((,) <$> accountM <*> fingerprintM)
-  let globals = case (file.txFileNetwork, lookupProprietary hwIdentifier networkField source.psbtGlobals) of
-        (Just net, Nothing) -> insertProprietary hwIdentifier networkField (cs net.name) source.psbtGlobals
-        _ -> source.psbtGlobals
-  return source {psbtGlobals = globals, psbtInputs = inputs, psbtOutputs = outputs}
+  outputs <- forM source.outputs $ \m -> maybe (return m) (\(acc, fp) -> fromSeed (outputDerivations ctx) (insertOutputDerivation ctx) acc fp m) ((,) <$> accountM <*> fingerprintM)
+  let globals = case (file.txFileNetwork, lookupProprietary hwIdentifier networkField source.globals) of
+        (Just net, Nothing) -> insertProprietary hwIdentifier networkField (cs net.name) source.globals
+        _ -> source.globals
+  return $ Psbt source.unsignedTx globals inputs outputs
   where
     -- The map of an input as the signed transaction has it: as it was
     -- while the input is unsigned
@@ -261,9 +260,9 @@ signedPsbt ctx accountM source file = do
       found <- records m
       return $
         foldr
-          (\(public, d) -> insert public (Derivation fingerprint (listToPath (pathToList acc.fileAccountPath <> pathToList d.derivationPath))))
+          (\(public, d) -> insert public (Derivation fingerprint (listToPath (pathToList acc.fileAccountPath <> pathToList d.path))))
           m
-          [(public, d) | (public, d) <- found, d.derivationFingerprint == xPubFP ctx acc.fileAccountXPub]
+          [(public, d) | (public, d) <- found, d.fingerprint == xPubFP ctx acc.fileAccountXPub]
 
 {- Reading -}
 
@@ -294,7 +293,7 @@ psbtTxFile :: Ctx -> [FileAccount] -> Psbt -> Either String TxFile
 psbtTxFile ctx accounts psbt = do
   extracted <- psbtTransaction psbt
   let stacks = extracted.witness <> repeat []
-  coins <- forM (zip3 [0 :: Int ..] extracted.inputs (zip stacks psbt.psbtInputs)) $ \(i, input, (stack, m)) -> do
+  coins <- forM (zip3 [0 :: Int ..] extracted.inputs (zip stacks psbt.inputs)) $ \(i, input, (stack, m)) -> do
     let place = "Input " <> show i
     parentM <- nonWitnessUtxo m
     parent <- maybe (Left (place <> " has no previous transaction: hw needs the whole transaction each coin comes from")) Right parentM
@@ -311,10 +310,10 @@ psbtTxFile ctx accounts psbt = do
     return (parent, TxIn input.outpoint scriptSig input.sequence, asked)
   let tx = Tx extracted.version [input | (_, input, _) <- coins] extracted.outputs extracted.witness extracted.locktime
       askedSigHashes = [(i, sh) | (i, (_, _, Just sh)) <- zip [0 :: Int ..] coins]
-  netM <- traverse networkOf (lookupProprietary hwIdentifier networkField psbt.psbtGlobals)
-  feeRateM <- traverse feeRateOf (lookupProprietary hwIdentifier feeRateField psbt.psbtGlobals)
-  replaces <- maybe (Right []) replacesOf (lookupProprietary hwIdentifier replacesField psbt.psbtGlobals)
-  label <- maybe (Right noLabel) (textOf "The label of the transaction") (lookupProprietary hwIdentifier labelField psbt.psbtGlobals)
+  netM <- traverse networkOf (lookupProprietary hwIdentifier networkField psbt.globals)
+  feeRateM <- traverse feeRateOf (lookupProprietary hwIdentifier feeRateField psbt.globals)
+  replaces <- maybe (Right []) replacesOf (lookupProprietary hwIdentifier replacesField psbt.globals)
+  label <- maybe (Right noLabel) (textOf "The label of the transaction") (lookupProprietary hwIdentifier labelField psbt.globals)
   matches <- mapM (accountMatch ctx netM psbt) accounts
   let onFileNetwork :: AccountMatch -> Bool
       onFileNetwork m = maybe True (== m.matchAccount.fileAccountNetwork) netM
@@ -333,7 +332,7 @@ psbtTxFile ctx accounts psbt = do
       [] -> case [(i, sh) | (i, sh) <- askedSigHashes, not (acceptableSigHash (signsWith first') sh)] of
         (i, sh) : _ -> Left (sigHashRefusal i sh (signsWith first'))
         [] -> return (Just first')
-  coinLabels <- forM (zip tx.inputs psbt.psbtInputs) $ \(input, m) ->
+  coinLabels <- forM (zip tx.inputs psbt.inputs) $ \(input, m) ->
     fmap (\text -> (input.outpoint.hash, text)) <$> traverse (textOf "The label of a coin") (lookupProprietary hwIdentifier coinLabelField m)
   let tsd =
         TxSignData
@@ -390,14 +389,14 @@ sigHashRefusal i sh netM =
 -- | What the records of the PSBT say of the account
 accountMatch :: Ctx -> Maybe Network -> Psbt -> FileAccount -> Either String AccountMatch
 accountMatch ctx netM psbt acc = do
-  inputs <- forM (zip [0 :: Int ..] psbt.psbtInputs) $ \(i, m) ->
+  inputs <- forM (zip [0 :: Int ..] psbt.inputs) $ \(i, m) ->
     addressesOf ("Input " <> show i) m =<< inputDerivations ctx m
-  outputs <- forM (zip [0 :: Int ..] psbt.psbtOutputs) $ \(i, m) ->
+  outputs <- forM (zip [0 :: Int ..] psbt.outputs) $ \(i, m) ->
     addressesOf ("Output " <> show i) m =<< outputDerivations ctx m
   -- The record of the account's own key, if the global map has one, says
   -- the fingerprint of the seed too
-  xpubs <- maybe (return []) (\net -> xpubRecords net ctx psbt.psbtGlobals) netM
-  let ofAccount = [d.derivationFingerprint | (xpub, d) <- xpubs, xpub == acc.fileAccountXPub, d.derivationPath == toGeneric acc.fileAccountPath]
+  xpubs <- maybe (return []) (\net -> xpubRecords net ctx psbt.globals) netM
+  let ofAccount = [d.fingerprint | (xpub, d) <- xpubs, xpub == acc.fileAccountXPub, d.path == toGeneric acc.fileAccountPath]
       found = concat (inputs <> outputs)
   return
     AccountMatch
@@ -426,8 +425,8 @@ matchRecord ctx acc place (public, derivation)
   | fingerprint == xPubFP ctx acc.fileAccountXPub, not (null indices) = resolve indices Nothing
   | otherwise = Right Nothing
   where
-    fingerprint = derivation.derivationFingerprint
-    indices = pathToList derivation.derivationPath
+    fingerprint = derivation.fingerprint
+    indices = pathToList derivation.path
     -- Whether the record's fingerprint is the account's: the fingerprint of
     -- its seed, when known, or of its own key
     namesAccount fromSeed = case fromSeed of

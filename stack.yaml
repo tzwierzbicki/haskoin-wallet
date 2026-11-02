@@ -1,4 +1,5 @@
-resolver: nightly-2026-08-31
+# The resolver is the one of haskoin-core
+resolver: nightly-2026-10-28
 nix:
   packages:
   - zlib
@@ -6,6 +7,11 @@ nix:
   - pkg-config
 extra-deps:
   - git: https://github.com/jprupp/haskoin-core.git
-    commit: 51e936a2377b63fbfc5897fb057d0b31928339ed
-  - haskoin-store-data-1.6.3@sha256:39edfd4e3c71c9755666be5a5921323c33895fba6d2ec414990e224ba5f08260,2509
-  - secp256k1-haskell-1.5.0@sha256:009a0d57651a0f4eeeafd2b480a45fbc049015252fe92388ae4bb2115f765430,2077
+    commit: cf153b59f88a5eab55105447b5aed45bef8bebcc
+  - git: https://github.com/jprupp/haskoin-store.git
+    commit: 940fbf20ba57e4adcb1ccf02c16e044948119dcd
+    subdirs:
+    - data
+  - git: https://github.com/jprupp/secp256k1-haskell.git
+    commit: ac04713831a43754b5317c4c61fc199b9d006eaa
+  - base16-2.0

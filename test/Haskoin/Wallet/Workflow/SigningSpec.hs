@@ -307,6 +307,15 @@ foreignFileSpec ctx =
         pendingState signed `shouldBe` Just (True, False)
         (Base64.encode <$> BS.readFile (home </> "signed.psbt")) `shouldReturn` corePreparedSignedText
 
+    -- Bitcoin Core 32 and later write a PSBT of version 2 (BIP 370) unless
+    -- asked for version 0: the same payment, as Core 32.1 writes it
+    it "prepared by Bitcoin Core as a PSBT of version 2 is refused, by its version" $
+      withHome $ \home -> do
+        createMain home
+        prepared <- coreFile home "core-prepared-v2.psbt"
+        (errorOf <$> hwJson home ["reviewtx", prepared] [])
+          `shouldReturn` Right ("The file " <> Text.pack prepared <> " could not be read: The global map: the value of the key 0xfb is PSBT version 2: only version 0 is supported")
+
     -- Core prepared 2.5 BTC of a wallet of its own to another address of
     -- that wallet, with a fee of 2250
     it "prepared by Bitcoin Core for another wallet is shown on the --network given, or on the default network, and refused without one" $

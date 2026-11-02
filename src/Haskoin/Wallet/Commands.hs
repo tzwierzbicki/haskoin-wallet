@@ -102,7 +102,6 @@ import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Amounts (AmountUnit)
 import Haskoin.Wallet.Backup (backupDatabase, backupDirectory, copyDatabase)
-import Haskoin.Wallet.Bip174 (Psbt, decodePsbt, decodePsbtBase64, encodePsbt, isPsbt)
 import Haskoin.Wallet.Bip329 (recordsText)
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Config

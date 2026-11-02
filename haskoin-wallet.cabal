@@ -47,7 +47,6 @@ library
       Haskoin.Wallet
       Haskoin.Wallet.Amounts
       Haskoin.Wallet.Backup
-      Haskoin.Wallet.Bip174
       Haskoin.Wallet.Bip329
       Haskoin.Wallet.Cli.Completion
       Haskoin.Wallet.Cli.Listing
@@ -221,7 +220,6 @@ test-suite spec
       Haskoin.Wallet.AmountsSpec
       Haskoin.Wallet.Arbitrary
       Haskoin.Wallet.BackupSpec
-      Haskoin.Wallet.Bip174Spec
       Haskoin.Wallet.Bip329Spec
       Haskoin.Wallet.Cli.CompletionSpec
       Haskoin.Wallet.Cli.ListingSpec

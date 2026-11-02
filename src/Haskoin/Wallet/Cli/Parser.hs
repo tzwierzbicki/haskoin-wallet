@@ -1562,9 +1562,11 @@ before you send it. A transaction that involves no account, such as a sweep
 to addresses outside the wallet, is shown on the network its file names.
 
 A file of another wallet, Bitcoin Core, Sparrow or Electrum for example, is
-shown the same way: a PSBT in bytes, or in base64 text. Such a file names no
-network. The account it involves tells it. One that involves no account
-needs --network, or the default-network of the configuration file.
+shown the same way: a PSBT in bytes, or in base64 text. hw reads version 0
+of the format. Bitcoin Core 32 and later write version 2 unless asked for
+version 0, with psbt_version. Such a file names no network. The account it
+involves tells it. One that involves no account needs --network, or the
+default-network of the configuration file.
 
 The labels reviewtx shows, the transaction's, those of its addresses and those
 of the coins it spends, are the ones the file carries, as the wallet that
@@ -1715,8 +1717,10 @@ which go on to the signed file.
 
 A file another wallet prepared for the account, Bitcoin Core, Sparrow or
 Electrum for example, is signed the same way, in bytes or in base64 text.
-The signed file keeps every field of it. hw signs with the sighash ALL only,
-and only when every input that is not the account's is signed already.
+hw reads version 0 of the format. Bitcoin Core 32 and later write version 2
+unless asked for version 0, with psbt_version. The signed file keeps every
+field of it. hw signs with the sighash ALL only, and only when every input
+that is not the account's is signed already.
 
 Signing sends nothing. Check the transaction with reviewtx or pendingtxs.
 Then send it with sendtx, or delete it with deletetx.

@@ -14,7 +14,6 @@ import Database.Persist.Sql (toSqlKey)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Util.Arbitrary
-import Haskoin.Wallet.Bip174
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Coin
@@ -359,38 +358,3 @@ arbitraryConfig =
 arbitraryFeeRates :: Gen FeeRates
 arbitraryFeeRates = FeeRates <$> arbitraryNatural <*> arbitraryNatural <*> arbitraryNatural <*> arbitrary <*> arbitrary <*> arbitrary
 
--- | A PSBT of a transaction of the network, with fields of every kind hw
--- reads and writes: previous transactions, sighash types, final scripts,
--- derivation records, proprietary fields, and keys the spec does not
--- define
-arbitraryPsbt :: Network -> Ctx -> Gen Psbt
-arbitraryPsbt net ctx = do
-  base <- psbtOf <$> arbitraryTx net ctx
-  globals <- unknownFields
-  inputs <- mapM (const inputFields) base.psbtInputs
-  outputs <- mapM (const outputFields) base.psbtOutputs
-  return base {psbtGlobals = globals, psbtInputs = inputs, psbtOutputs = outputs}
-  where
-    -- Types from 0x20 on are none the spec defines for any map
-    unknownFields = Map.fromList <$> resize 3 (listOf (oneof [unknownField, proprietaryField]))
-    unknownField = (,) <$> (PsbtKey <$> choose (0x20, 0x7f) <*> arbitraryBS) <*> arbitraryBS
-    proprietaryField = (,) <$> (proprietaryKey <$> (Proprietary <$> arbitraryBS <*> arbitrary <*> arbitraryBS)) <*> arbitraryBS
-    inputFields = do
-      m <- unknownFields
-      fields <-
-        sequence
-          [ maybeField (insertNonWitnessUtxo <$> arbitraryTx net ctx),
-            maybeField (insertSigHashType . fromIntegral <$> (arbitrary :: Gen Word32)),
-            maybeField (insertFinalScriptSig <$> arbitraryBS),
-            maybeField (insertFinalScriptWitness <$> resize 3 (listOf arbitraryBS)),
-            derivations (insertInputDerivation ctx)
-          ]
-      return (foldr ($) m fields)
-    outputFields = do
-      m <- unknownFields
-      records <- derivations (insertOutputDerivation ctx)
-      return (records m)
-    maybeField gen = oneof [return id, gen]
-    derivations insert = do
-      records <- resize 2 (listOf ((,) <$> (snd <$> arbitraryKeyPair ctx) <*> (Derivation <$> arbitraryFingerprint <*> arbitraryDerivPath)))
-      return $ foldr (\(key, derivation) inserted -> insert key derivation . inserted) id records

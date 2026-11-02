@@ -24,7 +24,6 @@ import Data.Time (UTCTime)
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Bip174 (decodePsbtBase64)
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Tx.CoinSelection (CoinSelection (..), FeePayer (..))
@@ -224,7 +223,7 @@ transactionLocked c = jsonCoinLock c == Just LockedByTransaction
 lockedCoins :: DBAccountId -> ExceptT String (DB IO) [(Address, Bool)]
 lockedCoins accId = map (\c -> (jsonCoinAddress c, transactionLocked c)) <$> coinsAfter btc accId AllCoins Nothing Nothing
 
--- | The payment of 'unsignedPayment' as Bitcoin Core 25.0 signed and
+-- | The payment of 'unsignedPayment' as Bitcoin Core signed and
 -- finalized the file hw writes for it, in
 -- test/data/psbt/core/pending-payment-finalized.psbt: another signer's
 -- signature, which differs from the one hw makes, and no derivation record

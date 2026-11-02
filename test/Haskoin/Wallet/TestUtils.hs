@@ -963,7 +963,7 @@ fingerprintOf = forceRight . textToFingerprint
 
 -- | The file Bitcoin Core prepared for the test account
 -- (test/data/psbt/core/core-prepared.psbt), signed by the test wallet into
--- that file, in base64: the file Bitcoin Core 25.0's analyzepsbt finds
+-- that file, in base64: the file Bitcoin Core's analyzepsbt finds
 -- complete, and whose transaction its testmempoolaccept accepts on the
 -- regtest chain the coin is on. See test/data/psbt/README.md.
 corePreparedSignedText :: BS.ByteString
