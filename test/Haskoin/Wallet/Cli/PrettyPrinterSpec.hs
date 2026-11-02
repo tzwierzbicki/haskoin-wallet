@@ -442,6 +442,21 @@ verboseSpec =
                      "             includes 0.00000300 btc of change too small for an output"
                    ]
 
+    it "shows the lock time under the fee, as the block the transaction waits for, and no field without one" $ do
+      let locked = TxInfo spendSummary {summaryLockTime = 814037} (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
+          unlocked = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
+      take 2 (drop 3 (renderedLines (verboseTxDoc btc UnitBitcoin [] (Just seenTimeInCet) locked)))
+        `shouldBe` [ "  Fee      : 0.00001000 btc, 4 sat/byte",
+                     "  Lock time: block 814037"
+                   ]
+      length (renderedLines (verboseTxDoc btc UnitBitcoin [] (Just seenTimeInCet) unlocked)) `shouldBe` 7
+
+    -- 500,000,000 and above, a lock time is a Unix time; hw writes none
+    it "shows a lock time of 500,000,000 or more as a Unix time" $ do
+      let locked = TxInfo spendSummary {summaryLockTime = 1700000000} (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
+      renderedLines (verboseTxDoc btc UnitBitcoin [] (Just seenTimeInCet) locked) !! 4
+        `shouldBe` "  Lock time: Unix time 1700000000"
+
     it "shows an unsigned transaction by its nosigHash, with the time it was created" $ do
       let info = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False (Just seenTime) [])) "" Map.empty
       take 2 (drop 1 (renderedLines (verboseTxDoc btc UnitBitcoin [] (Just seenTimeInCet) info)))

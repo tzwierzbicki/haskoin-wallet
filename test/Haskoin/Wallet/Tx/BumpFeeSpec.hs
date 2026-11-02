@@ -41,6 +41,7 @@ stuckSummary =
       summaryFeeByte = 10,
       summaryChangeInFee = Just 0,
       summarySize = 226,
+      summaryLockTime = 0,
       summaryMyOutputs = Map.empty,
       summaryOtherOutputs = Map.empty,
       summaryNonStdOutputs = [],
@@ -53,7 +54,7 @@ stuckSummary =
 payment :: Ctx -> Bool -> Sent
 payment ctx marked =
   Sent
-    { sentTx = (if marked then replaceableTx else spendingTx) ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 20000), (internalAddr 0, 27740)],
+    { sentTx = (if marked then builtTx ctx 0 else spendingTx ctx) [(fakeTxHash 1, 0)] [(otherAddr 0, 20000), (internalAddr 0, 27740)],
       sentSummary = stuckSummary,
       sentParents = [],
       sentLabel = ""

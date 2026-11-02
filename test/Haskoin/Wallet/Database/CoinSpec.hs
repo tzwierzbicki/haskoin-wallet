@@ -166,7 +166,7 @@ unspendable ctx accId minConf = sortOn fst . map (\(coin, lock) -> (coin.outpoin
 
 -- | The best block of Bitcoin at a height
 bestAt :: BlockHeight -> ExceptT String (DB IO) ()
-bestAt height = lift $ updateBest btc (fakeBlockHash 1) height
+bestAt height = lift $ updateBest btc (fakeBlockHash 1) height 1700000000
 
 -- | A pending transaction of an account spending the first payment
 spendingFirst :: Ctx -> DBAccountId -> ExceptT String (DB IO) ()
@@ -371,7 +371,7 @@ listingSpec ctx =
       inDatabaseE $ do
         accId <- account ctx
         _ <- refresh ctx accId [confirmedPayment ctx]
-        lift $ updateBest bch (fakeBlockHash 2) 900000
+        lift $ updateBest bch (fakeBlockHash 2) 900000 1700000000
         listed accId Nothing Nothing `dbShouldBeE` [(firstCoin, 1, Nothing)]
 
     it "shows a coin a pending transaction spends as locked, and the others as free" $

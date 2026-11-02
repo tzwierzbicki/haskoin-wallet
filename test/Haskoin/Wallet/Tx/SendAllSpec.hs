@@ -66,7 +66,7 @@ found unspents recipients =
 
 -- | Build with the seed 0, at 10 satoshis per byte and a dust limit of 546
 build :: Ctx -> SendAllCoins -> [(Address, Share)] -> Either String BuiltTx
-build ctx wallet recipients = buildSendAll btc ctx (mkStdGen 0) wallet recipients 10 546
+build ctx wallet recipients = buildSendAll btc ctx (mkStdGen 0) wallet recipients 10 546 800002
 
 -- | The outputs of a transaction as addresses and amounts, by amount, since
 -- the builder shuffles them
@@ -136,19 +136,21 @@ buildSpec ctx =
       built <- expectRight $ build ctx (found (twoCoins ctx) [(externalAddr 3, Deriv :/ 0 :/ 3)]) [(externalAddr 3, Remainder)]
       built.outputPaths `shouldBe` [Deriv :/ 0 :/ 3]
 
-    it "marks every input replaceable on Bitcoin" $ do
+    it "is a version 2 transaction with the lock time given, its inputs marked replaceable on Bitcoin" $ do
       built <- expectRight $ build ctx (found (twoCoins ctx) []) [(otherAddr 0, Remainder)]
+      (built.tx.version, built.tx.locktime) `shouldBe` (2, 800002)
       ((.sequence) <$> built.tx.inputs) `shouldBe` [0xfffffffd, 0xfffffffd]
 
-    it "keeps every input final on Bitcoin Cash" $ do
-      built <- expectRight $ buildSendAll bch ctx (mkStdGen 0) (found (twoCoins ctx) []) [(otherAddr 0, Remainder)] 10 546
-      ((.sequence) <$> built.tx.inputs) `shouldBe` [0xffffffff, 0xffffffff]
+    -- 0xfffffffe: not final, so the lock time applies, and not replaceable
+    it "gives every input of Bitcoin Cash, which replaces no transaction, the highest sequence under which the lock time applies" $ do
+      built <- expectRight $ buildSendAll bch ctx (mkStdGen 0) (found (twoCoins ctx) []) [(otherAddr 0, Remainder)] 10 546 800002
+      ((.sequence) <$> built.tx.inputs) `shouldBe` [0xfffffffe, 0xfffffffe]
 
     it "is refused without coins to send" $
       build ctx (found [] []) [(otherAddr 0, Remainder)] `shouldBe` Left "There are no coins to send"
 
     it "is refused a fee rate of zero" $
-      buildSendAll btc ctx (mkStdGen 0) (found (twoCoins ctx) []) [(otherAddr 0, Remainder)] 0 546
+      buildSendAll btc ctx (mkStdGen 0) (found (twoCoins ctx) []) [(otherAddr 0, Remainder)] 0 546 800002
         `shouldBe` Left "The fee rate must be at least 1 satoshi per byte"
 
 {- The report on dust coins -}

@@ -87,6 +87,7 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (getCurrentTime)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Text.Encoding (encodeUtf8)
 import Data.Word (Word64)
 import Database.Persist.Sqlite (transactionUndo)
@@ -109,14 +110,16 @@ import Haskoin.Wallet.Cli.Listing
 import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
 import Haskoin.Wallet.Cli.Parser
+import Haskoin.Wallet.Database.BestBlock (BestBlock (..), getBest)
 import Haskoin.Wallet.Database.PendingTx
-import Haskoin.Wallet.Cli.PrettyPrinter (addedCoinsDoc, childrenDoc, coinBalancesPrinter, dustReportDoc, feeRatesDoc, reducedDoc, renderOn, txAnswerDoc)
+import Haskoin.Wallet.Cli.PrettyPrinter (addedCoinsDoc, agoText, childrenDoc, coinBalancesPrinter, dustReportDoc, feeRatesDoc, reducedDoc, renderOn, txAnswerDoc)
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.Tx.Building (ChangeTo (..), CoinControl (..), buildTxSignData, coinWithPath)
 import Haskoin.Wallet.Tx.BumpFee
+import Haskoin.Wallet.Tx.LockTime (isStale, lockTimeFor)
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Signing (labelledTxFile, labelsFromFile, parseOutsideTxSignData, parseTxFile, signWalletTx)
@@ -653,6 +656,53 @@ confirmFeeRate yes feeByte dust = do
           <> ", the most hw takes without asking. Prepare the transaction anyway?"
     unless accepted $ throwError "The transaction was not prepared: give a lower --fee-rate"
 
+-- | Whether the wallet is behind the chain on the network: its best block,
+-- as the last sync left it, was mined more than eight hours ago
+-- ('isStale'), or at a time the wallet does not know. Left what to tell
+-- the user then, since a sync may also find coins spent or received since.
+-- Right the height of the best block otherwise, which the lock time of a
+-- new transaction is drawn from ('lockTimeFor'), or none before the first
+-- sync: a wallet that never synced has no coins to spend, and no height to
+-- be behind.
+behindTheChain :: Network -> ExceptT String (DB IO) (Either String (Maybe BlockHeight))
+behindTheChain net = do
+  bestM <- getBest net
+  now <- liftIO getCurrentTime
+  return $ case bestM of
+    Nothing -> Right Nothing
+    Just best
+      | Just time <- best.blockTime,
+        not (isStale now (Just time)) ->
+          Right (Just best.blockHeight)
+      | Just time <- best.blockTime ->
+          Left $
+            "The wallet is behind the chain: its best block, " <> show best.blockHeight <> ", was mined "
+              <> agoText now (posixSecondsToUTCTime (fromIntegral time)) <> ", and a sync may find coins spent or received since."
+      | otherwise ->
+          Left $
+            "The wallet may be behind the chain: it does not know when its best block, " <> show best.blockHeight
+              <> ", was mined, and a sync may find coins spent or received since."
+
+-- | Ask whether to prepare a transaction while the wallet is behind the
+-- chain, told why, unless --yes. The transaction then gets a lock time of
+-- 0, as Bitcoin Core and Electrum give one then. A no stops the command:
+-- the alternative is to sync first.
+confirmBehind :: Bool -> String -> ExceptT String (DB IO) ()
+confirmBehind yes why =
+  unless yes $ do
+    agreed <- askYes terminal $ why <> " Prepare the transaction anyway, with a lock time of 0?"
+    unless agreed $ throwError "The transaction was not prepared: run sync first"
+
+-- | The height the lock time of a new transaction is drawn from, which
+-- 'behindTheChain' gives: none when the wallet is behind the chain and the
+-- user agrees to go on ('confirmBehind'), for a lock time of 0
+lockTimeHeight :: Bool -> Network -> ExceptT String (DB IO) (Maybe BlockHeight)
+lockTimeHeight yes net = do
+  behind <- behindTheChain net
+  case behind of
+    Left why -> confirmBehind yes why >> return Nothing
+    Right heightM -> return heightM
+
 -- | The fee rate of a transaction, in satoshis per byte: the number given,
 -- or one of the rates recent blocks paid, read from the store: the level
 -- given, or the one the user picks, the median by default. A rate below
@@ -742,6 +792,7 @@ cmdPrepareTx ctx cfg unit opts =
     -- Before the transaction is built, not after
     for_ opts.output checkPathFree
     recipients <- liftEither $ mapM (readPayment net unit) opts.recipients
+    heightM <- lockTimeHeight opts.yes net
     feeByte <- chooseFeeRate cfg net (webStore ctx cfg net) 1 opts.feeRate
     confirmFeeRate opts.yes feeByte opts.dust
     (control, left) <-
@@ -758,7 +809,8 @@ cmdPrepareTx ctx cfg unit opts =
           | fromMaybe (configChangeBack cfg) opts.changeBack = ChangeBack (changeBackTo unit net accId)
           | otherwise = NewChangeAddress
     gen <- liftIO initStdGen
-    tsd <- buildTxSignData net ctx cfg gen opts.strategy accId recipients feeByte opts.dust opts.feePayer opts.minConf control changeTo
+    let (lockTime, buildGen) = lockTimeFor heightM gen
+    tsd <- buildTxSignData net ctx cfg buildGen opts.strategy accId recipients feeByte opts.dust lockTime opts.feePayer opts.minConf control changeTo
     preparedAnswer ctx accId acc opts.output (withLabel opts.label tsd) left
 
 -- | The address the change of a payment goes back to, among the addresses
@@ -794,6 +846,7 @@ cmdPrepareSendAll ctx cfg unit opts =
     liftEither $ checkSharing recipients
     when (controlled && isJust opts.dustCoins) $
       throwError "The coins chosen with --coin or --spend-from are all sent: give --spend-dust or --leave-dust without them"
+    heightM <- lockTimeHeight opts.yes net
     feeByte <- chooseFeeRate cfg net (webStore ctx cfg net) 1 opts.feeRate
     confirmFeeRate opts.yes feeByte opts.dust
     spendable <- spendableCoins net ctx accId opts.minConf
@@ -808,7 +861,8 @@ cmdPrepareSendAll ctx cfg unit opts =
           sent <- coinsWithDust labels feeByte recipients (not (null unspendable)) spendable
           return (sent, leftCoins labels (notSent sent spendable) unspendable [])
     gen <- liftIO initStdGen
-    tsd <- buildSendAllSignData net ctx gen accId sent recipients feeByte opts.dust
+    let (lockTime, buildGen) = lockTimeFor heightM gen
+    tsd <- buildSendAllSignData net ctx buildGen accId sent recipients feeByte opts.dust lockTime
     preparedAnswer ctx accId acc opts.output (withLabel opts.label tsd) left
   where
     -- The spendable coins the transaction does not send
@@ -991,14 +1045,19 @@ cmdBumpFee ctx cfg unit opts =
     children <- spendingChildren ctx store accId acc [stuck]
     refuseSpentElsewhere net accId (stuck : children)
     plan <- bumpPlan net ctx accId (stuck : children)
+    -- A wallet behind the chain is asked about with the other questions,
+    -- once nothing can refuse the replacement: it is built for a lock time
+    -- of 0 meanwhile
+    behind <- behindTheChain net
     gen <- liftIO initStdGen
+    let (lockTime, buildGen) = lockTimeFor (either (const Nothing) id behind) gen
     -- The network takes no replacement that adds an unconfirmed coin
     confirmed <- spendableCoins net ctx accId 1
     labels <- lift $ labelsOfCoins net accId confirmed
     candidates <- forM confirmed $ \coin -> (\(addr, path) -> (coin, addr, path)) <$> coinWithPath net accId coin
-    offered <- liftEither $ fundings ctx gen plan candidates feeByte opts.dust
+    offered <- liftEither $ fundings ctx buildGen plan candidates feeByte opts.dust
     built <- forM offered $ \funding -> do
-      tsd <- buildBump ctx cfg net accId gen plan funding feeByte opts.dust
+      tsd <- buildBump ctx cfg net accId buildGen plan funding feeByte opts.dust lockTime
       info <- txInfoOf ctx (accId, acc) tsd
       liftEither $ checkBumpFee plan info.txInfoSummary
       return (funding, tsd)
@@ -1006,6 +1065,7 @@ cmdBumpFee ctx cfg unit opts =
     -- change address a replacement took is given back if the answer is no,
     -- with everything else the command did.
     confirmFeeRate opts.yes feeByte opts.dust
+    either (confirmBehind opts.yes) (const (return ())) behind
     unless (null children) $ do
       liftIO $ renderOn stderr (childrenDoc children)
       agreed <- if opts.yes then return True else askYes terminal (childrenQuestion children)
@@ -1105,8 +1165,15 @@ cmdPrepareSweep ctx cfg unit opts =
       confirmFeeRate opts.yes feeByte opts.dust
       keys <- maybe (return []) (readSecKeys terminal net) opts.keys
       found <- fetchSweepCoins net ctx (webStore ctx cfg net) accIdM keys (typed <> listed) opts.coins (fst <$> sweepTo)
+      -- The lock time is drawn from the best block of the store, which the
+      -- coins come from: a sweep is prepared online, whatever the wallet
+      -- knows of the chain. A store behind the chain gives none.
+      best <- fromStore $ storeBestBlock (webStore ctx cfg net)
+      now <- liftIO getCurrentTime
       gen <- liftIO initStdGen
-      withLabel opts.label <$> liftEither (buildSweepSignData net ctx gen found sweepTo feeByte opts.dust)
+      let heightM = if isStale now (Just best.header.timestamp) then Nothing else Just best.height
+          (lockTime, buildGen) = lockTimeFor heightM gen
+      withLabel opts.label <$> liftEither (buildSweepSignData net ctx buildGen found sweepTo feeByte opts.dust lockTime)
     -- The addresses of the --address-file, read on the network of the
     -- sweep
     addressesOfFile net file = liftEither . parseAddresses net =<< liftEitherIO (readTextFile file)

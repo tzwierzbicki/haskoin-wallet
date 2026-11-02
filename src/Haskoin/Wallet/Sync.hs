@@ -203,7 +203,7 @@ sync ctx cfg store net accId full = do
   refreshed <- syncCoins ctx store net accId changedBals
   (resent, conflicted, retired) <- syncPending store accId (Set.fromList $ (.txid) <$> listed)
   pruneRawTxs everything refreshed retired
-  lift $ updateBest net (headerHash best.header) best.height
+  lift $ updateBest net (headerHash best.header) best.height best.header.timestamp
   -- After the best block, which matures the coins of a coinbase
   spendable <- spendableBalance net accId
   return
@@ -228,9 +228,9 @@ chainReorganised store net = do
   bestM <- getBest net
   case bestM of
     Nothing -> return False
-    Just (hash, height) -> do
-      blocks <- fromStore $ storeBlocksAtHeight store height
-      let stillMain b = headerHash b.header == hash && b.main
+    Just best -> do
+      blocks <- fromStore $ storeBlocksAtHeight store best.blockHeight
+      let stillMain b = headerHash b.header == best.blockHash && b.main
       return $ not $ any stillMain blocks
 
 {- The balances -}

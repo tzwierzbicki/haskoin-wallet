@@ -72,6 +72,28 @@ bumpFeeSpec ctx = do
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
           `shouldBe` (Map.fromList [(otherAddr 0, 20000)], Map.fromList [(internalAddr 0, 25480)], 4520)
 
+    -- The best block of the chain is 800002. One time in ten the lock time
+    -- is below it, by up to 99 blocks.
+    it "gets the lock time of the best block the wallet knows, or one up to 99 blocks below it, as a payment does" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        stuck <- sentPayment home
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
+        summaryLockTime (txInfoSummary bumped) `shouldSatisfy` (\lockTime -> lockTime <= 800002 && lockTime >= 800002 - 99)
+
+    -- The best block was mined nine hours before the test: more than the
+    -- eight hours after which the wallet counts as behind the chain. The
+    -- payment is prepared with --yes, which answers the same question.
+    it "asks before replacing while the wallet is behind the chain, and replaces with a lock time of 0 on yes" $
+      withChainMinedAgo ctx [] (9 * 3600) (paidChain ctx) $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--yes"] []
+        stuck <- signAndSend home nosig
+        run <- hw home ["bumpfee", stuck, "--fee-rate", "20"] ["n"]
+        runErr run `shouldSatisfy` Text.isInfixOf "The wallet is behind the chain: its best block, 800002, was mined 9 hours ago"
+        run `shouldSatisfy` printed "The transaction was not prepared: run sync first"
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] ["y"]
+        summaryLockTime (txInfoSummary bumped) `shouldBe` 0
+
     -- At 100 satoshis a byte, the 226 bytes pay 22600 and leave 50000 -
     -- 20000 - 22600 = 7400 of change, less than the 10000 of --dust-limit: the
     -- fee is all the rest, 50000 - 20000 = 30000

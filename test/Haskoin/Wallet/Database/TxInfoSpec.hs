@@ -189,6 +189,11 @@ summarySpec ctx =
       summaryNonStdOutputs summary `shouldBe` [opReturn]
       summaryOtherInputs summary `shouldBe` Map.empty
 
+    it "carries the lock time of the transaction, as the store reports it" $ do
+      let locked = storeTxLockedAt 814037 (fakeTxHash 1) (Store.BlockRef 800000 1) [inputFrom ctx (fakeTxHash 0xee, 0) (otherAddr 0) 51000] [outputTo ctx (externalAddr 0) 50000] 1000
+      summaryLockTime (summarized locked) `shouldBe` 814037
+      summaryLockTime (summarized (payment ctx)) `shouldBe` 0
+
     it "sees an address the account does not have as an outsider's" $ do
       let summary = storeSummary btc Map.empty (payment ctx)
       involvesWallet summary `shouldBe` False
@@ -246,6 +251,7 @@ jsonSpec =
               "feebyte": 4,
               "changeinfee": null,
               "size": 226,
+              "locktime": 0,
               "myoutputs": {"17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn": {"value": 9000, "path": "/1/0", "label": ""}},
               "otheroutputs": {"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU": 40000},
               "nonstdoutputs": [],
@@ -289,6 +295,7 @@ jsonSpec =
               "feebyte": 4,
               "changeinfee": null,
               "size": 226,
+              "locktime": 0,
               "myoutputs": {"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj": {"value": 50000, "path": "/0/0", "label": ""}},
               "otheroutputs": {},
               "nonstdoutputs": [],
@@ -507,13 +514,13 @@ listingSpec ctx =
         _ <- record accId (creditTx ctx (fakeTxHash 2) (Store.BlockRef 800002 1) (externalAddr 0) 50000)
         _ <- record accId (creditTx ctx (fakeTxHash 3) (Store.MemRef 1700000000) (externalAddr 0) 50000)
         listedBlocks accId `dbShouldBeE` [(Store.MemRef 1700000000, 0), (Store.BlockRef 800002 1, 1), (Store.BlockRef 800000 1, 1)]
-        lift $ updateBest btc (fakeBlockHash 0) 800002
+        lift $ updateBest btc (fakeBlockHash 0) 800002 1700000000
         listedBlocks accId `dbShouldBeE` [(Store.MemRef 1700000000, 0), (Store.BlockRef 800002 1, 1), (Store.BlockRef 800000 1, 3)]
         -- The best block of another network does not count
-        lift $ updateBest btcTest (fakeBlockHash 0) 900000
+        lift $ updateBest btcTest (fakeBlockHash 0) 900000 1700000000
         listedBlocks accId `dbShouldBeE` [(Store.MemRef 1700000000, 0), (Store.BlockRef 800002 1, 1), (Store.BlockRef 800000 1, 3)]
         -- A best block behind a transaction's block still confirms it once
-        lift $ updateBest btc (fakeBlockHash 0) 800001
+        lift $ updateBest btc (fakeBlockHash 0) 800001 1700000000
         listedBlocks accId `dbShouldBeE` [(Store.MemRef 1700000000, 0), (Store.BlockRef 800002 1, 1), (Store.BlockRef 800000 1, 2)]
 
     it "lists each transaction with the time the store gives it" $
@@ -526,7 +533,7 @@ listingSpec ctx =
       inDatabaseE $ do
         accId <- account ctx
         _ <- record accId (payment ctx)
-        lift $ updateBest btc (fakeBlockHash 0) 800002
+        lift $ updateBest btc (fakeBlockHash 0) 800002 1700000000
         lift $ markTxInfoDead accId (fakeTxHash 1)
         (map chainOf <$> txsAfter accId Nothing Nothing) `dbShouldBeE` [ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 0 True]
 
@@ -653,7 +660,7 @@ historySpec ctx =
         -- The sync records both transactions and the best block
         record accId (payment ctx) `dbShouldBeE` True
         record accId (spend ctx) `dbShouldBeE` True
-        lift $ updateBest btc (fakeBlockHash 0) 800002
+        lift $ updateBest btc (fakeBlockHash 0) 800002 1700000000
         txsAfter accId Nothing Nothing
           `dbShouldBeE` [ TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty,
                         TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "" Map.empty

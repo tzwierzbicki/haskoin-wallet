@@ -35,12 +35,13 @@ import Data.List (find, nub, nubBy)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isJust, listToMaybe, mapMaybe)
-import Data.Word (Word64)
+import Data.Word (Word32, Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Coin (coinText)
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.Tx.LockTime (inputSequence, txVersion)
 import Haskoin.Wallet.Tx.Recipient (Share, shareAmounts)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Database.TxInfo
@@ -159,8 +160,9 @@ uncompressedKeyAddr ctx key = pubKeyAddr ctx $ derivePublicKey ctx (wrapSecKey F
 {- Building -}
 
 -- | The sweep transaction and its signing data: all the coins spent to the
--- destinations, both in random order. The destinations with a fixed amount
--- get it, and what is left after the estimated fee is split evenly between
+-- destinations, both in random order, with the lock time given (see
+-- "Haskoin.Wallet.Tx.LockTime"). The destinations with a fixed amount get
+-- it, and what is left after the estimated fee is split evenly between
 -- the others ('shareAmounts'). The signing data carries the transactions
 -- the coins come from and the paths of the wallet's own addresses among the
 -- coins and the destinations, which may be none: a sweep need not involve
@@ -177,8 +179,10 @@ buildSweepSignData ::
   Natural ->
   -- | Dust
   Natural ->
+  -- | Lock time
+  Word32 ->
   Either String TxSignData
-buildSweepSignData net ctx gen found sweepTo feeByte dust = do
+buildSweepSignData net ctx gen found sweepTo feeByte dust lockTime = do
   when (null found.coins) $ Left "There are no coins to sweep in those addresses"
   when (null sweepTo) $ Left "No addresses to sweep to"
   checkFeeRateAndDust feeByte dust
@@ -190,7 +194,7 @@ buildSweepSignData net ctx gen found sweepTo feeByte dust = do
   let (shuffledCoins, shuffledOutputs) =
         evalState ((,) <$> randomShuffle found.coins <*> randomShuffle (zip scripts (snd <$> amounts))) gen
       outputs = [TxOut (fromIntegral amount) (marshal ctx script) | (script, amount) <- shuffledOutputs]
-      tx = Tx 1 [TxIn c.outpoint BS.empty (inputSequence net) | c <- shuffledCoins] outputs [] 0
+      tx = Tx txVersion [TxIn c.outpoint BS.empty (inputSequence net) | c <- shuffledCoins] outputs [] lockTime
       inputPaths = pathsOf $ mapMaybe (.address) found.coins
   return $ TxSignData tx found.transactions inputPaths (pathsOf (fst <$> sweepTo)) (Just feeByte) Nothing [] noLabel
   where

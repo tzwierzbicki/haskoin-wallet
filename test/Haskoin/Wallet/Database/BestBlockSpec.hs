@@ -45,46 +45,58 @@ storedSpec =
       inDatabaseE $
         getBest btc `dbShouldBeE` Nothing
 
-    it "is read back as it was stored" $
+    -- Block 814037 was mined on 2023-10-28 at 19:47:43 UTC
+    it "is read back as it was stored, with the time its header gives" $
       inDatabaseE $ do
-        lift $ updateBest btc bitcoinBlock 814037
-        getBest btc `dbShouldBeE` Just (bitcoinBlock, 814037)
+        lift $ updateBest btc bitcoinBlock 814037 1698522463
+        getBest btc `dbShouldBeE` Just (BestBlock bitcoinBlock 814037 (Just 1698522463))
 
     it "gives its height alone, which the confirmations are counted from" $
       inDatabaseE $ do
         bestHeight btc `dbShouldBeE` Nothing
-        lift $ updateBest btc bitcoinBlock 814037
+        lift $ updateBest btc bitcoinBlock 814037 1698522463
         bestHeight btc `dbShouldBeE` Just 814037
 
     it "is replaced by the next one, a single row for the network" $
       inDatabaseE $ do
-        lift $ updateBest btc bitcoinBlock 814037
-        lift $ updateBest btc nextBitcoinBlock 814038
-        getBest btc `dbShouldBeE` Just (nextBitcoinBlock, 814038)
+        lift $ updateBest btc bitcoinBlock 814037 1698522463
+        lift $ updateBest btc nextBitcoinBlock 814038 1698523063
+        getBest btc `dbShouldBeE` Just (BestBlock nextBitcoinBlock 814038 (Just 1698523063))
         lift (P.count ([] :: [P.Filter DBBest])) `dbShouldBeE` 1
 
     it "is kept for each network apart" $
       inDatabaseE $ do
-        lift $ updateBest btc bitcoinBlock 814037
-        lift $ updateBest btcTest testnetBlock 2535443
-        getBest btc `dbShouldBeE` Just (bitcoinBlock, 814037)
-        getBest btcTest `dbShouldBeE` Just (testnetBlock, 2535443)
+        lift $ updateBest btc bitcoinBlock 814037 1698522463
+        lift $ updateBest btcTest testnetBlock 2535443 1698522000
+        getBest btc `dbShouldBeE` Just (BestBlock bitcoinBlock 814037 (Just 1698522463))
+        getBest btcTest `dbShouldBeE` Just (BestBlock testnetBlock 2535443 (Just 1698522000))
         getBest bch `dbShouldBeE` Nothing
 
-    it "is stored under the name of its network, with the hash as it is displayed" $
+    it "is stored under the name of its network, with the hash as it is displayed and the time in seconds" $
       inDatabase $ do
-        updateBest btc bitcoinBlock 814037
+        updateBest btc bitcoinBlock 814037 1698522463
         tableRows "d_b_best"
-          `dbShouldBe` [[PersistText "btc", PersistText "00000000000000000004727b3cc0946dc2054f59e362369e0437325c0a992efb", PersistInt64 814037]]
+          `dbShouldBe` [[PersistText "btc", PersistText "00000000000000000004727b3cc0946dc2054f59e362369e0437325c0a992efb", PersistInt64 814037, PersistInt64 1698522463]]
+
+    -- The hw of before 2026-11 kept no time: the next sync stores one
+    it "reads a block stored without its time, by an older hw, as a block whose time is unknown" $
+      inDatabaseE $ do
+        lift $ P.insert_ $ DBBest "btc" "00000000000000000004727b3cc0946dc2054f59e362369e0437325c0a992efb" 814037 Nothing
+        getBest btc `dbShouldBeE` Just (BestBlock bitcoinBlock 814037 Nothing)
 
     it "is refused when its stored hash does not read, rather than taken for no block" $
       inDatabase $ do
-        P.insert_ $ DBBest "btc" "nonsense" 814037
+        P.insert_ $ DBBest "btc" "nonsense" 814037 Nothing
         dbShouldFailWith "The stored best block of btc does not read: sync --full stores it again" $ getBest btc
 
     it "is refused when its stored height is no block height" $
       inDatabase $ do
-        P.insert_ $ DBBest "btc" "00000000000000000004727b3cc0946dc2054f59e362369e0437325c0a992efb" (-1)
+        P.insert_ $ DBBest "btc" "00000000000000000004727b3cc0946dc2054f59e362369e0437325c0a992efb" (-1) Nothing
+        dbShouldFailWith "The stored best block of btc does not read: sync --full stores it again" $ getBest btc
+
+    it "is refused when its stored time is no Unix time" $
+      inDatabase $ do
+        P.insert_ $ DBBest "btc" "00000000000000000004727b3cc0946dc2054f59e362369e0437325c0a992efb" 814037 (Just (-1))
         dbShouldFailWith "The stored best block of btc does not read: sync --full stores it again" $ getBest btc
 
 {- Confirmations -}

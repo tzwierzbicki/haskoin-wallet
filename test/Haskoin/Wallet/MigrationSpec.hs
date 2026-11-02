@@ -39,7 +39,7 @@ spec = prepareContext $ \ctx ->
       inMemory $ do
         createTables migrateAll
         P.insert_ $ DBVersion latestDatabaseVersion
-        P.insert_ $ DBBest "btc" "00000000000000000002a7c4c1e48d76c5a37902165a270156b7a8d72728a054" 800105
+        P.insert_ $ DBBest "btc" "00000000000000000002a7c4c1e48d76c5a37902165a270156b7a8d72728a054" 800105 Nothing
         commitFixture
         original <- (,) <$> databaseSchema <*> tablesRows ["d_b_version", "d_b_best"]
         migrateAndCollect ctx `dbShouldBe` (Right (), [], [])

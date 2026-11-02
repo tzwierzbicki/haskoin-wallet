@@ -214,6 +214,7 @@ arbitraryTxSummary net =
     <*> arbitraryNatural
     <*> arbitraryMaybe arbitraryNatural
     <*> arbitraryNatural
+    <*> arbitrary
     <*> addressMap arbitraryMyOutputs
     <*> addressMap arbitraryNatural
     <*> resize 10 (listOf $ arbitraryStoreOutput net)

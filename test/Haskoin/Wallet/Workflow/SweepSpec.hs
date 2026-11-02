@@ -13,6 +13,7 @@ import qualified Data.Text as Text
 import Haskoin
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.Database (DBAccount (..))
+import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..))
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.SignData (TxFile (..))
@@ -55,6 +56,27 @@ sweepSpec ctx =
         (spendsAndPays ctx <$> published) `shouldBe` [([OutPoint (txHash (oldCoin ctx)) 0], [(28080, Right (externalAddr 0))])]
         modifyIORef chain mine
         (accountsOf <$> hwJson home ["sync"] []) `shouldReturn` Right [("main", 0, 28080)]
+
+    -- The best block of the server is 800002, mined three minutes before
+    -- the test. One time in ten the lock time is below it, by up to 99
+    -- blocks. The wallet has not synced: the sweep reads the server.
+    it "gets the lock time of the best block of the server, or one up to 99 blocks below it" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        keys <- writeKeyFile home
+        prepared <- txOf =<< answer home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
+        summaryLockTime (txInfoSummary prepared) `shouldSatisfy` (\lockTime -> lockTime <= 800002 && lockTime >= 800002 - 99)
+
+    -- Nine hours: the server is behind the chain, which no sync of the
+    -- wallet can help, so there is nothing to ask
+    it "gets a lock time of 0 when the best block of the server is more than eight hours old, without a question" $
+      withChainMinedAgo ctx [] (9 * 3600) (oldKeyChain ctx) $ \home _ -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        keys <- writeKeyFile home
+        prepared <- txOf =<< answer home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
+        summaryLockTime (txInfoSummary prepared) `shouldBe` 0
 
     -- Without the key, hw counts it as compressed, which it is: the sweep
     -- is the same 192 bytes

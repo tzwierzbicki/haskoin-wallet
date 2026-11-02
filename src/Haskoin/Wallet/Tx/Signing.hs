@@ -265,6 +265,7 @@ summarize net ctx accountPubM tsd coins = do
         summaryFeeByte = fee `div` size,
         summaryChangeInFee = changeInFee,
         summarySize = size,
+        summaryLockTime = tx.locktime,
         summaryMyOutputs = myOutputs,
         summaryOtherOutputs = otherOutputs,
         summaryNonStdOutputs = [],

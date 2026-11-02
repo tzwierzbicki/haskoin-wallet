@@ -64,6 +64,7 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Database.Persist as P
+import Data.Word (Word32)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Account (accountNetwork, accountXPubKey, getAccounts)
@@ -493,8 +494,10 @@ buildBump ::
   Natural ->
   -- | Dust
   Natural ->
+  -- | Lock time
+  Word32 ->
   ExceptT String (DB m) TxSignData
-buildBump ctx cfg net accId gen plan funding feeByte dust = do
+buildBump ctx cfg net accId gen plan funding feeByte dust lockTime = do
   let (funded, added) = case funding of
         ChangePays -> (plan, [])
         CoinsAdded extra -> (plan, extra)
@@ -506,7 +509,7 @@ buildBump ctx cfg net accId gen plan funding feeByte dust = do
     if chosen.selection.changeAmount > 0
       then Just <$> maybe newChange return plan.planChange
       else return Nothing
-  built <- liftEither $ assemblePayment net ctx found chosen change
+  built <- liftEither $ assemblePayment net ctx found chosen change lockTime
   return $ TxSignData built.tx (nubOrd (plan.planParents <> addedParents)) built.inputPaths built.outputPaths (Just feeByte) Nothing plan.planReplaces plan.planLabel
   where
     newChange = liftEither . fromDBAddr net =<< changeAddress ctx cfg accId

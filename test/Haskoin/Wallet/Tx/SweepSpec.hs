@@ -186,19 +186,19 @@ sweepBuilderSpec ctx =
           legacy = tx {witness = []}
       -- The estimate is 880 bytes: 659 outside the witnesses and 221 of
       -- witness data, every signature counted as 72 bytes. A signature is
-      -- 72 bytes or 71, as its values fall, and three of these five are 71:
-      -- signed, the transaction is 877 bytes, 658 outside the witnesses and
-      -- 219 of witness data. The inputs, in the order the builder shuffled
+      -- 72 bytes or 71, as its values fall, and two of these five are 71:
+      -- signed, the transaction is 878 bytes, 658 outside the witnesses and
+      -- 220 of witness data. The inputs, in the order the builder shuffled
       -- them, are the P2WPKH coin (empty script, a witness of 71 + 33 + 2
       -- with its two length bytes), the uncompressed P2PKH one (a script of
       -- 1 + 71 + 1 + 65), the P2SH-P2WPKH one (a script of 23, a witness of
-      -- 71 + 33 + 2) and the two compressed P2PKH ones (1 + 72 + 1 + 33).
+      -- 72 + 33 + 2) and the two compressed P2PKH ones (1 + 72 + 1 + 33).
       ( BS.length (S.encode tx),
         BS.length (S.encode legacy),
         BS.length . (.script) <$> tx.inputs,
         (\stack -> length stack + sum (BS.length <$> stack)) <$> tx.witness
         )
-        `shouldBe` (877, 658, [0, 138, 23, 107, 107], [106, 0, 106, 0, 0])
+        `shouldBe` (878, 658, [0, 138, 23, 107, 107], [106, 0, 107, 0, 0])
     -- Outside the wallet, the coin of the wallet and the output it is paid
     -- are another wallet's too; the fee is the 8800 of the 880 bytes
     it "is signed without an account, every input and output another wallet's" $ do
@@ -208,19 +208,21 @@ sweepBuilderSpec ctx =
       info.txInfoSummary.summaryFee `shouldBe` 8800
       (Map.null info.txInfoSummary.summaryMyInputs, Map.null info.txInfoSummary.summaryMyOutputs) `shouldBe` (True, True)
     it "refuses to sweep without coins" $
-      buildSweepSignData btc ctx seed (SweepCoins [] [] Map.empty []) destinations 10 546
+      buildSweepSignData btc ctx seed (SweepCoins [] [] Map.empty []) destinations 10 546 800002
         `shouldBe` Left "There are no coins to sweep in those addresses"
     it "refuses to sweep without destinations" $
       build [] `shouldBe` Left "No addresses to sweep to"
-    it "marks every input replaceable on Bitcoin" $ do
+    it "is a version 2 transaction with the lock time given, its inputs marked replaceable on Bitcoin" $ do
       tsd <- expectRight $ build destinations
+      (tsd.txSignDataTx.version, tsd.txSignDataTx.locktime) `shouldBe` (2, 800002)
       ((.sequence) <$> tsd.txSignDataTx.inputs) `shouldBe` replicate 5 0xfffffffd
     -- A coin at the first receiving address of cash, swept to another
-    -- address of the wallet on Bitcoin Cash
-    it "keeps every input final on Bitcoin Cash" $ do
+    -- address of the wallet on Bitcoin Cash. 0xfffffffe: not final, so the
+    -- lock time applies, and not replaceable.
+    it "gives every input of Bitcoin Cash, which replaces no transaction, the highest sequence under which the lock time applies" $ do
       let cashCoin = storeCoin ctx (fakeTxHash 8, 0) (Just 800000) bchExternalAddr 50000
-      tsd <- expectRight $ buildSweepSignData bch ctx seed (SweepCoins [cashCoin] [] Map.empty []) [(bchExternalAddr, Remainder)] 10 546
-      ((.sequence) <$> tsd.txSignDataTx.inputs) `shouldBe` [0xffffffff]
+      tsd <- expectRight $ buildSweepSignData bch ctx seed (SweepCoins [cashCoin] [] Map.empty []) [(bchExternalAddr, Remainder)] 10 546 800002
+      ((.sequence) <$> tsd.txSignDataTx.inputs) `shouldBe` [0xfffffffe]
     it "builds a sweep to addresses outside the wallet, P2PKH and Taproot, which the signer accepts" $ do
       -- 10 bytes of overhead, the inputs (581), a P2PKH output (34), a
       -- Taproot output (43) and the witness data (221): 889 bytes, a fee of
@@ -304,7 +306,7 @@ sweepBuilderSpec ctx =
     -- The Taproot example address of BIP350
     taprootAddr = fromJust $ textToAddr btc "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0"
     build = buildWith 10 546
-    buildWith feeByte dust to = buildSweepSignData btc ctx seed found to feeByte dust
+    buildWith feeByte dust to = buildSweepSignData btc ctx seed found to feeByte dust 800002
     spentBy :: TxSignData -> [OutPoint]
     spentBy tsd = (.outpoint) <$> tsd.txSignDataTx.inputs
     -- The outputs of the sweep by address, the smallest first, since the
@@ -466,7 +468,7 @@ sweepIntoWalletSpec ctx =
         -- wallet's second external address and to an outside address. The
         -- wallet holds no coin, so none is locked.
         found <- SweepCoins (coinsOf ctx keyFunding) [keyFunding] <$> walletPaths btc accId [externalAddr 1, otherAddr 0] <*> pure [sweptKeyUncompressedAddr]
-        tsd <- liftEither $ buildSweepSignData btc ctx (mkStdGen 0) found [(externalAddr 1, Remainder), (otherAddr 0, Remainder)] 10 546
+        tsd <- liftEither $ buildSweepSignData btc ctx (mkStdGen 0) found [(externalAddr 1, Remainder), (otherAddr 0, Remainder)] 10 546 800002
         let pendingHash = nosigHash tsd.txSignDataTx
         importPendingTx btc ctx accId tsd `dbShouldBeE` pendingHash
         ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)

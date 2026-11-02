@@ -292,6 +292,36 @@ paymentSpec ctx =
         prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", fixedTo (otherAddr 1) "0.0001", "--fee-rate", "10"] []
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 20000), (otherAddr 1, 10000)]
 
+    -- The best block of the chain is 800002, mined three minutes before the
+    -- test. One time in ten the lock time is below it, by up to 99 blocks.
+    it "has the lock time of the best block the wallet knows, or one up to 99 blocks below it" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        summaryLockTime (txInfoSummary prepared) `shouldSatisfy` (\lockTime -> lockTime <= 800002 && lockTime >= 800002 - 99)
+
+    -- The best block was mined nine hours before the test: more than the
+    -- eight hours after which the wallet counts as behind the chain
+    it "is not prepared while the wallet is behind the chain, unless the user agrees to a lock time of 0" $
+      withChainMinedAgo ctx [] (9 * 3600) (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] ["n"]
+        runErr run
+          `shouldSatisfy` Text.isInfixOf
+            "The wallet is behind the chain: its best block, 800002, was mined 9 hours ago, and a sync may find coins spent or received since. Prepare the transaction anyway, with a lock time of 0?"
+        run `shouldSatisfy` printed "The transaction was not prepared: run sync first"
+        (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] ["y"]
+        summaryLockTime (txInfoSummary prepared) `shouldBe` 0
+
+    it "is prepared with a lock time of 0 while the wallet is behind the chain by --yes, without asking" $
+      withChainMinedAgo ctx [] (9 * 3600) (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--yes"] []
+        runErr run `shouldNotSatisfy` Text.isInfixOf "behind the chain"
+        prepared <- onePendingTx home
+        summaryLockTime (txInfoSummary prepared) `shouldBe` 0
+
     -- As the recipients were typed before, the amount in a word of its own
     it "is refused a recipient without an amount, with how to write one" $
       withChain ctx (paidChain ctx) $ \home _ -> do

@@ -188,6 +188,16 @@ simpleFunding ctx = fundingTx ctx 1 [(externalAddr 0, 100000000)]
 analysisSpec :: Ctx -> Spec
 analysisSpec ctx =
   describe "Transaction analysis" $ do
+    -- The signer sees it, and so can refuse a lock time it did not expect
+    it "carries the lock time of the transaction" $ do
+      let tsd = simpleTransaction ctx
+          tx = tsd.txSignDataTx
+          locked = tsd {txSignDataTx = Tx tx.version tx.inputs tx.outputs tx.witness 814037}
+      info <- expectRight $ parseTxSignData btc ctx (testAccountPub ctx) locked
+      info.txInfoSummary.summaryLockTime `shouldBe` 814037
+      plain <- expectRight $ parseTxSignData btc ctx (testAccountPub ctx) tsd
+      plain.txInfoSummary.summaryLockTime `shouldBe` 0
+
     -- Its paths are those of an account the wallet does not have: the coin
     -- of 1 BTC and the two outputs are another wallet's
     it "describes a transaction outside the wallet, every input and output another wallet's" $ do

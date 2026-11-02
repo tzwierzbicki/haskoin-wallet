@@ -61,7 +61,7 @@ spec = prepareContext $ \ctx -> do
         res <- syncWith (paymentStore ctx) accId
         summaries accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
         coins accId `dbShouldBeE` [OutPoint (fakeTxHash 1) 0]
-        getBest btc `dbShouldBeE` Just (headerHash (blockAt 800002 1).header, 800002)
+        getBest btc `dbShouldBeE` Just (BestBlock (headerHash (blockAt 800002 1).header) 800002 (Just 1700000000))
         balances accId `dbShouldBeE` (50000, 0, 1)
         rawTransactionCount `dbShouldBeE` 1
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (1, 1)
@@ -75,7 +75,7 @@ spec = prepareContext $ \ctx -> do
           dbShouldFailWith "The stored best block of btc does not read: sync --full stores it again" $
             syncWith (paymentStore ctx) accId
         _ <- sync ctx cfg (toStore (paymentStore ctx)) btc accId True
-        getBest btc `dbShouldBeE` Just (headerHash (blockAt 800002 1).header, 800002)
+        getBest btc `dbShouldBeE` Just (BestBlock (headerHash (blockAt 800002 1).header) 800002 (Just 1700000000))
 
     it "does nothing when nothing changed" $
       inDatabaseE $ do
@@ -188,7 +188,7 @@ spec = prepareContext $ \ctx -> do
         res <- syncWith (movedStore ctx) accId
         liftIO $ syncResTxUpdates res `shouldBe` 1
         summaries accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800001 3, 50000)]
-        getBest btc `dbShouldBeE` Just (headerHash (blockAt 800003 7).header, 800003)
+        getBest btc `dbShouldBeE` Just (BestBlock (headerHash (blockAt 800003 7).header) 800003 (Just 1700000000))
 
     it "marks a payment a reorganisation left out as dead" $
       inDatabaseE $ do
@@ -548,7 +548,7 @@ spec = prepareContext $ \ctx -> do
         summaries accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
         (map jsonCoinOutpoint <$> coinsAfter bch accId AllCoins Nothing Nothing) `dbShouldBeE` [OutPoint (fakeTxHash 1) 0]
         balances accId `dbShouldBeE` (50000, 0, 1)
-        getBest bch `dbShouldBeE` Just (headerHash (blockAt 800002 1).header, 800002)
+        getBest bch `dbShouldBeE` Just (BestBlock (headerHash (blockAt 800002 1).header) 800002 (Just 1700000000))
         getBest btc `dbShouldBeE` Nothing
 
   describe "Syncing the accounts of several networks" $ do

@@ -145,7 +145,7 @@ fundAccountTwice ctx cfg accId = do
 -- byte, from the given coins of the account, or from any of its coins
 payment :: Ctx -> Config -> DBAccountId -> [OutPoint] -> Address -> Natural -> ExceptT String (DB IO) TxSignData
 payment ctx cfg accId chosen to amount =
-  buildTxSignData btc ctx cfg (mkStdGen 0) LeastWaste accId [(to, amount)] 1 0 SenderPays 0 control NewChangeAddress
+  buildTxSignData btc ctx cfg (mkStdGen 0) LeastWaste accId [(to, amount)] 1 0 800002 SenderPays 0 control NewChangeAddress
   where
     control = if null chosen then NoCoinControl else SpendChosen chosen
 
@@ -253,7 +253,7 @@ importingSpec ctx =
         second <- payment ctx cfg accId [] (otherAddr 1) 7000
         liftIO $
           sortedOutputs (txSignDataTx second)
-            `shouldBe` replaceableTx ctx [(txHash (secondFunding ctx), 0)] [(internalAddr 1, 2774), (otherAddr 1, 7000)]
+            `shouldBe` builtTx ctx 800002 [(txHash (secondFunding ctx), 0)] [(internalAddr 1, 2774), (otherAddr 1, 7000)]
         _ <- importPendingTx btc ctx accId second
         bothHeld <- lockedCoins accId
         liftIO $ bothHeld `shouldMatchList` [(externalAddr 0, True), (externalAddr 1, True)]
@@ -268,12 +268,14 @@ importingSpec ctx =
         -- and one output at 1 satoshi per byte
         tsd <- payment ctx cfg accId [] (otherAddr 2) 19808
         liftIO $ do
-          txSignDataTx tsd `shouldBe` replaceableTx ctx [(txHash (funding ctx), 0)] [(otherAddr 2, 19808)]
+          txSignDataTx tsd `shouldBe` builtTx ctx 800002 [(txHash (funding ctx), 0)] [(otherAddr 2, 19808)]
           txSignDataOutputPaths tsd `shouldBe` []
         -- One output, so nothing is shuffled and the hash is fixed. Computed
-        -- apart from hw from the parts of the two transactions; with final
-        -- sequences instead, the same computation gives 720a9cfe…696c.
-        importPendingTx btc ctx accId tsd `dbShouldBeE` "afc69158e620551785282f353d2414e178f589b36d5fe8b512100d38d90b596c"
+        -- apart from hw from the parts of the two transactions: version 2,
+        -- lock time 800002. As a version 1 transaction with no lock time,
+        -- the same computation gives afc69158…596c, and with final sequences
+        -- as well 720a9cfe…696c.
+        importPendingTx btc ctx accId tsd `dbShouldBeE` "43a4f39c6be9b7e98f1b2f1fca9b79f5af1adc07ffa14b42b82cc08b3c7b4a84"
         (map transactionLocked <$> coinsAfter btc accId AllCoins Nothing Nothing) `dbShouldBeE` [True]
         (dBAddressIndex <$> changeAddress ctx cfg accId) `dbShouldBeE` 0
     it "holds a payment to an external address of the wallet as an internal transaction" $
@@ -286,7 +288,7 @@ importingSpec ctx =
         -- 1 satoshi per byte leave 11774
         liftIO $ do
           sortedOutputs (txSignDataTx tsd)
-            `shouldBe` replaceableTx ctx [(txHash (funding ctx), 0)] [(externalAddr 1, 8000), (internalAddr 0, 11774)]
+            `shouldBe` builtTx ctx 800002 [(txHash (funding ctx), 0)] [(externalAddr 1, 8000), (internalAddr 0, 11774)]
           txSignDataInputPaths tsd `shouldBe` [Deriv :/ 0 :/ 0]
           txSignDataOutputPaths tsd `shouldMatchList` [Deriv :/ 0 :/ 1, Deriv :/ 1 :/ 0]
         pendingHash <- importPendingTx btc ctx accId tsd

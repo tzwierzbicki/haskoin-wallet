@@ -164,6 +164,7 @@ DBBest
   network Text
   bestBlock Text
   bestHeight Int
+  bestTime Int Maybe
   Primary network
   deriving Show
 |]

@@ -56,7 +56,7 @@ mainKeyLine = "{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\
 paymentStored :: DBAccountId -> BlockHeight -> DB IO ()
 paymentStored accId best = do
   _ <- repsertSummary btc accId (fakeTxHash 1) (Store.BlockRef 800000 1) seenTime paymentSummary
-  updateBest btc (fakeBlockHash 2) best
+  updateBest btc (fakeBlockHash 2) best 1700000000
 
 -- | The coin of the payment stored in the account, at the first receiving
 -- address, locked by the user or not

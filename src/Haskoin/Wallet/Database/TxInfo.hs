@@ -36,7 +36,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (UTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
-import Data.Word (Word64)
+import Data.Word (Word32, Word64)
 import Database.Esqueleto.Legacy as E
 import qualified Database.Persist as P
 import Haskoin
@@ -86,6 +86,9 @@ data TxSummary = TxSummary
     -- | The size in bytes: of the signed transaction, or estimated before
     -- it is signed
     summarySize :: !Natural,
+    -- | The lock time: the block the transaction waits for, 0 for none. hw
+    -- sets one near the best block (see "Haskoin.Wallet.Tx.LockTime").
+    summaryLockTime :: !Word32,
     -- | The outputs paying the account, by address
     summaryMyOutputs :: !(Map Address MyOutputs),
     -- | The outputs paying others, by address
@@ -285,6 +288,7 @@ summaryPairs net s =
     "otherinputs" .= mapAddrText net (summaryOtherInputs s),
     "nonstdinputs" .= (marshalValue net <$> summaryNonStdInputs s),
     "size" .= summarySize s,
+    "locktime" .= summaryLockTime s,
     "fee" .= summaryFee s,
     "feebyte" .= summaryFeeByte s,
     "changeinfee" .= summaryChangeInFee s
@@ -299,6 +303,8 @@ summaryParser net o =
     <*> o .: "feebyte"
     <*> o .:? "changeinfee"
     <*> o .: "size"
+    -- The summaries stored by earlier versions of hw have no lock time
+    <*> o .:? "locktime" .!= 0
     <*> (mapTextAddr net =<< o .: "myoutputs")
     <*> (mapTextAddr net =<< o .: "otheroutputs")
     <*> (mapM (unmarshalValue net) =<< o .: "nonstdoutputs")
@@ -378,6 +384,7 @@ storeSummary net walletAddrs sTx =
       summaryFeeByte = fee `div` size,
       summaryChangeInFee = Nothing,
       summarySize = size,
+      summaryLockTime = sTx.locktime,
       summaryMyOutputs = myOutputs,
       summaryOtherOutputs = outputs `Map.difference` walletAddrs,
       summaryNonStdOutputs = nonStdOut,

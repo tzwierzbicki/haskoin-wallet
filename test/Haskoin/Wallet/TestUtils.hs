@@ -278,6 +278,7 @@ paymentSummary =
       summaryFeeByte = 4,
       summaryChangeInFee = Nothing,
       summarySize = 226,
+      summaryLockTime = 0,
       summaryMyOutputs = Map.fromList [(externalAddr 0, MyOutputs 50000 (Deriv :/ 0 :/ 0) "")],
       summaryOtherOutputs = Map.empty,
       summaryNonStdOutputs = [],
@@ -296,6 +297,7 @@ spendSummary =
       summaryFeeByte = 4,
       summaryChangeInFee = Nothing,
       summarySize = 226,
+      summaryLockTime = 0,
       summaryMyOutputs = Map.fromList [(internalAddr 0, MyOutputs 9000 (Deriv :/ 1 :/ 0) "")],
       summaryOtherOutputs = Map.fromList [(otherAddr 0, 40000)],
       summaryNonStdOutputs = [],
@@ -488,11 +490,12 @@ spendingTx ctx spent paid =
     payment (addr, amount) = TxOut (fromIntegral amount) (addressScript ctx addr)
 
 -- | A transaction as hw builds it on Bitcoin, spending the outpoints and
--- paying the addresses: as 'spendingTx', with every input marked
--- replaceable by the sequence 0xfffffffd of BIP 125
-replaceableTx :: Ctx -> [(TxHash, Word32)] -> [(Address, Natural)] -> Tx
-replaceableTx ctx spent paid =
-  Tx 1 [TxIn (OutPoint h i) BS.empty 0xfffffffd | (h, i) <- spent] (payment <$> paid) [] 0
+-- paying the addresses: as 'spendingTx', in version 2, with the lock time
+-- given and every input marked replaceable by the sequence 0xfffffffd of
+-- BIP 125 (see "Haskoin.Wallet.Tx.LockTime")
+builtTx :: Ctx -> Word32 -> [(TxHash, Word32)] -> [(Address, Natural)] -> Tx
+builtTx ctx lockTime spent paid =
+  Tx 2 [TxIn (OutPoint h i) BS.empty 0xfffffffd | (h, i) <- spent] (payment <$> paid) [] lockTime
   where
     payment (addr, amount) = TxOut (fromIntegral amount) (addressScript ctx addr)
 
@@ -901,13 +904,17 @@ spendingStoreTx ctx tid block spent from paid =
   storeTx tid block [inputFrom ctx spent from (sum (snd <$> paid) + 1000)] (uncurry (outputTo ctx) <$> paid) 1000
 
 -- | A transaction of the store with the given inputs, outputs and fee,
--- 226 bytes long, at the given block
+-- 226 bytes long, at the given block, with no lock time
 storeTx :: TxHash -> Store.BlockRef -> [Store.StoreInput] -> [Store.StoreOutput] -> Word64 -> Store.Transaction
-storeTx tid block inputs outputs fee =
+storeTx = storeTxLockedAt 0
+
+-- | 'storeTx', with the lock time given
+storeTxLockedAt :: Word32 -> TxHash -> Store.BlockRef -> [Store.StoreInput] -> [Store.StoreOutput] -> Word64 -> Store.Transaction
+storeTxLockedAt lockTime tid block inputs outputs fee =
   Store.Transaction
     { Store.block = block,
       Store.version = 1,
-      Store.locktime = 0,
+      Store.locktime = lockTime,
       Store.inputs = inputs,
       Store.outputs = outputs,
       Store.deleted = False,

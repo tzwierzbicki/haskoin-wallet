@@ -613,6 +613,7 @@ verboseTxDoc net unit named time info@(TxInfo summary status label inputLabels) 
               <> [field 9 "Label" <> labelWord label | not (Text.null label)]
               <> statusFields time status
               <> [feeField unit summary]
+              <> lockTimeField summary
               <> section "From" Nothing True from
               <> section "To" (Just Incoming) True to
               <> section "Change" (Just Incoming) False change
@@ -665,6 +666,17 @@ feeField unit summary =
                  change > 0
                ]
       )
+
+-- | The lock time of a transaction that has one: the block it waits for,
+-- which hw sets near the best block (see "Haskoin.Wallet.Tx.LockTime"). A
+-- lock time of 500,000,000 or more is a Unix time instead, which hw never
+-- writes.
+lockTimeField :: TxSummary -> [Doc Style]
+lockTimeField summary =
+  [field 9 "Lock time" <> text (kind <> show lockTime) | lockTime /= 0]
+  where
+    lockTime = summaryLockTime summary
+    kind = if lockTime < 500000000 then "block " else "Unix time "
 
 -- | An address a transaction spends from or pays, as hw shows it
 data TxAddress = TxAddress

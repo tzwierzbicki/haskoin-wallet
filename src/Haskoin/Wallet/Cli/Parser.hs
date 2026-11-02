@@ -1214,9 +1214,16 @@ goes back to it without a question. Setting change-back to true in the
 configuration file makes --change-back the default. --new-change then sends the
 change of one payment to a new change address.
 
+The transaction gets the lock time of the best block the wallet knows, as
+Bitcoin Core and Electrum give theirs: it cannot be mined into a block below
+it, and it looks like theirs. One time in ten, the lock time is up to 99 blocks
+lower, so that the time signing takes does not show. When the best block was
+mined more than eight hours ago, the wallet is behind the chain, and a sync may
+find coins spent or received since. preparetx then asks whether to prepare the
+transaction anyway, with a lock time of 0.
+
 A fee rate above 100 satoshis per byte is more often a typo than a choice, so
-preparetx asks before it takes one. --yes takes it without asking, for
-scripts.
+preparetx asks before it takes one. --yes answers both questions, for scripts.
 |],
       args =
         CommandPrepareTx
@@ -1233,7 +1240,7 @@ scripts.
                   <*> underCoins (many coinOption)
                   <*> underCoins (many spendFromOption)
                   <*> underCoins selectOption
-                  <*> underFee highFeeYesOption
+                  <*> underFee prepareYesOption
                   <*> optionGroup "Change" changeBackOption
               )
     }
@@ -1308,8 +1315,13 @@ The answer lists every coin the transaction leaves in the account, with the
 reason: dust, locked by you or by a pending transaction, not spendable yet, or
 not chosen with --coin or --spend-from.
 
+The transaction gets a lock time as preparetx gives one. When the best block
+the wallet knows was mined more than eight hours ago, preparesendall asks
+whether to prepare the transaction anyway, with a lock time of 0, as preparetx
+does.
+
 A fee rate above 100 satoshis per byte is more often a typo than a choice, so
-preparesendall asks before it takes one. --yes takes it without asking, for
+preparesendall asks before it takes one. --yes answers both questions, for
 scripts.
 |],
       args =
@@ -1325,7 +1337,7 @@ scripts.
                   <*> underCoins (many coinOption)
                   <*> underCoins (many spendFromOption)
                   <*> underCoins dustCoinsOption
-                  <*> underFee highFeeYesOption
+                  <*> underFee prepareYesOption
               )
     }
 
@@ -1398,7 +1410,12 @@ feeOption =
       <> completeWith ["low", "median", "high"]
       <> help "The fee rate in satoshis per byte, or low, median or high for that rate of recent blocks, as `fees` shows them. Without it, hw shows those rates and asks, median by default. A rate above 100 needs a confirmation."
 
--- | Whether preparetx and preparesweep take a high fee rate without asking
+-- | Whether preparetx and preparesendall take a high fee rate, and prepare
+-- while the wallet is behind the chain, without asking
+prepareYesOption :: Args Bool
+prepareYesOption = yesOption "Answer yes to both questions: a fee rate above 100 satoshis per byte, and a wallet behind the chain"
+
+-- | Whether preparesweep takes a high fee rate without asking
 highFeeYesOption :: Args Bool
 highFeeYesOption = yesOption "Take a fee rate above 100 satoshis per byte without asking"
 
@@ -1825,6 +1842,10 @@ replaceable cannot. Neither can one that spends coins of another wallet, such
 as a sweep. Bitcoin Cash does not replace transactions. When the stuck
 transaction pays several addresses of the wallet besides its recipients, its
 change among them, the replacement gets one change output for all of them.
+
+The replacement gets a lock time as preparetx gives one. When the best block
+the wallet knows was mined more than eight hours ago, bumpfee asks whether to
+prepare it anyway, with a lock time of 0, as preparetx does.
 |],
       args =
         CommandBumpFee
@@ -1834,7 +1855,7 @@ change among them, the replacement gets one change output for all of them.
                   <*> replacementFeeOption
                   <*> dustOption
                   <*> outputFileMaybeOption
-                  <*> yesOption "Answer yes to every question: a fee rate above 100 satoshis per byte, adding coins, reducing what a lone recipient receives, and replacing the transactions that spend the change. Which of several recipients pays is still asked."
+                  <*> yesOption "Answer yes to every question: a fee rate above 100 satoshis per byte, a wallet behind the chain, adding coins, reducing what a lone recipient receives, and replacing the transactions that spend the change. Which of several recipients pays is still asked."
               )
     }
 
@@ -2170,6 +2191,10 @@ wallet that has none. It needs --network and --output, and is signed from the
 file. The default-network of the configuration file does not apply. Private
 keys, coins and the legacy addresses of Bitcoin Cash read the same on
 Bitcoin, so a wrong guess would sweep the coins of the other chain.
+
+The sweep gets a lock time as preparetx gives a payment one, drawn from the
+best block of the server rather than from the one the wallet knows: a sweep is
+prepared online.
 
 A fee rate above 100 satoshis per byte is more often a typo than a choice, so
 preparesweep asks before it takes one. It asks before the private keys are

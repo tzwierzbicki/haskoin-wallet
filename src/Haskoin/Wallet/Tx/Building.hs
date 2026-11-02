@@ -42,7 +42,7 @@ import Data.List (nub)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
-import Data.Word (Word64)
+import Data.Word (Word32, Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Address
@@ -54,7 +54,8 @@ import Haskoin.Wallet.Database.PendingTx (changeAddress)
 import Haskoin.Wallet.Database.RawTx
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Size (checkFeeRateAndDust, outputSize, p2pkhOutputSize)
-import Haskoin.Wallet.Util (addrToTextE, randomShuffle, safeSubtract, withInputSequence)
+import Haskoin.Wallet.Tx.LockTime (withHeader)
+import Haskoin.Wallet.Util (addrToTextE, randomShuffle, safeSubtract)
 import Numeric.Natural (Natural)
 import System.Random (StdGen, splitGen)
 
@@ -137,13 +138,15 @@ buildTxSignData ::
   Natural ->
   -- | Dust
   Natural ->
+  -- | Lock time
+  Word32 ->
   FeePayer ->
   -- | Minimum confirmations of the coins
   Natural ->
   CoinControl ->
   ChangeTo m ->
   ExceptT String (DB m) TxSignData
-buildTxSignData net ctx cfg gen strategy accId recipients feeByte dust payer minConf coinControl changeTo = do
+buildTxSignData net ctx cfg gen strategy accId recipients feeByte dust lockTime payer minConf coinControl changeTo = do
   when (null recipients) $ throwError "No recipients provided"
   found <- fetchWalletCoins net ctx accId (fst <$> recipients) minConf
   chosen <- liftEither $ choosePayment ctx gen strategy found recipients feeByte dust payer coinControl
@@ -151,7 +154,7 @@ buildTxSignData net ctx cfg gen strategy accId recipients feeByte dust payer min
     if chosen.selection.changeAmount > 0
       then Just <$> changeFor found.coinPaths chosen
       else return Nothing
-  built <- liftEither $ assemblePayment net ctx found chosen change
+  built <- liftEither $ assemblePayment net ctx found chosen change lockTime
   spentFrom <- mapM getRawTx $ nub $ (.outpoint.hash) <$> built.tx.inputs
   return $ TxSignData built.tx spentFrom built.inputPaths built.outputPaths (Just feeByte) Nothing [] noLabel
   where
@@ -218,12 +221,14 @@ buildWalletTx ::
   Natural ->
   -- | Dust
   Natural ->
+  -- | Lock time
+  Word32 ->
   FeePayer ->
   CoinControl ->
   Either String BuiltTx
-buildWalletTx net ctx gen strategy found change recipients feeByte dust payer coinControl = do
+buildWalletTx net ctx gen strategy found change recipients feeByte dust lockTime payer coinControl = do
   chosen <- choosePayment ctx gen strategy found recipients feeByte dust payer coinControl
-  assemblePayment net ctx found chosen (Just change)
+  assemblePayment net ctx found chosen (Just change) lockTime
 
 -- | Choose the coins of a payment to the recipients among the wallet's
 -- coins: by the strategy, or as coin control says ('CoinControl'). When the
@@ -281,19 +286,20 @@ spentAddresses :: ChosenPayment -> [Address]
 spentAddresses chosen = nub $ mapMaybe (.address) chosen.selection.selected
 
 -- | The transaction of a payment whose coins are chosen: its recipients,
--- and its change at the given address, in an order drawn at random. A
--- payment with change needs the address; one without ignores it. Every
--- output to the wallet, the change and a recipient of the account, has its
--- derivation path, and so has every input.
-assemblePayment :: Network -> Ctx -> WalletCoins -> ChosenPayment -> Maybe (Address, SoftPath) -> Either String BuiltTx
-assemblePayment net ctx found chosen changeM = do
+-- and its change at the given address, in an order drawn at random, with
+-- the lock time given (see "Haskoin.Wallet.Tx.LockTime"). A payment with
+-- change needs the address; one without ignores it. Every output to the
+-- wallet, the change and a recipient of the account, has its derivation
+-- path, and so has every input.
+assemblePayment :: Network -> Ctx -> WalletCoins -> ChosenPayment -> Maybe (Address, SoftPath) -> Word32 -> Either String BuiltTx
+assemblePayment net ctx found chosen changeM lockTime = do
   change <- case (chosen.selection.changeAmount, changeM) of
     (0, _) -> Right []
     (amount, Just (addr, path)) -> Right [((addr, amount), path)]
     (_, Nothing) -> Left "The payment has change, and no address for it"
   let outputs = (fst <$> change) <> (second fromIntegral <$> chosen.paidRecipients)
       shuffledOutputs = evalState (randomShuffle outputs) chosen.outputGen
-  tx <- withInputSequence net <$> (buildAddrTx net ctx ((.outpoint) <$> chosen.selection.selected) =<< mapM recipientText shuffledOutputs)
+  tx <- withHeader net lockTime <$> (buildAddrTx net ctx ((.outpoint) <$> chosen.selection.selected) =<< mapM recipientText shuffledOutputs)
   inputPaths <- nub <$> mapM coinPath chosen.selection.selected
   let outputPaths =
         nub $ (snd <$> change) <> mapMaybe ((`Map.lookup` found.recipientPaths) . fst) chosen.paidRecipients

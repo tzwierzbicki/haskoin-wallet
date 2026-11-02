@@ -157,6 +157,7 @@ spec = prepareContext $ \ctx ->
         columnNames "d_b_tx_info" `dbShouldBe` ["account", "blob", "block_ref", "created", "dead", "time", "txid"]
         columnNames "d_b_coin" `dbShouldBe` ["account", "address", "block_ref", "created", "locked_by_user", "outpoint", "value"]
         columnNames "d_b_pending_tx" `dbShouldBe` ["account", "blob", "conflicted", "created", "nosig_hash", "online"]
+        columnNames "d_b_best" `dbShouldBe` ["best_block", "best_height", "best_time", "network"]
 
     it "gives the transactions a table of labels, empty: version 3 had none" $
       inMemory $ do
@@ -191,12 +192,14 @@ spec = prepareContext $ \ctx ->
         migrateTo4 ctx
         queryRows "select conflicted from d_b_pending_tx" `dbShouldBe` [[PersistInt64 0]]
 
-    it "leaves the best blocks as they were" $
+    -- Version 4 stores the time of the best block, which version 3 did
+    -- not know: the next sync fills it
+    it "leaves the best blocks as they were, with no time until the next sync" $
       inMemory $ do
         version3Database
-        original <- tablesRows otherTables
         migrateTo4 ctx
-        tablesRows otherTables `dbShouldBe` original
+        queryRows "select network, best_block, best_height, best_time from d_b_best"
+          `dbShouldBe` [[PersistText "btc", PersistText "00000000000000000002a7c4c1e48d76c5a37902165a270156b7a8d72728a054", PersistInt64 800105, PersistNull]]
 
     it "changes nothing when it fails halfway: the database stays at version 3, as it was" $
       inScratchDirectory $ \dir -> do
@@ -235,9 +238,6 @@ columnNames :: Text -> DB IO [Text]
 columnNames table = do
   rows <- queryRows $ "select name from pragma_table_info('" <> table <> "') order by name"
   return [name | [PersistText name] <- rows]
-
-otherTables :: [Text]
-otherTables = ["d_b_best"]
 
 -- | The bytes of a hexadecimal text, as the step turns the old keys into
 hexBytes :: Text -> ByteString

@@ -407,7 +407,10 @@ paid. `--coin` and `--spend-from` choose the coins to spend, every one of them.
 selects them. `--change-back` sends the change back to an address the payment
 spends from. `--output` also writes the transaction to a file. `--label` gives
 the transaction a label, which goes with it to its file and stays once the
-network has it.
+network has it. The transaction gets the lock time of the best block the
+wallet knows, as the transactions of Bitcoin Core and Electrum do. When that
+block is more than eight hours old, `hw` asks whether to prepare the
+transaction anyway, with a lock time of 0, or to sync first.
 
 ```console
 hw preparetx ADDRESS:0.0005 --fee-rate median --label "rent of October"
@@ -615,6 +618,11 @@ To restore a backup, replace `~/.hw/accounts.sqlite` with the copy, or point
 - **Choosing a fee rate needs the server.** Without `--fee-rate`, `hw` reads the
   rates of recent blocks, and stops if it cannot reach the server. A rate above
   100 satoshis per byte asks for a confirmation, since it is more often a typo.
+- **A wallet behind the chain asks before preparing.** When the best block it
+  knows is more than eight hours old, `preparetx`, `preparesendall` and
+  `bumpfee` ask whether to go on with a lock time of 0. A `sync` first is the
+  better answer: it also finds the coins spent or received since. `--yes` goes
+  on without asking.
 - **The addresses of `hw` are legacy P2PKH.** They start with `1` on Bitcoin.
   `hw` can pay any kind of address. `signmsg` and `verifymsg` work with P2PKH
   addresses only.

@@ -40,16 +40,18 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
 import Data.Ord (Down (..))
+import Data.Word (Word32)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Address (walletPaths)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.RawTx (getRawTx)
+import Haskoin.Wallet.Tx.LockTime (withHeader)
 import Haskoin.Wallet.Tx.Recipient (Share (..), shareAmounts)
 import Haskoin.Wallet.Tx.Building (BuiltTx (..), coinWithPath, recipientOutputSize)
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Size (checkFeeRateAndDust, p2pkhInput, p2pkhInputSize, p2pkhOutputSize, txSize)
-import Haskoin.Wallet.Util (addrToTextE, randomShuffle, withInputSequence)
+import Haskoin.Wallet.Util (addrToTextE, randomShuffle)
 import Numeric.Natural (Natural)
 import System.Random (StdGen)
 
@@ -103,14 +105,15 @@ data SendAllCoins = SendAllCoins
   deriving (Eq, Show)
 
 -- | Build the transaction spending all the coins to the recipients, with no
--- change, its outputs shuffled (see 'sendAllAmounts'). A fee rate or a dust
--- limit no transaction can be built with is refused.
-buildSendAll :: Network -> Ctx -> StdGen -> SendAllCoins -> [(Address, Share)] -> Natural -> Natural -> Either String BuiltTx
-buildSendAll net ctx gen found recipients feeByte dust = do
+-- change, its outputs shuffled (see 'sendAllAmounts'), with the lock time
+-- given (see "Haskoin.Wallet.Tx.LockTime"). A fee rate or a dust limit no
+-- transaction can be built with is refused.
+buildSendAll :: Network -> Ctx -> StdGen -> SendAllCoins -> [(Address, Share)] -> Natural -> Natural -> Word32 -> Either String BuiltTx
+buildSendAll net ctx gen found recipients feeByte dust lockTime = do
   checkFeeRateAndDust feeByte dust
   when (null found.coins) $ Left "There are no coins to send"
   amounts <- sendAllAmounts ctx feeByte dust found.coins recipients
-  tx <- withInputSequence net <$> (buildAddrTx net ctx ((.outpoint) <$> found.coins) =<< mapM outputText (evalState (randomShuffle amounts) gen))
+  tx <- withHeader net lockTime <$> (buildAddrTx net ctx ((.outpoint) <$> found.coins) =<< mapM outputText (evalState (randomShuffle amounts) gen))
   inputPaths <- nub <$> mapM coinPath found.coins
   let outputPaths = nub $ mapMaybe ((`Map.lookup` found.recipientPaths) . fst) recipients
   return BuiltTx {tx, spentCoins = found.coins, inputPaths, outputPaths}
@@ -137,11 +140,13 @@ buildSendAllSignData ::
   Natural ->
   -- | Dust
   Natural ->
+  -- | Lock time
+  Word32 ->
   ExceptT String (DB m) TxSignData
-buildSendAllSignData net ctx gen accId coins recipients feeByte dust = do
+buildSendAllSignData net ctx gen accId coins recipients feeByte dust lockTime = do
   coinPaths <- Map.fromList <$> mapM (coinWithPath net accId) coins
   recipientPaths <- walletPaths net accId (fst <$> recipients)
-  built <- liftEither $ buildSendAll net ctx gen SendAllCoins {coins, coinPaths, recipientPaths} recipients feeByte dust
+  built <- liftEither $ buildSendAll net ctx gen SendAllCoins {coins, coinPaths, recipientPaths} recipients feeByte dust lockTime
   spentFrom <- mapM getRawTx $ nub $ (.outpoint.hash) <$> built.tx.inputs
   return $ TxSignData built.tx spentFrom built.inputPaths built.outputPaths (Just feeByte) Nothing [] noLabel
 

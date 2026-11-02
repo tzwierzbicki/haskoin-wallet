@@ -25,6 +25,7 @@ module Haskoin.Wallet.HwTestUtils
     inMempool,
     withChain,
     withChainDownOn,
+    withChainMinedAgo,
     withServerAnswering,
   )
 where
@@ -53,7 +54,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebCommon (HeightParam (..), LimitParam (..), Param (..))
 import Haskoin.Wallet.Cli.Response (Response)
 import Haskoin.Wallet.Store (Store (..))
-import Haskoin.Wallet.TestUtils (addressScript, blockAt, blockMinedAt, otherAddr)
+import Haskoin.Wallet.TestUtils (addressScript, blockMinedAt, otherAddr)
 import Network.HTTP.Types (hContentType, status200, status404, status502)
 import Network.Wai (Application, pathInfo, queryString, requestMethod, responseLBS, strictRequestBody)
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -343,8 +344,11 @@ chainStore ctx ref bestTime =
     }
   where
     now = liftIO (readIORef ref)
-    -- A block of the main chain, its hash its own at each height
-    blockOf height = blockAt height (fromIntegral height)
+    -- A block of the main chain, its hash its own at each height. Every
+    -- block has the time of the best one, which does not move with the
+    -- chain: the sync keeps the hash of the best block, and a time of its
+    -- own at each height would change it as the chain grows.
+    blockOf height = blockMinedAt height (fromIntegral height) bestTime 0
     -- The hundred latest heights, newest first, as the store lists them
     latestHeights :: Chain -> [BlockHeight]
     latestHeights chain = [chain.chainHeight, chain.chainHeight - 1 .. max 1 (chain.chainHeight - 99)]
@@ -359,12 +363,18 @@ chainStore ctx ref bestTime =
 withChain :: Ctx -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
 withChain ctx = withChainDownOn ctx []
 
--- | 'withChain', with the store down on the given networks
+-- | 'withChain', with the store down on the given networks. The best block
+-- was mined three minutes before the test.
 withChainDownOn :: Ctx -> [Network] -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
-withChainDownOn ctx downs chain test = do
+withChainDownOn ctx downs = withChainMinedAgo ctx downs 180
+
+-- | 'withChainDownOn', with the best block of the chain mined the given
+-- number of seconds before the test: more than eight hours, and a wallet
+-- synced with it is behind the chain
+withChainMinedAgo :: Ctx -> [Network] -> Word32 -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
+withChainMinedAgo ctx downs ago chain test = do
   ref <- newIORef chain
-  -- The best block was mined three minutes before the test
-  bestTime <- subtract 180 . floor <$> getPOSIXTime
+  bestTime <- subtract ago . floor <$> getPOSIXTime
   testWithApplication (return (downOn downs (storeApp ctx (chainStore ctx ref bestTime)))) $ \port ->
     withHome $ \home -> do
       useStore home ("http://127.0.0.1:" <> show port <> "/")
