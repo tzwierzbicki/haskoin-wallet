@@ -71,10 +71,10 @@ outputAt i psbt = psbt.outputs !! i
 
 -- | The PSBT with the maps of its inputs, or its global map, replaced
 withInputs :: [PsbtMap] -> Psbt -> Psbt
-withInputs inputs psbt = Psbt psbt.unsignedTx psbt.globals inputs psbt.outputs
+withInputs inputs psbt = Psbt psbt.version psbt.unsignedTx psbt.globals inputs psbt.outputs
 
 withGlobals :: PsbtMap -> Psbt -> Psbt
-withGlobals globals psbt = Psbt psbt.unsignedTx globals psbt.inputs psbt.outputs
+withGlobals globals psbt = Psbt psbt.version psbt.unsignedTx globals psbt.inputs psbt.outputs
 
 -- | The derivation records of a map, the keys shown in hexadecimal
 shownDerivations :: Ctx -> (PsbtMap -> Either String [(PublicKey, Derivation)]) -> PsbtMap -> IO [(Text, Derivation)]
@@ -243,12 +243,35 @@ signingIntoSpec ctx =
     it "keeps every field of the file it did not write: a key hw does not know in each map, and a field of another wallet" $ do
       source <- written ctx (knownSeed ctx) (paymentFile ctx)
       let foreign' = Map.insert (Key 0x20 "") "global" . insertProprietary "other" 7 "theirs"
-          withForeign = Psbt source.unsignedTx (foreign' source.globals) (foreign' <$> source.inputs) (foreign' <$> source.outputs)
+          withForeign = Psbt source.version source.unsignedTx (foreign' source.globals) (foreign' <$> source.inputs) (foreign' <$> source.outputs)
       signed <- expectRight $ signedPsbt ctx (Just (knownSeed ctx)) withForeign (paymentFile ctx) {txFileData = signedWithSeed ctx}
       Map.lookup (Key 0x20 "") signed.globals `shouldBe` Just "global"
       lookupProprietary "other" 7 signed.globals `shouldBe` Just "theirs"
       map (Map.lookup (Key 0x20 "")) signed.inputs `shouldBe` [Just "global"]
       map (lookupProprietary "other" 7) signed.outputs `shouldBe` [Just "theirs", Just "theirs"]
+
+    -- Bitcoin Core writes version 2 unless asked for version 0: the file
+    -- it prepared for the account, in version 2, signed into. The fields
+    -- of version 2 stay, and it has no flags: it takes no more inputs or
+    -- outputs.
+    it "keeps the version of a file of version 2, as the file Core accepts" $ do
+      psbt <- coreFile "core-prepared-v2.psbt"
+      file <- readBack ctx [knownSeed ctx] psbt
+      (signed, _) <- expectRight $ signWalletTx btc ctx file.txFileData testAccountKey
+      written' <- expectRight $ signedPsbt ctx (Just (knownSeed ctx)) psbt (TxFile (Just btc) signed Map.empty Map.empty)
+      written'.version `shouldBe` Version2
+      encodePsbtBase64 written' `shouldBe` corePreparedSignedV2Text
+      txModifiable written'.globals `shouldBe` Right Nothing
+
+    -- A file of version 2 may say its inputs and outputs can be added
+    -- to. Once hw signed it with the sighash ALL, they cannot.
+    it "clears the flags of a file of version 2 that let inputs and outputs be added, once signed" $ do
+      psbt <- coreFile "core-prepared-v2.psbt"
+      file <- readBack ctx [knownSeed ctx] psbt
+      (signed, _) <- expectRight $ signWalletTx btc ctx file.txFileData testAccountKey
+      let open = withGlobals (insertTxModifiable (Modifiable True True False 0) psbt.globals) psbt
+      written' <- expectRight $ signedPsbt ctx (Just (knownSeed ctx)) open (TxFile (Just btc) signed Map.empty Map.empty)
+      txModifiable written'.globals `shouldBe` Right (Just (Modifiable False False False 0))
 
     it "writes the final script of a signed input, and drops its sighash type and its partial signatures" $ do
       source <- written ctx (knownSeed ctx) (paymentFile ctx)
@@ -428,6 +451,41 @@ readingSpec ctx =
         info.txInfoSummary.summaryOtherOutputs `shouldBe` Map.fromList [(testAddress "1GfJmWwG2JUjrvQ6WjVfwaWpPgtbHDhSdE", 100000000)]
         Map.keys info.txInfoSummary.summaryMyOutputs `shouldBe` [internalAddr 0]
         Map.keys info.txInfoSummary.summaryMyInputs `shouldBe` [externalAddr 0]
+
+    -- The same payment as Core writes it by default since 32.0: a PSBT of
+    -- version 2, whose fields describe the transaction
+    it "reads a file Bitcoin Core prepared in version 2 as the same file as in version 0" $ do
+      version0 <- readBack ctx [knownSeed ctx] =<< coreFile "core-prepared.psbt"
+      version2 <- readBack ctx [knownSeed ctx] =<< coreFile "core-prepared-v2.psbt"
+      version2 `shouldBe` version0
+
+    -- Core signed its version 2 file without finalizing, as a hardware
+    -- wallet does. The final script is the one Core builds when it
+    -- finalizes the same file.
+    it "finalizes a partial signature of the coin's key in a file of version 2, as Core finalizes it" $ do
+      file <- readBack ctx [knownSeed ctx] =<< coreFile "core-prepared-v2-partial.psbt"
+      let input = file.txFileData.txSignDataTx.inputs !! 0
+      encodeHex input.script `shouldBe` "47304402202de30e4e2c703ea6f743f04721dbf1d9468c6527911011d7405778f310f7bab402201a19d6a0f44fb17013e2535aa2c9e219e2dc727033a3efa4c07e74028bd4f69e0121032f6437022256c854e0090e7d6c8b65e96606ef7f405399e0f0187c93097ac0f9"
+      file.txFileData.txSignDataInputPaths `shouldBe` ["/0/0"]
+      verifySignedTx btc ctx file.txFileData `shouldBe` Right ()
+
+    -- Core finalized its version 2 file: the input keeps the fields of
+    -- version 2 and loses its derivation record, so the file names no
+    -- path of it. The id is the one Core's decoderawtransaction gives the
+    -- transaction it extracts.
+    it "reads a file Bitcoin Core finalized in version 2 as the transaction Core extracted, with no path of its input" $ do
+      file <- readBack ctx [knownSeed ctx] =<< coreFile "core-prepared-v2-finalized.psbt"
+      isSigned file.txFileData.txSignDataTx `shouldBe` True
+      txHash file.txFileData.txSignDataTx `shouldBe` "4227ad75bbe53198afe887a6c486514c352134e991637bc808dd3d591c1ce6d6"
+      file.txFileData.txSignDataInputPaths `shouldBe` []
+      file.txFileData.txSignDataOutputPaths `shouldBe` ["/1/0"]
+
+    -- The payment of Database/PendingTxSpec.hs, signed and finalized by
+    -- Core, in both versions
+    it "reads a file finalized in version 2 as the same file as in version 0" $ do
+      version0 <- readBack ctx [knownSeed ctx] =<< coreFile "pending-payment-finalized.psbt"
+      version2 <- readBack ctx [knownSeed ctx] =<< coreFile "pending-payment-finalized-v2.psbt"
+      version2 `shouldBe` version0
 
     -- hw signs it with the key of the test wallet and writes the signatures
     -- into Core's file. Bitcoin Core finds this file complete with

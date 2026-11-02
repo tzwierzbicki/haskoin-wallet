@@ -538,9 +538,9 @@ labels of the wallet. The commands still read the JSON files of an earlier
 `hw`.
 
 The files of other wallets are read the same way, in bytes or in the base64
-text Bitcoin Core and HWI give. `hw` reads version 0 of the format, the
-version of BIP 174. Bitcoin Core 32 and later write version 2 unless asked
-for version 0, with `psbt_version`. `importtx` and `sendtx --input` take a file
+text Bitcoin Core and HWI give, in version 0 of the format or in version 2
+(BIP 370), which Bitcoin Core 32 and later write by default. A file is
+signed back in its version. `importtx` and `sendtx --input` take a file
 another signer returned, finalized or not: `hw` finalizes the signature of a
 P2PKH coin of the account itself, and keeps from the version it holds what
 such a file leaves out, the paths of its signed inputs, the fee rate and the

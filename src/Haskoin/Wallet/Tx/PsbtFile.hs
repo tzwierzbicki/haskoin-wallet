@@ -180,7 +180,7 @@ txFilePsbt ctx accountM file = do
             <> [insertProprietary hwIdentifier feeRateField bytes | Just bytes <- [feeRateM]]
             <> [insertProprietary hwIdentifier replacesField (BS.concat (S.encode <$> tsd.txSignDataReplaces)) | not (null tsd.txSignDataReplaces)]
             <> [insertProprietary hwIdentifier labelField (encodeUtf8 tsd.txSignDataLabel) | not (Text.null tsd.txSignDataLabel)]
-  return $ Psbt (psbtOf tx).unsignedTx globals inputs outputs
+  return $ Psbt Version0 (psbtOf tx).unsignedTx globals inputs outputs
 
 -- | The map of an input: the transaction its coin comes from, the sighash
 -- to sign it with while it is unsigned, its final script and witness once
@@ -236,7 +236,10 @@ signedPsbt ctx accountM source file = do
   let globals = case (file.txFileNetwork, lookupProprietary hwIdentifier networkField source.globals) of
         (Just net, Nothing) -> insertProprietary hwIdentifier networkField (cs net.name) source.globals
         _ -> source.globals
-  return $ Psbt source.unsignedTx globals inputs outputs
+  -- The file keeps its version. hw signs with the sighash ALL, with
+  -- FORKID on Bitcoin Cash, after which a file of version 2 takes no more
+  -- inputs or outputs: its flags say so.
+  return $ afterSignature sigHashAll (Psbt source.version source.unsignedTx globals inputs outputs)
   where
     -- The map of an input as the signed transaction has it: as it was
     -- while the input is unsigned

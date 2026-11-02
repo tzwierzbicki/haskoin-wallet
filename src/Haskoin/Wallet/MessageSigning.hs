@@ -217,8 +217,8 @@ readSignedMessageBlock content =
     (_, _ : afterBegin) ->
       case break (isMarker beginsSignature) afterBegin of
         (_, []) -> Left "no \"-----BEGIN BITCOIN SIGNATURE-----\" line after the message"
-        (messageLines, _ : afterSignature) ->
-          case filter isValue (takeWhile (not . isMarker ends) afterSignature) of
+        (messageLines, _ : afterSignatureLine) ->
+          case filter isValue (takeWhile (not . isMarker ends) afterSignatureLine) of
             address : signatureLines@(_ : _) ->
               Right (Text.strip address, Text.concat (Text.strip <$> signatureLines), Text.intercalate "\n" messageLines)
             _ -> Left "the signature part of the block must hold the address, then the signature"

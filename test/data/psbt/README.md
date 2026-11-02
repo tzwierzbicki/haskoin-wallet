@@ -33,8 +33,7 @@ text Core's RPCs give, as a user would save it. Core 25.0 wrote them. Core
 32.1 writes the same bytes, signs and finalizes the same, and accepts the
 same transaction, when `walletcreatefundedpsbt` is asked for a PSBT of
 version 0 with its `psbt_version` argument. Its default is version 2 (BIP
-370) since Core 32.0, which hw refuses: `core-prepared-v2.psbt` is that
-file.
+370) since Core 32.0, which hw reads too: the files named `-v2` are those.
 
 The wallet `hw` of that node holds the keys of the test account through the
 descriptors `pkh([bc560f95/44h/0h/0h]tprv.../0/*)` and `.../1/*`, the
@@ -52,7 +51,15 @@ a file before gives again with the `changeAddress` option.
 | --- | --- |
 | `core-prepared.psbt` | `walletcreatefundedpsbt` of the wallet `hw`: 1 BTC from the coin of 50 BTC mined to /0/0 of the test account, to a legacy address of `other`, with the change at /1/0 and `fee_rate` 10. The spec signs it with the test account's key into this file, and pins the result: `analyzepsbt` finds that result complete, `finalizepsbt` extracts the transaction, and `testmempoolaccept` accepts it on that chain. |
 | `core-outside.psbt` | `walletcreatefundedpsbt` of the wallet `other`: 2.5 BTC of its own coin to another of its legacy addresses, `fee_rate` 10. It involves no account of the test wallet. |
-| `core-prepared-v2.psbt` | `core-prepared.psbt` as Core 32.1 writes it by default: a PSBT of version 2, which hw refuses by its version. |
+| `core-prepared-v2.psbt` | `core-prepared.psbt` as Core 32.1 writes it by default: a PSBT of version 2, the same payment field by field. |
+| `core-prepared-v2-partial.psbt`, `core-prepared-v2-finalized.psbt`, `.hex` | `walletprocesspsbt` of the wallet `hw` on `core-prepared-v2.psbt`, with `finalize` false, then true, then `finalizepsbt`: Core's signature as a partial signature, the final script with the fields of version 2 kept, and the transaction alone. |
+| `pending-payment-finalized-v2.psbt` | `pending-payment-finalized.psbt` as version 2, converted apart from hw: the fields of BIP 370 added to the maps, the unsigned transaction removed. Core 32.1 decodes it and extracts the same transaction. |
+
+`corePreparedSignedV2Text` in `test/Haskoin/Wallet/TestUtils.hs`, the file
+hw signs into `core-prepared-v2.psbt`, was converted the same way from the
+version 0 one, and checked with Core 32.1: `analyzepsbt` finds it complete,
+`finalizepsbt` extracts the transaction of the version 0 one, and
+`testmempoolaccept` accepts it.
 | `hw-payment-partial.psbt` | `walletprocesspsbt` of the wallet `hw` on the file hw writes for the payment of `Tx/PsbtFileSpec.hs` (pinned there in base64), with `finalize` false: Core's signature as a partial signature, as a hardware wallet leaves it. |
 | `hw-payment-finalized.psbt`, `.hex` | The same with `finalize` true, then `finalizepsbt`: the final script in place of the partial signature and the derivation records of the input, which Core clears, and the transaction alone. |
 | `pending-payment-finalized.psbt`, `.hex` | The same for the payment of `Database/PendingTxSpec.hs` (8000 satoshis to the first address of another wallet, 11774 of change, at 1 satoshi per byte). |

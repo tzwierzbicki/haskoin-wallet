@@ -968,3 +968,11 @@ fingerprintOf = forceRight . textToFingerprint
 -- regtest chain the coin is on. See test/data/psbt/README.md.
 corePreparedSignedText :: BS.ByteString
 corePreparedSignedText = "cHNidP8BAHcCAAAAAZzolVrP9CarlPjUSHujJgVmsHiFB+Mm+Bafv63Mct7+AAAAAAD9////AgDh9QUAAAAAGXapFKvIhl67bbYllWAxY5ddm6o2RjLKiKw2CBAkAQAAABl2qRRFWqUMJmMUF3HrrCCW43gzkRIn1oisAAAAAAX8Amh3AANidGMAAQCHAgAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP////8DAWYA/////wIA8gUqAQAAABl2qRTIDVUiPi8QYTY63Sp7A2PChb8pjYisAAAAAAAAAAAmaiSqIant4vYcP3HR3v0/qZnfo2lTdVxpBol5mWK0i+vYNpdOjPkAAAAAIgYDL2Q3AiJWyFTgCQ59bItl6WYG739AU5ng8Bh8kwl6wPkYvFYPlSwAAIAAAACAAAAAgAAAAAAAAAAAAQdqRzBEAiAt4w5OLHA+pvdD8Ech2/HZRoxlJ5EQEddAV3jzEPe6tAIgGhnWoPRPsXAT4lNaosniGeLccnAzo++kwH50AovU9p4BIQMvZDcCIlbIVOAJDn1si2XpZgbvf0BTmeDwGHyTCXrA+QAAIgIDdvLnBkWN11Zzuhm479hC793ZvArkHjEznf/PkXtttusYvFYPlSwAAIAAAACAAAAAgAEAAAAAAAAAAA=="
+
+-- | The same, signed into the version 2 file Core writes by default
+-- (test/data/psbt/core/core-prepared-v2.psbt): the file above with the
+-- fields of version 2, converted apart from hw. Bitcoin Core 32.1's
+-- analyzepsbt finds it complete, its finalizepsbt extracts the transaction
+-- of the file above, and its testmempoolaccept accepts it.
+corePreparedSignedV2Text :: BS.ByteString
+corePreparedSignedV2Text = "cHNidP8BAgQCAAAAAQMEAAAAAAEEAQEBBQECAfsEAgAAAAX8Amh3AANidGMAAQCHAgAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP////8DAWYA/////wIA8gUqAQAAABl2qRTIDVUiPi8QYTY63Sp7A2PChb8pjYisAAAAAAAAAAAmaiSqIant4vYcP3HR3v0/qZnfo2lTdVxpBol5mWK0i+vYNpdOjPkAAAAAIgYDL2Q3AiJWyFTgCQ59bItl6WYG739AU5ng8Bh8kwl6wPkYvFYPlSwAAIAAAACAAAAAgAAAAAAAAAAAAQdqRzBEAiAt4w5OLHA+pvdD8Ech2/HZRoxlJ5EQEddAV3jzEPe6tAIgGhnWoPRPsXAT4lNaosniGeLccnAzo++kwH50AovU9p4BIQMvZDcCIlbIVOAJDn1si2XpZgbvf0BTmeDwGHyTCXrA+QEOIJzolVrP9CarlPjUSHujJgVmsHiFB+Mm+Bafv63Mct7+AQ8EAAAAAAEQBP3///8AAQMIAOH1BQAAAAABBBl2qRSryIZeu222JZVgMWOXXZuqNkYyyoisACICA3by5wZFjddWc7oZuO/YQu/d2bwK5B4xM53/z5F7bbbrGLxWD5UsAACAAAAAgAAAAIABAAAAAAAAAAEDCDYIECQBAAAAAQQZdqkURVqlDCZjFBdx66wgluN4M5ESJ9aIrAA="
