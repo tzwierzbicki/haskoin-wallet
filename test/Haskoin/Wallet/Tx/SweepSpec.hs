@@ -79,8 +79,14 @@ sweptKeyTestnetAddrsText =
 sweptKeyAddrs :: [Address]
 sweptKeyAddrs = fromJust . textToAddr btc <$> sweptKeyAddrsText
 
--- | The P2PKH address of the uncompressed encoding of the swept key
-sweptKeyUncompressedAddr :: Address
+-- | The compressed public key of the swept key
+sweptPubKey :: Ctx -> PublicKey
+sweptPubKey ctx = derivePublicKey ctx (wrapSecKey True sweptKey)
+
+-- | The P2PKH addresses of the compressed and uncompressed encodings of
+-- the swept key
+sweptKeyCompressedAddr, sweptKeyUncompressedAddr :: Address
+sweptKeyCompressedAddr = fromJust $ textToAddr btc "18FtYoEJipP5bCJnjgWdeeEbxSvozSjEUA"
 sweptKeyUncompressedAddr = fromJust $ textToAddr btc "1LwjY8QPCW46jXn79eeN5SfZDsYNB9qDj1"
 
 keyAddressesSpec :: Ctx -> Spec
@@ -128,7 +134,7 @@ sweepSizeSpec ctx =
   where
     sizeOf swept to =
       sweepTxSize btc ctx (SweepCoins swept [] Map.empty [sweptKeyUncompressedAddr]) (fromJust . addressToOutput <$> to)
-    compressedCoin = storeCoin ctx (fakeTxHash 1, 0) Nothing (fromJust $ textToAddr btc "18FtYoEJipP5bCJnjgWdeeEbxSvozSjEUA") 100000
+    compressedCoin = storeCoin ctx (fakeTxHash 1, 0) Nothing sweptKeyCompressedAddr 100000
     uncompressedCoin = storeCoin ctx (fakeTxHash 1, 1) Nothing sweptKeyUncompressedAddr 200000
     witnessCoin = storeCoin ctx (fakeTxHash 1, 2) Nothing (fromJust $ textToAddr btc "bc1qf7vmha6hqljyhs405efn0hkwj98gz74v86kel2") 300000
     nestedCoin = storeCoin ctx (fakeTxHash 1, 3) Nothing (fromJust $ textToAddr btc "3J6JzvfPtYr3GvY37YXbjuTx7ZLedG3C9p") 400000
@@ -139,10 +145,9 @@ sweepSizeSpec ctx =
         { Store.block = Store.MemRef 0,
           Store.outpoint = OutPoint (fakeTxHash 2) 0,
           Store.value = 100000,
-          Store.script = marshal ctx (PayPK sweptPub),
-          Store.address = Just (pubKeyAddr ctx sweptPub)
+          Store.script = marshal ctx (PayPK (sweptPubKey ctx)),
+          Store.address = Just (pubKeyAddr ctx (sweptPubKey ctx))
         }
-    sweptPub = derivePublicKey ctx (wrapSecKey True sweptKey)
     -- Destinations of every kind: the P2SH and P2WPKH addresses of the swept
     -- key, and the P2WSH and P2TR examples of BIP173 and BIP350
     scriptAddr = fromJust $ textToAddr btc "3J6JzvfPtYr3GvY37YXbjuTx7ZLedG3C9p"
@@ -278,6 +283,16 @@ sweepBuilderSpec ctx =
       let tx = spendingTx ctx [(txHash walletFunding, 0)] [(otherAddr 0, 500000)]
           unsigned = TxSignData tx [walletFunding] [firstExternal] [] Nothing Nothing [] noLabel
       signTxWithKeys btc ctx unsigned (Just accountPub) [walletKey] `shouldBe` Left "The transaction pays no fee"
+    -- The coin paid to the swept key's public key itself, swept to another
+    -- wallet: 10 + 114 + 34 = 158 bytes, a fee of 1580, and 100000 - 1580 =
+    -- 98420 paid. The coin is reported under the P2PKH address of the key.
+    it "signs a sweep of a coin paid to the public key itself, listed under the P2PKH address of the key" $ do
+      let tx = spendingTx ctx [(txHash p2pkFunding, 0)] [(otherAddr 0, 98420)]
+          unsigned = TxSignData tx [p2pkFunding] [] [] (Just 10) Nothing [] noLabel
+      (signed, info) <- expectRight $ signTxWithKeys btc ctx unsigned Nothing [sweptKey]
+      isSigned signed.txSignDataTx `shouldBe` True
+      Map.toList info.txInfoSummary.summaryOtherInputs `shouldBe` [(sweptKeyCompressedAddr, 100000)]
+      info.txInfoSummary.summaryFee `shouldBe` 1580
   where
     seed = mkStdGen 0
     -- The wallet: the test wallet of TestUtils, with its first two external addresses
@@ -288,6 +303,9 @@ sweepBuilderSpec ctx =
     -- The coins: 100000 to 400000 at the four addresses of the swept key, and 500000 of the wallet's
     keyFunding = fundingTx ctx 1 (zip sweptKeyAddrs [100000, 200000, 300000, 400000])
     walletFunding = fundingTx ctx 2 [(externalAddr 0, 500000)]
+    -- A transaction paying 100000 to the swept key's public key itself
+    -- (P2PK), as the coinbase transactions of the first years did
+    p2pkFunding = Tx 2 [TxIn (OutPoint (fakeTxHash 3) 0) BS.empty 0xffffffff] [TxOut 100000 (marshal ctx (PayPK (sweptPubKey ctx)))] [] 0
     allCoins :: [Store.Unspent]
     allCoins = coinsOf ctx keyFunding <> coinsOf ctx walletFunding
     found =

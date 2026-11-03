@@ -34,7 +34,7 @@ import Data.Function (on)
 import Data.List (find, nub, nubBy)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (isJust, listToMaybe, mapMaybe)
+import Data.Maybe (catMaybes, isJust, listToMaybe, mapMaybe)
 import Data.Word (Word32, Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -46,7 +46,7 @@ import Haskoin.Wallet.Tx.Recipient (Share, shareAmounts)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Tx.SignData
-import Haskoin.Wallet.Tx.Signing (coinSigInput, parseOutsideTxSignData, parseTxSignData, spentCoins, verifySignedTx)
+import Haskoin.Wallet.Tx.Signing (coinSigInput, parseOutsideTxSignData, parseTxSignData, spentAddress, spentCoins, verifySignedTx)
 import Haskoin.Wallet.Tx.Size (InputSize, checkFeeRateAndDust, inputSize, outputSize, txSize, uncompressedKeyInput)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
@@ -149,9 +149,12 @@ coinsOfTransactions given parents = mapM coinOf given
 keyAddresses :: Network -> Ctx -> SecKey -> [Address]
 keyAddresses net ctx key =
   [pubKeyAddr ctx compressed, uncompressedKeyAddr ctx key]
-    <> [a | net.segWit, a <- [pubKeyWitnessAddr ctx compressed, pubKeyCompatWitnessAddr ctx compressed]]
+    <> [a | net.segWit, a <- segWitAddresses]
   where
     compressed = derivePublicKey ctx (wrapSecKey True key)
+    -- haskoin-core gives no SegWit address to an uncompressed key. The key
+    -- here is compressed, so both addresses exist.
+    segWitAddresses = catMaybes [pubKeyWitnessAddr ctx compressed, pubKeyCompatWitnessAddr ctx compressed]
 
 -- | The P2PKH address of the uncompressed encoding of the key's public key
 uncompressedKeyAddr :: Ctx -> SecKey -> Address
@@ -307,4 +310,4 @@ signCoin net ctx keys tx (i, coin) =
     withKey maybeKey sign = maybe noKey sign maybeKey
     noKey = Left $ "No private key for " <> describeInput
     describeInput =
-      "input " <> show i <> " (" <> maybe "unknown address" (addrToString net) (outputAddress ctx coin.script) <> ")"
+      "input " <> show i <> " (" <> maybe "unknown address" (addrToString net) (spentAddress net ctx coin.script) <> ")"

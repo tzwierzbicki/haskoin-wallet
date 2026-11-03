@@ -77,6 +77,17 @@ wallet unspents recipients =
 firstChange :: (Address, SoftPath)
 firstChange = (internalAddr 0, Deriv :/ 1 :/ 0)
 
+-- | Bitcoin Cash addresses of other kinds: the P2SH32 address of the
+-- 32-byte hash 1863143c...903262, the token-aware address of the 20-byte
+-- hash 76a04053...559873, and the plain P2PKH address of that hash. The
+-- hashes are those of the examples of the CashAddr specification. The
+-- addresses were encoded apart from haskoin-core, with an encoder written
+-- from the specification.
+script32Addr, tokenAddr, plainTokenAddr :: Address
+script32Addr = fromJust $ textToAddr bch "bitcoincash:pvvxx9puznz3v6qyh5vjqv6kmgfkexzk0rx56faphrrr99syjqexyrusee847"
+tokenAddr = fromJust $ textToAddr bch "bitcoincash:zpm2qsznhks23z7629mms6s4cwef74vcwvrqekrq9w"
+plainTokenAddr = fromJust $ textToAddr bch "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"
+
 -- | Build with the seed 0 and the given strategy, wallet, recipients and
 -- payer, at 10 satoshis per byte with a dust limit of 546
 build :: Ctx -> CoinSelection -> WalletCoins -> [(Address, Natural)] -> FeePayer -> Either String BuiltTx
@@ -147,6 +158,20 @@ transactionSpec ctx =
       built <- expectRight $ buildWalletTx bch ctx (mkStdGen 0) LargestFirst cashWallet firstChange [(otherAddr 0, 350000)] 10 546 800002 SenderPays NoCoinControl
       ((.sequence) <$> built.tx.inputs) `shouldBe` [0xfffffffe]
       (built.tx.version, built.tx.locktime) `shouldBe` (2, 800002)
+    -- Fee: 10 + 148 + 44 (a P2SH32 output: 8 + 1 + 35) + 34 + 34 = 270 bytes * 10 = 2700
+    -- Change: 400000 - 100000 - 50000 - 2700 = 247300
+    it "pays a P2SH32 address and a token-aware address on Bitcoin Cash, the latter with the plain P2PKH script" $ do
+      let cashCoin = storeCoin ctx (fakeTxHash 8, 0) (Just 800000) bchExternalAddr 400000
+          cashWallet = WalletCoins {coins = [cashCoin], coinPaths = Map.fromList [(bchExternalAddr, Deriv :/ 0 :/ 0)], recipientPaths = Map.empty}
+      built <- expectRight $ buildWalletTx bch ctx (mkStdGen 0) LargestFirst cashWallet firstChange [(script32Addr, 100000), (tokenAddr, 50000)] 10 546 800002 SenderPays NoCoinControl
+      -- The coin of the token-aware address shows at the plain address of the same hash
+      spends ctx built `shouldBe` ([400000], [(plainTokenAddr, 50000), (script32Addr, 100000), (internalAddr 0, 247300)])
+      -- OP_DUP OP_HASH160 <20 bytes> OP_EQUALVERIFY OP_CHECKSIG, then OP_HASH256 <32 bytes> OP_EQUAL
+      (encodeHex . (.script) <$> take 2 (sortOn (.value) built.tx.outputs))
+        `shouldBe` [ "76a91476a04053bda0a88bda5177b86a15c3b29f55987388ac",
+                     "aa201863143c14c5166804bd19203356da136c985678cd4d27a1b8c632960490326287"
+                   ]
+      feePaid built `shouldBe` 2700
     it "pays several recipients" $ do
       -- Fee: 10 + 148 + 3 * 34 = 260 bytes * 10 = 2600
       -- Change: 400000 - 150000 - 100000 - 2600 = 147400

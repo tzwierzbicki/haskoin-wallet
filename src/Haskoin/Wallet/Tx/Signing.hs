@@ -1,4 +1,5 @@
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE NoFieldSelectors #-}
 {-# LANGUAGE OverloadedRecordDot #-}
@@ -38,6 +39,7 @@ module Haskoin.Wallet.Tx.Signing
     verifySignedTx,
     SpentCoin (..),
     spentCoins,
+    spentAddress,
     coinSigInput,
     walletSigHash,
     sigHashName,
@@ -187,7 +189,7 @@ spentCoins net ctx tsd = mapM spentCoin tsd.txSignDataTx.inputs
         maybe (Left "Referenced input transactions are missing") Right $
           nth op.index =<< Map.lookup op.hash outputs
       script <- either (const nonStandard) Right $ unmarshal ctx txOut.script
-      address <- maybe nonStandard Right $ paidAddress net ctx script
+      address <- maybe nonStandard Right $ spentAddress net ctx script
       return SpentCoin {outpoint = op, value = txOut.value, script, address}
     nonStandard = Left "There are non-standard inputs in the transaction"
     nth i xs = listToMaybe $ drop (fromIntegral i) xs
@@ -195,6 +197,16 @@ spentCoins net ctx tsd = mapM spentCoin tsd.txSignDataTx.inputs
 -- | The address an output script pays, when the network can write it
 paidAddress :: Network -> Ctx -> ScriptOutput -> Maybe Address
 paidAddress net ctx script = mfilter (onNetwork net) (outputAddress ctx script)
+
+-- | The address of a coin an input spends, when the network can write it.
+-- A coin paid to a public key itself (P2PK), which only a sweep spends, is
+-- listed under the P2PKH address of that key. haskoin-core gives the
+-- script no address, since the coin is not spent as a P2PKH one, but the
+-- same key signs for both, and hw has no other name for the coin.
+spentAddress :: Network -> Ctx -> ScriptOutput -> Maybe Address
+spentAddress net ctx = \case
+  PayPK key -> mfilter (onNetwork net) (Just (pubKeyAddr ctx key))
+  script -> paidAddress net ctx script
 
 -- | The signing parameters of a coin: its output script and value, signed
 -- with SIGHASH_ALL (with the FORKID flag on Bitcoin Cash networks)
