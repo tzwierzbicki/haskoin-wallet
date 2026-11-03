@@ -1,0 +1,29 @@
+{
+  "wallet_name": "watch",
+  "descriptors": [
+    {
+      "desc": "pkh([bc560f95/44h/1h/0h]tpubDCEeDpHvZZ49SMZ4VkifyjwqyJjKVFkbJHzhxZJiQgcMa2vnQnMhyXcu1ZZcReuwrprnxVnJsJGro7xdrEABAtK4AGZGqv2r4H7WytWLbPm/0/*)#r9hl74rq",
+      "timestamp": 1296688602,
+      "active": true,
+      "internal": false,
+      "range": [
+        0,
+        999
+      ],
+      "next": 0,
+      "next_index": 0
+    },
+    {
+      "desc": "pkh([bc560f95/44h/1h/0h]tpubDCEeDpHvZZ49SMZ4VkifyjwqyJjKVFkbJHzhxZJiQgcMa2vnQnMhyXcu1ZZcReuwrprnxVnJsJGro7xdrEABAtK4AGZGqv2r4H7WytWLbPm/1/*)#j3j7rqnc",
+      "timestamp": 1296688602,
+      "active": true,
+      "internal": true,
+      "range": [
+        0,
+        999
+      ],
+      "next": 0,
+      "next_index": 0
+    }
+  ]
+}

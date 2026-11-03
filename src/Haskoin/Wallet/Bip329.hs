@@ -8,13 +8,14 @@
 -- among them. The types are @tx@, @addr@, @pubkey@, @input@, @output@,
 -- @xpub@ and @spscan@, and a record of another type is ignored. The
 -- @origin@ of a record, an abbreviated output descriptor such as
--- @pkh([bc560f95/44'/0'/0'])@, names the wallet the label comes from, to
--- tell the accounts of one seed apart. A file of @output@ records says with
--- @spendable@ whether the wallet may spend each coin.
+-- @pkh([bc560f95/44'/0'/0'])@ ("Haskoin.Wallet.Descriptor"), names the
+-- wallet the label comes from, to tell the accounts of one seed apart. A
+-- file of @output@ records says with @spendable@ whether the wallet may
+-- spend each coin.
 --
 -- This module is the format alone: the records, their lines, and the texts
--- of the origins, key paths and outpoints. "Haskoin.Wallet.Labels" turns the
--- wallet into records and records into the wallet.
+-- of the key paths and outpoints. "Haskoin.Wallet.Labels" turns the wallet
+-- into records and records into the wallet.
 --
 -- hw writes and reads the fields it has a use for: @label@, @origin@,
 -- @spendable@, the @keypath@ of an address or a coin, and the @height@,
@@ -40,12 +41,6 @@ module Haskoin.Wallet.Bip329
     recordLine,
     recordsText,
 
-    -- * Origins
-    Origin (..),
-    accountOrigin,
-    originText,
-    parseOrigin,
-
     -- * Key paths and outpoints
     keypathText,
     parseKeypath,
@@ -61,7 +56,6 @@ import qualified Data.Aeson.Encoding as Encoding
 import Data.Aeson.Types (Parser)
 import qualified Data.Aeson.Types as Json
 import Data.Bifunctor (first)
-import Data.Char (isHexDigit)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -163,12 +157,12 @@ data Line
   deriving (Eq, Show)
 
 -- | The lines of a file that hold anything, each numbered from 1 as a text
--- editor counts them, read as records. A line that is not a record says
--- why. Blank lines are passed over, and a line ending in a carriage return
--- is read without it, so that a file edited on Windows reads too.
-readLines :: Text -> [(Natural, Either String Line)]
+-- editor counts them, without the spaces around them. Blank lines are
+-- passed over, and a line ending in a carriage return is read without it,
+-- so that a file edited on Windows reads too. 'parseLine' reads each.
+readLines :: Text -> [(Natural, Text)]
 readLines content =
-  [ (number, parseLine line)
+  [ (number, line)
     | (number, raw) <- zip [1 ..] (Text.splitOn "\n" content),
       let line = Text.strip raw,
       not (Text.null line)
@@ -234,69 +228,6 @@ recordLine r =
 -- a line feed
 recordsText :: [Record] -> Text
 recordsText records = Text.concat [recordLine r <> "\n" | r <- records]
-
-{- Origins -}
-
--- | The origin of a record, read from its abbreviated output descriptor:
--- the script functions around the key, the fingerprint of the master key
--- the key derives from, and the path of the derivation
-data Origin = Origin
-  { -- | The script functions from the outside in: ["pkh"] for a BIP44
-    -- account, ["sh", "wpkh"] for a BIP49 one, none for a bare key origin
-    originScripts :: ![Text],
-    originFingerprint :: !Fingerprint,
-    -- | The path from the master key to the key, with its hardened steps
-    originPath :: !DerivPath
-  }
-  deriving (Eq, Show)
-
--- | The origin of a BIP44 account of a seed: pkh([fingerprint/44'/coin'/index'])
-accountOrigin :: Fingerprint -> HardPath -> Origin
-accountOrigin fingerprint path = Origin ["pkh"] fingerprint (toGeneric path)
-
--- | An origin as a record writes it, hardened steps marked with an
--- apostrophe
-originText :: Origin -> Text
-originText origin =
-  Text.concat (map (<> "(") (originScripts origin))
-    <> "["
-    <> fingerprintToText (originFingerprint origin)
-    <> cs (pathToStr (originPath origin))
-    <> "]"
-    <> Text.replicate (length (originScripts origin)) ")"
-
--- | The origin an abbreviated output descriptor describes, if it is one of
--- a single key: script functions around a key origin in brackets, a
--- fingerprint of eight hexadecimal digits and a path whose hardened steps
--- end in an apostrophe, an h or an H, as BIP 380 writes them. A descriptor
--- of several keys, such as a multisig one, is none.
-parseOrigin :: Text -> Maybe Origin
-parseOrigin text = do
-  (scripts, keyOrigin) <- unwrapped [] (Text.strip text)
-  inside <- Text.stripSuffix "]" =<< Text.stripPrefix "[" keyOrigin
-  let (fingerprintText, pathText) = Text.breakOn "/" inside
-  guard (Text.length fingerprintText == 8 && Text.all isHexDigit fingerprintText)
-  fingerprint <- either (const Nothing) Just (textToFingerprint fingerprintText)
-  path <- parseOriginPath pathText
-  return (Origin scripts fingerprint path)
-  where
-    -- The script functions peeled off the text from the outside in, down
-    -- to the key origin in brackets
-    unwrapped :: [Text] -> Text -> Maybe ([Text], Text)
-    unwrapped scripts t
-      | "[" `Text.isPrefixOf` t = Just (reverse scripts, t)
-      | otherwise = do
-          let (name, rest) = Text.breakOn "(" t
-          guard (not (Text.null name) && Text.all (`notElem` ("()[]," :: String)) name)
-          inner <- Text.stripSuffix ")" =<< Text.stripPrefix "(" rest
-          unwrapped (name : scripts) inner
-
--- | The path after the fingerprint of a key origin: none, or steps each
--- after a slash
-parseOriginPath :: Text -> Maybe DerivPath
-parseOriginPath text
-  | Text.null text = Just Deriv
-  | otherwise = (.get) <$> parsePath (cs (Text.replace "H" "'" (Text.replace "h" "'" text)))
 
 {- Key paths and outpoints -}
 

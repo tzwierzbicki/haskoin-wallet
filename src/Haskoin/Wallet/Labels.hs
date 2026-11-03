@@ -30,6 +30,15 @@
 -- another import places it. What hw keeps no label for, such as inputs,
 -- coins and change addresses, is left aside and counted.
 --
+-- A line of the file that is not a record may hold the output descriptor
+-- of an account ("Haskoin.Wallet.Descriptor"), as another wallet exports
+-- one, or a key alone, and the whole file may be the one Bitcoin Core's
+-- listdescriptors writes, or the generic JSON of a Coldcard. A descriptor
+-- is read as the @xpub@ record it amounts to, with the origin of its key
+-- and no name, so the account it adds is named after its network and
+-- index, as recover names one. hw holds BIP44 accounts: a descriptor of
+-- another kind is refused, with the reason, and the import goes on.
+--
 -- The document exportacc wrote before this format, one JSON object with
 -- the key, the network, the name and the fingerprint, is read as the
 -- @xpub@ record it amounts to.
@@ -51,7 +60,7 @@ where
 
 import Conduit (MonadUnliftIO)
 import Control.Applicative ((<|>))
-import Control.Monad (filterM, foldM, forM, forM_, unless)
+import Control.Monad (filterM, foldM, forM, forM_, unless, when)
 import Control.Monad.Except (ExceptT, catchError, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
@@ -60,7 +69,7 @@ import qualified Data.Aeson as Json
 import Data.Aeson.Types (Pair, Parser)
 import qualified Data.Aeson.Types as Json
 import Data.Bits (testBit)
-import Data.List (partition)
+import Data.List (nubBy)
 import Data.Maybe (fromMaybe, isJust, listToMaybe, maybeToList)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -79,6 +88,7 @@ import Haskoin.Wallet.Database.Coin (coinOutpoint, readBlock, setLockedByUser, u
 import Haskoin.Wallet.Database.PendingTx (PendingTx (..), findPendingTx, pendingTxs, setPendingTxLabel, txInfoOf)
 import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..), liveSummary)
 import Haskoin.Wallet.Database.TxLabel (accountTxLabels, setTxLabel)
+import Haskoin.Wallet.Descriptor
 import Haskoin.Wallet.Keys (bip44Deriv, xPubIndex)
 import Haskoin.Wallet.Sync (recoveredName)
 import Haskoin.Wallet.Tx.SignData (TxSignData (..), isSigned)
@@ -231,32 +241,82 @@ emptyReport accounts unreadable =
       reportUnreadable = unreadable
     }
 
--- | Import the content of a file: a BIP 329 file, or a document of the
--- accounts as exportacc wrote them before. The network is the one of
--- --network or of the configuration, for a key the file places on none.
+-- | Import the content of a file: a BIP 329 file, whose lines may hold
+-- descriptors of accounts too, a file of descriptors as another wallet
+-- writes it, or a document of the accounts as exportacc wrote them
+-- before. The network is the one of --network or of the configuration,
+-- for a key the file places on none.
 importFile :: (MonadUnliftIO m) => Ctx -> Maybe Network -> Text -> ExceptT String (DB m) ImportReport
 importFile ctx netM content =
-  case oldDocument ctx content of
-    Just docE -> do
-      doc <- liftEither docE
-      importRecords ctx netM [(1, documentRecord ctx doc)] []
-    Nothing -> do
-      let parsed = readLines content
-          records = [(number, r) | (number, Right (LineRecord r)) <- parsed]
-          otherTypes = [number | (number, Right (LineOfOtherType _)) <- parsed]
-          unreadable = [number | (number, Left _) <- parsed]
-      report <- importRecords ctx netM records unreadable
-      return report {reportNotKept = reportNotKept report + fromIntegral (length otherTypes)}
+  case wholeObject content of
+    Just o
+      | isJust (Json.parseMaybe (.: "xpubkey") o :: Maybe Json.Value) -> do
+          doc <- liftEither (Json.parseEither (unmarshalValue ctx) (Json.Object o))
+          importRecords ctx netM [Right (documentRecord ctx doc)] [] []
+      | Just descriptors <- fileDescriptors o ->
+          importRecords ctx netM (oneOfEachKey (descriptorRecord <$> descriptors)) [] []
+    _ -> do
+      let classified = classifyLine <$> readLines content
+          keys = oneOfEachKey [key | KeyLine key <- classified]
+          records = [(number, r) | RecordLine number r <- classified]
+          otherTypes = length [() | OtherTypeLine <- classified]
+          unreadable = [number | UnreadableLine number <- classified]
+      report <- importRecords ctx netM keys records unreadable
+      return report {reportNotKept = reportNotKept report + fromIntegral otherTypes}
 
--- | The document of an earlier exportacc, when the content is one: a JSON
--- object naming the key, or Nothing for anything else
-oldDocument :: Ctx -> Text -> Maybe (Either String PubKeyDoc)
-oldDocument ctx content = do
-  value <- Json.decodeStrict' (encodeUtf8 content)
-  case value of
-    Json.Object o | isJust (Json.parseMaybe (.: "xpubkey") o :: Maybe Json.Value) ->
-      Just (Json.parseEither (unmarshalValue ctx) value)
-    _ -> Nothing
+-- | The one JSON object a file holds, when it is one: the document of an
+-- earlier exportacc, or a file of descriptors. A file of one record is one
+-- object too, which its keys tell apart.
+wholeObject :: Text -> Maybe Json.Object
+wholeObject content = case Json.decodeStrict' (encodeUtf8 content) of
+  Just (Json.Object o) -> Just o
+  _ -> Nothing
+
+-- | What a line of a file holds, for the import
+data FileLine
+  = -- | An xpub record, or a descriptor read as one, or a descriptor
+    -- refused with the reason
+    KeyLine !(Either AccountImport Record)
+  | -- | A record of another type, with the number of its line
+    RecordLine !Natural !Record
+  | -- | A record of a type the BIP does not define
+    OtherTypeLine
+  | -- | A line that is neither a record nor a descriptor, by its number
+    UnreadableLine !Natural
+
+-- | A line as a record, when it starts as a JSON object does, else as a
+-- descriptor. A line that is neither is not readable, unless it looks
+-- like a descriptor, in which case it is refused with the reason.
+classifyLine :: (Natural, Text) -> FileLine
+classifyLine (number, line)
+  | "{" `Text.isPrefixOf` line = case parseLine line of
+      Right (LineRecord r) | recordType r == XpubRecord -> KeyLine (Right r)
+      Right (LineRecord r) -> RecordLine number r
+      Right (LineOfOtherType _) -> OtherTypeLine
+      Left _ -> UnreadableLine number
+  | otherwise = case descriptorRecord line of
+      Right r -> KeyLine (Right r)
+      Left refused
+        | looksLikeDescriptor line -> KeyLine (Left refused)
+        | otherwise -> UnreadableLine number
+
+-- | The xpub record a descriptor amounts to: its key, with the origin of
+-- the key when the descriptor gives it, and neither name nor network. A
+-- text that is not the descriptor of an account is refused, named by its
+-- start, with the reason.
+descriptorRecord :: Text -> Either AccountImport Record
+descriptorRecord text = case parseDescriptor text of
+  Right d -> Right (record XpubRecord (descriptorKey d)) {recordOrigin = originText <$> descriptorOrigin d}
+  Left why -> Left (AccountRefused (Text.take 12 text <> "...") (cs why))
+
+-- | The key lines with each key once: the file of Bitcoin Core's
+-- listdescriptors writes an account as two descriptors of its key, one
+-- per chain
+oneOfEachKey :: [Either AccountImport Record] -> [Either AccountImport Record]
+oneOfEachKey = nubBy sameKey
+  where
+    sameKey (Right a) (Right b) = recordRef a == recordRef b
+    sameKey _ _ = False
 
 -- | The xpub record such a document amounts to
 documentRecord :: Ctx -> PubKeyDoc -> Record
@@ -267,12 +327,12 @@ documentRecord ctx (PubKeyDoc xpub net name fingerprintM) =
       recordNetwork = Just (cs net.name)
     }
 
--- | Import records, each with the number of its line, the xpub records
--- first, and count the lines given as not readable
-importRecords :: (MonadUnliftIO m) => Ctx -> Maybe Network -> [(Natural, Record)] -> [Natural] -> ExceptT String (DB m) ImportReport
-importRecords ctx netM numbered unreadable = do
-  let (keys, others) = partition ((== XpubRecord) . recordType . snd) numbered
-  accountImports <- mapM (importKey ctx netM . snd) keys
+-- | Import the accounts of the key lines, the refused ones as they are,
+-- then the other records, each with the number of its line, and count
+-- the lines given as not readable
+importRecords :: (MonadUnliftIO m) => Ctx -> Maybe Network -> [Either AccountImport Record] -> [(Natural, Record)] -> [Natural] -> ExceptT String (DB m) ImportReport
+importRecords ctx netM keys others unreadable = do
+  accountImports <- mapM (either return (importKey ctx netM)) keys
   accounts <- lift getAccounts
   foldM (importRecord ctx accounts) (emptyReport accountImports unreadable) others
 
@@ -316,6 +376,10 @@ importKey ctx netM r = do
     -- An account the wallet does not hold: on the network the record or the
     -- command names, from a BIP44 account key
     newAccount = do
+      when (isPrivateKey (recordRef r)) $
+        throwError "The key is a private key. hw takes the public key of an account, and no file of accounts should hold a private one"
+      when (isSlip132Key (recordRef r)) $
+        throwError "The key has a prefix of SLIP-132, which marks a BIP49 or BIP84 account. hw holds BIP44 accounts, whose keys start with xpub or tpub"
       namedM <- networkNamed
       net <- liftMaybe noNetwork (namedM <|> netM)
       xpub <- liftMaybe ("The key does not read as a key of " <> net.name) (xPubImport net ctx (recordRef r))

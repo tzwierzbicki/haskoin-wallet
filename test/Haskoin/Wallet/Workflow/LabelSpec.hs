@@ -15,7 +15,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.IO as TextIO
 import Haskoin
-import Haskoin.Wallet.Bip329 (Line (..), Record (..), RecordType (..), readLines)
+import Haskoin.Wallet.Bip329 (parseLine, Line (..), Record (..), RecordType (..), readLines)
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.Database (DBAccount (..))
 import Haskoin.Wallet.Database.Coin (CoinLock (..))
@@ -437,7 +437,7 @@ labelledLines ctx =
 recordsOf :: FilePath -> IO [Record]
 recordsOf file = do
   content <- TextIO.readFile file
-  return [r | (_, Right (LineRecord r)) <- readLines content]
+  return [r | (_, line) <- readLines content, Right (LineRecord r) <- [parseLine line]]
 
 -- | What became of each account importacc answered for, by name
 accountsImported :: Response -> Either String [(Text, String)]

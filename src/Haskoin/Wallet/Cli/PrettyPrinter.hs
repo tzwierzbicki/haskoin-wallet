@@ -200,6 +200,21 @@ verboseAccountDoc unit created acc spendable =
                 ]
         )
 
+-- | The descriptor of an account as descriptor shows it: the descriptor
+-- alone on its first line, to copy into another wallet, then its account
+-- and network, and that the fingerprint of the seed is unknown when it
+-- is, since the descriptor then names no origin
+descriptorDoc :: DBAccount -> Text -> Doc Style
+descriptorDoc acc descriptor =
+  vcat $
+    text (cs descriptor)
+      : ( indent 2
+            <$> [ field 11 "Account" <> pretty (dBAccountName acc) `withStyle` Account,
+                  field 11 "Network" <> text (accountNetwork acc).name
+                ]
+              <> [field 11 "Fingerprint" <> styled Muted "unknown" | isNothing (dBAccountFingerprint acc)]
+        )
+
 -- | The document in the style
 withStyle :: Doc Style -> Style -> Doc Style
 withStyle doc style = annotate style doc
@@ -939,6 +954,7 @@ responsePrinter unit view answer =
     ResponseAccResult _ res txt -> renderIO $ styled (if res then Good else Failure) (cs txt)
     ResponseFile f -> renderIO $ "Written to" <+> styled UserText f
     ResponseImport report -> renderIO $ importDoc report
+    ResponseDescriptors held -> renderIO $ vcat (intersperse mempty [descriptorDoc acc descriptor | (acc, descriptor) <- held])
     ResponseAddress _ addr spendable ->
       renderIO =<< listedAddressDoc Verbose unit (pathWidth [addr]) addr spendable
     ResponseCheckAddr acc path addr label -> renderIO $ checkAddrDoc acc path addr label
@@ -1149,13 +1165,24 @@ nextStepsPrinter cmd res =
     (CommandSignSweep signing _ _, ResponseOutsideTx _ info) -> afterSigning signing info
     (CommandSendTx {}, ResponseTx acc _) ->
       stepsPrinter [("Next, sync the account to follow the transaction", hwLine "sync" (accountArgs [acc]))]
-    -- The file labels things the wallet may not have yet
+    -- An account a descriptor added has the name recover gives one, since
+    -- a descriptor carries none, and the file may label things the wallet
+    -- does not have yet
     (CommandImportAcc _ file, ResponseImport report)
-      | reportNeedsSync report ->
-          stepsPrinter
-            [ ("Next, sync the wallet, for the addresses, transactions and coins the file labels", hwLine "sync" []),
-              ("Then import the file again, for the labels it could not place", hwLine "importacc" [fileWord file])
-            ]
+      | not (null steps) -> stepsPrinter steps
+      where
+        steps = renameSteps <> syncSteps
+        renameSteps =
+          [ ("Next, name the account, which the file did not", hwLine "renameacc" [pretty (shellWord (cs (dBAccountName acc))) `withStyle` Account, metavarWord "NAME"])
+            | AccountCreated acc <- reportAccounts report,
+              dBAccountName acc == recoveredName (accountNetwork acc) (accountIndex acc)
+          ]
+        syncSteps
+          | reportNeedsSync report =
+              [ ("Next, sync the wallet, for the addresses, transactions and coins the file labels", hwLine "sync" []),
+                ("Then import the file again, for the labels it could not place", hwLine "importacc" [fileWord file])
+              ]
+          | otherwise = []
     -- A sync that synced no account has nothing new to see
     (CommandSync {}, ResponseSync results _)
       | not (null results) ->

@@ -40,6 +40,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     accountsOf,
     notSyncedOf,
     keyOf,
+    descriptorsOf,
     accountOf,
     fingerprintsOf,
     addressesOf,
@@ -257,6 +258,12 @@ keyOf (ResponseImport report) =
     [Just acc] -> Right (dBAccountName acc, dBAccountIndex acc, dBAccountXPubKey acc)
     other -> Left (show other)
 keyOf other = Left (show other)
+
+-- | The accounts of an answer with their descriptors, as descriptor
+-- shows them
+descriptorsOf :: Response -> Either String [(Text, Text)]
+descriptorsOf (ResponseDescriptors held) = Right [(dBAccountName acc, descriptor) | (acc, descriptor) <- held]
+descriptorsOf other = Left (show other)
 
 -- | The account an answer shows
 accountOf :: Response -> Either String DBAccount

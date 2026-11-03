@@ -65,6 +65,8 @@ data Command
     CommandImportAcc !(Maybe Network) !FilePath
   | -- | The account, or every one, and the file to write them to
     CommandExportAcc !(Maybe Text) !FilePath
+  | -- | The account, or every one, whose output descriptor to show
+    CommandDescriptor !(Maybe Text)
   | CommandRenameAcc !RenameAcc
   | -- | The account, or every one, and how much of each to show
     CommandAccounts !(Maybe Text) !View
@@ -439,6 +441,7 @@ Type hw COMMAND --help for the help of a command.
               checkMnemonicCommand,
               exportAccCommand,
               importAccCommand,
+              descriptorCommand,
               accountsCommand,
               renameAccCommand,
               deleteAccCommand,
@@ -837,7 +840,7 @@ importAccCommand =
       args =
         CommandImportAcc
           <$> importNetworkOption
-          <*> fileArgument "A file in the format of BIP 329: the file exportacc wrote, or one another wallet exported"
+          <*> fileArgument "The file exportacc wrote, or a file of another wallet: BIP 329 labels, an output descriptor on a line, the file of Bitcoin Core's listdescriptors, or the generic JSON of a Coldcard"
     }
 
 -- | The network of the accounts a file of another wallet creates, which
@@ -862,6 +865,16 @@ can then watch it and prepare its payments without the mnemonic: this is how
 an online computer works with an offline signer. An account the wallet has
 learns the fingerprint of its seed, and takes the name a file of hw gives it.
 
+importacc also reads the output descriptors other wallets hand an account
+over by: a descriptor on a line, such as pkh([bc560f95/44h/0h/0h]xpub.../<0;1>/*),
+as Sparrow or a Coldcard exports it, a key alone, the file of Bitcoin Core's
+listdescriptors, or the generic JSON of a Coldcard. hw holds BIP44 accounts,
+so a descriptor of another kind, such as wpkh, is refused, and the import
+goes on. A descriptor names no network: give --network, or set a default
+network. An account a descriptor adds is named after its network and index,
+as recover names one, since a descriptor carries no name: renameacc renames
+it. `descriptor` shows the descriptor of an account of this wallet.
+
 The labels and the locks of the file are set on the addresses, transactions
 and coins the wallet has. An address the wallet has not generated yet is
 derived from the path the file gives, and a transaction the file places in an
@@ -873,6 +886,38 @@ The fingerprint is the four bytes that PSBTs and output descriptors write
 before a key of the seed. Each record of the file names its account by it, as
 in pkh([bc560f95/44'/0'/0']). `accounts` groups the accounts of one seed by it.
 |]
+
+{- descriptor -}
+
+descriptorCommand :: CommandSpec Command
+descriptorCommand =
+  CommandSpec
+    { name = "descriptor",
+      offline = False,
+      summary = "Show the output descriptor of the accounts",
+      details =
+        [r|
+descriptor shows each account as an output descriptor, the format of BIP 380
+in which wallets and Bitcoin Core take an account without its private key:
+
+  pkh([bc560f95/44h/0h/0h]xpub6CHK45s.../<0;1>/*)#vq597j87
+
+Paste it into Sparrow, BlueWallet or Bitcoin Core's importdescriptors to
+watch the account there. The descriptor carries the public key of the
+account, the fingerprint of its seed and its derivation path, and the two
+chains of addresses, with a checksum. It holds no private key. When hw does
+not know the fingerprint of the seed, the descriptor names no origin, which
+a hardware wallet needs to match it, and the answer says so.
+
+A descriptor does not name its network. Bitcoin and Bitcoin Cash write the
+same keys, and every test network writes tpub keys.
+
+descriptor asks nothing of the server, so it runs on an offline computer as
+well. importacc reads a descriptor back. Without --account, every account is
+shown.
+|],
+      args = CommandDescriptor <$> onlyAccountOption
+    }
 
 {- exportacc -}
 

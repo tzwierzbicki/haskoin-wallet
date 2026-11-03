@@ -2,14 +2,15 @@
 
 -- | The format of BIP 329: the records of the test vectors of the BIP, the
 -- lines a file holds and what hw makes of each, the lines hw writes, and
--- the origins, key paths and outpoints of the records
+-- the key paths and outpoints of the records. The origins of the records
+-- are tested with the descriptors, in "Haskoin.Wallet.DescriptorSpec".
 module Haskoin.Wallet.Bip329Spec (spec) where
 
 import Data.Either (isLeft)
 import qualified Data.Text.IO as Text
 import Haskoin
 import Haskoin.Wallet.Bip329
-import Haskoin.Wallet.TestUtils (testFingerprint)
+import Haskoin.Wallet.Descriptor (Origin (..), parseOrigin)
 import Test.Hspec
 
 spec :: Spec
@@ -17,7 +18,6 @@ spec = do
   vectorsSpec
   linesSpec
   writingSpec
-  originSpec
   pathSpec
 
 {- The test vectors -}
@@ -26,7 +26,7 @@ spec = do
 vectorRecords :: IO [Record]
 vectorRecords = do
   content <- Text.readFile "test/data/bip329/bip-0329.jsonl"
-  return [r | (_, Right (LineRecord r)) <- readLines content]
+  return [r | (_, line) <- readLines content, Right (LineRecord r) <- [parseLine line]]
 
 vectorsSpec :: Spec
 vectorsSpec =
@@ -114,11 +114,11 @@ linesSpec =
 
     -- The second line is blank, the third holds spaces, and the first ends
     -- as Windows ends a line
-    it "is numbered as a text editor numbers it, blank lines and carriage returns passed over" $
-      readLines "{\"type\": \"tx\", \"ref\": \"a\"}\r\n\n   \n{\"type\": \"addr\", \"ref\": \"b\"}\nnot a record\n"
-        `shouldBe` [ (1, Right (LineRecord (record TxRecord "a"))),
-                     (4, Right (LineRecord (record AddrRecord "b"))),
-                     (5, Left "The line is not a JSON object")
+    it "is numbered as a text editor numbers it, blank lines and carriage returns passed over, and read without the spaces around it" $
+      readLines "{\"type\": \"tx\", \"ref\": \"a\"}\r\n\n   \n  {\"type\": \"addr\", \"ref\": \"b\"}  \nnot a record\n"
+        `shouldBe` [ (1, "{\"type\": \"tx\", \"ref\": \"a\"}"),
+                     (4, "{\"type\": \"addr\", \"ref\": \"b\"}"),
+                     (5, "not a record")
                    ]
 
 {- Writing -}
@@ -170,49 +170,6 @@ writingSpec =
     it "ends every line of a file with a line feed" $
       recordsText [record TxRecord "a", record AddrRecord "b"]
         `shouldBe` "{\"type\":\"tx\",\"ref\":\"a\"}\n{\"type\":\"addr\",\"ref\":\"b\"}\n"
-
-{- Origins -}
-
--- | The path of account 0 of a seed on Bitcoin, m/44'/0'/0'
-account0 :: HardPath
-account0 = Deriv :| 44 :| 0 :| 0
-
-originSpec :: Spec
-originSpec =
-  describe "The origin of a record" $ do
-    it "is written for a BIP44 account as pkh([fingerprint/44'/coin'/index'])" $
-      originText (accountOrigin testFingerprint account0) `shouldBe` "pkh([bc560f95/44'/0'/0'])"
-
-    it "reads back as written" $
-      parseOrigin "pkh([bc560f95/44'/0'/0'])" `shouldBe` Just (Origin ["pkh"] testFingerprint (toGeneric account0))
-
-    -- BIP 380 lets a descriptor mark a hardened step with h or H as well
-    it "reads hardened steps marked with h or H, as other wallets write them" $ do
-      parseOrigin "pkh([73c5da0a/44h/0h/0h])" `shouldBe` Just (Origin ["pkh"] "73c5da0a" (toGeneric account0))
-      parseOrigin "pkh([73c5da0a/44H/0H/0H])" `shouldBe` Just (Origin ["pkh"] "73c5da0a" (toGeneric account0))
-
-    it "reads the script functions around the key from the outside in, and writes them back" $ do
-      let nested = Origin ["sh", "wpkh"] "d34db33f" (toGeneric (Deriv :| 49 :| 0 :| 0 :: HardPath))
-      parseOrigin "sh(wpkh([d34db33f/49'/0'/0']))" `shouldBe` Just nested
-      originText nested `shouldBe` "sh(wpkh([d34db33f/49'/0'/0']))"
-
-    it "reads a key origin without a script, and a fingerprint without a path" $ do
-      parseOrigin "[d34db33f/84'/0'/0']" `shouldBe` Just (Origin [] "d34db33f" (toGeneric (Deriv :| 84 :| 0 :| 0 :: HardPath)))
-      parseOrigin "pkh([d34db33f])" `shouldBe` Just (Origin ["pkh"] "d34db33f" Deriv)
-
-    it "reads a path with soft steps" $
-      parseOrigin "pkh([d34db33f/44'/0'/0'/1])" `shouldBe` Just (Origin ["pkh"] "d34db33f" (toGeneric account0 :/ 1))
-
-    it "is none for a descriptor of several keys" $
-      parseOrigin "wsh(sortedmulti(2,[a1b2c3d4/48'/0'/0'/2'],[d34db33f/48'/0'/0'/2']))" `shouldBe` Nothing
-
-    it "is none for a fingerprint that is not eight hexadecimal digits, or a path that is not one" $ do
-      parseOrigin "pkh([d34db33/44'/0'/0'])" `shouldBe` Nothing
-      parseOrigin "pkh([d34db33fa/44'/0'/0'])" `shouldBe` Nothing
-      parseOrigin "pkh([d34db33g/44'/0'/0'])" `shouldBe` Nothing
-      parseOrigin "pkh([d34db33f/44'/x'])" `shouldBe` Nothing
-      parseOrigin "pkh(d34db33f/44'/0'/0')" `shouldBe` Nothing
-      parseOrigin "" `shouldBe` Nothing
 
 {- Key paths and outpoints -}
 

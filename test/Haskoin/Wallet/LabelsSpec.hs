@@ -2,8 +2,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The accounts and labels of the wallet as the records of a BIP 329 file:
--- what exportacc writes for an account, and what importacc makes of each
--- kind of record, in a database of its own
+-- what exportacc writes for an account, what importacc makes of each
+-- kind of record, and of the descriptors and the files of other wallets,
+-- in a database of its own
 module Haskoin.Wallet.LabelsSpec (spec) where
 
 import Control.Monad.Except (ExceptT)
@@ -13,6 +14,7 @@ import Data.Default (def)
 import qualified Data.Serialize as S
 import Data.Text (Text)
 import qualified Data.Text as Text
+import qualified Data.Text.IO as Text
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -31,6 +33,8 @@ spec :: Spec
 spec = prepareContext $ \ctx -> do
   exportSpec ctx
   importKeySpec ctx
+  importDescriptorSpec ctx
+  importFileSpec ctx
   importAddressSpec ctx
   importTxSpec ctx
   importCoinSpec ctx
@@ -50,6 +54,14 @@ mainOrigin = "pkh([bc560f95/44'/0'/0'])"
 -- | The key of main as a record, with its name, origin and network
 mainKeyLine :: Text
 mainKeyLine = "{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\",\"origin\":\"" <> mainOrigin <> "\",\"network\":\"btc\"}\n"
+
+-- | The descriptor of main, as hw and a Coldcard write it
+mainDescriptor :: Text
+mainDescriptor = "pkh([bc560f95/44h/0h/0h]" <> testAccountXPub <> "/<0;1>/*)#vq597j87"
+
+-- | The key of main, as a refused line names it: its first twelve characters
+mainKeyStart :: Text
+mainKeyStart = "xpub6CHK45s4..."
 
 -- | The payment of 50000 stored in the account, in block 800000, and the
 -- best block at the height given
@@ -251,6 +263,142 @@ importKeySpec ctx =
     renamed _ = Nothing
     kept (AccountKept acc note) = Just (dBAccountName acc, note)
     kept _ = Nothing
+
+{- Importing descriptors -}
+
+importDescriptorSpec :: Ctx -> Spec
+importDescriptorSpec ctx =
+  describe "A descriptor" $ do
+    it "creates the account of its key, named after its network and index, with the fingerprint of its origin" $
+      inDatabaseE $ do
+        report <- importFile ctx (Just btc) (mainDescriptor <> "\n")
+        lift accountsStored `dbShouldBeE` [("btc0", "btc", Just "bc560f95")]
+        liftIO $ map created (reportAccounts report) `shouldBe` [Just ("btc0", testAccountXPub)]
+
+    it "is read without a checksum, with hardened steps marked with an apostrophe, and for one chain" $
+      inDatabaseE $ do
+        _ <- importFile ctx (Just btc) ("pkh([bc560f95/44'/0'/0']" <> testAccountXPub <> "/0/*)\n")
+        lift accountsStored `dbShouldBeE` [("btc0", "btc", Just "bc560f95")]
+
+    it "is read from a key alone, which gives no fingerprint" $
+      inDatabaseE $ do
+        _ <- importFile ctx (Just btc) (testAccountXPub <> "\n")
+        lift accountsStored `dbShouldBeE` [("btc0", "btc", Nothing)]
+
+    it "needs the --network, as it names none" $
+      inDatabaseE $ do
+        report <- importFile ctx Nothing (mainDescriptor <> "\n")
+        liftIO $ reportAccounts report `shouldBe` [AccountRefused mainKeyStart "Give the --network, or a default-network in the configuration file"]
+
+    it "is refused when it is not that of a BIP44 account, as one of a BIP84 wallet" $
+      inDatabaseE $ do
+        report <- importFile ctx (Just btc) ("wpkh([bc560f95/84h/0h/0h]" <> testAccountXPub <> "/<0;1>/*)#9w4wvr54\n")
+        liftIO $ reportAccounts report `shouldBe` [AccountRefused mainKeyStart "The key is not that of the BIP44 account /44'/0'/0': its origin is wpkh([bc560f95/84'/0'/0'])"]
+
+    it "is refused with a private key" $
+      inDatabaseE $ do
+        report <- importFile ctx (Just btc) ("pkh([bc560f95/44h/0h/0h]" <> testAccountXPrv <> "/<0;1>/*)#w6xkgv40\n")
+        liftIO $ reportAccounts report `shouldBe` [AccountRefused "xprv9yHxeaLA..." "The key is a private key. hw takes the public key of an account, and no file of accounts should hold a private one"]
+
+    it "is refused with a key of SLIP-132" $
+      inDatabaseE $ do
+        report <- importFile ctx (Just btc) "zpub6r4mjW7yrMWVXbBmfxTonrBKKVapwoKJECopsBs8nJfVCLg4E7SDEAyyQtkGubtbsPWC4MmuLyhaNKvV1ChQa2Z418YDQmyzD2GCiogfbAh\n"
+        liftIO $ reportAccounts report `shouldBe` [AccountRefused "zpub6r4mjW7y..." "The key has a prefix of SLIP-132, which marks a BIP49 or BIP84 account. hw holds BIP44 accounts, whose keys start with xpub or tpub"]
+
+    it "is refused with a wrong checksum, named by its start" $
+      inDatabaseE $ do
+        report <- importFile ctx (Just btc) ("pkh([bc560f95/44h/0h/0h]" <> testAccountXPub <> "/<0;1>/*)#vq597j88\n")
+        liftIO $ reportAccounts report `shouldBe` [AccountRefused "pkh([bc560f9..." "The checksum of the descriptor is wrong"]
+
+    it "is refused when its path does not derive the chains of an account" $
+      inDatabaseE $ do
+        report <- importFile ctx (Just btc) ("pkh([bc560f95/44h/0h/0h]" <> testAccountXPub <> "/0/5)\n")
+        liftIO $ reportAccounts report `shouldBe` [AccountRefused "pkh([bc560f9..." "The descriptor must end in /<0;1>/*, /0/* or /1/* after its key, to derive the addresses of an account"]
+
+    -- Bitcoin Core writes an account as two descriptors, one per chain
+    it "adds the account once from the two descriptors of its chains" $
+      inDatabaseE $ do
+        report <-
+          importFile ctx (Just btc) $
+            "pkh([bc560f95/44h/0h/0h]" <> testAccountXPub <> "/0/*)#77rvns4p\npkh([bc560f95/44h/0h/0h]" <> testAccountXPub <> "/1/*)#02xdw99e\n"
+        liftIO $ map created (reportAccounts report) `shouldBe` [Just ("btc0", testAccountXPub)]
+
+    it "finds the account the wallet holds under its key, which learns the fingerprint of its origin" $
+      inDatabaseE $ do
+        _ <- insertAccount btc ctx "main" (testAccountPub ctx) Nothing
+        report <- importFile ctx (Just btc) (mainDescriptor <> "\n")
+        liftIO $ map kept (reportAccounts report) `shouldBe` [Just ("main", Nothing)]
+        lift accountsStored `dbShouldBeE` [("main", "btc", Just "bc560f95")]
+
+    it "is read among the records of a BIP 329 file, before them" $
+      inDatabaseE $ do
+        report <-
+          importFile ctx (Just btc) $
+            "{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\",\"label\":\"Salary\",\"origin\":\"" <> mainOrigin <> "\"}\n" <> mainDescriptor <> "\n"
+        liftIO $ map created (reportAccounts report) `shouldBe` [Just ("btc0", testAccountXPub)]
+        liftIO $ reportTxLabels report `shouldBe` 1
+  where
+    created (AccountCreated acc) = Just (dBAccountName acc, dBAccountXPubKey acc)
+    created _ = Nothing
+    kept (AccountKept acc note) = Just (dBAccountName acc, note)
+    kept _ = Nothing
+
+{- Importing the files of other wallets -}
+
+-- | A file of test/data/descriptors
+descriptorFile :: FilePath -> IO Text
+descriptorFile name = Text.readFile ("test/data/descriptors/" <> name)
+
+importFileSpec :: Ctx -> Spec
+importFileSpec ctx =
+  describe "A file of descriptors of another wallet" $ do
+    -- The default wallet of Bitcoin Core 32.1 on regtest, with pkh,
+    -- sh(wpkh), tr and wpkh descriptors of its own seed, two chains each
+    it "of Bitcoin Core's listdescriptors adds the BIP44 account, and refuses the keys of the other kinds" $
+      inDatabaseE $ do
+        content <- liftIO $ descriptorFile "core-default-wallet.json"
+        report <- importFile ctx (Just btcTest) content
+        lift accountsStored `dbShouldBeE` [("btctest0", "btctest", Just "b079db60")]
+        liftIO $
+          reportAccounts report
+            `shouldBe` [ AccountCreated (accountNamed report "btctest0"),
+                         AccountRefused "tpubDD6QPbsK..." "The key is not that of the BIP44 account /44'/1'/0': its origin is sh(wpkh([b079db60/49'/1'/0']))",
+                         AccountRefused "tpubDChx3pxw..." "The key is not that of the BIP44 account /44'/1'/0': its origin is tr([b079db60/86'/1'/0'])",
+                         AccountRefused "tpubDD3yUiav..." "The key is not that of the BIP44 account /44'/1'/0': its origin is wpkh([b079db60/84'/1'/0'])"
+                       ]
+
+    -- A wallet of Core without private keys, watching the test account
+    it "of a Bitcoin Core wallet that watches the test account adds it, with the fingerprint of its seed" $
+      inDatabaseE $ do
+        content <- liftIO $ descriptorFile "core-watch-only.json"
+        report <- importFile ctx (Just btcTest) content
+        liftIO $ map created (reportAccounts report) `shouldBe` [Just ("btctest0", testAccountXPubTest)]
+        lift accountsStored `dbShouldBeE` [("btctest0", "btctest", Just "bc560f95")]
+
+    it "of the generic JSON of a Coldcard adds the BIP44 account, and refuses the BIP49 and BIP84 sections" $
+      inDatabaseE $ do
+        content <- liftIO $ descriptorFile "coldcard-export.json"
+        report <- importFile ctx (Just btc) content
+        liftIO $ map created (reportAccounts report) `shouldBe` [Just ("btc0", testAccountXPub), Nothing, Nothing]
+        liftIO $
+          drop 1 (reportAccounts report)
+            `shouldBe` [ AccountRefused "xpub6DSJPn1D..." "The key is not that of the BIP44 account /44'/0'/0': its origin is sh(wpkh([bc560f95/49'/0'/0']))",
+                         AccountRefused "xpub6CQF8An9..." "The key is not that of the BIP44 account /44'/0'/0': its origin is wpkh([bc560f95/84'/0'/0'])"
+                       ]
+        lift accountsStored `dbShouldBeE` [("btc0", "btc", Just "bc560f95")]
+
+    it "of an older Coldcard, with the path and the key of each section but no descriptor, adds the account the same" $
+      inDatabaseE $ do
+        _ <- importFile ctx (Just btc) ("{\"xfp\": \"BC560F95\", \"bip44\": {\"deriv\": \"m/44'/0'/0'\", \"xpub\": \"" <> testAccountXPub <> "\"}}")
+        lift accountsStored `dbShouldBeE` [("btc0", "btc", Just "bc560f95")]
+  where
+    created (AccountCreated acc) = Just (dBAccountName acc, dBAccountXPubKey acc)
+    created _ = Nothing
+    -- The account the report created under the name
+    accountNamed report name =
+      case [acc | AccountCreated acc <- reportAccounts report, dBAccountName acc == name] of
+        [acc] -> acc
+        _ -> error ("No account " <> Text.unpack name <> " created")
 
 {- Importing addresses -}
 

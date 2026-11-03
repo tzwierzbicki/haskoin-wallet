@@ -27,6 +27,7 @@ module Haskoin.Wallet.Commands
     cmdCheckMnemonic,
     cmdImportAcc,
     cmdExportAcc,
+    cmdDescriptor,
     cmdRenameAcc,
     cmdDeleteAcc,
     cmdAccounts,
@@ -103,6 +104,7 @@ import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Amounts (AmountUnit)
 import Haskoin.Wallet.Backup (backupDatabase, backupDirectory, copyDatabase)
 import Haskoin.Wallet.Bip329 (recordsText)
+import Haskoin.Wallet.Descriptor (accountDescriptor, descriptorText)
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
@@ -157,6 +159,7 @@ commandResponse ctx cfg unit = \case
   CommandCheckMnemonic account parts -> cmdCheckMnemonic ctx cfg account parts
   CommandImportAcc netM file -> cmdImportAcc ctx cfg netM file
   CommandExportAcc account file -> cmdExportAcc ctx cfg account file
+  CommandDescriptor account -> cmdDescriptor cfg account
   CommandRenameAcc opts -> cmdRenameAcc cfg opts
   CommandDeleteAcc name net path -> cmdDeleteAcc cfg name net path
   CommandAccounts account _ -> cmdAccounts cfg account
@@ -360,6 +363,18 @@ cmdExportAcc ctx cfg account file =
     records <- concat <$> mapM (accountRecords ctx) accs
     liftEitherIO $ writeTextFile file (recordsText records)
     return $ ResponseFile file
+
+-- | The output descriptor of the account, or of every account, as other
+-- wallets and Bitcoin Core take an account: its key in pkh, with its
+-- origin when the fingerprint of its seed is known
+cmdDescriptor :: Config -> Maybe Text -> IO Response
+cmdDescriptor cfg account =
+  runDBResponse cfg $ do
+    accs <- getAccountsByName account
+    when (null accs) $ throwError "There are no accounts in the wallet"
+    return $ ResponseDescriptors [(acc, descriptorOf acc) | (_, acc) <- accs]
+  where
+    descriptorOf acc = descriptorText (accountDescriptor (accountFingerprint acc) (accountPath acc) (dBAccountXPubKey acc))
 
 cmdRenameAcc :: Config -> RenameAcc -> IO Response
 cmdRenameAcc cfg opts =

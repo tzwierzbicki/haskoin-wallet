@@ -40,6 +40,8 @@ data Response
     ResponseImport !ImportReport
   | -- | Accounts, each with the balance it can spend now
     ResponseAccounts ![(DBAccount, Word64)]
+  | -- | Accounts, each with its output descriptor, as descriptor shows them
+    ResponseDescriptors ![(DBAccount, Text)]
   | -- | An address of the account, with the balance it can spend now
     ResponseAddress !DBAccount !DBAddress !Word64
   | -- | Addresses of the account, each with the balance it can spend now
@@ -107,6 +109,8 @@ instance ToJSON Response where
     ResponseFile file -> typed "file" ["file" .= file]
     ResponseImport report -> typed "import" (reportPairs report)
     ResponseAccounts accs -> typed "accounts" ["accounts" .= (uncurry accountWithSpendable <$> accs)]
+    ResponseDescriptors held ->
+      typed "descriptors" ["descriptors" .= [object ["account" .= acc, "descriptor" .= descriptor] | (acc, descriptor) <- held]]
     ResponseAddress acc addr spendable ->
       typed "address" ["account" .= acc, "address" .= addressWithSpendable addr spendable]
     ResponseAddresses acc addrs ->
@@ -148,6 +152,7 @@ instance FromJSON Response where
       "file" -> ResponseFile <$> o .: "file"
       "import" -> ResponseImport <$> parseReport o
       "accounts" -> ResponseAccounts <$> (mapM parseAccountWithSpendable =<< o .: "accounts")
+      "descriptors" -> ResponseDescriptors <$> (mapM heldDescriptor =<< o .: "descriptors")
       "address" -> do
         acc <- o .: "account"
         uncurry (ResponseAddress acc) <$> (parseAddressWithSpendable =<< o .: "address")
@@ -181,6 +186,9 @@ instance FromJSON Response where
       _ -> fail "Invalid JSON response type"
     where
       network o = maybe (fail "Unknown network") return . netByName =<< o .: "network"
+      -- The descriptor of an account
+      heldDescriptor = withObject "descriptor of an account" $ \entry ->
+        (,) <$> entry .: "account" <*> entry .: "descriptor"
       -- A transaction with its account, which names its network
       heldTx = withObject "transaction of an account" $ \entry -> do
         acc <- entry .: "account"

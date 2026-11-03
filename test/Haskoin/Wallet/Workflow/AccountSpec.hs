@@ -3,6 +3,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | An account as the user keeps it, from createacc to deleteacc: its
+-- descriptor, for other wallets and from them, its
 -- addresses and their labels, an address checked on the offline computer,
 -- its mnemonic typed in parts, the messages its keys sign and check, the
 -- backup of its database, and its recovery from a seed, with a passphrase
@@ -22,7 +23,7 @@ import Haskoin.Wallet.Keys (MnemonicPass (..))
 import Haskoin.Wallet.Migration (databaseVersion)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Workflow.TestUtils
-import System.Directory (copyFile)
+import System.Directory (copyFile, makeAbsolute)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import Test.Hspec
@@ -30,6 +31,7 @@ import Test.Hspec
 spec :: Spec
 spec = prepareContext $ \ctx -> do
   accountSpec
+  descriptorSpec
   addressSpec ctx
   checkAddrSpec
   splitSpec
@@ -173,6 +175,78 @@ accountSpec =
         createMain signer
         _ <- answer signer ["exportacc", signer </> "main.json"] []
         (keyOf <$> hwJson online ["importacc", signer </> "main.json"] []) `shouldReturn` Right ("main", 0, testAccountXPub)
+
+{- Descriptors -}
+
+-- | The descriptor of main, as hw writes it: checked with Bitcoin Core
+-- 32.1 (test/data/descriptors/README.md)
+mainDescriptor :: Text
+mainDescriptor = "pkh([bc560f95/44h/0h/0h]" <> testAccountXPub <> "/<0;1>/*)#vq597j87"
+
+descriptorSpec :: Spec
+descriptorSpec =
+  describe "The descriptor of an account" $ do
+    it "is shown by descriptor alone on a line, then the account and its network" $
+      withHome $ \home -> do
+        createMain home
+        run <- hw home ["descriptor"] []
+        runOut run `shouldBe` mainDescriptor <> "\n  Account    : main\n  Network    : btc\n"
+
+    -- second is account 1 of the seed, m/44'/0'/1'
+    it "is shown for every account, or for the --account named" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "second"] seedTwice
+        (descriptorsOf <$> hwJson home ["descriptor"] [])
+          `shouldReturn` Right [("main", mainDescriptor), ("second", "pkh([bc560f95/44h/0h/1h]" <> testAccountXPub1 <> "/<0;1>/*)#nycrn993")]
+        (descriptorsOf <$> hwJson home ["descriptor", "--account", "main"] []) `shouldReturn` Right [("main", mainDescriptor)]
+
+    -- An account imported from its key alone has no fingerprint
+    it "names no origin when the wallet does not know the fingerprint of the seed, and says so" $
+      withHome $ \home -> do
+        writeFile (home </> "key.txt") (Text.unpack testAccountXPub <> "\n")
+        _ <- answer home ["importacc", home </> "key.txt"] []
+        run <- hw home ["descriptor"] []
+        runOut run `shouldBe` "pkh(" <> testAccountXPub <> "/<0;1>/*)#mmejv52s\n  Account    : btc0\n  Network    : btc\n  Fingerprint: unknown\n"
+
+    it "is refused when the wallet has no account" $
+      withHome $ \home ->
+        (errorOf <$> hwJson home ["descriptor"] []) `shouldReturn` Right "There are no accounts in the wallet"
+
+    -- As a signer hands its account to another wallet, which hands it back
+    it "is read by importacc in another wallet, which gets the key and the fingerprint, and names the account after its network and index" $
+      withHome $ \signer -> withHome $ \online -> do
+        createMain signer
+        shown <- descriptorsOf <$> answer signer ["descriptor"] []
+        descriptor <- case shown of
+          Right [(_, descriptor)] -> return descriptor
+          other -> fail ("Not one descriptor: " <> show other)
+        writeFile (online </> "main.txt") (Text.unpack descriptor <> "\n")
+        (keyOf <$> hwJson online ["importacc", online </> "main.txt"] []) `shouldReturn` Right ("btc0", 0, testAccountXPub)
+        (fingerprintsOf <$> hwJson online ["accounts"] []) `shouldReturn` Right [("btc0", Just "bc560f95")]
+
+    it "is imported with the next step of naming the account, which the file did not" $
+      withHome $ \home -> do
+        writeFile (home </> "main.txt") (Text.unpack mainDescriptor <> "\n")
+        run <- hw home ["importacc", home </> "main.txt"] []
+        run `shouldSatisfy` printed "Next, name the account, which the file did not:"
+        run `shouldSatisfy` printed "hw renameacc btc0 NAME"
+
+    it "needs the --network, as a descriptor names none" $
+      withHome $ \home -> do
+        setDefaultNetwork home Nothing
+        writeFile (home </> "main.txt") (Text.unpack mainDescriptor <> "\n")
+        run <- hw home ["importacc", home </> "main.txt"] []
+        run `shouldSatisfy` printed "Give the --network, or a default-network in the configuration file"
+        (keyOf <$> hwJson home ["importacc", home </> "main.txt", "--network", "btc"] []) `shouldReturn` Right ("btc0", 0, testAccountXPub)
+
+    -- The file of Bitcoin Core's listdescriptors, of test/data/descriptors
+    it "is read from the file of Bitcoin Core, whose BIP44 account alone is added" $
+      withHome $ \home -> do
+        file <- makeAbsolute "test/data/descriptors/core-default-wallet.json"
+        _ <- answer home ["importacc", file, "--network", "btctest"] []
+        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("btctest0", 0, 0)]
+        (fingerprintsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("btctest0", Just "b079db60")]
 
 {- Addresses -}
 

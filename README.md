@@ -292,6 +292,30 @@ hw exportacc labels.jsonl                   # every account, for another wallet
 hw importacc sparrow-labels.jsonl --network btc
 ```
 
+**`hw descriptor`** shows each account as an output descriptor, the format of
+[BIP 380](https://github.com/bitcoin/bips/blob/master/bip-0380.mediawiki) in
+which other wallets and Bitcoin Core take an account without its private key:
+`pkh([bc560f95/44h/0h/0h]xpub.../<0;1>/*)#vq597j87`. Paste it into Sparrow,
+BlueWallet or Bitcoin Core's `importdescriptors` to watch the account there.
+It carries the public key of the account, the fingerprint of its seed and its
+derivation path, the two chains of addresses, and a checksum. When `hw` does
+not know the fingerprint, the descriptor names no origin, which a hardware
+wallet needs, and the answer says so. `--account` shows one account.
+
+`importacc` reads a descriptor back, and the files other wallets export an
+account in: a descriptor on a line, as Sparrow and Coldcard write it, a key
+alone, the file of Bitcoin Core's `listdescriptors`, or the generic JSON of a
+Coldcard. `hw` holds BIP44 accounts, so a descriptor of another kind, such as
+`wpkh`, is refused, and the import goes on. A descriptor names no network, so
+give `--network`, or set a default network. The account it adds is named after
+its network and index, as `recover` names one: `renameacc` renames it.
+
+```console
+hw descriptor --account vault               # for Sparrow or Bitcoin Core
+hw importacc coldcard-export.json --network btc
+hw renameacc btc0 coldcard
+```
+
 **`hw accounts`** shows the accounts with their balances. Each takes two
 lines: its name, network and derivation path, then what it can spend, what is
 unconfirmed and how many coins it holds. The spendable balance leaves out

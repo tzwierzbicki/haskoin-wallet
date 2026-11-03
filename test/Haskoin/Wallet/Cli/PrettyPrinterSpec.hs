@@ -31,6 +31,7 @@ spec = do
   verboseSpec
   answerSpec
   accountSpec
+  descriptorSpec
   addressSpec
   balanceSpec
   coinSpec
@@ -139,6 +140,25 @@ addressSpec =
     it "shows the label of the address checkaddr derives when the wallet has one" $
       (renderedLines (checkAddrDoc mainAccountRow (Deriv :/ 0 :/ 3) "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1" "Savings") !! 0)
         `shouldBe` "/0/3  1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1  \"Savings\""
+
+descriptorSpec :: Spec
+descriptorSpec =
+  describe "The descriptor of an account as hw shows it" $ do
+    it "gives the descriptor alone on its first line, then the account and its network" $
+      renderedLines (descriptorDoc mainAccountRow ("pkh([bc560f95/44h/0h/0h]" <> testAccountXPub <> "/<0;1>/*)#vq597j87"))
+        `shouldBe` [ "pkh([bc560f95/44h/0h/0h]" <> Text.unpack testAccountXPub <> "/<0;1>/*)#vq597j87",
+                     "  Account    : main",
+                     "  Network    : btc"
+                   ]
+
+    -- The descriptor then names no origin
+    it "says the fingerprint of the seed is unknown when it is" $
+      renderedLines (descriptorDoc mainAccountRow {dBAccountFingerprint = Nothing} ("pkh(" <> testAccountXPub <> "/<0;1>/*)#mmejv52s"))
+        `shouldBe` [ "pkh(" <> Text.unpack testAccountXPub <> "/<0;1>/*)#mmejv52s",
+                     "  Account    : main",
+                     "  Network    : btc",
+                     "  Fingerprint: unknown"
+                   ]
 
 balanceSpec :: Spec
 balanceSpec =
