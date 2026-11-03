@@ -304,10 +304,12 @@ importDoc report = vcat . intersperse mempty $ (accountImportDoc <$> reportAccou
     -- A count with its noun, when there is anything to count
     countedIf n singular plural = [counted n singular plural | n > 0]
 
--- | An account a file names, as accounts shows it, and what became of it
+-- | An account a file names, as accounts shows it, and what became of it.
+-- Under a created one, the note on a kind taken on trust, if any, wrapped
+-- at the width of the screen.
 accountImportDoc :: AccountImport -> Doc Style
 accountImportDoc = \case
-  AccountCreated acc -> vcat [accountLine acc, indent 2 (styled Good "created")]
+  AccountCreated acc noteM -> vcat ([accountLine acc, indent 2 (styled Good "created")] <> [indent 2 (sentence (wordsOf (cs note))) | Just note <- [noteM]])
   AccountKept acc Nothing -> vcat [accountLine acc, indent 2 "already in the wallet"]
   AccountKept acc (Just why) -> vcat [accountLine acc, indent 2 ("already in the wallet, and keeps its name:" <+> pretty why)]
   AccountRenamed was acc -> vcat [accountLine acc, indent 2 ("renamed from" <+> pretty was `withStyle` Account)]
@@ -1177,7 +1179,7 @@ nextStepsPrinter cmd res =
         steps = renameSteps <> syncSteps
         renameSteps =
           [ ("Next, name the account, which the file did not", hwLine "renameacc" [pretty (shellWord (cs (dBAccountName acc))) `withStyle` Account, metavarWord "NAME"])
-            | AccountCreated acc <- reportAccounts report,
+            | AccountCreated acc _ <- reportAccounts report,
               dBAccountName acc == recoveredName (accountKind acc) (accountNetwork acc) (accountIndex acc)
           ]
         syncSteps

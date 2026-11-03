@@ -208,7 +208,9 @@ data ImportReport = ImportReport
 
 -- | What became of an account the file names
 data AccountImport
-  = AccountCreated !DBAccount
+  = -- | Created, with the note on what the import took on trust, if
+    -- anything: the kind of a key that says none ('trustNote')
+    AccountCreated !DBAccount !(Maybe Text)
   | -- | The wallet had it already. It keeps its name against the file's
     -- for the reason given, if any.
     AccountKept !DBAccount !(Maybe Text)
@@ -222,7 +224,7 @@ data AccountImport
 -- | The account an xpub record left in the wallet, created or found, if any
 importedAccount :: AccountImport -> Maybe DBAccount
 importedAccount = \case
-  AccountCreated acc -> Just acc
+  AccountCreated acc _ -> Just acc
   AccountKept acc _ -> Just acc
   AccountRenamed _ acc -> Just acc
   AccountRefused _ _ -> Nothing
@@ -354,11 +356,17 @@ importRecords ctx netM kindM keys others unreadable = do
 -- wallet holds in line with the record. A record the wallet cannot take
 -- says why, and the import goes on. The key of the record is read first,
 -- as BIP32 writes it: a zpub or a vpub names the same key as its xpub, and
--- says its account is a BIP84 one ('readAccountKey').
+-- says its account is a BIP84 one ('readAccountKey'), which --type may not
+-- contradict.
 importKey :: (MonadUnliftIO m) => Ctx -> Maybe Network -> Maybe AccountKind -> Record -> ExceptT String (DB m) AccountImport
 importKey ctx netM kindM r = do
   outcome <- attempt $ do
     (prefixKindM, keyText) <- liftEither (readAccountKey (recordRef r))
+    -- The kind --type names must be the one the prefix of the key marks,
+    -- when it marks one: a zpub with --type bip44 is a contradiction, and
+    -- the import takes neither side
+    forM_ ((,) <$> prefixKindM <*> kindM) $ \(marked, typed) ->
+      unless (marked == typed) $ throwError (typedKindClash marked typed)
     heldM <- lift $ P.getBy (UniqueXPubKey keyText)
     case heldM of
       Just (P.Entity heldId held) -> heldAccount prefixKindM heldId held
@@ -370,6 +378,11 @@ importKey ctx netM kindM r = do
     shownName = fromMaybe (Text.take 12 (recordRef r) <> "...") (recordLabel r)
     networkNamed = forM (recordNetwork r) $ \name ->
       liftMaybe ("Unknown network " <> cs name) (netByName (cs name))
+    -- Why a key whose prefix marks one kind is refused with --type of the
+    -- other
+    typedKindClash :: AccountKind -> AccountKind -> String
+    typedKindClash marked typed =
+      "The key is a " <> cs (Text.take 4 (recordRef r)) <> ", which marks a " <> cs (kindName marked) <> " account in SLIP-132, and --type says " <> cs (kindName typed) <> ". Leave --type out, or write the key as an xpub or a tpub if it is of a " <> cs (kindName typed) <> " account after all."
     -- The kind of account the record says its key is of: by the script
     -- function of its origin, the purpose hw wrote, or the prefix of the
     -- key, which must agree; or none, for a key that says nothing
@@ -414,11 +427,36 @@ importKey ctx netM kindM r = do
       xpub <- liftMaybe ("The key does not read as a key of " <> net.name) (xPubImport net ctx keyText)
       unless (xpub.depth == 3 && testBit xpub.index 31) $
         throwError "The key is not that of an account, three hardened steps below the master key"
-      kind <- fromMaybe (fromMaybe Bip44 kindM) <$> recordKind prefixKindM
+      saidKindM <- recordKind prefixKindM
+      let kind = fromMaybe (fromMaybe Bip44 kindM) saidKindM
+          -- The kind of a key that says none is taken on trust
+          note = case saidKindM of
+            Nothing -> Just (trustNote kind kindM)
+            Just _ -> Nothing
       liftEither $ checkKindOnNetwork net kind
       checkOrigin kind originM (accountDeriv kind net (xPubIndex xpub))
       let name = fromMaybe (recoveredName kind net (xPubIndex xpub)) (recordLabel r)
-      AccountCreated . snd <$> insertAccount kind net ctx name xpub fingerprintM
+      (_, acc) <- insertAccount kind net ctx name xpub fingerprintM
+      return (AccountCreated acc note)
+
+-- | The note on an account made of a key that says no kind, an xpub or a
+-- tpub alone, which says nothing of its path: the kind the import took on
+-- trust, from --type or by default, and what tells when it was the wrong
+-- one. Ledger Live writes an xpub for an account of any kind.
+trustNote :: AccountKind -> Maybe AccountKind -> Text
+trustNote kind typedM =
+  Text.unwords
+    [ "The key says no kind. The account is " <> kindName kind <> taken,
+      "If the key is of a " <> kindName other <> " account" <> example <> ", a sync finds none of its transactions and signtx refuses the mnemonic.",
+      "Then deleteacc, and import the key again with --type " <> kindName other <> "."
+    ]
+  where
+    taken = if isJust typedM then " because --type says so." else " by default."
+    -- The other kind hw holds
+    other = case kind of
+      Bip44 -> Bip84
+      Bip84 -> Bip44
+    example = if other == Bip84 then ", as Ledger Live writes one" else ""
 
 -- | The result of an action that may be refused, as a value
 attempt :: (Monad m) => ExceptT String m a -> ExceptT String m (Either String a)
@@ -644,11 +682,12 @@ parseReport o =
     <*> o .: "unreadable"
 
 -- | What became of an account in JSON: its status, the account when the
--- wallet has it, the former name of a renamed one, the note of one that
--- kept its name, and the name and reason of one refused
+-- wallet has it, the former name of a renamed one, the note of a created
+-- one on what was taken on trust or of one that kept its name, and the
+-- name and reason of one refused
 accountImportJson :: AccountImport -> Json.Value
 accountImportJson = \case
-  AccountCreated acc -> Json.object ["status" .= ("created" :: Text), "account" .= acc]
+  AccountCreated acc noteM -> Json.object (["status" .= ("created" :: Text), "account" .= acc] <> ["note" .= note | Just note <- [noteM]])
   AccountKept acc noteM -> Json.object (["status" .= ("kept" :: Text), "account" .= acc] <> ["note" .= note | Just note <- [noteM]])
   AccountRenamed was acc -> Json.object ["status" .= ("renamed" :: Text), "was" .= was, "account" .= acc]
   AccountRefused name why -> Json.object ["status" .= ("refused" :: Text), "name" .= name, "reason" .= why]
@@ -657,7 +696,7 @@ parseAccountImport :: Json.Value -> Parser AccountImport
 parseAccountImport = Json.withObject "account import" $ \o -> do
   status <- o .: "status"
   case status :: Text of
-    "created" -> AccountCreated <$> o .: "account"
+    "created" -> AccountCreated <$> o .: "account" <*> o .:? "note"
     "kept" -> AccountKept <$> o .: "account" <*> o .:? "note"
     "renamed" -> AccountRenamed <$> o .: "was" <*> o .: "account"
     "refused" -> AccountRefused <$> o .: "name" <*> o .: "reason"

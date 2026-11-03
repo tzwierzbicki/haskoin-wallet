@@ -319,7 +319,7 @@ arbitraryImportReport net ctx =
 arbitraryAccountImport :: Network -> Ctx -> Gen AccountImport
 arbitraryAccountImport net ctx =
   oneof
-    [ AccountCreated <$> arbitraryDBAccount net ctx,
+    [ AccountCreated <$> arbitraryDBAccount net ctx <*> arbitraryMaybe arbitraryText,
       AccountKept <$> arbitraryDBAccount net ctx <*> arbitraryMaybe arbitraryText,
       AccountRenamed <$> arbitraryText <*> arbitraryDBAccount net ctx,
       AccountRefused <$> arbitraryText <*> arbitraryText

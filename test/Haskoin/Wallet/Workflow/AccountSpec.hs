@@ -257,6 +257,26 @@ segwitSpec ctx =
         (fingerprintsOf <$> hwJson online ["accounts"] []) `shouldReturn` Right [("btc0-segwit", Nothing)]
         (addressesOf <$> hwJson online ["receive"] []) `shouldReturn` Right [(segwitExternalAddrsText !! 0, "")]
 
+    it "is refused by importacc with --type bip44 for its zpub, which marks a bip84 account" $
+      withHome $ \home -> do
+        writeFile (home </> "spending.txt") (Text.unpack testSegwitAccountZPub <> "\n")
+        run <- hw home ["importacc", home </> "spending.txt", "--type", "bip44"] []
+        run `shouldSatisfy` printed "not imported: The key is a zpub, which marks a bip84 account in SLIP-132, and --type says bip44."
+        (refusedOf <$> hwJson home ["importacc", home </> "spending.txt", "--type", "bip44"] [])
+          `shouldReturn` Right [("zpub6r4mjW7y...", "The key is a zpub, which marks a bip84 account in SLIP-132, and --type says bip44. Leave --type out, or write the key as an xpub or a tpub if it is of a bip44 account after all.")]
+
+    -- An xpub alone says nothing of its path. The note wraps at 80 columns,
+    -- indented like the rest of the account.
+    it "is noted by importacc as taken on trust from its xpub with --type bip84, with what tells if the type was wrong" $
+      withHome $ \shown -> withHome $ \json -> do
+        writeFile (shown </> "spending.txt") (Text.unpack testSegwitAccountXPub <> "\n")
+        run <- hw shown ["importacc", shown </> "spending.txt", "--type", "bip84"] []
+        runOut run
+          `shouldBe` "btc0-segwit  btc  /84'/0'/0'\n  created\n  The key says no kind. The account is bip84 because --type says so. If the key\n  is of a bip44 account, a sync finds none of its transactions and signtx\n  refuses the mnemonic. Then deleteacc, and import the key again with --type\n  bip44.\n\nLabels set: none\n\nNext, name the account, which the file did not:\n  hw renameacc btc0-segwit NAME\n"
+        writeFile (json </> "spending.txt") (Text.unpack testSegwitAccountXPub <> "\n")
+        (createdNotesOf <$> hwJson json ["importacc", json </> "spending.txt", "--type", "bip84"] [])
+          `shouldReturn` Right [("btc0-segwit", Just "The key says no kind. The account is bip84 because --type says so. If the key is of a bip44 account, a sync finds none of its transactions and signtx refuses the mnemonic. Then deleteacc, and import the key again with --type bip44.")]
+
     -- The bip84 account of the file of Bitcoin Core, of
     -- test/data/descriptors: the vpub of its tpub, computed apart from hw
     it "is shown with a vpub on a test network, where the keys are tpub" $

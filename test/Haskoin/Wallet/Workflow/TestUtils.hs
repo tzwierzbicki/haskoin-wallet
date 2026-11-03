@@ -40,6 +40,8 @@ module Haskoin.Wallet.Workflow.TestUtils
     accountsOf,
     notSyncedOf,
     keyOf,
+    refusedOf,
+    createdNotesOf,
     descriptorsOf,
     slip132KeysOf,
     accountOf,
@@ -95,7 +97,7 @@ import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.Database (DBAccount (..), DBAddress (..))
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (AccountKind (..), MnemonicPass (..))
-import Haskoin.Wallet.Labels (ImportReport (..), importedAccount)
+import Haskoin.Wallet.Labels (AccountImport (..), ImportReport (..), importedAccount)
 import qualified Haskoin.Wallet.Schema.V3 as V3
 import Haskoin.Wallet.Sync (SyncRes (..))
 import Haskoin.Wallet.TestUtils
@@ -259,6 +261,18 @@ keyOf (ResponseImport report) =
     [Just acc] -> Right (dBAccountName acc, dBAccountIndex acc, dBAccountXPubKey acc)
     other -> Left (show other)
 keyOf other = Left (show other)
+
+-- | The accounts importacc refused, by the name the file gave them or the
+-- start of their key, each with the reason
+refusedOf :: Response -> Either String [(Text, Text)]
+refusedOf (ResponseImport report) = Right [(name, why) | AccountRefused name why <- reportAccounts report]
+refusedOf other = Left (show other)
+
+-- | The accounts importacc created, each with the note on what the import
+-- took on trust, if anything
+createdNotesOf :: Response -> Either String [(Text, Maybe Text)]
+createdNotesOf (ResponseImport report) = Right [(dBAccountName acc, note) | AccountCreated acc note <- reportAccounts report]
+createdNotesOf other = Left (show other)
 
 -- | The accounts of an answer with their descriptors, as descriptor
 -- shows them

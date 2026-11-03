@@ -678,7 +678,7 @@ importTypeOption =
       <> long "type"
       <> metavar "TYPE"
       <> completeWith (cs <$> kindNames)
-      <> help "The kind of account of a key the file says no kind of, a bare xpub or tpub: bip44 or bip84. Without it, bip44. A descriptor, a zpub and a file of hw say their kind themselves."
+      <> help "The kind of account of a key the file says no kind of, a bare xpub or tpub: bip44 or bip84. Without it, bip44. A descriptor, a zpub and a file of hw say their kind themselves, and a zpub with --type bip44 is refused."
 
 -- | A kind of account as typed: bip44 or bip84
 readKind :: Text -> Either String AccountKind
@@ -918,7 +918,11 @@ and bip84 accounts, so a descriptor of another kind, such as sh(wpkh(...)),
 is refused, and the import goes on. A key alone says its kind when it is a
 zpub or a vpub, which some wallets write for a bip84 account; an xpub or a
 tpub alone is taken for a bip44 account, or for a bip84 one with --type
-bip84. A descriptor names no network: give --network, or set a default
+bip84. A zpub with --type bip44 is refused, as the two contradict. An xpub
+alone says nothing of its path, so the answer notes that its kind was taken
+on trust, and what tells when it was wrong: a sync that finds none of its
+transactions. deleteacc, then import it again with the other --type. A
+descriptor names no network: give --network, or set a default
 network. An account a descriptor adds is named after its network, its index
 and its kind, as recover names one, since a descriptor carries no name:
 renameacc renames it. `descriptor` shows the descriptor of an account of

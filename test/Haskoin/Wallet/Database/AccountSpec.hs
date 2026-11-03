@@ -528,7 +528,7 @@ addressSpendable other = Left (show other)
 imported :: Response -> Either String (Text, Text, Text, Maybe Text)
 imported (ResponseImport report) =
   case reportAccounts report of
-    [AccountCreated acc] -> Right (fields acc)
+    [AccountCreated acc _] -> Right (fields acc)
     [AccountKept acc _] -> Right (fields acc)
     [AccountRenamed _ acc] -> Right (fields acc)
     [AccountRefused _ why] -> Left (cs why)

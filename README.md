@@ -325,8 +325,12 @@ Coldcard. `hw` holds `bip44` and `bip84` accounts, so a descriptor of another
 kind, such as `sh(wpkh(...))`, is refused, and the import goes on. A key
 alone says its kind when it is a `zpub` or a `vpub`, which some wallets write
 for a `bip84` account; an `xpub` or a `tpub` alone is taken for a `bip44`
-account, or for a `bip84` one with `--type bip84`. A descriptor names no
-network, so give `--network`, or set a default network. The account it adds
+account, or for a `bip84` one with `--type bip84`. A `zpub` with
+`--type bip44` is refused, as the two contradict. An `xpub` alone says nothing
+of its path, so the answer notes that its kind was taken on trust, and what
+tells when it was wrong: a sync that finds none of its transactions.
+`deleteacc`, then import it again with the other `--type`. A descriptor names
+no network, so give `--network`, or set a default network. The account it adds
 is named after its network, index and kind, as `recover` names one:
 `renameacc` renames it.
 

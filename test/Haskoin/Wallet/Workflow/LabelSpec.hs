@@ -443,7 +443,7 @@ recordsOf file = do
 accountsImported :: Response -> Either String [(Text, String)]
 accountsImported (ResponseImport report) = Right (describe' <$> reportAccounts report)
   where
-    describe' (AccountCreated acc) = (dBAccountName acc, "created")
+    describe' (AccountCreated acc _) = (dBAccountName acc, "created")
     describe' (AccountKept acc _) = (dBAccountName acc, "kept")
     describe' (AccountRenamed was acc) = (dBAccountName acc, "renamed from " <> Text.unpack was)
     describe' (AccountRefused name _) = (name, "refused")

@@ -90,8 +90,14 @@ accountsStored = map (\(_, a) -> (dBAccountName a, dBAccountNetwork a, dBAccount
 
 -- | The kind and the path of an account the import created, if it did
 createdKind :: AccountImport -> Maybe (AccountKind, String)
-createdKind (AccountCreated acc) = Just (accountKind acc, pathToStr (accountPath acc))
+createdKind (AccountCreated acc _) = Just (accountKind acc, pathToStr (accountPath acc))
 createdKind _ = Nothing
+
+-- | The note of an account the import created, if it did: what it took on
+-- trust, when it took anything
+createdNote :: AccountImport -> Maybe (Maybe Text)
+createdNote (AccountCreated _ note) = Just note
+createdNote _ = Nothing
 
 -- | The labels of the receiving addresses of an account, by index
 addressLabels :: DBAccountId -> DB IO [(Int, Text)]
@@ -240,6 +246,29 @@ importKeySpec ctx =
         liftIO $ map createdKind (reportAccounts segwit) `shouldBe` [Just (Bip84, "/84'/0'/0'")]
         lift accountsStored `dbShouldBeE` [("btc0", "btc", Nothing), ("btc0-segwit", "btc", Nothing)]
 
+    -- A bare key says nothing of its path, so its kind is the user's word
+    -- or the default, and the answer says what tells when it was wrong
+    it "notes that the kind of a bare key was taken by default" $
+      inDatabaseE $ do
+        report <- importFile ctx (Just btc) Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\"}\n")
+        liftIO $
+          map createdNote (reportAccounts report)
+            `shouldBe` [Just (Just "The key says no kind. The account is bip44 by default. If the key is of a bip84 account, as Ledger Live writes one, a sync finds none of its transactions and signtx refuses the mnemonic. Then deleteacc, and import the key again with --type bip84.")]
+
+    it "notes that the kind of a bare key was taken on --type" $
+      inDatabaseE $ do
+        report <- importFile ctx (Just btc) (Just Bip84) ("{\"type\":\"xpub\",\"ref\":\"" <> testSegwitAccountXPub <> "\"}\n")
+        liftIO $
+          map createdNote (reportAccounts report)
+            `shouldBe` [Just (Just "The key says no kind. The account is bip84 because --type says so. If the key is of a bip44 account, a sync finds none of its transactions and signtx refuses the mnemonic. Then deleteacc, and import the key again with --type bip44.")]
+
+    it "notes nothing for a key that says its kind, by its purpose or by its origin" $
+      inDatabaseE $ do
+        purpose <- importFile ctx (Just btc) Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testSegwitAccountXPub <> "\",\"purpose\":84}\n")
+        liftIO $ map createdNote (reportAccounts purpose) `shouldBe` [Just Nothing]
+        origin <- importFile ctx (Just btc) Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\"}\n")
+        liftIO $ map createdNote (reportAccounts origin) `shouldBe` [Just Nothing]
+
     it "is refused as a bip84 account on Bitcoin Cash, which has no SegWit" $
       inDatabaseE $ do
         report <- importFile ctx (Just bch) Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPubBch <> "\",\"label\":\"cash\",\"purpose\":84}\n")
@@ -309,7 +338,7 @@ importKeySpec ctx =
       inDatabase $
         dbShouldFail $ importFile ctx Nothing Nothing "{\"xpubkey\": \"xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah\", \"network\": \"nowhere\", \"name\": \"main\"}"
   where
-    created (AccountCreated acc) = Just (dBAccountName acc, dBAccountXPubKey acc)
+    created (AccountCreated acc _) = Just (dBAccountName acc, dBAccountXPubKey acc)
     created _ = Nothing
     renamed (AccountRenamed was acc) = Just (was, dBAccountName acc)
     renamed _ = Nothing
@@ -364,17 +393,41 @@ importDescriptorSpec ctx =
     -- The zpub of the bip84 section of the Coldcard file of
     -- test/data/descriptors, which some wallets write for the key of a
     -- bip84 account
-    it "adds a bip84 account from a zpub of SLIP-132, stored as its xpub" $
+    it "adds a bip84 account from a zpub of SLIP-132, stored as its xpub, with no note, as the zpub says its kind" $
       inDatabaseE $ do
-        report <- importFile ctx (Just btc) Nothing "zpub6r4mjW7yrMWVXbBmfxTonrBKKVapwoKJECopsBs8nJfVCLg4E7SDEAyyQtkGubtbsPWC4MmuLyhaNKvV1ChQa2Z418YDQmyzD2GCiogfbAh\n"
+        report <- importFile ctx (Just btc) Nothing (testSegwitAccountZPub <> "\n")
         liftIO $ map created (reportAccounts report) `shouldBe` [Just ("btc0-segwit", testSegwitAccountXPub)]
         liftIO $ map createdKind (reportAccounts report) `shouldBe` [Just (Bip84, "/84'/0'/0'")]
+        liftIO $ map createdNote (reportAccounts report) `shouldBe` [Just Nothing]
+
+    it "adds it with --type bip84 as well, which agrees with the zpub" $
+      inDatabaseE $ do
+        report <- importFile ctx (Just btc) (Just Bip84) (testSegwitAccountZPub <> "\n")
+        liftIO $ map createdKind (reportAccounts report) `shouldBe` [Just (Bip84, "/84'/0'/0'")]
+
+    -- The prefix of the key and --type contradict: the import takes neither
+    it "is refused with --type bip44 for a zpub, which marks a bip84 account" $
+      inDatabaseE $ do
+        report <- importFile ctx (Just btc) (Just Bip44) (testSegwitAccountZPub <> "\n")
+        liftIO $ reportAccounts report `shouldBe` [AccountRefused "zpub6r4mjW7y..." "The key is a zpub, which marks a bip84 account in SLIP-132, and --type says bip44. Leave --type out, or write the key as an xpub or a tpub if it is of a bip44 account after all."]
+        lift accountsStored `dbShouldBeE` []
+
+    it "is refused with --type bip44 for a vpub likewise, on a test network" $
+      inDatabaseE $ do
+        report <- importFile ctx (Just btcTest) (Just Bip44) (testSegwitAccountVPub <> "\n")
+        liftIO $ reportAccounts report `shouldBe` [AccountRefused "vpub5ZPKH6HZ..." "The key is a vpub, which marks a bip84 account in SLIP-132, and --type says bip44. Leave --type out, or write the key as an xpub or a tpub if it is of a bip44 account after all."]
 
     it "finds the account the wallet holds under its xpub from its zpub" $
       inDatabaseE $ do
         _ <- insertAccount Bip84 btc ctx "spending" (testSegwitAccountPub ctx) Nothing
-        report <- importFile ctx (Just btc) Nothing "zpub6r4mjW7yrMWVXbBmfxTonrBKKVapwoKJECopsBs8nJfVCLg4E7SDEAyyQtkGubtbsPWC4MmuLyhaNKvV1ChQa2Z418YDQmyzD2GCiogfbAh\n"
+        report <- importFile ctx (Just btc) Nothing (testSegwitAccountZPub <> "\n")
         liftIO $ map kept (reportAccounts report) `shouldBe` [Just ("spending", Nothing)]
+
+    it "is refused with --type bip44 for the zpub of an account the wallet holds too" $
+      inDatabaseE $ do
+        _ <- insertAccount Bip84 btc ctx "spending" (testSegwitAccountPub ctx) Nothing
+        report <- importFile ctx (Just btc) (Just Bip44) (testSegwitAccountZPub <> "\n")
+        liftIO $ reportAccounts report `shouldBe` [AccountRefused "zpub6r4mjW7y..." "The key is a zpub, which marks a bip84 account in SLIP-132, and --type says bip44. Leave --type out, or write the key as an xpub or a tpub if it is of a bip44 account after all."]
 
     it "is refused with a ypub of SLIP-132, which marks a BIP49 account" $
       inDatabaseE $ do
@@ -414,7 +467,7 @@ importDescriptorSpec ctx =
         liftIO $ map created (reportAccounts report) `shouldBe` [Just ("btc0", testAccountXPub)]
         liftIO $ reportTxLabels report `shouldBe` 1
   where
-    created (AccountCreated acc) = Just (dBAccountName acc, dBAccountXPubKey acc)
+    created (AccountCreated acc _) = Just (dBAccountName acc, dBAccountXPubKey acc)
     created _ = Nothing
     kept (AccountKept acc note) = Just (dBAccountName acc, note)
     kept _ = Nothing
@@ -437,10 +490,10 @@ importFileSpec ctx =
         lift accountsStored `dbShouldBeE` [("btctest0", "btctest", Just "b079db60"), ("btctest0-segwit", "btctest", Just "b079db60")]
         liftIO $
           reportAccounts report
-            `shouldBe` [ AccountCreated (accountNamed report "btctest0"),
+            `shouldBe` [ AccountCreated (accountNamed report "btctest0") Nothing,
                          AccountRefused "tpubDD6QPbsK..." "The key is not that of the bip44 account /44'/1'/0': its origin is sh(wpkh([b079db60/49'/1'/0']))",
                          AccountRefused "tpubDChx3pxw..." "The key is not that of the bip44 account /44'/1'/0': its origin is tr([b079db60/86'/1'/0'])",
-                         AccountCreated (accountNamed report "btctest0-segwit")
+                         AccountCreated (accountNamed report "btctest0-segwit") Nothing
                        ]
         liftIO $ map createdKind (reportAccounts report) `shouldBe` [Just (Bip44, "/44'/1'/0'"), Nothing, Nothing, Just (Bip84, "/84'/1'/0'")]
 
@@ -467,11 +520,11 @@ importFileSpec ctx =
         _ <- importFile ctx (Just btc) Nothing ("{\"xfp\": \"BC560F95\", \"bip44\": {\"deriv\": \"m/44'/0'/0'\", \"xpub\": \"" <> testAccountXPub <> "\"}}")
         lift accountsStored `dbShouldBeE` [("btc0", "btc", Just "bc560f95")]
   where
-    created (AccountCreated acc) = Just (dBAccountName acc, dBAccountXPubKey acc)
+    created (AccountCreated acc _) = Just (dBAccountName acc, dBAccountXPubKey acc)
     created _ = Nothing
     -- The account the report created under the name
     accountNamed report name =
-      case [acc | AccountCreated acc <- reportAccounts report, dBAccountName acc == name] of
+      case [acc | AccountCreated acc _ <- reportAccounts report, dBAccountName acc == name] of
         [acc] -> acc
         _ -> error ("No account " <> Text.unpack name <> " created")
 

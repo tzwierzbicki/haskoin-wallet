@@ -20,6 +20,7 @@ import Haskoin.Wallet.Database (DBAccount (..), DBAddress (..))
 import Haskoin.Wallet.Keys (MnemonicPass (..))
 import Haskoin.Wallet.Cli.PrettyPrinter
 import Haskoin.Wallet.Sync (SyncRes (..))
+import Haskoin.Wallet.Labels (AccountImport (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Database.TxInfo
 import Test.Hspec
@@ -32,6 +33,7 @@ spec = do
   answerSpec
   accountSpec
   descriptorSpec
+  importSpec
   addressSpec
   balanceSpec
   coinSpec
@@ -175,6 +177,23 @@ descriptorSpec =
                      "  Network    : btc",
                      "  Fingerprint: unknown",
                      "  SLIP-132   : " <> Text.unpack testSegwitAccountZPub
+                   ]
+
+importSpec :: Spec
+importSpec =
+  describe "An account importacc created, as the answer shows it" $ do
+    it "gives the account as accounts lists it, then that it was created" $
+      renderedLines (accountImportDoc (AccountCreated mainAccountRow Nothing))
+        `shouldBe` [ "main  btc  /44'/0'/0'",
+                     "  created"
+                   ]
+
+    -- The screen wraps the note at 80 columns; the test renders unbounded
+    it "puts the note on a kind taken on trust under it, indented like the rest" $
+      renderedLines (accountImportDoc (AccountCreated segwitAccountRow (Just "The key says no kind. The account is bip84 because --type says so.")))
+        `shouldBe` [ "spending  btc  /84'/0'/0'",
+                     "  created",
+                     "  The key says no kind. The account is bip84 because --type says so."
                    ]
 
 balanceSpec :: Spec
