@@ -26,6 +26,7 @@ import Haskoin.Wallet.Database.BestBlock (updateBest)
 import Haskoin.Wallet.Database.TxInfo (repsertSummary)
 import Haskoin.Wallet.Database.TxLabel (setTxLabel, txLabel)
 import Haskoin.Wallet.Labels
+import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
 import Test.Hspec
 
@@ -87,6 +88,11 @@ mainWithAddress ctx = do
 accountsStored :: DB IO [(Text, Text, Maybe Text)]
 accountsStored = map (\(_, a) -> (dBAccountName a, dBAccountNetwork a, dBAccountFingerprint a)) <$> getAccounts
 
+-- | The kind and the path of an account the import created, if it did
+createdKind :: AccountImport -> Maybe (AccountKind, String)
+createdKind (AccountCreated acc) = Just (accountKind acc, pathToStr (accountPath acc))
+createdKind _ = Nothing
+
 -- | The labels of the receiving addresses of an account, by index
 addressLabels :: DBAccountId -> DB IO [(Int, Text)]
 addressLabels accId = do
@@ -103,7 +109,7 @@ exportSpec :: Ctx -> Spec
 exportSpec ctx =
   describe "The records of an account" $ do
     -- The payment has 6 confirmations at best block 800005
-    it "are its key with its name, origin and network, then its labelled addresses, transactions and locked coins" $
+    it "are its key with its name, origin, network and purpose, then its labelled addresses, transactions and locked coins" $
       inDatabaseE $ do
         held@(accId, _) <- testNewAcc ctx "main"
         _ <- genExtAddress ctx def accId "Salary"
@@ -113,7 +119,7 @@ exportSpec ctx =
         records <- accountRecords ctx held
         liftIO $
           map recordLine records
-            `shouldBe` [ "{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\"}",
+            `shouldBe` [ "{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\",\"purpose\":44}",
                          "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Salary\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"keypath\":\"/0/0\"}",
                          "{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\",\"label\":\"First salary\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"height\":800000,\"fee\":1000,\"value\":50000}",
                          "{\"type\":\"output\",\"ref\":\"" <> paymentTxid <> ":0\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"spendable\":false,\"keypath\":\"/0/0\",\"height\":800000,\"value\":50000}"
@@ -140,7 +146,7 @@ exportSpec ctx =
 
     it "have no origin for an account whose seed hw does not know" $
       inDatabaseE $ do
-        held@(accId, _) <- insertAccount btc ctx "main" (testAccountPub ctx) Nothing
+        held@(accId, _) <- insertAccount Bip44 btc ctx "main" (testAccountPub ctx) Nothing
         _ <- genExtAddress ctx def accId "Salary"
         records <- accountRecords ctx held
         liftIO $ map recordOrigin records `shouldBe` [Nothing, Nothing]
@@ -159,58 +165,104 @@ importKeySpec ctx =
   describe "An xpub record" $ do
     it "creates the account, named after its label, on its network, with the fingerprint of its origin" $
       inDatabaseE $ do
-        report <- importFile ctx Nothing mainKeyLine
+        report <- importFile ctx Nothing Nothing mainKeyLine
         accounts <- lift accountsStored
         liftIO $ accounts `shouldBe` [("main", "btc", Just "bc560f95")]
         liftIO $ map created (reportAccounts report) `shouldBe` [Just ("main", testAccountXPub)]
 
     it "names an account without a label after its network and index, as recover does" $
       inDatabaseE $ do
-        _ <- importFile ctx Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"network\":\"btc\"}\n")
+        _ <- importFile ctx Nothing Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"network\":\"btc\"}\n")
         lift accountsStored `dbShouldBeE` [("btc0", "btc", Nothing)]
 
     -- A file of another wallet names no network
     it "takes the network of the command for a key that names none, and needs one" $ do
       inDatabaseE $ do
-        _ <- importFile ctx (Just bch) ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPubBch <> "\",\"label\":\"cash\"}\n")
+        _ <- importFile ctx (Just bch) Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPubBch <> "\",\"label\":\"cash\"}\n")
         lift accountsStored `dbShouldBeE` [("cash", "bch", Nothing)]
       inDatabaseE $ do
-        report <- importFile ctx Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\"}\n")
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\"}\n")
         liftIO $ reportAccounts report `shouldBe` [AccountRefused "main" "Give the --network, or a default-network in the configuration file"]
 
     it "is refused for a key that does not read on the network" $
       inDatabaseE $ do
-        report <- importFile ctx (Just btc) ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPubTest <> "\",\"label\":\"test\"}\n")
+        report <- importFile ctx (Just btc) Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPubTest <> "\",\"label\":\"test\"}\n")
         liftIO $ reportAccounts report `shouldBe` [AccountRefused "test" "The key does not read as a key of btc"]
 
     it "is refused for an unknown network" $
       inDatabaseE $ do
-        report <- importFile ctx Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\",\"network\":\"nowhere\"}\n")
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\",\"network\":\"nowhere\"}\n")
         liftIO $ reportAccounts report `shouldBe` [AccountRefused "main" "Unknown network nowhere"]
 
     -- The master key of the vectors of the BIP, at depth 0
     it "is refused for a key that is not three hardened steps below the master key" $
       inDatabaseE $ do
-        report <- importFile ctx (Just btc) "{\"type\":\"xpub\",\"ref\":\"xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8\",\"label\":\"Extended Public Key\"}\n"
-        liftIO $ reportAccounts report `shouldBe` [AccountRefused "Extended Public Key" "The key is not that of a BIP44 account, three hardened steps below the master key"]
+        report <- importFile ctx (Just btc) Nothing "{\"type\":\"xpub\",\"ref\":\"xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8\",\"label\":\"Extended Public Key\"}\n"
+        liftIO $ reportAccounts report `shouldBe` [AccountRefused "Extended Public Key" "The key is not that of an account, three hardened steps below the master key"]
 
-    it "is refused when its origin is not that of the BIP44 account, as a key of a BIP84 wallet" $
+    it "is refused when its origin is not that of the account at its path, as the pkh origin of a key at a BIP84 path" $
       inDatabaseE $ do
-        report <- importFile ctx Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\",\"origin\":\"wpkh([bc560f95/84'/0'/0'])\",\"network\":\"btc\"}\n")
-        liftIO $ reportAccounts report `shouldBe` [AccountRefused "main" "The key is not that of the BIP44 account /44'/0'/0': its origin is wpkh([bc560f95/84'/0'/0'])"]
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\",\"origin\":\"pkh([bc560f95/84'/0'/0'])\",\"network\":\"btc\"}\n")
+        liftIO $ reportAccounts report `shouldBe` [AccountRefused "main" "The key is not that of the bip44 account /44'/0'/0': its origin is pkh([bc560f95/84'/0'/0'])"]
+
+    it "is refused when its origin is of a kind of account hw does not hold, as sh(wpkh) of a BIP49 wallet" $
+      inDatabaseE $ do
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\",\"origin\":\"sh(wpkh([bc560f95/49'/0'/0']))\",\"network\":\"btc\"}\n")
+        liftIO $ reportAccounts report `shouldBe` [AccountRefused "main" "The key is not that of the bip44 account /44'/0'/0': its origin is sh(wpkh([bc560f95/49'/0'/0']))"]
+
+    it "adds a bip84 account when its origin is wpkh, named with -segwit after its network and index" $
+      inDatabaseE $ do
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testSegwitAccountXPub <> "\",\"origin\":\"wpkh([bc560f95/84'/0'/0'])\",\"network\":\"btc\"}\n")
+        liftIO $ map createdKind (reportAccounts report) `shouldBe` [Just (Bip84, "/84'/0'/0'")]
+        lift accountsStored `dbShouldBeE` [("btc0-segwit", "btc", Just "bc560f95")]
+
+    it "adds a bip84 account when its purpose is 84, as hw writes it for such an account without a known seed" $
+      inDatabaseE $ do
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testSegwitAccountXPub <> "\",\"label\":\"spending\",\"network\":\"btc\",\"purpose\":84}\n")
+        liftIO $ map createdKind (reportAccounts report) `shouldBe` [Just (Bip84, "/84'/0'/0'")]
+        lift accountsStored `dbShouldBeE` [("spending", "btc", Nothing)]
+
+    it "is refused when its origin and its purpose name two kinds of account" $
+      inDatabaseE $ do
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\",\"purpose\":84}\n")
+        liftIO $ reportAccounts report `shouldBe` [AccountRefused "main" "The record says its key is of accounts of two kinds, bip44 and bip84: its origin, its purpose and the prefix of its key do not agree"]
+
+    it "is refused when its purpose is of no kind hw holds" $
+      inDatabaseE $ do
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\",\"network\":\"btc\",\"purpose\":49}\n")
+        liftIO $ reportAccounts report `shouldBe` [AccountRefused "main" "The purpose 49 is of no kind of account hw holds: bip44 or bip84"]
+
+    it "adds a bip44 account from a bare key, and a bip84 one with --type bip84" $
+      inDatabaseE $ do
+        legacy <- importFile ctx (Just btc) Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\"}\n")
+        liftIO $ map createdKind (reportAccounts legacy) `shouldBe` [Just (Bip44, "/44'/0'/0'")]
+        segwit <- importFile ctx (Just btc) (Just Bip84) ("{\"type\":\"xpub\",\"ref\":\"" <> testSegwitAccountXPub <> "\"}\n")
+        liftIO $ map createdKind (reportAccounts segwit) `shouldBe` [Just (Bip84, "/84'/0'/0'")]
+        lift accountsStored `dbShouldBeE` [("btc0", "btc", Nothing), ("btc0-segwit", "btc", Nothing)]
+
+    it "is refused as a bip84 account on Bitcoin Cash, which has no SegWit" $
+      inDatabaseE $ do
+        report <- importFile ctx (Just bch) Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPubBch <> "\",\"label\":\"cash\",\"purpose\":84}\n")
+        liftIO $ reportAccounts report `shouldBe` [AccountRefused "cash" "A bip84 account needs SegWit, which bch does not have"]
+
+    it "is refused for an account the wallet holds as one kind when the record says another" $
+      inDatabaseE $ do
+        _ <- insertAccount Bip44 btc ctx "main" (testAccountPub ctx) Nothing
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\",\"network\":\"btc\",\"purpose\":84}\n")
+        liftIO $ reportAccounts report `shouldBe` [AccountRefused "main" "The account main holds this key as a bip44 account, and the record says it is of a bip84 one"]
 
     -- The wallet has the account main of the second seed
     it "is refused a name another account has, and the import goes on" $
       inDatabaseE $ do
         _ <- testNewAcc2 ctx "main"
-        report <- importFile ctx Nothing (mainKeyLine <> "{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub1 <> "\",\"label\":\"second\",\"network\":\"btc\"}\n")
+        report <- importFile ctx Nothing Nothing (mainKeyLine <> "{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub1 <> "\",\"label\":\"second\",\"network\":\"btc\"}\n")
         liftIO $ map created (reportAccounts report) `shouldBe` [Nothing, Just ("second", testAccountXPub1)]
         liftIO $ take 1 (reportAccounts report) `shouldBe` [AccountRefused "main" "The account main already exists"]
 
     it "renames the account the wallet holds under the key to its label" $
       inDatabaseE $ do
         _ <- testNewAcc ctx "main"
-        report <- importFile ctx Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"vault\",\"network\":\"btc\"}\n")
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"vault\",\"network\":\"btc\"}\n")
         liftIO $ map renamed (reportAccounts report) `shouldBe` [Just ("main", "vault")]
         lift accountsStored `dbShouldBeE` [("vault", "btc", Just "bc560f95")]
 
@@ -218,44 +270,44 @@ importKeySpec ctx =
     it "keeps the name of that account against the label of a file of another wallet, which names no network" $
       inDatabaseE $ do
         _ <- testNewAcc ctx "main"
-        report <- importFile ctx Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"BIP39\"}\n")
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"BIP39\"}\n")
         liftIO $ map kept (reportAccounts report) `shouldBe` [Just ("main", Nothing)]
 
     it "keeps the name of that account when the label is the name of another account, and says so" $
       inDatabaseE $ do
         _ <- testNewAcc ctx "main"
         _ <- testNewAcc2 ctx "savings"
-        report <- importFile ctx Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"savings\",\"network\":\"btc\"}\n")
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"savings\",\"network\":\"btc\"}\n")
         liftIO $ map kept (reportAccounts report) `shouldBe` [Just ("main", Just "The account savings already exists")]
 
     it "gives an account stored without the fingerprint of its seed the one of the origin" $
       inDatabaseE $ do
-        _ <- insertAccount btc ctx "main" (testAccountPub ctx) Nothing
-        report <- importFile ctx Nothing mainKeyLine
+        _ <- insertAccount Bip44 btc ctx "main" (testAccountPub ctx) Nothing
+        report <- importFile ctx Nothing Nothing mainKeyLine
         liftIO $ map kept (reportAccounts report) `shouldBe` [Just ("main", Nothing)]
         lift accountsStored `dbShouldBeE` [("main", "btc", Just "bc560f95")]
 
     it "is refused when its origin names another seed than the account's" $
       inDatabaseE $ do
         _ <- testNewAcc ctx "main"
-        report <- importFile ctx Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\",\"origin\":\"pkh([4435aa1c/44'/0'/0'])\",\"network\":\"btc\"}\n")
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\",\"origin\":\"pkh([4435aa1c/44'/0'/0'])\",\"network\":\"btc\"}\n")
         liftIO $ reportAccounts report `shouldBe` [AccountRefused "main" "The account main is of the seed bc560f95, not of 4435aa1c"]
 
     it "is refused when the wallet holds the key on another network" $
       inDatabaseE $ do
         _ <- testNewAcc ctx "main"
-        report <- importFile ctx Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\",\"network\":\"bch\"}\n")
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\",\"network\":\"bch\"}\n")
         liftIO $ reportAccounts report `shouldBe` [AccountRefused "main" "The account main on btc holds this key, which is of no account on bch"]
 
     it "is read from the document of an earlier exportacc" $
       inDatabaseE $ do
-        report <- importFile ctx Nothing "{\n  \"xpubkey\": \"xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah\",\n  \"network\": \"btc\",\n  \"name\": \"main\",\n  \"fingerprint\": \"bc560f95\"\n}\n"
+        report <- importFile ctx Nothing Nothing "{\n  \"xpubkey\": \"xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah\",\n  \"network\": \"btc\",\n  \"name\": \"main\",\n  \"fingerprint\": \"bc560f95\"\n}\n"
         liftIO $ map created (reportAccounts report) `shouldBe` [Just ("main", testAccountXPub)]
         lift accountsStored `dbShouldBeE` [("main", "btc", Just "bc560f95")]
 
     it "is not read from such a document on an unknown network" $
       inDatabase $
-        dbShouldFail $ importFile ctx Nothing "{\"xpubkey\": \"xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah\", \"network\": \"nowhere\", \"name\": \"main\"}"
+        dbShouldFail $ importFile ctx Nothing Nothing "{\"xpubkey\": \"xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah\", \"network\": \"nowhere\", \"name\": \"main\"}"
   where
     created (AccountCreated acc) = Just (dBAccountName acc, dBAccountXPubKey acc)
     created _ = Nothing
@@ -271,69 +323,93 @@ importDescriptorSpec ctx =
   describe "A descriptor" $ do
     it "creates the account of its key, named after its network and index, with the fingerprint of its origin" $
       inDatabaseE $ do
-        report <- importFile ctx (Just btc) (mainDescriptor <> "\n")
+        report <- importFile ctx (Just btc) Nothing (mainDescriptor <> "\n")
         lift accountsStored `dbShouldBeE` [("btc0", "btc", Just "bc560f95")]
         liftIO $ map created (reportAccounts report) `shouldBe` [Just ("btc0", testAccountXPub)]
 
     it "is read without a checksum, with hardened steps marked with an apostrophe, and for one chain" $
       inDatabaseE $ do
-        _ <- importFile ctx (Just btc) ("pkh([bc560f95/44'/0'/0']" <> testAccountXPub <> "/0/*)\n")
+        _ <- importFile ctx (Just btc) Nothing ("pkh([bc560f95/44'/0'/0']" <> testAccountXPub <> "/0/*)\n")
         lift accountsStored `dbShouldBeE` [("btc0", "btc", Just "bc560f95")]
 
     it "is read from a key alone, which gives no fingerprint" $
       inDatabaseE $ do
-        _ <- importFile ctx (Just btc) (testAccountXPub <> "\n")
+        _ <- importFile ctx (Just btc) Nothing (testAccountXPub <> "\n")
         lift accountsStored `dbShouldBeE` [("btc0", "btc", Nothing)]
 
     it "needs the --network, as it names none" $
       inDatabaseE $ do
-        report <- importFile ctx Nothing (mainDescriptor <> "\n")
+        report <- importFile ctx Nothing Nothing (mainDescriptor <> "\n")
         liftIO $ reportAccounts report `shouldBe` [AccountRefused mainKeyStart "Give the --network, or a default-network in the configuration file"]
 
-    it "is refused when it is not that of a BIP44 account, as one of a BIP84 wallet" $
+    -- The descriptor of the bip84 section of the Coldcard file of
+    -- test/data/descriptors
+    it "adds a bip84 account from a wpkh descriptor, named with -segwit after its network and index" $
       inDatabaseE $ do
-        report <- importFile ctx (Just btc) ("wpkh([bc560f95/84h/0h/0h]" <> testAccountXPub <> "/<0;1>/*)#9w4wvr54\n")
-        liftIO $ reportAccounts report `shouldBe` [AccountRefused mainKeyStart "The key is not that of the BIP44 account /44'/0'/0': its origin is wpkh([bc560f95/84'/0'/0'])"]
+        report <- importFile ctx (Just btc) Nothing ("wpkh([bc560f95/84h/0h/0h]" <> testSegwitAccountXPub <> "/<0;1>/*)#5nktextl\n")
+        liftIO $ map created (reportAccounts report) `shouldBe` [Just ("btc0-segwit", testSegwitAccountXPub)]
+        liftIO $ map createdKind (reportAccounts report) `shouldBe` [Just (Bip84, "/84'/0'/0'")]
+        lift accountsStored `dbShouldBeE` [("btc0-segwit", "btc", Just "bc560f95")]
+
+    it "is refused when it is of a kind of account hw does not hold, as sh(wpkh) of a BIP49 wallet" $
+      inDatabaseE $ do
+        report <- importFile ctx (Just btc) Nothing ("sh(wpkh([bc560f95/49h/0h/0h]" <> testAccountXPub <> "/<0;1>/*))\n")
+        liftIO $ reportAccounts report `shouldBe` [AccountRefused mainKeyStart "The key is not that of the bip44 account /44'/0'/0': its origin is sh(wpkh([bc560f95/49'/0'/0']))"]
 
     it "is refused with a private key" $
       inDatabaseE $ do
-        report <- importFile ctx (Just btc) ("pkh([bc560f95/44h/0h/0h]" <> testAccountXPrv <> "/<0;1>/*)#w6xkgv40\n")
+        report <- importFile ctx (Just btc) Nothing ("pkh([bc560f95/44h/0h/0h]" <> testAccountXPrv <> "/<0;1>/*)#w6xkgv40\n")
         liftIO $ reportAccounts report `shouldBe` [AccountRefused "xprv9yHxeaLA..." "The key is a private key. hw takes the public key of an account, and no file of accounts should hold a private one"]
 
-    it "is refused with a key of SLIP-132" $
+    -- The zpub of the bip84 section of the Coldcard file of
+    -- test/data/descriptors, which some wallets write for the key of a
+    -- bip84 account
+    it "adds a bip84 account from a zpub of SLIP-132, stored as its xpub" $
       inDatabaseE $ do
-        report <- importFile ctx (Just btc) "zpub6r4mjW7yrMWVXbBmfxTonrBKKVapwoKJECopsBs8nJfVCLg4E7SDEAyyQtkGubtbsPWC4MmuLyhaNKvV1ChQa2Z418YDQmyzD2GCiogfbAh\n"
-        liftIO $ reportAccounts report `shouldBe` [AccountRefused "zpub6r4mjW7y..." "The key has a prefix of SLIP-132, which marks a BIP49 or BIP84 account. hw holds BIP44 accounts, whose keys start with xpub or tpub"]
+        report <- importFile ctx (Just btc) Nothing "zpub6r4mjW7yrMWVXbBmfxTonrBKKVapwoKJECopsBs8nJfVCLg4E7SDEAyyQtkGubtbsPWC4MmuLyhaNKvV1ChQa2Z418YDQmyzD2GCiogfbAh\n"
+        liftIO $ map created (reportAccounts report) `shouldBe` [Just ("btc0-segwit", testSegwitAccountXPub)]
+        liftIO $ map createdKind (reportAccounts report) `shouldBe` [Just (Bip84, "/84'/0'/0'")]
+
+    it "finds the account the wallet holds under its xpub from its zpub" $
+      inDatabaseE $ do
+        _ <- insertAccount Bip84 btc ctx "spending" (testSegwitAccountPub ctx) Nothing
+        report <- importFile ctx (Just btc) Nothing "zpub6r4mjW7yrMWVXbBmfxTonrBKKVapwoKJECopsBs8nJfVCLg4E7SDEAyyQtkGubtbsPWC4MmuLyhaNKvV1ChQa2Z418YDQmyzD2GCiogfbAh\n"
+        liftIO $ map kept (reportAccounts report) `shouldBe` [Just ("spending", Nothing)]
+
+    it "is refused with a ypub of SLIP-132, which marks a BIP49 account" $
+      inDatabaseE $ do
+        report <- importFile ctx (Just btc) Nothing "ypub6YGZhSg8Nso498vduxTVMtR3EtZUu8H3bKfUmJDp5x1QXjy9DdACFQ8VwcgtS6NSgzCMGs5mUSCP2iG3BtXCRBP8Zh7V74rwL9qRRbN1yGV\n"
+        liftIO $ reportAccounts report `shouldBe` [AccountRefused "ypub6YGZhSg8..." "The key has the prefix ypub of SLIP-132, which marks a BIP49 account, with P2SH-P2WPKH addresses: hw holds bip44 and bip84 accounts"]
 
     it "is refused with a wrong checksum, named by its start" $
       inDatabaseE $ do
-        report <- importFile ctx (Just btc) ("pkh([bc560f95/44h/0h/0h]" <> testAccountXPub <> "/<0;1>/*)#vq597j88\n")
+        report <- importFile ctx (Just btc) Nothing ("pkh([bc560f95/44h/0h/0h]" <> testAccountXPub <> "/<0;1>/*)#vq597j88\n")
         liftIO $ reportAccounts report `shouldBe` [AccountRefused "pkh([bc560f9..." "The checksum of the descriptor is wrong"]
 
     it "is refused when its path does not derive the chains of an account" $
       inDatabaseE $ do
-        report <- importFile ctx (Just btc) ("pkh([bc560f95/44h/0h/0h]" <> testAccountXPub <> "/0/5)\n")
+        report <- importFile ctx (Just btc) Nothing ("pkh([bc560f95/44h/0h/0h]" <> testAccountXPub <> "/0/5)\n")
         liftIO $ reportAccounts report `shouldBe` [AccountRefused "pkh([bc560f9..." "The descriptor must end in /<0;1>/*, /0/* or /1/* after its key, to derive the addresses of an account"]
 
     -- Bitcoin Core writes an account as two descriptors, one per chain
     it "adds the account once from the two descriptors of its chains" $
       inDatabaseE $ do
         report <-
-          importFile ctx (Just btc) $
+          importFile ctx (Just btc) Nothing $
             "pkh([bc560f95/44h/0h/0h]" <> testAccountXPub <> "/0/*)#77rvns4p\npkh([bc560f95/44h/0h/0h]" <> testAccountXPub <> "/1/*)#02xdw99e\n"
         liftIO $ map created (reportAccounts report) `shouldBe` [Just ("btc0", testAccountXPub)]
 
     it "finds the account the wallet holds under its key, which learns the fingerprint of its origin" $
       inDatabaseE $ do
-        _ <- insertAccount btc ctx "main" (testAccountPub ctx) Nothing
-        report <- importFile ctx (Just btc) (mainDescriptor <> "\n")
+        _ <- insertAccount Bip44 btc ctx "main" (testAccountPub ctx) Nothing
+        report <- importFile ctx (Just btc) Nothing (mainDescriptor <> "\n")
         liftIO $ map kept (reportAccounts report) `shouldBe` [Just ("main", Nothing)]
         lift accountsStored `dbShouldBeE` [("main", "btc", Just "bc560f95")]
 
     it "is read among the records of a BIP 329 file, before them" $
       inDatabaseE $ do
         report <-
-          importFile ctx (Just btc) $
+          importFile ctx (Just btc) Nothing $
             "{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\",\"label\":\"Salary\",\"origin\":\"" <> mainOrigin <> "\"}\n" <> mainDescriptor <> "\n"
         liftIO $ map created (reportAccounts report) `shouldBe` [Just ("btc0", testAccountXPub)]
         liftIO $ reportTxLabels report `shouldBe` 1
@@ -354,42 +430,41 @@ importFileSpec ctx =
   describe "A file of descriptors of another wallet" $ do
     -- The default wallet of Bitcoin Core 32.1 on regtest, with pkh,
     -- sh(wpkh), tr and wpkh descriptors of its own seed, two chains each
-    it "of Bitcoin Core's listdescriptors adds the BIP44 account, and refuses the keys of the other kinds" $
+    it "of Bitcoin Core's listdescriptors adds the BIP44 and the BIP84 accounts, and refuses the keys of the other kinds" $
       inDatabaseE $ do
         content <- liftIO $ descriptorFile "core-default-wallet.json"
-        report <- importFile ctx (Just btcTest) content
-        lift accountsStored `dbShouldBeE` [("btctest0", "btctest", Just "b079db60")]
+        report <- importFile ctx (Just btcTest) Nothing content
+        lift accountsStored `dbShouldBeE` [("btctest0", "btctest", Just "b079db60"), ("btctest0-segwit", "btctest", Just "b079db60")]
         liftIO $
           reportAccounts report
             `shouldBe` [ AccountCreated (accountNamed report "btctest0"),
-                         AccountRefused "tpubDD6QPbsK..." "The key is not that of the BIP44 account /44'/1'/0': its origin is sh(wpkh([b079db60/49'/1'/0']))",
-                         AccountRefused "tpubDChx3pxw..." "The key is not that of the BIP44 account /44'/1'/0': its origin is tr([b079db60/86'/1'/0'])",
-                         AccountRefused "tpubDD3yUiav..." "The key is not that of the BIP44 account /44'/1'/0': its origin is wpkh([b079db60/84'/1'/0'])"
+                         AccountRefused "tpubDD6QPbsK..." "The key is not that of the bip44 account /44'/1'/0': its origin is sh(wpkh([b079db60/49'/1'/0']))",
+                         AccountRefused "tpubDChx3pxw..." "The key is not that of the bip44 account /44'/1'/0': its origin is tr([b079db60/86'/1'/0'])",
+                         AccountCreated (accountNamed report "btctest0-segwit")
                        ]
+        liftIO $ map createdKind (reportAccounts report) `shouldBe` [Just (Bip44, "/44'/1'/0'"), Nothing, Nothing, Just (Bip84, "/84'/1'/0'")]
 
     -- A wallet of Core without private keys, watching the test account
     it "of a Bitcoin Core wallet that watches the test account adds it, with the fingerprint of its seed" $
       inDatabaseE $ do
         content <- liftIO $ descriptorFile "core-watch-only.json"
-        report <- importFile ctx (Just btcTest) content
+        report <- importFile ctx (Just btcTest) Nothing content
         liftIO $ map created (reportAccounts report) `shouldBe` [Just ("btctest0", testAccountXPubTest)]
         lift accountsStored `dbShouldBeE` [("btctest0", "btctest", Just "bc560f95")]
 
-    it "of the generic JSON of a Coldcard adds the BIP44 account, and refuses the BIP49 and BIP84 sections" $
+    it "of the generic JSON of a Coldcard adds the BIP44 and the BIP84 accounts, and refuses the BIP49 section" $
       inDatabaseE $ do
         content <- liftIO $ descriptorFile "coldcard-export.json"
-        report <- importFile ctx (Just btc) content
-        liftIO $ map created (reportAccounts report) `shouldBe` [Just ("btc0", testAccountXPub), Nothing, Nothing]
+        report <- importFile ctx (Just btc) Nothing content
+        liftIO $ map created (reportAccounts report) `shouldBe` [Just ("btc0", testAccountXPub), Nothing, Just ("btc0-segwit", testSegwitAccountXPub)]
         liftIO $
-          drop 1 (reportAccounts report)
-            `shouldBe` [ AccountRefused "xpub6DSJPn1D..." "The key is not that of the BIP44 account /44'/0'/0': its origin is sh(wpkh([bc560f95/49'/0'/0']))",
-                         AccountRefused "xpub6CQF8An9..." "The key is not that of the BIP44 account /44'/0'/0': its origin is wpkh([bc560f95/84'/0'/0'])"
-                       ]
-        lift accountsStored `dbShouldBeE` [("btc0", "btc", Just "bc560f95")]
+          take 1 (drop 1 (reportAccounts report))
+            `shouldBe` [AccountRefused "xpub6DSJPn1D..." "The key is not that of the bip44 account /44'/0'/0': its origin is sh(wpkh([bc560f95/49'/0'/0']))"]
+        lift accountsStored `dbShouldBeE` [("btc0", "btc", Just "bc560f95"), ("btc0-segwit", "btc", Just "bc560f95")]
 
     it "of an older Coldcard, with the path and the key of each section but no descriptor, adds the account the same" $
       inDatabaseE $ do
-        _ <- importFile ctx (Just btc) ("{\"xfp\": \"BC560F95\", \"bip44\": {\"deriv\": \"m/44'/0'/0'\", \"xpub\": \"" <> testAccountXPub <> "\"}}")
+        _ <- importFile ctx (Just btc) Nothing ("{\"xfp\": \"BC560F95\", \"bip44\": {\"deriv\": \"m/44'/0'/0'\", \"xpub\": \"" <> testAccountXPub <> "\"}}")
         lift accountsStored `dbShouldBeE` [("btc0", "btc", Just "bc560f95")]
   where
     created (AccountCreated acc) = Just (dBAccountName acc, dBAccountXPubKey acc)
@@ -408,7 +483,7 @@ importAddressSpec ctx = do
     it "labels an address of the wallet, in whatever account has it" $
       inDatabaseE $ do
         (accId, _) <- mainWithAddress ctx
-        report <- importFile ctx Nothing "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Salary\"}\n"
+        report <- importFile ctx Nothing Nothing "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Salary\"}\n"
         liftIO $ report `shouldBe` nothingDone {reportAddressLabels = 1}
         lift (addressLabels accId) `dbShouldBeE` [(0, "Salary")]
 
@@ -416,7 +491,7 @@ importAddressSpec ctx = do
     it "derives an address the wallet does not have from its key path, generating the chain up to it" $
       inDatabaseE $ do
         (accId, _) <- mainWithAddress ctx
-        report <- importFile ctx Nothing ("{\"type\":\"addr\",\"ref\":\"" <> externalAddrsText !! 2 <> "\",\"label\":\"From Bob\",\"origin\":\"" <> mainOrigin <> "\",\"keypath\":\"/0/2\"}\n")
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"addr\",\"ref\":\"" <> externalAddrsText !! 2 <> "\",\"label\":\"From Bob\",\"origin\":\"" <> mainOrigin <> "\",\"keypath\":\"/0/2\"}\n")
         liftIO $ report `shouldBe` nothingDone {reportAddressLabels = 1}
         lift (addressLabels accId) `dbShouldBeE` [(0, ""), (1, ""), (2, "From Bob")]
 
@@ -424,14 +499,14 @@ importAddressSpec ctx = do
       inDatabaseE $ do
         _ <- testNewAcc2 ctx "other"
         (accId, _) <- mainWithAddress ctx
-        report <- importFile ctx Nothing ("{\"type\":\"addr\",\"ref\":\"" <> externalAddrsText !! 1 <> "\",\"label\":\"From Bob\",\"keypath\":\"/0/1\"}\n")
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"addr\",\"ref\":\"" <> externalAddrsText !! 1 <> "\",\"label\":\"From Bob\",\"keypath\":\"/0/1\"}\n")
         liftIO $ report `shouldBe` nothingDone {reportAddressLabels = 1}
         lift (addressLabels accId) `dbShouldBeE` [(0, ""), (1, "From Bob")]
 
     it "leaves the label of a change address aside, and generates none" $
       inDatabaseE $ do
         (accId, _) <- mainWithAddress ctx
-        report <- importFile ctx Nothing ("{\"type\":\"addr\",\"ref\":\"" <> internalAddrsText !! 0 <> "\",\"label\":\"Change\",\"keypath\":\"/1/0\"}\n")
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"addr\",\"ref\":\"" <> internalAddrsText !! 0 <> "\",\"label\":\"Change\",\"keypath\":\"/1/0\"}\n")
         liftIO $ report `shouldBe` nothingDone {reportChangeAddresses = 1}
         acc <- getAccountById accId
         liftIO $ dBAccountInternal acc `shouldBe` 0
@@ -439,13 +514,13 @@ importAddressSpec ctx = do
     it "counts an address the wallet does not have and no key path places" $
       inDatabaseE $ do
         _ <- mainWithAddress ctx
-        report <- importFile ctx Nothing ("{\"type\":\"addr\",\"ref\":\"" <> externalAddrsText !! 5 <> "\",\"label\":\"Lost\"}\n")
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"addr\",\"ref\":\"" <> externalAddrsText !! 5 <> "\",\"label\":\"Lost\"}\n")
         liftIO $ report `shouldBe` nothingDone {reportAddressesMissing = 1}
 
     it "does nothing without a label" $
       inDatabaseE $ do
         (accId, _) <- mainWithAddress ctx
-        report <- importFile ctx Nothing "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\"}\n"
+        report <- importFile ctx Nothing Nothing "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\"}\n"
         liftIO $ report `shouldBe` nothingDone
         lift (addressLabels accId) `dbShouldBeE` [(0, "")]
 
@@ -453,7 +528,7 @@ importAddressSpec ctx = do
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "main"
         _ <- genExtAddress ctx def accId "Salary"
-        _ <- importFile ctx Nothing "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"\"}\n"
+        _ <- importFile ctx Nothing Nothing "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"\"}\n"
         lift (addressLabels accId) `dbShouldBeE` [(0, "")]
 
   describe "A pubkey record" $ do
@@ -463,7 +538,7 @@ importAddressSpec ctx = do
         -- The key of the first receiving address, /0/0 of the account key
         let key = derivePubPath ctx (Deriv :/ 0 :/ 0) (testAccountPub ctx)
             hex = encodeHex (exportPubKey ctx True key.key)
-        report <- importFile ctx Nothing ("{\"type\":\"pubkey\",\"ref\":\"" <> hex <> "\",\"label\":\"Salary\"}\n")
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"pubkey\",\"ref\":\"" <> hex <> "\",\"label\":\"Salary\"}\n")
         liftIO $ report `shouldBe` nothingDone {reportAddressLabels = 1}
         lift (addressLabels accId) `dbShouldBeE` [(0, "Salary")]
 
@@ -471,7 +546,7 @@ importAddressSpec ctx = do
     it "is left aside when hw cannot read the key" $
       inDatabaseE $ do
         _ <- mainWithAddress ctx
-        report <- importFile ctx Nothing "{\"type\":\"pubkey\",\"ref\":\"83409659355b6d1cc3c32decd5d561abaac86c37a353b52895a5e6c196d6f448\",\"label\":\"Taproot\"}\n"
+        report <- importFile ctx Nothing Nothing "{\"type\":\"pubkey\",\"ref\":\"83409659355b6d1cc3c32decd5d561abaac86c37a353b52895a5e6c196d6f448\",\"label\":\"Taproot\"}\n"
         liftIO $ report `shouldBe` nothingDone {reportNotKept = 1}
 
 {- Importing transactions -}
@@ -482,7 +557,7 @@ importTxSpec ctx =
     it "labels the transaction in the account its origin names, before the sync has it" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "main"
-        report <- importFile ctx Nothing ("{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\",\"label\":\"Salary\",\"origin\":\"" <> mainOrigin <> "\"}\n")
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\",\"label\":\"Salary\",\"origin\":\"" <> mainOrigin <> "\"}\n")
         liftIO $ report `shouldBe` nothingDone {reportTxLabels = 1}
         lift (txLabel accId (fakeTxHash 1)) `dbShouldBeE` "Salary"
 
@@ -494,14 +569,14 @@ importTxSpec ctx =
         (thirdId, _) <- testNewAcc ctx "third"
         lift $ paymentStored mainId 800002
         lift $ paymentStored secondId 800002
-        report <- importFile ctx Nothing ("{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\",\"label\":\"Salary\"}\n")
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\",\"label\":\"Salary\"}\n")
         liftIO $ report `shouldBe` nothingDone {reportTxLabels = 2}
         lift (mapM (`txLabel` fakeTxHash 1) [mainId, secondId, thirdId]) `dbShouldBeE` ["Salary", "Salary", ""]
 
     it "labels a transaction without origin in the only account of the wallet, which need not have it" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "main"
-        report <- importFile ctx Nothing ("{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\",\"label\":\"Salary\"}\n")
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\",\"label\":\"Salary\"}\n")
         liftIO $ report `shouldBe` nothingDone {reportTxLabels = 1}
         lift (txLabel accId (fakeTxHash 1)) `dbShouldBeE` "Salary"
 
@@ -509,28 +584,28 @@ importTxSpec ctx =
       inDatabaseE $ do
         _ <- testNewAcc ctx "main"
         _ <- testNewAcc ctx "second"
-        report <- importFile ctx Nothing ("{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\",\"label\":\"Salary\"}\n")
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\",\"label\":\"Salary\"}\n")
         liftIO $ report `shouldBe` nothingDone {reportTxsMissing = 1}
 
     -- The origin of account 0 of the second seed
     it "counts a transaction whose origin names an account the wallet does not have" $
       inDatabaseE $ do
         _ <- testNewAcc ctx "main"
-        report <- importFile ctx Nothing ("{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\",\"label\":\"Salary\",\"origin\":\"pkh([4435aa1c/44'/0'/0'])\"}\n")
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\",\"label\":\"Salary\",\"origin\":\"pkh([4435aa1c/44'/0'/0'])\"}\n")
         liftIO $ report `shouldBe` nothingDone {reportOtherAccounts = 1}
 
     it "matches an origin to an account whose seed hw does not know yet" $
       inDatabaseE $ do
-        (accId, _) <- insertAccount btc ctx "main" (testAccountPub ctx) Nothing
+        (accId, _) <- insertAccount Bip44 btc ctx "main" (testAccountPub ctx) Nothing
         _ <- testNewAcc2 ctx "other"
-        report <- importFile ctx Nothing ("{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\",\"label\":\"Salary\",\"origin\":\"" <> mainOrigin <> "\"}\n")
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\",\"label\":\"Salary\",\"origin\":\"" <> mainOrigin <> "\"}\n")
         liftIO $ report `shouldBe` nothingDone {reportTxLabels = 1}
         lift (txLabel accId (fakeTxHash 1)) `dbShouldBeE` "Salary"
 
     it "is counted among the unreadable lines when its reference is not a transaction id" $
       inDatabaseE $ do
         _ <- testNewAcc ctx "main"
-        report <- importFile ctx Nothing "{\"type\":\"tx\",\"ref\":\"not-a-txid\",\"label\":\"Salary\"}\n"
+        report <- importFile ctx Nothing Nothing "{\"type\":\"tx\",\"ref\":\"not-a-txid\",\"label\":\"Salary\"}\n"
         liftIO $ report `shouldBe` nothingDone {reportUnreadable = [1]}
 
 {- Importing coins -}
@@ -542,7 +617,7 @@ importCoinSpec ctx =
       inDatabaseE $ do
         (accId, _) <- mainWithAddress ctx
         lift $ coinStored accId False
-        report <- importFile ctx Nothing ("{\"type\":\"output\",\"ref\":\"" <> paymentTxid <> ":0\",\"spendable\":false}\n")
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"output\",\"ref\":\"" <> paymentTxid <> ":0\",\"spendable\":false}\n")
         liftIO $ report `shouldBe` nothingDone {reportCoinsLocked = 1}
         lift (fmap (fmap dBCoinLockedByUser) (P.get (DBCoinKey (outpointBytes (OutPoint (fakeTxHash 1) 0))))) `dbShouldBeE` Just True
 
@@ -550,14 +625,14 @@ importCoinSpec ctx =
       inDatabaseE $ do
         (accId, _) <- mainWithAddress ctx
         lift $ coinStored accId True
-        report <- importFile ctx Nothing ("{\"type\":\"output\",\"ref\":\"" <> paymentTxid <> ":0\",\"spendable\":true}\n")
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"output\",\"ref\":\"" <> paymentTxid <> ":0\",\"spendable\":true}\n")
         liftIO $ report `shouldBe` nothingDone {reportCoinsUnlocked = 1}
         lift (fmap (fmap dBCoinLockedByUser) (P.get (DBCoinKey (outpointBytes (OutPoint (fakeTxHash 1) 0))))) `dbShouldBeE` Just False
 
     it "counts a coin the wallet does not have" $
       inDatabaseE $ do
         _ <- mainWithAddress ctx
-        report <- importFile ctx Nothing ("{\"type\":\"output\",\"ref\":\"" <> paymentTxid <> ":0\",\"spendable\":false}\n")
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"output\",\"ref\":\"" <> paymentTxid <> ":0\",\"spendable\":false}\n")
         liftIO $ report `shouldBe` nothingDone {reportCoinsMissing = 1}
 
     -- hw keeps no label on a coin: a coin shows the label of its transaction
@@ -565,7 +640,7 @@ importCoinSpec ctx =
       inDatabaseE $ do
         (accId, _) <- mainWithAddress ctx
         lift $ coinStored accId False
-        report <- importFile ctx Nothing ("{\"type\":\"output\",\"ref\":\"" <> paymentTxid <> ":0\",\"label\":\"Salary (received)\"}\n")
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"output\",\"ref\":\"" <> paymentTxid <> ":0\",\"label\":\"Salary (received)\"}\n")
         liftIO $ report `shouldBe` nothingDone {reportNotKept = 1}
 
 {- The rest of a file -}
@@ -579,7 +654,7 @@ importOtherSpec ctx =
       inDatabaseE $ do
         _ <- mainWithAddress ctx
         report <-
-          importFile ctx Nothing $
+          importFile ctx Nothing Nothing $
             Text.unlines
               [ "{\"type\":\"input\",\"ref\":\"" <> paymentTxid <> ":0\",\"label\":\"Salary (input)\"}",
                 "{\"type\":\"spscan\",\"ref\":\"spscan1q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zsq9q6qjevn2kmdrnpuxt0v6h2kr2a2epkr0g6nk55ftf0xcxtddazgkrth3e\",\"label\":\"Scan\"}",
@@ -593,18 +668,18 @@ importOtherSpec ctx =
     it "takes the keys first, wherever they are in the file, so that their records find their accounts" $
       inDatabaseE $ do
         report <-
-          importFile ctx Nothing $
+          importFile ctx Nothing Nothing $
             "{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\",\"label\":\"Salary\",\"origin\":\"" <> mainOrigin <> "\"}\n" <> mainKeyLine
         liftIO $ reportTxLabels report `shouldBe` 1
 
     it "does nothing with an empty file" $
       inDatabaseE $ do
-        report <- importFile ctx Nothing ""
+        report <- importFile ctx Nothing Nothing ""
         liftIO $ report `shouldBe` nothingDone
         liftIO $ reportNeedsSync report `shouldBe` False
 
     it "needs a sync when it labels something the wallet does not have" $
       inDatabaseE $ do
         _ <- mainWithAddress ctx
-        report <- importFile ctx Nothing ("{\"type\":\"output\",\"ref\":\"" <> paymentTxid <> ":0\",\"spendable\":false}\n")
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"output\",\"ref\":\"" <> paymentTxid <> ":0\",\"spendable\":false}\n")
         liftIO $ reportNeedsSync report `shouldBe` True

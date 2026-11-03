@@ -28,7 +28,10 @@
 -- transaction of the offline wallet. Every account has a plain id, which
 -- its addresses, summaries, coins and pending transactions point to. The
 -- confirmed columns of the summaries and the coins, which nothing read, are
--- gone as well. A summary says whether its transaction is dead, replaced or
+-- gone as well. An account carries its purpose, the first step of its
+-- path: 44 for a BIP44 account with P2PKH addresses, which every account
+-- was before hw had BIP84 accounts, so the column defaults to it, and 84
+-- for a BIP84 account with P2WPKH addresses. A summary says whether its transaction is dead, replaced or
 -- dropped from the network, where version 3 deleted it, and the time the
 -- store gives its transaction: when the store first saw it, in its mempool
 -- or in a block. A summary of version 3 has no time until the next sync
@@ -79,6 +82,7 @@ DBVersion
 DBAccount
   name Text
   index Int
+  purpose Int default=44
   network Text
   external Int
   internal Int

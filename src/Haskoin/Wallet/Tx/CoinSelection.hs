@@ -17,8 +17,9 @@
 -- inputs. When the recipients pay the fee out of what they receive, the
 -- coins only need to cover the amount, but the waste is still measured at
 -- the real fee rate: the recipients are not charged for consolidating. The
--- sizes are those of P2PKH inputs and outputs, the only ones the wallet
--- creates.
+-- sizes of the inputs and of the change output are those of the kind of
+-- the account, P2PKH for a BIP44 account and P2WPKH for a BIP84 one
+-- ("Haskoin.Wallet.Tx.Size"), in virtual bytes.
 --
 -- Under coin control, the user chooses the coins. 'spendCoins' spends every
 -- chosen coin, whatever the strategy. With --select, 'selectCoins' takes
@@ -42,7 +43,8 @@ import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Ord (Down (..), comparing)
 import Data.Word (Word64)
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Tx.Size (p2pkhInput, p2pkhInputSize, p2pkhOutputSize, txSize)
+import Haskoin.Wallet.Keys (AccountKind)
+import Haskoin.Wallet.Tx.Size (accountInput, accountInputSize, accountOutputSize, txSize)
 import Haskoin.Wallet.Util (randomShuffle, safeSubtract)
 import System.Random (StdGen)
 
@@ -73,7 +75,7 @@ data FeePayer
     RecipientsPay
   deriving (Eq, Show)
 
--- | The fee rates of a selection, in satoshis per byte
+-- | The fee rates of a selection, in satoshis per virtual byte
 data FeeRates = FeeRates
   { -- | What the transaction pays
     feeRate :: !Word64,
@@ -86,13 +88,16 @@ data FeeRates = FeeRates
 
 -- | What the coins must pay for
 data Payment = Payment
-  { rates :: !FeeRates,
+  { -- | The kind of the account paying, which sizes its inputs and its
+    -- change output
+    ownKind :: !AccountKind,
+    rates :: !FeeRates,
     payer :: !FeePayer,
     -- | Dust: the smallest change worth an output, like Bitcoin Core's dust
     -- limit (546 for P2PKH), below which an output is dust
     dust :: !Word64,
-    -- | The sizes in bytes of the outputs paid, by the scripts of the
-    -- recipients
+    -- | The sizes in virtual bytes of the outputs paid, by the scripts of
+    -- the recipients
     outputSizes :: ![Word64],
     -- | The amount paid, over all the outputs
     amount :: !Word64
@@ -114,11 +119,11 @@ data Selection = Selection
 {- Choosing the coins -}
 
 -- | The size of the payment transaction with the given number of the
--- wallet's own inputs, which are P2PKH, its outputs, and a change output
--- or not
+-- account's own inputs, its outputs, and a change output or not, the
+-- inputs and the change of the kind of the account
 paymentSize :: Payment -> Int -> Bool -> Word64
 paymentSize payment inputs hasChange =
-  txSize (replicate inputs p2pkhInput) (payment.outputSizes <> [p2pkhOutputSize | hasChange])
+  txSize (replicate inputs (accountInput payment.ownKind)) (payment.outputSizes <> [accountOutputSize payment.ownKind | hasChange])
 
 -- | Select the coins of a payment among the candidates: the spendable coins
 -- of the account, or the coins chosen with coin control and --select
@@ -135,7 +140,7 @@ selectCoins strategy gen payment candidates
   | otherwise = Right $ minimumBy (comparing (waste payment)) proposals
   where
     -- A candidate whose fee exceeds its amount never helps
-    usable = filter ((> 0) . effectiveValue payment.rates) candidates
+    usable = filter ((> 0) . effectiveValue payment.ownKind payment.rates) candidates
     proposals = selectionOf payment <$> mapMaybe ($ usable) strategies
     strategies = case strategy of
       LeastWaste -> [exactMatch payment, largestFirst, smallestFirst, randomDraw]
@@ -168,13 +173,13 @@ target payment = case payment.payer of
 -- sender pays for its input, its full value when the recipients do
 covers :: Payment -> Store.Unspent -> Integer
 covers payment coin = case payment.payer of
-  SenderPays -> effectiveValue payment.rates coin
+  SenderPays -> effectiveValue payment.ownKind payment.rates coin
   RecipientsPay -> fromIntegral coin.value
 
--- | What a coin is worth once its input is paid for. Negative for a coin
--- smaller than the fee of spending it.
-effectiveValue :: FeeRates -> Store.Unspent -> Integer
-effectiveValue rates coin = fromIntegral coin.value - fromIntegral (rates.feeRate * p2pkhInputSize)
+-- | What a coin is worth once its input, of the kind of the account, is
+-- paid for. Negative for a coin smaller than the fee of spending it.
+effectiveValue :: AccountKind -> FeeRates -> Store.Unspent -> Integer
+effectiveValue kind rates coin = fromIntegral coin.value - fromIntegral (rates.feeRate * accountInputSize kind)
 
 -- | How the value of coins covering the target is split between the
 -- recipients, the change and the fee
@@ -220,7 +225,7 @@ exactMatch payment coins =
   snd $ search (100000 :: Int) 0 (sortOn (Down . (.value)) coins)
   where
     lower = fromIntegral (target payment) :: Integer
-    upper = lower + fromIntegral (payment.rates.feeRate * p2pkhOutputSize + payment.rates.longTermFeeRate * p2pkhInputSize)
+    upper = lower + fromIntegral (payment.rates.feeRate * accountOutputSize payment.ownKind + payment.rates.longTermFeeRate * accountInputSize payment.ownKind)
     -- (steps left, solution): try with the next coin, then without it
     search steps acc cs
       | acc >= lower && acc <= upper = (steps, Just [])
@@ -243,7 +248,7 @@ waste payment selection = inputs + changeOrExcess
   where
     rates = payment.rates
     count = length selection.selected
-    inputs = fromIntegral count * fromIntegral p2pkhInputSize * (fromIntegral rates.feeRate - fromIntegral rates.longTermFeeRate)
+    inputs = fromIntegral count * fromIntegral (accountInputSize payment.ownKind) * (fromIntegral rates.feeRate - fromIntegral rates.longTermFeeRate)
     changeOrExcess
-      | selection.changeAmount > 0 = fromIntegral $ rates.feeRate * p2pkhOutputSize + rates.longTermFeeRate * p2pkhInputSize
+      | selection.changeAmount > 0 = fromIntegral $ rates.feeRate * accountOutputSize payment.ownKind + rates.longTermFeeRate * accountInputSize payment.ownKind
       | otherwise = fromIntegral selection.feeAmount - fromIntegral (rates.feeRate * paymentSize payment count False)

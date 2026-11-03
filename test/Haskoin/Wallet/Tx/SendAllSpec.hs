@@ -18,6 +18,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Tx.Recipient (Share (..))
 import Haskoin.Wallet.Amounts (AmountUnit (..))
 import Haskoin.Wallet.Cli.PrettyPrinter (dustReportDoc)
+import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.Building (BuiltTx (..))
 import Haskoin.Wallet.Tx.SendAll
@@ -33,7 +34,7 @@ spec =
     buildSpec ctx
     reportSpec ctx
 
--- Every test pays at 10 satoshis per byte with a dust limit of 546. The
+-- Every test pays at 10 satoshis per virtual byte with a dust limit of 546. The
 -- sizes are those of the builder: 10 bytes of frame, 148 per input and 34
 -- per output. The coins are confirmed, at the external addresses of the
 -- test wallet.
@@ -49,22 +50,23 @@ coin ctx w i = storeCoin ctx (fakeTxHash w, i) (Just 800000) (externalAddr (from
 twoCoins :: Ctx -> [Store.Unspent]
 twoCoins ctx = [coin ctx 1 0 50000, coin ctx 1 1 30000]
 
--- | The amounts of a send-all of the coins, at 10 satoshis per byte and a
+-- | The amounts of a send-all of the coins, at 10 satoshis per virtual byte and a
 -- dust limit of 546
 amounts :: Ctx -> [Store.Unspent] -> [(Address, Share)] -> Either String [(Address, Natural)]
-amounts ctx = sendAllAmounts ctx 10 546
+amounts ctx = sendAllAmounts ctx Bip44 10 546
 
 -- | The wallet as the builder sees it: the coins, and the paths of the first
 -- ten external addresses
 found :: [Store.Unspent] -> [(Address, SoftPath)] -> SendAllCoins
 found unspents recipients =
   SendAllCoins
-    { coins = unspents,
+    { ownKind = Bip44,
+      coins = unspents,
       coinPaths = Map.fromList [(externalAddr i, Deriv :/ 0 :/ fromIntegral i) | i <- [0 .. 9]],
       recipientPaths = Map.fromList recipients
     }
 
--- | Build with the seed 0, at 10 satoshis per byte and a dust limit of 546
+-- | Build with the seed 0, at 10 satoshis per virtual byte and a dust limit of 546
 build :: Ctx -> SendAllCoins -> [(Address, Share)] -> Either String BuiltTx
 build ctx wallet recipients = buildSendAll btc ctx (mkStdGen 0) wallet recipients 10 546 800002
 
@@ -78,11 +80,11 @@ outputsOf ctx transaction = sortOn snd [(forceRight (scriptToAddressBS ctx out.s
 -- stay in the account
 threeDustReport :: Ctx -> Bool -> DustReport
 threeDustReport ctx othersStaying =
-  dustReport ctx 10 546 [(otherAddr 0, Remainder)] (twoCoins ctx) [coin ctx 2 1 900, coin ctx 2 0 1200, coin ctx 2 2 546] othersStaying
+  dustReport ctx Bip44 10 546 [(otherAddr 0, Remainder)] (twoCoins ctx) [coin ctx 2 1 900, coin ctx 2 0 1200, coin ctx 2 2 546] othersStaying
 
 -- | The report on one dust coin beside the coins of 50000 and 30000
 oneDustReport :: Ctx -> Natural -> DustReport
-oneDustReport ctx value = dustReport ctx 10 546 [(otherAddr 0, Remainder)] (twoCoins ctx) [coin ctx 2 0 value] False
+oneDustReport ctx value = dustReport ctx Bip44 10 546 [(otherAddr 0, Remainder)] (twoCoins ctx) [coin ctx 2 0 value] False
 
 {- Dust coins -}
 
@@ -91,12 +93,19 @@ dustCoinSpec ctx =
   describe "A dust coin" $ do
     -- The input of 148 bytes costs 1480 at 10 satoshis a byte
     it "is worth no more than the fee of its input" $ do
-      isDustCoin 10 (coin ctx 1 0 1480) `shouldBe` True
-      isDustCoin 10 (coin ctx 1 0 1481) `shouldBe` False
+      isDustCoin Bip44 10 (coin ctx 1 0 1480) `shouldBe` True
+      isDustCoin Bip44 10 (coin ctx 1 0 1481) `shouldBe` False
 
     -- At 9 satoshis a byte, the input costs 1332
     it "is dust at one fee rate and not at a lower one" $
-      isDustCoin 9 (coin ctx 1 0 1480) `shouldBe` False
+      isDustCoin Bip44 9 (coin ctx 1 0 1480) `shouldBe` False
+
+    -- The P2WPKH input of a bip84 account is 68 virtual bytes, 680 at 10
+    -- satoshis a byte
+    it "is worth no more than the fee of its P2WPKH input in a bip84 account" $ do
+      isDustCoin Bip84 10 (coin ctx 1 0 680) `shouldBe` True
+      isDustCoin Bip84 10 (coin ctx 1 0 681) `shouldBe` False
+      worthSpendingUpTo Bip84 (coin ctx 1 0 681) `shouldBe` 10
 
 {- Amounts -}
 
@@ -107,6 +116,12 @@ dustCoinSpec ctx =
 amountSpec :: Ctx -> Spec
 amountSpec ctx =
   describe "The amounts of a send-all" $ do
+    -- The two inputs of a bip84 account: 10 + 2 * 41 + 34 = 126 bytes, then
+    -- (2 + 2 * 108) / 4 of witness data, rounded up to 55: 181 virtual
+    -- bytes, a fee of 1810
+    it "charge a bip84 account the virtual bytes of its P2WPKH inputs" $
+      sendAllAmounts ctx Bip84 10 546 (twoCoins ctx) [(otherAddr 0, Remainder)] `shouldBe` Right [(otherAddr 0, 78190)]
+
     it "give an address without an amount everything but the fee of the coins" $
       amounts ctx (twoCoins ctx) [(otherAddr 0, Remainder)] `shouldBe` Right [(otherAddr 0, 76600)]
 
@@ -151,7 +166,7 @@ buildSpec ctx =
 
     it "is refused a fee rate of zero" $
       buildSendAll btc ctx (mkStdGen 0) (found (twoCoins ctx) []) [(otherAddr 0, Remainder)] 0 546 800002
-        `shouldBe` Left "The fee rate must be at least 1 satoshi per byte"
+        `shouldBe` Left "The fee rate must be at least 1 satoshi per virtual byte"
 
 {- The report on dust coins -}
 
@@ -176,19 +191,19 @@ reportSpec ctx =
     -- In bitcoins, the unit by default: 1480 satoshis are 0.00001480 btc
     it "lists the dust coins, the largest first, each with its value and the rates it is worth spending at, then what spending and leaving them does" $
       renderedLines (dustReportDoc UnitBitcoin Map.empty (threeDustReport ctx False))
-        `shouldBe` [ "3 coins cost more to spend than they are worth at 10 sat/byte, 0.00001480 btc each:",
+        `shouldBe` [ "3 coins cost more to spend than they are worth at 10 sat/vB, 0.00001480 btc each:",
                      "",
-                     "    0.00001200 btc  worth spending at 8 sat/byte or less",
+                     "    0.00001200 btc  worth spending at 8 sat/vB or less",
                      "  0000000000000000000000000000000000000000000000000000000000000002:0",
                      "",
-                     "    0.00000900 btc  worth spending at 6 sat/byte or less",
+                     "    0.00000900 btc  worth spending at 6 sat/vB or less",
                      "  0000000000000000000000000000000000000000000000000000000000000002:1",
                      "",
-                     "    0.00000546 btc  worth spending at 3 sat/byte or less",
+                     "    0.00000546 btc  worth spending at 3 sat/vB or less",
                      "  0000000000000000000000000000000000000000000000000000000000000002:2",
                      "",
                      "Spending them adds 0.00004440 btc of fee for 0.00002646 btc of coins. What remains for the addresses without an amount is 0.00074806 btc instead of 0.00076600 btc, 0.00001794 btc less, and the account is empty.",
-                     "Leaving them, the account keeps 0.00002646 btc. Once the other coins are gone, they can only be spent together, at 4 sat/byte or less."
+                     "Leaving them, the account keeps 0.00002646 btc. Once the other coins are gone, they can only be spent together, at 4 sat/vB or less."
                    ]
 
     -- In satoshis, as --unit sat asks
@@ -204,8 +219,8 @@ reportSpec ctx =
     it "tells of one dust coin in the singular" $ do
       let report = oneDustReport ctx 1200
           shown = renderedLines (dustReportDoc UnitSatoshi Map.empty report)
-      (shown !! 0) `shouldBe` "1 coin costs more to spend than it is worth at 10 sat/byte, 1480 sats:"
-      (shown !! 6) `shouldBe` "Leaving it, the account keeps 1200 sats. Once the other coins are gone, it can only be spent at 3 sat/byte or less."
+      (shown !! 0) `shouldBe` "1 coin costs more to spend than it is worth at 10 sat/vB, 1480 sats:"
+      (shown !! 6) `shouldBe` "Leaving it, the account keeps 1200 sats. Once the other coins are gone, it can only be spent at 3 sat/vB or less."
       dustQuestion report `shouldBe` "Spend it too?"
 
     -- At 1 satoshi a byte, the 192 bytes leave 600 - 192 = 408

@@ -14,6 +14,7 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Amounts (AmountUnit (..))
 import Haskoin.Wallet.Cli.PrettyPrinter (reducedDoc)
+import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.BumpFee
 import Haskoin.Wallet.Database.TxInfo (MyInputs (..), TxSummary (..), TxType (..))
@@ -105,10 +106,10 @@ feeSpec ctx =
     it "pays the fees of the transactions it replaces, and its own size at 1 satoshi a byte" $ do
       checkBumpFee (plan 2260) (paid 2486 226) `shouldBe` Right ()
       checkBumpFee (plan 2260) (paid 2485 226)
-        `shouldBe` Left "The replacement pays 2485 satoshis of fee, and must pay 2486: the fees of the transactions it replaces, and its own 226 bytes. Give a --fee-rate of at least 11"
+        `shouldBe` Left "The replacement pays 2485 satoshis of fee, and must pay 2486: the fees of the transactions it replaces, and its own 226 virtual bytes. Give a --fee-rate of at least 11"
   where
     plan :: Natural -> BumpPlan
-    plan fees = BumpPlan [] [] Map.empty [] Map.empty Nothing fees [] ""
+    plan fees = BumpPlan Bip44 [] [] Map.empty [] Map.empty Nothing fees [] ""
     paid fee size = stuckSummary {summaryFee = fee, summarySize = size}
 
 {- What pays the fee the change cannot -}
@@ -125,7 +126,8 @@ coinAt ctx w i = storeCoin ctx (fakeTxHash w, 0) (Just 800000) (externalAddr i)
 sendAllPlan :: Ctx -> BumpPlan
 sendAllPlan ctx =
   BumpPlan
-    { planCoins = [coinAt ctx 1 0 50000],
+    { planKind = Bip44,
+      planCoins = [coinAt ctx 1 0 50000],
       planParents = [],
       planCoinPaths = Map.fromList [(externalAddr 0, Deriv :/ 0 :/ 0)],
       planRecipients = [(otherAddr 0, 30000), (otherAddr 1, 10000), (otherAddr 2, 7400)],
@@ -249,7 +251,7 @@ fundingSpec ctx =
 
     it "is refused when neither the coins nor the recipients can pay, telling both" $
       fundings ctx gen (oneRecipientPlan ctx) [] 300 546
-        `shouldBe` Left "The coins of the transaction cannot pay its fee at 300 sat/byte, and no confirmed coins of the account would. The recipient cannot pay the 55680 satoshis missing without being left with less than the dust limit of 546 satoshis"
+        `shouldBe` Left "The coins of the transaction cannot pay its fee at 300 sat/vB, and no confirmed coins of the account would. The recipient cannot pay the 55680 satoshis missing without being left with less than the dust limit of 546 satoshis"
   where
     -- The coins to add are taken the largest first: nothing is drawn
     gen = mkStdGen 0
@@ -262,7 +264,7 @@ reducedDocSpec =
     -- In satoshis, as --unit sat asks
     it "numbers the recipients, each with what it receives, then what it would receive paying alone and paying its share when all can" $ do
       renderedLines (reducedDoc btc UnitSatoshi 11 waysAt11)
-        `shouldBe` [ "The coins of the transaction cannot pay its fee at 11 sat/byte, and no coin of the account is added. The 260 sats missing can come out of what the recipients receive, one of them paying it alone, or all of them in equal shares:",
+        `shouldBe` [ "The coins of the transaction cannot pay its fee at 11 sat/vB, and no coin of the account is added. The 260 sats missing can come out of what the recipients receive, one of them paying it alone, or all of them in equal shares:",
                      "",
                      "  1  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  30000 sats",
                      "     29740 sats paying it alone, 29912 sats paying its share",
@@ -277,7 +279,7 @@ reducedDocSpec =
 
     it "tells which recipients cannot pay alone, and offers no share when all cannot" $ do
       renderedLines (reducedDoc btc UnitSatoshi 100 waysAt100)
-        `shouldBe` [ "The coins of the transaction cannot pay its fee at 100 sat/byte, and no coin of the account is added. The 23400 sats missing can come out of what the recipients receive, one of them paying it alone:",
+        `shouldBe` [ "The coins of the transaction cannot pay its fee at 100 sat/vB, and no coin of the account is added. The 23400 sats missing can come out of what the recipients receive, one of them paying it alone:",
                      "",
                      "  1  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  30000 sats",
                      "     6600 sats paying it alone",
@@ -293,7 +295,7 @@ reducedDocSpec =
     -- In bitcoins, the unit by default: 1920 satoshis are 0.00001920 btc
     it "tells a lone recipient what it would receive, and asks yes or no" $ do
       renderedLines (reducedDoc btc UnitBitcoin 20 [loneWayAt20])
-        `shouldBe` [ "The coins of the transaction cannot pay its fee at 20 sat/byte, and no coin of the account is added. The recipient can pay the 0.00001920 btc missing out of what it receives:",
+        `shouldBe` [ "The coins of the transaction cannot pay its fee at 20 sat/vB, and no coin of the account is added. The recipient can pay the 0.00001920 btc missing out of what it receives:",
                      "",
                      "  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00048080 btc",
                      "    0.00046160 btc paying it"

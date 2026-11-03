@@ -31,8 +31,8 @@
           "type": "debit",
           "amount": 0,
           "fee": 11000,
-          "size": 250,
-          "feeByte": 44
+          "size": 168,
+          "feeByte": 65
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx_segwit.py::test_send_p2sh",
@@ -69,8 +69,8 @@
           "type": "debit",
           "amount": 0,
           "fee": 10000,
-          "size": 223,
-          "feeByte": 44
+          "size": 142,
+          "feeByte": 70
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx_segwit_native.py::test_send_native",

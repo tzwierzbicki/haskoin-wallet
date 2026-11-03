@@ -189,7 +189,7 @@ pendingCursor accIdM named = do
 -- against the account's key, with its labels as the wallet has them
 txInfoOf :: (MonadUnliftIO m) => Ctx -> (DBAccountId, DBAccount) -> TxSignData -> ExceptT String (DB m) TxInfo
 txInfoOf ctx (accId, acc) tsd = do
-  info <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountXPubKey ctx acc) tsd
+  info <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountKind acc) (accountXPubKey ctx acc) tsd
   lift $ fillTxInfoLabels (accountNetwork acc) accId info
 
 -- | The summary of a pending transaction: the transaction as the wallet
@@ -329,7 +329,7 @@ importPendingTx net ctx accId tsd = do
     when (held.pendingTxAccount /= accId) $
       throwError "The transaction is pending in another account"
   let imported = maybe tsd (`heldVersion` tsd) heldM
-  info <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountXPubKey ctx acc) imported
+  info <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountKind acc) (accountXPubKey ctx acc) imported
   when (isSigned tx) $ do
     liftEither $ verifySignedTx net ctx imported
     -- The signer names the seed of the account, which this wallet may not know
@@ -443,7 +443,7 @@ replacedBy ctx accId tsd = do
   found <- forM tsd.txSignDataReplaces $ \tid ->
     case [p | p <- held, txHash (txSignDataTx p.pendingTxData) == tid] of
       p : _ -> do
-        info <- liftEither $ parseTxSignData net ctx (accountXPubKey ctx acc) p.pendingTxData
+        info <- liftEither $ parseTxSignData net ctx (accountKind acc) (accountXPubKey ctx acc) p.pendingTxData
         return $ Just (info.txInfoSummary, Just p)
       [] -> do
         live <- liveSummary net accId tid
@@ -472,7 +472,7 @@ replacedBy ctx accId tsd = do
 removePendingTx :: (MonadUnliftIO m) => Ctx -> PendingTx -> ExceptT String (DB m) (Natural, Natural)
 removePendingTx ctx held = do
   acc <- getAccountById held.pendingTxAccount
-  txInfo <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountXPubKey ctx acc) held.pendingTxData
+  txInfo <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountKind acc) (accountXPubKey ctx acc) held.pendingTxData
   let touched = touchedBy txInfo.txInfoSummary
       spent = (.outpoint) <$> (txSignDataTx held.pendingTxData).inputs
   heldCoins <- lift $ filterM (coinExists (accountNetwork acc)) spent
@@ -612,7 +612,7 @@ transactionAccount ctx nameM netM tsd = do
     onTxNetwork acc = maybe True (== accountNetwork acc) netM
     involves acc completedTsd =
       either (const False) (involvesWallet . txInfoSummary) $
-        parseTxSignData (accountNetwork acc) ctx (accountXPubKey ctx acc) completedTsd
+        parseTxSignData (accountNetwork acc) ctx (accountKind acc) (accountXPubKey ctx acc) completedTsd
     notInvolved :: Text -> String
     notInvolved name = "The transaction does not involve the account " <> cs name
 

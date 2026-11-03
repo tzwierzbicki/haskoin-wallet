@@ -323,6 +323,22 @@ foreignFileSpec ctx =
         pendingState signed `shouldBe` Just (True, False)
         (Base64.encode <$> BS.readFile (home </> "signed.psbt")) `shouldReturn` corePreparedSignedV2Text
 
+    -- Core prepared 1 BTC from the coin of 50 BTC of /0/0 of the bip84
+    -- account to another wallet, with the change at /1/0 and a fee of
+    -- 1440: 10 satoshis a virtual byte for 144. The signed file is the one
+    -- Core accepts, pinned in TestUtils.
+    it "prepared by Bitcoin Core for a bip84 account is shown and signed into that file, the signature in the witness" $
+      withHome $ \home -> do
+        _ <- answer home ["createacc", "spending", "--type", "bip84"] seedTwice
+        prepared <- coreFile home "core-prepared-segwit.psbt"
+        shown <- txOf =<< answer home ["reviewtx", prepared] []
+        paidToOthers shown `shouldBe` Map.fromList [(testAddress "157L9V7wdL7pYt2nndN5NN5DMynh1HdYhF", 100000000)]
+        paidToWallet shown `shouldBe` Map.fromList [(segwitInternalAddr 0, 4899998560)]
+        (feeOf shown, summarySize (txInfoSummary shown)) `shouldBe` (1440, 144)
+        signed <- txOf =<< answer home ["signtx", "--input", prepared, "--output", home </> "signed.psbt"] seedOnce
+        pendingState signed `shouldBe` Just (True, False)
+        (Base64.encode <$> BS.readFile (home </> "signed.psbt")) `shouldReturn` coreSegwitPreparedSignedText
+
     -- Core prepared 2.5 BTC of a wallet of its own to another address of
     -- that wallet, with a fee of 2250
     it "prepared by Bitcoin Core for another wallet is shown on the --network given, or on the default network, and refused without one" $

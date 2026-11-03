@@ -67,13 +67,14 @@ import qualified Database.Persist as P
 import Data.Word (Word32)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Database.Account (accountNetwork, accountXPubKey, getAccounts)
+import Haskoin.Wallet.Database.Account (accountKind, accountNetwork, accountXPubKey, getAccounts)
 import Haskoin.Wallet.Database.Address (fromDBAddr, isIntPath, walletPaths)
 import Haskoin.Wallet.Database.Coin (coinText)
 import Haskoin.Wallet.Tx.CoinSelection (CoinSelection (..), FeePayer (..), Selection (..))
 import Haskoin.Wallet.Config (Config)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.PendingTx (PendingTx (..), changeAddress, lookupPendingTx, pendingTxs, signedWithId)
+import Haskoin.Wallet.Keys (AccountKind)
 import Haskoin.Wallet.Database.RawTx (getRawTx, lookupRawTx)
 import Haskoin.Wallet.Store (Store, fromStore, rawTransactions)
 import Haskoin.Wallet.Tx.Building (BuiltTx (..), ChosenPayment (..), CoinControl (..), WalletCoins (..), assemblePayment, choosePayment, recipientsPayFee)
@@ -164,7 +165,7 @@ stuckTransaction ctx store accId acc tid = do
 -- label of its signing data
 pendingSent :: (MonadUnliftIO m) => Ctx -> DBAccount -> PendingTx -> ExceptT String (DB m) Sent
 pendingSent ctx acc p = do
-  info <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountXPubKey ctx acc) p.pendingTxData
+  info <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountKind acc) (accountXPubKey ctx acc) p.pendingTxData
   return $ Sent (txSignDataTx p.pendingTxData) info.txInfoSummary p.pendingTxData.txSignDataInputs p.pendingTxData.txSignDataLabel
 
 -- | A transaction of the account's history, as bumpfee replaces it, with
@@ -208,8 +209,8 @@ marksReplaceable transaction = any ((< 0xfffffffe) . (.sequence)) transaction.in
 notOwnPayment :: String
 notOwnPayment = "Only a payment from the coins of the account can be replaced: this transaction spends coins of another wallet"
 
--- | The lowest fee rate, in satoshis per byte, of a replacement of the
--- transaction: above the rate it pays
+-- | The lowest fee rate, in satoshis per virtual byte, of a replacement of
+-- the transaction: above the rate it pays
 minimumRate :: Sent -> Natural
 minimumRate s = s.sentSummary.summaryFee `div` s.sentSummary.summarySize + 1
 
@@ -277,7 +278,9 @@ refuseSpentElsewhere net accId sents = do
 -- what they pay, but their change and what one of them pays another; the
 -- address of their change, if any; the fees they paid; and their labels.
 data BumpPlan = BumpPlan
-  { planCoins :: ![Store.Unspent],
+  { -- | The kind of the account, which sizes its inputs and its change
+    planKind :: !AccountKind,
+    planCoins :: ![Store.Unspent],
     planParents :: ![Tx],
     planCoinPaths :: !(Map Address SoftPath),
     planRecipients :: ![(Address, Natural)],
@@ -294,8 +297,8 @@ data BumpPlan = BumpPlan
 -- transaction is what it pays the wallet on the change chain, or back to
 -- an address it spends from, as --change-back does. What it pays another
 -- address of the wallet is a payment, which the replacement keeps.
-bumpPlan :: (MonadUnliftIO m) => Network -> Ctx -> DBAccountId -> [Sent] -> ExceptT String (DB m) BumpPlan
-bumpPlan net ctx accId sents = do
+bumpPlan :: (MonadUnliftIO m) => Network -> Ctx -> DBAccountId -> AccountKind -> [Sent] -> ExceptT String (DB m) BumpPlan
+bumpPlan net ctx accId kind sents = do
   let replaced = Set.fromList (sentId <$> sents)
       parents = Map.fromList [(txHash parent, parent) | s <- sents, parent <- s.sentParents]
       spent = [input.outpoint | s <- sents, input <- s.sentTx.inputs]
@@ -320,7 +323,8 @@ bumpPlan net ctx accId sents = do
         _ -> Nothing
   return
     BumpPlan
-      { planCoins = planned,
+      { planKind = kind,
+        planCoins = planned,
         planParents = nubOrd [parent | coin <- planned, Just parent <- [Map.lookup coin.outpoint.hash parents]],
         planCoinPaths = plannedPaths,
         planRecipients = [(addr, value) | (s, addr, value) <- paid, isNothing (changeOf s addr)],
@@ -361,7 +365,8 @@ coinOf ctx net accId outpoint parent = do
 walletCoinsOf :: BumpPlan -> [(Store.Unspent, Address, SoftPath)] -> WalletCoins
 walletCoinsOf plan added =
   WalletCoins
-    { coins = plan.planCoins <> [coin | (coin, _, _) <- added],
+    { ownKind = plan.planKind,
+      coins = plan.planCoins <> [coin | (coin, _, _) <- added],
       coinPaths = plan.planCoinPaths <> Map.fromList [(addr, path) | (_, addr, path) <- added],
       recipientPaths = plan.planRecipientPaths
     }
@@ -429,7 +434,7 @@ reductions ctx plan feeByte dust = do
     amount = sum (snd <$> recipients)
     -- The replacement spends the coins in full, with no change: its fee is
     -- that of a send-all
-    fee = sendAllFee ctx feeByte plan.planCoins (fst <$> recipients)
+    fee = sendAllFee ctx plan.planKind feeByte plan.planCoins (fst <$> recipients)
     -- What each recipient gets paying the missing amount one way, when none
     -- is left below the dust limit
     reductionBy missing paidBy = do
@@ -475,7 +480,7 @@ fundings ctx gen plan candidates feeByte dust =
     (Nothing, Right reduced) -> Right (RecipientsReduced <$> reduced)
     (Nothing, Left cannot) -> Left (noCoins <> ". " <> cannot)
   where
-    noCoins = "The coins of the transaction cannot pay its fee at " <> show feeByte <> " sat/byte, and no confirmed coins of the account would"
+    noCoins = "The coins of the transaction cannot pay its fee at " <> show feeByte <> " sat/vB, and no confirmed coins of the account would"
 
 -- | The signing data of the replacement at the fee rate, from the coins of
 -- the plan and its funding, with the transactions those come from. Its
@@ -490,7 +495,7 @@ buildBump ::
   StdGen ->
   BumpPlan ->
   Funding ->
-  -- | Fee per byte
+  -- | Fee per virtual byte
   Natural ->
   -- | Dust
   Natural ->
@@ -517,9 +522,10 @@ buildBump ctx cfg net accId gen plan funding feeByte dust lockTime = do
     reducedPlan :: Reduction -> BumpPlan
     reducedPlan reduction = plan {planRecipients = [(addr, after) | (addr, _, after) <- reduction.reductionRecipients]}
 
--- | The satoshis per byte a replacement pays for its own size, beyond the
--- fees of what it replaces, for the network to relay it: the incremental
--- relay fee of Bitcoin Core, which recent versions lowered to 0.1
+-- | The satoshis per virtual byte a replacement pays for its own size,
+-- beyond the fees of what it replaces, for the network to relay it: the
+-- incremental relay fee of Bitcoin Core, which recent versions lowered to
+-- 0.1
 incrementalRate :: Natural
 incrementalRate = 1
 
@@ -535,7 +541,7 @@ checkBumpFee plan summary =
         <> show needed
         <> ": the fees of the transactions it replaces, and its own "
         <> show summary.summarySize
-        <> " bytes. Give a --fee-rate of at least "
+        <> " virtual bytes. Give a --fee-rate of at least "
         <> show ((needed + summary.summarySize - 1) `div` summary.summarySize)
   where
     needed = plan.planFees + incrementalRate * summary.summarySize

@@ -63,7 +63,7 @@ spec = prepareContext $ \ctx -> do
 -- | The key of an account of a seed on a network, by index, which the
 -- indices of these tests all have
 keyOf :: PublicSeed -> Network -> Natural -> IO XPubKey
-keyOf seed net index = maybe (fail "The child key at this index is invalid") return =<< seedAccountKey seed net index
+keyOf seed net index = maybe (fail "The child key at this index is invalid") return =<< seedAccountKey seed Bip44 net index
 
 -- | The key of account 1 of the test seed on Bitcoin, m/44'/0'/1'
 savingsXPub :: Text
@@ -74,11 +74,11 @@ savingsXPub = "xpub6CHK45s4QJWpt9C5kpAnypsE5ratNMWRGE3pZNQgGnxHTvZ1y6E65mSKMmz7V
 watchOnly :: Ctx -> Network -> Natural -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
 watchOnly ctx net index name = do
   key <- liftIO $ keyOf (testSeed ctx) net index
-  insertAccount net ctx name key Nothing
+  insertAccount Bip44 net ctx name key Nothing
 
--- | The index of the next account of a seed on a network
+-- | The index of the next BIP44 account of a seed on a network
 nextIndex :: Ctx -> Network -> PublicSeed -> DB IO Natural
-nextIndex ctx net seed = fst <$> nextAccount net ctx seed
+nextIndex ctx net seed = fst <$> nextAccount Bip44 net ctx seed
 
 -- | The names of the accounts as hw lists them, with their fingerprints
 listed :: DB IO [(Text, Maybe Text)]
@@ -125,6 +125,24 @@ creatingSpec ctx =
           dBAccountIndex savings `shouldBe` 1
           pathToStr (accountPath savings) `shouldBe` "/44'/0'/1'"
           dBAccountXPubKey savings `shouldBe` savingsXPub
+
+    it "stores the first bip84 account of a seed at index 0, under its BIP84 path, counted apart from its bip44 accounts" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        (_, acc) <- testNewSegwitAcc ctx "spending"
+        liftIO $ do
+          dBAccountIndex acc `shouldBe` 0
+          dBAccountPurpose acc `shouldBe` 84
+          accountKind acc `shouldBe` Bip84
+          pathToStr (accountPath acc) `shouldBe` "/84'/0'/0'"
+          dBAccountXPubKey acc `shouldBe` testSegwitAccountXPub
+          dBAccountFingerprint acc `shouldBe` Just "bc560f95"
+        lift $ nextIndex ctx btc (testSeed ctx) `dbShouldBe` 1
+        lift $ (fst <$> nextAccount Bip84 btc ctx (testSeed ctx)) `dbShouldBe` 1
+
+    it "refuses a bip84 account on Bitcoin Cash, which has no SegWit" $
+      inDatabaseE $ lift $
+        dbShouldFailWith "A bip84 account needs SegWit, which bch does not have" $ newAccountOfKind Bip84 ctx testMnemonic bch "cash"
 
     it "counts the accounts of a seed by their keys: another seed's, or another network's, do not count" $
       inDatabaseE $ do
@@ -176,10 +194,10 @@ creatingSpec ctx =
         -- Bitcoin testnet, Bitcoin Cash testnet and the regtests all use coin
         -- type 1: account 0 has the same key on each of them
         let key net = fromJust $ xPubImport net ctx testAccountXPubTest
-        _ <- insertAccount btcTest ctx "testnet" (key btcTest) Nothing
+        _ <- insertAccount Bip44 btcTest ctx "testnet" (key btcTest) Nothing
         lift $
           dbShouldFailWith "Account testnet on btctest already has this key: the test networks share their account keys, so a wallet holds one of them per account index" $
-            insertAccount bchTest ctx "cash testnet" (key bchTest) Nothing
+            insertAccount Bip44 bchTest ctx "cash testnet" (key bchTest) Nothing
 
 {- Naming -}
 
@@ -320,9 +338,16 @@ fingerprintSpec ctx =
         _ <- watchOnly ctx btc 1 "savings"
         _ <- watchOnly ctx bch 0 "cash"
         otherKey <- liftIO $ keyOf (testSeed2 ctx) btc 0
-        _ <- insertAccount btc ctx "other" otherKey Nothing
+        _ <- insertAccount Bip44 btc ctx "other" otherKey Nothing
         lift $ recordFingerprint ctx (testSeed ctx)
         lift $ listed `dbShouldBe` [("cash", Just "bc560f95"), ("main", Just "bc560f95"), ("savings", Just "bc560f95"), ("other", Nothing)]
+
+    it "is recorded on a bip84 account of the seed, whose key the seed derives along its own path" $
+      inDatabaseE $ do
+        key <- liftIO $ maybe (fail "The child key is invalid") return =<< seedAccountKey (testSeed ctx) Bip84 btc 0
+        _ <- insertAccount Bip84 btc ctx "spending" key Nothing
+        lift $ recordFingerprint ctx (testSeed ctx)
+        lift $ listed `dbShouldBe` [("spending", Just "bc560f95")]
 
     it "is not recorded on an account at an index the seed cannot derive" $
       inDatabaseE $ do
@@ -449,7 +474,7 @@ balanceSpec ctx =
 documentSpec :: Ctx -> Spec
 documentSpec ctx =
   describe "The account file, from an offline wallet to an online one" $ do
-    it "is written as the record of the key, with the name, the origin of the seed and the network" $
+    it "is written as the record of the key, with the name, the origin of the seed, the network and the purpose" $
       inScratchDirectory $ \dir -> do
         offline <- walletInFile (dir </> "offline.sqlite") (testNewAcc ctx "main")
         let file = dir </> "main.jsonl"
@@ -460,30 +485,30 @@ documentSpec ctx =
       inScratchDirectory $ \dir -> do
         online <- walletInFile (dir </> "online.sqlite") (return ())
         writeFile (dir </> "main.jsonl") (mainRecord <> "\n")
-        response <- cmdImportAcc ctx online Nothing (dir </> "main.jsonl")
+        response <- cmdImportAcc ctx online Nothing Nothing (dir </> "main.jsonl")
         imported response `shouldBe` Right ("main", "btc", testAccountXPub, Just "bc560f95")
 
     it "records the fingerprint of an account the online wallet has already, and the same file again changes nothing" $
       inScratchDirectory $ \dir -> do
         online <- walletInFile (dir </> "online.sqlite") (watchOnly ctx btc 0 "main")
         writeFile (dir </> "main.jsonl") (mainRecord <> "\n")
-        response <- cmdImportAcc ctx online Nothing (dir </> "main.jsonl")
+        response <- cmdImportAcc ctx online Nothing Nothing (dir </> "main.jsonl")
         imported response `shouldBe` Right ("main", "btc", testAccountXPub, Just "bc560f95")
-        again <- cmdImportAcc ctx online Nothing (dir </> "main.jsonl")
+        again <- cmdImportAcc ctx online Nothing Nothing (dir </> "main.jsonl")
         imported again `shouldBe` Right ("main", "btc", testAccountXPub, Just "bc560f95")
 
     it "reads the document of an earlier hw, with the fingerprint of the seed" $
       inScratchDirectory $ \dir -> do
         online <- walletInFile (dir </> "online.sqlite") (return ())
         writeFile (dir </> "main.json") mainDocument
-        response <- cmdImportAcc ctx online Nothing (dir </> "main.json")
+        response <- cmdImportAcc ctx online Nothing Nothing (dir </> "main.json")
         imported response `shouldBe` Right ("main", "btc", testAccountXPub, Just "bc560f95")
 
     it "reads a document of an earlier hw, which named a wallet instead of the seed" $
       inScratchDirectory $ \dir -> do
         online <- walletInFile (dir </> "online.sqlite") (return ())
         writeFile (dir </> "old.json") oldDocument
-        response <- cmdImportAcc ctx online Nothing (dir </> "old.json")
+        response <- cmdImportAcc ctx online Nothing Nothing (dir </> "old.json")
         imported response `shouldBe` Right ("main", "btc", testAccountXPub, Nothing)
 
 -- | What accounts answered: each account by its name, with the balance it
@@ -516,7 +541,7 @@ imported other = Left (show other)
 -- | The record of the key of the account main of the test seed, as
 -- exportacc writes it
 mainRecord :: String
-mainRecord = "{\"type\":\"xpub\",\"ref\":\"xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah\",\"label\":\"main\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\"}"
+mainRecord = "{\"type\":\"xpub\",\"ref\":\"xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah\",\"label\":\"main\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\",\"purpose\":44}"
 
 -- | The document of the account main of the test seed, as exportacc wrote
 -- it before hw took the format of BIP 329
@@ -557,16 +582,49 @@ jsonSpec =
       eitherDecode (cs unknownSeedJson) `shouldBe` Right (toJSON unknown)
       eitherDecode (cs unknownSeedJson) `shouldBe` Right unknown
 
+    it "prints a bip84 account with its type and its path, and reads it back" $ do
+      let segwit = fixtureAccount {dBAccountPurpose = 84, dBAccountXPubKey = testSegwitAccountXPub}
+      eitherDecode (cs segwitJson) `shouldBe` Right (toJSON segwit)
+      eitherDecode (cs segwitJson) `shouldBe` Right segwit
+
+    it "reads an account printed before hw had kinds, without a type, as a bip44 one" $
+      eitherDecode (cs untypedJson) `shouldBe` Right fixtureAccount
+
+-- | The bip84 account of the test wallet, with the balances of the
+-- fixture above
+segwitJson :: String
+segwitJson =
+  "{\"name\": \"main\", \"index\": 0, \"type\": \"bip84\", \"network\": \"btc\", \"derivation\": \"/84'/0'/0'\", \"external\": 2, \"internal\": 1, \"xPubKey\": \""
+    <> cs testSegwitAccountXPub
+    <> "\", \"fingerprint\": \"bc560f95\", \"balance\": {\"confirmed\": 5000, \"unconfirmed\": 300, \"coins\": 2}, \"created\": \"2023-11-01T00:00:00Z\"}"
+
+-- | The account of 'accountJson' as an hw without kinds printed it
+untypedJson :: String
+untypedJson =
+  [r|{
+  "name": "main",
+  "index": 0,
+  "network": "btc",
+  "derivation": "/44'/0'/0'",
+  "external": 2,
+  "internal": 1,
+  "xPubKey": "xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah",
+  "fingerprint": "bc560f95",
+  "balance": {"confirmed": 5000, "unconfirmed": 300, "coins": 2},
+  "created": "2023-11-01T00:00:00Z"
+}|]
+
 -- | The account main after two receiving and one change address, holding
 -- 5000 confirmed and 300 unconfirmed in two coins
 fixtureAccount :: DBAccount
-fixtureAccount = DBAccount "main" 0 "btc" 2 1 testAccountXPub (Just "bc560f95") 5000 300 2 fixtureTime
+fixtureAccount = DBAccount "main" 0 44 "btc" 2 1 testAccountXPub (Just "bc560f95") 5000 300 2 fixtureTime
 
 accountJson :: String
 accountJson =
   [r|{
   "name": "main",
   "index": 0,
+  "type": "bip44",
   "network": "btc",
   "derivation": "/44'/0'/0'",
   "external": 2,
@@ -583,6 +641,7 @@ spendableJson =
   [r|{
   "name": "main",
   "index": 0,
+  "type": "bip44",
   "network": "btc",
   "derivation": "/44'/0'/0'",
   "external": 2,
@@ -599,6 +658,7 @@ unknownSeedJson =
   [r|{
   "name": "main",
   "index": 0,
+  "type": "bip44",
   "network": "btc",
   "derivation": "/44'/0'/0'",
   "external": 2,

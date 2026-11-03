@@ -84,11 +84,14 @@ def message_hash(message: bytes) -> bytes:
 
 def recover_pubkey(signature: bytes, message: bytes):
     """Recover the public key from a 65-byte signature.
-    Returns (point, compressed), or None if no public key can be recovered."""
-    if len(signature) != 65 or not 27 <= signature[0] <= 34:
+    Returns (point, compressed), or None if no public key can be recovered.
+    The header bytes 27 to 30 are the recovery ids of an uncompressed key,
+    31 to 34 those of a compressed one, and 35 to 42 those of a compressed
+    one again, as BIP-137 marks the SegWit addresses."""
+    if len(signature) != 65 or not 27 <= signature[0] <= 42:
         return None
     flags = signature[0] - 27
-    recid, compressed = flags & 3, bool(flags & 4)
+    recid, compressed = flags & 3, flags >= 4
     r = int.from_bytes(signature[1:33], "big")
     s = int.from_bytes(signature[33:], "big")
     if not (0 < r < N and 0 < s < N):
@@ -187,6 +190,54 @@ def bech32_encode(hrp, witness_version, program):
     mod = polymod(expanded + data + [0] * 6) ^ 1
     checksum = [(mod >> 5 * (5 - i)) & 31 for i in range(6)]
     return hrp + "1" + "".join(BECH32_CHARSET[d] for d in data + checksum)
+
+
+def bech32_decode(address):
+    """Decode a SegWit v0 address (BIP-173): (hrp, witness version, program)"""
+    hrp, _, data_part = address.lower().rpartition("1")
+    data = [BECH32_CHARSET.index(c) for c in data_part]
+    generator = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]
+
+    def polymod(values):
+        checksum = 1
+        for value in values:
+            top = checksum >> 25
+            checksum = (checksum & 0x1ffffff) << 5 ^ value
+            for i in range(5):
+                checksum ^= generator[i] if (top >> i) & 1 else 0
+        return checksum
+
+    expanded = [ord(x) >> 5 for x in hrp] + [0] + [ord(x) & 31 for x in hrp]
+    if polymod(expanded + data) != 1:
+        raise ValueError("Not a bech32 address")
+    version, program = data[0], bytes(_convert_bits(data[1:-6], 5, 8, pad=False))
+    if version != 0 or len(program) not in (20, 32):
+        raise ValueError("Not a SegWit v0 address")
+    return hrp, version, program
+
+
+def signing_address_hash(address):
+    """The hash of the key of an address a message can be signed from, with
+    the kind of address: ("p2pkh", hash160 of the key), ("p2wpkh", hash160 of
+    the key) or ("p2sh", hash160 of the P2WPKH script of the key)"""
+    try:
+        hrp, _, program = bech32_decode(address)
+    except ValueError:
+        pass
+    else:
+        if len(program) != 20:
+            raise ValueError("Not a P2WPKH address")
+        return "p2wpkh", program
+    if ":" in address:
+        return "p2pkh", p2pkh_hash(address)
+    raw = base58check_decode(address)
+    if len(raw) != 21:
+        raise ValueError("Not an address of a key")
+    if raw[0] in (0x00, 0x6f):
+        return "p2pkh", raw[1:]
+    if raw[0] in (0x05, 0xc4):
+        return "p2sh", raw[1:]
+    raise ValueError("Not an address of a key")
 
 
 def p2pkh_hash(address):

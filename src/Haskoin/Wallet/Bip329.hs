@@ -21,11 +21,13 @@
 -- @spendable@, the @keypath@ of an address or a coin, and the @height@,
 -- @fee@ and @value@ of a transaction or a coin, which the BIP lists among
 -- its additional fields. The other additional fields, @time@, @rate@,
--- @fmv@ and @heights@, are left aside as the BIP allows. hw adds one key of
--- its own to an @xpub@ record, @network@, since an extended public key alone
--- does not tell Bitcoin from Bitcoin Cash, nor one test network from
--- another. The BIP defines no such key; the importers checked leave a key
--- they do not know aside.
+-- @fmv@ and @heights@, are left aside as the BIP allows. hw adds two keys
+-- of its own to an @xpub@ record: @network@, since an extended public key
+-- alone does not tell Bitcoin from Bitcoin Cash, nor one test network from
+-- another, and @purpose@, the first step of the path of the account, 44 or
+-- 84, since the key alone does not tell a BIP44 account from a BIP84 one
+-- either when the record carries no origin. The BIP defines no such keys;
+-- the importers checked leave a key they do not know aside.
 module Haskoin.Wallet.Bip329
   ( -- * Records
     Record (..),
@@ -125,7 +127,10 @@ data Record = Record
     recordValue :: !(Maybe Integer),
     -- | The network of an extended public key, as hw names it: hw's own
     -- key, on xpub records
-    recordNetwork :: !(Maybe Text)
+    recordNetwork :: !(Maybe Text),
+    -- | The purpose of the account of an extended public key, 44 or 84:
+    -- hw's own key, on xpub records
+    recordPurpose :: !(Maybe Natural)
   }
   deriving (Eq, Show)
 
@@ -142,7 +147,8 @@ record kind ref =
       recordHeight = Nothing,
       recordFee = Nothing,
       recordValue = Nothing,
-      recordNetwork = Nothing
+      recordNetwork = Nothing,
+      recordPurpose = Nothing
     }
 
 {- The lines of a file -}
@@ -194,6 +200,7 @@ lineParser = Json.withObject "record" $ \o -> do
           <*> o .:? "fee"
           <*> o .:? "value"
           <*> o .:? "network"
+          <*> o .:? "purpose"
       return (LineRecord fields)
 
 spendableParser :: Json.Value -> Parser Bool
@@ -214,6 +221,7 @@ recordLine r =
       given "label" (recordLabel r),
       given "origin" (recordOrigin r),
       given "network" (recordNetwork r),
+      given "purpose" (recordPurpose r),
       given "spendable" (recordSpendable r),
       given "keypath" (recordKeypath r),
       given "height" (recordHeight r),

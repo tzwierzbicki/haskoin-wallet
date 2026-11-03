@@ -203,7 +203,7 @@ sweepSpec ctx =
         _ <- answer home ["receive"] []
         keys <- writeKeyFile home
         (errorOf <$> hwJson home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "18446744073709551616"] [])
-          `shouldReturn` Right "The fee rate must be at most 4294967295 satoshis per byte"
+          `shouldReturn` Right "The fee rate must be at most 4294967295 satoshis per virtual byte"
 
     -- The wallet has two accounts of the test seed, and the sweep is
     -- pending in main

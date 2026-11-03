@@ -43,35 +43,39 @@ import Data.Ord (Down (..))
 import Data.Word (Word32)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.Database.Account (accountKind, getAccountById)
 import Haskoin.Wallet.Database.Address (walletPaths)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.RawTx (getRawTx)
+import Haskoin.Wallet.Keys (AccountKind)
 import Haskoin.Wallet.Tx.LockTime (withHeader)
 import Haskoin.Wallet.Tx.Recipient (Share (..), shareAmounts)
 import Haskoin.Wallet.Tx.Building (BuiltTx (..), coinWithPath, recipientOutputSize)
 import Haskoin.Wallet.Tx.SignData
-import Haskoin.Wallet.Tx.Size (checkFeeRateAndDust, p2pkhInput, p2pkhInputSize, p2pkhOutputSize, txSize)
+import Haskoin.Wallet.Tx.Size (accountInput, accountInputSize, accountOutputSize, checkFeeRateAndDust, txSize)
 import Haskoin.Wallet.Util (addrToTextE, randomShuffle)
 import Numeric.Natural (Natural)
 import System.Random (StdGen)
 
 {- Dust coins -}
 
--- | Whether a coin of the wallet is a dust coin at the fee rate: worth no
--- more than the fee of its input. The coins of the wallet are all P2PKH.
-isDustCoin :: Natural -> Store.Unspent -> Bool
-isDustCoin feeByte coin = fromIntegral coin.value <= inputFee feeByte
+-- | Whether a coin of an account of the kind is a dust coin at the fee
+-- rate: worth no more than the fee of its input
+isDustCoin :: AccountKind -> Natural -> Store.Unspent -> Bool
+isDustCoin kind feeByte coin = fromIntegral coin.value <= inputFee kind feeByte
 
--- | The fee of the input of a coin of the wallet, 148 bytes, at the fee rate
-inputFee :: Natural -> Natural
-inputFee feeByte = feeByte * fromIntegral p2pkhInputSize
+-- | The fee of the input of a coin of an account of the kind at the fee
+-- rate: 148 virtual bytes for a BIP44 account, 68 for a BIP84 one
+inputFee :: AccountKind -> Natural -> Natural
+inputFee kind feeByte = feeByte * fromIntegral (accountInputSize kind)
 
--- | The highest fee rate at which a coin is worth spending, its input
--- costing less than its value: 0 when no rate makes it worth spending
-worthSpendingUpTo :: Store.Unspent -> Natural
-worthSpendingUpTo coin
+-- | The highest fee rate at which a coin of an account of the kind is
+-- worth spending, its input costing less than its value: 0 when no rate
+-- makes it worth spending
+worthSpendingUpTo :: AccountKind -> Store.Unspent -> Natural
+worthSpendingUpTo kind coin
   | coin.value == 0 = 0
-  | otherwise = (fromIntegral coin.value - 1) `div` fromIntegral p2pkhInputSize
+  | otherwise = (fromIntegral coin.value - 1) `div` fromIntegral (accountInputSize kind)
 
 -- | The value of coins, in satoshis
 valueOf :: [Store.Unspent] -> Natural
@@ -79,23 +83,25 @@ valueOf coins = sum [fromIntegral coin.value | coin <- coins]
 
 {- Amounts -}
 
--- | The fee of the transaction spending the coins to the recipients, at the
--- fee rate
-sendAllFee :: Ctx -> Natural -> [Store.Unspent] -> [Address] -> Natural
-sendAllFee ctx feeByte coins recipients =
-  feeByte * fromIntegral (txSize [p2pkhInput | _ <- coins] (recipientOutputSize ctx <$> recipients))
+-- | The fee of the transaction spending the coins of an account of the
+-- kind to the recipients, at the fee rate
+sendAllFee :: Ctx -> AccountKind -> Natural -> [Store.Unspent] -> [Address] -> Natural
+sendAllFee ctx kind feeByte coins recipients =
+  feeByte * fromIntegral (txSize [accountInput kind | _ <- coins] (recipientOutputSize ctx <$> recipients))
 
--- | The amount of each recipient when the coins pay them and their fee at
--- the rate: see 'shareAmounts'
-sendAllAmounts :: Ctx -> Natural -> Natural -> [Store.Unspent] -> [(Address, Share)] -> Either String [(Address, Natural)]
-sendAllAmounts ctx feeByte dust coins recipients =
-  shareAmounts (valueOf coins) (sendAllFee ctx feeByte coins (fst <$> recipients)) dust recipients
+-- | The amount of each recipient when the coins of an account of the kind
+-- pay them and their fee at the rate: see 'shareAmounts'
+sendAllAmounts :: Ctx -> AccountKind -> Natural -> Natural -> [Store.Unspent] -> [(Address, Share)] -> Either String [(Address, Natural)]
+sendAllAmounts ctx kind feeByte dust coins recipients =
+  shareAmounts (valueOf coins) (sendAllFee ctx kind feeByte coins (fst <$> recipients)) dust recipients
 
 {- Building -}
 
 -- | What the builder of a send-all needs from the wallet database
 data SendAllCoins = SendAllCoins
-  { -- | The coins to send, every one of them
+  { -- | The kind of the account, which sizes its inputs
+    ownKind :: !AccountKind,
+    -- | The coins to send, every one of them
     coins :: ![Store.Unspent],
     -- | The derivation path of every address holding one of the coins
     coinPaths :: !(Map Address SoftPath),
@@ -112,7 +118,7 @@ buildSendAll :: Network -> Ctx -> StdGen -> SendAllCoins -> [(Address, Share)] -
 buildSendAll net ctx gen found recipients feeByte dust lockTime = do
   checkFeeRateAndDust feeByte dust
   when (null found.coins) $ Left "There are no coins to send"
-  amounts <- sendAllAmounts ctx feeByte dust found.coins recipients
+  amounts <- sendAllAmounts ctx found.ownKind feeByte dust found.coins recipients
   tx <- withHeader net lockTime <$> (buildAddrTx net ctx ((.outpoint) <$> found.coins) =<< mapM outputText (evalState (randomShuffle amounts) gen))
   inputPaths <- nub <$> mapM coinPath found.coins
   let outputPaths = nub $ mapMaybe ((`Map.lookup` found.recipientPaths) . fst) recipients
@@ -136,7 +142,7 @@ buildSendAllSignData ::
   -- | The coins to send
   [Store.Unspent] ->
   [(Address, Share)] ->
-  -- | Fee per byte
+  -- | Fee per virtual byte
   Natural ->
   -- | Dust
   Natural ->
@@ -144,9 +150,10 @@ buildSendAllSignData ::
   Word32 ->
   ExceptT String (DB m) TxSignData
 buildSendAllSignData net ctx gen accId coins recipients feeByte dust lockTime = do
+  ownKind <- accountKind <$> getAccountById accId
   coinPaths <- Map.fromList <$> mapM (coinWithPath net accId) coins
   recipientPaths <- walletPaths net accId (fst <$> recipients)
-  built <- liftEither $ buildSendAll net ctx gen SendAllCoins {coins, coinPaths, recipientPaths} recipients feeByte dust lockTime
+  built <- liftEither $ buildSendAll net ctx gen SendAllCoins {ownKind, coins, coinPaths, recipientPaths} recipients feeByte dust lockTime
   spentFrom <- mapM getRawTx $ nub $ (.outpoint.hash) <$> built.tx.inputs
   return $ TxSignData built.tx spentFrom built.inputPaths built.outputPaths (Just feeByte) Nothing [] noLabel
 
@@ -155,7 +162,9 @@ buildSendAllSignData net ctx gen accId coins recipients feeByte dust lockTime = 
 -- | What spending the dust coins too costs, and what leaving them does, for
 -- the question preparesendall asks
 data DustReport = DustReport
-  { -- | The fee rate, in satoshis per byte
+  { -- | The kind of the account, which sizes the inputs of its coins
+    reportKind :: !AccountKind,
+    -- | The fee rate, in satoshis per virtual byte
     rate :: !Natural,
     -- | The dust coins, the largest first
     dustCoins :: ![Store.Unspent],
@@ -170,21 +179,22 @@ data DustReport = DustReport
     -- instance
     othersStay :: !Bool,
     -- | The highest fee rate at which the dust coins alone can be sent later,
-    -- to one P2PKH address, leaving it at least the dust limit; none when no
-    -- rate can
+    -- to one address of the kind of the account, leaving it at least the
+    -- dust limit; none when no rate can
     laterRate :: !(Maybe Natural),
     -- | The dust limit, in satoshis
     dustLimit :: !Natural
   }
   deriving (Eq, Show)
 
--- | The report on the dust coins, from the coins worth spending and the dust
--- coins, once both they and all the coins together can pay the recipients:
--- see 'sendAllAmounts'
-dustReport :: Ctx -> Natural -> Natural -> [(Address, Share)] -> [Store.Unspent] -> [Store.Unspent] -> Bool -> DustReport
-dustReport ctx feeByte dust recipients worth dustCoins othersStay =
+-- | The report on the dust coins of an account of the kind, from the coins
+-- worth spending and the dust coins, once both they and all the coins
+-- together can pay the recipients: see 'sendAllAmounts'
+dustReport :: Ctx -> AccountKind -> Natural -> Natural -> [(Address, Share)] -> [Store.Unspent] -> [Store.Unspent] -> Bool -> DustReport
+dustReport ctx kind feeByte dust recipients worth dustCoins othersStay =
   DustReport
-    { rate = feeByte,
+    { reportKind = kind,
+      rate = feeByte,
       dustCoins = sortOn (Down . (.value)) dustCoins,
       addedFee = feeOf (worth <> dustCoins) - feeOf worth,
       withDust = remaining (worth <> dustCoins),
@@ -194,13 +204,13 @@ dustReport ctx feeByte dust recipients worth dustCoins othersStay =
       dustLimit = dust
     }
   where
-    feeOf coins = sendAllFee ctx feeByte coins (fst <$> recipients)
+    feeOf coins = sendAllFee ctx kind feeByte coins (fst <$> recipients)
     fixedTotal = sum [amount | (_, Fixed amount) <- recipients]
     -- Both sets of coins pay the recipients: nothing is below zero
     remaining coins = fromInteger $ max 0 $ toInteger (valueOf coins) - toInteger fixedTotal - toInteger (feeOf coins)
     dustValue = valueOf dustCoins
-    -- The dust coins alone, paying one P2PKH address
-    aloneSize = fromIntegral $ txSize [p2pkhInput | _ <- dustCoins] [p2pkhOutputSize]
+    -- The dust coins alone, paying one address of the kind of the account
+    aloneSize = fromIntegral $ txSize [accountInput kind | _ <- dustCoins] [accountOutputSize kind]
     laterRate
       | dustValue >= dust + aloneSize = Just ((dustValue - dust) `div` aloneSize)
       | otherwise = Nothing

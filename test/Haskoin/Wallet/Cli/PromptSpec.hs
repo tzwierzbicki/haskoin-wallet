@@ -269,7 +269,7 @@ seedOnceSpec =
 signingSpec :: Ctx -> Spec
 signingSpec ctx =
   describe "Asking for the signing key of an account, as signtx and signmsg do" $ do
-    let signingKeyOf lines' parts = answering lines' $ \term -> keyOf <$> askSigningKey term btc ctx parts 0 (testAccount ctx)
+    let signingKeyOf lines' parts = answering lines' $ \term -> keyOf <$> askSigningKey term Bip44 btc ctx parts 0 (testAccount ctx)
         keyOf (seed, key) = (fingerprintToText (seedFingerprint seed), xPrvExport btc key)
         signed = Right (testFingerprintText, testAccountXPrv)
         mismatch = "The mnemonic or the passphrase does not match the account"
@@ -304,7 +304,7 @@ matchingSpec ctx =
     -- Whether the account is found, and what the user is told
     let matching account passphrase = do
           (answer, shown, _) <- answering [] $ \term ->
-            isJust <$> matchAccount term btc ctx 0 (account ctx) (MnemonicPass testWords passphrase)
+            isJust <$> matchAccount term Bip44 btc ctx 0 (account ctx) (MnemonicPass testWords passphrase)
           return (answer, shown)
     it "finds the account BIP39 derives from an accented passphrase, typed composed" $
       matching cafeAccountNormalized "caf\233" `shouldReturn` (Right True, [])

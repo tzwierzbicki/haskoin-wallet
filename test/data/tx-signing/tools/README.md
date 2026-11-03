@@ -18,7 +18,7 @@ without its input scripts and witness, that the `txid` is right, and that every
 input of the signed transaction carries a valid, low-S signature by the key of
 the coin it spends
 (legacy sighash, Bitcoin Cash SIGHASH_FORKID, or BIP-143 for SegWit coins). It
-derives the wallet's addresses from the `account` and the paths to check the
-`txInfo` type, amount and fee. The `signed` transaction of a known-bug vector
+derives the wallet's addresses from the `account`, of its kind, and the paths
+to check the `txInfo` type, amount, fee and size, in virtual bytes. The `signed` transaction of a known-bug vector
 (`expect: error` with `signed`) is verified as well. Error messages are hw's
 own behaviour and are only checked by `Tx/SigningSpec.hs`.

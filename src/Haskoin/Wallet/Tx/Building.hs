@@ -1,3 +1,4 @@
+{-# LANGUAGE DisambiguateRecordFields #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE TupleSections #-}
@@ -45,8 +46,10 @@ import Data.Maybe (mapMaybe)
 import Data.Word (Word32, Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.Database.Account (accountKind, getAccountById)
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Coin
+import Haskoin.Wallet.Keys (AccountKind)
 import Haskoin.Wallet.Tx.CoinSelection
 import Haskoin.Wallet.Config (Config)
 import Haskoin.Wallet.Database
@@ -63,7 +66,9 @@ import System.Random (StdGen, splitGen)
 
 -- | What the builder needs from the wallet database
 data WalletCoins = WalletCoins
-  { -- | The spendable coins of the account
+  { -- | The kind of the account, which sizes its inputs and its change
+    ownKind :: !AccountKind,
+    -- | The spendable coins of the account
     coins :: ![Store.Unspent],
     -- | The derivation path of every address holding one of the coins
     coinPaths :: !(Map Address SoftPath),
@@ -134,7 +139,7 @@ buildTxSignData ::
   DBAccountId ->
   -- | The recipients and their amounts
   [(Address, Natural)] ->
-  -- | Fee per byte
+  -- | Fee per virtual byte
   Natural ->
   -- | Dust
   Natural ->
@@ -169,7 +174,8 @@ buildTxSignData net ctx cfg gen strategy accId recipients feeByte dust lockTime 
         return (addr, path)
 
 -- | Fetch the spendable coins of the account with their derivation paths,
--- and the paths of the recipients that are its own addresses
+-- and the paths of the recipients that are its own addresses, with the
+-- kind of the account
 fetchWalletCoins ::
   (MonadUnliftIO m) =>
   Network ->
@@ -181,10 +187,11 @@ fetchWalletCoins ::
   Natural ->
   ExceptT String (DB m) WalletCoins
 fetchWalletCoins net ctx accId recipients minConf = do
+  ownKind <- accountKind <$> getAccountById accId
   coins <- spendableCoins net ctx accId minConf
   coinPaths <- Map.fromList <$> mapM (coinWithPath net accId) coins
   recipientPaths <- walletPaths net accId recipients
-  return WalletCoins {coins, coinPaths, recipientPaths}
+  return WalletCoins {ownKind, coins, coinPaths, recipientPaths}
 
 -- | The address of a coin of the account, with its derivation path
 coinWithPath ::
@@ -198,7 +205,7 @@ coinWithPath net accId coin = do
 {- Building -}
 
 -- | The fee rate at which spending a coin is expected to cost in the future,
--- in satoshis per byte: the value Bitcoin Core uses. It only weighs
+-- in satoshis per virtual byte: the value Bitcoin Core uses. It only weighs
 -- consolidating small coins now against spending them later, so it is not a
 -- setting of the user.
 longTermRate :: Word64
@@ -217,7 +224,7 @@ buildWalletTx ::
   (Address, SoftPath) ->
   -- | The recipients and their amounts
   [(Address, Natural)] ->
-  -- | Fee per byte
+  -- | Fee per virtual byte
   Natural ->
   -- | Dust
   Natural ->
@@ -243,7 +250,7 @@ choosePayment ::
   WalletCoins ->
   -- | The recipients and their amounts
   [(Address, Natural)] ->
-  -- | Fee per byte
+  -- | Fee per virtual byte
   Natural ->
   -- | Dust
   Natural ->
@@ -273,7 +280,8 @@ choosePayment ctx gen strategy found recipients feeByte dust payer coinControl =
   where
     payment =
       Payment
-        { rates = FeeRates {feeRate = fromIntegral feeByte, longTermFeeRate = longTermRate},
+        { ownKind = found.ownKind,
+          rates = FeeRates {feeRate = fromIntegral feeByte, longTermFeeRate = longTermRate},
           payer,
           dust = fromIntegral dust,
           outputSizes = recipientOutputSize ctx . fst <$> recipients,

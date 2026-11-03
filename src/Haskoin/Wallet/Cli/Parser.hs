@@ -36,7 +36,7 @@ import Haskoin.Wallet.Cli.Completion
   )
 import Haskoin.Wallet.Database.Address (AddrType, readChainPath)
 import Haskoin.Wallet.Tx.FeeRates (FeeRateChoice, readFeeRateChoice)
-import Haskoin.Wallet.Keys (KeySource (..))
+import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), kindNamed, kindNames)
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
 import Haskoin.Wallet.Cli.Parser.Args
 import Haskoin.Wallet.Cli.Parser.Completion (completeFile)
@@ -55,14 +55,15 @@ import Text.RawString.QQ (r)
 data Command
   = CommandMnemonic !NewMnemonic
   | -- | The name of the new account, its network, unless the default one,
-    -- and the parts the mnemonic is typed in
-    CommandCreateAcc !Text !(Maybe Network) !Natural
+    -- its kind, and the parts the mnemonic is typed in
+    CommandCreateAcc !Text !(Maybe Network) !AccountKind !Natural
   | CommandRecover !Recover
   | -- | The account, and the parts the mnemonic is typed in
     CommandCheckMnemonic !(Maybe Text) !Natural
   | -- | The network of a key the file places on none, unless the default
-    -- one, and the file of accounts and labels to import
-    CommandImportAcc !(Maybe Network) !FilePath
+    -- one, the kind of a key the file says no kind of, unless BIP44, and
+    -- the file of accounts and labels to import
+    CommandImportAcc !(Maybe Network) !(Maybe AccountKind) !FilePath
   | -- | The account, or every one, and the file to write them to
     CommandExportAcc !(Maybe Text) !FilePath
   | -- | The account, or every one, whose output descriptor to show
@@ -200,7 +201,7 @@ data PrepareTx = PrepareTx
   { -- | The addresses paid, each with its amount, as typed: ADDRESS:AMOUNT
     recipients :: ![Text],
     account :: !(Maybe Text),
-    -- | The fee rate: a number of satoshis per byte or a level of the
+    -- | The fee rate: a number of satoshis per virtual byte or a level of the
     -- rates recent blocks paid, or none to ask the user from those rates
     feeRate :: !(Maybe FeeRateChoice),
     -- | The dust limit, in satoshis
@@ -219,7 +220,7 @@ data PrepareTx = PrepareTx
     -- | Whether the strategy selects among the chosen coins (--select),
     -- instead of every one of them being spent
     select :: !Bool,
-    -- | Whether a fee rate above 100 satoshis per byte is taken without
+    -- | Whether a fee rate above 100 satoshis per virtual byte is taken without
     -- asking (--yes)
     yes :: !Bool,
     -- | Whether the change goes back to an address the payment spends
@@ -250,7 +251,7 @@ data PrepareSendAll = PrepareSendAll
     -- ADDRESS:AMOUNT
     recipients :: ![Text],
     account :: !(Maybe Text),
-    -- | The fee rate: a number of satoshis per byte or a level of the
+    -- | The fee rate: a number of satoshis per virtual byte or a level of the
     -- rates recent blocks paid, or none to ask the user from those rates
     feeRate :: !(Maybe FeeRateChoice),
     -- | The dust limit, in satoshis
@@ -267,7 +268,7 @@ data PrepareSendAll = PrepareSendAll
     -- | What to do with the coins worth less than their fee, or Nothing to
     -- ask the user
     dustCoins :: !(Maybe DustCoins),
-    -- | Whether a fee rate above 100 satoshis per byte is taken without
+    -- | Whether a fee rate above 100 satoshis per virtual byte is taken without
     -- asking (--yes)
     yes :: !Bool
   }
@@ -329,7 +330,7 @@ data PrepareSweep = PrepareSweep
     feeRate :: !(Maybe FeeRateChoice),
     -- | The dust limit, in satoshis
     dust :: !Natural,
-    -- | Whether a fee rate above 100 satoshis per byte is taken without
+    -- | Whether a fee rate above 100 satoshis per virtual byte is taken without
     -- asking (--yes)
     yes :: !Bool
   }
@@ -392,8 +393,8 @@ program =
       -- The help adds which commands to run on an offline computer
       intro =
         [r|
-hw is a BIP44 wallet for Bitcoin and Bitcoin Cash. It stores public keys
-only.
+hw is a BIP44 and BIP84 wallet for Bitcoin and Bitcoin Cash. It stores
+public keys only.
 |],
       everydayNames = ["mnemonic", "recover", "accounts", "sync", "receive", "addresses", "balances", "label", "coins", "fees", "backup"],
       details =
@@ -628,9 +629,17 @@ createAccCommand =
       details =
         [r|
 createacc asks for the mnemonic and the passphrase, each twice to catch a
-typo. It derives the account key m/44'/coin'/index' and stores only its public
-key. It takes the first index of the seed that has no account in the wallet
-on that network. For example, the first Bitcoin account is m/44'/0'/0'.
+typo. It derives the account key m/44'/coin'/index', or m/84'/coin'/index'
+with --type bip84, and stores only its public key. It takes the first index
+of the seed that has no account of that kind in the wallet on that network.
+For example, the first Bitcoin account is m/44'/0'/0', and the first native
+SegWit one is m/84'/0'/0'.
+
+A bip44 account has legacy P2PKH addresses, which start with 1 on Bitcoin,
+and is the default. A bip84 account has native SegWit P2WPKH addresses,
+which start with bc1q, and its payments pay about 40% less in fees. Other
+wallets create bip84 accounts by default. Bitcoin Cash has no SegWit, so it
+has bip44 accounts only.
 
 The private keys are never stored. To keep them on an offline computer,
 create the account there. Then copy it to an online computer with exportacc
@@ -645,8 +654,35 @@ none of the normalized seed, createacc keeps to the old seed and says so.
         CommandCreateAcc
           <$> textArg "NAME" "The name of the new account"
           <*> networkMaybeOption
+          <*> accountTypeOption
           <*> mnemonicPartsOption
     }
+
+-- | The kind of the new account: bip44 unless given
+accountTypeOption :: Args AccountKind
+accountTypeOption =
+  option (eitherReader (readKind . cs)) $
+    short 't'
+      <> long "type"
+      <> metavar "TYPE"
+      <> value Bip44
+      <> showDefaultWith (const "bip44")
+      <> completeWith (cs <$> kindNames)
+      <> help "The kind of account: bip44, with legacy P2PKH addresses, or bip84, with native SegWit P2WPKH addresses, which pay lower fees"
+
+-- | The kind of an account the file says no kind of, when given
+importTypeOption :: Args (Maybe AccountKind)
+importTypeOption =
+  optional . option (eitherReader (readKind . cs)) $
+    short 't'
+      <> long "type"
+      <> metavar "TYPE"
+      <> completeWith (cs <$> kindNames)
+      <> help "The kind of account of a key the file says no kind of, a bare xpub or tpub: bip44 or bip84. Without it, bip44. A descriptor, a zpub and a file of hw say their kind themselves."
+
+-- | A kind of account as typed: bip44 or bip84
+readKind :: Text -> Either String AccountKind
+readKind typed = maybe (Left ("The type of an account is " <> intercalate " or " (cs <$> kindNames))) Right (kindNamed typed)
 
 -- | The network, when given. Without it, a command that needs one takes the
 -- default-network of the configuration file.
@@ -699,9 +735,15 @@ asks the server about the receiving addresses of each. Each account that was
 paid is added, named after the network and its index, such as btc0, and
 synced. Accounts the wallet has already are skipped.
 
-The search stops after --account-gap accounts in a row without a payment.
-BIP44 stops at the first such account. hw looks further, since accounts
-created on an offline computer may never have been paid.
+On Bitcoin, the bip44 accounts of the seed are searched first, then the
+bip84 ones, which most other wallets make: a bip84 account found is named
+with -segwit after the index, such as btc0-segwit. Bitcoin Cash has bip44
+accounts only.
+
+The search stops after --account-gap accounts in a row without a payment,
+counted for each kind of account apart. BIP44 stops at the first such
+account. hw looks further, since accounts created on an offline computer
+may never have been paid.
 
 `recover` needs the mnemonic and the server at the same time. To keep the
 mnemonic offline, create the accounts on the offline computer with createacc
@@ -840,6 +882,7 @@ importAccCommand =
       args =
         CommandImportAcc
           <$> importNetworkOption
+          <*> importTypeOption
           <*> fileArgument "The file exportacc wrote, or a file of another wallet: BIP 329 labels, an output descriptor on a line, the file of Bitcoin Core's listdescriptors, or the generic JSON of a Coldcard"
     }
 
@@ -854,10 +897,11 @@ importExportAccDetails =
   [r|
 exportacc writes the accounts to a file, with their labels, in the format of
 BIP 329, which other wallets read and write. An account goes in as its public
-key M/44'/coin'/index', its name, its network and, when hw knows it, the
-fingerprint of its seed. Then come the labels of its receiving addresses and
-of its transactions, and the coins locked with lockcoin. The file holds no
-private key. Without --account, every account goes in the file.
+key M/44'/coin'/index', or M/84'/coin'/index' for a bip84 account, its name,
+its network, its kind and, when hw knows it, the fingerprint of its seed.
+Then come the labels of its receiving addresses and of its transactions, and
+the coins locked with lockcoin. The file holds no private key. Without
+--account, every account goes in the file.
 
 importacc reads such a file, from hw or from another wallet. An account the
 wallet does not have is added, named after the label of its key. The wallet
@@ -866,14 +910,19 @@ an online computer works with an offline signer. An account the wallet has
 learns the fingerprint of its seed, and takes the name a file of hw gives it.
 
 importacc also reads the output descriptors other wallets hand an account
-over by: a descriptor on a line, such as pkh([bc560f95/44h/0h/0h]xpub.../<0;1>/*),
-as Sparrow or a Coldcard exports it, a key alone, the file of Bitcoin Core's
-listdescriptors, or the generic JSON of a Coldcard. hw holds BIP44 accounts,
-so a descriptor of another kind, such as wpkh, is refused, and the import
-goes on. A descriptor names no network: give --network, or set a default
-network. An account a descriptor adds is named after its network and index,
-as recover names one, since a descriptor carries no name: renameacc renames
-it. `descriptor` shows the descriptor of an account of this wallet.
+over by: a descriptor on a line, such as pkh([bc560f95/44h/0h/0h]xpub.../<0;1>/*)
+for a bip44 account or wpkh([bc560f95/84h/0h/0h]xpub.../<0;1>/*) for a bip84
+one, as Sparrow or a Coldcard exports it, a key alone, the file of Bitcoin
+Core's listdescriptors, or the generic JSON of a Coldcard. hw holds bip44
+and bip84 accounts, so a descriptor of another kind, such as sh(wpkh(...)),
+is refused, and the import goes on. A key alone says its kind when it is a
+zpub or a vpub, which some wallets write for a bip84 account; an xpub or a
+tpub alone is taken for a bip44 account, or for a bip84 one with --type
+bip84. A descriptor names no network: give --network, or set a default
+network. An account a descriptor adds is named after its network, its index
+and its kind, as recover names one, since a descriptor carries no name:
+renameacc renames it. `descriptor` shows the descriptor of an account of
+this wallet.
 
 The labels and the locks of the file are set on the addresses, transactions
 and coins the wallet has. An address the wallet has not generated yet is
@@ -884,7 +933,8 @@ of change addresses are left aside, since hw keeps none.
 
 The fingerprint is the four bytes that PSBTs and output descriptors write
 before a key of the seed. Each record of the file names its account by it, as
-in pkh([bc560f95/44'/0'/0']). `accounts` groups the accounts of one seed by it.
+in pkh([bc560f95/44'/0'/0']) or wpkh([bc560f95/84'/0'/0']). `accounts`
+groups the accounts of one seed by it.
 |]
 
 {- descriptor -}
@@ -901,13 +951,15 @@ descriptor shows each account as an output descriptor, the format of BIP 380
 in which wallets and Bitcoin Core take an account without its private key:
 
   pkh([bc560f95/44h/0h/0h]xpub6CHK45s.../<0;1>/*)#vq597j87
+  wpkh([bc560f95/84h/0h/0h]xpub6CQF8An.../<0;1>/*)#5nktextl
 
-Paste it into Sparrow, BlueWallet or Bitcoin Core's importdescriptors to
-watch the account there. The descriptor carries the public key of the
-account, the fingerprint of its seed and its derivation path, and the two
-chains of addresses, with a checksum. It holds no private key. When hw does
-not know the fingerprint of the seed, the descriptor names no origin, which
-a hardware wallet needs to match it, and the answer says so.
+The first is a bip44 account, the second a bip84 one. Paste it into
+Sparrow, BlueWallet or Bitcoin Core's importdescriptors to watch the account
+there. The descriptor carries the public key of the account, the
+fingerprint of its seed and its derivation path, and the two chains of
+addresses, with a checksum. It holds no private key. When hw does not know
+the fingerprint of the seed, the descriptor names no origin, which a
+hardware wallet needs to match it, and the answer says so.
 
 A descriptor does not name its network. Bitcoin and Bitcoin Cash write the
 same keys, and every test network writes tpub keys.
@@ -1278,7 +1330,7 @@ mined more than eight hours ago, the wallet is behind the chain, and a sync may
 find coins spent or received since. preparetx then asks whether to prepare the
 transaction anyway, with a lock time of 0.
 
-A fee rate above 100 satoshis per byte is more often a typo than a choice, so
+A fee rate above 100 satoshis per virtual byte is more often a typo than a choice, so
 preparetx asks before it takes one. --yes answers both questions, for scripts.
 |],
       args =
@@ -1376,7 +1428,7 @@ the wallet knows was mined more than eight hours ago, preparesendall asks
 whether to prepare the transaction anyway, with a lock time of 0, as preparetx
 does.
 
-A fee rate above 100 satoshis per byte is more often a typo than a choice, so
+A fee rate above 100 satoshis per virtual byte is more often a typo than a choice, so
 preparesendall asks before it takes one. --yes answers both questions, for
 scripts.
 |],
@@ -1455,7 +1507,7 @@ coinOptionWith what completion =
       <> completion
       <> help what
 
--- | The fee rate, when given: a number of satoshis per byte, or a level
+-- | The fee rate, when given: a number of satoshis per virtual byte, or a level
 -- of the rates recent blocks paid
 feeOption :: Args (Maybe FeeRateChoice)
 feeOption =
@@ -1464,16 +1516,16 @@ feeOption =
       <> long "fee-rate"
       <> metavar "RATE"
       <> completeWith ["low", "median", "high"]
-      <> help "The fee rate in satoshis per byte, or low, median or high for that rate of recent blocks, as `fees` shows them. Without it, hw shows those rates and asks for a level or a number, median by default. A rate above 100 needs a confirmation."
+      <> help "The fee rate in satoshis per virtual byte, or low, median or high for that rate of recent blocks, as `fees` shows them. Without it, hw shows those rates and asks for a level or a number, median by default. A rate above 100 needs a confirmation."
 
 -- | Whether preparetx and preparesendall take a high fee rate, and prepare
 -- while the wallet is behind the chain, without asking
 prepareYesOption :: Args Bool
-prepareYesOption = yesOption "Answer yes to both questions: a fee rate above 100 satoshis per byte, and a wallet behind the chain"
+prepareYesOption = yesOption "Answer yes to both questions: a fee rate above 100 satoshis per virtual byte, and a wallet behind the chain"
 
 -- | Whether preparesweep takes a high fee rate without asking
 highFeeYesOption :: Args Bool
-highFeeYesOption = yesOption "Take a fee rate above 100 satoshis per byte without asking"
+highFeeYesOption = yesOption "Take a fee rate above 100 satoshis per virtual byte without asking"
 
 -- | The dust limit. It has no short name. Few payments change it, and -d
 -- is --dice.
@@ -1941,7 +1993,7 @@ prepare it anyway, with a lock time of 0, as preparetx does.
                   <*> replacementFeeOption
                   <*> dustOption
                   <*> outputFileMaybeOption
-                  <*> yesOption "Answer yes to every question: a fee rate above 100 satoshis per byte, a wallet behind the chain, adding coins, reducing what a lone recipient receives, and replacing the transactions that spend the change. Which of several recipients pays is still asked."
+                  <*> yesOption "Answer yes to every question: a fee rate above 100 satoshis per virtual byte, a wallet behind the chain, adding coins, reducing what a lone recipient receives, and replacing the transactions that spend the change. Which of several recipients pays is still asked."
               )
     }
 
@@ -1962,7 +2014,7 @@ replacementFeeOption =
       <> long "fee-rate"
       <> metavar "RATE"
       <> completeWith ["low", "median", "high"]
-      <> help "The fee rate of the replacement in satoshis per byte, or low, median or high for that rate of recent blocks, as `fees` shows them. It must be above the rate of the transaction replaced. Without it, hw shows those rates and asks for a level or a number. A rate above 100 needs a confirmation."
+      <> help "The fee rate of the replacement in satoshis per virtual byte, or low, median or high for that rate of recent blocks, as `fees` shows them. It must be above the rate of the transaction replaced. Without it, hw shows those rates and asks for a level or a number. A rate above 100 needs a confirmation."
 
 {- sendtx -}
 
@@ -2110,11 +2162,12 @@ feesCommand =
       details =
         [r|
 fees reads the latest six blocks that hold fee-paying transactions. It shows
-three rates, in satoshis per byte:
+three rates, in satoshis per virtual byte, the unit the network charges
+fees in, where the bytes of a signature in a witness count a quarter:
 
-  low      a quarter of the bytes in those blocks paid less
-  median   half of the bytes paid less
-  high     nine tenths of the bytes paid less
+  low      a quarter of the virtual bytes in those blocks paid less
+  median   half of the virtual bytes paid less
+  high     nine tenths of the virtual bytes paid less
 
 The high rate almost surely gets into the next block. The low rate usually
 does when the network is calm. The age of the latest block tells how fresh
@@ -2144,8 +2197,11 @@ signMsgCommand =
         [r|
 signmsg asks for the mnemonic of the account of the ADDRESS, and signs the
 message with the key of that address. The signature uses the Bitcoin Signed
-Message format, the legacy format of BIP 322. Bitcoin Core and other wallets
-can verify it.
+Message format, the legacy format of BIP 322. From a P2PKH address, which
+starts with 1, Bitcoin Core and other wallets can verify it. From a native
+SegWit address, which starts with bc1q, the signature has the header byte
+of BIP 137, which Sparrow, Trezor, Ledger and Coldcard give and verify;
+Bitcoin Core verifies no signature from such an address.
 
 The message is signed exactly as given. hw warns about spaces or line breaks
 at its start or end. Copying a message easily changes them, and the signature
@@ -2195,9 +2251,12 @@ verifyMsgCommand =
       details =
         [r|
 verifymsg checks that the key of ADDRESS signed MESSAGE, from the SIGNATURE
-that signmsg, Bitcoin Core or another wallet gave. The address can be anyone's.
-It must be a P2PKH address, the only kind this format signs with. The
---network only tells hw how to read it.
+that signmsg, Bitcoin Core or another wallet gave. The address can be anyone's:
+a P2PKH address, which starts with 1, or a SegWit address of one key, native
+or wrapped, which starts with bc1q or 3. A signature from a SegWit address
+is valid when its key gives the address, whatever header byte the wallet
+that made it chose, as Sparrow checks one. The --network only tells hw how
+to read the address.
 
 Give the message exactly as it was signed. A single changed byte makes the
 signature invalid. When it is invalid, hw says so and exits with an error, so
@@ -2287,7 +2346,7 @@ The sweep gets a lock time as preparetx gives a payment one, drawn from the
 best block of the server rather than from the one the wallet knows: a sweep is
 prepared online.
 
-A fee rate above 100 satoshis per byte is more often a typo than a choice, so
+A fee rate above 100 satoshis per virtual byte is more often a typo than a choice, so
 preparesweep asks before it takes one. It asks before the private keys are
 typed. --yes takes it without asking, for scripts.
 |],

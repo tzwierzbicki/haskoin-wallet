@@ -24,6 +24,13 @@ The public keys of the test wallet the specs name were derived apart from hw
 with the Python tool of the message-signing vectors
 (`../message-signing/tools/btc.py`).
 
+`segwitPaymentText` in `test/Haskoin/Wallet/Tx/PsbtFileSpec.hs` pins the
+file hw writes for the same payment by the bip84 account of the test
+wallet, checked the same way with `decodepsbt`: the coin of its input
+both as its whole transaction and as itself (`witness_utxo`), the
+derivation records `m/84'/0'/0'/0/0` and `m/84'/0'/0'/1/0`, and hw's
+fields. Its public keys were derived apart from hw the same way.
+
 ## The files of Bitcoin Core, in `core/`
 
 Files Bitcoin Core wrote on a regtest chain, for the specs that read and
@@ -38,7 +45,14 @@ version 0 with its `psbt_version` argument. Its default is version 2 (BIP
 The wallet `hw` of that node holds the keys of the test account through the
 descriptors `pkh([bc560f95/44h/0h/0h]tprv.../0/*)` and `.../1/*`, the
 account's key `xprv9yHxeaL...` in the encoding of regtest, so that the keys
-and the derivation records are those of the test wallet. A second wallet,
+and the derivation records are those of the test wallet. The wallet `hw84`
+of the `-segwit` files holds those of its bip84 account the same way,
+`wpkh([bc560f95/84h/0h/0h]tprv.../0/*)` and `.../1/*`, the key
+`xprv9yQtifF...` in the encoding of regtest
+(`tprv8g5qVzZb7thKDKxbZnD4BBfZjesetceTNJkuNS6CwvsDzwTYAd8awzifSNCxyNuZngEcn5BqS9MhuD6Eiz9oqLVDDz3bvvSWDzNkB4MHYLB`);
+it mined 101 blocks to its address /0/0 on a chain of its own, so that the
+coin of block 1 is its one mature coin, and `other` holds a legacy address
+there. Core 32.1 wrote these files. A second wallet,
 `other`, has keys of its own, the descriptors
 `pkh(tprv8ZgxMBicQKsPdLA1DWtYbSdVVfjzd7dNqEvvBFL6V6YjwLkiQnzT6y9NgSHFG27K3sKpofaeeZjrSZkomqA7YRtncLyEEnuqhRWUeMMHq3T/44'/1'/0'/0/*)`
 and `.../1/*`, the fingerprint `b7253d71`. `other` mined blocks 1 to 101 to
@@ -63,6 +77,11 @@ version 0 one, and checked with Core 32.1: `analyzepsbt` finds it complete,
 | `hw-payment-partial.psbt` | `walletprocesspsbt` of the wallet `hw` on the file hw writes for the payment of `Tx/PsbtFileSpec.hs` (pinned there in base64), with `finalize` false: Core's signature as a partial signature, as a hardware wallet leaves it. |
 | `hw-payment-finalized.psbt`, `.hex` | The same with `finalize` true, then `finalizepsbt`: the final script in place of the partial signature and the derivation records of the input, which Core clears, and the transaction alone. |
 | `pending-payment-finalized.psbt`, `.hex` | The same for the payment of `Database/PendingTxSpec.hs` (8000 satoshis to the first address of another wallet, 11774 of change, at 1 satoshi per byte). |
+| `core-prepared-segwit.psbt` | `walletcreatefundedpsbt` of the wallet `hw84`, asked for version 0: 1 BTC from the coin of 50 BTC mined to /0/0 of the bip84 account, to a legacy address of `other`, with the change at /1/0 and `fee_rate` 10, which comes to 1440 satoshis for 144 virtual bytes. The spec signs it with the bip84 account's key into this file and pins the result, `coreSegwitPreparedSignedText` in `TestUtils.hs`: `analyzepsbt` finds that result complete, `finalizepsbt` extracts the transaction, and `testmempoolaccept` accepts it on that chain, 144 virtual bytes for 1440 satoshis. |
+| `core-prepared-segwit-v2.psbt` | The same payment as Core 32.1 writes it by default, in version 2, the change first this time. |
+| `core-prepared-segwit-v2-partial.psbt`, `core-prepared-segwit-v2-finalized.psbt`, `.hex` | `walletprocesspsbt` of the wallet `hw84` on the version 2 file, with `finalize` false, then true, then `finalizepsbt`: Core's signature of the P2WPKH coin as a partial signature, the final witness, and the transaction alone. |
+| `hw-segwit-payment-partial.psbt` | `walletprocesspsbt` of the wallet `hw84` on the file hw writes for the payment of the bip84 account (`segwitPaymentText`), with `finalize` false: Core's signature as a partial signature, as a hardware wallet leaves it. |
+| `hw-segwit-payment-finalized.psbt`, `.hex` | The same with `finalize` true, then `finalizepsbt`: the final witness in place of the partial signature and the derivation record of the input, which Core clears, and the transaction alone. |
 
 The literal values the specs expect for these files, the scripts, the
 derivation records, the fees and the addresses, are what `decodepsbt` shows

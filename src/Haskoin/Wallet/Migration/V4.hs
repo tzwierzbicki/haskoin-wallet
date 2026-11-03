@@ -60,12 +60,15 @@ migrateDB = lift $ do
   P.insert_ $ DBVersion 4
 
 -- | An account of version 3 as version 4 stores it: without its wallet and
--- its derivation path, with the fingerprint of its seed still to be learnt
+-- its derivation path, with the fingerprint of its seed still to be
+-- learnt, and with the purpose 44, since every account of version 3 is a
+-- BIP44 one
 account :: V3.DBAccount -> DBAccount
 account old =
   DBAccount
     { dBAccountName = V3.dBAccountName old,
       dBAccountIndex = V3.dBAccountIndex old,
+      dBAccountPurpose = 44,
       dBAccountNetwork = V3.dBAccountNetwork old,
       dBAccountExternal = V3.dBAccountExternal old,
       dBAccountInternal = V3.dBAccountInternal old,

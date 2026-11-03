@@ -174,7 +174,7 @@ bumpFeeSpec ctx = do
       withChain ctx (paidChain ctx) $ \home _ -> do
         stuck <- sentPayment home
         (errorOf <$> hwJson home ["bumpfee", stuck, "--fee-rate", "10"] [])
-          `shouldReturn` Right "The transaction pays 10 sat/byte: give a --fee-rate of at least 11"
+          `shouldReturn` Right "The transaction pays 10 sat/vB: give a --fee-rate of at least 11"
 
     it "cannot be replaced once in a block" $
       withChain ctx (paidChain ctx) $ \home chain -> do
@@ -194,7 +194,7 @@ bumpFeeSpec ctx = do
         runErr run `shouldNotSatisfy` Text.isInfixOf "Prepare the transaction anyway"
 
     -- At 120 satoshis a byte the coin still pays: 27120 of fee, 2880 of change
-    it "is not replaced at a fee rate above 100 satoshis per byte unless the user agrees" $
+    it "is not replaced at a fee rate above 100 satoshis per virtual byte unless the user agrees" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         stuck <- sentPayment home
         (errorOf <$> hwJson home ["bumpfee", stuck, "--fee-rate", "120"] ["n"])
@@ -203,7 +203,7 @@ bumpFeeSpec ctx = do
     -- 226 bytes at 120 satoshis a byte are a fee of 27120, which leaves
     -- 50000 - 20000 - 27120 = 2880 of change. Nothing is typed: a question
     -- would cancel the command.
-    it "is replaced at a fee rate above 100 satoshis per byte without asking with --yes" $
+    it "is replaced at a fee rate above 100 satoshis per virtual byte without asking with --yes" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         stuck <- sentPayment home
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "120", "--yes"] []
@@ -299,7 +299,7 @@ bumpFeeSpec ctx = do
         stuck <- withCostlyChild home
         run <- hw home ["bumpfee", stuck, "--fee-rate", "20"] []
         runErr run `shouldNotSatisfy` Text.isInfixOf "Replace both"
-        run `shouldSatisfy` printed "The replacement pays 5200 satoshis of fee, and must pay 13820: the fees of the transactions it replaces, and its own 260 bytes. Give a --fee-rate of at least 54"
+        run `shouldSatisfy` printed "The replacement pays 5200 satoshis of fee, and must pay 13820: the fees of the transactions it replaces, and its own 260 virtual bytes. Give a --fee-rate of at least 54"
 
     it "is replaced with the payment at a rate that pays for both" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -363,7 +363,7 @@ bumpFeeSpec ctx = do
       withChain ctx chain $ \home _ -> do
         stuck <- stuckPayment home
         run <- hw home ["bumpfee", stuck, "--fee-rate", "60"] ["y"]
-        run `shouldSatisfy` printedSentence "The coins of the transaction cannot pay its fee at 60 sat/byte, and this coin of the account would:"
+        run `shouldSatisfy` printedSentence "The coins of the transaction cannot pay its fee at 60 sat/vB, and this coin of the account would:"
         runErr run `shouldSatisfy` Text.isInfixOf ("\n    0.00030000 btc  at " <> externalAddrsText !! 1 <> "  /0/1\n  " <> Text.pack (coinArg (twoAddressesTx ctx) 1) <> "\n")
         runErr run `shouldSatisfy` Text.isInfixOf "Add it? [y/N]"
 
@@ -381,7 +381,7 @@ bumpFeeSpec ctx = do
         stuck <- stuckPayment home
         run <- hw home ["bumpfee", stuck, "--fee-rate", "60"] ["n", "n"]
         runErr run `shouldSatisfy` Text.isInfixOf "Add it? [y/N]"
-        run `shouldSatisfy` printedSentence "The coins of the transaction cannot pay its fee at 60 sat/byte, and no coin of the account is added. The recipient can pay the 0.00001520 btc missing out of what it receives:"
+        run `shouldSatisfy` printedSentence "The coins of the transaction cannot pay its fee at 60 sat/vB, and no coin of the account is added. The recipient can pay the 0.00001520 btc missing out of what it receives:"
         runErr run `shouldSatisfy` Text.isInfixOf ("\n  " <> Text.pack (textOf (otherAddr 0)) <> "  0.00040000 btc\n    0.00038480 btc paying it\n")
         runErr run `shouldSatisfy` Text.isInfixOf "Reduce what it receives? [y/N]"
 
@@ -419,7 +419,7 @@ bumpFeeSpec ctx = do
       withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
         stuck <- sentAll home
         run <- hw home ["bumpfee", stuck, "--fee-rate", "20"] ["y"]
-        run `shouldSatisfy` printedSentence "The coins of the transaction cannot pay its fee at 20 sat/byte, and no coin of the account is added. The recipient can pay the 0.00003400 btc missing out of what it receives:"
+        run `shouldSatisfy` printedSentence "The coins of the transaction cannot pay its fee at 20 sat/vB, and no coin of the account is added. The recipient can pay the 0.00003400 btc missing out of what it receives:"
         runErr run `shouldSatisfy` Text.isInfixOf ("\n  " <> Text.pack (textOf (otherAddr 0)) <> "  0.00076600 btc\n    0.00073200 btc paying it\n")
         runErr run `shouldSatisfy` Text.isInfixOf "Reduce what it receives? [y/N]"
 
@@ -443,7 +443,7 @@ bumpFeeSpec ctx = do
       withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
         stuck <- sentAll home
         run <- hw home ["bumpfee", stuck, "--fee-rate", "250"] []
-        run `shouldSatisfy` printed "The coins of the transaction cannot pay its fee at 250 sat/byte, and no confirmed coins of the account would. The recipient cannot pay the 81600 satoshis missing without being left with less than the dust limit of 546 satoshis"
+        run `shouldSatisfy` printed "The coins of the transaction cannot pay its fee at 250 sat/vB, and no confirmed coins of the account would. The recipient cannot pay the 81600 satoshis missing without being left with less than the dust limit of 546 satoshis"
         runErr run `shouldNotSatisfy` Text.isInfixOf "Reduce what it receives?"
         runErr run `shouldNotSatisfy` Text.isInfixOf "Prepare the transaction anyway"
 

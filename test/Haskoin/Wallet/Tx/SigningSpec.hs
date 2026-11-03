@@ -12,6 +12,7 @@ import Data.List (nub)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isJust, mapMaybe)
 import Haskoin
+import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Database.TxInfo (MyInputs (..), MyOutputs (..), TxInfo (..), TxSummary (..), TxType (..), txInfoHash)
 import Haskoin.Wallet.Tx.SignData
@@ -54,7 +55,7 @@ walletSigner ctx v = do
   when (isJust v.vecSweepKeys) $
     Left "this is a sweep vector: it belongs in test/data/tx-sweep"
   accountKey <- prefixError "account" $ accountSigningKey v.vecNetwork ctx v.vecAccount
-  return $ \c -> signWalletTx v.vecNetwork c v.vecSignData accountKey
+  return $ \c -> signWalletTx v.vecNetwork c (accountSpecKind v.vecAccount) v.vecSignData accountKey
 
 {- The signing data in JSON, and the files -}
 
@@ -90,7 +91,7 @@ fileSpec ctx = do
     -- not label
     it "is read as its account sees it, with the labels it carries" $ do
       let labelled = TxFile (Just btc) tsd (Map.fromList [("/0/0", "Salary")]) Map.empty
-      info <- expectRight $ parseTxFile btc ctx (testAccountPub ctx) labelled
+      info <- expectRight $ parseTxFile btc ctx Bip44 (testAccountPub ctx) labelled
       fmap (.myInputsLabel) info.txInfoSummary.summaryMyInputs `shouldBe` Map.fromList [(externalAddr 0, "Salary")]
       fmap (.myOutputsLabel) info.txInfoSummary.summaryMyOutputs `shouldBe` Map.fromList [(internalAddr 0, "")]
 
@@ -98,13 +99,13 @@ fileSpec ctx = do
     -- change address. The transaction touches neither.
     it "is read without the labels of paths the transaction does not touch" $ do
       let labelled = TxFile (Just btc) tsd (Map.fromList [("/0/1", "Elsewhere"), ("/1/3", "Other change")]) Map.empty
-      info <- expectRight $ parseTxFile btc ctx (testAccountPub ctx) labelled
+      info <- expectRight $ parseTxFile btc ctx Bip44 (testAccountPub ctx) labelled
       fmap (.myInputsLabel) info.txInfoSummary.summaryMyInputs `shouldBe` Map.fromList [(externalAddr 0, "")]
       fmap (.myOutputsLabel) info.txInfoSummary.summaryMyOutputs `shouldBe` Map.fromList [(internalAddr 0, "")]
 
     -- The change address, /1/0, has no label, so the file leaves it out
     it "is written with the labels of the account's addresses that have one, by their paths" $ do
-      info <- expectRight $ parseTxSignData btc ctx (testAccountPub ctx) tsd
+      info <- expectRight $ parseTxSignData btc ctx Bip44 (testAccountPub ctx) tsd
       let salaried = info {txInfoSummary = info.txInfoSummary {summaryMyInputs = Map.map (\i -> i {myInputsLabel = "Salary"}) info.txInfoSummary.summaryMyInputs}}
       txFilePathLabels (labelledTxFile btc salaried tsd) `shouldBe` Map.fromList [("/0/0", "Salary")]
 
@@ -112,11 +113,11 @@ fileSpec ctx = do
     -- spent, so its label is left aside.
     it "is read with the labels of the coins it spends, and without those of other transactions" $ do
       let labelled = TxFile (Just btc) tsd Map.empty (Map.fromList [(txHash (simpleFunding ctx), "Salary"), (fakeTxHash 3, "Elsewhere")])
-      info <- expectRight $ parseTxFile btc ctx (testAccountPub ctx) labelled
+      info <- expectRight $ parseTxFile btc ctx Bip44 (testAccountPub ctx) labelled
       Map.toList info.txInfoInputLabels `shouldBe` [(txHash (simpleFunding ctx), "Salary")]
 
     it "is written with the labels the coins it spends show" $ do
-      info <- expectRight $ parseTxSignData btc ctx (testAccountPub ctx) tsd
+      info <- expectRight $ parseTxSignData btc ctx Bip44 (testAccountPub ctx) tsd
       let salaried = info {txInfoInputLabels = Map.fromList [(txHash (simpleFunding ctx), "Salary")]}
       Map.toList (txFileInputLabels (labelledTxFile btc salaried tsd)) `shouldBe` [(txHash (simpleFunding ctx), "Salary")]
 
@@ -135,6 +136,15 @@ simpleTransaction ctx =
 -- | The transaction funding the wallet's coin of 'simpleTransaction'
 simpleFunding :: Ctx -> Tx
 simpleFunding ctx = fundingTx ctx 1 [(externalAddr 0, 100000000)]
+
+-- | The payment of the bip84 account of the test wallet: its coin of
+-- 100000 at /0/0, spent to another wallet (60000) and to its change
+-- address /1/0 (30000), built at 10 satoshis per virtual byte
+segwitUnsigned :: Ctx -> TxSignData
+segwitUnsigned ctx = TxSignData tx [segwitFunding] [Deriv :/ 0 :/ 0] [Deriv :/ 1 :/ 0] (Just 10) Nothing [] noLabel
+  where
+    segwitFunding = fundingTx ctx 2 [(segwitExternalAddr 0, 100000)]
+    tx = spendingTx ctx [(txHash segwitFunding, 0)] [(otherAddr 0, 60000), (segwitInternalAddr 0, 30000)]
 
 -- | The simple transaction signed with SIGHASH_ALL and ANYONECANPAY, as
 -- another signer could sign it: a valid signature that does not commit to
@@ -156,9 +166,9 @@ analysisSpec ctx =
       let tsd = simpleTransaction ctx
           tx = tsd.txSignDataTx
           locked = tsd {txSignDataTx = Tx tx.version tx.inputs tx.outputs tx.witness 814037}
-      info <- expectRight $ parseTxSignData btc ctx (testAccountPub ctx) locked
+      info <- expectRight $ parseTxSignData btc ctx Bip44 (testAccountPub ctx) locked
       info.txInfoSummary.summaryLockTime `shouldBe` 814037
-      plain <- expectRight $ parseTxSignData btc ctx (testAccountPub ctx) tsd
+      plain <- expectRight $ parseTxSignData btc ctx Bip44 (testAccountPub ctx) tsd
       plain.txInfoSummary.summaryLockTime `shouldBe` 0
 
     -- Its paths are those of an account the wallet does not have: the coin
@@ -172,7 +182,7 @@ analysisSpec ctx =
       (Map.null info.txInfoSummary.summaryMyInputs, Map.null info.txInfoSummary.summaryMyOutputs) `shouldBe` (True, True)
 
     it "describes an unsigned transaction with an estimated size" $ do
-      info <- expectRight $ parseTxSignData btc ctx accountPub unsigned
+      info <- expectRight $ parseTxSignData btc ctx Bip44 accountPub unsigned
       txInfoHash info `shouldBe` Nothing
       info.txInfoSummary.summaryType `shouldBe` TxDebit
       info.txInfoSummary.summaryAmount `shouldBe` (-60000000)
@@ -192,8 +202,8 @@ analysisSpec ctx =
       info.txInfoSummary.summaryNonStdInputs `shouldBe` []
       info.txInfoSummary.summaryNonStdOutputs `shouldBe` []
     it "describes the signed transaction with its real size" $ do
-      (signed, _) <- expectRight $ signWalletTx btc ctx unsigned testAccountKey
-      info <- expectRight $ parseTxSignData btc ctx accountPub signed
+      (signed, _) <- expectRight $ signWalletTx btc ctx Bip44 unsigned testAccountKey
+      info <- expectRight $ parseTxSignData btc ctx Bip44 accountPub signed
       txInfoHash info `shouldBe` Just "e66b790c73d4e72fe13a07e247e4439bdea210cac2f947040e901f1e0ce59ac2"
       -- The signature of this transaction is 72 bytes long, which the
       -- estimate assumes: 10 + 148 + 2 * 34
@@ -201,16 +211,16 @@ analysisSpec ctx =
       info.txInfoSummary.summaryFeeByte `shouldBe` 44247
       pendingFlags info `shouldBe` Just ((simpleNosigHash, True, False, False))
     it "reports the change too small for an output that the fee includes" $ do
-      -- A coin of 352500 pays 350000 at 10 satoshis per byte: the fee is
+      -- A coin of 352500 pays 350000 at 10 satoshis per virtual byte: the fee is
       -- 2500, 580 beyond the 10 + 148 + 34 = 192 bytes * 10 = 1920 of the
       -- transaction. Signing does not change it: the estimated size counts.
       let funding = fundingTx ctx 1 [(externalAddr 0, 352500)]
           tx = spendingTx ctx [(txHash funding, 0)] [(otherAddr 0, 350000)]
           tsd = TxSignData tx [funding] [Deriv :/ 0 :/ 0] [] (Just 10) Nothing [] noLabel
-      info <- expectRight $ parseTxSignData btc ctx accountPub tsd
+      info <- expectRight $ parseTxSignData btc ctx Bip44 accountPub tsd
       info.txInfoSummary.summaryFee `shouldBe` 2500
       info.txInfoSummary.summaryChangeInFee `shouldBe` Just 580
-      (signed, signedInfo) <- expectRight $ signWalletTx btc ctx tsd testAccountKey
+      (signed, signedInfo) <- expectRight $ signWalletTx btc ctx Bip44 tsd testAccountKey
       signed.txSignDataFeeRate `shouldBe` Just 10
       signedInfo.txInfoSummary.summaryChangeInFee `shouldBe` Just 580
     it "reports no change in the fee when the fee matches the requested rate" $ do
@@ -218,15 +228,15 @@ analysisSpec ctx =
       let funding = fundingTx ctx 1 [(externalAddr 0, 351920)]
           tx = spendingTx ctx [(txHash funding, 0)] [(otherAddr 0, 350000)]
           tsd = TxSignData tx [funding] [Deriv :/ 0 :/ 0] [] (Just 10) Nothing [] noLabel
-      info <- expectRight $ parseTxSignData btc ctx accountPub tsd
+      info <- expectRight $ parseTxSignData btc ctx Bip44 accountPub tsd
       info.txInfoSummary.summaryChangeInFee `shouldBe` Just 0
     it "refuses an output at an address the network cannot write, a SegWit one on Bitcoin Cash" $ do
       -- The same script is a payment to a SegWit address on Bitcoin, and
       -- one to nobody the review could name on Bitcoin Cash
       let tx = spendingTx ctx [(txHash (simpleFunding ctx), 0)] [(segwitAddr, 50000000), (internalAddr 0, 40000000)]
           tsd = TxSignData tx [simpleFunding ctx] [Deriv :/ 0 :/ 0] [Deriv :/ 1 :/ 0] Nothing Nothing [] noLabel
-      parseTxSignData bch ctx accountPub tsd `shouldBe` Left "There are non-standard outputs in the transaction"
-      info <- expectRight $ parseTxSignData btc ctx accountPub tsd
+      parseTxSignData bch ctx Bip44 accountPub tsd `shouldBe` Left "There are non-standard outputs in the transaction"
+      info <- expectRight $ parseTxSignData btc ctx Bip44 accountPub tsd
       info.txInfoSummary.summaryOtherOutputs `shouldBe` Map.fromList [(segwitAddr, 50000000)]
   where
     unsigned = simpleTransaction ctx
@@ -237,12 +247,37 @@ analysisSpec ctx =
 
 signingSpec :: Ctx -> Spec
 signingSpec ctx =
-  describe "Signing" $
+  describe "Signing" $ do
     it "refuses to sign a transaction without fee" $ do
       -- The coin of 1 BTC is sent in full
       let tx = spendingTx ctx [(txHash (simpleFunding ctx), 0)] [(otherAddr 0, 100000000)]
           unsigned = TxSignData tx [simpleFunding ctx] [Deriv :/ 0 :/ 0] [] Nothing Nothing [] noLabel
-      signWalletTx btc ctx unsigned testAccountKey `shouldBe` Left "The transaction pays no fee"
+      signWalletTx btc ctx Bip44 unsigned testAccountKey `shouldBe` Left "The transaction pays no fee"
+
+    -- The coin of 100000 at the first receiving address of the bip84
+    -- account, /0/0, spent to another wallet (60000) and to the first
+    -- change address of the account (30000): 10000 of fee
+    it "signs the P2WPKH coin of a bip84 account with the signature in the witness, verified with the digest of BIP 143" $ do
+      estimate <- expectRight $ parseTxSignData btc ctx Bip84 (testSegwitAccountPub ctx) (segwitUnsigned ctx)
+      -- The estimate: 10 bytes of frame, 41 for the input, 34 and 31 for the
+      -- outputs, then (2 + 108) / 4 of witness data, rounded up to 28
+      estimate.txInfoSummary.summarySize `shouldBe` 144
+      (signed, info) <- expectRight $ signWalletTx btc ctx Bip84 (segwitUnsigned ctx) testSegwitAccountKey
+      let tx = signed.txSignDataTx
+      map (.script) tx.inputs `shouldBe` [BS.empty]
+      map length tx.witness `shouldBe` [2]
+      verifySignedTx btc ctx signed `shouldBe` Right ()
+      -- 116 bytes outside the witness, which count four, and 109 or 110 of
+      -- witness data, as the signature is 71 or 72 bytes: 143.25 or 143.5,
+      -- rounded up
+      info.txInfoSummary.summarySize `shouldBe` 144
+      (info.txInfoSummary.summaryType, info.txInfoSummary.summaryAmount, info.txInfoSummary.summaryFee, info.txInfoSummary.summaryFeeByte)
+        `shouldBe` (TxDebit, -70000, 10000, 69)
+
+    -- The paths of a bip84 account derive other addresses from the key of
+    -- a bip44 one
+    it "refuses the transaction of a bip84 account taken for one of a bip44 account" $
+      signWalletTx btc ctx Bip44 (segwitUnsigned ctx) testAccountKey `shouldBe` Left "Input derivations don't match the transaction inputs"
 
 {- Verification -}
 
@@ -264,7 +299,7 @@ verificationSpec ctx =
       signed <- expectRight $ signedWithAnyoneCanPay ctx
       verifySignedTx btc ctx signed `shouldBe` Left "The signature of input 0 (1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj) has the sighash ALL|ANYONECANPAY, not ALL"
   where
-    signedTransaction = fst <$> expectRight (signWalletTx btc ctx (simpleTransaction ctx) testAccountKey)
+    signedTransaction = fst <$> expectRight (signWalletTx btc ctx Bip44 (simpleTransaction ctx) testAccountKey)
     invalidInput0 = "Invalid signature for input 0 (1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj)"
     withLockTime lockTime signed =
       let tx = signed.txSignDataTx
@@ -282,7 +317,7 @@ propertiesSpec ctx =
   describe "Signing properties" $
     prop "signs and verifies any transaction of the wallet" $
       forAll (walletTransaction ctx) $ \(tsd, expected) ->
-        case signWalletTx btc ctx tsd testAccountKey of
+        case signWalletTx btc ctx Bip44 tsd testAccountKey of
           Left err -> counterexample ("hw refused to sign: " <> err) False
           Right (signed, info) ->
             let inputs = length signed.txSignDataTx.inputs

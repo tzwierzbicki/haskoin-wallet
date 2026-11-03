@@ -2,8 +2,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Signing of messages with the key of a wallet address, in the Bitcoin
--- Signed Message format, and the verification of such signatures from any
--- address.
+-- Signed Message format, with the header byte of BIP 137 for a SegWit
+-- address, and the verification of such signatures from any address of
+-- one key.
 module Haskoin.Wallet.MessageSigning where
 
 import Control.Monad (guard, unless)
@@ -11,6 +12,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Base64 as B64
 import Data.Char (isSpace)
 import Data.List (find)
+import Data.Maybe (catMaybes)
 import qualified Data.Serialize as S
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -25,14 +27,23 @@ import Haskoin
 -- (src/common/signmessage.cpp in Bitcoin Core):
 --
 --   * BIP-322 states that the legacy format "MUST be restricted to the legacy
---     P2PKH invoice address format". hw only generates compressed P2PKH
---     addresses and signMessage rejects any address that is not the compressed
---     P2PKH address of the signing key. verifyMessage takes the signatures of
---     uncompressed keys too, for their P2PKH address, as Bitcoin Core does.
+--     P2PKH invoice address format". From a P2PKH address, hw signs as
+--     Bitcoin Core does, and signMessage rejects any address that is not
+--     an address of the compressed key. verifyMessage takes the signatures
+--     of uncompressed keys too, for their P2PKH address, as Bitcoin Core
+--     does.
+--   * From a native SegWit address, the P2WPKH address of a BIP84 account,
+--     hw signs the same way with the header byte of BIP 137, 39 to 42,
+--     which marks the kind of address: what Trezor, Ledger, Coldcard and
+--     Sparrow give for such an address. Bitcoin Core verifies no signature
+--     from a SegWit address, and Electrum signs from one with the header
+--     byte of a P2PKH address. verifyMessage therefore takes any header
+--     byte of a compressed key for a SegWit address, as Sparrow does: the
+--     verdict is whether the key the signature recovers gives the address.
 --   * BIP-322 recommends (SHOULD) its new formats even for P2PKH. We use the
 --     legacy format because it is accepted by Bitcoin Core and other legacy
---     verifiers. Supporting SegWit or Taproot addresses would require the
---     BIP-322 simple or full formats instead.
+--     verifiers. Taproot addresses would require the BIP-322 simple or
+--     full formats instead.
 --   * The message is signed byte for byte as UTF-8, with no normalization.
 --     Leading or trailing whitespace and line endings are part of the signed
 --     message (see messageWarnings).
@@ -50,20 +61,27 @@ signedMessageHash message =
     S.encode (VarString "Bitcoin Signed Message:\n")
       <> S.encode (VarString $ encodeUtf8 message)
 
--- | Sign a message using the Bitcoin Signed Message format. The address must
--- be the compressed P2PKH address of the signing key. Returns the 65-byte
--- recoverable signature: a header byte followed by r and s (32 bytes each).
--- This matches CKey::SignCompact in Bitcoin Core: the header byte is
--- 27 + recovery id + 4 for a compressed public key (31 or 32 in practice).
+-- | Sign a message using the Bitcoin Signed Message format. The address
+-- must be the P2PKH or the P2WPKH address of the compressed signing key.
+-- Returns the 65-byte recoverable signature: a header byte followed by r
+-- and s (32 bytes each). The header byte is 27 + recovery id + 4 for the
+-- P2PKH address of a compressed public key (31 or 32 in practice), as
+-- CKey::SignCompact in Bitcoin Core makes it, and 27 + recovery id + 12
+-- for a P2WPKH address, as BIP 137 marks it (39 or 40 in practice).
 signMessage :: Ctx -> Address -> SecKey -> Text -> Either String BS.ByteString
 signMessage ctx addr key message = do
-  unless (pubKeyAddr ctx (wrapPubKey True pub) == addr) $
-    Left "The address does not match the signing key"
+  headerBase <-
+    if pubKeyAddr ctx public == addr
+      then Right compressedHeader
+      else
+        if pubKeyWitnessAddr ctx public == Just addr
+          then Right witnessHeader
+          else Left "The address does not match the signing key"
   recId <- recoveryId ctx pub h r s
-  -- Header byte: 27 + recovery id + 4 (compressed public key)
-  return $ BS.cons (27 + 4 + recId) rs
+  return $ BS.cons (headerBase + recId) rs
   where
     pub = derivePubKey ctx key
+    public = wrapPubKey True pub
     h = signedMessageHash message
     -- libsecp256k1 signs with RFC6979 nonces and returns low-S signatures
     rs = (exportCompactSig ctx $ signHash ctx key h).get
@@ -94,22 +112,31 @@ encodeSignature = decodeUtf8 . B64.encode
 
 -- | Whether the key of the address signed the message, from the signature in
 -- base64 as signmsg writes it. The check is refused (Left) when the address
--- is not P2PKH, the only kind the format signs from, or when the signature
--- does not decode to 65 bytes. The verdict is the one of Bitcoin Core's
--- verifymessage: the signature recovers a public key, compressed or not as
--- its header byte says, and the address must be the address of that key. A
--- signature that recovers no key is not valid: a header byte outside 27 to
--- 34, or r or s outside the curve order.
+-- is not one of a single key, P2PKH, P2WPKH or P2SH-P2WPKH, the kinds the
+-- format signs from, or when the signature does not decode to 65 bytes.
+-- The verdict for a P2PKH address is the one of Bitcoin Core's
+-- verifymessage: the signature recovers a public key, compressed or not
+-- as its header byte says, and the address must be the address of that
+-- key. For a SegWit address, the address must be the one of that kind of
+-- the recovered key, whatever header byte of a compressed key the signer
+-- chose: the one of BIP 137 or the one of a P2PKH address. A signature
+-- that recovers no key is not valid: a header byte outside 27 to 42, or r
+-- or s outside the curve order.
 verifyMessage :: Ctx -> Address -> Text -> Text -> Either String Bool
 verifyMessage ctx addr signature message = do
-  unless (isPubKeyAddress addr) $
-    Left "The address is not a P2PKH address: a message can only be signed from one"
+  unless (isPubKeyAddress addr || isWitnessPubKeyAddress addr || isScriptAddress addr) $
+    Left "The address is not a P2PKH or a SegWit address of one key: a message can only be signed from one"
   (header, r, s) <- decodeSignature signature
   return $ case keyHeader header of
     Nothing -> False
     Just (compressed, recId) ->
-      let signer = recoverPubKey ctx (signedMessageHash message) recId r s
-       in (pubKeyAddr ctx . wrapPubKey compressed <$> signer) == Just addr
+      let signer = wrapPubKey compressed <$> recoverPubKey ctx (signedMessageHash message) recId r s
+       in maybe False (\key -> addr `elem` keyAddresses ctx key) signer
+
+-- | The addresses of a key a message can be signed from: its P2PKH
+-- address, and, for a compressed key, its P2WPKH and P2SH-P2WPKH ones
+keyAddresses :: Ctx -> PublicKey -> [Address]
+keyAddresses ctx key = pubKeyAddr ctx key : catMaybes [pubKeyWitnessAddr ctx key, pubKeyCompatWitnessAddr ctx key]
 
 -- | The header byte, r and s of a signature written in base64: 65 bytes
 decodeSignature :: Text -> Either String (Word8, BS.ByteString, BS.ByteString)
@@ -121,13 +148,22 @@ decodeSignature signature = do
 
 -- | What the header byte of a signature says of the key: whether it is
 -- compressed, and the recovery id. The bytes 27 to 30 are the ids 0 to 3 of
--- an uncompressed key, 31 to 34 those of a compressed one. Nothing for any
--- other byte: BIP-137 gives 35 to 42 to SegWit addresses, which the format
--- does not sign from.
+-- an uncompressed key, 31 to 34 those of a compressed one, and 35 to 42
+-- those of a compressed one again, where BIP 137 marks a P2SH-P2WPKH
+-- address with 35 to 38 and a P2WPKH one with 39 to 42. Nothing for any
+-- other byte.
 keyHeader :: Word8 -> Maybe (Bool, Word8)
 keyHeader header
-  | header >= 27 && header <= 34 = Just (header >= 31, (header - 27) `mod` 4)
+  | header >= uncompressedHeader && header <= witnessHeader + 3 = Just (header >= compressedHeader, (header - uncompressedHeader) `mod` 4)
   | otherwise = Nothing
+
+-- | The header byte of the recovery id 0 for each kind of key and
+-- address: 27 for an uncompressed key, 31 for a compressed one and its
+-- P2PKH address, 39 for a P2WPKH address as BIP 137 marks it
+uncompressedHeader, compressedHeader, witnessHeader :: Word8
+uncompressedHeader = 27
+compressedHeader = 31
+witnessHeader = 39
 
 {- Recovering the key -}
 

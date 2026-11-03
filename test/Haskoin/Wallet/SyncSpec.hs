@@ -37,6 +37,7 @@ import Haskoin.Wallet.Database.PendingTx
 import Haskoin.Wallet.Database.RawTx (hasRawTx, insertRawTx)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
+import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), MyOutputs (..), TxInfo (..), TxSummary (..), TxType (..), txInfoHash, txsAfter)
 import Haskoin.Wallet.Database.TxLabel (txLabel)
@@ -587,14 +588,14 @@ spec = prepareContext $ \ctx -> do
     -- The scan behind the watch of the gap, on the external chain with a
     -- window of 3 instead of the default 20: the ten written-out addresses
     -- of the test wallet are enough
-    let scan store = runExceptT $ scanChain ctx (toStore store) (testAccountPub ctx) extDeriv 3 0
+    let scan store = runExceptT $ scanChain ctx (toStore store) Bip44 (testAccountPub ctx) extDeriv 3 0
         -- A store where the given addresses each have one transaction
         used addrs = emptyStore {fakeBalances = [Store.Balance addr 1000 0 1 1 1000 | addr <- addrs]}
 
     it "finds nothing in an empty store, after one window" $ do
       asked <- newIORef []
       let store = notingBalanceRequests asked (toStore emptyStore)
-      runExceptT (scanChain ctx store (testAccountPub ctx) extDeriv 3 0) `shouldReturn` Right 0
+      runExceptT (scanChain ctx store Bip44 (testAccountPub ctx) extDeriv 3 0) `shouldReturn` Right 0
       readIORef asked `shouldReturn` [take 3 externalAddrs]
 
     it "counts the addresses up to the last used one" $
@@ -606,7 +607,7 @@ spec = prepareContext $ \ctx -> do
     it "looks at one more window past the last used address" $ do
       asked <- newIORef []
       let store = notingBalanceRequests asked (toStore (used [externalAddr 2]))
-      runExceptT (scanChain ctx store (testAccountPub ctx) extDeriv 3 0) `shouldReturn` Right 3
+      runExceptT (scanChain ctx store Bip44 (testAccountPub ctx) extDeriv 3 0) `shouldReturn` Right 3
       readIORef asked `shouldReturn` [take 3 externalAddrs, take 3 (drop 3 externalAddrs)]
 
     it "counts an address whose coins are all spent as used" $
@@ -616,7 +617,7 @@ spec = prepareContext $ \ctx -> do
       scan (emptyStore {fakeBalances = [Store.Balance (externalAddr 1) 0 0 0 0 0]}) `shouldReturn` Right 0
 
     it "fails when the store fails" $
-      runExceptT (scanChain ctx ((toStore emptyStore) {storeBalances = \_ -> throwError "The store is down"}) (testAccountPub ctx) extDeriv 3 0)
+      runExceptT (scanChain ctx ((toStore emptyStore) {storeBalances = \_ -> throwError "The store is down"}) Bip44 (testAccountPub ctx) extDeriv 3 0)
         `shouldReturn` Left "The store is down"
 
     it "recovers an account on its first sync, as a restored one is: every used address, its transactions and coins" $
@@ -635,7 +636,7 @@ spec = prepareContext $ \ctx -> do
     -- Accounts 0 and 2 of the test seed were paid at their first receiving
     -- address; account 1 and the ones after 2 never were
     let paidAccounts = paidStore ctx [(externalAddr 0, 50000), (account2Addr, 20000)]
-        found store seed gap = map fst <$> recoverableAccounts ctx cfg (toStore store) btc seed gap
+        found store seed gap = map fst <$> recoverableAccounts ctx cfg (toStore store) Bip44 btc seed gap
 
     it "finds the accounts that were paid, looking past a run of unpaid ones as long as the account gap" $
       inDatabaseE $ do
@@ -645,7 +646,7 @@ spec = prepareContext $ \ctx -> do
     it "stops after the account gap, having looked at one window of the receiving chain of each account" $ do
       asked <- newIORef []
       let store = notingBalanceRequests asked (toStore emptyStore)
-      inDatabaseE $ (map fst <$> recoverableAccounts ctx cfg store btc (testSeed ctx) 3) `dbShouldBeE` []
+      inDatabaseE $ (map fst <$> recoverableAccounts ctx cfg store Bip44 btc (testSeed ctx) 3) `dbShouldBeE` []
       windows <- readIORef asked
       map length windows `shouldBe` [20, 20, 20]
       map (take 1) windows `shouldBe` [[externalAddr 0], [account1Addr], [account2Addr]]
@@ -674,6 +675,23 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         recoverSeed ctx cfg (toStore emptyStore) btc (testSeed ctx) 2 `dbShouldBeE` []
         lift getAccounts `dbShouldBeE` []
+
+    -- The chain pays the first receiving address of the bip44 account 0
+    -- and of the bip84 account 0 of the seed, and no other account
+    it "creates the bip84 accounts found after the bip44 ones, named with -segwit, each kind searched with the account gap" $
+      inDatabaseE $ do
+        let store = paidStore ctx [(externalAddr 0, 50000), (segwitExternalAddr 0, 30000)]
+        results <- recoverSeed ctx cfg (toStore store) btc (testSeed ctx) 1
+        liftIO $ map (dBAccountName . syncResAccount) results `shouldBe` ["btc0", "btc0-segwit"]
+        liftIO $ map (pathToStr . accountPath . syncResAccount) results `shouldBe` ["/44'/0'/0'", "/84'/0'/0'"]
+        liftIO $ map syncResSpendable results `shouldBe` [50000, 30000]
+
+    it "searches no bip84 account on Bitcoin Cash, which has none" $ do
+      asked <- newIORef []
+      let store = notingBalanceRequests asked (toStore emptyStore)
+      inDatabaseE $ recoverSeed ctx cfg store bch (testSeed ctx) 1 `dbShouldBeE` []
+      windows <- readIORef asked
+      map (take 1) windows `shouldBe` [[bchExternalAddr]]
 
   describe "Watching the gap of addresses" $ do
     -- A gap of 3 instead of the default 20: the sync looks at the three

@@ -6,8 +6,10 @@
 -- ("Haskoin.Wallet.Bip329"), which exportacc writes and importacc reads.
 --
 -- An account goes in the file as an @xpub@ record: its key, its name as
--- the label, its origin @pkh([fingerprint/44'/coin'/index'])@ when hw knows
--- the fingerprint of its seed, and its network under hw's own key. Then
+-- the label, its origin @pkh([fingerprint/44'/coin'/index'])@, or
+-- @wpkh([fingerprint/84'/coin'/index'])@ for a BIP84 account, when hw
+-- knows the fingerprint of its seed, and its network and its purpose, 44
+-- or 84, under hw's own keys. Then
 -- come its labelled receiving addresses, each with its key path, its
 -- labelled transactions, with their height, fee and value when the chain
 -- has them, and the coins the user locked, as outputs that are not
@@ -35,9 +37,14 @@
 -- one, or a key alone, and the whole file may be the one Bitcoin Core's
 -- listdescriptors writes, or the generic JSON of a Coldcard. A descriptor
 -- is read as the @xpub@ record it amounts to, with the origin of its key
--- and no name, so the account it adds is named after its network and
--- index, as recover names one. hw holds BIP44 accounts: a descriptor of
--- another kind is refused, with the reason, and the import goes on.
+-- and no name, so the account it adds is named after its network, its
+-- index and its kind, as recover names one. The kind of a new account is
+-- what its record says of it: the script function of its origin, pkh or
+-- wpkh, the purpose hw wrote, or the prefix of SLIP-132 of its key, zpub
+-- or vpub for a BIP84 account; a key that says nothing, a bare xpub, is of
+-- the kind the command names, BIP44 without one. hw holds BIP44 and BIP84
+-- accounts: a descriptor of another kind, such as sh(wpkh()), is refused,
+-- with the reason, and the import goes on.
 --
 -- The document exportacc wrote before this format, one JSON object with
 -- the key, the network, the name and the fingerprint, is read as the
@@ -69,8 +76,8 @@ import qualified Data.Aeson as Json
 import Data.Aeson.Types (Pair, Parser)
 import qualified Data.Aeson.Types as Json
 import Data.Bits (testBit)
-import Data.List (nubBy)
-import Data.Maybe (fromMaybe, isJust, listToMaybe, maybeToList)
+import Data.List (nub, nubBy)
+import Data.Maybe (catMaybes, fromMaybe, isJust, listToMaybe, maybeToList)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -89,7 +96,7 @@ import Haskoin.Wallet.Database.PendingTx (PendingTx (..), findPendingTx, pending
 import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..), liveSummary)
 import Haskoin.Wallet.Database.TxLabel (accountTxLabels, setTxLabel)
 import Haskoin.Wallet.Descriptor
-import Haskoin.Wallet.Keys (bip44Deriv, xPubIndex)
+import Haskoin.Wallet.Keys (AccountKind (..), accountDeriv, checkKindOnNetwork, kindName, kindOfPurpose, kindPurpose, xPubIndex)
 import Haskoin.Wallet.Sync (recoveredName)
 import Haskoin.Wallet.Tx.SignData (TxSignData (..), isSigned)
 import Numeric.Natural (Natural)
@@ -143,12 +150,14 @@ accountRecords ctx (accId, acc) = do
   return $ keyRecord : addressRecords addrs <> chainRecords <> pendingRecords <> coinRecords
   where
     net = accountNetwork acc
-    originM = originText . (`accountOrigin` accountPath acc) <$> accountFingerprint acc
+    kind = accountKind acc
+    originM = originText . (\fingerprint -> accountOrigin kind fingerprint (accountPath acc)) <$> accountFingerprint acc
     withOrigin r = r {recordOrigin = originM}
     keyRecord =
       (withOrigin (record XpubRecord (dBAccountXPubKey acc)))
         { recordLabel = Just (dBAccountName acc),
-          recordNetwork = Just (dBAccountNetwork acc)
+          recordNetwork = Just (dBAccountNetwork acc),
+          recordPurpose = Just (kindPurpose kind)
         }
     addressRecords addrs =
       [ (withOrigin (record AddrRecord (dBAddressAddress addr)))
@@ -245,23 +254,24 @@ emptyReport accounts unreadable =
 -- descriptors of accounts too, a file of descriptors as another wallet
 -- writes it, or a document of the accounts as exportacc wrote them
 -- before. The network is the one of --network or of the configuration,
--- for a key the file places on none.
-importFile :: (MonadUnliftIO m) => Ctx -> Maybe Network -> Text -> ExceptT String (DB m) ImportReport
-importFile ctx netM content =
+-- for a key the file places on none, and the kind is the one of --type,
+-- for a key the file says no kind of.
+importFile :: (MonadUnliftIO m) => Ctx -> Maybe Network -> Maybe AccountKind -> Text -> ExceptT String (DB m) ImportReport
+importFile ctx netM kindM content =
   case wholeObject content of
     Just o
       | isJust (Json.parseMaybe (.: "xpubkey") o :: Maybe Json.Value) -> do
           doc <- liftEither (Json.parseEither (unmarshalValue ctx) (Json.Object o))
-          importRecords ctx netM [Right (documentRecord ctx doc)] [] []
+          importRecords ctx netM kindM [Right (documentRecord ctx doc)] [] []
       | Just descriptors <- fileDescriptors o ->
-          importRecords ctx netM (oneOfEachKey (descriptorRecord <$> descriptors)) [] []
+          importRecords ctx netM kindM (oneOfEachKey (descriptorRecord <$> descriptors)) [] []
     _ -> do
       let classified = classifyLine <$> readLines content
           keys = oneOfEachKey [key | KeyLine key <- classified]
           records = [(number, r) | RecordLine number r <- classified]
           otherTypes = length [() | OtherTypeLine <- classified]
           unreadable = [number | UnreadableLine number <- classified]
-      report <- importRecords ctx netM keys records unreadable
+      report <- importRecords ctx netM kindM keys records unreadable
       return report {reportNotKept = reportNotKept report + fromIntegral otherTypes}
 
 -- | The one JSON object a file holds, when it is one: the document of an
@@ -318,21 +328,23 @@ oneOfEachKey = nubBy sameKey
     sameKey (Right a) (Right b) = recordRef a == recordRef b
     sameKey _ _ = False
 
--- | The xpub record such a document amounts to
+-- | The xpub record such a document amounts to: the hw that wrote it had
+-- BIP44 accounts alone
 documentRecord :: Ctx -> PubKeyDoc -> Record
 documentRecord ctx (PubKeyDoc xpub net name fingerprintM) =
   (record XpubRecord (xPubExport net ctx xpub))
     { recordLabel = Just name,
-      recordOrigin = originText . (`accountOrigin` bip44Deriv net (xPubIndex xpub)) <$> fingerprintM,
-      recordNetwork = Just (cs net.name)
+      recordOrigin = originText . (\fingerprint -> accountOrigin Bip44 fingerprint (accountDeriv Bip44 net (xPubIndex xpub))) <$> fingerprintM,
+      recordNetwork = Just (cs net.name),
+      recordPurpose = Just (kindPurpose Bip44)
     }
 
 -- | Import the accounts of the key lines, the refused ones as they are,
 -- then the other records, each with the number of its line, and count
 -- the lines given as not readable
-importRecords :: (MonadUnliftIO m) => Ctx -> Maybe Network -> [Either AccountImport Record] -> [(Natural, Record)] -> [Natural] -> ExceptT String (DB m) ImportReport
-importRecords ctx netM keys others unreadable = do
-  accountImports <- mapM (either return (importKey ctx netM)) keys
+importRecords :: (MonadUnliftIO m) => Ctx -> Maybe Network -> Maybe AccountKind -> [Either AccountImport Record] -> [(Natural, Record)] -> [Natural] -> ExceptT String (DB m) ImportReport
+importRecords ctx netM kindM keys others unreadable = do
+  accountImports <- mapM (either return (importKey ctx netM kindM)) keys
   accounts <- lift getAccounts
   foldM (importRecord ctx accounts) (emptyReport accountImports unreadable) others
 
@@ -340,13 +352,17 @@ importRecords ctx netM keys others unreadable = do
 
 -- | Import the account of an xpub record: create it, or bring the one the
 -- wallet holds in line with the record. A record the wallet cannot take
--- says why, and the import goes on.
-importKey :: (MonadUnliftIO m) => Ctx -> Maybe Network -> Record -> ExceptT String (DB m) AccountImport
-importKey ctx netM r = do
-  heldM <- lift $ P.getBy (UniqueXPubKey (recordRef r))
-  outcome <- attempt $ case heldM of
-    Just (P.Entity heldId held) -> heldAccount heldId held
-    Nothing -> newAccount
+-- says why, and the import goes on. The key of the record is read first,
+-- as BIP32 writes it: a zpub or a vpub names the same key as its xpub, and
+-- says its account is a BIP84 one ('readAccountKey').
+importKey :: (MonadUnliftIO m) => Ctx -> Maybe Network -> Maybe AccountKind -> Record -> ExceptT String (DB m) AccountImport
+importKey ctx netM kindM r = do
+  outcome <- attempt $ do
+    (prefixKindM, keyText) <- liftEither (readAccountKey (recordRef r))
+    heldM <- lift $ P.getBy (UniqueXPubKey keyText)
+    case heldM of
+      Just (P.Entity heldId held) -> heldAccount prefixKindM heldId held
+      Nothing -> newAccount prefixKindM keyText
   return $ either (AccountRefused shownName . cs) id outcome
   where
     originM = parseOrigin =<< recordOrigin r
@@ -354,16 +370,30 @@ importKey ctx netM r = do
     shownName = fromMaybe (Text.take 12 (recordRef r) <> "...") (recordLabel r)
     networkNamed = forM (recordNetwork r) $ \name ->
       liftMaybe ("Unknown network " <> cs name) (netByName (cs name))
+    -- The kind of account the record says its key is of: by the script
+    -- function of its origin, the purpose hw wrote, or the prefix of the
+    -- key, which must agree; or none, for a key that says nothing
+    recordKind prefixKindM = do
+      purposeKindM <- forM (recordPurpose r) $ \purpose ->
+        liftMaybe ("The purpose " <> show purpose <> " is of no kind of account hw holds: " <> cs (Text.intercalate " or " (kindName <$> [minBound .. maxBound]))) (kindOfPurpose purpose)
+      case nub (catMaybes [kindOfScripts . originScripts =<< originM, purposeKindM, prefixKindM]) of
+        [] -> return Nothing
+        [kind] -> return (Just kind)
+        kinds -> throwError $ "The record says its key is of accounts of two kinds, " <> cs (Text.intercalate " and " (kindName <$> kinds)) <> ": its origin, its purpose and the prefix of its key do not agree"
     -- An account the wallet holds: the record must agree with it, and it
     -- learns the fingerprint of the record. It takes the name of the record
     -- when hw wrote it, which the network key tells: another wallet labels
     -- a key with the name of its signer, such as BIP39, not of the account.
-    heldAccount heldId held = do
+    heldAccount prefixKindM heldId held = do
       namedM <- networkNamed
       forM_ namedM $ \named ->
         unless (named.name == cs (dBAccountNetwork held)) $
           throwError $ "The account " <> cs (dBAccountName held) <> " on " <> cs (dBAccountNetwork held) <> " holds this key, which is of no account on " <> named.name
-      checkOrigin originM (accountPath held)
+      saidKindM <- recordKind prefixKindM
+      forM_ saidKindM $ \said ->
+        unless (said == accountKind held) $
+          throwError $ "The account " <> cs (dBAccountName held) <> " holds this key as a " <> cs (kindName (accountKind held)) <> " account, and the record says it is of a " <> cs (kindName said) <> " one"
+      checkOrigin (accountKind held) originM (accountPath held)
       forM_ fingerprintM (learnFingerprint heldId)
       case recordLabel r of
         Just new | new /= dBAccountName held && isJust namedM -> do
@@ -374,44 +404,46 @@ importKey ctx netM r = do
             Left why -> AccountKept acc (Just (cs why))
         _ -> (`AccountKept` Nothing) <$> getAccountById heldId
     -- An account the wallet does not hold: on the network the record or the
-    -- command names, from a BIP44 account key
-    newAccount = do
-      when (isPrivateKey (recordRef r)) $
+    -- command names, of the kind the record says, or the command names, or
+    -- BIP44, from an account key
+    newAccount prefixKindM keyText = do
+      when (isPrivateKey keyText) $
         throwError "The key is a private key. hw takes the public key of an account, and no file of accounts should hold a private one"
-      when (isSlip132Key (recordRef r)) $
-        throwError "The key has a prefix of SLIP-132, which marks a BIP49 or BIP84 account. hw holds BIP44 accounts, whose keys start with xpub or tpub"
       namedM <- networkNamed
       net <- liftMaybe noNetwork (namedM <|> netM)
-      xpub <- liftMaybe ("The key does not read as a key of " <> net.name) (xPubImport net ctx (recordRef r))
+      xpub <- liftMaybe ("The key does not read as a key of " <> net.name) (xPubImport net ctx keyText)
       unless (xpub.depth == 3 && testBit xpub.index 31) $
-        throwError "The key is not that of a BIP44 account, three hardened steps below the master key"
-      checkOrigin originM (bip44Deriv net (xPubIndex xpub))
-      let name = fromMaybe (recoveredName net (xPubIndex xpub)) (recordLabel r)
-      AccountCreated . snd <$> insertAccount net ctx name xpub fingerprintM
+        throwError "The key is not that of an account, three hardened steps below the master key"
+      kind <- fromMaybe (fromMaybe Bip44 kindM) <$> recordKind prefixKindM
+      liftEither $ checkKindOnNetwork net kind
+      checkOrigin kind originM (accountDeriv kind net (xPubIndex xpub))
+      let name = fromMaybe (recoveredName kind net (xPubIndex xpub)) (recordLabel r)
+      AccountCreated . snd <$> insertAccount kind net ctx name xpub fingerprintM
 
 -- | The result of an action that may be refused, as a value
 attempt :: (Monad m) => ExceptT String m a -> ExceptT String m (Either String a)
 attempt action = (Right <$> action) `catchError` (return . Left)
 
--- | Refuse an origin that is not that of the BIP44 account at the path: a
--- key of another kind of wallet, such as a BIP84 one, derives other
--- addresses. A record without an origin, or with one hw cannot read, is
--- not checked.
-checkOrigin :: (Monad m) => Maybe Origin -> HardPath -> ExceptT String m ()
-checkOrigin originM path = forM_ originM $ \origin ->
-  unless (originScripts origin == ["pkh"] && originPath origin == toGeneric path) $
-    throwError $ "The key is not that of the BIP44 account " <> pathToStr path <> ": its origin is " <> cs (originText origin)
+-- | Refuse an origin that is not that of the account of the kind at the
+-- path: a key of another kind of wallet, such as a BIP49 one, derives
+-- other addresses. A record without an origin, or with one hw cannot
+-- read, is not checked.
+checkOrigin :: (Monad m) => AccountKind -> Maybe Origin -> HardPath -> ExceptT String m ()
+checkOrigin kind originM path = forM_ originM $ \origin ->
+  unless (originScripts origin == kindScripts kind && originPath origin == toGeneric path) $
+    throwError $ "The key is not that of the " <> cs (kindName kind) <> " account " <> pathToStr path <> ": its origin is " <> cs (originText origin)
 
--- | The accounts of the wallet an origin names: those at its path whose
--- seed it names, or whose seed hw does not know yet. An origin hw cannot
--- read as that of a BIP44 account names none.
+-- | The accounts of the wallet an origin names: those of its kind at its
+-- path whose seed it names, or whose seed hw does not know yet. An origin
+-- hw cannot read as that of an account of a kind it holds names none.
 accountsOfOrigin :: [(DBAccountId, DBAccount)] -> Text -> [(DBAccountId, DBAccount)]
 accountsOfOrigin accounts text =
   case parseOrigin text of
     Just origin
-      | originScripts origin == ["pkh"] ->
+      | Just kind <- kindOfScripts (originScripts origin) ->
           [ held
             | held@(_, acc) <- accounts,
+              accountKind acc == kind,
               toGeneric (accountPath acc) == originPath origin,
               maybe True (== originFingerprint origin) (accountFingerprint acc)
           ]
@@ -423,11 +455,11 @@ accountsOfOrigin accounts text =
 importRecord :: (MonadUnliftIO m) => Ctx -> [(DBAccountId, DBAccount)] -> ImportReport -> (Natural, Record) -> ExceptT String (DB m) ImportReport
 importRecord ctx accounts report (number, r) =
   case recordType r of
-    AddrRecord -> labelAddressRecord ctx accounts report r (`textToAddr` recordRef r)
-    PubkeyRecord ->
-      case publicKeyAddress ctx (recordRef r) of
-        Just addr -> labelAddressRecord ctx accounts report r (const (Just addr))
-        Nothing -> return (leftAside report)
+    AddrRecord -> labelAddressRecord ctx accounts report r (\acc -> textToAddr (accountNetwork acc) (recordRef r))
+    PubkeyRecord
+      | isJust (publicKeyOf ctx (recordRef r)) ->
+          labelAddressRecord ctx accounts report r (\acc -> publicKeyAddress ctx (accountKind acc) (recordRef r))
+      | otherwise -> return (leftAside report)
     TxRecord ->
       case hexToTxHash (recordRef r) of
         Just tid -> labelTxRecord accounts report r tid
@@ -443,17 +475,26 @@ importRecord ctx accounts report (number, r) =
     leftAside rep = rep {reportNotKept = reportNotKept rep + 1}
     unreadable rep = rep {reportUnreadable = reportUnreadable rep <> [number]}
 
--- | The P2PKH address of a public key written in hexadecimal, compressed or
--- not. None for a key of another kind, such as an x-only key.
-publicKeyAddress :: Ctx -> Text -> Maybe Address
-publicKeyAddress ctx hex = do
+-- | A public key written in hexadecimal, compressed or not. None for a
+-- key of another kind, such as an x-only key.
+publicKeyOf :: Ctx -> Text -> Maybe PublicKey
+publicKeyOf ctx hex = do
   bytes <- decodeHex hex
-  key <- either (const Nothing) Just (unmarshal ctx bytes) :: Maybe PublicKey
-  return (pubKeyAddr ctx key)
+  either (const Nothing) Just (unmarshal ctx bytes)
 
--- | Label the address of a record, read on the network of each account as
--- the function gives it: see 'placeAddress'
-labelAddressRecord :: (MonadUnliftIO m) => Ctx -> [(DBAccountId, DBAccount)] -> ImportReport -> Record -> (Network -> Maybe Address) -> ExceptT String (DB m) ImportReport
+-- | The address of a public key written in hexadecimal in an account of
+-- the kind: its P2PKH address in a BIP44 account, compressed or not, its
+-- P2WPKH address in a BIP84 one, which an uncompressed key does not have
+publicKeyAddress :: Ctx -> AccountKind -> Text -> Maybe Address
+publicKeyAddress ctx kind hex = do
+  key <- publicKeyOf ctx hex
+  case kind of
+    Bip44 -> Just (pubKeyAddr ctx key)
+    Bip84 -> pubKeyWitnessAddr ctx key
+
+-- | Label the address of a record, read in each account as the function
+-- gives it: see 'placeAddress'
+labelAddressRecord :: (MonadUnliftIO m) => Ctx -> [(DBAccountId, DBAccount)] -> ImportReport -> Record -> (DBAccount -> Maybe Address) -> ExceptT String (DB m) ImportReport
 labelAddressRecord ctx accounts report r readOn =
   case recordLabel r of
     Nothing -> return report
@@ -486,13 +527,13 @@ data Placement
     NotPlaced
 
 -- | Find the address of a record among the addresses of the accounts, read
--- on the network of each; or derive it from its key path in the account
--- whose key gives it, which then generates its receiving chain up to it,
--- as the wallet that wrote the file had it
-placeAddress :: (MonadUnliftIO m) => Ctx -> [(DBAccountId, DBAccount)] -> (Network -> Maybe Address) -> Maybe SoftPath -> ExceptT String (DB m) Placement
-placeAddress ctx accounts readOn keypathM = do
+-- in each, on its network and of its kind; or derive it from its key path
+-- in the account whose key gives it, which then generates its receiving
+-- chain up to it, as the wallet that wrote the file had it
+placeAddress :: (MonadUnliftIO m) => Ctx -> [(DBAccountId, DBAccount)] -> (DBAccount -> Maybe Address) -> Maybe SoftPath -> ExceptT String (DB m) Placement
+placeAddress ctx accounts readIn keypathM = do
   heldM <- firstJust accounts $ \held@(accId, acc) -> do
-    rows <- lift $ storedAmong (maybeToList (readOn (accountNetwork acc))) held
+    rows <- lift $ storedAmong (maybeToList (readIn acc)) held
     return $ PlacedAt accId <$> listToMaybe rows
   case (heldM, chainIndex =<< keypathM) of
     (Just placed, _) -> return placed
@@ -500,10 +541,10 @@ placeAddress ctx accounts readOn keypathM = do
     (Nothing, Just (addrType, index)) -> fromMaybe NotPlaced <$> firstJust accounts (derived addrType index)
   where
     derived addrType index (accId, acc) =
-      case readOn (accountNetwork acc) of
+      case readIn acc of
         Nothing -> return Nothing
         Just addr -> do
-          derivedM <- liftIO $ deriveChainAddress ctx (accountXPubKey ctx acc) (addrDeriv addrType) index
+          derivedM <- liftIO $ deriveChainAddress ctx (accountKind acc) (accountXPubKey ctx acc) (addrDeriv addrType) index
           if derivedM /= Just addr
             then return Nothing
             else case addrType of

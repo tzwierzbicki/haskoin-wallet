@@ -45,6 +45,7 @@ import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.BestBlock
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.TxLabel (txLabel)
+import Haskoin.Wallet.Tx.Size (storeTxSize)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 
@@ -77,14 +78,14 @@ data TxSummary = TxSummary
     -- | What the account gains (positive) or spends (negative), fee included
     summaryAmount :: !Integer,
     summaryFee :: !Natural,
-    -- | The fee per byte, rounded down
+    -- | The fee per virtual byte, rounded down
     summaryFeeByte :: !Natural,
     -- | What the fee includes beyond the fee rate the transaction was built
     -- for: change that was not worth an output. Nothing when that rate is
     -- unknown, as it is for the transactions the store reports.
     summaryChangeInFee :: !(Maybe Natural),
-    -- | The size in bytes: of the signed transaction, or estimated before
-    -- it is signed
+    -- | The size in virtual bytes ("Haskoin.Wallet.Tx.Size"): of the
+    -- signed transaction, or estimated before it is signed
     summarySize :: !Natural,
     -- | The lock time: the block the transaction waits for, 0 for none. hw
     -- sets one near the best block (see "Haskoin.Wallet.Tx.LockTime").
@@ -393,7 +394,7 @@ storeSummary net walletAddrs sTx =
       summaryNonStdInputs = nonStdIn
     }
   where
-    size = fromIntegral sTx.size :: Natural
+    size = storeTxSize sTx
     fee = fromIntegral sTx.fee :: Natural
     (outputs, nonStdOut) = outputAddressMap net sTx.outputs
     (inputs, nonStdIn) = inputAddressMap net sTx.inputs

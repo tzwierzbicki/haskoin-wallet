@@ -93,7 +93,7 @@ import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..), LeftCoin (..)
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.Database (DBAccount (..), DBAddress (..))
 import Haskoin.Wallet.HwTestUtils
-import Haskoin.Wallet.Keys (MnemonicPass (..))
+import Haskoin.Wallet.Keys (AccountKind (..), MnemonicPass (..))
 import Haskoin.Wallet.Labels (ImportReport (..), importedAccount)
 import qualified Haskoin.Wallet.Schema.V3 as V3
 import Haskoin.Wallet.Sync (SyncRes (..))
@@ -374,8 +374,8 @@ spendsAndPays ctx tx = ((.outpoint) <$> tx.inputs, sortOn fst [(out.value, scrip
 -- | The first account of the test wallet, and that of the second wallet,
 -- as the derivation records of their files name their keys
 mainFileAccount, otherFileAccount :: Ctx -> FileAccount
-mainFileAccount ctx = FileAccount (testAccountPub ctx) "m/44'/0'/0'" (Just testFingerprint) btc
-otherFileAccount ctx = FileAccount (fromMaybe (error "otherFileAccount") (xPubImport btc ctx testAccountXPub2)) "m/44'/0'/0'" (Just testFingerprint2) btc
+mainFileAccount ctx = FileAccount (testAccountPub ctx) Bip44 "m/44'/0'/0'" (Just testFingerprint) btc
+otherFileAccount ctx = FileAccount (fromMaybe (error "otherFileAccount") (xPubImport btc ctx testAccountXPub2)) Bip44 "m/44'/0'/0'" (Just testFingerprint2) btc
 
 -- | The transaction file at the path, as hw wrote it: a PSBT, read with
 -- the paths of the first account of the test wallet, or of the second

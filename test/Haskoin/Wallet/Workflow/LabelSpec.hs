@@ -424,7 +424,7 @@ labelledHome ctx home = do
 -- blocks deep and so without a height, and its coin, locked
 labelledLines :: Ctx -> [Text]
 labelledLines ctx =
-  [ "{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\"}",
+  [ "{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\",\"purpose\":44}",
     "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Wages\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"keypath\":\"/0/0\"}",
     "{\"type\":\"addr\",\"ref\":\"1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg\",\"label\":\"From Bob\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"keypath\":\"/0/1\"}",
     "{\"type\":\"tx\",\"ref\":\"" <> txid <> "\",\"label\":\"Salary\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"fee\":1000,\"value\":50000}",

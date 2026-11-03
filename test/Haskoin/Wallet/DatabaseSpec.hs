@@ -10,7 +10,7 @@ import qualified Data.ByteString as BS
 import qualified Data.Serialize as S
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Database.Persist.Sql (PersistValue (..))
+import Database.Persist.Sql (PersistValue (..), rawExecute, runMigrationQuiet)
 import Haskoin
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.TestUtils
@@ -23,6 +23,7 @@ spec :: Spec
 spec = do
   keysSpec
   indexesSpec
+  purposeSpec
   -- A key reads back as it was written, in its hexadecimal form
   testIdentity def {jsonTests = [JsonBox arbitraryKeyBytes]}
 
@@ -44,6 +45,21 @@ keysSpec =
       outpointBytes outpoint `shouldSatisfy` (>= outpointBytes (OutPoint (fakeTxHash 1) minBound))
       outpointBytes outpoint `shouldSatisfy` (<= outpointBytes (OutPoint (fakeTxHash 1) maxBound))
       outpointBytes (OutPoint (fakeTxHash 2) 0) `shouldSatisfy` (> outpointBytes (OutPoint (fakeTxHash 1) maxBound))
+
+-- | The purpose column of the accounts came to version 4 after wallets
+-- had run it: the tables of such a wallet lack the column, which opening
+-- the database adds, with 44 for the accounts it has, since every account
+-- was a bip44 one
+purposeSpec :: Spec
+purposeSpec =
+  describe "A database of version 4 made before accounts had a purpose" $
+    it "gets the purpose column when opened, with 44 for every account it has" $
+      inMemory $ do
+        globalMigration
+        rawExecute "alter table d_b_account drop column purpose" []
+        rawExecute "insert into d_b_account (name, \"index\", network, external, internal, x_pub_key, balance_confirmed, balance_unconfirmed, balance_coins, created) values ('main', 0, 'btc', 1, 0, 'xpub', 0, 0, 0, '2023-11-01T00:00:00Z')" []
+        _ <- runMigrationQuiet migrateAll
+        queryRows "select name, purpose from d_b_account" `dbShouldBe` [[PersistText "main", PersistInt64 44]]
 
 indexesSpec :: Spec
 indexesSpec =

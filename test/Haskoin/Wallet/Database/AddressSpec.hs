@@ -26,6 +26,7 @@ import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
 import Numeric.Natural (Natural)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), testIdentity)
@@ -175,6 +176,14 @@ receivingSpec ctx =
         accId <- account ctx
         _ <- nextChangeAddress ctx cfg accId []
         lift $ dbShouldFailWith "A change address takes no label. Only a receiving address does." $ labelAddress "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn" "Rent"
+
+    it "gives a bip84 account its P2WPKH addresses, which start with bc1q, on both chains" $
+      inDatabaseE $ do
+        (accId, _) <- testNewSegwitAcc ctx "spending"
+        first <- genExtAddress ctx cfg accId ""
+        liftIO $ dBAddressAddress first `shouldBe` segwitExternalAddrsText !! 0
+        change <- nextChangeAddress ctx cfg accId []
+        liftIO $ dBAddressAddress change `shouldBe` segwitInternalAddrsText !! 0
 
     it "gives a Bitcoin Cash account addresses in the cash address format" $
       inDatabaseE $ do
@@ -521,13 +530,20 @@ derivingSpec ctx =
     -- 2^127 per index and no known example, so that path is covered by
     -- the hole test above and by reasoning alone
     it "derives the address of a chain at an index" $ do
-      deriveChainAddress ctx (testAccountPub ctx) extDeriv 9 `shouldReturn` Just (externalAddr 9)
-      deriveChainAddress ctx (testAccountPub ctx) intDeriv 0 `shouldReturn` Just (internalAddr 0)
+      deriveChainAddress ctx Bip44 (testAccountPub ctx) extDeriv 9 `shouldReturn` Just (externalAddr 9)
+      deriveChainAddress ctx Bip44 (testAccountPub ctx) intDeriv 0 `shouldReturn` Just (internalAddr 0)
 
     it "lists a window of a chain with the indices" $ do
-      chainAddresses ctx (testAccountPub ctx) extDeriv 2 3
+      chainAddresses ctx Bip44 (testAccountPub ctx) extDeriv 2 3
         `shouldReturn` [(externalAddr 2, 2), (externalAddr 3, 3), (externalAddr 4, 4)]
-      chainAddresses ctx (testAccountPub ctx) intDeriv 5 0 `shouldReturn` []
+      chainAddresses ctx Bip44 (testAccountPub ctx) intDeriv 5 0 `shouldReturn` []
+
+    -- The first ten addresses of each chain of the bip84 account, derived
+    -- apart from hw with the Python tool of the message-signing vectors
+    it "derives the P2WPKH addresses of a bip84 account from its key, on both chains" $ do
+      deriveChainAddress ctx Bip84 (testSegwitAccountPub ctx) extDeriv 0 `shouldReturn` Just (segwitExternalAddr 0)
+      chainAddresses ctx Bip84 (testSegwitAccountPub ctx) extDeriv 0 10 `shouldReturn` zip (segwitExternalAddr <$> [0 .. 9]) [0 .. 9]
+      chainAddresses ctx Bip84 (testSegwitAccountPub ctx) intDeriv 0 10 `shouldReturn` zip (segwitInternalAddr <$> [0 .. 9]) [0 .. 9]
 
 jsonSpec :: Spec
 jsonSpec =

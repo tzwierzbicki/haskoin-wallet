@@ -32,6 +32,7 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.PendingTx
 import Haskoin.Wallet.Database.RawTx
 import Haskoin.Wallet.Store
+import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.Building (ChangeTo (..), CoinControl (..), buildTxSignData)
 import Haskoin.Wallet.Database.TxInfo
@@ -161,7 +162,7 @@ unsignedPayment ctx cfg accId = do
 signedPending :: Ctx -> Config -> DBAccountId -> ExceptT String (DB IO) (TxHash, TxSignData)
 signedPending ctx cfg accId = do
   unsigned <- unsignedPayment ctx cfg accId
-  (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+  (signed, _) <- liftEither $ signWalletTx btc ctx Bip44 unsigned testAccountKey
   pendingHash <- importPendingTx btc ctx accId signed
   return (pendingHash, signed)
 
@@ -232,7 +233,7 @@ lockedCoins accId = map (\c -> (jsonCoinAddress c, transactionLocked c)) <$> coi
 corePayment :: Ctx -> IO TxSignData
 corePayment ctx = do
   text <- BS.readFile "test/data/psbt/core/pending-payment-finalized.psbt"
-  file <- expectRight $ psbtTxFile ctx [FileAccount (testAccountPub ctx) "m/44'/0'/0'" (Just testFingerprint) btc] =<< decodePsbtBase64 text
+  file <- expectRight $ psbtTxFile ctx [FileAccount (testAccountPub ctx) Bip44 "m/44'/0'/0'" (Just testFingerprint) btc] =<< decodePsbtBase64 text
   return (txFileData file)
 
 importingSpec :: Ctx -> Spec
@@ -312,7 +313,7 @@ importingSpec ctx =
         lift $
           dbShouldFailWith "The transaction already exists" $
             importPendingTx btc ctx accId unsigned
-        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        (signed, _) <- liftEither $ signWalletTx btc ctx Bip44 unsigned testAccountKey
         importPendingTx btc ctx accId signed `dbShouldBeE` pendingHash
         ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, False, False))]
@@ -326,7 +327,7 @@ importingSpec ctx =
         (accId, _) <- testNewAcc ctx "test"
         unsigned <- unsignedPayment ctx cfg accId
         pendingHash <- importPendingTx btc ctx accId unsigned
-        (byWallet, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        (byWallet, _) <- liftEither $ signWalletTx btc ctx Bip44 unsigned testAccountKey
         byCore <- liftIO $ corePayment ctx
         -- Both versions are valid, with different signatures, so different ids
         liftIO $ do
@@ -366,7 +367,7 @@ importingSpec ctx =
         (accId, _) <- testNewAcc ctx "test"
         unsigned <- unsignedPayment ctx cfg accId
         pendingHash <- importPendingTx btc ctx accId unsigned {txSignDataLabel = "Rent of October"}
-        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned {txSignDataLabel = "Rent"} testAccountKey
+        (signed, _) <- liftEither $ signWalletTx btc ctx Bip44 unsigned {txSignDataLabel = "Rent"} testAccountKey
         _ <- importPendingTx btc ctx accId signed
         ((.pendingTxData.txSignDataLabel) <$> requirePendingTx pendingHash) `dbShouldBeE` "Rent of October"
 
@@ -375,7 +376,7 @@ importingSpec ctx =
         (accId, _) <- testNewAcc ctx "test"
         unsigned <- unsignedPayment ctx cfg accId
         pendingHash <- importPendingTx btc ctx accId unsigned
-        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned {txSignDataLabel = "Rent"} testAccountKey
+        (signed, _) <- liftEither $ signWalletTx btc ctx Bip44 unsigned {txSignDataLabel = "Rent"} testAccountKey
         _ <- importPendingTx btc ctx accId signed
         ((.pendingTxData.txSignDataLabel) <$> requirePendingTx pendingHash) `dbShouldBeE` "Rent"
 
@@ -392,7 +393,7 @@ importingSpec ctx =
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
         unsigned <- unsignedPayment ctx cfg accId
-        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        (signed, _) <- liftEither $ signWalletTx btc ctx Bip44 unsigned testAccountKey
         let broken = signed {txSignDataTx = withBrokenSignature (txSignDataTx signed)}
         lift $
           dbShouldFailWith "Invalid signature for input 0 (1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj)" $
@@ -404,7 +405,7 @@ importingSpec ctx =
         (accId, _) <- testNewAcc ctx "test"
         unsigned <- unsignedPayment ctx cfg accId
         pendingHash <- importPendingTx btc ctx accId unsigned
-        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        (signed, _) <- liftEither $ signWalletTx btc ctx Bip44 unsigned testAccountKey
         let broken = signed {txSignDataTx = withBrokenSignature (txSignDataTx signed)}
         lift $
           dbShouldFailWith "Invalid signature for input 0 (1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj)" $
@@ -534,7 +535,7 @@ listingSpec ctx =
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
         unsigned <- unsignedPayment ctx cfg accId
-        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        (signed, _) <- liftEither $ signWalletTx btc ctx Bip44 unsigned testAccountKey
         let key = nosigHash unsigned.txSignDataTx
         lift $ P.insert_ $ DBPendingTx accId (hashBytes key) (blob signed) False False fixtureTime
         pendingCursor (Just accId) (txHash signed.txSignDataTx) `dbShouldBeE` (fixtureTime, key)
@@ -569,7 +570,7 @@ listingSpec ctx =
         (accId, _) <- testNewAcc ctx "test"
         unsigned <- unsignedPayment ctx cfg accId
         lift $ P.insert_ $ DBPendingTx accId (hashBytes (nosigHash unsigned.txSignDataTx)) (blob unsigned) False False fixtureTime
-        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        (signed, _) <- liftEither $ signWalletTx btc ctx Bip44 unsigned testAccountKey
         _ <- importPendingTx btc ctx accId signed
         (map createdOf <$> pendingTxsAfter ctx accId Nothing Nothing) `dbShouldBeE` [Just fixtureTime]
 
@@ -772,7 +773,7 @@ sendingFileSpec ctx =
         unsigned <- unsignedPayment ctx cfg accId
         pendingHash <- importPendingTx btc ctx accId unsigned
         -- The file the offline signer returns
-        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        (signed, _) <- liftEither $ signWalletTx btc ctx Bip44 unsigned testAccountKey
         sent <- sendSigned ctx (const (toStore (storeKnowing ctx signed))) withoutAsking Nothing Nothing signed
         liftIO $ case sent of
           SentPending _ info -> pendingFlags info `shouldBe` Just ((pendingHash, True, True, False))
@@ -787,7 +788,7 @@ sendingFileSpec ctx =
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
         unsigned <- unsignedPayment ctx cfg accId
-        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        (signed, _) <- liftEither $ signWalletTx btc ctx Bip44 unsigned testAccountKey
         pendingHash <- importPendingTx btc ctx accId signed {txSignDataLabel = "Rent of October"}
         sent <- sendSigned ctx (const (toStore (storeKnowing ctx signed))) withoutAsking Nothing Nothing signed {txSignDataLabel = "Rent"}
         liftIO $ case sent of
@@ -800,7 +801,7 @@ sendingFileSpec ctx =
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
         unsigned <- unsignedPayment ctx cfg accId
-        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        (signed, _) <- liftEither $ signWalletTx btc ctx Bip44 unsigned testAccountKey
         sent <- sendSigned ctx (const (toStore (storeKnowing ctx signed))) withoutAsking Nothing (Just btc) signed
         liftIO $ case sent of
           SentOutside net txid -> (net.name, txid) `shouldBe` ("btc", txHash (txSignDataTx signed))
@@ -811,7 +812,7 @@ sendingFileSpec ctx =
         (accId, _) <- testNewAcc ctx "test"
         unsigned <- unsignedPayment ctx cfg accId
         _ <- importPendingTx btc ctx accId unsigned
-        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        (signed, _) <- liftEither $ signWalletTx btc ctx Bip44 unsigned testAccountKey
         lift $
           dbShouldFailWith "The transaction is pending in an account of another network" $
             sendSigned ctx (const (toStore emptyStore)) withoutAsking (Just bch) (Just bch) signed
@@ -821,7 +822,7 @@ sendingFileSpec ctx =
         -- The payment is built but never held, as a file prepared elsewhere
         -- would be: the next sync catches up with it
         unsigned <- unsignedPayment ctx cfg accId
-        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        (signed, _) <- liftEither $ signWalletTx btc ctx Bip44 unsigned testAccountKey
         published <- liftIO $ newIORef []
         sent <- sendSigned ctx (const (notingPublished published (toStore (storeKnowing ctx signed)))) withoutAsking (Just btc) (Just btc) signed
         liftIO $ case sent of
@@ -836,7 +837,7 @@ sendingFileSpec ctx =
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
         unsigned <- unsignedPayment ctx cfg accId
-        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        (signed, _) <- liftEither $ signWalletTx btc ctx Bip44 unsigned testAccountKey
         seen <- liftIO $ newIORef []
         _ <- sendSigned ctx (const (toStore (storeKnowing ctx signed))) (noting seen) (Just btc) (Just btc) signed
         liftIO $ readIORef seen `shouldReturn` [("btc", Just (nosigHash (txSignDataTx signed), True, False, False))]
@@ -844,7 +845,7 @@ sendingFileSpec ctx =
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
         unsigned <- unsignedPayment ctx cfg accId
-        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        (signed, _) <- liftEither $ signWalletTx btc ctx Bip44 unsigned testAccountKey
         published <- liftIO $ newIORef []
         lift $
           dbShouldFailWith "The transaction was not sent" $
@@ -855,7 +856,7 @@ sendingFileSpec ctx =
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
         unsigned <- unsignedPayment ctx cfg accId
-        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        (signed, _) <- liftEither $ signWalletTx btc ctx Bip44 unsigned testAccountKey
         lift $
           dbShouldFailWith "The file names no network, as a file of another wallet does, and involves no account of this wallet: give the --network, or a default-network in the configuration file" $
             sendSigned ctx (const (toStore emptyStore)) withoutAsking Nothing Nothing signed
@@ -863,7 +864,7 @@ sendingFileSpec ctx =
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
         unsigned <- unsignedPayment ctx cfg accId
-        (signed, _) <- liftEither $ signWalletTx btc ctx unsigned testAccountKey
+        (signed, _) <- liftEither $ signWalletTx btc ctx Bip44 unsigned testAccountKey
         let broken = signed {txSignDataTx = withBrokenSignature (txSignDataTx signed)}
         lift $
           dbShouldFailWith "Invalid signature for input 0 (1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj)" $

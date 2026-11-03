@@ -8,6 +8,7 @@ import Control.Monad (forM_, unless)
 import Data.Aeson (FromJSON (..), withObject, (.!=), (.:), (.:?))
 import Data.Bits (xor)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Base64 as B64
 import Data.Char (isAscii)
 import Data.Either (isLeft)
 import Data.List (sort)
@@ -204,24 +205,23 @@ hashVectorProblems v =
         v.hashExpected
         (encodeHex $ S.encode $ signedMessageHash v.hashMessage)
 
--- | A signing vector: hw must sign as the vector expects, and the signature
--- of the vector must verify for hw's message bytes, unless it signs others
+-- | A signing vector: hw must sign as the vector expects, from the address
+-- of the vector, which must be the P2PKH or the P2WPKH address of the key,
+-- the two kinds hw signs from; and the signature of the vector must
+-- verify for hw's message bytes, unless it signs others
 vectorProblems :: Ctx -> Vector -> Problems
 vectorProblems ctx v =
   named v.vecName $ reportSetupError $ do
     key <- prefixError "key" $ vectorKey ctx v.vecNetwork v.vecKey
-    let pub = derivePubKey ctx key
-        addr = pubKeyAddr ctx (wrapPubKey True pub)
-        h = signedMessageHash v.vecMessage
+    let public = wrapPubKey True (derivePubKey ctx key)
+        ownAddresses = pubKeyAddr ctx public : maybe [] (: []) (pubKeyWitnessAddr ctx public)
+    addr <- maybeToEither "the address of the vector does not read on its network" (textToAddr v.vecNetwork v.vecAddress)
+    let h = signedMessageHash v.vecMessage
         own = encodeSignature <$> signMessage ctx addr key v.vecMessage
         verified signature = verifyMessage ctx addr signature v.vecMessage
         ownVerified = (verified =<< own) == Right True
     return $
-      -- Compare parsed addresses, but report them as text
-      ( if textToAddr v.vecNetwork v.vecAddress == Just addr
-          then []
-          else check "address of the key" (Just v.vecAddress) (addrToText v.vecNetwork addr)
-      )
+      require "the address is the P2PKH or the P2WPKH address of the key" (addr `elem` ownAddresses)
         <> utf8Problems v.vecMessage v.vecUtf8Hex
         <> maybe [] (\hash -> check "message hash" hash (encodeHex $ S.encode h)) v.vecHash
         <> case v.vecExpect of
@@ -312,17 +312,30 @@ verifySpec ctx =
       forM_ [(0, 1), (secp256k1Order, 1), (1, secp256k1Order)] $ \(r, s) ->
         verifyMessage ctx (externalAddr 0) (signatureOf 31 r s) "hello" `shouldBe` Right False
 
-    -- 26 is below the format; 36 and 40 are the BIP-137 header bytes of
-    -- SegWit signatures with the same recovery id as the signature
-    it "finds a signature invalid when its header byte is outside 27 to 34, whatever its low bits say" $
-      forM_ [26, 36, 40] $ \header ->
+    -- 26 is below the format, 43 above the header bytes of BIP 137
+    it "finds a signature invalid when its header byte is outside 27 to 42, whatever its low bits say" $
+      forM_ [26, 43] $ \header ->
         verifyMessage ctx (externalAddr 0) (onBytes (\_ r s -> BS.cons header (r <> s)) helloSignature) "hello"
           `shouldBe` Right False
 
-    it "refuses an address that is not P2PKH" $
-      -- The P2SH address of Bitcoin Core's message_verify test
-      verifyMessage ctx (testAddress "3B5fQsEXEaV8v6U3ejYc8XaKXAkyQj2MjV") helloSignature "hello"
-        `shouldBe` Left "The address is not a P2PKH address: a message can only be signed from one"
+    -- 36 and 40 are the header bytes of BIP 137 for a P2SH-P2WPKH and a
+    -- P2WPKH address, with the same recovery id as the signature: the key
+    -- they recover is the one of the address, whatever the address
+    it "takes the header bytes of BIP 137 for the compressed key they recover, whatever address of the key" $
+      forM_ [36, 40] $ \header ->
+        verifyMessage ctx (externalAddr 0) (onBytes (\_ r s -> BS.cons header (r <> s)) helloSignature) "hello"
+          `shouldBe` Right True
+
+    it "finds a signature of another key invalid for a SegWit address" $ do
+      -- The P2WPKH example of BIP 173, and the P2SH address of Bitcoin
+      -- Core's message_verify test
+      verifyMessage ctx segwitAddr helloSignature "hello" `shouldBe` Right False
+      verifyMessage ctx (testAddress "3B5fQsEXEaV8v6U3ejYc8XaKXAkyQj2MjV") helloSignature "hello" `shouldBe` Right False
+
+    it "refuses an address that is not of one key" $
+      -- The Taproot example of BIP 350
+      verifyMessage ctx (testAddress "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0") helloSignature "hello"
+        `shouldBe` Left "The address is not a P2PKH or a SegWit address of one key: a message can only be signed from one"
 
     it "refuses a signature that is not in base64" $
       verifyMessage ctx (externalAddr 0) "invalid signature, not in base64 encoding" "hello"
@@ -434,13 +447,24 @@ propertiesSpec ctx =
                 uncompressedSig = uncompressed signature
              in verifyMessage ctx uncompressedAddr uncompressedSig message == Right True
                   && verifyMessage ctx compressedAddr uncompressedSig message == Right False
-      prop "finds a signature with one byte altered invalid" $
+      -- A byte of r or s: the header byte has equivalents, 31, 35 and 39
+      -- naming the same key, as BIP 137 marks the kinds of addresses
+      prop "finds a signature with one byte of r or s altered invalid" $
         forAll arbitraryPrivateKey $ \prv ->
           forAll arbitraryText $ \message ->
-            forAll (choose (0, 64)) $ \position ->
+            forAll (choose (1, 64)) $ \position ->
               forAll (choose (1, 255)) $ \change ->
                 let (addr, signature) = signedBy ctx prv.key message
                  in verifyMessage ctx addr (alteredAt position change signature) message == Right False
+      prop "finds a signature with its header byte altered invalid, unless the new byte names the same compressed key" $
+        forAll arbitraryPrivateKey $ \prv ->
+          forAll arbitraryText $ \message ->
+            forAll (choose (1, 255)) $ \change ->
+              let (addr, signature) = signedBy ctx prv.key message
+                  header = BS.head (either error id (B64.decode (encodeUtf8 signature)))
+                  altered = header `xor` change
+                  sameKey = altered >= 31 && altered <= 42 && (altered - 27) `mod` 4 == (header - 27) `mod` 4
+               in verifyMessage ctx addr (alteredAt 0 change signature) message == Right sameKey
 
 {- Signatures -}
 

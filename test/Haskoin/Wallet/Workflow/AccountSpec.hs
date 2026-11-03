@@ -10,7 +10,9 @@
 -- as typed.
 module Haskoin.Wallet.Workflow.AccountSpec (spec) where
 
-import Control.Monad (forM_, replicateM_)
+import Control.Monad (forM_, replicateM_, void)
+import qualified Data.ByteString as BS
+import qualified Data.Map.Strict as Map
 import Control.Monad.Except (runExceptT)
 import Data.List (isInfixOf, sort)
 import Data.Text (Text)
@@ -22,6 +24,8 @@ import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (MnemonicPass (..))
 import Haskoin.Wallet.Migration (databaseVersion)
 import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..))
+import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData (..))
 import Haskoin.Wallet.Workflow.TestUtils
 import System.Directory (copyFile, makeAbsolute)
 import System.Exit (ExitCode (..))
@@ -31,6 +35,7 @@ import Test.Hspec
 spec :: Spec
 spec = prepareContext $ \ctx -> do
   accountSpec
+  segwitSpec ctx
   descriptorSpec
   addressSpec ctx
   checkAddrSpec
@@ -183,6 +188,124 @@ accountSpec =
 mainDescriptor :: Text
 mainDescriptor = "pkh([bc560f95/44h/0h/0h]" <> testAccountXPub <> "/<0;1>/*)#vq597j87"
 
+{- A bip84 account -}
+
+-- | A chain whose block 800000 pays 50000 to the first receiving address
+-- of the bip84 account of the test wallet
+segwitPaidChain :: Ctx -> Chain
+segwitPaidChain ctx = Chain 800002 [(fundingTx ctx 3 [(segwitExternalAddr 0, 50000)], Just 800000)]
+
+-- | The descriptor of the bip84 account, as the Coldcard file of
+-- test/data/descriptors writes it
+segwitDescriptor :: Text
+segwitDescriptor = "wpkh([bc560f95/84h/0h/0h]" <> testSegwitAccountXPub <> "/<0;1>/*)#5nktextl"
+
+-- | Create the bip84 account spending of the test wallet in a home
+createSpending :: FilePath -> IO ()
+createSpending home = void $ answer home ["createacc", "spending", "--type", "bip84"] seedTwice
+
+segwitSpec :: Ctx -> Spec
+segwitSpec ctx =
+  describe "A native SegWit account, of the kind bip84" $ do
+    it "is created by createacc --type bip84 at the first bip84 index of the seed, under the path m/84'/0'/0'" $
+      withHome $ \home -> do
+        createMain home
+        (keyOf <$> hwJson home ["createacc", "spending", "--type", "bip84"] seedTwice) `shouldReturn` Right ("spending", 0, testSegwitAccountXPub)
+        run <- hw home ["accounts"] []
+        run `shouldSatisfy` printed "main  btc  /44'/0'/0'"
+        run `shouldSatisfy` printed "spending  btc  /84'/0'/0'"
+
+    it "is refused on Bitcoin Cash, which has no SegWit, before the mnemonic is asked" $
+      withHome $ \home -> do
+        run <- hw home ["createacc", "cash", "--network", "bch", "--type", "bip84"] seedTwice
+        run `shouldSatisfy` printed "A bip84 account needs SegWit, which bch does not have"
+        run `shouldNotSatisfy` askedMnemonic
+
+    it "is refused a type other than bip44 and bip84" $
+      withHome $ \home -> do
+        run <- hw home ["createacc", "wrapped", "--type", "bip49"] seedTwice
+        runExit run `shouldNotBe` ExitSuccess
+        run `shouldSatisfy` printed "The type of an account is bip44 or bip84"
+
+    it "hands out addresses that start with bc1q, which checkaddr derives too" $
+      withHome $ \home -> do
+        createSpending home
+        (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [(segwitExternalAddrsText !! 0, "")]
+        (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [(segwitExternalAddrsText !! 1, "")]
+        (addressesOf <$> hwJson home ["checkaddr", "/0/5"] []) `shouldReturn` Right [(segwitExternalAddrsText !! 5, "")]
+        (addressesOf <$> hwJson home ["checkaddr", "/1/0"] []) `shouldReturn` Right [(segwitInternalAddrsText !! 0, "")]
+
+    it "is shown by descriptor as wpkh, as a Coldcard writes it" $
+      withHome $ \home -> do
+        createSpending home
+        (descriptorsOf <$> hwJson home ["descriptor"] []) `shouldReturn` Right [("spending", segwitDescriptor)]
+
+    it "is exported by exportacc and imported by importacc in another wallet, as a bip84 account with its fingerprint" $
+      withHome $ \signer -> withHome $ \online -> do
+        createSpending signer
+        _ <- answer signer ["exportacc", signer </> "spending.jsonl"] []
+        (keyOf <$> hwJson online ["importacc", signer </> "spending.jsonl"] []) `shouldReturn` Right ("spending", 0, testSegwitAccountXPub)
+        (fingerprintsOf <$> hwJson online ["accounts"] []) `shouldReturn` Right [("spending", Just "bc560f95")]
+        run <- hw online ["accounts"] []
+        run `shouldSatisfy` printed "spending  btc  /84'/0'/0'"
+        (addressesOf <$> hwJson online ["receive"] []) `shouldReturn` Right [(segwitExternalAddrsText !! 0, "")]
+
+    -- The payment: 10 bytes of frame, a P2WPKH input of 41 bytes, a P2PKH
+    -- output of 34 and a P2WPKH change output of 31, then (2 + 108) / 4
+    -- of witness data, rounded up to 28: 144 virtual bytes, a fee of 1440
+    -- at 10 satoshis a virtual byte, where the same payment of a bip44
+    -- account is 226 bytes. Signed, the input has an empty script and the
+    -- signature in its witness, and the transaction is 116 bytes outside
+    -- the witness and 109 or 110 with it: 144 virtual bytes as well.
+    it "is paid, pays its fee on virtual bytes, is signed with the signature in the witness, and sent" $
+      withChain ctx (segwitPaidChain ctx) $ \home _ -> do
+        createSpending home
+        _ <- answer home ["receive"] []
+        (accountsOf <$> hwJson home ["sync"] []) `shouldReturn` Right [("spending", 0, 50000)]
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        let summary = txInfoSummary prepared
+        (summaryFee summary, summaryFeeByte summary, summarySize summary) `shouldBe` (1440, 10, 144)
+        paidToWallet prepared `shouldBe` Map.fromList [(segwitInternalAddr 0, 28560)]
+        nosig <- nosigOf prepared
+        let file = home </> "signed.psbt"
+        signed <- txOf =<< answer home ["signtx", nosig, "--output", file] seedOnce
+        summarySize (txInfoSummary signed) `shouldBe` 144
+        signedTx <- txSignDataTx . txFileData <$> readTxFile ctx file
+        map (.script) signedTx.inputs `shouldBe` [BS.empty]
+        map length signedTx.witness `shouldBe` [2]
+        txid <- txidOf signed
+        sent <- txOf =<< answer home ["sendtx", nosig, "--yes"] []
+        txidOf sent `shouldReturn` txid
+        (accountsOf <$> hwJson home ["sync"] []) `shouldReturn` Right [("spending", 0, 28560)]
+
+    -- The signature was checked apart from hw with the pure-Python verifier
+    -- of the message-signing vectors: it recovers the key of the address,
+    -- m/84'/0'/0'/0/0 of the test seed, under the header byte 39 of BIP 137
+    it "signs a message from its address with the header byte of BIP 137, which verifymsg checks" $
+      withHome $ \home -> do
+        createSpending home
+        _ <- answer home ["receive"] []
+        signed <- hwJson home ["signmsg", Text.unpack (segwitExternalAddrsText !! 0), "hello"] seedOnce
+        signed `shouldBe` ResponseSignMsg "hello" segwitHelloSignature (segwitExternalAddrsText !! 0)
+        hwJson home ["verifymsg", Text.unpack (segwitExternalAddrsText !! 0), Text.unpack segwitHelloSignature, "hello"] []
+          `shouldReturn` ResponseVerifyMsg "hello" segwitHelloSignature (segwitExternalAddrsText !! 0) True
+
+    -- The chain pays the first receiving address of the bip44 account 0 and
+    -- of the bip84 account 0 of the seed
+    it "is recovered by recover beside the bip44 account of the seed, named btc0-segwit" $
+      withChain ctx (Chain 800002 [(payment ctx, Just 800000), (fundingTx ctx 3 [(segwitExternalAddr 0, 30000)], Just 800000)]) $ \home _ -> do
+        (accountsOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right [("btc0", 0, 50000), ("btc0-segwit", 0, 30000)]
+        run <- hw home ["accounts"] []
+        run `shouldSatisfy` printed "btc0  btc  /44'/0'/0'"
+        run `shouldSatisfy` printed "btc0-segwit  btc  /84'/0'/0'"
+
+-- | The signature of the message "hello" by the address /0/0 of the bip84
+-- account of the test wallet, as signmsg gives it, with the header byte of
+-- BIP 137: checked apart from hw with the pure-Python verifier of the
+-- message-signing vectors, which recovers the key of the address from it
+segwitHelloSignature :: Text
+segwitHelloSignature = "KPTsP4VeuwtqOgTJeMywhK80W9RJdrpsKebwu2/58WfqejQZQh54meETAcgDFYNrOSFmv3aAQ+V4BN0XOydeLEI="
+
 descriptorSpec :: Spec
 descriptorSpec =
   describe "The descriptor of an account" $ do
@@ -241,12 +364,12 @@ descriptorSpec =
         (keyOf <$> hwJson home ["importacc", home </> "main.txt", "--network", "btc"] []) `shouldReturn` Right ("btc0", 0, testAccountXPub)
 
     -- The file of Bitcoin Core's listdescriptors, of test/data/descriptors
-    it "is read from the file of Bitcoin Core, whose BIP44 account alone is added" $
+    it "is read from the file of Bitcoin Core, whose BIP44 and BIP84 accounts are added" $
       withHome $ \home -> do
         file <- makeAbsolute "test/data/descriptors/core-default-wallet.json"
         _ <- answer home ["importacc", file, "--network", "btctest"] []
-        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("btctest0", 0, 0)]
-        (fingerprintsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("btctest0", Just "b079db60")]
+        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("btctest0", 0, 0), ("btctest0-segwit", 0, 0)]
+        (fingerprintsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("btctest0", Just "b079db60"), ("btctest0-segwit", Just "b079db60")]
 
 {- Addresses -}
 
@@ -681,11 +804,12 @@ verifySpec =
         (errorOf <$> hwJson home ["verifymsg", "--input", file] [])
           `shouldReturn` Right (Text.pack $ "The file " <> file <> " holds an answer of hw, but not one of signmsg")
 
-    -- The refusals of Bitcoin Core's message_verify test
-    it "refuses an address that is not P2PKH" $
+    -- The refusals of Bitcoin Core's message_verify test, with a Taproot
+    -- address in place of its P2SH one, which hw takes for one of a key
+    it "refuses an address that is not of one key" $
       withHome $ \home ->
-        (errorOf <$> hwJson home ["verifymsg", "3B5fQsEXEaV8v6U3ejYc8XaKXAkyQj2MjV", "signature should be irrelevant", "message too"] [])
-          `shouldReturn` Right "The address is not a P2PKH address: a message can only be signed from one"
+        (errorOf <$> hwJson home ["verifymsg", "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0", "signature should be irrelevant", "message too"] [])
+          `shouldReturn` Right "The address is not a P2PKH or a SegWit address of one key: a message can only be signed from one"
 
     it "refuses a signature that is not in base64" $
       withHome $ \home ->

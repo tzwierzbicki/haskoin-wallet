@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The keys of the test wallets, derived from their mnemonics. The shared
@@ -33,20 +34,70 @@ spec = do
     typedSeedSpec ctx
     describe "Keys of the test wallets" $ do
       it "derives the account key of the test wallet from its mnemonic" $
-        xPrvExport btc <$> signingKey btc ctx testMnemonic 0 `shouldBe` Right testAccountXPrv
+        xPrvExport btc <$> signingKey Bip44 btc ctx testMnemonic 0 `shouldBe` Right testAccountXPrv
       it "derives the account public key of the test wallet" $
-        xPubExport btc ctx . deriveXPubKey ctx <$> signingKey btc ctx testMnemonic 0 `shouldBe` Right testAccountXPub
+        xPubExport btc ctx . deriveXPubKey ctx <$> signingKey Bip44 btc ctx testMnemonic 0 `shouldBe` Right testAccountXPub
       it "derives the fingerprint of the seed from its master public key, the same on every network" $
         fingerprintToText . seedFingerprint <$> seedOf ctx testMnemonic `shouldBe` Right testFingerprintText
       it "derives the public key of an account from the public side of the seed" $ do
         seed <- expectRight $ seedOf ctx testMnemonic
-        (fmap (xPubExport btc ctx) <$> seedAccountKey seed btc 0) `shouldReturn` Just testAccountXPub
+        (fmap (xPubExport btc ctx) <$> seedAccountKey seed Bip44 btc 0) `shouldReturn` Just testAccountXPub
       it "derives the keys and the fingerprint of the second wallet" $ do
-        xPrvExport btc <$> signingKey btc ctx testMnemonic2 0 `shouldBe` Right testAccountXPrv2
-        xPubExport btc ctx . deriveXPubKey ctx <$> signingKey btc ctx testMnemonic2 0 `shouldBe` Right testAccountXPub2
+        xPrvExport btc <$> signingKey Bip44 btc ctx testMnemonic2 0 `shouldBe` Right testAccountXPrv2
+        xPubExport btc ctx . deriveXPubKey ctx <$> signingKey Bip44 btc ctx testMnemonic2 0 `shouldBe` Right testAccountXPub2
         fingerprintToText . seedFingerprint <$> seedOf ctx testMnemonic2 `shouldBe` Right testFingerprintText2
+      it "derives the keys of the bip84 account of the test wallet along m/84'/0'/0'" $ do
+        xPrvExport btc <$> signingKey Bip84 btc ctx testMnemonic 0 `shouldBe` Right testSegwitAccountXPrv
+        xPubExport btc ctx . deriveXPubKey ctx <$> signingKey Bip84 btc ctx testMnemonic 0 `shouldBe` Right testSegwitAccountXPub
+      it "derives the public key of the bip84 account from the public side of the seed" $ do
+        seed <- expectRight $ seedOf ctx testMnemonic
+        (fmap (xPubExport btc ctx) <$> seedAccountKey seed Bip84 btc 0) `shouldReturn` Just testSegwitAccountXPub
+    kindSpec ctx
   passphraseSpec
   otherImplementationsSpec
+
+{- The kinds of accounts -}
+
+kindSpec :: Ctx -> Spec
+kindSpec ctx =
+  describe "The kinds of accounts" $ do
+    it "are named after their BIP, whose number is the purpose of their path" $ do
+      (kindPurpose Bip44, kindPurpose Bip84) `shouldBe` (44, 84)
+      (kindName Bip44, kindName Bip84) `shouldBe` ("bip44", "bip84")
+      kindNames `shouldBe` ["bip44", "bip84"]
+      kindOfPurpose 84 `shouldBe` Just Bip84
+      kindOfPurpose 49 `shouldBe` Nothing
+      kindNamed "BIP84" `shouldBe` Just Bip84
+      kindNamed "bip49" `shouldBe` Nothing
+
+    it "set the first step of the path of an account, before the coin type of the network and the index" $ do
+      pathToStr (accountDeriv Bip44 btc 0) `shouldBe` "/44'/0'/0'"
+      pathToStr (accountDeriv Bip84 btc 0) `shouldBe` "/84'/0'/0'"
+      pathToStr (accountDeriv Bip84 btcTest 3) `shouldBe` "/84'/1'/3'"
+
+    -- The first receiving key of the bip44 and of the bip84 account of the
+    -- test wallet, whose addresses are those of the test fixtures
+    it "give a key its address: P2PKH for bip44, P2WPKH for bip84" $ do
+      addrToText btc (keyAddress Bip44 ctx (derivePubPath ctx firstKey (testAccountPub ctx))) `shouldBe` Just (externalAddrsText !! 0)
+      addrToText btc (keyAddress Bip84 ctx (derivePubPath ctx firstKey (testSegwitAccountPub ctx))) `shouldBe` Just (segwitExternalAddrsText !! 0)
+
+    it "give a key the script of its address, which an account spends the coins of" $ do
+      let public = wrapPubKey True (derivePubPath ctx firstKey (testSegwitAccountPub ctx)).key
+      outputAddress ctx (keyScript Bip84 ctx public) `shouldBe` Just (segwitExternalAddr 0)
+      spendsScript Bip84 (keyScript Bip84 ctx public) `shouldBe` True
+      spendsScript Bip44 (keyScript Bip84 ctx public) `shouldBe` False
+      spendsScript Bip44 (keyScript Bip44 ctx public) `shouldBe` True
+      spendsScript Bip84 (keyScript Bip44 ctx public) `shouldBe` False
+
+    it "are both on the networks of Bitcoin, and bip44 alone on those of Bitcoin Cash, which has no SegWit" $ do
+      networkKinds btc `shouldBe` [Bip44, Bip84]
+      networkKinds btcTest `shouldBe` [Bip44, Bip84]
+      networkKinds bch `shouldBe` [Bip44]
+      checkKindOnNetwork bch Bip84 `shouldBe` Left "A bip84 account needs SegWit, which bch does not have"
+      checkKindOnNetwork bch Bip44 `shouldBe` Right ()
+      checkKindOnNetwork btc Bip84 `shouldBe` Right ()
+  where
+    firstKey = Deriv :/ 0 :/ 0 :: SoftPath
 
 {- The seed hw derived before, from the passphrase as typed -}
 
@@ -299,8 +350,8 @@ knownWallets =
 -- the database
 firstAddresses :: Ctx -> Text -> Text -> ExceptT String (DB IO) (Text, Text)
 firstAddresses ctx mnemonic passphrase = do
-  key <- liftEither $ signingKey btc ctx (MnemonicPass mnemonic passphrase) 0
-  (accId, _) <- insertAccount btc ctx "known" (deriveXPubKey ctx key) Nothing
+  key <- liftEither $ signingKey Bip44 btc ctx (MnemonicPass mnemonic passphrase) 0
+  (accId, _) <- insertAccount Bip44 btc ctx "known" (deriveXPubKey ctx key) Nothing
   receiving <- genExtAddress ctx def accId ""
   change <- nextChangeAddress ctx def accId []
   return (dBAddressAddress receiving, dBAddressAddress change)

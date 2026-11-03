@@ -41,6 +41,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Coin (coinText)
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.Keys (AccountKind)
 import Haskoin.Wallet.Tx.LockTime (inputSequence, txVersion)
 import Haskoin.Wallet.Tx.Recipient (Share, shareAmounts)
 import Haskoin.Wallet.Store
@@ -178,7 +179,7 @@ buildSweepSignData ::
   SweepCoins ->
   -- | The destinations, with what each gets
   [(Address, Share)] ->
-  -- | Fee per byte
+  -- | Fee per virtual byte
   Natural ->
   -- | Dust
   Natural ->
@@ -207,9 +208,9 @@ buildSweepSignData net ctx gen found sweepTo feeByte dust lockTime = do
 {- Size -}
 
 -- | The estimated size of the sweep transaction paying the given output
--- scripts, as "Haskoin.Wallet.Tx.Size" counts it: every input by the kind of
--- its coin, and by the encoding of its key for a P2PKH coin when the keys
--- were given, every output by its script
+-- scripts, in virtual bytes as "Haskoin.Wallet.Tx.Size" counts it: every
+-- input by the kind of its coin, and by the encoding of its key for a
+-- P2PKH coin when the keys were given, every output by its script
 sweepTxSize :: Network -> Ctx -> SweepCoins -> [ScriptOutput] -> Either String Word64
 sweepTxSize net ctx found outputs = do
   inputs <- mapM (coinInputSize net ctx found.uncompressedAddrs) found.coins
@@ -231,15 +232,15 @@ coinInputSize net ctx uncompressedAddrs coin = do
 {- Signing -}
 
 -- | Sign a transaction with the given private keys: every input is signed
--- with the key that matches the output script of its coin. The account
--- public key only identifies the wallet's own inputs and outputs, the paths
--- of the 'TxSignData' being relative to it; a sweep outside the wallet has
--- no account.
+-- with the key that matches the output script of its coin. The account,
+-- its kind and its public key, only identifies the wallet's own inputs and
+-- outputs, the paths of the 'TxSignData' being relative to it; a sweep
+-- outside the wallet has no account.
 signTxWithKeys ::
   Network ->
   Ctx ->
   TxSignData ->
-  Maybe XPubKey ->
+  Maybe (AccountKind, XPubKey) ->
   [SecKey] ->
   Either String (TxSignData, TxInfo)
 signTxWithKeys net ctx tsd accountPubM secKeys = do
@@ -256,7 +257,7 @@ signTxWithKeys net ctx tsd accountPubM secKeys = do
   signedInfo <- parse signedData
   return (signedData, signedInfo)
   where
-    parse = maybe (parseOutsideTxSignData net ctx) (parseTxSignData net ctx) accountPubM
+    parse = maybe (parseOutsideTxSignData net ctx) (uncurry (parseTxSignData net ctx)) accountPubM
 
 -- | The private keys, indexed by what identifies them in an output script.
 -- Every key is indexed with both encodings of its public key.

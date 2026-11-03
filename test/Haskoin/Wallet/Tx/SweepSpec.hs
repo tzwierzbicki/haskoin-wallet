@@ -22,6 +22,7 @@ import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Database.PendingTx
 import Haskoin.Wallet.Tx.Recipient (Share (..))
+import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..), TxType (..))
 import Haskoin.Wallet.Tx.SignData
@@ -52,7 +53,7 @@ sweepSigner ctx v = do
   accountKey <- prefixError "account" $ accountSigningKey v.vecNetwork ctx v.vecAccount
   keys <- prefixError "sweep key" $ mapM (vectorKey ctx v.vecNetwork) specs
   let accountPub = deriveXPubKey ctx accountKey
-  return $ \c -> signTxWithKeys v.vecNetwork c v.vecSignData (Just accountPub) keys
+  return $ \c -> signTxWithKeys v.vecNetwork c v.vecSignData (Just (accountSpecKind v.vecAccount, accountPub)) keys
 
 {- Key addresses -}
 
@@ -106,9 +107,10 @@ keyAddressesSpec ctx =
 
 -- The coins: one at each of the four Bitcoin addresses of the swept key,
 -- and a P2PK coin of its compressed public key. The sizes are written out
--- from the byte counts in the documentation of the estimator: a
--- transaction is 10 bytes of overhead around its inputs and outputs, a
--- P2PKH output is 34 bytes.
+-- from the byte counts in the documentation of the estimator, in virtual
+-- bytes: a transaction is 10 bytes of overhead around its inputs and
+-- outputs, a P2PKH output is 34 bytes, and the witness data, with the 2
+-- marker bytes, counts a quarter, rounded up.
 sweepSizeSpec :: Ctx -> Spec
 sweepSizeSpec ctx =
   describe "Sweep size" $ do
@@ -118,13 +120,15 @@ sweepSizeSpec ctx =
       sizeOf [uncompressedCoin] [otherAddr 0] `shouldBe` Right 224
     it "counts a P2PK input as 114 bytes" $
       sizeOf [p2pkCoin] [otherAddr 0] `shouldBe` Right 158
-    it "counts a P2WPKH input as 41 bytes, with a 108-byte witness after the 2 marker bytes" $
-      sizeOf [witnessCoin] [otherAddr 0] `shouldBe` Right 195
+    it "counts a P2WPKH input as 41 bytes, with a 108-byte witness after the 2 marker bytes, in quarters" $
+      -- 10 + 41 + 34 = 85, then (2 + 108) / 4 = 27.5, rounded up to 28
+      sizeOf [witnessCoin] [otherAddr 0] `shouldBe` Right 113
     it "counts a P2SH-P2WPKH input as 64 bytes, with the same witness" $
-      sizeOf [nestedCoin] [otherAddr 0] `shouldBe` Right 218
+      -- 10 + 64 + 34 = 108, then 28 of witness data
+      sizeOf [nestedCoin] [otherAddr 0] `shouldBe` Right 136
     it "counts an empty witness for a legacy input next to a SegWit one" $
-      -- 10 + 148 + 41 + 34, then 2 + 1 + 108 of witness data
-      sizeOf [compressedCoin, witnessCoin] [otherAddr 0] `shouldBe` Right 344
+      -- 10 + 148 + 41 + 34 = 233, then (2 + 1 + 108) / 4 = 27.75, rounded up to 28
+      sizeOf [compressedCoin, witnessCoin] [otherAddr 0] `shouldBe` Right 261
     it "sizes the outputs by their scripts" $
       -- 10 + 148, then P2PKH 34, P2SH 32, P2WPKH 31, P2WSH 43 and P2TR 43
       sizeOf [compressedCoin] [otherAddr 0, scriptAddr, witnessAddr, witnessScriptAddr, taprootAddr] `shouldBe` Right 341
@@ -170,7 +174,7 @@ sweepBuilderSpec ctx =
       length tsd.txSignDataTx.outputs `shouldBe` length destinations
     it "splits what is left after the fee evenly" $ do
       tsd <- expectRight $ build destinations
-      ((.value) <$> tsd.txSignDataTx.outputs) `shouldMatchList` [745600, 745600]
+      ((.value) <$> tsd.txSignDataTx.outputs) `shouldMatchList` [746425, 746425]
     it "records the dependent transactions and the wallet's paths" $ do
       tsd <- expectRight $ build destinations
       tsd.txSignDataInputs `shouldBe` [keyFunding, walletFunding]
@@ -179,38 +183,40 @@ sweepBuilderSpec ctx =
       tsd.txSignDataFeeRate `shouldBe` Just 10
     it "builds a transaction the sweep signer accepts" $ do
       tsd <- expectRight $ build destinations
-      (signed, info) <- expectRight $ signTxWithKeys btc ctx tsd (Just accountPub) [sweptKey, walletKey]
+      (signed, info) <- expectRight $ signTxWithKeys btc ctx tsd (Just (Bip44, accountPub)) [sweptKey, walletKey]
       isSigned signed.txSignDataTx `shouldBe` True
-      -- The wallet receives one of the two outputs (745600) and gives up its coin (500000)
+      -- The wallet receives one of the two outputs (746425) and gives up its coin (500000)
       info.txInfoSummary.summaryType `shouldBe` TxCredit
-      info.txInfoSummary.summaryAmount `shouldBe` 245600
+      info.txInfoSummary.summaryAmount `shouldBe` 246425
     it "estimates the size of the signed transaction part by part, every signature counted as 72 bytes" $ do
       tsd <- expectRight $ build destinations
-      (signed, _) <- expectRight $ signTxWithKeys btc ctx tsd (Just accountPub) [sweptKey, walletKey]
+      (signed, _) <- expectRight $ signTxWithKeys btc ctx tsd (Just (Bip44, accountPub)) [sweptKey, walletKey]
       let tx = signed.txSignDataTx
           legacy = tx {witness = []}
-      -- The estimate is 880 bytes: 659 outside the witnesses and 221 of
-      -- witness data, every signature counted as 72 bytes. A signature is
-      -- 72 bytes or 71, as its values fall, and two of these five are 71:
-      -- signed, the transaction is 878 bytes, 658 outside the witnesses and
-      -- 220 of witness data. The inputs, in the order the builder shuffled
-      -- them, are the P2WPKH coin (empty script, a witness of 71 + 33 + 2
-      -- with its two length bytes), the uncompressed P2PKH one (a script of
-      -- 1 + 71 + 1 + 65), the P2SH-P2WPKH one (a script of 23, a witness of
-      -- 72 + 33 + 2) and the two compressed P2PKH ones (1 + 72 + 1 + 33).
+      -- The estimate is 659 bytes outside the witnesses and 221 of
+      -- witness data, every signature counted as 72 bytes, 715 virtual
+      -- bytes in all. A signature is 72 bytes or 71, as its values fall,
+      -- and two of these five are 71: signed, the transaction is 878
+      -- bytes, 657 outside the witnesses and 221 of witness data. The
+      -- inputs, in the order the builder shuffled them, are the P2WPKH
+      -- coin (empty script, a witness of 72 + 33 + 2 with its two length
+      -- bytes), the uncompressed P2PKH one (a script of 1 + 71 + 1 + 65),
+      -- the P2SH-P2WPKH one (a script of 23, a witness of 72 + 33 + 2) and
+      -- the two compressed P2PKH ones (1 + 71 + 1 + 33, then 1 + 72 + 1 +
+      -- 33).
       ( BS.length (S.encode tx),
         BS.length (S.encode legacy),
         BS.length . (.script) <$> tx.inputs,
         (\stack -> length stack + sum (BS.length <$> stack)) <$> tx.witness
         )
-        `shouldBe` (878, 658, [0, 138, 23, 107, 107], [106, 0, 107, 0, 0])
+        `shouldBe` (878, 657, [0, 138, 23, 106, 107], [107, 0, 107, 0, 0])
     -- Outside the wallet, the coin of the wallet and the output it is paid
-    -- are another wallet's too; the fee is the 8800 of the 880 bytes
+    -- are another wallet's too; the fee is the 7150 of the 715 virtual bytes
     it "is signed without an account, every input and output another wallet's" $ do
       tsd <- expectRight $ build destinations
       (signed, info) <- expectRight $ signTxWithKeys btc ctx tsd Nothing [sweptKey, walletKey]
       isSigned signed.txSignDataTx `shouldBe` True
-      info.txInfoSummary.summaryFee `shouldBe` 8800
+      info.txInfoSummary.summaryFee `shouldBe` 7150
       (Map.null info.txInfoSummary.summaryMyInputs, Map.null info.txInfoSummary.summaryMyOutputs) `shouldBe` (True, True)
     it "refuses to sweep without coins" $
       buildSweepSignData btc ctx seed (SweepCoins [] [] Map.empty []) destinations 10 546 800002
@@ -230,59 +236,60 @@ sweepBuilderSpec ctx =
       ((.sequence) <$> tsd.txSignDataTx.inputs) `shouldBe` [0xfffffffe]
     it "builds a sweep to addresses outside the wallet, P2PKH and Taproot, which the signer accepts" $ do
       -- 10 bytes of overhead, the inputs (581), a P2PKH output (34), a
-      -- Taproot output (43) and the witness data (221): 889 bytes, a fee of
-      -- 8890, and (1500000 - 8890) / 2 = 745555 for each destination
+      -- Taproot output (43) and the witness data (221) in quarters (56):
+      -- 724 virtual bytes, a fee of 7240, and (1500000 - 7240) / 2 =
+      -- 746380 for each destination
       tsd <- expectRight $ build [(otherAddr 0, Remainder), (taprootAddr, Remainder)]
-      ((.value) <$> tsd.txSignDataTx.outputs) `shouldBe` [745555, 745555]
+      ((.value) <$> tsd.txSignDataTx.outputs) `shouldBe` [746380, 746380]
       tsd.txSignDataOutputPaths `shouldBe` []
-      (_, info) <- expectRight $ signTxWithKeys btc ctx tsd (Just accountPub) [sweptKey, walletKey]
-      info.txInfoSummary.summaryFee `shouldBe` 8890
-      Map.toList info.txInfoSummary.summaryOtherOutputs `shouldBe` [(otherAddr 0, 745555), (taprootAddr, 745555)]
+      (_, info) <- expectRight $ signTxWithKeys btc ctx tsd (Just (Bip44, accountPub)) [sweptKey, walletKey]
+      info.txInfoSummary.summaryFee `shouldBe` 7240
+      Map.toList info.txInfoSummary.summaryOtherOutputs `shouldBe` [(otherAddr 0, 746380), (taprootAddr, 746380)]
       -- A sweep has no change: nothing of the fee is change
       info.txInfoSummary.summaryChangeInFee `shouldBe` Nothing
-    -- The same 880 bytes and fee of 8800: 1500000 - 500000 - 8800 = 991200
+    -- The same 715 virtual bytes and fee of 7150: 1500000 - 500000 - 7150 = 992850
     it "pays a destination its fixed amount, the fee paid by the destination without one" $ do
       tsd <- expectRight $ build [(otherAddr 0, Fixed 500000), (externalAddr 1, Remainder)]
-      paidBy tsd `shouldBe` [(otherAddr 0, 500000), (externalAddr 1, 991200)]
+      paidBy tsd `shouldBe` [(otherAddr 0, 500000), (externalAddr 1, 992850)]
     it "refuses a sweep whose coins do not cover the fixed amounts and the fee, cutting none" $
       build [(otherAddr 0, Fixed 1500000), (externalAddr 1, Remainder)]
-        `shouldBe` Left "The coins, 1500000 satoshis, do not cover the fixed amounts, 1500000, and the fee, 8800"
+        `shouldBe` Left "The coins, 1500000 satoshis, do not cover the fixed amounts, 1500000, and the fee, 7150"
     it "refuses destinations that all have an amount, leaving no one what remains" $
       build [(otherAddr 0, Fixed 500000), (externalAddr 1, Fixed 500000)]
         `shouldBe` Left "Give at least one address without an amount, to receive what remains once the fixed amounts and the fee are paid"
     it "is reported before signing with the size estimated without the keys" $ do
       -- The report cannot know that one coin belongs to an uncompressed key
-      -- and counts its input as 148 bytes rather than 180: 848 bytes for the
-      -- 8800 of fee the builder set on 880
+      -- and counts its input as 148 bytes rather than 180: 683 virtual
+      -- bytes for the 7150 of fee the builder set on 715
       tsd <- expectRight $ build destinations
-      info <- expectRight $ parseTxSignData btc ctx accountPub tsd
-      (info.txInfoSummary.summarySize, info.txInfoSummary.summaryFee, info.txInfoSummary.summaryFeeByte, info.txInfoSummary.summaryChangeInFee) `shouldBe` (848, 8800, 10, Nothing)
+      info <- expectRight $ parseTxSignData btc ctx Bip44 accountPub tsd
+      (info.txInfoSummary.summarySize, info.txInfoSummary.summaryFee, info.txInfoSummary.summaryFeeByte, info.txInfoSummary.summaryChangeInFee) `shouldBe` (683, 7150, 10, Nothing)
     it "refuses a fee larger than the coins" $
-      buildWith 10000 546 destinations `shouldBe` Left "The coins, 1500000 satoshis, do not cover the fee, 8800000"
-    -- Each destination gets 745600: the dust limit right below, at and
+      buildWith 10000 546 destinations `shouldBe` Left "The coins, 1500000 satoshis, do not cover the fee, 7150000"
+    -- Each destination gets 746425: the dust limit right below, at and
     -- right above that amount
     it "accepts outputs above the dust value" $
-      buildWith 10 745599 destinations `shouldBe` build destinations
+      buildWith 10 746424 destinations `shouldBe` build destinations
     it "accepts outputs exactly at the dust value" $
-      buildWith 10 745600 destinations `shouldBe` build destinations
+      buildWith 10 746425 destinations `shouldBe` build destinations
     it "refuses outputs below the dust value" $
-      buildWith 10 745601 destinations `shouldBe` Left "What remains for each address without an amount, 745600 satoshis, is below the dust limit of 745601"
+      buildWith 10 746426 destinations `shouldBe` Left "What remains for each address without an amount, 746425 satoshis, is below the dust limit of 746426"
     it "refuses a fee rate of zero" $
-      buildWith 0 546 destinations `shouldBe` Left "The fee rate must be at least 1 satoshi per byte"
+      buildWith 0 546 destinations `shouldBe` Left "The fee rate must be at least 1 satoshi per virtual byte"
     -- A rate of 2^64 wrapped around to zero, and others to any fee
-    it "refuses a fee rate above 2^32 - 1 satoshis per byte" $
-      buildWith 4294967296 546 destinations `shouldBe` Left "The fee rate must be at most 4294967295 satoshis per byte"
-    -- 880 bytes at 4294967295 satoshis each, far more than the coins, and
-    -- far less than 2^64
+    it "refuses a fee rate above 2^32 - 1 satoshis per virtual byte" $
+      buildWith 4294967296 546 destinations `shouldBe` Left "The fee rate must be at most 4294967295 satoshis per virtual byte"
+    -- 715 virtual bytes at 4294967295 satoshis each, far more than the
+    -- coins, and far less than 2^64
     it "counts the fee at the highest rate without wrapping around" $
-      buildWith 4294967295 546 destinations `shouldBe` Left "The coins, 1500000 satoshis, do not cover the fee, 3779571219600"
+      buildWith 4294967295 546 destinations `shouldBe` Left "The coins, 1500000 satoshis, do not cover the fee, 3070901615925"
     it "refuses a dust limit above the 21 million bitcoins there will ever be" $
       buildWith 10 2100000000000001 destinations `shouldBe` Left "The dust limit must be at most the 21 million bitcoins there will ever be"
     it "refuses to sign a sweep without fee" $ do
       -- The wallet's coin of 500000 is swept in full
       let tx = spendingTx ctx [(txHash walletFunding, 0)] [(otherAddr 0, 500000)]
           unsigned = TxSignData tx [walletFunding] [firstExternal] [] Nothing Nothing [] noLabel
-      signTxWithKeys btc ctx unsigned (Just accountPub) [walletKey] `shouldBe` Left "The transaction pays no fee"
+      signTxWithKeys btc ctx unsigned (Just (Bip44, accountPub)) [walletKey] `shouldBe` Left "The transaction pays no fee"
     -- The coin paid to the swept key's public key itself, swept to another
     -- wallet: 10 + 114 + 34 = 158 bytes, a fee of 1580, and 100000 - 1580 =
     -- 98420 paid. The coin is reported under the P2PKH address of the key.
@@ -315,11 +322,11 @@ sweepBuilderSpec ctx =
           walletAddrs = Map.fromList [(externalAddr 0, firstExternal), (externalAddr 1, secondExternal)],
           uncompressedAddrs = [sweptKeyUncompressedAddr]
         }
-    -- The sweep: 10 satoshis per byte, dust at 546. The estimated size is
-    -- 10 bytes of overhead, the inputs (148 + 180 + 41 + 64 + 148 = 581),
-    -- two P2PKH outputs (68) and the witness data (2 + 1 + 1 + 108 + 108 + 1
-    -- = 221): 880 bytes, so the fee is 8800 and each destination gets
-    -- (1500000 - 8800) / 2 = 745600.
+    -- The sweep: 10 satoshis per virtual byte, dust at 546. The estimated
+    -- size is 10 bytes of overhead, the inputs (148 + 180 + 41 + 64 + 148 =
+    -- 581), two P2PKH outputs (68) and the witness data (2 + 1 + 1 + 108 +
+    -- 108 + 1 = 221) in quarters, rounded up (56): 715 virtual bytes, so the
+    -- fee is 7150 and each destination gets (1500000 - 7150) / 2 = 746425.
     destinations = [(otherAddr 0, Remainder), (externalAddr 1, Remainder)]
     -- The Taproot example address of BIP350
     taprootAddr = fromJust $ textToAddr btc "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0"
@@ -495,15 +502,16 @@ sweepIntoWalletSpec ctx =
         -- signsweep by nosigHash, with the outside key only
         held <- requirePendingTx pendingHash
         liftIO $ held.pendingTxOnline `shouldBe` False
-        (signed, info) <- liftEither $ signTxWithKeys btc ctx held.pendingTxData (Just accountPub) [sweptKey]
+        (signed, info) <- liftEither $ signTxWithKeys btc ctx held.pendingTxData (Just (Bip44, accountPub)) [sweptKey]
         importPendingTx btc ctx accId signed `dbShouldBeE` pendingHash
         ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, False, False))]
         -- The wallet receives one of the two outputs: 10 bytes of overhead,
         -- inputs of 148 + 180 + 41 + 64, two P2PKH outputs and 2 + 1 + 1 +
-        -- 108 + 108 of witness data make 731 bytes, a fee of 7310, so
-        -- (1000000 - 7310) / 2 = 496345 each
-        liftIO $ (info.txInfoSummary.summaryType, info.txInfoSummary.summaryAmount, info.txInfoSummary.summaryFee) `shouldBe` (TxCredit, 496345, 7310)
+        -- 108 + 108 of witness data, 220 in quarters rounded up to 55, make
+        -- 566 virtual bytes, a fee of 5660, so (1000000 - 5660) / 2 =
+        -- 497170 each
+        liftIO $ (info.txInfoSummary.summaryType, info.txInfoSummary.summaryAmount, info.txInfoSummary.summaryFee) `shouldBe` (TxCredit, 497170, 5660)
         liftIO $ Map.keys info.txInfoSummary.summaryMyOutputs `shouldBe` [externalAddr 1]
         -- Paid into the wallet or not, a sweep has no change
         liftIO $ info.txInfoSummary.summaryChangeInFee `shouldBe` Nothing

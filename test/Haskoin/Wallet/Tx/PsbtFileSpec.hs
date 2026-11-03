@@ -7,13 +7,16 @@ module Haskoin.Wallet.Tx.PsbtFileSpec (spec) where
 
 import Control.Monad (forM_)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as C8
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import qualified Data.Serialize as S
+import Data.Text.Encoding (decodeUtf8)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin
-import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..))
+import Haskoin.Wallet.Database.TxInfo (MyOutputs (..), TxInfo (..), TxSummary (..))
+import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.PsbtFile
 import Haskoin.Wallet.Tx.SignData
@@ -42,15 +45,33 @@ payment ctx = TxSignData (paymentTx ctx) [funding ctx] ["/0/0"] ["/1/0"] (Just 1
 paymentFile :: Ctx -> TxFile
 paymentFile ctx = TxFile (Just btc) (payment ctx) Map.empty Map.empty
 
+-- | The same payment by the bip84 account of the test wallet: its coin of
+-- 100000 at its first receiving address, /0/0, spent to another wallet
+-- (60000) and to its first change address, /1/0 (30000), 10000 of fee
+segwitFunding :: Ctx -> Tx
+segwitFunding ctx = fundingTx ctx 2 [(segwitExternalAddr 0, 100000)]
+
+segwitPayment :: Ctx -> TxSignData
+segwitPayment ctx =
+  TxSignData (builtTx ctx 800000 [(txHash (segwitFunding ctx), 0)] [(otherAddr 0, 60000), (segwitInternalAddr 0, 30000)]) [segwitFunding ctx] ["/0/0"] ["/1/0"] (Just 10) Nothing [] noLabel
+
+segwitPaymentFile :: Ctx -> TxFile
+segwitPaymentFile ctx = TxFile (Just btc) (segwitPayment ctx) Map.empty Map.empty
+
+-- | The bip84 account 0 of the test wallet, m/84'/0'/0', with the
+-- fingerprint of its seed
+segwitSeed :: Ctx -> FileAccount
+segwitSeed ctx = FileAccount (testSegwitAccountPub ctx) Bip84 "m/84'/0'/0'" (Just testFingerprint) btc
+
 -- | The first account of the test wallet, m/44'/0'/0', with the fingerprint
 -- of its seed known, and with it unknown
 knownSeed, unknownSeed :: Ctx -> FileAccount
-knownSeed ctx = FileAccount (testAccountPub ctx) "m/44'/0'/0'" (Just testFingerprint) btc
+knownSeed ctx = FileAccount (testAccountPub ctx) Bip44 "m/44'/0'/0'" (Just testFingerprint) btc
 unknownSeed ctx = (knownSeed ctx) {fileAccountFingerprint = Nothing}
 
 -- | The first account of the second test wallet
 otherWallet :: Ctx -> FileAccount
-otherWallet ctx = FileAccount (fromMaybe (error "otherWallet") (xPubImport btc ctx testAccountXPub2)) "m/44'/0'/0'" (Just testFingerprint2) btc
+otherWallet ctx = FileAccount (fromMaybe (error "otherWallet") (xPubImport btc ctx testAccountXPub2)) Bip44 "m/44'/0'/0'" (Just testFingerprint2) btc
 
 -- | The file as hw writes it for the account
 written :: Ctx -> FileAccount -> TxFile -> IO Psbt
@@ -102,6 +123,15 @@ signedWithSeed ctx = (signedByWallet ctx (payment ctx)) {txSignDataFingerprint =
 unsignedPaymentText :: BS.ByteString
 unsignedPaymentText = "cHNidP8BAHcCAAAAARtCW1G6d8iktJ6tfcrZ9/NlRYpWG/bQVr97AifbJolaAAAAAAD9////AmDqAAAAAAAAGXapFLy24qoWpyVllUiRDXoCBBTL/mXfiKwwdQAAAAAAABl2qRRFWqUMJmMUF3HrrCCW43gzkRIn1oisADUMAAX8Amh3AANidGMF/AJodwEICgAAAAAAAAAAAQBVAQAAAAEBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/////wGghgEAAAAAABl2qRTIDVUiPi8QYTY63Sp7A2PChb8pjYisAAAAAAEDBAEAAAAiBgMvZDcCIlbIVOAJDn1si2XpZgbvf0BTmeDwGHyTCXrA+Ri8Vg+VLAAAgAAAAIAAAACAAAAAAAAAAAAAACICA3by5wZFjddWc7oZuO/YQu/d2bwK5B4xM53/z5F7bbbrGLxWD5UsAACAAAAAgAAAAIABAAAAAAAAAAA="
 
+-- | The file hw writes for the unsigned payment of the bip84 account:
+-- the one Bitcoin Core signed for the vectors in test/data/psbt/core,
+-- checked with its decodepsbt: the coin on the input as its whole
+-- transaction and as itself, the derivation records of the keys
+-- m/84'/0'/0'/0/0 and /1/0 of the seed bc560f95, the sighash ALL and
+-- hw's fields
+segwitPaymentText :: BS.ByteString
+segwitPaymentText = "cHNidP8BAHQCAAAAAf0HLBjt2BsDcA3jyok02bxCoNYoJWOnc0LyAZ3uZ+kZAAAAAAD9////AmDqAAAAAAAAGXapFLy24qoWpyVllUiRDXoCBBTL/mXfiKwwdQAAAAAAABYAFP0l5/X0gP7M5jxDskByzUud0N6hADUMAAX8Amh3AANidGMF/AJodwEICgAAAAAAAAAAAQBSAQAAAAECAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/////wGghgEAAAAAABYAFCTmRxsMgVruAse9ImFMtg5IEaAZAAAAAAEBH6CGAQAAAAAAFgAUJOZHGwyBWu4Cx70iYUy2DkgRoBkBAwQBAAAAIgYCdlLe+8CYMh2khdphdd6Lh49DPw2JM0NVJiXJzVCTP1MYvFYPlVQAAIAAAACAAAAAgAAAAAAAAAAAAAAiAgMSvuVMTQzd0oxq2bXlbxXHLisLmALO0zcJZKa9BYoOChi8Vg+VVAAAgAAAAIAAAACAAQAAAAAAAAAA"
+
 {- Writing -}
 
 -- The public keys below are those of the test wallet at m/44'/0'/0'/0/0 and
@@ -133,6 +163,22 @@ writingSpec ctx =
       psbt <- written ctx (knownSeed ctx) (paymentFile ctx)
       shownDerivations ctx (outputDerivations ctx) (outputAt 0 psbt) `shouldReturn` []
       shownDerivations ctx (outputDerivations ctx) (outputAt 1 psbt) `shouldReturn` [("0376f2e706458dd75673ba19b8efd842efddd9bc0ae41e31339dffcf917b6db6eb", Derivation testFingerprint "m/44'/0'/0'/1/0")]
+
+    -- The keys at m/84'/0'/0'/0/0 and /1/0 were derived apart from hw with
+    -- the Python tool of the message-signing vectors
+    it "names the keys of a bip84 account on its input and its change output, whose scripts are P2WPKH" $ do
+      psbt <- written ctx (segwitSeed ctx) (segwitPaymentFile ctx)
+      inputs <- shownDerivations ctx (inputDerivations ctx) (inputAt 0 psbt)
+      inputs `shouldBe` [("027652defbc098321da485da6175de8b878f433f0d893343552625c9cd50933f53", Derivation testFingerprint "m/84'/0'/0'/0/0")]
+      outputs <- mapM (shownDerivations ctx (outputDerivations ctx)) psbt.outputs
+      outputs `shouldBe` [[], [("0312bee54c4d0cddd28c6ad9b5e56f15c72e2b0b9802ced3370964a6bd058a0e0a", Derivation testFingerprint "m/84'/0'/0'/1/0")]]
+
+    it "writes the coin itself beside its whole transaction on the input of a SegWit coin, which the signers of such coins ask for" $ do
+      psbt <- written ctx (segwitSeed ctx) (segwitPaymentFile ctx)
+      witnessUtxo (inputAt 0 psbt) `shouldBe` Right (Just (TxOut 100000 (addressScript ctx (segwitExternalAddr 0))))
+      nonWitnessUtxo (inputAt 0 psbt) `shouldBe` Right (Just (segwitFunding ctx))
+      legacy <- written ctx (knownSeed ctx) (paymentFile ctx)
+      witnessUtxo (inputAt 0 legacy) `shouldBe` Right Nothing
 
     it "writes the whole transaction each coin comes from on its input" $ do
       psbt <- written ctx (knownSeed ctx) (paymentFile ctx)
@@ -233,6 +279,10 @@ signingIntoSpec ctx =
   describe "The PSBT of a transaction signed into the PSBT it was read from" $ do
     -- The property the two writers share: for a file hw wrote, signing
     -- into it gives the file hw writes for the signed transaction
+    it "is this file, for the payment of the bip84 account of the test wallet" $ do
+      psbt <- written ctx (segwitSeed ctx) (segwitPaymentFile ctx)
+      encodePsbtBase64 psbt `shouldBe` segwitPaymentText
+
     it "is the file hw writes for the signed transaction, when the file was hw's own" $ do
       let signed = signedWithSeed ctx
       forM_ [knownSeed ctx, unknownSeed ctx] $ \acc -> do
@@ -257,7 +307,7 @@ signingIntoSpec ctx =
     it "keeps the version of a file of version 2, as the file Core accepts" $ do
       psbt <- coreFile "core-prepared-v2.psbt"
       file <- readBack ctx [knownSeed ctx] psbt
-      (signed, _) <- expectRight $ signWalletTx btc ctx file.txFileData testAccountKey
+      (signed, _) <- expectRight $ signWalletTx btc ctx Bip44 file.txFileData testAccountKey
       written' <- expectRight $ signedPsbt ctx (Just (knownSeed ctx)) psbt (TxFile (Just btc) signed Map.empty Map.empty)
       written'.version `shouldBe` Version2
       encodePsbtBase64 written' `shouldBe` corePreparedSignedV2Text
@@ -268,7 +318,7 @@ signingIntoSpec ctx =
     it "clears the flags of a file of version 2 that let inputs and outputs be added, once signed" $ do
       psbt <- coreFile "core-prepared-v2.psbt"
       file <- readBack ctx [knownSeed ctx] psbt
-      (signed, _) <- expectRight $ signWalletTx btc ctx file.txFileData testAccountKey
+      (signed, _) <- expectRight $ signWalletTx btc ctx Bip44 file.txFileData testAccountKey
       let open = withGlobals (insertTxModifiable (Modifiable True True False 0) psbt.globals) psbt
       written' <- expectRight $ signedPsbt ctx (Just (knownSeed ctx)) open (TxFile (Just btc) signed Map.empty Map.empty)
       txModifiable written'.globals `shouldBe` Right (Just (Modifiable False False False 0))
@@ -394,6 +444,28 @@ readingSpec ctx =
       file.txFileData.txSignDataFeeRate `shouldBe` Just 10
       verifySignedTx btc ctx file.txFileData `shouldBe` Right ()
 
+    it "reads the file of a bip84 account back as the file written, with the fingerprint of the seed, finding the account among those given" $ do
+      psbt <- written ctx (segwitSeed ctx) (segwitPaymentFile ctx)
+      readBack ctx [knownSeed ctx, segwitSeed ctx] psbt
+        `shouldReturn` (segwitPaymentFile ctx) {txFileData = (segwitPayment ctx) {txSignDataFingerprint = Just testFingerprint}}
+
+    -- The signature of the coin is the one hw makes for it, left among the
+    -- partial signatures as another signer leaves it
+    it "finalizes a partial signature of a P2WPKH coin into the witness of its input, the script left empty" $ do
+      (signed, _) <- expectRight $ signWalletTx btc ctx Bip84 (segwitPayment ctx) testSegwitAccountKey
+      stack <- case signed.txSignDataTx.witness of
+        [stack@[_, _]] -> return stack
+        other -> fail ("Not one witness of a signature and a key: " <> show other)
+      psbt <- written ctx (segwitSeed ctx) (segwitPaymentFile ctx)
+      let public = forceRight (unmarshal ctx (stack !! 1)) :: PublicKey
+          partial = insertPartialSignature ctx public (stack !! 0) (inputAt 0 psbt)
+      file <- readBack ctx [segwitSeed ctx] (withInputs [partial] psbt)
+      map (.script) file.txFileData.txSignDataTx.inputs `shouldBe` [BS.empty]
+      file.txFileData.txSignDataTx.witness `shouldBe` [stack]
+      isSigned file.txFileData.txSignDataTx `shouldBe` True
+      file.txFileData.txSignDataInputPaths `shouldBe` ["/0/0"]
+      verifySignedTx btc ctx file.txFileData `shouldBe` Right ()
+
     -- The key of the second wallet at m/44'/0'/0'/0/0 is not the coin's
     it "leaves an input with a partial signature of another key unsigned" $ do
       psbt <- written ctx (knownSeed ctx) (paymentFile ctx)
@@ -446,7 +518,7 @@ readingSpec ctx =
         file.txFileData.txSignDataReplaces `shouldBe` []
         file.txFileData.txSignDataLabel `shouldBe` ""
         map txHash file.txFileData.txSignDataInputs `shouldBe` ["fede72ccadbf9f16f826e3078578b0660526a37b48d4f894ab26f4cf5a95e89c"]
-        info <- expectRight $ parseTxFile btc ctx (testAccountPub ctx) file
+        info <- expectRight $ parseTxFile btc ctx Bip44 (testAccountPub ctx) file
         info.txInfoSummary.summaryFee `shouldBe` 2250
         info.txInfoSummary.summaryOtherOutputs `shouldBe` Map.fromList [(testAddress "1GfJmWwG2JUjrvQ6WjVfwaWpPgtbHDhSdE", 100000000)]
         Map.keys info.txInfoSummary.summaryMyOutputs `shouldBe` [internalAddr 0]
@@ -480,6 +552,89 @@ readingSpec ctx =
       file.txFileData.txSignDataInputPaths `shouldBe` []
       file.txFileData.txSignDataOutputPaths `shouldBe` ["/1/0"]
 
+    -- Bitcoin Core prepared this payment for the bip84 account, which it
+    -- watches by the descriptor of the account's key: 1 BTC from the coin
+    -- of 50 BTC mined to /0/0 on regtest, to another wallet, with the
+    -- change at /1/0 and a fee of 1440 satoshis, 10 per virtual byte for
+    -- 144. Each input carries the coin's transaction and the coin itself.
+    it "reads a file Bitcoin Core prepared for a bip84 account, and tells the account the seed" $ do
+      psbt <- coreFile "core-prepared-segwit.psbt"
+      witnessUtxo (inputAt 0 psbt) `shouldBe` Right (Just (TxOut 5000000000 (addressScript ctx (segwitExternalAddr 0))))
+      file <- readBack ctx [knownSeed ctx, otherWallet ctx, segwitSeed ctx] psbt
+      file.txFileNetwork `shouldBe` Nothing
+      file.txFileData.txSignDataInputPaths `shouldBe` ["/0/0"]
+      file.txFileData.txSignDataOutputPaths `shouldBe` ["/1/0"]
+      file.txFileData.txSignDataFingerprint `shouldBe` Just testFingerprint
+      file.txFileData.txSignDataFeeRate `shouldBe` Nothing
+      map txHash file.txFileData.txSignDataInputs `shouldBe` ["08d847645a7389f60bc35545b6b54aef449620dbc139433df4fbc874f6c53567"]
+      info <- expectRight $ parseTxFile btc ctx Bip84 (testSegwitAccountPub ctx) file
+      (info.txInfoSummary.summaryFee, info.txInfoSummary.summarySize, info.txInfoSummary.summaryFeeByte) `shouldBe` (1440, 144, 10)
+      info.txInfoSummary.summaryOtherOutputs `shouldBe` Map.fromList [(testAddress "157L9V7wdL7pYt2nndN5NN5DMynh1HdYhF", 100000000)]
+      Map.toList info.txInfoSummary.summaryMyOutputs `shouldBe` [(segwitInternalAddr 0, MyOutputs 4899998560 "/1/0" "")]
+      Map.keys info.txInfoSummary.summaryMyInputs `shouldBe` [segwitExternalAddr 0]
+
+    -- The signed file, checked with Core: analyzepsbt finds it complete,
+    -- finalizepsbt extracts its transaction, which testmempoolaccept
+    -- accepts on the regtest chain the coin is on
+    it "signs a file Bitcoin Core prepared for a bip84 account into that file, as the file Core accepts" $ do
+      psbt <- coreFile "core-prepared-segwit.psbt"
+      file <- readBack ctx [segwitSeed ctx] psbt
+      (signed, info) <- expectRight $ signWalletTx btc ctx Bip84 file.txFileData testSegwitAccountKey
+      txHash signed.txSignDataTx `shouldBe` "7ef8ee09a10d0edd9c06d6cb68a35fc37bbecccd24e35ca957f2526eb22d4848"
+      info.txInfoSummary.summarySize `shouldBe` 144
+      written' <- expectRight $ signedPsbt ctx (Just (segwitSeed ctx)) psbt (TxFile (Just btc) signed Map.empty Map.empty)
+      encodePsbtBase64 written' `shouldBe` coreSegwitPreparedSignedText
+
+    -- The same payment as Core writes it by default, a PSBT of version 2,
+    -- with the change first this time
+    it "reads a file Bitcoin Core prepared in version 2 for a bip84 account" $ do
+      file <- readBack ctx [segwitSeed ctx] =<< coreFile "core-prepared-segwit-v2.psbt"
+      file.txFileData.txSignDataInputPaths `shouldBe` ["/0/0"]
+      file.txFileData.txSignDataOutputPaths `shouldBe` ["/1/0"]
+      info <- expectRight $ parseTxFile btc ctx Bip84 (testSegwitAccountPub ctx) file
+      info.txInfoSummary.summaryFee `shouldBe` 1440
+
+    -- Core signed its version 2 file without finalizing, as a hardware
+    -- wallet does: hw puts the signature in the witness, as Core does when
+    -- it finalizes the same file, whose transaction is the one in the
+    -- .hex file beside it
+    it "finalizes a partial signature of a P2WPKH coin in a file of version 2, as Core finalizes it" $ do
+      file <- readBack ctx [segwitSeed ctx] =<< coreFile "core-prepared-segwit-v2-partial.psbt"
+      finalized <- BS.readFile "test/data/psbt/core/core-prepared-segwit-v2-finalized.hex"
+      encodeHex (S.encode file.txFileData.txSignDataTx) `shouldBe` decodeUtf8 (C8.strip finalized)
+      txHash file.txFileData.txSignDataTx `shouldBe` "d81848d337a1157f00264090d585f370c46f4099618fb9a47de24a2e8b7200cf"
+      file.txFileData.txSignDataInputPaths `shouldBe` ["/0/0"]
+      verifySignedTx btc ctx file.txFileData `shouldBe` Right ()
+
+    -- The file hw writes for the payment of the bip84 account, signed by
+    -- Core without finalizing it, as a hardware wallet leaves it: the
+    -- witness hw builds is the one Core builds when it finalizes the same
+    -- file
+    it "finalizes a partial signature of a P2WPKH coin another signer left, as Core finalizes it" $ do
+      psbt <- coreFile "hw-segwit-payment-partial.psbt"
+      file <- readBack ctx [segwitSeed ctx] psbt
+      map (.script) file.txFileData.txSignDataTx.inputs `shouldBe` [BS.empty]
+      map (map encodeHex) file.txFileData.txSignDataTx.witness
+        `shouldBe` [["304402202a23cc7e490251459c3954d9800b8231c2cbace769c0e1336b54716ca392404d022041f7d7e7b779f3dea71a3fc9a03f4201f994774e264ef9a50a48abbbfb9e671001", "027652defbc098321da485da6175de8b878f433f0d893343552625c9cd50933f53"]]
+      isSigned file.txFileData.txSignDataTx `shouldBe` True
+      file.txFileData.txSignDataInputPaths `shouldBe` ["/0/0"]
+      file.txFileData.txSignDataFingerprint `shouldBe` Just testFingerprint
+      verifySignedTx btc ctx file.txFileData `shouldBe` Right ()
+
+    -- The same file finalized by Core, which clears the derivation record
+    -- of the input it finalized: the account is found by its change
+    -- output, and hw's fields stay. The transaction is the one Core's
+    -- finalizepsbt gives.
+    it "reads the transaction of a P2WPKH input another signer finalized, which names no key of the account any more" $ do
+      file <- readBack ctx [segwitSeed ctx] =<< coreFile "hw-segwit-payment-finalized.psbt"
+      finalized <- BS.readFile "test/data/psbt/core/hw-segwit-payment-finalized.hex"
+      encodeHex (S.encode file.txFileData.txSignDataTx) `shouldBe` decodeUtf8 (C8.strip finalized)
+      txHash file.txFileData.txSignDataTx `shouldBe` "1fd25156213613f70bd549422e25c3134741a27315202b015231f645ad7f75fe"
+      file.txFileData.txSignDataInputPaths `shouldBe` []
+      file.txFileData.txSignDataOutputPaths `shouldBe` ["/1/0"]
+      file.txFileData.txSignDataFeeRate `shouldBe` Just 10
+      verifySignedTx btc ctx file.txFileData `shouldBe` Right ()
+
     -- The payment of Database/PendingTxSpec.hs, signed and finalized by
     -- Core, in both versions
     it "reads a file finalized in version 2 as the same file as in version 0" $ do
@@ -494,7 +649,7 @@ readingSpec ctx =
     it "signs a file Bitcoin Core prepared into that file, as the file Core accepts" $ do
       psbt <- coreFile "core-prepared.psbt"
       file <- readBack ctx [knownSeed ctx] psbt
-      (signed, _) <- expectRight $ signWalletTx btc ctx file.txFileData testAccountKey
+      (signed, _) <- expectRight $ signWalletTx btc ctx Bip44 file.txFileData testAccountKey
       written' <- expectRight $ signedPsbt ctx (Just (knownSeed ctx)) psbt (TxFile (Just btc) signed Map.empty Map.empty)
       encodePsbtBase64 written' `shouldBe` corePreparedSignedText
 

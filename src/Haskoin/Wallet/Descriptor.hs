@@ -4,7 +4,9 @@
 -- | Output descriptors, the format of BIP 380 in which wallets and Bitcoin
 -- Core pass an account around without its private key, as far as hw uses
 -- them: the descriptor of an account of one key, such as
--- @pkh([bc560f95/44h/0h/0h]xpub6CHK.../<0;1>/*)#vq597j87@. Script
+-- @pkh([bc560f95/44h/0h/0h]xpub6CHK.../<0;1>/*)#vq597j87@ for a BIP44
+-- account, or @wpkh([bc560f95/84h/0h/0h]xpub6CQF.../<0;1>/*)#5nktextl@
+-- for a BIP84 one, the script function naming the kind. Script
 -- functions wrap a key expression: the origin of the key in brackets, the
 -- fingerprint of the master key and the path from it, then the extended
 -- key, then the path to the addresses, @/<0;1>/*@ for both chains of the
@@ -16,6 +18,11 @@
 -- without the key, its origin: @pkh([bc560f95/44'/0'/0'])@. The origin is
 -- defined here too, and "Haskoin.Wallet.Bip329" uses it.
 --
+-- The key of a descriptor is one of BIP32, an xpub or a tpub. Some wallets
+-- write the key of a BIP84 account with a prefix of SLIP-132, zpub or
+-- vpub, to mark its kind: 'readAccountKey' reads such a key as the xpub it
+-- is, with the kind it marks.
+--
 -- This module is the format alone. "Haskoin.Wallet.Labels" makes an
 -- account of a descriptor, and the @descriptor@ command writes the
 -- descriptor of an account.
@@ -25,6 +32,8 @@ module Haskoin.Wallet.Descriptor
     accountOrigin,
     originText,
     parseOrigin,
+    kindScripts,
+    kindOfScripts,
 
     -- * Descriptors
     Descriptor (..),
@@ -37,7 +46,7 @@ module Haskoin.Wallet.Descriptor
 
     -- * Extended keys
     isPrivateKey,
-    isSlip132Key,
+    readAccountKey,
 
     -- * Checksums
     checksum,
@@ -53,6 +62,7 @@ import qualified Data.Aeson as Json
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.Types as Json
 import Data.Bits (shiftL, shiftR, testBit, xor, (.&.))
+import qualified Data.ByteString as BS
 import Data.Char (isAlpha, isAlphaNum, isHexDigit)
 import Data.List (elemIndex)
 import Data.Maybe (fromMaybe)
@@ -61,6 +71,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Word (Word64)
 import Haskoin
+import Haskoin.Wallet.Keys (AccountKind (..), kindName)
 
 {- Key origins -}
 
@@ -78,9 +89,22 @@ data Origin = Origin
   }
   deriving (Eq, Show)
 
--- | The origin of a BIP44 account of a seed: pkh([fingerprint/44'/coin'/index'])
-accountOrigin :: Fingerprint -> HardPath -> Origin
-accountOrigin fingerprint path = Origin ["pkh"] fingerprint (toGeneric path)
+-- | The origin of an account of a kind of a seed:
+-- pkh([fingerprint/44'/coin'/index']) for a BIP44 account,
+-- wpkh([fingerprint/84'/coin'/index']) for a BIP84 one
+accountOrigin :: AccountKind -> Fingerprint -> HardPath -> Origin
+accountOrigin kind fingerprint path = Origin (kindScripts kind) fingerprint (toGeneric path)
+
+-- | The script functions of the accounts of a kind: pkh for BIP44, wpkh
+-- for BIP84
+kindScripts :: AccountKind -> [Text]
+kindScripts Bip44 = ["pkh"]
+kindScripts Bip84 = ["wpkh"]
+
+-- | The kind of account whose script functions these are, if hw holds it:
+-- none for a bare key origin, or for the sh(wpkh()) of a BIP49 account
+kindOfScripts :: [Text] -> Maybe AccountKind
+kindOfScripts scripts = lookup scripts [(kindScripts kind, kind) | kind <- [minBound .. maxBound]]
 
 -- | An origin as a BIP 329 record writes it, hardened steps marked with an
 -- apostrophe, as the wallets that write such records do
@@ -177,12 +201,13 @@ data Descriptor = Descriptor
 data Chains = BothChains | ReceivingChain | ChangeChain
   deriving (Eq, Show)
 
--- | The descriptor of a BIP44 account: its key in pkh, with its origin
--- when the fingerprint of the seed is known, and both chains
-accountDescriptor :: Maybe Fingerprint -> HardPath -> Text -> Descriptor
-accountDescriptor fingerprintM path key =
+-- | The descriptor of an account of a kind: its key in the script function
+-- of the kind, pkh or wpkh, with its origin when the fingerprint of the
+-- seed is known, and both chains
+accountDescriptor :: AccountKind -> Maybe Fingerprint -> HardPath -> Text -> Descriptor
+accountDescriptor kind fingerprintM path key =
   Descriptor
-    { descriptorScripts = ["pkh"],
+    { descriptorScripts = kindScripts kind,
       descriptorKeyOrigin = (\fingerprint -> (fingerprint, toGeneric path)) <$> fingerprintM,
       descriptorKey = key,
       descriptorChains = BothChains
@@ -258,11 +283,43 @@ looksLikeDescriptor text =
 isPrivateKey :: Text -> Bool
 isPrivateKey key = "prv" `Text.isSuffixOf` Text.take 4 key
 
--- | Whether an extended key has a prefix of SLIP-132, such as ypub or
--- zpub, by which some wallets mark the key of a BIP49 or BIP84 account.
--- hw reads the prefixes of BIP32, xpub and tpub.
-isSlip132Key :: Text -> Bool
-isSlip132Key key = Text.take 4 key `elem` ["ypub", "zpub", "Ypub", "Zpub", "upub", "vpub", "Upub", "Vpub"]
+-- | The key of an account as BIP32 writes it, and the kind of account its
+-- prefix marks, from a key as a user or another wallet writes it: an xpub
+-- or a tpub as it is, which marks no kind; a zpub or a vpub, the prefix
+-- SLIP-132 gives the key of a BIP84 account, with that prefix replaced by
+-- the one of BIP32 for its network, since the key is the same and hw
+-- stores it as BIP32 writes it. A ypub or a upub marks a BIP49 account,
+-- and a capital Y, Z, U or V marks a multisig one: neither is held, so
+-- both are refused. Any other text is left as it is, for the reader of
+-- BIP32 keys to judge.
+readAccountKey :: Text -> Either String (Maybe AccountKind, Text)
+readAccountKey key =
+  case lookup (Text.take 4 key) slip132Prefixes of
+    Nothing -> Right (Nothing, key)
+    Just (Left refused) -> Left refused
+    Just (Right (kind, bip32Prefix)) ->
+      case decodeBase58Check key of
+        Just bytes | BS.length bytes == 78 -> Right (Just kind, encodeBase58Check (bip32Prefix <> BS.drop 4 bytes))
+        _ -> Left ("The key starts with " <> cs (Text.take 4 key) <> " but does not read as an extended key")
+
+-- | The prefixes of SLIP-132 by their first four characters: those of a
+-- BIP84 account, with the kind and the version bytes of BIP32 that take
+-- their place, and the refusal of the others
+slip132Prefixes :: [(Text, Either String (AccountKind, BS.ByteString))]
+slip132Prefixes =
+  [ ("zpub", Right (Bip84, BS.pack [0x04, 0x88, 0xb2, 0x1e])),
+    ("vpub", Right (Bip84, BS.pack [0x04, 0x35, 0x87, 0xcf])),
+    ("ypub", Left (bip49 "ypub")),
+    ("upub", Left (bip49 "upub")),
+    ("Ypub", Left (multisig "Ypub")),
+    ("Zpub", Left (multisig "Zpub")),
+    ("Upub", Left (multisig "Upub")),
+    ("Vpub", Left (multisig "Vpub"))
+  ]
+  where
+    bip49 prefix = "The key has the prefix " <> prefix <> " of SLIP-132, which marks a BIP49 account, with P2SH-P2WPKH addresses: hw holds " <> kinds <> " accounts"
+    multisig prefix = "The key has the prefix " <> prefix <> " of SLIP-132, which marks a multisig account: hw holds " <> kinds <> " accounts of one key"
+    kinds = cs (kindName Bip44) <> " and " <> cs (kindName Bip84)
 
 {- Checksums -}
 

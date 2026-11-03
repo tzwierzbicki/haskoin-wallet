@@ -24,18 +24,16 @@ import Data.List (maximumBy)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Store
-import Haskoin.Wallet.Tx.Size (checkFeeRate)
+import Haskoin.Wallet.Tx.Size (checkFeeRate, storeTxSize)
 import Haskoin.Wallet.Util (readNatural)
 import Numeric.Natural (Natural)
 
 {- The rates -}
 
 -- | The fee rates the transactions of recent blocks paid, in satoshis per
--- byte: the rates below which a quarter, half and nine tenths of the bytes
--- of those blocks paid less. The bytes are the virtual bytes miners weigh,
--- which for the transactions hw builds are their bytes. With them, the
--- blocks they come from, and when the latest of them was mined, as a Unix
--- time.
+-- virtual byte: the rates below which a quarter, half and nine tenths of
+-- the virtual bytes of those blocks paid less. With them, the blocks they
+-- come from, and when the latest of them was mined, as a Unix time.
 data FeeRates = FeeRates
   { rateLow :: !Natural,
     rateMedian :: !Natural,
@@ -78,7 +76,7 @@ levelName Low = "low"
 levelName Median = "median"
 levelName High = "high"
 
--- | The share of the bytes that paid less than the rate of a level
+-- | The share of the virtual bytes that paid less than the rate of a level
 levelShare :: FeeLevel -> Rational
 levelShare Low = 1 % 4
 levelShare Median = 1 % 2
@@ -91,17 +89,17 @@ rateAt Median = (.rateMedian)
 rateAt High = (.rateHigh)
 
 -- | How the fee rate of a transaction is chosen: a number of satoshis per
--- byte, or a level of the rates recent blocks paid
+-- virtual byte, or a level of the rates recent blocks paid
 data FeeRateChoice = FeeRateOf !Natural | FeeLevelOf !FeeLevel
   deriving (Eq, Show)
 
 -- | A fee rate choice as the command line gives it: a level by its name, or
--- a number of satoshis per byte
+-- a number of satoshis per virtual byte
 readFeeRateChoice :: String -> Either String FeeRateChoice
 readFeeRateChoice text =
   case [level | level <- [minBound .. maxBound], levelName level == Text.pack text] of
     level : _ -> Right (FeeLevelOf level)
-    [] -> maybe (Left "Give a number of satoshis per byte, or low, median or high") (Right . FeeRateOf) (readNatural (Text.pack text))
+    [] -> maybe (Left "Give a number of satoshis per virtual byte, or low, median or high") (Right . FeeRateOf) (readNatural (Text.pack text))
 
 {- The question -}
 
@@ -158,16 +156,17 @@ feeRateAnswer lowest rates typed
 
 -- | What the fee rate question calls a rate typed as a number
 aNumber :: String
-aNumber = "a number of satoshis per byte"
+aNumber = "a number of satoshis per virtual byte"
 
 -- | The name of a level, as a question shows it
 levelString :: FeeLevel -> String
 levelString = Text.unpack . levelName
 
--- | A fee rate in words: 1 satoshi per byte, 2 satoshis per byte
+-- | A fee rate in words: 1 satoshi per virtual byte, 2 satoshis per
+-- virtual byte
 perByte :: Natural -> String
-perByte 1 = "1 satoshi per byte"
-perByte rate = show rate <> " satoshis per byte"
+perByte 1 = "1 satoshi per virtual byte"
+perByte rate = show rate <> " satoshis per virtual byte"
 
 {- Computing them -}
 
@@ -189,14 +188,14 @@ feeRatesOf blocks
             ratesLatestTime = (maximumBy (comparing (.height)) (fst <$> blocks)).header.timestamp
           }
   where
-    paying = sortOn fst [(txRate tx, virtualSize tx) | (_, txs) <- blocks, tx <- txs, tx.fee > 0]
+    paying = sortOn fst [(txRate tx, storeTxSize tx) | (_, txs) <- blocks, tx <- txs, tx.fee > 0]
     heights = (.height) . fst <$> blocks
     at level = rateAtShare (levelShare level) paying
 
--- | The rate below which the share of the bytes paid less, among rates
--- sorted from the lowest, each with the bytes it bought: the rate of the
--- transaction where the bytes, counted from the cheapest, reach the
--- share. Rounded up to a whole satoshi, so that paying it is paying at
+-- | The rate below which the share of the virtual bytes paid less, among
+-- rates sorted from the lowest, each with the virtual bytes it bought: the
+-- rate of the transaction where the bytes, counted from the cheapest,
+-- reach the share. Rounded up to a whole satoshi, so that paying it is paying at
 -- least as much, and at least 1.
 rateAtShare :: Rational -> [(Rational, Natural)] -> Natural
 rateAtShare share sorted = max 1 (ceiling (reached 0 sorted))
@@ -209,12 +208,7 @@ rateAtShare share sorted = max 1 (ceiling (reached 0 sorted))
 
 -- | The fee rate of a transaction, in satoshis per virtual byte
 txRate :: Store.Transaction -> Rational
-txRate tx = fromIntegral tx.fee % fromIntegral (max 1 (virtualSize tx))
-
--- | The virtual size of a transaction, in bytes: its weight in quarters,
--- rounded up, as Bitcoin Core counts it
-virtualSize :: Store.Transaction -> Natural
-virtualSize tx = fromIntegral ((tx.weight + 3) `div` 4)
+txRate tx = fromIntegral tx.fee % fromIntegral (max 1 (storeTxSize tx))
 
 {- Reading them from the store -}
 

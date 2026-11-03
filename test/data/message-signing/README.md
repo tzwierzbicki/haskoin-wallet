@@ -43,7 +43,7 @@ Fields of a signing vector:
 | `name` | Unique name, prefixed by the origin |
 | `network` | haskoin network name: `btc`, `btctest`, `bch`, `bchtest` |
 | `key` | Private key, see below |
-| `address` | Compressed P2PKH address of the key |
+| `address` | The P2PKH or the P2WPKH address of the compressed key, the two kinds hw signs from. A signature from a P2WPKH address has the header byte of BIP 137, 39 to 42 |
 | `message` | Message text, signed as UTF-8 |
 | `messageRepeat` | Optional. The message is `message` repeated this many times |
 | `messageUtf8Hex` | Expected UTF-8 bytes of the full message. Required when the message is not plain ASCII (the test enforces it), so that an editor normalizing Unicode cannot silently change a vector |
@@ -78,13 +78,15 @@ Fields of a verification vector:
 `result` values:
 
 - `valid`: the signature recovers the key of the address, compressed or not
-  as its header byte says.
+  as its header byte says. For a SegWit address, P2WPKH or P2SH-P2WPKH, the
+  key must be compressed and give the address, whatever header byte of a
+  compressed key the signer chose: the one of BIP-137, 35 to 42, or the one
+  of a P2PKH address, as Electrum writes it.
 - `invalid`: it does not: another key, another message, a changed signature,
-  or no key at all (a header byte outside 27 to 34, r or s outside the curve
+  or no key at all (a header byte outside 27 to 42, r or s outside the curve
   order).
-- `refused`: `verifyMessage` cannot check it: the address is not P2PKH (the
-  format does not sign from SegWit or P2SH addresses, whatever the BIP-137
-  header byte of the signature says), or the signature is not 65 bytes in
+- `refused`: `verifyMessage` cannot check it: the address is not one of a
+  single key (P2PKH, P2WPKH or P2SH), or the signature is not 65 bytes in
   base64.
 
 `expect` values:

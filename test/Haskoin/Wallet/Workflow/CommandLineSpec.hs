@@ -735,7 +735,7 @@ commandLineSpec ctx = do
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "18446744073709551616"] [])
-          `shouldReturn` Right "The fee rate must be at most 4294967295 satoshis per byte"
+          `shouldReturn` Right "The fee rate must be at most 4294967295 satoshis per virtual byte"
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
 
     -- preparetx takes a change address before it chooses the coins, which

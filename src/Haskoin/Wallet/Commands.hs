@@ -154,10 +154,10 @@ commandResponse :: Ctx -> Config -> AmountUnit -> Command -> IO Response
 commandResponse ctx cfg unit = \case
   -- Mnemonics and accounts
   CommandMnemonic opts -> cmdMnemonic opts
-  CommandCreateAcc name net parts -> cmdCreateAcc ctx cfg name net parts
+  CommandCreateAcc name net kind parts -> cmdCreateAcc ctx cfg name net kind parts
   CommandRecover opts -> cmdRecover ctx cfg opts
   CommandCheckMnemonic account parts -> cmdCheckMnemonic ctx cfg account parts
-  CommandImportAcc netM file -> cmdImportAcc ctx cfg netM file
+  CommandImportAcc netM kindM file -> cmdImportAcc ctx cfg netM kindM file
   CommandExportAcc account file -> cmdExportAcc ctx cfg account file
   CommandDescriptor account -> cmdDescriptor cfg account
   CommandRenameAcc opts -> cmdRenameAcc cfg opts
@@ -273,16 +273,19 @@ cmdMnemonic opts =
     (source, mnemonic, parts) <- genMnemonic sources opts.entropy opts.parts
     return $ ResponseMnemonic source (Text.words mnemonic) (Text.words <$> parts)
 
-cmdCreateAcc :: Ctx -> Config -> Text -> Maybe Network -> Natural -> IO Response
-cmdCreateAcc ctx cfg name netM parts =
+-- | Create an account of a kind on a network from a mnemonic: the next
+-- account of the seed of that kind on that network
+cmdCreateAcc :: Ctx -> Config -> Text -> Maybe Network -> AccountKind -> Natural -> IO Response
+cmdCreateAcc ctx cfg name netM kind parts =
   runDBResponse cfg $ do
     -- Before the user types the mnemonic, not after
     checkNameFree name
     net <- liftMaybe noNetwork (commandNetwork cfg netM)
+    liftEither $ checkKindOnNetwork net kind
     mnem <- askNewMnemonicPass terminal parts
     seed <- seedToCreateWith ctx mnem
-    (_, xpub) <- lift $ nextAccount net ctx seed
-    (accId, _) <- insertAccount net ctx name xpub (Just (seedFingerprint seed))
+    (_, xpub) <- lift $ nextAccount kind net ctx seed
+    (accId, _) <- insertAccount kind net ctx name xpub (Just (seedFingerprint seed))
     -- The accounts of the seed created before hw recorded fingerprints
     lift $ recordFingerprint ctx seed
     accountAnswer accId
@@ -335,7 +338,7 @@ cmdCheckMnemonic ctx cfg account parts =
   runDBResponse cfg $ do
     (accId, acc) <- getAccountByName account
     mnem <- askMnemonicPass terminal parts
-    matched <- matchAccount terminal (accountNetwork acc) ctx (accountIndex acc) (accountXPubKey ctx acc) mnem
+    matched <- matchAccount terminal (accountKind acc) (accountNetwork acc) ctx (accountIndex acc) (accountXPubKey ctx acc) mnem
     -- A seed proven gives its fingerprint to every account of it
     for_ matched $ \(seed, _) -> lift $ recordFingerprint ctx seed
     tested <- getAccountById accId
@@ -344,13 +347,15 @@ cmdCheckMnemonic ctx cfg account parts =
       Nothing -> ResponseAccResult tested False "The mnemonic and passphrase did not match the account"
 
 -- | Add the accounts of a BIP 329 file and set the labels it carries, as
--- "Haskoin.Wallet.Labels" reads it. The answer says what became of each
--- account, and what the file labels that the wallet does not have yet.
-cmdImportAcc :: Ctx -> Config -> Maybe Network -> FilePath -> IO Response
-cmdImportAcc ctx cfg netM file =
+-- "Haskoin.Wallet.Labels" reads it, a key that says no kind of its account
+-- taken for one of the kind of --type. The answer says what became of
+-- each account, and what the file labels that the wallet does not have
+-- yet.
+cmdImportAcc :: Ctx -> Config -> Maybe Network -> Maybe AccountKind -> FilePath -> IO Response
+cmdImportAcc ctx cfg netM kindM file =
   runDBResponse cfg $ do
     content <- liftEitherIO $ readTextFile file
-    ResponseImport <$> importFile ctx (commandNetwork cfg netM) content
+    ResponseImport <$> importFile ctx (commandNetwork cfg netM) kindM content
 
 -- | Write the account, or every account, to a BIP 329 file with its labels
 -- and the coins the user locked
@@ -365,8 +370,9 @@ cmdExportAcc ctx cfg account file =
     return $ ResponseFile file
 
 -- | The output descriptor of the account, or of every account, as other
--- wallets and Bitcoin Core take an account: its key in pkh, with its
--- origin when the fingerprint of its seed is known
+-- wallets and Bitcoin Core take an account: its key in the script function
+-- of its kind, pkh or wpkh, with its origin when the fingerprint of its
+-- seed is known
 cmdDescriptor :: Config -> Maybe Text -> IO Response
 cmdDescriptor cfg account =
   runDBResponse cfg $ do
@@ -374,7 +380,7 @@ cmdDescriptor cfg account =
     when (null accs) $ throwError "There are no accounts in the wallet"
     return $ ResponseDescriptors [(acc, descriptorOf acc) | (_, acc) <- accs]
   where
-    descriptorOf acc = descriptorText (accountDescriptor (accountFingerprint acc) (accountPath acc) (dBAccountXPubKey acc))
+    descriptorOf acc = descriptorText (accountDescriptor (accountKind acc) (accountFingerprint acc) (accountPath acc) (dBAccountXPubKey acc))
 
 cmdRenameAcc :: Config -> RenameAcc -> IO Response
 cmdRenameAcc cfg opts =
@@ -493,7 +499,7 @@ cmdCheckAddr ctx cfg account addrType index =
   runDBResponse cfg $ do
     (accId, acc) <- getAccountByName account
     let path = addrDeriv addrType :/ index
-    addrM <- liftIO $ deriveChainAddress ctx (accountXPubKey ctx acc) (addrDeriv addrType) index
+    addrM <- liftIO $ deriveChainAddress ctx (accountKind acc) (accountXPubKey ctx acc) (addrDeriv addrType) index
     -- BIP32 says to skip an index whose child key is invalid, so the chain
     -- has no address there: see "Haskoin.Wallet.Database.Address"
     addr <- liftMaybe ("There is no address at " <> cs (pathText path) <> ": the key at that index is invalid, and the chain skips it") addrM
@@ -592,7 +598,7 @@ cmdReviewTx ctx cfg account file givenM =
     named <- fileNetwork givenM netM
     (accountM, completed) <- transactionAccount ctx account named tsd
     case accountM of
-      Just (_, acc) -> ResponseTx acc <$> liftEither (parseTxFile (accountNetwork acc) ctx (accountXPubKey ctx acc) txFile {txFileData = completed})
+      Just (_, acc) -> ResponseTx acc <$> liftEither (parseTxFile (accountNetwork acc) ctx (accountKind acc) (accountXPubKey ctx acc) txFile {txFileData = completed})
       Nothing -> do
         net <- liftMaybe noFileNetwork (commandNetwork cfg named)
         ResponseOutsideTx net <$> liftEither (parseOutsideTxSignData net ctx tsd)
@@ -644,7 +650,7 @@ notInWallet = "The transaction does not involve this wallet"
 -- | The keys of an account, as the derivation records of its files name
 -- them
 fileAccountOf :: Ctx -> DBAccount -> FileAccount
-fileAccountOf ctx acc = FileAccount (accountXPubKey ctx acc) (accountPath acc) (accountFingerprint acc) (accountNetwork acc)
+fileAccountOf ctx acc = FileAccount (accountXPubKey ctx acc) (accountKind acc) (accountPath acc) (accountFingerprint acc) (accountNetwork acc)
 
 -- | A transaction file as read: the transaction file, and the PSBT it was
 -- read from when it was one, for the signed transaction to be written
@@ -749,7 +755,7 @@ confirmFeeRate yes feeByte dust = do
   when (feeByte > highFeeRate && not yes) $ do
     accepted <-
       askYes terminal $
-        "The fee rate of " <> show feeByte <> " satoshis per byte is above " <> show highFeeRate
+        "The fee rate of " <> show feeByte <> " satoshis per virtual byte is above " <> show highFeeRate
           <> ", the most hw takes without asking. Prepare the transaction anyway?"
     unless accepted $ throwError "The transaction was not prepared: give a lower --fee-rate"
 
@@ -800,15 +806,15 @@ lockTimeHeight yes net = do
     Left why -> confirmBehind yes why >> return Nothing
     Right heightM -> return heightM
 
--- | The fee rate of a transaction, in satoshis per byte: the number given,
--- or one of the rates recent blocks paid, read from the store, at the
--- level given. Without either, hw shows those rates and asks, taking a
--- level or a number as --fee-rate does, the median by default. A rate
--- below the lowest the transaction can pay, which a replacement has, is
--- not offered, and a number below it is asked again. The rates and the
--- question go to stderr, to keep the --json answer clean. hw never
--- guesses a rate: without a --fee-rate, a store that cannot be reached
--- stops the command.
+-- | The fee rate of a transaction, in satoshis per virtual byte: the
+-- number given, or one of the rates recent blocks paid, read from the
+-- store, at the level given. Without either, hw shows those rates and
+-- asks, taking a level or a number as --fee-rate does, the median by
+-- default. A rate below the lowest the transaction can pay, which a
+-- replacement has, is not offered, and a number below it is asked again.
+-- The rates and the question go to stderr, to keep the --json answer
+-- clean. hw never guesses a rate: without a --fee-rate, a store that
+-- cannot be reached stops the command.
 chooseFeeRate :: Config -> Network -> Store -> Natural -> Maybe FeeRateChoice -> ExceptT String (DB IO) Natural
 chooseFeeRate _ _ _ _ (Just (FeeRateOf rate)) = return rate
 chooseFeeRate cfg net store lowest choice = do
@@ -817,7 +823,7 @@ chooseFeeRate cfg net store lowest choice = do
     Just (FeeLevelOf level) -> do
       let rate = rateAt level rates
       when (rate < lowest) $ throwError (levelTooLow level rate)
-      liftIO . tell terminal $ "The " <> cs (levelName level) <> " rate recent blocks paid: " <> show rate <> " satoshis per byte"
+      liftIO . tell terminal $ "The " <> cs (levelName level) <> " rate recent blocks paid: " <> show rate <> " satoshis per virtual byte"
       return rate
     _ -> do
       now <- liftIO getCurrentTime
@@ -826,7 +832,7 @@ chooseFeeRate cfg net store lowest choice = do
   where
     levelTooLow level rate =
       "The " <> cs (levelName level) <> " rate recent blocks paid, " <> show rate
-        <> " satoshis per byte, is below " <> show lowest <> ": give a --fee-rate of at least " <> show lowest
+        <> " satoshis per virtual byte, is below " <> show lowest <> ": give a --fee-rate of at least " <> show lowest
 
 -- | Show the fee rates recent blocks paid on the network, read from the
 -- store. No wallet is needed.
@@ -931,6 +937,7 @@ cmdPrepareSendAll ctx cfg unit opts =
   runDBResponse cfg $ do
     (accId, acc, spendFrom) <- controlledAccount opts.account opts.coins opts.spendFrom
     let net = accountNetwork acc
+        kind = accountKind acc
         controlled = not (null opts.coins && null spendFrom)
     -- Before the transaction is built, not after
     for_ opts.output checkPathFree
@@ -950,7 +957,7 @@ cmdPrepareSendAll ctx cfg unit opts =
           (sent, _) <- liftEither $ chosenCoins opts.coins spendFrom spendable unspendable
           return (sent, leftCoins labels [] unspendable (notSent sent spendable))
         else do
-          sent <- coinsWithDust labels feeByte recipients (not (null unspendable)) spendable
+          sent <- coinsWithDust kind labels feeByte recipients (not (null unspendable)) spendable
           return (sent, leftCoins labels (notSent sent spendable) unspendable [])
     gen <- liftIO initStdGen
     let (lockTime, buildGen) = lockTimeFor heightM gen
@@ -963,8 +970,8 @@ cmdPrepareSendAll ctx cfg unit opts =
     -- without a question when spending them too would leave too little for
     -- the recipients, and when the other coins cannot pay the recipients
     -- either, which the builder then tells.
-    coinsWithDust :: Map TxHash Text -> Natural -> [(Address, Share)] -> Bool -> [Store.Unspent] -> ExceptT String (DB IO) [Store.Unspent]
-    coinsWithDust labels feeByte recipients othersStay spendable
+    coinsWithDust :: AccountKind -> Map TxHash Text -> Natural -> [(Address, Share)] -> Bool -> [Store.Unspent] -> ExceptT String (DB IO) [Store.Unspent]
+    coinsWithDust kind labels feeByte recipients othersStay spendable
       | null dust || null worth = return spendable
       | otherwise =
           case opts.dustCoins of
@@ -972,10 +979,10 @@ cmdPrepareSendAll ctx cfg unit opts =
             Just LeaveDust -> return worth
             Nothing
               | isLeft (paying spendable) || isLeft (paying worth) -> return worth
-              | otherwise -> askAboutDust (dustReport ctx feeByte opts.dust recipients worth dust othersStay)
+              | otherwise -> askAboutDust (dustReport ctx kind feeByte opts.dust recipients worth dust othersStay)
       where
-        (dust, worth) = partition (isDustCoin feeByte) spendable
-        paying coins = sendAllAmounts ctx feeByte opts.dust coins recipients
+        (dust, worth) = partition (isDustCoin kind feeByte) spendable
+        paying coins = sendAllAmounts ctx kind feeByte opts.dust coins recipients
         -- On stderr, with the question, to keep the --json answer clean
         askAboutDust :: DustReport -> ExceptT String (DB IO) [Store.Unspent]
         askAboutDust report = do
@@ -1073,10 +1080,10 @@ cmdSignTx ctx cfg signing parts =
     (accountM, file@(TxFileRead txFile _), signedFile) <- transactionToSign ctx signing
     (accId, acc) <- liftMaybe notInWallet accountM
     let net = accountNetwork acc
-    (seed, key) <- askSigningKey terminal net ctx parts (accountIndex acc) (accountXPubKey ctx acc)
+    (seed, key) <- askSigningKey terminal (accountKind acc) net ctx parts (accountIndex acc) (accountXPubKey ctx acc)
     -- The signed data names the seed, for an online wallet to learn it
     let named = (txFileData txFile) {txSignDataFingerprint = Just (seedFingerprint seed)}
-    (signed, info) <- liftEither $ signWalletTx net ctx named key
+    (signed, info) <- liftEither $ signWalletTx net ctx (accountKind acc) named key
     lift $ recordFingerprint ctx seed
     keepSigned ctx net signing signedFile accId file signed info
 
@@ -1140,17 +1147,17 @@ cmdBumpFee ctx cfg unit opts =
       _ ->
         liftIO . tell terminal $
           "The transaction pays " <> show stuck.sentSummary.summaryFeeByte
-            <> " satoshis per byte: a replacement must pay at least "
+            <> " satoshis per virtual byte: a replacement must pay at least "
             <> show (minimumRate stuck)
     feeByte <- chooseFeeRate cfg net store (minimumRate stuck) opts.feeRate
     when (feeByte < minimumRate stuck) $
       throwError $
         "The transaction pays " <> show stuck.sentSummary.summaryFeeByte
-          <> " sat/byte: give a --fee-rate of at least "
+          <> " sat/vB: give a --fee-rate of at least "
           <> show (minimumRate stuck)
     children <- spendingChildren ctx store accId acc [stuck]
     refuseSpentElsewhere net accId (stuck : children)
-    plan <- bumpPlan net ctx accId (stuck : children)
+    plan <- bumpPlan net ctx accId (accountKind acc) (stuck : children)
     -- A wallet behind the chain is asked about with the other questions,
     -- once nothing can refuse the replacement: it is built for a lock time
     -- of 0 meanwhile
@@ -1297,7 +1304,7 @@ cmdSignSweep ctx cfg signing keysM givenM =
       Just (accId, acc) -> do
         let net = accountNetwork acc
         keys <- keysOn net
-        (signed, info) <- liftEither $ signTxWithKeys net ctx tsd (Just (accountXPubKey ctx acc)) keys
+        (signed, info) <- liftEither $ signTxWithKeys net ctx tsd (Just (accountKind acc, accountXPubKey ctx acc)) keys
         keepSigned ctx net signing signedFile accId file signed info
       Nothing -> do
         named <- fileNetwork givenM netM
@@ -1334,7 +1341,7 @@ cmdSignMsg ctx cfg opts =
     -- Warned before the mnemonic is asked, so that the user can stop. On
     -- stderr, to keep the armored block and the --json output clean.
     liftIO $ mapM_ (hPutStrLn stderr) $ signingWarnings opts.message
-    (seed, accountPrvKey) <- askSigningKey terminal net ctx opts.parts (accountIndex acc) (accountXPubKey ctx acc)
+    (seed, accountPrvKey) <- askSigningKey terminal (accountKind acc) net ctx opts.parts (accountIndex acc) (accountXPubKey ctx acc)
     lift $ recordFingerprint ctx seed
     let addrKey = derivePath ctx (addrPath addrDB) accountPrvKey
     signature <- encodeSignature <$> liftEither (signMessage ctx addr addrKey.key opts.message)

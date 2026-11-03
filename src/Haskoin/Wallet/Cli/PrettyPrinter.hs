@@ -557,7 +557,7 @@ statusWords feeByte = \case
     | pendingSigned status -> styled Waiting "signed, not sent" <> rate
     | otherwise -> styled Waiting "not signed" <> rate
   where
-    rate = ", " <> text (show feeByte <> " sat/byte")
+    rate = ", " <> text (show feeByte <> " sat/vB")
 
 confirmationsText :: Natural -> String
 confirmationsText n = counted n "confirmation" "confirmations"
@@ -675,7 +675,7 @@ feeField unit summary =
   field 9 "Fee"
     <> align
       ( vcat $
-          [neutralAmount unit (fromIntegral (summaryFee summary)) <> "," <+> text (show (summaryFeeByte summary) <> " sat/byte")]
+          [neutralAmount unit (fromIntegral (summaryFee summary)) <> "," <+> text (show (summaryFeeByte summary) <> " sat/vB")]
             <> [ "includes" <+> neutralAmount unit (fromIntegral change) <+> "of change too small for an output"
                | Just change <- [summaryChangeInFee summary],
                  change > 0
@@ -818,9 +818,9 @@ questionCoinDoc unit outpoint value label said =
       <> [indent 2 (labelWord label) | not (Text.null label)]
       <> [indent 2 (styled Muted (coinText outpoint))]
 
--- | A fee rate, in satoshis per byte
+-- | A fee rate, in satoshis per virtual byte
 rateDoc :: Natural -> Doc Style
-rateDoc feeByte = text (show feeByte <> " sat/byte")
+rateDoc feeByte = text (show feeByte <> " sat/vB")
 
 -- | The report on the coins worth less than their fee, as preparesendall
 -- shows it before its question: the coins, each with the rates it is worth
@@ -835,10 +835,10 @@ dustReportDoc unit labels report =
     them = if one then "it" else "them"
     amount v = neutralAmount unit (fromIntegral v)
     header
-      | one = sentence $ wordsOf "1 coin costs more to spend than it is worth at" <> [rateDoc report.rate <> ",", amount (inputFee report.rate) <> ":"]
-      | otherwise = sentence $ wordsOf (show count <> " coins cost more to spend than they are worth at") <> [rateDoc report.rate <> ",", amount (inputFee report.rate)] <> wordsOf "each:"
+      | one = sentence $ wordsOf "1 coin costs more to spend than it is worth at" <> [rateDoc report.rate <> ",", amount (inputFee report.reportKind report.rate) <> ":"]
+      | otherwise = sentence $ wordsOf (show count <> " coins cost more to spend than they are worth at") <> [rateDoc report.rate <> ",", amount (inputFee report.reportKind report.rate)] <> wordsOf "each:"
     dustCoinDoc coin = questionCoinDoc unit coin.outpoint (fromIntegral coin.value) (Map.findWithDefault "" coin.outpoint.hash labels) (worth coin)
-    worth coin = case worthSpendingUpTo coin of
+    worth coin = case worthSpendingUpTo report.reportKind coin of
       0 -> "worth less than its fee at any rate"
       upTo -> "worth spending at" <+> rateDoc upTo <+> "or less"
     dustValue = valueOf report.dustCoins
@@ -1019,7 +1019,7 @@ feeRatesDoc :: Network -> UTCTime -> FeeRates -> Doc Style
 feeRatesDoc net now rates =
   vcat
     [ text ("Fee rates of " <> net.name <> ", from " <> blocks),
-      indent 2 $ commaList [text (cs (levelName level)) <+> text (show (rateAt level rates)) | level <- [minBound .. maxBound]] <+> "sat/byte",
+      indent 2 $ commaList [text (cs (levelName level)) <+> text (show (rateAt level rates)) | level <- [minBound .. maxBound]] <+> "sat/vB",
       indent 2 $ "the latest block was mined" <+> age
     ]
   where
@@ -1168,14 +1168,14 @@ nextStepsPrinter cmd res =
     -- An account a descriptor added has the name recover gives one, since
     -- a descriptor carries none, and the file may label things the wallet
     -- does not have yet
-    (CommandImportAcc _ file, ResponseImport report)
+    (CommandImportAcc _ _ file, ResponseImport report)
       | not (null steps) -> stepsPrinter steps
       where
         steps = renameSteps <> syncSteps
         renameSteps =
           [ ("Next, name the account, which the file did not", hwLine "renameacc" [pretty (shellWord (cs (dBAccountName acc))) `withStyle` Account, metavarWord "NAME"])
             | AccountCreated acc <- reportAccounts report,
-              dBAccountName acc == recoveredName (accountNetwork acc) (accountIndex acc)
+              dBAccountName acc == recoveredName (accountKind acc) (accountNetwork acc) (accountIndex acc)
           ]
         syncSteps
           | reportNeedsSync report =

@@ -224,18 +224,40 @@ def input_problems(tx, i, prevout, network):
     return problems, key_hash
 
 
+PURPOSES = {"bip44": 44, "bip84": 84}
+
+
 def path_key_hashes(v):
-    """hash160 of the wallet's own addresses, from the account and the paths"""
+    """hash160 of the wallet's own addresses, from the account and the paths:
+    the keys at m/purpose'/coin'/account'/chain/index, with the purpose of
+    the kind of the account, 44 unless the vector says bip84"""
     account = v["account"]
+    purpose = PURPOSES[account.get("type", "bip44")]
+    coin = btc.COIN_TYPES[v["network"]]
 
     def key_hash(path):
         _, chain, index = path.split("/")
-        key = dict(account, chain=int(chain), index=int(index))
+        key = {"mnemonic": account["mnemonic"], "passphrase": account.get("passphrase", ""),
+               "path": f"m/{purpose}'/{coin}'/{account['account']}'/{chain}/{index}"}
         private = btc.private_keys(key, v["network"])[0]
         return btc.hash160(btc.serialize_pubkey(btc.point_mul(private, btc.G)))
 
     tsd = v["txSignData"]
     return {key_hash(p) for p in tsd["inputpaths"]}, {key_hash(p) for p in tsd["outputpaths"]}
+
+
+def own_script(v, key_hash):
+    """The output script paying the wallet's own key: P2PKH for a bip44
+    account, P2WPKH for a bip84 one"""
+    if v["account"].get("type", "bip44") == "bip84":
+        return b"\x00\x14" + key_hash
+    return p2pkh_script(key_hash)
+
+
+def virtual_size(tx, raw):
+    """The size in virtual bytes: the weight, three times the bytes outside
+    the witness plus all the bytes, in quarters rounded up"""
+    return (3 * len(serialize(tx)) + len(raw) + 3) // 4
 
 
 def vector_problems(v):
@@ -271,12 +293,12 @@ def vector_problems(v):
     if not own_inputs <= spent_hashes:
         problems.append("an input path is not spent by the transaction")
     out_sum = sum(o["value"] for o in tx["outs"])
-    my_out = sum(o["value"] for o in tx["outs"] if o["script"] in {p2pkh_script(h) for h in own_outputs})
+    my_out = sum(o["value"] for o in tx["outs"] if o["script"] in {own_script(v, h) for h in own_outputs})
     fee = in_sum - out_sum
     amount = my_out - my_in
     kind = "credit" if amount > 0 else "internal" if -amount == fee else "debit"
     info = expected["txInfo"]
-    size = len(bytes.fromhex(expected["tx"]))
+    size = virtual_size(tx, bytes.fromhex(expected["tx"]))
     if (info["type"], info["amount"], info["fee"]) != (kind, amount, fee):
         problems.append(f"txInfo: expected {kind} {amount} {fee}, vector says {info}")
     if (info["size"], info["feeByte"]) != (size, fee // size):

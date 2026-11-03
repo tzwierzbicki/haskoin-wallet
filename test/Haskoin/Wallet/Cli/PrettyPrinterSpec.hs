@@ -296,7 +296,7 @@ headlineSpec =
     it "gives the fee rate of a transaction not in a block yet" $ do
       let info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.MemRef 1700000000) (Just seenTime) 0 False)) "" Map.empty
       renderedLines (headlineDoc UnitBitcoin (Just seenTimeInCet) info)
-        `shouldBe` ["14 Nov 2023 23:13  Outgoing     -0.00041000 btc  unconfirmed, 4 sat/byte"]
+        `shouldBe` ["14 Nov 2023 23:13  Outgoing     -0.00041000 btc  unconfirmed, 4 sat/vB"]
 
     it "says dead for a transaction replaced or dropped from the network, without its fee rate" $ do
       let info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.MemRef 1700000000) (Just seenTime) 0 True)) "" Map.empty
@@ -311,17 +311,17 @@ headlineSpec =
     it "shows an unsigned transaction in preparation as not signed, with its fee rate" $ do
       let info = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False (Just seenTime) [])) "" Map.empty
       renderedLines (headlineDoc UnitBitcoin (Just seenTimeInCet) info)
-        `shouldBe` ["14 Nov 2023 23:13  Outgoing     -0.00041000 btc  not signed, 4 sat/byte"]
+        `shouldBe` ["14 Nov 2023 23:13  Outgoing     -0.00041000 btc  not signed, 4 sat/vB"]
 
     it "shows a signed transaction not sent yet as signed and not sent, with its fee rate" $ do
       let info = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) (Just (fakeTxHash 2)) False False (Just seenTime) [])) "" Map.empty
       renderedLines (headlineDoc UnitBitcoin (Just seenTimeInCet) info)
-        `shouldBe` ["14 Nov 2023 23:13  Outgoing     -0.00041000 btc  signed, not sent, 4 sat/byte"]
+        `shouldBe` ["14 Nov 2023 23:13  Outgoing     -0.00041000 btc  signed, not sent, 4 sat/vB"]
 
     it "shows a transaction sent that the sync has not seen yet as sent, with its fee rate" $ do
       let info = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) (Just (fakeTxHash 2)) True False (Just seenTime) [])) "" Map.empty
       renderedLines (headlineDoc UnitBitcoin (Just seenTimeInCet) info)
-        `shouldBe` ["14 Nov 2023 23:13  Outgoing     -0.00041000 btc  sent, 4 sat/byte"]
+        `shouldBe` ["14 Nov 2023 23:13  Outgoing     -0.00041000 btc  sent, 4 sat/vB"]
 
     it "shows a transaction in conflict as conflicted, without its fee rate" $ do
       let info = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) (Just (fakeTxHash 2)) False True (Just seenTime) [])) "" Map.empty
@@ -388,7 +388,7 @@ verboseSpec =
         `shouldBe` [ "14 Nov 2023 23:13  Outgoing     -0.00041000 btc  2 confirmations",
                      "  Txid     : 0000000000000000000000000000000000000000000000000000000000000002",
                      "  Time     : 14 Nov 2023 23:13:20 CET",
-                     "  Fee      : 0.00001000 btc, 4 sat/byte",
+                     "  Fee      : 0.00001000 btc, 4 sat/vB",
                      "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0",
                      "  To       : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00040000 btc",
                      "  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00009000 btc  /1/0"
@@ -458,7 +458,7 @@ verboseSpec =
     it "shows under the fee the change too small for an output that the fee took in" $ do
       let info = TxInfo spendSummary {summaryChangeInFee = Just 300} (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
       take 2 (drop 3 (renderedLines (verboseTxDoc btc UnitBitcoin [] (Just seenTimeInCet) info)))
-        `shouldBe` [ "  Fee      : 0.00001000 btc, 4 sat/byte",
+        `shouldBe` [ "  Fee      : 0.00001000 btc, 4 sat/vB",
                      "             includes 0.00000300 btc of change too small for an output"
                    ]
 
@@ -466,7 +466,7 @@ verboseSpec =
       let locked = TxInfo spendSummary {summaryLockTime = 814037} (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
           unlocked = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
       take 2 (drop 3 (renderedLines (verboseTxDoc btc UnitBitcoin [] (Just seenTimeInCet) locked)))
-        `shouldBe` [ "  Fee      : 0.00001000 btc, 4 sat/byte",
+        `shouldBe` [ "  Fee      : 0.00001000 btc, 4 sat/vB",
                      "  Lock time: block 814037"
                    ]
       length (renderedLines (verboseTxDoc btc UnitBitcoin [] (Just seenTimeInCet) unlocked)) `shouldBe` 7

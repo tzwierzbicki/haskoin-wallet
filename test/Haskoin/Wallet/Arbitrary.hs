@@ -52,6 +52,7 @@ arbitraryDBAccount net ctx =
   DBAccount
     <$> arbitraryText
     <*> arbitraryPositive
+    <*> elements [44, 84]
     <*> return (cs net.name)
     <*> arbitraryPositive
     <*> arbitraryPositive

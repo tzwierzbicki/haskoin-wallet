@@ -153,6 +153,12 @@ writingSpec =
           }
         `shouldBe` "{\"type\":\"xpub\",\"ref\":\"xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah\",\"label\":\"main\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\"}"
 
+    it "writes the purpose of a key after its network, and reads it back" $ do
+      let line = "{\"type\":\"xpub\",\"ref\":\"xpub6CQF8An9YzRXpzoY1EtZNfzJyZHw4ZLJPymPJQ5N2Huj693bio75z3fhNUq6unam47GaZQanRezUbkhMZosNyZBrGT9NExM1fa8uwdaWnoV\",\"label\":\"spending\",\"network\":\"btc\",\"purpose\":84}"
+          segwitKey = (record XpubRecord "xpub6CQF8An9YzRXpzoY1EtZNfzJyZHw4ZLJPymPJQ5N2Huj693bio75z3fhNUq6unam47GaZQanRezUbkhMZosNyZBrGT9NExM1fa8uwdaWnoV") {recordLabel = Just "spending", recordNetwork = Just "btc", recordPurpose = Just 84}
+      recordLine segwitKey `shouldBe` line
+      parseLine line `shouldBe` Right (LineRecord segwitKey)
+
     it "writes a label as it is, in UTF-8, with a line break in it escaped" $ do
       recordLine (record AddrRecord "a") {recordLabel = Just "Caf\233 \9749"}
         `shouldBe` "{\"type\":\"addr\",\"ref\":\"a\",\"label\":\"Caf\233 \9749\"}"

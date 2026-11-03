@@ -36,7 +36,7 @@ import Haskoin.Wallet.Database.Account (insertAccount, nextAccount)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database.Coin (JsonCoin (..))
 import Haskoin.Wallet.Database (DB, DBAccount (..), DBAccountId, DBAddress (..), DBPendingTx (..), hashBytes, migrateAll)
-import Haskoin.Wallet.Keys (MnemonicPass (..), PublicSeed (..), seedOf, signingKey)
+import Haskoin.Wallet.Keys (AccountKind (..), MnemonicPass (..), PublicSeed (..), kindNamed, seedOf, signingKey)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync (SyncRes (..))
 import Haskoin.Wallet.Cli.Style (Style, renderPlain)
@@ -178,13 +178,18 @@ storedVersions = do
   rows <- rawSql "select version, typeof(version) from d_b_version" []
   return [(value, storageClass) | (Single value, Single storageClass) <- rows]
 
--- | The next account of a seed on a network, stored as createacc stores it:
--- with the fingerprint of the seed
+-- | The next BIP44 account of a seed on a network, stored as createacc
+-- stores it: with the fingerprint of the seed
 newAccountOf :: Ctx -> MnemonicPass -> Network -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
-newAccountOf ctx mnem net name = do
+newAccountOf = newAccountOfKind Bip44
+
+-- | The next account of a seed of a kind on a network, stored as createacc
+-- stores it: with the fingerprint of the seed
+newAccountOfKind :: AccountKind -> Ctx -> MnemonicPass -> Network -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
+newAccountOfKind kind ctx mnem net name = do
   let seed = forceRight $ seedOf ctx mnem
-  (_, pub) <- lift $ nextAccount net ctx seed
-  insertAccount net ctx name pub (Just (seedFingerprint seed))
+  (_, pub) <- lift $ nextAccount kind net ctx seed
+  insertAccount kind net ctx name pub (Just (seedFingerprint seed))
 
 -- | The public side of the two test seeds
 testSeed, testSeed2 :: Ctx -> PublicSeed
@@ -195,7 +200,7 @@ testSeed2 ctx = forceRight $ seedOf ctx testMnemonic2
 -- seed with such an index is known, the odds being one in 2^127.
 seedWithoutIndex1 :: Ctx -> PublicSeed
 seedWithoutIndex1 ctx =
-  (testSeed ctx) {seedAccountKey = \net index -> if index == 1 then return Nothing else seedAccountKey (testSeed ctx) net index}
+  (testSeed ctx) {seedAccountKey = \kind net index -> if index == 1 then return Nothing else seedAccountKey (testSeed ctx) kind net index}
 
 -- | The test wallet with the passphrase "café", its é composed as a keyboard
 -- types it, which NFKD splits into e and an accent: the seed BIP39 derives,
@@ -232,6 +237,11 @@ testNewAcc2 ctx = newAccountOf ctx testMnemonic2 btc
 testNewAccBch :: Ctx -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
 testNewAccBch ctx = newAccountOf ctx testMnemonic bch
 
+-- | A new BIP84 account of the test wallet in the database, with the given
+-- name: its first one, m/84'/0'/0'
+testNewSegwitAcc :: Ctx -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
+testNewSegwitAcc ctx = newAccountOfKind Bip84 ctx testMnemonic btc
+
 {- Rows of the wallet -}
 
 -- | The account main of the test wallet as its row holds it: account 0 of
@@ -239,7 +249,7 @@ testNewAccBch ctx = newAccountOf ctx testMnemonic bch
 -- 0.05 btc confirmed and 0.001 btc unconfirmed in 3 coins, created at
 -- 'seenTime'
 mainAccountRow :: DBAccount
-mainAccountRow = DBAccount "main" 0 "btc" 12 3 testAccountXPub (Just testFingerprintText) 5000000 100000 3 seenTime
+mainAccountRow = DBAccount "main" 0 44 "btc" 12 3 testAccountXPub (Just testFingerprintText) 5000000 100000 3 seenTime
 
 -- | The first receiving address of that account as its row holds it,
 -- labelled "Invoice 42": paid 50000 in one transaction, which it still
@@ -443,27 +453,35 @@ vectorKey ctx net =
       parsed <- maybeToEither "Invalid path" $ parsePath (Text.unpack path)
       return (derivePath ctx parsed.get (makeXPrvKey seed)).key
     KeyAccount mnem pass acc chain idx -> do
-      accKey <- accountSigningKey net ctx (AccountSpec mnem pass acc)
+      accKey <- accountSigningKey net ctx (AccountSpec Bip44 mnem pass acc)
       let path = Deriv :/ fromIntegral chain :/ fromIntegral idx :: SoftPath
       return (derivePath ctx path accKey).key
 
 -- | An account of a BIP-39 mnemonic, derived like hw does: the account key is
--- m/44'/coin'/account'. In JSON: {"mnemonic", "passphrase", "account"}, where
--- the passphrase is optional.
-data AccountSpec = AccountSpec !Text !Text !Natural
+-- m/44'/coin'/account', or m/84'/coin'/account' for a bip84 account. In
+-- JSON: {"mnemonic", "passphrase", "account", "type"}, where the passphrase
+-- is optional and the type is bip44 unless given.
+data AccountSpec = AccountSpec !AccountKind !Text !Text !Natural
 
 instance FromJSON AccountSpec where
   parseJSON =
     withObject "AccountSpec" $ \o ->
       AccountSpec
-        <$> o .: "mnemonic"
+        <$> (kindOf =<< o .:? "type" .!= "bip44")
+        <*> o .: "mnemonic"
         <*> o .:? "passphrase" .!= ""
         <*> o .: "account"
+    where
+      kindOf name = maybe (fail ("Unknown account type " <> Text.unpack name)) return (kindNamed name)
+
+-- | The kind of the account of a specification
+accountSpecKind :: AccountSpec -> AccountKind
+accountSpecKind (AccountSpec kind _ _ _) = kind
 
 -- | The account private key of an account specification
 accountSigningKey :: Network -> Ctx -> AccountSpec -> Either String XPrvKey
-accountSigningKey net ctx (AccountSpec mnem pass acc) =
-  signingKey net ctx (MnemonicPass mnem pass) acc
+accountSigningKey net ctx (AccountSpec kind mnem pass acc) =
+  signingKey kind net ctx (MnemonicPass mnem pass) acc
 
 {- Synthetic transactions and coins -}
 
@@ -591,13 +609,69 @@ testAccountXPub = "xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZa
 testAccountXPub1 :: Text
 testAccountXPub1 = "xpub6CHK45s4QJWpt9C5kpAnypsE5ratNMWRGE3pZNQgGnxHTvZ1y6E65mSKMmz7V5ZUnVq5JMgq1Qros98GhLMCK7eoDaNo8kjqNdJzD8otqLW"
 
+-- | The keys of the BIP84 account 0 of the test wallet, m/84'/0'/0', and
+-- the first ten addresses of its two chains. The public key and the first
+-- address are those the Coldcard file of test/data/descriptors gives for
+-- the seed; all of them were derived apart from hw with the Python tool
+-- of the message-signing vectors.
+testSegwitAccountXPrv, testSegwitAccountXPub :: Text
+testSegwitAccountXPrv = "xprv9yQtifFFicsEcWj4uDMZ1Y3aRXTSf6cT2kqnW1fkTxNkDLiTBFnqSFMDXC3Jy1XFREhqmya5GnmuSMYVbmos2HDchLqJGZiTJtdKjPp6qDT"
+testSegwitAccountXPub = "xpub6CQF8An9YzRXpzoY1EtZNfzJyZHw4ZLJPymPJQ5N2Huj693bio75z3fhNUq6unam47GaZQanRezUbkhMZosNyZBrGT9NExM1fa8uwdaWnoV"
+
+testSegwitAccountKey :: XPrvKey
+testSegwitAccountKey = fromMaybe (error "testSegwitAccountKey") $ xPrvImport btc testSegwitAccountXPrv
+
+testSegwitAccountPub :: Ctx -> XPubKey
+testSegwitAccountPub ctx = fromMaybe (error "testSegwitAccountPub") $ xPubImport btc ctx testSegwitAccountXPub
+
+-- | The receiving addresses /0/0 to /0/9 of the BIP84 account
+segwitExternalAddrsText :: [Text]
+segwitExternalAddrsText =
+  [ "bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc",
+    "bc1qqdensnp26rdechmq669tjk4s2wsyjr04nw3mc2",
+    "bc1qrtmkfqwtavl80tm65mpwrrzt7pamm0syaageg2",
+    "bc1q30arh9afqsymrypvya7lr68305lgv0cmfwr48w",
+    "bc1q74rr85p6g48nxuzsh9cc6q0m4jqfuyg0wxjaar",
+    "bc1qg83sxnghnw6du9rn2yx0a74q300y2l22zmsjm0",
+    "bc1qvu4fzlulavum5ttxml7t2rdgnd6e4l9ls6ep9j",
+    "bc1qj5e9ycrm73a38wen2t2a625amd4gek2f7v6xr6",
+    "bc1q886qqrsms0ggsez6elckxfn4mpttyh3x9pgqqc",
+    "bc1qhrdz0l0tzrcdeltuavsu8kn5tjj29m0m7wgdm4"
+  ]
+
+-- | The change addresses /1/0 to /1/9 of the BIP84 account
+segwitInternalAddrsText :: [Text]
+segwitInternalAddrsText =
+  [ "bc1ql5j70a05srlvee3ugweyqukdfwwaph4pwaup74",
+    "bc1q2uprg958790vg0w8k5zjkntjh46mf3yc7vc782",
+    "bc1qnx0y3ap8f90px8ykvzt6vhzjpfcadnuvns3qpp",
+    "bc1qm2l6zjex86aea8cepuhghwnk0sdly2lvzz23uf",
+    "bc1quyj4p259snvcujp0a5ntzeyzzs4p6yzmae325h",
+    "bc1qs8d4wdld3rvcaz4ynr263wzl40c6u0awla8x6f",
+    "bc1q90u76d4knj3mgp3mc07lwryn0r9jaf73ytfzzp",
+    "bc1qd205vvtzfkty6e6jsv0f3ul88mm6n7pm7kgjvc",
+    "bc1qknv3fy496fhy5nrs95jch9d2rq5a5dwx8qmsf4",
+    "bc1qetesxsjf99fje2q696gkl7xam5cv0lran49a8k"
+  ]
+
+-- | The receiving address /0/i and the change address /1/i of the BIP84
+-- account
+segwitExternalAddr, segwitInternalAddr :: Int -> Address
+segwitExternalAddr i = testAddress (segwitExternalAddrsText !! i)
+segwitInternalAddr i = testAddress (segwitInternalAddrsText !! i)
+
+-- | The key of the BIP84 account 0 of the test wallet on the test networks,
+-- m/84'/1'/0', the same text on each of them
+testSegwitAccountXPubTest :: Text
+testSegwitAccountXPubTest = "tpubDDRUQfT52zY83AN2e4818hHNGVa4EgPmXHDUKFn6ba4fcBhjfq9dcSv5M44a2bGWsy6Y9JYPyBPPFf8qsFb2tdpL9LJNbk9epnUyF9Yobtg"
+
 testAccountKey :: XPrvKey
 testAccountKey = fromMaybe (error "testAccountKey") $ xPrvImport btc testAccountXPrv
 
 -- | The signing data signed with the account key of the test wallet, for
 -- the fixtures that need a transaction with real signatures
 signedByWallet :: Ctx -> TxSignData -> TxSignData
-signedByWallet ctx tsd = fst $ forceRight $ signWalletTx btc ctx tsd testAccountKey
+signedByWallet ctx tsd = fst $ forceRight $ signWalletTx btc ctx Bip44 tsd testAccountKey
 
 testAccountPub :: Ctx -> XPubKey
 testAccountPub ctx = fromMaybe (error "testAccountPub") $ xPubImport btc ctx testAccountXPub
@@ -968,6 +1042,15 @@ fingerprintOf = forceRight . textToFingerprint
 -- regtest chain the coin is on. See test/data/psbt/README.md.
 corePreparedSignedText :: BS.ByteString
 corePreparedSignedText = "cHNidP8BAHcCAAAAAZzolVrP9CarlPjUSHujJgVmsHiFB+Mm+Bafv63Mct7+AAAAAAD9////AgDh9QUAAAAAGXapFKvIhl67bbYllWAxY5ddm6o2RjLKiKw2CBAkAQAAABl2qRRFWqUMJmMUF3HrrCCW43gzkRIn1oisAAAAAAX8Amh3AANidGMAAQCHAgAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP////8DAWYA/////wIA8gUqAQAAABl2qRTIDVUiPi8QYTY63Sp7A2PChb8pjYisAAAAAAAAAAAmaiSqIant4vYcP3HR3v0/qZnfo2lTdVxpBol5mWK0i+vYNpdOjPkAAAAAIgYDL2Q3AiJWyFTgCQ59bItl6WYG739AU5ng8Bh8kwl6wPkYvFYPlSwAAIAAAACAAAAAgAAAAAAAAAAAAQdqRzBEAiAt4w5OLHA+pvdD8Ech2/HZRoxlJ5EQEddAV3jzEPe6tAIgGhnWoPRPsXAT4lNaosniGeLccnAzo++kwH50AovU9p4BIQMvZDcCIlbIVOAJDn1si2XpZgbvf0BTmeDwGHyTCXrA+QAAIgIDdvLnBkWN11Zzuhm479hC793ZvArkHjEznf/PkXtttusYvFYPlSwAAIAAAACAAAAAgAEAAAAAAAAAAA=="
+
+-- | The file Bitcoin Core prepared for the bip84 account of the test
+-- wallet (test/data/psbt/core/core-prepared-segwit.psbt), signed by the
+-- test wallet into that file, in base64: the file Bitcoin Core 32.1's
+-- analyzepsbt finds complete, and whose transaction its testmempoolaccept
+-- accepts on the regtest chain the coin is on, 144 virtual bytes for a
+-- fee of 1440. See test/data/psbt/README.md.
+coreSegwitPreparedSignedText :: BS.ByteString
+coreSegwitPreparedSignedText = "cHNidP8BAHQCAAAAAWc1xfZ0yPv0PUM5wdsglkTvSrW2RVXDC/aJc1pkR9gIAAAAAAD9////AgDh9QUAAAAAGXapFC0S+z6YrxZ3BWxVA/Hx0aMiQAbZiKxgCxAkAQAAABYAFP0l5/X0gP7M5jxDskByzUud0N6hAAAAAAX8Amh3AANidGMAAQCDAgAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP////8CUQD+////AgDyBSoBAAAAFgAUJOZHGwyBWu4Cx70iYUy2DkgRoBkAAAAAAAAAACZqJKohqe3i9hw/cdHe/T+pmd+jaVN1XGkGiXmZYrSL69g2l06M+QAAAAABAR8A8gUqAQAAABYAFCTmRxsMgVruAse9ImFMtg5IEaAZIgYCdlLe+8CYMh2khdphdd6Lh49DPw2JM0NVJiXJzVCTP1MYvFYPlVQAAIAAAACAAAAAgAAAAAAAAAAAAQhsAkgwRQIhAOextS4gCOX8iHiGEXf4bEqQo2OlixpAsJf1zIGkwO7mAiA0MlumEVMEGQx8IT9NPcwcRR4Wk4SBnQPmTTWVcH8q4AEhAnZS3vvAmDIdpIXaYXXei4ePQz8NiTNDVSYlyc1Qkz9TAAAiAgMSvuVMTQzd0oxq2bXlbxXHLisLmALO0zcJZKa9BYoOChi8Vg+VVAAAgAAAAIAAAACAAQAAAAAAAAAA"
 
 -- | The same, signed into the version 2 file Core writes by default
 -- (test/data/psbt/core/core-prepared-v2.psbt): the file above with the

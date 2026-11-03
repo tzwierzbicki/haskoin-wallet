@@ -7,6 +7,7 @@ import Data.Word (Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Tx.CoinSelection
+import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
 import Numeric.Natural (Natural)
 import System.Random (mkStdGen)
@@ -21,7 +22,7 @@ spec =
 
 -- Every coin pays the fee of its own input (148 bytes) and the target adds
 -- the fee of the frame (10 bytes) and of the outputs (34 bytes each). With
--- one output at 10 satoshis per byte: a coin is worth its amount - 1480, and
+-- one output at 10 satoshis per virtual byte: a coin is worth its amount - 1480, and
 -- the target to cover is the amount + 440. The long-term fee rate is 10, the
 -- value Bitcoin Core uses.
 
@@ -33,7 +34,7 @@ amounts s = ((.value) <$> s.selected, s.changeAmount, s.feeAmount)
 -- and dust
 selectWithSeed :: Ctx -> Int -> CoinSelection -> Word64 -> Word64 -> Word64 -> [Natural] -> Either String ([Word64], Word64, Word64)
 selectWithSeed ctx seed strategy feeRate dust amount coins =
-  amounts <$> selectCoins strategy (mkStdGen seed) (Payment (FeeRates feeRate 10) SenderPays dust [34] amount) (coinsWorth ctx coins)
+  amounts <$> selectCoins strategy (mkStdGen seed) (Payment Bip44 (FeeRates feeRate 10) SenderPays dust [34] amount) (coinsWorth ctx coins)
 
 -- | Select with the seed 0; only the random draw depends on it
 select :: Ctx -> CoinSelection -> Word64 -> Word64 -> Word64 -> [Natural] -> Either String ([Word64], Word64, Word64)
@@ -49,6 +50,12 @@ coinSelectionSpec ctx =
       -- Fee: 10 + 148 + 2 * 34 = 226 bytes * 2 = 452
       -- Change: 400000 - 350000 - 452 = 49548
       select ctx LargestFirst 2 546 350000 four `shouldBe` Right ([400000], 49548, 452)
+    -- The input of a bip84 account is 68 virtual bytes, its change output 31
+    it "sizes the inputs and the change of a bip84 account as P2WPKH" $
+      -- Fee: 10 + 41 + 34 + 31 = 116 bytes, then (2 + 108) / 4 rounded up to
+      -- 28: 144 virtual bytes * 2 = 288. Change: 400000 - 350000 - 288 = 49712
+      (amounts <$> selectCoins LargestFirst (mkStdGen 0) (Payment Bip84 (FeeRates 2 10) SenderPays 546 [34] 350000) (coinsWorth ctx four))
+        `shouldBe` Right ([400000], 49712, 288)
     it "spends the smallest coins first" $
       -- Fee: 10 + 3 * 148 + 2 * 34 = 522 bytes * 50 = 26100
       -- Change: 100000 + 200000 + 300000 - 350000 - 26100 = 223900
@@ -106,7 +113,7 @@ coinSelectionSpec ctx =
 changeAndFeeSpec :: Ctx -> Spec
 changeAndFeeSpec ctx =
   describe "Change and fee" $ do
-    -- 350000 to send at 1 satoshi per byte, with the dust limit at 546
+    -- 350000 to send at 1 satoshi per virtual byte, with the dust limit at 546
     -- Fee: 10 + 148 + 2 * 34 = 226 bytes * 1 = 226
     it "pays a change above the dust limit" $
       -- Change: 350773 - 350000 - 226 = 547
@@ -130,7 +137,7 @@ changeAndFeeSpec ctx =
     it "charges the fee of every output" $
       -- Fee: two outputs and the change, 10 + 148 + 3 * 34 = 260 bytes * 10 = 2600
       -- Change: 400000 - 350000 - 2600 = 47400
-      amounts <$> selectCoins LargestFirst (mkStdGen 0) (Payment (FeeRates 10 10) SenderPays 546 [34, 34] 350000) (coinsWorth ctx [400000])
+      amounts <$> selectCoins LargestFirst (mkStdGen 0) (Payment Bip44 (FeeRates 10 10) SenderPays 546 [34, 34] 350000) (coinsWorth ctx [400000])
         `shouldBe` Right ([400000], 47400, 2600)
     it "builds a free transaction at a fee rate of zero" $
       -- Fee: 10 + 148 + 2 * 34 = 226 bytes * 0 = 0
@@ -141,7 +148,7 @@ wasteSpec :: Ctx -> Spec
 wasteSpec ctx =
   describe "Waste of a selection" $ do
     -- 350000 paid by the sender in one output, at the given fee rate
-    let payment feeRate = Payment (FeeRates feeRate 10) SenderPays 546 [34] 350000
+    let payment feeRate = Payment Bip44 (FeeRates feeRate 10) SenderPays 546 [34] 350000
         selection coins change fee = Selection (coinsWorth ctx coins) 350000 change fee
     it "is the cost of the change output at the long-term fee rate" $
       -- Creating the output now (10 * 34) and spending it later (10 * 148)

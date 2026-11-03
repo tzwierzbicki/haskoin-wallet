@@ -9,7 +9,8 @@ import qualified Data.Aeson as Json
 import Data.Text (Text)
 import Haskoin
 import Haskoin.Wallet.Descriptor
-import Haskoin.Wallet.TestUtils (testAccountXPub, testAccountXPubTest, testFingerprint)
+import Haskoin.Wallet.Keys (AccountKind (..))
+import Haskoin.Wallet.TestUtils (testAccountXPub, testAccountXPubTest, testFingerprint, testSegwitAccountXPub)
 import Test.Hspec
 
 spec :: Spec
@@ -36,16 +37,29 @@ mainDescriptor = "pkh([bc560f95/44h/0h/0h]" <> testAccountXPub <> "/<0;1>/*)#vq5
 mainParsed :: Descriptor
 mainParsed = Descriptor ["pkh"] (Just (testFingerprint, toGeneric account0)) testAccountXPub BothChains
 
+-- | The bip84 account 0 of the test wallet, and its descriptor
+segwitAccount0 :: HardPath
+segwitAccount0 = Deriv :| 84 :| 0 :| 0
+
+segwitDescriptor :: Text
+segwitDescriptor = "wpkh([bc560f95/84h/0h/0h]" <> testSegwitAccountXPub <> "/<0;1>/*)#5nktextl"
+
 {- Descriptors -}
 
 descriptorSpec :: Spec
 descriptorSpec =
   describe "The descriptor of an account" $ do
     it "is its key in pkh, with the origin of the key, both chains and its checksum, hardened steps marked with an h" $
-      descriptorText (accountDescriptor (Just testFingerprint) account0 testAccountXPub) `shouldBe` mainDescriptor
+      descriptorText (accountDescriptor Bip44 (Just testFingerprint) account0 testAccountXPub) `shouldBe` mainDescriptor
+
+    -- The descriptor of the bip84 section of the Coldcard file of
+    -- test/data/descriptors, for the bip84 account of the test wallet
+    it "is its key in wpkh for a bip84 account, as a Coldcard writes it" $ do
+      descriptorText (accountDescriptor Bip84 (Just testFingerprint) segwitAccount0 testSegwitAccountXPub) `shouldBe` segwitDescriptor
+      parseDescriptor segwitDescriptor `shouldBe` Right (Descriptor ["wpkh"] (Just (testFingerprint, toGeneric segwitAccount0)) testSegwitAccountXPub BothChains)
 
     it "names no origin when the fingerprint of the seed is unknown" $
-      descriptorText (accountDescriptor Nothing account0 testAccountXPub)
+      descriptorText (accountDescriptor Bip44 Nothing account0 testAccountXPub)
         `shouldBe` "pkh(" <> testAccountXPub <> "/<0;1>/*)#mmejv52s"
 
     it "reads back as written" $
@@ -124,11 +138,34 @@ keySpec =
       isPrivateKey "tprv8ZgxMBicQKsPdLA1DWtYbSdVVfjzd7dNqEvvBFL6V6YjwLkiQnzT6y9NgSHFG27K3sKpofaeeZjrSZkomqA7YRtncLyEEnuqhRWUeMMHq3T" `shouldBe` True
       isPrivateKey testAccountXPub `shouldBe` False
 
-    it "has a prefix of SLIP-132 when it starts with ypub, zpub or the like, and not with xpub or tpub" $ do
-      isSlip132Key "zpub6r4mjW7yrMWVXbBmfxTonrBKKVapwoKJECopsBs8nJfVCLg4E7SDEAyyQtkGubtbsPWC4MmuLyhaNKvV1ChQa2Z418YDQmyzD2GCiogfbAh" `shouldBe` True
-      isSlip132Key "ypub6YGZhSg8Nso498vduxTVMtR3EtZUu8H3bKfUmJDp5x1QXjy9DdACFQ8VwcgtS6NSgzCMGs5mUSCP2iG3BtXCRBP8Zh7V74rwL9qRRbN1yGV" `shouldBe` True
-      isSlip132Key testAccountXPub `shouldBe` False
-      isSlip132Key testAccountXPubTest `shouldBe` False
+    -- The zpub and the vpub are the keys of the BIP84 account 0 of the test
+    -- wallet on Bitcoin and on testnet as a Coldcard and Electrum write
+    -- them, the xpub and the tpub the same keys as BIP32 writes them,
+    -- derived apart from hw with the Python tool of the message-signing
+    -- vectors
+    it "reads a zpub or a vpub of SLIP-132 as the xpub or tpub of a bip84 account" $ do
+      readAccountKey "zpub6r4mjW7yrMWVXbBmfxTonrBKKVapwoKJECopsBs8nJfVCLg4E7SDEAyyQtkGubtbsPWC4MmuLyhaNKvV1ChQa2Z418YDQmyzD2GCiogfbAh"
+        `shouldBe` Right (Just Bip84, testSegwitAccountXPub)
+      readAccountKey "vpub5ZPKH6HZ2MVi4mnwX9ZfWbkzbSBWN3ui9RajPuwBVeZ1khQa6HyRDsvy4c4cWH1SGnL22mqQWkrEnuR72zumQizqM4ADkPrShNmGi1jtzXq"
+        `shouldBe` Right (Just Bip84, "tpubDDRUQfT52zY83AN2e4818hHNGVa4EgPmXHDUKFn6ba4fcBhjfq9dcSv5M44a2bGWsy6Y9JYPyBPPFf8qsFb2tdpL9LJNbk9epnUyF9Yobtg")
+
+    it "reads an xpub or a tpub as it is, which marks no kind of account" $ do
+      readAccountKey testAccountXPub `shouldBe` Right (Nothing, testAccountXPub)
+      readAccountKey testAccountXPubTest `shouldBe` Right (Nothing, testAccountXPubTest)
+
+    it "refuses the ypub and upub of a bip49 account, and the keys of multisig accounts" $ do
+      readAccountKey "ypub6YGZhSg8Nso498vduxTVMtR3EtZUu8H3bKfUmJDp5x1QXjy9DdACFQ8VwcgtS6NSgzCMGs5mUSCP2iG3BtXCRBP8Zh7V74rwL9qRRbN1yGV"
+        `shouldBe` Left "The key has the prefix ypub of SLIP-132, which marks a BIP49 account, with P2SH-P2WPKH addresses: hw holds bip44 and bip84 accounts"
+      readAccountKey "upub5DmL6Fd1D7dcMfS5r7XxxGH5Lbnxvp1KGZC3CJQMGYE2S6h7GNA1ZGqoSrcGKGnEQdeEYj5BrvDuqGeT6YSjG9BpwZEpvbxdMKcmTdQ2NR9"
+        `shouldBe` Left "The key has the prefix upub of SLIP-132, which marks a BIP49 account, with P2SH-P2WPKH addresses: hw holds bip44 and bip84 accounts"
+      readAccountKey "Zpub6r4mjW7yrMWVXbBmfxTonrBKKVapwoKJECopsBs8nJfVCLg4E7SDEAyyQtkGubtbsPWC4MmuLyhaNKvV1ChQa2Z418YDQmyzD2GCiogfbAh"
+        `shouldBe` Left "The key has the prefix Zpub of SLIP-132, which marks a multisig account: hw holds bip44 and bip84 accounts of one key"
+
+    it "refuses a zpub that does not read as an extended key" $
+      readAccountKey "zpub6r4mjW7yrMW" `shouldBe` Left "The key starts with zpub but does not read as an extended key"
+
+    it "leaves any other text as it is" $
+      readAccountKey "not a key" `shouldBe` Right (Nothing, "not a key")
 
 {- Origins -}
 
@@ -136,7 +173,17 @@ originSpec :: Spec
 originSpec =
   describe "The origin of a record" $ do
     it "is written for a BIP44 account as pkh([fingerprint/44'/coin'/index'])" $
-      originText (accountOrigin testFingerprint account0) `shouldBe` "pkh([bc560f95/44'/0'/0'])"
+      originText (accountOrigin Bip44 testFingerprint account0) `shouldBe` "pkh([bc560f95/44'/0'/0'])"
+
+    it "is written for a BIP84 account as wpkh([fingerprint/84'/coin'/index'])" $
+      originText (accountOrigin Bip84 testFingerprint segwitAccount0) `shouldBe` "wpkh([bc560f95/84'/0'/0'])"
+
+    it "names the kind of account by its script functions: pkh for bip44, wpkh for bip84, and nothing for the others" $ do
+      (kindScripts Bip44, kindScripts Bip84) `shouldBe` (["pkh"], ["wpkh"])
+      kindOfScripts ["wpkh"] `shouldBe` Just Bip84
+      kindOfScripts ["pkh"] `shouldBe` Just Bip44
+      kindOfScripts ["sh", "wpkh"] `shouldBe` Nothing
+      kindOfScripts [] `shouldBe` Nothing
 
     it "reads back as written" $
       parseOrigin "pkh([bc560f95/44'/0'/0'])" `shouldBe` Just (Origin ["pkh"] testFingerprint (toGeneric account0))

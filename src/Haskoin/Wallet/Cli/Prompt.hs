@@ -228,25 +228,25 @@ askNewMnemonicPass term parts = MnemonicPass <$> confirmedMnemonic <*> confirmed
 
 {- The signing key of an account -}
 
--- | The signing key of an account from the mnemonic and the passphrase of
--- its seed, with the public side of the seed. Both are asked again while
--- the key they give is not the account's: a wrong word the checksum lets
--- through gives another seed, which no passphrase can fix. The one place a
--- private key comes out of the mnemonic for a command.
-askSigningKey :: (MonadIO m) => Terminal -> Network -> Ctx -> Natural -> Natural -> XPubKey -> ExceptT String m (PublicSeed, XPrvKey)
-askSigningKey term net ctx parts index accPub =
+-- | The signing key of an account of a kind from the mnemonic and the
+-- passphrase of its seed, with the public side of the seed. Both are asked
+-- again while the key they give is not the account's: a wrong word the
+-- checksum lets through gives another seed, which no passphrase can fix.
+-- The one place a private key comes out of the mnemonic for a command.
+askSigningKey :: (MonadIO m) => Terminal -> AccountKind -> Network -> Ctx -> Natural -> Natural -> XPubKey -> ExceptT String m (PublicSeed, XPrvKey)
+askSigningKey term kind net ctx parts index accPub =
   retrying term $ do
     mnem <- askMnemonicPass term parts
     maybe (Left "The mnemonic or the passphrase does not match the account") Right
-      <$> matchAccount term net ctx index accPub mnem
+      <$> matchAccount term kind net ctx index accPub mnem
 
--- | The seed and the signing key of an account that a mnemonic and a
--- passphrase give, if they give its public key. The passphrase is tried
--- normalized, as BIP39 asks, then, when normalizing changes it, as typed:
--- hw derived its accounts so before, and the user is told that other
--- wallets would not find such an account.
-matchAccount :: (MonadIO m) => Terminal -> Network -> Ctx -> Natural -> XPubKey -> MnemonicPass -> ExceptT String m (Maybe (PublicSeed, XPrvKey))
-matchAccount term net ctx index accPub mnem = do
+-- | The seed and the signing key of an account of a kind that a mnemonic
+-- and a passphrase give, if they give its public key. The passphrase is
+-- tried normalized, as BIP39 asks, then, when normalizing changes it, as
+-- typed: hw derived its accounts so before, and the user is told that
+-- other wallets would not find such an account.
+matchAccount :: (MonadIO m) => Terminal -> AccountKind -> Network -> Ctx -> Natural -> XPubKey -> MnemonicPass -> ExceptT String m (Maybe (PublicSeed, XPrvKey))
+matchAccount term kind net ctx index accPub mnem = do
   normalized <- liftIO . accountOf =<< liftEither (masterKey mnem)
   case normalized of
     Just found -> return (Just found)
@@ -259,10 +259,10 @@ matchAccount term net ctx index accPub mnem = do
   where
     accountOf master = do
       let seed = seedOfMaster ctx master
-      derived <- seedAccountKey seed net index
+      derived <- seedAccountKey seed kind net index
       return $
         if derived == Just accPub
-          then Just (seed, accountKey net ctx master index)
+          then Just (seed, accountKey kind net ctx master index)
           else Nothing
 
 -- | What the user is told of an account derived from a passphrase as typed

@@ -6,7 +6,9 @@
 -- | The addresses of an account: external ones to receive with and internal
 -- ones for change, generated along the two chains of the account within
 -- the gap of BIP44, with their labels and balances. The address at index i
--- of a chain has the derivation path chain/i. An index whose child key is
+-- of a chain has the derivation path chain/i, and is of the kind of the
+-- account: P2PKH for a BIP44 account, P2WPKH for a BIP84 one
+-- ("Haskoin.Wallet.Keys".'keyAddress'). An index whose child key is
 -- invalid, which BIP32 says to skip, has no address and no row: the chain
 -- goes on at the next index. An internal address is available for change
 -- when no transaction has used it and no pending transaction pays it; the
@@ -39,6 +41,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.Keys (AccountKind, keyAddress)
 import Haskoin.Wallet.Util (addrToTextE, readNatural, rowLimit, textToAddrE)
 import Numeric.Natural (Natural)
 
@@ -245,7 +248,7 @@ appendAddress :: (MonadUnliftIO m) => Ctx -> DBAccountId -> AddrType -> ExceptT 
 appendAddress ctx accId addrType = do
   acc <- getAccountById accId
   let next = dBAccountCount addrType acc
-  addrM <- liftIO $ deriveChainAddress ctx (accountXPubKey ctx acc) (addrDeriv addrType) (fromIntegral next)
+  addrM <- liftIO $ deriveChainAddress ctx (accountKind acc) (accountXPubKey ctx acc) (addrDeriv addrType) (fromIntegral next)
   lift $ P.update accId [dBAccountField addrType P.=. next + 1]
   case addrM of
     Just addr -> insertAddress (accountNetwork acc) accId addrType next addr
@@ -521,20 +524,20 @@ addrPath addr = chainPath (dBAddressInternal addr) (dBAddressIndex addr)
 fromDBAddr :: Network -> DBAddress -> Either String (Address, SoftPath)
 fromDBAddr net row = (,addrPath row) <$> textToAddrE net (dBAddressAddress row)
 
--- | The address of a chain at an index, or Nothing when the child key at
--- that index is invalid: haskoin-core throws for such a key, where BIP32
--- says to skip the index
-deriveChainAddress :: Ctx -> XPubKey -> SoftPath -> KeyIndex -> IO (Maybe Address)
-deriveChainAddress ctx pub chain i = do
+-- | The address of a chain of an account of the kind at an index, or
+-- Nothing when the child key at that index is invalid: haskoin-core throws
+-- for such a key, where BIP32 says to skip the index
+deriveChainAddress :: Ctx -> AccountKind -> XPubKey -> SoftPath -> KeyIndex -> IO (Maybe Address)
+deriveChainAddress ctx kind pub chain i = do
   derived <- try $ evaluate $ derivePubPath ctx (chain :/ i) pub
   return $ case derived of
     Left (DerivationException _) -> Nothing
-    Right child -> Just (xPubAddr ctx child)
+    Right child -> Just (keyAddress kind ctx child)
 
--- | The addresses of a chain of the public key from an index, as many as
--- asked, with their indices; an index with an invalid child key is left
--- out
-chainAddresses :: Ctx -> XPubKey -> SoftPath -> Natural -> Natural -> IO [(Address, KeyIndex)]
-chainAddresses ctx pub chain firstIndex howMany =
+-- | The addresses of a chain of the public key of an account of the kind
+-- from an index, as many as asked, with their indices; an index with an
+-- invalid child key is left out
+chainAddresses :: Ctx -> AccountKind -> XPubKey -> SoftPath -> Natural -> Natural -> IO [(Address, KeyIndex)]
+chainAddresses ctx kind pub chain firstIndex howMany =
   fmap catMaybes . forM (genericTake howMany [fromIntegral firstIndex ..]) $ \i ->
-    fmap (\addr -> (addr, i)) <$> deriveChainAddress ctx pub chain i
+    fmap (\addr -> (addr, i)) <$> deriveChainAddress ctx kind pub chain i

@@ -92,6 +92,12 @@ spec = prepareContext $ \ctx ->
                          [PersistInt64 3, PersistInt64 1, PersistInt64 0, PersistInt64 0, PersistInt64 0, PersistInt64 0, PersistInt64 0, PersistText "2023-11-03T00:00:00Z"]
                        ]
 
+    it "gives every account the purpose 44: every account of version 3 is a bip44 one" $
+      inMemory $ do
+        version3Database
+        migrateTo4 ctx
+        queryRows "select id, purpose from d_b_account" `dbShouldBe` [[PersistInt64 1, PersistInt64 44], [PersistInt64 2, PersistInt64 44], [PersistInt64 3, PersistInt64 44]]
+
     it "points the addresses, summaries, coins and pending transactions to their account's id" $
       inMemory $ do
         version3Database
@@ -148,7 +154,7 @@ spec = prepareContext $ \ctx ->
         migrateTo4 ctx
         columnNames "d_b_account"
           `dbShouldBe` [ "balance_coins", "balance_confirmed", "balance_unconfirmed", "created", "external", "fingerprint",
-                         "id", "index", "internal", "name", "network", "x_pub_key" ]
+                         "id", "index", "internal", "name", "network", "purpose", "x_pub_key" ]
         columnNames "d_b_address"
           `dbShouldBe` [ "account", "address", "balance_coins", "balance_confirmed", "balance_received", "balance_txs",
                          "balance_unconfirmed", "created", "index", "internal", "label" ]

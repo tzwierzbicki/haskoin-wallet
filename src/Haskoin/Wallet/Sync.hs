@@ -21,6 +21,7 @@ import Data.Maybe (isNothing)
 import Data.Set (Set)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
+import qualified Data.Text as Text
 import Data.Word (Word64)
 import qualified Data.Set as Set
 import Haskoin
@@ -31,7 +32,7 @@ import Haskoin.Wallet.Database.BestBlock
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Keys (PublicSeed (..))
+import Haskoin.Wallet.Keys (AccountKind (..), PublicSeed (..), networkKinds)
 import Haskoin.Wallet.Database.PendingTx
 import Haskoin.Wallet.Database.RawTx
 import Haskoin.Wallet.Store
@@ -42,17 +43,18 @@ import Numeric.Natural (Natural)
 
 {- The used addresses past the ones the account has -}
 
--- | The index after the last used address of a chain of the public key,
--- found by scanning windows of the given size from the given index: the
--- store is asked which addresses of a window have transactions, and a
--- window where none has ends the scan. The scan therefore stops only after
--- at least a window of unused addresses, up to twice that many depending
--- on where the last used address falls in its window.
-scanChain :: (MonadIO m) => Ctx -> Store -> XPubKey -> SoftPath -> Natural -> Natural -> ExceptT String m Natural
-scanChain ctx store pub chain window from = go from from
+-- | The index after the last used address of a chain of the public key of
+-- an account of the kind, found by scanning windows of the given size from
+-- the given index: the store is asked which addresses of a window have
+-- transactions, and a window where none has ends the scan. The scan
+-- therefore stops only after at least a window of unused addresses, up to
+-- twice that many depending on where the last used address falls in its
+-- window.
+scanChain :: (MonadIO m) => Ctx -> Store -> AccountKind -> XPubKey -> SoftPath -> Natural -> Natural -> ExceptT String m Natural
+scanChain ctx store kind pub chain window from = go from from
   where
     go next off = do
-      addrs <- liftIO $ chainAddresses ctx pub chain off window
+      addrs <- liftIO $ chainAddresses ctx kind pub chain off window
       bals <- fromStore $ storeBalances store (fst <$> addrs)
       let used = Set.fromList [bal.address | bal <- bals, bal.txs /= 0]
           usedIndices = [fromIntegral i | (addr, i) <- addrs, addr `Set.member` used]
@@ -72,28 +74,29 @@ watchGap ctx cfg store accId = do
   let pub = accountXPubKey ctx acc
       extend addrType = do
         let have = fromIntegral $ dBAccountCount addrType acc
-        next <- scanChain ctx store pub (addrDeriv addrType) (configGap cfg) have
+        next <- scanChain ctx store (accountKind acc) pub (addrDeriv addrType) (configGap cfg) have
         extendChainTo ctx accId addrType next
         return (next - have)
   (+) <$> extend AddrExternal <*> extend AddrInternal
 
 {- Recovering the accounts of a seed -}
 
--- | The accounts of a seed on a network that were paid, found as BIP44
--- describes: account after account from index 0, the receiving chain of
--- each scanned for a used address within the gap. The search ends after
--- the given number of accounts in a row without one. The standard stops at
--- the first, but hw creates accounts on an offline signer, where some never
--- receive anything, so the gap of accounts is the caller's. An account the
--- wallet has already is passed over without counting, and so is an index
--- whose child key is invalid. Returns the accounts found, with their keys.
-recoverableAccounts :: (MonadUnliftIO m) => Ctx -> Config -> Store -> Network -> PublicSeed -> Natural -> ExceptT String (DB m) [(Natural, XPubKey)]
-recoverableAccounts ctx cfg store net seed accountGap = go 0 0
+-- | The accounts of a seed of a kind on a network that were paid, found as
+-- BIP44 describes: account after account from index 0, the receiving
+-- chain of each scanned for a used address within the gap. The search
+-- ends after the given number of accounts in a row without one. The
+-- standard stops at the first, but hw creates accounts on an offline
+-- signer, where some never receive anything, so the gap of accounts is
+-- the caller's. An account the wallet has already is passed over without
+-- counting, and so is an index whose child key is invalid. Returns the
+-- accounts found, with their keys.
+recoverableAccounts :: (MonadUnliftIO m) => Ctx -> Config -> Store -> AccountKind -> Network -> PublicSeed -> Natural -> ExceptT String (DB m) [(Natural, XPubKey)]
+recoverableAccounts ctx cfg store kind net seed accountGap = go 0 0
   where
     go index unpaid
       | unpaid >= accountGap = return []
       | otherwise = do
-          keyM <- liftIO $ seedAccountKey seed net index
+          keyM <- liftIO $ seedAccountKey seed kind net index
           case keyM of
             Nothing -> go (index + 1) unpaid
             Just key -> do
@@ -101,25 +104,35 @@ recoverableAccounts ctx cfg store net seed accountGap = go 0 0
               case held of
                 Just _ -> go (index + 1) unpaid
                 Nothing -> do
-                  paid <- (> 0) <$> scanChain ctx store key extDeriv (configGap cfg) 0
+                  paid <- (> 0) <$> scanChain ctx store kind key extDeriv (configGap cfg) 0
                   if paid
                     then ((index, key) :) <$> go (index + 1) 0
                     else go (index + 1) (unpaid + 1)
 
--- | Recover the accounts of a seed on a network: those found paid are
--- created, named after the network and their index, and synced, and every
--- account of the seed records its fingerprint. Returns the sync of each
--- account created, in the order of their indices.
+-- | Recover the accounts of a seed on a network, of every kind the network
+-- has, the BIP44 accounts first: those found paid are created, named after
+-- the network, their index and their kind, and synced, and every account
+-- of the seed records its fingerprint. The gap of accounts counts for each
+-- kind apart. Returns the sync of each account created, in the order of
+-- their kinds and indices.
 recoverSeed :: (MonadUnliftIO m) => Ctx -> Config -> Store -> Network -> PublicSeed -> Natural -> ExceptT String (DB m) [SyncRes]
 recoverSeed ctx cfg store net seed accountGap = do
-  found <- recoverableAccounts ctx cfg store net seed accountGap
-  created <- forM found $ \(index, key) -> insertAccount net ctx (recoveredName net index) key (Just (seedFingerprint seed))
+  created <- fmap concat . forM (networkKinds net) $ \kind -> do
+    found <- recoverableAccounts ctx cfg store kind net seed accountGap
+    forM found $ \(index, key) -> insertAccount kind net ctx (recoveredName kind net index) key (Just (seedFingerprint seed))
   lift $ recordFingerprint ctx seed
   forM created $ \(accId, _) -> sync ctx cfg store net accId False
 
--- | The name of a recovered account: the network and the index, as in btc0
-recoveredName :: Network -> Natural -> Text
-recoveredName net index = cs net.name <> cs (show index)
+-- | The name of a recovered account: the network and the index, as in
+-- btc0, for a BIP44 account, and with -segwit after them, as in
+-- btc0-segwit, for a BIP84 one
+recoveredName :: AccountKind -> Network -> Natural -> Text
+recoveredName kind net index = cs net.name <> cs (show index) <> suffix
+  where
+    suffix :: Text
+    suffix = case kind of
+      Bip44 -> Text.empty
+      Bip84 -> Text.pack "-segwit"
 
 {- Synchronisation -}
 

@@ -75,8 +75,14 @@ def hash_vector_problems(v):
 
 
 def vector_problems(v):
+    """The address must be the P2PKH or the P2WPKH address of the key, the
+    kinds hw signs from; the signature must be valid for it, and for a vector
+    hw must match, one hw produces: the header byte of the kind of address,
+    31 or 32 for P2PKH and 39 or 40 for P2WPKH (BIP-137), and a low S"""
     problems = message_problems(v)
-    address_hash = btc.p2pkh_hash(v["address"])
+    kind, address_hash = btc.signing_address_hash(v["address"])
+    if kind == "p2sh":
+        return problems + ["the address is a P2SH address, which hw does not sign from"]
     keys = btc.private_keys(v["key"], v["network"])
     matching = [k for k in keys if btc.hash160(btc.serialize_pubkey(btc.point_mul(k, btc.G))) == address_hash]
     if not matching:
@@ -94,8 +100,9 @@ def vector_problems(v):
     elif not valid:
         problems.append("the signature is not valid")
     elif expect == "match":
-        if signature[0] not in (31, 32):
-            problems.append("hw only produces header bytes 31 and 32")
+        headers = {"p2pkh": (31, 32), "p2wpkh": (39, 40)}[kind]
+        if signature[0] not in headers:
+            problems.append(f"hw only produces header bytes {headers[0]} and {headers[1]} for a {kind} address")
         if int.from_bytes(signature[33:], "big") > btc.N // 2:
             problems.append("hw only produces low-S signatures")
     return problems
@@ -132,12 +139,13 @@ def rejected_problems(v):
 
 def verification_problems(v):
     """The verdict of a verification vector: refused when the address is not
-    P2PKH or the signature is not 65 bytes in base64, else valid when the
-    signature recovers the key of the address, compressed or not as its header
-    byte says, else invalid"""
+    one of a key (P2PKH, P2WPKH or P2SH) or the signature is not 65 bytes in
+    base64, else valid when the signature recovers the key of the address,
+    compressed or not as its header byte says, whatever the header byte of a
+    compressed key, 31 to 42, else invalid"""
     problems = message_problems(v)
     try:
-        address_hash = btc.p2pkh_hash(v["address"])
+        kind, address_hash = btc.signing_address_hash(v["address"])
         signature = base64.b64decode(v["signature"], validate=True)
         if len(signature) != 65:
             raise ValueError(f"the signature has {len(signature)} bytes")
@@ -145,7 +153,17 @@ def verification_problems(v):
         verdict = "refused"
     else:
         recovered = btc.recover_pubkey(signature, message_bytes(v))
-        valid = recovered is not None and btc.hash160(btc.serialize_pubkey(*recovered)) == address_hash
+        if recovered is None:
+            valid = False
+        else:
+            point, compressed = recovered
+            key_hash = btc.hash160(btc.serialize_pubkey(point, compressed))
+            if kind == "p2pkh":
+                valid = key_hash == address_hash
+            elif kind == "p2wpkh":
+                valid = compressed and key_hash == address_hash
+            else:
+                valid = compressed and btc.hash160(b"\x00\x14" + key_hash) == address_hash
         verdict = "valid" if valid else "invalid"
     if verdict != v["result"]:
         problems.append(f"expected {v['result']}, got {verdict}")

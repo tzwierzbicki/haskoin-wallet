@@ -136,8 +136,8 @@
           "type": "debit",
           "amount": 0,
           "fee": 10000,
-          "size": 343,
-          "feeByte": 29
+          "size": 261,
+          "feeByte": 38
         }
       },
       "comment": "A P2PKH coin and a P2WPKH coin of the same key swept together, as preparesweep builds it: a legacy input and a witness input in one transaction."

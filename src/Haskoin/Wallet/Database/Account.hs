@@ -4,9 +4,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
--- | The accounts of the wallet: a BIP44 account of a network, identified by
--- its key, with the fingerprint of its seed once hw has learnt it, its
--- balances and its address counts.
+-- | The accounts of the wallet: an account of a network, of either kind
+-- ("Haskoin.Wallet.Keys".'AccountKind'), identified by its key, with the
+-- fingerprint of its seed once hw has learnt it, its balances and its
+-- address counts.
 module Haskoin.Wallet.Database.Account where
 
 import Conduit (MonadUnliftIO)
@@ -29,7 +30,7 @@ import Database.Esqueleto.Legacy as E hiding (isNothing)
 import qualified Database.Persist as P
 import Haskoin
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Keys (PublicSeed (..), bip44Deriv, xPubIndex)
+import Haskoin.Wallet.Keys (AccountKind (..), PublicSeed (..), accountDeriv, checkKindOnNetwork, kindName, kindNamed, kindOfPurpose, kindPurpose, xPubIndex)
 import Numeric.Natural (Natural)
 
 {- Accounts in JSON -}
@@ -56,6 +57,7 @@ accountPairs :: DBAccount -> [Pair] -> [Pair]
 accountPairs acc moreBalances =
   [ "name" .= dBAccountName acc,
     "index" .= dBAccountIndex acc,
+    "type" .= kindName (accountKind acc),
     "network" .= dBAccountNetwork acc,
     "derivation" .= pathToStr (accountPath acc),
     "external" .= dBAccountExternal acc,
@@ -73,13 +75,16 @@ accountPairs acc moreBalances =
     "created" .= dBAccountCreated acc
   ]
 
+-- An account written before hw had kinds names none: it is a BIP44 one
 instance FromJSON DBAccount where
   parseJSON =
     withObject "DBAccount" $ \o -> do
       bal <- o .: "balance"
+      kind <- maybe (return Bip44) kindOf =<< o .:? "type"
       DBAccount
         <$> o .: "name"
         <*> o .: "index"
+        <*> return (fromIntegral (kindPurpose kind))
         <*> o .: "network"
         <*> o .: "external"
         <*> o .: "internal"
@@ -89,6 +94,8 @@ instance FromJSON DBAccount where
         <*> (bal .: "unconfirmed")
         <*> (bal .: "coins")
         <*> o .: "created"
+    where
+      kindOf name = maybe (fail ("Unknown account type " <> cs name)) return (kindNamed name)
 
 {- The fields of an account -}
 
@@ -107,10 +114,16 @@ accountXPubKey ctx acc =
   fromMaybe (error "Invalid XPubKey in database") $
     xPubImport (accountNetwork acc) ctx (dBAccountXPubKey acc)
 
--- | The BIP44 path of the account, m/44'/coin'/index', from its network
--- and index
+-- | The kind of the account, from its purpose
+accountKind :: DBAccount -> AccountKind
+accountKind acc =
+  fromMaybe (error ("Invalid account purpose in database: " <> show (dBAccountPurpose acc))) $
+    kindOfPurpose (fromIntegral (dBAccountPurpose acc))
+
+-- | The path of the account, m/purpose'/coin'/index', from its kind, its
+-- network and its index
 accountPath :: DBAccount -> HardPath
-accountPath acc = bip44Deriv (accountNetwork acc) (accountIndex acc)
+accountPath acc = accountDeriv (accountKind acc) (accountNetwork acc) (accountIndex acc)
 
 -- | The fingerprint of the seed of the account, when hw has learnt it
 accountFingerprint :: DBAccount -> Maybe Fingerprint
@@ -125,16 +138,17 @@ accountWithKey net ctx key = fmap entityPair <$> P.getBy (UniqueXPubKey $ xPubEx
 entityPair :: Entity a -> (P.Key a, a)
 entityPair e = (entityKey e, entityVal e)
 
--- | The next account of a seed on a network: the lowest index whose key
--- the database does not hold, with that key. An index whose child key is
--- invalid, which BIP32 says to skip, is passed over as for an address. An
--- account deleted leaves its index free, and creating it again gives the
--- same account.
-nextAccount :: (MonadUnliftIO m) => Network -> Ctx -> PublicSeed -> DB m (Natural, XPubKey)
-nextAccount net ctx seed = go 0
+-- | The next account of a seed on a network, of a kind: the lowest index
+-- whose key the database does not hold, with that key. An index whose
+-- child key is invalid, which BIP32 says to skip, is passed over as for an
+-- address. An account deleted leaves its index free, and creating it again
+-- gives the same account. The kinds count apart: the first BIP84 account
+-- of a seed is at index 0, whatever BIP44 accounts the seed has.
+nextAccount :: (MonadUnliftIO m) => AccountKind -> Network -> Ctx -> PublicSeed -> DB m (Natural, XPubKey)
+nextAccount kind net ctx seed = go 0
   where
     go i = do
-      keyM <- liftIO $ seedAccountKey seed net i
+      keyM <- liftIO $ seedAccountKey seed kind net i
       case keyM of
         Nothing -> go (i + 1)
         Just key -> do
@@ -142,11 +156,11 @@ nextAccount net ctx seed = go 0
           maybe (return (i, key)) (const $ go (i + 1)) held
 
 -- | Whether an account of the wallet is of the seed: one derives from it,
--- on its network at its index
+-- on its network at its index, along the path of its kind
 seedHasAccount :: (MonadUnliftIO m) => Ctx -> PublicSeed -> DB m Bool
 seedHasAccount ctx seed = do
   accounts <- getAccounts
-  derived <- forM accounts $ \(_, acc) -> liftIO $ seedAccountKey seed (accountNetwork acc) (accountIndex acc)
+  derived <- forM accounts $ \(_, acc) -> liftIO $ seedAccountKey seed (accountKind acc) (accountNetwork acc) (accountIndex acc)
   return $ or [key == Just (accountXPubKey ctx acc) | ((_, acc), key) <- zip accounts derived]
 
 existsAccount :: (MonadUnliftIO m) => Text -> DB m Bool
@@ -173,18 +187,21 @@ checkNameFree name = do
 
 {- Storing accounts -}
 
--- | Store an account of a network under a name, from its public key, with
--- the fingerprint of its seed when known
+-- | Store an account of a kind on a network under a name, from its public
+-- key, with the fingerprint of its seed when known. A kind the network
+-- does not have is refused.
 insertAccount ::
   (MonadUnliftIO m) =>
+  AccountKind ->
   Network ->
   Ctx ->
   Text ->
   XPubKey ->
   Maybe Fingerprint ->
   ExceptT String (DB m) (DBAccountId, DBAccount)
-insertAccount net ctx name xpub fingerprintM = do
+insertAccount kind net ctx name xpub fingerprintM = do
   checkNameFree name
+  liftEither $ checkKindOnNetwork net kind
   holderM <- lift $ accountWithKey net ctx xpub
   forM_ holderM $ throwError . keyTaken . snd
   time <- liftIO getCurrentTime
@@ -192,6 +209,7 @@ insertAccount net ctx name xpub fingerprintM = do
         DBAccount
           { dBAccountName = name,
             dBAccountIndex = fromIntegral $ xPubIndex xpub,
+            dBAccountPurpose = fromIntegral (kindPurpose kind),
             dBAccountNetwork = cs net.name,
             dBAccountExternal = 0,
             dBAccountInternal = 0,
@@ -336,15 +354,15 @@ updateAccountBalances accId = do
 {- The fingerprint of the seed -}
 
 -- | Record the fingerprint of a seed on each of its accounts in the
--- database, those whose key the seed derives. A command that holds the
--- mnemonic does this, so that every account of the seed, on every network,
--- shows the fingerprint.
+-- database, those whose key the seed derives, along the path of their
+-- kind. A command that holds the mnemonic does this, so that every account
+-- of the seed, on every network, shows the fingerprint.
 recordFingerprint :: (MonadUnliftIO m) => Ctx -> PublicSeed -> DB m ()
 recordFingerprint ctx seed = do
   accs <- getAccounts
   forM_ accs $ \(accId, acc) -> do
     let net = accountNetwork acc
-    derivedM <- liftIO $ seedAccountKey seed net (accountIndex acc)
+    derivedM <- liftIO $ seedAccountKey seed (accountKind acc) net (accountIndex acc)
     when (fmap (xPubExport net ctx) derivedM == Just (dBAccountXPubKey acc) && dBAccountFingerprint acc /= Just fingerprint) $
       P.update accId [DBAccountFingerprint P.=. Just fingerprint]
   where

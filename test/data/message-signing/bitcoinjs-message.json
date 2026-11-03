@@ -81,10 +81,10 @@
       "address": "3JvL6Ymt8MVWiCNHC7oWU6nLeHNJKLZGLN",
       "message": "vires is numeris",
       "signature": "JF8nHqFr3K2UKYahhX3soVeoW8W1ECNbr0wfck7lzyXjCS5Q16Ek45zyBuy1Fiy9sTPKVgsqqOuPvbycuVSSVl8=",
-      "result": "refused",
+      "result": "valid",
       "source": "bitcoinjs-message fixtures.json valid.verify",
       "sourceUrl": "https://github.com/bitcoinjs/bitcoinjs-message/blob/c43430f4c03c/test/fixtures.json",
-      "comment": "bitcoinjs-message verifies SegWit signatures with the BIP-137 header bytes (36 here, for P2SH-P2WPKH). The Bitcoin Signed Message format does not sign from a P2SH address: hw refuses the address."
+      "comment": "bitcoinjs-message verifies SegWit signatures with the BIP-137 header bytes (36 here, for P2SH-P2WPKH), and so does hw: the key the signature recovers gives the address."
     },
     {
       "name": "bitcoinjs-message/verify/p2wpkh",
@@ -92,10 +92,10 @@
       "address": "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
       "message": "vires is numeris",
       "signature": "KF8nHqFr3K2UKYahhX3soVeoW8W1ECNbr0wfck7lzyXjCS5Q16Ek45zyBuy1Fiy9sTPKVgsqqOuPvbycuVSSVl8=",
-      "result": "refused",
+      "result": "valid",
       "source": "bitcoinjs-message fixtures.json valid.verify",
       "sourceUrl": "https://github.com/bitcoinjs/bitcoinjs-message/blob/c43430f4c03c/test/fixtures.json",
-      "comment": "BIP-137 header byte 40, for P2WPKH. The format does not sign from a SegWit address: hw refuses the address."
+      "comment": "BIP-137 header byte 40, for P2WPKH: the key the signature recovers gives the address, so the signature is valid for it."
     },
     {
       "name": "bitcoinjs-message/verify/wrong-message",

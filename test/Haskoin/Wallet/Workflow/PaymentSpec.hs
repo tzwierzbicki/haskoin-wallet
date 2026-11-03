@@ -71,7 +71,7 @@ feesSpec ctx =
         run <- hw home ["fees"] []
         forM_
           [ "Fee rates of btc, from blocks 800000 to 800001\n",
-            "  low 9, median 12, high 118 sat/byte\n",
+            "  low 9, median 12, high 118 sat/vB\n",
             "  the latest block was mined 3 minutes ago\n"
           ]
           $ \line -> run `shouldSatisfy` printed line
@@ -96,8 +96,8 @@ feesSpec ctx =
         synced home
         let file = home </> "unsigned.psbt"
         run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", file] [""]
-        run `shouldSatisfy` printed "low 9, median 12, high 118 sat/byte"
-        run `shouldSatisfy` printed "Which fee rate? Type low, median, high or a number of satoshis per byte [median]"
+        run `shouldSatisfy` printed "low 9, median 12, high 118 sat/vB"
+        run `shouldSatisfy` printed "Which fee rate? Type low, median, high or a number of satoshis per virtual byte [median]"
         (txSignDataFeeRate . txFileData <$> readTxFile ctx file) `shouldReturn` Just 12
 
     it "are taken at the level typed" $
@@ -119,7 +119,7 @@ feesSpec ctx =
         synced home
         let file = home </> "unsigned.psbt"
         run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", file, "--fee-rate", "low"] []
-        run `shouldSatisfy` printed "The low rate recent blocks paid: 9 satoshis per byte"
+        run `shouldSatisfy` printed "The low rate recent blocks paid: 9 satoshis per virtual byte"
         run `shouldNotSatisfy` printed "Which fee rate?"
         (txSignDataFeeRate . txFileData <$> readTxFile ctx file) `shouldReturn` Just 9
 
@@ -134,8 +134,8 @@ feesSpec ctx =
         stuck <- sentPayment home
         let file = home </> "replacement.json"
         run <- hw home ["bumpfee", stuck, "--output", file] [""]
-        run `shouldSatisfy` printed "The transaction pays 10 satoshis per byte: a replacement must pay at least 11"
-        run `shouldSatisfy` printed "Which fee rate? Type median, high or a number of satoshis per byte [median]"
+        run `shouldSatisfy` printed "The transaction pays 10 satoshis per virtual byte: a replacement must pay at least 11"
+        run `shouldSatisfy` printed "Which fee rate? Type median, high or a number of satoshis per virtual byte [median]"
         (txSignDataFeeRate . txFileData <$> readTxFile ctx file) `shouldReturn` Just 12
 
     it "are offered to bumpfee beside a number, asked again when below what a replacement must pay" $
@@ -143,7 +143,7 @@ feesSpec ctx =
         stuck <- sentPayment home
         let file = home </> "replacement.json"
         run <- hw home ["bumpfee", stuck, "--output", file] ["10", "11"]
-        run `shouldSatisfy` printed "The fee rate must be at least 11 satoshis per byte"
+        run `shouldSatisfy` printed "The fee rate must be at least 11 satoshis per virtual byte"
         (txSignDataFeeRate . txFileData <$> readTxFile ctx file) `shouldReturn` Just 11
 
     -- The one transaction of the paid chain pays 1000 satoshis for 85
@@ -157,7 +157,7 @@ feesSpec ctx =
         stuck <- txidOf =<< txOf =<< answer home ["sendtx", nosig, "--yes"] []
         let file = home </> "replacement.json"
         run <- hw home ["bumpfee", stuck, "--output", file] ["25"]
-        run `shouldSatisfy` printed "Which fee rate? Type a number of satoshis per byte, at least 21:"
+        run `shouldSatisfy` printed "Which fee rate? Type a number of satoshis per virtual byte, at least 21:"
         (txSignDataFeeRate . txFileData <$> readTxFile ctx file) `shouldReturn` Just 25
 
 {- Receiving -}
@@ -511,9 +511,9 @@ minConfSpec ctx =
 
 {- A high fee rate -}
 
--- | The question of preparetx and preparesweep at 101 satoshis per byte
+-- | The question of preparetx and preparesweep at 101 satoshis per virtual byte
 highFeeQuestion :: Text
-highFeeQuestion = "The fee rate of 101 satoshis per byte is above 100, the most hw takes without asking. Prepare the transaction anyway? [y/N] "
+highFeeQuestion = "The fee rate of 101 satoshis per virtual byte is above 100, the most hw takes without asking. Prepare the transaction anyway? [y/N] "
 
 -- The payment of 20000 satoshis is 226 bytes: its fee is 22600 at 100
 -- satoshis a byte, and 22826 at 101. The sweep of the coin of 30000 of the
@@ -521,7 +521,7 @@ highFeeQuestion = "The fee rate of 101 satoshis per byte is above 100, the most 
 -- destination. Where nothing is typed, a question would cancel the command.
 highFeeSpec :: Ctx -> Spec
 highFeeSpec ctx =
-  describe "A fee rate above 100 satoshis per byte" $ do
+  describe "A fee rate above 100 satoshis per virtual byte" $ do
     it "is not asked about at 100, the highest rate taken without asking" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home

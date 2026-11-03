@@ -2,9 +2,10 @@
 
 Haskoin Wallet (`hw`) is a command-line wallet for Bitcoin and Bitcoin Cash.
 It makes mnemonics as [BIP39] describes, and derives accounts and addresses as
-[BIP44] does. It keeps its accounts in a SQLite database, and asks a
-[haskoin-store] server about the chain. The database holds public keys only.
-Your mnemonic is never written to disk.
+[BIP44] does, with legacy addresses, or as [BIP84] does, with native SegWit
+addresses, which pay lower fees. It keeps its accounts in a SQLite database,
+and asks a [haskoin-store] server about the chain. The database holds public
+keys only. Your mnemonic is never written to disk.
 
 `hw` is made for cold storage. The mnemonic can stay on an offline computer,
 while an online computer watches the accounts and prepares the payments. A
@@ -242,18 +243,26 @@ hw mnemonic --parts 3
 
 **`hw createacc NAME`** creates an account from a mnemonic and passphrase,
 each typed twice. It stores the public key of the account, at the next free
-index of the seed on the network.
+index of the seed on the network. An account is of one of two kinds. A
+`bip44` account, the default, has legacy P2PKH addresses, which start with
+`1` on Bitcoin, at `m/44'/coin'/index'`. A `bip84` account has native SegWit
+P2WPKH addresses, which start with `bc1q`, at `m/84'/coin'/index'`, and its
+payments pay about 40% less in fees. Other wallets make `bip84` accounts by
+default. Bitcoin Cash has no SegWit, so it has `bip44` accounts only.
 
 ```console
 hw createacc savings
+hw createacc spending --type bip84
 hw createacc cash --network bch
 hw createacc vault --parts 3
 ```
 
 **`hw recover`** finds the accounts of a mnemonic that were paid. It adds
-them, named `btc0`, `btc1` and so on, and syncs them. It stops after 10
-accounts in a row without a payment, or the number `--account-gap` gives. It
-needs the mnemonic and the server at the same time.
+them, named `btc0`, `btc1` and so on for the `bip44` accounts and
+`btc0-segwit`, `btc1-segwit` and so on for the `bip84` ones, and syncs them.
+It stops after 10 accounts in a row without a payment, or the number
+`--account-gap` gives, for each kind of account apart. It needs the mnemonic
+and the server at the same time.
 
 ```console
 hw recover --network btc --account-gap 20
@@ -270,10 +279,10 @@ hw checkmnemonic --account savings
 **`hw importacc FILE`** adds them to another wallet. The file is in the
 format of [BIP 329](https://github.com/bitcoin/bips/blob/master/bip-0329.mediawiki),
 which other wallets read and write. An account goes in as its public key,
-its name, its network and the fingerprint of its seed, then the labels of its
-receiving addresses and transactions, and the coins locked with `lockcoin`.
-The file holds no private key. `--account` writes one account instead of all
-of them.
+its name, its network, its kind and the fingerprint of its seed, then the
+labels of its receiving addresses and transactions, and the coins locked with
+`lockcoin`. The file holds no private key. `--account` writes one account
+instead of all of them.
 
 `importacc` creates the accounts the wallet does not have, named after the
 label of their key, and renames those it has when the file is one of `hw`,
@@ -302,18 +311,26 @@ derivation path, the two chains of addresses, and a checksum. When `hw` does
 not know the fingerprint, the descriptor names no origin, which a hardware
 wallet needs, and the answer says so. `--account` shows one account.
 
+A `bip84` account gives `wpkh([bc560f95/84h/0h/0h]xpub.../<0;1>/*)#5nktextl`,
+the script function naming the kind.
+
 `importacc` reads a descriptor back, and the files other wallets export an
 account in: a descriptor on a line, as Sparrow and Coldcard write it, a key
 alone, the file of Bitcoin Core's `listdescriptors`, or the generic JSON of a
-Coldcard. `hw` holds BIP44 accounts, so a descriptor of another kind, such as
-`wpkh`, is refused, and the import goes on. A descriptor names no network, so
-give `--network`, or set a default network. The account it adds is named after
-its network and index, as `recover` names one: `renameacc` renames it.
+Coldcard. `hw` holds `bip44` and `bip84` accounts, so a descriptor of another
+kind, such as `sh(wpkh(...))`, is refused, and the import goes on. A key
+alone says its kind when it is a `zpub` or a `vpub`, which some wallets write
+for a `bip84` account; an `xpub` or a `tpub` alone is taken for a `bip44`
+account, or for a `bip84` one with `--type bip84`. A descriptor names no
+network, so give `--network`, or set a default network. The account it adds
+is named after its network, index and kind, as `recover` names one:
+`renameacc` renames it.
 
 ```console
 hw descriptor --account vault               # for Sparrow or Bitcoin Core
 hw importacc coldcard-export.json --network btc
 hw renameacc btc0 coldcard
+hw importacc ledger-xpub.txt --network btc --type bip84
 ```
 
 **`hw accounts`** shows the accounts with their balances. Each takes two
@@ -424,9 +441,11 @@ hw unlockcoin TXHASH:1
 ### Payments
 
 **`hw fees`** shows the low, median and high fee rates of the latest six
-blocks, in satoshis per byte. The commands that take `--fee-rate` show the same
-rates and ask when you give none. Type a level, or a number of satoshis per
-byte.
+blocks, in satoshis per virtual byte, the unit the network charges fees in and
+every wallet shows: the bytes of a signature in a witness count a quarter. The
+commands that take `--fee-rate` show the same rates and ask when you give
+none. Type a level, or a number of satoshis per virtual byte. The sizes `hw`
+shows are in virtual bytes as well.
 
 ```console
 hw fees
@@ -565,7 +584,7 @@ text Bitcoin Core and HWI give, in version 0 of the format or in version 2
 (BIP 370), which Bitcoin Core 32 and later write by default. A file is
 signed back in its version. `importtx` and `sendtx --input` take a file
 another signer returned, finalized or not: `hw` finalizes the signature of a
-P2PKH coin of the account itself, and keeps from the version it holds what
+P2PKH or P2WPKH coin of the account itself, and keeps from the version it holds what
 such a file leaves out, the paths of its signed inputs, the fee rate and the
 label. `sendtx --input` also takes the signed transaction alone, in
 hexadecimal as Core's `finalizepsbt` gives it, when the wallet holds the
@@ -620,8 +639,12 @@ hw sendtx --input signed.psbt
 
 **`hw signmsg ADDRESS MESSAGE`** signs a message with the key of an address of
 the wallet. `--output` writes the signed message to a file instead of printing
-it. **`hw verifymsg`** checks a signature from `hw`, Bitcoin Core or another
-wallet, from any P2PKH address.
+it. From a P2PKH address, Bitcoin Core and every wallet verify the signature.
+From a native SegWit address, the signature has the header byte of BIP 137,
+which Sparrow, Trezor, Ledger and Coldcard give and verify; Bitcoin Core
+verifies no signature from such an address. **`hw verifymsg`** checks a
+signature from `hw`, Bitcoin Core or another wallet, from any P2PKH or SegWit
+address of one key, whatever header byte the wallet that made it chose.
 
 ```console
 hw signmsg MYADDRESS "I control this address" --output signed.txt
@@ -676,15 +699,17 @@ To restore a backup, replace `~/.hw/accounts.sqlite` with the copy, or point
   in the configuration file.
 - **Choosing a fee rate needs the server.** Without `--fee-rate`, `hw` reads the
   rates of recent blocks, and stops if it cannot reach the server. A rate above
-  100 satoshis per byte asks for a confirmation, since it is more often a typo.
+  100 satoshis per virtual byte asks for a confirmation, since it is more
+  often a typo.
 - **A wallet behind the chain asks before preparing.** When the best block it
   knows is more than eight hours old, `preparetx`, `preparesendall` and
   `bumpfee` ask whether to go on with a lock time of 0. A `sync` first is the
   better answer: it also finds the coins spent or received since. `--yes` goes
   on without asking.
-- **The addresses of `hw` are legacy P2PKH.** They start with `1` on Bitcoin.
-  `hw` can pay any kind of address. `signmsg` and `verifymsg` work with P2PKH
-  addresses only.
+- **A `bip44` account has legacy P2PKH addresses,** which start with `1` on
+  Bitcoin, and a `bip84` account native SegWit ones, which start with `bc1q`.
+  `hw` can pay any kind of address from either. `signmsg` and `verifymsg` work
+  with P2PKH and SegWit addresses of one key, not with Taproot ones.
 - **Bitcoin Cash does not replace transactions,** so `bumpfee` works on Bitcoin
   only.
 - **Private keys and legacy addresses read the same on Bitcoin and Bitcoin
@@ -729,6 +754,7 @@ not lost, but take care when you move them:
 
 [BIP39]: https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki
 [BIP44]: https://github.com/bitcoin/bips/blob/master/bip-0044.mediawiki
+[BIP84]: https://github.com/bitcoin/bips/blob/master/bip-0084.mediawiki
 [BIP125]: https://github.com/bitcoin/bips/blob/master/bip-0125.mediawiki
 [haskoin-store]: https://github.com/haskoin/haskoin-store
 [Stack]: https://docs.haskellstack.org

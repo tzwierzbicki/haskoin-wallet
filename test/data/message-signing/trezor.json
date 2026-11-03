@@ -151,6 +151,52 @@
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signmessage.py, case \"p2pkh long message\" (Bitcoin, m/44h/0h/0h/0/0)",
       "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_signmessage.py",
       "comment": "Trezor test mnemonic (12 x \"all\"), no passphrase. Signature converted from hex to base64. Trezor path m/44h/0h/0h/0/0 is hw account 0, chain 0, index 0. The message is \"VeryLongMessage!\" repeated 64 times (1024 bytes, 3-byte length prefix)."
+    },
+    {
+      "name": "trezor/bitcoin/segwit-native-bip137",
+      "network": "btc",
+      "key": {
+        "mnemonic": "all all all all all all all all all all all all",
+        "passphrase": "",
+        "path": "m/84'/0'/0'/0/0"
+      },
+      "address": "bc1qannfxke2tfd4l7vhepehpvt05y83v3qsf6nfkk",
+      "message": "This is an example of a signed message.",
+      "signature": "KLVddgDZ6afipJFV3fPP2455bCB/qrgzAQ+kH7eCiIm8R89iNIp6qgkjwIMqWJ+rVB6PEutU+3EckOIwfw9msZQ=",
+      "source": "Trezor firmware tests/device_tests/bitcoin/test_signmessage.py, case \"segwit-native\" (Bitcoin, m/84h/0h/0h/0/0)",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_signmessage.py",
+      "comment": "Trezor test mnemonic (12 x \"all\"), no passphrase. Signature converted from hex to base64. The P2WPKH address of the key, signed from with the header byte 40 of BIP 137 (39 + the recovery id 1), as hw signs from the address of a bip84 account."
+    },
+    {
+      "name": "trezor/testnet/segwit-native-bip137",
+      "network": "btctest",
+      "key": {
+        "mnemonic": "all all all all all all all all all all all all",
+        "passphrase": "",
+        "path": "m/84'/1'/0'/0/0"
+      },
+      "address": "tb1qkvwu9g3k2pdxewfqr7syz89r3gj557l3uuf9r9",
+      "message": "This is an example of a signed message.",
+      "signature": "J3WLM5M5atn+SPbOgfY0EBReeytppd/B1ItebmI+keCOOvtgvaFUb5xvn7W9CkGIe3hMJmA23UtAFaCrwRN9qh0=",
+      "source": "Trezor firmware tests/device_tests/bitcoin/test_signmessage.py, case \"segwit-native\" (Testnet, m/84h/1h/0h/0/0)",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_signmessage.py",
+      "comment": "The same on testnet: the header byte 39 of BIP 137 (39 + the recovery id 0)."
+    },
+    {
+      "name": "trezor/bitcoin/segwit-native-long-message",
+      "network": "btc",
+      "key": {
+        "mnemonic": "all all all all all all all all all all all all",
+        "passphrase": "",
+        "path": "m/84'/0'/0'/0/0"
+      },
+      "address": "bc1qannfxke2tfd4l7vhepehpvt05y83v3qsf6nfkk",
+      "message": "VeryLongMessage!",
+      "messageRepeat": 64,
+      "signature": "KMb4biVeqnaMRH1jXZHaAWMaxUryI8LBgtT6NnbP7K5KGZrTOnT+BPtGw5QyrLjYPedNqQ9fARI7O32LwlK8f3E=",
+      "source": "Trezor firmware tests/device_tests/bitcoin/test_signmessage.py, test_signmessage_long, case \"segwit-native\" (Bitcoin, m/84h/0h/0h/0/0)",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_signmessage.py",
+      "comment": "A message of 1024 bytes, signed from the P2WPKH address with the header byte of BIP 137."
     }
   ],
   "verification": [
@@ -322,6 +368,61 @@
       "source": "Trezor test_verifymessage.py test_verify_utf",
       "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_verifymessage.py",
       "comment": "EXPECTED TO BE INVALID, THIS IS NORMAL. The same words with their accents decomposed (NFKD). Trezor normalizes a message to NFC before hashing it, so it verifies this spelling too; hw verifies the bytes as given, like Bitcoin Core, and these are the bytes of another message."
+    },
+    {
+      "name": "trezor/verify/segwit-native-legacy-header",
+      "network": "btc",
+      "address": "bc1qannfxke2tfd4l7vhepehpvt05y83v3qsf6nfkk",
+      "message": "This is an example of a signed message.",
+      "signature": "ILVddgDZ6afipJFV3fPP2455bCB/qrgzAQ+kH7eCiIm8R89iNIp6qgkjwIMqWJ+rVB6PEutU+3EckOIwfw9msZQ=",
+      "result": "valid",
+      "source": "Trezor firmware tests/device_tests/bitcoin/test_signmessage.py, case \"segwit-native\" with no_script_type=True",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_signmessage.py",
+      "comment": "The signature of the key of the P2WPKH address with the header byte 32 of a P2PKH address, as Electrum signs from a SegWit address: the key it recovers gives the address, so hw takes it."
+    },
+    {
+      "name": "trezor/verify/segwit-p2sh-bip137",
+      "network": "btc",
+      "address": "3L6TyTisPBmrDAj6RoKmDzNnj4eQi54gD2",
+      "message": "This is an example of a signed message.",
+      "signature": "I3RN5FFvrFwUCAgBVmRRajL+rZTeiXdc7H4k28JP4TMHWsCTAcTMjhl76ktkgWYdW46b8Z2Le4o4Ls21PC7gdQ0=",
+      "result": "valid",
+      "source": "Trezor firmware tests/device_tests/bitcoin/test_signmessage.py, case \"segwit-p2sh\" (Bitcoin, m/49h/0h/0h/0/0)",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_signmessage.py",
+      "comment": "The P2SH-P2WPKH address of the key, signed from with the header byte 35 of BIP 137: hw signs from no such address, and verifies a signature from one when the key it recovers gives the address."
+    },
+    {
+      "name": "trezor/verify/segwit-p2sh-legacy-header",
+      "network": "btc",
+      "address": "3L6TyTisPBmrDAj6RoKmDzNnj4eQi54gD2",
+      "message": "This is an example of a signed message.",
+      "signature": "H3RN5FFvrFwUCAgBVmRRajL+rZTeiXdc7H4k28JP4TMHWsCTAcTMjhl76ktkgWYdW46b8Z2Le4o4Ls21PC7gdQ0=",
+      "result": "valid",
+      "source": "Trezor firmware tests/device_tests/bitcoin/test_signmessage.py, case \"segwit-p2sh\" with no_script_type=True",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_signmessage.py",
+      "comment": "The same signature with the header byte 31 of a P2PKH address."
+    },
+    {
+      "name": "trezor/verify/testnet-segwit-p2sh-bip137",
+      "network": "btctest",
+      "address": "2N4Q5FhU2497BryFfUgbqkAJE87aKHUhXMp",
+      "message": "This is an example of a signed message.",
+      "signature": "I+85/TiMNCXWqqBCdNzVx91MKDpBG2FkQ0dPvN5d2WYFDZG8fFfpV48o792Eyam8ukFfk8Vye10/K/PeRtcISJY=",
+      "result": "valid",
+      "source": "Trezor firmware tests/device_tests/bitcoin/test_signmessage.py, case \"segwit-p2sh\" (Testnet, m/49h/1h/0h/0/0)",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_signmessage.py",
+      "comment": "The P2SH-P2WPKH address of the key on testnet, with the header byte 35 of BIP 137."
+    },
+    {
+      "name": "trezor/verify/segwit-native-other-key",
+      "network": "btc",
+      "address": "bc1qannfxke2tfd4l7vhepehpvt05y83v3qsf6nfkk",
+      "message": "This is an example of a signed message.",
+      "signature": "I3RN5FFvrFwUCAgBVmRRajL+rZTeiXdc7H4k28JP4TMHWsCTAcTMjhl76ktkgWYdW46b8Z2Le4o4Ls21PC7gdQ0=",
+      "result": "invalid",
+      "source": "Trezor firmware tests/device_tests/bitcoin/test_signmessage.py, cases \"segwit-p2sh\" and \"segwit-native\"",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_signmessage.py",
+      "comment": "The signature of the key at m/49h/0h/0h/0/0 checked against the P2WPKH address of the key at m/84h/0h/0h/0/0: another key."
     }
   ]
 }

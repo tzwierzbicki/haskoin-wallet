@@ -27,6 +27,7 @@ import Haskoin.Wallet.Tx.CoinSelection
 import Haskoin.Wallet.Config (Config)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.RawTx
+import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.Building
 import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..))
@@ -51,7 +52,7 @@ spec =
     changeBackSpec ctx
 
 -- Every test pays from coins of the test wallet, funded by one synthetic
--- transaction, at 10 satoshis per byte with a dust limit of 546. The sizes
+-- transaction, at 10 satoshis per virtual byte with a dust limit of 546. The sizes
 -- are those of the coin selection: 10 bytes of frame, 148 per input and 34
 -- per output. The usual transaction, one input and two outputs, is 226 bytes
 -- and costs 2260; without a change output it is 192 bytes and costs 1920.
@@ -68,7 +69,8 @@ coinAt ctx values = OutPoint (txHash $ fundingWorth ctx values)
 wallet :: [Store.Unspent] -> [(Address, SoftPath)] -> WalletCoins
 wallet unspents recipients =
   WalletCoins
-    { coins = unspents,
+    { ownKind = Bip44,
+      coins = unspents,
       coinPaths = Map.fromList [(externalAddr i, Deriv :/ 0 :/ fromIntegral i) | i <- [0 .. 9]],
       recipientPaths = Map.fromList recipients
     }
@@ -76,6 +78,17 @@ wallet unspents recipients =
 -- | The change address of the builds: /1/0
 firstChange :: (Address, SoftPath)
 firstChange = (internalAddr 0, Deriv :/ 1 :/ 0)
+
+-- | The bip84 account of the test wallet as the builder sees it: a coin of
+-- 400000 at its first receiving address, /0/0
+segwitWallet :: Ctx -> WalletCoins
+segwitWallet ctx =
+  WalletCoins
+    { ownKind = Bip84,
+      coins = coinsOf ctx (fundingTx ctx 1 [(segwitExternalAddr 0, 400000)]),
+      coinPaths = Map.fromList [(segwitExternalAddr 0, Deriv :/ 0 :/ 0)],
+      recipientPaths = Map.empty
+    }
 
 -- | Bitcoin Cash addresses of other kinds: the P2SH32 address of the
 -- 32-byte hash 1863143c...903262, the token-aware address of the 20-byte
@@ -89,7 +102,7 @@ tokenAddr = fromJust $ textToAddr bch "bitcoincash:zpm2qsznhks23z7629mms6s4cwef7
 plainTokenAddr = fromJust $ textToAddr bch "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"
 
 -- | Build with the seed 0 and the given strategy, wallet, recipients and
--- payer, at 10 satoshis per byte with a dust limit of 546
+-- payer, at 10 satoshis per virtual byte with a dust limit of 546
 build :: Ctx -> CoinSelection -> WalletCoins -> [(Address, Natural)] -> FeePayer -> Either String BuiltTx
 build ctx strategy found recipients payer =
   buildWalletTx btc ctx (mkStdGen 0) strategy found firstChange recipients 10 546 800002 payer NoCoinControl
@@ -147,6 +160,15 @@ transactionSpec ctx =
       feePaid built `shouldBe` 2260
       built.inputPaths `shouldBe` [Deriv :/ 0 :/ 0]
       built.outputPaths `shouldBe` [Deriv :/ 1 :/ 0]
+    -- 10 + 41 + 34 + 31 = 116 bytes, then (2 + 108) / 4 of witness data,
+    -- rounded up to 28: 144 virtual bytes, a fee of 1440 at 10, and 400000
+    -- - 350000 - 1440 = 48560 of change, at the change address /1/0 of the
+    -- account
+    it "pays the fee of a bip84 account on its P2WPKH input and change, in virtual bytes" $ do
+      built <- expectRight $ buildWalletTx btc ctx (mkStdGen 0) LargestFirst (segwitWallet ctx) (segwitInternalAddr 0, Deriv :/ 1 :/ 0) [(otherAddr 0, 350000)] 10 546 800002 SenderPays NoCoinControl
+      spends ctx built `shouldBe` ([400000], [(segwitInternalAddr 0, 48560), (otherAddr 0, 350000)])
+      feePaid built `shouldBe` 1440
+      (built.inputPaths, built.outputPaths) `shouldBe` ([Deriv :/ 0 :/ 0], [Deriv :/ 1 :/ 0])
     it "is a version 2 transaction with the lock time given and its inputs marked replaceable" $ do
       built <- expectRight $ pay ctx [400000] [(otherAddr 0, 350000)]
       sortedOutputs built.tx
@@ -154,7 +176,7 @@ transactionSpec ctx =
     -- 0xfffffffe: not final, so the lock time applies, and not replaceable
     it "gives every input of Bitcoin Cash, which replaces no transaction, the highest sequence under which the lock time applies" $ do
       let cashCoin = storeCoin ctx (fakeTxHash 8, 0) (Just 800000) bchExternalAddr 400000
-          cashWallet = WalletCoins {coins = [cashCoin], coinPaths = Map.fromList [(bchExternalAddr, Deriv :/ 0 :/ 0)], recipientPaths = Map.empty}
+          cashWallet = WalletCoins {ownKind = Bip44, coins = [cashCoin], coinPaths = Map.fromList [(bchExternalAddr, Deriv :/ 0 :/ 0)], recipientPaths = Map.empty}
       built <- expectRight $ buildWalletTx bch ctx (mkStdGen 0) LargestFirst cashWallet firstChange [(otherAddr 0, 350000)] 10 546 800002 SenderPays NoCoinControl
       ((.sequence) <$> built.tx.inputs) `shouldBe` [0xfffffffe]
       (built.tx.version, built.tx.locktime) `shouldBe` (2, 800002)
@@ -162,7 +184,7 @@ transactionSpec ctx =
     -- Change: 400000 - 100000 - 50000 - 2700 = 247300
     it "pays a P2SH32 address and a token-aware address on Bitcoin Cash, the latter with the plain P2PKH script" $ do
       let cashCoin = storeCoin ctx (fakeTxHash 8, 0) (Just 800000) bchExternalAddr 400000
-          cashWallet = WalletCoins {coins = [cashCoin], coinPaths = Map.fromList [(bchExternalAddr, Deriv :/ 0 :/ 0)], recipientPaths = Map.empty}
+          cashWallet = WalletCoins {ownKind = Bip44, coins = [cashCoin], coinPaths = Map.fromList [(bchExternalAddr, Deriv :/ 0 :/ 0)], recipientPaths = Map.empty}
       built <- expectRight $ buildWalletTx bch ctx (mkStdGen 0) LargestFirst cashWallet firstChange [(script32Addr, 100000), (tokenAddr, 50000)] 10 546 800002 SenderPays NoCoinControl
       -- The coin of the token-aware address shows at the plain address of the same hash
       spends ctx built `shouldBe` ([400000], [(plainTokenAddr, 50000), (script32Addr, 100000), (internalAddr 0, 247300)])
@@ -260,9 +282,9 @@ recipientTypesSpec ctx =
     it "reports, signs and verifies the payment to every type" $ do
       built <- expectRight $ pay ctx [400000] everyType
       let tsd = TxSignData built.tx [fundingWorth ctx [400000]] built.inputPaths built.outputPaths (Just 10) Nothing [] noLabel
-      unsignedInfo <- expectRight $ parseTxSignData btc ctx (testAccountPub ctx) tsd
+      unsignedInfo <- expectRight $ parseTxSignData btc ctx Bip44 (testAccountPub ctx) tsd
       (unsignedInfo.txInfoSummary.summarySize, unsignedInfo.txInfoSummary.summaryFeeByte, unsignedInfo.txInfoSummary.summaryChangeInFee) `shouldBe` (375, 10, Just 0)
-      (signed, info) <- expectRight $ signWalletTx btc ctx tsd testAccountKey
+      (signed, info) <- expectRight $ signWalletTx btc ctx Bip44 tsd testAccountKey
       verifySignedTx btc ctx signed `shouldBe` Right ()
       -- A signature is 72 bytes or 71, as its values fall, and the estimate
       -- counts 72. The signature of this transaction is 71 bytes: 374 bytes
@@ -476,10 +498,10 @@ errorSpec ctx =
     it "fails without recipients" $
       pay ctx [400000] [] `shouldBe` Left "No recipients provided"
     it "fails at a fee rate of zero" $
-      payAt 0 546 `shouldBe` Left "The fee rate must be at least 1 satoshi per byte"
+      payAt 0 546 `shouldBe` Left "The fee rate must be at least 1 satoshi per virtual byte"
     -- A rate of 2^64 wrapped around to zero in the 64 bits of the builder
-    it "fails at a fee rate above 2^32 - 1 satoshis per byte" $
-      payAt 4294967296 546 `shouldBe` Left "The fee rate must be at most 4294967295 satoshis per byte"
+    it "fails at a fee rate above 2^32 - 1 satoshis per virtual byte" $
+      payAt 4294967296 546 `shouldBe` Left "The fee rate must be at most 4294967295 satoshis per virtual byte"
     -- 226 bytes at 4294967295 satoshis each, far more than the coin, and
     -- far less than 2^64
     it "counts the fee at the highest rate without wrapping around" $
@@ -583,7 +605,7 @@ databaseSpec ctx =
 {- Sending the change back -}
 
 -- | A payment of the amount to otherAddr 0 from the account, by the largest
--- coins first, at 10 satoshis per byte with a dust limit of 546
+-- coins first, at 10 satoshis per virtual byte with a dust limit of 546
 payBack :: Ctx -> Config -> DBAccountId -> Natural -> ChangeTo IO -> ExceptT String (DB IO) TxSignData
 payBack ctx cfg accId amount =
   buildTxSignData btc ctx cfg (mkStdGen 0) LargestFirst accId [(otherAddr 0, amount)] 10 546 800002 SenderPays 1 NoCoinControl

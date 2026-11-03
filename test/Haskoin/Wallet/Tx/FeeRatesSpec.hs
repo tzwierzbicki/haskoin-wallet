@@ -47,7 +47,7 @@ ratesSpec =
       feeRatesOf [(blockAt 800000 1, [txPaying 1 3 6])]
         `shouldBe` Just (FeeRates 2 2 2 800000 800000 1700000000)
 
-    it "are at least 1 satoshi per byte" $
+    it "are at least 1 satoshi per virtual byte" $
       feeRatesOf [(blockAt 800000 1, [txPaying 1 1 4000])]
         `shouldBe` Just (FeeRates 1 1 1 800000 800000 1700000000)
 
@@ -68,7 +68,7 @@ storeSpec :: Spec
 storeSpec =
   describe "The fee rates read from the store" $ do
     -- The blocks 800009 to 800004 each hold one transaction of 100 bytes,
-    -- at 9 to 4 satoshis per byte. The block above them is empty and the
+    -- at 9 to 4 satoshis per virtual byte. The block above them is empty and the
     -- one below, at 3 per byte, is the seventh with fees: neither counts.
     -- Of the 600 bytes, a quarter is reached at 5, half at 6 and nine
     -- tenths at 9.
@@ -101,11 +101,11 @@ choiceSpec =
       readFeeRateChoice "median" `shouldBe` Right (FeeLevelOf Median)
       readFeeRateChoice "high" `shouldBe` Right (FeeLevelOf High)
 
-    it "is a number of satoshis per byte" $
+    it "is a number of satoshis per virtual byte" $
       readFeeRateChoice "7" `shouldBe` Right (FeeRateOf 7)
 
     it "is nothing else" $
-      readFeeRateChoice "fast" `shouldBe` Left "Give a number of satoshis per byte, or low, median or high"
+      readFeeRateChoice "fast" `shouldBe` Left "Give a number of satoshis per virtual byte, or low, median or high"
 
 -- | The question of the fee rate when none is given, on rates of low 9,
 -- median 12 and high 118. The lowest rate is 1 for a new transaction, and
@@ -115,25 +115,25 @@ questionSpec = do
   let rates = FeeRates 9 12 118 800000 800001 1700000000
   describe "The question of the fee rate" $ do
     it "offers every level and a number, the median by default" $
-      feeRateQuestion 1 rates `shouldBe` "Which fee rate? Type low, median, high or a number of satoshis per byte [median] "
+      feeRateQuestion 1 rates `shouldBe` "Which fee rate? Type low, median, high or a number of satoshis per virtual byte [median] "
 
     -- 9 is below 11
     it "offers only the levels at or above the lowest rate" $
-      feeRateQuestion 11 rates `shouldBe` "Which fee rate? Type median, high or a number of satoshis per byte [median] "
+      feeRateQuestion 11 rates `shouldBe` "Which fee rate? Type median, high or a number of satoshis per virtual byte [median] "
 
     -- 9 and 12 are below 13
     it "takes the lowest level offered as the default when the median is too low" $
-      feeRateQuestion 13 rates `shouldBe` "Which fee rate? Type high or a number of satoshis per byte [high] "
+      feeRateQuestion 13 rates `shouldBe` "Which fee rate? Type high or a number of satoshis per virtual byte [high] "
 
     -- 118 is below 119
     it "asks for a number alone, without a default, when every level is too low" $
-      feeRateQuestion 119 rates `shouldBe` "Which fee rate? Type a number of satoshis per byte, at least 119: "
+      feeRateQuestion 119 rates `shouldBe` "Which fee rate? Type a number of satoshis per virtual byte, at least 119: "
 
   describe "An answer to the question of the fee rate" $ do
     it "takes a level by its name" $
       feeRateAnswer 1 rates "high" `shouldBe` Right 118
 
-    it "takes a number of satoshis per byte" $
+    it "takes a number of satoshis per virtual byte" $
       feeRateAnswer 11 rates "15" `shouldBe` Right 15
 
     it "takes the median when empty" $
@@ -144,23 +144,23 @@ questionSpec = do
       feeRateAnswer 13 rates "" `shouldBe` Right 118
 
     it "refuses a number below the lowest rate" $
-      feeRateAnswer 11 rates "10" `shouldBe` Left "The fee rate must be at least 11 satoshis per byte"
+      feeRateAnswer 11 rates "10" `shouldBe` Left "The fee rate must be at least 11 satoshis per virtual byte"
 
     it "refuses a rate of zero" $
-      feeRateAnswer 1 rates "0" `shouldBe` Left "The fee rate must be at least 1 satoshi per byte"
+      feeRateAnswer 1 rates "0" `shouldBe` Left "The fee rate must be at least 1 satoshi per virtual byte"
 
     -- 2^32 = 4294967296, one more than hw builds with
     it "refuses a number above the highest rate hw builds a transaction at" $
-      feeRateAnswer 1 rates "4294967296" `shouldBe` Left "The fee rate must be at most 4294967295 satoshis per byte"
+      feeRateAnswer 1 rates "4294967296" `shouldBe` Left "The fee rate must be at most 4294967295 satoshis per virtual byte"
 
     it "refuses a level below the lowest rate, and tells its rate" $
-      feeRateAnswer 11 rates "low" `shouldBe` Left "The low rate is 9 satoshis per byte, and the fee rate must be at least 11"
+      feeRateAnswer 11 rates "low" `shouldBe` Left "The low rate is 9 satoshis per virtual byte, and the fee rate must be at least 11"
 
     it "tells what to type when the answer is neither a level nor a number" $
-      feeRateAnswer 11 rates "fast" `shouldBe` Left "Type median, high, a number of satoshis per byte, or nothing for median"
+      feeRateAnswer 11 rates "fast" `shouldBe` Left "Type median, high, a number of satoshis per virtual byte, or nothing for median"
 
     it "refuses an empty answer when every level is too low" $
-      feeRateAnswer 119 rates "" `shouldBe` Left "Type a number of satoshis per byte, at least 119"
+      feeRateAnswer 119 rates "" `shouldBe` Left "Type a number of satoshis per virtual byte, at least 119"
 
 -- | How long ago a block was mined, in words
 agoSpec :: Spec

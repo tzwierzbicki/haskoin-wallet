@@ -2,20 +2,108 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The keys of a seed: from its mnemonic and passphrase to the master key,
--- to the signing key of an account along its BIP44 path; the public side of
--- a seed, its fingerprint and the public keys of its accounts, which is all
--- a command keeps of it outside signing; and the private keys of a sweep,
--- as users write them and where they come from.
+-- to the signing key of an account along the path of its kind, BIP44 or
+-- BIP84; the public side of a seed, its fingerprint and the public keys of
+-- its accounts, which is all a command keeps of it outside signing; and
+-- the private keys of a sweep, as users write them and where they come
+-- from.
 module Haskoin.Wallet.Keys where
 
 import Control.Applicative ((<|>))
 import Control.Exception (evaluate, try)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
+import qualified Data.Text as Text
 import Data.Text.Normalize (NormalizationMode (NFKD), normalize)
 import Haskoin
 import Haskoin.Wallet.Util (wordsOfLines)
 import Numeric.Natural (Natural)
+
+{- The kinds of accounts -}
+
+-- | The kind of an account: the standard it follows, which sets the first
+-- step of its path, the purpose of BIP43, and the kind of its addresses.
+-- The two kinds share everything else: the coin type of the network, the
+-- index, and the two chains of addresses below the account key.
+data AccountKind
+  = -- | BIP44: the account at m/44'/coin'/index', with legacy P2PKH
+    -- addresses, which start with 1 on Bitcoin
+    Bip44
+  | -- | BIP84: the account at m/84'/coin'/index', with native SegWit
+    -- P2WPKH addresses, which start with bc1q on Bitcoin and pay lower
+    -- fees. Bitcoin Cash has no SegWit, so it has no such account.
+    Bip84
+  deriving (Eq, Ord, Show, Enum, Bounded)
+
+-- | The purpose of a kind, the first step of the path of its accounts: 44
+-- or 84, as the BIP of the kind is numbered
+kindPurpose :: AccountKind -> Natural
+kindPurpose Bip44 = 44
+kindPurpose Bip84 = 84
+
+-- | The kind of a purpose, for the two hw holds
+kindOfPurpose :: Natural -> Maybe AccountKind
+kindOfPurpose purpose = lookup purpose [(kindPurpose kind, kind) | kind <- [minBound .. maxBound]]
+
+-- | The name of a kind, as the command line and the answers give it: bip44
+-- or bip84
+kindName :: AccountKind -> Text
+kindName kind = "bip" <> cs (show (kindPurpose kind))
+
+-- | The kind of a name, in any case: Nothing for a name that is none
+kindNamed :: Text -> Maybe AccountKind
+kindNamed name = lookup (Text.toLower name) [(kindName kind, kind) | kind <- [minBound .. maxBound]]
+
+-- | The names of the kinds, as the help lists them
+kindNames :: [Text]
+kindNames = kindName <$> [minBound .. maxBound]
+
+-- | The kind of coin an account spends, as the signer names it: P2PKH for
+-- BIP44, P2WPKH for BIP84
+kindCoinName :: AccountKind -> String
+kindCoinName Bip44 = "P2PKH"
+kindCoinName Bip84 = "P2WPKH"
+
+-- | The kinds of accounts a network has: both on the networks of Bitcoin,
+-- BIP44 alone on those of Bitcoin Cash, which has no SegWit
+networkKinds :: Network -> [AccountKind]
+networkKinds net = [kind | kind <- [minBound .. maxBound], kindOnNetwork net kind]
+
+-- | Whether a network has accounts of the kind
+kindOnNetwork :: Network -> AccountKind -> Bool
+kindOnNetwork net kind = case kind of
+  Bip44 -> True
+  Bip84 -> net.segWit
+
+-- | Refuse a kind of account the network does not have
+checkKindOnNetwork :: Network -> AccountKind -> Either String ()
+checkKindOnNetwork net kind
+  | kindOnNetwork net kind = Right ()
+  | otherwise = Left $ "A " <> cs (kindName kind) <> " account needs SegWit, which " <> net.name <> " does not have"
+
+-- | The address of a key of an account of the kind: the P2PKH address of
+-- the key for BIP44, its P2WPKH address for BIP84. The keys of an
+-- extended key are compressed, so both addresses exist.
+keyAddress :: AccountKind -> Ctx -> XPubKey -> Address
+keyAddress Bip44 = xPubAddr
+keyAddress Bip84 = xPubWitnessAddr
+
+-- | The output script that pays a key of an account of the kind, the one
+-- of its address: P2PKH for BIP44, P2WPKH for BIP84
+keyScript :: AccountKind -> Ctx -> PublicKey -> ScriptOutput
+keyScript kind ctx public = case kind of
+  Bip44 -> PayPKHash hash
+  Bip84 -> PayWitnessPKHash hash
+  where
+    hash = addressHash (marshal ctx public)
+
+-- | Whether an output script is of a coin an account of the kind spends:
+-- the script of one of its addresses
+spendsScript :: AccountKind -> ScriptOutput -> Bool
+spendsScript kind script = case (kind, script) of
+  (Bip44, PayPKHash _) -> True
+  (Bip84, PayWitnessPKHash _) -> True
+  _ -> False
 
 {- The keys of an account -}
 
@@ -25,10 +113,10 @@ data MnemonicPass = MnemonicPass
   }
   deriving (Eq, Show)
 
--- | The BIP44 path of an account: m/44'/coin'/account', with the coin
--- type of the network
-bip44Deriv :: Network -> Natural -> HardPath
-bip44Deriv net a = Deriv :| 44 :| net.bip44Coin :| fromIntegral a
+-- | The path of an account of a kind: m/purpose'/coin'/account', with the
+-- purpose of the kind and the coin type of the network
+accountDeriv :: AccountKind -> Network -> Natural -> HardPath
+accountDeriv kind net a = Deriv :| fromIntegral (kindPurpose kind) :| net.bip44Coin :| fromIntegral a
 
 -- | The index of an account from its public key: the last step of its path
 xPubIndex :: XPubKey -> Natural
@@ -53,21 +141,21 @@ normalizePassphrase = normalize NFKD
 typedMasterKey :: MnemonicPass -> Either String XPrvKey
 typedMasterKey mnem = makeXPrvKey <$> mnemonicToSeed (mnemonicPass mnem) (mnemonicWords mnem)
 
--- | The signing key of an account under a master key: the key at its BIP44
--- path
-accountKey :: Network -> Ctx -> XPrvKey -> Natural -> XPrvKey
-accountKey net ctx master acc = derivePath ctx (bip44Deriv net acc) master
+-- | The signing key of an account under a master key: the key at the path
+-- of its kind
+accountKey :: AccountKind -> Network -> Ctx -> XPrvKey -> Natural -> XPrvKey
+accountKey kind net ctx master acc = derivePath ctx (accountDeriv kind net acc) master
 
 -- | The signing key of an account, from the mnemonic of its seed
-signingKey :: Network -> Ctx -> MnemonicPass -> Natural -> Either String XPrvKey
-signingKey net ctx mnem acc = (\master -> accountKey net ctx master acc) <$> masterKey mnem
+signingKey :: AccountKind -> Network -> Ctx -> MnemonicPass -> Natural -> Either String XPrvKey
+signingKey kind net ctx mnem acc = (\master -> accountKey kind net ctx master acc) <$> masterKey mnem
 
 -- | The public key of an account of a seed, or Nothing when the child key
 -- at that index is invalid: haskoin-core throws for such a key, where BIP32
 -- says to skip the index, as "Haskoin.Wallet.Database.Address" does for an address
-accountPubKey :: Network -> Ctx -> XPrvKey -> Natural -> IO (Maybe XPubKey)
-accountPubKey net ctx master index = do
-  derived <- try $ evaluate $ deriveXPubKey ctx $ accountKey net ctx master index
+accountPubKey :: AccountKind -> Network -> Ctx -> XPrvKey -> Natural -> IO (Maybe XPubKey)
+accountPubKey kind net ctx master index = do
+  derived <- try $ evaluate $ deriveXPubKey ctx $ accountKey kind net ctx master index
   return $ case derived of
     Left (DerivationException _) -> Nothing
     Right pub -> Just pub
@@ -82,15 +170,15 @@ masterFingerprint = xPubFP
 {- The public side of a seed -}
 
 -- | What a command keeps of a seed once it has the mnemonic: the
--- fingerprint, and the public key of any of its accounts, derived on
--- demand, Nothing at an index whose child key is invalid. The account
--- steps of BIP44 are hardened, so these public keys can only come from the
+-- fingerprint, and the public key of any of its accounts, of either kind,
+-- derived on demand, Nothing at an index whose child key is invalid. The
+-- account steps are hardened, so these public keys can only come from the
 -- master private key, which stays inside this record and never comes out
 -- of it. The private key of an account reaches a command in one way only:
 -- as the signing key that "Haskoin.Wallet.Cli.Prompt" asks for.
 data PublicSeed = PublicSeed
   { seedFingerprint :: !Fingerprint,
-    seedAccountKey :: Network -> Natural -> IO (Maybe XPubKey)
+    seedAccountKey :: AccountKind -> Network -> Natural -> IO (Maybe XPubKey)
   }
 
 -- | The public side of a seed, from its mnemonic
@@ -111,7 +199,7 @@ seedOfMaster :: Ctx -> XPrvKey -> PublicSeed
 seedOfMaster ctx master =
   PublicSeed
     { seedFingerprint = masterFingerprint ctx (deriveXPubKey ctx master),
-      seedAccountKey = \net index -> accountPubKey net ctx master index
+      seedAccountKey = \kind net index -> accountPubKey kind net ctx master index
     }
 
 {- Private keys of a sweep -}

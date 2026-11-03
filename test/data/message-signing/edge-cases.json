@@ -28,19 +28,6 @@
       "comment": "P2PKH address of the uncompressed public key of the signing key: hw only signs for compressed keys."
     },
     {
-      "name": "edge/rejected/p2wpkh",
-      "network": "btc",
-      "key": {
-        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
-        "passphrase": "",
-        "account": 0,
-        "chain": 0,
-        "index": 0
-      },
-      "address": "bc1qmxrw6qdh5g3ztfcwm0et5l8mvws4eva24kmp8m",
-      "comment": "P2WPKH (SegWit v0) address of the signing key: the BIP-322 legacy format is restricted to P2PKH."
-    },
-    {
       "name": "edge/rejected/p2sh-p2wpkh",
       "network": "btc",
       "key": {
@@ -51,7 +38,7 @@
         "index": 0
       },
       "address": "3HkzTaFbEMWeJPLyNCNhPyGfZsVLDwdD3G",
-      "comment": "P2SH-P2WPKH address of the signing key: the BIP-322 legacy format is restricted to P2PKH."
+      "comment": "P2SH-P2WPKH address of the signing key: hw signs from the P2PKH and P2WPKH addresses of a key, not from a wrapped SegWit one, which no account of hw has."
     },
     {
       "name": "edge/rejected/p2sh-bitcoin-core",
@@ -65,15 +52,6 @@
       },
       "address": "3B5fQsEXEaV8v6U3ejYc8XaKXAkyQj2MjV",
       "comment": "P2SH address used by Bitcoin Core's message_verify unit test (ERR_ADDRESS_NO_KEY)."
-    },
-    {
-      "name": "edge/rejected/d-1-p2wpkh",
-      "network": "btc",
-      "key": {
-        "secretHex": "0000000000000000000000000000000000000000000000000000000000000001"
-      },
-      "address": "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
-      "comment": "P2WPKH address of d = 1 (the address in bitcoinjs-message's P2WPKH fixture for the same key)."
     }
   ],
   "vectors": [
@@ -562,7 +540,7 @@
       "messageHash": "1dad7c708b4a71e5cd9339c74c0bf20c3f0f07e6fadf822b9e8f3b248de5f4fa",
       "signature": "H7dG5LA/hCqS0WfP7w+QEWFaaaex3o/K1V7PWJFz7dP+Gmls6KLyg9+PpFfFR1mDuY+C4ACxoDvZRMdvY4f1isY=",
       "warnings": [],
-      "comment": "Two U+FFFD REPLACEMENT CHARACTERs (3 UTF-8 bytes each). Before hw forced UTF-8 (setUtf8Encoding), the argument \"caf\u00e9\" became this in a process without a UTF-8 locale (one U+FFFD per undecodable byte of \u00e9), and the altered message was signed silently: this is the signature hw 0.9.5 produced for \"caf\u00e9\" under LANG=C. The characters themselves are valid and signed byte for byte: the signature differs from nfc-e-acute. Header byte 31 (recovery id 0)."
+      "comment": "Two U+FFFD REPLACEMENT CHARACTERs (3 UTF-8 bytes each). Before hw forced UTF-8 (setUtf8Encoding), the argument \"café\" became this in a process without a UTF-8 locale (one U+FFFD per undecodable byte of é), and the altered message was signed silently: this is the signature hw 0.9.5 produced for \"café\" under LANG=C. The characters themselves are valid and signed byte for byte: the signature differs from nfc-e-acute. Header byte 31 (recovery id 0)."
     },
     {
       "name": "edge/two-byte-utf8",

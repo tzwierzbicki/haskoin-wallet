@@ -342,6 +342,76 @@
       "source": "Trezor firmware tests/device_tests/bitcoin/test_bcash.py::test_send_bch_nochange",
       "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_bcash.py",
       "comment": "Bitcoin Cash: two inputs, both from the previous vector's transaction, on an internal (m/44h/145h/0h/1/0) and an external (m/44h/145h/0h/0/1) address; one external output, no change. test_send_bch_oldaddr signs the same transaction with the output given as a legacy address (15pnEDZJo3ycPUamqP3tEDnEju1oW5fBCz) and produces the same bytes. On chain: https://bch1.trezor.io/api/tx/5594fd9e5e26dcb4437cbbbba517401720849159bac4e2158e1e6401ffd5fdb7"
+    },
+    {
+      "name": "trezor/testnet/native-segwit",
+      "network": "btctest",
+      "account": {
+        "mnemonic": "all all all all all all all all all all all all",
+        "passphrase": "",
+        "account": 0,
+        "type": "bip84"
+      },
+      "txSignData": {
+        "tx": "01000000019e2123e595e20d6aa2c8d227b2b98c781b8b41fda635756eca0768b8ce8067b30000000000ffffffff02409c00000000000017a9147a55d61848e77ca266e79a39bfc85c580a6426c98750c3000000000000160014cd4ee15090b177f15ed0760d85956d93b5990d5f00000000",
+        "txinputs": [
+          "0100000001e5af569cb6720e4a0c86b1b58de522cf4615e5045992388e84f8eae0022d8e33010000006a47304402202b09991327f3734d1a50ff8ce1df2f57d19c97009a65f24a26828ce717f8df6302205d653b0f704cd8162e467b6c465496d2b94d04eeeb51d34ad4679bbf01b8a4a0012103685ff9491738f67ae75d0a0c2b9f8527df44d9add4fa23bd5f3cdb66b8a36876fdffffff02a086010000000000160014ec871ec494e095efd8c3dcfd8b1fe1529a822d9dba5d1000000000001976a914c6f2998ea98ce79b750288124ec2b381a8f1745688ac00000000"
+        ],
+        "inputpaths": [
+          "/0/87"
+        ],
+        "outputpaths": []
+      },
+      "signed": {
+        "tx": "010000000001019e2123e595e20d6aa2c8d227b2b98c781b8b41fda635756eca0768b8ce8067b30000000000ffffffff02409c00000000000017a9147a55d61848e77ca266e79a39bfc85c580a6426c98750c3000000000000160014cd4ee15090b177f15ed0760d85956d93b5990d5f0247304402200c734ed16a9226162a29133c14fad3565332c60346050ceb9246e73a2fc8485002203463d40cf78eb5cc9718d6617d9f251b987e96cb58525795a507acb9b91696c7012103f60fc56bf7b5326537c7e86e0a63b6cd008eeb87d39af324cee5bcc3424bf4d000000000",
+        "txid": "65047a2b107d6301d72d4a1e49e7aea9cf06903fdc4ae74a4a9bba9bc1a414d2",
+        "txInfo": {
+          "type": "debit",
+          "amount": -100000,
+          "fee": 10000,
+          "size": 142,
+          "feeByte": 70
+        }
+      },
+      "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx_segwit_native.py::test_send_native",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_signtx_segwit_native.py",
+      "comment": "A bip84 account (m/84h/1h/0h) spending its P2WPKH coin at /0/87 (tb1qajr3a3y5uz27lkxrmn7ck8lp22dgytvagr5nqy) to a P2SH and a P2WPKH address of other wallets: a signature with the digest of BIP 143, in the witness. The same transaction is swept with the key alone in ../tx-sweep/trezor.json. The size is in virtual bytes: 223 bytes, of which 114 outside the witness, so (3 * 114 + 223) / 4 = 141.25, rounded up. On chain: https://tbtc1.trezor.io/api/tx/65047a2b107d6301d72d4a1e49e7aea9cf06903fdc4ae74a4a9bba9bc1a414d2"
+    },
+    {
+      "name": "trezor/testnet/native-segwit-change",
+      "network": "btctest",
+      "account": {
+        "mnemonic": "all all all all all all all all all all all all",
+        "passphrase": "",
+        "account": 0,
+        "type": "bip84"
+      },
+      "txSignData": {
+        "tx": "0100000001839d3ac09bea990d0452e556d0fe0d928bd963e7e950bafd0a90246243f5b3fc0000000000ffffffff02409c00000000000017a9147a55d61848e77ca266e79a39bfc85c580a6426c98750c3000000000000160014cc3e33b1eb529cea8b34af5d2c5d6e6e332de90400000000",
+        "txinputs": [
+          "0100000002de656ea6de268abf285c945fbc7cbaecb196d1eb9b502f127d2849fdbf045d0d000000006a47304402205622f5398e9f431afce154cece3eea635ac4ff877ff4c8fa6ba86c71db0ae3bb022035faf2bf8cee793cf17ad9b4444d58bf962d14ef3bb8a5a46c4e5b63d0e3eea5012102d83bf667bad85e533790d8c30656dec165a1b662310458be0219b4f2a9d84a30fdffffff9e2123e595e20d6aa2c8d227b2b98c781b8b41fda635756eca0768b8ce8067b3010000006b48304502210096093de2c32a418c7aa735e841d88aca50819ffcb6591c8854b4a57e07438e82022041e06bb7054fd6222301744ee4a068f38ee80571eef684aa0c62f836b5f78a1c0121027f66fac81a9c518fc9375e62f4d7827682b90b18d0a949cc9d2c23bd144cfcf2fdffffff02a086010000000000160014ec871ec494e095efd8c3dcfd8b1fe1529a822d9d37351000000000001976a914d919c35ad9af848342a17a8e3e1cd44f0489215388ac00000000"
+        ],
+        "inputpaths": [
+          "/0/87"
+        ],
+        "outputpaths": [
+          "/1/87"
+        ]
+      },
+      "signed": {
+        "tx": "01000000000101839d3ac09bea990d0452e556d0fe0d928bd963e7e950bafd0a90246243f5b3fc0000000000ffffffff02409c00000000000017a9147a55d61848e77ca266e79a39bfc85c580a6426c98750c3000000000000160014cc3e33b1eb529cea8b34af5d2c5d6e6e332de9040247304402207413e26bf9eff16513f5ed1db710aa6f766b51f6c6f23ad5e9e8ddf5c67e8aba02204e09b0755ec173f6beeb8ddfa515d36afb25f046d0c851d48fdbc2e0ad3b9f13012103f60fc56bf7b5326537c7e86e0a63b6cd008eeb87d39af324cee5bcc3424bf4d000000000",
+        "txid": "2161a89815814c3866f5953c1e59a977f7cd5432c731cd5633378cfc3fb87fdd",
+        "txInfo": {
+          "type": "debit",
+          "amount": -50000,
+          "fee": 10000,
+          "size": 142,
+          "feeByte": 70
+        }
+      },
+      "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx_segwit_native.py::test_send_native_change",
+      "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_signtx_segwit_native.py",
+      "comment": "The same coin's twin, from the previous transaction fcb3f543... of Trezor's tests/txcache (serialized apart from hw from its fields, and its id checked), spent to the P2SH address and to the change address /1/87 of the account (tb1qeslr8v0t22wn4ze5405kt3tmnwxvk7gyyt4lls). 40000 leave the account, and 10000 of fee."
     }
   ]
 }

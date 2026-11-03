@@ -109,14 +109,14 @@ sendAllSpec ctx = do
         staying `shouldSatisfy` Text.isInfixOf ("\n    0.00030000 btc  you locked it\n  " <> Text.pack (coinArg (twoCoinsTx ctx) 1) <> "\n")
         steps `shouldSatisfy` Text.isInfixOf "hw signtx"
 
-    it "are sent at a fee rate above 100 satoshis per byte only if the user takes it" $
+    it "are sent at a fee rate above 100 satoshis per virtual byte only if the user takes it" $
       withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
         synced home
         (errorOf <$> hwJson home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "101"] ["n"]) `shouldReturn` Right highFeeRefused
 
     -- 340 bytes at 101 satoshis a byte are a fee of 34340, which leaves
     -- 80000 - 34340 = 45660 for the address
-    it "are sent at a fee rate above 100 satoshis per byte without asking with --yes" $
+    it "are sent at a fee rate above 100 satoshis per virtual byte without asking with --yes" $
       withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
         synced home
         prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "101", "--yes"] []
@@ -157,7 +157,7 @@ sendAllSpec ctx = do
       withChain ctx (confirmedChain (dustCoinsTx ctx)) $ \home _ -> do
         synced home
         run <- hw home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "10"] ["n"]
-        run `shouldSatisfy` printedSentence "3 coins cost more to spend than they are worth at 10 sat/byte, 0.00001480 btc each:"
+        run `shouldSatisfy` printedSentence "3 coins cost more to spend than they are worth at 10 sat/vB, 0.00001480 btc each:"
         run `shouldSatisfy` printedSentence "What remains for the addresses without an amount is 0.00074806 btc instead of 0.00076600 btc, 0.00001794 btc less, and the account is empty."
         runErr run `shouldSatisfy` Text.isInfixOf dustQuestion
 
