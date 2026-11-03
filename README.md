@@ -203,10 +203,10 @@ hw reviewtx unsigned.psbt
 hw signtx --input unsigned.psbt --output signed.psbt
 ```
 
-The file is a PSBT, the format of BIP 174, so Bitcoin Core's `decodepsbt` and
-other wallets show it too. A hardware wallet, through HWI, or Bitcoin Core
-with the keys can sign it in place of the offline computer, and `sendtx
---input` takes the signed file back, finalized or not. The file names the
+The file is a PSBT, the format of BIP 174, so other wallets show it too. A
+hardware wallet, or another wallet with the keys, can sign it in place of the
+offline computer, and `sendtx --input` takes the signed file back, finalized
+or not. The file names the
 keys by the fingerprint of the seed, which a hardware wallet needs to find
 its own: the wallet knows it once it created the account, signed with it, or
 imported it with its origin. `preparetx` says so when it writes a file
@@ -303,9 +303,9 @@ hw importacc sparrow-labels.jsonl --network btc
 
 **`hw descriptor`** shows each account as an output descriptor, the format of
 [BIP 380](https://github.com/bitcoin/bips/blob/master/bip-0380.mediawiki) in
-which other wallets and Bitcoin Core take an account without its private key:
-`pkh([bc560f95/44h/0h/0h]xpub.../<0;1>/*)#vq597j87`. Paste it into Sparrow,
-BlueWallet or Bitcoin Core's `importdescriptors` to watch the account there.
+which other wallets take an account without its private key:
+`pkh([bc560f95/44h/0h/0h]xpub.../<0;1>/*)#vq597j87`. Paste it into a wallet
+that takes a descriptor, to watch the account there.
 It carries the public key of the account, the fingerprint of its seed and its
 derivation path, the two chains of addresses, and a checksum. When `hw` does
 not know the fingerprint, the descriptor names no origin, which a hardware
@@ -313,15 +313,14 @@ wallet needs, and the answer says so. `--account` shows one account.
 
 A `bip84` account gives `wpkh([bc560f95/84h/0h/0h]xpub.../<0;1>/*)#5nktextl`,
 the script function naming the kind. It is shown with its key as a `zpub` as
-well, or a `vpub` on a test network, in the row `SLIP-132`. Electrum,
-BlueWallet and Trezor Suite take that form for a native SegWit account, since
-an `xpub` makes a legacy wallet there. The key is the same, only its prefix
-differs.
+well, or a `vpub` on a test network, in the row `SLIP-132`. Some wallets take
+only that form for a native SegWit account, and make a legacy wallet of an
+`xpub`. The key is the same, only its prefix differs.
 
 `importacc` reads a descriptor back, and the files other wallets export an
-account in: a descriptor on a line, as Sparrow and Coldcard write it, a key
-alone, the file of Bitcoin Core's `listdescriptors`, or the generic JSON of a
-Coldcard. `hw` holds `bip44` and `bip84` accounts, so a descriptor of another
+account in: a descriptor on a line, a key alone, the file of Bitcoin Core's
+`listdescriptors`, or the generic JSON of a Coldcard. `hw` holds `bip44` and
+`bip84` accounts, so a descriptor of another
 kind, such as `sh(wpkh(...))`, is refused, and the import goes on. A key
 alone says its kind when it is a `zpub` or a `vpub`, which some wallets write
 for a `bip84` account; an `xpub` or a `tpub` alone is taken for a `bip44`
@@ -335,8 +334,8 @@ is named after its network, index and kind, as `recover` names one:
 `renameacc` renames it.
 
 ```console
-hw descriptor --account vault               # for Sparrow or Bitcoin Core
-hw descriptor --account spending            # a bip84 account, with its zpub for Electrum
+hw descriptor --account vault               # for a wallet that takes a descriptor
+hw descriptor --account spending            # a bip84 account, with its zpub for one that takes a key
 hw importacc coldcard-export.json --network btc
 hw renameacc btc0 coldcard
 hw importacc ledger-xpub.txt --network btc --type bip84
@@ -470,7 +469,7 @@ selects them. `--change-back` sends the change back to an address the payment
 spends from. `--output` also writes the transaction to a file. `--label` gives
 the transaction a label, which goes with it to its file and stays once the
 network has it. The transaction gets the lock time of the best block the
-wallet knows, as the transactions of Bitcoin Core and Electrum do. When that
+wallet knows, as the transactions of most wallets do. When that
 block is more than eight hours old, `hw` asks whether to prepare the
 transaction anyway, with a lock time of 0, or to sync first.
 
@@ -588,17 +587,16 @@ the labels of the account's addresses in it, and the labels of the coins it
 spends, as the wallet has them when it writes the file. `importtx` keeps the
 labels of the wallet.
 
-The files of other wallets are read the same way, in bytes or in the base64
-text Bitcoin Core and HWI give, in version 0 of the format or in version 2
-(BIP 370), which Bitcoin Core 32 and later write by default. A file is
+The files of other wallets are read the same way, in bytes or in base64 text,
+in version 0 of the format or in version 2 (BIP 370). A file is
 signed back in its version. `importtx` and `sendtx --input` take a file
 another signer returned, finalized or not: `hw` finalizes the signature of a
 P2PKH or P2WPKH coin of the account itself, and keeps from the version it holds what
 such a file leaves out, the paths of its signed inputs, the fee rate and the
 label. `sendtx --input` also takes the signed transaction alone, in
-hexadecimal as Core's `finalizepsbt` gives it, when the wallet holds the
-transaction. `signtx --input` signs a file Bitcoin Core, Sparrow or Electrum
-prepared for an account of the wallet, with the sighash ALL only and only
+hexadecimal as a wallet gives it once finalized, when the wallet holds the
+transaction. `signtx --input` signs a file another wallet prepared for an
+account of the wallet, with the sighash ALL only and only
 when every input that is not the account's is signed already, and the
 signed file keeps every field of it. Such a file names no network: the
 account it involves tells it. A file that involves no account of the wallet,
@@ -648,12 +646,12 @@ hw sendtx --input signed.psbt
 
 **`hw signmsg ADDRESS MESSAGE`** signs a message with the key of an address of
 the wallet. `--output` writes the signed message to a file instead of printing
-it. From a P2PKH address, Bitcoin Core and every wallet verify the signature.
-From a native SegWit address, the signature has the header byte of BIP 137,
-which Sparrow, Trezor, Ledger and Coldcard give and verify; Bitcoin Core
-verifies no signature from such an address. **`hw verifymsg`** checks a
-signature from `hw`, Bitcoin Core or another wallet, from any P2PKH or SegWit
-address of one key, whatever header byte the wallet that made it chose.
+it. From a P2PKH address, any wallet verifies the signature. From a native
+SegWit address, the signature has the header byte of BIP 137, which the
+wallets that sign from such an address give and verify; some wallets verify
+no signature from a SegWit address. **`hw verifymsg`** checks a signature
+from `hw` or another wallet, from any P2PKH or SegWit address of one key,
+whatever header byte the wallet that made it chose.
 
 ```console
 hw signmsg MYADDRESS "I control this address" --output signed.txt

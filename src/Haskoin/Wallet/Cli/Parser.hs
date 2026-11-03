@@ -912,8 +912,8 @@ learns the fingerprint of its seed, and takes the name a file of hw gives it.
 importacc also reads the output descriptors other wallets hand an account
 over by: a descriptor on a line, such as pkh([bc560f95/44h/0h/0h]xpub.../<0;1>/*)
 for a bip44 account or wpkh([bc560f95/84h/0h/0h]xpub.../<0;1>/*) for a bip84
-one, as Sparrow or a Coldcard exports it, a key alone, the file of Bitcoin
-Core's listdescriptors, or the generic JSON of a Coldcard. hw holds bip44
+one, a key alone, the file of Bitcoin Core's listdescriptors, or the generic
+JSON of a Coldcard. hw holds bip44
 and bip84 accounts, so a descriptor of another kind, such as sh(wpkh(...)),
 is refused, and the import goes on. A key alone says its kind when it is a
 zpub or a vpub, which some wallets write for a bip84 account; an xpub or a
@@ -952,14 +952,14 @@ descriptorCommand =
       details =
         [r|
 descriptor shows each account as an output descriptor, the format of BIP 380
-in which wallets and Bitcoin Core take an account without its private key:
+in which wallets take an account without its private key:
 
   pkh([bc560f95/44h/0h/0h]xpub6CHK45s.../<0;1>/*)#vq597j87
   wpkh([bc560f95/84h/0h/0h]xpub6CQF8An.../<0;1>/*)#5nktextl
 
-The first is a bip44 account, the second a bip84 one. Paste it into
-Sparrow, BlueWallet or Bitcoin Core's importdescriptors to watch the account
-there. The descriptor carries the public key of the account, the
+The first is a bip44 account, the second a bip84 one. Paste it into a
+wallet that takes a descriptor, to watch the account there. The descriptor
+carries the public key of the account, the
 fingerprint of its seed and its derivation path, and the two chains of
 addresses, with a checksum. It holds no private key. When hw does not know
 the fingerprint of the seed, the descriptor names no origin, which a
@@ -969,10 +969,10 @@ A descriptor does not name its network. Bitcoin and Bitcoin Cash write the
 same keys, and every test network writes tpub keys.
 
 A bip84 account is shown with its key in the form of SLIP-132 as well, a
-zpub, or a vpub on a test network, in the row SLIP-132. Electrum, BlueWallet
-and Trezor Suite take that form for a native SegWit account, since an xpub
-makes a legacy wallet there. The key is the same, only its prefix differs.
-A bip44 account has no such row, since those wallets take its xpub as it is.
+zpub, or a vpub on a test network, in the row SLIP-132. Some wallets take
+only that form for a native SegWit account, and make a legacy wallet of an
+xpub. The key is the same, only its prefix differs. A bip44 account has no
+such row, since such wallets take its xpub as it is.
 
 descriptor asks nothing of the server, so it runs on an offline computer as
 well. importacc reads a descriptor back. Without --account, every account is
@@ -1333,8 +1333,8 @@ configuration file makes --change-back the default. --new-change then sends the
 change of one payment to a new change address.
 
 The transaction gets the lock time of the best block the wallet knows, as
-Bitcoin Core and Electrum give theirs: it cannot be mined into a block below
-it, and it looks like theirs. One time in ten, the lock time is up to 99 blocks
+most wallets give theirs: it cannot be mined into a block below it, and it
+looks like theirs. One time in ten, the lock time is up to 99 blocks
 lower, so that the time signing takes does not show. When the best block was
 mined more than eight hours ago, the wallet is behind the chain, and a sync may
 find coins spent or received since. preparetx then asks whether to prepare the
@@ -1577,7 +1577,7 @@ coinSelectionOption =
         [r|
 How the coins to spend are selected. least-waste tries the other strategies and
 an exact match without change, and keeps the coins that waste the least fee,
-now and later, as Bitcoin Core does. random-draw spends coins in random order.
+now and later. random-draw spends coins in random order.
 largest-first spends the fewest coins, for the lowest fee now. smallest-first
 spends the smallest coins first, to consolidate them. With --coin or
 --spend-from, every chosen coin is spent and the strategy does not apply,
@@ -1668,9 +1668,9 @@ check a transaction before you sign it, or before you send it. A transaction
 that involves no account, such as a sweep to addresses outside the wallet,
 is shown on the network its file names.
 
-A file of another wallet, Bitcoin Core, Sparrow or Electrum for example, is
-shown the same way: a PSBT in bytes, or in base64 text, of version 0 or of
-version 2, the one Bitcoin Core 32 and later write. Such a file names no
+A file of another wallet is shown the same way: a PSBT in bytes, or in
+base64 text, of version 0 or of version 2, that of BIP 370. Such a file names
+no
 network. The account it involves tells it. One that involves no account
 needs --network, or the default-network of the configuration file.
 
@@ -1708,7 +1708,7 @@ exporttx writes a pending transaction to a file, signed or not, to carry it to
 an offline computer. Name it by the hash pendingtxs shows: its nosigHash, or
 its txid once it is signed.
 
-The file is a PSBT, the format of BIP 174 that Bitcoin Core and most wallets
+The file is a PSBT, the format of BIP 174 that most wallets
 read. It carries the transaction, the whole transaction each of its coins
 comes from, the keys of the account in it with their derivation paths, and
 the signatures once signed. What is hw's own goes in the proprietary fields
@@ -1821,9 +1821,8 @@ since the unsigned file is of no use once signed. It asks this before the
 mnemonic. A transaction of a file is shown with the labels the file carries,
 which go on to the signed file.
 
-A file another wallet prepared for the account, Bitcoin Core, Sparrow or
-Electrum for example, is signed the same way, in bytes or in base64 text,
-of version 0 or of version 2, the one Bitcoin Core 32 and later write. The
+A file another wallet prepared for the account is signed the same way, in
+bytes or in base64 text, of version 0 or of version 2, that of BIP 370. The
 signed file keeps every field of it, and its version. hw signs with the
 sighash ALL only, and only when every input that is not the account's is
 signed already.
@@ -2060,7 +2059,7 @@ the transaction and sends it, and changes nothing in the wallet.
 
 The file is a PSBT, in bytes or in base64 text, as another wallet or a
 hardware wallet returns it, finalized or not. The signed transaction alone,
-in hexadecimal as Bitcoin Core's finalizepsbt gives it, is sent too, when the
+in hexadecimal as a wallet gives it once finalized, is sent too, when the
 wallet holds its transaction. A file hw wrote names its network. One of
 another wallet names none: when the wallet holds its transaction, the
 account tells it; otherwise give --network, or a default-network in the
@@ -2208,10 +2207,10 @@ signMsgCommand =
 signmsg asks for the mnemonic of the account of the ADDRESS, and signs the
 message with the key of that address. The signature uses the Bitcoin Signed
 Message format, the legacy format of BIP 322. From a P2PKH address, which
-starts with 1, Bitcoin Core and other wallets can verify it. From a native
-SegWit address, which starts with bc1q, the signature has the header byte
-of BIP 137, which Sparrow, Trezor, Ledger and Coldcard give and verify;
-Bitcoin Core verifies no signature from such an address.
+starts with 1, any wallet can verify it. From a native SegWit address,
+which starts with bc1q, the signature has the header byte of BIP 137, which
+the wallets that sign from such an address give and verify; some wallets
+verify no signature from a SegWit address.
 
 The message is signed exactly as given. hw warns about spaces or line breaks
 at its start or end. Copying a message easily changes them, and the signature
@@ -2261,11 +2260,11 @@ verifyMsgCommand =
       details =
         [r|
 verifymsg checks that the key of ADDRESS signed MESSAGE, from the SIGNATURE
-that signmsg, Bitcoin Core or another wallet gave. The address can be anyone's:
+that signmsg or another wallet gave. The address can be anyone's:
 a P2PKH address, which starts with 1, or a SegWit address of one key, native
 or wrapped, which starts with bc1q or 3. A signature from a SegWit address
 is valid when its key gives the address, whatever header byte the wallet
-that made it chose, as Sparrow checks one. The --network only tells hw how
+that made it chose. The --network only tells hw how
 to read the address.
 
 Give the message exactly as it was signed. A single changed byte makes the

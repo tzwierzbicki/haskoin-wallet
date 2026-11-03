@@ -253,7 +253,7 @@ importKeySpec ctx =
         report <- importFile ctx (Just btc) Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\"}\n")
         liftIO $
           map createdNote (reportAccounts report)
-            `shouldBe` [Just (Just "The key says no kind. The account is bip44 by default. If the key is of a bip84 account, as Ledger Live writes one, a sync finds none of its transactions and signtx refuses the mnemonic. Then deleteacc, and import the key again with --type bip84.")]
+            `shouldBe` [Just (Just "The key says no kind. The account is bip44 by default. If the key is of a bip84 account, a sync finds none of its transactions and signtx refuses the mnemonic. Then deleteacc, and import the key again with --type bip84.")]
 
     it "notes that the kind of a bare key was taken on --type" $
       inDatabaseE $ do

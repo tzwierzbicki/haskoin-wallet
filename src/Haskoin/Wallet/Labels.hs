@@ -442,12 +442,12 @@ importKey ctx netM kindM r = do
 -- | The note on an account made of a key that says no kind, an xpub or a
 -- tpub alone, which says nothing of its path: the kind the import took on
 -- trust, from --type or by default, and what tells when it was the wrong
--- one. Ledger Live writes an xpub for an account of any kind.
+-- one. Some wallets write an xpub for an account of any kind.
 trustNote :: AccountKind -> Maybe AccountKind -> Text
 trustNote kind typedM =
   Text.unwords
     [ "The key says no kind. The account is " <> kindName kind <> taken,
-      "If the key is of a " <> kindName other <> " account" <> example <> ", a sync finds none of its transactions and signtx refuses the mnemonic.",
+      "If the key is of a " <> kindName other <> " account, a sync finds none of its transactions and signtx refuses the mnemonic.",
       "Then deleteacc, and import the key again with --type " <> kindName other <> "."
     ]
   where
@@ -456,7 +456,6 @@ trustNote kind typedM =
     other = case kind of
       Bip44 -> Bip84
       Bip84 -> Bip44
-    example = if other == Bip84 then ", as Ledger Live writes one" else ""
 
 -- | The result of an action that may be refused, as a value
 attempt :: (Monad m) => ExceptT String m a -> ExceptT String m (Either String a)
