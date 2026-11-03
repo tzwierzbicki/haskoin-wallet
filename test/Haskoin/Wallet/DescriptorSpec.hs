@@ -10,7 +10,7 @@ import Data.Text (Text)
 import Haskoin
 import Haskoin.Wallet.Descriptor
 import Haskoin.Wallet.Keys (AccountKind (..))
-import Haskoin.Wallet.TestUtils (testAccountXPub, testAccountXPubTest, testFingerprint, testSegwitAccountXPub)
+import Haskoin.Wallet.TestUtils (testAccountXPub, testAccountXPubTest, testFingerprint, testSegwitAccountVPub, testSegwitAccountXPub, testSegwitAccountXPubTest, testSegwitAccountZPub)
 import Test.Hspec
 
 spec :: Spec
@@ -140,14 +140,23 @@ keySpec =
 
     -- The zpub and the vpub are the keys of the BIP84 account 0 of the test
     -- wallet on Bitcoin and on testnet as a Coldcard and Electrum write
-    -- them, the xpub and the tpub the same keys as BIP32 writes them,
-    -- derived apart from hw with the Python tool of the message-signing
-    -- vectors
+    -- them, the xpub and the tpub the same keys as BIP32 writes them
     it "reads a zpub or a vpub of SLIP-132 as the xpub or tpub of a bip84 account" $ do
-      readAccountKey "zpub6r4mjW7yrMWVXbBmfxTonrBKKVapwoKJECopsBs8nJfVCLg4E7SDEAyyQtkGubtbsPWC4MmuLyhaNKvV1ChQa2Z418YDQmyzD2GCiogfbAh"
-        `shouldBe` Right (Just Bip84, testSegwitAccountXPub)
-      readAccountKey "vpub5ZPKH6HZ2MVi4mnwX9ZfWbkzbSBWN3ui9RajPuwBVeZ1khQa6HyRDsvy4c4cWH1SGnL22mqQWkrEnuR72zumQizqM4ADkPrShNmGi1jtzXq"
-        `shouldBe` Right (Just Bip84, "tpubDDRUQfT52zY83AN2e4818hHNGVa4EgPmXHDUKFn6ba4fcBhjfq9dcSv5M44a2bGWsy6Y9JYPyBPPFf8qsFb2tdpL9LJNbk9epnUyF9Yobtg")
+      readAccountKey testSegwitAccountZPub `shouldBe` Right (Just Bip84, testSegwitAccountXPub)
+      readAccountKey testSegwitAccountVPub `shouldBe` Right (Just Bip84, testSegwitAccountXPubTest)
+
+    it "writes the key of a bip84 account with the zpub prefix of SLIP-132, which Electrum takes" $
+      slip132Key Bip84 testSegwitAccountXPub `shouldBe` Just testSegwitAccountZPub
+
+    it "writes a vpub for a bip84 account of a test network" $
+      slip132Key Bip84 testSegwitAccountXPubTest `shouldBe` Just testSegwitAccountVPub
+
+    it "writes no SLIP-132 key for a bip44 account, whose xpub marks it" $ do
+      slip132Key Bip44 testAccountXPub `shouldBe` Nothing
+      slip132Key Bip44 testAccountXPubTest `shouldBe` Nothing
+
+    it "writes none for text that is not an extended key" $
+      slip132Key Bip84 "not a key" `shouldBe` Nothing
 
     it "reads an xpub or a tpub as it is, which marks no kind of account" $ do
       readAccountKey testAccountXPub `shouldBe` Right (Nothing, testAccountXPub)

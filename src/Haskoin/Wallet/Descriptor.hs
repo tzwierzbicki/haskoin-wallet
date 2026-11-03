@@ -21,7 +21,8 @@
 -- The key of a descriptor is one of BIP32, an xpub or a tpub. Some wallets
 -- write the key of a BIP84 account with a prefix of SLIP-132, zpub or
 -- vpub, to mark its kind: 'readAccountKey' reads such a key as the xpub it
--- is, with the kind it marks.
+-- is, with the kind it marks, and 'slip132Key' writes it for the wallets
+-- that take only that form, such as Electrum.
 --
 -- This module is the format alone. "Haskoin.Wallet.Labels" makes an
 -- account of a descriptor, and the @descriptor@ command writes the
@@ -47,6 +48,7 @@ module Haskoin.Wallet.Descriptor
     -- * Extended keys
     isPrivateKey,
     readAccountKey,
+    slip132Key,
 
     -- * Checksums
     checksum,
@@ -64,7 +66,7 @@ import qualified Data.Aeson.Types as Json
 import Data.Bits (shiftL, shiftR, testBit, xor, (.&.))
 import qualified Data.ByteString as BS
 import Data.Char (isAlpha, isAlphaNum, isHexDigit)
-import Data.List (elemIndex)
+import Data.List (elemIndex, find)
 import Data.Maybe (fromMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -297,25 +299,62 @@ readAccountKey key =
   case lookup (Text.take 4 key) slip132Prefixes of
     Nothing -> Right (Nothing, key)
     Just (Left refused) -> Left refused
-    Just (Right (kind, bip32Prefix)) ->
-      case decodeBase58Check key of
-        Just bytes | BS.length bytes == 78 -> Right (Just kind, encodeBase58Check (bip32Prefix <> BS.drop 4 bytes))
-        _ -> Left ("The key starts with " <> cs (Text.take 4 key) <> " but does not read as an extended key")
+    Just (Right prefix) ->
+      case extendedKeyBytes key of
+        Just bytes -> Right (Just prefix.prefixKind, encodeBase58Check (prefix.bip32Bytes <> BS.drop 4 bytes))
+        Nothing -> Left ("The key starts with " <> cs (Text.take 4 key) <> " but does not read as an extended key")
+
+-- | The key of an account with the prefix of SLIP-132 that marks its kind,
+-- from the key as BIP32 writes it, which hw stores: a zpub, or a vpub on a
+-- test network, for a BIP84 account. Electrum, BlueWallet and Trezor Suite
+-- take that form for a native SegWit account, since an xpub makes a legacy
+-- wallet there. The key is the same, only its four version bytes differ.
+-- A BIP44 account has no such key, as its xpub marks it, and text that is
+-- not an extended key has none.
+slip132Key :: AccountKind -> Text -> Maybe Text
+slip132Key kind key = do
+  bytes <- extendedKeyBytes key
+  prefix <- find (\p -> p.prefixKind == kind && p.bip32Bytes == BS.take 4 bytes) markedPrefixes
+  return (encodeBase58Check (prefix.slip132Bytes <> BS.drop 4 bytes))
+
+-- | The 78 bytes of an extended key, from its text, when its checksum and
+-- its length are right
+extendedKeyBytes :: Text -> Maybe BS.ByteString
+extendedKeyBytes key = do
+  bytes <- decodeBase58Check key
+  guard (BS.length bytes == 78)
+  return bytes
+
+-- | A prefix of SLIP-132 that hw reads and writes: the kind of account it
+-- marks, its first four characters, and its version bytes beside those of
+-- BIP32 on the same network, which take their place in the key hw stores
+data MarkedPrefix = MarkedPrefix
+  { prefixKind :: !AccountKind,
+    prefixText :: !Text,
+    bip32Bytes :: !BS.ByteString,
+    slip132Bytes :: !BS.ByteString
+  }
+
+-- | The prefixes of the key of a BIP84 account: zpub beside xpub on
+-- Bitcoin, vpub beside tpub on the test networks
+markedPrefixes :: [MarkedPrefix]
+markedPrefixes =
+  [ MarkedPrefix Bip84 "zpub" (BS.pack [0x04, 0x88, 0xb2, 0x1e]) (BS.pack [0x04, 0xb2, 0x47, 0x46]),
+    MarkedPrefix Bip84 "vpub" (BS.pack [0x04, 0x35, 0x87, 0xcf]) (BS.pack [0x04, 0x5f, 0x1c, 0xf6])
+  ]
 
 -- | The prefixes of SLIP-132 by their first four characters: those of a
--- BIP84 account, with the kind and the version bytes of BIP32 that take
--- their place, and the refusal of the others
-slip132Prefixes :: [(Text, Either String (AccountKind, BS.ByteString))]
+-- BIP84 account, which are read, and the refusal of the others
+slip132Prefixes :: [(Text, Either String MarkedPrefix)]
 slip132Prefixes =
-  [ ("zpub", Right (Bip84, BS.pack [0x04, 0x88, 0xb2, 0x1e])),
-    ("vpub", Right (Bip84, BS.pack [0x04, 0x35, 0x87, 0xcf])),
-    ("ypub", Left (bip49 "ypub")),
-    ("upub", Left (bip49 "upub")),
-    ("Ypub", Left (multisig "Ypub")),
-    ("Zpub", Left (multisig "Zpub")),
-    ("Upub", Left (multisig "Upub")),
-    ("Vpub", Left (multisig "Vpub"))
-  ]
+  [(prefix.prefixText, Right prefix) | prefix <- markedPrefixes]
+    <> [ ("ypub", Left (bip49 "ypub")),
+         ("upub", Left (bip49 "upub")),
+         ("Ypub", Left (multisig "Ypub")),
+         ("Zpub", Left (multisig "Zpub")),
+         ("Upub", Left (multisig "Upub")),
+         ("Vpub", Left (multisig "Vpub"))
+       ]
   where
     bip49 prefix = "The key has the prefix " <> prefix <> " of SLIP-132, which marks a BIP49 account, with P2SH-P2WPKH addresses: hw holds " <> kinds <> " accounts"
     multisig prefix = "The key has the prefix " <> prefix <> " of SLIP-132, which marks a multisig account: hw holds " <> kinds <> " accounts of one key"

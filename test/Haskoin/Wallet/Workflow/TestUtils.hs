@@ -41,6 +41,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     notSyncedOf,
     keyOf,
     descriptorsOf,
+    slip132KeysOf,
     accountOf,
     fingerprintsOf,
     addressesOf,
@@ -262,8 +263,14 @@ keyOf other = Left (show other)
 -- | The accounts of an answer with their descriptors, as descriptor
 -- shows them
 descriptorsOf :: Response -> Either String [(Text, Text)]
-descriptorsOf (ResponseDescriptors held) = Right [(dBAccountName acc, descriptor) | (acc, descriptor) <- held]
+descriptorsOf (ResponseDescriptors held) = Right [(dBAccountName acc, descriptor) | (acc, descriptor, _) <- held]
 descriptorsOf other = Left (show other)
+
+-- | The accounts of an answer with their keys in the form of SLIP-132, as
+-- descriptor shows them: a zpub for a bip84 account, none for a bip44 one
+slip132KeysOf :: Response -> Either String [(Text, Maybe Text)]
+slip132KeysOf (ResponseDescriptors held) = Right [(dBAccountName acc, key) | (acc, _, key) <- held]
+slip132KeysOf other = Left (show other)
 
 -- | The account an answer shows
 accountOf :: Response -> Either String DBAccount

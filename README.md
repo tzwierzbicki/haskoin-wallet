@@ -312,7 +312,11 @@ not know the fingerprint, the descriptor names no origin, which a hardware
 wallet needs, and the answer says so. `--account` shows one account.
 
 A `bip84` account gives `wpkh([bc560f95/84h/0h/0h]xpub.../<0;1>/*)#5nktextl`,
-the script function naming the kind.
+the script function naming the kind. It is shown with its key as a `zpub` as
+well, or a `vpub` on a test network, in the row `SLIP-132`. Electrum,
+BlueWallet and Trezor Suite take that form for a native SegWit account, since
+an `xpub` makes a legacy wallet there. The key is the same, only its prefix
+differs.
 
 `importacc` reads a descriptor back, and the files other wallets export an
 account in: a descriptor on a line, as Sparrow and Coldcard write it, a key
@@ -328,6 +332,7 @@ is named after its network, index and kind, as `recover` names one:
 
 ```console
 hw descriptor --account vault               # for Sparrow or Bitcoin Core
+hw descriptor --account spending            # a bip84 account, with its zpub for Electrum
 hw importacc coldcard-export.json --network btc
 hw renameacc btc0 coldcard
 hw importacc ledger-xpub.txt --network btc --type bip84

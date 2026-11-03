@@ -964,6 +964,12 @@ hardware wallet needs to match it, and the answer says so.
 A descriptor does not name its network. Bitcoin and Bitcoin Cash write the
 same keys, and every test network writes tpub keys.
 
+A bip84 account is shown with its key in the form of SLIP-132 as well, a
+zpub, or a vpub on a test network, in the row SLIP-132. Electrum, BlueWallet
+and Trezor Suite take that form for a native SegWit account, since an xpub
+makes a legacy wallet there. The key is the same, only its prefix differs.
+A bip44 account has no such row, since those wallets take its xpub as it is.
+
 descriptor asks nothing of the server, so it runs on an offline computer as
 well. importacc reads a descriptor back. Without --account, every account is
 shown.

@@ -235,10 +235,36 @@ segwitSpec ctx =
         (addressesOf <$> hwJson home ["checkaddr", "/0/5"] []) `shouldReturn` Right [(segwitExternalAddrsText !! 5, "")]
         (addressesOf <$> hwJson home ["checkaddr", "/1/0"] []) `shouldReturn` Right [(segwitInternalAddrsText !! 0, "")]
 
-    it "is shown by descriptor as wpkh, as a Coldcard writes it" $
+    it "is shown by descriptor as wpkh, as a Coldcard writes it, with its zpub for Electrum on a row of its own" $
       withHome $ \home -> do
         createSpending home
         (descriptorsOf <$> hwJson home ["descriptor"] []) `shouldReturn` Right [("spending", segwitDescriptor)]
+        (slip132KeysOf <$> hwJson home ["descriptor"] []) `shouldReturn` Right [("spending", Just testSegwitAccountZPub)]
+        run <- hw home ["descriptor"] []
+        runOut run `shouldBe` segwitDescriptor <> "\n  Account    : spending\n  Network    : btc\n  SLIP-132   : " <> testSegwitAccountZPub <> "\n"
+
+    -- As Electrum would be handed the account, and the key handed back to
+    -- another hw: a key alone carries no fingerprint
+    it "is imported from its zpub by another wallet as a bip84 account, named after its network, index and kind" $
+      withHome $ \signer -> withHome $ \online -> do
+        createSpending signer
+        shown <- slip132KeysOf <$> answer signer ["descriptor"] []
+        zpub <- case shown of
+          Right [(_, Just key)] -> return key
+          other -> fail ("Not one zpub: " <> show other)
+        writeFile (online </> "spending.txt") (Text.unpack zpub <> "\n")
+        (keyOf <$> hwJson online ["importacc", online </> "spending.txt"] []) `shouldReturn` Right ("btc0-segwit", 0, testSegwitAccountXPub)
+        (fingerprintsOf <$> hwJson online ["accounts"] []) `shouldReturn` Right [("btc0-segwit", Nothing)]
+        (addressesOf <$> hwJson online ["receive"] []) `shouldReturn` Right [(segwitExternalAddrsText !! 0, "")]
+
+    -- The bip84 account of the file of Bitcoin Core, of
+    -- test/data/descriptors: the vpub of its tpub, computed apart from hw
+    it "is shown with a vpub on a test network, where the keys are tpub" $
+      withHome $ \home -> do
+        file <- makeAbsolute "test/data/descriptors/core-default-wallet.json"
+        _ <- answer home ["importacc", file, "--network", "btctest"] []
+        (slip132KeysOf <$> hwJson home ["descriptor", "--account", "btctest0-segwit"] [])
+          `shouldReturn` Right [("btctest0-segwit", Just "vpub5Z1pM9RQ283SnGWmTeYJB46HYNFZom6eT5JgfZ73Vg9gzYZogXGmjepwEePvVAJqdMadJ7uYRcuXVjdYVuRJtL14o4aam2NbDQ7QzzeUsc8")]
 
     it "is exported by exportacc and imported by importacc in another wallet, as a bip84 account with its fingerprint" $
       withHome $ \signer -> withHome $ \online -> do
@@ -314,6 +340,11 @@ descriptorSpec =
         createMain home
         run <- hw home ["descriptor"] []
         runOut run `shouldBe` mainDescriptor <> "\n  Account    : main\n  Network    : btc\n"
+
+    it "has no row of SLIP-132 for a bip44 account, whose xpub Electrum takes as it is" $
+      withHome $ \home -> do
+        createMain home
+        (slip132KeysOf <$> hwJson home ["descriptor"] []) `shouldReturn` Right [("main", Nothing)]
 
     -- second is account 1 of the seed, m/44'/0'/1'
     it "is shown for every account, or for the --account named" $

@@ -202,10 +202,12 @@ verboseAccountDoc unit created acc spendable =
 
 -- | The descriptor of an account as descriptor shows it: the descriptor
 -- alone on its first line, to copy into another wallet, then its account
--- and network, and that the fingerprint of the seed is unknown when it
--- is, since the descriptor then names no origin
-descriptorDoc :: DBAccount -> Text -> Doc Style
-descriptorDoc acc descriptor =
+-- and network, that the fingerprint of the seed is unknown when it is,
+-- since the descriptor then names no origin, and the key with the prefix
+-- of SLIP-132 when the account has one, a zpub for a bip84 account, to
+-- copy into a wallet that takes only that form
+descriptorDoc :: DBAccount -> Text -> Maybe Text -> Doc Style
+descriptorDoc acc descriptor slip132 =
   vcat $
     text (cs descriptor)
       : ( indent 2
@@ -213,6 +215,7 @@ descriptorDoc acc descriptor =
                   field 11 "Network" <> text (accountNetwork acc).name
                 ]
               <> [field 11 "Fingerprint" <> styled Muted "unknown" | isNothing (dBAccountFingerprint acc)]
+              <> [field 11 "SLIP-132" <> text (cs key) | Just key <- [slip132]]
         )
 
 -- | The document in the style
@@ -954,7 +957,7 @@ responsePrinter unit view answer =
     ResponseAccResult _ res txt -> renderIO $ styled (if res then Good else Failure) (cs txt)
     ResponseFile f -> renderIO $ "Written to" <+> styled UserText f
     ResponseImport report -> renderIO $ importDoc report
-    ResponseDescriptors held -> renderIO $ vcat (intersperse mempty [descriptorDoc acc descriptor | (acc, descriptor) <- held])
+    ResponseDescriptors held -> renderIO $ vcat (intersperse mempty [descriptorDoc acc descriptor slip132 | (acc, descriptor, slip132) <- held])
     ResponseAddress _ addr spendable ->
       renderIO =<< listedAddressDoc Verbose unit (pathWidth [addr]) addr spendable
     ResponseCheckAddr acc path addr label -> renderIO $ checkAddrDoc acc path addr label

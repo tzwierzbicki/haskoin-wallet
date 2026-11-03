@@ -104,7 +104,7 @@ import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Amounts (AmountUnit)
 import Haskoin.Wallet.Backup (backupDatabase, backupDirectory, copyDatabase)
 import Haskoin.Wallet.Bip329 (recordsText)
-import Haskoin.Wallet.Descriptor (accountDescriptor, descriptorText)
+import Haskoin.Wallet.Descriptor (accountDescriptor, descriptorText, slip132Key)
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
@@ -372,13 +372,14 @@ cmdExportAcc ctx cfg account file =
 -- | The output descriptor of the account, or of every account, as other
 -- wallets and Bitcoin Core take an account: its key in the script function
 -- of its kind, pkh or wpkh, with its origin when the fingerprint of its
--- seed is known
+-- seed is known. A bip84 account comes with its key in the zpub form of
+-- SLIP-132 as well, for the wallets that take only that form.
 cmdDescriptor :: Config -> Maybe Text -> IO Response
 cmdDescriptor cfg account =
   runDBResponse cfg $ do
     accs <- getAccountsByName account
     when (null accs) $ throwError "There are no accounts in the wallet"
-    return $ ResponseDescriptors [(acc, descriptorOf acc) | (_, acc) <- accs]
+    return $ ResponseDescriptors [(acc, descriptorOf acc, slip132Key (accountKind acc) (dBAccountXPubKey acc)) | (_, acc) <- accs]
   where
     descriptorOf acc = descriptorText (accountDescriptor (accountKind acc) (accountFingerprint acc) (accountPath acc) (dBAccountXPubKey acc))
 

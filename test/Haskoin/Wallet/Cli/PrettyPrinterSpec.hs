@@ -145,7 +145,7 @@ descriptorSpec :: Spec
 descriptorSpec =
   describe "The descriptor of an account as hw shows it" $ do
     it "gives the descriptor alone on its first line, then the account and its network" $
-      renderedLines (descriptorDoc mainAccountRow ("pkh([bc560f95/44h/0h/0h]" <> testAccountXPub <> "/<0;1>/*)#vq597j87"))
+      renderedLines (descriptorDoc mainAccountRow ("pkh([bc560f95/44h/0h/0h]" <> testAccountXPub <> "/<0;1>/*)#vq597j87") Nothing)
         `shouldBe` [ "pkh([bc560f95/44h/0h/0h]" <> Text.unpack testAccountXPub <> "/<0;1>/*)#vq597j87",
                      "  Account    : main",
                      "  Network    : btc"
@@ -153,11 +153,28 @@ descriptorSpec =
 
     -- The descriptor then names no origin
     it "says the fingerprint of the seed is unknown when it is" $
-      renderedLines (descriptorDoc mainAccountRow {dBAccountFingerprint = Nothing} ("pkh(" <> testAccountXPub <> "/<0;1>/*)#mmejv52s"))
+      renderedLines (descriptorDoc mainAccountRow {dBAccountFingerprint = Nothing} ("pkh(" <> testAccountXPub <> "/<0;1>/*)#mmejv52s") Nothing)
         `shouldBe` [ "pkh(" <> Text.unpack testAccountXPub <> "/<0;1>/*)#mmejv52s",
                      "  Account    : main",
                      "  Network    : btc",
                      "  Fingerprint: unknown"
+                   ]
+
+    it "adds the key with the zpub prefix of SLIP-132 on a row of its own for a bip84 account" $
+      renderedLines (descriptorDoc segwitAccountRow ("wpkh([bc560f95/84h/0h/0h]" <> testSegwitAccountXPub <> "/<0;1>/*)#5nktextl") (Just testSegwitAccountZPub))
+        `shouldBe` [ "wpkh([bc560f95/84h/0h/0h]" <> Text.unpack testSegwitAccountXPub <> "/<0;1>/*)#5nktextl",
+                     "  Account    : spending",
+                     "  Network    : btc",
+                     "  SLIP-132   : " <> Text.unpack testSegwitAccountZPub
+                   ]
+
+    it "puts that row after the note on the fingerprint, which the descriptor lacks" $
+      renderedLines (descriptorDoc segwitAccountRow {dBAccountFingerprint = Nothing} ("wpkh(" <> testSegwitAccountXPub <> "/<0;1>/*)#h3820wwk") (Just testSegwitAccountZPub))
+        `shouldBe` [ "wpkh(" <> Text.unpack testSegwitAccountXPub <> "/<0;1>/*)#h3820wwk",
+                     "  Account    : spending",
+                     "  Network    : btc",
+                     "  Fingerprint: unknown",
+                     "  SLIP-132   : " <> Text.unpack testSegwitAccountZPub
                    ]
 
 balanceSpec :: Spec

@@ -251,6 +251,13 @@ testNewSegwitAcc ctx = newAccountOfKind Bip84 ctx testMnemonic btc
 mainAccountRow :: DBAccount
 mainAccountRow = DBAccount "main" 0 44 "btc" 12 3 testAccountXPub (Just testFingerprintText) 5000000 100000 3 seenTime
 
+-- | The BIP84 account spending of the test wallet as its row holds it:
+-- account 0 of the test mnemonic on Bitcoin at m/84'/0'/0', with 2
+-- receiving addresses handed out, no change address and nothing received,
+-- created at 'seenTime'
+segwitAccountRow :: DBAccount
+segwitAccountRow = DBAccount "spending" 0 84 "btc" 2 0 testSegwitAccountXPub (Just testFingerprintText) 0 0 0 seenTime
+
 -- | The first receiving address of that account as its row holds it,
 -- labelled "Invoice 42": paid 50000 in one transaction, which it still
 -- holds in one coin, created at 'seenTime'
@@ -618,6 +625,12 @@ testSegwitAccountXPrv, testSegwitAccountXPub :: Text
 testSegwitAccountXPrv = "xprv9yQtifFFicsEcWj4uDMZ1Y3aRXTSf6cT2kqnW1fkTxNkDLiTBFnqSFMDXC3Jy1XFREhqmya5GnmuSMYVbmos2HDchLqJGZiTJtdKjPp6qDT"
 testSegwitAccountXPub = "xpub6CQF8An9YzRXpzoY1EtZNfzJyZHw4ZLJPymPJQ5N2Huj693bio75z3fhNUq6unam47GaZQanRezUbkhMZosNyZBrGT9NExM1fa8uwdaWnoV"
 
+-- | The public key of the BIP84 account with the zpub prefix of SLIP-132,
+-- as Electrum and a Coldcard write it: the same key, its four version
+-- bytes swapped, computed apart from hw
+testSegwitAccountZPub :: Text
+testSegwitAccountZPub = "zpub6r4mjW7yrMWVXbBmfxTonrBKKVapwoKJECopsBs8nJfVCLg4E7SDEAyyQtkGubtbsPWC4MmuLyhaNKvV1ChQa2Z418YDQmyzD2GCiogfbAh"
+
 testSegwitAccountKey :: XPrvKey
 testSegwitAccountKey = fromMaybe (error "testSegwitAccountKey") $ xPrvImport btc testSegwitAccountXPrv
 
@@ -664,6 +677,10 @@ segwitInternalAddr i = testAddress (segwitInternalAddrsText !! i)
 -- m/84'/1'/0', the same text on each of them
 testSegwitAccountXPubTest :: Text
 testSegwitAccountXPubTest = "tpubDDRUQfT52zY83AN2e4818hHNGVa4EgPmXHDUKFn6ba4fcBhjfq9dcSv5M44a2bGWsy6Y9JYPyBPPFf8qsFb2tdpL9LJNbk9epnUyF9Yobtg"
+
+-- | The same key with the vpub prefix of SLIP-132, computed apart from hw
+testSegwitAccountVPub :: Text
+testSegwitAccountVPub = "vpub5ZPKH6HZ2MVi4mnwX9ZfWbkzbSBWN3ui9RajPuwBVeZ1khQa6HyRDsvy4c4cWH1SGnL22mqQWkrEnuR72zumQizqM4ADkPrShNmGi1jtzXq"
 
 testAccountKey :: XPrvKey
 testAccountKey = fromMaybe (error "testAccountKey") $ xPrvImport btc testAccountXPrv

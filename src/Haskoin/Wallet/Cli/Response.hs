@@ -40,8 +40,9 @@ data Response
     ResponseImport !ImportReport
   | -- | Accounts, each with the balance it can spend now
     ResponseAccounts ![(DBAccount, Word64)]
-  | -- | Accounts, each with its output descriptor, as descriptor shows them
-    ResponseDescriptors ![(DBAccount, Text)]
+  | -- | Accounts, each with its output descriptor and, for a bip84 one, its
+    -- key with the zpub prefix of SLIP-132, as descriptor shows them
+    ResponseDescriptors ![(DBAccount, Text, Maybe Text)]
   | -- | An address of the account, with the balance it can spend now
     ResponseAddress !DBAccount !DBAddress !Word64
   | -- | Addresses of the account, each with the balance it can spend now
@@ -110,7 +111,7 @@ instance ToJSON Response where
     ResponseImport report -> typed "import" (reportPairs report)
     ResponseAccounts accs -> typed "accounts" ["accounts" .= (uncurry accountWithSpendable <$> accs)]
     ResponseDescriptors held ->
-      typed "descriptors" ["descriptors" .= [object ["account" .= acc, "descriptor" .= descriptor] | (acc, descriptor) <- held]]
+      typed "descriptors" ["descriptors" .= [object ["account" .= acc, "descriptor" .= descriptor, "slip132" .= slip132] | (acc, descriptor, slip132) <- held]]
     ResponseAddress acc addr spendable ->
       typed "address" ["account" .= acc, "address" .= addressWithSpendable addr spendable]
     ResponseAddresses acc addrs ->
@@ -188,7 +189,7 @@ instance FromJSON Response where
       network o = maybe (fail "Unknown network") return . netByName =<< o .: "network"
       -- The descriptor of an account
       heldDescriptor = withObject "descriptor of an account" $ \entry ->
-        (,) <$> entry .: "account" <*> entry .: "descriptor"
+        (,,) <$> entry .: "account" <*> entry .: "descriptor" <*> entry .:? "slip132"
       -- A transaction with its account, which names its network
       heldTx = withObject "transaction of an account" $ \entry -> do
         acc <- entry .: "account"
