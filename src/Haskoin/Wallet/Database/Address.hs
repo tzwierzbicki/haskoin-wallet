@@ -528,16 +528,26 @@ fromDBAddr net row = (,addrPath row) <$> textToAddrE net (dBAddressAddress row)
 -- Nothing when the child key at that index is invalid: haskoin-core throws
 -- for such a key, where BIP32 says to skip the index
 deriveChainAddress :: Ctx -> AccountKind -> XPubKey -> SoftPath -> KeyIndex -> IO (Maybe Address)
-deriveChainAddress ctx kind pub chain i = do
+deriveChainAddress ctx kind = deriveChainAddressBy (keyAddress kind ctx) ctx
+
+-- | 'deriveChainAddress', with the address of a key given by the function:
+-- for the accounts hw does not hold, whose addresses are of no kind of
+-- 'AccountKind'
+deriveChainAddressBy :: (XPubKey -> Address) -> Ctx -> XPubKey -> SoftPath -> KeyIndex -> IO (Maybe Address)
+deriveChainAddressBy addressOf ctx pub chain i = do
   derived <- try $ evaluate $ derivePubPath ctx (chain :/ i) pub
   return $ case derived of
     Left (DerivationException _) -> Nothing
-    Right child -> Just (keyAddress kind ctx child)
+    Right child -> Just (addressOf child)
 
 -- | The addresses of a chain of the public key of an account of the kind
 -- from an index, as many as asked, with their indices; an index with an
 -- invalid child key is left out
 chainAddresses :: Ctx -> AccountKind -> XPubKey -> SoftPath -> Natural -> Natural -> IO [(Address, KeyIndex)]
-chainAddresses ctx kind pub chain firstIndex howMany =
+chainAddresses ctx kind = chainAddressesBy (keyAddress kind ctx) ctx
+
+-- | 'chainAddresses', with the address of a key given by the function
+chainAddressesBy :: (XPubKey -> Address) -> Ctx -> XPubKey -> SoftPath -> Natural -> Natural -> IO [(Address, KeyIndex)]
+chainAddressesBy addressOf ctx pub chain firstIndex howMany =
   fmap catMaybes . forM (genericTake howMany [fromIntegral firstIndex ..]) $ \i ->
-    fmap (\addr -> (addr, i)) <$> deriveChainAddress ctx kind pub chain i
+    fmap (\addr -> (addr, i)) <$> deriveChainAddressBy addressOf ctx pub chain i

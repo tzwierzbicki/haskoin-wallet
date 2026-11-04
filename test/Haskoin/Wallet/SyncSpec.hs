@@ -37,7 +37,7 @@ import Haskoin.Wallet.Database.PendingTx
 import Haskoin.Wallet.Database.RawTx (hasRawTx, insertRawTx)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
-import Haskoin.Wallet.Keys (AccountKind (..))
+import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), MyOutputs (..), TxInfo (..), TxSummary (..), TxType (..), txInfoHash, txsAfter)
 import Haskoin.Wallet.Database.TxLabel (txLabel)
@@ -692,6 +692,66 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ recoverSeed ctx cfg store bch (testSeed ctx) 1 `dbShouldBeE` []
       windows <- readIORef asked
       map (take 1) windows `shouldBe` [[bchExternalAddr]]
+
+  describe "The funds of a seed at accounts hw does not hold" $ do
+    -- The chain pays the bip49 account 0 of the seed at its first
+    -- receiving address, confirmed, and at its second change address,
+    -- unconfirmed, and the bip86 account 0 at its second receiving address
+    let elsewhere =
+          emptyStore
+            { fakeBalances =
+                [ Store.Balance (wrappedExternalAddr 0) 50000 0 1 1 50000,
+                  Store.Balance (wrappedInternalAddr 1) 0 20000 1 1 20000,
+                  Store.Balance (taprootExternalAddr 1) 7000 0 1 1 7000
+                ]
+            }
+        -- A gap of 2 instead of the default 20: the five written-out
+        -- addresses of each chain are enough for two windows
+        smallGap = cfg {configGap = 2}
+        found store net gap = runExceptT $ foreignFunds ctx smallGap (toStore store) net (testSeed ctx) gap
+
+    it "finds the bip49 and bip86 accounts paid on Bitcoin, with their used addresses and the balance of both chains, unconfirmed included" $
+      -- 50000 confirmed + 20000 unconfirmed = 70000
+      found elsewhere btc 1 `shouldReturn` Right [ForeignFunds Bip49 0 2 70000, ForeignFunds Bip86 0 1 7000]
+
+    it "finds nothing for a seed never paid there, after one window of the receiving chain of each kind" $ do
+      asked <- newIORef []
+      let store = notingBalanceRequests asked (toStore emptyStore)
+      runExceptT (foreignFunds ctx smallGap store btc (testSeed ctx) 1) `shouldReturn` Right []
+      readIORef asked `shouldReturn` [[wrappedExternalAddr 0, wrappedExternalAddr 1], [taprootExternalAddr 0, taprootExternalAddr 1]]
+
+    -- The bip49 account 0 was paid at its first receiving address, and
+    -- the search moves on to its account 1
+    it "scans the change chain of an account found, and only then" $ do
+      asked <- newIORef []
+      let store = notingBalanceRequests asked (toStore (emptyStore {fakeBalances = [Store.Balance (wrappedExternalAddr 0) 50000 0 1 1 50000]}))
+      runExceptT (foreignFunds ctx smallGap store btc (testSeed ctx) 1) `shouldReturn` Right [ForeignFunds Bip49 0 1 50000]
+      windows <- readIORef asked
+      map (take 1) windows `shouldBe` [[wrappedExternalAddr 0], [wrappedExternalAddr 2], [wrappedInternalAddr 0], [wrappedAccount1Addr], [taprootExternalAddr 0]]
+
+    it "looks past unpaid accounts as far as the account gap allows, as for the accounts hw holds" $ do
+      let paidAccount1 = emptyStore {fakeBalances = [Store.Balance wrappedAccount1Addr 1000 0 1 1 1000]}
+      found paidAccount1 btc 1 `shouldReturn` Right []
+      found paidAccount1 btc 2 `shouldReturn` Right [ForeignFunds Bip49 1 1 1000]
+
+    -- The chain pays the first receiving address of account 0 of the seed
+    -- on Bitcoin, m/44'/0'/0', whose keys hold Bitcoin Cash as well
+    it "finds the Bitcoin Cash at the bip44 accounts of Bitcoin, and looks for no SegWit account there" $ do
+      asked <- newIORef []
+      let store = notingBalanceRequests asked (toStore (emptyStore {fakeBalances = [Store.Balance (externalAddr 0) 50000 0 1 1 50000]}))
+      runExceptT (foreignFunds ctx smallGap store bch (testSeed ctx) 1) `shouldReturn` Right [ForeignFunds Bip44OfBitcoin 0 1 50000]
+      windows <- readIORef asked
+      map (take 1) windows `shouldBe` [[externalAddr 0], [externalAddr 2], [internalAddr 0], [account1Addr]]
+
+    it "asks nothing on the test networks of Bitcoin Cash, whose coin type is that of the test networks of Bitcoin" $ do
+      asked <- newIORef []
+      let store = notingBalanceRequests asked (toStore (emptyStore {fakeBalances = [Store.Balance (externalAddr 0) 50000 0 1 1 50000]}))
+      runExceptT (foreignFunds ctx smallGap store bchTest (testSeed ctx) 1) `shouldReturn` Right []
+      readIORef asked `shouldReturn` []
+
+    it "fails when the store fails" $
+      runExceptT (foreignFunds ctx smallGap ((toStore emptyStore) {storeBalances = \_ -> throwError "The store is down"}) btc (testSeed ctx) 1)
+        `shouldReturn` Left "The store is down"
 
   describe "Watching the gap of addresses" $ do
     -- A gap of 3 instead of the default 20: the sync looks at the three

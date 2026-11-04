@@ -39,6 +39,8 @@ module Haskoin.Wallet.Workflow.TestUtils
     printedSentence,
     accountsOf,
     notSyncedOf,
+    unspendableOf,
+    accResultOf,
     keyOf,
     refusedOf,
     createdNotesOf,
@@ -96,10 +98,10 @@ import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..), LeftCoin (..)
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.Database (DBAccount (..), DBAddress (..))
 import Haskoin.Wallet.HwTestUtils
-import Haskoin.Wallet.Keys (AccountKind (..), MnemonicPass (..))
+import Haskoin.Wallet.Keys (AccountKind (..), MnemonicPass (..), foreignKindName)
 import Haskoin.Wallet.Labels (AccountImport (..), ImportReport (..), importedAccount)
 import qualified Haskoin.Wallet.Schema.V3 as V3
-import Haskoin.Wallet.Sync (SyncRes (..))
+import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..), foreignPath)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Tx.PsbtFile (FileAccount (..), hwIdentifier, networkField, psbtTxFile, txFilePsbt)
@@ -243,8 +245,22 @@ accountsOf :: Response -> Either String [(Text, Int, Word64)]
 accountsOf (ResponseAccount acc spendable) = Right [(dBAccountName acc, dBAccountIndex acc, spendable)]
 accountsOf (ResponseAccounts accs) = Right [(dBAccountName acc, dBAccountIndex acc, spendable) | (acc, spendable) <- accs]
 accountsOf (ResponseSync results _) = Right [(dBAccountName (syncResAccount s), dBAccountIndex (syncResAccount s), syncResSpendable s) | s <- results]
-accountsOf (ResponseRecover _ _ results) = accountsOf (ResponseSync results [])
+accountsOf (ResponseRecover _ _ results _) = accountsOf (ResponseSync results [])
 accountsOf other = Left (show other)
+
+-- | The funds recover found at paths hw cannot spend from: the kind and
+-- the path of each account, how many of its addresses were used, and
+-- what they hold in satoshis
+unspendableOf :: Response -> Either String [(Text, String, Natural, Word64)]
+unspendableOf (ResponseRecover net _ _ elsewhere) =
+  Right [(foreignKindName (foreignKind funds), pathToStr (foreignPath net funds), foreignUsed funds, foreignBalance funds) | funds <- elsewhere]
+unspendableOf other = Left (show other)
+
+-- | Whether a command on an account did what it was asked, and what it
+-- says of it
+accResultOf :: Response -> Either String (Bool, Text)
+accResultOf (ResponseAccResult _ result text) = Right (result, text)
+accResultOf other = Left (show other)
 
 -- | The accounts a sync left out, each by name with the failure of its
 -- store

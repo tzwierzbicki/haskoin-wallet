@@ -682,6 +682,78 @@ testSegwitAccountXPubTest = "tpubDDRUQfT52zY83AN2e4818hHNGVa4EgPmXHDUKFn6ba4fcBh
 testSegwitAccountVPub :: Text
 testSegwitAccountVPub = "vpub5ZPKH6HZ2MVi4mnwX9ZfWbkzbSBWN3ui9RajPuwBVeZ1khQa6HyRDsvy4c4cWH1SGnL22mqQWkrEnuR72zumQizqM4ADkPrShNmGi1jtzXq"
 
+-- | The accounts of the test wallet of the kinds hw does not hold, which
+-- recover looks for: the key of the BIP49 account 0, m/49'/0'/0', and
+-- the first five addresses of its two chains, P2SH-P2WPKH; the first
+-- receiving address of the BIP49 account 1; and the same of the BIP86
+-- account 0, m/86'/0'/0', whose addresses are P2TR. All derived apart
+-- from hw with the Python tool of the message-signing vectors, whose
+-- derivation was checked against the vectors of BIP 49, BIP 84 and
+-- BIP 86 first.
+testWrappedAccountXPub :: Text
+testWrappedAccountXPub = "xpub6DSJPn1DECFaHqjX5bfs9oKY4vR2xWHYgD9FyuKvhwdXUe9uxxzddLUMvQjJSBiXHM5YXPVD1mqq9ReUUC7BcwhXhMR4XA3T4Rmn31uhQm3"
+
+testWrappedAccountPub :: Ctx -> XPubKey
+testWrappedAccountPub ctx = fromMaybe (error "testWrappedAccountPub") $ xPubImport btc ctx testWrappedAccountXPub
+
+wrappedExternalAddrsText :: [Text]
+wrappedExternalAddrsText =
+  [ "3F2meb7rc8H1iij4Z4h7ZW4skSxFvyX6Ks",
+    "3Gj5qxN37hKXjuHjY6PtjvQXVkRj8Q2hQo",
+    "3GCbzjo6c6BhwJpCg7mhjkVLoTscid2SRz",
+    "3JYW348M8gnbw53gBvPjdsrMP95qi6ehfF",
+    "3BpdjM8ZH31QTfy3eCFmyX8DRLRbJ2noHV"
+  ]
+
+wrappedInternalAddrsText :: [Text]
+wrappedInternalAddrsText =
+  [ "3PtUnPBhySzjMG996ZRgeHebs5PCd7qEHJ",
+    "32Dv272CRJhd2aTL2RZbXnoaMMd7uiaGy4",
+    "32Z1RJE2EezPo7ujVR2maYeM9tw4vJoZQT",
+    "3G24PqZkVabv23Qhc3MYikT4d1h8cU1Wux",
+    "34CLC4QRPL8fGb4whN3xn8Mh5f9qqkoXbp"
+  ]
+
+-- | The receiving address /0/i and the change address /1/i of the BIP49
+-- account 0
+wrappedExternalAddr, wrappedInternalAddr :: Int -> Address
+wrappedExternalAddr i = testAddress (wrappedExternalAddrsText !! i)
+wrappedInternalAddr i = testAddress (wrappedInternalAddrsText !! i)
+
+-- | The first receiving address of the BIP49 account 1, m/49'/0'/1'/0/0
+wrappedAccount1Addr :: Address
+wrappedAccount1Addr = testAddress "3FQUvWTfeMUcqxfNTxGqL2aJsNBadyhd3Q"
+
+testTaprootAccountXPub :: Text
+testTaprootAccountXPub = "xpub6C2p6JewFDCzaAxWktknQQxjHuqWgsXkH1ikanD6jrjuUWKyjoifhNSMj1tYaMfsKW7YZzMu5Pzw2t9rYGHi5jf1DrSNwpu6YYvrj9ZmG1C"
+
+testTaprootAccountPub :: Ctx -> XPubKey
+testTaprootAccountPub ctx = fromMaybe (error "testTaprootAccountPub") $ xPubImport btc ctx testTaprootAccountXPub
+
+taprootExternalAddrsText :: [Text]
+taprootExternalAddrsText =
+  [ "bc1p8zl0j9e73592k9n6ftz4keyq24dq8djqd3rkcrepu2fw6zeryyjs8zz3ev",
+    "bc1p8xcqvkxy92yp73jdyx2np4gc9n5pua72mfy6tpj00q7vqwhca25qk0dy72",
+    "bc1pykh5mycshgvcg3lq94yfjvgtaf0g3e76x4yqasukxkh6j9a3pcssycy0af",
+    "bc1pfw0wclq6cj8plp0e0glkgdmdal27txhdc3lrsat5cfdyq6mj7unq33j4yh",
+    "bc1ptu6lg68933utqcazhztenpsxnqf3d2pts70u9fvhqgt7c89avzlsjt3fwl"
+  ]
+
+taprootInternalAddrsText :: [Text]
+taprootInternalAddrsText =
+  [ "bc1pwgkx9jl5zns4twes524kls50zlxc45k4hcu9sxhga8g28sr9cchszuaxef",
+    "bc1pasgt6r0jwcm3qltj9hnehpj3u32hhf2593xq7efm4eva6ycen7aspcpj6r",
+    "bc1pak9cr67qx6549ftakl59jj8dcsx7gdeeqf6w4kgtp3jqs58e84lqytlvyh",
+    "bc1pu0nxupen84t3aqwhfqxtj9yuta8x7r6ch7uvq06lzfe4vyxpzcaqktlza0",
+    "bc1p9h27gzw2aptrh8fdvgrcj6rwt8jjvntw9xwcnj7rzc9pls9lfalslhutnf"
+  ]
+
+-- | The receiving address /0/i and the change address /1/i of the BIP86
+-- account 0
+taprootExternalAddr, taprootInternalAddr :: Int -> Address
+taprootExternalAddr i = testAddress (taprootExternalAddrsText !! i)
+taprootInternalAddr i = testAddress (taprootInternalAddrsText !! i)
+
 testAccountKey :: XPrvKey
 testAccountKey = fromMaybe (error "testAccountKey") $ xPrvImport btc testAccountXPrv
 

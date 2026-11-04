@@ -14,7 +14,7 @@ import Control.Monad.Except
 import Control.Monad.Reader (MonadIO (..), MonadTrans (lift))
 import Data.Containers.ListUtils (nubOrd, nubOrdOn)
 import Data.Either (partitionEithers)
-import Data.List (find, partition, sort)
+import Data.List (find, genericLength, partition, sort)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isNothing)
@@ -32,7 +32,7 @@ import Haskoin.Wallet.Database.BestBlock
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Keys (AccountKind (..), PublicSeed (..), networkKinds)
+import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind, PublicSeed (..), foreignAddress, foreignDeriv, keyAddress, networkForeignKinds, networkKinds)
 import Haskoin.Wallet.Database.PendingTx
 import Haskoin.Wallet.Database.RawTx
 import Haskoin.Wallet.Store
@@ -51,16 +51,30 @@ import Numeric.Natural (Natural)
 -- twice that many depending on where the last used address falls in its
 -- window.
 scanChain :: (MonadIO m) => Ctx -> Store -> AccountKind -> XPubKey -> SoftPath -> Natural -> Natural -> ExceptT String m Natural
-scanChain ctx store kind pub chain window from = go from from
+scanChain ctx store kind = scanChainBy ctx store (keyAddress kind ctx)
+
+-- | 'scanChain', with the address of a key given by the function: for the
+-- accounts hw does not hold
+scanChainBy :: (MonadIO m) => Ctx -> Store -> (XPubKey -> Address) -> XPubKey -> SoftPath -> Natural -> Natural -> ExceptT String m Natural
+scanChainBy ctx store addressOf pub chain window from = do
+  used <- usedChainAddresses ctx store addressOf pub chain window from
+  return $ if null used then from else maximum (fst <$> used) + 1
+
+-- | The used addresses of a chain of a public key from an index, each
+-- with its index and its balance at the store, found by scanning windows
+-- as 'scanChain' does: the scan behind it, which keeps what the store
+-- said of the addresses
+usedChainAddresses :: (MonadIO m) => Ctx -> Store -> (XPubKey -> Address) -> XPubKey -> SoftPath -> Natural -> Natural -> ExceptT String m [(Natural, Store.Balance)]
+usedChainAddresses ctx store addressOf pub chain window from = go from
   where
-    go next off = do
-      addrs <- liftIO $ chainAddresses ctx kind pub chain off window
+    go off = do
+      addrs <- liftIO $ chainAddressesBy addressOf ctx pub chain off window
       bals <- fromStore $ storeBalances store (fst <$> addrs)
-      let used = Set.fromList [bal.address | bal <- bals, bal.txs /= 0]
-          usedIndices = [fromIntegral i | (addr, i) <- addrs, addr `Set.member` used]
-      if null usedIndices
-        then return next
-        else go (maximum usedIndices + 1) (off + window)
+      let balanceOf = Map.fromList [(bal.address, bal) | bal <- bals, bal.txs /= 0]
+          used = [(fromIntegral i, bal) | (addr, i) <- addrs, Just bal <- [Map.lookup addr balanceOf]]
+      if null used
+        then return []
+        else (used <>) <$> go (off + window)
 
 -- | Generate the addresses of the account that were used without its
 -- knowledge: the gap of addresses past the ones each chain has is asked
@@ -133,6 +147,56 @@ recoveredName kind net index = cs net.name <> cs (show index) <> suffix
     suffix = case kind of
       Bip44 -> Text.empty
       Bip84 -> Text.pack "-segwit"
+
+{- The funds of a seed at accounts hw does not hold -}
+
+-- | What a seed holds at an account of a foreign kind: an account recover
+-- found paid, which hw cannot spend from and does not create
+data ForeignFunds = ForeignFunds
+  { foreignKind :: !ForeignKind,
+    foreignIndex :: !Natural,
+    -- | The addresses of the account with transactions, on both chains
+    foreignUsed :: !Natural,
+    -- | What those addresses hold, confirmed or not, in satoshis
+    foreignBalance :: !Word64
+  }
+  deriving (Eq, Show)
+
+-- | The path of the account the funds are at, on the network
+foreignPath :: Network -> ForeignFunds -> HardPath
+foreignPath net funds = foreignDeriv (foreignKind funds) net (foreignIndex funds)
+
+-- | The funds of a seed at the accounts of a foreign kind on a network,
+-- found as 'recoverableAccounts' finds the accounts hw holds: account
+-- after account from index 0, each paid when a receiving address within
+-- the gap was used, and the search over after the gap of accounts in a
+-- row without one. The change chain of an account found is scanned too,
+-- so that the balance is the whole of it.
+foreignFundsOfKind :: (MonadIO m) => Ctx -> Config -> Store -> ForeignKind -> Network -> PublicSeed -> Natural -> ExceptT String m [ForeignFunds]
+foreignFundsOfKind ctx cfg store kind net seed accountGap = go 0 0
+  where
+    usedOn key chain = usedChainAddresses ctx store (foreignAddress kind ctx) key chain (configGap cfg) 0
+    go index unpaid
+      | unpaid >= accountGap = return []
+      | otherwise = do
+          keyM <- liftIO $ seedForeignKey seed kind net index
+          case keyM of
+            Nothing -> go (index + 1) unpaid
+            Just key -> do
+              receiving <- usedOn key extDeriv
+              if null receiving
+                then go (index + 1) (unpaid + 1)
+                else do
+                  change <- usedOn key intDeriv
+                  let bals = snd <$> receiving <> change
+                      found = ForeignFunds kind index (genericLength bals) (sum [bal.confirmed + bal.unconfirmed | bal <- bals])
+                  (found :) <$> go (index + 1) 0
+
+-- | The funds of a seed on a network at the accounts of every foreign kind
+-- the network has, in the order of the kinds and of their indices
+foreignFunds :: (MonadIO m) => Ctx -> Config -> Store -> Network -> PublicSeed -> Natural -> ExceptT String m [ForeignFunds]
+foreignFunds ctx cfg store net seed accountGap =
+  concat <$> forM (networkForeignKinds net) (\kind -> foreignFundsOfKind ctx cfg store kind net seed accountGap)
 
 {- Synchronisation -}
 

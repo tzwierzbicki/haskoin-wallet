@@ -53,6 +53,7 @@ spec = do
         seed <- expectRight $ seedOf ctx testMnemonic
         (fmap (xPubExport btc ctx) <$> seedAccountKey seed Bip84 btc 0) `shouldReturn` Just testSegwitAccountXPub
     kindSpec ctx
+    foreignKindSpec ctx
   passphraseSpec
   otherImplementationsSpec
 
@@ -98,6 +99,80 @@ kindSpec ctx =
       checkKindOnNetwork btc Bip84 `shouldBe` Right ()
   where
     firstKey = Deriv :/ 0 :/ 0 :: SoftPath
+
+{- The kinds of accounts hw does not hold -}
+
+foreignKindSpec :: Ctx -> Spec
+foreignKindSpec ctx =
+  describe "The kinds of accounts hw does not hold" $ do
+    it "are named after their BIP, the bip44 accounts of Bitcoin by theirs, and described by what sets them apart" $ do
+      map foreignKindName [minBound .. maxBound] `shouldBe` ["bip49", "bip86", "bip44"]
+      foreignKindNamed "bip86" `shouldBe` Just Bip86
+      foreignKindNamed "bip84" `shouldBe` Nothing
+      map foreignKindDescription [minBound .. maxBound] `shouldBe` ["bip49, wrapped SegWit", "bip86, Taproot", "bip44 with the coin type of Bitcoin"]
+
+    it "set the purpose of the path of an account, and the coin type of Bitcoin for its bip44 accounts" $ do
+      pathToStr (foreignDeriv Bip49 btc 0) `shouldBe` "/49'/0'/0'"
+      pathToStr (foreignDeriv Bip86 btcTest 3) `shouldBe` "/86'/1'/3'"
+      pathToStr (foreignDeriv Bip44OfBitcoin bch 2) `shouldBe` "/44'/0'/2'"
+
+    it "are bip49 and bip86 on the networks of Bitcoin, and the bip44 accounts of Bitcoin on Bitcoin Cash alone, whose test networks have the coin type of Bitcoin's" $ do
+      networkForeignKinds btc `shouldBe` [Bip49, Bip86]
+      networkForeignKinds btcTest `shouldBe` [Bip49, Bip86]
+      networkForeignKinds bch `shouldBe` [Bip44OfBitcoin]
+      networkForeignKinds bchTest `shouldBe` []
+      networkForeignKinds bchRegTest `shouldBe` []
+
+    -- The keys of the bip49 and bip86 accounts 0 of the test wallet, derived
+    -- apart from hw with the Python tool of the message-signing vectors
+    it "have their keys derived from the public side of the seed, along their paths" $ do
+      seed <- expectRight $ seedOf ctx testMnemonic
+      (fmap (xPubExport btc ctx) <$> seedForeignKey seed Bip49 btc 0) `shouldReturn` Just testWrappedAccountXPub
+      (fmap (xPubExport btc ctx) <$> seedForeignKey seed Bip86 btc 0) `shouldReturn` Just testTaprootAccountXPub
+      (fmap (xPubExport btc ctx) <$> seedForeignKey seed Bip44OfBitcoin bch 0) `shouldReturn` Just testAccountXPub
+
+    it "give a key its address: P2SH-P2WPKH for bip49, P2TR for bip86, P2PKH for the bip44 accounts of Bitcoin" $ do
+      addrToText btc (foreignAddress Bip49 ctx (derivePubPath ctx firstKey (testWrappedAccountPub ctx))) `shouldBe` Just (wrappedExternalAddrsText !! 0)
+      addrToText btc (foreignAddress Bip86 ctx (derivePubPath ctx firstKey (testTaprootAccountPub ctx))) `shouldBe` Just (taprootExternalAddrsText !! 0)
+      foreignAddress Bip44OfBitcoin ctx (derivePubPath ctx firstKey (testAccountPub ctx)) `shouldBe` externalAddr 0
+
+    -- The vectors of BIP 49 and BIP 86, for the mnemonic of eleven times
+    -- "abandon" and "about", without a passphrase. BIP 86 tweaks the key
+    -- with an even y coordinate, which these vectors catch.
+    it "derive the addresses of the test vectors of BIP 49 and BIP 86" $ do
+      seed <- expectRight $ seedOf ctx abandonMnemonic
+      wrapped <- maybe (fail "The key is invalid") return =<< seedForeignKey seed Bip49 btcTest 0
+      addrToText btcTest (foreignAddress Bip49 ctx (derivePubPath ctx firstKey wrapped)) `shouldBe` Just "2Mww8dCYPUpKHofjgcXcBCEGmniw9CoaiD2"
+      taproot <- maybe (fail "The key is invalid") return =<< seedForeignKey seed Bip86 btc 0
+      xPubExport btc ctx taproot `shouldBe` "xpub6BgBgsespWvERF3LHQu6CnqdvfEvtMcQjYrcRzx53QJjSxarj2afYWcLteoGVky7D3UKDP9QyrLprQ3VCECoY49yfdDEHGCtMMj92pReUsQ"
+      let addressAt path = addrToText btc (foreignAddress Bip86 ctx (derivePubPath ctx path taproot))
+      addressAt (Deriv :/ 0 :/ 0) `shouldBe` Just "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr"
+      addressAt (Deriv :/ 0 :/ 1) `shouldBe` Just "bc1p4qhjn9zdvkux4e44uhx8tc55attvtyu358kutcqkudyccelu0was9fqzwh"
+      addressAt (Deriv :/ 1 :/ 0) `shouldBe` Just "bc1p3qkhfews2uk44qtvauqyr2ttdsw7svhkl9nkm9s9c3x4ax5h60wqwruhk7"
+
+    it "tell where a seed has a key: the kind and the network of the account whose key it is, at the index of the key" $ do
+      seed <- expectRight $ seedOf ctx testMnemonic
+      (held <$> accountsWithKey seed (testAccountPub ctx)) `shouldReturn` [("bip44", "btc")]
+      (held <$> accountsWithKey seed (testSegwitAccountPub ctx)) `shouldReturn` [("bip84", "btc")]
+      -- The key of the second test wallet is of another seed
+      (held <$> accountsWithKey seed (fromJust (xPubImport btc ctx testAccountXPub2))) `shouldReturn` []
+      -- The test networks all have the coin type 1
+      (held <$> accountsWithKey seed (fromJust (xPubImport btcTest ctx testAccountXPubTest)))
+        `shouldReturn` [("bip44", "btctest"), ("bip44", "btctest4"), ("bip44", "bchtest4"), ("bip44", "bchtest"), ("bip44", "btcreg"), ("bip44", "bchreg")]
+
+    it "tell when a seed has a key at an account of a kind hw does not hold, the bip44 accounts of Bitcoin on Bitcoin Cash included" $ do
+      seed <- expectRight $ seedOf ctx testMnemonic
+      (elsewhere <$> foreignAccountsWithKey seed (testWrappedAccountPub ctx)) `shouldReturn` [("bip49", "btc")]
+      (elsewhere <$> foreignAccountsWithKey seed (testTaprootAccountPub ctx)) `shouldReturn` [("bip86", "btc")]
+      (elsewhere <$> foreignAccountsWithKey seed (testAccountPub ctx)) `shouldReturn` [("bip44", "bch")]
+      (elsewhere <$> foreignAccountsWithKey seed (testSegwitAccountPub ctx)) `shouldReturn` []
+  where
+    firstKey = Deriv :/ 0 :/ 0 :: SoftPath
+    held :: [(AccountKind, Network)] -> [(Text, String)]
+    held found = [(kindName kind, net.name) | (kind, net) <- found]
+    elsewhere :: [(ForeignKind, Network)] -> [(Text, String)]
+    elsewhere found = [(foreignKindName kind, net.name) | (kind, net) <- found]
+    abandonMnemonic = MnemonicPass "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about" ""
 
 {- The seed hw derived before, from the passphrase as typed -}
 

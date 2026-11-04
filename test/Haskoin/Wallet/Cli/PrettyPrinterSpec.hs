@@ -17,9 +17,9 @@ import Haskoin.Wallet.Database.Address (CoinBalance (..))
 import Haskoin.Wallet.Amounts (AmountUnit (..))
 import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..))
 import Haskoin.Wallet.Database (DBAccount (..), DBAddress (..))
-import Haskoin.Wallet.Keys (MnemonicPass (..))
+import Haskoin.Wallet.Keys (ForeignKind (..), MnemonicPass (..))
 import Haskoin.Wallet.Cli.PrettyPrinter
-import Haskoin.Wallet.Sync (SyncRes (..))
+import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..))
 import Haskoin.Wallet.Labels (AccountImport (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Database.TxInfo
@@ -285,6 +285,24 @@ syncSpec =
         `shouldBe` [ "main  btc  /44'/0'/0'",
                      "  not synced: The store at http://127.0.0.1:1/ did not answer"
                    ]
+
+    it "lists the funds at paths hw cannot spend from: each account with its kind, its used addresses and what is left, then what to do" $
+      renderedLines (foreignFundsDoc UnitBitcoin btc [ForeignFunds Bip49 0 3 70000, ForeignFunds Bip86 0 1 0])
+        `shouldBe` [ "The seed was paid at paths hw cannot spend from:",
+                     "  /49'/0'/0'  bip49, wrapped SegWit: 3 addresses used, 0.00070000 btc left",
+                     "  /86'/0'/0'  bip86, Taproot: 1 address used, nothing left",
+                     "  A wallet that holds such accounts can move the funds to an address of this wallet."
+                   ]
+
+    it "aligns the kinds when the paths differ in length" $
+      take 2 (drop 1 (renderedLines (foreignFundsDoc UnitBitcoin btc [ForeignFunds Bip49 0 1 1000, ForeignFunds Bip49 10 1 1000])))
+        `shouldBe` [ "  /49'/0'/0'   bip49, wrapped SegWit: 1 address used, 0.00001000 btc left",
+                     "  /49'/0'/10'  bip49, wrapped SegWit: 1 address used, 0.00001000 btc left"
+                   ]
+
+    it "names the bip44 accounts of Bitcoin on Bitcoin Cash by the coin type of their path" $
+      renderedLines (foreignFundsDoc UnitBitcoin bch [ForeignFunds Bip44OfBitcoin 0 2 50000]) !! 1
+        `shouldBe` "  /44'/0'/0'  bip44 with the coin type of Bitcoin: 2 addresses used, 0.00050000 btc left"
 
 headlineSpec :: Spec
 headlineSpec =

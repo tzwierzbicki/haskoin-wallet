@@ -26,7 +26,7 @@ import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Keys (AccountKind (..))
+import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), foreignAddress)
 import Haskoin.Wallet.TestUtils
 import Numeric.Natural (Natural)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), testIdentity)
@@ -544,6 +544,15 @@ derivingSpec ctx =
       deriveChainAddress ctx Bip84 (testSegwitAccountPub ctx) extDeriv 0 `shouldReturn` Just (segwitExternalAddr 0)
       chainAddresses ctx Bip84 (testSegwitAccountPub ctx) extDeriv 0 10 `shouldReturn` zip (segwitExternalAddr <$> [0 .. 9]) [0 .. 9]
       chainAddresses ctx Bip84 (testSegwitAccountPub ctx) intDeriv 0 10 `shouldReturn` zip (segwitInternalAddr <$> [0 .. 9]) [0 .. 9]
+
+    -- The first five addresses of each chain of the bip49 and bip86
+    -- accounts 0 of the test wallet, derived apart from hw with the same
+    -- Python tool
+    it "derives the addresses of an account of a kind hw does not hold, given how its keys are addressed" $ do
+      chainAddressesBy (foreignAddress Bip49 ctx) ctx (testWrappedAccountPub ctx) extDeriv 0 5 `shouldReturn` zip (wrappedExternalAddr <$> [0 .. 4]) [0 .. 4]
+      chainAddressesBy (foreignAddress Bip49 ctx) ctx (testWrappedAccountPub ctx) intDeriv 0 5 `shouldReturn` zip (wrappedInternalAddr <$> [0 .. 4]) [0 .. 4]
+      chainAddressesBy (foreignAddress Bip86 ctx) ctx (testTaprootAccountPub ctx) extDeriv 0 5 `shouldReturn` zip (taprootExternalAddr <$> [0 .. 4]) [0 .. 4]
+      chainAddressesBy (foreignAddress Bip86 ctx) ctx (testTaprootAccountPub ctx) intDeriv 0 5 `shouldReturn` zip (taprootInternalAddr <$> [0 .. 4]) [0 .. 4]
 
 jsonSpec :: Spec
 jsonSpec =

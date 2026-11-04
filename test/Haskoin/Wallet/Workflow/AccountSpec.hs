@@ -140,6 +140,15 @@ accountSpec =
         matched <- hwJson home ["checkmnemonic", "--parts", "2"] partsOnce
         matched `shouldSatisfy` \case ResponseAccResult _ True _ -> True; _ -> False
 
+    -- The key of account 0 on Bitcoin, imported on Bitcoin Cash, where an
+    -- xpub reads the same
+    it "is told by checkmnemonic to be of another network, when the mnemonic gives its key there" $
+      withHome $ \home -> do
+        writeFile (home </> "main.txt") (Text.unpack testAccountXPub <> "\n")
+        _ <- answer home ["importacc", home </> "main.txt", "--network", "bch"] []
+        (accResultOf <$> hwJson home ["checkmnemonic"] seedOnce)
+          `shouldReturn` Right (False, "The mnemonic and passphrase did not match the account, but they give its key at /44'/0'/0' on btc: it is an account of btc, not of bch. Delete it with deleteacc and import it again with --network btc.")
+
     it "is renamed by renameacc" $
       withHome $ \home -> do
         createMain home
@@ -276,6 +285,24 @@ segwitSpec ctx =
         writeFile (json </> "spending.txt") (Text.unpack testSegwitAccountXPub <> "\n")
         (createdNotesOf <$> hwJson json ["importacc", json </> "spending.txt", "--type", "bip84"] [])
           `shouldReturn` Right [("btc0-segwit", Just "The key says no kind. The account is bip84 because --type says so. If the key is of a bip44 account, a sync finds none of its transactions and signtx refuses the mnemonic. Then deleteacc, and import the key again with --type bip44.")]
+
+    -- The bip84 key imported as a bip44 account, which the note above
+    -- warns of
+    it "is told apart by checkmnemonic when its xpub was imported as bip44: the mnemonic gives the key at the bip84 path" $
+      withHome $ \home -> do
+        writeFile (home </> "spending.txt") (Text.unpack testSegwitAccountXPub <> "\n")
+        _ <- answer home ["importacc", home </> "spending.txt"] []
+        (accResultOf <$> hwJson home ["checkmnemonic"] seedOnce)
+          `shouldReturn` Right (False, "The mnemonic and passphrase did not match the account, but they give its key at /84'/0'/0' on btc: it is a bip84 account, not a bip44 one. Delete it with deleteacc and import it again with --type bip84.")
+
+    -- The key of the bip49 account 0 of the seed, m/49'/0'/0', imported
+    -- as a bip44 account
+    it "is told by checkmnemonic to be of a kind hw cannot spend from, when the mnemonic gives its key at such a path" $
+      withHome $ \home -> do
+        writeFile (home </> "wrapped.txt") (Text.unpack testWrappedAccountXPub <> "\n")
+        _ <- answer home ["importacc", home </> "wrapped.txt"] []
+        (accResultOf <$> hwJson home ["checkmnemonic"] seedOnce)
+          `shouldReturn` Right (False, "The mnemonic and passphrase did not match the account, but they give its key at /49'/0'/0' on btc: it is an account of the kind bip49, wrapped SegWit, which hw cannot spend from.")
 
     -- The bip84 account of the file of Bitcoin Core, of
     -- test/data/descriptors: the vpub of its tpub, computed apart from hw
@@ -940,6 +967,37 @@ recoverSpec ctx =
       withChain ctx (chainPaying ctx bchExternalAddr) $ \home _ ->
         (accountsOf <$> hwJson home ["recover", "--network", "bch"] seedOnce) `shouldReturn` Right [("bch0", 0, 50000)]
 
+    -- The chain pays the first receiving address of account 0 of the seed,
+    -- and the first receiving address of its bip49 account 0 and of its
+    -- bip86 account 0, which hw cannot spend from
+    it "come with the funds at the bip49 and bip86 paths of the seed, which hw cannot spend and adds no account for" $
+      withChain ctx (paidElsewhereChain ctx) $ \home _ -> do
+        found <- hwJson home ["recover"] seedOnce
+        accountsOf found `shouldBe` Right [("btc0", 0, 50000)]
+        unspendableOf found `shouldBe` Right [("bip49", "/49'/0'/0'", 1, 30000), ("bip86", "/86'/0'/0'", 1, 7000)]
+        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("btc0", 0, 50000)]
+
+    it "are shown before those funds, each of which with its kind, its used addresses and what is left, then what to do" $
+      withChain ctx (paidElsewhereChain ctx) $ \home _ -> do
+        run <- hw home ["recover"] seedOnce
+        run `shouldSatisfy` printed "btc0  btc  /44'/0'/0'\n"
+        run `shouldSatisfy` printed "\n\nThe seed was paid at paths hw cannot spend from:\n  /49'/0'/0'  bip49, wrapped SegWit: 1 address used, 0.00030000 btc left\n  /86'/0'/0'  bip86, Taproot: 1 address used, 0.00007000 btc left\n  A wallet that holds such accounts can move the funds to an address of this wallet.\n"
+
+    it "are said to be none when none was paid, before the funds at the paths hw cannot spend from" $
+      withChain ctx (chainPaying ctx (wrappedExternalAddr 0)) $ \home _ -> do
+        run <- hw home ["recover"] seedOnce
+        runOut run `shouldBe` "No account of the seed was paid on btc: the search ended after 10 accounts in a row without a payment\n\nThe seed was paid at paths hw cannot spend from:\n  /49'/0'/0'  bip49, wrapped SegWit: 1 address used, 0.00050000 btc left\n  A wallet that holds such accounts can move the funds to an address of this wallet.\n"
+        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right []
+
+    -- The chain pays the first receiving address of account 0 of the seed
+    -- on Bitcoin, m/44'/0'/0', whose keys hold Bitcoin Cash as well. hw
+    -- holds the accounts of Bitcoin Cash at m/44'/145' only.
+    it "come with the Bitcoin Cash at the bip44 accounts of Bitcoin" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        found <- hwJson home ["recover", "--network", "bch"] seedOnce
+        accountsOf found `shouldBe` Right []
+        unspendableOf found `shouldBe` Right [("bip44", "/44'/0'/0'", 1, 50000)]
+
     it "leave out an account the wallet has" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         createMain home
@@ -999,6 +1057,11 @@ cafeTwice = [mnemonicWords testMnemonic, mnemonicWords testMnemonic, cafePassphr
 -- | A chain whose block 800000 pays 50000 to the address
 chainPaying :: Ctx -> Address -> Chain
 chainPaying ctx addr = Chain 800002 [(fundingTx ctx 1 [(addr, 50000)], Just 800000)]
+
+-- | The paid chain, with a payment to the first receiving address of the
+-- bip49 account 0 of the seed and of its bip86 account 0 in the same block
+paidElsewhereChain :: Ctx -> Chain
+paidElsewhereChain ctx = Chain 800002 [(payment ctx, Just 800000), (fundingTx ctx 3 [(wrappedExternalAddr 0, 30000), (taprootExternalAddr 0, 7000)], Just 800000)]
 
 passphraseSpec :: Ctx -> Spec
 passphraseSpec ctx =

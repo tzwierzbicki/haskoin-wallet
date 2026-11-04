@@ -294,9 +294,19 @@ arbitraryResponse net ctx =
       ResponseRecover
         <$> arbitraryNetwork
         <*> arbitraryNatural
-        <*> (resize 10 $ listOf $ arbitrarySyncRes net ctx),
+        <*> (resize 10 $ listOf $ arbitrarySyncRes net ctx)
+        <*> (resize 10 $ listOf arbitraryForeignFunds),
       ResponseFees net <$> arbitraryFeeRates
     ]
+
+-- | The funds of a seed at an account hw does not hold, of any kind
+arbitraryForeignFunds :: Gen ForeignFunds
+arbitraryForeignFunds =
+  ForeignFunds
+    <$> elements [minBound .. maxBound]
+    <*> arbitraryNatural
+    <*> arbitraryNatural
+    <*> arbitraryPositive
 
 -- | What importacc did with a file
 arbitraryImportReport :: Network -> Ctx -> Gen ImportReport

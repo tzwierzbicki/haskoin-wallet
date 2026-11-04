@@ -16,9 +16,10 @@ import Haskoin.Wallet.Database.Account (accountNetwork, accountWithSpendable, pa
 import Haskoin.Wallet.Database.Address (CoinBalance, addressWithCoinBalance, addressWithSpendable, parseAddressWithCoinBalance, parseAddressWithSpendable)
 import Haskoin.Wallet.Database.Coin (JsonCoin, LeftCoin)
 import Haskoin.Wallet.Database (DBAccount, DBAddress)
+import Haskoin.Wallet.Keys (foreignKindName, foreignKindNamed)
 import Haskoin.Wallet.Labels (ImportReport, parseReport, reportPairs)
 import Haskoin.Wallet.Tx.FeeRates (FeeRates)
-import Haskoin.Wallet.Sync (SyncRes (..))
+import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..), foreignPath)
 import Haskoin.Wallet.Database.TxInfo (TxInfo)
 import Numeric.Natural (Natural)
 
@@ -88,8 +89,9 @@ data Response
     -- with the failure of its store
     ResponseSync ![SyncRes] ![(DBAccount, Text)]
   | -- | The accounts of a seed recovered on a network, searched with the
-    -- gap of accounts, each with its sync
-    ResponseRecover !Network !Natural ![SyncRes]
+    -- gap of accounts, each with its sync, and the funds of the seed at
+    -- the accounts hw does not hold
+    ResponseRecover !Network !Natural ![SyncRes] ![ForeignFunds]
   | -- | The fee rates recent blocks paid, on the network asked
     ResponseFees !Network !FeeRates
   deriving (Eq, Show)
@@ -138,8 +140,8 @@ instance ToJSON Response where
       typed "verifymsg" ["message" .= message, "signature" .= signature, "address" .= addr, "valid" .= valid]
     ResponseSync results notSynced ->
       typed "sync" ["syncres" .= (syncResJson <$> results), "notsynced" .= (notSyncedJson <$> notSynced)]
-    ResponseRecover net gap results ->
-      typed "recover" ["network" .= net.name, "accountgap" .= gap, "syncres" .= (syncResJson <$> results)]
+    ResponseRecover net gap results elsewhere ->
+      typed "recover" ["network" .= net.name, "accountgap" .= gap, "syncres" .= (syncResJson <$> results), "unspendable" .= (foreignFundsJson net <$> elsewhere)]
     ResponseFees net rates -> typed "fees" ["network" .= net.name, "feerates" .= rates]
 
 instance FromJSON Response where
@@ -182,7 +184,12 @@ instance FromJSON Response where
       "signmsg" -> ResponseSignMsg <$> o .: "message" <*> o .: "signature" <*> o .: "address"
       "verifymsg" -> ResponseVerifyMsg <$> o .: "message" <*> o .: "signature" <*> o .: "address" <*> o .: "valid"
       "sync" -> ResponseSync <$> (mapM parseSyncRes =<< o .: "syncres") <*> (mapM parseNotSynced =<< o .: "notsynced")
-      "recover" -> ResponseRecover <$> network o <*> o .: "accountgap" <*> (mapM parseSyncRes =<< o .: "syncres")
+      "recover" ->
+        ResponseRecover
+          <$> network o
+          <*> o .: "accountgap"
+          <*> (mapM parseSyncRes =<< o .: "syncres")
+          <*> (mapM parseForeignFunds =<< o .: "unspendable")
       "fees" -> ResponseFees <$> network o <*> o .: "feerates"
       _ -> fail "Invalid JSON response type"
     where
@@ -233,6 +240,27 @@ parseSyncRes =
       <*> o .: "rebroadcast"
       <*> o .: "conflicted"
       <*> o .: "discovered"
+
+-- | The funds of a seed at an account hw does not hold, in JSON: the kind
+-- of the account, its path on the network and its index, how many of its
+-- addresses were used, and what they hold in satoshis
+foreignFundsJson :: Network -> ForeignFunds -> Value
+foreignFundsJson net funds =
+  object
+    [ "type" .= foreignKindName (foreignKind funds),
+      "path" .= pathToStr (foreignPath net funds),
+      "index" .= foreignIndex funds,
+      "addresses" .= foreignUsed funds,
+      "balance" .= foreignBalance funds
+    ]
+
+-- | The funds back from their JSON: the path follows from the kind and
+-- the index, so it is not read
+parseForeignFunds :: Value -> Parser ForeignFunds
+parseForeignFunds =
+  withObject "unspendable" $ \o -> do
+    kind <- maybe (fail "Unknown kind of account") return . foreignKindNamed =<< o .: "type"
+    ForeignFunds kind <$> o .: "index" <*> o .: "addresses" <*> o .: "balance"
 
 -- | Whether the answer is a failure, which hw exits with: an error, a
 -- signature found not valid, or a sync that left accounts out, so that a

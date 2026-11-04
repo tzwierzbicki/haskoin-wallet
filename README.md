@@ -261,7 +261,12 @@ them, named `btc0`, `btc1` and so on for the `bip44` accounts and
 `btc0-segwit`, `btc1-segwit` and so on for the `bip84` ones, and syncs them.
 It stops after 10 accounts in a row without a payment, or the number
 `--account-gap` gives, for each kind of account apart. It needs the mnemonic
-and the server at the same time.
+and the server at the same time. It also looks where other wallets keep their
+accounts, and tells of funds it cannot spend: the `bip49` accounts of wrapped
+SegWit and the `bip86` accounts of Taproot on Bitcoin, and the `bip44`
+accounts of Bitcoin on Bitcoin Cash, where a wallet that held Bitcoin at the
+fork of 2017 has its Bitcoin Cash. It adds no such account. Move the funds
+with a wallet that holds such accounts, to an address of `hw`.
 
 ```console
 hw recover --network btc --account-gap 20
@@ -269,6 +274,9 @@ hw recover --network btc --account-gap 20
 
 **`hw checkmnemonic`** checks that a mnemonic and passphrase give the public
 key of an account. Use it to test a mnemonic you wrote down. Nothing is signed.
+When they do not match, it says if they give the key at another path. An
+account imported from its key alone may have been given the wrong `--type` or
+`--network`, and `checkmnemonic` tells which to import it again with.
 
 ```console
 hw checkmnemonic --account savings

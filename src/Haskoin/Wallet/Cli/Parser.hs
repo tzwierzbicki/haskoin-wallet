@@ -740,6 +740,14 @@ bip84 ones, which most other wallets make: a bip84 account found is named
 with -segwit after the index, such as btc0-segwit. Bitcoin Cash has bip44
 accounts only.
 
+`recover` also looks where other wallets keep their accounts, and tells of
+funds it cannot spend. On Bitcoin, those are the bip49 accounts of wrapped
+SegWit, m/49', which hardware wallets made before native SegWit, and the
+bip86 accounts of Taproot, m/86'. On Bitcoin Cash, those are the bip44
+accounts of Bitcoin, m/44'/0', where a wallet that held Bitcoin at the fork
+of 2017 has its Bitcoin Cash. No such account is added. Move its funds with
+a wallet that holds such accounts, to an address of this wallet.
+
 The search stops after --account-gap accounts in a row without a payment,
 counted for each kind of account apart. BIP44 stops at the first such
 account. hw looks further, since accounts created on an offline computer
@@ -840,6 +848,12 @@ checkmnemonic asks for the mnemonic and the passphrase, and checks that they
 give the public key of the account. Use it to test a mnemonic you wrote down,
 before you rely on it. Nothing is signed. When they match, hw records the
 fingerprint of the seed, which `accounts` shows.
+
+When they do not match, hw looks for the key of the account at the other
+paths it knows. An account imported from its key alone was given its kind
+and its network by you, and the key may be of another kind, such as bip84,
+or of another network. checkmnemonic then says so, with the --type or the
+--network to import the key again with, after deleteacc.
 |],
       args =
         CommandCheckMnemonic

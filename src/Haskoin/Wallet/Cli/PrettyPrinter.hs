@@ -42,7 +42,7 @@ import Haskoin.Wallet.Amounts
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..), levelName, rateAt)
-import Haskoin.Wallet.Keys (KeySource (..))
+import Haskoin.Wallet.Keys (KeySource (..), foreignKindDescription)
 import Haskoin.Wallet.Labels (AccountImport (..), ImportReport (..), reportNeedsSync)
 import Haskoin.Wallet.MessageSigning (signedMessageText)
 import Haskoin.Wallet.Cli.Parser (BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), View (..), program)
@@ -273,6 +273,26 @@ notSyncedPrinter accs = vcat . intersperse mempty $ notSyncedDoc <$> accs
 notSyncedDoc :: (DBAccount, Text) -> Doc Style
 notSyncedDoc (acc, failure) =
   vcat [accountLine acc, indent 2 (styled Failure "not synced:" <+> pretty failure)]
+
+-- | The funds of a seed at accounts hw does not hold, as recover shows
+-- them: a line for each account, with its path, its kind, how many of its
+-- addresses were used and what they hold, then what to do with the funds
+foreignFundsDoc :: AmountUnit -> Network -> [ForeignFunds] -> Doc Style
+foreignFundsDoc unit net elsewhere =
+  vcat $
+    "The seed was paid at paths hw cannot spend from:"
+      : (indent 2 . fundsLine <$> elsewhere)
+      <> [indent 2 "A wallet that holds such accounts can move the funds to an address of this wallet."]
+  where
+    pathOf = pathToStr . foreignPath net
+    width = fromIntegral $ maximum (0 : (length . pathOf <$> elsewhere))
+    fundsLine funds =
+      text (block width (pathOf funds))
+        <> "  "
+        <> text (foreignKindDescription (foreignKind funds) <> ": " <> counted (foreignUsed funds) "address" "addresses" <> " used, ")
+        <> left (foreignBalance funds)
+    left 0 = "nothing left"
+    left balance = amountPrinter unit balance <+> "left"
 
 {- Imports -}
 
@@ -1005,11 +1025,13 @@ responsePrinter unit view answer =
     ResponseSync xs notSynced ->
       renderIO . vcat . intersperse mempty $
         [syncResultsPrinter unit xs | not (null xs)] <> [notSyncedPrinter notSynced | not (null notSynced)]
-    ResponseRecover net gap xs
-      | null xs ->
-          renderIO . text $
-            "No account of the seed was paid on " <> net.name <> ": the search ended after " <> show gap <> " accounts in a row without a payment"
-      | otherwise -> renderIO $ syncResultsPrinter unit xs
+    ResponseRecover net gap xs elsewhere ->
+      renderIO . vcat . intersperse mempty $
+        recovered : [foreignFundsDoc unit net elsewhere | not (null elsewhere)]
+      where
+        recovered
+          | null xs = text $ "No account of the seed was paid on " <> net.name <> ": the search ended after " <> show gap <> " accounts in a row without a payment"
+          | otherwise = syncResultsPrinter unit xs
     ResponseFees net rates -> do
       now <- getCurrentTime
       renderIO $ feeRatesDoc net now rates

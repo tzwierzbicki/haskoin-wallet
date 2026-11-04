@@ -11,7 +11,9 @@ module Haskoin.Wallet.Keys where
 
 import Control.Applicative ((<|>))
 import Control.Exception (evaluate, try)
+import Control.Monad (filterM)
 import Crypto.KDF.PBKDF2 (Parameters (..), fastPBKDF2_SHA512)
+import Data.Maybe (fromMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -107,6 +109,98 @@ spendsScript kind script = case (kind, script) of
   (Bip84, PayWitnessPKHash _) -> True
   _ -> False
 
+{- The kinds of accounts hw does not hold -}
+
+-- | A kind of account hw does not hold, but looks for when it recovers a
+-- seed: a wallet of another kind may have paid the seed at its path, and
+-- the user is told of funds hw cannot spend, rather than shown an empty
+-- wallet. Such an account is never created, and hw signs for none.
+-- 'AccountKind' stays the kinds hw spends from.
+data ForeignKind
+  = -- | BIP49: the account at m/49'/coin'/index', with P2SH-P2WPKH
+    -- addresses, SegWit wrapped in a script hash, which start with 3 on
+    -- Bitcoin. Hardware wallets made such accounts before native SegWit.
+    Bip49
+  | -- | BIP86: the account at m/86'/coin'/index', with P2TR addresses,
+    -- Taproot spent by its key alone, which start with bc1p on Bitcoin
+    Bip86
+  | -- | BIP44 with the coin type of Bitcoin, m/44'/0'/index', on Bitcoin
+    -- Cash, whose own coin type is 145: the keys that held Bitcoin at the
+    -- fork of 2017 hold Bitcoin Cash as well, and the wallets of that
+    -- time spent it from there
+    Bip44OfBitcoin
+  deriving (Eq, Ord, Show, Enum, Bounded)
+
+-- | The name of a foreign kind, as the answers give it: bip49, bip86, or
+-- bip44 for the accounts of Bitcoin, whose path tells them from hw's own
+foreignKindName :: ForeignKind -> Text
+foreignKindName kind = case kind of
+  Bip49 -> "bip49"
+  Bip86 -> "bip86"
+  Bip44OfBitcoin -> "bip44"
+
+-- | The foreign kind of a name, which the JSON of an answer carries:
+-- Nothing for a name that is none
+foreignKindNamed :: Text -> Maybe ForeignKind
+foreignKindNamed name = lookup name [(foreignKindName kind, kind) | kind <- [minBound .. maxBound]]
+
+-- | A foreign kind as the answers describe it: its name, and what sets it
+-- apart
+foreignKindDescription :: ForeignKind -> String
+foreignKindDescription kind = case kind of
+  Bip49 -> "bip49, wrapped SegWit"
+  Bip86 -> "bip86, Taproot"
+  Bip44OfBitcoin -> "bip44 with the coin type of Bitcoin"
+
+-- | The foreign kinds a seed may have been paid at on a network: BIP49
+-- and BIP86 on the networks of Bitcoin, which have SegWit, and the BIP44
+-- accounts of Bitcoin on Bitcoin Cash. The test networks of Bitcoin Cash
+-- have the coin type of Bitcoin's test networks, so the accounts of
+-- Bitcoin are their own there, and nothing else is looked for on them.
+networkForeignKinds :: Network -> [ForeignKind]
+networkForeignKinds net = [kind | kind <- [minBound .. maxBound], foreignKindOnNetwork net kind]
+
+-- | Whether a seed may have been paid at accounts of the foreign kind on
+-- the network. The accounts of Bitcoin are foreign where the coin type is
+-- the one of Bitcoin Cash, 145: its test networks have the coin type 1 of
+-- every test network, where the accounts of Bitcoin are hw's own.
+foreignKindOnNetwork :: Network -> ForeignKind -> Bool
+foreignKindOnNetwork net kind = case kind of
+  Bip49 -> net.segWit
+  Bip86 -> net.segWit
+  Bip44OfBitcoin -> net.bip44Coin == bch.bip44Coin
+
+-- | The path of an account of a foreign kind on a network:
+-- m/purpose'/coin'/index', with the coin type of the network, or that of
+-- Bitcoin for its BIP44 accounts
+foreignDeriv :: ForeignKind -> Network -> Natural -> HardPath
+foreignDeriv kind net a = Deriv :| purpose :| coin :| fromIntegral a
+  where
+    (purpose, coin) = case kind of
+      Bip49 -> (49, net.bip44Coin)
+      Bip86 -> (86, net.bip44Coin)
+      Bip44OfBitcoin -> (44, btc.bip44Coin)
+
+-- | The address of a key of an account of a foreign kind: P2SH-P2WPKH for
+-- BIP49, P2TR for BIP86, and P2PKH for the BIP44 accounts of Bitcoin
+foreignAddress :: ForeignKind -> Ctx -> XPubKey -> Address
+foreignAddress kind ctx key = case kind of
+  Bip49 -> xPubCompatWitnessAddr ctx key
+  Bip86 -> taprootAddress ctx key
+  Bip44OfBitcoin -> xPubAddr ctx key
+
+-- | The P2TR address of a key, as BIP 86 derives it: the output key is the
+-- key tweaked by the tagged hash of itself, with no script tree. BIP 341
+-- tweaks the key with an even y coordinate, which the x-only form of the
+-- key stands for, and haskoin-core tweaks the key as it is, so the key is
+-- taken through its x-only form first.
+taprootAddress :: Ctx -> XPubKey -> Address
+taprootAddress ctx key =
+  fromMaybe (error "taprootAddress: a Taproot output has an address") $
+    outputAddress ctx (taprootScriptOutput ctx (TaprootOutput evenKey Nothing))
+  where
+    evenKey = fromMaybe key.key $ importXOnlyPubKey ctx (exportXOnlyPubKey ctx key.key)
+
 {- The keys of an account -}
 
 data MnemonicPass = MnemonicPass
@@ -163,8 +257,13 @@ signingKey kind net ctx mnem acc = (\master -> accountKey kind net ctx master ac
 -- at that index is invalid: haskoin-core throws for such a key, where BIP32
 -- says to skip the index, as "Haskoin.Wallet.Database.Address" does for an address
 accountPubKey :: AccountKind -> Network -> Ctx -> XPrvKey -> Natural -> IO (Maybe XPubKey)
-accountPubKey kind net ctx master index = do
-  derived <- try $ evaluate $ deriveXPubKey ctx $ accountKey kind net ctx master index
+accountPubKey kind net ctx master index = pubKeyAtPath ctx master (accountDeriv kind net index)
+
+-- | The public key at a hardened path under a master key, or Nothing when
+-- a child key on the way is invalid
+pubKeyAtPath :: Ctx -> XPrvKey -> HardPath -> IO (Maybe XPubKey)
+pubKeyAtPath ctx master path = do
+  derived <- try $ evaluate $ deriveXPubKey ctx $ derivePath ctx path master
   return $ case derived of
     Left (DerivationException _) -> Nothing
     Right pub -> Just pub
@@ -179,15 +278,19 @@ masterFingerprint = xPubFP
 {- The public side of a seed -}
 
 -- | What a command keeps of a seed once it has the mnemonic: the
--- fingerprint, and the public key of any of its accounts, of either kind,
--- derived on demand, Nothing at an index whose child key is invalid. The
--- account steps are hardened, so these public keys can only come from the
--- master private key, which stays inside this record and never comes out
--- of it. The private key of an account reaches a command in one way only:
--- as the signing key that "Haskoin.Wallet.Cli.Prompt" asks for.
+-- fingerprint, and the public key of any of its accounts, of either kind
+-- hw holds or of a foreign kind, derived on demand, Nothing at an index
+-- whose child key is invalid. The account steps are hardened, so these
+-- public keys can only come from the master private key, which stays
+-- inside this record and never comes out of it. The private key of an
+-- account reaches a command in one way only: as the signing key that
+-- "Haskoin.Wallet.Cli.Prompt" asks for.
 data PublicSeed = PublicSeed
   { seedFingerprint :: !Fingerprint,
-    seedAccountKey :: AccountKind -> Network -> Natural -> IO (Maybe XPubKey)
+    seedAccountKey :: AccountKind -> Network -> Natural -> IO (Maybe XPubKey),
+    -- | The public key of an account of a foreign kind, which recover
+    -- looks for and hw never holds
+    seedForeignKey :: ForeignKind -> Network -> Natural -> IO (Maybe XPubKey)
   }
 
 -- | The public side of a seed, from its mnemonic
@@ -208,8 +311,24 @@ seedOfMaster :: Ctx -> XPrvKey -> PublicSeed
 seedOfMaster ctx master =
   PublicSeed
     { seedFingerprint = masterFingerprint ctx (deriveXPubKey ctx master),
-      seedAccountKey = \kind net index -> accountPubKey kind net ctx master index
+      seedAccountKey = \kind net index -> accountPubKey kind net ctx master index,
+      seedForeignKey = \kind net index -> pubKeyAtPath ctx master (foreignDeriv kind net index)
     }
+
+-- | The accounts of a seed that have a key, of any kind hw holds on any
+-- network, at the index the key carries: none when the seed does not have
+-- it there. An account imported from its key alone, which says nothing of
+-- its path, may have been given the wrong kind or network. This tells
+-- which it has.
+accountsWithKey :: PublicSeed -> XPubKey -> IO [(AccountKind, Network)]
+accountsWithKey seed key =
+  filterM (\(kind, net) -> (== Just key) <$> seedAccountKey seed kind net (xPubIndex key)) [(kind, net) | net <- allNets, kind <- networkKinds net]
+
+-- | The accounts of a foreign kind of a seed that have a key, as
+-- 'accountsWithKey' finds those of the kinds hw holds
+foreignAccountsWithKey :: PublicSeed -> XPubKey -> IO [(ForeignKind, Network)]
+foreignAccountsWithKey seed key =
+  filterM (\(kind, net) -> (== Just key) <$> seedForeignKey seed kind net (xPubIndex key)) [(kind, net) | net <- allNets, kind <- networkForeignKinds net]
 
 {- Private keys of a sweep -}
 

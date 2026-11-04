@@ -84,10 +84,10 @@ import qualified Data.ByteString.Char8 as C8
 import Data.Char (isHexDigit)
 import Data.Either (isLeft)
 import Data.Foldable (for_)
-import Data.List (genericTake, nub, partition)
+import Data.List (find, genericTake, nub, partition)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe, mapMaybe)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -310,9 +310,12 @@ seedToCreateWith ctx mnem = do
         else return seed
 
 -- | Recover the accounts of a seed that were paid on a network, from its
--- mnemonic: see "Haskoin.Wallet.Sync". When none is found and normalizing
--- changes the passphrase, the accounts hw derived before, from the
--- passphrase as typed, are looked for too, and the user is told of those.
+-- mnemonic: see "Haskoin.Wallet.Sync". The funds of the seed at the
+-- accounts hw does not hold are told, not taken. When no account is found
+-- and normalizing changes the passphrase, the accounts hw derived before,
+-- from the passphrase as typed, are looked for too, and the user is told
+-- of those. Only the seed of BIP39 is looked at for the other kinds of
+-- accounts: other wallets derive from no other.
 cmdRecover :: Ctx -> Config -> Recover -> IO Response
 cmdRecover ctx cfg opts =
   runDBResponse cfg $ do
@@ -324,6 +327,7 @@ cmdRecover ctx cfg opts =
     mnem <- askMnemonicPass terminal opts.parts
     seed <- liftEither $ seedOf ctx mnem
     found <- recoverSeed ctx cfg store net seed opts.accountGap
+    elsewhere <- foreignFunds ctx cfg store net seed opts.accountGap
     typedM <- liftEither $ typedSeedOf ctx mnem
     fromTyped <- case typedM of
       Just typed | null found -> do
@@ -331,7 +335,7 @@ cmdRecover ctx cfg opts =
         unless (null results) $ liftIO $ tell terminal typedPassphraseRecovered
         return results
       _ -> return []
-    return $ ResponseRecover net opts.accountGap (found <> fromTyped)
+    return $ ResponseRecover net opts.accountGap (found <> fromTyped) elsewhere
 
 cmdCheckMnemonic :: Ctx -> Config -> Maybe Text -> Natural -> IO Response
 cmdCheckMnemonic ctx cfg account parts =
@@ -342,9 +346,45 @@ cmdCheckMnemonic ctx cfg account parts =
     -- A seed proven gives its fingerprint to every account of it
     for_ matched $ \(seed, _) -> lift $ recordFingerprint ctx seed
     tested <- getAccountById accId
-    return $ case matched of
-      Just _ -> ResponseAccResult tested True "The mnemonic and passphrase matched the account"
-      Nothing -> ResponseAccResult tested False "The mnemonic and passphrase did not match the account"
+    case matched of
+      Just _ -> return $ ResponseAccResult tested True "The mnemonic and passphrase matched the account"
+      Nothing -> do
+        seed <- liftEither $ seedOf ctx mnem
+        elsewhere <- liftIO $ keyElsewhere ctx acc seed
+        return $ ResponseAccResult tested False ("The mnemonic and passphrase did not match the account" <> elsewhere)
+
+-- | What checkmnemonic adds when the seed has the key of the account at
+-- another path than the account's. An account imported from its key
+-- alone, which says nothing of its path, was given its kind and its
+-- network by the user: this tells which it has, and how to import it
+-- again, or that it is of a kind hw cannot spend from. The account's own
+-- network comes first among the paths found, since the test networks
+-- share a coin type. Empty when the seed has the key nowhere hw looks.
+keyElsewhere :: Ctx -> DBAccount -> PublicSeed -> IO Text
+keyElsewhere ctx acc seed = do
+  held <- accountsWithKey seed key
+  others <- foreignAccountsWithKey seed key
+  return $ case (onOwnNetworkFirst held, onOwnNetworkFirst others) of
+    (Just (kind, net), _) ->
+      let (what, options) = heldAs kind net
+       in ", but they give its key at " <> pathOn (accountDeriv kind net index) net <> ": it is " <> what <> ". Delete it with deleteacc and import it again with " <> options <> "."
+    (Nothing, Just (kind, net)) ->
+      ", but they give its key at " <> pathOn (foreignDeriv kind net index) net <> ": it is an account of the kind " <> cs (foreignKindDescription kind) <> ", which hw cannot spend from."
+    _ -> ""
+  where
+    key = accountXPubKey ctx acc
+    index = accountIndex acc
+    ownNet = accountNetwork acc
+    onOwnNetworkFirst :: [(kind, Network)] -> Maybe (kind, Network)
+    onOwnNetworkFirst found = find ((== ownNet.name) . (.name) . snd) found <|> listToMaybe found
+    pathOn :: HardPath -> Network -> Text
+    pathOn path net = cs (pathToStr path) <> " on " <> cs net.name
+    -- What the account is, and the options that import it so
+    heldAs :: AccountKind -> Network -> (Text, Text)
+    heldAs kind net
+      | net.name == ownNet.name = ("a " <> kindName kind <> " account, not a " <> kindName (accountKind acc) <> " one", "--type " <> kindName kind)
+      | kind == accountKind acc = ("an account of " <> cs net.name <> ", not of " <> cs ownNet.name, "--network " <> cs net.name)
+      | otherwise = ("a " <> kindName kind <> " account of " <> cs net.name <> ", not a " <> kindName (accountKind acc) <> " one of " <> cs ownNet.name, "--type " <> kindName kind <> " --network " <> cs net.name)
 
 -- | Add the accounts of a BIP 329 file and set the labels it carries, as
 -- "Haskoin.Wallet.Labels" reads it, a key that says no kind of its account
