@@ -233,7 +233,8 @@ genNextAddress ctx cfg accId addrType = do
   appendAddress ctx accId addrType
 
 -- | Generate the addresses of a chain up to the given index, as a scan of
--- the store found them used: the gap does not apply to used addresses
+-- the store found them used, or as the key path of a record of a file
+-- says: the gap does not apply to used addresses
 extendChainTo :: (MonadUnliftIO m) => Ctx -> DBAccountId -> AddrType -> Natural -> ExceptT String (DB m) ()
 extendChainTo ctx accId addrType next = do
   acc <- getAccountById accId
@@ -266,6 +267,30 @@ checkGap cfg accId addrType = do
     throwError $ case addrType of
       AddrExternal -> "The last " <> show gap <> " receiving addresses await a payment: reuse one of them, listed by hw addresses"
       AddrInternal -> "The last " <> show gap <> " change addresses are held by pending transactions: send or delete some of them"
+
+-- | How far hw generates past the last used address of a chain on its
+-- own: a thousand addresses. A scan looks at this many before it asks
+-- whether to go on, while the store reports a used address in every
+-- window ("Haskoin.Wallet.Sync"), and importacc derives no address from
+-- the key path of a record beyond that many past the last used one
+-- ('withinScanLimit'). A thousand is far more than an account gains
+-- between two syncs. A store that lies reports used addresses without
+-- end, and a file can name any index up to two billion: generating them
+-- would fill the gap of this wallet for good, put the next receiving
+-- address past any gap a wallet looks at when it recovers the seed, and
+-- take days.
+scanLimit :: Natural
+scanLimit = 1000
+
+-- | Whether an index of a chain is within 'scanLimit' of the last used
+-- address of the chain, or of its start when none is used: how far
+-- importacc derives an address from the key path of a record. The gap
+-- does not apply, since the file says the address was used.
+withinScanLimit :: (MonadUnliftIO m) => DBAccountId -> AddrType -> KeyIndex -> DB m Bool
+withinScanLimit accId addrType index = do
+  usedM <- highestUsedIndex accId addrType
+  let allowed = maybe 0 (+ 1) usedM + fromIntegral scanLimit
+  return (fromIntegral index < allowed)
 
 -- | The highest index of the chain with transactions, if any
 highestUsedIndex :: (MonadUnliftIO m) => DBAccountId -> AddrType -> DB m (Maybe Int)

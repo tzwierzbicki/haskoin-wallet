@@ -21,7 +21,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Bip329
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account
-import Haskoin.Wallet.Database.Address (genExtAddress)
+import Haskoin.Wallet.Database.Address (genExtAddress, updateAddressBalances)
 import Haskoin.Wallet.Database.BestBlock (updateBest)
 import Haskoin.Wallet.Database.TxInfo (repsertSummary)
 import Haskoin.Wallet.Database.TxLabel (setTxLabel, txLabel)
@@ -107,7 +107,7 @@ addressLabels accId = do
 
 -- | A report of an import that changed nothing
 nothingDone :: ImportReport
-nothingDone = ImportReport [] 0 0 0 0 0 0 0 0 0 0 []
+nothingDone = ImportReport [] 0 0 0 0 0 0 0 0 0 0 0 []
 
 {- Exporting -}
 
@@ -563,6 +563,36 @@ importAddressSpec ctx = do
         liftIO $ report `shouldBe` nothingDone {reportChangeAddresses = 1}
         acc <- getAccountById accId
         liftIO $ dBAccountInternal acc `shouldBe` 0
+
+    -- The address /0/1000, with /0/0 used: the thousandth past it
+    it "derives an address up to a thousand past the last used one of its chain" $
+      inDatabaseE $ do
+        (accId, _) <- mainWithAddress ctx
+        updateAddressBalances btc accId [paidOnce (externalAddr 0) 1000]
+        report <- importFile ctx Nothing Nothing "{\"type\":\"addr\",\"ref\":\"1KANnCm9fYm1z6A8o7hPMjsBCqgFWt9v8N\",\"label\":\"Far\",\"keypath\":\"/0/1000\"}\n"
+        liftIO $ report `shouldBe` nothingDone {reportAddressLabels = 1}
+        acc <- getAccountById accId
+        liftIO $ dBAccountExternal acc `shouldBe` 1001
+
+    -- The address /0/1001, with /0/0 used: one past the thousand
+    it "does not derive an address over a thousand past the last used one, and counts it among those not in the wallet" $
+      inDatabaseE $ do
+        (accId, _) <- mainWithAddress ctx
+        updateAddressBalances btc accId [paidOnce (externalAddr 0) 1000]
+        report <- importFile ctx Nothing Nothing "{\"type\":\"addr\",\"ref\":\"1BUtUkmTvZHpz7wPeEJNTX4VLTgLNxKNt2\",\"label\":\"Far\",\"keypath\":\"/0/1001\"}\n"
+        liftIO $ report `shouldBe` nothingDone {reportAddressesMissing = 1, reportAddressesTooFar = 1}
+        acc <- getAccountById accId
+        liftIO $ dBAccountExternal acc `shouldBe` 1
+
+    -- The address /0/1000 of a chain with no used address: the thousand
+    -- count from its start
+    it "counts the thousand from the start of a chain with no used address" $
+      inDatabaseE $ do
+        (accId, _) <- mainWithAddress ctx
+        report <- importFile ctx Nothing Nothing "{\"type\":\"addr\",\"ref\":\"1KANnCm9fYm1z6A8o7hPMjsBCqgFWt9v8N\",\"label\":\"Far\",\"keypath\":\"/0/1000\"}\n"
+        liftIO $ report `shouldBe` nothingDone {reportAddressesMissing = 1, reportAddressesTooFar = 1}
+        acc <- getAccountById accId
+        liftIO $ dBAccountExternal acc `shouldBe` 1
 
     it "counts an address the wallet does not have and no key path places" $
       inDatabaseE $ do

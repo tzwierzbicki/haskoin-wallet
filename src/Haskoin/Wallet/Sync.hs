@@ -43,15 +43,6 @@ import Numeric.Natural (Natural)
 
 {- The used addresses past the ones the account has -}
 
--- | How many addresses a scan looks at before it asks whether to go on,
--- while the store reports a used address in every window. A thousand is
--- far more than an account gains between two syncs. A store that lies
--- reports used addresses without end: generating them would put the next
--- receiving address past any gap a wallet looks at when it recovers the
--- seed, and fill the gap of this one for good.
-scanLimit :: Natural
-scanLimit = 1000
-
 -- | The question a scan asks when it reaches 'scanLimit': told what the
 -- store reports, whether to look further. The command puts it to the user
 -- on the terminal, and --yes does not answer it: a sync nobody watches

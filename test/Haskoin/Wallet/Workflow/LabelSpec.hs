@@ -25,6 +25,7 @@ import Haskoin.Wallet.Labels (AccountImport (..), ImportReport (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData (..))
 import Haskoin.Wallet.Workflow.TestUtils
+import Numeric.Natural (Natural)
 import System.FilePath ((</>))
 import Test.Hspec
 
@@ -449,6 +450,12 @@ accountsImported (ResponseImport report) = Right (describe' <$> reportAccounts r
     describe' (AccountRefused name _) = (name, "refused")
 accountsImported other = Left (show other)
 
+-- | The addresses an answer of importacc counts as not in the wallet yet,
+-- and of them those too far past the last used address to derive
+missingAddressesOf :: Response -> Either String (Natural, Natural)
+missingAddressesOf (ResponseImport report) = Right (reportAddressesMissing report, reportAddressesTooFar report)
+missingAddressesOf other = Left (show other)
+
 exportImportSpec :: Ctx -> Spec
 exportImportSpec ctx =
   describe "The accounts and labels in a file of BIP 329" $ do
@@ -547,6 +554,28 @@ exportImportSpec ctx =
         runOut run `shouldBe` "Labels set: 1 address, 1 transaction\nCoins locked: 1\nLeft aside: 1 record hw keeps no label for\n"
         (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [(externalAddrsText !! 0, "Wages")]
         (fmap (lookup (paidTxid ctx)) . historyLabels <$> hwJson home ["txs"] []) `shouldReturn` Right (Just "Salary")
+
+    -- The address /0/1001 of main, with /0/0 used: one past the thousand
+    -- that hw derives on the word of a file
+    it "say which addresses hw would not derive, over a thousand past the last used one of their chain" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        TextIO.writeFile (home </> "far.jsonl") "{\"type\":\"addr\",\"ref\":\"1BUtUkmTvZHpz7wPeEJNTX4VLTgLNxKNt2\",\"label\":\"Far\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"keypath\":\"/0/1001\"}\n"
+        run <- hw home ["importacc", home </> "far.jsonl"] []
+        runOut run
+          `shouldBe` Text.unlines
+            [ "Labels set: none",
+              "Not in the wallet yet: 1 address",
+              "  Of them, 1 address lies over a thousand past the last used address of its",
+              "  chain, further than hw generates on the word of a file.",
+              "",
+              "Next, sync the wallet, for the addresses, transactions and coins the file labels:",
+              "  hw sync",
+              "Then import the file again, for the labels it could not place:",
+              "  hw importacc " <> Text.pack (home </> "far.jsonl")
+            ]
+        (missingAddressesOf <$> hwJson home ["importacc", home </> "far.jsonl"] []) `shouldReturn` Right (1, 1)
+        (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [(externalAddrsText !! 0, "")]
 
     -- The file of another wallet names no network for its key
     it "create the account of a key of another wallet on the --network given, and refuse it without a network" $

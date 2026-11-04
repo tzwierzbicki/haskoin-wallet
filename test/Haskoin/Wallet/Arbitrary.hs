@@ -323,6 +323,7 @@ arbitraryImportReport net ctx =
     <*> arbitraryNatural
     <*> arbitraryNatural
     <*> arbitraryNatural
+    <*> arbitraryNatural
     <*> resize 5 (listOf arbitraryNatural)
 
 -- | What became of an account a file names

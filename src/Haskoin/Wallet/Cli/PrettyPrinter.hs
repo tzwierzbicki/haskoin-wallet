@@ -298,8 +298,9 @@ foreignFundsDoc unit net elsewhere =
 
 -- | What importacc did with a file: each account the file names, with what
 -- became of it, a blank line between them, then the labels and locks set,
--- what the file labels that the wallet does not have yet, what hw keeps no
--- label for, and the lines that are not records
+-- what the file labels that the wallet does not have yet, with the
+-- addresses among them that hw would not derive from their key path, what
+-- hw keeps no label for, and the lines that are not records
 importDoc :: ImportReport -> Doc Style
 importDoc report = vcat . intersperse mempty $ (accountImportDoc <$> reportAccounts report) <> [vcat summary]
   where
@@ -308,6 +309,7 @@ importDoc report = vcat . intersperse mempty $ (accountImportDoc <$> reportAccou
         <> [text ("Coins locked: " <> show n) | let n = reportCoinsLocked report, n > 0]
         <> [text ("Coins unlocked: " <> show n) | let n = reportCoinsUnlocked report, n > 0]
         <> ["Not in the wallet yet:" <+> commaList (text <$> missing) | not (null missing)]
+        <> [indent 2 (sentence (wordsOf (tooFar n))) | let n = reportAddressesTooFar report, n > 0]
         <> ["Left aside:" <+> commaList (text <$> aside) | not (null aside)]
         <> [styled Failure "Lines that are not records:" <+> text (intercalate ", " (show <$> reportUnreadable report)) | not (null (reportUnreadable report))]
     labelsLine = case countedIf (reportAddressLabels report) "address" "addresses" <> countedIf (reportTxLabels report) "transaction" "transactions" of
@@ -323,6 +325,10 @@ importDoc report = vcat . intersperse mempty $ (accountImportDoc <$> reportAccou
         <> [counted n "record" "records" <> " hw keeps no label for" | let n = reportNotKept report, n > 0]
     -- A count with its noun, when there is anything to count
     countedIf n singular plural = [counted n singular plural | n > 0]
+    -- Why hw derived none of these addresses from their key path: a file
+    -- names any path, and hw generates no further than the scan limit
+    -- past the last used address of a chain
+    tooFar n = "Of them, " <> counted n "address lies" "addresses lie" <> " over a thousand past the last used address of " <> (if n == 1 then "its" else "their") <> " chain, further than hw generates on the word of a file."
 
 -- | An account a file names, as accounts shows it, and what became of it.
 -- Under a created one, the note on a kind taken on trust, if any, wrapped

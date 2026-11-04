@@ -23,7 +23,8 @@
 -- each other record goes where it belongs. An address is found among the
 -- addresses of the wallet, however it is written, or derived from its key
 -- path in the account whose key gives it, which then generates its chain
--- up to it. A transaction goes to the accounts its origin names, whether
+-- up to it, no further than a thousand addresses past the last used one
+-- ('scanLimit'). A transaction goes to the accounts its origin names, whether
 -- they have the transaction yet or not, since the labels of transactions
 -- are kept apart from the transactions; without an origin, to the accounts
 -- that have it, or to the only account of the wallet. A coin that is not
@@ -189,6 +190,10 @@ data ImportReport = ImportReport
     reportCoinsUnlocked :: !Natural,
     -- | The addresses the wallet does not have, and could not derive
     reportAddressesMissing :: !Natural,
+    -- | Of those, the addresses hw did not derive from their key path,
+    -- which lies beyond 'scanLimit' past the last used address of the
+    -- receiving chain of their account
+    reportAddressesTooFar :: !Natural,
     -- | The transactions no account of the wallet has, when no origin says
     -- which account they are of
     reportTxsMissing :: !Natural,
@@ -244,6 +249,7 @@ emptyReport accounts unreadable =
       reportCoinsLocked = 0,
       reportCoinsUnlocked = 0,
       reportAddressesMissing = 0,
+      reportAddressesTooFar = 0,
       reportTxsMissing = 0,
       reportCoinsMissing = 0,
       reportOtherAccounts = 0,
@@ -544,6 +550,7 @@ labelAddressRecord ctx accounts report r readOn =
               _ <- setAddrLabel accId (dBAddressIndex addr) label
               return report {reportAddressLabels = reportAddressLabels report + 1}
         PlacedOnChangeChain -> return report {reportChangeAddresses = reportChangeAddresses report + 1}
+        PlacedTooFar -> return report {reportAddressesMissing = reportAddressesMissing report + 1, reportAddressesTooFar = reportAddressesTooFar report + 1}
         NotPlaced -> return report {reportAddressesMissing = reportAddressesMissing report + 1}
   where
     -- The accounts the origin names, or every account without one. An
@@ -560,13 +567,19 @@ data Placement
   | -- | Its key path derives it on the change chain of an account, where
     -- it takes no label and is not generated
     PlacedOnChangeChain
+  | -- | Its key path derives it on the receiving chain of an account,
+    -- beyond 'scanLimit' past the last used address, further than hw
+    -- generates on the word of a file ('withinScanLimit')
+    PlacedTooFar
   | -- | Nowhere hw can tell
     NotPlaced
 
 -- | Find the address of a record among the addresses of the accounts, read
 -- in each, on its network and of its kind; or derive it from its key path
 -- in the account whose key gives it, which then generates its receiving
--- chain up to it, as the wallet that wrote the file had it
+-- chain up to it, as the wallet that wrote the file had it, within
+-- 'scanLimit' of its last used address ('withinScanLimit'): a file names
+-- any path, and hw does not generate for days on its word
 placeAddress :: (MonadUnliftIO m) => Ctx -> [(DBAccountId, DBAccount)] -> (DBAccount -> Maybe Address) -> Maybe SoftPath -> ExceptT String (DB m) Placement
 placeAddress ctx accounts readIn keypathM = do
   heldM <- firstJust accounts $ \held@(accId, acc) -> do
@@ -587,9 +600,13 @@ placeAddress ctx accounts readIn keypathM = do
             else case addrType of
               AddrInternal -> return (Just PlacedOnChangeChain)
               AddrExternal -> do
-                extendChainTo ctx accId AddrExternal (fromIntegral index + 1)
-                rowM <- lift $ P.get (DBAddressKey accId False (fromIntegral index))
-                return $ PlacedAt accId <$> rowM
+                within <- lift $ withinScanLimit accId AddrExternal index
+                if not within
+                  then return (Just PlacedTooFar)
+                  else do
+                    extendChainTo ctx accId AddrExternal (fromIntegral index + 1)
+                    rowM <- lift $ P.get (DBAddressKey accId False (fromIntegral index))
+                    return $ PlacedAt accId <$> rowM
 
 -- | The first result of the action on the items, if any
 firstJust :: (Monad m) => [a] -> (a -> m (Maybe b)) -> m (Maybe b)
@@ -656,6 +673,7 @@ reportPairs report =
     "coinslocked" .= reportCoinsLocked report,
     "coinsunlocked" .= reportCoinsUnlocked report,
     "addressesmissing" .= reportAddressesMissing report,
+    "addressestoofar" .= reportAddressesTooFar report,
     "txsmissing" .= reportTxsMissing report,
     "coinsmissing" .= reportCoinsMissing report,
     "otheraccounts" .= reportOtherAccounts report,
@@ -673,6 +691,7 @@ parseReport o =
     <*> o .: "coinslocked"
     <*> o .: "coinsunlocked"
     <*> o .: "addressesmissing"
+    <*> o .: "addressestoofar"
     <*> o .: "txsmissing"
     <*> o .: "coinsmissing"
     <*> o .: "otheraccounts"

@@ -301,10 +301,11 @@ label of their key, and renames those it has when the file is one of `hw`,
 since other wallets label a key with the name of its signer. It sets the labels and locks on
 what the wallet has, labels a transaction before `sync` fetches it when the
 file says which account it is of, and derives an address from the path the
-file gives. What it cannot place, it counts: run `sync`, then `importacc`
-again. A file from another wallet names no network for its keys, so give
-`--network`, or set a default network. Labels of inputs, coins and change
-addresses are left aside, since `hw` keeps none.
+file gives, up to a thousand past the last used address of its chain. What
+it cannot place, it counts: run `sync`, then `importacc` again. A file from
+another wallet names no network for its keys, so give `--network`, or set a
+default network. Labels of inputs, coins and change addresses are left
+aside, since `hw` keeps none.
 
 ```console
 hw exportacc --account vault vault.jsonl    # on the offline computer
@@ -719,6 +720,10 @@ To restore a backup, replace `~/.hw/accounts.sqlite` with the copy, or point
 - **`receive` stops after 20 unused addresses in a row.** A wallet restored
   from the mnemonic would not look further. Reuse one of them, or raise `gap`
   in the configuration file.
+- **`importacc` derives no address over a thousand past the last used one of
+  its chain.** A file names any path, and a wrong one would have `hw` derive
+  addresses for days. Such an address is counted as not in the wallet yet,
+  and the answer says why.
 - **`hw` takes the server's word for the chain.** It checks that the server
   answers about the addresses and transactions it asked about and no others,
   and that the counts agree, but it cannot tell a hidden payment from none.

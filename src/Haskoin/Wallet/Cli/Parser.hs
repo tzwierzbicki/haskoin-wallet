@@ -944,9 +944,10 @@ this wallet.
 
 The labels and the locks of the file are set on the addresses, transactions
 and coins the wallet has. An address the wallet has not generated yet is
-derived from the path the file gives, and a transaction the file places in an
-account is labelled before `sync` fetches it. What hw cannot place is counted in
-the answer: run `sync`, then importacc again. The labels of inputs, of coins and
+derived from the path the file gives, up to a thousand past the last used
+address of its chain, and a transaction the file places in an account is
+labelled before `sync` fetches it. What hw cannot place is counted in the
+answer: run `sync`, then importacc again. The labels of inputs, of coins and
 of change addresses are left aside, since hw keeps none.
 
 The fingerprint is the four bytes that PSBTs and output descriptors write
