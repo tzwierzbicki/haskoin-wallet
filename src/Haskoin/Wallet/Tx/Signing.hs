@@ -76,7 +76,7 @@ import Haskoin.Wallet.Database.TxInfo
   )
 import Haskoin.Wallet.Keys (AccountKind, keyAddress, kindCoinName, spendsScript)
 import Haskoin.Wallet.Tx.SignData
-import Haskoin.Wallet.Tx.Size (inputSize, outputSize, p2pkhInput, signedTxSize, txSize)
+import Haskoin.Wallet.Tx.Size (inputSize, scriptOutputSize, p2pkhInput, signedTxSize, txSize)
 import Haskoin.Wallet.Util (addrToString, onNetwork, safeSubtract)
 import Numeric.Natural (Natural)
 
@@ -342,7 +342,7 @@ summarize net ctx accountPubM tsd coins = do
 estimatedSize :: [SpentCoin] -> Tx -> Natural
 estimatedSize coins tx =
   fromIntegral $
-    txSize (fromMaybe p2pkhInput . inputSize . (.script) <$> coins) (outputSize . (.script) <$> tx.outputs)
+    txSize (fromMaybe p2pkhInput . inputSize . (.script) <$> coins) (scriptOutputSize . (.script) <$> tx.outputs)
 
 {- Signing -}
 
@@ -379,13 +379,16 @@ signInputs net ctx kind accountKey myInputs tx coins =
 verifyInputs :: Network -> Ctx -> Tx -> [SpentCoin] -> Either String ()
 verifyInputs net ctx tx coins =
   forM_ (zip3 [0 ..] coins stacks) $ \(i, coin, stack) -> do
-    unless (verifyStdInput net ctx tx i coin.script coin.value) $
+    unless (verifyStdInput net ctx tx spent i) $
       Left $ "Invalid signature for " <> describeInput net i coin
     forM_ (inputSigHashes net ctx (tx.inputs !! i) stack) $ \sh ->
       unless (sh == walletSigHash net) $
         Left $ "The signature of " <> describeInput net i coin <> " has the sighash " <> sigHashName sh <> ", not " <> sigHashName (walletSigHash net)
   where
     stacks = tx.witness <> repeat []
+    -- The coins as the verifier takes them: it finds the coin of an input
+    -- by its outpoint
+    spent = [(coin.script, coin.value, coin.outpoint) | coin <- coins]
 
 -- | The sighash of every signature of an input: those of its script when
 -- it is a standard one, and those of the items of its witness that are
@@ -400,6 +403,9 @@ inputSigHashes net ctx input stack = ofScript <> ofWitness
     signaturesOf scriptInput = case scriptInput of
       RegularInput simple -> ofSimple simple
       ScriptHashInput simple _ -> ofSimple simple
+      -- The input of a P2SH-P2WPKH coin pushes its witness script alone:
+      -- its signature is in the witness
+      NestedWitnessInput _ -> []
     ofSimple simple = [sh | TxSignature _ sh <- case simple of SpendPK s -> [s]; SpendPKHash s _ -> [s]; SpendMulSig ss -> ss]
 
 describeInput :: Network -> Int -> SpentCoin -> String

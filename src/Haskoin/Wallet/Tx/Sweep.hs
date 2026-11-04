@@ -48,7 +48,7 @@ import Haskoin.Wallet.Store
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Signing (coinSigInput, parseOutsideTxSignData, parseTxSignData, spentAddress, spentCoins, verifySignedTx)
-import Haskoin.Wallet.Tx.Size (InputSize, checkFeeRateAndDust, inputSize, outputSize, txSize, uncompressedKeyInput)
+import Haskoin.Wallet.Tx.Size (InputSize, checkFeeRateAndDust, inputSize, scriptOutputSize, txSize, uncompressedKeyInput)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import System.Random (StdGen)
@@ -214,7 +214,7 @@ buildSweepSignData net ctx gen found sweepTo feeByte dust lockTime = do
 sweepTxSize :: Network -> Ctx -> SweepCoins -> [ScriptOutput] -> Either String Word64
 sweepTxSize net ctx found outputs = do
   inputs <- mapM (coinInputSize net ctx found.uncompressedAddrs) found.coins
-  return $ txSize inputs (outputSize . marshal ctx <$> outputs)
+  return $ txSize inputs (scriptOutputSize . marshal ctx <$> outputs)
 
 -- | The size of the signed input of a coin of the sweep: a P2PKH coin at an
 -- address of an uncompressed key carries the 65-byte public key; a coin of

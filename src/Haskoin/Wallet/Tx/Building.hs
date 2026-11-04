@@ -56,7 +56,7 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.PendingTx (changeAddress)
 import Haskoin.Wallet.Database.RawTx
 import Haskoin.Wallet.Tx.SignData
-import Haskoin.Wallet.Tx.Size (checkFeeRateAndDust, outputSize, p2pkhOutputSize)
+import Haskoin.Wallet.Tx.Size (checkFeeRateAndDust, scriptOutputSize, p2pkhOutputSize)
 import Haskoin.Wallet.Tx.LockTime (withHeader)
 import Haskoin.Wallet.Util (addrToTextE, randomShuffle, safeSubtract)
 import Numeric.Natural (Natural)
@@ -324,7 +324,7 @@ assemblePayment net ctx found chosen changeM lockTime = do
 -- paid is counted as P2PKH; the builder refuses it further down.
 recipientOutputSize :: Ctx -> Address -> Word64
 recipientOutputSize ctx addr =
-  maybe p2pkhOutputSize (outputSize . marshal ctx) (addressToOutput addr)
+  maybe p2pkhOutputSize (scriptOutputSize . marshal ctx) (addressToOutput addr)
 
 -- | The coins chosen under coin control, among the spendable coins of the
 -- account. Every chosen coin must be one of them: the command checks it

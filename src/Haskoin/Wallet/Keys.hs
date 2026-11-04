@@ -190,16 +190,12 @@ foreignAddress kind ctx key = case kind of
   Bip44OfBitcoin -> xPubAddr ctx key
 
 -- | The P2TR address of a key, as BIP 86 derives it: the output key is the
--- key tweaked by the tagged hash of itself, with no script tree. BIP 341
--- tweaks the key with an even y coordinate, which the x-only form of the
--- key stands for, and haskoin-core tweaks the key as it is, so the key is
--- taken through its x-only form first.
+-- x-only key tweaked by the tagged hash of itself, with no script tree,
+-- which haskoin-core's taprootOutputKey computes as BIP 341 defines it.
 taprootAddress :: Ctx -> XPubKey -> Address
 taprootAddress ctx key =
   fromMaybe (error "taprootAddress: a Taproot output has an address") $
-    outputAddress ctx (taprootScriptOutput ctx (TaprootOutput evenKey Nothing))
-  where
-    evenKey = fromMaybe key.key $ importXOnlyPubKey ctx (exportXOnlyPubKey ctx key.key)
+    outputAddress ctx (taprootScriptOutput ctx (TaprootOutput key.key Nothing))
 
 {- The keys of an account -}
 

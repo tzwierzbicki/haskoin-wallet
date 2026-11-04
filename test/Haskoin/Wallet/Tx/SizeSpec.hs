@@ -68,11 +68,11 @@ spec = do
 
     describe "The size of an output, by its script" $
       it "is 34 bytes for P2PKH, 32 for P2SH, 31 for P2WPKH, 43 for P2WSH and Taproot" $ do
-        outputSize (addressScript ctx keyHashAddr) `shouldBe` 34
-        outputSize (addressScript ctx scriptAddr) `shouldBe` 32
-        outputSize (addressScript ctx witnessAddr) `shouldBe` 31
-        outputSize (addressScript ctx witnessScriptAddr) `shouldBe` 43
-        outputSize (addressScript ctx taprootAddr) `shouldBe` 43
+        scriptOutputSize (addressScript ctx keyHashAddr) `shouldBe` 34
+        scriptOutputSize (addressScript ctx scriptAddr) `shouldBe` 32
+        scriptOutputSize (addressScript ctx witnessAddr) `shouldBe` 31
+        scriptOutputSize (addressScript ctx witnessScriptAddr) `shouldBe` 43
+        scriptOutputSize (addressScript ctx taprootAddr) `shouldBe` 43
         p2pkhOutputSize `shouldBe` 34
 
     describe "The witness data of a transaction" $ do

@@ -28,7 +28,7 @@ module Haskoin.Wallet.Tx.Size
     uncompressedKeyInput,
     accountInput,
     accountInputSize,
-    outputSize,
+    scriptOutputSize,
     p2pkhOutputSize,
     p2wpkhOutputSize,
     accountOutputSize,
@@ -45,9 +45,8 @@ where
 
 import Control.Monad (when)
 import qualified Data.ByteString as BS
-import qualified Data.Serialize as S
 import Data.Word (Word64)
-import Haskoin (ScriptOutput (..), Tx (..))
+import Haskoin (ScriptOutput (..), Tx, txVirtualSize)
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Amounts (maxMoney)
 import Haskoin.Wallet.Keys (AccountKind (..))
@@ -129,8 +128,8 @@ accountInputSize = inputVirtualSize . accountInput
 
 -- | The size of an output paying a script: 8 bytes of amount, the length
 -- of the script and the script
-outputSize :: BS.ByteString -> Word64
-outputSize script = 8 + varIntSize scriptLength + fromIntegral scriptLength
+scriptOutputSize :: BS.ByteString -> Word64
+scriptOutputSize script = 8 + varIntSize scriptLength + fromIntegral scriptLength
   where
     scriptLength = BS.length script
 
@@ -168,24 +167,18 @@ txSize inputs outputs =
       | all (== 0) witnesses = 0
       | otherwise = 2 + sum [max 1 w | w <- witnesses]
 
--- | The virtual size of a signed transaction, from its bytes: those
--- outside the witnesses count four, those of the witnesses one, and the
--- weight is taken in quarters, rounded up. A transaction without a
--- witness is serialized without the marker and flag bytes, so its virtual
--- size is its size.
+-- | The virtual size of a signed transaction, from its bytes, as
+-- haskoin-core's txVirtualSize measures it: those outside the witnesses
+-- count four, those of the witnesses one, and the weight is taken in
+-- quarters, rounded up. A transaction without a witness is serialized
+-- without the marker and flag bytes, so its virtual size is its size.
 signedTxSize :: Tx -> Natural
-signedTxSize tx = virtualSize (BS.length (S.encode tx {witness = []})) (BS.length (S.encode tx))
+signedTxSize = fromIntegral . txVirtualSize
 
 -- | The virtual size of a transaction as the store reports it, from the
 -- weight the store gives it
 storeTxSize :: Store.Transaction -> Natural
 storeTxSize tx = fromIntegral ((tx.weight + 3) `div` 4)
-
--- | The virtual size from the bytes outside the witnesses and all the
--- bytes: the weight, three times the former plus the latter, in quarters
--- rounded up
-virtualSize :: Int -> Int -> Natural
-virtualSize base total = fromIntegral ((3 * base + total + 3) `div` 4)
 
 -- | A number of witness bytes in virtual bytes: a quarter, rounded up
 quarter :: Word64 -> Word64

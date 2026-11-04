@@ -145,10 +145,10 @@ isSigned tx = not (null tx.inputs) && and (zipWith signedInput tx.inputs witness
 
 -- | The hash of a transaction without its signatures: the input scripts
 -- and the witnesses cleared, so it is the same before and after signing.
--- It identifies a pending transaction. (haskoin-core's nosigTxHash keeps
--- the witnesses, which changes the hash of a SegWit transaction once signed.)
+-- It identifies a pending transaction. This is haskoin-core's
+-- nosigTxHash, which clears the witnesses too since haskoin-core 1.5.0.
 nosigHash :: Tx -> TxHash
-nosigHash tx = nosigTxHash tx {witness = []}
+nosigHash = nosigTxHash
 
 -- | The hash hw shows for a transaction in preparation: its nosigHash until
 -- it is signed, then its id, which the network and the explorers know. The
