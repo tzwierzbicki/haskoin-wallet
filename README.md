@@ -124,7 +124,6 @@ database `accounts.sqlite` and the settings `config.json`:
 | `gap` | `20` | How many unused addresses in a row `receive` gives out and `sync` looks at |
 | `change-back` | `false` | Whether `preparetx` sends the change back to an address it spends from |
 | `parallel-requests` | `1` | How many requests go to the server at once. The public server takes one. |
-| `addr-batch`, `coin-batch`, `tx-full-batch` | `100` | How many addresses, coins or transactions one request asks about |
 | `database-file` | `null` | Another database, instead of `~/.hw/accounts.sqlite` |
 | `pager` | `null` | The pager a listing goes through on a terminal, instead of `less` or `PAGER`. `""` is none. |
 

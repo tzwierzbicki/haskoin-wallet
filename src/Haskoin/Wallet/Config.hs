@@ -60,12 +60,6 @@ data Config = Config
     -- | The gap of BIP44: how many unused addresses hw generates past the
     -- last used one of a chain, and looks at for payments on a sync
     configGap :: Natural,
-    -- | How many addresses one request for balances asks about
-    configAddrBatch :: Natural,
-    -- | How many addresses one request for coins asks about
-    configCoinBatch :: Natural,
-    -- | How many transactions one request fetches, in full or raw
-    configTxFullBatch :: Natural,
     -- | How many requests the sync sends to the store at a time. The
     -- public store at api.haskoin.com refuses a second request while one
     -- is in flight (503 Service Temporarily Unavailable), so the default
@@ -93,16 +87,13 @@ instance FromJSON Config where
     withObject "config" $ \o -> do
       -- A key missing from the file, or set to null, takes its default: a
       -- file written by an earlier hw, or trimmed by hand, still reads.
-      -- A key hw no longer has, like the tx-batch of hw 0.9 or the
-      -- recovery-gap of hw 0.10, is ignored.
+      -- A key hw no longer has, like the batch sizes of hw 0.9 (addr-batch,
+      -- tx-batch, coin-batch, tx-full-batch) or its recovery-gap, is ignored.
       let key name field = o .:? name .!= field (def :: Config)
           count name field = key name field >>= atLeastOne name
       Config
         <$> key "host" configHost
         <*> count "gap" configGap
-        <*> count "addr-batch" configAddrBatch
-        <*> count "coin-batch" configCoinBatch
-        <*> count "tx-full-batch" configTxFullBatch
         <*> count "parallel-requests" configParallelRequests
         <*> o .:? "database-file"
         <*> (traverse networkNamed =<< o .:? "default-network")
@@ -116,7 +107,7 @@ networkNamed text = maybe (fail refused) return (netByName text)
     refused = "The key \"default-network\" must be a network: " <> intercalate ", " ((.name) <$> allNets)
 
 -- | A count of the configuration cannot be zero: a gap of zero would refuse
--- every new address, and a batch of zero would ask the store forever
+-- every new address, and zero requests at a time would send none
 atLeastOne :: Key -> Natural -> Parser Natural
 atLeastOne name 0 = fail $ "The key " <> show name <> " must be at least 1"
 atLeastOne _ n = return n
@@ -126,9 +117,6 @@ instance ToJSON Config where
     object
       [ "host" .= configHost cfg,
         "gap" .= configGap cfg,
-        "addr-batch" .= configAddrBatch cfg,
-        "coin-batch" .= configCoinBatch cfg,
-        "tx-full-batch" .= configTxFullBatch cfg,
         "parallel-requests" .= configParallelRequests cfg,
         "database-file" .= configDatabaseFile cfg,
         "default-network" .= ((.name) <$> configDefaultNetwork cfg),
@@ -141,9 +129,6 @@ instance Default Config where
     Config
       { configHost = cs (def :: ApiConfig).host,
         configGap = 20,
-        configAddrBatch = 100,
-        configCoinBatch = 100,
-        configTxFullBatch = 100,
         configParallelRequests = 1,
         configDatabaseFile = Nothing,
         configDefaultNetwork = Just btc,

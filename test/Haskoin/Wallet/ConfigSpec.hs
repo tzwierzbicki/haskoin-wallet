@@ -36,7 +36,7 @@ fileSpec =
     it "reads the default configuration back" $
       decodeConfig defaultFile `shouldBe` Right def
 
-    it "reads a file of hw 0.9: the tx-batch and recovery-gap keys mean nothing now, the parallel requests take their default" $
+    it "reads a file of hw 0.9: its batch sizes and recovery-gap mean nothing now, the parallel requests take their default" $
       decodeConfig hw09File `shouldBe` Right withoutNetwork
 
     it "reads the number of parallel requests" $
@@ -82,9 +82,9 @@ keySpec =
       decodeConfig [r|{"gap": 0}|]
         `shouldBe` Left "Error in $: The key \"gap\" must be at least 1"
 
-    it "cannot be a batch of zero, which would ask the store forever" $
-      decodeConfig [r|{"addr-batch": 0}|]
-        `shouldBe` Left "Error in $: The key \"addr-batch\" must be at least 1"
+    it "cannot be zero requests at a time, which would send none" $
+      decodeConfig [r|{"parallel-requests": 0}|]
+        `shouldBe` Left "Error in $: The key \"parallel-requests\" must be at least 1"
 
     it "must be a number when its default is one" $
       decodeConfig [r|{"gap": "twenty"}|]
@@ -130,7 +130,7 @@ directorySpec =
       inScratchDirectory $ \dir -> do
         writeFile (configFile dir) hw09File
         cfg <- runExceptT $ readConfig dir
-        cfg `shouldBe` Right (withoutNetwork, ["The configuration file " <> configFile dir <> " has keys hw does not know, left aside: recovery-gap, tx-batch"])
+        cfg `shouldBe` Right (withoutNetwork, ["The configuration file " <> configFile dir <> " has keys hw does not know, left aside: addr-batch, coin-batch, recovery-gap, tx-batch, tx-full-batch"])
 
     it "warns about a mistyped key, whose setting would otherwise keep its default without a word" $
       inScratchDirectory $ \dir -> do
@@ -156,9 +156,6 @@ defaultFile =
   [r|{
   "host": "https://api.haskoin.com/",
   "gap": 20,
-  "addr-batch": 100,
-  "coin-batch": 100,
-  "tx-full-batch": 100,
   "parallel-requests": 1,
   "database-file": null,
   "default-network": "btc",
@@ -166,8 +163,8 @@ defaultFile =
   "pager": null
 }|]
 
--- | The file hw 0.9 wrote when there was none: tx-batch and recovery-gap
--- keys that no longer mean anything, and no parallel-requests key
+-- | The file hw 0.9 wrote when there was none: batch sizes and a
+-- recovery-gap that no longer mean anything, and no parallel-requests key
 hw09File :: String
 hw09File =
   [r|{
@@ -187,8 +184,5 @@ twoRequestsFile =
   [r|{
   "host": "https://api.haskoin.com/",
   "gap": 20,
-  "addr-batch": 100,
-  "coin-batch": 100,
-  "tx-full-batch": 100,
   "parallel-requests": 2
 }|]

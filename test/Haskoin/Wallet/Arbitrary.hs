@@ -334,9 +334,6 @@ arbitraryConfig =
     <$> arbitraryText
     <*> count
     <*> count
-    <*> count
-    <*> count
-    <*> count
     <*> arbitrary
     <*> arbitraryMaybe arbitraryNetwork
     <*> arbitrary

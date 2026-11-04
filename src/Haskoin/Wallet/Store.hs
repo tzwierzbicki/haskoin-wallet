@@ -101,8 +101,14 @@ unreachableStore host e = "The store at " <> cs host <> " could not be reached: 
       HttpExceptionRequest _ content -> show content
       InvalidUrlException url why -> "the address " <> url <> " is not valid: " <> why
 
--- | The store of hw: the web API of a haskoin-store, with the batch sizes
--- of the configuration
+-- | How many addresses or transactions one request to the store asks
+-- about. A question about more of them goes in several requests. The store
+-- puts no limit on a request; a hundred keeps each one short.
+requestBatch :: Natural
+requestBatch = 100
+
+-- | The store of hw: the web API of the haskoin-store the configuration
+-- names
 webStore :: Ctx -> Config -> Network -> Store
 webStore ctx cfg net =
   Store
@@ -116,15 +122,15 @@ webStore ctx cfg net =
       storeLatestBlocks = serial <$> call (GetBlockLatest (NoTx True)),
       storeBlockTransactions = \hash -> serial <$> call (GetTxsBlock hash),
       storeBalances = \addrs ->
-        serial <$> batch (configAddrBatch cfg) (GetAddrsBalance addrs),
+        serial <$> batch (GetAddrsBalance addrs),
       storeAddressTxs = \addr count ->
         serial <$> call (GetAddrTxs addr def {limit = Just (fromIntegral count)}),
       storeTransactions = \tids ->
-        serial <$> batch (configTxFullBatch cfg) (GetTxs tids),
+        serial <$> batch (GetTxs tids),
       storeUnspents = \addrs ->
-        serial <$> batch (configCoinBatch cfg) (GetAddrsUnspent addrs everything),
+        serial <$> batch (GetAddrsUnspent addrs everything),
       storeRawTransactions = \tids ->
-        raw <$> batch (configTxFullBatch cfg) (GetTxsRaw tids),
+        raw <$> batch (GetTxsRaw tids),
       storePublish = \tx -> do
         Store.TxId published <- call (PostTx tx)
         unless (published == txHash tx) $
@@ -134,7 +140,7 @@ webStore ctx cfg net =
     host = configHost cfg
     api = ApiConfig net (cs host)
     call req = webCall host $ apiCall ctx api req
-    batch size req = webCall host $ apiBatch ctx size api req
+    batch req = webCall host $ apiBatch ctx requestBatch api req
     serial (Store.SerialList xs) = xs
     raw (Store.RawResultList xs) = xs
     -- A limit of zero asks the store for everything. Without a limit, the
