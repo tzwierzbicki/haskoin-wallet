@@ -167,11 +167,12 @@ keyOriginIn text
   | otherwise = Just (Nothing, text)
 
 -- | The path after the fingerprint of a key origin: none, or steps each
--- after a slash, hardened ones ending in an apostrophe, an h or an H
+-- after a slash, hardened ones ending in an apostrophe, an h or an H, all
+-- of which haskoin-core reads
 parseOriginPath :: Text -> Maybe DerivPath
 parseOriginPath text
   | Text.null text = Just Deriv
-  | otherwise = (.get) <$> parsePath (cs (Text.replace "H" "'" (Text.replace "h" "'" text)))
+  | otherwise = (.get) <$> parsePath (cs text)
 
 -- | A key origin as a descriptor writes it, with the given mark on the
 -- hardened steps: [bc560f95/44h/0h/0h]

@@ -7,12 +7,12 @@
 -- one key.
 module Haskoin.Wallet.MessageSigning where
 
-import Control.Monad (guard, unless)
+import Control.Monad (unless)
+import Crypto.Secp256k1.Recovery (exportCompactRecSig, importCompactRecSig, recover, signRecMsg)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Base64 as B64
 import Data.Char (isSpace)
-import Data.List (find)
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, fromMaybe)
 import qualified Data.Serialize as S
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -77,32 +77,12 @@ signMessage ctx addr key message = do
         if pubKeyWitnessAddr ctx public == Just addr
           then Right witnessHeader
           else Left "The address does not match the signing key"
-  recId <- recoveryId ctx pub h r s
-  return $ BS.cons (headerBase + recId) rs
+  return $ BS.cons (headerBase + recId) compact.get
   where
-    pub = derivePubKey ctx key
-    public = wrapPubKey True pub
-    h = signedMessageHash message
-    -- libsecp256k1 signs with RFC6979 nonces and returns low-S signatures
-    rs = (exportCompactSig ctx $ signHash ctx key h).get
-    (r, s) = BS.splitAt 32 rs
-
--- | The recovery id of the signature (r, s) of the hash by the public key:
--- the id that recovers the key, found as Bitcoin Core finds it
--- (CKey::SignCompact)
-recoveryId ::
-  Ctx ->
-  PubKey ->
-  Hash256 ->
-  BS.ByteString ->
-  BS.ByteString ->
-  Either String Word8
-recoveryId ctx pub h r s =
-  maybeToEither "Could not compute the recovery id of the message signature" $
-    find recovers [0 .. 3]
-  where
-    recovers recId =
-      (exportPubKey ctx True <$> recoverPubKey ctx h recId r s) == Just (exportPubKey ctx True pub)
+    public = wrapPubKey True (derivePubKey ctx key)
+    -- libsecp256k1 signs with an RFC 6979 nonce and gives a low-S
+    -- signature, with the id that recovers the key
+    (compact, recId) = exportCompactRecSig ctx (signRecMsg ctx key (hashMsg (signedMessageHash message)))
 
 -- | A signature in base64, as signmsg writes it
 encodeSignature :: BS.ByteString -> Text
@@ -130,7 +110,7 @@ verifyMessage ctx addr signature message = do
   return $ case keyHeader header of
     Nothing -> False
     Just (compressed, recId) ->
-      let signer = wrapPubKey compressed <$> recoverPubKey ctx (signedMessageHash message) recId r s
+      let signer = wrapPubKey compressed <$> recoverSigner ctx (signedMessageHash message) recId (r <> s)
        in maybe False (\key -> addr `elem` keyAddresses ctx key) signer
 
 -- | The addresses of a key a message can be signed from: its P2PKH
@@ -167,52 +147,19 @@ witnessHeader = 39
 
 {- Recovering the key -}
 
--- | The public key that made the signature (r, s) of the hash, given the
--- recovery id: Q = r⁻¹(s·R − e·G), where e is the hash as a number and R the
--- point whose x coordinate is r, or r + n for the ids 2 and 3, and whose y
--- has the parity of the id. Nothing when no key comes out: r or s outside
--- the curve order, no point at that x, or a point at infinity on the way.
--- (A hash that is a multiple of the order recovers nothing either: no
--- message has one in practice.)
-recoverPubKey :: Ctx -> Hash256 -> Word8 -> BS.ByteString -> BS.ByteString -> Maybe PubKey
-recoverPubKey ctx h recId r s = do
-  guard (inOrder rI && inOrder sI)
-  -- importPubKey gives no point for an x at or past the field size
-  rPoint <- importPubKey ctx $ BS.cons (0x02 + recId `mod` 2) (toBytes32 x)
-  sT <- tweak s
-  eNegated <- tweakNegate ctx =<< tweak (toBytes32 e)
-  rInverse <- tweak $ toBytes32 $ inverseModOrder rI
-  sR <- tweakMulPubKey ctx rPoint sT
-  sRMinusEG <- tweakAddPubKey ctx sR eNegated
-  tweakMulPubKey ctx sRMinusEG rInverse
-  where
-    rI = bsToInteger r
-    sI = bsToInteger s
-    inOrder i = 0 < i && i < secp256k1Order
-    x = rI + if recId >= 2 then secp256k1Order else 0
-    e = bsToInteger (S.encode h) `mod` secp256k1Order
+-- | The public key that made the signature r‖s of the hash, given the
+-- recovery id, as libsecp256k1 recovers it. Nothing when no key comes
+-- out: r or s zero or not below the curve order, or no point at that x.
+recoverSigner :: Ctx -> Hash256 -> Word8 -> BS.ByteString -> Maybe PubKey
+recoverSigner ctx h recId rs = do
+  compact <- compactSig rs
+  recSig <- importCompactRecSig ctx compact recId
+  recover ctx recSig (hashMsg h)
 
--- | The inverse of a scalar modulo the curve order, which is prime: a^(n-2)
--- by Fermat's little theorem
-inverseModOrder :: Integer -> Integer
-inverseModOrder a = powMod a (secp256k1Order - 2)
-  where
-    powMod _ 0 = 1
-    powMod b k
-      | even k = square (powMod b (k `div` 2))
-      | otherwise = (b * powMod b (k - 1)) `mod` secp256k1Order
-    square c = (c * c) `mod` secp256k1Order
-
--- | A scalar as libsecp256k1 reads it: 32 bytes, big-endian
-toBytes32 :: Integer -> BS.ByteString
-toBytes32 i = BS.replicate (32 - BS.length bs) 0 <> bs
-  where
-    bs = integerToBS i
-
--- | Order n of the secp256k1 curve
-secp256k1Order :: Integer
-secp256k1Order =
-  0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+-- | A hash as libsecp256k1 signs and recovers it. A hash is 32 bytes, the
+-- one length it takes.
+hashMsg :: Hash256 -> Msg
+hashMsg h = fromMaybe (error "A hash is 32 bytes") (msg (S.encode h))
 
 {- The armored block -}
 

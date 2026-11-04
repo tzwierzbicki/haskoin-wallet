@@ -1076,3 +1076,16 @@ coreSegwitPreparedSignedText = "cHNidP8BAHQCAAAAAWc1xfZ0yPv0PUM5wdsglkTvSrW2RVXD
 -- of the file above, and its testmempoolaccept accepts it.
 corePreparedSignedV2Text :: BS.ByteString
 corePreparedSignedV2Text = "cHNidP8BAgQCAAAAAQMEAAAAAAEEAQEBBQECAfsEAgAAAAX8Amh3AANidGMAAQCHAgAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP////8DAWYA/////wIA8gUqAQAAABl2qRTIDVUiPi8QYTY63Sp7A2PChb8pjYisAAAAAAAAAAAmaiSqIant4vYcP3HR3v0/qZnfo2lTdVxpBol5mWK0i+vYNpdOjPkAAAAAIgYDL2Q3AiJWyFTgCQ59bItl6WYG739AU5ng8Bh8kwl6wPkYvFYPlSwAAIAAAACAAAAAgAAAAAAAAAAAAQdqRzBEAiAt4w5OLHA+pvdD8Ech2/HZRoxlJ5EQEddAV3jzEPe6tAIgGhnWoPRPsXAT4lNaosniGeLccnAzo++kwH50AovU9p4BIQMvZDcCIlbIVOAJDn1si2XpZgbvf0BTmeDwGHyTCXrA+QEOIJzolVrP9CarlPjUSHujJgVmsHiFB+Mm+Bafv63Mct7+AQ8EAAAAAAEQBP3///8AAQMIAOH1BQAAAAABBBl2qRSryIZeu222JZVgMWOXXZuqNkYyyoisACICA3by5wZFjddWc7oZuO/YQu/d2bwK5B4xM53/z5F7bbbrGLxWD5UsAACAAAAAgAAAAIABAAAAAAAAAAEDCDYIECQBAAAAAQQZdqkURVqlDCZjFBdx66wgluN4M5ESJ9aIrAA="
+
+{- Signatures at the edge of the curve -}
+
+-- | Order n of the secp256k1 curve, for the tests that build a signature
+-- with r or s outside 1 to n−1, which recovers no key
+secp256k1Order :: Integer
+secp256k1Order = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+
+-- | A scalar as a signature carries it: 32 bytes, big-endian
+toBytes32 :: Integer -> BS.ByteString
+toBytes32 i = BS.replicate (32 - BS.length bs) 0 <> bs
+  where
+    bs = integerToBS i

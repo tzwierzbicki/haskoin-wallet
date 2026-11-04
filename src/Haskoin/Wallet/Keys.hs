@@ -11,9 +11,11 @@ module Haskoin.Wallet.Keys where
 
 import Control.Applicative ((<|>))
 import Control.Exception (evaluate, try)
+import Crypto.KDF.PBKDF2 (Parameters (..), fastPBKDF2_SHA512)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import Data.Text.Encoding (encodeUtf8)
 import Data.Text.Normalize (NormalizationMode (NFKD), normalize)
 import Haskoin
 import Haskoin.Wallet.Util (wordsOfLines)
@@ -123,11 +125,11 @@ xPubIndex :: XPubKey -> Natural
 xPubIndex = fromIntegral . xPubChild
 
 -- | The master key of a seed: the root of its accounts on every network.
--- The passphrase is normalized to NFKD, as BIP39 asks, so that it gives the
--- same seed whatever form its accented letters were typed in, and the seed
--- other BIP39 wallets derive.
+-- The sentence and the passphrase are normalized to NFKD, as BIP39 asks,
+-- so that the seed is the same whatever form accented letters were typed
+-- in, and the one other BIP39 wallets derive.
 masterKey :: MnemonicPass -> Either String XPrvKey
-masterKey mnem = typedMasterKey mnem {mnemonicPass = normalizePassphrase (mnemonicPass mnem)}
+masterKey mnem = makeXPrvKey <$> mnemonicToSeed (mnemonicPass mnem) (mnemonicWords mnem)
 
 -- | A passphrase as BIP39 hashes it: in the NFKD normal form, an accented
 -- letter as its letter and its accent
@@ -137,9 +139,16 @@ normalizePassphrase = normalize NFKD
 -- | The master key from the passphrase as typed, not normalized: how hw
 -- derived seeds before it followed BIP39 there, which differs for a
 -- passphrase with accents. Only the check of an existing account tries it,
--- for the accounts hw made then.
+-- for the accounts hw made then. haskoin-core normalizes the passphrase
+-- itself since its version 1.5.0, so the seed is derived here as it was
+-- then: the PBKDF2 of BIP39, 2048 rounds of HMAC-SHA512, of the sentence
+-- the entropy of the words gives back, with the salt "mnemonic" followed by
+-- the passphrase as typed.
 typedMasterKey :: MnemonicPass -> Either String XPrvKey
-typedMasterKey mnem = makeXPrvKey <$> mnemonicToSeed (mnemonicPass mnem) (mnemonicWords mnem)
+typedMasterKey mnem = do
+  entropy <- fromMnemonic (mnemonicWords mnem)
+  sentence <- toMnemonic entropy
+  return $ makeXPrvKey $ fastPBKDF2_SHA512 (Parameters 2048 64) (encodeUtf8 sentence) ("mnemonic" <> encodeUtf8 (mnemonicPass mnem))
 
 -- | The signing key of an account under a master key: the key at the path
 -- of its kind
