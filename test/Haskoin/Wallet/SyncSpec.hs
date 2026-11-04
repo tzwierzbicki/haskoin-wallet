@@ -13,12 +13,12 @@
 module Haskoin.Wallet.SyncSpec (spec) where
 
 import Control.Concurrent (threadDelay)
-import Control.Monad (replicateM_)
+import Control.Monad (forM_, replicateM_)
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans (lift)
 import Data.Default (def)
-import Data.IORef (atomicModifyIORef', newIORef, readIORef)
+import Data.IORef (IORef, atomicModifyIORef', modifyIORef, newIORef, readIORef)
 import Data.List (find, sort, sortOn)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
@@ -45,15 +45,24 @@ import Haskoin.Wallet.Tx.SignData
 import Numeric.Natural (Natural)
 import Test.Hspec
 
+-- | The question of a scan answered yes the given number of times, then
+-- no, each time noted
+answering :: IORef [String] -> Int -> ScanQuestion IO
+answering asked yeses found = liftIO $ do
+  modifyIORef asked (<> [found])
+  (<= yeses) . length <$> readIORef asked
+
 spec :: Spec
 spec = prepareContext $ \ctx -> do
   let cfg = def :: Config
+      -- A store that reports every address used, as one that lies does
+      everyAddressUsed = (toStore emptyStore) {storeBalances = \addrs -> return [Store.Balance addr 1000 0 1 1 1000 | addr <- addrs]}
       -- An account with its first receiving address, externalAddr 0
       account = do
         (accId, _) <- testNewAcc ctx "main"
         _ <- genExtAddress ctx cfg accId ""
         return accId
-      syncWith store accId = sync ctx cfg (toStore store) btc accId False
+      syncWith store accId = sync ctx cfg (toStore store) btc accId False noQuestion
 
   describe "Syncing an account" $ do
     it "stores a received payment, its coin and the best block" $
@@ -75,7 +84,7 @@ spec = prepareContext $ \ctx -> do
         lift $
           dbShouldFailWith "The stored best block of btc does not read: sync --full stores it again" $
             syncWith (paymentStore ctx) accId
-        _ <- sync ctx cfg (toStore (paymentStore ctx)) btc accId True
+        _ <- sync ctx cfg (toStore (paymentStore ctx)) btc accId True noQuestion
         getBest btc `dbShouldBeE` Just (BestBlock (headerHash (blockAt 800002 1).header) 800002 (Just 1700000000))
 
     it "does nothing when nothing changed" $
@@ -211,10 +220,10 @@ spec = prepareContext $ \ctx -> do
         let store = notingBlockRequests asked $ toStore $ paymentStore ctx
         -- The first sync has no block to check against, the full ones look
         -- at everything anyway
-        _ <- sync ctx cfg store btc accId False
-        _ <- sync ctx cfg store btc accId True
-        _ <- sync ctx cfg store btc accId False
-        _ <- sync ctx cfg store btc accId True
+        _ <- sync ctx cfg store btc accId False noQuestion
+        _ <- sync ctx cfg store btc accId True noQuestion
+        _ <- sync ctx cfg store btc accId False noQuestion
+        _ <- sync ctx cfg store btc accId True noQuestion
         liftIO $ readIORef asked `shouldReturn` [800002]
 
     it "keeps every coin of an address with two hundred of them" $
@@ -232,7 +241,7 @@ spec = prepareContext $ \ctx -> do
         -- externalAddr 1 to externalAddr 6 as well
         replicateM_ 6 $ genExtAddress ctx cfg accId ""
         let twoAtATime = cfg {configParallelRequests = 2}
-        res <- sync ctx twoAtATime (toStore (sevenAddressesStore ctx)) btc accId False
+        res <- sync ctx twoAtATime (toStore (sevenAddressesStore ctx)) btc accId False noQuestion
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (7, 7)
         summaries accId
           `dbShouldBeE` [ (Just (fakeTxHash 1), Store.BlockRef 800000 1, 1000),
@@ -259,8 +268,8 @@ spec = prepareContext $ \ctx -> do
         accId <- account
         asked <- liftIO $ newIORef []
         let store = notingRawRequests asked $ toStore $ realPaymentStore ctx
-        _ <- sync ctx cfg store btc accId False
-        _ <- sync ctx cfg store btc accId True
+        _ <- sync ctx cfg store btc accId False noQuestion
+        _ <- sync ctx cfg store btc accId True noQuestion
         liftIO $ readIORef asked `shouldReturn` [[realPaymentId ctx]]
         rawTransactionCount `dbShouldBeE` 1
 
@@ -269,9 +278,9 @@ spec = prepareContext $ \ctx -> do
         accId <- account
         asked <- liftIO $ newIORef []
         let store = notingRawRequests asked $ toStore $ realPaymentStore ctx
-        _ <- sync ctx cfg store btc accId False
+        _ <- sync ctx cfg store btc accId False noQuestion
         lift $ P.deleteWhere ([] :: [P.Filter DBRawTx])
-        _ <- sync ctx cfg store btc accId True
+        _ <- sync ctx cfg store btc accId True noQuestion
         liftIO $ readIORef asked `shouldReturn` [[realPaymentId ctx], [realPaymentId ctx]]
         rawTransactionCount `dbShouldBeE` 1
 
@@ -305,7 +314,7 @@ spec = prepareContext $ \ctx -> do
         lift $ insertRawTx (spendingTx ctx [(fakeTxHash 5, 0)] [(otherAddr 0, 1000)])
         _ <- syncWith (realPaymentStore ctx) accId
         rawTransactionCount `dbShouldBeE` 2
-        _ <- sync ctx cfg (toStore (realPaymentStore ctx)) btc accId True
+        _ <- sync ctx cfg (toStore (realPaymentStore ctx)) btc accId True noQuestion
         rawTransactionCount `dbShouldBeE` 1
         lift (hasRawTx (realPaymentId ctx)) `dbShouldBeE` True
 
@@ -328,6 +337,26 @@ spec = prepareContext $ \ctx -> do
         liftIO $
           result
             `shouldBe` Left "The store counts 2 transactions for 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj but listed 1"
+
+    -- The store answers about the address of another wallet besides the
+    -- ones asked: it must not reach the rows of another account, nor
+    -- plant coins at an address of nobody's
+    it "refuses a store that answers about an address it was not asked about, on an incremental sync and on a full one" $
+      inDatabaseE $ do
+        accId <- account
+        let store = toStore (paymentStore ctx)
+            tooMany = store {storeBalances = \addrs -> (<> [Store.Balance (otherAddr 0) 1000 0 1 1 1000]) <$> storeBalances store addrs}
+        forM_ [False, True] $ \full ->
+          lift $ dbShouldFailWith "The store answered about other addresses than the ones asked" $ sync ctx cfg tooMany btc accId full noQuestion
+
+    it "refuses a store that returns a transaction it was not asked for" $
+      inDatabaseE $ do
+        accId <- account
+        let store = toStore (paymentStore ctx)
+            tooMany = store {storeTransactions = \tids -> (<> [creditTx ctx (fakeTxHash 9) (Store.BlockRef 800000 9) (otherAddr 0) 1000]) <$> storeTransactions store tids}
+        lift $
+          dbShouldFailWith "The store returned a transaction it was not asked for: 0000000000000000000000000000000000000000000000000000000000000009" $
+            sync ctx cfg tooMany btc accId False noQuestion
 
     it "retires a pending transaction seen online" $
       inDatabaseE $ do
@@ -356,7 +385,7 @@ spec = prepareContext $ \ctx -> do
         pendingHash <- importPendingTx btc ctx accId (signedSpend ctx)
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
         published <- liftIO $ newIORef []
-        res <- sync ctx cfg (notingPublished published $ toStore $ realPaymentStore ctx) btc accId False
+        res <- sync ctx cfg (notingPublished published $ toStore $ realPaymentStore ctx) btc accId False noQuestion
         liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (1, 0)
         liftIO $ readIORef published `shouldReturn` [txSignDataTx (signedSpend ctx)]
         pendingHashes accId `dbShouldBeE` [txHash (txSignDataTx (signedSpend ctx))]
@@ -369,7 +398,7 @@ spec = prepareContext $ \ctx -> do
         _ <- syncWith (realPaymentStore ctx) accId
         _ <- importPendingTx btc ctx accId (signedSpend ctx)
         published <- liftIO $ newIORef []
-        res <- sync ctx cfg (notingPublished published $ toStore $ realPaymentStore ctx) btc accId False
+        res <- sync ctx cfg (notingPublished published $ toStore $ realPaymentStore ctx) btc accId False noQuestion
         liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (0, 0)
         liftIO $ readIORef published `shouldReturn` []
 
@@ -380,7 +409,7 @@ spec = prepareContext $ \ctx -> do
         pendingHash <- importPendingTx btc ctx accId (signedSpend ctx)
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
         published <- liftIO $ newIORef []
-        res <- sync ctx cfg (notingPublished published $ toStore $ spentElsewhereStore ctx) btc accId False
+        res <- sync ctx cfg (notingPublished published $ toStore $ spentElsewhereStore ctx) btc accId False noQuestion
         liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (0, 1)
         liftIO $ readIORef published `shouldReturn` []
 
@@ -406,7 +435,7 @@ spec = prepareContext $ \ctx -> do
         pendingHash <- importPendingTx btc ctx accId (signedSpend ctx)
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
         published <- liftIO $ newIORef []
-        res <- sync ctx cfg (notingPublished published $ toStore $ malleatedStore ctx) btc accId False
+        res <- sync ctx cfg (notingPublished published $ toStore $ malleatedStore ctx) btc accId False noQuestion
         -- Neither in conflict nor sent again: the payment is on the chain
         liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (0, 0)
         liftIO $ readIORef published `shouldReturn` []
@@ -458,7 +487,7 @@ spec = prepareContext $ \ctx -> do
           `dbShouldBeE` [Just ((pendingHash, False, False, True))]
         -- A reorganisation undoes transaction 8: the store lists the coin
         -- unspent again, and the full sync that follows finds it free
-        res <- sync ctx cfg (toStore (realPaymentStore ctx)) btc accId True
+        res <- sync ctx cfg (toStore (realPaymentStore ctx)) btc accId True noQuestion
         liftIO $ syncResConflicted res `shouldBe` 0
         ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, False, False, False))]
@@ -544,7 +573,7 @@ spec = prepareContext $ \ctx -> do
         liftIO $ dBAccountXPubKey acc `shouldBe` testAccountXPubBch
         addr <- genExtAddress ctx cfg accId ""
         liftIO $ dBAddressAddress addr `shouldBe` bchExternalAddrText
-        res <- sync ctx cfg (toStore (cashPaymentStore ctx)) bch accId False
+        res <- sync ctx cfg (toStore (cashPaymentStore ctx)) bch accId False noQuestion
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (1, 1)
         summaries accId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
         (map jsonCoinOutpoint <$> coinsAfter bch accId AllCoins Nothing Nothing) `dbShouldBeE` [OutPoint (fakeTxHash 1) 0]
@@ -571,7 +600,7 @@ spec = prepareContext $ \ctx -> do
         let storeOn net
               | net == bch = toStore (cashPaymentStore ctx)
               | otherwise = unhealthy (toStore (paymentStore ctx))
-        (synced, notSynced) <- syncAccounts ctx cfg storeOn accs False
+        (synced, notSynced) <- syncAccounts ctx cfg storeOn accs False noQuestion
         liftIO $ map (dBAccountName . syncResAccount) synced `shouldBe` ["cash"]
         liftIO $ names notSynced `shouldBe` [("main", "The store is down")]
         summaries cashId `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
@@ -580,7 +609,7 @@ spec = prepareContext $ \ctx -> do
     it "leaves out every account when every store is down, in the order of the accounts, rather than failing" $
       inDatabaseE $ do
         accs <- accounts
-        (synced, notSynced) <- syncAccounts ctx cfg (const (unhealthy (toStore emptyStore))) accs False
+        (synced, notSynced) <- syncAccounts ctx cfg (const (unhealthy (toStore emptyStore))) accs False noQuestion
         liftIO $ map syncResAccount synced `shouldBe` []
         liftIO $ names notSynced `shouldBe` [("main", "The store is down"), ("cash", "The store is down")]
 
@@ -588,14 +617,14 @@ spec = prepareContext $ \ctx -> do
     -- The scan behind the watch of the gap, on the external chain with a
     -- window of 3 instead of the default 20: the ten written-out addresses
     -- of the test wallet are enough
-    let scan store = runExceptT $ scanChain ctx (toStore store) Bip44 (testAccountPub ctx) extDeriv 3 0
+    let scan store = runExceptT $ scanChain ctx (toStore store) Bip44 (testAccountPub ctx) extDeriv 3 0 "on the chain" noQuestion
         -- A store where the given addresses each have one transaction
         used addrs = emptyStore {fakeBalances = [Store.Balance addr 1000 0 1 1 1000 | addr <- addrs]}
 
     it "finds nothing in an empty store, after one window" $ do
       asked <- newIORef []
       let store = notingBalanceRequests asked (toStore emptyStore)
-      runExceptT (scanChain ctx store Bip44 (testAccountPub ctx) extDeriv 3 0) `shouldReturn` Right 0
+      runExceptT (scanChain ctx store Bip44 (testAccountPub ctx) extDeriv 3 0 "on the chain" noQuestion) `shouldReturn` Right 0
       readIORef asked `shouldReturn` [take 3 externalAddrs]
 
     it "counts the addresses up to the last used one" $
@@ -607,7 +636,7 @@ spec = prepareContext $ \ctx -> do
     it "looks at one more window past the last used address" $ do
       asked <- newIORef []
       let store = notingBalanceRequests asked (toStore (used [externalAddr 2]))
-      runExceptT (scanChain ctx store Bip44 (testAccountPub ctx) extDeriv 3 0) `shouldReturn` Right 3
+      runExceptT (scanChain ctx store Bip44 (testAccountPub ctx) extDeriv 3 0 "on the chain" noQuestion) `shouldReturn` Right 3
       readIORef asked `shouldReturn` [take 3 externalAddrs, take 3 (drop 3 externalAddrs)]
 
     it "counts an address whose coins are all spent as used" $
@@ -617,13 +646,29 @@ spec = prepareContext $ \ctx -> do
       scan (emptyStore {fakeBalances = [Store.Balance (externalAddr 1) 0 0 0 0 0]}) `shouldReturn` Right 0
 
     it "fails when the store fails" $
-      runExceptT (scanChain ctx ((toStore emptyStore) {storeBalances = \_ -> throwError "The store is down"}) Bip44 (testAccountPub ctx) extDeriv 3 0)
+      runExceptT (scanChain ctx ((toStore emptyStore) {storeBalances = \_ -> throwError "The store is down"}) Bip44 (testAccountPub ctx) extDeriv 3 0 "on the chain" noQuestion)
         `shouldReturn` Left "The store is down"
+
+    -- With a window of 3, the scan looks at 1002 addresses before it asks,
+    -- and at 1002 more before it asks again: the first answer goes on,
+    -- the second stops
+    it "asks whether to go on after a thousand addresses the store reports used in a row, saying where, and asks again as many further" $ do
+      asked <- newIORef []
+      result <- runExceptT $ scanChain ctx everyAddressUsed Bip44 (testAccountPub ctx) extDeriv 3 0 "on the receiving chain of the account main" (answering asked 1)
+      readIORef asked
+        `shouldReturn` [ "The store reports used addresses as far as 1002 on the receiving chain of the account main, and more beyond.",
+                         "The store reports used addresses as far as 2004 on the receiving chain of the account main, and more beyond."
+                       ]
+      result `shouldBe` Left "The store reports used addresses as far as 2004 on the receiving chain of the account main, and more beyond. The scan stopped there."
+
+    it "stops at the limit when the answer is no" $
+      runExceptT (scanChain ctx everyAddressUsed Bip44 (testAccountPub ctx) extDeriv 3 0 "on the chain" stopLooking)
+        `shouldReturn` Left "The store reports used addresses as far as 1002 on the chain, and more beyond. The scan stopped there."
 
     it "recovers an account on its first sync, as a restored one is: every used address, its transactions and coins" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "main"
-        res <- sync ctx cfg {configGap = 3} (toStore (discoveredStore ctx)) btc accId False
+        res <- sync ctx cfg {configGap = 3} (toStore (discoveredStore ctx)) btc accId False noQuestion
         liftIO $ (syncResNewAddrs res, dBAccountExternal (syncResAccount res), dBAccountInternal (syncResAccount res)) `shouldBe` (7, 5, 2)
         found <- summaries accId
         liftIO $ found `shouldMatchList` [(Just (txHash tx), Store.BlockRef height 1, fromIntegral amount) | (_, amount, height, tx) <- discoveredPayments ctx]
@@ -636,7 +681,7 @@ spec = prepareContext $ \ctx -> do
     -- Accounts 0 and 2 of the test seed were paid at their first receiving
     -- address; account 1 and the ones after 2 never were
     let paidAccounts = paidStore ctx [(externalAddr 0, 50000), (account2Addr, 20000)]
-        found store seed gap = map fst <$> recoverableAccounts ctx cfg (toStore store) Bip44 btc seed gap
+        found store seed gap = map fst <$> recoverableAccounts ctx cfg (toStore store) Bip44 btc seed gap noQuestion
 
     it "finds the accounts that were paid, looking past a run of unpaid ones as long as the account gap" $
       inDatabaseE $ do
@@ -646,7 +691,7 @@ spec = prepareContext $ \ctx -> do
     it "stops after the account gap, having looked at one window of the receiving chain of each account" $ do
       asked <- newIORef []
       let store = notingBalanceRequests asked (toStore emptyStore)
-      inDatabaseE $ (map fst <$> recoverableAccounts ctx cfg store Bip44 btc (testSeed ctx) 3) `dbShouldBeE` []
+      inDatabaseE $ (map fst <$> recoverableAccounts ctx cfg store Bip44 btc (testSeed ctx) 3 noQuestion) `dbShouldBeE` []
       windows <- readIORef asked
       map length windows `shouldBe` [20, 20, 20]
       map (take 1) windows `shouldBe` [[externalAddr 0], [account1Addr], [account2Addr]]
@@ -661,7 +706,7 @@ spec = prepareContext $ \ctx -> do
 
     it "creates the accounts found, named after the network and their index, with the fingerprint of the seed, and syncs them" $
       inDatabaseE $ do
-        results <- recoverSeed ctx cfg (toStore paidAccounts) btc (testSeed ctx) 2
+        results <- recoverSeed ctx cfg (toStore paidAccounts) btc (testSeed ctx) 2 noQuestion
         liftIO $ map (dBAccountName . syncResAccount) results `shouldBe` ["btc0", "btc2"]
         liftIO $ map (dBAccountFingerprint . syncResAccount) results `shouldBe` [Just "bc560f95", Just "bc560f95"]
         liftIO $ map syncResNewAddrs results `shouldBe` [1, 1]
@@ -673,7 +718,7 @@ spec = prepareContext $ \ctx -> do
 
     it "creates nothing for a seed that was never paid" $
       inDatabaseE $ do
-        recoverSeed ctx cfg (toStore emptyStore) btc (testSeed ctx) 2 `dbShouldBeE` []
+        recoverSeed ctx cfg (toStore emptyStore) btc (testSeed ctx) 2 noQuestion `dbShouldBeE` []
         lift getAccounts `dbShouldBeE` []
 
     -- The chain pays the first receiving address of the bip44 account 0
@@ -681,7 +726,7 @@ spec = prepareContext $ \ctx -> do
     it "creates the bip84 accounts found after the bip44 ones, named with -segwit, each kind searched with the account gap" $
       inDatabaseE $ do
         let store = paidStore ctx [(externalAddr 0, 50000), (segwitExternalAddr 0, 30000)]
-        results <- recoverSeed ctx cfg (toStore store) btc (testSeed ctx) 1
+        results <- recoverSeed ctx cfg (toStore store) btc (testSeed ctx) 1 noQuestion
         liftIO $ map (dBAccountName . syncResAccount) results `shouldBe` ["btc0", "btc0-segwit"]
         liftIO $ map (pathToStr . accountPath . syncResAccount) results `shouldBe` ["/44'/0'/0'", "/84'/0'/0'"]
         liftIO $ map syncResSpendable results `shouldBe` [50000, 30000]
@@ -689,9 +734,15 @@ spec = prepareContext $ \ctx -> do
     it "searches no bip84 account on Bitcoin Cash, which has none" $ do
       asked <- newIORef []
       let store = notingBalanceRequests asked (toStore emptyStore)
-      inDatabaseE $ recoverSeed ctx cfg store bch (testSeed ctx) 1 `dbShouldBeE` []
+      inDatabaseE $ recoverSeed ctx cfg store bch (testSeed ctx) 1 noQuestion `dbShouldBeE` []
       windows <- readIORef asked
       map (take 1) windows `shouldBe` [[bchExternalAddr]]
+
+    it "asks on the receiving chain of an account of the seed, named by its path" $
+      inDatabaseE $
+        lift $
+          dbShouldFailWith "The store reports used addresses as far as 1000 on the receiving chain of the account /44'/0'/0' of the seed, and more beyond. The scan stopped there." $
+            recoverableAccounts ctx cfg everyAddressUsed Bip44 btc (testSeed ctx) 1 stopLooking
 
   describe "The funds of a seed at accounts hw does not hold" $ do
     -- The chain pays the bip49 account 0 of the seed at its first
@@ -708,7 +759,7 @@ spec = prepareContext $ \ctx -> do
         -- A gap of 2 instead of the default 20: the five written-out
         -- addresses of each chain are enough for two windows
         smallGap = cfg {configGap = 2}
-        found store net gap = runExceptT $ foreignFunds ctx smallGap (toStore store) net (testSeed ctx) gap
+        found store net gap = runExceptT $ foreignFunds ctx smallGap (toStore store) net (testSeed ctx) gap noQuestion
 
     it "finds the bip49 and bip86 accounts paid on Bitcoin, with their used addresses and the balance of both chains, unconfirmed included" $
       -- 50000 confirmed + 20000 unconfirmed = 70000
@@ -717,7 +768,7 @@ spec = prepareContext $ \ctx -> do
     it "finds nothing for a seed never paid there, after one window of the receiving chain of each kind" $ do
       asked <- newIORef []
       let store = notingBalanceRequests asked (toStore emptyStore)
-      runExceptT (foreignFunds ctx smallGap store btc (testSeed ctx) 1) `shouldReturn` Right []
+      runExceptT (foreignFunds ctx smallGap store btc (testSeed ctx) 1 noQuestion) `shouldReturn` Right []
       readIORef asked `shouldReturn` [[wrappedExternalAddr 0, wrappedExternalAddr 1], [taprootExternalAddr 0, taprootExternalAddr 1]]
 
     -- The bip49 account 0 was paid at its first receiving address, and
@@ -725,7 +776,7 @@ spec = prepareContext $ \ctx -> do
     it "scans the change chain of an account found, and only then" $ do
       asked <- newIORef []
       let store = notingBalanceRequests asked (toStore (emptyStore {fakeBalances = [Store.Balance (wrappedExternalAddr 0) 50000 0 1 1 50000]}))
-      runExceptT (foreignFunds ctx smallGap store btc (testSeed ctx) 1) `shouldReturn` Right [ForeignFunds Bip49 0 1 50000]
+      runExceptT (foreignFunds ctx smallGap store btc (testSeed ctx) 1 noQuestion) `shouldReturn` Right [ForeignFunds Bip49 0 1 50000]
       windows <- readIORef asked
       map (take 1) windows `shouldBe` [[wrappedExternalAddr 0], [wrappedExternalAddr 2], [wrappedInternalAddr 0], [wrappedAccount1Addr], [taprootExternalAddr 0]]
 
@@ -739,25 +790,29 @@ spec = prepareContext $ \ctx -> do
     it "finds the Bitcoin Cash at the bip44 accounts of Bitcoin, and looks for no SegWit account there" $ do
       asked <- newIORef []
       let store = notingBalanceRequests asked (toStore (emptyStore {fakeBalances = [Store.Balance (externalAddr 0) 50000 0 1 1 50000]}))
-      runExceptT (foreignFunds ctx smallGap store bch (testSeed ctx) 1) `shouldReturn` Right [ForeignFunds Bip44OfBitcoin 0 1 50000]
+      runExceptT (foreignFunds ctx smallGap store bch (testSeed ctx) 1 noQuestion) `shouldReturn` Right [ForeignFunds Bip44OfBitcoin 0 1 50000]
       windows <- readIORef asked
       map (take 1) windows `shouldBe` [[externalAddr 0], [externalAddr 2], [internalAddr 0], [account1Addr]]
 
     it "asks nothing on the test networks of Bitcoin Cash, whose coin type is that of the test networks of Bitcoin" $ do
       asked <- newIORef []
       let store = notingBalanceRequests asked (toStore (emptyStore {fakeBalances = [Store.Balance (externalAddr 0) 50000 0 1 1 50000]}))
-      runExceptT (foreignFunds ctx smallGap store bchTest (testSeed ctx) 1) `shouldReturn` Right []
+      runExceptT (foreignFunds ctx smallGap store bchTest (testSeed ctx) 1 noQuestion) `shouldReturn` Right []
       readIORef asked `shouldReturn` []
 
     it "fails when the store fails" $
-      runExceptT (foreignFunds ctx smallGap ((toStore emptyStore) {storeBalances = \_ -> throwError "The store is down"}) btc (testSeed ctx) 1)
+      runExceptT (foreignFunds ctx smallGap ((toStore emptyStore) {storeBalances = \_ -> throwError "The store is down"}) btc (testSeed ctx) 1 noQuestion)
         `shouldReturn` Left "The store is down"
+
+    it "asks on the chains of an account of a kind hw does not hold, named by its path" $
+      runExceptT (foreignFunds ctx cfg everyAddressUsed btc (testSeed ctx) 1 stopLooking)
+        `shouldReturn` Left "The store reports used addresses as far as 1000 on the receiving chain of the account /49'/0'/0' of the seed, and more beyond. The scan stopped there."
 
   describe "Watching the gap of addresses" $ do
     -- A gap of 3 instead of the default 20: the sync looks at the three
     -- addresses past the ones the account has, on each chain
     let smallGap = cfg {configGap = 3}
-        watchWith store accId = sync ctx smallGap (toStore store) btc accId False
+        watchWith store accId = sync ctx smallGap (toStore store) btc accId False noQuestion
 
     it "finds a payment to an address past the ones generated, and generates up to it" $
       inDatabaseE $ do
@@ -802,8 +857,22 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         accId <- account
         asked <- liftIO $ newIORef []
-        _ <- sync ctx smallGap (notingBalanceRequests asked (toStore emptyStore)) btc accId False
+        _ <- sync ctx smallGap (notingBalanceRequests asked (toStore emptyStore)) btc accId False noQuestion
         liftIO $ readIORef asked `shouldReturn` [take 3 (drop 1 externalAddrs), take 3 internalAddrs, [externalAddr 0]]
+
+    -- The store reports every address used, as one that lies does: the
+    -- sync asks before it generates a thousand addresses, and a no leaves
+    -- the account as it was
+    it "asks before generating a thousand addresses the store reports used past the ones the account has, and generates none when the answer is no" $
+      inDatabaseE $ do
+        accId <- account
+        asked <- liftIO $ newIORef []
+        let noting found = liftIO (modifyIORef asked (<> [found])) >> return False
+        lift $
+          dbShouldFailWith "The store reports used addresses as far as 1002 past the 1 receiving address the account main has, and more beyond. The scan stopped there." $
+            sync ctx smallGap everyAddressUsed btc accId False noting
+        liftIO $ readIORef asked `shouldReturn` ["The store reports used addresses as far as 1002 past the 1 receiving address the account main has, and more beyond."]
+        (dBAccountExternal <$> getAccountById accId) `dbShouldBeE` 1
 
   describe "Choosing the transactions to fetch" $ do
     -- The store lists the payment of 50000 to an address as transaction 1
@@ -874,11 +943,13 @@ spec = prepareContext $ \ctx -> do
         unchanged = Store.Balance (externalAddr 0) 50000 0 1 1 50000
         paid = Store.Balance (externalAddr 1) 0 30000 1 1 30000
 
-    it "keeps the addresses whose balance the store reports changed" $
-      filterAddresses [unchanged, paid] stored `shouldBe` Right [paid]
+    it "are the addresses whose balance the store reports changed" $
+      changedBalances [unchanged, paid] stored `shouldBe` [paid]
 
-    it "refuses an answer about other addresses than asked" $
-      filterAddresses [unchanged] stored `shouldBe` Left "Sync: addresses do not match"
+    it "are refused when the store answered about other addresses than asked, more or fewer" $ do
+      answeredAbout [externalAddr 0, externalAddr 1] [unchanged] `shouldBe` Left "The store answered about other addresses than the ones asked"
+      answeredAbout [externalAddr 0] [unchanged, paid] `shouldBe` Left "The store answered about other addresses than the ones asked"
+      answeredAbout [externalAddr 0, externalAddr 1] [paid, unchanged] `shouldBe` Right ()
 
   describe "Asking the store in parallel" $ do
     it "answers in the order asked, even when later questions finish first" $ do

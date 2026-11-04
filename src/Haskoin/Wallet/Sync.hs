@@ -32,7 +32,7 @@ import Haskoin.Wallet.Database.BestBlock
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind, PublicSeed (..), foreignAddress, foreignDeriv, keyAddress, networkForeignKinds, networkKinds)
+import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind, PublicSeed (..), accountDeriv, foreignAddress, foreignDeriv, keyAddress, networkForeignKinds, networkKinds)
 import Haskoin.Wallet.Database.PendingTx
 import Haskoin.Wallet.Database.RawTx
 import Haskoin.Wallet.Store
@@ -43,38 +43,72 @@ import Numeric.Natural (Natural)
 
 {- The used addresses past the ones the account has -}
 
+-- | How many addresses a scan looks at before it asks whether to go on,
+-- while the store reports a used address in every window. A thousand is
+-- far more than an account gains between two syncs. A store that lies
+-- reports used addresses without end: generating them would put the next
+-- receiving address past any gap a wallet looks at when it recovers the
+-- seed, and fill the gap of this one for good.
+scanLimit :: Natural
+scanLimit = 1000
+
+-- | The question a scan asks when it reaches 'scanLimit': told what the
+-- store reports, whether to look further. The command puts it to the user
+-- on the terminal, and --yes does not answer it: a sync nobody watches
+-- must not believe a store that lies. A no stops the scan, which has
+-- written nothing.
+type ScanQuestion m = String -> ExceptT String m Bool
+
 -- | The index after the last used address of a chain of the public key of
 -- an account of the kind, found by scanning windows of the given size from
 -- the given index: the store is asked which addresses of a window have
 -- transactions, and a window where none has ends the scan. The scan
 -- therefore stops only after at least a window of unused addresses, up to
 -- twice that many depending on where the last used address falls in its
--- window.
-scanChain :: (MonadIO m) => Ctx -> Store -> AccountKind -> XPubKey -> SoftPath -> Natural -> Natural -> ExceptT String m Natural
+-- window. Where the chain is, for the question of 'scanLimit', is given
+-- as the end of a sentence: "on the receiving chain of the account main".
+scanChain :: (MonadIO m) => Ctx -> Store -> AccountKind -> XPubKey -> SoftPath -> Natural -> Natural -> String -> ScanQuestion m -> ExceptT String m Natural
 scanChain ctx store kind = scanChainBy ctx store (keyAddress kind ctx)
 
 -- | 'scanChain', with the address of a key given by the function: for the
 -- accounts hw does not hold
-scanChainBy :: (MonadIO m) => Ctx -> Store -> (XPubKey -> Address) -> XPubKey -> SoftPath -> Natural -> Natural -> ExceptT String m Natural
-scanChainBy ctx store addressOf pub chain window from = do
-  used <- usedChainAddresses ctx store addressOf pub chain window from
+scanChainBy :: (MonadIO m) => Ctx -> Store -> (XPubKey -> Address) -> XPubKey -> SoftPath -> Natural -> Natural -> String -> ScanQuestion m -> ExceptT String m Natural
+scanChainBy ctx store addressOf pub chain window from place ask = do
+  used <- usedChainAddresses ctx store addressOf pub chain window from place ask
   return $ if null used then from else maximum (fst <$> used) + 1
 
 -- | The used addresses of a chain of a public key from an index, each
 -- with its index and its balance at the store, found by scanning windows
 -- as 'scanChain' does: the scan behind it, which keeps what the store
--- said of the addresses
-usedChainAddresses :: (MonadIO m) => Ctx -> Store -> (XPubKey -> Address) -> XPubKey -> SoftPath -> Natural -> Natural -> ExceptT String m [(Natural, Store.Balance)]
-usedChainAddresses ctx store addressOf pub chain window from = go from
+-- said of the addresses. Every 'scanLimit' addresses the store reports
+-- used in a row, the question is asked, and a no stops the scan.
+usedChainAddresses :: (MonadIO m) => Ctx -> Store -> (XPubKey -> Address) -> XPubKey -> SoftPath -> Natural -> Natural -> String -> ScanQuestion m -> ExceptT String m [(Natural, Store.Balance)]
+usedChainAddresses ctx store addressOf pub chain window from place ask = go from 0
   where
-    go off = do
+    -- The window at the offset, after the given number of addresses
+    -- looked at since the scan began or last asked
+    go off looked = do
       addrs <- liftIO $ chainAddressesBy addressOf ctx pub chain off window
       bals <- fromStore $ storeBalances store (fst <$> addrs)
       let balanceOf = Map.fromList [(bal.address, bal) | bal <- bals, bal.txs /= 0]
           used = [(fromIntegral i, bal) | (addr, i) <- addrs, Just bal <- [Map.lookup addr balanceOf]]
       if null used
         then return []
-        else (used <>) <$> go (off + window)
+        else (used <>) <$> onward off (looked + window)
+    -- The window after the one at the offset, once the scan has looked at
+    -- the given number of addresses: at the limit, the question decides
+    onward off looked
+      | looked < scanLimit = go (off + window) looked
+      | otherwise = do
+          let found = reportedUsed (off + window - from) place
+          goOn <- ask found
+          unless goOn $ throwError (found <> " The scan stopped there.")
+          go (off + window) 0
+
+-- | What a scan reports when it reaches 'scanLimit': how far the store
+-- reports used addresses, and where
+reportedUsed :: Natural -> String -> String
+reportedUsed far place = "The store reports used addresses as far as " <> show far <> " " <> place <> ", and more beyond."
 
 -- | Generate the addresses of the account that were used without its
 -- knowledge: the gap of addresses past the ones each chain has is asked
@@ -82,16 +116,26 @@ usedChainAddresses ctx store addressOf pub chain window from = go from
 -- including it. Someone paying the wallet from its public key, or another
 -- wallet of the same seed, uses addresses this one has not generated yet.
 -- Returns how many addresses were generated.
-watchGap :: (MonadUnliftIO m) => Ctx -> Config -> Store -> DBAccountId -> ExceptT String (DB m) Natural
-watchGap ctx cfg store accId = do
+watchGap :: (MonadUnliftIO m) => Ctx -> Config -> Store -> DBAccountId -> ScanQuestion (DB m) -> ExceptT String (DB m) Natural
+watchGap ctx cfg store accId ask = do
   acc <- getAccountById accId
   let pub = accountXPubKey ctx acc
+      name = cs (dBAccountName acc)
       extend addrType = do
         let have = fromIntegral $ dBAccountCount addrType acc
-        next <- scanChain ctx store (accountKind acc) pub (addrDeriv addrType) (configGap cfg) have
+            -- Where the scan is, for the question of the limit
+            place
+              | have == 0 = "on the " <> chainWord addrType <> " chain of the account " <> name
+              | otherwise = "past the " <> show have <> " " <> chainWord addrType <> (if have == 1 then " address" else " addresses") <> " the account " <> name <> " has"
+        next <- scanChain ctx store (accountKind acc) pub (addrDeriv addrType) (configGap cfg) have place ask
         extendChainTo ctx accId addrType next
         return (next - have)
   (+) <$> extend AddrExternal <*> extend AddrInternal
+
+-- | The chain of an address type, as the questions name it
+chainWord :: AddrType -> String
+chainWord AddrExternal = "receiving"
+chainWord AddrInternal = "change"
 
 {- Recovering the accounts of a seed -}
 
@@ -104,8 +148,8 @@ watchGap ctx cfg store accId = do
 -- the caller's. An account the wallet has already is passed over without
 -- counting, and so is an index whose child key is invalid. Returns the
 -- accounts found, with their keys.
-recoverableAccounts :: (MonadUnliftIO m) => Ctx -> Config -> Store -> AccountKind -> Network -> PublicSeed -> Natural -> ExceptT String (DB m) [(Natural, XPubKey)]
-recoverableAccounts ctx cfg store kind net seed accountGap = go 0 0
+recoverableAccounts :: (MonadUnliftIO m) => Ctx -> Config -> Store -> AccountKind -> Network -> PublicSeed -> Natural -> ScanQuestion (DB m) -> ExceptT String (DB m) [(Natural, XPubKey)]
+recoverableAccounts ctx cfg store kind net seed accountGap ask = go 0 0
   where
     go index unpaid
       | unpaid >= accountGap = return []
@@ -118,7 +162,7 @@ recoverableAccounts ctx cfg store kind net seed accountGap = go 0 0
               case held of
                 Just _ -> go (index + 1) unpaid
                 Nothing -> do
-                  paid <- (> 0) <$> scanChain ctx store kind key extDeriv (configGap cfg) 0
+                  paid <- (> 0) <$> scanChain ctx store kind key extDeriv (configGap cfg) 0 (seedAccountPlace extDeriv (accountDeriv kind net index)) ask
                   if paid
                     then ((index, key) :) <$> go (index + 1) 0
                     else go (index + 1) (unpaid + 1)
@@ -129,13 +173,20 @@ recoverableAccounts ctx cfg store kind net seed accountGap = go 0 0
 -- of the seed records its fingerprint. The gap of accounts counts for each
 -- kind apart. Returns the sync of each account created, in the order of
 -- their kinds and indices.
-recoverSeed :: (MonadUnliftIO m) => Ctx -> Config -> Store -> Network -> PublicSeed -> Natural -> ExceptT String (DB m) [SyncRes]
-recoverSeed ctx cfg store net seed accountGap = do
+recoverSeed :: (MonadUnliftIO m) => Ctx -> Config -> Store -> Network -> PublicSeed -> Natural -> ScanQuestion (DB m) -> ExceptT String (DB m) [SyncRes]
+recoverSeed ctx cfg store net seed accountGap ask = do
   created <- fmap concat . forM (networkKinds net) $ \kind -> do
-    found <- recoverableAccounts ctx cfg store kind net seed accountGap
+    found <- recoverableAccounts ctx cfg store kind net seed accountGap ask
     forM found $ \(index, key) -> insertAccount kind net ctx (recoveredName kind net index) key (Just (seedFingerprint seed))
   lift $ recordFingerprint ctx seed
-  forM created $ \(accId, _) -> sync ctx cfg store net accId False
+  forM created $ \(accId, _) -> sync ctx cfg store net accId False ask
+
+-- | Where a chain of an account of the seed is, for the question of
+-- 'scanLimit': "on the receiving chain of the account /44'/0'/0' of the
+-- seed"
+seedAccountPlace :: SoftPath -> HardPath -> String
+seedAccountPlace chain path =
+  "on the " <> (if chain == intDeriv then "change" else "receiving") <> " chain of the account " <> pathToStr path <> " of the seed"
 
 -- | The name of a recovered account: the network and the index, as in
 -- btc0, for a BIP44 account, and with -segwit after them, as in
@@ -172,10 +223,11 @@ foreignPath net funds = foreignDeriv (foreignKind funds) net (foreignIndex funds
 -- the gap was used, and the search over after the gap of accounts in a
 -- row without one. The change chain of an account found is scanned too,
 -- so that the balance is the whole of it.
-foreignFundsOfKind :: (MonadIO m) => Ctx -> Config -> Store -> ForeignKind -> Network -> PublicSeed -> Natural -> ExceptT String m [ForeignFunds]
-foreignFundsOfKind ctx cfg store kind net seed accountGap = go 0 0
+foreignFundsOfKind :: (MonadIO m) => Ctx -> Config -> Store -> ForeignKind -> Network -> PublicSeed -> Natural -> ScanQuestion m -> ExceptT String m [ForeignFunds]
+foreignFundsOfKind ctx cfg store kind net seed accountGap ask = go 0 0
   where
-    usedOn key chain = usedChainAddresses ctx store (foreignAddress kind ctx) key chain (configGap cfg) 0
+    usedOn index key chain =
+      usedChainAddresses ctx store (foreignAddress kind ctx) key chain (configGap cfg) 0 (seedAccountPlace chain (foreignDeriv kind net index)) ask
     go index unpaid
       | unpaid >= accountGap = return []
       | otherwise = do
@@ -183,20 +235,20 @@ foreignFundsOfKind ctx cfg store kind net seed accountGap = go 0 0
           case keyM of
             Nothing -> go (index + 1) unpaid
             Just key -> do
-              receiving <- usedOn key extDeriv
+              receiving <- usedOn index key extDeriv
               if null receiving
                 then go (index + 1) (unpaid + 1)
                 else do
-                  change <- usedOn key intDeriv
+                  change <- usedOn index key intDeriv
                   let bals = snd <$> receiving <> change
                       found = ForeignFunds kind index (genericLength bals) (sum [bal.confirmed + bal.unconfirmed | bal <- bals])
                   (found :) <$> go (index + 1) 0
 
 -- | The funds of a seed on a network at the accounts of every foreign kind
 -- the network has, in the order of the kinds and of their indices
-foreignFunds :: (MonadIO m) => Ctx -> Config -> Store -> Network -> PublicSeed -> Natural -> ExceptT String m [ForeignFunds]
-foreignFunds ctx cfg store net seed accountGap =
-  concat <$> forM (networkForeignKinds net) (\kind -> foreignFundsOfKind ctx cfg store kind net seed accountGap)
+foreignFunds :: (MonadIO m) => Ctx -> Config -> Store -> Network -> PublicSeed -> Natural -> ScanQuestion m -> ExceptT String m [ForeignFunds]
+foreignFunds ctx cfg store net seed accountGap ask =
+  concat <$> forM (networkForeignKinds net) (\kind -> foreignFundsOfKind ctx cfg store kind net seed accountGap ask)
 
 {- Synchronisation -}
 
@@ -224,14 +276,14 @@ data SyncRes = SyncRes
 -- service then does not hold back the accounts of the other networks.
 -- Returns the syncs, and the accounts not synced with the failure of their
 -- store, both in the order of the accounts.
-syncAccounts :: (MonadUnliftIO m) => Ctx -> Config -> (Network -> Store) -> [(DBAccountId, DBAccount)] -> Bool -> ExceptT String (DB m) ([SyncRes], [(DBAccount, String)])
-syncAccounts ctx cfg storeOn accs full = do
+syncAccounts :: (MonadUnliftIO m) => Ctx -> Config -> (Network -> Store) -> [(DBAccountId, DBAccount)] -> Bool -> ScanQuestion (DB m) -> ExceptT String (DB m) ([SyncRes], [(DBAccount, String)])
+syncAccounts ctx cfg storeOn accs full ask = do
   failures <- liftIO $ forM networks $ \net -> (,) net.name <$> healthFailure (storeOn net)
   results <- forM accs $ \(accId, acc) -> do
     let net = accountNetwork acc
     case join (lookup net.name failures) of
       Just failure -> return $ Left (acc, failure)
-      Nothing -> Right <$> sync ctx cfg (storeOn net) net accId full
+      Nothing -> Right <$> sync ctx cfg (storeOn net) net accId full ask
   let (notSynced, synced) = partitionEithers results
   return (synced, notSynced)
   where
@@ -248,9 +300,12 @@ syncAccounts ctx cfg storeOn accs full = do
 -- address a new, confirmed, replaced or dropped transaction touches. A
 -- full sync, asked for or forced by a reorganisation of the chain, looks
 -- at every address and also marks dead the summaries of transactions the
--- store no longer lists.
-sync :: (MonadUnliftIO m) => Ctx -> Config -> Store -> Network -> DBAccountId -> Bool -> ExceptT String (DB m) SyncRes
-sync ctx cfg store net accId full = do
+-- store no longer lists. The store must answer about the addresses and
+-- the transactions it is asked about, and no others: a store that lies
+-- gets no further than that, and 'scanLimit' bounds what it can say of
+-- the addresses past the ones the account has.
+sync :: (MonadUnliftIO m) => Ctx -> Config -> Store -> Network -> DBAccountId -> Bool -> ScanQuestion (DB m) -> ExceptT String (DB m) SyncRes
+sync ctx cfg store net accId full ask = do
   fromStore $ storeHealth store
   -- The best block is taken before anything else, so that a block found
   -- during the sync is caught up with on the next one rather than missed
@@ -258,13 +313,14 @@ sync ctx cfg store net accId full = do
   -- A full sync looks at everything anyway: only an incremental one asks
   -- whether the chain moved
   everything <- if full then return True else chainReorganised store net
-  found <- watchGap ctx cfg store accId
+  found <- watchGap ctx cfg store accId ask
   -- The addresses of the account with their stored balances, and those the
   -- store reports changed
   (addrPaths, addrBals) <- allAddressesMap net accId
   storeBals <- fromStore $ storeBalances store (Map.keys addrBals)
-  changedBals <- if everything then return storeBals else liftEither $ filterAddresses storeBals addrBals
-  updateAddressBalances net changedBals
+  liftEither $ answeredAbout (Map.keys addrBals) storeBals
+  let changedBals = if everything then storeBals else changedBalances storeBals addrBals
+  updateAddressBalances net accId changedBals
   acc <- lift $ updateAccountBalances accId
   -- Their transactions, and the summaries to store or to mark dead
   listings <- listTxs cfg store net changedBals
@@ -273,6 +329,7 @@ sync ctx cfg store net accId full = do
   let toFetch = transactionsToFetch known untimed addrBals listings
       listed = concatMap snd listings
   txs <- fromStore $ storeTransactions store toFetch
+  liftEither $ askedFor toFetch txs
   updated <- lift $ forM (filter (not . (.deleted)) txs) $ \tx ->
     repsertSummary net accId tx.txid tx.block (storeTime tx.timestamp) (storeSummary net addrPaths tx)
   lift $ forM_ (deadTransactions everything known toFetch txs listed) $ markTxInfoDead accId
@@ -312,21 +369,35 @@ chainReorganised store net = do
 
 {- The balances -}
 
--- | The balances that differ from the stored ones: the addresses to update
-filterAddresses :: [Store.Balance] -> Map Address AddressBalance -> Either String [Store.Balance]
-filterAddresses sBals aMap
-  | sort ((.address) <$> sBals) /= sort (Map.keys aMap) = Left "Sync: addresses do not match"
-  | otherwise = filterM changed sBals
+-- | Refuse an answer about other addresses than the ones asked, or about
+-- fewer. A store that lies could otherwise reach the rows of another
+-- account, or plant coins at an address of nobody's; one that answers
+-- about fewer has lost some.
+answeredAbout :: [Address] -> [Store.Balance] -> Either String ()
+answeredAbout asked bals
+  | sort ((.address) <$> bals) /= sort asked = Left "The store answered about other addresses than the ones asked"
+  | otherwise = Right ()
+
+-- | The balances that differ from the stored ones: the addresses to
+-- update. One of an address not stored counts as changed.
+changedBalances :: [Store.Balance] -> Map Address AddressBalance -> [Store.Balance]
+changedBalances sBals aMap = filter changed sBals
   where
-    -- Whether the store's balance differs from the stored one. The guard
-    -- above makes every lookup succeed.
-    changed s = do
-      b <- maybeToEither "Sync: addresses do not match" $ Map.lookup s.address aMap
-      return $
+    changed s = case Map.lookup s.address aMap of
+      Nothing -> True
+      Just b ->
         s.txs /= addrBalanceTxs b
           || s.confirmed /= addrBalanceConfirmed b
           || s.unconfirmed /= addrBalanceUnconfirmed b
           || s.utxo /= addrBalanceCoins b
+
+-- | Refuse a transaction the store returned without being asked for it:
+-- it would enter the history of the account
+askedFor :: [TxHash] -> [Store.Transaction] -> Either String ()
+askedFor asked txs =
+  case [tx.txid | tx <- txs, tx.txid `Set.notMember` Set.fromList asked] of
+    [] -> Right ()
+    tid : _ -> Left ("The store returned a transaction it was not asked for: " <> cs (txHashToHex tid))
 
 -- | Every transaction the store lists for each address that has any: as
 -- many as it counts in the balance, which a listing cut short would not

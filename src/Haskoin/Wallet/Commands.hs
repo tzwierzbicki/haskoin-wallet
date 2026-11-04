@@ -326,12 +326,12 @@ cmdRecover ctx cfg opts =
     -- Typed once: a mistyped mnemonic finds no paid account
     mnem <- askMnemonicPass terminal opts.parts
     seed <- liftEither $ seedOf ctx mnem
-    found <- recoverSeed ctx cfg store net seed opts.accountGap
-    elsewhere <- foreignFunds ctx cfg store net seed opts.accountGap
+    found <- recoverSeed ctx cfg store net seed opts.accountGap scanQuestion
+    elsewhere <- foreignFunds ctx cfg store net seed opts.accountGap scanQuestion
     typedM <- liftEither $ typedSeedOf ctx mnem
     fromTyped <- case typedM of
       Just typed | null found -> do
-        results <- recoverSeed ctx cfg store net typed opts.accountGap
+        results <- recoverSeed ctx cfg store net typed opts.accountGap scanQuestion
         unless (null results) $ liftIO $ tell terminal typedPassphraseRecovered
         return results
       _ -> return []
@@ -1361,12 +1361,19 @@ cmdSignSweep ctx cfg signing keysM givenM =
 
 {- Sync, messages and backups -}
 
+-- | The question of a scan that reaches 'scanLimit' used addresses in a
+-- row, put to the user on the terminal. --yes does not answer it, so that
+-- a sync nobody watches does not believe a store that lies: an input that
+-- has ended cancels the command instead.
+scanQuestion :: ScanQuestion (DB IO)
+scanQuestion found = askYes terminal (found <> " Keep looking?")
+
 cmdSync :: Ctx -> Config -> Maybe Text -> Bool -> IO Response
 cmdSync ctx cfg account full =
   runDBResponse cfg $ do
     accs <- getAccountsByName account
     when (null accs) $ throwError "There are no accounts in the wallet"
-    (results, notSynced) <- syncAccounts ctx cfg (webStore ctx cfg) accs full
+    (results, notSynced) <- syncAccounts ctx cfg (webStore ctx cfg) accs full scanQuestion
     return $ ResponseSync results [(acc, cs failure) | (acc, failure) <- notSynced]
 
 -- | Sign a message with the key of an address of the wallet. The answer is

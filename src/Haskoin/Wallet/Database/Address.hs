@@ -313,9 +313,10 @@ addressLabelAt accId addrType index =
 
 {- Addresses in the database -}
 
--- | Store the balances the store reports
-updateAddressBalances :: (MonadUnliftIO m) => Network -> [Store.Balance] -> ExceptT String (DB m) ()
-updateAddressBalances net storeBals =
+-- | Store the balances the store reports for addresses of the account. A
+-- balance of an address of another account changes nothing.
+updateAddressBalances :: (MonadUnliftIO m) => Network -> DBAccountId -> [Store.Balance] -> ExceptT String (DB m) ()
+updateAddressBalances net accId storeBals =
   forM_ storeBals $ \s -> do
     addrT <- liftEither $ addrToTextE net s.address
     lift . update $ \a -> do
@@ -327,7 +328,9 @@ updateAddressBalances net storeBals =
           DBAddressBalanceTxs =. val s.txs,
           DBAddressBalanceReceived =. val s.received
         ]
-      where_ $ a ^. DBAddressAddress ==. val addrT
+      where_ $
+        a ^. DBAddressAddress ==. val addrT
+          &&. a ^. DBAddressAccount ==. val accId
 
 -- | An address of the wallet, however it is written, with its account: see
 -- 'addressesAmong'. An account key is in the wallet once, so an address is

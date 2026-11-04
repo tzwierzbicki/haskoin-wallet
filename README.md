@@ -386,7 +386,9 @@ of the same seed used. For each account, it shows its balances, the block it
 is synced to, and what changed. Run it before you prepare a payment and after
 you send one. `--full` downloads everything again, which is rarely needed. When the
 server does not answer for a network, `sync` leaves out the accounts of that
-network and says why, and still syncs the others.
+network and says why, and still syncs the others. After a thousand used
+addresses in a row, `sync` asks whether to keep looking: a server that lies
+reports them without end. A `sync` that cannot ask stops there.
 
 ```console
 hw sync
@@ -717,6 +719,12 @@ To restore a backup, replace `~/.hw/accounts.sqlite` with the copy, or point
 - **`receive` stops after 20 unused addresses in a row.** A wallet restored
   from the mnemonic would not look further. Reuse one of them, or raise `gap`
   in the configuration file.
+- **`hw` takes the server's word for the chain.** It checks that the server
+  answers about the addresses and transactions it asked about and no others,
+  and that the counts agree, but it cannot tell a hidden payment from none.
+  After a thousand used addresses in a row, `sync` and `recover` ask whether
+  to keep looking, since a server that lies reports them without end. Run
+  your own haskoin-store to trust no one else.
 - **Choosing a fee rate needs the server.** Without `--fee-rate`, `hw` reads the
   rates of recent blocks, and stops if it cannot reach the server. A rate above
   100 satoshis per virtual byte asks for a confirmation, since it is more

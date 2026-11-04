@@ -2121,6 +2121,12 @@ address used so far. It misses an address that comes after more unused ones in
 a row than the gap. Raise the gap for one sync to look further. The same gap
 limits how many unused addresses hw `receive` gives out.
 
+When the server reports used addresses a thousand deep, and more beyond,
+`sync` asks whether to keep looking. A server that lies reports them without
+end, and the addresses it would make `sync` generate are past any gap a wallet
+restoring the mnemonic looks at. A `sync` that cannot ask stops there, and
+generates none of them.
+
 `sync` also checks the pending transactions. One the network lists is retired,
 even under another id, as when a miner or another signer changed its
 signatures. One you sent that the server no longer knows is sent again, since

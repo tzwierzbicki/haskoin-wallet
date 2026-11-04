@@ -267,6 +267,26 @@ receivingSpec ctx = do
           `shouldReturn` Right "The coins do not cover the amount and the fee"
 
   describe "A sync" $ do
+    -- The store reports every address used, as one that lies does: after
+    -- a thousand on the receiving chain, sync asks, and a no leaves the
+    -- account as it was, without an address
+    it "asks whether to keep looking when the store reports used addresses a thousand deep, and generates none of them when the answer is no" $
+      withLyingChain ctx (paidChain ctx) $ \home _ -> do
+        createMain home
+        run <- hw home ["sync"] ["n"]
+        run `shouldSatisfy` printed "The store reports used addresses as far as 1000 on the receiving chain of the account main, and more beyond. Keep looking? [y/N] "
+        run `shouldSatisfy` printed "The scan stopped there."
+        runExit run `shouldBe` ExitFailure 1
+        (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [(externalAddrsText !! 0, "")]
+
+    it "stops at the question when the input has ended, as a sync nobody watches does" $
+      withLyingChain ctx (paidChain ctx) $ \home _ -> do
+        createMain home
+        run <- hw home ["sync"] []
+        run `shouldSatisfy` printed "Keep looking? [y/N] "
+        run `shouldSatisfy` printed "Cancelled: the input ended before the answer"
+        runExit run `shouldBe` ExitFailure 1
+
     -- The store answers every question about Bitcoin Cash with the error
     -- page of a proxy, as when the store behind the proxy is down. hw
     -- failed the whole sync before, with the error StringError "could not

@@ -105,7 +105,7 @@ receivingSpec ctx =
       inDatabaseE $ do
         accId <- account ctx
         replicateM_ 20 $ genExtAddress ctx cfg accId ""
-        updateAddressBalances btc [paidOnce (externalAddr 2) 5000, paidOnce (externalAddr 4) 1000]
+        updateAddressBalances btc accId [paidOnce (externalAddr 2) 5000, paidOnce (externalAddr 4) 1000]
         lift (highestUsedIndex accId AddrExternal) `dbShouldBeE` Just 4
         -- Addresses 5 to 24 are the twenty unused ones past it
         replicateM_ 5 $ genExtAddress ctx cfg accId ""
@@ -116,7 +116,7 @@ receivingSpec ctx =
       inDatabaseE $ do
         accId <- account ctx
         replicateM_ 20 $ genExtAddress ctx cfg accId ""
-        updateAddressBalances btc [emptied (externalAddr 9) 5000]
+        updateAddressBalances btc accId [emptied (externalAddr 9) 5000]
         lift (highestUsedIndex accId AddrExternal) `dbShouldBeE` Just 9
         (dBAddressIndex <$> genExtAddress ctx cfg accId "") `dbShouldBeE` 20
 
@@ -126,7 +126,7 @@ receivingSpec ctx =
         accId <- account ctx
         replicateM_ 20 $ genExtAddress ctx cfg accId ""
         _ <- nextChangeAddress ctx cfg accId []
-        updateAddressBalances btc [paidOnce (internalAddr 0) 1000]
+        updateAddressBalances btc accId [paidOnce (internalAddr 0) 1000]
         lift (highestUsedIndex accId AddrInternal) `dbShouldBeE` Just 0
         lift (highestUsedIndex accId AddrExternal) `dbShouldBeE` Nothing
         lift $ dbShouldFailWith receivingGap $ genExtAddress ctx cfg accId ""
@@ -134,7 +134,7 @@ receivingSpec ctx =
         -- account of the second wallet
         (other, _) <- testNewAcc2 ctx "other"
         _ <- genExtAddress ctx cfg other ""
-        updateAddressBalances btc [paidOnce externalAddr2 1000]
+        updateAddressBalances btc accId [paidOnce externalAddr2 1000]
         let held = [Deriv :/ 1 :/ i | i <- [0 .. 19]]
         replicateM_ 20 $ nextChangeAddress ctx cfg other held
         lift $ dbShouldFailWith changeGap $ nextChangeAddress ctx cfg other held
@@ -214,16 +214,16 @@ changeSpec ctx =
       inDatabaseE $ do
         accId <- account ctx
         _ <- nextChangeAddress ctx cfg accId []
-        updateAddressBalances btc [paidOnce (internalAddr 0) 11774]
+        updateAddressBalances btc accId [paidOnce (internalAddr 0) 11774]
         (dBAddressIndex <$> nextChangeAddress ctx cfg accId []) `dbShouldBeE` 1
-        updateAddressBalances btc [emptied (internalAddr 0) 11774]
+        updateAddressBalances btc accId [emptied (internalAddr 0) 11774]
         (dBAddressIndex <$> nextChangeAddress ctx cfg accId []) `dbShouldBeE` 1
 
     it "counts an unconfirmed payment to a change address as using it" $
       inDatabaseE $ do
         accId <- account ctx
         _ <- nextChangeAddress ctx cfg accId []
-        updateAddressBalances btc [paidInMempool (internalAddr 0) 11774]
+        updateAddressBalances btc accId [paidInMempool (internalAddr 0) 11774]
         (dBAddressIndex <$> nextChangeAddress ctx cfg accId []) `dbShouldBeE` 1
 
     it "fills the lowest unused address first, as a deleted transaction leaves one" $
@@ -234,7 +234,7 @@ changeSpec ctx =
         _ <- nextChangeAddress ctx cfg accId []
         _ <- nextChangeAddress ctx cfg accId [Deriv :/ 1 :/ 0]
         _ <- nextChangeAddress ctx cfg accId [Deriv :/ 1 :/ 0, Deriv :/ 1 :/ 1]
-        updateAddressBalances btc [paidOnce (internalAddr 0) 1000]
+        updateAddressBalances btc accId [paidOnce (internalAddr 0) 1000]
         (dBAddressIndex <$> nextChangeAddress ctx cfg accId []) `dbShouldBeE` 1
         (dBAddressIndex <$> nextChangeAddress ctx cfg accId [Deriv :/ 1 :/ 2]) `dbShouldBeE` 1
         (dBAddressIndex <$> nextChangeAddress ctx cfg accId [Deriv :/ 1 :/ 1]) `dbShouldBeE` 2
@@ -244,11 +244,11 @@ changeSpec ctx =
       inDatabaseE $ do
         accId <- account ctx
         _ <- nextChangeAddress ctx cfg accId []
-        updateAddressBalances btc [paidInMempool (internalAddr 0) 11774]
+        updateAddressBalances btc accId [paidInMempool (internalAddr 0) 11774]
         (dBAddressIndex <$> nextChangeAddress ctx cfg accId []) `dbShouldBeE` 1
         -- The store no longer counts the transaction: as BIP44 asks, an
         -- address with no transaction on the chain is unused
-        updateAddressBalances btc [Store.Balance (internalAddr 0) 0 0 0 0 0]
+        updateAddressBalances btc accId [Store.Balance (internalAddr 0) 0 0 0 0 0]
         (dBAddressIndex <$> nextChangeAddress ctx cfg accId []) `dbShouldBeE` 0
 
     it "refuses the twenty-first change address while pending transactions hold twenty, and says so" $
@@ -265,7 +265,7 @@ changeSpec ctx =
         accId <- account ctx
         let held = [Deriv :/ 1 :/ i | i <- [0 .. 20]]
         replicateM_ 20 $ nextChangeAddress ctx cfg accId held
-        updateAddressBalances btc [paidOnce (internalAddr 5) 1000]
+        updateAddressBalances btc accId [paidOnce (internalAddr 5) 1000]
         -- Addresses 6 to 25 are the twenty past it
         (dBAddressIndex <$> nextChangeAddress ctx cfg accId held) `dbShouldBeE` 20
 
@@ -297,7 +297,7 @@ restoringSpec ctx =
         accId <- account ctx
         -- A discovery found address 9 used and generated up to it
         extendChainTo ctx accId AddrExternal 10
-        updateAddressBalances btc [paidOnce (externalAddr 9) 1000]
+        updateAddressBalances btc accId [paidOnce (externalAddr 9) 1000]
         (pathText . addrPath <$> genExtAddress ctx cfg accId "") `dbShouldBeE` "/0/10"
         -- The discovered addresses count against the gap like the others
         (accId2, _) <- testNewAcc ctx "second"
@@ -329,9 +329,9 @@ databaseSpec ctx =
       inDatabaseE $ do
         accId <- account ctx
         replicateM_ 2 $ genExtAddress ctx cfg accId ""
-        updateAddressBalances btc [Store.Balance (externalAddr 0) 5000 300 2 3 9000]
+        updateAddressBalances btc accId [Store.Balance (externalAddr 0) 5000 300 2 3 9000]
         -- An address the wallet does not have is passed over
-        updateAddressBalances btc [paidOnce (otherAddr 0) 1000]
+        updateAddressBalances btc accId [paidOnce (otherAddr 0) 1000]
         rows <- lift $ addressesAfter accId AddrExternal Nothing Nothing
         liftIO $ map balanceOf rows `shouldBe` [AddressBalance 0 0 0 0 0, AddressBalance 5000 300 2 3 9000]
 
@@ -340,7 +340,7 @@ databaseSpec ctx =
         accId <- account ctx
         replicateM_ 2 $ genExtAddress ctx cfg accId ""
         _ <- nextChangeAddress ctx cfg accId []
-        updateAddressBalances btc [Store.Balance (externalAddr 1) 5000 0 1 1 5000, Store.Balance (internalAddr 0) 2000 700 2 2 2700]
+        updateAddressBalances btc accId [Store.Balance (externalAddr 1) 5000 0 1 1 5000, Store.Balance (internalAddr 0) 2000 700 2 2 2700]
         acc <- lift $ updateAccountBalances accId
         liftIO $ (dBAccountBalanceConfirmed acc, dBAccountBalanceUnconfirmed acc, dBAccountBalanceCoins acc) `shouldBe` (7000, 700, 3)
 
@@ -416,7 +416,7 @@ databaseSpec ctx =
       inDatabaseE $ do
         accId <- account ctx
         replicateM_ 2 $ genExtAddress ctx cfg accId ""
-        updateAddressBalances btc [paidOnce (externalAddr 0) 1000]
+        updateAddressBalances btc accId [paidOnce (externalAddr 0) 1000]
         lift (usedAddresses ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"])
           `dbShouldBeE` ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]
 
@@ -452,7 +452,7 @@ databaseSpec ctx =
         accId <- account ctx
         replicateM_ 2 $ genExtAddress ctx cfg accId ""
         _ <- nextChangeAddress ctx cfg accId []
-        updateAddressBalances btc [paidOnce (externalAddr 1) 5000]
+        updateAddressBalances btc accId [paidOnce (externalAddr 1) 5000]
         (paths, balances) <- allAddressesMap btc accId
         liftIO $ do
           paths `shouldBe` Map.fromList [(externalAddr 0, Deriv :/ 0 :/ 0), (externalAddr 1, Deriv :/ 0 :/ 1), (internalAddr 0, Deriv :/ 1 :/ 0)]

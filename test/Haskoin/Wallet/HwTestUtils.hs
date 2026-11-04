@@ -26,6 +26,7 @@ module Haskoin.Wallet.HwTestUtils
     withChain,
     withChainDownOn,
     withChainMinedAgo,
+    withLyingChain,
     withServerAnswering,
   )
 where
@@ -372,10 +373,26 @@ withChainDownOn ctx downs = withChainMinedAgo ctx downs 180
 -- number of seconds before the test: more than eight hours, and a wallet
 -- synced with it is behind the chain
 withChainMinedAgo :: Ctx -> [Network] -> Word32 -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
-withChainMinedAgo ctx downs ago chain test = do
+withChainMinedAgo ctx = withChainStore ctx id
+
+-- | 'withChain', with a store that reports every address used, as a store
+-- that lies does
+withLyingChain :: Ctx -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
+withLyingChain ctx = withChainStore ctx everyAddressUsed [] 180
+
+-- | The store, reporting every address used: one transaction, and 1000
+-- satoshis received and held
+everyAddressUsed :: Store -> Store
+everyAddressUsed store = store {storeBalances = \addrs -> return [Store.Balance addr 1000 0 1 1 1000 | addr <- addrs]}
+
+-- | Run a test with a home whose hw talks to a fake store serving the
+-- chain, altered by the function, down on the given networks, with the
+-- best block mined the given number of seconds before the test
+withChainStore :: Ctx -> (Store -> Store) -> [Network] -> Word32 -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
+withChainStore ctx alter downs ago chain test = do
   ref <- newIORef chain
   bestTime <- subtract ago . floor <$> getPOSIXTime
-  testWithApplication (return (downOn downs (storeApp ctx (chainStore ctx ref bestTime)))) $ \port ->
+  testWithApplication (return (downOn downs (storeApp ctx (alter (chainStore ctx ref bestTime))))) $ \port ->
     withHome $ \home -> do
       useStore home ("http://127.0.0.1:" <> show port <> "/")
       test home ref

@@ -964,7 +964,7 @@ deletingSpec ctx =
         (map transactionLocked <$> coinsAfter btc accId AllCoins Nothing Nothing) `dbShouldBeE` [False]
         -- The sync that retires it also records the change paid to /1/0,
         -- and an address paid on the chain is never used again
-        updateAddressBalances btc [Store.Balance (internalAddr 0) 11774 0 1 1 11774]
+        updateAddressBalances btc accId [Store.Balance (internalAddr 0) 11774 0 1 1 11774]
         (dBAddressIndex <$> changeAddress ctx cfg accId) `dbShouldBeE` 1
     -- A miner may re-encode the signatures: the network has it as 9
     it "retiring a labelled transaction gives its label to the id the network has it under" $
