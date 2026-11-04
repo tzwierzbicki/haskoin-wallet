@@ -21,6 +21,7 @@ import Haskoin.Wallet.Tx.Size (txSize)
 import Haskoin.Wallet.TxVectors
 import Numeric.Natural (Natural)
 import Data.Text (Text)
+import Data.Word (Word64)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), MarshalJsonBox (..), testIdentity)
 import Data.Default (def)
 import Haskoin.Wallet.Arbitrary (arbitraryTxSignData)
@@ -38,6 +39,7 @@ spec = do
   prepareContext $ \ctx -> do
     analysisSpec ctx
     signingSpec ctx
+    signInputsSpec ctx
     verificationSpec ctx
     propertiesSpec ctx
     fileSpec ctx
@@ -238,6 +240,21 @@ analysisSpec ctx =
       parseTxSignData bch ctx Bip44 accountPub tsd `shouldBe` Left "There are non-standard outputs in the transaction"
       info <- expectRight $ parseTxSignData btc ctx Bip44 accountPub tsd
       info.txInfoSummary.summaryOtherOutputs `shouldBe` Map.fromList [(segwitAddr, 50000000)]
+
+    -- The coin of 1 BTC paid to the key of the account at /2/7, where it
+    -- has no address: taken for the account's own, the payment would show
+    -- as internal, and the wallet, which scans /0/n and /1/n alone, would
+    -- never see the funds
+    it "refuses an output at a path of no address of the account, rather than showing it as the wallet's own" $ do
+      let tx = spendingTx ctx [(txHash (simpleFunding ctx), 0)] [(addrAt27, 90000000)]
+          tsd = TxSignData tx [simpleFunding ctx] [Deriv :/ 0 :/ 0] [Deriv :/ 2 :/ 7] Nothing Nothing [] noLabel
+      parseTxSignData btc ctx Bip44 accountPub tsd `shouldBe` Left "The path /2/7 is of no address of the account: its addresses are at /0/n and /1/n"
+
+    it "refuses an input at a path of no address of the account" $ do
+      let coin = fundingTx ctx 2 [(addrAt27, 100000)]
+          tx = spendingTx ctx [(txHash coin, 0)] [(otherAddr 0, 90000)]
+          tsd = TxSignData tx [coin] [Deriv :/ 2 :/ 7] [] Nothing Nothing [] noLabel
+      parseTxSignData btc ctx Bip44 accountPub tsd `shouldBe` Left "The path /2/7 is of no address of the account: its addresses are at /0/n and /1/n"
   where
     unsigned = simpleTransaction ctx
     accountPub = testAccountPub ctx
@@ -278,6 +295,110 @@ signingSpec ctx =
     -- a bip44 one
     it "refuses the transaction of a bip84 account taken for one of a bip44 account" $
       signWalletTx btc ctx Bip44 (segwitUnsigned ctx) testAccountKey `shouldBe` Left "Input derivations don't match the transaction inputs"
+
+    -- The coin at /2/7, where the account has no address, spent to another
+    -- wallet: the account's key derives a key there, which hw must not
+    -- sign with
+    it "refuses to sign a coin at a path of no address of the account" $ do
+      let coin = fundingTx ctx 2 [(addrAt27, 100000)]
+          tx = spendingTx ctx [(txHash coin, 0)] [(otherAddr 0, 90000)]
+          tsd = TxSignData tx [coin] [Deriv :/ 2 :/ 7] [] Nothing Nothing [] noLabel
+      signWalletTx btc ctx Bip44 tsd testAccountKey `shouldBe` Left "The path /2/7 is of no address of the account: its addresses are at /0/n and /1/n"
+
+{- Signing the inputs -}
+
+-- | The inputs signed one by one, as signWalletTx does once the summary
+-- has told the wallet's inputs from the others, each at the path of its
+-- address as the summary lists them
+signInputsSpec :: Ctx -> Spec
+signInputsSpec ctx =
+  describe "Signing the inputs of a transaction" $ do
+    -- The coin of 1 BTC at /0/0, spent by the simple transaction
+    it "signs an input of the wallet with the key at the path of its address, the signature and the key in the script of a P2PKH coin" $ do
+      signed <- expectRight $ signInputs btc ctx Bip44 testAccountKey (mine (externalAddr 0) "/0/0") unsigned coins
+      map (BS.null . (.script)) signed.inputs `shouldBe` [False]
+      signed.witness `shouldBe` []
+      verifySignedTx btc ctx (simpleTransaction ctx) {txSignDataTx = signed} `shouldBe` Right ()
+
+    it "signs a P2WPKH coin of a bip84 account with the signature and the key in the witness, the script left empty" $ do
+      let tsd = segwitUnsigned ctx
+      segwitCoins <- expectRight $ spentCoins btc ctx tsd
+      signed <- expectRight $ signInputs btc ctx Bip84 testSegwitAccountKey (mine (segwitExternalAddr 0) "/0/0") tsd.txSignDataTx segwitCoins
+      map (.script) signed.inputs `shouldBe` [BS.empty]
+      map length signed.witness `shouldBe` [2]
+      verifySignedTx btc ctx tsd {txSignDataTx = signed} `shouldBe` Right ()
+
+    it "signs with the sighash ALL on Bitcoin, and ALL with the FORKID flag on Bitcoin Cash" $ do
+      onBitcoin <- expectRight $ signInputs btc ctx Bip44 testAccountKey (mine (externalAddr 0) "/0/0") unsigned coins
+      onCash <- expectRight $ signInputs bch ctx Bip44 testAccountKey (mine (externalAddr 0) "/0/0") unsigned coins
+      sigHashOf btc onBitcoin `shouldBe` Right 0x01
+      sigHashOf bch onCash `shouldBe` Right 0x41
+      verifySignedTx bch ctx (simpleTransaction ctx) {txSignDataTx = onCash} `shouldBe` Right ()
+
+    -- The signatures are deterministic, as RFC 6979 draws their nonces
+    it "signs an input of the wallet that is signed already again, to the same signature" $ do
+      signedOnce <- expectRight $ signInputs btc ctx Bip44 testAccountKey (mine (externalAddr 0) "/0/0") unsigned coins
+      signInputs btc ctx Bip44 testAccountKey (mine (externalAddr 0) "/0/0") signedOnce coins `shouldBe` Right signedOnce
+
+    -- The coins at /0/0 and /1/3 of the wallet, and one of another wallet,
+    -- which signed its input already
+    it "signs every input of the wallet, each with the key of its own address, and leaves the signed input of another wallet as it is" $ do
+      let threeCoinFunding = fundingTx ctx 1 [(externalAddr 0, 60000), (internalAddr 3, 30000), (otherAddr 0, 50000)]
+          theirs = withInputScript 2 "a signature of the other wallet" $ spendingTx ctx [(txHash threeCoinFunding, 0), (txHash threeCoinFunding, 1), (txHash threeCoinFunding, 2)] [(otherAddr 1, 130000)]
+      threeCoins <- expectRight $ spentCoins btc ctx (TxSignData theirs [threeCoinFunding] [] [] Nothing Nothing [] noLabel)
+      signed <- expectRight $ signInputs btc ctx Bip44 testAccountKey (mine (externalAddr 0) "/0/0" <> mine (internalAddr 3) "/1/3") theirs threeCoins
+      [verifyStdInput btc ctx signed (spent threeCoins) i | i <- [0, 1]] `shouldBe` [True, True]
+      signed.inputs !! 2 `shouldBe` theirs.inputs !! 2
+
+    it "refuses an unsigned input that is not the wallet's" $
+      signInputs btc ctx Bip44 testAccountKey Map.empty unsigned coins
+        `shouldBe` Left "input 0 (1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj) does not belong to the wallet"
+
+    it "leaves a signed input that is not the wallet's as it is" $ do
+      let theirs = withInputScript 0 "a signature of the other wallet" unsigned
+      signInputs btc ctx Bip44 testAccountKey Map.empty theirs coins `shouldBe` Right theirs
+
+    it "refuses a coin of the wallet that is not of the kind of the account, naming the kind" $ do
+      let tsd = segwitUnsigned ctx
+      segwitCoins <- expectRight $ spentCoins btc ctx tsd
+      signInputs btc ctx Bip44 testAccountKey (mine (segwitExternalAddr 0) "/0/0") tsd.txSignDataTx segwitCoins
+        `shouldBe` Left "input 0 (bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc) is not a P2PKH coin"
+      signInputs btc ctx Bip84 testSegwitAccountKey (mine (externalAddr 0) "/0/0") unsigned coins
+        `shouldBe` Left "input 0 (1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj) is not a P2WPKH coin"
+
+    -- The summary checks that a path derives the address of the input; the
+    -- signer takes the path as given, and the key of another address signs
+    -- for nothing
+    it "signs with the key of the path given, which is not the coin's when the path is another address's" $ do
+      signed <- expectRight $ signInputs btc ctx Bip44 testAccountKey (mine (externalAddr 0) "/0/1") unsigned coins
+      verifySignedTx btc ctx (simpleTransaction ctx) {txSignDataTx = signed} `shouldBe` Left "Invalid signature for input 0 (1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj)"
+
+    -- The coin at /2/7, where the account has no address: refused before
+    -- any key is derived, whatever the summary said of the coin
+    it "refuses to derive a key at a path of no address of the account, even told the coin is the wallet's" $ do
+      let hiddenCoin = fundingTx ctx 2 [(addrAt27, 100000)]
+          hiddenSpend = spendingTx ctx [(txHash hiddenCoin, 0)] [(otherAddr 0, 90000)]
+      hiddenCoins <- expectRight $ spentCoins btc ctx (TxSignData hiddenSpend [hiddenCoin] [] [] Nothing Nothing [] noLabel)
+      signInputs btc ctx Bip44 testAccountKey (mine addrAt27 "/2/7") hiddenSpend hiddenCoins
+        `shouldBe` Left "The path /2/7 is of no address of the account: its addresses are at /0/n and /1/n"
+  where
+    unsigned = (simpleTransaction ctx).txSignDataTx
+    coins = forceRight (spentCoins btc ctx (simpleTransaction ctx))
+    -- The wallet's input at the address, at the path, as the summary lists it
+    mine addr path = Map.singleton addr (MyInputs 0 path "" [])
+    -- The coins as haskoin-core's verifier takes them
+    spent :: [SpentCoin] -> [(ScriptOutput, Word64, OutPoint)]
+    spent spentCoins' = [(c.script, c.value, c.outpoint) | c <- spentCoins']
+    -- The transaction with the script of input i replaced, as another
+    -- signer leaves the input it signed
+    withInputScript :: Int -> BS.ByteString -> Tx -> Tx
+    withInputScript i script tx =
+      Tx tx.version [if j == i then TxIn input.outpoint script input.sequence else input | (j, input) <- zip [0 ..] tx.inputs] tx.outputs tx.witness tx.locktime
+    -- The sighash of the signature in the script of the first input
+    sigHashOf :: Network -> Tx -> Either String SigHash
+    sigHashOf net tx = case unmarshal (net, ctx) (tx.inputs !! 0).script :: Either String ScriptInput of
+      Right (RegularInput (SpendPKHash (TxSignature _ sh) _)) -> Right sh
+      other -> Left (show other)
 
 {- Verification -}
 

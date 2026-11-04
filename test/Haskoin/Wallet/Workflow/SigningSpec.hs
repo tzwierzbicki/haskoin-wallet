@@ -554,6 +554,24 @@ inputFileSpec ctx = do
         run `shouldSatisfy` printed (alreadyExists (home </> "signed.psbt"))
         run `shouldNotSatisfy` askedMnemonic
 
+    -- A file crafted to pay the wallet's coin to the key of the account at
+    -- /2/7, where it has no address, with the record that would make hw
+    -- take the output for the account's own change. The wallet would never
+    -- see the funds, since it scans /0/n and /1/n alone.
+    it "refuses a file that names a key of the account at a path of no address of it, as reviewtx does" $
+      withHome $ \home -> do
+        createMain home
+        let hidden = spendingTx ctx [(txHash (payment ctx), 0)] [(addrAt27, 40000)]
+            refusal = "Output 0 names a key of the account at /2/7, where it has no address: its addresses are at /0/n and /1/n"
+        psbt <- psbtOnBitcoin ctx (TxSignData hidden [payment ctx] ["/0/0"] [] (Just 10) Nothing [] noLabel)
+        let naming = insertOutputDerivation ctx (keyAt27 ctx) (Derivation testFingerprint "m/44'/0'/0'/2/7")
+        BS.writeFile (home </> "hidden.psbt") (encodePsbt (Psbt psbt.version psbt.unsignedTx psbt.globals psbt.inputs (naming <$> psbt.outputs)))
+        review <- hw home ["reviewtx", home </> "hidden.psbt"] []
+        review `shouldSatisfy` printed refusal
+        run <- hw home ["signtx", "--input", home </> "hidden.psbt", "--output", home </> "signed.psbt"] seedOnce
+        run `shouldSatisfy` printed refusal
+        run `shouldNotSatisfy` askedMnemonic
+
 {- Sending -}
 
 -- | The state of the one pending transaction of a home: signed, and online

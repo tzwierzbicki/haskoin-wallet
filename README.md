@@ -211,6 +211,11 @@ its own: the wallet knows it once it created the account, signed with it, or
 imported it with its origin. `preparetx` says so when it writes a file
 without it.
 
+`hw` signs for the addresses of the account alone, at `/0/n` and `/1/n`. A
+file that names a key of the account at any other path is refused, by
+`reviewtx` as by `signtx`. An output there would be the account's, and yet
+never seen by it, since it scans those two chains alone.
+
 On the online computer, send it:
 
 ```console

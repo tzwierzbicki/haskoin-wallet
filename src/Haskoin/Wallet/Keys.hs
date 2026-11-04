@@ -210,6 +210,17 @@ data MnemonicPass = MnemonicPass
 accountDeriv :: AccountKind -> Network -> Natural -> HardPath
 accountDeriv kind net a = Deriv :| fromIntegral (kindPurpose kind) :| net.bip44Coin :| fromIntegral a
 
+-- | Whether a path below the key of an account is of one of its
+-- addresses: /0/n on its receiving chain, or /1/n on its change chain.
+-- An account has no address anywhere else. hw refuses to show or sign a
+-- transaction that names a key of the account at any other path: funds
+-- paid there would be the account's, and yet never seen by it, which
+-- scans the two chains alone.
+isChainPath :: SoftPath -> Bool
+isChainPath path = case pathToList path of
+  [chain, _] -> chain == 0 || chain == 1
+  _ -> False
+
 -- | The index of an account from its public key: the last step of its path
 xPubIndex :: XPubKey -> Natural
 xPubIndex = fromIntegral . xPubChild

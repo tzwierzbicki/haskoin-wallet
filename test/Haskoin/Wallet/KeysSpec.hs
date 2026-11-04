@@ -28,6 +28,7 @@ import Test.Hspec
 spec :: Spec
 spec = do
   sweepKeysSpec
+  chainPathSpec
   prepareContext $ \ctx -> do
     knownWalletsSpec ctx
     leadingZeroSpec ctx
@@ -58,6 +59,15 @@ spec = do
   otherImplementationsSpec
 
 {- The kinds of accounts -}
+
+-- | The paths below the key of an account that are of its addresses
+chainPathSpec :: Spec
+chainPathSpec =
+  describe "A path below the key of an account" $ do
+    it "is of an address of the account on its receiving chain, /0/n, or on its change chain, /1/n" $
+      map isChainPath ["/0/0", "/1/0", "/0/2147483647", "/1/5"] `shouldBe` [True, True, True, True]
+    it "is of no address of the account anywhere else: another chain, a chain alone, a step below an address, or the key itself" $
+      map isChainPath ["/2/7", "/0", "/1", "/0/5/3", Deriv] `shouldBe` [False, False, False, False, False]
 
 kindSpec :: Ctx -> Spec
 kindSpec ctx =

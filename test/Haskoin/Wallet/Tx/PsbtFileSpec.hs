@@ -94,6 +94,9 @@ outputAt i psbt = psbt.outputs !! i
 withInputs :: [PsbtMap] -> Psbt -> Psbt
 withInputs inputs psbt = Psbt psbt.version psbt.unsignedTx psbt.globals inputs psbt.outputs
 
+withOutputs :: [PsbtMap] -> Psbt -> Psbt
+withOutputs outputs psbt = Psbt psbt.version psbt.unsignedTx psbt.globals psbt.inputs outputs
+
 withGlobals :: PsbtMap -> Psbt -> Psbt
 withGlobals globals psbt = Psbt psbt.version psbt.unsignedTx globals psbt.inputs psbt.outputs
 
@@ -257,6 +260,12 @@ writingSpec ctx =
       let file = (paymentFile ctx) {txFileData = (payment ctx) {txSignDataInputPaths = ["/0/1"]}}
       txFilePsbt ctx (Just (knownSeed ctx)) file `shouldBe` Left "The path /0/1 is of no input of the transaction"
 
+    -- The account has no address at /2/7: hw names no key of the account
+    -- there, whatever the signing data says
+    it "refuses a path of no address of the account" $ do
+      let file = (paymentFile ctx) {txFileData = (payment ctx) {txSignDataOutputPaths = ["/2/7"]}}
+      txFilePsbt ctx (Just (knownSeed ctx)) file `shouldBe` Left "The path /2/7 is of no address of the account: its addresses are at /0/n and /1/n"
+
     it "refuses a coin whose transaction is missing" $ do
       let file = (paymentFile ctx) {txFileData = (payment ctx) {txSignDataInputs = []}}
       txFilePsbt ctx (Just (knownSeed ctx)) file `shouldBe` Left "The transaction input 0 spends from is missing"
@@ -404,6 +413,48 @@ readingSpec ctx =
           forged = insertInputDerivation ctx other (Derivation testFingerprint "m/44'/0'/0'/0/0") (Map.filter (const False) (inputAt 0 psbt) `Map.union` withoutDerivations (inputAt 0 psbt))
       psbtTxFile ctx [knownSeed ctx] (withInputs [forged] psbt)
         `shouldBe` Left "Input 0 names the key /0/0 of the account, but carries another public key"
+
+    -- The account has no address at /2/7, where its key still derives
+    -- one. A crafted file pays the wallet's coin there, with the record
+    -- that would make hw take the output for the account's own change:
+    -- the wallet would never see the funds, since it scans /0/n and /1/n
+    -- alone, and a second file could have them signed away.
+    it "refuses a record that names a key of the account at a path of no address of it, on an output" $ do
+      let hidden = builtTx ctx 800000 [(txHash (funding ctx), 0)] [(addrAt27, 90000)]
+          file = (paymentFile ctx) {txFileData = (payment ctx) {txSignDataTx = hidden, txSignDataOutputPaths = []}}
+      psbt <- written ctx (knownSeed ctx) file
+      let naming = insertOutputDerivation ctx (keyAt27 ctx) (Derivation testFingerprint "m/44'/0'/0'/2/7") (outputAt 0 psbt)
+      psbtTxFile ctx [knownSeed ctx] (withOutputs [naming] psbt)
+        `shouldBe` Left "Output 0 names a key of the account at /2/7, where it has no address: its addresses are at /0/n and /1/n"
+
+    -- The second file: the coin at /2/7 spent to another wallet, its
+    -- input naming the account's key there by the seed, by the account's
+    -- own key, or by another seed
+    it "refuses a record that names a key of the account at a path of no address of it, on an input, whatever seed it names" $ do
+      let coin = fundingTx ctx 2 [(addrAt27, 100000)]
+          spend = builtTx ctx 800000 [(txHash coin, 0)] [(otherAddr 0, 90000)]
+          outside = TxFile (Just btc) (TxSignData spend [coin] [] [] (Just 10) Nothing [] noLabel) Map.empty Map.empty
+      psbt <- expectRight $ txFilePsbt ctx Nothing outside
+      forM_ [Derivation testFingerprint "m/44'/0'/0'/2/7", Derivation (fingerprintOf "892eb8e4") "/2/7", Derivation testFingerprint2 "m/44'/0'/0'/2/7"] $ \derivation -> do
+        let naming = insertInputDerivation ctx (keyAt27 ctx) derivation (inputAt 0 psbt)
+        psbtTxFile ctx [knownSeed ctx] (withInputs [naming] psbt)
+          `shouldBe` Left "Input 0 names a key of the account at /2/7, where it has no address: its addresses are at /0/n and /1/n"
+
+    -- A hardened step below the account derives no address of it either
+    it "refuses a record that names a key of the account at a hardened step below it" $ do
+      psbt <- written ctx (knownSeed ctx) (paymentFile ctx)
+      let naming = insertInputDerivation ctx (keyAt27 ctx) (Derivation testFingerprint "m/44'/0'/0'/0'/0") (withoutDerivations (inputAt 0 psbt))
+      psbtTxFile ctx [knownSeed ctx] (withInputs [naming] psbt)
+        `shouldBe` Left "Input 0 names a key of the account at /0'/0, where it has no address: its addresses are at /0/n and /1/n"
+
+    -- The second wallet's key at its /0/0, which its record places at
+    -- /2/7: its business, not the account's
+    it "leaves aside a record of another wallet at such a path" $ do
+      psbt <- written ctx (knownSeed ctx) (paymentFile ctx)
+      let other = forceRight (unmarshal ctx (hexBytes "02b31089d88f43ba74b787dad983c54486772e2d5c7b432e1bbf16591d698912c8")) :: PublicKey
+          naming = insertInputDerivation ctx other (Derivation testFingerprint2 "m/44'/0'/0'/2/7") (inputAt 0 psbt)
+      file <- readBack ctx [knownSeed ctx] (withInputs [naming] psbt)
+      file.txFileData.txSignDataInputPaths `shouldBe` ["/0/0"]
 
     it "refuses an input without its previous transaction" $ do
       psbt <- written ctx (knownSeed ctx) (paymentFile ctx)

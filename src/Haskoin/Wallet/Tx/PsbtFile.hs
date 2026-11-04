@@ -69,9 +69,9 @@ import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
 import Data.Word (Word64)
 import Haskoin
-import Haskoin.Wallet.Keys (AccountKind, keyScript)
+import Haskoin.Wallet.Keys (AccountKind, isChainPath, keyScript)
 import Haskoin.Wallet.Tx.SignData
-import Haskoin.Wallet.Tx.Signing (sigHashName, walletSigHash)
+import Haskoin.Wallet.Tx.Signing (offChainPath, sigHashName, walletSigHash)
 import Numeric.Natural (Natural)
 
 -- | The keys of an account, as the derivation records of its files name
@@ -160,6 +160,8 @@ txFilePsbt ctx accountM file = do
   let fingerprintM = tsd.txSignDataFingerprint <|> (fileAccountFingerprint =<< accountM)
   (inputKeys, outputKeys) <- case accountM of
     Just acc -> do
+      forM_ (tsd.txSignDataInputPaths <> tsd.txSignDataOutputPaths) $ \path ->
+        unless (isChainPath path) $ Left (offChainPath path)
       let keysOf = map (addressKey ctx acc fingerprintM)
           inputKeys = keysOf tsd.txSignDataInputPaths
           outputKeys = keysOf tsd.txSignDataOutputPaths
@@ -442,7 +444,11 @@ accountMatch ctx netM psbt acc = do
 -- | What a derivation record says of the account: the path of one of its
 -- addresses, with the fingerprint of the seed when the record derives the
 -- key from the seed; nothing for a key of another wallet; a refusal for a
--- record that names a key of the account but carries another public key
+-- record that names a key of the account but carries another public key,
+-- or that names a key of the account at a path of no address of it. An
+-- address of the account is at /0/n or /1/n ('isChainPath'): a file
+-- naming the account's key elsewhere could pay funds there that the
+-- account would never see, and later have them signed away.
 matchRecord :: Ctx -> FileAccount -> String -> (PublicKey, Derivation) -> Either String (Maybe (SoftPath, Maybe Fingerprint))
 matchRecord ctx acc place (public, derivation)
   | Just rest <- stripPrefix (pathToList acc.fileAccountPath) indices, not (null rest) = resolve rest (Just fingerprint)
@@ -456,13 +462,29 @@ matchRecord ctx acc place (public, derivation)
     namesAccount fromSeed = case fromSeed of
       Just f -> Just f == acc.fileAccountFingerprint
       Nothing -> True
+    -- Whether the record's key is the account's at a soft path below it
+    keyAt path = (addressKey ctx acc Nothing path).addressPublic == public
     resolve rest fromSeed = case toSoft (listToPath rest) of
-      -- A hardened step below the account derives no address of it
-      Nothing -> Right Nothing
       Just path
-        | (addressKey ctx acc Nothing path).addressPublic == public -> Right (Just (path, fromSeed))
-        | namesAccount fromSeed -> Left (place <> " names the key " <> pathToStr path <> " of the account, but carries another public key")
+        | isChainPath path -> onChain path fromSeed
+        -- A soft path off the chains: the account's key there, or a record
+        -- that says it is, is refused; another wallet's is left aside
+        | namesAccount fromSeed || keyAt path -> Left (offChains rest)
         | otherwise -> Right Nothing
+      -- A hardened step below the account derives no address of it: a
+      -- record that names the account there is refused all the same
+      Nothing
+        | namesAccount fromSeed -> Left (offChains rest)
+        | otherwise -> Right Nothing
+    -- A record at a path of a chain of the account: matched when its key
+    -- is the account's there, refused when it is not but the record says
+    -- so, and another wallet's otherwise
+    onChain path fromSeed
+      | keyAt path = Right (Just (path, fromSeed))
+      | namesAccount fromSeed = Left (place <> " names the key " <> pathToStr path <> " of the account, but carries another public key")
+      | otherwise = Right Nothing
+    offChains rest =
+      place <> " names a key of the account at " <> pathToStr (listToPath rest) <> ", where it has no address: its addresses are at /0/n and /1/n"
 
 -- | A map of the pairs, the first value of a key winning
 firstOfEach :: (Ord k) => [(k, v)] -> Map k v

@@ -66,6 +66,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     spendsAndPays,
     readTxFile,
     writeTxFile,
+    psbtOnBitcoin,
     writeOtherWalletTxFile,
     -- * Payments and chains
     payment,

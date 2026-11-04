@@ -17,8 +17,9 @@
 --
 -- 1. finds the coin spent by every input in the dependent transactions;
 -- 2. checks that the transaction has inputs and outputs and spends every
---    coin once, that the input and output paths derive exactly the wallet's
---    addresses in the transaction, and computes the fee and the amount;
+--    coin once, that the input and output paths are of the two chains of
+--    the account, /0/n and /1/n, and derive exactly the wallet's addresses
+--    in the transaction, and computes the fee and the amount;
 -- 3. signs every input of the wallet, which must be a coin of the kind of
 --    the account, with the key derived from the path of its address: a
 --    P2PKH coin with the legacy digest, a P2WPKH coin with the digest of
@@ -42,6 +43,7 @@ module Haskoin.Wallet.Tx.Signing
     labelsFromFile,
     labelledTxFile,
     signWalletTx,
+    signInputs,
     verifySignedTx,
     SpentCoin (..),
     spentCoins,
@@ -49,6 +51,7 @@ module Haskoin.Wallet.Tx.Signing
     coinSigInput,
     walletSigHash,
     sigHashName,
+    offChainPath,
   )
 where
 
@@ -74,7 +77,7 @@ import Haskoin.Wallet.Database.TxInfo
     spentTxids,
     txType,
   )
-import Haskoin.Wallet.Keys (AccountKind, keyAddress, kindCoinName, spendsScript)
+import Haskoin.Wallet.Keys (AccountKind, isChainPath, keyAddress, kindCoinName, spendsScript)
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Size (inputKind, scriptOutputKind, signedTxSize, txSize)
 import Haskoin.Wallet.Util (addrToString, onNetwork, safeSubtract)
@@ -254,6 +257,8 @@ summarize net ctx accountPubM tsd coins = do
   when (null tx.outputs) $ Left "The transaction has no outputs"
   when (length (nub outpoints) /= length coins) $
     Left "The transaction spends the same coin twice"
+  forM_ (tsd.txSignDataInputPaths <> tsd.txSignDataOutputPaths) $ \path ->
+    unless (isChainPath path) $ Left (offChainPath path)
   outputs <- mapM outputAddress' tx.outputs
   fee <-
     maybe (Left "Fee is negative") Right $
@@ -335,6 +340,14 @@ summarize net ctx accountPubM tsd coins = do
           Left err
         return addresses
 
+-- | The refusal of a path at which the account has no address: a path
+-- of a chain other than its two ('Haskoin.Wallet.Keys.isChainPath'). hw
+-- neither shows nor signs a transaction with one, and writes none to a
+-- file.
+offChainPath :: SoftPath -> String
+offChainPath path =
+  "The path " <> pathToStr path <> " is of no address of the account: its addresses are at /0/n and /1/n"
+
 -- | The size the builder estimated, from the kinds of the coins and the
 -- scripts of the outputs. The signing data does not say whether a P2PKH
 -- coin belongs to an uncompressed key, so such a coin is counted for a
@@ -361,6 +374,11 @@ signInputs net ctx kind accountKey myInputs tx coins =
     signInput' partial (i, coin) =
       case Map.lookup coin.address myInputs of
         Just mine
+          -- The summary refuses such a path before anything is signed; the
+          -- one place a private key is derived from a path does not rely
+          -- on that
+          | not (isChainPath mine.myInputsPath) ->
+              Left (offChainPath mine.myInputsPath)
           | spendsScript kind coin.script ->
               signInput net ctx partial i (coinSigInput net coin) (inputKey mine.myInputsPath)
           | otherwise ->

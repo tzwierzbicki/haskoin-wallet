@@ -830,6 +830,17 @@ testAddress = fromMaybe (error "testAddress") . textToAddr btc
 segwitAddr :: Address
 segwitAddr = testAddress "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
 
+-- | The key of the first account of the test wallet at /2/7, and its
+-- P2PKH address: a path below the account where it has no address, since
+-- its addresses are at /0/n and /1/n. A crafted transaction file could
+-- pay funds of the account there, where the wallet would never see them.
+-- Both were derived with haskoin-core, apart from hw's code.
+keyAt27 :: Ctx -> PublicKey
+keyAt27 ctx = forceRight (unmarshal ctx (hexBytes "0355d0e6bcc6e5ebd257b97ea27942a1676b3ac61dedb4e2ce20adb8b84afd4160"))
+
+addrAt27 :: Address
+addrAt27 = testAddress "1K7GH8Bg5VrS8boE37csWFPKjbvG9GCiaK"
+
 -- | A second wallet, with its fingerprint and the keys of its account 0
 testMnemonic2 :: MnemonicPass
 testMnemonic2 =
