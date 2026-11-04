@@ -48,7 +48,7 @@ import Haskoin.Wallet.Store
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Signing (coinSigInput, parseOutsideTxSignData, parseTxSignData, spentAddress, spentCoins, verifySignedTx)
-import Haskoin.Wallet.Tx.Size (InputSize, checkFeeRateAndDust, inputSize, scriptOutputSize, txSize, uncompressedKeyInput)
+import Haskoin.Wallet.Tx.Size (checkFeeRateAndDust, inputKind, scriptOutputKind, txSize)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import System.Random (StdGen)
@@ -213,18 +213,18 @@ buildSweepSignData net ctx gen found sweepTo feeByte dust lockTime = do
 -- P2PKH coin when the keys were given, every output by its script
 sweepTxSize :: Network -> Ctx -> SweepCoins -> [ScriptOutput] -> Either String Word64
 sweepTxSize net ctx found outputs = do
-  inputs <- mapM (coinInputSize net ctx found.uncompressedAddrs) found.coins
-  return $ txSize inputs (scriptOutputSize . marshal ctx <$> outputs)
+  inputs <- mapM (sweptInputKind net ctx found.uncompressedAddrs) found.coins
+  return $ txSize inputs (scriptOutputKind . marshal ctx <$> outputs)
 
--- | The size of the signed input of a coin of the sweep: a P2PKH coin at an
--- address of an uncompressed key carries the 65-byte public key; a coin of
--- a kind the sweep cannot sign is refused here, before signing
-coinInputSize :: Network -> Ctx -> [Address] -> Store.Unspent -> Either String InputSize
-coinInputSize net ctx uncompressedAddrs coin = do
+-- | The kind of the signed input of a coin of the sweep: a P2PKH coin at
+-- an address of an uncompressed key carries the 65-byte public key; a coin
+-- of a kind the sweep cannot sign is refused here, before signing
+sweptInputKind :: Network -> Ctx -> [Address] -> Store.Unspent -> Either String InputKind
+sweptInputKind net ctx uncompressedAddrs coin = do
   script <- either (const unsupported) Right $ unmarshal ctx coin.script
   case script of
-    PayPKHash h | PubKeyAddress h `elem` uncompressedAddrs -> Right uncompressedKeyInput
-    _ -> maybe unsupported Right (inputSize script)
+    PayPKHash h | PubKeyAddress h `elem` uncompressedAddrs -> Right InputUncompressedPKHash
+    _ -> maybe unsupported Right (inputKind script)
   where
     unsupported =
       Left $ "Unsupported output script for the coin at " <> maybe "unknown address" (addrToString net) coin.address

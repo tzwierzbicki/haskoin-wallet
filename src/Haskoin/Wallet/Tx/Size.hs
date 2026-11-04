@@ -2,10 +2,10 @@
 
 -- | The sizes of transactions, in virtual bytes, which is how hw measures
 -- sizes and fee rates everywhere: the size of a transaction before it is
--- signed, which its fee is paid on, counted from the kinds of its inputs
--- and the scripts of its outputs, and the size of a signed one, measured
--- from its bytes. Signatures are counted at their largest, so an estimate
--- is an upper bound, by a byte or two per input.
+-- signed, which its fee is paid on, estimated by haskoin-core from the
+-- kinds of its inputs and outputs ('guessTxSize'), and the size of a
+-- signed one, measured from its bytes. Signatures are counted at their
+-- largest, so an estimate is an upper bound, by a byte or two per input.
 --
 -- The network charges fees by weight: the bytes outside the witnesses
 -- count four, and the bytes of the witnesses count one. The virtual size
@@ -15,27 +15,22 @@
 -- in the witness: such an input is 68 virtual bytes, where a P2PKH one is
 -- 148 ('accountInput').
 --
--- The fee rate and the dust limit a transaction is built with are checked
--- here too, for the builders of payments and of sweeps, beside the default
--- fee rate and the rate above which hw asks the user first.
+-- This module maps what hw knows, the kind of an account and the scripts
+-- of its coins and outputs, onto the kinds of haskoin-core. The fee rate
+-- and the dust limit a transaction is built with are checked here too,
+-- for the builders of payments and of sweeps, beside the default fee rate
+-- and the rate above which hw asks the user first.
 module Haskoin.Wallet.Tx.Size
-  ( InputSize (..),
-    inputSize,
+  ( inputKind,
     inputVirtualSize,
-    p2pkhInput,
-    p2pkhInputSize,
-    p2wpkhInput,
-    uncompressedKeyInput,
     accountInput,
     accountInputSize,
-    scriptOutputSize,
-    p2pkhOutputSize,
-    p2wpkhOutputSize,
+    scriptOutputKind,
+    accountOutputKind,
     accountOutputSize,
     txSize,
     signedTxSize,
     storeTxSize,
-    varIntSize,
     highFeeRate,
     maxFeeRate,
     checkFeeRateAndDust,
@@ -46,7 +41,7 @@ where
 import Control.Monad (when)
 import qualified Data.ByteString as BS
 import Data.Word (Word64)
-import Haskoin (ScriptOutput (..), Tx, txVirtualSize)
+import Haskoin (InputKind (..), OutputKind (..), ScriptOutput (..), Tx, guessTxSize, inputWeight, outputSize, txVirtualSize)
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Amounts (maxMoney)
 import Haskoin.Wallet.Keys (AccountKind (..))
@@ -54,70 +49,42 @@ import Numeric.Natural (Natural)
 
 {- Inputs -}
 
--- | The size of a signed input: its bytes among the inputs, and the bytes
--- of its witness with their item count, 0 for an input without a witness
-data InputSize = InputSize
-  { inputBytes :: !Word64,
-    witnessBytes :: !Word64
-  }
-  deriving (Eq, Show)
-
--- | The size of the signed input of a coin, by the kind of its output
--- script, for a compressed public key; Nothing for a kind hw cannot sign.
--- An input is 32 bytes of transaction hash, 4 of output index, 1 of script
--- length, the script and 4 of sequence; a signature is counted as 72 bytes
--- with its hash type, and the push of it as 1 more.
+-- | The kind of the signed input of a coin, by its output script, for a
+-- compressed public key; Nothing for a kind hw cannot sign. A P2SH coin
+-- is taken for a P2SH-P2WPKH one, the only script hash hw signs. The
+-- sweep tells a P2PKH coin of an uncompressed key apart itself, as
+-- 'InputUncompressedPKHash'.
 --
 --   * P2PKH: the script pushes the signature and the 33-byte public key:
---     148 bytes ('p2pkhInput'; 180 for an uncompressed key,
---     'uncompressedKeyInput').
+--     148 bytes (180 for an uncompressed key).
 --   * P2PK: the script pushes the signature alone: 114 bytes.
 --   * P2WPKH: an empty script, 41 bytes; the witness holds the signature and
---     the public key, each with its length, after their count: 108 bytes
---     ('p2wpkhInput').
+--     the public key, each with its length, after their count: 108 bytes.
 --   * P2SH-P2WPKH: the script pushes the 22-byte P2WPKH script, 64 bytes,
---     with the same witness. A P2SH coin is taken for one of these, the
---     only script hash hw signs.
-inputSize :: ScriptOutput -> Maybe InputSize
-inputSize script =
+--     with the same witness.
+inputKind :: ScriptOutput -> Maybe InputKind
+inputKind script =
   case script of
-    PayPKHash _ -> Just p2pkhInput
-    PayPK _ -> Just (InputSize 114 0)
-    PayWitnessPKHash _ -> Just p2wpkhInput
-    PayScriptHash _ -> Just (InputSize 64 108)
+    PayPKHash _ -> Just InputPKHash
+    PayPK _ -> Just InputPK
+    PayWitnessPKHash _ -> Just InputWitnessPKHash
+    PayScriptHash _ -> Just InputNestedWitnessPKHash
     _ -> Nothing
 
--- | The virtual size of an input on its own: its bytes, and a quarter of
--- those of its witness, rounded up. The marker and flag bytes of a
--- transaction with witnesses are counted once, in 'txSize'.
-inputVirtualSize :: InputSize -> Word64
-inputVirtualSize input = input.inputBytes + quarter input.witnessBytes
-
--- | The input of a P2PKH coin of a compressed key, the kind a BIP44
--- account spends: a 107-byte script (1 + 72 for the signature with its
--- hash type, 1 + 33 for the public key) in a 148-byte input
-p2pkhInput :: InputSize
-p2pkhInput = InputSize p2pkhInputSize 0
-
-p2pkhInputSize :: Word64
-p2pkhInputSize = 148
-
--- | The input of a P2WPKH coin, the kind a BIP84 account spends: 41 bytes
--- with an empty script, and the signature and the public key in its
--- witness, 108 bytes that count a quarter, 68 virtual bytes in all
-p2wpkhInput :: InputSize
-p2wpkhInput = InputSize 41 108
-
--- | The input of a P2PKH coin of an uncompressed key: a 65-byte public key
--- instead of 33
-uncompressedKeyInput :: InputSize
-uncompressedKeyInput = InputSize 180 0
+-- | The virtual size of an input of the kind on its own: its bytes, and a
+-- quarter of those of its witness, rounded up. The marker and flag bytes
+-- of a transaction with witnesses are counted once, in 'txSize'.
+inputVirtualSize :: InputKind -> Word64
+inputVirtualSize kind = fromIntegral bytes + quarter (fromIntegral witnessBytes)
+  where
+    (bytes, witnessBytes) = inputWeight kind
 
 -- | The input of a coin of an account of the kind: P2PKH for a BIP44
--- account, P2WPKH for a BIP84 one
-accountInput :: AccountKind -> InputSize
-accountInput Bip44 = p2pkhInput
-accountInput Bip84 = p2wpkhInput
+-- account, 148 bytes; P2WPKH for a BIP84 one, 41 bytes with an empty
+-- script, and the signature and the public key in its 108-byte witness
+accountInput :: AccountKind -> InputKind
+accountInput Bip44 = InputPKHash
+accountInput Bip84 = InputWitnessPKHash
 
 -- | The virtual size of the input of a coin of an account of the kind:
 -- 148 for a BIP44 account, 68 for a BIP84 one
@@ -126,46 +93,35 @@ accountInputSize = inputVirtualSize . accountInput
 
 {- Outputs -}
 
--- | The size of an output paying a script: 8 bytes of amount, the length
--- of the script and the script
-scriptOutputSize :: BS.ByteString -> Word64
-scriptOutputSize script = 8 + varIntSize scriptLength + fromIntegral scriptLength
-  where
-    scriptLength = BS.length script
+-- | The kind of an output paying a script, for its size. haskoin-core
+-- sizes any script by its length, 8 bytes of amount, the length of the
+-- script and the script, which is all hw needs of a recipient's output.
+scriptOutputKind :: BS.ByteString -> OutputKind
+scriptOutputKind = OutputScript . BS.length
 
--- | A P2PKH output, the kind a BIP44 account pays its change to: a 25-byte
--- script in a 34-byte output
-p2pkhOutputSize :: Word64
-p2pkhOutputSize = 34
+-- | The output an account of the kind pays its change to: P2PKH for a
+-- BIP44 account, a 25-byte script in a 34-byte output; P2WPKH for a BIP84
+-- one, a 22-byte script in a 31-byte output
+accountOutputKind :: AccountKind -> OutputKind
+accountOutputKind Bip44 = OutputPKHash
+accountOutputKind Bip84 = OutputWitnessPKHash
 
--- | A P2WPKH output, the kind a BIP84 account pays its change to: a
--- 22-byte script in a 31-byte output
-p2wpkhOutputSize :: Word64
-p2wpkhOutputSize = 31
-
--- | The size of the output an account of the kind pays its change to:
--- P2PKH for a BIP44 account, P2WPKH for a BIP84 one
+-- | The size of the output an account of the kind pays its change to: 34
+-- for a BIP44 account, 31 for a BIP84 one
 accountOutputSize :: AccountKind -> Word64
-accountOutputSize Bip44 = p2pkhOutputSize
-accountOutputSize Bip84 = p2wpkhOutputSize
+accountOutputSize = fromIntegral . outputSize . accountOutputKind
 
 {- Transactions -}
 
--- | The virtual size of a transaction with the given inputs and outputs: 4
--- bytes of version, the counts of inputs and outputs as variable-length
--- integers, the inputs, the outputs and 4 bytes of lock time, all of which
--- count in full; then, for a transaction with a witness, a marker byte and
--- a flag byte, and a witness for every input, an empty one, a single count
--- byte, for an input without, which together count a quarter, rounded up.
-txSize :: [InputSize] -> [Word64] -> Word64
-txSize inputs outputs =
-  overhead + sum ((.inputBytes) <$> inputs) + sum outputs + quarter witnessData
-  where
-    overhead = 8 + varIntSize (length inputs) + varIntSize (length outputs)
-    witnesses = (.witnessBytes) <$> inputs
-    witnessData
-      | all (== 0) witnesses = 0
-      | otherwise = 2 + sum [max 1 w | w <- witnesses]
+-- | The virtual size of a transaction with the given inputs and outputs,
+-- as haskoin-core estimates it: 4 bytes of version, the counts of inputs
+-- and outputs as variable-length integers, the inputs, the outputs and 4
+-- bytes of lock time, all of which count in full; then, for a transaction
+-- with a witness, a marker byte and a flag byte, and a witness for every
+-- input, an empty one, a single count byte, for an input without, which
+-- together count a quarter, rounded up.
+txSize :: [InputKind] -> [OutputKind] -> Word64
+txSize inputs outputs = fromIntegral (guessTxSize inputs outputs)
 
 -- | The virtual size of a signed transaction, from its bytes, as
 -- haskoin-core's txVirtualSize measures it: those outside the witnesses
@@ -183,15 +139,6 @@ storeTxSize tx = fromIntegral ((tx.weight + 3) `div` 4)
 -- | A number of witness bytes in virtual bytes: a quarter, rounded up
 quarter :: Word64 -> Word64
 quarter bytes = (bytes + 3) `div` 4
-
--- | The size in bytes of a count as Bitcoin encodes it: one byte up to 252,
--- then a marker byte and 2, 4 or 8 bytes
-varIntSize :: Int -> Word64
-varIntSize n
-  | n <= 0xfc = 1
-  | n <= 0xffff = 3
-  | n <= 0xffffffff = 5
-  | otherwise = 9
 
 {- Rates -}
 

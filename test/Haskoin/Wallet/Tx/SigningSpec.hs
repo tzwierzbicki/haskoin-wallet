@@ -17,7 +17,7 @@ import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Database.TxInfo (MyInputs (..), MyOutputs (..), TxInfo (..), TxSummary (..), TxType (..), txInfoHash)
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Signing
-import Haskoin.Wallet.Tx.Size (p2pkhInput, p2pkhOutputSize, txSize)
+import Haskoin.Wallet.Tx.Size (txSize)
 import Haskoin.Wallet.TxVectors
 import Numeric.Natural (Natural)
 import Data.Text (Text)
@@ -322,7 +322,7 @@ propertiesSpec ctx =
           Right (signed, info) ->
             let inputs = length signed.txSignDataTx.inputs
                 outputs = length signed.txSignDataTx.outputs
-                estimated = fromIntegral $ txSize (replicate inputs p2pkhInput) (replicate outputs p2pkhOutputSize)
+                estimated = fromIntegral $ txSize (replicate inputs InputPKHash) (replicate outputs OutputPKHash)
              in verifySignedTx btc ctx signed === Right ()
                   .&&. info.txInfoSummary.summaryFee === expected.expectedFee
                   .&&. info.txInfoSummary.summaryAmount === expected.expectedAmount

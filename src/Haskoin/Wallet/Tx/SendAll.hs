@@ -51,9 +51,9 @@ import Haskoin.Wallet.Database.RawTx (getRawTx)
 import Haskoin.Wallet.Keys (AccountKind)
 import Haskoin.Wallet.Tx.LockTime (withHeader)
 import Haskoin.Wallet.Tx.Recipient (Share (..), shareAmounts)
-import Haskoin.Wallet.Tx.Building (BuiltTx (..), coinWithPath, recipientOutputSize)
+import Haskoin.Wallet.Tx.Building (BuiltTx (..), coinWithPath, recipientOutputKind)
 import Haskoin.Wallet.Tx.SignData
-import Haskoin.Wallet.Tx.Size (accountInput, accountInputSize, accountOutputSize, checkFeeRateAndDust, txSize)
+import Haskoin.Wallet.Tx.Size (accountInput, accountInputSize, accountOutputKind, checkFeeRateAndDust, txSize)
 import Haskoin.Wallet.Util (addrToTextE, randomShuffle)
 import Numeric.Natural (Natural)
 import System.Random (StdGen)
@@ -88,7 +88,7 @@ valueOf coins = sum [fromIntegral coin.value | coin <- coins]
 -- kind to the recipients, at the fee rate
 sendAllFee :: Ctx -> AccountKind -> Natural -> [Store.Unspent] -> [Address] -> Natural
 sendAllFee ctx kind feeByte coins recipients =
-  feeByte * fromIntegral (txSize [accountInput kind | _ <- coins] (recipientOutputSize ctx <$> recipients))
+  feeByte * fromIntegral (txSize [accountInput kind | _ <- coins] (recipientOutputKind ctx <$> recipients))
 
 -- | The amount of each recipient when the coins of an account of the kind
 -- pay them and their fee at the rate: see 'shareAmounts'
@@ -211,7 +211,7 @@ dustReport ctx kind feeByte dust recipients worth dustCoins othersStay =
     remaining coins = fromInteger $ max 0 $ toInteger (valueOf coins) - toInteger fixedTotal - toInteger (feeOf coins)
     dustValue = valueOf dustCoins
     -- The dust coins alone, paying one address of the kind of the account
-    aloneSize = fromIntegral $ txSize [accountInput kind | _ <- dustCoins] [accountOutputSize kind]
+    aloneSize = fromIntegral $ txSize [accountInput kind | _ <- dustCoins] [accountOutputKind kind]
     laterRate
       | dustValue >= dust + aloneSize = Just ((dustValue - dust) `div` aloneSize)
       | otherwise = Nothing

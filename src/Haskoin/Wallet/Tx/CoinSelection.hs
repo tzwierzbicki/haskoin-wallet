@@ -42,9 +42,10 @@ import Data.List (minimumBy, sortOn)
 import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Ord (Down (..), comparing)
 import Data.Word (Word64)
+import Haskoin (OutputKind)
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Keys (AccountKind)
-import Haskoin.Wallet.Tx.Size (accountInput, accountInputSize, accountOutputSize, txSize)
+import Haskoin.Wallet.Tx.Size (accountInput, accountInputSize, accountOutputKind, accountOutputSize, txSize)
 import Haskoin.Wallet.Util (randomShuffle, safeSubtract)
 import System.Random (StdGen)
 
@@ -96,9 +97,9 @@ data Payment = Payment
     -- | Dust: the smallest change worth an output, like Bitcoin Core's dust
     -- limit (546 for P2PKH), below which an output is dust
     dust :: !Word64,
-    -- | The sizes in virtual bytes of the outputs paid, by the scripts of
-    -- the recipients
-    outputSizes :: ![Word64],
+    -- | The kinds of the outputs paid, by the scripts of the recipients,
+    -- which size them
+    outputKinds :: ![OutputKind],
     -- | The amount paid, over all the outputs
     amount :: !Word64
   }
@@ -123,7 +124,7 @@ data Selection = Selection
 -- inputs and the change of the kind of the account
 paymentSize :: Payment -> Int -> Bool -> Word64
 paymentSize payment inputs hasChange =
-  txSize (replicate inputs (accountInput payment.ownKind)) (payment.outputSizes <> [accountOutputSize payment.ownKind | hasChange])
+  txSize (replicate inputs (accountInput payment.ownKind)) (payment.outputKinds <> [accountOutputKind payment.ownKind | hasChange])
 
 -- | Select the coins of a payment among the candidates: the spendable coins
 -- of the account, or the coins chosen with coin control and --select

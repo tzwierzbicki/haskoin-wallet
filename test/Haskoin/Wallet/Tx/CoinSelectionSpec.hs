@@ -34,7 +34,7 @@ amounts s = ((.value) <$> s.selected, s.changeAmount, s.feeAmount)
 -- and dust
 selectWithSeed :: Ctx -> Int -> CoinSelection -> Word64 -> Word64 -> Word64 -> [Natural] -> Either String ([Word64], Word64, Word64)
 selectWithSeed ctx seed strategy feeRate dust amount coins =
-  amounts <$> selectCoins strategy (mkStdGen seed) (Payment Bip44 (FeeRates feeRate 10) SenderPays dust [34] amount) (coinsWorth ctx coins)
+  amounts <$> selectCoins strategy (mkStdGen seed) (Payment Bip44 (FeeRates feeRate 10) SenderPays dust [OutputPKHash] amount) (coinsWorth ctx coins)
 
 -- | Select with the seed 0; only the random draw depends on it
 select :: Ctx -> CoinSelection -> Word64 -> Word64 -> Word64 -> [Natural] -> Either String ([Word64], Word64, Word64)
@@ -54,7 +54,7 @@ coinSelectionSpec ctx =
     it "sizes the inputs and the change of a bip84 account as P2WPKH" $
       -- Fee: 10 + 41 + 34 + 31 = 116 bytes, then (2 + 108) / 4 rounded up to
       -- 28: 144 virtual bytes * 2 = 288. Change: 400000 - 350000 - 288 = 49712
-      (amounts <$> selectCoins LargestFirst (mkStdGen 0) (Payment Bip84 (FeeRates 2 10) SenderPays 546 [34] 350000) (coinsWorth ctx four))
+      (amounts <$> selectCoins LargestFirst (mkStdGen 0) (Payment Bip84 (FeeRates 2 10) SenderPays 546 [OutputPKHash] 350000) (coinsWorth ctx four))
         `shouldBe` Right ([400000], 49712, 288)
     it "spends the smallest coins first" $
       -- Fee: 10 + 3 * 148 + 2 * 34 = 522 bytes * 50 = 26100
@@ -137,7 +137,7 @@ changeAndFeeSpec ctx =
     it "charges the fee of every output" $
       -- Fee: two outputs and the change, 10 + 148 + 3 * 34 = 260 bytes * 10 = 2600
       -- Change: 400000 - 350000 - 2600 = 47400
-      amounts <$> selectCoins LargestFirst (mkStdGen 0) (Payment Bip44 (FeeRates 10 10) SenderPays 546 [34, 34] 350000) (coinsWorth ctx [400000])
+      amounts <$> selectCoins LargestFirst (mkStdGen 0) (Payment Bip44 (FeeRates 10 10) SenderPays 546 [OutputPKHash, OutputPKHash] 350000) (coinsWorth ctx [400000])
         `shouldBe` Right ([400000], 47400, 2600)
     it "builds a free transaction at a fee rate of zero" $
       -- Fee: 10 + 148 + 2 * 34 = 226 bytes * 0 = 0
@@ -148,7 +148,7 @@ wasteSpec :: Ctx -> Spec
 wasteSpec ctx =
   describe "Waste of a selection" $ do
     -- 350000 paid by the sender in one output, at the given fee rate
-    let payment feeRate = Payment Bip44 (FeeRates feeRate 10) SenderPays 546 [34] 350000
+    let payment feeRate = Payment Bip44 (FeeRates feeRate 10) SenderPays 546 [OutputPKHash] 350000
         selection coins change fee = Selection (coinsWorth ctx coins) 350000 change fee
     it "is the cost of the change output at the long-term fee rate" $
       -- Creating the output now (10 * 34) and spending it later (10 * 148)

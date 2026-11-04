@@ -29,7 +29,7 @@ module Haskoin.Wallet.Tx.Building
     spentAddresses,
     fetchWalletCoins,
     coinWithPath,
-    recipientOutputSize,
+    recipientOutputKind,
     recipientsPayFee,
   )
 where
@@ -56,7 +56,7 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.PendingTx (changeAddress)
 import Haskoin.Wallet.Database.RawTx
 import Haskoin.Wallet.Tx.SignData
-import Haskoin.Wallet.Tx.Size (checkFeeRateAndDust, scriptOutputSize, p2pkhOutputSize)
+import Haskoin.Wallet.Tx.Size (checkFeeRateAndDust, scriptOutputKind)
 import Haskoin.Wallet.Tx.LockTime (withHeader)
 import Haskoin.Wallet.Util (addrToTextE, randomShuffle, safeSubtract)
 import Numeric.Natural (Natural)
@@ -284,7 +284,7 @@ choosePayment ctx gen strategy found recipients feeByte dust payer coinControl =
           rates = FeeRates {feeRate = fromIntegral feeByte, longTermFeeRate = longTermRate},
           payer,
           dust = fromIntegral dust,
-          outputSizes = recipientOutputSize ctx . fst <$> recipients,
+          outputKinds = recipientOutputKind ctx . fst <$> recipients,
           amount = sum $ fromIntegral . snd <$> recipients
         }
 
@@ -320,11 +320,12 @@ assemblePayment net ctx found chosen changeM lockTime = do
       addr <- maybeToEither "A chosen coin has no address" coin.address
       maybeToEither "A chosen coin has no derivation path" $ Map.lookup addr found.coinPaths
 
--- | The size of the output paying a recipient. An address that cannot be
--- paid is counted as P2PKH; the builder refuses it further down.
-recipientOutputSize :: Ctx -> Address -> Word64
-recipientOutputSize ctx addr =
-  maybe p2pkhOutputSize (scriptOutputSize . marshal ctx) (addressToOutput addr)
+-- | The kind of the output paying a recipient, for its size. An address
+-- that cannot be paid is counted as P2PKH; the builder refuses it further
+-- down.
+recipientOutputKind :: Ctx -> Address -> OutputKind
+recipientOutputKind ctx addr =
+  maybe OutputPKHash (scriptOutputKind . marshal ctx) (addressToOutput addr)
 
 -- | The coins chosen under coin control, among the spendable coins of the
 -- account. Every chosen coin must be one of them: the command checks it

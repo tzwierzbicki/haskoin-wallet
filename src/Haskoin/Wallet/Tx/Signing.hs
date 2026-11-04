@@ -76,7 +76,7 @@ import Haskoin.Wallet.Database.TxInfo
   )
 import Haskoin.Wallet.Keys (AccountKind, keyAddress, kindCoinName, spendsScript)
 import Haskoin.Wallet.Tx.SignData
-import Haskoin.Wallet.Tx.Size (inputSize, scriptOutputSize, p2pkhInput, signedTxSize, txSize)
+import Haskoin.Wallet.Tx.Size (inputKind, scriptOutputKind, signedTxSize, txSize)
 import Haskoin.Wallet.Util (addrToString, onNetwork, safeSubtract)
 import Numeric.Natural (Natural)
 
@@ -342,7 +342,7 @@ summarize net ctx accountPubM tsd coins = do
 estimatedSize :: [SpentCoin] -> Tx -> Natural
 estimatedSize coins tx =
   fromIntegral $
-    txSize (fromMaybe p2pkhInput . inputSize . (.script) <$> coins) (scriptOutputSize . (.script) <$> tx.outputs)
+    txSize (fromMaybe InputPKHash . inputKind . (.script) <$> coins) (scriptOutputKind . (.script) <$> tx.outputs)
 
 {- Signing -}
 
