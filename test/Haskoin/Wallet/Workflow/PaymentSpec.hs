@@ -212,6 +212,24 @@ receivingSpec ctx = do
         (accountsOf <$> hwJson home ["sync"] []) `shouldReturn` Right [("main", 0, 50000)]
         (coinsShown <$> hwJson home ["coins"] []) `shouldReturn` Right [(OutPoint (txHash (payment ctx)) 0, 50000, 1, Nothing, True)]
 
+  -- Only this wallet can replace the payment, which spends the coin of
+  -- main. At 10 satoshis a byte, its 226 bytes cost 2260, so main keeps
+  -- 50000 - 30000 - 2260 = 17740 of change.
+  describe "A payment from another account of the wallet" $
+    it "can be spent while in the mempool, like the change of the account that paid it" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        createMain home
+        _ <- answer home ["createacc", "second"] seedTwice
+        _ <- answer home ["receive", "--account", "main"] []
+        secondAddr <- receiveFor home "second"
+        _ <- answer home ["sync"] []
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", secondAddr <> ":0.0003", "--account", "main", "--fee-rate", "10"] []
+        _ <- answer home ["signtx", nosig] seedOnce
+        _ <- answer home ["sendtx", nosig, "--yes"] []
+        (accountsOf <$> hwJson home ["sync"] []) `shouldReturn` Right [("main", 0, 17740), ("second", 1, 30000)]
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--account", "second", "--fee-rate", "10"] []
+        spentFromWallet prepared `shouldBe` Map.fromList [(account1Addr, 30000)]
+
   describe "A coin locked by the user" $ do
     let twoCoins = fundingTx ctx 1 [(externalAddr 0, 50000), (externalAddr 0, 20000)]
         chain = Chain 800002 [(twoCoins, Just 800000)]

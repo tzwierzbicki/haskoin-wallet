@@ -256,9 +256,10 @@ spendingChildren ctx store accId acc parents = go (sentId <$> parents) []
 
 -- | Refuse to replace transactions an output of which a transaction of
 -- another account of the network spends: replacing them would remove it,
--- and hw cannot replace it from this account. hw builds no such
--- transaction, since an account spends no unconfirmed coin another account
--- paid it, but another wallet of the seed may have.
+-- and hw cannot replace it from this account. An account may spend what
+-- another account of the wallet paid it before it confirms, so hw builds
+-- such a transaction itself: deletetx frees the way while it is pending,
+-- and once it is sent, the payment is replaced from neither account.
 refuseSpentElsewhere :: (MonadUnliftIO m) => Network -> DBAccountId -> [Sent] -> ExceptT String (DB m) ()
 refuseSpentElsewhere net accId sents = do
   others <- filter (\(otherId, other) -> otherId /= accId && accountNetwork other == net) <$> lift getAccounts

@@ -79,7 +79,7 @@ import Haskoin.Wallet.Database.Account (accountNetwork, getAccountById, getAccou
 import Haskoin.Wallet.Database.Address (CoinBalance (..))
 import Haskoin.Wallet.Database.PendingTx (lockedOutpoints, userLockedOutpoints)
 import Haskoin.Wallet.Database.RawTx (lookupRawTx)
-import Haskoin.Wallet.Database.TxInfo (MyInputs (..), TxSummary (..), coinLabel, coinLabels, liveSummary, ownTransaction, walletAddressRow)
+import Haskoin.Wallet.Database.TxInfo (coinLabel, coinLabels, liveSummaries, spentTxids, walletAddressRow, walletTransaction)
 import Haskoin.Wallet.Util (rowLimit)
 import Numeric.Natural (Natural)
 
@@ -269,7 +269,7 @@ data CoinFilter = AllCoins | LockedCoins
 -- its outpoint, or the first ones, up to the count, or all of them.
 coinsAfter :: (MonadUnliftIO m) => Network -> DBAccountId -> CoinFilter -> Maybe (Store.BlockRef, OutPoint) -> Maybe Natural -> ExceptT String (DB m) [JsonCoin]
 coinsAfter net accId shown afterM countM = do
-  rules <- spendingOf net accId
+  rules <- spendingOf net
   let lockedOnly = case shown of
         AllCoins -> []
         LockedCoins -> [DBCoinOutpoint P.<-. map outpointBytes (Map.keys rules.spendingLocks)]
@@ -339,22 +339,21 @@ coinBlock accId outpoint = do
 
 {- Spending -}
 
--- | What deciding whether the coins of an account can be spent reads once:
--- the account and its network, the height of the best block, and the
--- locks of the coins of the network
+-- | What deciding whether the coins of a network can be spent reads once:
+-- the network, the height of its best block, and the locks of its coins.
+-- The rules are the same for every account of the network.
 data Spending = Spending
   { spendingNetwork :: !Network,
-    spendingAccount :: !DBAccountId,
     spendingBest :: !(Maybe BlockHeight),
     spendingLocks :: !(Map OutPoint CoinLock)
   }
 
--- | The spending rules of an account as the database has them now
-spendingOf :: (MonadUnliftIO m) => Network -> DBAccountId -> ExceptT String (DB m) Spending
-spendingOf net accId = do
+-- | The spending rules of a network as the database has them now
+spendingOf :: (MonadUnliftIO m) => Network -> ExceptT String (DB m) Spending
+spendingOf net = do
   heightM <- bestHeight net
   locks <- coinLocks net
-  return Spending {spendingNetwork = net, spendingAccount = accId, spendingBest = heightM, spendingLocks = locks}
+  return Spending {spendingNetwork = net, spendingBest = heightM, spendingLocks = locks}
 
 -- | The locks of the coins of a network: those the pending transactions
 -- spend, and those the user locked
@@ -364,16 +363,17 @@ coinLocks net = do
   byUser <- userLockedOutpoints net
   return $ Map.fromSet (const LockedByTransaction) byTransactions <> Map.fromSet (const LockedByUser) byUser
 
--- | Whether the builder may spend a coin of the account with at least the
--- given confirmations: nothing locks it, neither a pending transaction nor
--- the user, a coin from a coinbase has matured, and an unconfirmed coin
--- comes from a transaction the account trusts ('trustedTx'), its own
--- change. At zero confirmations, this says whether the coin can be spent
--- now: the spendable flag and balances.
+-- | Whether the builder may spend a coin with at least the given
+-- confirmations: nothing locks it, neither a pending transaction nor the
+-- user, a coin from a coinbase has matured, and an unconfirmed coin comes
+-- from a transaction the wallet trusts ('trustedTx'): one it made itself,
+-- whether the coin is its change or what one of its accounts paid another.
+-- At zero confirmations, this says whether the coin can be spent now: the
+-- spendable flag and balances.
 canSpend :: (MonadUnliftIO m) => Spending -> Natural -> OutPoint -> Store.BlockRef -> ExceptT String (DB m) Bool
 canSpend rules minConf outpoint block
   | confirmations < minConf || outpoint `Map.member` rules.spendingLocks = return False
-  | confirmations == 0 = trustedTx rules.spendingNetwork rules.spendingAccount outpoint.hash
+  | confirmations == 0 = trustedTx rules.spendingNetwork outpoint.hash
   | confirmations < coinbaseMaturity = not <$> isCoinbaseTx outpoint.hash
   | otherwise = return True
   where
@@ -383,7 +383,7 @@ canSpend rules minConf outpoint block
 -- as the store last reported them
 spendableCoins :: (MonadUnliftIO m) => Network -> Ctx -> DBAccountId -> Natural -> ExceptT String (DB m) [Store.Unspent]
 spendableCoins net ctx accId minConf = do
-  rules <- spendingOf net accId
+  rules <- spendingOf net
   coins <- liftEither . mapM (storedUnspent net ctx) =<< accountCoins accId
   filterM (\coin -> canSpend rules minConf coin.outpoint coin.block) coins
 
@@ -392,7 +392,7 @@ spendableCoins net ctx accId minConf = do
 -- a lock is not confirmed enough yet, or is a coinbase not yet mature.
 unspendableCoins :: (MonadUnliftIO m) => Network -> Ctx -> DBAccountId -> Natural -> ExceptT String (DB m) [(Store.Unspent, Maybe CoinLock)]
 unspendableCoins net ctx accId minConf = do
-  rules <- spendingOf net accId
+  rules <- spendingOf net
   coins <- liftEither . mapM (storedUnspent net ctx) =<< accountCoins accId
   held <- filterM (\coin -> not <$> canSpend rules minConf coin.outpoint coin.block) coins
   return [(coin, Map.lookup coin.outpoint rules.spendingLocks) | coin <- held]
@@ -404,14 +404,14 @@ unspendableCoins net ctx accId minConf = do
 -- left out.
 spendableAtAddresses :: (MonadUnliftIO m) => Network -> DBAccountId -> [Text] -> ExceptT String (DB m) (Map Text Word64)
 spendableAtAddresses net accId addrs = do
-  rules <- spendingOf net accId
+  rules <- spendingOf net
   coins <- balanceColumns accId (Just addrs)
   Map.fromListWith (+) <$> spendableValues rules coins
 
 -- | The value of all the coins of the account that can be spent now
 spendableBalance :: (MonadUnliftIO m) => Network -> DBAccountId -> ExceptT String (DB m) Word64
 spendableBalance net accId = do
-  rules <- spendingOf net accId
+  rules <- spendingOf net
   coins <- balanceColumns accId Nothing
   sum . map snd <$> spendableValues rules coins
 
@@ -501,22 +501,26 @@ isCoinbaseTx tid = maybe False coinbase <$> lookupRawTx tid
     -- A coinbase has a single input, which spends nothing
     coinbase tx = map (.outpoint) tx.inputs == [nullOutPoint]
 
--- | Whether the coins of a transaction of the account can be spent: it is
--- confirmed, or the account made it from coins that can be spent by this
--- same rule. Whoever pays the account can replace their transaction until
--- it confirms, which also undoes every transaction built on it. A
--- transaction the sync has not stored, or has found dead, is not trusted.
-trustedTx :: (MonadUnliftIO m) => Network -> DBAccountId -> TxHash -> ExceptT String (DB m) Bool
-trustedTx net accId tid = do
-  found <- liveSummary net accId tid
-  case found of
-    Just (block, summary)
-      | Store.confirmed block -> return True
-      | ownTransaction summary -> and <$> mapM (trustedTx net accId) (spentTxs summary)
-    _ -> return False
+-- | Whether the coins of a transaction can be spent before it confirms: it
+-- is confirmed, or the wallet made it ('walletTransaction') from coins that
+-- can be spent by this same rule. Whoever holds the keys of the inputs can
+-- replace the transaction until it confirms, which also undoes every
+-- transaction built on it. When the inputs are coins of the wallet's own
+-- accounts, that is the user: the change of a payment and what one account
+-- pays another are as safe as each other. A transaction the sync has not
+-- stored for every account that spends in it, or has found dead, is not
+-- trusted.
+trustedTx :: (MonadUnliftIO m) => Network -> TxHash -> ExceptT String (DB m) Bool
+trustedTx net tid = do
+  stored <- liveSummaries net tid
+  if any (Store.confirmed . fst) stored
+    then return True
+    else trustedUnconfirmed (snd <$> stored)
   where
-    spentTxs summary =
-      nubOrd [outpoint.hash | input <- Map.elems summary.summaryMyInputs, outpoint <- input.myInputsOutpoints]
+    -- The wallet made it, from transactions trusted by this same rule
+    trustedUnconfirmed summaries
+      | walletTransaction summaries = and <$> mapM (trustedTx net) (nubOrd (concatMap spentTxids summaries))
+      | otherwise = return False
 
 {- Locks of the user -}
 
@@ -577,7 +581,7 @@ userLockedCoins accId =
 shownCoin :: (MonadUnliftIO m) => Network -> DBCoin -> ExceptT String (DB m) (DBAccount, JsonCoin)
 shownCoin net row = do
   acc <- getAccountById (dBCoinAccount row)
-  rules <- spendingOf net (dBCoinAccount row)
+  rules <- spendingOf net
   coin <- toJsonCoin rules row
   return (acc, coin)
 

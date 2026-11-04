@@ -699,8 +699,9 @@ To restore a backup, replace `~/.hw/accounts.sqlite` with the copy, or point
   for good, for a fee too low to relay for example, keeps coming back until
   you delete it with `deletetx`.
 - **Unconfirmed payments from others cannot be spent.** The sender can still
-  replace them until they confirm. Only the unconfirmed change of your own
-  transactions can be spent.
+  replace them until they confirm. The unconfirmed coins of your own
+  transactions can be spent: their change, and what one of your accounts
+  pays another.
 - **`receive` stops after 20 unused addresses in a row.** A wallet restored
   from the mnemonic would not look further. Reuse one of them, or raise `gap`
   in the configuration file.

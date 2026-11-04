@@ -1036,8 +1036,9 @@ seed come together.
 The spendable balance is what the account can spend now. It leaves out the
 coins locked by a pending transaction or by lockcoin, the coinbase coins with
 fewer than 100 confirmations, and the unconfirmed payments from other wallets.
-The unconfirmed change of the wallet's own transactions counts. preparetx can
-spend all of it, unless --min-conf asks for confirmations.
+The unconfirmed coins of the wallet's own transactions count: its change, and
+what one of its accounts pays another. preparetx can spend all of it, unless
+--min-conf asks for confirmations.
 
 --verbose adds the fingerprint of the seed when known, how many receiving and
 change addresses the account has, when it was created, and the confirmed and
@@ -1563,7 +1564,7 @@ minConfOption =
       <> metavar "INT"
       <> value 0
       <> showDefault
-      <> help "The confirmations a coin needs to be spent. At 0, the unconfirmed change of the wallet's own transactions is spent, but no unconfirmed payment from others."
+      <> help "The confirmations a coin needs to be spent. At 0, the unconfirmed coins of the wallet's own transactions are spent, its change and what its accounts pay each other, but no unconfirmed payment from others."
 
 coinSelectionOption :: Args CoinSelection
 coinSelectionOption =
@@ -1867,9 +1868,10 @@ have no labels of their own. A coin at a change address says so, where the
 label of the address would be.
 
 A coin is spendable when the wallet can spend it now. Nothing locks it, a
-coinbase coin has 100 confirmations, and an unconfirmed coin is the change of
-a transaction of the wallet. The other coins become spendable once they
-confirm, or for a coinbase, once it matures.
+coinbase coin has 100 confirmations, and an unconfirmed coin comes from a
+transaction of the wallet: its change, or what another account of the wallet
+paid. The other coins become spendable once they confirm, or for a coinbase,
+once it matures.
 
 A pending transaction locks the coins it spends, until the network lists it or
 deletetx deletes it. You can also lock a coin yourself with lockcoin, until

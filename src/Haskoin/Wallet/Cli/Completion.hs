@@ -220,7 +220,7 @@ walletCoinsStarting named typed = do
   fmap concat . forM accounts $ \(accId, acc) -> do
     let net = accountNetwork acc
     rows <- fewEnough <$> coinsStarting accId (takeWhile isHexDigit (take 64 typed)) askedFor
-    listed <- fromRight [] <$> runExceptT (spendingOf net accId >>= \rules -> mapM (toJsonCoin rules) rows)
+    listed <- fromRight [] <$> runExceptT (spendingOf net >>= \rules -> mapM (toJsonCoin rules) rows)
     return [(net, coin) | coin <- listed, typed `isPrefixOf` coinText (jsonCoinOutpoint coin)]
 
 {- What label labels -}

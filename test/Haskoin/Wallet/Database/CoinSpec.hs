@@ -8,7 +8,8 @@
 -- confirmations, locks and whether they can be spent, and offered to the
 -- transaction builder when they can: confirmed enough, held by no pending
 -- transaction of their network, a coinbase matured, an unconfirmed coin
--- the account's own change. The balances the account and its addresses
+-- from a transaction of the wallet, the account's own change or what
+-- another account of the wallet paid it. The balances the account and its addresses
 -- can spend add up those coins, and so does the balance of the coins at
 -- each address that balances lists. The account of these tests is account
 -- 0 of the test wallet on Bitcoin.
@@ -72,6 +73,16 @@ spec = prepareContext $ \ctx -> do
 -- | The account of these tests
 account :: Ctx -> ExceptT String (DB IO) DBAccountId
 account ctx = fst <$> testNewAcc ctx "main"
+
+-- | Another account of the wallet, created after the account of these
+-- tests: account 1 of the test seed on Bitcoin, whose first receiving
+-- address is 'account1Addr'
+otherAccount :: Ctx -> ExceptT String (DB IO) DBAccountId
+otherAccount ctx = fst <$> testNewAcc ctx "savings"
+
+-- | The address of the other account these tests use, with its path
+otherAccountPaths :: Map Address SoftPath
+otherAccountPaths = Map.fromList [(account1Addr, Deriv :/ 0 :/ 0)]
 
 -- | The addresses of the account these tests use, with their derivation
 -- paths: the first two receiving addresses and the first two change
@@ -204,9 +215,15 @@ oddlyWrittenPayment =
 
 {- Transactions behind the coins -}
 
--- | Store the summary of a transaction of the store, as the sync does
+-- | Store the summary of a transaction of the store for the account of
+-- these tests, as the sync does
 summarise :: DBAccountId -> Store.Transaction -> ExceptT String (DB IO) ()
-summarise accId tx = void $ lift $ repsertSummary btc accId tx.txid tx.block (storeTime tx.timestamp) (storeSummary btc accountPaths tx)
+summarise = summariseFor accountPaths
+
+-- | Store the summary of a transaction of the store for an account whose
+-- addresses are given with their paths, as the sync does
+summariseFor :: Map Address SoftPath -> DBAccountId -> Store.Transaction -> ExceptT String (DB IO) ()
+summariseFor paths accId tx = void $ lift $ repsertSummary btc accId tx.txid tx.block (storeTime tx.timestamp) (storeSummary btc paths tx)
 
 -- | Transaction 1 confirmed at 800000: someone else pays the first payment
 firstPaymentTx :: Ctx -> Store.Transaction
@@ -234,6 +251,42 @@ paymentOnThirdTx ctx = spendingStoreTx ctx (fakeTxHash 9) (Store.MemRef 0) (fake
 -- | The change of transaction 9
 changeOnThird :: Ctx -> Store.Unspent
 changeOnThird ctx = storeCoin ctx (fakeTxHash 9, 1) Nothing (internalAddr 1) 9000
+
+-- | Transaction 10 in the mempool: the account pays 30000 to the other
+-- account from the confirmed first payment, with 19000 of change at the
+-- first change address
+paymentToOtherTx :: Ctx -> Store.Transaction
+paymentToOtherTx ctx = spendingStoreTx ctx (fakeTxHash 10) (Store.MemRef 0) (fakeTxHash 1, 0) (externalAddr 0) [(account1Addr, 30000), (internalAddr 0, 19000)]
+
+-- | The coin of the other account from transaction 10
+paidToOther :: Ctx -> Store.Unspent
+paidToOther ctx = storeCoin ctx (fakeTxHash 10, 0) Nothing account1Addr 30000
+
+-- | Transaction 11 in the mempool: the account pays 20000 to the other
+-- account from the unconfirmed third payment, with 9000 of change at the
+-- second change address
+paymentToOtherOnThirdTx :: Ctx -> Store.Transaction
+paymentToOtherOnThirdTx ctx = spendingStoreTx ctx (fakeTxHash 11) (Store.MemRef 0) (fakeTxHash 3, 0) (externalAddr 1) [(account1Addr, 20000), (internalAddr 1, 9000)]
+
+-- | The coin of the other account from transaction 11
+paidToOtherOnThird :: Ctx -> Store.Unspent
+paidToOtherOnThird ctx = storeCoin ctx (fakeTxHash 11, 0) Nothing account1Addr 20000
+
+-- | Transaction 12 in the mempool: the account and someone else pay the
+-- other account 69000 together, 50000 from the confirmed first payment and
+-- 20000 from a coin of theirs, with a fee of 1000
+jointPaymentToOtherTx :: Ctx -> Store.Transaction
+jointPaymentToOtherTx ctx =
+  storeTx
+    (fakeTxHash 12)
+    (Store.MemRef 0)
+    [inputFrom ctx (fakeTxHash 1, 0) (externalAddr 0) 50000, inputFrom ctx (fakeTxHash 24, 0) (otherAddr 1) 20000]
+    [outputTo ctx account1Addr 69000]
+    1000
+
+-- | The coin of the other account from transaction 12
+jointlyPaidToOther :: Ctx -> Store.Unspent
+jointlyPaidToOther ctx = storeCoin ctx (fakeTxHash 12, 0) Nothing account1Addr 69000
 
 -- | The coinbase of block 800000, paying the reward of 312500000 to the
 -- first receiving address. Its single input spends nothing and carries the
@@ -403,7 +456,7 @@ listingSpec ctx =
         spendingFirst ctx accId
         spendableFlags accId `dbShouldBeE` [(secondCoin, True), (firstCoin, False)]
 
-    it "marks an unconfirmed coin as spendable only when it is the account's own change" $
+    it "marks an unconfirmed coin as spendable only when the wallet made its transaction" $
       inDatabaseE $ do
         accId <- account ctx
         summarise accId (thirdPaymentTx ctx)
@@ -411,6 +464,16 @@ listingSpec ctx =
         summarise accId (ownPaymentTx ctx)
         _ <- refresh ctx accId [thirdPayment ctx, ownChange ctx]
         (sort <$> spendableFlags accId) `dbShouldBeE` [(thirdCoin, False), (OutPoint (fakeTxHash 8) 1, True)]
+
+    it "marks as spendable an unconfirmed coin another account of the wallet paid" $
+      inDatabaseE $ do
+        accId <- account ctx
+        otherId <- otherAccount ctx
+        summarise accId (firstPaymentTx ctx)
+        summarise accId (paymentToOtherTx ctx)
+        summariseFor otherAccountPaths otherId (paymentToOtherTx ctx)
+        _ <- refreshCoins btc ctx otherId [account1Addr] [paidToOther ctx]
+        spendableFlags otherId `dbShouldBeE` [(OutPoint (fakeTxHash 10) 0, True)]
 
     it "marks a coinbase as spendable once it has matured" $
       inDatabaseE $ do
@@ -590,6 +653,51 @@ spendableSpec ctx =
         summarise accId (paymentOnThirdTx ctx)
         _ <- refresh ctx accId [changeOnThird ctx]
         spendable ctx accId 0 `dbShouldBeE` []
+
+    -- Only the wallet can replace a payment between its accounts, as for
+    -- its change
+    it "offers at zero confirmations what another account of the wallet paid, as it offers the account's own change" $
+      inDatabaseE $ do
+        accId <- account ctx
+        otherId <- otherAccount ctx
+        summarise accId (firstPaymentTx ctx)
+        summarise accId (paymentToOtherTx ctx)
+        summariseFor otherAccountPaths otherId (paymentToOtherTx ctx)
+        _ <- refreshCoins btc ctx otherId [account1Addr] [paidToOther ctx]
+        spendable ctx otherId 0 `dbShouldBeE` [OutPoint (fakeTxHash 10) 0]
+        spendable ctx otherId 1 `dbShouldBeE` []
+
+    -- The payment is stored for the receiving account alone, as when the
+    -- paying account has not synced yet: nothing says its inputs are the
+    -- wallet's
+    it "holds back what another account paid until the sync has stored the payment for that account too" $
+      inDatabaseE $ do
+        accId <- account ctx
+        otherId <- otherAccount ctx
+        summarise accId (firstPaymentTx ctx)
+        summariseFor otherAccountPaths otherId (paymentToOtherTx ctx)
+        _ <- refreshCoins btc ctx otherId [account1Addr] [paidToOther ctx]
+        spendable ctx otherId 0 `dbShouldBeE` []
+
+    it "holds back what another account paid out of an unconfirmed coin someone else paid it" $
+      inDatabaseE $ do
+        accId <- account ctx
+        otherId <- otherAccount ctx
+        summarise accId (thirdPaymentTx ctx)
+        summarise accId (paymentToOtherOnThirdTx ctx)
+        summariseFor otherAccountPaths otherId (paymentToOtherOnThirdTx ctx)
+        _ <- refreshCoins btc ctx otherId [account1Addr] [paidToOtherOnThird ctx]
+        spendable ctx otherId 0 `dbShouldBeE` []
+
+    it "holds back what another account paid along with someone else, who can still undo the payment" $
+      inDatabaseE $ do
+        accId <- account ctx
+        otherId <- otherAccount ctx
+        summarise accId (firstPaymentTx ctx)
+        summarise accId (jointPaymentToOtherTx ctx)
+        summariseFor otherAccountPaths otherId (jointPaymentToOtherTx ctx)
+        _ <- refreshCoins btc ctx otherId [account1Addr] [jointlyPaidToOther ctx]
+        spendable ctx otherId 0 `dbShouldBeE` []
 
     it "offers each coin as the store last reported it" $
       inDatabaseE $ do
@@ -937,7 +1045,7 @@ rowSpec ctx =
         accId <- account ctx
         refreshed <- refresh ctx accId [confirmedPayment ctx]
         row <- liftMaybe "The coin is not stored" $ listToMaybe (insertedCoins refreshed)
-        let rules = Spending btc accId (Just 800002) Map.empty
+        let rules = Spending btc (Just 800002) Map.empty
             shown = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True "" "" False
         toJsonCoin rules row `dbShouldBeE` shown
         toJsonCoin rules {spendingLocks = Map.fromList [(firstCoin, LockedByTransaction)]} row

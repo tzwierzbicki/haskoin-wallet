@@ -31,6 +31,7 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust)
 import qualified Data.Serialize as S
+import qualified Data.Set as Set
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -133,6 +134,21 @@ ownTransaction summary =
   not (Map.null (summaryMyInputs summary))
     && Map.null (summaryOtherInputs summary)
     && null (summaryNonStdInputs summary)
+
+-- | Whether the wallet made the transaction, as its summaries for each of
+-- the accounts it involves tell: every input spends a coin of one of them.
+-- An input one account sees as another's must be one another account of
+-- the wallet spends, so the summary of every account that spends in the
+-- transaction must be among them. With the summary of one account alone,
+-- this is 'ownTransaction'.
+walletTransaction :: [TxSummary] -> Bool
+walletTransaction summaries = not (Set.null spentByWallet) && all spendsWalletCoinsOnly summaries
+  where
+    -- The addresses the accounts spend from, all together
+    spentByWallet = Set.unions [Map.keysSet (summaryMyInputs summary) | summary <- summaries]
+    spendsWalletCoinsOnly summary =
+      Map.keysSet (summaryOtherInputs summary) `Set.isSubsetOf` spentByWallet
+        && null (summaryNonStdInputs summary)
 
 -- | The type of a transaction, from what the account gains or loses and
 -- the fee: a loss of exactly the fee moved money between its own addresses
@@ -495,6 +511,26 @@ liveSummary net accId tid = do
   forM (mfilter (not . dBTxInfoDead) rowM) $ \row -> do
     ref <- liftEither $ S.decode (dBTxInfoBlockRef row)
     summary <- liftEither $ decodeSummary net tid (dBTxInfoBlob row)
+    return (ref, summary)
+
+-- | The stored summaries of a live transaction, one for each account of
+-- the network the sync has stored it for, each with its block: none when
+-- the sync has stored it for no account, or found it dead for each. A
+-- transaction from before the fork of Bitcoin Cash has the same id on both
+-- chains, so the accounts of the other network are left out.
+liveSummaries :: (MonadUnliftIO m) => Network -> TxHash -> ExceptT String (DB m) [(Store.BlockRef, TxSummary)]
+liveSummaries net tid = do
+  rows <-
+    lift . select . from $ \(t `InnerJoin` a) -> do
+      on $ t ^. DBTxInfoAccount ==. a ^. DBAccountId
+      where_ $
+        t ^. DBTxInfoTxid ==. val (hashBytes tid)
+          &&. t ^. DBTxInfoDead ==. val False
+          &&. a ^. DBAccountNetwork ==. val (cs net.name)
+      return (t ^. DBTxInfoBlockRef, t ^. DBTxInfoBlob)
+  forM rows $ \(Value refBytes, Value blob) -> do
+    ref <- liftEither $ S.decode refBytes
+    summary <- liftEither $ decodeSummary net tid blob
     return (ref, summary)
 
 -- | A summary as the database stores it
