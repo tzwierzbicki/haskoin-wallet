@@ -18,6 +18,14 @@ and outputs, if any.
 | `hw-regression.json` | Produced by hw itself (regression vectors) |
 | `edge-cases.json` | Sweeps that hw must refuse to sign, with the exact error |
 
+The vectors taken from other projects stay under the licenses of those
+projects. The public-domain dedication of hw's
+[UNLICENSE](../../../UNLICENSE) does not cover them. The device tests of the
+Trezor firmware are under the GPL version 3, the tests of the Ledger Bitcoin
+app under the Apache License 2.0, and bitcoinjs-lib and Electrum under the
+MIT license. The `source` and `sourceUrl` of a vector say where it came
+from.
+
 Verify the vectors with the tools of the signing vectors:
 
 ```sh

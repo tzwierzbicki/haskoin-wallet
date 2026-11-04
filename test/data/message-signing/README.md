@@ -24,6 +24,14 @@ in each `sourceUrl`. All vectors were independently verified with Bitcoin Core
 implementation of the format. The scripts that verify the vectors, and how to
 add one, are in [tools/](tools/README.md).
 
+The vectors taken from other projects stay under the licenses of those
+projects. The public-domain dedication of hw's
+[UNLICENSE](../../../UNLICENSE) does not cover them. Bitcoin Core, Electrum
+and bitcoinjs-message are under the MIT license, python-bitcoinlib under the
+LGPL version 3 or later, and the device tests of the Trezor firmware under
+the GPL version 3. The `source` and `sourceUrl` of a vector say where it
+came from.
+
 ## Format
 
 Each file is a JSON object with a `description` and up to four lists:

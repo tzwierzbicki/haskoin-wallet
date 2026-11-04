@@ -1,4 +1,4 @@
-cabal-version: 1.12
+cabal-version: 2.2
 
 -- This file has been generated from package.yaml by hpack version 0.39.6.
 --
@@ -13,7 +13,7 @@ homepage:       http://github.com/jprupp/haskoin-wallet
 bug-reports:    http://github.com/jprupp/haskoin-wallet/issues
 author:         JP Rupp
 maintainer:     jprupp@protonmail.ch
-license:        PublicDomain
+license:        Unlicense
 license-file:   UNLICENSE
 build-type:     Simple
 extra-source-files:
@@ -103,6 +103,8 @@ library
       Haskoin.Wallet.Util
   other-modules:
       Paths_haskoin_wallet
+  autogen-modules:
+      Paths_haskoin_wallet
   hs-source-dirs:
       src
   ghc-options: -Wall
@@ -160,6 +162,8 @@ library
 executable hw
   main-is: Main.hs
   other-modules:
+      Paths_haskoin_wallet
+  autogen-modules:
       Paths_haskoin_wallet
   hs-source-dirs:
       app
@@ -281,6 +285,8 @@ test-suite spec
       Haskoin.Wallet.Workflow.SigningSpec
       Haskoin.Wallet.Workflow.SweepSpec
       Haskoin.Wallet.Workflow.TestUtils
+      Paths_haskoin_wallet
+  autogen-modules:
       Paths_haskoin_wallet
   hs-source-dirs:
       test
