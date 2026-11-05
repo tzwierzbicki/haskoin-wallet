@@ -7,12 +7,11 @@
 -- or with NO_COLOR set, the document is printed plain.
 --
 -- A colour means one thing everywhere. Cyan is a command, and magenta is
--- secret: a command that asks for a mnemonic or private keys, or the
--- mnemonic itself. Green is an option, an amount coming in, or a state as
--- it should be. Red is an amount going out, or something wrong. Yellow
--- waits for something. Faint is secondary, such as the name of a field,
--- and bold is a title or a name. The text itself keeps the colour of the
--- terminal.
+-- a command that asks for a mnemonic or private keys. Green is an option,
+-- an amount coming in, or a state as it should be. Red is an amount going
+-- out, or something wrong. Yellow waits for something. Faint is secondary,
+-- such as the name of a field, and bold is a title, a name or the words of
+-- a mnemonic. The text itself keeps the colour of the terminal.
 --
 -- The colours are the dull ANSI ones. Most terminal themes make them
 -- readable on a light background as well as on a dark one, which the vivid
@@ -63,8 +62,8 @@ data Style
     Field
   | -- | An account, by its name
     Account
-  | -- | The words of a mnemonic. They are secret, as the commands that ask
-    -- for them are offline.
+  | -- | The words of a mnemonic or of a share. They keep the colour of the
+    -- terminal, which reads well on any theme.
     Secret
   | -- | The hash by which the commands name a pending transaction: its
     -- nosigHash, or its txid once it is signed
@@ -101,7 +100,7 @@ sgrOf = \case
   -- The name is less than its value, as a metavar is less than the text
   Field -> [faint]
   Account -> [bold]
-  Secret -> [bold, foreground Magenta]
+  Secret -> [bold]
   PendingHash -> [bold]
   UserText -> [SetItalicized True]
   Incoming -> [foreground Green]
