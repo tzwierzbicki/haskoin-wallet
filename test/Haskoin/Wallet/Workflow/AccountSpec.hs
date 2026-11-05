@@ -1048,7 +1048,7 @@ backupSpec =
         createMain home
         let copy = home </> "missing" </> "copy.sqlite"
         (errorOf <$> hwJson home ["backup", copy] [])
-          `shouldReturn` Right ("The database could not be copied to " <> Text.pack copy <> ": the file could not be created")
+          `shouldReturn` Right ("The database could not be copied to " <> Text.pack copy <> ": no such file or directory")
 
     it "is copied by backup into the backups of hw without a file" $
       withHome $ \home -> do

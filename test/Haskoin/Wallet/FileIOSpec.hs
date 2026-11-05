@@ -4,8 +4,9 @@
 -- read or write: the file, with the reason the system or the decoder gives
 module Haskoin.Wallet.FileIOSpec (spec) where
 
-import Control.Exception (finally)
+import Control.Exception (ErrorCall (..), finally, throwIO)
 import Data.Aeson (Value, object, (.=))
+import Data.Bits ((.&.))
 import Data.List (isPrefixOf)
 import Data.Text (Text)
 import Haskoin (btc)
@@ -14,6 +15,7 @@ import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.TestUtils (inScratchDirectory)
 import System.Directory (createDirectory, getPermissions, listDirectory, setOwnerWritable, setPermissions)
 import System.FilePath ((</>))
+import System.Posix.Files (fileMode, getFileStatus)
 import Test.Hspec
 
 -- | A document of the tests
@@ -66,12 +68,60 @@ spec = do
         result <- readMarshalFile btc file :: IO (Either String JsonCoin)
         result `shouldSatisfy` failsWith ("The file " <> file <> " could not be read: ")
 
-  describe "A JSON file that cannot be written" $
+  describe "A JSON file that cannot be written" $ do
     it "is named, with the reason: its directory does not exist" $
       inScratchDirectory $ \dir -> do
         let file = dir </> "missing" </> "doc.json"
         writeJsonFile file document
           `shouldReturn` Left ("The file " <> file <> " could not be written: no such file or directory")
+
+    -- The path was free when the command checked it, and a file took it
+    -- while the command did its work
+    it "is named, with the reason, when a file took its path, which is kept" $
+      inScratchDirectory $ \dir -> do
+        let file = dir </> "doc.json"
+        writeFile file "kept"
+        writeJsonFile file document
+          `shouldReturn` Left ("The file " <> file <> " could not be written: file exists")
+        readFile file `shouldReturn` "kept"
+
+    it "is named, with the reason: a directory stands at its path" $
+      inScratchDirectory $ \dir -> do
+        let file = dir </> "doc.json"
+        createDirectory file
+        writeJsonFile file document
+          `shouldReturn` Left ("The file " <> file <> " could not be written: is a directory")
+
+  describe "A new file" $ do
+    -- It is written next to its path, then takes it
+    it "leaves no other file next to it" $
+      inScratchDirectory $ \dir -> do
+        writeJsonFile (dir </> "doc.json") document `shouldReturn` Right ()
+        listDirectory dir `shouldReturn` ["doc.json"]
+
+    it "is its owner's alone to read and write" $
+      inScratchDirectory $ \dir -> do
+        let file = dir </> "doc.json"
+        writeJsonFile file document `shouldReturn` Right ()
+        -- The permission bits of rw-------
+        (.&. 0o777) . fileMode <$> getFileStatus file `shouldReturn` 0o600
+
+    it "is not left at its path, nor next to it, when it could not be filled" $
+      inScratchDirectory $ \dir -> do
+        let file = dir </> "doc.json"
+        placeFile AtFreePath file (\_ -> throwIO (ErrorCall "no contents"))
+          `shouldThrow` (== ErrorCall "no contents")
+        listDirectory dir `shouldReturn` []
+
+  describe "A file replaced" $
+    it "is left as it was when the new one could not be filled" $
+      inScratchDirectory $ \dir -> do
+        let file = dir </> "doc.json"
+        writeJsonFile file document `shouldReturn` Right ()
+        placeFile InPlaceOfFile file (\_ -> throwIO (ErrorCall "no contents"))
+          `shouldThrow` (== ErrorCall "no contents")
+        readJsonFile file `shouldReturn` Right document
+        listDirectory dir `shouldReturn` ["doc.json"]
 
   -- As signtx and signsweep replace the --input file with the signed
   -- transaction

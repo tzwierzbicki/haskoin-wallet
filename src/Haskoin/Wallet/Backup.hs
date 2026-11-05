@@ -11,14 +11,15 @@ module Haskoin.Wallet.Backup
   )
 where
 
-import Control.Exception (bracket, catch)
+import Control.Exception (bracket, try)
 import Control.Monad (void)
+import Data.Bifunctor (first)
 import Data.String.Conversions (cs)
 import Data.Time (ZonedTime, defaultTimeLocale, formatTime, getZonedTime)
 import Database.Persist.Sql (PersistValue (PersistText))
 import qualified Database.Sqlite as Sqlite
 import Haskoin.Wallet.Config (hwDataDirectory)
-import Haskoin.Wallet.FileIO (systemReason)
+import Haskoin.Wallet.FileIO (Placement (..), placeFile, systemReason)
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeBaseName, (</>))
 
@@ -64,16 +65,24 @@ backupName database version time =
 -- copy itself, so that it is complete and consistent whatever the state of
 -- the file: hw keeps a write-ahead log, whose pages a plain copy of the file
 -- would miss, and a connection of hw may be open while the copy is made.
--- A copy that fails is a message, and closes what it opened.
+-- SQLite writes it into a new file next to the copy, which takes the
+-- copy's name once it is whole and on the disk ('placeFile'), since
+-- SQLite does not put it there itself. A copy that fails is a message,
+-- closes what it opened, and leaves no file behind.
 copyDatabase :: FilePath -> FilePath -> IO (Either String ())
-copyDatabase database copy = (Right <$> vacuumInto) `catch` (return . Left . couldNotCopy)
+copyDatabase database copy = do
+  placed <- systemReason (try (placeFile AtFreePath copy vacuumInto) :: IO (Either Sqlite.SqliteException ()))
+  return $ first couldNotCopy (placed >>= first sqliteReason)
   where
-    vacuumInto =
+    vacuumInto :: FilePath -> IO ()
+    vacuumInto new =
       bracket (Sqlite.open (cs database)) Sqlite.close $ \connection ->
         bracket (Sqlite.prepare connection "vacuum into ?") Sqlite.finalize $ \statement -> do
-          Sqlite.bind statement [PersistText (cs copy)]
+          Sqlite.bind statement [PersistText (cs new)]
           void $ Sqlite.step statement
-    couldNotCopy e = "The database could not be copied to " <> copy <> ": " <> reason (Sqlite.seError e)
-    reason Sqlite.ErrorCan'tOpen = "the file could not be created"
-    reason Sqlite.ErrorFull = "the disk is full"
-    reason other = show other
+    couldNotCopy why = "The database could not be copied to " <> copy <> ": " <> why
+    sqliteReason e = case Sqlite.seError e of
+      Sqlite.ErrorFull -> "the disk is full"
+      -- The name persistent-sqlite gives SQLite's "file is not a database"
+      Sqlite.ErrorNotAConnection -> "it is not an SQLite database"
+      other -> show other

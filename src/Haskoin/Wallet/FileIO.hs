@@ -6,11 +6,13 @@
 -- | The files hw reads and writes: the bytes of a transaction file, and
 -- JSON documents, written pretty-printed so that a user can read them, at a
 -- path that must be free, or in place of a file the user agreed to replace.
--- A file that cannot be read or written is a message naming it, with the
--- reason the system gives, never an exception.
+-- Every file is written whole next to its path first, and put on the disk,
+-- before it takes the path in one step ('placeFile'): a crash leaves no
+-- part of a file behind. A file that cannot be read or written is a
+-- message naming it, with the reason the system gives, never an exception.
 module Haskoin.Wallet.FileIO where
 
-import Control.Exception (onException, try)
+import Control.Exception (bracket, catch, onException, throwIO, try)
 import Control.Monad
 import Control.Monad.Except
 import Control.Monad.Reader (MonadIO (..))
@@ -28,9 +30,14 @@ import Haskoin.Wallet.Util
 import qualified System.Directory as D
 import System.FilePath (takeDirectory, takeFileName)
 import System.IO (hClose, openBinaryTempFile)
+import System.IO.Error (isAlreadyExistsError)
+import System.Posix.IO (OpenFileFlags (..), OpenMode (..), closeFd, defaultFileFlags, openFd)
+import System.Posix.Unistd (fileSynchronise)
 
 {- Paths -}
 
+-- | Refuse a path that is taken, before a command does its work. The write
+-- checks again, since a file can take the path in the meantime.
 checkPathFree :: (MonadIO m) => FilePath -> ExceptT String m ()
 checkPathFree path = do
   exist <- liftIO $ D.doesPathExist path
@@ -56,22 +63,85 @@ couldNotRead file reason = "The file " <> file <> " could not be read: " <> reas
 couldNotWrite :: FilePath -> String -> String
 couldNotWrite file reason = "The file " <> file <> " could not be written: " <> reason
 
+{- Writing a file -}
+
+-- | Where a file is written
+data Placement
+  = -- | At a path that must be free. A file that took the path since it
+    -- was checked is not written over.
+    AtFreePath
+  | -- | In place of the file at the path, which the user agreed to
+    -- replace
+    InPlaceOfFile
+  deriving (Eq, Show)
+
+-- | Write a file: the given action fills a new file next to its path,
+-- whose contents are put on the disk before it takes the path in one
+-- step, and the directory is put on the disk after, so that a crash
+-- leaves either the whole file or none of it. A free path is taken first,
+-- with an empty file, so that no file written there in the meantime is
+-- lost: a crash before the step leaves that empty file. A write that fails
+-- is the exception of the system, and leaves nothing behind. The file can
+-- be read and written by its owner alone, the mode a new file is made
+-- with.
+placeFile :: Placement -> FilePath -> (FilePath -> IO ()) -> IO ()
+placeFile placement file fill = do
+  claimed <- case placement of
+    AtFreePath -> True <$ claimPath file
+    InPlaceOfFile -> return False
+  let unclaim = when claimed $ ignoringFailure (D.removeFile file)
+  new <- newFileNextTo file `onException` unclaim
+  (fill new >> syncFile new >> D.renameFile new file)
+    `onException` (ignoringFailure (D.removeFile new) >> unclaim)
+  syncDirectory (takeDirectory file)
+
+-- | Take a path with an empty file, which the file written replaces. The
+-- system refuses with "file exists" when the path is taken, of a
+-- directory too: hw says "is a directory" of one, as it would of a
+-- write into it.
+claimPath :: FilePath -> IO ()
+claimPath file = create `catch` taken
+  where
+    create = closeFd =<< openFd file WriteOnly defaultFileFlags {creat = Just 0o600, exclusive = True}
+    taken e
+      | isAlreadyExistsError e = do
+          isDirectory <- D.doesDirectoryExist file
+          throwIO $ if isDirectory then e {ioe_description = "is a directory"} else e
+      | otherwise = throwIO e
+
+-- | A new, empty file next to the given one, named after it, that no
+-- other process can have made or opened
+newFileNextTo :: FilePath -> IO FilePath
+newFileNextTo file = do
+  (new, h) <- openBinaryTempFile (takeDirectory file) (takeFileName file)
+  new <$ hClose h
+
+-- | Put the contents of a file on the disk
+syncFile :: FilePath -> IO ()
+syncFile file = bracket (openFd file ReadOnly defaultFileFlags) closeFd fileSynchronise
+
+-- | Put the entries of a directory on the disk, so that a file just made
+-- or moved there is found after a crash. A filesystem that cannot sync a
+-- directory, or a directory hw cannot open, is no reason to refuse a
+-- write that went through: the failure is ignored, as SQLite ignores it.
+syncDirectory :: FilePath -> IO ()
+syncDirectory dir = ignoringFailure $ bracket (openFd dir ReadOnly defaultFileFlags) closeFd fileSynchronise
+
+-- | An action whose failure is not reported: the cleanup after a write
+-- that failed, which must not hide the reason, and the sync of a directory
+ignoringFailure :: IO () -> IO ()
+ignoringFailure action = void (try action :: IO (Either IOException ()))
+
 {- Files of bytes -}
 
--- | Write bytes to a file, or say why they could not be written
+-- | Write bytes to a new file, or say why they could not be written
 writeFileBytes :: FilePath -> ByteString -> IO (Either String ())
-writeFileBytes file bytes = first (couldNotWrite file) <$> systemReason (C8.writeFile file bytes)
+writeFileBytes file bytes = first (couldNotWrite file) <$> systemReason (placeFile AtFreePath file (`C8.writeFile` bytes))
 
--- | Replace a file with bytes, or say why it could not be replaced. The
--- bytes are written to a new file next to it first, which then takes its
--- place: a write that fails leaves the file as it was.
+-- | Replace a file with bytes, or say why it could not be replaced: a
+-- write that fails leaves the file as it was
 replaceFileBytes :: FilePath -> ByteString -> IO (Either String ())
-replaceFileBytes file bytes = first (couldNotWrite file) <$> systemReason replace
-  where
-    replace = do
-      (new, h) <- openBinaryTempFile (takeDirectory file) (takeFileName file)
-      let write = C8.hPut h bytes >> hClose h >> D.renameFile new file
-      write `onException` (hClose h >> D.removeFile new)
+replaceFileBytes file bytes = first (couldNotWrite file) <$> systemReason (placeFile InPlaceOfFile file (`C8.writeFile` bytes))
 
 -- | Read the bytes of a file, or say why they could not be read
 readFileBytes :: FilePath -> IO (Either String ByteString)
@@ -105,9 +175,9 @@ readTextFile file = do
   where
     decoded = either (const $ Left "The file is not UTF-8 text") Right . decodeUtf8'
 
--- | Write a text file as UTF-8, or say why it could not be written
+-- | Write a new text file as UTF-8, or say why it could not be written
 writeTextFile :: FilePath -> Text -> IO (Either String ())
-writeTextFile file content = first (couldNotWrite file) <$> systemReason (C8.writeFile file (encodeUtf8 content))
+writeTextFile file content = writeFileBytes file (encodeUtf8 content)
 
 writeMarshalFile :: (MarshalJSON s a) => s -> FilePath -> a -> IO (Either String ())
 writeMarshalFile s file a = writeJsonFile file $ marshalValue s a

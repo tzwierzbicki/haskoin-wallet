@@ -766,8 +766,10 @@ To restore a backup, replace `~/.hw/accounts.sqlite` with the copy, or point
 - **A message is signed byte for byte.** A space or a line break added at either
   end makes the signature fail. `hw` warns about them.
 - **`hw` never overwrites a file.** `--output` and `backup` refuse a file that
-  exists. `signtx` and `signsweep` replace their `--input` file only when you
-  agree.
+  exists, even one that appeared while the command ran. `signtx` and
+  `signsweep` replace their `--input` file only when you agree. A file `hw`
+  writes is whole on the disk before it takes its name, so a crash or a power
+  loss leaves no half-written file, and it is readable by its owner alone.
 - **One command at a time.** A second `hw` command on the same database stops
   with "The database is in use by another hw command".
 - **The public server takes one request at a time.** Keep `parallel-requests`

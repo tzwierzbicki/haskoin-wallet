@@ -18,6 +18,7 @@ import Haskoin.Wallet.Migration (latestDatabaseVersion)
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.TestUtils
 import qualified Haskoin.Wallet.Schema.V2 as V2
+import System.Directory (listDirectory)
 import System.FilePath (takeDirectory, takeFileName, (</>))
 import Test.Hspec
 
@@ -41,6 +42,15 @@ spec = do
         takeFileName copy `shouldSatisfy` \name -> "accounts-version-2-" `isPrefixOf` name && ".sqlite" `isSuffixOf` name
         inDatabaseFile copy storedVersions `shouldReturn` [(PersistText "0.9", "text")]
         inDatabaseFile copy (tableRows "d_b_wallet") `shouldReturn` [[PersistText "892eb8e4"]]
+
+    -- SQLite writes the copy next to its path, and it then takes the path
+    it "leaves no other file next to it" $
+      inScratchDirectory $ \dir -> do
+        let database = dir </> "accounts.sqlite"
+            backups = dir </> "backups"
+        inDatabaseFile database $ createTables V2.migrateAll
+        copy <- either fail return =<< backupDatabase database backups 2
+        listDirectory backups `shouldReturn` [takeFileName copy]
 
     it "includes the rows still in the write-ahead log" $
       inScratchDirectory $ \dir -> do
@@ -93,7 +103,16 @@ spec = do
             copy = dir </> "missing" </> "copy.sqlite"
         inDatabaseFile database $ createTables migrateAll
         cmdBackup (configUsing database) (Just copy)
-          `shouldReturn` ResponseError (cs $ "The database could not be copied to " <> copy <> ": the file could not be created")
+          `shouldReturn` ResponseError (cs $ "The database could not be copied to " <> copy <> ": no such file or directory")
+
+    it "says why it could not copy a file that is not a database, and leaves no file behind" $
+      inScratchDirectory $ \dir -> do
+        let database = dir </> "accounts.sqlite"
+            copy = dir </> "copy.sqlite"
+        writeFile database "not a database\n"
+        cmdBackup (configUsing database) (Just copy)
+          `shouldReturn` ResponseError (cs $ "The database could not be copied to " <> copy <> ": it is not an SQLite database")
+        listDirectory dir `shouldReturn` ["accounts.sqlite"]
 
 -- | The configuration of an hw whose database is the given file
 configUsing :: FilePath -> Config

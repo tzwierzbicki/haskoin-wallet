@@ -154,7 +154,7 @@ library
     , time >=1.12.2
     , transformers >=0.5.6.2
     , unicode-transforms >=0.4
-    , unix >=2.7
+    , unix >=2.8
     , unliftio >=0.2.10
     , unordered-containers >=0.2.10.0
     , wreq >=0.5.3.2
@@ -215,7 +215,7 @@ executable hw
     , time >=1.12.2
     , transformers >=0.5.6.2
     , unicode-transforms >=0.4
-    , unix >=2.7
+    , unix >=2.8
     , unliftio >=0.2.10
     , unordered-containers >=0.2.10.0
     , wreq >=0.5.3.2
@@ -344,7 +344,7 @@ test-suite spec
     , transformers >=0.5.6.2
     , typed-process >=0.2.6
     , unicode-transforms >=0.4
-    , unix >=2.7
+    , unix >=2.8
     , unliftio >=0.2.10
     , unordered-containers >=0.2.10.0
     , wai >=3.2
