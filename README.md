@@ -710,6 +710,11 @@ To restore a backup, replace `~/.hw/accounts.sqlite` with the copy, or point
 - **The mnemonic is the only key to the funds.** `hw` never stores it. Without
   the database, the mnemonic still spends the funds, and `recover` finds the
   accounts again. Without the mnemonic, the funds are lost.
+- **The mnemonic is in memory while a command runs.** `hw` cannot wipe it
+  from there, so it protects its memory as a whole. It writes no core file
+  when it crashes. On Linux, no other program of yours can read its memory or
+  attach to it as a debugger. The administrator of the computer still can.
+  Type a mnemonic on an offline computer if you can.
 - **A backup in shares is not a mnemonic.** A wallet that reads [SLIP39]
   shares restores it. One that reads only BIP39 mnemonics cannot. Its
   passphrase has printable ASCII characters only.

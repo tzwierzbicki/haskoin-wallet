@@ -195,7 +195,15 @@ readMnemonic typed
 data SeedWords
   = MnemonicWords !Mnemonic
   | BackupShares !EncryptedMasterSecret
-  deriving (Eq, Show)
+  deriving (Eq)
+
+-- | The words of a mnemonic and the bytes of a backup are not shown. They
+-- are the secret of the seed, short of its passphrase.
+instance Show SeedWords where
+  showsPrec d typed =
+    showParen (d > 10) $ case typed of
+      MnemonicWords _ -> showString "MnemonicWords <redacted>"
+      BackupShares backup -> showString "BackupShares " . showsPrec 11 backup
 
 -- | What the first words typed are: a mnemonic, or a share of a backup.
 -- The number of words tells: a mnemonic has 12, 15, 18, 21 or 24, and no

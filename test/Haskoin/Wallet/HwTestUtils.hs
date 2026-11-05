@@ -15,6 +15,7 @@ module Haskoin.Wallet.HwTestUtils
     setChangeBack,
     hw,
     hwWithEnv,
+    whileHwWaitsAt,
     centralEurope,
     hwJson,
     tabAfter,
@@ -63,7 +64,10 @@ import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.Environment (getExecutablePath)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
-import System.Process.Typed (byteStringInput, proc, readProcess, setEnv, setStdin, setWorkingDir)
+import qualified System.IO as IO
+import System.Posix.Types (ProcessID)
+import qualified System.Process as Process
+import System.Process.Typed (byteStringInput, createPipe, getStderr, nullStream, proc, readProcess, setEnv, setStderr, setStdin, setStdout, setWorkingDir, unsafeProcessHandle, withProcessTerm)
 import System.Timeout (timeout)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
@@ -154,6 +158,38 @@ hwWithEnv extra home args typed = do
   case done of
     Nothing -> fail $ "hw " <> unwords args <> " did not finish within a minute"
     Just (code, out, err) -> return $ Run code (decodeUtf8 (BL.toStrict out)) (decodeUtf8 (BL.toStrict err))
+
+-- | Run hw in a home and look at its process while it waits for a line to
+-- be typed. The test gets the id of the process once hw has shown the
+-- prompt given on its error output. Nothing is ever typed, and hw is
+-- stopped when the test is done. A prompt that does not show within a
+-- minute fails the test.
+whileHwWaitsAt :: FilePath -> [String] -> Text -> (ProcessID -> IO a) -> IO a
+whileHwWaitsAt home args prompt look = do
+  binary <- hwBinary
+  let process =
+        setStdin createPipe
+          . setStdout nullStream
+          . setStderr createPipe
+          . setEnv [("HOME", home)]
+          . setWorkingDir home
+          $ proc binary args
+  withProcessTerm process $ \running -> do
+    shown <- timeout 60000000 (shownUpToPrompt (getStderr running) BS.empty)
+    pid <- Process.getPid (unsafeProcessHandle running)
+    case (shown, pid) of
+      (Just seen, Just waiting) | asked seen -> look waiting
+      (Just seen, _) -> fail $ "hw " <> unwords args <> " ended without asking, after: " <> show seen
+      (Nothing, _) -> fail $ "hw " <> unwords args <> " did not ask within a minute"
+  where
+    asked seen = encodeUtf8 prompt `BS.isInfixOf` seen
+    -- A prompt ends with no new line, so the output is read as it comes
+    shownUpToPrompt :: IO.Handle -> BS.ByteString -> IO BS.ByteString
+    shownUpToPrompt output seen
+      | asked seen = return seen
+      | otherwise = do
+          more <- BS.hGetSome output 4096
+          if BS.null more then return seen else shownUpToPrompt output (seen <> more)
 
 -- | The arguments the completion script of bash passes hw when Tab is
 -- pressed after the words typed after hw. They are the index of the last

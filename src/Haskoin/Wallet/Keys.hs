@@ -200,11 +200,20 @@ taprootAddress ctx key =
 
 {- The keys of an account -}
 
+-- | A mnemonic and its passphrase
 data MnemonicPass = MnemonicPass
   { mnemonicWords :: !Text,
     mnemonicPass :: !Text
   }
-  deriving (Eq, Show)
+  deriving (Eq)
+
+-- | The words and the passphrase are not shown. Together they give every
+-- key of the seed. A value that ends up in a log, in an error message or
+-- in the output of a failed test must not reveal them.
+instance Show MnemonicPass where
+  showsPrec d _ =
+    showParen (d > 10) $
+      showString "MnemonicPass {mnemonicWords = <redacted>, mnemonicPass = <redacted>}"
 
 -- | The path of an account of a kind: m/purpose'/coin'/account', with the
 -- purpose of the kind and the coin type of the network
@@ -260,7 +269,16 @@ typedMasterKey mnem = do
 data SeedSecret
   = MnemonicSecret !MnemonicPass
   | SharesSecret !EncryptedMasterSecret !Text
-  deriving (Eq, Show)
+  deriving (Eq)
+
+-- | Nothing secret is shown. The mnemonic, the bytes of the backup and the
+-- passphrase are left out. The kind of secret and the identifier of a
+-- backup stay, since neither is secret.
+instance Show SeedSecret where
+  showsPrec d secret =
+    showParen (d > 10) $ case secret of
+      MnemonicSecret mnem -> showString "MnemonicSecret " . showsPrec 11 mnem
+      SharesSecret backup _ -> showString "SharesSecret " . showsPrec 11 backup . showString " <redacted>"
 
 -- | The master key of a seed, from its secret. A mnemonic gives the one of
 -- BIP39 ('masterKey'). A backup in shares gives the one of SLIP-39: the

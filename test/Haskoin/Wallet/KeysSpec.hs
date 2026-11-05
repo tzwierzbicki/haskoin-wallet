@@ -29,6 +29,7 @@ spec :: Spec
 spec = do
   sweepKeysSpec
   chainPathSpec
+  shownSecretSpec
   prepareContext $ \ctx -> do
     knownWalletsSpec ctx
     leadingZeroSpec ctx
@@ -251,6 +252,30 @@ sharesSeedSpec ctx = do
 
     it "has none for a passphrase normalizing leaves as it is" $
       fmap (fmap (fingerprintToText . seedFingerprint)) (secretTypedSeed ctx (MnemonicSecret testMnemonic)) `shouldBe` Right Nothing
+
+{- A secret, shown -}
+
+-- | The secret of a seed as a log, an error message or a failed test would
+-- print it
+shownSecretSpec :: Spec
+shownSecretSpec =
+  describe "The secret of a seed, shown" $ do
+    it "hides the words and the passphrase of a mnemonic" $
+      show testMnemonic `shouldBe` "MnemonicPass {mnemonicWords = <redacted>, mnemonicPass = <redacted>}"
+
+    it "hides the mnemonic a command asked for" $
+      show (MnemonicSecret testMnemonic)
+        `shouldBe` "MnemonicSecret (MnemonicPass {mnemonicWords = <redacted>, mnemonicPass = <redacted>})"
+
+    -- 10282 is the identifier every share of the backup carries. It is not
+    -- secret.
+    it "hides the bytes and the passphrase of a backup in shares, and keeps its identifier" $
+      show testSharesSecret
+        `shouldBe` "SharesSecret (EncryptedMasterSecret {identifier = 10282, extendable = False, iterationExponent = 0, ciphertext = <redacted>}) <redacted>"
+
+    it "goes in parentheses inside another value, as any value does" $
+      show (Just (MnemonicSecret testMnemonic))
+        `shouldBe` "Just (MnemonicSecret (MnemonicPass {mnemonicWords = <redacted>, mnemonicPass = <redacted>}))"
 
 {- The passphrase, as BIP39 hashes it -}
 

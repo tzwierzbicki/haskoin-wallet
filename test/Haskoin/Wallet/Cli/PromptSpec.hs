@@ -33,6 +33,7 @@ import Test.Hspec
 spec :: Spec
 spec = prepareContext $ \ctx -> do
   readingSpec
+  shownWordsSpec
   mnemonicSpec
   sharesSpec
   newSeedSpec
@@ -159,6 +160,25 @@ readingSpec =
 
     it "lets through a typo that keeps the checksum: only the account, or a second typing, tells" $
       readMnemonic typoWords `shouldBe` Right typoWords
+
+{- The words of a seed, shown -}
+
+-- | The words typed as a log, an error message or a failed test would
+-- print them
+shownWordsSpec :: Spec
+shownWordsSpec =
+  describe "The words of a seed, shown" $ do
+    it "hides the words of a mnemonic" $
+      show (MnemonicWords testWords) `shouldBe` "MnemonicWords <redacted>"
+
+    -- 10282 is the identifier every share of the backup carries. It is not
+    -- secret.
+    it "hides the bytes of a backup in shares, and keeps its identifier" $
+      show (BackupShares testSharesBackup)
+        `shouldBe` "BackupShares (EncryptedMasterSecret {identifier = 10282, extendable = False, iterationExponent = 0, ciphertext = <redacted>})"
+
+    it "goes in parentheses inside another value, as any value does" $
+      show (Just (MnemonicWords testWords)) `shouldBe` "Just (MnemonicWords <redacted>)"
 
 {- Asking for a mnemonic -}
 

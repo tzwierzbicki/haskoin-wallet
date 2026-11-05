@@ -12,6 +12,7 @@ import Haskoin.Wallet.Commands (commandListing, commandResponse)
 import Haskoin.Wallet.Config (Config, databaseFile, initConfig)
 import Haskoin.Wallet.Amounts (AmountUnit)
 import Haskoin.Wallet.Database (DB, catchDatabaseInUse, runDB)
+import Haskoin.Wallet.Memory (keepMemoryPrivate)
 import Haskoin.Wallet.Cli.Listing (Listing, streamListing)
 import Haskoin.Wallet.Cli.Pager (pagerCommand, withPager, writeDoc)
 import Haskoin.Wallet.Migration (Hooks (..), migrateDB)
@@ -28,6 +29,9 @@ import System.IO (hPutStrLn, stderr)
 
 clientMain :: IO ()
 clientMain = do
+  -- This comes first, before any secret is typed. See
+  -- "Haskoin.Wallet.Memory".
+  keepMemoryPrivate
   setUtf8Encoding
   argumentsProblem <- invalidArgumentsError
   forM_ argumentsProblem die

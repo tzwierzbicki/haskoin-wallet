@@ -77,6 +77,7 @@ library
       Haskoin.Wallet.Keys
       Haskoin.Wallet.Labels
       Haskoin.Wallet.Main
+      Haskoin.Wallet.Memory
       Haskoin.Wallet.MessageSigning
       Haskoin.Wallet.Migration
       Haskoin.Wallet.Migration.V2
@@ -253,6 +254,7 @@ test-suite spec
       Haskoin.Wallet.KeysSpec
       Haskoin.Wallet.LabelsSpec
       Haskoin.Wallet.MainSpec
+      Haskoin.Wallet.MemorySpec
       Haskoin.Wallet.MessageSigningSpec
       Haskoin.Wallet.Migration.TestUtils
       Haskoin.Wallet.Migration.V2Spec
