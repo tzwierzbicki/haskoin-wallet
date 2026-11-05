@@ -20,11 +20,10 @@ in each `sourceUrl`. All signed transactions were independently verified with
 the pure-Python script in [tools/](tools/README.md).
 
 The vectors taken from other projects stay under the licenses of those
-projects. The public-domain dedication of hw's
-[UNLICENSE](../../../UNLICENSE) does not cover them. The device tests of the
-Trezor firmware are under the GPL version 3, and the tests of the Ledger
-Bitcoin app under the Apache License 2.0. The `source` and `sourceUrl` of a
-vector say where it came from.
+projects. The [MIT license](../../../LICENSE) of hw does not cover them. The
+device tests of the Trezor firmware are under the GPL version 3, and the tests
+of the Ledger Bitcoin app under the Apache License 2.0. The `source` and
+`sourceUrl` of a vector say where it came from.
 
 ## Format
 

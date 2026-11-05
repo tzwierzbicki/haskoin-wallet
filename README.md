@@ -1,5 +1,8 @@
 # Haskoin Wallet
 
+[![Hackage](https://img.shields.io/hackage/v/haskoin-wallet.svg)](https://hackage.haskell.org/package/haskoin-wallet)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/jprupp/haskoin-wallet/blob/master/LICENSE)
+
 Haskoin Wallet (`hw`) is a command-line wallet for Bitcoin and Bitcoin Cash.
 It makes mnemonics as [BIP39] describes, or backups in shares as [SLIP39]
 describes, and derives accounts and addresses as [BIP44] does, with legacy addresses, or as [BIP84] does, with native SegWit

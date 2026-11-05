@@ -8,8 +8,8 @@ description:
 category: Bitcoin, Finance, Network
 author: JP Rupp
 maintainer: jprupp@protonmail.ch
-license: Unlicense
-license-file: UNLICENSE
+license: MIT
+license-file: LICENSE
 github: haskoin/haskoin-wallet.git
 homepage: http://github.com/jprupp/haskoin-wallet
 bug-reports: http://github.com/jprupp/haskoin-wallet/issues
