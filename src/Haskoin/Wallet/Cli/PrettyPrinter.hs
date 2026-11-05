@@ -132,17 +132,23 @@ amountIn style unit amnt = maybe id annotate style (pretty (showAmount unit amnt
 {- Mnemonics -}
 
 -- | A new mnemonic: what it is and where its entropy came from, then its
--- words, or with --parts its parts only, a blank line between them. The
--- whole mnemonic is not shown with its parts: whoever reads the screen
--- would have the seed.
-mnemonicDoc :: Text -> [Text] -> [[Text]] -> Doc Style
-mnemonicDoc source ws parts =
-  case parts of
-    [] -> vcat [heading, wordsDoc ws]
-    _ -> vcat . intersperse mempty $ heading : [vcat [text ("Part " <> show i), wordsDoc part] | (i, part) <- zip [1 :: Natural ..] parts]
+-- words
+mnemonicDoc :: Text -> [Text] -> Doc Style
+mnemonicDoc source ws = vcat [heading, wordsDoc ws]
   where
-    heading = text ("Mnemonic of " <> show (length ws) <> " words" <> inParts <> ",") <+> styled Muted ("from " <> cs source)
-    inParts = if null parts then "" else " in " <> show (length parts) <> " parts"
+    heading = text ("Mnemonic of " <> show (length ws) <> " words,") <+> styled Muted ("from " <> cs source)
+
+-- | The shares of a new backup: how many they are, of how many words, how
+-- many of them rebuild the seed and where their entropy came from, then
+-- each share under its number, a blank line between them
+sharesDoc :: Text -> Natural -> [[Text]] -> Doc Style
+sharesDoc source threshold shares =
+  vcat . intersperse mempty $ heading : [vcat [text ("Share " <> show i), wordsDoc share] | (i, share) <- zip [1 :: Natural ..] shares]
+  where
+    heading = text ("Backup in " <> counted (fromIntegral (length shares)) "share" "shares" <> " of " <> show (maybe 0 length (listToMaybe shares)) <> " words, " <> needed <> ",") <+> styled Muted ("from " <> cs source)
+    needed
+      | length shares == 1 = "which is the whole backup"
+      | otherwise = "any " <> show threshold <> " of them rebuild the seed"
 
 -- | The words of a mnemonic, four on a line, each after its number, in
 -- columns. A word of the BIP39 list has at most 8 letters.
@@ -979,7 +985,8 @@ responsePrinter unit view answer =
     ResponsePendingTxs {} -> listing
     ResponseCoins {} -> listing
     ResponseError err -> renderIO $ errorDoc err
-    ResponseMnemonic source ws parts -> renderIO $ mnemonicDoc source ws parts
+    ResponseMnemonic source ws -> renderIO $ mnemonicDoc source ws
+    ResponseShares source threshold shares -> renderIO $ sharesDoc source threshold shares
     ResponseAccount acc spendable -> renderIO =<< listedAccountDoc Verbose unit acc spendable
     -- In green when the command did what it was asked, in red otherwise
     ResponseAccResult _ res txt -> renderIO $ styled (if res then Good else Failure) (cs txt)

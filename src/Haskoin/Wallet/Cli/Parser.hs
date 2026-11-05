@@ -44,6 +44,7 @@ import Haskoin.Wallet.Cli.Parser.Run (runProgram)
 import Haskoin.Wallet.Cli.Listing (Paging (..))
 import Haskoin.Wallet.Util (readNatural)
 import Numeric.Natural (Natural)
+import qualified Options.Applicative as O
 import qualified Paths_haskoin_wallet as Paths
 import Text.RawString.QQ (r)
 
@@ -145,8 +146,10 @@ data NewMnemonic = NewMnemonic
     entropy :: !Natural,
     -- | Whether dice rolls are mixed in
     dice :: !Bool,
-    -- | The parts the mnemonic is split in
-    parts :: !Natural
+    -- | The shares of a backup to make in place of a mnemonic
+    shares :: !(Maybe Natural),
+    -- | The number of shares that rebuild the seed
+    threshold :: !(Maybe Natural)
   }
   deriving (Eq, Show)
 
@@ -535,7 +538,7 @@ mnemonicCommand =
   CommandSpec
     { name = "mnemonic",
       offline = True,
-      summary = "Generate a new mnemonic",
+      summary = "Generate a new mnemonic, or a backup in shares",
       details =
         [r|
 hw prints the mnemonic and stores nothing. Write it down and keep copies in
@@ -547,13 +550,21 @@ machine has it. With --dice, hw also mixes in rolls of a die, so that you do
 not have to trust the system alone. Run this command on an offline computer
 if you can.
 
-With --parts, hw prints several parts instead of one mnemonic. The commands
-that ask for the mnemonic then need every part, in any order, with the same
---parts.
+With --shares, hw prints the shares of a backup instead of a mnemonic, in the
+SLIP-39 format. Any --threshold of the shares rebuild the seed, and fewer
+tell nothing of it: with --shares 3 --threshold 2, any two of three. A share
+is a list of 20 words, or of 33 with --entropy 32. The commands that ask for
+the mnemonic take the shares in its place: type one, and hw asks for the
+next until it has enough. A single share, with --shares 1, is the whole
+backup, as a mnemonic is.
+
+A backup in shares is not a BIP39 mnemonic, and no mnemonic comes of it. A
+wallet that reads SLIP-39 shares restores it, and one that reads only BIP39
+mnemonics cannot.
 |],
       args =
         CommandMnemonic
-          <$> (NewMnemonic <$> entropyOption <*> diceOption <*> splitInOption)
+          <$> (NewMnemonic <$> entropyOption <*> diceOption <*> sharesOption <*> thresholdOption <* splitRefused)
     }
 
 entropyOption :: Args Natural
@@ -565,7 +576,11 @@ entropyOption =
       <> value 16
       <> showDefault
       <> completeWith valid
-      <> help "The bytes of entropy: 16, 20, 24, 28 or 32, for a mnemonic of 12, 15, 18, 21 or 24 words"
+      <> help
+        [r|
+The bytes of entropy: 16, 20, 24, 28 or 32, for a mnemonic of 12, 15, 18, 21
+or 24 words. A backup in shares takes 16 or 32, for shares of 20 or 33 words.
+|]
   where
     valid = ["16", "20", "24", "28", "32"]
     f s
@@ -581,23 +596,64 @@ diceOption =
         [r|
 Mix rolls of a six-sided die into the entropy of the system. hw asks for the
 rolls. Type the faces, as many on a line as you like. They are not shown, and
-hw tells how many rolls are left after each line.
+hw tells how many rolls are left after each line. With --shares, hw asks for
+enough rolls for the seed and for each random value that splits it, and uses
+no roll twice.
 |]
 
--- | The parts mnemonic splits the mnemonic into
-splitInOption :: Args Natural
-splitInOption =
-  partsOption
-    [r|
-Split the mnemonic into INT parts, from 1 to 12. All the parts are needed to
-rebuild it, in any order. With --dice, hw asks for enough rolls for every
-part, and uses no roll twice.
+-- | The shares of a backup that mnemonic makes in place of a mnemonic
+sharesOption :: Args (Maybe Natural)
+sharesOption =
+  optional . option (eitherReader $ upToSixteen "--shares" . cs) $
+    short 's'
+      <> long "shares"
+      <> metavar "INT"
+      <> help
+        [r|
+Make a backup in INT shares, from 1 to 16, in place of a mnemonic. With more
+than one share, --threshold gives the number of them that rebuild the seed.
 |]
 
--- | The parts a mnemonic is typed in, when mnemonic --parts made it
+-- | The number of shares that rebuild the seed of a backup
+thresholdOption :: Args (Maybe Natural)
+thresholdOption =
+  optional . option (eitherReader $ upToSixteen "--threshold" . cs) $
+    long "threshold"
+      <> metavar "INT"
+      <> help
+        [r|
+The number of shares that rebuild the seed, from 2 to the number of shares.
+Fewer of them tell nothing of it.
+|]
+
+-- | A number of shares, from 1 to 16: the format has four bits for it
+upToSixteen :: String -> Text -> Either String Natural
+upToSixteen name typed =
+  case readNatural typed of
+    Just n
+      | n >= 1 && n <= 16 -> Right n
+      | otherwise -> Left ("The " <> name <> " value has to be between 1 and 16")
+    Nothing -> Left ("Could not parse the " <> name <> " option")
+
+-- | The --parts of earlier versions, which split a mnemonic into parts
+-- that are all needed to merge it back: mnemonic refuses it, and says what
+-- took its place. The option has no row in the help.
+splitRefused :: Args ()
+splitRefused =
+  Args NoUsage [] $
+    O.option
+      (O.eitherReader (const (Left "hw makes no mnemonic in parts any more: make a backup in shares with --shares and --threshold")))
+      (O.long "parts" <> O.short 'p' <> O.value () <> O.internal)
+
+-- | The parts a mnemonic is typed in, when an earlier version of hw split
+-- it
 mnemonicPartsOption :: Args Natural
 mnemonicPartsOption =
-  partsOption "The number of parts of the mnemonic, when `mnemonic` --parts made it. hw asks for each part."
+  partsOption
+    [r|
+The number of parts of a mnemonic that an earlier version of hw split with
+`mnemonic` --parts. hw asks for each part.
+|]
 
 -- | The --parts option, with the help of the command about it
 partsOption :: String -> Args Natural
@@ -629,7 +685,12 @@ createAccCommand =
       details =
         [r|
 createacc asks for the mnemonic and the passphrase, each twice to catch a
-typo. It derives the account key m/44'/coin'/index', or m/84'/coin'/index'
+typo. It takes the shares of a backup in place of the mnemonic: type one,
+and hw asks for the next until it has enough. Shares are typed once, since
+their checksums catch a typo, and their passphrase has printable ASCII
+characters only, as their format asks.
+
+It derives the account key m/44'/coin'/index', or m/84'/coin'/index'
 with --type bip84, and stores only its public key. It takes the first index
 of the seed that has no account of that kind in the wallet on that network.
 For example, the first Bitcoin account is m/44'/0'/0', and the first native
@@ -729,8 +790,8 @@ recoverCommand =
       summary = "Find the accounts of a mnemonic that were paid",
       details =
         [r|
-`recover` asks for the mnemonic, then searches the network for the accounts of
-its seed that were paid. It checks the accounts in order from index 0, and
+`recover` asks for the mnemonic, or for the shares of a backup, then searches
+the network for the accounts of its seed that were paid. It checks the accounts in order from index 0, and
 asks the server about the receiving addresses of each. Each account that was
 paid is added, named after the network and its index, such as btc0, and
 synced. Accounts the wallet has already are skipped.
@@ -846,7 +907,7 @@ checkMnemonicCommand =
         [r|
 checkmnemonic asks for the mnemonic and the passphrase, and checks that they
 give the public key of the account. Use it to test a mnemonic you wrote down,
-before you rely on it. Nothing is signed. When they match, hw records the
+or the shares of a backup, before you rely on it. Nothing is signed. When they match, hw records the
 fingerprint of the seed, which `accounts` shows.
 
 When they do not match, hw looks for the key of the account at the other
@@ -1827,7 +1888,8 @@ signTxCommand =
       details =
         [r|
 signtx asks for the mnemonic and the passphrase of the account, and signs the
-transaction. It asks again while they do not match the account.
+transaction. It asks again while they do not match the account. It takes the
+shares of a backup in place of the mnemonic.
 
 Give a pending transaction by its NOSIGHASH. The signed transaction then takes
 its place in the wallet, shown by its txid. Or give a transaction file with
@@ -2227,8 +2289,8 @@ signMsgCommand =
       summary = "Sign a message with the key of an address",
       details =
         [r|
-signmsg asks for the mnemonic of the account of the ADDRESS, and signs the
-message with the key of that address. The signature uses the Bitcoin Signed
+signmsg asks for the mnemonic of the account of the ADDRESS, or for the
+shares of its backup, and signs the message with the key of that address. The signature uses the Bitcoin Signed
 Message format, the legacy format of BIP 322. From a P2PKH address, which
 starts with 1, any wallet can verify it. From a native SegWit address,
 which starts with bc1q, the signature has the header byte of BIP 137, which

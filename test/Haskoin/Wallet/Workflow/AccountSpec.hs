@@ -40,6 +40,7 @@ spec = prepareContext $ \ctx -> do
   addressSpec ctx
   checkAddrSpec
   splitSpec
+  sharesSpec ctx
   messageSpec
   verifySpec
   backupSpec
@@ -625,33 +626,24 @@ checkAddrSpec =
           runExit run `shouldBe` ExitFailure 1
           runErr run `shouldSatisfy` Text.isInfixOf ("The path " <> Text.pack path <> " is not that of an address: /0/i is the receiving address i, and /1/i the change address i")
 
-{- Mnemonics in parts -}
+{- New mnemonics and backups in shares -}
 
 splitSpec :: Spec
-splitSpec =
+splitSpec = do
   describe "A new mnemonic" $ do
     it "has 12 words of the entropy of /dev/random by default, and 24 words for 32 bytes" $
       withHome $ \home -> do
         whole <- answer home ["mnemonic"] []
-        whole `shouldSatisfy` \case ResponseMnemonic "/dev/random" ws [] -> length ws == 12; _ -> False
+        whole `shouldSatisfy` \case ResponseMnemonic "/dev/random" ws -> length ws == 12; _ -> False
         long <- answer home ["mnemonic", "--entropy", "32"] []
-        long `shouldSatisfy` \case ResponseMnemonic _ ws [] -> length ws == 24; _ -> False
-
-    -- A heading, then each part under its name: 11 lines, and more if the
-    -- whole mnemonic were printed too
-    it "prints its parts only with --parts, not the whole mnemonic" $
-      withHome $ \home -> do
-        run <- hw home ["mnemonic", "--parts", "2"] []
-        let shown = Text.lines (runOut run)
-        take 3 shown `shouldBe` ["Mnemonic of 12 words in 2 parts, from /dev/random", "", "Part 1"]
-        length shown `shouldBe` 11
+        long `shouldSatisfy` \case ResponseMnemonic _ ws -> length ws == 24; _ -> False
 
     -- BIP39 adds a word of 11 bits for every 4 bytes of entropy
     it "has 15, 18 and 21 words for 20, 24 and 28 bytes of --entropy" $
       withHome $ \home ->
         forM_ [("20", 15), ("24", 18), ("28", 21)] $ \(bytes, count) -> do
           generated <- answer home ["mnemonic", "--entropy", bytes] []
-          generated `shouldSatisfy` \case ResponseMnemonic _ ws [] -> length ws == count; _ -> False
+          generated `shouldSatisfy` \case ResponseMnemonic _ ws -> length ws == count; _ -> False
 
     it "is refused an --entropy other than 16, 20, 24, 28 or 32 bytes" $
       withHome $ \home -> do
@@ -659,29 +651,12 @@ splitSpec =
         runExit run `shouldBe` ExitFailure 1
         runErr run `shouldSatisfy` Text.isInfixOf "option --entropy: cannot parse value `17'"
 
-    -- Any of the parts alone says nothing of the mnemonic: all of them make
-    -- the account, as the mnemonic does
-    it "comes in parts with --parts, which createacc --parts takes for the account of the mnemonic" $
-      withHome $ \home -> withHome $ \wholeHome -> withHome $ \partsHome -> do
-        generated <- answer home ["mnemonic", "--parts", "3"] []
-        (ws, parts) <- case generated of
-          ResponseMnemonic _ ws parts@[_, _, _] -> return (Text.unwords ws, Text.unwords <$> parts)
-          other -> fail $ "Not a mnemonic in three parts: " <> show other
-        -- Without a passphrase, which is asked once
-        whole <- keyOf <$> hwJson wholeHome ["createacc", "main"] [ws, ws, ""]
-        fromParts <- keyOf <$> hwJson partsHome ["createacc", "main", "--parts", "3"] (parts <> parts <> [""])
-        fromParts `shouldBe` whole
-        (\(_, index, _) -> index) <$> fromParts `shouldBe` Right 0
-
-    -- One part is the whole mnemonic, as without --parts
-    it "comes in 1 to 12 parts" $
+    -- Earlier versions split a mnemonic into parts that were all needed
+    it "is split into parts no more: --parts is refused, and names --shares" $
       withHome $ \home -> do
-        whole <- answer home ["mnemonic", "--parts", "1"] []
-        whole `shouldSatisfy` \case ResponseMnemonic _ ws [] -> length ws == 12; _ -> False
-        forM_ ["0", "13"] $ \parts -> do
-          run <- hw home ["mnemonic", "--parts", parts] []
-          runExit run `shouldBe` ExitFailure 1
-          runErr run `shouldSatisfy` Text.isInfixOf "The --parts value has to be between 1 and 12"
+        run <- hw home ["mnemonic", "--parts", "2"] []
+        runExit run `shouldBe` ExitFailure 1
+        runErr run `shouldSatisfy` Text.isInfixOf "option --parts: hw makes no mnemonic in parts any more: make a backup in shares with --shares and --threshold"
 
     -- The rolls are asked once the entropy of the system is read. None are
     -- typed here, and no mnemonic is made without them.
@@ -690,6 +665,160 @@ splitSpec =
         run <- hw home ["mnemonic", "--dice"] []
         runErr run `shouldSatisfy` Text.isInfixOf "Rolls: "
         run `shouldSatisfy` printed "Cancelled: the input ended before the answer"
+
+  describe "A mnemonic that an earlier version split into parts" $
+    -- The two parts of the test mnemonic, typed twice, then its passphrase
+    -- twice
+    it "makes with createacc --parts the account of the mnemonic" $
+      withHome $ \home ->
+        (keyOf <$> hwJson home ["createacc", "main", "--parts", "2"] (testMnemonicParts <> testMnemonicParts <> replicate 2 (mnemonicPass testMnemonic)))
+          `shouldReturn` Right ("main", 0, testAccountXPub)
+
+  describe "A new backup in shares" $ do
+    it "comes in the shares of --shares, of 20 words each, with the threshold of --threshold" $
+      withHome $ \home -> do
+        made <- answer home ["mnemonic", "--shares", "3", "--threshold", "2"] []
+        made `shouldSatisfy` \case ResponseShares "/dev/random" 2 shares -> map length shares == [20, 20, 20]; _ -> False
+
+    it "has shares of 33 words for 32 bytes of --entropy" $
+      withHome $ \home -> do
+        made <- answer home ["mnemonic", "--shares", "2", "--threshold", "2", "--entropy", "32"] []
+        made `shouldSatisfy` \case ResponseShares _ 2 shares -> map length shares == [33, 33]; _ -> False
+
+    it "is one share, the whole backup, with --shares 1, with or without --threshold 1" $
+      withHome $ \home ->
+        forM_ [["mnemonic", "--shares", "1"], ["mnemonic", "--shares", "1", "--threshold", "1"]] $ \args -> do
+          made <- answer home args []
+          made `shouldSatisfy` \case ResponseShares _ 1 [share] -> length share == 20; _ -> False
+
+    -- A heading, then each share under its number, five lines of four
+    -- words: 1 + 2 x 7 lines
+    it "prints a heading, then each share under its number" $
+      withHome $ \home -> do
+        run <- hw home ["mnemonic", "--shares", "2", "--threshold", "2"] []
+        let shown = Text.lines (runOut run)
+        take 3 shown `shouldBe` ["Backup in 2 shares of 20 words, any 2 of them rebuild the seed, from /dev/random", "", "Share 1"]
+        length shown `shouldBe` 15
+
+    -- Without a passphrase, which is asked once. Shares are typed once.
+    it "makes with createacc the same account from any threshold of its shares" $
+      withHome $ \home -> withHome $ \firstHome -> withHome $ \lastHome -> do
+        made <- answer home ["mnemonic", "--shares", "3", "--threshold", "2"] []
+        shares <- case made of
+          ResponseShares _ _ shares@[_, _, _] -> return (Text.unwords <$> shares)
+          other -> fail $ "Not a backup in three shares: " <> show other
+        fromFirst <- keyOf <$> hwJson firstHome ["createacc", "main"] (take 2 shares <> [""])
+        fromLast <- keyOf <$> hwJson lastHome ["createacc", "main"] (reverse (drop 1 shares) <> [""])
+        fromLast `shouldBe` fromFirst
+        (\(_, index, _) -> index) <$> fromFirst `shouldBe` Right 0
+
+    it "needs --threshold for more than one share" $
+      withHome $ \home ->
+        (errorOf <$> hwJson home ["mnemonic", "--shares", "3"] [])
+          `shouldReturn` Right "With more than one share, give --threshold: the number of shares that rebuild the seed"
+
+    it "is refused a threshold of 1 for more than one share" $
+      withHome $ \home ->
+        (errorOf <$> hwJson home ["mnemonic", "--shares", "3", "--threshold", "1"] [])
+          `shouldReturn` Right "With a threshold of 1 every share would be the whole backup: make one share, and copy it"
+
+    it "is refused a threshold above the number of shares" $
+      withHome $ \home ->
+        (errorOf <$> hwJson home ["mnemonic", "--shares", "3", "--threshold", "4"] [])
+          `shouldReturn` Right "The threshold cannot be greater than the number of shares, 3"
+
+    it "is refused --threshold without --shares" $
+      withHome $ \home ->
+        (errorOf <$> hwJson home ["mnemonic", "--threshold", "2"] [])
+          `shouldReturn` Right "--threshold goes with --shares: it is the number of shares that rebuild the seed"
+
+    it "is refused 20, 24 or 28 bytes of --entropy, which a mnemonic alone has" $
+      withHome $ \home ->
+        (errorOf <$> hwJson home ["mnemonic", "--shares", "1", "--entropy", "20"] [])
+          `shouldReturn` Right "A backup in shares has 16 or 32 bytes of entropy, not 20"
+
+    it "comes in 1 to 16 shares" $
+      withHome $ \home ->
+        forM_ ["0", "17"] $ \shares -> do
+          run <- hw home ["mnemonic", "--shares", shares, "--threshold", "2"] []
+          runExit run `shouldBe` ExitFailure 1
+          runErr run `shouldSatisfy` Text.isInfixOf "The --shares value has to be between 1 and 16"
+
+    -- 16 bytes for the seed and 12 for the random value that splits it:
+    -- 224 bits, about 135 rolls of 5/3 bits
+    it "asks with --dice for the rolls of the seed and of the random value that splits it" $
+      withHome $ \home -> do
+        run <- hw home ["mnemonic", "--shares", "3", "--threshold", "2", "--dice"] []
+        runErr run `shouldSatisfy` Text.isInfixOf "Roll a die about 135 times"
+        run `shouldSatisfy` printed "Cancelled: the input ended before the answer"
+
+{- Accounts of a backup in shares -}
+
+sharesSpec :: Ctx -> Spec
+sharesSpec ctx =
+  describe "An account of a backup in shares" $ do
+    it "is created from the shares typed once and the passphrase typed twice, with the key of the seed other wallets derive" $
+      withHome $ \home ->
+        (keyOf <$> hwJson home ["createacc", "vault", "--network", "btctest"] sharesForNew)
+          `shouldReturn` Right ("vault", 0, testSharesTestnetXPub)
+
+    it "hands out the address the device tests of a hardware wallet give for the backup" $
+      withHome $ \home -> do
+        _ <- answer home ["createacc", "vault", "--network", "btctest"] sharesForNew
+        receiveFor home "vault" `shouldReturn` Text.unpack (testSharesTestnetAddrs !! 0)
+
+    it "is the same account on Bitcoin as its seed gives apart from hw" $
+      withHome $ \home -> do
+        (keyOf <$> hwJson home ["createacc", "vault"] sharesForNew) `shouldReturn` Right ("vault", 0, testSharesXPub)
+        receiveFor home "vault" `shouldReturn` Text.unpack testSharesAddr
+
+    it "records the fingerprint of its seed" $
+      withHome $ \home -> do
+        _ <- answer home ["createacc", "vault"] sharesForNew
+        (fingerprintsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("vault", Just testSharesFingerprintText)]
+
+    -- The first share is a group of one, the three others are of a group
+    -- that needs three: two groups, as the backup needs
+    it "is created from the shares of a backup of several groups, and hands out the address the device tests give" $
+      withHome $ \home -> do
+        _ <- answer home ["createacc", "vault", "--network", "btctest"] (testGroupShares <> ["TREZOR", "TREZOR"])
+        receiveFor home "vault" `shouldReturn` Text.unpack testGroupSharesTestnetAddr
+
+    -- Three attempts, each refused before the passphrase is typed again
+    it "is not created with a passphrase that has an accent, which the format of the shares does not take" $
+      withHome $ \home ->
+        (errorOf <$> hwJson home ["createacc", "vault"] (testShares <> replicate 3 "caf\233"))
+          `shouldReturn` Right "The passphrase of a backup in shares has printable ASCII characters only: other wallets would not take this one"
+
+    it "is checked by checkmnemonic against its shares and its passphrase" $
+      withHome $ \home -> do
+        _ <- answer home ["createacc", "vault"] sharesForNew
+        (accResultOf <$> hwJson home ["checkmnemonic"] sharesOnce)
+          `shouldReturn` Right (True, "The shares and passphrase matched the account")
+        (accResultOf <$> hwJson home ["checkmnemonic"] (testShares <> ["trezor"]))
+          `shouldReturn` Right (False, "The shares and passphrase did not match the account")
+
+    it "is not matched by the mnemonic of another seed" $
+      withHome $ \home -> do
+        _ <- answer home ["createacc", "vault"] sharesForNew
+        (accResultOf <$> hwJson home ["checkmnemonic"] seedOnce)
+          `shouldReturn` Right (False, "The mnemonic and passphrase did not match the account")
+
+    it "signs a message from its shares, which verifymsg checks against its address" $
+      withHome $ \home -> do
+        _ <- answer home ["createacc", "vault"] sharesForNew
+        address <- receiveFor home "vault"
+        signed <- hwJson home ["signmsg", address, "hello"] sharesOnce
+        signature <- case signed of
+          ResponseSignMsg "hello" signature _ -> return signature
+          other -> fail $ "Not a signed message: " <> show other
+        verified <- hwJson home ["verifymsg", address, Text.unpack signature, "hello"] []
+        verified `shouldBe` ResponseVerifyMsg "hello" signature testSharesAddr True
+
+    it "is found by recover from its shares, when it was paid" $
+      withChain ctx (chainPaying ctx sharesTestnetAddr) $ \home _ ->
+        (accountsOf <$> hwJson home ["recover", "--network", "btctest"] sharesOnce)
+          `shouldReturn` Right [("btctest0", 0, 50000)]
 
 {- Signed messages -}
 
@@ -1053,10 +1182,6 @@ recoverSpec ctx =
 cafeOnce, cafeTwice :: [Text]
 cafeOnce = [mnemonicWords testMnemonic, cafePassphrase]
 cafeTwice = [mnemonicWords testMnemonic, mnemonicWords testMnemonic, cafePassphrase, cafePassphrase]
-
--- | A chain whose block 800000 pays 50000 to the address
-chainPaying :: Ctx -> Address -> Chain
-chainPaying ctx addr = Chain 800002 [(fundingTx ctx 1 [(addr, 50000)], Just 800000)]
 
 -- | The paid chain, with a payment to the first receiving address of the
 -- bip49 account 0 of the seed and of its bip86 account 0 in the same block

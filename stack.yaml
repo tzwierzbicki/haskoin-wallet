@@ -6,8 +6,9 @@ nix:
   - secp256k1
   - pkg-config
 extra-deps:
-  - git: https://github.com/jprupp/haskoin-core.git
-    commit: ef9b3cddbb57618559362584c687f5abf38cff2b
+  # The local checkout, on its slip-39 branch, for Haskoin.Crypto.Keys.Slip39:
+  # pin the commit of jprupp's master again once the branch is merged there
+  - ../haskoin-core
   - git: https://github.com/jprupp/haskoin-store.git
     commit: e7a83fe48e1383ff546323697be8795096f89682
     subdirs:

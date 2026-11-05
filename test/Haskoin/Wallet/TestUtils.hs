@@ -18,7 +18,7 @@ import Data.Aeson (FromJSON (..), eitherDecodeFileStrict, encode, withObject, (.
 import Data.Default (def)
 import qualified Data.ByteString as BS
 import Data.Either (fromRight, isLeft)
-import Data.IORef (IORef, modifyIORef)
+import Data.IORef (IORef, modifyIORef, newIORef, readIORef, writeIORef)
 import Data.List (find, isSuffixOf, sort, sortOn)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
@@ -31,12 +31,14 @@ import Data.Word (Word32, Word64, Word8)
 import Database.Persist.Sql (Migration, PersistValue, Single (..), rawQuery, rawSql, runMigrationQuiet, toSqlKey)
 import Database.Persist.Sqlite (runSqlite)
 import Haskoin
+import Haskoin.Crypto.Keys.Slip39 (EncryptedMasterSecret (..))
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Account (insertAccount, nextAccount)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database.Coin (JsonCoin (..))
 import Haskoin.Wallet.Database (DB, DBAccount (..), DBAccountId, DBAddress (..), DBPendingTx (..), hashBytes, migrateAll)
-import Haskoin.Wallet.Keys (AccountKind (..), MnemonicPass (..), PublicSeed (..), kindNamed, seedOf, signingKey)
+import Haskoin.Wallet.Entropy (Sources (..), systemEntropy)
+import Haskoin.Wallet.Keys (AccountKind (..), MnemonicPass (..), PublicSeed (..), SeedSecret (..), kindNamed, seedOf, signingKey)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync (ScanQuestion, SyncRes (..))
 import Haskoin.Wallet.Cli.Style (Style, renderPlain)
@@ -1181,3 +1183,112 @@ toBytes32 :: Integer -> BS.ByteString
 toBytes32 i = BS.replicate (32 - BS.length bs) 0 <> bs
   where
     bs = integerToBS i
+
+{- A backup in shares -}
+
+-- | Three shares of a backup of six, any three of which rebuild it, and its
+-- passphrase: a set of the device tests of Trezor's firmware
+-- (MNEMONIC_SLIP39_BASIC_20_3of6 in tests/common.py), whose
+-- test_passphrase_slip39_basic.py gives the master key and the first
+-- testnet address of the seed. The other keys and addresses below were
+-- derived from that seed apart from hw, with the SLIP-39 verifier of
+-- haskoin-core and the Python tools of test/data/message-signing/tools,
+-- which gave back that master key and that address first.
+testShares :: [Text]
+testShares =
+  [ "extra extend academic bishop cricket bundle tofu goat apart victim enlarge program behavior permit course armed jerky faint language modern",
+    "extra extend academic acne away best indicate impact square oasis prospect painting voting guest either argue username racism enemy eclipse",
+    "extra extend academic arcade born dive legal hush gross briefing talent drug much home firefly toxic analysis idea umbrella slice"
+  ]
+
+testSharesPassphrase :: Text
+testSharesPassphrase = "TREZOR"
+
+-- | The backup the shares rebuild, which the passphrase decrypts: its
+-- bytes are MNEMONIC_SLIP39_BASIC_20_3of6_SECRET of those tests, and the
+-- shares carry the identifier 10282, no extendable flag and the iteration
+-- exponent 0
+testSharesBackup :: EncryptedMasterSecret
+testSharesBackup = EncryptedMasterSecret 10282 False 0 (fromMaybe (error "testSharesBackup") (decodeHex "491b795b80fc21ccdf466c0fbc98c8fc"))
+
+-- | The secret of the seed of the shares with their passphrase
+testSharesSecret :: SeedSecret
+testSharesSecret = SharesSecret testSharesBackup testSharesPassphrase
+
+-- | The master key of the seed of the shares with their passphrase, as the
+-- device tests give it, and the fingerprint of the seed
+testSharesMasterKey, testSharesFingerprintText :: Text
+testSharesMasterKey = "xprv9s21ZrQH143K2pMWi8jrTawHaj16uKk4CSbvo4Zt61tcrmuUDMx2o1Byzcr3saXNGNvHP8zZgXVdJHsXVdzYFPavxvCyaGyGr1WkAYG83ce"
+testSharesFingerprintText = "5596eb4d"
+
+-- | The keys of the bip44 account 0 of that seed on Bitcoin's testnet,
+-- m/44'/1'/0', and its first two receiving addresses: the first is the
+-- address the device tests give
+testSharesTestnetXPrv, testSharesTestnetXPub :: Text
+testSharesTestnetXPrv = "tprv8fo2vdaeWiGHxEvp1STwjxywEooz5kMp2GJGANWqtqdUqHamGg2boUJktFZGxAbgkz4jEqsrPgHTYC4VwKwgGUrsRdAq8WZtCgjS4PEYnP2"
+testSharesTestnetXPub = "tpubDCV553ctf5wxqhxbu68Y9Ne3oqKvF5YibZu3StZ9K7RsfmqXu4rByxvd4MoWSykTqqvgbUEZBHJw9iXfitPge7Mwxg873BUE3as7yF6iWSr"
+
+testSharesTestnetAddrs :: [Text]
+testSharesTestnetAddrs = ["mi4HXfRJAqCDyEdet5veunBvXLTKSxpuim", "mzDSttNhCtvkJExSAiz6xksdyEQUuxuDVc"]
+
+-- | The public key of the bip44 account 0 of that seed on Bitcoin,
+-- m/44'/0'/0', and its first receiving address
+testSharesXPub, testSharesAddr :: Text
+testSharesXPub = "xpub6CDgeTHt97zmW24XoYdjH9PVFMUj6qcYAe9SZXMKRKJbvTNeZhutNkQqajLyZrQ9DCqdnGenKhBD6UTrT1nHnoLCfFHkdeX8hDsZx1je6b2"
+testSharesAddr = "1NomKAUNnbASwbPuGHmkSVmnrJS5tZeVce"
+
+-- | Shares of a backup of several groups, of the same device tests
+-- (MNEMONIC_SLIP39_ADVANCED_20): two groups of four rebuild it. The first
+-- share is its group alone; the three others are three of the five shares
+-- of another group, which needs three. With the passphrase "TREZOR" the
+-- tests give the master key and the first testnet address below.
+testGroupShares :: [Text]
+testGroupShares =
+  [ "eraser senior beard romp adorn nuclear spill corner cradle style ancient family general leader ambition exchange unusual garlic promise voice",
+    "eraser senior ceramic snake clay various huge numb argue hesitate auction category timber browser greatest hanger petition script leaf pickup",
+    "eraser senior ceramic shaft dynamic become junior wrist silver peasant force math alto coal amazing segment yelp velvet image paces",
+    "eraser senior ceramic round column hawk trust auction smug shame alive greatest sheriff living perfect corner chest sled fumes adequate"
+  ]
+
+testGroupSharesMasterKey, testGroupSharesTestnetAddr :: Text
+testGroupSharesMasterKey = "xprv9s21ZrQH143K3dzDLfeY3cMp23u5vDeFYftu5RPYZPucKc99mNEddU4w99GxdgUGcSfMpVDxhnR1XpJzZNXRN1m6xNgnzFS5MwMP6QyBRKV"
+testGroupSharesTestnetAddr = "mkKDUMRR1CcK8eLAzCZAjKnNbCquPoWPxN"
+
+{- Sources of entropy -}
+
+-- | Random bytes, read from /dev/random once, on 2026-10-26: the 64 bytes
+-- of a sample of a sound source
+goodSample :: BS.ByteString
+goodSample =
+  BS.pack
+    [ 0x5d, 0x51, 0x10, 0x86, 0xbe, 0x8b, 0xbf, 0x2f, 0xa3, 0x2c, 0xdf, 0x3d, 0x16, 0x77, 0x94, 0x68,
+      0xa6, 0x1a, 0x1b, 0x48, 0x20, 0x21, 0x40, 0x18, 0xc8, 0x8f, 0x8e, 0xa3, 0x19, 0xd1, 0xe5, 0x5d,
+      0xda, 0x22, 0x2e, 0xd6, 0x6a, 0xd1, 0xe3, 0x98, 0xe3, 0x41, 0xef, 0xd1, 0x9b, 0x01, 0x6a, 0xbe,
+      0x6d, 0xc8, 0x9e, 0x49, 0x83, 0xf4, 0xe0, 0xec, 0xcc, 0xc9, 0x6a, 0x4d, 0x1c, 0xd6, 0x83, 0x4f
+    ]
+
+-- | What hw says before it reads the system
+readingSystemMessage :: String
+readingSystemMessage = "Reading the entropy of the system, which can take a moment while the system gathers it"
+
+-- | The sources of hw: the entropy of the system, no dice, nothing said
+systemSources :: Sources IO
+systemSources = Sources {readSystem = systemEntropy, askDice = Nothing, say = \_ -> return ()}
+
+-- | Sources that give out the given entropies in order, named "fixed", with
+-- the given dice; what they say and do is noted in the log, a read as
+-- "system" and the dice as "dice", each with the number of bytes asked
+fixedSources :: IORef [String] -> [BS.ByteString] -> Maybe BS.ByteString -> IO (Sources IO)
+fixedSources logged entropies diceM = do
+  left <- newIORef entropies
+  return
+    Sources
+      { readSystem = \bytes -> do
+          liftIO $ modifyIORef logged (<> ["system " <> show bytes])
+          rest <- liftIO $ readIORef left
+          case rest of
+            [] -> throwError "The fixed entropies ran out"
+            entropy : more -> liftIO (writeIORef left more) >> return ("fixed", entropy),
+        askDice = fmap (\dice bytes -> liftIO (modifyIORef logged (<> ["dice " <> show bytes])) >> return dice) diceM,
+        say = \message -> modifyIORef logged (<> [message])
+      }

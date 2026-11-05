@@ -41,30 +41,68 @@ spec = do
   mnemonicSpec
 
 mnemonicSpec :: Spec
-mnemonicSpec =
+mnemonicSpec = do
   describe "A new mnemonic as hw shows it" $ do
     it "says how many words it has and where its entropy came from, then numbers its words four on a line, in columns" $
-      renderedLines (mnemonicDoc "/dev/random" (Text.words (mnemonicWords testMnemonic)) [])
+      renderedLines (mnemonicDoc "/dev/random" (Text.words (mnemonicWords testMnemonic)))
         `shouldBe` [ "Mnemonic of 12 words, from /dev/random",
                      "   1. snow       2. senior     3. nerve      4. virus",
                      "   5. fabric     6. now        7. fringe     8. clip",
                      "   9. marble    10. interest  11. analyst   12. can"
                    ]
 
-    it "shows its parts only, each numbered from 1, a blank line between them, and not the whole mnemonic" $
-      renderedLines (mnemonicDoc "/dev/random" (Text.words (mnemonicWords testMnemonic)) (Text.words <$> testMnemonicParts))
-        `shouldBe` [ "Mnemonic of 12 words in 2 parts, from /dev/random",
+  describe "The shares of a new backup as hw shows them" $ do
+    it "say how many they are, of how many words, how many rebuild the seed and where the entropy came from, then each share under its number, a blank line between them" $
+      renderedLines
+        ( sharesDoc
+            "/dev/random"
+            2
+            [ Text.words "acid fawn academic acid axis auction endless award answer random spew dryer again public civil unwrap scandal pleasure extra member",
+              Text.words "acid fawn academic agency damage stilt math warmth satisfy step gravity prospect elder swing flexible explain subject sugar holy sled",
+              Text.words "acid fawn academic always crisis research spirit eyebrow often hunting reaction diploma envelope have response cargo warn violence smirk symbolic"
+            ]
+        )
+        `shouldBe` [ "Backup in 3 shares of 20 words, any 2 of them rebuild the seed, from /dev/random",
                      "",
-                     "Part 1",
-                     "   1. stamp      2. snap       3. purity     4. pepper",
-                     "   5. arrange    6. notable    7. inform     8. grass",
-                     "   9. crazy     10. salad     11. thought   12. slide",
+                     "Share 1",
+                     "   1. acid       2. fawn       3. academic   4. acid",
+                     "   5. axis       6. auction    7. endless    8. award",
+                     "   9. answer    10. random    11. spew      12. dryer",
+                     "  13. again     14. public    15. civil     16. unwrap",
+                     "  17. scandal   18. pleasure  19. extra     20. member",
                      "",
-                     "Part 2",
-                     "   1. boring     2. auction    3. demand     4. filter",
-                     "   5. frog       6. accuse     7. company    8. exchange",
-                     "   9. rely      10. slogan    11. trim      12. typical"
+                     "Share 2",
+                     "   1. acid       2. fawn       3. academic   4. agency",
+                     "   5. damage     6. stilt      7. math       8. warmth",
+                     "   9. satisfy   10. step      11. gravity   12. prospect",
+                     "  13. elder     14. swing     15. flexible  16. explain",
+                     "  17. subject   18. sugar     19. holy      20. sled",
+                     "",
+                     "Share 3",
+                     "   1. acid       2. fawn       3. academic   4. always",
+                     "   5. crisis     6. research   7. spirit     8. eyebrow",
+                     "   9. often     10. hunting   11. reaction  12. diploma",
+                     "  13. envelope  14. have      15. response  16. cargo",
+                     "  17. warn      18. violence  19. smirk     20. symbolic"
                    ]
+
+    it "say of one share that it is the whole backup" $
+      renderedLines (sharesDoc "/dev/random" 1 [Text.words "analysis morning academic academic center intend saver petition romp expand dryer smirk award estate sunlight deny mortgage debut dictate rocky"])
+        `shouldBe` [ "Backup in 1 share of 20 words, which is the whole backup, from /dev/random",
+                     "",
+                     "Share 1",
+                     "   1. analysis   2. morning    3. academic   4. academic",
+                     "   5. center     6. intend     7. saver      8. petition",
+                     "   9. romp      10. expand    11. dryer     12. smirk",
+                     "  13. award     14. estate    15. sunlight  16. deny",
+                     "  17. mortgage  18. debut     19. dictate   20. rocky"
+                   ]
+
+    -- 33 words: eight lines of four, and one word on the ninth
+    it "number the 33 words of a share of 32 bytes on nine lines" $ do
+      let shown = renderedLines (sharesDoc "/dev/random" 2 (replicate 2 (Text.words "academic agency academic acid airport idle resident emphasis nail dwarf crunch cards adjust bundle impact election activity modify tension move fitness terminal emerald stick burning quantity payment body strike guitar emphasis enjoy flexible")))
+      take 1 shown `shouldBe` ["Backup in 2 shares of 33 words, any 2 of them rebuild the seed, from /dev/random"]
+      take 2 (drop 10 shown) `shouldBe` ["  29. strike    30. guitar    31. emphasis  32. enjoy", "  33. flexible"]
 
 accountSpec :: Spec
 accountSpec =

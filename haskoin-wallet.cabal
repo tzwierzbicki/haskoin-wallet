@@ -86,6 +86,7 @@ library
       Haskoin.Wallet.Schema.V2
       Haskoin.Wallet.Schema.V3
       Haskoin.Wallet.Schema.V4
+      Haskoin.Wallet.Shares
       Haskoin.Wallet.Store
       Haskoin.Wallet.Sync
       Haskoin.Wallet.Tx.Building
@@ -259,6 +260,7 @@ test-suite spec
       Haskoin.Wallet.Migration.V4Spec
       Haskoin.Wallet.MigrationSpec
       Haskoin.Wallet.Schema.V1
+      Haskoin.Wallet.SharesSpec
       Haskoin.Wallet.StoreSpec
       Haskoin.Wallet.SyncSpec
       Haskoin.Wallet.TestUtils

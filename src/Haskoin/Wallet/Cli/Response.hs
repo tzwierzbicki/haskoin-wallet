@@ -26,9 +26,11 @@ import Numeric.Natural (Natural)
 data Response
   = -- | The command failed, and why
     ResponseError !Text
-  | -- | A new mnemonic: the source of its entropy, its words, and the words
-    -- of each of its parts when it is split
-    ResponseMnemonic !Text ![Text] ![[Text]]
+  | -- | A new mnemonic: the source of its entropy, and its words
+    ResponseMnemonic !Text ![Text]
+  | -- | The shares of a new backup: the source of its entropy, the number
+    -- of shares that rebuild the seed, and the words of each share
+    ResponseShares !Text !Natural ![[Text]]
   | -- | An account, with the balance it can spend now
     ResponseAccount !DBAccount !Word64
   | -- | An account, whether the command did what it was asked, and what it
@@ -105,8 +107,10 @@ typed kind fields = object (("type" .= kind) : fields)
 instance ToJSON Response where
   toJSON = \case
     ResponseError err -> typed "error" ["error" .= err]
-    ResponseMnemonic source ws parts ->
-      typed "mnemonic" ["entropysource" .= source, "mnemonic" .= ws, "splitmnemonic" .= parts]
+    ResponseMnemonic source ws ->
+      typed "mnemonic" ["entropysource" .= source, "mnemonic" .= ws]
+    ResponseShares source threshold shares ->
+      typed "shares" ["entropysource" .= source, "threshold" .= threshold, "shares" .= shares]
     ResponseAccount acc spendable -> typed "account" ["account" .= accountWithSpendable acc spendable]
     ResponseAccResult acc result text -> typed "accresult" ["account" .= acc, "result" .= result, "text" .= text]
     ResponseFile file -> typed "file" ["file" .= file]
@@ -149,7 +153,8 @@ instance FromJSON Response where
     kind <- o .: "type"
     case kind :: Text of
       "error" -> ResponseError <$> o .: "error"
-      "mnemonic" -> ResponseMnemonic <$> o .: "entropysource" <*> o .: "mnemonic" <*> o .: "splitmnemonic"
+      "mnemonic" -> ResponseMnemonic <$> o .: "entropysource" <*> o .: "mnemonic"
+      "shares" -> ResponseShares <$> o .: "entropysource" <*> o .: "threshold" <*> o .: "shares"
       "account" -> uncurry ResponseAccount <$> (parseAccountWithSpendable =<< o .: "account")
       "accresult" -> ResponseAccResult <$> o .: "account" <*> o .: "result" <*> o .: "text"
       "file" -> ResponseFile <$> o .: "file"

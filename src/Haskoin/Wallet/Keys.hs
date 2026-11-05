@@ -20,6 +20,7 @@ import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
 import Data.Text.Normalize (NormalizationMode (NFKD), normalize)
 import Haskoin
+import Haskoin.Crypto.Keys.Slip39 (EncryptedMasterSecret, decryptMasterSecret)
 import Haskoin.Wallet.Util (wordsOfLines)
 import Numeric.Natural (Natural)
 
@@ -251,6 +252,34 @@ typedMasterKey mnem = do
   sentence <- toMnemonic entropy
   return $ makeXPrvKey $ fastPBKDF2_SHA512 (Parameters 2048 64) (encodeUtf8 sentence) ("mnemonic" <> encodeUtf8 (mnemonicPass mnem))
 
+{- The secret of a seed -}
+
+-- | The secret of a seed as the user holds it, with its passphrase: the
+-- mnemonic of BIP39, or the backup that the shares of SLIP-39 rebuild,
+-- which the passphrase decrypts.
+data SeedSecret
+  = MnemonicSecret !MnemonicPass
+  | SharesSecret !EncryptedMasterSecret !Text
+  deriving (Eq, Show)
+
+-- | The master key of a seed, from its secret. A mnemonic gives the one of
+-- BIP39 ('masterKey'). A backup in shares gives the one of SLIP-39: the
+-- backup decrypted with the passphrase is the seed itself, which BIP32
+-- derives the master key from, with no mnemonic in between. Any passphrase
+-- decrypts it to a seed, so a wrong one is not told here.
+secretMasterKey :: SeedSecret -> Either String XPrvKey
+secretMasterKey (MnemonicSecret mnem) = masterKey mnem
+secretMasterKey (SharesSecret backup passphrase) = makeXPrvKey <$> decryptMasterSecret passphrase backup
+
+-- | The master key hw derived before it normalized passphrases
+-- ('typedMasterKey'): Nothing when normalizing leaves the passphrase as it
+-- is, and for a backup in shares, which hw never derived otherwise
+secretTypedMasterKey :: SeedSecret -> Either String (Maybe XPrvKey)
+secretTypedMasterKey (MnemonicSecret mnem)
+  | normalizePassphrase (mnemonicPass mnem) == mnemonicPass mnem = Right Nothing
+  | otherwise = Just <$> typedMasterKey mnem
+secretTypedMasterKey (SharesSecret _ _) = Right Nothing
+
 -- | The signing key of an account under a master key: the key at the path
 -- of its kind
 accountKey :: AccountKind -> Network -> Ctx -> XPrvKey -> Natural -> XPrvKey
@@ -312,6 +341,15 @@ typedSeedOf :: Ctx -> MnemonicPass -> Either String (Maybe PublicSeed)
 typedSeedOf ctx mnem
   | normalizePassphrase (mnemonicPass mnem) == mnemonicPass mnem = Right Nothing
   | otherwise = Just . seedOfMaster ctx <$> typedMasterKey mnem
+
+-- | The public side of a seed, from its secret
+secretSeed :: Ctx -> SeedSecret -> Either String PublicSeed
+secretSeed ctx secret = seedOfMaster ctx <$> secretMasterKey secret
+
+-- | The public side of the seed hw derived before it normalized the
+-- passphrase, when the secret has one: see 'secretTypedMasterKey'
+secretTypedSeed :: Ctx -> SeedSecret -> Either String (Maybe PublicSeed)
+secretTypedSeed ctx secret = fmap (seedOfMaster ctx) <$> secretTypedMasterKey secret
 
 -- | The public side of a seed, from its master key
 seedOfMaster :: Ctx -> XPrvKey -> PublicSeed

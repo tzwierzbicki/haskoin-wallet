@@ -148,14 +148,14 @@ commandLineSpec ctx = do
 
     it "says what is wrong with the value of an option, then the usage of the command" $
       withHome $ \home -> do
-        run <- hw home ["mnemonic", "--parts", "20"] []
+        run <- hw home ["mnemonic", "--shares", "20"] []
         runExit run `shouldBe` ExitFailure 1
-        runErr run `shouldSatisfy` Text.isInfixOf "Error: option --parts: The --parts value has to be between 1 and 12"
+        runErr run `shouldSatisfy` Text.isInfixOf "Error: option --shares: The --shares value has to be between 1 and 16"
         runErr run `shouldSatisfy` Text.isInfixOf "Usage: hw mnemonic"
 
     it "ends with the help to read" $
       withHome $ \home -> do
-        run <- hw home ["mnemonic", "--parts", "20"] []
+        run <- hw home ["mnemonic", "--shares", "20"] []
         runErr run `shouldSatisfy` Text.isSuffixOf "Type hw mnemonic --help for the help of mnemonic.\n"
 
     it "says what a command misses" $

@@ -16,6 +16,9 @@ module Haskoin.Wallet.Workflow.TestUtils
     seedOnce,
     seedTwice,
     partsOnce,
+    sharesOnce,
+    sharesForNew,
+    sharesTestnetAddr,
     -- * Running a command
     answer,
     createMain,
@@ -71,6 +74,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     -- * Payments and chains
     payment,
     paidChain,
+    chainPaying,
     newerPayment,
     olderAndNewerChain,
     twoCoinsTx,
@@ -89,7 +93,7 @@ import Control.Monad (void)
 import qualified Data.ByteString as BS
 import Data.List (sortOn)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Word (Word64)
@@ -125,6 +129,21 @@ seedTwice = [mnemonicWords testMnemonic, mnemonicWords testMnemonic, mnemonicPas
 -- typed once each, as a command with --parts 2 asks for them
 partsOnce :: [Text]
 partsOnce = testMnemonicParts <> [mnemonicPass testMnemonic]
+
+-- | The shares of the backup of the device tests, then its passphrase,
+-- typed once each, as the commands that check a seed ask for them
+sharesOnce :: [Text]
+sharesOnce = testShares <> [testSharesPassphrase]
+
+-- | The shares typed once and the passphrase twice, as createacc asks for
+-- them
+sharesForNew :: [Text]
+sharesForNew = testShares <> [testSharesPassphrase, testSharesPassphrase]
+
+-- | The first receiving address of the bip44 account 0 of that backup on
+-- testnet
+sharesTestnetAddr :: Address
+sharesTestnetAddr = fromMaybe (error "sharesTestnetAddr") (textToAddr btcTest =<< listToMaybe testSharesTestnetAddrs)
 
 {- Running a command -}
 
@@ -454,6 +473,10 @@ payment ctx = fundingTx ctx 1 [(externalAddr 0, 50000)]
 -- | A chain whose block 800000 holds the payment, two blocks below its best
 paidChain :: Ctx -> Chain
 paidChain ctx = Chain 800002 [(payment ctx, Just 800000)]
+
+-- | A chain whose block 800000 pays 50000 to the address
+chainPaying :: Ctx -> Address -> Chain
+chainPaying ctx addr = Chain 800002 [(fundingTx ctx 1 [(addr, 50000)], Just 800000)]
 
 -- | A payment of 30000 satoshis from another wallet to the second
 -- receiving address of the test wallet

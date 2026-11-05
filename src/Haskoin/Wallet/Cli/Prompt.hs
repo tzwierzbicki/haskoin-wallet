@@ -2,8 +2,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | What hw asks the user for on the terminal: the mnemonic of a wallet,
--- whole or in parts, and its passphrase, which give the signing key of an
--- account; the dice rolls that add to the entropy of a new mnemonic; the
+-- or the shares of its backup, and its passphrase, which give the signing
+-- key of an account; the dice rolls that add to the entropy of a new
+-- mnemonic; the
 -- private keys of a sweep, when they are not in a file; the answer to a
 -- yes-or-no question, such as whether to send a transaction or to take a
 -- high fee rate; a choice among a few, such as the address the change of
@@ -26,9 +27,11 @@ module Haskoin.Wallet.Cli.Prompt
     askAnswer,
     askChoice,
     readMnemonic,
-    askMnemonic,
-    askMnemonicPass,
-    askNewMnemonicPass,
+    SeedWords (..),
+    readSeedWords,
+    askSeedWords,
+    askSeedSecret,
+    askNewSeedSecret,
     askSigningKey,
     matchAccount,
     typedPassphraseCreated,
@@ -46,7 +49,7 @@ import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
-import Data.Char (digitToInt, isSpace)
+import Data.Char (digitToInt, isSpace, ord)
 import Data.List (elemIndex, intercalate)
 import Data.Maybe (fromMaybe, listToMaybe)
 import qualified Data.Map.Strict as Map
@@ -54,8 +57,10 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8')
 import Haskoin
+import Haskoin.Crypto.Keys.Slip39 (EncryptedMasterSecret, Share)
 import Haskoin.Wallet.Entropy (diceBits, diceEntropy, mergeMnemonicParts)
 import Haskoin.Wallet.Keys
+import Haskoin.Wallet.Shares (Progress (..), addShare, noShares, progress, readShare, rebuilt)
 import Numeric.Natural (Natural)
 import qualified System.IO as IO
 import System.IO.Error (isDoesNotExistError, isEOFError)
@@ -185,77 +190,143 @@ readMnemonic typed
   where
     ws = Text.words (Text.toLower typed)
 
--- | A mnemonic typed whole, or in the given number of parts that merge
--- into it, in its canonical form. A mnemonic or a part that does not read
--- is told and asked again, and so are parts that do not merge.
-askMnemonic :: (MonadIO m) => Terminal -> Natural -> ExceptT String m Mnemonic
-askMnemonic term parts
-  | parts <= 1 = askWords "Mnemonic: "
-  | otherwise =
-      retrying term $
+-- | The words of a seed as typed: the mnemonic of BIP39, or the backup
+-- that the shares of SLIP-39 typed rebuild
+data SeedWords
+  = MnemonicWords !Mnemonic
+  | BackupShares !EncryptedMasterSecret
+  deriving (Eq, Show)
+
+-- | What the first words typed are: a mnemonic, or a share of a backup.
+-- The number of words tells: a mnemonic has 12, 15, 18, 21 or 24, and no
+-- share has any of those. Either is read as 'readMnemonic' and
+-- 'readShare' read them.
+readSeedWords :: Text -> Either String (Either Mnemonic Share)
+readSeedWords typed
+  | count `elem` [12, 15, 18, 21, 24] = Left <$> readMnemonic typed
+  | count >= 20 = Right <$> readShare typed
+  | otherwise = Left $ "A mnemonic has 12, 15, 18, 21 or 24 words, and a share of a backup 20 or 33, not " <> show count
+  where
+    count = length (Text.words typed)
+
+-- | The words of a seed. Without parts, the user types a mnemonic, or the
+-- first share of a backup: hw then asks for the next shares, telling how
+-- many are needed, until they rebuild the backup. With parts, the user
+-- types the parts an earlier version of hw split a mnemonic into, which
+-- merge into it. What does not read is told and asked again, and so are
+-- parts that do not merge and shares that do not rebuild a backup.
+askSeedWords :: (MonadIO m) => Terminal -> Natural -> ExceptT String m SeedWords
+askSeedWords term parts
+  | parts > 1 =
+      fmap MnemonicWords . retrying term $
         mergeMnemonicParts <$> forM [1 .. parts] (\n -> askWords $ "Mnemonic part " <> show n <> " of " <> show parts <> ": ")
+  | otherwise =
+      retrying term $ do
+        first <- retrying term $ readSeedWords <$> hidden term "Mnemonic, or a share of a backup: "
+        case first of
+          Left mnemonic -> return (Right (MnemonicWords mnemonic))
+          Right share -> fmap BackupShares <$> askShares term share
   where
     askWords prompt = retrying term $ readMnemonic <$> hidden term prompt
+
+-- | The backup of a first share and of the shares asked after it, as many
+-- as it takes; or why they do not rebuild one. Before each share hw tells
+-- what is typed of what is needed. A share that does not go with the
+-- others is told and asked again.
+askShares :: (MonadIO m) => Terminal -> Share -> ExceptT String m (Either String EncryptedMasterSecret)
+askShares term share = liftEither (addShare noShares share) >>= collect
+  where
+    collect typed = case progress typed of
+      Enough shares -> return (rebuilt shares)
+      Needs needed -> do
+        more <- retrying term $ (readShare >=> addShare typed) <$> hidden term (needed <> ". Next share: ")
+        collect more
 
 -- | A passphrase, typed once; nothing when the seed has none
 askPassphrase :: (MonadIO m) => Terminal -> ExceptT String m Text
 askPassphrase term = hidden term "Passphrase, or nothing if the seed has none: "
 
--- | The mnemonic and the passphrase of a seed, typed once each, for a
--- command that checks them: against the accounts, or on the chain
-askMnemonicPass :: (MonadIO m) => Terminal -> Natural -> ExceptT String m MnemonicPass
-askMnemonicPass term parts = MnemonicPass <$> askMnemonic term parts <*> askPassphrase term
+-- | The secret of the words of a seed with its passphrase
+withPassphrase :: SeedWords -> Text -> SeedSecret
+withPassphrase (MnemonicWords mnemonic) passphrase = MnemonicSecret (MnemonicPass mnemonic passphrase)
+withPassphrase (BackupShares backup) passphrase = SharesSecret backup passphrase
 
--- | The mnemonic and the passphrase of a seed an account is created from,
--- each typed twice: a typo that the checksum lets through, one time in 16
--- for 12 words, makes another seed, and an account whose funds the
--- mnemonic written down could not spend
-askNewMnemonicPass :: (MonadIO m) => Terminal -> Natural -> ExceptT String m MnemonicPass
-askNewMnemonicPass term parts = MnemonicPass <$> confirmedMnemonic <*> confirmedPassphrase
+-- | The words and the passphrase of a seed, typed once each, for a
+-- command that checks them: against the accounts, or on the chain
+askSeedSecret :: (MonadIO m) => Terminal -> Natural -> ExceptT String m SeedSecret
+askSeedSecret term parts = withPassphrase <$> askSeedWords term parts <*> askPassphrase term
+
+-- | The words and the passphrase of a seed an account is created from.
+--
+-- A mnemonic is typed twice: a typo that its checksum lets through, one
+-- time in 16 for 12 words, makes another seed, and an account whose funds
+-- the mnemonic written down could not spend. The shares of a backup are
+-- typed once: the checksum of a share catches any three wrong words, and
+-- the digest of the backup a share that is not of it.
+--
+-- The passphrase is typed twice. That of a backup in shares has printable
+-- ASCII characters only, as its format asks: another one is refused, since
+-- other wallets would not take it, or would not make the same seed of it.
+askNewSeedSecret :: (MonadIO m) => Terminal -> Natural -> ExceptT String m SeedSecret
+askNewSeedSecret term parts = do
+  ws <- confirmedWords
+  withPassphrase ws <$> confirmedPassphrase ws
   where
-    confirmedMnemonic = retrying term $ do
-      first <- askMnemonic term parts
-      liftIO $ tell term "Type the mnemonic again, to check it"
-      second <- askMnemonic term parts
-      return $ if first == second then Right first else Left "The mnemonics do not match"
-    confirmedPassphrase = retrying term $ do
+    confirmedWords = retrying term $ do
+      first <- askSeedWords term parts
+      case first of
+        BackupShares _ -> return (Right first)
+        MnemonicWords _ -> do
+          liftIO $ tell term "Type the mnemonic again, to check it"
+          second <- askSeedWords term parts
+          return $ if first == second then Right first else Left "The mnemonics do not match"
+    confirmedPassphrase ws = retrying term $ do
       first <- askPassphrase term
-      if Text.null first
-        then return (Right first)
-        else do
+      case ws of
+        _ | Text.null first -> return (Right first)
+        BackupShares _ | not (Text.all printableAscii first) -> return (Left sharesPassphrase)
+        _ -> do
           second <- hidden term "Passphrase again: "
           return $ if first == second then Right first else Left "The passphrases do not match"
+    printableAscii c = ord c >= 32 && ord c <= 126
+    sharesPassphrase =
+      "The passphrase of a backup in shares has printable ASCII characters only: \
+      \other wallets would not take this one"
 
 {- The signing key of an account -}
 
--- | The signing key of an account of a kind from the mnemonic and the
+-- | The signing key of an account of a kind from the words and the
 -- passphrase of its seed, with the public side of the seed. Both are asked
 -- again while the key they give is not the account's: a wrong word the
--- checksum lets through gives another seed, which no passphrase can fix.
--- The one place a private key comes out of the mnemonic for a command.
+-- checksum of a mnemonic lets through gives another seed, which no
+-- passphrase can fix, and any passphrase decrypts a backup in shares to
+-- some seed. The one place a private key comes out of the secret of a seed
+-- for a command.
 askSigningKey :: (MonadIO m) => Terminal -> AccountKind -> Network -> Ctx -> Natural -> Natural -> XPubKey -> ExceptT String m (PublicSeed, XPrvKey)
 askSigningKey term kind net ctx parts index accPub =
   retrying term $ do
-    mnem <- askMnemonicPass term parts
-    maybe (Left "The mnemonic or the passphrase does not match the account") Right
-      <$> matchAccount term kind net ctx index accPub mnem
+    secret <- askSeedSecret term parts
+    maybe (Left (mismatch secret)) Right
+      <$> matchAccount term kind net ctx index accPub secret
+  where
+    mismatch (MnemonicSecret _) = "The mnemonic or the passphrase does not match the account"
+    mismatch (SharesSecret _ _) = "The shares or the passphrase do not match the account"
 
--- | The seed and the signing key of an account of a kind that a mnemonic
--- and a passphrase give, if they give its public key. The passphrase is
--- tried normalized, as BIP39 asks, then, when normalizing changes it, as
--- typed: hw derived its accounts so before, and the user is told that
--- other wallets would not find such an account.
-matchAccount :: (MonadIO m) => Terminal -> AccountKind -> Network -> Ctx -> Natural -> XPubKey -> MnemonicPass -> ExceptT String m (Maybe (PublicSeed, XPrvKey))
-matchAccount term kind net ctx index accPub mnem = do
-  normalized <- liftIO . accountOf =<< liftEither (masterKey mnem)
-  case normalized of
+-- | The seed and the signing key of an account of a kind that the secret
+-- of a seed gives, if it gives its public key. The passphrase of a
+-- mnemonic is tried normalized, as BIP39 asks, then, when normalizing
+-- changes it, as typed: hw derived its accounts so before, and the user is
+-- told that other wallets would not find such an account.
+matchAccount :: (MonadIO m) => Terminal -> AccountKind -> Network -> Ctx -> Natural -> XPubKey -> SeedSecret -> ExceptT String m (Maybe (PublicSeed, XPrvKey))
+matchAccount term kind net ctx index accPub secret = do
+  derived <- liftIO . accountOf =<< liftEither (secretMasterKey secret)
+  case derived of
     Just found -> return (Just found)
-    Nothing
-      | normalizePassphrase (mnemonicPass mnem) == mnemonicPass mnem -> return Nothing
-      | otherwise -> do
-          typed <- liftIO . accountOf =<< liftEither (typedMasterKey mnem)
-          forM_ typed $ \_ -> liftIO $ tell term typedPassphraseWarning
-          return typed
+    Nothing -> do
+      asTyped <- liftEither (secretTypedMasterKey secret)
+      typed <- maybe (return Nothing) (liftIO . accountOf) asTyped
+      forM_ typed $ \_ -> liftIO $ tell term typedPassphraseWarning
+      return typed
   where
     accountOf master = do
       let seed = seedOfMaster ctx master

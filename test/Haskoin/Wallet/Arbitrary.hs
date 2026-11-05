@@ -244,7 +244,10 @@ arbitraryResponse net ctx =
     [ ResponseError <$> arbitraryText,
       ResponseMnemonic
         <$> arbitraryText
-        <*> resize 12 (listOf arbitraryText)
+        <*> resize 12 (listOf arbitraryText),
+      ResponseShares
+        <$> arbitraryText
+        <*> arbitraryNatural
         <*> resize 12 (listOf $ resize 12 $ listOf arbitraryText),
       ResponseAccount <$> arbitraryDBAccount net ctx <*> arbitraryPositive,
       ResponseAccResult

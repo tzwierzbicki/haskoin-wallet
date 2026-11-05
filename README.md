@@ -1,8 +1,8 @@
 # Haskoin Wallet
 
 Haskoin Wallet (`hw`) is a command-line wallet for Bitcoin and Bitcoin Cash.
-It makes mnemonics as [BIP39] describes, and derives accounts and addresses as
-[BIP44] does, with legacy addresses, or as [BIP84] does, with native SegWit
+It makes mnemonics as [BIP39] describes, or backups in shares as [SLIP39]
+describes, and derives accounts and addresses as [BIP44] does, with legacy addresses, or as [BIP84] does, with native SegWit
 addresses, which pay lower fees. It keeps its accounts in a SQLite database,
 and asks a [haskoin-store] server about the chain. The database holds public
 keys only. Your mnemonic is never written to disk.
@@ -237,16 +237,25 @@ hw checkaddr /0/7                           # on the offline computer: the same 
 
 **`hw mnemonic`** prints a new mnemonic, made from the entropy of the
 operating system, and stores nothing. `--entropy 32` gives 24 words instead of
-12. `--dice` mixes in rolls of a die. `--parts N` prints N parts, which are all
-needed to rebuild the mnemonic.
+12. `--dice` mixes in rolls of a die.
+
+`--shares N` prints the N shares of a backup instead of a mnemonic, in the
+[SLIP39] format. Any `--threshold` of them rebuild the seed, and fewer tell
+nothing of it: with `--shares 3 --threshold 2`, losing one share loses
+nothing, and finding one gives nothing away. A share is a list of 20 words,
+or of 33 with `--entropy 32`. `--shares 1` makes a single share, which is the
+whole backup. The commands that ask for a mnemonic take the shares in its
+place: type one, and `hw` asks for the next until it has enough.
 
 ```console
 hw mnemonic --entropy 32 --dice
-hw mnemonic --parts 3
+hw mnemonic --shares 3 --threshold 2
+hw mnemonic --shares 1
 ```
 
 **`hw createacc NAME`** creates an account from a mnemonic and passphrase,
-each typed twice. It stores the public key of the account, at the next free
+each typed twice, or from the shares of a backup, typed once, and their
+passphrase. It stores the public key of the account, at the next free
 index of the seed on the network. An account is of one of two kinds. A
 `bip44` account, the default, has legacy P2PKH addresses, which start with
 `1` on Bitcoin, at `m/44'/coin'/index'`. A `bip84` account has native SegWit
@@ -258,10 +267,10 @@ default. Bitcoin Cash has no SegWit, so it has `bip44` accounts only.
 hw createacc savings
 hw createacc spending --type bip84
 hw createacc cash --network bch
-hw createacc vault --parts 3
 ```
 
-**`hw recover`** finds the accounts of a mnemonic that were paid. It adds
+**`hw recover`** finds the accounts of a mnemonic, or of a backup in shares,
+that were paid. It adds
 them, named `btc0`, `btc1` and so on for the `bip44` accounts and
 `btc0-segwit`, `btc1-segwit` and so on for the `bip84` ones, and syncs them.
 It stops after 10 accounts in a row without a payment, or the number
@@ -278,7 +287,8 @@ hw recover --network btc --account-gap 20
 ```
 
 **`hw checkmnemonic`** checks that a mnemonic and passphrase give the public
-key of an account. Use it to test a mnemonic you wrote down. Nothing is signed.
+key of an account. Use it to test a mnemonic you wrote down, or the shares of
+a backup. Nothing is signed.
 When they do not match, it says if they give the key at another path. An
 account imported from its key alone may have been given the wrong `--type` or
 `--network`, and `checkmnemonic` tells which to import it again with.
@@ -508,7 +518,8 @@ hw preparesendall ADDRESS1:0.1 ADDRESS2 --fee-rate median --leave-dust
 ```
 
 **`hw signtx`** signs a pending transaction by its nosigHash, or a transaction
-file. It asks for the mnemonic and passphrase of the account.
+file. It asks for the mnemonic and passphrase of the account, or for the
+shares of its backup.
 
 ```console
 hw signtx NOSIGHASH
@@ -699,8 +710,12 @@ To restore a backup, replace `~/.hw/accounts.sqlite` with the copy, or point
 - **The mnemonic is the only key to the funds.** `hw` never stores it. Without
   the database, the mnemonic still spends the funds, and `recover` finds the
   accounts again. Without the mnemonic, the funds are lost.
-- **Give the same `--parts` to every command that asks for a split mnemonic.**
-  `hw` then asks for each part.
+- **A backup in shares is not a mnemonic.** A wallet that reads [SLIP39]
+  shares restores it. One that reads only BIP39 mnemonics cannot. Its
+  passphrase has printable ASCII characters only.
+- **A mnemonic split by an earlier version is typed with `--parts`.** `hw`
+  splits a mnemonic no more. Give `--parts N` to every command that asks for
+  one split so, and `hw` asks for each of the N parts.
 - **The database and the account files are private.** They hold no private
   key. But the public keys in them reveal every address and balance of your
   accounts.
@@ -785,7 +800,13 @@ not lost, but take care when you move them:
 - Version 0.7.0 derives the wrong account from a split mnemonic. Use the
   0.7.0 binary to move the funds to a new account created with 0.10.
 
+Versions up to 0.9 split a mnemonic with `mnemonic --parts` into parts that
+were all needed to rebuild it. `hw` 0.10 makes no such parts, and reads them
+with `--parts`. Its backups in shares take their place: a chosen number of
+shares is enough, and a wrong share is told.
+
 [BIP39]: https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki
+[SLIP39]: https://github.com/satoshilabs/slips/blob/master/slip-0039.md
 [BIP44]: https://github.com/bitcoin/bips/blob/master/bip-0044.mediawiki
 [BIP84]: https://github.com/bitcoin/bips/blob/master/bip-0084.mediawiki
 [BIP125]: https://github.com/bitcoin/bips/blob/master/bip-0125.mediawiki

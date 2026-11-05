@@ -112,6 +112,7 @@ import Haskoin.Wallet.Entropy
 import Haskoin.Wallet.Tx.FeeRates
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Keys
+import Haskoin.Wallet.Shares (genShares)
 import Haskoin.Wallet.Labels (accountRecords, importFile)
 import Haskoin.Wallet.Cli.Listing
 import Haskoin.Wallet.MessageSigning
@@ -259,8 +260,8 @@ txAnswer accId info = do
 
 {- Mnemonics and accounts -}
 
--- | A new mnemonic, from the entropy of the system, mixed with dice rolls
--- with --dice
+-- | A new mnemonic, or with --shares the shares of a new backup, from the
+-- entropy of the system, mixed with dice rolls with --dice
 cmdMnemonic :: NewMnemonic -> IO Response
 cmdMnemonic opts =
   runResponse $ do
@@ -270,11 +271,19 @@ cmdMnemonic opts =
               askDice = if opts.dice then Just (askDiceEntropy terminal) else Nothing,
               say = tell terminal
             }
-    (source, mnemonic, parts) <- genMnemonic sources opts.entropy opts.parts
-    return $ ResponseMnemonic source (Text.words mnemonic) (Text.words <$> parts)
+    case opts.shares of
+      Nothing -> do
+        when (isJust opts.threshold) $
+          throwError "--threshold goes with --shares: it is the number of shares that rebuild the seed"
+        (source, mnemonic) <- genMnemonic sources opts.entropy
+        return $ ResponseMnemonic source (Text.words mnemonic)
+      Just count -> do
+        (source, threshold, shares) <- genShares sources opts.entropy count opts.threshold
+        return $ ResponseShares source (fromIntegral threshold) (Text.words <$> shares)
 
--- | Create an account of a kind on a network from a mnemonic: the next
--- account of the seed of that kind on that network
+-- | Create an account of a kind on a network from a mnemonic, or from the
+-- shares of a backup: the next account of the seed of that kind on that
+-- network
 cmdCreateAcc :: Ctx -> Config -> Text -> Maybe Network -> AccountKind -> Natural -> IO Response
 cmdCreateAcc ctx cfg name netM kind parts =
   runDBResponse cfg $ do
@@ -282,8 +291,8 @@ cmdCreateAcc ctx cfg name netM kind parts =
     checkNameFree name
     net <- liftMaybe noNetwork (commandNetwork cfg netM)
     liftEither $ checkKindOnNetwork net kind
-    mnem <- askNewMnemonicPass terminal parts
-    seed <- seedToCreateWith ctx mnem
+    secret <- askNewSeedSecret terminal parts
+    seed <- seedToCreateWith ctx secret
     (_, xpub) <- lift $ nextAccount kind net ctx seed
     (accId, _) <- insertAccount kind net ctx name xpub (Just (seedFingerprint seed))
     -- The accounts of the seed created before hw recorded fingerprints
@@ -291,15 +300,16 @@ cmdCreateAcc ctx cfg name netM kind parts =
     accountAnswer accId
 
 -- | The seed createacc derives the account from: the one BIP39 derives
--- from the mnemonic and the passphrase. For a passphrase that normalizing
--- changes, hw derived another seed before, from the passphrase as typed.
--- When the wallet has an account of that seed and none of the other, the
--- new account is of it too, so that one seed keeps one set of accounts,
--- and the user is told.
-seedToCreateWith :: Ctx -> MnemonicPass -> ExceptT String (DB IO) PublicSeed
-seedToCreateWith ctx mnem = do
-  seed <- liftEither $ seedOf ctx mnem
-  typedM <- liftEither $ typedSeedOf ctx mnem
+-- from the mnemonic and the passphrase, or the one SLIP-39 derives from a
+-- backup in shares and its passphrase. For a mnemonic with a passphrase
+-- that normalizing changes, hw derived another seed before, from the
+-- passphrase as typed. When the wallet has an account of that seed and
+-- none of the other, the new account is of it too, so that one seed keeps
+-- one set of accounts, and the user is told.
+seedToCreateWith :: Ctx -> SeedSecret -> ExceptT String (DB IO) PublicSeed
+seedToCreateWith ctx secret = do
+  seed <- liftEither $ secretSeed ctx secret
+  typedM <- liftEither $ secretTypedSeed ctx secret
   case typedM of
     Nothing -> return seed
     Just typed -> do
@@ -310,7 +320,7 @@ seedToCreateWith ctx mnem = do
         else return seed
 
 -- | Recover the accounts of a seed that were paid on a network, from its
--- mnemonic: see "Haskoin.Wallet.Sync". The funds of the seed at the
+-- mnemonic or the shares of its backup: see "Haskoin.Wallet.Sync". The funds of the seed at the
 -- accounts hw does not hold are told, not taken. When no account is found
 -- and normalizing changes the passphrase, the accounts hw derived before,
 -- from the passphrase as typed, are looked for too, and the user is told
@@ -324,11 +334,11 @@ cmdRecover ctx cfg opts =
     -- An offline computer hears it before the mnemonic is typed
     fromStore $ storeHealth store
     -- Typed once: a mistyped mnemonic finds no paid account
-    mnem <- askMnemonicPass terminal opts.parts
-    seed <- liftEither $ seedOf ctx mnem
+    secret <- askSeedSecret terminal opts.parts
+    seed <- liftEither $ secretSeed ctx secret
     found <- recoverSeed ctx cfg store net seed opts.accountGap scanQuestion
     elsewhere <- foreignFunds ctx cfg store net seed opts.accountGap scanQuestion
-    typedM <- liftEither $ typedSeedOf ctx mnem
+    typedM <- liftEither $ secretTypedSeed ctx secret
     fromTyped <- case typedM of
       Just typed | null found -> do
         results <- recoverSeed ctx cfg store net typed opts.accountGap scanQuestion
@@ -341,17 +351,20 @@ cmdCheckMnemonic :: Ctx -> Config -> Maybe Text -> Natural -> IO Response
 cmdCheckMnemonic ctx cfg account parts =
   runDBResponse cfg $ do
     (accId, acc) <- getAccountByName account
-    mnem <- askMnemonicPass terminal parts
-    matched <- matchAccount terminal (accountKind acc) (accountNetwork acc) ctx (accountIndex acc) (accountXPubKey ctx acc) mnem
+    secret <- askSeedSecret terminal parts
+    matched <- matchAccount terminal (accountKind acc) (accountNetwork acc) ctx (accountIndex acc) (accountXPubKey ctx acc) secret
     -- A seed proven gives its fingerprint to every account of it
     for_ matched $ \(seed, _) -> lift $ recordFingerprint ctx seed
     tested <- getAccountById accId
+    let typed = case secret of
+          MnemonicSecret _ -> "The mnemonic and passphrase"
+          SharesSecret _ _ -> "The shares and passphrase"
     case matched of
-      Just _ -> return $ ResponseAccResult tested True "The mnemonic and passphrase matched the account"
+      Just _ -> return $ ResponseAccResult tested True (typed <> " matched the account")
       Nothing -> do
-        seed <- liftEither $ seedOf ctx mnem
+        seed <- liftEither $ secretSeed ctx secret
         elsewhere <- liftIO $ keyElsewhere ctx acc seed
-        return $ ResponseAccResult tested False ("The mnemonic and passphrase did not match the account" <> elsewhere)
+        return $ ResponseAccResult tested False (typed <> " did not match the account" <> elsewhere)
 
 -- | What checkmnemonic adds when the seed has the key of the account at
 -- another path than the account's. An account imported from its key
@@ -1114,7 +1127,8 @@ keepSigned ctx net signing signedFile accId (TxFileRead file sourceM) signed inf
   where
     fromWallet = isJust signing.nosigHash
 
--- | Sign a transaction of the account with the key of its mnemonic
+-- | Sign a transaction of the account with the key of its mnemonic, or of
+-- the shares of its backup
 cmdSignTx :: Ctx -> Config -> Signing -> Natural -> IO Response
 cmdSignTx ctx cfg signing parts =
   runDBResponse cfg $ do

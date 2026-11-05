@@ -126,6 +126,18 @@ signingSpec ctx = do
         signed <- txOf =<< answer home ["signtx", nosig, "--parts", "2"] partsOnce
         pendingState signed `shouldBe` Just (True, False)
 
+    -- The chain pays the first address of the account of the backup on
+    -- testnet, and the account pays 20000 to another wallet
+    it "is signed from the shares of a backup, typed in place of the mnemonic" $
+      withChain ctx (chainPaying ctx sharesTestnetAddr) $ \home _ -> do
+        _ <- answer home ["createacc", "vault", "--network", "btctest"] sharesForNew
+        _ <- answer home ["receive"] []
+        _ <- answer home ["sync"] []
+        let recipient = maybe (error "recipient") Text.unpack (addrToText btcTest (otherAddr 0))
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", recipient <> ":0.0002", "--fee-rate", "10"] []
+        signed <- txOf =<< answer home ["signtx", nosig] sharesOnce
+        pendingState signed `shouldBe` Just (True, False)
+
     -- The wallet has two accounts of the test seed, and the payment is
     -- pending in main. Without --account, hw asked which account to use.
     it "is signed by the account that holds it, without --account" $

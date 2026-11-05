@@ -33,6 +33,7 @@ spec = do
     knownWalletsSpec ctx
     leadingZeroSpec ctx
     typedSeedSpec ctx
+    sharesSeedSpec ctx
     describe "Keys of the test wallets" $ do
       it "derives the account key of the test wallet from its mnemonic" $
         xPrvExport btc <$> signingKey Bip44 btc ctx testMnemonic 0 `shouldBe` Right testAccountXPrv
@@ -198,6 +199,58 @@ typedSeedSpec ctx =
 
     it "is not the seed BIP39 derives from the same passphrase" $
       fmap (fingerprintToText . seedFingerprint) (seedOf ctx (withPassphrase cafePassphrase)) `shouldBe` Right cafeNormalizedFingerprint
+
+{- The seed of a backup in shares -}
+
+sharesSeedSpec :: Ctx -> Spec
+sharesSeedSpec ctx = do
+  describe "The seed of a backup in shares" $ do
+    it "has the master key the device tests of a hardware wallet give for its passphrase" $
+      xPrvExport btc <$> secretMasterKey testSharesSecret `shouldBe` Right testSharesMasterKey
+
+    -- Any passphrase decrypts the backup to a seed: the master key of the
+    -- seed 4ba7d31410fa0996f02ffb7cc3b992a1, derived apart from hw
+    it "has another master key without its passphrase, and no error" $
+      xPrvExport btc <$> secretMasterKey (SharesSecret testSharesBackup "")
+        `shouldBe` Right "xprv9s21ZrQH143K3reExTJbGTHPu6mGuUx6yN1H1KkqoiAcw6j1t6hBiwwnXYxNQXxU8T7pANSv1rJYQPXn1LMQk1gbWes5BjSz3rJ5ZfH1cc3"
+
+    it "derives the keys of its bip44 account 0 on testnet, m/44'/1'/0'" $ do
+      master <- expectRight $ secretMasterKey testSharesSecret
+      xPrvExport btcTest (accountKey Bip44 btcTest ctx master 0) `shouldBe` testSharesTestnetXPrv
+      xPubExport btcTest ctx (deriveXPubKey ctx (accountKey Bip44 btcTest ctx master 0)) `shouldBe` testSharesTestnetXPub
+
+    -- The first one is the address the device tests give for the seed
+    it "derives the first two addresses of that account" $ do
+      let account = fromJust $ xPubImport btcTest ctx testSharesTestnetXPub
+          addressAt i = addrToText btcTest (keyAddress Bip44 ctx (derivePubPath ctx (Deriv :/ 0 :/ i) account))
+      map addressAt [0, 1] `shouldBe` map Just testSharesTestnetAddrs
+
+    it "derives the public key of its bip44 account 0 on Bitcoin from the public side of the seed, and its first address" $ do
+      seed <- expectRight $ secretSeed ctx testSharesSecret
+      account <- seedAccountKey seed Bip44 btc 0
+      fmap (xPubExport btc ctx) account `shouldBe` Just testSharesXPub
+      fmap (addrToText btc . keyAddress Bip44 ctx . derivePubPath ctx (Deriv :/ 0 :/ 0)) account `shouldBe` Just (Just testSharesAddr)
+
+    it "has the fingerprint of its master public key" $
+      fingerprintToText . seedFingerprint <$> secretSeed ctx testSharesSecret `shouldBe` Right testSharesFingerprintText
+
+    -- hw never derived the seed of a backup in shares another way
+    it "has no seed of the passphrase as typed, even for a passphrase with an accent" $
+      fmap (fmap (fingerprintToText . seedFingerprint)) (secretTypedSeed ctx (SharesSecret testSharesBackup cafePassphrase)) `shouldBe` Right Nothing
+
+  describe "The seed of a mnemonic, as the secret a command asks for" $ do
+    it "is the seed BIP39 derives" $
+      fingerprintToText . seedFingerprint <$> secretSeed ctx (MnemonicSecret testMnemonic) `shouldBe` Right testFingerprintText
+
+    it "gives the account key of the test wallet" $
+      (\master -> xPrvExport btc (accountKey Bip44 btc ctx master 0)) <$> secretMasterKey (MnemonicSecret testMnemonic) `shouldBe` Right testAccountXPrv
+
+    it "has the seed of the passphrase as typed, for a passphrase normalizing changes" $
+      fmap (fmap (fingerprintToText . seedFingerprint)) (secretTypedSeed ctx (MnemonicSecret (withPassphrase cafePassphrase)))
+        `shouldBe` Right (Just cafeTypedFingerprint)
+
+    it "has none for a passphrase normalizing leaves as it is" $
+      fmap (fmap (fingerprintToText . seedFingerprint)) (secretTypedSeed ctx (MnemonicSecret testMnemonic)) `shouldBe` Right Nothing
 
 {- The passphrase, as BIP39 hashes it -}
 
