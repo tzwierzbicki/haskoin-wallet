@@ -1155,6 +1155,29 @@ recoverSpec ctx =
         runErr run `shouldNotSatisfy` Text.isInfixOf "as typed"
         (fingerprintsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("btc0", Just cafeNormalizedFingerprint)]
 
+    -- The chain pays 50000 to the first receiving address of each of the
+    -- accounts 0 to 20 of the seed: 21 accounts, one more than recover
+    -- finds before it asks. A store that lies reports them without end.
+    it "are asked about once the store reports 20 of them paid, and none is added when the answer is no" $ do
+      firstAddrs <- firstAddrsOfAccounts ctx 21
+      withChain ctx (Chain 800002 [(fundingTx ctx 1 [(addr, 50000) | addr <- firstAddrs], Just 800000)]) $ \home _ -> do
+        run <- hw home ["recover"] (seedOnce <> ["n"])
+        run `shouldSatisfy` printed "The store reports payments to 20 accounts of the seed, as far as the account /44'/0'/19'. Keep looking? [y/N] "
+        run `shouldSatisfy` printed "The search stopped there."
+        runExit run `shouldBe` ExitFailure 1
+        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right []
+
+    it "are all added when the answer is yes, those found before the question and the one after" $ do
+      firstAddrs <- firstAddrsOfAccounts ctx 21
+      withChain ctx (Chain 800002 [(fundingTx ctx 1 [(addr, 50000) | addr <- firstAddrs], Just 800000)]) $ \home _ -> do
+        found <- hwJson home ["recover"] (seedOnce <> ["y"])
+        (map (\(name, _, _) -> name) <$> accountsOf found)
+          `shouldBe` Right
+            [ "btc0", "btc1", "btc2", "btc3", "btc4", "btc5", "btc6",
+              "btc7", "btc8", "btc9", "btc10", "btc11", "btc12", "btc13",
+              "btc14", "btc15", "btc16", "btc17", "btc18", "btc19", "btc20"
+            ]
+
     -- Every account searched is a scan at the store
     it "are looked for with an account gap from 1 to 100" $
       withHome $ \home -> do

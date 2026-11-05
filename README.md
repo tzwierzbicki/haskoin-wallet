@@ -172,7 +172,8 @@ hw checkaddr /0/7                           # on the offline computer: the same 
   answers about the addresses and transactions it asked about and no others,
   and that the counts agree, but it cannot tell a hidden payment from none.
   After a thousand used addresses in a row, `sync` and `recover` ask whether to
-  keep looking, since a server that lies reports them without end. Run your own
+  keep looking, since a server that lies reports them without end. `recover`
+  asks the same after every 20 accounts the server reports paid. Run your own
   haskoin-store to trust no one else.
 
 ## Using `hw`
@@ -361,6 +362,10 @@ The accounts are named `btc0`, `btc1` and so on for the `bip44` accounts, and
 after 10 accounts in a row without a payment, or the number `--account-gap`
 gives, for each kind of account apart. After a thousand used addresses in a row,
 it asks whether to keep looking, as [`sync`](#hw-sync) does.
+
+After every 20 accounts of a kind the server reports paid, `recover` asks
+whether to keep looking. A server that lies reports them without end. A no stops
+the search, and no account is added.
 
 `recover` also looks where other wallets keep their accounts, and tells of funds
 it cannot spend:

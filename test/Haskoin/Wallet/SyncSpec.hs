@@ -15,7 +15,7 @@ module Haskoin.Wallet.SyncSpec (spec) where
 import Control.Concurrent (threadDelay)
 import Control.Monad (forM_, replicateM_)
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
-import Control.Monad.IO.Class (liftIO)
+import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Trans (lift)
 import Data.Default (def)
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef, newIORef, readIORef)
@@ -47,7 +47,7 @@ import Test.Hspec
 
 -- | The question of a scan answered yes the given number of times, then
 -- no, each time noted
-answering :: IORef [String] -> Int -> ScanQuestion IO
+answering :: (MonadIO m) => IORef [String] -> Int -> ScanQuestion m
 answering asked yeses found = liftIO $ do
   modifyIORef asked (<> [found])
   (<= yeses) . length <$> readIORef asked
@@ -744,6 +744,31 @@ spec = prepareContext $ \ctx -> do
           dbShouldFailWith "The store reports used addresses as far as 1000 on the receiving chain of the account /44'/0'/0' of the seed, and more beyond. The scan stopped there." $
             recoverableAccounts ctx cfg everyAddressUsed Bip44 btc (testSeed ctx) 1 stopLooking
 
+    -- The store reports the accounts 0 to 39 of the seed paid at their
+    -- first receiving address. The first answer goes on, the second stops.
+    it "asks whether to go on after 20 accounts the store reports paid, naming the last one by its path, and asks again 20 accounts further" $
+      inDatabaseE $ do
+        firstAddrs <- liftIO $ firstAddrsOfAccounts ctx 40
+        asked <- liftIO $ newIORef []
+        lift $
+          dbShouldFailWith "The store reports payments to 40 accounts of the seed, as far as the account /44'/0'/39'. The search stopped there." $
+            recoverableAccounts ctx cfg (toStore (paidStore ctx [(addr, 1000) | addr <- firstAddrs])) Bip44 btc (testSeed ctx) 1 (answering asked 1)
+        liftIO $
+          readIORef asked
+            `shouldReturn` [ "The store reports payments to 20 accounts of the seed, as far as the account /44'/0'/19'.",
+                             "The store reports payments to 40 accounts of the seed, as far as the account /44'/0'/39'."
+                           ]
+
+    -- The store reports the accounts 0 to 20 of the seed paid at their
+    -- first receiving address: 21 accounts, one more than the search finds
+    -- before it asks
+    it "finds every paid account when the answer is yes, those before the question and those after" $
+      inDatabaseE $ do
+        firstAddrs <- liftIO $ firstAddrsOfAccounts ctx 21
+        let store = toStore (paidStore ctx [(addr, 1000) | addr <- firstAddrs])
+        (map fst <$> recoverableAccounts ctx cfg store Bip44 btc (testSeed ctx) 1 keepLooking)
+          `dbShouldBeE` [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+
   describe "The funds of a seed at accounts hw does not hold" $ do
     -- The chain pays the bip49 account 0 of the seed at its first
     -- receiving address, confirmed, and at its second change address,
@@ -807,6 +832,13 @@ spec = prepareContext $ \ctx -> do
     it "asks on the chains of an account of a kind hw does not hold, named by its path" $
       runExceptT (foreignFunds ctx cfg everyAddressUsed btc (testSeed ctx) 1 stopLooking)
         `shouldReturn` Left "The store reports used addresses as far as 1000 on the receiving chain of the account /49'/0'/0' of the seed, and more beyond. The scan stopped there."
+
+    -- The store reports the bip49 accounts 0 to 19 of the seed paid at
+    -- their first receiving address
+    it "asks whether to go on after 20 accounts of a kind the store reports paid, as for the accounts hw holds, and stops when the answer is no" $ do
+      firstAddrs <- firstAddrsOfWrappedAccounts ctx 20
+      runExceptT (foreignFunds ctx cfg (toStore (paidStore ctx [(addr, 1000) | addr <- firstAddrs])) btc (testSeed ctx) 1 stopLooking)
+        `shouldReturn` Left "The store reports payments to 20 accounts of the seed, as far as the account /49'/0'/19'. The search stopped there."
 
   describe "Watching the gap of addresses" $ do
     -- A gap of 3 instead of the default 20: the sync looks at the three

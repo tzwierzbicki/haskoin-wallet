@@ -814,6 +814,10 @@ counted for each kind of account apart. BIP44 stops at the first such
 account. hw looks further, since accounts created on an offline computer
 may never have been paid.
 
+After every 20 accounts of a kind the server reports paid, `recover` asks
+whether to keep looking. A server that lies reports them without end. A no
+stops the search, and no account is added.
+
 `recover` needs the mnemonic and the server at the same time. To keep the
 mnemonic offline, create the accounts on the offline computer with createacc
 instead. Copy them with exportacc and importacc, and run `sync`.

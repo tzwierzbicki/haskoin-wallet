@@ -43,11 +43,12 @@ import Numeric.Natural (Natural)
 
 {- The used addresses past the ones the account has -}
 
--- | The question a scan asks when it reaches 'scanLimit': told what the
--- store reports, whether to look further. The command puts it to the user
--- on the terminal, and --yes does not answer it: a sync nobody watches
--- must not believe a store that lies. A no stops the scan, which has
--- written nothing.
+-- | The question a scan asks when it reaches 'scanLimit', and a search
+-- over the accounts of a seed when it reaches 'accountLimit': told what
+-- the store reports, whether to look further. The command puts it to the
+-- user on the terminal, and --yes does not answer it: a sync nobody
+-- watches must not believe a store that lies. A no stops the scan or the
+-- search, which has written nothing.
 type ScanQuestion m = String -> ExceptT String m Bool
 
 -- | The index after the last used address of a chain of the public key of
@@ -130,6 +131,64 @@ chainWord AddrInternal = "change"
 
 {- Recovering the accounts of a seed -}
 
+-- | How many accounts a search finds paid before it asks whether to go
+-- on: twenty. Few seeds have that many paid accounts of one kind, and
+-- the owner of one that does answers yes. A store that lies reports an
+-- account paid at every index, without end. With one used address in
+-- each, no chain of theirs reaches 'scanLimit', so the search over the
+-- accounts has a limit of its own.
+accountLimit :: Natural
+accountLimit = 20
+
+-- | What a search finds at the index of an account
+data Looked a
+  = -- | Nothing to look at, which counts neither way: an index whose
+    -- child key is invalid, or an account the wallet has already
+    PassedOver
+  | -- | An account that was never paid
+    Unpaid
+  | -- | An account that was paid, with what the search keeps of it
+    Paid a
+
+-- | The loop of a search over the accounts of a seed, as BIP44 describes
+-- it: index after index from 0, until the given number of unpaid accounts
+-- in a row. The last argument looks at the account of an index. The
+-- result is what it kept of each paid account, in the order of the
+-- indices.
+--
+-- After every 'accountLimit' accounts found paid, the question is asked.
+-- It is told how many accounts the store reports, and the path of the
+-- last one, which the second argument gives from its index. A no stops
+-- the search with an error, so the command writes nothing.
+searchAccounts :: (Monad m) => Natural -> (Natural -> HardPath) -> ScanQuestion m -> (Natural -> ExceptT String m (Looked a)) -> ExceptT String m [a]
+searchAccounts accountGap pathOf ask look = go 0 0 0
+  where
+    -- The accounts from the index on, after the given number of unpaid
+    -- accounts in a row, and of paid accounts since the search began
+    go index unpaid found
+      | unpaid >= accountGap = return []
+      | otherwise = do
+          looked <- look index
+          case looked of
+            PassedOver -> go (index + 1) unpaid found
+            Unpaid -> go (index + 1) (unpaid + 1) found
+            Paid account -> (account :) <$> onward index (found + 1)
+    -- The accounts after the paid one at the index, which is the given
+    -- number of them found: at every multiple of the limit, the question
+    -- decides
+    onward index found = do
+      when (found `mod` accountLimit == 0) $ do
+        let reported = reportedPaid found (pathOf index)
+        goOn <- ask reported
+        unless goOn $ throwError (reported <> " The search stopped there.")
+      go (index + 1) 0 found
+
+-- | What a search reports when it reaches 'accountLimit': how many
+-- accounts the store reports paid, and the path of the last one
+reportedPaid :: Natural -> HardPath -> String
+reportedPaid found path =
+  "The store reports payments to " <> show found <> " accounts of the seed, as far as the account " <> pathToStr path <> "."
+
 -- | The accounts of a seed of a kind on a network that were paid, found as
 -- BIP44 describes: account after account from index 0, the receiving
 -- chain of each scanned for a used address within the gap. The search
@@ -137,26 +196,22 @@ chainWord AddrInternal = "change"
 -- standard stops at the first, but hw creates accounts on an offline
 -- signer, where some never receive anything, so the gap of accounts is
 -- the caller's. An account the wallet has already is passed over without
--- counting, and so is an index whose child key is invalid. Returns the
--- accounts found, with their keys.
+-- counting, and so is an index whose child key is invalid. After every
+-- 'accountLimit' accounts found, the question is asked ('searchAccounts').
+-- Returns the accounts found, with their keys.
 recoverableAccounts :: (MonadUnliftIO m) => Ctx -> Config -> Store -> AccountKind -> Network -> PublicSeed -> Natural -> ScanQuestion (DB m) -> ExceptT String (DB m) [(Natural, XPubKey)]
-recoverableAccounts ctx cfg store kind net seed accountGap ask = go 0 0
-  where
-    go index unpaid
-      | unpaid >= accountGap = return []
-      | otherwise = do
-          keyM <- liftIO $ seedAccountKey seed kind net index
-          case keyM of
-            Nothing -> go (index + 1) unpaid
-            Just key -> do
-              held <- lift $ accountWithKey net ctx key
-              case held of
-                Just _ -> go (index + 1) unpaid
-                Nothing -> do
-                  paid <- (> 0) <$> scanChain ctx store kind key extDeriv (configGap cfg) 0 (seedAccountPlace extDeriv (accountDeriv kind net index)) ask
-                  if paid
-                    then ((index, key) :) <$> go (index + 1) 0
-                    else go (index + 1) (unpaid + 1)
+recoverableAccounts ctx cfg store kind net seed accountGap ask =
+  searchAccounts accountGap (accountDeriv kind net) ask $ \index -> do
+    keyM <- liftIO $ seedAccountKey seed kind net index
+    case keyM of
+      Nothing -> return PassedOver
+      Just key -> do
+        held <- lift $ accountWithKey net ctx key
+        case held of
+          Just _ -> return PassedOver
+          Nothing -> do
+            paid <- (> 0) <$> scanChain ctx store kind key extDeriv (configGap cfg) 0 (seedAccountPlace extDeriv (accountDeriv kind net index)) ask
+            return $ if paid then Paid (index, key) else Unpaid
 
 -- | Recover the accounts of a seed on a network, of every kind the network
 -- has, the BIP44 accounts first: those found paid are created, named after
@@ -211,29 +266,27 @@ foreignPath net funds = foreignDeriv (foreignKind funds) net (foreignIndex funds
 -- | The funds of a seed at the accounts of a foreign kind on a network,
 -- found as 'recoverableAccounts' finds the accounts hw holds: account
 -- after account from index 0, each paid when a receiving address within
--- the gap was used, and the search over after the gap of accounts in a
--- row without one. The change chain of an account found is scanned too,
+-- the gap was used, the search over after the gap of accounts in a row
+-- without one, and the question asked after every 'accountLimit'
+-- accounts found. The change chain of an account found is scanned too,
 -- so that the balance is the whole of it.
 foreignFundsOfKind :: (MonadIO m) => Ctx -> Config -> Store -> ForeignKind -> Network -> PublicSeed -> Natural -> ScanQuestion m -> ExceptT String m [ForeignFunds]
-foreignFundsOfKind ctx cfg store kind net seed accountGap ask = go 0 0
+foreignFundsOfKind ctx cfg store kind net seed accountGap ask =
+  searchAccounts accountGap (foreignDeriv kind net) ask $ \index -> do
+    keyM <- liftIO $ seedForeignKey seed kind net index
+    case keyM of
+      Nothing -> return PassedOver
+      Just key -> do
+        receiving <- usedOn index key extDeriv
+        if null receiving
+          then return Unpaid
+          else do
+            change <- usedOn index key intDeriv
+            let bals = snd <$> receiving <> change
+            return $ Paid (ForeignFunds kind index (genericLength bals) (sum [bal.confirmed + bal.unconfirmed | bal <- bals]))
   where
     usedOn index key chain =
       usedChainAddresses ctx store (foreignAddress kind ctx) key chain (configGap cfg) 0 (seedAccountPlace chain (foreignDeriv kind net index)) ask
-    go index unpaid
-      | unpaid >= accountGap = return []
-      | otherwise = do
-          keyM <- liftIO $ seedForeignKey seed kind net index
-          case keyM of
-            Nothing -> go (index + 1) unpaid
-            Just key -> do
-              receiving <- usedOn index key extDeriv
-              if null receiving
-                then go (index + 1) (unpaid + 1)
-                else do
-                  change <- usedOn index key intDeriv
-                  let bals = snd <$> receiving <> change
-                      found = ForeignFunds kind index (genericLength bals) (sum [bal.confirmed + bal.unconfirmed | bal <- bals])
-                  (found :) <$> go (index + 1) 0
 
 -- | The funds of a seed on a network at the accounts of every foreign kind
 -- the network has, in the order of the kinds and of their indices

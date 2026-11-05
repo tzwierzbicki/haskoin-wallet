@@ -19,7 +19,7 @@ import Data.Default (def)
 import qualified Data.ByteString as BS
 import Data.Either (fromRight, isLeft)
 import Data.IORef (IORef, modifyIORef, newIORef, readIORef, writeIORef)
-import Data.List (find, isSuffixOf, sort, sortOn)
+import Data.List (find, genericTake, isSuffixOf, sort, sortOn)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import qualified Data.Serialize as S
@@ -38,7 +38,7 @@ import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database.Coin (JsonCoin (..))
 import Haskoin.Wallet.Database (DB, DBAccount (..), DBAccountId, DBAddress (..), DBPendingTx (..), hashBytes, migrateAll)
 import Haskoin.Wallet.Entropy (Sources (..), systemEntropy)
-import Haskoin.Wallet.Keys (AccountKind (..), MnemonicPass (..), PublicSeed (..), SeedSecret (..), kindNamed, seedOf, signingKey)
+import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), MnemonicPass (..), PublicSeed (..), SeedSecret (..), foreignAddress, keyAddress, kindNamed, seedOf, signingKey)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync (ScanQuestion, SyncRes (..))
 import Haskoin.Wallet.Cli.Style (Style, renderPlain)
@@ -226,6 +226,28 @@ cafeTypedAddr = testAddress "1N24hDMGThGAPhKVrd7fNWdtE4uHsNf3UL"
 account1Addr, account2Addr :: Address
 account1Addr = testAddress "17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo"
 account2Addr = testAddress "1CtzLtfkTFgv6tHN4zBHWHtrtCeBdD1KNt"
+
+-- | The first receiving address, /0/0, of each of the first bip44 accounts
+-- of the test seed on Bitcoin, as many as asked, from account 0 on. The
+-- first three are externalAddr 0, account1Addr and account2Addr. They are
+-- derived, since they are too many to write out: a store or a chain that
+-- pays them has more paid accounts than a search finds before it asks
+-- whether to go on.
+firstAddrsOfAccounts :: Ctx -> Natural -> IO [Address]
+firstAddrsOfAccounts ctx = firstAddrsBy ctx (seedAccountKey (testSeed ctx) Bip44 btc) (keyAddress Bip44 ctx)
+
+-- | The same for the bip49 accounts of the test seed, which hw does not
+-- hold. The first two are wrappedExternalAddr 0 and wrappedAccount1Addr.
+firstAddrsOfWrappedAccounts :: Ctx -> Natural -> IO [Address]
+firstAddrsOfWrappedAccounts ctx = firstAddrsBy ctx (seedForeignKey (testSeed ctx) Bip49 btc) (foreignAddress Bip49 ctx)
+
+-- | The address at /0/0 of each of the first accounts, as many as asked,
+-- the key of an account and the address of a key given by the functions
+firstAddrsBy :: Ctx -> (Natural -> IO (Maybe XPubKey)) -> (XPubKey -> Address) -> Natural -> IO [Address]
+firstAddrsBy ctx keyOfAccount addressOf count =
+  forM (genericTake count [0 ..]) $ \index -> do
+    key <- fromMaybe (error "firstAddrsBy: no key at the index") <$> keyOfAccount index
+    return $ addressOf (derivePubPath ctx (Deriv :/ 0 :/ 0 :: SoftPath) key)
 
 -- | A new account of the test wallet in the database, with the given name
 testNewAcc :: Ctx -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
