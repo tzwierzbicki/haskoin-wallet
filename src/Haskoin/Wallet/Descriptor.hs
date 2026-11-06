@@ -319,12 +319,20 @@ slip132Key kind key = do
   return (encodeBase58Check (prefix.slip132Bytes <> BS.drop 4 bytes))
 
 -- | The 78 bytes of an extended key, from its text, when its checksum and
--- its length are right
+-- its length are right. A text longer than an extended key can be is
+-- refused before it is decoded, as haskoin-core does for the keys it
+-- reads: the time to decode Base58 grows with the square of the length,
+-- and the key comes from a file or from the command line.
 extendedKeyBytes :: Text -> Maybe BS.ByteString
 extendedKeyBytes key = do
+  guard (Text.length key <= maxExtendedKeyLength)
   bytes <- decodeBase58Check key
   guard (BS.length bytes == 78)
   return bytes
+  where
+    -- The 82 bytes of a key and its checksum take at most 112 digits of
+    -- Base58, since 58^112 is larger than 256^82
+    maxExtendedKeyLength = 112
 
 -- | A prefix of SLIP-132 that hw reads and writes: the kind of account it
 -- marks, its first four characters, and its version bytes beside those of

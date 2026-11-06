@@ -82,6 +82,7 @@ import Haskoin.Wallet.Database.TxInfo (MyInputs (..), TxInfo (..), TxSummary (..
 import Haskoin.Wallet.Database.TxLabel (txLabel)
 import Haskoin.Wallet.Tx.SendAll (sendAllFee)
 import Haskoin.Wallet.Tx.SignData
+import Haskoin.Wallet.Tx.Size (outputDustLimit, recipientOutputKind)
 import Haskoin.Wallet.Tx.Signing (parseTxSignData)
 import Haskoin.Wallet.Util (addrToString, safeSubtract)
 import Numeric.Natural (Natural)
@@ -337,7 +338,7 @@ bumpPlan net ctx accId kind sents = do
       }
   where
     addressOf :: TxOut -> Either String Address
-    addressOf out = either (const $ Left "A transaction replaced pays an output without an address") Right (scriptToAddressBS ctx out.script)
+    addressOf out = either (const $ Left "A transaction replaced pays an output without an address") Right (scriptToAddressBS net ctx out.script)
 
 -- | The label of a replacement: the labels of the transactions it
 -- replaces, the stuck one first, each label once, a semicolon between
@@ -350,7 +351,7 @@ replacementLabel sents = Text.intercalate "; " (nubOrd [s.sentLabel | s <- sents
 coinOf :: (MonadUnliftIO m) => Ctx -> Network -> DBAccountId -> OutPoint -> Tx -> ExceptT String (DB m) Store.Unspent
 coinOf ctx net accId outpoint parent = do
   out <- liftMaybe ("The coin " <> coinText outpoint <> " is missing") (listToMaybe (drop (fromIntegral outpoint.index) parent.outputs))
-  addr <- liftEither $ either (const $ Left ("The coin " <> coinText outpoint <> " pays no address")) Right (scriptToAddressBS ctx out.script)
+  addr <- liftEither $ either (const $ Left ("The coin " <> coinText outpoint <> " pays no address")) Right (scriptToAddressBS net ctx out.script)
   live <- liveSummary net accId outpoint.hash
   (block, _) <- liftMaybe ("The transaction of the coin " <> coinText outpoint <> " is not in the history: sync first") live
   return
@@ -417,8 +418,9 @@ data Reduction = Reduction
 -- | The ways the recipients can pay what the coins of the plan cannot of
 -- the fee at the rate, with no coin added: each of them alone, in their
 -- order, then all of them in equal shares; those that leave no recipient
--- below the dust limit. A lone recipient has one way. Refused when the
--- coins pay the fee as they are, or when no way is left.
+-- below the dust limit of its output ('outputDustLimit'). A lone
+-- recipient has one way. Refused when the coins pay the fee as they are,
+-- or when no way is left.
 reductions :: Ctx -> BumpPlan -> Natural -> Natural -> Either String [Reduction]
 reductions ctx plan feeByte dust = do
   when (total >= amount + fee) $
@@ -442,18 +444,26 @@ reductions ctx plan feeByte dust = do
       after <- case paidBy of
         OneRecipient i -> sequence [(addr,) <$> (if j == i then value `safeSubtract` missing else Just value) | (j, (addr, value)) <- zip [0 ..] recipients]
         AllRecipients -> either (const Nothing) Just (recipientsPayFee (fromIntegral missing) recipients)
-      guard $ all ((>= dust) . snd) after
+      guard $ all (\(addr, value) -> value >= dustOf addr) after
       return
         Reduction
           { reductionPaidBy = paidBy,
             reductionMissing = missing,
             reductionRecipients = [(addr, before, afterwards) | ((addr, before), (_, afterwards)) <- zip recipients after]
           }
+    -- The dust limit of the output paying a recipient
+    dustOf addr = outputDustLimit dust (recipientOutputKind ctx addr)
+    -- The limits of the recipients, each once: one number when their
+    -- outputs are of one kind
+    dustLimits = nubOrd (dustOf . fst <$> recipients)
+    dustLimitText = case dustLimits of
+      [limit] -> "the dust limit of " <> show limit <> " satoshis"
+      _ -> "the dust limit of its output"
     cannot missing
       | several =
-          "The recipients cannot pay the " <> show missing <> " satoshis missing, together or alone, without one being left with less than the dust limit of " <> show dust <> " satoshis"
+          "The recipients cannot pay the " <> show missing <> " satoshis missing, together or alone, without one being left with less than " <> dustLimitText
       | otherwise =
-          "The recipient cannot pay the " <> show missing <> " satoshis missing without being left with less than the dust limit of " <> show dust <> " satoshis"
+          "The recipient cannot pay the " <> show missing <> " satoshis missing without being left with less than " <> dustLimitText
 
 {- Funding -}
 

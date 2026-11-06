@@ -276,7 +276,7 @@ bumpFeeSpec ctx = do
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", secondAddr <> ":0.0002", "--account", "main", "--fee-rate", "10"] []
         stuck <- signAndSend home nosig
         [sent] <- inMempool <$> readIORef chain
-        index <- maybe (fail "The payment does not pay second") return $ findIndex ((== Right account1Addr) . scriptToAddressBS ctx . (.script)) sent.outputs
+        index <- maybe (fail "The payment does not pay second") return $ findIndex ((== Right account1Addr) . scriptToAddressBS btc ctx . (.script)) sent.outputs
         let spender = spendingTx ctx [(txHash sent, fromIntegral index)] [(otherAddr 2, 15000)]
         modifyIORef chain $ \c -> c {chainTxs = c.chainTxs <> [(spender, Nothing)]}
         _ <- answer home ["sync"] []

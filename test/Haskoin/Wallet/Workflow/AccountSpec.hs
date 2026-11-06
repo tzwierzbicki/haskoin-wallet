@@ -788,7 +788,7 @@ sharesSpec ctx =
     it "is not created with a passphrase that has an accent, which the format of the shares does not take" $
       withHome $ \home ->
         (errorOf <$> hwJson home ["createacc", "vault"] (testShares <> replicate 3 "caf\233"))
-          `shouldReturn` Right "The passphrase of a backup in shares has printable ASCII characters only: other wallets would not take this one"
+          `shouldReturn` Right "The passphrase of a backup in shares has printable ASCII characters only, as its format asks"
 
     it "is checked by checkmnemonic against its shares and its passphrase" $
       withHome $ \home -> do

@@ -62,7 +62,8 @@ noLabel = Text.empty
 instance FromJSON TxSignData where
   parseJSON =
     withObject "txsigndata" $ \o -> do
-      let f = eitherToMaybe . S.decode <=< decodeHex
+      -- A transaction is its hex and nothing after it
+      let f = eitherToMaybe . decodeTx <=< decodeHex
       t <- maybe mzero return . f =<< o .: "tx"
       i <- maybe mzero return . mapM f =<< o .: "txinputs"
       TxSignData t i

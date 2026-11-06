@@ -13,6 +13,8 @@ import Control.Applicative ((<|>))
 import Control.Exception (evaluate, try)
 import Control.Monad (filterM)
 import Crypto.KDF.PBKDF2 (Parameters (..), fastPBKDF2_SHA512)
+import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
 import Data.Maybe (fromMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -182,21 +184,25 @@ foreignDeriv kind net a = Deriv :| purpose :| coin :| fromIntegral a
       Bip86 -> (86, net.bip44Coin)
       Bip44OfBitcoin -> (44, btc.bip44Coin)
 
--- | The address of a key of an account of a foreign kind: P2SH-P2WPKH for
--- BIP49, P2TR for BIP86, and P2PKH for the BIP44 accounts of Bitcoin
-foreignAddress :: ForeignKind -> Ctx -> XPubKey -> Address
-foreignAddress kind ctx key = case kind of
-  Bip49 -> xPubCompatWitnessAddr ctx key
-  Bip86 -> taprootAddress ctx key
-  Bip44OfBitcoin -> xPubAddr ctx key
+-- | The address of a key of an account of a foreign kind on a network:
+-- P2SH-P2WPKH for BIP49, P2TR for BIP86, and P2PKH for the BIP44 accounts
+-- of Bitcoin. Nothing on a network that has no such address: a Taproot
+-- output has none on a network without SegWit, where no account of BIP86
+-- is looked for ('foreignKindOnNetwork').
+foreignAddress :: ForeignKind -> Network -> Ctx -> XPubKey -> Maybe Address
+foreignAddress kind net ctx key = case kind of
+  Bip49 -> Just (xPubCompatWitnessAddr ctx key)
+  Bip86 -> taprootAddress net ctx key
+  Bip44OfBitcoin -> Just (xPubAddr ctx key)
 
--- | The P2TR address of a key, as BIP 86 derives it: the output key is the
--- x-only key tweaked by the tagged hash of itself, with no script tree,
--- which haskoin-core's taprootOutputKey computes as BIP 341 defines it.
-taprootAddress :: Ctx -> XPubKey -> Address
-taprootAddress ctx key =
-  fromMaybe (error "taprootAddress: a Taproot output has an address") $
-    outputAddress ctx (taprootScriptOutput ctx (TaprootOutput key.key Nothing))
+-- | The P2TR address of a key on a network, as BIP 86 derives it: the
+-- output key is the x-only key tweaked by the tagged hash of itself, with
+-- no script tree, which haskoin-core's taprootOutputKey computes as BIP
+-- 341 defines it. haskoin-core gives the output an address on a network
+-- that has SegWit, and none elsewhere.
+taprootAddress :: Network -> Ctx -> XPubKey -> Maybe Address
+taprootAddress net ctx key =
+  outputAddress net ctx (taprootScriptOutput ctx (TaprootOutput key.key Nothing))
 
 {- The keys of an account -}
 
@@ -285,9 +291,25 @@ instance Show SeedSecret where
 -- backup decrypted with the passphrase is the seed itself, which BIP32
 -- derives the master key from, with no mnemonic in between. Any passphrase
 -- decrypts it to a seed, so a wrong one is not told here.
+--
+-- The passphrase of a backup has printable ASCII characters only, as its
+-- format asks: haskoin-core refuses any other, and hw with it. The prompt
+-- tells the user before ('Haskoin.Wallet.Cli.Prompt.passphraseOf').
 secretMasterKey :: SeedSecret -> Either String XPrvKey
 secretMasterKey (MnemonicSecret mnem) = masterKey mnem
-secretMasterKey (SharesSecret backup passphrase) = makeXPrvKey <$> decryptMasterSecret passphrase backup
+secretMasterKey (SharesSecret backup passphrase) =
+  backupSeedMasterKey =<< decryptMasterSecret passphrase backup
+
+-- | The master key of the seed a backup in shares holds. BIP32 takes a
+-- seed of 16 to 64 bytes, and haskoin-core's makeXPrvKey throws for any
+-- other length. The format of the shares allows a longer secret, which is
+-- then no seed: it is refused here, with its length.
+backupSeedMasterKey :: ByteString -> Either String XPrvKey
+backupSeedMasterKey seed
+  | bytes < 16 || bytes > 64 = Left ("The backup holds a secret of " <> show bytes <> " bytes, which is not a seed: a seed has 16 to 64 bytes")
+  | otherwise = Right (makeXPrvKey seed)
+  where
+    bytes = BS.length seed
 
 -- | The master key hw derived before it normalized passphrases
 -- ('typedMasterKey'): Nothing when normalizing leaves the passphrase as it
@@ -411,7 +433,7 @@ parseSecKey net word = wif <|> mini <|> hex
   where
     wif = (.key) <$> fromWif net word
     mini = (.key) <$> fromMiniKey (cs word)
-    hex = secKey =<< decodeHex word
+    hex = decodeSecKey =<< decodeHex word
 
 -- | The private keys of a text, as a key file or a typed line holds them:
 -- every word that is a key, on any line, as 'wordsOfLines' reads them

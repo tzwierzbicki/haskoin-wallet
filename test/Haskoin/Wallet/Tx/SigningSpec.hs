@@ -367,11 +367,12 @@ signInputsSpec ctx =
         `shouldBe` Left "input 0 (1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj) is not a P2WPKH coin"
 
     -- The summary checks that a path derives the address of the input; the
-    -- signer takes the path as given, and the key of another address signs
-    -- for nothing
-    it "signs with the key of the path given, which is not the coin's when the path is another address's" $ do
-      signed <- expectRight $ signInputs btc ctx Bip44 testAccountKey (mine (externalAddr 0) "/0/1") unsigned coins
-      verifySignedTx btc ctx (simpleTransaction ctx) {txSignDataTx = signed} `shouldBe` Left "Invalid signature for input 0 (1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj)"
+    -- signer takes the path as given. The key of another address is not
+    -- the coin's, and haskoin-core's signer refuses to sign with it: its
+    -- signature would spend nothing.
+    it "refuses to sign with the key of the path given when the path is another address's, whose key is not the coin's" $
+      signInputs btc ctx Bip44 testAccountKey (mine (externalAddr 0) "/0/1") unsigned coins
+        `shouldBe` Left "signInput: the key is not a key of the coin"
 
     -- The coin at /2/7, where the account has no address: refused before
     -- any key is derived, whatever the summary said of the coin
@@ -419,6 +420,16 @@ verificationSpec ctx =
     it "refuses a signature with a sighash other than ALL, naming both" $ do
       signed <- expectRight $ signedWithAnyoneCanPay ctx
       verifySignedTx btc ctx signed `shouldBe` Left "The signature of input 0 (1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj) has the sighash ALL|ANYONECANPAY, not ALL"
+    -- The signature of a P2PKH coin does not commit to its amount, so a
+    -- transaction that pays 2 BTC from the coin of 1 BTC can be signed.
+    -- No node accepts it: the transaction is verified as a whole as well.
+    it "refuses a signed transaction that pays more than its coins hold" $ do
+      let overpaying = spendingTx ctx [(txHash (simpleFunding ctx), 0)] [(otherAddr 0, 200000000)]
+          unsigned = TxSignData overpaying [simpleFunding ctx] [Deriv :/ 0 :/ 0] [] Nothing Nothing [] noLabel
+      coins <- expectRight $ spentCoins btc ctx unsigned
+      signed <- expectRight $ signInputs btc ctx Bip44 testAccountKey (Map.singleton (externalAddr 0) (MyInputs 0 "/0/0" "" [])) overpaying coins
+      verifySignedTx btc ctx unsigned {txSignDataTx = signed}
+        `shouldBe` Left "The transaction does not verify: it spends a coin twice, or pays more than its coins hold"
   where
     signedTransaction = fst <$> expectRight (signWalletTx btc ctx Bip44 (simpleTransaction ctx) testAccountKey)
     invalidInput0 = "Invalid signature for input 0 (1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj)"

@@ -105,8 +105,8 @@ keyAddressesSpec ctx =
 
 {- Sweep size -}
 
--- The coins: one at each of the four Bitcoin addresses of the swept key,
--- and a P2PK coin of its compressed public key. The sizes are written out
+-- The coins: one at each of the four Bitcoin addresses of the swept key.
+-- The sizes are written out
 -- from the byte counts in the documentation of the estimator, in virtual
 -- bytes: a transaction is 10 bytes of overhead around its inputs and
 -- outputs, a P2PKH output is 34 bytes, and the witness data, with the 2
@@ -118,8 +118,6 @@ sweepSizeSpec ctx =
       sizeOf [compressedCoin] [otherAddr 0] `shouldBe` Right 192
     it "counts a P2PKH input with an uncompressed key as 180 bytes" $
       sizeOf [uncompressedCoin] [otherAddr 0] `shouldBe` Right 224
-    it "counts a P2PK input as 114 bytes" $
-      sizeOf [p2pkCoin] [otherAddr 0] `shouldBe` Right 158
     it "counts a P2WPKH input as 41 bytes, with a 108-byte witness after the 2 marker bytes, in quarters" $
       -- 10 + 41 + 34 = 85, then (2 + 108) / 4 = 27.5, rounded up to 28
       sizeOf [witnessCoin] [otherAddr 0] `shouldBe` Right 113
@@ -135,6 +133,9 @@ sweepSizeSpec ctx =
     it "refuses a coin the sweep cannot sign" $
       sizeOf [storeCoin ctx (fakeTxHash 3, 0) Nothing witnessScriptAddr 100000] [otherAddr 0]
         `shouldBe` Left "Unsupported output script for the coin at bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv3"
+    -- hw names a coin by its address, and sweeps no coin without one
+    it "refuses a coin paid to a public key itself (P2PK), which has no address" $
+      sizeOf [p2pkCoin] [otherAddr 0] `shouldBe` Left "Unsupported output script for the coin at unknown address"
   where
     sizeOf swept to =
       sweepTxSize btc ctx (SweepCoins swept [] Map.empty [sweptKeyUncompressedAddr]) (fromJust . addressToOutput <$> to)
@@ -142,15 +143,15 @@ sweepSizeSpec ctx =
     uncompressedCoin = storeCoin ctx (fakeTxHash 1, 1) Nothing sweptKeyUncompressedAddr 200000
     witnessCoin = storeCoin ctx (fakeTxHash 1, 2) Nothing (fromJust $ textToAddr btc "bc1qf7vmha6hqljyhs405efn0hkwj98gz74v86kel2") 300000
     nestedCoin = storeCoin ctx (fakeTxHash 1, 3) Nothing (fromJust $ textToAddr btc "3J6JzvfPtYr3GvY37YXbjuTx7ZLedG3C9p") 400000
-    -- A coin paid to the public key itself, which the store lists under the
-    -- P2PKH address of the key
+    -- A coin paid to the public key itself, which the store lists under
+    -- no address
     p2pkCoin =
       Store.Unspent
         { Store.block = Store.MemRef 0,
           Store.outpoint = OutPoint (fakeTxHash 2) 0,
           Store.value = 100000,
           Store.script = marshal ctx (PayPK (sweptPubKey ctx)),
-          Store.address = Just (pubKeyAddr ctx (sweptPubKey ctx))
+          Store.address = Nothing
         }
     -- Destinations of every kind: the P2SH and P2WPKH addresses of the swept
     -- key, and the P2WSH and P2TR examples of BIP173 and BIP350
@@ -290,16 +291,23 @@ sweepBuilderSpec ctx =
       let tx = spendingTx ctx [(txHash walletFunding, 0)] [(otherAddr 0, 500000)]
           unsigned = TxSignData tx [walletFunding] [firstExternal] [] Nothing Nothing [] noLabel
       signTxWithKeys btc ctx unsigned (Just (Bip44, accountPub)) [walletKey] `shouldBe` Left "The transaction pays no fee"
-    -- The coin paid to the swept key's public key itself, swept to another
-    -- wallet: 10 + 114 + 34 = 158 bytes, a fee of 1580, and 100000 - 1580 =
-    -- 98420 paid. The coin is reported under the P2PKH address of the key.
-    it "signs a sweep of a coin paid to the public key itself, listed under the P2PKH address of the key" $ do
+    -- The coin is paid to the swept key's public key itself. haskoin-core
+    -- gives such a coin no address, since the P2PKH address of the key
+    -- would mislead, and hw names a coin by its address.
+    it "refuses to sign a sweep of a coin paid to a public key itself (P2PK), which has no address" $ do
       let tx = spendingTx ctx [(txHash p2pkFunding, 0)] [(otherAddr 0, 98420)]
           unsigned = TxSignData tx [p2pkFunding] [] [] (Just 10) Nothing [] noLabel
-      (signed, info) <- expectRight $ signTxWithKeys btc ctx unsigned Nothing [sweptKey]
-      isSigned signed.txSignDataTx `shouldBe` True
-      Map.toList info.txInfoSummary.summaryOtherInputs `shouldBe` [(sweptKeyCompressedAddr, 100000)]
-      info.txInfoSummary.summaryFee `shouldBe` 1580
+      signTxWithKeys btc ctx unsigned Nothing [sweptKey] `shouldBe` Left "There are non-standard inputs in the transaction"
+    -- A SegWit coin is spent with a compressed public key: a block may
+    -- hold a spend with the other encoding, but nodes do not relay one.
+    -- The coin here pays the hash of the swept key's uncompressed public
+    -- key, at the P2WPKH address computed apart from hw with the Python
+    -- primitives of test/data/message-signing/tools/btc.py.
+    it "refuses to sign a SegWit coin of the uncompressed public key of a key given, which nodes would not relay" $ do
+      let tx = spendingTx ctx [(txHash uncompressedWitnessFunding, 0)] [(otherAddr 0, 98000)]
+          unsigned = TxSignData tx [uncompressedWitnessFunding] [] [] (Just 10) Nothing [] noLabel
+      signTxWithKeys btc ctx unsigned Nothing [sweptKey]
+        `shouldBe` Left "The coin of input 0 (bc1qmtz9cyhf5zqaehgsd3apj2p9692zunjr89xa83) is a SegWit coin of an uncompressed public key: nodes do not relay a spend of it"
   where
     seed = mkStdGen 0
     -- The wallet: the test wallet of TestUtils, with its first two external addresses
@@ -313,6 +321,9 @@ sweepBuilderSpec ctx =
     -- A transaction paying 100000 to the swept key's public key itself
     -- (P2PK), as the coinbase transactions of the first years did
     p2pkFunding = Tx 2 [TxIn (OutPoint (fakeTxHash 3) 0) BS.empty 0xffffffff] [TxOut 100000 (marshal ctx (PayPK (sweptPubKey ctx)))] [] 0
+    -- A transaction paying 100000 to the P2WPKH address of the swept key's
+    -- uncompressed public key
+    uncompressedWitnessFunding = fundingTx ctx 4 [(fromJust (textToAddr btc "bc1qmtz9cyhf5zqaehgsd3apj2p9692zunjr89xa83"), 100000)]
     allCoins :: [Store.Unspent]
     allCoins = coinsOf ctx keyFunding <> coinsOf ctx walletFunding
     found =
@@ -337,7 +348,7 @@ sweepBuilderSpec ctx =
     -- The outputs of the sweep by address, the smallest first, since the
     -- builder shuffles them
     paidBy :: TxSignData -> [(Address, Word64)]
-    paidBy tsd = sortOn snd [(forceRight (scriptToAddressBS ctx out.script), out.value) | out <- tsd.txSignDataTx.outputs]
+    paidBy tsd = sortOn snd [(forceRight (scriptToAddressBS btc ctx out.script), out.value) | out <- tsd.txSignDataTx.outputs]
 
 {- Coins given by outpoint -}
 

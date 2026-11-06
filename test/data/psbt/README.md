@@ -69,6 +69,18 @@ a file before gives again with the `changeAddress` option.
 | `core-prepared-v2-partial.psbt`, `core-prepared-v2-finalized.psbt`, `.hex` | `walletprocesspsbt` of the wallet `hw` on `core-prepared-v2.psbt`, with `finalize` false, then true, then `finalizepsbt`: Core's signature as a partial signature, the final script with the fields of version 2 kept, and the transaction alone. |
 | `pending-payment-finalized-v2.psbt` | `pending-payment-finalized.psbt` as version 2, converted apart from hw: the fields of BIP 370 added to the maps, the unsigned transaction removed. Core 32.1 decodes it and extracts the same transaction. |
 
+The files hw signs into `core-prepared.psbt`, `core-prepared-segwit.psbt`
+and `core-prepared-v2.psbt` are pinned in `test/Haskoin/Wallet/TestUtils.hs`
+(`corePreparedSignedText`, `coreSegwitPreparedSignedText`,
+`corePreparedSignedV2Text`). Each was checked on that chain as its row says,
+when a signed input still carried its derivation record. hw now writes a
+signed input as a finalizer leaves it, without that record. The pinned files
+are the checked ones with the record of the signed input cleared apart from
+hw, by a script written from BIP 174 that rewrites the maps key by key.
+Bitcoin Core 32.1 decodes each, finds it complete with `analyzepsbt`, and
+extracts with `finalizepsbt` the very transaction of the file checked on the
+chain.
+
 `corePreparedSignedV2Text` in `test/Haskoin/Wallet/TestUtils.hs`, the file
 hw signs into `core-prepared-v2.psbt`, was converted the same way from the
 version 0 one, and checked with Core 32.1: `analyzepsbt` finds it complete,

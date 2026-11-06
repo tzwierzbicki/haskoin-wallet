@@ -17,7 +17,7 @@ module Haskoin.Wallet.Tx.Recipient
 where
 
 import Control.Applicative ((<|>))
-import Control.Monad (unless, when)
+import Control.Monad (forM_, unless, when)
 import Data.List (mapAccumL)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -89,30 +89,34 @@ checkSharing recipients =
 -- total pay them and the fee: the fixed amounts as typed, and what remains
 -- shared equally among the others, the first of them also getting what does
 -- not divide. The recipients without an amount pay the fee. Nothing is
--- built when an output would be below the dust limit, or when the coins do
--- not cover the fixed amounts and the fee.
+-- built when an output would be below its dust limit, or when the coins do
+-- not cover the fixed amounts and the fee. The dust limit of the output
+-- paying an address is given by the function: it depends on the kind of
+-- the output ('Haskoin.Wallet.Tx.Size.outputDustLimit').
 shareAmounts ::
   -- | The value of the coins
   Natural ->
   -- | The fee
   Natural ->
-  -- | The dust limit
-  Natural ->
+  -- | The dust limit of the output paying an address
+  (Address -> Natural) ->
   [(Address, Share)] ->
   Either String [(Address, Natural)]
-shareAmounts total fee dust recipients = do
+shareAmounts total fee dustOf recipients = do
   checkSharing recipients
-  when (any (< dust) fixedAmounts) $
-    Left $ "A fixed amount is below the dust limit of " <> show dust <> " satoshis"
+  forM_ [(addr, amount) | (addr, Fixed amount) <- recipients] $ \(addr, amount) ->
+    when (amount < dustOf addr) $
+      Left $ "A fixed amount is below the dust limit of " <> show (dustOf addr) <> " satoshis"
   when (total < fixedTotal + fee) $
     Left $ case fixedAmounts of
       [] -> "The coins, " <> show total <> " satoshis, do not cover the fee, " <> show fee
       _ -> "The coins, " <> show total <> " satoshis, do not cover the fixed amounts, " <> show fixedTotal <> ", and the fee, " <> show fee
-  when (each < dust) $
-    Left $
-      "What remains for each address without an amount, " <> show each
-        <> " satoshis, is below the dust limit of "
-        <> show dust
+  forM_ [addr | (addr, Remainder) <- recipients] $ \addr ->
+    when (each < dustOf addr) $
+      Left $
+        "What remains for each address without an amount, " <> show each
+          <> " satoshis, is below the dust limit of "
+          <> show (dustOf addr)
   -- What does not divide goes to the first address without an amount
   return $ snd $ mapAccumL give extra recipients
   where

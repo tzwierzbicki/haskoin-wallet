@@ -396,6 +396,24 @@ foreignFileSpec ctx =
         (errorOf <$> hwJson home ["sendtx", "--input", home </> "other.hex"] [])
           `shouldReturn` Right "The file holds a transaction alone, which the wallet does not hold as pending: hw needs the whole transaction each of its coins comes from, which a PSBT carries"
 
+    -- A transaction given alone is the whole file. Bytes after it would
+    -- be dropped without a word, so the file is refused, as Bitcoin Core
+    -- refuses such hexadecimal. A transaction cut short is refused the
+    -- same way.
+    it "holding a transaction in hexadecimal with bytes after it, or cut short, is refused" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        nosig <- paymentSigned home
+        _ <- answer home ["exporttx", nosig, home </> "signed.psbt"] []
+        signed <- readTxFile ctx (home </> "signed.psbt")
+        let hex = Text.unpack (encodeHex (S.encode (txSignDataTx (txFileData signed))))
+            longer = home </> "longer.hex"
+            shorter = home </> "shorter.hex"
+        writeFile longer (hex <> "00\n")
+        writeFile shorter (take (length hex - 2) hex <> "\n")
+        forM_ [longer, shorter] $ \file ->
+          (errorOf <$> hwJson home ["sendtx", "--input", file] [])
+            `shouldReturn` Right ("The file " <> Text.pack file <> " could not be read: The hexadecimal text is not one whole transaction")
+
     it "in base64 text, as Bitcoin Core and HWI give a PSBT, is read like its bytes" $
       withChain ctx (paidChain ctx) $ \home chain -> do
         nosig <- paymentSigned home

@@ -47,8 +47,8 @@ import Haskoin.Wallet.Tx.Recipient (Share, shareAmounts)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Tx.SignData
-import Haskoin.Wallet.Tx.Signing (coinSigInput, parseOutsideTxSignData, parseTxSignData, spentAddress, spentCoins, verifySignedTx)
-import Haskoin.Wallet.Tx.Size (checkFeeRateAndDust, inputKind, scriptOutputKind, txSize)
+import Haskoin.Wallet.Tx.Signing (coinSigInput, parseOutsideTxSignData, parseTxSignData, spentCoins, verifySignedTx)
+import Haskoin.Wallet.Tx.Size (checkFeeRateAndDust, checkStandardSize, inputKind, outputDustLimit, recipientOutputKind, scriptOutputKind, txSize)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import System.Random (StdGen)
@@ -194,7 +194,7 @@ buildSweepSignData net ctx gen found sweepTo feeByte dust lockTime = do
   size <- sweepTxSize net ctx found scripts
   let total = sum $ (.value) <$> found.coins
       fee = fromIntegral feeByte * size
-  amounts <- shareAmounts (fromIntegral total) (fromIntegral fee) dust sweepTo
+  amounts <- shareAmounts (fromIntegral total) (fromIntegral fee) (outputDustLimit dust . recipientOutputKind ctx) sweepTo
   let (shuffledCoins, shuffledOutputs) =
         evalState ((,) <$> randomShuffle found.coins <*> randomShuffle (zip scripts (snd <$> amounts))) gen
       outputs = [TxOut (fromIntegral amount) (marshal ctx script) | (script, amount) <- shuffledOutputs]
@@ -211,10 +211,15 @@ buildSweepSignData net ctx gen found sweepTo feeByte dust lockTime = do
 -- scripts, in virtual bytes as "Haskoin.Wallet.Tx.Size" counts it: every
 -- input by the kind of its coin, and by the encoding of its key for a
 -- P2PKH coin when the keys were given, every output by its script
+--
+-- A sweep of more coins than a transaction nodes relay can hold is
+-- refused ('checkStandardSize').
 sweepTxSize :: Network -> Ctx -> SweepCoins -> [ScriptOutput] -> Either String Word64
 sweepTxSize net ctx found outputs = do
   inputs <- mapM (sweptInputKind net ctx found.uncompressedAddrs) found.coins
-  return $ txSize inputs (scriptOutputKind . marshal ctx <$> outputs)
+  let outputKinds = scriptOutputKind ctx . marshal ctx <$> outputs
+  checkStandardSize inputs outputKinds
+  return $ txSize inputs outputKinds
 
 -- | The kind of the signed input of a coin of the sweep: a P2PKH coin at
 -- an address of an uncompressed key carries the 65-byte public key; a coin
@@ -264,8 +269,6 @@ signTxWithKeys net ctx tsd accountPubM secKeys = do
 data Keys = Keys
   { -- | By the hash of the public key: P2PKH and P2WPKH coins
     byKeyHash :: !(Map Hash160 PrivateKey),
-    -- | By the encoded public key: P2PK coins
-    byPubKey :: !(Map BS.ByteString PrivateKey),
     -- | By the hash of the P2WPKH script of the key, with that script:
     -- P2SH-P2WPKH coins
     byWitnessScriptHash :: !(Map Hash160 (PrivateKey, ScriptOutput))
@@ -275,7 +278,6 @@ indexKeys :: Ctx -> [SecKey] -> Keys
 indexKeys ctx secKeys =
   Keys
     { byKeyHash = Map.fromList [(keyHash pub, key) | (key, pub) <- keys],
-      byPubKey = Map.fromList [(marshal ctx pub, key) | (key, pub) <- keys],
       byWitnessScriptHash =
         Map.fromList
           [ (addressHash (marshal ctx witnessScript), (key, witnessScript))
@@ -300,8 +302,15 @@ signCoin :: Network -> Ctx -> Keys -> Tx -> (Int, SigInput) -> Either String Tx
 signCoin net ctx keys tx (i, coin) =
   case coin.script of
     PayPKHash h -> withKey (Map.lookup h keys.byKeyHash) $ signInput net ctx tx i coin
-    PayPK pub -> withKey (Map.lookup (marshal ctx pub) keys.byPubKey) $ signInput net ctx tx i coin
-    PayWitnessPKHash h -> withKey (Map.lookup h keys.byKeyHash) $ signInput net ctx tx i coin
+    PayWitnessPKHash h -> case Map.lookup h keys.byKeyHash of
+      Just key
+        | key.compress -> signInput net ctx tx i coin key
+        -- The coin pays the hash of the uncompressed public key. A block
+        -- may hold a spend of it, but nodes do not relay one, so the
+        -- transaction would not reach a block. haskoin-core's signTx
+        -- refuses it for the same reason.
+        | otherwise -> Left $ "The coin of " <> describeInput <> " is a SegWit coin of an uncompressed public key: nodes do not relay a spend of it"
+      Nothing -> noKey
     PayScriptHash h -> case Map.lookup h keys.byWitnessScriptHash of
       Just (key, witnessScript) ->
         signNestedInput net ctx tx i (SigInput witnessScript coin.value coin.outpoint coin.sighash Nothing) key
@@ -311,4 +320,4 @@ signCoin net ctx keys tx (i, coin) =
     withKey maybeKey sign = maybe noKey sign maybeKey
     noKey = Left $ "No private key for " <> describeInput
     describeInput =
-      "input " <> show i <> " (" <> maybe "unknown address" (addrToString net) (spentAddress net ctx coin.script) <> ")"
+      "input " <> show i <> " (" <> maybe "unknown address" (addrToString net) (outputAddress net ctx coin.script) <> ")"

@@ -51,9 +51,9 @@ import Haskoin.Wallet.Database.RawTx (getRawTx)
 import Haskoin.Wallet.Keys (AccountKind)
 import Haskoin.Wallet.Tx.LockTime (withHeader)
 import Haskoin.Wallet.Tx.Recipient (Share (..), shareAmounts)
-import Haskoin.Wallet.Tx.Building (BuiltTx (..), coinWithPath, recipientOutputKind)
+import Haskoin.Wallet.Tx.Building (BuiltTx (..), coinWithPath)
 import Haskoin.Wallet.Tx.SignData
-import Haskoin.Wallet.Tx.Size (accountInput, accountInputSize, accountOutputKind, checkFeeRateAndDust, txSize)
+import Haskoin.Wallet.Tx.Size (accountInput, accountInputSize, accountOutputKind, checkFeeRateAndDust, checkStandardSize, outputDustLimit, recipientOutputKind, txSize)
 import Haskoin.Wallet.Util (addrToTextE, randomShuffle)
 import Numeric.Natural (Natural)
 import System.Random (StdGen)
@@ -94,7 +94,7 @@ sendAllFee ctx kind feeByte coins recipients =
 -- pay them and their fee at the rate: see 'shareAmounts'
 sendAllAmounts :: Ctx -> AccountKind -> Natural -> Natural -> [Store.Unspent] -> [(Address, Share)] -> Either String [(Address, Natural)]
 sendAllAmounts ctx kind feeByte dust coins recipients =
-  shareAmounts (valueOf coins) (sendAllFee ctx kind feeByte coins (fst <$> recipients)) dust recipients
+  shareAmounts (valueOf coins) (sendAllFee ctx kind feeByte coins (fst <$> recipients)) (outputDustLimit dust . recipientOutputKind ctx) recipients
 
 {- Building -}
 
@@ -114,11 +114,13 @@ data SendAllCoins = SendAllCoins
 -- | Build the transaction spending all the coins to the recipients, with no
 -- change, its outputs shuffled (see 'sendAllAmounts'), with the lock time
 -- given (see "Haskoin.Wallet.Tx.LockTime"). A fee rate or a dust limit no
--- transaction can be built with is refused.
+-- transaction can be built with is refused, and so are more coins than a
+-- transaction nodes relay can hold ('checkStandardSize').
 buildSendAll :: Network -> Ctx -> StdGen -> SendAllCoins -> [(Address, Share)] -> Natural -> Natural -> Word32 -> Either String BuiltTx
 buildSendAll net ctx gen found recipients feeByte dust lockTime = do
   checkFeeRateAndDust feeByte dust
   when (null found.coins) $ Left "There are no coins to send"
+  checkStandardSize (accountInput found.ownKind <$ found.coins) (recipientOutputKind ctx . fst <$> recipients)
   amounts <- sendAllAmounts ctx found.ownKind feeByte dust found.coins recipients
   tx <- withHeader net lockTime <$> (buildAddrTx net ctx ((.outpoint) <$> found.coins) =<< mapM outputText (evalState (randomShuffle amounts) gen))
   inputPaths <- nub <$> mapM coinPath found.coins
@@ -183,7 +185,8 @@ data DustReport = DustReport
     -- to one address of the kind of the account, leaving it at least the
     -- dust limit; none when no rate can
     laterRate :: !(Maybe Natural),
-    -- | The dust limit, in satoshis
+    -- | The dust limit of an output of the kind of the account, in
+    -- satoshis: the least the dust coins must leave when sent later
     dustLimit :: !Natural
   }
   deriving (Eq, Show)
@@ -202,7 +205,7 @@ dustReport ctx kind feeByte dust recipients worth dustCoins othersStay =
       withoutDust = remaining worth,
       othersStay,
       laterRate,
-      dustLimit = dust
+      dustLimit = aloneDust
     }
   where
     feeOf coins = sendAllFee ctx kind feeByte coins (fst <$> recipients)
@@ -212,8 +215,10 @@ dustReport ctx kind feeByte dust recipients worth dustCoins othersStay =
     dustValue = valueOf dustCoins
     -- The dust coins alone, paying one address of the kind of the account
     aloneSize = fromIntegral $ txSize [accountInput kind | _ <- dustCoins] [accountOutputKind kind]
+    -- The dust limit of that address: the least the dust coins must leave it
+    aloneDust = outputDustLimit dust (accountOutputKind kind)
     laterRate
-      | dustValue >= dust + aloneSize = Just ((dustValue - dust) `div` aloneSize)
+      | dustValue >= aloneDust + aloneSize = Just ((dustValue - aloneDust) `div` aloneSize)
       | otherwise = Nothing
 
 -- | The question after the report

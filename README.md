@@ -721,7 +721,7 @@ hw preparetx ADDRESS:0.01 --recipients-pay --fee-rate high --output unsigned.psb
 | `--min-conf N` | Sets the confirmations a coin needs to be spent. The default is 0. |
 | `--change-back` | Sends the change back to an address the payment spends from. |
 | `--new-change` | Sends the change to a new change address, even when the configuration file sets `change-back`. |
-| `--dust-limit SATOSHIS` | Sets the smallest output. The default is 546. |
+| `--dust-limit SATOSHIS` | Raises the smallest output to this amount. Without it, the smallest output is what nodes relay for its kind: 546 satoshis for a legacy output, 294 for a native SegWit one. |
 | `--output FILE` | Also writes the transaction to a [file](#transaction-files). |
 | `--label LABEL` | Gives the transaction a label, which goes with it to its file and stays once the network has it. |
 | `--yes` | Answers yes to the questions on a high fee rate and on a wallet behind the chain. |
@@ -729,6 +729,13 @@ hw preparetx ADDRESS:0.01 --recipients-pay --fee-rate high --output unsigned.psb
 > **Good to know**
 >
 > - **An amount without a unit is in bitcoins.** See [Amounts](#amounts).
+> - **No output is smaller than what nodes relay.** A smaller payment is
+>   refused, and smaller change goes to the fee. `--dust-limit` raises that
+>   limit, and never lowers it.
+> - **A transaction takes at most 100,000 virtual bytes**, the largest that
+>   nodes relay. That is about 675 legacy coins, or 1,470 native SegWit ones.
+>   `hw` refuses to prepare a larger one. Send the coins in several
+>   transactions, choosing them with `--coin` or `--spend-from`.
 > - **A wallet behind the chain asks before preparing.** The transaction gets
 >   the lock time of the best block the wallet knows, as the transactions of
 >   most wallets do. When that block is more than eight hours old, `preparetx`,
@@ -913,6 +920,9 @@ hw sendtx --input signed.psbt
 > - **Private keys and legacy addresses read the same on Bitcoin and Bitcoin
 >   Cash.** That is why a sweep that pays no account of the wallet needs
 >   `--network`, and the default network does not apply to it.
+> - **A sweep takes the coins that have an address**: legacy, native SegWit and
+>   SegWit nested in a script address. A coin paid to a public key itself, as
+>   the first blocks hold them, has no address, and `hw` does not sweep it.
 
 #### `hw signsweep`
 
@@ -986,10 +996,11 @@ The standard fields carry:
 
 - The transaction.
 - The whole transaction each coin comes from.
-- The keys of the account in the inputs and outputs, with their derivation
-  paths.
+- The keys of the account in the inputs still to sign and in the outputs, with
+  their derivation paths.
 - The sighash to sign with.
-- Once signed, the signatures.
+- Once signed, the final script of each input. A signed input names no key any
+  more, as the format asks of a finalized input and as other wallets write it.
 
 What is `hw`'s own goes in the proprietary fields of the format, under the
 identifier `hw`, which other software leaves aside:
@@ -1014,14 +1025,16 @@ version 0 of the format or in version 2 ([BIP 370]). A file is signed back in
 its version.
 
 - **`importtx` and `sendtx --input`** take a file another signer returned,
-  finalized or not. `hw` finalizes the signature of a P2PKH or P2WPKH coin of
-  the account itself. It keeps from the version it holds what such a file leaves
-  out: the paths of its signed inputs, the fee rate and the label.
+  finalized or not. `hw` finalizes an input left signed and not final, and
+  refuses a signature that does not verify. It keeps from the version it holds
+  what such a file leaves out: the paths of its signed inputs, the fee rate and
+  the label.
 - **`sendtx --input`** also takes the signed transaction alone, in hexadecimal
   as a wallet gives it once finalized, when the wallet holds the transaction.
 - **`signtx --input`** signs a file another wallet prepared for an account of
   the wallet, with the sighash ALL only, and only when every input that is not
-  the account's is signed already. The signed file keeps every field of it.
+  the account's is signed already. The signed file keeps every field of it,
+  but those of the inputs signed that served the signers.
 
 Such a file names no network. The account it involves tells it. A file that
 involves no account of the wallet, for `reviewtx`, `sendtx` or `signsweep`,

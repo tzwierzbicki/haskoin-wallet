@@ -13,11 +13,13 @@ import Control.Monad (forM_)
 import Control.Monad.Except (ExceptT)
 import Crypto.KDF.PBKDF2 (Parameters (..), fastPBKDF2_SHA512)
 import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
 import Data.Default (def)
 import Data.Maybe (fromJust)
 import Data.Text (Text)
 import Data.Text.Encoding (encodeUtf8)
 import Haskoin
+import Haskoin.Crypto.Keys.Slip39 (EncryptedMasterSecret (..))
 import Haskoin.Wallet.Database.Account (insertAccount)
 import Haskoin.Wallet.Database.Address (genExtAddress, nextChangeAddress)
 import Haskoin.Wallet.Database (DB, DBAddress (..))
@@ -96,7 +98,7 @@ kindSpec ctx =
 
     it "give a key the script of its address, which an account spends the coins of" $ do
       let public = wrapPubKey True (derivePubPath ctx firstKey (testSegwitAccountPub ctx)).key
-      outputAddress ctx (keyScript Bip84 ctx public) `shouldBe` Just (segwitExternalAddr 0)
+      outputAddress btc ctx (keyScript Bip84 ctx public) `shouldBe` Just (segwitExternalAddr 0)
       spendsScript Bip84 (keyScript Bip84 ctx public) `shouldBe` True
       spendsScript Bip44 (keyScript Bip84 ctx public) `shouldBe` False
       spendsScript Bip44 (keyScript Bip44 ctx public) `shouldBe` True
@@ -144,9 +146,13 @@ foreignKindSpec ctx =
       (fmap (xPubExport btc ctx) <$> seedForeignKey seed Bip44OfBitcoin bch 0) `shouldReturn` Just testAccountXPub
 
     it "give a key its address: P2SH-P2WPKH for bip49, P2TR for bip86, P2PKH for the bip44 accounts of Bitcoin" $ do
-      addrToText btc (foreignAddress Bip49 ctx (derivePubPath ctx firstKey (testWrappedAccountPub ctx))) `shouldBe` Just (wrappedExternalAddrsText !! 0)
-      addrToText btc (foreignAddress Bip86 ctx (derivePubPath ctx firstKey (testTaprootAccountPub ctx))) `shouldBe` Just (taprootExternalAddrsText !! 0)
-      foreignAddress Bip44OfBitcoin ctx (derivePubPath ctx firstKey (testAccountPub ctx)) `shouldBe` externalAddr 0
+      (addrToText btc =<< foreignAddress Bip49 btc ctx (derivePubPath ctx firstKey (testWrappedAccountPub ctx))) `shouldBe` Just (wrappedExternalAddrsText !! 0)
+      (addrToText btc =<< foreignAddress Bip86 btc ctx (derivePubPath ctx firstKey (testTaprootAccountPub ctx))) `shouldBe` Just (taprootExternalAddrsText !! 0)
+      foreignAddress Bip44OfBitcoin bch ctx (derivePubPath ctx firstKey (testAccountPub ctx)) `shouldBe` Just (externalAddr 0)
+
+    -- A Taproot output is a SegWit one, which Bitcoin Cash does not have
+    it "give a key of bip86 no address on Bitcoin Cash, which has no SegWit" $
+      foreignAddress Bip86 bch ctx (derivePubPath ctx firstKey (testTaprootAccountPub ctx)) `shouldBe` Nothing
 
     -- The vectors of BIP 49 and BIP 86, for the mnemonic of eleven times
     -- "abandon" and "about", without a passphrase. BIP 86 tweaks the key
@@ -154,10 +160,10 @@ foreignKindSpec ctx =
     it "derive the addresses of the test vectors of BIP 49 and BIP 86" $ do
       seed <- expectRight $ seedOf ctx abandonMnemonic
       wrapped <- maybe (fail "The key is invalid") return =<< seedForeignKey seed Bip49 btcTest 0
-      addrToText btcTest (foreignAddress Bip49 ctx (derivePubPath ctx firstKey wrapped)) `shouldBe` Just "2Mww8dCYPUpKHofjgcXcBCEGmniw9CoaiD2"
+      (addrToText btcTest =<< foreignAddress Bip49 btcTest ctx (derivePubPath ctx firstKey wrapped)) `shouldBe` Just "2Mww8dCYPUpKHofjgcXcBCEGmniw9CoaiD2"
       taproot <- maybe (fail "The key is invalid") return =<< seedForeignKey seed Bip86 btc 0
       xPubExport btc ctx taproot `shouldBe` "xpub6BgBgsespWvERF3LHQu6CnqdvfEvtMcQjYrcRzx53QJjSxarj2afYWcLteoGVky7D3UKDP9QyrLprQ3VCECoY49yfdDEHGCtMMj92pReUsQ"
-      let addressAt path = addrToText btc (foreignAddress Bip86 ctx (derivePubPath ctx path taproot))
+      let addressAt path = addrToText btc =<< foreignAddress Bip86 btc ctx (derivePubPath ctx path taproot)
       addressAt (Deriv :/ 0 :/ 0) `shouldBe` Just "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr"
       addressAt (Deriv :/ 0 :/ 1) `shouldBe` Just "bc1p4qhjn9zdvkux4e44uhx8tc55attvtyu358kutcqkudyccelu0was9fqzwh"
       addressAt (Deriv :/ 1 :/ 0) `shouldBe` Just "bc1p3qkhfews2uk44qtvauqyr2ttdsw7svhkl9nkm9s9c3x4ax5h60wqwruhk7"
@@ -214,6 +220,19 @@ sharesSeedSpec ctx = do
     it "has another master key without its passphrase, and no error" $
       xPrvExport btc <$> secretMasterKey (SharesSecret testSharesBackup "")
         `shouldBe` Right "xprv9s21ZrQH143K3reExTJbGTHPu6mGuUx6yN1H1KkqoiAcw6j1t6hBiwwnXYxNQXxU8T7pANSv1rJYQPXn1LMQk1gbWes5BjSz3rJ5ZfH1cc3"
+
+    -- The format of the shares asks for a passphrase of printable ASCII:
+    -- one with an accent has several encodings that look alike, each of
+    -- which would give another seed
+    it "has no master key for a passphrase with an accent, which the format of the shares does not take" $
+      xPrvExport btc <$> secretMasterKey (SharesSecret testSharesBackup "caf\233")
+        `shouldBe` Left "The passphrase must contain only printable ASCII characters, code points 32 to 126"
+
+    -- BIP32 takes a seed of 16 to 64 bytes. The format of the shares lets
+    -- a backup hold more: 66 bytes here.
+    it "is refused when the backup holds more bytes than a seed has" $
+      xPrvExport btc <$> secretMasterKey (SharesSecret (EncryptedMasterSecret 10282 False 0 (BS.replicate 66 0)) "")
+        `shouldBe` Left "The backup holds a secret of 66 bytes, which is not a seed: a seed has 16 to 64 bytes"
 
     it "derives the keys of its bip44 account 0 on testnet, m/44'/1'/0'" $ do
       master <- expectRight $ secretMasterKey testSharesSecret

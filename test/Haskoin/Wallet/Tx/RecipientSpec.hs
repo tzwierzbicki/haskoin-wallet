@@ -102,43 +102,58 @@ shareSpec :: Spec
 shareSpec =
   describe "What each recipient gets of the coins" $ do
     it "is everything but the fee for an address without an amount" $
-      shareAmounts 80000 3400 546 [(otherAddr 0, Remainder)] `shouldBe` Right [(otherAddr 0, 76600)]
+      shareAmounts 80000 3400 (const 546) [(otherAddr 0, Remainder)] `shouldBe` Right [(otherAddr 0, 76600)]
 
     -- 80000 - 30000 - 3740 = 46260
     it "is the amount typed for a fixed one, the fee paid by the address without one" $
-      shareAmounts 80000 3740 546 [(otherAddr 0, Fixed 30000), (otherAddr 1, Remainder)]
+      shareAmounts 80000 3740 (const 546) [(otherAddr 0, Fixed 30000), (otherAddr 1, Remainder)]
         `shouldBe` Right [(otherAddr 0, 30000), (otherAddr 1, 46260)]
 
     -- 80000 - 3740 = 76260, 38130 each
     it "is an equal part of what remains for the addresses without an amount" $
-      shareAmounts 80000 3740 546 [(otherAddr 0, Remainder), (otherAddr 1, Remainder)]
+      shareAmounts 80000 3740 (const 546) [(otherAddr 0, Remainder), (otherAddr 1, Remainder)]
         `shouldBe` Right [(otherAddr 0, 38130), (otherAddr 1, 38130)]
 
     -- 80001 - 20000 - 4080 = 55921, 27960 each and the satoshi left to the
     -- first
     it "gives what does not divide to the first address without an amount" $
-      shareAmounts 80001 4080 546 [(otherAddr 0, Fixed 20000), (otherAddr 1, Remainder), (otherAddr 2, Remainder)]
+      shareAmounts 80001 4080 (const 546) [(otherAddr 0, Fixed 20000), (otherAddr 1, Remainder), (otherAddr 2, Remainder)]
         `shouldBe` Right [(otherAddr 0, 20000), (otherAddr 1, 27961), (otherAddr 2, 27960)]
 
     it "is nothing, cutting no fixed amount, when the coins do not cover the fixed amounts and the fee" $
-      shareAmounts 80000 3740 546 [(otherAddr 0, Fixed 80000), (otherAddr 1, Remainder)]
+      shareAmounts 80000 3740 (const 546) [(otherAddr 0, Fixed 80000), (otherAddr 1, Remainder)]
         `shouldBe` Left "The coins, 80000 satoshis, do not cover the fixed amounts, 80000, and the fee, 3740"
 
     it "is nothing when the coins do not cover the fee, without fixed amounts" $
-      shareAmounts 80000 80001 546 [(otherAddr 0, Remainder)]
+      shareAmounts 80000 80001 (const 546) [(otherAddr 0, Remainder)]
         `shouldBe` Left "The coins, 80000 satoshis, do not cover the fee, 80001"
 
     -- 80000 - 76000 - 3740 = 260
     it "is nothing when what remains for an address without an amount is below the dust limit" $
-      shareAmounts 80000 3740 546 [(otherAddr 0, Fixed 76000), (otherAddr 1, Remainder)]
+      shareAmounts 80000 3740 (const 546) [(otherAddr 0, Fixed 76000), (otherAddr 1, Remainder)]
         `shouldBe` Left "What remains for each address without an amount, 260 satoshis, is below the dust limit of 546"
 
     it "is nothing for a fixed amount below the dust limit" $
-      shareAmounts 80000 3740 546 [(otherAddr 0, Fixed 545), (otherAddr 1, Remainder)]
+      shareAmounts 80000 3740 (const 546) [(otherAddr 0, Fixed 545), (otherAddr 1, Remainder)]
         `shouldBe` Left "A fixed amount is below the dust limit of 546 satoshis"
+
+    -- The limit depends on the kind of the output: 546 for the first
+    -- address here, 294 for the second
+    it "is held to the dust limit of each recipient's own output" $ do
+      let limitOf addr = if addr == otherAddr 0 then 546 else 294
+      shareAmounts 80000 3740 limitOf [(otherAddr 1, Fixed 294), (otherAddr 2, Remainder)]
+        `shouldBe` Right [(otherAddr 1, 294), (otherAddr 2, 75966)] -- 80000 - 294 - 3740
+      shareAmounts 80000 3740 limitOf [(otherAddr 0, Fixed 545), (otherAddr 2, Remainder)]
+        `shouldBe` Left "A fixed amount is below the dust limit of 546 satoshis"
+      -- 80000 - 75800 - 3740 = 460 remains: below the 546 of the first
+      -- address, above the 294 of the second
+      shareAmounts 80000 3740 limitOf [(otherAddr 1, Fixed 75800), (otherAddr 0, Remainder)]
+        `shouldBe` Left "What remains for each address without an amount, 460 satoshis, is below the dust limit of 546"
+      shareAmounts 80000 3740 limitOf [(otherAddr 0, Fixed 75800), (otherAddr 1, Remainder)]
+        `shouldBe` Right [(otherAddr 0, 75800), (otherAddr 1, 460)]
 
     it "is nothing without an address to receive what remains" $ do
       checkSharing [(otherAddr 0, Fixed 30000), (otherAddr 1, Fixed 20000)]
         `shouldBe` Left "Give at least one address without an amount, to receive what remains once the fixed amounts and the fee are paid"
-      shareAmounts 80000 3740 546 [(otherAddr 0, Fixed 30000)]
+      shareAmounts 80000 3740 (const 546) [(otherAddr 0, Fixed 30000)]
         `shouldBe` Left "Give at least one address without an amount, to receive what remains once the fixed amounts and the fee are paid"

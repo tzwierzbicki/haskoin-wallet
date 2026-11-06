@@ -88,7 +88,6 @@ import Data.List (find, genericTake, nub, partition)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe, mapMaybe)
-import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -648,7 +647,7 @@ pendingTxsListing ctx account paging = do
 cmdReviewTx :: Ctx -> Config -> Maybe Text -> FilePath -> Maybe Network -> IO Response
 cmdReviewTx ctx cfg account file givenM =
   runDBResponse cfg $ do
-    TxFileRead txFile@(TxFile netM tsd _ _) _ <- readTxFileIn ctx file
+    TxFileRead txFile@(TxFile netM tsd _ _) _ <- readTxFileIn ctx (commandNetwork cfg givenM) file
     named <- fileNetwork givenM netM
     (accountM, completed) <- transactionAccount ctx account named tsd
     case accountM of
@@ -663,7 +662,7 @@ cmdReviewTx ctx cfg account file givenM =
 cmdImportTx :: Ctx -> Config -> Maybe Text -> FilePath -> IO Response
 cmdImportTx ctx cfg account file =
   runDBResponse cfg $ do
-    TxFileRead (TxFile netM tsd _ _) _ <- readTxFileIn ctx file
+    TxFileRead (TxFile netM tsd _ _) _ <- readTxFileIn ctx (commandNetwork cfg Nothing) file
     (accountM, completed) <- transactionAccount ctx account netM tsd
     (accId, acc) <- liftMaybe notInWallet accountM
     pendingHash <- importPendingTx (accountNetwork acc) ctx accId completed
@@ -717,8 +716,13 @@ data TxFileRead = TxFileRead !TxFile !(Maybe Psbt)
 -- transaction alone, in hexadecimal, as Bitcoin Core's finalizepsbt gives
 -- it, is read with the signing data the wallet holds for it, which it
 -- must. Anything else is refused.
-readTxFileIn :: Ctx -> FilePath -> ExceptT String (DB IO) TxFileRead
-readTxFileIn ctx file = do
+--
+-- The network given is the one of the command, from --network or from
+-- the configuration, if any. It says how the signatures another signer
+-- left in a PSBT are verified when neither the file nor an account of
+-- the wallet names a network ('psbtTxFile').
+readTxFileIn :: Ctx -> Maybe Network -> FilePath -> ExceptT String (DB IO) TxFileRead
+readTxFileIn ctx fallbackM file = do
   bytes <- liftEitherIO $ readFileBytes file
   let text = C8.strip bytes
   if isPsbt bytes
@@ -728,18 +732,26 @@ readTxFileIn ctx file = do
         then fromPsbt =<< refused (decodePsbtBase64 text)
         else
           if isHexText text
-            then fromRawTx =<< refused (maybe (Left "Not the hexadecimal of a transaction") S.decode (decodeHex (cs text)))
+            then fromRawTx =<< refused (rawTransaction text)
             else throwError (couldNotRead file "Not a PSBT, in bytes or in base64 text, nor the hexadecimal of a transaction")
   where
     refused :: Either String a -> ExceptT String (DB IO) a
     refused = liftEither . first (couldNotRead file)
     fromPsbt psbt = do
       accounts <- lift getAccounts
-      txFile <- refused $ psbtTxFile ctx (fileAccountOf ctx . snd <$> accounts) psbt
+      txFile <- refused $ psbtTxFile ctx fallbackM (fileAccountOf ctx . snd <$> accounts) psbt
       return $ TxFileRead txFile (Just psbt)
     -- "psbt" and 0xff in base64: what the text of any PSBT starts with
     base64Magic = "cHNidP"
     isHexText text = not (BS.null text) && even (BS.length text) && C8.all isHexDigit text
+    -- The transaction a hexadecimal text holds, which must be the whole
+    -- text: haskoin-core's decodeTx refuses bytes after the transaction,
+    -- as Bitcoin Core does. The words of the parser name its internals,
+    -- so the refusal is hw's own.
+    rawTransaction :: BS.ByteString -> Either String Tx
+    rawTransaction text =
+      maybe (Left notOneTransaction) (first (const notOneTransaction) . decodeTx) (decodeHex (cs text))
+    notOneTransaction = "The hexadecimal text is not one whole transaction"
     fromRawTx tx = do
       heldM <- lookupPendingTx (nosigHash tx)
       held <- liftMaybe "The file holds a transaction alone, which the wallet does not hold as pending: hw needs the whole transaction each of its coins comes from, which a PSBT carries" heldM
@@ -1065,9 +1077,11 @@ data SignedFile
 -- agrees, all before the user types a secret.
 transactionToSign ::
   Ctx ->
+  -- | The network of the command, for a file that names none ('readTxFileIn')
+  Maybe Network ->
   Signing ->
   ExceptT String (DB IO) (Maybe (DBAccountId, DBAccount), TxFileRead, SignedFile)
-transactionToSign ctx signing = do
+transactionToSign ctx fallbackM signing = do
   TxFileRead txFile@(TxFile netM tsd _ _) sourceM <- case (signing.nosigHash, signing.input) of
     (Nothing, Nothing) ->
       throwError "Give the NOSIGHASH of a pending transaction, or an --input file"
@@ -1078,7 +1092,7 @@ transactionToSign ctx signing = do
       when held.pendingTxOnline $
         throwError "The transaction is already online"
       return $ TxFileRead (plainTxFile Nothing held.pendingTxData) Nothing
-    (_, Just file) -> readTxFileIn ctx file
+    (_, Just file) -> readTxFileIn ctx fallbackM file
   when (isSigned (txSignDataTx tsd)) $
     throwError "The transaction is already signed"
   (accountM, completed) <- transactionAccount ctx signing.account netM tsd
@@ -1132,7 +1146,7 @@ keepSigned ctx net signing signedFile accId (TxFileRead file sourceM) signed inf
 cmdSignTx :: Ctx -> Config -> Signing -> Natural -> IO Response
 cmdSignTx ctx cfg signing parts =
   runDBResponse cfg $ do
-    (accountM, file@(TxFileRead txFile _), signedFile) <- transactionToSign ctx signing
+    (accountM, file@(TxFileRead txFile _), signedFile) <- transactionToSign ctx (commandNetwork cfg Nothing) signing
     (accId, acc) <- liftMaybe notInWallet accountM
     let net = accountNetwork acc
     (seed, key) <- askSigningKey terminal (accountKind acc) net ctx parts (accountIndex acc) (accountXPubKey ctx acc)
@@ -1153,7 +1167,7 @@ cmdSendTx :: Ctx -> Config -> AmountUnit -> Maybe TxHash -> Maybe FilePath -> Bo
 cmdSendTx ctx cfg unit namedM fileM yes givenM =
   case (namedM, fileM) of
     (Just named, Nothing) -> sending $ (`TxFileRead` Nothing) . plainTxFile Nothing . (.pendingTxData) <$> requirePendingTx named
-    (Nothing, Just file) -> sending (readTxFileIn ctx file)
+    (Nothing, Just file) -> sending (readTxFileIn ctx (commandNetwork cfg givenM) file)
     (Nothing, Nothing) -> return $ ResponseError "Give the TXID of a pending transaction or an --input file"
     (Just _, Just _) -> return $ ResponseError "Can not specify both a TXID and an --input file"
   where
@@ -1354,7 +1368,7 @@ cmdPrepareSweep ctx cfg unit opts =
 cmdSignSweep :: Ctx -> Config -> Signing -> Maybe KeySource -> Maybe Network -> IO Response
 cmdSignSweep ctx cfg signing keysM givenM =
   runDBResponse cfg $ do
-    (accountM, file@(TxFileRead (TxFile netM tsd _ _) sourceM), signedFile) <- transactionToSign ctx signing
+    (accountM, file@(TxFileRead (TxFile netM tsd _ _) sourceM), signedFile) <- transactionToSign ctx (commandNetwork cfg givenM) signing
     case accountM of
       Just (accId, acc) -> do
         let net = accountNetwork acc

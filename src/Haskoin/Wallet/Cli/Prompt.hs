@@ -254,6 +254,26 @@ askShares term share = liftEither (addShare noShares share) >>= collect
 askPassphrase :: (MonadIO m) => Terminal -> ExceptT String m Text
 askPassphrase term = hidden term "Passphrase, or nothing if the seed has none: "
 
+-- | The passphrase of the words typed, typed once. One that does not go
+-- with the words is told and asked again ('passphraseOf').
+askPassphraseOf :: (MonadIO m) => Terminal -> SeedWords -> ExceptT String m Text
+askPassphraseOf term ws = retrying term (passphraseOf ws <$> askPassphrase term)
+
+-- | The passphrase as it goes with the words of a seed. That of a backup
+-- in shares has printable ASCII characters only, code points 32 to 126:
+-- its format asks so, and haskoin-core decrypts a backup with no other.
+-- A passphrase with other characters has several encodings that look the
+-- same on screen, and each would give another seed. A mnemonic takes any
+-- passphrase, which BIP39 normalizes.
+passphraseOf :: SeedWords -> Text -> Either String Text
+passphraseOf ws passphrase = case ws of
+  BackupShares _
+    | not (Text.all printableAscii passphrase) ->
+        Left "The passphrase of a backup in shares has printable ASCII characters only, as its format asks"
+  _ -> Right passphrase
+  where
+    printableAscii c = ord c >= 32 && ord c <= 126
+
 -- | The secret of the words of a seed with its passphrase
 withPassphrase :: SeedWords -> Text -> SeedSecret
 withPassphrase (MnemonicWords mnemonic) passphrase = MnemonicSecret (MnemonicPass mnemonic passphrase)
@@ -262,7 +282,9 @@ withPassphrase (BackupShares backup) passphrase = SharesSecret backup passphrase
 -- | The words and the passphrase of a seed, typed once each, for a
 -- command that checks them: against the accounts, or on the chain
 askSeedSecret :: (MonadIO m) => Terminal -> Natural -> ExceptT String m SeedSecret
-askSeedSecret term parts = withPassphrase <$> askSeedWords term parts <*> askPassphrase term
+askSeedSecret term parts = do
+  ws <- askSeedWords term parts
+  withPassphrase ws <$> askPassphraseOf term ws
 
 -- | The words and the passphrase of a seed an account is created from.
 --
@@ -272,9 +294,8 @@ askSeedSecret term parts = withPassphrase <$> askSeedWords term parts <*> askPas
 -- typed once: the checksum of a share catches any three wrong words, and
 -- the digest of the backup a share that is not of it.
 --
--- The passphrase is typed twice. That of a backup in shares has printable
--- ASCII characters only, as its format asks: another one is refused, since
--- other wallets would not take it, or would not make the same seed of it.
+-- The passphrase is typed twice. One that does not go with the words is
+-- told and asked again, as for every command ('passphraseOf').
 askNewSeedSecret :: (MonadIO m) => Terminal -> Natural -> ExceptT String m SeedSecret
 askNewSeedSecret term parts = do
   ws <- confirmedWords
@@ -290,16 +311,12 @@ askNewSeedSecret term parts = do
           return $ if first == second then Right first else Left "The mnemonics do not match"
     confirmedPassphrase ws = retrying term $ do
       first <- askPassphrase term
-      case ws of
-        _ | Text.null first -> return (Right first)
-        BackupShares _ | not (Text.all printableAscii first) -> return (Left sharesPassphrase)
-        _ -> do
+      case passphraseOf ws first of
+        Left refused -> return (Left refused)
+        Right _ | Text.null first -> return (Right first)
+        Right _ -> do
           second <- hidden term "Passphrase again: "
           return $ if first == second then Right first else Left "The passphrases do not match"
-    printableAscii c = ord c >= 32 && ord c <= 126
-    sharesPassphrase =
-      "The passphrase of a backup in shares has printable ASCII characters only: \
-      \other wallets would not take this one"
 
 {- The signing key of an account -}
 

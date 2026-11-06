@@ -283,9 +283,11 @@ outputsOf chain = [(OutPoint (txHash tx) i, out, ref) | (tx, ref) <- placed chai
 spenders :: Chain -> Map.Map OutPoint Store.Spender
 spenders chain = Map.fromList [(input.outpoint, Store.Spender (txHash tx) i) | (tx, _) <- chain.chainTxs, (i, input) <- zip [0 ..] tx.inputs]
 
--- | The address an output pays, if a standard one
+-- | The address an output pays, if a standard one. The fake store has one
+-- chain for every network, so the address is read as on Bitcoin, which
+-- has every kind of address the tests pay.
 addressOf :: Ctx -> TxOut -> Maybe Address
-addressOf ctx out = either (const Nothing) Just (scriptToAddressBS ctx out.script)
+addressOf ctx out = either (const Nothing) Just (scriptToAddressBS btc ctx out.script)
 
 -- | The outputs of the chain that no transaction of it spends
 unspentsOf :: Ctx -> Chain -> [Store.Unspent]

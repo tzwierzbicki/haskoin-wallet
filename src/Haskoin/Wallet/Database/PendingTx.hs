@@ -627,7 +627,7 @@ withWalletPaths :: (MonadUnliftIO m) => Ctx -> (DBAccountId, DBAccount) -> TxSig
 withWalletPaths ctx (accId, acc) tsd = do
   let net = accountNetwork acc
       spent = either (const []) (map (.address)) (spentCoins net ctx tsd)
-      paid = [addr | out <- tsd.txSignDataTx.outputs, Right script <- [unmarshal ctx out.script], Just addr <- [outputAddress ctx script], onNetwork net addr]
+      paid = [addr | out <- tsd.txSignDataTx.outputs, Right script <- [unmarshal ctx out.script], Just addr <- [outputAddress net ctx script]]
   known <- walletPaths net accId (spent <> paid)
   let pathsOf addrs listed = nubOrd (listed <> mapMaybe (`Map.lookup` known) addrs)
   return

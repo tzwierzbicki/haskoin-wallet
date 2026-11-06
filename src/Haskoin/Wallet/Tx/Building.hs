@@ -29,7 +29,6 @@ module Haskoin.Wallet.Tx.Building
     spentAddresses,
     fetchWalletCoins,
     coinWithPath,
-    recipientOutputKind,
     recipientsPayFee,
   )
 where
@@ -56,7 +55,7 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.PendingTx (changeAddress)
 import Haskoin.Wallet.Database.RawTx
 import Haskoin.Wallet.Tx.SignData
-import Haskoin.Wallet.Tx.Size (checkFeeRateAndDust, scriptOutputKind)
+import Haskoin.Wallet.Tx.Size (accountInput, accountOutputKind, checkFeeRateAndDust, checkStandardSize, outputDustLimit, recipientOutputKind)
 import Haskoin.Wallet.Tx.LockTime (withHeader)
 import Haskoin.Wallet.Util (addrToTextE, randomShuffle, safeSubtract)
 import Numeric.Natural (Natural)
@@ -242,7 +241,9 @@ buildWalletTx net ctx gen strategy found change recipients feeByte dust lockTime
 -- recipients pay the fee, it is deducted from their amounts in equal parts,
 -- the first recipient also paying the remainder. A fee rate of zero is
 -- refused: the network would not relay the transaction. So is a recipient
--- paid less than the dust limit.
+-- paid less than the dust limit of its output ('outputDustLimit'), and a
+-- payment that takes more coins than a transaction nodes relay can hold
+-- ('checkStandardSize').
 choosePayment ::
   Ctx ->
   StdGen ->
@@ -274,16 +275,23 @@ choosePayment ctx gen strategy found recipients feeByte dust payer coinControl =
       when (selection.paid == 0) $ Left "Recipients can't pay for the fee"
       recipientsPayFee (payment.amount - selection.paid) recipients
   -- The change is never below the dust limit: below it, it goes to the fee
-  when (any ((< dust) . snd) paidRecipients) $
+  when (any belowDust paidRecipients) $
     Left "Recipient output is smaller than the dust value"
+  checkStandardSize
+    (accountInput found.ownKind <$ selection.selected)
+    (payment.outputKinds <> [changeKind | selection.changeAmount > 0])
   return ChosenPayment {selection, paidRecipients, outputGen}
   where
+    -- The change is an output of the kind of the account
+    changeKind = accountOutputKind found.ownKind
+    -- Whether a recipient is paid less than the dust limit of its output
+    belowDust (addr, amount) = amount < outputDustLimit dust (recipientOutputKind ctx addr)
     payment =
       Payment
         { ownKind = found.ownKind,
           rates = FeeRates {feeRate = fromIntegral feeByte, longTermFeeRate = longTermRate},
           payer,
-          dust = fromIntegral dust,
+          dust = fromIntegral (outputDustLimit dust changeKind),
           outputKinds = recipientOutputKind ctx . fst <$> recipients,
           amount = sum $ fromIntegral . snd <$> recipients
         }
@@ -319,13 +327,6 @@ assemblePayment net ctx found chosen changeM lockTime = do
     coinPath coin = do
       addr <- maybeToEither "A chosen coin has no address" coin.address
       maybeToEither "A chosen coin has no derivation path" $ Map.lookup addr found.coinPaths
-
--- | The kind of the output paying a recipient, for its size. An address
--- that cannot be paid is counted as P2PKH; the builder refuses it further
--- down.
-recipientOutputKind :: Ctx -> Address -> OutputKind
-recipientOutputKind ctx addr =
-  maybe OutputPKHash (scriptOutputKind . marshal ctx) (addressToOutput addr)
 
 -- | The coins chosen under coin control, among the spendable coins of the
 -- account. Every chosen coin must be one of them: the command checks it

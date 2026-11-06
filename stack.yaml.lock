@@ -5,19 +5,6 @@
 
 packages:
 - completed:
-    commit: e7a83fe48e1383ff546323697be8795096f89682
-    git: https://github.com/jprupp/haskoin-store.git
-    name: haskoin-store-data
-    pantry-tree:
-      sha256: 00807ffe1abb23dfe4989ba6361a041582c8895a889455f67aafc68c253b19ed
-      size: 624
-    subdir: data
-    version: 1.6.3
-  original:
-    commit: e7a83fe48e1383ff546323697be8795096f89682
-    git: https://github.com/jprupp/haskoin-store.git
-    subdir: data
-- completed:
     commit: 29e7ca97790254a4f1b4608733fd92473ff0bf27
     git: https://github.com/jprupp/secp256k1-haskell.git
     name: secp256k1-haskell

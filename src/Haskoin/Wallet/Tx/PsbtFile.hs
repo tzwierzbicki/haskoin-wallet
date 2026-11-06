@@ -23,18 +23,25 @@
 -- the file learns its fingerprint. A PSBT does not say which account of
 -- the wallet it is for: the reader tries the accounts given, by the keys
 -- the records name, and gives the paths of the first one with a record,
--- relative to it, as the signing data wants them. A signed input keeps its
--- derivation records, which the spec lets a finalizer clear, so that the
--- signed file still says which inputs are the account's. The file carries
--- no key of the account beyond those of its addresses in the transaction.
+-- relative to it, as the signing data wants them. The file carries no key
+-- of the account beyond those of its addresses in the transaction.
+--
+-- A signed input is final: it carries its final script and witness, and
+-- no key, sighash or partial signature any more, as the finalizer of the
+-- spec leaves it and as Bitcoin Core writes it. The finalizer is
+-- haskoin-core's finalizePsbt, here and for the files of other wallets:
+-- it verifies every signature it uses against the coin. A wallet that
+-- reads a signed file finds its inputs among its own addresses, and the
+-- fingerprint of the seed in the record of an output of the account, if
+-- the transaction has one.
 --
 -- A file of another wallet is read the same way. An input it signed but
--- did not finalize, as a hardware wallet leaves it, is finalized here when
--- the coin is a P2PKH or a P2WPKH one and the signature is of its key. A file that
--- asks for a sighash hw does not sign with is refused, as the spec wants.
--- When hw signs a file of another wallet, 'signedPsbt' writes the
--- signatures into that file and keeps every other field of it, known to
--- hw or not, as the spec wants a signer to do.
+-- did not finalize, as a hardware wallet leaves it, is finalized when it
+-- is read. A file that asks for a sighash hw does not sign with is
+-- refused, as the spec wants. When hw signs a file of another wallet,
+-- 'signedPsbt' hands its signatures to the finalizer in that file, and
+-- every other field of it stays, known to hw or not, but those the
+-- finalizer clears.
 module Haskoin.Wallet.Tx.PsbtFile
   ( FileAccount (..),
     txFilePsbt,
@@ -58,10 +65,10 @@ import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Containers.ListUtils (nubOrd, nubOrdOn)
-import Data.List (sortOn, stripPrefix)
+import Data.List (sortOn, stripPrefix, zipWith4)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, listToMaybe, mapMaybe)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -190,10 +197,11 @@ txFilePsbt ctx accountM file = do
   return $ Psbt Version0 (psbtOf tx).unsignedTx globals inputs outputs
 
 -- | The map of an input: the transaction its coin comes from, the coin
--- itself as well for a SegWit one, the sighash to sign it with while it is
--- unsigned, its final script and witness once signed, the derivation and
--- label of the address of the account it spends from, if any, and the
--- label its coin shows, if any. The whole transaction is what hw and
+-- itself as well for a SegWit one, and the label its coin shows, if any.
+-- While it is unsigned: the sighash to sign it with, and the derivation
+-- and label of the address of the account it spends from, if any. Once
+-- signed: its final script and witness, and none of what served the
+-- signers, as the finalizer of the spec leaves an input. The whole transaction is what hw and
 -- the hardware wallets that check the amounts want; the coin alone is what
 -- the spec asks for a SegWit input, and what the signers that read no
 -- more look at.
@@ -204,7 +212,7 @@ inputMap ctx net file keys input stack (parent, coin) =
       <> [insertSigHashType (walletSigHash net) | unsigned]
       <> [insertFinalScriptSig input.script | not (BS.null input.script)]
       <> [insertFinalScriptWitness stack | not (null stack)]
-      <> concat [addressFields (insertInputDerivation ctx) file key | key <- keys, key.addressScript == coin.script]
+      <> concat [addressFields (insertInputDerivation ctx) file key | unsigned, key <- keys, key.addressScript == coin.script]
       <> [insertProprietary hwIdentifier coinLabelField (encodeUtf8 label) | Just label <- [Map.lookup input.outpoint.hash file.txFileInputLabels]]
   where
     unsigned = BS.null input.script && null stack
@@ -227,42 +235,73 @@ addressFields insertDerivation file key =
 {- Signing into a file -}
 
 -- | The PSBT of a transaction just signed, written into the PSBT its file
--- was read from, as the spec wants a signer to work: every field of that
--- file stays, known to hw or not. Each input signed gets its final script
--- and witness, and loses the sighash it was to be signed with and the
--- signatures that were not final. The derivation records that named the
--- keys of the account by the account's own key, when the wallet did not
--- know the seed, are rewritten from the seed the signer names. The network
--- goes in hw's field when the file has none. The transaction signed must
--- be the file's.
+-- was read from, as the spec wants a signer and a finalizer to work. The
+-- signature of each input hw signed goes among the partial signatures of
+-- that input, as a signer hands it over. haskoin-core's finalizePsbt then
+-- verifies it against the coin, builds the final script and witness, and
+-- clears what served the signers: the partial signatures, the sighash
+-- type, the redeem script and the derivation records, as Bitcoin Core
+-- does. Every other field of the file stays, known to hw or not. The
+-- file, once finalized, must hold the very transaction signed.
+--
+-- The derivation records that are left, those of the outputs and of the
+-- inputs still unsigned, and that named the keys of the account by the
+-- account's own key, when the wallet did not know the seed, are rewritten
+-- from the seed the signer names. The network goes in hw's field when the
+-- file has none. The transaction signed must be the file's, and the
+-- signed file must name its network, which says how a signature is
+-- verified.
 signedPsbt :: Ctx -> Maybe FileAccount -> Psbt -> TxFile -> Either String Psbt
 signedPsbt ctx accountM source file = do
+  net <- maybe (Left "The file names no network") Right file.txFileNetwork
   let tsd = file.txFileData
       tx = tsd.txSignDataTx
   unless (nosigHash tx == nosigHash source.unsignedTx) $
     Left "The transaction signed is not the one of the file"
+  coins <- inputCoins source
   let stacks = tx.witness <> repeat []
-      signed = zipWith3 signedInput tx.inputs stacks source.inputs
-      fingerprintM = tsd.txSignDataFingerprint <|> (fileAccountFingerprint =<< accountM)
-  inputs <- forM signed $ \m -> maybe (return m) (\(acc, fp) -> fromSeed (inputDerivations ctx) (insertInputDerivation ctx) acc fp m) ((,) <$> accountM <*> fingerprintM)
-  outputs <- forM source.outputs $ \m -> maybe (return m) (\(acc, fp) -> fromSeed (outputDerivations ctx) (insertOutputDerivation ctx) acc fp m) ((,) <$> accountM <*> fingerprintM)
-  let globals = case (file.txFileNetwork, lookupProprietary hwIdentifier networkField source.globals) of
-        (Just net, Nothing) -> insertProprietary hwIdentifier networkField (cs net.name) source.globals
-        _ -> source.globals
+      withSignatures = zipWith4 (signerFields net) coins tx.inputs stacks source.inputs
+      globals = case lookupProprietary hwIdentifier networkField source.globals of
+        Nothing -> insertProprietary hwIdentifier networkField (cs net.name) source.globals
+        Just _ -> source.globals
+  finalized <- finalizePsbt net ctx (Psbt source.version source.unsignedTx globals withSignatures source.outputs)
+  final <- psbtPartialTransaction finalized
+  unless (S.encode final == S.encode tx) $
+    Left "The file, once finalized, does not hold the transaction signed"
+  let fingerprintM = tsd.txSignDataFingerprint <|> (fileAccountFingerprint =<< accountM)
+      namedBySeed records insert m = maybe (return m) (\(acc, fp) -> fromSeed records insert acc fp m) ((,) <$> accountM <*> fingerprintM)
+  inputs <- forM finalized.inputs (namedBySeed (inputDerivations ctx) (insertInputDerivation ctx))
+  outputs <- forM finalized.outputs (namedBySeed (outputDerivations ctx) (insertOutputDerivation ctx))
   -- The file keeps its version. hw signs with the sighash ALL, with
   -- FORKID on Bitcoin Cash, after which a file of version 2 takes no more
   -- inputs or outputs: its flags say so.
-  return $ afterSignature sigHashAll (Psbt source.version source.unsignedTx globals inputs outputs)
+  return $ afterSignature sigHashAll (Psbt finalized.version finalized.unsignedTx finalized.globals inputs outputs)
   where
-    -- The map of an input as the signed transaction has it: as it was
-    -- while the input is unsigned
-    signedInput :: TxIn -> WitnessStack -> PsbtMap -> PsbtMap
-    signedInput input stack m
+    -- The map of an input with the signature hw made for it, as a signer
+    -- gives it to the finalizer: the key and its signature and, for a
+    -- P2WPKH coin nested in P2SH, the redeem script the input pushes.
+    -- These are the three kinds of coins hw signs. An input that is
+    -- unsigned in the transaction, or final in the file already, is left
+    -- as it is.
+    signerFields :: Network -> Maybe InputCoin -> TxIn -> WitnessStack -> PsbtMap -> PsbtMap
+    signerFields net coinM input stack m
       | BS.null input.script && null stack = m
-      | otherwise =
-          foldr ($) (deleteSigHashType (deletePartialSignatures m)) $
-            [insertFinalScriptSig input.script | not (BS.null input.script)]
-              <> [insertFinalScriptWitness stack | not (null stack)]
+      | isJust (finalScriptSig m) || either (const False) isJust (finalScriptWitness m) = m
+      | otherwise = fromMaybe m $ do
+          found <- coinM
+          coinScript <- eitherToMaybe (unmarshal ctx found.coin.script)
+          let scriptInput = eitherToMaybe (unmarshal (net, ctx) input.script) :: Maybe ScriptInput
+          case (coinScript, scriptInput, stack) of
+            (PayPKHash _, Just (RegularInput (SpendPKHash signature public)), []) ->
+              Just (insertPartialSignature ctx public (encodeTxSig net ctx signature) m)
+            (PayWitnessPKHash _, _, [signature, key])
+              | BS.null input.script ->
+                  (\public -> insertPartialSignature ctx public signature m) <$> eitherToMaybe (unmarshal ctx key)
+            (PayScriptHash _, Just (NestedWitnessInput redeem), [signature, key]) -> do
+              public <- eitherToMaybe (unmarshal ctx key)
+              redeemScript <- eitherToMaybe (encodeOutput ctx redeem)
+              Just (insertInputRedeemScript redeemScript (insertPartialSignature ctx public signature m))
+            _ -> Nothing
     -- The records of the map that name a key by the account's own key,
     -- named by the seed and the full path instead
     fromSeed ::
@@ -300,39 +339,36 @@ data AccountMatch = AccountMatch
 -- on an output, those on the network the file names coming first. A PSBT
 -- that names none of them is read without paths, as a transaction outside
 -- the wallet. Every input must carry the whole transaction its coin comes
--- from. An input signed but not finalized is finalized when hw can, as
--- 'finalizedInput' says, and stays unsigned otherwise. An input to be
+-- from, which haskoin-core checks against the input. An input to be
 -- signed with a sighash hw does not sign with is refused: that of the
 -- account's network, or ALL, with FORKID on Bitcoin Cash, when no account
 -- is involved.
-psbtTxFile :: Ctx -> [FileAccount] -> Psbt -> Either String TxFile
-psbtTxFile ctx accounts psbt = do
-  extracted <- psbtTransaction psbt
-  let stacks = extracted.witness <> repeat []
-  coins <- forM (zip3 [0 :: Int ..] extracted.inputs (zip stacks psbt.inputs)) $ \(i, input, (stack, m)) -> do
-    let place = "Input " <> show i
-    parentM <- nonWitnessUtxo m
-    parent <- maybe (Left (place <> " has no previous transaction: hw needs the whole transaction each coin comes from")) Right parentM
-    unless (txHash parent == input.outpoint.hash) $
-      Left ("The previous transaction of input " <> show i <> " is not the one it spends")
-    coin <-
-      maybe (Left (place <> " spends an output its previous transaction does not have")) Right $
-        listToMaybe (drop (fromIntegral input.outpoint.index) parent.outputs)
-    (scriptSig, witness) <-
-      if BS.null input.script && null stack
-        then fromMaybe (BS.empty, []) <$> finalizedInput ctx coin m
-        else return (input.script, stack)
-    asked <- first ((place <> ": ") <>) (sigHashType m)
-    return (parent, TxIn input.outpoint scriptSig input.sequence, witness, asked)
-  let witnesses = [witness | (_, _, witness, _) <- coins]
-      tx =
-        Tx
-          extracted.version
-          [input | (_, input, _, _) <- coins]
-          extracted.outputs
-          (if all null witnesses then [] else witnesses)
-          extracted.locktime
-      askedSigHashes = [(i, sh) | (i, (_, _, _, Just sh)) <- zip [0 :: Int ..] coins]
+--
+-- An input signed but not finalized, as a hardware wallet leaves it, is
+-- finalized by haskoin-core's finalizePsbt, which verifies the signatures
+-- it uses against the coin and refuses one that does not verify. A
+-- signature is verified as its network has it: the network the file
+-- names, else that of the account its records name, else the one given,
+-- which a command takes from --network or from the configuration. When
+-- nothing names a network, nothing is finalized, and such an input reads
+-- as unsigned.
+psbtTxFile :: Ctx -> Maybe Network -> [FileAccount] -> Psbt -> Either String TxFile
+psbtTxFile ctx fallbackM accounts psbt = do
+  -- The coin of every input, as haskoin-core reads it from the fields of
+  -- the input ('inputCoins'): the output of its previous transaction,
+  -- which must be the transaction the input spends and have that output.
+  -- A coin given alone beside it, as a SegWit input has it, must be that
+  -- output too.
+  checkedCoins <- inputCoins psbt
+  parents <- forM (zip3 [0 :: Int ..] psbt.inputs checkedCoins) $ \(i, m, checkedM) -> do
+    let noParent = Left ("Input " <> show i <> " has no previous transaction: hw needs the whole transaction each coin comes from")
+    -- A coin known from its output alone is a claim of whoever wrote the
+    -- file: hw wants the transaction it comes from, which proves it
+    case checkedM of
+      Just checked | checked.fromPreviousTx -> maybe noParent Right =<< nonWitnessUtxo m
+      _ -> noParent
+  asked <- forM (zip [0 :: Int ..] psbt.inputs) $ \(i, m) -> first (("Input " <> show i <> ": ") <>) (sigHashType m)
+  let askedSigHashes = [(i, sh) | (i, Just sh) <- zip [0 :: Int ..] asked]
   netM <- traverse networkOf (lookupProprietary hwIdentifier networkField psbt.globals)
   feeRateM <- traverse feeRateOf (lookupProprietary hwIdentifier feeRateField psbt.globals)
   replaces <- maybe (Right []) replacesOf (lookupProprietary hwIdentifier replacesField psbt.globals)
@@ -355,12 +391,20 @@ psbtTxFile ctx accounts psbt = do
       [] -> case [(i, sh) | (i, sh) <- askedSigHashes, not (acceptableSigHash (signsWith first') sh)] of
         (i, sh) : _ -> Left (sigHashRefusal i sh (signsWith first'))
         [] -> return (Just first')
+  -- The finalizer of the spec, for the inputs another signer left signed
+  -- and not final
+  let signedOn = netM <|> (signsWith =<< chosen) <|> fallbackM
+  finalized <- maybe (Right psbt) (\net -> finalizePsbt net ctx psbt) signedOn
+  -- The transaction with the final scripts the file has. A file may still
+  -- be unsigned, so this is not haskoin-core's psbtTransaction, the
+  -- extractor, which takes a PSBT whose inputs are all final.
+  tx <- psbtPartialTransaction finalized
   coinLabels <- forM (zip tx.inputs psbt.inputs) $ \(input, m) ->
     fmap (\text -> (input.outpoint.hash, text)) <$> traverse (textOf "The label of a coin") (lookupProprietary hwIdentifier coinLabelField m)
   let tsd =
         TxSignData
           { txSignDataTx = tx,
-            txSignDataInputs = nubOrdOn txHash [parent | (parent, _, _, _) <- coins],
+            txSignDataInputs = nubOrdOn txHash parents,
             txSignDataInputPaths = maybe [] (.matchInputPaths) chosen,
             txSignDataOutputPaths = maybe [] (.matchOutputPaths) chosen,
             txSignDataFeeRate = feeRateM,
@@ -375,27 +419,6 @@ psbtTxFile ctx accounts psbt = do
         txFilePathLabels = maybe Map.empty (.matchLabels) chosen,
         txFileInputLabels = firstOfEach (mapMaybe id coinLabels)
       }
-
--- | The final script and witness of a coin whose input carries the
--- signature of its key among the signatures that are not final, as the
--- finalizer of the spec builds them: for a P2PKH coin, the input script
--- pushes the signature, then the key, and the witness is empty; for a
--- P2WPKH coin, the witness holds the signature, then the key, and the
--- input script is empty. Nothing for any other input, which stays
--- unsigned: hw finalizes what it signs itself, and nothing else. Whether
--- the signature is good is checked where the signed transaction is
--- verified.
-finalizedInput :: Ctx -> TxOut -> PsbtMap -> Either String (Maybe (ByteString, WitnessStack))
-finalizedInput ctx coin m = do
-  signatures <- partialSignatures ctx m
-  let signatureOfKey hash =
-        listToMaybe [(signature, marshal ctx public) | (public, signature) <- signatures, addressHash (marshal ctx public) == hash]
-  return $ case unmarshal ctx coin.script of
-    Right (PayPKHash hash) ->
-      (\(signature, public) -> (S.encode (Script [opPushData signature, opPushData public]), [])) <$> signatureOfKey hash
-    Right (PayWitnessPKHash hash) ->
-      (\(signature, public) -> (BS.empty, [signature, public])) <$> signatureOfKey hash
-    _ -> Nothing
 
 -- | Whether hw signs with the sighash: that of the network when known,
 -- else ALL, with or without FORKID
@@ -462,8 +485,13 @@ matchRecord ctx acc place (public, derivation)
     namesAccount fromSeed = case fromSeed of
       Just f -> Just f == acc.fileAccountFingerprint
       Nothing -> True
-    -- Whether the record's key is the account's at a soft path below it
-    keyAt path = (addressKey ctx acc Nothing path).addressPublic == public
+    -- Whether the record's key is the account's at a soft path below it.
+    -- The path comes from the file and may be of any length, so it is
+    -- followed with tryDerivePubPath, which does not throw: a path too
+    -- deep to have a key is of no key of the account.
+    keyAt path = case tryDerivePubPath ctx path acc.fileAccountXPub of
+      Right derived -> wrapPubKey True derived.key == public
+      Left _ -> False
     resolve rest fromSeed = case toSoft (listToPath rest) of
       Just path
         | isChainPath path -> onChain path fromSeed

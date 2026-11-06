@@ -43,8 +43,8 @@ dependencies:
   - path-pieces
   - http-api-data
   - esqueleto >=3.5.10.1
-  - haskoin-core >= 1.5.0
-  - haskoin-store-data >= 1.2.2
+  - haskoin-core >= 1.6.0
+  - haskoin-store-data >= 1.7.0
   - http-client >= 0.7
   - http-types >= 0.12.3
   - lens >= 4.18.1

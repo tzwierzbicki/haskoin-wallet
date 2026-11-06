@@ -47,7 +47,6 @@ module Haskoin.Wallet.Tx.Signing
     verifySignedTx,
     SpentCoin (..),
     spentCoins,
-    spentAddress,
     coinSigInput,
     walletSigHash,
     sigHashName,
@@ -55,7 +54,7 @@ module Haskoin.Wallet.Tx.Signing
   )
 where
 
-import Control.Monad (foldM, forM_, mfilter, unless, when)
+import Control.Monad (foldM, forM_, unless, when)
 import Data.Bits ((.&.))
 import qualified Data.ByteString as BS
 import Data.List (nub)
@@ -80,7 +79,7 @@ import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Keys (AccountKind, isChainPath, keyAddress, kindCoinName, spendsScript)
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Size (inputKind, scriptOutputKind, signedTxSize, txSize)
-import Haskoin.Wallet.Util (addrToString, onNetwork, safeSubtract)
+import Haskoin.Wallet.Util (addrToString, safeSubtract)
 import Numeric.Natural (Natural)
 
 {- Entry points -}
@@ -188,7 +187,11 @@ data SpentCoin = SpentCoin
     address :: !Address
   }
 
--- | The coin spent by every input, in the order of the inputs
+-- | The coin spent by every input, in the order of the inputs. hw names a
+-- coin by its address, the one haskoin-core gives its script on the
+-- network. A coin without one is refused as non-standard: one paid to a
+-- public key itself (P2PK) has no address, and the P2PKH address of its
+-- key would mislead, since it is not spent as a P2PKH coin.
 spentCoins :: Network -> Ctx -> TxSignData -> Either String [SpentCoin]
 spentCoins net ctx tsd = mapM spentCoin tsd.txSignDataTx.inputs
   where
@@ -201,24 +204,10 @@ spentCoins net ctx tsd = mapM spentCoin tsd.txSignDataTx.inputs
         maybe (Left "Referenced input transactions are missing") Right $
           nth op.index =<< Map.lookup op.hash outputs
       script <- either (const nonStandard) Right $ unmarshal ctx txOut.script
-      address <- maybe nonStandard Right $ spentAddress net ctx script
+      address <- maybe nonStandard Right $ outputAddress net ctx script
       return SpentCoin {outpoint = op, value = txOut.value, script, address}
     nonStandard = Left "There are non-standard inputs in the transaction"
     nth i xs = listToMaybe $ drop (fromIntegral i) xs
-
--- | The address an output script pays, when the network can write it
-paidAddress :: Network -> Ctx -> ScriptOutput -> Maybe Address
-paidAddress net ctx script = mfilter (onNetwork net) (outputAddress ctx script)
-
--- | The address of a coin an input spends, when the network can write it.
--- A coin paid to a public key itself (P2PK), which only a sweep spends, is
--- listed under the P2PKH address of that key. haskoin-core gives the
--- script no address, since the coin is not spent as a P2PKH one, but the
--- same key signs for both, and hw has no other name for the coin.
-spentAddress :: Network -> Ctx -> ScriptOutput -> Maybe Address
-spentAddress net ctx = \case
-  PayPK key -> mfilter (onNetwork net) (Just (pubKeyAddr ctx key))
-  script -> paidAddress net ctx script
 
 -- | The signing parameters of a coin: its output script and value, signed
 -- with SIGHASH_ALL (with the FORKID flag on Bitcoin Cash networks)
@@ -287,7 +276,7 @@ summarize net ctx accountPubM tsd coins = do
       amount =
         toInteger (sum $ (.myOutputsValue) <$> myOutputs)
           - toInteger (sum $ (.myInputsValue) <$> myInputs)
-      estimated = estimatedSize coins tx
+      estimated = estimatedSize ctx coins tx
       size
         | isSigned tx = signedTxSize tx
         | otherwise = estimated
@@ -321,7 +310,7 @@ summarize net ctx accountPubM tsd coins = do
     outputAddress' :: TxOut -> Either String (Address, Natural)
     outputAddress' txOut = do
       script <- either (const nonStandard) Right $ unmarshal ctx txOut.script
-      address <- maybe nonStandard Right $ paidAddress net ctx script
+      address <- maybe nonStandard Right $ outputAddress net ctx script
       return (address, fromIntegral txOut.value)
     nonStandard = Left "There are non-standard outputs in the transaction"
     coinsValue :: [SpentCoin] -> Natural
@@ -352,10 +341,10 @@ offChainPath path =
 -- scripts of the outputs. The signing data does not say whether a P2PKH
 -- coin belongs to an uncompressed key, so such a coin is counted for a
 -- compressed one, as is a coin of a kind hw cannot sign.
-estimatedSize :: [SpentCoin] -> Tx -> Natural
-estimatedSize coins tx =
+estimatedSize :: Ctx -> [SpentCoin] -> Tx -> Natural
+estimatedSize ctx coins tx =
   fromIntegral $
-    txSize (fromMaybe InputPKHash . inputKind . (.script) <$> coins) (scriptOutputKind . (.script) <$> tx.outputs)
+    txSize (fromMaybe InputPKHash . inputKind . (.script) <$> coins) (scriptOutputKind ctx . (.script) <$> tx.outputs)
 
 {- Signing -}
 
@@ -394,14 +383,21 @@ signInputs net ctx kind accountKey myInputs tx coins =
 -- signs with. Another signer can give a valid signature with another
 -- sighash, which commits to less than the whole transaction: with NONE,
 -- anyone could change where the coins go once the transaction is out.
+--
+-- The transaction is then verified as a whole, with haskoin-core's
+-- verifyStdTx, which also refuses a coin spent twice and outputs that pay
+-- more than the coins hold. The inputs are checked one by one first, to
+-- name the input that fails.
 verifyInputs :: Network -> Ctx -> Tx -> [SpentCoin] -> Either String ()
-verifyInputs net ctx tx coins =
+verifyInputs net ctx tx coins = do
   forM_ (zip3 [0 ..] coins stacks) $ \(i, coin, stack) -> do
     unless (verifyStdInput net ctx tx spent i) $
       Left $ "Invalid signature for " <> describeInput net i coin
     forM_ (inputSigHashes net ctx (tx.inputs !! i) stack) $ \sh ->
       unless (sh == walletSigHash net) $
         Left $ "The signature of " <> describeInput net i coin <> " has the sighash " <> sigHashName sh <> ", not " <> sigHashName (walletSigHash net)
+  unless (verifyStdTx net ctx tx spent) $
+    Left "The transaction does not verify: it spends a coin twice, or pays more than its coins hold"
   where
     stacks = tx.witness <> repeat []
     -- The coins as the verifier takes them: it finds the coin of an input

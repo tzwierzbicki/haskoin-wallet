@@ -73,7 +73,7 @@ build ctx wallet recipients = buildSendAll btc ctx (mkStdGen 0) wallet recipient
 -- | The outputs of a transaction as addresses and amounts, by amount, since
 -- the builder shuffles them
 outputsOf :: Ctx -> Tx -> [(Address, Word64)]
-outputsOf ctx transaction = sortOn snd [(forceRight (scriptToAddressBS ctx out.script), out.value) | out <- transaction.outputs]
+outputsOf ctx transaction = sortOn snd [(forceRight (scriptToAddressBS btc ctx out.script), out.value) | out <- transaction.outputs]
 
 -- | The report on the dust coins of 1200, 900 and 546 satoshis, beside the
 -- coins of 50000 and 30000, all sent to one address, and whether other coins
@@ -161,6 +161,14 @@ buildSpec ctx =
       built <- expectRight $ buildSendAll bch ctx (mkStdGen 0) (found (twoCoins ctx) []) [(otherAddr 0, Remainder)] 10 546 800002
       ((.sequence) <$> built.tx.inputs) `shouldBe` [0xfffffffe, 0xfffffffe]
 
+    -- Nodes relay a transaction of at most 100000 virtual bytes. 676 P2PKH
+    -- coins sent to one P2PKH output take 12 + 676 × 148 + 34 = 100094
+    -- bytes: the coins are those of 676 outputs of one transaction, all at
+    -- the first address of the wallet.
+    it "is refused more coins than a transaction nodes relay can hold" $ do
+      let manyCoins = [storeCoin ctx (fakeTxHash 3, i) (Just 800000) (externalAddr 0) 10000 | i <- [0 .. 675]]
+      build ctx (found manyCoins []) [(otherAddr 0, Remainder)]
+        `shouldBe` Left "The transaction would take 100094 virtual bytes, and nodes relay at most 100000: spend fewer coins or pay fewer recipients in one transaction"
     it "is refused without coins to send" $
       build ctx (found [] []) [(otherAddr 0, Remainder)] `shouldBe` Left "There are no coins to send"
 

@@ -20,15 +20,23 @@
 -- and the dust limit a transaction is built with are checked here too,
 -- for the builders of payments and of sweeps, beside the default fee rate
 -- and the rate above which hw asks the user first.
+--
+-- Two limits of the relay policy of nodes are here as well, both taken
+-- from haskoin-core: the smallest amount an output may hold, by its kind
+-- ('outputDustLimit'), and the largest transaction ('checkStandardSize').
+-- A transaction beyond either does not spread, so hw builds none.
 module Haskoin.Wallet.Tx.Size
   ( inputKind,
     inputVirtualSize,
     accountInput,
     accountInputSize,
     scriptOutputKind,
+    recipientOutputKind,
     accountOutputKind,
     accountOutputSize,
+    outputDustLimit,
     txSize,
+    checkStandardSize,
     signedTxSize,
     storeTxSize,
     highFeeRate,
@@ -41,7 +49,7 @@ where
 import Control.Monad (when)
 import qualified Data.ByteString as BS
 import Data.Word (Word64)
-import Haskoin (InputKind (..), OutputKind (..), ScriptOutput (..), Tx, guessTxSize, inputWeight, outputSize, txVirtualSize)
+import Haskoin (Address, Ctx, InputKind (..), OutputKind (..), ScriptOutput (..), Tx, addressToOutput, dustThreshold, guessTxSize, guessTxWeight, inputWeight, marshal, maxStandardTxWeight, outputSize, txVirtualSize, unmarshal)
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Amounts (maxMoney)
 import Haskoin.Wallet.Keys (AccountKind (..))
@@ -57,7 +65,6 @@ import Numeric.Natural (Natural)
 --
 --   * P2PKH: the script pushes the signature and the 33-byte public key:
 --     148 bytes (180 for an uncompressed key).
---   * P2PK: the script pushes the signature alone: 114 bytes.
 --   * P2WPKH: an empty script, 41 bytes; the witness holds the signature and
 --     the public key, each with its length, after their count: 108 bytes.
 --   * P2SH-P2WPKH: the script pushes the 22-byte P2WPKH script, 64 bytes,
@@ -66,7 +73,6 @@ inputKind :: ScriptOutput -> Maybe InputKind
 inputKind script =
   case script of
     PayPKHash _ -> Just InputPKHash
-    PayPK _ -> Just InputPK
     PayWitnessPKHash _ -> Just InputWitnessPKHash
     PayScriptHash _ -> Just InputNestedWitnessPKHash
     _ -> Nothing
@@ -93,11 +99,27 @@ accountInputSize = inputVirtualSize . accountInput
 
 {- Outputs -}
 
--- | The kind of an output paying a script, for its size. haskoin-core
--- sizes any script by its length, 8 bytes of amount, the length of the
--- script and the script, which is all hw needs of a recipient's output.
-scriptOutputKind :: BS.ByteString -> OutputKind
-scriptOutputKind = OutputScript . BS.length
+-- | The kind of an output paying a script, as haskoin-core names the
+-- kinds. The kind says the size of the output, 8 bytes of amount, the
+-- length of the script and the script, and the amount below which nodes
+-- do not relay it ('outputDustLimit'). A script of no named kind, such as
+-- a bare multisig, a data carrier or a witness program of a later
+-- version, is of the kind of its length.
+scriptOutputKind :: Ctx -> BS.ByteString -> OutputKind
+scriptOutputKind ctx script = case unmarshal ctx script :: Either String ScriptOutput of
+  Right (PayPKHash _) -> OutputPKHash
+  Right (PayScriptHash _) -> OutputScriptHash
+  Right (PayScript32Hash _) -> OutputScript32Hash
+  Right (PayWitnessPKHash _) -> OutputWitnessPKHash
+  Right (PayWitnessScriptHash _) -> OutputWitnessScriptHash
+  Right (PayWitness version program) | version == 1 && BS.length program == 32 -> OutputTaproot
+  _ -> OutputScript (BS.length script)
+
+-- | The kind of the output paying a recipient. An address that cannot be
+-- paid is counted as P2PKH: the builder refuses it further down.
+recipientOutputKind :: Ctx -> Address -> OutputKind
+recipientOutputKind ctx addr =
+  maybe OutputPKHash (scriptOutputKind ctx . marshal ctx) (addressToOutput addr)
 
 -- | The output an account of the kind pays its change to: P2PKH for a
 -- BIP44 account, a 25-byte script in a 34-byte output; P2WPKH for a BIP84
@@ -111,6 +133,17 @@ accountOutputKind Bip84 = OutputWitnessPKHash
 accountOutputSize :: AccountKind -> Word64
 accountOutputSize = fromIntegral . outputSize . accountOutputKind
 
+-- | The dust limit of an output of the kind: the smallest amount it may
+-- hold, in satoshis. Nodes do not relay an output below the threshold of
+-- its kind, which haskoin-core's dustThreshold gives as Bitcoin Core
+-- computes it: 546 for P2PKH, 540 for P2SH, 294 for P2WPKH, and 330 for
+-- P2WSH and Taproot. The limit asked with --dust-limit raises that of
+-- every output to its amount, and lowers none: one output below what
+-- nodes relay keeps the whole transaction from spreading. Without the
+-- option the limit asked is zero.
+outputDustLimit :: Natural -> OutputKind -> Natural
+outputDustLimit asked kind = max asked (fromIntegral (dustThreshold kind))
+
 {- Transactions -}
 
 -- | The virtual size of a transaction with the given inputs and outputs,
@@ -122,6 +155,21 @@ accountOutputSize = fromIntegral . outputSize . accountOutputKind
 -- together count a quarter, rounded up.
 txSize :: [InputKind] -> [OutputKind] -> Word64
 txSize inputs outputs = fromIntegral (guessTxSize inputs outputs)
+
+-- | Refuse a transaction too large for nodes to relay: one whose weight,
+-- as haskoin-core estimates it, is above its maxStandardTxWeight, the
+-- 400000 weight units of Bitcoin Core, which are 100000 virtual bytes.
+-- Bitcoin Cash Node has the same limit, in bytes. The builders check the
+-- transaction they are about to make: no fee makes a larger one spread.
+checkStandardSize :: [InputKind] -> [OutputKind] -> Either String ()
+checkStandardSize inputs outputs =
+  when (guessTxWeight inputs outputs > maxStandardTxWeight) $
+    Left $
+      "The transaction would take "
+        <> show (txSize inputs outputs)
+        <> " virtual bytes, and nodes relay at most "
+        <> show (maxStandardTxWeight `div` 4)
+        <> ": spend fewer coins or pay fewer recipients in one transaction"
 
 -- | The virtual size of a signed transaction, from its bytes, as
 -- haskoin-core's txVirtualSize measures it: those outside the witnesses

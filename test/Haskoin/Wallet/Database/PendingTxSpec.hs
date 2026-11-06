@@ -233,7 +233,7 @@ lockedCoins accId = map (\c -> (jsonCoinAddress c, transactionLocked c)) <$> coi
 corePayment :: Ctx -> IO TxSignData
 corePayment ctx = do
   text <- BS.readFile "test/data/psbt/core/pending-payment-finalized.psbt"
-  file <- expectRight $ psbtTxFile ctx [FileAccount (testAccountPub ctx) Bip44 "m/44'/0'/0'" (Just testFingerprint) btc] =<< decodePsbtBase64 text
+  file <- expectRight $ psbtTxFile ctx Nothing [FileAccount (testAccountPub ctx) Bip44 "m/44'/0'/0'" (Just testFingerprint) btc] =<< decodePsbtBase64 text
   return (txFileData file)
 
 importingSpec :: Ctx -> Spec

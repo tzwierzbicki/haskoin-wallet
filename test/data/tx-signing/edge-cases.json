@@ -292,8 +292,8 @@
         "outputpaths": []
       },
       "expect": "error",
-      "error": "input 0 (16jj9LFEK2ULQ9dMkDArv6ud4xVQVbWyfX) is not a P2PKH coin",
-      "comment": "A pay-to-public-key coin paying to the key of a wallet address (/0/10): the wallet only signs P2PKH coins."
+      "error": "There are non-standard inputs in the transaction",
+      "comment": "A pay-to-public-key coin paying to the key of a wallet address (/0/10). Such a coin has no address, and hw names a coin by its address: the transaction is refused before the kind of the coin is looked at."
     },
     {
       "name": "edge/non-standard-input",

@@ -42,33 +42,74 @@ spec = do
       sizeOf 65535 1 `shouldBe` 9699226
       sizeOf 65536 1 `shouldBe` 9699376
 
+  -- What nodes relay, as Bitcoin Core computes it: three satoshis for each
+  -- byte of the output and of the smallest input that spends it, which is
+  -- 148 bytes without a witness and 67 with one
+  describe "The dust limit of an output, by its kind" $ do
+    it "is what nodes relay when no limit is asked: 546 for P2PKH, 540 for P2SH, 294 for P2WPKH, 330 for P2WSH and Taproot" $ do
+      outputDustLimit 0 OutputPKHash `shouldBe` 546 -- 3 × (34 + 148)
+      outputDustLimit 0 OutputScriptHash `shouldBe` 540 -- 3 × (32 + 148)
+      outputDustLimit 0 OutputWitnessPKHash `shouldBe` 294 -- 3 × (31 + 67)
+      outputDustLimit 0 OutputWitnessScriptHash `shouldBe` 330 -- 3 × (43 + 67)
+      outputDustLimit 0 OutputTaproot `shouldBe` 330 -- 3 × (43 + 67)
+    it "is 576 for the P2SH32 output of Bitcoin Cash" $
+      outputDustLimit 0 OutputScript32Hash `shouldBe` 576 -- 3 × (44 + 148)
+    it "is the limit asked, when that is above what nodes relay" $ do
+      outputDustLimit 1000 OutputPKHash `shouldBe` 1000
+      outputDustLimit 1000 OutputWitnessPKHash `shouldBe` 1000
+      outputDustLimit 300 OutputWitnessPKHash `shouldBe` 300
+    it "is never below what nodes relay, whatever limit is asked" $ do
+      outputDustLimit 100 OutputPKHash `shouldBe` 546
+      outputDustLimit 293 OutputWitnessPKHash `shouldBe` 294
+
+  -- Nodes relay a transaction of at most 400000 weight units, which are
+  -- 100000 virtual bytes. With 675 P2PKH coins and one P2PKH output a
+  -- transaction takes 12 + 675 × 148 + 34 = 99946 bytes, and with 676 it
+  -- takes 12 + 676 × 148 + 34 = 100094.
+  describe "The largest transaction nodes relay" $ do
+    it "holds 675 P2PKH coins paid to one P2PKH output" $
+      checkStandardSize (replicate 675 InputPKHash) [OutputPKHash] `shouldBe` Right ()
+    it "does not hold 676 of them, which is refused with the size it would take" $
+      checkStandardSize (replicate 676 InputPKHash) [OutputPKHash]
+        `shouldBe` Left "The transaction would take 100094 virtual bytes, and nodes relay at most 100000: spend fewer coins or pay fewer recipients in one transaction"
+
   prepareContext $ \ctx -> do
     describe "The kind of an input, by the output script of its coin" $ do
-      it "is P2PKH, P2PK, P2WPKH, or P2WPKH nested in P2SH, the only script hash hw signs" $ do
+      it "is P2PKH, P2WPKH, or P2WPKH nested in P2SH, the only script hash hw signs" $ do
         inputKind (scriptOf keyHashAddr) `shouldBe` Just InputPKHash
-        inputKind (PayPK (derivePublicKey ctx (wrapSecKey True sweptKey))) `shouldBe` Just InputPK
         inputKind (scriptOf witnessAddr) `shouldBe` Just InputWitnessPKHash
         inputKind (scriptOf scriptAddr) `shouldBe` Just InputNestedWitnessPKHash
       it "is unknown for a coin hw cannot sign" $ do
         inputKind (scriptOf witnessScriptAddr) `shouldBe` Nothing
+        -- A coin paid to a public key itself (P2PK) has no address
+        inputKind (PayPK (derivePublicKey ctx (wrapSecKey True sweptKey))) `shouldBe` Nothing
         inputKind (scriptOf taprootAddr) `shouldBe` Nothing
 
     describe "The virtual size of an input on its own, by its kind" $ do
-      it "is 148 bytes for a P2PKH coin, 180 with an uncompressed key, 114 for a P2PK coin" $ do
+      it "is 148 bytes for a P2PKH coin, 180 with an uncompressed key" $ do
         inputVirtualSize InputPKHash `shouldBe` 148
         inputVirtualSize InputUncompressedPKHash `shouldBe` 180
-        inputVirtualSize InputPK `shouldBe` 114
       it "is the bytes and a quarter of the 108-byte witness, rounded up: 41 + 27 for a P2WPKH coin, 64 + 27 nested in P2SH" $ do
         inputVirtualSize InputWitnessPKHash `shouldBe` 68
         inputVirtualSize InputNestedWitnessPKHash `shouldBe` 91
 
     describe "The size of an output, by its script" $
       it "is 34 bytes for P2PKH, 32 for P2SH, 31 for P2WPKH, 43 for P2WSH and Taproot" $ do
-        outputSize (scriptOutputKind (addressScript ctx keyHashAddr)) `shouldBe` 34
-        outputSize (scriptOutputKind (addressScript ctx scriptAddr)) `shouldBe` 32
-        outputSize (scriptOutputKind (addressScript ctx witnessAddr)) `shouldBe` 31
-        outputSize (scriptOutputKind (addressScript ctx witnessScriptAddr)) `shouldBe` 43
-        outputSize (scriptOutputKind (addressScript ctx taprootAddr)) `shouldBe` 43
+        outputSize (scriptOutputKind ctx (addressScript ctx keyHashAddr)) `shouldBe` 34
+        outputSize (scriptOutputKind ctx (addressScript ctx scriptAddr)) `shouldBe` 32
+        outputSize (scriptOutputKind ctx (addressScript ctx witnessAddr)) `shouldBe` 31
+        outputSize (scriptOutputKind ctx (addressScript ctx witnessScriptAddr)) `shouldBe` 43
+        outputSize (scriptOutputKind ctx (addressScript ctx taprootAddr)) `shouldBe` 43
+
+    describe "The kind of an output, by its script" $
+      it "is the kind haskoin-core names for the script, and that of its length for any other script" $ do
+        scriptOutputKind ctx (addressScript ctx keyHashAddr) `shouldBe` OutputPKHash
+        scriptOutputKind ctx (addressScript ctx scriptAddr) `shouldBe` OutputScriptHash
+        scriptOutputKind ctx (addressScript ctx witnessAddr) `shouldBe` OutputWitnessPKHash
+        scriptOutputKind ctx (addressScript ctx witnessScriptAddr) `shouldBe` OutputWitnessScriptHash
+        scriptOutputKind ctx (addressScript ctx taprootAddr) `shouldBe` OutputTaproot
+        -- OP_RETURN, then a push of the 5 bytes of "hello": 7 bytes
+        scriptOutputKind ctx (hexBytes "6a0568656c6c6f") `shouldBe` OutputScript 7
 
     describe "The witness data of a transaction" $ do
       it "adds 2 marker bytes and the witness of a SegWit input, which count a quarter, rounded up" $
@@ -78,8 +119,8 @@ spec = do
         -- 10 + 148 + 41 + 34 = 233, then (2 + 1 + 108) / 4 = 27.75, rounded up to 28
         txSize [InputPKHash, InputWitnessPKHash] [OutputPKHash] `shouldBe` 261
       it "adds nothing to a transaction without SegWit inputs" $
-        -- 10 + 148 + 180 + 114 + 34
-        txSize [InputPKHash, InputUncompressedPKHash, InputPK] [OutputPKHash] `shouldBe` 486
+        -- 10 + 148 + 180 + 34
+        txSize [InputPKHash, InputUncompressedPKHash] [OutputPKHash] `shouldBe` 372
 
     describe "The size of a transaction of a BIP84 account, with P2WPKH inputs and outputs" $ do
       it "is 10 bytes of frame, 41 per input and 31 per output, then the witnesses in quarters" $ do

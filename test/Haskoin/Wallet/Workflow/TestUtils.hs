@@ -426,7 +426,7 @@ addressLabelsOf info = Map.union (myInputsLabel <$> summaryMyInputs summary) (my
 -- | What a transaction spends and pays: its outpoints, and its outputs by
 -- amount, with their addresses
 spendsAndPays :: Ctx -> Tx -> ([OutPoint], [(Word64, Either String Address)])
-spendsAndPays ctx tx = ((.outpoint) <$> tx.inputs, sortOn fst [(out.value, scriptToAddressBS ctx out.script) | out <- tx.outputs])
+spendsAndPays ctx tx = ((.outpoint) <$> tx.inputs, sortOn fst [(out.value, scriptToAddressBS btc ctx out.script) | out <- tx.outputs])
 
 -- | The first account of the test wallet, and that of the second wallet,
 -- as the derivation records of their files name their keys
@@ -441,7 +441,7 @@ readTxFile :: Ctx -> FilePath -> IO TxFile
 readTxFile ctx file = do
   bytes <- BS.readFile file
   either (\reason -> fail ("Not a transaction file: " <> file <> ": " <> reason)) return $
-    psbtTxFile ctx [mainFileAccount ctx, otherFileAccount ctx] =<< decodePsbt bytes
+    psbtTxFile ctx Nothing [mainFileAccount ctx, otherFileAccount ctx] =<< decodePsbt bytes
 
 -- | Write the signing data of a transaction at the path, as hw writes a
 -- file: a PSBT on Bitcoin, with the keys of the first account of the test

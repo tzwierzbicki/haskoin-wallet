@@ -556,26 +556,27 @@ fromDBAddr net row = (,addrPath row) <$> textToAddrE net (dBAddressAddress row)
 -- Nothing when the child key at that index is invalid: haskoin-core throws
 -- for such a key, where BIP32 says to skip the index
 deriveChainAddress :: Ctx -> AccountKind -> XPubKey -> SoftPath -> KeyIndex -> IO (Maybe Address)
-deriveChainAddress ctx kind = deriveChainAddressBy (keyAddress kind ctx) ctx
+deriveChainAddress ctx kind = deriveChainAddressBy (Just . keyAddress kind ctx) ctx
 
 -- | 'deriveChainAddress', with the address of a key given by the function:
 -- for the accounts hw does not hold, whose addresses are of no kind of
--- 'AccountKind'
-deriveChainAddressBy :: (XPubKey -> Address) -> Ctx -> XPubKey -> SoftPath -> KeyIndex -> IO (Maybe Address)
+-- 'AccountKind'. Nothing as well when the function gives the key no
+-- address, as for a kind of address the network does not have.
+deriveChainAddressBy :: (XPubKey -> Maybe Address) -> Ctx -> XPubKey -> SoftPath -> KeyIndex -> IO (Maybe Address)
 deriveChainAddressBy addressOf ctx pub chain i = do
   derived <- try $ evaluate $ derivePubPath ctx (chain :/ i) pub
   return $ case derived of
     Left (DerivationException _) -> Nothing
-    Right child -> Just (addressOf child)
+    Right child -> addressOf child
 
 -- | The addresses of a chain of the public key of an account of the kind
 -- from an index, as many as asked, with their indices; an index with an
 -- invalid child key is left out
 chainAddresses :: Ctx -> AccountKind -> XPubKey -> SoftPath -> Natural -> Natural -> IO [(Address, KeyIndex)]
-chainAddresses ctx kind = chainAddressesBy (keyAddress kind ctx) ctx
+chainAddresses ctx kind = chainAddressesBy (Just . keyAddress kind ctx) ctx
 
 -- | 'chainAddresses', with the address of a key given by the function
-chainAddressesBy :: (XPubKey -> Address) -> Ctx -> XPubKey -> SoftPath -> Natural -> Natural -> IO [(Address, KeyIndex)]
+chainAddressesBy :: (XPubKey -> Maybe Address) -> Ctx -> XPubKey -> SoftPath -> Natural -> Natural -> IO [(Address, KeyIndex)]
 chainAddressesBy addressOf ctx pub chain firstIndex howMany =
   fmap catMaybes . forM (genericTake howMany [fromIntegral firstIndex ..]) $ \i ->
     fmap (\addr -> (addr, i)) <$> deriveChainAddressBy addressOf ctx pub chain i

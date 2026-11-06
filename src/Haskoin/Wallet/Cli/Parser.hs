@@ -207,7 +207,7 @@ data PrepareTx = PrepareTx
     -- | The fee rate: a number of satoshis per virtual byte or a level of the
     -- rates recent blocks paid, or none to ask the user from those rates
     feeRate :: !(Maybe FeeRateChoice),
-    -- | The dust limit, in satoshis
+    -- | The dust limit asked for, in satoshis: zero for what nodes relay
     dust :: !Natural,
     feePayer :: !FeePayer,
     -- | The confirmations a coin needs to be spent
@@ -240,7 +240,7 @@ data BumpFee = BumpFee
     account :: !(Maybe Text),
     -- | The fee rate of the replacement, as for preparetx
     feeRate :: !(Maybe FeeRateChoice),
-    -- | The dust limit, in satoshis
+    -- | The dust limit asked for, in satoshis: zero for what nodes relay
     dust :: !Natural,
     output :: !(Maybe FilePath),
     -- | Whether every question is answered yes (--yes)
@@ -257,7 +257,7 @@ data PrepareSendAll = PrepareSendAll
     -- | The fee rate: a number of satoshis per virtual byte or a level of the
     -- rates recent blocks paid, or none to ask the user from those rates
     feeRate :: !(Maybe FeeRateChoice),
-    -- | The dust limit, in satoshis
+    -- | The dust limit asked for, in satoshis: zero for what nodes relay
     dust :: !Natural,
     -- | The confirmations a coin needs to be sent
     minConf :: !Natural,
@@ -331,7 +331,7 @@ data PrepareSweep = PrepareSweep
     label :: !(Maybe Text),
     -- | The fee rate, as for preparetx
     feeRate :: !(Maybe FeeRateChoice),
-    -- | The dust limit, in satoshis
+    -- | The dust limit asked for, in satoshis: zero for what nodes relay
     dust :: !Natural,
     -- | Whether a fee rate above 100 satoshis per virtual byte is taken without
     -- asking (--yes)
@@ -1618,16 +1618,17 @@ prepareYesOption = yesOption "Answer yes to both questions: a fee rate above 100
 highFeeYesOption :: Args Bool
 highFeeYesOption = yesOption "Take a fee rate above 100 satoshis per virtual byte without asking"
 
--- | The dust limit. It has no short name. Few payments change it, and -d
--- is --dice.
+-- | The dust limit asked for, zero without the option: the limit of an
+-- output is then what nodes relay for its kind, and the option only
+-- raises it ('Haskoin.Wallet.Tx.Size.outputDustLimit'). It has no short
+-- name. Few payments change it, and -d is --dice.
 dustOption :: Args Natural
 dustOption =
   option (maybeReader $ readNatural . cs) $
     long "dust-limit"
       <> metavar "SATOSHIS"
-      <> value 546
-      <> showDefault
-      <> help "The smallest output, in satoshis. A smaller payment is refused, and smaller change goes to the fee."
+      <> value 0
+      <> help "Raise the smallest output to this amount, in satoshis. Without it, the smallest output is what nodes relay for its kind: 546 for a legacy P2PKH output, 294 for a native SegWit P2WPKH one. A smaller payment is refused, and smaller change goes to the fee."
 
 rcptPayOption :: Args FeePayer
 rcptPayOption =
@@ -1807,12 +1808,12 @@ signatures are checked first. The wallet keeps its own labels, and shows the
 transaction with them.
 
 A file another wallet or a hardware wallet signed is imported the same way,
-in bytes or in base64 text, finalized or not: hw finalizes the signature of
-a P2PKH coin of the account itself. What the file leaves out, the paths of
-the account's addresses once the signatures are final, the fee rate and the
-label, the wallet keeps from the version it holds. A file another wallet
-prepared for an account of this wallet is imported too, and signed with
-signtx.
+in bytes or in base64 text, finalized or not: hw finalizes an input left
+signed, and refuses a signature that does not verify. What the file leaves
+out, the paths of the account's addresses once the signatures are final, the
+fee rate and the label, the wallet keeps from the version it holds. A file
+another wallet prepared for an account of this wallet is imported too, and
+signed with signtx.
 
 sendtx --input sends a signed file without importtx.
 |]
@@ -1900,12 +1901,14 @@ its place in the wallet, shown by its txid. Or give a transaction file with
 --input, on an offline computer for example. The signed transaction then goes
 to the --output file. Without --output, hw offers to replace the --input file,
 since the unsigned file is of no use once signed. It asks this before the
-mnemonic. A transaction of a file is shown with the labels the file carries,
-which go on to the signed file.
+mnemonic. A transaction of a file is shown with the labels the file carries.
+A signed input names no key any more, as the format asks, so the signed file
+keeps the labels of the outputs and of the coins.
 
 A file another wallet prepared for the account is signed the same way, in
 bytes or in base64 text, of version 0 or of version 2, that of BIP 370. The
-signed file keeps every field of it, and its version. hw signs with the
+signed file keeps its version and every field of it, but those of the inputs
+signed that served the signers. hw signs with the
 sighash ALL only, and only when every input that is not the account's is
 signed already.
 
@@ -2417,6 +2420,10 @@ addresses of the keys in the --key-file, and the --coin coins. Give any of
 them. The --address-file holds addresses separated by spaces or line breaks,
 as the --key-file holds keys. An old wallet may have more addresses than a
 command line takes.
+
+A sweep takes the coins that have an address: legacy coins, native SegWit
+coins, and SegWit coins nested in a script address. A coin paid to a public
+key itself, as the first blocks hold them, has no address, and is not swept.
 
 The private keys are needed only to sign, with signsweep, so they can stay on
 another computer. Without them, hw counts every key as compressed, so the fee

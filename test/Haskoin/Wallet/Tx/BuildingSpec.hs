@@ -107,6 +107,14 @@ build :: Ctx -> CoinSelection -> WalletCoins -> [(Address, Natural)] -> FeePayer
 build ctx strategy found recipients payer =
   buildWalletTx btc ctx (mkStdGen 0) strategy found firstChange recipients 10 546 800002 payer NoCoinControl
 
+-- | Pay recipients from the wallet's coins, the largest first, the sender
+-- paying the fee, at 10 satoshis per virtual byte, with the dust limit
+-- asked and the change address given: zero asks for no limit, so that each
+-- output has the limit nodes relay for its kind
+payWithDust :: Ctx -> Natural -> WalletCoins -> (Address, SoftPath) -> [(Address, Natural)] -> Either String BuiltTx
+payWithDust ctx dust found change recipients =
+  buildWalletTx btc ctx (mkStdGen 0) LargestFirst found change recipients 10 dust 800002 SenderPays NoCoinControl
+
 -- | Pay recipients of other wallets from coins worth the given amounts, the
 -- largest coins first, the sender paying the fee
 pay :: Ctx -> [Natural] -> [(Address, Natural)] -> Either String BuiltTx
@@ -137,11 +145,22 @@ payWith ctx seed strategy values recipients =
 -- | What a built transaction spends and pays: the amounts of its inputs, in
 -- order, and its outputs by amount, since the builder shuffles them
 spends :: Ctx -> BuiltTx -> ([Word64], [(Address, Word64)])
-spends ctx built = ((.value) <$> built.spentCoins, sortOn snd (outputsOf ctx built.tx))
+spends = spendsOn btc
 
--- | The outputs of a transaction as addresses and amounts, in order
+-- | 'spends' for a transaction of the network given. The network says
+-- which address a script has: a P2SH32 output has one on Bitcoin Cash
+-- alone.
+spendsOn :: Network -> Ctx -> BuiltTx -> ([Word64], [(Address, Word64)])
+spendsOn net ctx built = ((.value) <$> built.spentCoins, sortOn snd (outputsOn net ctx built.tx))
+
+-- | The outputs of a transaction of Bitcoin as addresses and amounts, in
+-- order
 outputsOf :: Ctx -> Tx -> [(Address, Word64)]
-outputsOf ctx transaction = [(forceRight (scriptToAddressBS ctx out.script), out.value) | out <- transaction.outputs]
+outputsOf = outputsOn btc
+
+-- | 'outputsOf' for a transaction of the network given
+outputsOn :: Network -> Ctx -> Tx -> [(Address, Word64)]
+outputsOn net ctx transaction = [(forceRight (scriptToAddressBS net ctx out.script), out.value) | out <- transaction.outputs]
 
 -- | The fee a built transaction pays: what its inputs hold beyond its outputs
 feePaid :: BuiltTx -> Word64
@@ -187,7 +206,7 @@ transactionSpec ctx =
           cashWallet = WalletCoins {ownKind = Bip44, coins = [cashCoin], coinPaths = Map.fromList [(bchExternalAddr, Deriv :/ 0 :/ 0)], recipientPaths = Map.empty}
       built <- expectRight $ buildWalletTx bch ctx (mkStdGen 0) LargestFirst cashWallet firstChange [(script32Addr, 100000), (tokenAddr, 50000)] 10 546 800002 SenderPays NoCoinControl
       -- The coin of the token-aware address shows at the plain address of the same hash
-      spends ctx built `shouldBe` ([400000], [(plainTokenAddr, 50000), (script32Addr, 100000), (internalAddr 0, 247300)])
+      spendsOn bch ctx built `shouldBe` ([400000], [(plainTokenAddr, 50000), (script32Addr, 100000), (internalAddr 0, 247300)])
       -- OP_DUP OP_HASH160 <20 bytes> OP_EQUALVERIFY OP_CHECKSIG, then OP_HASH256 <32 bytes> OP_EQUAL
       (encodeHex . (.script) <$> take 2 (sortOn (.value) built.tx.outputs))
         `shouldBe` [ "76a91476a04053bda0a88bda5177b86a15c3b29f55987388ac",
@@ -337,6 +356,44 @@ dustSpec ctx =
     it "fails when a recipient is left just below the dust limit after its fee" $
       -- 2805 - 2260 = 545
       recipientsPayFor ctx [400000] [(otherAddr 0, 2805)] `shouldBe` Left "Recipient output is smaller than the dust value"
+
+    -- With no dust limit asked, each output has the limit nodes relay for
+    -- its kind: 546 for a P2PKH output, 294 for a P2WPKH one. The payment
+    -- of the bip84 account takes 144 virtual bytes with its change, a fee
+    -- of 1440.
+    it "keeps a P2WPKH change of 294 satoshis, the least nodes relay, when no limit is asked" $ do
+      -- Change: 400000 - 398266 - 1440 = 294
+      built <- expectRight $ payWithDust ctx 0 (segwitWallet ctx) segwitChange [(otherAddr 0, 398266)]
+      spends ctx built `shouldBe` ([400000], [(segwitInternalAddr 0, 294), (otherAddr 0, 398266)])
+      feePaid built `shouldBe` 1440
+    it "gives a P2WPKH change of 293 satoshis to the fee" $ do
+      -- Change: 400000 - 398267 - 1440 = 293: no change output, and the
+      -- fee is 400000 - 398267 = 1733
+      built <- expectRight $ payWithDust ctx 0 (segwitWallet ctx) segwitChange [(otherAddr 0, 398267)]
+      spends ctx built `shouldBe` ([400000], [(otherAddr 0, 398267)])
+      feePaid built `shouldBe` 1733
+    it "gives a P2PKH change of 545 satoshis to the fee, when no limit is asked" $ do
+      -- Change: 352805 - 350000 - 2260 = 545, below the 546 nodes relay
+      built <- expectRight $ payWithDust ctx 0 (wallet (coinsWorth ctx [352805]) []) firstChange [(otherAddr 0, 350000)]
+      spends ctx built `shouldBe` ([352805], [(otherAddr 0, 350000)])
+    it "pays a P2WPKH recipient 294 satoshis, and refuses 293, when no limit is asked" $ do
+      -- Fee: 10 + 148 + 31 + 34 = 223 bytes * 10 = 2230
+      -- Change: 400000 - 294 - 2230 = 397476
+      built <- expectRight $ payWithDust ctx 0 (wallet (coinsWorth ctx [400000]) []) firstChange [(segwitExternalAddr 1, 294)]
+      spends ctx built `shouldBe` ([400000], [(segwitExternalAddr 1, 294), (internalAddr 0, 397476)])
+      payWithDust ctx 0 (wallet (coinsWorth ctx [400000]) []) firstChange [(segwitExternalAddr 1, 293)]
+        `shouldBe` Left "Recipient output is smaller than the dust value"
+    it "refuses a P2PKH recipient paid 545 satoshis, when no limit is asked" $
+      payWithDust ctx 0 (wallet (coinsWorth ctx [400000]) []) firstChange [(otherAddr 0, 545)]
+        `shouldBe` Left "Recipient output is smaller than the dust value"
+    it "raises the limit of every output to the limit asked: 1000 refuses a P2WPKH recipient paid 999" $
+      payWithDust ctx 1000 (wallet (coinsWorth ctx [400000]) []) firstChange [(segwitExternalAddr 1, 999)]
+        `shouldBe` Left "Recipient output is smaller than the dust value"
+    it "lowers no limit below what nodes relay: asking for 100 still refuses a P2PKH recipient paid 545" $
+      payWithDust ctx 100 (wallet (coinsWorth ctx [400000]) []) firstChange [(otherAddr 0, 545)]
+        `shouldBe` Left "Recipient output is smaller than the dust value"
+  where
+    segwitChange = (segwitInternalAddr 0, Deriv :/ 1 :/ 0)
 
 {- Who pays the fee -}
 

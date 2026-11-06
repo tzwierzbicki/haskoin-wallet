@@ -157,6 +157,56 @@
       "expect": "error",
       "error": "Unsupported output script for input 0 (bc1qcjksntygukpusmnnpt2rt546kzufdvl8qdw9hhlg0p0tezzuneds5w7se8)",
       "comment": "A P2WSH coin: the sweep signs no script type other than P2PKH, P2PK, P2WPKH and P2SH-P2WPKH."
+    },
+    {
+      "name": "edge/sweep-p2pk",
+      "network": "btc",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "sweepKeys": [
+        {
+          "wif": "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU7Bqcefezr"
+        }
+      ],
+      "txSignData": {
+        "tx": "0100000001df67b7994f8aeecc414d0dfed037c6483af3c6ea4dc28006d2df267f451eb5b90000000000ffffffff01f0b9f505000000001976a914bcb6e2aa16a725659548910d7a020414cbfe65df88ac00000000",
+        "txinputs": [
+          "01000000010b000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0100e1f50500000000232103defdea4cdb677750a420fee807eacf21eb9898ae79b9768766e4faa04a2d4a34ac00000000"
+        ],
+        "inputpaths": [],
+        "outputpaths": []
+      },
+      "expect": "error",
+      "error": "There are non-standard inputs in the transaction",
+      "comment": "A pay-to-public-key coin of a compressed key: the funding output is a P2PK script, not P2PKH. Such a coin has no address, and hw names a coin by its address, so the sweep is refused, whatever key is given."
+    },
+    {
+      "name": "edge/sweep-p2pk-uncompressed",
+      "network": "btc",
+      "account": {
+        "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
+        "passphrase": "correct horse battery staple",
+        "account": 0
+      },
+      "sweepKeys": [
+        {
+          "wif": "5HpHagT65TZzG1PH3CSu63k8DbpvD8s5ip4nEB3kEsreEYP1uta"
+        }
+      ],
+      "txSignData": {
+        "tx": "010000000174cdc4f1964161eb5aae45b3d5a977baee3b7805cedd293304193940f995ae220000000000ffffffff01f0ca052a010000001976a914bcb6e2aa16a725659548910d7a020414cbfe65df88ac00000000",
+        "txinputs": [
+          "01000000010c000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0100f2052a010000004341041be68a5a028f2601d0e80d468c344ba331d611b96c358b6032e8b4da0547fc11bebc47511ade7308b3ca6265f9400779c076329c75146bc6ff1822f5d1f30e79ac00000000"
+        ],
+        "inputpaths": [],
+        "outputpaths": []
+      },
+      "expect": "error",
+      "error": "There are non-standard inputs in the transaction",
+      "comment": "A pay-to-public-key coin of an uncompressed key, as mined in the first years of Bitcoin, with its uncompressed WIF key. It has no address either, and is refused the same way."
     }
   ]
 }

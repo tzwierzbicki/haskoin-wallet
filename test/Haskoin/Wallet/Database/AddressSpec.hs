@@ -549,10 +549,10 @@ derivingSpec ctx =
     -- accounts 0 of the test wallet, derived apart from hw with the same
     -- Python tool
     it "derives the addresses of an account of a kind hw does not hold, given how its keys are addressed" $ do
-      chainAddressesBy (foreignAddress Bip49 ctx) ctx (testWrappedAccountPub ctx) extDeriv 0 5 `shouldReturn` zip (wrappedExternalAddr <$> [0 .. 4]) [0 .. 4]
-      chainAddressesBy (foreignAddress Bip49 ctx) ctx (testWrappedAccountPub ctx) intDeriv 0 5 `shouldReturn` zip (wrappedInternalAddr <$> [0 .. 4]) [0 .. 4]
-      chainAddressesBy (foreignAddress Bip86 ctx) ctx (testTaprootAccountPub ctx) extDeriv 0 5 `shouldReturn` zip (taprootExternalAddr <$> [0 .. 4]) [0 .. 4]
-      chainAddressesBy (foreignAddress Bip86 ctx) ctx (testTaprootAccountPub ctx) intDeriv 0 5 `shouldReturn` zip (taprootInternalAddr <$> [0 .. 4]) [0 .. 4]
+      chainAddressesBy (foreignAddress Bip49 btc ctx) ctx (testWrappedAccountPub ctx) extDeriv 0 5 `shouldReturn` zip (wrappedExternalAddr <$> [0 .. 4]) [0 .. 4]
+      chainAddressesBy (foreignAddress Bip49 btc ctx) ctx (testWrappedAccountPub ctx) intDeriv 0 5 `shouldReturn` zip (wrappedInternalAddr <$> [0 .. 4]) [0 .. 4]
+      chainAddressesBy (foreignAddress Bip86 btc ctx) ctx (testTaprootAccountPub ctx) extDeriv 0 5 `shouldReturn` zip (taprootExternalAddr <$> [0 .. 4]) [0 .. 4]
+      chainAddressesBy (foreignAddress Bip86 btc ctx) ctx (testTaprootAccountPub ctx) intDeriv 0 5 `shouldReturn` zip (taprootInternalAddr <$> [0 .. 4]) [0 .. 4]
 
 jsonSpec :: Spec
 jsonSpec =

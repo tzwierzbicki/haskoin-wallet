@@ -399,7 +399,7 @@ newSeedSpec =
                            secondSharePrompt,
                            thirdSharePrompt,
                            passphrasePrompt,
-                           "The passphrase of a backup in shares has printable ASCII characters only: other wallets would not take this one",
+                           "The passphrase of a backup in shares has printable ASCII characters only, as its format asks",
                            passphrasePrompt,
                            againPrompt
                          ],
@@ -423,11 +423,26 @@ seedOnceSpec =
       answering (testShares <> [testSharesPassphrase]) (`askSeedSecret` 1)
         `shouldReturn` (Right testSharesSecret, [mnemonicPrompt, secondSharePrompt, thirdSharePrompt, passphrasePrompt], [])
 
-    -- A share made before the format asked for ASCII may have such a
-    -- passphrase: hw takes it as typed where no account is created
-    it "takes a passphrase with an accent for a backup in shares, where no account is created" $
-      answerOf (testShares <> ["caf\233"]) (`askSeedSecret` 1)
-        `shouldReturn` Right (SharesSecret testSharesBackup "caf\233")
+    -- The format of the shares allows printable ASCII only, for a backup
+    -- that exists as for a new one: another passphrase is told, and asked
+    -- again
+    it "refuses a passphrase with an accent for a backup in shares, and asks for another" $
+      answering (testShares <> ["caf\233", testSharesPassphrase]) (`askSeedSecret` 1)
+        `shouldReturn` ( Right testSharesSecret,
+                         [ mnemonicPrompt,
+                           secondSharePrompt,
+                           thirdSharePrompt,
+                           passphrasePrompt,
+                           "The passphrase of a backup in shares has printable ASCII characters only, as its format asks",
+                           passphrasePrompt
+                         ],
+                         []
+                       )
+
+    -- BIP39 normalizes the passphrase of a mnemonic, whatever its characters
+    it "takes a passphrase with an accent for a mnemonic" $
+      answerOf [testWords, "caf\233"] (`askSeedSecret` 1)
+        `shouldReturn` Right (MnemonicSecret (MnemonicPass testWords "caf\233"))
 
 {- The signing key of an account -}
 

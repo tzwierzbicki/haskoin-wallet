@@ -60,11 +60,11 @@ type ScanQuestion m = String -> ExceptT String m Bool
 -- window. Where the chain is, for the question of 'scanLimit', is given
 -- as the end of a sentence: "on the receiving chain of the account main".
 scanChain :: (MonadIO m) => Ctx -> Store -> AccountKind -> XPubKey -> SoftPath -> Natural -> Natural -> String -> ScanQuestion m -> ExceptT String m Natural
-scanChain ctx store kind = scanChainBy ctx store (keyAddress kind ctx)
+scanChain ctx store kind = scanChainBy ctx store (Just . keyAddress kind ctx)
 
 -- | 'scanChain', with the address of a key given by the function: for the
 -- accounts hw does not hold
-scanChainBy :: (MonadIO m) => Ctx -> Store -> (XPubKey -> Address) -> XPubKey -> SoftPath -> Natural -> Natural -> String -> ScanQuestion m -> ExceptT String m Natural
+scanChainBy :: (MonadIO m) => Ctx -> Store -> (XPubKey -> Maybe Address) -> XPubKey -> SoftPath -> Natural -> Natural -> String -> ScanQuestion m -> ExceptT String m Natural
 scanChainBy ctx store addressOf pub chain window from place ask = do
   used <- usedChainAddresses ctx store addressOf pub chain window from place ask
   return $ if null used then from else maximum (fst <$> used) + 1
@@ -74,7 +74,7 @@ scanChainBy ctx store addressOf pub chain window from place ask = do
 -- as 'scanChain' does: the scan behind it, which keeps what the store
 -- said of the addresses. Every 'scanLimit' addresses the store reports
 -- used in a row, the question is asked, and a no stops the scan.
-usedChainAddresses :: (MonadIO m) => Ctx -> Store -> (XPubKey -> Address) -> XPubKey -> SoftPath -> Natural -> Natural -> String -> ScanQuestion m -> ExceptT String m [(Natural, Store.Balance)]
+usedChainAddresses :: (MonadIO m) => Ctx -> Store -> (XPubKey -> Maybe Address) -> XPubKey -> SoftPath -> Natural -> Natural -> String -> ScanQuestion m -> ExceptT String m [(Natural, Store.Balance)]
 usedChainAddresses ctx store addressOf pub chain window from place ask = go from 0
   where
     -- The window at the offset, after the given number of addresses
@@ -286,7 +286,7 @@ foreignFundsOfKind ctx cfg store kind net seed accountGap ask =
             return $ Paid (ForeignFunds kind index (genericLength bals) (sum [bal.confirmed + bal.unconfirmed | bal <- bals]))
   where
     usedOn index key chain =
-      usedChainAddresses ctx store (foreignAddress kind ctx) key chain (configGap cfg) 0 (seedAccountPlace chain (foreignDeriv kind net index)) ask
+      usedChainAddresses ctx store (foreignAddress kind net ctx) key chain (configGap cfg) 0 (seedAccountPlace chain (foreignDeriv kind net index)) ask
 
 -- | The funds of a seed on a network at the accounts of every foreign kind
 -- the network has, in the order of the kinds and of their indices
