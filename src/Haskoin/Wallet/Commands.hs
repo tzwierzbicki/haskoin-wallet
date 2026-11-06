@@ -124,6 +124,7 @@ import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
+import Haskoin.Wallet.SyncStatus (StatusLine (..), withStatusLine)
 import Haskoin.Wallet.Tx.Building (ChangeTo (..), CoinControl (..), buildTxSignData, coinWithPath)
 import Haskoin.Wallet.Tx.BumpFee
 import Haskoin.Wallet.Tx.LockTime (isStale, lockTimeFor)
@@ -327,24 +328,28 @@ seedToCreateWith ctx secret = do
 -- accounts: other wallets derive from no other.
 cmdRecover :: Ctx -> Config -> Recover -> IO Response
 cmdRecover ctx cfg opts =
-  runDBResponse cfg $ do
-    net <- liftMaybe noNetwork (commandNetwork cfg opts.network)
-    let store = webStore ctx cfg net
-    -- An offline computer hears it before the mnemonic is typed
-    fromStore $ storeHealth store
-    -- Typed once: a mistyped mnemonic finds no paid account
-    secret <- askSeedSecret terminal opts.parts
-    seed <- liftEither $ secretSeed ctx secret
-    found <- recoverSeed ctx cfg store net seed opts.accountGap scanQuestion
-    elsewhere <- foreignFunds ctx cfg store net seed opts.accountGap scanQuestion
-    typedM <- liftEither $ secretTypedSeed ctx secret
-    fromTyped <- case typedM of
-      Just typed | null found -> do
-        results <- recoverSeed ctx cfg store net typed opts.accountGap scanQuestion
-        unless (null results) $ liftIO $ tell terminal typedPassphraseRecovered
-        return results
-      _ -> return []
-    return $ ResponseRecover net opts.accountGap (found <> fromTyped) elsewhere
+  withStatusLine $ \line ->
+    runDBResponse cfg $ do
+      net <- liftMaybe noNetwork (commandNetwork cfg opts.network)
+      let store = webStore ctx cfg net
+          watch = terminalWatcher line
+      -- An offline computer hears it before the mnemonic is typed
+      fromStore $ storeHealth store
+      -- Typed once: a mistyped mnemonic finds no paid account
+      secret <- askSeedSecret terminal opts.parts
+      seed <- liftEither $ secretSeed ctx secret
+      found <- recoverSeed ctx cfg store net seed opts.accountGap watch
+      elsewhere <- foreignFunds ctx cfg store net seed opts.accountGap watch
+      typedM <- liftEither $ secretTypedSeed ctx secret
+      fromTyped <- case typedM of
+        Just typed | null found -> do
+          results <- recoverSeed ctx cfg store net typed opts.accountGap watch
+          unless (null results) $ liftIO $ do
+            eraseStatus line
+            tell terminal typedPassphraseRecovered
+          return results
+        _ -> return []
+      return $ ResponseRecover net opts.accountGap (found <> fromTyped) elsewhere
 
 cmdCheckMnemonic :: Ctx -> Config -> Maybe Text -> Natural -> IO Response
 cmdCheckMnemonic ctx cfg account parts =
@@ -1392,17 +1397,25 @@ cmdSignSweep ctx cfg signing keysM givenM =
 -- | The question of a scan that reaches 'scanLimit' used addresses in a
 -- row, put to the user on the terminal. --yes does not answer it, so that
 -- a sync nobody watches does not believe a store that lies: an input that
--- has ended cancels the command instead.
-scanQuestion :: ScanQuestion (DB IO)
-scanQuestion found = askYes terminal (found <> " Keep looking?")
+-- has ended cancels the command instead. The status line makes room for
+-- it, and comes back with the next step.
+scanQuestion :: StatusLine -> ScanQuestion (DB IO)
+scanQuestion line found = do
+  liftIO $ eraseStatus line
+  askYes terminal (found <> " Keep looking?")
+
+-- | The user on the terminal, watching a sync or a search on the line
+terminalWatcher :: StatusLine -> Watcher (DB IO)
+terminalWatcher line = Watcher {question = scanQuestion line, status = showStep line}
 
 cmdSync :: Ctx -> Config -> Maybe Text -> Bool -> IO Response
 cmdSync ctx cfg account full =
-  runDBResponse cfg $ do
-    accs <- getAccountsByName account
-    when (null accs) $ throwError "There are no accounts in the wallet"
-    (results, notSynced) <- syncAccounts ctx cfg (webStore ctx cfg) accs full scanQuestion
-    return $ ResponseSync results [(acc, cs failure) | (acc, failure) <- notSynced]
+  withStatusLine $ \line ->
+    runDBResponse cfg $ do
+      accs <- getAccountsByName account
+      when (null accs) $ throwError "There are no accounts in the wallet"
+      (results, notSynced) <- syncAccounts ctx cfg (webStore ctx cfg) accs full (terminalWatcher line)
+      return $ ResponseSync results [(acc, cs failure) | (acc, failure) <- notSynced]
 
 -- | Sign a message with the key of an address of the wallet. The answer is
 -- the signed message, or the --output file its armored block went to.

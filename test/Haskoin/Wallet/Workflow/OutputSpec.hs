@@ -28,6 +28,53 @@ import Test.Hspec
 
 spec :: Spec
 spec = prepareContext $ \ctx -> do
+  describe "The status line" $ do
+    let shown text run = text `Text.isInfixOf` runErr run
+
+    it "tells on a terminal what sync is doing" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        createMain home
+        run <- hwOnTerminal home ["sync"] []
+        run `shouldSatisfy` shown "\rmain: checking the store\ESC[0K"
+
+    it "shows on a sync with nothing new as well" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hwOnTerminal home ["sync"] []
+        run `shouldSatisfy` shown "\rmain: reading balances  [--------------------]  0/1 addresses\ESC[0K"
+
+    it "is gone from the terminal when sync ends" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        createMain home
+        run <- hwOnTerminal home ["sync"] []
+        runErr run `shouldSatisfy` Text.isSuffixOf "\r\ESC[0K"
+
+    it "leaves the answer of sync as it is off a terminal" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        plain <- hw home ["sync"] []
+        run <- hwOnTerminal home ["sync"] []
+        runOut run `shouldBe` runOut plain
+
+    it "writes nothing off a terminal" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        createMain home
+        run <- hw home ["sync"] []
+        runErr run `shouldBe` ""
+
+    -- The question comes right after the code that clears the line, so
+    -- it starts at the left edge and nothing is left behind it
+    it "makes room for the question of a scan" $
+      withLyingChain ctx (paidChain ctx) $ \home _ -> do
+        createMain home
+        run <- hwOnTerminal home ["sync"] ["n"]
+        run `shouldSatisfy` shown "\r\ESC[0KThe store reports used addresses as far as 1000"
+
+    it "tells on a terminal which accounts recover looks at, after the mnemonic is typed" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        run <- hwOnTerminal home ["recover"] seedOnce
+        run `shouldSatisfy` shown "\rrecover: looking at /44'/0'/0', 0 accounts paid so far\ESC[0K"
+
   listingSpec ctx
   layoutSpec ctx
   pendingListSpec ctx

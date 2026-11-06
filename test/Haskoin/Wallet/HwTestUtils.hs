@@ -15,6 +15,7 @@ module Haskoin.Wallet.HwTestUtils
     setChangeBack,
     hw,
     hwWithEnv,
+    hwOnTerminal,
     whileHwWaitsAt,
     centralEurope,
     hwJson,
@@ -32,6 +33,7 @@ module Haskoin.Wallet.HwTestUtils
   )
 where
 
+import Control.Exception (IOException, try)
 import Control.Monad (filterM, join)
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
@@ -65,10 +67,13 @@ import System.Environment (getExecutablePath)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
 import qualified System.IO as IO
+import System.Posix.IO (fdToHandle)
+import System.Posix.Terminal (openPseudoTerminal)
 import System.Posix.Types (ProcessID)
 import qualified System.Process as Process
-import System.Process.Typed (byteStringInput, createPipe, getStderr, nullStream, proc, readProcess, setEnv, setStderr, setStdin, setStdout, setWorkingDir, unsafeProcessHandle, withProcessTerm)
+import System.Process.Typed (byteStringInput, createPipe, getStderr, nullStream, proc, readProcess, readProcessStdout, setEnv, setStderr, setStdin, setStdout, setWorkingDir, unsafeProcessHandle, useHandleClose, withProcessTerm)
 import System.Timeout (timeout)
+import UnliftIO.Async (wait, withAsync)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 {- Running hw -}
@@ -158,6 +163,40 @@ hwWithEnv extra home args typed = do
   case done of
     Nothing -> fail $ "hw " <> unwords args <> " did not finish within a minute"
     Just (code, out, err) -> return $ Run code (decodeUtf8 (BL.toStrict out)) (decodeUtf8 (BL.toStrict err))
+
+-- | Run hw as 'hw' does, with its error output on a terminal, as a user
+-- has it. 'runErr' is all the terminal received, its control codes
+-- included, and a new line comes as a carriage return and a line feed.
+hwOnTerminal :: FilePath -> [String] -> [Text] -> IO Run
+hwOnTerminal home args typed = do
+  binary <- hwBinary
+  (screenFd, terminalFd) <- openPseudoTerminal
+  screen <- fdToHandle screenFd
+  terminal <- fdToHandle terminalFd
+  let process =
+        setStdin (byteStringInput (BL.fromStrict (encodeUtf8 (Text.unlines typed))))
+          . setStderr (useHandleClose terminal)
+          . setEnv [("HOME", home), ("TERM", "xterm")]
+          . setWorkingDir home
+          $ proc binary args
+  -- Read as it comes: hw would stop on a terminal nobody reads
+  done <- timeout 60000000 $ withAsync (shownOn screen) $ \shown -> do
+    (code, out) <- readProcessStdout process
+    (,,) code out <$> wait shown
+  case done of
+    Nothing -> fail $ "hw " <> unwords args <> " did not finish within a minute"
+    Just (code, out, shown) -> return $ Run code (decodeUtf8 (BL.toStrict out)) (decodeUtf8 shown)
+
+-- | All a terminal shows until the last program on it ends. Linux then
+-- fails the read rather than giving an end of file.
+shownOn :: IO.Handle -> IO BS.ByteString
+shownOn screen = go BS.empty
+  where
+    go seen = do
+      more <- try (BS.hGetSome screen 4096) :: IO (Either IOException BS.ByteString)
+      case more of
+        Right bytes | not (BS.null bytes) -> go (seen <> bytes)
+        _ -> return seen
 
 -- | Run hw in a home and look at its process while it waits for a line to
 -- be typed. The test gets the id of the process once hw has shown the

@@ -37,6 +37,7 @@ import Haskoin.Wallet.Database.PendingTx
 import Haskoin.Wallet.Database.RawTx (hasRawTx, insertRawTx)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
+import Haskoin.Wallet.SyncStatus
 import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), MyOutputs (..), TxInfo (..), TxSummary (..), TxType (..), txInfoHash, txsAfter)
@@ -47,8 +48,8 @@ import Test.Hspec
 
 -- | The question of a scan answered yes the given number of times, then
 -- no, each time noted
-answering :: (MonadIO m) => IORef [String] -> Int -> ScanQuestion m
-answering asked yeses found = liftIO $ do
+answering :: (MonadIO m) => IORef [String] -> Int -> Watcher m
+answering asked yeses = answeringWith $ \found -> liftIO $ do
   modifyIORef asked (<> [found])
   (<= yeses) . length <$> readIORef asked
 
@@ -677,6 +678,71 @@ spec = prepareContext $ \ctx -> do
         balances accId `dbShouldBeE` (80000, 0, 3)
         rawTransactionCount `dbShouldBeE` 3
 
+  describe "The steps a sync tells" $ do
+    let watching steps = noQuestion {status = notingSteps steps}
+        -- What a sync tells of the account main, in the order told
+        toldOf steps = map snd <$> readIORef steps
+        -- The steps of a task on a single item
+        oneOf task = [Counted task 0 1, Counted task 1 1]
+
+    -- The account has one address, paid once. Each chain takes one window
+    -- of the scan, which finds nothing past that address.
+    it "tells every step of a sync that finds a payment, each counting its one item" $
+      inDatabaseE $ do
+        accId <- account
+        steps <- liftIO $ newIORef []
+        _ <- sync ctx cfg (toStore (realPaymentStore ctx)) btc accId False (watching steps)
+        liftIO $
+          toldOf steps
+            `shouldReturn` [CheckingStore, LookingForAddresses 0, LookingForAddresses 0]
+              <> oneOf ReadingBalances
+              <> oneOf ListingTransactions
+              <> oneOf FetchingTransactions
+              <> oneOf ReadingCoins
+              <> oneOf FetchingRawTransactions
+
+    it "tells a sync that finds nothing new, which only reads the balances" $
+      inDatabaseE $ do
+        accId <- account
+        let store = toStore (realPaymentStore ctx)
+        _ <- sync ctx cfg store btc accId False noQuestion
+        steps <- liftIO $ newIORef []
+        _ <- sync ctx cfg store btc accId False (watching steps)
+        liftIO $ toldOf steps `shouldReturn` [CheckingStore, LookingForAddresses 0, LookingForAddresses 0] <> oneOf ReadingBalances
+
+    it "names the account in every step" $
+      inDatabaseE $ do
+        accId <- account
+        steps <- liftIO $ newIORef []
+        _ <- sync ctx cfg (toStore (realPaymentStore ctx)) btc accId False (watching steps)
+        names <- liftIO $ map fst <$> readIORef steps
+        liftIO $ names `shouldSatisfy` all (== "main")
+
+    -- With windows of 3, the receiving chain takes three of them: the
+    -- first finds address 0, the second address 4, the third nothing. The
+    -- change chain takes two: the first finds address 1, the second
+    -- nothing. Each window tells what the ones before it found.
+    it "tells the used addresses a scan finds, counting on from one chain to the next" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "main"
+        steps <- liftIO $ newIORef []
+        _ <- sync ctx cfg {configGap = 3} (toStore (discoveredStore ctx)) btc accId False (watching steps)
+        told <- liftIO $ toldOf steps
+        liftIO $ [found | LookingForAddresses found <- told] `shouldBe` [0, 1, 2, 2, 3]
+
+    -- The sync makes two requests at a time, and the count still reaches
+    -- all seven addresses
+    it "counts every address listed, whatever the requests at a time" $
+      inDatabaseE $ do
+        accId <- account
+        -- externalAddr 1 to externalAddr 6 as well
+        replicateM_ 6 $ genExtAddress ctx cfg accId ""
+        let twoAtATime = cfg {configParallelRequests = 2}
+        steps <- liftIO $ newIORef []
+        _ <- sync ctx twoAtATime (toStore (sevenAddressesStore ctx)) btc accId False (watching steps)
+        told <- liftIO $ toldOf steps
+        liftIO $ [done | Counted ListingTransactions done _ <- told] `shouldBe` [0, 1, 2, 3, 4, 5, 6, 7]
+
   describe "Recovering the accounts of a seed" $ do
     -- Accounts 0 and 2 of the test seed were paid at their first receiving
     -- address; account 1 and the ones after 2 never were
@@ -700,6 +766,21 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         _ <- testNewAcc ctx "main"
         found paidAccounts (testSeed ctx) 2 `dbShouldBeE` [2]
+
+    -- Account 0 is paid, 1 is not, 2 is, and 3 and 4 are not, which ends
+    -- the search with a gap of 2. Each line tells what came before it.
+    it "tells each account it looks at, with the accounts found paid so far" $
+      inDatabaseE $ do
+        steps <- liftIO $ newIORef []
+        _ <- recoverableAccounts ctx cfg (toStore paidAccounts) Bip44 btc (testSeed ctx) 2 noQuestion {status = notingSteps steps}
+        liftIO $
+          (map (uncurry statusText) <$> readIORef steps)
+            `shouldReturn` [ "recover: looking at /44'/0'/0', 0 accounts paid so far",
+                             "recover: looking at /44'/0'/1', 1 account paid so far",
+                             "recover: looking at /44'/0'/2', 1 account paid so far",
+                             "recover: looking at /44'/0'/3', 2 accounts paid so far",
+                             "recover: looking at /44'/0'/4', 2 accounts paid so far"
+                           ]
 
     it "passes over an index whose child key is invalid, without counting it" $
       inDatabaseE $ found paidAccounts (seedWithoutIndex1 ctx) 1 `dbShouldBeE` [0, 2]
@@ -899,10 +980,9 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         accId <- account
         asked <- liftIO $ newIORef []
-        let noting found = liftIO (modifyIORef asked (<> [found])) >> return False
         lift $
           dbShouldFailWith "The store reports used addresses as far as 1002 past the 1 receiving address the account main has, and more beyond. The scan stopped there." $
-            sync ctx smallGap everyAddressUsed btc accId False noting
+            sync ctx smallGap everyAddressUsed btc accId False (answering asked 0)
         liftIO $ readIORef asked `shouldReturn` ["The store reports used addresses as far as 1002 past the 1 receiving address the account main has, and more beyond."]
         (dBAccountExternal <$> getAccountById accId) `dbShouldBeE` 1
 
@@ -986,19 +1066,19 @@ spec = prepareContext $ \ctx -> do
   describe "Asking the store in parallel" $ do
     it "answers in the order asked, even when later questions finish first" $ do
       -- Question 1 takes 25 milliseconds, question 5 takes 5
-      let question n = liftIO (threadDelay ((6 - n) * 5000)) >> return n
-      answers <- runExceptT $ inParallel 3 [question n | n <- [1 .. 5 :: Int]]
+      let slowQuestion n = liftIO (threadDelay ((6 - n) * 5000)) >> return n
+      answers <- runExceptT $ inParallel 3 [slowQuestion n | n <- [1 .. 5 :: Int]]
       answers `shouldBe` Right [1, 2, 3, 4, 5]
 
     it "asks at most the given number of questions at a time" $ do
       running <- newIORef (0 :: Int)
       most <- newIORef (0 :: Int)
-      let question = liftIO $ do
+      let countedQuestion = liftIO $ do
             now <- atomicModifyIORef' running $ \n -> (n + 1, n + 1)
             atomicModifyIORef' most $ \m -> (max m now, ())
             threadDelay 20000
             atomicModifyIORef' running $ \n -> (n - 1, ())
-      _ <- runExceptT $ inParallel 3 $ replicate 7 question
+      _ <- runExceptT $ inParallel 3 $ replicate 7 countedQuestion
       readIORef most `shouldReturn` 3
 
     it "fails with the first failed question" $ do

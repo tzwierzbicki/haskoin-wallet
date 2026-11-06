@@ -40,7 +40,8 @@ import Haskoin.Wallet.Database (DB, DBAccount (..), DBAccountId, DBAddress (..),
 import Haskoin.Wallet.Entropy (Sources (..), systemEntropy)
 import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), MnemonicPass (..), PublicSeed (..), SeedSecret (..), foreignAddress, keyAddress, kindNamed, seedOf, signingKey)
 import Haskoin.Wallet.Store
-import Haskoin.Wallet.Sync (ScanQuestion, SyncRes (..))
+import Haskoin.Wallet.Sync (ScanQuestion, SyncRes (..), Watcher (Watcher))
+import Haskoin.Wallet.SyncStatus (Status, Step, noStatus)
 import Haskoin.Wallet.Cli.Style (Style, renderPlain)
 import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), MyInputs (..), MyOutputs (..), PendingStatus (..), TxInfo (..), TxStatus (..), TxSummary (..), TxType (..), pendingSigned)
 import Haskoin.Wallet.Tx.SignData (TxSignData (..), noLabel, nosigHash)
@@ -927,14 +928,22 @@ bchExternalAddrText = "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"
 bchExternalAddr :: Address
 bchExternalAddr = fromMaybe (error "bchExternalAddr") (textToAddr bch bchExternalAddrText)
 
-{- The question of a scan -}
+{- Who watches a sync -}
+
+-- | A watcher with the answers given, and no status line
+answeringWith :: ScanQuestion m -> Watcher m
+answeringWith answer = Watcher answer noStatus
 
 -- | The answers to the question of a scan that reaches its limit: none
 -- expected, which fails the scan, or yes, or no
-noQuestion, keepLooking, stopLooking :: (Monad m) => ScanQuestion m
-noQuestion found = throwError ("The scan asked a question: " <> found)
-keepLooking _ = return True
-stopLooking _ = return False
+noQuestion, keepLooking, stopLooking :: (Monad m) => Watcher m
+noQuestion = answeringWith $ \found -> throwError ("The scan asked a question: " <> found)
+keepLooking = answeringWith $ \_ -> return True
+stopLooking = answeringWith $ \_ -> return False
+
+-- | A status that notes each step with what it is of, in the order told
+notingSteps :: IORef [(Text, Step)] -> Status
+notingSteps steps name step = modifyIORef steps (<> [(name, step)])
 
 {- The scripted store -}
 

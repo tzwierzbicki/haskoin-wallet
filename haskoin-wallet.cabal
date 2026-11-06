@@ -90,6 +90,7 @@ library
       Haskoin.Wallet.Shares
       Haskoin.Wallet.Store
       Haskoin.Wallet.Sync
+      Haskoin.Wallet.SyncStatus
       Haskoin.Wallet.Tx.Building
       Haskoin.Wallet.Tx.BumpFee
       Haskoin.Wallet.Tx.CoinSelection
@@ -261,6 +262,7 @@ test-suite spec
       Haskoin.Wallet.SharesSpec
       Haskoin.Wallet.StoreSpec
       Haskoin.Wallet.SyncSpec
+      Haskoin.Wallet.SyncStatusSpec
       Haskoin.Wallet.TestUtils
       Haskoin.Wallet.Tx.BuildingSpec
       Haskoin.Wallet.Tx.BumpFeeSpec

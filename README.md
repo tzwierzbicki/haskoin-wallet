@@ -367,7 +367,8 @@ The accounts are named `btc0`, `btc1` and so on for the `bip44` accounts, and
 `btc0-segwit`, `btc1-segwit` and so on for the `bip84` ones. The search stops
 after 10 accounts in a row without a payment, or the number `--account-gap`
 gives, for each kind of account apart. After a thousand used addresses in a row,
-it asks whether to keep looking, as [`sync`](#hw-sync) does.
+it asks whether to keep looking, as [`sync`](#hw-sync) does. On a terminal, a
+line tells which account it is looking at.
 
 After every 20 accounts of a kind the server reports paid, `recover` asks
 whether to keep looking. A server that lies reports them without end. A no stops
@@ -561,6 +562,10 @@ hw sync --account savings --full
 ```
 
 `--full` downloads everything again, which is rarely needed.
+
+On a terminal, a line tells what `sync` is doing while it works, with a bar for
+the steps whose size it knows. The line goes to stderr and is gone when `sync`
+ends, so scripts never see it.
 
 > **Good to know**
 >

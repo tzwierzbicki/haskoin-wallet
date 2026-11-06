@@ -814,7 +814,8 @@ a wallet that holds such accounts, to an address of this wallet.
 The search stops after --account-gap accounts in a row without a payment,
 counted for each kind of account apart. BIP44 stops at the first such
 account. hw looks further, since accounts created on an offline computer
-may never have been paid.
+may never have been paid. On a terminal, a line tells which account `recover`
+is looking at, as `sync` does.
 
 After every 20 accounts of a kind the server reports paid, `recover` asks
 whether to keep looking. A server that lies reports them without end. A no
@@ -2170,6 +2171,10 @@ syncCommand =
 `sync` asks the server for the latest balances, transactions and coins of the
 accounts. For each account, it shows its balances as `accounts` does, the
 block it is synced to, and what changed.
+
+On a terminal, a line tells what `sync` is doing while it works, with a bar for
+the steps whose size it knows. The line goes to stderr and is gone when `sync`
+ends, so scripts never see it.
 
 It first looks for used addresses past the ones each account has, as far as
 the gap of the configuration file, 20 by default. Someone paying to the
