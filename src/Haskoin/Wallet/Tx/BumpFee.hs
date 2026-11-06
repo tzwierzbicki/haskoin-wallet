@@ -375,21 +375,21 @@ walletCoinsOf plan added =
 
 -- | The coins of the replacement at the fee rate: all those of the plan,
 -- and the coins added
-chooseBump :: Ctx -> StdGen -> BumpPlan -> [(Store.Unspent, Address, SoftPath)] -> Natural -> Natural -> Either String ChosenPayment
-chooseBump ctx gen plan added feeByte dust =
-  choosePayment ctx gen LargestFirst found plan.planRecipients feeByte dust SenderPays (SpendChosen ((.outpoint) <$> found.coins))
+chooseBump :: Ctx -> StdGen -> BumpPlan -> [(Store.Unspent, Address, SoftPath)] -> Natural -> Either String ChosenPayment
+chooseBump ctx gen plan added feeByte =
+  choosePayment ctx gen LargestFirst found plan.planRecipients feeByte SenderPays (SpendChosen ((.outpoint) <$> found.coins))
   where
     found = walletCoinsOf plan added
 
 -- | The coins to add for the replacement to pay its recipients and its fee:
 -- the largest first, as few as do, among the candidates. None when the
 -- coins of the plan do. Nothing when even all the candidates do not.
-coinsToAdd :: Ctx -> StdGen -> BumpPlan -> [(Store.Unspent, Address, SoftPath)] -> Natural -> Natural -> Maybe [(Store.Unspent, Address, SoftPath)]
-coinsToAdd ctx gen plan candidates feeByte dust
+coinsToAdd :: Ctx -> StdGen -> BumpPlan -> [(Store.Unspent, Address, SoftPath)] -> Natural -> Maybe [(Store.Unspent, Address, SoftPath)]
+coinsToAdd ctx gen plan candidates feeByte
   | covers [] = Just []
   | otherwise = find covers (drop 1 (inits (sortOn (\(coin, _, _) -> Down coin.value) candidates)))
   where
-    covers added = isRight (chooseBump ctx gen plan added feeByte dust)
+    covers added = isRight (chooseBump ctx gen plan added feeByte)
 
 {- The recipients paying -}
 
@@ -421,8 +421,8 @@ data Reduction = Reduction
 -- below the dust limit of its output ('outputDustLimit'). A lone
 -- recipient has one way. Refused when the coins pay the fee as they are,
 -- or when no way is left.
-reductions :: Ctx -> BumpPlan -> Natural -> Natural -> Either String [Reduction]
-reductions ctx plan feeByte dust = do
+reductions :: Ctx -> BumpPlan -> Natural -> Either String [Reduction]
+reductions ctx plan feeByte = do
   when (total >= amount + fee) $
     Left "The coins of the transaction pay its fee: the recipients have nothing to pay"
   let missing = amount + fee - total
@@ -452,7 +452,7 @@ reductions ctx plan feeByte dust = do
             reductionRecipients = [(addr, before, afterwards) | ((addr, before), (_, afterwards)) <- zip recipients after]
           }
     -- The dust limit of the output paying a recipient
-    dustOf addr = outputDustLimit dust (recipientOutputKind ctx addr)
+    dustOf addr = outputDustLimit (recipientOutputKind ctx addr)
     -- The limits of the recipients, each once: one number when their
     -- outputs are of one kind
     dustLimits = nubOrd (dustOf . fst <$> recipients)
@@ -483,9 +483,9 @@ data Funding
 -- offers them: the change alone, when it pays; otherwise the coins of the
 -- account to add, when some would do, then each way the recipients can
 -- pay. Refused when nothing pays: neither the coins, nor the recipients.
-fundings :: Ctx -> StdGen -> BumpPlan -> [(Store.Unspent, Address, SoftPath)] -> Natural -> Natural -> Either String [Funding]
-fundings ctx gen plan candidates feeByte dust =
-  case (coinsToAdd ctx gen plan candidates feeByte dust, reductions ctx plan feeByte dust) of
+fundings :: Ctx -> StdGen -> BumpPlan -> [(Store.Unspent, Address, SoftPath)] -> Natural -> Either String [Funding]
+fundings ctx gen plan candidates feeByte =
+  case (coinsToAdd ctx gen plan candidates feeByte, reductions ctx plan feeByte) of
     (Just [], _) -> Right [ChangePays]
     (Just added, reduced) -> Right (CoinsAdded added : (RecipientsReduced <$> fromRight [] reduced))
     (Nothing, Right reduced) -> Right (RecipientsReduced <$> reduced)
@@ -508,19 +508,17 @@ buildBump ::
   Funding ->
   -- | Fee per virtual byte
   Natural ->
-  -- | Dust
-  Natural ->
   -- | Lock time
   Word32 ->
   ExceptT String (DB m) TxSignData
-buildBump ctx cfg net accId gen plan funding feeByte dust lockTime = do
+buildBump ctx cfg net accId gen plan funding feeByte lockTime = do
   let (funded, added) = case funding of
         ChangePays -> (plan, [])
         CoinsAdded extra -> (plan, extra)
         RecipientsReduced reduction -> (reducedPlan reduction, [])
       found = walletCoinsOf funded added
   addedParents <- mapM getRawTx $ nub [coin.outpoint.hash | (coin, _, _) <- added]
-  chosen <- liftEither $ chooseBump ctx gen funded added feeByte dust
+  chosen <- liftEither $ chooseBump ctx gen funded added feeByte
   change <-
     if chosen.selection.changeAmount > 0
       then Just <$> maybe newChange return plan.planChange

@@ -34,10 +34,9 @@ spec =
     buildSpec ctx
     reportSpec ctx
 
--- Every test pays at 10 satoshis per virtual byte with a dust limit of 546. The
--- sizes are those of the builder: 10 bytes of frame, 148 per input and 34
--- per output. The coins are confirmed, at the external addresses of the
--- test wallet.
+-- Every test pays at 10 satoshis per virtual byte. The sizes are those of
+-- the builder: 10 bytes of frame, 148 per input and 34 per output. The coins
+-- are confirmed, at the external addresses of the test wallet.
 
 {- Helpers -}
 
@@ -50,10 +49,9 @@ coin ctx w i = storeCoin ctx (fakeTxHash w, i) (Just 800000) (externalAddr (from
 twoCoins :: Ctx -> [Store.Unspent]
 twoCoins ctx = [coin ctx 1 0 50000, coin ctx 1 1 30000]
 
--- | The amounts of a send-all of the coins, at 10 satoshis per virtual byte and a
--- dust limit of 546
+-- | The amounts of a send-all of the coins, at 10 satoshis per virtual byte
 amounts :: Ctx -> [Store.Unspent] -> [(Address, Share)] -> Either String [(Address, Natural)]
-amounts ctx = sendAllAmounts ctx Bip44 10 546
+amounts ctx = sendAllAmounts ctx Bip44 10
 
 -- | The wallet as the builder sees it: the coins, and the paths of the first
 -- ten external addresses
@@ -66,9 +64,9 @@ found unspents recipients =
       recipientPaths = Map.fromList recipients
     }
 
--- | Build with the seed 0, at 10 satoshis per virtual byte and a dust limit of 546
+-- | Build with the seed 0, at 10 satoshis per virtual byte
 build :: Ctx -> SendAllCoins -> [(Address, Share)] -> Either String BuiltTx
-build ctx wallet recipients = buildSendAll btc ctx (mkStdGen 0) wallet recipients 10 546 800002
+build ctx wallet recipients = buildSendAll btc ctx (mkStdGen 0) wallet recipients 10 800002
 
 -- | The outputs of a transaction as addresses and amounts, by amount, since
 -- the builder shuffles them
@@ -80,11 +78,11 @@ outputsOf ctx transaction = sortOn snd [(forceRight (scriptToAddressBS btc ctx o
 -- stay in the account
 threeDustReport :: Ctx -> Bool -> DustReport
 threeDustReport ctx othersStaying =
-  dustReport ctx Bip44 10 546 [(otherAddr 0, Remainder)] (twoCoins ctx) [coin ctx 2 1 900, coin ctx 2 0 1200, coin ctx 2 2 546] othersStaying
+  dustReport ctx Bip44 10 [(otherAddr 0, Remainder)] (twoCoins ctx) [coin ctx 2 1 900, coin ctx 2 0 1200, coin ctx 2 2 546] othersStaying
 
 -- | The report on one dust coin beside the coins of 50000 and 30000
 oneDustReport :: Ctx -> Natural -> DustReport
-oneDustReport ctx value = dustReport ctx Bip44 10 546 [(otherAddr 0, Remainder)] (twoCoins ctx) [coin ctx 2 0 value] False
+oneDustReport ctx value = dustReport ctx Bip44 10 [(otherAddr 0, Remainder)] (twoCoins ctx) [coin ctx 2 0 value] False
 
 {- Dust coins -}
 
@@ -120,7 +118,7 @@ amountSpec ctx =
     -- (2 + 2 * 108) / 4 of witness data, rounded up to 55: 181 virtual
     -- bytes, a fee of 1810
     it "charge a bip84 account the virtual bytes of its P2WPKH inputs" $
-      sendAllAmounts ctx Bip84 10 546 (twoCoins ctx) [(otherAddr 0, Remainder)] `shouldBe` Right [(otherAddr 0, 78190)]
+      sendAllAmounts ctx Bip84 10 (twoCoins ctx) [(otherAddr 0, Remainder)] `shouldBe` Right [(otherAddr 0, 78190)]
 
     it "give an address without an amount everything but the fee of the coins" $
       amounts ctx (twoCoins ctx) [(otherAddr 0, Remainder)] `shouldBe` Right [(otherAddr 0, 76600)]
@@ -158,7 +156,7 @@ buildSpec ctx =
 
     -- 0xfffffffe: not final, so the lock time applies, and not replaceable
     it "gives every input of Bitcoin Cash, which replaces no transaction, the highest sequence under which the lock time applies" $ do
-      built <- expectRight $ buildSendAll bch ctx (mkStdGen 0) (found (twoCoins ctx) []) [(otherAddr 0, Remainder)] 10 546 800002
+      built <- expectRight $ buildSendAll bch ctx (mkStdGen 0) (found (twoCoins ctx) []) [(otherAddr 0, Remainder)] 10 800002
       ((.sequence) <$> built.tx.inputs) `shouldBe` [0xfffffffe, 0xfffffffe]
 
     -- Nodes relay a transaction of at most 100000 virtual bytes. 676 P2PKH
@@ -173,7 +171,7 @@ buildSpec ctx =
       build ctx (found [] []) [(otherAddr 0, Remainder)] `shouldBe` Left "There are no coins to send"
 
     it "is refused a fee rate of zero" $
-      buildSendAll btc ctx (mkStdGen 0) (found (twoCoins ctx) []) [(otherAddr 0, Remainder)] 0 546 800002
+      buildSendAll btc ctx (mkStdGen 0) (found (twoCoins ctx) []) [(otherAddr 0, Remainder)] 0 800002
         `shouldBe` Left "The fee rate must be at least 1 satoshi per virtual byte"
 
 {- The report on dust coins -}

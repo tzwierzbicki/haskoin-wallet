@@ -120,13 +120,15 @@ sweepSpec ctx =
         (errorOf <$> hwJson home ["preparesweep", "--address-file", home </> "addresses.txt", "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--fee-rate", "10"] [])
           `shouldReturn` Right "No address on line 3: 1LoVGDgRs9hTfTNJNuXKSpywcbdvwRXpmX old wallet"
 
-    it "is refused when what remains for the destination is below the --dust-limit" $
+    -- Two outputs make 226 bytes, a fee of 2260, which leaves 30000 - 2260 -
+    -- 27500 = 240 for the second destination
+    it "is refused when what remains for a destination is below the dust limit" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
         createMain home
         _ <- answer home ["receive"] []
         keys <- writeKeyFile home
-        (errorOf <$> hwJson home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--dust-limit", "30000", "--fee-rate", "10"] [])
-          `shouldReturn` Right "What remains for each address without an amount, 28080 satoshis, is below the dust limit of 30000"
+        (errorOf <$> hwJson home ["preparesweep", "--key-file", keys, "--sweep-to", fixedTo (otherAddr 0) "27500sat", "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] [])
+          `shouldReturn` Right "What remains for each address without an amount, 240 satoshis, is below the dust limit of 546"
 
     it "that pays outside the wallet is refused without an --output file" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do

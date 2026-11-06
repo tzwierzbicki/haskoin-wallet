@@ -147,7 +147,7 @@ fundAccountTwice ctx cfg accId = do
 -- byte, from the given coins of the account, or from any of its coins
 payment :: Ctx -> Config -> DBAccountId -> [OutPoint] -> Address -> Natural -> ExceptT String (DB IO) TxSignData
 payment ctx cfg accId chosen to amount =
-  buildTxSignData btc ctx cfg (mkStdGen 0) LeastWaste accId [(to, amount)] 1 0 800002 SenderPays 0 control NewChangeAddress
+  buildTxSignData btc ctx cfg (mkStdGen 0) LeastWaste accId [(to, amount)] 1 800002 SenderPays 0 control NewChangeAddress
   where
     control = if null chosen then NoCoinControl else SpendChosen chosen
 

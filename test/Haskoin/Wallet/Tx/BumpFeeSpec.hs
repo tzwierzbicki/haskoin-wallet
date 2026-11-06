@@ -181,12 +181,12 @@ reductionSpec :: Ctx -> Spec
 reductionSpec ctx =
   describe "What the recipients pay of the fee the coins cannot" $ do
     it "is paid by one of them alone, or by all of them in equal shares, the first also paying the remainder" $
-      reductions ctx (sendAllPlan ctx) 11 546 `shouldBe` Right waysAt11
+      reductions ctx (sendAllPlan ctx) 11 `shouldBe` Right waysAt11
 
     -- At 40 satoshis a byte, 10400 of fee: 7800 missing, more than the
     -- 7400 of the third recipient. Together, each pays 2600.
     it "is not paid alone by a recipient that has less than that" $
-      reductions ctx (sendAllPlan ctx) 40 546
+      reductions ctx (sendAllPlan ctx) 40
         `shouldBe` Right
           [ way (OneRecipient 0) 7800 (22200, 10000, 7400),
             way (OneRecipient 1) 7800 (30000, 2200, 7400),
@@ -194,63 +194,64 @@ reductionSpec ctx =
           ]
 
     it "is not paid by all of them when one would be left below the dust limit" $
-      reductions ctx (sendAllPlan ctx) 100 546 `shouldBe` Right waysAt100
+      reductions ctx (sendAllPlan ctx) 100 `shouldBe` Right waysAt100
 
-    -- At 11 satoshis a byte, the third recipient keeps 7140 paying alone,
-    -- and 7314 paying its share
-    it "leaves no recipient below the --dust-limit" $
-      reductions ctx (sendAllPlan ctx) 11 7300
+    -- At 37 satoshis a byte, 9620 of fee: 47400 + 9620 - 50000 = 7020
+    -- missing. The third recipient has enough, and alone would keep 7400 -
+    -- 7020 = 380, below the 546 of its output. Together, each pays 2340.
+    it "leaves no recipient below the dust limit of its output" $
+      reductions ctx (sendAllPlan ctx) 37
         `shouldBe` Right
-          [ way (OneRecipient 0) 260 (29740, 10000, 7400),
-            way (OneRecipient 1) 260 (30000, 9740, 7400),
-            way AllRecipients 260 (29912, 9914, 7314)
+          [ way (OneRecipient 0) 7020 (22980, 10000, 7400),
+            way (OneRecipient 1) 7020 (30000, 2980, 7400),
+            way AllRecipients 7020 (27660, 7660, 5060)
           ]
 
     -- At 200 satoshis a byte, 52000 of fee: 49400 missing, more than any
     -- recipient has, and 16468 for the first and 16466 for the others
     -- together, more than the second has
     it "is refused when no recipient can pay it, together or alone" $
-      reductions ctx (sendAllPlan ctx) 200 546
+      reductions ctx (sendAllPlan ctx) 200
         `shouldBe` Left "The recipients cannot pay the 49400 satoshis missing, together or alone, without one being left with less than the dust limit of 546 satoshis"
 
     it "is paid by a lone recipient, the one way" $
-      reductions ctx (oneRecipientPlan ctx) 20 546 `shouldBe` Right [loneWayAt20]
+      reductions ctx (oneRecipientPlan ctx) 20 `shouldBe` Right [loneWayAt20]
 
     -- At 300 satoshis a byte, 57600 of fee: 55680 missing, more than the
     -- recipient receives
     it "is refused when the lone recipient cannot pay it" $
-      reductions ctx (oneRecipientPlan ctx) 300 546
+      reductions ctx (oneRecipientPlan ctx) 300
         `shouldBe` Left "The recipient cannot pay the 55680 satoshis missing without being left with less than the dust limit of 546 satoshis"
 
     -- The payment keeps 27740 of change: at 20 satoshis a byte, its 226
     -- bytes pay 4520, with 25480 to spare
     it "is nothing when the coins pay the fee" $
-      reductions ctx (paymentPlan ctx) 20 546
+      reductions ctx (paymentPlan ctx) 20
         `shouldBe` Left "The coins of the transaction pay its fee: the recipients have nothing to pay"
 
 fundingSpec :: Ctx -> Spec
 fundingSpec ctx =
   describe "What pays the fee of a replacement" $ do
     it "is the change, when it can" $
-      fundings ctx gen (paymentPlan ctx) [] 20 546 `shouldBe` Right [ChangePays]
+      fundings ctx gen (paymentPlan ctx) [] 20 `shouldBe` Right [ChangePays]
 
     -- With the coin of 30000 at /0/1 added, two inputs and two outputs,
     -- 374 bytes, pay 7480 at 20 satoshis a byte, and 80000 - 48080 - 7480
     -- = 24440 go to the change
     it "is a coin of the account first, then the recipients" $
-      fundings ctx gen (oneRecipientPlan ctx) [added30000] 20 546
+      fundings ctx gen (oneRecipientPlan ctx) [added30000] 20
         `shouldBe` Right [CoinsAdded [added30000], RecipientsReduced loneWayAt20]
 
     it "is the recipients alone when no coin of the account would do" $
-      fundings ctx gen (oneRecipientPlan ctx) [] 20 546 `shouldBe` Right [RecipientsReduced loneWayAt20]
+      fundings ctx gen (oneRecipientPlan ctx) [] 20 `shouldBe` Right [RecipientsReduced loneWayAt20]
 
     -- At 300 satoshis a byte, the coin of 200000 pays the 112200 of 374
     -- bytes, with 89720 of change; the recipient would be left with nothing
     it "is a coin of the account alone when the recipients cannot pay" $
-      fundings ctx gen (oneRecipientPlan ctx) [added200000] 300 546 `shouldBe` Right [CoinsAdded [added200000]]
+      fundings ctx gen (oneRecipientPlan ctx) [added200000] 300 `shouldBe` Right [CoinsAdded [added200000]]
 
     it "is refused when neither the coins nor the recipients can pay, telling both" $
-      fundings ctx gen (oneRecipientPlan ctx) [] 300 546
+      fundings ctx gen (oneRecipientPlan ctx) [] 300
         `shouldBe` Left "The coins of the transaction cannot pay its fee at 300 sat/vB, and no confirmed coins of the account would. The recipient cannot pay the 55680 satoshis missing without being left with less than the dust limit of 546 satoshis"
   where
     -- The coins to add are taken the largest first: nothing is drawn

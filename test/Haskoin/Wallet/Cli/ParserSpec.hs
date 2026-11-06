@@ -25,11 +25,11 @@ spec = do
     -- default
     it "lists the options of preparetx as they are typed" $
       usageOf "preparetx"
-        `shouldBe` "ADDRESS:AMOUNT... [-a|--account NAME] [-f|--fee-rate RATE] [--dust-limit SATOSHIS] [-r|--recipients-pay] [-m|--min-conf INT] [--strategy STRATEGY] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS]... [--select] [-y|--yes] [--change-back | --new-change]"
+        `shouldBe` "ADDRESS:AMOUNT... [-a|--account NAME] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--strategy STRATEGY] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS]... [--select] [-y|--yes] [--change-back | --new-change]"
 
     it "follows what may be given several times with ..., after the brackets of an optional one" $
       usageOf "preparesendall"
-        `shouldBe` "ADDRESS[:AMOUNT]... [-a|--account NAME] [-f|--fee-rate RATE] [--dust-limit SATOSHIS] [-m|--min-conf INT] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS]... [--spend-dust | --leave-dust] [-y|--yes]"
+        `shouldBe` "ADDRESS[:AMOUNT]... [-a|--account NAME] [-f|--fee-rate RATE] [-m|--min-conf INT] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS]... [--spend-dust | --leave-dust] [-y|--yes]"
 
     it "puts the argument of checkaddr before its option" $
       usageOf "checkaddr" `shouldBe` "PATH [-a|--account NAME]"
@@ -39,7 +39,7 @@ spec = do
 
     it "shows an option that has to be given at least once as required" $
       usageOf "preparesweep"
-        `shouldBe` "[-a|--account NAME] [-n|--network NETWORK] [-k|--key-file FILENAME] [-w|--sweep-from ADDRESS]... [--address-file FILENAME] (-t|--sweep-to ADDRESS[:AMOUNT])... [-c|--coin TXID:INDEX]... [-o|--output FILENAME] [-l|--label LABEL] [-f|--fee-rate RATE] [--dust-limit SATOSHIS] [-y|--yes]"
+        `shouldBe` "[-a|--account NAME] [-n|--network NETWORK] [-k|--key-file FILENAME] [-w|--sweep-from ADDRESS]... [--address-file FILENAME] (-t|--sweep-to ADDRESS[:AMOUNT])... [-c|--coin TXID:INDEX]... [-o|--output FILENAME] [-l|--label LABEL] [-f|--fee-rate RATE] [-y|--yes]"
 
   describe "What label labels" $ do
     it "is a transaction for a word of 64 hexadecimal digits" $

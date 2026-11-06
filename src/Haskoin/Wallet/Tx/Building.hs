@@ -55,7 +55,7 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.PendingTx (changeAddress)
 import Haskoin.Wallet.Database.RawTx
 import Haskoin.Wallet.Tx.SignData
-import Haskoin.Wallet.Tx.Size (accountInput, accountOutputKind, checkFeeRateAndDust, checkStandardSize, outputDustLimit, recipientOutputKind)
+import Haskoin.Wallet.Tx.Size (accountInput, accountOutputKind, checkFeeRate, checkStandardSize, outputDustLimit, recipientOutputKind)
 import Haskoin.Wallet.Tx.LockTime (withHeader)
 import Haskoin.Wallet.Util (addrToTextE, randomShuffle, safeSubtract)
 import Numeric.Natural (Natural)
@@ -140,8 +140,6 @@ buildTxSignData ::
   [(Address, Natural)] ->
   -- | Fee per virtual byte
   Natural ->
-  -- | Dust
-  Natural ->
   -- | Lock time
   Word32 ->
   FeePayer ->
@@ -150,10 +148,10 @@ buildTxSignData ::
   CoinControl ->
   ChangeTo m ->
   ExceptT String (DB m) TxSignData
-buildTxSignData net ctx cfg gen strategy accId recipients feeByte dust lockTime payer minConf coinControl changeTo = do
+buildTxSignData net ctx cfg gen strategy accId recipients feeByte lockTime payer minConf coinControl changeTo = do
   when (null recipients) $ throwError "No recipients provided"
   found <- fetchWalletCoins net ctx accId (fst <$> recipients) minConf
-  chosen <- liftEither $ choosePayment ctx gen strategy found recipients feeByte dust payer coinControl
+  chosen <- liftEither $ choosePayment ctx gen strategy found recipients feeByte payer coinControl
   change <-
     if chosen.selection.changeAmount > 0
       then Just <$> changeFor found.coinPaths chosen
@@ -225,15 +223,13 @@ buildWalletTx ::
   [(Address, Natural)] ->
   -- | Fee per virtual byte
   Natural ->
-  -- | Dust
-  Natural ->
   -- | Lock time
   Word32 ->
   FeePayer ->
   CoinControl ->
   Either String BuiltTx
-buildWalletTx net ctx gen strategy found change recipients feeByte dust lockTime payer coinControl = do
-  chosen <- choosePayment ctx gen strategy found recipients feeByte dust payer coinControl
+buildWalletTx net ctx gen strategy found change recipients feeByte lockTime payer coinControl = do
+  chosen <- choosePayment ctx gen strategy found recipients feeByte payer coinControl
   assemblePayment net ctx found chosen (Just change) lockTime
 
 -- | Choose the coins of a payment to the recipients among the wallet's
@@ -253,14 +249,12 @@ choosePayment ::
   [(Address, Natural)] ->
   -- | Fee per virtual byte
   Natural ->
-  -- | Dust
-  Natural ->
   FeePayer ->
   CoinControl ->
   Either String ChosenPayment
-choosePayment ctx gen strategy found recipients feeByte dust payer coinControl = do
+choosePayment ctx gen strategy found recipients feeByte payer coinControl = do
   when (null recipients) $ Left "No recipients provided"
-  checkFeeRateAndDust feeByte dust
+  checkFeeRate feeByte
   -- The coin selection draws from a generator of its own; the outputs are
   -- shuffled with what is left
   let (drawGen, outputGen) = splitGen gen
@@ -285,13 +279,13 @@ choosePayment ctx gen strategy found recipients feeByte dust payer coinControl =
     -- The change is an output of the kind of the account
     changeKind = accountOutputKind found.ownKind
     -- Whether a recipient is paid less than the dust limit of its output
-    belowDust (addr, amount) = amount < outputDustLimit dust (recipientOutputKind ctx addr)
+    belowDust (addr, amount) = amount < outputDustLimit (recipientOutputKind ctx addr)
     payment =
       Payment
         { ownKind = found.ownKind,
           rates = FeeRates {feeRate = fromIntegral feeByte, longTermFeeRate = longTermRate},
           payer,
-          dust = fromIntegral (outputDustLimit dust changeKind),
+          dust = fromIntegral (outputDustLimit changeKind),
           outputKinds = recipientOutputKind ctx . fst <$> recipients,
           amount = sum $ fromIntegral . snd <$> recipients
         }

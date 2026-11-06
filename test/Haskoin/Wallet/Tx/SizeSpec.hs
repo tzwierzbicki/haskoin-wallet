@@ -46,21 +46,14 @@ spec = do
   -- byte of the output and of the smallest input that spends it, which is
   -- 148 bytes without a witness and 67 with one
   describe "The dust limit of an output, by its kind" $ do
-    it "is what nodes relay when no limit is asked: 546 for P2PKH, 540 for P2SH, 294 for P2WPKH, 330 for P2WSH and Taproot" $ do
-      outputDustLimit 0 OutputPKHash `shouldBe` 546 -- 3 × (34 + 148)
-      outputDustLimit 0 OutputScriptHash `shouldBe` 540 -- 3 × (32 + 148)
-      outputDustLimit 0 OutputWitnessPKHash `shouldBe` 294 -- 3 × (31 + 67)
-      outputDustLimit 0 OutputWitnessScriptHash `shouldBe` 330 -- 3 × (43 + 67)
-      outputDustLimit 0 OutputTaproot `shouldBe` 330 -- 3 × (43 + 67)
+    it "is what nodes relay: 546 for P2PKH, 540 for P2SH, 294 for P2WPKH, 330 for P2WSH and Taproot" $ do
+      outputDustLimit OutputPKHash `shouldBe` 546 -- 3 × (34 + 148)
+      outputDustLimit OutputScriptHash `shouldBe` 540 -- 3 × (32 + 148)
+      outputDustLimit OutputWitnessPKHash `shouldBe` 294 -- 3 × (31 + 67)
+      outputDustLimit OutputWitnessScriptHash `shouldBe` 330 -- 3 × (43 + 67)
+      outputDustLimit OutputTaproot `shouldBe` 330 -- 3 × (43 + 67)
     it "is 576 for the P2SH32 output of Bitcoin Cash" $
-      outputDustLimit 0 OutputScript32Hash `shouldBe` 576 -- 3 × (44 + 148)
-    it "is the limit asked, when that is above what nodes relay" $ do
-      outputDustLimit 1000 OutputPKHash `shouldBe` 1000
-      outputDustLimit 1000 OutputWitnessPKHash `shouldBe` 1000
-      outputDustLimit 300 OutputWitnessPKHash `shouldBe` 300
-    it "is never below what nodes relay, whatever limit is asked" $ do
-      outputDustLimit 100 OutputPKHash `shouldBe` 546
-      outputDustLimit 293 OutputWitnessPKHash `shouldBe` 294
+      outputDustLimit OutputScript32Hash `shouldBe` 576 -- 3 × (44 + 148)
 
   -- Nodes relay a transaction of at most 400000 weight units, which are
   -- 100000 virtual bytes. With 675 P2PKH coins and one P2PKH output a

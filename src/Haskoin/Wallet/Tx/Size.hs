@@ -17,9 +17,9 @@
 --
 -- This module maps what hw knows, the kind of an account and the scripts
 -- of its coins and outputs, onto the kinds of haskoin-core. The fee rate
--- and the dust limit a transaction is built with are checked here too,
--- for the builders of payments and of sweeps, beside the default fee rate
--- and the rate above which hw asks the user first.
+-- a transaction is built with is checked here too, for the builders of
+-- payments and of sweeps, beside the default fee rate and the rate above
+-- which hw asks the user first.
 --
 -- Two limits of the relay policy of nodes are here as well, both taken
 -- from haskoin-core: the smallest amount an output may hold, by its kind
@@ -41,7 +41,6 @@ module Haskoin.Wallet.Tx.Size
     storeTxSize,
     highFeeRate,
     maxFeeRate,
-    checkFeeRateAndDust,
     checkFeeRate,
   )
 where
@@ -51,7 +50,6 @@ import qualified Data.ByteString as BS
 import Data.Word (Word64)
 import Haskoin (Address, Ctx, InputKind (..), OutputKind (..), ScriptOutput (..), Tx, addressToOutput, dustThreshold, guessTxSize, guessTxWeight, inputWeight, marshal, maxStandardTxWeight, outputSize, txVirtualSize, unmarshal)
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Amounts (maxMoney)
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Numeric.Natural (Natural)
 
@@ -137,12 +135,11 @@ accountOutputSize = fromIntegral . outputSize . accountOutputKind
 -- hold, in satoshis. Nodes do not relay an output below the threshold of
 -- its kind, which haskoin-core's dustThreshold gives as Bitcoin Core
 -- computes it: 546 for P2PKH, 540 for P2SH, 294 for P2WPKH, and 330 for
--- P2WSH and Taproot. The limit asked with --dust-limit raises that of
--- every output to its amount, and lowers none: one output below what
--- nodes relay keeps the whole transaction from spreading. Without the
--- option the limit asked is zero.
-outputDustLimit :: Natural -> OutputKind -> Natural
-outputDustLimit asked kind = max asked (fromIntegral (dustThreshold kind))
+-- P2WSH and Taproot. The user cannot change it. One output below what
+-- nodes relay keeps the whole transaction from spreading, and a higher
+-- limit would only send more change to the fee.
+outputDustLimit :: OutputKind -> Natural
+outputDustLimit = fromIntegral . dustThreshold
 
 {- Transactions -}
 
@@ -205,18 +202,10 @@ highFeeRate = 100
 maxFeeRate :: Natural
 maxFeeRate = 2 ^ (32 :: Int) - 1
 
--- | Refuse a fee rate or a dust limit that a transaction cannot be built
--- with: a rate 'checkFeeRate' refuses, or a dust limit above the 21
--- million bitcoins there will ever be. The command line takes any number,
--- and the builders count in 64 bits: a rate of 2^64 wrapped around to
--- zero.
-checkFeeRateAndDust :: Natural -> Natural -> Either String ()
-checkFeeRateAndDust feeByte dust = do
-  checkFeeRate feeByte
-  when (toInteger dust > maxMoney) $ Left "The dust limit must be at most the 21 million bitcoins there will ever be"
-
 -- | Refuse a fee rate that a transaction cannot be built with: zero,
--- which no node relays, or above 'maxFeeRate'
+-- which no node relays, or above 'maxFeeRate'. The command line takes any
+-- number, and the builders count in 64 bits: a rate of 2^64 wrapped around
+-- to zero.
 checkFeeRate :: Natural -> Either String ()
 checkFeeRate feeByte = do
   when (feeByte == 0) $ Left "The fee rate must be at least 1 satoshi per virtual byte"

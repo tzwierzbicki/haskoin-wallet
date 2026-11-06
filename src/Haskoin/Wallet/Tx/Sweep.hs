@@ -48,7 +48,7 @@ import Haskoin.Wallet.Store
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Signing (coinSigInput, parseOutsideTxSignData, parseTxSignData, spentCoins, verifySignedTx)
-import Haskoin.Wallet.Tx.Size (checkFeeRateAndDust, checkStandardSize, inputKind, outputDustLimit, recipientOutputKind, scriptOutputKind, txSize)
+import Haskoin.Wallet.Tx.Size (checkFeeRate, checkStandardSize, inputKind, outputDustLimit, recipientOutputKind, scriptOutputKind, txSize)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import System.Random (StdGen)
@@ -181,20 +181,18 @@ buildSweepSignData ::
   [(Address, Share)] ->
   -- | Fee per virtual byte
   Natural ->
-  -- | Dust
-  Natural ->
   -- | Lock time
   Word32 ->
   Either String TxSignData
-buildSweepSignData net ctx gen found sweepTo feeByte dust lockTime = do
+buildSweepSignData net ctx gen found sweepTo feeByte lockTime = do
   when (null found.coins) $ Left "There are no coins to sweep in those addresses"
   when (null sweepTo) $ Left "No addresses to sweep to"
-  checkFeeRateAndDust feeByte dust
+  checkFeeRate feeByte
   scripts <- mapM (scriptOf . fst) sweepTo
   size <- sweepTxSize net ctx found scripts
   let total = sum $ (.value) <$> found.coins
       fee = fromIntegral feeByte * size
-  amounts <- shareAmounts (fromIntegral total) (fromIntegral fee) (outputDustLimit dust . recipientOutputKind ctx) sweepTo
+  amounts <- shareAmounts (fromIntegral total) (fromIntegral fee) (outputDustLimit . recipientOutputKind ctx) sweepTo
   let (shuffledCoins, shuffledOutputs) =
         evalState ((,) <$> randomShuffle found.coins <*> randomShuffle (zip scripts (snd <$> amounts))) gen
       outputs = [TxOut (fromIntegral amount) (marshal ctx script) | (script, amount) <- shuffledOutputs]

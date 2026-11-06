@@ -140,7 +140,7 @@ import Haskoin.Wallet.Tx.SendAll
     isDustCoin,
     sendAllAmounts,
   )
-import Haskoin.Wallet.Tx.Size (checkFeeRateAndDust, highFeeRate)
+import Haskoin.Wallet.Tx.Size (checkFeeRate, highFeeRate)
 import Haskoin.Wallet.Tx.Sweep (buildSweepSignData, fetchSweepCoins, signTxWithKeys)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
@@ -813,11 +813,11 @@ storePrepared ctx accId acc output tsd = do
 
 -- | Ask before preparing a transaction at a fee rate above 'highFeeRate',
 -- unless --yes: a rate that high is more often a typo than a choice. A fee
--- rate or a dust limit no transaction can be built with is refused first,
--- without a question.
-confirmFeeRate :: Bool -> Natural -> Natural -> ExceptT String (DB IO) ()
-confirmFeeRate yes feeByte dust = do
-  liftEither $ checkFeeRateAndDust feeByte dust
+-- rate no transaction can be built with is refused first, without a
+-- question.
+confirmFeeRate :: Bool -> Natural -> ExceptT String (DB IO) ()
+confirmFeeRate yes feeByte = do
+  liftEither $ checkFeeRate feeByte
   when (feeByte > highFeeRate && not yes) $ do
     accepted <-
       askYes terminal $
@@ -958,7 +958,7 @@ cmdPrepareTx ctx cfg unit opts =
     recipients <- liftEither $ mapM (readPayment net unit) opts.recipients
     heightM <- lockTimeHeight opts.yes net
     feeByte <- chooseFeeRate cfg net (webStore ctx cfg net) 1 opts.feeRate
-    confirmFeeRate opts.yes feeByte opts.dust
+    confirmFeeRate opts.yes feeByte
     (control, left) <-
       if not controlled
         then return (NoCoinControl, [])
@@ -974,7 +974,7 @@ cmdPrepareTx ctx cfg unit opts =
           | otherwise = NewChangeAddress
     gen <- liftIO initStdGen
     let (lockTime, buildGen) = lockTimeFor heightM gen
-    tsd <- buildTxSignData net ctx cfg buildGen opts.strategy accId recipients feeByte opts.dust lockTime opts.feePayer opts.minConf control changeTo
+    tsd <- buildTxSignData net ctx cfg buildGen opts.strategy accId recipients feeByte lockTime opts.feePayer opts.minConf control changeTo
     preparedAnswer ctx accId acc opts.output (withLabel opts.label tsd) left
 
 -- | The address the change of a payment goes back to, among the addresses
@@ -1013,7 +1013,7 @@ cmdPrepareSendAll ctx cfg unit opts =
       throwError "The coins chosen with --coin or --spend-from are all sent: give --spend-dust or --leave-dust without them"
     heightM <- lockTimeHeight opts.yes net
     feeByte <- chooseFeeRate cfg net (webStore ctx cfg net) 1 opts.feeRate
-    confirmFeeRate opts.yes feeByte opts.dust
+    confirmFeeRate opts.yes feeByte
     spendable <- spendableCoins net ctx accId opts.minConf
     unspendable <- unspendableCoins net ctx accId opts.minConf
     labels <- lift $ labelsOfCoins net accId (spendable <> (fst <$> unspendable))
@@ -1027,7 +1027,7 @@ cmdPrepareSendAll ctx cfg unit opts =
           return (sent, leftCoins labels (notSent sent spendable) unspendable [])
     gen <- liftIO initStdGen
     let (lockTime, buildGen) = lockTimeFor heightM gen
-    tsd <- buildSendAllSignData net ctx buildGen accId sent recipients feeByte opts.dust lockTime
+    tsd <- buildSendAllSignData net ctx buildGen accId sent recipients feeByte lockTime
     preparedAnswer ctx accId acc opts.output (withLabel opts.label tsd) left
   where
     -- The spendable coins the transaction does not send
@@ -1045,10 +1045,10 @@ cmdPrepareSendAll ctx cfg unit opts =
             Just LeaveDust -> return worth
             Nothing
               | isLeft (paying spendable) || isLeft (paying worth) -> return worth
-              | otherwise -> askAboutDust (dustReport ctx kind feeByte opts.dust recipients worth dust othersStay)
+              | otherwise -> askAboutDust (dustReport ctx kind feeByte recipients worth dust othersStay)
       where
         (dust, worth) = partition (isDustCoin kind feeByte) spendable
-        paying coins = sendAllAmounts ctx kind feeByte opts.dust coins recipients
+        paying coins = sendAllAmounts ctx kind feeByte coins recipients
         -- On stderr, with the question, to keep the --json answer clean
         askAboutDust :: DustReport -> ExceptT String (DB IO) [Store.Unspent]
         askAboutDust report = do
@@ -1237,16 +1237,16 @@ cmdBumpFee ctx cfg unit opts =
     confirmed <- spendableCoins net ctx accId 1
     labels <- lift $ labelsOfCoins net accId confirmed
     candidates <- forM confirmed $ \coin -> (\(addr, path) -> (coin, addr, path)) <$> coinWithPath net accId coin
-    offered <- liftEither $ fundings ctx buildGen plan candidates feeByte opts.dust
+    offered <- liftEither $ fundings ctx buildGen plan candidates feeByte
     built <- forM offered $ \funding -> do
-      tsd <- buildBump ctx cfg net accId buildGen plan funding feeByte opts.dust lockTime
+      tsd <- buildBump ctx cfg net accId buildGen plan funding feeByte lockTime
       info <- txInfoOf ctx (accId, acc) tsd
       liftEither $ checkBumpFee plan info.txInfoSummary
       return (funding, tsd)
     -- The questions, once nothing can refuse the replacement any more. A
     -- change address a replacement took is given back if the answer is no,
     -- with everything else the command did.
-    confirmFeeRate opts.yes feeByte opts.dust
+    confirmFeeRate opts.yes feeByte
     either (confirmBehind opts.yes) (const (return ())) behind
     unless (null children) $ do
       liftIO $ renderOn stderr (childrenDoc children)
@@ -1344,7 +1344,7 @@ cmdPrepareSweep ctx cfg unit opts =
       sweepTo <- liftEither $ mapM (readRecipient net unit) opts.sweepTo
       liftEither $ checkSharing sweepTo
       feeByte <- chooseFeeRate cfg net (webStore ctx cfg net) 1 opts.feeRate
-      confirmFeeRate opts.yes feeByte opts.dust
+      confirmFeeRate opts.yes feeByte
       keys <- maybe (return []) (readSecKeys terminal net) opts.keys
       found <- fetchSweepCoins net ctx (webStore ctx cfg net) accIdM keys (typed <> listed) opts.coins (fst <$> sweepTo)
       -- The lock time is drawn from the best block of the store, which the
@@ -1355,7 +1355,7 @@ cmdPrepareSweep ctx cfg unit opts =
       gen <- liftIO initStdGen
       let heightM = if isStale now (Just best.header.timestamp) then Nothing else Just best.height
           (lockTime, buildGen) = lockTimeFor heightM gen
-      withLabel opts.label <$> liftEither (buildSweepSignData net ctx buildGen found sweepTo feeByte opts.dust lockTime)
+      withLabel opts.label <$> liftEither (buildSweepSignData net ctx buildGen found sweepTo feeByte lockTime)
     -- The addresses of the --address-file, read on the network of the
     -- sweep
     addressesOfFile net file = liftEither . parseAddresses net =<< liftEitherIO (readTextFile file)

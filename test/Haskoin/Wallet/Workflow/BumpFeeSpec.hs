@@ -94,13 +94,13 @@ bumpFeeSpec ctx = do
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] ["y"]
         summaryLockTime (txInfoSummary bumped) `shouldBe` 0
 
-    -- At 100 satoshis a byte, the 226 bytes pay 22600 and leave 50000 -
-    -- 20000 - 22600 = 7400 of change, less than the 10000 of --dust-limit: the
-    -- fee is all the rest, 50000 - 20000 = 30000
-    it "gives the fee a change below the --dust-limit" $
+    -- At 131 satoshis a byte, the 226 bytes pay 29606 and leave 50000 -
+    -- 20000 - 29606 = 394 of change, less than the 546 nodes relay: the fee
+    -- is all the rest, 50000 - 20000 = 30000
+    it "gives the fee a change below the dust limit" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         stuck <- sentPayment home
-        bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "100", "--dust-limit", "10000"] []
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "131", "--yes"] []
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
           `shouldBe` (Map.fromList [(otherAddr 0, 20000)], Map.empty, 30000)
 

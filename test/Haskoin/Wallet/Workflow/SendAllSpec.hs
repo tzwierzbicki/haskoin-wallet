@@ -131,11 +131,13 @@ sendAllSpec ctx = do
         (dBAccountName <$> accountOf prepared) `shouldBe` Right "main"
         paidToOthers <$> txOf prepared `shouldReturn` Map.fromList [(otherAddr 0, 76600)]
 
-    it "are not sent when what remains for the address is below the --dust-limit" $
+    -- Two outputs make 374 bytes, a fee of 3740, which leaves 80000 - 3740 -
+    -- 76000 = 260 for the second address
+    it "are not sent when what remains for an address is below the dust limit" $
       withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
         synced home
-        (errorOf <$> hwJson home ["preparesendall", textOf (otherAddr 0), "--dust-limit", "80000", "--fee-rate", "10"] [])
-          `shouldReturn` Right "What remains for each address without an amount, 76600 satoshis, is below the dust limit of 80000"
+        (errorOf <$> hwJson home ["preparesendall", fixedTo (otherAddr 0) "76000sat", textOf (otherAddr 1), "--fee-rate", "10"] [])
+          `shouldReturn` Right "What remains for each address without an amount, 260 satoshis, is below the dust limit of 546"
 
     -- The coin of 50000 has 3 confirmations, and the coin of 30000 has 1.
     -- The coin of 50000 alone makes 192 bytes, a fee of 1920.

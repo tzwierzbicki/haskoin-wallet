@@ -721,7 +721,6 @@ hw preparetx ADDRESS:0.01 --recipients-pay --fee-rate high --output unsigned.psb
 | `--min-conf N` | Sets the confirmations a coin needs to be spent. The default is 0. |
 | `--change-back` | Sends the change back to an address the payment spends from. |
 | `--new-change` | Sends the change to a new change address, even when the configuration file sets `change-back`. |
-| `--dust-limit SATOSHIS` | Raises the smallest output to this amount. Without it, the smallest output is what nodes relay for its kind: 546 satoshis for a legacy output, 294 for a native SegWit one. |
 | `--output FILE` | Also writes the transaction to a [file](#transaction-files). |
 | `--label LABEL` | Gives the transaction a label, which goes with it to its file and stays once the network has it. |
 | `--yes` | Answers yes to the questions on a high fee rate and on a wallet behind the chain. |
@@ -729,9 +728,9 @@ hw preparetx ADDRESS:0.01 --recipients-pay --fee-rate high --output unsigned.psb
 > **Good to know**
 >
 > - **An amount without a unit is in bitcoins.** See [Amounts](#amounts).
-> - **No output is smaller than what nodes relay.** A smaller payment is
->   refused, and smaller change goes to the fee. `--dust-limit` raises that
->   limit, and never lowers it.
+> - **No output is smaller than what nodes relay.** That is 546 satoshis for a
+>   legacy output, and 294 for a native SegWit one. A smaller payment is
+>   refused, and smaller change goes to the fee.
 > - **A transaction takes at most 100,000 virtual bytes**, the largest that
 >   nodes relay. That is about 675 legacy coins, or 1,470 native SegWit ones.
 >   `hw` refuses to prepare a larger one. Send the coins in several
@@ -757,8 +756,8 @@ hw preparesendall ADDRESS1:0.1 ADDRESS2 --fee-rate median --leave-dust
 `hw` asks whether to spend the coins worth less than their fee, unless
 `--spend-dust` or `--leave-dust` answers.
 
-`--fee-rate`, `--coin`, `--spend-from`, `--min-conf`, `--dust-limit`, `--output`,
-`--label` and `--yes` work as for [`preparetx`](#hw-preparetx).
+`--fee-rate`, `--coin`, `--spend-from`, `--min-conf`, `--output`, `--label` and
+`--yes` work as for [`preparetx`](#hw-preparetx).
 
 #### `hw signtx`
 

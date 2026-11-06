@@ -413,23 +413,22 @@ paymentSpec ctx =
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 17740)]
         paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 30000)]
 
-    -- 999 satoshis are less than the 1000 of --dust-limit, and more than the
-    -- 546 of the default
-    it "is refused a payment below the --dust-limit" $
+    -- 545 satoshis are less than the 546 nodes relay for a P2PKH output
+    it "is refused a payment below the dust limit" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "999sat", "--dust-limit", "1000", "--fee-rate", "10"] [])
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "545sat", "--fee-rate", "10"] [])
           `shouldReturn` Right "Recipient output is smaller than the dust value"
 
-    -- A payment of 30000 from the coin of 50000 leaves 50000 - 30000 - 2260
-    -- = 17740 of change, less than the 20000 of --dust-limit: the fee is all
-    -- the rest, 50000 - 30000 = 20000
-    it "gives the fee a change below the --dust-limit" $
+    -- A payment of 47400 from the coin of 50000 leaves 50000 - 47400 - 2260
+    -- = 340 of change, less than the 546 nodes relay: the fee is all the
+    -- rest, 50000 - 47400 = 2600
+    it "gives the fee a change below the dust limit" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0003", "--dust-limit", "20000", "--fee-rate", "10"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "47400sat", "--fee-rate", "10"] []
         paidToWallet prepared `shouldBe` Map.empty
-        feeOf prepared `shouldBe` 20000
+        feeOf prepared `shouldBe` 2600
 
     -- The coins of 50000 and 30000 are both at /0/0, and either pays 20000
     -- alone. Each payment is deleted, which frees its coin for the next.

@@ -207,8 +207,6 @@ data PrepareTx = PrepareTx
     -- | The fee rate: a number of satoshis per virtual byte or a level of the
     -- rates recent blocks paid, or none to ask the user from those rates
     feeRate :: !(Maybe FeeRateChoice),
-    -- | The dust limit asked for, in satoshis: zero for what nodes relay
-    dust :: !Natural,
     feePayer :: !FeePayer,
     -- | The confirmations a coin needs to be spent
     minConf :: !Natural,
@@ -240,8 +238,6 @@ data BumpFee = BumpFee
     account :: !(Maybe Text),
     -- | The fee rate of the replacement, as for preparetx
     feeRate :: !(Maybe FeeRateChoice),
-    -- | The dust limit asked for, in satoshis: zero for what nodes relay
-    dust :: !Natural,
     output :: !(Maybe FilePath),
     -- | Whether every question is answered yes (--yes)
     yes :: !Bool
@@ -257,8 +253,6 @@ data PrepareSendAll = PrepareSendAll
     -- | The fee rate: a number of satoshis per virtual byte or a level of the
     -- rates recent blocks paid, or none to ask the user from those rates
     feeRate :: !(Maybe FeeRateChoice),
-    -- | The dust limit asked for, in satoshis: zero for what nodes relay
-    dust :: !Natural,
     -- | The confirmations a coin needs to be sent
     minConf :: !Natural,
     output :: !(Maybe FilePath),
@@ -331,8 +325,6 @@ data PrepareSweep = PrepareSweep
     label :: !(Maybe Text),
     -- | The fee rate, as for preparetx
     feeRate :: !(Maybe FeeRateChoice),
-    -- | The dust limit asked for, in satoshis: zero for what nodes relay
-    dust :: !Natural,
     -- | Whether a fee rate above 100 satoshis per virtual byte is taken without
     -- asking (--yes)
     yes :: !Bool
@@ -1413,6 +1405,10 @@ goes back to it without a question. Setting change-back to true in the
 configuration file makes --change-back the default. --new-change then sends the
 change of one payment to a new change address.
 
+No output is smaller than what nodes relay for its kind: 546 satoshis for a
+legacy P2PKH output, 294 for a native SegWit P2WPKH one. A smaller payment is
+refused, and smaller change goes to the fee.
+
 The transaction gets the lock time of the best block the wallet knows, as
 most wallets give theirs: it cannot be mined into a block below it, and it
 looks like theirs. One time in ten, the lock time is up to 99 blocks
@@ -1430,7 +1426,6 @@ preparetx asks before it takes one. --yes answers both questions, for scripts.
                   <$> some paymentArg
                   <*> payingAccountOption
                   <*> underFee feeOption
-                  <*> dustOption
                   <*> underFee rcptPayOption
                   <*> underCoins minConfOption
                   <*> underCoins coinSelectionOption
@@ -1529,7 +1524,6 @@ scripts.
                   <$> some sendAllRecipientArg
                   <*> payingAccountOption
                   <*> underFee feeOption
-                  <*> dustOption
                   <*> underCoins minConfOption
                   <*> outputFileMaybeOption
                   <*> txLabelOption
@@ -1617,18 +1611,6 @@ prepareYesOption = yesOption "Answer yes to both questions: a fee rate above 100
 -- | Whether preparesweep takes a high fee rate without asking
 highFeeYesOption :: Args Bool
 highFeeYesOption = yesOption "Take a fee rate above 100 satoshis per virtual byte without asking"
-
--- | The dust limit asked for, zero without the option: the limit of an
--- output is then what nodes relay for its kind, and the option only
--- raises it ('Haskoin.Wallet.Tx.Size.outputDustLimit'). It has no short
--- name. Few payments change it, and -d is --dice.
-dustOption :: Args Natural
-dustOption =
-  option (maybeReader $ readNatural . cs) $
-    long "dust-limit"
-      <> metavar "SATOSHIS"
-      <> value 0
-      <> help "Raise the smallest output to this amount, in satoshis. Without it, the smallest output is what nodes relay for its kind: 546 for a legacy P2PKH output, 294 for a native SegWit P2WPKH one. A smaller payment is refused, and smaller change goes to the fee."
 
 rcptPayOption :: Args FeePayer
 rcptPayOption =
@@ -2088,7 +2070,6 @@ prepare it anyway, with a lock time of 0, as preparetx does.
                   <$> bumpedArg
                   <*> txAccountOption
                   <*> replacementFeeOption
-                  <*> dustOption
                   <*> outputFileMaybeOption
                   <*> yesOption "Answer yes to every question: a fee rate above 100 satoshis per virtual byte, a wallet behind the chain, adding coins, reducing what a lone recipient receives, and replacing the transactions that spend the change. Which of several recipients pays is still asked."
               )
@@ -2470,7 +2451,6 @@ typed. --yes takes it without asking, for scripts.
                   <*> outputFileMaybeOption
                   <*> txLabelOption
                   <*> underFee feeOption
-                  <*> dustOption
                   <*> underFee highFeeYesOption
               )
     }

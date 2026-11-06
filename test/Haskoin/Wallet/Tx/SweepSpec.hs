@@ -220,7 +220,7 @@ sweepBuilderSpec ctx =
       info.txInfoSummary.summaryFee `shouldBe` 7150
       (Map.null info.txInfoSummary.summaryMyInputs, Map.null info.txInfoSummary.summaryMyOutputs) `shouldBe` (True, True)
     it "refuses to sweep without coins" $
-      buildSweepSignData btc ctx seed (SweepCoins [] [] Map.empty []) destinations 10 546 800002
+      buildSweepSignData btc ctx seed (SweepCoins [] [] Map.empty []) destinations 10 800002
         `shouldBe` Left "There are no coins to sweep in those addresses"
     it "refuses to sweep without destinations" $
       build [] `shouldBe` Left "No addresses to sweep to"
@@ -233,7 +233,7 @@ sweepBuilderSpec ctx =
     -- lock time applies, and not replaceable.
     it "gives every input of Bitcoin Cash, which replaces no transaction, the highest sequence under which the lock time applies" $ do
       let cashCoin = storeCoin ctx (fakeTxHash 8, 0) (Just 800000) bchExternalAddr 50000
-      tsd <- expectRight $ buildSweepSignData bch ctx seed (SweepCoins [cashCoin] [] Map.empty []) [(bchExternalAddr, Remainder)] 10 546 800002
+      tsd <- expectRight $ buildSweepSignData bch ctx seed (SweepCoins [cashCoin] [] Map.empty []) [(bchExternalAddr, Remainder)] 10 800002
       ((.sequence) <$> tsd.txSignDataTx.inputs) `shouldBe` [0xfffffffe]
     it "builds a sweep to addresses outside the wallet, P2PKH and Taproot, which the signer accepts" $ do
       -- 10 bytes of overhead, the inputs (581), a P2PKH output (34), a
@@ -266,26 +266,26 @@ sweepBuilderSpec ctx =
       info <- expectRight $ parseTxSignData btc ctx Bip44 accountPub tsd
       (info.txInfoSummary.summarySize, info.txInfoSummary.summaryFee, info.txInfoSummary.summaryFeeByte, info.txInfoSummary.summaryChangeInFee) `shouldBe` (683, 7150, 10, Nothing)
     it "refuses a fee larger than the coins" $
-      buildWith 10000 546 destinations `shouldBe` Left "The coins, 1500000 satoshis, do not cover the fee, 7150000"
-    -- Each destination gets 746425: the dust limit right below, at and
-    -- right above that amount
-    it "accepts outputs above the dust value" $
-      buildWith 10 746424 destinations `shouldBe` build destinations
-    it "accepts outputs exactly at the dust value" $
-      buildWith 10 746425 destinations `shouldBe` build destinations
-    it "refuses outputs below the dust value" $
-      buildWith 10 746426 destinations `shouldBe` Left "What remains for each address without an amount, 746425 satoshis, is below the dust limit of 746426"
+      buildWith 10000 destinations `shouldBe` Left "The coins, 1500000 satoshis, do not cover the fee, 7150000"
+    -- The fee of 7150 leaves 1500000 - 7150 = 1492850 for the destinations,
+    -- two P2PKH outputs whose limit is 546
+    it "accepts a destination left exactly the dust limit" $ do
+      -- 1492850 - 1492304 = 546
+      tsd <- expectRight $ build [(otherAddr 0, Fixed 1492304), (externalAddr 1, Remainder)]
+      paidBy tsd `shouldBe` [(externalAddr 1, 546), (otherAddr 0, 1492304)]
+    it "refuses a destination left just below the dust limit" $
+      -- 1492850 - 1492305 = 545
+      build [(otherAddr 0, Fixed 1492305), (externalAddr 1, Remainder)]
+        `shouldBe` Left "What remains for each address without an amount, 545 satoshis, is below the dust limit of 546"
     it "refuses a fee rate of zero" $
-      buildWith 0 546 destinations `shouldBe` Left "The fee rate must be at least 1 satoshi per virtual byte"
+      buildWith 0 destinations `shouldBe` Left "The fee rate must be at least 1 satoshi per virtual byte"
     -- A rate of 2^64 wrapped around to zero, and others to any fee
     it "refuses a fee rate above 2^32 - 1 satoshis per virtual byte" $
-      buildWith 4294967296 546 destinations `shouldBe` Left "The fee rate must be at most 4294967295 satoshis per virtual byte"
+      buildWith 4294967296 destinations `shouldBe` Left "The fee rate must be at most 4294967295 satoshis per virtual byte"
     -- 715 virtual bytes at 4294967295 satoshis each, far more than the
     -- coins, and far less than 2^64
     it "counts the fee at the highest rate without wrapping around" $
-      buildWith 4294967295 546 destinations `shouldBe` Left "The coins, 1500000 satoshis, do not cover the fee, 3070901615925"
-    it "refuses a dust limit above the 21 million bitcoins there will ever be" $
-      buildWith 10 2100000000000001 destinations `shouldBe` Left "The dust limit must be at most the 21 million bitcoins there will ever be"
+      buildWith 4294967295 destinations `shouldBe` Left "The coins, 1500000 satoshis, do not cover the fee, 3070901615925"
     it "refuses to sign a sweep without fee" $ do
       -- The wallet's coin of 500000 is swept in full
       let tx = spendingTx ctx [(txHash walletFunding, 0)] [(otherAddr 0, 500000)]
@@ -333,16 +333,15 @@ sweepBuilderSpec ctx =
           walletAddrs = Map.fromList [(externalAddr 0, firstExternal), (externalAddr 1, secondExternal)],
           uncompressedAddrs = [sweptKeyUncompressedAddr]
         }
-    -- The sweep: 10 satoshis per virtual byte, dust at 546. The estimated
-    -- size is 10 bytes of overhead, the inputs (148 + 180 + 41 + 64 + 148 =
+    -- The sweep: 10 satoshis per virtual byte. The estimated size is 10 bytes of overhead, the inputs (148 + 180 + 41 + 64 + 148 =
     -- 581), two P2PKH outputs (68) and the witness data (2 + 1 + 1 + 108 +
     -- 108 + 1 = 221) in quarters, rounded up (56): 715 virtual bytes, so the
     -- fee is 7150 and each destination gets (1500000 - 7150) / 2 = 746425.
     destinations = [(otherAddr 0, Remainder), (externalAddr 1, Remainder)]
     -- The Taproot example address of BIP350
     taprootAddr = fromJust $ textToAddr btc "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0"
-    build = buildWith 10 546
-    buildWith feeByte dust to = buildSweepSignData btc ctx seed found to feeByte dust 800002
+    build = buildWith 10
+    buildWith feeByte to = buildSweepSignData btc ctx seed found to feeByte 800002
     spentBy :: TxSignData -> [OutPoint]
     spentBy tsd = (.outpoint) <$> tsd.txSignDataTx.inputs
     -- The outputs of the sweep by address, the smallest first, since the
@@ -504,7 +503,7 @@ sweepIntoWalletSpec ctx =
         -- wallet's second external address and to an outside address. The
         -- wallet holds no coin, so none is locked.
         found <- SweepCoins (coinsOf ctx keyFunding) [keyFunding] <$> walletPaths btc accId [externalAddr 1, otherAddr 0] <*> pure [sweptKeyUncompressedAddr]
-        tsd <- liftEither $ buildSweepSignData btc ctx (mkStdGen 0) found [(externalAddr 1, Remainder), (otherAddr 0, Remainder)] 10 546 800002
+        tsd <- liftEither $ buildSweepSignData btc ctx (mkStdGen 0) found [(externalAddr 1, Remainder), (otherAddr 0, Remainder)] 10 800002
         let pendingHash = nosigHash tsd.txSignDataTx
         importPendingTx btc ctx accId tsd `dbShouldBeE` pendingHash
         ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
