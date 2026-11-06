@@ -408,6 +408,10 @@ it to the online computer with exportacc and importacc. Then carry each
 transaction between them with preparetx --output, signtx --input and sendtx
 --input.
 
+`recover` and preparesweep --key-file take a mnemonic or private keys too, but
+they need the server, so they run on an online computer. Their help says how to
+keep the secret offline.
+
 On a terminal, a listing such as `txs` goes through less: scroll it, search
 it with /, and quit it with q. One that fits on the screen is shown as it
 is.
@@ -778,10 +782,16 @@ recoverCommand :: CommandSpec Command
 recoverCommand =
   CommandSpec
     { name = "recover",
-      offline = True,
+      offline = False,
       summary = "Find the accounts of a mnemonic that were paid",
       details =
         [r|
+`recover` needs the mnemonic and the server at the same time, so it runs on an
+online computer and not on an offline one. A computer that was tampered with
+can steal a mnemonic typed on it. To keep the mnemonic offline, create the
+accounts on the offline computer with createacc instead. Copy them with
+exportacc and importacc, and run `sync`.
+
 `recover` asks for the mnemonic, or for the shares of a backup, then searches
 the network for the accounts of its seed that were paid. It checks the accounts in order from index 0, and
 asks the server about the receiving addresses of each. Each account that was
@@ -809,10 +819,6 @@ may never have been paid.
 After every 20 accounts of a kind the server reports paid, `recover` asks
 whether to keep looking. A server that lies reports them without end. A no
 stops the search, and no account is added.
-
-`recover` needs the mnemonic and the server at the same time. To keep the
-mnemonic offline, create the accounts on the offline computer with createacc
-instead. Copy them with exportacc and importacc, and run `sync`.
 
 hw normalizes a passphrase as BIP39 asks, and older versions did not. When
 nothing is found, `recover` also tries the passphrase as typed. It says so if
@@ -2404,13 +2410,17 @@ them. The --address-file holds addresses separated by spaces or line breaks,
 as the --key-file holds keys. An old wallet may have more addresses than a
 command line takes.
 
+preparesweep needs the server, so it runs on an online computer and not on an
+offline one. With --key-file, the private keys are read on that computer too,
+and one that was tampered with can steal them. The keys are needed only to
+sign, with signsweep, so keep them on an offline computer if you can. Name the
+coins with --sweep-from, --address-file or --coin instead. Without the keys, hw
+counts every key as compressed, so the fee of a coin of an uncompressed key
+comes out a little low.
+
 A sweep takes the coins that have an address: legacy coins, native SegWit
 coins, and SegWit coins nested in a script address. A coin paid to a public
 key itself, as the first blocks hold them, has no address, and is not swept.
-
-The private keys are needed only to sign, with signsweep, so they can stay on
-another computer. Without them, hw counts every key as compressed, so the fee
-of a coin of an uncompressed key comes out a little low.
 
 Give each destination with --sweep-to, as ADDRESS or ADDRESS:AMOUNT, written as
 for preparetx. An address with an amount gets exactly that amount. The
@@ -2443,7 +2453,7 @@ typed. --yes takes it without asking, for scripts.
           <$> ( PrepareSweep
                   <$> accountOptionWith "The account the sweep pays. Needed only when the --sweep-to addresses are in several accounts."
                   <*> sweepNetworkOption
-                  <*> underCoinsSwept prvKeysMaybeOption
+                  <*> underCoinsSwept sweepKeysOption
                   <*> underCoinsSwept (many sweepFromOption)
                   <*> underCoinsSwept addressFileOption
                   <*> some sweepToOption -- some: at least one
@@ -2516,15 +2526,27 @@ none: give --network, or a default-network in the configuration file.
           <*> fileNetworkOption
     }
 
--- | The private keys: a file, or - for the terminal
+-- | The private keys of signsweep, which can run on an offline computer
 prvKeysMaybeOption :: Args (Maybe KeySource)
-prvKeysMaybeOption =
+prvKeysMaybeOption = keyFileOption keyFileHelp
+
+-- | The private keys of preparesweep. It needs the server, so they are
+-- read on an online computer, and it can do without them.
+sweepKeysOption :: Args (Maybe KeySource)
+sweepKeysOption = keyFileOption (keyFileHelp <> " This puts them on an online computer, so leave it out if you can.")
+
+keyFileHelp :: String
+keyFileHelp = "A file of private keys in WIF, minikey or hex format, separated by spaces or line breaks. Give - to type them on the terminal instead."
+
+-- | The private keys: a file, or - for the terminal
+keyFileOption :: String -> Args (Maybe KeySource)
+keyFileOption what =
   optional . option (eitherReader source) $
     short 'k'
       <> long "key-file"
       <> metavar "FILENAME"
       <> fileCompletion
-      <> help "A file of private keys in WIF, minikey or hex format, separated by spaces or line breaks. Give - to type them on the terminal instead."
+      <> help what
   where
     source "-" = Right KeysOnTerminal
     source file = Right (KeysInFile file)

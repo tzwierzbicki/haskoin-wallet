@@ -7,8 +7,8 @@
 -- or with NO_COLOR set, the document is printed plain.
 --
 -- A colour means one thing everywhere. Cyan is a command, and magenta is
--- a command that asks for a mnemonic or private keys. Green is an option,
--- an amount coming in, or a state as it should be. Red is an amount going
+-- a command to run on an offline computer. Green is an option, an amount
+-- coming in, or a state as it should be. Red is an amount going
 -- out, or something wrong. Yellow waits for something. Faint is secondary,
 -- such as the name of a field, and bold is a title, a name or the words of
 -- a mnemonic. The text itself keeps the colour of the terminal.
@@ -44,8 +44,8 @@ data Style
     Subheading
   | -- | A command of hw
     Command
-  | -- | A command that asks for a mnemonic or private keys, to run on an
-    -- offline computer if one can
+  | -- | A command that asks for a mnemonic or private keys and needs no
+    -- server, to run on an offline computer if one can
     OfflineCommand
   | -- | What the help says of such a command
     OfflineNote

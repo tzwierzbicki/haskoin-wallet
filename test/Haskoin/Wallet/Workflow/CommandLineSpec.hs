@@ -81,6 +81,56 @@ commandLineSpec ctx = do
         runOut run `shouldSatisfy` Text.isInfixOf "! Generate a new mnemonic"
         runOut run `shouldSatisfy` (not . Text.isInfixOf "! Send a signed transaction")
 
+    -- recover takes a mnemonic, and preparesweep private keys, but neither
+    -- can run on an offline computer. A mark would sit before the summary.
+    it "does not mark a command that needs the server, even one that takes a secret" $
+      withHome $ \home -> do
+        run <- hw home ["--help"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "  recover                   Find the accounts of a mnemonic that were paid\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "  preparesweep              Prepare a transaction that moves coins"
+
+    it "of the program names the commands that take a secret on an online computer" $
+      withHome $ \home -> do
+        run <- hw home ["--help"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "recover and preparesweep --key-file take a mnemonic or private keys too"
+
+    it "of recover does not say to run it on an offline computer" $
+      withHome $ \home -> do
+        run <- hw home ["recover", "--help"] []
+        runOut run `shouldSatisfy` (not . Text.isInfixOf "Run it on an offline computer")
+
+    it "of recover warns that the mnemonic is typed on an online computer" $
+      withHome $ \home -> do
+        run <- hw home ["recover", "--help"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "recover needs the mnemonic and the server at the same time, so it runs on an\nonline computer"
+
+    it "of recover says how to keep the mnemonic offline" $
+      withHome $ \home -> do
+        run <- hw home ["recover", "--help"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "To keep the mnemonic offline, create the accounts\non the offline computer with createacc instead."
+
+    it "of preparesweep warns that --key-file reads the keys on an online computer" $
+      withHome $ \home -> do
+        run <- hw home ["preparesweep", "--help"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "preparesweep needs the server, so it runs on an online computer"
+        runOut run `shouldSatisfy` Text.isInfixOf "With --key-file, the private keys are read on that computer too"
+
+    it "of preparesweep says how to keep the keys offline" $
+      withHome $ \home -> do
+        run <- hw home ["preparesweep", "--help"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "Name the coins\nwith --sweep-from, --address-file or --coin instead."
+
+    it "of the --key-file of preparesweep says to leave it out if one can" $
+      withHome $ \home -> do
+        run <- hw home ["preparesweep", "--help"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "on an online computer, so leave it out if you can."
+
+    -- signsweep can run on an offline computer, so the warning is not its
+    it "of the --key-file of signsweep says nothing of an online computer" $
+      withHome $ \home -> do
+        run <- hw home ["signsweep", "--help"] []
+        runOut run `shouldSatisfy` (not . Text.isInfixOf "online computer")
+
     it "has no colour codes when written to a pipe" $
       withHome $ \home -> do
         run <- hw home ["--help"] []

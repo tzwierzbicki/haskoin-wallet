@@ -1273,8 +1273,8 @@ stepsPrinter steps = Just $ vcat [vcat [styled Field (what <> ":"), indent 2 com
 hwLine :: String -> [Doc Style] -> Doc Style
 hwLine name args = hsep ("hw" : commandWord name : args)
 
--- | A command of hw, in the colour of its kind: the colour of the offline
--- commands for one that asks for a mnemonic or private keys
+-- | A command of hw, in the colour of its kind, as the list of commands
+-- shows it
 commandWord :: String -> Doc Style
 commandWord name = maybe (styled Command name) commandName (commandNamed program name)
 

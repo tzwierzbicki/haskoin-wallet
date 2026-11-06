@@ -265,8 +265,11 @@ optionGroup title args = args {rows = map under args.rows}
 -- | A command of the program: what its help says, and its options
 data CommandSpec a = CommandSpec
   { name :: String,
-    -- | Whether it asks for a mnemonic or private keys. The help marks
-    -- such a command with !, to run it on an offline computer.
+    -- | Whether to run it on an offline computer: it asks for a mnemonic
+    -- or private keys and needs no server. The help marks such a command
+    -- with !. A command that needs the server cannot run there, so it is
+    -- not marked even when it takes a secret. recover always takes one,
+    -- and preparesweep does with --key-file. Their details warn of it.
     offline :: Bool,
     -- | What it does, in a line: shown in the list of commands and at the
     -- top of its help

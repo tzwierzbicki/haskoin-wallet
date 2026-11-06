@@ -11,8 +11,8 @@
 -- Each thing the user may type has one look wherever it appears: a
 -- command, an option, a metavar. The help finds them in its own text too,
 -- so that a paragraph that names signtx shows it as the list of commands
--- does. A command that asks for a mnemonic or private keys has a colour of
--- its own. Printed plain, the list of commands marks it with ! instead.
+-- does. A command to run on an offline computer has a colour of its own.
+-- Printed plain, the list of commands marks it with ! instead.
 module Haskoin.Wallet.Cli.Parser.Help
   ( programHelp,
     commandHelp,
@@ -128,8 +128,8 @@ usageError parserHelp program command =
     plainText = String.renderString . layoutPretty (LayoutOptions Unbounded) . unAnnotate
     plainDoc = pretty . plainText
 
--- | The legend of the colour of the commands that ask for a mnemonic or
--- private keys, or of the ! that marks them when the help is plain
+-- | The legend of the colour of the commands to run on an offline
+-- computer, or of the ! that marks them when the help is plain
 offlineLegend :: Output -> [Doc Style]
 offlineLegend output = case output of
   Styled -> map pretty (words "The commands in") <> [annotate OfflineCommand (pretty offlineColourName)] <> rest

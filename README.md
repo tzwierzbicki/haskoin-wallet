@@ -187,6 +187,10 @@ The commands in magenta in the list ask for a mnemonic or private keys. Run them
 on an offline computer if you can. When the help is not shown on a terminal, or
 with `NO_COLOR` set, they are marked `!` instead.
 
+[`recover`](#hw-recover) and [`preparesweep --key-file`](#hw-preparesweep) take a
+mnemonic or private keys too. They need the server, so they run on an online
+computer and are not marked. Their sections say how to keep the secret offline.
+
 ### Options of every command
 
 These options work with every command, before or after it:
@@ -239,14 +243,16 @@ A second `hw` command on the same database waits three seconds, then stops with
 ## Commands
 
 The commands marked `!` ask for a mnemonic or private keys. Run them on an
-offline computer if you can.
+offline computer if you can. [`recover`](#hw-recover) and
+[`preparesweep --key-file`](#hw-preparesweep) take them too, but they need the
+server, so they are not marked.
 
 | Command | What it does |
 |---|---|
 | **[Mnemonics and accounts](#mnemonics-and-accounts)** | |
 | [`mnemonic`](#hw-mnemonic) `!` | Make a new mnemonic, or a backup in shares |
 | [`createacc`](#hw-createacc) `!` | Create an account from a mnemonic |
-| [`recover`](#hw-recover) `!` | Find the accounts of a mnemonic that were paid |
+| [`recover`](#hw-recover) | Find the accounts of a mnemonic that were paid |
 | [`checkmnemonic`](#hw-checkmnemonic) `!` | Test a mnemonic or a backup against an account |
 | [`exportacc`](#hw-exportacc) | Write the accounts and their labels to a file |
 | [`importacc`](#hw-importacc) | Add accounts and labels from a file, a descriptor or a key |
@@ -377,6 +383,16 @@ it cannot spend:
 
 It adds no such account. Move the funds with a wallet that holds such accounts,
 to an address of `hw`.
+
+> **Good to know**
+>
+> - **`recover` takes the mnemonic on an online computer.** It needs the server
+>   at the same time, so it cannot run on an offline one. A computer that was
+>   tampered with can steal a mnemonic typed on it. To keep the mnemonic
+>   offline, create the accounts on the offline computer with
+>   [`createacc`](#hw-createacc) instead. Copy them with
+>   [`exportacc`](#hw-exportacc) and [`importacc`](#hw-importacc), and run
+>   [`sync`](#hw-sync).
 
 #### `hw checkmnemonic`
 
@@ -909,13 +925,18 @@ A sweep that pays no address of this wallet needs `--network` and `--output`,
 and no account. It goes from file to file:
 
 ```console
-hw preparesweep --key-file keys.txt --sweep-to ADDRESS --network btc --fee-rate median --output sweep.psbt
+hw preparesweep --sweep-from OLDADDRESS --sweep-to ADDRESS --network btc --fee-rate median --output sweep.psbt
 hw signsweep --input sweep.psbt --key-file keys.txt --output signed.psbt
 hw sendtx --input signed.psbt
 ```
 
 > **Good to know**
 >
+> - **`--key-file` reads the private keys on an online computer.**
+>   `preparesweep` needs the server, so it cannot run on an offline one. A
+>   computer that was tampered with can steal the keys. They are needed only to
+>   sign, so keep them on an offline computer if you can. Name the coins with
+>   `--sweep-from`, `--address-file` or `--coin` instead.
 > - **Private keys and legacy addresses read the same on Bitcoin and Bitcoin
 >   Cash.** That is why a sweep that pays no account of the wallet needs
 >   `--network`, and the default network does not apply to it.
