@@ -40,8 +40,8 @@ replacesOf info = case txInfoStatus info of
 -- | The transactions of the history: each by its id, dead or not, with its
 -- confirmations
 historyOf :: Response -> Either String [(String, Bool, Natural)]
-historyOf (ResponseTxs _ infos) =
-  Right [(Text.unpack (txHashToHex (chainTxid status)), chainDead status, chainConfirmations status) | info <- infos, OnChain status <- [txInfoStatus info]]
+historyOf (ResponseTxs _ listed) =
+  Right [(Text.unpack (txHashToHex (chainTxid status)), chainDead status, chainConfirmations status) | ListedTx info _ <- listed, OnChain status <- [txInfoStatus info]]
 historyOf other = Left (show other)
 
 -- | The pending transactions of a listing
@@ -131,6 +131,18 @@ bumpFeeSpec ctx = do
         history <- hwJson home ["txs"] []
         (filter (\(tid, _, _) -> tid `elem` [stuck, replacement]) <$> historyOf history)
           `shouldSatisfy` either (const False) (\rows -> sort rows == sort [(stuck, True, 0), (replacement, False, 1)])
+
+    -- The stuck transaction stays first, at its place in the mempool. The
+    -- replacement left 25480 of the 50000 paid.
+    it "counts only its replacement in the balances of the history: the dead transaction shows none" $
+      withChain ctx (paidChain ctx) $ \home chain -> do
+        stuck <- sentPayment home
+        _ <- answer home ["sync"] []
+        nosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
+        _ <- signAndSend home nosig
+        modifyIORef chain mine
+        _ <- answer home ["sync"] []
+        (txBalancesOf <$> hwJson home ["txs"] []) `shouldReturn` Right [Nothing, Just 25480, Just 50000]
 
     it "leaves the pending transactions once its replacement is sent" $
       withChain ctx (paidChain ctx) $ \home _ -> do

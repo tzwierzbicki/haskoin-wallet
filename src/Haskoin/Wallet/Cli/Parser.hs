@@ -1388,15 +1388,17 @@ The list is as of the last sync. Unconfirmed transactions come first, then
 the newest. The transactions you prepared, and those you sent that `sync` has
 not seen yet, are in pendingtxs.
 
-Each transaction takes three lines. The first gives its time, its type, its
+Each transaction takes four lines. The first gives its time, its type, its
 amount and its status. The time is in the time zone of the computer. The type
 is Outgoing, Incoming, or Internal for a transaction between addresses of the
 account. The amount includes the fee. The status gives the confirmations. An
 unconfirmed transaction shows its fee rate instead, which tells how soon a
-block may take it. A dead one was replaced, or dropped from the network. A
-transaction with a label shows it next, on a line of its own: see `label`. The
-second line gives the address paid, the largest when there are several. The
-third gives the txid.
+block may take it. A dead one was replaced, or dropped from the network. The
+second line gives the balance of the account after the transaction. The newest
+one shows what the account holds, confirmed or not. A dead transaction shows no
+balance, and does not count. A transaction with a label shows it next, on a
+line of its own: see `label`. The third line gives the address paid, the
+largest when there are several. The fourth gives the txid.
 |],
       args =
         CommandTxs
@@ -1749,11 +1751,11 @@ A pending transaction is one that preparetx, preparesendall, bumpfee or
 preparesweep made, or that importtx added. It is unsigned, signed, or sent.
 `sync` retires it once the network lists it. The newest come first.
 
-Each takes three lines, as in `txs`. The first gives the time it was created,
-its type, its amount and its status: not signed, signed and not sent, or sent,
-with its fee rate. A transaction with a label shows it next, on a line of its
-own. The second gives the address paid, after the account when every account
-is listed. A replacement that bumpfee made then names the transactions it
+Each takes three lines. The first gives the time it was created, its type, its
+amount and its status: not signed, signed and not sent, or sent, with its fee
+rate. A transaction with a label shows it next, on a line of its own. The
+second gives the address paid, after the account when every account is listed.
+A replacement that bumpfee made then names the transactions it
 replaces. The last line gives the hash of the transaction. It is the nosigHash
 of an unsigned transaction, and the txid of a signed one. The other commands
 name a pending transaction by that hash. The nosigHash of a signed one works

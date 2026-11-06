@@ -116,6 +116,14 @@ indexesSpec =
             \order by block_ref, txid limit 100"
         liftIO $ plan `shouldBe` ["SEARCH d_b_tx_info USING INDEX d_b_tx_info_account_block_ref (account=? AND block_ref>?)"]
 
+    it "add up the amounts down to a given transaction from the index alone, without reading the rows" $
+      inMemory $ do
+        globalMigration
+        plan <-
+          queryPlan
+            "select sum(amount) from d_b_tx_info where account = 1 and dead = 0 and block_ref <= x'0001' and (block_ref < x'0001' or txid <= x'ff')"
+        liftIO $ plan `shouldBe` ["SEARCH d_b_tx_info USING COVERING INDEX d_b_tx_info_account_block_ref (account=? AND block_ref<?)"]
+
 -- | The steps SQLite takes to answer a query
 queryPlan :: Text -> DB IO [Text]
 queryPlan query = do

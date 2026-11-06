@@ -12,19 +12,20 @@
 --
 -- The other columns change with it. A summary says whether its transaction
 -- is dead, where version 3 deleted the summary: every summary it kept is
--- alive. The locked column of the coins and the free column of the
--- addresses go: the pending transactions tell which coins they lock and
--- which change addresses they hold. The confirmed columns of the summaries
--- and the coins, which nothing read, go as well, and so does the copy of
--- the whole coin that a coin row kept: its columns and its address, which
--- gives its script, are the coin. A pending transaction keeps whether the
--- last sync found it in conflict, out of conflict until the next sync asks
--- the store. The labels of the transactions, which version 3 did not have,
--- get a table of their own, empty. The keys are made for large wallets: an
--- address is keyed by its chain and index instead of the text of its path,
--- and the transaction ids, outpoints, nosigHashes and raw transaction
--- hashes are the bytes of their hexadecimal text; indexes persistent cannot
--- declare complete the tables.
+-- alive. A summary keeps its amount in a column, which the step reads from
+-- its blob: every blob has it, since hw 0.9. The locked column of the coins
+-- and the free column of the addresses go: the pending transactions tell
+-- which coins they lock and which change addresses they hold. The confirmed
+-- columns of the summaries and the coins, which nothing read, go as well,
+-- and so does the copy of the whole coin that a coin row kept: its columns
+-- and its address, which gives its script, are the coin. A pending
+-- transaction keeps whether the last sync found it in conflict, out of
+-- conflict until the next sync asks the store. The labels of the
+-- transactions, which version 3 did not have, get a table of their own,
+-- empty. The keys are made for large wallets: an address is keyed by its
+-- chain and index instead of the text of its path, and the transaction ids,
+-- outpoints, nosigHashes and raw transaction hashes are the bytes of their
+-- hexadecimal text; indexes persistent cannot declare complete the tables.
 --
 -- The step reads the accounts with the tables of "Haskoin.Wallet.Schema.V3"
 -- and works on those of "Haskoin.Wallet.Schema.V4": the old tables are set
@@ -87,11 +88,12 @@ rebuiltTables = ["d_b_account", "d_b_address", "d_b_tx_info", "d_b_coin", "d_b_p
 -- | The rows of the old tables under the new ids and keys. The rows of an
 -- account find its id through its key, unique in the old table and in the
 -- new one; the hashes and outpoints, stored as hexadecimal text, become
--- their bytes. The columns version 4 drops are left behind, and the new
--- ones take their defaults: no summary is dead or has a time, which the
--- next sync fetches, no pending transaction is in conflict, and the user
--- has locked no coin. The locked column of version 3 said which coins the
--- pending transactions held, which version 4 reads from them.
+-- their bytes. The amount of a summary comes out of its blob. The columns
+-- version 4 drops are left behind, and the other new ones take their
+-- defaults: no summary is dead or has a time, which the next sync fetches,
+-- no pending transaction is in conflict, and the user has locked no coin.
+-- The locked column of version 3 said which coins the pending transactions
+-- held, which version 4 reads from them.
 copies :: [Text]
 copies =
   [ "insert into d_b_address \
@@ -100,8 +102,8 @@ copies =
     \select n.id, o.internal, o.\"index\", o.address, o.label, o.balance_confirmed, o.balance_unconfirmed, \
     \o.balance_coins, o.balance_txs, o.balance_received, o.created \
     \from old_d_b_address o " <> throughAccount,
-    "insert into d_b_tx_info (account, txid, block_ref, blob, created) \
-    \select n.id, unhex(o.txid), o.block_ref, o.blob, o.created \
+    "insert into d_b_tx_info (account, txid, block_ref, amount, blob, created) \
+    \select n.id, unhex(o.txid), o.block_ref, json_extract(cast(o.blob as text), '$.amount'), o.blob, o.created \
     \from old_d_b_tx_info o " <> throughAccount,
     "insert into d_b_coin (account, outpoint, address, value, block_ref, created) \
     \select n.id, unhex(o.outpoint), o.address, o.value, o.block_ref, o.created \

@@ -274,7 +274,7 @@ arbitraryResponse net ctx =
         <*> resize 20 (listOf $ (,) <$> arbitraryDBAccount net ctx <*> arbitraryTxInfo net),
       ResponseTxs
         <$> arbitraryDBAccount net ctx
-        <*> resize 20 (listOf $ arbitraryTxInfo net),
+        <*> resize 20 (listOf $ ListedTx <$> arbitraryTxInfo net <*> arbitraryMaybe arbitrary),
       ResponseTx <$> arbitraryDBAccount net ctx <*> arbitraryTxInfo net,
       ResponseLabelledTxs <$> resize 3 (listOf $ (,) <$> arbitraryDBAccount net ctx <*> arbitraryTxInfo net),
       ResponsePrepared

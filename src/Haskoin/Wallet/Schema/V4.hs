@@ -35,7 +35,9 @@
 -- dropped from the network, where version 3 deleted it, and the time the
 -- store gives its transaction: when the store first saw it, in its mempool
 -- or in a block. A summary of version 3 has no time until the next sync
--- fetches its transaction again. A coin keeps its
+-- fetches its transaction again. A summary also keeps its amount in a
+-- column, beside the blob that holds it, so that txs can add up the amounts
+-- without reading the blobs. A coin keeps its
 -- address, which gives its script, and no longer the whole coin as the
 -- store reported it. Whether a coin is locked and whether a change address
 -- is free are read from the pending transactions, which the locked column
@@ -54,8 +56,8 @@
 -- from its network and index. Transaction ids, outpoints and nosigHashes
 -- are the bytes of the hash, not its hexadecimal text: half the size in
 -- every key and index. The 'tableIndexes' below are the ones persistent cannot
--- declare: a covering index that serves the ordering of txs and the scan
--- of the sync without touching the rows; the summaries without their time,
+-- declare: a covering index that serves the ordering of txs, the sums of
+-- its balances and the scan of the sync without touching the rows; the summaries without their time,
 -- which only a database of version 3 had; the account of every coin and
 -- pending transaction, which their keys do not give; the coins of an
 -- address of an account with their values, which the sync refreshes and
@@ -64,6 +66,7 @@
 module Haskoin.Wallet.Schema.V4 where
 
 import Data.ByteString (ByteString)
+import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Time (UTCTime)
 import Data.Word (Word64)
@@ -119,6 +122,7 @@ DBTxInfo
   txid KeyBytes
   blockRef ByteString
   time UTCTime Maybe
+  amount Int64
   blob ByteString
   dead Bool default=0
   created UTCTime default=CURRENT_TIMESTAMP
@@ -179,7 +183,7 @@ DBBest
 -- loses its indexes and must create them again.
 tableIndexes :: [Text]
 tableIndexes =
-  [ "create index d_b_tx_info_account_block_ref on d_b_tx_info (account, block_ref, txid, dead)",
+  [ "create index d_b_tx_info_account_block_ref on d_b_tx_info (account, block_ref, txid, dead, amount)",
     "create index d_b_tx_info_untimed on d_b_tx_info (account) where time is null",
     "create index d_b_coin_account on d_b_coin (account)",
     "create index d_b_coin_account_address on d_b_coin (account, address, value)",

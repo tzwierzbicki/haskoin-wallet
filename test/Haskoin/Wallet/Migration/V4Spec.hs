@@ -12,6 +12,7 @@ module Haskoin.Wallet.Migration.V4Spec (spec) where
 import Control.Exception (SomeException, try)
 import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
+import Data.ByteString (ByteString)
 import Data.List (isInfixOf)
 import qualified Data.Serialize as S
 import Data.Text (Text)
@@ -158,7 +159,7 @@ spec = prepareContext $ \ctx ->
         columnNames "d_b_address"
           `dbShouldBe` [ "account", "address", "balance_coins", "balance_confirmed", "balance_received", "balance_txs",
                          "balance_unconfirmed", "created", "index", "internal", "label" ]
-        columnNames "d_b_tx_info" `dbShouldBe` ["account", "blob", "block_ref", "created", "dead", "time", "txid"]
+        columnNames "d_b_tx_info" `dbShouldBe` ["account", "amount", "blob", "block_ref", "created", "dead", "time", "txid"]
         columnNames "d_b_coin" `dbShouldBe` ["account", "address", "block_ref", "created", "locked_by_user", "outpoint", "value"]
         columnNames "d_b_pending_tx" `dbShouldBe` ["account", "blob", "conflicted", "created", "nosig_hash", "online"]
         columnNames "d_b_best" `dbShouldBe` ["best_block", "best_height", "best_time", "network"]
@@ -177,6 +178,15 @@ spec = prepareContext $ \ctx ->
         queryRows "select dead from d_b_tx_info" `dbShouldBe` [[PersistInt64 0]]
 
     -- Version 3 kept no time: the next sync fetches the transactions again
+    it "reads the amount of each summary from its blob, what it spends below zero" $
+      inMemory $ do
+        version3Database
+        P.insert_ $
+          V3.DBTxInfo (V3.DBWalletKey "892eb8e4") "/44'/0'/0'" (txHashToHex (fakeTxHash 3)) (S.encode (Store.BlockRef 800001 1)) True spendingBlob fixtureTime
+        commitFixture
+        migrateTo4 ctx
+        queryRows "select amount from d_b_tx_info" `dbShouldBe` [[PersistInt64 (-41000)], [PersistInt64 50000]]
+
     it "gives the summaries no time" $
       inMemory $ do
         version3Database
@@ -265,7 +275,7 @@ version3Database = do
   P.insert_ $ address btcWallet "/44'/0'/0'" 0 "/1/0" "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn" "" 0 True True
   P.insert_ $ address bchWallet "/44'/145'/0'" 0 "/0/0" bchExternalAddrText "" 0 False False
   P.insert_ $
-    V3.DBTxInfo btcWallet "/44'/0'/0'" (txHashToHex (fakeTxHash 1)) (S.encode (Store.BlockRef 800000 3)) True "{\"type\": \"credit\"}" fixtureTime
+    V3.DBTxInfo btcWallet "/44'/0'/0'" (txHashToHex (fakeTxHash 1)) (S.encode (Store.BlockRef 800000 3)) True "{\"type\": \"credit\", \"amount\": 50000}" fixtureTime
   P.insert_ $
     V3.DBCoin btcWallet "/44'/0'/0'" (encodeHex (S.encode (OutPoint (fakeTxHash 1) 0))) "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" 50000 (S.encode (Store.BlockRef 800000 3)) "coin" True True fixtureTime
   P.insert_ $ V3.DBRawTx (txHashToHex (fakeTxHash 1)) "raw"
@@ -279,6 +289,18 @@ version3Database = do
       V3.DBAccount name wallet index net deriv ext int xpub confirmed 0 coins created
     address wallet accDeriv index path addr label received internal free =
       V3.DBAddress index wallet accDeriv path addr label received 0 (if received > 0 then 1 else 0) (if received > 0 then 1 else 0) received internal free fixtureTime
+
+-- | The summary of a payment as hw writes it: 40000 to an outside address,
+-- 9000 of change and 1000 of fee, out of a coin of 50000. Other keys hold
+-- amounts of their own, and only the one at the top is the summary's:
+-- 9000 - 50000 = -41000.
+spendingBlob :: ByteString
+spendingBlob =
+  "{\"type\":\"debit\",\"amount\":-41000,\
+  \\"myoutputs\":{\"17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn\":{\"value\":9000,\"path\":\"/1/0\",\"label\":\"\"}},\
+  \\"otheroutputs\":{\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\":40000},\"nonstdoutputs\":[],\
+  \\"myinputs\":{\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\":{\"value\":50000,\"path\":\"/0/0\",\"label\":\"\",\"outpoints\":[]}},\
+  \\"otherinputs\":{},\"nonstdinputs\":[],\"size\":226,\"locktime\":0,\"fee\":1000,\"feebyte\":4,\"changeinfee\":null}"
 
 -- | Every table of version 3
 version3Tables :: [Text]
@@ -294,7 +316,7 @@ anotherSeed = do
   P.insert_ $ V3.DBAccount "other" otherWallet 0 "btc" "/44'/0'/0'" 1 0 testAccountXPub2 10000 0 1 otherTime
   P.insert_ $ V3.DBAddress 0 otherWallet "/44'/0'/0'" "/0/0" externalAddr2Text "" 10000 0 1 1 10000 False False otherTime
   P.insert_ $
-    V3.DBTxInfo otherWallet "/44'/0'/0'" (txHashToHex (fakeTxHash 2)) (S.encode (Store.BlockRef 800001 1)) True "{\"type\": \"credit\"}" otherTime
+    V3.DBTxInfo otherWallet "/44'/0'/0'" (txHashToHex (fakeTxHash 2)) (S.encode (Store.BlockRef 800001 1)) True "{\"type\": \"credit\", \"amount\": 10000}" otherTime
   P.insert_ $
     V3.DBCoin otherWallet "/44'/0'/0'" (encodeHex (S.encode (OutPoint (fakeTxHash 2) 0))) externalAddr2Text 10000 (S.encode (Store.BlockRef 800001 1)) "coin" True False otherTime
   commitFixture

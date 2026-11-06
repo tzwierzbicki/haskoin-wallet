@@ -691,7 +691,7 @@ Lists the coins of an account. Each takes three lines:
 3. The coin as `TXID:INDEX`.
 
 A coin paid by a transaction you labelled shows the label on a line of its own,
-below the first, as `txs` does. The change of a payment you made shows no label.
+below the first. The change of a payment you made shows no label.
 The label says what the payment was for, not what its change is.
 
 ```console
@@ -854,19 +854,22 @@ what the recipients receive, asking which of them pays.
 
 #### `hw txs`
 
-Lists the transactions of an account, as of the last sync. Each takes three
+Lists the transactions of an account, as of the last sync. Each takes four
 lines:
 
 1. Its time, in the time zone of the computer, its type, its amount and its
    status.
-2. The address paid.
-3. The txid.
+2. The balance of the account after the transaction.
+3. The address paid.
+4. The txid.
 
 An unconfirmed transaction shows its fee rate. A transaction with a label shows
-it on a line of its own, below the first.
+it on a line of its own, below the balance. The balance of the newest
+transaction is what the account holds, confirmed or not. A dead transaction,
+replaced or dropped from the network, shows no balance and does not count.
 
 `--verbose` shows the label as a field, every address with its amount, path and
-label, and the fee. A change address the transaction spends from or pays says
+label, the fee and the balance. A change address the transaction spends from or pays says
 `change address` in place of a label. An address the transaction spends from
 ends with the labels of the coins spent, as `coins` shows them, after the word
 `from`.
@@ -880,7 +883,7 @@ hw txs --max 20 --after TXID
 #### `hw pendingtxs`
 
 Lists the pending transactions: prepared, signed, or sent and not yet seen by
-`sync`. They take three lines each, as in `txs`. Each is shown by its nosigHash
+`sync`. They take three lines each. Each is shown by its nosigHash
 until it is signed, then by its txid. A conflicted one can no longer be sent.
 
 ```console

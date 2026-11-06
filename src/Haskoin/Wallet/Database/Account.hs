@@ -328,6 +328,12 @@ renameAccount oldName newName
       when (renamed == 0) $ throwError $ "The account " <> cs oldName <> " does not exist"
       snd <$> getAccountByName (Just newName)
 
+-- | What the account holds, confirmed or not: the balance after its
+-- newest transaction. A spend lowers the side of the balance its coin was
+-- on, so the two add up to the coins that are left.
+accountTotal :: DBAccount -> Integer
+accountTotal acc = toInteger (dBAccountBalanceConfirmed acc) + toInteger (dBAccountBalanceUnconfirmed acc)
+
 -- | Add up the balances of the addresses of an account into the account
 updateAccountBalances :: (MonadUnliftIO m) => DBAccountId -> DB m DBAccount
 updateAccountBalances accId = do

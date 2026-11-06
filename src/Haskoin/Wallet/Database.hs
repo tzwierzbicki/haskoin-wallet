@@ -28,7 +28,9 @@
 -- listings stay fast, when one place writes everything it depends on: the
 -- confirmed and unconfirmed totals of an account are the sums of its
 -- address balances, which the sync writes, right before it writes the
--- totals. The spendable balances depend on writes in many places, the
+-- totals. The amount of a summary is a column as well as a part of its
+-- blob, written with it, so that txs can add up amounts for its balances
+-- without decoding the blobs. The spendable balances depend on writes in many places, the
 -- pending transactions of every account of a network and the best block
 -- among them, and are computed: from the few columns they need, and for
 -- the addresses shown only.

@@ -615,20 +615,22 @@ cmdTxs :: Config -> Maybe Text -> Paging TxHash -> IO Response
 cmdTxs cfg account paging = readListing cfg (txsListing account paging)
 
 -- | The transactions of the account on the chain, in the order txs lists
--- them. A transaction names the one to go on after, with its block.
+-- them, each with the balance after it. A transaction names the one to go
+-- on after, with its block and the balance so far, so that a chunk adds up
+-- nothing. Only --after adds up the transactions above it.
 txsListing :: Maybe Text -> Paging TxHash -> ExceptT String (DB IO) Listing
 txsListing account paging = do
   (accId, acc) <- getAccountByName account
-  start <- forM paging.pagingAfter $ \tid -> (,tid) <$> txBlock accId tid
+  start <- forM paging.pagingAfter (txsCursorAt accId acc)
   return
     Listing
       { listingStart = start,
         listingMax = paging.pagingMax,
-        listingRows = txsAfter accId,
-        listingCursor = \info -> case txInfoStatus info of
-          OnChain status -> Right (chainBlock status, chainTxid status)
+        listingRows = listedTxsAfter accId,
+        listingCursor = \(listed, before) -> case txInfoStatus (listedTxInfo listed) of
+          OnChain chain -> Right (TxsCursor (chainBlock chain) (chainTxid chain) before)
           Pending _ -> Left "txs lists transactions of the chain only",
-        listingAnswer = ResponseTxs acc
+        listingAnswer = ResponseTxs acc . map fst
       }
 
 cmdPendingTxs :: Ctx -> Config -> Maybe Text -> Paging TxHash -> IO Response
@@ -648,7 +650,7 @@ pendingTxsListing ctx account paging = do
         listingMax = paging.pagingMax,
         listingRows = pendingAfter ctx accIdM,
         listingCursor = \(_, info) -> case txInfoStatus info of
-          Pending status | Just created <- pendingCreated status -> Right (created, pendingNosigHash status)
+          Pending pending | Just created <- pendingCreated pending -> Right (created, pendingNosigHash pending)
           _ -> Left "pendingtxs lists the transactions the wallet holds only",
         listingAnswer = ResponsePendingTxs (snd <$> asked)
       }
@@ -1284,7 +1286,7 @@ agreedFunding net unit labels feeByte yes built =
       fromRecipients <- maybe (offerReductions [(way, tsd) | (RecipientsReduced way, tsd) <- built]) (return . Just) fromCoins
       liftMaybe "The transaction was not replaced" fromRecipients
   where
-    agreedTo question = if yes then return True else askYes terminal question
+    agreedTo asked = if yes then return True else askYes terminal asked
     offerCoins [] = return Nothing
     offerCoins ((added, tsd) : _) = do
       liftIO $ renderOn stderr (addedCoinsDoc net unit labels feeByte added)

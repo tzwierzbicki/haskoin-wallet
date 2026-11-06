@@ -11,6 +11,7 @@
 module Haskoin.Wallet.Database.TxInfoSpec (spec) where
 
 import Conduit (liftIO)
+import Control.Monad (void)
 import Control.Monad.Except (ExceptT)
 import Control.Monad.Trans (lift)
 import Data.Aeson (Object, Value (Null, Object), eitherDecode, encode)
@@ -24,9 +25,11 @@ import Data.Maybe (fromMaybe)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
+import Data.Word (Word64)
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.Database.Account (getAccountById)
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.BestBlock
 import Haskoin.Wallet.Config
@@ -47,6 +50,7 @@ spec = prepareContext $ \ctx -> do
   jsonSpec
   storingSpec ctx
   listingSpec ctx
+  balanceSpec ctx
   historySpec ctx
   -- A transaction, its summary and the parts of the summary read back as
   -- they were written
@@ -121,6 +125,16 @@ listedLabels accId = do
       | info <- infos,
         let summary = txInfoSummary info
     ]
+
+-- | The balance after each listed transaction
+listedBalances :: DBAccountId -> Maybe TxsCursor -> ExceptT String (DB IO) [Maybe Integer]
+listedBalances accId afterM = map (listedTxBalance . fst) <$> listedTxsAfter accId afterM Nothing
+
+-- | Give the account these confirmed and unconfirmed balances, as a sync
+-- does
+holding :: DBAccountId -> Word64 -> Word64 -> ExceptT String (DB IO) ()
+holding accId confirmed unconfirmed =
+  lift $ P.update accId [DBAccountBalanceConfirmed P.=. confirmed, DBAccountBalanceUnconfirmed P.=. unconfirmed]
 
 -- | Two transaction ids as hw shows them, which start with ab and with cd
 idAb, idCd :: TxHash
@@ -550,7 +564,7 @@ listingSpec ctx =
     it "refuses a stored summary that does not decode, naming the transaction" $
       inDatabaseE $ do
         accId <- account ctx
-        lift $ P.insert_ $ DBTxInfo accId (hashBytes (fakeTxHash 9)) (S.encode (Store.BlockRef 800000 1)) (Just seenTime) "nonsense" False fixtureTime
+        lift $ P.insert_ $ DBTxInfo accId (hashBytes (fakeTxHash 9)) (S.encode (Store.BlockRef 800000 1)) (Just seenTime) 0 "nonsense" False fixtureTime
         lift $
           dbShouldFailWith "The stored summary of transaction 0000000000000000000000000000000000000000000000000000000000000009 does not decode" $
             txsAfter accId Nothing Nothing
@@ -647,6 +661,120 @@ listingSpec ctx =
         _ <- lift $ repsertSummary btc otherId (fakeTxHash 8) (Store.BlockRef 800000 2) seenTime (storeSummary btc otherPaths otherPayment)
         listedIds accId Nothing Nothing `dbShouldBeE` [fakeTxHash 1]
         listedIds otherId Nothing Nothing `dbShouldBeE` [fakeTxHash 8]
+
+balanceSpec :: Ctx -> Spec
+balanceSpec ctx =
+  describe "The balances of txs" $ do
+    -- The payment and its spending: 50000 - 41000 = 9000 left
+    let paidAndSpent = do
+          accId <- account ctx
+          _ <- record accId (payment ctx)
+          _ <- record accId (spend ctx)
+          holding accId 9000 0
+          return accId
+        -- A payment of 70000, one block above the spending
+        laterPayment = creditTx ctx (fakeTxHash 3) (Store.BlockRef 800002 1) (externalAddr 0) 70000
+        -- A payment of 70000 listed between the payment and its spending
+        paymentBetween = creditTx ctx (fakeTxHash 3) (Store.BlockRef 800000 5) (externalAddr 0) 70000
+
+    it "gives the newest transaction what the account holds, confirmed or not" $
+      inDatabaseE $ do
+        accId <- paidAndSpent
+        holding accId 6000 3000
+        -- 6000 + 3000 = 9000
+        (take 1 <$> listedBalances accId Nothing) `dbShouldBeE` [Just 9000]
+
+    it "gives each older transaction the balance without the one above it" $
+      inDatabaseE $ do
+        accId <- paidAndSpent
+        -- The spending took 41000: 9000 + 41000 = 50000
+        listedBalances accId Nothing `dbShouldBeE` [Just 9000, Just 50000]
+
+    it "gives a dead transaction no balance, and takes nothing off for it" $
+      inDatabaseE $ do
+        accId <- paidAndSpent
+        _ <- record accId paymentBetween
+        lift $ markTxInfoDead accId (fakeTxHash 3)
+        listedBalances accId Nothing `dbShouldBeE` [Just 9000, Nothing, Just 50000]
+
+    it "hands each transaction on with the balance before it, a dead one included" $
+      inDatabaseE $ do
+        accId <- paidAndSpent
+        _ <- record accId paymentBetween
+        lift $ markTxInfoDead accId (fakeTxHash 3)
+        (map snd <$> listedTxsAfter accId Nothing Nothing) `dbShouldBeE` [50000, 50000, 0]
+
+    it "goes on from the balance the cursor carries, for the next chunk" $
+      inDatabaseE $ do
+        accId <- paidAndSpent
+        listedBalances accId (Just (TxsCursor (Store.BlockRef 800001 1) (fakeTxHash 2) 12345)) `dbShouldBeE` [Just 12345]
+
+    it "starts after a transaction with the balance before it, for --after" $
+      inDatabaseE $ do
+        accId <- paidAndSpent
+        acc <- getAccountById accId
+        -- 9000 + 41000 = 50000
+        txsCursorAt accId acc (fakeTxHash 2) `dbShouldBeE` TxsCursor (Store.BlockRef 800001 1) (fakeTxHash 2) 50000
+
+    it "takes off the transactions above the one --after names" $
+      inDatabaseE $ do
+        accId <- paidAndSpent
+        _ <- record accId laterPayment
+        holding accId 79000 0
+        acc <- getAccountById accId
+        -- 79000 - 70000 + 41000 = 50000
+        txsCursorAt accId acc (fakeTxHash 2) `dbShouldBeE` TxsCursor (Store.BlockRef 800001 1) (fakeTxHash 2) 50000
+
+    it "takes off no dead transaction for --after" $
+      inDatabaseE $ do
+        accId <- paidAndSpent
+        _ <- record accId laterPayment
+        lift $ markTxInfoDead accId (fakeTxHash 3)
+        acc <- getAccountById accId
+        -- 9000 + 41000 = 50000, the dead 70000 left out
+        txsCursorAt accId acc (fakeTxHash 2) `dbShouldBeE` TxsCursor (Store.BlockRef 800001 1) (fakeTxHash 2) 50000
+
+    it "takes off the transaction --after names even when it is dead: nothing" $
+      inDatabaseE $ do
+        accId <- paidAndSpent
+        _ <- record accId laterPayment
+        lift $ markTxInfoDead accId (fakeTxHash 3)
+        acc <- getAccountById accId
+        txsCursorAt accId acc (fakeTxHash 3) `dbShouldBeE` TxsCursor (Store.BlockRef 800002 1) (fakeTxHash 3) 9000
+
+    -- Two transactions of one block go by their ids: ab before cd
+    it "takes off the transactions of one block as far as the one --after names, in the order of their ids" $
+      inDatabaseE $ do
+        accId <- account ctx
+        lift $ do
+          _ <- repsertSummary btc accId idAb (Store.MemRef 1700000000) seenTime paymentSummary
+          void $ repsertSummary btc accId idCd (Store.MemRef 1700000000) seenTime spendSummary
+        holding accId 9000 0
+        acc <- getAccountById accId
+        -- 9000 - 50000 = -41000: listed in this order, the balance dips
+        txsCursorAt accId acc idAb `dbShouldBeE` TxsCursor (Store.MemRef 1700000000) idAb (-41000)
+        -- -41000 + 41000 = 0
+        txsCursorAt accId acc idCd `dbShouldBeE` TxsCursor (Store.MemRef 1700000000) idCd 0
+
+    it "leaves the transactions of other accounts out of what --after adds up" $
+      inDatabaseE $ do
+        accId <- paidAndSpent
+        (otherId, _) <- testNewAcc2 ctx "other"
+        _ <- lift $ repsertSummary btc otherId (fakeTxHash 8) (Store.BlockRef 800002 1) seenTime paymentSummary
+        acc <- getAccountById accId
+        txsCursorAt accId acc (fakeTxHash 2) `dbShouldBeE` TxsCursor (Store.BlockRef 800001 1) (fakeTxHash 2) 50000
+
+    it "stores what a transaction adds or takes in its row, for --after to add up" $
+      inDatabaseE $ do
+        accId <- paidAndSpent
+        (fmap dBTxInfoAmount <$> lift (storedRow accId (fakeTxHash 1))) `dbShouldBeE` Just 50000
+        (fmap dBTxInfoAmount <$> lift (storedRow accId (fakeTxHash 2))) `dbShouldBeE` Just (-41000)
+
+    it "stores the new amount when the sync rebuilds a summary" $
+      inDatabaseE $ do
+        accId <- paidAndSpent
+        _ <- lift $ repsertSummary btc accId (fakeTxHash 2) (Store.BlockRef 800001 1) seenTime paymentSummary
+        (fmap dBTxInfoAmount <$> lift (storedRow accId (fakeTxHash 2))) `dbShouldBeE` Just 50000
 
 historySpec :: Ctx -> Spec
 historySpec ctx =

@@ -58,6 +58,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     txOf,
     txsOf,
     txRow,
+    txBalancesOf,
     txidOf,
     feeOf,
     pendingState,
@@ -370,11 +371,16 @@ txOf other = fail $ "Not a transaction: " <> show other
 -- | The transactions of an answer: type, amount, and confirmations once on
 -- the chain
 txsOf :: Response -> Either String [(TxType, Integer, Maybe Natural)]
-txsOf (ResponseTxs _ infos) = Right (txRow <$> infos)
+txsOf (ResponseTxs _ listed) = Right (txRow . listedTxInfo <$> listed)
 txsOf (ResponsePendingTxs _ held) = Right (txRow . snd <$> held)
 txsOf other = Left (show other)
 
 -- | A transaction as 'txsOf' gives it
+-- | The balance after each transaction txs lists
+txBalancesOf :: Response -> Either String [Maybe Integer]
+txBalancesOf (ResponseTxs _ listed) = Right (listedTxBalance <$> listed)
+txBalancesOf other = Left (show other)
+
 txRow :: TxInfo -> (TxType, Integer, Maybe Natural)
 txRow i = (summaryType (txInfoSummary i), summaryAmount (txInfoSummary i), confirmations (txInfoStatus i))
   where

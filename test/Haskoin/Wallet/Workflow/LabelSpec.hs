@@ -43,8 +43,8 @@ spec = prepareContext $ \ctx -> do
 
 -- | The transactions of the history, each by its id, with its label
 historyLabels :: Response -> Either String [(String, Text)]
-historyLabels (ResponseTxs _ infos) =
-  Right [(Text.unpack (txHashToHex (chainTxid status)), txInfoLabel info) | info <- infos, OnChain status <- [txInfoStatus info]]
+historyLabels (ResponseTxs _ listed) =
+  Right [(Text.unpack (txHashToHex (chainTxid status)), txInfoLabel info) | ListedTx info _ <- listed, OnChain status <- [txInfoStatus info]]
 historyLabels other = Left (show other)
 
 -- | The answer of label for a transaction: each account by name, with the

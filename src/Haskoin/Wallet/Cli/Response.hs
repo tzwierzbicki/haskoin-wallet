@@ -20,7 +20,7 @@ import Haskoin.Wallet.Keys (foreignKindName, foreignKindNamed)
 import Haskoin.Wallet.Labels (ImportReport, parseReport, reportPairs)
 import Haskoin.Wallet.Tx.FeeRates (FeeRates)
 import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..), foreignPath)
-import Haskoin.Wallet.Database.TxInfo (TxInfo)
+import Haskoin.Wallet.Database.TxInfo (ListedTx, TxInfo)
 import Numeric.Natural (Natural)
 
 data Response
@@ -57,7 +57,7 @@ data Response
     -- checkaddr derives it, with the label the wallet has for it, if any
     ResponseCheckAddr !DBAccount !SoftPath !Text !Text
   | -- | Transactions of the account
-    ResponseTxs !DBAccount ![TxInfo]
+    ResponseTxs !DBAccount ![ListedTx]
   | -- | Pending transactions, each with its account: those of the account
     -- asked for, or of every account when none is
     ResponsePendingTxs !(Maybe DBAccount) ![(DBAccount, TxInfo)]

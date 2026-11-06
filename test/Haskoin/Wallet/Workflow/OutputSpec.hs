@@ -98,7 +98,7 @@ rowsOf other = Left (show other)
 keysOf :: Response -> Either String [String]
 keysOf (ResponseAddresses _ addrs) = Right (Text.unpack . dBAddressAddress . fst <$> addrs)
 keysOf (ResponseBalances _ addrs) = Right (Text.unpack . dBAddressAddress . fst <$> addrs)
-keysOf (ResponseTxs _ infos) = Right [Text.unpack (txHashToHex (chainTxid status)) | info <- infos, OnChain status <- [txInfoStatus info]]
+keysOf (ResponseTxs _ listed) = Right [Text.unpack (txHashToHex (chainTxid status)) | ListedTx info _ <- listed, OnChain status <- [txInfoStatus info]]
 keysOf (ResponsePendingTxs _ held) = Right [Text.unpack (txHashToHex (pendingShownHash status)) | (_, info) <- held, Pending status <- [txInfoStatus info]]
 keysOf (ResponseCoins _ coins) = Right [Text.unpack (txHashToHex outpoint.hash) <> ":" <> show outpoint.index | coin <- coins, let outpoint = jsonCoinOutpoint coin]
 keysOf other = Left (show other)
@@ -111,7 +111,7 @@ listings = ["addresses", "txs", "coins", "pendingtxs", "balances"]
 
 -- | The time of each transaction an answer lists
 timesOf :: Response -> Either String [Maybe UTCTime]
-timesOf (ResponseTxs _ infos) = Right (chainTime . chainOf <$> infos)
+timesOf (ResponseTxs _ listed) = Right (chainTime . chainOf . listedTxInfo <$> listed)
 timesOf other = Left (show other)
 
 listingSpec :: Ctx -> Spec
@@ -269,18 +269,63 @@ layoutSpec ctx =
         compact `shouldNotSatisfy` Text.isInfixOf (Text.pack (textOf (otherAddr 1)))
         verbose `shouldNotSatisfy` Text.isInfixOf (Text.pack (textOf (otherAddr 1)))
 
-    it "lists each transaction in three lines without --verbose" $
+    it "lists each transaction in four lines without --verbose" $
       withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
         synced home
         listed <- runOut <$> hw home ["txs"] []
-        length (Text.lines listed) `shouldBe` 3
+        length (Text.lines listed) `shouldBe` 4
 
-    -- The two payments, three lines each, and a blank line between them
+    -- The two payments, four lines each, and a blank line between them
     it "sets the transactions apart with a blank line without --verbose" $
       withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
         synced home
         listed <- runOut <$> hw home ["txs"] []
-        map Text.null (Text.lines listed) `shouldBe` [False, False, False, True, False, False, False]
+        map Text.null (Text.lines listed) `shouldBe` [False, False, False, False, True, False, False, False, False]
+
+    -- The newest payment brought 30000 to the 50000: 50000 + 30000 = 80000
+    it "shows the balance after each transaction, the newest with what the account holds" $
+      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+        synced home
+        listed <- runOut <$> hw home ["txs"] []
+        filter ("Balance" `Text.isInfixOf`) (Text.lines listed)
+          `shouldBe` [ "                   Balance       0.00080000 btc",
+                       "                   Balance       0.00050000 btc"
+                     ]
+
+    it "shows the balance after each transaction as a field in txs --verbose" $
+      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+        synced home
+        listed <- runOut <$> hw home ["txs", "--verbose"] []
+        filter ("Balance" `Text.isInfixOf`) (Text.lines listed)
+          `shouldBe` ["  Balance  : 0.00080000 btc", "  Balance  : 0.00050000 btc"]
+
+    it "writes the balance after each transaction in satoshis with --json" $
+      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home ["txs", "--json"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "\"balance\": 80000"
+        runOut run `shouldSatisfy` Text.isInfixOf "\"balance\": 50000"
+
+    -- The transaction after the newest one keeps the balance it has in the
+    -- whole listing: 80000 - 30000 = 50000
+    it "gives the transaction after the one --after names the balance it has in the whole listing" $
+      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+        synced home
+        Right (newest : _) <- keysOf <$> hwJson home ["txs"] []
+        (txBalancesOf <$> hwJson home ["txs", "--after", newest] []) `shouldReturn` Right [Just 50000]
+
+    -- The payment of 20000 with its fee of 2260: 50000 - 22260 = 27740
+    it "counts an unconfirmed payment in the balance of the newest transaction" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        _ <- sentPayment home
+        _ <- answer home ["sync"] []
+        (txBalancesOf <$> hwJson home ["txs"] []) `shouldReturn` Right [Just 27740, Just 50000]
+
+    it "shows no balance in a transaction a command answers with" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0001"] []
+        runOut run `shouldNotSatisfy` Text.isInfixOf "Balance"
 
     -- The store saw the payment at 22:13:20 UTC, 23:13:20 in Central
     -- Europe in November

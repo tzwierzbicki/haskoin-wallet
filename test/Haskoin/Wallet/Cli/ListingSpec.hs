@@ -2,15 +2,20 @@
 
 module Haskoin.Wallet.Cli.ListingSpec (spec) where
 
-import Control.Monad (replicateM_)
+import Control.Monad (forM_, replicateM_)
+import Control.Monad.Reader (MonadTrans (lift))
 import Data.Default (def)
 import Data.IORef (modifyIORef, newIORef, readIORef)
 import Data.Text (Text)
+import Data.Word (Word8)
+import qualified Database.Persist as P
 import Haskoin
+import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Address (genExtAddress)
-import Haskoin.Wallet.Commands (addressesListing)
+import Haskoin.Wallet.Commands (addressesListing, txsListing)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.Database.TxInfo (ListedTx (..), markTxInfoDead, repsertSummary)
 import Haskoin.Wallet.Cli.Listing (Paging (..), streamListing)
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.TestUtils
@@ -47,6 +52,18 @@ spec = prepareContext $ \ctx ->
         chunks <- streamed wallet (Paging Nothing Nothing) (const True)
         map snd chunks `shouldBe` [(True, [])]
 
+    -- 101 payments, newest first. The one in the second block is the row
+    -- that ends the first chunk, and it is dead. The chunk after it starts
+    -- with the oldest payment, whose 50000 is all that was there.
+    it "carries the balance of txs over to the next chunk, through a dead transaction that ends a chunk" $
+      inScratchDirectory $ \dir -> do
+        wallet <- walletWithPayments ctx dir 101 2
+        chunks <- streamedBalances wallet
+        length <$> chunks `shouldBe` [100, 1]
+        -- 100 payments are alive: 100 × 50000 = 5000000
+        take 1 (concat chunks) `shouldBe` [Just 5000000]
+        drop 98 (concat chunks) `shouldBe` [Just 100000, Nothing, Just 50000]
+
     it "stops once the reader has no use for more, as a pager quit early" $
       inScratchDirectory $ \dir -> do
         wallet <- walletWithAddresses ctx dir 250
@@ -58,6 +75,30 @@ spec = prepareContext $ \ctx ->
         wallet <- walletWithAddresses ctx dir 3
         chunks <- streamed wallet (Paging (Just "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU") Nothing) (const True)
         chunks `shouldBe` [(Left "The address 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU is not a receiving address of the account", (False, []))]
+
+-- | The account of a wallet with the given number of payments of 50000,
+-- each in a block of its own, holding them all but the one marked dead
+walletWithPayments :: Ctx -> FilePath -> Word8 -> Word8 -> IO Config
+walletWithPayments ctx dir count dead =
+  walletInFile (dir </> "wallet.sqlite") $ do
+    (accId, _) <- testNewAcc ctx "main"
+    lift $ do
+      forM_ [1 .. count] $ \n ->
+        repsertSummary btc accId (fakeTxHash n) (Store.BlockRef (800000 + fromIntegral n) 1) fixtureTime paymentSummary
+      markTxInfoDead accId (fakeTxHash dead)
+      P.update accId [DBAccountBalanceConfirmed P.=. fromIntegral (count - 1) * 50000]
+
+-- | The balances of txs, chunk by chunk, as the screen reads them
+streamedBalances :: Config -> IO [[Maybe Integer]]
+streamedBalances wallet = do
+  seen <- newIORef []
+  result <- streamListing wallet (txsListing Nothing (Paging Nothing Nothing)) $ \_ answer -> do
+    case answer of
+      ResponseTxs _ listed -> modifyIORef seen ((listedTxBalance <$> listed) :)
+      _ -> return ()
+    return True
+  result `shouldBe` Right ()
+  reverse <$> readIORef seen
 
 -- | A wallet of one account with the given number of receiving addresses,
 -- generated past the usual gap

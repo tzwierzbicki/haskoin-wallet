@@ -495,18 +495,20 @@ coinDoc net unit JsonCoin {..} =
 
 -- A transaction shows in one of two views. Both start with the same first
 -- line: its time, its type, its amount and where it stands. The compact
--- view then gives whom it pays and its hash, in two more lines. The
--- verbose view gives every detail below the first line, as fields.
+-- view then gives the balance after it, in txs, then whom it pays and its
+-- hash. The verbose view gives every detail below the first line, as
+-- fields.
 
 -- | A transaction as a listing shows it, in the view asked for, with its
 -- time in the time zone of the computer. A listing of every account names
--- the account of each transaction.
-listedTxDoc :: View -> Network -> AmountUnit -> Maybe DBAccount -> TxInfo -> IO (Doc Style)
-listedTxDoc view net unit accountM info = do
+-- the account of each transaction. The balance after it is the one txs
+-- gives: the other listings have none.
+listedTxDoc :: View -> Network -> AmountUnit -> Maybe DBAccount -> Maybe Integer -> TxInfo -> IO (Doc Style)
+listedTxDoc view net unit accountM balanceM info = do
   time <- localTxTime info
   return $ case view of
-    Compact -> compactTxDoc net unit accountM time info
-    Verbose -> verboseTxDoc net unit [accountField acc | Just acc <- [accountM]] time info
+    Compact -> compactTxDoc net unit accountM balanceM time info
+    Verbose -> verboseTxDoc net unit [accountField acc | Just acc <- [accountM]] balanceM time info
 
 -- | The account of a transaction, as a field of the verbose view
 accountField :: DBAccount -> Doc Style
@@ -520,7 +522,7 @@ accountField acc = field 9 "Account" <> pretty (dBAccountName acc) `withStyle` A
 txAnswerDoc :: Network -> Maybe DBAccount -> AmountUnit -> TxInfo -> IO (Doc Style)
 txAnswerDoc net accountM unit info = do
   time <- localTxTime info
-  return $ verboseTxDoc net unit named time info
+  return $ verboseTxDoc net unit named Nothing time info
   where
     named = [accountField acc | Just acc <- [accountM]] <> [field 9 "Network" <> text net.name]
 
@@ -575,6 +577,10 @@ typeWord = \case
   TxCredit -> "Incoming"
   TxInternal -> "Internal"
 
+-- | The length of the three words of 'typeWord'
+typeWidth :: Natural
+typeWidth = 8
+
 -- | What a transaction adds to the account or takes from it, with its
 -- sign, green when it comes in and red when it goes out
 amountColumn :: AmountUnit -> Integer -> Doc Style
@@ -591,10 +597,30 @@ amountColumn unit amnt = amountCell style sign unit amnt
 -- listing line up. A larger amount pushes the rest of its line.
 amountCell :: Maybe Style -> String -> AmountUnit -> Integer -> Doc Style
 amountCell style sign unit amnt =
-  maybe id annotate style (pretty (rblock 14 (sign <> cs (showAmount unit amnt))))
+  maybe id annotate style (amountNumber sign unit amnt)
     <+> pretty (block unitWidth (cs (showUnit unit amnt)))
   where
     unitWidth = fromIntegral (Text.length (showUnit unit 2))
+
+-- | The number of an amount, as it stands in the column of the amounts
+amountNumber :: String -> AmountUnit -> Integer -> Doc Style
+amountNumber sign unit amnt = pretty (rblock 14 (sign <> cs (showAmount unit amnt)))
+
+-- | The balance of the account after a transaction, on the line below its
+-- first line: its word under the type and its number under the amount, so
+-- that the eye goes from what changed to what is left. Nothing follows
+-- the unit, which needs no padding here.
+balanceLine :: AmountUnit -> Integer -> Doc Style
+balanceLine unit balance =
+  hcat
+    [ pretty (block minuteWidth ""),
+      "  ",
+      pretty (block typeWidth "Balance"),
+      "  ",
+      amountNumber "" unit balance,
+      " ",
+      pretty (showUnit unit balance)
+    ]
 
 -- | Where a transaction stands, in a few words. One that waits shows its
 -- fee rate, which tells how soon a block may take it: unconfirmed, or in
@@ -617,16 +643,17 @@ statusWords feeByte = \case
 confirmationsText :: Natural -> String
 confirmationsText n = counted n "confirmation" "confirmations"
 
--- | A transaction in three lines: its first line, whom it pays, and the
--- hash to name it by. A transaction the user labelled shows its label
--- below its first line, on a line of its own: the label says what the
--- transaction is for, better than any of its numbers. A replacement that
--- bumpfee prepared also names the transactions it replaces, before its
--- hash.
-compactTxDoc :: Network -> AmountUnit -> Maybe DBAccount -> Maybe ZonedTime -> TxInfo -> Doc Style
-compactTxDoc net unit accountM time info@(TxInfo summary status label _) =
+-- | A transaction in a few lines: its first line, the balance after it if
+-- the listing gives one, whom it pays, and the hash to name it by. A
+-- transaction the user labelled shows its label on a line of its own,
+-- above whom it pays: the label says what the transaction is for, better
+-- than any of its numbers. A replacement that bumpfee prepared also names
+-- the transactions it replaces, before its hash.
+compactTxDoc :: Network -> AmountUnit -> Maybe DBAccount -> Maybe Integer -> Maybe ZonedTime -> TxInfo -> Doc Style
+compactTxDoc net unit accountM balanceM time info@(TxInfo summary status label _) =
   vcat $
     [headlineDoc unit time info]
+      <> [balanceLine unit balance | Just balance <- [balanceM]]
       <> [indent 2 (labelWord label) | not (Text.null label)]
       <> (indent 2 <$> payeeLine net accountM summary)
       <> [indent 2 ("replaces" <+> text (cs (txHashToHex replaced))) | Pending p <- [status], replaced <- pendingReplaces p]
@@ -669,13 +696,14 @@ hashWord (Pending status) = styled PendingHash (cs (txHashToHex (pendingShownHas
 
 -- | A transaction with every detail: its first line, then its fields. The
 -- lines given come first: its account in a listing of every account, or
--- its network in an answer. Its label, if any, follows them. Every address
+-- its network in an answer. Its label, if any, follows them. The balance
+-- after it, if the listing gives one, follows its fee. Every address
 -- it spends from or pays is on a line of its own, with its value, and those
 -- of the wallet with their paths and labels, in columns. An address of the
 -- wallet it spends from ends with the labels its coins show, if any. A
 -- change address is marked as one, except under Change, which says it.
-verboseTxDoc :: Network -> AmountUnit -> [Doc Style] -> Maybe ZonedTime -> TxInfo -> Doc Style
-verboseTxDoc net unit named time info@(TxInfo summary status label inputLabels) =
+verboseTxDoc :: Network -> AmountUnit -> [Doc Style] -> Maybe Integer -> Maybe ZonedTime -> TxInfo -> Doc Style
+verboseTxDoc net unit named balanceM time info@(TxInfo summary status label inputLabels) =
   vcat $
     headlineDoc unit time info
       : ( indent 2
@@ -683,6 +711,7 @@ verboseTxDoc net unit named time info@(TxInfo summary status label inputLabels) 
               <> [field 9 "Label" <> labelWord label | not (Text.null label)]
               <> statusFields time status
               <> [feeField unit summary]
+              <> [field 9 "Balance" <> neutralAmount unit balance | Just balance <- [balanceM]]
               <> lockTimeField summary
               <> section "From" Nothing True from
               <> section "To" (Just Incoming) True to
@@ -1149,7 +1178,7 @@ rowsPrinter unit view = \case
     let pad = longestPathWidth acc [False, True]
      in return . Just $ Rows (text "There are no addresses with coins to display") (uncurry (coinBalanceDoc unit pad) <$> addrs) True
   ResponseTxs acc txs -> do
-    docs <- mapM (listedTxDoc view (accountNetwork acc) unit Nothing) txs
+    docs <- mapM (\(ListedTx info balanceM) -> listedTxDoc view (accountNetwork acc) unit Nothing balanceM info) txs
     return . Just $ Rows (text "There are no transactions to display") docs True
   -- Listing every account, each transaction names its own
   ResponsePendingTxs asked held -> do
@@ -1157,7 +1186,7 @@ rowsPrinter unit view = \case
           Just acc -> "There are no pending transactions in the account " <> cs (dBAccountName acc)
           Nothing -> "There are no pending transactions"
         named acc = if isNothing asked then Just acc else Nothing
-    docs <- mapM (\(acc, info) -> listedTxDoc view (accountNetwork acc) unit (named acc) info) held
+    docs <- mapM (\(acc, info) -> listedTxDoc view (accountNetwork acc) unit (named acc) Nothing info) held
     return . Just $ Rows (text none) docs True
   ResponseCoins acc coins ->
     return . Just $ Rows (text "There are no coins to display") (coinDoc (accountNetwork acc) unit <$> coins) True

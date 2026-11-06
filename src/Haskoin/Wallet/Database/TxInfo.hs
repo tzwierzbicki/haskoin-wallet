@@ -27,6 +27,8 @@ import qualified Data.ByteString as BS
 import Data.Char (toUpper)
 import Data.Containers.ListUtils (nubOrd)
 import Data.Either (partitionEithers, rights)
+import Data.Int (Int64)
+import Data.List (mapAccumL)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust)
@@ -230,6 +232,32 @@ data TxInfo = TxInfo
   }
   deriving (Eq, Show)
 
+-- | Whether a transaction was replaced or dropped from the network. Only
+-- one on the chain can be: one in preparation is not out yet.
+txInfoDead :: TxInfo -> Bool
+txInfoDead info =
+  case txInfoStatus info of
+    OnChain status -> chainDead status
+    Pending _ -> False
+
+-- | A transaction as txs lists it, with the balance of the account after
+-- it. A dead transaction has none: the balance of the account leaves it
+-- out.
+data ListedTx = ListedTx
+  { listedTxInfo :: !TxInfo,
+    listedTxBalance :: !(Maybe Integer)
+  }
+  deriving (Eq, Show)
+
+-- | Where txs goes on: after a transaction, by its block and its id, and
+-- with the balance before it, which is the balance after the next one
+data TxsCursor = TxsCursor
+  { txsCursorBlock :: !Store.BlockRef,
+    txsCursorTxid :: !TxHash,
+    txsCursorBalance :: !Integer
+  }
+  deriving (Eq, Show)
+
 -- | The id of the transaction, when it has one: a transaction in
 -- preparation has none until it is signed
 txInfoHash :: TxInfo -> Maybe TxHash
@@ -284,8 +312,7 @@ instance MarshalJSON Network TxSummary where
   unmarshalValue net = withObject "TxSummary" (summaryParser net)
 
 instance MarshalJSON Network TxInfo where
-  marshalValue net (TxInfo summary status label inputs) =
-    object $ summaryPairs net summary <> statusPairs status <> ["label" .= label, "inputlabels" .= txidLabelsJson inputs]
+  marshalValue net = object . txInfoPairs net
   unmarshalValue net =
     withObject "TxInfo" $ \o ->
       TxInfo
@@ -293,6 +320,19 @@ instance MarshalJSON Network TxInfo where
         <*> statusParser o
         <*> o .:? "label" .!= ""
         <*> (maybe (return Map.empty) parseTxidLabels =<< o .:? "inputlabels")
+
+-- | The balance joins the keys of the transaction, in the same flat object
+instance MarshalJSON Network ListedTx where
+  marshalValue net (ListedTx info balance) =
+    object $ txInfoPairs net info <> ["balance" .= balance]
+  unmarshalValue net value =
+    ListedTx
+      <$> unmarshalValue net value
+      <*> withObject "ListedTx" (.: "balance") value
+
+txInfoPairs :: Network -> TxInfo -> [Pair]
+txInfoPairs net (TxInfo summary status label inputs) =
+  summaryPairs net summary <> statusPairs status <> ["label" .= label, "inputlabels" .= txidLabelsJson inputs]
 
 summaryPairs :: Network -> TxSummary -> [Pair]
 summaryPairs net s =
@@ -563,6 +603,7 @@ repsertSummary net accId tid ref time summary = do
             dBTxInfoTxid = hashBytes tid,
             dBTxInfoBlockRef = S.encode ref,
             dBTxInfoTime = Just time,
+            dBTxInfoAmount = fromInteger (summaryAmount summary),
             dBTxInfoBlob = BS.toStrict $ marshalJSON net summary,
             dBTxInfoDead = False,
             dBTxInfoCreated = now
@@ -604,6 +645,53 @@ txsAfter accId afterM countM = do
       return t
   heightM <- bestHeight net
   forM rows $ chainTxInfo net heightM . entityVal
+
+-- | The transactions of txs after the cursor, or the first ones, up to the
+-- count, or all of them. Each comes with the balance before it, which the
+-- cursor after it carries. The first transaction of the listing starts
+-- from what the account holds, and each one below from the balance before
+-- the one above it.
+listedTxsAfter :: (MonadUnliftIO m) => DBAccountId -> Maybe TxsCursor -> Maybe Natural -> ExceptT String (DB m) [(ListedTx, Integer)]
+listedTxsAfter accId afterM countM = do
+  acc <- getAccountById accId
+  infos <- txsAfter accId (position <$> afterM) countM
+  let start = maybe (accountTotal acc) txsCursorBalance afterM
+  return $ snd (mapAccumL withBalance start infos)
+  where
+    position cursor = (txsCursorBlock cursor, txsCursorTxid cursor)
+
+-- | A transaction with the balance after it, and that balance without
+-- the transaction: the balance before it, and after the next one down. A
+-- dead transaction takes nothing away, since the balance leaves it out.
+withBalance :: Integer -> TxInfo -> (Integer, (ListedTx, Integer))
+withBalance after info
+  | txInfoDead info = (after, (ListedTx info Nothing, after))
+  | otherwise = (before, (ListedTx info (Just after), before))
+  where
+    before = after - summaryAmount (txInfoSummary info)
+
+-- | The cursor of the transaction --after names, whose balance takes away
+-- every transaction down to that one
+txsCursorAt :: (MonadUnliftIO m) => DBAccountId -> DBAccount -> TxHash -> ExceptT String (DB m) TxsCursor
+txsCursorAt accId acc tid = do
+  block <- txBlock accId tid
+  above <- lift $ amountsThrough accId block tid
+  return $ TxsCursor block tid (accountTotal acc - above)
+
+-- | What the live transactions of the account add up to, from the top of
+-- txs down to the transaction given, that one included. The index on the
+-- block references holds the amounts, so the sum reads no row.
+amountsThrough :: (MonadUnliftIO m) => DBAccountId -> Store.BlockRef -> TxHash -> DB m Integer
+amountsThrough accId block tid = do
+  total <- selectOne . from $ \t -> do
+    let blockBytes = val (S.encode block)
+    where_ $
+      t ^. DBTxInfoAccount ==. val accId
+        &&. t ^. DBTxInfoDead ==. val False
+        &&. t ^. DBTxInfoBlockRef <=. blockBytes
+        &&. (t ^. DBTxInfoBlockRef <. blockBytes ||. t ^. DBTxInfoTxid <=. val (hashBytes tid))
+    return $ sum_ (t ^. DBTxInfoAmount)
+  return $ toInteger (joinMaybe (0 :: Int64) id total)
 
 -- | A transaction of the account on the chain, as txs shows it, if the
 -- account has it, dead or alive
