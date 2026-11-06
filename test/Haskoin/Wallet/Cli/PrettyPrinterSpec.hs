@@ -181,6 +181,21 @@ addressSpec =
       (renderedLines (checkAddrDoc mainAccountRow (Deriv :/ 0 :/ 3) "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1" "Savings") !! 0)
         `shouldBe` "/0/3  1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1  \"Savings\""
 
+    -- The rows of # stand for the rows of a code
+    it "goes above its QR code, which starts on the next line" $
+      renderedLines (withCodeDoc (verboseAddressDoc UnitBitcoin 4 seenTimeInCet paidAddressRow 50000) ["####", "####"])
+        `shouldBe` [ "/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Invoice 42\"",
+                     "  Transactions: 1",
+                     "  Received    : 0.00050000 btc",
+                     "  Confirmed   : 0.00050000 btc",
+                     "  Unconfirmed : 0.00000000 btc",
+                     "  Spendable   : 0.00050000 btc",
+                     "  Coins       : 1",
+                     "  Created     : 14 Nov 2023 23:13:20 CET",
+                     "####",
+                     "####"
+                   ]
+
 descriptorSpec :: Spec
 descriptorSpec =
   describe "The descriptor of an account as hw shows it" $ do

@@ -76,6 +76,8 @@ data Command
     -- the deletion
     CommandDeleteAcc !Text !Network !HardPath
   | CommandReceive !Receive
+  | -- | An address of the wallet, as the user typed it
+    CommandShowAddr !Text
   | -- | The account, whether its change addresses, how much of each
     -- address to show, and the page
     CommandAddresses !(Maybe Text) !Bool !View !(Paging Text)
@@ -139,6 +141,17 @@ viewOf (CommandAddresses _ _ view _) = view
 viewOf (CommandTxs _ view _) = view
 viewOf (CommandPendingTxs _ view _) = view
 viewOf _ = Compact
+
+-- | Whether an address in an answer comes with its QR code, on a terminal
+data AddressCode = WithCode | WithoutCode
+  deriving (Eq, Show)
+
+-- | A command that gives out an address shows its QR code, for a payer to
+-- scan. label also answers with an address, which it does not give out.
+addressCodeOf :: Command -> AddressCode
+addressCodeOf (CommandReceive _) = WithCode
+addressCodeOf (CommandShowAddr _) = WithCode
+addressCodeOf _ = WithoutCode
 
 -- | The options of mnemonic
 data NewMnemonic = NewMnemonic
@@ -450,6 +463,7 @@ Type hw COMMAND --help for the help of a command.
           CommandGroup
             "Addresses"
             [ receiveCommand,
+              showAddrCommand,
               addressesCommand,
               balancesCommand,
               labelCommand,
@@ -1147,7 +1161,12 @@ addresses, at M/44'/coin'/index'/1/i. `addresses` --change lists them.
 of the configuration file says. A wallet restored from the mnemonic stops
 looking after that many unused addresses, and would miss later payments. Once that many
 addresses await a payment, `receive` refuses. Give out one of them again.
-`addresses` lists them.
+`addresses` lists them, and showaddr shows one with its QR code.
+
+On a terminal, the QR code of the address comes under it, for the payer to
+scan. The code holds a payment URI with the address and nothing else, so it does
+not hold the label. Piped into another program, or with --json, `receive` gives
+the text alone.
 |],
       args = CommandReceive <$> (Receive <$> accountOption <*> labelOption)
     }
@@ -1159,6 +1178,35 @@ labelOption =
       <> long "label"
       <> metavar "LABEL"
       <> help "A label for the address, to recognize the payment later"
+
+{- showaddr -}
+
+showAddrCommand :: CommandSpec Command
+showAddrCommand =
+  CommandSpec
+    { name = "showaddr",
+      offline = False,
+      summary = "Show an address of the wallet with its QR code",
+      details =
+        [r|
+showaddr shows an address the wallet holds as `receive` shows a new one: its
+path, its label and what it received, and on a terminal its QR code under them.
+Use it to give out an address again. It hands out no new address and changes
+nothing.
+
+The address tells its account. An address the wallet does not hold is refused,
+so the code never pays anyone else. Any address of the wallet will do, a change
+address too.
+|],
+      args = CommandShowAddr <$> shownAddressArg
+    }
+
+shownAddressArg :: Args Text
+shownAddressArg =
+  strArgument $
+    metavar "ADDRESS"
+      <> completer (mkCompleter walletAddresses)
+      <> help "The address to show. It must be an address of this wallet."
 
 {- addresses -}
 

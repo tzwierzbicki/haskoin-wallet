@@ -58,6 +58,7 @@ library
       Haskoin.Wallet.Cli.Parser.Run
       Haskoin.Wallet.Cli.PrettyPrinter
       Haskoin.Wallet.Cli.Prompt
+      Haskoin.Wallet.Cli.QrCode
       Haskoin.Wallet.Cli.Response
       Haskoin.Wallet.Cli.Style
       Haskoin.Wallet.Commands
@@ -145,6 +146,7 @@ library
     , prettyprinter >=1.7
     , prettyprinter-ansi-terminal >=1.1
     , process >=1.6
+    , qrcode-core >=0.9.12
     , random >=1.1
     , raw-strings-qq >=1.1
     , secp256k1-haskell >=2.0.0
@@ -204,6 +206,7 @@ executable hw
     , prettyprinter >=1.7
     , prettyprinter-ansi-terminal >=1.1
     , process >=1.6
+    , qrcode-core >=0.9.12
     , random >=1.1
     , raw-strings-qq >=1.1
     , secp256k1-haskell >=2.0.0
@@ -233,6 +236,7 @@ test-suite spec
       Haskoin.Wallet.Cli.ParserSpec
       Haskoin.Wallet.Cli.PrettyPrinterSpec
       Haskoin.Wallet.Cli.PromptSpec
+      Haskoin.Wallet.Cli.QrCodeSpec
       Haskoin.Wallet.Cli.ResponseSpec
       Haskoin.Wallet.ConfigSpec
       Haskoin.Wallet.Database.AccountSpec
@@ -332,6 +336,7 @@ test-suite spec
     , prettyprinter >=1.7
     , prettyprinter-ansi-terminal >=1.1
     , process >=1.6
+    , qrcode-core >=0.9.12
     , random >=1.1
     , raw-strings-qq >=1.1
     , secp256k1-haskell >=2.0.0

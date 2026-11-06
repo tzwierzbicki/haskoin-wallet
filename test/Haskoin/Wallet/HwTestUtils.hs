@@ -16,6 +16,7 @@ module Haskoin.Wallet.HwTestUtils
     hw,
     hwWithEnv,
     hwOnTerminal,
+    hwOnScreen,
     whileHwWaitsAt,
     centralEurope,
     hwJson,
@@ -71,7 +72,7 @@ import System.Posix.IO (fdToHandle)
 import System.Posix.Terminal (openPseudoTerminal)
 import System.Posix.Types (ProcessID)
 import qualified System.Process as Process
-import System.Process.Typed (byteStringInput, createPipe, getStderr, nullStream, proc, readProcess, readProcessStdout, setEnv, setStderr, setStdin, setStdout, setWorkingDir, unsafeProcessHandle, useHandleClose, withProcessTerm)
+import System.Process.Typed (byteStringInput, createPipe, getStderr, nullStream, proc, readProcess, readProcessStderr, readProcessStdout, setEnv, setStderr, setStdin, setStdout, setWorkingDir, unsafeProcessHandle, useHandleClose, withProcessTerm)
 import System.Timeout (timeout)
 import UnliftIO.Async (wait, withAsync)
 import UnliftIO.Temporary (withSystemTempDirectory)
@@ -186,6 +187,30 @@ hwOnTerminal home args typed = do
   case done of
     Nothing -> fail $ "hw " <> unwords args <> " did not finish within a minute"
     Just (code, out, shown) -> return $ Run code (decodeUtf8 (BL.toStrict out)) (decodeUtf8 shown)
+
+-- | Run hw as 'hw' does, with its answer on a terminal, as a user reads it,
+-- and these variables added to its environment. 'runOut' is all the
+-- terminal received, its control codes included, and a new line comes as a
+-- carriage return and a line feed.
+hwOnScreen :: [(String, String)] -> FilePath -> [String] -> IO Run
+hwOnScreen extra home args = do
+  binary <- hwBinary
+  (screenFd, terminalFd) <- openPseudoTerminal
+  screen <- fdToHandle screenFd
+  terminal <- fdToHandle terminalFd
+  let process =
+        setStdin (byteStringInput BL.empty)
+          . setStdout (useHandleClose terminal)
+          . setEnv (("HOME", home) : ("TERM", "xterm") : extra)
+          . setWorkingDir home
+          $ proc binary args
+  -- Read as it comes: hw would stop on a terminal nobody reads
+  done <- timeout 60000000 $ withAsync (shownOn screen) $ \shown -> do
+    (code, err) <- readProcessStderr process
+    (,,) code err <$> wait shown
+  case done of
+    Nothing -> fail $ "hw " <> unwords args <> " did not finish within a minute"
+    Just (code, err, out) -> return $ Run code (decodeUtf8 out) (decodeUtf8 (BL.toStrict err))
 
 -- | All a terminal shows until the last program on it ends. Linux then
 -- fails the read rather than giving an end of file.

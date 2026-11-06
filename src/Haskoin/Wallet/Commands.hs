@@ -166,6 +166,7 @@ commandResponse ctx cfg unit = \case
   CommandAccounts account _ -> cmdAccounts cfg account
   -- Addresses
   CommandReceive opts -> cmdReceive ctx cfg opts
+  CommandShowAddr address -> cmdShowAddr cfg address
   CommandAddresses account internal _ paging -> cmdAddresses cfg account internal paging
   CommandBalances account paging -> cmdBalances cfg account paging
   CommandLabel opts -> cmdLabel ctx cfg opts
@@ -488,6 +489,14 @@ cmdReceive ctx cfg opts =
     (accId, _) <- getAccountByName opts.account
     addr <- genExtAddress ctx cfg accId (fromMaybe "" opts.label)
     addressAnswer accId addr
+
+-- | Show an address the wallet holds, to give it out again. The address
+-- tells its account, and nothing is generated or stored.
+cmdShowAddr :: Config -> Text -> IO Response
+cmdShowAddr cfg typed =
+  runDBResponse cfg $ do
+    (_, addr) <- getAddressByText typed
+    addressAnswer (dBAddressAccount addr) addr
 
 cmdAddresses :: Config -> Maybe Text -> Bool -> Paging Text -> IO Response
 cmdAddresses cfg account internal paging = readListing cfg (addressesListing account internal paging)

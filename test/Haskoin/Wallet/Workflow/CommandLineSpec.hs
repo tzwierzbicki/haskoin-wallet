@@ -557,6 +557,19 @@ commandLineSpec ctx = do
         run <- hw home (tabAfter ["label", "17Ki"]) []
         runOut run `shouldBe` ""
 
+    it "offers the receiving addresses of the wallet after showaddr" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home (tabAfter ["showaddr", "1KEn"]) []
+        runOut run `shouldBe` "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\n"
+
+    it "offers the change addresses too after showaddr" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        run <- hw home (tabAfter ["showaddr", "17Ki"]) []
+        runOut run `shouldBe` "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn\n"
+
     it "offers the change addresses too after signmsg" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home

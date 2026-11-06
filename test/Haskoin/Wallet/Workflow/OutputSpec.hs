@@ -79,6 +79,7 @@ spec = prepareContext $ \ctx -> do
   layoutSpec ctx
   pendingListSpec ctx
   balancesListSpec ctx
+  addressCodeSpec ctx
   nextStepSpec ctx
 
 {- Listings -}
@@ -499,6 +500,133 @@ onePendingNosig home = Text.pack <$> (nosigOf =<< onePendingTx home)
 -- | Whether the output of a run shows the command
 showsCommand :: Text -> Run -> Bool
 showsCommand command run = command `Text.isInfixOf` runOut run
+
+{- The QR code of an address -}
+
+-- | What a person reads on a terminal, without colours
+screen :: FilePath -> [String] -> IO [Text]
+screen home args = Text.lines . Text.filter (/= '\r') . runOut <$> hwOnScreen [("NO_COLOR", "1")] home args
+
+-- | The lines of an answer under the text of an address, which takes 8
+codeUnderAddress :: [Text] -> [Text]
+codeUnderAddress = drop 8
+
+-- An address given out, as a terminal receives it
+addressCodeSpec :: Ctx -> Spec
+addressCodeSpec ctx = do
+  describe "An address on a terminal" $ do
+    it "comes with its QR code from receive, under its text" $
+      withHome $ \home -> do
+        createMain home
+        (codeUnderAddress <$> screen home ["receive"]) `shouldReturn` p2pkhAddressCode
+
+    -- The eighth line tells when it was created, which changes
+    it "keeps its text whole above the code, with nothing beside it" $
+      withHome $ \home -> do
+        createMain home
+        (take 7 <$> screen home ["receive", "--label", "rent"])
+          `shouldReturn` [ "/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"rent\"",
+                           "  Transactions: 0",
+                           "  Received    : 0.00000000 btc",
+                           "  Confirmed   : 0.00000000 btc",
+                           "  Unconfirmed : 0.00000000 btc",
+                           "  Spendable   : 0.00000000 btc",
+                           "  Coins       : 0"
+                         ]
+
+    it "shows the same text as off a terminal" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        piped <- hw home ["showaddr", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"] []
+        (take 8 <$> screen home ["showaddr", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]) `shouldReturn` Text.lines (runOut piped)
+
+    it "draws the code of a BIP84 account from its bech32 address" $
+      withHome $ \home -> do
+        _ <- answer home ["createacc", "segwit", "--type", "bip84"] seedTwice
+        (codeUnderAddress <$> screen home ["receive"]) `shouldReturn` p2wpkhAddressCode
+
+    -- Black is colour 16 of the palette, and white 231
+    it "draws the code in black on white, whatever the colours of the terminal" $
+      withHome $ \home -> do
+        createMain home
+        run <- hwOnScreen [] home ["receive"]
+        runOut run `shouldSatisfy` Text.isInfixOf "\ESC[0;38;5;16;48;5;231m"
+
+    it "sets no colour with NO_COLOR, and still draws the code" $
+      withHome $ \home -> do
+        createMain home
+        run <- hwOnScreen [("NO_COLOR", "1")] home ["receive"]
+        runOut run `shouldSatisfy` (not . Text.isInfixOf "\ESC[")
+        runOut run `shouldSatisfy` Text.isInfixOf "█"
+
+    it "has no code when the answer goes to a pipe" $
+      withHome $ \home -> do
+        createMain home
+        run <- hw home ["receive"] []
+        runOut run `shouldSatisfy` (not . Text.isInfixOf "█")
+
+    it "has no code with --json, even on a terminal" $
+      withHome $ \home -> do
+        createMain home
+        run <- hwOnScreen [] home ["receive", "--json"]
+        runOut run `shouldSatisfy` (not . Text.isInfixOf "█")
+
+    it "has no code in the answer of label, which gives out no address" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        run <- hwOnScreen [] home ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "rent"]
+        runOut run `shouldSatisfy` (not . Text.isInfixOf "█")
+
+  describe "showaddr" $ do
+    it "shows the QR code of an address the wallet holds" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        (codeUnderAddress <$> screen home ["showaddr", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]) `shouldReturn` p2pkhAddressCode
+
+    it "hands out no new address" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        _ <- answer home ["showaddr", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"] []
+        (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "")]
+
+    it "answers in JSON as receive does" $
+      withHome $ \home -> do
+        createMain home
+        given <- hwJson home ["receive"] []
+        (addressesOf <$> hwJson home ["showaddr", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"] []) `shouldReturn` addressesOf given
+
+    it "refuses an address the wallet does not hold, and shows no code" $
+      withHome $ \home -> do
+        createMain home
+        run <- hwOnScreen [] home ["showaddr", "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1"]
+        runExit run `shouldBe` ExitFailure 1
+        runOut run `shouldSatisfy` Text.isInfixOf "Address does not exist"
+        runOut run `shouldSatisfy` (not . Text.isInfixOf "█")
+
+    it "finds the account of the address, whatever the default account" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "segwit", "--type", "bip84"] seedTwice
+        _ <- answer home ["receive", "--account", "segwit"] []
+        (fmap dBAccountName . accountOf <$> hwJson home ["showaddr", "bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc"] []) `shouldReturn` Right "segwit"
+
+    it "takes a Bitcoin Cash address without its prefix, and shows the whole address" $
+      withHome $ \home -> do
+        _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
+        _ <- answer home ["receive", "--account", "cash"] []
+        (take 1 <$> screen home ["showaddr", "qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"])
+          `shouldReturn` ["/0/0  bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"]
+
+    it "shows a change address at its path on the change chain" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        (take 1 <$> screen home ["showaddr", "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"])
+          `shouldReturn` ["/1/0  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"]
 
 -- The pretty output, after the answer
 nextStepSpec :: Ctx -> Spec

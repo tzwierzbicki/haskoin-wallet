@@ -792,6 +792,59 @@ signedByWallet ctx tsd = fst $ forceRight $ signWalletTx btc ctx Bip44 tsd testA
 testAccountPub :: Ctx -> XPubKey
 testAccountPub ctx = fromMaybe (error "testAccountPub") $ xPubImport btc ctx testAccountXPub
 
+-- | The QR code of the first receiving address of the test wallet, as a
+-- terminal draws it. It holds bitcoin:1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj.
+-- Two decoders read this drawing, zxing-cpp and OpenCV, and segno encodes
+-- the same modules with the same mask.
+p2pkhAddressCode :: [Text]
+p2pkhAddressCode =
+  [ "                                     ",
+    "                                     ",
+    "    █▀▀▀▀▀█  ▀▄ ▄ ▀█▀█▄ █ █▀▀▀▀▀█    ",
+    "    █ ███ █ █▄▄▄█ ▄ ▀▄▀ ▀ █ ███ █    ",
+    "    █ ▀▀▀ █ █▀ ▄ ▀▄▄▀▀▄▀▀ █ ▀▀▀ █    ",
+    "    ▀▀▀▀▀▀▀ █▄▀ █ █▄█ ▀ █ ▀▀▀▀▀▀▀    ",
+    "    ▀ ██▀█▀  ▄▄  █▀▄▄▀▀▀▄ █▀█▀▀▄▄    ",
+    "     ▄▀   ▀▄▄▄▄   █▀   ▄▀ ▄▄ █▀▄     ",
+    "    █ █▄▀▄▀ █ █ ▀▀██▄█▀ ▄▄▄▄▄▄█ ▄    ",
+    "    ▀▀▀█▀▀▀▀▄█ ▄█▀ ▀  ▀▄▀█████▀      ",
+    "    █ ▄▀ █▀ █▄▀▀ ▄▀▄▄▀▄▀▄▄ ▄█ ███    ",
+    "    █ ██ ▀▀█ ▄█▄▄ ▀▀  ▄▄█  ▀ █ ▄▄    ",
+    "    ▀ ▀▀▀ ▀▀█ ▀▄ █▀███▄▄█▀▀▀█▄██▄    ",
+    "    █▀▀▀▀▀█ ▄▀▄▄▄▀ █▀▀▀▀█ ▀ █ ▀▄▄    ",
+    "    █ ███ █ ██▄█▄  ▀█▀▄▄▀▀▀▀█▀███    ",
+    "    █ ▀▀▀ █ ▀▄▄▀▄▄ ██ ▀ ▄▄▄██ ▀█     ",
+    "    ▀▀▀▀▀▀▀ ▀     ▀▀▀▀▀▀ ▀  ▀▀▀      ",
+    "                                     ",
+    "                                     "
+  ]
+
+-- | The QR code of the first receiving address of the BIP84 test account.
+-- It holds BITCOIN:BC1QYNNYWXCVS9DWUQK8H53XZN9KPEYPRGQEACXWTC, in the
+-- alphanumeric mode, and was checked as 'p2pkhAddressCode' was.
+p2wpkhAddressCode :: [Text]
+p2wpkhAddressCode =
+  [ "                                     ",
+    "                                     ",
+    "    █▀▀▀▀▀█ ▀▄█▄ ▀▀█ █▀   █▀▀▀▀▀█    ",
+    "    █ ███ █ ▀▀▀▀█▀ ▄ ▄▄▀▄ █ ███ █    ",
+    "    █ ▀▀▀ █ ▄█ █▄▄▄▀▀█▀▀  █ ▀▀▀ █    ",
+    "    ▀▀▀▀▀▀▀ ▀ █▄▀▄▀ ▀ █ ▀ ▀▀▀▀▀▀▀    ",
+    "    ▀▄█▄▄▄▀▀ █▀█▄▀ ▀▄▀▄ ▀▄ ▀  ▀▄▀    ",
+    "    █▄▄  ▀▀  ▄███▀██▀ █▀█ ▀██▀▄██    ",
+    "    ▀▄▀▀ ▄▀▀ ▀██▀██▀▄██ ▀▄█▄█▀ ▀     ",
+    "     ▄█ ▀█▀ ▀▀ ▄ ▄ ▄██   ▄██  █ █    ",
+    "    ▀█ ▄▀ ▀▀▀ ▀▀▀▀ █▄ ▄█▄██ ▀ ▄█     ",
+    "    ▀▀█▄▄█▀▄█▀▄█▄▀█▄▀█▀▀▀▄ █ ▄█▀▀    ",
+    "    ▀▀▀▀  ▀▀█ ▄▀▀██▄ ██▀█▀▀▀█ ▄▀█    ",
+    "    █▀▀▀▀▀█ ▀█▄█ ▄ █▄█ ▄█ ▀ █  █▀    ",
+    "    █ ███ █  ▄▀██▀ ▀▀█ █▀█▀▀▀▀██     ",
+    "    █ ▀▀▀ █ ▀▀▀█▀  ▀█▄▄   ▀ ▀██▀█    ",
+    "    ▀▀▀▀▀▀▀ ▀ ▀ ▀ ▀▀ ▀▀ ▀  ▀   ▀▀    ",
+    "                                     ",
+    "                                     "
+  ]
+
 -- | The external (receiving) addresses /0/0 to /0/9 of the test account
 externalAddrsText :: [Text]
 externalAddrsText =

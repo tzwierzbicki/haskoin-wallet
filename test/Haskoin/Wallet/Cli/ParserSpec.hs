@@ -31,6 +31,9 @@ spec = do
       usageOf "preparesendall"
         `shouldBe` "ADDRESS[:AMOUNT]... [-a|--account NAME] [-f|--fee-rate RATE] [-m|--min-conf INT] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS]... [--spend-dust | --leave-dust] [-y|--yes]"
 
+    it "gives showaddr the address to show and no option" $
+      usageOf "showaddr" `shouldBe` "ADDRESS"
+
     it "puts the argument of checkaddr before its option" $
       usageOf "checkaddr" `shouldBe` "PATH [-a|--account NAME]"
 

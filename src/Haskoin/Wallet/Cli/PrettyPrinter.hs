@@ -45,9 +45,10 @@ import Haskoin.Wallet.Tx.FeeRates (FeeRates (..), levelName, rateAt)
 import Haskoin.Wallet.Keys (KeySource (..), foreignKindDescription)
 import Haskoin.Wallet.Labels (AccountImport (..), ImportReport (..), reportNeedsSync)
 import Haskoin.Wallet.MessageSigning (signedMessageText)
-import Haskoin.Wallet.Cli.Parser (BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), View (..), program)
+import Haskoin.Wallet.Cli.Parser (AddressCode (..), BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), View (..), program)
 import Haskoin.Wallet.Cli.Parser.Help (commandName)
 import Haskoin.Wallet.Cli.Parser.Run (commandNamed)
+import Haskoin.Wallet.Cli.QrCode (paymentUri, qrRows)
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Style
 import Haskoin.Wallet.Sync
@@ -406,6 +407,23 @@ verboseAddressDoc unit pad created addr spendable =
                   field 12 "Created" <> text (secondText created)
                 ]
         )
+
+-- | An address as an answer shows it, with its QR code when the command
+-- gives the address out and someone can scan the screen
+addressAnswerDoc :: AddressCode -> AmountUnit -> DBAccount -> DBAddress -> Word64 -> IO (Doc Style)
+addressAnswerDoc code unit acc addr spendable = do
+  details <- listedAddressDoc Verbose unit (pathWidth [addr]) addr spendable
+  terminal <- hIsTerminalDevice stdout
+  let rows
+        | code == WithCode && terminal = fromMaybe [] (qrRows (paymentUri (accountNetwork acc) (dBAddressAddress addr)))
+        | otherwise = []
+  return (withCodeDoc details rows)
+
+-- | Text, then a QR code drawn in the rows given. The code goes under the
+-- text and never beside it: a terminal wraps its long lines again when it
+-- is resized, which would mix the text into the code.
+withCodeDoc :: Doc Style -> [Text] -> Doc Style
+withCodeDoc details rows = vcat (details : (annotate QrCode . pretty <$> rows))
 
 -- | The address at a path of the account, as checkaddr shows it: its
 -- path, the address and its label when the wallet has one, as the first
@@ -968,14 +986,14 @@ reducedDoc net unit feeByte ways@(way : _) =
     shareDoc i = [amount (afters !! i) <+> "paying its share" | Just afters <- [shares]]
 
 -- | Print the answer of a command. A listing shows each element in the
--- view given.
-prettyPrinter :: AmountUnit -> View -> Response -> IO ()
-prettyPrinter unit view res = do
-  responsePrinter unit view res
+-- view given, and an address that goes with a code shows it on a terminal.
+prettyPrinter :: AmountUnit -> View -> AddressCode -> Response -> IO ()
+prettyPrinter unit view code res = do
+  responsePrinter unit view code res
   when (responseFailed res) exitFailure
 
-responsePrinter :: AmountUnit -> View -> Response -> IO ()
-responsePrinter unit view answer =
+responsePrinter :: AmountUnit -> View -> AddressCode -> Response -> IO ()
+responsePrinter unit view code answer =
   case answer of
     -- The listings, which the screen reads in chunks ('rowsPrinter')
     ResponseAccounts {} -> listing
@@ -993,8 +1011,8 @@ responsePrinter unit view answer =
     ResponseFile f -> renderIO $ "Written to" <+> styled UserText f
     ResponseImport report -> renderIO $ importDoc report
     ResponseDescriptors held -> renderIO $ vcat (intersperse mempty [descriptorDoc acc descriptor slip132 | (acc, descriptor, slip132) <- held])
-    ResponseAddress _ addr spendable ->
-      renderIO =<< listedAddressDoc Verbose unit (pathWidth [addr]) addr spendable
+    ResponseAddress acc addr spendable ->
+      renderIO =<< addressAnswerDoc code unit acc addr spendable
     ResponseCheckAddr acc path addr label -> renderIO $ checkAddrDoc acc path addr label
     ResponseTx acc txInfo ->
       renderIO =<< txAnswerDoc (accountNetwork acc) (Just acc) unit txInfo

@@ -20,6 +20,7 @@ What `hw` does:
   [SLIP39] describes.
 - [Accounts](#hw-createacc) as [BIP44] derives them, with legacy addresses, or
   as [BIP84] does, with native SegWit addresses, which pay lower fees.
+- [QR codes of addresses](#hw-receive) on the terminal, for a payer to scan.
 - [Signing on an offline computer](#signing-on-an-offline-computer), or with a
   hardware wallet, through [transaction files](#transaction-files).
 - [Coin control](#hw-preparetx), and [fee rates](#hw-fees) read from recent
@@ -263,6 +264,7 @@ server, so they are not marked.
 | [`sync`](#hw-sync) | Update the accounts from the server |
 | **[Addresses](#addresses)** | |
 | [`receive`](#hw-receive) | Get a new address to receive a payment |
+| [`showaddr`](#hw-showaddr) | Show an address of the wallet with its QR code |
 | [`addresses`](#hw-addresses) | List the receiving addresses, or the change addresses |
 | [`balances`](#hw-balances) | List the addresses that hold coins |
 | [`label`](#hw-label) | Label a receiving address or a transaction |
@@ -580,7 +582,8 @@ ends, so scripts never see it.
 
 #### `hw receive`
 
-Gives the next receiving address of an account.
+Gives the next receiving address of an account. On a terminal, its QR code comes
+under it, for the payer to scan.
 
 ```console
 hw receive --label "invoice 42"
@@ -591,6 +594,31 @@ hw receive --label "invoice 42"
 > - **`receive` stops after 20 unused addresses in a row.** A wallet restored
 >   from the mnemonic would not look further. Reuse one of them, or raise `gap`
 >   in the [configuration file](#configuration).
+> - **The code holds a payment URI** as [BIP 321] describes, with the address
+>   and nothing else. The label stays in the wallet.
+> - **The code takes 37 columns and 19 lines.** On a narrower terminal, its lines
+>   wrap and tear it apart.
+> - **The code is black on white, whatever the theme of the terminal.** With
+>   `NO_COLOR` set, it takes the colours of the terminal. On a dark theme it is
+>   then light on dark, which some scanners cannot read.
+> - **Scripts get the text alone.** Piped into another program, or with `--json`,
+>   `receive` shows no code.
+
+#### `hw showaddr`
+
+`hw showaddr ADDRESS` shows an address of the wallet as `receive` shows a new
+one, with its QR code on a terminal. Use it to give an address out again. It
+hands out no new address and changes nothing.
+
+```console
+hw showaddr ADDRESS
+```
+
+> **Good to know**
+>
+> - **An address the wallet does not hold is refused**, so the code never pays
+>   anyone else. The address tells its account.
+> - **Any address of the wallet will do**, a change address too.
 
 #### `hw addresses`
 
@@ -1233,6 +1261,7 @@ transaction again.
 [BIP84]: https://github.com/bitcoin/bips/blob/master/bip-0084.mediawiki
 [BIP125]: https://github.com/bitcoin/bips/blob/master/bip-0125.mediawiki
 [BIP 174]: https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki
+[BIP 321]: https://github.com/bitcoin/bips/blob/master/bip-0321.mediawiki
 [BIP 329]: https://github.com/bitcoin/bips/blob/master/bip-0329.mediawiki
 [BIP 370]: https://github.com/bitcoin/bips/blob/master/bip-0370.mediawiki
 [BIP 380]: https://github.com/bitcoin/bips/blob/master/bip-0380.mediawiki

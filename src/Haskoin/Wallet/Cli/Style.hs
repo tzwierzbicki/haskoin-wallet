@@ -15,7 +15,7 @@
 --
 -- The colours are the dull ANSI ones. Most terminal themes make them
 -- readable on a light background as well as on a dark one, which the vivid
--- ones are not.
+-- ones are not. Only a QR code sets its own colours: see 'QrCode'.
 module Haskoin.Wallet.Cli.Style
   ( Style (..),
     Output (..),
@@ -79,6 +79,10 @@ data Style
   | -- | A state that waits for something, often the user: not signed,
     -- locked, not confirmed yet
     Waiting
+  | -- | A QR code. It is black on white whatever the theme: a scanner
+    -- finds dark modules on a light background, and not all of them read
+    -- the opposite.
+    QrCode
   deriving (Eq, Show)
 
 -- | How each part looks on a terminal
@@ -107,6 +111,9 @@ sgrOf = \case
   Outgoing -> [foreground Red]
   Good -> [foreground Green]
   Waiting -> [foreground Yellow]
+  -- The colours of the palette's cube, which themes leave as they are,
+  -- unlike the sixteen named ones
+  QrCode -> [SetPaletteColor Foreground (xterm6LevelRGB 0 0 0), SetPaletteColor Background (xterm6LevelRGB 5 5 5)]
   where
     faint = SetConsoleIntensity FaintIntensity
     bold = SetConsoleIntensity BoldIntensity

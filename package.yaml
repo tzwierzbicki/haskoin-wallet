@@ -58,6 +58,7 @@ dependencies:
   - process >= 1.6
   - prettyprinter >= 1.7
   - prettyprinter-ansi-terminal >= 1.1
+  - qrcode-core >= 0.9.12
   - random >= 1.1
   - raw-strings-qq >= 1.1
   - secp256k1-haskell >= 2.0.0
