@@ -6,11 +6,12 @@ nix:
   - secp256k1
   - pkg-config
 extra-deps:
-  # The local checkouts, for haskoin-core 1.6.0 and haskoin-store-data 1.7.0,
-  # the versions with the fixes of the November 2026 security review: pin
-  # the commits of jprupp's master again once they are merged there
-  - ../haskoin-core
-  - ../haskoin-store/data
+  - git: https://github.com/jprupp/haskoin-core.git
+    commit: 1a03243b1f99ad83abd03cadc22fe2c0c2f8a9cd
+  - git: https://github.com/jprupp/haskoin-store.git
+    commit: a3fe66dc9fecab81e1dba95039d74f3bb0a4b0ab
+    subdirs:
+      - data
   - git: https://github.com/jprupp/secp256k1-haskell.git
     commit: 29e7ca97790254a4f1b4608733fd92473ff0bf27
   - base16-2.0
