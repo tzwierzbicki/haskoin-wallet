@@ -617,12 +617,15 @@ transactionAccount ctx nameM netM tsd = do
     notInvolved name = "The transaction does not involve the account " <> cs name
 
 -- | The signing data with the paths of the account's addresses in the
--- transaction that it leaves out. A file signed and finalized by other
--- software names no key of its signed inputs, as the spec lets a
--- finalizer clear them, and a file another wallet prepared may name no
--- key of an output of the account. The wallet knows its own addresses,
--- so it fills the paths in. Signing data whose coins cannot be found is
--- left as it is: parsing it says why.
+-- transaction that it leaves out. A file hw prepared or signed names the
+-- path of every input of the account, in a field of its own that a
+-- finalizer leaves. A file another wallet prepared, and other software
+-- signed and finalized, names no key of its signed inputs, as the spec
+-- lets a finalizer clear them, and it may name no key of an output of
+-- the account. The wallet knows the addresses it handed out or found
+-- used, so it fills those paths in. An address it never generated, as
+-- on an offline computer, stays without a path. Signing data whose
+-- coins cannot be found is left as it is: parsing it says why.
 withWalletPaths :: (MonadUnliftIO m) => Ctx -> (DBAccountId, DBAccount) -> TxSignData -> ExceptT String (DB m) TxSignData
 withWalletPaths ctx (accId, acc) tsd = do
   let net = accountNetwork acc

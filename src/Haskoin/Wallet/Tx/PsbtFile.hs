@@ -12,7 +12,8 @@
 -- proprietary fields under the identifier "hw": the network, the fee rate
 -- the transaction was built for, the transactions it replaces and its
 -- label in the global map, the label of an address on its input or output,
--- and the label a coin shows on its input.
+-- the label a coin shows on its input, and the path of the address of the
+-- account an input spends from.
 --
 -- A derivation record names a key by the fingerprint of the seed and the
 -- path from it, m/44'/0'/0'/0/5, when the wallet knows the seed, as the
@@ -30,10 +31,16 @@
 -- no key, sighash or partial signature any more, as the finalizer of the
 -- spec leaves it and as Bitcoin Core writes it. The finalizer is
 -- haskoin-core's finalizePsbt, here and for the files of other wallets:
--- it verifies every signature it uses against the coin. A wallet that
--- reads a signed file finds its inputs among its own addresses, and the
--- fingerprint of the seed in the record of an output of the account, if
--- the transaction has one.
+-- it verifies every signature it uses against the coin. A finalizer
+-- leaves the fields the spec does not define, so the path of the address
+-- an input spends from stays, in the field of hw: the reader derives the
+-- key of each of its accounts there, and the input is of the account
+-- whose address the coin pays. No table of addresses and no search is
+-- needed, so an offline signer that never handed out an address reads
+-- the file it signed. A file without that field, which another wallet
+-- prepared and finalized, is placed by the addresses the wallet knows.
+-- The fingerprint of the seed is in the record of an output of the
+-- account, if the transaction has one.
 --
 -- A file of another wallet is read the same way. An input it signed but
 -- did not finalize, as a hardware wallet leaves it, is finalized when it
@@ -56,6 +63,7 @@ module Haskoin.Wallet.Tx.PsbtFile
     labelField,
     addressLabelField,
     coinLabelField,
+    inputPathField,
   )
 where
 
@@ -114,10 +122,33 @@ labelField = 3
 
 -- | The subtypes of hw's fields in the map of an input or of an output: the
 -- label of the address of the account there, and, on an input, the label
--- the coin shows, both in UTF-8
-addressLabelField, coinLabelField :: Word64
+-- the coin shows, both in UTF-8, and the path of the address of the
+-- account the input spends from ('inputPathBytes')
+addressLabelField, coinLabelField, inputPathField :: Word64
 addressLabelField = 0
 coinLabelField = 1
+inputPathField = 2
+
+-- | The path of an address in its account, as hw's field of an input
+-- holds it: the chain and the index, /0/5, 4 bytes each, little-endian,
+-- as a derivation record writes the steps of a path. The field holds no
+-- key and no fingerprint. It says where the address is, which the reader
+-- checks against the coin.
+inputPathBytes :: SoftPath -> ByteString
+inputPathBytes path = S.runPut (mapM_ S.putWord32le (pathToList path))
+
+-- | The path hw's field of an input holds: /0/n or /1/n, where an account
+-- has its addresses ('isChainPath'). hw writes no other value, so any
+-- other is refused.
+inputPathOf :: Int -> ByteString -> Either String SoftPath
+inputPathOf i bytes =
+  case S.runGet ((,) <$> S.getWord32le <*> S.getWord32le) bytes of
+    Right (chain, index)
+      | BS.length bytes == 8,
+        Just path <- toSoft (listToPath [chain, index]),
+        isChainPath path ->
+          Right path
+    _ -> Left ("Input " <> show i <> ": the path of the address it spends from, in the field of hw, is not /0/n or /1/n")
 
 {- Writing -}
 
@@ -197,14 +228,17 @@ txFilePsbt ctx accountM file = do
   return $ Psbt Version0 (psbtOf tx).unsignedTx globals inputs outputs
 
 -- | The map of an input: the transaction its coin comes from, the coin
--- itself as well for a SegWit one, and the label its coin shows, if any.
--- While it is unsigned: the sighash to sign it with, and the derivation
--- and label of the address of the account it spends from, if any. Once
--- signed: its final script and witness, and none of what served the
--- signers, as the finalizer of the spec leaves an input. The whole transaction is what hw and
--- the hardware wallets that check the amounts want; the coin alone is what
--- the spec asks for a SegWit input, and what the signers that read no
--- more look at.
+-- itself as well for a SegWit one, the label its coin shows, if any, and
+-- the path and the label of the address of the account it spends from, if
+-- any, in the fields of hw. While it is unsigned: the sighash to sign it
+-- with, and the derivation record of that address. Once signed: its final
+-- script and witness, and none of what served the signers, as the
+-- finalizer of the spec leaves an input. The fields of hw stay, as a
+-- finalizer leaves the fields the spec does not define: the path is how
+-- the reader of a signed file knows the input as the account's. The
+-- whole transaction is what hw and the hardware wallets that check the
+-- amounts want; the coin alone is what the spec asks for a SegWit input,
+-- and what the signers that read no more look at.
 inputMap :: Ctx -> Network -> TxFile -> [AddressKey] -> TxIn -> WitnessStack -> (Tx, TxOut) -> PsbtMap
 inputMap ctx net file keys input stack (parent, coin) =
   foldr ($) (insertNonWitnessUtxo parent Map.empty) $
@@ -212,25 +246,30 @@ inputMap ctx net file keys input stack (parent, coin) =
       <> [insertSigHashType (walletSigHash net) | unsigned]
       <> [insertFinalScriptSig input.script | not (BS.null input.script)]
       <> [insertFinalScriptWitness stack | not (null stack)]
-      <> concat [addressFields (insertInputDerivation ctx) file key | unsigned, key <- keys, key.addressScript == coin.script]
+      <> concat [spentAddressFields key | key <- keys, key.addressScript == coin.script]
       <> [insertProprietary hwIdentifier coinLabelField (encodeUtf8 label) | Just label <- [Map.lookup input.outpoint.hash file.txFileInputLabels]]
   where
     unsigned = BS.null input.script && null stack
     segWitCoin = either (const False) isSegwit (unmarshal ctx coin.script)
+    -- The address of the account the input spends from: its path and its
+    -- label, and the derivation record of its key while a signer needs it
+    spentAddressFields key =
+      [insertProprietary hwIdentifier inputPathField (inputPathBytes key.addressPath)]
+        <> [insertInputDerivation ctx key.addressPublic key.addressDerivation | unsigned]
+        <> addressLabel file key
 
 -- | The map of an output: the derivation and label of the address of the
 -- account it pays, if any
 outputMap :: Ctx -> TxFile -> [AddressKey] -> TxOut -> PsbtMap
 outputMap ctx file keys output =
   foldr ($) Map.empty $
-    concat [addressFields (insertOutputDerivation ctx) file key | key <- keys, key.addressScript == output.script]
+    concat [insertOutputDerivation ctx key.addressPublic key.addressDerivation : addressLabel file key | key <- keys, key.addressScript == output.script]
 
--- | The fields of an address of the account in an input or an output: the
--- derivation of its key, and its label when it has one
-addressFields :: (PublicKey -> Derivation -> PsbtMap -> PsbtMap) -> TxFile -> AddressKey -> [PsbtMap -> PsbtMap]
-addressFields insertDerivation file key =
-  insertDerivation key.addressPublic key.addressDerivation
-    : [insertProprietary hwIdentifier addressLabelField (encodeUtf8 label) | Just label <- [Map.lookup key.addressPath file.txFilePathLabels]]
+-- | The label of an address of the account, in the field of hw of its
+-- input or output, when the file has one for its path
+addressLabel :: TxFile -> AddressKey -> [PsbtMap -> PsbtMap]
+addressLabel file key =
+  [insertProprietary hwIdentifier addressLabelField (encodeUtf8 label) | Just label <- [Map.lookup key.addressPath file.txFilePathLabels]]
 
 {- Signing into a file -}
 
@@ -243,6 +282,12 @@ addressFields insertDerivation file key =
 -- type, the redeem script and the derivation records, as Bitcoin Core
 -- does. Every other field of the file stays, known to hw or not. The
 -- file, once finalized, must hold the very transaction signed.
+--
+-- The path of each address of the account the transaction spends from
+-- goes in the field of hw of its input first, as hw writes it in a file
+-- it prepares ('inputPathField'). A file another wallet prepared has no
+-- such field, and its records go with the signature: the path is what
+-- lets a wallet that never handed out the address read the signed file.
 --
 -- The derivation records that are left, those of the outputs and of the
 -- inputs still unsigned, and that named the keys of the account by the
@@ -260,7 +305,15 @@ signedPsbt ctx accountM source file = do
     Left "The transaction signed is not the one of the file"
   coins <- inputCoins source
   let stacks = tx.witness <> repeat []
-      withSignatures = zipWith4 (signerFields net) coins tx.inputs stacks source.inputs
+      -- The paths the account signed with, by the script of their address
+      spentPaths = case accountM of
+        Just acc -> Map.fromList [(key.addressScript, key.addressPath) | key <- addressKey ctx acc Nothing <$> tsd.txSignDataInputPaths]
+        Nothing -> Map.empty
+      withPath :: Maybe InputCoin -> PsbtMap -> PsbtMap
+      withPath coinM m = case (\found -> Map.lookup found.coin.script spentPaths) =<< coinM of
+        Just path -> insertProprietary hwIdentifier inputPathField (inputPathBytes path) m
+        Nothing -> m
+      withSignatures = zipWith4 (signerFields net) coins tx.inputs stacks (zipWith withPath coins source.inputs)
       globals = case lookupProprietary hwIdentifier networkField source.globals of
         Nothing -> insertProprietary hwIdentifier networkField (cs net.name) source.globals
         Just _ -> source.globals
@@ -334,11 +387,15 @@ data AccountMatch = AccountMatch
   }
 
 -- | The transaction file of a PSBT, as the signing data of hw holds it,
--- with its paths relative to the account among those given that the
--- derivation records name: the first with a record on an input, or else
--- on an output, those on the network the file names coming first. A PSBT
--- that names none of them is read without paths, as a transaction outside
--- the wallet. Every input must carry the whole transaction its coin comes
+-- with its paths relative to the account among those given that the file
+-- names: the first with an address on an input, or else on an output,
+-- those on the network the file names coming first. A derivation record
+-- names an address of an account by its key. The field of hw of an input
+-- names one by its path alone ('inputPathField'), which a signed input
+-- still has: it is of the account whose address at that path the coin
+-- pays, and of no account when none has it there. A PSBT that names none
+-- of the accounts is read without paths, as a transaction outside the
+-- wallet. Every input must carry the whole transaction its coin comes
 -- from, which haskoin-core checks against the input. An input to be
 -- signed with a sighash hw does not sign with is refused: that of the
 -- account's network, or ALL, with FORKID on Bitcoin Cash, when no account
@@ -373,7 +430,12 @@ psbtTxFile ctx fallbackM accounts psbt = do
   feeRateM <- traverse feeRateOf (lookupProprietary hwIdentifier feeRateField psbt.globals)
   replaces <- maybe (Right []) replacesOf (lookupProprietary hwIdentifier replacesField psbt.globals)
   label <- maybe (Right noLabel) (textOf "The label of the transaction") (lookupProprietary hwIdentifier labelField psbt.globals)
-  matches <- mapM (accountMatch ctx netM psbt) accounts
+  -- The path the field of hw names on each input, beside the script of
+  -- the coin the input spends
+  fieldPaths <- forM (zip [0 :: Int ..] psbt.inputs) $ \(i, m) ->
+    traverse (inputPathOf i) (lookupProprietary hwIdentifier inputPathField m)
+  let spent = zip fieldPaths (map (fmap (.coin.script)) checkedCoins)
+  matches <- mapM (accountMatch ctx netM psbt spent) accounts
   let onFileNetwork :: AccountMatch -> Bool
       onFileNetwork m = maybe True (== m.matchAccount.fileAccountNetwork) netM
       candidates =
@@ -435,11 +497,19 @@ sigHashRefusal i sh netM =
     Just net -> sigHashName (walletSigHash net) <> " on " <> net.name
     Nothing -> "ALL, or ALL|FORKID on Bitcoin Cash"
 
--- | What the records of the PSBT say of the account
-accountMatch :: Ctx -> Maybe Network -> Psbt -> FileAccount -> Either String AccountMatch
-accountMatch ctx netM psbt acc = do
-  inputs <- forM (zip [0 :: Int ..] psbt.inputs) $ \(i, m) ->
-    addressesOf ("Input " <> show i) m =<< inputDerivations ctx m
+-- | What the PSBT says of the account: the addresses of the account its
+-- derivation records name, and those the field of hw of an input names,
+-- given here for each input beside the script of its coin
+accountMatch :: Ctx -> Maybe Network -> Psbt -> [(Maybe SoftPath, Maybe ByteString)] -> FileAccount -> Either String AccountMatch
+accountMatch ctx netM psbt spent acc = do
+  inputs <- forM (zip3 [0 :: Int ..] psbt.inputs spent) $ \(i, m, (fieldPathM, coinScriptM)) -> do
+    named <- addressesOf ("Input " <> show i) m =<< inputDerivations ctx m
+    labelM <- labelOf m
+    -- The path of hw's field is of this account when the address of the
+    -- account there is the one the coin pays. Otherwise it is of another
+    -- account, or of another wallet, and says nothing of this one.
+    let followed = [(path, Nothing, labelM) | Just path <- [fieldPathM], Just coinScript <- [coinScriptM], scriptAt path == Just coinScript]
+    return (named <> followed)
   outputs <- forM (zip [0 :: Int ..] psbt.outputs) $ \(i, m) ->
     addressesOf ("Output " <> show i) m =<< outputDerivations ctx m
   -- The record of the account's own key, if the global map has one, says
@@ -460,9 +530,15 @@ accountMatch ctx netM psbt acc = do
     -- fingerprint of the seed when their records carry it, and the label
     -- of the address when the map has one
     addressesOf place m records = do
-      labelM <- traverse (textOf "The label of an address") (lookupProprietary hwIdentifier addressLabelField m)
+      labelM <- labelOf m
       found <- forM records $ \record -> fmap (\(path, fingerprintM) -> (path, fingerprintM, labelM)) <$> matchRecord ctx acc place record
       return (mapMaybe id found)
+    labelOf m = traverse (textOf "The label of an address") (lookupProprietary hwIdentifier addressLabelField m)
+    -- The script of the address of the account at a path, or none where
+    -- the account has no key
+    scriptAt path = case tryDerivePubPath ctx path acc.fileAccountXPub of
+      Right derived -> Just (marshal ctx (keyScript acc.fileAccountKind ctx (wrapPubKey True derived.key)))
+      Left _ -> Nothing
 
 -- | What a derivation record says of the account: the path of one of its
 -- addresses, with the fingerprint of the seed when the record derives the

@@ -1001,6 +1001,8 @@ The standard fields carry:
 - The sighash to sign with.
 - Once signed, the final script of each input. A signed input names no key any
   more, as the format asks of a finalized input and as other wallets write it.
+  The file still says which address of the account the input spends from, in a
+  field of `hw`.
 
 What is `hw`'s own goes in the proprietary fields of the format, under the
 identifier `hw`, which other software leaves aside:
@@ -1012,6 +1014,12 @@ identifier `hw`, which other software leaves aside:
 - The labels of the account's addresses in it.
 - The labels of the coins it spends, as the wallet has them when it writes the
   file.
+- The path of the address each input spends from, such as `/0/5`. The format
+  lets a signed input keep the fields it does not define, so this one stays
+  once the input is signed, by `hw` or by another wallet. `hw` then knows the
+  input as the account's on any computer that holds the account, such as an
+  offline one that never handed out an address. It derives the address at that
+  path and checks that the coin pays it.
 
 The file names the keys by the fingerprint of the seed, which a hardware wallet
 needs to find its own. The wallet knows it once it created the account, signed
@@ -1027,14 +1035,15 @@ its version.
 - **`importtx` and `sendtx --input`** take a file another signer returned,
   finalized or not. `hw` finalizes an input left signed and not final, and
   refuses a signature that does not verify. It keeps from the version it holds
-  what such a file leaves out: the paths of its signed inputs, the fee rate and
-  the label.
+  what such a file may leave out: the paths of its signed inputs, when another
+  wallet prepared it, the fee rate and the label.
 - **`sendtx --input`** also takes the signed transaction alone, in hexadecimal
   as a wallet gives it once finalized, when the wallet holds the transaction.
 - **`signtx --input`** signs a file another wallet prepared for an account of
   the wallet, with the sighash ALL only, and only when every input that is not
   the account's is signed already. The signed file keeps every field of it,
-  but those of the inputs signed that served the signers.
+  but those of the inputs signed that served the signers, and gains the path
+  of the address each of them spends from.
 
 Such a file names no network. The account it involves tells it. A file that
 involves no account of the wallet, for `reviewtx`, `sendtx` or `signsweep`,

@@ -1901,9 +1901,11 @@ its place in the wallet, shown by its txid. Or give a transaction file with
 --input, on an offline computer for example. The signed transaction then goes
 to the --output file. Without --output, hw offers to replace the --input file,
 since the unsigned file is of no use once signed. It asks this before the
-mnemonic. A transaction of a file is shown with the labels the file carries.
-A signed input names no key any more, as the format asks, so the signed file
-keeps the labels of the outputs and of the coins.
+mnemonic. A transaction of a file is shown with the labels the file carries,
+which go on to the signed file. A signed input names no key any more, as the
+format asks. The file still says which address of the account it spends from,
+in a field of hw, so reviewtx shows the signed file as the payment it is, on
+the offline computer too.
 
 A file another wallet prepared for the account is signed the same way, in
 bytes or in base64 text, of version 0 or of version 2, that of BIP 370. The

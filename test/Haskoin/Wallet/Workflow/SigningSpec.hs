@@ -239,6 +239,40 @@ signingSpec ctx = do
         summaryFee (txInfoSummary reviewed) `shouldBe` 2260
         (txsOf <$> hwJson signer ["pendingtxs"] []) `shouldReturn` Right []
 
+    -- The signer never handed out the address the payment spends from, and
+    -- a signed input names no key any more. The file names the path of
+    -- that address in a field of hw, which the signer follows.
+    it "is shown again by reviewtx on the signer once signed, as the payment it signed" $
+      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+        signerAndOnline signer online
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
+        reviewed <- hwJson signer ["reviewtx", signer </> "signed.psbt"] []
+        (dBAccountName <$> accountOf reviewed) `shouldBe` Right "main"
+        shown <- txOf reviewed
+        pendingState shown `shouldBe` Just (True, False)
+        -- 20000 paid and 2260 of fee leave the account
+        txRow shown `shouldBe` (TxDebit, -22260, Nothing)
+        spentFromWallet shown `shouldBe` Map.fromList [(externalAddr 0, 50000)]
+        paidToOthers shown `shouldBe` Map.fromList [(otherAddr 0, 20000)]
+        paidToWallet shown `shouldBe` Map.fromList [(internalAddr 0, 27740)]
+
+    -- A payment of every coin has no change, so no output of the file
+    -- names the account either: the path of the address spent from is all
+    -- that does. One input and one output are 192 bytes, so the fee is
+    -- 1920, and 50000 - 1920 = 48080 are paid.
+    it "of every coin of the account is shown again by reviewtx on the signer once signed, as spent from its account" $
+      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+        signerAndOnline signer online
+        _ <- answer online ["preparesendall", textOf (otherAddr 0), "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
+        reviewed <- hwJson signer ["reviewtx", signer </> "signed.psbt"] []
+        (dBAccountName <$> accountOf reviewed) `shouldBe` Right "main"
+        shown <- txOf reviewed
+        txRow shown `shouldBe` (TxDebit, -50000, Nothing)
+        spentFromWallet shown `shouldBe` Map.fromList [(externalAddr 0, 50000)]
+        paidToOthers shown `shouldBe` Map.fromList [(otherAddr 0, 48080)]
+
     -- The payment is from main
     it "is shown by reviewtx with the name of its account" $
       withHome $ \home -> do
@@ -318,6 +352,20 @@ foreignFileSpec ctx =
         signed <- txOf =<< answer home ["signtx", "--input", prepared, "--output", home </> "signed.psbt"] seedOnce
         pendingState signed `shouldBe` Just (True, False)
         (Base64.encode <$> BS.readFile (home </> "signed.psbt")) `shouldReturn` corePreparedSignedText
+
+    -- Core's file has no field of hw. The wallet never handed out the
+    -- address the payment spends from: signtx writes its path into the
+    -- file it signs, which the wallet then follows.
+    it "prepared by Bitcoin Core and signed by hw is shown again as the payment of the account, by a wallet that never handed out its address" $
+      withHome $ \home -> do
+        createMain home
+        prepared <- coreFile home "core-prepared.psbt"
+        _ <- answer home ["signtx", "--input", prepared, "--output", home </> "signed.psbt"] seedOnce
+        shown <- txOf =<< answer home ["reviewtx", home </> "signed.psbt"] []
+        pendingState shown `shouldBe` Just (True, False)
+        spentFromWallet shown `shouldBe` Map.fromList [(externalAddr 0, 5000000000)]
+        paidToOthers shown `shouldBe` Map.fromList [(testAddress "1GfJmWwG2JUjrvQ6WjVfwaWpPgtbHDhSdE", 100000000)]
+        paidToWallet shown `shouldBe` Map.fromList [(internalAddr 0, 4899997750)]
 
     -- Bitcoin Core 32 and later write a PSBT of version 2 (BIP 370) unless
     -- asked for version 0: the same payment, as Core 32.1 writes it. The

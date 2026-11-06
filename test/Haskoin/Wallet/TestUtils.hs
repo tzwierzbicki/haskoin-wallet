@@ -1175,12 +1175,13 @@ fingerprintOf = forceRight . textToFingerprint
 -- that file, in base64: the file Bitcoin Core's analyzepsbt finds
 -- complete, and whose transaction its testmempoolaccept accepts on the
 -- regtest chain the coin is on. Its signed input carries its final
--- script and no derivation record, as a finalizer leaves it: that record
--- was cleared apart from hw from the file checked on the chain, and
+-- script, no derivation record, as a finalizer leaves it, and the path
+-- /0/0 of its address in the field of hw. That record was cleared and
+-- that field added apart from hw, in the file checked on the chain, and
 -- Bitcoin Core 32.1 extracts the same transaction from both. This holds
 -- for the two files below as well. See test/data/psbt/README.md.
 corePreparedSignedText :: BS.ByteString
-corePreparedSignedText = "cHNidP8BAHcCAAAAAZzolVrP9CarlPjUSHujJgVmsHiFB+Mm+Bafv63Mct7+AAAAAAD9////AgDh9QUAAAAAGXapFKvIhl67bbYllWAxY5ddm6o2RjLKiKw2CBAkAQAAABl2qRRFWqUMJmMUF3HrrCCW43gzkRIn1oisAAAAAAX8Amh3AANidGMAAQCHAgAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP////8DAWYA/////wIA8gUqAQAAABl2qRTIDVUiPi8QYTY63Sp7A2PChb8pjYisAAAAAAAAAAAmaiSqIant4vYcP3HR3v0/qZnfo2lTdVxpBol5mWK0i+vYNpdOjPkAAAAAAQdqRzBEAiAt4w5OLHA+pvdD8Ech2/HZRoxlJ5EQEddAV3jzEPe6tAIgGhnWoPRPsXAT4lNaosniGeLccnAzo++kwH50AovU9p4BIQMvZDcCIlbIVOAJDn1si2XpZgbvf0BTmeDwGHyTCXrA+QAAIgIDdvLnBkWN11Zzuhm479hC793ZvArkHjEznf/PkXtttusYvFYPlSwAAIAAAACAAAAAgAEAAAAAAAAAAA=="
+corePreparedSignedText = "cHNidP8BAHcCAAAAAZzolVrP9CarlPjUSHujJgVmsHiFB+Mm+Bafv63Mct7+AAAAAAD9////AgDh9QUAAAAAGXapFKvIhl67bbYllWAxY5ddm6o2RjLKiKw2CBAkAQAAABl2qRRFWqUMJmMUF3HrrCCW43gzkRIn1oisAAAAAAX8Amh3AANidGMAAQCHAgAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP////8DAWYA/////wIA8gUqAQAAABl2qRTIDVUiPi8QYTY63Sp7A2PChb8pjYisAAAAAAAAAAAmaiSqIant4vYcP3HR3v0/qZnfo2lTdVxpBol5mWK0i+vYNpdOjPkAAAAAAQdqRzBEAiAt4w5OLHA+pvdD8Ech2/HZRoxlJ5EQEddAV3jzEPe6tAIgGhnWoPRPsXAT4lNaosniGeLccnAzo++kwH50AovU9p4BIQMvZDcCIlbIVOAJDn1si2XpZgbvf0BTmeDwGHyTCXrA+QX8Amh3AggAAAAAAAAAAAAAIgIDdvLnBkWN11Zzuhm479hC793ZvArkHjEznf/PkXtttusYvFYPlSwAAIAAAACAAAAAgAEAAAAAAAAAAA=="
 
 -- | The file Bitcoin Core prepared for the bip84 account of the test
 -- wallet (test/data/psbt/core/core-prepared-segwit.psbt), signed by the
@@ -1189,7 +1190,7 @@ corePreparedSignedText = "cHNidP8BAHcCAAAAAZzolVrP9CarlPjUSHujJgVmsHiFB+Mm+Bafv6
 -- accepts on the regtest chain the coin is on, 144 virtual bytes for a
 -- fee of 1440. See test/data/psbt/README.md.
 coreSegwitPreparedSignedText :: BS.ByteString
-coreSegwitPreparedSignedText = "cHNidP8BAHQCAAAAAWc1xfZ0yPv0PUM5wdsglkTvSrW2RVXDC/aJc1pkR9gIAAAAAAD9////AgDh9QUAAAAAGXapFC0S+z6YrxZ3BWxVA/Hx0aMiQAbZiKxgCxAkAQAAABYAFP0l5/X0gP7M5jxDskByzUud0N6hAAAAAAX8Amh3AANidGMAAQCDAgAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP////8CUQD+////AgDyBSoBAAAAFgAUJOZHGwyBWu4Cx70iYUy2DkgRoBkAAAAAAAAAACZqJKohqe3i9hw/cdHe/T+pmd+jaVN1XGkGiXmZYrSL69g2l06M+QAAAAABAR8A8gUqAQAAABYAFCTmRxsMgVruAse9ImFMtg5IEaAZAQhsAkgwRQIhAOextS4gCOX8iHiGEXf4bEqQo2OlixpAsJf1zIGkwO7mAiA0MlumEVMEGQx8IT9NPcwcRR4Wk4SBnQPmTTWVcH8q4AEhAnZS3vvAmDIdpIXaYXXei4ePQz8NiTNDVSYlyc1Qkz9TAAAiAgMSvuVMTQzd0oxq2bXlbxXHLisLmALO0zcJZKa9BYoOChi8Vg+VVAAAgAAAAIAAAACAAQAAAAAAAAAA"
+coreSegwitPreparedSignedText = "cHNidP8BAHQCAAAAAWc1xfZ0yPv0PUM5wdsglkTvSrW2RVXDC/aJc1pkR9gIAAAAAAD9////AgDh9QUAAAAAGXapFC0S+z6YrxZ3BWxVA/Hx0aMiQAbZiKxgCxAkAQAAABYAFP0l5/X0gP7M5jxDskByzUud0N6hAAAAAAX8Amh3AANidGMAAQCDAgAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP////8CUQD+////AgDyBSoBAAAAFgAUJOZHGwyBWu4Cx70iYUy2DkgRoBkAAAAAAAAAACZqJKohqe3i9hw/cdHe/T+pmd+jaVN1XGkGiXmZYrSL69g2l06M+QAAAAABAR8A8gUqAQAAABYAFCTmRxsMgVruAse9ImFMtg5IEaAZAQhsAkgwRQIhAOextS4gCOX8iHiGEXf4bEqQo2OlixpAsJf1zIGkwO7mAiA0MlumEVMEGQx8IT9NPcwcRR4Wk4SBnQPmTTWVcH8q4AEhAnZS3vvAmDIdpIXaYXXei4ePQz8NiTNDVSYlyc1Qkz9TBfwCaHcCCAAAAAAAAAAAAAAiAgMSvuVMTQzd0oxq2bXlbxXHLisLmALO0zcJZKa9BYoOChi8Vg+VVAAAgAAAAIAAAACAAQAAAAAAAAAA"
 
 -- | The same, signed into the version 2 file Core writes by default
 -- (test/data/psbt/core/core-prepared-v2.psbt): the file above with the
@@ -1197,7 +1198,7 @@ coreSegwitPreparedSignedText = "cHNidP8BAHQCAAAAAWc1xfZ0yPv0PUM5wdsglkTvSrW2RVXD
 -- analyzepsbt finds it complete, its finalizepsbt extracts the transaction
 -- of the file above, and its testmempoolaccept accepts it.
 corePreparedSignedV2Text :: BS.ByteString
-corePreparedSignedV2Text = "cHNidP8BAgQCAAAAAQMEAAAAAAEEAQEBBQECAfsEAgAAAAX8Amh3AANidGMAAQCHAgAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP////8DAWYA/////wIA8gUqAQAAABl2qRTIDVUiPi8QYTY63Sp7A2PChb8pjYisAAAAAAAAAAAmaiSqIant4vYcP3HR3v0/qZnfo2lTdVxpBol5mWK0i+vYNpdOjPkAAAAAAQdqRzBEAiAt4w5OLHA+pvdD8Ech2/HZRoxlJ5EQEddAV3jzEPe6tAIgGhnWoPRPsXAT4lNaosniGeLccnAzo++kwH50AovU9p4BIQMvZDcCIlbIVOAJDn1si2XpZgbvf0BTmeDwGHyTCXrA+QEOIJzolVrP9CarlPjUSHujJgVmsHiFB+Mm+Bafv63Mct7+AQ8EAAAAAAEQBP3///8AAQMIAOH1BQAAAAABBBl2qRSryIZeu222JZVgMWOXXZuqNkYyyoisACICA3by5wZFjddWc7oZuO/YQu/d2bwK5B4xM53/z5F7bbbrGLxWD5UsAACAAAAAgAAAAIABAAAAAAAAAAEDCDYIECQBAAAAAQQZdqkURVqlDCZjFBdx66wgluN4M5ESJ9aIrAA="
+corePreparedSignedV2Text = "cHNidP8BAgQCAAAAAQMEAAAAAAEEAQEBBQECAfsEAgAAAAX8Amh3AANidGMAAQCHAgAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP////8DAWYA/////wIA8gUqAQAAABl2qRTIDVUiPi8QYTY63Sp7A2PChb8pjYisAAAAAAAAAAAmaiSqIant4vYcP3HR3v0/qZnfo2lTdVxpBol5mWK0i+vYNpdOjPkAAAAAAQdqRzBEAiAt4w5OLHA+pvdD8Ech2/HZRoxlJ5EQEddAV3jzEPe6tAIgGhnWoPRPsXAT4lNaosniGeLccnAzo++kwH50AovU9p4BIQMvZDcCIlbIVOAJDn1si2XpZgbvf0BTmeDwGHyTCXrA+QEOIJzolVrP9CarlPjUSHujJgVmsHiFB+Mm+Bafv63Mct7+AQ8EAAAAAAEQBP3///8F/AJodwIIAAAAAAAAAAAAAQMIAOH1BQAAAAABBBl2qRSryIZeu222JZVgMWOXXZuqNkYyyoisACICA3by5wZFjddWc7oZuO/YQu/d2bwK5B4xM53/z5F7bbbrGLxWD5UsAACAAAAAgAAAAIABAAAAAAAAAAEDCDYIECQBAAAAAQQZdqkURVqlDCZjFBdx66wgluN4M5ESJ9aIrAA="
 
 {- Signatures at the edge of the curve -}
 

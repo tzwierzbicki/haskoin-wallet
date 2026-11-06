@@ -126,7 +126,7 @@ signedWithSeed ctx = (signedByWallet ctx (payment ctx)) {txSignDataFingerprint =
 -- | The file hw writes for the unsigned payment, with the seed known:
 -- the one Bitcoin Core signed for the vectors in test/data/psbt/core
 unsignedPaymentText :: BS.ByteString
-unsignedPaymentText = "cHNidP8BAHcCAAAAARtCW1G6d8iktJ6tfcrZ9/NlRYpWG/bQVr97AifbJolaAAAAAAD9////AmDqAAAAAAAAGXapFLy24qoWpyVllUiRDXoCBBTL/mXfiKwwdQAAAAAAABl2qRRFWqUMJmMUF3HrrCCW43gzkRIn1oisADUMAAX8Amh3AANidGMF/AJodwEICgAAAAAAAAAAAQBVAQAAAAEBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/////wGghgEAAAAAABl2qRTIDVUiPi8QYTY63Sp7A2PChb8pjYisAAAAAAEDBAEAAAAiBgMvZDcCIlbIVOAJDn1si2XpZgbvf0BTmeDwGHyTCXrA+Ri8Vg+VLAAAgAAAAIAAAACAAAAAAAAAAAAAACICA3by5wZFjddWc7oZuO/YQu/d2bwK5B4xM53/z5F7bbbrGLxWD5UsAACAAAAAgAAAAIABAAAAAAAAAAA="
+unsignedPaymentText = "cHNidP8BAHcCAAAAARtCW1G6d8iktJ6tfcrZ9/NlRYpWG/bQVr97AifbJolaAAAAAAD9////AmDqAAAAAAAAGXapFLy24qoWpyVllUiRDXoCBBTL/mXfiKwwdQAAAAAAABl2qRRFWqUMJmMUF3HrrCCW43gzkRIn1oisADUMAAX8Amh3AANidGMF/AJodwEICgAAAAAAAAAAAQBVAQAAAAEBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/////wGghgEAAAAAABl2qRTIDVUiPi8QYTY63Sp7A2PChb8pjYisAAAAAAEDBAEAAAAiBgMvZDcCIlbIVOAJDn1si2XpZgbvf0BTmeDwGHyTCXrA+Ri8Vg+VLAAAgAAAAIAAAACAAAAAAAAAAAAF/AJodwIIAAAAAAAAAAAAACICA3by5wZFjddWc7oZuO/YQu/d2bwK5B4xM53/z5F7bbbrGLxWD5UsAACAAAAAgAAAAIABAAAAAAAAAAA="
 
 -- | The file hw writes for the unsigned payment of the bip84 account:
 -- the one Bitcoin Core signed for the vectors in test/data/psbt/core,
@@ -135,7 +135,7 @@ unsignedPaymentText = "cHNidP8BAHcCAAAAARtCW1G6d8iktJ6tfcrZ9/NlRYpWG/bQVr97AifbJ
 -- m/84'/0'/0'/0/0 and /1/0 of the seed bc560f95, the sighash ALL and
 -- hw's fields
 segwitPaymentText :: BS.ByteString
-segwitPaymentText = "cHNidP8BAHQCAAAAAf0HLBjt2BsDcA3jyok02bxCoNYoJWOnc0LyAZ3uZ+kZAAAAAAD9////AmDqAAAAAAAAGXapFLy24qoWpyVllUiRDXoCBBTL/mXfiKwwdQAAAAAAABYAFP0l5/X0gP7M5jxDskByzUud0N6hADUMAAX8Amh3AANidGMF/AJodwEICgAAAAAAAAAAAQBSAQAAAAECAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/////wGghgEAAAAAABYAFCTmRxsMgVruAse9ImFMtg5IEaAZAAAAAAEBH6CGAQAAAAAAFgAUJOZHGwyBWu4Cx70iYUy2DkgRoBkBAwQBAAAAIgYCdlLe+8CYMh2khdphdd6Lh49DPw2JM0NVJiXJzVCTP1MYvFYPlVQAAIAAAACAAAAAgAAAAAAAAAAAAAAiAgMSvuVMTQzd0oxq2bXlbxXHLisLmALO0zcJZKa9BYoOChi8Vg+VVAAAgAAAAIAAAACAAQAAAAAAAAAA"
+segwitPaymentText = "cHNidP8BAHQCAAAAAf0HLBjt2BsDcA3jyok02bxCoNYoJWOnc0LyAZ3uZ+kZAAAAAAD9////AmDqAAAAAAAAGXapFLy24qoWpyVllUiRDXoCBBTL/mXfiKwwdQAAAAAAABYAFP0l5/X0gP7M5jxDskByzUud0N6hADUMAAX8Amh3AANidGMF/AJodwEICgAAAAAAAAAAAQBSAQAAAAECAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/////wGghgEAAAAAABYAFCTmRxsMgVruAse9ImFMtg5IEaAZAAAAAAEBH6CGAQAAAAAAFgAUJOZHGwyBWu4Cx70iYUy2DkgRoBkBAwQBAAAAIgYCdlLe+8CYMh2khdphdd6Lh49DPw2JM0NVJiXJzVCTP1MYvFYPlVQAAIAAAACAAAAAgAAAAAAAAAAABfwCaHcCCAAAAAAAAAAAAAAiAgMSvuVMTQzd0oxq2bXlbxXHLisLmALO0zcJZKa9BYoOChi8Vg+VVAAAgAAAAIAAAACAAQAAAAAAAAAA"
 
 {- Writing -}
 
@@ -212,6 +212,23 @@ writingSpec ctx =
       sigHashType (inputAt 0 psbt) `shouldBe` Right Nothing
       nonWitnessUtxo (inputAt 0 psbt) `shouldBe` Right (Just (funding ctx))
 
+    -- The coins are at /0/3 and /1/2: the field holds the chain, then the
+    -- index, four bytes each, little-endian
+    it "writes the path of the address an input spends from in the field of hw: its chain and its index" $ do
+      let coins = fundingTx ctx 1 [(externalAddr 3, 60000), (internalAddr 2, 40000)]
+          spending = TxSignData (builtTx ctx 800000 [(txHash coins, 0), (txHash coins, 1)] [(otherAddr 0, 90000)]) [coins] ["/0/3", "/1/2"] [] (Just 10) Nothing [] noLabel
+      psbt <- written ctx (knownSeed ctx) (TxFile (Just btc) spending Map.empty Map.empty)
+      map (hwField inputPathField) psbt.inputs `shouldBe` [Just (hexBytes "0000000003000000"), Just (hexBytes "0100000002000000")]
+
+    -- A finalizer leaves the fields the spec does not define. The path
+    -- /0/0 is how the reader of a signed file knows the input as the
+    -- account's, and where the label of its address goes.
+    it "writes that path on a signed input too, with the label of its address" $ do
+      let labelled = TxFile (Just btc) (signedByWallet ctx (payment ctx)) (Map.fromList [("/0/0", "Salary")]) Map.empty
+      psbt <- written ctx (knownSeed ctx) labelled
+      hwField inputPathField (inputAt 0 psbt) `shouldBe` Just (hexBytes "0000000000000000")
+      hwField addressLabelField (inputAt 0 psbt) `shouldBe` Just "Salary"
+
     it "keeps the derivation record of the account's change output in a signed file" $ do
       let signed = signedByWallet ctx (payment ctx)
       psbt <- written ctx (knownSeed ctx) (paymentFile ctx) {txFileData = signed}
@@ -256,6 +273,7 @@ writingSpec ctx =
       let sweep = TxFile (Just btc) (TxSignData (paymentTx ctx) [funding ctx] [] [] (Just 10) Nothing [] noLabel) Map.empty Map.empty
       psbt <- expectRight $ txFilePsbt ctx Nothing sweep
       inputDerivations ctx (inputAt 0 psbt) `shouldBe` Right []
+      hwField inputPathField (inputAt 0 psbt) `shouldBe` Nothing
       mapM (outputDerivations ctx) psbt.outputs `shouldBe` Right [[], []]
       xpubRecords btc ctx psbt.globals `shouldBe` Right []
 
@@ -380,6 +398,19 @@ signingIntoSpec ctx =
       hasPartialSignatures (inputAt 0 signed) `shouldBe` False
       psbtTransaction signed `shouldBe` Right signedSweep.txSignDataTx
 
+    -- Core's file names the key of the input in a derivation record,
+    -- which the finalizer clears, and has no field of hw. hw writes the
+    -- path /0/0 it signed with in its own field first, so that the signed
+    -- file still says which address of the account the input spends from.
+    it "writes the path of the address it signed for in the field of hw of a file of another wallet" $ do
+      psbt <- coreFile "core-prepared.psbt"
+      hwField inputPathField (inputAt 0 psbt) `shouldBe` Nothing
+      file <- readBack ctx [knownSeed ctx] psbt
+      (signed, _) <- expectRight $ signWalletTx btc ctx Bip44 file.txFileData testAccountKey
+      written' <- expectRight $ signedPsbt ctx (Just (knownSeed ctx)) psbt (TxFile (Just btc) signed Map.empty Map.empty)
+      inputDerivations ctx (inputAt 0 written') `shouldBe` Right []
+      hwField inputPathField (inputAt 0 written') `shouldBe` Just (hexBytes "0000000000000000")
+
     it "names the network in the field of hw when the file has none" $ do
       source <- written ctx (knownSeed ctx) (paymentFile ctx)
       let withoutNetwork = withGlobals (Map.delete (proprietaryKey (Proprietary hwIdentifier networkField "")) source.globals) source
@@ -431,11 +462,54 @@ readingSpec ctx =
       file <- readBack ctx [knownSeed ctx] =<< written ctx (knownSeed ctx) signed
       isSigned file.txFileData.txSignDataTx `shouldBe` True
       file.txFileData.txSignDataTx `shouldBe` signed.txFileData.txSignDataTx
-      -- The signed input names no key: the wallet that reads the file
-      -- finds its inputs among its own addresses. The change output still
-      -- names the account.
+      -- The signed input names no key, and still the path of its address,
+      -- in the field of hw. The change output still names its key.
+      file.txFileData.txSignDataInputPaths `shouldBe` ["/0/0"]
+      file.txFileData.txSignDataOutputPaths `shouldBe` ["/1/0"]
+
+    it "is the file written signed, with the labels of its addresses and the fingerprint of the seed its change output carries" $ do
+      let labelled = TxFile (Just btc) (signedByWallet ctx (payment ctx)) (Map.fromList [("/0/0", "Salary"), ("/1/0", "Change")]) (Map.fromList [(txHash (funding ctx), "From work")])
+      file <- readBack ctx [knownSeed ctx] =<< written ctx (knownSeed ctx) labelled
+      file `shouldBe` labelled {txFileData = labelled.txFileData {txSignDataFingerprint = Just testFingerprint}}
+
+    -- The coin of 100000 at /0/0 goes to another wallet, less a fee of
+    -- 10000. No output is the account's, so no record names it: the path
+    -- of the input is all that does, and it names no seed.
+    it "finds the account of a signed payment without change by the path of its input, among several accounts" $ do
+      let allOfIt = TxSignData (builtTx ctx 800000 [(txHash (funding ctx), 0)] [(otherAddr 0, 90000)]) [funding ctx] ["/0/0"] [] (Just 10) Nothing [] noLabel
+      psbt <- written ctx (knownSeed ctx) (TxFile (Just btc) (signedByWallet ctx allOfIt) Map.empty Map.empty)
+      mapM (outputDerivations ctx) psbt.outputs `shouldBe` Right [[]]
+      file <- readBack ctx [otherWallet ctx, segwitSeed ctx, knownSeed ctx] psbt
+      file.txFileData.txSignDataInputPaths `shouldBe` ["/0/0"]
+      file.txFileData.txSignDataOutputPaths `shouldBe` []
+      file.txFileData.txSignDataFingerprint `shouldBe` Nothing
+
+    -- The other wallet has another address at /0/0, which the coin does
+    -- not pay: the path says nothing of it
+    it "leaves aside the path of an input of another wallet" $ do
+      let signed = (paymentFile ctx) {txFileData = signedByWallet ctx (payment ctx)}
+      file <- readBack ctx [otherWallet ctx] =<< written ctx (knownSeed ctx) signed
+      file.txFileData.txSignDataInputPaths `shouldBe` []
+      file.txFileData.txSignDataOutputPaths `shouldBe` []
+
+    -- The coin is at /0/0. A file that says /0/1 names the second
+    -- receiving address, which the coin does not pay: the input is not
+    -- taken for the account's on the word of the file.
+    it "follows the path of an input only where the coin pays the address of the account there" $ do
+      let signed = (paymentFile ctx) {txFileData = signedByWallet ctx (payment ctx)}
+      psbt <- written ctx (knownSeed ctx) signed
+      let elsewhere = withInputs [insertProprietary hwIdentifier inputPathField (hexBytes "0000000001000000") (inputAt 0 psbt)] psbt
+      file <- readBack ctx [knownSeed ctx] elsewhere
       file.txFileData.txSignDataInputPaths `shouldBe` []
       file.txFileData.txSignDataOutputPaths `shouldBe` ["/1/0"]
+
+    -- /2/7 is on no chain of an account, 0x80000000 is a hardened index,
+    -- and four bytes are no path of two steps: hw writes none of them
+    it "refuses a path of an input that is not /0/n or /1/n" $ do
+      psbt <- written ctx (knownSeed ctx) (paymentFile ctx)
+      forM_ ["0200000007000000", "0000000000000080", "00000000"] $ \bytes ->
+        psbtTxFile ctx Nothing [knownSeed ctx] (withInputs [insertProprietary hwIdentifier inputPathField (hexBytes bytes) (inputAt 0 psbt)] psbt)
+          `shouldBe` Left "Input 0: the path of the address it spends from, in the field of hw, is not /0/n or /1/n"
 
     it "finds the account among several by the keys its records name" $ do
       file <- readBack ctx [otherWallet ctx, knownSeed ctx] =<< written ctx (knownSeed ctx) (paymentFile ctx)
@@ -539,15 +613,17 @@ readingSpec ctx =
       verifySignedTx btc ctx file.txFileData `shouldBe` Right ()
 
     -- The same file signed and finalized by Core, which clears the
-    -- derivation records of the input it finalized: the account is found
-    -- by its change output. The transaction is the one Core's finalizepsbt
-    -- gives.
-    it "reads the transaction of an input another signer finalized, which names no key of the account any more" $ do
+    -- derivation records of the input it finalized and leaves the fields
+    -- of hw: the input still names its path, /0/0. The transaction is the
+    -- one Core's finalizepsbt gives.
+    it "reads the transaction of an input another signer finalized, which names no key of the account any more, and still its path" $ do
       psbt <- coreFile "hw-payment-finalized.psbt"
+      inputDerivations ctx (inputAt 0 psbt) `shouldBe` Right []
+      hwField inputPathField (inputAt 0 psbt) `shouldBe` Just (hexBytes "0000000000000000")
       file <- readBack ctx [knownSeed ctx] psbt
       encodeHex (S.encode file.txFileData.txSignDataTx)
         `shouldBe` "02000000011b425b51ba77c8a4b49ead7dcad9f7f365458a561bf6d056bf7b0227db26895a000000006a473044022074f111ce88a136dea1259050e9a564a9a021d07e5bc9e35710f4768da5b1b9a502200fbdf1799186f1bb53be566c1f529be81f44d4c461521d9ef5f1495a951f24b70121032f6437022256c854e0090e7d6c8b65e96606ef7f405399e0f0187c93097ac0f9fdffffff0260ea0000000000001976a914bcb6e2aa16a725659548910d7a020414cbfe65df88ac30750000000000001976a914455aa50c2663141771ebac2096e37833911227d688ac00350c00"
-      file.txFileData.txSignDataInputPaths `shouldBe` []
+      file.txFileData.txSignDataInputPaths `shouldBe` ["/0/0"]
       file.txFileData.txSignDataOutputPaths `shouldBe` ["/1/0"]
       file.txFileData.txSignDataFingerprint `shouldBe` Just testFingerprint
       file.txFileData.txSignDataFeeRate `shouldBe` Just 10
@@ -783,15 +859,15 @@ readingSpec ctx =
       verifySignedTx btc ctx file.txFileData `shouldBe` Right ()
 
     -- The same file finalized by Core, which clears the derivation record
-    -- of the input it finalized: the account is found by its change
-    -- output, and hw's fields stay. The transaction is the one Core's
+    -- of the input it finalized, and leaves hw's fields: the input still
+    -- names its path, /0/0. The transaction is the one Core's
     -- finalizepsbt gives.
-    it "reads the transaction of a P2WPKH input another signer finalized, which names no key of the account any more" $ do
+    it "reads the transaction of a P2WPKH input another signer finalized, which names no key of the account any more, and still its path" $ do
       file <- readBack ctx [segwitSeed ctx] =<< coreFile "hw-segwit-payment-finalized.psbt"
       finalized <- BS.readFile "test/data/psbt/core/hw-segwit-payment-finalized.hex"
       encodeHex (S.encode file.txFileData.txSignDataTx) `shouldBe` decodeUtf8 (C8.strip finalized)
       txHash file.txFileData.txSignDataTx `shouldBe` "1fd25156213613f70bd549422e25c3134741a27315202b015231f645ad7f75fe"
-      file.txFileData.txSignDataInputPaths `shouldBe` []
+      file.txFileData.txSignDataInputPaths `shouldBe` ["/0/0"]
       file.txFileData.txSignDataOutputPaths `shouldBe` ["/1/0"]
       file.txFileData.txSignDataFeeRate `shouldBe` Just 10
       verifySignedTx btc ctx file.txFileData `shouldBe` Right ()

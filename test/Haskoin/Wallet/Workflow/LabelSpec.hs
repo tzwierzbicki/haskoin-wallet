@@ -176,9 +176,9 @@ addressLabelsSpec ctx =
         (txFilePathLabels <$> readTxFile ctx file) `shouldReturn` Map.fromList [("/0/0", "Salary")]
 
     -- The address labelled is the one the payment spends from. A signed
-    -- input names no key any more, so the signed file has no path to
-    -- label: the wallet that takes the file back has its own labels.
-    it "are those of the wallet when signtx signs a pending transaction: shown, and left out of its --output file for the input signed" $
+    -- input names no key any more, and still the path of its address, in
+    -- a field of hw: the label goes with that path.
+    it "are those of the wallet when signtx signs a pending transaction, shown and written to its --output file" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
@@ -186,7 +186,7 @@ addressLabelsSpec ctx =
         let file = home </> "signed.psbt"
         signed <- txOf =<< answer home ["signtx", nosig, "--output", file] seedOnce
         addressLabelsOf signed `shouldBe` Map.fromList [(externalAddr 0, "Salary"), (internalAddr 0, "")]
-        (txFilePathLabels <$> readTxFile ctx file) `shouldReturn` Map.empty
+        (txFilePathLabels <$> readTxFile ctx file) `shouldReturn` Map.fromList [("/0/0", "Salary")]
 
     -- The address is relabelled after the file is written
     it "are shown by reviewtx in place of the wallet's own" $
@@ -207,14 +207,14 @@ addressLabelsSpec ctx =
         run <- hw signer ["reviewtx", online </> "unsigned.psbt"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0  \"Salary\"\n"
 
-    it "are shown by signtx --input on the offline signer, and left out of the signed file for the input signed" $
+    it "are shown by signtx --input on the offline signer, and go on to the signed file" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
         _ <- answer online ["label", textOf (externalAddr 0), "Salary"] []
         _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
         signed <- txOf =<< answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
         addressLabelsOf signed `shouldBe` Map.fromList [(externalAddr 0, "Salary"), (internalAddr 0, "")]
-        (txFilePathLabels <$> readTxFile ctx (signer </> "signed.psbt")) `shouldReturn` Map.empty
+        (txFilePathLabels <$> readTxFile ctx (signer </> "signed.psbt")) `shouldReturn` Map.fromList [("/0/0", "Salary")]
 
     -- The address is relabelled while the file is away to be signed
     it "give way to the wallet's own when importtx takes the signed file back" $
