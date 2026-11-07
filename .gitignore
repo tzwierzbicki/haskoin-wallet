@@ -22,4 +22,3 @@ cabal.project.local~
 .ghc.environment.*
 # Python bytecode cache (test vector tools)
 __pycache__/
-CLAUDE.md

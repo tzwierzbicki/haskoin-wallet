@@ -14,6 +14,7 @@ github: haskoin/haskoin-wallet.git
 homepage: http://github.com/jprupp/haskoin-wallet
 bug-reports: http://github.com/jprupp/haskoin-wallet/issues
 extra-source-files:
+  - CHANGELOG.md
   - test/data/bip329/*.jsonl
   - test/data/bip329/README.md
   - test/data/descriptors/*.json

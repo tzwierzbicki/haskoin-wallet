@@ -1247,6 +1247,9 @@ The backslash goes when the command runs, as it does in a name with a space,
 
 Use `hw` 0.10. Never use version 0.8 or earlier.
 
+[CHANGELOG.md](CHANGELOG.md) lists what changed in each version, and the
+commands and options that were renamed or removed.
+
 `hw` 0.10 upgrades the database of 0.8 and 0.9 on its first command. It backs
 the database up to `~/.hw/migration-backups` first. Do not run an older `hw`
 on the upgraded database. `hw` 0.8 would rewrite parts of it in a format that
