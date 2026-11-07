@@ -181,6 +181,13 @@ unitSpec = do
       readUnit "satoshi" `shouldBe` Nothing
       readUnit "mbtc" `shouldBe` Nothing
 
+  -- As the help and the configuration file write it
+  describe "The name of a unit on its own" $
+    it "is btc, bit or sat" $ do
+      unitName UnitBitcoin `shouldBe` "btc"
+      unitName UnitBit `shouldBe` "bit"
+      unitName UnitSatoshi `shouldBe` "sat"
+
   -- showUnit takes the amount in satoshis, as the amounts shown are
   describe "The name of a unit after an amount" $ do
     it "is btc for bitcoins, whatever the amount" $ do

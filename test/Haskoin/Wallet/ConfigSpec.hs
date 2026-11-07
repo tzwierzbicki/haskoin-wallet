@@ -11,6 +11,7 @@ import Data.Default (def)
 import Data.List (isPrefixOf)
 import Data.String.Conversions (cs)
 import Haskoin (bch)
+import Haskoin.Wallet.Amounts (AmountUnit (..))
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.TestUtils (inScratchDirectory)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), testIdentity)
@@ -52,7 +53,7 @@ keySpec =
       decodeConfig [r|{"gap": 30}|] `shouldBe` Right withoutNetwork {configGap = 30}
 
     it "takes its default when null" $
-      decodeConfig [r|{"gap": null, "database-file": null}|] `shouldBe` Right withoutNetwork
+      decodeConfig [r|{"gap": null, "database-file": null, "unit": null}|] `shouldBe` Right withoutNetwork
 
     -- For a user of one network: the commands that need one take it
     -- without --network
@@ -68,6 +69,18 @@ keySpec =
     it "cannot be a network hw does not know" $
       decodeConfig [r|{"default-network": "doge"}|]
         `shouldSatisfy` either ("Error in $: The key \"default-network\" must be a network: " `isPrefixOf`) (const False)
+
+    -- For a user who counts in satoshis: the amounts are shown in them, and
+    -- read in them when typed without a unit
+    it "sets the unit of the amounts when --unit is not given" $
+      configUnit <$> decodeConfig [r|{"unit": "sat"}|] `shouldBe` Right UnitSatoshi
+
+    it "names a unit as --unit does, by its plural too, in any case" $
+      configUnit <$> decodeConfig [r|{"unit": "Bits"}|] `shouldBe` Right UnitBit
+
+    it "cannot be a unit hw does not know" $
+      decodeConfig [r|{"unit": "mbtc"}|]
+        `shouldBe` Left "Error in $: The key \"unit\" must be a unit: btc, bit or sat"
 
     -- A new file does not: the change of a payment goes to a new change
     -- address unless --change-back says otherwise
@@ -159,6 +172,7 @@ defaultFile =
   "parallel-requests": 1,
   "database-file": null,
   "default-network": "btc",
+  "unit": "btc",
   "change-back": false,
   "pager": null
 }|]

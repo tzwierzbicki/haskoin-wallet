@@ -4,9 +4,21 @@
 -- satoshis. A unit is a number of decimal places of satoshis, 8 for a
 -- bitcoin and 2 for a bit, and the rest follows from it: an amount is read
 -- with at most as many decimals, and shown with exactly as many.
+--
+-- There are three units on purpose. The bitcoin and the satoshi are the
+-- units amounts are quoted in. The bit, a millionth of a bitcoin, is the
+-- unit of BIP176, for those who want two decimals.
+--
+-- The millibitcoin (mBTC), 100,000 satoshis, is left out. Few quote
+-- amounts in it now. It also sits a factor of 1000 from both the bitcoin
+-- and the bit. An amount typed in the wrong one of two such units pays a
+-- thousand times too much or too little. A new unit is one more line of
+-- 'places', so one can be added when users ask for it. A unit taken away
+-- would break their configuration files and scripts.
 module Haskoin.Wallet.Amounts
   ( AmountUnit (..),
     readUnit,
+    unitName,
     showUnit,
     readAmount,
     showAmount,
@@ -44,21 +56,27 @@ maxMoney = 21000000 * oneUnit UnitBitcoin
 
 {- Units -}
 
--- | A unit as typed after an amount or with --unit, in any case
+-- | A unit as typed after an amount, with --unit or in the configuration
+-- file, in any case
 readUnit :: Text -> Maybe AmountUnit
 readUnit name =
   lookup (Text.toLower name) [("btc", UnitBitcoin), ("bit", UnitBit), ("bits", UnitBit), ("sat", UnitSatoshi), ("sats", UnitSatoshi)]
+
+-- | The name of a unit on its own, as the help and the configuration file
+-- write it: btc, bit or sat. 'readUnit' reads it back.
+unitName :: AmountUnit -> Text
+unitName UnitBitcoin = "btc"
+unitName UnitBit = "bit"
+unitName UnitSatoshi = "sat"
 
 -- | The name of a unit after an amount of satoshis shown in it, as the
 -- user types it: btc, and bit or sat for exactly one unit, bits or sats
 -- otherwise
 showUnit :: AmountUnit -> Integer -> Text
 showUnit unit amount = case unit of
-  UnitBitcoin -> "btc"
-  UnitBit -> plural "bit"
-  UnitSatoshi -> plural "sat"
-  where
-    plural name = if abs amount == oneUnit unit then name else name <> "s"
+  UnitBitcoin -> unitName unit
+  _ | abs amount == oneUnit unit -> unitName unit
+    | otherwise -> unitName unit <> "s"
 
 {- Amounts -}
 

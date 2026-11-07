@@ -9,7 +9,7 @@ import qualified Data.ByteString.Char8 as C8
 import GHC.IO.Encoding (setFileSystemEncoding, setLocaleEncoding, utf8)
 import Haskoin (withContext)
 import Haskoin.Wallet.Commands (commandListing, commandResponse)
-import Haskoin.Wallet.Config (Config, databaseFile, initConfig)
+import Haskoin.Wallet.Config (Config, commandUnit, databaseFile, initConfig)
 import Haskoin.Wallet.Amounts (AmountUnit)
 import Haskoin.Wallet.Database (DB, catchDatabaseInUse, runDB)
 import Haskoin.Wallet.Memory (keepMemoryPrivate)
@@ -36,12 +36,13 @@ clientMain = do
   argumentsProblem <- invalidArgumentsError
   forM_ argumentsProblem die
   withContext $ \ctx -> do
-    (cmd, GlobalOptions unit json noPager) <- parserMain
+    (cmd, GlobalOptions unitGiven json noPager) <- parserMain
     -- Only a command reads the configuration and touches the database:
     -- help, --version and usage errors leave ~/.hw as it is, and a
     -- database newer than this hw still gets help
     (cfg, warnings) <- either die return =<< initConfig
     forM_ warnings $ hPutStrLn stderr
+    let unit = commandUnit cfg unitGiven
     migrated <- catchDatabaseInUse $ runDB cfg (migrateDB (migrationHooks cfg) ctx)
     either die return (join migrated)
     case commandListing ctx cmd of

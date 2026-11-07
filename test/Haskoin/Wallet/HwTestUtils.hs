@@ -13,6 +13,7 @@ module Haskoin.Wallet.HwTestUtils
     withHome,
     setDefaultNetwork,
     setChangeBack,
+    setUnit,
     hw,
     hwWithEnv,
     hwOnTerminal,
@@ -120,6 +121,11 @@ setDefaultNetwork home netM =
 -- from without --change-back, in the configuration file of a home
 setChangeBack :: FilePath -> Bool -> IO ()
 setChangeBack home on = editConfig home (KeyMap.insert "change-back" (Json.Bool on))
+
+-- | Set the unit of the amounts without --unit, by its name, in the
+-- configuration file of a home
+setUnit :: FilePath -> Text -> IO ()
+setUnit home name = editConfig home (KeyMap.insert "unit" (Json.String name))
 
 -- | Change the keys of the configuration file of a home
 editConfig :: FilePath -> (Json.Object -> Json.Object) -> IO ()

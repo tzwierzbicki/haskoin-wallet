@@ -203,19 +203,25 @@ These options work with every command, before or after it:
 
 | Option | What it does |
 |---|---|
-| `--unit UNIT` | Sets the unit of the amounts shown, and of the amounts typed without a unit: `btc`, `bit` or `sat`. The default is `btc`. A bit is 100 satoshis. |
+| `--unit UNIT` | Sets the unit of the amounts shown, and of the amounts typed without a unit: `btc`, `bit` or `sat`. A bit is 100 satoshis. The default is the key `unit` of the [configuration](#configuration), or `btc`. |
 | `--json` | Prints the answer as JSON. Questions and warnings go to stderr. |
 | `--no-pager` | Prints a listing as it is, through no pager. |
 
 ### Amounts
 
-**An amount without a unit is in bitcoins.** `ADDRESS:1000` asks for 1000 BTC,
-not 1000 satoshis. Write the unit, as in `ADDRESS:1000sat`, or give
-`--unit sat`.
+**An amount without a unit is in bitcoins**, unless `--unit` or the
+configuration names another unit. `ADDRESS:1000` asks for 1000 BTC, not 1000
+satoshis. Write the unit, as in `ADDRESS:1000sat`, or give `--unit sat`.
 
 An amount can end with `btc`, `bit`, `bits`, `sat` or `sats`. Bitcoins take up
 to 8 decimals, bits up to 2, and satoshis none. `ADDRESS:0.00001`,
 `ADDRESS:10bits` and `ADDRESS:1000sat` pay the same.
+
+If you count in satoshis or in bits, set the key `unit` of the
+[configuration](#configuration). Amounts are then shown in that unit. An
+amount typed without a unit is read in it too. A script should give `--unit`,
+or write the unit after each amount, so that the configuration cannot change
+what it pays. JSON answers give every amount in satoshis, whatever the unit.
 
 ### Listings
 
@@ -783,7 +789,8 @@ hw preparetx ADDRESS:0.01 --recipients-pay --fee-rate high --output unsigned.psb
 
 > **Good to know**
 >
-> - **An amount without a unit is in bitcoins.** See [Amounts](#amounts).
+> - **An amount without a unit is in bitcoins**, or in the unit of the
+>   configuration. See [Amounts](#amounts).
 > - **No output is smaller than what nodes relay.** That is 546 satoshis for a
 >   legacy output, and 294 for a native SegWit one. A smaller payment is
 >   refused, and smaller change goes to the fee.
@@ -1149,6 +1156,7 @@ On its first command, `hw` creates the directory `~/.hw`. It holds the database
 |---|---|---|
 | `host` | `https://api.haskoin.com/` | The haskoin-store server |
 | `default-network` | `btc` | The network of a command given no `--network` |
+| `unit` | `btc` | The unit of the amounts of a command given no `--unit`: `btc`, `bit` or `sat` |
 | `gap` | `20` | How many unused addresses in a row `receive` gives out and `sync` looks at |
 | `change-back` | `false` | Whether `preparetx` sends the change back to an address it spends from |
 | `parallel-requests` | `1` | How many requests go to the server at once. The public server takes one at a time, so keep it at 1 unless you run your own haskoin-store. |

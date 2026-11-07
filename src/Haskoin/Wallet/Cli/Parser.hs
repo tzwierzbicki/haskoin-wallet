@@ -19,7 +19,7 @@ import Data.Text (Text)
 import Data.Version (showVersion)
 import Data.Word (Word32)
 import Haskoin
-import Haskoin.Wallet.Amounts (AmountUnit (..), readUnit)
+import Haskoin.Wallet.Amounts (AmountUnit, readUnit)
 import Haskoin.Wallet.Tx.CoinSelection (CoinSelection (..), FeePayer (..))
 import Haskoin.Wallet.Cli.Completion
   ( accountNames,
@@ -382,8 +382,10 @@ signingOptions =
 
 -- | The options that go with any command
 data GlobalOptions = GlobalOptions
-  { -- | The unit of the amounts shown and typed
-    globalUnit :: !AmountUnit,
+  { -- | The unit of the amounts shown and typed, when --unit is given.
+    -- Without it, the unit is that of the configuration file, which is
+    -- read after the command line.
+    globalUnit :: !(Maybe AmountUnit),
     -- | Answer in JSON
     globalJson :: !Bool,
     -- | Print a listing as it is, through no pager
@@ -444,8 +446,8 @@ it with /, and quit it with q. One that fits on the screen is shown as it
 is.
 
 The options --unit, --json and --no-pager go before or after the command.
-The settings, such as the server, the default network, the address gap and
-the pager, are in ~/.hw/config.json.
+The settings, such as the server, the default network, the unit, the address
+gap and the pager, are in ~/.hw/config.json.
 
 The Tab key completes the commands, the options, and what the wallet holds:
 account names, the hashes of pending transactions, coins and addresses. The
@@ -541,18 +543,18 @@ Print a listing as it is. On a terminal, it goes through less otherwise, or
 through the pager that HW_PAGER, the key pager of config.json or PAGER names.
 |]
 
-unitOption :: Args AmountUnit
+unitOption :: Args (Maybe AmountUnit)
 unitOption =
-  option (maybeReader (readUnit . cs)) $
+  optional . option (maybeReader (readUnit . cs)) $
     short 'u'
       <> long "unit"
       <> metavar "UNIT"
-      <> value UnitBitcoin
       <> completeWith ["btc", "bit", "sat"]
       <> help
         [r|
 The unit of the amounts shown, and of the amounts typed without a unit: btc,
-bit or sat (default: btc). A bit is 100 satoshis.
+bit or sat. A bit is 100 satoshis. The default is the key unit of
+config.json, or btc.
 |]
 
 {- mnemonic -}
@@ -1540,11 +1542,11 @@ paymentArg =
       <> help
         [r|
 A recipient and the amount it gets. Repeat for several recipients. The amount
-is in bitcoins, or in the --unit given, unless it ends with btc, bit, bits, sat
-or sats. ADDRESS:0.00001, ADDRESS:10bits and ADDRESS:1000sat pay the same.
-Bitcoins take up to 8 decimals, bits up to 2, and satoshis none. Separators
-such as 1'000 are refused. A Bitcoin Cash address can keep its prefix, as in
-bitcoincash:qp...:0.001.
+is in the unit of --unit or of config.json, bitcoins by default, unless it ends
+with btc, bit, bits, sat or sats. ADDRESS:0.00001, ADDRESS:10bits and
+ADDRESS:1000sat pay the same. Bitcoins take up to 8 decimals, bits up to 2, and
+satoshis none. Separators such as 1'000 are refused. A Bitcoin Cash address
+can keep its prefix, as in bitcoincash:qp...:0.001.
 |]
 
 {- preparesendall -}

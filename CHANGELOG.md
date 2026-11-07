@@ -106,6 +106,8 @@ Using `hw`:
   unit, as in `1000sat`.
 - The key `default-network` of the configuration sets the network of a command
   given no `--network`.
+- The key `unit` of the configuration sets the unit of the amounts of a
+  command given no `--unit`.
 
 ### Changed
 

@@ -14,6 +14,7 @@ import Database.Persist.Sql (toSqlKey)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Util.Arbitrary
+import Haskoin.Wallet.Amounts (AmountUnit (..))
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Coin
@@ -350,6 +351,7 @@ arbitraryConfig =
     <*> count
     <*> arbitrary
     <*> arbitraryMaybe arbitraryNetwork
+    <*> elements [UnitBitcoin, UnitBit, UnitSatoshi]
     <*> arbitrary
     <*> arbitraryMaybe arbitraryText
   where

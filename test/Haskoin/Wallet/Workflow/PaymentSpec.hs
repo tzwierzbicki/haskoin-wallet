@@ -186,6 +186,26 @@ receivingSpec ctx = do
         synced home
         (printed "50000 sats" <$> hw home ["--unit", "sat", "accounts"] []) `shouldReturn` True
 
+    it "is shown in the unit of the configuration file when --unit is not given" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        setUnit home "sat"
+        (printed "50000 sats" <$> hw home ["accounts"] []) `shouldReturn` True
+
+    -- 50000 satoshis are 500 bits
+    it "is shown in the unit of --unit, even when the configuration file names another" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        setUnit home "sat"
+        (printed "500.00 bits" <$> hw home ["accounts", "--unit", "bit"] []) `shouldReturn` True
+
+    -- A script that reads the JSON answers is not affected by the unit
+    it "is answered in JSON in satoshis, whatever the unit of the configuration file" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        setUnit home "bit"
+        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("main", 0, 50000)]
+
     it "is answered in JSON with --json given before the command" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
@@ -352,6 +372,13 @@ paymentSpec ctx =
           paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 20000)]
           nosig <- nosigOf prepared
           void $ answer home ["deletetx", nosig] []
+
+    it "takes an amount typed without a unit in the unit of the configuration file" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        setUnit home "sat"
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "20000", "--fee-rate", "10"] []
+        paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 20000)]
 
     it "pays each recipient the amount after its address" $
       withChain ctx (paidChain ctx) $ \home _ -> do

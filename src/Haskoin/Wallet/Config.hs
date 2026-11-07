@@ -22,6 +22,7 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Haskoin (Network (..), allNets, btc, netByName)
 import Haskoin.Store.WebClient
+import Haskoin.Wallet.Amounts (AmountUnit (..), readUnit, unitName)
 import Haskoin.Wallet.FileIO
 import Numeric.Natural (Natural)
 import qualified System.Directory as D
@@ -74,6 +75,13 @@ data Config = Config
     -- A sweep that pays no account of the wallet does not take it: it
     -- needs its --network.
     configDefaultNetwork :: Maybe Network,
+    -- | The unit of the amounts when --unit is not given, for a user who
+    -- counts in satoshis or in bits. It is the default of --unit, so it
+    -- sets the unit of the amounts shown and of those typed without a
+    -- unit. Splitting the two would make "1000" typed mean another amount
+    -- than "1000" shown. JSON answers count satoshis whatever the unit, so
+    -- a script that reads them is not affected.
+    configUnit :: AmountUnit,
     -- | Whether preparetx sends the change back to an address the payment
     -- spends from, as --change-back does, rather than to a new change
     -- address. --new-change overrides it for one payment.
@@ -99,6 +107,8 @@ instance FromJSON Config where
         <*> count "parallel-requests" configParallelRequests
         <*> o .:? "database-file"
         <*> (traverse networkNamed =<< o .:? "default-network")
+        -- Missing or null, the key reads as the name of the default unit
+        <*> (unitNamed =<< key "unit" (unitName . configUnit))
         <*> key "change-back" configChangeBack
         <*> o .:? "pager"
 
@@ -107,6 +117,12 @@ networkNamed :: String -> Parser Network
 networkNamed text = maybe (fail refused) return (netByName text)
   where
     refused = "The key \"default-network\" must be a network: " <> intercalate ", " ((.name) <$> allNets)
+
+-- | The unit of a name in the configuration file, any name --unit takes
+unitNamed :: Text -> Parser AmountUnit
+unitNamed text = maybe (fail refused) return (readUnit text)
+  where
+    refused = "The key \"unit\" must be a unit: btc, bit or sat"
 
 -- | A count of the configuration cannot be zero: a gap of zero would refuse
 -- every new address, and zero requests at a time would send none
@@ -122,6 +138,7 @@ instance ToJSON Config where
         "parallel-requests" .= configParallelRequests cfg,
         "database-file" .= configDatabaseFile cfg,
         "default-network" .= ((.name) <$> configDefaultNetwork cfg),
+        "unit" .= unitName (configUnit cfg),
         "change-back" .= configChangeBack cfg,
         "pager" .= configPager cfg
       ]
@@ -134,6 +151,7 @@ instance Default Config where
         configParallelRequests = 1,
         configDatabaseFile = Nothing,
         configDefaultNetwork = Just btc,
+        configUnit = UnitBitcoin,
         configChangeBack = False,
         configPager = Nothing
       }
@@ -142,6 +160,11 @@ instance Default Config where
 -- the default network of the configuration, when it has one
 commandNetwork :: Config -> Maybe Network -> Maybe Network
 commandNetwork cfg given = given <|> configDefaultNetwork cfg
+
+-- | The unit of the amounts of a command: the one --unit names, or the
+-- unit of the configuration
+commandUnit :: Config -> Maybe AmountUnit -> AmountUnit
+commandUnit cfg given = fromMaybe (configUnit cfg) given
 
 -- | The refusal of a command that needs a network and has none
 noNetwork :: String
