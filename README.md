@@ -563,7 +563,9 @@ hw sync
 hw sync --account savings --full
 ```
 
-`--full` downloads everything again, which is rarely needed.
+`--full` downloads the account's data again and writes it anew. Use it if the
+wallet shows something wrong. It keeps labels, locked coins and pending transactions.
+A reorganization of the chain does not need it: `sync` sees one by itself.
 
 On a terminal, a line tells what `sync` is doing while it works, with a bar for
 the steps whose size it knows. The line goes to stderr and is gone when `sync`

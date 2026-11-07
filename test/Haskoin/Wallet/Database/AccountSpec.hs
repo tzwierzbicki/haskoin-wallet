@@ -402,7 +402,7 @@ listingSpec ctx =
 deletingSpec :: Ctx -> Spec
 deletingSpec ctx =
   describe "Deleting an account" $
-    it "deletes it with its addresses, summaries, labels of transactions, coins and pending transactions, and nothing of another account" $
+    it "deletes it with its addresses, summaries, labels of transactions, coins, pending transactions and synced block, and nothing of another account" $
       inDatabaseE $ do
         (mainId, _) <- testNewAcc ctx "main"
         (otherId, _) <- testNewAcc2 ctx "other"
@@ -412,19 +412,21 @@ deletingSpec ctx =
           lift $ P.insert_ $ DBTxInfo accId (hashBytes (fakeTxHash n)) (S.encode (Store.BlockRef 800000 1)) (Just fixtureTime) 0 "{}" False fixtureTime
           lift $ P.insert_ $ DBTxLabel accId (hashBytes (fakeTxHash n)) "rent"
           lift $ P.insert_ $ DBPendingTx accId (hashBytes (fakeTxHash (n + 2))) "{}" False False fixtureTime
-        lift $ rowsOf mainId `dbShouldBe` (1, 1, 1, 1, 1)
+          lift $ P.insert_ $ DBSyncedBlock accId "00000000000000000002a7c4c1e48d76c5a37902165a270156b7a8d72728a054" 800000
+        lift $ rowsOf mainId `dbShouldBe` (1, 1, 1, 1, 1, 1)
         lift $ deleteAccount mainId
-        lift $ rowsOf mainId `dbShouldBe` (0, 0, 0, 0, 0)
-        lift $ rowsOf otherId `dbShouldBe` (1, 1, 1, 1, 1)
+        lift $ rowsOf mainId `dbShouldBe` (0, 0, 0, 0, 0, 0)
+        lift $ rowsOf otherId `dbShouldBe` (1, 1, 1, 1, 1, 1)
         lift $ (map fst <$> listed) `dbShouldBe` ["other"]
   where
     rowsOf accId =
-      (,,,,)
+      (,,,,,)
         <$> P.count [DBAddressAccount P.==. accId]
         <*> P.count [DBTxInfoAccount P.==. accId]
         <*> P.count [DBTxLabelAccount P.==. accId]
         <*> P.count [DBCoinAccount P.==. accId]
         <*> P.count [DBPendingTxAccount P.==. accId]
+        <*> P.count [DBSyncedBlockAccount P.==. accId]
 
 {- Balances -}
 

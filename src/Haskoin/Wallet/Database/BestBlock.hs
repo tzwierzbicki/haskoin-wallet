@@ -1,13 +1,17 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 
--- | The best block of each network the wallet synced with: where the last
--- sync left off, what the confirmations are counted from, and what the lock
--- time of a new transaction is drawn from.
+-- | The best block of each network the wallet synced with: what the
+-- confirmations are counted from, and what the lock time of a new
+-- transaction is drawn from. Also the block the last sync of each account
+-- reached, which tells that account whether the chain moved under it.
 module Haskoin.Wallet.Database.BestBlock
   ( BestBlock (..),
     getBest,
     bestHeight,
     updateBest,
+    SyncedBlock (..),
+    syncedBlock,
+    updateSyncedBlock,
     getConfirmations,
   )
 where
@@ -38,24 +42,22 @@ data BestBlock = BestBlock
 
 -- | The best block of a network as the last sync left it, or nothing
 -- before the first sync. A stored block that does not read is refused, as
--- every row that does not read: taking it for no block at all would skip
--- the check for a reorganisation of the chain that an incremental sync
--- makes. A full sync makes no such check and stores the block again.
+-- every row that does not read. Every sync stores the block again.
 getBest :: (MonadUnliftIO m) => Network -> ExceptT String (DB m) (Maybe BestBlock)
 getBest net = do
   rowM <- lift $ P.get (bestKey net)
   forM rowM $ \row ->
-    liftMaybe ("The stored best block of " <> net.name <> " does not read: sync --full stores it again") $ do
+    liftMaybe ("The stored best block of " <> net.name <> " does not read: sync stores it again") $ do
       hash <- hexToBlockHash (dBBestBestBlock row)
       height <- word32 (dBBestBestHeight row)
       time <- traverse word32 (dBBestBestTime row)
       return $ BestBlock hash height time
-  where
-    -- A height or a time, which the column holds as an integer
-    word32 :: Int -> Maybe Word32
-    word32 stored
-      | stored >= 0 && stored <= fromIntegral (maxBound :: Word32) = Just (fromIntegral stored)
-      | otherwise = Nothing
+
+-- | A height or a time, which a column holds as an integer
+word32 :: Int -> Maybe Word32
+word32 stored
+  | stored >= 0 && stored <= fromIntegral (maxBound :: Word32) = Just (fromIntegral stored)
+  | otherwise = Nothing
 
 -- | The height of the best block of a network, which the confirmations are
 -- counted from
@@ -77,6 +79,38 @@ updateBest net hash height time =
 -- | The row of the best block of a network, keyed by the network's name
 bestKey :: Network -> P.Key DBBest
 bestKey net = DBBestKey (cs net.name)
+
+{- The block of an account -}
+
+-- | The block the last sync of an account reached
+data SyncedBlock = SyncedBlock
+  { syncedHash :: !BlockHash,
+    syncedHeight :: !BlockHeight
+  }
+  deriving (Eq, Show)
+
+-- | The block the last sync of an account reached, or nothing before its
+-- first sync. A stored block that does not read is refused, as every row
+-- that does not read: taking it for no block at all would hide why the
+-- sync looks at everything. A full sync makes no such check and stores the
+-- block again.
+syncedBlock :: (MonadUnliftIO m) => DBAccountId -> ExceptT String (DB m) (Maybe SyncedBlock)
+syncedBlock accId = do
+  rowM <- lift $ P.get (DBSyncedBlockKey accId)
+  forM rowM $ \row ->
+    liftMaybe "The block the last sync of the account reached does not read: sync --full stores it again" $
+      SyncedBlock <$> hexToBlockHash (dBSyncedBlockBlock row) <*> word32 (dBSyncedBlockHeight row)
+
+-- | Store the block a sync of an account reached, in place of the one
+-- before: the sync does so once it is done
+updateSyncedBlock :: (MonadUnliftIO m) => DBAccountId -> BlockHash -> BlockHeight -> DB m ()
+updateSyncedBlock accId hash height =
+  P.repsert (DBSyncedBlockKey accId) $
+    DBSyncedBlock
+      { dBSyncedBlockAccount = accId,
+        dBSyncedBlockBlock = blockHashToHex hash,
+        dBSyncedBlockHeight = fromIntegral height
+      }
 
 {- Confirmations -}
 

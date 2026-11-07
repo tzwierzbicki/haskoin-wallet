@@ -187,6 +187,12 @@ spec = prepareContext $ \ctx ->
         migrateTo4 ctx
         queryRows "select amount from d_b_tx_info" `dbShouldBe` [[PersistInt64 (-41000)], [PersistInt64 50000]]
 
+    it "leaves every account without a synced block, for its first sync to look at every address: version 3 kept none" $
+      inMemory $ do
+        version3Database
+        migrateTo4 ctx
+        tablesRows ["d_b_synced_block"] `dbShouldBe` [[]]
+
     it "gives the summaries no time" $
       inMemory $ do
         version3Database

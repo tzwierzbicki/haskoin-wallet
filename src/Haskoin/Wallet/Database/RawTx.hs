@@ -28,7 +28,8 @@ insertRawTx tx = do
   P.repsert key $ DBRawTx hash (S.encode tx)
 
 -- | The raw transaction a coin comes from, which must be stored. The sync
--- stores it with the coin; a full sync fetches those that are missing.
+-- stores it with the coin; a full sync fetches it when it is missing or
+-- damaged.
 getRawTx :: (MonadUnliftIO m) => TxHash -> ExceptT String (DB m) Tx
 getRawTx hash =
   lookupRawTx hash
@@ -47,6 +48,18 @@ hasRawTx hash = isJust <$> P.get (DBRawTxKey $ hashBytes hash)
 -- | Those of the transactions whose raw transaction is not stored
 missingRawTxs :: (MonadUnliftIO m) => [TxHash] -> DB m [TxHash]
 missingRawTxs = filterM (fmap not . hasRawTx)
+
+-- | Those of the transactions whose raw transaction is missing or damaged.
+-- A raw transaction is named by its hash, so one that reads and hashes to
+-- its key is exactly right, and fetching it again would add nothing.
+unsoundRawTxs :: (MonadUnliftIO m) => [TxHash] -> DB m [TxHash]
+unsoundRawTxs = filterM (fmap not . sound)
+  where
+    sound hash = do
+      rowM <- P.get (DBRawTxKey $ hashBytes hash)
+      return $ case S.decode . dBRawTxBlob <$> rowM of
+        Just (Right tx) -> txHash tx == hash
+        _ -> False
 
 -- | Delete the raw transaction, if it is stored
 deleteRawTx :: (MonadUnliftIO m) => TxHash -> DB m ()

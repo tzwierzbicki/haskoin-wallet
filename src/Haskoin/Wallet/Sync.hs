@@ -352,14 +352,28 @@ syncAccounts ctx cfg storeOn accs full watch = do
 -- has: a used address found there is generated, with the ones before it,
 -- and synced like the others. An incremental sync then looks only at the
 -- addresses whose balance changed since the last sync, which is every
--- address a new, confirmed, replaced or dropped transaction touches. A
--- full sync, asked for or forced by a reorganisation of the chain, looks
--- at every address and also marks dead the summaries of transactions the
--- store no longer lists. The store must answer about the addresses and
--- the transactions it is asked about, and no others: a store that lies
--- gets no further than that, and 'scanLimit' bounds what it can say of
--- the addresses past the ones the account has. Most steps reach the status
--- line through the store ("Haskoin.Wallet.SyncStatus").
+-- address a new, confirmed, replaced or dropped transaction touches.
+--
+-- When the chain may have moved under the account ('chainMayHaveMoved'),
+-- the sync looks at every address, and also marks dead the summaries of
+-- transactions the store no longer lists. It still fetches only the
+-- transactions that moved: a reorganisation cannot change what a
+-- transaction holds, and a test network has them often.
+--
+-- A full sync, which the user asks for, is the way out of whatever went
+-- wrong in the database. It goes by nothing the store said before: it
+-- fetches every transaction listed and writes it again, it checks the raw
+-- transactions the coins come from and replaces those that are damaged, and
+-- a stored row that does not read cannot stop it. Only what the store
+-- cannot tell stays: labels, the coins the
+-- user locked, pending transactions, and the dead summaries kept for the
+-- history, except those that do not read, which nothing can write again.
+--
+-- The store must answer about the addresses and the transactions it is
+-- asked about, and no others: a store that lies gets no further than that,
+-- and 'scanLimit' bounds what it can say of the addresses past the ones the
+-- account has. Most steps reach the status line through the store
+-- ("Haskoin.Wallet.SyncStatus").
 sync :: (MonadUnliftIO m) => Ctx -> Config -> Store -> Network -> DBAccountId -> Bool -> Watcher (DB m) -> ExceptT String (DB m) SyncRes
 sync ctx cfg plainStore net accId full watch = do
   -- The questions to these stores tell the steps of the sync
@@ -372,7 +386,7 @@ sync ctx cfg plainStore net accId full watch = do
   best <- fromStore $ storeBestBlock store
   -- A full sync looks at everything anyway: only an incremental one asks
   -- whether the chain moved
-  everything <- if full then return True else chainReorganised store net
+  everything <- if full then return True else chainMayHaveMoved store accId
   found <- watchGap ctx cfg scanStore accId watch
   -- The addresses of the account with their stored balances, and those the
   -- store reports changed
@@ -384,20 +398,27 @@ sync ctx cfg plainStore net accId full watch = do
   acc <- lift $ updateAccountBalances accId
   -- Their transactions, and the summaries to store or to mark dead
   listings <- listTxs cfg store net tell changedBals
-  known <- txInfoBlockRefs accId
-  untimed <- untimedSummaries accId
-  let toFetch = transactionsToFetch known untimed addrBals listings
-      listed = concatMap snd listings
+  let listed = concatMap snd listings
+  (toFetch, live) <-
+    if full
+      then (,) (nubOrd ((.txid) <$> listed)) <$> liveTxids accId
+      else do
+        known <- txInfoBlockRefs accId
+        untimed <- untimedSummaries accId
+        return (transactionsToFetch known untimed addrBals listings, Map.keysSet known)
   txs <- fromStore $ storeTransactions store toFetch
   liftEither $ askedFor toFetch txs
   updated <- lift $ forM (filter (not . (.deleted)) txs) $ \tx ->
     repsertSummary net accId tx.txid tx.block (storeTime tx.timestamp) (storeSummary net addrPaths tx)
-  lift $ forM_ (deadTransactions everything known toFetch txs listed) $ markTxInfoDead accId
+  lift $ forM_ (deadTransactions everything live toFetch txs listed) $ markTxInfoDead accId
+  when full $ lift $ dropUnreadableDead net accId
   -- The coins, the pending transactions and the raw transactions
-  refreshed <- syncCoins ctx store net accId changedBals
+  refreshed <- syncCoins ctx store net accId full changedBals
   (resent, conflicted, retired) <- syncPending store accId (Set.fromList $ (.txid) <$> listed)
-  pruneRawTxs everything refreshed retired
-  lift $ updateBest net (headerHash best.header) best.height best.header.timestamp
+  pruneRawTxs full refreshed retired
+  lift $ do
+    updateBest net (headerHash best.header) best.height best.header.timestamp
+    updateSyncedBlock accId (headerHash best.header) best.height
   -- After the best block, which matures the coins of a coinbase
   spendable <- spendableBalance net accId
   return
@@ -413,18 +434,23 @@ sync ctx cfg plainStore net accId full watch = do
         syncResNewAddrs = found
       }
 
--- | Whether the chain has moved away from the block of the last sync: that
--- block is no longer in the main chain at its height. Balances alone do not
--- show a reorganisation that leaves them unchanged while it moves
--- transactions to other blocks, so a full sync follows.
-chainReorganised :: (MonadUnliftIO m) => Store -> Network -> ExceptT String (DB m) Bool
-chainReorganised store net = do
-  bestM <- getBest net
-  case bestM of
-    Nothing -> return False
-    Just best -> do
-      blocks <- fromStore $ storeBlocksAtHeight store best.blockHeight
-      let stillMain b = headerHash b.header == best.blockHash && b.main
+-- | Whether the chain may have moved under the account since its last
+-- sync: the block that sync reached is no longer in the main chain at its
+-- height. Balances alone do not show a reorganisation that leaves them
+-- unchanged while it moves transactions to other blocks, so the sync then
+-- looks at every address. Each account asks about its own block: the first
+-- one to see a reorganisation moves the best block of the network past it.
+-- An account with no block may have moved too. It was never synced, which
+-- makes every address new anyway, or it comes from a version of the
+-- database that kept no block.
+chainMayHaveMoved :: (MonadUnliftIO m) => Store -> DBAccountId -> ExceptT String (DB m) Bool
+chainMayHaveMoved store accId = do
+  syncedM <- syncedBlock accId
+  case syncedM of
+    Nothing -> return True
+    Just synced -> do
+      blocks <- fromStore $ storeBlocksAtHeight store synced.syncedHeight
+      let stillMain b = headerHash b.header == synced.syncedHash && b.main
       return $ not $ any stillMain blocks
 
 {- The balances -}
@@ -496,29 +522,31 @@ transactionsToFetch known untimed addrBals listings = nubOrd $ changed <> unconf
     storedCount bal = maybe 0 addrBalanceTxs $ Map.lookup bal.address addrBals
     firstSeen = [r.txid | (bal, refs) <- listings, storedCount bal == 0, r <- refs]
 
--- | The known transactions that are dead: those fetched that the store
+-- | The live transactions that are dead: those fetched that the store
 -- reports deleted or does not return, replaced, dropped from the mempool or
--- left out by a reorganisation; and, on a full sync, those no address lists
--- any more, since a reorganisation may remove a confirmed transaction
--- without a trace in the addresses it touched. Their summaries are marked
--- dead and kept, for the history, and are no longer known: a transaction
--- the store lists again later is fetched and comes back to life.
-deadTransactions :: Bool -> Map TxHash Store.BlockRef -> [TxHash] -> [Store.Transaction] -> [Store.TxRef] -> [TxHash]
-deadTransactions everything known fetched txs listed = nubOrd $ gone <> vanished
+-- left out by a reorganisation; and, when the sync looked at every address,
+-- those no address lists any more, since a reorganisation may remove a
+-- confirmed transaction without a trace in the addresses it touched. Their
+-- summaries are marked dead and kept, for the history, and are no longer
+-- live: a transaction the store lists again later is fetched and comes back
+-- to life.
+deadTransactions :: Bool -> Set TxHash -> [TxHash] -> [Store.Transaction] -> [Store.TxRef] -> [TxHash]
+deadTransactions everything live fetched txs listed = nubOrd $ gone <> vanished
   where
     alive = Set.fromList [t.txid | t <- txs, not t.deleted]
-    gone = [tid | tid <- fetched, tid `Set.notMember` alive, tid `Map.member` known]
+    gone = [tid | tid <- fetched, tid `Set.notMember` alive, tid `Set.member` live]
     stillListed = Set.fromList $ (.txid) <$> listed
-    vanished = [tid | everything, tid <- Map.keys known, tid `Set.notMember` stillListed]
+    vanished = [tid | everything, tid <- Set.toList live, tid `Set.notMember` stillListed]
 
 {- The coins and their raw transactions -}
 
 -- | The coins of the changed addresses, all of them, which the store must
 -- list as many of as it counts, and the raw transactions they come from,
 -- which signing needs. A raw transaction never changes, so the ones already
--- stored are not fetched again.
-syncCoins :: (MonadUnliftIO m) => Ctx -> Store -> Network -> DBAccountId -> [Store.Balance] -> ExceptT String (DB m) Refreshed
-syncCoins ctx store net accId changedBals = do
+-- stored are not fetched again. A full sync checks them instead, and
+-- fetches those that went wrong in the database.
+syncCoins :: (MonadUnliftIO m) => Ctx -> Store -> Network -> DBAccountId -> Bool -> [Store.Balance] -> ExceptT String (DB m) Refreshed
+syncCoins ctx store net accId full changedBals = do
   let changedAddrs = (.address) <$> changedBals
       counted = sum $ (.utxo) <$> changedBals
   unspents <- fromStore $ storeUnspents store changedAddrs
@@ -526,8 +554,9 @@ syncCoins ctx store net accId changedBals = do
     throwError $
       "The store counts " <> show counted <> " coins for the addresses to update but listed " <> show (length unspents)
   refreshed <- refreshCoins net ctx accId changedAddrs unspents
-  missing <- lift $ missingRawTxs $ nubOrd $ (.outpoint.hash) <$> unspents
-  rawTxs <- fromStore $ rawTransactions store missing
+  let parents = nubOrd $ (.outpoint.hash) <$> unspents
+  wanted <- lift $ if full then unsoundRawTxs parents else missingRawTxs parents
+  rawTxs <- fromStore $ rawTransactions store wanted
   lift $ forM_ rawTxs insertRawTx
   return refreshed
 
@@ -538,8 +567,8 @@ syncCoins ctx store net accId changedBals = do
 -- looks at every raw transaction instead, which also cleans up after the
 -- versions of hw that kept them all.
 pruneRawTxs :: (MonadUnliftIO m) => Bool -> Refreshed -> [TxHash] -> ExceptT String (DB m) ()
-pruneRawTxs everything refreshed retired
-  | everything = void dropOrphanRawTxs
+pruneRawTxs full refreshed retired
+  | full = void dropOrphanRawTxs
   | otherwise = do
       goneParents <- liftEither $ mapM (fmap (.hash) . coinOutpoint) refreshed.deletedCoins
       void $ lift $ dropRawTxsWithoutCoins $ nubOrd $ goneParents <> retired

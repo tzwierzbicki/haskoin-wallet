@@ -2266,9 +2266,12 @@ fullOption =
     long "full"
       <> help
         [r|
-Download all the account data again, instead of only what changed. A full
-sync also marks as dead the transactions the server no longer lists. It is
-rarely needed, since a reorganization of the chain triggers one by itself.
+Download the balances, transactions and coins of the account again and write
+them anew, instead of only what changed, and replace any damaged copy of a raw
+transaction. A transaction the server no longer lists is marked as dead. Use it
+if the wallet shows something wrong. It keeps what the server cannot tell:
+labels, locked coins and pending transactions. It is not needed for a
+reorganization of the chain, which `sync` sees by itself.
 |]
 
 {- backup -}

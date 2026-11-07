@@ -587,8 +587,8 @@ shownCoin net row = do
 
 {- Refreshing -}
 
--- | What a refresh changed: how many coins were inserted, moved to another
--- block or deleted, and the coins inserted and deleted
+-- | What a refresh changed: how many coins were inserted, rewritten or
+-- deleted, and the coins inserted and deleted
 data Refreshed = Refreshed
   { refreshedCount :: !Int,
     insertedCoins :: ![DBCoin],
@@ -608,9 +608,10 @@ instance Monoid Refreshed where
   mempty = Refreshed 0 [] []
 
 -- | Bring the coins of the account at the addresses in line with what the
--- store lists: insert the coins that are new, move those whose block
+-- store lists: insert the coins that are new, rewrite those whose block
 -- changed, delete those the store no longer lists. A coin the store lists
--- twice is stored once.
+-- twice is stored once. The value of a coin never changes, so a value that
+-- differs is a stored one gone wrong, which a full sync repairs here.
 refreshCoins ::
   (MonadUnliftIO m) =>
   Network ->
@@ -634,10 +635,10 @@ refreshCoins net ctx accId addrs unspents = mconcat <$> mapM refreshAddress addr
           moved =
             [ coin
               | (coin, row) <- Map.elems (Map.intersectionWith (,) current stored),
-                S.encode coin.block /= dBCoinBlockRef row
+                S.encode coin.block /= dBCoinBlockRef row || coin.value /= dBCoinValue row
             ]
       lift $ forM_ gone deleteCoin
-      lift $ forM_ moved moveCoin
+      lift $ forM_ moved rewriteCoin
       inserted <- mapM (insertCoin net accId) new
       return
         Refreshed
@@ -653,6 +654,11 @@ insertCoin net accId coin = do
     liftMaybe ("The coin " <> coinText coin.outpoint <> " pays no address of the network") $
       addrToText net =<< coin.address
   time <- liftIO getCurrentTime
+  -- A row with this key holds the coin under another address or account,
+  -- which only a database gone wrong does. The coin takes the row over, so
+  -- that a full sync gets past it, and what the user locked stays locked.
+  let key = DBCoinKey (outpointBytes coin.outpoint)
+  previousM <- lift $ P.get key
   let row =
         DBCoin
           { dBCoinAccount = accId,
@@ -660,15 +666,19 @@ insertCoin net accId coin = do
             dBCoinAddress = addr,
             dBCoinValue = coin.value,
             dBCoinBlockRef = S.encode coin.block,
-            dBCoinLockedByUser = False,
+            dBCoinLockedByUser = maybe False dBCoinLockedByUser previousM,
             dBCoinCreated = time
           }
-  lift $ P.insert_ row
+  lift $ P.repsert key row
   return row
 
--- | Move a stored coin to the block the store now reports for it
-moveCoin :: (MonadUnliftIO m) => Store.Unspent -> DB m ()
-moveCoin coin = P.update (DBCoinKey $ outpointBytes coin.outpoint) [DBCoinBlockRef P.=. S.encode coin.block]
+-- | Give a stored coin the block and the value the store now reports for
+-- it. Whether the user locked it stays.
+rewriteCoin :: (MonadUnliftIO m) => Store.Unspent -> DB m ()
+rewriteCoin coin =
+  P.update
+    (DBCoinKey $ outpointBytes coin.outpoint)
+    [DBCoinBlockRef P.=. S.encode coin.block, DBCoinValue P.=. coin.value]
 
 -- | Delete a stored coin
 deleteCoin :: (MonadUnliftIO m) => DBCoin -> DB m ()

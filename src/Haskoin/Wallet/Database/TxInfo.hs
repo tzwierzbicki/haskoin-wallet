@@ -26,13 +26,14 @@ import Data.Aeson.Types (Pair, Parser)
 import qualified Data.ByteString as BS
 import Data.Char (toUpper)
 import Data.Containers.ListUtils (nubOrd)
-import Data.Either (partitionEithers, rights)
+import Data.Either (isLeft, partitionEithers, rights)
 import Data.Int (Int64)
 import Data.List (mapAccumL)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust)
 import qualified Data.Serialize as S
+import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -503,6 +504,19 @@ txInfoBlockRefs accId = do
     return (tid, ref)
   return $ Map.fromList entries
 
+-- | The ids of the live summaries of an account, whatever else their rows
+-- hold. A full sync goes by these alone: it rewrites the rows, so one that
+-- does not read must not stop it.
+liveTxids :: (MonadUnliftIO m) => DBAccountId -> ExceptT String (DB m) (Set TxHash)
+liveTxids accId = do
+  rows <-
+    lift . select . from $ \t -> do
+      where_ $
+        t ^. DBTxInfoAccount ==. val accId
+          &&. t ^. DBTxInfoDead ==. val False
+      return (t ^. DBTxInfoTxid)
+  Set.fromList <$> liftEither (mapM (bytesToHash . unValue) rows)
+
 -- | The live summaries of an account without their time, stored before hw
 -- kept it, as the step to version 4 of the database copied them: the sync
 -- fetches their transactions again to learn it. An index holds these rows
@@ -584,6 +598,22 @@ decodeSummary net tid blob =
 markTxInfoDead :: (MonadUnliftIO m) => DBAccountId -> TxHash -> DB m ()
 markTxInfoDead accId tid =
   P.update (DBTxInfoKey accId (hashBytes tid)) [DBTxInfoDead P.=. True]
+
+-- | Delete the dead summaries of the account that do not read. The store
+-- no longer lists their transactions, so nothing can write them again, and
+-- one of them would stop txs for good: it refuses a row that does not read.
+-- A full sync does this last, when every live summary has just been
+-- written.
+dropUnreadableDead :: (MonadUnliftIO m) => Network -> DBAccountId -> DB m ()
+dropUnreadableDead net accId = do
+  rows <- P.selectList [DBTxInfoAccount P.==. accId, DBTxInfoDead P.==. True] []
+  forM_ rows $ \(Entity key row) ->
+    when (isLeft (readable row)) $ P.delete key
+  where
+    readable row = do
+      tid <- bytesToHash (dBTxInfoTxid row)
+      _ <- S.decode (dBTxInfoBlockRef row) :: Either String Store.BlockRef
+      decodeSummary net tid (dBTxInfoBlob row)
 
 -- | The time the store gives a transaction, in seconds since 1970
 storeTime :: Word64 -> UTCTime

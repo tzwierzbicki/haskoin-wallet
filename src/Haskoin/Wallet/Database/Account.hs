@@ -233,7 +233,8 @@ insertAccount kind net ctx name xpub fingerprintM = do
             <> " already has this key: the test networks share their account keys, so a wallet holds one of them per account index"
 
 -- | Delete an account with its addresses, summaries, labels of
--- transactions, coins and pending transactions
+-- transactions, coins, pending transactions and the block its last sync
+-- reached
 deleteAccount :: (MonadUnliftIO m) => DBAccountId -> DB m ()
 deleteAccount accId = do
   delete . from $ \a -> where_ $ a ^. DBAddressAccount ==. val accId
@@ -241,6 +242,7 @@ deleteAccount accId = do
   delete . from $ \l -> where_ $ l ^. DBTxLabelAccount ==. val accId
   delete . from $ \c -> where_ $ c ^. DBCoinAccount ==. val accId
   delete . from $ \p -> where_ $ p ^. DBPendingTxAccount ==. val accId
+  delete . from $ \b -> where_ $ b ^. DBSyncedBlockAccount ==. val accId
   P.delete accId
 
 -- | The account of a name, which must exist. Without a name, the one

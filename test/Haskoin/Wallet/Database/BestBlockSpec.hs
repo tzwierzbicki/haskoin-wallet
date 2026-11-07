@@ -87,17 +87,17 @@ storedSpec =
     it "is refused when its stored hash does not read, rather than taken for no block" $
       inDatabase $ do
         P.insert_ $ DBBest "btc" "nonsense" 814037 Nothing
-        dbShouldFailWith "The stored best block of btc does not read: sync --full stores it again" $ getBest btc
+        dbShouldFailWith "The stored best block of btc does not read: sync stores it again" $ getBest btc
 
     it "is refused when its stored height is no block height" $
       inDatabase $ do
         P.insert_ $ DBBest "btc" "00000000000000000004727b3cc0946dc2054f59e362369e0437325c0a992efb" (-1) Nothing
-        dbShouldFailWith "The stored best block of btc does not read: sync --full stores it again" $ getBest btc
+        dbShouldFailWith "The stored best block of btc does not read: sync stores it again" $ getBest btc
 
     it "is refused when its stored time is no Unix time" $
       inDatabase $ do
         P.insert_ $ DBBest "btc" "00000000000000000004727b3cc0946dc2054f59e362369e0437325c0a992efb" 814037 (Just (-1))
-        dbShouldFailWith "The stored best block of btc does not read: sync --full stores it again" $ getBest btc
+        dbShouldFailWith "The stored best block of btc does not read: sync stores it again" $ getBest btc
 
 {- Confirmations -}
 

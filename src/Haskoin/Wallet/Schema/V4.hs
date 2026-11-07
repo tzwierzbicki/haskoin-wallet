@@ -48,7 +48,11 @@
 -- labels the user gives the transactions of an account on the network have
 -- a table of their own, by account and txid, which the sync never touches:
 -- a summary it rewrites or marks dead keeps its label. A pending
--- transaction keeps its label in its signing data until then.
+-- transaction keeps its label in its signing data until then. An account
+-- keeps the block its last sync reached, in a table of its own with a row
+-- once it has synced. The best block of the network cannot serve: each
+-- account is synced apart, and the first one to see a reorganisation of
+-- the chain moves that block past it for the others.
 --
 -- The keys are made for large wallets. An address is keyed by its account,
 -- its chain and its index, the order `addresses` lists it in, and its
@@ -175,6 +179,14 @@ DBBest
   bestTime Int Maybe
   Primary network
   deriving Show
+
+DBSyncedBlock
+  account DBAccountId
+  block Text
+  height Int
+  Primary account
+  deriving Show
+  deriving Eq
 |]
 
 -- | The indexes of the tables above that persistent cannot declare, created

@@ -22,6 +22,8 @@ import Data.IORef (IORef, atomicModifyIORef', modifyIORef, newIORef, readIORef)
 import Data.List (find, sort, sortOn)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
+import qualified Data.Serialize as S
+import qualified Data.Set as Set
 import Data.Text (Text)
 import Data.Word (Word32, Word64, Word8)
 import qualified Database.Persist as P
@@ -34,14 +36,14 @@ import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.PendingTx
-import Haskoin.Wallet.Database.RawTx (hasRawTx, insertRawTx)
+import Haskoin.Wallet.Database.RawTx (hasRawTx, insertRawTx, lookupRawTx)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.SyncStatus
 import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..))
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), MyOutputs (..), TxInfo (..), TxSummary (..), TxType (..), txInfoHash, txsAfter)
-import Haskoin.Wallet.Database.TxLabel (txLabel)
+import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), ListedTx (..), MyOutputs (..), TxInfo (..), TxSummary (..), TxType (..), listedTxsAfter, markTxInfoDead, repsertSummary, txInfoHash, txsAfter)
+import Haskoin.Wallet.Database.TxLabel (setTxLabel, txLabel)
 import Haskoin.Wallet.Tx.SignData
 import Numeric.Natural (Natural)
 import Test.Hspec
@@ -77,15 +79,12 @@ spec = prepareContext $ \ctx -> do
         rawTransactionCount `dbShouldBeE` 1
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (1, 1)
 
-    it "refuses an incremental sync over a stored best block that does not read, which a full sync stores again" $
+    it "stores the best block of the network again over one that does not read, on any sync" $
       inDatabaseE $ do
         accId <- account
         _ <- syncWith (paymentStore ctx) accId
         lift $ P.update (DBBestKey "btc") [DBBestBestBlock P.=. "nonsense"]
-        lift $
-          dbShouldFailWith "The stored best block of btc does not read: sync --full stores it again" $
-            syncWith (paymentStore ctx) accId
-        _ <- sync ctx cfg (toStore (paymentStore ctx)) btc accId True noQuestion
+        _ <- syncWith (paymentStore ctx) accId
         getBest btc `dbShouldBeE` Just (BestBlock (headerHash (blockAt 800002 1).header) 800002 (Just 1700000000))
 
     it "does nothing when nothing changed" $
@@ -582,6 +581,410 @@ spec = prepareContext $ \ctx -> do
         getBest bch `dbShouldBeE` Just (BestBlock (headerHash (blockAt 800002 1).header) 800002 (Just 1700000000))
         getBest btc `dbShouldBeE` Nothing
 
+  describe "The balances of txs when the history changes in the middle" $ do
+    -- The payment of 10000 lands between the 30000 and the 20000:
+    -- 30000 + 10000 = 40000, and 40000 + 20000 = 60000
+    it "takes in an old payment found late, and changes only the balances above it" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (twoPaymentsStore ctx) accId
+        listedBalances accId `dbShouldBeE` [(Just (fakeTxHash 3), Just 50000), (Just (fakeTxHash 2), Just 30000)]
+        _ <- genExtAddress ctx cfg accId ""
+        _ <- syncWith (latePaymentStore ctx) accId
+        listedBalances accId
+          `dbShouldBeE` [ (Just (fakeTxHash 3), Just 60000),
+                          (Just (fakeTxHash 4), Just 40000),
+                          (Just (fakeTxHash 2), Just 30000)
+                        ]
+
+    -- 90000 was there with the middle payment of 40000, 50000 without it
+    it "drops a payment in the middle a reorganisation left out, and changes only the balances above it" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (threePaymentsStore ctx) accId
+        listedBalances accId
+          `dbShouldBeE` [ (Just (fakeTxHash 3), Just 90000),
+                          (Just (fakeTxHash 6), Just 70000),
+                          (Just (fakeTxHash 2), Just 30000)
+                        ]
+        _ <- syncWith (middleLeftOutStore ctx) accId
+        listedBalances accId
+          `dbShouldBeE` [ (Just (fakeTxHash 3), Just 50000),
+                          (Just (fakeTxHash 6), Nothing),
+                          (Just (fakeTxHash 2), Just 30000)
+                        ]
+
+    -- 50000 confirmed + 15000 unconfirmed = 65000 before, and
+    -- 50000 + 5000 = 55000 once the 10000 is replaced
+    it "drops an unconfirmed payment replaced in the middle of the mempool, on an incremental sync" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (twoUnconfirmedStore ctx) accId
+        listedBalances accId
+          `dbShouldBeE` [ (Just (fakeTxHash 7), Just 65000),
+                          (Just (fakeTxHash 6), Just 60000),
+                          (Just (fakeTxHash 3), Just 50000),
+                          (Just (fakeTxHash 2), Just 30000)
+                        ]
+        _ <- syncWith (oneReplacedStore ctx) accId
+        listedBalances accId
+          `dbShouldBeE` [ (Just (fakeTxHash 7), Just 55000),
+                          (Just (fakeTxHash 6), Nothing),
+                          (Just (fakeTxHash 3), Just 50000),
+                          (Just (fakeTxHash 2), Just 30000)
+                        ]
+
+    -- One chain serves both accounts, so its reorganisation concerns both
+    it "marks a payment a reorganisation left out as dead in every account hw sync goes through" $
+      inDatabaseE $ do
+        mainId <- account
+        (secondId, _) <- testNewAcc2 ctx "second"
+        _ <- genExtAddress ctx cfg secondId ""
+        accs <- mapM (\accId -> (,) accId <$> getAccountById accId) [mainId, secondId]
+        _ <- syncAccounts ctx cfg (const (toStore (twoWalletsStore ctx))) accs False noQuestion
+        _ <- syncAccounts ctx cfg (const (toStore (secondLeftOutStore ctx))) accs False noQuestion
+        listedBalances secondId `dbShouldBeE` [(Just (fakeTxHash 2), Nothing)]
+
+    it "marks a payment a reorganisation left out as dead in an account synced after another one" $
+      inDatabaseE $ do
+        mainId <- account
+        (secondId, _) <- testNewAcc2 ctx "second"
+        _ <- genExtAddress ctx cfg secondId ""
+        _ <- syncWith (twoWalletsStore ctx) mainId
+        _ <- syncWith (twoWalletsStore ctx) secondId
+        _ <- syncWith (secondLeftOutStore ctx) mainId
+        _ <- syncWith (secondLeftOutStore ctx) secondId
+        listedBalances secondId `dbShouldBeE` [(Just (fakeTxHash 2), Nothing)]
+
+    it "marks a payment a reorganisation left out as dead in that account on a full sync, whatever came before" $
+      inDatabaseE $ do
+        mainId <- account
+        (secondId, _) <- testNewAcc2 ctx "second"
+        _ <- genExtAddress ctx cfg secondId ""
+        _ <- syncWith (twoWalletsStore ctx) mainId
+        _ <- syncWith (twoWalletsStore ctx) secondId
+        _ <- syncWith (secondLeftOutStore ctx) mainId
+        _ <- syncWith (secondLeftOutStore ctx) secondId
+        _ <- sync ctx cfg (toStore (secondLeftOutStore ctx)) btc secondId True noQuestion
+        listedBalances secondId `dbShouldBeE` [(Just (fakeTxHash 2), Nothing)]
+
+  describe "The block the last sync of an account reached" $ do
+    let twoAccounts = do
+          mainId <- account
+          (secondId, _) <- testNewAcc2 ctx "second"
+          _ <- genExtAddress ctx cfg secondId ""
+          return (mainId, secondId)
+
+    it "is stored for the account that synced, and for no other" $
+      inDatabaseE $ do
+        (mainId, secondId) <- twoAccounts
+        _ <- syncWith (twoWalletsStore ctx) mainId
+        syncedBlock mainId `dbShouldBeE` Just (SyncedBlock (headerHash (blockAt 800002 1).header) 800002)
+        syncedBlock secondId `dbShouldBeE` Nothing
+
+    it "is what the incremental sync of each account asks the store about" $
+      inDatabaseE $ do
+        (mainId, secondId) <- twoAccounts
+        let laterChain = (twoWalletsStore ctx) {fakeBest = blockAt 800003 7, fakeBlocks = [blockAt 800002 1, blockAt 800003 7]}
+        _ <- syncWith (twoWalletsStore ctx) mainId
+        _ <- syncWith laterChain secondId
+        asked <- liftIO $ newIORef []
+        let store = notingBlockRequests asked (toStore laterChain)
+        _ <- sync ctx cfg store btc mainId False noQuestion
+        _ <- sync ctx cfg store btc secondId False noQuestion
+        liftIO $ readIORef asked `shouldReturn` [800002, 800003]
+
+    -- No reorganisation tells of it: only looking at every address does
+    it "makes a sync look at every address when the account has none, as after a migration" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (twoPaymentsStore ctx) accId
+        lift $ P.delete (DBSyncedBlockKey accId)
+        _ <- syncWith ((leftOutStore ctx) {fakeBest = blockAt 800002 1, fakeBlocks = [blockAt 800002 1]}) accId
+        deadSummaries accId `dbShouldBeE` [Just (fakeTxHash 3)]
+
+    it "refuses an incremental sync when it does not read, and a full sync stores it again" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (paymentStore ctx) accId
+        lift $ P.update (DBSyncedBlockKey accId) [DBSyncedBlockBlock P.=. "nonsense"]
+        lift $
+          dbShouldFailWith "The block the last sync of the account reached does not read: sync --full stores it again" $
+            syncWith (paymentStore ctx) accId
+        _ <- sync ctx cfg (toStore (paymentStore ctx)) btc accId True noQuestion
+        syncedBlock accId `dbShouldBeE` Just (SyncedBlock (headerHash (blockAt 800002 1).header) 800002)
+
+  describe "A reorganisation of the chain" $ do
+    it "moves a payment to its new block in an account synced after another one" $
+      inDatabaseE $ do
+        mainId <- account
+        (secondId, _) <- testNewAcc2 ctx "second"
+        _ <- genExtAddress ctx cfg secondId ""
+        _ <- syncWith (twoWalletsStore ctx) mainId
+        _ <- syncWith (twoWalletsStore ctx) secondId
+        _ <- syncWith (secondMovedStore ctx) mainId
+        _ <- syncWith (secondMovedStore ctx) secondId
+        summaries secondId `dbShouldBeE` [(Just (fakeTxHash 2), Store.BlockRef 800003 3, 30000)]
+
+    -- The 40000 goes to the top of the list, and the rows it left go down:
+    -- 30000 + 20000 = 50000, and 50000 + 40000 = 90000
+    it "puts a payment that goes back to the mempool at the top of the list, with the balances that follow" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (threePaymentsStore ctx) accId
+        _ <- syncWith (backInMempoolStore ctx) accId
+        listedBalances accId
+          `dbShouldBeE` [ (Just (fakeTxHash 6), Just 90000),
+                          (Just (fakeTxHash 3), Just 50000),
+                          (Just (fakeTxHash 2), Just 30000)
+                        ]
+        balances accId `dbShouldBeE` (50000, 40000, 3)
+
+    it "drops a payment and the spending of its coin when it leaves both out" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (spentPaymentStore ctx) accId
+        listedBalances accId
+          `dbShouldBeE` [ (Just (fakeTxHash 8), Just 30000),
+                          (Just (fakeTxHash 3), Just 50000),
+                          (Just (fakeTxHash 2), Just 30000)
+                        ]
+        _ <- syncWith (leftOutStore ctx) accId
+        listedBalances accId
+          `dbShouldBeE` [ (Just (fakeTxHash 8), Nothing),
+                          (Just (fakeTxHash 3), Nothing),
+                          (Just (fakeTxHash 2), Just 30000)
+                        ]
+        balances accId `dbShouldBeE` (30000, 0, 1)
+
+    it "gives back the coin of a spending it leaves out" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (spentPaymentStore ctx) accId
+        _ <- syncWith (middleLeftOutStore ctx) accId
+        listedBalances accId
+          `dbShouldBeE` [ (Just (fakeTxHash 8), Nothing),
+                          (Just (fakeTxHash 3), Just 50000),
+                          (Just (fakeTxHash 2), Just 30000)
+                        ]
+        coins accId `dbShouldBeE` [OutPoint (fakeTxHash 2) 0, OutPoint (fakeTxHash 3) 0]
+        balances accId `dbShouldBeE` (50000, 0, 2)
+
+    -- Both sit at the same place in the chain, so they go by their ids.
+    -- 30000 + 15000 = 45000.
+    it "takes in the rival it puts in the place of a payment" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (twoPaymentsStore ctx) accId
+        _ <- syncWith (rivalStore ctx) accId
+        listedBalances accId
+          `dbShouldBeE` [ (Just (fakeTxHash 3), Nothing),
+                          (Just (fakeTxHash 9), Just 45000),
+                          (Just (fakeTxHash 2), Just 30000)
+                        ]
+        balances accId `dbShouldBeE` (45000, 0, 2)
+
+    it "follows a chain that got shorter than the block the account reached" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (twoPaymentsStore ctx) accId
+        _ <- syncWith ((leftOutStore ctx) {fakeBest = blockAt 800001 9, fakeBlocks = [blockAt 800001 9]}) accId
+        deadSummaries accId `dbShouldBeE` [Just (fakeTxHash 3)]
+        syncedBlock accId `dbShouldBeE` Just (SyncedBlock (headerHash (blockAt 800001 9).header) 800001)
+        getBest btc `dbShouldBeE` Just (BestBlock (headerHash (blockAt 800001 9).header) 800001 (Just 1700000000))
+
+    it "fetches only the transactions that moved: it cannot change what a transaction holds" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (twoPaymentsStore ctx) accId
+        asked <- liftIO $ newIORef []
+        _ <- sync ctx cfg (notingTxRequests asked (toStore (oneMovedStore ctx))) btc accId False noQuestion
+        liftIO $ (concat <$> readIORef asked) `shouldReturn` [fakeTxHash 3]
+
+  describe "A full sync, over a database gone wrong" $ do
+    let -- The account with the two payments, and the store that has them
+        syncedAccount = do
+          accId <- account
+          _ <- syncWith (twoPaymentsStore ctx) accId
+          return accId
+        fullSync accId = sync ctx cfg (toStore (twoPaymentsStore ctx)) btc accId True noQuestion
+        summaryKey accId n = DBTxInfoKey accId (hashBytes (fakeTxHash n))
+        coinKey n = DBCoinKey (outpointBytes (OutPoint (fakeTxHash n) 0))
+        rightSummaries =
+          [ (Just (fakeTxHash 2), Store.BlockRef 800001 1, 30000),
+            (Just (fakeTxHash 3), Store.BlockRef 800002 1, 20000)
+          ]
+        rightBalances = [(Just (fakeTxHash 3), Just 50000), (Just (fakeTxHash 2), Just 30000)]
+
+    it "fetches every transaction the store lists, though no block moved" $
+      inDatabaseE $ do
+        accId <- syncedAccount
+        asked <- liftIO $ newIORef []
+        _ <- sync ctx cfg (notingTxRequests asked (toStore (twoPaymentsStore ctx))) btc accId True noQuestion
+        liftIO $ (sort . concat <$> readIORef asked) `shouldReturn` [fakeTxHash 2, fakeTxHash 3]
+
+    it "reports no update over a database that was right" $
+      inDatabaseE $ do
+        accId <- syncedAccount
+        res <- fullSync accId
+        liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (0, 0)
+
+    it "writes the amount of a summary again, which --after adds up" $
+      inDatabaseE $ do
+        accId <- syncedAccount
+        lift $ P.update (summaryKey accId 3) [DBTxInfoAmount P.=. 1]
+        _ <- fullSync accId
+        (fmap dBTxInfoAmount <$> lift (P.get (summaryKey accId 3))) `dbShouldBeE` Just 20000
+
+    it "writes again a summary that reads but says the wrong thing" $
+      inDatabaseE $ do
+        accId <- syncedAccount
+        _ <- lift $ repsertSummary btc accId (fakeTxHash 3) (Store.BlockRef 800002 1) fixtureTime paymentSummary
+        _ <- fullSync accId
+        summaries accId `dbShouldBeE` rightSummaries
+
+    it "writes again a summary that does not read" $
+      inDatabaseE $ do
+        accId <- syncedAccount
+        lift $ P.update (summaryKey accId 3) [DBTxInfoBlob P.=. "nonsense"]
+        _ <- fullSync accId
+        summaries accId `dbShouldBeE` rightSummaries
+
+    it "writes again a block reference that does not read, which would stop any other sync" $
+      inDatabaseE $ do
+        accId <- syncedAccount
+        lift $ P.update (summaryKey accId 3) [DBTxInfoBlockRef P.=. "nonsense"]
+        _ <- fullSync accId
+        summaries accId `dbShouldBeE` rightSummaries
+
+    it "brings back a summary that went missing, and the balances below it are right again" $
+      inDatabaseE $ do
+        accId <- syncedAccount
+        lift $ P.delete (summaryKey accId 3)
+        -- With the 20000 gone from the list, the older row takes all that
+        -- the account holds: 20000 too much
+        listedBalances accId `dbShouldBeE` [(Just (fakeTxHash 2), Just 50000)]
+        _ <- fullSync accId
+        listedBalances accId `dbShouldBeE` rightBalances
+
+    it "brings back to life a transaction the store lists" $
+      inDatabaseE $ do
+        accId <- syncedAccount
+        lift $ markTxInfoDead accId (fakeTxHash 3)
+        _ <- fullSync accId
+        listedBalances accId `dbShouldBeE` rightBalances
+
+    it "marks dead a transaction no address lists, and keeps it for the history" $
+      inDatabaseE $ do
+        accId <- syncedAccount
+        _ <- lift $ repsertSummary btc accId (fakeTxHash 9) (Store.BlockRef 800001 5) fixtureTime paymentSummary
+        _ <- fullSync accId
+        listedBalances accId
+          `dbShouldBeE` [ (Just (fakeTxHash 3), Just 50000),
+                          (Just (fakeTxHash 9), Nothing),
+                          (Just (fakeTxHash 2), Just 30000)
+                        ]
+
+    -- txs refuses a row that does not read, and nothing can write this one
+    it "deletes a dead summary that does not read, which would stop txs for good" $
+      inDatabaseE $ do
+        accId <- syncedAccount
+        _ <- lift $ repsertSummary btc accId (fakeTxHash 9) (Store.BlockRef 800001 5) fixtureTime paymentSummary
+        lift $ markTxInfoDead accId (fakeTxHash 9)
+        lift $ P.update (summaryKey accId 9) [DBTxInfoBlob P.=. "nonsense"]
+        _ <- fullSync accId
+        listedBalances accId `dbShouldBeE` rightBalances
+
+    it "deletes a live summary that does not read and that no address lists" $
+      inDatabaseE $ do
+        accId <- syncedAccount
+        _ <- lift $ repsertSummary btc accId (fakeTxHash 9) (Store.BlockRef 800001 5) fixtureTime paymentSummary
+        lift $ P.update (summaryKey accId 9) [DBTxInfoBlockRef P.=. "nonsense"]
+        _ <- fullSync accId
+        listedBalances accId `dbShouldBeE` rightBalances
+
+    it "writes the balances of the addresses and of the account again" $
+      inDatabaseE $ do
+        accId <- syncedAccount
+        lift $ P.update accId [DBAccountBalanceConfirmed P.=. 7, DBAccountBalanceUnconfirmed P.=. 8, DBAccountBalanceCoins P.=. 9]
+        lift $ P.updateWhere [DBAddressAccount P.==. accId] [DBAddressBalanceConfirmed P.=. 7]
+        _ <- fullSync accId
+        balances accId `dbShouldBeE` (50000, 0, 2)
+
+    it "brings back a coin that went missing" $
+      inDatabaseE $ do
+        accId <- syncedAccount
+        lift $ P.delete (coinKey 3)
+        _ <- fullSync accId
+        coins accId `dbShouldBeE` [OutPoint (fakeTxHash 2) 0, OutPoint (fakeTxHash 3) 0]
+
+    it "deletes a coin the store does not list" $
+      inDatabaseE $ do
+        accId <- syncedAccount
+        lift $ P.insert_ $ DBCoin accId (outpointBytes (OutPoint (fakeTxHash 9) 0)) "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" 1000 (S.encode (Store.BlockRef 800000 1)) False fixtureTime
+        _ <- fullSync accId
+        coins accId `dbShouldBeE` [OutPoint (fakeTxHash 2) 0, OutPoint (fakeTxHash 3) 0]
+
+    it "writes the value of a coin again" $
+      inDatabaseE $ do
+        accId <- syncedAccount
+        lift $ P.update (coinKey 3) [DBCoinValue P.=. 1]
+        _ <- fullSync accId
+        (fmap dBCoinValue <$> lift (P.get (coinKey 3))) `dbShouldBeE` Just 20000
+
+    it "writes the block of a coin again" $
+      inDatabaseE $ do
+        accId <- syncedAccount
+        lift $ P.update (coinKey 3) [DBCoinBlockRef P.=. "nonsense"]
+        _ <- fullSync accId
+        coins accId `dbShouldBeE` [OutPoint (fakeTxHash 2) 0, OutPoint (fakeTxHash 3) 0]
+
+    -- Whichever address comes first, its coin is stored under the other
+    it "gives each coin its address again when two coins stand under each other's address" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- genExtAddress ctx cfg accId ""
+        _ <- syncWith (oldPaymentStore ctx) accId
+        lift $ P.update (coinKey 3) [DBCoinAddress P.=. "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"]
+        lift $ P.update (coinKey 4) [DBCoinAddress P.=. "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]
+        _ <- sync ctx cfg (toStore (oldPaymentStore ctx)) btc accId True noQuestion
+        (fmap dBCoinAddress <$> lift (P.get (coinKey 3))) `dbShouldBeE` Just "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"
+        (fmap dBCoinAddress <$> lift (P.get (coinKey 4))) `dbShouldBeE` Just "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"
+
+    it "takes back a coin stored under another account" $
+      inDatabaseE $ do
+        accId <- syncedAccount
+        (otherId, _) <- testNewAcc2 ctx "second"
+        lift $ P.update (coinKey 3) [DBCoinAccount P.=. otherId]
+        _ <- fullSync accId
+        coins accId `dbShouldBeE` [OutPoint (fakeTxHash 2) 0, OutPoint (fakeTxHash 3) 0]
+
+    it "fetches again a raw transaction that does not read" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (realPaymentStore ctx) accId
+        lift $ P.update (DBRawTxKey (hashBytes (realPaymentId ctx))) [DBRawTxBlob P.=. "nonsense"]
+        _ <- sync ctx cfg (toStore (realPaymentStore ctx)) btc accId True noQuestion
+        lookupRawTx (realPaymentId ctx) `dbShouldBeE` Just (realPaymentTx ctx)
+
+    it "fetches again a raw transaction that reads but holds another transaction" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (realPaymentStore ctx) accId
+        lift $ P.update (DBRawTxKey (hashBytes (realPaymentId ctx))) [DBRawTxBlob P.=. S.encode (spendingTx ctx [(fakeTxHash 5, 0)] [(otherAddr 0, 1000)])]
+        _ <- sync ctx cfg (toStore (realPaymentStore ctx)) btc accId True noQuestion
+        lookupRawTx (realPaymentId ctx) `dbShouldBeE` Just (realPaymentTx ctx)
+
+    it "keeps the labels and the coins the user locked: the store cannot tell them" $
+      inDatabaseE $ do
+        accId <- syncedAccount
+        lift $ setTxLabel accId (fakeTxHash 3) "Rent"
+        _ <- lockCoin (OutPoint (fakeTxHash 3) 0)
+        lift $ P.update (coinKey 3) [DBCoinValue P.=. 1]
+        _ <- fullSync accId
+        lift (txLabel accId (fakeTxHash 3)) `dbShouldBeE` "Rent"
+        (fmap dBCoinLockedByUser <$> lift (P.get (coinKey 3))) `dbShouldBeE` Just True
+
   describe "Syncing the accounts of several networks" $ do
     -- The account main on btc and the account cash on bch, each with its
     -- first receiving address
@@ -1028,7 +1431,7 @@ spec = prepareContext $ \ctx -> do
 
   describe "Telling the dead transactions" $ do
     -- Two known transactions; the store still lists the second
-    let known = Map.fromList [(fakeTxHash 1, Store.BlockRef 800000 1), (fakeTxHash 2, Store.BlockRef 800001 1)]
+    let known = Set.fromList [fakeTxHash 1, fakeTxHash 2]
         alive = creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000
         listedRef = Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 2)
 
@@ -1044,7 +1447,7 @@ spec = prepareContext $ \ctx -> do
     it "ignores a fetched transaction it never knew" $
       deadTransactions False known [fakeTxHash 9] [] [listedRef] `shouldBe` []
 
-    it "counts a known transaction no address lists any more as dead, on a full sync only" $ do
+    it "counts a known transaction no address lists any more as dead, when the sync looked at every address only" $ do
       deadTransactions True known [] [] [listedRef] `shouldBe` [fakeTxHash 1]
       deadTransactions False known [] [] [listedRef] `shouldBe` []
 
@@ -1190,6 +1593,198 @@ oldPaymentStore ctx =
       fakeRawTransactions =
         fakeRawTransactions (twoPaymentsStore ctx)
           <> [(fakeTxHash 4, fundingTx ctx 4 [(externalAddr 1, 10000)])]
+    }
+
+-- | The old payment of 10000 to externalAddr 1 at a place between the two
+-- payments: in block 800001, after the one of 30000
+latePaymentStore :: Ctx -> FakeStore
+latePaymentStore ctx =
+  (oldPaymentStore ctx)
+    { fakeTxRefs =
+        fakeTxRefs (twoPaymentsStore ctx)
+          <> [(externalAddr 1, [Store.TxRef lateBlock (fakeTxHash 4)])],
+      fakeTransactions =
+        fakeTransactions (twoPaymentsStore ctx)
+          <> [creditTx ctx (fakeTxHash 4) lateBlock (externalAddr 1) 10000]
+    }
+  where
+    lateBlock = Store.BlockRef 800001 5
+
+-- | The two payments, with transaction 6 between them: 40000 in block
+-- 800001, after the one of 30000
+threePaymentsStore :: Ctx -> FakeStore
+threePaymentsStore ctx =
+  (twoPaymentsStore ctx)
+    { fakeBalances = [Store.Balance (externalAddr 0) 90000 0 3 3 90000],
+      fakeTxRefs =
+        [ ( externalAddr 0,
+            [ Store.TxRef (Store.BlockRef 800002 1) (fakeTxHash 3),
+              Store.TxRef (Store.BlockRef 800001 5) (fakeTxHash 6),
+              Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 2)
+            ]
+          )
+        ],
+      fakeTransactions =
+        fakeTransactions (twoPaymentsStore ctx)
+          <> [creditTx ctx (fakeTxHash 6) (Store.BlockRef 800001 5) (externalAddr 0) 40000],
+      fakeUnspents =
+        fakeUnspents (twoPaymentsStore ctx)
+          <> [coinOf ctx (fakeTxHash 6) (Just 800001) (externalAddr 0) 40000],
+      fakeRawTransactions =
+        fakeRawTransactions (twoPaymentsStore ctx)
+          <> [(fakeTxHash 6, fundingTx ctx 6 [(externalAddr 0, 40000)])]
+    }
+
+-- | After a reorganisation that left transaction 6 out of the chain, and
+-- kept the other two
+middleLeftOutStore :: Ctx -> FakeStore
+middleLeftOutStore ctx =
+  (twoPaymentsStore ctx)
+    { fakeBest = blockAt 800003 7,
+      fakeBlocks = [blockAt 800002 9, blockAt 800003 7]
+    }
+
+-- | After a reorganisation that sent transaction 6 back to the mempool
+backInMempoolStore :: Ctx -> FakeStore
+backInMempoolStore ctx =
+  (threePaymentsStore ctx)
+    { fakeBest = blockAt 800003 7,
+      fakeBlocks = [blockAt 800002 9, blockAt 800003 7],
+      fakeBalances = [Store.Balance (externalAddr 0) 50000 40000 3 3 90000],
+      fakeTxRefs =
+        [ ( externalAddr 0,
+            [ Store.TxRef (Store.MemRef 1700000000) (fakeTxHash 6),
+              Store.TxRef (Store.BlockRef 800002 1) (fakeTxHash 3),
+              Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 2)
+            ]
+          )
+        ],
+      fakeTransactions =
+        fakeTransactions (twoPaymentsStore ctx)
+          <> [creditTx ctx (fakeTxHash 6) (Store.MemRef 1700000000) (externalAddr 0) 40000],
+      fakeUnspents =
+        fakeUnspents (twoPaymentsStore ctx)
+          <> [coinOf ctx (fakeTxHash 6) Nothing (externalAddr 0) 40000]
+    }
+
+-- | The two payments, with transaction 8 spending the coin of the 20000 on
+-- another wallet, 19000 and a fee of 1000, in the block of that payment
+spentPaymentStore :: Ctx -> FakeStore
+spentPaymentStore ctx =
+  (twoPaymentsStore ctx)
+    { fakeBalances = [Store.Balance (externalAddr 0) 30000 0 1 3 50000],
+      fakeTxRefs =
+        [ ( externalAddr 0,
+            [ Store.TxRef (Store.BlockRef 800002 5) (fakeTxHash 8),
+              Store.TxRef (Store.BlockRef 800002 1) (fakeTxHash 3),
+              Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 2)
+            ]
+          )
+        ],
+      fakeTransactions =
+        fakeTransactions (twoPaymentsStore ctx)
+          <> [spendingStoreTx ctx (fakeTxHash 8) (Store.BlockRef 800002 5) (fakeTxHash 3, 0) (externalAddr 0) [(otherAddr 0, 19000)]],
+      fakeUnspents = [coinOf ctx (fakeTxHash 2) (Just 800001) (externalAddr 0) 30000]
+    }
+
+-- | After a reorganisation that put transaction 9, a payment of 15000, in
+-- the place of the payment of 20000
+rivalStore :: Ctx -> FakeStore
+rivalStore ctx =
+  (leftOutStore ctx)
+    { fakeBalances = [Store.Balance (externalAddr 0) 45000 0 2 2 45000],
+      fakeTxRefs =
+        [ ( externalAddr 0,
+            [ Store.TxRef (Store.BlockRef 800002 1) (fakeTxHash 9),
+              Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 2)
+            ]
+          )
+        ],
+      fakeTransactions =
+        fakeTransactions (leftOutStore ctx)
+          <> [creditTx ctx (fakeTxHash 9) (Store.BlockRef 800002 1) (externalAddr 0) 15000],
+      fakeUnspents =
+        fakeUnspents (leftOutStore ctx)
+          <> [coinOf ctx (fakeTxHash 9) (Just 800002) (externalAddr 0) 15000],
+      fakeRawTransactions =
+        fakeRawTransactions (twoPaymentsStore ctx)
+          <> [(fakeTxHash 9, fundingTx ctx 9 [(externalAddr 0, 15000)])]
+    }
+
+-- | After a reorganisation that moved the payment of 20000 within its
+-- block, with the balances unchanged
+oneMovedStore :: Ctx -> FakeStore
+oneMovedStore ctx =
+  (twoPaymentsStore ctx)
+    { fakeBest = blockAt 800003 7,
+      fakeBlocks = [blockAt 800002 9, blockAt 800003 7],
+      fakeTxRefs =
+        [ ( externalAddr 0,
+            [ Store.TxRef (Store.BlockRef 800002 4) (fakeTxHash 3),
+              Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 2)
+            ]
+          )
+        ],
+      fakeTransactions =
+        [ creditTx ctx (fakeTxHash 2) (Store.BlockRef 800001 1) (externalAddr 0) 30000,
+          creditTx ctx (fakeTxHash 3) (Store.BlockRef 800002 4) (externalAddr 0) 20000
+        ]
+    }
+
+-- | The two payments and two unconfirmed ones: transaction 6 pays 10000,
+-- then transaction 7 pays 5000
+twoUnconfirmedStore :: Ctx -> FakeStore
+twoUnconfirmedStore ctx =
+  (twoPaymentsStore ctx)
+    { fakeBalances = [Store.Balance (externalAddr 0) 50000 15000 4 4 65000],
+      fakeTxRefs =
+        [ ( externalAddr 0,
+            [ Store.TxRef (Store.MemRef 1700000100) (fakeTxHash 7),
+              Store.TxRef (Store.MemRef 1700000000) (fakeTxHash 6),
+              Store.TxRef (Store.BlockRef 800002 1) (fakeTxHash 3),
+              Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 2)
+            ]
+          )
+        ],
+      fakeTransactions =
+        fakeTransactions (twoPaymentsStore ctx)
+          <> [ creditTx ctx (fakeTxHash 6) (Store.MemRef 1700000000) (externalAddr 0) 10000,
+               creditTx ctx (fakeTxHash 7) (Store.MemRef 1700000100) (externalAddr 0) 5000
+             ],
+      fakeUnspents =
+        fakeUnspents (twoPaymentsStore ctx)
+          <> [ coinOf ctx (fakeTxHash 6) Nothing (externalAddr 0) 10000,
+               coinOf ctx (fakeTxHash 7) Nothing (externalAddr 0) 5000
+             ],
+      fakeRawTransactions =
+        fakeRawTransactions (twoPaymentsStore ctx)
+          <> [ (fakeTxHash 6, fundingTx ctx 6 [(externalAddr 0, 10000)]),
+               (fakeTxHash 7, fundingTx ctx 7 [(externalAddr 0, 5000)])
+             ]
+    }
+
+-- | The unconfirmed transaction 6 replaced: the store still has it, marked
+-- as deleted, and the address has lost its 10000
+oneReplacedStore :: Ctx -> FakeStore
+oneReplacedStore ctx =
+  (twoUnconfirmedStore ctx)
+    { fakeBalances = [Store.Balance (externalAddr 0) 50000 5000 3 3 55000],
+      fakeTxRefs =
+        [ ( externalAddr 0,
+            [ Store.TxRef (Store.MemRef 1700000100) (fakeTxHash 7),
+              Store.TxRef (Store.BlockRef 800002 1) (fakeTxHash 3),
+              Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 2)
+            ]
+          )
+        ],
+      fakeTransactions =
+        fakeTransactions (twoPaymentsStore ctx)
+          <> [ replaced $ creditTx ctx (fakeTxHash 6) (Store.MemRef 1700000000) (externalAddr 0) 10000,
+               creditTx ctx (fakeTxHash 7) (Store.MemRef 1700000100) (externalAddr 0) 5000
+             ],
+      fakeUnspents =
+        fakeUnspents (twoPaymentsStore ctx)
+          <> [coinOf ctx (fakeTxHash 7) Nothing (externalAddr 0) 5000]
     }
 
 -- | Transaction 5 paid 30000 to externalAddr 0 and 20000 to externalAddr 1,
@@ -1446,6 +2041,41 @@ twoWalletsStore ctx =
         ]
     }
 
+-- | The payments of the two wallets after a reorganisation that moved the
+-- payment of the second wallet, transaction 2, to block 800003, with the
+-- balances unchanged
+secondMovedStore :: Ctx -> FakeStore
+secondMovedStore ctx =
+  (twoWalletsStore ctx)
+    { fakeBest = blockAt 800003 7,
+      fakeBlocks = [blockAt 800002 9, blockAt 800003 7],
+      fakeTxRefs =
+        [ (externalAddr 0, [Store.TxRef (Store.BlockRef 800000 1) (fakeTxHash 1)]),
+          (externalAddr2, [Store.TxRef (Store.BlockRef 800003 3) (fakeTxHash 2)])
+        ],
+      fakeTransactions =
+        [ creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000,
+          creditTx ctx (fakeTxHash 2) (Store.BlockRef 800003 3) externalAddr2 30000
+        ],
+      fakeUnspents =
+        [ coinOf ctx (fakeTxHash 1) (Just 800000) (externalAddr 0) 50000,
+          coinOf ctx (fakeTxHash 2) (Just 800003) externalAddr2 30000
+        ]
+    }
+
+-- | The payments of the two wallets after a reorganisation that left the
+-- payment of the second wallet, transaction 2, out of the chain
+secondLeftOutStore :: Ctx -> FakeStore
+secondLeftOutStore ctx =
+  (twoWalletsStore ctx)
+    { fakeBest = blockAt 800003 7,
+      fakeBlocks = [blockAt 800002 9, blockAt 800003 7],
+      fakeBalances = [Store.Balance (externalAddr 0) 50000 0 1 1 50000],
+      fakeTxRefs = [(externalAddr 0, [Store.TxRef (Store.BlockRef 800000 1) (fakeTxHash 1)])],
+      fakeTransactions = [creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000],
+      fakeUnspents = [coinOf ctx (fakeTxHash 1) (Just 800000) (externalAddr 0) 50000]
+    }
+
 -- | A payment of 50000 to the first address of the Bitcoin Cash account,
 -- as transaction 1, confirmed at height 800000
 cashPaymentStore :: Ctx -> FakeStore
@@ -1634,6 +2264,12 @@ summaries :: DBAccountId -> ExceptT String (DB IO) [(Maybe TxHash, Store.BlockRe
 summaries accId = do
   txInfos <- txsAfter accId Nothing Nothing
   return $ sortOn (\(h, _, _) -> txHashToHex <$> h) [(txInfoHash t, chainBlock (chainOf t), summaryAmount (txInfoSummary t)) | t <- txInfos]
+
+-- | Each transaction txs lists, newest first, with the balance after it
+listedBalances :: DBAccountId -> ExceptT String (DB IO) [(Maybe TxHash, Maybe Integer)]
+listedBalances accId = do
+  rows <- listedTxsAfter accId Nothing Nothing
+  return [(txInfoHash (listedTxInfo listed), listedTxBalance listed) | (listed, _) <- rows]
 
 -- | The dead summaries of the account, by transaction id
 deadSummaries :: DBAccountId -> ExceptT String (DB IO) [Maybe TxHash]

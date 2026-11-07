@@ -22,7 +22,9 @@
 -- transaction keeps whether the last sync found it in conflict, out of
 -- conflict until the next sync asks the store. The labels of the
 -- transactions, which version 3 did not have, get a table of their own,
--- empty. The keys are made for large wallets: an address is keyed by its
+-- empty. So does the block the last sync of an account reached, which
+-- version 3 did not keep: the first sync of each account then looks at
+-- every address. The keys are made for large wallets: an address is keyed by its
 -- chain and index instead of the text of its path, and the transaction ids,
 -- outpoints, nosigHashes and raw transaction hashes are the bytes of their
 -- hexadecimal text; indexes persistent cannot declare complete the tables.
