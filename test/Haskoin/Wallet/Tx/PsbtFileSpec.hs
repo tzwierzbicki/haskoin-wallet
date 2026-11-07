@@ -511,6 +511,12 @@ readingSpec ctx =
         psbtTxFile ctx Nothing [knownSeed ctx] (withInputs [insertProprietary hwIdentifier inputPathField (hexBytes bytes) (inputAt 0 psbt)] psbt)
           `shouldBe` Left "Input 0: the path of the address it spends from, in the field of hw, is not /0/n or /1/n"
 
+    -- The path /0/0 of eight bytes, and one byte after it
+    it "refuses a path field of an input with a byte after its eight" $ do
+      psbt <- written ctx (knownSeed ctx) (paymentFile ctx)
+      psbtTxFile ctx Nothing [knownSeed ctx] (withInputs [insertProprietary hwIdentifier inputPathField (hexBytes "000000000000000000") (inputAt 0 psbt)] psbt)
+        `shouldBe` Left "Input 0: the path of the address it spends from, in the field of hw, is not /0/n or /1/n"
+
     it "finds the account among several by the keys its records name" $ do
       file <- readBack ctx [otherWallet ctx, knownSeed ctx] =<< written ctx (knownSeed ctx) (paymentFile ctx)
       file.txFileData.txSignDataInputPaths `shouldBe` ["/0/0"]
@@ -785,6 +791,9 @@ readingSpec ctx =
     it "reads a file Bitcoin Core finalized in version 2 as the transaction Core extracted, with no path of its input" $ do
       file <- readBack ctx [knownSeed ctx] =<< coreFile "core-prepared-v2-finalized.psbt"
       isSigned file.txFileData.txSignDataTx `shouldBe` True
+      -- The transaction Core's finalizepsbt extracted, in the .hex file beside
+      extracted <- BS.readFile "test/data/psbt/core/core-prepared-v2-finalized.hex"
+      encodeHex (S.encode file.txFileData.txSignDataTx) `shouldBe` decodeUtf8 (C8.strip extracted)
       txHash file.txFileData.txSignDataTx `shouldBe` "4227ad75bbe53198afe887a6c486514c352134e991637bc808dd3d591c1ce6d6"
       file.txFileData.txSignDataInputPaths `shouldBe` []
       file.txFileData.txSignDataOutputPaths `shouldBe` ["/1/0"]
@@ -841,6 +850,19 @@ readingSpec ctx =
       encodeHex (S.encode file.txFileData.txSignDataTx) `shouldBe` decodeUtf8 (C8.strip finalized)
       txHash file.txFileData.txSignDataTx `shouldBe` "d81848d337a1157f00264090d585f370c46f4099618fb9a47de24a2e8b7200cf"
       file.txFileData.txSignDataInputPaths `shouldBe` ["/0/0"]
+      verifySignedTx btc ctx file.txFileData `shouldBe` Right ()
+
+    -- Core finalized its version 2 file for the bip84 account: the witness
+    -- input keeps the fields of version 2 and loses its derivation record.
+    -- The transaction is the one Core's finalizepsbt extracted, in the .hex
+    -- file beside it.
+    it "reads a file Bitcoin Core finalized in version 2 for a bip84 account as the transaction Core extracted, with no path of its input" $ do
+      file <- readBack ctx [segwitSeed ctx] =<< coreFile "core-prepared-segwit-v2-finalized.psbt"
+      extracted <- BS.readFile "test/data/psbt/core/core-prepared-segwit-v2-finalized.hex"
+      encodeHex (S.encode file.txFileData.txSignDataTx) `shouldBe` decodeUtf8 (C8.strip extracted)
+      txHash file.txFileData.txSignDataTx `shouldBe` "d81848d337a1157f00264090d585f370c46f4099618fb9a47de24a2e8b7200cf"
+      file.txFileData.txSignDataInputPaths `shouldBe` []
+      file.txFileData.txSignDataOutputPaths `shouldBe` ["/1/0"]
       verifySignedTx btc ctx file.txFileData `shouldBe` Right ()
 
     -- The file hw writes for the payment of the bip84 account, signed by

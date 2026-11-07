@@ -137,7 +137,13 @@ noFileNetwork = "The file names no network, as a file of another wallet does, an
 -- or witness data for a SegWit coin. Only their presence is checked here;
 -- "Haskoin.Wallet.Tx.Signing" verifies the signatures themselves.
 isSigned :: Tx -> Bool
-isSigned tx = not (null tx.inputs) && and (zipWith signedInput tx.inputs witnesses)
+isSigned tx = not (null tx.inputs) && and (signedInputs tx)
+
+-- | Whether each input of the transaction carries a signature, in the
+-- order of the inputs: a script, or witness data for a SegWit coin, as
+-- 'isSigned' looks at them
+signedInputs :: Tx -> [Bool]
+signedInputs tx = zipWith signedInput tx.inputs witnesses
   where
     -- One witness stack per input, or none at all in a legacy transaction
     witnesses = tx.witness <> repeat []

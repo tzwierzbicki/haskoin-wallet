@@ -11,9 +11,10 @@
 -- 'buildSweepSignData' builds the transaction spending them all to the
 -- destinations, in the wallet or not, with a fee on the size 'sweepTxSize'
 -- estimates from the kinds of coins, and 'signTxWithKeys' signs it with the
--- keys: P2PKH, P2PK, P2WPKH and P2SH-P2WPKH coins, each with the key that
--- matches its output script. Analysis and verification come from
--- "Haskoin.Wallet.Tx.Signing".
+-- keys: P2PKH, P2WPKH and P2SH-P2WPKH coins, each with the key that
+-- matches its output script. A coin paid to a public key itself (P2PK)
+-- has no address, so the sweep refuses it, as the signer does. Analysis
+-- and verification come from "Haskoin.Wallet.Tx.Signing".
 module Haskoin.Wallet.Tx.Sweep
   ( SweepCoins (..),
     buildSweepSignData,
@@ -26,7 +27,7 @@ module Haskoin.Wallet.Tx.Sweep
 where
 
 import Conduit (MonadUnliftIO)
-import Control.Monad (foldM, when)
+import Control.Monad (foldM, forM_, when)
 import Control.Monad.Except
 import Control.Monad.State
 import qualified Data.ByteString as BS
@@ -39,7 +40,7 @@ import Data.Word (Word32, Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Address
-import Haskoin.Wallet.Database.Coin (coinText)
+import Haskoin.Wallet.Database.Coin (checkCoinsPaid, coinText)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Keys (AccountKind)
 import Haskoin.Wallet.Tx.LockTime (inputSequence, txVersion)
@@ -47,7 +48,7 @@ import Haskoin.Wallet.Tx.Recipient (Share, shareAmounts)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Tx.SignData
-import Haskoin.Wallet.Tx.Signing (coinSigInput, parseOutsideTxSignData, parseTxSignData, spentCoins, verifySignedTx)
+import Haskoin.Wallet.Tx.Signing (HeldChains, checkOutputReach, coinSigInput, parseOutsideTxSignData, parseTxSignData, spentCoins, verifySignedTx)
 import Haskoin.Wallet.Tx.Size (checkFeeRate, checkStandardSize, inputKind, outputDustLimit, recipientOutputKind, scriptOutputKind, txSize)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
@@ -111,8 +112,10 @@ fetchSweepCoins net ctx store accIdM secKeys sweepFrom given sweepTo = do
   let coins = nubBy ((==) `on` (.outpoint)) (found <> givenCoins)
       spentFrom = nub $ (.outpoint.hash) <$> coins
   -- The store lists the coins, so it must have every transaction they
-  -- come from
+  -- come from, and each must pay its coin as the store reports it: the
+  -- fee is counted from the values of the coins
   transactions <- fromStore $ rawTransactions store spentFrom
+  liftEither $ checkCoinsPaid transactions coins
   walletAddrs <- maybe (return Map.empty) (\accId -> walletPaths net accId (mapMaybe (.address) coins <> sweepTo)) accIdM
   let uncompressedAddrs = nub $ uncompressedKeyAddr ctx <$> secKeys
   return SweepCoins {coins, transactions, walletAddrs, uncompressedAddrs}
@@ -237,19 +240,21 @@ sweptInputKind net ctx uncompressedAddrs coin = do
 -- | Sign a transaction with the given private keys: every input is signed
 -- with the key that matches the output script of its coin. The account,
 -- its kind and its public key, only identifies the wallet's own inputs and
--- outputs, the paths of the 'TxSignData' being relative to it; a sweep
--- outside the wallet has no account.
+-- outputs, the paths of the 'TxSignData' being relative to it, with the
+-- addresses the wallet holds of it, which bound its output paths
+-- ('HeldChains'); a sweep outside the wallet has no account.
 signTxWithKeys ::
   Network ->
   Ctx ->
   TxSignData ->
-  Maybe (AccountKind, XPubKey) ->
+  Maybe (AccountKind, XPubKey, HeldChains) ->
   [SecKey] ->
   Either String (TxSignData, TxInfo)
 signTxWithKeys net ctx tsd accountPubM secKeys = do
   when (isSigned tsd.txSignDataTx) $ Left "The transaction is already signed"
   when (null secKeys) $ Left "There are no private keys to sign"
   info <- parse tsd
+  forM_ accountPubM $ \(_, _, held) -> checkOutputReach held tsd
   -- The sweep builder refuses a fee rate of zero; the signer checks the fee itself
   when (info.txInfoSummary.summaryFee == 0) $ Left "The transaction pays no fee"
   -- The coin of every input, in the order of the inputs
@@ -260,7 +265,7 @@ signTxWithKeys net ctx tsd accountPubM secKeys = do
   signedInfo <- parse signedData
   return (signedData, signedInfo)
   where
-    parse = maybe (parseOutsideTxSignData net ctx) (uncurry (parseTxSignData net ctx)) accountPubM
+    parse = maybe (parseOutsideTxSignData net ctx) (\(kind, pub, _) -> parseTxSignData net ctx kind pub) accountPubM
 
 -- | The private keys, indexed by what identifies them in an output script.
 -- Every key is indexed with both encodings of its public key.

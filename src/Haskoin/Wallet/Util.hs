@@ -15,6 +15,7 @@ import qualified Data.Aeson.Encode.Pretty as Pretty
 import Data.Aeson.Types (Parser)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
+import Data.Char (GeneralCategory (..), generalCategory)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -23,6 +24,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Read as Read
 import Haskoin
+import Numeric (showHex)
 import Numeric.Natural (Natural)
 import System.Random (StdGen, uniformShuffleList)
 
@@ -46,6 +48,52 @@ encodeJsonPretty =
 -- wrapping around: 2^64 + 1 read as 1 gave a single row.
 rowLimit :: (Num a) => Natural -> a
 rowLimit n = fromIntegral (min n (fromIntegral (maxBound :: Int64)))
+
+{- Text from outside -}
+
+-- | A text from outside the wallet, such as a label of a file, made safe
+-- to show on a terminal: every character that is an order rather than
+-- text is written as an escape. A terminal obeys control characters, so a
+-- label holding them could move the cursor, erase what hw printed and
+-- write a recipient of its choice in its place; a format character such
+-- as U+202E turns the text after it around. Those are the control
+-- characters, the format characters but the two joiners, and the line and
+-- paragraph separators. A line break shows as \n, a carriage return as \r
+-- and a tab as \t, any other by its code point in hexadecimal: \x1b,
+-- \u202e, \U000e0001. The zero-width joiner and non-joiner stay, since
+-- emoji and some scripts need them, and they move nothing.
+visibleText :: Text -> Text
+visibleText text
+  | Text.any isHidden text = Text.concatMap visibleChar text
+  | otherwise = text
+  where
+    visibleChar c
+      | isHidden c = Text.pack (escapeOf c)
+      | otherwise = Text.singleton c
+
+-- | Whether a character is an order to the terminal or to the layout,
+-- which 'visibleText' writes as an escape
+isHidden :: Char -> Bool
+isHidden c = case generalCategory c of
+  Control -> True
+  Format -> c `notElem` ['\x200C', '\x200D']
+  LineSeparator -> True
+  ParagraphSeparator -> True
+  _ -> False
+
+-- | The escape of a character, as 'visibleText' writes it
+escapeOf :: Char -> String
+escapeOf c = case c of
+  '\n' -> "\\n"
+  '\r' -> "\\r"
+  '\t' -> "\\t"
+  _
+    | code <= 0xff -> "\\x" <> hexDigits 2
+    | code <= 0xffff -> "\\u" <> hexDigits 4
+    | otherwise -> "\\U" <> hexDigits 8
+  where
+    code = fromEnum c
+    hexDigits width = let digits = showHex code "" in replicate (width - length digits) '0' <> digits
 
 {- Errors -}
 
@@ -71,7 +119,7 @@ textToAddrE net a =
 -- word that is an address of the network, on any line, as 'wordsOfLines'
 -- reads them
 parseAddresses :: Network -> Text -> Either String [Address]
-parseAddresses net = wordsOfLines "address" (textToAddr net)
+parseAddresses net = wordsOfLines NumberAndText "address" (textToAddr net)
 
 -- | An address as it is written in a message or on the screen, or a
 -- mention of the mismatch when it cannot be written on the network
@@ -85,21 +133,34 @@ onNetwork net = isJust . addrToText net
 
 {- Files of words -}
 
+-- | How an error names a line of a file that holds no item: by its number
+-- and its text, or by its number alone, when the text may be a secret. A
+-- private key with one character wrong is the key all the same, found
+-- again in moments by trying the characters of that place against its
+-- checksum, and a key of another network is whole.
+data LineShown = NumberAndText | NumberOnly
+  deriving (Eq, Show)
+
 -- | The items of a text, as a file of private keys or of addresses holds
 -- them: every word that reads as one, on any line. A line starting with #
 -- is a comment. A line with words but no item is an error naming the line,
 -- so that a mistyped item alone on its line is not passed over. Another
 -- word on the line of an item is a label, left alone. The name of an item,
--- "private key" or "address", is for the error.
-wordsOfLines :: String -> (Text -> Maybe a) -> Text -> Either String [a]
-wordsOfLines name readWord text = concat <$> mapM itemsOf (zip [1 :: Int ..] (Text.lines text))
+-- "private key" or "address", is for the error, which names the line as
+-- the 'LineShown' says. Its text, shown, comes from a file and is made
+-- safe for a terminal ('visibleText').
+wordsOfLines :: LineShown -> String -> (Text -> Maybe a) -> Text -> Either String [a]
+wordsOfLines shown name readWord text = concat <$> mapM itemsOf (zip [1 :: Int ..] (Text.lines text))
   where
     itemsOf (number, line)
       | null (Text.words line) || "#" `Text.isPrefixOf` Text.stripStart line = Right []
-      | null items = Left $ "No " <> name <> " on line " <> show number <> ": " <> Text.unpack line
+      | null items = Left $ "No " <> name <> " on line " <> show number <> lineText line
       | otherwise = Right items
       where
         items = mapMaybe readWord (Text.words line)
+    lineText line = case shown of
+      NumberAndText -> ": " <> Text.unpack (visibleText line)
+      NumberOnly -> ""
 
 {- Numbers -}
 

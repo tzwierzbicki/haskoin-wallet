@@ -11,7 +11,9 @@ import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.Word (Word64)
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Store (webCall)
+import Haskoin (prepareContext, txHash)
+import Haskoin.Wallet.Store (Store (..), broadcastWith, webCall)
+import Haskoin.Wallet.TestUtils (emptyStore, fakeTxHash, otherAddr, replaced, spendingTx, storeTx, toStore)
 import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), defaultRequest)
 import Test.Hspec
 
@@ -25,7 +27,12 @@ failingWith :: HttpExceptionContent -> ExceptT Store.Except IO [Word64]
 failingWith content = liftIO $ throwIO (HttpExceptionRequest defaultRequest content)
 
 spec :: Spec
-spec =
+spec = do
+  callSpec
+  broadcastSpec
+
+callSpec :: Spec
+callSpec =
   describe "A call of the web client" $ do
     it "gives the answer of the store" $
       called (return [5, 7]) `shouldReturn` Right [5, 7]
@@ -62,3 +69,18 @@ spec =
     it "fails with an answer it could not read, wherever in the answer" $
       called (return [5, error "not enough bytes"])
         `shouldReturn` Left "The store at http://store.test/ gave an answer hw could not read: not enough bytes"
+
+-- | Sending a transaction: the store says nothing of what its peers made
+-- of it, only listing it afterwards tells that the network took it
+broadcastSpec :: Spec
+broadcastSpec =
+  prepareContext $ \ctx ->
+    describe "A transaction handed to the network" $ do
+      let tx = spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 20000)]
+          -- A store that lists the transactions given, whatever it is asked
+          listing listed = (toStore emptyStore) {storeTransactions = \_ -> return listed}
+      it "is seen once the store lists it" $
+        runExceptT (broadcastWith 0 1 (listing [storeTx (txHash tx) (Store.MemRef 0) [] [] 0]) tx) `shouldReturn` Right True
+      -- A transaction replaced or dropped stays in the store, marked deleted
+      it "is not seen while the store lists it as deleted" $
+        runExceptT (broadcastWith 0 1 (listing [replaced (storeTx (txHash tx) (Store.MemRef 0) [] [] 0)]) tx) `shouldReturn` Right False

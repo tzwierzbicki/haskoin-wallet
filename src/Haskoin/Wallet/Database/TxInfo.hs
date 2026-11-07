@@ -462,26 +462,35 @@ storeSummary net walletAddrs sTx =
         - toInteger (sum $ myInputsValue <$> Map.elems myInputs)
 
 -- | The value paid to each address of the network, and the outputs that
--- pay no such address
+-- pay no such address. An output at an address the network cannot write,
+-- such as a SegWit one on Bitcoin Cash, is kept without its address, as
+-- one that pays none: the summary is written on the network, which has no
+-- text for it.
 outputAddressMap :: Network -> [Store.StoreOutput] -> (Map Address Natural, [Store.StoreOutput])
 outputAddressMap net outs =
   (Map.fromListWith (+) rs, ls)
   where
     (ls, rs) = partitionEithers $ f <$> outs
     f (Store.StoreOutput v _ _ (Just a)) | onNetwork net a = Right (a, fromIntegral v)
-    f s = Left s
+    f (Store.StoreOutput v script spender _) = Left (Store.StoreOutput v script spender Nothing)
 
 -- | The value spent by each address of the network with the coins it
 -- spends, in the order of the inputs, and the inputs that spend no such
--- address
+-- address, kept without the address the network cannot write, as for the
+-- outputs
 inputAddressMap :: Network -> [Store.StoreInput] -> (Map Address (Natural, [OutPoint]), [Store.StoreInput])
 inputAddressMap net ins =
-  (Map.fromListWith addLater rs, ls)
+  (Map.map inOrder (Map.fromListWith addEarlier rs), ls)
   where
     (ls, rs) = partitionEithers $ f <$> ins
     f (Store.StoreInput outpoint _ _ _ v _ (Just a)) | onNetwork net a = Right (a, (fromIntegral v, [outpoint]))
-    f s = Left s
-    addLater (v2, later) (v1, earlier) = (v1 + v2, earlier <> later)
+    f (Store.StoreInput outpoint sequenceNumber script pkscript v witness _) = Left (Store.StoreInput outpoint sequenceNumber script pkscript v witness Nothing)
+    f coinbase = Left coinbase
+    -- The coins of an address gather newest first, each in front, and
+    -- are turned around once: appending each would take the square of
+    -- their number
+    addEarlier (v2, later) (v1, earlier) = (v1 + v2, later <> earlier)
+    inOrder (v, outpoints) = (v, reverse outpoints)
 
 {- Summaries in the database -}
 

@@ -16,6 +16,11 @@
 -- The colours are the dull ANSI ones. Most terminal themes make them
 -- readable on a light background as well as on a dark one, which the vivid
 -- ones are not. Only a QR code sets its own colours: see 'QrCode'.
+--
+-- Whatever a document holds, the terminal receives no order from its
+-- text: every control or format character in it is printed as an escape
+-- ('visibleStream'), styled or plain. The only codes on the terminal are
+-- those of the styles.
 module Haskoin.Wallet.Cli.Style
   ( Style (..),
     Output (..),
@@ -23,10 +28,13 @@ module Haskoin.Wallet.Cli.Style
     offlineColourName,
     putDoc,
     renderPlain,
+    visibleStream,
   )
 where
 
+import qualified Data.Text as Text
 import qualified Data.Text.IO as Text
+import Haskoin.Wallet.Util (isHidden, visibleText)
 import Prettyprinter
 import Prettyprinter.Render.String (renderString)
 import qualified Prettyprinter.Render.Text as Plain
@@ -138,7 +146,7 @@ outputOf h = do
 -- | Print the document on the handle, 80 columns wide, then a line break
 putDoc :: Handle -> Output -> Doc Style -> IO ()
 putDoc h output doc = do
-  let stream = layoutPretty (LayoutOptions (AvailablePerLine 80 1.0)) doc
+  let stream = visibleStream $ layoutPretty (LayoutOptions (AvailablePerLine 80 1.0)) doc
   case output of
     Styled -> renderStyled h stream
     Plain -> Plain.renderIO h stream
@@ -165,4 +173,26 @@ renderStyled h = go []
 
 -- | The document as plain text, on one line as long as it needs
 renderPlain :: Doc Style -> String
-renderPlain = renderString . layoutPretty (LayoutOptions Unbounded)
+renderPlain = renderString . visibleStream . layoutPretty (LayoutOptions Unbounded)
+
+-- | A laid out document whose texts hold no order to the terminal: each
+-- control or format character is written as an escape ('visibleText').
+-- A label of a file that reached a document as it is can then neither
+-- move the cursor nor rewrite what hw printed. A line break is the
+-- layout's own and stays one: a text that may hold one must be passed
+-- through 'visibleText' before it becomes a document. The layout is done
+-- before, so a line that holds an escape is a little longer than the
+-- layout counted.
+visibleStream :: SimpleDocStream ann -> SimpleDocStream ann
+visibleStream stream = case stream of
+  SEmpty -> SEmpty
+  SFail -> SFail
+  SChar c rest
+    | isHidden c -> visible (Text.singleton c) rest
+    | otherwise -> SChar c (visibleStream rest)
+  SText _ t rest -> visible t rest
+  SLine i rest -> SLine i (visibleStream rest)
+  SAnnPush ann rest -> SAnnPush ann (visibleStream rest)
+  SAnnPop rest -> SAnnPop (visibleStream rest)
+  where
+    visible t rest = let shown = visibleText t in SText (Text.length shown) shown (visibleStream rest)

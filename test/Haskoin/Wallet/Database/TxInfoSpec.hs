@@ -14,7 +14,8 @@ import Conduit (liftIO)
 import Control.Monad (void)
 import Control.Monad.Except (ExceptT)
 import Control.Monad.Trans (lift)
-import Data.Aeson (Object, Value (Null, Object), eitherDecode, encode)
+import Data.Aeson (Object, Value (Array, Null, Object), eitherDecode, encode)
+import Data.Foldable (toList)
 import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Aeson.Types (parseEither)
 import qualified Data.ByteString as BS
@@ -215,15 +216,34 @@ summarySpec ctx =
       summaryOtherOutputs summary `shouldBe` Map.fromList [(externalAddr 0, 50000)]
       involvesWallet paymentSummary `shouldBe` True
 
-    it "sets apart an output at an address the network cannot write, a SegWit one on Bitcoin Cash" $ do
+    it "sets apart an output at an address the network cannot write, a SegWit one on Bitcoin Cash, keeping no address for it" $ do
       -- The store names the address whatever the network; the summary only
-      -- keeps what the network can write, since that is what it stores
+      -- keeps what the network can write, since that is what it stores.
+      -- The output is kept as one that pays no address.
       let paid = outputTo ctx segwitAddr 30000
           tx = storeTx (fakeTxHash 9) (Store.BlockRef 800000 4) [inputFrom ctx (fakeTxHash 0xee, 0) (otherAddr 0) 31000] [paid] 1000
           onBch = storeSummary bch Map.empty tx
       summaryOtherOutputs onBch `shouldBe` Map.empty
-      summaryNonStdOutputs onBch `shouldBe` [paid]
+      summaryNonStdOutputs onBch `shouldBe` [Store.StoreOutput 30000 (addressScript ctx segwitAddr) Nothing Nothing]
       summaryOtherOutputs (storeSummary btc Map.empty tx) `shouldBe` Map.fromList [(segwitAddr, 30000)]
+
+    it "sets apart an input from an address the network cannot write, keeping no address for it" $ do
+      let spent = inputFrom ctx (fakeTxHash 0xee, 0) segwitAddr 31000
+          tx = storeTx (fakeTxHash 9) (Store.BlockRef 800000 4) [spent] [outputTo ctx (otherAddr 0) 30000] 1000
+          onBch = storeSummary bch Map.empty tx
+      summaryOtherInputs onBch `shouldBe` Map.empty
+      summaryNonStdInputs onBch `shouldBe` [Store.StoreInput (OutPoint (fakeTxHash 0xee) 0) 0xffffffff BS.empty (addressScript ctx segwitAddr) 31000 [] Nothing]
+
+    -- The JSON of a summary writes every address it holds on its network,
+    -- which has no text for a SegWit address on Bitcoin Cash
+    it "writes the summary of such a transaction in JSON, the output and the input without an address" $ do
+      let tx = storeTx (fakeTxHash 9) (Store.BlockRef 800000 4) [inputFrom ctx (fakeTxHash 0xee, 0) segwitAddr 31000] [outputTo ctx segwitAddr 30000] 1000
+          json = encode (marshalValue bch (storeSummary bch Map.empty tx))
+          addressesOf key = case eitherDecode json of
+            Right (Object o) | Just (Array items) <- KeyMap.lookup key o -> [KeyMap.lookup "address" item | Object item <- toList items]
+            _ -> []
+      addressesOf "nonstdoutputs" `shouldBe` [Just Null]
+      addressesOf "nonstdinputs" `shouldBe` [Just Null]
 
 statusSpec :: Spec
 statusSpec =

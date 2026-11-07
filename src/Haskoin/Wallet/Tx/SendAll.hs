@@ -47,7 +47,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Account (accountKind, getAccountById)
 import Haskoin.Wallet.Database.Address (walletPaths)
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Database.RawTx (getRawTx)
+import Haskoin.Wallet.Database.Coin (coinParents, coinsSpentBy)
 import Haskoin.Wallet.Keys (AccountKind)
 import Haskoin.Wallet.Tx.LockTime (withHeader)
 import Haskoin.Wallet.Tx.Recipient (Share (..), shareAmounts)
@@ -155,7 +155,7 @@ buildSendAllSignData net ctx gen accId coins recipients feeByte lockTime = do
   coinPaths <- Map.fromList <$> mapM (coinWithPath net accId) coins
   recipientPaths <- walletPaths net accId (fst <$> recipients)
   built <- liftEither $ buildSendAll net ctx gen SendAllCoins {ownKind, coins, coinPaths, recipientPaths} recipients feeByte lockTime
-  spentFrom <- mapM getRawTx $ nub $ (.outpoint.hash) <$> built.tx.inputs
+  spentFrom <- coinParents (coinsSpentBy built.tx coins)
   return $ TxSignData built.tx spentFrom built.inputPaths built.outputPaths (Just feeByte) Nothing [] noLabel
 
 {- The question about dust coins -}

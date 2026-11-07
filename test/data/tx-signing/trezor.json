@@ -411,7 +411,7 @@
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx_segwit_native.py::test_send_native_change",
       "sourceUrl": "https://github.com/trezor/trezor-firmware/blob/5fdc180b99bd/tests/device_tests/bitcoin/test_signtx_segwit_native.py",
-      "comment": "The same coin's twin, from the previous transaction fcb3f543... of Trezor's tests/txcache (serialized apart from hw from its fields, and its id checked), spent to the P2SH address and to the change address /1/87 of the account (tb1qeslr8v0t22wn4ze5405kt3tmnwxvk7gyyt4lls). 40000 leave the account, and 10000 of fee."
+      "comment": "The same coin's twin, from the previous transaction fcb3f543... of Trezor's tests/txcache (serialized apart from hw from its fields, and its id checked), spent to the P2SH address and to the change address /1/87 of the account (tb1qeslr8v0t22ww4ze54awjchtwdcejm6gyy37r57). 40000 leave the account, and 10000 of fee."
     }
   ]
 }

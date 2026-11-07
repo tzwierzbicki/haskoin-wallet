@@ -8,8 +8,10 @@
 -- "Haskoin.Wallet.Arbitrary".
 module Haskoin.Wallet.TestUtils where
 
+import System.Posix.Files (setFileCreationMask)
+import System.Posix.Types (FileMode)
 import Conduit (runConduit, sinkList, (.|))
-import Control.Exception (finally)
+import Control.Exception (bracket, finally)
 import Control.Monad (forM, unless, void, when)
 import Control.Monad.Except (ExceptT, throwError)
 import Control.Monad.Trans (lift, liftIO)
@@ -128,6 +130,12 @@ inScratchDirectory test = do
   when exists $ removeDirectoryRecursive dir
   createDirectoryIfMissing True dir
   test dir `finally` removeDirectoryRecursive dir
+
+-- | Run the action with the umask given, then put the one before back. The
+-- hw a workflow runs inherits it: what hw makes is shown private whatever
+-- the umask of the computer running the tests.
+underUmask :: FileMode -> IO a -> IO a
+underUmask mask action = bracket (setFileCreationMask mask) setFileCreationMask (const action)
 
 {- Checks inside a database action -}
 
@@ -397,6 +405,15 @@ vectorFileSpec vectorCount fileProblems (file, Right doc) =
           <> unlines problems
   where
     problems = fileProblems doc
+
+-- | The vector files of a directory hold the vectors expected, file by
+-- file, as counted apart from hw. A file deleted, or a list of vectors
+-- renamed, which the reader takes for an empty one, fails this test
+-- rather than passing over its vectors.
+vectorCountsSpec :: (a -> Int) -> [(FilePath, Int)] -> [(FilePath, Either String a)] -> Spec
+vectorCountsSpec count expected files =
+  it ("holds " <> show (sum (snd <$> expected)) <> " vectors in " <> show (length expected) <> " files") $
+    [(file, either (const 0) count doc) | (file, doc) <- files] `shouldBe` expected
 
 {- Collecting problems -}
 

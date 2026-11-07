@@ -45,7 +45,7 @@ import Haskoin.Wallet.Tx.FeeRates (FeeRates (..), levelName, rateAt)
 import Haskoin.Wallet.Keys (KeySource (..), foreignKindDescription)
 import Haskoin.Wallet.Labels (AccountImport (..), ImportReport (..), reportNeedsSync)
 import Haskoin.Wallet.MessageSigning (signedMessageText)
-import Haskoin.Wallet.Cli.Parser (AddressCode (..), BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), View (..), program)
+import Haskoin.Wallet.Cli.Parser (AddressCode (..), BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), TxShown (..), View (..), program)
 import Haskoin.Wallet.Cli.Parser.Help (commandName)
 import Haskoin.Wallet.Cli.Parser.Run (commandNamed)
 import Haskoin.Wallet.Cli.QrCode (paymentUri, qrRows)
@@ -346,7 +346,9 @@ accountImportDoc = \case
   AccountKept acc Nothing -> vcat [accountLine acc, indent 2 "already in the wallet"]
   AccountKept acc (Just why) -> vcat [accountLine acc, indent 2 ("already in the wallet, and keeps its name:" <+> pretty why)]
   AccountRenamed was acc -> vcat [accountLine acc, indent 2 ("renamed from" <+> pretty was `withStyle` Account)]
-  AccountRefused name why -> vcat [pretty name `withStyle` Account, indent 2 (styled Failure "not imported:" <+> pretty why)]
+  -- The name of a refused account is the label of a record, or the start
+  -- of a line, of the file
+  AccountRefused name why -> vcat [pretty (visibleText name) `withStyle` Account, indent 2 (styled Failure "not imported:" <+> pretty why)]
 
 {- Addresses -}
 
@@ -683,9 +685,12 @@ payeeLine net accountM summary =
           <> [changeWord | Just (path, _) <- [txAddressOwn row], isIntPath path]
 
 -- | The label of an address or of a transaction, quoted, which sets it
--- apart on a line
+-- apart on a line. A label may come from a file, so every character that
+-- is not text, a line break included, shows as an escape ('visibleText'):
+-- a label cannot write lines of its own, such as a recipient the
+-- transaction does not pay.
 labelWord :: Text -> Doc Style
-labelWord label = styled UserText ("\"" <> cs label <> "\"")
+labelWord label = styled UserText ("\"" <> cs (visibleText label) <> "\"")
 
 -- | The hash to name a transaction by. For one on the chain, its txid,
 -- faint, since the user rarely types it. For one in preparation, its
@@ -1016,14 +1021,17 @@ reducedDoc net unit feeByte ways@(way : _) =
 
 -- | Print the answer of a command. A listing shows each element in the
 -- view given, and an address that goes with a code shows it on a terminal.
-prettyPrinter :: AmountUnit -> View -> AddressCode -> Response -> IO ()
-prettyPrinter unit view code res = do
-  responsePrinter unit view code res
+prettyPrinter :: AmountUnit -> View -> AddressCode -> TxShown -> Response -> IO ()
+prettyPrinter unit view code shown res = do
+  responsePrinter unit view code shown res
   when (responseFailed res) exitFailure
 
-responsePrinter :: AmountUnit -> View -> AddressCode -> Response -> IO ()
-responsePrinter unit view code answer =
+responsePrinter :: AmountUnit -> View -> AddressCode -> TxShown -> Response -> IO ()
+responsePrinter unit view code shown answer =
   case answer of
+    -- A transaction just signed, shown in full before the secret was asked
+    ResponseTx _ info | SignedTx fileM <- shown -> renderIO $ signedDoc fileM info
+    ResponseOutsideTx _ info | SignedTx fileM <- shown -> renderIO $ signedDoc fileM info
     -- The listings, which the screen reads in chunks ('rowsPrinter')
     ResponseAccounts {} -> listing
     ResponseAddresses {} -> listing
@@ -1097,6 +1105,15 @@ responsePrinter unit view code answer =
       renderIO $ feeRatesDoc net now rates
   where
     listing = mapM_ (renderIO . listingDoc) =<< rowsPrinter unit view answer
+
+-- | A transaction just signed, as signtx and signsweep answer on the
+-- screen: its id, and the file it was written to, if any. The transaction
+-- itself was shown before the secret was asked for.
+signedDoc :: Maybe FilePath -> TxInfo -> Doc Style
+signedDoc fileM info =
+  vcat $
+    [styled Good "Signed" <> "," <+> "txid" <+> styled PendingHash (cs (txHashToHex hash)) | Just hash <- [txInfoHash info]]
+      <> ["Written to" <+> styled UserText file | Just file <- [fileM]]
 
 -- | The fee rates recent blocks paid on the network, with how fresh they
 -- are: the age of the latest of those blocks, which also tells when the

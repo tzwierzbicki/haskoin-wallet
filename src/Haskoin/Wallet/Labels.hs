@@ -40,9 +40,10 @@
 -- is read as the @xpub@ record it amounts to, with the origin of its key
 -- and no name, so the account it adds is named after its network, its
 -- index and its kind, as recover names one. The kind of a new account is
--- what its record says of it: the script function of its origin, pkh or
--- wpkh, the purpose hw wrote, or the prefix of SLIP-132 of its key, zpub
--- or vpub for a BIP84 account; a key that says nothing, a bare xpub, is of
+-- what its record says of it: the script function of its descriptor or
+-- of its origin, pkh or wpkh, the purpose hw wrote, or the prefix of
+-- SLIP-132 of its key, zpub or vpub for a BIP84 account; a key that says
+-- nothing, a bare xpub, is of
 -- the kind the command names, BIP44 without one. hw holds BIP44 and BIP84
 -- accounts: a descriptor of another kind, such as sh(wpkh()), is refused,
 -- with the reason, and the import goes on.
@@ -78,7 +79,7 @@ import Data.Aeson.Types (Pair, Parser)
 import qualified Data.Aeson.Types as Json
 import Data.Bits (testBit)
 import Data.List (nub, nubBy)
-import Data.Maybe (catMaybes, fromMaybe, isJust, listToMaybe, maybeToList)
+import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, listToMaybe, maybeToList)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -100,6 +101,7 @@ import Haskoin.Wallet.Descriptor
 import Haskoin.Wallet.Keys (AccountKind (..), accountDeriv, checkKindOnNetwork, kindName, kindOfPurpose, kindPurpose, xPubIndex)
 import Haskoin.Wallet.Sync (recoveredName)
 import Haskoin.Wallet.Tx.SignData (TxSignData (..), isSigned)
+import Haskoin.Wallet.Util (visibleText)
 import Numeric.Natural (Natural)
 
 {- The file exportacc writes -}
@@ -319,13 +321,30 @@ classifyLine (number, line)
         | otherwise -> UnreadableLine number
 
 -- | The xpub record a descriptor amounts to: its key, with the origin of
--- the key when the descriptor gives it, and neither name nor network. A
--- text that is not the descriptor of an account is refused, named by its
--- start, with the reason.
+-- the key when the descriptor gives it, the purpose of the kind its script
+-- function names, and neither name nor network. The script function says
+-- the kind with or without an origin (BIP 380): wpkh(KEY) is a bip84
+-- account. A text that is not the descriptor of an account is refused,
+-- named by its start, with the reason, and so is a descriptor without an
+-- origin whose script functions are of no kind hw holds, such as tr(KEY);
+-- with an origin, the origin itself is refused ('checkOrigin').
 descriptorRecord :: Text -> Either AccountImport Record
 descriptorRecord text = case parseDescriptor text of
-  Right d -> Right (record XpubRecord (descriptorKey d)) {recordOrigin = originText <$> descriptorOrigin d}
+  Right d -> do
+    let scripts = descriptorScripts d
+        kindM = kindOfScripts scripts
+        originM = descriptorOrigin d
+    when (not (null scripts) && isNothing kindM && isNothing originM) $
+      Left (AccountRefused (Text.take 12 (descriptorKey d) <> "...") (otherScripts scripts))
+    Right (record XpubRecord (descriptorKey d)) {recordOrigin = originText <$> originM, recordPurpose = kindPurpose <$> kindM}
   Left why -> Left (AccountRefused (Text.take 12 text <> "...") (cs why))
+  where
+    otherScripts :: [Text] -> Text
+    otherScripts scripts =
+      "The script "
+        <> Text.concat (map (<> "(") scripts)
+        <> Text.replicate (length scripts) ")"
+        <> " of the descriptor is of no kind of account hw holds: pkh() for bip44, wpkh() for bip84"
 
 -- | The key lines with each key once: the file of Bitcoin Core's
 -- listdescriptors writes an account as two descriptors of its key, one
@@ -383,7 +402,7 @@ importKey ctx netM kindM r = do
     fingerprintM = originFingerprint <$> originM
     shownName = fromMaybe (Text.take 12 (recordRef r) <> "...") (recordLabel r)
     networkNamed = forM (recordNetwork r) $ \name ->
-      liftMaybe ("Unknown network " <> cs name) (netByName (cs name))
+      liftMaybe ("Unknown network " <> cs (visibleText name)) (netByName (cs name))
     -- Why a key whose prefix marks one kind is refused with --type of the
     -- other
     typedKindClash :: AccountKind -> AccountKind -> String

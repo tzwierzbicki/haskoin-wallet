@@ -7,6 +7,7 @@
 module Haskoin.Wallet.Bip329Spec (spec) where
 
 import Data.Either (isLeft)
+import Data.List (isInfixOf)
 import qualified Data.Text.IO as Text
 import Haskoin
 import Haskoin.Wallet.Bip329
@@ -81,16 +82,16 @@ linesSpec =
       parseLine "{\"type\": \"future\", \"ref\": {\"not\": \"validated\"}, \"label\": \"Unknown\"}"
         `shouldBe` Right (LineOfOtherType "future")
 
-    it "needs a type and a reference" $ do
-      parseLine "{\"ref\": \"f91d0a8a78462bc59398f2c5d7a84fcff491c26ba54c4833478b202796c8aafd\", \"label\": \"Transaction\"}" `shouldSatisfy` isLeft
-      parseLine "{\"type\": \"tx\", \"label\": \"Transaction\"}" `shouldSatisfy` isLeft
+    it "needs a type and a reference, and names the one it lacks" $ do
+      parseLine "{\"ref\": \"f91d0a8a78462bc59398f2c5d7a84fcff491c26ba54c4833478b202796c8aafd\", \"label\": \"Transaction\"}" `shouldSatisfy` refusedNaming "type"
+      parseLine "{\"type\": \"tx\", \"label\": \"Transaction\"}" `shouldSatisfy` refusedNaming "ref"
 
     it "must be a JSON object" $ do
       parseLine "Transaction f91d0a8a" `shouldSatisfy` isLeft
       parseLine "[\"tx\", \"f91d0a8a\"]" `shouldSatisfy` isLeft
 
     it "has a label of text, or none" $ do
-      parseLine "{\"type\": \"tx\", \"ref\": \"f91d0a8a\", \"label\": 42}" `shouldSatisfy` isLeft
+      parseLine "{\"type\": \"tx\", \"ref\": \"f91d0a8a\", \"label\": 42}" `shouldSatisfy` refusedNaming "label"
       parseLine "{\"type\": \"tx\", \"ref\": \"f91d0a8a\", \"label\": null}"
         `shouldBe` Right (LineRecord (record TxRecord "f91d0a8a"))
 
@@ -100,7 +101,7 @@ linesSpec =
         `shouldBe` Right (LineRecord (record OutputRecord "f91d0a8a:1") {recordSpendable = Just False})
       parseLine "{\"type\": \"output\", \"ref\": \"f91d0a8a:1\", \"spendable\": \"true\"}"
         `shouldBe` Right (LineRecord (record OutputRecord "f91d0a8a:1") {recordSpendable = Just True})
-      parseLine "{\"type\": \"output\", \"ref\": \"f91d0a8a:1\", \"spendable\": \"yes\"}" `shouldSatisfy` isLeft
+      parseLine "{\"type\": \"output\", \"ref\": \"f91d0a8a:1\", \"spendable\": \"yes\"}" `shouldSatisfy` refusedNaming "spendable"
 
     it "reads the height, fee and value of a transaction, and passes over the time and rate" $
       parseLine "{\"type\": \"tx\", \"ref\": \"f91d0a8a\", \"height\": 800000, \"time\": \"2025-01-23T11:40:35Z\", \"fee\": 1000, \"value\": -41000, \"rate\": {\"USD\": 105620.00}}"
@@ -210,3 +211,7 @@ pathSpec = do
       readOutpoint "f91d0a8a78462bc59398f2c5d7a84fcff491c26ba54c4833478b202796c8aafd" `shouldBe` Nothing
       readOutpoint "f91d0a8a:1" `shouldBe` Nothing
       readOutpoint ":1" `shouldBe` Nothing
+
+-- | Whether a line is refused with a reason that names the field
+refusedNaming :: String -> Either String a -> Bool
+refusedNaming field = either (field `isInfixOf`) (const False)

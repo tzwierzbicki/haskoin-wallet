@@ -37,6 +37,11 @@ module Haskoin.Wallet.Database.Coin
     setLockedByUser,
     userLockedCoins,
     coinAccounts,
+    checkCoinOutput,
+    checkListedCoins,
+    checkCoinsPaid,
+    coinParents,
+    coinsSpentBy,
     Refreshed (..),
     refreshCoins,
     LeftReason (..),
@@ -53,13 +58,14 @@ import Control.Monad
 import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Reader (MonadTrans (lift))
+import Control.Monad.State (StateT, evalStateT, gets, modify)
 import Data.Aeson ((.:?), (.!=), FromJSON (..), ToJSON (..), Value (String), object, withObject, withText, (.:), (.=))
 import Data.ByteString (ByteString)
 import Data.Containers.ListUtils (nubOrd)
 import Data.List (intercalate, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes, fromMaybe, mapMaybe)
+import Data.Maybe (catMaybes, fromMaybe, listToMaybe, mapMaybe)
 import Data.Ord (Down (..))
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
@@ -78,7 +84,7 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account (accountNetwork, getAccountById, getAccountsById)
 import Haskoin.Wallet.Database.Address (CoinBalance (..))
 import Haskoin.Wallet.Database.PendingTx (lockedOutpoints, userLockedOutpoints)
-import Haskoin.Wallet.Database.RawTx (lookupRawTx)
+import Haskoin.Wallet.Database.RawTx (getRawTx, lookupRawTx)
 import Haskoin.Wallet.Database.TxInfo (coinLabel, coinLabels, liveSummaries, spentTxids, walletAddressRow, walletTransaction)
 import Haskoin.Wallet.Util (rowLimit)
 import Numeric.Natural (Natural)
@@ -510,17 +516,44 @@ isCoinbaseTx tid = maybe False coinbase <$> lookupRawTx tid
 -- pays another are as safe as each other. A transaction the sync has not
 -- stored for every account that spends in it, or has found dead, is not
 -- trusted.
+--
+-- The walk keeps what it found of each transaction, so that a parent two
+-- transactions share is looked at once. A transaction met again while its
+-- own parents are being looked at spends itself, through others or
+-- directly: no chain holds such transactions, so a store that reports them
+-- lies, and they are not trusted. The walk then ends, where it would
+-- otherwise go round for ever.
 trustedTx :: (MonadUnliftIO m) => Network -> TxHash -> ExceptT String (DB m) Bool
-trustedTx net tid = do
-  stored <- liveSummaries net tid
-  if any (Store.confirmed . fst) stored
-    then return True
-    else trustedUnconfirmed (snd <$> stored)
+trustedTx net tid = evalStateT (trusted tid) Map.empty
   where
+    -- What the walk found of each transaction: Nothing while its parents
+    -- are being looked at, then whether it is trusted
+    trusted :: (MonadUnliftIO m) => TxHash -> StateT (Map TxHash (Maybe Bool)) (ExceptT String (DB m)) Bool
+    trusted t = do
+      found <- gets (Map.lookup t)
+      case found of
+        Just (Just verdict) -> return verdict
+        -- Met again on its own path: a cycle
+        Just Nothing -> return False
+        Nothing -> do
+          modify (Map.insert t Nothing)
+          verdict <- judge t
+          modify (Map.insert t (Just verdict))
+          return verdict
+    judge t = do
+      stored <- lift $ liveSummaries net t
+      if any (Store.confirmed . fst) stored
+        then return True
+        else trustedUnconfirmed (snd <$> stored)
     -- The wallet made it, from transactions trusted by this same rule
     trustedUnconfirmed summaries
-      | walletTransaction summaries = and <$> mapM (trustedTx net) (nubOrd (concatMap spentTxids summaries))
+      | walletTransaction summaries = allM trusted (nubOrd (concatMap spentTxids summaries))
       | otherwise = return False
+    -- Whether all are trusted, looking no further than the first that is not
+    allM _ [] = return True
+    allM f (x : xs) = do
+      ok <- f x
+      if ok then allM f xs else return False
 
 {- Locks of the user -}
 
@@ -584,6 +617,68 @@ shownCoin net row = do
   rules <- spendingOf net
   coin <- toJsonCoin rules row
   return (acc, coin)
+
+{- The coins against their transactions -}
+
+-- | Refuse a coin the transaction it comes from does not pay as the store
+-- reports it: the transaction is named by its hash, so its output is what
+-- the coin holds, whatever the store says. A store that reported a coin
+-- below its value would have hw build a payment whose fee takes the
+-- difference: 1 btc reported as 0.0011 btc gave a fee of 0.9989 btc. The
+-- transaction must be the coin's own, of the hash of its outpoint.
+checkCoinOutput :: Tx -> Store.Unspent -> Either String ()
+checkCoinOutput parent coin = do
+  output <-
+    maybe (Left (named <> ", but its transaction has " <> show (length parent.outputs) <> " outputs")) Right $
+      listToMaybe (drop (fromIntegral coin.outpoint.index) parent.outputs)
+  when (output.value /= coin.value) $
+    Left (named <> " as worth " <> show coin.value <> " satoshis, but its transaction pays " <> show output.value)
+  when (output.script /= coin.script) $
+    Left (named <> " at another script than its transaction pays")
+  where
+    named = "The store reports the coin " <> coinText coin.outpoint
+
+-- | Refuse a coin the store lists that the raw transaction stored under
+-- the hash of its outpoint does not pay ('checkCoinOutput'). The sync asks
+-- this once it has stored the raw transactions, before it stores a coin.
+-- A coin whose raw transaction is not stored is not checked: no builder
+-- spends it, since signing needs the raw transaction.
+checkListedCoins :: (MonadUnliftIO m) => [Store.Unspent] -> ExceptT String (DB m) ()
+checkListedCoins coins =
+  forM_ coins $ \coin -> do
+    parentM <- lookupRawTx coin.outpoint.hash
+    forM_ parentM $ \parent -> liftEither (checkCoinOutput parent coin)
+
+-- | The transactions the coins come from, each once, in the order of the
+-- coins, as a builder puts them in the signing data: read from the
+-- database, and each coin checked against its output ('checkCoinOutput'),
+-- so that no transaction is built on a value that a store got wrong and
+-- an earlier version of hw stored.
+coinParents :: (MonadUnliftIO m) => [Store.Unspent] -> ExceptT String (DB m) [Tx]
+coinParents coins = do
+  parents <- mapM getRawTx $ nubOrd $ (.outpoint.hash) <$> coins
+  liftEither $ checkCoinsPaid parents coins
+  return parents
+
+-- | Refuse a coin whose transaction is not among the transactions given,
+-- by its hash, or does not pay it ('checkCoinOutput'): for coins and
+-- transactions that come from the store together, as those of a sweep
+checkCoinsPaid :: [Tx] -> [Store.Unspent] -> Either String ()
+checkCoinsPaid parents coins =
+  forM_ coins $ \coin -> do
+    parent <-
+      maybe (Left ("The store gave no transaction of the coin " <> coinText coin.outpoint)) Right $
+        Map.lookup coin.outpoint.hash byHash
+    checkCoinOutput parent coin
+  where
+    byHash = Map.fromList [(txHash tx, tx) | tx <- parents]
+
+-- | The coins among the given ones that the inputs of the transaction
+-- spend, in the order of the inputs
+coinsSpentBy :: Tx -> [Store.Unspent] -> [Store.Unspent]
+coinsSpentBy tx coins = mapMaybe (\input -> Map.lookup input.outpoint byOutpoint) tx.inputs
+  where
+    byOutpoint = Map.fromList [(c.outpoint, c) | c <- coins]
 
 {- Refreshing -}
 

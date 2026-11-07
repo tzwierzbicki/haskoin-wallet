@@ -26,6 +26,7 @@ spec = do
   jsonSpec
   rowsSpec
   errorSpec
+  visibleSpec
   addressSpec
   addressFileSpec
   numberSpec
@@ -54,6 +55,25 @@ errorSpec =
     it "is the error of the monad when the action failed" $
       runExceptT (liftEitherIO (return (Left "The file is not JSON")))
         `shouldReturn` (Left "The file is not JSON" :: Either String Char)
+
+visibleSpec :: Spec
+visibleSpec =
+  describe "A text from outside the wallet, made safe to show on a terminal" $ do
+    it "writes an escape as \\x1b, so that it cannot move the cursor" $
+      visibleText "x\ESC[1Ay" `shouldBe` "x\\x1b[1Ay"
+    it "writes a line break, a carriage return and a tab by their letters" $
+      visibleText "a\nb\rc\td" `shouldBe` "a\\nb\\rc\\td"
+    -- 0x9b is the one-byte form of ESC [ that some terminals obey
+    it "writes delete and the control characters above 127 by their code points" $
+      visibleText "a\DELb\x9b\&2J" `shouldBe` "a\\x7fb\\x9b2J"
+    it "writes a right-to-left override as \\u202e, so that it cannot turn the text around" $
+      visibleText "abc\x202E\&def" `shouldBe` "abc\\u202edef"
+    it "writes the line separator as \\u2028" $
+      visibleText "a\x2028\&b" `shouldBe` "a\\u2028b"
+    it "writes a format character above the basic plane with eight digits" $
+      visibleText "a\xE0001\&b" `shouldBe` "a\\U000e0001b"
+    it "leaves letters of any script, emoji and the joiners between them as they are" $
+      visibleText "Caf\xE9 \x6771\x4EAC \x1F468\x200D\x1F469 \x0645\x200C\x06CC" `shouldBe` "Caf\xE9 \x6771\x4EAC \x1F468\x200D\x1F469 \x0645\x200C\x06CC"
 
 addressSpec :: Spec
 addressSpec =

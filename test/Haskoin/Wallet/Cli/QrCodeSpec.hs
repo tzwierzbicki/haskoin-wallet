@@ -27,8 +27,8 @@ spec = do
         `shouldBe` "bitcoin:mipcBbFg9gMiCh81Kj8tqqdgoZub1ZJRfn"
 
     it "keeps the scheme of Bitcoin for a bech32 address of a test network" $
-      paymentUri btcTest "tb1qghfhmd4zh7ncpmxl3qzhmq566jk8ckq4gafnmq"
-        `shouldBe` "BITCOIN:TB1QGHFHMD4ZH7NCPMXL3QZHMQ566JK8CKQ4GAFNMQ"
+      paymentUri btcTest "tb1qghfhmd4zh7ncpmxl3qzhmq566jk8ckq4gafnmg"
+        `shouldBe` "BITCOIN:TB1QGHFHMD4ZH7NCPMXL3QZHMQ566JK8CKQ4GAFNMG"
 
     it "is a Bitcoin Cash address itself, in uppercase: its prefix is its scheme" $
       paymentUri bch "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"

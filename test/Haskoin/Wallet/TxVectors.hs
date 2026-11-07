@@ -27,16 +27,18 @@ import Test.Hspec
 type VectorSigner =
   Ctx -> Vector -> Either String (Ctx -> Either String (TxSignData, TxInfo))
 
--- | One check per vector file of the directory, signing with the given signer
-txVectorSpec :: FilePath -> String -> VectorSigner -> Spec
-txVectorSpec dir title signer =
+-- | One check per vector file of the directory, signing with the given
+-- signer, and one that the files hold the vectors expected
+txVectorSpec :: FilePath -> String -> [(FilePath, Int)] -> VectorSigner -> Spec
+txVectorSpec dir title expected signer =
   -- A second, separately randomized context: signing with both must give the
   -- same bytes (RFC6979 nonces do not depend on the context randomization).
   prepareContext $ \ctx ->
     prepareContext $ \ctx2 -> do
       files <- runIO (loadVectorFiles dir :: IO [(FilePath, Either String VectorFile)])
-      describe title $
+      describe title $ do
         forM_ files $ vectorFileSpec vectorCount (fileProblems signer ctx ctx2)
+        vectorCountsSpec vectorCount expected files
 
 vectorCount :: VectorFile -> Int
 vectorCount = length . (.fileVectors)

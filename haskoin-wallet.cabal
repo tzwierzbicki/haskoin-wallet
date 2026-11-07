@@ -19,6 +19,10 @@ build-type:     Simple
 extra-source-files:
     test/data/bip329/bip-0329.jsonl
     test/data/bip329/README.md
+    test/data/descriptors/coldcard-export.json
+    test/data/descriptors/core-default-wallet.json
+    test/data/descriptors/core-watch-only.json
+    test/data/descriptors/README.md
     test/data/message-signing/bitcoin-core.json
     test/data/message-signing/bitcoinjs-message.json
     test/data/message-signing/edge-cases.json
@@ -27,6 +31,27 @@ extra-source-files:
     test/data/message-signing/python-bitcoinlib.json
     test/data/message-signing/trezor.json
     test/data/message-signing/README.md
+    test/data/psbt/README.md
+    test/data/psbt/core/core-prepared-segwit-v2-finalized.hex
+    test/data/psbt/core/core-prepared-v2-finalized.hex
+    test/data/psbt/core/hw-payment-finalized.hex
+    test/data/psbt/core/hw-segwit-payment-finalized.hex
+    test/data/psbt/core/pending-payment-finalized.hex
+    test/data/psbt/core/core-outside.psbt
+    test/data/psbt/core/core-prepared-segwit-v2-finalized.psbt
+    test/data/psbt/core/core-prepared-segwit-v2-partial.psbt
+    test/data/psbt/core/core-prepared-segwit-v2.psbt
+    test/data/psbt/core/core-prepared-segwit.psbt
+    test/data/psbt/core/core-prepared-v2-finalized.psbt
+    test/data/psbt/core/core-prepared-v2-partial.psbt
+    test/data/psbt/core/core-prepared-v2.psbt
+    test/data/psbt/core/core-prepared.psbt
+    test/data/psbt/core/hw-payment-finalized.psbt
+    test/data/psbt/core/hw-payment-partial.psbt
+    test/data/psbt/core/hw-segwit-payment-finalized.psbt
+    test/data/psbt/core/hw-segwit-payment-partial.psbt
+    test/data/psbt/core/pending-payment-finalized-v2.psbt
+    test/data/psbt/core/pending-payment-finalized.psbt
     test/data/tx-signing/edge-cases.json
     test/data/tx-signing/external.json
     test/data/tx-signing/hw-regression.json
@@ -118,6 +143,7 @@ library
     , base >=4.9 && <5
     , base16-bytestring >=1.0.0.0
     , base64-bytestring >=1.0.0.3
+    , bytes >=0.17
     , bytestring >=0.10.10.0
     , cereal >=0.5.8.1
     , conduit >=1.3.5
@@ -177,6 +203,7 @@ executable hw
     , base >=4.9 && <5
     , base16-bytestring >=1.0.0.0
     , base64-bytestring >=1.0.0.3
+    , bytes >=0.17
     , bytestring >=0.10.10.0
     , cereal >=0.5.8.1
     , conduit >=1.3.5

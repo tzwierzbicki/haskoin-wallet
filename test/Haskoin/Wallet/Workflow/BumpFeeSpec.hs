@@ -172,6 +172,22 @@ bumpFeeSpec ctx = do
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
         paidToWallet bumped `shouldBe` Map.fromList [(externalAddr 0, 25480)]
 
+    -- BIP 125, rule 2: a replacement spends no unconfirmed coin that its
+    -- originals did not. At 160 sat/vB the change cannot pay: 192 bytes
+    -- without change need 30720, and the coin of 50000 holds 30000 beyond
+    -- the 20000 paid. The only other coin is the unconfirmed change of a
+    -- second payment, from the coin at /0/1: the recipient pays the rest.
+    it "adds no unconfirmed coin, not even the wallet's own change, and has the recipient pay instead" $
+      withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from", textOf (externalAddr 0), "--fee-rate", "10"] []
+        stuck <- signAndSend home nosig
+        other <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--spend-from", textOf (externalAddr 1), "--fee-rate", "10"] []
+        _ <- signAndSend home other
+        _ <- answer home ["sync"] []
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "160", "--yes"] []
+        concatMap myInputsOutpoints (Map.elems bumped.txInfoSummary.summaryMyInputs) `shouldBe` [OutPoint (txHash (twoAddressesTx ctx)) 0]
+
     -- The payment to the second receiving address is no change: only the
     -- change at /1/0 pays the higher fee
     it "keeps what it pays another address of the wallet" $

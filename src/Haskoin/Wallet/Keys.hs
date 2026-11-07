@@ -22,7 +22,7 @@ import Data.Text.Encoding (encodeUtf8)
 import Data.Text.Normalize (NormalizationMode (NFKD), normalize)
 import Haskoin
 import Haskoin.Crypto.Keys.Slip39 (EncryptedMasterSecret, decryptMasterSecret)
-import Haskoin.Wallet.Util (wordsOfLines)
+import Haskoin.Wallet.Util (LineShown (..), wordsOfLines)
 import Numeric.Natural (Natural)
 
 {- The kinds of accounts -}
@@ -435,6 +435,8 @@ parseSecKey net word = wif <|> mini <|> hex
     hex = decodeSecKey =<< decodeHex word
 
 -- | The private keys of a text, as a key file or a typed line holds them:
--- every word that is a key, on any line, as 'wordsOfLines' reads them
+-- every word that is a key, on any line, as 'wordsOfLines' reads them. A
+-- line with no key is named by its number alone: it may be a key with a
+-- typo, or one of another network, which the error must not print.
 parseSecKeys :: Network -> Text -> Either String [SecKey]
-parseSecKeys net = wordsOfLines "private key" (parseSecKey net)
+parseSecKeys net = wordsOfLines NumberOnly "private key" (parseSecKey net)

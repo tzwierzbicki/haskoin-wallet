@@ -56,6 +56,7 @@ import Database.Persist.Sqlite (SqliteConnectionInfo, extraPragmas, fkEnabled, m
 import Database.Sqlite (Error (..), SqliteException (..))
 import Haskoin
 import Haskoin.Wallet.Config
+import Haskoin.Wallet.FileIO (privateFile)
 import Haskoin.Wallet.Schema.KeyBytes
 import Haskoin.Wallet.Schema.V4
 import System.Directory (makeAbsolute)
@@ -75,6 +76,9 @@ type DB m = ReaderT SqlBackend (NoLoggingT (ResourceT m))
 runDB :: (MonadUnliftIO m) => Config -> DB m a -> m a
 runDB cfg action = do
   dbFile <- liftIO $ databaseFile cfg
+  -- A new database is made private before SQLite opens it, which would
+  -- give it the mode the umask allows, readable by others as a rule
+  liftIO $ privateFile dbFile
   runDBWith busyTimeout dbFile action
 
 -- | How long a command waits for another one to release the database, in

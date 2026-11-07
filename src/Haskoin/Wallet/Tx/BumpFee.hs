@@ -54,7 +54,7 @@ import Control.Monad.Except
 import Control.Monad.Reader (MonadTrans (lift))
 import Data.Containers.ListUtils (nubOrd)
 import Data.Either (fromRight, isRight)
-import Data.List (find, inits, intercalate, nub, sortOn)
+import Data.List (find, inits, intercalate, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, isJust, isNothing, listToMaybe, mapMaybe)
@@ -69,13 +69,13 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Account (accountKind, accountNetwork, accountXPubKey, getAccounts)
 import Haskoin.Wallet.Database.Address (fromDBAddr, isIntPath, walletPaths)
-import Haskoin.Wallet.Database.Coin (coinText)
+import Haskoin.Wallet.Database.Coin (coinParents, coinText)
 import Haskoin.Wallet.Tx.CoinSelection (CoinSelection (..), FeePayer (..), Selection (..))
 import Haskoin.Wallet.Config (Config)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.PendingTx (PendingTx (..), changeAddress, lookupPendingTx, pendingTxs, signedWithId)
 import Haskoin.Wallet.Keys (AccountKind)
-import Haskoin.Wallet.Database.RawTx (getRawTx, lookupRawTx)
+import Haskoin.Wallet.Database.RawTx (lookupRawTx)
 import Haskoin.Wallet.Store (Store, fromStore, rawTransactions)
 import Haskoin.Wallet.Tx.Building (BuiltTx (..), ChosenPayment (..), CoinControl (..), WalletCoins (..), assemblePayment, choosePayment, recipientsPayFee)
 import Haskoin.Wallet.Database.TxInfo (MyInputs (..), TxInfo (..), TxSummary (..), liveSummary, ownTransaction, txInfoBlockRefs)
@@ -517,7 +517,7 @@ buildBump ctx cfg net accId gen plan funding feeByte lockTime = do
         CoinsAdded extra -> (plan, extra)
         RecipientsReduced reduction -> (reducedPlan reduction, [])
       found = walletCoinsOf funded added
-  addedParents <- mapM getRawTx $ nub [coin.outpoint.hash | (coin, _, _) <- added]
+  addedParents <- coinParents [coin | (coin, _, _) <- added]
   chosen <- liftEither $ chooseBump ctx gen funded added feeByte
   change <-
     if chosen.selection.changeAmount > 0

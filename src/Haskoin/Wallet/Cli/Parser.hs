@@ -153,6 +153,20 @@ addressCodeOf (CommandReceive _) = WithCode
 addressCodeOf (CommandShowAddr _) = WithCode
 addressCodeOf _ = WithoutCode
 
+-- | How the screen shows a transaction a command answers with: in full,
+-- or by its id and the file it was written to, if any, for one just
+-- signed, which signtx and signsweep showed in full before they asked for
+-- the secret
+data TxShown = FullTx | SignedTx !(Maybe FilePath)
+  deriving (Eq, Show)
+
+-- | The file a signing command writes is its --output file, or the --input
+-- file it replaces with the user's agreement
+txShownOf :: Command -> TxShown
+txShownOf (CommandSignTx signing _) = SignedTx (signing.output <|> signing.input)
+txShownOf (CommandSignSweep signing _ _) = SignedTx (signing.output <|> signing.input)
+txShownOf _ = FullTx
+
 -- | The options of mnemonic
 data NewMnemonic = NewMnemonic
   { -- | The bytes of entropy

@@ -31,6 +31,7 @@ import qualified Database.Persist as P
 import Haskoin
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Keys (AccountKind (..), PublicSeed (..), accountDeriv, checkKindOnNetwork, kindName, kindNamed, kindOfPurpose, kindPurpose, xPubIndex)
+import Haskoin.Wallet.Util (visibleText)
 import Numeric.Natural (Natural)
 
 {- Accounts in JSON -}
@@ -81,11 +82,15 @@ instance FromJSON DBAccount where
     withObject "DBAccount" $ \o -> do
       bal <- o .: "balance"
       kind <- maybe (return Bip44) kindOf =<< o .:? "type"
+      network <- o .: "network"
+      -- Read here, where it can fail: 'accountNetwork' takes the name of
+      -- a row for a known network
+      _ <- maybe (fail ("Unknown network " <> cs (visibleText network))) return (netByName (cs network))
       DBAccount
         <$> o .: "name"
         <*> o .: "index"
         <*> return (fromIntegral (kindPurpose kind))
-        <*> o .: "network"
+        <*> return network
         <*> o .: "external"
         <*> o .: "internal"
         <*> o .: "xPubKey"
@@ -376,9 +381,10 @@ recordFingerprint ctx seed = do
   where
     fingerprint = fingerprintToText $ seedFingerprint seed
 
--- | Record the fingerprint of the seed of an account as the offline wallet
--- reports it, in an exported document or with a signed transaction. One
--- already recorded must be the same.
+-- | Record the fingerprint of the seed of an account as a file of accounts
+-- reports it, an exported document or the origin of a BIP 329 record. One
+-- already recorded must be the same: the record is refused otherwise, and
+-- the import goes on.
 learnFingerprint :: (MonadUnliftIO m) => DBAccountId -> Fingerprint -> ExceptT String (DB m) ()
 learnFingerprint accId fingerprint = do
   acc <- getAccountById accId
@@ -391,6 +397,20 @@ learnFingerprint accId fingerprint = do
             "The account " <> cs (dBAccountName acc) <> " is of the seed " <> cs known <> ", not of " <> cs reported
   where
     reported = fingerprintToText fingerprint
+
+-- | Record the fingerprint of the seed of an account as a signed
+-- transaction names it, when the account knows none. A fingerprint cannot
+-- be checked from the public key of the account, so the word of the file
+-- is all there is: it never replaces the one the account has, and a file
+-- naming another is not refused for it. A counterparty holding a file the
+-- user signed could otherwise plant a fingerprint against which the
+-- genuine file is then refused. The seed itself sets it for sure
+-- ('recordFingerprint'), when signtx or signmsg signs with it.
+claimFingerprint :: (MonadUnliftIO m) => DBAccountId -> Fingerprint -> ExceptT String (DB m) ()
+claimFingerprint accId fingerprint = do
+  acc <- getAccountById accId
+  when (isNothing (dBAccountFingerprint acc)) $
+    lift $ P.update accId [DBAccountFingerprint P.=. Just (fingerprintToText fingerprint)]
 
 {- The export document -}
 

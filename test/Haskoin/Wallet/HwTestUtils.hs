@@ -31,6 +31,7 @@ module Haskoin.Wallet.HwTestUtils
     withChainMinedAgo,
     withLyingChain,
     withServerAnswering,
+    withServerSending,
   )
 where
 
@@ -512,14 +513,19 @@ downOn downs app req respond
 -- question with the same text, as a server that is not a haskoin-store
 -- would. The test gets the address of the server, as config.json has it.
 withServerAnswering :: Text -> (FilePath -> String -> IO a) -> IO a
-withServerAnswering text test =
+withServerAnswering text = withServerSending (BL.fromStrict (encodeUtf8 text))
+
+-- | 'withServerAnswering' with the bytes of the answer, which the server
+-- sends as it makes them: a long answer is never whole in memory
+withServerSending :: BL.ByteString -> (FilePath -> String -> IO a) -> IO a
+withServerSending body test =
   testWithApplication (return answering) $ \port ->
     withHome $ \home -> do
       let url = "http://127.0.0.1:" <> show port <> "/"
       useStore home url
       test home url
   where
-    answering _ respond = respond $ responseLBS status200 [] (BL.fromStrict (encodeUtf8 text))
+    answering _ respond = respond $ responseLBS status200 [] body
 
 -- | The web API of haskoin-store, as its web client asks it, answering
 -- from a store: the paths, the parameters and the binary encoding of

@@ -38,7 +38,7 @@ import Haskoin.Wallet.Store
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Database.TxLabel (setTxLabel)
 import Haskoin.Wallet.Tx.SignData
-import Haskoin.Wallet.Tx.Signing (SpentCoin (..), parseOutsideTxSignData, parseTxSignData, spentCoins, verifySignedTx)
+import Haskoin.Wallet.Tx.Signing (SpentCoin (..), checkOutputReach, heldChainsOf, parseOutsideTxSignData, parseTxSignData, spentCoins, verifySignedTx)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 
@@ -330,10 +330,12 @@ importPendingTx net ctx accId tsd = do
       throwError "The transaction is pending in another account"
   let imported = maybe tsd (`heldVersion` tsd) heldM
   info <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountKind acc) (accountXPubKey ctx acc) imported
+  liftEither $ checkOutputReach (heldChainsOf acc) imported
   when (isSigned tx) $ do
     liftEither $ verifySignedTx net ctx imported
-    -- The signer names the seed of the account, which this wallet may not know
-    forM_ (txSignDataFingerprint imported) $ learnFingerprint accId
+    -- The signer names the seed of the account, which this wallet may not
+    -- know: taken on its word only when the wallet knows none
+    forM_ (txSignDataFingerprint imported) $ claimFingerprint accId
   case heldM of
     Just held -> replaceVersion held imported
     Nothing -> insertPendingTx net accId imported info.txInfoSummary =<< replacedBy ctx accId imported
@@ -580,7 +582,10 @@ sendPending ctx storeOn beforeSending named = do
 -- accounts the transaction involves: those whose keys derive the addresses
 -- it spends or pays, at the paths it gives or the wallet knows. One that
 -- involves none, a sweep between addresses outside the wallet, is of no
--- account, and --account may not name one.
+-- account, and --account may not name one. Once the account is known, an
+-- output path too far past the addresses it holds is refused
+-- ('checkOutputReach'), so that a file cannot strand the change at an
+-- index no scan reaches.
 transactionAccount :: (MonadUnliftIO m) => Ctx -> Maybe Text -> Maybe Network -> TxSignData -> ExceptT String (DB m) (Maybe (DBAccountId, DBAccount), TxSignData)
 transactionAccount ctx nameM netM tsd = do
   heldM <- lookupPendingTx (nosigHash (txSignDataTx tsd))
@@ -594,7 +599,9 @@ transactionAccount ctx nameM netM tsd = do
           (\name -> "The transaction is pending in the account " <> cs (dBAccountName holder) <> ", not in " <> cs name)
           nameM
           [(held.pendingTxAccount, holder)]
-      (Just chosen,) <$> withWalletPaths ctx chosen tsd
+      completed <- withWalletPaths ctx chosen tsd
+      liftEither $ checkOutputReach (heldChainsOf holder) completed
+      return (Just chosen, completed)
     Nothing -> do
       accounts <- lift getAccounts
       completed <- forM accounts $ \account -> (account,) <$> withWalletPaths ctx account tsd
@@ -607,7 +614,9 @@ transactionAccount ctx nameM netM tsd = do
           return (Nothing, tsd)
         _ -> do
           chosen <- accountAmong notInvolved nameM (fst <$> involved)
-          return (Just chosen, maybe tsd snd (find ((== fst chosen) . fst . fst) involved))
+          let completedTsd = maybe tsd snd (find ((== fst chosen) . fst . fst) involved)
+          liftEither $ checkOutputReach (heldChainsOf (snd chosen)) completedTsd
+          return (Just chosen, completedTsd)
   where
     onTxNetwork acc = maybe True (== accountNetwork acc) netM
     involves acc completedTsd =

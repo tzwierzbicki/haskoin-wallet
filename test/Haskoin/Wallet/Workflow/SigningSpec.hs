@@ -9,6 +9,7 @@
 module Haskoin.Wallet.Workflow.SigningSpec (spec) where
 
 import Control.Monad (forM_, void)
+import Data.Char (isHexDigit)
 import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Base64 as Base64
@@ -23,11 +24,12 @@ import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.Database (DBAccount (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.HwTestUtils
+import Haskoin.Wallet.Keys (AccountKind (..), keyAddress)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData (..), isSigned, noLabel)
 import Haskoin.Wallet.Workflow.TestUtils
 import Numeric.Natural (Natural)
-import System.Directory (copyFile)
+import System.Directory (copyFile, doesFileExist)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import Test.Hspec
@@ -535,6 +537,30 @@ inputFileSpec ctx = do
           (errorOf <$> hwJson home [command, "--input", home </> "missing.json", "--output", home </> "signed.psbt"] [])
             `shouldReturn` Right (noSuchFile (home </> "missing.json"))
 
+  -- The payment of 40000 to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, from the
+  -- coin at /0/0
+  describe "signtx, showing what the mnemonic signs" $ do
+    it "shows the transaction as reviewtx does before it asks for the mnemonic" $
+      withHome $ \home -> do
+        createMain home
+        writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
+        run <- hw home ["signtx", "--input", home </> "payment.psbt", "--output", home </> "signed.psbt"] seedOnce
+        let (beforeMnemonic, mnemonicOnward) = Text.breakOn "Mnemonic" (runErr run)
+        beforeMnemonic `shouldSatisfy` Text.isInfixOf "  To       : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00040000 btc\n"
+        mnemonicOnward `shouldSatisfy` (not . Text.null)
+
+    it "answers on the screen with the id of the signed transaction and the file written, not with the transaction again" $
+      withHome $ \home -> do
+        createMain home
+        writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
+        run <- hw home ["signtx", "--input", home </> "payment.psbt", "--output", home </> "signed.psbt"] seedOnce
+        case Text.lines (runOut run) of
+          signedLine : writtenLine : _ -> do
+            Text.stripPrefix "Signed, txid " signedLine `shouldSatisfy` maybe False (\txid -> Text.length txid == 64 && Text.all isHexDigit txid)
+            writtenLine `shouldBe` "Written to " <> Text.pack (home </> "signed.psbt")
+          other -> expectationFailure ("Not the answer of a signature: " <> show other)
+        runOut run `shouldNotSatisfy` Text.isInfixOf "To       :"
+
   -- The unsigned file is of no use once the transaction is signed
   describe "signtx and signsweep with an --input file and no --output file" $ do
     let question file = "Replace " <> Text.pack file <> " with the signed transaction? Give an --output file to write it elsewhere. [y/N] "
@@ -649,6 +675,23 @@ inputFileSpec ctx = do
         run <- hw home ["signtx", "--input", home </> "hidden.psbt", "--output", home </> "signed.psbt"] seedOnce
         run `shouldSatisfy` printed refusal
         run `shouldNotSatisfy` askedMnemonic
+
+    -- The change goes to the key of the account at /1/2000000000, as a
+    -- genuine record says: no scan of the account would find it there
+    it "refuses a file whose change lies far past every address of its chain, as reviewtx does, and writes no signed file" $
+      withHome $ \home -> do
+        createMain home
+        let farPath = Deriv :/ 1 :/ 2000000000 :: SoftPath
+            farChange = keyAddress Bip44 ctx (derivePubPath ctx farPath (testAccountPub ctx))
+            tx = spendingTx ctx [(txHash (payment ctx), 0)] [(otherAddr 0, 20000), (farChange, 27740)]
+            refusal = "The path /1/2000000000 of an output is over 1000 addresses past the last one of its chain that the wallet holds or the transaction spends from: no scan of the account would find what it pays there"
+        writeTxFile ctx (home </> "far.psbt") (TxSignData tx [payment ctx] [Deriv :/ 0 :/ 0] [farPath] (Just 10) Nothing [] noLabel)
+        review <- hw home ["reviewtx", home </> "far.psbt"] []
+        review `shouldSatisfy` printed refusal
+        run <- hw home ["signtx", "--input", home </> "far.psbt", "--output", home </> "signed.psbt"] seedOnce
+        run `shouldSatisfy` printed refusal
+        run `shouldNotSatisfy` askedMnemonic
+        doesFileExist (home </> "signed.psbt") `shouldReturn` False
 
 {- Sending -}
 

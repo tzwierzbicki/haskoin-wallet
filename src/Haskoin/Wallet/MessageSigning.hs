@@ -94,14 +94,21 @@ encodeSignature = decodeUtf8 . B64.encode
 -- base64 as signmsg writes it. The check is refused (Left) when the address
 -- is not one of a single key, P2PKH, P2WPKH or P2SH-P2WPKH, the kinds the
 -- format signs from, or when the signature does not decode to 65 bytes.
--- The verdict for a P2PKH address is the one of Bitcoin Core's
--- verifymessage: the signature recovers a public key, compressed or not
--- as its header byte says, and the address must be the address of that
--- key. For a SegWit address, the address must be the one of that kind of
--- the recovered key, whatever header byte of a compressed key the signer
+-- The header byte is read as BIP 137 writes it, for every kind of address
+-- ('keyHeader'): the signature recovers a public key, compressed or not
+-- as the byte says, and the address must be one of that key. For a SegWit
+-- address, that is whatever header byte of a compressed key the signer
 -- chose: the one of BIP 137 or the one of a P2PKH address. A signature
 -- that recovers no key is not valid: a header byte outside 27 to 42, or r
 -- or s outside the curve order.
+--
+-- For a P2PKH address the verdict is that of Bitcoin Core's verifymessage
+-- for the header bytes 27 to 34 alone. Core reads any byte, the key as
+-- compressed when bit 2 of the byte less 27 is set: it finds 35 to 38,
+-- which BIP 137 gives a P2SH-P2WPKH address, a byte of an uncompressed
+-- key, and it takes bytes past 42 that hw refuses, such as 43 for the
+-- recovery id 0 of an uncompressed key. hw follows BIP 137, as Sparrow
+-- does, so that a signature reads the same from every address of a key.
 verifyMessage :: Ctx -> Address -> Text -> Text -> Either String Bool
 verifyMessage ctx addr signature message = do
   unless (isPubKeyAddress addr || isWitnessPubKeyAddress addr || isScriptAddress addr) $

@@ -324,6 +324,48 @@ spec = prepareContext $ \ctx -> do
         result <- lift $ runExceptT $ syncWith (noRawStore ctx) accId
         liftIO $ result `shouldBe` Left "The store was asked for 1 raw transactions but returned 0"
 
+    -- The raw transaction of the payment pays externalAddr 0 50000 at its
+    -- output 0. Its txid, a16ab47f...080e, is the double SHA-256 of its
+    -- bytes, worked out apart from hw.
+    it "refuses a store that reports a coin worth less than its transaction pays, and stores none of its coins" $
+      inDatabaseE $ do
+        accId <- account
+        let store = (realPaymentStore ctx) {fakeUnspents = [coinOf ctx (realPaymentId ctx) (Just 800000) (externalAddr 0) 1100]}
+        result <- lift $ runExceptT $ syncWith store accId
+        liftIO $ result `shouldBe` Left "The store reports the coin a16ab47fec4dadea83515835516e9240df6507475dd0f0c8cd4eba835cfd080e:0 as worth 1100 satoshis, but its transaction pays 50000"
+        coins accId `dbShouldBeE` []
+
+    it "refuses a store that reports a coin at another script than its transaction pays" $
+      inDatabaseE $ do
+        accId <- account
+        let coin =
+              Store.Unspent
+                { Store.block = Store.BlockRef 800000 0,
+                  Store.outpoint = OutPoint (realPaymentId ctx) 0,
+                  Store.value = 50000,
+                  Store.script = addressScript ctx (externalAddr 1),
+                  Store.address = Just (externalAddr 0)
+                }
+            store = (realPaymentStore ctx) {fakeUnspents = [coin]}
+        result <- lift $ runExceptT $ syncWith store accId
+        liftIO $ result `shouldBe` Left "The store reports the coin a16ab47fec4dadea83515835516e9240df6507475dd0f0c8cd4eba835cfd080e:0 at another script than its transaction pays"
+
+    it "refuses a store that reports a coin at an output its transaction does not have" $
+      inDatabaseE $ do
+        accId <- account
+        let store = (realPaymentStore ctx) {fakeUnspents = [coinAt ctx (realPaymentId ctx) 1 (Just 800000) (externalAddr 0) 50000]}
+        result <- lift $ runExceptT $ syncWith store accId
+        liftIO $ result `shouldBe` Left "The store reports the coin a16ab47fec4dadea83515835516e9240df6507475dd0f0c8cd4eba835cfd080e:1, but its transaction has 1 outputs"
+
+    -- The fee rate of a summary is its fee divided by its size
+    it "refuses a store that reports a transaction of weight 0, rather than dividing by it" $
+      inDatabaseE $ do
+        accId <- account
+        let weightless (Store.Transaction b v l i o d r t x z _ f) = Store.Transaction b v l i o d r t x z 0 f
+            store = (realPaymentStore ctx) {fakeTransactions = weightless <$> (realPaymentStore ctx).fakeTransactions}
+        result <- lift $ runExceptT $ syncWith store accId
+        liftIO $ result `shouldBe` Left "The store reports a weight of 0 for the transaction a16ab47fec4dadea83515835516e9240df6507475dd0f0c8cd4eba835cfd080e"
+
     it "refuses a store that lists fewer coins than it counts" $
       inDatabaseE $ do
         accId <- account
@@ -715,6 +757,17 @@ spec = prepareContext $ \ctx -> do
         syncedBlock accId `dbShouldBeE` Just (SyncedBlock (headerHash (blockAt 800002 1).header) 800002)
 
   describe "A reorganisation of the chain" $ do
+    -- After a reorganisation the store still knows the block the last sync
+    -- reached, at its height, out of the main chain. The balances stay as
+    -- they were, and transaction 3 is listed no more.
+    it "looks at every address when the block the last sync reached is at its height but out of the main chain" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- syncWith (twoPaymentsStore ctx) accId
+        let outOfMain (Store.BlockData h _ w hd z wt t o f s) = Store.BlockData h False w hd z wt t o f s
+        _ <- syncWith ((leftOutStore ctx) {fakeBlocks = [outOfMain (blockAt 800002 1), blockAt 800002 9, blockAt 800003 7]}) accId
+        deadSummaries accId `dbShouldBeE` [Just (fakeTxHash 3)]
+
     it "moves a payment to its new block in an account synced after another one" $
       inDatabaseE $ do
         mainId <- account

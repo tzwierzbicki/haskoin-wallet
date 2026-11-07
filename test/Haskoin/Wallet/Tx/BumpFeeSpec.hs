@@ -64,12 +64,25 @@ payment ctx marked =
 replaceableSpec :: Ctx -> Spec
 replaceableSpec ctx =
   describe "A transaction bumpfee replaces" $ do
+    let -- The payment with an input of each sequence
+        withSequences sequences =
+          let tx = spendingTx ctx [(fakeTxHash 1, i) | i <- [0 .. fromIntegral (length sequences) - 1]] [(otherAddr 0, 20000)]
+           in Tx tx.version [TxIn input.outpoint input.script s | (input, s) <- zip tx.inputs sequences] tx.outputs tx.witness tx.locktime
     it "is a payment of the account marked replaceable" $
       checkReplaceable (payment ctx True) `shouldBe` Right ()
 
     it "is not one whose inputs are final, which the store would keep showing" $
       checkReplaceable (payment ctx False)
         `shouldBe` Left "The transaction is not marked replaceable (BIP 125): the store would keep showing it in place of its replacement until a block confirms one of them"
+
+    -- BIP 125: a transaction signals that it may be replaced when one of
+    -- its inputs has a sequence below 0xfffffffe
+    it "is marked replaceable by an input of the sequence 0xfffffffd, the highest that signals" $
+      marksReplaceable (withSequences [0xfffffffd]) `shouldBe` True
+    it "is not marked replaceable by inputs of the sequence 0xfffffffe, which enables the lock time alone" $
+      marksReplaceable (withSequences [0xfffffffe, 0xfffffffe]) `shouldBe` False
+    it "is marked replaceable by one input that signals among final ones" $
+      marksReplaceable (withSequences [0xffffffff, 0xfffffffd, 0xffffffff]) `shouldBe` True
 
     it "is not one that spends a coin of another wallet" $ do
       let received = (payment ctx True) {sentSummary = stuckSummary {summaryOtherInputs = Map.fromList [(otherAddr 1, 30000)]}}

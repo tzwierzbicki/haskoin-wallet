@@ -12,6 +12,7 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans (lift)
 import Data.Default (def)
 import qualified Data.Serialize as S
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.IO as Text
@@ -206,6 +207,29 @@ importKeySpec ctx =
         report <- importFile ctx (Just btc) Nothing "{\"type\":\"xpub\",\"ref\":\"xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8\",\"label\":\"Extended Public Key\"}\n"
         liftIO $ reportAccounts report `shouldBe` [AccountRefused "Extended Public Key" "The key is not that of an account, three hardened steps below the master key"]
 
+    -- The key of the test account at /0', four hardened steps deep
+    it "is refused for a key a hardened step further than an account" $
+      inDatabaseE $ do
+        let deeper = xPubExport btc ctx (deriveXPubKey ctx (hardSubKey ctx testAccountKey 0))
+        report <- importFile ctx (Just btc) Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> deeper <> "\",\"label\":\"deeper\"}\n")
+        liftIO $ reportAccounts report `shouldBe` [AccountRefused "deeper" "The key is not that of an account, three hardened steps below the master key"]
+
+    -- The key of the master key of the shares of the tests at
+    -- m/44'/0'/0, three steps deep, the last one not hardened
+    it "is refused for a key three steps deep whose last step is not hardened" $
+      inDatabaseE $ do
+        let master = fromMaybe (error "master") (xPrvImport btc testSharesMasterKey)
+            soft = xPubExport btc ctx (deriveXPubKey ctx (derivePath ctx (Deriv :| 44 :| 0 :/ 0 :: DerivPath) master))
+        report <- importFile ctx (Just btc) Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> soft <> "\",\"label\":\"soft\"}\n")
+        liftIO $ reportAccounts report `shouldBe` [AccountRefused "soft" "The key is not that of an account, three hardened steps below the master key"]
+
+    -- The path is that of the account; the script functions, those of a
+    -- BIP49 wallet, are not
+    it "is refused when the script functions of its origin are not those of the account, at its very path" $
+      inDatabaseE $ do
+        report <- importFile ctx Nothing Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\",\"origin\":\"sh(wpkh([bc560f95/44'/0'/0']))\",\"network\":\"btc\"}\n")
+        liftIO $ reportAccounts report `shouldBe` [AccountRefused "main" "The key is not that of the bip44 account /44'/0'/0': its origin is sh(wpkh([bc560f95/44'/0'/0']))"]
+
     it "is refused when its origin is not that of the account at its path, as the pkh origin of a key at a BIP84 path" $
       inDatabaseE $ do
         report <- importFile ctx Nothing Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\",\"origin\":\"pkh([bc560f95/84'/0'/0'])\",\"network\":\"btc\"}\n")
@@ -379,6 +403,32 @@ importDescriptorSpec ctx =
         liftIO $ map created (reportAccounts report) `shouldBe` [Just ("btc0-segwit", testSegwitAccountXPub)]
         liftIO $ map createdKind (reportAccounts report) `shouldBe` [Just (Bip84, "/84'/0'/0'")]
         lift accountsStored `dbShouldBeE` [("btc0-segwit", "btc", Just "bc560f95")]
+
+    -- BIP 380: the script function says the kind, with or without the
+    -- origin of the key. hw writes such a descriptor for a bip84 account
+    -- whose seed it does not know.
+    it "adds a bip84 account from a wpkh descriptor without an origin, with no note, as the script function says its kind" $
+      inDatabaseE $ do
+        report <- importFile ctx (Just btc) Nothing ("wpkh(" <> testSegwitAccountXPub <> "/<0;1>/*)\n")
+        liftIO $ map createdKind (reportAccounts report) `shouldBe` [Just (Bip84, "/84'/0'/0'")]
+        liftIO $ map createdNote (reportAccounts report) `shouldBe` [Just Nothing]
+
+    it "adds a bip44 account from a pkh descriptor without an origin, with no note" $
+      inDatabaseE $ do
+        report <- importFile ctx (Just btc) Nothing ("pkh(" <> testAccountXPub <> "/<0;1>/*)\n")
+        liftIO $ map createdKind (reportAccounts report) `shouldBe` [Just (Bip44, "/44'/0'/0'")]
+        liftIO $ map createdNote (reportAccounts report) `shouldBe` [Just Nothing]
+
+    it "is refused without an origin when its script function is of no kind hw holds, as tr of a Taproot wallet" $
+      inDatabaseE $ do
+        report <- importFile ctx (Just btc) Nothing ("tr(" <> testSegwitAccountXPub <> "/<0;1>/*)\n")
+        liftIO $ reportAccounts report `shouldBe` [AccountRefused "xpub6CQF8An9..." "The script tr() of the descriptor is of no kind of account hw holds: pkh() for bip44, wpkh() for bip84"]
+        lift accountsStored `dbShouldBeE` []
+
+    it "is refused without an origin when its script functions are those of a BIP49 wallet, sh(wpkh)" $
+      inDatabaseE $ do
+        report <- importFile ctx (Just btc) Nothing ("sh(wpkh(" <> testSegwitAccountXPub <> "/<0;1>/*))\n")
+        liftIO $ reportAccounts report `shouldBe` [AccountRefused "xpub6CQF8An9..." "The script sh(wpkh()) of the descriptor is of no kind of account hw holds: pkh() for bip44, wpkh() for bip84"]
 
     it "is refused when it is of a kind of account hw does not hold, as sh(wpkh) of a BIP49 wallet" $
       inDatabaseE $ do

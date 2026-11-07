@@ -12,7 +12,7 @@ import Data.List (nub)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isJust, mapMaybe)
 import Haskoin
-import Haskoin.Wallet.Keys (AccountKind (..))
+import Haskoin.Wallet.Keys (AccountKind (..), keyAddress)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Database.TxInfo (MyInputs (..), MyOutputs (..), TxInfo (..), TxSummary (..), TxType (..), txInfoHash)
 import Haskoin.Wallet.Tx.SignData
@@ -35,7 +35,8 @@ import Test.QuickCheck
 -- module.
 spec :: Spec
 spec = do
-  txVectorSpec "test/data/tx-signing" "Transaction signing test vectors" walletSigner
+  -- Counted apart from hw: 39 vectors, as verify_vectors.py finds them
+  txVectorSpec "test/data/tx-signing" "Transaction signing test vectors" [("edge-cases.json", 16), ("external.json", 1), ("hw-regression.json", 10), ("trezor.json", 12)] walletSigner
   prepareContext $ \ctx -> do
     analysisSpec ctx
     signingSpec ctx
@@ -225,6 +226,32 @@ analysisSpec ctx =
       (signed, signedInfo) <- expectRight $ signWalletTx btc ctx Bip44 tsd testAccountKey
       signed.txSignDataFeeRate `shouldBe` Just 10
       signedInfo.txInfoSummary.summaryChangeInFee `shouldBe` Just 580
+    it "reports change in the fee up to one satoshi below what a change output could have held" $ do
+      -- A coin of 352805 pays 350000: 2805 of fee, 885 beyond 1920. A change
+      -- output of 34 bytes would cost 340 of it at 10 sat/vB, which leaves
+      -- 545, one below the dust limit of 546: the builder drops such change
+      let funding = fundingTx ctx 1 [(externalAddr 0, 352805)]
+          tx = spendingTx ctx [(txHash funding, 0)] [(otherAddr 0, 350000)]
+          tsd = TxSignData tx [funding] [Deriv :/ 0 :/ 0] [] (Just 10) Nothing [] noLabel
+      info <- expectRight $ parseTxSignData btc ctx Bip44 accountPub tsd
+      info.txInfoSummary.summaryChangeInFee `shouldBe` Just 885
+    it "reports no change in a fee that a change output could have held" $ do
+      -- A coin of 352806: 886 beyond 1920, and 886 - 340 = 546, the dust
+      -- limit, which a change output may hold
+      let funding = fundingTx ctx 1 [(externalAddr 0, 352806)]
+          tx = spendingTx ctx [(txHash funding, 0)] [(otherAddr 0, 350000)]
+          tsd = TxSignData tx [funding] [Deriv :/ 0 :/ 0] [] (Just 10) Nothing [] noLabel
+      info <- expectRight $ parseTxSignData btc ctx Bip44 accountPub tsd
+      info.txInfoSummary.summaryChangeInFee `shouldBe` Nothing
+    -- A file naming a fee rate of 10 for a coin of 1 btc spent on 350000:
+    -- the note would call 99648080 of the fee change, 99650000 - 1920
+    it "does not explain as change a fee far above the rate the file names" $ do
+      let funding = fundingTx ctx 1 [(externalAddr 0, 100000000)]
+          tx = spendingTx ctx [(txHash funding, 0)] [(otherAddr 0, 350000)]
+          tsd = TxSignData tx [funding] [Deriv :/ 0 :/ 0] [] (Just 10) Nothing [] noLabel
+      info <- expectRight $ parseTxSignData btc ctx Bip44 accountPub tsd
+      info.txInfoSummary.summaryFee `shouldBe` 99650000
+      info.txInfoSummary.summaryChangeInFee `shouldBe` Nothing
     it "reports no change in the fee when the fee matches the requested rate" $ do
       -- A coin of 351920 pays 350000: 1920 of fee, exactly 192 bytes * 10
       let funding = fundingTx ctx 1 [(externalAddr 0, 351920)]
@@ -255,9 +282,54 @@ analysisSpec ctx =
           tx = spendingTx ctx [(txHash coin, 0)] [(otherAddr 0, 90000)]
           tsd = TxSignData tx [coin] [Deriv :/ 2 :/ 7] [] Nothing Nothing [] noLabel
       parseTxSignData btc ctx Bip44 accountPub tsd `shouldBe` Left "The path /2/7 is of no address of the account: its addresses are at /0/n and /1/n"
+
+    -- The coin of 1 btc at /0/0 pays 50000000 out and the rest, less a fee
+    -- of 10000000, to the change at the path. No scan of the account looks
+    -- a thousand addresses past the last one it knows of a chain.
+    it "refuses change a thousand and one addresses into a chain of which the wallet holds no address and spends from none" $
+      checkOutputReach noneHeld (changeAt (Deriv :/ 1 :/ 1000) [])
+        `shouldBe` Left "The path /1/1000 of an output is over 1000 addresses past the last one of its chain that the wallet holds or the transaction spends from: no scan of the account would find what it pays there"
+    it "takes change at the thousandth address of a chain of which the wallet holds no address and spends from none" $
+      checkOutputReach noneHeld (changeAt (Deriv :/ 1 :/ 999) []) `shouldBe` Right ()
+    -- The change address /1/2 the wallet holds is its third: 2 + 1000
+    it "takes change a thousand addresses past the last change address the wallet holds, and refuses it one further" $ do
+      checkOutputReach (HeldChains 0 3) (changeAt (Deriv :/ 1 :/ 1002) []) `shouldBe` Right ()
+      checkOutputReach (HeldChains 0 3) (changeAt (Deriv :/ 1 :/ 1003) [])
+        `shouldBe` Left "The path /1/1003 of an output is over 1000 addresses past the last one of its chain that the wallet holds or the transaction spends from: no scan of the account would find what it pays there"
+    -- The coin at /1/5 is in use: 5 + 1000
+    it "takes change a thousand addresses past the furthest coin the transaction spends from the chain, and refuses it one further" $ do
+      checkOutputReach noneHeld (changeAt (Deriv :/ 1 :/ 1005) [Deriv :/ 1 :/ 5]) `shouldBe` Right ()
+      checkOutputReach noneHeld (changeAt (Deriv :/ 1 :/ 1006) [Deriv :/ 1 :/ 5])
+        `shouldBe` Left "The path /1/1006 of an output is over 1000 addresses past the last one of its chain that the wallet holds or the transaction spends from: no scan of the account would find what it pays there"
+    -- The receiving addresses the wallet holds say nothing of the change chain
+    it "measures the change chain by the change addresses alone" $
+      checkOutputReach (HeldChains 5000 0) (changeAt (Deriv :/ 1 :/ 1000) [])
+        `shouldBe` Left "The path /1/1000 of an output is over 1000 addresses past the last one of its chain that the wallet holds or the transaction spends from: no scan of the account would find what it pays there"
+    it "refuses an output to a receiving address far past those the wallet holds" $
+      checkOutputReach (HeldChains 3 0) (changeAt (Deriv :/ 0 :/ 2000000000) [])
+        `shouldBe` Left "The path /0/2000000000 of an output is over 1000 addresses past the last one of its chain that the wallet holds or the transaction spends from: no scan of the account would find what it pays there"
+    it "refuses to sign change far past the addresses of its chain, before anything is signed" $
+      signHeldWalletTx btc ctx Bip44 noneHeld (changeAt (Deriv :/ 1 :/ 2000000000) []) testAccountKey
+        `shouldBe` Left "The path /1/2000000000 of an output is over 1000 addresses past the last one of its chain that the wallet holds or the transaction spends from: no scan of the account would find what it pays there"
+    -- A coin at /0/5000 is there to be spent, however far along its chain
+    it "takes an input far past the addresses the wallet holds" $ do
+      let coin = fundingTx ctx 2 [(addrAt (Deriv :/ 0 :/ 5000), 100000)]
+          tx = spendingTx ctx [(txHash coin, 0)] [(otherAddr 0, 90000)]
+          tsd = TxSignData tx [coin] [Deriv :/ 0 :/ 5000] [] Nothing Nothing [] noLabel
+      checkOutputReach noneHeld tsd `shouldBe` Right ()
   where
     unsigned = simpleTransaction ctx
     accountPub = testAccountPub ctx
+    -- The address of the account at a path
+    addrAt path = keyAddress Bip44 ctx (derivePubPath ctx (path :: SoftPath) accountPub)
+    -- The coin of 1 btc at /0/0, and coins at the given paths of the
+    -- account worth 100000 each, paying 50000000 out and the rest, less a
+    -- fee of 10000000, to the change at the path
+    changeAt path spentPaths =
+      let coins = [fundingTx ctx (fromIntegral (10 + i)) [(addrAt p, 100000)] | (i, p) <- zip [0 :: Int ..] spentPaths]
+          spent = 100000000 + 100000 * fromIntegral (length spentPaths)
+          tx = spendingTx ctx ((txHash (simpleFunding ctx), 0) : [(txHash c, 0) | c <- coins]) [(otherAddr 0, 50000000), (addrAt path, spent - 60000000)]
+       in TxSignData tx (simpleFunding ctx : coins) (Deriv :/ 0 :/ 0 : spentPaths) [path] Nothing Nothing [] noLabel
     simpleNosigHash = "9b41b3cb7b10bfd1dc3f7f1885ce3623789b1b946d206fd59fb432ad4fdb6d70"
 
 {- Signing -}
@@ -357,6 +429,27 @@ signInputsSpec ctx =
     it "leaves a signed input that is not the wallet's as it is" $ do
       let theirs = withInputScript 0 "a signature of the other wallet" unsigned
       signInputs btc ctx Bip44 testAccountKey Map.empty theirs coins `shouldBe` Right theirs
+
+    -- A SegWit input has an empty script: its signature is in its witness
+    it "leaves an input that is not the wallet's, signed in its witness, as it is" $ do
+      let theirs = Tx unsigned.version unsigned.inputs unsigned.outputs [["a signature of the other wallet", "its key"]] unsigned.locktime
+      signInputs btc ctx Bip44 testAccountKey Map.empty theirs coins `shouldBe` Right theirs
+
+    -- The coin of 1 btc at /0/0 of the account and one of 100000 at the
+    -- first address of the bip84 account, a wallet of its own here, which
+    -- has signed its input already, its signature in the witness
+    it "signs the wallet's input beside an input another wallet signed in its witness, and the whole transaction verifies" $ do
+      let theirFunding = fundingTx ctx 2 [(segwitExternalAddr 0, 100000)]
+          tx = spendingTx ctx [(txHash (simpleFunding ctx), 0), (txHash theirFunding, 0)] [(otherAddr 0, 100090000)]
+          unsignedBoth = TxSignData tx [simpleFunding ctx, theirFunding] [] [] Nothing Nothing [] noLabel
+      bothCoins <- expectRight $ spentCoins btc ctx unsignedBoth
+      -- The other wallet signs its input alone, with haskoin-core's signer
+      let theirKey = wrapSecKey True (derivePath ctx (Deriv :/ 0 :/ 0 :: SoftPath) testSegwitAccountKey).key
+      theirsSigned <- expectRight $ signInput btc ctx tx 1 (coinSigInput btc (bothCoins !! 1)) theirKey
+      let tsd = unsignedBoth {txSignDataTx = theirsSigned, txSignDataInputPaths = [Deriv :/ 0 :/ 0]}
+      (signed, _) <- expectRight $ signWalletTx btc ctx Bip44 tsd testAccountKey
+      isSigned signed.txSignDataTx `shouldBe` True
+      verifySignedTx btc ctx signed `shouldBe` Right ()
 
     it "refuses a coin of the wallet that is not of the kind of the account, naming the kind" $ do
       let tsd = segwitUnsigned ctx

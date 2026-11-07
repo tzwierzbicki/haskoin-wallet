@@ -9,6 +9,9 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Tx.CoinSelection
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Tx.Size (accountInput, accountOutputKind, outputDustLimit, txSize)
+import Test.Hspec.QuickCheck (modifyMaxSuccess, prop)
+import Test.QuickCheck (choose, elements, forAll, label, listOf1)
 import Numeric.Natural (Natural)
 import System.Random (mkStdGen)
 import Test.Hspec
@@ -19,6 +22,8 @@ spec =
     coinSelectionSpec ctx
     changeAndFeeSpec ctx
     wasteSpec ctx
+    wholeTransactionSpec ctx
+    selectionPropertySpec ctx
 
 -- Every coin pays the fee of its own input (148 bytes) and the target adds
 -- the fee of the frame (10 bytes) and of the outputs (34 bytes each). With
@@ -168,3 +173,64 @@ wasteSpec ctx =
       -- One input at 148 * (50 - 10) = 5920, plus a change output costing
       -- 50 * 34 + 10 * 148 = 3180
       waste (payment 50) (selection [400000] 38700 11300) `shouldBe` 9100
+
+-- The fee must pay the rate on the whole transaction, which is a little
+-- more than its parts. One bip84 input and one P2WPKH output: 10 + 68 + 31
+-- = 109 virtual bytes counted part by part, and 110 for the whole, since
+-- the 2 bytes of marker and flag of the witness are half a virtual byte,
+-- rounded up: 110 * 10 = 1100. And 260 legacy inputs take 3 bytes to count
+-- them, not 1: 12 + 260 * 148 + 34 = 38526 bytes, 385260 at 10.
+wholeTransactionSpec :: Ctx -> Spec
+wholeTransactionSpec ctx =
+  describe "A payment the coins cover without change" $ do
+    let segwitPayment = Payment Bip84 (FeeRates 10 10) SenderPays 294 [OutputWitnessPKHash] 20000
+        legacyPayment amount = Payment Bip44 (FeeRates 10 10) SenderPays 546 [OutputPKHash] amount
+        -- 260 coins of 2000, 520000 in all
+        smallCoins = [storeCoin ctx (fakeTxHash 1, i) (Just 1) (externalAddr 0) 2000 | i <- [0 .. 259]]
+    it "refuses a bip84 coin of 21090 that covers the fee of the parts, 1090, but not of the whole, 1100" $
+      spendCoins segwitPayment (coinsWorth ctx [21090]) `shouldBe` Left "The chosen coins do not cover the amount and the fee"
+    it "pays a fee of 1100 with a bip84 coin of 21100, the rate on the whole" $
+      (amounts <$> spendCoins segwitPayment (coinsWorth ctx [21100])) `shouldBe` Right ([21100], 0, 1100)
+    it "selects no bip84 coin that covers the parts but not the whole" $
+      (amounts <$> selectCoins LargestFirst (mkStdGen 0) segwitPayment (coinsWorth ctx [21090]))
+        `shouldBe` Left "The coins do not cover the amount and the fee"
+    it "finds no exact match in a bip84 coin that covers the parts but not the whole" $
+      (amounts <$> selectCoins LeastWaste (mkStdGen 0) segwitPayment (coinsWorth ctx [21090]))
+        `shouldBe` Left "The coins do not cover the amount and the fee"
+    -- 520000 - 134760 = 385240, 20 short of 385260
+    it "refuses 260 legacy coins that cover the fee with 1 byte to count the inputs but not with the 3 it takes" $
+      spendCoins (legacyPayment 134760) smallCoins `shouldBe` Left "The chosen coins do not cover the amount and the fee"
+    -- 520000 - 134740 = 385260
+    it "pays the rate on 260 legacy inputs when the coins cover the 3 bytes that count them" $
+      (amounts <$> spendCoins (legacyPayment 134740) smallCoins) `shouldBe` Right (replicate 260 2000, 0, 385260)
+
+-- Of coins of the account, of either kind, a payment to one output of
+-- the kind at a rate of 1 to 50: whatever the selection, the fee pays the
+-- rate on the size of the whole transaction, with its change output when
+-- it has one, and the value of the coins goes to the recipient, the
+-- change and the fee, every satoshi of it. The amount is at most half the
+-- coins, so that most draws select. A fee short of the rate shows in a few
+-- hundred draws, so the property takes 2000.
+selectionPropertySpec :: Ctx -> Spec
+selectionPropertySpec ctx =
+  describe "Any selection" $
+    modifyMaxSuccess (const 2000) $
+      prop "pays at least the rate on the whole transaction, and splits the value of its coins exactly" $
+      forAll draw $ \(kind, rate, values, amount) ->
+        let output = accountOutputKind kind
+            payment = Payment kind (FeeRates rate 10) SenderPays (fromIntegral (outputDustLimit output)) [output] amount
+            coins = [storeCoin ctx (fakeTxHash 1, i) (Just 1) (externalAddr 0) (fromIntegral v) | (i, v) <- zip [0 ..] values]
+         in case selectCoins LeastWaste (mkStdGen 0) payment coins of
+              Left _ -> label "no selection" True
+              Right s ->
+                let size = txSize (accountInput kind <$ s.selected) (output : [output | s.changeAmount > 0])
+                 in label "selected" $
+                      sum ((.value) <$> s.selected) == s.paid + s.changeAmount + s.feeAmount
+                        && s.feeAmount >= rate * size
+  where
+    draw = do
+      kind <- elements [Bip44, Bip84]
+      rate <- choose (1, 50)
+      values <- listOf1 (choose (1000, 1000000 :: Word64))
+      amount <- choose (1000, max 1000 (sum values `div` 2))
+      return (kind, rate, values, fromIntegral amount)

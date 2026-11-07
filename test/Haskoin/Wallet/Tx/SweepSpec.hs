@@ -26,7 +26,7 @@ import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..), TxType (..))
 import Haskoin.Wallet.Tx.SignData
-import Haskoin.Wallet.Tx.Signing (parseTxSignData)
+import Haskoin.Wallet.Tx.Signing (noneHeld, parseTxSignData)
 import Haskoin.Wallet.Tx.Sweep
 import Haskoin.Wallet.TxVectors
 import System.Random (mkStdGen)
@@ -37,7 +37,8 @@ import Test.Hspec
 -- added without changing this module.
 spec :: Spec
 spec = do
-  txVectorSpec "test/data/tx-sweep" "Sweep signing test vectors" sweepSigner
+  -- Counted apart from hw: 20 vectors, as verify_vectors.py finds them
+  txVectorSpec "test/data/tx-sweep" "Sweep signing test vectors" [("edge-cases.json", 8), ("external.json", 6), ("hw-regression.json", 4), ("trezor.json", 2)] sweepSigner
   prepareContext $ \ctx -> do
     keyAddressesSpec ctx
     sweepSizeSpec ctx
@@ -53,7 +54,7 @@ sweepSigner ctx v = do
   accountKey <- prefixError "account" $ accountSigningKey v.vecNetwork ctx v.vecAccount
   keys <- prefixError "sweep key" $ mapM (vectorKey ctx v.vecNetwork) specs
   let accountPub = deriveXPubKey ctx accountKey
-  return $ \c -> signTxWithKeys v.vecNetwork c v.vecSignData (Just (accountSpecKind v.vecAccount, accountPub)) keys
+  return $ \c -> signTxWithKeys v.vecNetwork c v.vecSignData (Just (accountSpecKind v.vecAccount, accountPub, noneHeld)) keys
 
 {- Key addresses -}
 
@@ -184,14 +185,14 @@ sweepBuilderSpec ctx =
       tsd.txSignDataFeeRate `shouldBe` Just 10
     it "builds a transaction the sweep signer accepts" $ do
       tsd <- expectRight $ build destinations
-      (signed, info) <- expectRight $ signTxWithKeys btc ctx tsd (Just (Bip44, accountPub)) [sweptKey, walletKey]
+      (signed, info) <- expectRight $ signTxWithKeys btc ctx tsd (Just (Bip44, accountPub, noneHeld)) [sweptKey, walletKey]
       isSigned signed.txSignDataTx `shouldBe` True
       -- The wallet receives one of the two outputs (746425) and gives up its coin (500000)
       info.txInfoSummary.summaryType `shouldBe` TxCredit
       info.txInfoSummary.summaryAmount `shouldBe` 246425
     it "estimates the size of the signed transaction part by part, every signature counted as 72 bytes" $ do
       tsd <- expectRight $ build destinations
-      (signed, _) <- expectRight $ signTxWithKeys btc ctx tsd (Just (Bip44, accountPub)) [sweptKey, walletKey]
+      (signed, _) <- expectRight $ signTxWithKeys btc ctx tsd (Just (Bip44, accountPub, noneHeld)) [sweptKey, walletKey]
       let tx = signed.txSignDataTx
           legacy = tx {witness = []}
       -- The estimate is 659 bytes outside the witnesses and 221 of
@@ -243,7 +244,7 @@ sweepBuilderSpec ctx =
       tsd <- expectRight $ build [(otherAddr 0, Remainder), (taprootAddr, Remainder)]
       ((.value) <$> tsd.txSignDataTx.outputs) `shouldBe` [746380, 746380]
       tsd.txSignDataOutputPaths `shouldBe` []
-      (_, info) <- expectRight $ signTxWithKeys btc ctx tsd (Just (Bip44, accountPub)) [sweptKey, walletKey]
+      (_, info) <- expectRight $ signTxWithKeys btc ctx tsd (Just (Bip44, accountPub, noneHeld)) [sweptKey, walletKey]
       info.txInfoSummary.summaryFee `shouldBe` 7240
       Map.toList info.txInfoSummary.summaryOtherOutputs `shouldBe` [(otherAddr 0, 746380), (taprootAddr, 746380)]
       -- A sweep has no change: nothing of the fee is change
@@ -290,7 +291,7 @@ sweepBuilderSpec ctx =
       -- The wallet's coin of 500000 is swept in full
       let tx = spendingTx ctx [(txHash walletFunding, 0)] [(otherAddr 0, 500000)]
           unsigned = TxSignData tx [walletFunding] [firstExternal] [] Nothing Nothing [] noLabel
-      signTxWithKeys btc ctx unsigned (Just (Bip44, accountPub)) [walletKey] `shouldBe` Left "The transaction pays no fee"
+      signTxWithKeys btc ctx unsigned (Just (Bip44, accountPub, noneHeld)) [walletKey] `shouldBe` Left "The transaction pays no fee"
     -- The coin is paid to the swept key's public key itself. haskoin-core
     -- gives such a coin no address, since the P2PKH address of the key
     -- would mislead, and hw names a coin by its address.
@@ -459,6 +460,15 @@ fetchSpec ctx =
         lift $
           dbShouldFailWith "The store was asked for 1 raw transactions but returned 0" $
             fetchSweepCoins btc ctx (toStore store {fakeRawTransactions = []}) (Just accId) [] [sweptKeyAddrs !! 0] [] [otherAddr 0]
+    -- The wallet's funding pays externalAddr 0 500000. Its txid,
+    -- b0716615...7af4, is worked out apart from hw.
+    it "refuses a coin the store reports worth less than its transaction pays, which would leave the rest to the fee" $
+      inDatabaseE $ do
+        accId <- account
+        let lying = store {fakeUnspents = [storeCoin ctx (txHash walletFunding, 0) Nothing (externalAddr 0) 5000]}
+        lift $
+          dbShouldFailWith "The store reports the coin b0716615da2b14afe38e3c4a06f618ea80e1ac83fe0d993d548a1ff2b2107af4:0 as worth 5000 satoshis, but its transaction pays 500000" $
+            fetchSweepCoins btc ctx (toStore lying) (Just accId) [] [externalAddr 0] [] [otherAddr 0]
     it "refuses a store that is not healthy" $
       inDatabaseE $ do
         accId <- account
@@ -512,7 +522,7 @@ sweepIntoWalletSpec ctx =
         -- signsweep by nosigHash, with the outside key only
         held <- requirePendingTx pendingHash
         liftIO $ held.pendingTxOnline `shouldBe` False
-        (signed, info) <- liftEither $ signTxWithKeys btc ctx held.pendingTxData (Just (Bip44, accountPub)) [sweptKey]
+        (signed, info) <- liftEither $ signTxWithKeys btc ctx held.pendingTxData (Just (Bip44, accountPub, noneHeld)) [sweptKey]
         importPendingTx btc ctx accId signed `dbShouldBeE` pendingHash
         ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, False, False))]

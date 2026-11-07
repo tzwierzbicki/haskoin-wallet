@@ -14,6 +14,7 @@ import Control.Monad (forM_, replicateM_, void)
 import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as Map
 import Control.Monad.Except (runExceptT)
+import Data.Bits ((.&.))
 import Data.List (isInfixOf, sort)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -30,6 +31,7 @@ import Haskoin.Wallet.Workflow.TestUtils
 import System.Directory (copyFile, makeAbsolute)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
+import System.Posix.Files (fileMode, getFileStatus)
 import Test.Hspec
 
 spec :: Spec
@@ -55,6 +57,13 @@ accountSpec =
     it "is created from the mnemonic and the passphrase, each typed twice, at the first index of the seed" $
       withHome $ \home ->
         (keyOf <$> hwJson home ["createacc", "main"] seedTwice) `shouldReturn` Right ("main", 0, testAccountXPub)
+
+    -- Under the umask 022, SQLite would make the database rw-r--r--
+    it "is kept in a database its owner alone can read, whatever the umask lets" $
+      withHome $ \home -> underUmask 0o022 $ do
+        createMain home
+        -- The permission bits of rw-------
+        (.&. 0o777) . fileMode <$> getFileStatus (home </> ".hw" </> "accounts.sqlite") `shouldReturn` 0o600
 
     it "is listed by accounts, with what it can spend" $
       withHome $ \home -> do
@@ -1008,6 +1017,15 @@ verifySpec =
         run <- hw home ["mnemonic", "--json"] []
         let file = home </> "mnemonic.json"
         writeFile file (Text.unpack (runOut run))
+        (errorOf <$> hwJson home ["verifymsg", "--input", file] [])
+          `shouldReturn` Right (Text.pack $ "The file " <> file <> " holds an answer of hw, but not one of signmsg")
+
+    -- The answer of a transaction whose account names a network hw does
+    -- not know: hw stopped on it with an uncaught exception
+    it "refuses a file holding another answer, whatever network it names" $
+      withHome $ \home -> do
+        let file = home </> "unknown.json"
+        writeFile file "{\"type\":\"tx\",\"account\":{\"name\":\"x\",\"index\":0,\"network\":\"nope\",\"external\":0,\"internal\":0,\"xPubKey\":\"k\",\"balance\":{\"confirmed\":0,\"unconfirmed\":0,\"coins\":0},\"created\":\"2026-01-01T00:00:00Z\"},\"tx\":{}}"
         (errorOf <$> hwJson home ["verifymsg", "--input", file] [])
           `shouldReturn` Right (Text.pack $ "The file " <> file <> " holds an answer of hw, but not one of signmsg")
 

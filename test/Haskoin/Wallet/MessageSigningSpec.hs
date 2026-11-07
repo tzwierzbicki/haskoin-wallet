@@ -38,6 +38,8 @@ spec =
     files <- runIO $ loadVectorFiles vectorDir
     describe "Message signing test vectors" $ do
       forM_ files $ vectorFileSpec vectorCount (fileProblems ctx)
+      -- Counted apart from hw: 332 vectors, as verify_vectors.py finds them
+      vectorCountsSpec vectorCount [("bitcoin-core.json", 8), ("bitcoinjs-message.json", 18), ("edge-cases.json", 54), ("electrum.json", 10), ("hw-regression.json", 10), ("python-bitcoinlib.json", 200), ("trezor.json", 32)] files
       coverageSpec files
     verifySpec ctx
     blockSpec
@@ -317,6 +319,15 @@ verifySpec ctx =
       forM_ [26, 43] $ \header ->
         verifyMessage ctx (externalAddr 0) (onBytes (\_ r s -> BS.cons header (r <> s)) helloSignature) "hello"
           `shouldBe` Right False
+
+    -- The vector of bitcoinjs-message for "vires is numeris": its header
+    -- byte 31 is the recovery id 0 of a compressed key, which 43 would name
+    -- too if the header bytes went on past 42, as they do not
+    it "finds a signature of the recovery id 0 invalid at the header byte 43, though valid at 31" $ do
+      let vires = "H8JawPtQOrybrSP1WHQnQPr67B9S3qrxBrl1mlzoTJOSHEpmnF7D3+t+LX0Xei9J20B5AIdPbeL3AaTBZ4N3bY0="
+          signer = testAddress "1PMycacnJaSqwwJqjawXBErnLsZ7RkXUAs"
+      verifyMessage ctx signer vires "vires is numeris" `shouldBe` Right True
+      verifyMessage ctx signer (onBytes (\_ r s -> BS.cons 43 (r <> s)) vires) "vires is numeris" `shouldBe` Right False
 
     -- 36 and 40 are the header bytes of BIP 137 for a P2SH-P2WPKH and a
     -- P2WPKH address, with the same recovery id as the signature: the key

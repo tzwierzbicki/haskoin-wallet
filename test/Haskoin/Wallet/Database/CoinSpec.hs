@@ -44,6 +44,7 @@ import Numeric.Natural (Natural)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), MarshalJsonBox (..), testIdentity)
 import Data.Default (def)
 import Haskoin.Wallet.Arbitrary (arbitraryCoinLock, arbitraryJsonCoin)
+import System.Timeout (timeout)
 import Test.Hspec
 import Text.RawString.QQ (r)
 
@@ -645,6 +646,28 @@ spendableSpec ctx =
         _ <- refresh ctx accId [ownChange ctx]
         spendable ctx accId 0 `dbShouldBeE` [OutPoint (fakeTxHash 8) 1]
         spendable ctx accId 1 `dbShouldBeE` []
+
+    -- Transactions 31 and 32, in the mempool, each spend the output 0 of the
+    -- other from the first receiving address: no chain can hold them, and
+    -- a store that reports them lies. The check gives up after 5 seconds,
+    -- where it would otherwise follow them for ever.
+    it "holds back a coin of two unconfirmed transactions that spend each other, and gives an answer" $ do
+      answered <- timeout 5000000 $ inDatabaseE $ do
+        accId <- account ctx
+        summarise accId (spendingStoreTx ctx (fakeTxHash 31) (Store.MemRef 0) (fakeTxHash 32, 0) (externalAddr 0) [(externalAddr 0, 40000)])
+        summarise accId (spendingStoreTx ctx (fakeTxHash 32) (Store.MemRef 0) (fakeTxHash 31, 0) (externalAddr 0) [(externalAddr 0, 40000)])
+        _ <- refresh ctx accId [storeCoin ctx (fakeTxHash 31, 0) Nothing (externalAddr 0) 40000]
+        spendable ctx accId 0 `dbShouldBeE` []
+      answered `shouldBe` Just ()
+
+    -- Transaction 33 spends its own output 0
+    it "holds back a coin of an unconfirmed transaction that spends itself" $ do
+      answered <- timeout 5000000 $ inDatabaseE $ do
+        accId <- account ctx
+        summarise accId (spendingStoreTx ctx (fakeTxHash 33) (Store.MemRef 0) (fakeTxHash 33, 0) (externalAddr 0) [(externalAddr 0, 40000)])
+        _ <- refresh ctx accId [storeCoin ctx (fakeTxHash 33, 0) Nothing (externalAddr 0) 40000]
+        spendable ctx accId 0 `dbShouldBeE` []
+      answered `shouldBe` Just ()
 
     it "holds back the change of a payment that spends an unconfirmed coin someone else paid" $
       inDatabaseE $ do

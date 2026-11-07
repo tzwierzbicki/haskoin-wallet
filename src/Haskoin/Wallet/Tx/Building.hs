@@ -53,7 +53,6 @@ import Haskoin.Wallet.Tx.CoinSelection
 import Haskoin.Wallet.Config (Config)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.PendingTx (changeAddress)
-import Haskoin.Wallet.Database.RawTx
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Size (accountInput, accountOutputKind, checkFeeRate, checkStandardSize, outputDustLimit, recipientOutputKind)
 import Haskoin.Wallet.Tx.LockTime (withHeader)
@@ -157,7 +156,7 @@ buildTxSignData net ctx cfg gen strategy accId recipients feeByte lockTime payer
       then Just <$> changeFor found.coinPaths chosen
       else return Nothing
   built <- liftEither $ assemblePayment net ctx found chosen change lockTime
-  spentFrom <- mapM getRawTx $ nub $ (.outpoint.hash) <$> built.tx.inputs
+  spentFrom <- coinParents (coinsSpentBy built.tx found.coins)
   return $ TxSignData built.tx spentFrom built.inputPaths built.outputPaths (Just feeByte) Nothing [] noLabel
   where
     -- The change address, given the paths of the addresses of the coins

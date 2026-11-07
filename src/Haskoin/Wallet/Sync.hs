@@ -408,6 +408,7 @@ sync ctx cfg plainStore net accId full watch = do
         return (transactionsToFetch known untimed addrBals listings, Map.keysSet known)
   txs <- fromStore $ storeTransactions store toFetch
   liftEither $ askedFor toFetch txs
+  liftEither $ mapM_ weighed txs
   updated <- lift $ forM (filter (not . (.deleted)) txs) $ \tx ->
     repsertSummary net accId tx.txid tx.block (storeTime tx.timestamp) (storeSummary net addrPaths tx)
   lift $ forM_ (deadTransactions everything live toFetch txs listed) $ markTxInfoDead accId
@@ -485,6 +486,13 @@ askedFor asked txs =
     [] -> Right ()
     tid : _ -> Left ("The store returned a transaction it was not asked for: " <> cs (txHashToHex tid))
 
+-- | Refuse a transaction the store reports of weight 0: no transaction
+-- weighs nothing, and the fee rate of its summary would divide by it
+weighed :: Store.Transaction -> Either String ()
+weighed tx
+  | tx.weight == 0 = Left ("The store reports a weight of 0 for the transaction " <> cs (txHashToHex tx.txid))
+  | otherwise = Right ()
+
 -- | Every transaction the store lists for each address that has any: as
 -- many as it counts in the balance, which a listing cut short would not
 -- match. The addresses are not listed together in one request, because the
@@ -544,7 +552,10 @@ deadTransactions everything live fetched txs listed = nubOrd $ gone <> vanished
 -- list as many of as it counts, and the raw transactions they come from,
 -- which signing needs. A raw transaction never changes, so the ones already
 -- stored are not fetched again. A full sync checks them instead, and
--- fetches those that went wrong in the database.
+-- fetches those that went wrong in the database. The raw transactions are
+-- stored first, and a coin they do not pay as the store reports it is
+-- refused before any coin is stored ('checkListedCoins'): its value is
+-- what the builders count on.
 syncCoins :: (MonadUnliftIO m) => Ctx -> Store -> Network -> DBAccountId -> Bool -> [Store.Balance] -> ExceptT String (DB m) Refreshed
 syncCoins ctx store net accId full changedBals = do
   let changedAddrs = (.address) <$> changedBals
@@ -553,12 +564,12 @@ syncCoins ctx store net accId full changedBals = do
   when (fromIntegral (length unspents) /= counted) $
     throwError $
       "The store counts " <> show counted <> " coins for the addresses to update but listed " <> show (length unspents)
-  refreshed <- refreshCoins net ctx accId changedAddrs unspents
   let parents = nubOrd $ (.outpoint.hash) <$> unspents
   wanted <- lift $ if full then unsoundRawTxs parents else missingRawTxs parents
   rawTxs <- fromStore $ rawTransactions store wanted
   lift $ forM_ rawTxs insertRawTx
-  return refreshed
+  checkListedCoins unspents
+  refreshCoins net ctx accId changedAddrs unspents
 
 -- | Drop the raw transactions no coin needs any more. A raw transaction is
 -- kept while a coin comes from it: the parents of the coins that are gone

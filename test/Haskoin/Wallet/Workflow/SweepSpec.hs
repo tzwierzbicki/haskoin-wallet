@@ -56,6 +56,18 @@ sweepSpec ctx =
         modifyIORef chain mine
         (accountsOf <$> hwJson home ["sync"] []) `shouldReturn` Right [("main", 0, 28080)]
 
+    -- The keys are typed on the terminal, as secret as a mnemonic
+    it "is shown by signsweep before it asks for the private keys" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        keys <- writeKeyFile home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
+        run <- hw home ["signsweep", nosig, "--key-file", "-"] [wikiKeyWif]
+        let (beforeKeys, fromKeys) = Text.breakOn "Private keys" (runErr run)
+        beforeKeys `shouldSatisfy` Text.isInfixOf "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00028080 btc"
+        fromKeys `shouldSatisfy` (not . Text.null)
+
     -- The best block of the server is 800002, mined three minutes before
     -- the test. One time in ten the lock time is below it, by up to 99
     -- blocks. The wallet has not synced: the sweep reads the server.

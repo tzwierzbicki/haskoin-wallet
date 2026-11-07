@@ -12,6 +12,7 @@ import Control.Monad (forM_, replicateM_)
 import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as BL
 import Data.IORef (modifyIORef)
 import Data.List (sort)
 import qualified Data.Text as Text
@@ -829,6 +830,18 @@ commandLineSpec ctx = do
         notSynced <- notSyncedOf <$> hwJson home ["sync"] []
         (map fst <$> notSynced) `shouldBe` Right ["main"]
         (map snd <$> notSynced) `shouldSatisfy` either (const False) (all (Text.isPrefixOf ("The store at " <> Text.pack url <> " gave an answer hw could not read: ")))
+
+    -- 64 MiB is 67108864 bytes. The web client read a body in full: a
+    -- store sending one without end filled the memory in seconds.
+    it "refuses an answer of the store one byte over 64 MiB, before it decodes it" $
+      withServerSending (BL.replicate 67108865 0) $ \home url ->
+        (errorOf <$> hwJson home ["fees"] [])
+          `shouldReturn` Right (Text.pack ("The store at " <> url <> " sent an answer of more than 64 MiB, which hw does not read"))
+
+    it "reads an answer of the store of 64 MiB, whatever it then makes of it" $
+      withServerSending (BL.replicate 67108864 0) $ \home url ->
+        (errorOf <$> hwJson home ["fees"] [])
+          `shouldNotReturn` Right (Text.pack ("The store at " <> url <> " sent an answer of more than 64 MiB, which hw does not read"))
 
     -- hw crashed with the exception of the system before, and wrote no JSON
     it "tells when a file it reads does not exist, naming it" $

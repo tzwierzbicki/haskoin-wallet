@@ -164,7 +164,9 @@ hw checkaddr /0/7                           # on the offline computer: the same 
   mnemonic on an offline computer if you can.
 - **The database and the account files are private.** They hold no private key.
   But the public keys in them reveal every address and balance of your
-  accounts.
+  accounts. `hw` makes `~/.hw` and the database yours alone to read. A wallet
+  made by `hw` 0.9 or earlier keeps the permissions it had:
+  [make it private](#a-wallet-readable-by-others).
 - **An online computer can show a wrong address.** One that was tampered with
   shows an address of its own, and the payer pays the attacker.
   [Check an address](#check-an-address-before-you-give-it-out) with `checkaddr`
@@ -172,6 +174,9 @@ hw checkaddr /0/7                           # on the offline computer: the same 
 - **`hw` takes the server's word for the chain.** It checks that the server
   answers about the addresses and transactions it asked about and no others,
   and that the counts agree, but it cannot tell a hidden payment from none.
+  It checks each coin against the transaction it comes from, which it keeps,
+  so a server cannot change what a coin is worth. It reads no answer of more
+  than 64 MiB.
   After a thousand used addresses in a row, `sync` and `recover` ask whether to
   keep looking, since a server that lies reports them without end. `recover`
   asks the same after every 20 accounts the server reports paid. Run your own
@@ -469,8 +474,8 @@ its keys, so give `--network`, or set a default network.
 
 | The file gives | The account |
 |---|---|
-| A `pkh(...)` or a `wpkh(...)` descriptor | It is a `bip44` or a `bip84` account, as the descriptor says. |
-| A descriptor of another kind, such as `sh(wpkh(...))` | It is refused, and the import goes on. |
+| A `pkh(...)` or a `wpkh(...)` descriptor | It is a `bip44` or a `bip84` account, as the descriptor says, with the origin of its key or without. |
+| A descriptor of another kind, such as `sh(wpkh(...))` or `tr(...)` | It is refused, and the import goes on. |
 | A `zpub` or a `vpub`, which some wallets write for a `bip84` account | It is a `bip84` account. |
 | A `zpub` with `--type bip44` | It is refused, as the two contradict. |
 | An `xpub` or a `tpub` alone | It is a `bip44` account, or a `bip84` one with `--type bip84`. |
@@ -812,8 +817,12 @@ hw preparesendall ADDRESS1:0.1 ADDRESS2 --fee-rate median --leave-dust
 
 #### `hw signtx`
 
-Signs a pending transaction by its nosigHash, or a transaction file. It asks for
-the mnemonic and passphrase of the account, or for the shares of its backup.
+Signs a pending transaction by its nosigHash, or a transaction file. It first
+shows the transaction, as [`reviewtx`](#hw-reviewtx) does, then asks for the
+mnemonic and passphrase of the account, or for the shares of its backup. Check
+what it shows before you type the mnemonic, and stop it with Ctrl-C if it is
+not the payment you mean. Once signed, it prints the txid and the file it wrote.
+`signsweep` shows the transaction in the same way before it asks for the keys.
 
 ```console
 hw signtx NOSIGHASH
@@ -1019,7 +1028,9 @@ a SegWit address.
 #### `hw verifymsg`
 
 Checks a signature from `hw` or another wallet, from any P2PKH or SegWit address
-of one key, whatever header byte the wallet that made it chose.
+of one key, whatever header byte of [BIP 137] the wallet that made it chose, 27
+to 42. Bitcoin Core reads other header bytes too, so for a P2PKH address it may
+find valid a signature that `hw` does not, or the other way around.
 
 ```console
 hw verifymsg --input signed.txt
@@ -1079,10 +1090,16 @@ identifier `hw`, which other software leaves aside:
   offline one that never handed out an address. It derives the address at that
   path and checks that the coin pays it.
 
+Anyone who handles the file can change its labels. `hw` shows a label with its
+control characters written out, such as `\x1b` for an escape or `\n` for a
+line break, so that a label cannot rewrite what the screen shows, a recipient
+for instance.
+
 The file names the keys by the fingerprint of the seed, which a hardware wallet
 needs to find its own. The wallet knows it once it created the account, signed
 with it, or imported it with its origin. `preparetx` says so when it writes a
-file without it.
+file without it. The fingerprint a signed file names is taken on its word only
+by a wallet that knows none: it never replaces the one the wallet has.
 
 ### Files of other wallets
 
@@ -1113,6 +1130,15 @@ needs `--network`, or the `default-network` of the configuration file.
 that names a key of the account at any other path is refused, by `reviewtx` as
 by `signtx`. An output there would be the account's, and yet never seen by it,
 since it scans those two chains alone.
+
+An output of the account more than a thousand addresses past the last one of
+its chain that the wallet holds, or that the transaction spends from, is
+refused too. No scan of `hw` or of another wallet looks that far, so a file
+could hide the change there, at `/1/2000000000` for instance. An offline
+computer that never gives out an address holds none of them. On such a
+computer, a wallet with more than a thousand change addresses can see a genuine
+file refused when no coin it spends is near its change. Prepare the payment
+again with a recent change coin among its coins, chosen with `--coin`.
 
 ## Configuration
 
@@ -1255,6 +1281,18 @@ asks since `hw` 0.10. Earlier versions did not normalize it, so their accounts
 come from another seed than other wallets find. `hw` 0.10 still finds and signs
 those accounts, and warns. Move their funds to an account created with 0.10.
 
+### A wallet readable by others
+
+`hw` 0.9 and earlier let the system give `~/.hw` and the database the
+permissions of your umask, which often lets the other users of the computer
+read them. `hw` 0.10 makes a new wallet private, and leaves an existing one as
+it is. Make yours private:
+
+```console
+chmod 700 ~/.hw
+chmod 600 ~/.hw/accounts.sqlite
+```
+
 ### Transaction files of an earlier version
 
 `hw` 0.10 reads no JSON transaction file of an earlier `hw`. Prepare the
@@ -1265,6 +1303,7 @@ transaction again.
 [BIP44]: https://github.com/bitcoin/bips/blob/master/bip-0044.mediawiki
 [BIP84]: https://github.com/bitcoin/bips/blob/master/bip-0084.mediawiki
 [BIP125]: https://github.com/bitcoin/bips/blob/master/bip-0125.mediawiki
+[BIP 137]: https://github.com/bitcoin/bips/blob/master/bip-0137.mediawiki
 [BIP 174]: https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki
 [BIP 321]: https://github.com/bitcoin/bips/blob/master/bip-0321.mediawiki
 [BIP 329]: https://github.com/bitcoin/bips/blob/master/bip-0329.mediawiki

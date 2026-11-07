@@ -7,6 +7,7 @@
 module Haskoin.Wallet.Tx.LockTimeSpec (spec) where
 
 import Data.List (unfoldr)
+import qualified Data.Set as Set
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Word (Word32)
 import Haskoin
@@ -68,10 +69,11 @@ lockTimeSpec =
           below = length (filter (< 814037) lockTimes)
       below `shouldSatisfy` (\n -> n > 850 && n < 1150)
 
+    -- About 1000 draws go back, by 0 to 99 blocks: each of the 99 heights
+    -- below the best block, 813938 to 814036, is drawn, and none lower
     it "spreads the draws that go below over the 99 blocks" $ do
       let lockTimes = drawn 10000 (Just 814037) (mkStdGen 1)
-      -- 814037 - 99 = 813938: the lowest a draw can go
-      minimum lockTimes `shouldSatisfy` (< 813938 + 10)
+      Set.fromList (filter (< 814037) lockTimes) `shouldBe` Set.fromList [813938 .. 814036]
 
     it "never goes below 0 from a best block near the start of the chain" $ do
       let lockTimes = drawn 10000 (Just 50) (mkStdGen 1)

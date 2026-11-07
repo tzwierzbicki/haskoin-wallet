@@ -87,6 +87,7 @@ import Haskoin
 import Haskoin.Wallet.Keys (AccountKind, isChainPath, keyScript)
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Signing (offChainPath, sigHashName, walletSigHash)
+import Haskoin.Wallet.Util (visibleText)
 import Numeric.Natural (Natural)
 
 -- | The keys of an account, as the derivation records of its files name
@@ -597,7 +598,7 @@ firstOfEach = Map.fromListWith (\_ earlier -> earlier)
 networkOf :: ByteString -> Either String Network
 networkOf bytes = do
   name <- textOf "The network" bytes
-  maybe (Left ("Unknown network " <> cs name)) Right (netByName (cs name))
+  maybe (Left ("Unknown network " <> cs (visibleText name))) Right (netByName (cs name))
 
 feeRateOf :: ByteString -> Either String Natural
 feeRateOf bytes

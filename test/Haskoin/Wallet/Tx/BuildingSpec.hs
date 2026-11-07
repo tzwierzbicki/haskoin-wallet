@@ -643,6 +643,21 @@ databaseSpec ctx =
         liftIO $
           result
             `shouldBe` Left "The raw transaction 0000000000000000000000000000000000000000000000000000000000000009 of a coin is missing: sync --full fetches it"
+    -- A coin an earlier hw stored as a store reported it: 400000, where its
+    -- transaction pays 1 btc. The payment would have left 99600000 of it
+    -- to the fee. The txid, e555d280...43de, is worked out apart from hw.
+    it "refuses a coin the wallet holds at another value than its transaction pays" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        lift $ updateBest btc (fakeBlockHash 0) 0 1700000000
+        _ <- genExtAddress ctx cfg accId ""
+        let fund = fundingWorth ctx [100000000]
+        lift $ insertRawTx fund
+        _ <- refreshCoins btc ctx accId [externalAddr 0] [storeCoin ctx (txHash fund, 0) (Just 0) (externalAddr 0) 400000]
+        result <- lift $ runExceptT $ buildTxSignData btc ctx cfg (mkStdGen 0) LargestFirst accId [(otherAddr 0, 350000)] 10 800002 SenderPays 1 NoCoinControl NewChangeAddress
+        liftIO $
+          result
+            `shouldBe` Left "The store reports the coin e555d2807e912fa1dd1d589e87653f8f55a52724e99e81b2a125cb93cb4743de:0 as worth 400000 satoshis, but its transaction pays 100000000"
     it "fails without recipients" $
       inDatabaseE $ do
         (accId, _) <- fundedAccount ctx cfg

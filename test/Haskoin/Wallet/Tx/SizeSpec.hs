@@ -62,6 +62,12 @@ spec = do
   describe "The largest transaction nodes relay" $ do
     it "holds 675 P2PKH coins paid to one P2PKH output" $
       checkStandardSize (replicate 675 InputPKHash) [OutputPKHash] `shouldBe` Right ()
+    -- 12 + 675 × 148 + 34 + (8 + 1 + 45) = 100000 bytes, 400000 weight units
+    -- exactly, which nodes relay; one byte more of script is too many
+    it "holds a transaction of 400000 weight units exactly, and refuses one byte more" $ do
+      checkStandardSize (replicate 675 InputPKHash) [OutputPKHash, OutputScript 45] `shouldBe` Right ()
+      checkStandardSize (replicate 675 InputPKHash) [OutputPKHash, OutputScript 46]
+        `shouldBe` Left "The transaction would take 100001 virtual bytes, and nodes relay at most 100000: spend fewer coins or pay fewer recipients in one transaction"
     it "does not hold 676 of them, which is refused with the size it would take" $
       checkStandardSize (replicate 676 InputPKHash) [OutputPKHash]
         `shouldBe` Left "The transaction would take 100094 virtual bytes, and nodes relay at most 100000: spend fewer coins or pay fewer recipients in one transaction"
@@ -159,9 +165,11 @@ spec = do
     sizeOf inputs outputs = txSize (replicate inputs InputPKHash) (replicate outputs OutputPKHash)
     segwitSizeOf inputs outputs = txSize (replicate inputs InputWitnessPKHash) (replicate outputs OutputWitnessPKHash)
     scriptOf = fromJust . addressToOutput
+    -- The signed transaction of the Trezor vector trezor/testnet/one-two-fee
+    -- of test/data/tx-signing: one P2PKH input, two P2PKH outputs
+    trezorLegacyTx = "0100000001cd3b93f5b24ae190ce5141235091cd93fbb2908e24e5b9ff6776aec11b0e04e5000000006b483045022100eba3bbcbb82ab1ebac88a394e8fb53b0263dadbb3e8072f0a21ee62818c911060220686a9b7f306d028b54a228b5c47cc6c27b1d01a3b0770440bcc64d55d8bace2c0121030e669acac1f280d1ddf441cd2ba5e97417bf2689e4bbec86df4f831bf9f7ffd0ffffffff021023cb01000000001976a91485eb47fe98f349065d6f044e27a4ac541af79ee288aca0bb0d00000000001976a9143d3cca567e00a04819742b21a696a67da796498b88ac00000000"
     -- The signed transaction of the Trezor vector trezor/testnet/native of
     -- test/data/tx-signing: one P2WPKH input, a P2SH and a P2WPKH output
-    trezorLegacyTx = "0100000001cd3b93f5b24ae190ce5141235091cd93fbb2908e24e5b9ff6776aec11b0e04e5000000006b483045022100eba3bbcbb82ab1ebac88a394e8fb53b0263dadbb3e8072f0a21ee62818c911060220686a9b7f306d028b54a228b5c47cc6c27b1d01a3b0770440bcc64d55d8bace2c0121030e669acac1f280d1ddf441cd2ba5e97417bf2689e4bbec86df4f831bf9f7ffd0ffffffff021023cb01000000001976a91485eb47fe98f349065d6f044e27a4ac541af79ee288aca0bb0d00000000001976a9143d3cca567e00a04819742b21a696a67da796498b88ac00000000"
     trezorNativeTx = "010000000001019e2123e595e20d6aa2c8d227b2b98c781b8b41fda635756eca0768b8ce8067b30000000000ffffffff02409c00000000000017a9147a55d61848e77ca266e79a39bfc85c580a6426c98750c3000000000000160014cd4ee15090b177f15ed0760d85956d93b5990d5f0247304402200c734ed16a9226162a29133c14fad3565332c60346050ceb9246e73a2fc8485002203463d40cf78eb5cc9718d6617d9f251b987e96cb58525795a507acb9b91696c7012103f60fc56bf7b5326537c7e86e0a63b6cd008eeb87d39af324cee5bcc3424bf4d000000000"
     -- The addresses of the swept key of "Haskoin.Wallet.Tx.SweepSpec", and
     -- the P2WSH and Taproot examples of BIP173 and BIP350

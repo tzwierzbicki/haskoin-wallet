@@ -31,6 +31,7 @@ import qualified System.Directory as D
 import System.FilePath (takeDirectory, takeFileName)
 import System.IO (hClose, openBinaryTempFile)
 import System.IO.Error (isAlreadyExistsError)
+import System.Posix.Directory (createDirectory)
 import System.Posix.IO (OpenFileFlags (..), OpenMode (..), closeFd, defaultFileFlags, openFd)
 import System.Posix.Unistd (fileSynchronise)
 
@@ -108,6 +109,26 @@ claimPath file = create `catch` taken
           isDirectory <- D.doesDirectoryExist file
           throwIO $ if isDirectory then e {ioe_description = "is a directory"} else e
       | otherwise = throwIO e
+
+-- | Create the directory, if missing, so that its owner alone can enter
+-- it, mode 0700, whatever the umask allows: the data directory of hw,
+-- whose database holds the keys of the accounts, every address and the
+-- history. An existing directory is left as it is.
+privateDirectory :: FilePath -> IO ()
+privateDirectory dir = do
+  exists <- D.doesDirectoryExist dir
+  unless exists $ createDirectory dir 0o700 `catch` alreadyThere
+
+-- | Create an empty file, if missing, that its owner alone can read and
+-- write, mode 0600: the database before SQLite opens it, which takes an
+-- empty file for a new database and gives its journals the mode of the
+-- database. An existing file is left as it is.
+privateFile :: FilePath -> IO ()
+privateFile file = (closeFd =<< openFd file WriteOnly defaultFileFlags {creat = Just 0o600, exclusive = True}) `catch` alreadyThere
+
+-- | Nothing to do for a path made already, by another hw for instance
+alreadyThere :: IOException -> IO ()
+alreadyThere e = unless (isAlreadyExistsError e) (throwIO e)
 
 -- | A new, empty file next to the given one, named after it, that no
 -- other process can have made or opened

@@ -207,6 +207,18 @@ addressLabelsSpec ctx =
         run <- hw signer ["reviewtx", online </> "unsigned.psbt"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0  \"Salary\"\n"
 
+    -- ESC [ 1 A moves the cursor up a line: a file could rewrite the lines
+    -- above the label, the recipient among them
+    it "reach the terminal of reviewtx with their control characters written out, so that a file cannot rewrite the screen" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["label", textOf (externalAddr 0), "x\ESC[1Ay"] []
+        let file = home </> "unsigned.psbt"
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--output", file] []
+        run <- hwOnScreen [] home ["reviewtx", file]
+        runOut run `shouldSatisfy` Text.isInfixOf "\"x\\x1b[1Ay\""
+        runOut run `shouldSatisfy` (not . Text.isInfixOf "\ESC[1A")
+
     it "are shown by signtx --input on the offline signer, and go on to the signed file" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online

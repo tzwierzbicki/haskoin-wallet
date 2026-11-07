@@ -660,9 +660,14 @@ sweepKeysSpec = do
       parseSecKeys btc (wikiKeyWif <> " " <> miniKey) `shouldBe` Right [wikiKey, miniKeySecret]
     it "reads nothing from an empty text" $
       parseSecKeys btc "" `shouldBe` Right []
-    it "refuses a line with words but no key" $
+    -- The key of the Bitcoin wiki's WIF page with its last character
+    -- changed: one try per character of that place gives the key back
+    it "refuses a line with words but no key, naming the line by its number alone" $
       parseSecKeys btc (wikiKeyWif <> "\n\nKwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98618 old wallet\n")
-        `shouldBe` Left "No private key on line 3: KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98618 old wallet"
+        `shouldBe` Left "No private key on line 3"
+    it "refuses a key of another network, naming its line by its number alone" $
+      parseSecKeys btcTest (wikiKeyWif <> "\n")
+        `shouldBe` Left "No private key on line 1"
   where
     keyFile =
       "# The keys of the old wallet\n"

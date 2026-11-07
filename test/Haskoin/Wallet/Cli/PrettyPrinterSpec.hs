@@ -19,6 +19,7 @@ import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..))
 import Haskoin.Wallet.Database (DBAccount (..), DBAddress (..))
 import Haskoin.Wallet.Keys (ForeignKind (..), MnemonicPass (..))
 import Haskoin.Wallet.Cli.PrettyPrinter
+import Haskoin.Wallet.Cli.Style (renderPlain)
 import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..))
 import Haskoin.Wallet.Labels (AccountImport (..))
 import Haskoin.Wallet.TestUtils
@@ -39,6 +40,16 @@ spec = do
   coinSpec
   syncSpec
   mnemonicSpec
+  outsideTextSpec
+
+-- What reaches a document without passing through a label, such as an
+-- error quoting a file, is written out as the document is printed
+outsideTextSpec :: Spec
+outsideTextSpec =
+  describe "A document as hw prints it" $
+    it "has an escape in any of its texts written out, never as an order to the terminal" $
+      renderPlain (errorDoc "Unknown network btc\ESC[2J")
+        `shouldBe` "Error: Unknown network btc\\x1b[2J"
 
 mnemonicSpec :: Spec
 mnemonicSpec = do
@@ -247,6 +258,13 @@ importSpec =
         `shouldBe` [ "spending  btc  /84'/0'/0'",
                      "  created",
                      "  The key says no kind. The account is bip84 because --type says so."
+                   ]
+
+    -- The name of a refused account is the label of its record in the file
+    it "writes out a line break in the name of a refused account, which stays on its line" $
+      renderedLines (accountImportDoc (AccountRefused "main\ncreated" "The key does not read as a key of btc"))
+        `shouldBe` [ "main\\ncreated",
+                     "  not imported: The key does not read as a key of btc"
                    ]
 
 balanceSpec :: Spec
@@ -661,4 +679,12 @@ answerSpec =
         `shouldBe` [ "  Account  : main",
                      "  Network  : btc",
                      "  Label    : \"Rent of October\""
+                   ]
+
+    -- A label from a file that tries to write a recipient line of its own
+    it "writes out a line break in its label, which stays on the line of the label" $ do
+      shown <- txAnswerDoc btc (Just mainAccountRow) UnitBitcoin info {txInfoLabel = "Rent\n  To       : 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ"}
+      take 2 (drop 3 (renderedLines shown))
+        `shouldBe` [ "  Label    : \"Rent\\n  To       : 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ\"",
+                     "  NoSigHash: 0000000000000000000000000000000000000000000000000000000000000007"
                    ]

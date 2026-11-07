@@ -78,6 +78,7 @@ import Control.Monad.Except (ExceptT, runExceptT, throwError, withExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import qualified Data.Aeson as Json
+import Data.Aeson.Types (Parser, parseEither)
 import Data.Bifunctor (first)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
@@ -131,7 +132,7 @@ import Haskoin.Wallet.Tx.LockTime (isStale, lockTimeFor)
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Tx.PsbtFile (FileAccount (..), psbtTxFile, signedPsbt, txFilePsbt)
 import Haskoin.Wallet.Tx.SignData
-import Haskoin.Wallet.Tx.Signing (labelledTxFile, labelsFromFile, parseOutsideTxSignData, parseTxFile, signWalletTx)
+import Haskoin.Wallet.Tx.Signing (heldChainsOf, labelledTxFile, labelsFromFile, parseOutsideTxSignData, parseTxFile, parseTxSignData, signHeldWalletTx)
 import Haskoin.Wallet.Tx.Recipient (Share, checkSharing, readPayment, readRecipient, recipientAddress)
 import Haskoin.Wallet.Tx.SendAll
   ( DustReport,
@@ -184,12 +185,12 @@ commandResponse ctx cfg unit = \case
   CommandDeleteTx named -> cmdDeleteTx ctx cfg named
   CommandPrepareTx opts -> cmdPrepareTx ctx cfg unit opts
   CommandPrepareSendAll opts -> cmdPrepareSendAll ctx cfg unit opts
-  CommandSignTx signing parts -> cmdSignTx ctx cfg signing parts
+  CommandSignTx signing parts -> cmdSignTx ctx cfg unit signing parts
   CommandSendTx namedM fileM yes netM -> cmdSendTx ctx cfg unit namedM fileM yes netM
   CommandBumpFee opts -> cmdBumpFee ctx cfg unit opts
   -- Sweeps
   CommandPrepareSweep opts -> cmdPrepareSweep ctx cfg unit opts
-  CommandSignSweep signing keysM netM -> cmdSignSweep ctx cfg signing keysM netM
+  CommandSignSweep signing keysM netM -> cmdSignSweep ctx cfg unit signing keysM netM
   -- Sync, messages and backups
   CommandSync account full -> cmdSync ctx cfg account full
   CommandFees netM -> cmdFees ctx cfg netM
@@ -1121,6 +1122,23 @@ transactionToSign ctx fallbackM signing = do
     (Nothing, Nothing) -> return NoSignedFile
   return (accountM, TxFileRead txFile {txFileData = completed} sourceM, signedFile)
 
+-- | Show the transaction about to be signed, before the secret is asked
+-- for, as reviewtx shows it: with the wallet's labels for a pending
+-- transaction, those of the file for a file. On stderr, as the questions,
+-- to keep the --json answer clean.
+showToSign :: Ctx -> AmountUnit -> Signing -> Network -> Maybe (DBAccountId, DBAccount) -> TxFile -> ExceptT String (DB IO) ()
+showToSign ctx unit signing net accountM txFile = do
+  let tsd = txFileData txFile
+  info <- case accountM of
+    Just (accId, acc) -> do
+      parsed <- liftEither $ parseTxSignData net ctx (accountKind acc) (accountXPubKey ctx acc) tsd
+      if isJust signing.nosigHash
+        then lift (fillTxInfoLabels net accId parsed)
+        else return (labelsFromFile txFile parsed)
+    Nothing -> liftEither $ parseOutsideTxSignData net ctx tsd
+  doc <- liftIO $ txAnswerDoc net (snd <$> accountM) unit info
+  liftIO $ renderOn stderr doc
+
 -- | Write a transaction just signed to its file, if any, with the keys of
 -- its account when it has one: into the PSBT the --input file held, which
 -- keeps every field of it, or as a new PSBT for a transaction that came
@@ -1158,17 +1176,20 @@ keepSigned ctx net signing signedFile accId (TxFileRead file sourceM) signed inf
     fromWallet = isJust signing.nosigHash
 
 -- | Sign a transaction of the account with the key of its mnemonic, or of
--- the shares of its backup
-cmdSignTx :: Ctx -> Config -> Signing -> Natural -> IO Response
-cmdSignTx ctx cfg signing parts =
+-- the shares of its backup. The transaction is shown first, as reviewtx
+-- shows it, so that the user sees what the mnemonic is typed for: the
+-- prompt is the confirmation, and an interrupt stops it.
+cmdSignTx :: Ctx -> Config -> AmountUnit -> Signing -> Natural -> IO Response
+cmdSignTx ctx cfg unit signing parts =
   runDBResponse cfg $ do
     (accountM, file@(TxFileRead txFile _), signedFile) <- transactionToSign ctx (commandNetwork cfg Nothing) signing
     (accId, acc) <- liftMaybe notInWallet accountM
     let net = accountNetwork acc
+    showToSign ctx unit signing net (Just (accId, acc)) txFile
     (seed, key) <- askSigningKey terminal (accountKind acc) net ctx parts (accountIndex acc) (accountXPubKey ctx acc)
     -- The signed data names the seed, for an online wallet to learn it
     let named = (txFileData txFile) {txSignDataFingerprint = Just (seedFingerprint seed)}
-    (signed, info) <- liftEither $ signWalletTx net ctx (accountKind acc) named key
+    (signed, info) <- liftEither $ signHeldWalletTx net ctx (accountKind acc) (heldChainsOf acc) named key
     lift $ recordFingerprint ctx seed
     keepSigned ctx net signing signedFile accId file signed info
 
@@ -1381,19 +1402,22 @@ cmdPrepareSweep ctx cfg unit opts =
 -- on the network its file names, or on that of --network or of the
 -- configuration when the file names none, from its file to another, or in
 -- its place.
-cmdSignSweep :: Ctx -> Config -> Signing -> Maybe KeySource -> Maybe Network -> IO Response
-cmdSignSweep ctx cfg signing keysM givenM =
+cmdSignSweep :: Ctx -> Config -> AmountUnit -> Signing -> Maybe KeySource -> Maybe Network -> IO Response
+cmdSignSweep ctx cfg unit signing keysM givenM =
   runDBResponse cfg $ do
-    (accountM, file@(TxFileRead (TxFile netM tsd _ _) sourceM), signedFile) <- transactionToSign ctx (commandNetwork cfg givenM) signing
+    (accountM, file@(TxFileRead txFile@(TxFile netM tsd _ _) sourceM), signedFile) <- transactionToSign ctx (commandNetwork cfg givenM) signing
     case accountM of
       Just (accId, acc) -> do
         let net = accountNetwork acc
+        -- Shown before the keys are asked for, as signtx shows it
+        showToSign ctx unit signing net accountM txFile
         keys <- keysOn net
-        (signed, info) <- liftEither $ signTxWithKeys net ctx tsd (Just (accountKind acc, accountXPubKey ctx acc)) keys
+        (signed, info) <- liftEither $ signTxWithKeys net ctx tsd (Just (accountKind acc, accountXPubKey ctx acc, heldChainsOf acc)) keys
         keepSigned ctx net signing signedFile accId file signed info
       Nothing -> do
         named <- fileNetwork givenM netM
         net <- liftMaybe noFileNetwork (commandNetwork cfg named)
+        showToSign ctx unit signing net Nothing txFile
         keys <- keysOn net
         (signed, info) <- liftEither $ signTxWithKeys net ctx tsd Nothing keys
         -- No address of the sweep is the wallet's: none has a label
@@ -1475,11 +1499,21 @@ signedMessageFromFile file = do
   content <- liftEitherIO $ readTextFile file
   if "{" `Text.isPrefixOf` Text.stripStart content
     then do
-      answer <- liftEither $ first (couldNotRead file) $ Json.eitherDecodeStrict' (encodeUtf8 content)
+      answer <- liftEither $ first (couldNotRead file) $ parseEither signMsgAnswer =<< Json.eitherDecodeStrict' (encodeUtf8 content)
       case answer of
-        ResponseSignMsg message signature address -> return (address, signature, message)
-        _ -> throwError $ "The file " <> file <> " holds an answer of hw, but not one of signmsg"
+        Just signed -> return signed
+        Nothing -> throwError $ "The file " <> file <> " holds an answer of hw, but not one of signmsg"
     else liftEither $ first (couldNotRead file) $ readSignedMessageBlock content
+  where
+    -- The fields of the answer of signmsg alone: the address, the
+    -- signature and the message. Another answer is not read further, so
+    -- that a file crafted as one has nothing more to be read for.
+    signMsgAnswer :: Json.Value -> Parser (Maybe (Text, Text, Text))
+    signMsgAnswer = Json.withObject "an answer of hw" $ \o -> do
+      kind <- o Json..: "type"
+      if kind == ("signmsg" :: Text)
+        then (\message signature address -> Just (address, signature, message)) <$> o Json..: "message" <*> o Json..: "signature" <*> o Json..: "address"
+        else return Nothing
 
 -- | Copy the database to the given file, which must not exist, or into the
 -- backups directory of hw under a name carrying the format version and the

@@ -162,16 +162,26 @@ keySpec =
       readAccountKey testAccountXPub `shouldBe` Right (Nothing, testAccountXPub)
       readAccountKey testAccountXPubTest `shouldBe` Right (Nothing, testAccountXPubTest)
 
+    -- The upub and the Zpub are the key of the test account with the
+    -- version bytes of SLIP-132, 044a5262 and 02aa7ed3, and their checksums,
+    -- worked out apart from hw: keys of those kinds, refused for their kind
     it "refuses the ypub and upub of a bip49 account, and the keys of multisig accounts" $ do
       readAccountKey "ypub6YGZhSg8Nso498vduxTVMtR3EtZUu8H3bKfUmJDp5x1QXjy9DdACFQ8VwcgtS6NSgzCMGs5mUSCP2iG3BtXCRBP8Zh7V74rwL9qRRbN1yGV"
         `shouldBe` Left "The key has the prefix ypub of SLIP-132, which marks a BIP49 account, with P2SH-P2WPKH addresses: hw holds bip44 and bip84 accounts"
-      readAccountKey "upub5DmL6Fd1D7dcMfS5r7XxxGH5Lbnxvp1KGZC3CJQMGYE2S6h7GNA1ZGqoSrcGKGnEQdeEYj5BrvDuqGeT6YSjG9BpwZEpvbxdMKcmTdQ2NR9"
+      readAccountKey "upub5DnX95rJxFtPFjzzuKq1acnoxnmHMKccnPW9vhsbzvxe6Lm8MXet2Nf9XLHH4pvUwnZEMHY9xrDgtwLS88LatCqhXj91JZBtpUF59YfekPX"
         `shouldBe` Left "The key has the prefix upub of SLIP-132, which marks a BIP49 account, with P2SH-P2WPKH addresses: hw holds bip44 and bip84 accounts"
-      readAccountKey "Zpub6r4mjW7yrMWVXbBmfxTonrBKKVapwoKJECopsBs8nJfVCLg4E7SDEAyyQtkGubtbsPWC4MmuLyhaNKvV1ChQa2Z418YDQmyzD2GCiogfbAh"
+      readAccountKey "Zpub72qvnewLGdA9vo7y1nE7T8c8YRXnGnFhgDkvkwcaGjgSz2QBPDryDoomS52gcoQzDTDEyFX59NNwSY221qZc1sNNhtjXdWkL4pqAgQsJZwy"
         `shouldBe` Left "The key has the prefix Zpub of SLIP-132, which marks a multisig account: hw holds bip44 and bip84 accounts of one key"
 
     it "refuses a zpub that does not read as an extended key" $
       readAccountKey "zpub6r4mjW7yrMW" `shouldBe` Left "The key starts with zpub but does not read as an extended key"
+
+    -- A text of 110 characters that starts with zpub and is the Base58Check
+    -- of 77 bytes, one fewer than an extended key has, found by a search
+    -- apart from hw
+    it "refuses a zpub whose checksum holds but whose bytes are not the 78 of an extended key" $
+      readAccountKey "zpubVzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzyi1mCWrkrxG5QKN9oLKbZJ9Tgh1sKoWwzZ46oS8BtnbBbS5CVHhHpp9"
+        `shouldBe` Left "The key starts with zpub but does not read as an extended key"
 
     it "leaves any other text as it is" $
       readAccountKey "not a key" `shouldBe` Right (Nothing, "not a key")

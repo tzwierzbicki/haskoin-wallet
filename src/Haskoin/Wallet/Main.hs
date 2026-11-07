@@ -17,7 +17,7 @@ import Haskoin.Wallet.Cli.Listing (Listing, streamListing)
 import Haskoin.Wallet.Cli.Pager (pagerCommand, withPager, writeDoc)
 import Haskoin.Wallet.Migration (Hooks (..), migrateDB)
 import Haskoin.Wallet.Backup (backupDatabase, migrationBackupDirectory)
-import Haskoin.Wallet.Cli.Parser (GlobalOptions (..), View, addressCodeOf, parserMain, viewOf)
+import Haskoin.Wallet.Cli.Parser (GlobalOptions (..), View, addressCodeOf, parserMain, txShownOf, viewOf)
 import Haskoin.Wallet.Cli.PrettyPrinter (chunkDoc, errorDoc, prettyPrinter, printNextSteps)
 import Haskoin.Wallet.Cli.Response (Response (..), responseFailed)
 import Haskoin.Wallet.Util (encodeJsonPretty)
@@ -53,7 +53,7 @@ clientMain = do
         if json
           then jsonPrinter res
           else do
-            prettyPrinter unit (viewOf cmd) (addressCodeOf cmd) res
+            prettyPrinter unit (viewOf cmd) (addressCodeOf cmd) (txShownOf cmd) res
             printNextSteps cmd res
 
 -- | Print a listing on the screen, chunk by chunk, through the pager when

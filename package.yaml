@@ -16,8 +16,13 @@ bug-reports: http://github.com/jprupp/haskoin-wallet/issues
 extra-source-files:
   - test/data/bip329/*.jsonl
   - test/data/bip329/README.md
+  - test/data/descriptors/*.json
+  - test/data/descriptors/README.md
   - test/data/message-signing/*.json
   - test/data/message-signing/README.md
+  - test/data/psbt/README.md
+  - test/data/psbt/core/*.hex
+  - test/data/psbt/core/*.psbt
   - test/data/tx-signing/*.json
   - test/data/tx-signing/README.md
   - test/data/tx-sweep/*.json
@@ -29,6 +34,7 @@ dependencies:
   - aeson-pretty >= 0.8.8
   - base16-bytestring >= 1.0.0.0
   - base64-bytestring >= 1.0.0.3
+  - bytes >= 0.17
   - bytestring >= 0.10.10.0
   - cereal >= 0.5.8.1
   - conduit >= 1.3.5

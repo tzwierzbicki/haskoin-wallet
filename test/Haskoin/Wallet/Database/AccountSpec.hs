@@ -7,7 +7,7 @@
 -- carries one from an offline wallet to an online one
 module Haskoin.Wallet.Database.AccountSpec (spec) where
 
-import Control.Monad (forM_)
+import Control.Monad (forM_, void)
 import Control.Monad.Except (ExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans (lift)
@@ -18,6 +18,7 @@ import Data.Maybe (fromJust)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
+import qualified Data.Text as Text
 import Data.Word (Word64)
 import qualified Database.Persist as P
 import Haskoin
@@ -375,13 +376,25 @@ fingerprintSpec ctx =
         _ <- importPendingTx btc ctx accId $ signedByWallet ctx $ paymentOf ctx funding testFingerprint
         (dBAccountFingerprint <$> getAccountById accId) `dbShouldBeE` Just "bc560f95"
 
-    it "refuses a signed transaction naming another seed than the account's" $
+    -- The file's word cannot be checked against the account's key: the
+    -- seed proved bc560f95 when the account was made
+    it "takes a signed transaction naming another seed than the account's, and keeps the account's" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "main"
         funding <- fundedWith ctx accId 50000
-        lift $
-          dbShouldFailWith "The account main is of the seed bc560f95, not of 4435aa1c" $
-            importPendingTx btc ctx accId $ signedByWallet ctx $ paymentOf ctx funding testFingerprint2
+        _ <- importPendingTx btc ctx accId $ signedByWallet ctx $ paymentOf ctx funding testFingerprint2
+        (dBAccountFingerprint <$> getAccountById accId) `dbShouldBeE` Just "bc560f95"
+
+    -- A counterparty names the seed 4435aa1c in a file the user signed,
+    -- and hands it over first: the next genuine file, of another payment,
+    -- is not refused for it
+    it "takes the genuine signed transaction of another payment after a file that named another seed" $
+      inDatabaseE $ do
+        (accId, _) <- watchOnly ctx btc 0 "main"
+        first <- fundedWith ctx accId 50000
+        _ <- importPendingTx btc ctx accId $ signedByWallet ctx $ paymentOf ctx first testFingerprint2
+        second <- fundedWith ctx accId 60000
+        void $ importPendingTx btc ctx accId $ signedByWallet ctx $ paymentOf ctx second testFingerprint
 
 {- Listing -}
 
@@ -591,6 +604,11 @@ jsonSpec =
 
     it "reads an account printed before hw had kinds, without a type, as a bip44 one" $
       eitherDecode (cs untypedJson) `shouldBe` Right fixtureAccount
+
+    -- A file given to hw may name any network
+    it "refuses an account of a network hw does not know, naming it" $
+      (eitherDecode (cs (Text.replace "\"network\": \"btc\"" "\"network\": \"nope\"" (cs accountJson))) :: Either String DBAccount)
+        `shouldBe` Left "Error in $: Unknown network nope"
 
 -- | The bip84 account of the test wallet, with the balances of the
 -- fixture above

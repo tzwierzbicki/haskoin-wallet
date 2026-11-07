@@ -12,7 +12,7 @@ import Data.Text (Text)
 import Haskoin (btc)
 import Haskoin.Wallet.Database.Coin (JsonCoin)
 import Haskoin.Wallet.FileIO
-import Haskoin.Wallet.TestUtils (inScratchDirectory)
+import Haskoin.Wallet.TestUtils (inScratchDirectory, underUmask)
 import System.Directory (createDirectory, getPermissions, listDirectory, setOwnerWritable, setPermissions)
 import System.FilePath ((</>))
 import System.Posix.Files (fileMode, getFileStatus)
@@ -112,6 +112,27 @@ spec = do
         placeFile AtFreePath file (\_ -> throwIO (ErrorCall "no contents"))
           `shouldThrow` (== ErrorCall "no contents")
         listDirectory dir `shouldReturn` []
+
+  -- Under the umask 022, a directory would be made rwxr-xr-x and a file
+  -- rw-r--r--, which other users of the computer can read
+  describe "The data directory and the database, made private" $ do
+    it "is a directory its owner alone can enter, whatever the umask lets" $
+      inScratchDirectory $ \dir -> underUmask 0o022 $ do
+        privateDirectory (dir </> ".hw")
+        -- The permission bits of rwx------
+        (.&. 0o777) . fileMode <$> getFileStatus (dir </> ".hw") `shouldReturn` 0o700
+
+    it "is an empty file its owner alone can read and write, whatever the umask lets" $
+      inScratchDirectory $ \dir -> underUmask 0o022 $ do
+        privateFile (dir </> "accounts.sqlite")
+        (.&. 0o777) . fileMode <$> getFileStatus (dir </> "accounts.sqlite") `shouldReturn` 0o600
+        readFile (dir </> "accounts.sqlite") `shouldReturn` ""
+
+    it "leaves a file that exists as it is" $
+      inScratchDirectory $ \dir -> do
+        writeFile (dir </> "accounts.sqlite") "a database"
+        privateFile (dir </> "accounts.sqlite")
+        readFile (dir </> "accounts.sqlite") `shouldReturn` "a database"
 
   describe "A file replaced" $
     it "is left as it was when the new one could not be filled" $

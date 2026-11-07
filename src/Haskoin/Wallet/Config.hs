@@ -29,11 +29,13 @@ import System.FilePath ((</>))
 
 {- The data directory -}
 
--- | The directory of hw, ~/.hw, created when missing
+-- | The directory of hw, ~/.hw, created when missing so that its owner
+-- alone can enter it ('privateDirectory'): the database it holds is not
+-- for the other users of the computer
 hwDataDirectory :: IO FilePath
 hwDataDirectory = do
   dir <- D.getAppUserDataDirectory "hw"
-  D.createDirectoryIfMissing True dir
+  privateDirectory dir
   return dir
 
 -- | The configuration file of a data directory
