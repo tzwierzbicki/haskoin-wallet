@@ -126,6 +126,9 @@ data Command
     CommandSync !(Maybe Text) !Bool
   | -- | The file of the copy, or none for the backups directory of hw
     CommandBackup !(Maybe FilePath)
+  | -- | The account, or every one, and the spreadsheet to write their
+    -- listings to
+    CommandExportSheet !(Maybe Text) !FilePath
   | CommandPrepareSweep !PrepareSweep
   | -- | What to sign, the file of the private keys, typed on the terminal
     -- without one, and the network of a file that names none and involves
@@ -557,7 +560,8 @@ Type hw COMMAND --help for the help of a command.
             ],
           CommandGroup
             "The wallet"
-            [ backupCommand
+            [ backupCommand,
+              exportSheetCommand
             ]
         ]
     }
@@ -2471,6 +2475,40 @@ A copy made by a newer hw is refused.
       args =
         CommandBackup
           <$> optional (fileArgument "The file to copy the database to. It must not exist yet. Without it, the copy goes to ~/.hw/backups.")
+    }
+
+{- exportsheet -}
+
+exportSheetCommand :: CommandSpec Command
+exportSheetCommand =
+  CommandSpec
+    { name = "exportsheet",
+      offline = False,
+      summary = "Write every listing of the wallet to a spreadsheet",
+      details =
+        [r|
+exportsheet writes the accounts, the addresses, the balances, the coins, the
+transactions and the pending transactions to a new spreadsheet, a tab each, in
+the OpenDocument format of LibreOffice (.ods). Excel and Google Sheets open it
+too. Each tab holds every row of its listing, in the columns of its --csv file.
+
+The tabs hold every account, or the one --account names. Those of the
+addresses, the balances, the coins and the transactions start with a column
+that names the account of each row. The addresses of both chains share a tab,
+the receiving ones first.
+
+Each cell keeps its kind. A label is text, whatever it starts with, an amount
+is a number of satoshis, and a time is a time, in UTC. The header of each tab
+stays at the top as its rows scroll.
+
+The six listings are read at one moment, so the tabs agree with each other.
+The file must not exist yet. It is readable by you alone, since it tells your
+whole history.
+|],
+      args =
+        CommandExportSheet
+          <$> onlyAccountOption
+          <*> fileArgument "The spreadsheet to write, such as wallet.ods. It must not exist yet."
     }
 
 {- fees -}

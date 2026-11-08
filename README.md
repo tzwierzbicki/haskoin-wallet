@@ -30,7 +30,8 @@ What `hw` does:
 - [Message signing](#messages) in the Bitcoin Signed Message format.
 - [Labels and accounts](#hw-exportacc) shared with other wallets.
 - [JSON answers](#options-of-every-command) from every command, for scripts.
-- [CSV files](#listings) of every listing, for a spreadsheet.
+- [CSV files](#listings) of every listing, and a
+  [spreadsheet](#hw-exportsheet) of the whole wallet.
 
 ## Contents
 
@@ -278,8 +279,8 @@ hw coins --csv coins.csv
 
 ### Files
 
-**`hw` never overwrites a file.** `--output`, `--csv` and `backup` refuse a file
-that exists, even one that appeared while the command ran. `signtx` and `signsweep`
+**`hw` never overwrites a file.** `--output`, `--csv`, `backup` and `exportsheet`
+refuse a file that exists, even one that appeared while the command ran. `signtx` and `signsweep`
 replace their `--input` file only when you agree.
 
 A file `hw` writes is whole on the disk before it takes its name, so a crash or
@@ -344,6 +345,7 @@ server, so they are not marked.
 | [`verifymsg`](#hw-verifymsg) | Check the signature of a message |
 | **[The wallet](#the-wallet)** | |
 | [`backup`](#hw-backup) | Copy the wallet database to a backup file |
+| [`exportsheet`](#hw-exportsheet) | Write every listing of the wallet to a spreadsheet |
 
 ### Mnemonics and accounts
 
@@ -1220,6 +1222,39 @@ hw backup ~/hw-2026-10-30.sqlite
 
 To restore a backup, replace `~/.hw/accounts.sqlite` with the copy, or point
 `database-file` in `~/.hw/config.json` to it.
+
+#### `hw exportsheet`
+
+`hw exportsheet FILE` writes the six listings to a new spreadsheet, a tab each:
+the accounts, the addresses, the balances, the coins, the transactions and the
+pending transactions. The file is an OpenDocument spreadsheet (`.ods`), the format of
+LibreOffice, which Excel and Google Sheets open too. Each tab holds every row
+of its listing, in the columns of its [CSV file](#listings).
+
+The tabs hold every account, or the one `--account` names. The addresses, the
+balances, the coins and the transactions start with a column that names the
+account of each row, so that one tab sorts and sums across the wallet. The
+addresses of both chains share a tab, the receiving ones first.
+
+Each cell keeps its kind, unlike in a CSV file. A label is text, whatever it
+starts with, and keeps its leading zeros. An amount is a number of satoshis,
+shown with separators of thousands. A time is a date, in UTC. The header of
+each tab stays at the top as its rows scroll. The six listings are read at one
+moment, so the tabs agree with each other.
+
+```console
+hw exportsheet wallet.ods
+hw exportsheet savings.ods --account savings
+```
+
+> **Good to know**
+>
+> - **Amounts of Bitcoin and of Bitcoin Cash share a column** when the wallet
+>   holds both. The Account column tells them apart: filter on it before you
+>   sum.
+> - **The spreadsheet tells your history.** `hw` makes it readable by you
+>   alone. A spreadsheet program may still keep copies, such as backups and
+>   recent files.
 
 ## Transaction files
 

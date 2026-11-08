@@ -20,6 +20,7 @@ module Haskoin.Wallet.Cli.Listing
     chunkRows,
     readListing,
     streamListing,
+    wholeListing,
   )
 where
 
@@ -71,11 +72,15 @@ chunkRows = 100
 -- | Read the listing whole, in one transaction, as the answer --json
 -- writes: every row --max allows, after the row --after names
 readListing :: Config -> ExceptT String (DB IO) Listing -> IO Response
-readListing cfg build = do
-  result <- readOnce cfg $ do
-    Listing start most rows _ answer _ <- build
-    answer <$> rows start most
-  return $ either (ResponseError . cs) id result
+readListing cfg build = either (ResponseError . cs) id <$> readOnce cfg (wholeListing build)
+
+-- | Every row --max allows, after the row --after names, as the answer of
+-- the command, read in the transaction the caller runs: exportsheet reads
+-- its six listings in one, so that they agree with each other
+wholeListing :: ExceptT String (DB IO) Listing -> ExceptT String (DB IO) Response
+wholeListing build = do
+  Listing start most rows _ answer _ <- build
+  answer <$> rows start most
 
 -- | Read the listing chunk by chunk, each chunk in a transaction of its
 -- own, and pass each one to the action as an answer, telling the first

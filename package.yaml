@@ -85,6 +85,9 @@ dependencies:
   - unliftio >= 0.2.10
   - unordered-containers >= 0.2.10.0
   - wreq >= 0.5.3.2
+  # The zip file that holds an OpenDocument spreadsheet, which exportsheet
+  # writes: see Haskoin.Wallet.Cli.Ods
+  - zip-archive >= 0.4
 library:
   source-dirs: src
   ghc-options: -Wall

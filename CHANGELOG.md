@@ -112,6 +112,10 @@ Using `hw`:
   with the identifiers and amounts of the JSON answer in columns of their own.
   Amounts are in satoshis and times in UTC. A label that a spreadsheet would
   run as a formula gets an apostrophe in front.
+- `exportsheet FILE` writes the six listings of the wallet, or of one account
+  with `--account`, to a new OpenDocument spreadsheet, a tab each. Each cell
+  keeps its kind: text, a number of satoshis, or a time in UTC. The header of
+  each tab stays at the top as its rows scroll.
 - `sync` and `recover` show what they are doing on a status line.
 - Tab completion in bash, zsh and fish. It completes commands, options,
   account names, coins, addresses and pending transactions.

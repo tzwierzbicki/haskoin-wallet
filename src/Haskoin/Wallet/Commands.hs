@@ -14,6 +14,7 @@ module Haskoin.Wallet.Commands
 
     -- * Listings
     cmdCsv,
+    cmdExportSheet,
     accountsListing,
     addressesListing,
     balancesListing,
@@ -116,6 +117,7 @@ import Haskoin.Wallet.Keys
 import Haskoin.Wallet.Shares (genShares)
 import Haskoin.Wallet.Labels (accountRecords, importFile)
 import Haskoin.Wallet.Cli.Csv (sheetCsv)
+import Haskoin.Wallet.Cli.Ods (workbookOds)
 import Haskoin.Wallet.Cli.Listing
 import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
@@ -125,7 +127,7 @@ import Haskoin.Wallet.Database.PendingTx
 import Haskoin.Wallet.Cli.PrettyPrinter (addedCoinsDoc, agoText, childrenDoc, coinBalancesPrinter, dustReportDoc, feeRatesDoc, reducedDoc, renderOn, txAnswerDoc)
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response
-import Haskoin.Wallet.Cli.Sheet (listingSheet)
+import Haskoin.Wallet.Cli.Sheet (AccountSheets (..), Sheet, listingSheet, stacked, walletSheets)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.SyncStatus (StatusLine (..), withStatusLine)
@@ -205,6 +207,7 @@ commandResponse ctx cfg unit = \case
   CommandSignMsg opts -> cmdSignMsg ctx cfg opts
   CommandVerifyMsg opts -> cmdVerifyMsg ctx cfg opts
   CommandBackup fileM -> cmdBackup cfg fileM
+  CommandExportSheet account file -> cmdExportSheet ctx cfg account file
 
 -- | The listing of a command that lists, which the screen reads chunk by
 -- chunk, or Nothing for a command that answers at once
@@ -485,6 +488,44 @@ cmdCsv cfg file listing = do
         -- The listing failed, and its answer says why
         Nothing -> return answer
         Just sheet -> either (ResponseError . cs) (const (ResponseFile file)) <$> writeFileBytes file (sheetCsv sheet)
+
+-- | Write every listing of the account, or of every account, to a new
+-- OpenDocument spreadsheet, a tab each ("Haskoin.Wallet.Cli.Ods"), and
+-- answer with the file. The tabs hold what the CSV files of the listings
+-- hold ('walletSheets'). The six listings are read in one transaction, so
+-- that the tabs agree with each other: the balances with the coins, and
+-- the coins with the transactions.
+cmdExportSheet :: Ctx -> Config -> Maybe Text -> FilePath -> IO Response
+cmdExportSheet ctx cfg account file =
+  runDBResponse cfg $ do
+    checkPathFree file
+    accs <- getAccountsByName account
+    when (null accs) $ throwError "There are no accounts in the wallet"
+    accounts <- sheetOf (accountsListing account)
+    held <- forM accs $ \(_, acc) -> (acc,) <$> accountSheets (Just (dBAccountName acc))
+    pending <- sheetOf (pendingTxsListing ctx account everyRow)
+    now <- liftIO getCurrentTime
+    liftEitherIO $ writeFileBytes file (workbookOds now (walletSheets accounts held pending))
+    return $ ResponseFile file
+  where
+    everyRow :: Paging a
+    everyRow = Paging Nothing Nothing
+    -- The listings of one account: its receiving addresses then its change
+    -- addresses, its balances, all its coins, and its transactions
+    accountSheets named = do
+      receiving <- sheetOf (addressesListing named False everyRow)
+      change <- sheetOf (addressesListing named True everyRow)
+      AccountSheets (stacked [receiving, change])
+        <$> sheetOf (balancesListing named everyRow)
+        <*> sheetOf (coinsListing named False everyRow)
+        <*> sheetOf (txsListing named everyRow)
+
+-- | The sheet of a listing, read whole in the transaction the caller runs
+sheetOf :: ExceptT String (DB IO) Listing -> ExceptT String (DB IO) Sheet
+sheetOf listing = do
+  answer <- wholeListing listing
+  -- Every listing has a sheet: an answer without one would be a bug
+  maybe (throwError "The listing has no sheet") return (listingSheet answer)
 
 cmdAccounts :: Config -> Maybe Text -> IO Response
 cmdAccounts cfg account = readListing cfg (accountsListing account)

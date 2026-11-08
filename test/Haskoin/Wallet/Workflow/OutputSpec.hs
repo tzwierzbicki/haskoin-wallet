@@ -4,16 +4,19 @@
 
 -- | What hw shows: the listings and their paging, a transaction as hw
 -- lays it out, the pending transactions, the balances of the addresses,
--- the coins, the next step shown after a payment or a sweep, and the CSV
--- files of --csv.
+-- the coins, the next step shown after a payment or a sweep, the CSV
+-- files of --csv, and the spreadsheet of exportsheet.
 module Haskoin.Wallet.Workflow.OutputSpec (spec) where
 
+import Codec.Archive.Zip (findEntryByPath, fromEntry, toArchive)
 import Control.Monad (forM_, replicateM_, void)
 import Data.Bits ((.&.))
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as BL
 import Data.IORef (modifyIORef)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import Data.Text.Encoding (decodeUtf8)
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Data.Word (Word64)
 import Haskoin
@@ -25,6 +28,7 @@ import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Workflow.TestUtils
+import System.Directory (doesFileExist)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.Posix.Files (fileMode, getFileStatus)
@@ -83,6 +87,7 @@ spec = prepareContext $ \ctx -> do
   layoutSpec ctx
   pendingListSpec ctx
   csvSpec ctx
+  exportSheetSpec ctx
   balancesListSpec ctx
   coinsListSpec ctx
   addressCodeSpec ctx
@@ -1014,3 +1019,99 @@ csvSpec ctx =
         createMain home
         let file = home </> "accounts.csv"
         hwJson home ["accounts", "--csv", file] [] `shouldReturn` ResponseFile file
+
+{- The spreadsheet of exportsheet -}
+
+-- | The spreadsheet exportsheet writes
+exportSheetSpec :: Ctx -> Spec
+exportSheetSpec ctx =
+  describe "The spreadsheet of exportsheet" $ do
+    let contentOf file = do
+          archive <- toArchive <$> BL.readFile file
+          maybe (fail "The spreadsheet has no content.xml") (return . decodeUtf8 . BL.toStrict . fromEntry) (findEntryByPath "content.xml" archive)
+        -- The names of the tables, in the order of the file
+        tabsOf content = [Text.takeWhile (/= '"') rest | rest <- drop 1 (Text.splitOn "<table:table table:name=\"" content)]
+
+    -- The type of the file shows at byte 30, after the header of the
+    -- first entry of the archive and its name, mimetype
+    it "is written to the file exportsheet names, as an OpenDocument spreadsheet, and hw says where" $
+      withHome $ \home -> do
+        createMain home
+        let file = home </> "wallet.ods"
+        run <- hw home ["exportsheet", file] []
+        runOut run `shouldBe` "Written to " <> Text.pack file <> "\n"
+        BS.take 54 . BS.drop 30 <$> BS.readFile file `shouldReturn` "mimetypeapplication/vnd.oasis.opendocument.spreadsheet"
+
+    it "has a tab for each listing, in the order of the help" $
+      withHome $ \home -> do
+        createMain home
+        let file = home </> "wallet.ods"
+        _ <- answer home ["exportsheet", file] []
+        tabsOf <$> contentOf file `shouldReturn` ["Accounts", "Addresses", "Balances", "Coins", "Transactions", "Pending transactions"]
+
+    -- The coin of the payment, 3 confirmations deep, can be spent: 50000
+    -- in all and spendable, nothing locked or waiting, in one coin
+    it "gives the balance of each address, as numbers of satoshis, after a first column that names its account" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        let file = home </> "wallet.ods"
+        _ <- answer home ["exportsheet", file] []
+        content <- contentOf file
+        content
+          `shouldSatisfy` Text.isInfixOf
+            ( Text.concat
+                [ "<table:table-row>",
+                  "<table:table-cell office:value-type=\"string\"><text:p>main</text:p></table:table-cell>",
+                  "<table:table-cell office:value-type=\"string\"><text:p>/0/0</text:p></table:table-cell>",
+                  "<table:table-cell office:value-type=\"string\"><text:p>1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj</text:p></table:table-cell>",
+                  -- No label
+                  "<table:table-cell/>",
+                  -- Total, spendable, locked by tx, locked by you, not spendable yet
+                  "<table:table-cell table:style-name=\"satoshis\" office:value-type=\"float\" office:value=\"50000\"><text:p>50000</text:p></table:table-cell>",
+                  "<table:table-cell table:style-name=\"satoshis\" office:value-type=\"float\" office:value=\"50000\"><text:p>50000</text:p></table:table-cell>",
+                  "<table:table-cell table:style-name=\"satoshis\" office:value-type=\"float\" office:value=\"0\"><text:p>0</text:p></table:table-cell>",
+                  "<table:table-cell table:style-name=\"satoshis\" office:value-type=\"float\" office:value=\"0\"><text:p>0</text:p></table:table-cell>",
+                  "<table:table-cell table:style-name=\"satoshis\" office:value-type=\"float\" office:value=\"0\"><text:p>0</text:p></table:table-cell>",
+                  -- Coins
+                  "<table:table-cell office:value-type=\"float\" office:value=\"1\"><text:p>1</text:p></table:table-cell>",
+                  "</table:table-row>"
+                ]
+            )
+
+    it "holds the account --account names alone" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "savings"] seedTwice
+        let file = home </> "savings.ods"
+        _ <- answer home ["exportsheet", "--account", "savings", file] []
+        content <- contentOf file
+        (Text.isInfixOf "<text:p>savings</text:p>" content, Text.isInfixOf "<text:p>main</text:p>" content) `shouldBe` (True, False)
+
+    it "is refused a file that exists, and the file is kept" $
+      withHome $ \home -> do
+        createMain home
+        let file = home </> "wallet.ods"
+        writeFile file "kept\n"
+        run <- hw home ["exportsheet", file] []
+        run `shouldSatisfy` printed (alreadyExists file)
+        readFile file `shouldReturn` "kept\n"
+
+    it "is refused in a wallet without accounts, and writes no file" $
+      withHome $ \home -> do
+        let file = home </> "wallet.ods"
+        run <- hw home ["exportsheet", file] []
+        run `shouldSatisfy` printed "There are no accounts in the wallet"
+        doesFileExist file `shouldReturn` False
+
+    it "can be read and written by its owner alone" $
+      withHome $ \home -> do
+        createMain home
+        let file = home </> "wallet.ods"
+        _ <- answer home ["exportsheet", file] []
+        (.&. 0o777) . fileMode <$> getFileStatus file `shouldReturn` 0o600
+
+    it "is answered in --json by the file written" $
+      withHome $ \home -> do
+        createMain home
+        let file = home </> "wallet.ods"
+        hwJson home ["exportsheet", file] [] `shouldReturn` ResponseFile file

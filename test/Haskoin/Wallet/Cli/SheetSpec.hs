@@ -8,7 +8,8 @@ import qualified Data.Map.Strict as Map
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Cli.Response (Response (..))
-import Haskoin.Wallet.Cli.Sheet (Cell (..), Sheet (..), listingSheet)
+import Haskoin.Wallet.Cli.Sheet (AccountSheets (..), Cell (..), Sheet (..), listingSheet, stacked, walletSheets, withAccountColumn)
+import Haskoin.Wallet.Database (DBAccount (..))
 import Haskoin.Wallet.Database.Address (CoinBalance (..))
 import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..))
 import Haskoin.Wallet.Database.TxInfo
@@ -30,6 +31,7 @@ spec = do
   coinSheetSpec
   txSheetSpec
   pendingSheetSpec
+  walletSheetSpec
 
 accountSheetSpec :: Spec
 accountSheetSpec =
@@ -176,3 +178,37 @@ pendingSheetSpec =
           [ [TextCell "main", TimeCell seenTime, TextCell "Outgoing", SatoshiCell (-41000), SatoshiCell 1000, CountCell 4, TextCell "sent", TextCell "0000000000000000000000000000000000000000000000000000000000000007", TextCell "0000000000000000000000000000000000000000000000000000000000000002", EmptyCell, TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, CountCell 0],
             [TextCell "main", TimeCell seenTime, TextCell "Outgoing", SatoshiCell (-41000), SatoshiCell 1000, CountCell 4, TextCell "conflicted", TextCell "0000000000000000000000000000000000000000000000000000000000000007", TextCell "0000000000000000000000000000000000000000000000000000000000000002", EmptyCell, TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, CountCell 0]
           ]
+
+walletSheetSpec :: Spec
+walletSheetSpec = do
+  let savings = mainAccountRow {dBAccountName = "savings", dBAccountIndex = 1}
+      paths path = Sheet ["Path"] [[TextCell path]]
+      sheetsOf sheet = AccountSheets sheet sheet sheet sheet
+
+  describe "The sheets of the spreadsheet of the wallet" $ do
+    it "are named after the six listings, in the order of the help" $
+      map fst (walletSheets (Sheet [] []) [] (Sheet [] []))
+        `shouldBe` ["Accounts", "Addresses", "Balances", "Coins", "Transactions", "Pending transactions"]
+
+    it "give the rows of each account under a first column that names it, one account after the other" $
+      lookup "Addresses" (walletSheets (Sheet [] []) [(mainAccountRow, sheetsOf (paths "/0/0")), (savings, sheetsOf (paths "/0/7"))] (Sheet [] []))
+        `shouldBe` Just (Sheet ["Account", "Path"] [[TextCell "main", TextCell "/0/0"], [TextCell "savings", TextCell "/0/7"]])
+
+    it "keep the sheets of the accounts and the pending transactions as the listings give them, since they name their accounts" $ do
+      let accounts = Sheet ["Account"] [[TextCell "main"]]
+          pendingSheet = Sheet ["Account", "Status"] [[TextCell "main", TextCell "signed"]]
+          sheets = walletSheets accounts [(mainAccountRow, sheetsOf (paths "/0/0"))] pendingSheet
+      (lookup "Accounts" sheets, lookup "Pending transactions" sheets) `shouldBe` (Just accounts, Just pendingSheet)
+
+  describe "A sheet with the column of its account" $
+    it "starts every row with the name of the account, under the heading Account" $
+      withAccountColumn mainAccountRow (Sheet ["Path", "Coins"] [[TextCell "/0/0", CountCell 1], [TextCell "/0/1", CountCell 0]])
+        `shouldBe` Sheet ["Account", "Path", "Coins"] [[TextCell "main", TextCell "/0/0", CountCell 1], [TextCell "main", TextCell "/0/1", CountCell 0]]
+
+  describe "Sheets stacked" $ do
+    it "are the rows of each one after the other, under the headings of the first" $
+      stacked [paths "/0/1", Sheet ["Path"] [], paths "/1/0"]
+        `shouldBe` Sheet ["Path"] [[TextCell "/0/1"], [TextCell "/1/0"]]
+
+    it "are a sheet of no column when there are none" $
+      stacked [] `shouldBe` Sheet [] []

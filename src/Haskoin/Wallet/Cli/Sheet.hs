@@ -24,10 +24,19 @@
 -- sheet that refers to the columns of another, finds each column where it
 -- was. A value unknown, or one that does not apply, such as the block of
 -- an unconfirmed transaction, leaves its cell empty.
+--
+-- exportsheet writes the six listings to one spreadsheet, a tab each
+-- ('walletSheets'), for every account at once. The sheets of the listings
+-- of one account then get a first column that names it, and the rows of
+-- each account follow those of the one before.
 module Haskoin.Wallet.Cli.Sheet
   ( Cell (..),
     Sheet (..),
     listingSheet,
+    AccountSheets (..),
+    walletSheets,
+    withAccountColumn,
+    stacked,
   )
 where
 
@@ -324,3 +333,56 @@ purposeColumns =
     payeeOf = mainPayee . txInfoSummary
     -- The path and the label of the address paid, when it is the wallet's
     ownPayee info = txAddressOwn . payeeRow =<< payeeOf info
+
+{- The spreadsheet of the wallet -}
+
+-- | The sheets of the listings of one account that exportsheet writes: its
+-- addresses, of both chains, the balances of those that hold coins, its
+-- coins, locked or not, and its transactions
+data AccountSheets = AccountSheets
+  { addressesSheet :: !Sheet,
+    balancesSheet :: !Sheet,
+    coinsSheet :: !Sheet,
+    txsSheet :: !Sheet
+  }
+  deriving (Eq, Show)
+
+-- | The sheets of the spreadsheet of exportsheet, each with the name of
+-- its tab, in the order of the help: the accounts, the addresses, the
+-- balances, the coins and the transactions of each account given, and
+-- the pending transactions. A sheet of one account gets a first column
+-- that names it ('withAccountColumn'), as the accounts and the pending
+-- transactions name theirs, and the rows of the accounts follow each
+-- other ('stacked'). One sheet for all of them, rather than a tab for each
+-- account, sorts and sums across the wallet. Amounts of Bitcoin and of
+-- Bitcoin Cash then share a column: the account tells them apart.
+walletSheets :: Sheet -> [(DBAccount, AccountSheets)] -> Sheet -> [(Text, Sheet)]
+walletSheets accounts held pending =
+  [ ("Accounts", accounts),
+    ("Addresses", ofEach addressesSheet),
+    ("Balances", ofEach balancesSheet),
+    ("Coins", ofEach coinsSheet),
+    ("Transactions", ofEach txsSheet),
+    ("Pending transactions", pending)
+  ]
+  where
+    ofEach part = stacked [withAccountColumn acc (part sheets) | (acc, sheets) <- held]
+
+-- | A sheet with a first column, Account, that names the account given on
+-- every row
+withAccountColumn :: DBAccount -> Sheet -> Sheet
+withAccountColumn acc sheet =
+  Sheet
+    { sheetHeadings = "Account" : sheetHeadings sheet,
+      sheetRows = (TextCell (dBAccountName acc) :) <$> sheetRows sheet
+    }
+
+-- | Sheets of the same columns as one: the headings of the first, then
+-- the rows of each, one sheet after the other. None makes a sheet of no
+-- column.
+stacked :: [Sheet] -> Sheet
+stacked sheets =
+  Sheet
+    { sheetHeadings = concat (take 1 (sheetHeadings <$> sheets)),
+      sheetRows = concatMap sheetRows sheets
+    }
