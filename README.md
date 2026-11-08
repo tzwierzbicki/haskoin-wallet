@@ -30,6 +30,7 @@ What `hw` does:
 - [Message signing](#messages) in the Bitcoin Signed Message format.
 - [Labels and accounts](#hw-exportacc) shared with other wallets.
 - [JSON answers](#options-of-every-command) from every command, for scripts.
+- [CSV files](#listings) of every listing, for a spreadsheet.
 
 ## Contents
 
@@ -246,10 +247,39 @@ hw txs --max 20 --json
 hw txs --max 20 --after TXID --json
 ```
 
+`--csv FILE` writes a listing to a new file instead, for a spreadsheet. Each
+element takes a row, and the columns hold what the JSON answer holds, such as
+the txid, the coin and the fee, each in a column of its own. Amounts are in
+satoshis, as whole numbers, whatever `--unit` says. Times are in UTC, as
+`2023-11-14T22:13:20`, whatever the time zone of the computer. `--after` and
+`--max` choose the rows, as they do on the screen.
+
+```console
+hw txs --csv txs.csv
+hw coins --csv coins.csv
+```
+
+> **Good to know**
+>
+> - **A spreadsheet guesses what each cell of a CSV file holds.** A label made
+>   of digits alone, such as `007`, becomes the number 7. The fingerprint of a
+>   seed is often made of digits alone, so the file of `accounts` leaves it
+>   out. `accounts --verbose` gives it.
+> - **A label that starts with `=`, `+`, `-` or `@` gets an apostrophe in
+>   front.** A spreadsheet would run it as a formula, and a label can come from
+>   a file of another wallet. A formula could send your rows to a web server.
+>   The apostrophe shows in the cell.
+> - **A spreadsheet set to a decimal comma may expect semicolons.** Excel may
+>   then show each row in one cell. Import the file with the comma as the
+>   separator rather than open it. LibreOffice asks which separator to use.
+> - **The file tells your history.** Its addresses, amounts and labels tell
+>   whoever reads it what you hold and whom you paid. `hw` makes it readable
+>   by you alone.
+
 ### Files
 
-**`hw` never overwrites a file.** `--output` and `backup` refuse a file that
-exists, even one that appeared while the command ran. `signtx` and `signsweep`
+**`hw` never overwrites a file.** `--output`, `--csv` and `backup` refuse a file
+that exists, even one that appeared while the command ran. `signtx` and `signsweep`
 replace their `--input` file only when you agree.
 
 A file `hw` writes is whole on the disk before it takes its name, so a crash or
@@ -545,10 +575,16 @@ was created, and its confirmed and unconfirmed balances.
 derivation path, what it can spend, what is unconfirmed, and its coins. The
 first column is as wide as the longest name, which no row cuts.
 
+`--csv FILE` writes the accounts to a [CSV file](#listings): the name, network
+and path of each, what it can spend, its confirmed and unconfirmed balances,
+its coins, how many receiving and change addresses it has, and when it was
+created.
+
 ```console
 hw accounts
 hw accounts --verbose
 hw accounts --tabular
+hw accounts --csv accounts.csv
 hw accounts --account savings --unit sat
 ```
 
@@ -659,12 +695,18 @@ how many transactions, and its label. An unused address
 leaves its amounts empty. The table of change addresses has no label column,
 since change addresses take no label.
 
+`--csv FILE` writes the addresses to a [CSV file](#listings): the path, the
+address and the label of each, what it can spend, its confirmed and
+unconfirmed balances, what it received, its coins and transactions, and when
+it was created.
+
 ```console
 hw addresses
 hw addresses --change
 hw addresses --verbose
 hw addresses --tabular
 hw addresses --change --tabular
+hw addresses --csv addresses.csv
 hw addresses --max 10 --after ADDRESS
 ```
 
@@ -681,10 +723,15 @@ yet, which waits for a confirmation.
 the value of its coins, what it can spend now and the rest, and its label, or
 `change address`.
 
+`--csv FILE` writes the addresses to a [CSV file](#listings): the path, the
+address and the label of each, its total, what it can spend, the three parts it
+cannot, and its coins.
+
 ```console
 hw balances
 hw balances --verbose
 hw balances --tabular
+hw balances --csv balances.csv
 ```
 
 #### `hw label`
@@ -756,10 +803,16 @@ with its path, and the label of the address. A coin a pending transaction
 spends says `locked by tx`. The table leaves out the coin itself, `TXID:INDEX`,
 which `lockcoin` and `--coin` take. `coins` without `--tabular` shows it.
 
+`--csv FILE` writes the coins to a [CSV file](#listings): the coin as
+`TXID:INDEX`, the time of its transaction, its value, state, confirmations and
+block, the address that holds it with its path, and the labels of the address
+and of the transaction.
+
 ```console
 hw coins
 hw coins --verbose
 hw coins --tabular
+hw coins --csv coins.csv
 hw coins --locked
 ```
 
@@ -971,10 +1024,17 @@ header names the unit of the amounts, so
 the cells hold numbers alone. The table leaves out the txid and the fee rate.
 `txs` without `--tabular` shows them.
 
+`--csv FILE` writes the transactions to a [CSV file](#listings): the time, type,
+amount, fee and fee rate of each, the balance after it, its status,
+confirmations, block, txid and label. Then come the address it pays the most,
+its path and label when it is one of the wallet, and how many other addresses
+it pays.
+
 ```console
 hw txs
 hw txs --verbose
 hw txs --tabular
+hw txs --csv txs.csv
 hw txs --max 20 --after TXID
 ```
 
@@ -1000,10 +1060,16 @@ The account column is as wide as the longest name. The table leaves out the
 hash, which the other commands
 take. `pendingtxs` without `--tabular` shows it.
 
+`--csv FILE` writes the pending transactions to a [CSV file](#listings): the
+account of each, when it was created, its type, amount, fee and fee rate, its
+status, its nosigHash, its txid once signed, its label, and the address it pays
+the most, as `txs --csv` gives it.
+
 ```console
 hw pendingtxs
 hw pendingtxs --verbose
 hw pendingtxs --tabular
+hw pendingtxs --csv pending.csv
 ```
 
 > **Good to know**

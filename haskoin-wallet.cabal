@@ -75,6 +75,7 @@ library
       Haskoin.Wallet.Backup
       Haskoin.Wallet.Bip329
       Haskoin.Wallet.Cli.Completion
+      Haskoin.Wallet.Cli.Csv
       Haskoin.Wallet.Cli.Listing
       Haskoin.Wallet.Cli.Pager
       Haskoin.Wallet.Cli.Parser
@@ -86,6 +87,7 @@ library
       Haskoin.Wallet.Cli.Prompt
       Haskoin.Wallet.Cli.QrCode
       Haskoin.Wallet.Cli.Response
+      Haskoin.Wallet.Cli.Sheet
       Haskoin.Wallet.Cli.Style
       Haskoin.Wallet.Commands
       Haskoin.Wallet.Config
@@ -263,6 +265,7 @@ test-suite spec
       Haskoin.Wallet.BackupSpec
       Haskoin.Wallet.Bip329Spec
       Haskoin.Wallet.Cli.CompletionSpec
+      Haskoin.Wallet.Cli.CsvSpec
       Haskoin.Wallet.Cli.ListingSpec
       Haskoin.Wallet.Cli.PagerSpec
       Haskoin.Wallet.Cli.ParserSpec
@@ -270,6 +273,7 @@ test-suite spec
       Haskoin.Wallet.Cli.PromptSpec
       Haskoin.Wallet.Cli.QrCodeSpec
       Haskoin.Wallet.Cli.ResponseSpec
+      Haskoin.Wallet.Cli.SheetSpec
       Haskoin.Wallet.ConfigSpec
       Haskoin.Wallet.Database.AccountSpec
       Haskoin.Wallet.Database.AddressSpec

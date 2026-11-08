@@ -13,6 +13,7 @@ module Haskoin.Wallet.Commands
     commandListing,
 
     -- * Listings
+    cmdCsv,
     accountsListing,
     addressesListing,
     balancesListing,
@@ -114,6 +115,7 @@ import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Keys
 import Haskoin.Wallet.Shares (genShares)
 import Haskoin.Wallet.Labels (accountRecords, importFile)
+import Haskoin.Wallet.Cli.Csv (sheetCsv)
 import Haskoin.Wallet.Cli.Listing
 import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
@@ -123,6 +125,7 @@ import Haskoin.Wallet.Database.PendingTx
 import Haskoin.Wallet.Cli.PrettyPrinter (addedCoinsDoc, agoText, childrenDoc, coinBalancesPrinter, dustReportDoc, feeRatesDoc, reducedDoc, renderOn, txAnswerDoc)
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response
+import Haskoin.Wallet.Cli.Sheet (listingSheet)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.SyncStatus (StatusLine (..), withStatusLine)
@@ -154,6 +157,11 @@ import System.Random (initStdGen)
 -- | The answer of hw to a command
 commandResponse :: Ctx -> Config -> AmountUnit -> Command -> IO Response
 commandResponse ctx cfg unit = \case
+  -- A listing to write to a CSV file, whatever it lists
+  cmd
+    | Just file <- csvFileOf cmd,
+      Just listing <- commandListing ctx cmd ->
+        cmdCsv cfg file listing
   -- Mnemonics and accounts
   CommandMnemonic opts -> cmdMnemonic opts
   CommandCreateAcc name net kind parts -> cmdCreateAcc ctx cfg name net kind parts
@@ -460,6 +468,23 @@ cmdDeleteAcc cfg name net path =
       throwError "The full derivation path of the account to delete did not match"
     lift $ deleteAccount accId
     return $ ResponseAccResult acc True ("The account " <> name <> " has been deleted")
+
+-- | Write every row of a listing to a new CSV file, for a spreadsheet,
+-- and answer with the file ("Haskoin.Wallet.Cli.Csv"). The listing is
+-- read whole, in one transaction, as --json reads it, then written: the
+-- file is either whole or not there. A path that is taken is refused
+-- before the listing is read.
+cmdCsv :: Config -> FilePath -> ExceptT String (DB IO) Listing -> IO Response
+cmdCsv cfg file listing = do
+  free <- runExceptT (checkPathFree file)
+  case free of
+    Left err -> return (ResponseError (cs err))
+    Right () -> do
+      answer <- readListing cfg listing
+      case listingSheet answer of
+        -- The listing failed, and its answer says why
+        Nothing -> return answer
+        Just sheet -> either (ResponseError . cs) (const (ResponseFile file)) <$> writeFileBytes file (sheetCsv sheet)
 
 cmdAccounts :: Config -> Maybe Text -> IO Response
 cmdAccounts cfg account = readListing cfg (accountsListing account)

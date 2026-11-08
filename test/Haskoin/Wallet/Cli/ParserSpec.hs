@@ -31,23 +31,23 @@ spec = do
       usageOf "preparesendall"
         `shouldBe` "ADDRESS[:AMOUNT]... [-a|--account NAME] [-f|--fee-rate RATE] [-m|--min-conf INT] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS]... [--spend-dust | --leave-dust] [-y|--yes]"
 
-    it "offers txs --verbose and --tabular as a choice, since a table has no room for every detail" $
-      usageOf "txs" `shouldBe` "[-a|--account NAME] [(-v|--verbose) | --tabular] [--after TXID] [--max INT]"
+    it "offers txs --verbose, --tabular and --csv as a choice, since a table has no room for every detail and a file is not the screen" $
+      usageOf "txs" `shouldBe` "[-a|--account NAME] [(-v|--verbose) | --tabular | --csv FILENAME] [--after TXID] [--max INT]"
 
-    it "offers addresses --verbose and --tabular as a choice too" $
-      usageOf "addresses" `shouldBe` "[-a|--account NAME] [--change] [(-v|--verbose) | --tabular] [--after ADDRESS] [--max INT]"
+    it "offers addresses --verbose, --tabular and --csv as a choice too" $
+      usageOf "addresses" `shouldBe` "[-a|--account NAME] [--change] [(-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT]"
 
-    it "offers accounts --verbose and --tabular as a choice" $
-      usageOf "accounts" `shouldBe` "[-a|--account NAME] [(-v|--verbose) | --tabular]"
+    it "offers accounts --verbose, --tabular and --csv as a choice" $
+      usageOf "accounts" `shouldBe` "[-a|--account NAME] [(-v|--verbose) | --tabular | --csv FILENAME]"
 
-    it "offers coins --verbose and --tabular as a choice" $
-      usageOf "coins" `shouldBe` "[-a|--account NAME] [--locked] [(-v|--verbose) | --tabular] [--after TXID:INDEX] [--max INT]"
+    it "offers coins --verbose, --tabular and --csv as a choice" $
+      usageOf "coins" `shouldBe` "[-a|--account NAME] [--locked] [(-v|--verbose) | --tabular | --csv FILENAME] [--after TXID:INDEX] [--max INT]"
 
-    it "offers pendingtxs --verbose and --tabular as a choice" $
-      usageOf "pendingtxs" `shouldBe` "[-a|--account NAME] [(-v|--verbose) | --tabular] [--after HASH] [--max INT]"
+    it "offers pendingtxs --verbose, --tabular and --csv as a choice" $
+      usageOf "pendingtxs" `shouldBe` "[-a|--account NAME] [(-v|--verbose) | --tabular | --csv FILENAME] [--after HASH] [--max INT]"
 
-    it "offers balances --verbose and --tabular as a choice" $
-      usageOf "balances" `shouldBe` "[-a|--account NAME] [(-v|--verbose) | --tabular] [--after ADDRESS] [--max INT]"
+    it "offers balances --verbose, --tabular and --csv as a choice" $
+      usageOf "balances" `shouldBe` "[-a|--account NAME] [(-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT]"
 
     it "gives showaddr the address to show and no option" $
       usageOf "showaddr" `shouldBe` "ADDRESS"

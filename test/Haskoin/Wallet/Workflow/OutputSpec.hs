@@ -4,10 +4,13 @@
 
 -- | What hw shows: the listings and their paging, a transaction as hw
 -- lays it out, the pending transactions, the balances of the addresses,
--- the coins, and the next step shown after a payment or a sweep.
+-- the coins, the next step shown after a payment or a sweep, and the CSV
+-- files of --csv.
 module Haskoin.Wallet.Workflow.OutputSpec (spec) where
 
 import Control.Monad (forM_, replicateM_, void)
+import Data.Bits ((.&.))
+import qualified Data.ByteString as BS
 import Data.IORef (modifyIORef)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -24,6 +27,7 @@ import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Workflow.TestUtils
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
+import System.Posix.Files (fileMode, getFileStatus)
 import Test.Hspec
 
 spec :: Spec
@@ -78,6 +82,7 @@ spec = prepareContext $ \ctx -> do
   listingSpec ctx
   layoutSpec ctx
   pendingListSpec ctx
+  csvSpec ctx
   balancesListSpec ctx
   coinsListSpec ctx
   addressCodeSpec ctx
@@ -943,3 +948,69 @@ nextStepSpec ctx =
         synced home
         run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--json", "--fee-rate", "10"] []
         run `shouldNotSatisfy` showsCommand "hw signtx"
+
+{- CSV files -}
+
+-- | The listings --csv writes to a file
+csvSpec :: Ctx -> Spec
+csvSpec ctx =
+  describe "A listing written with --csv" $ do
+    -- The coin of the payment, 3 confirmations deep, can be spent. The
+    -- file starts with EF BB BF, the byte order mark of UTF-8.
+    it "is written to the file --csv names, a row for each address that holds coins, and hw says where" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        let file = home </> "balances.csv"
+        run <- hw home ["balances", "--csv", file] []
+        runOut run `shouldBe` "Written to " <> Text.pack file <> "\n"
+        BS.readFile file
+          `shouldReturn` "\xEF\xBB\xBF\&Path,Address,Label,Total (sats),Spendable (sats),Locked by tx (sats),Locked by you (sats),Not spendable yet (sats),Coins\r\n/0/0,1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj,,50000,50000,0,0,0,1\r\n"
+
+    -- The store saw the payment at 22:13:20 UTC, 23:13:20 in Central
+    -- Europe in November
+    it "gives the time of a transaction in UTC, whatever the time zone of the computer" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        let file = home </> "txs.csv"
+        _ <- hwWithEnv [("TZ", centralEurope)] home ["txs", "--csv", file] []
+        content <- BS.readFile file
+        content `shouldSatisfy` BS.isInfixOf "\r\n2023-11-14T22:13:20,Incoming,"
+
+    it "writes the headings alone for a listing with no rows" $
+      withHome $ \home -> do
+        createMain home
+        let file = home </> "pending.csv"
+        _ <- answer home ["pendingtxs", "--csv", file] []
+        BS.readFile file
+          `shouldReturn` "\xEF\xBB\xBF\&Account,Created (UTC),Type,Amount (sats),Fee (sats),Fee rate (sat/vB),Status,Nosighash,Txid,Label,Address,Path,Address label,Other addresses\r\n"
+
+    -- 50000 at /0/0 is the largest total, before 30000 at /0/1
+    it "writes the rows --max allows, the first ones of the listing" $
+      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+        synced home
+        let file = home </> "balances.csv"
+        _ <- answer home ["balances", "--csv", file, "--max", "1"] []
+        BS.readFile file
+          `shouldReturn` "\xEF\xBB\xBF\&Path,Address,Label,Total (sats),Spendable (sats),Locked by tx (sats),Locked by you (sats),Not spendable yet (sats),Coins\r\n/0/0,1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj,,50000,50000,0,0,0,1\r\n"
+
+    it "is refused a --csv file that exists, and the file is kept" $
+      withHome $ \home -> do
+        createMain home
+        let file = home </> "accounts.csv"
+        writeFile file "kept\n"
+        run <- hw home ["accounts", "--csv", file] []
+        run `shouldSatisfy` printed (alreadyExists file)
+        readFile file `shouldReturn` "kept\n"
+
+    it "can be read and written by its owner alone" $
+      withHome $ \home -> do
+        createMain home
+        let file = home </> "accounts.csv"
+        _ <- answer home ["accounts", "--csv", file] []
+        (.&. 0o777) . fileMode <$> getFileStatus file `shouldReturn` 0o600
+
+    it "is answered in --json by the file written" $
+      withHome $ \home -> do
+        createMain home
+        let file = home </> "accounts.csv"
+        hwJson home ["accounts", "--csv", file] [] `shouldReturn` ResponseFile file

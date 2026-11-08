@@ -196,6 +196,12 @@ commandLineSpec ctx = do
         runExit run `shouldBe` ExitFailure 1
         runErr run `shouldSatisfy` Text.isInfixOf "Invalid option `--tabular'"
 
+    it "names --csv when it follows --tabular in txs, since the screen and the file are a choice" $
+      withHome $ \home -> do
+        run <- hw home ["txs", "--tabular", "--csv", home </> "txs.csv"] []
+        runExit run `shouldBe` ExitFailure 1
+        runErr run `shouldSatisfy` Text.isInfixOf "Invalid option `--csv'"
+
     it "names the unknown command, and suggests the closest one" $
       withHome $ \home -> do
         run <- hw home ["preparetxx"] []

@@ -71,8 +71,9 @@ data Command
   | -- | The account, or every one, whose output descriptor to show
     CommandDescriptor !(Maybe Text)
   | CommandRenameAcc !RenameAcc
-  | -- | The account, or every one, and how much of each to show
-    CommandAccounts !(Maybe Text) !View
+  | -- | The account, or every one, and how to show each, or the CSV file
+    -- to write them to
+    CommandAccounts !(Maybe Text) !ListingOutput
   | -- | The name of the account, with its network and its path to confirm
     -- the deletion
     CommandDeleteAcc !Text !Network !HardPath
@@ -80,20 +81,22 @@ data Command
   | -- | An address of the wallet, as the user typed it
     CommandShowAddr !Text
   | -- | The account, whether its change addresses, how to show each
-    -- address, and the page
-    CommandAddresses !(Maybe Text) !Bool !View !(Paging Text)
-  | -- | The account, how to show each address, and the page
-    CommandBalances !(Maybe Text) !View !(Paging Text)
+    -- address or the CSV file to write them to, and the page
+    CommandAddresses !(Maybe Text) !Bool !ListingOutput !(Paging Text)
+  | -- | The account, how to show each address or the CSV file to write
+    -- them to, and the page
+    CommandBalances !(Maybe Text) !ListingOutput !(Paging Text)
   | CommandLabel !Label
   | -- | The account, and the chain and index of the address to show
     CommandCheckAddr !(Maybe Text) !AddrType !KeyIndex
-  | -- | The account, how to show each transaction, and the page
-    CommandTxs !(Maybe Text) !View !(Paging TxHash)
+  | -- | The account, how to show each transaction or the CSV file to
+    -- write them to, and the page
+    CommandTxs !(Maybe Text) !ListingOutput !(Paging TxHash)
   | CommandPrepareTx !PrepareTx
   | CommandPrepareSendAll !PrepareSendAll
-  | -- | The account, or every one, how much of each transaction to show,
-    -- and the page
-    CommandPendingTxs !(Maybe Text) !View !(Paging TxHash)
+  | -- | The account, or every one, how to show each transaction or the
+    -- CSV file to write them to, and the page
+    CommandPendingTxs !(Maybe Text) !ListingOutput !(Paging TxHash)
   | -- | The account, the transaction file, and the network of a file that
     -- names none and involves no account
     CommandReviewTx !(Maybe Text) !FilePath !(Maybe Network)
@@ -110,8 +113,8 @@ data Command
   | CommandSignMsg !SignMsg
   | CommandVerifyMsg !VerifyMsg
   | -- | The account, whether the locked coins only, how to show each
-    -- coin, and the page
-    CommandCoins !(Maybe Text) !Bool !View !(Paging OutPoint)
+    -- coin or the CSV file to write them to, and the page
+    CommandCoins !(Maybe Text) !Bool !ListingOutput !(Paging OutPoint)
   | CommandLockCoin !OutPoint
   | CommandUnlockCoin !OutPoint
   | -- | A pending transaction, by its txid or its nosigHash, or the file
@@ -137,16 +140,36 @@ data Command
 data View = Compact | Verbose | Table
   deriving (Eq, Show)
 
+-- | Where a listing goes: on the screen, in the view asked for, or to a
+-- new CSV file with --csv, for a spreadsheet ("Haskoin.Wallet.Cli.Csv").
+-- A file is not a view: it has no colours and no widths, and holds every
+-- row whole, more columns than a table. The screen and the file are a
+-- choice, as the views are.
+data ListingOutput = OnScreen !View | CsvFile !FilePath
+  deriving (Eq, Show)
+
+-- | The output a listing command asks for. Nothing for another command.
+listingOutputOf :: Command -> Maybe ListingOutput
+listingOutputOf (CommandAccounts _ output) = Just output
+listingOutputOf (CommandAddresses _ _ output _) = Just output
+listingOutputOf (CommandBalances _ output _) = Just output
+listingOutputOf (CommandTxs _ output _) = Just output
+listingOutputOf (CommandPendingTxs _ output _) = Just output
+listingOutputOf (CommandCoins _ _ output _) = Just output
+listingOutputOf _ = Nothing
+
+-- | The CSV file a listing command is asked to write, with --csv
+csvFileOf :: Command -> Maybe FilePath
+csvFileOf cmd = case listingOutputOf cmd of
+  Just (CsvFile file) -> Just file
+  _ -> Nothing
+
 -- | How the command shows each element it lists, as asked of accounts,
 -- addresses, balances, txs, pendingtxs and coins. The other commands have
--- one view.
+-- one view. A listing written to a CSV file answers with the file, in
+-- the compact view.
 viewOf :: Command -> View
-viewOf (CommandAccounts _ view) = view
-viewOf (CommandAddresses _ _ view _) = view
-viewOf (CommandBalances _ view _) = view
-viewOf (CommandTxs _ view _) = view
-viewOf (CommandPendingTxs _ view _) = view
-viewOf (CommandCoins _ _ view _) = view
+viewOf cmd | Just (OnScreen view) <- listingOutputOf cmd = view
 -- The one coin they answer with, with every detail, as the other commands
 -- that answer with one element show it
 viewOf (CommandLockCoin _) = Verbose
@@ -455,7 +478,8 @@ keep the secret offline.
 On a terminal, a listing such as `txs` goes through less: scroll it, search
 it with /, and quit it with q. One that fits on the screen is shown as it
 is. A line wider than the screen is cut at its edge, and the right arrow key
-scrolls to the rest of it.
+scrolls to the rest of it. --csv FILENAME writes a listing to a new file for a
+spreadsheet instead, every row whole.
 
 The options --unit, --json and --no-pager go before or after the command.
 The settings, such as the server, the default network, the unit, the address
@@ -1169,13 +1193,19 @@ With --tabular, each account takes one row of a table, under a header that
 names the columns: its name, its network, its derivation path, what it can
 spend, what is unconfirmed, and how many coins it holds. The amounts are in the
 unit the header names. The first column is as wide as the longest name.
+
+With --csv FILENAME, each account takes one row of a new CSV file, for a
+spreadsheet: its name, network and path, what it can spend, its confirmed and
+unconfirmed balances, its coins, how many receiving and change addresses it
+has, and when it was created. Amounts are in satoshis, and times in UTC.
 |],
       args =
         CommandAccounts
           <$> onlyAccountOption
-          <*> tableViewOption
+          <*> listingOutputOption
             "Show every detail of each account: the fingerprint of its seed, its addresses, when it was created, and each of its balances."
             "Show each account on one row of a table: its name, network and path, what it can spend, what is unconfirmed, and its coins."
+            "accounts"
     }
 
 {- receive -}
@@ -1267,14 +1297,20 @@ names the columns: the path, the address, what it can spend, what it received
 and in how many transactions, and its label. The amounts are in the unit the
 header names. An address no transaction has paid leaves its amounts empty.
 Change addresses have no label, so their table has no column for one.
+
+With --csv FILENAME, each address takes one row of a new CSV file, for a
+spreadsheet: its path, the address and its label, what it can spend, its
+confirmed and unconfirmed balances, what it received, its coins and its
+transactions, and when it was created. Amounts are in satoshis, and times in UTC.
 |],
       args =
         CommandAddresses
           <$> accountOption
           <*> changeAddressesOption
-          <*> tableViewOption
+          <*> listingOutputOption
             "Show every detail of each address: its transactions, what it received, its balances, its coins, and when it was created."
             "Show each address on one row of a table: its path, the address, what it can spend and what it received, its transactions and its label."
+            "addresses"
           <*> pagingOptions (afterOption "ADDRESS" str "Start after this address")
     }
 
@@ -1340,13 +1376,18 @@ and the value not spendable yet, which waits for a confirmation.
 With --tabular, each address takes one row of a table, under a header that
 names the columns: the path, the address, the three amounts, and the label, or
 that it is a change address. The amounts are in the unit the header names.
+
+With --csv FILENAME, each address takes one row of a new CSV file, for a
+spreadsheet: its path, the address and its label, its total, what it can spend,
+the three parts it cannot, and its coins. Amounts are in satoshis.
 |],
       args =
         CommandBalances
           <$> accountOption
-          <*> tableViewOption
+          <*> listingOutputOption
             "Show every detail of each address: its total and its coins, its spendable amount, and what pending transactions lock, what you lock, and what is not spendable yet."
             "Show each address on one row of a table: its path, the address, its total, spendable and unspendable amounts, and its label."
+            "addresses that hold coins"
           <*> pagingOptions (afterOption "ADDRESS" str "Start after this address")
     }
 
@@ -1471,27 +1512,39 @@ gives the path of the address it was paid at, then the label of the payment, or
 else the label of the address. A payment gives its label, or else the address
 it pays. Nothing in it is cut, a long label or address included. The table
 leaves out the txid.
+
+With --csv FILENAME, each transaction takes one row of a new CSV file, for a
+spreadsheet: its time, type, amount, fee and fee rate, the balance after it,
+its status, confirmations, block and txid, and its label. Then come the address
+it pays the most, its path and label when it is one of the wallet, and how many
+other addresses it pays. Amounts are in satoshis, and times in UTC.
 |],
       args =
         CommandTxs
           <$> accountOption
-          <*> tableViewOption
+          <*> listingOutputOption
             txVerboseHelp
             "Show each transaction on one row of a table: its time, type, amount, balance and confirmations, then what it is for: its label, the path of an address of the wallet, or the address paid."
+            "transactions"
           <*> pagingOptions (afterOption "TXID" (maybeReader $ hexToTxHash . cs) "Start after this transaction")
     }
 
--- | How a listing shows each element: in a few lines, with every detail
--- with --verbose, or on one row of a table with --tabular. The two options
--- are a choice, since a table has no room for every detail. Every listing
--- offers both. The help of --verbose comes first, then that of --tabular.
-tableViewOption :: String -> String -> Args View
-tableViewOption verboseHelp tabularHelp =
-  fromMaybe Compact
+-- | Where a listing goes, and how it shows each element: in a few lines,
+-- with every detail with --verbose, on one row of a table with --tabular,
+-- or on one row of a new CSV file with --csv. The options are a choice: a
+-- table has no room for every detail, and a file is not the screen. Every
+-- listing offers them. The help of --verbose comes first, then that of
+-- --tabular, then the name of what the listing lists, for that of --csv.
+listingOutputOption :: String -> String -> String -> Args ListingOutput
+listingOutputOption verboseHelp tabularHelp listed =
+  fromMaybe (OnScreen Compact)
     <$> optional
-      ( flag' Verbose (short 'v' <> long "verbose" <> help verboseHelp)
-          <|> flag' Table (long "tabular" <> help tabularHelp)
+      ( flag' (OnScreen Verbose) (short 'v' <> long "verbose" <> help verboseHelp)
+          <|> flag' (OnScreen Table) (long "tabular" <> help tabularHelp)
+          <|> CsvFile <$> strOption (long "csv" <> metavar "FILENAME" <> fileCompletion <> help csvHelp)
       )
+  where
+    csvHelp = "Write the " <> listed <> " to this file, one on each row, as CSV for a spreadsheet, with amounts in satoshis and times in UTC. The file must not exist yet."
 
 txVerboseHelp :: String
 txVerboseHelp = "Show every detail of each transaction: its label, each address it spends from or pays, with its amount, path and label, the labels of the coins spent as `coins` shows them, and the fee."
@@ -1849,13 +1902,20 @@ names the columns: its account when every account is listed, the time it was
 created, its type, its amount, its status, its fee rate in sat/vB, and what it
 is for, as txs --tabular says it. The account column is as wide as the longest
 name. The table leaves out the hash, which the other commands take.
+
+With --csv FILENAME, each transaction takes one row of a new CSV file, for a
+spreadsheet: its account, when it was created, its type, amount, fee and fee
+rate, its status, its nosigHash, its txid once signed, and its label. Then come
+the address it pays the most, its path and label when it is one of the wallet,
+and how many other addresses it pays. Amounts are in satoshis, and times in UTC.
 |],
       args =
         CommandPendingTxs
           <$> onlyAccountOption
-          <*> tableViewOption
+          <*> listingOutputOption
             txVerboseHelp
             "Show each transaction on one row of a table: its account, time, type, amount, status and fee rate, then what it is for."
+            "pending transactions"
           <*> pagingOptions (afterOption "HASH" (maybeReader $ hexToTxHash . cs) "Start after this pending transaction")
     }
 
@@ -2092,6 +2152,11 @@ confirmations up to 999+, the address that holds it with its path, and the
 label of the address. A coin locked by a pending transaction says "locked by
 tx". The table leaves out the coin itself, TXID:INDEX.
 
+With --csv FILENAME, each coin takes one row of a new CSV file, for a
+spreadsheet: the coin, TXID:INDEX, the time of its transaction, its value, its
+state, its confirmations and block, the address that holds it with its path
+and label, and the label of its transaction. Amounts are in satoshis, and times in UTC.
+
 A coin is spendable when the wallet can spend it now. Nothing locks it, a
 coinbase coin has 100 confirmations, and an unconfirmed coin comes from a
 transaction of the wallet: its change, or what another account of the wallet
@@ -2106,9 +2171,10 @@ unlockcoin.
         CommandCoins
           <$> accountOption
           <*> lockedOption
-          <*> tableViewOption
+          <*> listingOutputOption
             "Show every detail of each coin: the full count of its confirmations, the label of its transaction, the coin, the block that holds it, the time of its transaction, and its address in full with its path."
             "Show each coin on one row of a table: the time of its transaction, its value, state and confirmations, its address and path, and the label of the address."
+            "coins"
           <*> pagingOptions (afterOption "TXID:INDEX" coinReader "Start after this coin")
     }
 

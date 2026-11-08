@@ -108,6 +108,10 @@ Using `hw`:
   columns under a header: `accounts`, `addresses`, `balances`, `coins`, `txs`
   and `pendingtxs`. Nothing in a table is cut. `less` keeps the header of a
   table taller than the screen on the screen.
+- `--csv FILE` writes a listing to a new CSV file, for a spreadsheet: every row,
+  with the identifiers and amounts of the JSON answer in columns of their own.
+  Amounts are in satoshis and times in UTC. A label that a spreadsheet would
+  run as a formula gets an apostrophe in front.
 - `sync` and `recover` show what they are doing on a status line.
 - Tab completion in bash, zsh and fish. It completes commands, options,
   account names, coins, addresses and pending transactions.

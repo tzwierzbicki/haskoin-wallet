@@ -17,7 +17,7 @@ import Haskoin.Wallet.Cli.Listing (Listing, streamListing)
 import Haskoin.Wallet.Cli.Pager (Shown (..), pagerCommand, tableShown, withPager)
 import Haskoin.Wallet.Migration (Hooks (..), migrateDB)
 import Haskoin.Wallet.Backup (backupDatabase, migrationBackupDirectory)
-import Haskoin.Wallet.Cli.Parser (GlobalOptions (..), View (..), addressCodeOf, parserMain, txShownOf, viewOf)
+import Haskoin.Wallet.Cli.Parser (GlobalOptions (..), View (..), addressCodeOf, csvFileOf, parserMain, txShownOf, viewOf)
 import Haskoin.Wallet.Cli.PrettyPrinter (chunkDoc, errorDoc, prettyPrinter, printNextSteps)
 import Haskoin.Wallet.Cli.Response (Response (..), responseFailed)
 import Haskoin.Wallet.Cli.Style (renderPlain)
@@ -47,8 +47,10 @@ clientMain = do
     let unit = commandUnit cfg unitGiven
     migrated <- catchDatabaseInUse $ runDB cfg (migrateDB (migrationHooks cfg) ctx)
     either die return (join migrated)
+    -- A listing goes to the screen, unless --json or --csv asks for it
+    -- whole: then it is an answer as any other
     case commandListing ctx cmd of
-      Just listing | not json -> do
+      Just listing | not json, Nothing <- csvFileOf cmd -> do
         pager <- pagerCommand noPager cfg
         printListing cfg pager unit (viewOf cmd) listing
       _ -> do

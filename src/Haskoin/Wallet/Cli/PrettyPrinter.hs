@@ -559,17 +559,25 @@ coinLine countText unit time coin =
       | jsonCoinConfirmations coin == 0 = styled Waiting "unconfirmed"
       | otherwise = text (countText (jsonCoinConfirmations coin))
 
--- | Whether a coin can be spent now, in the colour of its state: spendable,
--- locked by a pending transaction or by the user, or waiting for a
--- confirmation. The words for a coin a pending transaction spends are
--- given: the compact view spells them out, and the table has little room.
+-- | Whether a coin can be spent now, in the colour of its state
+-- ('coinStateText'): green when it is spendable, yellow when it waits
 coinState :: String -> JsonCoin -> Doc Style
-coinState lockedByTransaction coin = case jsonCoinLock coin of
-  Just LockedByTransaction -> styled Waiting lockedByTransaction
-  Just LockedByUser -> styled Waiting "locked by you"
+coinState lockedByTransaction coin = styled style (coinStateText lockedByTransaction coin)
+  where
+    style = if isNothing (jsonCoinLock coin) && jsonCoinSpendable coin then Good else Waiting
+
+-- | Whether a coin can be spent now, in words: spendable, locked by a
+-- pending transaction or by the user, or not spendable yet, as it waits
+-- for a confirmation. The words for a coin a pending transaction spends
+-- are given: the compact view and a CSV file spell them out, and the table
+-- has little room.
+coinStateText :: String -> JsonCoin -> String
+coinStateText lockedByTransaction coin = case jsonCoinLock coin of
+  Just LockedByTransaction -> lockedByTransaction
+  Just LockedByUser -> "locked by you"
   Nothing
-    | jsonCoinSpendable coin -> styled Good "spendable"
-    | otherwise -> styled Waiting "not spendable yet"
+    | jsonCoinSpendable coin -> "spendable"
+    | otherwise -> "not spendable yet"
 
 -- | The address that holds a coin, as both views give it: in full, then
 -- its path, with its label, or the mark of a change address, on the line
@@ -1122,13 +1130,24 @@ confsCell 0 = styled Waiting "0"
 confsCell n = text (cappedCount n)
 
 -- | How far a transaction in preparation got, in the words of the compact
--- view, as short as they go: not signed, signed, sent, or conflicted
+-- view, as short as they go ('pendingStatusText'), in the colour of where
+-- it stands: red in conflict, green once sent, yellow before
 pendingStatusWord :: PendingStatus -> Doc Style
-pendingStatusWord status
-  | pendingConflicted status = styled Failure "conflicted"
-  | pendingOnline status = styled Good "sent"
-  | pendingSigned status = styled Waiting "signed"
-  | otherwise = styled Waiting "not signed"
+pendingStatusWord status = styled style (pendingStatusText status)
+  where
+    style
+      | pendingConflicted status = Failure
+      | pendingOnline status = Good
+      | otherwise = Waiting
+
+-- | How far a transaction in preparation got, in words: not signed,
+-- signed, sent, or conflicted, which it stays once it is, sent or not
+pendingStatusText :: PendingStatus -> String
+pendingStatusText status
+  | pendingConflicted status = "conflicted"
+  | pendingOnline status = "sent"
+  | pendingSigned status = "signed"
+  | otherwise = "not signed"
 
 -- | The time of a transaction in a column of a table, to the minute
 timeCell :: Maybe ZonedTime -> Doc Style
