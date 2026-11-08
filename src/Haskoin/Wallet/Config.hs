@@ -23,6 +23,7 @@ import Data.Text (Text)
 import Haskoin (Network (..), allNets, btc, netByName)
 import Haskoin.Store.WebClient
 import Haskoin.Wallet.Amounts (AmountUnit (..), readUnit, unitName)
+import Haskoin.Wallet.Cli.View (View (..), readView, viewName, viewNames)
 import Haskoin.Wallet.FileIO
 import Numeric.Natural (Natural)
 import qualified System.Directory as D
@@ -82,6 +83,13 @@ data Config = Config
     -- than "1000" shown. JSON answers count satoshis whatever the unit, so
     -- a script that reads them is not affected.
     configUnit :: AmountUnit,
+    -- | The view of a listing when no --compact, --verbose or --tabular
+    -- is given, for a user who always wants the same one. The option
+    -- overrides it for one listing, and --compact brings back the compact
+    -- view. It sets the screen alone. --json and --csv answer the same
+    -- whatever it says, so a script that reads them is not affected. The
+    -- commands that answer with one element keep their own view.
+    configListingView :: View,
     -- | Whether preparetx sends the change back to an address the payment
     -- spends from, as --change-back does, rather than to a new change
     -- address. --new-change overrides it for one payment.
@@ -109,6 +117,7 @@ instance FromJSON Config where
         <*> (traverse networkNamed =<< o .:? "default-network")
         -- Missing or null, the key reads as the name of the default unit
         <*> (unitNamed =<< key "unit" (unitName . configUnit))
+        <*> (viewNamed =<< key "listing-view" (viewName . configListingView))
         <*> key "change-back" configChangeBack
         <*> o .:? "pager"
 
@@ -123,6 +132,13 @@ unitNamed :: Text -> Parser AmountUnit
 unitNamed text = maybe (fail refused) return (readUnit text)
   where
     refused = "The key \"unit\" must be a unit: btc, bit or sat"
+
+-- | The view of a name in the configuration file, as the option that asks
+-- for it writes it
+viewNamed :: Text -> Parser View
+viewNamed text = maybe (fail refused) return (readView text)
+  where
+    refused = "The key \"listing-view\" must be a view: " <> intercalate ", " (cs <$> viewNames)
 
 -- | A count of the configuration cannot be zero: a gap of zero would refuse
 -- every new address, and zero requests at a time would send none
@@ -139,6 +155,7 @@ instance ToJSON Config where
         "database-file" .= configDatabaseFile cfg,
         "default-network" .= ((.name) <$> configDefaultNetwork cfg),
         "unit" .= unitName (configUnit cfg),
+        "listing-view" .= viewName (configListingView cfg),
         "change-back" .= configChangeBack cfg,
         "pager" .= configPager cfg
       ]
@@ -152,6 +169,7 @@ instance Default Config where
         configDatabaseFile = Nothing,
         configDefaultNetwork = Just btc,
         configUnit = UnitBitcoin,
+        configListingView = Compact,
         configChangeBack = False,
         configPager = Nothing
       }

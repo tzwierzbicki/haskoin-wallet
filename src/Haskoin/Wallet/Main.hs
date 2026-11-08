@@ -9,7 +9,7 @@ import qualified Data.ByteString.Char8 as C8
 import GHC.IO.Encoding (setFileSystemEncoding, setLocaleEncoding, utf8)
 import Haskoin (withContext)
 import Haskoin.Wallet.Commands (commandListing, commandResponse)
-import Haskoin.Wallet.Config (Config, commandUnit, databaseFile, initConfig)
+import Haskoin.Wallet.Config (Config (..), commandUnit, databaseFile, initConfig)
 import Haskoin.Wallet.Amounts (AmountUnit)
 import Haskoin.Wallet.Database (DB, catchDatabaseInUse, runDB)
 import Haskoin.Wallet.Memory (keepMemoryPrivate)
@@ -17,7 +17,8 @@ import Haskoin.Wallet.Cli.Listing (Listing, streamListing)
 import Haskoin.Wallet.Cli.Pager (Shown (..), pagerCommand, tableShown, withPager)
 import Haskoin.Wallet.Migration (Hooks (..), migrateDB)
 import Haskoin.Wallet.Backup (backupDatabase, migrationBackupDirectory)
-import Haskoin.Wallet.Cli.Parser (GlobalOptions (..), View (..), addressCodeOf, csvFileOf, parserMain, txShownOf, viewOf)
+import Haskoin.Wallet.Cli.Parser (GlobalOptions (..), addressCodeOf, csvFileOf, parserMain, txShownOf, viewOf)
+import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Cli.PrettyPrinter (chunkDoc, errorDoc, prettyPrinter, printNextSteps)
 import Haskoin.Wallet.Cli.Response (Response (..), responseFailed)
 import Haskoin.Wallet.Cli.Style (renderPlain)
@@ -45,6 +46,8 @@ clientMain = do
     (cfg, warnings) <- either die return =<< initConfig
     forM_ warnings $ hPutStrLn stderr
     let unit = commandUnit cfg unitGiven
+        -- The view an option asks for, or that of the configuration
+        view = viewOf (configListingView cfg) cmd
     migrated <- catchDatabaseInUse $ runDB cfg (migrateDB (migrationHooks cfg) ctx)
     either die return (join migrated)
     -- A listing goes to the screen, unless --json or --csv asks for it
@@ -52,13 +55,13 @@ clientMain = do
     case commandListing ctx cmd of
       Just listing | not json, Nothing <- csvFileOf cmd -> do
         pager <- pagerCommand noPager cfg
-        printListing cfg pager unit (viewOf cmd) listing
+        printListing cfg pager unit view listing
       _ -> do
         res <- commandResponse ctx cfg unit cmd
         if json
           then jsonPrinter res
           else do
-            prettyPrinter unit (viewOf cmd) (addressCodeOf cmd) (txShownOf cmd) res
+            prettyPrinter unit view (addressCodeOf cmd) (txShownOf cmd) res
             printNextSteps cmd res
 
 -- | Print a listing on the screen, chunk by chunk, through the pager when

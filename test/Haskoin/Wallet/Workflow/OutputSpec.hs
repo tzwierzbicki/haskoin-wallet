@@ -2,7 +2,8 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | What hw shows: the listings and their paging, a transaction as hw
+-- | What hw shows: the listings, their paging and the view the
+-- configuration file names for them, a transaction as hw
 -- lays it out, the pending transactions, the balances of the addresses,
 -- the coins, the next step shown after a payment or a sweep, the CSV
 -- files of --csv, and the spreadsheet of exportsheet.
@@ -84,6 +85,7 @@ spec = prepareContext $ \ctx -> do
         run `shouldSatisfy` shown "\rrecover: looking at /44'/0'/0', 0 accounts paid so far\ESC[0K"
 
   listingSpec ctx
+  listingViewSpec ctx
   layoutSpec ctx
   pendingListSpec ctx
   csvSpec ctx
@@ -259,6 +261,76 @@ listingSpec ctx = do
         olderId <- txidOf =<< txOf =<< answer home ["signtx", older] seedOnce
         newerId <- txidOf =<< txOf =<< answer home ["signtx", newer] seedOnce
         (keysOf <$> hwJson home ["pendingtxs", "--after", newerId] []) `shouldReturn` Right [olderId]
+
+-- | The key listing-view of the configuration file, for a user who always
+-- wants the same view, and --compact, which brings back the compact view
+listingViewSpec :: Ctx -> Spec
+listingViewSpec ctx =
+  describe "The view of the listings that the configuration file names" $ do
+    -- The first column is as wide as its heading, which is longer than
+    -- the name main
+    it "shows a listing in that view when no option asks for one" $
+      withHome $ \home -> do
+        createMain home
+        setListingView home "tabular"
+        listed <- Text.lines . runOut <$> hw home ["accounts"] []
+        take 1 listed `shouldBe` ["Account │ Network │ Path       │ Spendable (btc) │ Unconfirmed (btc) │ Coins"]
+        listed `shouldContain` ["main    │ btc     │ /44'/0'/0' │      0.00000000 │        0.00000000 │     0"]
+
+    -- Only the verbose view gives the block of a coin
+    it "can be the verbose view" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        setListingView home "verbose"
+        run <- hw home ["coins"] []
+        Text.lines (runOut run) `shouldContain` ["  Block  : 800000"]
+
+    -- A table has a line of dashes under its headings, the second line,
+    -- which no other view has. The payment prepared gives each listing
+    -- a row.
+    it "is the view of each of the six listings" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        setListingView home "tabular"
+        let ruleOfTable line = not (Text.null line) && Text.all (`elem` ("─┼" :: String)) line
+        forM_ ("accounts" : listings) $ \listing -> do
+          listed <- Text.lines . runOut <$> hw home [listing] []
+          -- The name of the listing goes with the check, so that a
+          -- failure tells which listing it was
+          (listing, ruleOfTable <$> take 1 (drop 1 listed)) `shouldBe` (listing, [True])
+
+    -- The two lines of the compact view of an account nothing has paid
+    it "gives way to --compact, which shows the compact view" $
+      withHome $ \home -> do
+        createMain home
+        setListingView home "tabular"
+        run <- hw home ["accounts", "--compact"] []
+        runOut run `shouldBe` "main  btc  /44'/0'/0'\n  spendable 0.00000000 btc, no coins\n"
+
+    -- Only the verbose view gives the fingerprint of the seed
+    it "gives way to the view another option asks for" $
+      withHome $ \home -> do
+        createMain home
+        setListingView home "tabular"
+        run <- hw home ["accounts", "--verbose"] []
+        runOut run `shouldSatisfy` Text.isInfixOf ("\n  Fingerprint: " <> testFingerprintText <> "\n")
+
+    -- A script that reads the JSON answers is not affected by the view
+    it "leaves the JSON answer of a listing as it is" $
+      withHome $ \home -> do
+        createMain home
+        setListingView home "tabular"
+        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("main", 0, 0)]
+
+    -- lockcoin answers with one coin, as a listing of coins does, but it
+    -- is not a listing. The block is in its verbose view only.
+    it "leaves a command that answers with one element in its own view" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        setListingView home "tabular"
+        run <- hw home ["lockcoin", coinArg (payment ctx) 0] []
+        Text.lines (runOut run) `shouldContain` ["  Block  : 800000"]
 
 {- Transactions as hw shows them -}
 

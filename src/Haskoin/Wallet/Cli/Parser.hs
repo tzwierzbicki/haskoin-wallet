@@ -43,6 +43,7 @@ import Haskoin.Wallet.Cli.Parser.Args
 import Haskoin.Wallet.Cli.Parser.Completion (completeFile)
 import Haskoin.Wallet.Cli.Parser.Run (runProgram)
 import Haskoin.Wallet.Cli.Listing (Paging (..))
+import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Util (readNatural)
 import Numeric.Natural (Natural)
 import qualified Options.Applicative as O
@@ -136,19 +137,14 @@ data Command
     CommandSignSweep !Signing !(Maybe KeySource) !(Maybe Network)
   deriving (Eq, Show)
 
--- | How a listing shows each element: in a few lines, with every detail
--- with --verbose, or on one row of a table with --tabular. A table suits
--- reading down a column, such as the amounts or the balances. It gives up
--- the details that do not fit on a row. Every listing offers it.
-data View = Compact | Verbose | Table
-  deriving (Eq, Show)
-
 -- | Where a listing goes: on the screen, in the view asked for, or to a
 -- new CSV file with --csv, for a spreadsheet ("Haskoin.Wallet.Cli.Csv").
--- A file is not a view: it has no colours and no widths, and holds every
--- row whole, more columns than a table. The screen and the file are a
--- choice, as the views are.
-data ListingOutput = OnScreen !View | CsvFile !FilePath
+-- On the screen, Nothing means that no option asked for a view: the
+-- listing then takes the key listing-view of the configuration, which
+-- the parser does not read ('viewOf'). A file is not a view: it has no
+-- colours and no widths, and holds every row whole, more columns than a
+-- table. The screen and the file are a choice, as the views are.
+data ListingOutput = OnScreen !(Maybe View) | CsvFile !FilePath
   deriving (Eq, Show)
 
 -- | The output a listing command asks for. Nothing for another command.
@@ -168,16 +164,19 @@ csvFileOf cmd = case listingOutputOf cmd of
   _ -> Nothing
 
 -- | How the command shows each element it lists, as asked of accounts,
--- addresses, balances, txs, pendingtxs and coins. The other commands have
--- one view. A listing written to a CSV file answers with the file, in
--- the compact view.
-viewOf :: Command -> View
-viewOf cmd | Just (OnScreen view) <- listingOutputOf cmd = view
+-- addresses, balances, txs, pendingtxs and coins, or else in the listing
+-- view given, the key listing-view of the configuration. The other
+-- commands have one view, which the key does not change: it is about
+-- listings. A listing written to a CSV file answers with the file, in the
+-- compact view.
+viewOf :: View -> Command -> View
+viewOf listingView cmd
+  | Just (OnScreen asked) <- listingOutputOf cmd = fromMaybe listingView asked
 -- The one coin they answer with, with every detail, as the other commands
 -- that answer with one element show it
-viewOf (CommandLockCoin _) = Verbose
-viewOf (CommandUnlockCoin _) = Verbose
-viewOf _ = Compact
+viewOf _ (CommandLockCoin _) = Verbose
+viewOf _ (CommandUnlockCoin _) = Verbose
+viewOf _ _ = Compact
 
 -- | Whether an address in an answer comes with its QR code, on a terminal
 data AddressCode = WithCode | WithoutCode
@@ -485,8 +484,8 @@ scrolls to the rest of it. --csv FILENAME writes a listing to a new file for a
 spreadsheet instead, every row whole.
 
 The options --unit, --json and --no-pager go before or after the command.
-The settings, such as the server, the default network, the unit, the address
-gap and the pager, are in ~/.hw/config.json.
+The settings, such as the server, the default network, the unit, the view of
+the listings, the address gap and the pager, are in ~/.hw/config.json.
 
 The Tab key completes the commands, the options, and what the wallet holds:
 account names, the hashes of pending transactions, coins and addresses. The
@@ -1533,21 +1532,28 @@ other addresses it pays. Amounts are in satoshis, and times in UTC.
           <*> pagingOptions (afterOption "TXID" (maybeReader $ hexToTxHash . cs) "Start after this transaction")
     }
 
--- | Where a listing goes, and how it shows each element: in a few lines,
--- with every detail with --verbose, on one row of a table with --tabular,
--- or on one row of a new CSV file with --csv. The options are a choice: a
--- table has no room for every detail, and a file is not the screen. Every
--- listing offers them. The help of --verbose comes first, then that of
--- --tabular, then the name of what the listing lists, for that of --csv.
+-- | Where a listing goes, and how it shows each element: in a few lines
+-- with --compact, with every detail with --verbose, on one row of a table
+-- with --tabular, or on one row of a new CSV file with --csv. The options
+-- are a choice: a table has no room for every detail, and a file is not
+-- the screen. Every listing offers them. Without any of them, the listing
+-- takes the view of the configuration, compact unless the key listing-view
+-- names another. --compact exists for a user whose configuration names
+-- another view: it brings the compact view back for one listing, as
+-- --new-change does for change-back. The help of --verbose comes first,
+-- then that of --tabular, then the name of what the listing lists, for
+-- those of --compact and --csv.
 listingOutputOption :: String -> String -> String -> Args ListingOutput
 listingOutputOption verboseHelp tabularHelp listed =
-  fromMaybe (OnScreen Compact)
+  fromMaybe (OnScreen Nothing)
     <$> optional
-      ( flag' (OnScreen Verbose) (short 'v' <> long "verbose" <> help verboseHelp)
-          <|> flag' (OnScreen Table) (long "tabular" <> help tabularHelp)
+      ( flag' (OnScreen (Just Compact)) (long "compact" <> help compactHelp)
+          <|> flag' (OnScreen (Just Verbose)) (short 'v' <> long "verbose" <> help verboseHelp)
+          <|> flag' (OnScreen (Just Table)) (long "tabular" <> help tabularHelp)
           <|> CsvFile <$> strOption (long "csv" <> metavar "FILENAME" <> fileCompletion <> help csvHelp)
       )
   where
+    compactHelp = "Show the " <> listed <> " in a few lines each. It is the default, unless the key listing-view of config.json names another view."
     csvHelp = "Write the " <> listed <> " to this file, one on each row, as CSV for a spreadsheet, with amounts in satoshis and times in UTC. The file must not exist yet."
 
 txVerboseHelp :: String

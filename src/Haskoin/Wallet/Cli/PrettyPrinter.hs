@@ -45,12 +45,13 @@ import Haskoin.Wallet.Tx.FeeRates (FeeRates (..), levelName, rateAt)
 import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), foreignKindDescription)
 import Haskoin.Wallet.Labels (AccountImport (..), ImportReport (..), reportNeedsSync)
 import Haskoin.Wallet.MessageSigning (signedMessageText)
-import Haskoin.Wallet.Cli.Parser (AddressCode (..), BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), TxShown (..), View (..), program)
+import Haskoin.Wallet.Cli.Parser (AddressCode (..), BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), TxShown (..), program)
 import Haskoin.Wallet.Cli.Parser.Help (commandName)
 import Haskoin.Wallet.Cli.Parser.Run (commandNamed)
 import Haskoin.Wallet.Cli.QrCode (paymentUri, qrRows)
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Style
+import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.Tx.BumpFee (PaidBy (..), Reduction (..), Sent, sentId)
 import Haskoin.Wallet.Database.TxInfo

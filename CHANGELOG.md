@@ -126,6 +126,10 @@ Using `hw`:
   given no `--network`.
 - The key `unit` of the configuration sets the unit of the amounts of a
   command given no `--unit`.
+- The key `listing-view` of the configuration sets the view of the six
+  listings given no `--compact`, `--verbose` or `--tabular`. It is `compact`,
+  `verbose` or `tabular`. `--compact` shows the compact view whatever the key
+  says.
 
 ### Changed
 

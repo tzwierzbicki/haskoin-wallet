@@ -12,6 +12,7 @@ import Data.List (isPrefixOf)
 import Data.String.Conversions (cs)
 import Haskoin (bch)
 import Haskoin.Wallet.Amounts (AmountUnit (..))
+import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.TestUtils (inScratchDirectory)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), testIdentity)
@@ -53,7 +54,7 @@ keySpec =
       decodeConfig [r|{"gap": 30}|] `shouldBe` Right withoutNetwork {configGap = 30}
 
     it "takes its default when null" $
-      decodeConfig [r|{"gap": null, "database-file": null, "unit": null}|] `shouldBe` Right withoutNetwork
+      decodeConfig [r|{"gap": null, "database-file": null, "unit": null, "listing-view": null}|] `shouldBe` Right withoutNetwork
 
     -- For a user of one network: the commands that need one take it
     -- without --network
@@ -81,6 +82,20 @@ keySpec =
     it "cannot be a unit hw does not know" $
       decodeConfig [r|{"unit": "mbtc"}|]
         `shouldBe` Left "Error in $: The key \"unit\" must be a unit: btc, bit or sat"
+
+    -- For a user who always wants a table: the listings show one without
+    -- --tabular
+    it "sets the view of the listings when no option asks for one" $
+      configListingView <$> decodeConfig [r|{"listing-view": "tabular"}|] `shouldBe` Right Table
+
+    it "names each view as the option that asks for it does" $ do
+      configListingView <$> decodeConfig [r|{"listing-view": "compact"}|] `shouldBe` Right Compact
+      configListingView <$> decodeConfig [r|{"listing-view": "verbose"}|] `shouldBe` Right Verbose
+
+    -- "table" is what the help calls the view, but not its name
+    it "cannot be a view hw does not know, naming the views it knows" $
+      decodeConfig [r|{"listing-view": "table"}|]
+        `shouldBe` Left "Error in $: The key \"listing-view\" must be a view: compact, verbose, tabular"
 
     -- A new file does not: the change of a payment goes to a new change
     -- address unless --change-back says otherwise
@@ -173,6 +188,7 @@ defaultFile =
   "database-file": null,
   "default-network": "btc",
   "unit": "btc",
+  "listing-view": "compact",
   "change-back": false,
   "pager": null
 }|]

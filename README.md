@@ -227,6 +227,18 @@ what it pays. JSON answers give every amount in satoshis, whatever the unit.
 
 ### Listings
 
+Six commands list what the wallet holds: `accounts`, `addresses`, `balances`,
+`coins`, `txs` and `pendingtxs`. By default, they show each element in a few
+lines. This is the compact view. `--verbose` gives every detail of each
+element. `--tabular` gives each element one row of a table. The section of each
+command says what its views show.
+
+If you always want the same view, set the key `listing-view` of the
+[configuration](#configuration) to `verbose` or `tabular`. `--compact` then
+brings back the compact view for one listing. The key changes the screen alone.
+`--json` and `--csv` answer as they would without it. A command that answers
+with one element, such as `lockcoin`, keeps its own view.
+
 On a terminal, a listing such as `hw txs` goes through `less`. The arrow keys
 scroll it, `/` searches it and `q` quits it. A listing that fits on the screen
 is shown as it is. `HW_PAGER`, the key `pager` of `config.json` or `PAGER` name
@@ -1355,6 +1367,7 @@ On its first command, `hw` creates the directory `~/.hw`. It holds the database
 | `host` | `https://api.haskoin.com/` | The haskoin-store server |
 | `default-network` | `btc` | The network of a command given no `--network` |
 | `unit` | `btc` | The unit of the amounts of a command given no `--unit`: `btc`, `bit` or `sat` |
+| `listing-view` | `compact` | The [view of a listing](#listings) given no `--compact`, `--verbose` or `--tabular`: `compact`, `verbose` or `tabular` |
 | `gap` | `20` | How many unused addresses in a row `receive` gives out and `sync` looks at |
 | `change-back` | `false` | Whether `preparetx` sends the change back to an address it spends from |
 | `parallel-requests` | `1` | How many requests go to the server at once. The public server takes one at a time, so keep it at 1 unless you run your own haskoin-store. |

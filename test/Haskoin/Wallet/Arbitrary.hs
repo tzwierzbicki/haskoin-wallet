@@ -19,6 +19,7 @@ import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Cli.Response
+import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Labels (AccountImport (..), ImportReport (..))
@@ -357,6 +358,7 @@ arbitraryConfig =
     <*> arbitrary
     <*> arbitraryMaybe arbitraryNetwork
     <*> elements [UnitBitcoin, UnitBit, UnitSatoshi]
+    <*> elements [Compact, Verbose, Table]
     <*> arbitrary
     <*> arbitraryMaybe arbitraryText
   where

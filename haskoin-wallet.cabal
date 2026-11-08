@@ -90,6 +90,7 @@ library
       Haskoin.Wallet.Cli.Response
       Haskoin.Wallet.Cli.Sheet
       Haskoin.Wallet.Cli.Style
+      Haskoin.Wallet.Cli.View
       Haskoin.Wallet.Commands
       Haskoin.Wallet.Config
       Haskoin.Wallet.Database

@@ -14,6 +14,7 @@ module Haskoin.Wallet.HwTestUtils
     setDefaultNetwork,
     setChangeBack,
     setUnit,
+    setListingView,
     hw,
     hwWithEnv,
     hwOnTerminal,
@@ -126,6 +127,11 @@ setChangeBack home on = editConfig home (KeyMap.insert "change-back" (Json.Bool 
 -- configuration file of a home
 setUnit :: FilePath -> Text -> IO ()
 setUnit home name = editConfig home (KeyMap.insert "unit" (Json.String name))
+
+-- | Set the view of the listings without --compact, --verbose or
+-- --tabular, by its name, in the configuration file of a home
+setListingView :: FilePath -> Text -> IO ()
+setListingView home name = editConfig home (KeyMap.insert "listing-view" (Json.String name))
 
 -- | Change the keys of the configuration file of a home
 editConfig :: FilePath -> (Json.Object -> Json.Object) -> IO ()

@@ -19,7 +19,7 @@ import Haskoin.Wallet.Amounts (AmountUnit (..))
 import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..))
 import Haskoin.Wallet.Database (DBAccount (..), DBAddress (..))
 import Haskoin.Wallet.Keys (ForeignKind (..), MnemonicPass (..))
-import Haskoin.Wallet.Cli.Parser (View (..))
+import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Cli.PrettyPrinter
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.Cli.Style (renderPlain)
