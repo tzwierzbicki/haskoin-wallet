@@ -18,7 +18,7 @@
 --
 -- The replacement is a pending transaction like any other, which names the
 -- transactions it replaces ('txSignDataReplaces'): signtx signs it, and
--- sendtx sends it and retires those still pending.
+-- broadcast sends it and retires those still pending.
 module Haskoin.Wallet.Tx.BumpFee
   ( Sent (..),
     transactionAccounts,

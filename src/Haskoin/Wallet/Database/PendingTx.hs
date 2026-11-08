@@ -553,7 +553,7 @@ setPendingTxOnline nosigH =
 
 -- | What sending does last before a transaction goes on the network, for
 -- good: given the transaction, its network, and its account when the
--- wallet holds it, it may stop the sending with an error. sendtx shows the
+-- wallet holds it, it may stop the sending with an error. broadcast shows the
 -- transaction there and asks the user.
 type BeforeSending m = Network -> Maybe DBAccount -> TxInfo -> ExceptT String (DB m) ()
 

@@ -65,7 +65,7 @@ commandLineSpec ctx = do
     it "of a command ends with the commands its text names" $
       withHome $ \home -> do
         run <- hw home ["preparetx", "--help"] []
-        runOut run `shouldSatisfy` Text.isSuffixOf "See also: signtx, sendtx, pendingtxs, deletetx, bumpfee\n"
+        runOut run `shouldSatisfy` Text.isSuffixOf "See also: signtx, broadcast, pendingtxs, deletetx, bumpfee\n"
 
     it "of the program lists the commands by group with --help" $
       withHome $ \home -> do
@@ -347,37 +347,37 @@ commandLineSpec ctx = do
         run <- hw home (tabAfter ["signtx", take 4 txid]) []
         runOut run `shouldBe` ""
 
-    it "offers the id of a signed transaction after sendtx" $
+    it "offers the id of a signed transaction after broadcast" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         _ <- paymentSigned home
         txid <- txidOf =<< onePendingTx home
-        run <- hw home (tabAfter ["sendtx", take 4 txid]) []
+        run <- hw home (tabAfter ["broadcast", take 4 txid]) []
         runOut run `shouldBe` Text.pack txid <> "\n"
 
-    it "does not offer a transaction not signed yet after sendtx" $
+    it "does not offer a transaction not signed yet after broadcast" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
-        run <- hw home (tabAfter ["sendtx", take 4 nosig]) []
+        run <- hw home (tabAfter ["broadcast", take 4 nosig]) []
         runOut run `shouldBe` ""
 
     -- The sync sends it again should the network lose it
-    it "does not offer a transaction sent already after sendtx" $
+    it "does not offer a transaction sent already after broadcast" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         txid <- sentPayment home
-        run <- hw home (tabAfter ["sendtx", take 4 txid]) []
+        run <- hw home (tabAfter ["broadcast", take 4 txid]) []
         runOut run `shouldBe` ""
 
     -- Another transaction of the mempool spends the coin of the payment,
     -- which the sync finds
-    it "does not offer a transaction in conflict after sendtx, which the network would refuse" $
+    it "does not offer a transaction in conflict after broadcast, which the network would refuse" $
       withChain ctx (paidChain ctx) $ \home chain -> do
         _ <- paymentSigned home
         let other = spendingTx ctx [(txHash (payment ctx), 0)] [(otherAddr 1, 40000)]
         modifyIORef chain $ \c -> c {chainTxs = c.chainTxs <> [(other, Nothing)]}
         _ <- hw home ["sync"] []
         txid <- txidOf =<< onePendingTx home
-        run <- hw home (tabAfter ["sendtx", take 4 txid]) []
+        run <- hw home (tabAfter ["broadcast", take 4 txid]) []
         runOut run `shouldBe` ""
 
     it "offers a transaction in conflict after deletetx, which frees its coins" $

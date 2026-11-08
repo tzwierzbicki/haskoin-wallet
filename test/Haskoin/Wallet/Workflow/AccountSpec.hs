@@ -357,7 +357,7 @@ segwitSpec ctx =
         map (.script) signedTx.inputs `shouldBe` [BS.empty]
         map length signedTx.witness `shouldBe` [2]
         txid <- txidOf signed
-        sent <- txOf =<< answer home ["sendtx", nosig, "--yes"] []
+        sent <- txOf =<< answer home ["broadcast", nosig, "--yes"] []
         txidOf sent `shouldReturn` txid
         (accountsOf <$> hwJson home ["sync"] []) `shouldReturn` Right [("spending", 0, 28560)]
 

@@ -98,7 +98,7 @@ hw receive --label "first deposit"          # give this address to the payer
 hw sync                                     # once the payment is sent
 hw preparetx ADDRESS:0.0005 --fee-rate median
 hw signtx NOSIGHASH                         # type the mnemonic again
-hw sendtx TXID                              # the txid signtx shows
+hw broadcast TXID                           # the txid signtx shows
 hw sync
 ```
 
@@ -137,7 +137,7 @@ digits, which the next steps and the listings show.
 4. On the online computer, send it:
 
    ```console
-   hw sendtx --input signed.psbt
+   hw broadcast --input signed.psbt
    hw sync
    ```
 
@@ -383,7 +383,7 @@ server, so they are not marked.
 | [`preparetx`](#hw-preparetx) | Prepare a payment, with coin control if you like |
 | [`preparesendall`](#hw-preparesendall) | Prepare a payment of all the coins of an account |
 | [`signtx`](#hw-signtx) `!` | Sign a pending transaction or a transaction file |
-| [`sendtx`](#hw-sendtx) | Send a signed transaction to the network |
+| [`broadcast`](#hw-broadcast) | Send a signed transaction to the network |
 | [`bumpfee`](#hw-bumpfee) | Replace a stuck payment with one that pays a higher fee |
 | **[Transactions](#transactions)** | |
 | [`txs`](#hw-txs) | List the transactions of an account |
@@ -1016,14 +1016,14 @@ hw signtx NOSIGHASH
 hw signtx --input unsigned.psbt --output signed.psbt
 ```
 
-#### `hw sendtx`
+#### `hw broadcast`
 
 Shows a signed transaction, asks, and sends it. It then waits up to ten seconds
 for the server to see it.
 
 ```console
-hw sendtx TXID
-hw sendtx --input signed.psbt
+hw broadcast TXID
+hw broadcast --input signed.psbt
 ```
 
 > **Good to know**
@@ -1041,7 +1041,7 @@ transactions. Sign and send the replacement like any payment.
 ```console
 hw bumpfee TXID --fee-rate high
 hw signtx NOSIGHASH
-hw sendtx TXID                              # the txid of the replacement
+hw broadcast TXID                           # the txid of the replacement
 ```
 
 The extra fee comes out of the change. When the change cannot pay it, `hw`
@@ -1209,7 +1209,7 @@ address of this wallet is kept as a pending transaction.
 ```console
 hw preparesweep --sweep-from OLDADDRESS --sweep-to MYADDRESS --fee-rate median
 hw signsweep NOSIGHASH --key-file keys.txt
-hw sendtx TXID
+hw broadcast TXID
 ```
 
 | Coins swept | Option |
@@ -1225,7 +1225,7 @@ and no account. It goes from file to file:
 ```console
 hw preparesweep --sweep-from OLDADDRESS --sweep-to ADDRESS --network btc --fee-rate median --output sweep.psbt
 hw signsweep --input sweep.psbt --key-file keys.txt --output signed.psbt
-hw sendtx --input signed.psbt
+hw broadcast --input signed.psbt
 ```
 
 > **Good to know**
@@ -1340,8 +1340,8 @@ hw exportsheet savings.ods --account savings
 `--output`, `exporttx`, `--input` and `importtx` carry a transaction in a file.
 The file is a PSBT, the format of [BIP 174], so other wallets show it too. A
 hardware wallet, or another wallet with the keys, can sign it in place of the
-offline computer, and `sendtx --input` takes the signed file back, finalized or
-not.
+offline computer, and `broadcast --input` takes the signed file back,
+finalized or not.
 
 ### What a file holds
 
@@ -1391,13 +1391,14 @@ The files of other wallets are read the same way, in bytes or in base64 text, in
 version 0 of the format or in version 2 ([BIP 370]). A file is signed back in
 its version.
 
-- **`importtx` and `sendtx --input`** take a file another signer returned,
+- **`importtx` and `broadcast --input`** take a file another signer returned,
   finalized or not. `hw` finalizes an input left signed and not final, and
   refuses a signature that does not verify. It keeps from the version it holds
   what such a file may leave out: the paths of its signed inputs, when another
   wallet prepared it, the fee rate and the label.
-- **`sendtx --input`** also takes the signed transaction alone, in hexadecimal
-  as a wallet gives it once finalized, when the wallet holds the transaction.
+- **`broadcast --input`** also takes the signed transaction alone, in
+  hexadecimal as a wallet gives it once finalized, when the wallet holds the
+  transaction.
 - **`signtx --input`** signs a file another wallet prepared for an account of
   the wallet, with the sighash ALL only, and only when every input that is not
   the account's is signed already. The signed file keeps every field of it,
@@ -1405,7 +1406,7 @@ its version.
   of the address each of them spends from.
 
 Such a file names no network. The account it involves tells it. A file that
-involves no account of the wallet, for `reviewtx`, `sendtx` or `signsweep`,
+involves no account of the wallet, for `reviewtx`, `broadcast` or `signsweep`,
 needs `--network`, or the `default-network` of the configuration file.
 
 ### Paths `hw` refuses
@@ -1497,8 +1498,8 @@ Each command is offered what it takes from your wallet:
 
 - The names of your accounts.
 - The hashes of your pending transactions. `signtx` offers those to sign,
-  `sendtx` those signed and not sent yet, and `exporttx` and `deletetx` all of
-  them.
+  `broadcast` those signed and not sent yet, and `exporttx` and `deletetx`
+  all of them.
 - The transactions `bumpfee` can replace: your own payments on Bitcoin that
   are not in a block yet.
 - Your coins. `lockcoin` offers the free ones, `unlockcoin` those you locked,

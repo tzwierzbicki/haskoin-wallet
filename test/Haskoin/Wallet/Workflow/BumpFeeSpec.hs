@@ -29,7 +29,7 @@ spec = prepareContext $ \ctx -> do
 signAndSend :: FilePath -> String -> IO String
 signAndSend home nosig = do
   _ <- answer home ["signtx", nosig] seedOnce
-  txidOf =<< txOf =<< answer home ["sendtx", nosig, "--yes"] []
+  txidOf =<< txOf =<< answer home ["broadcast", nosig, "--yes"] []
 
 -- | The ids of the transactions a replacement replaces, as typed
 replacesOf :: TxInfo -> [String]
@@ -167,7 +167,7 @@ bumpFeeSpec ctx = do
         _ <- answer home ["sync"] []
         listed <- hwJson home ["pendingtxs"] []
         (conflictsOf <$> pendingInfosOf listed) `shouldBe` Right [False]
-        sent <- txOf =<< answer home ["sendtx", nosig, "--yes"] []
+        sent <- txOf =<< answer home ["broadcast", nosig, "--yes"] []
         pendingState sent `shouldBe` Just (True, True)
 
     it "takes the higher fee from the change it sent back to the address it spends from" $
@@ -294,7 +294,7 @@ bumpFeeSpec ctx = do
         _ <- answer home ["signtx", nosig] seedOnce
         modifyIORef chain mine
         _ <- answer home ["sync"] []
-        (errorOf <$> hwJson home ["sendtx", nosig, "--yes"] [])
+        (errorOf <$> hwJson home ["broadcast", nosig, "--yes"] [])
           `shouldReturn` Right ("The transaction " <> Text.pack stuck <> " it replaces is in a block already: delete this replacement with deletetx")
 
   -- main pays 20000 to the first address of second, and another wallet of
@@ -349,12 +349,12 @@ bumpFeeSpec ctx = do
         nosig <- nosigOf =<< txOf =<< answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
         _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
         _ <- answer online ["importtx", signer </> "signed.psbt"] []
-        stuck <- txidOf =<< txOf =<< answer online ["sendtx", nosig, "--yes"] []
+        stuck <- txidOf =<< txOf =<< answer online ["broadcast", nosig, "--yes"] []
         bumpNosig <- nosigOf =<< txOf =<< answer online ["bumpfee", stuck, "--fee-rate", "20", "--output", online </> "bump.json"] []
         signed <- txOf =<< answer signer ["signtx", "--input", online </> "bump.json", "--output", signer </> "bump-signed.psbt"] seedOnce
         replacesOf signed `shouldBe` [stuck]
         _ <- answer online ["importtx", signer </> "bump-signed.psbt"] []
-        _ <- answer online ["sendtx", bumpNosig, "--yes"] []
+        _ <- answer online ["broadcast", bumpNosig, "--yes"] []
         (pendingNosigsOf <$> hwJson online ["pendingtxs"] []) `shouldReturn` Right [bumpNosig]
 
   describe "A payment bumpfee does not replace" $ do

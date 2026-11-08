@@ -123,7 +123,7 @@ data Command
   | -- | A pending transaction, by its txid or its nosigHash, in full or by
     -- its short id, or the file of a signed one, whether to send it without asking, and the network
     -- of a file that names none and that the wallet does not hold
-    CommandSendTx !(Maybe HashRef) !(Maybe FilePath) !Bool !(Maybe Network)
+    CommandBroadcast !(Maybe HashRef) !(Maybe FilePath) !Bool !(Maybe Network)
   | CommandBumpFee !BumpFee
   | -- | The account, or every one, and whether to sync from the start
     CommandSync !(Maybe Text) !Bool
@@ -470,7 +470,7 @@ A payment takes three steps:
 
   hw preparetx ADDRESS:AMOUNT    prepare it, without any key
   hw signtx NOSIGHASH            sign it with the mnemonic
-  hw sendtx TXID                 send it to the network
+  hw broadcast TXID              send it to the network
 
 preparetx shows the nosigHash of the new transaction. signtx shows its txid,
 the id the network knows it by.
@@ -482,8 +482,8 @@ digits, hw names both and asks for the full hash.
 
 To sign on an offline computer, create the account there with createacc. Copy
 it to the online computer with exportacc and importacc. Then carry each
-transaction between them with preparetx --output, signtx --input and sendtx
---input.
+transaction between them with preparetx --output, signtx --input and
+broadcast --input.
 
 `recover` and preparesweep --key-file take a mnemonic or private keys too, but
 they need the server, so they run on an online computer. Their help says how to
@@ -547,7 +547,7 @@ Type hw COMMAND --help for the help of a command.
               prepareTxCommand,
               prepareSendAllCommand,
               signTxCommand,
-              sendTxCommand,
+              broadcastCommand,
               bumpFeeCommand
             ],
           CommandGroup
@@ -1600,7 +1600,7 @@ prepareTxCommand =
         [r|
 A payment takes three steps. preparetx builds the transaction, unsigned. It
 needs no mnemonic, so it can run on an online computer. signtx then signs it,
-on an offline computer if you like, and sendtx sends it to the network.
+on an offline computer if you like, and broadcast sends it to the network.
 
 The new transaction is kept as a pending transaction, which pendingtxs lists.
 --output also writes it to a file, a PSBT (BIP 174), to carry to an offline
@@ -2043,7 +2043,7 @@ fee rate and the label, the wallet keeps from the version it holds. A file
 another wallet prepared for an account of this wallet is imported too, and
 signed with signtx.
 
-sendtx --input sends a signed file without importtx.
+broadcast --input sends a signed file without importtx.
 |]
 
 -- | A pending transaction to sign, by its nosigHash, in full or by its
@@ -2102,7 +2102,7 @@ deleteTxCommand =
 deletetx removes a pending transaction from the wallet. The coins it spends
 can then be spent again, and its change address is free again.
 
-A transaction sent with sendtx can be deleted only once the server no longer
+A transaction sent with broadcast can be deleted only once the server no longer
 knows it. That happens when the nodes dropped it from their mempools, or never
 accepted it. While the server lists it, it may still confirm, and the next
 `sync` retires it.
@@ -2146,7 +2146,7 @@ sighash ALL only, and only when every input that is not the account's is
 signed already.
 
 Signing sends nothing. Check the transaction with reviewtx or pendingtxs.
-Then send it with sendtx, or delete it with deletetx.
+Then send it with broadcast, or delete it with deletetx.
 |],
       args =
         CommandSignTx
@@ -2349,7 +2349,7 @@ Replacing the stuck one would remove it too, so hw offers to replace both with
 one transaction that pays the recipients of both.
 
 The replacement is a pending transaction. Sign it with signtx and send it with
-sendtx. sendtx then drops the transactions it replaces from the pending
+broadcast, which then drops the transactions it replaces from the pending
 transactions.
 
 The network does not tell hw when it refuses a replacement. A replacement
@@ -2397,26 +2397,26 @@ replacementFeeOption =
       <> completeWith ["low", "median", "high"]
       <> help "The fee rate of the replacement in satoshis per virtual byte, or low, median or high for that rate of recent blocks, as `fees` shows them. It must be above the rate of the transaction replaced. Without it, hw shows those rates and asks for a level or a number. A rate above 100 needs a confirmation."
 
-{- sendtx -}
+{- broadcast -}
 
-sendTxCommand :: CommandSpec Command
-sendTxCommand =
+broadcastCommand :: CommandSpec Command
+broadcastCommand =
   CommandSpec
-    { name = "sendtx",
+    { name = "broadcast",
       offline = False,
       summary = "Send a signed transaction to the network",
       details =
         [r|
-Sending cannot be undone. sendtx shows the transaction, as reviewtx does, and
+Sending cannot be undone. broadcast shows the transaction, as reviewtx does, and
 sends it only if you answer yes. --yes sends it without showing it or asking,
 for scripts.
 
-The server passes the transaction to the nodes without checking it. sendtx
+The server passes the transaction to the nodes without checking it. broadcast
 then waits up to ten seconds for the server to see it in its mempool. That is
 the only sign that the network accepted it. If the server does not see it,
-nothing is recorded, and sendtx says so. The network may have refused the
+nothing is recorded, and broadcast says so. The network may have refused the
 transaction, for a fee below what the nodes relay for example. Or it may just
-be slow. Run sendtx again later.
+be slow. Run broadcast again later.
 
 Give a pending transaction by its TXID, as signtx and pendingtxs show it, in
 full or by its short id. Its nosigHash works too. Once the server sees it, it is marked as sent. `sync`
@@ -2438,7 +2438,7 @@ account tells it; otherwise give --network, or a default-network in the
 configuration file.
 |],
       args =
-        CommandSendTx
+        CommandBroadcast
           <$> optional signedTxidArg
           <*> inputFileMaybeOption
           <*> yesOption "Send without showing the transaction and asking first"

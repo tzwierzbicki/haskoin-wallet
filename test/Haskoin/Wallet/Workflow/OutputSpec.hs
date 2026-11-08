@@ -741,7 +741,7 @@ balancesListSpec ctx =
     it "include the change addresses" $
       withChain ctx (paidChain ctx) $ \home chain -> do
         nosig <- paymentSigned home
-        _ <- answer home ["sendtx", nosig, "--yes"] []
+        _ <- answer home ["broadcast", nosig, "--yes"] []
         modifyIORef chain mine
         _ <- answer home ["sync"] []
         (balancesOf <$> hwJson home ["balances"] []) `shouldReturn` Right [(internalAddrsText !! 0, 27740, 27740, 0)]
@@ -939,26 +939,26 @@ nextStepSpec ctx =
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         run <- hw home ["signtx", nosig] seedOnce
         txid <- txidOf =<< onePendingTx home
-        run `shouldSatisfy` showsCommand ("hw sendtx " <> Text.pack (shortOf txid) <> "\n")
+        run `shouldSatisfy` showsCommand ("hw broadcast " <> Text.pack (shortOf txid) <> "\n")
 
     it "is to send the file signtx signed offline, from the online computer" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
         _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
         run <- hw signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
-        run `shouldSatisfy` showsCommand ("hw sendtx --input " <> Text.pack (signer </> "signed.psbt"))
+        run `shouldSatisfy` showsCommand ("hw broadcast --input " <> Text.pack (signer </> "signed.psbt"))
 
     it "is to send the --input file signtx replaced with the signed transaction" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
         _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
         run <- hw signer ["signtx", "--input", online </> "unsigned.psbt"] (["y"] <> seedOnce)
-        run `shouldSatisfy` showsCommand ("hw sendtx --input " <> Text.pack (online </> "unsigned.psbt"))
+        run `shouldSatisfy` showsCommand ("hw broadcast --input " <> Text.pack (online </> "unsigned.psbt"))
 
-    it "is to sync the account of the transaction sendtx sent" $
+    it "is to sync the account of the transaction that broadcast sent" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         nosig <- paymentSigned home
-        run <- hw home ["sendtx", nosig, "--yes"] []
+        run <- hw home ["broadcast", nosig, "--yes"] []
         run `shouldSatisfy` showsCommand "hw sync --account main"
 
     it "is to see the transactions of the account synced" $
@@ -1020,14 +1020,14 @@ nextStepSpec ctx =
         nosig <- nosigOf =<< txOf =<< answer home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
         run <- hw home ["signsweep", nosig, "--key-file", keys] []
         txid <- txidOf =<< onePendingTx home
-        run `shouldSatisfy` showsCommand ("hw sendtx " <> Text.pack (shortOf txid) <> "\n")
+        run `shouldSatisfy` showsCommand ("hw broadcast " <> Text.pack (shortOf txid) <> "\n")
 
     it "is to send the file of a sweep outside the wallet that signsweep signed" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
         keys <- writeKeyFile home
         _ <- answer home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--fee-rate", "10"] []
         run <- hw home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.psbt", "--key-file", keys] []
-        run `shouldSatisfy` showsCommand ("hw sendtx --input " <> Text.pack (home </> "signed.psbt"))
+        run `shouldSatisfy` showsCommand ("hw broadcast --input " <> Text.pack (home </> "signed.psbt"))
 
     -- The name with a space would be two words for the shell
     it "quotes an account name the shell would split" $

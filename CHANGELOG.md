@@ -85,7 +85,7 @@ Transaction files:
   can sign them in place of the offline computer.
 - `hw` reads, signs and sends the PSBTs of other wallets, in version 0 or 2
   (BIP370), in bytes or in base64.
-- `sendtx --input` also takes a signed transaction in hexadecimal.
+- `broadcast --input` also takes a signed transaction in hexadecimal.
 
 Messages:
 
@@ -176,6 +176,7 @@ Using `hw`:
 | `syncacc` | `sync` |
 | `discoveracc` | `recover`, which now finds every paid account |
 | `testacc` | `checkmnemonic` |
+| `sendtx` | `broadcast` |
 | `addrs`, `addrs --internal` | `addresses`, `addresses --change` |
 | `version` | `hw --version` |
 | `--satoshi`, `--bit` | `--unit sat`, `--unit bit` |

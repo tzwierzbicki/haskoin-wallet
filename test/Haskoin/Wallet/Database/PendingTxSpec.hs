@@ -58,7 +58,7 @@ spec =
     conflictsSpec ctx
     accountOfTxSpec ctx
 
--- | Nothing before sending: the transaction goes on, as with sendtx --yes
+-- | Nothing before sending: the transaction goes on, as with broadcast --yes
 withoutAsking :: (Monad m) => Network -> Maybe DBAccount -> TxInfo -> ExceptT String m ()
 withoutAsking _ _ _ = return ()
 
@@ -338,7 +338,7 @@ importingSpec ctx =
           txHash (txSignDataTx byCore) `shouldNotBe` txHash (txSignDataTx byWallet)
         importPendingTx btc ctx accId byWallet `dbShouldBeE` pendingHash
         importPendingTx btc ctx accId byCore `dbShouldBeE` pendingHash
-        -- The wallet holds the version imported last: sendtx sends that one
+        -- The wallet holds the version imported last: broadcast sends that one
         stored <- lookupPendingTx pendingHash
         liftIO $ (txSignDataTx . pendingTxData <$> stored) `shouldBe` Just (txSignDataTx byCore)
     -- Core clears the derivation records of the input it finalized: the
@@ -722,7 +722,7 @@ sendingSpec ctx =
         (accId, _) <- testNewAcc ctx "test"
         (pendingHash, _) <- signedPending ctx cfg accId
         lift $
-          dbShouldFailWith "The transaction was handed to the network but the store has not seen it after 10 seconds. It stays signed and not online: run sendtx again later" $
+          dbShouldFailWith "The transaction was handed to the network but the store has not seen it after 10 seconds. It stays signed and not online: run broadcast again later" $
             sendPending ctx (const (toStore emptyStore)) withoutAsking pendingHash
         ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, False, False))]
@@ -750,7 +750,7 @@ sendingSpec ctx =
         lift $
           dbShouldFailWith "The pending transaction does not exist" $
             sendPending ctx (const (toStore emptyStore)) withoutAsking (fakeTxHash 7)
-    -- What sendtx shows the user, before it asks: signed, and not online yet
+    -- What broadcast shows the user, before it asks: signed, and not online yet
     it "gives the step before sending the transaction as it is held, on the network of its account" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"

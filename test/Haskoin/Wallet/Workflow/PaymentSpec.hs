@@ -154,7 +154,7 @@ feesSpec ctx =
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "20"] []
         _ <- answer home ["signtx", nosig] seedOnce
-        stuck <- txidOf =<< txOf =<< answer home ["sendtx", nosig, "--yes"] []
+        stuck <- txidOf =<< txOf =<< answer home ["broadcast", nosig, "--yes"] []
         let file = home </> "replacement.json"
         run <- hw home ["bumpfee", stuck, "--output", file] ["25"]
         run `shouldSatisfy` printed "Which fee rate? Type a number of satoshis per virtual byte, at least 21:"
@@ -245,7 +245,7 @@ receivingSpec ctx = do
         _ <- answer home ["sync"] []
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", secondAddr <> ":0.0003", "--account", "main", "--fee-rate", "10"] []
         _ <- answer home ["signtx", nosig] seedOnce
-        _ <- answer home ["sendtx", nosig, "--yes"] []
+        _ <- answer home ["broadcast", nosig, "--yes"] []
         (accountsOf <$> hwJson home ["sync"] []) `shouldReturn` Right [("main", 0, 17740), ("second", 1, 30000)]
         prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--account", "second", "--fee-rate", "10"] []
         spentFromWallet prepared `shouldBe` Map.fromList [(account1Addr, 30000)]

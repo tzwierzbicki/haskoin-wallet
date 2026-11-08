@@ -566,7 +566,7 @@ spec = prepareContext $ \ctx -> do
         -- The change address, /1/0, and the coin to spend
         _ <- changeAddress ctx cfg accId
         _ <- syncWith (realPaymentStore ctx) accId
-        -- The user prepared, signed and sent the payment, as sendtx leaves
+        -- The user prepared, signed and sent the payment, as broadcast leaves
         -- it: pending, online, its raw transaction stored
         lift $ P.insert_ $ pendingRow accId (changeSpendTx ctx)
         lift (setPendingTxOnline (nosigHash (changeSpendTx ctx))) `dbShouldBeE` 1

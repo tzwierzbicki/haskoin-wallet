@@ -65,7 +65,7 @@ sentWithLabel home label = do
   synced home
   nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--label", label] []
   _ <- answer home ["signtx", nosig] seedOnce
-  txidOf =<< txOf =<< answer home ["sendtx", nosig, "--yes"] []
+  txidOf =<< txOf =<< answer home ["broadcast", nosig, "--yes"] []
 
 preparingSpec :: Ctx -> Spec
 preparingSpec ctx =
@@ -121,13 +121,13 @@ fileSpec ctx =
         _ <- answer home ["exporttx", nosig, file] []
         (txSignDataLabel . txFileData <$> readTxFile ctx file) `shouldReturn` "Rent"
 
-    it "comes back from an offline signer with the signed transaction, which sendtx sends with it" $
+    it "comes back from an offline signer with the signed transaction, which broadcast sends with it" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
         _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10", "--label", "Rent"] []
         _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
         (txSignDataLabel . txFileData <$> readTxFile ctx (signer </> "signed.psbt")) `shouldReturn` "Rent"
-        sent <- txOf =<< answer online ["sendtx", "--input", signer </> "signed.psbt", "--yes"] []
+        sent <- txOf =<< answer online ["broadcast", "--input", signer </> "signed.psbt", "--yes"] []
         txInfoLabel sent `shouldBe` "Rent"
 
     -- The user changes the label while the file is away to be signed
@@ -137,7 +137,7 @@ fileSpec ctx =
         nosig <- nosigOf =<< txOf =<< answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10", "--label", "Rent"] []
         _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
         _ <- answer online ["label", nosig, "Rent of October"] []
-        sent <- txOf =<< answer online ["sendtx", "--input", signer </> "signed.psbt", "--yes"] []
+        sent <- txOf =<< answer online ["broadcast", "--input", signer </> "signed.psbt", "--yes"] []
         txInfoLabel sent `shouldBe` "Rent of October"
 
     it "gives way to the label the online computer holds in the answer of importtx too" $
@@ -239,14 +239,14 @@ addressLabelsSpec ctx =
         imported <- txOf =<< answer online ["importtx", signer </> "signed.psbt"] []
         addressLabelsOf imported `shouldBe` Map.fromList [(externalAddr 0, "Wages"), (internalAddr 0, "")]
 
-    it "give way to the wallet's own when sendtx --input sends the signed file" $
+    it "give way to the wallet's own when broadcast --input sends the signed file" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
         _ <- answer online ["label", textOf (externalAddr 0), "Salary"] []
         _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
         _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
         _ <- answer online ["label", textOf (externalAddr 0), "Wages"] []
-        sent <- txOf =<< answer online ["sendtx", "--input", signer </> "signed.psbt", "--yes"] []
+        sent <- txOf =<< answer online ["broadcast", "--input", signer </> "signed.psbt", "--yes"] []
         addressLabelsOf sent `shouldBe` Map.fromList [(externalAddr 0, "Wages"), (internalAddr 0, "")]
 
 -- The coin of the paid chain is the output 0 of the payment, 50000 at
@@ -374,7 +374,7 @@ historySpec ctx =
         _ <- answer home ["sync"] []
         nosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
         _ <- answer home ["signtx", nosig] seedOnce
-        replacement <- txidOf =<< txOf =<< answer home ["sendtx", nosig, "--yes"] []
+        replacement <- txidOf =<< txOf =<< answer home ["broadcast", nosig, "--yes"] []
         modifyIORef chain mine
         _ <- answer home ["sync"] []
         labels <- historyLabels <$> hwJson home ["txs"] []

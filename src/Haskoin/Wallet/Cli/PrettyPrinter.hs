@@ -2041,7 +2041,7 @@ agoText now time
 {- Next steps -}
 
 -- | What the user does next after a command of a payment or a sweep,
--- preparetx, preparesendall, preparesweep, signtx, signsweep, sendtx or
+-- preparetx, preparesendall, preparesweep, signtx, signsweep, broadcast or
 -- sync, below its answer. In the pretty output only: a script reading the JSON answer knows
 -- its next step.
 printNextSteps :: Command -> Response -> IO ()
@@ -2204,7 +2204,7 @@ nextStepsPrinter cmd res =
     (CommandSignTx signing _, ResponseTx _ info) -> afterSigning signing info
     (CommandSignSweep signing _ _, ResponseTx _ info) -> afterSigning signing info
     (CommandSignSweep signing _ _, ResponseOutsideTx _ info) -> afterSigning signing info
-    (CommandSendTx {}, ResponseTx acc _) ->
+    (CommandBroadcast {}, ResponseTx acc _) ->
       stepsPrinter [("Next, sync the account to follow the transaction", hwLine "sync" (accountArgs [acc]))]
     -- An account a descriptor added has the name recover gives one, since
     -- a descriptor carries none, and the file may label things the wallet
@@ -2255,9 +2255,9 @@ nextStepsPrinter cmd res =
     -- --input file it replaced
     afterSigning signing info
       | Just shown <- shownOf info, isJust signing.nosigHash =
-          stepsPrinter [("Next, send it to the network", hwLine "sendtx" [pendingHashWord shown])]
+          stepsPrinter [("Next, send it to the network", hwLine "broadcast" [pendingHashWord shown])]
       | Just file <- signing.output <|> signing.input =
-          stepsPrinter [("Next, send its file from the online computer", hwLine "sendtx" [optionWord "--input", fileWord file])]
+          stepsPrinter [("Next, send its file from the online computer", hwLine "broadcast" [optionWord "--input", fileWord file])]
       | otherwise = Nothing
     -- Without a file, signsweep asks for the keys on the terminal
     keysArgs (Just (KeysInFile file)) = [optionWord "--key-file", fileWord file]

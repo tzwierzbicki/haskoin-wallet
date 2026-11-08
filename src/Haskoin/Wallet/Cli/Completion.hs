@@ -3,7 +3,7 @@
 
 -- | What the shell completes from the wallet: the names of the accounts,
 -- the hashes of the pending transactions at each step from preparetx to
--- sendtx, the transactions bumpfee replaces, the coins, the addresses, and
+-- broadcast, the transactions bumpfee replaces, the coins, the addresses, and
 -- what label labels.
 -- Each command is offered what it takes, and only when few enough values
 -- match what was typed: see 'offeredAtMost'. The shell runs hw at each
@@ -123,7 +123,7 @@ accountsNamed (Just name) = either (const []) pure <$> runExceptT (getAccountByN
 hashesToSign :: String -> IO [String]
 hashesToSign = shownHashesOf (\p -> not (isSigned (txOf p)) && not p.pendingTxOnline)
 
--- | The ids of the pending transactions to send, for sendtx: those signed
+-- | The ids of the pending transactions to send, for broadcast: those signed
 -- and not sent yet. The sync sends one again should the network lose it.
 -- One in conflict is left out: the network refuses it, and deletetx
 -- frees its coins.

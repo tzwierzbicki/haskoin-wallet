@@ -95,10 +95,10 @@ spec = do
 
   describe "The commands a text of the help names" $ do
     it "are those named in it, in its order" $
-      mentionedCommands program "Sign it with signtx, then send it with sendtx." `shouldBe` ["signtx", "sendtx"]
+      mentionedCommands program "Sign it with signtx, then send it with broadcast." `shouldBe` ["signtx", "broadcast"]
 
     it "are each named once, however often the text names them" $
-      mentionedCommands program "signtx, then sendtx, then signtx again" `shouldBe` ["signtx", "sendtx"]
+      mentionedCommands program "signtx, then broadcast, then signtx again" `shouldBe` ["signtx", "broadcast"]
 
     it "include a command named by an everyday word only when it is in backticks" $
       mentionedCommands program "The coins of the last sync, as `coins` lists them." `shouldBe` ["coins"]

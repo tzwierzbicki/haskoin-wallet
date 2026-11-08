@@ -535,7 +535,8 @@ sweepIntoWalletSpec ctx =
         liftIO $ Map.keys info.txInfoSummary.summaryMyOutputs `shouldBe` [externalAddr 1]
         -- Paid into the wallet or not, a sweep has no change
         liftIO $ info.txInfoSummary.summaryChangeInFee `shouldBe` Nothing
-        -- sendtx marks it online, the sync retires it once the store lists it
+        -- broadcast marks it online, and the sync retires it once the store
+        -- lists it
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
         ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, True, False))]

@@ -210,7 +210,7 @@ paymentSigned home = do
 sentPayment :: FilePath -> IO String
 sentPayment home = do
   nosig <- paymentSigned home
-  txidOf =<< txOf =<< answer home ["sendtx", nosig, "--yes"] []
+  txidOf =<< txOf =<< answer home ["broadcast", nosig, "--yes"] []
 
 -- | The one pending transaction of a home
 onePendingTx :: FilePath -> IO TxInfo

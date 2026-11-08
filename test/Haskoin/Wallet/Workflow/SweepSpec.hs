@@ -50,7 +50,7 @@ sweepSpec ctx =
         nosig <- nosigOf prepared
         signed <- txOf =<< answer home ["signsweep", nosig, "--key-file", keys] []
         pendingState signed `shouldBe` Just (True, False)
-        _ <- answer home ["sendtx", nosig, "--yes"] []
+        _ <- answer home ["broadcast", nosig, "--yes"] []
         published <- inMempool <$> readIORef chain
         (spendsAndPays ctx <$> published) `shouldBe` [([OutPoint (txHash (oldCoin ctx)) 0], [(28080, Right (externalAddr 0))])]
         modifyIORef chain mine
@@ -150,7 +150,8 @@ sweepSpec ctx =
           `shouldReturn` Right "The sweep does not involve this wallet: give an --output file to write it to"
 
     -- The wallet keeps no trace of it: the sweep is signed from its file,
-    -- and sent with the network sendtx cannot read from the wallet
+    -- and broadcast sends it on the network the file names, since the
+    -- wallet cannot tell it
     it "that pays outside the wallet is written to its file only, signed from it, and sent on the network it names" $
       withChain ctx (oldKeyChain ctx) $ \home chain -> do
         createMain home
@@ -160,7 +161,7 @@ sweepSpec ctx =
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
         signed <- txOf =<< answer home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.psbt", "--key-file", keys] []
         pendingState signed `shouldBe` Just (True, False)
-        sent <- answer home ["sendtx", "--input", home </> "signed.psbt", "--yes"] []
+        sent <- answer home ["broadcast", "--input", home </> "signed.psbt", "--yes"] []
         published <- inMempool <$> readIORef chain
         (spendsAndPays ctx <$> published) `shouldBe` [([OutPoint (txHash (oldCoin ctx)) 0], [(28080, Right (otherAddr 0))])]
         (ResponseSentTx btc . txHash <$> published) `shouldBe` [sent]
@@ -260,7 +261,7 @@ sweepSpec ctx =
         prepared `shouldSatisfy` \case ResponseOutsideTx net _ -> net == btc; _ -> False
         signed <- txOf =<< answer home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.psbt", "--key-file", keys] []
         pendingState signed `shouldBe` Just (True, False)
-        _ <- answer home ["sendtx", "--input", home </> "signed.psbt", "--yes"] []
+        _ <- answer home ["broadcast", "--input", home </> "signed.psbt", "--yes"] []
         published <- inMempool <$> readIORef chain
         (spendsAndPays ctx <$> published) `shouldBe` [([OutPoint (txHash (oldCoin ctx)) 0], [(28080, Right (otherAddr 0))])]
         (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right []

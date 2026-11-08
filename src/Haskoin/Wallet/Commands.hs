@@ -58,7 +58,7 @@ module Haskoin.Wallet.Commands
     cmdPrepareTx,
     cmdPrepareSendAll,
     cmdSignTx,
-    cmdSendTx,
+    cmdBroadcast,
     cmdBumpFee,
 
     -- * Sweeps
@@ -197,7 +197,7 @@ commandResponse ctx cfg unit = \case
   CommandPrepareTx opts -> cmdPrepareTx ctx cfg unit opts
   CommandPrepareSendAll opts -> cmdPrepareSendAll ctx cfg unit opts
   CommandSignTx signing parts -> cmdSignTx ctx cfg unit signing parts
-  CommandSendTx namedM fileM yes netM -> cmdSendTx ctx cfg unit namedM fileM yes netM
+  CommandBroadcast namedM fileM yes netM -> cmdBroadcast ctx cfg unit namedM fileM yes netM
   CommandBumpFee opts -> cmdBumpFee ctx cfg unit opts
   -- Sweeps
   CommandPrepareSweep opts -> cmdPrepareSweep ctx cfg unit opts
@@ -949,7 +949,7 @@ writeTxFile ctx accM file txFile = do
 -- the account's own key, as the wallet does not know the fingerprint of
 -- the seed
 noFingerprintWarning :: String
-noFingerprintWarning = "The wallet does not know the fingerprint of the seed, so the file names the keys by the account's own key, which a hardware wallet does not sign. The wallet learns the fingerprint when signtx or signmsg signs with the seed, when importtx or sendtx takes a file signtx signed, or when importacc gives the origin of the account."
+noFingerprintWarning = "The wallet does not know the fingerprint of the seed, so the file names the keys by the account's own key, which a hardware wallet does not sign. The wallet learns the fingerprint when signtx or signmsg signs with the seed, when importtx or broadcast takes a file signtx signed, or when importacc gives the origin of the account."
 
 -- | Write a transaction of the network to the --output file, when there is
 -- one, with the labels of its addresses as its summary has them, and the
@@ -1351,8 +1351,8 @@ cmdSignTx ctx cfg unit signing parts =
 -- --network or of the configuration when the file names none. See
 -- 'sendSigned'. The user sees the transaction and says whether to send
 -- it, unless --yes.
-cmdSendTx :: Ctx -> Config -> AmountUnit -> Maybe HashRef -> Maybe FilePath -> Bool -> Maybe Network -> IO Response
-cmdSendTx ctx cfg unit namedM fileM yes givenM =
+cmdBroadcast :: Ctx -> Config -> AmountUnit -> Maybe HashRef -> Maybe FilePath -> Bool -> Maybe Network -> IO Response
+cmdBroadcast ctx cfg unit namedM fileM yes givenM =
   case (namedM, fileM) of
     (Just named, Nothing) -> sending $ (`TxFileRead` Nothing) . plainTxFile Nothing . (.pendingTxData) <$> (requirePendingTx =<< pendingHashOf named)
     (Nothing, Just file) -> sending (readTxFileIn ctx (commandNetwork cfg givenM) file)

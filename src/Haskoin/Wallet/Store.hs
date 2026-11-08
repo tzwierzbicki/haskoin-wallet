@@ -305,9 +305,9 @@ broadcastWith pause asks store tx = do
         then return True
         else seen (left - 1)
 
--- | What sendtx answers when the store has not seen the transaction
+-- | What broadcast answers when the store has not seen the transaction
 notAccepted :: String
 notAccepted =
   "The transaction was handed to the network but the store has not seen it after "
     <> show acceptanceWait
-    <> " seconds. It stays signed and not online: run sendtx again later"
+    <> " seconds. It stays signed and not online: run broadcast again later"

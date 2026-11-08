@@ -2,9 +2,9 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | A payment signed by signtx and sent by sendtx, on the same computer
+-- | A payment signed by signtx and sent by broadcast, on the same computer
 -- or offline: the --input and --output files, what the signing commands
--- refuse before they ask for the mnemonic, and the question sendtx asks
+-- refuse before they ask for the mnemonic, and the question broadcast asks
 -- before it sends.
 module Haskoin.Wallet.Workflow.SigningSpec (spec) where
 
@@ -71,7 +71,7 @@ deletedOf other = Left (show other)
 signingSpec :: Ctx -> Spec
 signingSpec ctx = do
   describe "A payment signed on the same computer" $ do
-    -- signtx keeps the signed version in the wallet, which sendtx sends: it
+    -- signtx keeps the signed version in the wallet, which broadcast sends: it
     -- sends no transaction that is not signed
     it "is prepared, signed and sent by its nosigHash, and confirmed by a sync" $
       withChain ctx (paidChain ctx) $ \home chain -> do
@@ -79,21 +79,21 @@ signingSpec ctx = do
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         signed <- txOf =<< answer home ["signtx", nosig] seedOnce
         pendingState signed `shouldBe` Just (True, False)
-        sent <- txOf =<< answer home ["sendtx", nosig, "--yes"] []
+        sent <- txOf =<< answer home ["broadcast", nosig, "--yes"] []
         pendingState sent `shouldBe` Just (True, True)
         published <- inMempool <$> readIORef chain
         (spendsAndPays ctx <$> published) `shouldBe` [paymentSent ctx]
         modifyIORef chain mine
         (accountsOf <$> hwJson home ["sync"] []) `shouldReturn` Right [("main", 0, 27740)]
 
-    -- The answer of sendtx reads as once sent: what the wallet holds tells
+    -- The answer of broadcast reads as once sent: what the wallet holds tells
     -- whether it marked the transaction online
     it "is sent by the txid signtx shows, and marked online" $
       withChain ctx (paidChain ctx) $ \home chain -> do
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         txid <- txidOf =<< txOf =<< answer home ["signtx", nosig] seedOnce
-        _ <- answer home ["sendtx", txid, "--yes"] []
+        _ <- answer home ["broadcast", txid, "--yes"] []
         published <- inMempool <$> readIORef chain
         (spendsAndPays ctx <$> published) `shouldBe` [paymentSent ctx]
         onePendingState home `shouldReturn` Just (True, True)
@@ -109,7 +109,7 @@ signingSpec ctx = do
       withChain ctx (paidChain ctx) $ \home chain -> do
         _ <- paymentSigned home
         txid <- txidOf =<< onePendingTx home
-        _ <- answer home ["sendtx", shortOf txid, "--yes"] []
+        _ <- answer home ["broadcast", shortOf txid, "--yes"] []
         published <- inMempool <$> readIORef chain
         (spendsAndPays ctx <$> published) `shouldBe` [paymentSent ctx]
         onePendingState home `shouldReturn` Just (True, True)
@@ -221,7 +221,7 @@ signingSpec ctx = do
         summaryFee (txInfoSummary prepared) `shouldBe` 2260
         signed <- txOf =<< answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
         pendingState signed `shouldBe` Just (True, False)
-        sent <- txOf =<< answer online ["sendtx", "--input", signer </> "signed.psbt", "--yes"] []
+        sent <- txOf =<< answer online ["broadcast", "--input", signer </> "signed.psbt", "--yes"] []
         pendingState sent `shouldBe` Just (True, True)
         published <- inMempool <$> readIORef chain
         (spendsAndPays ctx <$> published) `shouldBe` [paymentSent ctx]
@@ -243,7 +243,7 @@ signingSpec ctx = do
         _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
         imported <- txOf =<< answer online ["importtx", signer </> "signed.psbt"] []
         pendingState imported `shouldBe` Just (True, False)
-        sent <- txOf =<< answer online ["sendtx", nosig, "--yes"] []
+        sent <- txOf =<< answer online ["broadcast", nosig, "--yes"] []
         pendingState sent `shouldBe` Just (True, True)
         published <- inMempool <$> readIORef chain
         (spendsAndPays ctx <$> published) `shouldBe` [paymentSent ctx]
@@ -340,7 +340,7 @@ signingSpec ctx = do
         (fingerprintsOf <$> hwJson online ["accounts"] []) `shouldReturn` Right [("main", Nothing)]
         _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
         _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
-        _ <- answer online ["sendtx", "--input", signer </> "signed.psbt", "--yes"] []
+        _ <- answer online ["broadcast", "--input", signer </> "signed.psbt", "--yes"] []
         (fingerprintsOf <$> hwJson online ["accounts"] []) `shouldReturn` Right [("main", Just "bc560f95")]
 
     -- A hardware wallet signs only the records that name its own seed
@@ -352,7 +352,7 @@ signingSpec ctx = do
         _ <- answer online ["sync"] []
         prepared <- hw online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
         runExit prepared `shouldBe` ExitSuccess
-        runErr prepared `shouldSatisfy` Text.isInfixOf "The wallet does not know the fingerprint of the seed, so the file names the keys by the account's own key, which a hardware wallet does not sign. The wallet learns the fingerprint when signtx or signmsg signs with the seed, when importtx or sendtx takes a file signtx signed, or when importacc gives the origin of the account."
+        runErr prepared `shouldSatisfy` Text.isInfixOf "The wallet does not know the fingerprint of the seed, so the file names the keys by the account's own key, which a hardware wallet does not sign. The wallet learns the fingerprint when signtx or signmsg signs with the seed, when importtx or broadcast takes a file signtx signed, or when importacc gives the origin of the account."
         _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
         imported <- txOf =<< answer online ["importtx", signer </> "signed.psbt"] []
         nosig <- nosigOf imported
@@ -473,12 +473,12 @@ foreignFileSpec ctx =
         _ <- answer home ["exporttx", nosig, home </> "signed.psbt"] []
         signed <- readTxFile ctx (home </> "signed.psbt")
         writeFile (home </> "signed.hex") (Text.unpack (encodeHex (S.encode (txSignDataTx (txFileData signed)))) <> "\n")
-        sent <- txOf =<< answer home ["sendtx", "--input", home </> "signed.hex", "--yes"] []
+        sent <- txOf =<< answer home ["broadcast", "--input", home </> "signed.hex", "--yes"] []
         pendingState sent `shouldBe` Just (True, True)
         published <- inMempool <$> readIORef chain
         (spendsAndPays ctx <$> published) `shouldBe` [paymentSent ctx]
         writeFile (home </> "other.hex") (Text.unpack (encodeHex (S.encode (txSignDataTx (signedPayment ctx)))))
-        (errorOf <$> hwJson home ["sendtx", "--input", home </> "other.hex"] [])
+        (errorOf <$> hwJson home ["broadcast", "--input", home </> "other.hex"] [])
           `shouldReturn` Right "The file holds a transaction alone, which the wallet does not hold as pending: hw needs the whole transaction each of its coins comes from, which a PSBT carries"
 
     -- A transaction given alone is the whole file. Bytes after it would
@@ -496,7 +496,7 @@ foreignFileSpec ctx =
         writeFile longer (hex <> "00\n")
         writeFile shorter (take (length hex - 2) hex <> "\n")
         forM_ [longer, shorter] $ \file ->
-          (errorOf <$> hwJson home ["sendtx", "--input", file] [])
+          (errorOf <$> hwJson home ["broadcast", "--input", file] [])
             `shouldReturn` Right ("The file " <> Text.pack file <> " could not be read: The hexadecimal text is not one whole transaction")
 
     it "in base64 text, as Bitcoin Core and HWI give a PSBT, is read like its bytes" $
@@ -504,12 +504,12 @@ foreignFileSpec ctx =
         nosig <- paymentSigned home
         _ <- answer home ["exporttx", nosig, home </> "signed.psbt"] []
         BS.writeFile (home </> "signed.txt") . (<> "\n") . Base64.encode =<< BS.readFile (home </> "signed.psbt")
-        sent <- txOf =<< answer home ["sendtx", "--input", home </> "signed.txt", "--yes"] []
+        sent <- txOf =<< answer home ["broadcast", "--input", home </> "signed.txt", "--yes"] []
         pendingState sent `shouldBe` Just (True, True)
         published <- inMempool <$> readIORef chain
         (spendsAndPays ctx <$> published) `shouldBe` [paymentSent ctx]
 
-{- The files of signtx, signsweep and sendtx -}
+{- The files of signtx, signsweep and broadcast -}
 
 -- | A payment of the test wallet to another wallet, unsigned
 unsignedPayment :: Ctx -> TxSignData
@@ -522,29 +522,29 @@ unsignedPayment ctx =
 signedPayment :: Ctx -> TxSignData
 signedPayment ctx = signedByWallet ctx (unsignedPayment ctx)
 
--- | The files of signtx, signsweep and sendtx: what they refuse, and the
+-- | The files of signtx, signsweep and broadcast: what they refuse, and the
 -- --input file replaced by the signed transaction
 inputFileSpec :: Ctx -> Spec
 inputFileSpec ctx = do
-  describe "sendtx from a file" $ do
+  describe "broadcast from a file" $ do
     it "needs a txid or a file" $
       withHome $ \home ->
-        (errorOf <$> hwJson home ["sendtx"] []) `shouldReturn` Right "Give the TXID of a pending transaction or an --input file"
+        (errorOf <$> hwJson home ["broadcast"] []) `shouldReturn` Right "Give the TXID of a pending transaction or an --input file"
 
     it "takes a txid or a file, not both" $
       withHome $ \home ->
-        (errorOf <$> hwJson home ["sendtx", Text.unpack (txHashToHex (fakeTxHash 1)), "--input", home </> "sweep.psbt"] [])
+        (errorOf <$> hwJson home ["broadcast", Text.unpack (txHashToHex (fakeTxHash 1)), "--input", home </> "sweep.psbt"] [])
           `shouldReturn` Right "Can not specify both a TXID and an --input file"
 
     it "refuses a missing file" $
       withHome $ \home ->
-        (errorOf <$> hwJson home ["sendtx", "--input", home </> "missing.json"] [])
+        (errorOf <$> hwJson home ["broadcast", "--input", home </> "missing.json"] [])
           `shouldReturn` Right (noSuchFile (home </> "missing.json"))
 
     it "refuses an unsigned transaction" $
       withHome $ \home -> do
         writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
-        (errorOf <$> hwJson home ["sendtx", "--input", home </> "payment.psbt"] [])
+        (errorOf <$> hwJson home ["broadcast", "--input", home </> "payment.psbt"] [])
           `shouldReturn` Right "The transaction is not signed"
 
     -- The file is written as another wallet writes it, without the
@@ -553,7 +553,7 @@ inputFileSpec ctx = do
       withHome $ \home -> do
         setDefaultNetwork home Nothing
         writeOtherWalletTxFile ctx (home </> "payment.psbt") (signedPayment ctx)
-        (errorOf <$> hwJson home ["sendtx", "--input", home </> "payment.psbt"] [])
+        (errorOf <$> hwJson home ["broadcast", "--input", home </> "payment.psbt"] [])
           `shouldReturn` Right "The file names no network, as a file of another wallet does, and involves no account of this wallet: give the --network, or a default-network in the configuration file"
 
   describe "signtx and signsweep" $ do
@@ -650,7 +650,7 @@ inputFileSpec ctx = do
         keys <- writeKeyFile home
         _ <- answer home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--fee-rate", "10"] []
         _ <- answer home ["signsweep", "--input", home </> "sweep.json", "--key-file", keys] ["y"]
-        _ <- answer home ["sendtx", "--input", home </> "sweep.json", "--yes"] []
+        _ <- answer home ["broadcast", "--input", home </> "sweep.json", "--yes"] []
         published <- inMempool <$> readIORef chain
         (spendsAndPays ctx <$> published) `shouldBe` [([OutPoint (txHash (oldCoin ctx)) 0], [(28080, Right (otherAddr 0))])]
 
@@ -669,7 +669,7 @@ inputFileSpec ctx = do
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         _ <- answer home ["signtx", nosig] seedOnce
-        _ <- answer home ["sendtx", nosig, "--yes"] []
+        _ <- answer home ["broadcast", nosig, "--yes"] []
         run <- hw home ["signtx", nosig] seedOnce
         run `shouldSatisfy` printed "The transaction is already online"
         run `shouldNotSatisfy` askedMnemonic
@@ -734,19 +734,19 @@ inputFileSpec ctx = do
 onePendingState :: FilePath -> IO (Maybe (Bool, Bool))
 onePendingState home = pendingState <$> onePendingTx home
 
--- | The question of sendtx
+-- | The question of broadcast
 sendQuestion :: Text
 sendQuestion = "Send this transaction to the network? This cannot be undone. [y/N] "
 
 confirmationSpec :: Ctx -> Spec
 confirmationSpec ctx =
-  describe "sendtx, before it sends" $ do
+  describe "broadcast, before it sends" $ do
     -- On stderr, which keeps the answer clean: the payment of 20000 to
     -- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU
     it "shows the transaction on stderr and asks whether to send it" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         nosig <- paymentSigned home
-        run <- hw home ["sendtx", nosig] ["y"]
+        run <- hw home ["broadcast", nosig] ["y"]
         runErr run `shouldSatisfy` Text.isInfixOf "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
         runErr run `shouldSatisfy` Text.isInfixOf sendQuestion
 
@@ -754,13 +754,13 @@ confirmationSpec ctx =
     it "names the account of the transaction it shows" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         nosig <- paymentSigned home
-        run <- hw home ["sendtx", nosig] ["n"]
+        run <- hw home ["broadcast", nosig] ["n"]
         runErr run `shouldSatisfy` Text.isInfixOf "\n  Account  : main\n"
 
     it "sends it when the user answers yes, the --json answer kept clean" $
       withChain ctx (paidChain ctx) $ \home chain -> do
         nosig <- paymentSigned home
-        sent <- txOf =<< answer home ["sendtx", nosig] ["y"]
+        sent <- txOf =<< answer home ["broadcast", nosig] ["y"]
         pendingState sent `shouldBe` Just (True, True)
         published <- inMempool <$> readIORef chain
         (spendsAndPays ctx <$> published) `shouldBe` [paymentSent ctx]
@@ -768,7 +768,7 @@ confirmationSpec ctx =
     it "sends nothing when the user answers anything else, and keeps the transaction as it was" $
       withChain ctx (paidChain ctx) $ \home chain -> do
         nosig <- paymentSigned home
-        (errorOf <$> hwJson home ["sendtx", nosig] ["n"]) `shouldReturn` Right "The transaction was not sent"
+        (errorOf <$> hwJson home ["broadcast", nosig] ["n"]) `shouldReturn` Right "The transaction was not sent"
         (inMempool <$> readIORef chain) `shouldReturn` []
         onePendingState home `shouldReturn` Just (True, False)
 
@@ -779,14 +779,14 @@ confirmationSpec ctx =
         signerAndOnline signer online
         _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
         _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
-        (errorOf <$> hwJson online ["sendtx", "--input", signer </> "signed.psbt"] ["no"]) `shouldReturn` Right "The transaction was not sent"
+        (errorOf <$> hwJson online ["broadcast", "--input", signer </> "signed.psbt"] ["no"]) `shouldReturn` Right "The transaction was not sent"
         (inMempool <$> readIORef chain) `shouldReturn` []
         onePendingState online `shouldReturn` Just (False, False)
 
     it "sends without showing the transaction or asking with --yes" $
       withChain ctx (paidChain ctx) $ \home chain -> do
         nosig <- paymentSigned home
-        run <- hw home ["sendtx", nosig, "--yes"] []
+        run <- hw home ["broadcast", nosig, "--yes"] []
         runExit run `shouldBe` ExitSuccess
         runErr run `shouldNotSatisfy` Text.isInfixOf sendQuestion
         (spendsAndPays ctx <$>) . inMempool <$> readIORef chain `shouldReturn` [paymentSent ctx]
@@ -795,5 +795,5 @@ confirmationSpec ctx =
     it "sends nothing when the input ends before the answer" $
       withChain ctx (paidChain ctx) $ \home chain -> do
         nosig <- paymentSigned home
-        (errorOf <$> hwJson home ["sendtx", nosig] []) `shouldReturn` Right "Cancelled: the input ended before the answer"
+        (errorOf <$> hwJson home ["broadcast", nosig] []) `shouldReturn` Right "Cancelled: the input ended before the answer"
         (inMempool <$> readIORef chain) `shouldReturn` []
