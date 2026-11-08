@@ -833,34 +833,33 @@ hw checkaddr /1/2 --account vault
 
 #### `hw coins`
 
-Lists the coins of an account. Each takes three or four lines:
+Lists the coins of an account. Each takes two or three lines:
 
-1. The time of the transaction that paid it, its value, its state, spendable
-   or locked, and its confirmations, up to `999+ confirmations`.
+1. The [short id](#short-ids) of the coin, such as `a1075db5:1`, which
+   `lockcoin` and `--coin` take. Then the time of the transaction that paid it,
+   its value, its state, spendable or locked, and its confirmations, up to
+   `999+ confirmations`. A coin a pending transaction spends is `locked by tx`.
 2. The address that holds it, in full, with its derivation path.
 3. The label of the address, under the address, or `change address` when it is
    one. A coin at an address without a label has no such line.
-4. The [short id](#short-ids) of the coin, such as `a1075db5:1`, which
-   `lockcoin` and `--coin` take.
 
 This is the one listing that gives an address of the wallet in full in its
 compact view. What tells a coin apart is the address that holds it, more than
 its path. As everywhere an address is in full, its label is on the line below.
 Where a view gives only the path, the label stays on the same line.
 
-`--verbose` gives the full count of the confirmations on the first line. The
-label of the transaction that paid the coin, the coin in full and its short id,
-the block that holds it,
+`--verbose` starts each coin with the time of its transaction, and gives the
+full count of the confirmations on the first line. The label of the transaction
+that paid the coin, the coin in full and its short id, the block that holds it,
 the time of the transaction to the second and the address in full with its path
 follow as fields. The label of the address is on the line below it. An
 unconfirmed coin is in no block yet, and shows none. The change of a payment
 you made shows no label of its transaction: the label says what the payment was
 for, not what its change is.
 
-`--tabular` shows each coin on one row of a table: the time of its transaction,
-its value, its state, its confirmations up to `999+`, the address that holds it
-with its path, the short id of the coin, and the label of the address. A coin a
-pending transaction spends says `locked by tx`.
+`--tabular` shows each coin on one row of a table: the short id of the coin,
+the time of its transaction, its value, its state, its confirmations up to
+`999+`, the address that holds it with its path, and the label of the address.
 
 `--csv FILE` writes the coins to a [CSV file](#listings): the coin as
 `TXID:INDEX`, in full and by its short id, the time of its transaction, its
@@ -1040,28 +1039,38 @@ what the recipients receive, asking which of them pays.
 
 #### `hw txs`
 
-Lists the transactions of an account, as of the last sync. Each takes four
+Lists the transactions of an account, as of the last sync. Each takes two
 lines:
 
-1. Its time, in the time zone of the computer, its type, its amount and its
-   status.
-2. The balance of the account after the transaction.
-3. The address paid. An address of the wallet is named by its derivation path,
-   such as `/0/3`, with its label, or `change address` when it is one.
-4. Its [short id](#short-ids), the first 8 digits of its txid.
+1. Its [short id](#short-ids), the first 8 digits of its txid, then its time, in
+   the time zone of the computer, its amount and its status.
+2. The balance of the account after the transaction, then what the transaction
+   is for.
 
-On a terminal, the addresses of the wallet and their labels are blue, which
-sets them apart from the addresses of others.
+What a transaction is for is said as the last column of the table says it:
 
-The status counts the confirmations up to `999+ confirmations`. An unconfirmed
-transaction shows its fee rate instead. A transaction with a label shows it on
-a line of its own, below the balance. The balance of the newest transaction is
-what the account holds, confirmed or not. A dead transaction, replaced or
-dropped from the network, shows no balance and does not count.
+- A payment received gives the path of the address it was paid at, then the
+  label of the payment, or else the label of the address, as in
+  `at /0/3 "Salary"`. A change address says `change address` instead.
+- A payment gives its label, or else the address it pays, as in
+  `to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU`.
+- Either says how many other addresses it pays, as in `and 2 more`.
 
-`--verbose` shows the label as a field, the txid in full and its short id, every
-address in full with its amount,
-and its path for an address of the wallet, the fee and the balance. It gives
+Nothing in it is cut, a long label or address included. On a terminal, the
+addresses of the wallet and their labels are blue, which sets them apart from
+the addresses of others.
+
+The amount has a plus sign when it comes in. The status counts the
+confirmations up to `999+ confirmations`. An unconfirmed transaction shows its
+fee rate too. The balance of the newest transaction is what the account holds,
+confirmed or not. A dead transaction, replaced or dropped from the network,
+shows no balance and does not count.
+
+`--verbose` starts each transaction with its time, then its type: `Outgoing`,
+`Incoming`, or `Internal` for one between addresses of the account. It shows
+the label as a field, the txid in full and its short id, every address in full
+with its amount, and its path for an address of the wallet, the fee and the
+balance. It gives
 the full count of the confirmations. The label of an address of the wallet is
 on the line below it, under the address. A change address the transaction
 spends from or pays says `change address` there instead. An address the
@@ -1071,22 +1080,13 @@ spends, and so which payments it links. Long labels wrap at the edge of the
 screen, each line again under the address.
 
 `--tabular` shows each transaction on one row of a table, as a spreadsheet
-does. The columns are the time, the type, the amount, the balance after it, the
-confirmations and the short id. The confirmations are a number alone, up to
-`999+`. An
-unconfirmed transaction has 0, and a dead one says `dead`. The last column,
-Description, says what the transaction is for:
-
-- A payment received gives the path of the address it was paid at, then the
-  label of the payment, or else the label of the address, as in
-  `at /0/3 "Salary"`.
-- A payment gives its label, or else the address it pays, as in
-  `to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU`.
-
-Nothing in the last column is cut, a long label or address included. The
-header names the unit of the amounts, so
-the cells hold numbers alone. The table leaves out the fee rate. `txs` without
-`--tabular` shows it.
+does. The columns are the short id, the time, the type, the amount, the balance
+after it and the confirmations. The confirmations are a number alone, up to
+`999+`. An unconfirmed transaction has 0, and a dead one says `dead`. The last
+column, Description, says what the transaction is for, in the words of the
+compact view. The header names the unit of the amounts, so the cells hold
+numbers alone. The table leaves out the fee rate. `txs` without `--tabular`
+shows it.
 
 `--csv FILE` writes the transactions to a [CSV file](#listings): the time, type,
 amount, fee and fee rate of each, the balance after it, its status,
@@ -1114,13 +1114,16 @@ hw txs --max 20 --after TXID
 #### `hw pendingtxs`
 
 Lists the pending transactions: prepared, signed, or sent and not yet seen by
-`sync`. They take three lines each. Each is shown by the
-[short id](#short-ids) of its nosigHash until it is signed, then by that of its
-txid. A conflicted one can no longer be sent.
+`sync`. They take two lines each, as in `txs`. The first starts with the
+[short id](#short-ids) of the nosigHash until the transaction is signed, then
+with that of its txid. It gives the time the transaction was created, its
+amount and its status, with its fee rate. The second gives its account when
+every account is listed, the transactions a replacement replaces, and what the
+transaction is for. A conflicted one can no longer be sent.
 
-`--tabular` shows each transaction on one row of a table: its account when
-every account is listed, the time it was created, its type, its amount, its
-status, its fee rate in sat/vB, its short id, and what it is for, as
+`--tabular` shows each transaction on one row of a table: its short id, its
+account when every account is listed, the time it was created, its type, its
+amount, its status, its fee rate in sat/vB, and what it is for, as
 `txs --tabular` says it. The account column is as wide as the longest name.
 
 `--csv FILE` writes the pending transactions to a [CSV file](#listings): the

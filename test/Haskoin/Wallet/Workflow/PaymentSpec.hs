@@ -281,7 +281,7 @@ receivingSpec ctx = do
         synced home
         listed <- hw home ["coins"] []
         let written = shortCoinArg twoCoins 0
-        runOut listed `shouldSatisfy` Text.isInfixOf ("\n  " <> Text.pack written <> "\n")
+        Text.lines (runOut listed) `shouldSatisfy` any (Text.isPrefixOf (Text.pack written <> "  "))
         (locks . coinsShown <$> hwJson home ["lockcoin", written] []) `shouldReturn` Right [(firstCoin, Just LockedByUser)]
 
     it "is listed alone by coins --locked" $

@@ -436,13 +436,14 @@ labelCommandSpec ctx =
 shownSpec :: Ctx -> Spec
 shownSpec ctx =
   describe "A label as hw shows it" $ do
-    -- The payment received at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj
-    it "is on a line of its own in txs, below the first line of its transaction" $
+    -- The payment of 50000 received at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj,
+    -- the first receiving address
+    it "follows the path of the address a payment received is paid at, in txs" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["label", paidTxid ctx, "Salary"] []
         run <- hw home ["txs"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  \"Salary\"\n  at /0/0\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  balance 0.00050000 btc, at /0/0 \"Salary\"\n"
 
     it "is a field of txs --verbose" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -452,13 +453,13 @@ shownSpec ctx =
         runOut run `shouldSatisfy` Text.isInfixOf "\n  Label    : \"Salary\"\n"
 
     -- pendingtxs lists every account without --account, so it names the
-    -- account before the address paid
-    it "is on a line of its own in pendingtxs" $
+    -- account first
+    it "takes the place of the address a payment pays in pendingtxs" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--label", "Rent"] []
         run <- hw home ["pendingtxs"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  \"Rent\"\n  account main, to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  account main, \"Rent\"\n"
 
     it "is shown by label with the transaction, after its account and network" $
       withChain ctx (paidChain ctx) $ \home _ -> do

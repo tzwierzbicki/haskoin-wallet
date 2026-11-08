@@ -1422,8 +1422,8 @@ The label of an address names the payments it receives. `addresses`,
 `balances` and the transactions that pay the address show it. A change
 address takes no label.
 
-The label of a transaction shows on a line of its own in txs and pendingtxs,
-and as a Label field with --verbose. preparetx, preparesendall and preparesweep
+The label of a transaction shows in txs and pendingtxs, in place of the
+address a payment pays, and as a Label field with --verbose. preparetx, preparesendall and preparesweep
 take one with --label. A pending transaction is named by the hash pendingtxs
 shows, its nosigHash or its txid once signed. Its label goes with it to the
 files of exporttx and --output, and stays once the network has it. bumpfee
@@ -1498,35 +1498,36 @@ The list is as of the last sync. Unconfirmed transactions come first, then
 the newest. The transactions you prepared, and those you sent that `sync` has
 not seen yet, are in pendingtxs.
 
-Each transaction takes four lines. The first gives its time, its type, its
-amount and its status. The time is in the time zone of the computer. The type
-is Outgoing, Incoming, or Internal for a transaction between addresses of the
-account. The amount includes the fee. The status gives the confirmations, up
-to 999+ confirmations. --verbose gives the full count. An unconfirmed
-transaction shows its fee rate instead, which tells how soon a block may take
-it. A dead one was replaced, or dropped from the network. The second line
-gives the balance of the account after the transaction. The newest one shows
-what the account holds, confirmed or not. A dead transaction shows no balance,
-and does not count. A transaction with a label shows it next, on a line of
-its own: see `label`. The third line gives the address paid, the largest when
-there are several. An address of the wallet is named by its derivation path,
-such as /0/3, with its label. The fourth gives its short id, the first 8 digits
-of its txid, which the other commands take in place of the txid. On a terminal,
-the addresses of the wallet and their labels are blue.
+Each transaction takes two lines. The first starts with its short id, the first
+8 digits of its txid, which the other commands take in place of the txid. It
+then gives its time, its amount and its status. The time is in the time zone of
+the computer. The amount includes the fee, with a plus sign when it comes in.
+The status gives the confirmations, up to 999+ confirmations. --verbose gives
+the full count. An unconfirmed transaction shows its fee rate too, which tells
+how soon a block may take it. A dead one was replaced, or dropped from the
+network.
 
-With --verbose, the txid is in full, then its short id. Every address is in
-full, and an address of the wallet has its path after it. Its label is on the line below, with the labels of the coins it
+The second line gives the balance of the account after the transaction. The
+newest one shows what the account holds, confirmed or not. A dead transaction
+shows no balance, and does not count. Then comes what the transaction is for. A
+payment received gives the path of the address it was paid at, such as /0/3,
+then the label of the payment, or else the label of the address. A payment
+gives its label, or else the address it pays, the largest when there are
+several. Nothing in it is cut, a long label or address included. On a
+terminal, the addresses of the wallet and their labels are blue.
+
+With --verbose, each transaction starts with its time, then its type: Outgoing,
+Incoming, or Internal for a transaction between addresses of the account. The
+txid is in full, then its short id. Every address is in full, and an address of
+the wallet has its path after it. Its label is on the line below, with the labels of the coins it
 spends, after the word from. Long labels wrap under the address.
 
 With --tabular, each transaction takes one row of a table, under a header
-that names the columns. The amounts are in the unit the header names. The
-Confs column gives the confirmations as a number alone, up to 999+. An
-unconfirmed transaction has 0, and gives no fee rate. A dead one says dead. The
-Txid column gives the short id. The last column, Description, says what the
-transaction is for. A payment received gives the path of the address it was
-paid at, then the label of the payment, or else the label of the address. A
-payment gives its label, or else the address it pays. Nothing in it is cut, a
-long label or address included.
+that names the columns. The first, Txid, gives the short id. The amounts are in
+the unit the header names. The Confs column gives the confirmations as a number
+alone, up to 999+. An unconfirmed transaction has 0, and gives no fee rate. A
+dead one says dead. The last column, Description, says what the transaction is
+for, in the words of the compact view.
 
 With --csv FILENAME, each transaction takes one row of a new CSV file, for a
 spreadsheet: its time, type, amount, fee and fee rate, the balance after it,
@@ -1540,7 +1541,7 @@ other addresses it pays. Amounts are in satoshis, and times in UTC.
           <$> accountOption
           <*> listingOutputOption
             txVerboseHelp
-            "Show each transaction on one row of a table: its time, type, amount, balance, confirmations and short id, then what it is for: its label, the path of an address of the wallet, or the address paid."
+            "Show each transaction on one row of a table: its short id, time, type, amount, balance and confirmations, then what it is for: its label, the path of an address of the wallet, or the address paid."
             "transactions"
           <*> pagingOptions (afterOption "TXID" hashRefReader "Start after this transaction, by its txid or its short id")
     }
@@ -1905,27 +1906,28 @@ A pending transaction is one that preparetx, preparesendall, bumpfee or
 preparesweep made, or that importtx added. It is unsigned, signed, or sent.
 `sync` retires it once the network lists it. The newest come first.
 
-Each takes three lines. The first gives the time it was created, its type, its
-amount and its status: not signed, signed and not sent, or sent, with its fee
-rate. A transaction with a label shows it next, on a line of its own. The
-second gives the address paid, after the account when every account is listed.
-An address of the wallet is named by its derivation path.
-A replacement that bumpfee made then names the transactions it
-replaces. The last line gives the short id of the transaction, the first 8
-digits of its hash. The hash is the nosigHash of an unsigned transaction, and
-the txid of a signed one. The other commands name a pending transaction by that
-hash, in full or by its short id. The nosigHash of a signed one works too.
---verbose gives the hash in full, then its short id.
+Each takes two lines. The first starts with the short id of the transaction,
+the first 8 digits of its hash. The hash is the nosigHash of an unsigned
+transaction, and the txid of a signed one. The other commands name a pending
+transaction by that hash, in full or by its short id. The nosigHash of a signed
+one works too. --verbose gives the hash in full, then its short id. The first
+line then gives the time the transaction was created, its amount and its
+status: not signed, signed and not sent, or sent, with its fee rate.
+
+The second line gives the account when every account is listed. A replacement
+that bumpfee made then names the transactions it replaces. Last comes what the
+transaction is for, as txs says it: its label, or else the address it pays. An
+address of the wallet is named by its derivation path.
 
 A transaction marked conflicted spends a coin that another transaction has
 spent, or that is gone, as the server said at the last sync. It cannot be sent
 while that lasts. Delete it with deletetx, which frees its coins.
 
 With --tabular, each transaction takes one row of a table, under a header that
-names the columns: its account when every account is listed, the time it was
-created, its type, its amount, its status, its fee rate in sat/vB, its short
-id, and what it is for, as txs --tabular says it. The account column is as wide
-as the longest name.
+names the columns: its short id, its account when every account is listed, the
+time it was created, its type, its amount, its status, its fee rate in sat/vB,
+and what it is for, as txs --tabular says it. The account column is as wide as
+the longest name.
 
 With --csv FILENAME, each transaction takes one row of a new CSV file, for a
 spreadsheet: its account, when it was created, its type, amount, fee and fee
@@ -1939,7 +1941,7 @@ and how many other addresses it pays. Amounts are in satoshis, and times in UTC.
           <$> onlyAccountOption
           <*> listingOutputOption
             txVerboseHelp
-            "Show each transaction on one row of a table: its account, time, type, amount, status, fee rate and short id, then what it is for."
+            "Show each transaction on one row of a table: its short id, account, time, type, amount, status and fee rate, then what it is for."
             "pending transactions"
           <*> pagingOptions (afterOption "HASH" hashRefReader "Start after this pending transaction, by either of its hashes or its short id")
     }
@@ -2157,18 +2159,20 @@ coinsCommand =
       details =
         [r|
 A coin is an unspent output of a transaction, written TXID:INDEX. The
-unconfirmed coins come first, then the newest. Each takes three lines, or four
-when its address has a label. The first gives the time of the transaction that
-paid it, in the time zone of the computer, its value, its state and its
-confirmations, up to 999+ confirmations. The second gives the address that
-holds it, with its derivation path. The label of the address follows on a line
-of its own, under the address, as in the other views that give an address in
-full. A coin at a change address says so there. The last line gives the short
-id of the coin: the first 8 digits of its txid, a colon, and its index, such as
-a1075db5:1. lockcoin and --coin take it, or the coin in full.
+unconfirmed coins come first, then the newest. Each takes two lines, or three
+when its address has a label. The first starts with the short id of the coin:
+the first 8 digits of its txid, a colon, and its index, such as a1075db5:1.
+lockcoin and --coin take it, or the coin in full. The first line then gives the
+time of the transaction that paid the coin, in the time zone of the computer,
+its value, its state and its confirmations, up to 999+ confirmations. A coin
+that a pending transaction spends is "locked by tx". The second line gives the
+address that holds the coin, with its derivation path. The label of the address
+follows on a line of its own, under the address, as in the other views that
+give an address in full. A coin at a change address says so there.
 
-With --verbose, each coin gives the full count of its confirmations on its
-first line. Its fields follow: the label of the transaction that paid it, the
+With --verbose, each coin starts with the time of its transaction, and gives the
+full count of its confirmations on its first line. A coin that a pending
+transaction spends is locked by a pending transaction. Its fields follow: the label of the transaction that paid it, the
 coin in full and its short id, the block that holds it, the time of its transaction to the second, and
 the address in full with its path. The label of the address is on the line
 below it. An unconfirmed coin is in no block yet. Coins have no labels of their
@@ -2176,10 +2180,10 @@ own. The change of a payment you made shows no label of its transaction: the
 label says what the payment was for, not what its change is.
 
 With --tabular, each coin takes one row of a table, under a header that names
-the columns: the time of its transaction, its value, its state, its
-confirmations up to 999+, the address that holds it with its path, the short id
-of the coin, and the label of the address. A coin locked by a pending
-transaction says "locked by tx".
+the columns: the short id of the coin, the time of its transaction, its value,
+its state, its confirmations up to 999+, the address that holds it with its
+path, and the label of the address. A coin locked by a pending transaction says
+"locked by tx".
 
 With --csv FILENAME, each coin takes one row of a new CSV file, for a
 spreadsheet: the coin, TXID:INDEX, in full and by its short id, the time of its
@@ -2203,7 +2207,7 @@ unlockcoin.
           <*> lockedOption
           <*> listingOutputOption
             "Show every detail of each coin: the full count of its confirmations, the label of its transaction, the coin in full and its short id, the block that holds it, the time of its transaction, and its address in full with its path."
-            "Show each coin on one row of a table: the time of its transaction, its value, state and confirmations, its address and path, its short id, and the label of the address."
+            "Show each coin on one row of a table: its short id, the time of its transaction, its value, state and confirmations, its address and path, and the label of the address."
             "coins"
           <*> pagingOptions (afterOption "TXID:INDEX" coinReader "Start after this coin, with its txid in full or by its short id")
     }

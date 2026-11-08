@@ -124,7 +124,7 @@ bumpFeeSpec ctx = do
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
         replacesOf bumped `shouldBe` [stuck]
         run <- hw home ["pendingtxs"] []
-        runOut run `shouldSatisfy` Text.isInfixOf ("\n  replaces " <> Text.pack (shortOf stuck) <> "\n")
+        runOut run `shouldSatisfy` Text.isInfixOf ("\n  account main, replaces " <> Text.pack (shortOf stuck) <> ", ")
 
     it "gives way to its replacement once sent: the history shows it dead, and the replacement confirmed" $
       withChain ctx (paidChain ctx) $ \home chain -> do
