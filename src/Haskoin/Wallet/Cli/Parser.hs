@@ -1460,16 +1460,18 @@ such as /0/3, with its label. The fourth gives the txid. On a terminal, the
 addresses of the wallet and their labels are blue.
 
 With --verbose, every address is in full, and an address of the wallet has its
-path after it. Its label is on the line below.
+path after it. Its label is on the line below, with the labels of the coins it
+spends, after the word from. Long labels wrap under the address.
 
 With --tabular, each transaction takes one row of a table, under a header
 that names the columns. The amounts are in the unit the header names. The
-Confirmations column gives their number alone, up to 999+. An unconfirmed
-transaction has 0, and gives no fee rate. A dead one says dead. The last
-column, Description, says what the transaction is for. A payment received gives the path of
-the address it was paid at, then the label of the payment, or else the label of
-the address. A payment gives its label, or else the address it pays. The column
-is cut at 50 characters. The table leaves out the txid.
+Confs column gives the confirmations as a number alone, up to 999+. An
+unconfirmed transaction has 0, and gives no fee rate. A dead one says dead. The
+last column, Description, says what the transaction is for. A payment received
+gives the path of the address it was paid at, then the label of the payment, or
+else the label of the address. A payment gives its label, or else the address
+it pays. A label is cut to fit in 50 columns. An address is never cut. The
+table leaves out the txid.
 |],
       args =
         CommandTxs
@@ -1846,8 +1848,9 @@ while that lasts. Delete it with deletetx, which frees its coins.
 With --tabular, each transaction takes one row of a table, under a header that
 names the columns: its account when every account is listed, the time it was
 created, its type, its amount, its status, its fee rate in sat/vB, and what it
-is for, as txs --tabular says it. An account name longer than 12 characters is
-cut short. The table leaves out the hash, which the other commands take.
+is for, as txs --tabular says it. The account column is as wide as the longest
+name, up to 20 columns. A longer name is cut short. The table leaves out the
+hash, which the other commands take.
 |],
       args =
         CommandPendingTxs

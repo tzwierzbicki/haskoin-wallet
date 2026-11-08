@@ -14,13 +14,15 @@ import Haskoin.Wallet.Amounts (AmountUnit)
 import Haskoin.Wallet.Database (DB, catchDatabaseInUse, runDB)
 import Haskoin.Wallet.Memory (keepMemoryPrivate)
 import Haskoin.Wallet.Cli.Listing (Listing, streamListing)
-import Haskoin.Wallet.Cli.Pager (pagerCommand, withPager, writeDoc)
+import Haskoin.Wallet.Cli.Pager (Shown (..), pagerCommand, tableShown, withPager)
 import Haskoin.Wallet.Migration (Hooks (..), migrateDB)
 import Haskoin.Wallet.Backup (backupDatabase, migrationBackupDirectory)
-import Haskoin.Wallet.Cli.Parser (GlobalOptions (..), View, addressCodeOf, parserMain, txShownOf, viewOf)
+import Haskoin.Wallet.Cli.Parser (GlobalOptions (..), View (..), addressCodeOf, parserMain, txShownOf, viewOf)
 import Haskoin.Wallet.Cli.PrettyPrinter (chunkDoc, errorDoc, prettyPrinter, printNextSteps)
 import Haskoin.Wallet.Cli.Response (Response (..), responseFailed)
+import Haskoin.Wallet.Cli.Style (renderPlain)
 import Haskoin.Wallet.Util (encodeJsonPretty)
+import qualified System.Console.Terminal.Size as Terminal
 import System.Environment (getArgs)
 import System.Exit (die, exitFailure)
 import System.IO (hPutStrLn, stderr)
@@ -58,12 +60,18 @@ clientMain = do
             printNextSteps cmd res
 
 -- | Print a listing on the screen, chunk by chunk, through the pager when
--- there is one, its transactions in the view given. A listing that fails
--- exits as a failure, as an answer does.
+-- there is one, its elements in the view given. The pager keeps the rows
+-- of a table whole, and the header of a table taller than the screen on
+-- the screen: the first chunk tells how tall the table is, the height of
+-- the terminal how tall the screen. A listing that fails exits as a
+-- failure, as an answer does.
 printListing :: Config -> Maybe String -> AmountUnit -> View -> ExceptT String (DB IO) Listing -> IO ()
 printListing cfg pager unit view listing = do
-  failed <- withPager pager $ \h output -> do
-    let write = writeDoc h output
+  screenRows <- fmap Terminal.height <$> Terminal.size
+  let shownOf doc
+        | view == Table = tableShown screenRows (length (lines (renderPlain doc)))
+        | otherwise = TextLines
+  failed <- withPager pager shownOf $ \write -> do
     streamed <- streamListing cfg listing $ \first answer -> write =<< chunkDoc unit view first answer
     case streamed of
       Left err -> write (errorDoc (cs err)) >> return True

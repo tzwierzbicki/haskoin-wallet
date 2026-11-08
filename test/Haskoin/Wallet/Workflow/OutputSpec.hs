@@ -154,8 +154,16 @@ listingSpec ctx = do
         createMain home
         _ <- answer home ["createacc", "family savings account"] seedTwice
         listed <- Text.lines . runOut <$> hw home ["accounts", "--tabular"] []
-        take 1 listed `shouldBe` ["Account                │ Network  │ Path         │ Spendable (btc) │ Unconfirmed (btc) │ Coins"]
-        listed `shouldContain` ["family savings account │ btc      │ /44'/0'/1'   │      0.00000000 │        0.00000000 │     0"]
+        take 1 listed `shouldBe` ["Account                │ Network │ Path       │ Spendable (btc) │ Unconfirmed (btc) │ Coins"]
+        listed `shouldContain` ["family savings account │ btc     │ /44'/0'/1' │      0.00000000 │        0.00000000 │     0"]
+
+    -- The payment waits in the mempool. Yellow is colour 33 of the
+    -- terminal. --no-pager prints the listing itself.
+    it "shows the unconfirmed balance of an account in yellow on a terminal, as what cannot be spent yet" $
+      withChain ctx (Chain 800002 [(payment ctx, Nothing)]) $ \home _ -> do
+        synced home
+        run <- hwOnScreen [] home ["accounts", "--no-pager"]
+        runOut run `shouldSatisfy` Text.isInfixOf "unconfirmed \ESC[0;33m0.00050000\ESC[0m btc"
 
     -- The header takes two lines, and the coin of the payment one row
     it "shows each coin on one row under a header with coins --tabular" $

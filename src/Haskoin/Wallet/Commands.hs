@@ -661,7 +661,9 @@ pendingTxsListing ctx account paging = do
           Pending pending | Just created <- pendingCreated pending -> Right (created, pendingNosigHash pending)
           _ -> Left "pendingtxs lists the transactions the wallet holds only",
         listingAnswer = ResponsePendingTxs (snd <$> asked),
-        listingWhole = False
+        -- A few transactions, read whole: the table of them sizes its
+        -- column of accounts to the longest name
+        listingWhole = True
       }
 
 -- | Show the transaction of a file, as the account it involves sees it, or

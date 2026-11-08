@@ -12,7 +12,8 @@
 -- A listing of few rows, which reads all of them for any chunk anyway, is
 -- read whole instead, in one chunk ('listingWhole'). Its table can then
 -- size a column to its widest cell, which a listing in chunks cannot: a
--- later chunk would not line up with the first. accounts is read so.
+-- later chunk would not line up with the first. accounts and pendingtxs
+-- are read so.
 module Haskoin.Wallet.Cli.Listing
   ( Paging (..),
     Listing (..),

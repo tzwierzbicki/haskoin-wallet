@@ -105,7 +105,8 @@ Using `hw`:
 - `txs` shows the balance after each transaction.
 - `--tabular` shows each element of a listing on one row of a table, in
   columns under a header: `accounts`, `addresses`, `balances`, `coins`, `txs`
-  and `pendingtxs`.
+  and `pendingtxs`. `less` keeps each row on one line, and the header of a
+  table taller than the screen on the screen.
 - `sync` and `recover` show what they are doing on a status line.
 - Tab completion in bash, zsh and fish. It completes commands, options,
   account names, coins, addresses and pending transactions.

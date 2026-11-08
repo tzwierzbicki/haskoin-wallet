@@ -707,12 +707,25 @@ tableSpec = do
       renderedLines (txRowDoc btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) (spent "Deposit for the flat in Lyon, paid by bank and card" Map.empty))
         `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ \"Deposit for the flat in Lyon, paid by bank and …\""]
 
-    -- The address has 62 characters. "to ", its first 46 and the ellipsis
-    -- make 50.
-    it "cuts the address of another wallet too long for the cell, to 50 characters with an ellipsis" $ do
+    -- "to " and the 62 characters of the address make 65, past 50
+    it "gives the address of another wallet whole, however long, never cut" $ do
       let toTaproot = TxInfo spendSummary {summaryOtherOutputs = Map.fromList [(taprootExternalAddr 0, 40000)]} (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
       renderedLines (txRowDoc btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) toTaproot)
-        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ to bc1p8zl0j9e73592k9n6ftz4keyq24dq8djqd3rkcrepu2…"]
+        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ to bc1p8zl0j9e73592k9n6ftz4keyq24dq8djqd3rkcrepu2fw6zeryyjs8zz3ev"]
+
+    -- "to " and the 54 characters of the address, its prefix included,
+    -- make 57
+    it "gives a Bitcoin Cash address whole, with its prefix" $ do
+      let toCash = TxInfo spendSummary {summaryOtherOutputs = Map.fromList [(bchExternalAddr, 40000)]} (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
+      renderedLines (txRowDoc bch UnitBitcoin (Just 1208000) (Just seenTimeInCet) toCash)
+        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ to bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"]
+
+    -- The 27 characters of the label take 54 columns. With its quotes, the
+    -- label has 48 of the 50: its first 23 characters take 46, and the
+    -- ellipsis makes 47.
+    it "cuts a label by the columns it takes, a wide character counting two" $
+      renderedLines (txRowDoc btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) (spent "東京の家賃と光熱費とインターネットと電話と水道の支払い" Map.empty))
+        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ \"東京の家賃と光熱費とインターネットと電話と水道…\""]
 
     it "gives the label of a payment received after the path of the address it was paid at" $ do
       let info = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "Salary" Map.empty
@@ -877,47 +890,64 @@ addressTableSpec = do
                      "/0/0  │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │      0.00050000 │     0.00050000 │     1 │ \"Invoice 42\""
                    ]
 
--- The columns of the accounts: the name as wide as the longest one, or as
--- "Account", 8 for the network, 12 for the path, 15 for "Spendable
--- (btc)", 17 for "Unconfirmed (btc)", and 5 for the coins. main can spend
--- 5000000 of its 3 coins, and 100000 is unconfirmed.
+-- The columns of the accounts: the name, the network and the path as
+-- wide as the widest of the accounts, or as their headings, then 15 for
+-- "Spendable (btc)", 17 for "Unconfirmed (btc)", and 5 for the coins.
+-- main can spend 5000000 of its 3 coins, and 100000 is unconfirmed.
 accountTableSpec :: Spec
 accountTableSpec =
   describe "The table of accounts --tabular" $ do
     let ofMain = accountTableColumns UnitBitcoin [mainAccountRow]
 
-    -- "main" is shorter than "Account", of 7 characters: 7 + 1 = 8 under
-    -- Account, 8 + 2 = 10 under Network, 12 + 2 = 14 under Path, 15 + 2 =
-    -- 17 under Spendable, 17 + 2 = 19 under Unconfirmed, and 5 + 1 = 6
-    -- under Coins
+    -- "main" and "btc" are shorter than "Account" and "Network", of 7
+    -- characters, and "/44'/0'/0'" takes 10: 7 + 1 = 8 under Account,
+    -- 7 + 2 = 9 under Network, 10 + 2 = 12 under Path, 15 + 2 = 17 under
+    -- Spendable, 17 + 2 = 19 under Unconfirmed, and 5 + 1 = 6 under Coins
     it "names its columns in a header, the unit in the headings of the amounts, with a line under it" $
       concatMap renderedLines (tableHeader ofMain)
-        `shouldBe` [ "Account │ Network  │ Path         │ Spendable (btc) │ Unconfirmed (btc) │ Coins",
-                     "────────┼──────────┼──────────────┼─────────────────┼───────────────────┼──────"
+        `shouldBe` [ "Account │ Network │ Path       │ Spendable (btc) │ Unconfirmed (btc) │ Coins",
+                     "────────┼─────────┼────────────┼─────────────────┼───────────────────┼──────"
                    ]
 
     it "gives an account one row: its name, network and path, what it can spend, what is unconfirmed, and its coins" $
       renderedLines (accountRowDoc UnitBitcoin ofMain mainAccountRow 5000000)
-        `shouldBe` ["main    │ btc      │ /44'/0'/0'   │      0.05000000 │        0.00100000 │     3"]
+        `shouldBe` ["main    │ btc     │ /44'/0'/0' │      0.05000000 │        0.00100000 │     3"]
 
     it "gives the path of a bip84 account, and zero for what an unpaid account holds" $
       renderedLines (accountRowDoc UnitBitcoin (accountTableColumns UnitBitcoin [segwitAccountRow]) segwitAccountRow 0)
-        `shouldBe` ["spending │ btc      │ /84'/0'/0'   │      0.00000000 │        0.00000000 │     0"]
+        `shouldBe` ["spending │ btc     │ /84'/0'/0' │      0.00000000 │        0.00000000 │     0"]
 
     -- "family savings account" has 22 characters
     it "gives a long name whole, in a first column as wide as it" $ do
       let family = mainAccountRow {dBAccountName = "family savings account"}
       renderedLines (accountRowDoc UnitBitcoin (accountTableColumns UnitBitcoin [family]) family 5000000)
-        `shouldBe` ["family savings account │ btc      │ /44'/0'/0'   │      0.05000000 │        0.00100000 │     3"]
+        `shouldBe` ["family savings account │ btc     │ /44'/0'/0' │      0.05000000 │        0.00100000 │     3"]
+
+    -- The eleventh account of Bitcoin Cash, of coin type 145, has the path
+    -- /44'/145'/10', of 13 characters
+    it "makes the column of paths as wide as the longest path" $ do
+      let eleventh = mainAccountRow {dBAccountNetwork = "bch", dBAccountIndex = 10}
+      renderedLines (accountRowDoc UnitBitcoin (accountTableColumns UnitBitcoin [eleventh]) eleventh 5000000)
+        `shouldBe` ["main    │ bch     │ /44'/145'/10' │      0.05000000 │        0.00100000 │     3"]
+
+    -- Each of the five characters of 家族の貯金 takes two columns of the
+    -- terminal: 5 × 2 = 10. "main" takes 4, and 6 spaces make 10.
+    it "counts two columns for a wide character, so that the columns line up after it" $ do
+      let family = mainAccountRow {dBAccountName = "家族の貯金"}
+          both = accountTableColumns UnitBitcoin [family, mainAccountRow]
+      concatMap renderedLines [accountRowDoc UnitBitcoin both family 5000000, accountRowDoc UnitBitcoin both mainAccountRow 5000000]
+        `shouldBe` [ "家族の貯金 │ btc     │ /44'/0'/0' │      0.05000000 │        0.00100000 │     3",
+                     "main       │ btc     │ /44'/0'/0' │      0.05000000 │        0.00100000 │     3"
+                   ]
 
     -- "spending", of 8 characters, is the longest name of the two
     it "makes the first column of a chunk as wide as the longest name of its accounts" $ do
       doc <- chunkDoc UnitBitcoin Table True (ResponseAccounts [(mainAccountRow, 5000000), (segwitAccountRow, 0)])
       renderedLines doc
-        `shouldBe` [ "Account  │ Network  │ Path         │ Spendable (btc) │ Unconfirmed (btc) │ Coins",
-                     "─────────┼──────────┼──────────────┼─────────────────┼───────────────────┼──────",
-                     "main     │ btc      │ /44'/0'/0'   │      0.05000000 │        0.00100000 │     3",
-                     "spending │ btc      │ /84'/0'/0'   │      0.00000000 │        0.00000000 │     0"
+        `shouldBe` [ "Account  │ Network │ Path       │ Spendable (btc) │ Unconfirmed (btc) │ Coins",
+                     "─────────┼─────────┼────────────┼─────────────────┼───────────────────┼──────",
+                     "main     │ btc     │ /44'/0'/0' │      0.05000000 │        0.00100000 │     3",
+                     "spending │ btc     │ /84'/0'/0' │      0.00000000 │        0.00000000 │     0"
                    ]
 
 -- The columns of the coins of main, with paths of 4 characters: 17 for
@@ -1026,16 +1056,18 @@ balanceTableSpec =
                      "/0/0  │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │     0.00080000 │      0.00050000 │        0.00030000 │ \"Invoice 42\""
                    ]
 
--- The columns of the pending transactions: 12 for the account when every
--- account is listed, 17 for the time, 8 for the type, 14 for the amount,
--- 10 for the status and 6 for the fee rate, then what it is for
+-- The columns of the pending transactions: the account when every account
+-- is listed, as wide as its longest name up to 20, 17 for the time, 8 for
+-- the type, 14 for the amount, 10 for the status and 6 for the fee rate,
+-- then what it is for
 pendingTableSpec :: Spec
 pendingTableSpec =
   describe "The table of pending transactions --tabular" $ do
-    let ofOne = pendingTableColumns UnitBitcoin False
-        ofEvery = pendingTableColumns UnitBitcoin True
+    let ofOne = pendingTableColumns UnitBitcoin Nothing
+        ofMain = pendingTableColumns UnitBitcoin (Just [mainAccountRow])
         preparedWith signedM online conflicted = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) signedM online conflicted (Just seenTime) [])) "" Map.empty
         unsigned = preparedWith Nothing False False
+        timeless = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing [])) "" Map.empty
 
     -- 17 + 1 = 18 under Time, 8 + 2 = 10 under Type, 14 + 2 = 16 under
     -- Amount, 10 + 2 = 12 under Status, 6 + 2 = 8 under sat/vB, and
@@ -1046,11 +1078,12 @@ pendingTableSpec =
                      "──────────────────┼──────────┼────────────────┼────────────┼────────┼────────────"
                    ]
 
-    -- 12 + 1 = 13 under Account, then 17 + 2 = 19 under Time
+    -- "main" is shorter than "Account", of 7 characters: 7 + 1 = 8 under
+    -- Account, then 17 + 2 = 19 under Time
     it "names the account first when it lists every account" $
-      concatMap renderedLines (tableHeader ofEvery)
-        `shouldBe` [ "Account      │ Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Description",
-                     "─────────────┼───────────────────┼──────────┼────────────────┼────────────┼────────┼────────────"
+      concatMap renderedLines (tableHeader ofMain)
+        `shouldBe` [ "Account │ Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Description",
+                     "────────┼───────────────────┼──────────┼────────────────┼────────────┼────────┼────────────"
                    ]
 
     -- 40000 paid + 1000 of fee = 41000, at 4 sat/vB
@@ -1071,14 +1104,32 @@ pendingTableSpec =
         `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ conflicted │        │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "names the account of the transaction first when it lists every account" $
-      renderedLines (pendingRowDoc btc UnitBitcoin ofEvery (Just mainAccountRow) (Just seenTimeInCet) unsigned)
-        `shouldBe` ["main         │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+      renderedLines (pendingRowDoc btc UnitBitcoin ofMain (Just mainAccountRow) (Just seenTimeInCet) unsigned)
+        `shouldBe` ["main    │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
-    -- "family savings account" has 22 characters. Its first 11 and the
-    -- ellipsis make 12.
-    it "cuts the name of an account longer than 12 characters to its first 11 and an ellipsis" $
-      renderedLines (pendingRowDoc btc UnitBitcoin ofEvery (Just mainAccountRow {dBAccountName = "family savings account"}) (Just seenTimeInCet) unsigned)
-        `shouldBe` ["family savi… │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+    -- "family savings" has 14 characters, more than "main" and "Account"
+    it "makes the column of accounts as wide as the longest name it lists" $ do
+      let family = mainAccountRow {dBAccountName = "family savings"}
+          both = pendingTableColumns UnitBitcoin (Just [mainAccountRow, family])
+      concatMap renderedLines [pendingRowDoc btc UnitBitcoin both (Just family) (Just seenTimeInCet) unsigned, pendingRowDoc btc UnitBitcoin both (Just mainAccountRow) (Just seenTimeInCet) unsigned]
+        `shouldBe` [ "family savings │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU",
+                     "main           │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
+                   ]
+
+    -- "family savings account" has 22 characters. Its first 19 and the
+    -- ellipsis make 20, the width of the column.
+    it "cuts the name of an account longer than 20 characters to its first 19 and an ellipsis" $ do
+      let family = mainAccountRow {dBAccountName = "family savings account"}
+      renderedLines (pendingRowDoc btc UnitBitcoin (pendingTableColumns UnitBitcoin (Just [family])) (Just family) (Just seenTimeInCet) unsigned)
+        `shouldBe` ["family savings acco… │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+
+    -- The 13 characters of 家族の貯金と旅行の口座です take 26 columns. Its
+    -- first 9 take 18, and the ellipsis makes 19. The column takes 20, so
+    -- a space pads the name.
+    it "cuts a name by the columns it takes, a wide character counting two" $ do
+      let family = mainAccountRow {dBAccountName = "家族の貯金と旅行の口座です"}
+      renderedLines (pendingRowDoc btc UnitBitcoin (pendingTableColumns UnitBitcoin (Just [family])) (Just family) (Just seenTimeInCet) unsigned)
+        `shouldBe` ["家族の貯金と旅行の…  │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "gives the label of a payment in place of the address it pays, as the table of txs does" $ do
       let labelled = unsigned {txInfoLabel = "Rent of October"}
@@ -1088,16 +1139,14 @@ pendingTableSpec =
     -- A transaction without a time shows "time unknown", whatever the time
     -- zone of the computer
     it "names the accounts in a chunk of the pending transactions of every account" $ do
-      let timeless = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing [])) "" Map.empty
       doc <- chunkDoc UnitBitcoin Table True (ResponsePendingTxs Nothing [(mainAccountRow, timeless)])
       renderedLines doc
-        `shouldBe` [ "Account      │ Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Description",
-                     "─────────────┼───────────────────┼──────────┼────────────────┼────────────┼────────┼────────────",
-                     "main         │ time unknown      │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
+        `shouldBe` [ "Account │ Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Description",
+                     "────────┼───────────────────┼──────────┼────────────────┼────────────┼────────┼────────────",
+                     "main    │ time unknown      │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
                    ]
 
     it "leaves the accounts out of a chunk of the pending transactions of one account" $ do
-      let timeless = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing [])) "" Map.empty
       doc <- chunkDoc UnitBitcoin Table False (ResponsePendingTxs (Just mainAccountRow) [(mainAccountRow, timeless)])
       renderedLines doc
         `shouldBe` ["time unknown      │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]

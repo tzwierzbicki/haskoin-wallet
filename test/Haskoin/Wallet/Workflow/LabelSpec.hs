@@ -307,6 +307,21 @@ coinLabelsSpec ctx =
         run <- hw signer ["reviewtx", online </> "unsigned.psbt"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0\n             \"Wages\"  from \"Salary\"\n"
 
+    -- The line below the address starts at column 13, under the address,
+    -- and wraps before column 80, each new line under the address again
+    it "wraps with the label of the address spent from at the edge of the screen, under the address" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["label", paidTxid ctx, "This is a very long label for an internal transaction that was done on oct 31. Bloooooooooooooob! Bloooooooooooooooob!"] []
+        _ <- answer home ["label", textOf (externalAddr 0), "Label for an address blablabla"] []
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        Text.lines (runOut run)
+          `shouldContain` [ "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0",
+                            "             \"Label for an address blablabla\"  from \"This is a very long label",
+                            "             for an internal transaction that was done on oct 31.",
+                            "             Bloooooooooooooob! Bloooooooooooooooob!\""
+                          ]
+
     -- The label is given while the file is away
     it "is the wallet's own in the answer of importtx, not the file's" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
