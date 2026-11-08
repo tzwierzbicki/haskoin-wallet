@@ -11,18 +11,18 @@
 module Haskoin.Wallet.Database.TxInfoSpec (spec) where
 
 import Conduit (liftIO)
-import Control.Monad (void)
+import Control.Monad (forM_, void)
 import Control.Monad.Except (ExceptT)
 import Control.Monad.Trans (lift)
 import Data.Aeson (Object, Value (Array, Null, Object), eitherDecode, encode)
 import Data.Foldable (toList)
+import Data.List (sort)
 import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Aeson.Types (parseEither)
 import qualified Data.ByteString as BS
 import Data.Default (def)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -142,9 +142,12 @@ idAb, idCd :: TxHash
 idAb = typedTxid "ab00000000000000000000000000000000000000000000000000000000000000"
 idCd = typedTxid "cd00000000000000000000000000000000000000000000000000000000000000"
 
--- | A transaction id as the user types it
-typedTxid :: Text -> TxHash
-typedTxid = fromMaybe (error "typedTxid") . hexToTxHash
+-- | The lowest and the highest txids of the short id ab000000, and the
+-- lowest of the next short id, ab000001
+lowestAb, highestAb, nextAb :: TxHash
+lowestAb = idAb
+highestAb = typedTxid "ab000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+nextAb = typedTxid "ab00000100000000000000000000000000000000000000000000000000000000"
 
 -- | The row of a transaction of the account
 storedRow :: DBAccountId -> TxHash -> DB IO (Maybe DBTxInfo)
@@ -669,6 +672,33 @@ listingSpec ctx =
           -- In the order of the ids, up to the count
           txidsStarting accId "" 21 `dbShouldBe` [idAb, idCd]
           txidsStarting accId "" 1 `dbShouldBe` [idAb]
+
+    -- A short id names the txids that start with its 8 digits, ab000000
+    -- here: the lowest and the highest of them, and not ab000001, the next
+    -- short id
+    it "finds the txids of the account that have the short id, from the lowest to the highest, and no other" $
+      inDatabaseE $ do
+        accId <- account ctx
+        lift $ do
+          forM_ [lowestAb, highestAb, nextAb, idCd] $ \tid ->
+            repsertSummary btc accId tid (Store.BlockRef 800000 1) seenTime paymentSummary
+          (sort . map txHashToHex <$> txidsWith accId (typedShortId "ab000000"))
+            `dbShouldBe` [ "ab00000000000000000000000000000000000000000000000000000000000000",
+                           "ab000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                         ]
+
+    it "finds the txids that have the short id in every account, a txid two accounts hold once" $
+      inDatabaseE $ do
+        accId <- account ctx
+        (otherId, _) <- testNewAcc2 ctx "other"
+        lift $ do
+          _ <- repsertSummary btc accId lowestAb (Store.BlockRef 800000 1) seenTime paymentSummary
+          _ <- repsertSummary btc otherId lowestAb (Store.BlockRef 800000 1) seenTime paymentSummary
+          _ <- repsertSummary btc otherId highestAb (Store.BlockRef 800000 2) seenTime paymentSummary
+          (sort . map txHashToHex <$> walletTxidsWith (typedShortId "ab000000"))
+            `dbShouldBe` [ "ab00000000000000000000000000000000000000000000000000000000000000",
+                           "ab000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                         ]
 
     it "lists the transactions of the account alone" $
       inDatabaseE $ do

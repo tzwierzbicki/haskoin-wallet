@@ -33,6 +33,7 @@ import Haskoin.Wallet.Database.PendingTx
 import Haskoin.Wallet.Database.RawTx
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Keys (AccountKind (..))
+import Haskoin.Wallet.ShortId (shortIdOf)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.Building (ChangeTo (..), CoinControl (..), buildTxSignData)
 import Haskoin.Wallet.Database.TxInfo
@@ -607,6 +608,23 @@ namingSpec ctx =
         (accId, _) <- testNewAcc ctx "test"
         (pendingHash, signed) <- signedPending ctx cfg accId
         ((.pendingTxData) <$> requirePendingTx pendingHash) `dbShouldBeE` signed
+
+    -- The short id of a hash is its first 8 digits
+    it "is found by the short id of either of its hashes once signed" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        (pendingHash, signed) <- signedPending ctx cfg accId
+        let txid = txHash signed.txSignDataTx
+        pendingHashesWith (shortIdOf pendingHash) `dbShouldBeE` [pendingHash]
+        pendingHashesWith (shortIdOf txid) `dbShouldBeE` [txid]
+
+    -- The hashes of the pending transaction are real ones, which do not
+    -- start with 00000000
+    it "is not found by a short id neither of its hashes has" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx "test"
+        _ <- signedPending ctx cfg accId
+        pendingHashesWith (typedShortId "00000000") `dbShouldBeE` []
 
 labellingSpec :: Ctx -> Spec
 labellingSpec ctx =

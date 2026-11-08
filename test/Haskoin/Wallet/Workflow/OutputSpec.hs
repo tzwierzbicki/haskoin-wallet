@@ -251,6 +251,18 @@ listingSpec ctx = do
           (keysOf <$> hwJson home [listing, "--after", keys !! 0] []) `shouldReturn` Right [keys !! 1]
           (rowsOf <$> hwJson home [listing, "--after", keys !! 1] []) `shouldReturn` Right 0
 
+    -- The listings of the test before that name a row by a hash. A coin is
+    -- the short id of its txid, then its index.
+    it "shows the rows after the one --after names by its short id" $
+      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (payment ctx) 0, "--fee-rate", "10"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--coin", coinArg (newerPayment ctx) 0, "--fee-rate", "10"] []
+        let shortKey key = shortOf key <> dropWhile (/= ':') key
+        forM_ ["txs", "coins", "pendingtxs"] $ \listing -> do
+          keys <- either fail return . keysOf =<< hwJson home [listing] []
+          (keysOf <$> hwJson home [listing, "--after", shortKey (keys !! 0)] []) `shouldReturn` Right [keys !! 1]
+
     -- The two payments of the test before, signed. The newer is listed
     -- first.
     it "shows the pending transactions after the signed one --after names by its txid" $
@@ -283,7 +295,7 @@ listingViewSpec ctx =
         synced home
         setListingView home "verbose"
         run <- hw home ["coins"] []
-        Text.lines (runOut run) `shouldContain` ["  Block  : 800000"]
+        Text.lines (runOut run) `shouldContain` ["  Block   : 800000"]
 
     -- A table has a line of dashes under its headings, the second line,
     -- which no other view has. The payment prepared gives each listing
@@ -330,7 +342,7 @@ listingViewSpec ctx =
         synced home
         setListingView home "tabular"
         run <- hw home ["lockcoin", coinArg (payment ctx) 0] []
-        Text.lines (runOut run) `shouldContain` ["  Block  : 800000"]
+        Text.lines (runOut run) `shouldContain` ["  Block   : 800000"]
 
 {- Transactions as hw shows them -}
 
@@ -632,25 +644,25 @@ pendingListSpec ctx =
         let duringRun time = addUTCTime (-1) started <= time && time <= addUTCTime 1 ended
         (fmap (fmap duringRun) <$> times) `shouldBe` Right [Just True]
 
-    it "show an unsigned transaction by its nosigHash" $
+    it "show an unsigned transaction by the short id of its nosigHash" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         run <- hw home ["pendingtxs"] []
-        runOut run `shouldSatisfy` Text.isInfixOf ("\n  " <> Text.pack nosig <> "\n")
+        runOut run `shouldSatisfy` Text.isInfixOf ("\n  " <> Text.pack (shortOf nosig) <> "\n")
 
-    it "show a signed transaction by its txid" $
+    it "show a signed transaction by the short id of its txid" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         _ <- paymentSigned home
         txid <- txidOf =<< onePendingTx home
         run <- hw home ["pendingtxs"] []
-        runOut run `shouldSatisfy` Text.isInfixOf ("\n  " <> Text.pack txid <> "\n")
+        runOut run `shouldSatisfy` Text.isInfixOf ("\n  " <> Text.pack (shortOf txid) <> "\n")
 
-    it "hide the nosigHash of a signed transaction" $
+    it "hide the nosigHash of a signed transaction, even its short id" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         nosig <- paymentSigned home
         run <- hw home ["pendingtxs"] []
-        runOut run `shouldNotSatisfy` Text.isInfixOf (Text.pack nosig)
+        runOut run `shouldNotSatisfy` Text.isInfixOf (Text.pack (shortOf nosig))
 
     it "show the time they were created to the second with --verbose" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -683,7 +695,7 @@ coinsListSpec ctx =
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         run <- hw home ["coins", "--verbose"] []
-        Text.lines (runOut run) `shouldContain` ["  Block  : 800000"]
+        Text.lines (runOut run) `shouldContain` ["  Block   : 800000"]
 
     it "do not show the block without --verbose" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -695,14 +707,14 @@ coinsListSpec ctx =
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         run <- hw home ["lockcoin", coinArg (payment ctx) 0] []
-        Text.lines (runOut run) `shouldContain` ["  Block  : 800000"]
+        Text.lines (runOut run) `shouldContain` ["  Block   : 800000"]
 
     it "are shown with every detail by unlockcoin, which answers with one" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["lockcoin", coinArg (payment ctx) 0] []
         run <- hw home ["unlockcoin", coinArg (payment ctx) 0] []
-        Text.lines (runOut run) `shouldContain` ["  Block  : 800000"]
+        Text.lines (runOut run) `shouldContain` ["  Block   : 800000"]
 
 balancesListSpec :: Ctx -> Spec
 balancesListSpec ctx =
@@ -753,9 +765,10 @@ balancesListSpec ctx =
 
 {- Next steps -}
 
--- | The nosigHash of the one pending transaction of a home
-onePendingNosig :: FilePath -> IO Text
-onePendingNosig home = Text.pack <$> (nosigOf =<< onePendingTx home)
+-- | The short id of the nosigHash of the one pending transaction of a
+-- home, its first 8 digits, by which the next steps name it
+onePendingShortId :: FilePath -> IO Text
+onePendingShortId home = Text.pack . shortOf <$> (nosigOf =<< onePendingTx home)
 
 -- | Whether the output of a run shows the command
 showsCommand :: Text -> Run -> Bool
@@ -892,37 +905,37 @@ addressCodeSpec ctx = do
 nextStepSpec :: Ctx -> Spec
 nextStepSpec ctx =
   describe "The next step of a payment or a sweep, shown after the answer" $ do
-    it "is to sign the transaction preparetx made, or to export it to sign it offline" $
+    it "is to sign the transaction preparetx made, or to export it to sign it offline, by the short id of its nosigHash" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
-        nosig <- onePendingNosig home
-        run `shouldSatisfy` showsCommand ("hw signtx " <> nosig)
-        run `shouldSatisfy` showsCommand ("hw exporttx " <> nosig <> " FILE")
+        short <- onePendingShortId home
+        run `shouldSatisfy` showsCommand ("hw signtx " <> short)
+        run `shouldSatisfy` showsCommand ("hw exporttx " <> short <> " FILE")
 
     it "is to sign the file preparetx wrote on an offline computer, or the transaction here" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", home </> "unsigned.psbt", "--fee-rate", "10"] []
-        nosig <- onePendingNosig home
+        short <- onePendingShortId home
         run `shouldSatisfy` showsCommand ("hw signtx --input " <> Text.pack (home </> "unsigned.psbt") <> "\n")
-        run `shouldSatisfy` showsCommand ("hw signtx " <> nosig)
+        run `shouldSatisfy` showsCommand ("hw signtx " <> short)
 
     it "is to sign the transaction preparesendall made, or to export it to sign it offline" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         run <- hw home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "10"] []
-        nosig <- onePendingNosig home
-        run `shouldSatisfy` showsCommand ("hw signtx " <> nosig)
-        run `shouldSatisfy` showsCommand ("hw exporttx " <> nosig <> " FILE")
+        short <- onePendingShortId home
+        run `shouldSatisfy` showsCommand ("hw signtx " <> short)
+        run `shouldSatisfy` showsCommand ("hw exporttx " <> short <> " FILE")
 
-    it "is to send the transaction signtx signed in the wallet, by its txid" $
+    it "is to send the transaction signtx signed in the wallet, by the short id of its txid" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         run <- hw home ["signtx", nosig] seedOnce
         txid <- txidOf =<< onePendingTx home
-        run `shouldSatisfy` showsCommand ("hw sendtx " <> Text.pack txid)
+        run `shouldSatisfy` showsCommand ("hw sendtx " <> Text.pack (shortOf txid) <> "\n")
 
     it "is to send the file signtx signed offline, from the online computer" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
@@ -967,9 +980,9 @@ nextStepSpec ctx =
         _ <- answer home ["receive"] []
         keys <- writeKeyFile home
         run <- hw home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
-        nosig <- onePendingNosig home
-        run `shouldSatisfy` showsCommand ("hw signsweep " <> nosig <> " --key-file " <> Text.pack keys)
-        run `shouldSatisfy` showsCommand ("hw exporttx " <> nosig <> " FILE")
+        short <- onePendingShortId home
+        run `shouldSatisfy` showsCommand ("hw signsweep " <> short <> " --key-file " <> Text.pack keys)
+        run `shouldSatisfy` showsCommand ("hw exporttx " <> short <> " FILE")
 
     -- Prepared from the address of the key, without it: signsweep asks
     -- for the key on the terminal
@@ -978,8 +991,8 @@ nextStepSpec ctx =
         createMain home
         _ <- answer home ["receive"] []
         run <- hw home ["preparesweep", "--sweep-from", textOf wikiAddr, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
-        nosig <- onePendingNosig home
-        run `shouldSatisfy` showsCommand ("hw signsweep " <> nosig <> "\n")
+        short <- onePendingShortId home
+        run `shouldSatisfy` showsCommand ("hw signsweep " <> short <> "\n")
 
     it "is to sign the file of the sweep where the keys are, when preparesweep wrote one" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
@@ -995,7 +1008,7 @@ nextStepSpec ctx =
         run <- hw home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--fee-rate", "10"] []
         run `shouldSatisfy` showsCommand ("hw signsweep --input " <> Text.pack (home </> "sweep.json") <> " --key-file " <> Text.pack keys)
 
-    it "is to send the sweep signsweep signed in the wallet, by its txid" $
+    it "is to send the sweep signsweep signed in the wallet, by the short id of its txid" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
         createMain home
         _ <- answer home ["receive"] []
@@ -1003,7 +1016,7 @@ nextStepSpec ctx =
         nosig <- nosigOf =<< txOf =<< answer home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
         run <- hw home ["signsweep", nosig, "--key-file", keys] []
         txid <- txidOf =<< onePendingTx home
-        run `shouldSatisfy` showsCommand ("hw sendtx " <> Text.pack txid)
+        run `shouldSatisfy` showsCommand ("hw sendtx " <> Text.pack (shortOf txid) <> "\n")
 
     it "is to send the file of a sweep outside the wallet that signsweep signed" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
@@ -1059,7 +1072,7 @@ csvSpec ctx =
         let file = home </> "pending.csv"
         _ <- answer home ["pendingtxs", "--csv", file] []
         BS.readFile file
-          `shouldReturn` "\xEF\xBB\xBF\&Account,Created (UTC),Type,Amount (sats),Fee (sats),Fee rate (sat/vB),Status,Nosighash,Txid,Label,Address,Path,Address label,Other addresses\r\n"
+          `shouldReturn` "\xEF\xBB\xBF\&Account,Created (UTC),Type,Amount (sats),Fee (sats),Fee rate (sat/vB),Status,Nosighash,Short nosighash,Txid,Short txid,Label,Address,Path,Address label,Other addresses\r\n"
 
     -- 50000 at /0/0 is the largest total, before 30000 at /0/1
     it "writes the rows --max allows, the first ones of the listing" $

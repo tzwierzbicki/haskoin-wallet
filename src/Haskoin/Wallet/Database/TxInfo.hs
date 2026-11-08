@@ -49,6 +49,7 @@ import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.BestBlock
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.TxLabel (txLabel)
+import Haskoin.Wallet.ShortId (ShortId, shortIdRange)
 import Haskoin.Wallet.Tx.Size (storeTxSize)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
@@ -776,6 +777,30 @@ txidsStarting accId digits atMost = do
       "select txid from d_b_tx_info where account = ? and substr(hex(txid), 1, ?) = ? order by txid limit ?"
       [P.toPersistValue accId, P.toPersistValue (length digits), P.toPersistValue (map toUpper digits), P.toPersistValue (rowLimit atMost :: Int)]
   return $ rights (bytesToHash . unSingle <$> rows)
+
+-- | The txids of the account's transactions on the chain that have the
+-- short id. The key holds the bytes of a txid in the order hw shows them,
+-- so the txids that start with the short id are a range of the index of
+-- the keys ('shortIdRange'), which the query reads alone.
+txidsWith :: (MonadUnliftIO m) => DBAccountId -> ShortId -> DB m [TxHash]
+txidsWith accId short = do
+  keys <-
+    P.selectKeysList
+      ( [DBTxInfoAccount P.==. accId, DBTxInfoTxid P.>=. KeyBytes low]
+          <> [DBTxInfoTxid P.<. KeyBytes high | Just high <- [highM]]
+      )
+      []
+  return $ rights [bytesToHash txid | DBTxInfoKey _ txid <- keys]
+  where
+    (low, highM) = shortIdRange short
+
+-- | The txids of the transactions on the chain that have the short id,
+-- in every account, each once: those a command can name by a txid, which
+-- it then looks for in the account it acts on
+walletTxidsWith :: (MonadUnliftIO m) => ShortId -> DB m [TxHash]
+walletTxidsWith short = do
+  accounts <- getAccounts
+  nubOrd . concat <$> forM accounts (\(accId, _) -> txidsWith accId short)
 
 -- | The transaction with its labels filled in as the database has them
 -- now: those of the account's addresses, and those the coins it spends

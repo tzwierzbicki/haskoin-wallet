@@ -52,6 +52,7 @@ import Haskoin.Wallet.Cli.QrCode (paymentUri, qrRows)
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Style
 import Haskoin.Wallet.Cli.View (View (..))
+import Haskoin.Wallet.ShortId (shortCoinText, shortHashText)
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.Tx.BumpFee (PaidBy (..), Reduction (..), Sent, sentId)
 import Haskoin.Wallet.Database.TxInfo
@@ -590,8 +591,8 @@ coinAddressDoc net coin =
     (ownAddressNoteBelow (jsonCoinAddressLabel coin) (jsonCoinChange coin))
 
 -- | A coin in three lines: its first line, its confirmations counted up to
--- 999+, the address that holds it, and the coin itself, as lockcoin and
--- --coin take it. The address is in full, then its path, and its label
+-- 999+, the address that holds it, and the short id of the coin, which
+-- lockcoin and --coin take ("Haskoin.Wallet.ShortId"). The address is in full, then its path, and its label
 -- on the line below ('coinAddressDoc'), which makes four lines. It is the
 -- one compact view that gives an address of the wallet in full: what
 -- tells a coin apart is the address that holds it, which another wallet
@@ -604,13 +605,13 @@ compactCoinDoc net unit time coin =
   vcat
     [ coinLine cappedConfirmations unit time coin,
       indent 2 ("at" <+> coinAddressDoc net coin),
-      indent 2 (styled Muted (coinText (jsonCoinOutpoint coin)))
+      indent 2 (styled Muted (shortCoinText (jsonCoinOutpoint coin)))
     ]
 
 -- | A coin with every detail: its first line, with the full count of its
 -- confirmations, then its fields. The label of its transaction comes
--- first, as in the verbose view of a transaction, then the coin, the
--- block that holds it, the time of its transaction to the second with its
+-- first, as in the verbose view of a transaction, then the coin in full
+-- and its short id, the block that holds it, the time of its transaction to the second with its
 -- time zone, and its address in full with its path. The label of the
 -- address, or the mark of a change address, is on the line below the
 -- address, as in the verbose view of a transaction. An unconfirmed coin
@@ -620,11 +621,13 @@ verboseCoinDoc net unit time coin =
   vcat $
     coinLine fullConfirmations unit time coin
       : ( indent 2
-            <$> [field 7 "Label" <> labelWord label | let label = jsonCoinTxLabel coin, not (Text.null label)]
-              <> [field 7 "Coin" <> text (coinText (jsonCoinOutpoint coin))]
-              <> [field 7 "Block" <> text (show height) | Store.BlockRef height _ <- [jsonCoinBlock coin]]
-              <> [field 7 "Time" <> text (secondText t) | Just t <- [time]]
-              <> [field 7 "Address" <> coinAddressDoc net coin]
+            <$> [field 8 "Label" <> labelWord label | let label = jsonCoinTxLabel coin, not (Text.null label)]
+              <> [ field 8 "Coin" <> text (coinText (jsonCoinOutpoint coin)),
+                   field 8 "Short id" <> text (shortCoinText (jsonCoinOutpoint coin))
+                 ]
+              <> [field 8 "Block" <> text (show height) | Store.BlockRef height _ <- [jsonCoinBlock coin]]
+              <> [field 8 "Time" <> text (secondText t) | Just t <- [time]]
+              <> [field 8 "Address" <> coinAddressDoc net coin]
         )
 
 {- Transactions -}
@@ -634,11 +637,12 @@ verboseCoinDoc net unit time coin =
 -- where it stands. Only the count of the confirmations differs: the compact
 -- view stops it at 999+, and the verbose view gives it in full. The
 -- compact view then gives the balance after it, in txs, then whom it pays
--- and its hash. It names an address of the wallet by its path. The
--- verbose view gives every detail below the first line, as fields, every
--- address in full. The table gives the first line and the balance, on one
--- row, in columns under a header, and what the transaction is for
--- ('purposeCell').
+-- and its short id, the first 8 digits of its hash. It names an address
+-- of the wallet by its path. The verbose view gives every detail below
+-- the first line, as fields, every address in full, and the hash in full
+-- with its short id. The table gives the first line and the balance, on
+-- one row, in columns under a header, then the short id and what the
+-- transaction is for ('purposeCell').
 
 -- | A transaction as a listing shows it, in the view asked for, with its
 -- time in the time zone of the computer. A listing of every account names
@@ -833,11 +837,11 @@ countCap :: Natural
 countCap = 999
 
 -- | A transaction in a few lines: its first line, the balance after it if
--- the listing gives one, whom it pays, and the hash to name it by. A
+-- the listing gives one, whom it pays, and the short id to name it by. A
 -- transaction the user labelled shows its label on a line of its own,
 -- above whom it pays: the label says what the transaction is for, better
 -- than any of its numbers. A replacement that bumpfee prepared also names
--- the transactions it replaces, before its hash.
+-- the transactions it replaces by their short ids, before its own.
 compactTxDoc :: Network -> AmountUnit -> Maybe DBAccount -> Maybe Integer -> Maybe ZonedTime -> TxInfo -> Doc Style
 compactTxDoc net unit accountM balanceM time info@(TxInfo summary status label _) =
   vcat $
@@ -845,7 +849,7 @@ compactTxDoc net unit accountM balanceM time info@(TxInfo summary status label _
       <> [balanceLine unit balance | Just balance <- [balanceM]]
       <> [indent 2 (labelWord label) | not (Text.null label)]
       <> (indent 2 <$> payeeLine net accountM summary)
-      <> [indent 2 ("replaces" <+> text (cs (txHashToHex replaced))) | Pending p <- [status], replaced <- pendingReplaces p]
+      <> [indent 2 ("replaces" <+> text (shortHashText replaced)) | Pending p <- [status], replaced <- pendingReplaces p]
       <> [indent 2 (hashWord status)]
 
 -- | Whom a transaction pays, in one line: the largest output of those it
@@ -988,12 +992,14 @@ wrappingLabelWord label = annotate UserText (fillSep (pretty <$> Text.splitOn " 
 labelWord :: Text -> Doc Style
 labelWord label = styled UserText ("\"" <> cs (visibleText label) <> "\"")
 
--- | The hash to name a transaction by. For one on the chain, its txid,
--- faint, since the user rarely types it. For one in preparation, its
--- nosigHash until it is signed, then its txid, as the commands take it.
+-- | The short id to name a transaction by, the first 8 digits of its hash
+-- ("Haskoin.Wallet.ShortId"). For one on the chain, that of its txid,
+-- faint, since the user rarely types it. For one in preparation, that of
+-- its nosigHash until it is signed, then that of its txid, as the
+-- commands take it.
 hashWord :: TxStatus -> Doc Style
-hashWord (OnChain status) = styled Muted (cs (txHashToHex (chainTxid status)))
-hashWord (Pending status) = styled PendingHash (cs (txHashToHex (pendingShownHash status)))
+hashWord (OnChain status) = styled Muted (shortHashText (chainTxid status))
+hashWord (Pending status) = styled PendingHash (shortHashText (pendingShownHash status))
 
 {- Tables -}
 
@@ -1092,10 +1098,10 @@ tableRule headed = styled Muted (intercalate "┼" (zipWith dashes [1 ..] headed
 -- address of another wallet gives way to the label of the transaction,
 -- which says more to the user. Nothing in the cell is cut.
 --
--- The table leaves out the txid. Its 64 characters would make a row too
--- wide for most screens, and its first characters alone would name it
--- nowhere, since no command takes part of a txid. The compact and the
--- verbose views give it.
+-- The column before it gives the short id of the transaction, the first 8
+-- digits of its txid, which the commands take ("Haskoin.Wallet.ShortId").
+-- The 64 digits of the txid would make a row too wide for most screens.
+-- The verbose view gives them.
 
 -- | The columns of the table of txs
 txColumns :: AmountUnit -> [Column]
@@ -1107,8 +1113,13 @@ txColumns unit =
     -- Its cells take four characters at most, "999+" and "dead": the
     -- heading sets its width
     column "Confs" 4 RightSide,
+    column "Txid" shortIdWidth LeftSide,
     column "Description" 0 LeftSide
   ]
+
+-- | The width of a column of short ids: 8 digits
+shortIdWidth :: Natural
+shortIdWidth = 8
 
 -- | The confirmations of a transaction, as a number alone in its column of
 -- the table, up to "999+". An unconfirmed transaction has 0, in the
@@ -1166,8 +1177,8 @@ txTableHeader :: AmountUnit -> [Doc Style]
 txTableHeader = tableHeader . txColumns
 
 -- | A transaction on one row of the table of txs: its time, its type, its
--- amount, the balance after it and its confirmations, each in its column,
--- then what it is for ('purposeCell'). The amount has its sign and its
+-- amount, the balance after it, its confirmations and its short id, each
+-- in its column, then what it is for ('purposeCell'). The amount has its sign and its
 -- colour, as on the first line of the compact view. A dead transaction leaves its balance empty, since
 -- the balance does not count it. The table lists one account, so no row
 -- names its account.
@@ -1181,6 +1192,7 @@ txRowDoc net unit balanceM time (TxInfo summary status label _) =
         signedAmountCell unit (summaryAmount summary),
         maybe mempty (text . cs . showAmount unit) balanceM,
         tableConfirmations status,
+        hashWord status,
         purposeCell net label summary
       ]
 
@@ -1335,12 +1347,12 @@ accountRowDoc unit headed acc spendable =
 
 {- The table of coins -}
 
--- The table of coins gives what the compact view gives, but the coin
--- itself: the time of the transaction that paid the coin, its value, its
--- state, its confirmations, the address that holds it in full with its
--- path, and the label of the address. The coin, TXID:INDEX, takes 66
--- characters at least, which would make a row too wide. The compact view
--- gives it, as lockcoin and --coin take it.
+-- The table of coins gives what the compact view gives: the time of the
+-- transaction that paid the coin, its value, its state, its
+-- confirmations, the address that holds it in full with its path, the
+-- short id of the coin, and the label of the address. The coin in full,
+-- TXID:INDEX, takes 66 characters at least, which would make a row too
+-- wide. The verbose view gives it.
 
 -- | The columns of the table of coins. The address takes the width of
 -- the widest address the account can have ('addressWidth'), and the path
@@ -1354,8 +1366,15 @@ coinTableColumns unit acc pad =
     column "Confs" 4 RightSide,
     column "Address" (addressWidth acc) LeftSide,
     column "Path" pad LeftSide,
+    column "Coin" coinIdWidth LeftSide,
     column "Label" 0 LeftSide
   ]
+
+-- | The width of the column of the short ids of coins: 8 digits, a colon
+-- and an index of up to three digits. A coin past the thousandth output of
+-- its transaction pushes the rest of its row.
+coinIdWidth :: Natural
+coinIdWidth = 12
 
 -- | The width of the column of the states of coins: that of "not
 -- spendable yet", the longest
@@ -1366,8 +1385,8 @@ coinStateWidth = 17
 -- the transaction that paid it, its value in green, its state, with
 -- "locked by tx" for a coin a pending transaction spends, its
 -- confirmations, the address in the colour of the wallet's addresses, its
--- path, faint, then the label of the address in that colour, or that it
--- is a change address. The address and its label share a colour, as in
+-- path, faint, its short id, faint, then the label of the address in that
+-- colour, or that it is a change address. The address and its label share a colour, as in
 -- the compact view.
 coinRowDoc :: Network -> AmountUnit -> [Column] -> Maybe ZonedTime -> JsonCoin -> Doc Style
 coinRowDoc net unit headed time coin =
@@ -1380,6 +1399,7 @@ coinRowDoc net unit headed time coin =
         confsCell (jsonCoinConfirmations coin),
         ownAddressWord net (jsonCoinAddress coin),
         maybe mempty trailingPathWord (jsonCoinPath coin),
+        styled Muted (shortCoinText (jsonCoinOutpoint coin)),
         -- The label has a column of its own
         hsep (ownAddressNote (jsonCoinAddressLabel coin) (jsonCoinChange coin))
       ]
@@ -1427,14 +1447,14 @@ balanceRowDoc unit headed addr balance =
 
 {- The table of pending transactions -}
 
--- The table of pending transactions gives what the compact view gives,
--- but the hash: the time it was created, its type, its amount, how far it
--- got, its fee rate, and what it is for, as the table of txs says it. A
--- listing of every account names the account of each in a first column.
--- The listing is read whole ('listingWhole'), so that column is as wide as
--- the longest name it shows, as in the table of accounts. The hash, which the
--- other commands take, would make a row too wide. The compact view gives
--- it.
+-- The table of pending transactions gives what the compact view gives:
+-- the time it was created, its type, its amount, how far it got, its fee
+-- rate, the short id of the hash the other commands take, and what it is
+-- for, as the table of txs says it. A listing of every account names the
+-- account of each in a first column. The listing is read whole
+-- ('listingWhole'), so that column is as wide as the longest name it
+-- shows, as in the table of accounts. The hash in full would make a row
+-- too wide. The verbose view gives it.
 
 -- | The columns of the table of pending transactions, with a column of
 -- accounts first when the listing has every account's: those given, whose
@@ -1448,6 +1468,7 @@ pendingTableColumns unit namedM =
          column "Status" pendingStatusWidth LeftSide,
          -- The fee rate has a few digits: the heading sets the width
          column "sat/vB" 1 RightSide,
+         column "Hash" shortIdWidth LeftSide,
          column "Description" 0 LeftSide
        ]
 
@@ -1458,7 +1479,7 @@ pendingStatusWidth = 10
 
 -- | A pending transaction on one row of its table, under the columns
 -- given: its account when given, the time it was created, its type, its
--- amount, how far it got, its fee rate, and what it is for
+-- amount, how far it got, its fee rate, its short id, and what it is for
 -- ('purposeCell'). One in conflict can no longer be sent: its fee rate no
 -- longer matters, and its cell is empty.
 pendingRowDoc :: Network -> AmountUnit -> [Column] -> Maybe DBAccount -> Maybe ZonedTime -> TxInfo -> Doc Style
@@ -1470,6 +1491,7 @@ pendingRowDoc net unit headed accountM time (TxInfo summary status label _) =
            signedAmountCell unit (summaryAmount summary),
            statusCell,
            rateCell,
+           hashWord status,
            purposeCell net label summary
          ]
   where
@@ -1514,19 +1536,17 @@ verboseTxDoc net unit named balanceM time info@(TxInfo summary status label inpu
       [field 9 name <> align (vcat (addressRow net unit widths ownStyle marked <$> rows)) | not (null rows)]
 
 -- | The fields that say where a transaction stands: the hash to name it
--- by, its time to the second with its time zone, and what its first line
--- does not explain
+-- by, in full and by its short id, its time to the second with its time
+-- zone, and what its first line does not explain
 statusFields :: Maybe ZonedTime -> TxStatus -> [Doc Style]
 statusFields time (OnChain status) =
-  [field 9 "Txid" <> text (cs $ txHashToHex (chainTxid status))]
+  hashFields Nothing "Txid" (chainTxid status)
     <> [field 9 "Time" <> text (secondText t) | Just t <- [time]]
     <> [field 9 "Status" <> "replaced, or dropped from the network" | chainDead status]
 -- A transaction in preparation shows one hash, the one to name it by: its
 -- nosigHash until it is signed, then its id, which the network will know.
 statusFields time (Pending status) =
-  [ field 9 (if pendingSigned status then "Txid" else "NoSigHash")
-      <> styled PendingHash (cs $ txHashToHex (pendingShownHash status))
-  ]
+  hashFields (Just PendingHash) (if pendingSigned status then "Txid" else "NoSigHash") (pendingShownHash status)
     <> [ field 9 "Replaces" <> align (vcat [text (cs $ txHashToHex replaced) | replaced <- pendingReplaces status])
        | not (null (pendingReplaces status))
        ]
@@ -1538,6 +1558,18 @@ statusFields time (Pending status) =
            <> "."
        | pendingConflicted status
        ]
+
+-- | A hash under its name, in full, then its short id on a field of its
+-- own, as the verbose views give both: the full hash for a block explorer
+-- or another wallet, the short id for a command. Both are in the style
+-- given, if any. On one line, the two would reach 86 columns.
+hashFields :: Maybe Style -> Text -> TxHash -> [Doc Style]
+hashFields styleM name hash =
+  [ field 9 name <> shown (cs (txHashToHex hash)),
+    field 9 "Short id" <> shown (shortHashText hash)
+  ]
+  where
+    shown = maybe text styled styleM
 
 -- | The fee and its rate. Below them, the change the fee took in, too
 -- small for an output: that change comes neither in nor out.
@@ -1677,8 +1709,9 @@ leftCoinsDoc unit left =
 
 -- The reports the commands show on stderr before they ask. A sentence
 -- wraps at the width of the screen, as the help does. A coin takes two
--- lines, as in a listing: its value with what is said of it, then the coin
--- itself, as --coin takes it. The amounts are in the unit asked for.
+-- lines, as in a listing: its value with what is said of it, then the
+-- short id of the coin, as --coin takes it. The amounts are in the unit
+-- asked for.
 
 -- | A sentence of words and amounts, wrapped at the width of the screen
 sentence :: [Doc Style] -> Doc Style
@@ -1689,13 +1722,14 @@ wordsOf :: String -> [Doc Style]
 wordsOf = map pretty . words
 
 -- | A coin in a question: its value, then what is said of it, then the
--- label it shows if any, then the coin as --coin and lockcoin take it
+-- label it shows if any, then the short id of the coin, as --coin and
+-- lockcoin take it
 questionCoinDoc :: AmountUnit -> OutPoint -> Natural -> Text -> Doc Style -> Doc Style
 questionCoinDoc unit outpoint value label said =
   vcat $
     [columns [amountCell (Just Incoming) "" unit (fromIntegral value), said]]
       <> [indent 2 (labelWord label) | not (Text.null label)]
-      <> [indent 2 (styled Muted (coinText outpoint))]
+      <> [indent 2 (styled Muted (shortCoinText outpoint))]
 
 -- | A fee rate, in satoshis per virtual byte
 rateDoc :: Natural -> Doc Style
@@ -1745,12 +1779,13 @@ dustReportDoc unit labels report =
       Nothing -> wordsOf ((if one then "it" else "they") <> " can never be spent: any fee would leave less than") <> [amount report.dustLimit <> "."]
 
 -- | What bumpfee says of the transactions that spend the change of the one
--- to replace, before it asks to replace them all
+-- to replace, before it asks to replace them all: their short ids, as txs
+-- shows them
 childrenDoc :: [Sent] -> Doc Style
 childrenDoc children =
   vcat $
     sentence (wordsOf "Replacing the transaction removes those of the account that spend its change:")
-      : [indent 2 (styled Muted (cs (txHashToHex (sentId child)))) | child <- children]
+      : [indent 2 (styled Muted (shortHashText (sentId child))) | child <- children]
 
 -- | What bumpfee says of the coins to add, before it asks to add them: each
 -- with the address that holds it and its path, and the label it shows
@@ -1855,6 +1890,7 @@ responsePrinter unit view code shown answer =
       renderIO $
         vcat
           [ field 9 "Sent" <> text (cs $ txHashToHex h),
+            indent 2 $ field 9 "Short id" <> text (shortHashText h),
             indent 2 $ field 9 "Network" <> text net.name
           ]
     -- By the hash pendingtxs showed: the id of a signed transaction. The
@@ -1863,10 +1899,12 @@ responsePrinter unit view code shown answer =
     ResponseDeleteTx nosigH txidM coins addrs ->
       renderIO $
         vcat
-          [ field 9 "Deleted" <> styled PendingHash (cs $ txHashToHex (fromMaybe nosigH txidM)),
+          [ field 9 "Deleted" <> styled PendingHash (cs $ txHashToHex deleted),
+            indent 2 $ field 9 "Short id" <> styled PendingHash (shortHashText deleted),
             indent 2 $ field 9 "Freed" <> freed
           ]
       where
+        deleted = fromMaybe nosigH txidM
         freed = case [counted coins "coin" "coins" | coins > 0] <> [counted addrs "change address" "change addresses" | addrs > 0] of
           [] -> text "nothing"
           parts -> text (intercalate ", " parts)
@@ -2138,9 +2176,10 @@ nextStepsPrinter cmd res =
                 ]
     _ -> Nothing
   where
-    -- The hash of a transaction in preparation, as its answer shows it
+    -- The short id of a transaction in preparation, as its answer shows
+    -- it, to type in the next command
     shownOf info = case txInfoStatus info of
-      Pending status -> Just (cs (txHashToHex (pendingShownHash status)))
+      Pending status -> Just (shortHashText (pendingShownHash status))
       OnChain _ -> Nothing
     -- A payment of the wallet is signed with its mnemonic, here or on an
     -- offline computer

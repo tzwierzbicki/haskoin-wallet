@@ -41,6 +41,7 @@ import Haskoin.Wallet.Database.Coin (JsonCoin (..))
 import Haskoin.Wallet.Database (DB, DBAccount (..), DBAccountId, DBAddress (..), DBPendingTx (..), hashBytes, migrateAll)
 import Haskoin.Wallet.Entropy (Sources (..), systemEntropy)
 import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), MnemonicPass (..), PublicSeed (..), SeedSecret (..), foreignAddress, keyAddress, kindNamed, seedOf, signingKey)
+import Haskoin.Wallet.ShortId (ShortId, readShortId)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync (ScanQuestion, SyncRes (..), Watcher (Watcher))
 import Haskoin.Wallet.SyncStatus (Status, Step, noStatus)
@@ -538,6 +539,22 @@ accountSigningKey net ctx (AccountSpec kind mnem pass acc) =
 -- The transactions of the tests exist on no blockchain: a funding transaction
 -- spends a fake outpoint and pays the addresses a test needs, and the test
 -- then spends the coins of that funding transaction.
+
+-- | A transaction id as the user types it, in hexadecimal
+typedTxid :: Text -> TxHash
+typedTxid = fromMaybe (error "typedTxid") . hexToTxHash
+
+-- | A short id as the user types it: 8 hexadecimal digits
+typedShortId :: Text -> ShortId
+typedShortId = fromMaybe (error "typedShortId") . readShortId
+
+-- | Two txids that share the short id a1075db5, their first 8 digits, and
+-- one of the short id b2d4f6a8. The ids of 'fakeTxHash' all start with
+-- 00000000, so tests that tell two short ids apart take these.
+a1075db5First, a1075db5Second, b2d4f6a8Txid :: TxHash
+a1075db5First = typedTxid "a1075db5c0ffee00000000000000000000000000000000000000000000000001"
+a1075db5Second = typedTxid "a1075db5c0ffee00000000000000000000000000000000000000000000000002"
+b2d4f6a8Txid = typedTxid "b2d4f6a8c0ffee00000000000000000000000000000000000000000000000001"
 
 -- | A transaction hash that exists nowhere: one byte, then zeros
 fakeTxHash :: Word8 -> TxHash

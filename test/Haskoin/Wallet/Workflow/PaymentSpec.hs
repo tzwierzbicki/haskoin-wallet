@@ -263,13 +263,25 @@ receivingSpec ctx = do
         (locks . coinsShown <$> hwJson home ("unlockcoin" : coinArgs) []) `shouldReturn` Right [(firstCoin, Nothing)]
         (errorOf <$> hwJson home ("unlockcoin" : coinArgs) []) `shouldReturn` Right "The coin is not locked"
 
+    it "is unlocked by its short id" $
+      withChain ctx chain $ \home _ -> do
+        synced home
+        _ <- answer home ["lockcoin", coinArg twoCoins 0] []
+        (locks . coinsShown <$> hwJson home ["unlockcoin", shortCoinArg twoCoins 0] []) `shouldReturn` Right [(firstCoin, Nothing)]
+
+    -- No transaction of the wallet has a txid that starts with 00000000
+    it "is not found by a short id that matches no coin of the wallet" $
+      withChain ctx chain $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["lockcoin", "00000000:0"] []) `shouldReturn` Right "The wallet has no coin 00000000:0"
+
     -- Copied from the listing, as the user would
-    it "is written by coins as lockcoin takes it, TXID:INDEX" $
+    it "is written by coins by its short id, the first 8 digits of its txid and its index, which lockcoin takes" $
       withChain ctx chain $ \home _ -> do
         synced home
         listed <- hw home ["coins"] []
-        let written = Text.unpack (txHashToHex (txHash twoCoins)) <> ":0"
-        runOut listed `shouldSatisfy` Text.isInfixOf (Text.pack written)
+        let written = shortCoinArg twoCoins 0
+        runOut listed `shouldSatisfy` Text.isInfixOf ("\n  " <> Text.pack written <> "\n")
         (locks . coinsShown <$> hwJson home ["lockcoin", written] []) `shouldReturn` Right [(firstCoin, Just LockedByUser)]
 
     it "is listed alone by coins --locked" $
@@ -653,6 +665,14 @@ highFeeSpec ctx =
 coinControlSpec :: Ctx -> Spec
 coinControlSpec ctx =
   describe "Coin control" $ do
+    -- The coin of 50000 at /0/0 pays 20000: a fee of 2260, and 27740 of
+    -- change
+    it "spends the coin --coin names by its short id" $
+      withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
+        synced home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", shortCoinArg (twoAddressesTx ctx) 0, "--fee-rate", "10"] []
+        spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 50000)]
+
     it "spends the coins at the address of --spend-from, and only them" $
       withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
         synced home
@@ -728,7 +748,7 @@ coinControlSpec ctx =
         run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (twoAddressesTx ctx) 0, "--coin", coinArg (twoAddressesTx ctx) 1, "--fee-rate", "10"] []
         let (transaction, staying) = Text.breakOn "in the account:" (runOut run)
         transaction `shouldSatisfy` Text.isInfixOf "NoSigHash"
-        staying `shouldSatisfy` Text.isInfixOf ("\n    0.00030000 btc  you locked it\n  " <> Text.pack (coinArg (twoAddressesTx ctx) 1) <> "\n")
+        staying `shouldSatisfy` Text.isInfixOf ("\n    0.00030000 btc  you locked it\n  " <> Text.pack (shortCoinArg (twoAddressesTx ctx) 1) <> "\n")
 
     it "prepares nothing when none of the coins chosen can be spent, and tells why" $
       withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do

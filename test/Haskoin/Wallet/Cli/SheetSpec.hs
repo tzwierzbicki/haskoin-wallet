@@ -87,23 +87,29 @@ coinSheetSpec =
 
     it "names its columns" $
       sheetHeadings <$> listingSheet (ResponseCoins mainAccountRow [])
-        `shouldBe` Just ["Coin", "Time (UTC)", "Value (sats)", "State", "Confirmations", "Block", "Address", "Path", "Address label", "Transaction label"]
+        `shouldBe` Just ["Coin", "Short coin", "Time (UTC)", "Value (sats)", "State", "Confirmations", "Block", "Address", "Path", "Address label", "Transaction label"]
 
-    it "gives a coin a row: the coin, the time of its transaction, its value in satoshis, its state, its confirmations and block, then its address and path" $
+    -- spendableCoinRow is output 0 of transaction 1, whose txid starts
+    -- with 00000000
+    it "gives a coin a row: the coin in full and by its short id, the time of its transaction, its value in satoshis, its state, its confirmations and block, then its address and path" $
       rowsOf spendableCoinRow
-        `shouldBe` Just [[TextCell "0000000000000000000000000000000000000000000000000000000000000001:0", TimeCell seenTime, SatoshiCell 50000, TextCell "spendable", CountCell 3, CountCell 800000, TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", EmptyCell, EmptyCell]]
+        `shouldBe` Just [[TextCell "0000000000000000000000000000000000000000000000000000000000000001:0", TextCell "00000000:0", TimeCell seenTime, SatoshiCell 50000, TextCell "spendable", CountCell 3, CountCell 800000, TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", EmptyCell, EmptyCell]]
+
+    it "gives the short id of a coin as the short id of its txid, a colon and its index" $
+      (map (take 2) <$> rowsOf spendableCoinRow {jsonCoinOutpoint = OutPoint a1075db5First 1})
+        `shouldBe` Just [[TextCell "a1075db5c0ffee00000000000000000000000000000000000000000000000001:1", TextCell "a1075db5:1"]]
 
     it "says a coin a pending transaction spends is locked by a pending transaction" $
       rowsOf spendableCoinRow {jsonCoinLock = Just LockedByTransaction, jsonCoinSpendable = False}
-        `shouldBe` Just [[TextCell "0000000000000000000000000000000000000000000000000000000000000001:0", TimeCell seenTime, SatoshiCell 50000, TextCell "locked by a pending transaction", CountCell 3, CountCell 800000, TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", EmptyCell, EmptyCell]]
+        `shouldBe` Just [[TextCell "0000000000000000000000000000000000000000000000000000000000000001:0", TextCell "00000000:0", TimeCell seenTime, SatoshiCell 50000, TextCell "locked by a pending transaction", CountCell 3, CountCell 800000, TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", EmptyCell, EmptyCell]]
 
     it "leaves the block of an unconfirmed coin empty" $
       rowsOf spendableCoinRow {jsonCoinBlock = Store.MemRef 1700000000, jsonCoinConfirmations = 0, jsonCoinSpendable = False}
-        `shouldBe` Just [[TextCell "0000000000000000000000000000000000000000000000000000000000000001:0", TimeCell seenTime, SatoshiCell 50000, TextCell "not spendable yet", CountCell 0, EmptyCell, TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", EmptyCell, EmptyCell]]
+        `shouldBe` Just [[TextCell "0000000000000000000000000000000000000000000000000000000000000001:0", TextCell "00000000:0", TimeCell seenTime, SatoshiCell 50000, TextCell "not spendable yet", CountCell 0, EmptyCell, TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", EmptyCell, EmptyCell]]
 
     it "gives the label of the address and that of the transaction, each in its column" $
       rowsOf spendableCoinRow {jsonCoinAddressLabel = "Invoice 42", jsonCoinTxLabel = "Salary"}
-        `shouldBe` Just [[TextCell "0000000000000000000000000000000000000000000000000000000000000001:0", TimeCell seenTime, SatoshiCell 50000, TextCell "spendable", CountCell 3, CountCell 800000, TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "Invoice 42", TextCell "Salary"]]
+        `shouldBe` Just [[TextCell "0000000000000000000000000000000000000000000000000000000000000001:0", TextCell "00000000:0", TimeCell seenTime, SatoshiCell 50000, TextCell "spendable", CountCell 3, CountCell 800000, TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "Invoice 42", TextCell "Salary"]]
 
 txSheetSpec :: Spec
 txSheetSpec =
@@ -114,31 +120,36 @@ txSheetSpec =
 
     it "names its columns" $
       sheetHeadings <$> listingSheet (ResponseTxs mainAccountRow [])
-        `shouldBe` Just ["Time (UTC)", "Type", "Amount (sats)", "Fee (sats)", "Fee rate (sat/vB)", "Balance (sats)", "Status", "Confirmations", "Block", "Txid", "Label", "Address", "Path", "Address label", "Other addresses"]
+        `shouldBe` Just ["Time (UTC)", "Type", "Amount (sats)", "Fee (sats)", "Fee rate (sat/vB)", "Balance (sats)", "Status", "Confirmations", "Block", "Txid", "Short txid", "Label", "Address", "Path", "Address label", "Other addresses"]
 
     -- The payment received pays 50000 at /0/0, and its payer paid 1000 of
     -- fee, at 4 sat/vB
-    it "gives a payment received a row: its time, type, amount, fee and balance, where it stands, its txid and label, then the address it was paid at" $
+    -- The txids of fakeTxHash all start with 00000000
+    it "gives a payment received a row: its time, type, amount, fee and balance, where it stands, its txid in full and by its short id, and its label, then the address it was paid at" $
       rowsOf [ListedTx (onChain paymentSummary 1 (Store.BlockRef 800000 1) 3 False "Salary") (Just 50000)]
-        `shouldBe` Just [[TimeCell seenTime, TextCell "Incoming", SatoshiCell 50000, SatoshiCell 1000, CountCell 4, SatoshiCell 50000, TextCell "confirmed", CountCell 3, CountCell 800000, TextCell "0000000000000000000000000000000000000000000000000000000000000001", TextCell "Salary", TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", EmptyCell, CountCell 0]]
+        `shouldBe` Just [[TimeCell seenTime, TextCell "Incoming", SatoshiCell 50000, SatoshiCell 1000, CountCell 4, SatoshiCell 50000, TextCell "confirmed", CountCell 3, CountCell 800000, TextCell "0000000000000000000000000000000000000000000000000000000000000001", TextCell "00000000", TextCell "Salary", TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", EmptyCell, CountCell 0]]
+
+    it "gives the short id of the txid, its first 8 digits, after the txid" $
+      (map (take 2 . drop 9) <$> rowsOf [ListedTx (TxInfo spendSummary (OnChain (ChainStatus a1075db5First (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty) (Just 9000)])
+        `shouldBe` Just [[TextCell "a1075db5c0ffee00000000000000000000000000000000000000000000000001", TextCell "a1075db5"]]
 
     -- 40000 paid + 1000 of fee = 41000 leave the account, which keeps 9000
     it "gives a payment the address of the other wallet it pays, with no path" $
       rowsOf [ListedTx (onChain spendSummary 2 (Store.BlockRef 800001 1) 2 False "") (Just 9000)]
-        `shouldBe` Just [[TimeCell seenTime, TextCell "Outgoing", SatoshiCell (-41000), SatoshiCell 1000, CountCell 4, SatoshiCell 9000, TextCell "confirmed", CountCell 2, CountCell 800001, TextCell "0000000000000000000000000000000000000000000000000000000000000002", EmptyCell, TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, CountCell 0]]
+        `shouldBe` Just [[TimeCell seenTime, TextCell "Outgoing", SatoshiCell (-41000), SatoshiCell 1000, CountCell 4, SatoshiCell 9000, TextCell "confirmed", CountCell 2, CountCell 800001, TextCell "0000000000000000000000000000000000000000000000000000000000000002", TextCell "00000000", EmptyCell, TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, CountCell 0]]
 
     it "gives the label of the address a payment was received at in its own column" $
       rowsOf [ListedTx (onChain paymentToRent 1 (Store.BlockRef 800000 1) 3 False "") (Just 50000)]
-        `shouldBe` Just [[TimeCell seenTime, TextCell "Incoming", SatoshiCell 50000, SatoshiCell 1000, CountCell 4, SatoshiCell 50000, TextCell "confirmed", CountCell 3, CountCell 800000, TextCell "0000000000000000000000000000000000000000000000000000000000000001", EmptyCell, TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "Rent", CountCell 0]]
+        `shouldBe` Just [[TimeCell seenTime, TextCell "Incoming", SatoshiCell 50000, SatoshiCell 1000, CountCell 4, SatoshiCell 50000, TextCell "confirmed", CountCell 3, CountCell 800000, TextCell "0000000000000000000000000000000000000000000000000000000000000001", TextCell "00000000", EmptyCell, TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "Rent", CountCell 0]]
 
     it "says an unconfirmed transaction is unconfirmed, with 0 confirmations and no block" $
       rowsOf [ListedTx (onChain spendSummary 2 (Store.MemRef 1700000000) 0 False "") (Just 9000)]
-        `shouldBe` Just [[TimeCell seenTime, TextCell "Outgoing", SatoshiCell (-41000), SatoshiCell 1000, CountCell 4, SatoshiCell 9000, TextCell "unconfirmed", CountCell 0, EmptyCell, TextCell "0000000000000000000000000000000000000000000000000000000000000002", EmptyCell, TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, CountCell 0]]
+        `shouldBe` Just [[TimeCell seenTime, TextCell "Outgoing", SatoshiCell (-41000), SatoshiCell 1000, CountCell 4, SatoshiCell 9000, TextCell "unconfirmed", CountCell 0, EmptyCell, TextCell "0000000000000000000000000000000000000000000000000000000000000002", TextCell "00000000", EmptyCell, TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, CountCell 0]]
 
     -- The balance of the account leaves a dead transaction out
     it "says a dead transaction is dead, and leaves its balance empty" $
       rowsOf [ListedTx (onChain spendSummary 2 (Store.MemRef 1700000000) 0 True "") Nothing]
-        `shouldBe` Just [[TimeCell seenTime, TextCell "Outgoing", SatoshiCell (-41000), SatoshiCell 1000, CountCell 4, EmptyCell, TextCell "dead", CountCell 0, EmptyCell, TextCell "0000000000000000000000000000000000000000000000000000000000000002", EmptyCell, TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, CountCell 0]]
+        `shouldBe` Just [[TimeCell seenTime, TextCell "Outgoing", SatoshiCell (-41000), SatoshiCell 1000, CountCell 4, EmptyCell, TextCell "dead", CountCell 0, EmptyCell, TextCell "0000000000000000000000000000000000000000000000000000000000000002", TextCell "00000000", EmptyCell, TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, CountCell 0]]
 
     -- /0/0 pays 40000 to /0/1 and 9000 to /1/0: /0/1 is paid the most,
     -- and the account loses the fee of 1000
@@ -151,32 +162,32 @@ txSheetSpec =
                 summaryMyOutputs = Map.fromList [(externalAddr 1, MyOutputs 40000 (Deriv :/ 0 :/ 1) ""), (internalAddr 0, MyOutputs 9000 (Deriv :/ 1 :/ 0) "")]
               }
       rowsOf [ListedTx (onChain internal 2 (Store.BlockRef 800001 1) 2 False "") (Just 49000)]
-        `shouldBe` Just [[TimeCell seenTime, TextCell "Internal", SatoshiCell (-1000), SatoshiCell 1000, CountCell 4, SatoshiCell 49000, TextCell "confirmed", CountCell 2, CountCell 800001, TextCell "0000000000000000000000000000000000000000000000000000000000000002", EmptyCell, TextCell "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", TextCell "/0/1", EmptyCell, CountCell 1]]
+        `shouldBe` Just [[TimeCell seenTime, TextCell "Internal", SatoshiCell (-1000), SatoshiCell 1000, CountCell 4, SatoshiCell 49000, TextCell "confirmed", CountCell 2, CountCell 800001, TextCell "0000000000000000000000000000000000000000000000000000000000000002", TextCell "00000000", EmptyCell, TextCell "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", TextCell "/0/1", EmptyCell, CountCell 1]]
 
 pendingSheetSpec :: Spec
 pendingSheetSpec =
   describe "The sheet of pending transactions" $ do
-    let prepared signedM online conflicted = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) signedM online conflicted (Just seenTime) [])) "" Map.empty
+    let prepared signedM online conflicted = TxInfo spendSummary (Pending (PendingStatus a1075db5First signedM online conflicted (Just seenTime) [])) "" Map.empty
         rowsOf infos = sheetRows <$> listingSheet (ResponsePendingTxs Nothing [(mainAccountRow, info) | info <- infos])
 
     it "names its columns, the account first" $
       sheetHeadings <$> listingSheet (ResponsePendingTxs Nothing [])
-        `shouldBe` Just ["Account", "Created (UTC)", "Type", "Amount (sats)", "Fee (sats)", "Fee rate (sat/vB)", "Status", "Nosighash", "Txid", "Label", "Address", "Path", "Address label", "Other addresses"]
+        `shouldBe` Just ["Account", "Created (UTC)", "Type", "Amount (sats)", "Fee (sats)", "Fee rate (sat/vB)", "Status", "Nosighash", "Short nosighash", "Txid", "Short txid", "Label", "Address", "Path", "Address label", "Other addresses"]
 
     -- 40000 paid + 1000 of fee = 41000, at 4 sat/vB
-    it "gives a transaction not signed a row: its account, when it was created, its type, amount and fee, its status and nosigHash, with no txid, then what it is for" $
+    it "gives a transaction not signed a row: its account, when it was created, its type, amount and fee, its status and nosigHash in full and by its short id, with no txid, then what it is for" $
       rowsOf [prepared Nothing False False]
-        `shouldBe` Just [[TextCell "main", TimeCell seenTime, TextCell "Outgoing", SatoshiCell (-41000), SatoshiCell 1000, CountCell 4, TextCell "not signed", TextCell "0000000000000000000000000000000000000000000000000000000000000007", EmptyCell, EmptyCell, TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, CountCell 0]]
+        `shouldBe` Just [[TextCell "main", TimeCell seenTime, TextCell "Outgoing", SatoshiCell (-41000), SatoshiCell 1000, CountCell 4, TextCell "not signed", TextCell "a1075db5c0ffee00000000000000000000000000000000000000000000000001", TextCell "a1075db5", EmptyCell, EmptyCell, EmptyCell, TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, CountCell 0]]
 
-    it "gives a signed transaction its txid next to its nosigHash" $
-      rowsOf [prepared (Just (fakeTxHash 2)) False False]
-        `shouldBe` Just [[TextCell "main", TimeCell seenTime, TextCell "Outgoing", SatoshiCell (-41000), SatoshiCell 1000, CountCell 4, TextCell "signed", TextCell "0000000000000000000000000000000000000000000000000000000000000007", TextCell "0000000000000000000000000000000000000000000000000000000000000002", EmptyCell, TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, CountCell 0]]
+    it "gives a signed transaction its txid in full and by its short id next to its nosigHash" $
+      rowsOf [prepared (Just b2d4f6a8Txid) False False]
+        `shouldBe` Just [[TextCell "main", TimeCell seenTime, TextCell "Outgoing", SatoshiCell (-41000), SatoshiCell 1000, CountCell 4, TextCell "signed", TextCell "a1075db5c0ffee00000000000000000000000000000000000000000000000001", TextCell "a1075db5", TextCell "b2d4f6a8c0ffee00000000000000000000000000000000000000000000000001", TextCell "b2d4f6a8", EmptyCell, TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, CountCell 0]]
 
     it "says a transaction sent is sent, and one in conflict conflicted" $
-      rowsOf [prepared (Just (fakeTxHash 2)) True False, prepared (Just (fakeTxHash 2)) False True]
+      rowsOf [prepared (Just b2d4f6a8Txid) True False, prepared (Just b2d4f6a8Txid) False True]
         `shouldBe` Just
-          [ [TextCell "main", TimeCell seenTime, TextCell "Outgoing", SatoshiCell (-41000), SatoshiCell 1000, CountCell 4, TextCell "sent", TextCell "0000000000000000000000000000000000000000000000000000000000000007", TextCell "0000000000000000000000000000000000000000000000000000000000000002", EmptyCell, TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, CountCell 0],
-            [TextCell "main", TimeCell seenTime, TextCell "Outgoing", SatoshiCell (-41000), SatoshiCell 1000, CountCell 4, TextCell "conflicted", TextCell "0000000000000000000000000000000000000000000000000000000000000007", TextCell "0000000000000000000000000000000000000000000000000000000000000002", EmptyCell, TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, CountCell 0]
+          [ [TextCell "main", TimeCell seenTime, TextCell "Outgoing", SatoshiCell (-41000), SatoshiCell 1000, CountCell 4, TextCell "sent", TextCell "a1075db5c0ffee00000000000000000000000000000000000000000000000001", TextCell "a1075db5", TextCell "b2d4f6a8c0ffee00000000000000000000000000000000000000000000000001", TextCell "b2d4f6a8", EmptyCell, TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, CountCell 0],
+            [TextCell "main", TimeCell seenTime, TextCell "Outgoing", SatoshiCell (-41000), SatoshiCell 1000, CountCell 4, TextCell "conflicted", TextCell "a1075db5c0ffee00000000000000000000000000000000000000000000000001", TextCell "a1075db5", TextCell "b2d4f6a8c0ffee00000000000000000000000000000000000000000000000001", TextCell "b2d4f6a8", EmptyCell, TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, CountCell 0]
           ]
 
 walletSheetSpec :: Spec

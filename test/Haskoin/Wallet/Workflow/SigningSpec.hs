@@ -98,6 +98,34 @@ signingSpec ctx = do
         (spendsAndPays ctx <$> published) `shouldBe` [paymentSent ctx]
         onePendingState home `shouldReturn` Just (True, True)
 
+    it "is signed by the short id of its nosigHash, as pendingtxs shows it" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        signed <- txOf =<< answer home ["signtx", shortOf nosig] seedOnce
+        pendingState signed `shouldBe` Just (True, False)
+
+    it "is sent by the short id of its txid once signed, and marked online" $
+      withChain ctx (paidChain ctx) $ \home chain -> do
+        _ <- paymentSigned home
+        txid <- txidOf =<< onePendingTx home
+        _ <- answer home ["sendtx", shortOf txid, "--yes"] []
+        published <- inMempool <$> readIORef chain
+        (spendsAndPays ctx <$> published) `shouldBe` [paymentSent ctx]
+        onePendingState home `shouldReturn` Just (True, True)
+
+    it "is deleted by the short id of its nosigHash" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        nosig <- paymentSigned home
+        _ <- answer home ["deletetx", shortOf nosig] []
+        (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+
+    -- No pending transaction has a hash that starts with 00000000
+    it "is not found by a short id that matches no pending transaction, as a hash that matches none" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        _ <- paymentSigned home
+        (errorOf <$> hwJson home ["deletetx", "00000000"] []) `shouldReturn` Right "The pending transaction does not exist"
+
     -- It held the coin of 50000 and the change address
     it "is deleted by its txid once signed, and deletetx answers with both its hashes" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -113,6 +141,13 @@ signingSpec ctx = do
         txid <- txidOf =<< onePendingTx home
         run <- hw home ["deletetx", nosig] []
         runOut run `shouldSatisfy` Text.isInfixOf ("Deleted  : " <> Text.pack txid)
+
+    it "is shown by deletetx by its txid in full, then its short id" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        nosig <- paymentSigned home
+        txid <- txidOf =<< onePendingTx home
+        run <- hw home ["deletetx", nosig] []
+        runOut run `shouldSatisfy` Text.isInfixOf ("Deleted  : " <> Text.pack txid <> "\n  Short id : " <> Text.pack (shortOf txid) <> "\n")
 
     -- The payment spends one coin and pays its change to one change address
     it "says what deletetx freed: the coins it spent, and the change addresses it paid" $

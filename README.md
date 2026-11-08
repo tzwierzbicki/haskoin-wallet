@@ -45,6 +45,7 @@ What `hw` does:
   - [Options of every command](#options-of-every-command)
   - [Amounts](#amounts)
   - [Listings](#listings)
+  - [Short ids](#short-ids)
   - [Files](#files)
   - [One command at a time](#one-command-at-a-time)
 - [Commands](#commands), each with its examples and what is good to know
@@ -105,7 +106,8 @@ hw sync
 run next. A nosigHash is a hash of the transaction without its signatures. It
 names the transaction until it is signed. `signtx` then prints its txid, the id
 the network knows it by, and `pendingtxs` shows the txid from then on. The
-commands take either hash.
+commands take either hash, in full or by its [short id](#short-ids), its first 8
+digits, which the next steps and the listings show.
 
 ### Signing on an offline computer
 
@@ -262,7 +264,8 @@ hw txs --max 20 --after TXID --json
 
 `--csv FILE` writes a listing to a new file instead, for a spreadsheet. Each
 element takes a row, and the columns hold what the JSON answer holds, such as
-the txid, the coin and the fee, each in a column of its own. Amounts are in
+the txid, the coin and the fee, each in a column of its own. Each hash comes in
+full, then by its [short id](#short-ids). Amounts are in
 satoshis, as whole numbers, whatever `--unit` says. Times are in UTC, as
 `2023-11-14T22:13:20`, whatever the time zone of the computer. `--after` and
 `--max` choose the rows, as they do on the screen.
@@ -277,7 +280,11 @@ hw coins --csv coins.csv
 > - **A spreadsheet guesses what each cell of a CSV file holds.** A label made
 >   of digits alone, such as `007`, becomes the number 7. The fingerprint of a
 >   seed is often made of digits alone, so the file of `accounts` leaves it
->   out. `accounts --verbose` gives it.
+>   out. `accounts --verbose` gives it. About one short txid in 43 is made of
+>   digits alone too, such as `01234567`, and becomes a number without its
+>   leading zero. The full hash in the column before it stays text. A short
+>   coin stays text, since its colon makes it no number. `exportsheet` keeps
+>   every short id as text.
 > - **A label that starts with `=`, `+`, `-` or `@` gets an apostrophe in
 >   front.** A spreadsheet would run it as a formula, and a label can come from
 >   a file of another wallet. A formula could send your rows to a web server.
@@ -288,6 +295,42 @@ hw coins --csv coins.csv
 > - **The file tells your history.** Its addresses, amounts and labels tell
 >   whoever reads it what you hold and whom you paid. `hw` makes it readable
 >   by you alone.
+
+### Short ids
+
+A txid has 64 digits, too many for a table and for typing. The listings and the
+compact views name a transaction by its short id instead: the first 8 digits of
+its txid, such as `a1075db5`. A pending transaction has the short id of its
+nosigHash until it is signed, then that of its txid. A coin has the short id of
+its transaction, a colon and its index, such as `a1075db5:1`. `--verbose` gives
+the hash in full, then its short id.
+
+Every command that takes a hash or a coin takes its short id too:
+
+```console
+hw signtx a1075db5
+hw lockcoin a1075db5:1
+hw label a1075db5 "rent of October"
+hw txs --after a1075db5
+```
+
+A short id is the start of the hash itself, not a number the wallet hands out.
+It means the same on every computer, the offline one included, and in a block
+explorer, where the txid starts with it. A typo in it almost never matches
+another transaction, so `hw` refuses it rather than act on the wrong one.
+
+Two hashes share their first 8 digits about once in 4 billion pairs. When a
+short id matches two or more hashes that a command can take, `hw` names each in
+full and asks for the full hash. It never picks one. A part of a hash longer
+than 8 digits is refused: give the short id or all 64 digits.
+
+> **Good to know**
+>
+> - **`preparesweep --coin` takes the txid in full.** The wallet does not hold
+>   the coins it sweeps, and the server looks up a whole txid only.
+> - **Files and scripts get whole hashes.** The transaction files, the files of
+>   labels and the answers in JSON give each hash in full. Another wallet, or a
+>   script, needs the exact hash. `--csv` and `exportsheet` give both forms.
 
 ### Files
 
@@ -764,9 +807,10 @@ hw label TXID ""                            # removes the label
 **An address.** The address tells its account. Change addresses take no label.
 
 **A transaction.** Name a pending one by the hash `pendingtxs` shows, and one of
-the history by its txid. A pending transaction keeps its label in its file,
-through signing on an offline computer, and in the history once the network has
-it. A label set while the file is away stays when the signed file comes back.
+the history by its txid. Either goes in full or by its [short id](#short-ids). A
+pending transaction keeps its label in its file, through signing on an offline
+computer, and in the history once the network has it. A label set while the file
+is away stays when the signed file comes back.
 
 `preparetx`, `preparesendall` and `preparesweep` take a `--label`, and `bumpfee`
 gives a replacement the labels of the transactions it replaces. A transaction
@@ -796,7 +840,8 @@ Lists the coins of an account. Each takes three or four lines:
 2. The address that holds it, in full, with its derivation path.
 3. The label of the address, under the address, or `change address` when it is
    one. A coin at an address without a label has no such line.
-4. The coin as `TXID:INDEX`.
+4. The [short id](#short-ids) of the coin, such as `a1075db5:1`, which
+   `lockcoin` and `--coin` take.
 
 This is the one listing that gives an address of the wallet in full in its
 compact view. What tells a coin apart is the address that holds it, more than
@@ -804,7 +849,8 @@ its path. As everywhere an address is in full, its label is on the line below.
 Where a view gives only the path, the label stays on the same line.
 
 `--verbose` gives the full count of the confirmations on the first line. The
-label of the transaction that paid the coin, the coin, the block that holds it,
+label of the transaction that paid the coin, the coin in full and its short id,
+the block that holds it,
 the time of the transaction to the second and the address in full with its path
 follow as fields. The label of the address is on the line below it. An
 unconfirmed coin is in no block yet, and shows none. The change of a payment
@@ -813,14 +859,13 @@ for, not what its change is.
 
 `--tabular` shows each coin on one row of a table: the time of its transaction,
 its value, its state, its confirmations up to `999+`, the address that holds it
-with its path, and the label of the address. A coin a pending transaction
-spends says `locked by tx`. The table leaves out the coin itself, `TXID:INDEX`,
-which `lockcoin` and `--coin` take. `coins` without `--tabular` shows it.
+with its path, the short id of the coin, and the label of the address. A coin a
+pending transaction spends says `locked by tx`.
 
 `--csv FILE` writes the coins to a [CSV file](#listings): the coin as
-`TXID:INDEX`, the time of its transaction, its value, state, confirmations and
-block, the address that holds it with its path, and the labels of the address
-and of the transaction.
+`TXID:INDEX`, in full and by its short id, the time of its transaction, its
+value, state, confirmations and block, the address that holds it with its path,
+and the labels of the address and of the transaction.
 
 ```console
 hw coins
@@ -839,11 +884,13 @@ hw coins --locked
 
 #### `hw lockcoin`
 
-Keeps a coin from being spent. It shows the coin with every detail, as
-`coins --verbose` does.
+Keeps a coin from being spent. It takes the coin by its
+[short id](#short-ids), as `coins` shows it, or in full. It shows the coin with
+every detail, as `coins --verbose` does.
 
 ```console
 hw lockcoin TXHASH:1
+hw lockcoin a1075db5:1                      # the short id coins shows
 ```
 
 #### `hw unlockcoin`
@@ -896,7 +943,7 @@ hw preparetx ADDRESS:0.01 --recipients-pay --fee-rate high --output unsigned.psb
 |---|---|
 | `--fee-rate RATE` | Sets the fee rate: a number of satoshis per virtual byte, or `low`, `median` or `high`. Without it, `hw` shows [the rates](#hw-fees) and asks. |
 | `--recipients-pay` | Takes the fee out of the amounts paid, in equal shares. |
-| `--coin TXID:INDEX` | Chooses a coin to spend. Every coin chosen is spent. Repeat it for several coins. |
+| `--coin TXID:INDEX` | Chooses a coin to spend, in full or by its [short id](#short-ids). Every coin chosen is spent. Repeat it for several coins. |
 | `--spend-from ADDRESS` | Chooses the coins at an address to spend. Every coin chosen is spent. Repeat it for several addresses. |
 | `--select` | Spends only what the payment needs among the coins chosen, as `--strategy` selects them. |
 | `--strategy STRATEGY` | Sets how the coins are selected: `least-waste`, the default, `random-draw`, `largest-first` or `smallest-first`. |
@@ -944,7 +991,8 @@ hw preparesendall ADDRESS1:0.1 ADDRESS2 --fee-rate median --leave-dust
 
 #### `hw signtx`
 
-Signs a pending transaction by its nosigHash, or a transaction file. It first
+Signs a pending transaction by its nosigHash, in full or by its
+[short id](#short-ids), or a transaction file. It first
 shows the transaction, as [`reviewtx`](#hw-reviewtx) does, then asks for the
 mnemonic and passphrase of the account, or for the shares of its backup. Check
 what it shows before you type the mnemonic, and stop it with Ctrl-C if it is
@@ -1000,7 +1048,7 @@ lines:
 2. The balance of the account after the transaction.
 3. The address paid. An address of the wallet is named by its derivation path,
    such as `/0/3`, with its label, or `change address` when it is one.
-4. The txid.
+4. Its [short id](#short-ids), the first 8 digits of its txid.
 
 On a terminal, the addresses of the wallet and their labels are blue, which
 sets them apart from the addresses of others.
@@ -1011,7 +1059,8 @@ a line of its own, below the balance. The balance of the newest transaction is
 what the account holds, confirmed or not. A dead transaction, replaced or
 dropped from the network, shows no balance and does not count.
 
-`--verbose` shows the label as a field, every address in full with its amount,
+`--verbose` shows the label as a field, the txid in full and its short id, every
+address in full with its amount,
 and its path for an address of the wallet, the fee and the balance. It gives
 the full count of the confirmations. The label of an address of the wallet is
 on the line below it, under the address. A change address the transaction
@@ -1022,8 +1071,9 @@ spends, and so which payments it links. Long labels wrap at the edge of the
 screen, each line again under the address.
 
 `--tabular` shows each transaction on one row of a table, as a spreadsheet
-does. The columns are the time, the type, the amount, the balance after it and
-the confirmations. The confirmations are a number alone, up to `999+`. An
+does. The columns are the time, the type, the amount, the balance after it, the
+confirmations and the short id. The confirmations are a number alone, up to
+`999+`. An
 unconfirmed transaction has 0, and a dead one says `dead`. The last column,
 Description, says what the transaction is for:
 
@@ -1035,14 +1085,14 @@ Description, says what the transaction is for:
 
 Nothing in the last column is cut, a long label or address included. The
 header names the unit of the amounts, so
-the cells hold numbers alone. The table leaves out the txid and the fee rate.
-`txs` without `--tabular` shows them.
+the cells hold numbers alone. The table leaves out the fee rate. `txs` without
+`--tabular` shows it.
 
 `--csv FILE` writes the transactions to a [CSV file](#listings): the time, type,
 amount, fee and fee rate of each, the balance after it, its status,
-confirmations, block, txid and label. Then come the address it pays the most,
-its path and label when it is one of the wallet, and how many other addresses
-it pays.
+confirmations and block, its txid in full and by its short id, and its label.
+Then come the address it pays the most, its path and label when it is one of the
+wallet, and how many other addresses it pays.
 
 ```console
 hw txs
@@ -1054,7 +1104,7 @@ hw txs --max 20 --after TXID
 
 > **Good to know**
 >
-> - **A row of the table is wide.** It takes 73 columns before its last
+> - **A row of the table is wide.** It takes 84 columns before its last
 >   cell, which takes what its label or address needs. `less` keeps the row
 >   on one line, and the right arrow key scrolls to its end. The columns keep
 >   the same widths from the first row to the last, so that a long listing
@@ -1064,19 +1114,19 @@ hw txs --max 20 --after TXID
 #### `hw pendingtxs`
 
 Lists the pending transactions: prepared, signed, or sent and not yet seen by
-`sync`. They take three lines each. Each is shown by its nosigHash
-until it is signed, then by its txid. A conflicted one can no longer be sent.
+`sync`. They take three lines each. Each is shown by the
+[short id](#short-ids) of its nosigHash until it is signed, then by that of its
+txid. A conflicted one can no longer be sent.
 
 `--tabular` shows each transaction on one row of a table: its account when
 every account is listed, the time it was created, its type, its amount, its
-status, its fee rate in sat/vB, and what it is for, as `txs --tabular` says it.
-The account column is as wide as the longest name. The table leaves out the
-hash, which the other commands
-take. `pendingtxs` without `--tabular` shows it.
+status, its fee rate in sat/vB, its short id, and what it is for, as
+`txs --tabular` says it. The account column is as wide as the longest name.
 
 `--csv FILE` writes the pending transactions to a [CSV file](#listings): the
 account of each, when it was created, its type, amount, fee and fee rate, its
-status, its nosigHash, its txid once signed, its label, and the address it pays
+status, its nosigHash and its txid once signed, each in full and by its short
+id, its label, and the address it pays
 the most, as `txs --csv` gives it.
 
 ```console
@@ -1124,7 +1174,8 @@ hw importtx signed.psbt
 #### `hw deletetx`
 
 `hw deletetx HASH` deletes a pending transaction and frees its coins. Name it by
-its nosigHash, or by its txid once it is signed. A transaction you sent can be
+its nosigHash, or by its txid once it is signed, in full or by its
+[short id](#short-ids). A transaction you sent can be
 deleted only once the server no longer knows it.
 
 ```console
@@ -1150,7 +1201,7 @@ hw sendtx TXID
 | The coins at an address | `--sweep-from ADDRESS` |
 | The coins at the addresses listed in a file | `--address-file FILE` |
 | The coins at the addresses of the keys in a file | `--key-file FILE` |
-| A coin given by its transaction and index | `--coin TXID:INDEX` |
+| A coin given by its txid in full and its index | `--coin TXID:INDEX` |
 
 A sweep that pays no address of this wallet needs `--network` and `--output`,
 and no account. It goes from file to file:
@@ -1446,6 +1497,8 @@ transactions, coins and addresses of that account only.
 
 `hw` offers at most 20 values for a word. When more of them start with what
 you typed, it offers none: type more of the value, or copy it from a listing.
+Tab after the 8 digits of a [short id](#short-ids) completes the whole hash.
+The command takes the short id as it is too.
 Only the values that match are read, so a large wallet completes as fast as a
 small one.
 

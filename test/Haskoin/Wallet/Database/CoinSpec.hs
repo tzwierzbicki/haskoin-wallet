@@ -59,6 +59,7 @@ spec = prepareContext $ \ctx -> do
   lifeSpec ctx
   rowSpec ctx
   holdersSpec ctx
+  shortIdSpec ctx
   jsonSpec ctx
   leftSpec ctx
   chosenSpec ctx
@@ -1071,6 +1072,35 @@ holdersSpec ctx =
         _ <- refresh ctx accId [confirmedPayment ctx]
         _ <- refreshCoins btc ctx otherId [externalAddr2] [storeCoin ctx (fakeTxHash 2, 0) (Just 800001) externalAddr2 20000]
         (map fst <$> coinAccounts [firstCoin, secondCoin, firstCoin, thirdCoin]) `dbShouldBeE` [accId, otherId]
+
+-- lockcoin and --coin take a coin by the short id of its txid and its
+-- index: a1075db5:1
+shortIdSpec :: Ctx -> Spec
+shortIdSpec ctx =
+  describe "The coins named by a short id and an index" $ do
+    it "are the coins at that index of the transactions with the short id, in every account" $
+      inDatabaseE $ do
+        accId <- account ctx
+        (otherId, _) <- testNewAcc2 ctx "other"
+        _ <-
+          refresh
+            ctx
+            accId
+            [ storeCoin ctx (a1075db5First, 0) (Just 800000) (externalAddr 0) 10000,
+              storeCoin ctx (a1075db5First, 1) (Just 800000) (externalAddr 1) 20000,
+              storeCoin ctx (b2d4f6a8Txid, 1) (Just 800000) (externalAddr 0) 30000
+            ]
+        _ <- refreshCoins btc ctx otherId [externalAddr2] [storeCoin ctx (a1075db5Second, 1) (Just 800000) externalAddr2 40000]
+        (sort . map coinText <$> lift (coinsWith (typedShortId "a1075db5") 1))
+          `dbShouldBeE` [ "a1075db5c0ffee00000000000000000000000000000000000000000000000001:1",
+                          "a1075db5c0ffee00000000000000000000000000000000000000000000000002:1"
+                        ]
+
+    it "are none when no transaction with the short id has a coin at that index" $
+      inDatabaseE $ do
+        accId <- account ctx
+        _ <- refresh ctx accId [storeCoin ctx (a1075db5First, 0) (Just 800000) (externalAddr 0) 10000]
+        lift (coinsWith (typedShortId "a1075db5") 1) `dbShouldBeE` []
 
 rowSpec :: Ctx -> Spec
 rowSpec ctx =

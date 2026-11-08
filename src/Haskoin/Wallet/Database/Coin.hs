@@ -22,6 +22,7 @@ module Haskoin.Wallet.Database.Coin
     CoinFilter (..),
     coinsAfter,
     coinsStarting,
+    coinsWith,
     coinAddressesStarting,
     coinBlock,
     Spending (..),
@@ -61,7 +62,9 @@ import Control.Monad.Reader (MonadTrans (lift))
 import Control.Monad.State (StateT, evalStateT, gets, modify)
 import Data.Aeson ((.:?), (.!=), FromJSON (..), ToJSON (..), Value (String), object, withObject, withText, (.:), (.=))
 import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
 import Data.Containers.ListUtils (nubOrd)
+import Data.Either (rights)
 import Data.List (intercalate, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -74,7 +77,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Database.Persist.Sql (Single (..), rawSql)
 import Data.Time (UTCTime, getCurrentTime)
-import Data.Word (Word64)
+import Data.Word (Word32, Word64)
 import Database.Esqueleto.Legacy (InnerJoin (..), Value (..), asc, desc, from, groupBy, having, in_, just, limit, on, orderBy, select, sum_, val, valList, where_, (&&.), (<.), (==.), (>.), (^.), (||.))
 import qualified Database.Persist as P
 import Haskoin
@@ -85,6 +88,7 @@ import Haskoin.Wallet.Database.Account (accountNetwork, getAccountById, getAccou
 import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath)
 import Haskoin.Wallet.Database.PendingTx (lockedOutpoints, userLockedOutpoints)
 import Haskoin.Wallet.Database.RawTx (getRawTx, lookupRawTx)
+import Haskoin.Wallet.ShortId (ShortId, shortIdKey)
 import Haskoin.Wallet.Database.TxInfo (coinLabel, coinLabels, liveSummaries, spentTxids, transactionTime, walletAddressRow, walletTransaction)
 import Haskoin.Wallet.Util (rowLimit)
 import Numeric.Natural (Natural)
@@ -336,6 +340,22 @@ coinsStarting accId digits atMost = do
         <> concat [[P.toPersistValue (32 - bytes), P.toPersistValue lastDigit] | not (null lastDigit)]
     pairs (a : b : more) = [a, b] : pairs more
     pairs _ = []
+
+-- | The coins of the wallet, of every account, whose transaction has the
+-- short id and that are at the index among its outputs. The key holds the
+-- txid in the reverse order of the digits hw shows ('outpointBytes'), then
+-- the index in 4 bytes, the lowest first. So the key ends with the short
+-- id reversed, then the index. No index of the keys reads the end of a
+-- key: every coin is read, as 'coinsStarting' reads them for the shell.
+coinsWith :: (MonadUnliftIO m) => ShortId -> Word32 -> DB m [OutPoint]
+coinsWith short index = do
+  rows <-
+    rawSql
+      "select outpoint from d_b_coin where substr(outpoint, 29, 8) = ?"
+      [P.toPersistValue keyEnd]
+  return $ rights (bytesToOutpoint . unSingle <$> rows)
+  where
+    keyEnd = BS.reverse (shortIdKey short) <> S.runPut (S.putWord32le index)
 
 -- | The text of at most the given number of addresses of the account that
 -- hold a coin and start with the text, as 'addressesStarting' matches it:

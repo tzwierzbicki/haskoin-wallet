@@ -106,7 +106,7 @@ sendAllSpec ctx = do
         let (beforeSteps, steps) = Text.breakOn "Next, sign it" (runOut run)
             (transaction, staying) = Text.breakOn "in the account:" beforeSteps
         transaction `shouldSatisfy` Text.isInfixOf "NoSigHash"
-        staying `shouldSatisfy` Text.isInfixOf ("\n    0.00030000 btc  you locked it\n  " <> Text.pack (coinArg (twoCoinsTx ctx) 1) <> "\n")
+        staying `shouldSatisfy` Text.isInfixOf ("\n    0.00030000 btc  you locked it\n  " <> Text.pack (shortCoinArg (twoCoinsTx ctx) 1) <> "\n")
         steps `shouldSatisfy` Text.isInfixOf "hw signtx"
 
     it "are sent at a fee rate above 100 satoshis per virtual byte only if the user takes it" $

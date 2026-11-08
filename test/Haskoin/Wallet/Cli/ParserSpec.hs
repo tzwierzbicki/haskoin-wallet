@@ -7,12 +7,13 @@
 module Haskoin.Wallet.Cli.ParserSpec (spec) where
 
 import Haskoin (txHashToHex)
-import Haskoin.Wallet.Cli.Parser (Labelled (..), program, readLabelled)
+import Haskoin.Wallet.Cli.Parser (Labelled (..), program, readCoinRef, readLabelled)
 import Haskoin.Wallet.Cli.Parser.Args (Args (..), CommandSpec (..))
 import Haskoin.Wallet.Cli.Parser.Help (mentionedCommands, usageParts)
 import Haskoin.Wallet.Cli.Parser.Completion (completionParts)
 import Haskoin.Wallet.Cli.Parser.Run (Request (..), commandNamed, requestOf)
 import Haskoin.Wallet.Cli.Style (renderPlain)
+import Haskoin.Wallet.ShortId (HashRef (..), coinRefText, shortIdText)
 import Test.Hspec
 
 spec :: Spec
@@ -65,12 +66,32 @@ spec = do
   describe "What label labels" $ do
     it "is a transaction for a word of 64 hexadecimal digits" $
       case readLabelled "ab00000000000000000000000000000000000000000000000000000000000001" of
-        LabelledTx tid -> txHashToHex tid `shouldBe` "ab00000000000000000000000000000000000000000000000000000000000001"
+        LabelledTx (FullHash tid) -> txHashToHex tid `shouldBe` "ab00000000000000000000000000000000000000000000000000000000000001"
         other -> expectationFailure $ "Not a transaction: " <> show other
+
+    it "is a transaction by its short id, for a word of 8 hexadecimal digits" $
+      case readLabelled "a1075db5" of
+        LabelledTx (ShortHash short) -> shortIdText short `shouldBe` "a1075db5"
+        other -> expectationFailure $ "Not a short id: " <> show other
+
+    -- No address has 9 characters, so label refuses it as an address
+    it "is an address for a word of 9 hexadecimal digits, which is neither a short id nor a txid" $
+      readLabelled "a1075db5c" `shouldBe` LabelledAddress "a1075db5c"
 
     it "is an address, as typed, for any other word" $ do
       readLabelled "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" `shouldBe` LabelledAddress "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"
       readLabelled "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u" `shouldBe` LabelledAddress "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"
+
+  describe "A coin as the user types it" $ do
+    it "is TXID:INDEX with the txid in full" $
+      (coinRefText <$> readCoinRef "a1075db5c0ffee00000000000000000000000000000000000000000000000001:1")
+        `shouldBe` Just "a1075db5c0ffee00000000000000000000000000000000000000000000000001:1"
+
+    it "is the short id of its txid, a colon and its index" $
+      (coinRefText <$> readCoinRef "a1075db5:1") `shouldBe` Just "a1075db5:1"
+
+    it "is nothing without its index" $
+      readCoinRef "a1075db5" `shouldBe` Nothing
 
   describe "The commands a text of the help names" $ do
     it "are those named in it, in its order" $

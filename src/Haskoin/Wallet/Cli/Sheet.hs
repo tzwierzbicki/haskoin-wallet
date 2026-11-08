@@ -7,12 +7,15 @@
 --
 -- A sheet is not the table of the screen, which --tabular shows. The
 -- screen has 80 columns or so, and a table there gives up what does
--- not fit: the txid, the coin, the fee, the hashes of a pending
--- transaction. A spreadsheet has room, and is where the user sorts,
+-- not fit: the fee, and the hashes in full, of which it gives the short
+-- ids alone. A spreadsheet has room, and is where the user sorts,
 -- filters and sums. So a sheet gives what the answer in JSON gives: every
 -- identifier the commands take, every amount, and the label of the
 -- address apart from that of the transaction, each in a column of its
--- own. It gives no colours and no paddings, and cuts nothing.
+-- own. It gives no colours and no paddings, and cuts nothing. Each hash
+-- comes in full, then by its short id, the first 8 digits, which the
+-- screen shows ("Haskoin.Wallet.ShortId"): the short id finds a row of
+-- the sheet on the screen, and the full hash finds it anywhere else.
 --
 -- Each cell has a kind ('Cell'): text, an amount in satoshis, a count, a
 -- time. A CSV file holds text alone, so its writer decides how each kind
@@ -54,6 +57,7 @@ import Haskoin.Wallet.Database.Account (accountNetwork, accountPath)
 import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath, coinBalanceNotSpendableYet, pathText)
 import Haskoin.Wallet.Database.Coin (JsonCoin (..), coinText)
 import Haskoin.Wallet.Database.TxInfo
+import Haskoin.Wallet.ShortId (shortCoinText, shortHashText)
 import Numeric.Natural (Natural)
 
 -- | A cell of a sheet, with the kind of what it holds. A spreadsheet
@@ -149,6 +153,11 @@ addressCell net addr = maybe EmptyCell TextCell (addrToText net addr)
 hashCell :: TxHash -> Cell
 hashCell = TextCell . txHashToHex
 
+-- | The short id of a hash in a cell, its first 8 digits, as the screen
+-- shows it and the commands take it too
+shortHashCell :: TxHash -> Cell
+shortHashCell = TextCell . cs . shortHashText
+
 -- | The height of the block of a transaction in a cell, or an empty cell
 -- for one in no block yet
 blockCell :: Store.BlockRef -> Cell
@@ -220,12 +229,14 @@ balanceColumns =
 
 {- Coins -}
 
--- | The columns of the coins: the coin, as lockcoin and --coin take it,
--- the time of the transaction that paid it, its value, its state and
--- its confirmations, the address that holds it, and both labels
+-- | The columns of the coins: the coin, in full and by its short id, as
+-- lockcoin and --coin take it, the time of the transaction that paid it,
+-- its value, its state and its confirmations, the address that holds it,
+-- and both labels
 coinColumns :: Network -> [Column JsonCoin]
 coinColumns net =
   [ Column "Coin" (TextCell . cs . coinText . jsonCoinOutpoint),
+    Column "Short coin" (TextCell . cs . shortCoinText . jsonCoinOutpoint),
     Column "Time (UTC)" (timeCell . jsonCoinTime),
     Column "Value (sats)" (satoshiCell . jsonCoinValue),
     Column "State" (TextCell . cs . coinStateText "locked by a pending transaction"),
@@ -241,7 +252,7 @@ coinColumns net =
 
 -- | The columns of the transactions of the account, each with the
 -- balance after it: when, what it adds or takes, where it stands, its
--- txid, and what it is for
+-- txid in full and by its short id, and what it is for
 txColumns :: Network -> [Column ListedTx]
 txColumns net =
   [Column "Time (UTC)" (timeCell . txTime . listedTxInfo)]
@@ -255,9 +266,9 @@ txColumns net =
             Pending _ -> EmptyCell,
           Column "Block" $ \(_, info) -> case txInfoStatus info of
             OnChain status -> blockCell (chainBlock status)
-            Pending _ -> EmptyCell,
-          txidColumn
+            Pending _ -> EmptyCell
         ]
+          <> txidColumns
           <> purposeColumns
       )
   where
@@ -265,7 +276,8 @@ txColumns net =
 
 -- | The columns of the pending transactions, each with its account: its
 -- account, when the wallet started holding it, what it adds or takes, how
--- far it got, both its hashes, and what it is for
+-- far it got, both its hashes, each in full and by its short id, and what
+-- it is for
 pendingColumns :: [Column (DBAccount, TxInfo)]
 pendingColumns =
   [ Column "Account" $ \(acc, _) -> TextCell (dBAccountName acc),
@@ -275,15 +287,17 @@ pendingColumns =
       held
       ( amountColumns
           <> [ statusColumn,
-               Column "Nosighash" $ \(_, info) -> case txInfoStatus info of
-                 Pending status -> hashCell (pendingNosigHash status)
-                 OnChain _ -> EmptyCell,
-               txidColumn
+               Column "Nosighash" $ \(_, info) -> maybe EmptyCell hashCell (nosigHashOf info),
+               Column "Short nosighash" $ \(_, info) -> maybe EmptyCell shortHashCell (nosigHashOf info)
              ]
+          <> txidColumns
           <> purposeColumns
       )
   where
     held (acc, info) = (accountNetwork acc, info)
+    nosigHashOf info = case txInfoStatus info of
+      Pending status -> Just (pendingNosigHash status)
+      OnChain _ -> Nothing
 
 -- | The columns of what a transaction adds to the account or takes from
 -- it: its type, its amount, fee included, its fee and its fee rate. The
@@ -300,10 +314,13 @@ amountColumns =
 statusColumn :: Column (Network, TxInfo)
 statusColumn = Column "Status" $ \(_, info) -> TextCell (statusText (txInfoStatus info))
 
--- | The column of the txid of a transaction, empty for one in
--- preparation not signed yet
-txidColumn :: Column (Network, TxInfo)
-txidColumn = Column "Txid" $ \(_, info) -> maybe EmptyCell hashCell (txInfoHash info)
+-- | The columns of the txid of a transaction, in full then by its short
+-- id, both empty for one in preparation not signed yet
+txidColumns :: [Column (Network, TxInfo)]
+txidColumns =
+  [ Column "Txid" $ \(_, info) -> maybe EmptyCell hashCell (txInfoHash info),
+    Column "Short txid" $ \(_, info) -> maybe EmptyCell shortHashCell (txInfoHash info)
+  ]
 
 -- | Where a transaction stands, in words. One on the chain is confirmed,
 -- unconfirmed, or dead: replaced or dropped, never to confirm. One in

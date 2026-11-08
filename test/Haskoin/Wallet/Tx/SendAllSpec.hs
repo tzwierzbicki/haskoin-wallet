@@ -195,18 +195,20 @@ reportSpec ctx =
       (threeDustReport ctx False).laterRate `shouldBe` Just 4
 
     -- In bitcoins, the unit by default: 1480 satoshis are 0.00001480 btc
+    -- The coins are outputs of transaction 2, whose txid starts with
+    -- 00000000: each shows by its short id, as --coin takes it
     it "lists the dust coins, the largest first, each with its value and the rates it is worth spending at, then what spending and leaving them does" $
       renderedLines (dustReportDoc UnitBitcoin Map.empty (threeDustReport ctx False))
         `shouldBe` [ "3 coins cost more to spend than they are worth at 10 sat/vB, 0.00001480 btc each:",
                      "",
                      "    0.00001200 btc  worth spending at 8 sat/vB or less",
-                     "  0000000000000000000000000000000000000000000000000000000000000002:0",
+                     "  00000000:0",
                      "",
                      "    0.00000900 btc  worth spending at 6 sat/vB or less",
-                     "  0000000000000000000000000000000000000000000000000000000000000002:1",
+                     "  00000000:1",
                      "",
                      "    0.00000546 btc  worth spending at 3 sat/vB or less",
-                     "  0000000000000000000000000000000000000000000000000000000000000002:2",
+                     "  00000000:2",
                      "",
                      "Spending them adds 0.00004440 btc of fee for 0.00002646 btc of coins. What remains for the addresses without an amount is 0.00074806 btc instead of 0.00076600 btc, 0.00001794 btc less, and the account is empty.",
                      "Leaving them, the account keeps 0.00002646 btc. Once the other coins are gone, they can only be spent together, at 4 sat/vB or less."

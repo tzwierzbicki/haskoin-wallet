@@ -75,7 +75,7 @@ module Haskoin.Wallet.Commands
 where
 
 import Control.Applicative ((<|>))
-import Control.Monad (forM, join, unless, void, when)
+import Control.Monad (forM, join, unless, void, when, (<=<))
 import Control.Monad.Except (ExceptT, runExceptT, throwError, withExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
@@ -135,6 +135,7 @@ import Haskoin.Wallet.Tx.Building (ChangeTo (..), CoinControl (..), buildTxSignD
 import Haskoin.Wallet.Tx.BumpFee
 import Haskoin.Wallet.Tx.LockTime (isStale, lockTimeFor)
 import Haskoin.Wallet.Database.TxInfo
+import Haskoin.Wallet.ShortId
 import Haskoin.Wallet.Tx.PsbtFile (FileAccount (..), psbtTxFile, signedPsbt, txFilePsbt)
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Signing (heldChainsOf, labelledTxFile, labelsFromFile, parseOutsideTxSignData, parseTxFile, parseTxSignData, signHeldWalletTx)
@@ -551,6 +552,55 @@ accountsListing account =
         listingWhole = True
       }
 
+{- Short ids -}
+
+-- A command takes a hash in full or by its short id, its first 8 digits
+-- (see "Haskoin.Wallet.ShortId"). A short id is looked up among the
+-- hashes the command can name, in every account, and the command then
+-- goes on as with the full hash: it says what it says of a full hash the
+-- account does not hold, for instance. A short id that matches none gets
+-- the answer a full hash that matches nothing gets, with the short id in
+-- it. One that matches two or more is refused, with each one named, for
+-- the user to give the full hash.
+
+-- | The pending transaction a command names, by its nosigHash or its txid
+-- once signed, in full or by its short id
+pendingHashOf :: HashRef -> ExceptT String (DB IO) TxHash
+pendingHashOf = fullHashOf noPendingTx pendingNamed pendingHashesWith
+
+-- | The transaction on the chain that txs --after names, by its txid in
+-- full or by its short id, among those of every account. The listing
+-- then refuses one of another account.
+chainTxidOf :: HashRef -> ExceptT String (DB IO) TxHash
+chainTxidOf named = fullHashOf none transactionsNamed (lift . walletTxidsWith) named
+  where
+    none = "The transaction " <> hashRefText named <> " is not in the account"
+
+-- | The transaction a command names, pending or on the chain, by its
+-- txid, or by its nosigHash while it is pending, in full or by its short
+-- id: what label and bumpfee take
+walletTxHashOf :: HashRef -> ExceptT String (DB IO) TxHash
+walletTxHashOf named = fullHashOf (noTransaction named) walletTxsNamed withShortId named
+  where
+    withShortId short = (<>) <$> pendingHashesWith short <*> lift (walletTxidsWith short)
+
+-- | The answer to a hash that names no transaction of the wallet
+noTransaction :: HashRef -> String
+noTransaction named = "The wallet has no transaction " <> hashRefText named
+
+-- | The coin a command names, by its txid in full or by its short id, and
+-- its index, among the coins of every account: what lockcoin, unlockcoin
+-- and --coin take
+walletCoinOf :: CoinRef -> ExceptT String (DB IO) OutPoint
+walletCoinOf named = coinNamed ("The wallet has no coin " <> coinRefText named) named
+
+-- | The coin a command names, as 'walletCoinOf' finds it, with the answer
+-- to a short id that matches no coin
+coinNamed :: String -> CoinRef -> ExceptT String (DB IO) OutPoint
+coinNamed none = \case
+  CoinRef (FullHash hash) index -> return (OutPoint hash index)
+  CoinRef (ShortHash short) index -> liftEither . pickCoin none short index =<< lift (coinsWith short index)
+
 {- Addresses -}
 
 cmdReceive :: Ctx -> Config -> Receive -> IO Response
@@ -626,7 +676,9 @@ cmdLabel ctx cfg opts =
       LabelledAddress typed -> do
         addr <- labelAddress typed opts.label
         addressAnswer (dBAddressAccount addr) addr
-      LabelledTx named -> ResponseLabelledTxs <$> labelTransaction ctx named opts.label
+      LabelledTx named -> do
+        hash <- walletTxHashOf named
+        ResponseLabelledTxs <$> labelTransaction ctx hash opts.label
 
 -- | Show the address of the account at an index of one of its chains,
 -- derived from the public key of the account: what an offline computer
@@ -648,16 +700,18 @@ cmdCheckAddr ctx cfg account addrType index =
 
 {- Coins -}
 
-cmdCoins :: Config -> Maybe Text -> Bool -> Paging OutPoint -> IO Response
+cmdCoins :: Config -> Maybe Text -> Bool -> Paging CoinRef -> IO Response
 cmdCoins cfg account locked paging = readListing cfg (coinsListing account locked paging)
 
 -- | The coins of the account, or its locked ones, in the order coins
 -- lists them. A coin names the one to go on after, with its block.
-coinsListing :: Maybe Text -> Bool -> Paging OutPoint -> ExceptT String (DB IO) Listing
+coinsListing :: Maybe Text -> Bool -> Paging CoinRef -> ExceptT String (DB IO) Listing
 coinsListing account locked paging = do
   (accId, acc) <- getAccountByName account
   let shown = if locked then LockedCoins else AllCoins
-  start <- forM paging.pagingAfter $ \outpoint -> (,outpoint) <$> coinBlock accId outpoint
+  start <- forM paging.pagingAfter $ \named -> do
+    outpoint <- coinNamed ("The coin " <> coinRefText named <> " is not in the account") named
+    (,outpoint) <$> coinBlock accId outpoint
   return
     Listing
       { listingStart = start,
@@ -669,32 +723,32 @@ coinsListing account locked paging = do
       }
 
 -- | Lock a coin at the user's request, and show it
-cmdLockCoin :: Config -> OutPoint -> IO Response
-cmdLockCoin cfg outpoint =
+cmdLockCoin :: Config -> CoinRef -> IO Response
+cmdLockCoin cfg named =
   runDBResponse cfg $ do
-    (acc, coin) <- lockCoin outpoint
+    (acc, coin) <- lockCoin =<< walletCoinOf named
     return $ ResponseCoins acc [coin]
 
 -- | Unlock a coin the user locked, and show it
-cmdUnlockCoin :: Config -> OutPoint -> IO Response
-cmdUnlockCoin cfg outpoint =
+cmdUnlockCoin :: Config -> CoinRef -> IO Response
+cmdUnlockCoin cfg named =
   runDBResponse cfg $ do
-    (acc, coin) <- unlockCoin outpoint
+    (acc, coin) <- unlockCoin =<< walletCoinOf named
     return $ ResponseCoins acc [coin]
 
 {- Transactions -}
 
-cmdTxs :: Config -> Maybe Text -> Paging TxHash -> IO Response
+cmdTxs :: Config -> Maybe Text -> Paging HashRef -> IO Response
 cmdTxs cfg account paging = readListing cfg (txsListing account paging)
 
 -- | The transactions of the account on the chain, in the order txs lists
 -- them, each with the balance after it. A transaction names the one to go
 -- on after, with its block and the balance so far, so that a chunk adds up
 -- nothing. Only --after adds up the transactions above it.
-txsListing :: Maybe Text -> Paging TxHash -> ExceptT String (DB IO) Listing
+txsListing :: Maybe Text -> Paging HashRef -> ExceptT String (DB IO) Listing
 txsListing account paging = do
   (accId, acc) <- getAccountByName account
-  start <- forM paging.pagingAfter (txsCursorAt accId acc)
+  start <- forM paging.pagingAfter (txsCursorAt accId acc <=< chainTxidOf)
   return
     Listing
       { listingStart = start,
@@ -707,17 +761,17 @@ txsListing account paging = do
         listingWhole = False
       }
 
-cmdPendingTxs :: Ctx -> Config -> Maybe Text -> Paging TxHash -> IO Response
+cmdPendingTxs :: Ctx -> Config -> Maybe Text -> Paging HashRef -> IO Response
 cmdPendingTxs ctx cfg account paging = readListing cfg (pendingTxsListing ctx account paging)
 
 -- | The pending transactions of the account, or of every account, newest
 -- first. The one to go on after is named by either of its hashes. The
 -- listing goes on after the time it was created and its nosigHash.
-pendingTxsListing :: Ctx -> Maybe Text -> Paging TxHash -> ExceptT String (DB IO) Listing
+pendingTxsListing :: Ctx -> Maybe Text -> Paging HashRef -> ExceptT String (DB IO) Listing
 pendingTxsListing ctx account paging = do
   asked <- forM account $ \_ -> getAccountByName account
   let accIdM = fst <$> asked
-  start <- forM paging.pagingAfter (pendingCursor accIdM)
+  start <- forM paging.pagingAfter (pendingCursor accIdM <=< pendingHashOf)
   return
     Listing
       { listingStart = start,
@@ -763,10 +817,10 @@ cmdImportTx ctx cfg account file =
 
 -- | Write a pending transaction to a file, with the labels of its
 -- addresses as the wallet has them now
-cmdExportTx :: Ctx -> Config -> TxHash -> FilePath -> IO Response
+cmdExportTx :: Ctx -> Config -> HashRef -> FilePath -> IO Response
 cmdExportTx ctx cfg named file =
   runDBResponse cfg $ do
-    held <- requirePendingTx named
+    held <- requirePendingTx =<< pendingHashOf named
     checkPathFree file
     acc <- getAccountById held.pendingTxAccount
     info <- txInfoOf ctx (held.pendingTxAccount, acc) held.pendingTxData
@@ -775,10 +829,10 @@ cmdExportTx ctx cfg named file =
 
 -- | Delete a pending transaction, named by either of its hashes. The
 -- answer gives both, whichever the user typed.
-cmdDeleteTx :: Ctx -> Config -> TxHash -> IO Response
+cmdDeleteTx :: Ctx -> Config -> HashRef -> IO Response
 cmdDeleteTx ctx cfg named =
   runDBResponse cfg $ do
-    held <- requirePendingTx named
+    held <- requirePendingTx =<< pendingHashOf named
     let tx = txSignDataTx held.pendingTxData
         txidM = if isSigned tx then Just (txHash tx) else Nothing
     (coins, addrs) <- deleteTx ctx (webStore ctx cfg) (nosigHash tx)
@@ -1041,9 +1095,10 @@ controlledAccount account outpoints spendFrom = do
 cmdPrepareTx :: Ctx -> Config -> AmountUnit -> PrepareTx -> IO Response
 cmdPrepareTx ctx cfg unit opts =
   runDBResponse cfg $ do
-    (accId, acc, spendFrom) <- controlledAccount opts.account opts.coins opts.spendFrom
+    coins <- mapM walletCoinOf opts.coins
+    (accId, acc, spendFrom) <- controlledAccount opts.account coins opts.spendFrom
     let net = accountNetwork acc
-        controlled = not (null opts.coins && null spendFrom)
+        controlled = not (null coins && null spendFrom)
     when (opts.select && not controlled) $
       throwError "--select needs coins to select among: give --coin or --spend-from"
     -- Before the transaction is built, not after
@@ -1058,7 +1113,7 @@ cmdPrepareTx ctx cfg unit opts =
         else do
           spendable <- spendableCoins net ctx accId opts.minConf
           unspendable <- unspendableCoins net ctx accId opts.minConf
-          (chosen, held) <- liftEither $ chosenCoins opts.coins spendFrom spendable unspendable
+          (chosen, held) <- liftEither $ chosenCoins coins spendFrom spendable unspendable
           let outpoints = (.outpoint) <$> chosen
           labels <- lift $ labelsOfCoins net accId (fst <$> held)
           return (if opts.select then SelectAmongChosen outpoints else SpendChosen outpoints, leftCoins labels [] held [])
@@ -1094,10 +1149,11 @@ changeBackTo unit net accId addrs = do
 cmdPrepareSendAll :: Ctx -> Config -> AmountUnit -> PrepareSendAll -> IO Response
 cmdPrepareSendAll ctx cfg unit opts =
   runDBResponse cfg $ do
-    (accId, acc, spendFrom) <- controlledAccount opts.account opts.coins opts.spendFrom
+    coins <- mapM walletCoinOf opts.coins
+    (accId, acc, spendFrom) <- controlledAccount opts.account coins opts.spendFrom
     let net = accountNetwork acc
         kind = accountKind acc
-        controlled = not (null opts.coins && null spendFrom)
+        controlled = not (null coins && null spendFrom)
     -- Before the transaction is built, not after
     for_ opts.output checkPathFree
     recipients <- liftEither $ mapM (readRecipient net unit) opts.recipients
@@ -1113,7 +1169,7 @@ cmdPrepareSendAll ctx cfg unit opts =
     (sent, left) <-
       if controlled
         then do
-          (sent, _) <- liftEither $ chosenCoins opts.coins spendFrom spendable unspendable
+          (sent, _) <- liftEither $ chosenCoins coins spendFrom spendable unspendable
           return (sent, leftCoins labels [] unspendable (notSent sent spendable))
         else do
           sent <- coinsWithDust kind labels feeByte recipients (not (null unspendable)) spendable
@@ -1180,8 +1236,8 @@ transactionToSign ctx fallbackM signing = do
       throwError "Give the NOSIGHASH of a pending transaction, or an --input file"
     (Just _, Just _) ->
       throwError "Can not specify both a NOSIGHASH and an --input file"
-    (Just nosigH, _) -> do
-      held <- requirePendingTx nosigH
+    (Just named, _) -> do
+      held <- requirePendingTx =<< pendingHashOf named
       when held.pendingTxOnline $
         throwError "The transaction is already online"
       return $ TxFileRead (plainTxFile Nothing held.pendingTxData) Nothing
@@ -1276,10 +1332,10 @@ cmdSignTx ctx cfg unit signing parts =
 -- --network or of the configuration when the file names none. See
 -- 'sendSigned'. The user sees the transaction and says whether to send
 -- it, unless --yes.
-cmdSendTx :: Ctx -> Config -> AmountUnit -> Maybe TxHash -> Maybe FilePath -> Bool -> Maybe Network -> IO Response
+cmdSendTx :: Ctx -> Config -> AmountUnit -> Maybe HashRef -> Maybe FilePath -> Bool -> Maybe Network -> IO Response
 cmdSendTx ctx cfg unit namedM fileM yes givenM =
   case (namedM, fileM) of
-    (Just named, Nothing) -> sending $ (`TxFileRead` Nothing) . plainTxFile Nothing . (.pendingTxData) <$> requirePendingTx named
+    (Just named, Nothing) -> sending $ (`TxFileRead` Nothing) . plainTxFile Nothing . (.pendingTxData) <$> (requirePendingTx =<< pendingHashOf named)
     (Nothing, Just file) -> sending (readTxFileIn ctx (commandNetwork cfg givenM) file)
     (Nothing, Nothing) -> return $ ResponseError "Give the TXID of a pending transaction or an --input file"
     (Just _, Just _) -> return $ ResponseError "Can not specify both a TXID and an --input file"
@@ -1314,15 +1370,16 @@ cmdBumpFee ctx cfg unit opts =
   runDBResponse cfg $ do
     -- Before anything is asked, not after
     for_ opts.output checkPathFree
-    holders <- transactionAccounts opts.bumped
+    bumped <- walletTxHashOf opts.bumped
+    holders <- transactionAccounts bumped
     when (null holders) $
-      throwError $ "The wallet has no transaction " <> cs (txHashToHex opts.bumped)
+      throwError $ "The wallet has no transaction " <> cs (txHashToHex bumped)
     (accId, acc) <- accountAmong (\name -> "The transaction is not in the account " <> cs name) opts.account holders
     let net = accountNetwork acc
         store = webStore ctx cfg net
     unless net.replaceByFee $
       throwError "Bitcoin Cash replaces no transaction: its nodes keep the first one they see"
-    stuck <- stuckTransaction ctx store accId acc opts.bumped
+    stuck <- stuckTransaction ctx store accId acc bumped
     liftEither $ checkReplaceable stuck
     case opts.feeRate of
       Just (FeeRateOf _) -> return ()

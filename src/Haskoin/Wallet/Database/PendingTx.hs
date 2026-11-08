@@ -34,6 +34,7 @@ import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Config (Config)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.RawTx
+import Haskoin.Wallet.ShortId (ShortId, startsWith)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Database.TxLabel (setTxLabel)
@@ -136,6 +137,20 @@ signedWithId :: TxHash -> PendingTx -> Bool
 signedWithId tid p = isSigned tx && txHash tx == tid
   where
     tx = txSignDataTx p.pendingTxData
+
+-- | The hashes of the pending transactions that have the short id, of
+-- every account: the nosigHash of each, and the txid of a signed one, the
+-- two hashes 'findPendingTx' takes. The rows are few, and read whole, as
+-- 'findPendingTx' reads them for a txid.
+pendingHashesWith :: (MonadUnliftIO m) => ShortId -> ExceptT String (DB m) [TxHash]
+pendingHashesWith short = do
+  held <- liftEither . mapM fromRow =<< lift (pendingRows Nothing Nothing Nothing)
+  return $ filter (startsWith short) (concatMap hashesOf held)
+  where
+    hashesOf :: PendingTx -> [TxHash]
+    hashesOf p =
+      let tx = txSignDataTx p.pendingTxData
+       in nosigHash tx : [txHash tx | isSigned tx]
 
 -- | The rows of an account, or of every account, newest first, and those
 -- created at the same time by their nosigHashes, so that the order is

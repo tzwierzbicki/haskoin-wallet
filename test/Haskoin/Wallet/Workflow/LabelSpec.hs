@@ -265,7 +265,7 @@ coinLabelsSpec ctx =
         synced home
         _ <- answer home ["label", paidTxid ctx, "Salary"] []
         run <- hw home ["coins", "--verbose"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  Label  : \"Salary\"\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  Label   : \"Salary\"\n"
 
     it "is left out of coins without --verbose" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -402,6 +402,18 @@ labelCommandSpec ctx =
         (labelledOf <$> hwJson home ["label", paidTxid ctx, "Salary"] []) `shouldReturn` Right [("main", "Salary")]
         (fmap (lookup (paidTxid ctx)) . historyLabels <$> hwJson home ["txs"] []) `shouldReturn` Right (Just "Salary")
 
+    it "labels a transaction of the history by the short id of its txid, its first 8 digits" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        (labelledOf <$> hwJson home ["label", shortOf (paidTxid ctx), "Salary"] []) `shouldReturn` Right [("main", "Salary")]
+        (fmap (lookup (paidTxid ctx)) . historyLabels <$> hwJson home ["txs"] []) `shouldReturn` Right (Just "Salary")
+
+    it "labels a pending transaction by the short id of its nosigHash" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        (labelledOf <$> hwJson home ["label", shortOf nosig, "Rent"] []) `shouldReturn` Right [("main", "Rent")]
+
     it "removes the label of a transaction with an empty one" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
@@ -414,6 +426,12 @@ labelCommandSpec ctx =
         synced home
         (errorOf <$> hwJson home ["label", "ab00000000000000000000000000000000000000000000000000000000000000", "Rent"] [])
           `shouldReturn` Right "The wallet has no transaction ab00000000000000000000000000000000000000000000000000000000000000"
+
+    it "refuses a short id that matches no transaction of the wallet, as it refuses such a txid" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["label", "ab000000", "Rent"] [])
+          `shouldReturn` Right "The wallet has no transaction ab000000"
 
 shownSpec :: Ctx -> Spec
 shownSpec ctx =

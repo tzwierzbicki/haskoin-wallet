@@ -324,12 +324,18 @@ coinSpec :: Spec
 coinSpec = do
   describe "A coin as hw shows it" $ do
     -- 22:13 UTC is 23:13 CET
-    it "gives the time of its transaction, its value, its state and its confirmations, then its address in full with its path, then the coin as lockcoin takes it" $
+    -- spendableCoinRow is output 0 of transaction 1, whose txid starts
+    -- with 00000000
+    it "gives the time of its transaction, its value, its state and its confirmations, then its address in full with its path, then the short id of the coin, as lockcoin takes it" $
       renderedLines (compactCoinDoc btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow)
         `shouldBe` [ "14 Nov 2023 23:13      0.00050000 btc  spendable, 3 confirmations",
                      "  at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  /0/0",
-                     "  0000000000000000000000000000000000000000000000000000000000000001:0"
+                     "  00000000:0"
                    ]
+
+    it "gives the short id of the coin as the short id of its txid, a colon and its index" $
+      last (renderedLines (compactCoinDoc btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinOutpoint = OutPoint a1075db5First 1}))
+        `shouldBe` "  a1075db5:1"
 
     -- "  at " takes 5 characters
     it "gives the label of its address on the line below, under the address, as the views that give an address in full do" $
@@ -342,7 +348,7 @@ coinSpec = do
       renderedLines (compactCoinDoc btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinTxLabel = "Salary"})
         `shouldBe` [ "14 Nov 2023 23:13      0.00050000 btc  spendable, 3 confirmations",
                      "  at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  /0/0",
-                     "  0000000000000000000000000000000000000000000000000000000000000001:0"
+                     "  00000000:0"
                    ]
 
     -- 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn is the first change address, which
@@ -373,16 +379,23 @@ coinSpec = do
       (renderedLines (compactCoinDoc btc UnitBitcoin Nothing spendableCoinRow) !! 0)
         `shouldBe` "time unknown           0.00050000 btc  spendable, 3 confirmations"
 
-  -- The fields are padded to "Address", the longest of their names
+  -- The fields are padded to "Short id", the longest of their names
   describe "A coin with every detail, as coins --verbose shows it" $ do
     -- spendableCoinRow is output 0 of transaction 1, in block 800000
-    it "gives its first line, then the coin, the block that holds it, the time of its transaction to the second and its address in full with its path as fields" $
+    it "gives its first line, then the coin in full and by its short id, the block that holds it, the time of its transaction to the second and its address in full with its path as fields" $
       renderedLines (verboseCoinDoc btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow)
         `shouldBe` [ "14 Nov 2023 23:13      0.00050000 btc  spendable, 3 confirmations",
-                     "  Coin   : 0000000000000000000000000000000000000000000000000000000000000001:0",
-                     "  Block  : 800000",
-                     "  Time   : 14 Nov 2023 23:13:20 CET",
-                     "  Address: 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  /0/0"
+                     "  Coin    : 0000000000000000000000000000000000000000000000000000000000000001:0",
+                     "  Short id: 00000000:0",
+                     "  Block   : 800000",
+                     "  Time    : 14 Nov 2023 23:13:20 CET",
+                     "  Address : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  /0/0"
+                   ]
+
+    it "gives the coin in full, then its short id, the short id of its txid and its index" $
+      take 2 (drop 1 (renderedLines (verboseCoinDoc btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinOutpoint = OutPoint a1075db5First 1})))
+        `shouldBe` [ "  Coin    : a1075db5c0ffee00000000000000000000000000000000000000000000000001:1",
+                     "  Short id: a1075db5:1"
                    ]
 
     it "gives the full count of the confirmations, past 999 too" $
@@ -395,28 +408,29 @@ coinSpec = do
 
     it "gives the label of its transaction, quoted, as its first field" $
       (renderedLines (verboseCoinDoc btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinTxLabel = "Salary"}) !! 1)
-        `shouldBe` "  Label  : \"Salary\""
+        `shouldBe` "  Label   : \"Salary\""
 
-    -- "  Address: " takes 11 characters
+    -- "  Address : " takes 12 characters
     it "gives the label of its address on the line below, under the address" $
-      drop 4 (renderedLines (verboseCoinDoc btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinAddressLabel = "Wages"}))
-        `shouldBe` [ "  Address: 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  /0/0",
-                     "           \"Wages\""
+      drop 5 (renderedLines (verboseCoinDoc btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinAddressLabel = "Wages"}))
+        `shouldBe` [ "  Address : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  /0/0",
+                     "            \"Wages\""
                    ]
 
     -- 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn is the first change address
     it "says a coin at a change address is at one, on the line below the address" $
-      drop 4 (renderedLines (verboseCoinDoc btc UnitBitcoin (Just seenTimeInCet) atChange))
-        `shouldBe` [ "  Address: 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  /1/0",
-                     "           change address"
+      drop 5 (renderedLines (verboseCoinDoc btc UnitBitcoin (Just seenTimeInCet) atChange))
+        `shouldBe` [ "  Address : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  /1/0",
+                     "            change address"
                    ]
 
     it "gives no block for an unconfirmed coin, which is in none yet" $
       renderedLines (verboseCoinDoc btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinBlock = Store.MemRef 1700000000, jsonCoinConfirmations = 0, jsonCoinSpendable = False})
         `shouldBe` [ "14 Nov 2023 23:13      0.00050000 btc  not spendable yet, unconfirmed",
-                     "  Coin   : 0000000000000000000000000000000000000000000000000000000000000001:0",
-                     "  Time   : 14 Nov 2023 23:13:20 CET",
-                     "  Address: 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  /0/0"
+                     "  Coin    : 0000000000000000000000000000000000000000000000000000000000000001:0",
+                     "  Short id: 00000000:0",
+                     "  Time    : 14 Nov 2023 23:13:20 CET",
+                     "  Address : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  /0/0"
                    ]
 
 syncSpec :: Spec
@@ -560,7 +574,7 @@ compactSpec = do
         `shouldBe` [ "14 Nov 2023 23:13  Outgoing     -0.00041000 btc  2 confirmations",
                      "                   Balance       0.01208000 btc",
                      "  to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU",
-                     "  0000000000000000000000000000000000000000000000000000000000000002"
+                     "  00000000"
                    ]
 
     it "comes before the label in the compact view" $
@@ -581,18 +595,18 @@ compactSpec = do
                    ]
 
     it "follows the fee in the verbose view" $
-      take 2 (drop 3 (renderedLines (verboseTxDoc btc UnitBitcoin [] (Just 1208000) (Just seenTimeInCet) (spent "" Map.empty))))
+      take 2 (drop 4 (renderedLines (verboseTxDoc btc UnitBitcoin [] (Just 1208000) (Just seenTimeInCet) (spent "" Map.empty))))
         `shouldBe` [ "  Fee      : 0.00001000 btc, 4 sat/vB",
                      "  Balance  : 0.01208000 btc"
                    ]
 
   describe "The compact view of a transaction" $ do
-    it "gives the address a payment pays, without its change, then the txid" $ do
-      let info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
+    it "gives the address a payment pays, without its change, then the short id of its txid, its first 8 digits" $ do
+      let info = TxInfo spendSummary (OnChain (ChainStatus a1075db5First (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
       renderedLines (compactTxDoc btc UnitBitcoin Nothing Nothing (Just seenTimeInCet) info)
         `shouldBe` [ "14 Nov 2023 23:13  Outgoing     -0.00041000 btc  2 confirmations",
                      "  to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU",
-                     "  0000000000000000000000000000000000000000000000000000000000000002"
+                     "  a1075db5"
                    ]
 
     it "counts the confirmations up to 999" $ do
@@ -611,7 +625,7 @@ compactSpec = do
         `shouldBe` [ "14 Nov 2023 23:13  Outgoing     -0.00041000 btc  2 confirmations",
                      "  \"Rent of October\"",
                      "  to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU",
-                     "  0000000000000000000000000000000000000000000000000000000000000002"
+                     "  00000000"
                    ]
 
     it "names the address of the wallet a payment received is paid at by its path, with its label" $ do
@@ -626,26 +640,26 @@ compactSpec = do
       (renderedLines (compactTxDoc btc UnitBitcoin Nothing Nothing (Just seenTimeInCet) info) !! 1)
         `shouldBe` "  to 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ and 2 more"
 
-    it "shows an unsigned transaction by its nosigHash" $ do
-      let info = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False (Just seenTime) [])) "" Map.empty
+    it "shows an unsigned transaction by the short id of its nosigHash" $ do
+      let info = TxInfo spendSummary (Pending (PendingStatus a1075db5First Nothing False False (Just seenTime) [])) "" Map.empty
       last (renderedLines (compactTxDoc btc UnitBitcoin Nothing Nothing (Just seenTimeInCet) info))
-        `shouldBe` "  0000000000000000000000000000000000000000000000000000000000000007"
+        `shouldBe` "  a1075db5"
 
-    it "shows a signed transaction by its txid" $ do
-      let info = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) (Just (fakeTxHash 2)) False False (Just seenTime) [])) "" Map.empty
+    it "shows a signed transaction by the short id of its txid" $ do
+      let info = TxInfo spendSummary (Pending (PendingStatus a1075db5First (Just b2d4f6a8Txid) False False (Just seenTime) [])) "" Map.empty
       last (renderedLines (compactTxDoc btc UnitBitcoin Nothing Nothing (Just seenTimeInCet) info))
-        `shouldBe` "  0000000000000000000000000000000000000000000000000000000000000002"
+        `shouldBe` "  b2d4f6a8"
 
-    it "names the transaction a replacement replaces, before its hash" $ do
-      let info = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False (Just seenTime) [fakeTxHash 5])) "" Map.empty
+    it "names the transaction a replacement replaces by its short id, before its own" $ do
+      let info = TxInfo spendSummary (Pending (PendingStatus a1075db5First Nothing False False (Just seenTime) [b2d4f6a8Txid])) "" Map.empty
       drop 2 (renderedLines (compactTxDoc btc UnitBitcoin Nothing Nothing (Just seenTimeInCet) info))
-        `shouldBe` [ "  replaces 0000000000000000000000000000000000000000000000000000000000000005",
-                     "  0000000000000000000000000000000000000000000000000000000000000007"
+        `shouldBe` [ "  replaces b2d4f6a8",
+                     "  a1075db5"
                    ]
 
 -- The columns have fixed widths: 17 for the time, 8 for the type, 14 for
--- each amount and 5 for the confirmations, the width of "Confs". " │ "
--- sets two cells apart. The confirmations are right-aligned, as numbers.
+-- each amount, 5 for the confirmations, the width of "Confs", and 8 for
+-- the short id of the txid. " │ " sets two cells apart. The confirmations are right-aligned, as numbers.
 -- The last column says what the transaction is for, in 50 characters at
 -- most.
 tableSpec :: Spec
@@ -656,81 +670,87 @@ tableSpec = do
 
     -- Under a heading, the line has a dash for each character and the
     -- space on each side: 17 + 1 = 18 under Time, 8 + 2 = 10 under Type,
-    -- 14 + 2 = 16 under each amount, 5 + 2 = 7 under Confs, and
-    -- 11 + 1 = 12 under Description
+    -- 14 + 2 = 16 under each amount, 5 + 2 = 7 under Confs, 8 + 2 = 10
+    -- under Txid, and 11 + 1 = 12 under Description
     it "names its columns in a header, the unit in the headings of the amounts, with a line under it" $
       concatMap renderedLines (txTableHeader UnitBitcoin)
-        `shouldBe` [ "Time              │ Type     │   Amount (btc) │  Balance (btc) │ Confs │ Description",
-                     "──────────────────┼──────────┼────────────────┼────────────────┼───────┼────────────"
+        `shouldBe` [ "Time              │ Type     │   Amount (btc) │  Balance (btc) │ Confs │ Txid     │ Description",
+                     "──────────────────┼──────────┼────────────────┼────────────────┼───────┼──────────┼────────────"
                    ]
 
     it "names satoshis in the headings of the amounts when they are in satoshis" $
       take 1 (concatMap renderedLines (txTableHeader UnitSatoshi))
-        `shouldBe` ["Time              │ Type     │  Amount (sats) │ Balance (sats) │ Confs │ Description"]
+        `shouldBe` ["Time              │ Type     │  Amount (sats) │ Balance (sats) │ Confs │ Txid     │ Description"]
 
     -- 40000 paid + 1000 of fee = 41000
-    it "gives a transaction one row: its time, type, amount, balance and confirmations, then the address paid" $
+    -- The txids of fakeTxHash all start with 00000000
+    it "gives a transaction one row: its time, type, amount, balance, confirmations and the short id of its txid, then the address paid" $
       renderedLines (txRowDoc btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) (spent "" Map.empty))
-        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ 00000000 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+
+    it "gives the short id of the txid, its first 8 digits, in the Txid column" $ do
+      let info = TxInfo spendSummary (OnChain (ChainStatus a1075db5First (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
+      renderedLines (txRowDoc btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) info)
+        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ a1075db5 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "counts the confirmations up to 999" $
       renderedLines (txRowDoc btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) (spentWith 999))
-        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │   999 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │   999 │ 00000000 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "says 999+ for more than 999 confirmations" $
       renderedLines (txRowDoc btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) (spentWith 1000))
-        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │  999+ │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │  999+ │ 00000000 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "gives 0 confirmations for a transaction not in a block yet, without its fee rate" $ do
       let unconfirmed = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.MemRef 1700000000) (Just seenTime) 0 False)) "" Map.empty
       renderedLines (txRowDoc btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) unconfirmed)
-        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     0 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     0 │ 00000000 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "shows a payment received with a plus sign, and the path of the address of the wallet it was paid at" $ do
       let info = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "" Map.empty
       renderedLines (txRowDoc btc UnitBitcoin (Just 50000) (Just seenTimeInCet) info)
-        `shouldBe` ["14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ at /0/0"]
+        `shouldBe` ["14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ 00000000 │ at /0/0"]
 
     it "gives the label of a transaction, quoted, in place of the address paid" $
       renderedLines (txRowDoc btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) (spent "Rent of October" Map.empty))
-        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ \"Rent of October\""]
+        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ 00000000 │ \"Rent of October\""]
 
     it "gives a long label whole, in the last column" $
       renderedLines (txRowDoc btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) (spent "Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month" Map.empty))
-        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ \"Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month\""]
+        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ 00000000 │ \"Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month\""]
 
     -- A Taproot address has 62 characters
     it "gives the address of another wallet whole, however long, never cut" $ do
       let toTaproot = TxInfo spendSummary {summaryOtherOutputs = Map.fromList [(taprootExternalAddr 0, 40000)]} (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
       renderedLines (txRowDoc btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) toTaproot)
-        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ to bc1p8zl0j9e73592k9n6ftz4keyq24dq8djqd3rkcrepu2fw6zeryyjs8zz3ev"]
+        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ 00000000 │ to bc1p8zl0j9e73592k9n6ftz4keyq24dq8djqd3rkcrepu2fw6zeryyjs8zz3ev"]
 
     it "gives a Bitcoin Cash address whole, with its prefix" $ do
       let toCash = TxInfo spendSummary {summaryOtherOutputs = Map.fromList [(bchExternalAddr, 40000)]} (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
       renderedLines (txRowDoc bch UnitBitcoin (Just 1208000) (Just seenTimeInCet) toCash)
-        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ to bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"]
+        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ 00000000 │ to bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"]
 
     it "gives the label of a payment received after the path of the address it was paid at" $ do
       let info = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "Salary" Map.empty
       renderedLines (txRowDoc btc UnitBitcoin (Just 50000) (Just seenTimeInCet) info)
-        `shouldBe` ["14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ at /0/0 \"Salary\""]
+        `shouldBe` ["14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ 00000000 │ at /0/0 \"Salary\""]
 
     it "gives the label of the address a payment was received at when the payment has none" $ do
       let info = TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "" Map.empty
       renderedLines (txRowDoc btc UnitBitcoin (Just 50000) (Just seenTimeInCet) info)
-        `shouldBe` ["14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ at /0/0 \"Rent\""]
+        `shouldBe` ["14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ 00000000 │ at /0/0 \"Rent\""]
 
     it "gives the label of a payment received rather than the label of its address" $ do
       let info = TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "Salary" Map.empty
       renderedLines (txRowDoc btc UnitBitcoin (Just 50000) (Just seenTimeInCet) info)
-        `shouldBe` ["14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ at /0/0 \"Salary\""]
+        `shouldBe` ["14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ 00000000 │ at /0/0 \"Salary\""]
 
     -- 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn is the first change address
     it "says a payment received at a change address is at one" $ do
       let atChangeAddress = paymentSummary {summaryMyOutputs = Map.fromList [(internalAddr 0, MyOutputs 50000 (Deriv :/ 1 :/ 0) "")]}
           info = TxInfo atChangeAddress (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "" Map.empty
       renderedLines (txRowDoc btc UnitBitcoin (Just 50000) (Just seenTimeInCet) info)
-        `shouldBe` ["14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ at /1/0 change address"]
+        `shouldBe` ["14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ 00000000 │ at /1/0 change address"]
 
     -- /0/0 pays 40000 to /0/1 and 9000 to /1/0: the account loses the fee
     -- of 1000
@@ -744,36 +764,36 @@ tableSpec = do
               }
           info = TxInfo internal (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
       renderedLines (txRowDoc btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) info)
-        `shouldBe` ["14 Nov 2023 23:13 │ Internal │    -0.00001000 │     0.01208000 │     2 │ to /0/1 and 1 more"]
+        `shouldBe` ["14 Nov 2023 23:13 │ Internal │    -0.00001000 │     0.01208000 │     2 │ 00000000 │ to /0/1 and 1 more"]
 
     it "gives a long label of an address whole, after its path" $ do
       let longLabel = paymentSummary {summaryMyOutputs = Map.fromList [(externalAddr 0, MyOutputs 50000 (Deriv :/ 0 :/ 0) "Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month")]}
           info = TxInfo longLabel (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "" Map.empty
       renderedLines (txRowDoc btc UnitBitcoin (Just 50000) (Just seenTimeInCet) info)
-        `shouldBe` ["14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ at /0/0 \"Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month\""]
+        `shouldBe` ["14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ 00000000 │ at /0/0 \"Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month\""]
 
     it "leaves the balance of a dead transaction empty" $ do
       let dead = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.MemRef 1700000000) (Just seenTime) 0 True)) "" Map.empty
       renderedLines (txRowDoc btc UnitBitcoin Nothing (Just seenTimeInCet) dead)
-        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │                │  dead │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │                │  dead │ 00000000 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     -- A dead transaction has 0 confirmations, as an unconfirmed one does,
     -- but it will never confirm
     it "says dead in place of the confirmations of a dead transaction" $ do
       let dead = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.MemRef 1700000000) (Just seenTime) 0 True)) "" Map.empty
       renderedLines (txRowDoc btc UnitBitcoin Nothing (Just seenTimeInCet) dead)
-        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │                │  dead │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │                │  dead │ 00000000 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "gives the amounts as numbers alone, since the header names their unit" $
       renderedLines (txRowDoc btc UnitSatoshi (Just 1208000) (Just seenTimeInCet) (spent "" Map.empty))
-        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │         -41000 │        1208000 │     2 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │         -41000 │        1208000 │     2 │ 00000000 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     -- 1250000000000 satoshis are 12500 bitcoins: "+12500.00000000" takes
     -- 15 characters, one more than the column
     it "lets an amount wider than its column push the rest of its row" $ do
       let large = TxInfo paymentSummary {summaryAmount = 1250000000000} (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "" Map.empty
       renderedLines (txRowDoc btc UnitBitcoin (Just 50000) (Just seenTimeInCet) large)
-        `shouldBe` ["14 Nov 2023 23:13 │ Incoming │ +12500.00000000 │     0.00050000 │     3 │ at /0/0"]
+        `shouldBe` ["14 Nov 2023 23:13 │ Incoming │ +12500.00000000 │     0.00050000 │     3 │ 00000000 │ at /0/0"]
 
   -- The screen reads a listing in chunks. A transaction without a time
   -- shows "time unknown", whatever the time zone of the computer.
@@ -783,15 +803,15 @@ tableSpec = do
     it "starts with the header when it is the first one" $ do
       doc <- chunkDoc UnitBitcoin Table True (ResponseTxs mainAccountRow [listed])
       renderedLines doc
-        `shouldBe` [ "Time              │ Type     │   Amount (btc) │  Balance (btc) │ Confs │ Description",
-                     "──────────────────┼──────────┼────────────────┼────────────────┼───────┼────────────",
-                     "time unknown      │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
+        `shouldBe` [ "Time              │ Type     │   Amount (btc) │  Balance (btc) │ Confs │ Txid     │ Description",
+                     "──────────────────┼──────────┼────────────────┼────────────────┼───────┼──────────┼────────────",
+                     "time unknown      │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ 00000000 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
                    ]
 
     it "holds its rows alone when it is a later one, with no header and no blank line" $ do
       doc <- chunkDoc UnitBitcoin Table False (ResponseTxs mainAccountRow [listed])
       renderedLines doc
-        `shouldBe` ["time unknown      │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+        `shouldBe` ["time unknown      │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ 00000000 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "says there are no transactions, without a header, when there are none" $ do
       doc <- chunkDoc UnitBitcoin Table True (ResponseTxs mainAccountRow [])
@@ -947,48 +967,56 @@ coinTableSpec =
     -- Under a heading, the line has a dash for each character and the
     -- space on each side: 17 + 1 = 18 under Time, 14 + 2 = 16 under Value,
     -- 17 + 2 = 19 under State, 5 + 2 = 7 under Confs, 34 + 2 = 36 under
-    -- Address, 4 + 2 = 6 under Path, and 5 + 1 = 6 under Label
+    -- Address, 4 + 2 = 6 under Path, 12 + 2 = 14 under Coin, and 5 + 1 = 6
+    -- under Label
     it "names its columns in a header, the unit in the heading of the value, with a line under it" $
       concatMap renderedLines (tableHeader headed)
-        `shouldBe` [ "Time              │    Value (btc) │ State             │ Confs │ Address                            │ Path │ Label",
-                     "──────────────────┼────────────────┼───────────────────┼───────┼────────────────────────────────────┼──────┼──────"
+        `shouldBe` [ "Time              │    Value (btc) │ State             │ Confs │ Address                            │ Path │ Coin         │ Label",
+                     "──────────────────┼────────────────┼───────────────────┼───────┼────────────────────────────────────┼──────┼──────────────┼──────"
                    ]
 
-    it "gives a coin one row: the time of its transaction, its value, state, confirmations, and its address in full with its path, then nothing without a label" $
+    -- spendableCoinRow is output 0 of transaction 1, whose txid starts
+    -- with 00000000
+    it "gives a coin one row: the time of its transaction, its value, state, confirmations, its address in full with its path, and its short id, then nothing without a label" $
       renderedLines (row spendableCoinRow)
-        `shouldBe` ["14 Nov 2023 23:13 │     0.00050000 │ spendable         │     3 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ /0/0 │"]
+        `shouldBe` ["14 Nov 2023 23:13 │     0.00050000 │ spendable         │     3 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ /0/0 │ 00000000:0   │"]
+
+    -- "a1075db5:1" takes 10 of the 12 characters of the column
+    it "gives the short id of the coin, the short id of its txid and its index, in the Coin column" $
+      renderedLines (row spendableCoinRow {jsonCoinOutpoint = OutPoint a1075db5First 1})
+        `shouldBe` ["14 Nov 2023 23:13 │     0.00050000 │ spendable         │     3 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ /0/0 │ a1075db5:1   │"]
 
     it "gives the label of the address of the coin" $
       renderedLines (row spendableCoinRow {jsonCoinAddressLabel = "Wages"})
-        `shouldBe` ["14 Nov 2023 23:13 │     0.00050000 │ spendable         │     3 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ /0/0 │ \"Wages\""]
+        `shouldBe` ["14 Nov 2023 23:13 │     0.00050000 │ spendable         │     3 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ /0/0 │ 00000000:0   │ \"Wages\""]
 
     it "leaves out the label of the transaction that paid the coin, which the verbose view gives" $
       renderedLines (row spendableCoinRow {jsonCoinTxLabel = "Salary"})
-        `shouldBe` ["14 Nov 2023 23:13 │     0.00050000 │ spendable         │     3 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ /0/0 │"]
+        `shouldBe` ["14 Nov 2023 23:13 │     0.00050000 │ spendable         │     3 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ /0/0 │ 00000000:0   │"]
 
     it "says a coin at a change address is at one, in place of a label" $
       renderedLines (row atChange)
-        `shouldBe` ["14 Nov 2023 23:13 │     0.00050000 │ spendable         │     3 │ 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn │ /1/0 │ change address"]
+        `shouldBe` ["14 Nov 2023 23:13 │     0.00050000 │ spendable         │     3 │ 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn │ /1/0 │ 00000000:0   │ change address"]
 
     it "says a coin a pending transaction spends is locked by tx" $
       renderedLines (row spendableCoinRow {jsonCoinLock = Just LockedByTransaction, jsonCoinSpendable = False})
-        `shouldBe` ["14 Nov 2023 23:13 │     0.00050000 │ locked by tx      │     3 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ /0/0 │"]
+        `shouldBe` ["14 Nov 2023 23:13 │     0.00050000 │ locked by tx      │     3 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ /0/0 │ 00000000:0   │"]
 
     it "says a coin locked with lockcoin is locked by you" $
       renderedLines (row spendableCoinRow {jsonCoinLock = Just LockedByUser, jsonCoinSpendable = False})
-        `shouldBe` ["14 Nov 2023 23:13 │     0.00050000 │ locked by you     │     3 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ /0/0 │"]
+        `shouldBe` ["14 Nov 2023 23:13 │     0.00050000 │ locked by you     │     3 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ /0/0 │ 00000000:0   │"]
 
     it "says a free coin the wallet cannot spend yet is not spendable yet, and gives an unconfirmed one 0 confirmations" $
       renderedLines (row spendableCoinRow {jsonCoinBlock = Store.MemRef 1700000000, jsonCoinConfirmations = 0, jsonCoinSpendable = False})
-        `shouldBe` ["14 Nov 2023 23:13 │     0.00050000 │ not spendable yet │     0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ /0/0 │"]
+        `shouldBe` ["14 Nov 2023 23:13 │     0.00050000 │ not spendable yet │     0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ /0/0 │ 00000000:0   │"]
 
     it "says 999+ for more than 999 confirmations" $
       renderedLines (row spendableCoinRow {jsonCoinConfirmations = 1000})
-        `shouldBe` ["14 Nov 2023 23:13 │     0.00050000 │ spendable         │  999+ │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ /0/0 │"]
+        `shouldBe` ["14 Nov 2023 23:13 │     0.00050000 │ spendable         │  999+ │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ /0/0 │ 00000000:0   │"]
 
     it "gives a long label whole, in the last column" $
       renderedLines (row spendableCoinRow {jsonCoinAddressLabel = "Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month"})
-        `shouldBe` ["14 Nov 2023 23:13 │     0.00050000 │ spendable         │     3 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ /0/0 │ \"Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month\""]
+        `shouldBe` ["14 Nov 2023 23:13 │     0.00050000 │ spendable         │     3 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ /0/0 │ 00000000:0   │ \"Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month\""]
 
     -- main has 12 receiving addresses and 3 change addresses: its longest
     -- path is /0/11, of 5 characters. A coin without a time shows "time
@@ -996,9 +1024,9 @@ coinTableSpec =
     it "takes the width of the paths from the longest path of the account, in a chunk of coins" $ do
       doc <- chunkDoc UnitBitcoin Table True (ResponseCoins mainAccountRow [spendableCoinRow {jsonCoinTime = Nothing}])
       renderedLines doc
-        `shouldBe` [ "Time              │    Value (btc) │ State             │ Confs │ Address                            │ Path  │ Label",
-                     "──────────────────┼────────────────┼───────────────────┼───────┼────────────────────────────────────┼───────┼──────",
-                     "time unknown      │     0.00050000 │ spendable         │     3 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ /0/0  │"
+        `shouldBe` [ "Time              │    Value (btc) │ State             │ Confs │ Address                            │ Path  │ Coin         │ Label",
+                     "──────────────────┼────────────────┼───────────────────┼───────┼────────────────────────────────────┼───────┼──────────────┼──────",
+                     "time unknown      │     0.00050000 │ spendable         │     3 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ /0/0  │ 00000000:0   │"
                    ]
 
 -- The columns of the balances of main, with paths of 4 characters: 4 for
@@ -1057,56 +1085,67 @@ pendingTableSpec =
         timeless = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing [])) "" Map.empty
 
     -- 17 + 1 = 18 under Time, 8 + 2 = 10 under Type, 14 + 2 = 16 under
-    -- Amount, 10 + 2 = 12 under Status, 6 + 2 = 8 under sat/vB, and
-    -- 11 + 1 = 12 under Description
+    -- Amount, 10 + 2 = 12 under Status, 6 + 2 = 8 under sat/vB, 8 + 2 = 10
+    -- under Hash, and 11 + 1 = 12 under Description
     it "names its columns in a header, without the account when it lists one account" $
       concatMap renderedLines (tableHeader ofOne)
-        `shouldBe` [ "Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Description",
-                     "──────────────────┼──────────┼────────────────┼────────────┼────────┼────────────"
+        `shouldBe` [ "Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Hash     │ Description",
+                     "──────────────────┼──────────┼────────────────┼────────────┼────────┼──────────┼────────────"
                    ]
 
     -- "main" is shorter than "Account", of 7 characters: 7 + 1 = 8 under
     -- Account, then 17 + 2 = 19 under Time
     it "names the account first when it lists every account" $
       concatMap renderedLines (tableHeader ofMain)
-        `shouldBe` [ "Account │ Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Description",
-                     "────────┼───────────────────┼──────────┼────────────────┼────────────┼────────┼────────────"
+        `shouldBe` [ "Account │ Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Hash     │ Description",
+                     "────────┼───────────────────┼──────────┼────────────────┼────────────┼────────┼──────────┼────────────"
                    ]
 
-    -- 40000 paid + 1000 of fee = 41000, at 4 sat/vB
-    it "gives a transaction one row: its time, type, amount, status and fee rate, then what it is for" $
+    -- 40000 paid + 1000 of fee = 41000, at 4 sat/vB. The hashes of
+    -- fakeTxHash all start with 00000000.
+    it "gives a transaction one row: its time, type, amount, status, fee rate and short id, then what it is for" $
       renderedLines (pendingRowDoc btc UnitBitcoin ofOne Nothing (Just seenTimeInCet) unsigned)
-        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ 00000000 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+
+    it "gives the short id of the nosigHash of a transaction not signed" $ do
+      let notSigned = TxInfo spendSummary (Pending (PendingStatus a1075db5First Nothing False False (Just seenTime) [])) "" Map.empty
+      renderedLines (pendingRowDoc btc UnitBitcoin ofOne Nothing (Just seenTimeInCet) notSigned)
+        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ a1075db5 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+
+    it "gives the short id of the txid of a signed transaction, which the commands take" $ do
+      let signed = TxInfo spendSummary (Pending (PendingStatus a1075db5First (Just b2d4f6a8Txid) False False (Just seenTime) [])) "" Map.empty
+      renderedLines (pendingRowDoc btc UnitBitcoin ofOne Nothing (Just seenTimeInCet) signed)
+        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ signed     │      4 │ b2d4f6a8 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "says a signed transaction not sent yet is signed" $
       renderedLines (pendingRowDoc btc UnitBitcoin ofOne Nothing (Just seenTimeInCet) (preparedWith (Just (fakeTxHash 2)) False False))
-        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ signed     │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ signed     │      4 │ 00000000 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "says a transaction sent that the sync has not seen yet is sent" $
       renderedLines (pendingRowDoc btc UnitBitcoin ofOne Nothing (Just seenTimeInCet) (preparedWith (Just (fakeTxHash 2)) True False))
-        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ sent       │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ sent       │      4 │ 00000000 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "says a transaction in conflict is conflicted, and leaves its fee rate empty" $
       renderedLines (pendingRowDoc btc UnitBitcoin ofOne Nothing (Just seenTimeInCet) (preparedWith (Just (fakeTxHash 2)) False True))
-        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ conflicted │        │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ conflicted │        │ 00000000 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "names the account of the transaction first when it lists every account" $
       renderedLines (pendingRowDoc btc UnitBitcoin ofMain (Just mainAccountRow) (Just seenTimeInCet) unsigned)
-        `shouldBe` ["main    │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+        `shouldBe` ["main    │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ 00000000 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     -- "family savings" has 14 characters, more than "main" and "Account"
     it "makes the column of accounts as wide as the longest name it lists" $ do
       let family = mainAccountRow {dBAccountName = "family savings"}
           both = pendingTableColumns UnitBitcoin (Just [mainAccountRow, family])
       concatMap renderedLines [pendingRowDoc btc UnitBitcoin both (Just family) (Just seenTimeInCet) unsigned, pendingRowDoc btc UnitBitcoin both (Just mainAccountRow) (Just seenTimeInCet) unsigned]
-        `shouldBe` [ "family savings │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU",
-                     "main           │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
+        `shouldBe` [ "family savings │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ 00000000 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU",
+                     "main           │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ 00000000 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
                    ]
 
     it "gives a long name whole, in a first column as wide as it" $ do
       let family = mainAccountRow {dBAccountName = "family savings account for travel"}
       renderedLines (pendingRowDoc btc UnitBitcoin (pendingTableColumns UnitBitcoin (Just [family])) (Just family) (Just seenTimeInCet) unsigned)
-        `shouldBe` ["family savings account for travel │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+        `shouldBe` ["family savings account for travel │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ 00000000 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     -- The 13 characters of 家族の貯金と旅行の口座です take 26 columns: main
     -- takes 4, and 22 spaces pad it
@@ -1114,29 +1153,29 @@ pendingTableSpec =
       let family = mainAccountRow {dBAccountName = "家族の貯金と旅行の口座です"}
           both = pendingTableColumns UnitBitcoin (Just [mainAccountRow, family])
       concatMap renderedLines [pendingRowDoc btc UnitBitcoin both (Just family) (Just seenTimeInCet) unsigned, pendingRowDoc btc UnitBitcoin both (Just mainAccountRow) (Just seenTimeInCet) unsigned]
-        `shouldBe` [ "家族の貯金と旅行の口座です │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU",
-                     "main                       │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
+        `shouldBe` [ "家族の貯金と旅行の口座です │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ 00000000 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU",
+                     "main                       │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ 00000000 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
                    ]
 
     it "gives the label of a payment in place of the address it pays, as the table of txs does" $ do
       let labelled = unsigned {txInfoLabel = "Rent of October"}
       renderedLines (pendingRowDoc btc UnitBitcoin ofOne Nothing (Just seenTimeInCet) labelled)
-        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ \"Rent of October\""]
+        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ 00000000 │ \"Rent of October\""]
 
     -- A transaction without a time shows "time unknown", whatever the time
     -- zone of the computer
     it "names the accounts in a chunk of the pending transactions of every account" $ do
       doc <- chunkDoc UnitBitcoin Table True (ResponsePendingTxs Nothing [(mainAccountRow, timeless)])
       renderedLines doc
-        `shouldBe` [ "Account │ Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Description",
-                     "────────┼───────────────────┼──────────┼────────────────┼────────────┼────────┼────────────",
-                     "main    │ time unknown      │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
+        `shouldBe` [ "Account │ Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Hash     │ Description",
+                     "────────┼───────────────────┼──────────┼────────────────┼────────────┼────────┼──────────┼────────────",
+                     "main    │ time unknown      │ Outgoing │    -0.00041000 │ not signed │      4 │ 00000000 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
                    ]
 
     it "leaves the accounts out of a chunk of the pending transactions of one account" $ do
       doc <- chunkDoc UnitBitcoin Table False (ResponsePendingTxs (Just mainAccountRow) [(mainAccountRow, timeless)])
       renderedLines doc
-        `shouldBe` ["time unknown      │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+        `shouldBe` ["time unknown      │ Outgoing │    -0.00041000 │ not signed │      4 │ 00000000 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
 verboseSpec :: Spec
 verboseSpec =
@@ -1148,6 +1187,7 @@ verboseSpec =
       renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info)
         `shouldBe` [ "14 Nov 2023 23:13  Outgoing     -0.00041000 btc  2 confirmations",
                      "  Txid     : 0000000000000000000000000000000000000000000000000000000000000002",
+                     "  Short id : 00000000",
                      "  Time     : 14 Nov 2023 23:13:20 CET",
                      "  Fee      : 0.00001000 btc, 4 sat/vB",
                      "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0",
@@ -1159,10 +1199,17 @@ verboseSpec =
     -- the amounts are right-aligned, and the paths start in one column
     it "lines up the paths of the addresses of the wallet after amounts of different widths" $ do
       let info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
-      drop 4 (renderedLines (verboseTxDoc btc UnitSatoshi [] Nothing (Just seenTimeInCet) info))
+      drop 5 (renderedLines (verboseTxDoc btc UnitSatoshi [] Nothing (Just seenTimeInCet) info))
         `shouldBe` [ "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  50000 sats  /0/0",
                      "  To       : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  40000 sats",
                      "  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn   9000 sats  /1/0"
+                   ]
+
+    it "gives the txid in full, then its short id, its first 8 digits" $ do
+      let info = TxInfo spendSummary (OnChain (ChainStatus a1075db5First (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
+      take 2 (drop 1 (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info)))
+        `shouldBe` [ "  Txid     : a1075db5c0ffee00000000000000000000000000000000000000000000000001",
+                     "  Short id : a1075db5"
                    ]
 
     it "gives the full count of the confirmations, past 999 too" $ do
@@ -1185,7 +1232,7 @@ verboseSpec =
     -- "  From     : " takes 13 characters
     it "shows the label of an address of the wallet, quoted, on the line below, under the address" $ do
       let info = TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
-      take 2 (drop 4 (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info)))
+      take 2 (drop 5 (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info)))
         `shouldBe` [ "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0",
                      "             \"Rent\""
                    ]
@@ -1193,14 +1240,14 @@ verboseSpec =
     -- The coin spent is of transaction 1, the payment labelled Salary
     it "follows the label of an address spent from with the labels of its coins, after the word from" $ do
       let info = TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" (Map.fromList [(fakeTxHash 1, "Salary")])
-      (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info) !! 5)
+      (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info) !! 6)
         `shouldBe` "             \"Rent\"  from \"Salary\""
 
     -- The spending from the first change address, 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn
     it "marks a change address spent from as one, on the line below the address" $ do
       let fromChange = spendSummary {summaryMyInputs = Map.fromList [(internalAddr 0, MyInputs 50000 (Deriv :/ 1 :/ 0) "" [OutPoint (fakeTxHash 1) 0])]}
           info = TxInfo fromChange (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
-      take 2 (drop 4 (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info)))
+      take 2 (drop 5 (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info)))
         `shouldBe` [ "  From     : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00050000 btc  /1/0",
                      "             change address"
                    ]
@@ -1215,7 +1262,7 @@ verboseSpec =
 
     it "gives the labels of the coins of an address spent from without a label of its own on the line below" $ do
       let info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" (Map.fromList [(fakeTxHash 1, "Salary")])
-      take 2 (drop 4 (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info)))
+      take 2 (drop 5 (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info)))
         `shouldBe` [ "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0",
                      "             from \"Salary\""
                    ]
@@ -1223,7 +1270,7 @@ verboseSpec =
     -- The payer spends 51000 from otherAddr 0, which is nothing to the wallet
     it "shows the addresses the payer of a payment received spends from, without their amounts" $ do
       let info = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "" Map.empty
-      drop 4 (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info))
+      drop 5 (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info))
         `shouldBe` [ "  From     : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU",
                      "  To       : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0"
                    ]
@@ -1233,19 +1280,19 @@ verboseSpec =
     it "puts each address of a section on a line of its own, under the first" $ do
       let twoPaid = spendSummary {summaryOtherOutputs = Map.fromList [(otherAddr 0, 30000), (otherAddr 1, 10000)]}
           info = TxInfo twoPaid (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
-      take 2 (drop 5 (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info)))
+      take 2 (drop 6 (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info)))
         `shouldBe` [ "  To       : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00030000 btc",
                      "             1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ  0.00010000 btc"
                    ]
 
     it "explains why a transaction is dead" $ do
       let info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.MemRef 1700000000) (Just seenTime) 0 True)) "" Map.empty
-      (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info) !! 3)
+      (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info) !! 4)
         `shouldBe` "  Status   : replaced, or dropped from the network"
 
     it "shows under the fee the change too small for an output that the fee took in" $ do
       let info = TxInfo spendSummary {summaryChangeInFee = Just 300} (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
-      take 2 (drop 3 (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info)))
+      take 2 (drop 4 (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info)))
         `shouldBe` [ "  Fee      : 0.00001000 btc, 4 sat/vB",
                      "             includes 0.00000300 btc of change too small for an output"
                    ]
@@ -1253,33 +1300,41 @@ verboseSpec =
     it "shows the lock time under the fee, as the block the transaction waits for, and no field without one" $ do
       let locked = TxInfo spendSummary {summaryLockTime = 814037} (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
           unlocked = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
-      take 2 (drop 3 (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) locked)))
+      take 2 (drop 4 (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) locked)))
         `shouldBe` [ "  Fee      : 0.00001000 btc, 4 sat/vB",
                      "  Lock time: block 814037"
                    ]
-      length (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) unlocked)) `shouldBe` 7
+      length (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) unlocked)) `shouldBe` 8
 
     -- 500,000,000 and above, a lock time is a Unix time; hw writes none
     it "shows a lock time of 500,000,000 or more as a Unix time" $ do
       let locked = TxInfo spendSummary {summaryLockTime = 1700000000} (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
-      renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) locked) !! 4
+      renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) locked) !! 5
         `shouldBe` "  Lock time: Unix time 1700000000"
 
-    it "shows an unsigned transaction by its nosigHash, with the time it was created" $ do
-      let info = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False (Just seenTime) [])) "" Map.empty
-      take 2 (drop 1 (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info)))
-        `shouldBe` [ "  NoSigHash: 0000000000000000000000000000000000000000000000000000000000000007",
+    it "shows an unsigned transaction by its nosigHash, in full then by its short id, with the time it was created" $ do
+      let info = TxInfo spendSummary (Pending (PendingStatus a1075db5First Nothing False False (Just seenTime) [])) "" Map.empty
+      take 3 (drop 1 (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info)))
+        `shouldBe` [ "  NoSigHash: a1075db5c0ffee00000000000000000000000000000000000000000000000001",
+                     "  Short id : a1075db5",
                      "  Created  : 14 Nov 2023 23:13:20 CET"
+                   ]
+
+    it "shows a signed transaction by its txid, in full then by its short id" $ do
+      let info = TxInfo spendSummary (Pending (PendingStatus a1075db5First (Just b2d4f6a8Txid) False False (Just seenTime) [])) "" Map.empty
+      take 2 (drop 1 (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info)))
+        `shouldBe` [ "  Txid     : b2d4f6a8c0ffee00000000000000000000000000000000000000000000000001",
+                     "  Short id : b2d4f6a8"
                    ]
 
     it "explains a conflict, and how to free the coins" $ do
       let info = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) (Just (fakeTxHash 2)) False True (Just seenTime) [])) "" Map.empty
-      (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info) !! 3)
+      (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info) !! 4)
         `shouldBe` "  Conflict : A coin it spends was spent by another transaction, or is gone. It can no longer be sent. Delete it with deletetx."
 
     it "names every transaction a replacement replaces, one under the other" $ do
       let info = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False (Just seenTime) [fakeTxHash 5, fakeTxHash 6])) "" Map.empty
-      take 2 (drop 2 (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info)))
+      take 2 (drop 3 (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info)))
         `shouldBe` [ "  Replaces : 0000000000000000000000000000000000000000000000000000000000000005",
                      "             0000000000000000000000000000000000000000000000000000000000000006"
                    ]

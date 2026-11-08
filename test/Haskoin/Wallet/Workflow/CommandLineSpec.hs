@@ -221,6 +221,20 @@ commandLineSpec ctx = do
         run <- hw home ["mnemonic", "--shares", "20"] []
         runErr run `shouldSatisfy` Text.isSuffixOf "Type hw mnemonic --help for the help of mnemonic.\n"
 
+    it "refuses a word of 9 digits for a hash, which is neither a short id nor a whole hash" $
+      withHome $ \home -> do
+        run <- hw home ["deletetx", "a1075db5c"] []
+        runExit run `shouldBe` ExitFailure 1
+        runErr run `shouldSatisfy` Text.isInfixOf "The hash a1075db5c is not valid: give its 64 digits, or its short id, its first 8 digits, as the listings show it"
+
+    -- preparesweep fetches the coin from the server, which looks up whole
+    -- txids only
+    it "refuses a coin to sweep given by its short id" $
+      withHome $ \home -> do
+        run <- hw home ["preparesweep", "--sweep-to", textOf (otherAddr 0), "--coin", "a1075db5:0"] []
+        runExit run `shouldBe` ExitFailure 1
+        runErr run `shouldSatisfy` Text.isInfixOf "The coin a1075db5:0 needs its txid in full: the wallet does not hold a coin it sweeps, and the server looks up a whole txid only"
+
     it "says what a command misses" $
       withHome $ \home -> do
         run <- hw home ["exporttx", Text.unpack (txHashToHex (fakeTxHash 1))] []

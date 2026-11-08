@@ -116,6 +116,13 @@ Using `hw`:
   with `--account`, to a new OpenDocument spreadsheet, a tab each. Each cell
   keeps its kind: text, a number of satoshis, or a time in UTC. The header of
   each tab stays at the top as its rows scroll.
+- Short ids: the first 8 digits of a hash name a transaction, a pending
+  transaction or a coin (`a1075db5:1`) wherever the whole hash does. The tables
+  and the compact views show them. `--verbose` gives the hash in full, then its
+  short id, and `--csv` and `exportsheet` give both. When a short id matches
+  two hashes of the wallet, `hw` names both and asks for the full hash.
+  `preparesweep --coin` takes whole txids only. The JSON answers and the files
+  keep whole hashes.
 - `sync` and `recover` show what they are doing on a status line.
 - Tab completion in bash, zsh and fish. It completes commands, options,
   account names, coins, addresses and pending transactions.

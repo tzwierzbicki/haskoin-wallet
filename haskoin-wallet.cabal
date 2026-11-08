@@ -119,6 +119,7 @@ library
       Haskoin.Wallet.Schema.V3
       Haskoin.Wallet.Schema.V4
       Haskoin.Wallet.Shares
+      Haskoin.Wallet.ShortId
       Haskoin.Wallet.Store
       Haskoin.Wallet.Sync
       Haskoin.Wallet.SyncStatus
@@ -305,6 +306,7 @@ test-suite spec
       Haskoin.Wallet.MigrationSpec
       Haskoin.Wallet.Schema.V1
       Haskoin.Wallet.SharesSpec
+      Haskoin.Wallet.ShortIdSpec
       Haskoin.Wallet.StoreSpec
       Haskoin.Wallet.SyncSpec
       Haskoin.Wallet.SyncStatusSpec

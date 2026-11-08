@@ -39,6 +39,7 @@ import Haskoin.Wallet.Database.Address (AddrType, readChainPath)
 import Haskoin.Wallet.Tx.FeeRates (FeeRateChoice, readFeeRateChoice)
 import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), kindNamed, kindNames)
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
+import Haskoin.Wallet.ShortId (CoinRef (..), HashRef (..), readHashRef)
 import Haskoin.Wallet.Cli.Parser.Args
 import Haskoin.Wallet.Cli.Parser.Completion (completeFile)
 import Haskoin.Wallet.Cli.Parser.Run (runProgram)
@@ -92,22 +93,23 @@ data Command
     CommandCheckAddr !(Maybe Text) !AddrType !KeyIndex
   | -- | The account, how to show each transaction or the CSV file to
     -- write them to, and the page
-    CommandTxs !(Maybe Text) !ListingOutput !(Paging TxHash)
+    CommandTxs !(Maybe Text) !ListingOutput !(Paging HashRef)
   | CommandPrepareTx !PrepareTx
   | CommandPrepareSendAll !PrepareSendAll
   | -- | The account, or every one, how to show each transaction or the
     -- CSV file to write them to, and the page
-    CommandPendingTxs !(Maybe Text) !ListingOutput !(Paging TxHash)
+    CommandPendingTxs !(Maybe Text) !ListingOutput !(Paging HashRef)
   | -- | The account, the transaction file, and the network of a file that
     -- names none and involves no account
     CommandReviewTx !(Maybe Text) !FilePath !(Maybe Network)
   | -- | The account, and the transaction file
     CommandImportTx !(Maybe Text) !FilePath
-  | -- | The pending transaction, by either of its hashes, and the file to
-    -- write it to
-    CommandExportTx !TxHash !FilePath
-  | -- | The pending transaction, by either of its hashes
-    CommandDeleteTx !TxHash
+  | -- | The pending transaction, by either of its hashes, in full or by
+    -- its short id, and the file to write it to
+    CommandExportTx !HashRef !FilePath
+  | -- | The pending transaction, by either of its hashes, in full or by
+    -- its short id
+    CommandDeleteTx !HashRef
   | -- | What to sign, and the parts the mnemonic is typed in
     CommandSignTx !Signing !Natural
   | CommandFees !(Maybe Network)
@@ -115,13 +117,13 @@ data Command
   | CommandVerifyMsg !VerifyMsg
   | -- | The account, whether the locked coins only, how to show each
     -- coin or the CSV file to write them to, and the page
-    CommandCoins !(Maybe Text) !Bool !ListingOutput !(Paging OutPoint)
-  | CommandLockCoin !OutPoint
-  | CommandUnlockCoin !OutPoint
-  | -- | A pending transaction, by its txid or its nosigHash, or the file
-    -- of a signed one, whether to send it without asking, and the network
+    CommandCoins !(Maybe Text) !Bool !ListingOutput !(Paging CoinRef)
+  | CommandLockCoin !CoinRef
+  | CommandUnlockCoin !CoinRef
+  | -- | A pending transaction, by its txid or its nosigHash, in full or by
+    -- its short id, or the file of a signed one, whether to send it without asking, and the network
     -- of a file that names none and that the wallet does not hold
-    CommandSendTx !(Maybe TxHash) !(Maybe FilePath) !Bool !(Maybe Network)
+    CommandSendTx !(Maybe HashRef) !(Maybe FilePath) !Bool !(Maybe Network)
   | CommandBumpFee !BumpFee
   | -- | The account, or every one, and whether to sync from the start
     CommandSync !(Maybe Text) !Bool
@@ -251,16 +253,18 @@ data Label = Label
   deriving (Eq, Show)
 
 -- | What label labels: a transaction, by its txid, or while it is pending
--- by either of its hashes; or a receiving address, as typed
+-- by either of its hashes, in full or by its short id; or a receiving
+-- address, as typed
 data Labelled
-  = LabelledTx !TxHash
+  = LabelledTx !HashRef
   | LabelledAddress !Text
   deriving (Eq, Show)
 
 -- | What a word typed for label names. A hash has 64 hexadecimal digits,
--- which no address has, so any other word is an address.
+-- and its short id 8, which no address has, so any other word is an
+-- address.
 readLabelled :: String -> Labelled
-readLabelled word = maybe (LabelledAddress (cs word)) LabelledTx (hexToTxHash (cs word))
+readLabelled word = maybe (LabelledAddress (cs word)) LabelledTx (readHashRef (cs word))
 
 -- | The options of preparetx
 data PrepareTx = PrepareTx
@@ -277,8 +281,9 @@ data PrepareTx = PrepareTx
     output :: !(Maybe FilePath),
     -- | The label of the transaction (--label)
     label :: !(Maybe Text),
-    -- | Coin control: the coins chosen by their outpoints (--coin)
-    coins :: ![OutPoint],
+    -- | Coin control: the coins chosen by their outpoints, in full or by
+    -- their short ids (--coin)
+    coins :: ![CoinRef],
     -- | Coin control: the addresses whose coins are chosen (--spend-from)
     spendFrom :: ![Text],
     -- | Whether the strategy selects among the chosen coins (--select),
@@ -296,8 +301,8 @@ data PrepareTx = PrepareTx
 
 -- | The options of bumpfee
 data BumpFee = BumpFee
-  { -- | The transaction to replace, by its id
-    bumped :: !TxHash,
+  { -- | The transaction to replace, by its id, in full or by its short id
+    bumped :: !HashRef,
     account :: !(Maybe Text),
     -- | The fee rate of the replacement, as for preparetx
     feeRate :: !(Maybe FeeRateChoice),
@@ -321,8 +326,9 @@ data PrepareSendAll = PrepareSendAll
     output :: !(Maybe FilePath),
     -- | The label of the transaction (--label)
     label :: !(Maybe Text),
-    -- | The coins to send, instead of all of them
-    coins :: ![OutPoint],
+    -- | The coins to send, instead of all of them, in full or by their
+    -- short ids
+    coins :: ![CoinRef],
     -- | The addresses whose coins to send, instead of all of them
     spendFrom :: ![Text],
     -- | What to do with the coins worth less than their fee, or Nothing to
@@ -399,7 +405,7 @@ data PrepareSweep = PrepareSweep
 -- --output file
 data Signing = Signing
   { account :: !(Maybe Text),
-    nosigHash :: !(Maybe TxHash),
+    nosigHash :: !(Maybe HashRef),
     input :: !(Maybe FilePath),
     output :: !(Maybe FilePath)
   }
@@ -467,6 +473,11 @@ A payment takes three steps:
 
 preparetx shows the nosigHash of the new transaction. signtx shows its txid,
 the id the network knows it by.
+
+A command that takes a hash, or a coin TXID:INDEX, also takes its short id:
+the first 8 digits of the hash, as the listings show it, such as a1075db5, or
+a1075db5:1 for a coin. When two transactions of the wallet share those 8
+digits, hw names both and asks for the full hash.
 
 To sign on an offline computer, create the account there with createacc. Copy
 it to the online computer with exportacc and importacc. Then carry each
@@ -1419,7 +1430,7 @@ files of exporttx and --output, and stays once the network has it. bumpfee
 gives a replacement the labels of the transactions it replaces. A transaction
 on the network is named by its txid, as txs shows it. It gets the label in
 every account that has it, such as both ends of a payment between two
-accounts.
+accounts. Either hash goes in full or by its short id, its first 8 digits.
 |],
       args =
         CommandLabel
@@ -1432,7 +1443,7 @@ labelledArg =
   argument (readLabelled <$> str) $
     metavar "ADDRESS|TXID"
       <> completer (mkCompleter labelTargets)
-      <> help "A receiving address of the wallet, as `addresses` lists it, or a transaction, by its txid or the hash pendingtxs shows. Change addresses take no label."
+      <> help "A receiving address of the wallet, as `addresses` lists it, or a transaction, by its txid or the hash pendingtxs shows, in full or by its short id, the first 8 digits. Change addresses take no label."
 
 {- checkaddr -}
 
@@ -1499,26 +1510,28 @@ what the account holds, confirmed or not. A dead transaction shows no balance,
 and does not count. A transaction with a label shows it next, on a line of
 its own: see `label`. The third line gives the address paid, the largest when
 there are several. An address of the wallet is named by its derivation path,
-such as /0/3, with its label. The fourth gives the txid. On a terminal, the
-addresses of the wallet and their labels are blue.
+such as /0/3, with its label. The fourth gives its short id, the first 8 digits
+of its txid, which the other commands take in place of the txid. On a terminal,
+the addresses of the wallet and their labels are blue.
 
-With --verbose, every address is in full, and an address of the wallet has its
-path after it. Its label is on the line below, with the labels of the coins it
+With --verbose, the txid is in full, then its short id. Every address is in
+full, and an address of the wallet has its path after it. Its label is on the line below, with the labels of the coins it
 spends, after the word from. Long labels wrap under the address.
 
 With --tabular, each transaction takes one row of a table, under a header
 that names the columns. The amounts are in the unit the header names. The
 Confs column gives the confirmations as a number alone, up to 999+. An
 unconfirmed transaction has 0, and gives no fee rate. A dead one says dead. The
-last column, Description, says what the transaction is for. A payment received
-gives the path of the address it was paid at, then the label of the payment, or
-else the label of the address. A payment gives its label, or else the address
-it pays. Nothing in it is cut, a long label or address included. The table
-leaves out the txid.
+Txid column gives the short id. The last column, Description, says what the
+transaction is for. A payment received gives the path of the address it was
+paid at, then the label of the payment, or else the label of the address. A
+payment gives its label, or else the address it pays. Nothing in it is cut, a
+long label or address included.
 
 With --csv FILENAME, each transaction takes one row of a new CSV file, for a
 spreadsheet: its time, type, amount, fee and fee rate, the balance after it,
-its status, confirmations, block and txid, and its label. Then come the address
+its status, confirmations and block, its txid in full and by its short id, and
+its label. Then come the address
 it pays the most, its path and label when it is one of the wallet, and how many
 other addresses it pays. Amounts are in satoshis, and times in UTC.
 |],
@@ -1527,9 +1540,9 @@ other addresses it pays. Amounts are in satoshis, and times in UTC.
           <$> accountOption
           <*> listingOutputOption
             txVerboseHelp
-            "Show each transaction on one row of a table: its time, type, amount, balance and confirmations, then what it is for: its label, the path of an address of the wallet, or the address paid."
+            "Show each transaction on one row of a table: its time, type, amount, balance, confirmations and short id, then what it is for: its label, the path of an address of the wallet, or the address paid."
             "transactions"
-          <*> pagingOptions (afterOption "TXID" (maybeReader $ hexToTxHash . cs) "Start after this transaction")
+          <*> pagingOptions (afterOption "TXID" hashRefReader "Start after this transaction, by its txid or its short id")
     }
 
 -- | Where a listing goes, and how it shows each element: in a few lines
@@ -1557,7 +1570,7 @@ listingOutputOption verboseHelp tabularHelp listed =
     csvHelp = "Write the " <> listed <> " to this file, one on each row, as CSV for a spreadsheet, with amounts in satoshis and times in UTC. The file must not exist yet."
 
 txVerboseHelp :: String
-txVerboseHelp = "Show every detail of each transaction: its label, each address it spends from or pays, with its amount, path and label, the labels of the coins spent as `coins` shows them, and the fee."
+txVerboseHelp = "Show every detail of each transaction: its label, its hash in full and its short id, each address it spends from or pays, with its amount, path and label, the labels of the coins spent as `coins` shows them, and the fee."
 
 {- preparetx -}
 
@@ -1577,7 +1590,7 @@ The new transaction is kept as a pending transaction, which pendingtxs lists.
 --output also writes it to a file, a PSBT (BIP 174), to carry to an offline
 computer. A pending transaction is named by its nosigHash, a hash of the
 transaction without its signatures. Once signed, it is shown by its txid instead, and the commands
-take either hash. The coins it spends stay locked while it is pending.
+take either hash, in full or by its short id, its first 8 digits. The coins it spends stay locked while it is pending.
 deletetx deletes it and frees them.
 
 On Bitcoin, the transaction is marked replaceable (BIP 125). Until it
@@ -1767,28 +1780,28 @@ selectOption =
     long "select"
       <> help "Coin control: spend only what the payment needs among the coins of --coin and --spend-from, as --strategy selects them, instead of every one of them"
 
--- | A coin to spend, as coins lists it
-coinOption :: Args OutPoint
+-- | A coin to spend, as coins lists it, in full or by its short id
+coinOption :: Args CoinRef
 coinOption =
-  coinOptionWith
-    "Coin control: spend this coin, as `coins` lists it. Repeat for several coins."
-    (completer (mkCompleter coinsToSpend))
-
--- | A coin to sweep, by its outpoint. The wallet does not hold it, and
--- has none to offer.
-sweepCoinOption :: Args OutPoint
-sweepCoinOption = coinOptionWith "A coin to sweep: the id of its transaction, a colon, and its index among the outputs. Repeat for several coins." mempty
-
--- | The --coin option, with the help of the command about it and how the
--- shell completes it
-coinOptionWith :: String -> Mod OptionFields OutPoint -> Args OutPoint
-coinOptionWith what completion =
   option coinReader $
-    short 'c'
-      <> long "coin"
-      <> metavar "TXID:INDEX"
-      <> completion
-      <> help what
+    coinOptionFields "Coin control: spend this coin, as `coins` lists it, by its short id or with its txid in full. Repeat for several coins."
+      <> completer (mkCompleter coinsToSpend)
+
+-- | A coin to sweep, by its outpoint, with its txid in full. The wallet
+-- does not hold it, and has none to offer.
+sweepCoinOption :: Args OutPoint
+sweepCoinOption =
+  option fullCoinReader $
+    coinOptionFields "A coin to sweep: the id of its transaction in full, a colon, and its index among the outputs. Repeat for several coins."
+
+-- | The name, the metavar and the help of the --coin option, with the
+-- help of the command about it
+coinOptionFields :: String -> Mod OptionFields a
+coinOptionFields what =
+  short 'c'
+    <> long "coin"
+    <> metavar "TXID:INDEX"
+    <> help what
 
 -- | The fee rate, when given: a number of satoshis per virtual byte, or a level
 -- of the rates recent blocks paid
@@ -1898,10 +1911,11 @@ rate. A transaction with a label shows it next, on a line of its own. The
 second gives the address paid, after the account when every account is listed.
 An address of the wallet is named by its derivation path.
 A replacement that bumpfee made then names the transactions it
-replaces. The last line gives the hash of the transaction. It is the nosigHash
-of an unsigned transaction, and the txid of a signed one. The other commands
-name a pending transaction by that hash. The nosigHash of a signed one works
-too.
+replaces. The last line gives the short id of the transaction, the first 8
+digits of its hash. The hash is the nosigHash of an unsigned transaction, and
+the txid of a signed one. The other commands name a pending transaction by that
+hash, in full or by its short id. The nosigHash of a signed one works too.
+--verbose gives the hash in full, then its short id.
 
 A transaction marked conflicted spends a coin that another transaction has
 spent, or that is gone, as the server said at the last sync. It cannot be sent
@@ -1909,13 +1923,14 @@ while that lasts. Delete it with deletetx, which frees its coins.
 
 With --tabular, each transaction takes one row of a table, under a header that
 names the columns: its account when every account is listed, the time it was
-created, its type, its amount, its status, its fee rate in sat/vB, and what it
-is for, as txs --tabular says it. The account column is as wide as the longest
-name. The table leaves out the hash, which the other commands take.
+created, its type, its amount, its status, its fee rate in sat/vB, its short
+id, and what it is for, as txs --tabular says it. The account column is as wide
+as the longest name.
 
 With --csv FILENAME, each transaction takes one row of a new CSV file, for a
 spreadsheet: its account, when it was created, its type, amount, fee and fee
-rate, its status, its nosigHash, its txid once signed, and its label. Then come
+rate, its status, its nosigHash and its txid once signed, each in full and by
+its short id, and its label. Then come
 the address it pays the most, its path and label when it is one of the wallet,
 and how many other addresses it pays. Amounts are in satoshis, and times in UTC.
 |],
@@ -1924,9 +1939,9 @@ and how many other addresses it pays. Amounts are in satoshis, and times in UTC.
           <$> onlyAccountOption
           <*> listingOutputOption
             txVerboseHelp
-            "Show each transaction on one row of a table: its account, time, type, amount, status and fee rate, then what it is for."
+            "Show each transaction on one row of a table: its account, time, type, amount, status, fee rate and short id, then what it is for."
             "pending transactions"
-          <*> pagingOptions (afterOption "HASH" (maybeReader $ hexToTxHash . cs) "Start after this pending transaction")
+          <*> pagingOptions (afterOption "HASH" hashRefReader "Start after this pending transaction, by either of its hashes or its short id")
     }
 
 {- reviewtx -}
@@ -1984,7 +1999,7 @@ importExportTxDetails =
   [r|
 exporttx writes a pending transaction to a file, signed or not, to carry it to
 an offline computer. Name it by the hash pendingtxs shows: its nosigHash, or
-its txid once it is signed.
+its txid once it is signed, in full or by its short id.
 
 The file is a PSBT, the format of BIP 174 that most wallets
 read. It carries the transaction, the whole transaction each of its coins
@@ -2014,30 +2029,33 @@ signed with signtx.
 sendtx --input sends a signed file without importtx.
 |]
 
--- | A pending transaction to sign, by its nosigHash
-nosigHashArg :: Args TxHash
+-- | A pending transaction to sign, by its nosigHash, in full or by its
+-- short id
+nosigHashArg :: Args HashRef
 nosigHashArg =
-  argument (maybeReader $ hexToTxHash . cs) $
+  argument hashRefReader $
     metavar "NOSIGHASH"
       <> completer (mkCompleter hashesToSign)
-      <> help "The nosigHash of a pending transaction, as pendingtxs shows it"
+      <> help "The nosigHash of a pending transaction, as pendingtxs shows it: in full, or its short id, the first 8 digits"
 
--- | A pending transaction, by either of its hashes
-pendingHashArg :: Args TxHash
+-- | A pending transaction, by either of its hashes, in full or by its
+-- short id
+pendingHashArg :: Args HashRef
 pendingHashArg =
-  argument (maybeReader $ hexToTxHash . cs) $
+  argument hashRefReader $
     metavar "HASH"
       <> completer (mkCompleter pendingHashes)
-      <> help "A pending transaction, by the hash pendingtxs shows: its nosigHash, or its txid once it is signed"
+      <> help "A pending transaction, by the hash pendingtxs shows: its nosigHash, or its txid once it is signed, in full or by its short id, the first 8 digits"
 
 -- | A signed pending transaction to send, by its txid. Its nosigHash works
--- too, as the user may have noted it before signing.
-signedTxidArg :: Args TxHash
+-- too, as the user may have noted it before signing. Either goes in full
+-- or by its short id.
+signedTxidArg :: Args HashRef
 signedTxidArg =
-  argument (maybeReader $ hexToTxHash . cs) $
+  argument hashRefReader $
     metavar "TXID"
       <> completer (mkCompleter idsToSend)
-      <> help "The txid of a signed pending transaction, as signtx and pendingtxs show it. Its nosigHash works too."
+      <> help "The txid of a signed pending transaction, as signtx and pendingtxs show it, in full or by its short id, the first 8 digits. Its nosigHash works too."
 
 {- importtx -}
 
@@ -2092,8 +2110,8 @@ signtx asks for the mnemonic and the passphrase of the account, and signs the
 transaction. It asks again while they do not match the account. It takes the
 shares of a backup in place of the mnemonic.
 
-Give a pending transaction by its NOSIGHASH. The signed transaction then takes
-its place in the wallet, shown by its txid. Or give a transaction file with
+Give a pending transaction by its NOSIGHASH, in full or by its short id. The
+signed transaction then takes its place in the wallet, shown by its txid. Or give a transaction file with
 --input, on an offline computer for example. The signed transaction then goes
 to the --output file. Without --output, hw offers to replace the --input file,
 since the unsigned file is of no use once signed. It asks this before the
@@ -2145,12 +2163,13 @@ paid it, in the time zone of the computer, its value, its state and its
 confirmations, up to 999+ confirmations. The second gives the address that
 holds it, with its derivation path. The label of the address follows on a line
 of its own, under the address, as in the other views that give an address in
-full. A coin at a change address says so there. The last line gives the coin
-itself, as lockcoin and --coin take it.
+full. A coin at a change address says so there. The last line gives the short
+id of the coin: the first 8 digits of its txid, a colon, and its index, such as
+a1075db5:1. lockcoin and --coin take it, or the coin in full.
 
 With --verbose, each coin gives the full count of its confirmations on its
 first line. Its fields follow: the label of the transaction that paid it, the
-coin, the block that holds it, the time of its transaction to the second, and
+coin in full and its short id, the block that holds it, the time of its transaction to the second, and
 the address in full with its path. The label of the address is on the line
 below it. An unconfirmed coin is in no block yet. Coins have no labels of their
 own. The change of a payment you made shows no label of its transaction: the
@@ -2158,12 +2177,13 @@ label says what the payment was for, not what its change is.
 
 With --tabular, each coin takes one row of a table, under a header that names
 the columns: the time of its transaction, its value, its state, its
-confirmations up to 999+, the address that holds it with its path, and the
-label of the address. A coin locked by a pending transaction says "locked by
-tx". The table leaves out the coin itself, TXID:INDEX.
+confirmations up to 999+, the address that holds it with its path, the short id
+of the coin, and the label of the address. A coin locked by a pending
+transaction says "locked by tx".
 
 With --csv FILENAME, each coin takes one row of a new CSV file, for a
-spreadsheet: the coin, TXID:INDEX, the time of its transaction, its value, its
+spreadsheet: the coin, TXID:INDEX, in full and by its short id, the time of its
+transaction, its value, its
 state, its confirmations and block, the address that holds it with its path
 and label, and the label of its transaction. Amounts are in satoshis, and times in UTC.
 
@@ -2182,10 +2202,10 @@ unlockcoin.
           <$> accountOption
           <*> lockedOption
           <*> listingOutputOption
-            "Show every detail of each coin: the full count of its confirmations, the label of its transaction, the coin, the block that holds it, the time of its transaction, and its address in full with its path."
-            "Show each coin on one row of a table: the time of its transaction, its value, state and confirmations, its address and path, and the label of the address."
+            "Show every detail of each coin: the full count of its confirmations, the label of its transaction, the coin in full and its short id, the block that holds it, the time of its transaction, and its address in full with its path."
+            "Show each coin on one row of a table: the time of its transaction, its value, state and confirmations, its address and path, its short id, and the label of the address."
             "coins"
-          <*> pagingOptions (afterOption "TXID:INDEX" coinReader "Start after this coin")
+          <*> pagingOptions (afterOption "TXID:INDEX" coinReader "Start after this coin, with its txid in full or by its short id")
     }
 
 lockedOption :: Args Bool
@@ -2237,22 +2257,46 @@ does.
 
 -- | A coin of the wallet, as coins lists it, with the coins the shell
 -- offers for it
-coinArg :: (String -> IO [String]) -> Args OutPoint
+coinArg :: (String -> IO [String]) -> Args CoinRef
 coinArg offered =
   argument coinReader $
     metavar "TXID:INDEX"
       <> completer (mkCompleter offered)
-      <> help "The coin, as `coins` lists it: the id of its transaction, a colon, and its index among the outputs"
+      <> help "The coin, as `coins` lists it: the id of its transaction, in full or by its short id, a colon, and its index among the outputs"
 
 -- | A coin as coins lists it, and as a block explorer often writes it: the
--- id of its transaction, a colon, and its index among the outputs
-coinReader :: ReadM OutPoint
-coinReader = eitherReader $ \s -> maybe (Left (notACoin s)) Right (readCoin s)
+-- id of its transaction, in full or by its short id, a colon, and its
+-- index among the outputs
+coinReader :: ReadM CoinRef
+coinReader = eitherReader $ \s -> maybe (Left (notACoin s)) Right (readCoinRef s)
+
+-- | A coin, TXID:INDEX, with the txid in full or by its short id. Nothing
+-- for any other word.
+readCoinRef :: String -> Maybe CoinRef
+readCoinRef s = case break (== ':') s of
+  (hash, ':' : index) -> CoinRef <$> readHashRef (cs hash) <*> readOutputIndex index
+  _ -> Nothing
+
+-- | The refusal of a word that is not a coin
+notACoin :: String -> String
+notACoin s = "The coin " <> s <> " is not valid: write it TXID:INDEX, as coins lists it, the txid in full or by its short id"
+
+-- | A coin outside the wallet, as a block explorer writes it: TXID:INDEX,
+-- the txid in full. preparesweep fetches it from the server, which looks a
+-- transaction up by its whole txid: its short id would name nothing there,
+-- and the wallet, which does not hold the coin, cannot tell its txid.
+fullCoinReader :: ReadM OutPoint
+fullCoinReader = eitherReader $ \s -> case readCoinRef s of
+  Just (CoinRef (FullHash hash) index) -> Right (OutPoint hash index)
+  Just (CoinRef (ShortHash _) _) -> Left ("The coin " <> s <> " needs its txid in full: the wallet does not hold a coin it sweeps, and the server looks up a whole txid only")
+  Nothing -> Left (notACoin s)
+
+-- | A hash as the user types it: in full, 64 hexadecimal digits, or by
+-- its short id, its first 8 ("Haskoin.Wallet.ShortId")
+hashRefReader :: ReadM HashRef
+hashRefReader = eitherReader $ \s -> maybe (Left (notAHash s)) Right (readHashRef (cs s))
   where
-    readCoin s = case break (== ':') s of
-      (hash, ':' : index) -> OutPoint <$> hexToTxHash (cs hash) <*> readOutputIndex index
-      _ -> Nothing
-    notACoin s = "The coin " <> s <> " is not valid: write it TXID:INDEX, as coins lists it"
+    notAHash s = "The hash " <> s <> " is not valid: give its 64 digits, or its short id, its first 8 digits, as the listings show it"
 
 -- | The index of an output in its transaction, which has 32 bits. A larger
 -- number names no output, rather than wrapping around to another one.
@@ -2316,13 +2360,13 @@ prepare it anyway, with a lock time of 0, as preparetx does.
               )
     }
 
--- | The transaction bumpfee replaces
-bumpedArg :: Args TxHash
+-- | The transaction bumpfee replaces, in full or by its short id
+bumpedArg :: Args HashRef
 bumpedArg =
-  argument (maybeReader $ hexToTxHash . cs) $
+  argument hashRefReader $
     metavar "TXID"
       <> completer (mkCompleter idsToBump)
-      <> help "The id of the transaction to replace, as txs or pendingtxs shows it"
+      <> help "The id of the transaction to replace, as txs or pendingtxs shows it: in full, or its short id, the first 8 digits"
 
 -- | The fee rate of a replacement, when given, as for preparetx: it must be
 -- above the rate of the transaction it replaces
@@ -2356,8 +2400,8 @@ nothing is recorded, and sendtx says so. The network may have refused the
 transaction, for a fee below what the nodes relay for example. Or it may just
 be slow. Run sendtx again later.
 
-Give a pending transaction by its TXID, as signtx and pendingtxs show it. Its
-nosigHash works too. Once the server sees it, it is marked as sent. `sync`
+Give a pending transaction by its TXID, as signtx and pendingtxs show it, in
+full or by its short id. Its nosigHash works too. Once the server sees it, it is marked as sent. `sync`
 then sends it again whenever the server loses it, and retires it once the
 network lists it. A transaction the network refuses for good is sent again on
 every sync, until you delete it with deletetx.
@@ -2681,8 +2725,9 @@ prepareSweepCommand =
 A sweep moves coins whose private keys you hold, from an old wallet for
 example, to new addresses. preparesweep takes every coin at the --sweep-from
 addresses and at those listed in the --address-file, every coin at the
-addresses of the keys in the --key-file, and the --coin coins. Give any of
-them. The --address-file holds addresses separated by spaces or line breaks,
+addresses of the keys in the --key-file, and the --coin coins, each with its
+txid in full: the wallet does not hold them, so a short id would name none.
+Give any of them. The --address-file holds addresses separated by spaces or line breaks,
 as the --key-file holds keys. An old wallet may have more addresses than a
 command line takes.
 

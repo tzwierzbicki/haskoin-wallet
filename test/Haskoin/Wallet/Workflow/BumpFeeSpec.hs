@@ -112,13 +112,19 @@ bumpFeeSpec ctx = do
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
           `shouldBe` (Map.fromList [(otherAddr 0, 20000)], Map.fromList [(internalAddr 0, 25480)], 4520)
 
-    it "is named by its replacement, which pendingtxs shows" $
+    it "is replaced when bumpfee names it by the short id of its txid" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        stuck <- sentPayment home
+        bumped <- txOf =<< answer home ["bumpfee", shortOf stuck, "--fee-rate", "20"] []
+        replacesOf bumped `shouldBe` [stuck]
+
+    it "is named by its replacement, by its short id, which pendingtxs shows" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         stuck <- sentPayment home
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
         replacesOf bumped `shouldBe` [stuck]
         run <- hw home ["pendingtxs"] []
-        runOut run `shouldSatisfy` Text.isInfixOf ("\n  replaces " <> Text.pack stuck <> "\n")
+        runOut run `shouldSatisfy` Text.isInfixOf ("\n  replaces " <> Text.pack (shortOf stuck) <> "\n")
 
     it "gives way to its replacement once sent: the history shows it dead, and the replacement confirmed" $
       withChain ctx (paidChain ctx) $ \home chain -> do
@@ -387,12 +393,12 @@ bumpFeeSpec ctx = do
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
           `shouldBe` (Map.fromList [(otherAddr 0, 40000)], Map.fromList [(internalAddr 0, 17560)], 22440)
 
-    it "names the coin it asks to add" $
+    it "names the coin it asks to add, by its short id" $
       withChain ctx chain $ \home _ -> do
         stuck <- stuckPayment home
         run <- hw home ["bumpfee", stuck, "--fee-rate", "60"] ["y"]
         run `shouldSatisfy` printedSentence "The coins of the transaction cannot pay its fee at 60 sat/vB, and this coin of the account would:"
-        runErr run `shouldSatisfy` Text.isInfixOf ("\n    0.00030000 btc  at " <> externalAddrsText !! 1 <> "  /0/1\n  " <> Text.pack (coinArg (twoAddressesTx ctx) 1) <> "\n")
+        runErr run `shouldSatisfy` Text.isInfixOf ("\n    0.00030000 btc  at " <> externalAddrsText !! 1 <> "  /0/1\n  " <> Text.pack (shortCoinArg (twoAddressesTx ctx) 1) <> "\n")
         runErr run `shouldSatisfy` Text.isInfixOf "Add it? [y/N]"
 
     -- Without the coin, the replacement of 192 bytes pays 11520 and has no
@@ -541,11 +547,11 @@ bumpFeeSpec ctx = do
           `shouldBe` (Map.fromList [(otherAddr 0, 20000), (otherAddr 1, 10000)], Map.fromList [(internalAddr 1, 14800)], 5200)
         replacesOf bumped `shouldBe` [stuck, second]
 
-    it "names that payment when it asks" $
+    it "names that payment by its short id when it asks" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         (stuck, second) <- withSecond home
         run <- hw home ["bumpfee", stuck, "--fee-rate", "20"] ["y"]
-        runErr run `shouldSatisfy` Text.isInfixOf ("Replacing the transaction removes those of the account that spend its change:\n  " <> Text.pack second)
+        runErr run `shouldSatisfy` Text.isInfixOf ("Replacing the transaction removes those of the account that spend its change:\n  " <> Text.pack (shortOf second) <> "\n")
         runErr run `shouldSatisfy` Text.isInfixOf "Replace both with one transaction that pays the recipients of both? [y/N]"
 
     it "is not replaced when the user does not want that payment replaced too" $

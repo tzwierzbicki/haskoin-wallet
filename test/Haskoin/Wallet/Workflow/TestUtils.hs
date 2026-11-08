@@ -32,6 +32,8 @@ module Haskoin.Wallet.Workflow.TestUtils
     textOf,
     fixedTo,
     coinArg,
+    shortOf,
+    shortCoinArg,
     -- * Reading an answer
     errorOf,
     alreadyExists,
@@ -229,6 +231,16 @@ fixedTo addr amount = textOf addr <> ":" <> amount
 -- | A coin of a transaction, as --coin takes it
 coinArg :: Tx -> Int -> String
 coinArg tx i = Text.unpack (txHashToHex (txHash tx)) <> ":" <> show i
+
+-- | The short id of a hash as typed: its first 8 digits, as the listings
+-- show it
+shortOf :: String -> String
+shortOf = take 8
+
+-- | A coin of a transaction by the short id of its txid, as coins shows it
+-- and --coin takes it
+shortCoinArg :: Tx -> Int -> String
+shortCoinArg tx i = shortOf (coinArg tx i) <> ":" <> show i
 
 {- Reading an answer -}
 
