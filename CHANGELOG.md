@@ -96,7 +96,8 @@ Using `hw`:
 - The help is laid out again, with a colour for each kind of thing to type.
   The commands that take a secret and need no server are marked.
 - Listings show a compact view, and `--verbose` shows every detail. On a
-  terminal they go through a pager.
+  terminal they go through a pager, which keeps each line on one line of the
+  screen, so that the columns line up.
 - The compact views count the confirmations up to `999+ confirmations`.
   `--verbose` and the JSON answers give the full count.
 - Transactions name the addresses of the wallet by their derivation path, such
@@ -105,7 +106,7 @@ Using `hw`:
 - `txs` shows the balance after each transaction.
 - `--tabular` shows each element of a listing on one row of a table, in
   columns under a header: `accounts`, `addresses`, `balances`, `coins`, `txs`
-  and `pendingtxs`. `less` keeps each row on one line, and the header of a
+  and `pendingtxs`. Nothing in a table is cut. `less` keeps the header of a
   table taller than the screen on the screen.
 - `sync` and `recover` show what they are doing on a status line.
 - Tab completion in bash, zsh and fish. It completes commands, options,

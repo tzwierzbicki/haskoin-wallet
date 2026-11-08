@@ -695,37 +695,20 @@ tableSpec = do
       renderedLines (txRowDoc btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) (spent "Rent of October" Map.empty))
         `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ \"Rent of October\""]
 
-    -- "Rent of October, the flat in Lyon, paid in full!" has 48 characters,
-    -- and 50 with its quotes
-    it "shows a label whole when it takes 50 characters with its quotes" $
-      renderedLines (txRowDoc btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) (spent "Rent of October, the flat in Lyon, paid in full!" Map.empty))
-        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ \"Rent of October, the flat in Lyon, paid in full!\""]
+    it "gives a long label whole, in the last column" $
+      renderedLines (txRowDoc btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) (spent "Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month" Map.empty))
+        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ \"Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month\""]
 
-    -- The label has 51 characters. Its first 47, the ellipsis and the two
-    -- quotes make 50.
-    it "cuts a longer label inside its quotes, to 50 characters with an ellipsis" $
-      renderedLines (txRowDoc btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) (spent "Deposit for the flat in Lyon, paid by bank and card" Map.empty))
-        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ \"Deposit for the flat in Lyon, paid by bank and …\""]
-
-    -- "to " and the 62 characters of the address make 65, past 50
+    -- A Taproot address has 62 characters
     it "gives the address of another wallet whole, however long, never cut" $ do
       let toTaproot = TxInfo spendSummary {summaryOtherOutputs = Map.fromList [(taprootExternalAddr 0, 40000)]} (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
       renderedLines (txRowDoc btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) toTaproot)
         `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ to bc1p8zl0j9e73592k9n6ftz4keyq24dq8djqd3rkcrepu2fw6zeryyjs8zz3ev"]
 
-    -- "to " and the 54 characters of the address, its prefix included,
-    -- make 57
     it "gives a Bitcoin Cash address whole, with its prefix" $ do
       let toCash = TxInfo spendSummary {summaryOtherOutputs = Map.fromList [(bchExternalAddr, 40000)]} (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
       renderedLines (txRowDoc bch UnitBitcoin (Just 1208000) (Just seenTimeInCet) toCash)
         `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ to bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"]
-
-    -- The 27 characters of the label take 54 columns. With its quotes, the
-    -- label has 48 of the 50: its first 23 characters take 46, and the
-    -- ellipsis makes 47.
-    it "cuts a label by the columns it takes, a wide character counting two" $
-      renderedLines (txRowDoc btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) (spent "東京の家賃と光熱費とインターネットと電話と水道の支払い" Map.empty))
-        `shouldBe` ["14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ \"東京の家賃と光熱費とインターネットと電話と水道…\""]
 
     it "gives the label of a payment received after the path of the address it was paid at" $ do
       let info = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "Salary" Map.empty
@@ -763,14 +746,11 @@ tableSpec = do
       renderedLines (txRowDoc btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) info)
         `shouldBe` ["14 Nov 2023 23:13 │ Internal │    -0.00001000 │     0.01208000 │     2 │ to /0/1 and 1 more"]
 
-    -- The label of the address has 51 characters. "at /0/0 " takes 8,
-    -- leaving 42 for the label: its first 39, the ellipsis and the two
-    -- quotes.
-    it "cuts the label of an address inside its quotes, the path before it counted in the 50 characters" $ do
-      let longLabel = paymentSummary {summaryMyOutputs = Map.fromList [(externalAddr 0, MyOutputs 50000 (Deriv :/ 0 :/ 0) "Deposit for the flat in Lyon, paid by bank and card")]}
+    it "gives a long label of an address whole, after its path" $ do
+      let longLabel = paymentSummary {summaryMyOutputs = Map.fromList [(externalAddr 0, MyOutputs 50000 (Deriv :/ 0 :/ 0) "Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month")]}
           info = TxInfo longLabel (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "" Map.empty
       renderedLines (txRowDoc btc UnitBitcoin (Just 50000) (Just seenTimeInCet) info)
-        `shouldBe` ["14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ at /0/0 \"Deposit for the flat in Lyon, paid by b…\""]
+        `shouldBe` ["14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ at /0/0 \"Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month\""]
 
     it "leaves the balance of a dead transaction empty" $ do
       let dead = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.MemRef 1700000000) (Just seenTime) 0 True)) "" Map.empty
@@ -846,6 +826,10 @@ addressTableSpec = do
     it "gives an address one row: its path, the address, what it can spend and received, its transactions and its label" $
       renderedLines (addressRowDoc UnitBitcoin receiving paidAddressRow 50000)
         `shouldBe` ["/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │      0.00050000 │     0.00050000 │     1 │ \"Invoice 42\""]
+
+    it "gives a long label whole, in the last column" $
+      renderedLines (addressRowDoc UnitBitcoin receiving paidAddressRow {dBAddressLabel = "Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month"} 50000)
+        `shouldBe` ["/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │      0.00050000 │     0.00050000 │     1 │ \"Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month\""]
 
     it "leaves the amounts of an address no transaction paid empty, and ends its row without a label" $
       renderedLines (addressRowDoc UnitBitcoin receiving unusedAddressRow 0)
@@ -1002,10 +986,9 @@ coinTableSpec =
       renderedLines (row spendableCoinRow {jsonCoinConfirmations = 1000})
         `shouldBe` ["14 Nov 2023 23:13 │     0.00050000 │ spendable         │  999+ │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ /0/0 │"]
 
-    -- The label has 51 characters. Its first 39 and the ellipsis make 40.
-    it "cuts a label longer than 40 characters to its first 39 and an ellipsis" $
-      renderedLines (row spendableCoinRow {jsonCoinAddressLabel = "Deposit for the flat in Lyon, paid by bank and card"})
-        `shouldBe` ["14 Nov 2023 23:13 │     0.00050000 │ spendable         │     3 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ /0/0 │ \"Deposit for the flat in Lyon, paid by b…\""]
+    it "gives a long label whole, in the last column" $
+      renderedLines (row spendableCoinRow {jsonCoinAddressLabel = "Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month"})
+        `shouldBe` ["14 Nov 2023 23:13 │     0.00050000 │ spendable         │     3 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ /0/0 │ \"Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month\""]
 
     -- main has 12 receiving addresses and 3 change addresses: its longest
     -- path is /0/11, of 5 characters. A coin without a time shows "time
@@ -1042,6 +1025,10 @@ balanceTableSpec =
       renderedLines (balanceRowDoc UnitBitcoin headed paidAddressRow (CoinBalance 80000 50000 30000 0))
         `shouldBe` ["/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │     0.00080000 │      0.00050000 │        0.00030000 │ \"Invoice 42\""]
 
+    it "gives a long label whole, in the last column" $
+      renderedLines (balanceRowDoc UnitBitcoin headed paidAddressRow {dBAddressLabel = "Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month"} (CoinBalance 80000 50000 30000 0))
+        `shouldBe` ["/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │     0.00080000 │      0.00050000 │        0.00030000 │ \"Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month\""]
+
     it "says a change address is one, in place of a label" $
       renderedLines (balanceRowDoc UnitBitcoin headed changeAddressRow (CoinBalance 9000 9000 0 0))
         `shouldBe` ["/1/0 │ 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn │     0.00009000 │      0.00009000 │        0.00000000 │ change address"]
@@ -1057,7 +1044,7 @@ balanceTableSpec =
                    ]
 
 -- The columns of the pending transactions: the account when every account
--- is listed, as wide as its longest name up to 20, 17 for the time, 8 for
+-- is listed, as wide as its longest name, 17 for the time, 8 for
 -- the type, 14 for the amount, 10 for the status and 6 for the fee rate,
 -- then what it is for
 pendingTableSpec :: Spec
@@ -1116,20 +1103,20 @@ pendingTableSpec =
                      "main           │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
                    ]
 
-    -- "family savings account" has 22 characters. Its first 19 and the
-    -- ellipsis make 20, the width of the column.
-    it "cuts the name of an account longer than 20 characters to its first 19 and an ellipsis" $ do
-      let family = mainAccountRow {dBAccountName = "family savings account"}
+    it "gives a long name whole, in a first column as wide as it" $ do
+      let family = mainAccountRow {dBAccountName = "family savings account for travel"}
       renderedLines (pendingRowDoc btc UnitBitcoin (pendingTableColumns UnitBitcoin (Just [family])) (Just family) (Just seenTimeInCet) unsigned)
-        `shouldBe` ["family savings acco… │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+        `shouldBe` ["family savings account for travel │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
-    -- The 13 characters of 家族の貯金と旅行の口座です take 26 columns. Its
-    -- first 9 take 18, and the ellipsis makes 19. The column takes 20, so
-    -- a space pads the name.
-    it "cuts a name by the columns it takes, a wide character counting two" $ do
+    -- The 13 characters of 家族の貯金と旅行の口座です take 26 columns: main
+    -- takes 4, and 22 spaces pad it
+    it "counts two columns for a wide character, so that the columns line up after it" $ do
       let family = mainAccountRow {dBAccountName = "家族の貯金と旅行の口座です"}
-      renderedLines (pendingRowDoc btc UnitBitcoin (pendingTableColumns UnitBitcoin (Just [family])) (Just family) (Just seenTimeInCet) unsigned)
-        `shouldBe` ["家族の貯金と旅行の…  │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+          both = pendingTableColumns UnitBitcoin (Just [mainAccountRow, family])
+      concatMap renderedLines [pendingRowDoc btc UnitBitcoin both (Just family) (Just seenTimeInCet) unsigned, pendingRowDoc btc UnitBitcoin both (Just mainAccountRow) (Just seenTimeInCet) unsigned]
+        `shouldBe` [ "家族の貯金と旅行の口座です │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU",
+                     "main                       │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
+                   ]
 
     it "gives the label of a payment in place of the address it pays, as the table of txs does" $ do
       let labelled = unsigned {txInfoLabel = "Rent of October"}

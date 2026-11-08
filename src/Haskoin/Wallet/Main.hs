@@ -70,7 +70,7 @@ printListing cfg pager unit view listing = do
   screenRows <- fmap Terminal.height <$> Terminal.size
   let shownOf doc
         | view == Table = tableShown screenRows (length (lines (renderPlain doc)))
-        | otherwise = TextLines
+        | otherwise = Lines
   failed <- withPager pager shownOf $ \write -> do
     streamed <- streamListing cfg listing $ \first answer -> write =<< chunkDoc unit view first answer
     case streamed of

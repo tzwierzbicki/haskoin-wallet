@@ -454,7 +454,8 @@ keep the secret offline.
 
 On a terminal, a listing such as `txs` goes through less: scroll it, search
 it with /, and quit it with q. One that fits on the screen is shown as it
-is.
+is. A line wider than the screen is cut at its edge, and the right arrow key
+scrolls to the rest of it.
 
 The options --unit, --json and --no-pager go before or after the command.
 The settings, such as the server, the default network, the unit, the address
@@ -1264,9 +1265,8 @@ coins it holds, and when it was created.
 With --tabular, each address takes one row of a table, under a header that
 names the columns: the path, the address, what it can spend, what it received
 and in how many transactions, and its label. The amounts are in the unit the
-header names. An address no transaction has paid leaves its amounts empty. A
-label longer than 40 characters is cut short. Change addresses have no label,
-so their table has no column for one.
+header names. An address no transaction has paid leaves its amounts empty.
+Change addresses have no label, so their table has no column for one.
 |],
       args =
         CommandAddresses
@@ -1339,8 +1339,7 @@ and the value not spendable yet, which waits for a confirmation.
 
 With --tabular, each address takes one row of a table, under a header that
 names the columns: the path, the address, the three amounts, and the label, or
-that it is a change address. The amounts are in the unit the header names. A
-label longer than 40 characters is cut short.
+that it is a change address. The amounts are in the unit the header names.
 |],
       args =
         CommandBalances
@@ -1470,8 +1469,8 @@ unconfirmed transaction has 0, and gives no fee rate. A dead one says dead. The
 last column, Description, says what the transaction is for. A payment received
 gives the path of the address it was paid at, then the label of the payment, or
 else the label of the address. A payment gives its label, or else the address
-it pays. A label is cut to fit in 50 columns. An address is never cut. The
-table leaves out the txid.
+it pays. Nothing in it is cut, a long label or address included. The table
+leaves out the txid.
 |],
       args =
         CommandTxs
@@ -1849,8 +1848,7 @@ With --tabular, each transaction takes one row of a table, under a header that
 names the columns: its account when every account is listed, the time it was
 created, its type, its amount, its status, its fee rate in sat/vB, and what it
 is for, as txs --tabular says it. The account column is as wide as the longest
-name, up to 20 columns. A longer name is cut short. The table leaves out the
-hash, which the other commands take.
+name. The table leaves out the hash, which the other commands take.
 |],
       args =
         CommandPendingTxs
@@ -2092,8 +2090,7 @@ With --tabular, each coin takes one row of a table, under a header that names
 the columns: the time of its transaction, its value, its state, its
 confirmations up to 999+, the address that holds it with its path, and the
 label of the address. A coin locked by a pending transaction says "locked by
-tx". A label longer than 40 characters is cut short. The table leaves out the
-coin itself, TXID:INDEX.
+tx". The table leaves out the coin itself, TXID:INDEX.
 
 A coin is spendable when the wallet can spend it now. Nothing locks it, a
 coinbase coin has 100 confirmations, and an unconfirmed coin comes from a

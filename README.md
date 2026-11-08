@@ -230,11 +230,13 @@ scroll it, `/` searches it and `q` quits it. A listing that fits on the screen
 is shown as it is. `HW_PAGER`, the key `pager` of `config.json` or `PAGER` name
 another pager.
 
-A table, with `--tabular`, keeps each row on one line. A row wider than the
-screen is cut at its edge, and the right and left arrow keys scroll to the rest
-of it. `less` then stays open, so that you can. A table taller than the screen
-also keeps its header at the top while its rows scroll, with `less` 608 or
-later. When you set `LESS` yourself, `hw` leaves it as it is.
+Each line stays on one line of the screen, so that the columns of a view line
+up. A line wider than the screen is cut at its edge, which a `>` marks, and the
+right and left arrow keys scroll to the rest of it. `less` then stays open, so
+that you can. The compact and verbose views are laid out for 80 columns, so
+this happens mostly to the rows of a table, with `--tabular`. A table taller
+than the screen also keeps its header at the top while its rows scroll, with
+`less` 608 or later. When you set `LESS` yourself, `hw` leaves it as it is.
 
 Scripts read a listing a page at a time with `--max`, then `--after` the last
 row they got.
@@ -653,7 +655,7 @@ balances, its coins and when it was created.
 
 `--tabular` shows each address on one row of a table, as `txs --tabular` does.
 The columns are the path, the address, what it can spend, what it received, in
-how many transactions, and its label, cut to 40 characters. An unused address
+how many transactions, and its label. An unused address
 leaves its amounts empty. The table of change addresses has no label column,
 since change addresses take no label.
 
@@ -677,7 +679,7 @@ yet, which waits for a confirmation.
 
 `--tabular` shows each address on one row of a table: its path, the address,
 the value of its coins, what it can spend now and the rest, and its label, or
-`change address`. A label longer than 40 characters is cut short.
+`change address`.
 
 ```console
 hw balances
@@ -964,8 +966,8 @@ Description, says what the transaction is for:
 - A payment gives its label, or else the address it pays, as in
   `to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU`.
 
-A label in the last column is cut to fit in 50 columns, an ellipsis showing
-the cut. An address is never cut. The header names the unit of the amounts, so
+Nothing in the last column is cut, a long label or address included. The
+header names the unit of the amounts, so
 the cells hold numbers alone. The table leaves out the txid and the fee rate.
 `txs` without `--tabular` shows them.
 
@@ -979,8 +981,8 @@ hw txs --max 20 --after TXID
 > **Good to know**
 >
 > - **A row of the table is wide.** It takes 73 columns before its last
->   cell. A label then takes 50 at most, but a long address, such as a
->   Taproot or a Bitcoin Cash address, takes what it needs. The columns keep
+>   cell, which takes what its label or address needs. `less` keeps the row
+>   on one line, and the right arrow key scrolls to its end. The columns keep
 >   the same widths from the first row to the last, so that a long listing
 >   lines up. A rare cell that does not fit, such as an amount of 10 000
 >   bitcoins or more, pushes the rest of its row.
@@ -994,8 +996,8 @@ until it is signed, then by its txid. A conflicted one can no longer be sent.
 `--tabular` shows each transaction on one row of a table: its account when
 every account is listed, the time it was created, its type, its amount, its
 status, its fee rate in sat/vB, and what it is for, as `txs --tabular` says it.
-The account column is as wide as the longest name, up to 20 columns. A longer
-name is cut short. The table leaves out the hash, which the other commands
+The account column is as wide as the longest name. The table leaves out the
+hash, which the other commands
 take. `pendingtxs` without `--tabular` shows it.
 
 ```console

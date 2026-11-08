@@ -3,11 +3,12 @@
 -- | The pager a listing goes through on a terminal, as git shows a log:
 -- less, unless HW_PAGER, the key pager of config.json or PAGER names
 -- another one. less quits by itself when the listing fits on the screen,
--- shows the colours, and leaves the listing on the screen when it quits
--- (-F, -R and -X), unless LESS is set to something else. A table keeps its
--- rows whole, and a table taller than the screen its header on the screen
--- besides ('lessOptions'). A listing goes out as it is when stdout is not a
--- terminal, with --no-pager, and when the pager named is empty or cat.
+-- shows the colours, leaves the listing on the screen when it quits, and
+-- keeps each line on one line of the screen (-F, -R, -X and -S), unless
+-- LESS is set to something else. A table taller than the screen also
+-- keeps its header on the screen ('lessOptions'). A listing goes out as it
+-- is when stdout is not a terminal, with --no-pager, and when the pager
+-- named is empty or cat.
 --
 -- The pager starts with the first chunk of the listing, not before it: how
 -- less shows a table depends on how tall the table is ('tableShown').
@@ -69,11 +70,11 @@ pagerNamed hwPager fromConfig pager =
   where
     named = fromMaybe "less" (hwPager <|> (cs <$> fromConfig) <|> pager)
 
--- | What a listing shows, which tells less how to show it: lines of text,
--- which wrap at the edge of the screen, the rows of a table that fits on
--- the screen, or those of a table taller than the screen, which the user
--- scrolls under its header
-data Shown = TextLines | TableRows | TallTableRows
+-- | What a listing shows, which tells less how to show it: lines that
+-- scroll together, those of a compact or a verbose view or of a table
+-- that fits on the screen, or the rows of a table taller than the screen,
+-- which the user scrolls under its header
+data Shown = Lines | TallTable
   deriving (Eq, Show)
 
 -- | How less shows a table of the lines given, on a screen of the rows
@@ -83,8 +84,8 @@ data Shown = TextLines | TableRows | TallTableRows
 -- then scrolls with the rows, but a short table still closes by itself.
 tableShown :: Maybe Int -> Int -> Shown
 tableShown screenRows tableLines
-  | maybe False (tableLines >=) screenRows = TallTableRows
-  | otherwise = TableRows
+  | maybe False (tableLines >=) screenRows = TallTable
+  | otherwise = Lines
 
 -- | Run the action with a function that writes a document of the listing
 -- where the terminal takes it, and tells whether the reader still reads
@@ -142,7 +143,7 @@ startPager command shown = do
       else do
         -- Only a tall table asks, and only less: --header depends on its
         -- version
-        version <- if shown == TallTableRows then lessVersion command else return Nothing
+        version <- if shown == TallTable then lessVersion command else return Nothing
         return (("LESS", lessOptions shown version) : environment)
   (inputM, _, _, pager) <- createProcess (shell command) {std_in = CreatePipe, env = Just withLess}
   input <- maybe (ioError (userError "The pager has no input")) return inputM
@@ -158,12 +159,21 @@ stopPager (Running input pager previous) = do
   void (installHandler sigINT previous Nothing)
 
 -- | The options hw gives less in LESS, given the version of less if
--- known. They are those git gives it: quit when the listing fits on the
--- screen (-F), show the colours (-R), and leave the listing on the screen
--- when less quits (-X). A table also keeps each row on one line, cut at
--- the edge of the screen, the arrow keys scrolling it sideways (-S): a row
--- that wrapped would no longer line up under the header. less then stays
--- open when it cut a row, so that the user can scroll to the rest of it.
+-- known. The first three are those git gives it: quit when the listing
+-- fits on the screen (-F), show the colours (-R), and leave the listing
+-- on the screen when less quits (-X).
+--
+-- Every listing also keeps each line on one line of the screen, cut at its
+-- edge, the arrow keys scrolling it sideways (-S). The views are laid out
+-- in columns: the rows of a table under its header, the fields of a
+-- verbose view, a label under its address. A line that wrapped would go
+-- on at the first column of the screen and break them. The compact and
+-- the verbose views are laid out to fit in 80 columns, so on most screens
+-- only a long label or name goes past the edge. A table is often wider.
+-- less marks a line it cut with a > at the edge of the screen, and then
+-- stays open, so that the user can scroll to the rest of it. git once gave -S too, and dropped it as a matter of taste: a line it
+-- cuts, such as a long line of a diff, hides text until the user scrolls.
+-- Wrapping hides nothing, but here it would break what the columns show.
 --
 -- From less 608 on, the header of a table taller than the screen, the line
 -- of headings and the line under it, stays at the top of the screen as the
@@ -172,9 +182,8 @@ stopPager (Running input pager previous) = do
 -- quit every short table. An older less would refuse --header with a
 -- warning above the table, and so would one whose version hw cannot tell.
 lessOptions :: Shown -> Maybe Natural -> String
-lessOptions TextLines _ = "FRX"
-lessOptions TableRows _ = "FRXS"
-lessOptions TallTableRows version
+lessOptions Lines _ = "FRXS"
+lessOptions TallTable version
   | maybe False (>= 608) version = "FRXS --header=2"
   | otherwise = "FRXS"
 

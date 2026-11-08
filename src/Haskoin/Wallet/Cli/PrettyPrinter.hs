@@ -58,7 +58,7 @@ import Haskoin.Wallet.Tx.SendAll (DustReport (..), inputFee, valueOf, worthSpend
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import Prettyprinter (Doc, align, annotate, fillSep, flatAlt, group, hcat, hsep, indent, line, pretty, punctuate, vcat, (<+>))
-import Text.DocLayout (charWidth, realLength)
+import Text.DocLayout (realLength)
 import System.Exit
 import System.IO
 
@@ -110,8 +110,7 @@ rblock n str =
 -- | How many columns of the terminal a text takes. A character of most
 -- scripts takes one, one of the East Asian scripts or an emoji two, and a
 -- combining accent none. Counting characters would put a cell after such
--- a text out of its column, so every padding and every cut counts
--- columns. A character of ambiguous width counts one, as most terminals
+-- a text out of its column, so every padding counts columns. A character of ambiguous width counts one, as most terminals
 -- show it.
 shownWidth :: String -> Int
 shownWidth = realLength
@@ -881,7 +880,14 @@ mainPayee summary =
 -- address of the wallet is named by its path, with its label or the mark
 -- of a change address. The address of another wallet is in full.
 payeeWords :: Network -> Payee -> Doc Style
-payeeWords net (Payee preposition row others) =
+payeeWords net = payeeWordsNoted net (\path label -> ownAddressNote label (isIntPath path))
+
+-- | Whom a transaction pays, as 'payeeWords' says it, but what is said
+-- after the path of an address of the wallet is what the function given
+-- says of the path and the label of the address. The table of txs gives
+-- the label of the transaction there ('purposeCell').
+payeeWordsNoted :: Network -> (SoftPath -> Text -> [Doc Style]) -> Payee -> Doc Style
+payeeWordsNoted net noteOf (Payee preposition row others) =
   hsep $ [text (cs preposition), target] <> note <> more
   where
     target = case txAddressOwn row of
@@ -889,7 +895,7 @@ payeeWords net (Payee preposition row others) =
       Nothing -> text (addrToString net (txAddress row))
     -- A path is short: its label stays on its line
     note = case txAddressOwn row of
-      Just (path, label) -> ownAddressNote label (isIntPath path)
+      Just (path, label) -> noteOf path label
       Nothing -> []
     more = if others > 0 then ["and", text (show others), "more"] else []
 
@@ -992,11 +998,13 @@ hashWord (Pending status) = styled PendingHash (cs (txHashToHex (pendingShownHas
 -- every cell. A cell wider than its column pushes the rest of its row.
 --
 -- A label has no width to fix in advance. It goes in the last column,
--- which ends the row and pushes nothing, and it is cut to
--- 'tableLabelLength' characters. The verbose view gives it whole. The
--- tables of transactions cut their last cell at 'purposeWidth' instead,
--- the address of another wallet included. An address in a column of
--- addresses is never cut.
+-- which ends the row and pushes nothing. Nothing in a table is cut: a
+-- label, an address and the name of an account show whole, however long.
+-- On a terminal, less keeps each row on one line and scrolls it sideways
+-- ("Haskoin.Wallet.Cli.Pager"), so a long cell makes its row wider
+-- without breaking the columns. A cut would save room on the screen, but
+-- hide what tells two labels apart, and an address read in part is how a
+-- lookalike passes for the right one.
 --
 -- A table has no frame, only lines between the columns and one under the
 -- header. A frame needs a line under the last row, and the screen does not
@@ -1025,56 +1033,6 @@ column heading width = Column heading (max width (fromIntegral (shownWidth headi
 -- is in the plural, as an amount of 2 shows it.
 amountHeading :: String -> AmountUnit -> String
 amountHeading name unit = name <> " (" <> cs (showUnit unit 2) <> ")"
-
--- | How many characters of a label the table of addresses shows at most,
--- the ellipsis that ends a longer one included. Quoted, a label then takes
--- 42 characters, as wide as a native SegWit address. The table of txs
--- cuts its whole last cell instead ('purposeWidth').
-tableLabelLength :: Int
-tableLabelLength = 40
-
--- | A label as a table shows it: whole, or its first characters and an
--- ellipsis when it is longer than 'tableLabelLength'
-tableLabel :: Text -> Text
-tableLabel = cutVisible tableLabelLength
-
--- | A text in the columns given at most: whole, or its first characters
--- and an ellipsis. The cut is made in the text as the terminal shows it,
--- escapes included ('visibleText'), and counts columns ('shownWidth'), so
--- that a wide character counts twice. The ellipsis takes one column, so
--- at least one is given.
-cutVisible :: Int -> Text -> Text
-cutVisible most label
-  | shownWidth (cs shown) <= most = shown
-  | otherwise = Text.pack (takeColumns (most - 1) (Text.unpack shown)) <> "…"
-  where
-    shown = visibleText label
-
--- | The first characters of a text that take the columns given at most. A
--- combining accent after the last of them stays with it.
-takeColumns :: Int -> String -> String
-takeColumns _ [] = []
-takeColumns room (c : rest)
-  | charWidth c > room = []
-  | otherwise = c : takeColumns (room - charWidth c) rest
-
--- | A part of the text of a cell, with the styles it shows in. A cell
--- made of pieces can be measured, which a document cannot, to tell a
--- label the room it has.
-data Piece = Piece ![Style] !Text
-
--- | The columns pieces take ('shownWidth')
-piecesLength :: [Piece] -> Int
-piecesLength pieces = sum [shownWidth (cs t) | Piece _ t <- pieces]
-
--- | Pieces as a document, each in its styles
-piecesDoc :: [Piece] -> Doc Style
-piecesDoc pieces = hcat [foldr annotate (pretty t) styles | Piece styles t <- pieces]
-
--- | A label, quoted, in the characters given at most, quotes included.
--- A longer label is cut inside its quotes, which then still close it.
-quotedPiece :: [Style] -> Int -> Text -> Piece
-quotedPiece styles most label = Piece styles ("\"" <> cutVisible (most - 2) label <> "\"")
 
 -- | The header of a table: the heading of each column, then a line under
 -- them
@@ -1123,8 +1081,7 @@ tableRule headed = styled Muted (intercalate "┼" (zipWith dashes [1 ..] headed
 -- does. An address of the wallet is named by its path, which is short,
 -- then the label of the transaction, or else that of the address. The
 -- address of another wallet gives way to the label of the transaction,
--- since the two would not fit. A label is cut so that the cell takes
--- 'purposeWidth' columns at most. An address is never cut.
+-- which says more to the user. Nothing in the cell is cut.
 --
 -- The table leaves out the txid. Its 64 characters would make a row too
 -- wide for most screens, and its first characters alone would name it
@@ -1207,46 +1164,26 @@ txRowDoc net unit balanceM time (TxInfo summary status label _) =
         purposeCell net label summary
       ]
 
--- | The most characters of the last cell of the tables of transactions.
--- A label is cut to fit them, but an address is never cut.
-purposeWidth :: Int
-purposeWidth = 50
-
 -- | What a transaction is for, as the last cell of the table of txs says
--- it. A payment received, or one between the addresses of the wallet,
--- gives the path of the address it pays the most, then the label of the
--- transaction, or else the label of that address, or else that it is a
--- change address: "at /0/3 \"Salary\"". A payment gives its label alone,
--- or else the address of the other wallet it pays the most: "to
+-- it, in the words of the compact view ('payeeWords'). A payment
+-- received, or one between the addresses of the wallet, gives the path of
+-- the address it pays the most, then the label of the transaction, or
+-- else the label of that address, or else that it is a change address:
+-- "at /0/3 \"Salary\"". A payment gives its label alone, or else the
+-- address of the other wallet it pays the most: "to
 -- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU". Either tells how many other
--- addresses it pays. A label is cut inside its quotes, so that the cell
--- takes 'purposeWidth' columns at most. An address is never cut, however
--- long: one read in part is how a lookalike passes for the right one, and
--- the end of a Bitcoin Cash address, which people compare, would go
--- first. A long address makes its row wider instead.
+-- addresses it pays. A label and an address are whole, however long.
 purposeCell :: Network -> Text -> TxSummary -> Doc Style
-purposeCell net label summary = piecesDoc pieces
+purposeCell net label summary = case mainPayee summary of
+  Just payee
+    | isJust (txAddressOwn (payeeRow payee)) || Text.null label -> payeeWordsNoted net ownNote payee
+  _ -> if Text.null label then mempty else labelWord label
   where
-    pieces = case mainPayee summary of
-      Just payee
-        | isJust (txAddressOwn (payeeRow payee)) || Text.null label -> payeePieces payee
-      _ -> [quotedPiece [UserText] purposeWidth label | not (Text.null label)]
-    payeePieces (Payee preposition row others) =
-      let before = [Piece [] (preposition <> " "), target row]
-          after = [Piece [] (" and " <> cs (show others) <> " more") | others > 0]
-          -- What the label may take: the cell, but for the rest and the
-          -- space before the label
-          room = purposeWidth - piecesLength (before <> after) - 1
-       in before <> concat [[Piece [] " ", note] | Just note <- [noteOf room row]] <> after
-    target row = case txAddressOwn row of
-      Just (path, _) -> Piece [OwnAddress] (cs (pathToStr path))
-      Nothing -> Piece [] (cs (addrToString net (txAddress row)))
-    noteOf room row = case txAddressOwn row of
-      Just (path, ownLabel)
-        | not (Text.null label) -> Just (quotedPiece [UserText] room label)
-        | not (Text.null ownLabel) -> Just (quotedPiece [OwnAddress, UserText] room ownLabel)
-        | isIntPath path -> Just (Piece [Muted] "change address")
-      _ -> Nothing
+    -- The label of the transaction says what it is for better than the
+    -- label of its address
+    ownNote path ownLabel
+      | Text.null label = ownAddressNote ownLabel (isIntPath path)
+      | otherwise = [labelWord label]
 
 {- The table of addresses -}
 
@@ -1310,7 +1247,7 @@ addressRowDoc unit headed addr spendable =
         <> [labelCell | not (dBAddressInternal addr)]
     labelCell
       | Text.null (dBAddressLabel addr) = mempty
-      | otherwise = labelWord (tableLabel (dBAddressLabel addr))
+      | otherwise = labelWord (dBAddressLabel addr)
 
 -- | An amount that waits to be spent, as a number in a column of a table:
 -- yellow, unless it is zero, as 'waitingAmount'
@@ -1330,25 +1267,36 @@ heldAmountCell unit amnt = (if amnt > 0 then annotate Incoming else id) (text (c
 -- addresses are for the verbose view.
 --
 -- The listing of accounts is read whole ('listingWhole'), so its first
--- column takes the width of the longest name, and no name is cut: the name
--- is what the table lists, and what --account takes.
+-- column takes the width of the longest name: the name is what the table
+-- lists, and what --account takes.
 
 -- | The columns of the table of accounts, the name, the network and the
 -- path as wide as the widest of the accounts given
 accountTableColumns :: AmountUnit -> [DBAccount] -> [Column]
 accountTableColumns unit accs =
-  [ column "Account" (widest (cs . visibleText . dBAccountName)) LeftSide,
-    column "Network" (widest (\acc -> (accountNetwork acc).name)) LeftSide,
-    column "Path" (widest (pathToStr . accountPath)) LeftSide,
+  [ column "Account" (widestCell accountNameText accs) LeftSide,
+    column "Network" (widestCell (\acc -> (accountNetwork acc).name) accs) LeftSide,
+    column "Path" (widestCell (pathToStr . accountPath) accs) LeftSide,
     column (amountHeading "Spendable" unit) amountWidth RightSide,
     column (amountHeading "Unconfirmed" unit) amountWidth RightSide,
     -- The heading sets the width: 99 999 coins
     column "Coins" 1 RightSide
   ]
-  where
-    -- As the terminal shows them, names with their escapes
-    widest :: (DBAccount -> String) -> Natural
-    widest cell = fromIntegral (maximum (0 : [shownWidth (cell acc) | acc <- accs]))
+
+-- | The width of a column that holds the cells of the elements given, as
+-- the terminal shows them: that of the widest. Only a listing read whole
+-- can size a column so ('Haskoin.Wallet.Cli.Listing.listingWhole').
+widestCell :: (a -> String) -> [a] -> Natural
+widestCell cell elements = fromIntegral (maximum (0 : [shownWidth (cell e) | e <- elements]))
+
+-- | The name of an account as a table shows it, every character that is
+-- not text as an escape ('visibleText')
+accountNameText :: DBAccount -> String
+accountNameText = cs . visibleText . dBAccountName
+
+-- | The name of an account in a column of a table, bold and whole
+accountCell :: DBAccount -> Doc Style
+accountCell = styled Account . accountNameText
 
 -- | An account on one row of its table, under the columns given: its
 -- name, bold and whole, its network and its derivation path, then what it
@@ -1357,19 +1305,13 @@ accountTableColumns unit accs =
 accountRowDoc :: AmountUnit -> [Column] -> DBAccount -> Word64 -> Doc Style
 accountRowDoc unit headed acc spendable =
   tableLine . zip headed $
-    [ styled Account (cs (visibleText (dBAccountName acc))),
+    [ accountCell acc,
       text (accountNetwork acc).name,
       text (pathToStr (accountPath acc)),
       heldAmountCell unit spendable,
       waitingAmountCell unit (dBAccountBalanceUnconfirmed acc),
       text (show (dBAccountBalanceCoins acc))
     ]
-
--- | The name of an account in the table of pending transactions, bold, in
--- 'accountCellMost' columns at most. A longer name is cut, with an
--- ellipsis, so that a long name leaves room for the rest of the row.
-accountCell :: DBAccount -> Doc Style
-accountCell acc = styled Account (cs (cutVisible (fromIntegral accountCellMost) (dBAccountName acc)))
 
 {- The table of coins -}
 
@@ -1419,7 +1361,7 @@ coinRowDoc net unit headed time coin =
         ownAddressWord net (jsonCoinAddress coin),
         maybe mempty trailingPathWord (jsonCoinPath coin),
         -- The label has a column of its own
-        hsep (ownAddressNote (tableLabel (jsonCoinAddressLabel coin)) (jsonCoinChange coin))
+        hsep (ownAddressNote (jsonCoinAddressLabel coin) (jsonCoinChange coin))
       ]
 
 {- The table of balances -}
@@ -1459,7 +1401,7 @@ balanceRowDoc unit headed addr balance =
       ]
   where
     labelCell
-      | not (Text.null (dBAddressLabel addr)) = labelWord (tableLabel (dBAddressLabel addr))
+      | not (Text.null (dBAddressLabel addr)) = labelWord (dBAddressLabel addr)
       | dBAddressInternal addr = changeWord
       | otherwise = mempty
 
@@ -1470,16 +1412,16 @@ balanceRowDoc unit headed addr balance =
 -- got, its fee rate, and what it is for, as the table of txs says it. A
 -- listing of every account names the account of each in a first column.
 -- The listing is read whole ('listingWhole'), so that column is as wide as
--- the longest name it shows, up to 'accountCellMost'. The hash, which the
+-- the longest name it shows, as in the table of accounts. The hash, which the
 -- other commands take, would make a row too wide. The compact view gives
 -- it.
 
 -- | The columns of the table of pending transactions, with a column of
 -- accounts first when the listing has every account's: those given, whose
--- longest name, cut as 'accountCell' cuts it, sets its width
+-- longest name sets its width
 pendingTableColumns :: AmountUnit -> Maybe [DBAccount] -> [Column]
 pendingTableColumns unit namedM =
-  [column "Account" (widest named) LeftSide | Just named <- [namedM]]
+  [column "Account" (widestCell accountNameText named) LeftSide | Just named <- [namedM]]
     <> [ column "Time" minuteWidth LeftSide,
          column "Type" typeWidth LeftSide,
          column (amountHeading "Amount" unit) amountWidth RightSide,
@@ -1488,15 +1430,6 @@ pendingTableColumns unit namedM =
          column "sat/vB" 1 RightSide,
          column "Description" 0 LeftSide
        ]
-
-  where
-    widest accs = fromIntegral (maximum (0 : [min accountCellMost (shownWidth (cs (visibleText (dBAccountName acc)))) | acc <- accs]))
-
--- | The most columns the name of an account takes in the table of pending
--- transactions. A name is the user's choice, of any length, so a longer
--- one is cut, with an ellipsis ('accountCell').
-accountCellMost :: Int
-accountCellMost = 20
 
 -- | The width of the column of the statuses of pending transactions: that
 -- of "not signed" and "conflicted", the longest
