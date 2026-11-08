@@ -37,12 +37,12 @@ import Data.Word
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Account
-import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath, chainPath, coinBalanceUnspendable, isIntPath, pathText)
+import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath, chainPath, coinBalanceNotSpendableYet, coinBalanceUnspendable, isIntPath, pathText)
 import Haskoin.Wallet.Amounts
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..), levelName, rateAt)
-import Haskoin.Wallet.Keys (KeySource (..), foreignKindDescription)
+import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), foreignKindDescription)
 import Haskoin.Wallet.Labels (AccountImport (..), ImportReport (..), reportNeedsSync)
 import Haskoin.Wallet.MessageSigning (signedMessageText)
 import Haskoin.Wallet.Cli.Parser (AddressCode (..), BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), TxShown (..), View (..), program)
@@ -170,6 +170,9 @@ listedAccountDoc view unit acc spendable = do
   return $ case view of
     Compact -> compactAccountDoc unit acc spendable
     Verbose -> verboseAccountDoc unit created acc spendable
+    -- The table needs every account for the width of its names:
+    -- rowsPrinter lays it out ('accountRowDoc')
+    Table -> compactAccountDoc unit acc spendable
 
 -- | The first line of an account: its name, its network and its
 -- derivation path, the three things deleteacc asks for
@@ -361,6 +364,9 @@ listedAddressDoc view unit pad addr spendable = do
   return $ case view of
     Compact -> compactAddressDoc unit pad addr spendable
     Verbose -> verboseAddressDoc unit pad created addr spendable
+    -- The table needs the account for the width of its addresses:
+    -- rowsPrinter lays it out ('addressRowDoc')
+    Table -> compactAddressDoc unit pad addr spendable
 
 -- | The first line of an address: its derivation path, which tells
 -- receiving and change addresses apart, padded to the width given, then
@@ -443,6 +449,14 @@ checkAddrDoc acc path addr label =
 pathWidth :: [DBAddress] -> Natural
 pathWidth addrs = fromIntegral $ maximum (0 : (Text.length . pathText . addrPath <$> addrs))
 
+-- | An address as balances lists it, in the view asked for. The table
+-- needs the account for the widths of its columns: rowsPrinter lays it
+-- out ('balanceRowDoc').
+listedBalanceDoc :: View -> AmountUnit -> Natural -> DBAddress -> CoinBalance -> Doc Style
+listedBalanceDoc view unit pad addr balance = case view of
+  Verbose -> verboseBalanceDoc unit pad addr balance
+  _ -> coinBalanceDoc unit pad addr balance
+
 -- | An address as balances shows it: its first line, with a change
 -- address marked as one among the receiving addresses, then the value of
 -- its coins, what it can spend now, and the rest, which waits
@@ -454,12 +468,35 @@ coinBalanceDoc unit pad addr balance =
         commaList
           [ "total" <+> amountPrinter unit (coinBalanceTotal balance),
             "spendable" <+> amountPrinter unit (coinBalanceSpendable balance),
-            "unspendable" <+> unspendable (coinBalanceUnspendable balance)
+            "unspendable" <+> waitingAmount unit (coinBalanceUnspendable balance)
           ]
     ]
-  where
-    unspendable 0 = neutralAmount unit 0
-    unspendable v = amountIn (Just Waiting) unit (fromIntegral v)
+
+-- | An address as balances --verbose shows it: its first line, then its
+-- fields. The value of its coins and how many there are, then what it can
+-- spend now, and what it cannot, split as coins tells the state of each
+-- coin: locked by a pending transaction, locked by the user, or not
+-- spendable yet. The compact view gives the sum of the three; this one
+-- tells which to wait for, and which to unlock.
+verboseBalanceDoc :: AmountUnit -> Natural -> DBAddress -> CoinBalance -> Doc Style
+verboseBalanceDoc unit pad addr balance =
+  vcat $
+    addressLine True pad addr
+      : ( indent 2
+            <$> [ field 17 "Total" <> amountPrinter unit (coinBalanceTotal balance),
+                  field 17 "Coins" <> countPrinter (fromIntegral (dBAddressBalanceCoins addr)),
+                  field 17 "Spendable" <> amountPrinter unit (coinBalanceSpendable balance),
+                  field 17 "Locked by tx" <> waitingAmount unit (coinBalanceLockedByTx balance),
+                  field 17 "Locked by you" <> waitingAmount unit (coinBalanceLockedByUser balance),
+                  field 17 "Not spendable yet" <> waitingAmount unit (coinBalanceNotSpendableYet balance)
+                ]
+        )
+
+-- | An amount that waits to be spent: in the colour of what waits, unless
+-- it is zero
+waitingAmount :: AmountUnit -> Word64 -> Doc Style
+waitingAmount unit 0 = neutralAmount unit 0
+waitingAmount unit v = amountIn (Just Waiting) unit (fromIntegral v)
 
 -- | Addresses as balances lists them, their paths aligned, a blank line
 -- between them. preparetx --change-back shows the addresses it can send
@@ -469,37 +506,114 @@ coinBalancesPrinter unit addrs = vcat . intersperse mempty $ uncurry (coinBalanc
 
 {- Coins -}
 
--- | A coin in three lines: its value with its state and its
--- confirmations, the address that holds it with its label, or marked as a
--- change address, and the coin itself, as lockcoin and --coin take it. A
--- coin that shows the label of its transaction has it on a line of its
--- own, below the first, as a transaction does.
-coinDoc :: Network -> AmountUnit -> JsonCoin -> Doc Style
-coinDoc net unit JsonCoin {..} =
-  vcat $
-    [columns [amountCell (Just Incoming) "" unit (fromIntegral jsonCoinValue), commaList [state, confirmations]]]
-      <> [indent 2 (labelWord jsonCoinTxLabel) | not (Text.null jsonCoinTxLabel)]
-      <> [ indent 2 (hsep $ ["at", text (addrToString net jsonCoinAddress)] <> [labelWord jsonCoinAddressLabel | not (Text.null jsonCoinAddressLabel)] <> [changeWord | jsonCoinChange]),
-           indent 2 (styled Muted (coinText jsonCoinOutpoint))
-         ]
+-- A coin shows in one of three views. The compact and the verbose views
+-- start with the same first line: the time of the transaction that paid
+-- it, its value, its state and its confirmations, as a transaction starts
+-- with its time. Only the count of the confirmations differs: the compact
+-- view stops it at 999+, and the verbose view gives it in full. The table
+-- gives a coin one row ('coinRowDoc').
+
+-- | A coin as a listing shows it, in the view asked for, with the time of
+-- its transaction in the time zone of the computer. lockcoin and
+-- unlockcoin answer with the verbose view, as the commands that answer
+-- with one element do.
+listedCoinDoc :: View -> Network -> AmountUnit -> JsonCoin -> IO (Doc Style)
+listedCoinDoc view net unit coin = do
+  time <- traverse utcToLocalZonedTime (jsonCoinTime coin)
+  return $ case view of
+    Compact -> compactCoinDoc net unit time coin
+    Verbose -> verboseCoinDoc net unit time coin
+    -- The table needs the account for the width of its paths: rowsPrinter
+    -- lays it out ('coinRowDoc')
+    Table -> compactCoinDoc net unit time coin
+
+-- | The first line of a coin: the time of the transaction that paid it,
+-- its value, then its state and its confirmations, written by the
+-- function given. The time and the value keep the columns of the first
+-- line of a transaction, so that the values of a listing line up.
+coinLine :: (Natural -> String) -> AmountUnit -> Maybe ZonedTime -> JsonCoin -> Doc Style
+coinLine countText unit time coin =
+  columns
+    [ minuteWord time,
+      amountCell (Just Incoming) "" unit (fromIntegral (jsonCoinValue coin)),
+      commaList [coinState "locked by a pending transaction" coin, confirmations]
+    ]
   where
-    state = case jsonCoinLock of
-      Just LockedByTransaction -> styled Waiting "locked by a pending transaction"
-      Just LockedByUser -> styled Waiting "locked by you"
-      Nothing
-        | jsonCoinSpendable -> styled Good "spendable"
-        | otherwise -> styled Waiting "not spendable yet"
     confirmations
-      | jsonCoinConfirmations == 0 = styled Waiting "unconfirmed"
-      | otherwise = text (confirmationsText jsonCoinConfirmations)
+      | jsonCoinConfirmations coin == 0 = styled Waiting "unconfirmed"
+      | otherwise = text (countText (jsonCoinConfirmations coin))
+
+-- | Whether a coin can be spent now, in the colour of its state: spendable,
+-- locked by a pending transaction or by the user, or waiting for a
+-- confirmation. The words for a coin a pending transaction spends are
+-- given: the compact view spells them out, and the table has little room.
+coinState :: String -> JsonCoin -> Doc Style
+coinState lockedByTransaction coin = case jsonCoinLock coin of
+  Just LockedByTransaction -> styled Waiting lockedByTransaction
+  Just LockedByUser -> styled Waiting "locked by you"
+  Nothing
+    | jsonCoinSpendable coin -> styled Good "spendable"
+    | otherwise -> styled Waiting "not spendable yet"
+
+-- | The address that holds a coin, as both views give it: in full, then
+-- its path, with its label, or the mark of a change address, on the line
+-- below
+coinAddressDoc :: Network -> JsonCoin -> Doc Style
+coinAddressDoc net coin =
+  withNotesBelow
+    (fullAddressWords net (jsonCoinAddress coin) (jsonCoinPath coin))
+    (ownAddressNote (jsonCoinAddressLabel coin) (jsonCoinChange coin))
+
+-- | A coin in three lines: its first line, its confirmations counted up to
+-- 999+, the address that holds it, and the coin itself, as lockcoin and
+-- --coin take it. The address is in full, then its path, and its label
+-- on the line below ('coinAddressDoc'), which makes four lines. It is the
+-- one compact view that gives an address of the wallet in full: what
+-- tells a coin apart is the address that holds it, which another wallet
+-- or a block explorer shows, more than its path. The label of the address
+-- stays, since a user may sort coins by the labels of their addresses.
+-- The label of the transaction that paid the coin says less of the coin,
+-- and only the verbose view gives it.
+compactCoinDoc :: Network -> AmountUnit -> Maybe ZonedTime -> JsonCoin -> Doc Style
+compactCoinDoc net unit time coin =
+  vcat
+    [ coinLine cappedConfirmations unit time coin,
+      indent 2 ("at" <+> coinAddressDoc net coin),
+      indent 2 (styled Muted (coinText (jsonCoinOutpoint coin)))
+    ]
+
+-- | A coin with every detail: its first line, with the full count of its
+-- confirmations, then its fields. The label of its transaction comes
+-- first, as in the verbose view of a transaction, then the coin, the
+-- block that holds it, the time of its transaction to the second with its
+-- time zone, and its address in full with its path. The label of the
+-- address, or the mark of a change address, is on the line below the
+-- address, as in the verbose view of a transaction. An unconfirmed coin
+-- is in no block yet, and shows none.
+verboseCoinDoc :: Network -> AmountUnit -> Maybe ZonedTime -> JsonCoin -> Doc Style
+verboseCoinDoc net unit time coin =
+  vcat $
+    coinLine fullConfirmations unit time coin
+      : ( indent 2
+            <$> [field 7 "Label" <> labelWord label | let label = jsonCoinTxLabel coin, not (Text.null label)]
+              <> [field 7 "Coin" <> text (coinText (jsonCoinOutpoint coin))]
+              <> [field 7 "Block" <> text (show height) | Store.BlockRef height _ <- [jsonCoinBlock coin]]
+              <> [field 7 "Time" <> text (secondText t) | Just t <- [time]]
+              <> [field 7 "Address" <> coinAddressDoc net coin]
+        )
 
 {- Transactions -}
 
--- A transaction shows in one of two views. Both start with the same first
--- line: its time, its type, its amount and where it stands. The compact
--- view then gives the balance after it, in txs, then whom it pays and its
--- hash. The verbose view gives every detail below the first line, as
--- fields.
+-- A transaction shows in one of three views. The compact and the verbose
+-- views start with the same first line: its time, its type, its amount and
+-- where it stands. Only the count of the confirmations differs: the compact
+-- view stops it at 999+, and the verbose view gives it in full. The
+-- compact view then gives the balance after it, in txs, then whom it pays
+-- and its hash. It names an address of the wallet by its path. The
+-- verbose view gives every detail below the first line, as fields, every
+-- address in full. The table gives the first line and the balance, on one
+-- row, in columns under a header, and what the transaction is for
+-- ('purposeCell').
 
 -- | A transaction as a listing shows it, in the view asked for, with its
 -- time in the time zone of the computer. A listing of every account names
@@ -511,6 +625,7 @@ listedTxDoc view net unit accountM balanceM info = do
   return $ case view of
     Compact -> compactTxDoc net unit accountM balanceM time info
     Verbose -> verboseTxDoc net unit [accountField acc | Just acc <- [accountM]] balanceM time info
+    Table -> txRowDoc net unit balanceM time info
 
 -- | The account of a transaction, as a field of the verbose view
 accountField :: DBAccount -> Doc Style
@@ -550,24 +665,31 @@ minuteText = formatTime defaultTimeLocale "%d %b %Y %H:%M"
 minuteWidth :: Natural
 minuteWidth = 17
 
+-- | A time to the minute, as a first line starts with it, in a column of
+-- 'minuteWidth' characters: "31 Oct 2026 09:12", or "time unknown",
+-- faint, when hw does not know the time
+minuteWord :: Maybe ZonedTime -> Doc Style
+minuteWord = maybe (styled Muted (block minuteWidth "time unknown")) (text . minuteText)
+
 -- | A time to the second, with its time zone: "31 Oct 2026 09:12:40 CET"
 secondText :: ZonedTime -> String
 secondText = formatTime defaultTimeLocale "%d %b %Y %H:%M:%S %Z"
 
--- | The first line of a transaction, the same in both views: its time,
--- its type, what it adds to the account or takes from it, fee included,
--- and where it stands. Its columns line up from one transaction to the
--- next.
-headlineDoc :: AmountUnit -> Maybe ZonedTime -> TxInfo -> Doc Style
-headlineDoc unit time (TxInfo summary status _ _) =
+-- | The first line of a transaction: its time, its type, what it adds to
+-- the account or takes from it, fee included, and where it stands. Its
+-- columns line up from one transaction to the next. The function given
+-- writes the confirmations: 'cappedConfirmations' in the compact view,
+-- 'fullConfirmations' in the verbose view.
+headlineDoc :: (Natural -> String) -> AmountUnit -> Maybe ZonedTime -> TxInfo -> Doc Style
+headlineDoc countText unit time (TxInfo summary status _ _) =
   hcat
-    [ maybe (styled Muted (block minuteWidth "time unknown")) (text . minuteText) time,
+    [ minuteWord time,
       "  ",
       text (typeWord (summaryType summary)),
       "  ",
       amountColumn unit (summaryAmount summary),
       "  ",
-      statusWords (summaryFeeByte summary) status
+      statusWords countText (summaryFeeByte summary) status
     ]
 
 -- | The type of a transaction. The three words have the same length,
@@ -588,10 +710,16 @@ typeWidth = 8
 amountColumn :: AmountUnit -> Integer -> Doc Style
 amountColumn unit amnt = amountCell style sign unit amnt
   where
-    (style, sign)
-      | amnt > 0 = (Just Incoming, "+")
-      | amnt < 0 = (Just Outgoing, "")
-      | otherwise = (Nothing, "")
+    (style, sign) = changeSign amnt
+
+-- | The style and the sign before the number of what a transaction adds
+-- to the account or takes from it: green with a plus when it comes in,
+-- red when it goes out, where the number has its minus already
+changeSign :: Integer -> (Maybe Style, String)
+changeSign amnt
+  | amnt > 0 = (Just Incoming, "+")
+  | amnt < 0 = (Just Outgoing, "")
+  | otherwise = (Nothing, "")
 
 -- | An amount in a column: its number after the sign given, right-aligned
 -- in a column wide enough for 9 999 bitcoins in any unit, in the style if
@@ -606,7 +734,14 @@ amountCell style sign unit amnt =
 
 -- | The number of an amount, as it stands in the column of the amounts
 amountNumber :: String -> AmountUnit -> Integer -> Doc Style
-amountNumber sign unit amnt = pretty (rblock 14 (sign <> cs (showAmount unit amnt)))
+amountNumber sign unit amnt = pretty (rblock amountWidth (sign <> cs (showAmount unit amnt)))
+
+-- | The width of the number of an amount in a column: that of 9 999
+-- bitcoins with their sign in any unit, such as "-9999.00000000". More
+-- is rare in a wallet. An amount that does not fit pushes the rest of its
+-- line, rather than every line making room for 21 million bitcoins.
+amountWidth :: Natural
+amountWidth = 14
 
 -- | The balance of the account after a transaction, on the line below its
 -- first line: its word under the type and its number under the amount, so
@@ -628,12 +763,13 @@ balanceLine unit balance =
 -- fee rate, which tells how soon a block may take it: unconfirmed, or in
 -- preparation. One in conflict can no longer be sent, and a dead one was
 -- replaced or dropped from the network: their fee rates no longer matter.
-statusWords :: Natural -> TxStatus -> Doc Style
-statusWords feeByte = \case
+-- The function given writes the confirmations of one in a block.
+statusWords :: (Natural -> String) -> Natural -> TxStatus -> Doc Style
+statusWords countText feeByte = \case
   OnChain status
     | chainDead status -> styled Failure "dead"
     | chainConfirmations status == 0 -> styled Waiting "unconfirmed" <> rate
-    | otherwise -> text (confirmationsText (chainConfirmations status))
+    | otherwise -> text (countText (chainConfirmations status))
   Pending status
     | pendingConflicted status -> styled Failure "conflicted"
     | pendingOnline status -> styled Good "sent" <> rate
@@ -642,8 +778,34 @@ statusWords feeByte = \case
   where
     rate = ", " <> text (show feeByte <> " sat/vB")
 
-confirmationsText :: Natural -> String
-confirmationsText n = counted n "confirmation" "confirmations"
+-- | A number of confirmations in full: "1 confirmation", "1234
+-- confirmations". The verbose views give it, since they give every
+-- detail.
+fullConfirmations :: Natural -> String
+fullConfirmations n = counted n "confirmation" "confirmations"
+
+-- | A number of confirmations up to 999: "1 confirmation", "998
+-- confirmations", and "999+ confirmations" for more. The compact views
+-- give it. Past a few blocks, how many more no longer matters, and a
+-- count that grows without end would push the rest of a line. The
+-- verbose views give the full count, and the JSON answers the number.
+cappedConfirmations :: Natural -> String
+cappedConfirmations n
+  | n > countCap = cappedCount n <> " confirmations"
+  | otherwise = fullConfirmations n
+
+-- | A number up to 'countCap', alone: "998", and "999+" for more. The
+-- table of txs gives the confirmations this way, under a heading that
+-- names them.
+cappedCount :: Natural -> String
+cappedCount n
+  | n > countCap = show countCap <> "+"
+  | otherwise = show n
+
+-- | The largest number of confirmations every view but the verbose one
+-- counts to
+countCap :: Natural
+countCap = 999
 
 -- | A transaction in a few lines: its first line, the balance after it if
 -- the listing gives one, whom it pays, and the hash to name it by. A
@@ -654,7 +816,7 @@ confirmationsText n = counted n "confirmation" "confirmations"
 compactTxDoc :: Network -> AmountUnit -> Maybe DBAccount -> Maybe Integer -> Maybe ZonedTime -> TxInfo -> Doc Style
 compactTxDoc net unit accountM balanceM time info@(TxInfo summary status label _) =
   vcat $
-    [headlineDoc unit time info]
+    [headlineDoc cappedConfirmations unit time info]
       <> [balanceLine unit balance | Just balance <- [balanceM]]
       <> [indent 2 (labelWord label) | not (Text.null label)]
       <> (indent 2 <$> payeeLine net accountM summary)
@@ -664,25 +826,108 @@ compactTxDoc net unit accountM balanceM time info@(TxInfo summary status label _
 -- | Whom a transaction pays, in one line: the largest output of those it
 -- sends to, with its label, and how many more there are. A payment the
 -- wallet receives is paid "at" an address of the wallet, the others "to"
--- an address. The account comes first when the listing has every
--- account's. None for a transaction that pays no address and names no
--- account.
+-- an address. An address of the wallet is named by its path. The account
+-- comes first when the listing has every account's. None for a
+-- transaction that pays no address and names no account.
 payeeLine :: Network -> Maybe DBAccount -> TxSummary -> [Doc Style]
 payeeLine net accountM summary =
   [hcat (intersperse ", " parts) | not (null parts)]
   where
-    parts = ["account" <+> pretty (dBAccountName acc) `withStyle` Account | Just acc <- [accountM]] <> payee
-    payee = case sortOn (Down . txAddressValue) (fst (paidTo summary)) of
-      [] -> []
-      largest : others -> [hsep ([preposition, addressWords largest] <> more others)]
+    parts =
+      ["account" <+> pretty (dBAccountName acc) `withStyle` Account | Just acc <- [accountM]]
+        <> [payeeWords net payee | Just payee <- [mainPayee summary]]
+
+-- | The address a transaction pays the most, with the word before it and
+-- how many other addresses it pays
+data Payee = Payee
+  { -- | "at" for a payment the wallet receives, which it is paid at, and
+    -- "to" for the others
+    payeePreposition :: !Text,
+    payeeRow :: !TxAddress,
+    payeeOthers :: !Int
+  }
+
+-- | The address a transaction pays the most, of those it sends to: the
+-- address of another wallet for a payment, one of the wallet for a
+-- payment received or one between its addresses. None for a transaction
+-- that pays no address.
+mainPayee :: TxSummary -> Maybe Payee
+mainPayee summary =
+  case sortOn (Down . txAddressValue) (fst (paidTo summary)) of
+    [] -> Nothing
+    largest : others -> Just (Payee preposition largest (length others))
+  where
     preposition = if summaryType summary == TxCredit then "at" else "to"
-    more [] = []
-    more others = ["and", text (show (length others)), "more"]
-    addressWords row =
-      hsep $
-        text (addrToString net (txAddress row))
-          : [labelWord label | Just (_, label) <- [txAddressOwn row], not (Text.null label)]
-          <> [changeWord | Just (path, _) <- [txAddressOwn row], isIntPath path]
+
+-- | Whom a transaction pays, as the compact view says it: "at /0/3
+-- \"Rent\"", "to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU and 2 more". An
+-- address of the wallet is named by its path, with its label or the mark
+-- of a change address. The address of another wallet is in full.
+payeeWords :: Network -> Payee -> Doc Style
+payeeWords net (Payee preposition row others) =
+  hsep $ [text (cs preposition), target] <> note <> more
+  where
+    target = case txAddressOwn row of
+      Just (path, _) -> ownPathWord path
+      Nothing -> text (addrToString net (txAddress row))
+    -- A path is short: its label stays on its line
+    note = case txAddressOwn row of
+      Just (path, label) -> ownAddressNote label (isIntPath path)
+      Nothing -> []
+    more = if others > 0 then ["and", text (show others), "more"] else []
+
+{- The addresses of the wallet -}
+
+-- An address of the wallet is blue, with its label ('OwnAddress'), so
+-- that it stands apart from the addresses of others in a transaction, and
+-- so that a label on the line below its address is seen to go with it.
+-- The compact views and the table name it by its derivation path, which is
+-- short and says which address of the account it is. The verbose views
+-- give it in full, with its path: the address is what another wallet or a
+-- block explorer shows. The compact view of a coin does too, since the
+-- address is what tells a coin apart ('compactCoinDoc').
+
+-- | The derivation path of an address of the wallet, in its colour
+ownPathWord :: SoftPath -> Doc Style
+ownPathWord path = styled OwnAddress (pathToStr path)
+
+-- | An address of the wallet in full, in its colour
+ownAddressWord :: Network -> Address -> Doc Style
+ownAddressWord net addr = styled OwnAddress (addrToString net addr)
+
+-- | The label of an address of the wallet, quoted, in the colour of its
+-- address
+ownLabelWord :: Text -> Doc Style
+ownLabelWord = annotate OwnAddress . labelWord
+
+-- | What is said of an address of the wallet after it: its label, quoted,
+-- in the colour of the address, or that it is a change address, which
+-- never has a label. Nothing when it has neither. The flag says whether
+-- to mark a change address: a view that lists change apart says it once.
+ownAddressNote :: Text -> Bool -> [Doc Style]
+ownAddressNote label change =
+  [ownLabelWord label | not (Text.null label)] <> [changeWord | change]
+
+-- | An address of the wallet in full, in its colour, then its derivation
+-- path, if known, faint: the path adds to the address, which is what
+-- another wallet or a block explorer shows
+fullAddressWords :: Network -> Address -> Maybe SoftPath -> Doc Style
+fullAddressWords net addr pathM = columns (ownAddressWord net addr : [trailingPathWord path | Just path <- [pathM]])
+
+-- | The derivation path after an address in full, faint
+trailingPathWord :: SoftPath -> Doc Style
+trailingPathWord = styled Muted . pathToStr
+
+-- | A line that starts with an address in full, and below it, starting
+-- under the address, what is said of the address: its label, or the mark
+-- of a change address ('ownAddressNote'), and what else a view adds, two
+-- spaces apart. After an address in full, a label would push the line far
+-- to the right. On the line below, in the colour of the address, it is
+-- still seen to go with it. A view that names an address by its path
+-- keeps the label on the same line instead, since a path is short
+-- ('payeeWords', 'purposeCell').
+withNotesBelow :: Doc Style -> [Doc Style] -> Doc Style
+withNotesBelow line notes = align (vcat (line : [columns notes | not (null notes)]))
 
 -- | The label of an address or of a transaction, quoted, which sets it
 -- apart on a line. A label may come from a file, so every character that
@@ -699,18 +944,571 @@ hashWord :: TxStatus -> Doc Style
 hashWord (OnChain status) = styled Muted (cs (txHashToHex (chainTxid status)))
 hashWord (Pending status) = styled PendingHash (cs (txHashToHex (pendingShownHash status)))
 
+{- Tables -}
+
+-- accounts, txs, addresses, coins, balances and pendingtxs show each
+-- element on one row with --tabular, in columns, under a header that names
+-- them. The screen reads a listing in
+-- chunks of rows (see "Haskoin.Wallet.Cli.Listing"), and only the first
+-- chunk has the header. A column therefore cannot take the width of its
+-- widest cell: a later chunk would not line up with the first one. Each
+-- column has a width fixed in advance instead, wide enough for nearly
+-- every cell. A cell wider than its column pushes the rest of its row.
+--
+-- A label has no width to fix in advance. It goes in the last column,
+-- which ends the row and pushes nothing, and it is cut to
+-- 'tableLabelLength' characters. The verbose view gives it whole. The
+-- tables of transactions cut their last cell at 'purposeWidth' instead,
+-- the address of another wallet included. An address in a column of
+-- addresses is never cut.
+--
+-- A table has no frame, only lines between the columns and one under the
+-- header. A frame needs a line under the last row, and the screen does not
+-- know which chunk is the last before it shows it.
+
+-- | Which side of its column a cell keeps to: words to the left, numbers
+-- to the right, so that their points line up
+data Side = LeftSide | RightSide
+
+-- | A column of a table: its heading, its width, and the side its cells
+-- keep to. Make one with 'column', which fits the heading in.
+data Column = Column
+  { columnHeading :: !String,
+    columnWidth :: !Natural,
+    columnSide :: !Side
+  }
+
+-- | A column with its heading, as wide as its cells need or as its
+-- heading, whichever is wider. The last column of a table is given no
+-- width of its own: its cells run past its heading.
+column :: String -> Natural -> Side -> Column
+column heading width = Column heading (max width (fromIntegral (length heading)))
+
+-- | The heading of a column of amounts, which names their unit, so that
+-- the cells hold numbers alone: "Amount (btc)", "Amount (sats)". The unit
+-- is in the plural, as an amount of 2 shows it.
+amountHeading :: String -> AmountUnit -> String
+amountHeading name unit = name <> " (" <> cs (showUnit unit 2) <> ")"
+
+-- | How many characters of a label the table of addresses shows at most,
+-- the ellipsis that ends a longer one included. Quoted, a label then takes
+-- 42 characters, as wide as a native SegWit address. The table of txs
+-- cuts its whole last cell instead ('purposeWidth').
+tableLabelLength :: Int
+tableLabelLength = 40
+
+-- | A label as a table shows it: whole, or its first characters and an
+-- ellipsis when it is longer than 'tableLabelLength'
+tableLabel :: Text -> Text
+tableLabel = cutVisible tableLabelLength
+
+-- | A text in the characters given at most: whole, or its first
+-- characters and an ellipsis. The cut is made in the text as the terminal
+-- shows it, escapes included ('visibleText'), so that every character
+-- counts. The ellipsis takes one of the characters, so at least one is
+-- given.
+cutVisible :: Int -> Text -> Text
+cutVisible most label
+  | Text.length shown <= most = shown
+  | otherwise = Text.take (max 0 (most - 1)) shown <> "…"
+  where
+    shown = visibleText label
+
+-- | A part of the text of a cell, with the styles it shows in. A cell
+-- made of pieces can be cut at a number of characters, which a document
+-- cannot.
+data Piece = Piece ![Style] !Text
+
+-- | The characters of pieces
+piecesLength :: [Piece] -> Int
+piecesLength pieces = sum [Text.length t | Piece _ t <- pieces]
+
+-- | Pieces as a document, each in its styles
+piecesDoc :: [Piece] -> Doc Style
+piecesDoc pieces = hcat [foldr annotate (pretty t) styles | Piece styles t <- pieces]
+
+-- | Pieces in the characters given at most: whole, or their first
+-- characters and an ellipsis, which takes one of them
+cutPieces :: Int -> [Piece] -> [Piece]
+cutPieces most pieces
+  | piecesLength pieces <= most = pieces
+  | otherwise = keep (most - 1) pieces <> [Piece [] "…"]
+  where
+    keep _ [] = []
+    keep room (Piece styles t : rest)
+      | room <= 0 = []
+      | Text.length t <= room = Piece styles t : keep (room - Text.length t) rest
+      | otherwise = [Piece styles (Text.take room t)]
+
+-- | A label, quoted, in the characters given at most, quotes included.
+-- A longer label is cut inside its quotes, which then still close it.
+quotedPiece :: [Style] -> Int -> Text -> Piece
+quotedPiece styles most label = Piece styles ("\"" <> cutVisible (most - 2) label <> "\"")
+
+-- | The header of a table: the heading of each column, then a line under
+-- them
+tableHeader :: [Column] -> [Doc Style]
+tableHeader headed =
+  [ tableLine [(headedColumn, styled Field (columnHeading headedColumn)) | headedColumn <- headed],
+    tableRule headed
+  ]
+
+-- | A row of a table: each cell on its side of its column, padded to the
+-- width of the column, and a faint line between two cells. The last cell
+-- gets no padding when it keeps to the left, and an empty one no space
+-- before it either: a line ends without spaces.
+tableLine :: [(Column, Doc Style)] -> Doc Style
+tableLine cells = hcat (zipWith cellAt [1 ..] cells)
+  where
+    cellAt :: Int -> (Column, Doc Style) -> Doc Style
+    cellAt i (cellColumn, doc)
+      | i == 1 = padded i cellColumn doc
+      | i == length cells && null (renderPlain doc) = " " <> bar
+      | otherwise = " " <> bar <> " " <> padded i cellColumn doc
+    bar = styled Muted "│"
+    padded i cellColumn doc =
+      let missing = pretty (replicate (fromIntegral (columnWidth cellColumn) - length (renderPlain doc)) ' ')
+       in case columnSide cellColumn of
+            LeftSide
+              | i == length cells -> doc
+              | otherwise -> doc <> missing
+            RightSide -> missing <> doc
+
+-- | The line under the header of a table: a dash under each character of
+-- the header, and a cross under each line between two columns. A column
+-- has a space on each side of its cells, except on the left of the first
+-- one and on the right of the last one.
+tableRule :: [Column] -> Doc Style
+tableRule headed = styled Muted (intercalate "┼" (zipWith dashes [1 ..] headed))
+  where
+    dashes :: Int -> Column -> String
+    dashes i ruledColumn = replicate (fromIntegral (columnWidth ruledColumn) + spaceBefore i + spaceAfter i) '─'
+    spaceBefore i = if i > 1 then 1 else 0
+    spaceAfter i = if i < length headed then 1 else 0
+
+{- The table of txs -}
+
+-- The last column says what a transaction is for, as a bank statement
+-- does. An address of the wallet is named by its path, which is short,
+-- then the label of the transaction, or else that of the address. The
+-- address of another wallet gives way to the label of the transaction,
+-- since the two would not fit. The cell is cut at 'purposeWidth'
+-- characters, so that no row wraps on a wide screen.
+--
+-- The table leaves out the txid. Its 64 characters would make a row too
+-- wide for most screens, and its first characters alone would name it
+-- nowhere, since no command takes part of a txid. The compact and the
+-- verbose views give it.
+
+-- | The columns of the table of txs
+txColumns :: AmountUnit -> [Column]
+txColumns unit =
+  [ column "Time" minuteWidth LeftSide,
+    column "Type" typeWidth LeftSide,
+    column (amountHeading "Amount" unit) amountWidth RightSide,
+    column (amountHeading "Balance" unit) amountWidth RightSide,
+    -- Its cells take four characters at most, "999+" and "dead": the
+    -- heading sets its width
+    column "Confs" 4 RightSide,
+    column "Description" 0 LeftSide
+  ]
+
+-- | The confirmations of a transaction, as a number alone in its column of
+-- the table, up to "999+". An unconfirmed transaction has 0, in the
+-- colour of what waits. It gives no fee rate, which would not fit. The
+-- compact view gives it. A dead transaction says it is dead: it will
+-- never confirm, and a count would hide that. txs lists no transaction in
+-- preparation, but one would say how far it got, in the words of the
+-- compact view, as short as they go.
+tableConfirmations :: TxStatus -> Doc Style
+tableConfirmations = \case
+  OnChain status
+    | chainDead status -> styled Failure "dead"
+    | otherwise -> confsCell (chainConfirmations status)
+  Pending status -> pendingStatusWord status
+
+-- | A number of confirmations in a column of a table, up to "999+". None
+-- is 0, in the colour of what waits.
+confsCell :: Natural -> Doc Style
+confsCell 0 = styled Waiting "0"
+confsCell n = text (cappedCount n)
+
+-- | How far a transaction in preparation got, in the words of the compact
+-- view, as short as they go: not signed, signed, sent, or conflicted
+pendingStatusWord :: PendingStatus -> Doc Style
+pendingStatusWord status
+  | pendingConflicted status = styled Failure "conflicted"
+  | pendingOnline status = styled Good "sent"
+  | pendingSigned status = styled Waiting "signed"
+  | otherwise = styled Waiting "not signed"
+
+-- | The time of a transaction in a column of a table, to the minute
+timeCell :: Maybe ZonedTime -> Doc Style
+timeCell = maybe (styled Muted "time unknown") (text . minuteText)
+
+-- | What a transaction adds to the account or takes from it, as a number
+-- in a column of a table, with its sign and its colour
+signedAmountCell :: AmountUnit -> Integer -> Doc Style
+signedAmountCell unit amount = maybe id annotate style (text (sign <> cs (showAmount unit amount)))
+  where
+    (style, sign) = changeSign amount
+
+-- | The header of the table of txs
+txTableHeader :: AmountUnit -> [Doc Style]
+txTableHeader = tableHeader . txColumns
+
+-- | A transaction on one row of the table of txs: its time, its type, its
+-- amount, the balance after it and its confirmations, each in its column,
+-- then what it is for ('purposeCell'). The amount has its sign and its
+-- colour, as on the first line of the compact view. A dead transaction leaves its balance empty, since
+-- the balance does not count it. The table lists one account, so no row
+-- names its account.
+txRowDoc :: Network -> AmountUnit -> Maybe Integer -> Maybe ZonedTime -> TxInfo -> Doc Style
+txRowDoc net unit balanceM time (TxInfo summary status label _) =
+  tableLine (zip (txColumns unit) cells)
+  where
+    cells =
+      [ timeCell time,
+        text (typeWord (summaryType summary)),
+        signedAmountCell unit (summaryAmount summary),
+        maybe mempty (text . cs . showAmount unit) balanceM,
+        tableConfirmations status,
+        purposeCell net label summary
+      ]
+
+-- | The most characters of the last cell of the tables of transactions.
+-- A row of txs then takes 123 at most: 73 before the cell, and the cell.
+purposeWidth :: Int
+purposeWidth = 50
+
+-- | What a transaction is for, as the last cell of the table of txs says
+-- it, in 'purposeWidth' characters at most. A payment received, or one
+-- between the addresses of the wallet, gives the path of the address it
+-- pays the most, then the label of the transaction, or else the label of
+-- that address, or else that it is a change address: "at /0/3
+-- \"Salary\"". A payment gives its label alone, or else the address of
+-- the other wallet it pays the most: "to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU".
+-- Either tells how many other addresses it pays. A label too long for the
+-- cell is cut inside its quotes, and anything else too long is cut at the
+-- end, an ellipsis showing the cut.
+purposeCell :: Network -> Text -> TxSummary -> Doc Style
+purposeCell net label summary = piecesDoc (cutPieces purposeWidth pieces)
+  where
+    pieces = case mainPayee summary of
+      Just payee
+        | isJust (txAddressOwn (payeeRow payee)) || Text.null label -> payeePieces payee
+      _ -> [quotedPiece [UserText] purposeWidth label | not (Text.null label)]
+    payeePieces (Payee preposition row others) =
+      let before = [Piece [] (preposition <> " "), target row]
+          after = [Piece [] (" and " <> cs (show others) <> " more") | others > 0]
+          -- What the label may take: the cell, but for the rest and the
+          -- space before the label
+          room = purposeWidth - piecesLength (before <> after) - 1
+       in before <> concat [[Piece [] " ", note] | Just note <- [noteOf room row]] <> after
+    target row = case txAddressOwn row of
+      Just (path, _) -> Piece [OwnAddress] (cs (pathToStr path))
+      Nothing -> Piece [] (cs (addrToString net (txAddress row)))
+    noteOf room row = case txAddressOwn row of
+      Just (path, ownLabel)
+        | not (Text.null label) -> Just (quotedPiece [UserText] room label)
+        | not (Text.null ownLabel) -> Just (quotedPiece [OwnAddress, UserText] room ownLabel)
+        | isIntPath path -> Just (Piece [Muted] "change address")
+      _ -> Nothing
+
+{- The table of addresses -}
+
+-- The table of addresses gives what the compact view gives: the path, the
+-- address, what it can spend, what it received and in how many
+-- transactions, then its label. addresses lists the receiving addresses
+-- or the change addresses, never both at once. A change address never
+-- has a label, so the table of change addresses has no column for one.
+
+-- | The columns of the table of the addresses of the account, on its
+-- receiving chain or on its change chain. The path takes the width given,
+-- that of the longest path of the account on the chain
+-- ('longestPathWidth'), and the address that of the widest address the
+-- account can have ('addressWidth').
+addressTableColumns :: AmountUnit -> DBAccount -> Natural -> Bool -> [Column]
+addressTableColumns unit acc pad internal =
+  [ column "Path" pad LeftSide,
+    column "Address" (addressWidth acc) LeftSide,
+    column (amountHeading "Spendable" unit) amountWidth RightSide,
+    column (amountHeading "Received" unit) amountWidth RightSide,
+    column "Txs" txCountWidth RightSide
+  ]
+    <> [column "Label" 0 LeftSide | not internal]
+
+-- | The width of the column of the numbers of transactions: that of
+-- 99 999 transactions. An address used that often is rare: hw gives out a
+-- new address for each payment.
+txCountWidth :: Natural
+txCountWidth = 5
+
+-- | The width of the widest address the account can have. Its addresses
+-- are all of its kind, and bech32 and cashaddr write every address of a
+-- kind with as many characters. Base58, which writes the P2PKH addresses
+-- of Bitcoin, writes a hash shorter when its first bits are zero. A hash of
+-- all ones takes the most characters, so its address is the widest.
+addressWidth :: DBAccount -> Natural
+addressWidth acc = fromIntegral (length (addrToString (accountNetwork acc) widest))
+  where
+    widest = case accountKind acc of
+      Bip44 -> PubKeyAddress allOnes
+      Bip84 -> WitnessPubKeyAddress allOnes
+    allOnes = "ffffffffffffffffffffffffffffffffffffffff"
+
+-- | An address on one row of its table, under the columns given: its
+-- path, the address, what it can spend now and what it received, in green
+-- unless zero, in how many transactions, then its label. An address no
+-- transaction paid leaves its amounts empty, which sets it apart from one
+-- that was paid and spent everything.
+addressRowDoc :: AmountUnit -> [Column] -> DBAddress -> Word64 -> Doc Style
+addressRowDoc unit headed addr spendable =
+  tableLine (zip headed cells)
+  where
+    used = dBAddressBalanceTxs addr > 0
+    cells =
+      [ text (cs (pathText (addrPath addr))),
+        pretty (dBAddressAddress addr),
+        if used then heldAmountCell unit spendable else mempty,
+        if used then heldAmountCell unit (dBAddressBalanceReceived addr) else mempty,
+        text (show (dBAddressBalanceTxs addr))
+      ]
+        <> [labelCell | not (dBAddressInternal addr)]
+    labelCell
+      | Text.null (dBAddressLabel addr) = mempty
+      | otherwise = labelWord (tableLabel (dBAddressLabel addr))
+
+-- | An amount the wallet holds, as a number in a column of a table: green,
+-- unless it is zero
+heldAmountCell :: AmountUnit -> Word64 -> Doc Style
+heldAmountCell unit amnt = (if amnt > 0 then annotate Incoming else id) (text (cs (showAmount unit (fromIntegral amnt))))
+
+{- The table of accounts -}
+
+-- The table of accounts gives what the compact view gives: the name, the
+-- network and the derivation path, what the account can spend, what is
+-- unconfirmed, and how many coins it holds. The fingerprint and the
+-- addresses are for the verbose view.
+--
+-- The listing of accounts is read whole ('listingWhole'), so its first
+-- column takes the width of the longest name, and no name is cut: the name
+-- is what the table lists, and what --account takes.
+
+-- | The columns of the table of accounts, the first as wide as the
+-- longest of the names given. The other widths depend on nothing the
+-- listing holds.
+accountTableColumns :: AmountUnit -> [DBAccount] -> [Column]
+accountTableColumns unit accs =
+  [ column "Account" nameWidth LeftSide,
+    column "Network" networkWidth LeftSide,
+    column "Path" accountPathWidth LeftSide,
+    column (amountHeading "Spendable" unit) amountWidth RightSide,
+    column (amountHeading "Unconfirmed" unit) amountWidth RightSide,
+    -- The heading sets the width: 99 999 coins
+    column "Coins" 1 RightSide
+  ]
+  where
+    -- As the terminal shows the names, escapes included
+    nameWidth = fromIntegral (maximum (0 : [Text.length (visibleText (dBAccountName acc)) | acc <- accs]))
+
+-- | The width of the column of networks: that of the longest name of the
+-- networks hw knows, such as "btctest4"
+networkWidth :: Natural
+networkWidth = fromIntegral (maximum [length net.name | net <- allNets])
+
+-- | The width of the column of the derivation paths of accounts: that of
+-- "/44'/145'/0'", the first account of Bitcoin Cash. An account further
+-- down a seed has a longer path, which pushes the rest of its row.
+accountPathWidth :: Natural
+accountPathWidth = 12
+
+-- | An account on one row of its table, under the columns given: its
+-- name, bold and whole, its network and its derivation path, then what it
+-- can spend now and what is unconfirmed, in green unless zero, and how
+-- many coins it holds
+accountRowDoc :: AmountUnit -> [Column] -> DBAccount -> Word64 -> Doc Style
+accountRowDoc unit headed acc spendable =
+  tableLine . zip headed $
+    [ styled Account (cs (visibleText (dBAccountName acc))),
+      text (accountNetwork acc).name,
+      text (pathToStr (accountPath acc)),
+      heldAmountCell unit spendable,
+      heldAmountCell unit (dBAccountBalanceUnconfirmed acc),
+      text (show (dBAccountBalanceCoins acc))
+    ]
+
+-- | The name of an account in the table of pending transactions, bold, in
+-- 'accountCellWidth' characters at most. A longer name is cut, with an
+-- ellipsis: that listing comes in chunks, so the widths of its columns are
+-- fixed in advance.
+accountCell :: DBAccount -> Doc Style
+accountCell acc = styled Account (cs (cutVisible (fromIntegral accountCellWidth) (dBAccountName acc)))
+
+{- The table of coins -}
+
+-- The table of coins gives what the compact view gives, but the coin
+-- itself: the time of the transaction that paid the coin, its value, its
+-- state, its confirmations, the address that holds it in full with its
+-- path, and the label of the address. The coin, TXID:INDEX, takes 66
+-- characters at least, which would make a row too wide. The compact view
+-- gives it, as lockcoin and --coin take it.
+
+-- | The columns of the table of coins. The address takes the width of
+-- the widest address the account can have ('addressWidth'), and the path
+-- the width given, that of the longest path of the account on its two
+-- chains, since coins lists the coins of both.
+coinTableColumns :: AmountUnit -> DBAccount -> Natural -> [Column]
+coinTableColumns unit acc pad =
+  [ column "Time" minuteWidth LeftSide,
+    column (amountHeading "Value" unit) amountWidth RightSide,
+    column "State" coinStateWidth LeftSide,
+    column "Confs" 4 RightSide,
+    column "Address" (addressWidth acc) LeftSide,
+    column "Path" pad LeftSide,
+    column "Label" 0 LeftSide
+  ]
+
+-- | The width of the column of the states of coins: that of "not
+-- spendable yet", the longest
+coinStateWidth :: Natural
+coinStateWidth = 17
+
+-- | A coin on one row of its table, under the columns given: the time of
+-- the transaction that paid it, its value in green, its state, with
+-- "locked by tx" for a coin a pending transaction spends, its
+-- confirmations, the address in the colour of the wallet's addresses, its
+-- path, faint, then the label of the address in that colour, or that it
+-- is a change address. The address and its label share a colour, as in
+-- the compact view.
+coinRowDoc :: Network -> AmountUnit -> [Column] -> Maybe ZonedTime -> JsonCoin -> Doc Style
+coinRowDoc net unit headed time coin =
+  tableLine $
+    zip
+      headed
+      [ timeCell time,
+        heldAmountCell unit (jsonCoinValue coin),
+        coinState "locked by tx" coin,
+        confsCell (jsonCoinConfirmations coin),
+        ownAddressWord net (jsonCoinAddress coin),
+        maybe mempty trailingPathWord (jsonCoinPath coin),
+        -- The label has a column of its own
+        hsep (ownAddressNote (tableLabel (jsonCoinAddressLabel coin)) (jsonCoinChange coin))
+      ]
+
+{- The table of balances -}
+
+-- The table of balances gives what the compact view gives: the path, the
+-- address, its three amounts, and its label, or that it is a change
+-- address. balances lists the addresses of both chains together.
+
+-- | The columns of the table of balances. The path takes the width given,
+-- that of the longest path of the account on its two chains, and the
+-- address that of the widest address the account can have.
+balanceTableColumns :: AmountUnit -> DBAccount -> Natural -> [Column]
+balanceTableColumns unit acc pad =
+  [ column "Path" pad LeftSide,
+    column "Address" (addressWidth acc) LeftSide,
+    column (amountHeading "Total" unit) amountWidth RightSide,
+    column (amountHeading "Spendable" unit) amountWidth RightSide,
+    column (amountHeading "Unspendable" unit) amountWidth RightSide,
+    column "Label" 0 LeftSide
+  ]
+
+-- | An address on one row of the table of balances, under the columns
+-- given: its path, the address, the value of its coins and what it can
+-- spend, in green unless zero, the rest in yellow unless zero, then its
+-- label, or that it is a change address
+balanceRowDoc :: AmountUnit -> [Column] -> DBAddress -> CoinBalance -> Doc Style
+balanceRowDoc unit headed addr balance =
+  tableLine $
+    zip
+      headed
+      [ text (cs (pathText (addrPath addr))),
+        pretty (dBAddressAddress addr),
+        heldAmountCell unit (coinBalanceTotal balance),
+        heldAmountCell unit (coinBalanceSpendable balance),
+        (if unspendable > 0 then annotate Waiting else id) (text (cs (showAmount unit (fromIntegral unspendable)))),
+        labelCell
+      ]
+  where
+    unspendable = coinBalanceUnspendable balance
+    labelCell
+      | not (Text.null (dBAddressLabel addr)) = labelWord (tableLabel (dBAddressLabel addr))
+      | dBAddressInternal addr = changeWord
+      | otherwise = mempty
+
+{- The table of pending transactions -}
+
+-- The table of pending transactions gives what the compact view gives,
+-- but the hash: the time it was created, its type, its amount, how far it
+-- got, its fee rate, and what it is for, as the table of txs says it. A
+-- listing of every account names the account of each in a first column.
+-- The hash, which the other commands take, would make a row too wide. The
+-- compact view gives it.
+
+-- | The columns of the table of pending transactions, with a column of
+-- accounts first when the listing has every account's
+pendingTableColumns :: AmountUnit -> Bool -> [Column]
+pendingTableColumns unit named =
+  [column "Account" accountCellWidth LeftSide | named]
+    <> [ column "Time" minuteWidth LeftSide,
+         column "Type" typeWidth LeftSide,
+         column (amountHeading "Amount" unit) amountWidth RightSide,
+         column "Status" pendingStatusWidth LeftSide,
+         -- The fee rate has a few digits: the heading sets the width
+         column "sat/vB" 1 RightSide,
+         column "Description" 0 LeftSide
+       ]
+
+-- | The width of the column of accounts in the table of pending
+-- transactions. A name is the user's choice, of any length, so a longer
+-- one is cut, with an ellipsis ('accountCell').
+accountCellWidth :: Natural
+accountCellWidth = 12
+
+-- | The width of the column of the statuses of pending transactions: that
+-- of "not signed" and "conflicted", the longest
+pendingStatusWidth :: Natural
+pendingStatusWidth = 10
+
+-- | A pending transaction on one row of its table, under the columns
+-- given: its account when given, the time it was created, its type, its
+-- amount, how far it got, its fee rate, and what it is for
+-- ('purposeCell'). One in conflict can no longer be sent: its fee rate no
+-- longer matters, and its cell is empty.
+pendingRowDoc :: Network -> AmountUnit -> [Column] -> Maybe DBAccount -> Maybe ZonedTime -> TxInfo -> Doc Style
+pendingRowDoc net unit headed accountM time (TxInfo summary status label _) =
+  tableLine . zip headed $
+    [accountCell acc | Just acc <- [accountM]]
+      <> [ timeCell time,
+           text (typeWord (summaryType summary)),
+           signedAmountCell unit (summaryAmount summary),
+           statusCell,
+           rateCell,
+           purposeCell net label summary
+         ]
+  where
+    -- pendingtxs lists the transactions in preparation only
+    (statusCell, rateCell) = case status of
+      Pending pending
+        | pendingConflicted pending -> (pendingStatusWord pending, mempty)
+        | otherwise -> (pendingStatusWord pending, text (show (summaryFeeByte summary)))
+      OnChain _ -> (tableConfirmations status, mempty)
+
 -- | A transaction with every detail: its first line, then its fields. The
 -- lines given come first: its account in a listing of every account, or
 -- its network in an answer. Its label, if any, follows them. The balance
 -- after it, if the listing gives one, follows its fee. Every address
--- it spends from or pays is on a line of its own, with its value, and those
--- of the wallet with their paths and labels, in columns. An address of the
--- wallet it spends from ends with the labels its coins show, if any. A
--- change address is marked as one, except under Change, which says it.
+-- it spends from or pays is on a line of its own, in full, with its value,
+-- and those of the wallet with their paths, in columns. Below an address
+-- of the wallet, its label, and for one it spends from, the labels its
+-- coins show, if any ('addressRow'). A change address is marked as one,
+-- except under Change, which says it.
 verboseTxDoc :: Network -> AmountUnit -> [Doc Style] -> Maybe Integer -> Maybe ZonedTime -> TxInfo -> Doc Style
 verboseTxDoc net unit named balanceM time info@(TxInfo summary status label inputLabels) =
   vcat $
-    headlineDoc unit time info
+    headlineDoc fullConfirmations unit time info
       : ( indent 2
             <$> named
               <> [field 9 "Label" <> labelWord label | not (Text.null label)]
@@ -842,32 +1640,40 @@ addressColumns net unit rows =
 valueText :: AmountUnit -> Natural -> String
 valueText unit v = cs (showAmount unit (fromIntegral v) <> " " <> showUnit unit (fromIntegral v))
 
--- | An address of a transaction on one line: the address, its value
--- right-aligned, then for an address of the wallet, its path and its
--- label, or that it is a change address when marked, then the labels its
--- coins show, after the word "from". The value of an address of the
--- wallet is in the style given.
+-- | An address of a transaction: the address, its value right-aligned,
+-- then for an address of the wallet, its path. Below them, on a line that
+-- starts under the address, an address of the wallet has its label, or
+-- that it is a change address when marked, then the labels its coins
+-- show, after the word "from". The line below keeps the columns of
+-- addresses lined up, however long the labels. An address of the wallet
+-- and its label are in its colour, and its value in the style given.
 addressRow :: Network -> AmountUnit -> AddressColumns -> Maybe Style -> Bool -> TxAddress -> Doc Style
 addressRow net unit widths ownStyle marked row =
-  cellsLine $
-    [(addressColumn widths, address, text address)]
-      <> [(valueColumn widths, value, valueDoc value) | Just v <- [txAddressValue row], let value = valueText unit v]
-      <> case txAddressOwn row of
-        Just (path, label) ->
-          (pathColumn widths, pathToStr path, styled Muted (pathToStr path))
-            : [(0, "", labelWord label) | not (Text.null label)]
-            <> [(0, "", changeWord) | marked, isIntPath path]
-            <> [(0, "", styled Muted "from" <+> commaList (labelWord <$> spentLabels)) | let spentLabels = txAddressCoinLabels row, not (null spentLabels)]
-        Nothing -> []
+  withNotesBelow (cellsLine firstLine) notes
   where
+    firstLine =
+      [(addressColumn widths, address, addressDoc)]
+        <> [(valueColumn widths, padding value <> value, valueDoc value) | Just v <- [txAddressValue row], let value = valueText unit v]
+        <> [(pathColumn widths, pathToStr path, trailingPathWord path) | Just (path, _) <- [txAddressOwn row]]
+    notes = case txAddressOwn row of
+      Just (path, label) ->
+        ownAddressNote label (marked && isIntPath path)
+          <> [styled Muted "from" <+> commaList (labelWord <$> spentLabels) | let spentLabels = txAddressCoinLabels row, not (null spentLabels)]
+      Nothing -> []
     address = addrToString net (txAddress row)
+    addressDoc = if isJust (txAddressOwn row) then styled OwnAddress address else text address
     style = if isJust (txAddressOwn row) then ownStyle else Nothing
-    -- Right-aligned, so that the points line up
-    valueDoc value = pretty (replicate (valueColumn widths - length value) ' ') <> maybe id annotate style (pretty value)
+    -- Right-aligned, so that the points line up. The text of the cell
+    -- holds the spaces before the value, so that 'cellsLine' adds none
+    -- after it, and the paths line up too.
+    padding value = replicate (valueColumn widths - length value) ' '
+    valueDoc value = pretty (padding value) <> maybe id annotate style (pretty value)
 
 -- | Cells side by side, two spaces apart, each with the width of its
 -- column and its text. Each is padded to the width of its column, but the
--- last: a line ends without spaces. A right-aligned cell comes padded.
+-- last: a line ends without spaces. A right-aligned cell comes padded on
+-- its left, and its text holds that padding, so that it gets none on its
+-- right.
 cellsLine :: [(Int, String, Doc Style)] -> Doc Style
 cellsLine cells = hcat (intersperse "  " (padded cells))
   where
@@ -972,7 +1778,7 @@ addedCoinsDoc net unit labels feeByte added =
   where
     them = if length added == 1 then "this coin" else "these coins"
     header = sentence $ wordsOf "The coins of the transaction cannot pay its fee at" <> [rateDoc feeByte <> ","] <> wordsOf ("and " <> them <> " of the account would:")
-    held addr path = columns ["at" <+> text (addrToString net addr), styled Muted (pathToStr path)]
+    held addr path = "at" <+> fullAddressWords net addr (Just path)
 
 -- | What bumpfee says of the ways the recipients can pay, those of
 -- 'reductions', before it asks which: each recipient, numbered when there
@@ -1170,43 +1976,83 @@ errorDoc err = styled Failure "Error:" <+> pretty err
 data Rows = Rows
   { -- | What to say when the listing has no row at all
     rowsNone :: Doc Style,
+    -- | The lines above the first row: the header of a table. Only the
+    -- first chunk of a listing shows them.
+    rowsHeader :: [Doc Style],
     -- | A document per row
     rowsDocs :: [Doc Style],
     -- | Whether a blank line sets the rows apart
     rowsApart :: Bool
   }
 
+-- | The rows of a listing whose elements take a few lines each: no
+-- header, and a blank line between two elements
+apartRows :: Doc Style -> [Doc Style] -> Rows
+apartRows none docs = Rows none [] docs True
+
 -- | The rows of an answer that lists, or Nothing for an answer that does
--- not, a blank line between them. The screen reads a listing in chunks,
--- so the paths of its addresses are padded to the longest path of the
--- account on the chains listed, the same for every chunk, rather than to
--- the longest one shown. The accounts, addresses and transactions show in
--- the view given, their times in the time zone of the computer.
+-- not, a blank line between them. A table, of txs or of addresses, has a
+-- header instead, and a row under the other. The screen reads a listing in chunks, so the
+-- paths of its addresses are padded to the longest path of the account on
+-- the chains listed, the same for every chunk, rather than to the longest
+-- one shown. The columns of the table have fixed widths for the same
+-- reason. The accounts, addresses, transactions and coins show in the view
+-- given, their times in the time zone of the computer.
 rowsPrinter :: AmountUnit -> View -> Response -> IO (Maybe Rows)
 rowsPrinter unit view = \case
   ResponseAccounts accs -> do
-    docs <- mapM (uncurry (listedAccountDoc view unit)) accs
-    return . Just $ Rows (text "There are no accounts to display") docs True
+    let none = text "There are no accounts to display"
+        -- The listing is read whole: these are all the accounts
+        headed = accountTableColumns unit (fst <$> accs)
+    if view == Table
+      then return . Just $ Rows none (tableHeader headed) (uncurry (accountRowDoc unit headed) <$> accs) False
+      else Just . apartRows none <$> mapM (uncurry (listedAccountDoc view unit)) accs
   ResponseAddresses acc addrs -> do
-    let pad = longestPathWidth acc (nub (dBAddressInternal . fst <$> addrs))
-    docs <- mapM (uncurry (listedAddressDoc view unit pad)) addrs
-    return . Just $ Rows (text "There are no addresses to display") docs True
+    let none = text "There are no addresses to display"
+        pad = longestPathWidth acc (nub (dBAddressInternal . fst <$> addrs))
+        -- addresses lists the addresses of one chain
+        internal = any (dBAddressInternal . fst) addrs
+        headed = addressTableColumns unit acc pad internal
+    if view == Table
+      then return . Just $ Rows none (tableHeader headed) (uncurry (addressRowDoc unit headed) <$> addrs) False
+      else Just . apartRows none <$> mapM (uncurry (listedAddressDoc view unit pad)) addrs
   ResponseBalances acc addrs ->
-    let pad = longestPathWidth acc [False, True]
-     in return . Just $ Rows (text "There are no addresses with coins to display") (uncurry (coinBalanceDoc unit pad) <$> addrs) True
+    let none = text "There are no addresses with coins to display"
+        pad = longestPathWidth acc [False, True]
+        headed = balanceTableColumns unit acc pad
+     in return . Just $
+          if view == Table
+            then Rows none (tableHeader headed) (uncurry (balanceRowDoc unit headed) <$> addrs) False
+            else apartRows none (uncurry (listedBalanceDoc view unit pad) <$> addrs)
   ResponseTxs acc txs -> do
     docs <- mapM (\(ListedTx info balanceM) -> listedTxDoc view (accountNetwork acc) unit Nothing balanceM info) txs
-    return . Just $ Rows (text "There are no transactions to display") docs True
+    let none = text "There are no transactions to display"
+    return . Just $
+      if view == Table
+        then Rows none (txTableHeader unit) docs False
+        else apartRows none docs
   -- Listing every account, each transaction names its own
   ResponsePendingTxs asked held -> do
     let none = case asked of
           Just acc -> "There are no pending transactions in the account " <> cs (dBAccountName acc)
           Nothing -> "There are no pending transactions"
         named acc = if isNothing asked then Just acc else Nothing
-    docs <- mapM (\(acc, info) -> listedTxDoc view (accountNetwork acc) unit (named acc) Nothing info) held
-    return . Just $ Rows (text none) docs True
-  ResponseCoins acc coins ->
-    return . Just $ Rows (text "There are no coins to display") (coinDoc (accountNetwork acc) unit <$> coins) True
+        headed = pendingTableColumns unit (isNothing asked)
+    if view == Table
+      then do
+        rows <- mapM (\(acc, info) -> pendingRowDoc (accountNetwork acc) unit headed (named acc) <$> localTxTime info <*> pure info) held
+        return . Just $ Rows (text none) (tableHeader headed) rows False
+      else do
+        docs <- mapM (\(acc, info) -> listedTxDoc view (accountNetwork acc) unit (named acc) Nothing info) held
+        return . Just $ apartRows (text none) docs
+  ResponseCoins acc coins -> do
+    let none = text "There are no coins to display"
+        headed = coinTableColumns unit acc (longestPathWidth acc [False, True])
+    if view == Table
+      then do
+        rows <- mapM (\coin -> coinRowDoc (accountNetwork acc) unit headed <$> traverse utcToLocalZonedTime (jsonCoinTime coin) <*> pure coin) coins
+        return . Just $ Rows none (tableHeader headed) rows False
+      else Just . apartRows none <$> mapM (listedCoinDoc view (accountNetwork acc) unit) coins
   _ -> return Nothing
 
 -- | The width of the longest derivation path of the account on the
@@ -1219,22 +2065,30 @@ longestPathWidth acc chains = fromIntegral $ maximum (0 : (width <$> chains))
       let count = if internal then dBAccountInternal acc else dBAccountExternal acc
        in if count == 0 then 0 else Text.length (pathText (chainPath internal (count - 1)))
 
--- | A whole listing: its rows, or what to say when it has none
+-- | A whole listing: its header and its rows, or what to say when it has
+-- no row
 listingDoc :: Rows -> Doc Style
-listingDoc (Rows none [] _) = none
-listingDoc (Rows _ docs apart) = vcat (if apart then intersperse mempty docs else docs)
+listingDoc rows
+  | null (rowsDocs rows) = rowsNone rows
+  | otherwise = vcat (rowsHeader rows <> [rowsBody rows])
+
+-- | The rows of a listing alone, without its header
+rowsBody :: Rows -> Doc Style
+rowsBody rows = vcat (if rowsApart rows then intersperse mempty (rowsDocs rows) else rowsDocs rows)
 
 -- | A chunk of a listing, the first one or a later one. The first chunk
--- of a listing without rows says so. A later chunk of a listing whose
--- rows are set apart starts with the blank line that sets it apart from
--- the chunk before. An answer that is not a listing is a failure here.
+-- of a listing without rows says so. The first chunk has the header of
+-- the listing, if any, and a later one goes on under the rows before it.
+-- A later chunk of a listing whose rows are set apart starts with the
+-- blank line that sets it apart from the chunk before. An answer that is
+-- not a listing is a failure here.
 chunkDoc :: AmountUnit -> View -> Bool -> Response -> IO (Doc Style)
 chunkDoc unit view first answer = do
   rowsM <- rowsPrinter unit view answer
   return $ case rowsM of
     Just rows
       | first -> listingDoc rows
-      | otherwise -> vcat ([mempty | rowsApart rows] <> [listingDoc rows])
+      | otherwise -> vcat ([mempty | rowsApart rows] <> [rowsBody rows])
     Nothing -> case answer of
       ResponseError err -> errorDoc err
       _ -> errorDoc "The answer is not a listing"

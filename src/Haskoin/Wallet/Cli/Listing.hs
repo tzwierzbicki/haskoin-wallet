@@ -8,6 +8,11 @@
 -- cursor: what orders the listing, taken from the row before it. A script
 -- reads a listing the same way with --after and --max, which name the row
 -- to start after and how many rows to read.
+--
+-- A listing of few rows, which reads all of them for any chunk anyway, is
+-- read whole instead, in one chunk ('listingWhole'). Its table can then
+-- size a column to its widest cell, which a listing in chunks cannot: a
+-- later chunk would not line up with the first. accounts is read so.
 module Haskoin.Wallet.Cli.Listing
   ( Paging (..),
     Listing (..),
@@ -52,7 +57,9 @@ data Listing = forall cursor row.
     listingCursor :: row -> Either String cursor,
     -- | The rows as the answer of the command: every row for --json, a
     -- chunk of them for the screen
-    listingAnswer :: [row] -> Response
+    listingAnswer :: [row] -> Response,
+    -- | Whether the screen reads every row in one chunk, as the first one
+    listingWhole :: Bool
   }
 
 -- | How many rows a chunk of the screen holds: more than a screen shows,
@@ -65,7 +72,7 @@ chunkRows = 100
 readListing :: Config -> ExceptT String (DB IO) Listing -> IO Response
 readListing cfg build = do
   result <- readOnce cfg $ do
-    Listing start most rows _ answer <- build
+    Listing start most rows _ answer _ <- build
     answer <$> rows start most
   return $ either (ResponseError . cs) id result
 
@@ -74,13 +81,19 @@ readListing cfg build = do
 -- chunk apart: an empty first chunk is an empty listing. The reading stops
 -- when the rows run out, when --max rows were read, or when the action
 -- answers False, as it does once the pager is closed. An empty chunk after
--- the first one is not passed on.
+-- the first one is not passed on. A listing read whole is passed on as one
+-- first chunk, however many rows it has.
 streamListing :: Config -> ExceptT String (DB IO) Listing -> (Bool -> Response -> IO Bool) -> IO (Either String ())
 streamListing cfg build onChunk = do
   built <- readOnce cfg build
   case built of
     Left err -> return (Left err)
-    Right (Listing start most rows cursorOf answer) -> do
+    Right (Listing start most rows _ answer True) -> do
+      whole <- readOnce cfg (rows start most)
+      case whole of
+        Left err -> return (Left err)
+        Right found -> Right () <$ onChunk True (answer found)
+    Right (Listing start most rows cursorOf answer False) -> do
       let chunk first cursor left = do
             let count = maybe chunkRows (min chunkRows) left
             got <- readOnce cfg (rows cursor (Just count))

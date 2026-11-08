@@ -815,6 +815,13 @@ coinLabels net accId tids = do
   labelled <- forM (nubOrd tids) $ \tid -> (,) tid <$> coinLabel net accId tid
   return $ Map.fromList [(tid, label) | (tid, label) <- labelled, not (Text.null label)]
 
+-- | The time of a transaction of the account: when the store first saw
+-- it, as the history of the account holds it. A coin shows the time of
+-- the transaction that paid it, as a transaction shows its own. None when
+-- the store gave no time, or when the account has no such transaction.
+transactionTime :: (MonadUnliftIO m) => DBAccountId -> TxHash -> DB m (Maybe UTCTime)
+transactionTime accId tid = (dBTxInfoTime =<<) <$> P.get (DBTxInfoKey accId (hashBytes tid))
+
 -- | The transaction with the labels of the account's addresses, those it
 -- spends from and those it pays, as the function gives them from the
 -- database

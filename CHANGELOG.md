@@ -97,7 +97,15 @@ Using `hw`:
   The commands that take a secret and need no server are marked.
 - Listings show a compact view, and `--verbose` shows every detail. On a
   terminal they go through a pager.
+- The compact views count the confirmations up to `999+ confirmations`.
+  `--verbose` and the JSON answers give the full count.
+- Transactions name the addresses of the wallet by their derivation path, such
+  as `/0/3`, and show them and their labels in blue. `--verbose` gives every
+  address in full. `coins` gives the address of a coin in full, with its path.
 - `txs` shows the balance after each transaction.
+- `--tabular` shows each element of a listing on one row of a table, in
+  columns under a header: `accounts`, `addresses`, `balances`, `coins`, `txs`
+  and `pendingtxs`.
 - `sync` and `recover` show what they are doing on a status line.
 - Tab completion in bash, zsh and fish. It completes commands, options,
   account names, coins, addresses and pending transactions.

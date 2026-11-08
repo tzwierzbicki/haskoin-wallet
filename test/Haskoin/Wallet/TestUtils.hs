@@ -301,10 +301,11 @@ paidAddressRow = DBAddress (toSqlKey 1) False 0 (externalAddrsText !! 0) "Invoic
 unusedAddressRow :: DBAddress
 unusedAddressRow = DBAddress (toSqlKey 1) False 1 (externalAddrsText !! 1) "" 0 0 0 0 0 seenTime
 
--- | The coin of 50000 at the first receiving address as coins lists it:
--- in block 800000, 3 confirmations deep, free and spendable
+-- | The coin of 50000 at the first receiving address, /0/0, as coins
+-- lists it: in block 800000, 3 confirmations deep, free and spendable,
+-- paid by a transaction the store saw at 'seenTime'
 spendableCoinRow :: JsonCoin
-spendableCoinRow = JsonCoin (OutPoint (fakeTxHash 1) 0) (externalAddr 0) 50000 (Store.BlockRef 800000 1) 3 Nothing True "" "" False
+spendableCoinRow = JsonCoin (OutPoint (fakeTxHash 1) 0) (externalAddr 0) 50000 (Store.BlockRef 800000 1) 3 Nothing True "" "" False (Just (Deriv :/ 0 :/ 0)) (Just seenTime)
 
 -- | A sync of main that found nothing new, at block 800002
 quietSync :: SyncRes

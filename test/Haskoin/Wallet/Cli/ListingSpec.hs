@@ -3,6 +3,7 @@
 module Haskoin.Wallet.Cli.ListingSpec (spec) where
 
 import Control.Monad (forM_, replicateM_)
+import Control.Monad.Except (ExceptT)
 import Control.Monad.Reader (MonadTrans (lift))
 import Data.Default (def)
 import Data.IORef (modifyIORef, newIORef, readIORef)
@@ -16,7 +17,7 @@ import Haskoin.Wallet.Commands (addressesListing, txsListing)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.TxInfo (ListedTx (..), markTxInfoDead, repsertSummary)
-import Haskoin.Wallet.Cli.Listing (Paging (..), streamListing)
+import Haskoin.Wallet.Cli.Listing (Listing (..), Paging (..), streamListing)
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.TestUtils
 import System.FilePath ((</>))
@@ -70,6 +71,12 @@ spec = prepareContext $ \ctx ->
         chunks <- streamed wallet (Paging Nothing Nothing) (const False)
         map snd chunks `shouldBe` [(True, [249, 248 .. 150])]
 
+    it "passes a listing read whole on as one first chunk, however many rows it has" $
+      inScratchDirectory $ \dir -> do
+        wallet <- walletWithAddresses ctx dir 250
+        chunks <- streamedFrom wallet ((\listing -> listing {listingWhole = True}) <$> addressesListing Nothing False (Paging Nothing Nothing)) (const True)
+        map snd chunks `shouldBe` [(True, [249, 248 .. 0])]
+
     it "fails as the listing does, before any chunk" $
       inScratchDirectory $ \dir -> do
         wallet <- walletWithAddresses ctx dir 3
@@ -112,9 +119,14 @@ walletWithAddresses ctx dir count =
 -- whether it is the first and the indices of its rows, the reader answering
 -- as told. A failure is recorded as a chunk of its own, with no rows.
 streamed :: Config -> Paging Text -> (Int -> Bool) -> IO [(Either String (), (Bool, [Int]))]
-streamed wallet paging keepReading = do
+streamed wallet paging = streamedFrom wallet (addressesListing Nothing False paging)
+
+-- | Stream a listing of receiving addresses as 'streamed' does, the
+-- listing given
+streamedFrom :: Config -> ExceptT String (DB IO) Listing -> (Int -> Bool) -> IO [(Either String (), (Bool, [Int]))]
+streamedFrom wallet listing keepReading = do
   seen <- newIORef []
-  result <- streamListing wallet (addressesListing Nothing False paging) $ \first answer -> do
+  result <- streamListing wallet listing $ \first answer -> do
     let rows = case answer of
           ResponseAddresses _ addrs -> dBAddressIndex . fst <$> addrs
           _ -> []

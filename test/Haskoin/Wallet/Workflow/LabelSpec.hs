@@ -205,7 +205,7 @@ addressLabelsSpec ctx =
         _ <- answer online ["label", textOf (externalAddr 0), "Salary"] []
         _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
         run <- hw signer ["reviewtx", online </> "unsigned.psbt"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0  \"Salary\"\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0\n             \"Salary\"\n"
 
     -- ESC [ 1 A moves the cursor up a line: a file could rewrite the lines
     -- above the label, the recipient among them
@@ -260,13 +260,27 @@ coinLabelsSpec ctx =
         _ <- answer home ["label", paidTxid ctx, "Salary"] []
         (coinLabelsShown <$> hwJson home ["coins"] []) `shouldReturn` Right [(OutPoint (txHash (payment ctx)) 0, "Salary")]
 
-    it "is on a line of its own below the first, and the label of the address follows the address" $
+    it "is a field of coins --verbose" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["label", paidTxid ctx, "Salary"] []
+        run <- hw home ["coins", "--verbose"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  Label  : \"Salary\"\n"
+
+    it "is left out of coins without --verbose" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["label", paidTxid ctx, "Salary"] []
+        run <- hw home ["coins"] []
+        runOut run `shouldNotSatisfy` Text.isInfixOf "Salary"
+
+    it "gives way to the label of the address in coins, on the line below the address" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["label", paidTxid ctx, "Salary"] []
         _ <- answer home ["label", textOf (externalAddr 0), "Wages"] []
         run <- hw home ["coins"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  \"Salary\"\n  at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj \"Wages\"\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  /0/0\n     \"Wages\"\n"
 
     -- The change of the payment of 20000 is the one coin left
     it "is none on the change of a payment the user made and labelled" $
@@ -291,7 +305,7 @@ coinLabelsSpec ctx =
         _ <- answer online ["label", textOf (externalAddr 0), "Wages"] []
         _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
         run <- hw signer ["reviewtx", online </> "unsigned.psbt"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0  \"Wages\"  from \"Salary\"\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0\n             \"Wages\"  from \"Salary\"\n"
 
     -- The label is given while the file is away
     it "is the wallet's own in the answer of importtx, not the file's" $
@@ -308,13 +322,13 @@ coinLabelsSpec ctx =
 changeAddressSpec :: Ctx -> Spec
 changeAddressSpec ctx =
   describe "A change address" $ do
-    it "is said to be one in coins, where the label of the address would be" $
+    it "is said to be one in coins, on the line below the address" $
       withChain ctx (paidChain ctx) $ \home chain -> do
         _ <- sentWithLabel home "Rent"
         modifyIORef chain mine
         _ <- answer home ["sync"] []
         run <- hw home ["coins"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  at 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn change address\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  at 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  /1/0\n     change address\n"
 
     it "is said to be one by a transaction that spends from it" $
       withChain ctx (paidChain ctx) $ \home chain -> do
@@ -322,7 +336,7 @@ changeAddressSpec ctx =
         modifyIORef chain mine
         _ <- answer home ["sync"] []
         run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--fee-rate", "10"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  From     : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  /1/0  change address\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  From     : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  /1/0\n             change address\n"
 
 historySpec :: Ctx -> Spec
 historySpec ctx =
@@ -395,7 +409,7 @@ shownSpec ctx =
         synced home
         _ <- answer home ["label", paidTxid ctx, "Salary"] []
         run <- hw home ["txs"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  \"Salary\"\n  at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  \"Salary\"\n  at /0/0\n"
 
     it "is a field of txs --verbose" $
       withChain ctx (paidChain ctx) $ \home _ -> do

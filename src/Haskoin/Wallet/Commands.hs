@@ -169,11 +169,11 @@ commandResponse ctx cfg unit = \case
   CommandReceive opts -> cmdReceive ctx cfg opts
   CommandShowAddr address -> cmdShowAddr cfg address
   CommandAddresses account internal _ paging -> cmdAddresses cfg account internal paging
-  CommandBalances account paging -> cmdBalances cfg account paging
+  CommandBalances account _ paging -> cmdBalances cfg account paging
   CommandLabel opts -> cmdLabel ctx cfg opts
   CommandCheckAddr account addrType index -> cmdCheckAddr ctx cfg account addrType index
   -- Coins
-  CommandCoins account locked paging -> cmdCoins cfg account locked paging
+  CommandCoins account locked _ paging -> cmdCoins cfg account locked paging
   CommandLockCoin outpoint -> cmdLockCoin cfg outpoint
   CommandUnlockCoin outpoint -> cmdUnlockCoin cfg outpoint
   -- Transactions
@@ -204,8 +204,8 @@ commandListing :: Ctx -> Command -> Maybe (ExceptT String (DB IO) Listing)
 commandListing ctx = \case
   CommandAccounts account _ -> Just $ accountsListing account
   CommandAddresses account internal _ paging -> Just $ addressesListing account internal paging
-  CommandBalances account paging -> Just $ balancesListing account paging
-  CommandCoins account locked paging -> Just $ coinsListing account locked paging
+  CommandBalances account _ paging -> Just $ balancesListing account paging
+  CommandCoins account locked _ paging -> Just $ coinsListing account locked paging
   CommandTxs account _ paging -> Just $ txsListing account paging
   CommandPendingTxs account _ paging -> Just $ pendingTxsListing ctx account paging
   _ -> Nothing
@@ -479,7 +479,10 @@ accountsListing account =
                 Just name -> drop 1 $ dropWhile ((/= name) . dBAccountName . snd) accs
           mapM withSpendable $ maybe id genericTake countM following,
         listingCursor = Right . dBAccountName . fst,
-        listingAnswer = ResponseAccounts
+        listingAnswer = ResponseAccounts,
+        -- Every chunk reads every account anyway, and the table of
+        -- accounts takes the width of its names from all of them
+        listingWhole = True
       }
 
 {- Addresses -}
@@ -519,7 +522,8 @@ addressesListing account internal paging = do
           balances <- spendableAtAddresses net accId (dBAddressAddress <$> addrs)
           return [(addr, spendableAt balances addr) | addr <- addrs],
         listingCursor = Right . dBAddressIndex . fst,
-        listingAnswer = ResponseAddresses acc
+        listingAnswer = ResponseAddresses acc,
+        listingWhole = False
       }
 
 cmdBalances :: Config -> Maybe Text -> Paging Text -> IO Response
@@ -544,7 +548,8 @@ balancesListing account paging = do
         listingMax = paging.pagingMax,
         listingRows = coinBalancesAfter net accId,
         listingCursor = Right,
-        listingAnswer = ResponseBalances acc
+        listingAnswer = ResponseBalances acc,
+        listingWhole = False
       }
 
 -- | Label a receiving address, or a transaction: see 'labelTransaction'
@@ -593,7 +598,8 @@ coinsListing account locked paging = do
         listingMax = paging.pagingMax,
         listingRows = coinsAfter (accountNetwork acc) accId shown,
         listingCursor = \coin -> Right (jsonCoinBlock coin, jsonCoinOutpoint coin),
-        listingAnswer = ResponseCoins acc
+        listingAnswer = ResponseCoins acc,
+        listingWhole = False
       }
 
 -- | Lock a coin at the user's request, and show it
@@ -631,7 +637,8 @@ txsListing account paging = do
         listingCursor = \(listed, before) -> case txInfoStatus (listedTxInfo listed) of
           OnChain chain -> Right (TxsCursor (chainBlock chain) (chainTxid chain) before)
           Pending _ -> Left "txs lists transactions of the chain only",
-        listingAnswer = ResponseTxs acc . map fst
+        listingAnswer = ResponseTxs acc . map fst,
+        listingWhole = False
       }
 
 cmdPendingTxs :: Ctx -> Config -> Maybe Text -> Paging TxHash -> IO Response
@@ -653,7 +660,8 @@ pendingTxsListing ctx account paging = do
         listingCursor = \(_, info) -> case txInfoStatus info of
           Pending pending | Just created <- pendingCreated pending -> Right (created, pendingNosigHash pending)
           _ -> Left "pendingtxs lists the transactions the wallet holds only",
-        listingAnswer = ResponsePendingTxs (snd <$> asked)
+        listingAnswer = ResponsePendingTxs (snd <$> asked),
+        listingWhole = False
       }
 
 -- | Show the transaction of a file, as the account it involves sees it, or

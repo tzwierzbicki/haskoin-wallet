@@ -89,8 +89,8 @@ parseAddressWithSpendable value = do
   return (addr, spendable)
 
 -- | An address in JSON with the balance of its coins among its balances:
--- the total, the spendable and the unspendable values, as balances shows
--- them
+-- the total, the spendable and the unspendable values, and the parts of
+-- the unspendable one, as balances --verbose shows them
 addressWithCoinBalance :: DBAddress -> CoinBalance -> Json.Value
 addressWithCoinBalance addr balance =
   object $
@@ -98,16 +98,22 @@ addressWithCoinBalance addr balance =
       addr
       [ "total" .= coinBalanceTotal balance,
         "spendable" .= coinBalanceSpendable balance,
-        "unspendable" .= coinBalanceUnspendable balance
+        "unspendable" .= coinBalanceUnspendable balance,
+        "lockedbytx" .= coinBalanceLockedByTx balance,
+        "lockedbyuser" .= coinBalanceLockedByUser balance,
+        "notspendableyet" .= coinBalanceNotSpendableYet balance
       ]
 
 -- | An address and the balance of its coins, as 'addressWithCoinBalance'
--- writes them. The unspendable value follows from the other two.
+-- writes them. The unspendable value and the value not spendable yet
+-- follow from the others.
 parseAddressWithCoinBalance :: Json.Value -> Parser (DBAddress, CoinBalance)
 parseAddressWithCoinBalance value = do
   addr <- parseJSON value
-  balance <- withObject "DBAddress" (\o -> o .: "balance" >>= \bal -> CoinBalance <$> bal .: "total" <*> bal .: "spendable") value
+  balance <- withObject "DBAddress" (\o -> o .: "balance" >>= readBalance) value
   return (addr, balance)
+  where
+    readBalance bal = CoinBalance <$> bal .: "total" <*> bal .: "spendable" <*> bal .: "lockedbytx" <*> bal .: "lockedbyuser"
 
 -- | The keys of an address, with more balances than those it stores when
 -- they are given
@@ -183,19 +189,44 @@ instance FromJSON AddressBalance where
         <*> o .: "txs"
         <*> o .: "received"
 
--- | The balance of the coins at an address: the value of all of them, and
--- of those that can be spent now. hw computes it from the coins it stores
--- ("Haskoin.Wallet.Database.Coin"), where the store reports 'AddressBalance'.
+-- | The balance of the coins at an address: the value of all of them, of
+-- those that can be spent now, and of those that a pending transaction or
+-- the user locks. The rest waits for a confirmation, or for a coinbase to
+-- mature. hw computes it from the coins it stores
+-- ("Haskoin.Wallet.Database.Coin"), where the store reports
+-- 'AddressBalance'. The parts follow the states coins gives each coin, so
+-- that balances --verbose tells why a value cannot be spent.
 data CoinBalance = CoinBalance
   { coinBalanceTotal :: !Word64,
-    coinBalanceSpendable :: !Word64
+    coinBalanceSpendable :: !Word64,
+    -- | The value of the coins a pending transaction spends
+    coinBalanceLockedByTx :: !Word64,
+    -- | The value of the coins the user locked with lockcoin
+    coinBalanceLockedByUser :: !Word64
   }
   deriving (Show, Eq)
+
+-- | The balance of the coins of an address is the sum of the balances of
+-- each coin, part by part
+instance Semigroup CoinBalance where
+  a <> b =
+    CoinBalance
+      (coinBalanceTotal a + coinBalanceTotal b)
+      (coinBalanceSpendable a + coinBalanceSpendable b)
+      (coinBalanceLockedByTx a + coinBalanceLockedByTx b)
+      (coinBalanceLockedByUser a + coinBalanceLockedByUser b)
 
 -- | The value of the coins at the address that cannot be spent now: those
 -- a pending transaction or the user locks, and those not spendable yet
 coinBalanceUnspendable :: CoinBalance -> Word64
 coinBalanceUnspendable balance = coinBalanceTotal balance - coinBalanceSpendable balance
+
+-- | The value of the coins at the address that nothing locks, but that
+-- cannot be spent yet: unconfirmed payments from other wallets, and
+-- coinbases that have not matured
+coinBalanceNotSpendableYet :: CoinBalance -> Word64
+coinBalanceNotSpendableYet balance =
+  coinBalanceUnspendable balance - coinBalanceLockedByTx balance - coinBalanceLockedByUser balance
 
 {- Generating addresses -}
 

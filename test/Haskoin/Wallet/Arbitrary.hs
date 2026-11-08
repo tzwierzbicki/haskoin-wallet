@@ -84,13 +84,16 @@ arbitraryDBAddress net =
     <*> arbitraryPositive
     <*> arbitraryUTCTime
 
--- | The balance of the coins at an address: what can be spent now is part
--- of the total
+-- | The balance of the coins at an address: what can be spent now, what
+-- pending transactions and the user lock, and what is not spendable yet
+-- are parts of the total
 arbitraryCoinBalance :: Gen CoinBalance
 arbitraryCoinBalance = do
   spendable <- choose (0, 2100000000000000)
-  unspendable <- choose (0, 2100000000000000)
-  return $ CoinBalance (spendable + unspendable) spendable
+  lockedByTx <- choose (0, 2100000000000000)
+  lockedByUser <- choose (0, 2100000000000000)
+  notYet <- choose (0, 2100000000000000)
+  return $ CoinBalance (spendable + lockedByTx + lockedByUser + notYet) spendable lockedByTx lockedByUser
 
 arbitraryAddressBalance :: Gen AddressBalance
 arbitraryAddressBalance =
@@ -114,6 +117,8 @@ arbitraryJsonCoin net =
     <*> arbitraryText
     <*> arbitraryText
     <*> arbitrary
+    <*> arbitraryMaybe arbitraryChainPath
+    <*> arbitraryMaybe arbitraryUTCTime
 
 arbitraryCoinLock :: Gen CoinLock
 arbitraryCoinLock = elements [LockedByTransaction, LockedByUser]

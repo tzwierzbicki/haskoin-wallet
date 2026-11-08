@@ -533,9 +533,14 @@ not yet mature, and unconfirmed payments from other wallets.
 `--verbose` adds the fingerprint of the seed, the addresses, when the account
 was created, and its confirmed and unconfirmed balances.
 
+`--tabular` shows each account on one row of a table: its name, network and
+derivation path, what it can spend, what is unconfirmed, and its coins. The
+first column is as wide as the longest name, which no row cuts.
+
 ```console
 hw accounts
 hw accounts --verbose
+hw accounts --tabular
 hw accounts --account savings --unit sat
 ```
 
@@ -640,10 +645,18 @@ Lists the receiving addresses, the newest first, or the change addresses with
 it can spend and what it received, or that it is unused. `--verbose` adds its
 balances, its coins and when it was created.
 
+`--tabular` shows each address on one row of a table, as `txs --tabular` does.
+The columns are the path, the address, what it can spend, what it received, in
+how many transactions, and its label, cut to 40 characters. An unused address
+leaves its amounts empty. The table of change addresses has no label column,
+since change addresses take no label.
+
 ```console
 hw addresses
 hw addresses --change
 hw addresses --verbose
+hw addresses --tabular
+hw addresses --change --tabular
 hw addresses --max 10 --after ADDRESS
 ```
 
@@ -651,8 +664,19 @@ hw addresses --max 10 --after ADDRESS
 
 Lists the addresses that hold coins, the largest total first.
 
+`--verbose` gives the total and the number of coins of each address, what it
+can spend now, and what it cannot in three parts. They are what pending
+transactions lock, what you locked with `lockcoin`, and what is not spendable
+yet, which waits for a confirmation.
+
+`--tabular` shows each address on one row of a table: its path, the address,
+the value of its coins, what it can spend now and the rest, and its label, or
+`change address`. A label longer than 40 characters is cut short.
+
 ```console
 hw balances
+hw balances --verbose
+hw balances --tabular
 ```
 
 #### `hw label`
@@ -696,19 +720,38 @@ hw checkaddr /1/2 --account vault
 
 #### `hw coins`
 
-Lists the coins of an account. Each takes three lines:
+Lists the coins of an account. Each takes three or four lines:
 
-1. Its value with its state, spendable or locked, and its confirmations.
-2. The address that holds it, with its label, or `change address` when it is
-   one.
-3. The coin as `TXID:INDEX`.
+1. The time of the transaction that paid it, its value, its state, spendable
+   or locked, and its confirmations, up to `999+ confirmations`.
+2. The address that holds it, in full, with its derivation path.
+3. The label of the address, under the address, or `change address` when it is
+   one. A coin at an address without a label has no such line.
+4. The coin as `TXID:INDEX`.
 
-A coin paid by a transaction you labelled shows the label on a line of its own,
-below the first. The change of a payment you made shows no label.
-The label says what the payment was for, not what its change is.
+This is the one listing that gives an address of the wallet in full in its
+compact view. What tells a coin apart is the address that holds it, more than
+its path. As everywhere an address is in full, its label is on the line below.
+Where a view gives only the path, the label stays on the same line.
+
+`--verbose` gives the full count of the confirmations on the first line. The
+label of the transaction that paid the coin, the coin, the block that holds it,
+the time of the transaction to the second and the address in full with its path
+follow as fields. The label of the address is on the line below it. An
+unconfirmed coin is in no block yet, and shows none. The change of a payment
+you made shows no label of its transaction: the label says what the payment was
+for, not what its change is.
+
+`--tabular` shows each coin on one row of a table: the time of its transaction,
+its value, its state, its confirmations up to `999+`, the address that holds it
+with its path, and the label of the address. A coin a pending transaction
+spends says `locked by tx`. The table leaves out the coin itself, `TXID:INDEX`,
+which `lockcoin` and `--coin` take. `coins` without `--tabular` shows it.
 
 ```console
 hw coins
+hw coins --verbose
+hw coins --tabular
 hw coins --locked
 ```
 
@@ -721,7 +764,8 @@ hw coins --locked
 
 #### `hw lockcoin`
 
-Keeps a coin from being spent.
+Keeps a coin from being spent. It shows the coin with every detail, as
+`coins --verbose` does.
 
 ```console
 hw lockcoin TXHASH:1
@@ -729,7 +773,8 @@ hw lockcoin TXHASH:1
 
 #### `hw unlockcoin`
 
-Frees a coin locked with `lockcoin`.
+Frees a coin locked with `lockcoin`. It shows the coin with every detail, as
+`coins --verbose` does.
 
 ```console
 hw unlockcoin TXHASH:1
@@ -878,25 +923,58 @@ lines:
 1. Its time, in the time zone of the computer, its type, its amount and its
    status.
 2. The balance of the account after the transaction.
-3. The address paid.
+3. The address paid. An address of the wallet is named by its derivation path,
+   such as `/0/3`, with its label, or `change address` when it is one.
 4. The txid.
 
-An unconfirmed transaction shows its fee rate. A transaction with a label shows
-it on a line of its own, below the balance. The balance of the newest
-transaction is what the account holds, confirmed or not. A dead transaction,
-replaced or dropped from the network, shows no balance and does not count.
+On a terminal, the addresses of the wallet and their labels are blue, which
+sets them apart from the addresses of others.
 
-`--verbose` shows the label as a field, every address with its amount, path and
-label, the fee and the balance. A change address the transaction spends from or pays says
-`change address` in place of a label. An address the transaction spends from
-ends with the labels of the coins spent, as `coins` shows them, after the word
-`from`.
+The status counts the confirmations up to `999+ confirmations`. An unconfirmed
+transaction shows its fee rate instead. A transaction with a label shows it on
+a line of its own, below the balance. The balance of the newest transaction is
+what the account holds, confirmed or not. A dead transaction, replaced or
+dropped from the network, shows no balance and does not count.
+
+`--verbose` shows the label as a field, every address in full with its amount,
+and its path for an address of the wallet, the fee and the balance. It gives
+the full count of the confirmations. The label of an address of the wallet is
+on the line below it, under the address. A change address the transaction
+spends from or pays says `change address` there instead. An address the
+transaction spends from adds the labels of the coins spent, as `coins` shows
+them, after the word `from`.
+
+`--tabular` shows each transaction on one row of a table, as a spreadsheet
+does. The columns are the time, the type, the amount, the balance after it and
+the confirmations. The confirmations are a number alone, up to `999+`. An
+unconfirmed transaction has 0, and a dead one says `dead`. The last column,
+Description, says what the transaction is for:
+
+- A payment received gives the path of the address it was paid at, then the
+  label of the payment, or else the label of the address, as in
+  `at /0/3 "Salary"`.
+- A payment gives its label, or else the address it pays, as in
+  `to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU`.
+
+The last column is cut at 50 characters, an ellipsis showing the cut. The
+header names the unit of the amounts, so the cells hold numbers alone. The
+table leaves out the txid and the fee rate. `txs` without `--tabular` shows
+them.
 
 ```console
 hw txs
 hw txs --verbose
+hw txs --tabular
 hw txs --max 20 --after TXID
 ```
+
+> **Good to know**
+>
+> - **A row of the table is wide.** It takes 73 columns before its last
+>   cell, and 123 at most. A narrower terminal wraps it. The columns keep the
+>   same widths from the first row to the last, so that a long listing lines
+>   up. A rare cell that does not fit, such as an amount of 10 000 bitcoins or
+>   more, pushes the rest of its row.
 
 #### `hw pendingtxs`
 
@@ -904,9 +982,17 @@ Lists the pending transactions: prepared, signed, or sent and not yet seen by
 `sync`. They take three lines each. Each is shown by its nosigHash
 until it is signed, then by its txid. A conflicted one can no longer be sent.
 
+`--tabular` shows each transaction on one row of a table: its account when
+every account is listed, the time it was created, its type, its amount, its
+status, its fee rate in sat/vB, and what it is for, as `txs --tabular` says it.
+An account name longer than 12 characters is cut short. The table leaves out
+the hash, which the other commands take. `pendingtxs` without `--tabular`
+shows it.
+
 ```console
 hw pendingtxs
 hw pendingtxs --verbose
+hw pendingtxs --tabular
 ```
 
 > **Good to know**

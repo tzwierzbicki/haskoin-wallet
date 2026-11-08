@@ -190,6 +190,12 @@ commandLineSpec ctx = do
         runErr run `shouldSatisfy` Text.isInfixOf "Invalid option `--version'"
 
   describe "A command line hw cannot parse" $ do
+    it "names --tabular when it follows --verbose in txs, since the two are a choice" $
+      withHome $ \home -> do
+        run <- hw home ["txs", "--verbose", "--tabular"] []
+        runExit run `shouldBe` ExitFailure 1
+        runErr run `shouldSatisfy` Text.isInfixOf "Invalid option `--tabular'"
+
     it "names the unknown command, and suggests the closest one" $
       withHome $ \home -> do
         run <- hw home ["preparetxx"] []

@@ -14,6 +14,7 @@ module Haskoin.Wallet.Cli.Parser where
 
 import Control.Applicative (Alternative (..), optional)
 import Data.List (find, intercalate)
+import Data.Maybe (fromMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Version (showVersion)
@@ -78,15 +79,15 @@ data Command
   | CommandReceive !Receive
   | -- | An address of the wallet, as the user typed it
     CommandShowAddr !Text
-  | -- | The account, whether its change addresses, how much of each
-    -- address to show, and the page
+  | -- | The account, whether its change addresses, how to show each
+    -- address, and the page
     CommandAddresses !(Maybe Text) !Bool !View !(Paging Text)
-  | -- | The account, and the page
-    CommandBalances !(Maybe Text) !(Paging Text)
+  | -- | The account, how to show each address, and the page
+    CommandBalances !(Maybe Text) !View !(Paging Text)
   | CommandLabel !Label
   | -- | The account, and the chain and index of the address to show
     CommandCheckAddr !(Maybe Text) !AddrType !KeyIndex
-  | -- | The account, how much of each transaction to show, and the page
+  | -- | The account, how to show each transaction, and the page
     CommandTxs !(Maybe Text) !View !(Paging TxHash)
   | CommandPrepareTx !PrepareTx
   | CommandPrepareSendAll !PrepareSendAll
@@ -108,8 +109,9 @@ data Command
   | CommandFees !(Maybe Network)
   | CommandSignMsg !SignMsg
   | CommandVerifyMsg !VerifyMsg
-  | -- | The account, whether the locked coins only, and the page
-    CommandCoins !(Maybe Text) !Bool !(Paging OutPoint)
+  | -- | The account, whether the locked coins only, how to show each
+    -- coin, and the page
+    CommandCoins !(Maybe Text) !Bool !View !(Paging OutPoint)
   | CommandLockCoin !OutPoint
   | CommandUnlockCoin !OutPoint
   | -- | A pending transaction, by its txid or its nosigHash, or the file
@@ -128,18 +130,27 @@ data Command
     CommandSignSweep !Signing !(Maybe KeySource) !(Maybe Network)
   deriving (Eq, Show)
 
--- | How much a listing shows of each element: a few lines, or every
--- detail with --verbose
-data View = Compact | Verbose
+-- | How a listing shows each element: in a few lines, with every detail
+-- with --verbose, or on one row of a table with --tabular. A table suits
+-- reading down a column, such as the amounts or the balances. It gives up
+-- the details that do not fit on a row. Every listing offers it.
+data View = Compact | Verbose | Table
   deriving (Eq, Show)
 
--- | How much of each element the command lists, as asked of accounts,
--- addresses, txs and pendingtxs. The other commands have one view.
+-- | How the command shows each element it lists, as asked of accounts,
+-- addresses, balances, txs, pendingtxs and coins. The other commands have
+-- one view.
 viewOf :: Command -> View
 viewOf (CommandAccounts _ view) = view
 viewOf (CommandAddresses _ _ view _) = view
+viewOf (CommandBalances _ view _) = view
 viewOf (CommandTxs _ view _) = view
 viewOf (CommandPendingTxs _ view _) = view
+viewOf (CommandCoins _ _ view _) = view
+-- The one coin they answer with, with every detail, as the other commands
+-- that answer with one element show it
+viewOf (CommandLockCoin _) = Verbose
+viewOf (CommandUnlockCoin _) = Verbose
 viewOf _ = Compact
 
 -- | Whether an address in an answer comes with its QR code, on a terminal
@@ -1152,11 +1163,18 @@ what one of its accounts pays another. preparetx can spend all of it, unless
 --verbose adds the fingerprint of the seed when known, how many receiving and
 change addresses the account has, when it was created, and the confirmed and
 unconfirmed balances the server gave at the last sync.
+
+With --tabular, each account takes one row of a table, under a header that
+names the columns: its name, its network, its derivation path, what it can
+spend, what is unconfirmed, and how many coins it holds. The amounts are in the
+unit the header names. The first column is as wide as the longest name.
 |],
       args =
         CommandAccounts
           <$> onlyAccountOption
-          <*> verboseOption "Show every detail of each account: the fingerprint of its seed, its addresses, when it was created, and each of its balances."
+          <*> tableViewOption
+            "Show every detail of each account: the fingerprint of its seed, its addresses, when it was created, and each of its balances."
+            "Show each account on one row of a table: its name, network and path, what it can spend, what is unconfirmed, and its coins."
     }
 
 {- receive -}
@@ -1242,12 +1260,21 @@ address no transaction has paid yet is unused.
 
 --verbose adds the confirmed and unconfirmed balances of the address, how many
 coins it holds, and when it was created.
+
+With --tabular, each address takes one row of a table, under a header that
+names the columns: the path, the address, what it can spend, what it received
+and in how many transactions, and its label. The amounts are in the unit the
+header names. An address no transaction has paid leaves its amounts empty. A
+label longer than 40 characters is cut short. Change addresses have no label,
+so their table has no column for one.
 |],
       args =
         CommandAddresses
           <$> accountOption
           <*> changeAddressesOption
-          <*> verboseOption "Show every detail of each address: its transactions, what it received, its balances, its coins, and when it was created."
+          <*> tableViewOption
+            "Show every detail of each address: its transactions, what it received, its balances, its coins, and when it was created."
+            "Show each address on one row of a table: its path, the address, what it can spend and what it received, its transactions and its label."
           <*> pagingOptions (afterOption "ADDRESS" str "Start after this address")
     }
 
@@ -1304,10 +1331,23 @@ describes. The unspendable amount is the rest. It counts the coins locked by a
 pending transaction or by lockcoin, the unconfirmed payments from other
 wallets, and the coinbase coins with fewer than 100 confirmations. `coins`
 tells which applies to each coin.
+
+With --verbose, each address gives its fields: the total, the number of its
+coins, the spendable amount, then the unspendable amount in three parts. They
+are the value locked by pending transactions, the value locked with lockcoin,
+and the value not spendable yet, which waits for a confirmation.
+
+With --tabular, each address takes one row of a table, under a header that
+names the columns: the path, the address, the three amounts, and the label, or
+that it is a change address. The amounts are in the unit the header names. A
+label longer than 40 characters is cut short.
 |],
       args =
         CommandBalances
           <$> accountOption
+          <*> tableViewOption
+            "Show every detail of each address: its total and its coins, its spendable amount, and what pending transactions lock, what you lock, and what is not spendable yet."
+            "Show each address on one row of a table: its path, the address, its total, spendable and unspendable amounts, and its label."
           <*> pagingOptions (afterOption "ADDRESS" str "Start after this address")
     }
 
@@ -1407,29 +1447,50 @@ not seen yet, are in pendingtxs.
 Each transaction takes four lines. The first gives its time, its type, its
 amount and its status. The time is in the time zone of the computer. The type
 is Outgoing, Incoming, or Internal for a transaction between addresses of the
-account. The amount includes the fee. The status gives the confirmations. An
-unconfirmed transaction shows its fee rate instead, which tells how soon a
-block may take it. A dead one was replaced, or dropped from the network. The
-second line gives the balance of the account after the transaction. The newest
-one shows what the account holds, confirmed or not. A dead transaction shows no
-balance, and does not count. A transaction with a label shows it next, on a
-line of its own: see `label`. The third line gives the address paid, the
-largest when there are several. The fourth gives the txid.
+account. The amount includes the fee. The status gives the confirmations, up
+to 999+ confirmations. --verbose gives the full count. An unconfirmed
+transaction shows its fee rate instead, which tells how soon a block may take
+it. A dead one was replaced, or dropped from the network. The second line
+gives the balance of the account after the transaction. The newest one shows
+what the account holds, confirmed or not. A dead transaction shows no balance,
+and does not count. A transaction with a label shows it next, on a line of
+its own: see `label`. The third line gives the address paid, the largest when
+there are several. An address of the wallet is named by its derivation path,
+such as /0/3, with its label. The fourth gives the txid. On a terminal, the
+addresses of the wallet and their labels are blue.
+
+With --verbose, every address is in full, and an address of the wallet has its
+path after it. Its label is on the line below.
+
+With --tabular, each transaction takes one row of a table, under a header
+that names the columns. The amounts are in the unit the header names. The
+Confirmations column gives their number alone, up to 999+. An unconfirmed
+transaction has 0, and gives no fee rate. A dead one says dead. The last
+column, Description, says what the transaction is for. A payment received gives the path of
+the address it was paid at, then the label of the payment, or else the label of
+the address. A payment gives its label, or else the address it pays. The column
+is cut at 50 characters. The table leaves out the txid.
 |],
       args =
         CommandTxs
           <$> accountOption
-          <*> verboseOption txVerboseHelp
+          <*> tableViewOption
+            txVerboseHelp
+            "Show each transaction on one row of a table: its time, type, amount, balance and confirmations, then what it is for: its label, the path of an address of the wallet, or the address paid."
           <*> pagingOptions (afterOption "TXID" (maybeReader $ hexToTxHash . cs) "Start after this transaction")
     }
 
--- | The --verbose flag of a listing, with the help of the command about it
-verboseOption :: String -> Args View
-verboseOption what =
-  flag Compact Verbose $
-    short 'v'
-      <> long "verbose"
-      <> help what
+-- | How a listing shows each element: in a few lines, with every detail
+-- with --verbose, or on one row of a table with --tabular. The two options
+-- are a choice, since a table has no room for every detail. Every listing
+-- offers both. The help of --verbose comes first, then that of --tabular.
+tableViewOption :: String -> String -> Args View
+tableViewOption verboseHelp tabularHelp =
+  fromMaybe Compact
+    <$> optional
+      ( flag' Verbose (short 'v' <> long "verbose" <> help verboseHelp)
+          <|> flag' Table (long "tabular" <> help tabularHelp)
+      )
 
 txVerboseHelp :: String
 txVerboseHelp = "Show every detail of each transaction: its label, each address it spends from or pays, with its amount, path and label, the labels of the coins spent as `coins` shows them, and the fee."
@@ -1771,6 +1832,7 @@ Each takes three lines. The first gives the time it was created, its type, its
 amount and its status: not signed, signed and not sent, or sent, with its fee
 rate. A transaction with a label shows it next, on a line of its own. The
 second gives the address paid, after the account when every account is listed.
+An address of the wallet is named by its derivation path.
 A replacement that bumpfee made then names the transactions it
 replaces. The last line gives the hash of the transaction. It is the nosigHash
 of an unsigned transaction, and the txid of a signed one. The other commands
@@ -1780,11 +1842,19 @@ too.
 A transaction marked conflicted spends a coin that another transaction has
 spent, or that is gone, as the server said at the last sync. It cannot be sent
 while that lasts. Delete it with deletetx, which frees its coins.
+
+With --tabular, each transaction takes one row of a table, under a header that
+names the columns: its account when every account is listed, the time it was
+created, its type, its amount, its status, its fee rate in sat/vB, and what it
+is for, as txs --tabular says it. An account name longer than 12 characters is
+cut short. The table leaves out the hash, which the other commands take.
 |],
       args =
         CommandPendingTxs
           <$> onlyAccountOption
-          <*> verboseOption txVerboseHelp
+          <*> tableViewOption
+            txVerboseHelp
+            "Show each transaction on one row of a table: its account, time, type, amount, status and fee rate, then what it is for."
           <*> pagingOptions (afterOption "HASH" (maybeReader $ hexToTxHash . cs) "Start after this pending transaction")
     }
 
@@ -1998,15 +2068,29 @@ coinsCommand =
       details =
         [r|
 A coin is an unspent output of a transaction, written TXID:INDEX. The
-unconfirmed coins come first, then the newest. Each takes three lines: its
-value with its state and its confirmations, the address that holds it with its
-label, and the coin itself, as lockcoin and --coin take it.
+unconfirmed coins come first, then the newest. Each takes three lines, or four
+when its address has a label. The first gives the time of the transaction that
+paid it, in the time zone of the computer, its value, its state and its
+confirmations, up to 999+ confirmations. The second gives the address that
+holds it, with its derivation path. The label of the address follows on a line
+of its own, under the address, as in the other views that give an address in
+full. A coin at a change address says so there. The last line gives the coin
+itself, as lockcoin and --coin take it.
 
-A coin paid by a transaction you labelled shows the label on a line of its
-own, below the first, as txs does. The change of a payment you made shows no
-label: the label says what the payment was for, not what its change is. Coins
-have no labels of their own. A coin at a change address says so, where the
-label of the address would be.
+With --verbose, each coin gives the full count of its confirmations on its
+first line. Its fields follow: the label of the transaction that paid it, the
+coin, the block that holds it, the time of its transaction to the second, and
+the address in full with its path. The label of the address is on the line
+below it. An unconfirmed coin is in no block yet. Coins have no labels of their
+own. The change of a payment you made shows no label of its transaction: the
+label says what the payment was for, not what its change is.
+
+With --tabular, each coin takes one row of a table, under a header that names
+the columns: the time of its transaction, its value, its state, its
+confirmations up to 999+, the address that holds it with its path, and the
+label of the address. A coin locked by a pending transaction says "locked by
+tx". A label longer than 40 characters is cut short. The table leaves out the
+coin itself, TXID:INDEX.
 
 A coin is spendable when the wallet can spend it now. Nothing locks it, a
 coinbase coin has 100 confirmations, and an unconfirmed coin comes from a
@@ -2022,6 +2106,9 @@ unlockcoin.
         CommandCoins
           <$> accountOption
           <*> lockedOption
+          <*> tableViewOption
+            "Show every detail of each coin: the full count of its confirmations, the label of its transaction, the coin, the block that holds it, the time of its transaction, and its address in full with its path."
+            "Show each coin on one row of a table: the time of its transaction, its value, state and confirmations, its address and path, and the label of the address."
           <*> pagingOptions (afterOption "TXID:INDEX" coinReader "Start after this coin")
     }
 
@@ -2049,6 +2136,8 @@ Only a free coin can be locked. A coin that a pending transaction spends is
 locked already, and deletetx frees it. The lock stays while the coin confirms,
 and goes with the coin once it is spent elsewhere. `coins` --locked lists the
 locked coins.
+
+lockcoin shows the coin it locked with every detail, as `coins` --verbose does.
 |],
       args = CommandLockCoin <$> coinArg coinsToLock
     }
@@ -2063,6 +2152,9 @@ unlockCoinCommand =
         [r|
 Only a coin locked with lockcoin can be unlocked. A coin that a pending
 transaction spends is freed by deleting that transaction with deletetx.
+
+unlockcoin shows the coin it freed with every detail, as `coins` --verbose
+does.
 |],
       args = CommandUnlockCoin <$> coinArg coinsToUnlock
     }

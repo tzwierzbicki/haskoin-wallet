@@ -8,10 +8,12 @@
 --
 -- A colour means one thing everywhere. Cyan is a command, and magenta is
 -- a command to run on an offline computer. Green is an option, an amount
--- coming in, or a state as it should be. Red is an amount going
--- out, or something wrong. Yellow waits for something. Faint is secondary,
--- such as the name of a field, and bold is a title, a name or the words of
--- a mnemonic. The text itself keeps the colour of the terminal.
+-- coming in, or a state as it should be. Red is an amount going out, or
+-- something wrong. Yellow waits for something. Blue is an address of the
+-- wallet, with its label, which sets it apart from the addresses of others
+-- in a transaction. Faint is secondary, such as the name of a field, and
+-- bold is a title, a name or the words of a mnemonic. The text itself
+-- keeps the colour of the terminal.
 --
 -- The colours are the dull ANSI ones. Most terminal themes make them
 -- readable on a light background as well as on a dark one, which the vivid
@@ -87,6 +89,11 @@ data Style
   | -- | A state that waits for something, often the user: not signed,
     -- locked, not confirmed yet
     Waiting
+  | -- | An address of the wallet, or the derivation path that names it,
+    -- and its label, in a transaction or a coin. They share a colour, so
+    -- that a label below its address is seen to go with it, and so that
+    -- the addresses of the wallet stand apart from those of others.
+    OwnAddress
   | -- | A QR code. It is black on white whatever the theme: a scanner
     -- finds dark modules on a light background, and not all of them read
     -- the opposite.
@@ -119,6 +126,7 @@ sgrOf = \case
   Outgoing -> [foreground Red]
   Good -> [foreground Green]
   Waiting -> [foreground Yellow]
+  OwnAddress -> [foreground Blue]
   -- The colours of the palette's cube, which themes leave as they are,
   -- unlike the sixteen named ones
   QrCode -> [SetPaletteColor Foreground (xterm6LevelRGB 0 0 0), SetPaletteColor Background (xterm6LevelRGB 5 5 5)]

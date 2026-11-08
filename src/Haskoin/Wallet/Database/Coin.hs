@@ -73,7 +73,7 @@ import Data.Char (toUpper)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Database.Persist.Sql (Single (..), rawSql)
-import Data.Time (getCurrentTime)
+import Data.Time (UTCTime, getCurrentTime)
 import Data.Word (Word64)
 import Database.Esqueleto.Legacy (InnerJoin (..), Value (..), asc, desc, from, groupBy, having, in_, just, limit, on, orderBy, select, sum_, val, valList, where_, (&&.), (<.), (==.), (>.), (^.), (||.))
 import qualified Database.Persist as P
@@ -82,10 +82,10 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.BestBlock
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account (accountNetwork, getAccountById, getAccountsById)
-import Haskoin.Wallet.Database.Address (CoinBalance (..))
+import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath)
 import Haskoin.Wallet.Database.PendingTx (lockedOutpoints, userLockedOutpoints)
 import Haskoin.Wallet.Database.RawTx (getRawTx, lookupRawTx)
-import Haskoin.Wallet.Database.TxInfo (coinLabel, coinLabels, liveSummaries, spentTxids, walletAddressRow, walletTransaction)
+import Haskoin.Wallet.Database.TxInfo (coinLabel, coinLabels, liveSummaries, spentTxids, transactionTime, walletAddressRow, walletTransaction)
 import Haskoin.Wallet.Util (rowLimit)
 import Numeric.Natural (Natural)
 
@@ -107,7 +107,13 @@ data JsonCoin = JsonCoin
     -- | The label of the address that holds it, or none
     jsonCoinAddressLabel :: !Text,
     -- | Whether the address that holds it is a change address
-    jsonCoinChange :: !Bool
+    jsonCoinChange :: !Bool,
+    -- | The derivation path of the address that holds it, which the
+    -- compact views show in place of the address
+    jsonCoinPath :: !(Maybe SoftPath),
+    -- | The time of the transaction that paid it ('transactionTime'),
+    -- which its views start with, as the views of a transaction do
+    jsonCoinTime :: !(Maybe UTCTime)
   }
   deriving (Eq, Show)
 
@@ -138,7 +144,9 @@ instance MarshalJSON Network JsonCoin where
         "spendable" .= jsonCoinSpendable c,
         "txlabel" .= jsonCoinTxLabel c,
         "addresslabel" .= jsonCoinAddressLabel c,
-        "change" .= jsonCoinChange c
+        "change" .= jsonCoinChange c,
+        "path" .= jsonCoinPath c,
+        "time" .= jsonCoinTime c
       ]
   unmarshalValue net =
     withObject "JsonCoin" $ \o ->
@@ -153,10 +161,13 @@ instance MarshalJSON Network JsonCoin where
         <*> o .:? "txlabel" .!= ""
         <*> o .:? "addresslabel" .!= ""
         <*> o .:? "change" .!= False
+        <*> o .:? "path"
+        <*> o .:? "time"
 
 -- | A coin row as the user sees it: its confirmations counted from the best
 -- block, its lock, spendable when the builder may spend it now, the label
--- it shows, and the label and the kind of its address
+-- it shows, the time of its transaction, and the label, the kind and the
+-- path of its address
 toJsonCoin :: (MonadUnliftIO m) => Spending -> DBCoin -> ExceptT String (DB m) JsonCoin
 toJsonCoin rules row = do
   outpoint <- liftEither $ coinOutpoint row
@@ -165,6 +176,7 @@ toJsonCoin rules row = do
   spendable <- canSpend rules 0 outpoint block
   label <- lift $ coinLabel rules.spendingNetwork (dBCoinAccount row) outpoint.hash
   addrRowM <- lift $ walletAddressRow rules.spendingNetwork addr
+  time <- lift $ transactionTime (dBCoinAccount row) outpoint.hash
   return
     JsonCoin
       { jsonCoinOutpoint = outpoint,
@@ -176,7 +188,9 @@ toJsonCoin rules row = do
         jsonCoinSpendable = spendable,
         jsonCoinTxLabel = label,
         jsonCoinAddressLabel = maybe "" dBAddressLabel addrRowM,
-        jsonCoinChange = maybe False dBAddressInternal addrRowM
+        jsonCoinChange = maybe False dBAddressInternal addrRowM,
+        jsonCoinPath = addrPath <$> addrRowM,
+        jsonCoinTime = time
       }
 
 -- | The labels the coins show ('coinLabel'), by the transaction that paid
@@ -468,8 +482,20 @@ coinBalances net accId addrsM afterM countM = do
     return (a, total)
   -- An address of the page holds a coin at least, so its total is never null
   let held = [(P.entityVal a, fromMaybe 0 total) | (a, Value total) <- rows]
-  spendable <- spendableAtAddresses net accId (dBAddressAddress . fst <$> held)
-  return [(addr, CoinBalance total (Map.findWithDefault 0 (dBAddressAddress addr) spendable)) | (addr, total) <- held]
+  rules <- spendingOf net
+  coins <- balanceColumns accId (Just (dBAddressAddress . fst <$> held))
+  byAddress <- Map.fromListWith (<>) <$> mapM (coinShare rules) coins
+  return [(addr, Map.findWithDefault (CoinBalance total 0 0 0) (dBAddressAddress addr) byAddress) | (addr, total) <- held]
+
+-- | What a coin adds to the balance of its address: its value to the
+-- total, and to the part its state puts it in. A locked coin cannot be
+-- spent ('canSpend'), so no coin counts in two parts.
+coinShare :: (MonadUnliftIO m) => Spending -> (OutPoint, Text, Word64, Store.BlockRef) -> ExceptT String (DB m) (Text, CoinBalance)
+coinShare rules (outpoint, addr, value, block) = do
+  spendable <- canSpend rules 0 outpoint block
+  let lock = Map.lookup outpoint rules.spendingLocks
+      partIf held = if held then value else 0
+  return (addr, CoinBalance value (partIf spendable) (partIf (lock == Just LockedByTransaction)) (partIf (lock == Just LockedByUser)))
 
 -- | What the spendable balances read of the coins of an account, at the
 -- given addresses or at all of them: the outpoint, address, value and

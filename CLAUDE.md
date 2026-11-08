@@ -48,6 +48,20 @@ and the alternatives it rejects. A reader should come away knowing when to use
 it and when not to. Keep to the structure the README already has, and put new
 material in the section where a reader would look for it.
 
+## Testing conventions
+
+A test states what the code should do, in words that make sense without
+reading the code. Its name says the behaviour in plain words. Its expected
+values are literals: amounts, addresses, lines of output, JSON. A short comment
+gives any arithmetic, such as `-- 40000 paid + 1000 of fee = 41000`. A test
+never computes its expectation with the code under test. Each test checks one
+rule.
+
+Always write the tests based on your expectation and logical deduction of
+what the code should do. Don't write tests merely to pin the code. If there are
+any discrepancies between your expections and the actual code, fix whichever
+you think makes the most sense and report it.
+
 ## Checks
 
 Build the documentation with `stack haddock --no-haddock-deps` and make sure it

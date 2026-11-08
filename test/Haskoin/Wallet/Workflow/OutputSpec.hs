@@ -4,7 +4,7 @@
 
 -- | What hw shows: the listings and their paging, a transaction as hw
 -- lays it out, the pending transactions, the balances of the addresses,
--- and the next step shown after a payment or a sweep.
+-- the coins, and the next step shown after a payment or a sweep.
 module Haskoin.Wallet.Workflow.OutputSpec (spec) where
 
 import Control.Monad (forM_, replicateM_, void)
@@ -79,6 +79,7 @@ spec = prepareContext $ \ctx -> do
   layoutSpec ctx
   pendingListSpec ctx
   balancesListSpec ctx
+  coinsListSpec ctx
   addressCodeSpec ctx
   nextStepSpec ctx
 
@@ -129,6 +130,54 @@ listingSpec ctx = do
         createMain home
         replicateM_ 6 (answer home ["receive"] [])
         (rowsOf <$> hwJson home ["addresses"] []) `shouldReturn` Right 6
+
+    -- The header takes two lines: the headings, and the line under them.
+    -- Each of the 6 addresses takes one row.
+    it "shows each address on one row under a header with addresses --tabular" $
+      withHome $ \home -> do
+        createMain home
+        replicateM_ 6 (answer home ["receive"] [])
+        listed <- runOut <$> hw home ["addresses", "--tabular"] []
+        length (Text.lines listed) `shouldBe` 8
+
+    -- The header takes two lines, and the account one row
+    it "shows each account on one row under a header with accounts --tabular" $
+      withHome $ \home -> do
+        createMain home
+        listed <- runOut <$> hw home ["accounts", "--tabular"] []
+        length (Text.lines listed) `shouldBe` 3
+
+    -- The second account of the seed has the path /44'/0'/1'. Its name
+    -- has 22 characters, the width of the first column.
+    it "gives every name whole with accounts --tabular, in a first column as wide as the longest" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "family savings account"] seedTwice
+        listed <- Text.lines . runOut <$> hw home ["accounts", "--tabular"] []
+        take 1 listed `shouldBe` ["Account                │ Network  │ Path         │ Spendable (btc) │ Unconfirmed (btc) │ Coins"]
+        listed `shouldContain` ["family savings account │ btc      │ /44'/0'/1'   │      0.00000000 │        0.00000000 │     0"]
+
+    -- The header takes two lines, and the coin of the payment one row
+    it "shows each coin on one row under a header with coins --tabular" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        listed <- runOut <$> hw home ["coins", "--tabular"] []
+        length (Text.lines listed) `shouldBe` 3
+
+    -- The header takes two lines, and the address paid one row
+    it "shows each address on one row under a header with balances --tabular" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        listed <- runOut <$> hw home ["balances", "--tabular"] []
+        length (Text.lines listed) `shouldBe` 3
+
+    -- The header takes two lines, and the payment prepared one row
+    it "shows each pending transaction on one row under a header with pendingtxs --tabular" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        listed <- runOut <$> hw home ["pendingtxs", "--tabular"] []
+        length (Text.lines listed) `shouldBe` 3
 
     it "shows the row of each listing" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -222,7 +271,7 @@ layoutSpec ctx =
         synced home
         _ <- answer home ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "salary"] []
         shown <- shownPayment home []
-        shown `shouldSatisfy` Text.isInfixOf "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0  \"salary\"\n"
+        shown `shouldSatisfy` Text.isInfixOf "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0\n             \"salary\"\n"
 
     it "shows the recipients of a payment" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -255,11 +304,33 @@ layoutSpec ctx =
         listed <- runOut <$> hw home ["txs", "--verbose"] []
         listed `shouldSatisfy` Text.isInfixOf "  To       : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0\n"
 
-    it "shows the address of the wallet a payment received is paid at, in txs" $
+    it "shows the path of the address of the wallet a payment received is paid at, in txs" $
       withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
         synced home
         listed <- runOut <$> hw home ["txs"] []
-        listed `shouldSatisfy` Text.isInfixOf "\n  at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\n"
+        listed `shouldSatisfy` Text.isInfixOf "\n  at /0/0\n"
+
+    -- Blue is colour 34 of the terminal, and 3 sets italics, as labels
+    -- have them. --no-pager prints the listing itself, which a pager would
+    -- read.
+    it "shows the path of an address of the wallet in blue on a terminal" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hwOnScreen [] home ["txs", "--no-pager"]
+        runOut run `shouldSatisfy` Text.isInfixOf "at \ESC[0;34m/0/0\ESC[0m"
+
+    it "shows the label of an address of the wallet in its blue on a terminal, in italics" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "rent"] []
+        run <- hwOnScreen [] home ["txs", "--no-pager"]
+        runOut run `shouldSatisfy` Text.isInfixOf "\ESC[0;34;3m\"rent\""
+
+    it "shows an address of the wallet in full in blue on a terminal, in txs --verbose" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hwOnScreen [] home ["txs", "--verbose", "--no-pager"]
+        runOut run `shouldSatisfy` Text.isInfixOf "\ESC[0;34m1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\ESC[0m"
 
     it "does not show the change the payer of a payment received keeps, in either view" $
       withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
@@ -281,6 +352,22 @@ layoutSpec ctx =
         synced home
         listed <- runOut <$> hw home ["txs"] []
         map Text.null (Text.lines listed) `shouldBe` [False, False, False, False, True, False, False, False, False]
+
+    -- The header takes two lines: the headings, and the line under them.
+    -- Each of the two payments takes one row.
+    it "lists each transaction on one row under a header with --tabular" $
+      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+        synced home
+        listed <- runOut <$> hw home ["txs", "--tabular"] []
+        length (Text.lines listed) `shouldBe` 4
+
+    -- The newest payment brought 30000 to the 50000: 50000 + 30000 = 80000
+    it "puts the balance after each transaction next to its amount with --tabular" $
+      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+        synced home
+        listed <- runOut <$> hw home ["txs", "--tabular"] []
+        map (Text.isInfixOf "│    +0.00030000 │     0.00080000 │") (Text.lines listed) `shouldBe` [False, False, True, False]
+        map (Text.isInfixOf "│    +0.00050000 │     0.00050000 │") (Text.lines listed) `shouldBe` [False, False, False, True]
 
     -- The newest payment brought 30000 to the 50000: 50000 + 30000 = 80000
     it "shows the balance after each transaction, the newest with what the account holds" $
@@ -362,7 +449,7 @@ layoutSpec ctx =
             (_, sent) = Text.breakOn "  To       : " shown
         firstLine `shouldSatisfy` Text.isInfixOf "  Internal  "
         sent `shouldSatisfy` Text.isInfixOf "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg  0.00020000 btc  /0/1\n"
-        sent `shouldSatisfy` Text.isInfixOf "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  /1/0  change address\n"
+        sent `shouldSatisfy` Text.isInfixOf "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  /1/0\n             change address\n"
         shown `shouldNotSatisfy` Text.isInfixOf "  Change   : "
 
 -- old key
@@ -497,6 +584,36 @@ balancesOf (ResponseBalances _ addrs) =
   Right [(dBAddressAddress addr, coinBalanceTotal b, coinBalanceSpendable b, coinBalanceUnspendable b) | (addr, b) <- addrs]
 balancesOf other = Left (show other)
 
+-- The coin of the paid chain is in block 800000, three blocks deep at best
+-- block 800002. Only the verbose view gives the block.
+coinsListSpec :: Ctx -> Spec
+coinsListSpec ctx =
+  describe "The coins coins lists" $ do
+    it "show the block that holds each coin with --verbose" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home ["coins", "--verbose"] []
+        Text.lines (runOut run) `shouldContain` ["  Block  : 800000"]
+
+    it "do not show the block without --verbose" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home ["coins"] []
+        runOut run `shouldNotSatisfy` Text.isInfixOf "Block"
+
+    it "are shown with every detail by lockcoin, which answers with one" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home ["lockcoin", coinArg (payment ctx) 0] []
+        Text.lines (runOut run) `shouldContain` ["  Block  : 800000"]
+
+    it "are shown with every detail by unlockcoin, which answers with one" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["lockcoin", coinArg (payment ctx) 0] []
+        run <- hw home ["unlockcoin", coinArg (payment ctx) 0] []
+        Text.lines (runOut run) `shouldContain` ["  Block  : 800000"]
+
 balancesListSpec :: Ctx -> Spec
 balancesListSpec ctx =
   describe "The addresses balances lists" $ do
@@ -522,6 +639,14 @@ balancesListSpec ctx =
         modifyIORef chain mine
         _ <- answer home ["sync"] []
         (balancesOf <$> hwJson home ["balances"] []) `shouldReturn` Right [(internalAddrsText !! 0, 27740, 27740, 0)]
+
+    -- The payment of 20000 spends the coin of 50000 at /0/0
+    it "tell with --verbose that a pending payment locks the coin it spends" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        run <- hw home ["balances", "--verbose"] []
+        Text.lines (runOut run) `shouldContain` ["  Locked by tx     : 0.00050000 btc"]
 
     it "show the path of each address, then its total, spendable and unspendable balances" $
       withChain ctx (paidChain ctx) $ \home _ -> do
