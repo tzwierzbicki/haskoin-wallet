@@ -588,9 +588,11 @@ coinStateText lockedByTransaction coin = case jsonCoinLock coin of
     | jsonCoinSpendable coin -> "spendable"
     | otherwise -> "not spendable yet"
 
--- | The address that holds a coin, as both views give it: in full, then
--- its path, with its label, or the mark of a change address, on the line
--- below
+-- | The address that holds a coin, as the verbose view gives it: in full,
+-- then its path, with its label, or the mark of a change address, on the
+-- line below, as every view that gives an address in full does. The
+-- compact view keeps them on the line of the address instead
+-- ('compactCoinDoc').
 coinAddressDoc :: Network -> JsonCoin -> Doc Style
 coinAddressDoc net coin =
   withNotesBelow
@@ -604,19 +606,22 @@ coinAddressDoc net coin =
 -- confirmations, counted up to 999+. A coin a pending transaction spends
 -- is "locked by tx", in the words of the table, so that the line keeps to
 -- 80 columns. The second line gives the address that holds the coin in
--- full, then its path, and its label on the line below
--- ('coinAddressDoc'), which makes three lines. It is the one compact
--- view that gives an address of the wallet in full: what tells a coin
--- apart is the address that holds it, which another wallet or a block
--- explorer shows, more than its path. The label of the address stays,
--- since a user may sort coins by the labels of their addresses. The label
--- of the transaction that paid the coin says less of the coin, and only
--- the verbose view gives it.
+-- full, then its path, then its label, or the mark of a change address. It
+-- is the one compact view that gives an address of the wallet in full:
+-- what tells a coin apart is the address that holds it, which another
+-- wallet or a block explorer shows, more than its path. The label of the
+-- address stays, since a user may sort coins by the labels of their
+-- addresses. It stays on the line of the address too, so that every coin
+-- takes two lines: the one exception to the rule that puts the label of
+-- an address in full on the line below it ('withNotesBelow'). A label
+-- ends the line, so a long one pushes nothing, and it is whole, as on a
+-- row of a table. The label of the transaction that paid the coin says
+-- less of the coin, and only the verbose view gives it.
 compactCoinDoc :: Network -> AmountUnit -> Maybe ZonedTime -> JsonCoin -> Doc Style
 compactCoinDoc net unit time coin =
   vcat
     [ columns (shortCoinWord coin : coinLineCells "locked by tx" cappedConfirmations unit time coin),
-      indent 2 ("at" <+> coinAddressDoc net coin)
+      indent 2 ("at" <+> columns (fullAddressWords net (jsonCoinAddress coin) (jsonCoinPath coin) : ownAddressNote (jsonCoinAddressLabel coin) (jsonCoinChange coin)))
     ]
 
 -- | The short id of a coin at the start of a line, faint, padded to the
@@ -1000,7 +1005,9 @@ trailingPathWord = styled Muted . pathToStr
 -- screen, each line again under the address, so that long labels make no
 -- line the terminal would wrap at its first column. A view that names an
 -- address by its path keeps the label on the same line instead, since a
--- path is short ('purposeCell').
+-- path is short ('purposeCell'). So does the compact view of a coin, the
+-- one exception among the views that give an address in full, so that
+-- each coin takes two lines ('compactCoinDoc').
 withNotesBelow :: Doc Style -> [Doc Style] -> Doc Style
 withNotesBelow first notes = align (vcat (first : [hcat (intersperse apart notes) | not (null notes)]))
   where

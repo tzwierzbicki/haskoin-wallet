@@ -340,12 +340,14 @@ coinSpec = do
       take 1 (renderedLines (compactCoinDoc btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinOutpoint = OutPoint a1075db5First 12}))
         `shouldBe` ["a1075db5:12  14 Nov 2023 23:13      0.00050000 btc  spendable, 3 confirmations"]
 
-    -- "  at " takes 5 characters
-    it "gives the label of its address on the line below, under the address, as the views that give an address in full do" $
+    -- The one view that keeps the label of an address in full on its line
+    it "gives the label of its address on the line of the address, after its path" $
       drop 1 (renderedLines (compactCoinDoc btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinAddressLabel = "Wages"}))
-        `shouldBe` [ "  at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  /0/0",
-                     "     \"Wages\""
-                   ]
+        `shouldBe` ["  at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  /0/0  \"Wages\""]
+
+    it "gives a long label of its address whole, at the end of the line, without wrapping it" $
+      drop 1 (renderedLines (compactCoinDoc btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinAddressLabel = "Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month"}))
+        `shouldBe` ["  at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  /0/0  \"Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month\""]
 
     it "leaves out the label of the transaction that paid it, which the verbose view gives" $
       renderedLines (compactCoinDoc btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinTxLabel = "Salary"})
@@ -355,11 +357,9 @@ coinSpec = do
 
     -- 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn is the first change address, which
     -- takes no label
-    it "says a coin at a change address is at one, on the line below the address" $
+    it "says a coin at a change address is at one, on the line of the address" $
       drop 1 (renderedLines (compactCoinDoc btc UnitBitcoin (Just seenTimeInCet) atChange))
-        `shouldBe` [ "  at 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  /1/0",
-                     "     change address"
-                   ]
+        `shouldBe` ["  at 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  /1/0  change address"]
 
     it "says a coin a pending transaction spends is locked by tx, as the table does" $
       (renderedLines (compactCoinDoc btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinLock = Just LockedByTransaction, jsonCoinSpendable = False}) !! 0)

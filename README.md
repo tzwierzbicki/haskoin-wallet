@@ -833,20 +833,21 @@ hw checkaddr /1/2 --account vault
 
 #### `hw coins`
 
-Lists the coins of an account. Each takes two or three lines:
+Lists the coins of an account. Each takes two lines:
 
 1. The [short id](#short-ids) of the coin, such as `a1075db5:1`, which
    `lockcoin` and `--coin` take. Then the time of the transaction that paid it,
    its value, its state, spendable or locked, and its confirmations, up to
    `999+ confirmations`. A coin a pending transaction spends is `locked by tx`.
-2. The address that holds it, in full, with its derivation path.
-3. The label of the address, under the address, or `change address` when it is
-   one. A coin at an address without a label has no such line.
+2. The address that holds it, in full, with its derivation path, then the label
+   of the address, or `change address` when it is one.
 
 This is the one listing that gives an address of the wallet in full in its
 compact view. What tells a coin apart is the address that holds it, more than
-its path. As everywhere an address is in full, its label is on the line below.
-Where a view gives only the path, the label stays on the same line.
+its path. It is also the one view that keeps the label of an address in full
+on the line of the address, so that each coin takes two lines. Everywhere else
+an address is in full, its label is on the line below, and where a view gives
+only the path, the label stays on the same line.
 
 `--verbose` starts each coin with the time of its transaction, and gives the
 full count of the confirmations on the first line. The label of the transaction

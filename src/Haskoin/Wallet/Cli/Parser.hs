@@ -2159,16 +2159,15 @@ coinsCommand =
       details =
         [r|
 A coin is an unspent output of a transaction, written TXID:INDEX. The
-unconfirmed coins come first, then the newest. Each takes two lines, or three
-when its address has a label. The first starts with the short id of the coin:
+unconfirmed coins come first, then the newest. Each takes two lines. The first
+starts with the short id of the coin:
 the first 8 digits of its txid, a colon, and its index, such as a1075db5:1.
 lockcoin and --coin take it, or the coin in full. The first line then gives the
 time of the transaction that paid the coin, in the time zone of the computer,
 its value, its state and its confirmations, up to 999+ confirmations. A coin
 that a pending transaction spends is "locked by tx". The second line gives the
-address that holds the coin, with its derivation path. The label of the address
-follows on a line of its own, under the address, as in the other views that
-give an address in full. A coin at a change address says so there.
+address that holds the coin, with its derivation path, then the label of the
+address. A coin at a change address says so there.
 
 With --verbose, each coin starts with the time of its transaction, and gives the
 full count of its confirmations on its first line. A coin that a pending

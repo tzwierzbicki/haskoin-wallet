@@ -274,13 +274,13 @@ coinLabelsSpec ctx =
         run <- hw home ["coins"] []
         runOut run `shouldNotSatisfy` Text.isInfixOf "Salary"
 
-    it "gives way to the label of the address in coins, on the line below the address" $
+    it "gives way to the label of the address in coins, on the line of the address" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["label", paidTxid ctx, "Salary"] []
         _ <- answer home ["label", textOf (externalAddr 0), "Wages"] []
         run <- hw home ["coins"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  /0/0\n     \"Wages\"\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  /0/0  \"Wages\"\n"
 
     -- The change of the payment of 20000 is the one coin left
     it "is none on the change of a payment the user made and labelled" $
@@ -337,13 +337,13 @@ coinLabelsSpec ctx =
 changeAddressSpec :: Ctx -> Spec
 changeAddressSpec ctx =
   describe "A change address" $ do
-    it "is said to be one in coins, on the line below the address" $
+    it "is said to be one in coins, on the line of the address" $
       withChain ctx (paidChain ctx) $ \home chain -> do
         _ <- sentWithLabel home "Rent"
         modifyIORef chain mine
         _ <- answer home ["sync"] []
         run <- hw home ["coins"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  at 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  /1/0\n     change address\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  at 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  /1/0  change address\n"
 
     it "is said to be one by a transaction that spends from it" $
       withChain ctx (paidChain ctx) $ \home chain -> do
