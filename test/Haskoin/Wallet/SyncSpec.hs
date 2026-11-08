@@ -1225,17 +1225,17 @@ spec = prepareContext $ \ctx -> do
 
     -- Account 0 is paid, 1 is not, 2 is, and 3 and 4 are not, which ends
     -- the search with a gap of 2. Each line tells what came before it.
-    it "tells each account it looks at, with the accounts found paid so far" $
+    it "tells each account it looks at, with its network and the accounts found paid so far" $
       inDatabaseE $ do
         steps <- liftIO $ newIORef []
         _ <- recoverableAccounts ctx cfg (toStore paidAccounts) Bip44 btc (testSeed ctx) 2 noQuestion {status = notingSteps steps}
         liftIO $
           (map (uncurry statusText) <$> readIORef steps)
-            `shouldReturn` [ "recover: looking at /44'/0'/0', 0 accounts paid so far",
-                             "recover: looking at /44'/0'/1', 1 account paid so far",
-                             "recover: looking at /44'/0'/2', 1 account paid so far",
-                             "recover: looking at /44'/0'/3', 2 accounts paid so far",
-                             "recover: looking at /44'/0'/4', 2 accounts paid so far"
+            `shouldReturn` [ "recover on btc: looking at /44'/0'/0', 0 accounts paid so far",
+                             "recover on btc: looking at /44'/0'/1', 1 account paid so far",
+                             "recover on btc: looking at /44'/0'/2', 1 account paid so far",
+                             "recover on btc: looking at /44'/0'/3', 2 accounts paid so far",
+                             "recover on btc: looking at /44'/0'/4', 2 accounts paid so far"
                            ]
 
     it "passes over an index whose child key is invalid, without counting it" $
@@ -1275,25 +1275,25 @@ spec = prepareContext $ \ctx -> do
       windows <- readIORef asked
       map (take 1) windows `shouldBe` [[bchExternalAddr]]
 
-    it "asks on the receiving chain of an account of the seed, named by its path" $
+    it "asks on the receiving chain of an account of the seed, named by its path and its network" $
       inDatabaseE $
         lift $
-          dbShouldFailWith "The store reports used addresses as far as 1000 on the receiving chain of the account /44'/0'/0' of the seed, and more beyond. The scan stopped there." $
+          dbShouldFailWith "The store reports used addresses as far as 1000 on the receiving chain of the account /44'/0'/0' of the seed on btc, and more beyond. The scan stopped there." $
             recoverableAccounts ctx cfg everyAddressUsed Bip44 btc (testSeed ctx) 1 stopLooking
 
     -- The store reports the accounts 0 to 39 of the seed paid at their
     -- first receiving address. The first answer goes on, the second stops.
-    it "asks whether to go on after 20 accounts the store reports paid, naming the last one by its path, and asks again 20 accounts further" $
+    it "asks whether to go on after 20 accounts the store reports paid, naming the network and the last one by its path, and asks again 20 accounts further" $
       inDatabaseE $ do
         firstAddrs <- liftIO $ firstAddrsOfAccounts ctx 40
         asked <- liftIO $ newIORef []
         lift $
-          dbShouldFailWith "The store reports payments to 40 accounts of the seed, as far as the account /44'/0'/39'. The search stopped there." $
+          dbShouldFailWith "The store reports payments to 40 accounts of the seed on btc, as far as the account /44'/0'/39'. The search stopped there." $
             recoverableAccounts ctx cfg (toStore (paidStore ctx [(addr, 1000) | addr <- firstAddrs])) Bip44 btc (testSeed ctx) 1 (answering asked 1)
         liftIO $
           readIORef asked
-            `shouldReturn` [ "The store reports payments to 20 accounts of the seed, as far as the account /44'/0'/19'.",
-                             "The store reports payments to 40 accounts of the seed, as far as the account /44'/0'/39'."
+            `shouldReturn` [ "The store reports payments to 20 accounts of the seed on btc, as far as the account /44'/0'/19'.",
+                             "The store reports payments to 40 accounts of the seed on btc, as far as the account /44'/0'/39'."
                            ]
 
     -- The store reports the accounts 0 to 20 of the seed paid at their
@@ -1366,16 +1366,16 @@ spec = prepareContext $ \ctx -> do
       runExceptT (foreignFunds ctx smallGap ((toStore emptyStore) {storeBalances = \_ -> throwError "The store is down"}) btc (testSeed ctx) 1 noQuestion)
         `shouldReturn` Left "The store is down"
 
-    it "asks on the chains of an account of a kind hw does not hold, named by its path" $
+    it "asks on the chains of an account of a kind hw does not hold, named by its path and its network" $
       runExceptT (foreignFunds ctx cfg everyAddressUsed btc (testSeed ctx) 1 stopLooking)
-        `shouldReturn` Left "The store reports used addresses as far as 1000 on the receiving chain of the account /49'/0'/0' of the seed, and more beyond. The scan stopped there."
+        `shouldReturn` Left "The store reports used addresses as far as 1000 on the receiving chain of the account /49'/0'/0' of the seed on btc, and more beyond. The scan stopped there."
 
     -- The store reports the bip49 accounts 0 to 19 of the seed paid at
     -- their first receiving address
     it "asks whether to go on after 20 accounts of a kind the store reports paid, as for the accounts hw holds, and stops when the answer is no" $ do
       firstAddrs <- firstAddrsOfWrappedAccounts ctx 20
       runExceptT (foreignFunds ctx cfg (toStore (paidStore ctx [(addr, 1000) | addr <- firstAddrs])) btc (testSeed ctx) 1 stopLooking)
-        `shouldReturn` Left "The store reports payments to 20 accounts of the seed, as far as the account /49'/0'/19'. The search stopped there."
+        `shouldReturn` Left "The store reports payments to 20 accounts of the seed on btc, as far as the account /49'/0'/19'. The search stopped there."
 
   describe "Watching the gap of addresses" $ do
     -- A gap of 3 instead of the default 20: the sync looks at the three

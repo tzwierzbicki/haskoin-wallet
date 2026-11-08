@@ -74,7 +74,8 @@ data Config = Config
     -- | The network of a command that needs one when --network is not
     -- given, for a user of one network. Without it, --network must be.
     -- A sweep that pays no account of the wallet does not take it: it
-    -- needs its --network.
+    -- needs its --network. recover does not take it either: it searches
+    -- Bitcoin and Bitcoin Cash, since a seed is often paid on both.
     configDefaultNetwork :: Maybe Network,
     -- | The unit of the amounts when --unit is not given, for a user who
     -- counts in satoshis or in bits. It is the default of --unit, so it

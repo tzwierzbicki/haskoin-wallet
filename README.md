@@ -468,15 +468,23 @@ Finds the accounts of a mnemonic, or of a backup in shares, that were paid. It
 adds them and syncs them. It needs the mnemonic and the server at the same time.
 
 ```console
-hw recover --network btc --account-gap 20
+hw recover
+hw recover --network bch --account-gap 20
 ```
 
-The accounts are named `btc0`, `btc1` and so on for the `bip44` accounts, and
-`btc0-segwit`, `btc1-segwit` and so on for the `bip84` ones. The search stops
-after 10 accounts in a row without a payment, or the number `--account-gap`
-gives, for each kind of account apart. After a thousand used addresses in a row,
-it asks whether to keep looking, as [`sync`](#hw-sync) does. On a terminal, a
-line tells which account it is looking at.
+Without `--network`, `recover` searches Bitcoin, then Bitcoin Cash. The
+`default-network` of the configuration does not apply. A seed is often paid on
+both, as every seed from before the fork of 2017 is, and a search of one
+network would say nothing of the other. A test network is searched only when
+`--network` names it.
+
+The accounts are named after their network and index: `btc0`, `btc1`, `bch0`
+and so on for the `bip44` accounts, and `btc0-segwit`, `btc1-segwit` and so on
+for the `bip84` ones. The search stops after 10 accounts in a row without a
+payment, or the number `--account-gap` gives, for each kind of account apart.
+After a thousand used addresses in a row, it asks whether to keep looking, as
+[`sync`](#hw-sync) does. On a terminal, a line tells which network and account
+it is looking at.
 
 After every 20 accounts of a kind the server reports paid, `recover` asks
 whether to keep looking. A server that lies reports them without end. A no stops
@@ -502,6 +510,10 @@ to an address of `hw`.
 >   [`createacc`](#hw-createacc) instead. Copy them with
 >   [`exportacc`](#hw-exportacc) and [`importacc`](#hw-importacc), and run
 >   [`sync`](#hw-sync).
+> - **A network the server does not answer for is left out.** `recover` still
+>   searches the other one. Its answer ends with the network it left out, and
+>   it exits with an error, as `sync` does. Run `recover` again once the
+>   server answers. The accounts found the first time are skipped.
 
 #### `hw checkmnemonic`
 
@@ -1420,7 +1432,7 @@ On its first command, `hw` creates the directory `~/.hw`. It holds the database
 | Key | Default | What it sets |
 |---|---|---|
 | `host` | `https://api.haskoin.com/` | The haskoin-store server |
-| `default-network` | `btc` | The network of a command given no `--network` |
+| `default-network` | `btc` | The network of a command given no `--network`. `recover` searches `btc` and `bch` instead. |
 | `unit` | `btc` | The unit of the amounts of a command given no `--unit`: `btc`, `bit` or `sat` |
 | `listing-view` | `compact` | The [view of a listing](#listings) given no `--compact`, `--verbose` or `--tabular`: `compact`, `verbose` or `tabular` |
 | `gap` | `20` | How many unused addresses in a row `receive` gives out and `sync` looks at |

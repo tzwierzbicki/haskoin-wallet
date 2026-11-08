@@ -43,8 +43,9 @@ Accounts and backups:
   Any T of the N shares rebuild the seed. Every command that asks for a
   mnemonic takes shares too.
 - `recover` finds the accounts of a mnemonic that were paid, adds them and
-  syncs them. It also tells of funds at paths `hw` cannot spend from, such as
-  wrapped SegWit and Taproot accounts.
+  syncs them. Without `--network`, it searches Bitcoin and Bitcoin Cash both.
+  It also tells of funds at paths `hw` cannot spend from, such as wrapped
+  SegWit and Taproot accounts.
 - `descriptor` shows an account as an output descriptor (BIP380). `importacc`
   reads descriptors and extended public keys.
 - `exportacc` and `importacc` use the BIP329 format. The file carries the
@@ -131,7 +132,7 @@ Using `hw`:
 - `--unit btc|bit|sat` sets the unit of amounts. An amount can carry its own
   unit, as in `1000sat`.
 - The key `default-network` of the configuration sets the network of a command
-  given no `--network`.
+  given no `--network`. `recover` searches Bitcoin and Bitcoin Cash instead.
 - The key `unit` of the configuration sets the unit of the amounts of a
   command given no `--unit`.
 - The key `listing-view` of the configuration sets the view of the six

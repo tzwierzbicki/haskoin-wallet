@@ -302,10 +302,11 @@ arbitraryResponse net ctx =
         <$> (resize 10 $ listOf $ arbitrarySyncRes net ctx)
         <*> (resize 10 $ listOf $ (,) <$> arbitraryDBAccount net ctx <*> arbitraryText),
       ResponseRecover
-        <$> arbitraryNetwork
+        <$> (resize 2 $ listOf arbitraryNetwork)
         <*> arbitraryNatural
         <*> (resize 10 $ listOf $ arbitrarySyncRes net ctx)
-        <*> (resize 10 $ listOf arbitraryForeignFunds),
+        <*> (resize 10 $ listOf $ (,) <$> arbitraryNetwork <*> arbitraryForeignFunds)
+        <*> (resize 2 $ listOf $ (,) <$> arbitraryNetwork <*> arbitraryText),
       ResponseFees net <$> arbitraryFeeRates
     ]
 

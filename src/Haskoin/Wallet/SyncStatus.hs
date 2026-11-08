@@ -49,7 +49,7 @@ import Data.List (genericLength)
 import Data.List.Split (chunksOf)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Haskoin (HardPath, pathToStr)
+import Haskoin (HardPath, Network (..), pathToStr)
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Store (Store (..), inParallel, requestBatch)
 import Numeric.Natural (Natural)
@@ -158,17 +158,19 @@ bar width done total = "[" <> replicate filled '#' <> replicate (width - filled)
 type Tell = Step -> IO ()
 
 -- | Where the steps go, given what they are of: the name of an account, or
--- recover for a search over the accounts of a seed
+-- "recover on" a network for a search over the accounts of a seed
 type Status = Text -> Tell
 
 -- | Nowhere: for the tests, and off a terminal
 noStatus :: Status
 noStatus _ _ = return ()
 
--- | Tell that a search is looking at the account at the path, with how
--- many accounts it found paid so far
-tellSearch :: Status -> HardPath -> Natural -> IO ()
-tellSearch status path paid = status "recover" (LookingAtAccount path paid)
+-- | Tell that a search is looking at the account at the path on the
+-- network, with how many accounts it found paid so far. The line reads
+-- "recover on btc: looking at /44'/0'/0', 0 accounts paid so far". It names
+-- the network, since recover searches two in one run.
+tellSearch :: Status -> Network -> HardPath -> Natural -> IO ()
+tellSearch status net path paid = status ("recover on " <> Text.pack net.name) (LookingAtAccount path paid)
 
 {- The store that tells -}
 

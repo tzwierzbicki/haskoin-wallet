@@ -220,7 +220,8 @@ data NewMnemonic = NewMnemonic
 
 -- | The options of recover
 data Recover = Recover
-  { -- | The network, unless the default one
+  { -- | The one network to search, when given. Without it, recover
+    -- searches Bitcoin and Bitcoin Cash, whatever the default network.
     network :: !(Maybe Network),
     -- | The accounts in a row without a payment that end the search
     accountGap :: !Natural,
@@ -826,6 +827,13 @@ readKind typed = maybe (Left ("The type of an account is " <> intercalate " or "
 networkMaybeOption :: Args (Maybe Network)
 networkMaybeOption = networkOptionWith "Without it, the default-network of the configuration file."
 
+-- | The one network recover searches, when given. Without it, recover
+-- searches Bitcoin and Bitcoin Cash: the default-network of the
+-- configuration file does not apply, since a seed is often paid on both.
+recoverNetworkOption :: Args (Maybe Network)
+recoverNetworkOption =
+  networkOptionWith "Only it is searched. Without it, btc and bch are searched, whatever the default-network of the configuration file."
+
 -- | The network of a sweep, when given. A sweep that pays an account of the
 -- wallet is on the network of that account. One that pays none needs it.
 sweepNetworkOption :: Args (Maybe Network)
@@ -873,10 +881,17 @@ accounts on the offline computer with createacc instead. Copy them with
 exportacc and importacc, and run `sync`.
 
 `recover` asks for the mnemonic, or for the shares of a backup, then searches
-the network for the accounts of its seed that were paid. It checks the accounts in order from index 0, and
-asks the server about the receiving addresses of each. Each account that was
-paid is added, named after the network and its index, such as btc0, and
-synced. Accounts the wallet has already are skipped.
+for the accounts of its seed that were paid. It checks the accounts in order
+from index 0, and asks the server about the receiving addresses of each. Each
+account that was paid is added, named after the network and its index, such
+as btc0 or bch0, and synced. Accounts the wallet has already are skipped.
+
+Without --network, `recover` searches Bitcoin, then Bitcoin Cash. The
+default-network of the configuration file does not apply. A seed is often paid
+on both, as every seed from before the fork of 2017 is. A test network is
+searched only when --network names it. When the server does not answer for
+one of the two, the other is still searched. The answer then names the one
+left out, and hw exits with an error, as `sync` does.
 
 On Bitcoin, the bip44 accounts of the seed are searched first, then the
 bip84 ones, which most other wallets make: a bip84 account found is named
@@ -894,8 +909,8 @@ a wallet that holds such accounts, to an address of this wallet.
 The search stops after --account-gap accounts in a row without a payment,
 counted for each kind of account apart. BIP44 stops at the first such
 account. hw looks further, since accounts created on an offline computer
-may never have been paid. On a terminal, a line tells which account `recover`
-is looking at, as `sync` does.
+may never have been paid. On a terminal, a line tells which network and
+account `recover` is looking at, as `sync` does.
 
 After every 20 accounts of a kind the server reports paid, `recover` asks
 whether to keep looking. A server that lies reports them without end. A no
@@ -907,7 +922,7 @@ that finds accounts.
 |],
       args =
         CommandRecover
-          <$> (Recover <$> networkMaybeOption <*> accountGapOption <*> mnemonicPartsOption)
+          <$> (Recover <$> recoverNetworkOption <*> accountGapOption <*> mnemonicPartsOption)
     }
 
 accountGapOption :: Args Natural

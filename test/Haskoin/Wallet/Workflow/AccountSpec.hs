@@ -1114,26 +1114,76 @@ recoverSpec ctx =
       withChain ctx (chainPaying ctx bchExternalAddr) $ \home _ ->
         (accountsOf <$> hwJson home ["recover", "--network", "bch"] seedOnce) `shouldReturn` Right [("bch0", 0, 50000)]
 
-    -- The chain pays the first receiving address of account 0 of the seed,
-    -- and the first receiving address of its bip49 account 0 and of its
-    -- bip86 account 0, which hw cannot spend from
-    it "come with the funds at the bip49 and bip86 paths of the seed, which hw cannot spend and adds no account for" $
-      withChain ctx (paidElsewhereChain ctx) $ \home _ -> do
-        found <- hwJson home ["recover"] seedOnce
-        accountsOf found `shouldBe` Right [("btc0", 0, 50000)]
-        unspendableOf found `shouldBe` Right [("bip49", "/49'/0'/0'", 1, 30000), ("bip86", "/86'/0'/0'", 1, 7000)]
+    -- The configuration file of the test home names btc. The chain pays the
+    -- first receiving address of account 0 of the seed on Bitcoin, and the
+    -- one on Bitcoin Cash, at m/44'/145'/0'.
+    it "are looked for on Bitcoin, then on Bitcoin Cash, without --network, whatever the default network" $
+      withChain ctx (bothNetworksChain ctx) $ \home _ ->
+        (accountsOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right [("btc0", 0, 50000), ("bch0", 0, 20000)]
+
+    it "are looked for on Bitcoin and Bitcoin Cash when the configuration file names no default network" $
+      withChain ctx (bothNetworksChain ctx) $ \home _ -> do
+        setDefaultNetwork home Nothing
+        (accountsOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right [("btc0", 0, 50000), ("bch0", 0, 20000)]
+
+    -- The chain pays the first receiving address of the bip44 account 0 of
+    -- the test backup in shares on testnet, m/44'/1'/0'/0/0, which recover
+    -- --network btctest finds
+    it "are not looked for on a test network without --network, even when it is the default network" $
+      withChain ctx (chainPaying ctx sharesTestnetAddr) $ \home _ -> do
+        setDefaultNetwork home (Just "btctest")
+        (accountsOf <$> hwJson home ["recover"] sharesOnce) `shouldReturn` Right []
+
+    -- The server answers for Bitcoin, and not for Bitcoin Cash
+    it "are added on the network whose store is up when the other one is down" $
+      withChainDownOn ctx [bch] (bothNetworksChain ctx) $ \home _ -> do
+        _ <- hwJson home ["recover"] seedOnce
         (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("btc0", 0, 50000)]
 
-    it "are shown before those funds, each of which with its kind, its used addresses and what is left, then what to do" $
+    it "name last the network whose store is down, which was not searched" $
+      withChainDownOn ctx [bch] (bothNetworksChain ctx) $ \home _ -> do
+        run <- hw home ["recover"] seedOnce
+        runOut run `shouldSatisfy` Text.isInfixOf "\n\nbch  not searched: The store at http://127.0.0.1:"
+        runOut run `shouldSatisfy` Text.isSuffixOf "/ answered with an error hw could not read\n"
+
+    it "name in JSON the network whose store is down, with the failure of its store" $
+      withChainDownOn ctx [bch] (bothNetworksChain ctx) $ \home _ -> do
+        found <- hwJson home ["recover"] seedOnce
+        (map fst <$> notSearchedOf found) `shouldBe` Right ["bch"]
+        (map snd <$> notSearchedOf found)
+          `shouldSatisfy` either (const False) (all (\failure -> "The store at http://127.0.0.1:" `Text.isPrefixOf` failure && "/ answered with an error hw could not read" `Text.isSuffixOf` failure))
+
+    -- A script tells from the exit code that the search is not whole, as it
+    -- does after a sync that left an account out
+    it "end with an error when a network was not searched" $
+      withChainDownOn ctx [bch] (bothNetworksChain ctx) $ \home _ -> do
+        run <- hw home ["recover"] seedOnce
+        runExit run `shouldBe` ExitFailure 1
+
+    -- The chain pays the first receiving address of account 0 of the seed,
+    -- and the first receiving address of its bip49 account 0 and of its
+    -- bip86 account 0, which hw cannot spend from. On Bitcoin alone: the
+    -- fake store has one chain for both networks, so Bitcoin Cash would
+    -- report the coins of account 0 at m/44'/0' too.
+    it "come with the funds at the bip49 and bip86 paths of the seed, which hw cannot spend and adds no account for" $
+      withChain ctx (paidElsewhereChain ctx) $ \home _ -> do
+        found <- hwJson home ["recover", "--network", "btc"] seedOnce
+        accountsOf found `shouldBe` Right [("btc0", 0, 50000)]
+        unspendableOf found `shouldBe` Right [("btc", "bip49", "/49'/0'/0'", 1, 30000), ("btc", "bip86", "/86'/0'/0'", 1, 7000)]
+        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("btc0", 0, 50000)]
+
+    -- The coins of account 0 at m/44'/0'/0' are on both chains, as those of
+    -- a seed from before the fork of Bitcoin Cash are
+    it "are shown before those funds, each of which with its network, its path, its kind, its used addresses and what is left, then what to do" $
       withChain ctx (paidElsewhereChain ctx) $ \home _ -> do
         run <- hw home ["recover"] seedOnce
         run `shouldSatisfy` printed "btc0  btc  /44'/0'/0'\n"
-        run `shouldSatisfy` printed "\n\nThe seed was paid at paths hw cannot spend from:\n  /49'/0'/0'  bip49, wrapped SegWit: 1 address used, 0.00030000 btc left\n  /86'/0'/0'  bip86, Taproot: 1 address used, 0.00007000 btc left\n  A wallet that holds such accounts can move the funds to an address of this wallet.\n"
+        run `shouldSatisfy` printed "\n\nThe seed was paid at paths hw cannot spend from:\n  btc  /49'/0'/0'  bip49, wrapped SegWit: 1 address used, 0.00030000 btc left\n  btc  /86'/0'/0'  bip86, Taproot: 1 address used, 0.00007000 btc left\n  bch  /44'/0'/0'  bip44 with the coin type of Bitcoin: 1 address used, 0.00050000 btc left\n  A wallet that holds such accounts can move the funds to an address of this wallet.\n"
 
-    it "are said to be none when none was paid, before the funds at the paths hw cannot spend from" $
+    it "are said to be none on either network when none was paid, before the funds at the paths hw cannot spend from" $
       withChain ctx (chainPaying ctx (wrappedExternalAddr 0)) $ \home _ -> do
         run <- hw home ["recover"] seedOnce
-        runOut run `shouldBe` "No account of the seed was paid on btc: the search ended after 10 accounts in a row without a payment\n\nThe seed was paid at paths hw cannot spend from:\n  /49'/0'/0'  bip49, wrapped SegWit: 1 address used, 0.00050000 btc left\n  A wallet that holds such accounts can move the funds to an address of this wallet.\n"
+        runOut run `shouldBe` "No account of the seed was paid on btc or bch: the search ended after 10 accounts in a row without a payment\n\nThe seed was paid at paths hw cannot spend from:\n  btc  /49'/0'/0'  bip49, wrapped SegWit: 1 address used, 0.00050000 btc left\n  A wallet that holds such accounts can move the funds to an address of this wallet.\n"
         (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right []
 
     -- The chain pays the first receiving address of account 0 of the seed
@@ -1143,20 +1193,13 @@ recoverSpec ctx =
       withChain ctx (paidChain ctx) $ \home _ -> do
         found <- hwJson home ["recover", "--network", "bch"] seedOnce
         accountsOf found `shouldBe` Right []
-        unspendableOf found `shouldBe` Right [("bip44", "/44'/0'/0'", 1, 50000)]
+        unspendableOf found `shouldBe` Right [("bch", "bip44", "/44'/0'/0'", 1, 50000)]
 
     it "leave out an account the wallet has" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         createMain home
         (accountsOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right []
         (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("main", 0, 0)]
-
-    it "are not looked for without a --network or a default network in the configuration file, before the mnemonic" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
-        setDefaultNetwork home Nothing
-        run <- hw home ["recover"] seedOnce
-        run `shouldSatisfy` printed "Give the --network, or a default-network in the configuration file"
-        run `shouldNotSatisfy` askedMnemonic
 
     -- The chain pays the account hw derived before it normalized the
     -- passphrase, where BIP39 gives another seed
@@ -1176,11 +1219,13 @@ recoverSpec ctx =
     -- The chain pays 50000 to the first receiving address of each of the
     -- accounts 0 to 20 of the seed: 21 accounts, one more than recover
     -- finds before it asks. A store that lies reports them without end.
+    -- On Bitcoin alone: the fake store has one chain for both networks,
+    -- so the search of Bitcoin Cash at m/44'/0' would ask again.
     it "are asked about once the store reports 20 of them paid, and none is added when the answer is no" $ do
       firstAddrs <- firstAddrsOfAccounts ctx 21
       withChain ctx (Chain 800002 [(fundingTx ctx 1 [(addr, 50000) | addr <- firstAddrs], Just 800000)]) $ \home _ -> do
-        run <- hw home ["recover"] (seedOnce <> ["n"])
-        run `shouldSatisfy` printed "The store reports payments to 20 accounts of the seed, as far as the account /44'/0'/19'. Keep looking? [y/N] "
+        run <- hw home ["recover", "--network", "btc"] (seedOnce <> ["n"])
+        run `shouldSatisfy` printed "The store reports payments to 20 accounts of the seed on btc, as far as the account /44'/0'/19'. Keep looking? [y/N] "
         run `shouldSatisfy` printed "The search stopped there."
         runExit run `shouldBe` ExitFailure 1
         (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right []
@@ -1188,7 +1233,7 @@ recoverSpec ctx =
     it "are all added when the answer is yes, those found before the question and the one after" $ do
       firstAddrs <- firstAddrsOfAccounts ctx 21
       withChain ctx (Chain 800002 [(fundingTx ctx 1 [(addr, 50000) | addr <- firstAddrs], Just 800000)]) $ \home _ -> do
-        found <- hwJson home ["recover"] (seedOnce <> ["y"])
+        found <- hwJson home ["recover", "--network", "btc"] (seedOnce <> ["y"])
         (map (\(name, _, _) -> name) <$> accountsOf found)
           `shouldBe` Right
             [ "btc0", "btc1", "btc2", "btc3", "btc4", "btc5", "btc6",
@@ -1223,6 +1268,12 @@ recoverSpec ctx =
 cafeOnce, cafeTwice :: [Text]
 cafeOnce = [mnemonicWords testMnemonic, cafePassphrase]
 cafeTwice = [mnemonicWords testMnemonic, mnemonicWords testMnemonic, cafePassphrase, cafePassphrase]
+
+-- | A chain whose block 800000 pays 50000 to the first receiving address
+-- of account 0 of the seed on Bitcoin, m/44'/0'/0'/0/0, and 20000 to the
+-- one on Bitcoin Cash, m/44'/145'/0'/0/0
+bothNetworksChain :: Ctx -> Chain
+bothNetworksChain ctx = Chain 800002 [(fundingTx ctx 1 [(externalAddr 0, 50000), (bchExternalAddr, 20000)], Just 800000)]
 
 -- | The paid chain, with a payment to the first receiving address of the
 -- bip49 account 0 of the seed and of its bip86 account 0 in the same block

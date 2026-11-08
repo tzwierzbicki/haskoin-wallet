@@ -159,26 +159,28 @@ data Looked a
   | -- | An account that was paid, with what the search keeps of it
     Paid a
 
--- | The loop of a search over the accounts of a seed, as BIP44 describes
--- it: index after index from 0, until the given number of unpaid accounts
--- in a row. The last argument looks at the account of an index. The
--- result is what it kept of each paid account, in the order of the
--- indices.
+-- | The loop of a search over the accounts of a seed on a network, as
+-- BIP44 describes it: index after index from 0, until the given number of
+-- unpaid accounts in a row. The last argument looks at the account of an
+-- index. The result is what it kept of each paid account, in the order of
+-- the indices.
 --
 -- After every 'accountLimit' accounts found paid, the question is asked.
--- It is told how many accounts the store reports, and the path of the
--- last one, which the second argument gives from its index. A no stops
--- the search with an error, so the command writes nothing. The status line
--- tells each account the search looks at.
-searchAccounts :: (MonadIO m) => Natural -> (Natural -> HardPath) -> Watcher m -> (Natural -> ExceptT String m (Looked a)) -> ExceptT String m [a]
-searchAccounts accountGap pathOf watch look = go 0 0 0
+-- It is told how many accounts the store reports, on which network, and
+-- the path of the last one, which the third argument gives from its index.
+-- A no stops the search with an error, so the command writes nothing. The
+-- status line tells each account the search looks at, with its network.
+-- recover searches two networks in one run, and a path alone does not
+-- tell them apart: m/44'/0' is an account of Bitcoin on both.
+searchAccounts :: (MonadIO m) => Natural -> Network -> (Natural -> HardPath) -> Watcher m -> (Natural -> ExceptT String m (Looked a)) -> ExceptT String m [a]
+searchAccounts accountGap net pathOf watch look = go 0 0 0
   where
     -- The accounts from the index on, after the given number of unpaid
     -- accounts in a row, and of paid accounts since the search began
     go index unpaid found
       | unpaid >= accountGap = return []
       | otherwise = do
-          liftIO $ tellSearch watch.status (pathOf index) found
+          liftIO $ tellSearch watch.status net (pathOf index) found
           looked <- look index
           case looked of
             PassedOver -> go (index + 1) unpaid found
@@ -189,16 +191,17 @@ searchAccounts accountGap pathOf watch look = go 0 0 0
     -- decides
     onward index found = do
       when (found `mod` accountLimit == 0) $ do
-        let reported = reportedPaid found (pathOf index)
+        let reported = reportedPaid found net (pathOf index)
         goOn <- watch.question reported
         unless goOn $ throwError (reported <> " The search stopped there.")
       go (index + 1) 0 found
 
 -- | What a search reports when it reaches 'accountLimit': how many
--- accounts the store reports paid, and the path of the last one
-reportedPaid :: Natural -> HardPath -> String
-reportedPaid found path =
-  "The store reports payments to " <> show found <> " accounts of the seed, as far as the account " <> pathToStr path <> "."
+-- accounts the store reports paid, on which network, and the path of the
+-- last one
+reportedPaid :: Natural -> Network -> HardPath -> String
+reportedPaid found net path =
+  "The store reports payments to " <> show found <> " accounts of the seed on " <> net.name <> ", as far as the account " <> pathToStr path <> "."
 
 -- | The accounts of a seed of a kind on a network that were paid, found as
 -- BIP44 describes: account after account from index 0, the receiving
@@ -212,7 +215,7 @@ reportedPaid found path =
 -- Returns the accounts found, with their keys.
 recoverableAccounts :: (MonadUnliftIO m) => Ctx -> Config -> Store -> AccountKind -> Network -> PublicSeed -> Natural -> Watcher (DB m) -> ExceptT String (DB m) [(Natural, XPubKey)]
 recoverableAccounts ctx cfg store kind net seed accountGap watch =
-  searchAccounts accountGap (accountDeriv kind net) watch $ \index -> do
+  searchAccounts accountGap net (accountDeriv kind net) watch $ \index -> do
     keyM <- liftIO $ seedAccountKey seed kind net index
     case keyM of
       Nothing -> return PassedOver
@@ -221,8 +224,26 @@ recoverableAccounts ctx cfg store kind net seed accountGap watch =
         case held of
           Just _ -> return PassedOver
           Nothing -> do
-            paid <- (> 0) <$> scanChain ctx store kind key extDeriv (configGap cfg) 0 (seedAccountPlace extDeriv (accountDeriv kind net index)) watch
+            paid <- (> 0) <$> scanChain ctx store kind key extDeriv (configGap cfg) 0 (seedAccountPlace net extDeriv (accountDeriv kind net index)) watch
             return $ if paid then Paid (index, key) else Unpaid
+
+-- | The networks recover searches: the one --network names, or else
+-- Bitcoin and Bitcoin Cash, in that order.
+--
+-- The default-network of the configuration does not apply. A seed is
+-- often paid on both networks, as every seed from before the fork of 2017
+-- is, and the person restoring it may not know which. A search that took
+-- the default would find half the funds and say nothing of the rest.
+--
+-- The test networks are left out unless named. Their coins have no value.
+-- They all have coin type 1 and write tpub keys, and the wallet holds one
+-- account per key, so a seed paid on two of them would get its account
+-- on the first one searched alone. The public server does not serve all
+-- of them either, and a search of every one would end most runs with
+-- networks it could not search. A regtest chain never has a public server
+-- at all.
+recoverNetworks :: Maybe Network -> [Network]
+recoverNetworks = maybe [btc, bch] pure
 
 -- | Recover the accounts of a seed on a network, of every kind the network
 -- has, the BIP44 accounts first: those found paid are created, named after
@@ -240,10 +261,11 @@ recoverSeed ctx cfg store net seed accountGap watch = do
 
 -- | Where a chain of an account of the seed is, for the question of
 -- 'scanLimit': "on the receiving chain of the account /44'/0'/0' of the
--- seed"
-seedAccountPlace :: SoftPath -> HardPath -> String
-seedAccountPlace chain path =
-  "on the " <> (if chain == intDeriv then "change" else "receiving") <> " chain of the account " <> pathToStr path <> " of the seed"
+-- seed on btc". The network is named because the path does not tell it:
+-- m/44'/0' is searched on Bitcoin Cash too.
+seedAccountPlace :: Network -> SoftPath -> HardPath -> String
+seedAccountPlace net chain path =
+  "on the " <> (if chain == intDeriv then "change" else "receiving") <> " chain of the account " <> pathToStr path <> " of the seed on " <> net.name
 
 -- | The name of a recovered account: the network and the index, as in
 -- btc0, for a BIP44 account, and with -segwit after them, as in
@@ -283,7 +305,7 @@ foreignPath net funds = foreignDeriv (foreignKind funds) net (foreignIndex funds
 -- so that the balance is the whole of it.
 foreignFundsOfKind :: (MonadIO m) => Ctx -> Config -> Store -> ForeignKind -> Network -> PublicSeed -> Natural -> Watcher m -> ExceptT String m [ForeignFunds]
 foreignFundsOfKind ctx cfg store kind net seed accountGap watch =
-  searchAccounts accountGap (foreignDeriv kind net) watch $ \index -> do
+  searchAccounts accountGap net (foreignDeriv kind net) watch $ \index -> do
     keyM <- liftIO $ seedForeignKey seed kind net index
     case keyM of
       Nothing -> return PassedOver
@@ -297,7 +319,7 @@ foreignFundsOfKind ctx cfg store kind net seed accountGap watch =
             return $ Paid (ForeignFunds kind index (genericLength bals) (sum [bal.confirmed + bal.unconfirmed | bal <- bals]))
   where
     usedOn index key chain =
-      usedChainAddresses ctx store (foreignAddress kind net ctx) key chain (configGap cfg) 0 (seedAccountPlace chain (foreignDeriv kind net index)) watch
+      usedChainAddresses ctx store (foreignAddress kind net ctx) key chain (configGap cfg) 0 (seedAccountPlace net chain (foreignDeriv kind net index)) watch
 
 -- | The funds of a seed on a network at the accounts of every foreign kind
 -- the network has, in the order of the kinds and of their indices
@@ -344,7 +366,6 @@ syncAccounts ctx cfg storeOn accs full watch = do
   where
     -- Network has no Ord instance, so the networks are told apart by name
     networks = nubOrdOn (.name) (accountNetwork . snd <$> accs)
-    healthFailure store = either Just (const Nothing) <$> runExceptT (storeHealth store)
 
 -- | Bring an account up to date with the store.
 --

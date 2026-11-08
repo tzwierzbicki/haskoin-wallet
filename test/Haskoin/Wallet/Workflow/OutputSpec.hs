@@ -79,10 +79,13 @@ spec = prepareContext $ \ctx -> do
         run <- hwOnTerminal home ["sync"] ["n"]
         run `shouldSatisfy` shown "\r\ESC[0KThe store reports used addresses as far as 1000"
 
-    it "tells on a terminal which accounts recover looks at, after the mnemonic is typed" $
+    -- Bitcoin is searched first, then Bitcoin Cash, whose bip44 accounts
+    -- are at m/44'/145'
+    it "tells on a terminal which network and account recover looks at, after the mnemonic is typed" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         run <- hwOnTerminal home ["recover"] seedOnce
-        run `shouldSatisfy` shown "\rrecover: looking at /44'/0'/0', 0 accounts paid so far\ESC[0K"
+        run `shouldSatisfy` shown "\rrecover on btc: looking at /44'/0'/0', 0 accounts paid so far\ESC[0K"
+        run `shouldSatisfy` shown "\rrecover on bch: looking at /44'/145'/0', 0 accounts paid so far\ESC[0K"
 
   listingSpec ctx
   listingViewSpec ctx

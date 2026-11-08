@@ -249,6 +249,13 @@ webStore ctx cfg net =
 fromStore :: (MonadIO m) => ExceptT String IO a -> ExceptT String m a
 fromStore action = ExceptT $ liftIO $ runExceptT action
 
+-- | Why the store fails its health check, or Nothing when it passes. A
+-- command over several networks asks this of each store first. It then
+-- leaves out the networks whose store fails, rather than failing whole,
+-- so that one store out of service does not hold back the others.
+healthFailure :: Store -> IO (Maybe String)
+healthFailure store = either Just (const Nothing) <$> runExceptT (storeHealth store)
+
 -- | Ask the store several questions, at most the given number at a time,
 -- and answer them in the order asked. One failed question fails them all.
 inParallel :: Natural -> [ExceptT String IO a] -> ExceptT String IO [a]

@@ -90,10 +90,12 @@ data Response
   | -- | The sync of each account synced, and the accounts not synced, each
     -- with the failure of its store
     ResponseSync ![SyncRes] ![(DBAccount, Text)]
-  | -- | The accounts of a seed recovered on a network, searched with the
-    -- gap of accounts, each with its sync, and the funds of the seed at
-    -- the accounts hw does not hold
-    ResponseRecover !Network !Natural ![SyncRes] ![ForeignFunds]
+  | -- | What recover found of a seed. In order: the networks searched;
+    -- the gap of accounts the search ended on; the sync of each account
+    -- created, in the order of the networks, kinds and indices; the funds
+    -- of the seed at the accounts hw does not hold, each with its network;
+    -- and the networks left out, each with the failure of its store.
+    ResponseRecover ![Network] !Natural ![SyncRes] ![(Network, ForeignFunds)] ![(Network, Text)]
   | -- | The fee rates recent blocks paid, on the network asked
     ResponseFees !Network !FeeRates
   deriving (Eq, Show)
@@ -144,8 +146,15 @@ instance ToJSON Response where
       typed "verifymsg" ["message" .= message, "signature" .= signature, "address" .= addr, "valid" .= valid]
     ResponseSync results notSynced ->
       typed "sync" ["syncres" .= (syncResJson <$> results), "notsynced" .= (notSyncedJson <$> notSynced)]
-    ResponseRecover net gap results elsewhere ->
-      typed "recover" ["network" .= net.name, "accountgap" .= gap, "syncres" .= (syncResJson <$> results), "unspendable" .= (foreignFundsJson net <$> elsewhere)]
+    ResponseRecover searched gap results elsewhere notSearched ->
+      typed
+        "recover"
+        [ "networks" .= ((.name) <$> searched),
+          "accountgap" .= gap,
+          "syncres" .= (syncResJson <$> results),
+          "unspendable" .= (uncurry foreignFundsJson <$> elsewhere),
+          "notsearched" .= (notSearchedJson <$> notSearched)
+        ]
     ResponseFees net rates -> typed "fees" ["network" .= net.name, "feerates" .= rates]
 
 instance FromJSON Response where
@@ -191,14 +200,15 @@ instance FromJSON Response where
       "sync" -> ResponseSync <$> (mapM parseSyncRes =<< o .: "syncres") <*> (mapM parseNotSynced =<< o .: "notsynced")
       "recover" ->
         ResponseRecover
-          <$> network o
+          <$> (mapM networkNamed =<< o .: "networks")
           <*> o .: "accountgap"
           <*> (mapM parseSyncRes =<< o .: "syncres")
           <*> (mapM parseForeignFunds =<< o .: "unspendable")
+          <*> (mapM parseNotSearched =<< o .: "notsearched")
       "fees" -> ResponseFees <$> network o <*> o .: "feerates"
       _ -> fail "Invalid JSON response type"
     where
-      network o = maybe (fail "Unknown network") return . netByName =<< o .: "network"
+      network o = networkNamed =<< o .: "network"
       -- The descriptor of an account
       heldDescriptor = withObject "descriptor of an account" $ \entry ->
         (,,) <$> entry .: "account" <*> entry .: "descriptor" <*> entry .:? "slip132"
@@ -206,6 +216,10 @@ instance FromJSON Response where
       heldTx = withObject "transaction of an account" $ \entry -> do
         acc <- entry .: "account"
         (,) acc <$> (unmarshalValue (accountNetwork acc) =<< entry .: "tx")
+
+-- | The network of a name in JSON
+networkNamed :: String -> Parser Network
+networkNamed = maybe (fail "Unknown network") return . netByName
 
 -- | A transaction with its account in JSON, in a list of transactions of
 -- several accounts
@@ -246,32 +260,45 @@ parseSyncRes =
       <*> o .: "conflicted"
       <*> o .: "discovered"
 
--- | The funds of a seed at an account hw does not hold, in JSON: the kind
--- of the account, its path on the network and its index, how many of its
--- addresses were used, and what they hold in satoshis
+-- | A network recover did not search in JSON, with the failure of its
+-- store
+notSearchedJson :: (Network, Text) -> Value
+notSearchedJson (net, failure) = object ["network" .= net.name, "error" .= failure]
+
+parseNotSearched :: Value -> Parser (Network, Text)
+parseNotSearched = withObject "notsearched" $ \o -> (,) <$> (networkNamed =<< o .: "network") <*> o .: "error"
+
+-- | The funds of a seed at an account hw does not hold, in JSON: the
+-- network, the kind of the account, its path on the network and its
+-- index, how many of its addresses were used, and what they hold in
+-- satoshis. The network is needed to read the path: m/44'/0' is an
+-- account of Bitcoin on Bitcoin Cash too.
 foreignFundsJson :: Network -> ForeignFunds -> Value
 foreignFundsJson net funds =
   object
-    [ "type" .= foreignKindName (foreignKind funds),
+    [ "network" .= net.name,
+      "type" .= foreignKindName (foreignKind funds),
       "path" .= pathToStr (foreignPath net funds),
       "index" .= foreignIndex funds,
       "addresses" .= foreignUsed funds,
       "balance" .= foreignBalance funds
     ]
 
--- | The funds back from their JSON: the path follows from the kind and
--- the index, so it is not read
-parseForeignFunds :: Value -> Parser ForeignFunds
+-- | The funds back from their JSON, with their network: the path follows
+-- from the network, the kind and the index, so it is not read
+parseForeignFunds :: Value -> Parser (Network, ForeignFunds)
 parseForeignFunds =
   withObject "unspendable" $ \o -> do
+    net <- networkNamed =<< o .: "network"
     kind <- maybe (fail "Unknown kind of account") return . foreignKindNamed =<< o .: "type"
-    ForeignFunds kind <$> o .: "index" <*> o .: "addresses" <*> o .: "balance"
+    (,) net <$> (ForeignFunds kind <$> o .: "index" <*> o .: "addresses" <*> o .: "balance")
 
 -- | Whether the answer is a failure, which hw exits with: an error, a
--- signature found not valid, or a sync that left accounts out, so that a
--- script can tell from the exit code
+-- signature found not valid, a sync that left accounts out, or a recover
+-- that left a network out, so that a script can tell from the exit code
 responseFailed :: Response -> Bool
 responseFailed (ResponseError _) = True
 responseFailed (ResponseVerifyMsg _ _ _ valid) = not valid
 responseFailed (ResponseSync _ notSynced) = not (null notSynced)
+responseFailed (ResponseRecover _ _ _ _ notSearched) = not (null notSearched)
 responseFailed _ = False

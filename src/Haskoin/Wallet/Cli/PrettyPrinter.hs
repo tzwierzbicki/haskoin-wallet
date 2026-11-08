@@ -256,6 +256,14 @@ columns = hcat . intersperse "  "
 commaList :: [Doc Style] -> Doc Style
 commaList = hcat . intersperse ", "
 
+-- | Names in a sentence, "or" before the last: "btc", "btc or bch",
+-- "btc, bch or btctest4"
+orList :: [String] -> String
+orList names = case reverse names of
+  [] -> ""
+  [name] -> name
+  lastName : before -> intercalate ", " (reverse before) <> " or " <> lastName
+
 -- | A count with its noun: "no coins", "1 coin", "3 coins"
 counted :: Natural -> String -> String -> String
 counted 0 _ plural = "no " <> plural
@@ -300,20 +308,33 @@ notSyncedDoc :: (DBAccount, Text) -> Doc Style
 notSyncedDoc (acc, failure) =
   vcat [accountLine acc, indent 2 (styled Failure "not synced:" <+> pretty failure)]
 
+-- | The networks recover left out, a line for each with the failure of its
+-- store
+notSearchedDoc :: [(Network, Text)] -> Doc Style
+notSearchedDoc nets =
+  vcat [text net.name <> "  " <> styled Failure "not searched:" <+> pretty failure | (net, failure) <- nets]
+
 -- | The funds of a seed at accounts hw does not hold, as recover shows
--- them: a line for each account, with its path, its kind, how many of its
--- addresses were used and what they hold, then what to do with the funds
-foreignFundsDoc :: AmountUnit -> Network -> [ForeignFunds] -> Doc Style
-foreignFundsDoc unit net elsewhere =
+-- them: a line for each account, with its network, its path, its kind, how
+-- many of its addresses were used and what they hold, then what to do with
+-- the funds. The network comes first, as on the line of an account. The
+-- path alone does not tell it, since m/44'/0' is searched on Bitcoin Cash
+-- too.
+foreignFundsDoc :: AmountUnit -> [(Network, ForeignFunds)] -> Doc Style
+foreignFundsDoc unit elsewhere =
   vcat $
     "The seed was paid at paths hw cannot spend from:"
       : (indent 2 . fundsLine <$> elsewhere)
       <> [indent 2 "A wallet that holds such accounts can move the funds to an address of this wallet."]
   where
-    pathOf = pathToStr . foreignPath net
-    width = fromIntegral $ maximum (0 : (length . pathOf <$> elsewhere))
-    fundsLine funds =
-      text (block width (pathOf funds))
+    netOf (net, _) = net.name
+    pathOf (net, funds) = pathToStr (foreignPath net funds)
+    -- The widest of the column, so that the next one lines up
+    widthOf shown = fromIntegral $ maximum (0 : (length . shown <$> elsewhere))
+    fundsLine entry@(_, funds) =
+      text (block (widthOf netOf) (netOf entry))
+        <> "  "
+        <> text (block (widthOf pathOf) (pathOf entry))
         <> "  "
         <> text (foreignKindDescription (foreignKind funds) <> ": " <> counted (foreignUsed funds) "address" "addresses" <> " used, ")
         <> left (foreignBalance funds)
@@ -1957,12 +1978,15 @@ responsePrinter unit view code shown answer =
     ResponseSync xs notSynced ->
       renderIO . vcat . intersperse mempty $
         [syncResultsPrinter unit xs | not (null xs)] <> [notSyncedPrinter notSynced | not (null notSynced)]
-    ResponseRecover net gap xs elsewhere ->
+    -- The networks not searched last, where the user sees them
+    ResponseRecover searched gap xs elsewhere notSearched ->
       renderIO . vcat . intersperse mempty $
-        recovered : [foreignFundsDoc unit net elsewhere | not (null elsewhere)]
+        recovered
+          : [foreignFundsDoc unit elsewhere | not (null elsewhere)]
+          <> [notSearchedDoc notSearched | not (null notSearched)]
       where
         recovered
-          | null xs = text $ "No account of the seed was paid on " <> net.name <> ": the search ended after " <> show gap <> " accounts in a row without a payment"
+          | null xs = text $ "No account of the seed was paid on " <> orList ((.name) <$> searched) <> ": the search ended after " <> show gap <> " accounts in a row without a payment"
           | otherwise = syncResultsPrinter unit xs
     ResponseFees net rates -> do
       now <- getCurrentTime

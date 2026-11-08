@@ -333,37 +333,56 @@ seedToCreateWith ctx secret = do
         then liftIO (tell terminal typedPassphraseCreated) >> return typed
         else return seed
 
--- | Recover the accounts of a seed that were paid on a network, from its
--- mnemonic or the shares of its backup: see "Haskoin.Wallet.Sync". The funds of the seed at the
--- accounts hw does not hold are told, not taken. When no account is found
--- and normalizing changes the passphrase, the accounts hw derived before,
--- from the passphrase as typed, are looked for too, and the user is told
--- of those. Only the seed of BIP39 is looked at for the other kinds of
--- accounts: other wallets derive from no other.
+-- | Recover the accounts of a seed that were paid, from its mnemonic or
+-- the shares of its backup: see "Haskoin.Wallet.Sync". The search covers
+-- the network --network names, or else Bitcoin and Bitcoin Cash
+-- ('recoverNetworks'), one network after the other.
+--
+-- The store of each network is asked whether it is up before the mnemonic
+-- is typed. A network whose store is down is left out, and the answer
+-- names it, as sync does, so that one store out of service does not hold
+-- back the other network. When no store is up, the command fails before
+-- the mnemonic: the computer is offline, or the host is wrong.
+--
+-- The funds of the seed at the accounts hw does not hold are told, not
+-- taken. When no account is found on any network and normalizing changes
+-- the passphrase, the accounts hw derived before, from the passphrase as
+-- typed, are looked for too, and the user is told of those. Only the seed
+-- of BIP39 is looked at for the other kinds of accounts: other wallets
+-- derive from no other.
 cmdRecover :: Ctx -> Config -> Recover -> IO Response
 cmdRecover ctx cfg opts =
   withStatusLine $ \line ->
     runDBResponse cfg $ do
-      net <- liftMaybe noNetwork (commandNetwork cfg opts.network)
-      let store = webStore ctx cfg net
+      let storeOn = webStore ctx cfg
           watch = terminalWatcher line
       -- An offline computer hears it before the mnemonic is typed
-      fromStore $ storeHealth store
+      checked <- liftIO $ forM (recoverNetworks opts.network) $ \net -> (,) net <$> healthFailure (storeOn net)
+      let searched = [net | (net, Nothing) <- checked]
+          failures = [(net, failure) | (net, Just failure) <- checked]
+      -- No store is up: the command fails with the first failure, as it
+      -- does on one network
+      case failures of
+        (_, failure) : _ | null searched -> throwError failure
+        _ -> return ()
       -- Typed once: a mistyped mnemonic finds no paid account
       secret <- askSeedSecret terminal opts.parts
       seed <- liftEither $ secretSeed ctx secret
-      found <- recoverSeed ctx cfg store net seed opts.accountGap watch
-      elsewhere <- foreignFunds ctx cfg store net seed opts.accountGap watch
+      let accountsOn fromSeed net = recoverSeed ctx cfg (storeOn net) net fromSeed opts.accountGap watch
+          unspendableOn net = map ((,) net) <$> foreignFunds ctx cfg (storeOn net) net seed opts.accountGap watch
+      onEach <- forM searched $ \net -> (,) <$> accountsOn seed net <*> unspendableOn net
+      let found = concatMap fst onEach
+          elsewhere = concatMap snd onEach
       typedM <- liftEither $ secretTypedSeed ctx secret
       fromTyped <- case typedM of
         Just typed | null found -> do
-          results <- recoverSeed ctx cfg store net typed opts.accountGap watch
+          results <- concat <$> forM searched (accountsOn typed)
           unless (null results) $ liftIO $ do
             eraseStatus line
             tell terminal typedPassphraseRecovered
           return results
         _ -> return []
-      return $ ResponseRecover net opts.accountGap (found <> fromTyped) elsewhere
+      return $ ResponseRecover searched opts.accountGap (found <> fromTyped) elsewhere [(net, cs failure) | (net, failure) <- failures]
 
 cmdCheckMnemonic :: Ctx -> Config -> Maybe Text -> Natural -> IO Response
 cmdCheckMnemonic ctx cfg account parts =
