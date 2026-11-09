@@ -106,6 +106,7 @@ import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Amounts (AmountUnit)
 import Haskoin.Wallet.Backup (backupDatabase, backupDirectory, copyDatabase)
 import Haskoin.Wallet.Bip329 (recordsText)
+import Haskoin.Wallet.CutAddress (cutAddress)
 import Haskoin.Wallet.Descriptor (accountDescriptor, descriptorText, slip132Key)
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Config
@@ -666,9 +667,11 @@ newestReceiving account = do
 -- check an address the online computer gave out. The address shown is
 -- always the one the key derives. When the wallet holds it, it is shown
 -- as receive shows one, with its label, its balance and its QR code. When
--- the wallet does not, it is shown alone and without a code: receive did
--- not give it out, and it may lie past the gap that a restored wallet
--- looks at.
+-- the wallet does not, it is shown cut, with its middle hidden and
+-- without a code ("Haskoin.Wallet.CutAddress"). receive did not give it
+-- out, and it may lie past the gap that a restored wallet looks at, so
+-- nobody must be able to pay it. Its ends are enough to compare it with
+-- the address the online computer shows.
 addressAtPath :: Ctx -> Maybe Text -> AddrType -> KeyIndex -> ExceptT String (DB IO) Response
 addressAtPath ctx account addrType index = do
   (accId, acc) <- getAccountByName account
@@ -682,7 +685,7 @@ addressAtPath ctx account addrType index = do
   held <- lift $ storedAmong [addr] (accId, acc)
   case held of
     row : _ -> addressAnswer accId row
-    [] -> ResponseDerivedAddr acc path <$> liftEither (addrToTextE (accountNetwork acc) addr)
+    [] -> ResponseDerivedAddr acc path <$> liftMaybe "An account derives no address of this kind" (cutAddress (accountNetwork acc) addr)
 
 -- | An address of the wallet, however it is written, to give out again.
 -- The address tells its account. One the wallet does not hold is refused,

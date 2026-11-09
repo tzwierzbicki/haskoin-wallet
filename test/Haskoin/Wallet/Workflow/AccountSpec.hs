@@ -249,8 +249,11 @@ segwitSpec ctx =
         createSpending home
         (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [(segwitExternalAddrsText !! 0, "")]
         (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [(segwitExternalAddrsText !! 1, "")]
-        (addressesOf <$> hwJson home ["show", "/0/5"] []) `shouldReturn` Right [(segwitExternalAddrsText !! 5, "")]
-        (addressesOf <$> hwJson home ["show", "/1/0"] []) `shouldReturn` Right [(segwitInternalAddrsText !! 0, "")]
+        -- The ends of bc1qg83sxnghnw6du9rn2yx0a74q300y2l22zmsjm0 and
+        -- bc1ql5j70a05srlvee3ugweyqukdfwwaph4pwaup74, cut since the wallet
+        -- has not given them out
+        (cutAddressOf <$> hwJson home ["show", "/0/5"] []) `shouldReturn` Right "bc1qg83sxnghnw6du............00y2l22zmsjm0"
+        (cutAddressOf <$> hwJson home ["show", "/1/0"] []) `shouldReturn` Right "bc1ql5j70a05srlve............wwaph4pwaup74"
 
     it "is shown by descriptor as wpkh, as a Coldcard writes it, with its zpub for Electrum on a row of its own" $
       withHome $ \home -> do

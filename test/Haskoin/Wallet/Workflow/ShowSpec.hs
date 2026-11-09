@@ -1,7 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | What show shows of the wallet, from the word typed: an address by its
--- path, derived as an offline computer checks it, the newest receiving
+-- path, derived as an offline computer checks it, and cut when the wallet
+-- does not hold it ("Haskoin.Wallet.CutAddress"), the newest receiving
 -- address without a word, a transaction by either of its hashes, and a
 -- coin. Then what show refuses. The addresses typed in full, and the QR
 -- codes show draws, are with the other screens in
@@ -31,26 +32,48 @@ spec = prepareContext $ \ctx -> do
 pathSpec :: Spec
 pathSpec =
   describe "An address shown by its path" $ do
-    -- The signer never ran receive: it derives the address from the key
-    it "is the one receive gave out online, at the path receive showed, on the signer that never handed it out" $
+    -- The signer never ran receive: it derives the address from the key.
+    -- 1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1 shows its first 12 characters and
+    -- its last 12.
+    it "is the one receive gave out online at the path receive showed, cut on the signer that never handed it out" $
       withHome $ \signer -> withHome $ \online -> do
         createMain signer
         _ <- answer signer ["exportacc", signer </> "main.json"] []
         _ <- answer online ["importacc", signer </> "main.json"] []
         replicateM_ 3 $ answer online ["receive"] []
-        (addressesOf <$> hwJson online ["receive"] []) `shouldReturn` Right [(externalAddrsText !! 3, "")]
-        (addressesOf <$> hwJson signer ["show", "/0/3"] []) `shouldReturn` Right [(externalAddrsText !! 3, "")]
+        (addressesOf <$> hwJson online ["receive"] []) `shouldReturn` Right [("1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1", "")]
+        (cutAddressOf <$> hwJson signer ["show", "/0/3"] []) `shouldReturn` Right "1yQZuJjA6w7h.........Cv22rKCas7F1"
 
+    -- The ends of 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn, the change address
+    -- /1/0 of main
     it "is a change address for a path on the change chain, before the account spends" $
       withHome $ \home -> do
         createMain home
-        (addressesOf <$> hwJson home ["show", "/1/0"] []) `shouldReturn` Right [(internalAddrsText !! 0, "")]
+        (cutAddressOf <$> hwJson home ["show", "/1/0"] []) `shouldReturn` Right "17KiDLpE3r92..........tgHqEVJrznvn"
 
-    it "is shown under its path, then its account and network, when the wallet does not hold it" $
+    it "is shown cut under its path, then its account and network, when the wallet does not hold it" $
       withHome $ \home -> do
         createMain home
         run <- hw home ["show", "/0/3"] []
-        runOut run `shouldBe` "/0/3  " <> externalAddrsText !! 3 <> "\n  Account  : main\n  Network  : btc\n"
+        take 3 (Text.lines (runOut run))
+          `shouldBe` [ "/0/3  1yQZuJjA6w7h.........Cv22rKCas7F1",
+                       "  Account  : main",
+                       "  Network  : btc"
+                     ]
+
+    it "comes cut with a note on how to check it, and to give out the address as receive showed it" $
+      withHome $ \home -> do
+        createMain home
+        run <- hw home ["show", "/0/3"] []
+        run
+          `shouldSatisfy` printedSentence
+            "Compare both ends with the address that receive gave out at /0/3 on the online computer. If they match, that address is of this account, and you can give it out. If they differ, the online computer may have been tampered with, and you should not give the address out. Nobody can make another address with the same ends. This screen is for checking only, so the middle of the address is hidden. Give out the address as receive showed it."
+
+    it "is cut in JSON too, which holds nowhere the whole address, so that no script pays it" $
+      withHome $ \home -> do
+        createMain home
+        run <- hw home ["show", "/0/3", "--json"] []
+        runOut run `shouldSatisfy` (not . Text.isInfixOf "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1")
 
     it "is shown as receive gave it out, with its label, when the wallet holds it" $
       withHome $ \home -> do
@@ -58,21 +81,22 @@ pathSpec =
         given <- hwJson home ["receive", "--label", "rent"] []
         hwJson home ["show", "/0/0"] [] `shouldReturn` given
 
-    -- 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo is the first receiving address of
-    -- second, account 1 of the seed
+    -- The ends of 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo, the first receiving
+    -- address of second, account 1 of the seed
     it "is of the --account named, which a wallet of several accounts needs" $
       withHome $ \home -> do
         createMain home
         _ <- answer home ["createacc", "second"] seedTwice
-        (addressesOf <$> hwJson home ["show", "/0/0", "--account", "second"] []) `shouldReturn` Right [("17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "")]
+        (cutAddressOf <$> hwJson home ["show", "/0/0", "--account", "second"] []) `shouldReturn` Right "17Hc4H2HwzLf..........QPGpNEvK2NUo"
         (errorOf <$> hwJson home ["show", "/0/0"] []) `shouldReturn` Right "Specify which account to use"
 
     -- hw stores the address /0/0 of cash, the Bitcoin Cash account of the
-    -- test wallet, as bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u
+    -- test wallet, as bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u.
+    -- Cut, it shows bitcoincash:q and 13 characters, then the last 14.
     it "is written as the network of the account writes it" $
       withHome $ \home -> do
         _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
-        (addressesOf <$> hwJson home ["show", "/0/0"] []) `shouldReturn` Right [("bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u", "")]
+        (cutAddressOf <$> hwJson home ["show", "/0/0"] []) `shouldReturn` Right "bitcoincash:qzvzk6v4gdxt70..............pfzercknlz3k4u"
 
     it "hands out nothing: the wallet has no address after it, and receive starts at the first" $
       withHome $ \home -> do

@@ -184,12 +184,15 @@ addressSpec =
                    ]
 
     -- The address /0/3 of main, which the wallet has not handed out, so
-    -- it has no label and no balance
-    it "gives the address show derives at a path the wallet does not hold under its path, then its account and network" $
-      renderedLines (derivedAddrDoc mainAccountRow (Deriv :/ 0 :/ 3) "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1")
-        `shouldBe` [ "/0/3  1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1",
+    -- it has no label and no balance. The note is on one line, since the
+    -- test lays it out with no width.
+    it "gives the address show derives at a path the wallet does not hold cut under its path, then its account and network, then what it is for" $
+      renderedLines (derivedAddrDoc mainAccountRow (Deriv :/ 0 :/ 3) "1yQZuJjA6w7h.........Cv22rKCas7F1")
+        `shouldBe` [ "/0/3  1yQZuJjA6w7h.........Cv22rKCas7F1",
                      "  Account  : main",
-                     "  Network  : btc"
+                     "  Network  : btc",
+                     "",
+                     "Compare both ends with the address that receive gave out at /0/3 on the online computer. If they match, that address is of this account, and you can give it out. If they differ, the online computer may have been tampered with, and you should not give the address out. Nobody can make another address with the same ends. This screen is for checking only, so the middle of the address is hidden. Give out the address as receive showed it."
                    ]
 
     -- The rows of # stand for the rows of a code

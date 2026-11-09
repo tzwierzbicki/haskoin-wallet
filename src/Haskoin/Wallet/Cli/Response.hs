@@ -55,7 +55,10 @@ data Response
     ResponseBalances !DBAccount ![(DBAddress, CoinBalance)]
   | -- | The address of the account at a path of one of its chains,
     -- derived from the key of the account, which the wallet does not hold:
-    -- what show answers for such a path
+    -- what show answers for such a path. The address is cut, its middle
+    -- hidden ("Haskoin.Wallet.CutAddress"), in JSON too, so that no script
+    -- pays it either. JSON gives it as "cutaddress", since it is no
+    -- address.
     ResponseDerivedAddr !DBAccount !SoftPath !Text
   | -- | Transactions of the account
     ResponseTxs !DBAccount ![ListedTx]
@@ -131,8 +134,8 @@ instance ToJSON Response where
       typed "addresses" ["account" .= acc, "addresses" .= (uncurry addressWithSpendable <$> addrs)]
     ResponseBalances acc addrs ->
       typed "balances" ["account" .= acc, "addresses" .= (uncurry addressWithCoinBalance <$> addrs)]
-    ResponseDerivedAddr acc path addr ->
-      typed "derivedaddr" ["account" .= acc, "derivation" .= path, "address" .= addr]
+    ResponseDerivedAddr acc path cut ->
+      typed "derivedaddr" ["account" .= acc, "derivation" .= path, "cutaddress" .= cut]
     ResponseTxs acc txs -> typed "txs" ["account" .= acc, "txs" .= (marshalValue (accountNetwork acc) <$> txs)]
     ResponsePendingTxs asked held ->
       typed "pendingtxs" ["account" .= asked, "txs" .= (heldTxJson <$> held)]
@@ -181,7 +184,7 @@ instance FromJSON Response where
         uncurry (ResponseAddress acc) <$> (parseAddressWithSpendable =<< o .: "address")
       "addresses" -> ResponseAddresses <$> o .: "account" <*> (mapM parseAddressWithSpendable =<< o .: "addresses")
       "balances" -> ResponseBalances <$> o .: "account" <*> (mapM parseAddressWithCoinBalance =<< o .: "addresses")
-      "derivedaddr" -> ResponseDerivedAddr <$> o .: "account" <*> o .: "derivation" <*> o .: "address"
+      "derivedaddr" -> ResponseDerivedAddr <$> o .: "account" <*> o .: "derivation" <*> o .: "cutaddress"
       "txs" -> do
         acc <- o .: "account"
         ResponseTxs acc <$> (mapM (unmarshalValue (accountNetwork acc)) =<< o .: "txs")

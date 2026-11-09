@@ -59,7 +59,9 @@ Addresses:
   a coin `TXID:INDEX`. Without a word, it shows the newest receiving address.
   An address the wallet holds comes with its QR code, to give it out again.
   Run `show /0/3` on the offline computer to check an address the online one
-  gives out: it derives the address from the public key.
+  gives out: it derives the address from the public key. An address at a path
+  the wallet does not hold is shown cut, its middle hidden behind dots, in JSON
+  too. Its ends carry 128 bits, enough to compare, and nobody can pay it.
 - `balances` lists the addresses that hold coins.
 - `label` labels transactions too, and the prepare commands take `--label`.
 

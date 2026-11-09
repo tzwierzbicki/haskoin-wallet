@@ -1016,6 +1016,13 @@ bchExternalAddrText = "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"
 bchExternalAddr :: Address
 bchExternalAddr = fromMaybe (error "bchExternalAddr") (textToAddr bch bchExternalAddrText)
 
+-- | A P2PKH address of Bitcoin Cash testnet, whose prefix bchtest is
+-- shorter than bitcoincash: the receiving address /0/0 of m/44'/1'/0' of
+-- the seed "abandon ... about" with the passphrase TREZOR, from the
+-- vectors of test/data/message-signing
+bchTestAddr :: Address
+bchTestAddr = fromMaybe (error "bchTestAddr") (textToAddr bchTest "bchtest:qztv0mmm3yscxcvfr93hq3wn63xk50merq7wl5gp3m")
+
 {- Who watches a sync -}
 
 -- | A watcher with the answers given, and no status line

@@ -1339,10 +1339,17 @@ out. An online computer that was tampered with can show an address of its own
 in place of one of the account, and the payer would pay the attacker. The
 offline computer holds the same account, since createacc made it there, and
 derives the same addresses. Run `receive` online, then `show` on the offline
-computer with the path `receive` showed, and compare the two addresses letter
-for letter. The address at a path the wallet does not hold comes without its QR
-code, since `receive` did not give it out. It may lie past the gap that a
-restored wallet looks at.
+computer with the path `receive` showed, and compare the two addresses.
+
+The address at a path the wallet holds is shown as any address of the wallet.
+One the wallet does not hold, as on the offline computer, is shown cut: its two
+ends, with a dot for each character of the middle, and no QR code. Compare the
+ends with the address the online computer shows. They are enough, since nobody
+can make another address with the same ends: it would take about 2^128 tries.
+The middle is hidden so that nobody pays the address. `receive` did not give it
+out, and it may lie past the gap that a restored wallet looks at. Look at the
+path too. A tampered online computer picks the path it shows, and a path far
+past the addresses you gave out is a sign of that.
 
 A transaction is shown in full, as each account that holds it sees it: a
 payment between two accounts of the wallet once for each. A coin is shown with

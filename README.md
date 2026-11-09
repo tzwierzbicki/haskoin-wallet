@@ -148,12 +148,18 @@ of the offline computer. See [Transaction files](#transaction-files).
 
 An online computer that was tampered with can show an address of its own in
 place of one of the account. The offline computer holds the same account and
-derives the same addresses, without the mnemonic.
+derives the same addresses, without the mnemonic. It did not give the address
+out, so it shows it cut, with a dot for each character of its middle. Compare
+the two ends with the address the online computer shows.
 
 ```console
 hw receive                                  # on the online computer: /0/7 and the address
-hw show /0/7                                # on the offline computer: the same address?
+hw show /0/7                                # on the offline computer: the same ends?
 ```
+
+The ends are enough, since nobody can make another address with the same ends.
+The middle is hidden so that nobody pays an address that the wallet never gave
+out. See [`show`](#hw-show).
 
 ## Keep your funds safe
 
@@ -742,7 +748,7 @@ tells what it is, by its shape:
 | Word | What `show` shows |
 |---|---|
 | none | The newest receiving address of the account, the first one `addresses` lists |
-| `/0/i` or `/1/i` | The receiving address `i`, or the change address `i`, derived from the public key |
+| `/0/i` or `/1/i` | The receiving address `i`, or the change address `i`, derived from the public key, and cut when the wallet does not hold it |
 | An address | That address of the wallet, a change address too |
 | A txid or a nosigHash | That transaction, pending or in the history |
 | `TXID:INDEX` | That coin, with every detail, as `coins --verbose` shows it |
@@ -767,6 +773,31 @@ account. It needs no mnemonic and no server, so it runs on the offline computer
 too. There it checks an address the online computer gave out: see
 [Check an address](#check-an-address-before-you-give-it-out).
 
+An address the wallet holds is shown as any other. One the wallet does not
+hold, as on the offline computer, is shown cut. A dot stands for each character
+of its middle, and a note says how to check it:
+
+```console
+$ hw show /0/308
+/0/308  169h8ryuSwhG..........Cpzv9Q8PGum5
+  Account  : vault
+  Network  : btc
+
+Compare both ends with the address that receive gave out at /0/308 on the online
+computer. If they match, that address is of this account, and you can give it
+out. If they differ, the online computer may have been tampered with, and you
+should not give the address out. Nobody can make another address with the same
+ends. This screen is for checking only, so the middle of the address is hidden.
+Give out the address as receive showed it.
+```
+
+The ends carry at least 128 bits. To make an address with the same ends, an
+attacker would have to try about 2^128 keys, which no computer can. The middle
+hides enough that over a million addresses fit the cut address, so nobody can
+pay it. That matters because the wallet never gave the address out. It may
+lie past the gap of 20 that a restored wallet looks at, and no `sync` would
+find a payment there.
+
 **A transaction.** A transaction is shown in full, as each account that holds
 it sees it. A payment between two accounts of the wallet is shown once for
 each. `--account` keeps the view of one account.
@@ -775,9 +806,14 @@ each. `--account` keeps the view of one account.
 >
 > - **An address the wallet does not hold is refused**, so the code never pays
 >   anyone else.
-> - **An address at a path the wallet does not hold has no QR code.** `receive`
->   has not given it out, and it may lie past the gap of 20 that a restored
->   wallet looks at.
+> - **An address at a path the wallet does not hold is cut, and has no QR
+>   code**, even within the gap. `--json` gives it cut too, as `cutaddress`,
+>   so that no script pays it.
+> - **Look at the path as well as the ends.** A tampered online computer picks
+>   the path it shows, so it can match an address of its own against any
+>   address of the account. A path far past the addresses you gave out is a
+>   sign of that. `show` takes any path, so that a large account can be checked
+>   too.
 > - **Without a word, the address may have been paid already.** `show` gives
 >   out the newest address again, as it is. Run `receive` for a new one.
 > - **`--account` goes with a path, a transaction, or no word.** An address and

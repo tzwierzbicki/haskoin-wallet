@@ -471,17 +471,37 @@ withCodeDoc :: Doc Style -> [Text] -> Doc Style
 withCodeDoc details rows = vcat (details : (annotate QrCode . pretty <$> rows))
 
 -- | The address at a path of the account that show derives, when the
--- wallet does not hold it: its path and the address, as the first line of
--- addresses, then its account and network. The wallet holds no row for
--- it, so it has no label and no balance. The user compares the address
--- with the one the online computer showed.
+-- wallet does not hold it: its path and the address cut, as the first
+-- line of addresses, then its account and network, then what the cut form
+-- is for. The wallet holds no row for it, so it has no label and no
+-- balance. The user compares its ends with the address the online
+-- computer showed, and the note says why the middle is missing, which a
+-- user would otherwise take for a fault ("Haskoin.Wallet.CutAddress").
 derivedAddrDoc :: DBAccount -> SoftPath -> Text -> Doc Style
-derivedAddrDoc acc path addr =
+derivedAddrDoc acc path cut =
   vcat
-    [ columns [text (cs (pathText path)), pretty addr],
+    [ columns [text (cs (pathText path)), pretty cut],
       indent 2 (accountField acc),
-      indent 2 (field 9 "Network" <> text (accountNetwork acc).name)
+      indent 2 (field 9 "Network" <> text (accountNetwork acc).name),
+      mempty,
+      sentence (wordsOf (cutAddressNote path))
     ]
+
+-- | How to check an address with its cut form, and why its middle is
+-- hidden. The user reads it in the middle of a payment, about to give the
+-- address out, so it says what to do in each case and alarms only when
+-- the ends differ. Why the address must not be paid from this screen, that
+-- it may lie past the gap, is in the help and the README instead.
+cutAddressNote :: SoftPath -> String
+cutAddressNote path =
+  "Compare both ends with the address that receive gave out at "
+    <> pathToStr path
+    <> " on the online computer."
+    <> " If they match, that address is of this account, and you can give it out."
+    <> " If they differ, the online computer may have been tampered with, and you should not give the address out."
+    <> " Nobody can make another address with the same ends."
+    <> " This screen is for checking only, so the middle of the address is hidden."
+    <> " Give out the address as receive showed it."
 
 -- | The width of the longest derivation path of the addresses listed
 pathWidth :: [DBAddress] -> Natural

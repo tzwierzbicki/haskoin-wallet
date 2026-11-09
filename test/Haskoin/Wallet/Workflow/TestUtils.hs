@@ -56,6 +56,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     accountOf,
     fingerprintsOf,
     addressesOf,
+    cutAddressOf,
     heldTxsOf,
     coinsShown,
     coinLabelsShown,
@@ -365,8 +366,13 @@ fingerprintsOf other = Left (show other)
 addressesOf :: Response -> Either String [(Text, Text)]
 addressesOf (ResponseAddress _ addr _) = Right [(dBAddressAddress addr, dBAddressLabel addr)]
 addressesOf (ResponseAddresses _ addrs) = Right [(dBAddressAddress addr, dBAddressLabel addr) | (addr, _) <- addrs]
-addressesOf (ResponseDerivedAddr _ _ addr) = Right [(addr, "")]
 addressesOf other = Left (show other)
+
+-- | The address that show derives at a path the wallet does not hold, cut,
+-- with its middle hidden: no address, so not one of 'addressesOf'
+cutAddressOf :: Response -> Either String Text
+cutAddressOf (ResponseDerivedAddr _ _ cut) = Right cut
+cutAddressOf other = Left (show other)
 
 -- | A transaction as show answers with it, as each account that holds it
 -- sees it: the name of the account, and what the transaction adds to its
