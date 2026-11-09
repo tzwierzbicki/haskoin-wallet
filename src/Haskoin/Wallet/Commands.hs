@@ -168,9 +168,9 @@ commandResponse ctx cfg unit = \case
         cmdCsv cfg file listing
   -- Mnemonics and accounts
   CommandMnemonic opts -> cmdMnemonic opts
-  CommandCreateAcc name net kind parts -> cmdCreateAcc ctx cfg name net kind parts
+  CommandCreateAcc name net kind -> cmdCreateAcc ctx cfg name net kind
   CommandRecover opts -> cmdRecover ctx cfg opts
-  CommandCheckMnemonic account parts -> cmdCheckMnemonic ctx cfg account parts
+  CommandCheckMnemonic account -> cmdCheckMnemonic ctx cfg account
   CommandImportAcc netM kindM file -> cmdImportAcc ctx cfg netM kindM file
   CommandExportAcc account file -> cmdExportAcc ctx cfg account file
   CommandDescriptor account -> cmdDescriptor cfg account
@@ -196,7 +196,7 @@ commandResponse ctx cfg unit = \case
   CommandDeleteTx named -> cmdDeleteTx ctx cfg named
   CommandPrepareTx opts -> cmdPrepareTx ctx cfg unit opts
   CommandPrepareSendAll opts -> cmdPrepareSendAll ctx cfg unit opts
-  CommandSignTx signing parts -> cmdSignTx ctx cfg unit signing parts
+  CommandSignTx signing -> cmdSignTx ctx cfg unit signing
   CommandBroadcast namedM fileM yes netM -> cmdBroadcast ctx cfg unit namedM fileM yes netM
   CommandBumpFee opts -> cmdBumpFee ctx cfg unit opts
   -- Sweeps
@@ -298,14 +298,14 @@ cmdMnemonic opts =
 -- | Create an account of a kind on a network from a mnemonic, or from the
 -- shares of a backup: the next account of the seed of that kind on that
 -- network
-cmdCreateAcc :: Ctx -> Config -> Text -> Maybe Network -> AccountKind -> Natural -> IO Response
-cmdCreateAcc ctx cfg name netM kind parts =
+cmdCreateAcc :: Ctx -> Config -> Text -> Maybe Network -> AccountKind -> IO Response
+cmdCreateAcc ctx cfg name netM kind =
   runDBResponse cfg $ do
     -- Before the user types the mnemonic, not after
     checkNameFree name
     net <- liftMaybe noNetwork (commandNetwork cfg netM)
     liftEither $ checkKindOnNetwork net kind
-    secret <- askNewSeedSecret terminal parts
+    secret <- askNewSeedSecret terminal
     seed <- seedToCreateWith ctx secret
     (_, xpub) <- lift $ nextAccount kind net ctx seed
     (accId, _) <- insertAccount kind net ctx name xpub (Just (seedFingerprint seed))
@@ -366,7 +366,7 @@ cmdRecover ctx cfg opts =
         (_, failure) : _ | null searched -> throwError failure
         _ -> return ()
       -- Typed once: a mistyped mnemonic finds no paid account
-      secret <- askSeedSecret terminal opts.parts
+      secret <- askSeedSecret terminal
       seed <- liftEither $ secretSeed ctx secret
       let accountsOn fromSeed net = recoverSeed ctx cfg (storeOn net) net fromSeed opts.accountGap watch
           unspendableOn net = map ((,) net) <$> foreignFunds ctx cfg (storeOn net) net seed opts.accountGap watch
@@ -384,11 +384,11 @@ cmdRecover ctx cfg opts =
         _ -> return []
       return $ ResponseRecover searched opts.accountGap (found <> fromTyped) elsewhere [(net, cs failure) | (net, failure) <- failures]
 
-cmdCheckMnemonic :: Ctx -> Config -> Maybe Text -> Natural -> IO Response
-cmdCheckMnemonic ctx cfg account parts =
+cmdCheckMnemonic :: Ctx -> Config -> Maybe Text -> IO Response
+cmdCheckMnemonic ctx cfg account =
   runDBResponse cfg $ do
     (accId, acc) <- getAccountByName account
-    secret <- askSeedSecret terminal parts
+    secret <- askSeedSecret terminal
     matched <- matchAccount terminal (accountKind acc) (accountNetwork acc) ctx (accountIndex acc) (accountXPubKey ctx acc) secret
     -- A seed proven gives its fingerprint to every account of it
     for_ matched $ \(seed, _) -> lift $ recordFingerprint ctx seed
@@ -1399,14 +1399,14 @@ keepSigned ctx net signing signedFile accId (TxFileRead file sourceM) signed inf
 -- the shares of its backup. The transaction is shown first, as reviewtx
 -- shows it, so that the user sees what the mnemonic is typed for: the
 -- prompt is the confirmation, and an interrupt stops it.
-cmdSignTx :: Ctx -> Config -> AmountUnit -> Signing -> Natural -> IO Response
-cmdSignTx ctx cfg unit signing parts =
+cmdSignTx :: Ctx -> Config -> AmountUnit -> Signing -> IO Response
+cmdSignTx ctx cfg unit signing =
   runDBResponse cfg $ do
     (accountM, file@(TxFileRead txFile _), signedFile) <- transactionToSign ctx (commandNetwork cfg Nothing) signing
     (accId, acc) <- liftMaybe notInWallet accountM
     let net = accountNetwork acc
     showToSign ctx unit signing net (Just (accId, acc)) txFile
-    (seed, key) <- askSigningKey terminal (accountKind acc) net ctx parts (accountIndex acc) (accountXPubKey ctx acc)
+    (seed, key) <- askSigningKey terminal (accountKind acc) net ctx (accountIndex acc) (accountXPubKey ctx acc)
     -- The signed data names the seed, for an online wallet to learn it
     let named = (txFileData txFile) {txSignDataFingerprint = Just (seedFingerprint seed)}
     (signed, info) <- liftEither $ signHeldWalletTx net ctx (accountKind acc) (heldChainsOf acc) named key
@@ -1686,7 +1686,7 @@ cmdSignMsg ctx cfg opts =
     -- Warned before the mnemonic is asked, so that the user can stop. On
     -- stderr, to keep the armored block and the --json output clean.
     liftIO $ mapM_ (hPutStrLn stderr) $ signingWarnings opts.message
-    (seed, accountPrvKey) <- askSigningKey terminal (accountKind acc) net ctx opts.parts (accountIndex acc) (accountXPubKey ctx acc)
+    (seed, accountPrvKey) <- askSigningKey terminal (accountKind acc) net ctx (accountIndex acc) (accountXPubKey ctx acc)
     lift $ recordFingerprint ctx seed
     let addrKey = derivePath ctx (addrPath addrDB) accountPrvKey
     signature <- encodeSignature <$> liftEither (signMessage ctx addr addrKey.key opts.message)

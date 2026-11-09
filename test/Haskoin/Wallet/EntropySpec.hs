@@ -2,9 +2,8 @@
 
 -- | The entropy of a new mnemonic, as "Haskoin.Wallet.Entropy" makes it:
 -- the bits of the dice rolls a user may add, the exclusive or that mixes
--- them into the entropy of the system, that entropy and the check of its
--- source, and the parts that earlier versions of hw split a mnemonic into,
--- which still merge back into it.
+-- them into the entropy of the system, and that entropy and the check of
+-- its source.
 module Haskoin.Wallet.EntropySpec (spec) where
 
 import Control.Exception (evaluate)
@@ -18,8 +17,6 @@ import Data.List (sort)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Word (Word8)
-import Haskoin (toMnemonic)
-import Haskoin.Util.Arbitrary (arbitraryBSn)
 import Haskoin.Wallet.Entropy
 import Haskoin.Wallet.TestUtils (expectRight, fixedSources, goodSample, inScratchDirectory, readingSystemMessage, systemSources)
 import Numeric.Natural (Natural)
@@ -34,7 +31,6 @@ spec = do
   diceSpec
   xorSpec
   mixSpec
-  mergeSpec
   systemSpec
   checkSpec
   patternSpec
@@ -45,27 +41,19 @@ spec = do
 
 -- | Mnemonics of BIP39's official test vectors (vectors.json of
 -- trezor/python-mnemonic), named by their first and last words. Their
--- entropies repeat a byte: 0x7f, 0x80, 0xff or 0x00. Each byte of 0x7f xor
--- 0x80 is 0xff, and of 0x7f xor 0x80 xor 0xff is 0x00, so their parts
--- merge into one another.
-legalYellow, letterAbove, zooWrong, abandonAbout :: Text
+-- entropies repeat a byte: 0x7f for the first, 0xff for the second.
+legalYellow, zooWrong :: Text
 legalYellow = "legal winner thank year wave sausage worth useful legal winner thank yellow"
-letterAbove = "letter advice cage absurd amount doctor acoustic avoid letter advice cage above"
 zooWrong = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong"
-abandonAbout = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
 
--- | The entropies of 16 bytes of the four mnemonics above
+-- | Entropies of 16 bytes that repeat a byte: those of the two mnemonics
+-- above, 0x7f and 0xff, and 0x80 and 0x00. Each byte of 0x7f xor 0x80 is
+-- 0xff.
 entropy7f, entropy80, entropyFf, entropy00 :: BS.ByteString
 entropy7f = BS.replicate 16 0x7f
 entropy80 = BS.replicate 16 0x80
 entropyFf = BS.replicate 16 0xff
 entropy00 = BS.replicate 16 0x00
-
--- | The same vectors of 32 bytes of entropy, in 24 words
-legalTitle, letterBless, zooVote :: Text
-legalTitle = "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title"
-letterBless = "letter advice cage absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic bless"
-zooVote = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo vote"
 
 -- | The sizes of entropy, in bytes, that a mnemonic can have
 entropySizes :: [Int]
@@ -162,16 +150,6 @@ xorSpec = do
       evaluate (xorBytes (BS.pack [0x00, 0x00]) (BS.pack [0x00])) `shouldThrow` errorCall "xorBytes: the entropies do not have the same length"
       evaluate (xorBytes (BS.pack [0x00]) (BS.pack [0x00, 0x00])) `shouldThrow` errorCall "xorBytes: the entropies do not have the same length"
 
-  describe "The exclusive or of several entropies" $ do
-    it "combines them all" $
-      xorAll [BS.pack [0x7f, 0x01], BS.pack [0x80, 0x02], BS.pack [0xff, 0x04]] `shouldBe` BS.pack [0x00, 0x07]
-
-    it "is the entropy itself for one entropy" $
-      xorAll [BS.pack [0x7f, 0x01]] `shouldBe` BS.pack [0x7f, 0x01]
-
-    it "is empty for no entropy" $
-      xorAll [] `shouldBe` BS.empty
-
 {- Dice rolls mixed into the entropy of the system -}
 
 -- | The refusal of dice that do not cover the entropy, byte for byte
@@ -200,57 +178,6 @@ mixSpec =
 
     it "are refused when they have more bytes than the values together" $
       mixDice (Just (BS.pack [0x01, 0x02, 0x04, 0x08])) [BS.pack [0x10, 0x20], BS.pack [0x40]] `shouldBe` diceShort
-
-{- Merging the parts of a mnemonic -}
-
-mergeSpec :: Spec
-mergeSpec =
-  describe "The parts of a mnemonic" $ do
-    it "merge into the mnemonic of the exclusive or of their entropies" $
-      mergeMnemonicParts [legalYellow, letterAbove] `shouldBe` Right zooWrong
-
-    it "merge by three" $
-      mergeMnemonicParts [legalYellow, letterAbove, zooWrong] `shouldBe` Right abandonAbout
-
-    it "merge with 24 words" $
-      mergeMnemonicParts [legalTitle, letterBless] `shouldBe` Right zooVote
-
-    -- hw asks for "part 1 of 2", but the user may have written the parts
-    -- down in any order
-    it "merge whatever their order" $ do
-      mergeMnemonicParts [letterAbove, legalYellow] `shouldBe` Right zooWrong
-      mergeMnemonicParts [zooWrong, legalYellow, letterAbove] `shouldBe` Right abandonAbout
-
-    -- The two parts earlier versions made of an entropy: the entropy xor a
-    -- random part, and that random part. An entropy of zeros alone is left
-    -- out: its two parts would be the same, which no merge takes.
-    prop "merge back into the mnemonic of the entropy they were split from, whatever its size" $
-      forAll (elements entropySizes >>= arbitraryBSn) $ \secret ->
-        BS.any (/= 0) secret ==>
-          forAll (arbitraryBSn (BS.length secret)) $ \random -> do
-            parts <- expectRight $ mapM toMnemonic [xorBytes secret random, random]
-            mergeMnemonicParts parts `shouldBe` toMnemonic secret
-
-    it "are refused when there are fewer than two" $ do
-      mergeMnemonicParts [] `shouldBe` Left "A mnemonic in parts has two parts or more"
-      mergeMnemonicParts [legalYellow] `shouldBe` Left "A mnemonic in parts has two parts or more"
-
-    -- Their entropies would not have the same length: merging them used to
-    -- stop the program
-    it "are refused when they do not have the same number of words" $
-      mergeMnemonicParts [legalYellow, legalTitle] `shouldBe` Left "The parts do not have the same number of words"
-
-    -- Two equal parts would cancel each other out of the merge
-    it "are refused when two of them are the same" $ do
-      mergeMnemonicParts [legalYellow, legalYellow] `shouldBe` Left "Two of the parts are the same, but every part of a mnemonic is different"
-      mergeMnemonicParts [legalYellow, letterAbove, legalYellow] `shouldBe` Left "Two of the parts are the same, but every part of a mnemonic is different"
-
-    -- The words of a part are secret: the message does not repeat them
-    it "are refused when one of them is not a mnemonic, named by its position only" $ do
-      mergeMnemonicParts [legalYellow, "legal winner thank year wave sausage worth useful legal winner thank zoo"]
-        `shouldBe` Left "Part 2 is not a mnemonic"
-      mergeMnemonicParts ["legal winner thank year wave sausage worth useful legal winner thank notaword", legalYellow]
-        `shouldBe` Left "Part 1 is not a mnemonic"
 
 {- The entropy of the system -}
 

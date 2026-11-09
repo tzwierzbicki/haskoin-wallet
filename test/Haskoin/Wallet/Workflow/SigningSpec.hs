@@ -156,13 +156,6 @@ signingSpec ctx = do
         run <- hw home ["deletetx", nosig] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  Freed    : 1 coin, 1 change address\n"
 
-    it "is signed from the parts of the mnemonic with signtx --parts" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
-        synced home
-        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
-        signed <- txOf =<< answer home ["signtx", nosig, "--parts", "2"] partsOnce
-        pendingState signed `shouldBe` Just (True, False)
-
     -- The chain pays the first address of the account of the backup on
     -- testnet, and the account pays 20000 to another wallet
     it "is signed from the shares of a backup, typed in place of the mnemonic" $

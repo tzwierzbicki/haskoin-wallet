@@ -2228,7 +2228,7 @@ nextStepsPrinter cmd res =
     (CommandPrepareSweep opts, ResponseOutsideTx _ _)
       | Just file <- opts.output ->
           stepsPrinter [("Next, sign its file with the private keys of the coins", hwLine "signsweep" ([optionWord "--input", fileWord file] <> keysArgs opts.keys))]
-    (CommandSignTx signing _, ResponseTx _ info) -> afterSigning signing info
+    (CommandSignTx signing, ResponseTx _ info) -> afterSigning signing info
     (CommandSignSweep signing _ _, ResponseTx _ info) -> afterSigning signing info
     (CommandSignSweep signing _ _, ResponseOutsideTx _ info) -> afterSigning signing info
     (CommandBroadcast {}, ResponseTx acc _) ->

@@ -2,18 +2,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The entropy of a new mnemonic: the entropy of the operating system,
--- mixed with the entropy of dice rolls when the user rolls dice. And the
--- parts that earlier versions of hw split a mnemonic into, all of which
--- are needed to merge it back: hw still reads them, and makes no more. A
--- backup in shares, of which some rebuild the seed, is made in
+-- mixed with the entropy of dice rolls when the user rolls dice. A backup
+-- in shares, of which some rebuild the seed, is made in
 -- "Haskoin.Wallet.Shares" from the entropy read here.
 module Haskoin.Wallet.Entropy
   ( diceBits,
     diceEntropy,
     xorBytes,
-    xorAll,
     mixDice,
-    mergeMnemonicParts,
     systemEntropy,
     entropyAt,
     checkSource,
@@ -26,14 +22,13 @@ module Haskoin.Wallet.Entropy
 where
 
 import Control.Exception (IOException, try)
-import Control.Monad (unless, when, zipWithM)
+import Control.Monad (unless, when)
 import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Trans (lift)
-import Data.Bifunctor (first)
 import Data.Bits (xor)
 import qualified Data.ByteString as BS
-import Data.List (group, nub, sort)
+import Data.List (group, sort)
 import Data.List.Split (chunksOf)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -91,11 +86,6 @@ xorBytes a b
   | BS.length a == BS.length b = BS.pack (BS.zipWith xor a b)
   | otherwise = error "xorBytes: the entropies do not have the same length"
 
--- | The exclusive or of entropies of the same length; nothing for none
-xorAll :: [BS.ByteString] -> BS.ByteString
-xorAll [] = BS.empty
-xorAll (entropy : rest) = foldl' xorBytes entropy rest
-
 -- | The values read from the system, each mixed by exclusive or with the
 -- dice rolls when there are any: the first bytes of the dice go into the
 -- first value, the next ones into the second, and so on. The dice have
@@ -113,25 +103,6 @@ mixDice (Just dice) values
     sizes = map BS.length values
     pieces [] _ = []
     pieces (size : rest) bytes = BS.take size bytes : pieces rest (BS.drop size bytes)
-
-{- The parts of a mnemonic -}
-
--- | The mnemonic that parts merge into, whatever their order: the mnemonic
--- of the exclusive or of their entropies. Earlier versions of hw split a
--- mnemonic so, with mnemonic --parts. The parts are two or more, of as
--- many words, and all different, since two equal parts cancel out. A part
--- that does not read is named by its position only: its words are secret.
-mergeMnemonicParts :: [Text] -> Either String Mnemonic
-mergeMnemonicParts parts = do
-  when (length parts < 2) $ Left "A mnemonic in parts has two parts or more"
-  entropies <- zipWithM entropyOf [1 :: Int ..] parts
-  when (length (nub (map BS.length entropies)) > 1) $
-    Left "The parts do not have the same number of words"
-  when (length (nub entropies) < length entropies) $
-    Left "Two of the parts are the same, but every part of a mnemonic is different"
-  toMnemonic (xorAll entropies)
-  where
-    entropyOf n part = first (const $ "Part " <> show n <> " is not a mnemonic") (fromMnemonic part)
 
 {- The entropy of the system -}
 

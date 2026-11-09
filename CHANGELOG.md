@@ -25,8 +25,9 @@ so read [Before you upgrade](#before-you-upgrade) first.
 - **A passphrase with accents is now normalized**, as BIP39 asks. Accounts that
   earlier versions made from such a passphrase still work, with a warning.
   Move their funds to an account made with 0.10.
-- **A mnemonic split into parts** by an earlier version is still read. Give
-  `--parts N` to the command that asks for it. `hw` makes no new parts.
+- **A mnemonic split into parts** with `--split` is no longer read. Move its
+  funds with `hw` 0.9, as the README says under
+  [A mnemonic split into parts](README.md#a-mnemonic-split-into-parts).
 - **An existing wallet keeps its file permissions.** Earlier versions often
   left it readable by other users. Make it private with `chmod 700 ~/.hw` and
   `chmod 600 ~/.hw/accounts.sqlite`.
@@ -192,7 +193,6 @@ Using `hw`:
 | `--sweepfrom`, `--sweepto` | `--sweep-from`, `--sweep-to` |
 | `--prvkeys` | `--key-file` |
 | `--addrfile` | `--address-file` |
-| `--split` | `--parts`, to read old parts only |
 
 `label` now takes the address instead of its index.
 
@@ -202,7 +202,8 @@ Using `hw`:
 - `rolldice`. Roll real dice and type them in with `mnemonic --dice`.
 - `--dust`. Each output takes the dust limit of its kind.
 - `createacc --derivation`. `createacc` takes the next free index of the seed.
-- Splitting a mnemonic into parts. Use backups in shares.
+- `--split`, which split a mnemonic into parts and read them back. `hw` 0.10
+  neither makes nor reads such parts. Use backups in shares.
 - The key `recovery-gap` of the configuration, with `discoveracc`. Raise `gap`
   for one sync instead.
 - The JSON transaction files of earlier versions.

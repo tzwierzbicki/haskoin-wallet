@@ -58,7 +58,7 @@ import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8')
 import Haskoin
 import Haskoin.Crypto.Keys.Slip39 (EncryptedMasterSecret, Share)
-import Haskoin.Wallet.Entropy (diceBits, diceEntropy, mergeMnemonicParts)
+import Haskoin.Wallet.Entropy (diceBits, diceEntropy)
 import Haskoin.Wallet.Keys
 import Haskoin.Wallet.Shares (Progress (..), addShare, noShares, progress, readShare, rebuilt)
 import Numeric.Natural (Natural)
@@ -217,25 +217,17 @@ readSeedWords typed
   where
     count = length (Text.words typed)
 
--- | The words of a seed. Without parts, the user types a mnemonic, or the
--- first share of a backup: hw then asks for the next shares, telling how
--- many are needed, until they rebuild the backup. With parts, the user
--- types the parts an earlier version of hw split a mnemonic into, which
--- merge into it. What does not read is told and asked again, and so are
--- parts that do not merge and shares that do not rebuild a backup.
-askSeedWords :: (MonadIO m) => Terminal -> Natural -> ExceptT String m SeedWords
-askSeedWords term parts
-  | parts > 1 =
-      fmap MnemonicWords . retrying term $
-        mergeMnemonicParts <$> forM [1 .. parts] (\n -> askWords $ "Mnemonic part " <> show n <> " of " <> show parts <> ": ")
-  | otherwise =
-      retrying term $ do
-        first <- retrying term $ readSeedWords <$> hidden term "Mnemonic, or a share of a backup: "
-        case first of
-          Left mnemonic -> return (Right (MnemonicWords mnemonic))
-          Right share -> fmap BackupShares <$> askShares term share
-  where
-    askWords prompt = retrying term $ readMnemonic <$> hidden term prompt
+-- | The words of a seed. The user types a mnemonic, or the first share of
+-- a backup: hw then asks for the next shares, telling how many are needed,
+-- until they rebuild the backup. What does not read is told and asked
+-- again, and so are shares that do not rebuild a backup.
+askSeedWords :: (MonadIO m) => Terminal -> ExceptT String m SeedWords
+askSeedWords term =
+  retrying term $ do
+    first <- retrying term $ readSeedWords <$> hidden term "Mnemonic, or a share of a backup: "
+    case first of
+      Left mnemonic -> return (Right (MnemonicWords mnemonic))
+      Right share -> fmap BackupShares <$> askShares term share
 
 -- | The backup of a first share and of the shares asked after it, as many
 -- as it takes; or why they do not rebuild one. Before each share hw tells
@@ -281,9 +273,9 @@ withPassphrase (BackupShares backup) passphrase = SharesSecret backup passphrase
 
 -- | The words and the passphrase of a seed, typed once each, for a
 -- command that checks them: against the accounts, or on the chain
-askSeedSecret :: (MonadIO m) => Terminal -> Natural -> ExceptT String m SeedSecret
-askSeedSecret term parts = do
-  ws <- askSeedWords term parts
+askSeedSecret :: (MonadIO m) => Terminal -> ExceptT String m SeedSecret
+askSeedSecret term = do
+  ws <- askSeedWords term
   withPassphrase ws <$> askPassphraseOf term ws
 
 -- | The words and the passphrase of a seed an account is created from.
@@ -296,18 +288,18 @@ askSeedSecret term parts = do
 --
 -- The passphrase is typed twice. One that does not go with the words is
 -- told and asked again, as for every command ('passphraseOf').
-askNewSeedSecret :: (MonadIO m) => Terminal -> Natural -> ExceptT String m SeedSecret
-askNewSeedSecret term parts = do
+askNewSeedSecret :: (MonadIO m) => Terminal -> ExceptT String m SeedSecret
+askNewSeedSecret term = do
   ws <- confirmedWords
   withPassphrase ws <$> confirmedPassphrase ws
   where
     confirmedWords = retrying term $ do
-      first <- askSeedWords term parts
+      first <- askSeedWords term
       case first of
         BackupShares _ -> return (Right first)
         MnemonicWords _ -> do
           liftIO $ tell term "Type the mnemonic again, to check it"
-          second <- askSeedWords term parts
+          second <- askSeedWords term
           return $ if first == second then Right first else Left "The mnemonics do not match"
     confirmedPassphrase ws = retrying term $ do
       first <- askPassphrase term
@@ -327,10 +319,10 @@ askNewSeedSecret term parts = do
 -- passphrase can fix, and any passphrase decrypts a backup in shares to
 -- some seed. The one place a private key comes out of the secret of a seed
 -- for a command.
-askSigningKey :: (MonadIO m) => Terminal -> AccountKind -> Network -> Ctx -> Natural -> Natural -> XPubKey -> ExceptT String m (PublicSeed, XPrvKey)
-askSigningKey term kind net ctx parts index accPub =
+askSigningKey :: (MonadIO m) => Terminal -> AccountKind -> Network -> Ctx -> Natural -> XPubKey -> ExceptT String m (PublicSeed, XPrvKey)
+askSigningKey term kind net ctx index accPub =
   retrying term $ do
-    secret <- askSeedSecret term parts
+    secret <- askSeedSecret term
     maybe (Left (mismatch secret)) Right
       <$> matchAccount term kind net ctx index accPub secret
   where

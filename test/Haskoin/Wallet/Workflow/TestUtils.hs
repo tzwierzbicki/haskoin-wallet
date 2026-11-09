@@ -15,7 +15,6 @@ module Haskoin.Wallet.Workflow.TestUtils
   ( -- * What the user types
     seedOnce,
     seedTwice,
-    partsOnce,
     sharesOnce,
     sharesForNew,
     sharesTestnetAddr,
@@ -131,11 +130,6 @@ seedOnce = [mnemonicWords testMnemonic, mnemonicPass testMnemonic]
 -- | The same, typed twice each, as createacc asks for them
 seedTwice :: [Text]
 seedTwice = [mnemonicWords testMnemonic, mnemonicWords testMnemonic, mnemonicPass testMnemonic, mnemonicPass testMnemonic]
-
--- | The words of the test wallet in their two parts, then its passphrase,
--- typed once each, as a command with --parts 2 asks for them
-partsOnce :: [Text]
-partsOnce = testMnemonicParts <> [mnemonicPass testMnemonic]
 
 -- | The shares of the backup of the device tests, then its passphrase,
 -- typed once each, as the commands that check a seed ask for them

@@ -3,13 +3,12 @@
 -- | What hw asks the user on the terminal: the mnemonic, or the shares of
 -- a backup, and the passphrase of a seed, once to check them against an
 -- account or the chain, the mnemonic and the passphrase twice to create an
--- account; the parts of a mnemonic that earlier versions split; the
--- signing key of an account,
--- asked until the mnemonic and the passphrase give it, three attempts at
--- most; the private keys of a sweep, from a file or typed; and the
--- questions: yes or no, a pick among choices, and an answer read as typed.
--- A scripted terminal types the lines of each test and
--- keeps what hw shows; the real one is tested on files.
+-- account; the signing key of an account, asked until the mnemonic and the
+-- passphrase give it, three attempts at most; the private keys of a sweep,
+-- from a file or typed; and the questions: yes or no, a pick among
+-- choices, and an answer read as typed. A scripted terminal types the
+-- lines of each test and keeps what hw shows; the real one is tested on
+-- files.
 module Haskoin.Wallet.Cli.PromptSpec (spec) where
 
 import Control.Monad (forM_)
@@ -88,13 +87,6 @@ otherWords = "abandon abandon abandon abandon abandon abandon abandon abandon ab
 -- four bits for twelve words, lets this typo through
 typoWords :: Text
 typoWords = "now senior nerve virus fabric now fringe clip marble interest analyst can"
-
--- | Two parts that merge into the words of the test wallet: the mnemonic
--- of the entropy of ones, and that of the test entropy with every bit
--- flipped
-firstPart, secondPart :: Text
-firstPart = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong"
-secondPart = "crash detail high arena purse hand pepper start joke medal waste tennis"
 
 -- | The prompts of hw
 mnemonicPrompt, passphrasePrompt, againPrompt :: String
@@ -186,24 +178,24 @@ mnemonicSpec :: Spec
 mnemonicSpec =
   describe "Asking for a mnemonic" $ do
     it "reads it whole, without echo" $
-      answering [testWords] (`askSeedWords` 1) `shouldReturn` (Right (MnemonicWords testWords), [mnemonicPrompt], [])
+      answering [testWords] askSeedWords `shouldReturn` (Right (MnemonicWords testWords), [mnemonicPrompt], [])
 
     it "tells what is wrong with it and asks again" $
-      answering ["snow senior", testWords] (`askSeedWords` 1)
+      answering ["snow senior", testWords] askSeedWords
         `shouldReturn` ( Right (MnemonicWords testWords),
                          [mnemonicPrompt, "A mnemonic has 12, 15, 18, 21 or 24 words, and a share of a backup 20 or 33, not 2", mnemonicPrompt],
                          []
                        )
 
     it "tells what is wrong with its words as for a mnemonic, when it has as many words as one" $
-      answering ["slow senior nerve virus fabric now fringe clip marble interest analyst can", testWords] (`askSeedWords` 1)
+      answering ["slow senior nerve virus fabric now fringe clip marble interest analyst can", testWords] askSeedWords
         `shouldReturn` ( Right (MnemonicWords testWords),
                          [mnemonicPrompt, "The words do not check out: one of them is mistyped", mnemonicPrompt],
                          []
                        )
 
     it "fails after three mistakes, asking no more" $
-      answering ["one", "two", "three", testWords] (`askSeedWords` 1)
+      answering ["one", "two", "three", testWords] askSeedWords
         `shouldReturn` ( Left "A mnemonic has 12, 15, 18, 21 or 24 words, and a share of a backup 20 or 33, not 1",
                          [ mnemonicPrompt,
                            "A mnemonic has 12, 15, 18, 21 or 24 words, and a share of a backup 20 or 33, not 1",
@@ -215,36 +207,7 @@ mnemonicSpec =
                        )
 
     it "is cancelled when the input ends" $
-      answerOf [] (`askSeedWords` 1) `shouldReturn` Left cancelled
-
-    it "reads the parts an earlier version split it into, and merges them" $
-      answering [firstPart, secondPart] (`askSeedWords` 2)
-        `shouldReturn` (Right (MnemonicWords testWords), ["Mnemonic part 1 of 2: ", "Mnemonic part 2 of 2: "], [])
-
-    it "asks for the parts again when they do not merge" $
-      answering [firstPart, firstPart, firstPart, secondPart] (`askSeedWords` 2)
-        `shouldReturn` ( Right (MnemonicWords testWords),
-                         [ "Mnemonic part 1 of 2: ",
-                           "Mnemonic part 2 of 2: ",
-                           "Two of the parts are the same, but every part of a mnemonic is different",
-                           "Mnemonic part 1 of 2: ",
-                           "Mnemonic part 2 of 2: "
-                         ],
-                         []
-                       )
-
-    -- Merging them used to stop hw instead
-    it "asks for the parts again when they do not have the same number of words" $
-      answering [firstPart, Text.unwords (replicate 23 "abandon" <> ["art"]), firstPart, secondPart] (`askSeedWords` 2)
-        `shouldReturn` ( Right (MnemonicWords testWords),
-                         [ "Mnemonic part 1 of 2: ",
-                           "Mnemonic part 2 of 2: ",
-                           "The parts do not have the same number of words",
-                           "Mnemonic part 1 of 2: ",
-                           "Mnemonic part 2 of 2: "
-                         ],
-                         []
-                       )
+      answerOf [] askSeedWords `shouldReturn` Left cancelled
 
 {- The shares of a backup -}
 
@@ -252,25 +215,25 @@ sharesSpec :: Spec
 sharesSpec =
   describe "Asking for the shares of a backup" $ do
     it "takes a share for a mnemonic, then asks for the next ones, telling how many are needed" $
-      answering testShares (`askSeedWords` 1)
+      answering testShares askSeedWords
         `shouldReturn` (Right (BackupShares testSharesBackup), [mnemonicPrompt, secondSharePrompt, thirdSharePrompt], [])
 
     it "takes the shares in any order" $
-      answerOf (reverse testShares) (`askSeedWords` 1) `shouldReturn` Right (BackupShares testSharesBackup)
+      answerOf (reverse testShares) askSeedWords `shouldReturn` Right (BackupShares testSharesBackup)
 
     it "asks for no other share when the first is the whole backup" $
-      answering ["analysis morning academic academic center intend saver petition romp expand dryer smirk award estate sunlight deny mortgage debut dictate rocky"] (`askSeedWords` 1)
+      answering ["analysis morning academic academic center intend saver petition romp expand dryer smirk award estate sunlight deny mortgage debut dictate rocky"] askSeedWords
         `shouldReturn` (Right (BackupShares (EncryptedMasterSecret 1234 True 1 (fromJust (decodeHex "8376b0ea5b004f0f7cf83f4af6d32e52")))), [mnemonicPrompt], [])
 
     it "tells what is wrong with a share, without repeating its words, and asks for it again" $
-      answering (take 1 testShares <> [Text.replace "acne" "acme" (testShares !! 1)] <> drop 1 testShares) (`askSeedWords` 1)
+      answering (take 1 testShares <> [Text.replace "acne" "acme" (testShares !! 1)] <> drop 1 testShares) askSeedWords
         `shouldReturn` ( Right (BackupShares testSharesBackup),
                          [mnemonicPrompt, secondSharePrompt, "Word 4 is not a word of the share list", secondSharePrompt, thirdSharePrompt],
                          []
                        )
 
     it "tells of a share typed twice, and of one of another backup, and asks again" $
-      answering (take 1 testShares <> take 1 testShares <> [firstOfThree] <> drop 1 testShares) (`askSeedWords` 1)
+      answering (take 1 testShares <> take 1 testShares <> [firstOfThree] <> drop 1 testShares) askSeedWords
         `shouldReturn` ( Right (BackupShares testSharesBackup),
                          [ mnemonicPrompt,
                            secondSharePrompt,
@@ -284,7 +247,7 @@ sharesSpec =
                        )
 
     it "refuses a mnemonic where the next share is asked" $
-      answering (take 1 testShares <> [testWords] <> drop 1 testShares) (`askSeedWords` 1)
+      answering (take 1 testShares <> [testWords] <> drop 1 testShares) askSeedWords
         `shouldReturn` ( Right (BackupShares testSharesBackup),
                          [mnemonicPrompt, secondSharePrompt, "A share of a backup has 20 or 33 words, not 12", secondSharePrompt, thirdSharePrompt],
                          []
@@ -293,7 +256,7 @@ sharesSpec =
     -- The first share is a group of one; the others are of a group that
     -- needs three of its five
     it "tells how many groups are complete, and how far each one started is, for a backup of several groups" $
-      (\(_, shown, _) -> shown) <$> answering testGroupShares (`askSeedWords` 1)
+      (\(_, shown, _) -> shown) <$> answering testGroupShares askSeedWords
         `shouldReturn` [ mnemonicPrompt,
                          "Groups complete: 1 of the 2 needed. Next share: ",
                          "Groups complete: 1 of the 2 needed; group 3 has 1 of its 3 shares. Next share: ",
@@ -303,7 +266,7 @@ sharesSpec =
     -- The second share is of another backup with the same identifier: only
     -- the digest tells. The right two are then typed.
     it "asks for the shares again from the first when they do not rebuild a backup" $
-      answering [firstOfThree, secondOfOther, firstOfThree, secondOfThree] (`askSeedWords` 1)
+      answering [firstOfThree, secondOfOther, firstOfThree, secondOfThree] askSeedWords
         `shouldReturn` ( Right (BackupShares backupOfThree),
                          [ mnemonicPrompt,
                            "Share 1 of the 2 needed. Next share: ",
@@ -315,7 +278,7 @@ sharesSpec =
                        )
 
     it "is cancelled when the input ends before the last share" $
-      answerOf (take 2 testShares) (`askSeedWords` 1) `shouldReturn` Left cancelled
+      answerOf (take 2 testShares) askSeedWords `shouldReturn` Left cancelled
 
 {- A new seed, as createacc asks for it -}
 
@@ -323,18 +286,18 @@ newSeedSpec :: Spec
 newSeedSpec =
   describe "Asking for the seed of a new account, as createacc does" $ do
     it "takes the mnemonic and the passphrase twice each" $
-      answering [testWords, testWords, testPassphrase, testPassphrase] (`askNewSeedSecret` 1)
+      answering [testWords, testWords, testPassphrase, testPassphrase] askNewSeedSecret
         `shouldReturn` ( Right (MnemonicSecret testMnemonic),
                          [mnemonicPrompt, "Type the mnemonic again, to check it", mnemonicPrompt, passphrasePrompt, againPrompt],
                          []
                        )
 
     it "takes the same words however they were typed the second time" $
-      answerOf [testWords, Text.toUpper testWords, ""] (`askNewSeedSecret` 1)
+      answerOf [testWords, Text.toUpper testWords, ""] askNewSeedSecret
         `shouldReturn` Right (MnemonicSecret (MnemonicPass testWords ""))
 
     it "catches a typo the checksum lets through, and asks for the mnemonic again" $
-      answering [testWords, typoWords, testWords, testWords, ""] (`askNewSeedSecret` 1)
+      answering [testWords, typoWords, testWords, testWords, ""] askNewSeedSecret
         `shouldReturn` ( Right (MnemonicSecret (MnemonicPass testWords "")),
                          [ mnemonicPrompt,
                            "Type the mnemonic again, to check it",
@@ -349,14 +312,14 @@ newSeedSpec =
                        )
 
     it "asks once for a passphrase left empty" $
-      answering [testWords, testWords, ""] (`askNewSeedSecret` 1)
+      answering [testWords, testWords, ""] askNewSeedSecret
         `shouldReturn` ( Right (MnemonicSecret (MnemonicPass testWords "")),
                          [mnemonicPrompt, "Type the mnemonic again, to check it", mnemonicPrompt, passphrasePrompt],
                          []
                        )
 
     it "asks for the passphrase twice again when the two differ" $
-      answering [testWords, testWords, "correct horse", "correct hrose", testPassphrase, testPassphrase] (`askNewSeedSecret` 1)
+      answering [testWords, testWords, "correct horse", "correct hrose", testPassphrase, testPassphrase] askNewSeedSecret
         `shouldReturn` ( Right (MnemonicSecret testMnemonic),
                          [ mnemonicPrompt,
                            "Type the mnemonic again, to check it",
@@ -370,30 +333,26 @@ newSeedSpec =
                          []
                        )
 
-    it "takes the parts of a mnemonic twice" $
-      answerOf [firstPart, secondPart, firstPart, secondPart, ""] (`askNewSeedSecret` 2)
-        `shouldReturn` Right (MnemonicSecret (MnemonicPass testWords ""))
-
     it "is cancelled when the input ends" $
-      answerOf [testWords, testWords, testPassphrase] (`askNewSeedSecret` 1) `shouldReturn` Left cancelled
+      answerOf [testWords, testWords, testPassphrase] askNewSeedSecret `shouldReturn` Left cancelled
 
     -- The checksum of a share catches any three wrong words, and the digest
     -- of the backup a wrong share: nothing is left for a second typing
     it "takes the shares of a backup once, and their passphrase twice" $
-      answering (testShares <> [testSharesPassphrase, testSharesPassphrase]) (`askNewSeedSecret` 1)
+      answering (testShares <> [testSharesPassphrase, testSharesPassphrase]) askNewSeedSecret
         `shouldReturn` ( Right testSharesSecret,
                          [mnemonicPrompt, secondSharePrompt, thirdSharePrompt, passphrasePrompt, againPrompt],
                          []
                        )
 
     it "asks once for the passphrase of a backup in shares left empty" $
-      answerOf (testShares <> [""]) (`askNewSeedSecret` 1)
+      answerOf (testShares <> [""]) askNewSeedSecret
         `shouldReturn` Right (SharesSecret testSharesBackup "")
 
     -- The format of the shares allows printable ASCII only: another
     -- passphrase is refused before it is typed a second time
     it "refuses a passphrase with an accent for a backup in shares, and asks for another" $
-      answering (testShares <> ["caf\233", testSharesPassphrase, testSharesPassphrase]) (`askNewSeedSecret` 1)
+      answering (testShares <> ["caf\233", testSharesPassphrase, testSharesPassphrase]) askNewSeedSecret
         `shouldReturn` ( Right testSharesSecret,
                          [ mnemonicPrompt,
                            secondSharePrompt,
@@ -407,7 +366,7 @@ newSeedSpec =
                        )
 
     it "takes the space and the tilde, the first and the last printable ASCII characters, in such a passphrase" $
-      answerOf (testShares <> [" ~", " ~"]) (`askNewSeedSecret` 1)
+      answerOf (testShares <> [" ~", " ~"]) askNewSeedSecret
         `shouldReturn` Right (SharesSecret testSharesBackup " ~")
 
 {- A seed typed once, as recover and checkmnemonic ask for it -}
@@ -416,18 +375,18 @@ seedOnceSpec :: Spec
 seedOnceSpec =
   describe "Asking for a seed to check, as recover and checkmnemonic do" $ do
     it "takes the mnemonic and the passphrase once each" $
-      answering [testWords, testPassphrase] (`askSeedSecret` 1)
+      answering [testWords, testPassphrase] askSeedSecret
         `shouldReturn` (Right (MnemonicSecret testMnemonic), [mnemonicPrompt, passphrasePrompt], [])
 
     it "takes the shares of a backup and the passphrase once each" $
-      answering (testShares <> [testSharesPassphrase]) (`askSeedSecret` 1)
+      answering (testShares <> [testSharesPassphrase]) askSeedSecret
         `shouldReturn` (Right testSharesSecret, [mnemonicPrompt, secondSharePrompt, thirdSharePrompt, passphrasePrompt], [])
 
     -- The format of the shares allows printable ASCII only, for a backup
     -- that exists as for a new one: another passphrase is told, and asked
     -- again
     it "refuses a passphrase with an accent for a backup in shares, and asks for another" $
-      answering (testShares <> ["caf\233", testSharesPassphrase]) (`askSeedSecret` 1)
+      answering (testShares <> ["caf\233", testSharesPassphrase]) askSeedSecret
         `shouldReturn` ( Right testSharesSecret,
                          [ mnemonicPrompt,
                            secondSharePrompt,
@@ -441,7 +400,7 @@ seedOnceSpec =
 
     -- BIP39 normalizes the passphrase of a mnemonic, whatever its characters
     it "takes a passphrase with an accent for a mnemonic" $
-      answerOf [testWords, "caf\233"] (`askSeedSecret` 1)
+      answerOf [testWords, "caf\233"] askSeedSecret
         `shouldReturn` Right (MnemonicSecret (MnemonicPass testWords "caf\233"))
 
 {- The signing key of an account -}
@@ -449,33 +408,29 @@ seedOnceSpec =
 signingSpec :: Ctx -> Spec
 signingSpec ctx =
   describe "Asking for the signing key of an account, as signtx and signmsg do" $ do
-    let signingKeyOf lines' parts = answering lines' $ \term -> keyOf <$> askSigningKey term Bip44 btc ctx parts 0 (testAccount ctx)
+    let signingKeyOf lines' = answering lines' $ \term -> keyOf <$> askSigningKey term Bip44 btc ctx 0 (testAccount ctx)
         keyOf (seed, key) = (fingerprintToText (seedFingerprint seed), xPrvExport btc key)
         signed = Right (testFingerprintText, testAccountXPrv)
         mismatch = "The mnemonic or the passphrase does not match the account"
     it "gives the key and the seed of the account from its mnemonic and passphrase" $
-      signingKeyOf [testWords, testPassphrase] 1 `shouldReturn` (signed, [mnemonicPrompt, passphrasePrompt], [])
+      signingKeyOf [testWords, testPassphrase] `shouldReturn` (signed, [mnemonicPrompt, passphrasePrompt], [])
 
     it "asks for both again after a wrong passphrase" $
-      signingKeyOf [testWords, "correct horse", testWords, testPassphrase] 1
+      signingKeyOf [testWords, "correct horse", testWords, testPassphrase]
         `shouldReturn` (signed, [mnemonicPrompt, passphrasePrompt, mismatch, mnemonicPrompt, passphrasePrompt], [])
 
     it "asks for both again after a wrong mnemonic, which no passphrase could fix" $
-      signingKeyOf [otherWords, testPassphrase, testWords, testPassphrase] 1
+      signingKeyOf [otherWords, testPassphrase, testWords, testPassphrase]
         `shouldReturn` (signed, [mnemonicPrompt, passphrasePrompt, mismatch, mnemonicPrompt, passphrasePrompt], [])
 
     it "fails after three attempts that do not match, asking no more" $ do
-      (answer, _, left) <- signingKeyOf [typoWords, testPassphrase, typoWords, testPassphrase, typoWords, testPassphrase, testWords] 1
+      (answer, _, left) <- signingKeyOf [typoWords, testPassphrase, typoWords, testPassphrase, typoWords, testPassphrase, testWords]
       (answer, left) `shouldBe` (Left mismatch, [testWords])
-
-    it "takes a mnemonic in parts" $
-      signingKeyOf [firstPart, secondPart, testPassphrase] 2
-        `shouldReturn` (signed, ["Mnemonic part 1 of 2: ", "Mnemonic part 2 of 2: ", passphrasePrompt], [])
 
     -- The bip44 account 0 on testnet of the backup of the device tests
     let sharesAccount = fromJust $ xPubImport btcTest ctx testSharesTestnetXPub
         sharesKeyOf lines' = answering lines' $ \term ->
-          (\(seed, key) -> (fingerprintToText (seedFingerprint seed), xPrvExport btcTest key)) <$> askSigningKey term Bip44 btcTest ctx 1 0 sharesAccount
+          (\(seed, key) -> (fingerprintToText (seedFingerprint seed), xPrvExport btcTest key)) <$> askSigningKey term Bip44 btcTest ctx 0 sharesAccount
     it "gives the key and the seed of an account from the shares of its backup and their passphrase" $
       sharesKeyOf (testShares <> [testSharesPassphrase])
         `shouldReturn` ( Right (testSharesFingerprintText, testSharesTestnetXPrv),
@@ -500,7 +455,7 @@ signingSpec ctx =
                    ]
 
     it "is cancelled when the input ends" $ do
-      (answer, _, _) <- signingKeyOf [testWords] 1
+      (answer, _, _) <- signingKeyOf [testWords]
       answer `shouldBe` Left cancelled
 
 {- Matching an account -}

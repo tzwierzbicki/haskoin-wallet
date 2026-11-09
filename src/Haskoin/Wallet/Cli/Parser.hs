@@ -48,7 +48,6 @@ import Haskoin.Wallet.Cli.Listing (Paging (..))
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Util (readNatural)
 import Numeric.Natural (Natural)
-import qualified Options.Applicative as O
 import qualified Paths_haskoin_wallet as Paths
 import Text.RawString.QQ (r)
 
@@ -60,11 +59,11 @@ import Text.RawString.QQ (r)
 data Command
   = CommandMnemonic !NewMnemonic
   | -- | The name of the new account, its network, unless the default one,
-    -- its kind, and the parts the mnemonic is typed in
-    CommandCreateAcc !Text !(Maybe Network) !AccountKind !Natural
+    -- and its kind
+    CommandCreateAcc !Text !(Maybe Network) !AccountKind
   | CommandRecover !Recover
-  | -- | The account, and the parts the mnemonic is typed in
-    CommandCheckMnemonic !(Maybe Text) !Natural
+  | -- | The account whose mnemonic to check
+    CommandCheckMnemonic !(Maybe Text)
   | -- | The network of a key the file places on none, unless the default
     -- one, the kind of a key the file says no kind of, unless BIP44, and
     -- the file of accounts and labels to import
@@ -110,8 +109,8 @@ data Command
   | -- | The pending transaction, by either of its hashes, in full or by
     -- its short id
     CommandDeleteTx !HashRef
-  | -- | What to sign, and the parts the mnemonic is typed in
-    CommandSignTx !Signing !Natural
+  | -- | What to sign
+    CommandSignTx !Signing
   | CommandFees !(Maybe Network)
   | CommandSignMsg !SignMsg
   | CommandVerifyMsg !VerifyMsg
@@ -202,7 +201,7 @@ data TxShown = FullTx | SignedTx !(Maybe FilePath)
 -- | The file a signing command writes is its --output file, or the --input
 -- file it replaces with the user's agreement
 txShownOf :: Command -> TxShown
-txShownOf (CommandSignTx signing _) = SignedTx (signing.output <|> signing.input)
+txShownOf (CommandSignTx signing) = SignedTx (signing.output <|> signing.input)
 txShownOf (CommandSignSweep signing _ _) = SignedTx (signing.output <|> signing.input)
 txShownOf _ = FullTx
 
@@ -225,9 +224,7 @@ data Recover = Recover
     -- searches Bitcoin and Bitcoin Cash, whatever the default network.
     network :: !(Maybe Network),
     -- | The accounts in a row without a payment that end the search
-    accountGap :: !Natural,
-    -- | The parts the mnemonic is typed in
-    parts :: !Natural
+    accountGap :: !Natural
   }
   deriving (Eq, Show)
 
@@ -383,8 +380,6 @@ data SignMsg = SignMsg
   { -- | The address of the wallet that signs
     address :: !Text,
     message :: !Text,
-    -- | The parts the mnemonic is typed in
-    parts :: !Natural,
     -- | The file the armored block is written to, instead of the screen
     output :: !(Maybe FilePath)
   }
@@ -672,7 +667,7 @@ mnemonics cannot.
 |],
       args =
         CommandMnemonic
-          <$> (NewMnemonic <$> entropyOption <*> diceOption <*> sharesOption <*> thresholdOption <* splitRefused)
+          <$> (NewMnemonic <$> entropyOption <*> diceOption <*> sharesOption <*> thresholdOption)
     }
 
 entropyOption :: Args Natural
@@ -743,45 +738,6 @@ upToSixteen name typed =
       | otherwise -> Left ("The " <> name <> " value has to be between 1 and 16")
     Nothing -> Left ("Could not parse the " <> name <> " option")
 
--- | The --parts of earlier versions, which split a mnemonic into parts
--- that are all needed to merge it back: mnemonic refuses it, and says what
--- took its place. The option has no row in the help.
-splitRefused :: Args ()
-splitRefused =
-  Args NoUsage [] $
-    O.option
-      (O.eitherReader (const (Left "hw makes no mnemonic in parts any more: make a backup in shares with --shares and --threshold")))
-      (O.long "parts" <> O.short 'p' <> O.value () <> O.internal)
-
--- | The parts a mnemonic is typed in, when an earlier version of hw split
--- it
-mnemonicPartsOption :: Args Natural
-mnemonicPartsOption =
-  partsOption
-    [r|
-The number of parts of a mnemonic that an earlier version of hw split with
-`mnemonic` --parts. hw asks for each part.
-|]
-
--- | The --parts option, with the help of the command about it
-partsOption :: String -> Args Natural
-partsOption what =
-  option (eitherReader $ f . cs) $
-    short 'p'
-      <> long "parts"
-      <> metavar "INT"
-      <> value 1
-      <> showDefault
-      <> help what
-  where
-    f s =
-      case readNatural s of
-        Just n ->
-          if n >= 1 && n <= 12
-            then Right n
-            else Left "The --parts value has to be between 1 and 12"
-        Nothing -> Left "Could not parse the --parts option"
-
 {- createacc -}
 
 createAccCommand :: CommandSpec Command
@@ -824,7 +780,6 @@ none of the normalized seed, createacc keeps to the old seed and says so.
           <$> textArg "NAME" "The name of the new account"
           <*> networkMaybeOption
           <*> accountTypeOption
-          <*> mnemonicPartsOption
     }
 
 -- | The kind of the new account: bip44 unless given
@@ -953,7 +908,7 @@ that finds accounts.
 |],
       args =
         CommandRecover
-          <$> (Recover <$> recoverNetworkOption <*> accountGapOption <*> mnemonicPartsOption)
+          <$> (Recover <$> recoverNetworkOption <*> accountGapOption)
     }
 
 accountGapOption :: Args Natural
@@ -1048,7 +1003,6 @@ or of another network. checkmnemonic then says so, with the --type or the
       args =
         CommandCheckMnemonic
           <$> accountOption
-          <*> mnemonicPartsOption
     }
 
 -- | The account of a command, which the wallet's only account is without it
@@ -2187,7 +2141,6 @@ Then send it with broadcast, or delete it with deletetx.
       args =
         CommandSignTx
           <$> signingOptions
-          <*> mnemonicPartsOption
     }
 
 inputFileMaybeOption :: Args (Maybe FilePath)
@@ -2677,7 +2630,7 @@ saved to a file.
 |],
       args =
         CommandSignMsg
-          <$> (SignMsg <$> signAddressArg <*> signMsgArg <*> mnemonicPartsOption <*> signedMessageOutputOption)
+          <$> (SignMsg <$> signAddressArg <*> signMsgArg <*> signedMessageOutputOption)
     }
 
 signAddressArg :: Args Text

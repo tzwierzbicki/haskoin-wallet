@@ -3,10 +3,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | An account as the user keeps it, from createacc to deleteacc: its
--- descriptor, for other wallets and from them, its
--- addresses and their labels, its mnemonic typed in parts, the messages its keys sign and check, the
--- backup of its database, and its recovery from a seed, with a passphrase
--- as typed.
+-- descriptor, for other wallets and from them, its addresses and their
+-- labels, the messages its keys sign and check, the backup of its
+-- database, and its recovery from a seed, with a passphrase as typed.
 module Haskoin.Wallet.Workflow.AccountSpec (spec) where
 
 import Control.Monad (forM_, replicateM_, void)
@@ -141,12 +140,6 @@ accountSpec =
         matched `shouldSatisfy` \case ResponseAccResult acc True _ -> dBAccountName acc == "other"; _ -> False
         missed <- hwJson home ["checkmnemonic", "--account", "other"] seedOnce
         missed `shouldSatisfy` \case ResponseAccResult _ False _ -> True; _ -> False
-
-    it "is checked by checkmnemonic --parts against the parts of its mnemonic" $
-      withHome $ \home -> do
-        createMain home
-        matched <- hwJson home ["checkmnemonic", "--parts", "2"] partsOnce
-        matched `shouldSatisfy` \case ResponseAccResult _ True _ -> True; _ -> False
 
     -- The key of account 0 on Bitcoin, imported on Bitcoin Cash, where an
     -- xpub reads the same
@@ -594,13 +587,6 @@ splitSpec = do
         runExit run `shouldBe` ExitFailure 1
         runErr run `shouldSatisfy` Text.isInfixOf "option --entropy: cannot parse value `17'"
 
-    -- Earlier versions split a mnemonic into parts that were all needed
-    it "is split into parts no more: --parts is refused, and names --shares" $
-      withHome $ \home -> do
-        run <- hw home ["mnemonic", "--parts", "2"] []
-        runExit run `shouldBe` ExitFailure 1
-        runErr run `shouldSatisfy` Text.isInfixOf "option --parts: hw makes no mnemonic in parts any more: make a backup in shares with --shares and --threshold"
-
     -- The rolls are asked once the entropy of the system is read. None are
     -- typed here, and no mnemonic is made without them.
     it "asks for dice rolls with --dice, and is not made without them" $
@@ -608,14 +594,6 @@ splitSpec = do
         run <- hw home ["mnemonic", "--dice"] []
         runErr run `shouldSatisfy` Text.isInfixOf "Rolls: "
         run `shouldSatisfy` printed "Cancelled: the input ended before the answer"
-
-  describe "A mnemonic that an earlier version split into parts" $
-    -- The two parts of the test mnemonic, typed twice, then its passphrase
-    -- twice
-    it "makes with createacc --parts the account of the mnemonic" $
-      withHome $ \home ->
-        (keyOf <$> hwJson home ["createacc", "main", "--parts", "2"] (testMnemonicParts <> testMnemonicParts <> replicate 2 (mnemonicPass testMnemonic)))
-          `shouldReturn` Right ("main", 0, testAccountXPub)
 
   describe "A new backup in shares" $ do
     it "comes in the shares of --shares, of 20 words each, with the threshold of --threshold" $
@@ -773,14 +751,6 @@ messageSpec =
         createMain home
         _ <- answer home ["receive"] []
         signed <- hwJson home ["signmsg", textOf (externalAddr 0), "hello"] seedOnce
-        signed `shouldBe` ResponseSignMsg "hello" helloSignature (externalAddrsText !! 0)
-
-    -- A signature of the key is always the same
-    it "is signed from the parts of the mnemonic with --parts" $
-      withHome $ \home -> do
-        createMain home
-        _ <- answer home ["receive"] []
-        signed <- hwJson home ["signmsg", textOf (externalAddr 0), "hello", "--parts", "2"] partsOnce
         signed `shouldBe` ResponseSignMsg "hello" helloSignature (externalAddrsText !! 0)
 
     -- cash is the Bitcoin Cash account of the test wallet. hw stores the
@@ -1031,10 +1001,6 @@ recoverSpec ctx =
       withChain ctx (paidChain ctx) $ \home _ -> do
         (accountsOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right [("btc0", 0, 50000)]
         (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("btc0", 0, 50000)]
-
-    it "are found from the parts of the mnemonic with --parts" $
-      withChain ctx (paidChain ctx) $ \home _ ->
-        (accountsOf <$> hwJson home ["recover", "--parts", "2"] partsOnce) `shouldReturn` Right [("btc0", 0, 50000)]
 
     -- The chain pays account 1 only. Account 0 is one without a payment.
     it "are looked for until --account-gap accounts in a row without a payment" $

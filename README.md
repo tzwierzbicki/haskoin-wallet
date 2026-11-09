@@ -1618,10 +1618,16 @@ not lost, but take care when you move them:
 
 ### A mnemonic split into parts
 
-Versions up to 0.9 split a mnemonic with `mnemonic --parts` into parts that
-were all needed to rebuild it. `hw` 0.10 makes no such parts, and reads them
-with `--parts`. Give `--parts N` to every command that asks for a mnemonic
-split so, and `hw` asks for each of the N parts.
+Versions up to 0.9 could split a mnemonic with `mnemonic --split` into parts
+that were all needed to rebuild it. `hw` 0.10 neither makes nor reads such
+parts. Use `hw` 0.9 to move the funds of such a mnemonic to an account of
+`hw` 0.10.
+
+Run `hw` 0.9 with a `HOME` of its own, such as `HOME=$(mktemp -d)`. It then
+makes a wallet apart and leaves the upgraded one alone. There,
+`createacc --split N` asks for each of the N parts. Sync the account with
+`syncacc`. Then pay its funds to an address of `hw` 0.10 with `preparetx`,
+`signtx --split N` and `sendtx`.
 
 [Backups in shares](#hw-mnemonic) take the place of parts. A chosen number of
 shares is enough, and a wrong share is told.
