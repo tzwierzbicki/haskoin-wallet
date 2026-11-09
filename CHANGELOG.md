@@ -47,8 +47,10 @@ Accounts and backups:
   syncs them. Without `--network`, it searches Bitcoin and Bitcoin Cash both.
   It also tells of funds at paths `hw` cannot spend from, such as wrapped
   SegWit and Taproot accounts.
-- `descriptor` shows an account as an output descriptor (BIP380). `importacc`
-  reads descriptors and extended public keys.
+- `accounts --verbose` shows each account as an output descriptor (BIP380),
+  and a bip84 account with its key as a zpub too. Its lines wrap on a
+  terminal, so that a descriptor can be copied whole. `importacc` reads
+  descriptors and extended public keys.
 - `exportacc` and `importacc` use the BIP329 format. The file carries the
   accounts, their labels and their locked coins.
 

@@ -21,8 +21,12 @@ spec = do
       pagerNamed Nothing (Just "  ") (Just "more") `shouldBe` Nothing
       pagerNamed Nothing Nothing (Just "cat") `shouldBe` Nothing
 
-    it "gives less -F, -R and -X, and -S so that a line is cut at the edge of the screen rather than wrapped, for every listing" $
+    it "gives less -F, -R and -X, and -S so that a line is cut at the edge of the screen rather than wrapped, for a listing of lines" $
       lessOptions Lines (Just 668) `shouldBe` "FRXS"
+
+    -- The terminal then wraps a descriptor itself, and copies it whole
+    it "gives less no -S for lines that wrap, those that end with a descriptor to copy" $
+      lessOptions WrappedLines (Just 668) `shouldBe` "FRX"
 
     -- With --header, less never quits by itself: a short table gets none
     it "keeps the header of a table taller than the screen on the screen with less 608, which added --header" $

@@ -30,6 +30,7 @@ import Database.Esqueleto.Legacy as E hiding (isNothing)
 import qualified Database.Persist as P
 import Haskoin
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.Descriptor (accountDescriptor, descriptorText, slip132Key)
 import Haskoin.Wallet.Keys (AccountKind (..), PublicSeed (..), accountDeriv, checkKindOnNetwork, kindName, kindNamed, kindOfPurpose, kindPurpose, xPubIndex)
 import Haskoin.Wallet.Util (visibleText)
 import Numeric.Natural (Natural)
@@ -44,6 +45,27 @@ instance ToJSON DBAccount where
 -- shows the balances of an account ("Haskoin.Wallet.Database.Coin").
 accountWithSpendable :: DBAccount -> Word64 -> Json.Value
 accountWithSpendable acc spendable = object (accountPairs acc ["spendable" .= spendable])
+
+-- | An account in JSON with its spendable balance, as 'accountWithSpendable'
+-- writes it, and with the keys another wallet takes it by: its output
+-- descriptor, and its key in the form of SLIP-132, null for a kind that has
+-- none ('accountDescriptorText', 'accountSlip132Key'). The answers that show
+-- an account with every detail write it so, as accounts and createacc do.
+-- The answers of sync leave the keys out, as its screen does.
+--
+-- The two keys follow from the key, the kind, the path and the fingerprint
+-- of the account, which the JSON gives too. So they are written here, on
+-- the way out, and the answers of hw keep only the account. A copy kept
+-- beside the account could only fall out of step with it.
+-- 'parseAccountWithSpendable' reads neither back.
+accountWithKeys :: DBAccount -> Word64 -> Json.Value
+accountWithKeys acc spendable =
+  object
+    ( accountPairs acc ["spendable" .= spendable]
+        <> [ "descriptor" .= accountDescriptorText acc,
+             "slip132" .= accountSlip132Key acc
+           ]
+    )
 
 -- | An account and its spendable balance, as 'accountWithSpendable' writes them
 parseAccountWithSpendable :: Json.Value -> Parser (DBAccount, Word64)
@@ -133,6 +155,23 @@ accountPath acc = accountDeriv (accountKind acc) (accountNetwork acc) (accountIn
 -- | The fingerprint of the seed of the account, when hw has learnt it
 accountFingerprint :: DBAccount -> Maybe Fingerprint
 accountFingerprint acc = eitherToMaybe . textToFingerprint =<< dBAccountFingerprint acc
+
+-- | The output descriptor of the account, as other wallets and Bitcoin
+-- Core take an account without its private key ("Haskoin.Wallet.Descriptor"):
+-- its key in the script function of its kind, pkh or wpkh, with the origin
+-- of the key when hw knows the fingerprint of the seed, and both chains.
+-- A descriptor without its origin still watches the account, but a
+-- hardware wallet cannot match it to its seed.
+accountDescriptorText :: DBAccount -> Text
+accountDescriptorText acc =
+  descriptorText (accountDescriptor (accountKind acc) (accountFingerprint acc) (accountPath acc) (dBAccountXPubKey acc))
+
+-- | The key of the account with the prefix of SLIP-132 that marks its
+-- kind, a zpub or a vpub for a bip84 account, for the wallets that take
+-- only that form. None for a bip44 account, whose xpub such wallets take
+-- as it is.
+accountSlip132Key :: DBAccount -> Maybe Text
+accountSlip132Key acc = slip132Key (accountKind acc) (dBAccountXPubKey acc)
 
 {- Accounts in the database -}
 

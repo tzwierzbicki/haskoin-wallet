@@ -7,7 +7,9 @@
 module Haskoin.Wallet.Cli.ParserSpec (spec) where
 
 import Haskoin (txHashToHex)
-import Haskoin.Wallet.Cli.Parser (Labelled (..), Shown (..), program, readCoinRef, readLabelled, readShown)
+import Haskoin.Wallet.Cli.Listing (Paging (..))
+import Haskoin.Wallet.Cli.Parser (Command (..), Labelled (..), ListingOutput (..), Shown (..), program, readCoinRef, readLabelled, readShown, wrapsLines)
+import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Cli.Parser.Args (Args (..), CommandSpec (..))
 import Haskoin.Wallet.Cli.Parser.Help (mentionedCommands, usageParts)
 import Haskoin.Wallet.Cli.Parser.Completion (completionParts)
@@ -119,6 +121,18 @@ spec = do
 
     it "is nothing without its index" $
       readCoinRef "a1075db5" `shouldBe` Nothing
+
+  -- The verbose view of accounts ends each account with its descriptor,
+  -- which the user copies whole from the screen
+  describe "Whether the pager wraps the lines of a listing" $ do
+    it "wraps those of accounts --verbose" $
+      wrapsLines Verbose (CommandAccounts Nothing (OnScreen (Just Verbose))) `shouldBe` True
+
+    it "cuts those of the compact view of accounts, which shows no descriptor" $
+      wrapsLines Compact (CommandAccounts Nothing (OnScreen Nothing)) `shouldBe` False
+
+    it "cuts those of the verbose view of another listing, such as txs" $
+      wrapsLines Verbose (CommandTxs Nothing (OnScreen (Just Verbose)) (Paging Nothing Nothing)) `shouldBe` False
 
   describe "The commands a text of the help names" $ do
     it "are those named in it, in its order" $

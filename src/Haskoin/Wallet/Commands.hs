@@ -29,7 +29,6 @@ module Haskoin.Wallet.Commands
     cmdCheckMnemonic,
     cmdImportAcc,
     cmdExportAcc,
-    cmdDescriptor,
     cmdRenameAcc,
     cmdDeleteAcc,
     cmdAccounts,
@@ -107,7 +106,6 @@ import Haskoin.Wallet.Amounts (AmountUnit)
 import Haskoin.Wallet.Backup (backupDatabase, backupDirectory, copyDatabase)
 import Haskoin.Wallet.Bip329 (recordsText)
 import Haskoin.Wallet.CutAddress (cutAddress)
-import Haskoin.Wallet.Descriptor (accountDescriptor, descriptorText, slip132Key)
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
@@ -173,7 +171,6 @@ commandResponse ctx cfg unit = \case
   CommandCheckMnemonic account -> cmdCheckMnemonic ctx cfg account
   CommandImportAcc netM kindM file -> cmdImportAcc ctx cfg netM kindM file
   CommandExportAcc account file -> cmdExportAcc ctx cfg account file
-  CommandDescriptor account -> cmdDescriptor cfg account
   CommandRenameAcc opts -> cmdRenameAcc cfg opts
   CommandDeleteAcc name net path -> cmdDeleteAcc cfg name net path
   CommandAccounts account _ -> cmdAccounts cfg account
@@ -458,20 +455,6 @@ cmdExportAcc ctx cfg account file =
     records <- concat <$> mapM (accountRecords ctx) accs
     liftEitherIO $ writeTextFile file (recordsText records)
     return $ ResponseFile file
-
--- | The output descriptor of the account, or of every account, as other
--- wallets and Bitcoin Core take an account: its key in the script function
--- of its kind, pkh or wpkh, with its origin when the fingerprint of its
--- seed is known. A bip84 account comes with its key in the zpub form of
--- SLIP-132 as well, for the wallets that take only that form.
-cmdDescriptor :: Config -> Maybe Text -> IO Response
-cmdDescriptor cfg account =
-  runDBResponse cfg $ do
-    accs <- getAccountsByName account
-    when (null accs) $ throwError "There are no accounts in the wallet"
-    return $ ResponseDescriptors [(acc, descriptorOf acc, slip132Key (accountKind acc) (dBAccountXPubKey acc)) | (_, acc) <- accs]
-  where
-    descriptorOf acc = descriptorText (accountDescriptor (accountKind acc) (accountFingerprint acc) (accountPath acc) (dBAccountXPubKey acc))
 
 cmdRenameAcc :: Config -> RenameAcc -> IO Response
 cmdRenameAcc cfg opts =

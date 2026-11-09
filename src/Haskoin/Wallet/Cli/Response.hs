@@ -12,7 +12,7 @@ import Data.Aeson.Types (Pair, Parser)
 import Data.Text (Text)
 import Data.Word (Word64)
 import Haskoin
-import Haskoin.Wallet.Database.Account (accountNetwork, accountWithSpendable, parseAccountWithSpendable)
+import Haskoin.Wallet.Database.Account (accountNetwork, accountWithKeys, accountWithSpendable, parseAccountWithSpendable)
 import Haskoin.Wallet.Database.Address (CoinBalance, addressWithCoinBalance, addressWithSpendable, parseAddressWithCoinBalance, parseAddressWithSpendable)
 import Haskoin.Wallet.Database.Coin (JsonCoin, LeftCoin)
 import Haskoin.Wallet.Database (DBAccount, DBAddress)
@@ -31,7 +31,8 @@ data Response
   | -- | The shares of a new backup: the source of its entropy, the number
     -- of shares that rebuild the seed, and the words of each share
     ResponseShares !Text !Natural ![[Text]]
-  | -- | An account, with the balance it can spend now
+  | -- | An account, with the balance it can spend now. The JSON gives it
+    -- with its output descriptor too ('accountWithKeys').
     ResponseAccount !DBAccount !Word64
   | -- | An account, whether the command did what it was asked, and what it
     -- says of it
@@ -41,11 +42,9 @@ data Response
   | -- | What importacc did with a file: the accounts it names, the labels
     -- and locks set, and what it could not place
     ResponseImport !ImportReport
-  | -- | Accounts, each with the balance it can spend now
+  | -- | Accounts, each with the balance it can spend now. The JSON gives
+    -- each with its output descriptor too ('accountWithKeys').
     ResponseAccounts ![(DBAccount, Word64)]
-  | -- | Accounts, each with its output descriptor and, for a bip84 one, its
-    -- key with the zpub prefix of SLIP-132, as descriptor shows them
-    ResponseDescriptors ![(DBAccount, Text, Maybe Text)]
   | -- | An address of the account, with the balance it can spend now
     ResponseAddress !DBAccount !DBAddress !Word64
   | -- | Addresses of the account, each with the balance it can spend now
@@ -121,13 +120,11 @@ instance ToJSON Response where
       typed "mnemonic" ["entropysource" .= source, "mnemonic" .= ws]
     ResponseShares source threshold shares ->
       typed "shares" ["entropysource" .= source, "threshold" .= threshold, "shares" .= shares]
-    ResponseAccount acc spendable -> typed "account" ["account" .= accountWithSpendable acc spendable]
+    ResponseAccount acc spendable -> typed "account" ["account" .= accountWithKeys acc spendable]
     ResponseAccResult acc result text -> typed "accresult" ["account" .= acc, "result" .= result, "text" .= text]
     ResponseFile file -> typed "file" ["file" .= file]
     ResponseImport report -> typed "import" (reportPairs report)
-    ResponseAccounts accs -> typed "accounts" ["accounts" .= (uncurry accountWithSpendable <$> accs)]
-    ResponseDescriptors held ->
-      typed "descriptors" ["descriptors" .= [object ["account" .= acc, "descriptor" .= descriptor, "slip132" .= slip132] | (acc, descriptor, slip132) <- held]]
+    ResponseAccounts accs -> typed "accounts" ["accounts" .= (uncurry accountWithKeys <$> accs)]
     ResponseAddress acc addr spendable ->
       typed "address" ["account" .= acc, "address" .= addressWithSpendable addr spendable]
     ResponseAddresses acc addrs ->
@@ -178,7 +175,6 @@ instance FromJSON Response where
       "file" -> ResponseFile <$> o .: "file"
       "import" -> ResponseImport <$> parseReport o
       "accounts" -> ResponseAccounts <$> (mapM parseAccountWithSpendable =<< o .: "accounts")
-      "descriptors" -> ResponseDescriptors <$> (mapM heldDescriptor =<< o .: "descriptors")
       "address" -> do
         acc <- o .: "account"
         uncurry (ResponseAddress acc) <$> (parseAddressWithSpendable =<< o .: "address")
@@ -219,9 +215,6 @@ instance FromJSON Response where
       _ -> fail "Invalid JSON response type"
     where
       network o = networkNamed =<< o .: "network"
-      -- The descriptor of an account
-      heldDescriptor = withObject "descriptor of an account" $ \entry ->
-        (,,) <$> entry .: "account" <*> entry .: "descriptor" <*> entry .:? "slip132"
       -- A transaction with its account, which names its network
       heldTx = withObject "transaction of an account" $ \entry -> do
         acc <- entry .: "account"

@@ -70,8 +70,6 @@ data Command
     CommandImportAcc !(Maybe Network) !(Maybe AccountKind) !FilePath
   | -- | The account, or every one, and the file to write them to
     CommandExportAcc !(Maybe Text) !FilePath
-  | -- | The account, or every one, whose output descriptor to show
-    CommandDescriptor !(Maybe Text)
   | CommandRenameAcc !RenameAcc
   | -- | The account, or every one, and how to show each, or the CSV file
     -- to write them to
@@ -204,6 +202,17 @@ txShownOf :: Command -> TxShown
 txShownOf (CommandSignTx signing) = SignedTx (signing.output <|> signing.input)
 txShownOf (CommandSignSweep signing _ _) = SignedTx (signing.output <|> signing.input)
 txShownOf _ = FullTx
+
+-- | Whether the pager wraps the lines of the listing the command shows in
+-- the view given, rather than cut them at the edge of the screen
+-- ("Haskoin.Wallet.Cli.Pager"). Only accounts in the verbose view wraps.
+-- Its rows end with the output descriptor of each account, wider than
+-- most screens, which the user copies into another wallet. A cut
+-- descriptor could not be copied from the screen. Every other view keeps
+-- its columns whole by cutting its lines.
+wrapsLines :: View -> Command -> Bool
+wrapsLines Verbose (CommandAccounts _ _) = True
+wrapsLines _ _ = False
 
 -- | The options of mnemonic
 data NewMnemonic = NewMnemonic
@@ -547,7 +556,6 @@ Type hw COMMAND --help for the help of a command.
               checkMnemonicCommand,
               exportAccCommand,
               importAccCommand,
-              descriptorCommand,
               accountsCommand,
               renameAccCommand,
               deleteAccCommand,
@@ -769,6 +777,10 @@ has bip44 accounts only.
 The private keys are never stored. To keep them on an offline computer,
 create the account there. Then copy it to an online computer with exportacc
 and importacc.
+
+createacc answers with every detail of the new account, as accounts --verbose
+shows it, its output descriptor last. Another wallet takes the account by its
+descriptor, to watch it.
 
 A passphrase with accents or other non-ASCII letters is normalized as BIP39
 asks, so that other wallets find the same seed. Older versions of hw did not
@@ -1083,8 +1095,8 @@ transactions. deleteacc, then import it again with the other --type. A
 descriptor names no network: give --network, or set a default
 network. An account a descriptor adds is named after its network, its index
 and its kind, as recover names one, since a descriptor carries no name:
-renameacc renames it. `descriptor` shows the descriptor of an account of
-this wallet.
+renameacc renames it. accounts --verbose shows the descriptor of each account
+of this wallet.
 
 The labels and the locks of the file are set on the addresses, transactions
 and coins the wallet has. An address the wallet has not generated yet is
@@ -1099,46 +1111,6 @@ before a key of the seed. Each record of the file names its account by it, as
 in pkh([bc560f95/44'/0'/0']) or wpkh([bc560f95/84'/0'/0']). `accounts`
 groups the accounts of one seed by it.
 |]
-
-{- descriptor -}
-
-descriptorCommand :: CommandSpec Command
-descriptorCommand =
-  CommandSpec
-    { name = "descriptor",
-      offline = False,
-      summary = "Show the output descriptor of the accounts",
-      details =
-        [r|
-descriptor shows each account as an output descriptor, the format of BIP 380
-in which wallets take an account without its private key:
-
-  pkh([bc560f95/44h/0h/0h]xpub6CHK45s.../<0;1>/*)#vq597j87
-  wpkh([bc560f95/84h/0h/0h]xpub6CQF8An.../<0;1>/*)#5nktextl
-
-The first is a bip44 account, the second a bip84 one. Paste it into a
-wallet that takes a descriptor, to watch the account there. The descriptor
-carries the public key of the account, the
-fingerprint of its seed and its derivation path, and the two chains of
-addresses, with a checksum. It holds no private key. When hw does not know
-the fingerprint of the seed, the descriptor names no origin, which a
-hardware wallet needs to match it, and the answer says so.
-
-A descriptor does not name its network. Bitcoin and Bitcoin Cash write the
-same keys, and every test network writes tpub keys.
-
-A bip84 account is shown with its key in the form of SLIP-132 as well, a
-zpub, or a vpub on a test network, in the row SLIP-132. Some wallets take
-only that form for a native SegWit account, and make a legacy wallet of an
-xpub. The key is the same, only its prefix differs. A bip44 account has no
-such row, since such wallets take its xpub as it is.
-
-descriptor asks nothing of the server, so it runs on an offline computer as
-well. importacc reads a descriptor back. Without --account, every account is
-shown.
-|],
-      args = CommandDescriptor <$> onlyAccountOption
-    }
 
 {- exportacc -}
 
@@ -1184,7 +1156,7 @@ accountsCommand =
   CommandSpec
     { name = "accounts",
       offline = False,
-      summary = "Show the accounts and their balances",
+      summary = "Show the accounts, their balances and descriptors",
       details =
         [r|
 Each account takes two lines. The first gives its name, its network and its
@@ -1201,7 +1173,33 @@ what one of its accounts pays another. preparetx can spend all of it, unless
 
 --verbose adds the fingerprint of the seed when known, how many receiving and
 change addresses the account has, when it was created, and the confirmed and
-unconfirmed balances the server gave at the last sync.
+unconfirmed balances the server gave at the last sync. It ends with the
+account as an output descriptor, the format of BIP 380 in which wallets take
+an account without its private key:
+
+  pkh([bc560f95/44h/0h/0h]xpub6CHK45s.../<0;1>/*)#vq597j87
+  wpkh([bc560f95/84h/0h/0h]xpub6CQF8An.../<0;1>/*)#5nktextl
+
+The first is a bip44 account, the second a bip84 one. Paste it into a wallet
+that takes a descriptor, to watch the account there. The descriptor carries
+the public key of the account, the fingerprint of its seed and its derivation
+path, and the two chains of addresses, with a checksum. It holds no private
+key. When hw does not know the fingerprint of the seed, the descriptor names
+no origin, which a hardware wallet needs to match it. importacc reads a
+descriptor back.
+
+A descriptor does not name its network. Bitcoin and Bitcoin Cash write the
+same keys, and every test network writes tpub keys.
+
+A bip84 account also shows its key in the form of SLIP-132, a zpub, or a vpub
+on a test network, in the row SLIP-132. Some wallets take only that form for a
+native SegWit account, and make a legacy wallet of an xpub. The key is the
+same, only its prefix differs. A bip44 account has no such row, since such
+wallets take its xpub as it is.
+
+A descriptor is wider than most screens. On a terminal, the pager wraps the
+lines of --verbose rather than cut them at the edge of the screen, so that a
+descriptor can be copied whole.
 
 With --tabular, each account takes one row of a table, under a header that
 names the columns: its name, its network, its derivation path, what it can
@@ -1211,13 +1209,15 @@ unit the header names. The first column is as wide as the longest name.
 With --csv FILENAME, each account takes one row of a new CSV file, for a
 spreadsheet: its name, network and path, what it can spend, its confirmed and
 unconfirmed balances, its coins, how many receiving and change addresses it
-has, and when it was created. Amounts are in satoshis, and times in UTC.
+has, and when it was created. Amounts are in satoshis, and times in UTC. The
+file holds no key and no descriptor: anyone it reaches could see every
+address and every payment of the account with them.
 |],
       args =
         CommandAccounts
           <$> onlyAccountOption
           <*> listingOutputOption
-            "Show every detail of each account: the fingerprint of its seed, its addresses, when it was created, and each of its balances."
+            "Show every detail of each account: the fingerprint of its seed, its addresses, when it was created, each of its balances, and its output descriptor."
             "Show each account on one row of a table: its name, network and path, what it can spend, what is unconfirmed, and its coins."
             "accounts"
     }

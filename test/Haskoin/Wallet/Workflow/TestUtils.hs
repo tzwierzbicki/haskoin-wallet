@@ -95,7 +95,10 @@ module Haskoin.Wallet.Workflow.TestUtils
   )
 where
 
-import Control.Monad (void)
+import Control.Applicative ((<|>))
+import Control.Monad (forM, void)
+import qualified Data.Aeson as Json
+import Data.Aeson.Types (parseEither)
 import qualified Data.ByteString as BS
 import Data.List (sortOn)
 import qualified Data.Map.Strict as Map
@@ -331,17 +334,23 @@ createdNotesOf :: Response -> Either String [(Text, Maybe Text)]
 createdNotesOf (ResponseImport report) = Right [(dBAccountName acc, note) | AccountCreated acc note <- reportAccounts report]
 createdNotesOf other = Left (show other)
 
--- | The accounts of an answer with their descriptors, as descriptor
--- shows them
-descriptorsOf :: Response -> Either String [(Text, Text)]
-descriptorsOf (ResponseDescriptors held) = Right [(dBAccountName acc, descriptor) | (acc, descriptor, _) <- held]
-descriptorsOf other = Left (show other)
+-- | The accounts of an answer in JSON ('hwJsonValue'), each with its
+-- output descriptor: those of accounts, or the one createacc gives
+descriptorsOf :: Json.Value -> Either String [(Text, Text)]
+descriptorsOf = accountKeysOf "descriptor"
 
--- | The accounts of an answer with their keys in the form of SLIP-132, as
--- descriptor shows them: a zpub for a bip84 account, none for a bip44 one
-slip132KeysOf :: Response -> Either String [(Text, Maybe Text)]
-slip132KeysOf (ResponseDescriptors held) = Right [(dBAccountName acc, key) | (acc, _, key) <- held]
-slip132KeysOf other = Left (show other)
+-- | The accounts of an answer in JSON, each with its key in the form of
+-- SLIP-132: a zpub for a bip84 account, null for a bip44 one
+slip132KeysOf :: Json.Value -> Either String [(Text, Maybe Text)]
+slip132KeysOf = accountKeysOf "slip132"
+
+-- | The accounts of an answer in JSON, each by its name with what the key
+-- given holds, which each must have: the accounts of a listing, or the
+-- account of an answer of one
+accountKeysOf :: (Json.FromJSON a) => Json.Key -> Json.Value -> Either String [(Text, a)]
+accountKeysOf key = parseEither $ Json.withObject "answer" $ \o -> do
+  accounts <- (o Json..: "accounts") <|> (pure <$> o Json..: "account")
+  forM accounts $ Json.withObject "account" $ \acc -> (,) <$> acc Json..: "name" <*> acc Json..: key
 
 -- | The account an answer shows
 accountOf :: Response -> Either String DBAccount

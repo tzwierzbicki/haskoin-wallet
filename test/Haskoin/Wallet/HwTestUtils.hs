@@ -22,6 +22,7 @@ module Haskoin.Wallet.HwTestUtils
     whileHwWaitsAt,
     centralEurope,
     hwJson,
+    hwJsonValue,
     tabAfter,
     bashCompletion,
     -- * The chain of the fake store
@@ -304,7 +305,16 @@ centralEurope = "CET-1CEST,M3.5.0,M10.5.0/3"
 
 -- | Run hw with --json, and its answer, which must read as one
 hwJson :: FilePath -> [String] -> [Text] -> IO Response
-hwJson home args typed = do
+hwJson = hwJsonAs
+
+-- | Run hw with --json, and its answer as the JSON hw wrote, for the keys
+-- that a 'Response' does not keep, such as the descriptor of an account
+hwJsonValue :: FilePath -> [String] -> [Text] -> IO Json.Value
+hwJsonValue = hwJsonAs
+
+-- | Run hw with --json, and its answer, which must read as the type asked
+hwJsonAs :: (Json.FromJSON a) => FilePath -> [String] -> [Text] -> IO a
+hwJsonAs home args typed = do
   run <- hw home (args <> ["--json"]) typed
   either (\e -> fail $ "hw " <> unwords args <> " did not answer in JSON (" <> e <> "): " <> show run) return $
     Json.eitherDecodeStrict (encodeUtf8 run.runOut)

@@ -37,7 +37,6 @@ spec = do
   verboseSpec
   answerSpec
   accountSpec
-  descriptorSpec
   importSpec
   addressSpec
   balanceSpec
@@ -135,7 +134,10 @@ accountSpec =
                      "  spendable 0.00000000 btc, no coins"
                    ]
 
-    it "gives every detail with --verbose, the time it was created on the clock given" $
+    -- The checksums of the descriptors here were computed apart from hw,
+    -- and Bitcoin Core 32.1 gives the same (test/data/descriptors). A bip44
+    -- account has no row of SLIP-132, since its xpub marks its kind.
+    it "gives every detail with --verbose, the time it was created on the clock given, and ends with its descriptor" $
       renderedLines (verboseAccountDoc UnitBitcoin seenTimeInCet mainAccountRow 5000000)
         `shouldBe` [ "main  btc  /44'/0'/0'",
                      "  Fingerprint: bc560f95",
@@ -144,12 +146,24 @@ accountSpec =
                      "  Confirmed  : 0.05000000 btc",
                      "  Unconfirmed: 0.00100000 btc",
                      "  Spendable  : 0.05000000 btc",
-                     "  Coins      : 3"
+                     "  Coins      : 3",
+                     "  Descriptor : pkh([bc560f95/44h/0h/0h]" <> Text.unpack testAccountXPub <> "/<0;1>/*)#vq597j87"
                    ]
 
     it "says the fingerprint is unknown when hw has not learnt it" $
       (renderedLines (verboseAccountDoc UnitBitcoin seenTimeInCet mainAccountRow {dBAccountFingerprint = Nothing} 5000000) !! 1)
         `shouldBe` "  Fingerprint: unknown"
+
+    it "gives the descriptor without the origin of its key when the fingerprint is unknown" $
+      last (renderedLines (verboseAccountDoc UnitBitcoin seenTimeInCet mainAccountRow {dBAccountFingerprint = Nothing} 5000000))
+        `shouldBe` "  Descriptor : pkh(" <> Text.unpack testAccountXPub <> "/<0;1>/*)#mmejv52s"
+
+    -- As the Coldcard file of test/data/descriptors writes the descriptor
+    it "ends a bip84 account with its descriptor in wpkh, then its key as a zpub on a row of its own" $
+      drop 8 (renderedLines (verboseAccountDoc UnitBitcoin seenTimeInCet segwitAccountRow 0))
+        `shouldBe` [ "  Descriptor : wpkh([bc560f95/84h/0h/0h]" <> Text.unpack testSegwitAccountXPub <> "/<0;1>/*)#5nktextl",
+                     "  SLIP-132   : " <> Text.unpack testSegwitAccountZPub
+                   ]
 
 addressSpec :: Spec
 addressSpec =
@@ -208,42 +222,6 @@ addressSpec =
                      "  Created     : 14 Nov 2023 23:13:20 CET",
                      "####",
                      "####"
-                   ]
-
-descriptorSpec :: Spec
-descriptorSpec =
-  describe "The descriptor of an account as hw shows it" $ do
-    it "gives the descriptor alone on its first line, then the account and its network" $
-      renderedLines (descriptorDoc mainAccountRow ("pkh([bc560f95/44h/0h/0h]" <> testAccountXPub <> "/<0;1>/*)#vq597j87") Nothing)
-        `shouldBe` [ "pkh([bc560f95/44h/0h/0h]" <> Text.unpack testAccountXPub <> "/<0;1>/*)#vq597j87",
-                     "  Account    : main",
-                     "  Network    : btc"
-                   ]
-
-    -- The descriptor then names no origin
-    it "says the fingerprint of the seed is unknown when it is" $
-      renderedLines (descriptorDoc mainAccountRow {dBAccountFingerprint = Nothing} ("pkh(" <> testAccountXPub <> "/<0;1>/*)#mmejv52s") Nothing)
-        `shouldBe` [ "pkh(" <> Text.unpack testAccountXPub <> "/<0;1>/*)#mmejv52s",
-                     "  Account    : main",
-                     "  Network    : btc",
-                     "  Fingerprint: unknown"
-                   ]
-
-    it "adds the key with the zpub prefix of SLIP-132 on a row of its own for a bip84 account" $
-      renderedLines (descriptorDoc segwitAccountRow ("wpkh([bc560f95/84h/0h/0h]" <> testSegwitAccountXPub <> "/<0;1>/*)#5nktextl") (Just testSegwitAccountZPub))
-        `shouldBe` [ "wpkh([bc560f95/84h/0h/0h]" <> Text.unpack testSegwitAccountXPub <> "/<0;1>/*)#5nktextl",
-                     "  Account    : spending",
-                     "  Network    : btc",
-                     "  SLIP-132   : " <> Text.unpack testSegwitAccountZPub
-                   ]
-
-    it "puts that row after the note on the fingerprint, which the descriptor lacks" $
-      renderedLines (descriptorDoc segwitAccountRow {dBAccountFingerprint = Nothing} ("wpkh(" <> testSegwitAccountXPub <> "/<0;1>/*)#h3820wwk") (Just testSegwitAccountZPub))
-        `shouldBe` [ "wpkh(" <> Text.unpack testSegwitAccountXPub <> "/<0;1>/*)#h3820wwk",
-                     "  Account    : spending",
-                     "  Network    : btc",
-                     "  Fingerprint: unknown",
-                     "  SLIP-132   : " <> Text.unpack testSegwitAccountZPub
                    ]
 
 importSpec :: Spec

@@ -6,9 +6,10 @@
 -- shows the colours, leaves the listing on the screen when it quits, and
 -- keeps each line on one line of the screen (-F, -R, -X and -S), unless
 -- LESS is set to something else. A table taller than the screen also
--- keeps its header on the screen ('lessOptions'). A listing goes out as it
--- is when stdout is not a terminal, with --no-pager, and when the pager
--- named is empty or cat.
+-- keeps its header on the screen, and the verbose view of accounts wraps
+-- its lines instead, for its descriptors ('lessOptions'). A listing goes
+-- out as it is when stdout is not a terminal, with --no-pager, and when
+-- the pager named is empty or cat.
 --
 -- The pager starts with the first chunk of the listing, not before it: how
 -- less shows a table depends on how tall the table is ('tableShown').
@@ -72,9 +73,11 @@ pagerNamed hwPager fromConfig pager =
 
 -- | What a listing shows, which tells less how to show it: lines that
 -- scroll together, those of a compact or a verbose view or of a table
--- that fits on the screen, or the rows of a table taller than the screen,
--- which the user scrolls under its header
-data Shown = Lines | TallTable
+-- that fits on the screen, the rows of a table taller than the screen,
+-- which the user scrolls under its header, or lines that wrap at the edge
+-- of the screen, those of a view that ends with a key to copy whole
+-- ('Haskoin.Wallet.Cli.Parser.wrapsLines')
+data Shown = Lines | TallTable | WrappedLines
   deriving (Eq, Show)
 
 -- | How less shows a table of the lines given, on a screen of the rows
@@ -163,17 +166,27 @@ stopPager (Running input pager previous) = do
 -- fits on the screen (-F), show the colours (-R), and leave the listing
 -- on the screen when less quits (-X).
 --
--- Every listing also keeps each line on one line of the screen, cut at its
--- edge, the arrow keys scrolling it sideways (-S). The views are laid out
--- in columns: the rows of a table under its header, the fields of a
--- verbose view, a label under its address. A line that wrapped would go
--- on at the first column of the screen and break them. The compact and
--- the verbose views are laid out to fit in 80 columns, so on most screens
--- only a long label or name goes past the edge. A table is often wider.
--- less marks a line it cut with a > at the edge of the screen, and then
--- stays open, so that the user can scroll to the rest of it. git once gave -S too, and dropped it as a matter of taste: a line it
+-- Every listing but one also keeps each line on one line of the screen,
+-- cut at its edge, the arrow keys scrolling it sideways (-S). The views
+-- are laid out in columns: the rows of a table under its header, the
+-- fields of a verbose view, a label under its address. A line that
+-- wrapped would go on at the first column of the screen and break them.
+-- The compact and the verbose views are laid out to fit in 80 columns, so
+-- on most screens only a long label or name goes past the edge. A table
+-- is often wider. less marks a line it cut with a > at the edge of the
+-- screen, and then stays open, so that the user can scroll to the rest of
+-- it. git once gave -S too, and dropped it as a matter of taste: a line it
 -- cuts, such as a long line of a diff, hides text until the user scrolls.
 -- Wrapping hides nothing, but here it would break what the columns show.
+--
+-- The verbose view of accounts is the one listing whose lines wrap (no
+-- -S). Each account in it ends with its output descriptor, 148 columns or
+-- more, which the user copies into another wallet. A descriptor cut at the
+-- edge of the screen could not be copied, and less would stay open on
+-- every such listing, however short. Without -S, less leaves the wrapping
+-- to the terminal, which then copies the line whole, and quits by itself
+-- when the listing fits. The wrapped rows come last in each account, so
+-- that they break no column of the other fields.
 --
 -- From less 608 on, the header of a table taller than the screen, the line
 -- of headings and the line under it, stays at the top of the screen as the
@@ -183,6 +196,7 @@ stopPager (Running input pager previous) = do
 -- warning above the table, and so would one whose version hw cannot tell.
 lessOptions :: Shown -> Maybe Natural -> String
 lessOptions Lines _ = "FRXS"
+lessOptions WrappedLines _ = "FRX"
 lessOptions TallTable version
   | maybe False (>= 608) version = "FRXS --header=2"
   | otherwise = "FRXS"

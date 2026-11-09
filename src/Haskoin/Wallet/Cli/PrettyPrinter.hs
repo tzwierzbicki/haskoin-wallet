@@ -210,7 +210,19 @@ compactAccountDoc unit acc spendable =
     unconfirmed = ["unconfirmed" <+> waitingAmount unit v | let v = dBAccountBalanceUnconfirmed acc, v > 0]
     coins = text (counted (fromIntegral (dBAccountBalanceCoins acc)) "coin" "coins")
 
--- | An account with every detail: its first line, then its fields
+-- | An account with every detail: its first line, then its fields, and
+-- last the keys another wallet takes it by. The output descriptor comes
+-- whole, without its origin when the fingerprint is unknown, as the row
+-- Fingerprint then says. A bip84 account adds its key in the form of
+-- SLIP-132, a zpub or a vpub, for the wallets that take only that form.
+--
+-- The keys come last because their rows are wider than most screens. A
+-- descriptor row takes 148 columns or more, and a zpub row 126. The
+-- terminal wraps such a row, which goes on at the first column of the
+-- screen. At the end, the wrapped rows break no column of the other
+-- fields. The accounts listing has the pager wrap its lines in this view,
+-- so that the user can copy a descriptor whole
+-- ('Haskoin.Wallet.Cli.Parser.wrapsLines').
 verboseAccountDoc :: AmountUnit -> ZonedTime -> DBAccount -> Word64 -> Doc Style
 verboseAccountDoc unit created acc spendable =
   vcat $
@@ -222,26 +234,10 @@ verboseAccountDoc unit created acc spendable =
                   field 11 "Confirmed" <> amountPrinter unit (dBAccountBalanceConfirmed acc),
                   field 11 "Unconfirmed" <> waitingAmount unit (dBAccountBalanceUnconfirmed acc),
                   field 11 "Spendable" <> amountPrinter unit spendable,
-                  field 11 "Coins" <> countPrinter (fromIntegral (dBAccountBalanceCoins acc))
+                  field 11 "Coins" <> countPrinter (fromIntegral (dBAccountBalanceCoins acc)),
+                  field 11 "Descriptor" <> text (cs (accountDescriptorText acc))
                 ]
-        )
-
--- | The descriptor of an account as descriptor shows it: the descriptor
--- alone on its first line, to copy into another wallet, then its account
--- and network, that the fingerprint of the seed is unknown when it is,
--- since the descriptor then names no origin, and the key with the prefix
--- of SLIP-132 when the account has one, a zpub for a bip84 account, to
--- copy into a wallet that takes only that form
-descriptorDoc :: DBAccount -> Text -> Maybe Text -> Doc Style
-descriptorDoc acc descriptor slip132 =
-  vcat $
-    text (cs descriptor)
-      : ( indent 2
-            <$> [ field 11 "Account" <> pretty (dBAccountName acc) `withStyle` Account,
-                  field 11 "Network" <> text (accountNetwork acc).name
-                ]
-              <> [field 11 "Fingerprint" <> styled Muted "unknown" | isNothing (dBAccountFingerprint acc)]
-              <> [field 11 "SLIP-132" <> text (cs key) | Just key <- [slip132]]
+              <> [field 11 "SLIP-132" <> text (cs key) | Just key <- [accountSlip132Key acc]]
         )
 
 -- | The document in the style
@@ -1950,7 +1946,6 @@ responsePrinter unit view code shown answer =
     ResponseAccResult _ res txt -> renderIO $ styled (if res then Good else Failure) (cs txt)
     ResponseFile f -> renderIO $ "Written to" <+> styled UserText f
     ResponseImport report -> renderIO $ importDoc report
-    ResponseDescriptors held -> renderIO $ vcat (intersperse mempty [descriptorDoc acc descriptor slip132 | (acc, descriptor, slip132) <- held])
     ResponseAddress acc addr spendable ->
       renderIO =<< addressAnswerDoc code unit acc addr spendable
     ResponseDerivedAddr acc path addr -> renderIO $ derivedAddrDoc acc path addr

@@ -3,9 +3,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | An account as the user keeps it, from createacc to deleteacc: its
--- descriptor, for other wallets and from them, its addresses and their
--- labels, the messages its keys sign and check, the backup of its
--- database, and its recovery from a seed, with a passphrase as typed.
+-- descriptor, which accounts --verbose shows, for other wallets and from
+-- them, its addresses and their labels, the messages its keys sign and
+-- check, the backup of its database, and its recovery from a seed, with a
+-- passphrase as typed.
 module Haskoin.Wallet.Workflow.AccountSpec (spec) where
 
 import Control.Monad (forM_, replicateM_, void)
@@ -248,20 +249,24 @@ segwitSpec ctx =
         (cutAddressOf <$> hwJson home ["show", "/0/5"] []) `shouldReturn` Right "bc1qg83sxnghnw6du............00y2l22zmsjm0"
         (cutAddressOf <$> hwJson home ["show", "/1/0"] []) `shouldReturn` Right "bc1ql5j70a05srlve............wwaph4pwaup74"
 
-    it "is shown by descriptor as wpkh, as a Coldcard writes it, with its zpub for Electrum on a row of its own" $
+    it "ends accounts --verbose with its descriptor in wpkh, as a Coldcard writes it, then its zpub on a row of its own" $
       withHome $ \home -> do
         createSpending home
-        (descriptorsOf <$> hwJson home ["descriptor"] []) `shouldReturn` Right [("spending", segwitDescriptor)]
-        (slip132KeysOf <$> hwJson home ["descriptor"] []) `shouldReturn` Right [("spending", Just testSegwitAccountZPub)]
-        run <- hw home ["descriptor"] []
-        runOut run `shouldBe` segwitDescriptor <> "\n  Account    : spending\n  Network    : btc\n  SLIP-132   : " <> testSegwitAccountZPub <> "\n"
+        run <- hw home ["accounts", "--verbose"] []
+        runOut run `shouldSatisfy` Text.isSuffixOf ("\n  Descriptor : " <> segwitDescriptor <> "\n  SLIP-132   : " <> testSegwitAccountZPub <> "\n")
+
+    it "is given in the JSON of accounts with its descriptor in wpkh and its zpub" $
+      withHome $ \home -> do
+        createSpending home
+        (descriptorsOf <$> hwJsonValue home ["accounts"] []) `shouldReturn` Right [("spending", segwitDescriptor)]
+        (slip132KeysOf <$> hwJsonValue home ["accounts"] []) `shouldReturn` Right [("spending", Just testSegwitAccountZPub)]
 
     -- As Electrum would be handed the account, and the key handed back to
     -- another hw: a key alone carries no fingerprint
     it "is imported from its zpub by another wallet as a bip84 account, named after its network, index and kind" $
       withHome $ \signer -> withHome $ \online -> do
         createSpending signer
-        shown <- slip132KeysOf <$> answer signer ["descriptor"] []
+        shown <- slip132KeysOf <$> hwJsonValue signer ["accounts"] []
         zpub <- case shown of
           Right [(_, Just key)] -> return key
           other -> fail ("Not one zpub: " <> show other)
@@ -314,7 +319,7 @@ segwitSpec ctx =
       withHome $ \home -> do
         file <- makeAbsolute "test/data/descriptors/core-default-wallet.json"
         _ <- answer home ["importacc", file, "--network", "btctest"] []
-        (slip132KeysOf <$> hwJson home ["descriptor", "--account", "btctest0-segwit"] [])
+        (slip132KeysOf <$> hwJsonValue home ["accounts", "--account", "btctest0-segwit"] [])
           `shouldReturn` Right [("btctest0-segwit", Just "vpub5Z1pM9RQ283SnGWmTeYJB46HYNFZom6eT5JgfZ73Vg9gzYZogXGmjepwEePvVAJqdMadJ7uYRcuXVjdYVuRJtL14o4aam2NbDQ7QzzeUsc8")]
 
     it "is exported by exportacc and imported by importacc in another wallet, as a bip84 account with its fingerprint" $
@@ -386,43 +391,49 @@ segwitHelloSignature = "KPTsP4VeuwtqOgTJeMywhK80W9RJdrpsKebwu2/58WfqejQZQh54meET
 descriptorSpec :: Spec
 descriptorSpec =
   describe "The descriptor of an account" $ do
-    it "is shown by descriptor alone on a line, then the account and its network" $
+    -- A bip44 account has no row of SLIP-132, since its xpub marks its kind
+    it "ends the details of accounts --verbose" $
       withHome $ \home -> do
         createMain home
-        run <- hw home ["descriptor"] []
-        runOut run `shouldBe` mainDescriptor <> "\n  Account    : main\n  Network    : btc\n"
+        run <- hw home ["accounts", "--verbose"] []
+        runOut run `shouldSatisfy` Text.isSuffixOf ("\n  Coins      : 0\n  Descriptor : " <> mainDescriptor <> "\n")
 
-    it "has no row of SLIP-132 for a bip44 account, whose xpub Electrum takes as it is" $
+    -- createacc answers with every detail of the account, as a signer
+    -- hands its account to an online computer
+    it "is shown by createacc with the new account" $
+      withHome $ \home -> do
+        run <- hw home ["createacc", "main"] seedTwice
+        run `shouldSatisfy` printed ("\n  Descriptor : " <> mainDescriptor <> "\n")
+
+    it "is given in the JSON of accounts, with a SLIP-132 key of null for a bip44 account" $
       withHome $ \home -> do
         createMain home
-        (slip132KeysOf <$> hwJson home ["descriptor"] []) `shouldReturn` Right [("main", Nothing)]
+        (descriptorsOf <$> hwJsonValue home ["accounts"] []) `shouldReturn` Right [("main", mainDescriptor)]
+        (slip132KeysOf <$> hwJsonValue home ["accounts"] []) `shouldReturn` Right [("main", Nothing)]
 
     -- second is account 1 of the seed, m/44'/0'/1'
-    it "is shown for every account, or for the --account named" $
+    it "is given for every account, or for the --account named" $
       withHome $ \home -> do
         createMain home
         _ <- answer home ["createacc", "second"] seedTwice
-        (descriptorsOf <$> hwJson home ["descriptor"] [])
+        (descriptorsOf <$> hwJsonValue home ["accounts"] [])
           `shouldReturn` Right [("main", mainDescriptor), ("second", "pkh([bc560f95/44h/0h/1h]" <> testAccountXPub1 <> "/<0;1>/*)#nycrn993")]
-        (descriptorsOf <$> hwJson home ["descriptor", "--account", "main"] []) `shouldReturn` Right [("main", mainDescriptor)]
+        (descriptorsOf <$> hwJsonValue home ["accounts", "--account", "main"] []) `shouldReturn` Right [("main", mainDescriptor)]
 
     -- An account imported from its key alone has no fingerprint
-    it "names no origin when the wallet does not know the fingerprint of the seed, and says so" $
+    it "names no origin when the wallet does not know the fingerprint of the seed, which the row Fingerprint says" $
       withHome $ \home -> do
         writeFile (home </> "key.txt") (Text.unpack testAccountXPub <> "\n")
         _ <- answer home ["importacc", home </> "key.txt"] []
-        run <- hw home ["descriptor"] []
-        runOut run `shouldBe` "pkh(" <> testAccountXPub <> "/<0;1>/*)#mmejv52s\n  Account    : btc0\n  Network    : btc\n  Fingerprint: unknown\n"
-
-    it "is refused when the wallet has no account" $
-      withHome $ \home ->
-        (errorOf <$> hwJson home ["descriptor"] []) `shouldReturn` Right "There are no accounts in the wallet"
+        run <- hw home ["accounts", "--verbose"] []
+        run `shouldSatisfy` printed "\n  Fingerprint: unknown\n"
+        runOut run `shouldSatisfy` Text.isSuffixOf ("\n  Descriptor : pkh(" <> testAccountXPub <> "/<0;1>/*)#mmejv52s\n")
 
     -- As a signer hands its account to another wallet, which hands it back
     it "is read by importacc in another wallet, which gets the key and the fingerprint, and names the account after its network and index" $
       withHome $ \signer -> withHome $ \online -> do
         createMain signer
-        shown <- descriptorsOf <$> answer signer ["descriptor"] []
+        shown <- descriptorsOf <$> hwJsonValue signer ["accounts"] []
         descriptor <- case shown of
           Right [(_, descriptor)] -> return descriptor
           other -> fail ("Not one descriptor: " <> show other)

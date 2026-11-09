@@ -17,7 +17,7 @@ import Haskoin.Wallet.Cli.Listing (Listing, streamListing)
 import Haskoin.Wallet.Cli.Pager (Shown (..), pagerCommand, tableShown, withPager)
 import Haskoin.Wallet.Migration (Hooks (..), migrateDB)
 import Haskoin.Wallet.Backup (backupDatabase, migrationBackupDirectory)
-import Haskoin.Wallet.Cli.Parser (GlobalOptions (..), addressCodeOf, csvFileOf, parserMain, txShownOf, viewOf)
+import Haskoin.Wallet.Cli.Parser (GlobalOptions (..), addressCodeOf, csvFileOf, parserMain, txShownOf, viewOf, wrapsLines)
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Cli.PrettyPrinter (chunkDoc, errorDoc, prettyPrinter, printNextSteps)
 import Haskoin.Wallet.Cli.Response (Response (..), responseFailed)
@@ -55,7 +55,7 @@ clientMain = do
     case commandListing ctx cmd of
       Just listing | not json, Nothing <- csvFileOf cmd -> do
         pager <- pagerCommand noPager cfg
-        printListing cfg pager unit view listing
+        printListing cfg pager unit view (wrapsLines view cmd) listing
       _ -> do
         res <- commandResponse ctx cfg unit cmd
         if json
@@ -68,12 +68,14 @@ clientMain = do
 -- there is one, its elements in the view given. The pager keeps the rows
 -- of a table whole, and the header of a table taller than the screen on
 -- the screen: the first chunk tells how tall the table is, the height of
--- the terminal how tall the screen. A listing that fails exits as a
--- failure, as an answer does.
-printListing :: Config -> Maybe String -> AmountUnit -> View -> ExceptT String (DB IO) Listing -> IO ()
-printListing cfg pager unit view listing = do
+-- the terminal how tall the screen. It wraps the lines of the listing
+-- when told to, rather than cut them ('wrapsLines'). A listing that fails
+-- exits as a failure, as an answer does.
+printListing :: Config -> Maybe String -> AmountUnit -> View -> Bool -> ExceptT String (DB IO) Listing -> IO ()
+printListing cfg pager unit view wraps listing = do
   screenRows <- fmap Terminal.height <$> Terminal.size
   let shownOf doc
+        | wraps = WrappedLines
         | view == Table = tableShown screenRows (length (lines (renderPlain doc)))
         | otherwise = Lines
   failed <- withPager pager shownOf $ \write -> do

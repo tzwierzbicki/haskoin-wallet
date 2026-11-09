@@ -25,8 +25,8 @@
 -- that take only that form, such as Electrum.
 --
 -- This module is the format alone. "Haskoin.Wallet.Labels" makes an
--- account of a descriptor, and the @descriptor@ command writes the
--- descriptor of an account.
+-- account of a descriptor, and "Haskoin.Wallet.Database.Account" writes
+-- the descriptor of an account, which @accounts --verbose@ shows.
 module Haskoin.Wallet.Descriptor
   ( -- * Key origins
     Origin (..),

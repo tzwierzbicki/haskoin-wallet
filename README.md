@@ -256,7 +256,9 @@ Each line stays on one line of the screen, so that the columns of a view line
 up. A line wider than the screen is cut at its edge, which a `>` marks, and the
 right and left arrow keys scroll to the rest of it. `less` then stays open, so
 that you can. The compact and verbose views are laid out for 80 columns, so
-this happens mostly to the rows of a table, with `--tabular`. A table taller
+this happens mostly to the rows of a table, with `--tabular`. The one exception
+is `accounts --verbose`, whose lines wrap, so that you can copy the descriptor
+of an account whole. A table taller
 than the screen also keeps its header at the top while its rows scroll, with
 `less` 608 or later. When you set `LESS` yourself, `hw` leaves it as it is.
 
@@ -368,8 +370,7 @@ server, so they are not marked.
 | [`checkmnemonic`](#hw-checkmnemonic) `!` | Test a mnemonic or a backup against an account |
 | [`exportacc`](#hw-exportacc) | Write the accounts and their labels to a file |
 | [`importacc`](#hw-importacc) | Add accounts and labels from a file, a descriptor or a key |
-| [`descriptor`](#hw-descriptor) | Show an account as an output descriptor |
-| [`accounts`](#hw-accounts) | Show the accounts and their balances |
+| [`accounts`](#hw-accounts) | Show the accounts, their balances and descriptors |
 | [`renameacc`](#hw-renameacc) | Rename an account |
 | [`deleteacc`](#hw-deleteacc) | Delete an account from the wallet |
 | [`sync`](#hw-sync) | Update the accounts from the server |
@@ -466,6 +467,9 @@ An account is of one of two kinds:
 The payments of a `bip84` account pay about 40% less in fees. Other wallets make
 `bip84` accounts by default. Bitcoin Cash has no SegWit, so it has `bip44`
 accounts only. `hw` can pay any kind of address from either kind of account.
+
+`createacc` answers with every detail of the new account, as
+[`accounts --verbose`](#hw-accounts) shows it, its output descriptor last.
 
 #### `hw recover`
 
@@ -609,32 +613,6 @@ its keys, so give `--network`, or set a default network.
 >   addresses for days. Such an address is counted as not in the wallet yet, and
 >   the answer says why.
 
-#### `hw descriptor`
-
-Shows each account as an output descriptor, the format of [BIP 380] in which
-other wallets take an account without its private key. Paste it into a wallet
-that takes a descriptor, to watch the account there. `--account` shows one
-account.
-
-```console
-hw descriptor --account vault               # for a wallet that takes a descriptor
-hw descriptor --account spending            # a bip84 account, with its zpub for one that takes a key
-```
-
-A `bip44` account gives `pkh([bc560f95/44h/0h/0h]xpub.../<0;1>/*)#vq597j87`. It
-carries the public key of the account, the fingerprint of its seed and its
-derivation path, the two chains of addresses, and a checksum. When `hw` does not
-know the fingerprint, the descriptor names no origin, which a hardware wallet
-needs, and the answer says so.
-
-A `bip84` account gives `wpkh([bc560f95/84h/0h/0h]xpub.../<0;1>/*)#5nktextl`, the
-script function naming the kind. It is shown with its key as a `zpub` as well,
-or a `vpub` on a test network, in the row `SLIP-132`. Some wallets take only
-that form for a native SegWit account, and make a legacy wallet of an `xpub`.
-The key is the same, only its prefix differs.
-
-[`importacc`](#hw-importacc) reads a descriptor back.
-
 #### `hw accounts`
 
 Shows the accounts with their balances. Each takes two lines: its name, network
@@ -643,7 +621,10 @@ coins it holds. The spendable balance leaves out locked coins, coinbase coins
 not yet mature, and unconfirmed payments from other wallets.
 
 `--verbose` adds the fingerprint of the seed, the addresses, when the account
-was created, and its confirmed and unconfirmed balances.
+was created, and its confirmed and unconfirmed balances. It ends with the
+account as an output descriptor, the format of [BIP 380] in which other wallets
+take an account without its private key. Paste the descriptor into a wallet
+that takes one, to watch the account there.
 
 `--tabular` shows each account on one row of a table: its name, network and
 derivation path, what it can spend, what is unconfirmed, and its coins. The
@@ -652,15 +633,44 @@ first column is as wide as the longest name, which no row cuts.
 `--csv FILE` writes the accounts to a [CSV file](#listings): the name, network
 and path of each, what it can spend, its confirmed and unconfirmed balances,
 its coins, how many receiving and change addresses it has, and when it was
-created.
+created. The file holds no key and no descriptor, since they would show every
+address and payment of the account to anyone the file reaches.
 
 ```console
 hw accounts
 hw accounts --verbose
+hw accounts --verbose --account vault       # the descriptor of vault, for another wallet
 hw accounts --tabular
 hw accounts --csv accounts.csv
 hw accounts --account savings --unit sat
 ```
+
+**The descriptor.** A `bip44` account gives
+`pkh([bc560f95/44h/0h/0h]xpub.../<0;1>/*)#vq597j87`. It carries the public key
+of the account, the fingerprint of its seed and its derivation path, the two
+chains of addresses, and a checksum. It holds no private key. When `hw` does
+not know the fingerprint, the descriptor names no origin, which a hardware
+wallet needs, and the row `Fingerprint` says `unknown`. A descriptor names no
+network: Bitcoin and Bitcoin Cash write the same keys, and every test network
+writes `tpub` keys.
+
+A `bip84` account gives `wpkh([bc560f95/84h/0h/0h]xpub.../<0;1>/*)#5nktextl`,
+the script function naming the kind. It is shown with its key as a `zpub` as
+well, or a `vpub` on a test network, in the row `SLIP-132`. Some wallets take
+only that form for a native SegWit account, and make a legacy wallet of an
+`xpub`. The key is the same, only its prefix differs.
+
+`--json` gives the descriptor of each account as `descriptor`, and its `zpub`
+as `slip132`, `null` for a `bip44` account. [`createacc`](#hw-createacc) shows
+the descriptor of the new account too. [`importacc`](#hw-importacc) reads a
+descriptor back.
+
+> **Good to know**
+>
+> - **The lines of `accounts --verbose` wrap on a terminal.** A descriptor is
+>   wider than most screens. The pager wraps these lines rather than cut them
+>   at the edge of the screen, so that you can copy a descriptor whole. Its row
+>   comes last, so that the wrapped lines break no column of the others.
 
 #### `hw renameacc`
 

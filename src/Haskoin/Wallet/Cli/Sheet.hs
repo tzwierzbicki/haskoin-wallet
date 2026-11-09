@@ -173,7 +173,8 @@ blockCell = \case
 -- every address and every payment of the account. A fingerprint has 8
 -- hexadecimal digits, and about one in 40 has no letter: a spreadsheet
 -- would read it as a number, and drop its leading zeros, without a word.
--- The verbose view and descriptor give it.
+-- The verbose view of accounts gives it, with the descriptor of the
+-- account.
 accountColumns :: [Column (DBAccount, Word64)]
 accountColumns =
   [ Column "Account" $ \(acc, _) -> TextCell (dBAccountName acc),

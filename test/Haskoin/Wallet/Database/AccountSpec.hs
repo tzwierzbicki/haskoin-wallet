@@ -588,9 +588,20 @@ jsonSpec =
       eitherDecode (cs accountJson) `shouldBe` Right (toJSON fixtureAccount)
       eitherDecode (cs accountJson) `shouldBe` Right fixtureAccount
 
-    it "prints an account with the balance it can spend among its balances, as accounts does, and reads it back" $ do
+    it "prints an account with the balance it can spend among its balances, as sync does, and reads it back" $ do
       eitherDecode (cs spendableJson) `shouldBe` Right (accountWithSpendable fixtureAccount 4800)
       (parseEither parseAccountWithSpendable =<< eitherDecode (cs spendableJson)) `shouldBe` Right (fixtureAccount, 4800)
+
+    -- The checksum was computed apart from hw (test/data/descriptors)
+    it "prints an account with its descriptor, and a SLIP-132 key of null for a bip44 account, as accounts does" $
+      eitherDecode (cs keysJson) `shouldBe` Right (accountWithKeys fixtureAccount 4800)
+
+    -- The descriptor of the Coldcard file of test/data/descriptors
+    it "prints a bip84 account with its descriptor in wpkh and its key as a zpub, as accounts does" $
+      eitherDecode (cs segwitKeysJson) `shouldBe` Right (accountWithKeys fixtureAccount {dBAccountPurpose = 84, dBAccountXPubKey = testSegwitAccountXPub} 4800)
+
+    it "reads an account printed with its keys back, as without them" $
+      (parseEither parseAccountWithSpendable =<< eitherDecode (cs keysJson)) `shouldBe` Right (fixtureAccount, 4800)
 
     it "prints the fingerprint of a seed not known yet as null, and reads it back" $ do
       let unknown = fixtureAccount {dBAccountFingerprint = Nothing}
@@ -655,7 +666,7 @@ accountJson =
   "created": "2023-11-01T00:00:00Z"
 }|]
 
--- | The same account as accounts prints it, with 4800 it can spend now
+-- | The same account as sync prints it, with 4800 it can spend now
 spendableJson :: String
 spendableJson =
   [r|{
@@ -671,6 +682,38 @@ spendableJson =
   "balance": {"confirmed": 5000, "unconfirmed": 300, "coins": 2, "spendable": 4800},
   "created": "2023-11-01T00:00:00Z"
 }|]
+
+-- | The same account as accounts prints it, with the keys another wallet
+-- takes it by
+keysJson :: String
+keysJson =
+  [r|{
+  "name": "main",
+  "index": 0,
+  "type": "bip44",
+  "network": "btc",
+  "derivation": "/44'/0'/0'",
+  "external": 2,
+  "internal": 1,
+  "xPubKey": "xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah",
+  "fingerprint": "bc560f95",
+  "balance": {"confirmed": 5000, "unconfirmed": 300, "coins": 2, "spendable": 4800},
+  "created": "2023-11-01T00:00:00Z",
+  "descriptor": "pkh([bc560f95/44h/0h/0h]xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah/<0;1>/*)#vq597j87",
+  "slip132": null
+}|]
+
+-- | The bip84 account of the test wallet as accounts prints it, with the
+-- balances of the fixture above
+segwitKeysJson :: String
+segwitKeysJson =
+  "{\"name\": \"main\", \"index\": 0, \"type\": \"bip84\", \"network\": \"btc\", \"derivation\": \"/84'/0'/0'\", \"external\": 2, \"internal\": 1, \"xPubKey\": \""
+    <> cs testSegwitAccountXPub
+    <> "\", \"fingerprint\": \"bc560f95\", \"balance\": {\"confirmed\": 5000, \"unconfirmed\": 300, \"coins\": 2, \"spendable\": 4800}, \"created\": \"2023-11-01T00:00:00Z\", \"descriptor\": \"wpkh([bc560f95/84h/0h/0h]"
+    <> cs testSegwitAccountXPub
+    <> "/<0;1>/*)#5nktextl\", \"slip132\": \""
+    <> cs testSegwitAccountZPub
+    <> "\"}"
 
 -- | The same account before its seed was proven
 unknownSeedJson :: String
