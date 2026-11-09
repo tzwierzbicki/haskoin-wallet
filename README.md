@@ -376,7 +376,7 @@ server, so they are not marked.
 | [`sync`](#hw-sync) | Update the accounts from the server |
 | **[Addresses](#addresses)** | |
 | [`receive`](#hw-receive) | Get a new address to receive a payment |
-| [`show`](#hw-show) | Show an address, a transaction or a coin, or a transaction file |
+| [`show`](#hw-show) | Show an address, a transaction or a coin, or a file of a transaction or of accounts |
 | [`addresses`](#hw-addresses) | List the receiving addresses, or the change addresses |
 | [`balances`](#hw-balances) | List the addresses that hold coins |
 | [`label`](#hw-label) | Label a receiving address or a transaction |
@@ -573,6 +573,9 @@ It reads these files:
 - The file of Bitcoin Core's `listdescriptors`.
 - The generic JSON of a Coldcard.
 
+[`show FILE`](#hw-show) shows what `importacc` would make of a file, and
+changes nothing. Run it first to see the accounts and labels the file holds.
+
 **Accounts of a BIP 329 file.** `importacc` creates the accounts the wallet does
 not have, named after the label of their key. It renames those it has when the
 file is one of `hw`, since other wallets label a key with the name of its
@@ -611,6 +614,10 @@ its keys, so give `--network`, or set a default network.
 >   its chain.** A file names any path, and a wrong one would have `hw` derive
 >   addresses for days. Such an address is counted as not in the wallet yet, and
 >   the answer says why.
+> - **A word alone on a line is a key only when it starts as one does**, with
+>   four letters that end in `pub` or `prv`, such as `xpub` or `zpub`. Any other
+>   word, such as a word of a mnemonic, is counted as a line that is not a
+>   record.
 
 #### `hw accounts`
 
@@ -751,8 +758,8 @@ hw receive --label "invoice 42"
 
 #### `hw show`
 
-`hw show [WORD]` shows one thing of the wallet, or a transaction file, and
-changes nothing. The word tells what it is, by its shape:
+`hw show [WORD]` shows one thing of the wallet, or a file of a transaction or
+of accounts, and changes nothing. The word tells what it is, by its shape:
 
 | Word | What `show` shows |
 |---|---|
@@ -761,7 +768,7 @@ changes nothing. The word tells what it is, by its shape:
 | An address | That address of the wallet, a change address too |
 | A txid or a nosigHash | That transaction, pending or in the history |
 | `TXID:INDEX` | That coin, with every detail, as `coins --verbose` shows it |
-| Any other word | That [transaction file](#transaction-files), as its account sees it |
+| Any other word | That file: a [transaction file](#transaction-files), as its account sees it, or a file of accounts, as [`importacc`](#hw-importacc) would take it |
 
 A hash goes in full or by its [short id](#short-ids).
 
@@ -773,6 +780,7 @@ hw show ADDRESS
 hw show a1075db5                            # a transaction by its short id
 hw show a1075db5:1                          # a coin
 hw show unsigned.psbt                       # a transaction file
+hw show vault.jsonl                         # a file of accounts
 ```
 
 **An address.** An address the wallet holds is shown as `receive` shows a new
@@ -820,6 +828,29 @@ shows are those the file carries, so an offline computer sees the labels of the
 online wallet. A file of another wallet that involves no account of the wallet
 needs `--network`: see [Files of other wallets](#files-of-other-wallets).
 
+**A file of accounts.** A file that is neither a PSBT nor the hexadecimal of a
+transaction is read as `importacc` reads it: the file of `exportacc`, a [BIP 329]
+file of another wallet, or descriptors. `show` shows what `importacc` would make
+of it, and changes nothing. Each account comes as `accounts` lists it, with
+whether the wallet holds it, or why `importacc` would refuse it. Under it come
+the labels of its addresses and transactions, and the coins it locks or
+unlocks. Run it before `importacc`, to see what the file holds:
+
+```console
+$ hw show vault.jsonl
+vault  btc  /44'/0'/0'
+  not in the wallet, and importacc adds it
+  Address labels
+    /0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  "Wages"
+  Transaction labels
+    f91d0a8a78462bc59398f2c5d7a84fcff491c26ba54c4833478b202796c8aafd  "Salary"
+```
+
+The labels of no account of the file come last, then what `hw` keeps no label
+for and the lines that are not records, as `importacc` counts them. An account
+the file names no network for goes on `--network`, or on the default network,
+as with `importacc`.
+
 > **Good to know**
 >
 > - **An address the wallet does not hold is refused**, so the code never pays
@@ -834,9 +865,9 @@ needs `--network`: see [Files of other wallets](#files-of-other-wallets).
 >   too.
 > - **Without a word, the address may have been paid already.** `show` gives
 >   out the newest address again, as it is. Run `receive` for a new one.
-> - **`--account` goes with a path, a transaction, a file, or no word.** An
->   address and a coin tell their account, so `show` refuses `--account` with
->   them. `--network` goes with a file only.
+> - **`--account` goes with a path, a transaction, a transaction file, or no
+>   word.** An address, a coin and a file of accounts tell their accounts, so
+>   `show` refuses `--account` with them. `--network` goes with a file only.
 > - **A file that involves two accounts needs `--account`.** A transaction the
 >   wallet holds is shown once for each account instead.
 > - **A file named like a hash, an address or a path is taken for one.** Type
@@ -845,6 +876,13 @@ needs `--network`: see [Files of other wallets](#files-of-other-wallets).
 > - **A word that is none of these and names no file is refused**, with the
 >   forms `show` takes. A short id with a digit missing gets this answer, for
 >   instance.
+> - **A file of accounts goes by the origins of its records.** A record goes
+>   under the account whose origin it names, and in a file of one account a
+>   record without an origin goes under that account too. `importacc` places a
+>   label by what the wallet holds, so it may place one that `show` shows
+>   apart.
+> - **A key that says no kind is shown as a `bip44` account**, as `importacc`
+>   takes it without `--type`.
 
 #### `hw addresses`
 

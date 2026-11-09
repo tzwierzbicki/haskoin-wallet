@@ -908,15 +908,15 @@ commandLineSpec ctx = do
             `shouldReturn` Right (noSuchFile (home </> "missing.json"))
 
     -- The JSON file of an earlier hw is such a file: this version reads
-    -- it no more
+    -- it no more. show reads files of accounts too, and names them as well
+    -- ("Haskoin.Wallet.Workflow.ShowSpec").
     it "tells when a file it reads is no transaction file, naming it and the forms a transaction file takes" $
       withHome $ \home -> do
         createMain home
         let file = home </> "earlier.json"
         writeFile file "{\"tx\": \"0100000000000000000000\", \"txinputs\": []}\n"
-        forM_ ["show", "importtx"] $ \command ->
-          (errorOf <$> hwJson home [command, file] [])
-            `shouldReturn` Right ("The file " <> Text.pack file <> " could not be read: Not a PSBT, in bytes or in base64 text, nor the hexadecimal of a transaction")
+        (errorOf <$> hwJson home ["importtx", file] [])
+          `shouldReturn` Right ("The file " <> Text.pack file <> " could not be read: Not a PSBT, in bytes or in base64 text, nor the hexadecimal of a transaction")
 
     it "tells when a file it writes has no directory to go in, naming it" $
       withHome $ \home -> do

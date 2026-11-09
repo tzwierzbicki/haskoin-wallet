@@ -94,7 +94,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (getCurrentTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
-import Data.Text.Encoding (encodeUtf8)
+import Data.Text.Encoding (decodeUtf8', encodeUtf8)
 import Data.Word (Word64)
 import Database.Persist.Sqlite (transactionUndo)
 import Haskoin
@@ -113,7 +113,7 @@ import Haskoin.Wallet.Tx.FeeRates
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Keys
 import Haskoin.Wallet.Shares (genShares)
-import Haskoin.Wallet.Labels (accountRecords, importFile)
+import Haskoin.Wallet.Labels (accountRecords, fileShown, holdsAnything, importFile, readAccountFile)
 import Haskoin.Wallet.Cli.Csv (sheetCsv)
 import Haskoin.Wallet.Cli.Ods (workbookOds)
 import Haskoin.Wallet.Cli.Listing
@@ -615,15 +615,16 @@ cmdReceive ctx cfg opts =
 -- word the newest receiving address of the account. Nothing is generated
 -- or stored. An address and a coin tell their account, so --account is
 -- refused with them rather than ignored: the user who typed it may have
--- meant another account, or another thing to show. --network is refused
--- with all but a file for the same reason. The rest is of an account, on
--- the network of the account.
+-- meant another account, or another thing to show. A file of accounts
+-- tells its accounts too. --network is refused with all but a file for
+-- the same reason. The rest is of an account, on the network of the
+-- account.
 cmdShow :: Ctx -> Config -> Maybe Text -> Maybe Shown -> Maybe Network -> IO Response
 cmdShow ctx cfg account shownM netM =
   runDBResponse cfg $ case shownM of
     Just (ShownFile file) -> shownFile ctx cfg account netM file
     -- When the guard fails, the alternatives below are tried
-    _ | isJust netM -> throwError "show takes --network with a transaction file only, since the rest is on the network of its account"
+    _ | isJust netM -> throwError "show takes --network with a file only, since the rest is on the network of its account"
     Nothing -> newestReceiving account
     Just (ShownPath addrType index) -> addressAtPath ctx account addrType index
     Just (ShownAddress typed) -> do
@@ -684,11 +685,8 @@ shownAddress typed = do
     Just (_, addr) -> addressAnswer (dBAddressAccount addr) addr
     Nothing -> throwError ("The wallet has no address " <> cs typed)
 
--- | The transaction of a file, as the account it involves sees it. One that
--- involves no account is shown as outside the wallet, on the network of
--- --network or of the configuration when the file names none. The wallet
--- keeps nothing of it. The labels shown are those the file carries, not
--- those of this wallet, since the file is what an offline computer has.
+-- | A file, a transaction file or a file of accounts, as its bytes tell
+-- ('txFileForm'). The wallet keeps nothing of either.
 --
 -- show takes for a file any word of no other shape ('readShown'). A word
 -- with no slash that names no file may have been meant as something else,
@@ -702,9 +700,24 @@ shownFile ctx cfg account givenM file = do
     throwError $
       file
         <> " is not a path, an address, a transaction or a coin, and no file has that name: show takes a path such as /0/3,"
-        <> " an address of the wallet, a txid or a nosigHash, a coin TXID:INDEX, or a transaction file,"
+        <> " an address of the wallet, a txid or a nosigHash, a coin TXID:INDEX, or a file of a transaction or of accounts,"
         <> " each hash in full or by its short id, its first 8 digits"
-  TxFileRead txFile@(TxFile netM tsd _ _) _ <- readTxFileIn ctx (commandNetwork cfg givenM) file
+  bytes <- liftEitherIO $ readFileBytes file
+  case txFileForm bytes of
+    Just _ -> shownTxFile ctx cfg account givenM file bytes
+    Nothing -> do
+      when (isJust account) $
+        throwError "A file of accounts tells its accounts, so show takes no --account with it"
+      shownAccountFile ctx cfg givenM file bytes
+
+-- | The transaction of a file, as the account it involves sees it. One that
+-- involves no account is shown as outside the wallet, on the network of
+-- --network or of the configuration when the file names none. The labels
+-- shown are those the file carries, not those of this wallet, since the
+-- file is what an offline computer has.
+shownTxFile :: Ctx -> Config -> Maybe Text -> Maybe Network -> FilePath -> BS.ByteString -> ExceptT String (DB IO) Response
+shownTxFile ctx cfg account givenM file bytes = do
+  TxFileRead txFile@(TxFile netM tsd _ _) _ <- txFileOfBytes ctx (commandNetwork cfg givenM) file bytes
   named <- fileNetwork givenM netM
   (accountM, completed) <- transactionAccount ctx account named tsd
   case accountM of
@@ -712,6 +725,21 @@ shownFile ctx cfg account givenM file = do
     Nothing -> do
       net <- liftMaybe noFileNetwork (commandNetwork cfg named)
       ResponseOutsideTx net <$> liftEither (parseOutsideTxSignData net ctx tsd)
+
+-- | A file of accounts, as importacc reads it, which importacc would add
+-- to the wallet: each account as importacc would take it, on the network
+-- of --network or of the configuration when the file names none, with
+-- its labels and locks ("Haskoin.Wallet.Labels"). The file is refused
+-- when it holds nothing a file of accounts holds. Its bytes are in no form
+-- of a transaction file either, so the refusal names both kinds.
+shownAccountFile :: Ctx -> Config -> Maybe Network -> FilePath -> BS.ByteString -> ExceptT String (DB IO) Response
+shownAccountFile ctx cfg givenM file bytes = do
+  content <- either (const (throwError neither)) return (decodeUtf8' bytes)
+  accountFile <- liftEither $ first (couldNotRead file) (readAccountFile ctx content)
+  unless (holdsAnything accountFile) $ throwError neither
+  ResponseAccountFile <$> fileShown ctx (commandNetwork cfg givenM) accountFile
+  where
+    neither = couldNotRead file "Neither a transaction file, a PSBT in bytes or in base64 text or the hexadecimal of a transaction, nor a file of accounts that importacc reads"
 
 -- | A transaction of the wallet, pending or on the chain, as each account
 -- that holds it sees it, or as the account --account names sees it. The
@@ -948,26 +976,51 @@ data TxFileRead = TxFileRead !TxFile !(Maybe Psbt)
 readTxFileIn :: Ctx -> Maybe Network -> FilePath -> ExceptT String (DB IO) TxFileRead
 readTxFileIn ctx fallbackM file = do
   bytes <- liftEitherIO $ readFileBytes file
-  let text = C8.strip bytes
-  if isPsbt bytes
-    then fromPsbt =<< refused (decodePsbt bytes)
-    else
-      if base64Magic `BS.isPrefixOf` text
-        then fromPsbt =<< refused (decodePsbtBase64 text)
-        else
-          if isHexText text
-            then fromRawTx =<< refused (rawTransaction text)
-            else throwError (couldNotRead file "Not a PSBT, in bytes or in base64 text, nor the hexadecimal of a transaction")
+  txFileOfBytes ctx fallbackM file bytes
+
+-- | The forms a transaction file takes, as its first bytes tell them
+data TxFileForm
+  = -- | A PSBT in bytes, as BIP 174 writes it
+    PsbtBytes
+  | -- | A PSBT in base64 text
+    PsbtText
+  | -- | A transaction alone, in hexadecimal
+    HexTransaction
+
+-- | The form of a transaction file the bytes are in, if any. The spaces
+-- and line breaks around a text do not count. A file of accounts is in
+-- none of these forms: it is JSON, a descriptor or a key, none of which
+-- is all hexadecimal digits.
+txFileForm :: BS.ByteString -> Maybe TxFileForm
+txFileForm bytes
+  | isPsbt bytes = Just PsbtBytes
+  | base64Magic `BS.isPrefixOf` text = Just PsbtText
+  | isHexText = Just HexTransaction
+  | otherwise = Nothing
   where
+    text = C8.strip bytes
+    -- "psbt" and 0xff in base64: what the text of any PSBT starts with
+    base64Magic = "cHNidP"
+    isHexText = not (BS.null text) && even (BS.length text) && C8.all isHexDigit text
+
+-- | The transaction file of the bytes of a file, read as 'readTxFileIn'
+-- reads it
+txFileOfBytes :: Ctx -> Maybe Network -> FilePath -> BS.ByteString -> ExceptT String (DB IO) TxFileRead
+txFileOfBytes ctx fallbackM file bytes =
+  case txFileForm bytes of
+    Just PsbtBytes -> fromPsbt =<< refused (decodePsbt bytes)
+    Just PsbtText -> fromPsbt =<< refused (decodePsbtBase64 stripped)
+    Just HexTransaction -> fromRawTx =<< refused (rawTransaction stripped)
+    Nothing -> throwError (couldNotRead file "Not a PSBT, in bytes or in base64 text, nor the hexadecimal of a transaction")
+  where
+    -- The text without the spaces and line breaks around it
+    stripped = C8.strip bytes
     refused :: Either String a -> ExceptT String (DB IO) a
     refused = liftEither . first (couldNotRead file)
     fromPsbt psbt = do
       accounts <- lift getAccounts
       txFile <- refused $ psbtTxFile ctx fallbackM (fileAccountOf ctx . snd <$> accounts) psbt
       return $ TxFileRead txFile (Just psbt)
-    -- "psbt" and 0xff in base64: what the text of any PSBT starts with
-    base64Magic = "cHNidP"
-    isHexText text = not (BS.null text) && even (BS.length text) && C8.all isHexDigit text
     -- The transaction a hexadecimal text holds, which must be the whole
     -- text: haskoin-core's decodeTx refuses bytes after the transaction,
     -- as Bitcoin Core does. The words of the parser name its internals,

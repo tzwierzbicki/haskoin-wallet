@@ -4,7 +4,8 @@
 -- path, derived as an offline computer checks it, and cut when the wallet
 -- does not hold it ("Haskoin.Wallet.CutAddress"), the newest receiving
 -- address without a word, a transaction by either of its hashes, a coin,
--- and a transaction file by its name. Then what show refuses. The
+-- a transaction file by its name, and a file of accounts, as importacc
+-- would take it. Then what show refuses. The
 -- addresses typed in full, and the QR codes show draws, are with the other
 -- screens in "Haskoin.Wallet.Workflow.OutputSpec". What a file holds, and
 -- how show reads the files of other wallets, is in
@@ -13,6 +14,7 @@ module Haskoin.Wallet.Workflow.ShowSpec (spec) where
 
 import Control.Monad (forM_, replicateM_)
 import qualified Data.Text as Text
+import qualified Data.Text.IO as TextIO
 import Haskoin
 import Haskoin.Wallet.Database (DBAccount (..))
 import Haskoin.Wallet.HwTestUtils
@@ -29,6 +31,7 @@ spec = prepareContext $ \ctx -> do
   txSpec ctx
   coinSpec ctx
   fileSpec ctx
+  accountFileSpec
   refusedSpec
 
 {- An address by its path -}
@@ -284,6 +287,63 @@ fileSpec ctx =
         (fmap dBAccountName . accountOf <$> hwJson home ["show", "./a1075db5"] []) `shouldReturn` Right "main"
         (errorOf <$> hwJson home ["show", "a1075db5"] []) `shouldReturn` Right "The wallet has no transaction a1075db5"
 
+{- A file of accounts -}
+
+-- | A file of accounts as exportacc writes it for main of the test seed:
+-- its key, an address labelled Wages and a transaction labelled Salary
+mainAccountFile :: Text.Text
+mainAccountFile =
+  Text.unlines
+    [ "{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\",\"purpose\":44}",
+      "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Wages\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"keypath\":\"/0/0\"}",
+      "{\"type\":\"tx\",\"ref\":\"0000000000000000000000000000000000000000000000000000000000000001\",\"label\":\"Salary\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\"}"
+    ]
+
+accountFileSpec :: Spec
+accountFileSpec =
+  describe "A file of accounts shown by its name" $ do
+    it "is shown account by account, as importacc would take each, with the labels of the file under it" $
+      withHome $ \home -> do
+        TextIO.writeFile (home </> "labels.jsonl") mainAccountFile
+        run <- hw home ["show", "labels.jsonl"] []
+        runOut run
+          `shouldBe` Text.unlines
+            [ "main  btc  /44'/0'/0'",
+              "  not in the wallet, and importacc adds it",
+              "  Address labels",
+              "    /0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Wages\"",
+              "  Transaction labels",
+              "    0000000000000000000000000000000000000000000000000000000000000001  \"Salary\""
+            ]
+
+    it "leaves the wallet without the accounts it shows" $
+      withHome $ \home -> do
+        TextIO.writeFile (home </> "labels.jsonl") mainAccountFile
+        _ <- answer home ["show", "labels.jsonl"] []
+        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right []
+
+    it "says of an account the wallet holds that it is in the wallet" $
+      withHome $ \home -> do
+        createMain home
+        TextIO.writeFile (home </> "labels.jsonl") mainAccountFile
+        run <- hw home ["show", "labels.jsonl"] []
+        run `shouldSatisfy` printed "main  btc  /44'/0'/0'\n  in the wallet\n"
+
+    -- A key alone names no network, as another wallet writes it
+    it "takes an account the file names no network for on the --network given" $
+      withHome $ \home -> do
+        setDefaultNetwork home Nothing
+        TextIO.writeFile (home </> "key.txt") (testAccountXPub <> "\n")
+        run <- hw home ["show", "key.txt", "--network", "btc"] []
+        run `shouldSatisfy` printed "btc0  btc  /44'/0'/0'\n  not in the wallet, and importacc adds it\n"
+
+    it "says importacc would refuse an account the file names no network for, without --network or a default network" $
+      withHome $ \home -> do
+        setDefaultNetwork home Nothing
+        TextIO.writeFile (home </> "key.txt") (testAccountXPub <> "\n")
+        run <- hw home ["show", "key.txt"] []
+        run `shouldSatisfy` printed "xpub6CHK45s4...\n  importacc refuses it: Give the --network, or a default-network in the configuration file\n"
+
 {- What show refuses -}
 
 refusedSpec :: Spec
@@ -306,7 +366,23 @@ refusedSpec =
       withHome $ \home -> do
         createMain home
         (errorOf <$> hwJson home ["show", "/0/0", "--network", "btc"] [])
-          `shouldReturn` Right "show takes --network with a transaction file only, since the rest is on the network of its account"
+          `shouldReturn` Right "show takes --network with a file only, since the rest is on the network of its account"
+
+    it "refuses --account with a file of accounts, which tells its accounts" $
+      withHome $ \home -> do
+        createMain home
+        TextIO.writeFile (home </> "labels.jsonl") mainAccountFile
+        (errorOf <$> hwJson home ["show", "labels.jsonl", "--account", "main"] [])
+          `shouldReturn` Right "A file of accounts tells its accounts, so show takes no --account with it"
+
+    -- The JSON file of a transaction of an earlier hw is such a file
+    it "refuses a file that is neither a transaction file nor a file of accounts, naming the forms of both" $
+      withHome $ \home -> do
+        createMain home
+        let file = home </> "earlier.json"
+        writeFile file "{\"tx\": \"0100000000000000000000\", \"txinputs\": []}\n"
+        (errorOf <$> hwJson home ["show", file] [])
+          `shouldReturn` Right ("The file " <> Text.pack file <> " could not be read: Neither a transaction file, a PSBT in bytes or in base64 text or the hexadecimal of a transaction, nor a file of accounts that importacc reads")
 
     -- A short id with its last digit missing, which no file of the home is
     -- named
@@ -314,4 +390,4 @@ refusedSpec =
       withHome $ \home -> do
         createMain home
         (errorOf <$> hwJson home ["show", "a1075db"] [])
-          `shouldReturn` Right "a1075db is not a path, an address, a transaction or a coin, and no file has that name: show takes a path such as /0/3, an address of the wallet, a txid or a nosigHash, a coin TXID:INDEX, or a transaction file, each hash in full or by its short id, its first 8 digits"
+          `shouldReturn` Right "a1075db is not a path, an address, a transaction or a coin, and no file has that name: show takes a path such as /0/3, an address of the wallet, a txid or a nosigHash, a coin TXID:INDEX, or a file of a transaction or of accounts, each hash in full or by its short id, its first 8 digits"

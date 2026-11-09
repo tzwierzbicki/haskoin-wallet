@@ -6,6 +6,7 @@
 -- are tested with the descriptors, in "Haskoin.Wallet.DescriptorSpec".
 module Haskoin.Wallet.Bip329Spec (spec) where
 
+import qualified Data.Aeson as Json
 import Data.Either (isLeft)
 import Data.List (isInfixOf)
 import qualified Data.Text.IO as Text
@@ -125,7 +126,7 @@ linesSpec =
 {- Writing -}
 
 writingSpec :: Spec
-writingSpec =
+writingSpec = do
   describe "A record hw writes" $ do
     it "starts with its type and its reference, then the fields it has, in one compact object" $
       recordLine txVector {recordLabel = Just "Transaction", recordOrigin = Just "pkh([bc560f95/44'/0'/0'])"}
@@ -177,6 +178,20 @@ writingSpec =
     it "ends every line of a file with a line feed" $
       recordsText [record TxRecord "a", record AddrRecord "b"]
         `shouldBe` "{\"type\":\"tx\",\"ref\":\"a\"}\n{\"type\":\"addr\",\"ref\":\"b\"}\n"
+
+  -- The --json answer of show gives the records of a file so
+  describe "A record in JSON" $ do
+    it "is the object of its line, with the fields its line has" $
+      Json.encode (record OutputRecord "f91d0a8a:1") {recordSpendable = Just False, recordKeypath = Just "/0/0"}
+        `shouldBe` "{\"type\":\"output\",\"ref\":\"f91d0a8a:1\",\"spendable\":false,\"keypath\":\"/0/0\"}"
+
+    it "reads as the record its line reads as" $
+      Json.eitherDecode "{\"type\":\"tx\",\"ref\":\"f91d0a8a\",\"label\":\"Salary\",\"fee\":1000}"
+        `shouldBe` Right (record TxRecord "f91d0a8a") {recordLabel = Just "Salary", recordFee = Just 1000}
+
+    it "is refused in JSON when its type is none the BIP defines, since no answer of hw holds one" $
+      (Json.eitherDecode "{\"type\":\"future\",\"ref\":\"f91d0a8a\"}" :: Either String Record)
+        `shouldSatisfy` isLeft
 
 {- Key paths and outpoints -}
 

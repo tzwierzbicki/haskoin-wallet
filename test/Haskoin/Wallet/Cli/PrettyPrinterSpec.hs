@@ -24,7 +24,8 @@ import Haskoin.Wallet.Cli.PrettyPrinter
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.Cli.Style (renderPlain)
 import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..))
-import Haskoin.Wallet.Labels (AccountImport (..))
+import Haskoin.Wallet.Bip329 (Record (..), RecordType (..), record)
+import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Database.TxInfo
 import Test.Hspec
@@ -38,6 +39,7 @@ spec = do
   answerSpec
   accountSpec
   importSpec
+  accountFileSpec
   addressSpec
   balanceSpec
   coinSpec
@@ -246,6 +248,103 @@ importSpec =
       renderedLines (accountImportDoc (AccountRefused "main\ncreated" "The key does not read as a key of btc"))
         `shouldBe` [ "main\\ncreated",
                      "  not imported: The key does not read as a key of btc"
+                   ]
+
+-- | The id of a transaction, as a record of a file writes it
+fileTxid :: Text.Text
+fileTxid = "0000000000000000000000000000000000000000000000000000000000000001"
+
+-- | A file of accounts as show shows it, of the one account given, with
+-- what importacc would do with it and its records, and nothing else
+fileOf :: AccountImport -> [Record] -> FileShown
+fileOf outcome records = FileShown [(outcome, records)] [] 0 0 []
+
+accountFileSpec :: Spec
+accountFileSpec =
+  describe "A file of accounts as show shows it" $ do
+    it "gives an account as accounts lists it, what importacc would do with it, then its labels under a heading for each kind" $
+      renderedLines
+        ( accountFileDoc $
+            fileOf
+              (AccountKept mainAccountRow Nothing)
+              [ (record AddrRecord "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj") {recordLabel = Just "Wages", recordKeypath = Just "/0/0"},
+                (record TxRecord fileTxid) {recordLabel = Just "Salary"},
+                (record OutputRecord (fileTxid <> ":0")) {recordSpendable = Just False}
+              ]
+        )
+        `shouldBe` [ "main  btc  /44'/0'/0'",
+                     "  in the wallet",
+                     "  Address labels",
+                     "    /0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Wages\"",
+                     "  Transaction labels",
+                     "    0000000000000000000000000000000000000000000000000000000000000001  \"Salary\"",
+                     "  Coins",
+                     "    0000000000000000000000000000000000000000000000000000000000000001:0  locked"
+                   ]
+
+    it "says of an account the wallet does not hold that importacc adds it" $
+      renderedLines (accountFileDoc (fileOf (AccountCreated mainAccountRow Nothing) []))
+        `shouldBe` [ "main  btc  /44'/0'/0'",
+                     "  not in the wallet, and importacc adds it"
+                   ]
+
+    it "names an account the wallet holds under another name, which importacc renames" $
+      renderedLines (accountFileDoc (fileOf (AccountRenamed "btc0" mainAccountRow) []))
+        `shouldBe` [ "main  btc  /44'/0'/0'",
+                     "  in the wallet as btc0, and importacc renames it"
+                   ]
+
+    -- Sparrow names the key of an account after its signer
+    it "gives why importacc would refuse an account, under the name the file gives it" $
+      renderedLines (accountFileDoc (fileOf (AccountRefused "BIP39" "Give the --network, or a default-network in the configuration file") []))
+        `shouldBe` [ "BIP39",
+                     "  importacc refuses it: Give the --network, or a default-network in the configuration file"
+                   ]
+
+    it "says a coin the file unlocks is unlocked" $
+      renderedLines (accountFileDoc (fileOf (AccountKept mainAccountRow Nothing) [(record OutputRecord (fileTxid <> ":1")) {recordSpendable = Just True}]))
+        `shouldBe` [ "main  btc  /44'/0'/0'",
+                     "  in the wallet",
+                     "  Coins",
+                     "    0000000000000000000000000000000000000000000000000000000000000001:1  unlocked"
+                   ]
+
+    -- /0/10 is the longest path, five characters
+    it "pads the key paths of the addresses to the longest, and gives an address without one after the padding" $
+      renderedLines
+        ( accountFileDoc $
+            fileOf
+              (AccountKept mainAccountRow Nothing)
+              [ (record AddrRecord "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj") {recordLabel = Just "Wages", recordKeypath = Just "/0/0"},
+                (record AddrRecord "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg") {recordLabel = Just "From Bob", recordKeypath = Just "/0/10"},
+                (record AddrRecord "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1") {recordLabel = Just "Rent"}
+              ]
+        )
+        `shouldBe` [ "main  btc  /44'/0'/0'",
+                     "  in the wallet",
+                     "  Address labels",
+                     "    /0/0   1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Wages\"",
+                     "    /0/10  1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg  \"From Bob\"",
+                     "           1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1  \"Rent\""
+                   ]
+
+    it "gives the labels of no account of the file last, then what hw keeps no label for and the lines that are not records" $
+      renderedLines (accountFileDoc (FileShown [] [(record TxRecord fileTxid) {recordLabel = Just "Salary"}] 1 2 [4, 7]))
+        `shouldBe` [ "Labels without an account in the file",
+                     "  Transaction labels",
+                     "    0000000000000000000000000000000000000000000000000000000000000001  \"Salary\"",
+                     "",
+                     "Left aside: 1 label of change addresses, 2 records hw keeps no label for",
+                     "Lines that are not records: 4, 7"
+                   ]
+
+    -- What a file holds may be anything, an escape to clear the screen too
+    it "writes out an escape in a reference of the file, never as an order to the terminal" $
+      renderedLines (accountFileDoc (fileOf (AccountKept mainAccountRow Nothing) [(record AddrRecord "1KEn\ESC[2J") {recordLabel = Just "Wages"}]))
+        `shouldBe` [ "main  btc  /44'/0'/0'",
+                     "  in the wallet",
+                     "  Address labels",
+                     "    1KEn\\x1b[2J  \"Wages\""
                    ]
 
 balanceSpec :: Spec

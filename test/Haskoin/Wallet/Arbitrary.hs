@@ -22,7 +22,8 @@ import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Labels (AccountImport (..), ImportReport (..))
+import Haskoin.Wallet.Bip329 (Record (..))
+import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..))
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..))
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.Database.TxInfo
@@ -263,6 +264,7 @@ arbitraryResponse net ctx =
         <*> arbitraryText,
       ResponseFile <$> (cs <$> arbitraryText),
       ResponseImport <$> arbitraryImportReport net ctx,
+      ResponseAccountFile <$> arbitraryFileShown net ctx,
       ResponseAccounts <$> resize 20 (listOf $ (,) <$> arbitraryDBAccount net ctx <*> arbitraryPositive),
       ResponseAddress <$> arbitraryDBAccount net ctx <*> arbitraryDBAddress net <*> arbitraryPositive,
       ResponseAddresses
@@ -346,6 +348,32 @@ arbitraryAccountImport net ctx =
       AccountRenamed <$> arbitraryText <*> arbitraryDBAccount net ctx,
       AccountRefused <$> arbitraryText <*> arbitraryText
     ]
+
+-- | A file of accounts as show shows it
+arbitraryFileShown :: Network -> Ctx -> Gen FileShown
+arbitraryFileShown net ctx =
+  FileShown
+    <$> resize 5 (listOf ((,) <$> arbitraryAccountImport net ctx <*> resize 5 (listOf arbitraryRecord)))
+    <*> resize 5 (listOf arbitraryRecord)
+    <*> arbitraryNatural
+    <*> arbitraryNatural
+    <*> resize 5 (listOf arbitraryNatural)
+
+-- | A record of a file of BIP 329, of any type the BIP defines
+arbitraryRecord :: Gen Record
+arbitraryRecord =
+  Record
+    <$> elements [minBound .. maxBound]
+    <*> arbitraryText
+    <*> arbitraryMaybe arbitraryText
+    <*> arbitraryMaybe arbitraryText
+    <*> arbitraryMaybe arbitrary
+    <*> arbitraryMaybe arbitraryText
+    <*> arbitraryMaybe arbitraryNatural
+    <*> arbitraryMaybe arbitraryNatural
+    <*> arbitraryMaybe arbitrary
+    <*> arbitraryMaybe arbitraryText
+    <*> arbitraryMaybe arbitraryNatural
 
 arbitraryKeyBytes :: Gen KeyBytes
 arbitraryKeyBytes = KeyBytes <$> arbitraryBS

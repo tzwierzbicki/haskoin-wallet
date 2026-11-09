@@ -43,7 +43,8 @@ import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..), levelName, rateAt)
 import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), foreignKindDescription)
-import Haskoin.Wallet.Labels (AccountImport (..), ImportReport (..), reportNeedsSync)
+import Haskoin.Wallet.Bip329 (Record (..), RecordType (..), parseKeypath)
+import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), reportNeedsSync)
 import Haskoin.Wallet.MessageSigning (signedMessageText)
 import Haskoin.Wallet.Cli.Parser (AddressCode (..), BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), TxShown (..), program)
 import Haskoin.Wallet.Cli.Parser.Help (commandName)
@@ -385,6 +386,65 @@ accountImportDoc = \case
   -- The name of a refused account is the label of a record, or the start
   -- of a line, of the file
   AccountRefused name why -> vcat [pretty (visibleText name) `withStyle` Account, indent 2 (styled Failure "not imported:" <+> pretty why)]
+
+{- Files of accounts -}
+
+-- | A file of accounts as show shows it, a blank line between its parts. Each account comes first, with what importacc would
+-- do with it, then the labels and locks of its records. Then come the
+-- labels and locks of no account of the file, and last what hw keeps no
+-- label for and the lines that are not records, in the words of
+-- importacc.
+accountFileDoc :: FileShown -> Doc Style
+accountFileDoc shown =
+  vcat . intersperse mempty $
+    [vcat (fileAccountDoc outcome : (indent 2 <$> recordsDocs records)) | (outcome, records) <- shownAccounts shown]
+      <> [vcat ("Labels without an account in the file" : (indent 2 <$> recordsDocs others)) | let others = shownOthers shown, not (null others)]
+      <> [vcat rest | not (null rest)]
+  where
+    rest =
+      ["Left aside:" <+> commaList (text <$> aside) | not (null aside)]
+        <> [styled Failure "Lines that are not records:" <+> text (intercalate ", " (show <$> unreadable)) | let unreadable = shownUnreadable shown, not (null unreadable)]
+    aside =
+      [counted n "label" "labels" <> " of change addresses" | let n = shownChangeLabels shown, n > 0]
+        <> [counted n "record" "records" <> " hw keeps no label for" | let n = shownNotKept shown, n > 0]
+
+-- | An account of a file, as accounts shows its first line, and what
+-- importacc would do with it, in the words of its answer. Under one
+-- importacc would add, the note on a kind taken on trust, if any, wrapped
+-- at the width of the screen.
+fileAccountDoc :: AccountImport -> Doc Style
+fileAccountDoc = \case
+  AccountCreated acc noteM -> vcat ([accountLine acc, indent 2 "not in the wallet, and importacc adds it"] <> [indent 2 (sentence (wordsOf (cs note))) | Just note <- [noteM]])
+  AccountKept acc Nothing -> vcat [accountLine acc, indent 2 "in the wallet"]
+  AccountKept acc (Just why) -> vcat [accountLine acc, indent 2 ("in the wallet, and keeps its name:" <+> pretty why)]
+  AccountRenamed was acc -> vcat [accountLine acc, indent 2 ("in the wallet as" <+> (pretty (visibleText was) `withStyle` Account) <> ", and importacc renames it")]
+  -- The name of a refused account is the label of a record, or the start
+  -- of a line, of the file
+  AccountRefused name why -> vcat [pretty (visibleText name) `withStyle` Account, indent 2 (styled Failure "importacc refuses it:" <+> pretty why)]
+
+-- | The labels and locks of records, under a heading for each kind. An
+-- address comes after its key path, when its record gives one, the paths
+-- padded to the longest. A public key comes in place of an address, in
+-- hexadecimal. A transaction comes by its txid and a coin by its
+-- outpoint, in full: the wallet may hold neither, so a short id could
+-- name nothing. What comes from the file is written out, never as an
+-- order to the terminal.
+recordsDocs :: [Record] -> [Doc Style]
+recordsDocs records =
+  section "Address labels" (labelledAddressRow <$> ofTypes [AddrRecord, PubkeyRecord])
+    <> section "Transaction labels" (txRow <$> ofTypes [TxRecord])
+    <> section "Coins" (coinRow <$> ofTypes [OutputRecord])
+  where
+    ofTypes kinds = filter ((`elem` kinds) . recordType) records
+    section :: String -> [Doc Style] -> [Doc Style]
+    section title rows = [vcat (styled Field title : (indent 2 <$> rows)) | not (null rows)]
+    keypathOf r = maybe "" pathToStr (parseKeypath =<< recordKeypath r)
+    keypathWidth = fromIntegral (maximum (0 : (length . keypathOf <$> ofTypes [AddrRecord, PubkeyRecord])))
+    reference r = pretty (visibleText (recordRef r))
+    labelOf r = [labelWord label | Just label <- [recordLabel r], not (Text.null label)]
+    labelledAddressRow r = columns ([text (block keypathWidth (keypathOf r)) | keypathWidth > 0] <> [reference r] <> labelOf r)
+    txRow r = columns (reference r : labelOf r)
+    coinRow r = columns [reference r, if recordSpendable r == Just False then "locked" else "unlocked"]
 
 {- Addresses -}
 
@@ -1946,6 +2006,7 @@ responsePrinter unit view code shown answer =
     ResponseAccResult _ res txt -> renderIO $ styled (if res then Good else Failure) (cs txt)
     ResponseFile f -> renderIO $ "Written to" <+> styled UserText f
     ResponseImport report -> renderIO $ importDoc report
+    ResponseAccountFile file -> renderIO $ accountFileDoc file
     ResponseAddress acc addr spendable ->
       renderIO =<< addressAnswerDoc code unit acc addr spendable
     ResponseDerivedAddr acc path addr -> renderIO $ derivedAddrDoc acc path addr

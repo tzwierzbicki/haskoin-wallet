@@ -1089,6 +1089,7 @@ wallet does not have is added, named after the label of its key. The wallet
 can then watch it and prepare its payments without the mnemonic: this is how
 an online computer works with an offline signer. An account the wallet has
 learns the fingerprint of its seed, and takes the name a file of hw gives it.
+`show` FILE shows what importacc would make of a file, and changes nothing.
 
 importacc also reads the output descriptors other wallets hand an account
 over by: a descriptor on a line, such as pkh([bc560f95/44h/0h/0h]xpub.../<0;1>/*)
@@ -1276,17 +1277,18 @@ showCommand =
   CommandSpec
     { name = "show",
       offline = False,
-      summary = "Show an address, a transaction or a coin, or a transaction file",
+      summary = "Show an address, a transaction or a coin, or a file of a transaction or of accounts",
       details =
         [r|
-`show` shows one address, transaction or coin of the wallet, or a transaction
-file, and changes nothing. The word given tells what it is:
+`show` shows one address, transaction or coin of the wallet, or a file of a
+transaction or of accounts, and changes nothing. The word given tells what it
+is:
 
   /0/i or /1/i   the receiving address i, or the change address i
   ADDRESS        an address of the wallet
   HASH           a transaction, by its txid, or its nosigHash while pending
   TXID:INDEX     a coin
-  FILENAME       a transaction file, any other word
+  FILENAME       a file, any other word
 
 A hash goes in full or by its short id, its first 8 digits. A file whose name
 looks like one of the others goes with its directory, such as ./a1075db5. With
@@ -1339,10 +1341,23 @@ those of the coins it spends, are the ones the file carries, as the wallet that
 wrote it had them. They are not those of this wallet, which an offline computer
 does not have.
 
+A file that is neither a PSBT nor the hexadecimal of a transaction is read as
+a file of accounts, the file exportacc writes and importacc reads: BIP 329
+labels or output descriptors, from hw or from another wallet. `show` shows what
+importacc would make of it. Each account comes as
+`accounts` lists it, with whether the wallet holds it, or why importacc would
+refuse it. Under it come the labels of its addresses and transactions, and the
+coins it locks or unlocks. A record goes under the account its origin names. In
+a file of one account, a record without an origin goes under that account too.
+The labels of no account of the file come last, then what hw keeps no label
+for. An account the file names no network for is taken on --network, or the
+default-network of the configuration file, and a key that says no kind is
+taken for a bip44 account, as importacc takes them.
+
 --account names the account of a path and of the newest address. With a
-transaction or a file, it keeps the view of that account. An address and a
-coin tell their account, so `show` refuses --account with them. --network goes
-with a file only.
+transaction or a transaction file, it keeps the view of that account. An
+address, a coin and a file of accounts tell their accounts, so `show` refuses
+--account with them. --network goes with a file only.
 |],
       args =
         (\shown account network -> CommandShow account shown network)
@@ -1358,7 +1373,7 @@ shownArg =
   argument (eitherReader readShown) $
     metavar "PATH|ADDRESS|HASH|TXID:INDEX|FILENAME"
       <> completer (mkCompleter shownCompletion)
-      <> help "What to show: a path such as /0/3, an address of the wallet, a transaction by its txid or nosigHash, a coin, or a transaction file. A hash goes in full or by its short id, the first 8 digits. Without it, the newest receiving address."
+      <> help "What to show: a path such as /0/3, an address of the wallet, a transaction by its txid or nosigHash, a coin, or a file of a transaction or of accounts. A hash goes in full or by its short id, the first 8 digits. Without it, the newest receiving address."
 
 -- | What the shell offers for show. It offers the addresses, transactions
 -- and coins of the wallet ('shownTargets'), and the files and directories,
@@ -1378,13 +1393,13 @@ shownCompletion typed = do
 -- | The --account of show, which goes with some of what it shows only
 showAccountOption :: Args (Maybe Text)
 showAccountOption =
-  accountOptionWith "The account of the path or of the newest address. Needed only when the wallet has more than one. With a transaction or a file, the account whose view to show."
+  accountOptionWith "The account of the path or of the newest address. Needed only when the wallet has more than one. With a transaction or a transaction file, the account whose view to show."
 
--- | The --network of show, which goes with a transaction file only. What
--- else show shows is of an account, on the network of the account.
+-- | The --network of show, which goes with a file only. What else show
+-- shows is of an account, on the network of the account.
 showNetworkOption :: Args (Maybe Network)
 showNetworkOption =
-  networkOptionWith "With a transaction file only, for one that names no network and involves no account of this wallet, as a file of another wallet does. Without it, the default-network of the configuration file."
+  networkOptionWith "With a file only, as a file of another wallet needs it: for a transaction file that names no network and involves no account of this wallet, or for an account that a file of accounts names no network for. Without it, the default-network of the configuration file."
 
 {- addresses -}
 

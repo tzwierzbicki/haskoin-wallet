@@ -52,15 +52,18 @@ Accounts and backups:
   terminal, so that a descriptor can be copied whole. `importacc` reads
   descriptors and extended public keys.
 - `exportacc` and `importacc` use the BIP329 format. The file carries the
-  accounts, their labels and their locked coins.
+  accounts, their labels and their locked coins. `show FILE` shows what
+  `importacc` would make of such a file, and changes nothing.
 
 Addresses:
 
 - `receive` shows a QR code of the new address on the terminal.
 - `show` shows one thing of the wallet, as the word typed tells: the address at
   a path such as `/0/3`, an address, a transaction by its txid or nosigHash, a
-  coin `TXID:INDEX`, or a transaction file, any other word. Without a word, it
-  shows the newest receiving address.
+  coin `TXID:INDEX`, or a file, any other word. Without a word, it shows the
+  newest receiving address. A file is a transaction file, as its account sees
+  it, or a file of accounts, as `importacc` would take each account, with the
+  labels of the file under it.
   An address the wallet holds comes with its QR code, to give it out again.
   Run `show /0/3` on the offline computer to check an address the online one
   gives out: it derives the address from the public key. An address at a path

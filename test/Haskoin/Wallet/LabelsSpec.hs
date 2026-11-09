@@ -41,6 +41,8 @@ spec = prepareContext $ \ctx -> do
   importTxSpec ctx
   importCoinSpec ctx
   importOtherSpec ctx
+  wordLineSpec ctx
+  showFileSpec ctx
 
 {- Fixtures -}
 
@@ -56,6 +58,11 @@ mainOrigin = "pkh([bc560f95/44'/0'/0'])"
 -- | The key of main as a record, with its name, origin and network
 mainKeyLine :: Text
 mainKeyLine = "{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\",\"origin\":\"" <> mainOrigin <> "\",\"network\":\"btc\"}\n"
+
+-- | The key of account 1 of the test seed as a record, named second, with
+-- its origin and network
+secondKeyLine :: Text
+secondKeyLine = "{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub1 <> "\",\"label\":\"second\",\"origin\":\"pkh([bc560f95/44'/0'/1'])\",\"network\":\"btc\"}\n"
 
 -- | The descriptor of main, as hw and a Coldcard write it
 mainDescriptor :: Text
@@ -816,3 +823,132 @@ importOtherSpec ctx =
         _ <- mainWithAddress ctx
         report <- importFile ctx Nothing Nothing ("{\"type\":\"output\",\"ref\":\"" <> paymentTxid <> ":0\",\"spendable\":false}\n")
         liftIO $ reportNeedsSync report `shouldBe` True
+
+{- A word alone on a line -}
+
+wordLineSpec :: Ctx -> Spec
+wordLineSpec ctx =
+  describe "A word alone on a line of a file" $ do
+    -- Two words of the test mnemonic, one a line, as a backup on paper is
+    -- copied
+    it "is a line that is not a record when it does not start as an extended key does" $
+      inDatabaseE $ do
+        report <- importFile ctx (Just btc) Nothing "snow\nsenior\n"
+        liftIO $ report `shouldBe` nothingDone {reportUnreadable = [1, 2]}
+
+    -- The key of main, with its last character changed from h to a
+    it "is refused as a key, with the reason, when it starts as an extended key does" $
+      inDatabaseE $ do
+        report <- importFile ctx (Just btc) Nothing "xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uaa\n"
+        liftIO $ reportAccounts report `shouldBe` [AccountRefused mainKeyStart "The key does not read as a key of btc"]
+
+{- Showing a file -}
+
+-- | The file of accounts of the text, as show shows it
+shownOf :: Ctx -> Text -> ExceptT String (DB IO) FileShown
+shownOf ctx content = fileShown ctx Nothing =<< liftEither (readAccountFile ctx content)
+
+-- | The records of each account of a file as show sorts them, by their
+-- references, then the records of no account of the file
+recordsSorted :: FileShown -> ([[Text]], [Text])
+recordsSorted shown = ([recordRef <$> records | (_, records) <- shownAccounts shown], recordRef <$> shownOthers shown)
+
+showFileSpec :: Ctx -> Spec
+showFileSpec ctx = do
+  describe "A file of accounts as show shows it" $ do
+    it "gives an account the wallet does not hold as importacc would create it, and the wallet keeps none of it" $
+      inDatabaseE $ do
+        shown <- shownOf ctx mainKeyLine
+        liftIO $ map (created . fst) (shownAccounts shown) `shouldBe` [Just ("main", testAccountXPub)]
+        lift accountsStored `dbShouldBeE` []
+
+    -- The file names main savings, and hw wrote it: importacc would rename
+    -- main
+    it "keeps what the wallet held before, and undoes only what it took in" $
+      inDatabaseE $ do
+        _ <- mainWithAddress ctx
+        shown <- shownOf ctx ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"savings\",\"origin\":\"" <> mainOrigin <> "\",\"network\":\"btc\"}\n")
+        liftIO $ map (renamed . fst) (shownAccounts shown) `shouldBe` [Just ("main", "savings")]
+        lift accountsStored `dbShouldBeE` [("main", "btc", Just "bc560f95")]
+
+    it "puts each record under the account of the file whose origin it names" $
+      inDatabaseE $ do
+        shown <-
+          shownOf ctx $
+            mainKeyLine
+              <> secondKeyLine
+              <> "{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\",\"label\":\"Savings\",\"origin\":\"pkh([bc560f95/44'/0'/1'])\"}\n"
+              <> "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Wages\",\"origin\":\"" <> mainOrigin <> "\"}\n"
+        liftIO $ recordsSorted shown `shouldBe` ([["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"], [paymentTxid]], [])
+
+    it "puts a record without an origin under the account of a file of one account" $
+      inDatabaseE $ do
+        shown <- shownOf ctx (mainKeyLine <> "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Wages\"}\n")
+        liftIO $ recordsSorted shown `shouldBe` ([["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]], [])
+
+    it "puts a record without an origin apart in a file of two accounts" $
+      inDatabaseE $ do
+        shown <- shownOf ctx (mainKeyLine <> secondKeyLine <> "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Wages\"}\n")
+        liftIO $ recordsSorted shown `shouldBe` ([[], []], ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"])
+
+    -- The origin of the test vectors of BIP 329, of another seed
+    it "puts apart a record whose origin names no account of the file" $
+      inDatabaseE $ do
+        shown <- shownOf ctx (mainKeyLine <> "{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\",\"label\":\"Transaction\",\"origin\":\"wpkh([d34db33f/84'/0'/0'])\"}\n")
+        liftIO $ recordsSorted shown `shouldBe` ([[]], [paymentTxid])
+
+    -- The key of main alone says nothing of its seed. The wallet holds main
+    -- and knows its seed, bc560f95.
+    it "finds the account of a key without an origin by the fingerprint of the seed the wallet knows" $
+      inDatabaseE $ do
+        _ <- mainWithAddress ctx
+        shown <- shownOf ctx (testAccountXPub <> "\n" <> secondKeyLine <> "{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\",\"label\":\"Salary\",\"origin\":\"" <> mainOrigin <> "\"}\n")
+        liftIO $ recordsSorted shown `shouldBe` ([[paymentTxid], []], [])
+
+    it "shows a coin with the lock the file gives it" $
+      inDatabaseE $ do
+        shown <- shownOf ctx (mainKeyLine <> "{\"type\":\"output\",\"ref\":\"" <> paymentTxid <> ":0\",\"spendable\":false}\n")
+        liftIO $ map snd (shownAccounts shown) `shouldBe` [[(record OutputRecord (paymentTxid <> ":0")) {recordSpendable = Just False}]]
+
+    it "leaves aside a coin with a label alone, which hw does not keep" $
+      inDatabaseE $ do
+        shown <- shownOf ctx (mainKeyLine <> "{\"type\":\"output\",\"ref\":\"" <> paymentTxid <> ":0\",\"label\":\"Salary (received)\"}\n")
+        liftIO $ (recordsSorted shown, shownNotKept shown) `shouldBe` (([[]], []), 1)
+
+    it "counts the label of a change address apart, by its key path, and does not show it" $
+      inDatabaseE $ do
+        shown <- shownOf ctx (mainKeyLine <> "{\"type\":\"addr\",\"ref\":\"17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn\",\"label\":\"Change\",\"keypath\":\"/1/0\"}\n")
+        liftIO $ (recordsSorted shown, shownChangeLabels shown) `shouldBe` (([[]], []), 1)
+
+    it "passes over a transaction without a label, which sets nothing" $
+      inDatabaseE $ do
+        shown <- shownOf ctx (mainKeyLine <> "{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\"}\n")
+        liftIO $ (recordsSorted shown, shownNotKept shown, shownUnreadable shown) `shouldBe` (([[]], []), 0, [])
+
+    -- Line 1 names no transaction, line 4 is of a type the BIP does not
+    -- define, line 5 is not JSON, and line 6 has no reference
+    it "leaves aside what hw keeps no label for, and numbers the lines that are not records in their order" $
+      inDatabaseE $ do
+        shown <-
+          shownOf ctx $
+            Text.unlines
+              [ "{\"type\":\"tx\",\"ref\":\"f91d0a8a\",\"label\":\"Salary\"}",
+                "{\"type\":\"input\",\"ref\":\"" <> paymentTxid <> ":0\",\"label\":\"Salary (input)\"}",
+                "{\"type\":\"spscan\",\"ref\":\"spscan1q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zsq9q6qjevn2kmdrnpuxt0v6h2kr2a2epkr0g6nk55ftf0xcxtddazgkrth3e\",\"label\":\"Scan\"}",
+                "{\"type\":\"future\",\"ref\":{\"not\":\"validated\"},\"label\":\"Unknown\"}",
+                "not a record",
+                "{\"type\":\"addr\",\"label\":\"Salary\"}"
+              ]
+        liftIO $ (shownNotKept shown, shownUnreadable shown) `shouldBe` (3, [1, 5, 6])
+
+  describe "A file" $ do
+    it "holds nothing of a file of accounts when no line is a key or a record" $
+      holdsAnything <$> readAccountFile ctx "Buy milk\nsnow\n" `shouldBe` Right False
+
+    it "holds something of a file of accounts with a record of a type the BIP does not define" $
+      holdsAnything <$> readAccountFile ctx "{\"type\":\"future\",\"ref\":\"a\"}\n" `shouldBe` Right True
+  where
+    created (AccountCreated acc _) = Just (dBAccountName acc, dBAccountXPubKey acc)
+    created _ = Nothing
+    renamed (AccountRenamed was acc) = Just (was, dBAccountName acc)
+    renamed _ = Nothing

@@ -15,7 +15,8 @@
 --
 -- This module is the format alone: the records, their lines, and the texts
 -- of the key paths and outpoints. "Haskoin.Wallet.Labels" turns the wallet
--- into records and records into the wallet.
+-- into records and records into the wallet. A record in JSON is the object
+-- of its line, as the --json answer of show gives the records of a file.
 --
 -- hw writes and reads the fields it has a use for: @label@, @origin@,
 -- @spendable@, the @keypath@ of an address or a coin, and the @height@,
@@ -214,23 +215,41 @@ spendableParser value = case value of
 -- the reference first, then the fields it has, in one compact JSON object.
 -- Text is written as it is, in UTF-8, as the BIP asks.
 recordLine :: Record -> Text
-recordLine r =
-  cs . Encoding.encodingToLazyByteString . Encoding.pairs . mconcat $
-    [ "type" .= recordTypeName (recordType r),
-      "ref" .= recordRef r,
-      given "label" (recordLabel r),
-      given "origin" (recordOrigin r),
-      given "network" (recordNetwork r),
-      given "purpose" (recordPurpose r),
-      given "spendable" (recordSpendable r),
-      given "keypath" (recordKeypath r),
-      given "height" (recordHeight r),
-      given "fee" (recordFee r),
-      given "value" (recordValue r)
-    ]
+recordLine = cs . Encoding.encodingToLazyByteString . Encoding.pairs . mconcat . recordFields
+
+-- | The fields of a record, in the order its line writes them: the type
+-- and the reference, then the fields it has. A field the record does not
+-- have is left out, not written as null. The line of a file and the JSON
+-- of a record are both made of them, so that the two never differ.
+recordFields :: (Json.KeyValue e kv) => Record -> [kv]
+recordFields r =
+  ["type" .= recordTypeName (recordType r), "ref" .= recordRef r]
+    <> given "label" (recordLabel r)
+    <> given "origin" (recordOrigin r)
+    <> given "network" (recordNetwork r)
+    <> given "purpose" (recordPurpose r)
+    <> given "spendable" (recordSpendable r)
+    <> given "keypath" (recordKeypath r)
+    <> given "height" (recordHeight r)
+    <> given "fee" (recordFee r)
+    <> given "value" (recordValue r)
   where
-    given :: (Json.ToJSON a) => Json.Key -> Maybe a -> Json.Series
-    given key = maybe mempty (key .=)
+    given :: (Json.KeyValue e kv, Json.ToJSON a) => Json.Key -> Maybe a -> [kv]
+    given key = maybe [] (\value -> [key .= value])
+
+-- | A record in JSON is the object of its line, so that the --json answer
+-- of show gives the records of a file as the file has them
+instance Json.ToJSON Record where
+  toJSON = Json.object . recordFields
+  toEncoding = Encoding.pairs . mconcat . recordFields
+
+-- | A record of a type the BIP defines, as its line or its JSON writes it
+instance Json.FromJSON Record where
+  parseJSON value = do
+    parsed <- lineParser value
+    case parsed of
+      LineRecord r -> return r
+      LineOfOtherType name -> fail ("A record of the type " <> cs name <> ", which the BIP does not define")
 
 -- | The text of a file of records: each on its line, every line ended by
 -- a line feed

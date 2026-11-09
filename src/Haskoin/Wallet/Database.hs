@@ -164,6 +164,23 @@ fileUri file = ("file://" <>) . concatMap escape <$> makeAbsolute file
     escape '#' = "%23"
     escape c = [c]
 
+{- Undoing -}
+
+-- | Run an action, then undo the writes it made, and only those. What the
+-- command wrote before stays, and its transaction goes on. A savepoint of
+-- SQLite marks the place to go back to. show uses this to take the
+-- accounts of a file into the wallet as importacc would, read what became
+-- of them, and keep none of them ("Haskoin.Wallet.Labels"). The action
+-- must not fail by an exception: the command fails with it then, and its
+-- whole transaction is undone.
+undoneAfter :: (MonadUnliftIO m) => DB m a -> DB m a
+undoneAfter action = do
+  rawExecute "SAVEPOINT undone" []
+  result <- action
+  rawExecute "ROLLBACK TO undone" []
+  rawExecute "RELEASE undone" []
+  return result
+
 {- The tables -}
 
 -- | The tables of a new database, with their indexes

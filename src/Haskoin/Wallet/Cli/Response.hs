@@ -17,7 +17,7 @@ import Haskoin.Wallet.Database.Address (CoinBalance, addressWithCoinBalance, add
 import Haskoin.Wallet.Database.Coin (JsonCoin, LeftCoin)
 import Haskoin.Wallet.Database (DBAccount, DBAddress)
 import Haskoin.Wallet.Keys (foreignKindName, foreignKindNamed)
-import Haskoin.Wallet.Labels (ImportReport, parseReport, reportPairs)
+import Haskoin.Wallet.Labels (FileShown, ImportReport, fileShownPairs, parseFileShown, parseReport, reportPairs)
 import Haskoin.Wallet.Tx.FeeRates (FeeRates)
 import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..), foreignPath)
 import Haskoin.Wallet.Database.TxInfo (ListedTx, TxInfo)
@@ -42,6 +42,10 @@ data Response
   | -- | What importacc did with a file: the accounts it names, the labels
     -- and locks set, and what it could not place
     ResponseImport !ImportReport
+  | -- | A file of accounts as show shows it, before it is imported: each
+    -- account as importacc would take it, with its labels and locks, and
+    -- the rest of the file. The wallet keeps nothing of it.
+    ResponseAccountFile !FileShown
   | -- | Accounts, each with the balance it can spend now. The JSON gives
     -- each with its output descriptor too ('accountWithKeys').
     ResponseAccounts ![(DBAccount, Word64)]
@@ -124,6 +128,7 @@ instance ToJSON Response where
     ResponseAccResult acc result text -> typed "accresult" ["account" .= acc, "result" .= result, "text" .= text]
     ResponseFile file -> typed "file" ["file" .= file]
     ResponseImport report -> typed "import" (reportPairs report)
+    ResponseAccountFile shown -> typed "accountfile" (fileShownPairs shown)
     ResponseAccounts accs -> typed "accounts" ["accounts" .= (uncurry accountWithKeys <$> accs)]
     ResponseAddress acc addr spendable ->
       typed "address" ["account" .= acc, "address" .= addressWithSpendable addr spendable]
@@ -174,6 +179,7 @@ instance FromJSON Response where
       "accresult" -> ResponseAccResult <$> o .: "account" <*> o .: "result" <*> o .: "text"
       "file" -> ResponseFile <$> o .: "file"
       "import" -> ResponseImport <$> parseReport o
+      "accountfile" -> ResponseAccountFile <$> parseFileShown o
       "accounts" -> ResponseAccounts <$> (mapM parseAccountWithSpendable =<< o .: "accounts")
       "address" -> do
         acc <- o .: "account"

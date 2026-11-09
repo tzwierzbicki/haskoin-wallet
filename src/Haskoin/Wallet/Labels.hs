@@ -51,11 +51,20 @@
 -- The document exportacc wrote before this format, one JSON object with
 -- the key, the network, the name and the fingerprint, is read as the
 -- @xpub@ record it amounts to.
+--
+-- show shows such a file before the user imports it ('fileShown'). It
+-- reads the file as importacc does ('readAccountFile'), and shows each
+-- account as importacc would take it, with the labels and locks of its
+-- records under it. The wallet keeps nothing of it. show sorts the
+-- records by their origins only, where importacc looks for each in the
+-- wallet, since show tells what the file says.
 module Haskoin.Wallet.Labels
   ( -- * The file exportacc writes
     accountRecords,
 
     -- * The file importacc reads
+    AccountFile (..),
+    readAccountFile,
     importFile,
     importRecords,
     ImportReport (..),
@@ -64,13 +73,20 @@ module Haskoin.Wallet.Labels
     reportPairs,
     parseReport,
     reportNeedsSync,
+
+    -- * The file show shows
+    FileShown (..),
+    fileShown,
+    holdsAnything,
+    fileShownPairs,
+    parseFileShown,
   )
 where
 
 import Conduit (MonadUnliftIO)
 import Control.Applicative ((<|>))
 import Control.Monad (filterM, foldM, forM, forM_, unless, when)
-import Control.Monad.Except (ExceptT, catchError, throwError)
+import Control.Monad.Except (ExceptT, catchError, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Data.Aeson ((.:), (.:?), (.=))
@@ -78,7 +94,8 @@ import qualified Data.Aeson as Json
 import Data.Aeson.Types (Pair, Parser)
 import qualified Data.Aeson.Types as Json
 import Data.Bits (testBit)
-import Data.List (nub, nubBy)
+import Data.Char (isAlpha, isAlphaNum)
+import Data.List (elemIndex, nub, nubBy, sort)
 import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, listToMaybe, maybeToList)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -260,29 +277,57 @@ emptyReport accounts unreadable =
       reportUnreadable = unreadable
     }
 
--- | Import the content of a file: a BIP 329 file, whose lines may hold
--- descriptors of accounts too, a file of descriptors as another wallet
--- writes it, or a document of the accounts as exportacc wrote them
--- before. The network is the one of --network or of the configuration,
--- for a key the file places on none, and the kind is the one of --type,
--- for a key the file says no kind of.
+-- | Import the content of a file of accounts, as 'readAccountFile' reads
+-- it. The network is the one of --network or of the configuration, for a
+-- key the file places on none, and the kind is the one of --type, for a
+-- key the file says no kind of.
 importFile :: (MonadUnliftIO m) => Ctx -> Maybe Network -> Maybe AccountKind -> Text -> ExceptT String (DB m) ImportReport
-importFile ctx netM kindM content =
+importFile ctx netM kindM content = do
+  file <- liftEither (readAccountFile ctx content)
+  report <- importRecords ctx netM kindM (fileKeys file) (fileRecords file) (fileUnreadable file)
+  return report {reportNotKept = reportNotKept report + fileOtherTypes file}
+
+-- | What a file of accounts holds, as importacc reads it, before anything
+-- is done with it. importacc imports it, and show shows it
+-- ('fileShown').
+data AccountFile = AccountFile
+  { -- | The key of each account, in the order of the file, each key once,
+    -- or the refusal of a line that looks like a descriptor and is none
+    fileKeys :: ![Either AccountImport Record],
+    -- | The records of anything but a key, each with the number of its line
+    fileRecords :: ![(Natural, Record)],
+    -- | The records of a type the BIP does not define
+    fileOtherTypes :: !Natural,
+    -- | The lines that are neither a record nor a descriptor, by number
+    fileUnreadable :: ![Natural]
+  }
+  deriving (Eq, Show)
+
+-- | Read the content of a file of accounts: a BIP 329 file, whose lines
+-- may hold descriptors of accounts too, a file of descriptors as another
+-- wallet writes it, or a document of the accounts as exportacc wrote them
+-- before. Only that document is refused, when it does not read as one.
+-- Any other content reads, if only as lines that are not records.
+readAccountFile :: Ctx -> Text -> Either String AccountFile
+readAccountFile ctx content =
   case wholeObject content of
     Just o
       | isJust (Json.parseMaybe (.: "xpubkey") o :: Maybe Json.Value) -> do
-          doc <- liftEither (Json.parseEither (unmarshalValue ctx) (Json.Object o))
-          importRecords ctx netM kindM [Right (documentRecord ctx doc)] [] []
+          doc <- Json.parseEither (unmarshalValue ctx) (Json.Object o)
+          return (keysOnly [Right (documentRecord ctx doc)])
       | Just descriptors <- fileDescriptors o ->
-          importRecords ctx netM kindM (oneOfEachKey (descriptorRecord <$> descriptors)) [] []
+          return (keysOnly (oneOfEachKey (descriptorRecord <$> descriptors)))
     _ -> do
       let classified = classifyLine <$> readLines content
-          keys = oneOfEachKey [key | KeyLine key <- classified]
-          records = [(number, r) | RecordLine number r <- classified]
-          otherTypes = length [() | OtherTypeLine <- classified]
-          unreadable = [number | UnreadableLine number <- classified]
-      report <- importRecords ctx netM kindM keys records unreadable
-      return report {reportNotKept = reportNotKept report + fromIntegral otherTypes}
+      return
+        AccountFile
+          { fileKeys = oneOfEachKey [key | KeyLine key <- classified],
+            fileRecords = [(number, r) | RecordLine number r <- classified],
+            fileOtherTypes = fromIntegral (length [() | OtherTypeLine <- classified]),
+            fileUnreadable = [number | UnreadableLine number <- classified]
+          }
+  where
+    keysOnly keys = AccountFile keys [] 0 []
 
 -- | The one JSON object a file holds, when it is one: the document of an
 -- earlier exportacc, or a file of descriptors. A file of one record is one
@@ -307,6 +352,12 @@ data FileLine
 -- | A line as a record, when it starts as a JSON object does, else as a
 -- descriptor. A line that is neither is not readable, unless it looks
 -- like a descriptor, in which case it is refused with the reason.
+--
+-- A descriptor may be a key alone, a word of letters and digits. A word
+-- is read as a key only when it starts as an extended key does
+-- ('startsAsExtendedKey'). Any other word is a line that is not a record:
+-- the word of a mnemonic, in a file of one word a line, is no key, and
+-- show and importacc do not show a word of it as one.
 classifyLine :: (Natural, Text) -> FileLine
 classifyLine (number, line)
   | "{" `Text.isPrefixOf` line = case parseLine line of
@@ -314,11 +365,22 @@ classifyLine (number, line)
       Right (LineRecord r) -> RecordLine number r
       Right (LineOfOtherType _) -> OtherTypeLine
       Left _ -> UnreadableLine number
+  | Text.all isAlphaNum line && not (startsAsExtendedKey line) = UnreadableLine number
   | otherwise = case descriptorRecord line of
       Right r -> KeyLine (Right r)
       Left refused
         | looksLikeDescriptor line -> KeyLine (Left refused)
         | otherwise -> UnreadableLine number
+
+-- | Whether a word starts as an extended key does, public or private: with
+-- four letters that end in pub or prv. xpub and tpub are those of BIP32,
+-- and zpub, vpub, ypub and the rest those of SLIP-132. A word with such a
+-- start that is no key is still refused as a key, with the reason, as a
+-- key with a typo in it is.
+startsAsExtendedKey :: Text -> Bool
+startsAsExtendedKey word = Text.length prefix == 4 && Text.all isAlpha prefix && Text.drop 1 prefix `elem` ["pub", "prv"]
+  where
+    prefix = Text.take 4 word
 
 -- | The xpub record a descriptor amounts to: its key, with the origin of
 -- the key when the descriptor gives it, the purpose of the kind its script
@@ -371,9 +433,14 @@ documentRecord ctx (PubKeyDoc xpub net name fingerprintM) =
 -- the lines given as not readable
 importRecords :: (MonadUnliftIO m) => Ctx -> Maybe Network -> Maybe AccountKind -> [Either AccountImport Record] -> [(Natural, Record)] -> [Natural] -> ExceptT String (DB m) ImportReport
 importRecords ctx netM kindM keys others unreadable = do
-  accountImports <- mapM (either return (importKey ctx netM kindM)) keys
+  accountImports <- importKeys ctx netM kindM keys
   accounts <- lift getAccounts
   foldM (importRecord ctx accounts) (emptyReport accountImports unreadable) others
+
+-- | Import the accounts of the key lines, the refused ones as they are, and
+-- say what became of each, in the order of the lines
+importKeys :: (MonadUnliftIO m) => Ctx -> Maybe Network -> Maybe AccountKind -> [Either AccountImport Record] -> ExceptT String (DB m) [AccountImport]
+importKeys ctx netM kindM = mapM (either return (importKey ctx netM kindM))
 
 {- Accounts -}
 
@@ -681,6 +748,160 @@ lockOutputRecord report r outpoint = do
           then report {reportCoinsUnlocked = reportCoinsUnlocked report + 1}
           else report {reportCoinsLocked = reportCoinsLocked report + 1}
 
+{- The file show shows -}
+
+-- | A file of accounts as show shows it, before the user imports it. Each
+-- account of the file comes as importacc would take it, with the labels
+-- and locks of its records. Then come the labels and locks of no account
+-- of the file, the records hw keeps no label for, and the lines that are
+-- not records.
+--
+-- A record goes under the account of the file whose origin it names. In
+-- a file of one account, a record without an origin goes under that
+-- account too, as a wallet of one account writes it. This reads only
+-- what the file says. importacc places a record in the wallet itself, by
+-- the address or the transaction, and may place one show shows apart.
+data FileShown = FileShown
+  { -- | Each account of the file, in its order, with the records of the
+    -- labels and locks hw keeps
+    shownAccounts :: ![(AccountImport, [Record])],
+    -- | The records of labels and locks that name no account of the file
+    shownOthers :: ![Record],
+    -- | The labels of change addresses, which hw does not keep
+    shownChangeLabels :: !Natural,
+    -- | The records hw keeps no label for: inputs, the labels of coins,
+    -- public keys it cannot read, and the kinds the BIP does not define
+    shownNotKept :: !Natural,
+    -- | The lines that are not records, as a text editor numbers them
+    shownUnreadable :: ![Natural]
+  }
+  deriving (Eq, Show)
+
+-- | Whether a file holds anything a file of accounts holds: a key or a
+-- record, even one of a type the BIP does not define. A file of other
+-- lines alone is no file of accounts.
+holdsAnything :: AccountFile -> Bool
+holdsAnything file = not (null (fileKeys file) && null (fileRecords file) && fileOtherTypes file == 0)
+
+-- | Show a file of accounts. Its accounts are taken into the wallet as
+-- importacc takes them, then that is undone ('undoneAfter'), so that the
+-- wallet keeps nothing. Each account shows as importacc would leave it:
+-- created, found, renamed or refused, with the reasons importacc gives. A
+-- key that says no kind is taken for a BIP44 account, as importacc takes
+-- it without --type, and a key the file places on no network goes on the
+-- network given.
+--
+-- Taking the accounts in and undoing it gives the very answer importacc
+-- would give, without its rules written twice, once to do and once to
+-- tell what it would do. The two could not drift apart.
+fileShown :: (MonadUnliftIO m) => Ctx -> Maybe Network -> AccountFile -> ExceptT String (DB m) FileShown
+fileShown ctx netM file = do
+  outcomes <- liftEither =<< lift (undoneAfter (runExceptT (importKeys ctx netM Nothing (fileKeys file))))
+  return (sortRecords ctx file (zip (fileKeys file) outcomes))
+
+-- | Sort the records of a file under the accounts of its keys, each key
+-- with what became of its account
+sortRecords :: Ctx -> AccountFile -> [(Either AccountImport Record, AccountImport)] -> FileShown
+sortRecords ctx file accounts =
+  FileShown
+    { shownAccounts = [(outcome, [r | (Just at, r) <- placed, at == i]) | (i, (_, outcome)) <- zip [0 ..] accounts],
+      shownOthers = [r | (Nothing, r) <- placed],
+      shownChangeLabels = fromIntegral (length [() | ChangeLabel <- sorted]),
+      shownNotKept = fileOtherTypes file + fromIntegral (length [() | NotKept <- sorted]),
+      shownUnreadable = sort (fileUnreadable file <> [number | UnreadableRef number <- sorted])
+    }
+  where
+    sorted = sortRecord ctx <$> fileRecords file
+    placed = [(accountOf r, r) | ShownRecord r <- sorted]
+    origins = keyOrigin <$> accounts
+    -- The place of the account of a record among the accounts of the file
+    accountOf :: Record -> Maybe Int
+    accountOf r = case recordOrigin r of
+      Just text -> do
+        origin <- parseOrigin text
+        elemIndex (Just origin) origins
+      Nothing
+        | [_] <- accounts -> Just 0
+        | otherwise -> Nothing
+
+-- | The origin of an account of a file: the one its key gives, or else
+-- that of the account the wallet holds or would make of it, when the
+-- fingerprint of its seed is known
+keyOrigin :: (Either AccountImport Record, AccountImport) -> Maybe Origin
+keyOrigin (key, outcome) = given <|> ofAccount
+  where
+    given = parseOrigin =<< recordOrigin =<< either (const Nothing) Just key
+    ofAccount = do
+      acc <- importedAccount outcome
+      fingerprint <- accountFingerprint acc
+      return (accountOrigin (accountKind acc) fingerprint (accountPath acc))
+
+-- | What show makes of a record of a file, as importacc would take it
+data SortedRecord
+  = -- | A label or a lock that hw keeps
+    ShownRecord !Record
+  | -- | The label of a change address, by its key path, which hw does not
+    -- keep
+    ChangeLabel
+  | -- | A record hw keeps no label for
+    NotKept
+  | -- | A record whose reference does not read, by the number of its line
+    UnreadableRef !Natural
+  | -- | A record that neither labels nor locks anything, which importacc
+    -- passes over without a word
+    NothingSet
+
+-- | Sort a record as importacc takes it ('importRecord'). An address on
+-- the change chain is told by its key path alone, since show does not
+-- look for the address in the wallet.
+sortRecord :: Ctx -> (Natural, Record) -> SortedRecord
+sortRecord ctx (number, r) =
+  case recordType r of
+    AddrRecord -> addressLabel
+    PubkeyRecord
+      | isJust (publicKeyOf ctx (recordRef r)) -> addressLabel
+      | otherwise -> NotKept
+    TxRecord
+      | isNothing (hexToTxHash (recordRef r)) -> UnreadableRef number
+      | isNothing (recordLabel r) -> NothingSet
+      | otherwise -> ShownRecord r
+    OutputRecord
+      | isNothing (readOutpoint (recordRef r)) -> UnreadableRef number
+      | isNothing (recordSpendable r) -> NotKept
+      | otherwise -> ShownRecord r
+    InputRecord -> NotKept
+    SpscanRecord -> NotKept
+    XpubRecord -> NotKept
+  where
+    addressLabel
+      | isNothing (recordLabel r) = NothingSet
+      | Just (AddrInternal, _) <- chainIndex =<< parseKeypath =<< recordKeypath r = ChangeLabel
+      | otherwise = ShownRecord r
+
+-- | The keys of a file as the --json answer of show writes them: each
+-- account as the answer of importacc writes it, with its records
+-- ("records"), then the records of no account of the file, and the
+-- counts of what hw keeps no label for
+fileShownPairs :: FileShown -> [Pair]
+fileShownPairs shown =
+  [ "accounts" .= [Json.object (accountImportPairs outcome <> ["records" .= records]) | (outcome, records) <- shownAccounts shown],
+    "records" .= shownOthers shown,
+    "changeaddresses" .= shownChangeLabels shown,
+    "notkept" .= shownNotKept shown,
+    "unreadable" .= shownUnreadable shown
+  ]
+
+parseFileShown :: Json.Object -> Parser FileShown
+parseFileShown o =
+  FileShown
+    <$> (mapM shownAccount =<< o .: "accounts")
+    <*> o .: "records"
+    <*> o .: "changeaddresses"
+    <*> o .: "notkept"
+    <*> o .: "unreadable"
+  where
+    shownAccount value = (,) <$> parseAccountImport value <*> Json.withObject "account" (.: "records") value
+
 {- The report in JSON -}
 
 -- | The keys of a report, as the --json answer of importacc writes them
@@ -723,11 +944,16 @@ parseReport o =
 -- one on what was taken on trust or of one that kept its name, and the
 -- name and reason of one refused
 accountImportJson :: AccountImport -> Json.Value
-accountImportJson = \case
-  AccountCreated acc noteM -> Json.object (["status" .= ("created" :: Text), "account" .= acc] <> ["note" .= note | Just note <- [noteM]])
-  AccountKept acc noteM -> Json.object (["status" .= ("kept" :: Text), "account" .= acc] <> ["note" .= note | Just note <- [noteM]])
-  AccountRenamed was acc -> Json.object ["status" .= ("renamed" :: Text), "was" .= was, "account" .= acc]
-  AccountRefused name why -> Json.object ["status" .= ("refused" :: Text), "name" .= name, "reason" .= why]
+accountImportJson = Json.object . accountImportPairs
+
+-- | The keys of what became of an account, which show adds the records of
+-- the account to
+accountImportPairs :: AccountImport -> [Pair]
+accountImportPairs = \case
+  AccountCreated acc noteM -> ["status" .= ("created" :: Text), "account" .= acc] <> ["note" .= note | Just note <- [noteM]]
+  AccountKept acc noteM -> ["status" .= ("kept" :: Text), "account" .= acc] <> ["note" .= note | Just note <- [noteM]]
+  AccountRenamed was acc -> ["status" .= ("renamed" :: Text), "was" .= was, "account" .= acc]
+  AccountRefused name why -> ["status" .= ("refused" :: Text), "name" .= name, "reason" .= why]
 
 parseAccountImport :: Json.Value -> Parser AccountImport
 parseAccountImport = Json.withObject "account import" $ \o -> do
