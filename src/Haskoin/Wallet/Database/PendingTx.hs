@@ -17,6 +17,8 @@ import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
 import Data.Containers.ListUtils (nubOrd)
 import Data.List (find, nub)
+import Data.List.NonEmpty (nonEmpty)
+import qualified Data.List.NonEmpty as NonEmpty
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, isJust, listToMaybe, mapMaybe)
 import Data.Set (Set)
@@ -635,7 +637,7 @@ transactionAccount ctx nameM netM tsd = do
         accountAmong
           (\name -> "The transaction is pending in the account " <> cs (dBAccountName holder) <> ", not in " <> cs name)
           nameM
-          [(held.pendingTxAccount, holder)]
+          (NonEmpty.singleton (held.pendingTxAccount, holder))
       completed <- withWalletPaths ctx chosen tsd
       liftEither $ checkOutputReach (heldChainsOf holder) completed
       return (Just chosen, completed)
@@ -645,12 +647,12 @@ transactionAccount ctx nameM netM tsd = do
       let involved = [(account, completedTsd) | (account, completedTsd) <- completed, involves (snd account) completedTsd]
       unless (all (onTxNetwork . snd . fst) involved) $
         throwError "The transaction involves an account of another network"
-      case involved of
-        [] -> do
-          forM_ nameM $ \name -> getAccountByName (Just name) >> throwError (notInvolved name)
+      case nonEmpty (fst <$> involved) of
+        Nothing -> do
+          forM_ nameM $ \name -> getAccountByName name >> throwError (notInvolved name)
           return (Nothing, tsd)
-        _ -> do
-          chosen <- accountAmong notInvolved nameM (fst <$> involved)
+        Just candidates -> do
+          chosen <- accountAmong notInvolved nameM candidates
           let completedTsd = maybe tsd snd (find ((== fst chosen) . fst . fst) involved)
           liftEither $ checkOutputReach (heldChainsOf (snd chosen)) completedTsd
           return (Just chosen, completedTsd)

@@ -16,6 +16,7 @@ import Haskoin.Wallet.Database.Address (genExtAddress)
 import Haskoin.Wallet.Commands (addressesListing, txsListing)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.Database.Account (AccountChoice (..))
 import Haskoin.Wallet.Database.TxInfo (ListedTx (..), markTxInfoDead, repsertSummary)
 import Haskoin.Wallet.Cli.Listing (Listing (..), Paging (..), streamListing)
 import Haskoin.Wallet.Cli.Response (Response (..))
@@ -74,7 +75,7 @@ spec = prepareContext $ \ctx ->
     it "passes a listing read whole on as one first chunk, however many rows it has" $
       inScratchDirectory $ \dir -> do
         wallet <- walletWithAddresses ctx dir 250
-        chunks <- streamedFrom wallet ((\listing -> listing {listingWhole = True}) <$> addressesListing Nothing False (Paging Nothing Nothing)) (const True)
+        chunks <- streamedFrom wallet ((\listing -> listing {listingWhole = True}) <$> addressesListing wallet (AccountChoice Nothing Nothing) False (Paging Nothing Nothing)) (const True)
         map snd chunks `shouldBe` [(True, [249, 248 .. 0])]
 
     it "fails as the listing does, before any chunk" $
@@ -99,7 +100,7 @@ walletWithPayments ctx dir count dead =
 streamedBalances :: Config -> IO [[Maybe Integer]]
 streamedBalances wallet = do
   seen <- newIORef []
-  result <- streamListing wallet (txsListing Nothing (Paging Nothing Nothing)) $ \_ answer -> do
+  result <- streamListing wallet (txsListing wallet (AccountChoice Nothing Nothing) (Paging Nothing Nothing)) $ \_ answer -> do
     case answer of
       ResponseTxs _ listed -> modifyIORef seen ((listedTxBalance <$> listed) :)
       _ -> return ()
@@ -119,7 +120,7 @@ walletWithAddresses ctx dir count =
 -- whether it is the first and the indices of its rows, the reader answering
 -- as told. A failure is recorded as a chunk of its own, with no rows.
 streamed :: Config -> Paging Text -> (Int -> Bool) -> IO [(Either String (), (Bool, [Int]))]
-streamed wallet paging = streamedFrom wallet (addressesListing Nothing False paging)
+streamed wallet paging = streamedFrom wallet (addressesListing wallet (AccountChoice Nothing Nothing) False paging)
 
 -- | Stream a listing of receiving addresses as 'streamed' does, the
 -- listing given

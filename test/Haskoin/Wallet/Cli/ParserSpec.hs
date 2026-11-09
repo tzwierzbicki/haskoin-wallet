@@ -15,6 +15,7 @@ import Haskoin.Wallet.Cli.Parser.Help (mentionedCommands, usageParts)
 import Haskoin.Wallet.Cli.Parser.Completion (completionParts)
 import Haskoin.Wallet.Cli.Parser.Run (Request (..), commandNamed, requestOf)
 import Haskoin.Wallet.Cli.Style (renderPlain)
+import Haskoin.Wallet.Database.Account (AccountChoice (..))
 import Haskoin.Wallet.Database.Address (AddrType (..))
 import Haskoin.Wallet.ShortId (HashRef (..), coinRefText, shortIdText)
 import Test.Hspec
@@ -23,35 +24,35 @@ spec :: Spec
 spec = do
   describe "The usage line of a command" $ do
     it "puts an option that may be left out in brackets, its names separated by a bar" $
-      usageOf "receive" `shouldBe` "[-a|--account NAME] [-l|--label LABEL]"
+      usageOf "receive" `shouldBe` "[-a|--account NAME] [-n|--network NETWORK] [-l|--label LABEL]"
 
     -- The recipients and the coins may be repeated, and the strategy has a
     -- default
     it "lists the options of preparetx as they are typed" $
       usageOf "preparetx"
-        `shouldBe` "ADDRESS:AMOUNT... [-a|--account NAME] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--strategy STRATEGY] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS]... [--select] [-y|--yes] [--change-back | --new-change]"
+        `shouldBe` "ADDRESS:AMOUNT... [-a|--account NAME] [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--strategy STRATEGY] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS]... [--select] [-y|--yes] [--change-back | --new-change]"
 
     it "follows what may be given several times with ..., after the brackets of an optional one" $
       usageOf "preparesendall"
-        `shouldBe` "ADDRESS[:AMOUNT]... [-a|--account NAME] [-f|--fee-rate RATE] [-m|--min-conf INT] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS]... [--spend-dust | --leave-dust] [-y|--yes]"
+        `shouldBe` "ADDRESS[:AMOUNT]... [-a|--account NAME] [-n|--network NETWORK] [-f|--fee-rate RATE] [-m|--min-conf INT] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS]... [--spend-dust | --leave-dust] [-y|--yes]"
 
     it "offers txs --compact, --verbose, --tabular and --csv as a choice, since a table has no room for every detail and a file is not the screen" $
-      usageOf "txs" `shouldBe` "[-a|--account NAME] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after TXID] [--max INT]"
+      usageOf "txs" `shouldBe` "[-a|--account NAME] [-n|--network NETWORK] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after TXID] [--max INT]"
 
     it "offers addresses --compact, --verbose, --tabular and --csv as a choice too" $
-      usageOf "addresses" `shouldBe` "[-a|--account NAME] [--change] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT]"
+      usageOf "addresses" `shouldBe` "[-a|--account NAME] [-n|--network NETWORK] [--change] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT]"
 
     it "offers accounts --compact, --verbose, --tabular and --csv as a choice" $
       usageOf "accounts" `shouldBe` "[-a|--account NAME] [--compact | (-v|--verbose) | --tabular | --csv FILENAME]"
 
     it "offers coins --compact, --verbose, --tabular and --csv as a choice" $
-      usageOf "coins" `shouldBe` "[-a|--account NAME] [--locked] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after TXID:INDEX] [--max INT]"
+      usageOf "coins" `shouldBe` "[-a|--account NAME] [-n|--network NETWORK] [--locked] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after TXID:INDEX] [--max INT]"
 
     it "offers pendingtxs --compact, --verbose, --tabular and --csv as a choice" $
       usageOf "pendingtxs" `shouldBe` "[-a|--account NAME] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after HASH] [--max INT]"
 
     it "offers balances --compact, --verbose, --tabular and --csv as a choice" $
-      usageOf "balances" `shouldBe` "[-a|--account NAME] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT]"
+      usageOf "balances" `shouldBe` "[-a|--account NAME] [-n|--network NETWORK] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT]"
 
     it "puts the word of show, which may be left out, before its options" $
       usageOf "show" `shouldBe` "[PATH|ADDRESS|HASH|TXID:INDEX|FILENAME] [-a|--account NAME] [-n|--network NETWORK]"
@@ -152,7 +153,7 @@ spec = do
       wrapsLines Compact (CommandAccounts Nothing (OnScreen Nothing)) `shouldBe` False
 
     it "cuts those of the verbose view of another listing, such as txs" $
-      wrapsLines Verbose (CommandTxs Nothing (OnScreen (Just Verbose)) (Paging Nothing Nothing)) `shouldBe` False
+      wrapsLines Verbose (CommandTxs (AccountChoice Nothing Nothing) (OnScreen (Just Verbose)) (Paging Nothing Nothing)) `shouldBe` False
 
   describe "The commands a text of the help names" $ do
     it "are those named in it, in its order" $

@@ -52,7 +52,7 @@ clientMain = do
     either die return (join migrated)
     -- A listing goes to the screen, unless --json or --csv asks for it
     -- whole: then it is an answer as any other
-    case commandListing ctx cmd of
+    case commandListing ctx cfg cmd of
       Just listing | not json, Nothing <- csvFileOf cmd -> do
         pager <- pagerCommand noPager cfg
         printListing cfg pager unit view (wrapsLines view cmd) listing

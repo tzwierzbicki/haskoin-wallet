@@ -86,6 +86,7 @@ import Data.Char (isHexDigit)
 import Data.Either (isLeft)
 import Data.Foldable (for_)
 import Data.List (find, genericTake, nub, partition)
+import Data.List.NonEmpty (nonEmpty)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe, mapMaybe)
@@ -162,7 +163,7 @@ commandResponse ctx cfg unit = \case
   -- A listing to write to a CSV file, whatever it lists
   cmd
     | Just file <- csvFileOf cmd,
-      Just listing <- commandListing ctx cmd ->
+      Just listing <- commandListing ctx cfg cmd ->
         cmdCsv cfg file listing
   -- Mnemonics and accounts
   CommandMnemonic opts -> cmdMnemonic opts
@@ -208,13 +209,13 @@ commandResponse ctx cfg unit = \case
 
 -- | The listing of a command that lists, which the screen reads chunk by
 -- chunk, or Nothing for a command that answers at once
-commandListing :: Ctx -> Command -> Maybe (ExceptT String (DB IO) Listing)
-commandListing ctx = \case
+commandListing :: Ctx -> Config -> Command -> Maybe (ExceptT String (DB IO) Listing)
+commandListing ctx cfg = \case
   CommandAccounts account _ -> Just $ accountsListing account
-  CommandAddresses account internal _ paging -> Just $ addressesListing account internal paging
-  CommandBalances account _ paging -> Just $ balancesListing account paging
-  CommandCoins account locked _ paging -> Just $ coinsListing account locked paging
-  CommandTxs account _ paging -> Just $ txsListing account paging
+  CommandAddresses account internal _ paging -> Just $ addressesListing cfg account internal paging
+  CommandBalances account _ paging -> Just $ balancesListing cfg account paging
+  CommandCoins account locked _ paging -> Just $ coinsListing cfg account locked paging
+  CommandTxs account _ paging -> Just $ txsListing cfg account paging
   CommandPendingTxs account _ paging -> Just $ pendingTxsListing ctx account paging
   _ -> Nothing
 
@@ -236,6 +237,13 @@ runResponse action = answered <$> runExceptT action
 -- | The answer of a command, or its error
 answered :: Either String Response -> Response
 answered = either (ResponseError . cs) id
+
+-- | The account of a command that acts on one account, as the user chose
+-- it, with the default account of the default network of the
+-- configuration in a wallet of several accounts
+-- ('chooseAccount')
+chosenAccount :: Config -> AccountChoice -> ExceptT String (DB IO) (DBAccountId, DBAccount)
+chosenAccount cfg = chooseAccount (defaultAccountNetwork cfg)
 
 {- Answers -}
 
@@ -298,8 +306,8 @@ cmdCreateAcc :: Ctx -> Config -> Text -> Maybe Network -> AccountKind -> IO Resp
 cmdCreateAcc ctx cfg name netM kind =
   runDBResponse cfg $ do
     -- Before the user types the mnemonic, not after
-    checkNameFree name
     net <- liftMaybe noNetwork (commandNetwork cfg netM)
+    checkNameFree net name
     liftEither $ checkKindOnNetwork net kind
     secret <- askNewSeedSecret terminal
     seed <- seedToCreateWith ctx secret
@@ -380,10 +388,10 @@ cmdRecover ctx cfg opts =
         _ -> return []
       return $ ResponseRecover searched opts.accountGap (found <> fromTyped) elsewhere [(net, cs failure) | (net, failure) <- failures]
 
-cmdCheckMnemonic :: Ctx -> Config -> Maybe Text -> IO Response
+cmdCheckMnemonic :: Ctx -> Config -> AccountChoice -> IO Response
 cmdCheckMnemonic ctx cfg account =
   runDBResponse cfg $ do
-    (accId, acc) <- getAccountByName account
+    (accId, acc) <- chosenAccount cfg account
     secret <- askSeedSecret terminal
     matched <- matchAccount terminal (accountKind acc) (accountNetwork acc) ctx (accountIndex acc) (accountXPubKey ctx acc) secret
     -- A seed proven gives its fingerprint to every account of it
@@ -459,14 +467,14 @@ cmdRenameAcc :: Config -> RenameAcc -> IO Response
 cmdRenameAcc cfg opts =
   runDBResponse cfg $ do
     _ <- renameAccount opts.old opts.new
-    accountAnswer . fst =<< getAccountByName (Just opts.new)
+    accountAnswer . fst =<< getAccountByName opts.new
 
 -- | Delete an account, given its network and its path too, which must be
 -- those of the account
 cmdDeleteAcc :: Config -> Text -> Network -> HardPath -> IO Response
 cmdDeleteAcc cfg name net path =
   runDBResponse cfg $ do
-    (accId, acc) <- getAccountByName (Just name)
+    (accId, acc) <- getAccountByName name
     unless (accountNetwork acc == net) $
       throwError "The network of the account to delete did not match"
     unless (path == accountPath acc) $
@@ -504,7 +512,7 @@ cmdExportSheet ctx cfg account file =
     accs <- getAccountsByName account
     when (null accs) $ throwError "There are no accounts in the wallet"
     accounts <- sheetOf (accountsListing account)
-    held <- forM accs $ \(_, acc) -> (acc,) <$> accountSheets (Just (dBAccountName acc))
+    held <- forM accs $ \(_, acc) -> (acc,) <$> accountSheets (AccountChoice (Just (dBAccountName acc)) Nothing)
     pending <- sheetOf (pendingTxsListing ctx account everyRow)
     now <- liftIO getCurrentTime
     liftEitherIO $ writeFileBytes file (workbookOds now (walletSheets accounts held pending))
@@ -515,12 +523,12 @@ cmdExportSheet ctx cfg account file =
     -- The listings of one account: its receiving addresses then its change
     -- addresses, its balances, all its coins, and its transactions
     accountSheets named = do
-      receiving <- sheetOf (addressesListing named False everyRow)
-      change <- sheetOf (addressesListing named True everyRow)
+      receiving <- sheetOf (addressesListing cfg named False everyRow)
+      change <- sheetOf (addressesListing cfg named True everyRow)
       AccountSheets (stacked [receiving, change])
-        <$> sheetOf (balancesListing named everyRow)
-        <*> sheetOf (coinsListing named False everyRow)
-        <*> sheetOf (txsListing named everyRow)
+        <$> sheetOf (balancesListing cfg named everyRow)
+        <*> sheetOf (coinsListing cfg named False everyRow)
+        <*> sheetOf (txsListing cfg named everyRow)
 
 -- | The sheet of a listing, read whole in the transaction the caller runs
 sheetOf :: ExceptT String (DB IO) Listing -> ExceptT String (DB IO) Sheet
@@ -607,7 +615,7 @@ coinNamed none = \case
 cmdReceive :: Ctx -> Config -> Receive -> IO Response
 cmdReceive ctx cfg opts =
   runDBResponse cfg $ do
-    (accId, _) <- getAccountByName opts.account
+    (accId, _) <- chosenAccount cfg opts.account
     addr <- genExtAddress ctx cfg accId (fromMaybe "" opts.label)
     addressAnswer accId addr
 
@@ -616,35 +624,43 @@ cmdReceive ctx cfg opts =
 -- or stored. An address and a coin tell their account, so --account is
 -- refused with them rather than ignored: the user who typed it may have
 -- meant another account, or another thing to show. A file of accounts
--- tells its accounts too. --network is refused with all but a file for
--- the same reason. The rest is of an account, on the network of the
--- account.
+-- tells its accounts too. A path and the newest address are of the
+-- account the user chose, as for receive: --network names the network of
+-- its default account. With a file, --network is the network of the
+-- file. An address, a transaction and a coin are of an account, on the
+-- network of the account, so --network is refused with them.
 cmdShow :: Ctx -> Config -> Maybe Text -> Maybe Shown -> Maybe Network -> IO Response
 cmdShow ctx cfg account shownM netM =
   runDBResponse cfg $ case shownM of
     Just (ShownFile file) -> shownFile ctx cfg account netM file
-    -- When the guard fails, the alternatives below are tried
-    _ | isJust netM -> throwError "show takes --network with a file only, since the rest is on the network of its account"
-    Nothing -> newestReceiving account
-    Just (ShownPath addrType index) -> addressAtPath ctx account addrType index
+    Nothing -> newestReceiving cfg choice
+    Just (ShownPath addrType index) -> addressAtPath ctx cfg choice addrType index
     Just (ShownAddress typed) -> do
       refuseAccount "An address"
+      refuseNetwork "an address"
       shownAddress typed
-    Just (ShownTx named) -> shownTxs ctx account named
+    Just (ShownTx named) -> do
+      refuseNetwork "a transaction"
+      shownTxs ctx account named
     Just (ShownCoin named) -> do
       refuseAccount "A coin"
+      refuseNetwork "a coin"
       (acc, coin) <- walletCoinShown =<< walletCoinOf named
       return $ ResponseCoins acc [coin]
   where
+    choice = AccountChoice account netM
     refuseAccount what =
       when (isJust account) $
         throwError (what <> " tells its account, so show takes no --account with it")
+    refuseNetwork what =
+      when (isJust netM) $
+        throwError ("show takes no --network with " <> what <> ", which is on the network of its account")
 
 -- | The newest receiving address of the account, the first one addresses
 -- lists, to give out again
-newestReceiving :: Maybe Text -> ExceptT String (DB IO) Response
-newestReceiving account = do
-  (accId, _) <- getAccountByName account
+newestReceiving :: Config -> AccountChoice -> ExceptT String (DB IO) Response
+newestReceiving cfg account = do
+  (accId, _) <- chosenAccount cfg account
   newest <- lift $ addressesAfter accId AddrExternal Nothing (Just 1)
   case newest of
     addr : _ -> addressAnswer accId addr
@@ -660,9 +676,9 @@ newestReceiving account = do
 -- out, and it may lie past the gap that a restored wallet looks at, so
 -- nobody must be able to pay it. Its ends are enough to compare it with
 -- the address the online computer shows.
-addressAtPath :: Ctx -> Maybe Text -> AddrType -> KeyIndex -> ExceptT String (DB IO) Response
-addressAtPath ctx account addrType index = do
-  (accId, acc) <- getAccountByName account
+addressAtPath :: Ctx -> Config -> AccountChoice -> AddrType -> KeyIndex -> ExceptT String (DB IO) Response
+addressAtPath ctx cfg account addrType index = do
+  (accId, acc) <- chosenAccount cfg account
   let path = addrDeriv addrType :/ index
   addrM <- liftIO $ deriveChainAddress ctx (accountKind acc) (accountXPubKey ctx acc) (addrDeriv addrType) index
   -- BIP32 says to skip an index whose child key is invalid, so the chain
@@ -747,7 +763,7 @@ shownAccountFile ctx cfg givenM file bytes = do
 -- matches it.
 shownTxs :: Ctx -> Maybe Text -> HashRef -> ExceptT String (DB IO) Response
 shownTxs ctx account named = do
-  askedM <- forM account $ \_ -> getAccountByName account
+  askedM <- forM account getAccountByName
   hash <- walletTxHashOf named
   views <- transactionViews ctx hash
   kept <- case askedM of
@@ -758,14 +774,14 @@ shownTxs ctx account named = do
         mine -> return mine
   return $ ResponseHeldTxs [(acc, info) | (_, acc, info) <- kept]
 
-cmdAddresses :: Config -> Maybe Text -> Bool -> Paging Text -> IO Response
-cmdAddresses cfg account internal paging = readListing cfg (addressesListing account internal paging)
+cmdAddresses :: Config -> AccountChoice -> Bool -> Paging Text -> IO Response
+cmdAddresses cfg account internal paging = readListing cfg (addressesListing cfg account internal paging)
 
 -- | The addresses of a chain of the account, newest first, each with the
 -- balance it can spend now. An address names the one to go on after.
-addressesListing :: Maybe Text -> Bool -> Paging Text -> ExceptT String (DB IO) Listing
-addressesListing account internal paging = do
-  (accId, acc) <- getAccountByName account
+addressesListing :: Config -> AccountChoice -> Bool -> Paging Text -> ExceptT String (DB IO) Listing
+addressesListing cfg account internal paging = do
+  (accId, acc) <- chosenAccount cfg account
   let net = accountNetwork acc
       addrType = if internal then AddrInternal else AddrExternal
   start <- forM paging.pagingAfter $ fmap dBAddressIndex . listedAddress net accId addrType
@@ -782,15 +798,15 @@ addressesListing account internal paging = do
         listingWhole = False
       }
 
-cmdBalances :: Config -> Maybe Text -> Paging Text -> IO Response
-cmdBalances cfg account paging = readListing cfg (balancesListing account paging)
+cmdBalances :: Config -> AccountChoice -> Paging Text -> IO Response
+cmdBalances cfg account paging = readListing cfg (balancesListing cfg account paging)
 
 -- | The addresses of the account that hold coins, receiving and change
 -- addresses alike, each with the balance of its coins. An address names
 -- the one to go on after, with the balance it holds now.
-balancesListing :: Maybe Text -> Paging Text -> ExceptT String (DB IO) Listing
-balancesListing account paging = do
-  (accId, acc) <- getAccountByName account
+balancesListing :: Config -> AccountChoice -> Paging Text -> ExceptT String (DB IO) Listing
+balancesListing cfg account paging = do
+  (accId, acc) <- chosenAccount cfg account
   let net = accountNetwork acc
   start <- forM paging.pagingAfter $ \text -> do
     _ <- liftEither $ textToAddrE net text
@@ -822,14 +838,14 @@ cmdLabel ctx cfg opts =
 
 {- Coins -}
 
-cmdCoins :: Config -> Maybe Text -> Bool -> Paging CoinRef -> IO Response
-cmdCoins cfg account locked paging = readListing cfg (coinsListing account locked paging)
+cmdCoins :: Config -> AccountChoice -> Bool -> Paging CoinRef -> IO Response
+cmdCoins cfg account locked paging = readListing cfg (coinsListing cfg account locked paging)
 
 -- | The coins of the account, or its locked ones, in the order coins
 -- lists them. A coin names the one to go on after, with its block.
-coinsListing :: Maybe Text -> Bool -> Paging CoinRef -> ExceptT String (DB IO) Listing
-coinsListing account locked paging = do
-  (accId, acc) <- getAccountByName account
+coinsListing :: Config -> AccountChoice -> Bool -> Paging CoinRef -> ExceptT String (DB IO) Listing
+coinsListing cfg account locked paging = do
+  (accId, acc) <- chosenAccount cfg account
   let shown = if locked then LockedCoins else AllCoins
   start <- forM paging.pagingAfter $ \named -> do
     outpoint <- coinNamed ("The coin " <> coinRefText named <> " is not in the account") named
@@ -860,16 +876,16 @@ cmdUnlockCoin cfg named =
 
 {- Transactions -}
 
-cmdTxs :: Config -> Maybe Text -> Paging HashRef -> IO Response
-cmdTxs cfg account paging = readListing cfg (txsListing account paging)
+cmdTxs :: Config -> AccountChoice -> Paging HashRef -> IO Response
+cmdTxs cfg account paging = readListing cfg (txsListing cfg account paging)
 
 -- | The transactions of the account on the chain, in the order txs lists
 -- them, each with the balance after it. A transaction names the one to go
 -- on after, with its block and the balance so far, so that a chunk adds up
 -- nothing. Only --after adds up the transactions above it.
-txsListing :: Maybe Text -> Paging HashRef -> ExceptT String (DB IO) Listing
-txsListing account paging = do
-  (accId, acc) <- getAccountByName account
+txsListing :: Config -> AccountChoice -> Paging HashRef -> ExceptT String (DB IO) Listing
+txsListing cfg account paging = do
+  (accId, acc) <- chosenAccount cfg account
   start <- forM paging.pagingAfter (txsCursorAt accId acc <=< chainTxidOf)
   return
     Listing
@@ -891,7 +907,7 @@ cmdPendingTxs ctx cfg account paging = readListing cfg (pendingTxsListing ctx ac
 -- listing goes on after the time it was created and its nosigHash.
 pendingTxsListing :: Ctx -> Maybe Text -> Paging HashRef -> ExceptT String (DB IO) Listing
 pendingTxsListing ctx account paging = do
-  asked <- forM account $ \_ -> getAccountByName account
+  asked <- forM account getAccountByName
   let accIdM = fst <$> asked
   start <- forM paging.pagingAfter (pendingCursor accIdM <=< pendingHashOf)
   return
@@ -1197,15 +1213,23 @@ preparedAnswer ctx accId acc output tsd left = do
 
 -- | The account a transaction is prepared from, with the addresses that
 -- coin control chose, read on its network. The coins of --coin and the
--- addresses of --spend-from name their account; otherwise it is the account
--- of --account, or the only one. Each --spend-from address must be one of
--- the account: the address counts, not its text, so a Bitcoin Cash address
--- is found without its prefix, or in its legacy form.
-controlledAccount :: Maybe Text -> [OutPoint] -> [Text] -> ExceptT String (DB IO) (DBAccountId, DBAccount, [Address])
-controlledAccount account outpoints spendFrom = do
+-- addresses of --spend-from name their account, which must be on the
+-- --network, if given. Otherwise the account is chosen as for any command
+-- that acts on one account: by --account, or as the only one, or as the
+-- default account of the network ('chosenAccount'). Each --spend-from
+-- address must be one of the account: the address counts, not its text, so
+-- a Bitcoin Cash address is found without its prefix, or in its legacy
+-- form.
+controlledAccount :: Config -> AccountChoice -> [OutPoint] -> [Text] -> ExceptT String (DB IO) (DBAccountId, DBAccount, [Address])
+controlledAccount cfg account outpoints spendFrom = do
   byCoin <- coinAccounts outpoints
   byAddress <- accountsHolding (\net -> mapMaybe (textToAddr net) spendFrom)
-  (accId, acc) <- accountAmong (\name -> "The coins or addresses given are not in the account " <> cs name) account (nub (byCoin <> byAddress))
+  (accId, acc) <- case nonEmpty (nub (byCoin <> byAddress)) of
+    Nothing -> chosenAccount cfg account
+    Just held -> do
+      chosen <- accountAmong (\name -> "The coins or addresses given are not in the account " <> cs name) account.namedAccount held
+      liftEither $ checkOnNetwork account.namedNetwork (snd chosen)
+      return chosen
   let net = accountNetwork acc
   addrs <- forM spendFrom $ \typed -> do
     addr <- liftEither $ textToAddrE net typed
@@ -1226,7 +1250,7 @@ cmdPrepareTx :: Ctx -> Config -> AmountUnit -> PrepareTx -> IO Response
 cmdPrepareTx ctx cfg unit opts =
   runDBResponse cfg $ do
     coins <- mapM walletCoinOf opts.coins
-    (accId, acc, spendFrom) <- controlledAccount opts.account coins opts.spendFrom
+    (accId, acc, spendFrom) <- controlledAccount cfg opts.account coins opts.spendFrom
     let net = accountNetwork acc
         controlled = not (null coins && null spendFrom)
     when (opts.select && not controlled) $
@@ -1280,7 +1304,7 @@ cmdPrepareSendAll :: Ctx -> Config -> AmountUnit -> PrepareSendAll -> IO Respons
 cmdPrepareSendAll ctx cfg unit opts =
   runDBResponse cfg $ do
     coins <- mapM walletCoinOf opts.coins
-    (accId, acc, spendFrom) <- controlledAccount opts.account coins opts.spendFrom
+    (accId, acc, spendFrom) <- controlledAccount cfg opts.account coins opts.spendFrom
     let net = accountNetwork acc
         kind = accountKind acc
         controlled = not (null coins && null spendFrom)
@@ -1501,9 +1525,9 @@ cmdBumpFee ctx cfg unit opts =
     -- Before anything is asked, not after
     for_ opts.output checkPathFree
     bumped <- walletTxHashOf opts.bumped
-    holders <- transactionAccounts bumped
-    when (null holders) $
-      throwError $ "The wallet has no transaction " <> cs (txHashToHex bumped)
+    holders <-
+      maybe (throwError ("The wallet has no transaction " <> cs (txHashToHex bumped))) return . nonEmpty
+        =<< transactionAccounts bumped
     (accId, acc) <- accountAmong (\name -> "The transaction is not in the account " <> cs name) opts.account holders
     let net = accountNetwork acc
         store = webStore ctx cfg net
@@ -1609,9 +1633,9 @@ cmdPrepareSweep ctx cfg unit opts =
     -- The account of a destination is found by its address, an amount after
     -- it or not, before the network to read the amounts on is known
     holders <- accountsHolding (\net -> mapMaybe (recipientAddress net) opts.sweepTo)
-    case holders of
-      [] -> do
-        for_ opts.account $ \name -> getAccountByName (Just name) >> throwError (paysNo name)
+    case nonEmpty holders of
+      Nothing -> do
+        for_ opts.account $ \name -> getAccountByName name >> throwError (paysNo name)
         net <-
           liftMaybe
             "Give the --network of a sweep that pays no account of the wallet: the default-network of the configuration file does not apply to it"
@@ -1622,11 +1646,11 @@ cmdPrepareSweep ctx cfg unit opts =
         info <- liftEither $ parseOutsideTxSignData net ctx tsd
         writeOutput ctx Nothing net opts.output info tsd
         return $ ResponseOutsideTx net info
-      _ -> do
+      Just paid -> do
         -- The addresses of the wallet it pays name their account
         unless (length (nub (accountNetwork . snd <$> holders)) == 1) $
           throwError "The sweep pays accounts of several networks"
-        (accId, acc) <- accountAmong paysNo opts.account holders
+        (accId, acc) <- accountAmong paysNo opts.account paid
         let net = accountNetwork acc
         for_ opts.network $ \given ->
           unless (given == net) $

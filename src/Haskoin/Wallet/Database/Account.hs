@@ -7,7 +7,8 @@
 -- | The accounts of the wallet: an account of a network, of either kind
 -- ("Haskoin.Wallet.Keys".'AccountKind'), identified by its key, with the
 -- fingerprint of its seed once hw has learnt it, its balances and its
--- address counts.
+-- address counts. Also the account a command acts on, as the user names it
+-- or as the wallet's only or default account ('chooseAccount').
 module Haskoin.Wallet.Database.Account where
 
 import Conduit (MonadUnliftIO)
@@ -19,7 +20,9 @@ import Data.Aeson
 import Data.Aeson.Types (Pair, Parser)
 import qualified Data.Aeson.Types as Json
 import Data.Char (isControl)
-import Data.List (sortOn)
+import Data.List (find, sortOn)
+import Data.List.NonEmpty (NonEmpty)
+import qualified Data.List.NonEmpty as NonEmpty
 import Data.Maybe (fromJust, fromMaybe, isNothing)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -222,10 +225,36 @@ checkAccountName name
   | Text.strip name /= name = Left "The account name must not start or end with a space"
   | otherwise = Right ()
 
--- | Refuse a name that breaks the rules, or that an account has already
-checkNameFree :: (MonadUnliftIO m) => Text -> ExceptT String (DB m) ()
-checkNameFree name = do
+-- | The name of the default account of a network: default-btc for btc,
+-- default-bch for bch. A command that acts on one account takes the
+-- default account of its network when the wallet has several and no
+-- --account names one ('chooseAccount').
+--
+-- The default is a name, not a mark stored beside the account. The user
+-- makes an account the default with createacc or renameacc, and sees which
+-- one it is in every listing. No command or column of the database is
+-- needed to set it, clear it or show it. The cost is a name the user
+-- cannot give an account of another network ('checkDefaultName').
+defaultAccountName :: Network -> Text
+defaultAccountName net = "default-" <> cs net.name
+
+-- | Refuse the name of the default account of a network for an account of
+-- another network. Such an account would look like the default of a network
+-- it is not on, and commands on that network would not take it.
+checkDefaultName :: Network -> Text -> Either String ()
+checkDefaultName net name =
+  case find ((== name) . defaultAccountName) allNets of
+    Just owner
+      | owner /= net ->
+          Left $ "Only an account of " <> owner.name <> " can be named " <> cs name <> ", the default account of " <> owner.name
+    _ -> Right ()
+
+-- | Refuse a name that breaks the rules, that names the default account of
+-- another network than the account's, or that an account has already
+checkNameFree :: (MonadUnliftIO m) => Network -> Text -> ExceptT String (DB m) ()
+checkNameFree net name = do
   liftEither $ checkAccountName name
+  liftEither $ checkDefaultName net name
   taken <- lift $ existsAccount name
   when taken $ throwError $ "The account " <> cs name <> " already exists"
 
@@ -244,7 +273,7 @@ insertAccount ::
   Maybe Fingerprint ->
   ExceptT String (DB m) (DBAccountId, DBAccount)
 insertAccount kind net ctx name xpub fingerprintM = do
-  checkNameFree name
+  checkNameFree net name
   liftEither $ checkKindOnNetwork net kind
   holderM <- lift $ accountWithKey net ctx xpub
   forM_ holderM $ throwError . keyTaken . snd
@@ -289,45 +318,123 @@ deleteAccount accId = do
   delete . from $ \b -> where_ $ b ^. DBSyncedBlockAccount ==. val accId
   P.delete accId
 
--- | The account of a name, which must exist. Without a name, the one
--- account of the wallet, when it has exactly one.
+-- | The account of a name, which must exist
 getAccountByName ::
   (MonadUnliftIO m) =>
-  Maybe Text ->
+  Text ->
   ExceptT String (DB m) (DBAccountId, DBAccount)
-getAccountByName (Just name) = do
+getAccountByName name = do
   aM <- lift $ P.getBy $ UniqueName name
   case aM of
     Just a -> return (entityKey a, entityVal a)
     _ -> throwError $ "The account " <> cs name <> " does not exist"
-getAccountByName Nothing = do
-  as <- lift getAccounts
-  case as of
-    [a] -> return a
-    [] -> throwError "There are no accounts in the wallet"
-    _ -> throwError "Specify which account to use"
+
+{- The account a command acts on -}
+
+-- | How the user names the account of a command that acts on one account:
+-- by --account, by --network, whose default account to take, or by
+-- neither. The parser gives both as typed, and 'chooseAccount' finds the
+-- account. The default network of the configuration is not part of it,
+-- since the parser does not read the configuration.
+data AccountChoice = AccountChoice
+  { -- | The name --account gives
+    namedAccount :: !(Maybe Text),
+    -- | The network --network gives
+    namedNetwork :: !(Maybe Network)
+  }
+  deriving (Eq, Show)
+
+-- | The account of a command that acts on one account, as the user chose
+-- it, in this order:
+--
+-- 1. The account --account names.
+-- 2. Without --account, the only account of the wallet.
+-- 3. In a wallet of several accounts, the default account of the network
+--    of --network, or of the network given here without one: default-btc
+--    for btc ('defaultAccountName').
+--
+-- Without such a default account, the user must name the account with
+-- --account. An account chosen by its name, or as the only one, must be
+-- on the network of --network when one is given.
+--
+-- The only account comes before the default account, as it did before
+-- default accounts, so a wallet of one account never needs a name. The
+-- network given here, the default network of the configuration, applies
+-- to the third step only. A wallet whose only account is on bch thus keeps
+-- using it, whatever that network is.
+--
+-- The default account is looked up by name and network together. An
+-- account named default-btc on another network, which an earlier hw could
+-- create, is not the default account of btc, so a command never acts on
+-- an account of a network the user did not mean.
+chooseAccount ::
+  (MonadUnliftIO m) =>
+  Network ->
+  AccountChoice ->
+  ExceptT String (DB m) (DBAccountId, DBAccount)
+chooseAccount fallback choice = do
+  chosen <- case choice.namedAccount of
+    Just name -> getAccountByName name
+    Nothing -> do
+      accounts <- lift getAccounts
+      case accounts of
+        [] -> throwError "There are no accounts in the wallet"
+        [only] -> return only
+        _ -> defaultAccountOn (fromMaybe fallback choice.namedNetwork)
+  liftEither $ checkOnNetwork choice.namedNetwork (snd chosen)
+  return chosen
+
+-- | The default account of a network, which the wallet must have
+defaultAccountOn ::
+  (MonadUnliftIO m) =>
+  Network ->
+  ExceptT String (DB m) (DBAccountId, DBAccount)
+defaultAccountOn net = do
+  found <- lift $ P.getBy $ UniqueName name
+  case found of
+    Just a | accountNetwork (entityVal a) == net -> return (entityPair a)
+    _ ->
+      throwError $
+        "Specify which account to use with --account: the wallet has several, and none is "
+          <> cs name
+          <> ", the default account of "
+          <> net.name
+  where
+    name = defaultAccountName net
+
+-- | Refuse an account that is not on the network --network gives, if any
+checkOnNetwork :: Maybe Network -> DBAccount -> Either String ()
+checkOnNetwork (Just net) acc
+  | accountNetwork acc /= net =
+      Left $ "The account " <> cs (dBAccountName acc) <> " is on " <> cs (dBAccountNetwork acc) <> ", not on the --network " <> net.name
+checkOnNetwork _ _ = Right ()
 
 -- | The account a command acts on, among the accounts its data points to:
 -- the coins it spends or the transaction it reads, for instance. The
 -- account --account names must be one of them, or the command stops with
 -- the refusal of that name. Without --account, the account is the only one
 -- the data points to, and the user is asked for --account when it points
--- to several. Data that points to no account leaves the choice to
--- --account, or to the only account of the wallet.
+-- to several.
+--
+-- The default account of a network does not settle the choice among
+-- several. A transaction between two accounts of the wallet is signed,
+-- imported or bumped in the account that made it, and guessing the
+-- default one could sign or keep it in the wrong one. Data that points to
+-- no account is not for this function: the command chooses its account as
+-- 'chooseAccount' does.
 accountAmong ::
   (MonadUnliftIO m) =>
   (Text -> String) ->
   Maybe Text ->
-  [(DBAccountId, DBAccount)] ->
+  NonEmpty (DBAccountId, DBAccount) ->
   ExceptT String (DB m) (DBAccountId, DBAccount)
 accountAmong refused (Just name) candidates = do
-  named <- getAccountByName (Just name)
-  unless (null candidates || fst named `elem` (fst <$> candidates)) $
+  named <- getAccountByName name
+  unless (fst named `elem` (fst <$> candidates)) $
     throwError (refused name)
   return named
 accountAmong _ Nothing candidates =
-  case candidates of
-    [] -> getAccountByName Nothing
+  case NonEmpty.toList candidates of
     [one] -> return one
     _ -> throwError "Specify which account to use"
 
@@ -340,7 +447,7 @@ getAccountsByName ::
   (MonadUnliftIO m) =>
   Maybe Text ->
   ExceptT String (DB m) [(DBAccountId, DBAccount)]
-getAccountsByName (Just name) = (: []) <$> getAccountByName (Just name)
+getAccountsByName (Just name) = (: []) <$> getAccountByName name
 getAccountsByName Nothing = lift getAccounts
 
 getAccountById ::
@@ -364,15 +471,16 @@ getAccountNames = map (dBAccountName . entityVal) <$> P.selectList [] [P.Asc DBA
 renameAccount ::
   (MonadUnliftIO m) => Text -> Text -> ExceptT String (DB m) DBAccount
 renameAccount oldName newName
-  | oldName == newName = snd <$> getAccountByName (Just oldName)
+  | oldName == newName = snd <$> getAccountByName oldName
   | otherwise = do
-      checkNameFree newName
-      renamed <-
-        lift . updateCount $ \a -> do
-          set a [DBAccountName =. val newName]
-          where_ $ a ^. DBAccountName ==. val oldName
-      when (renamed == 0) $ throwError $ "The account " <> cs oldName <> " does not exist"
-      snd <$> getAccountByName (Just newName)
+      (_, acc) <- getAccountByName oldName
+      -- The network of the account says whether it can take the name of a
+      -- default account
+      checkNameFree (accountNetwork acc) newName
+      lift . update $ \a -> do
+        set a [DBAccountName =. val newName]
+        where_ $ a ^. DBAccountName ==. val oldName
+      snd <$> getAccountByName newName
 
 -- | What the account holds, confirmed or not: the balance after its
 -- newest transaction. A spend lowers the side of the balance its coin was

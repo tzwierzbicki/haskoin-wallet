@@ -43,6 +43,7 @@ What `hw` does:
 - [Using `hw`](#using-hw)
   - [Getting help](#getting-help)
   - [Options of every command](#options-of-every-command)
+  - [The account of a command](#the-account-of-a-command)
   - [Amounts](#amounts)
   - [Listings](#listings)
   - [Short ids](#short-ids)
@@ -216,6 +217,53 @@ These options work with every command, before or after it:
 | `--unit UNIT` | Sets the unit of the amounts shown, and of the amounts typed without a unit: `btc`, `bit` or `sat`. A bit is 100 satoshis. The default is the key `unit` of the [configuration](#configuration), or `btc`. |
 | `--json` | Prints the answer as JSON. Questions and warnings go to stderr. |
 | `--no-pager` | Prints a listing as it is, through no pager. |
+
+### The account of a command
+
+Many commands act on one account: `receive`, `show`, `addresses`, `balances`,
+`coins`, `txs`, `preparetx`, `preparesendall` and `checkmnemonic`. `--account`
+names it. Without `--account`, the command takes:
+
+1. The only account, in a wallet of one account.
+2. The default account of the network, in a wallet of several accounts. It is
+   the account named `default-` and the name of the network: `default-btc` on
+   `btc`, `default-bch` on `bch`. `--network` names the network. Without it,
+   the network is the `default-network` of the
+   [configuration](#configuration), or `btc`.
+
+Without a default account on that network, the command asks for `--account`.
+Make an account the default with [`createacc`](#hw-createacc) or
+[`renameacc`](#hw-renameacc):
+
+```console
+hw renameacc main default-btc               # main is now the default on btc
+hw createacc default-bch --network bch      # and this one on bch
+hw receive                                  # an address of default-btc
+hw receive --network bch                    # an address of default-bch
+hw preparetx ADDRESS:0.01 --network bch --fee-rate low
+```
+
+The default is a name rather than a setting, so `accounts` shows it, and a
+file of [`exportacc`](#hw-exportacc) carries it to another wallet.
+
+> **Good to know**
+>
+> - **Only an account of `btc` can be named `default-btc`.** `createacc`,
+>   `renameacc` and `importacc` refuse that name for an account of another
+>   network. It would look like the default of a network it is not on.
+> - **`--network` and `--account` must agree.** With both, the account must be
+>   on that network, and the command refuses it otherwise.
+> - **A wallet of one account takes it on any network.** The
+>   `default-network` does not pass it over. `--network` must then be its
+>   network.
+> - **Some commands find the account themselves.** `signtx`, `importtx`,
+>   `bumpfee` and `preparesweep` take the account of the transaction, and
+>   `preparetx --coin` or `--spend-from` the account of the coins. When a
+>   transaction involves two accounts, the default account does not choose
+>   between them. Give `--account`.
+> - **A command of every account stays one of every account.** Without
+>   `--account`, `accounts`, `sync`, `pendingtxs`, `exportacc` and
+>   `exportsheet` act on every account, not on the default one.
 
 ### Amounts
 
@@ -530,6 +578,7 @@ to test a mnemonic you wrote down, or the shares of a backup. Nothing is signed.
 
 ```console
 hw checkmnemonic --account savings
+hw checkmnemonic --network bch              # default-bch, in a wallet of several accounts
 ```
 
 When they do not match, it says if they give the key at another path. An account
@@ -684,7 +733,12 @@ descriptor back.
 
 ```console
 hw renameacc savings rainy-day
+hw renameacc rainy-day default-btc          # the default account of btc
 ```
+
+The name `default-btc` makes an account the default account of `btc`, as
+[The account of a command](#the-account-of-a-command) explains. Only an
+account of `btc` can take it.
 
 #### `hw deleteacc`
 
@@ -867,7 +921,12 @@ as with `importacc`.
 >   out the newest address again, as it is. Run `receive` for a new one.
 > - **`--account` goes with a path, a transaction, a transaction file, or no
 >   word.** An address, a coin and a file of accounts tell their accounts, so
->   `show` refuses `--account` with them. `--network` goes with a file only.
+>   `show` refuses `--account` with them.
+> - **`--network` goes with a path, a file, or no word.** With a path or no
+>   word, it names the network of the default account. With a file, it is the
+>   network of a file that names none. An address, a transaction and a coin
+>   are on the network of their account, so `show` refuses `--network` with
+>   them.
 > - **A file that involves two accounts needs `--account`.** A transaction the
 >   wallet holds is shown once for each account instead.
 > - **A file named like a hash, an address or a path is taken for one.** Type
@@ -1546,7 +1605,7 @@ On its first command, `hw` creates the directory `~/.hw`. It holds the database
 | Key | Default | What it sets |
 |---|---|---|
 | `host` | `https://api.haskoin.com/` | The haskoin-store server |
-| `default-network` | `btc` | The network of a command given no `--network`. `recover` searches `btc` and `bch` instead. |
+| `default-network` | `btc` | The network of a command given no `--network`, and of the [default account](#the-account-of-a-command) a command takes. `recover` searches `btc` and `bch` instead. |
 | `unit` | `btc` | The unit of the amounts of a command given no `--unit`: `btc`, `bit` or `sat` |
 | `listing-view` | `compact` | The [view of a listing](#listings) given no `--compact`, `--verbose` or `--tabular`: `compact`, `verbose` or `tabular` |
 | `gap` | `20` | How many unused addresses in a row `receive` gives out and `sync` looks at |

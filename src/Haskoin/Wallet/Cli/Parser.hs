@@ -36,6 +36,7 @@ import Haskoin.Wallet.Cli.Completion
     shownTargets,
     walletAddresses,
   )
+import Haskoin.Wallet.Database.Account (AccountChoice (..))
 import Haskoin.Wallet.Database.Address (AddrType, readChainPath)
 import Haskoin.Wallet.Tx.FeeRates (FeeRateChoice, readFeeRateChoice)
 import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), kindNamed, kindNames)
@@ -63,7 +64,7 @@ data Command
     CommandCreateAcc !Text !(Maybe Network) !AccountKind
   | CommandRecover !Recover
   | -- | The account whose mnemonic to check
-    CommandCheckMnemonic !(Maybe Text)
+    CommandCheckMnemonic !AccountChoice
   | -- | The network of a key the file places on none, unless the default
     -- one, the kind of a key the file says no kind of, unless BIP44, and
     -- the file of accounts and labels to import
@@ -84,14 +85,14 @@ data Command
     CommandShow !(Maybe Text) !(Maybe Shown) !(Maybe Network)
   | -- | The account, whether its change addresses, how to show each
     -- address or the CSV file to write them to, and the page
-    CommandAddresses !(Maybe Text) !Bool !ListingOutput !(Paging Text)
+    CommandAddresses !AccountChoice !Bool !ListingOutput !(Paging Text)
   | -- | The account, how to show each address or the CSV file to write
     -- them to, and the page
-    CommandBalances !(Maybe Text) !ListingOutput !(Paging Text)
+    CommandBalances !AccountChoice !ListingOutput !(Paging Text)
   | CommandLabel !Label
   | -- | The account, how to show each transaction or the CSV file to
     -- write them to, and the page
-    CommandTxs !(Maybe Text) !ListingOutput !(Paging HashRef)
+    CommandTxs !AccountChoice !ListingOutput !(Paging HashRef)
   | CommandPrepareTx !PrepareTx
   | CommandPrepareSendAll !PrepareSendAll
   | -- | The account, or every one, how to show each transaction or the
@@ -112,7 +113,7 @@ data Command
   | CommandVerifyMsg !VerifyMsg
   | -- | The account, whether the locked coins only, how to show each
     -- coin or the CSV file to write them to, and the page
-    CommandCoins !(Maybe Text) !Bool !ListingOutput !(Paging CoinRef)
+    CommandCoins !AccountChoice !Bool !ListingOutput !(Paging CoinRef)
   | CommandLockCoin !CoinRef
   | CommandUnlockCoin !CoinRef
   | -- | A pending transaction, by its txid or its nosigHash, in full or by
@@ -244,7 +245,7 @@ data RenameAcc = RenameAcc
 
 -- | The options of receive
 data Receive = Receive
-  { account :: !(Maybe Text),
+  { account :: !AccountChoice,
     label :: !(Maybe Text)
   }
   deriving (Eq, Show)
@@ -321,7 +322,8 @@ readShown word
 data PrepareTx = PrepareTx
   { -- | The addresses paid, each with its amount, as typed: ADDRESS:AMOUNT
     recipients :: ![Text],
-    account :: !(Maybe Text),
+    -- | The account to pay from, unless the coins of coin control tell it
+    account :: !AccountChoice,
     -- | The fee rate: a number of satoshis per virtual byte or a level of the
     -- rates recent blocks paid, or none to ask the user from those rates
     feeRate :: !(Maybe FeeRateChoice),
@@ -368,7 +370,8 @@ data PrepareSendAll = PrepareSendAll
   { -- | The recipients as typed: an address, or an address and its amount,
     -- ADDRESS:AMOUNT
     recipients :: ![Text],
-    account :: !(Maybe Text),
+    -- | The account to pay from, unless the coins of coin control tell it
+    account :: !AccountChoice,
     -- | The fee rate: a number of satoshis per virtual byte or a level of the
     -- rates recent blocks paid, or none to ask the user from those rates
     feeRate :: !(Maybe FeeRateChoice),
@@ -527,6 +530,14 @@ A command that takes a hash, or a coin TXID:INDEX, also takes its short id:
 the first 8 digits of the hash, as the listings show it, such as a1075db5, or
 a1075db5:1 for a coin. When two transactions of the wallet share those 8
 digits, hw names both and asks for the full hash.
+
+A command that acts on one account, such as receive, takes the only account of
+the wallet. In a wallet of several accounts, it takes the default account of
+the network: the account named default-btc on btc, or default-bch on bch. Give
+--account to use another one. --network names the network of the default
+account. Without it, that is the default-network of the configuration file, or
+btc. Name an account default-btc with createacc or renameacc to make it the
+default.
 
 To sign on an offline computer, create the account there with createacc. Copy
 it to the online computer with exportacc and importacc. Then carry each
@@ -1025,12 +1036,28 @@ or of another network. checkmnemonic then says so, with the --type or the
 |],
       args =
         CommandCheckMnemonic
-          <$> accountOption
+          <$> accountChoiceOption
     }
 
--- | The account of a command, which the wallet's only account is without it
-accountOption :: Args (Maybe Text)
-accountOption = accountOptionWith "The account to use. Needed only when the wallet has more than one."
+-- | The account of a command that acts on one account: the one --account
+-- names, or the only one of the wallet, or the default account of the
+-- --network ('Haskoin.Wallet.Database.Account.chooseAccount')
+accountChoiceOption :: Args AccountChoice
+accountChoiceOption =
+  accountChoiceWith "The account to use. Without it, the only account of the wallet, or else the default account of the network, such as default-btc."
+
+-- | The --account and --network of a command that acts on one account,
+-- with the help of the command about --account. --network comes with
+-- --account, since it names an account too: the default account of the
+-- network.
+accountChoiceWith :: String -> Args AccountChoice
+accountChoiceWith what = AccountChoice <$> accountOptionWith what <*> defaultAccountNetworkOption
+
+-- | The network whose default account a command takes, when given
+defaultAccountNetworkOption :: Args (Maybe Network)
+defaultAccountNetworkOption =
+  networkOptionWith
+    "In a wallet of several accounts, the command uses the default account of this network, such as default-bch, when no --account is given. Without it, the default-network of the configuration file, or btc. With --account, it must be the network of the account."
 
 -- | The account of a command that acts on every account without it
 onlyAccountOption :: Args (Maybe Text)
@@ -1259,7 +1286,7 @@ scan. The code holds a payment URI with the address and nothing else, so it does
 not hold the label. Piped into another program, or with --json, `receive` gives
 the text alone.
 |],
-      args = CommandReceive <$> (Receive <$> accountOption <*> labelOption)
+      args = CommandReceive <$> (Receive <$> accountChoiceOption <*> labelOption)
     }
 
 labelOption :: Args (Maybe Text)
@@ -1354,10 +1381,17 @@ for. An account the file names no network for is taken on --network, or the
 default-network of the configuration file, and a key that says no kind is
 taken for a bip44 account, as importacc takes them.
 
---account names the account of a path and of the newest address. With a
-transaction or a transaction file, it keeps the view of that account. An
-address, a coin and a file of accounts tell their accounts, so `show` refuses
---account with them. --network goes with a file only.
+--account names the account of a path and of the newest address. Without it,
+they are of the only account of the wallet, or else of the default account of
+the network, such as default-btc. With a transaction or a transaction file,
+--account keeps the view of that account. An address, a coin and a file of
+accounts tell their accounts, so `show` refuses --account with them.
+
+--network goes with a path, with nothing to show, and with a file. With a path
+or nothing, it names the network of the default account. With a file, it is the
+network of a file that names none. An address, a transaction and a coin are of
+an account, on the network of the account, so `show` refuses --network with
+them.
 |],
       args =
         (\shown account network -> CommandShow account shown network)
@@ -1393,13 +1427,16 @@ shownCompletion typed = do
 -- | The --account of show, which goes with some of what it shows only
 showAccountOption :: Args (Maybe Text)
 showAccountOption =
-  accountOptionWith "The account of the path or of the newest address. Needed only when the wallet has more than one. With a transaction or a transaction file, the account whose view to show."
+  accountOptionWith "The account of the path or of the newest address. Without it, the only account of the wallet, or else the default account of the network, such as default-btc. With a transaction or a transaction file, the account whose view to show."
 
--- | The --network of show, which goes with a file only. What else show
--- shows is of an account, on the network of the account.
+-- | The --network of show, which goes with a path, with nothing to show,
+-- and with a file. With a path or nothing, it names the default account
+-- to show it of, as for receive. With a file, it is the network of a file
+-- of another wallet, which may name none. An address, a transaction and a
+-- coin are of an account, on the network of the account.
 showNetworkOption :: Args (Maybe Network)
 showNetworkOption =
-  networkOptionWith "With a file only, as a file of another wallet needs it: for a transaction file that names no network and involves no account of this wallet, or for an account that a file of accounts names no network for. Without it, the default-network of the configuration file."
+  networkOptionWith "With a path or with nothing to show, the network of the default account to use, such as default-bch, when no --account is given. With a file, the network of a transaction file that names none and involves no account of this wallet, or of an account that a file of accounts names no network for. Without it, the default-network of the configuration file, and btc for a default account."
 
 {- addresses -}
 
@@ -1433,7 +1470,7 @@ transactions, and when it was created. Amounts are in satoshis, and times in UTC
 |],
       args =
         CommandAddresses
-          <$> accountOption
+          <$> accountChoiceOption
           <*> changeAddressesOption
           <*> listingOutputOption
             "Show every detail of each address: its transactions, what it received, its balances, its coins, and when it was created."
@@ -1511,7 +1548,7 @@ the three parts it cannot, and its coins. Amounts are in satoshis.
 |],
       args =
         CommandBalances
-          <$> accountOption
+          <$> accountChoiceOption
           <*> listingOutputOption
             "Show every detail of each address: its total and its coins, its spendable amount, and what pending transactions lock, what you lock, and what is not spendable yet."
             "Show each address on one row of a table: its path, the address, its total, spendable and unspendable amounts, and its label."
@@ -1613,7 +1650,7 @@ other addresses it pays. Amounts are in satoshis, and times in UTC.
 |],
       args =
         CommandTxs
-          <$> accountOption
+          <$> accountChoiceOption
           <*> listingOutputOption
             txVerboseHelp
             "Show each transaction on one row of a table: its short id, time, type, amount, balance and confirmations, then what it is for: its label, the path of an address of the wallet, or the address paid."
@@ -1737,9 +1774,9 @@ underCoins :: Args a -> Args a
 underCoins = optionGroup "Coins"
 
 -- | The account a payment spends from, which coin control can tell
-payingAccountOption :: Args (Maybe Text)
+payingAccountOption :: Args AccountChoice
 payingAccountOption =
-  accountOptionWith "The account to pay from. Needed only when the wallet has more than one, and no --coin or --spend-from tells it."
+  accountChoiceWith "The account to pay from. Without it, the account of the --coin or --spend-from given, or else the only account of the wallet, or else the default account of the network, such as default-btc."
 
 -- | Where the change of preparetx goes, when the command says
 changeBackOption :: Args (Maybe Bool)
@@ -2242,7 +2279,7 @@ unlockcoin.
 |],
       args =
         CommandCoins
-          <$> accountOption
+          <$> accountChoiceOption
           <*> lockedOption
           <*> listingOutputOption
             "Show every detail of each coin: the full count of its confirmations, the label of its transaction, the coin in full and its short id, the block that holds it, the time of its transaction, and its address in full with its path."

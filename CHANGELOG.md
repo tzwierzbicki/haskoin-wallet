@@ -54,6 +54,14 @@ Accounts and backups:
 - `exportacc` and `importacc` use the BIP329 format. The file carries the
   accounts, their labels and their locked coins. `show FILE` shows what
   `importacc` would make of such a file, and changes nothing.
+- Default accounts. In a wallet of several accounts, a command that acts on one
+  account takes the account named `default-btc` on Bitcoin, `default-bch` on
+  Bitcoin Cash, and so on, without `--account`. `--network` names the network
+  of the default account, and without it the `default-network` of the
+  configuration, or `btc`. `receive`, `show`, `addresses`, `balances`, `coins`,
+  `txs`, `preparetx`, `preparesendall` and `checkmnemonic` take `--network`
+  for it. Only an account of a network can take the name of its default
+  account. A wallet of one account still needs no `--account`.
 
 Addresses:
 

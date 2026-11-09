@@ -115,7 +115,7 @@ accountNamed = go . takeWhile (/= "--")
 -- account has gives none.
 accountsNamed :: Maybe Text -> DB IO [(DBAccountId, DBAccount)]
 accountsNamed Nothing = getAccounts
-accountsNamed (Just name) = either (const []) pure <$> runExceptT (getAccountByName (Just name))
+accountsNamed (Just name) = either (const []) pure <$> runExceptT (getAccountByName name)
 
 {- The pending transactions -}
 

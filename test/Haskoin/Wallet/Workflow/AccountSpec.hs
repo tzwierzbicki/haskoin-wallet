@@ -36,6 +36,7 @@ import Test.Hspec
 spec :: Spec
 spec = prepareContext $ \ctx -> do
   accountSpec
+  defaultAccountSpec
   segwitSpec ctx
   descriptorSpec
   addressSpec ctx
@@ -46,6 +47,73 @@ spec = prepareContext $ \ctx -> do
   backupSpec
   recoverSpec ctx
   passphraseSpec ctx
+
+{- The default account of a network -}
+
+-- In a wallet of several accounts, a command that acts on one account
+-- takes the one named default-btc on btc, default-bch on bch. main is
+-- account 0 of the test seed on btc, and a second account on btc is
+-- account 1, whose first receiving address is
+-- 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo. The first account of the seed on
+-- bch is account 0, whose first receiving address is
+-- bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u. The
+-- configuration file of the test home names btc.
+defaultAccountSpec :: Spec
+defaultAccountSpec =
+  describe "The default account of a network" $ do
+    it "is the account receive gives an address of, in a wallet of several accounts" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "default-btc"] seedTwice
+        (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [("17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "")]
+
+    it "is that of the --network given, which checkmnemonic --network bch checks" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "default-bch", "--network", "bch"] seedTwice
+        checked <- hwJson home ["checkmnemonic", "--network", "bch"] seedOnce
+        checked `shouldSatisfy` \case ResponseAccResult acc True _ -> dBAccountName acc == "default-bch"; _ -> False
+
+    it "is that of the default-network of the configuration file without --network" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "default-bch", "--network", "bch"] seedTwice
+        setDefaultNetwork home (Just "bch")
+        (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [("bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u", "")]
+
+    it "is that of btc when the configuration file names no default network" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "default-btc"] seedTwice
+        setDefaultNetwork home Nothing
+        (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [("17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "")]
+
+    it "is made by renameacc, which gives an account its name" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "second"] seedTwice
+        _ <- answer home ["renameacc", "second", "default-btc"] []
+        (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [("17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "")]
+
+    it "is missing from a wallet of several accounts none of which has its name, and the user is asked for --account" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "second"] seedTwice
+        (errorOf <$> hwJson home ["receive"] [])
+          `shouldReturn` Right "Specify which account to use with --account: the wallet has several, and none is default-btc, the default account of btc"
+
+    it "cannot be of another network: createacc refuses default-btc on bch, before the mnemonic is asked" $
+      withHome $ \home -> do
+        run <- hw home ["createacc", "default-btc", "--network", "bch"] seedTwice
+        runExit run `shouldBe` ExitFailure 1
+        run `shouldSatisfy` printed "Only an account of btc can be named default-btc, the default account of btc"
+        run `shouldNotSatisfy` askedMnemonic
+
+    it "is not what --account and --network name together: the account must be on the network" $
+      withHome $ \home -> do
+        createMain home
+        (errorOf <$> hwJson home ["receive", "--account", "main", "--network", "bch"] [])
+          `shouldReturn` Right "The account main is on btc, not on the --network bch"
 
 {- An account -}
 

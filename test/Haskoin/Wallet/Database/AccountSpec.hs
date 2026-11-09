@@ -14,6 +14,7 @@ import Control.Monad.Trans (lift)
 import Data.Aeson (eitherDecode, toJSON)
 import Data.Aeson.Types (parseEither)
 import Data.Default (def)
+import qualified Data.List.NonEmpty as NonEmpty
 import Data.Maybe (fromJust)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
@@ -209,26 +210,100 @@ namingSpec ctx = do
       inDatabaseE $ do
         (accId, acc) <- testNewAcc ctx "main"
         _ <- testNewAcc ctx "savings"
-        getAccountByName (Just "main") `dbShouldBeE` (accId, acc)
-
-    it "finds the only account without a name" $
-      inDatabaseE $ do
-        (accId, acc) <- testNewAcc ctx "main"
-        getAccountByName Nothing `dbShouldBeE` (accId, acc)
-
-    it "needs a name when there are several accounts" $
-      inDatabaseE $ do
-        _ <- testNewAcc ctx "main"
-        _ <- testNewAcc ctx "savings"
-        lift $ dbShouldFailWith "Specify which account to use" $ getAccountByName Nothing
-
-    it "has none to find in an empty wallet" $
-      inDatabaseE $ lift $ dbShouldFailWith "There are no accounts in the wallet" $ getAccountByName Nothing
+        getAccountByName "main" `dbShouldBeE` (accId, acc)
 
     it "knows no account of a name it does not have" $
       inDatabaseE $ do
         _ <- testNewAcc ctx "main"
-        lift $ dbShouldFailWith "The account nobody does not exist" $ getAccountByName (Just "nobody")
+        lift $ dbShouldFailWith "The account nobody does not exist" $ getAccountByName "nobody"
+
+  -- As a command that acts on one account takes it: by --account, as the
+  -- only one, or as the default account of the network. The first
+  -- argument of chooseAccount is the default network of the configuration.
+  describe "Choosing the account of a command" $ do
+    let byName name = AccountChoice (Just name) Nothing
+        byNetwork net = AccountChoice Nothing (Just net)
+        unnamed = AccountChoice Nothing Nothing
+    it "is the account --account names, in a wallet of several" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        savingsAcc <- testNewAcc ctx "savings"
+        chooseAccount btc (byName "savings") `dbShouldBeE` savingsAcc
+
+    it "is the only account of the wallet without --account" $
+      inDatabaseE $ do
+        mainAcc <- testNewAcc ctx "main"
+        chooseAccount btc unnamed `dbShouldBeE` mainAcc
+
+    it "is the only account of the wallet, on bch, though the default network is btc" $
+      inDatabaseE $ do
+        cashAcc <- testNewAccBch ctx "cash"
+        chooseAccount btc unnamed `dbShouldBeE` cashAcc
+
+    it "is default-btc in a wallet of several accounts, when the default network is btc" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        defaultAcc <- testNewAcc ctx "default-btc"
+        _ <- testNewAcc ctx "savings"
+        chooseAccount btc unnamed `dbShouldBeE` defaultAcc
+
+    it "is default-bch without --network, when the default network is bch" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "default-btc"
+        cashAcc <- testNewAccBch ctx "default-bch"
+        chooseAccount bch unnamed `dbShouldBeE` cashAcc
+
+    it "is the default account of the --network, whatever the default network" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "default-btc"
+        cashAcc <- testNewAccBch ctx "default-bch"
+        chooseAccount btc (byNetwork bch) `dbShouldBeE` cashAcc
+
+    it "asks for --account in a wallet of several accounts and no default account, naming the one it looked for" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        _ <- testNewAcc ctx "savings"
+        lift $
+          dbShouldFailWith "Specify which account to use with --account: the wallet has several, and none is default-btc, the default account of btc" $
+            chooseAccount btc unnamed
+
+    it "does not take the default account of another network" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        _ <- testNewAccBch ctx "default-bch"
+        lift $
+          dbShouldFailWith "Specify which account to use with --account: the wallet has several, and none is default-btc, the default account of btc" $
+            chooseAccount btc unnamed
+
+    -- An earlier hw let an account of bch be named default-btc
+    it "does not take an account named default-btc on bch for the default account of btc" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        (cashId, _) <- testNewAccBch ctx "cash"
+        lift $ P.update cashId [DBAccountName P.=. "default-btc"]
+        lift $
+          dbShouldFailWith "Specify which account to use with --account: the wallet has several, and none is default-btc, the default account of btc" $
+            chooseAccount btc unnamed
+
+    it "refuses the account --account names when it is not on the --network" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        lift $
+          dbShouldFailWith "The account main is on btc, not on the --network bch" $
+            chooseAccount btc (AccountChoice (Just "main") (Just bch))
+
+    it "refuses the only account of the wallet when it is not on the --network" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        lift $ dbShouldFailWith "The account main is on btc, not on the --network bch" $ chooseAccount btc (byNetwork bch)
+
+    it "has none to choose in an empty wallet" $
+      inDatabaseE $ lift $ dbShouldFailWith "There are no accounts in the wallet" $ chooseAccount btc unnamed
+
+    it "knows no account of a name it does not have" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        lift $ dbShouldFailWith "The account nobody does not exist" $ chooseAccount btc (byName "nobody")
 
   -- As accounts and sync take them, with --account or without
   describe "Finding the accounts of a name" $ do
@@ -268,45 +343,71 @@ namingSpec ctx = do
       inDatabaseE $ do
         mainAcc <- testNewAcc ctx "main"
         savingsAcc <- testNewAcc ctx "savings"
-        accountAmong refused (Just "savings") [mainAcc, savingsAcc] `dbShouldBeE` savingsAcc
+        accountAmong refused (Just "savings") (NonEmpty.fromList [mainAcc, savingsAcc]) `dbShouldBeE` savingsAcc
 
     it "refuses an account --account names that is not among them" $
       inDatabaseE $ do
         mainAcc <- testNewAcc ctx "main"
         _ <- testNewAcc ctx "savings"
-        lift $ dbShouldFailWith "Not the account savings" $ accountAmong refused (Just "savings") [mainAcc]
+        lift $ dbShouldFailWith "Not the account savings" $ accountAmong refused (Just "savings") (NonEmpty.singleton mainAcc)
 
     it "refuses a name the wallet does not have" $
       inDatabaseE $ do
         mainAcc <- testNewAcc ctx "main"
-        lift $ dbShouldFailWith "The account nobody does not exist" $ accountAmong refused (Just "nobody") [mainAcc]
+        lift $ dbShouldFailWith "The account nobody does not exist" $ accountAmong refused (Just "nobody") (NonEmpty.singleton mainAcc)
 
     it "is the only one among them without --account" $
       inDatabaseE $ do
         _ <- testNewAcc ctx "main"
         savingsAcc <- testNewAcc ctx "savings"
-        accountAmong refused Nothing [savingsAcc] `dbShouldBeE` savingsAcc
+        accountAmong refused Nothing (NonEmpty.singleton savingsAcc) `dbShouldBeE` savingsAcc
 
     it "asks for --account when they are several" $
       inDatabaseE $ do
         mainAcc <- testNewAcc ctx "main"
         savingsAcc <- testNewAcc ctx "savings"
-        lift $ dbShouldFailWith "Specify which account to use" $ accountAmong refused Nothing [mainAcc, savingsAcc]
+        lift $ dbShouldFailWith "Specify which account to use" $ accountAmong refused Nothing (NonEmpty.fromList [mainAcc, savingsAcc])
 
-    it "is the account --account names, or the only one of the wallet, when the data points to none" $
+    it "asks for --account when they are several, though one of them is the default account" $
       inDatabaseE $ do
-        mainAcc <- testNewAcc ctx "main"
-        accountAmong refused Nothing [] `dbShouldBeE` mainAcc
+        defaultAcc <- testNewAcc ctx "default-btc"
         savingsAcc <- testNewAcc ctx "savings"
-        accountAmong refused (Just "savings") [] `dbShouldBeE` savingsAcc
-        lift $ dbShouldFailWith "Specify which account to use" $ accountAmong refused Nothing []
+        lift $ dbShouldFailWith "Specify which account to use" $ accountAmong refused Nothing (NonEmpty.fromList [defaultAcc, savingsAcc])
+
+  describe "The name of a default account" $ do
+    it "is default- and the name of the network" $ do
+      defaultAccountName btc `shouldBe` "default-btc"
+      defaultAccountName btcTest `shouldBe` "default-btctest"
+
+    it "is given to an account of its network" $
+      inDatabaseE $ do
+        (_, acc) <- testNewAccBch ctx "default-bch"
+        lift $ return (dBAccountName acc) `dbShouldBe` "default-bch"
+
+    it "is refused to an account of another network" $
+      inDatabaseE $
+        lift $
+          dbShouldFailWith "Only an account of btc can be named default-btc, the default account of btc" $
+            testNewAccBch ctx "default-btc"
+
+    it "is taken by renameacc for an account of its network" $
+      inDatabaseE $ do
+        (_, acc) <- testNewAcc ctx "main"
+        renameAccount "main" "default-btc" `dbShouldBeE` acc {dBAccountName = "default-btc"}
+
+    it "is refused by renameacc for an account of another network" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        lift $
+          dbShouldFailWith "Only an account of bch can be named default-bch, the default account of bch" $
+            renameAccount "main" "default-bch"
 
   describe "Renaming an account" $ do
     it "changes its name and nothing else" $
       inDatabaseE $ do
         (accId, acc) <- testNewAcc ctx "main"
         renameAccount "main" "salary" `dbShouldBeE` acc {dBAccountName = "salary"}
-        getAccountByName (Just "salary") `dbShouldBeE` (accId, acc {dBAccountName = "salary"})
+        getAccountByName "salary" `dbShouldBeE` (accId, acc {dBAccountName = "salary"})
 
     it "changes nothing when the name is the one it has" $
       inDatabaseE $ do
@@ -468,7 +569,7 @@ balanceSpec ctx =
           _ <- genExtAddress ctx def accId ""
           refreshCoins btc ctx accId [externalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
         -- Newest first: the second address holds nothing
-        addressSpendable <$> cmdAddresses wallet Nothing False (Paging Nothing Nothing)
+        addressSpendable <$> cmdAddresses wallet (AccountChoice Nothing Nothing) False (Paging Nothing Nothing)
           `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", 0), ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", 50000)]
 
     it "add up those of its addresses" $
