@@ -246,12 +246,14 @@ labelTargets typed = readForCompletion $ do
 
 {- What show shows -}
 
--- | What show shows, among what starts with the word typed: the addresses
--- of both chains, the pending transactions, by the hash pendingtxs shows,
--- the transactions of the history, by their ids, and the coins, as coins
--- lists them. Every account counts, since an address, a transaction and a
--- coin tell their account. Among more than 'offeredAtMost' of them all,
--- none. A path is not offered: it is short to type, as receive shows it.
+-- | What show shows of the wallet, among what starts with the word typed:
+-- the addresses of both chains, the pending transactions, by the hash
+-- pendingtxs shows, the transactions of the history, by their ids, and the
+-- coins, as coins lists them. Every account counts, since an address, a
+-- transaction and a coin tell their account. Among more than
+-- 'offeredAtMost' of them all, none. A path is not offered: it is short to
+-- type, as receive shows it. The files show takes are offered beside these
+-- by the parser of show, which knows what show reads as a file.
 shownTargets :: String -> IO [String]
 shownTargets typed = readForCompletion $ do
   accounts <- getAccounts

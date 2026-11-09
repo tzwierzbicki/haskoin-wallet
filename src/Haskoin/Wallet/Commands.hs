@@ -48,7 +48,6 @@ module Haskoin.Wallet.Commands
     -- * Transactions
     cmdTxs,
     cmdPendingTxs,
-    cmdReviewTx,
     cmdImportTx,
     cmdExportTx,
     cmdDeleteTx,
@@ -151,6 +150,7 @@ import Haskoin.Wallet.Tx.Size (checkFeeRate, highFeeRate)
 import Haskoin.Wallet.Tx.Sweep (buildSweepSignData, fetchSweepCoins, signTxWithKeys)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
+import System.Directory (doesPathExist)
 import System.IO (hPutStrLn, stderr)
 import System.Random (initStdGen)
 
@@ -176,7 +176,7 @@ commandResponse ctx cfg unit = \case
   CommandAccounts account _ -> cmdAccounts cfg account
   -- Addresses
   CommandReceive opts -> cmdReceive ctx cfg opts
-  CommandShow account shown -> cmdShow ctx cfg account shown
+  CommandShow account shown netM -> cmdShow ctx cfg account shown netM
   CommandAddresses account internal _ paging -> cmdAddresses cfg account internal paging
   CommandBalances account _ paging -> cmdBalances cfg account paging
   CommandLabel opts -> cmdLabel ctx cfg opts
@@ -187,7 +187,6 @@ commandResponse ctx cfg unit = \case
   -- Transactions
   CommandTxs account _ paging -> cmdTxs cfg account paging
   CommandPendingTxs account _ paging -> cmdPendingTxs ctx cfg account paging
-  CommandReviewTx account file netM -> cmdReviewTx ctx cfg account file netM
   CommandImportTx account file -> cmdImportTx ctx cfg account file
   CommandExportTx named file -> cmdExportTx ctx cfg named file
   CommandDeleteTx named -> cmdDeleteTx ctx cfg named
@@ -616,10 +615,15 @@ cmdReceive ctx cfg opts =
 -- word the newest receiving address of the account. Nothing is generated
 -- or stored. An address and a coin tell their account, so --account is
 -- refused with them rather than ignored: the user who typed it may have
--- meant another account, or another thing to show.
-cmdShow :: Ctx -> Config -> Maybe Text -> Maybe Shown -> IO Response
-cmdShow ctx cfg account shownM =
+-- meant another account, or another thing to show. --network is refused
+-- with all but a file for the same reason. The rest is of an account, on
+-- the network of the account.
+cmdShow :: Ctx -> Config -> Maybe Text -> Maybe Shown -> Maybe Network -> IO Response
+cmdShow ctx cfg account shownM netM =
   runDBResponse cfg $ case shownM of
+    Just (ShownFile file) -> shownFile ctx cfg account netM file
+    -- When the guard fails, the alternatives below are tried
+    _ | isJust netM -> throwError "show takes --network with a transaction file only, since the rest is on the network of its account"
     Nothing -> newestReceiving account
     Just (ShownPath addrType index) -> addressAtPath ctx account addrType index
     Just (ShownAddress typed) -> do
@@ -672,23 +676,42 @@ addressAtPath ctx account addrType index = do
 
 -- | An address of the wallet, however it is written, to give out again.
 -- The address tells its account. One the wallet does not hold is refused,
--- so that its QR code never pays anyone else. A word that is an address
--- on no network is none of what show shows, a short id with a digit
--- missing for instance, and the answer names the four things it can be.
+-- so that its QR code never pays anyone else.
 shownAddress :: Text -> ExceptT String (DB IO) Response
 shownAddress typed = do
   found <- lift $ findAddressByText typed
   case found of
     Just (_, addr) -> addressAnswer (dBAddressAccount addr) addr
-    Nothing
-      | any (\net -> isJust (textToAddr net typed)) allNets ->
-          throwError ("The wallet has no address " <> cs typed)
-      | otherwise ->
-          throwError $
-            cs typed
-              <> " is not a path, an address, a transaction or a coin: show takes a path such as /0/3,"
-              <> " an address of the wallet, a txid or a nosigHash, or a coin TXID:INDEX,"
-              <> " each hash in full or by its short id, its first 8 digits"
+    Nothing -> throwError ("The wallet has no address " <> cs typed)
+
+-- | The transaction of a file, as the account it involves sees it. One that
+-- involves no account is shown as outside the wallet, on the network of
+-- --network or of the configuration when the file names none. The wallet
+-- keeps nothing of it. The labels shown are those the file carries, not
+-- those of this wallet, since the file is what an offline computer has.
+--
+-- show takes for a file any word of no other shape ('readShown'). A word
+-- with no slash that names no file may have been meant as something else,
+-- a short id with a digit missing for instance. The answer then names the
+-- five kinds show takes. A word with a slash is a file path, and gets the
+-- answer of any command that reads a missing file.
+shownFile :: Ctx -> Config -> Maybe Text -> Maybe Network -> FilePath -> ExceptT String (DB IO) Response
+shownFile ctx cfg account givenM file = do
+  exists <- liftIO $ doesPathExist file
+  unless (exists || '/' `elem` file) $
+    throwError $
+      file
+        <> " is not a path, an address, a transaction or a coin, and no file has that name: show takes a path such as /0/3,"
+        <> " an address of the wallet, a txid or a nosigHash, a coin TXID:INDEX, or a transaction file,"
+        <> " each hash in full or by its short id, its first 8 digits"
+  TxFileRead txFile@(TxFile netM tsd _ _) _ <- readTxFileIn ctx (commandNetwork cfg givenM) file
+  named <- fileNetwork givenM netM
+  (accountM, completed) <- transactionAccount ctx account named tsd
+  case accountM of
+    Just (_, acc) -> ResponseTx acc <$> liftEither (parseTxFile (accountNetwork acc) ctx (accountKind acc) (accountXPubKey ctx acc) txFile {txFileData = completed})
+    Nothing -> do
+      net <- liftMaybe noFileNetwork (commandNetwork cfg named)
+      ResponseOutsideTx net <$> liftEither (parseOutsideTxSignData net ctx tsd)
 
 -- | A transaction of the wallet, pending or on the chain, as each account
 -- that holds it sees it, or as the account --account names sees it. The
@@ -856,23 +879,6 @@ pendingTxsListing ctx account paging = do
         -- column of accounts to the longest name
         listingWhole = True
       }
-
--- | Show the transaction of a file, as the account it involves sees it, or
--- as outside the wallet, on the network of --network or of the
--- configuration when the file names none, without keeping it. The labels
--- shown are those the file carries, not those of this wallet: the file is
--- what an offline computer has.
-cmdReviewTx :: Ctx -> Config -> Maybe Text -> FilePath -> Maybe Network -> IO Response
-cmdReviewTx ctx cfg account file givenM =
-  runDBResponse cfg $ do
-    TxFileRead txFile@(TxFile netM tsd _ _) _ <- readTxFileIn ctx (commandNetwork cfg givenM) file
-    named <- fileNetwork givenM netM
-    (accountM, completed) <- transactionAccount ctx account named tsd
-    case accountM of
-      Just (_, acc) -> ResponseTx acc <$> liftEither (parseTxFile (accountNetwork acc) ctx (accountKind acc) (accountXPubKey ctx acc) txFile {txFileData = completed})
-      Nothing -> do
-        net <- liftMaybe noFileNetwork (commandNetwork cfg named)
-        ResponseOutsideTx net <$> liftEither (parseOutsideTxSignData net ctx tsd)
 
 -- | Add the transaction of a file to the pending transactions of its
 -- account, and show it as the wallet holds it from now on: with the labels
@@ -1326,7 +1332,7 @@ transactionToSign ctx fallbackM signing = do
   return (accountM, TxFileRead txFile {txFileData = completed} sourceM, signedFile)
 
 -- | Show the transaction about to be signed, before the secret is asked
--- for, as reviewtx shows it: with the wallet's labels for a pending
+-- for, as show shows it: with the wallet's labels for a pending
 -- transaction, those of the file for a file. On stderr, as the questions,
 -- to keep the --json answer clean.
 showToSign :: Ctx -> AmountUnit -> Signing -> Network -> Maybe (DBAccountId, DBAccount) -> TxFile -> ExceptT String (DB IO) ()
@@ -1379,7 +1385,7 @@ keepSigned ctx net signing signedFile accId (TxFileRead file sourceM) signed inf
     fromWallet = isJust signing.nosigHash
 
 -- | Sign a transaction of the account with the key of its mnemonic, or of
--- the shares of its backup. The transaction is shown first, as reviewtx
+-- the shares of its backup. The transaction is shown first, as show
 -- shows it, so that the user sees what the mnemonic is typed for: the
 -- prompt is the confirmation, and an interrupt stops it.
 cmdSignTx :: Ctx -> Config -> AmountUnit -> Signing -> IO Response

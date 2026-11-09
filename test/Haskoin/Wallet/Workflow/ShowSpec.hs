@@ -3,15 +3,18 @@
 -- | What show shows of the wallet, from the word typed: an address by its
 -- path, derived as an offline computer checks it, and cut when the wallet
 -- does not hold it ("Haskoin.Wallet.CutAddress"), the newest receiving
--- address without a word, a transaction by either of its hashes, and a
--- coin. Then what show refuses. The addresses typed in full, and the QR
--- codes show draws, are with the other screens in
--- "Haskoin.Wallet.Workflow.OutputSpec".
+-- address without a word, a transaction by either of its hashes, a coin,
+-- and a transaction file by its name. Then what show refuses. The
+-- addresses typed in full, and the QR codes show draws, are with the other
+-- screens in "Haskoin.Wallet.Workflow.OutputSpec". What a file holds, and
+-- how show reads the files of other wallets, is in
+-- "Haskoin.Wallet.Workflow.SigningSpec".
 module Haskoin.Wallet.Workflow.ShowSpec (spec) where
 
 import Control.Monad (forM_, replicateM_)
 import qualified Data.Text as Text
 import Haskoin
+import Haskoin.Wallet.Database (DBAccount (..))
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Workflow.TestUtils
@@ -25,6 +28,7 @@ spec = prepareContext $ \ctx -> do
   newestSpec
   txSpec ctx
   coinSpec ctx
+  fileSpec ctx
   refusedSpec
 
 {- An address by its path -}
@@ -259,6 +263,27 @@ coinSpec ctx =
         synced home
         (errorOf <$> hwJson home ["show", "ab000000:0"] []) `shouldReturn` Right "The wallet has no coin ab000000:0"
 
+{- A transaction file -}
+
+fileSpec :: Ctx -> Spec
+fileSpec ctx =
+  describe "A transaction file shown by its name" $ do
+    -- hw runs in the home. The payment of preparetx is from main.
+    it "is read from the directory the command runs in, when its name has no directory" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--output", home </> "unsigned.psbt"] []
+        (fmap dBAccountName . accountOf <$> hwJson home ["show", "unsigned.psbt"] []) `shouldReturn` Right "main"
+
+    -- The bare name is taken for the short id of a transaction the wallet
+    -- does not have
+    it "is read with its directory when its name looks like a short id" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--output", home </> "a1075db5"] []
+        (fmap dBAccountName . accountOf <$> hwJson home ["show", "./a1075db5"] []) `shouldReturn` Right "main"
+        (errorOf <$> hwJson home ["show", "a1075db5"] []) `shouldReturn` Right "The wallet has no transaction a1075db5"
+
 {- What show refuses -}
 
 refusedSpec :: Spec
@@ -277,9 +302,16 @@ refusedSpec =
         (errorOf <$> hwJson home ["show", "ab000000:0", "--account", "main"] [])
           `shouldReturn` Right "A coin tells its account, so show takes no --account with it"
 
-    -- A short id with its last digit missing
-    it "names the four things it shows for a word that is none of them" $
+    it "refuses --network with anything but a file, since the rest is on the network of its account" $
+      withHome $ \home -> do
+        createMain home
+        (errorOf <$> hwJson home ["show", "/0/0", "--network", "btc"] [])
+          `shouldReturn` Right "show takes --network with a transaction file only, since the rest is on the network of its account"
+
+    -- A short id with its last digit missing, which no file of the home is
+    -- named
+    it "names the five things it shows for a word that is none of them and names no file" $
       withHome $ \home -> do
         createMain home
         (errorOf <$> hwJson home ["show", "a1075db"] [])
-          `shouldReturn` Right "a1075db is not a path, an address, a transaction or a coin: show takes a path such as /0/3, an address of the wallet, a txid or a nosigHash, or a coin TXID:INDEX, each hash in full or by its short id, its first 8 digits"
+          `shouldReturn` Right "a1075db is not a path, an address, a transaction or a coin, and no file has that name: show takes a path such as /0/3, an address of the wallet, a txid or a nosigHash, a coin TXID:INDEX, or a transaction file, each hash in full or by its short id, its first 8 digits"

@@ -245,25 +245,25 @@ signingSpec ctx = do
     -- names neither the account nor main, the account of the payment: the
     -- keys of main derive the addresses it spends, and the online wallet
     -- holds it pending.
-    it "is reviewed, signed and imported back without --account, by wallets of several accounts" $
+    it "is shown, signed and imported back without --account, by wallets of several accounts" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
         _ <- answer signer ["createacc", "second"] seedTwice
         _ <- answer signer ["exportacc", "--account", "second", signer </> "second.json"] []
         _ <- answer online ["importacc", signer </> "second.json"] []
         _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--account", "main", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
-        (fmap dBAccountName . accountOf <$> hwJson signer ["reviewtx", online </> "unsigned.psbt"] []) `shouldReturn` Right "main"
+        (fmap dBAccountName . accountOf <$> hwJson signer ["show", online </> "unsigned.psbt"] []) `shouldReturn` Right "main"
         signed <- txOf =<< answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
         pendingState signed `shouldBe` Just (True, False)
         (fmap dBAccountName . accountOf <$> hwJson online ["importtx", signer </> "signed.psbt"] []) `shouldReturn` Right "main"
 
     -- The signer has no coins: the file carries the transactions the
     -- payment spends, and the paths of the change
-    it "is shown by reviewtx from its file, as the signer reads it before signing, and not kept" $
+    it "is shown from its file by show, as the signer reads it before signing, and not kept" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
         _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
-        reviewed <- txOf =<< answer signer ["reviewtx", online </> "unsigned.psbt"] []
+        reviewed <- txOf =<< answer signer ["show", online </> "unsigned.psbt"] []
         paidToOthers reviewed `shouldBe` Map.fromList [(otherAddr 0, 20000)]
         paidToWallet reviewed `shouldBe` Map.fromList [(internalAddr 0, 27740)]
         summaryFee (txInfoSummary reviewed) `shouldBe` 2260
@@ -272,12 +272,12 @@ signingSpec ctx = do
     -- The signer never handed out the address the payment spends from, and
     -- a signed input names no key any more. The file names the path of
     -- that address in a field of hw, which the signer follows.
-    it "is shown again by reviewtx on the signer once signed, as the payment it signed" $
+    it "is shown again from its file on the signer once signed, as the payment it signed" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
         _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
         _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
-        reviewed <- hwJson signer ["reviewtx", signer </> "signed.psbt"] []
+        reviewed <- hwJson signer ["show", signer </> "signed.psbt"] []
         (dBAccountName <$> accountOf reviewed) `shouldBe` Right "main"
         shown <- txOf reviewed
         pendingState shown `shouldBe` Just (True, False)
@@ -291,12 +291,12 @@ signingSpec ctx = do
     -- names the account either: the path of the address spent from is all
     -- that does. One input and one output are 192 bytes, so the fee is
     -- 1920, and 50000 - 1920 = 48080 are paid.
-    it "of every coin of the account is shown again by reviewtx on the signer once signed, as spent from its account" $
+    it "of every coin of the account is shown again from its file on the signer once signed, as spent from its account" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
         _ <- answer online ["preparesendall", textOf (otherAddr 0), "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
         _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
-        reviewed <- hwJson signer ["reviewtx", signer </> "signed.psbt"] []
+        reviewed <- hwJson signer ["show", signer </> "signed.psbt"] []
         (dBAccountName <$> accountOf reviewed) `shouldBe` Right "main"
         shown <- txOf reviewed
         txRow shown `shouldBe` (TxDebit, -50000, Nothing)
@@ -304,20 +304,20 @@ signingSpec ctx = do
         paidToOthers shown `shouldBe` Map.fromList [(otherAddr 0, 48080)]
 
     -- The payment is from main
-    it "is shown by reviewtx with the name of its account" $
+    it "is shown from its file with the name of its account" $
       withHome $ \home -> do
         createMain home
         writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
-        run <- hw home ["reviewtx", home </> "payment.psbt"] []
+        run <- hw home ["show", home </> "payment.psbt"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  Account  : main\n"
 
     -- The payment is from main
-    it "is refused by reviewtx and importtx for an --account the transaction does not involve" $
+    it "is refused by show and importtx for an --account the transaction does not involve" $
       withHome $ \home -> do
         createMain home
         _ <- answer home ["createacc", "second"] seedTwice
         writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
-        forM_ ["reviewtx", "importtx"] $ \command ->
+        forM_ ["show", "importtx"] $ \command ->
           (errorOf <$> hwJson home [command, home </> "payment.psbt", "--account", "second"] [])
             `shouldReturn` Right "The transaction does not involve the account second"
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
@@ -374,7 +374,7 @@ foreignFileSpec ctx =
       withHome $ \home -> do
         createMain home
         prepared <- coreFile home "core-prepared.psbt"
-        shown <- txOf =<< answer home ["reviewtx", prepared] []
+        shown <- txOf =<< answer home ["show", prepared] []
         pendingState shown `shouldBe` Just (False, False)
         paidToOthers shown `shouldBe` Map.fromList [(testAddress "1GfJmWwG2JUjrvQ6WjVfwaWpPgtbHDhSdE", 100000000)]
         paidToWallet shown `shouldBe` Map.fromList [(internalAddr 0, 4899997750)]
@@ -391,7 +391,7 @@ foreignFileSpec ctx =
         createMain home
         prepared <- coreFile home "core-prepared.psbt"
         _ <- answer home ["signtx", "--input", prepared, "--output", home </> "signed.psbt"] seedOnce
-        shown <- txOf =<< answer home ["reviewtx", home </> "signed.psbt"] []
+        shown <- txOf =<< answer home ["show", home </> "signed.psbt"] []
         pendingState shown `shouldBe` Just (True, False)
         spentFromWallet shown `shouldBe` Map.fromList [(externalAddr 0, 5000000000)]
         paidToOthers shown `shouldBe` Map.fromList [(testAddress "1GfJmWwG2JUjrvQ6WjVfwaWpPgtbHDhSdE", 100000000)]
@@ -405,7 +405,7 @@ foreignFileSpec ctx =
       withHome $ \home -> do
         createMain home
         prepared <- coreFile home "core-prepared-v2.psbt"
-        shown <- txOf =<< answer home ["reviewtx", prepared] []
+        shown <- txOf =<< answer home ["show", prepared] []
         paidToOthers shown `shouldBe` Map.fromList [(testAddress "1GfJmWwG2JUjrvQ6WjVfwaWpPgtbHDhSdE", 100000000)]
         paidToWallet shown `shouldBe` Map.fromList [(internalAddr 0, 4899997750)]
         feeOf shown `shouldBe` 2250
@@ -421,7 +421,7 @@ foreignFileSpec ctx =
       withHome $ \home -> do
         _ <- answer home ["createacc", "spending", "--type", "bip84"] seedTwice
         prepared <- coreFile home "core-prepared-segwit.psbt"
-        shown <- txOf =<< answer home ["reviewtx", prepared] []
+        shown <- txOf =<< answer home ["show", prepared] []
         paidToOthers shown `shouldBe` Map.fromList [(testAddress "157L9V7wdL7pYt2nndN5NN5DMynh1HdYhF", 100000000)]
         paidToWallet shown `shouldBe` Map.fromList [(segwitInternalAddr 0, 4899998560)]
         (feeOf shown, summarySize (txInfoSummary shown)) `shouldBe` (1440, 144)
@@ -436,9 +436,9 @@ foreignFileSpec ctx =
         createMain home
         setDefaultNetwork home Nothing
         outside <- coreFile home "core-outside.psbt"
-        (errorOf <$> hwJson home ["reviewtx", outside] [])
+        (errorOf <$> hwJson home ["show", outside] [])
           `shouldReturn` Right "The file names no network, as a file of another wallet does, and involves no account of this wallet: give the --network, or a default-network in the configuration file"
-        shown <- hwJson home ["reviewtx", outside, "--network", "btc"] []
+        shown <- hwJson home ["show", outside, "--network", "btc"] []
         case shown of
           ResponseOutsideTx net info -> do
             net.name `shouldBe` "btc"
@@ -446,7 +446,7 @@ foreignFileSpec ctx =
             paidToOthers info `shouldBe` Map.fromList [(testAddress "13tJFzYnF13gRMh6Z6eb44mLD9e9R8sHeZ", 250000000), (testAddress "1588dPBmgVnvS2N3BE5YHXUqXcb468zpsz", 4749997750)]
           other -> expectationFailure ("Not a transaction outside the wallet: " <> show other)
         setDefaultNetwork home (Just "btc")
-        byDefault <- hwJson home ["reviewtx", outside] []
+        byDefault <- hwJson home ["show", outside] []
         case byDefault of
           ResponseOutsideTx net _ -> net.name `shouldBe` "btc"
           other -> expectationFailure ("Not a transaction outside the wallet: " <> show other)
@@ -455,9 +455,9 @@ foreignFileSpec ctx =
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", home </> "unsigned.psbt", "--fee-rate", "10"] []
-        (errorOf <$> hwJson home ["reviewtx", home </> "unsigned.psbt", "--network", "bch"] [])
+        (errorOf <$> hwJson home ["show", home </> "unsigned.psbt", "--network", "bch"] [])
           `shouldReturn` Right "The file is on btc, not on the --network bch"
-        (fmap dBAccountName . accountOf <$> hwJson home ["reviewtx", home </> "unsigned.psbt", "--network", "btc"] []) `shouldReturn` Right "main"
+        (fmap dBAccountName . accountOf <$> hwJson home ["show", home </> "unsigned.psbt", "--network", "btc"] []) `shouldReturn` Right "main"
 
     -- Bitcoin Core's finalizepsbt gives the transaction alone, in hexadecimal
     it "holding the signed transaction alone is sent when the wallet holds the transaction, and refused otherwise" $
@@ -568,7 +568,7 @@ inputFileSpec ctx = do
   -- The payment of 40000 to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, from the
   -- coin at /0/0
   describe "signtx, showing what the mnemonic signs" $ do
-    it "shows the transaction as reviewtx does before it asks for the mnemonic" $
+    it "shows the transaction as show does before it asks for the mnemonic" $
       withHome $ \home -> do
         createMain home
         writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
@@ -690,7 +690,7 @@ inputFileSpec ctx = do
     -- /2/7, where it has no address, with the record that would make hw
     -- take the output for the account's own change. The wallet would never
     -- see the funds, since it scans /0/n and /1/n alone.
-    it "refuses a file that names a key of the account at a path of no address of it, as reviewtx does" $
+    it "refuses a file that names a key of the account at a path of no address of it, as show does" $
       withHome $ \home -> do
         createMain home
         let hidden = spendingTx ctx [(txHash (payment ctx), 0)] [(addrAt27, 40000)]
@@ -698,7 +698,7 @@ inputFileSpec ctx = do
         psbt <- psbtOnBitcoin ctx (TxSignData hidden [payment ctx] ["/0/0"] [] (Just 10) Nothing [] noLabel)
         let naming = insertOutputDerivation ctx (keyAt27 ctx) (Derivation testFingerprint "m/44'/0'/0'/2/7")
         BS.writeFile (home </> "hidden.psbt") (encodePsbt (Psbt psbt.version psbt.unsignedTx psbt.globals psbt.inputs (naming <$> psbt.outputs)))
-        review <- hw home ["reviewtx", home </> "hidden.psbt"] []
+        review <- hw home ["show", home </> "hidden.psbt"] []
         review `shouldSatisfy` printed refusal
         run <- hw home ["signtx", "--input", home </> "hidden.psbt", "--output", home </> "signed.psbt"] seedOnce
         run `shouldSatisfy` printed refusal
@@ -706,7 +706,7 @@ inputFileSpec ctx = do
 
     -- The change goes to the key of the account at /1/2000000000, as a
     -- genuine record says: no scan of the account would find it there
-    it "refuses a file whose change lies far past every address of its chain, as reviewtx does, and writes no signed file" $
+    it "refuses a file whose change lies far past every address of its chain, as show does, and writes no signed file" $
       withHome $ \home -> do
         createMain home
         let farPath = Deriv :/ 1 :/ 2000000000 :: SoftPath
@@ -714,7 +714,7 @@ inputFileSpec ctx = do
             tx = spendingTx ctx [(txHash (payment ctx), 0)] [(otherAddr 0, 20000), (farChange, 27740)]
             refusal = "The path /1/2000000000 of an output is over 1000 addresses past the last one of its chain that the wallet holds or the transaction spends from: no scan of the account would find what it pays there"
         writeTxFile ctx (home </> "far.psbt") (TxSignData tx [payment ctx] [Deriv :/ 0 :/ 0] [farPath] (Just 10) Nothing [] noLabel)
-        review <- hw home ["reviewtx", home </> "far.psbt"] []
+        review <- hw home ["show", home </> "far.psbt"] []
         review `shouldSatisfy` printed refusal
         run <- hw home ["signtx", "--input", home </> "far.psbt", "--output", home </> "signed.psbt"] seedOnce
         run `shouldSatisfy` printed refusal
@@ -743,7 +743,7 @@ confirmationSpec ctx =
         runErr run `shouldSatisfy` Text.isInfixOf "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
         runErr run `shouldSatisfy` Text.isInfixOf sendQuestion
 
-    -- The payment is from main, as reviewtx shows it
+    -- The payment is from main, as show shows it
     it "names the account of the transaction it shows" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         nosig <- paymentSigned home

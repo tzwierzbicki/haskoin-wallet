@@ -189,33 +189,33 @@ addressLabelsSpec ctx =
         (txFilePathLabels <$> readTxFile ctx file) `shouldReturn` Map.fromList [("/0/0", "Salary")]
 
     -- The address is relabelled after the file is written
-    it "are shown by reviewtx in place of the wallet's own" $
+    it "are shown by show in place of the wallet's own" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["label", textOf (externalAddr 0), "Salary"] []
         let file = home </> "unsigned.psbt"
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--output", file] []
         _ <- answer home ["label", textOf (externalAddr 0), "Wages"] []
-        reviewed <- txOf =<< answer home ["reviewtx", file] []
+        reviewed <- txOf =<< answer home ["show", file] []
         addressLabelsOf reviewed `shouldBe` Map.fromList [(externalAddr 0, "Salary"), (internalAddr 0, "")]
 
-    it "are shown by reviewtx on the offline signer, which has no labels of its own" $
+    it "are shown by show on the offline signer, which has no labels of its own" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
         _ <- answer online ["label", textOf (externalAddr 0), "Salary"] []
         _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
-        run <- hw signer ["reviewtx", online </> "unsigned.psbt"] []
+        run <- hw signer ["show", online </> "unsigned.psbt"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0\n             \"Salary\"\n"
 
     -- ESC [ 1 A moves the cursor up a line: a file could rewrite the lines
     -- above the label, the recipient among them
-    it "reach the terminal of reviewtx with their control characters written out, so that a file cannot rewrite the screen" $
+    it "reach the terminal of show with their control characters written out, so that a file cannot rewrite the screen" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["label", textOf (externalAddr 0), "x\ESC[1Ay"] []
         let file = home </> "unsigned.psbt"
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--output", file] []
-        run <- hwOnScreen [] home ["reviewtx", file]
+        run <- hwOnScreen [] home ["show", file]
         runOut run `shouldSatisfy` Text.isInfixOf "\"x\\x1b[1Ay\""
         runOut run `shouldSatisfy` (not . Text.isInfixOf "\ESC[1A")
 
@@ -298,13 +298,13 @@ coinLabelsSpec ctx =
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--output", file] []
         (txFileInputLabels <$> readTxFile ctx file) `shouldReturn` Map.fromList [(txHash (payment ctx), "Salary")]
 
-    it "ends the address spent from in reviewtx on the offline signer, after the label of the address" $
+    it "ends the address spent from in show on the offline signer, after the label of the address" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
         _ <- answer online ["label", paidTxid ctx, "Salary"] []
         _ <- answer online ["label", textOf (externalAddr 0), "Wages"] []
         _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
-        run <- hw signer ["reviewtx", online </> "unsigned.psbt"] []
+        run <- hw signer ["show", online </> "unsigned.psbt"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0\n             \"Wages\"  from \"Salary\"\n"
 
     -- The line below the address starts at column 13, under the address,

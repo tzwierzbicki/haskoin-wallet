@@ -316,11 +316,11 @@ sweepSpec ctx =
         (errorOf <$> hwJson home (outsideSweep home keys <> ["--account", "main"]) [])
           `shouldReturn` Right "The sweep pays no address of the account main"
 
-    it "that pays outside the wallet is reviewed from its file, outside the wallet, on its network" $
+    it "that pays outside the wallet is shown from its file, outside the wallet, on its network" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
         keys <- writeKeyFile home
         _ <- answer home (outsideSweep home keys) []
-        reviewed <- answer home ["reviewtx", home </> "sweep.json"] []
+        reviewed <- answer home ["show", home </> "sweep.json"] []
         reviewed `shouldSatisfy` \case ResponseOutsideTx net _ -> net == btc; _ -> False
         (paidToOthers <$> txOf reviewed) `shouldReturn` Map.fromList [(otherAddr 0, 28080)]
 

@@ -58,8 +58,9 @@ Addresses:
 
 - `receive` shows a QR code of the new address on the terminal.
 - `show` shows one thing of the wallet, as the word typed tells: the address at
-  a path such as `/0/3`, an address, a transaction by its txid or nosigHash, or
-  a coin `TXID:INDEX`. Without a word, it shows the newest receiving address.
+  a path such as `/0/3`, an address, a transaction by its txid or nosigHash, a
+  coin `TXID:INDEX`, or a transaction file, any other word. Without a word, it
+  shows the newest receiving address.
   An address the wallet holds comes with its QR code, to give it out again.
   Run `show /0/3` on the offline computer to check an address the online one
   gives out: it derives the address from the public key. An address at a path
@@ -185,6 +186,7 @@ Using `hw`:
 | `discoveracc` | `recover`, which now finds every paid account |
 | `testacc` | `checkmnemonic` |
 | `sendtx` | `broadcast` |
+| `reviewtx FILE` | `show FILE` |
 | `addrs`, `addrs --internal` | `addresses`, `addresses --change` |
 | `version` | `hw --version` |
 | `--satoshi`, `--bit` | `--unit sat`, `--unit bit` |

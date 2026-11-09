@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | A transaction file as a PSBT (BIP 174), which preparetx, preparesweep,
--- bumpfee, exporttx, signtx and signsweep write, and reviewtx, importtx,
+-- bumpfee, exporttx, signtx and signsweep write, and show, importtx,
 -- signtx, signsweep and broadcast read. The fields of the spec carry the
 -- transaction, the whole transaction every coin comes from, and for a
 -- SegWit coin its output alone as well, which the signers of such coins

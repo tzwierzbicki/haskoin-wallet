@@ -605,6 +605,28 @@ commandLineSpec ctx = do
         run <- hw home (tabAfter ["show", take 4 (txidArg (payment ctx))]) []
         runOut run `shouldBe` Text.pack (txidArg (payment ctx)) <> "\n" <> Text.pack (txidArg (payment ctx)) <> "\\:0\n"
 
+    -- 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj is the first receiving address of
+    -- main. The script of bash runs in the home.
+    it "offers the files after show, with the addresses of the wallet" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        writeFile (home </> "1KEn-notes.psbt") ""
+        (sort <$> bashCompletion home ["show", "1KEn"]) `shouldReturn` ["1KEn-notes.psbt", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]
+
+    it "offers a directory after show with a /, so that the path goes on into it" $
+      withHome $ \home -> do
+        createDirectory (home </> "docs")
+        bashCompletion home ["show", "do"] `shouldReturn` ["docs/"]
+
+    -- show would take the bare name for a short id
+    it "leaves out after show a file named like a short id, and offers it once ./ is typed" $
+      withHome $ \home -> do
+        createMain home
+        writeFile (home </> "a1075db5") ""
+        bashCompletion home ["show", "a1"] `shouldReturn` []
+        bashCompletion home ["show", "./a1"] `shouldReturn` ["./a1075db5"]
+
     it "offers the change addresses too after signmsg" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
@@ -881,7 +903,7 @@ commandLineSpec ctx = do
     it "tells when a file it reads does not exist, naming it" $
       withHome $ \home -> do
         createMain home
-        forM_ ["reviewtx", "importtx", "importacc"] $ \command ->
+        forM_ ["show", "importtx", "importacc"] $ \command ->
           (errorOf <$> hwJson home [command, home </> "missing.json"] [])
             `shouldReturn` Right (noSuchFile (home </> "missing.json"))
 
@@ -892,7 +914,7 @@ commandLineSpec ctx = do
         createMain home
         let file = home </> "earlier.json"
         writeFile file "{\"tx\": \"0100000000000000000000\", \"txinputs\": []}\n"
-        forM_ ["reviewtx", "importtx"] $ \command ->
+        forM_ ["show", "importtx"] $ \command ->
           (errorOf <$> hwJson home [command, file] [])
             `shouldReturn` Right ("The file " <> Text.pack file <> " could not be read: Not a PSBT, in bytes or in base64 text, nor the hexadecimal of a transaction")
 

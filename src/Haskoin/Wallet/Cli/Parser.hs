@@ -14,7 +14,7 @@ module Haskoin.Wallet.Cli.Parser where
 
 import Control.Applicative (Alternative (..), optional)
 import Data.List (find, intercalate)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Version (showVersion)
@@ -78,9 +78,10 @@ data Command
     -- the deletion
     CommandDeleteAcc !Text !Network !HardPath
   | CommandReceive !Receive
-  | -- | The account --account names, and what to show, or Nothing for the
-    -- newest receiving address of the account
-    CommandShow !(Maybe Text) !(Maybe Shown)
+  | -- | The account --account names, what to show, or Nothing for the
+    -- newest receiving address of the account, and the network of a
+    -- transaction file that names none and involves no account
+    CommandShow !(Maybe Text) !(Maybe Shown) !(Maybe Network)
   | -- | The account, whether its change addresses, how to show each
     -- address or the CSV file to write them to, and the page
     CommandAddresses !(Maybe Text) !Bool !ListingOutput !(Paging Text)
@@ -96,9 +97,6 @@ data Command
   | -- | The account, or every one, how to show each transaction or the
     -- CSV file to write them to, and the page
     CommandPendingTxs !(Maybe Text) !ListingOutput !(Paging HashRef)
-  | -- | The account, the transaction file, and the network of a file that
-    -- names none and involves no account
-    CommandReviewTx !(Maybe Text) !FilePath !(Maybe Network)
   | -- | The account, and the transaction file
     CommandImportTx !(Maybe Text) !FilePath
   | -- | The pending transaction, by either of its hashes, in full or by
@@ -175,7 +173,7 @@ viewOf listingView cmd
 -- that answer with one element show it
 viewOf _ (CommandLockCoin _) = Verbose
 viewOf _ (CommandUnlockCoin _) = Verbose
-viewOf _ (CommandShow _ _) = Verbose
+viewOf _ (CommandShow {}) = Verbose
 viewOf _ _ = Compact
 
 -- | Whether an address in an answer comes with its QR code, on a terminal
@@ -186,7 +184,7 @@ data AddressCode = WithCode | WithoutCode
 -- scan. label also answers with an address, which it does not give out.
 addressCodeOf :: Command -> AddressCode
 addressCodeOf (CommandReceive _) = WithCode
-addressCodeOf (CommandShow _ _) = WithCode
+addressCodeOf (CommandShow {}) = WithCode
 addressCodeOf _ = WithoutCode
 
 -- | How the screen shows a transaction a command answers with: in full,
@@ -275,9 +273,9 @@ readLabelled :: String -> Labelled
 readLabelled word = maybe (LabelledAddress (cs word)) LabelledTx (readHashRef (cs word))
 
 -- | What show shows, as the word typed names it. One command takes the
--- four, so that the user need not know which command shows what: the
--- word tells. The shapes of the four do not overlap, so a word is never
--- taken for one kind when it was typed as another ('readShown').
+-- five, so that the user need not know which command shows what. The word
+-- tells. The shapes of the five do not overlap, so a word is never taken
+-- for one kind when it was typed as another ('readShown').
 data Shown
   = -- | The address at a path of a chain of the account, /0/i or /1/i
     ShownPath !AddrType !KeyIndex
@@ -288,22 +286,36 @@ data Shown
     ShownTx !HashRef
   | -- | A coin, TXID:INDEX, the txid in full or by its short id
     ShownCoin !CoinRef
+  | -- | A transaction file, which the wallet does not keep
+    ShownFile !FilePath
   deriving (Eq, Show)
 
--- | What a word typed for show names, by its shape. A path has a slash,
--- which no address, hash or coin has, so a word with one is a path or is
--- refused as one: 0/3 and m/0/3 are told how to write a path. A coin has
--- a colon after 8 or 64 hexadecimal digits. A hash has 8 or 64
--- hexadecimal digits and nothing else, which no address has, as for
--- label. Any other word is an address. A word that is none of the four, a
--- short id of 7 digits for instance, is taken for an address, and show
--- then names the four kinds it can be.
+-- | What a word typed for show names, by its shape. The four kinds of the
+-- wallet have strict shapes, and any other word names a file.
+--
+-- * A path is made of digits and slashes, such as /0/3. A word of those,
+--   perhaps with the m, h and ' of a BIP32 path, is a path or is refused
+--   as one. So 0/3 and m/0/3 are told how to write a path.
+-- * A coin has a colon after 8 or 64 hexadecimal digits.
+-- * A hash has 8 or 64 hexadecimal digits and nothing else, as for label.
+-- * An address reads as an address on one of the networks. Its checksum
+--   tells it from a file name.
+-- * Every other word names a file, such as unsigned.psbt or
+--   ./unsigned.psbt. A file whose name has one of the other shapes goes
+--   with its directory, as ./a1075db5.
+--
+-- A word that is none of the five, such as a short id of 7 digits, is
+-- taken for a file. show then names the five kinds when no file has that
+-- name.
 readShown :: String -> Either String Shown
 readShown word
-  | '/' `elem` word = uncurry ShownPath <$> readChainPath (cs word)
+  | isPathShaped = uncurry ShownPath <$> readChainPath (cs word)
   | Just coin <- readCoinRef word = Right (ShownCoin coin)
   | Just hash <- readHashRef (cs word) = Right (ShownTx hash)
-  | otherwise = Right (ShownAddress (cs word))
+  | any (\net -> isJust (textToAddr net (cs word))) allNets = Right (ShownAddress (cs word))
+  | otherwise = Right (ShownFile word)
+  where
+    isPathShaped = '/' `elem` word && all (`elem` ("0123456789/mMhH'" :: String)) word
 
 -- | The options of preparetx
 data PrepareTx = PrepareTx
@@ -588,7 +600,6 @@ Type hw COMMAND --help for the help of a command.
             "Transactions"
             [ txsCommand,
               pendingTxsCommand,
-              reviewTxCommand,
               exportTxCommand,
               importTxCommand,
               deleteTxCommand
@@ -1265,20 +1276,22 @@ showCommand =
   CommandSpec
     { name = "show",
       offline = False,
-      summary = "Show an address, a transaction or a coin of the wallet",
+      summary = "Show an address, a transaction or a coin, or a transaction file",
       details =
         [r|
-`show` shows one address, transaction or coin of the wallet, and changes
-nothing. The word given tells what it is:
+`show` shows one address, transaction or coin of the wallet, or a transaction
+file, and changes nothing. The word given tells what it is:
 
   /0/i or /1/i   the receiving address i, or the change address i
   ADDRESS        an address of the wallet
   HASH           a transaction, by its txid, or its nosigHash while pending
   TXID:INDEX     a coin
+  FILENAME       a transaction file, any other word
 
-A hash goes in full or by its short id, its first 8 digits. With no word,
-`show` shows the newest receiving address of the account, the first one
-`addresses` lists. It hands out no new address.
+A hash goes in full or by its short id, its first 8 digits. A file whose name
+looks like one of the others goes with its directory, such as ./a1075db5. With
+no word, `show` shows the newest receiving address of the account, the first
+one `addresses` lists. It hands out no new address.
 
 An address the wallet holds is shown as `receive` shows a new one: its path,
 its label and what it received, and on a terminal its QR code under them. Use
@@ -1309,26 +1322,69 @@ A transaction is shown in full, as each account that holds it sees it: a
 payment between two accounts of the wallet once for each. A coin is shown with
 every detail, as `coins` --verbose shows it.
 
+A transaction file is shown as its account sees it, with the name of that
+account. The wallet keeps nothing of it. The file comes from preparetx
+--output, exporttx, signtx or preparesweep: a PSBT (BIP 174). Use it to check
+a transaction before you sign it, or before you send it. A transaction that
+involves no account, such as a sweep to addresses outside the wallet, is shown
+on the network its file names.
+
+A file of another wallet is shown the same way: a PSBT in bytes, or in base64
+text, of version 0 or of version 2, that of BIP 370. Such a file names no
+network. The account it involves tells it. One that involves no account needs
+--network, or the default-network of the configuration file.
+
+The labels shown for a file, the transaction's, those of its addresses and
+those of the coins it spends, are the ones the file carries, as the wallet that
+wrote it had them. They are not those of this wallet, which an offline computer
+does not have.
+
 --account names the account of a path and of the newest address. With a
-transaction, it keeps the view of that account. An address and a coin tell
-their account, so `show` refuses --account with them.
+transaction or a file, it keeps the view of that account. An address and a
+coin tell their account, so `show` refuses --account with them. --network goes
+with a file only.
 |],
-      args = (\shown account -> CommandShow account shown) <$> optional shownArg <*> showAccountOption
+      args =
+        (\shown account network -> CommandShow account shown network)
+          <$> optional shownArg
+          <*> showAccountOption
+          <*> showNetworkOption
     }
 
--- | What show shows, read by its shape ('readShown'), with the addresses,
--- transactions and coins of the wallet that the shell offers for it
+-- | What show shows, read by its shape ('readShown'), with what the shell
+-- offers for it ('shownCompletion')
 shownArg :: Args Shown
 shownArg =
   argument (eitherReader readShown) $
-    metavar "PATH|ADDRESS|HASH|TXID:INDEX"
-      <> completer (mkCompleter shownTargets)
-      <> help "What to show: a path such as /0/3, an address of the wallet, a transaction by its txid or nosigHash, or a coin. A hash goes in full or by its short id, the first 8 digits. Without it, the newest receiving address."
+    metavar "PATH|ADDRESS|HASH|TXID:INDEX|FILENAME"
+      <> completer (mkCompleter shownCompletion)
+      <> help "What to show: a path such as /0/3, an address of the wallet, a transaction by its txid or nosigHash, a coin, or a transaction file. A hash goes in full or by its short id, the first 8 digits. Without it, the newest receiving address."
+
+-- | What the shell offers for show. It offers the addresses, transactions
+-- and coins of the wallet ('shownTargets'), and the files and directories,
+-- as for a FILENAME. It leaves out a file whose name show reads as
+-- something else, a file named a1075db5 for instance. show would take that
+-- word for a short id. The file is offered once ./ is typed before it.
+-- Offering ./a1075db5 for the word a1 would not do, since zsh drops a value
+-- that does not start with the word typed.
+shownCompletion :: String -> IO [String]
+shownCompletion typed = do
+  held <- shownTargets typed
+  files <- completeFile typed
+  return (held <> filter readAsFile files)
+  where
+    readAsFile name = readShown name == Right (ShownFile name)
 
 -- | The --account of show, which goes with some of what it shows only
 showAccountOption :: Args (Maybe Text)
 showAccountOption =
-  accountOptionWith "The account of the path or of the newest address. Needed only when the wallet has more than one. With a transaction, the account whose view to show."
+  accountOptionWith "The account of the path or of the newest address. Needed only when the wallet has more than one. With a transaction or a file, the account whose view to show."
+
+-- | The --network of show, which goes with a transaction file only. What
+-- else show shows is of an account, on the network of the account.
+showNetworkOption :: Args (Maybe Network)
+showNetworkOption =
+  networkOptionWith "With a transaction file only, for one that names no network and involves no account of this wallet, as a file of another wallet does. Without it, the default-network of the configuration file."
 
 {- addresses -}
 
@@ -1951,41 +2007,6 @@ and how many other addresses it pays. Amounts are in satoshis, and times in UTC.
           <*> pagingOptions (afterOption "HASH" hashRefReader "Start after this pending transaction, by either of its hashes or its short id")
     }
 
-{- reviewtx -}
-
-reviewTxCommand :: CommandSpec Command
-reviewTxCommand =
-  CommandSpec
-    { name = "reviewtx",
-      offline = False,
-      summary = "Show the transaction in a file",
-      details =
-        [r|
-reviewtx shows a transaction file as its account sees it, and names that
-account. It changes nothing in the wallet. The file comes from preparetx
---output, exporttx, signtx or preparesweep: a PSBT (BIP 174). Use it to
-check a transaction before you sign it, or before you send it. A transaction
-that involves no account, such as a sweep to addresses outside the wallet,
-is shown on the network its file names.
-
-A file of another wallet is shown the same way: a PSBT in bytes, or in
-base64 text, of version 0 or of version 2, that of BIP 370. Such a file names
-no
-network. The account it involves tells it. One that involves no account
-needs --network, or the default-network of the configuration file.
-
-The labels reviewtx shows, the transaction's, those of its addresses and those
-of the coins it spends, are the ones the file carries, as the wallet that
-wrote it had them. They are not those of this wallet, which an offline
-computer does not have.
-|],
-      args =
-        CommandReviewTx
-          <$> txAccountOption
-          <*> fileArgument "The transaction file to show"
-          <*> fileNetworkOption
-    }
-
 {- exporttx -}
 
 exportTxCommand :: CommandSpec Command
@@ -2125,7 +2146,7 @@ since the unsigned file is of no use once signed. It asks this before the
 mnemonic. A transaction of a file is shown with the labels the file carries,
 which go on to the signed file. A signed input names no key any more, as the
 format asks. The file still says which address of the account it spends from,
-in a field of hw, so reviewtx shows the signed file as the payment it is, on
+in a field of hw, so `show` shows the signed file as the payment it is, on
 the offline computer too.
 
 A file another wallet prepared for the account is signed the same way, in
@@ -2135,8 +2156,8 @@ signed that served the signers. hw signs with the
 sighash ALL only, and only when every input that is not the account's is
 signed already.
 
-Signing sends nothing. Check the transaction with reviewtx or pendingtxs.
-Then send it with broadcast, or delete it with deletetx.
+Signing sends nothing. Check the transaction with `show`, given its txid or its
+file. Then send it with broadcast, or delete it with deletetx.
 |],
       args =
         CommandSignTx
@@ -2396,7 +2417,7 @@ broadcastCommand =
       summary = "Send a signed transaction to the network",
       details =
         [r|
-Sending cannot be undone. broadcast shows the transaction, as reviewtx does, and
+Sending cannot be undone. broadcast shows the transaction, as `show` does, and
 sends it only if you answer yes. --yes sends it without showing it or asking,
 for scripts.
 

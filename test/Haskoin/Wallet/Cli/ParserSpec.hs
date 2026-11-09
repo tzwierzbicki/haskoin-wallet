@@ -53,8 +53,8 @@ spec = do
     it "offers balances --compact, --verbose, --tabular and --csv as a choice" $
       usageOf "balances" `shouldBe` "[-a|--account NAME] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT]"
 
-    it "puts the word of show, which may be left out, before its option" $
-      usageOf "show" `shouldBe` "[PATH|ADDRESS|HASH|TXID:INDEX] [-a|--account NAME]"
+    it "puts the word of show, which may be left out, before its options" $
+      usageOf "show" `shouldBe` "[PATH|ADDRESS|HASH|TXID:INDEX|FILENAME] [-a|--account NAME] [-n|--network NETWORK]"
 
     it "puts a choice in parentheses, and a required option with two names too" $
       usageOf "verifymsg" `shouldBe` "(ADDRESS SIGNATURE MESSAGE | (-i|--input FILENAME)) [-n|--network NETWORK]"
@@ -87,9 +87,11 @@ spec = do
       readShown "/0/3" `shouldBe` Right (ShownPath AddrExternal 3)
       readShown "/1/0" `shouldBe` Right (ShownPath AddrInternal 0)
 
-    -- No address, hash or coin has a slash
-    it "is refused as a path for any other word with a slash" $
+    -- A word of digits and slashes, with perhaps the m, h and ' of a BIP32
+    -- path, was meant as a path
+    it "is refused as a path for another word of digits and slashes" $ do
       readShown "m/0/3" `shouldBe` Left "The path m/0/3 is not that of an address: /0/i is the receiving address i, and /1/i the change address i"
+      readShown "m/44h/0'/0/3" `shouldBe` Left "The path m/44h/0'/0/3 is not that of an address: /0/i is the receiving address i, and /1/i the change address i"
 
     it "is a coin for a txid by its short id, a colon and an index" $
       case readShown "a1075db5:1" of
@@ -106,10 +108,28 @@ spec = do
         Right (ShownTx (ShortHash short)) -> shortIdText short `shouldBe` "a1075db5"
         other -> expectationFailure $ "Not a short id: " <> show other
 
-    -- The prefix of a Bitcoin Cash address has a colon, but no hash before it
-    it "is an address, as typed, for any other word" $ do
+    -- The prefix of a Bitcoin Cash address has a colon, but no hash before
+    -- it. The shell offers the address without its prefix.
+    it "is an address, as typed, for a word that reads as an address on one of the networks" $ do
       readShown "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" `shouldBe` Right (ShownAddress "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj")
       readShown "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u" `shouldBe` Right (ShownAddress "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u")
+      readShown "qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u" `shouldBe` Right (ShownAddress "qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u")
+
+    it "is a file for a name of none of the other shapes" $
+      readShown "unsigned.psbt" `shouldBe` Right (ShownFile "unsigned.psbt")
+
+    -- A letter other than m and h is in no path
+    it "is a file for a word with a slash and a letter that no path has" $ do
+      readShown "./unsigned.psbt" `shouldBe` Right (ShownFile "./unsigned.psbt")
+      readShown "/tmp/unsigned.psbt" `shouldBe` Right (ShownFile "/tmp/unsigned.psbt")
+
+    it "is a file named like a short id when its directory comes before it" $
+      readShown "./a1075db5" `shouldBe` Right (ShownFile "./a1075db5")
+
+    -- 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj with its last character changed:
+    -- the checksum no longer matches
+    it "is a file for an address whose checksum is wrong, since it is an address on no network" $
+      readShown "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLk" `shouldBe` Right (ShownFile "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLk")
 
   describe "A coin as the user types it" $ do
     it "is TXID:INDEX with the txid in full" $

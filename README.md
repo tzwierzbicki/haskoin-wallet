@@ -130,7 +130,7 @@ digits, which the next steps and the listings show.
 3. Back on the offline computer, check the transaction and sign it:
 
    ```console
-   hw reviewtx unsigned.psbt
+   hw show unsigned.psbt
    hw signtx --input unsigned.psbt --output signed.psbt
    ```
 
@@ -376,7 +376,7 @@ server, so they are not marked.
 | [`sync`](#hw-sync) | Update the accounts from the server |
 | **[Addresses](#addresses)** | |
 | [`receive`](#hw-receive) | Get a new address to receive a payment |
-| [`show`](#hw-show) | Show an address, a transaction or a coin of the wallet |
+| [`show`](#hw-show) | Show an address, a transaction or a coin, or a transaction file |
 | [`addresses`](#hw-addresses) | List the receiving addresses, or the change addresses |
 | [`balances`](#hw-balances) | List the addresses that hold coins |
 | [`label`](#hw-label) | Label a receiving address or a transaction |
@@ -394,7 +394,6 @@ server, so they are not marked.
 | **[Transactions](#transactions)** | |
 | [`txs`](#hw-txs) | List the transactions of an account |
 | [`pendingtxs`](#hw-pendingtxs) | List the pending transactions |
-| [`reviewtx`](#hw-reviewtx) | Show the transaction in a file |
 | [`exporttx`](#hw-exporttx) | Write a pending transaction to a file |
 | [`importtx`](#hw-importtx) | Add a transaction file to the pending transactions |
 | [`deletetx`](#hw-deletetx) | Delete a pending transaction and free its coins |
@@ -752,8 +751,8 @@ hw receive --label "invoice 42"
 
 #### `hw show`
 
-`hw show [WORD]` shows one thing of the wallet and changes nothing. The word
-tells what it is, by its shape:
+`hw show [WORD]` shows one thing of the wallet, or a transaction file, and
+changes nothing. The word tells what it is, by its shape:
 
 | Word | What `show` shows |
 |---|---|
@@ -762,6 +761,7 @@ tells what it is, by its shape:
 | An address | That address of the wallet, a change address too |
 | A txid or a nosigHash | That transaction, pending or in the history |
 | `TXID:INDEX` | That coin, with every detail, as `coins --verbose` shows it |
+| Any other word | That [transaction file](#transaction-files), as its account sees it |
 
 A hash goes in full or by its [short id](#short-ids).
 
@@ -772,6 +772,7 @@ hw show /1/2 --account vault
 hw show ADDRESS
 hw show a1075db5                            # a transaction by its short id
 hw show a1075db5:1                          # a coin
+hw show unsigned.psbt                       # a transaction file
 ```
 
 **An address.** An address the wallet holds is shown as `receive` shows a new
@@ -812,6 +813,13 @@ find a payment there.
 it sees it. A payment between two accounts of the wallet is shown once for
 each. `--account` keeps the view of one account.
 
+**A transaction file.** `show` shows the transaction in a file and the account
+it belongs to, without changing the wallet. Run it on the offline computer
+before you sign, and on the online computer before you send. The labels it
+shows are those the file carries, so an offline computer sees the labels of the
+online wallet. A file of another wallet that involves no account of the wallet
+needs `--network`: see [Files of other wallets](#files-of-other-wallets).
+
 > **Good to know**
 >
 > - **An address the wallet does not hold is refused**, so the code never pays
@@ -826,10 +834,17 @@ each. `--account` keeps the view of one account.
 >   too.
 > - **Without a word, the address may have been paid already.** `show` gives
 >   out the newest address again, as it is. Run `receive` for a new one.
-> - **`--account` goes with a path, a transaction, or no word.** An address and
->   a coin tell their account, so `show` refuses `--account` with them.
-> - **A word that is none of these is refused**, with the forms `show` takes.
->   A short id with a digit missing gets this answer, for instance.
+> - **`--account` goes with a path, a transaction, a file, or no word.** An
+>   address and a coin tell their account, so `show` refuses `--account` with
+>   them. `--network` goes with a file only.
+> - **A file that involves two accounts needs `--account`.** A transaction the
+>   wallet holds is shown once for each account instead.
+> - **A file named like a hash, an address or a path is taken for one.** Type
+>   its directory before it, as in `hw show ./a1075db5`. Tab offers such a file
+>   once you type `./`.
+> - **A word that is none of these and names no file is refused**, with the
+>   forms `show` takes. A short id with a digit missing gets this answer, for
+>   instance.
 
 #### `hw addresses`
 
@@ -1074,7 +1089,7 @@ hw preparesendall ADDRESS1:0.1 ADDRESS2 --fee-rate median --leave-dust
 
 Signs a pending transaction by its nosigHash, in full or by its
 [short id](#short-ids), or a transaction file. It first
-shows the transaction, as [`reviewtx`](#hw-reviewtx) does, then asks for the
+shows the transaction, as [`show`](#hw-show) does, then asks for the
 mnemonic and passphrase of the account, or for the shares of its backup. Check
 what it shows before you type the mnemonic, and stop it with Ctrl-C if it is
 not the payment you mean. Once signed, it prints the txid and the file it wrote.
@@ -1227,16 +1242,6 @@ hw pendingtxs --csv pending.csv
 > - **A pending transaction locks its coins.** They stay locked until `sync`
 >   sees the transaction on the network, or until `deletetx` deletes it. Delete
 >   the transactions you abandon.
-
-#### `hw reviewtx`
-
-`hw reviewtx FILE` shows the transaction in a file and the account it belongs
-to, without changing the wallet. The labels it shows are those the file carries,
-so an offline computer sees the labels of the online wallet.
-
-```console
-hw reviewtx unsigned.psbt
-```
 
 #### `hw exporttx`
 
@@ -1476,13 +1481,13 @@ its version.
   of the address each of them spends from.
 
 Such a file names no network. The account it involves tells it. A file that
-involves no account of the wallet, for `reviewtx`, `broadcast` or `signsweep`,
+involves no account of the wallet, for `show`, `broadcast` or `signsweep`,
 needs `--network`, or the `default-network` of the configuration file.
 
 ### Paths `hw` refuses
 
 `hw` signs for the addresses of the account alone, at `/0/n` and `/1/n`. A file
-that names a key of the account at any other path is refused, by `reviewtx` as
+that names a key of the account at any other path is refused, by `show` as
 by `signtx`. An output there would be the account's, and yet never seen by it,
 since it scans those two chains alone.
 
@@ -1578,6 +1583,10 @@ Each command is offered what it takes from your wallet:
   all of them, and `--spend-from` those that hold coins you can spend now.
 - Your transactions. `label` and `show` offer them by their txid, and the
   pending ones by the hash `pendingtxs` shows. `show` offers your coins too.
+
+`show` also offers file names, as for any file. It leaves out a file whose name
+looks like a hash, an address or a path, since `show` would read it as one.
+Type `./` first, and Tab offers it.
 
 After `--account`, `bumpfee`, `--coin` and `--spend-from` offer the
 transactions, coins and addresses of that account only.
