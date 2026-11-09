@@ -548,9 +548,9 @@ exportImportSpec ctx =
         [(recordRef r, recordLabel r) | r <- records, recordType r == TxRecord] `shouldBe` [(Text.pack txid, Just "Rent")]
 
     -- The wallet is lost with its computer. recover finds the account from
-    -- the mnemonic, as btc0, with the one address the chain paid. The file
-    -- gives the account its name and its labels back, the labelled address
-    -- nobody paid among them. The unlabelled one nobody paid is gone, until
+    -- the mnemonic, as default-btc, with the one address the chain paid.
+    -- The file gives the account its name and its labels back, the
+    -- labelled address nobody paid among them. The unlabelled one nobody paid is gone, until
     -- receive hands it out again.
     it "are read back by importacc into the account recovered from the mnemonic, give or take the unused addresses without a label" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -559,7 +559,7 @@ exportImportSpec ctx =
         _ <- answer home ["deleteacc", "main", "btc", "/44'/0'/0'"] []
         _ <- answer home ["recover"] seedOnce
         (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [(externalAddrsText !! 0, "")]
-        (accountsImported <$> hwJson home ["importacc", home </> "labels.jsonl"] []) `shouldReturn` Right [("main", "renamed from btc0")]
+        (accountsImported <$> hwJson home ["importacc", home </> "labels.jsonl"] []) `shouldReturn` Right [("main", "renamed from default-btc")]
         (fingerprintsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("main", Just "bc560f95")]
         -- Nothing to spend: the coin is locked again
         (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("main", 0, 0)]

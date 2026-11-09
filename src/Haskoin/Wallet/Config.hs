@@ -76,8 +76,8 @@ data Config = Config
     -- A sweep that pays no account of the wallet does not take it: it
     -- needs its --network. recover does not take it either: it searches
     -- Bitcoin and Bitcoin Cash, since a seed is often paid on both. It
-    -- also names the default account a command takes in a wallet of
-    -- several accounts ('defaultAccountNetwork').
+    -- also names the network whose default or only account a command
+    -- takes in a wallet of several accounts ('defaultAccountNetwork').
     configDefaultNetwork :: Maybe Network,
     -- | The unit of the amounts when --unit is not given, for a user who
     -- counts in satoshis or in bits. It is the default of --unit, so it
@@ -182,16 +182,16 @@ instance Default Config where
 commandNetwork :: Config -> Maybe Network -> Maybe Network
 commandNetwork cfg given = given <|> configDefaultNetwork cfg
 
--- | The network whose default account a command takes when the wallet has
--- several accounts and neither --account nor --network names one: the
--- default network of the configuration, or btc without one
+-- | The network whose default or only account a command takes when the
+-- wallet has several accounts and neither --account nor --network names
+-- one: the default network of the configuration, or btc without one
 -- ('Haskoin.Wallet.Database.Account.chooseAccount').
 --
 -- Unlike 'commandNetwork', it falls back on btc. A command that makes
 -- something on a network, such as createacc, must not guess the network:
--- the configuration or the user must name it. Choosing an account guesses
--- nothing. It only finds an account the user named default-btc, and that
--- account is on btc whatever the guess.
+-- the configuration or the user must name it. Choosing an account makes
+-- nothing. It finds an account the wallet has already on btc: the one
+-- named default-btc, or the only one there.
 defaultAccountNetwork :: Config -> Network
 defaultAccountNetwork cfg = fromMaybe btc (configDefaultNetwork cfg)
 

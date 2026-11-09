@@ -96,7 +96,7 @@ pathSpec =
         _ <- answer home ["createacc", "second"] seedTwice
         (cutAddressOf <$> hwJson home ["show", "/0/0", "--account", "second"] []) `shouldReturn` Right "17Hc4H2HwzLf..........QPGpNEvK2NUo"
         (errorOf <$> hwJson home ["show", "/0/0"] [])
-          `shouldReturn` Right "Specify which account to use with --account: the wallet has several, and none is default-btc, the default account of btc"
+          `shouldReturn` Right "Specify which account to use with --account: the wallet has several accounts on btc, and none is default-btc, the default account of btc"
 
     -- hw stores the address /0/0 of cash, the Bitcoin Cash account of the
     -- test wallet, as bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u.

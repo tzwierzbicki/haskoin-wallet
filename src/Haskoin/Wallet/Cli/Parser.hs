@@ -533,11 +533,13 @@ digits, hw names both and asks for the full hash.
 
 A command that acts on one account, such as receive, takes the only account of
 the wallet. In a wallet of several accounts, it takes the default account of
-the network: the account named default-btc on btc, or default-bch on bch. Give
---account to use another one. --network names the network of the default
-account. Without it, that is the default-network of the configuration file, or
-btc. Name an account default-btc with createacc or renameacc to make it the
-default.
+the network: the account named default-btc on btc, or default-bch on bch.
+Without a default account, it takes the only account of the wallet on the
+network. Give --account to use another one. --network names the network.
+Without it, that is the default-network of the configuration file, or btc.
+Name an account default-btc with createacc or renameacc to make it the
+default. recover names the first account it adds on a network so, when the
+wallet has no account there yet.
 
 To sign on an offline computer, create the account there with createacc. Copy
 it to the online computer with exportacc and importacc. Then carry each
@@ -905,6 +907,9 @@ for the accounts of its seed that were paid. It checks the accounts in order
 from index 0, and asks the server about the receiving addresses of each. Each
 account that was paid is added, named after the network and its index, such
 as btc0 or bch0, and synced. Accounts the wallet has already are skipped.
+On a network where the wallet has no account yet, the first account added is
+named default-btc or default-bch instead. It is then the default account,
+which commands take without --account.
 
 Without --network, `recover` searches Bitcoin, then Bitcoin Cash. The
 default-network of the configuration file does not apply. A seed is often paid
@@ -1040,11 +1045,11 @@ or of another network. checkmnemonic then says so, with the --type or the
     }
 
 -- | The account of a command that acts on one account: the one --account
--- names, or the only one of the wallet, or the default account of the
--- --network ('Haskoin.Wallet.Database.Account.chooseAccount')
+-- names, or the only one of the wallet, or the default or only account of
+-- the --network ('Haskoin.Wallet.Database.Account.chooseAccount')
 accountChoiceOption :: Args AccountChoice
 accountChoiceOption =
-  accountChoiceWith "The account to use. Without it, the only account of the wallet, or else the default account of the network, such as default-btc."
+  accountChoiceWith "The account to use. Without it, the only account of the wallet, or else the default account of the network, such as default-btc, or else the only account on the network."
 
 -- | The --account and --network of a command that acts on one account,
 -- with the help of the command about --account. --network comes with
@@ -1053,11 +1058,11 @@ accountChoiceOption =
 accountChoiceWith :: String -> Args AccountChoice
 accountChoiceWith what = AccountChoice <$> accountOptionWith what <*> defaultAccountNetworkOption
 
--- | The network whose default account a command takes, when given
+-- | The network whose default or only account a command takes, when given
 defaultAccountNetworkOption :: Args (Maybe Network)
 defaultAccountNetworkOption =
   networkOptionWith
-    "In a wallet of several accounts, the command uses the default account of this network, such as default-bch, when no --account is given. Without it, the default-network of the configuration file, or btc. With --account, it must be the network of the account."
+    "In a wallet of several accounts, the command uses the default account of this network, such as default-bch, or else the only account on it, when no --account is given. Without it, the default-network of the configuration file, or btc. With --account, it must be the network of the account."
 
 -- | The account of a command that acts on every account without it
 onlyAccountOption :: Args (Maybe Text)
@@ -1383,12 +1388,13 @@ taken for a bip44 account, as importacc takes them.
 
 --account names the account of a path and of the newest address. Without it,
 they are of the only account of the wallet, or else of the default account of
-the network, such as default-btc. With a transaction or a transaction file,
---account keeps the view of that account. An address, a coin and a file of
-accounts tell their accounts, so `show` refuses --account with them.
+the network, such as default-btc, or else of the only account on the network.
+With a transaction or a transaction file, --account keeps the view of that
+account. An address, a coin and a file of accounts tell their accounts, so
+`show` refuses --account with them.
 
 --network goes with a path, with nothing to show, and with a file. With a path
-or nothing, it names the network of the default account. With a file, it is the
+or nothing, it names the network of the account. With a file, it is the
 network of a file that names none. An address, a transaction and a coin are of
 an account, on the network of the account, so `show` refuses --network with
 them.
@@ -1427,16 +1433,16 @@ shownCompletion typed = do
 -- | The --account of show, which goes with some of what it shows only
 showAccountOption :: Args (Maybe Text)
 showAccountOption =
-  accountOptionWith "The account of the path or of the newest address. Without it, the only account of the wallet, or else the default account of the network, such as default-btc. With a transaction or a transaction file, the account whose view to show."
+  accountOptionWith "The account of the path or of the newest address. Without it, the only account of the wallet, or else the default account of the network, such as default-btc, or else the only account on the network. With a transaction or a transaction file, the account whose view to show."
 
 -- | The --network of show, which goes with a path, with nothing to show,
--- and with a file. With a path or nothing, it names the default account
--- to show it of, as for receive. With a file, it is the network of a file
+-- and with a file. With a path or nothing, it names the network of the
+-- account to show it of, as for receive. With a file, it is the network of a file
 -- of another wallet, which may name none. An address, a transaction and a
 -- coin are of an account, on the network of the account.
 showNetworkOption :: Args (Maybe Network)
 showNetworkOption =
-  networkOptionWith "With a path or with nothing to show, the network of the default account to use, such as default-bch, when no --account is given. With a file, the network of a transaction file that names none and involves no account of this wallet, or of an account that a file of accounts names no network for. Without it, the default-network of the configuration file, and btc for a default account."
+  networkOptionWith "With a path or with nothing to show, the network of the default or only account to use, such as default-bch, when no --account is given. With a file, the network of a transaction file that names none and involves no account of this wallet, or of an account that a file of accounts names no network for. Without it, the default-network of the configuration file, and btc for a default account."
 
 {- addresses -}
 
@@ -1776,7 +1782,7 @@ underCoins = optionGroup "Coins"
 -- | The account a payment spends from, which coin control can tell
 payingAccountOption :: Args AccountChoice
 payingAccountOption =
-  accountChoiceWith "The account to pay from. Without it, the account of the --coin or --spend-from given, or else the only account of the wallet, or else the default account of the network, such as default-btc."
+  accountChoiceWith "The account to pay from. Without it, the account of the --coin or --spend-from given, or else the only account of the wallet, or else the default account of the network, such as default-btc, or else the only account on the network."
 
 -- | Where the change of preparetx goes, when the command says
 changeBackOption :: Args (Maybe Bool)

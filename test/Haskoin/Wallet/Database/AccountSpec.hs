@@ -218,7 +218,7 @@ namingSpec ctx = do
         lift $ dbShouldFailWith "The account nobody does not exist" $ getAccountByName "nobody"
 
   -- As a command that acts on one account takes it: by --account, as the
-  -- only one, or as the default account of the network. The first
+  -- only one, or as the default or only account of the network. The first
   -- argument of chooseAccount is the default network of the configuration.
   describe "Choosing the account of a command" $ do
     let byName name = AccountChoice (Just name) Nothing
@@ -259,31 +259,50 @@ namingSpec ctx = do
         cashAcc <- testNewAccBch ctx "default-bch"
         chooseAccount btc (byNetwork bch) `dbShouldBeE` cashAcc
 
-    it "asks for --account in a wallet of several accounts and no default account, naming the one it looked for" $
+    it "is the only account on the --network, in a wallet without default accounts" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "btc0"
+        cashAcc <- testNewAccBch ctx "bch0"
+        chooseAccount btc (byNetwork bch) `dbShouldBeE` cashAcc
+
+    it "is the only account on the default network without --network, in a wallet without default accounts" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "btc0"
+        cashAcc <- testNewAccBch ctx "bch0"
+        chooseAccount bch unnamed `dbShouldBeE` cashAcc
+
+    it "asks for --account when the network has several accounts and none is its default account, naming the one it looked for" $
       inDatabaseE $ do
         _ <- testNewAcc ctx "main"
         _ <- testNewAcc ctx "savings"
         lift $
-          dbShouldFailWith "Specify which account to use with --account: the wallet has several, and none is default-btc, the default account of btc" $
+          dbShouldFailWith "Specify which account to use with --account: the wallet has several accounts on btc, and none is default-btc, the default account of btc" $
             chooseAccount btc unnamed
+
+    it "asks for --account or --network when the wallet has no account on the network" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        _ <- testNewAcc ctx "savings"
+        lift $
+          dbShouldFailWith "Specify which account to use with --account or --network: the wallet has no account on bch" $
+            chooseAccount btc (byNetwork bch)
 
     it "does not take the default account of another network" $
       inDatabaseE $ do
         _ <- testNewAcc ctx "main"
+        _ <- testNewAcc ctx "savings"
         _ <- testNewAccBch ctx "default-bch"
         lift $
-          dbShouldFailWith "Specify which account to use with --account: the wallet has several, and none is default-btc, the default account of btc" $
+          dbShouldFailWith "Specify which account to use with --account: the wallet has several accounts on btc, and none is default-btc, the default account of btc" $
             chooseAccount btc unnamed
 
     -- An earlier hw let an account of bch be named default-btc
-    it "does not take an account named default-btc on bch for the default account of btc" $
+    it "takes the only account on btc, and not an account named default-btc on bch" $
       inDatabaseE $ do
-        _ <- testNewAcc ctx "main"
+        mainAcc <- testNewAcc ctx "main"
         (cashId, _) <- testNewAccBch ctx "cash"
         lift $ P.update cashId [DBAccountName P.=. "default-btc"]
-        lift $
-          dbShouldFailWith "Specify which account to use with --account: the wallet has several, and none is default-btc, the default account of btc" $
-            chooseAccount btc unnamed
+        chooseAccount btc unnamed `dbShouldBeE` mainAcc
 
     it "refuses the account --account names when it is not on the --network" $
       inDatabaseE $ do

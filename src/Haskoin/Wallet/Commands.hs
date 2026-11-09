@@ -239,9 +239,8 @@ answered :: Either String Response -> Response
 answered = either (ResponseError . cs) id
 
 -- | The account of a command that acts on one account, as the user chose
--- it, with the default account of the default network of the
--- configuration in a wallet of several accounts
--- ('chooseAccount')
+-- it, with the default or only account of the default network of the
+-- configuration in a wallet of several accounts ('chooseAccount')
 chosenAccount :: Config -> AccountChoice -> ExceptT String (DB IO) (DBAccountId, DBAccount)
 chosenAccount cfg = chooseAccount (defaultAccountNetwork cfg)
 
@@ -626,7 +625,7 @@ cmdReceive ctx cfg opts =
 -- meant another account, or another thing to show. A file of accounts
 -- tells its accounts too. A path and the newest address are of the
 -- account the user chose, as for receive: --network names the network of
--- its default account. With a file, --network is the network of the
+-- that account. With a file, --network is the network of the
 -- file. An address, a transaction and a coin are of an account, on the
 -- network of the account, so --network is refused with them.
 cmdShow :: Ctx -> Config -> Maybe Text -> Maybe Shown -> Maybe Network -> IO Response
@@ -1216,7 +1215,7 @@ preparedAnswer ctx accId acc output tsd left = do
 -- addresses of --spend-from name their account, which must be on the
 -- --network, if given. Otherwise the account is chosen as for any command
 -- that acts on one account: by --account, or as the only one, or as the
--- default account of the network ('chosenAccount'). Each --spend-from
+-- default or only account of the network ('chosenAccount'). Each --spend-from
 -- address must be one of the account: the address counts, not its text, so
 -- a Bitcoin Cash address is found without its prefix, or in its legacy
 -- form.

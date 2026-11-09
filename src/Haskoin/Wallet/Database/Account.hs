@@ -7,8 +7,9 @@
 -- | The accounts of the wallet: an account of a network, of either kind
 -- ("Haskoin.Wallet.Keys".'AccountKind'), identified by its key, with the
 -- fingerprint of its seed once hw has learnt it, its balances and its
--- address counts. Also the account a command acts on, as the user names it
--- or as the wallet's only or default account ('chooseAccount').
+-- address counts. Also the account a command acts on, as the user names it,
+-- or else the only account of the wallet, or the default or only account of
+-- a network ('chooseAccount').
 module Haskoin.Wallet.Database.Account where
 
 import Conduit (MonadUnliftIO)
@@ -352,21 +353,29 @@ data AccountChoice = AccountChoice
 -- 3. In a wallet of several accounts, the default account of the network
 --    of --network, or of the network given here without one: default-btc
 --    for btc ('defaultAccountName').
+-- 4. Without a default account, the only account of the wallet on that
+--    network.
 --
--- Without such a default account, the user must name the account with
--- --account. An account chosen by its name, or as the only one, must be
--- on the network of --network when one is given.
+-- When none of these gives an account, the user must name it with
+-- --account. An account chosen by its name, or as the only one of the
+-- wallet, must be on the network of --network when one is given.
 --
--- The only account comes before the default account, as it did before
--- default accounts, so a wallet of one account never needs a name. The
--- network given here, the default network of the configuration, applies
--- to the third step only. A wallet whose only account is on bch thus keeps
+-- The only account of the wallet comes first, as it did before default
+-- accounts, so a wallet of one account never needs a name. The network
+-- given here, the default network of the configuration, applies to the
+-- last two steps only. A wallet whose only account is on bch thus keeps
 -- using it, whatever that network is.
 --
--- The default account is looked up by name and network together. An
--- account named default-btc on another network, which an earlier hw could
--- create, is not the default account of btc, so a command never acts on
--- an account of a network the user did not mean.
+-- The default account comes before the only account of the network, so
+-- that naming an account default-btc settles the choice for good. Adding a
+-- second account of btc then changes nothing. Without a default account, a
+-- wallet of one account on each network, as recover may leave, needs no
+-- --account either: --network alone tells the account.
+--
+-- An account is counted on its network only. An account named default-btc
+-- on another network, which an earlier hw could create, is not the default
+-- account of btc, so a command never acts on an account of a network the
+-- user did not mean.
 chooseAccount ::
   (MonadUnliftIO m) =>
   Network ->
@@ -380,27 +389,34 @@ chooseAccount fallback choice = do
       case accounts of
         [] -> throwError "There are no accounts in the wallet"
         [only] -> return only
-        _ -> defaultAccountOn (fromMaybe fallback choice.namedNetwork)
+        _ -> liftEither $ accountOfNetwork (fromMaybe fallback choice.namedNetwork) accounts
   liftEither $ checkOnNetwork choice.namedNetwork (snd chosen)
   return chosen
 
--- | The default account of a network, which the wallet must have
-defaultAccountOn ::
-  (MonadUnliftIO m) =>
-  Network ->
-  ExceptT String (DB m) (DBAccountId, DBAccount)
-defaultAccountOn net = do
-  found <- lift $ P.getBy $ UniqueName name
-  case found of
-    Just a | accountNetwork (entityVal a) == net -> return (entityPair a)
-    _ ->
-      throwError $
-        "Specify which account to use with --account: the wallet has several, and none is "
-          <> cs name
-          <> ", the default account of "
-          <> net.name
+-- | Among the accounts of a wallet, the account of a network: its default
+-- account, or else its only account on the network
+accountOfNetwork :: Network -> [(DBAccountId, DBAccount)] -> Either String (DBAccountId, DBAccount)
+accountOfNetwork net accounts =
+  case find isDefault onNetwork of
+    Just account -> Right account
+    Nothing -> case onNetwork of
+      [only] -> Right only
+      [] ->
+        Left $
+          "Specify which account to use with --account or --network: the wallet has no account on "
+            <> net.name
+      _ ->
+        Left $
+          "Specify which account to use with --account: the wallet has several accounts on "
+            <> net.name
+            <> ", and none is "
+            <> cs defaultName
+            <> ", the default account of "
+            <> net.name
   where
-    name = defaultAccountName net
+    onNetwork = filter ((== net) . accountNetwork . snd) accounts
+    defaultName = defaultAccountName net
+    isDefault (_, acc) = dBAccountName acc == defaultName
 
 -- | Refuse an account that is not on the network --network gives, if any
 checkOnNetwork :: Maybe Network -> DBAccount -> Either String ()

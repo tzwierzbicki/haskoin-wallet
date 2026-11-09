@@ -230,10 +230,14 @@ names it. Without `--account`, the command takes:
    `btc`, `default-bch` on `bch`. `--network` names the network. Without it,
    the network is the `default-network` of the
    [configuration](#configuration), or `btc`.
+3. The only account on that network, when the network has no default account.
+   In a wallet of `btc0` and `bch0`, `receive --network bch` takes `bch0`.
 
-Without a default account on that network, the command asks for `--account`.
-Make an account the default with [`createacc`](#hw-createacc) or
-[`renameacc`](#hw-renameacc):
+When the network has several accounts and none is the default, or none at
+all, the command asks for `--account`. Make an account the default with
+[`createacc`](#hw-createacc) or [`renameacc`](#hw-renameacc).
+[`recover`](#hw-recover) makes one too, on a network where the wallet has no
+account yet:
 
 ```console
 hw renameacc main default-btc               # main is now the default on btc
@@ -256,6 +260,9 @@ file of [`exportacc`](#hw-exportacc) carries it to another wallet.
 > - **A wallet of one account takes it on any network.** The
 >   `default-network` does not pass it over. `--network` must then be its
 >   network.
+> - **The default account wins over the only one.** A second account on
+>   `btc` changes nothing for a wallet with a `default-btc`. Without one, it
+>   makes the commands on `btc` ask for `--account`.
 > - **Some commands find the account themselves.** `signtx`, `importtx`,
 >   `bumpfee` and `preparesweep` take the account of the transaction, and
 >   `preparetx --coin` or `--spend-from` the account of the coins. When a
@@ -536,7 +543,12 @@ network would say nothing of the other. A test network is searched only when
 
 The accounts are named after their network and index: `btc0`, `btc1`, `bch0`
 and so on for the `bip44` accounts, and `btc0-segwit`, `btc1-segwit` and so on
-for the `bip84` ones. The search stops after 10 accounts in a row without a
+for the `bip84` ones. On a network where the wallet has no account yet, the
+first account found is named `default-btc` or `default-bch` instead. It is
+then the [default account](#the-account-of-a-command) that commands take
+without `--account`. The first one found is the `bip44` account of the lowest
+index, or the `bip84` one when no `bip44` account was paid. The search stops
+after 10 accounts in a row without a
 payment, or the number `--account-gap` gives, for each kind of account apart.
 After a thousand used addresses in a row, it asks whether to keep looking, as
 [`sync`](#hw-sync) does. On a terminal, a line tells which network and account
@@ -570,6 +582,10 @@ to an address of `hw`.
 >   searches the other one. Its answer ends with the network it left out, and
 >   it exits with an error, as `sync` does. Run `recover` again once the
 >   server answers. The accounts found the first time are skipped.
+> - **An account the wallet has keeps its place.** On a network where the
+>   wallet has an account already, `recover` names no account `default-btc`.
+>   Otherwise, recovering a seed again, for the accounts created since, would
+>   make its account 1 the default in place of account 0.
 
 #### `hw checkmnemonic`
 

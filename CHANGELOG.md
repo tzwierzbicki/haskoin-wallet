@@ -56,12 +56,14 @@ Accounts and backups:
   `importacc` would make of such a file, and changes nothing.
 - Default accounts. In a wallet of several accounts, a command that acts on one
   account takes the account named `default-btc` on Bitcoin, `default-bch` on
-  Bitcoin Cash, and so on, without `--account`. `--network` names the network
-  of the default account, and without it the `default-network` of the
-  configuration, or `btc`. `receive`, `show`, `addresses`, `balances`, `coins`,
-  `txs`, `preparetx`, `preparesendall` and `checkmnemonic` take `--network`
-  for it. Only an account of a network can take the name of its default
-  account. A wallet of one account still needs no `--account`.
+  Bitcoin Cash, and so on, without `--account`. Without a default account, it
+  takes the only account on the network. `--network` names the network, and
+  without it the `default-network` of the configuration, or `btc`. `receive`,
+  `show`, `addresses`, `balances`, `coins`, `txs`, `preparetx`,
+  `preparesendall` and `checkmnemonic` take `--network` for it. Only an
+  account of a network can take the name of its default account. `recover`
+  gives it to the first account it finds on a network where the wallet has no
+  account yet. A wallet of one account still needs no `--account`.
 
 Addresses:
 

@@ -246,18 +246,57 @@ recoverNetworks :: Maybe Network -> [Network]
 recoverNetworks = maybe [btc, bch] pure
 
 -- | Recover the accounts of a seed on a network, of every kind the network
--- has, the BIP44 accounts first: those found paid are created, named after
--- the network, their index and their kind, and synced, and every account
--- of the seed records its fingerprint. The gap of accounts counts for each
--- kind apart. Returns the sync of each account created, in the order of
--- their kinds and indices.
+-- has, the BIP44 accounts first: those found paid are created, named as
+-- 'recoveredNames' says, and synced, and every account of the seed records
+-- its fingerprint. The gap of accounts counts for each kind apart. Returns
+-- the sync of each account created, in the order of their kinds and
+-- indices.
+--
+-- Every kind is searched before any account is created, so that the names
+-- are known together: only the first account found takes the name of the
+-- default account of the network.
 recoverSeed :: (MonadUnliftIO m) => Ctx -> Config -> Store -> Network -> PublicSeed -> Natural -> Watcher (DB m) -> ExceptT String (DB m) [SyncRes]
 recoverSeed ctx cfg store net seed accountGap watch = do
-  created <- fmap concat . forM (networkKinds net) $ \kind -> do
-    found <- recoverableAccounts ctx cfg store kind net seed accountGap watch
-    forM found $ \(index, key) -> insertAccount kind net ctx (recoveredName kind net index) key (Just (seedFingerprint seed))
+  withDefault <- lift $ recoverTakesDefault net
+  found <- fmap concat . forM (networkKinds net) $ \kind -> do
+    paid <- recoverableAccounts ctx cfg store kind net seed accountGap watch
+    return [(kind, index, key) | (index, key) <- paid]
+  let names = recoveredNames withDefault net [(kind, index) | (kind, index, _) <- found]
+  created <- forM (zip names found) $ \(name, (kind, _, key)) ->
+    insertAccount kind net ctx name key (Just (seedFingerprint seed))
   lift $ recordFingerprint ctx seed
   forM created $ \(accId, _) -> sync ctx cfg store net accId False watch
+
+-- | Whether the first account recover creates on a network takes the name
+-- of the default account of the network, such as default-btc: when the
+-- wallet has no account on the network yet, and no account of another
+-- network has that name, as one from an earlier hw can.
+--
+-- A recovered wallet of several accounts thus needs no --account on each
+-- of its networks. An account the wallet has already on the network keeps
+-- its place, as the only account there or as the default one the user
+-- named. A recovered account named default-btc would take over from it
+-- without a word. Recovering a seed again, for the accounts created since,
+-- would even make account 1 of the seed the default in place of account 0.
+recoverTakesDefault :: (MonadUnliftIO m) => Network -> DB m Bool
+recoverTakesDefault net = do
+  accounts <- getAccounts
+  taken <- existsAccount (defaultAccountName net)
+  return $ not taken && not (any ((== net) . accountNetwork . snd) accounts)
+
+-- | The names of the accounts recover creates on a network, from their
+-- kinds and indices in the order found. With the flag of
+-- 'recoverTakesDefault', the first one is named as the default account of
+-- the network, such as default-btc. Every other one is named after the
+-- network, its index and its kind ('recoveredName').
+--
+-- The first account found is the bip44 account of the lowest index, or the
+-- bip84 one of the lowest index when no bip44 account was paid.
+recoveredNames :: Bool -> Network -> [(AccountKind, Natural)] -> [Text]
+recoveredNames withDefault net found =
+  case [recoveredName kind net index | (kind, index) <- found] of
+    _ : rest | withDefault -> defaultAccountName net : rest
+    names -> names
 
 -- | Where a chain of an account of the seed is, for the question of
 -- 'scanLimit': "on the receiving chain of the account /44'/0'/0' of the
@@ -267,9 +306,10 @@ seedAccountPlace :: Network -> SoftPath -> HardPath -> String
 seedAccountPlace net chain path =
   "on the " <> (if chain == intDeriv then "change" else "receiving") <> " chain of the account " <> pathToStr path <> " of the seed on " <> net.name
 
--- | The name of a recovered account: the network and the index, as in
--- btc0, for a BIP44 account, and with -segwit after them, as in
--- btc0-segwit, for a BIP84 one
+-- | The name of a recovered account that is not the default one
+-- ('recoveredNames'): the network and the index, as in btc0, for a BIP44
+-- account, and with -segwit after them, as in btc0-segwit, for a BIP84 one.
+-- importacc gives it to an account a file names not.
 recoveredName :: AccountKind -> Network -> Natural -> Text
 recoveredName kind net index = cs net.name <> cs (show index) <> suffix
   where
