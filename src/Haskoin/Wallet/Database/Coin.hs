@@ -35,6 +35,7 @@ module Haskoin.Wallet.Database.Coin
     coinBalancesAt,
     lockCoin,
     unlockCoin,
+    walletCoinShown,
     setLockedByUser,
     userLockedCoins,
     coinAccounts,
@@ -630,6 +631,11 @@ unlockCoin outpoint = do
     Just LockedByTransaction -> throwError "The coin is locked by a pending transaction, not by the user: deletetx frees it"
     Nothing -> throwError "The coin is not locked"
   shownCoin net row
+
+-- | A coin of the wallet by its outpoint, as coins shows it now, with its
+-- account: what show answers. It changes nothing.
+walletCoinShown :: (MonadUnliftIO m) => OutPoint -> ExceptT String (DB m) (DBAccount, JsonCoin)
+walletCoinShown outpoint = uncurry shownCoin =<< walletCoin outpoint
 
 -- | The accounts that hold the coins, each once. A coin the wallet does not
 -- hold has none.

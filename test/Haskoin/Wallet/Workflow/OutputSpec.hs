@@ -815,8 +815,8 @@ addressCodeSpec ctx = do
       withHome $ \home -> do
         createMain home
         _ <- answer home ["receive"] []
-        piped <- hw home ["showaddr", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"] []
-        (take 8 <$> screen home ["showaddr", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]) `shouldReturn` Text.lines (runOut piped)
+        piped <- hw home ["show", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"] []
+        (take 8 <$> screen home ["show", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]) `shouldReturn` Text.lines (runOut piped)
 
     it "draws the code of a BIP84 account from its bech32 address" $
       withHome $ \home -> do
@@ -856,32 +856,34 @@ addressCodeSpec ctx = do
         run <- hwOnScreen [] home ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "rent"]
         runOut run `shouldSatisfy` (not . Text.isInfixOf "█")
 
-  describe "showaddr" $ do
+  describe "show for an address" $ do
     it "shows the QR code of an address the wallet holds" $
       withHome $ \home -> do
         createMain home
         _ <- answer home ["receive"] []
-        (codeUnderAddress <$> screen home ["showaddr", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]) `shouldReturn` p2pkhAddressCode
+        (codeUnderAddress <$> screen home ["show", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]) `shouldReturn` p2pkhAddressCode
 
     it "hands out no new address" $
       withHome $ \home -> do
         createMain home
         _ <- answer home ["receive"] []
-        _ <- answer home ["showaddr", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"] []
+        _ <- answer home ["show", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"] []
         (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "")]
 
     it "answers in JSON as receive does" $
       withHome $ \home -> do
         createMain home
         given <- hwJson home ["receive"] []
-        (addressesOf <$> hwJson home ["showaddr", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"] []) `shouldReturn` addressesOf given
+        (addressesOf <$> hwJson home ["show", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"] []) `shouldReturn` addressesOf given
 
+    -- 1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1 is /0/3 of main, which receive
+    -- has not given out
     it "refuses an address the wallet does not hold, and shows no code" $
       withHome $ \home -> do
         createMain home
-        run <- hwOnScreen [] home ["showaddr", "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1"]
+        run <- hwOnScreen [] home ["show", "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1"]
         runExit run `shouldBe` ExitFailure 1
-        runOut run `shouldSatisfy` Text.isInfixOf "Address does not exist"
+        runOut run `shouldSatisfy` Text.isInfixOf "The wallet has no address 1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1"
         runOut run `shouldSatisfy` (not . Text.isInfixOf "█")
 
     it "finds the account of the address, whatever the default account" $
@@ -889,21 +891,41 @@ addressCodeSpec ctx = do
         createMain home
         _ <- answer home ["createacc", "segwit", "--type", "bip84"] seedTwice
         _ <- answer home ["receive", "--account", "segwit"] []
-        (fmap dBAccountName . accountOf <$> hwJson home ["showaddr", "bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc"] []) `shouldReturn` Right "segwit"
+        (fmap dBAccountName . accountOf <$> hwJson home ["show", "bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc"] []) `shouldReturn` Right "segwit"
 
     it "takes a Bitcoin Cash address without its prefix, and shows the whole address" $
       withHome $ \home -> do
         _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
         _ <- answer home ["receive", "--account", "cash"] []
-        (take 1 <$> screen home ["showaddr", "qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"])
+        (take 1 <$> screen home ["show", "qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"])
           `shouldReturn` ["/0/0  bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"]
 
     it "shows a change address at its path on the change chain" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
-        (take 1 <$> screen home ["showaddr", "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"])
+        (take 1 <$> screen home ["show", "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"])
           `shouldReturn` ["/1/0  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"]
+
+  describe "show for a path or for the newest address" $ do
+    it "shows the QR code at a path the wallet holds" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        (codeUnderAddress <$> screen home ["show", "/0/0"]) `shouldReturn` p2pkhAddressCode
+
+    -- receive gave out none: /0/0 may lie past the gap of a restored wallet
+    it "shows no code at a path the wallet does not hold" $
+      withHome $ \home -> do
+        createMain home
+        run <- hwOnScreen [] home ["show", "/0/0"]
+        runOut run `shouldSatisfy` (not . Text.isInfixOf "█")
+
+    it "shows the QR code of the newest receiving address without a word" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["receive"] []
+        (codeUnderAddress <$> screen home ["show"]) `shouldReturn` p2pkhAddressCode
 
 -- The pretty output, after the answer
 nextStepSpec :: Ctx -> Spec

@@ -470,14 +470,15 @@ addressAnswerDoc code unit acc addr spendable = do
 withCodeDoc :: Doc Style -> [Text] -> Doc Style
 withCodeDoc details rows = vcat (details : (annotate QrCode . pretty <$> rows))
 
--- | The address at a path of the account, as checkaddr shows it: its
--- path, the address and its label when the wallet has one, as the first
--- line of addresses, then its account and network. The user compares the
--- address with the one the online computer showed.
-checkAddrDoc :: DBAccount -> SoftPath -> Text -> Text -> Doc Style
-checkAddrDoc acc path addr label =
+-- | The address at a path of the account that show derives, when the
+-- wallet does not hold it: its path and the address, as the first line of
+-- addresses, then its account and network. The wallet holds no row for
+-- it, so it has no label and no balance. The user compares the address
+-- with the one the online computer showed.
+derivedAddrDoc :: DBAccount -> SoftPath -> Text -> Doc Style
+derivedAddrDoc acc path addr =
   vcat
-    [ columns $ [text (cs (pathText path)), pretty addr] <> [labelWord label | not (Text.null label)],
+    [ columns [text (cs (pathText path)), pretty addr],
       indent 2 (accountField acc),
       indent 2 (field 9 "Network" <> text (accountNetwork acc).name)
     ]
@@ -1932,12 +1933,12 @@ responsePrinter unit view code shown answer =
     ResponseDescriptors held -> renderIO $ vcat (intersperse mempty [descriptorDoc acc descriptor slip132 | (acc, descriptor, slip132) <- held])
     ResponseAddress acc addr spendable ->
       renderIO =<< addressAnswerDoc code unit acc addr spendable
-    ResponseCheckAddr acc path addr label -> renderIO $ checkAddrDoc acc path addr label
+    ResponseDerivedAddr acc path addr -> renderIO $ derivedAddrDoc acc path addr
     ResponseTx acc txInfo ->
       renderIO =<< txAnswerDoc (accountNetwork acc) (Just acc) unit txInfo
     -- Each account's view of the transaction, a blank line between them
-    ResponseLabelledTxs held ->
-      renderIO . vcat . intersperse mempty =<< mapM (\(acc, txInfo) -> txAnswerDoc (accountNetwork acc) (Just acc) unit txInfo) held
+    ResponseLabelledTxs held -> renderIO =<< heldTxsDoc unit held
+    ResponseHeldTxs held -> renderIO =<< heldTxsDoc unit held
     -- The coins left in the account below the transaction, apart from it
     ResponsePrepared acc txInfo left -> do
       renderIO =<< txAnswerDoc (accountNetwork acc) (Just acc) unit txInfo
@@ -1993,6 +1994,12 @@ responsePrinter unit view code shown answer =
       renderIO $ feeRatesDoc net now rates
   where
     listing = mapM_ (renderIO . listingDoc) =<< rowsPrinter unit view answer
+
+-- | A transaction as each account that holds it sees it, in full, a blank
+-- line between the accounts: what label and show answer
+heldTxsDoc :: AmountUnit -> [(DBAccount, TxInfo)] -> IO (Doc Style)
+heldTxsDoc unit held =
+  vcat . intersperse mempty <$> mapM (\(acc, txInfo) -> txAnswerDoc (accountNetwork acc) (Just acc) unit txInfo) held
 
 -- | A transaction just signed, as signtx and signsweep answer on the
 -- screen: its id, and the file it was written to, if any. The transaction

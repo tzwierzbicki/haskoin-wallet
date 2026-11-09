@@ -4,8 +4,7 @@
 
 -- | An account as the user keeps it, from createacc to deleteacc: its
 -- descriptor, for other wallets and from them, its
--- addresses and their labels, an address checked on the offline computer,
--- its mnemonic typed in parts, the messages its keys sign and check, the
+-- addresses and their labels, its mnemonic typed in parts, the messages its keys sign and check, the
 -- backup of its database, and its recovery from a seed, with a passphrase
 -- as typed.
 module Haskoin.Wallet.Workflow.AccountSpec (spec) where
@@ -40,7 +39,6 @@ spec = prepareContext $ \ctx -> do
   segwitSpec ctx
   descriptorSpec
   addressSpec ctx
-  checkAddrSpec
   splitSpec
   sharesSpec ctx
   messageSpec
@@ -246,13 +244,13 @@ segwitSpec ctx =
         runExit run `shouldNotBe` ExitSuccess
         run `shouldSatisfy` printed "The type of an account is bip44 or bip84"
 
-    it "hands out addresses that start with bc1q, which checkaddr derives too" $
+    it "hands out addresses that start with bc1q, which show derives at their paths too" $
       withHome $ \home -> do
         createSpending home
         (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [(segwitExternalAddrsText !! 0, "")]
         (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [(segwitExternalAddrsText !! 1, "")]
-        (addressesOf <$> hwJson home ["checkaddr", "/0/5"] []) `shouldReturn` Right [(segwitExternalAddrsText !! 5, "")]
-        (addressesOf <$> hwJson home ["checkaddr", "/1/0"] []) `shouldReturn` Right [(segwitInternalAddrsText !! 0, "")]
+        (addressesOf <$> hwJson home ["show", "/0/5"] []) `shouldReturn` Right [(segwitExternalAddrsText !! 5, "")]
+        (addressesOf <$> hwJson home ["show", "/1/0"] []) `shouldReturn` Right [(segwitInternalAddrsText !! 0, "")]
 
     it "is shown by descriptor as wpkh, as a Coldcard writes it, with its zpub for Electrum on a row of its own" $
       withHome $ \home -> do
@@ -567,73 +565,6 @@ addressSpec ctx =
       withHome $ \home -> do
         createMain home
         (addressesOf <$> hwJson home ["addresses", "--change"] []) `shouldReturn` Right []
-
-{- Checking an address on the offline computer -}
-
-checkAddrSpec :: Spec
-checkAddrSpec =
-  describe "An address checked with checkaddr" $ do
-    -- The signer never ran receive: it derives the address from the key
-    it "is the one receive gave out online, at the path receive showed, on the signer that never handed it out" $
-      withHome $ \signer -> withHome $ \online -> do
-        createMain signer
-        _ <- answer signer ["exportacc", signer </> "main.json"] []
-        _ <- answer online ["importacc", signer </> "main.json"] []
-        replicateM_ 3 $ answer online ["receive"] []
-        (addressesOf <$> hwJson online ["receive"] []) `shouldReturn` Right [(externalAddrsText !! 3, "")]
-        (addressesOf <$> hwJson signer ["checkaddr", "/0/3"] []) `shouldReturn` Right [(externalAddrsText !! 3, "")]
-
-    it "is a change address for a path on the change chain, before the account spends" $
-      withHome $ \home -> do
-        createMain home
-        (addressesOf <$> hwJson home ["checkaddr", "/1/0"] []) `shouldReturn` Right [(internalAddrsText !! 0, "")]
-
-    it "is shown under its path, then its account and network" $
-      withHome $ \home -> do
-        createMain home
-        run <- hw home ["checkaddr", "/0/3"] []
-        runOut run `shouldBe` "/0/3  " <> externalAddrsText !! 3 <> "\n  Account  : main\n  Network  : btc\n"
-
-    it "is shown with its label when the wallet has it" $
-      withHome $ \home -> do
-        createMain home
-        _ <- answer home ["receive", "--label", "rent"] []
-        (addressesOf <$> hwJson home ["checkaddr", "/0/0"] []) `shouldReturn` Right [(externalAddrsText !! 0, "rent")]
-
-    -- 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo is the first receiving address of
-    -- second, account 1 of the seed
-    it "is of the --account named, which a wallet of several accounts needs" $
-      withHome $ \home -> do
-        createMain home
-        _ <- answer home ["createacc", "second"] seedTwice
-        (addressesOf <$> hwJson home ["checkaddr", "/0/0", "--account", "second"] []) `shouldReturn` Right [("17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "")]
-        (errorOf <$> hwJson home ["checkaddr", "/0/0"] []) `shouldReturn` Right "Specify which account to use"
-
-    -- hw stores the address /0/0 of cash, the Bitcoin Cash account of the
-    -- test wallet, as bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u
-    it "is written as the network of the account writes it" $
-      withHome $ \home -> do
-        _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
-        (addressesOf <$> hwJson home ["checkaddr", "/0/0"] []) `shouldReturn` Right [("bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u", "")]
-
-    it "hands out nothing: the wallet has no address after it, and receive starts at the first" $
-      withHome $ \home -> do
-        createMain home
-        _ <- answer home ["checkaddr", "/0/5"] []
-        _ <- answer home ["checkaddr", "/1/5"] []
-        (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right []
-        (addressesOf <$> hwJson home ["addresses", "--change"] []) `shouldReturn` Right []
-        (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [(externalAddrsText !! 0, "")]
-
-    -- A third chain, a hardened step, one step, three steps, no leading
-    -- slash, a master key, and the first hardened index
-    it "is refused for a path that is not that of an address, with the two forms" $
-      withHome $ \home -> do
-        createMain home
-        forM_ ["/2/0", "/0/3'", "/0", "/0/3/1", "0/3", "m/0/3", "/0/2147483648"] $ \path -> do
-          run <- hw home ["checkaddr", path] []
-          runExit run `shouldBe` ExitFailure 1
-          runErr run `shouldSatisfy` Text.isInfixOf ("The path " <> Text.pack path <> " is not that of an address: /0/i is the receiving address i, and /1/i the change address i")
 
 {- New mnemonics and backups in shares -}
 

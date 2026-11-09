@@ -271,11 +271,10 @@ arbitraryResponse net ctx =
       ResponseBalances
         <$> arbitraryDBAccount net ctx
         <*> resize 20 (listOf $ (,) <$> arbitraryDBAddress net <*> arbitraryCoinBalance),
-      ResponseCheckAddr
+      ResponseDerivedAddr
         <$> arbitraryDBAccount net ctx
         <*> arbitraryChainPath
-        <*> (fromJust . addrToText net <$> arbitraryAddress net)
-        <*> arbitraryText,
+        <*> (fromJust . addrToText net <$> arbitraryAddress net),
       ResponsePendingTxs
         <$> arbitraryMaybe (arbitraryDBAccount net ctx)
         <*> resize 20 (listOf $ (,) <$> arbitraryDBAccount net ctx <*> arbitraryTxInfo net),
@@ -284,6 +283,7 @@ arbitraryResponse net ctx =
         <*> resize 20 (listOf $ ListedTx <$> arbitraryTxInfo net <*> arbitraryMaybe arbitrary),
       ResponseTx <$> arbitraryDBAccount net ctx <*> arbitraryTxInfo net,
       ResponseLabelledTxs <$> resize 3 (listOf $ (,) <$> arbitraryDBAccount net ctx <*> arbitraryTxInfo net),
+      ResponseHeldTxs <$> resize 3 (listOf $ (,) <$> arbitraryDBAccount net ctx <*> arbitraryTxInfo net),
       ResponsePrepared
         <$> arbitraryDBAccount net ctx
         <*> arbitraryTxInfo net

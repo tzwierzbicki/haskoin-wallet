@@ -28,7 +28,7 @@ import qualified Data.Aeson.Types as Json
 import Data.List (genericTake, nub)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes, mapMaybe)
+import Data.Maybe (catMaybes, listToMaybe, mapMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -361,12 +361,6 @@ labelAddress addrTxt label = do
     throwError "A change address takes no label. Only a receiving address does."
   setAddrLabel (dBAddressAccount addr) (dBAddressIndex addr) label
 
--- | The label of the address of the account at an index of a chain: none
--- when the wallet has no row for it, or the row has no label
-addressLabelAt :: (MonadUnliftIO m) => DBAccountId -> AddrType -> KeyIndex -> DB m Text
-addressLabelAt accId addrType index =
-  maybe "" dBAddressLabel <$> P.get (DBAddressKey accId (isInternal addrType) (fromIntegral index))
-
 {- Addresses in the database -}
 
 -- | Store the balances the store reports for addresses of the account. A
@@ -392,12 +386,16 @@ updateAddressBalances net accId storeBals =
 -- 'addressesAmong'. An account key is in the wallet once, so an address is
 -- of one account at most.
 getAddressByText :: (MonadUnliftIO m) => Text -> ExceptT String (DB m) (DBAccount, DBAddress)
-getAddressByText addrTxt = do
-  accounts <- lift getAccounts
-  found <- lift $ forM accounts $ \(accId, acc) -> map (acc,) <$> addressesAmong [addrTxt] (accId, acc)
-  case concat found of
-    held : _ -> return held
-    [] -> throwError "Address does not exist"
+getAddressByText addrTxt =
+  maybe (throwError "Address does not exist") return =<< lift (findAddressByText addrTxt)
+
+-- | The address of the wallet a text names, as 'getAddressByText' finds
+-- it, or Nothing when no account holds it
+findAddressByText :: (MonadUnliftIO m) => Text -> DB m (Maybe (DBAccount, DBAddress))
+findAddressByText addrTxt = do
+  accounts <- getAccounts
+  found <- forM accounts $ \(accId, acc) -> map (acc,) <$> addressesAmong [addrTxt] (accId, acc)
+  return (listToMaybe (concat found))
 
 -- | The accounts that have the addresses, each once, however the addresses
 -- are written: see 'addressesAmong'. An address the wallet does not have

@@ -184,17 +184,13 @@ addressSpec =
                    ]
 
     -- The address /0/3 of main, which the wallet has not handed out, so
-    -- it has no label
-    it "gives the address checkaddr derives under its path, then its account and network" $
-      renderedLines (checkAddrDoc mainAccountRow (Deriv :/ 0 :/ 3) "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1" "")
+    -- it has no label and no balance
+    it "gives the address show derives at a path the wallet does not hold under its path, then its account and network" $
+      renderedLines (derivedAddrDoc mainAccountRow (Deriv :/ 0 :/ 3) "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1")
         `shouldBe` [ "/0/3  1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1",
                      "  Account  : main",
                      "  Network  : btc"
                    ]
-
-    it "shows the label of the address checkaddr derives when the wallet has one" $
-      (renderedLines (checkAddrDoc mainAccountRow (Deriv :/ 0 :/ 3) "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1" "Savings") !! 0)
-        `shouldBe` "/0/3  1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1  \"Savings\""
 
     -- The rows of # stand for the rows of a code
     it "goes above its QR code, which starts on the next line" $

@@ -152,7 +152,7 @@ derives the same addresses, without the mnemonic.
 
 ```console
 hw receive                                  # on the online computer: /0/7 and the address
-hw checkaddr /0/7                           # on the offline computer: the same address?
+hw show /0/7                                # on the offline computer: the same address?
 ```
 
 ## Keep your funds safe
@@ -173,7 +173,7 @@ hw checkaddr /0/7                           # on the offline computer: the same 
   [make it private](#a-wallet-readable-by-others).
 - **An online computer can show a wrong address.** One that was tampered with
   shows an address of its own, and the payer pays the attacker.
-  [Check an address](#check-an-address-before-you-give-it-out) with `checkaddr`
+  [Check an address](#check-an-address-before-you-give-it-out) with `show`
   on the offline computer before you give it out.
 - **`hw` takes the server's word for the chain.** It checks that the server
   answers about the addresses and transactions it asked about and no others,
@@ -369,11 +369,10 @@ server, so they are not marked.
 | [`sync`](#hw-sync) | Update the accounts from the server |
 | **[Addresses](#addresses)** | |
 | [`receive`](#hw-receive) | Get a new address to receive a payment |
-| [`showaddr`](#hw-showaddr) | Show an address of the wallet with its QR code |
+| [`show`](#hw-show) | Show an address, a transaction or a coin of the wallet |
 | [`addresses`](#hw-addresses) | List the receiving addresses, or the change addresses |
 | [`balances`](#hw-balances) | List the addresses that hold coins |
 | [`label`](#hw-label) | Label a receiving address or a transaction |
-| [`checkaddr`](#hw-checkaddr) | Show the address at a derivation path, to check it offline |
 | **[Coins](#coins)** | |
 | [`coins`](#hw-coins) | List the coins of an account |
 | [`lockcoin`](#hw-lockcoin) | Keep a coin from being spent |
@@ -735,21 +734,56 @@ hw receive --label "invoice 42"
 > - **Scripts get the text alone.** Piped into another program, or with `--json`,
 >   `receive` shows no code.
 
-#### `hw showaddr`
+#### `hw show`
 
-`hw showaddr ADDRESS` shows an address of the wallet as `receive` shows a new
-one, with its QR code on a terminal. Use it to give an address out again. It
-hands out no new address and changes nothing.
+`hw show [WORD]` shows one thing of the wallet and changes nothing. The word
+tells what it is, by its shape:
+
+| Word | What `show` shows |
+|---|---|
+| none | The newest receiving address of the account, the first one `addresses` lists |
+| `/0/i` or `/1/i` | The receiving address `i`, or the change address `i`, derived from the public key |
+| An address | That address of the wallet, a change address too |
+| A txid or a nosigHash | That transaction, pending or in the history |
+| `TXID:INDEX` | That coin, with every detail, as `coins --verbose` shows it |
+
+A hash goes in full or by its [short id](#short-ids).
 
 ```console
-hw showaddr ADDRESS
+hw show                                     # the newest receiving address
+hw show /0/7                                # the address at a path
+hw show /1/2 --account vault
+hw show ADDRESS
+hw show a1075db5                            # a transaction by its short id
+hw show a1075db5:1                          # a coin
 ```
+
+**An address.** An address the wallet holds is shown as `receive` shows a new
+one, with its QR code on a terminal. Use it to give an address out again.
+`show` hands out no new address.
+
+**A path.** `show` derives the address at a path from the public key of the
+account. It needs no mnemonic and no server, so it runs on the offline computer
+too. There it checks an address the online computer gave out: see
+[Check an address](#check-an-address-before-you-give-it-out).
+
+**A transaction.** A transaction is shown in full, as each account that holds
+it sees it. A payment between two accounts of the wallet is shown once for
+each. `--account` keeps the view of one account.
 
 > **Good to know**
 >
 > - **An address the wallet does not hold is refused**, so the code never pays
->   anyone else. The address tells its account.
-> - **Any address of the wallet will do**, a change address too.
+>   anyone else.
+> - **An address at a path the wallet does not hold has no QR code.** `receive`
+>   has not given it out, and it may lie past the gap of 20 that a restored
+>   wallet looks at.
+> - **Without a word, the address may have been paid already.** `show` gives
+>   out the newest address again, as it is. Run `receive` for a new one.
+> - **`--account` goes with a path, a transaction, or no word.** An address and
+>   a coin tell their account, so `show` refuses `--account` with them.
+> - **A word that is none of these is refused**, with the forms `show` takes.
+>   A short id with a digit missing gets this answer, for instance.
 
 #### `hw addresses`
 
@@ -828,19 +862,6 @@ is away stays when the signed file comes back.
 gives a replacement the labels of the transactions it replaces. A transaction
 between two accounts of the wallet gets the label in both.
 
-#### `hw checkaddr`
-
-`hw checkaddr PATH` shows the address of an account at a derivation path, `/0/i`
-for the receiving address `i` and `/1/i` for the change address `i`, derived
-from the public key. Any other path is refused. It needs no mnemonic and no
-server, hands out no address, and stores nothing. Run it on the offline computer
-to check an address the online computer gave out.
-
-```console
-hw checkaddr /0/7
-hw checkaddr /1/2 --account vault
-```
-
 ### Coins
 
 #### `hw coins`
@@ -878,6 +899,8 @@ the time of its transaction, its value, its state, its confirmations up to
 `TXID:INDEX`, in full and by its short id, the time of its transaction, its
 value, state, confirmations and block, the address that holds it with its path,
 and the labels of the address and of the transaction.
+
+[`show TXID:INDEX`](#hw-show) shows one coin, with every detail.
 
 ```console
 hw coins
@@ -1052,8 +1075,8 @@ what the recipients receive, asking which of them pays.
 
 #### `hw txs`
 
-Lists the transactions of an account, as of the last sync. Each takes two
-lines:
+Lists the transactions of an account, as of the last sync.
+[`show TXID`](#hw-show) shows one of them in full. Each takes two lines:
 
 1. Its [short id](#short-ids), the first 8 digits of its txid, then its time, in
    the time zone of the computer, its amount and its status.
@@ -1133,6 +1156,7 @@ with that of its txid. It gives the time the transaction was created, its
 amount and its status, with its fee rate. The second gives its account when
 every account is listed, the transactions a replacement replaces, and what the
 transaction is for. A conflicted one can no longer be sent.
+[`show HASH`](#hw-show) shows one of them in full.
 
 `--tabular` shows each transaction on one row of a table: its short id, its
 account when every account is listed, the time it was created, its type, its
@@ -1504,10 +1528,10 @@ Each command is offered what it takes from your wallet:
   are not in a block yet.
 - Your coins. `lockcoin` offers the free ones, `unlockcoin` those you locked,
   and `--coin` those you can spend now.
-- Your addresses. `label` offers the receiving addresses, `signmsg` all of
-  them, and `--spend-from` those that hold coins you can spend now.
-- Your transactions. `label` offers them by their txid, and the pending ones
-  by the hash `pendingtxs` shows.
+- Your addresses. `label` offers the receiving addresses, `show` and `signmsg`
+  all of them, and `--spend-from` those that hold coins you can spend now.
+- Your transactions. `label` and `show` offer them by their txid, and the
+  pending ones by the hash `pendingtxs` shows. `show` offers your coins too.
 
 After `--account`, `bumpfee`, `--coin` and `--spend-from` offer the
 transactions, coins and addresses of that account only.

@@ -584,18 +584,26 @@ commandLineSpec ctx = do
         run <- hw home (tabAfter ["label", "17Ki"]) []
         runOut run `shouldBe` ""
 
-    it "offers the receiving addresses of the wallet after showaddr" $
+    it "offers the receiving addresses of the wallet after show" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        run <- hw home (tabAfter ["showaddr", "1KEn"]) []
+        run <- hw home (tabAfter ["show", "1KEn"]) []
         runOut run `shouldBe` "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\n"
 
-    it "offers the change addresses too after showaddr" $
+    it "offers the change addresses too after show" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
-        run <- hw home (tabAfter ["showaddr", "17Ki"]) []
+        run <- hw home (tabAfter ["show", "17Ki"]) []
         runOut run `shouldBe` "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn\n"
+
+    -- The payment of the paid chain, by its txid, and its one coin of the
+    -- wallet, TXID:0, which bash takes as it is: TXID\:0
+    it "offers the transactions and the coins of the wallet after show, by their first digits" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home (tabAfter ["show", take 4 (txidArg (payment ctx))]) []
+        runOut run `shouldBe` Text.pack (txidArg (payment ctx)) <> "\n" <> Text.pack (txidArg (payment ctx)) <> "\\:0\n"
 
     it "offers the change addresses too after signmsg" $
       withChain ctx (paidChain ctx) $ \home _ -> do

@@ -31,6 +31,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     onePendingTx,
     textOf,
     fixedTo,
+    txidArg,
     coinArg,
     shortOf,
     shortCoinArg,
@@ -55,6 +56,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     accountOf,
     fingerprintsOf,
     addressesOf,
+    heldTxsOf,
     coinsShown,
     coinLabelsShown,
     leftOf,
@@ -229,9 +231,13 @@ textOf = maybe (error "textOf") Text.unpack . addrToText btc
 fixedTo :: Address -> String -> String
 fixedTo addr amount = textOf addr <> ":" <> amount
 
+-- | A transaction by its txid in full, as typed
+txidArg :: Tx -> String
+txidArg tx = Text.unpack (txHashToHex (txHash tx))
+
 -- | A coin of a transaction, as --coin takes it
 coinArg :: Tx -> Int -> String
-coinArg tx i = Text.unpack (txHashToHex (txHash tx)) <> ":" <> show i
+coinArg tx i = txidArg tx <> ":" <> show i
 
 -- | The short id of a hash as typed: its first 8 digits, as the listings
 -- show it
@@ -359,8 +365,15 @@ fingerprintsOf other = Left (show other)
 addressesOf :: Response -> Either String [(Text, Text)]
 addressesOf (ResponseAddress _ addr _) = Right [(dBAddressAddress addr, dBAddressLabel addr)]
 addressesOf (ResponseAddresses _ addrs) = Right [(dBAddressAddress addr, dBAddressLabel addr) | (addr, _) <- addrs]
-addressesOf (ResponseCheckAddr _ _ addr label) = Right [(addr, label)]
+addressesOf (ResponseDerivedAddr _ _ addr) = Right [(addr, "")]
 addressesOf other = Left (show other)
+
+-- | A transaction as show answers with it, as each account that holds it
+-- sees it: the name of the account, and what the transaction adds to its
+-- balance, or takes from it when negative
+heldTxsOf :: Response -> Either String [(Text, Integer)]
+heldTxsOf (ResponseHeldTxs held) = Right [(dBAccountName acc, summaryAmount (txInfoSummary info)) | (acc, info) <- held]
+heldTxsOf other = Left (show other)
 
 -- | The coins of an answer: outpoint, value, confirmations, lock, and
 -- whether the builder may spend it now

@@ -27,7 +27,7 @@
 --
 -- A hash is given in full or by its short id, with nothing in between.
 -- The rule is short to say, and a word of 8 digits is never an address,
--- so that label tells a transaction from an address.
+-- so that label and show tell a transaction from an address.
 --
 -- When two hashes that a command can name share their short id, the
 -- command names both and asks for the full hash ('pickHash'). It never

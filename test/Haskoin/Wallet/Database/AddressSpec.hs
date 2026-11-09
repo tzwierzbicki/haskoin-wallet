@@ -344,17 +344,6 @@ databaseSpec ctx =
         acc <- lift $ updateAccountBalances accId
         liftIO $ (dBAccountBalanceConfirmed acc, dBAccountBalanceUnconfirmed acc, dBAccountBalanceCoins acc) `shouldBe` (7000, 700, 3)
 
-    -- The wallet has the receiving addresses /0/0 and /0/1 only
-    it "gives the label of an address by its chain and index, and none for an address the wallet does not have" $
-      inDatabaseE $ do
-        accId <- account ctx
-        _ <- genExtAddress ctx cfg accId "Savings"
-        _ <- genExtAddress ctx cfg accId ""
-        lift (addressLabelAt accId AddrExternal 0) `dbShouldBeE` "Savings"
-        lift (addressLabelAt accId AddrExternal 1) `dbShouldBeE` ""
-        lift (addressLabelAt accId AddrExternal 5) `dbShouldBeE` ""
-        lift (addressLabelAt accId AddrInternal 0) `dbShouldBeE` ""
-
     it "finds an address of the wallet by its text, with its account" $
       inDatabaseE $ do
         accId <- account ctx

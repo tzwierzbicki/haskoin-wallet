@@ -7,12 +7,13 @@
 module Haskoin.Wallet.Cli.ParserSpec (spec) where
 
 import Haskoin (txHashToHex)
-import Haskoin.Wallet.Cli.Parser (Labelled (..), program, readCoinRef, readLabelled)
+import Haskoin.Wallet.Cli.Parser (Labelled (..), Shown (..), program, readCoinRef, readLabelled, readShown)
 import Haskoin.Wallet.Cli.Parser.Args (Args (..), CommandSpec (..))
 import Haskoin.Wallet.Cli.Parser.Help (mentionedCommands, usageParts)
 import Haskoin.Wallet.Cli.Parser.Completion (completionParts)
 import Haskoin.Wallet.Cli.Parser.Run (Request (..), commandNamed, requestOf)
 import Haskoin.Wallet.Cli.Style (renderPlain)
+import Haskoin.Wallet.Database.Address (AddrType (..))
 import Haskoin.Wallet.ShortId (HashRef (..), coinRefText, shortIdText)
 import Test.Hspec
 
@@ -50,11 +51,8 @@ spec = do
     it "offers balances --compact, --verbose, --tabular and --csv as a choice" $
       usageOf "balances" `shouldBe` "[-a|--account NAME] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT]"
 
-    it "gives showaddr the address to show and no option" $
-      usageOf "showaddr" `shouldBe` "ADDRESS"
-
-    it "puts the argument of checkaddr before its option" $
-      usageOf "checkaddr" `shouldBe` "PATH [-a|--account NAME]"
+    it "puts the word of show, which may be left out, before its option" $
+      usageOf "show" `shouldBe` "[PATH|ADDRESS|HASH|TXID:INDEX] [-a|--account NAME]"
 
     it "puts a choice in parentheses, and a required option with two names too" $
       usageOf "verifymsg" `shouldBe` "(ADDRESS SIGNATURE MESSAGE | (-i|--input FILENAME)) [-n|--network NETWORK]"
@@ -81,6 +79,35 @@ spec = do
     it "is an address, as typed, for any other word" $ do
       readLabelled "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" `shouldBe` LabelledAddress "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"
       readLabelled "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u" `shouldBe` LabelledAddress "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"
+
+  describe "What show shows, by the shape of the word" $ do
+    it "is the receiving address i for /0/i, and the change address i for /1/i" $ do
+      readShown "/0/3" `shouldBe` Right (ShownPath AddrExternal 3)
+      readShown "/1/0" `shouldBe` Right (ShownPath AddrInternal 0)
+
+    -- No address, hash or coin has a slash
+    it "is refused as a path for any other word with a slash" $
+      readShown "m/0/3" `shouldBe` Left "The path m/0/3 is not that of an address: /0/i is the receiving address i, and /1/i the change address i"
+
+    it "is a coin for a txid by its short id, a colon and an index" $
+      case readShown "a1075db5:1" of
+        Right (ShownCoin coin) -> coinRefText coin `shouldBe` "a1075db5:1"
+        other -> expectationFailure $ "Not a coin: " <> show other
+
+    it "is a transaction for a word of 64 hexadecimal digits" $
+      case readShown "ab00000000000000000000000000000000000000000000000000000000000001" of
+        Right (ShownTx (FullHash tid)) -> txHashToHex tid `shouldBe` "ab00000000000000000000000000000000000000000000000000000000000001"
+        other -> expectationFailure $ "Not a transaction: " <> show other
+
+    it "is a transaction by its short id for a word of 8 hexadecimal digits" $
+      case readShown "a1075db5" of
+        Right (ShownTx (ShortHash short)) -> shortIdText short `shouldBe` "a1075db5"
+        other -> expectationFailure $ "Not a short id: " <> show other
+
+    -- The prefix of a Bitcoin Cash address has a colon, but no hash before it
+    it "is an address, as typed, for any other word" $ do
+      readShown "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" `shouldBe` Right (ShownAddress "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj")
+      readShown "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u" `shouldBe` Right (ShownAddress "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u")
 
   describe "A coin as the user types it" $ do
     it "is TXID:INDEX with the txid in full" $

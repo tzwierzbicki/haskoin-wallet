@@ -53,9 +53,10 @@ data Response
   | -- | Addresses of the account that hold coins, each with the balance of
     -- its coins
     ResponseBalances !DBAccount ![(DBAddress, CoinBalance)]
-  | -- | The address of the account at a path of one of its chains, as
-    -- checkaddr derives it, with the label the wallet has for it, if any
-    ResponseCheckAddr !DBAccount !SoftPath !Text !Text
+  | -- | The address of the account at a path of one of its chains,
+    -- derived from the key of the account, which the wallet does not hold:
+    -- what show answers for such a path
+    ResponseDerivedAddr !DBAccount !SoftPath !Text
   | -- | Transactions of the account
     ResponseTxs !DBAccount ![ListedTx]
   | -- | Pending transactions, each with its account: those of the account
@@ -66,6 +67,10 @@ data Response
   | -- | A transaction just labelled, as each account that holds it sees it:
     -- the account of a pending one, or every account whose history has it
     ResponseLabelledTxs ![(DBAccount, TxInfo)]
+  | -- | A transaction as each account that holds it sees it, as show
+    -- answers: the account of a pending one, or every account whose
+    -- history has it, such as both ends of a payment between two accounts
+    ResponseHeldTxs ![(DBAccount, TxInfo)]
   | -- | A transaction of the account just prepared by preparetx or
     -- preparesendall, with the coins it leaves in the account and why: the
     -- coins that coin control chose and could not spend, and for a
@@ -126,13 +131,14 @@ instance ToJSON Response where
       typed "addresses" ["account" .= acc, "addresses" .= (uncurry addressWithSpendable <$> addrs)]
     ResponseBalances acc addrs ->
       typed "balances" ["account" .= acc, "addresses" .= (uncurry addressWithCoinBalance <$> addrs)]
-    ResponseCheckAddr acc path addr label ->
-      typed "checkaddr" ["account" .= acc, "derivation" .= path, "address" .= addr, "label" .= label]
+    ResponseDerivedAddr acc path addr ->
+      typed "derivedaddr" ["account" .= acc, "derivation" .= path, "address" .= addr]
     ResponseTxs acc txs -> typed "txs" ["account" .= acc, "txs" .= (marshalValue (accountNetwork acc) <$> txs)]
     ResponsePendingTxs asked held ->
       typed "pendingtxs" ["account" .= asked, "txs" .= (heldTxJson <$> held)]
     ResponseTx acc info -> typed "tx" ["account" .= acc, "tx" .= marshalValue (accountNetwork acc) info]
     ResponseLabelledTxs held -> typed "labelledtxs" ["txs" .= (heldTxJson <$> held)]
+    ResponseHeldTxs held -> typed "heldtxs" ["txs" .= (heldTxJson <$> held)]
     ResponsePrepared acc info left ->
       typed "prepared" ["account" .= acc, "tx" .= marshalValue (accountNetwork acc) info, "left" .= left]
     ResponseOutsideTx net info -> typed "outsidetx" ["network" .= net.name, "tx" .= marshalValue net info]
@@ -175,7 +181,7 @@ instance FromJSON Response where
         uncurry (ResponseAddress acc) <$> (parseAddressWithSpendable =<< o .: "address")
       "addresses" -> ResponseAddresses <$> o .: "account" <*> (mapM parseAddressWithSpendable =<< o .: "addresses")
       "balances" -> ResponseBalances <$> o .: "account" <*> (mapM parseAddressWithCoinBalance =<< o .: "addresses")
-      "checkaddr" -> ResponseCheckAddr <$> o .: "account" <*> o .: "derivation" <*> o .: "address" <*> o .: "label"
+      "derivedaddr" -> ResponseDerivedAddr <$> o .: "account" <*> o .: "derivation" <*> o .: "address"
       "txs" -> do
         acc <- o .: "account"
         ResponseTxs acc <$> (mapM (unmarshalValue (accountNetwork acc)) =<< o .: "txs")
@@ -184,6 +190,7 @@ instance FromJSON Response where
         ResponseTx acc <$> (unmarshalValue (accountNetwork acc) =<< o .: "tx")
       "pendingtxs" -> ResponsePendingTxs <$> o .: "account" <*> (mapM heldTx =<< o .: "txs")
       "labelledtxs" -> ResponseLabelledTxs <$> (mapM heldTx =<< o .: "txs")
+      "heldtxs" -> ResponseHeldTxs <$> (mapM heldTx =<< o .: "txs")
       "prepared" -> do
         acc <- o .: "account"
         ResponsePrepared acc <$> (unmarshalValue (accountNetwork acc) =<< o .: "tx") <*> o .: "left"

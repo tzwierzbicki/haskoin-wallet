@@ -33,6 +33,7 @@ import Haskoin.Wallet.Cli.Completion
     idsToSend,
     labelTargets,
     pendingHashes,
+    shownTargets,
     walletAddresses,
   )
 import Haskoin.Wallet.Database.Address (AddrType, readChainPath)
@@ -80,8 +81,9 @@ data Command
     -- the deletion
     CommandDeleteAcc !Text !Network !HardPath
   | CommandReceive !Receive
-  | -- | An address of the wallet, as the user typed it
-    CommandShowAddr !Text
+  | -- | The account --account names, and what to show, or Nothing for the
+    -- newest receiving address of the account
+    CommandShow !(Maybe Text) !(Maybe Shown)
   | -- | The account, whether its change addresses, how to show each
     -- address or the CSV file to write them to, and the page
     CommandAddresses !(Maybe Text) !Bool !ListingOutput !(Paging Text)
@@ -89,8 +91,6 @@ data Command
     -- them to, and the page
     CommandBalances !(Maybe Text) !ListingOutput !(Paging Text)
   | CommandLabel !Label
-  | -- | The account, and the chain and index of the address to show
-    CommandCheckAddr !(Maybe Text) !AddrType !KeyIndex
   | -- | The account, how to show each transaction or the CSV file to
     -- write them to, and the page
     CommandTxs !(Maybe Text) !ListingOutput !(Paging HashRef)
@@ -178,6 +178,7 @@ viewOf listingView cmd
 -- that answer with one element show it
 viewOf _ (CommandLockCoin _) = Verbose
 viewOf _ (CommandUnlockCoin _) = Verbose
+viewOf _ (CommandShow _ _) = Verbose
 viewOf _ _ = Compact
 
 -- | Whether an address in an answer comes with its QR code, on a terminal
@@ -188,7 +189,7 @@ data AddressCode = WithCode | WithoutCode
 -- scan. label also answers with an address, which it does not give out.
 addressCodeOf :: Command -> AddressCode
 addressCodeOf (CommandReceive _) = WithCode
-addressCodeOf (CommandShowAddr _) = WithCode
+addressCodeOf (CommandShow _ _) = WithCode
 addressCodeOf _ = WithoutCode
 
 -- | How the screen shows a transaction a command answers with: in full,
@@ -266,6 +267,37 @@ data Labelled
 -- address.
 readLabelled :: String -> Labelled
 readLabelled word = maybe (LabelledAddress (cs word)) LabelledTx (readHashRef (cs word))
+
+-- | What show shows, as the word typed names it. One command takes the
+-- four, so that the user need not know which command shows what: the
+-- word tells. The shapes of the four do not overlap, so a word is never
+-- taken for one kind when it was typed as another ('readShown').
+data Shown
+  = -- | The address at a path of a chain of the account, /0/i or /1/i
+    ShownPath !AddrType !KeyIndex
+  | -- | An address of the wallet, as typed
+    ShownAddress !Text
+  | -- | A transaction, pending or on the chain, by its txid or, while it
+    -- is pending, its nosigHash, in full or by its short id
+    ShownTx !HashRef
+  | -- | A coin, TXID:INDEX, the txid in full or by its short id
+    ShownCoin !CoinRef
+  deriving (Eq, Show)
+
+-- | What a word typed for show names, by its shape. A path has a slash,
+-- which no address, hash or coin has, so a word with one is a path or is
+-- refused as one: 0/3 and m/0/3 are told how to write a path. A coin has
+-- a colon after 8 or 64 hexadecimal digits. A hash has 8 or 64
+-- hexadecimal digits and nothing else, which no address has, as for
+-- label. Any other word is an address. A word that is none of the four, a
+-- short id of 7 digits for instance, is taken for an address, and show
+-- then names the four kinds it can be.
+readShown :: String -> Either String Shown
+readShown word
+  | '/' `elem` word = uncurry ShownPath <$> readChainPath (cs word)
+  | Just coin <- readCoinRef word = Right (ShownCoin coin)
+  | Just hash <- readHashRef (cs word) = Right (ShownTx hash)
+  | otherwise = Right (ShownAddress (cs word))
 
 -- | The options of preparetx
 data PrepareTx = PrepareTx
@@ -463,7 +495,7 @@ program =
 hw is a BIP44 and BIP84 wallet for Bitcoin and Bitcoin Cash. It stores
 public keys only.
 |],
-      everydayNames = ["mnemonic", "recover", "accounts", "sync", "receive", "addresses", "balances", "label", "coins", "fees", "backup"],
+      everydayNames = ["mnemonic", "recover", "accounts", "sync", "receive", "show", "addresses", "balances", "label", "coins", "fees", "backup"],
       details =
         [r|
 A payment takes three steps:
@@ -529,11 +561,10 @@ Type hw COMMAND --help for the help of a command.
           CommandGroup
             "Addresses"
             [ receiveCommand,
-              showAddrCommand,
+              showCommand,
               addressesCommand,
               balancesCommand,
-              labelCommand,
-              checkAddrCommand
+              labelCommand
             ],
           CommandGroup
             "Coins"
@@ -1255,7 +1286,7 @@ addresses, at M/44'/coin'/index'/1/i. `addresses` --change lists them.
 of the configuration file says. A wallet restored from the mnemonic stops
 looking after that many unused addresses, and would miss later payments. Once that many
 addresses await a payment, `receive` refuses. Give out one of them again.
-`addresses` lists them, and showaddr shows one with its QR code.
+`addresses` lists them, and `show` shows one again with its QR code.
 
 On a terminal, the QR code of the address comes under it, for the payer to
 scan. The code holds a payment URI with the address and nothing else, so it does
@@ -1273,34 +1304,70 @@ labelOption =
       <> metavar "LABEL"
       <> help "A label for the address, to recognize the payment later"
 
-{- showaddr -}
+{- show -}
 
-showAddrCommand :: CommandSpec Command
-showAddrCommand =
+showCommand :: CommandSpec Command
+showCommand =
   CommandSpec
-    { name = "showaddr",
+    { name = "show",
       offline = False,
-      summary = "Show an address of the wallet with its QR code",
+      summary = "Show an address, a transaction or a coin of the wallet",
       details =
         [r|
-showaddr shows an address the wallet holds as `receive` shows a new one: its
-path, its label and what it received, and on a terminal its QR code under them.
-Use it to give out an address again. It hands out no new address and changes
-nothing.
+`show` shows one address, transaction or coin of the wallet, and changes
+nothing. The word given tells what it is:
 
-The address tells its account. An address the wallet does not hold is refused,
-so the code never pays anyone else. Any address of the wallet will do, a change
-address too.
+  /0/i or /1/i   the receiving address i, or the change address i
+  ADDRESS        an address of the wallet
+  HASH           a transaction, by its txid, or its nosigHash while pending
+  TXID:INDEX     a coin
+
+A hash goes in full or by its short id, its first 8 digits. With no word,
+`show` shows the newest receiving address of the account, the first one
+`addresses` lists. It hands out no new address.
+
+An address the wallet holds is shown as `receive` shows a new one: its path,
+its label and what it received, and on a terminal its QR code under them. Use
+it to give an address out again. Any address of the wallet will do, a change
+address too. An address the wallet does not hold is refused, so the code never
+pays anyone else.
+
+A path is derived from the public key of the account. It needs no mnemonic and
+nothing of the server, so it runs on an offline computer as well as online.
+Use it on the offline computer to check an address the online computer gave
+out. An online computer that was tampered with can show an address of its own
+in place of one of the account, and the payer would pay the attacker. The
+offline computer holds the same account, since createacc made it there, and
+derives the same addresses. Run `receive` online, then `show` on the offline
+computer with the path `receive` showed, and compare the two addresses letter
+for letter. The address at a path the wallet does not hold comes without its QR
+code, since `receive` did not give it out. It may lie past the gap that a
+restored wallet looks at.
+
+A transaction is shown in full, as each account that holds it sees it: a
+payment between two accounts of the wallet once for each. A coin is shown with
+every detail, as `coins` --verbose shows it.
+
+--account names the account of a path and of the newest address. With a
+transaction, it keeps the view of that account. An address and a coin tell
+their account, so `show` refuses --account with them.
 |],
-      args = CommandShowAddr <$> shownAddressArg
+      args = (\shown account -> CommandShow account shown) <$> optional shownArg <*> showAccountOption
     }
 
-shownAddressArg :: Args Text
-shownAddressArg =
-  strArgument $
-    metavar "ADDRESS"
-      <> completer (mkCompleter walletAddresses)
-      <> help "The address to show. It must be an address of this wallet."
+-- | What show shows, read by its shape ('readShown'), with the addresses,
+-- transactions and coins of the wallet that the shell offers for it
+shownArg :: Args Shown
+shownArg =
+  argument (eitherReader readShown) $
+    metavar "PATH|ADDRESS|HASH|TXID:INDEX"
+      <> completer (mkCompleter shownTargets)
+      <> help "What to show: a path such as /0/3, an address of the wallet, a transaction by its txid or nosigHash, or a coin. A hash goes in full or by its short id, the first 8 digits. Without it, the newest receiving address."
+
+-- | The --account of show, which goes with some of what it shows only
+showAccountOption :: Args (Maybe Text)
+showAccountOption =
+  accountOptionWith "The account of the path or of the newest address. Needed only when the wallet has more than one. With a transaction, the account whose view to show."
 
 {- addresses -}
 
@@ -1460,45 +1527,6 @@ labelledArg =
       <> completer (mkCompleter labelTargets)
       <> help "A receiving address of the wallet, as `addresses` lists it, or a transaction, by its txid or the hash pendingtxs shows, in full or by its short id, the first 8 digits. Change addresses take no label."
 
-{- checkaddr -}
-
-checkAddrCommand :: CommandSpec Command
-checkAddrCommand =
-  CommandSpec
-    { name = "checkaddr",
-      offline = False,
-      summary = "Show the address of an account at a derivation path",
-      details =
-        [r|
-checkaddr derives the address at PATH from the public key of the account, and
-shows it. It asks for no mnemonic and nothing of the server, so it runs on an
-offline computer as well as online. It hands out no address and stores
-nothing.
-
-Use it on the offline computer to check an address the online computer gave
-out. An online computer that was tampered with can show an address of its own
-in place of one of the account, and the payer would pay the attacker. The
-offline computer holds the same account, since createacc made it there, and
-derives the same addresses. Run `receive` online, then checkaddr on the offline
-computer with the path `receive` showed, and compare the two addresses letter
-for letter.
-
-The path is as `receive` and `addresses` show it: /0/i for the receiving
-address i, and /1/i for the change address i. Any other path is refused. Give
-payers the addresses `receive` hands out, which stay within the gap. An address
-the wallet has is shown with its label.
-|],
-      args = (\(addrType, index) account -> CommandCheckAddr account addrType index) <$> chainPathArg <*> accountOption
-    }
-
--- | The path of an address on one of the two chains of the account, read
--- as addresses shows it
-chainPathArg :: Args (AddrType, KeyIndex)
-chainPathArg =
-  argument (eitherReader (readChainPath . cs)) $
-    metavar "PATH"
-      <> help "The derivation path of the address, as `receive` and `addresses` show it: /0/i for the receiving address i, /1/i for the change address i"
-
 {- txs -}
 
 txsCommand :: CommandSpec Command
@@ -1511,7 +1539,7 @@ txsCommand =
         [r|
 The list is as of the last sync. Unconfirmed transactions come first, then
 the newest. The transactions you prepared, and those you sent that `sync` has
-not seen yet, are in pendingtxs.
+not seen yet, are in pendingtxs. `show` TXID shows one transaction in full.
 
 Each transaction takes two lines. The first starts with its short id, the first
 8 digits of its txid, which the other commands take in place of the txid. It
@@ -1919,7 +1947,8 @@ pendingTxsCommand =
         [r|
 A pending transaction is one that preparetx, preparesendall, bumpfee or
 preparesweep made, or that importtx added. It is unsigned, signed, or sent.
-`sync` retires it once the network lists it. The newest come first.
+`sync` retires it once the network lists it. The newest come first. `show`
+HASH shows one of them in full.
 
 Each takes two lines. The first starts with the short id of the transaction,
 the first 8 digits of its hash. The hash is the nosigHash of an unsigned
@@ -2177,7 +2206,7 @@ A coin is an unspent output of a transaction, written TXID:INDEX. The
 unconfirmed coins come first, then the newest. Each takes two lines. The first
 starts with the short id of the coin:
 the first 8 digits of its txid, a colon, and its index, such as a1075db5:1.
-lockcoin and --coin take it, or the coin in full. The first line then gives the
+lockcoin, --coin and `show` take it, or the coin in full. The first line then gives the
 time of the transaction that paid the coin, in the time zone of the computer,
 its value, its state and its confirmations, up to 999+ confirmations. A coin
 that a pending transaction spends is "locked by tx". The second line gives the

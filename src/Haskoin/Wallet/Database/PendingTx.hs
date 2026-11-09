@@ -532,14 +532,36 @@ labelTransaction ctx named label = do
       info <- pendingSummary ctx acc held {pendingTxData = held.pendingTxData {txSignDataLabel = label}}
       return [(acc, info)]
     Nothing -> do
-      accounts <- lift getAccounts
-      found <- fmap catMaybes . forM accounts $ \(accId, acc) ->
-        fmap (accId,acc,) <$> storedTxInfo accId named
-      when (null found) $
-        throwError $ "The wallet has no transaction " <> cs (txHashToHex named)
+      found <- inHistories named
       forM found $ \(accId, acc, info) -> do
         lift $ setTxLabel accId named label
         return (acc, info {txInfoLabel = label})
+
+-- | A transaction of the wallet as each account that holds it sees it,
+-- found as 'labelTransaction' finds it, with nothing changed: what show
+-- answers. A pending transaction is named by either of its hashes, and is
+-- of one account. A transaction on the network is named by its id, and is
+-- in every account whose history holds it, with the amounts of each.
+transactionViews :: (MonadUnliftIO m) => Ctx -> TxHash -> ExceptT String (DB m) [(DBAccountId, DBAccount, TxInfo)]
+transactionViews ctx named = do
+  pendingM <- findPendingTx named
+  case pendingM of
+    Just held -> do
+      acc <- getAccountById held.pendingTxAccount
+      info <- pendingSummary ctx acc held
+      return [(held.pendingTxAccount, acc, info)]
+    Nothing -> inHistories named
+
+-- | A transaction on the network, by its id, as each account whose
+-- history holds it sees it, or why there is none
+inHistories :: (MonadUnliftIO m) => TxHash -> ExceptT String (DB m) [(DBAccountId, DBAccount, TxInfo)]
+inHistories named = do
+  accounts <- lift getAccounts
+  found <- fmap catMaybes . forM accounts $ \(accId, acc) ->
+    fmap (accId,acc,) <$> storedTxInfo accId named
+  when (null found) $
+    throwError $ "The wallet has no transaction " <> cs (txHashToHex named)
+  return found
 
 -- | Mark a pending transaction as sent to the network by the user. The
 -- number of rows changed: one, or none for a hash that is not pending.

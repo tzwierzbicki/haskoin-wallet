@@ -53,10 +53,13 @@ Accounts and backups:
 
 Addresses:
 
-- `receive` shows a QR code of the new address on the terminal. `showaddr`
-  shows one for an address the wallet already holds.
-- `checkaddr` shows the address at a path. Run it on the offline computer to
-  check an address the online one gives out.
+- `receive` shows a QR code of the new address on the terminal.
+- `show` shows one thing of the wallet, as the word typed tells: the address at
+  a path such as `/0/3`, an address, a transaction by its txid or nosigHash, or
+  a coin `TXID:INDEX`. Without a word, it shows the newest receiving address.
+  An address the wallet holds comes with its QR code, to give it out again.
+  Run `show /0/3` on the offline computer to check an address the online one
+  gives out: it derives the address from the public key.
 - `balances` lists the addresses that hold coins.
 - `label` labels transactions too, and the prepare commands take `--label`.
 

@@ -36,10 +36,10 @@ module Haskoin.Wallet.Commands
 
     -- * Addresses
     cmdReceive,
+    cmdShow,
     cmdAddresses,
     cmdBalances,
     cmdLabel,
-    cmdCheckAddr,
 
     -- * Coins
     cmdCoins,
@@ -178,11 +178,10 @@ commandResponse ctx cfg unit = \case
   CommandAccounts account _ -> cmdAccounts cfg account
   -- Addresses
   CommandReceive opts -> cmdReceive ctx cfg opts
-  CommandShowAddr address -> cmdShowAddr cfg address
+  CommandShow account shown -> cmdShow ctx cfg account shown
   CommandAddresses account internal _ paging -> cmdAddresses cfg account internal paging
   CommandBalances account _ paging -> cmdBalances cfg account paging
   CommandLabel opts -> cmdLabel ctx cfg opts
-  CommandCheckAddr account addrType index -> cmdCheckAddr ctx cfg account addrType index
   -- Coins
   CommandCoins account locked _ paging -> cmdCoins cfg account locked paging
   CommandLockCoin outpoint -> cmdLockCoin cfg outpoint
@@ -629,13 +628,98 @@ cmdReceive ctx cfg opts =
     addr <- genExtAddress ctx cfg accId (fromMaybe "" opts.label)
     addressAnswer accId addr
 
--- | Show an address the wallet holds, to give it out again. The address
--- tells its account, and nothing is generated or stored.
-cmdShowAddr :: Config -> Text -> IO Response
-cmdShowAddr cfg typed =
-  runDBResponse cfg $ do
-    (_, addr) <- getAddressByText typed
-    addressAnswer (dBAddressAccount addr) addr
+-- | Show what the word names, as its shape tells ('Shown'), or without a
+-- word the newest receiving address of the account. Nothing is generated
+-- or stored. An address and a coin tell their account, so --account is
+-- refused with them rather than ignored: the user who typed it may have
+-- meant another account, or another thing to show.
+cmdShow :: Ctx -> Config -> Maybe Text -> Maybe Shown -> IO Response
+cmdShow ctx cfg account shownM =
+  runDBResponse cfg $ case shownM of
+    Nothing -> newestReceiving account
+    Just (ShownPath addrType index) -> addressAtPath ctx account addrType index
+    Just (ShownAddress typed) -> do
+      refuseAccount "An address"
+      shownAddress typed
+    Just (ShownTx named) -> shownTxs ctx account named
+    Just (ShownCoin named) -> do
+      refuseAccount "A coin"
+      (acc, coin) <- walletCoinShown =<< walletCoinOf named
+      return $ ResponseCoins acc [coin]
+  where
+    refuseAccount what =
+      when (isJust account) $
+        throwError (what <> " tells its account, so show takes no --account with it")
+
+-- | The newest receiving address of the account, the first one addresses
+-- lists, to give out again
+newestReceiving :: Maybe Text -> ExceptT String (DB IO) Response
+newestReceiving account = do
+  (accId, _) <- getAccountByName account
+  newest <- lift $ addressesAfter accId AddrExternal Nothing (Just 1)
+  case newest of
+    addr : _ -> addressAnswer accId addr
+    [] -> throwError "The account has no receiving address yet: receive gives out the first one"
+
+-- | The address of the account at an index of one of its chains, derived
+-- from the public key of the account: what an offline computer shows to
+-- check an address the online computer gave out. The address shown is
+-- always the one the key derives. When the wallet holds it, it is shown
+-- as receive shows one, with its label, its balance and its QR code. When
+-- the wallet does not, it is shown alone and without a code: receive did
+-- not give it out, and it may lie past the gap that a restored wallet
+-- looks at.
+addressAtPath :: Ctx -> Maybe Text -> AddrType -> KeyIndex -> ExceptT String (DB IO) Response
+addressAtPath ctx account addrType index = do
+  (accId, acc) <- getAccountByName account
+  let path = addrDeriv addrType :/ index
+  addrM <- liftIO $ deriveChainAddress ctx (accountKind acc) (accountXPubKey ctx acc) (addrDeriv addrType) index
+  -- BIP32 says to skip an index whose child key is invalid, so the chain
+  -- has no address there: see "Haskoin.Wallet.Database.Address"
+  addr <- liftMaybe ("There is no address at " <> cs (pathText path) <> ": the key at that index is invalid, and the chain skips it") addrM
+  -- The row is looked up by the address derived, not by its path, so that
+  -- the answer shows what the key derives in either case
+  held <- lift $ storedAmong [addr] (accId, acc)
+  case held of
+    row : _ -> addressAnswer accId row
+    [] -> ResponseDerivedAddr acc path <$> liftEither (addrToTextE (accountNetwork acc) addr)
+
+-- | An address of the wallet, however it is written, to give out again.
+-- The address tells its account. One the wallet does not hold is refused,
+-- so that its QR code never pays anyone else. A word that is an address
+-- on no network is none of what show shows, a short id with a digit
+-- missing for instance, and the answer names the four things it can be.
+shownAddress :: Text -> ExceptT String (DB IO) Response
+shownAddress typed = do
+  found <- lift $ findAddressByText typed
+  case found of
+    Just (_, addr) -> addressAnswer (dBAddressAccount addr) addr
+    Nothing
+      | any (\net -> isJust (textToAddr net typed)) allNets ->
+          throwError ("The wallet has no address " <> cs typed)
+      | otherwise ->
+          throwError $
+            cs typed
+              <> " is not a path, an address, a transaction or a coin: show takes a path such as /0/3,"
+              <> " an address of the wallet, a txid or a nosigHash, or a coin TXID:INDEX,"
+              <> " each hash in full or by its short id, its first 8 digits"
+
+-- | A transaction of the wallet, pending or on the chain, as each account
+-- that holds it sees it, or as the account --account names sees it. The
+-- short id is matched among the transactions of every account, as label
+-- matches it.
+shownTxs :: Ctx -> Maybe Text -> HashRef -> ExceptT String (DB IO) Response
+shownTxs ctx account named = do
+  askedM <- forM account $ \_ -> getAccountByName account
+  hash <- walletTxHashOf named
+  views <- transactionViews ctx hash
+  kept <- case askedM of
+    Nothing -> return views
+    Just (askedId, asked) ->
+      case [view | view@(heldId, _, _) <- views, heldId == askedId] of
+        [] -> throwError ("The transaction " <> hashRefText named <> " is not in the account " <> cs (dBAccountName asked))
+        mine -> return mine
+  return $ ResponseHeldTxs [(acc, info) | (_, acc, info) <- kept]
 
 cmdAddresses :: Config -> Maybe Text -> Bool -> Paging Text -> IO Response
 cmdAddresses cfg account internal paging = readListing cfg (addressesListing account internal paging)
@@ -698,24 +782,6 @@ cmdLabel ctx cfg opts =
       LabelledTx named -> do
         hash <- walletTxHashOf named
         ResponseLabelledTxs <$> labelTransaction ctx hash opts.label
-
--- | Show the address of the account at an index of one of its chains,
--- derived from the public key of the account: what an offline computer
--- shows to check an address the online computer gave out. The wallet need
--- not have the address, and nothing is generated or stored. When it has
--- it, its label is shown too.
-cmdCheckAddr :: Ctx -> Config -> Maybe Text -> AddrType -> KeyIndex -> IO Response
-cmdCheckAddr ctx cfg account addrType index =
-  runDBResponse cfg $ do
-    (accId, acc) <- getAccountByName account
-    let path = addrDeriv addrType :/ index
-    addrM <- liftIO $ deriveChainAddress ctx (accountKind acc) (accountXPubKey ctx acc) (addrDeriv addrType) index
-    -- BIP32 says to skip an index whose child key is invalid, so the chain
-    -- has no address there: see "Haskoin.Wallet.Database.Address"
-    addr <- liftMaybe ("There is no address at " <> cs (pathText path) <> ": the key at that index is invalid, and the chain skips it") addrM
-    addrText <- liftEither $ addrToTextE (accountNetwork acc) addr
-    label <- lift $ addressLabelAt accId addrType index
-    return $ ResponseCheckAddr acc path addrText label
 
 {- Coins -}
 

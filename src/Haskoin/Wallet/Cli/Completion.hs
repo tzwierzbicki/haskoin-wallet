@@ -3,8 +3,8 @@
 
 -- | What the shell completes from the wallet: the names of the accounts,
 -- the hashes of the pending transactions at each step from preparetx to
--- broadcast, the transactions bumpfee replaces, the coins, the addresses, and
--- what label labels.
+-- broadcast, the transactions bumpfee replaces, the coins, the addresses,
+-- what label labels, and what show shows.
 -- Each command is offered what it takes, and only when few enough values
 -- match what was typed: see 'offeredAtMost'. The shell runs hw at each
 -- Tab, so a completion reads the database and changes nothing. It writes
@@ -22,6 +22,7 @@ module Haskoin.Wallet.Cli.Completion
     coinsToUnlock,
     coinsToSpend,
     labelTargets,
+    shownTargets,
     walletAddresses,
     addressesToSpendFrom,
     accountNamed,
@@ -242,6 +243,30 @@ labelTargets typed = readForCompletion $ do
       then concat <$> sequence [txidsStarting accId typed askedFor | (accId, _) <- accounts]
       else return []
   return $ fewEnough (nub ((offeredAddress <$> addresses) <> pending <> (hexOf <$> history)))
+
+{- What show shows -}
+
+-- | What show shows, among what starts with the word typed: the addresses
+-- of both chains, the pending transactions, by the hash pendingtxs shows,
+-- the transactions of the history, by their ids, and the coins, as coins
+-- lists them. Every account counts, since an address, a transaction and a
+-- coin tell their account. Among more than 'offeredAtMost' of them all,
+-- none. A path is not offered: it is short to type, as receive shows it.
+shownTargets :: String -> IO [String]
+shownTargets typed = readForCompletion $ do
+  accounts <- getAccounts
+  addresses <- concat <$> sequence [addressesStarting accId chain (cs typed) askedFor | (accId, _) <- accounts, chain <- [AddrExternal, AddrInternal]]
+  held <- rights . map fromRow <$> pendingRows Nothing Nothing Nothing
+  let pending = [hash | p <- held, let hash = hexOf (shownHash (txOf p)), typed `isPrefixOf` hash]
+  -- A word that is no hexadecimal number starts no txid, and no coin
+  (history, coins) <-
+    if all isHexDigit typed
+      then do
+        txids <- concat <$> sequence [txidsStarting accId typed askedFor | (accId, _) <- accounts]
+        found <- walletCoinsStarting Nothing typed
+        return (hexOf <$> txids, [coinText (jsonCoinOutpoint coin) | (_, coin) <- found])
+      else return ([], [])
+  return $ fewEnough (nub ((offeredAddress <$> addresses) <> pending <> history <> coins))
 
 {- The addresses -}
 
