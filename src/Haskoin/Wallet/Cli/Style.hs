@@ -59,7 +59,7 @@ data Style
     OfflineCommand
   | -- | What the help says of such a command
     OfflineNote
-  | -- | An option, such as --account
+  | -- | An option, such as --portfolio
     Option
   | -- | What stands for a value to type, such as FILENAME
     Metavar

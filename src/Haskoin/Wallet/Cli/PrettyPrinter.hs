@@ -36,16 +36,19 @@ import Data.Time.Format
 import Data.Word
 import Haskoin
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath, chainPath, coinBalanceNotSpendableYet, coinBalanceUnspendable, isIntPath, pathText)
 import Haskoin.Wallet.Amounts
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..), levelName, rateAt)
-import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), foreignKindDescription)
+import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), PoolPath (..), foreignKindDescription, kindName, poolPathText)
 import Haskoin.Wallet.Bip329 (Record (..), RecordType (..), parseKeypath)
-import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), reportNeedsSync)
+import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), PortfolioImport (..), WalletImport (..), reportNeedsSync)
 import Haskoin.Wallet.MessageSigning (signedMessageText)
+import Haskoin.Wallet.Cli.Listing (ChunkAt (..))
 import Haskoin.Wallet.Cli.Parser (AddressCode (..), BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), TxShown (..), program)
 import Haskoin.Wallet.Cli.Parser.Help (commandName)
 import Haskoin.Wallet.Cli.Parser.Run (commandNamed)
@@ -176,70 +179,156 @@ wordsDoc ws = indent 2 . vcat $ cellsLine . map cell <$> chunksOf 4 (zip [1 :: N
       let number = rblock 2 (show i) <> "."
        in (12, number <> " " <> cs w, styled Field number <+> styled Secret (cs w))
 
-{- Accounts -}
+{- Where an answer is -}
 
--- | An account as a listing shows it, in the view asked for, the time it
--- was created in the time zone of the computer
-listedAccountDoc :: View -> AmountUnit -> DBAccount -> Word64 -> IO (Doc Style)
-listedAccountDoc view unit acc spendable = do
-  created <- utcToLocalZonedTime (dBAccountCreated acc)
-  return $ case view of
-    Compact -> compactAccountDoc unit acc spendable
-    Verbose -> verboseAccountDoc unit created acc spendable
-    -- The table needs every account for the width of its names:
-    -- rowsPrinter lays it out ('accountRowDoc')
-    Table -> compactAccountDoc unit acc spendable
+-- | A portfolio as an answer names it: portfolio0, and its wallet after
+-- it when that is not wallet0, as in "portfolio0 of wallet1". A user of
+-- one mnemonic has wallet0 alone and never reads its name. The listing of
+-- the portfolios names the wallet of each on its own.
+portfolioWords :: PortfolioRef -> String
+portfolioWords ref =
+  cs (portfolioName (refPortfolio ref))
+    <> (if refWallet ref == 0 then "" else " of " <> cs (walletName (refWallet ref)))
 
--- | The first line of an account: its name, its network and its
--- derivation path, the three things deleteacc asks for
-accountLine :: DBAccount -> Doc Style
-accountLine acc =
+-- | The line that says where the rows under it are: the portfolio, then
+-- the network
+placeLine :: Place -> Doc Style
+placeLine place =
   columns
-    [ pretty (dBAccountName acc) `withStyle` Account,
-      text (accountNetwork acc).name,
-      text (pathToStr (accountPath acc))
+    [ text (portfolioWords (placePortfolio place)) `withStyle` Account,
+      text (placeNetwork place).name
     ]
 
--- | An account in two lines: its first line, then what it can spend now,
--- what is unconfirmed when anything is, and how many coins it holds
-compactAccountDoc :: AmountUnit -> DBAccount -> Word64 -> Doc Style
-compactAccountDoc unit acc spendable =
-  vcat [accountLine acc, indent 2 (commaList (spendable' : unconfirmed <> [coins]))]
-  where
-    spendable' = "spendable" <+> amountPrinter unit spendable
-    -- An unconfirmed payment from another wallet cannot be spent yet
-    unconfirmed = ["unconfirmed" <+> waitingAmount unit v | let v = dBAccountBalanceUnconfirmed acc, v > 0]
-    coins = text (counted (fromIntegral (dBAccountBalanceCoins acc)) "coin" "coins")
+-- | The line that names an account: its portfolio, its network and the
+-- type of its addresses, as --network and --type pick it
+accountRefLine :: AccountRef -> Doc Style
+accountRefLine ref =
+  columns
+    [ text (portfolioWords (placePortfolio (accountRefPlace ref))) `withStyle` Account,
+      text (accountRefNetwork ref).name,
+      text (cs (kindName (accountRefKind ref)))
+    ]
 
--- | An account with every detail: its first line, then its fields, and
--- last the keys another wallet takes it by. The output descriptor comes
--- whole, without its origin when the fingerprint is unknown, as the row
--- Fingerprint then says. A bip84 account adds its key in the form of
--- SLIP-132, a zpub or a vpub, for the wallets that take only that form.
---
--- The keys come last because their rows are wider than most screens. A
--- descriptor row takes 148 columns or more, and a zpub row 126. The
--- terminal wraps such a row, which goes on at the first column of the
--- screen. At the end, the wrapped rows break no column of the other
--- fields. The accounts listing has the pager wrap its lines in this view,
--- so that the user can copy a descriptor whole
--- ('Haskoin.Wallet.Cli.Parser.wrapsLines').
-verboseAccountDoc :: AmountUnit -> ZonedTime -> DBAccount -> Word64 -> Doc Style
-verboseAccountDoc unit created acc spendable =
+-- | The fields that say where a transaction is, first in its verbose
+-- view: its portfolio and its network, each padded to the width given
+placeFields :: Natural -> Place -> [Doc Style]
+placeFields pad place =
+  [ field pad "Portfolio" <> (text (portfolioWords (placePortfolio place)) `withStyle` Account),
+    field pad "Network" <> text (placeNetwork place).name
+  ]
+
+{- Portfolios -}
+
+-- | A portfolio as a listing shows it, in the view asked for, the time it
+-- was created in the time zone of the computer
+listedPortfolioDoc :: View -> AmountUnit -> PortfolioView -> IO (Doc Style)
+listedPortfolioDoc view unit portfolio = do
+  created <- utcToLocalZonedTime (viewCreated portfolio)
+  return $ case view of
+    Verbose -> verbosePortfolioDoc unit created portfolio
+    -- The table is laid out by rowsPrinter ('portfolioRowDocs')
+    _ -> compactPortfolioDoc unit created portfolio
+
+-- | The first line of a portfolio: its name, its wallet, and its
+-- description when it has one. The listing of the portfolios always names
+-- the wallet, since it is where the wallets are told apart.
+portfolioLine :: PortfolioView -> Doc Style
+portfolioLine portfolio =
+  columns $
+    [ pretty (portfolioName (refPortfolio (viewRef portfolio))) `withStyle` Account,
+      pretty (walletName (refWallet (viewRef portfolio)))
+    ]
+      <> [labelWord description | let description = viewDescription portfolio, not (Text.null description)]
+
+-- | The networks of a portfolio that a short view shows: those it has an
+-- address or a coin on. A whole portfolio has an account on every network,
+-- most of which a user never touches.
+activeNetworks :: PortfolioView -> [NetworkView]
+activeNetworks portfolio = [net | net <- viewNetworks portfolio, networkViewAddresses net > 0 || networkViewCoins net > 0]
+
+-- | What a portfolio holds on a network, in one line: what it can spend
+-- now, what is unconfirmed when anything is, and how many coins and
+-- addresses it has
+networkFigures :: AmountUnit -> NetworkView -> Doc Style
+networkFigures unit net = commaList (spendable : unconfirmed <> [coins, addresses])
+  where
+    spendable = "spendable" <+> amountPrinter unit (networkViewSpendable net)
+    -- An unconfirmed payment from another wallet cannot be spent yet
+    unconfirmed = ["unconfirmed" <+> waitingAmount unit v | let v = networkViewUnconfirmed net, v > 0]
+    coins = text (counted (fromIntegral (networkViewCoins net)) "coin" "coins")
+    addresses = text (counted (networkViewAddresses net) "address" "addresses")
+
+-- | What a partial portfolio is told to be, and how to fill it in
+partialWords :: PortfolioView -> Doc Style
+partialWords portfolio =
+  styled Waiting "partial:"
+    <+> text ("it lacks " <> counted (fromIntegral (length (viewMissing portfolio))) "account" "accounts" <> ", and fillwallet fills it in")
+
+-- | A portfolio in a few lines: its first line, the description of its
+-- wallet when it has one, the date it was created, then a line for each
+-- network it has addresses or coins on, with what it holds there, and a
+-- line when it is partial
+compactPortfolioDoc :: AmountUnit -> ZonedTime -> PortfolioView -> Doc Style
+compactPortfolioDoc unit created portfolio =
   vcat $
-    accountLine acc
+    portfolioLine portfolio
+      : (indent 2 <$> (ofWallet <> [("created" <+> text (dayText created))] <> networks <> [partialWords portfolio | viewPartial portfolio]))
+  where
+    -- What the user said of the wallet, which its name does not tell
+    ofWallet = [pretty (walletName (refWallet (viewRef portfolio))) <+> "is" <+> labelWord description | let description = viewWalletDescription portfolio, not (Text.null description)]
+    active = activeNetworks portfolio
+    pad = fromIntegral (maximum (0 : (length . (.name) . networkViewNetwork <$> active)))
+    networks
+      | null active = [styled Muted "no addresses yet"]
+      | otherwise = [text (block pad (networkViewNetwork net).name) <> "  " <> networkFigures unit net | net <- active]
+
+-- | A portfolio with every detail: its first line, the fields of the
+-- portfolio and of its wallet, then every network it has an account on,
+-- with each of its balances, and under each network its accounts, each
+-- with its path and the keys another wallet takes it by. The output
+-- descriptor comes whole, without its origin when the fingerprint is
+-- unknown, as the row Fingerprint then says. A bip84 account adds its key
+-- in the form of SLIP-132, a zpub or a vpub, for the wallets that take
+-- only that form.
+--
+-- A descriptor row takes 148 columns or more, and a zpub row 126. The
+-- terminal wraps such a row, which goes on at the first column of the
+-- screen. The portfolios listing has the pager wrap its lines in this
+-- view, so that the user can copy a descriptor whole
+-- ('Haskoin.Wallet.Cli.Parser.wrapsLines').
+verbosePortfolioDoc :: AmountUnit -> ZonedTime -> PortfolioView -> Doc Style
+verbosePortfolioDoc unit created portfolio =
+  vcat $
+    portfolioLine portfolio
       : ( indent 2
-            <$> [ field 11 "Fingerprint" <> maybe (styled Muted "unknown") pretty (dBAccountFingerprint acc),
-                  field 11 "Addresses" <> text (show (dBAccountExternal acc) <> " receiving, " <> show (dBAccountInternal acc) <> " change"),
-                  field 11 "Created" <> text (secondText created),
-                  field 11 "Confirmed" <> amountPrinter unit (dBAccountBalanceConfirmed acc),
-                  field 11 "Unconfirmed" <> waitingAmount unit (dBAccountBalanceUnconfirmed acc),
-                  field 11 "Spendable" <> amountPrinter unit spendable,
-                  field 11 "Coins" <> countPrinter (fromIntegral (dBAccountBalanceCoins acc)),
-                  field 11 "Descriptor" <> text (cs (accountDescriptorText acc))
-                ]
-              <> [field 11 "SLIP-132" <> text (cs key) | Just key <- [accountSlip132Key acc]]
+            <$> ( [ field 11 "Fingerprint" <> maybe (styled Muted "unknown") (pretty . fingerprintToText) (viewFingerprint portfolio),
+                    field 11 "Created" <> text (secondText created)
+                  ]
+                    <> [field 11 "Wallet" <> labelWord description | let description = viewWalletDescription portfolio, not (Text.null description)]
+                    <> [field 11 "Partial" <> text ("lacks " <> intercalate ", " [net.name <> " " <> cs (kindName kind) | (net, kind) <- viewMissing portfolio] <> ": fillwallet fills it in") | viewPartial portfolio]
+                    <> concatMap networkBlock (viewNetworks portfolio)
+                )
         )
+  where
+    networkBlock net =
+      styled Field (networkViewNetwork net).name
+        : ( indent 2
+              <$> ( [ field 11 "Confirmed" <> amountPrinter unit (networkViewConfirmed net),
+                      field 11 "Unconfirmed" <> waitingAmount unit (networkViewUnconfirmed net),
+                      field 11 "Spendable" <> amountPrinter unit (networkViewSpendable net),
+                      field 11 "Coins" <> countPrinter (fromIntegral (networkViewCoins net)),
+                      field 11 "Addresses" <> countPrinter (networkViewAddresses net)
+                    ]
+                      <> concatMap accountBlock (networkViewAccounts net)
+                  )
+          )
+    accountBlock keys =
+      columns [text (cs (kindName (keysKind keys))), text (pathToStr (keysPath keys))]
+        : ( indent 2
+              <$> ( [field 10 "Descriptor" <> text (cs (keysDescriptor keys))]
+                      <> [field 10 "SLIP-132" <> text (cs key) | Just key <- [keysSlip132 keys]]
+                  )
+          )
 
 -- | The document in the style
 withStyle :: Doc Style -> Style -> Doc Style
@@ -269,18 +358,54 @@ counted n _ plural = show n <> " " <> plural
 
 {- Syncs -}
 
--- | The accounts synced, each with the results of its sync, a blank line
--- between them
-syncResultsPrinter :: AmountUnit -> [SyncRes] -> Doc Style
-syncResultsPrinter unit results = vcat . intersperse mempty $ syncResultDoc unit <$> results
+-- | Whether a sync is worth a block of its own: the portfolio holds
+-- something on the network, or the sync changed something. sync goes over
+-- every network of every portfolio, and most of them hold nothing.
+syncWorthShowing :: SyncRes -> Bool
+syncWorthShowing result =
+  syncResCoins result > 0
+    || syncResConfirmed result > 0
+    || syncResUnconfirmed result > 0
+    || syncResTxUpdates result > 0
+    || syncResCoinUpdates result > 0
+    || syncResRebroadcast result > 0
+    || syncResConflicted result > 0
+    || syncResNewAddrs result > 0
 
--- | An account synced: its two lines as accounts shows them, the block it
--- is synced to, and what changed, one kind of change a line. What did not
--- change is left out, and a sync that changed nothing says so.
+-- | The syncs worth showing, each with its results, a blank line between
+-- them, then one line for each portfolio that names its networks where
+-- nothing is held and nothing changed
+syncResultsPrinter :: AmountUnit -> [SyncRes] -> Doc Style
+syncResultsPrinter unit results =
+  vcat . intersperse mempty $ (syncResultDoc unit <$> shown) <> [vcat quietLines | not (null quietLines)]
+  where
+    shown = filter syncWorthShowing results
+    quiet = filter (not . syncWorthShowing) results
+    quietLines =
+      [ (text (portfolioWords ref) `withStyle` Account) <> "  " <> styled Muted ("nothing on " <> andList [(placeNetwork (syncResPlace r)).name | r <- quiet, placePortfolio (syncResPlace r) == ref])
+        | ref <- nub (placePortfolio . syncResPlace <$> quiet)
+      ]
+
+-- | Names in a sentence, "and" before the last: "btc", "btc and bch",
+-- "btc, bch and btctest4"
+andList :: [String] -> String
+andList names = case reverse names of
+  [] -> ""
+  [name] -> name
+  lastName : before -> intercalate ", " (reverse before) <> " and " <> lastName
+
+-- | A portfolio synced on a network: where it is, what it holds there,
+-- the block it is synced to, and what changed, one kind of change a
+-- line. What did not change is left out, and a sync that changed nothing
+-- says so.
 syncResultDoc :: AmountUnit -> SyncRes -> Doc Style
 syncResultDoc unit result =
-  vcat $ compactAccountDoc unit (syncResAccount result) (syncResSpendable result) : (indent 2 <$> synced : changes)
+  vcat $ placeLine (syncResPlace result) : (indent 2 <$> holds : synced : changes)
   where
+    holds = commaList (spendable : unconfirmed <> [coins])
+    spendable = "spendable" <+> amountPrinter unit (syncResSpendable result)
+    unconfirmed = ["unconfirmed" <+> waitingAmount unit v | let v = syncResUnconfirmed result, v > 0]
+    coins = text (counted (fromIntegral (syncResCoins result)) "coin" "coins")
     synced
       | null changes = "synced at block" <+> height <> ", nothing new"
       | otherwise = "synced at block" <+> height
@@ -296,20 +421,18 @@ syncResultDoc unit result =
     conflicted = [styled Failure (counted k "pending transaction" "pending transactions" <> " conflicted") | let k = syncResConflicted result, k > 0]
     found = [text (counted n "new address" "new addresses") <+> "found" | let n = syncResNewAddrs result, n > 0]
 
--- | The accounts the sync left out, each with the failure of its store, a
--- blank line between them
-notSyncedPrinter :: [(DBAccount, Text)] -> Doc Style
-notSyncedPrinter accs = vcat . intersperse mempty $ notSyncedDoc <$> accs
+-- | The networks the host does not serve, in one line: no failure, since
+-- no host serves every network
+notServedDoc :: [Network] -> Doc Style
+notServedDoc nets = styled Muted ("Not served by the store: " <> intercalate ", " ((.name) <$> nets))
 
-notSyncedDoc :: (DBAccount, Text) -> Doc Style
-notSyncedDoc (acc, failure) =
-  vcat [accountLine acc, indent 2 (styled Failure "not synced:" <+> pretty failure)]
-
--- | The networks recover left out, a line for each with the failure of its
--- store
-notSearchedDoc :: [(Network, Text)] -> Doc Style
-notSearchedDoc nets =
-  vcat [text net.name <> "  " <> styled Failure "not searched:" <+> pretty failure | (net, failure) <- nets]
+-- | The networks a sync or a search left out because their store is down,
+-- a line for each with the failure of its store. The word says what was
+-- not done there: "not synced", or "left out" for recover, whose
+-- network may fail during the search or during the syncs after it.
+failedNetworksDoc :: String -> [(Network, Text)] -> Doc Style
+failedNetworksDoc notDone nets =
+  vcat [text net.name <> "  " <> styled Failure (notDone <> ":") <+> pretty failure | (net, failure) <- nets]
 
 -- | The funds of a seed at accounts hw does not hold, as recover shows
 -- them: a line for each account, with its network, its path, its kind, how
@@ -340,13 +463,18 @@ foreignFundsDoc unit elsewhere =
 
 {- Imports -}
 
--- | What importacc did with a file: each account the file names, with what
--- became of it, a blank line between them, then the labels and locks set,
--- what the file labels that the wallet does not have yet, with the
--- addresses among them that hw would not derive from their key path, what
--- hw keeps no label for, and the lines that are not records
+-- | What importwallet did with a file: each wallet the file names, with
+-- what became of it and of its portfolios, then the keys left aside, a
+-- blank line between them, then the labels and locks set, what the file
+-- labels that the wallet does not have yet, with the addresses among them
+-- that hw would not derive from their key path, what hw keeps no label
+-- for, and the lines that are not records
 importDoc :: ImportReport -> Doc Style
-importDoc report = vcat . intersperse mempty $ (accountImportDoc <$> reportAccounts report) <> [vcat summary]
+importDoc report =
+  vcat . intersperse mempty $
+    (walletImportDoc False <$> reportWallets report)
+      <> [leftAsideDoc "not imported:" name why | AccountLeftAside name why <- reportAccounts report]
+      <> [vcat summary]
   where
     summary =
       [labelsLine]
@@ -365,6 +493,7 @@ importDoc report = vcat . intersperse mempty $ (accountImportDoc <$> reportAccou
         <> countedIf (reportCoinsMissing report) "coin" "coins"
     aside =
       [counted n "record" "records" <> " of accounts the wallet does not have" | let n = reportOtherAccounts report, n > 0]
+        <> [counted n "record" "records" <> " of the portfolios --portfolio leaves out" | let n = reportOtherPortfolios report, n > 0]
         <> [counted n "label" "labels" <> " of change addresses" | let n = reportChangeAddresses report, n > 0]
         <> [counted n "record" "records" <> " hw keeps no label for" | let n = reportNotKept report, n > 0]
     -- A count with its noun, when there is anything to count
@@ -374,30 +503,56 @@ importDoc report = vcat . intersperse mempty $ (accountImportDoc <$> reportAccou
     -- past the last used address of a chain
     tooFar n = "Of them, " <> counted n "address lies" "addresses lie" <> " over a thousand past the last used address of " <> (if n == 1 then "its" else "their") <> " chain, further than hw generates on the word of a file."
 
--- | An account a file names, as accounts shows it, and what became of it.
--- Under a created one, the note on a kind taken on trust, if any, wrapped
--- at the width of the screen.
-accountImportDoc :: AccountImport -> Doc Style
-accountImportDoc = \case
-  AccountCreated acc noteM -> vcat ([accountLine acc, indent 2 (styled Good "created")] <> [indent 2 (sentence (wordsOf (cs note))) | Just note <- [noteM]])
-  AccountKept acc Nothing -> vcat [accountLine acc, indent 2 "already in the wallet"]
-  AccountKept acc (Just why) -> vcat [accountLine acc, indent 2 ("already in the wallet, and keeps its name:" <+> pretty why)]
-  AccountRenamed was acc -> vcat [accountLine acc, indent 2 ("renamed from" <+> pretty was `withStyle` Account)]
-  -- The name of a refused account is the label of a record, or the start
-  -- of a line, of the file
-  AccountRefused name why -> vcat [pretty (visibleText name) `withStyle` Account, indent 2 (styled Failure "not imported:" <+> pretty why)]
+-- | A wallet a file names, and what became of it, or what would with the
+-- flag: its name and the fingerprint of its seed, whether it was created
+-- or found, the wallets of the same seed merged into it, then a line for
+-- each portfolio the file names, with whether it was created, how many
+-- accounts were added, and how many it still lacks
+walletImportDoc :: Bool -> WalletImport -> Doc Style
+walletImportDoc dryRun wallet =
+  vcat $
+    columns
+      ( [ pretty (walletName (walletImportIndex wallet)) `withStyle` Account,
+          maybe (styled Muted "fingerprint unknown") (pretty . fingerprintToText) (walletImportFingerprint wallet),
+          status
+        ]
+          <> [text ("merged with " <> andList (cs . walletName <$> merged)) | let merged = walletImportMerged wallet, not (null merged)]
+      )
+      : (indent 2 . portfolioDoc <$> walletImportPortfolios wallet)
+  where
+    status
+      | walletImportCreated wallet = if dryRun then "not in the database, and importwallet creates it" else styled Good "created"
+      | otherwise = if dryRun then "in the database" else "already in the database"
+    portfolioDoc p =
+      columns
+        [ pretty (portfolioName (portfolioImportIndex p)) `withStyle` Account,
+          commaList (text <$> ([created | portfolioImportCreated p] <> [added (portfolioImportAdded p)] <> [lacks n | let n = portfolioImportMissing p, n > 0]))
+        ]
+    created = if dryRun then "importwallet creates it" else "created"
+    added 0 = "nothing to add"
+    added n = counted n "account" "accounts" <> (if dryRun then " to add" else " added")
+    lacks n = "still lacks " <> counted n "account" "accounts"
 
-{- Files of accounts -}
+-- | A key of a file that is not one of an account of a wallet of hw: the
+-- start of the key, and why it is left aside
+leftAsideDoc :: String -> Text -> Text -> Doc Style
+leftAsideDoc notDone name why =
+  vcat [pretty (visibleText name) `withStyle` Account, indent 2 (styled Failure notDone <+> pretty why)]
 
--- | A file of accounts as show shows it, a blank line between its parts. Each account comes first, with what importacc would
--- do with it, then the labels and locks of its records. Then come the
--- labels and locks of no account of the file, and last what hw keeps no
--- label for and the lines that are not records, in the words of
--- importacc.
-accountFileDoc :: FileShown -> Doc Style
-accountFileDoc shown =
+{- Files of a wallet -}
+
+-- | A file of a wallet as show shows it, a blank line between its parts.
+-- Each wallet comes first, with what importwallet would do with it and
+-- with its portfolios. Then each account comes with the labels and locks
+-- of its records, those that have any, and the keys importwallet would
+-- leave aside. Then come the labels and locks of no account of the file,
+-- and last what hw keeps no label for and the lines that are not records,
+-- in the words of importwallet.
+walletFileDoc :: FileShown -> Doc Style
+walletFileDoc shown =
   vcat . intersperse mempty $
-    [vcat (fileAccountDoc outcome : (indent 2 <$> recordsDocs records)) | (outcome, records) <- shownAccounts shown]
+    (walletImportDoc True <$> shownWallets shown)
+      <> [doc | (outcome, records) <- shownAccounts shown, doc <- fileAccountDocs outcome records]
       <> [vcat ("Labels without an account in the file" : (indent 2 <$> recordsDocs others)) | let others = shownOthers shown, not (null others)]
       <> [vcat rest | not (null rest)]
   where
@@ -405,22 +560,20 @@ accountFileDoc shown =
       ["Left aside:" <+> commaList (text <$> aside) | not (null aside)]
         <> [styled Failure "Lines that are not records:" <+> text (intercalate ", " (show <$> unreadable)) | let unreadable = shownUnreadable shown, not (null unreadable)]
     aside =
-      [counted n "label" "labels" <> " of change addresses" | let n = shownChangeLabels shown, n > 0]
+      [counted n "record" "records" <> " of the portfolios --portfolio leaves out" | let n = shownOtherPortfolios shown, n > 0]
+        <> [counted n "label" "labels" <> " of change addresses" | let n = shownChangeLabels shown, n > 0]
         <> [counted n "record" "records" <> " hw keeps no label for" | let n = shownNotKept shown, n > 0]
 
--- | An account of a file, as accounts shows its first line, and what
--- importacc would do with it, in the words of its answer. Under one
--- importacc would add, the note on a kind taken on trust, if any, wrapped
--- at the width of the screen.
-fileAccountDoc :: AccountImport -> Doc Style
-fileAccountDoc = \case
-  AccountCreated acc noteM -> vcat ([accountLine acc, indent 2 "not in the wallet, and importacc adds it"] <> [indent 2 (sentence (wordsOf (cs note))) | Just note <- [noteM]])
-  AccountKept acc Nothing -> vcat [accountLine acc, indent 2 "in the wallet"]
-  AccountKept acc (Just why) -> vcat [accountLine acc, indent 2 ("in the wallet, and keeps its name:" <+> pretty why)]
-  AccountRenamed was acc -> vcat [accountLine acc, indent 2 ("in the wallet as" <+> (pretty (visibleText was) `withStyle` Account) <> ", and importacc renames it")]
-  -- The name of a refused account is the label of a record, or the start
-  -- of a line, of the file
-  AccountRefused name why -> vcat [pretty (visibleText name) `withStyle` Account, indent 2 (styled Failure "importacc refuses it:" <+> pretty why)]
+-- | An account of a file with the labels and locks of its records, when
+-- it has any: a whole portfolio has twelve accounts, and most carry no
+-- label. A key importwallet would leave aside comes with the reason.
+fileAccountDocs :: AccountImport -> [Record] -> [Doc Style]
+fileAccountDocs outcome records = case outcome of
+  AccountAdded ref -> withRecords ref
+  AccountHeld ref -> withRecords ref
+  AccountLeftAside name why -> [leftAsideDoc "importwallet leaves it aside:" name why]
+  where
+    withRecords ref = [vcat (accountRefLine ref : (indent 2 <$> recordsDocs records)) | not (null records)]
 
 -- | The labels and locks of records, under a heading for each kind. An
 -- address comes after its key path, when its record gives one, the paths
@@ -509,16 +662,28 @@ verboseAddressDoc unit pad created addr spendable =
                 ]
         )
 
--- | An address as an answer shows it, with its QR code when the command
--- gives the address out and someone can scan the screen
-addressAnswerDoc :: AddressCode -> AmountUnit -> DBAccount -> DBAddress -> Word64 -> IO (Doc Style)
-addressAnswerDoc code unit acc addr spendable = do
+-- | An address as an answer shows it, with where it is, and with its QR
+-- code when the command gives the address out and someone can scan the
+-- screen
+addressAnswerDoc :: AddressCode -> AmountUnit -> AccountRef -> DBAddress -> Word64 -> IO (Doc Style)
+addressAnswerDoc code unit ref addr spendable = do
   details <- listedAddressDoc Verbose unit (pathWidth [addr]) addr spendable
   terminal <- hIsTerminalDevice stdout
   let rows
-        | code == WithCode && terminal = fromMaybe [] (qrRows (paymentUri (accountNetwork acc) (dBAddressAddress addr)))
+        | code == WithCode && terminal = fromMaybe [] (qrRows (paymentUri (accountRefNetwork ref) (dBAddressAddress addr)))
         | otherwise = []
-  return (withCodeDoc details rows)
+  return (withCodeDoc (vcat [details, indent 2 (accountRefField 12 ref)]) rows)
+
+-- | The field that says the account of an address: its portfolio, its
+-- network and the type of its addresses
+accountRefField :: Natural -> AccountRef -> Doc Style
+accountRefField pad ref =
+  field pad "Account"
+    <> columns
+      [ text (portfolioWords (placePortfolio (accountRefPlace ref))) `withStyle` Account,
+        text (accountRefNetwork ref).name,
+        text (cs (kindName (accountRefKind ref)))
+      ]
 
 -- | Text, then a QR code drawn in the rows given. The code goes under the
 -- text and never beside it: a terminal wraps its long lines again when it
@@ -528,17 +693,15 @@ withCodeDoc details rows = vcat (details : (annotate QrCode . pretty <$> rows))
 
 -- | The address at a path of the account that show derives, when the
 -- wallet does not hold it: its path and the address cut, as the first
--- line of addresses, then its account and network, then what the cut form
--- is for. The wallet holds no row for it, so it has no label and no
+-- line of addresses, then its account, then what the cut form is for. The wallet holds no row for it, so it has no label and no
 -- balance. The user compares its ends with the address the online
 -- computer showed, and the note says why the middle is missing, which a
 -- user would otherwise take for a fault ("Haskoin.Wallet.CutAddress").
-derivedAddrDoc :: DBAccount -> SoftPath -> Text -> Doc Style
-derivedAddrDoc acc path cut =
+derivedAddrDoc :: AccountRef -> SoftPath -> Text -> Doc Style
+derivedAddrDoc ref path cut =
   vcat
     [ columns [text (cs (pathText path)), pretty cut],
-      indent 2 (accountField acc),
-      indent 2 (field 9 "Network" <> text (accountNetwork acc).name),
+      indent 2 (accountRefField 9 ref),
       mempty,
       sentence (wordsOf (cutAddressNote path))
     ]
@@ -694,7 +857,7 @@ coinStateText lockedByTransaction coin = case jsonCoinLock coin of
 coinAddressDoc :: Network -> JsonCoin -> Doc Style
 coinAddressDoc net coin =
   withNotesBelow
-    (fullAddressWords net (jsonCoinAddress coin) (jsonCoinPath coin))
+    (fullAddressWords net (jsonCoinAddress coin) (pathInAccount <$> jsonCoinPath coin))
     (ownAddressNoteBelow (jsonCoinAddressLabel coin) (jsonCoinChange coin))
 
 -- | A coin in two lines, as the compact view of a transaction is laid
@@ -719,7 +882,7 @@ compactCoinDoc :: Network -> AmountUnit -> Maybe ZonedTime -> JsonCoin -> Doc St
 compactCoinDoc net unit time coin =
   vcat
     [ columns (shortCoinWord coin : coinLineCells "locked by tx" cappedConfirmations unit time coin),
-      indent 2 ("at" <+> columns (fullAddressWords net (jsonCoinAddress coin) (jsonCoinPath coin) : ownAddressNote (jsonCoinAddressLabel coin) (jsonCoinChange coin)))
+      indent 2 ("at" <+> columns (fullAddressWords net (jsonCoinAddress coin) (pathInAccount <$> jsonCoinPath coin) : ownAddressNote (jsonCoinAddressLabel coin) (jsonCoinChange coin)))
     ]
 
 -- | The short id of a coin at the start of a line, faint, padded to the
@@ -772,32 +935,37 @@ verboseCoinDoc net unit time coin =
 -- transaction is for.
 
 -- | A transaction as a listing shows it, in the view asked for, with its
--- time in the time zone of the computer. A listing of every account names
--- the account of each transaction. The balance after it is the one txs
--- gives: the other listings have none.
-listedTxDoc :: View -> Network -> AmountUnit -> Maybe DBAccount -> Maybe Integer -> TxInfo -> IO (Doc Style)
-listedTxDoc view net unit accountM balanceM info = do
+-- time in the time zone of the computer. A listing of every portfolio
+-- names the portfolio of each transaction. The balance after it is the
+-- one txs gives: the other listings have none.
+listedTxDoc :: View -> Network -> AmountUnit -> Maybe PortfolioRef -> Maybe Integer -> TxInfo -> IO (Doc Style)
+listedTxDoc view net unit portfolioM balanceM info = do
   time <- localTxTime info
   return $ case view of
-    Compact -> compactTxDoc net unit accountM balanceM time info
-    Verbose -> verboseTxDoc net unit [accountField acc | Just acc <- [accountM]] balanceM time info
+    Compact -> compactTxDoc net unit portfolioM balanceM time info
+    Verbose -> verboseTxDoc net unit (whereFields net portfolioM info) balanceM time info
     Table -> txRowDoc net unit balanceM time info
 
--- | The account of a transaction, as a field of the verbose view
-accountField :: DBAccount -> Doc Style
-accountField acc = field 9 "Account" <> pretty (dBAccountName acc) `withStyle` Account
+-- | The fields that say where a transaction is, first in its verbose
+-- view: its portfolio, when the view names it, its network, and the types
+-- of the portfolio's addresses it involves, when it involves any. A
+-- portfolio holds coins of both types on Bitcoin, and the types tell
+-- which of them a transaction touched.
+whereFields :: Network -> Maybe PortfolioRef -> TxInfo -> [Doc Style]
+whereFields net portfolioM info =
+  [field 9 "Portfolio" <> (text (portfolioWords ref) `withStyle` Account) | Just ref <- [portfolioM]]
+    <> [field 9 "Network" <> text net.name]
+    <> [field 9 "Types" <> text (intercalate ", " (cs . kindName <$> kinds)) | let kinds = summaryKinds (txInfoSummary info), not (null kinds)]
 
 -- | The one transaction a command answers with, with every detail, naming
--- its account when it is one of the wallet, and its network. The user sees
--- whose coins it moves, and which coins: private keys, coins and the legacy
--- addresses of Bitcoin Cash read the same on Bitcoin, and a sweep outside
--- the wallet is on the network of its file.
-txAnswerDoc :: Network -> Maybe DBAccount -> AmountUnit -> TxInfo -> IO (Doc Style)
-txAnswerDoc net accountM unit info = do
+-- its portfolio when it is one of the wallet, and its network. The user
+-- sees whose coins it moves, and which coins: private keys, coins and the
+-- legacy addresses of Bitcoin Cash read the same on Bitcoin, and a sweep
+-- outside the wallet is on the network of its file.
+txAnswerDoc :: Network -> Maybe PortfolioRef -> AmountUnit -> TxInfo -> IO (Doc Style)
+txAnswerDoc net portfolioM unit info = do
   time <- localTxTime info
-  return $ verboseTxDoc net unit named Nothing time info
-  where
-    named = [accountField acc | Just acc <- [accountM]] <> [field 9 "Network" <> text net.name]
+  return $ verboseTxDoc net unit (whereFields net portfolioM info) Nothing time info
 
 -- | The time a transaction shows: when the store first saw it, for one on
 -- the chain, or when the wallet started holding it, for one in
@@ -830,6 +998,10 @@ minuteWord = maybe (styled Muted (block minuteWidth "time unknown")) (text . min
 -- | A time to the second, with its time zone: "31 Oct 2026 09:12:40 CET"
 secondText :: ZonedTime -> String
 secondText = formatTime defaultTimeLocale "%d %b %Y %H:%M:%S %Z"
+
+-- | A time to the day, as the date a portfolio was created shows
+dayText :: ZonedTime -> String
+dayText = formatTime defaultTimeLocale "%d %b %Y"
 
 -- | The first line of the verbose view of a transaction: its time, its
 -- type, what it adds to the account or takes from it, fee included, and
@@ -966,14 +1138,14 @@ countCap = 999
 -- full, and the type of the transaction, which the sign of the amount and
 -- the words "at" and "to" tell here. A transaction with no detail, which
 -- pays no address and has no label, takes one line.
-compactTxDoc :: Network -> AmountUnit -> Maybe DBAccount -> Maybe Integer -> Maybe ZonedTime -> TxInfo -> Doc Style
-compactTxDoc net unit accountM balanceM time info@(TxInfo summary status label _) =
+compactTxDoc :: Network -> AmountUnit -> Maybe PortfolioRef -> Maybe Integer -> Maybe ZonedTime -> TxInfo -> Doc Style
+compactTxDoc net unit portfolioM balanceM time info@(TxInfo summary status label _) =
   vcat $
     compactHeadline unit time info
       : [indent 2 (hcat (intersperse ", " details)) | not (null details)]
   where
     details =
-      ["account" <+> pretty (dBAccountName acc) `withStyle` Account | Just acc <- [accountM]]
+      [(text (portfolioWords ref) `withStyle` Account) <+> text net.name | Just ref <- [portfolioM]]
         <> ["balance" <+> neutralAmount unit balance | Just balance <- [balanceM]]
         <> ["replaces" <+> shortIdList replaced | Pending p <- [status], let replaced = pendingReplaces p, not (null replaced)]
         <> [purpose | not (null (renderPlain purpose))]
@@ -1031,7 +1203,7 @@ mainPayee summary =
 -- its path and its label: 'purposeCell' gives the label of the
 -- transaction there, or else that of the address, or else the mark of a
 -- change address. The address of another wallet is in full.
-payeeWordsNoted :: Network -> (SoftPath -> Text -> [Doc Style]) -> Payee -> Doc Style
+payeeWordsNoted :: Network -> (PoolPath -> Text -> [Doc Style]) -> Payee -> Doc Style
 payeeWordsNoted net noteOf (Payee preposition row others) =
   hsep $ [text (cs preposition), target] <> note <> more
   where
@@ -1049,15 +1221,18 @@ payeeWordsNoted net noteOf (Payee preposition row others) =
 -- An address of the wallet is blue, with its label ('OwnAddress'), so
 -- that it stands apart from the addresses of others in a transaction, and
 -- so that a label on the line below its address is seen to go with it.
--- The compact views and the table name it by its derivation path, which is
--- short and says which address of the account it is. The verbose views
+-- The compact views and the table name it by its type and its derivation
+-- path, which is short and says which address of the portfolio it is. The verbose views
 -- give it in full, with its path: the address is what another wallet or a
 -- block explorer shows. The compact view of a coin does too, since the
 -- address is what tells a coin apart ('compactCoinDoc').
 
--- | The derivation path of an address of the wallet, in its colour
-ownPathWord :: SoftPath -> Doc Style
-ownPathWord path = styled OwnAddress (pathToStr path)
+-- | The path of an address of the wallet, in its colour, with the type
+-- of its account in front, as in bip84/0/3. A portfolio has an address at
+-- /0/3 in each of its accounts on a network, and the type tells them
+-- apart where the address itself is not written out.
+ownPathWord :: PoolPath -> Doc Style
+ownPathWord path = styled OwnAddress (cs (poolPathText path))
 
 -- | An address of the wallet in full, in its colour
 ownAddressWord :: Network -> Address -> Doc Style
@@ -1348,7 +1523,7 @@ purposeCell net label summary = case mainPayee summary of
     -- The label of the transaction says what it is for better than the
     -- label of its address
     ownNote path ownLabel
-      | Text.null label = ownAddressNote ownLabel (isIntPath path)
+      | Text.null label = ownAddressNote ownLabel (isIntPath (pathInAccount path))
       | otherwise = [labelWord label]
 
 {- The table of addresses -}
@@ -1364,10 +1539,10 @@ purposeCell net label summary = case mainPayee summary of
 -- that of the longest path of the account on the chain
 -- ('longestPathWidth'), and the address that of the widest address the
 -- account can have ('addressWidth').
-addressTableColumns :: AmountUnit -> DBAccount -> Natural -> Bool -> [Column]
-addressTableColumns unit acc pad internal =
+addressTableColumns :: AmountUnit -> Network -> [AccountKind] -> Natural -> Bool -> [Column]
+addressTableColumns unit net kinds pad internal =
   [ column "Path" pad LeftSide,
-    column "Address" (addressWidth acc) LeftSide,
+    column "Address" (addressWidth net kinds) LeftSide,
     column (amountHeading "Spendable" unit) amountWidth RightSide,
     column (amountHeading "Received" unit) amountWidth RightSide,
     column "Txs" txCountWidth RightSide
@@ -1385,10 +1560,10 @@ txCountWidth = 5
 -- kind with as many characters. Base58, which writes the P2PKH addresses
 -- of Bitcoin, writes a hash shorter when its first bits are zero. A hash of
 -- all ones takes the most characters, so its address is the widest.
-addressWidth :: DBAccount -> Natural
-addressWidth acc = fromIntegral (length (addrToString (accountNetwork acc) widest))
+addressWidth :: Network -> [AccountKind] -> Natural
+addressWidth net kinds = fromIntegral (maximum (0 : [length (addrToString net (widest kind)) | kind <- kinds]))
   where
-    widest = case accountKind acc of
+    widest kind = case kind of
       Bip44 -> PubKeyAddress allOnes
       Bip84 -> WitnessPubKeyAddress allOnes
     allOnes = "ffffffffffffffffffffffffffffffffffffffff"
@@ -1425,59 +1600,60 @@ waitingAmountCell unit amnt = (if amnt > 0 then annotate Waiting else id) (text 
 heldAmountCell :: AmountUnit -> Word64 -> Doc Style
 heldAmountCell unit amnt = (if amnt > 0 then annotate Incoming else id) (text (cs (showAmount unit (fromIntegral amnt))))
 
-{- The table of accounts -}
+{- The table of portfolios -}
 
--- The table of accounts gives what the compact view gives: the name, the
--- network and the derivation path, what the account can spend, what is
--- unconfirmed, and how many coins it holds. The fingerprint and the
--- addresses are for the verbose view.
---
--- The listing of accounts is read whole ('listingWhole'), so its first
--- column takes the width of the longest name: the name is what the table
--- lists, and what --account takes.
+-- The table of portfolios gives a row to each network of each portfolio
+-- that has addresses or coins, as the compact view gives it a line. A
+-- portfolio without any gets one row with no network, so that it shows.
+-- The listing is read whole, so its first columns are as wide as their
+-- widest cells.
 
--- | The columns of the table of accounts, the name, the network and the
--- path as wide as the widest of the accounts given
-accountTableColumns :: AmountUnit -> [DBAccount] -> [Column]
-accountTableColumns unit accs =
-  [ column "Account" (widestCell accountNameText accs) LeftSide,
-    column "Network" (widestCell (\acc -> (accountNetwork acc).name) accs) LeftSide,
-    column "Path" (widestCell (pathToStr . accountPath) accs) LeftSide,
+-- | The columns of the table of portfolios, for the portfolios listed
+portfolioTableColumns :: AmountUnit -> [PortfolioView] -> [Column]
+portfolioTableColumns unit portfolios =
+  [ column "Wallet" (widestCell (cs . walletName . refWallet . viewRef) portfolios) LeftSide,
+    column "Portfolio" (widestCell (cs . portfolioName . refPortfolio . viewRef) portfolios) LeftSide,
+    column "Network" (widestCell (\net -> (networkViewNetwork net).name) (concatMap activeNetworks portfolios)) LeftSide,
     column (amountHeading "Spendable" unit) amountWidth RightSide,
     column (amountHeading "Unconfirmed" unit) amountWidth RightSide,
-    -- The heading sets the width: 99 999 coins
-    column "Coins" 1 RightSide
+    -- The headings set the widths: 99 999 coins, 999 999 999 addresses
+    column "Coins" 1 RightSide,
+    column "Addresses" 1 RightSide,
+    column "Description" 0 LeftSide
   ]
 
--- | The width of a column that holds the cells of the elements given, as
--- the terminal shows them: that of the widest. Only a listing read whole
--- can size a column so ('Haskoin.Wallet.Cli.Listing.listingWhole').
+-- | The width of the widest cell of a column, which a listing read whole
+-- can size its columns to
 widestCell :: (a -> String) -> [a] -> Natural
 widestCell cell elements = fromIntegral (maximum (0 : [shownWidth (cell e) | e <- elements]))
 
--- | The name of an account as a table shows it, every character that is
--- not text as an escape ('visibleText')
-accountNameText :: DBAccount -> String
-accountNameText = cs . visibleText . dBAccountName
-
--- | The name of an account in a column of a table, bold and whole
-accountCell :: DBAccount -> Doc Style
-accountCell = styled Account . accountNameText
-
--- | An account on one row of its table, under the columns given: its
--- name, bold and whole, its network and its derivation path, then what it
--- can spend now, in green unless zero, what is unconfirmed, in yellow
--- unless zero, and how many coins it holds
-accountRowDoc :: AmountUnit -> [Column] -> DBAccount -> Word64 -> Doc Style
-accountRowDoc unit headed acc spendable =
-  tableLine . zip headed $
-    [ accountCell acc,
-      text (accountNetwork acc).name,
-      text (pathToStr (accountPath acc)),
-      heldAmountCell unit spendable,
-      waitingAmountCell unit (dBAccountBalanceUnconfirmed acc),
-      text (show (dBAccountBalanceCoins acc))
-    ]
+-- | A portfolio on the rows of the table of portfolios: one for each
+-- network it has addresses or coins on, or one without a network
+portfolioRowDocs :: AmountUnit -> [Column] -> PortfolioView -> [Doc Style]
+portfolioRowDocs unit headed portfolio =
+  case activeNetworks portfolio of
+    [] -> [tableLine (zip headed (named <> [mempty, mempty, mempty, mempty, mempty, describedCell]))]
+    active ->
+      [ tableLine . zip headed $
+          named
+            <> [ text (networkViewNetwork net).name,
+                 heldAmountCell unit (networkViewSpendable net),
+                 waitingAmountCell unit (networkViewUnconfirmed net),
+                 text (show (networkViewCoins net)),
+                 text (show (networkViewAddresses net)),
+                 describedCell
+               ]
+        | net <- active
+      ]
+  where
+    named =
+      [ pretty (walletName (refWallet (viewRef portfolio))),
+        pretty (portfolioName (refPortfolio (viewRef portfolio))) `withStyle` Account
+      ]
+    describedCell =
+      hsep $
+        [labelWord description | let description = viewDescription portfolio, not (Text.null description)]
+          <> [styled Waiting "partial" | viewPartial portfolio]
 
 {- The table of coins -}
 
@@ -1492,14 +1668,14 @@ accountRowDoc unit headed acc spendable =
 -- the widest address the account can have ('addressWidth'), and the path
 -- the width given, that of the longest path of the account on its two
 -- chains, since coins lists the coins of both.
-coinTableColumns :: AmountUnit -> DBAccount -> Natural -> [Column]
-coinTableColumns unit acc pad =
+coinTableColumns :: AmountUnit -> Network -> [AccountKind] -> Natural -> [Column]
+coinTableColumns unit net kinds pad =
   [ column "Coin" coinIdWidth LeftSide,
     column "Time" minuteWidth LeftSide,
     column (amountHeading "Value" unit) amountWidth RightSide,
     column "State" coinStateWidth LeftSide,
     column "Confs" 4 RightSide,
-    column "Address" (addressWidth acc) LeftSide,
+    column "Address" (addressWidth net kinds) LeftSide,
     column "Path" pad LeftSide,
     column "Label" 0 LeftSide
   ]
@@ -1533,7 +1709,7 @@ coinRowDoc net unit headed time coin =
         coinState "locked by tx" coin,
         confsCell (jsonCoinConfirmations coin),
         ownAddressWord net (jsonCoinAddress coin),
-        maybe mempty trailingPathWord (jsonCoinPath coin),
+        maybe mempty (trailingPathWord . pathInAccount) (jsonCoinPath coin),
         -- The label has a column of its own
         hsep (ownAddressNote (jsonCoinAddressLabel coin) (jsonCoinChange coin))
       ]
@@ -1547,10 +1723,10 @@ coinRowDoc net unit headed time coin =
 -- | The columns of the table of balances. The path takes the width given,
 -- that of the longest path of the account on its two chains, and the
 -- address that of the widest address the account can have.
-balanceTableColumns :: AmountUnit -> DBAccount -> Natural -> [Column]
-balanceTableColumns unit acc pad =
+balanceTableColumns :: AmountUnit -> Network -> [AccountKind] -> Natural -> [Column]
+balanceTableColumns unit net kinds pad =
   [ column "Path" pad LeftSide,
-    column "Address" (addressWidth acc) LeftSide,
+    column "Address" (addressWidth net kinds) LeftSide,
     column (amountHeading "Total" unit) amountWidth RightSide,
     column (amountHeading "Spendable" unit) amountWidth RightSide,
     column (amountHeading "Unspendable" unit) amountWidth RightSide,
@@ -1593,10 +1769,12 @@ balanceRowDoc unit headed addr balance =
 -- | The columns of the table of pending transactions: the short id first,
 -- then a column of accounts when the listing has every account's, those
 -- given, whose longest name sets its width
-pendingTableColumns :: AmountUnit -> Maybe [DBAccount] -> [Column]
-pendingTableColumns unit namedM =
-  [column "Hash" shortIdWidth LeftSide]
-    <> [column "Account" (widestCell accountNameText named) LeftSide | Just named <- [namedM]]
+pendingTableColumns :: AmountUnit -> [Place] -> [Column]
+pendingTableColumns unit places =
+  [ column "Hash" shortIdWidth LeftSide,
+    column "Portfolio" (widestCell (portfolioWords . placePortfolio) places) LeftSide,
+    column "Network" (widestCell (\place -> (placeNetwork place).name) places) LeftSide
+  ]
     <> [ column "Time" minuteWidth LeftSide,
          column "Type" typeWidth LeftSide,
          column (amountHeading "Amount" unit) amountWidth RightSide,
@@ -1616,11 +1794,13 @@ pendingStatusWidth = 10
 -- its type, its amount, how far it got, its fee rate, and what it is for
 -- ('purposeCell'). One in conflict can no longer be sent: its fee rate no
 -- longer matters, and its cell is empty.
-pendingRowDoc :: Network -> AmountUnit -> [Column] -> Maybe DBAccount -> Maybe ZonedTime -> TxInfo -> Doc Style
-pendingRowDoc net unit headed accountM time (TxInfo summary status label _) =
+pendingRowDoc :: AmountUnit -> [Column] -> Place -> Maybe ZonedTime -> TxInfo -> Doc Style
+pendingRowDoc unit headed place time (TxInfo summary status label _) =
   tableLine . zip headed $
-    [hashWord status]
-      <> [accountCell acc | Just acc <- [accountM]]
+    [ hashWord status,
+      text (portfolioWords (placePortfolio place)) `withStyle` Account,
+      text net.name
+    ]
       <> [ timeCell time,
            text (typeWord (summaryType summary)),
            signedAmountCell unit (summaryAmount summary),
@@ -1629,6 +1809,7 @@ pendingRowDoc net unit headed accountM time (TxInfo summary status label _) =
            purposeCell net label summary
          ]
   where
+    net = placeNetwork place
     -- pendingtxs lists the transactions in preparation only
     (statusCell, rateCell) = case status of
       Pending pending
@@ -1736,8 +1917,8 @@ data TxAddress = TxAddress
     -- | What it spends or receives. None for an address another wallet
     -- spends from: that wallet's coins are nothing to this one.
     txAddressValue :: !(Maybe Natural),
-    -- | The derivation path and the label of an address of the wallet
-    txAddressOwn :: !(Maybe (SoftPath, Text)),
+    -- | The path and the label of an address of the wallet
+    txAddressOwn :: !(Maybe (PoolPath, Text)),
     -- | The labels the coins spent from an address of the wallet show,
     -- each once. None for an address paid.
     txAddressCoinLabels :: ![Text]
@@ -1781,7 +1962,7 @@ addressColumns net unit rows =
   AddressColumns
     { addressColumn = widest [addrToString net (txAddress row) | row <- rows],
       valueColumn = widest [valueText unit v | Just v <- txAddressValue <$> rows],
-      pathColumn = widest [pathToStr p | Just (p, _) <- txAddressOwn <$> rows]
+      pathColumn = widest [pathToStr (pathInAccount p) | Just (p, _) <- txAddressOwn <$> rows]
     }
   where
     widest = maximum . (0 :) . map shownWidth
@@ -1804,10 +1985,10 @@ addressRow net unit widths ownStyle marked row =
     firstLine =
       [(addressColumn widths, address, addressDoc)]
         <> [(valueColumn widths, padding value <> value, valueDoc value) | Just v <- [txAddressValue row], let value = valueText unit v]
-        <> [(pathColumn widths, pathToStr path, trailingPathWord path) | Just (path, _) <- [txAddressOwn row]]
+        <> [(pathColumn widths, pathToStr soft, trailingPathWord soft) | Just (path, _) <- [txAddressOwn row], let soft = pathInAccount path]
     notes = case txAddressOwn row of
       Just (path, label) ->
-        ownAddressNoteBelow label (marked && isIntPath path)
+        ownAddressNoteBelow label (marked && isIntPath (pathInAccount path))
           <> [styled Muted "from" <+> fillSep (punctuate "," (wrappingLabelWord <$> spentLabels)) | let spentLabels = txAddressCoinLabels row, not (null spentLabels)]
       Nothing -> []
     address = addrToString net (txAddress row)
@@ -1836,7 +2017,7 @@ cellsLine cells = hcat (intersperse "  " (padded cells))
 leftCoinsDoc :: AmountUnit -> [LeftCoin] -> Doc Style
 leftCoinsDoc unit left =
   vcat . intersperse mempty $
-    text (counted (fromIntegral (length left)) "coin stays" "coins stay" <> " in the account:")
+    text (counted (fromIntegral (length left)) "coin stays" "coins stay" <> " in the portfolio:")
       : [questionCoinDoc unit coin.leftCoinOutpoint (fromIntegral coin.leftCoinValue) coin.leftCoinTxLabel (text (leftReasonText coin.leftCoinReason)) | coin <- left]
 
 {- The questions of preparesendall and bumpfee -}
@@ -1881,11 +2062,19 @@ dustReportDoc unit labels report =
     one = count == 1
     them = if one then "it" else "them"
     amount v = neutralAmount unit (fromIntegral v)
-    header
-      | one = sentence $ wordsOf "1 coin costs more to spend than it is worth at" <> [rateDoc report.rate <> ",", amount (inputFee report.reportKind report.rate) <> ":"]
-      | otherwise = sentence $ wordsOf (show count <> " coins cost more to spend than they are worth at") <> [rateDoc report.rate <> ",", amount (inputFee report.reportKind report.rate)] <> wordsOf "each:"
+    -- The fee of an input depends on the type of its coin. The header
+    -- gives it when the dust coins all cost the same, and each coin
+    -- gives its own otherwise.
+    fees = nub (inputFee report.rate <$> report.dustCoins)
+    header = case fees of
+      [fee]
+        | one -> sentence $ wordsOf "1 coin costs more to spend than it is worth at" <> [rateDoc report.rate <> ",", amount fee <> ":"]
+        | otherwise -> sentence $ wordsOf (show count <> " coins cost more to spend than they are worth at") <> [rateDoc report.rate <> ",", amount fee] <> wordsOf "each:"
+      _ -> sentence $ wordsOf (show count <> " coins cost more to spend than they are worth at") <> [rateDoc report.rate <> ":"]
     dustCoinDoc coin = questionCoinDoc unit coin.outpoint (fromIntegral coin.value) (Map.findWithDefault "" coin.outpoint.hash labels) (worth coin)
-    worth coin = case worthSpendingUpTo report.reportKind coin of
+    worth coin = hsep (ownFee coin <> [worthAt coin])
+    ownFee coin = ["costs" <+> amount (inputFee report.rate coin) <> "," | length fees > 1]
+    worthAt coin = case worthSpendingUpTo coin of
       0 -> "worth less than its fee at any rate"
       upTo -> "worth spending at" <+> rateDoc upTo <+> "or less"
     dustValue = valueOf report.dustCoins
@@ -1899,10 +2088,10 @@ dustReportDoc unit labels report =
           <> [amount report.withDust]
           <> wordsOf "instead of"
           <> [amount report.withoutDust <> ",", amount (report.withoutDust - report.withDust)]
-          <> wordsOf ("less" <> if report.othersStay then "." else ", and the account is empty.")
+          <> wordsOf ("less" <> if report.othersStay then "." else ", and the portfolio has no coin left on the network.")
     left =
       sentence $
-        wordsOf ("Leaving " <> them <> ", the account keeps")
+        wordsOf ("Leaving " <> them <> ", the portfolio keeps")
           <> [amount dustValue <> "."]
           <> wordsOf "Once the other coins are gone,"
           <> later
@@ -1918,20 +2107,20 @@ dustReportDoc unit labels report =
 childrenDoc :: [Sent] -> Doc Style
 childrenDoc children =
   vcat $
-    sentence (wordsOf "Replacing the transaction removes those of the account that spend its change:")
+    sentence (wordsOf "Replacing the transaction removes those of the portfolio that spend its change:")
       : [indent 2 (styled Muted (shortHashText (sentId child))) | child <- children]
 
 -- | What bumpfee says of the coins to add, before it asks to add them: each
 -- with the address that holds it and its path, and the label it shows
 -- among those given
-addedCoinsDoc :: Network -> AmountUnit -> Map.Map TxHash Text -> Natural -> [(Store.Unspent, Address, SoftPath)] -> Doc Style
+addedCoinsDoc :: Network -> AmountUnit -> Map.Map TxHash Text -> Natural -> [(Store.Unspent, Address, PoolPath)] -> Doc Style
 addedCoinsDoc net unit labels feeByte added =
   vcat . intersperse mempty $
     header : [questionCoinDoc unit coin.outpoint (fromIntegral coin.value) (Map.findWithDefault "" coin.outpoint.hash labels) (held addr path) | (coin, addr, path) <- added]
   where
     them = if length added == 1 then "this coin" else "these coins"
-    header = sentence $ wordsOf "The coins of the transaction cannot pay its fee at" <> [rateDoc feeByte <> ","] <> wordsOf ("and " <> them <> " of the account would:")
-    held addr path = "at" <+> fullAddressWords net addr (Just path)
+    header = sentence $ wordsOf "The coins of the transaction cannot pay its fee at" <> [rateDoc feeByte <> ","] <> wordsOf ("and " <> them <> " of the portfolio would:")
+    held addr path = "at" <+> fullAddressWords net addr (Just (pathInAccount path))
 
 -- | What bumpfee says of the ways the recipients can pay, those of
 -- 'reductions', before it asks which: each recipient, numbered when there
@@ -1954,7 +2143,7 @@ reducedDoc net unit feeByte ways@(way : _) =
       sentence $
         wordsOf "The coins of the transaction cannot pay its fee at"
           <> [rateDoc feeByte <> ","]
-          <> wordsOf "and no coin of the account is added."
+          <> wordsOf "and no coin of the portfolio is added."
           <> who
     who
       | several =
@@ -1985,39 +2174,59 @@ prettyPrinter unit view code shown res = do
   responsePrinter unit view code shown res
   when (responseFailed res) exitFailure
 
+-- | Print the answer of a command, as 'prettyPrinter' does, without the
+-- exit status of a failure
 responsePrinter :: AmountUnit -> View -> AddressCode -> TxShown -> Response -> IO ()
 responsePrinter unit view code shown answer =
   case answer of
     -- A transaction just signed, shown in full before the secret was asked
     ResponseTx _ info | SignedTx fileM <- shown -> renderIO $ signedDoc fileM info
     ResponseOutsideTx _ info | SignedTx fileM <- shown -> renderIO $ signedDoc fileM info
-    -- The listings, which the screen reads in chunks ('rowsPrinter')
-    ResponseAccounts {} -> listing
+    -- The listings, which the screen reads in chunks ('sectionsPrinter')
+    ResponsePortfolios {} -> listing
     ResponseAddresses {} -> listing
     ResponseBalances {} -> listing
     ResponseTxs {} -> listing
     ResponsePendingTxs {} -> listing
     ResponseCoins {} -> listing
     ResponseError err -> renderIO $ errorDoc err
-    ResponseMnemonic source ws -> renderIO $ mnemonicDoc source ws
-    ResponseShares source threshold shares -> renderIO $ sharesDoc source threshold shares
-    ResponseAccount acc spendable -> renderIO =<< listedAccountDoc Verbose unit acc spendable
-    -- In green when the command did what it was asked, in red otherwise
-    ResponseAccResult _ res txt -> renderIO $ styled (if res then Good else Failure) (cs txt)
+    ResponseNewPortfolio secretM portfolio merged filled ->
+      renderIO . vcat . intersperse mempty $
+        [secretDoc secret | Just secret <- [secretM]]
+          <> [newPortfolioDoc portfolio]
+          <> [vcat notes | let wallet = refWallet (viewRef portfolio), let notes = mergedNote wallet merged <> filledNote wallet filled, not (null notes)]
+    ResponsePortfolio portfolio -> renderIO =<< listedPortfolioDoc Compact unit portfolio
+    ResponseFilled merged added portfolios -> do
+      docs <- mapM (listedPortfolioDoc Compact unit) portfolios
+      renderIO . vcat . intersperse mempty $ filledDoc merged added portfolios : docs
+    -- In green when the mnemonic matches, in red otherwise
+    ResponseChecked _ matches said -> renderIO $ styled (if matches then Good else Failure) (cs said)
+    ResponseDeleted said newDefaults ->
+      renderIO . vcat $
+        styled Good (cs said)
+          : [ text ("The key " <> cs key <> " of the configuration file is now " <> show value <> ".")
+              | (key, value) <- newDefaults
+            ]
+    ResponseDefaults defaults file ->
+      renderIO . vcat $
+        [field pad key <> pretty value | (key, value) <- defaults]
+          <> ["Written to" <+> styled UserText file]
+      where
+        pad = fromIntegral (maximum (0 : (Text.length . fst <$> defaults)))
     ResponseFile f -> renderIO $ "Written to" <+> styled UserText f
     ResponseImport report -> renderIO $ importDoc report
-    ResponseAccountFile file -> renderIO $ accountFileDoc file
-    ResponseAddress acc addr spendable ->
-      renderIO =<< addressAnswerDoc code unit acc addr spendable
-    ResponseDerivedAddr acc path addr -> renderIO $ derivedAddrDoc acc path addr
-    ResponseTx acc txInfo ->
-      renderIO =<< txAnswerDoc (accountNetwork acc) (Just acc) unit txInfo
-    -- Each account's view of the transaction, a blank line between them
+    ResponseWalletFile file -> renderIO $ walletFileDoc file
+    ResponseAddress ref addr spendable ->
+      renderIO =<< addressAnswerDoc code unit ref addr spendable
+    ResponseDerivedAddr ref path addr -> renderIO $ derivedAddrDoc ref path addr
+    ResponseTx place txInfo ->
+      renderIO =<< txAnswerDoc (placeNetwork place) (Just (placePortfolio place)) unit txInfo
+    -- Each portfolio's view of the transaction, a blank line between them
     ResponseLabelledTxs held -> renderIO =<< heldTxsDoc unit held
     ResponseHeldTxs held -> renderIO =<< heldTxsDoc unit held
-    -- The coins left in the account below the transaction, apart from it
-    ResponsePrepared acc txInfo left -> do
-      renderIO =<< txAnswerDoc (accountNetwork acc) (Just acc) unit txInfo
+    -- The coins left in the portfolio below the transaction, apart from it
+    ResponsePrepared place txInfo left -> do
+      renderIO =<< txAnswerDoc (placeNetwork place) (Just (placePortfolio place)) unit txInfo
       unless (null left) $ putStrLn "" >> renderIO (leftCoinsDoc unit left)
     ResponseOutsideTx net txInfo -> renderIO =<< txAnswerDoc net Nothing unit txInfo
     ResponseSentTx net h ->
@@ -2051,31 +2260,111 @@ responsePrinter unit view code shown answer =
         if valid
           then styled Good ("The key of " <> cs addr <> " signed this message")
           else styled Failure ("This is not a signature of this message by the key of " <> cs addr)
-    -- The accounts not synced last, where the user sees them
-    ResponseSync xs notSynced ->
+    -- The networks left out last, where the user sees them
+    ResponseSync results notServed notSynced ->
       renderIO . vcat . intersperse mempty $
-        [syncResultsPrinter unit xs | not (null xs)] <> [notSyncedPrinter notSynced | not (null notSynced)]
-    -- The networks not searched last, where the user sees them
-    ResponseRecover searched gap xs elsewhere notSearched ->
+        [syncResultsPrinter unit results | not (null results)]
+          <> [notServedDoc notServed | not (null notServed)]
+          <> [failedNetworksDoc "not synced" notSynced | not (null notSynced)]
+    ResponseRecover searched gap walletM merged created filled results elsewhere notServed notSearched ->
       renderIO . vcat . intersperse mempty $
-        recovered
-          : [foreignFundsDoc unit elsewhere | not (null elsewhere)]
-          <> [notSearchedDoc notSearched | not (null notSearched)]
-      where
-        recovered
-          | null xs = text $ "No account of the seed was paid on " <> orList ((.name) <$> searched) <> ": the search ended after " <> show gap <> " accounts in a row without a payment"
-          | otherwise = syncResultsPrinter unit xs
+        [vcat (recoveredDocs searched gap walletM merged created filled)]
+          <> [syncResultsPrinter unit results | not (null results)]
+          <> [foreignFundsDoc unit elsewhere | not (null elsewhere)]
+          <> [notServedDoc notServed | not (null notServed)]
+          <> [failedNetworksDoc "left out" notSearched | not (null notSearched)]
     ResponseFees net rates -> do
       now <- getCurrentTime
       renderIO $ feeRatesDoc net now rates
   where
-    listing = mapM_ (renderIO . listingDoc) =<< rowsPrinter unit view answer
+    -- An answer of several groups says where each is
+    listing = mapM_ (renderIO . listingDoc) =<< sectionsPrinter unit view (severalGroups answer) answer
 
--- | A transaction as each account that holds it sees it, in full, a blank
--- line between the accounts: what label and show answer
-heldTxsDoc :: AmountUnit -> [(DBAccount, TxInfo)] -> IO (Doc Style)
+-- | The secret newportfolio made, which it shows once
+secretDoc :: NewSecret -> Doc Style
+secretDoc (NewMnemonic source ws) = mnemonicDoc source ws
+secretDoc (NewShares source threshold shares) = sharesDoc source threshold shares
+
+-- | The portfolio newportfolio created: its name and its wallet, the
+-- fingerprint of the wallet, which names the mnemonic from then on, and
+-- the accounts it has. A new portfolio has every account, so the line
+-- only counts them and names their networks.
+newPortfolioDoc :: PortfolioView -> Doc Style
+newPortfolioDoc portfolio =
+  vcat $
+    (styled Good "Created" <+> (pretty (portfolioName (refPortfolio ref)) `withStyle` Account) <+> "of" <+> pretty (walletName (refWallet ref)))
+      : ( indent 2
+            <$> [ field 11 "Fingerprint" <> maybe (styled Muted "unknown") (pretty . fingerprintToText) (viewFingerprint portfolio),
+                  field 11 "Accounts" <> text (show accounts <> ", on " <> andList networks)
+                ]
+        )
+  where
+    ref = viewRef portfolio
+    accounts = sum (length . networkViewAccounts <$> viewNetworks portfolio)
+    networks = (.name) . networkViewNetwork <$> viewNetworks portfolio
+
+-- | The wallets of the same mnemonic a command merged into the wallet it
+-- was given the mnemonic of, in a line, or nothing when it merged none. A
+-- database of an earlier version keeps the accounts of one mnemonic on
+-- Bitcoin and on Bitcoin Cash in two wallets, until a command is given
+-- the mnemonic.
+mergedNote :: Natural -> [Natural] -> [Doc Style]
+mergedNote wallet merged =
+  [ text $
+      andList (cs . walletName <$> merged)
+        <> (if length merged == 1 then " was" else " were")
+        <> " merged into "
+        <> cs (walletName wallet)
+        <> ": the same mnemonic gives "
+        <> (if length merged == 1 then "both." else "them all.")
+    | not (null merged)
+  ]
+
+-- | The accounts a command added to the portfolios the wallet already
+-- had, which lacked them, in a line, or nothing when it added none
+filledNote :: Natural -> Natural -> [Doc Style]
+filledNote wallet filled =
+  [ text (counted filled "account was" "accounts were" <> " added to the portfolios " <> cs (walletName wallet) <> " already had, which lacked them.")
+    | filled > 0
+  ]
+
+-- | What fillwallet did, above the portfolios of the wallet: how many
+-- accounts it added, and the wallets of the same mnemonic it merged into
+-- the wallet
+filledDoc :: [Natural] -> Natural -> [PortfolioView] -> Doc Style
+filledDoc merged added portfolios =
+  vcat $
+    [ styled Good $ case added of
+        0 -> name <> " lacks no account: every portfolio is whole"
+        _ -> counted added "account" "accounts" <> " added to " <> name
+    ]
+      <> mergedNote wallet merged
+  where
+    wallet = maybe 0 (refWallet . viewRef) (listToMaybe portfolios)
+    name = cs (walletName wallet) :: String
+
+-- | What recover found, above the syncs of the portfolios: the portfolios
+-- it created, or that the search found none, and what it did with a
+-- wallet the database already had for the mnemonic
+recoveredDocs :: [Network] -> Natural -> Maybe Natural -> [Natural] -> [Natural] -> Natural -> [Doc Style]
+recoveredDocs searched gap walletM merged created filled =
+  case walletM of
+    Nothing -> [text ("No portfolio of the mnemonic was paid on " <> orList ((.name) <$> searched) <> ". " <> ended)]
+    Just wallet ->
+      [ case created of
+          [] -> text ("No new portfolio of the mnemonic was paid on " <> orList ((.name) <$> searched) <> ". " <> ended)
+          _ -> styled Good "Recovered" <+> (text (andList (cs . portfolioName <$> created)) `withStyle` Account) <+> "of" <+> pretty (walletName wallet)
+      ]
+        <> mergedNote wallet merged
+        <> filledNote wallet filled
+  where
+    ended = "The search ended after " <> counted gap "portfolio" "portfolios in a row" <> " without a payment."
+
+-- | A transaction as each portfolio that holds it sees it, in full, a
+-- blank line between the portfolios: what label and show answer
+heldTxsDoc :: AmountUnit -> [(Place, TxInfo)] -> IO (Doc Style)
 heldTxsDoc unit held =
-  vcat . intersperse mempty <$> mapM (\(acc, txInfo) -> txAnswerDoc (accountNetwork acc) (Just acc) unit txInfo) held
+  vcat . intersperse mempty <$> mapM (\(place, txInfo) -> txAnswerDoc (placeNetwork place) (Just (placePortfolio place)) unit txInfo) held
 
 -- | A transaction just signed, as signtx and signsweep answer on the
 -- screen: its id, and the file it was written to, if any. The transaction
@@ -2124,17 +2413,14 @@ agoText now time
 {- Next steps -}
 
 -- | What the user does next after a command of a payment or a sweep,
--- preparetx, preparesendall, preparesweep, signtx, signsweep, broadcast or
--- sync, below its answer. In the pretty output only: a script reading the
--- JSON answer knows its next step. The first argument tells the accounts
--- whose name is on several networks ('nextStepsPrinter').
-printNextSteps :: (DBAccount -> Bool) -> Command -> Response -> IO ()
-printNextSteps shared cmd res =
-  forM_ (nextStepsPrinter shared cmd res) $ \steps -> putStrLn "" >> renderIO steps
-
--- | Whether the answer of the command has steps to suggest next
-hasNextSteps :: Command -> Response -> Bool
-hasNextSteps cmd res = isJust (nextStepsPrinter (const False) cmd res)
+-- preparetx, preparesendall, preparesweep, signtx, signsweep, broadcast,
+-- importwallet or sync, below its answer. In the pretty output only: a
+-- script reading the JSON answer knows its next step. The configuration
+-- tells the default wallet and portfolio, which a step does not name
+-- ('nextStepsPrinter').
+printNextSteps :: Config -> Command -> Response -> IO ()
+printNextSteps cfg cmd res =
+  forM_ (nextStepsPrinter cfg cmd res) $ \steps -> putStrLn "" >> renderIO steps
 
 -- | A failure, as an answer or a listing reports it
 errorDoc :: Text -> Doc Style
@@ -2142,12 +2428,17 @@ errorDoc err = styled Failure "Error:" <+> pretty err
 
 {- Listings -}
 
--- | The rows of a listing, as the screen shows them
+-- | The rows of a section of a listing, as the screen shows them. A
+-- listing over a portfolio has a section for each network, or for each
+-- account for the addresses. Any other listing is one section.
 data Rows = Rows
   { -- | What to say when the listing has no row at all
     rowsNone :: Doc Style,
+    -- | The lines that say where the rows are, above the section: none
+    -- in a listing of one place, which the command line already names
+    rowsTitle :: [Doc Style],
     -- | The lines above the first row: the header of a table. Only the
-    -- first chunk of a listing shows them.
+    -- first chunk of a section shows them.
     rowsHeader :: [Doc Style],
     -- | A document per row
     rowsDocs :: [Doc Style],
@@ -2156,125 +2447,198 @@ data Rows = Rows
   }
 
 -- | The rows of a listing whose elements take a few lines each: no
--- header, and a blank line between two elements
+-- title, no header, and a blank line between two elements
 apartRows :: Doc Style -> [Doc Style] -> Rows
-apartRows none docs = Rows none [] docs True
+apartRows none docs = Rows none [] [] docs True
 
--- | The rows of an answer that lists, or Nothing for an answer that does
--- not, a blank line between them. A table, of txs or of addresses, has a
--- header instead, and a row under the other. The screen reads a listing in chunks, so the
--- paths of its addresses are padded to the longest path of the account on
--- the chains listed, the same for every chunk, rather than to the longest
--- one shown. The columns of the table have fixed widths for the same
--- reason. The accounts, addresses, transactions and coins show in the view
--- given, their times in the time zone of the computer.
-rowsPrinter :: AmountUnit -> View -> Response -> IO (Maybe Rows)
-rowsPrinter unit view = \case
-  ResponseAccounts accs -> do
-    let none = text "There are no accounts to display"
-        -- The listing is read whole: these are all the accounts
-        headed = accountTableColumns unit (fst <$> accs)
+-- | Whether an answer that lists comes in several groups, each of which
+-- then says where it is
+severalGroups :: Response -> Bool
+severalGroups = \case
+  ResponseAddresses groups -> length groups > 1
+  ResponseBalances groups -> length groups > 1
+  ResponseTxs groups -> length groups > 1
+  ResponseCoins groups -> length groups > 1
+  _ -> False
+
+-- | The sections of an answer that lists, or Nothing for an answer that
+-- does not: one for each group of the answer, or one alone for the
+-- portfolios and the pending transactions, which come in no group. An
+-- answer without a group gives one section without rows, which says what
+-- to say then.
+--
+-- The rows of a section have a blank line between them. A table has a
+-- header instead, and a row under the other. The screen reads a listing
+-- in chunks, so the paths of its addresses are padded to the longest path
+-- of the accounts of the section on the chains listed, the same for every
+-- chunk, rather than to the longest one shown. The columns of a table
+-- have fixed widths for the same reason. The portfolios, addresses,
+-- transactions and coins show in the view given, their times in the time
+-- zone of the computer.
+--
+-- With the flag, each section says where it is in a line above its rows:
+-- its portfolio and its network, and its account for the addresses. The
+-- callers set it for a listing that may cover several places. The
+-- sections of balances always have that line, which gives the total of
+-- the network: the specification of the listing asks for a total for
+-- each network, and a listing narrowed to one network has one too.
+sectionsPrinter :: AmountUnit -> View -> Bool -> Response -> IO (Maybe [Rows])
+sectionsPrinter unit view titled = \case
+  ResponsePortfolios portfolios -> do
+    let none = text "There are no portfolios to display"
+        -- The listing is read whole: these are all the portfolios
+        headed = portfolioTableColumns unit portfolios
     if view == Table
-      then return . Just $ Rows none (tableHeader headed) (uncurry (accountRowDoc unit headed) <$> accs) False
-      else Just . apartRows none <$> mapM (uncurry (listedAccountDoc view unit)) accs
-  ResponseAddresses acc addrs -> do
-    let none = text "There are no addresses to display"
-        pad = longestPathWidth acc (nub (dBAddressInternal . fst <$> addrs))
-        -- addresses lists the addresses of one chain
-        internal = any (dBAddressInternal . fst) addrs
-        headed = addressTableColumns unit acc pad internal
-    if view == Table
-      then return . Just $ Rows none (tableHeader headed) (uncurry (addressRowDoc unit headed) <$> addrs) False
-      else Just . apartRows none <$> mapM (uncurry (listedAddressDoc view unit pad)) addrs
-  ResponseBalances acc addrs ->
-    let none = text "There are no addresses with coins to display"
-        pad = longestPathWidth acc [False, True]
-        headed = balanceTableColumns unit acc pad
-     in return . Just $
-          if view == Table
-            then Rows none (tableHeader headed) (uncurry (balanceRowDoc unit headed) <$> addrs) False
-            else apartRows none (uncurry (listedBalanceDoc view unit pad) <$> addrs)
-  ResponseTxs acc txs -> do
-    docs <- mapM (\(ListedTx info balanceM) -> listedTxDoc view (accountNetwork acc) unit Nothing balanceM info) txs
-    let none = text "There are no transactions to display"
-    return . Just $
+      then return $ Just [Rows none [] (tableHeader headed) (concatMap (portfolioRowDocs unit headed) portfolios) False]
+      else Just . pure . apartRows none <$> mapM (listedPortfolioDoc view unit) portfolios
+  ResponseAddresses groups ->
+    sections (text "There are no addresses to display") groups $ \none g -> do
+      let net = placeNetwork (groupPlace g)
+          addrs = groupRows g
+          pad = longestPathWidth (groupAccounts g) (nub (dBAddressInternal . fst <$> addrs))
+          -- addresses lists the addresses of one chain
+          internal = any (dBAddressInternal . fst) addrs
+          headed = addressTableColumns unit net (countsKind <$> groupAccounts g) pad internal
+          title = [maybe (placeLine (groupPlace g)) accountRefLine (groupAccountRef g) | titled]
       if view == Table
-        then Rows none (txTableHeader unit) docs False
-        else apartRows none docs
-  -- Listing every account, each transaction names its own
-  ResponsePendingTxs asked held -> do
-    let none = case asked of
-          Just acc -> "There are no pending transactions in the account " <> cs (dBAccountName acc)
-          Nothing -> "There are no pending transactions"
-        named acc = if isNothing asked then Just acc else Nothing
-        -- The listing is read whole: these are all its accounts
-        headed = pendingTableColumns unit (if isNothing asked then Just (fst <$> held) else Nothing)
+        then return $ Rows none title (tableHeader headed) (uncurry (addressRowDoc unit headed) <$> addrs) False
+        else do
+          docs <- mapM (uncurry (listedAddressDoc view unit pad)) addrs
+          return $ Rows none title [] docs True
+  ResponseBalances groups ->
+    sections (text "There are no addresses with coins to display") groups $ \none (g, total) -> do
+      let net = placeNetwork (groupPlace g)
+          addrs = groupRows g
+          pad = longestPathWidth (groupAccounts g) [False, True]
+          headed = balanceTableColumns unit net (countsKind <$> groupAccounts g) pad
+          title = [balanceTitle unit (groupPlace g) total]
+      return $
+        if view == Table
+          then Rows none title (tableHeader headed) (uncurry (balanceRowDoc unit headed) <$> addrs) False
+          else Rows none title [] (uncurry (listedBalanceDoc view unit pad) <$> addrs) True
+  ResponseTxs groups ->
+    sections (text "There are no transactions to display") groups $ \none g -> do
+      let net = placeNetwork (groupPlace g)
+          title = [placeLine (groupPlace g) | titled]
+      docs <- mapM (\(ListedTx info balanceM) -> listedTxDoc view net unit Nothing balanceM info) (groupRows g)
+      return $
+        if view == Table
+          then Rows none title (txTableHeader unit) docs False
+          else Rows none title [] docs True
+  -- The listing covers every portfolio on every network unless the
+  -- options narrow it, so each transaction says where it is
+  ResponsePendingTxs held -> do
+    let none = text "There are no pending transactions"
+        -- The listing is read whole: these are all its places
+        headed = pendingTableColumns unit (fst <$> held)
     if view == Table
       then do
-        rows <- mapM (\(acc, info) -> pendingRowDoc (accountNetwork acc) unit headed (named acc) <$> localTxTime info <*> pure info) held
-        return . Just $ Rows (text none) (tableHeader headed) rows False
+        rows <- mapM (\(place, info) -> pendingRowDoc unit headed place <$> localTxTime info <*> pure info) held
+        return $ Just [Rows none [] (tableHeader headed) rows False]
       else do
-        docs <- mapM (\(acc, info) -> listedTxDoc view (accountNetwork acc) unit (named acc) Nothing info) held
-        return . Just $ apartRows (text none) docs
-  ResponseCoins acc coins -> do
-    let none = text "There are no coins to display"
-        headed = coinTableColumns unit acc (longestPathWidth acc [False, True])
-    if view == Table
-      then do
-        rows <- mapM (\coin -> coinRowDoc (accountNetwork acc) unit headed <$> traverse utcToLocalZonedTime (jsonCoinTime coin) <*> pure coin) coins
-        return . Just $ Rows none (tableHeader headed) rows False
-      else Just . apartRows none <$> mapM (listedCoinDoc view (accountNetwork acc) unit) coins
+        docs <- mapM (\(place, info) -> listedTxDoc view (placeNetwork place) unit (Just (placePortfolio place)) Nothing info) held
+        return $ Just [apartRows none docs]
+  ResponseCoins groups ->
+    sections (text "There are no coins to display") groups $ \none g -> do
+      let net = placeNetwork (groupPlace g)
+          coins = groupRows g
+          headed = coinTableColumns unit net (countsKind <$> groupAccounts g) (longestPathWidth (groupAccounts g) [False, True])
+          title = [placeLine (groupPlace g) | titled]
+      if view == Table
+        then do
+          rows <- mapM (\coin -> coinRowDoc net unit headed <$> traverse utcToLocalZonedTime (jsonCoinTime coin) <*> pure coin) coins
+          return $ Rows none title (tableHeader headed) rows False
+        else do
+          docs <- mapM (listedCoinDoc view net unit) coins
+          return $ Rows none title [] docs True
   _ -> return Nothing
-
--- | The width of the longest derivation path of the account on the
--- chains, False for the receiving one and True for the change one: that
--- of its newest address there
-longestPathWidth :: DBAccount -> [Bool] -> Natural
-longestPathWidth acc chains = fromIntegral $ maximum (0 : (width <$> chains))
   where
-    width internal =
-      let count = if internal then dBAccountInternal acc else dBAccountExternal acc
-       in if count == 0 then 0 else Text.length (pathText (chainPath internal (count - 1)))
+    -- A section for each group, or one without rows for no group
+    sections :: Doc Style -> [group] -> (Doc Style -> group -> IO Rows) -> IO (Maybe [Rows])
+    sections none [] _ = return $ Just [apartRows none []]
+    sections none groups rowsOf = Just <$> mapM (rowsOf none) groups
 
--- | A whole listing: its header and its rows, or what to say when it has
--- no row
-listingDoc :: Rows -> Doc Style
-listingDoc rows
-  | null (rowsDocs rows) = rowsNone rows
-  | otherwise = vcat (rowsHeader rows <> [rowsBody rows])
+-- | The line above the addresses balances lists on a network: where they
+-- are, then the value of every coin of the portfolio there, what it can
+-- spend now, and the rest, which waits. The figures count every coin the
+-- listing covers on the network, whatever part of them a page shows.
+balanceTitle :: AmountUnit -> Place -> CoinBalance -> Doc Style
+balanceTitle unit place total =
+  columns
+    [ placeLine place,
+      commaList
+        [ "total" <+> amountPrinter unit (coinBalanceTotal total),
+          "spendable" <+> amountPrinter unit (coinBalanceSpendable total),
+          "unspendable" <+> waitingAmount unit (coinBalanceUnspendable total)
+        ]
+    ]
 
--- | The rows of a listing alone, without its header
+-- | The width of the longest derivation path of the accounts on the
+-- chains, False for the receiving one and True for the change one: that
+-- of the newest address there
+longestPathWidth :: [AccountCounts] -> [Bool] -> Natural
+longestPathWidth accounts chains = fromIntegral $ maximum (0 : [width account internal | account <- accounts, internal <- chains])
+  where
+    width account internal =
+      let count = if internal then countsInternal account else countsExternal account
+       in if count == 0 then 0 else Text.length (pathText (chainPath internal (fromIntegral (count - 1))))
+
+-- | A whole listing: its sections that have rows, a blank line between
+-- them, or what to say when none has a row
+listingDoc :: [Rows] -> Doc Style
+listingDoc sections = case filter (not . null . rowsDocs) sections of
+  [] -> maybe mempty rowsNone (listToMaybe sections)
+  shown -> vcat (intersperse mempty (sectionDoc <$> shown))
+
+-- | A section from its start: its title, set apart by a blank line when
+-- its rows are, its header and its rows
+sectionDoc :: Rows -> Doc Style
+sectionDoc rows =
+  vcat (rowsTitle rows <> [mempty | rowsApart rows, not (null (rowsTitle rows))] <> rowsHeader rows <> [rowsBody rows])
+
+-- | The rows of a section alone, without its title and its header
 rowsBody :: Rows -> Doc Style
 rowsBody rows = vcat (if rowsApart rows then intersperse mempty (rowsDocs rows) else rowsDocs rows)
 
--- | A chunk of a listing, the first one or a later one. The first chunk
--- of a listing without rows says so. The first chunk has the header of
--- the listing, if any, and a later one goes on under the rows before it.
--- A later chunk of a listing whose rows are set apart starts with the
--- blank line that sets it apart from the chunk before. An answer that is
--- not a listing is a failure here.
-chunkDoc :: AmountUnit -> View -> Bool -> Response -> IO (Doc Style)
-chunkDoc unit view first answer = do
-  rowsM <- rowsPrinter unit view answer
-  return $ case rowsM of
-    Just rows
-      | first -> listingDoc rows
-      | otherwise -> vcat ([mempty | rowsApart rows] <> [rowsBody rows])
+-- | A chunk of a listing, where the listing says it is ('ChunkAt'). The
+-- first chunk of a listing without rows says so. A chunk that starts a
+-- section has the title of the section, if any, and the header of its
+-- table, after a blank line that sets it apart from the section before.
+-- A chunk that goes on in its section comes under the rows before it,
+-- after the blank line that sets them apart if one does. An answer that
+-- is not a listing is a failure here.
+chunkDoc :: AmountUnit -> View -> ChunkAt -> Response -> IO (Doc Style)
+chunkDoc unit view at answer = do
+  sectionsM <- sectionsPrinter unit view (chunkTitled at) answer
+  return $ case sectionsM of
+    Just sections
+      | all (null . rowsDocs) sections -> listingDoc sections
+      | chunkStartsSection at -> vcat ([mempty | not (chunkFirst at)] <> [listingDoc sections])
+      | otherwise -> vcat [vcat ([mempty | rowsApart rows] <> [rowsBody rows]) | rows <- sections]
     Nothing -> case answer of
       ResponseError err -> errorDoc err
       _ -> errorDoc "The answer is not a listing"
+
+-- | Whether the first lines of the first chunk of a listing are the
+-- header of a table, which the pager can then keep on the screen: a
+-- table whose sections have no title. A title comes above the header, and
+-- the pager keeps the first lines it is given.
+startsWithHeader :: View -> ChunkAt -> Response -> Bool
+startsWithHeader view at answer = view == Table && not (chunkTitled at) && not balances
+  where
+    balances = case answer of
+      ResponseBalances _ -> True
+      _ -> False
 
 -- | The steps the user may take next, after a command of a payment or a
 -- sweep, if any. Each step is a command line, styled as the help shows
 -- commands, options and metavars.
 --
--- A step names an account by --account. When the first argument tells
--- that accounts of other networks have its name, the step gives its
--- --network too. Without it, a command that acts on one account would take
--- the account of that name on the default network, which may be another
--- one. A name on one network needs no --network, and the step stays short.
-nextStepsPrinter :: (DBAccount -> Bool) -> Command -> Response -> Maybe (Doc Style)
-nextStepsPrinter shared cmd res =
+-- A step names a portfolio by --wallet and --portfolio, and only when
+-- they are not the defaults of the configuration: the next command takes
+-- the defaults by itself, and a user of one portfolio reads no option.
+nextStepsPrinter :: Config -> Command -> Response -> Maybe (Doc Style)
+nextStepsPrinter cfg cmd res =
   case (cmd, res) of
     (CommandPrepareTx opts, ResponsePrepared _ info _)
       | Just shown <- shownOf info -> afterPreparing opts.output shown
@@ -2298,34 +2662,23 @@ nextStepsPrinter shared cmd res =
     (CommandSignTx signing, ResponseTx _ info) -> afterSigning signing info
     (CommandSignSweep signing _ _, ResponseTx _ info) -> afterSigning signing info
     (CommandSignSweep signing _ _, ResponseOutsideTx _ info) -> afterSigning signing info
-    (CommandBroadcast {}, ResponseTx acc _) ->
-      stepsPrinter [("Next, sync the account to follow the transaction", hwLine "sync" (accountArgs [acc]))]
-    -- An account a descriptor added has the name recover gives one, since
-    -- a descriptor carries none, and the file may label things the wallet
-    -- does not have yet
-    (CommandImportAcc _ _ file, ResponseImport report)
-      | not (null steps) -> stepsPrinter steps
-      where
-        steps = renameSteps <> syncSteps
-        renameSteps =
-          [ ("Next, name the account, which the file did not", hwLine "renameacc" ([pretty (shellWord (cs (dBAccountName acc))) `withStyle` Account, metavarWord "NAME"] <> networkArgs acc))
-            | AccountCreated acc _ <- reportAccounts report,
-              dBAccountName acc == recoveredName (accountKind acc) (accountNetwork acc) (accountIndex acc)
-          ]
-        syncSteps
-          | reportNeedsSync report =
-              [ ("Next, sync the wallet, for the addresses, transactions and coins the file labels", hwLine "sync" []),
-                ("Then import the file again, for the labels it could not place", hwLine "importacc" [fileWord file])
-              ]
-          | otherwise = []
-    -- A sync that synced no account has nothing new to see
-    (CommandSync {}, ResponseSync results _)
+    (CommandBroadcast {}, ResponseTx _ _) ->
+      stepsPrinter [("Next, sync the wallet to follow the transaction", hwLine "sync" [])]
+    -- The file may label things the wallet does not have yet
+    (CommandImportWallet _ file, ResponseImport report)
+      | reportNeedsSync report ->
+          stepsPrinter
+            [ ("Next, sync the wallet, for the addresses, transactions and coins the file labels", hwLine "sync" []),
+              ("Then import the file again, for the labels it could not place", hwLine "importwallet" [fileWord file])
+            ]
+    -- A sync that synced nothing has nothing new to see
+    (CommandSync {}, ResponseSync results _ _)
       | not (null results) ->
           case filter ((> 0) . syncResConflicted) results of
-            [] -> stepsPrinter [("Next, see the transactions", hwLine "txs" (accountArgs (syncResAccount <$> results)))]
+            [] -> stepsPrinter [("Next, see the transactions", hwLine "txs" (portfolioArgs (syncResPlace <$> filter syncWorthShowing results)))]
             conflicted ->
               stepsPrinter
-                [ ("Next, find the pending transaction in conflict, which can no longer be sent", hwLine "pendingtxs" (accountArgs (syncResAccount <$> conflicted))),
+                [ ("Next, find the pending transaction in conflict, which can no longer be sent", hwLine "pendingtxs" (portfolioArgs (syncResPlace <$> conflicted))),
                   ("Then delete it, to free its coins", hwLine "deletetx" [metavarWord "HASH"])
                 ]
     _ -> Nothing
@@ -2356,11 +2709,14 @@ nextStepsPrinter shared cmd res =
     -- Without a file, signsweep asks for the keys on the terminal
     keysArgs (Just (KeysInFile file)) = [optionWord "--key-file", fileWord file]
     keysArgs _ = []
-    -- The account of the next command, named when there is one
-    accountArgs [acc] = [optionWord "--account", styled Account (shellWord (cs (dBAccountName acc)))] <> networkArgs acc
-    accountArgs _ = [optionWord "--account", metavarWord "NAME"]
-    -- The --network of an account whose name other networks have too
-    networkArgs acc = [arg | shared acc, arg <- [optionWord "--network", pretty (dBAccountNetwork acc)]]
+    -- The portfolio of the next command, when the places are all in one
+    -- portfolio and it is not the default one. Several portfolios are
+    -- left to the user: the command then shows the default one.
+    portfolioArgs places = case nub (placePortfolio <$> places) of
+      [ref] ->
+        [arg | refWallet ref /= configDefaultWallet cfg, arg <- [optionWord "--wallet", text (show (refWallet ref))]]
+          <> [arg | refPortfolio ref /= configDefaultPortfolio cfg, arg <- [optionWord "--portfolio", text (show (refPortfolio ref))]]
+      _ -> []
 
 -- | Steps, each with what it does and the command that does it
 stepsPrinter :: [(String, Doc Style)] -> Maybe (Doc Style)
@@ -2391,7 +2747,7 @@ fileWord :: String -> Doc Style
 fileWord = styled UserText . shellWord
 
 -- | A word of a command typed in a shell, quoted when the shell would read
--- it as more than one word or change it: an account name with a space, for
+-- it as more than one word or change it: a file name with a space, for
 -- instance
 shellWord :: String -> String
 shellWord word

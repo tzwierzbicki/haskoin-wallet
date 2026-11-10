@@ -10,9 +10,12 @@ import qualified Data.ByteString as BS
 import qualified Data.Serialize as S
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Database.Persist.Sql (PersistValue (..), rawExecute, runMigrationQuiet)
+import Conduit (runConduit, sinkList, (.|))
+import Database.Esqueleto.Legacy (renderQuerySelect)
+import Database.Persist.Sql (PersistValue (..), rawQuery)
 import Haskoin
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.Database.TxInfo (liveSummariesQuery)
 import Haskoin.Wallet.TestUtils
 import Data.Default (def)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), testIdentity)
@@ -23,7 +26,6 @@ spec :: Spec
 spec = do
   keysSpec
   indexesSpec
-  purposeSpec
   -- A key reads back as it was written, in its hexadecimal form
   testIdentity def {jsonTests = [JsonBox arbitraryKeyBytes]}
 
@@ -45,21 +47,6 @@ keysSpec =
       outpointBytes outpoint `shouldSatisfy` (>= outpointBytes (OutPoint (fakeTxHash 1) minBound))
       outpointBytes outpoint `shouldSatisfy` (<= outpointBytes (OutPoint (fakeTxHash 1) maxBound))
       outpointBytes (OutPoint (fakeTxHash 2) 0) `shouldSatisfy` (> outpointBytes (OutPoint (fakeTxHash 1) maxBound))
-
--- | The purpose column of the accounts came to version 4 after wallets
--- had run it: the tables of such a wallet lack the column, which opening
--- the database adds, with 44 for the accounts it has, since every account
--- was a bip44 one
-purposeSpec :: Spec
-purposeSpec =
-  describe "A database of version 4 made before accounts had a purpose" $
-    it "gets the purpose column when opened, with 44 for every account it has" $
-      inMemory $ do
-        globalMigration
-        rawExecute "alter table d_b_account drop column purpose" []
-        rawExecute "insert into d_b_account (name, \"index\", network, external, internal, x_pub_key, balance_confirmed, balance_unconfirmed, balance_coins, created) values ('main', 0, 'btc', 1, 0, 'xpub', 0, 0, 0, '2023-11-01T00:00:00Z')" []
-        _ <- runMigrationQuiet migrateAll
-        queryRows "select name, purpose from d_b_account" `dbShouldBe` [[PersistText "main", PersistInt64 44]]
 
 indexesSpec :: Spec
 indexesSpec =
@@ -107,25 +94,61 @@ indexesSpec =
             \order by block_ref, outpoint limit 100"
         liftIO $ plan `shouldBe` ["SEARCH d_b_coin USING INDEX d_b_coin_account_block_ref (account=? AND block_ref>?)"]
 
-    it "find the transactions after a given one from the index, without sorting them" $
+    -- The transactions belong to a portfolio on a network
+    it "find the transactions of a portfolio on a network after a given one from the index, without sorting them" $
       inMemory $ do
         globalMigration
         plan <-
           queryPlan
-            "select txid, block_ref, time, dead, blob from d_b_tx_info where account = 1 and block_ref >= x'0001' and (block_ref > x'0001' or txid > x'ff') \
+            "select txid, block_ref, time, dead, blob from d_b_tx_info where portfolio = 1 and network = 'btc' and block_ref >= x'0001' and (block_ref > x'0001' or txid > x'ff') \
             \order by block_ref, txid limit 100"
-        liftIO $ plan `shouldBe` ["SEARCH d_b_tx_info USING INDEX d_b_tx_info_account_block_ref (account=? AND block_ref>?)"]
+        liftIO $ plan `shouldBe` ["SEARCH d_b_tx_info USING INDEX d_b_tx_info_pool_block_ref (portfolio=? AND network=? AND block_ref>?)"]
 
     it "add up the amounts down to a given transaction from the index alone, without reading the rows" $
       inMemory $ do
         globalMigration
         plan <-
           queryPlan
-            "select sum(amount) from d_b_tx_info where account = 1 and dead = 0 and block_ref <= x'0001' and (block_ref < x'0001' or txid <= x'ff')"
-        liftIO $ plan `shouldBe` ["SEARCH d_b_tx_info USING COVERING INDEX d_b_tx_info_account_block_ref (account=? AND block_ref<?)"]
+            "select sum(amount) from d_b_tx_info where portfolio = 1 and network = 'btc' and dead = 0 and block_ref <= x'0001' and (block_ref < x'0001' or txid <= x'ff')"
+        liftIO $ plan `shouldBe` ["SEARCH d_b_tx_info USING COVERING INDEX d_b_tx_info_pool_block_ref (portfolio=? AND network=? AND block_ref<?)"]
+
+    -- lockcoin and show name a coin without its account, and the key of a
+    -- coin starts with its account
+    it "find the rows of a coin named by its outpoint alone, in whatever account" $
+      inMemory $ do
+        globalMigration
+        plan <- queryPlan "select * from d_b_coin where outpoint = x'ff'"
+        liftIO $ plan `shouldBe` ["SEARCH d_b_coin USING INDEX d_b_coin_outpoint (outpoint=?)"]
+
+    -- trustedTx looks up the summaries of a transaction for each coin it
+    -- judges. The key of a summary starts with its portfolio and its
+    -- network, and no index starts with the txid.
+    it "find the live summaries of a transaction on a network by the key of each portfolio, without reading every summary" $
+      inMemory $ do
+        globalMigration
+        plan <- queryPlanOf =<< renderQuerySelect (liveSummariesQuery btc (fakeTxHash 1))
+        liftIO $
+          plan
+            `shouldBe` [ "SCAN d_b_portfolio USING COVERING INDEX sqlite_autoindex_d_b_portfolio_1",
+                         "SEARCH d_b_tx_info USING INDEX sqlite_autoindex_d_b_tx_info_1 (portfolio=? AND network=? AND txid=?)"
+                       ]
+
+    -- The key of a pending transaction is its nosigHash alone
+    it "find the pending transactions of a portfolio on a network" $
+      inMemory $ do
+        globalMigration
+        plan <- queryPlan "select * from d_b_pending_tx where portfolio = 1 and network = 'btc'"
+        liftIO $ plan `shouldBe` ["SEARCH d_b_pending_tx USING INDEX d_b_pending_tx_pool (portfolio=? AND network=?)"]
 
 -- | The steps SQLite takes to answer a query
 queryPlan :: Text -> DB IO [Text]
 queryPlan query = do
   rows <- queryRows ("explain query plan " <> query)
+  return [detail | [_, _, _, PersistText detail] <- rows]
+
+-- | The steps SQLite takes to answer a query of hw, as esqueleto renders
+-- it with its parameters, in their order
+queryPlanOf :: (Text, [PersistValue]) -> DB IO [Text]
+queryPlanOf (query, params) = do
+  rows <- runConduit (rawQuery ("explain query plan " <> query) params .| sinkList)
   return [detail | [_, _, _, PersistText detail] <- rows]

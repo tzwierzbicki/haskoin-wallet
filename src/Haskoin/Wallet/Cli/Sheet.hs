@@ -1,6 +1,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 
 -- | A listing as a sheet of a spreadsheet: a row of headings, then a row
 -- for each element, as --csv writes it to a file ("Haskoin.Wallet.Cli.Csv").
@@ -28,17 +29,24 @@
 -- was. A value unknown, or one that does not apply, such as the block of
 -- an unconfirmed transaction, leaves its cell empty.
 --
+-- A listing over a portfolio covers several networks, and for the
+-- addresses both types. Its sheet has one row for each element, whatever
+-- its network, with the network in a first column, and the type of an
+-- address in a second: a sheet has no sections, and its user filters on a
+-- column instead.
+--
 -- exportsheet writes the six listings to one spreadsheet, a tab each
--- ('walletSheets'), for every account at once. The sheets of the listings
--- of one account then get a first column that names it, and the rows of
--- each account follow those of the one before.
+-- ('walletSheets'), for every portfolio at once. The sheets of the
+-- listings of one portfolio then get two first columns that name its
+-- wallet and the portfolio, and the rows of each portfolio follow those
+-- of the one before.
 module Haskoin.Wallet.Cli.Sheet
   ( Cell (..),
     Sheet (..),
     listingSheet,
-    AccountSheets (..),
+    PortfolioSheets (..),
     walletSheets,
-    withAccountColumn,
+    withPortfolioColumns,
     stacked,
   )
 where
@@ -51,12 +59,14 @@ import Data.Word (Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Cli.PrettyPrinter (Payee (..), TxAddress (..), coinStateText, mainPayee, pendingStatusText, txTime, typeWord)
-import Haskoin.Wallet.Cli.Response (Response (..))
-import Haskoin.Wallet.Database (DBAccount (..), DBAddress (..))
-import Haskoin.Wallet.Database.Account (accountNetwork, accountPath)
+import Haskoin.Wallet.Cli.Response (Group (..), Response (..))
+import Haskoin.Wallet.Database (DBAddress (..))
+import Haskoin.Wallet.Database.Account (NetworkView (..), PortfolioView (..))
 import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath, coinBalanceNotSpendableYet, pathText)
 import Haskoin.Wallet.Database.Coin (JsonCoin (..), coinText)
+import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..), portfolioName, walletName)
 import Haskoin.Wallet.Database.TxInfo
+import Haskoin.Wallet.Keys (PoolPath (..), addressKind, kindName)
 import Haskoin.Wallet.ShortId (shortCoinText, shortHashText)
 import Numeric.Natural (Natural)
 
@@ -108,18 +118,23 @@ sheetOf columns elements =
 through :: (element -> part) -> [Column part] -> [Column element]
 through part columns = [Column heading (cell . part) | Column heading cell <- columns]
 
--- | The sheet of the answer of a listing: accounts, addresses, balances,
--- coins, txs or pendingtxs. Nothing for any other answer, an error
--- included.
+-- | The sheet of the answer of a listing: portfolios, addresses,
+-- balances, coins, txs or pendingtxs. Nothing for any other answer, an
+-- error included. The rows of the groups of an answer follow each other,
+-- each with the network of its group.
 listingSheet :: Response -> Maybe Sheet
 listingSheet = \case
-  ResponseAccounts accs -> Just (sheetOf accountColumns accs)
-  ResponseAddresses _ addrs -> Just (sheetOf addressColumns addrs)
-  ResponseBalances _ addrs -> Just (sheetOf balanceColumns addrs)
-  ResponseCoins acc coins -> Just (sheetOf (coinColumns (accountNetwork acc)) coins)
-  ResponseTxs acc txs -> Just (sheetOf (txColumns (accountNetwork acc)) txs)
-  ResponsePendingTxs _ held -> Just (sheetOf pendingColumns held)
+  ResponsePortfolios portfolios -> Just (sheetOf portfolioColumns (concatMap portfolioRows portfolios))
+  ResponseAddresses groups -> Just (sheetOf addressColumns (concatMap onNetwork groups))
+  ResponseBalances groups -> Just (sheetOf balanceColumns (concatMap (onNetwork . fst) groups))
+  ResponseCoins groups -> Just (sheetOf coinColumns (concatMap onNetwork groups))
+  ResponseTxs groups -> Just (sheetOf txColumns (concatMap onNetwork groups))
+  ResponsePendingTxs held -> Just (sheetOf pendingColumns held)
   _ -> Nothing
+  where
+    -- The rows of a group, each with the network of the group
+    onNetwork :: Group row -> [(Network, row)]
+    onNetwork g = (placeNetwork (groupPlace g),) <$> groupRows g
 
 {- Cells -}
 
@@ -165,100 +180,142 @@ blockCell = \case
   Store.BlockRef height _ -> countCell height
   Store.MemRef _ -> EmptyCell
 
-{- Accounts -}
+{- Portfolios -}
 
--- | The columns of the accounts, each with what it can spend now: what
--- the verbose view gives, but the key of the account and the fingerprint
--- of its seed. A key in a spreadsheet would let anyone it reaches see
--- every address and every payment of the account. A fingerprint has 8
+-- | The rows of a portfolio in the sheet of portfolios: one for each
+-- network it has an account on, or one without a network for a portfolio
+-- that has no account yet, so that it shows
+portfolioRows :: PortfolioView -> [(PortfolioView, Maybe NetworkView)]
+portfolioRows portfolio = case viewNetworks portfolio of
+  [] -> [(portfolio, Nothing)]
+  networks -> (portfolio,) . Just <$> networks
+
+-- | The columns of the portfolios, a row for each network of each: the
+-- wallet, the portfolio and its description, the network, what the
+-- portfolio can spend there now, the balances the store gave, its coins
+-- and its addresses, and when the portfolio was created. What the verbose
+-- view gives, but the keys of the accounts and the fingerprint of the
+-- mnemonic. A key in a spreadsheet would let anyone it reaches see every
+-- address and every payment of the account. A fingerprint has 8
 -- hexadecimal digits, and about one in 40 has no letter: a spreadsheet
 -- would read it as a number, and drop its leading zeros, without a word.
--- The verbose view of accounts gives it, with the descriptor of the
--- account.
-accountColumns :: [Column (DBAccount, Word64)]
-accountColumns =
-  [ Column "Account" $ \(acc, _) -> TextCell (dBAccountName acc),
-    Column "Network" $ \(acc, _) -> TextCell (cs (accountNetwork acc).name),
-    Column "Path" $ \(acc, _) -> TextCell (cs (pathToStr (accountPath acc))),
-    Column "Spendable (sats)" $ \(_, spendable) -> satoshiCell spendable,
-    Column "Confirmed (sats)" $ \(acc, _) -> satoshiCell (dBAccountBalanceConfirmed acc),
-    Column "Unconfirmed (sats)" $ \(acc, _) -> satoshiCell (dBAccountBalanceUnconfirmed acc),
-    Column "Coins" $ \(acc, _) -> countCell (dBAccountBalanceCoins acc),
-    Column "Receiving addresses" $ \(acc, _) -> countCell (dBAccountExternal acc),
-    Column "Change addresses" $ \(acc, _) -> countCell (dBAccountInternal acc),
-    Column "Created (UTC)" $ \(acc, _) -> TimeCell (dBAccountCreated acc)
+-- The verbose view of portfolios gives both.
+portfolioColumns :: [Column (PortfolioView, Maybe NetworkView)]
+portfolioColumns =
+  [ Column "Wallet" $ \(portfolio, _) -> TextCell (walletName (refWallet (viewRef portfolio))),
+    Column "Portfolio" $ \(portfolio, _) -> TextCell (portfolioName (refPortfolio (viewRef portfolio))),
+    Column "Description" $ \(portfolio, _) -> textCell (viewDescription portfolio),
+    Column "Network" $ onNetwork (\net -> TextCell (cs (networkViewNetwork net).name)),
+    Column "Spendable (sats)" $ onNetwork (satoshiCell . networkViewSpendable),
+    Column "Confirmed (sats)" $ onNetwork (satoshiCell . networkViewConfirmed),
+    Column "Unconfirmed (sats)" $ onNetwork (satoshiCell . networkViewUnconfirmed),
+    Column "Coins" $ onNetwork (countCell . networkViewCoins),
+    Column "Addresses" $ onNetwork (countCell . networkViewAddresses),
+    Column "Created (UTC)" $ \(portfolio, _) -> TimeCell (viewCreated portfolio)
   ]
+  where
+    onNetwork cell (_, netM) = maybe EmptyCell cell netM
+
+-- | The columns that say where a row of several portfolios is: its
+-- wallet, its portfolio and its network
+placeColumns :: [Column Place]
+placeColumns =
+  [ Column "Wallet" (TextCell . walletName . refWallet . placePortfolio),
+    Column "Portfolio" (TextCell . portfolioName . refPortfolio . placePortfolio),
+    Column "Network" (\place -> TextCell (cs (placeNetwork place).name))
+  ]
+
+-- | The column of the network of a row of a listing over a portfolio
+networkColumn :: Column (Network, row)
+networkColumn = Column "Network" $ \(net, _) -> TextCell (cs net.name)
 
 {- Addresses and balances -}
 
--- | The columns that name an address of the account: its path, the
--- address and its label. addresses and balances start with them.
-addressNameColumns :: [Column DBAddress]
+-- | The columns that name an address of the portfolio: its network, the
+-- type of its account, its path there, the address and its label.
+-- addresses and balances start with them. The path alone does not name
+-- an address: each account of the portfolio has one at /0/3.
+addressNameColumns :: [Column (Network, DBAddress)]
 addressNameColumns =
-  [ Column "Path" (pathCell . addrPath),
-    Column "Address" (TextCell . dBAddressAddress),
-    Column "Label" (textCell . dBAddressLabel)
+  [ Column "Network" $ \(net, _) -> TextCell (cs net.name),
+    Column "Type" $ \(net, addr) -> maybe EmptyCell (TextCell . kindName) (addressKind =<< textToAddr net (dBAddressAddress addr)),
+    Column "Path" (pathCell . addrPath . snd),
+    Column "Address" (TextCell . dBAddressAddress . snd),
+    Column "Label" (textCell . dBAddressLabel . snd)
   ]
 
 -- | The columns of the addresses, each with what it can spend now: what
 -- the verbose view gives
-addressColumns :: [Column (DBAddress, Word64)]
+addressColumns :: [Column (Network, (DBAddress, Word64))]
 addressColumns =
-  through fst addressNameColumns
-    <> [ Column "Spendable (sats)" $ \(_, spendable) -> satoshiCell spendable,
-         Column "Confirmed (sats)" $ \(addr, _) -> satoshiCell (dBAddressBalanceConfirmed addr),
-         Column "Unconfirmed (sats)" $ \(addr, _) -> satoshiCell (dBAddressBalanceUnconfirmed addr),
-         Column "Received (sats)" $ \(addr, _) -> satoshiCell (dBAddressBalanceReceived addr),
-         Column "Coins" $ \(addr, _) -> countCell (dBAddressBalanceCoins addr),
-         Column "Transactions" $ \(addr, _) -> countCell (dBAddressBalanceTxs addr),
-         Column "Created (UTC)" $ \(addr, _) -> TimeCell (dBAddressCreated addr)
-       ]
+  through (fmap fst) addressNameColumns
+    <> through
+      snd
+      [ Column "Spendable (sats)" $ \(_, spendable) -> satoshiCell spendable,
+        Column "Confirmed (sats)" $ \(addr, _) -> satoshiCell (dBAddressBalanceConfirmed addr),
+        Column "Unconfirmed (sats)" $ \(addr, _) -> satoshiCell (dBAddressBalanceUnconfirmed addr),
+        Column "Received (sats)" $ \(addr, _) -> satoshiCell (dBAddressBalanceReceived addr),
+        Column "Coins" $ \(addr, _) -> countCell (dBAddressBalanceCoins addr),
+        Column "Transactions" $ \(addr, _) -> countCell (dBAddressBalanceTxs addr),
+        Column "Created (UTC)" $ \(addr, _) -> TimeCell (dBAddressCreated addr)
+      ]
 
 -- | The columns of the addresses that hold coins, each with the balance
 -- of its coins: what the verbose view gives, the value the wallet cannot
 -- spend in its three parts
-balanceColumns :: [Column (DBAddress, CoinBalance)]
+balanceColumns :: [Column (Network, (DBAddress, CoinBalance))]
 balanceColumns =
-  through fst addressNameColumns
-    <> [ Column "Total (sats)" $ \(_, balance) -> satoshiCell (coinBalanceTotal balance),
-         Column "Spendable (sats)" $ \(_, balance) -> satoshiCell (coinBalanceSpendable balance),
-         Column "Locked by tx (sats)" $ \(_, balance) -> satoshiCell (coinBalanceLockedByTx balance),
-         Column "Locked by you (sats)" $ \(_, balance) -> satoshiCell (coinBalanceLockedByUser balance),
-         Column "Not spendable yet (sats)" $ \(_, balance) -> satoshiCell (coinBalanceNotSpendableYet balance),
-         Column "Coins" $ \(addr, _) -> countCell (dBAddressBalanceCoins addr)
-       ]
+  through (fmap fst) addressNameColumns
+    <> through
+      snd
+      [ Column "Total (sats)" $ \(_, balance) -> satoshiCell (coinBalanceTotal balance),
+        Column "Spendable (sats)" $ \(_, balance) -> satoshiCell (coinBalanceSpendable balance),
+        Column "Locked by tx (sats)" $ \(_, balance) -> satoshiCell (coinBalanceLockedByTx balance),
+        Column "Locked by you (sats)" $ \(_, balance) -> satoshiCell (coinBalanceLockedByUser balance),
+        Column "Not spendable yet (sats)" $ \(_, balance) -> satoshiCell (coinBalanceNotSpendableYet balance),
+        Column "Coins" $ \(addr, _) -> countCell (dBAddressBalanceCoins addr)
+      ]
 
 {- Coins -}
 
--- | The columns of the coins: the coin, in full and by its short id, as
--- lockcoin and --coin take it, the time of the transaction that paid it,
--- its value, its state and its confirmations, the address that holds it,
--- and both labels
-coinColumns :: Network -> [Column JsonCoin]
-coinColumns net =
-  [ Column "Coin" (TextCell . cs . coinText . jsonCoinOutpoint),
-    Column "Short coin" (TextCell . cs . shortCoinText . jsonCoinOutpoint),
-    Column "Time (UTC)" (timeCell . jsonCoinTime),
-    Column "Value (sats)" (satoshiCell . jsonCoinValue),
-    Column "State" (TextCell . cs . coinStateText "locked by a pending transaction"),
-    Column "Confirmations" (countCell . jsonCoinConfirmations),
-    Column "Block" (blockCell . jsonCoinBlock),
-    Column "Address" (addressCell net . jsonCoinAddress),
-    Column "Path" (maybe EmptyCell pathCell . jsonCoinPath),
-    Column "Address label" (textCell . jsonCoinAddressLabel),
-    Column "Transaction label" (textCell . jsonCoinTxLabel)
-  ]
+-- | The columns of the coins: the network, the coin, in full and by its
+-- short id, as lockcoin and --coin take it, the time of the transaction
+-- that paid it, its value, its state and its confirmations, the address
+-- that holds it, with the type of its account and its path there, and
+-- both labels
+coinColumns :: [Column (Network, JsonCoin)]
+coinColumns =
+  networkColumn
+    : through
+      snd
+      [ Column "Coin" (TextCell . cs . coinText . jsonCoinOutpoint),
+        Column "Short coin" (TextCell . cs . shortCoinText . jsonCoinOutpoint),
+        Column "Time (UTC)" (timeCell . jsonCoinTime),
+        Column "Value (sats)" (satoshiCell . jsonCoinValue),
+        Column "State" (TextCell . cs . coinStateText "locked by a pending transaction"),
+        Column "Confirmations" (countCell . jsonCoinConfirmations),
+        Column "Block" (blockCell . jsonCoinBlock)
+      ]
+    <> [Column "Address" (\(net, coin) -> addressCell net (jsonCoinAddress coin))]
+    <> through
+      snd
+      [ Column "Type" (maybe EmptyCell (TextCell . kindName . pathKind) . jsonCoinPath),
+        Column "Path" (maybe EmptyCell (pathCell . pathInAccount) . jsonCoinPath),
+        Column "Address label" (textCell . jsonCoinAddressLabel),
+        Column "Transaction label" (textCell . jsonCoinTxLabel)
+      ]
 
 {- Transactions -}
 
--- | The columns of the transactions of the account, each with the
--- balance after it: when, what it adds or takes, where it stands, its
--- txid in full and by its short id, and what it is for
-txColumns :: Network -> [Column ListedTx]
-txColumns net =
-  [Column "Time (UTC)" (timeCell . txTime . listedTxInfo)]
+-- | The columns of the transactions of the portfolio, each with the
+-- balance after it on its network: the network, when, what it adds or
+-- takes, where it stands, its txid in full and by its short id, and what
+-- it is for
+txColumns :: [Column (Network, ListedTx)]
+txColumns =
+  [networkColumn, Column "Time (UTC)" (timeCell . txTime . listedTxInfo . snd)]
     <> through held amountColumns
-    <> [Column "Balance (sats)" (maybe EmptyCell SatoshiCell . listedTxBalance)]
+    <> [Column "Balance (sats)" (maybe EmptyCell SatoshiCell . listedTxBalance . snd)]
     <> through
       held
       ( [ statusColumn,
@@ -273,17 +330,16 @@ txColumns net =
           <> purposeColumns
       )
   where
-    held tx = (net, listedTxInfo tx)
+    held = fmap listedTxInfo
 
--- | The columns of the pending transactions, each with its account: its
--- account, when the wallet started holding it, what it adds or takes, how
--- far it got, both its hashes, each in full and by its short id, and what
--- it is for
-pendingColumns :: [Column (DBAccount, TxInfo)]
+-- | The columns of the pending transactions, each with where it is: its
+-- wallet, its portfolio and its network, when the wallet started holding
+-- it, what it adds or takes, how far it got, both its hashes, each in
+-- full and by its short id, and what it is for
+pendingColumns :: [Column (Place, TxInfo)]
 pendingColumns =
-  [ Column "Account" $ \(acc, _) -> TextCell (dBAccountName acc),
-    Column "Created (UTC)" $ \(_, info) -> timeCell (txTime info)
-  ]
+  through fst placeColumns
+    <> [Column "Created (UTC)" $ \(_, info) -> timeCell (txTime info)]
     <> through
       held
       ( amountColumns
@@ -295,17 +351,19 @@ pendingColumns =
           <> purposeColumns
       )
   where
-    held (acc, info) = (accountNetwork acc, info)
+    held (place, info) = (placeNetwork place, info)
     nosigHashOf info = case txInfoStatus info of
       Pending status -> Just (pendingNosigHash status)
       OnChain _ -> Nothing
 
--- | The columns of what a transaction adds to the account or takes from
--- it: its type, its amount, fee included, its fee and its fee rate. The
--- fee of a payment received is the fee its payer paid.
+-- | The columns of what a transaction adds to the portfolio or takes
+-- from it: its type, the types of the addresses of the portfolio it
+-- involves, its amount, fee included, its fee and its fee rate. The fee
+-- of a payment received is the fee its payer paid.
 amountColumns :: [Column (Network, TxInfo)]
 amountColumns =
   [ Column "Type" $ \(_, info) -> TextCell (cs (typeWord (summaryType (txInfoSummary info)))),
+    Column "Address types" $ \(_, info) -> textCell (Text.intercalate ", " (kindName <$> summaryKinds (txInfoSummary info))),
     Column "Amount (sats)" $ \(_, info) -> SatoshiCell (summaryAmount (txInfoSummary info)),
     Column "Fee (sats)" $ \(_, info) -> satoshiCell (summaryFee (txInfoSummary info)),
     Column "Fee rate (sat/vB)" $ \(_, info) -> countCell (summaryFeeByte (txInfoSummary info))
@@ -343,7 +401,7 @@ purposeColumns :: [Column (Network, TxInfo)]
 purposeColumns =
   [ Column "Label" $ \(_, info) -> textCell (txInfoLabel info),
     Column "Address" $ \(net, info) -> maybe EmptyCell (addressCell net . txAddress . payeeRow) (payeeOf info),
-    Column "Path" $ \(_, info) -> maybe EmptyCell (pathCell . fst) (ownPayee info),
+    Column "Path" $ \(_, info) -> maybe EmptyCell (pathCell . pathInAccount . fst) (ownPayee info),
     Column "Address label" $ \(_, info) -> maybe EmptyCell (textCell . snd) (ownPayee info),
     Column "Other addresses" $ \(_, info) -> countCell (maybe 0 payeeOthers (payeeOf info))
   ]
@@ -354,10 +412,10 @@ purposeColumns =
 
 {- The spreadsheet of the wallet -}
 
--- | The sheets of the listings of one account that exportsheet writes: its
--- addresses, of both chains, the balances of those that hold coins, its
--- coins, locked or not, and its transactions
-data AccountSheets = AccountSheets
+-- | The sheets of the listings of one portfolio that exportsheet writes:
+-- its addresses, of both chains, the balances of those that hold coins,
+-- its coins, locked or not, and its transactions, each over every network
+data PortfolioSheets = PortfolioSheets
   { addressesSheet :: !Sheet,
     balancesSheet :: !Sheet,
     coinsSheet :: !Sheet,
@@ -366,17 +424,18 @@ data AccountSheets = AccountSheets
   deriving (Eq, Show)
 
 -- | The sheets of the spreadsheet of exportsheet, each with the name of
--- its tab, in the order of the help: the accounts, the addresses, the
--- balances, the coins and the transactions of each account given, and
--- the pending transactions. A sheet of one account gets a first column
--- that names it ('withAccountColumn'), as the accounts and the pending
--- transactions name theirs, and the rows of the accounts follow each
--- other ('stacked'). One sheet for all of them, rather than a tab for each
--- account, sorts and sums across the wallet. Amounts of Bitcoin and of
--- Bitcoin Cash then share a column: the account tells them apart.
-walletSheets :: Sheet -> [(DBAccount, AccountSheets)] -> Sheet -> [(Text, Sheet)]
-walletSheets accounts held pending =
-  [ ("Accounts", accounts),
+-- its tab, in the order of the help: the portfolios, the addresses, the
+-- balances, the coins and the transactions of each portfolio given, and
+-- the pending transactions. A sheet of one portfolio gets two first
+-- columns that name its wallet and the portfolio
+-- ('withPortfolioColumns'), as the portfolios and the pending
+-- transactions name theirs, and the rows of the portfolios follow each
+-- other ('stacked'). One sheet for all of them, rather than a tab for
+-- each portfolio, sorts and sums across the wallet. Amounts of Bitcoin
+-- and of Bitcoin Cash then share a column: the network tells them apart.
+walletSheets :: Sheet -> [(PortfolioRef, PortfolioSheets)] -> Sheet -> [(Text, Sheet)]
+walletSheets portfolios held pending =
+  [ ("Portfolios", portfolios),
     ("Addresses", ofEach addressesSheet),
     ("Balances", ofEach balancesSheet),
     ("Coins", ofEach coinsSheet),
@@ -384,15 +443,15 @@ walletSheets accounts held pending =
     ("Pending transactions", pending)
   ]
   where
-    ofEach part = stacked [withAccountColumn acc (part sheets) | (acc, sheets) <- held]
+    ofEach part = stacked [withPortfolioColumns ref (part sheets) | (ref, sheets) <- held]
 
--- | A sheet with a first column, Account, that names the account given on
--- every row
-withAccountColumn :: DBAccount -> Sheet -> Sheet
-withAccountColumn acc sheet =
+-- | A sheet with two first columns, Wallet and Portfolio, that name the
+-- portfolio given on every row
+withPortfolioColumns :: PortfolioRef -> Sheet -> Sheet
+withPortfolioColumns ref sheet =
   Sheet
-    { sheetHeadings = "Account" : sheetHeadings sheet,
-      sheetRows = (TextCell (dBAccountName acc) :) <$> sheetRows sheet
+    { sheetHeadings = "Wallet" : "Portfolio" : sheetHeadings sheet,
+      sheetRows = ([TextCell (walletName (refWallet ref)), TextCell (portfolioName (refPortfolio ref))] <>) <$> sheetRows sheet
     }
 
 -- | Sheets of the same columns as one: the headings of the first, then

@@ -32,8 +32,12 @@ module Haskoin.Wallet.Cli.Prompt
     askSeedWords,
     askSeedSecret,
     askNewSeedSecret,
+    askNewPassphraseOf,
+    backupOfShares,
     askSigningKey,
+    askSigningKeys,
     matchAccount,
+    matchAccounts,
     typedPassphraseCreated,
     typedPassphraseRecovered,
     readRolls,
@@ -291,7 +295,7 @@ askSeedSecret term = do
 askNewSeedSecret :: (MonadIO m) => Terminal -> ExceptT String m SeedSecret
 askNewSeedSecret term = do
   ws <- confirmedWords
-  withPassphrase ws <$> confirmedPassphrase ws
+  askNewPassphraseOf term ws
   where
     confirmedWords = retrying term $ do
       first <- askSeedWords term
@@ -301,14 +305,33 @@ askNewSeedSecret term = do
           liftIO $ tell term "Type the mnemonic again, to check it"
           second <- askSeedWords term
           return $ if first == second then Right first else Left "The mnemonics do not match"
-    confirmedPassphrase ws = retrying term $ do
-      first <- askPassphrase term
-      case passphraseOf ws first of
-        Left refused -> return (Left refused)
-        Right _ | Text.null first -> return (Right first)
-        Right _ -> do
-          second <- hidden term "Passphrase again: "
-          return $ if first == second then Right first else Left "The passphrases do not match"
+
+-- | The secret of the words of a seed a wallet is created from, with the
+-- passphrase the user gives them now, typed twice. newportfolio asks this
+-- for the mnemonic it has just made, which the user has not typed: the
+-- passphrase is the one part of the seed hw cannot make.
+askNewPassphraseOf :: (MonadIO m) => Terminal -> SeedWords -> ExceptT String m SeedSecret
+askNewPassphraseOf term ws =
+  fmap (withPassphrase ws) . retrying term $ do
+    first <- askPassphrase term
+    case passphraseOf ws first of
+      Left refused -> return (Left refused)
+      Right _ | Text.null first -> return (Right first)
+      Right _ -> do
+        second <- hidden term "Passphrase again: "
+        return $ if first == second then Right first else Left "The passphrases do not match"
+
+-- | The backup that the shares of a new backup rebuild, as many of them
+-- as it takes: what newportfolio derives the wallet from once it has
+-- made the shares
+backupOfShares :: [Mnemonic] -> Either String EncryptedMasterSecret
+backupOfShares = go noShares
+  where
+    go typed texts = case progress typed of
+      Enough shares -> rebuilt shares
+      Needs _ -> case texts of
+        [] -> Left "The shares do not rebuild a backup"
+        text : rest -> readShare text >>= addShare typed >>= (`go` rest)
 
 {- The signing key of an account -}
 
@@ -317,8 +340,7 @@ askNewSeedSecret term = do
 -- again while the key they give is not the account's: a wrong word the
 -- checksum of a mnemonic lets through gives another seed, which no
 -- passphrase can fix, and any passphrase decrypts a backup in shares to
--- some seed. The one place a private key comes out of the secret of a seed
--- for a command.
+-- some seed.
 askSigningKey :: (MonadIO m) => Terminal -> AccountKind -> Network -> Ctx -> Natural -> XPubKey -> ExceptT String m (PublicSeed, XPrvKey)
 askSigningKey term kind net ctx index accPub =
   retrying term $ do
@@ -329,51 +351,81 @@ askSigningKey term kind net ctx index accPub =
     mismatch (MnemonicSecret _) = "The mnemonic or the passphrase does not match the account"
     mismatch (SharesSecret _ _) = "The shares or the passphrase do not match the account"
 
+-- | The signing keys of the accounts of a portfolio on a network, each
+-- with its kind, from the words and the passphrase of the seed, with the
+-- public side of the seed. The accounts are given by their kinds and
+-- their public keys, and the index is that of the portfolio. Both are
+-- asked again while the keys they give are not those of the accounts. A
+-- payment that spends BIP44 and BIP84 coins of a portfolio together is
+-- signed with the keys of both accounts, from the mnemonic typed once.
+-- With 'askSigningKey', the one place a private key comes out of the
+-- secret of a seed for a command.
+askSigningKeys :: (MonadIO m) => Terminal -> Network -> Ctx -> Natural -> [(AccountKind, XPubKey)] -> ExceptT String m (PublicSeed, [(AccountKind, XPrvKey)])
+askSigningKeys term net ctx index accounts =
+  retrying term $ do
+    secret <- askSeedSecret term
+    maybe (Left (mismatch secret)) Right
+      <$> matchAccounts term net ctx index accounts secret
+  where
+    mismatch (MnemonicSecret _) = "The mnemonic or the passphrase does not match the portfolio"
+    mismatch (SharesSecret _ _) = "The shares or the passphrase do not match the portfolio"
+
 -- | The seed and the signing key of an account of a kind that the secret
--- of a seed gives, if it gives its public key. The passphrase of a
--- mnemonic is tried normalized, as BIP39 asks, then, when normalizing
--- changes it, as typed: hw derived its accounts so before, and the user is
--- told that other wallets would not find such an account.
+-- of a seed gives, if it gives its public key: 'matchAccounts' for one
+-- account
 matchAccount :: (MonadIO m) => Terminal -> AccountKind -> Network -> Ctx -> Natural -> XPubKey -> SeedSecret -> ExceptT String m (Maybe (PublicSeed, XPrvKey))
 matchAccount term kind net ctx index accPub secret = do
-  derived <- liftIO . accountOf =<< liftEither (secretMasterKey secret)
+  matched <- matchAccounts term net ctx index [(kind, accPub)] secret
+  return $ case matched of
+    Just (seed, [(_, key)]) -> Just (seed, key)
+    _ -> Nothing
+
+-- | The seed and the signing keys of accounts at one index on a network
+-- that the secret of a seed gives, if it gives the public key of every
+-- one of them. The passphrase of a mnemonic is tried normalized, as BIP39
+-- asks, then, when normalizing changes it, as typed: hw derived its
+-- accounts so before, and the user is told that other wallets would not
+-- find such an account.
+matchAccounts :: (MonadIO m) => Terminal -> Network -> Ctx -> Natural -> [(AccountKind, XPubKey)] -> SeedSecret -> ExceptT String m (Maybe (PublicSeed, [(AccountKind, XPrvKey)]))
+matchAccounts term net ctx index accounts secret = do
+  derived <- liftIO . accountsOf =<< liftEither (secretMasterKey secret)
   case derived of
     Just found -> return (Just found)
     Nothing -> do
       asTyped <- liftEither (secretTypedMasterKey secret)
-      typed <- maybe (return Nothing) (liftIO . accountOf) asTyped
+      typed <- maybe (return Nothing) (liftIO . accountsOf) asTyped
       forM_ typed $ \_ -> liftIO $ tell term typedPassphraseWarning
       return typed
   where
-    accountOf master = do
+    accountsOf master = do
       let seed = seedOfMaster ctx master
-      derived <- seedAccountKey seed kind net index
+      derived <- mapM (\(kind, _) -> seedAccountKey seed kind net index) accounts
       return $
-        if derived == Just accPub
-          then Just (seed, accountKey kind net ctx master index)
+        if not (null accounts) && derived == map (Just . snd) accounts
+          then Just (seed, [(kind, accountKey kind net ctx master index) | (kind, _) <- accounts])
           else Nothing
 
 -- | What the user is told of an account derived from a passphrase as typed
 typedPassphraseWarning :: String
 typedPassphraseWarning =
-  "This account comes from the passphrase as typed, which hw did not normalize as BIP39 asks: \
+  "This portfolio comes from the passphrase as typed, which hw did not normalize as BIP39 asks: \
   \other wallets would not find it from this mnemonic and passphrase. \
-  \Moving its funds to an account created now keeps them within reach of any wallet."
+  \Moving its funds to a wallet made now keeps them within reach of any wallet."
 
--- | What the user is told when createacc keeps to the seed of the
--- passphrase as typed, the one the accounts of the wallet are of
+-- | What the user is told when a command keeps to the seed of the
+-- passphrase as typed, the one the portfolios of the wallet are of
 typedPassphraseCreated :: String
 typedPassphraseCreated =
-  "The accounts of this seed come from the passphrase as typed, which hw did not normalize as BIP39 asks, \
-  \and so does this one, to keep them together: other wallets would not find it from this mnemonic and passphrase."
+  "The portfolios of this wallet come from the passphrase as typed, which hw did not normalize as BIP39 asks, \
+  \and so does the new one, to keep them together: other wallets would not find them from this mnemonic and passphrase."
 
--- | What the user is told when recover finds accounts from the passphrase
--- as typed
+-- | What the user is told when recover finds portfolios from the
+-- passphrase as typed
 typedPassphraseRecovered :: String
 typedPassphraseRecovered =
-  "The accounts found come from the passphrase as typed, which hw did not normalize as BIP39 asks: \
+  "The portfolios found come from the passphrase as typed, which hw did not normalize as BIP39 asks: \
   \other wallets would not find them from this mnemonic and passphrase. \
-  \Moving their funds to an account created now keeps them within reach of any wallet."
+  \Moving their funds to a wallet made now keeps them within reach of any wallet."
 
 {- Dice rolls -}
 

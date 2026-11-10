@@ -23,7 +23,9 @@ import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Bip329 (Record (..))
-import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..))
+import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), PortfolioRef (..))
+import Haskoin.Wallet.Keys (AccountKind (..), PoolPath (..), accountDeriv, indexBound, networkKinds, portfolioAccounts)
+import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), PortfolioImport (..), WalletImport (..))
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..))
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.Database.TxInfo
@@ -53,18 +55,81 @@ arbitraryBlockRef =
 arbitraryDBAccount :: Network -> Ctx -> Gen DBAccount
 arbitraryDBAccount net ctx =
   DBAccount
-    <$> arbitraryText
-    <*> arbitraryPositive
-    <*> elements [44, 84]
+    <$> (toSqlKey <$> arbitraryPositive)
     <*> return (cs net.name)
+    <*> elements [44, 84]
     <*> arbitraryPositive
     <*> arbitraryPositive
     <*> (xPubExport net ctx <$> arbitraryXPubKey ctx)
-    <*> arbitraryMaybe (fingerprintToText <$> arbitraryFingerprint)
     <*> arbitraryPositive
     <*> arbitraryPositive
     <*> arbitraryPositive
     <*> arbitraryUTCTime
+
+-- | A type of account
+arbitraryKind :: Gen AccountKind
+arbitraryKind = elements [Bip44, Bip84]
+
+-- | How an answer names a portfolio: the indexes of its wallet and of the
+-- portfolio
+arbitraryPortfolioRef :: Gen PortfolioRef
+arbitraryPortfolioRef = PortfolioRef <$> index <*> index
+  where
+    -- The index of a portfolio is a hardened step of a path: below 2^31
+    index = fromIntegral <$> choose (0, 0x7fffffff :: Integer)
+
+-- | A portfolio on the network
+arbitraryPlace :: Network -> Gen Place
+arbitraryPlace net = (`Place` net) <$> arbitraryPortfolioRef
+
+-- | An account of a portfolio on the network, of a type the network has
+arbitraryAccountRef :: Network -> Gen AccountRef
+arbitraryAccountRef net = AccountRef <$> arbitraryPlace net <*> elements (networkKinds net)
+
+-- | The path of an address in a pool: the type of its account, and its
+-- path there
+arbitraryPoolPath :: Gen PoolPath
+arbitraryPoolPath = PoolPath <$> arbitraryKind <*> arbitrarySoftPath
+
+-- | A portfolio as portfolios shows it, with a few networks and accounts
+arbitraryPortfolioView :: Ctx -> Gen PortfolioView
+arbitraryPortfolioView ctx =
+  PortfolioView
+    <$> arbitraryPortfolioRef
+    <*> arbitraryText
+    <*> arbitraryText
+    <*> arbitraryMaybe arbitraryFingerprint
+    <*> arbitraryUTCTime
+    <*> sublistOf portfolioAccounts
+    <*> resize 3 (listOf (arbitraryNetworkView ctx))
+
+arbitraryNetworkView :: Ctx -> Gen NetworkView
+arbitraryNetworkView ctx = do
+  net <- arbitraryNetwork
+  NetworkView net
+    <$> arbitraryPositive
+    <*> arbitraryPositive
+    <*> arbitraryPositive
+    <*> arbitraryPositive
+    <*> arbitraryNatural
+    <*> resize 2 (listOf (arbitraryAccountKeys net ctx))
+
+arbitraryAccountKeys :: Network -> Ctx -> Gen AccountKeys
+arbitraryAccountKeys net ctx = do
+  kind <- arbitraryKind
+  index <- choose (0, 1000 :: Integer)
+  AccountKeys kind (accountDeriv kind net (fromIntegral index))
+    <$> (xPubExport net ctx <$> arbitraryXPubKey ctx)
+    <*> arbitraryText
+    <*> arbitraryMaybe arbitraryText
+
+-- | A group of a listing on the network, with its accounts and a few rows
+arbitraryGroup :: Network -> Gen row -> Gen (Group row)
+arbitraryGroup net row =
+  Group
+    <$> arbitraryPlace net
+    <*> resize 2 (listOf (AccountCounts <$> arbitraryKind <*> arbitraryNatural <*> arbitraryNatural))
+    <*> resize 10 (listOf row)
 
 -- | The path of an address on one of the two chains of an account: /0/i
 -- or /1/i, with i below 2^31
@@ -119,7 +184,7 @@ arbitraryJsonCoin net =
     <*> arbitraryText
     <*> arbitraryText
     <*> arbitrary
-    <*> arbitraryMaybe arbitraryChainPath
+    <*> arbitraryMaybe (PoolPath <$> arbitraryKind <*> arbitraryChainPath)
     <*> arbitraryMaybe arbitraryUTCTime
 
 arbitraryCoinLock :: Gen CoinLock
@@ -130,28 +195,20 @@ arbitraryLeftCoin =
   LeftCoin
     <$> arbitraryOutPoint
     <*> arbitraryPositive
-    <*> elements [WorthLessThanFee, Locked LockedByUser, Locked LockedByTransaction, NotSpendableYet, NotGiven]
+    <*> elements leftReasons
     <*> arbitraryText
 
 -- | The labels of a few transactions, by id
 arbitraryTxidLabels :: Gen (Map.Map TxHash Text)
 arbitraryTxidLabels = Map.fromList <$> resize 3 (listOf ((,) <$> arbitraryTxHash <*> arbitraryText))
 
-arbitraryPubKeyDoc :: Ctx -> Gen PubKeyDoc
-arbitraryPubKeyDoc ctx =
-  PubKeyDoc
-    <$> arbitraryXPubKey ctx
-    <*> arbitraryNetwork
-    <*> arbitraryText
-    <*> arbitraryMaybe arbitraryFingerprint
-
 arbitraryTxSignData :: Network -> Ctx -> Gen TxSignData
 arbitraryTxSignData net ctx =
   TxSignData
     <$> arbitraryTx net ctx
     <*> resize 10 (listOf (arbitraryTx net ctx))
-    <*> resize 10 (listOf arbitrarySoftPath)
-    <*> resize 10 (listOf arbitrarySoftPath)
+    <*> resize 10 (listOf arbitraryPoolPath)
+    <*> resize 10 (listOf arbitraryPoolPath)
     <*> arbitraryMaybe arbitraryNatural
     <*> arbitraryMaybe arbitraryFingerprint
     <*> resize 3 (listOf arbitraryTxHash)
@@ -161,14 +218,14 @@ arbitraryMyOutputs :: Gen MyOutputs
 arbitraryMyOutputs =
   MyOutputs
     <$> arbitraryNatural
-    <*> arbitrarySoftPath
+    <*> arbitraryPoolPath
     <*> arbitraryText
 
 arbitraryMyInputs :: Gen MyInputs
 arbitraryMyInputs =
   MyInputs
     <$> arbitraryNatural
-    <*> arbitrarySoftPath
+    <*> arbitraryPoolPath
     <*> arbitraryText
     <*> resize 10 (listOf arbitraryOutPoint)
 
@@ -233,10 +290,13 @@ arbitraryTxStatus =
 arbitraryTxInfo :: Network -> Gen TxInfo
 arbitraryTxInfo net = TxInfo <$> arbitraryTxSummary net <*> arbitraryTxStatus <*> arbitraryText <*> arbitraryTxidLabels
 
-arbitrarySyncRes :: Network -> Ctx -> Gen SyncRes
-arbitrarySyncRes net ctx =
+arbitrarySyncRes :: Network -> Gen SyncRes
+arbitrarySyncRes net =
   SyncRes
-    <$> arbitraryDBAccount net ctx
+    <$> arbitraryPlace net
+    <*> arbitraryPositive
+    <*> arbitraryPositive
+    <*> arbitraryPositive
     <*> arbitraryPositive
     <*> arbitraryBlockHash
     <*> arbitrary
@@ -246,48 +306,60 @@ arbitrarySyncRes net ctx =
     <*> arbitraryNatural
     <*> arbitraryNatural
 
+-- | The secret newportfolio shows: a mnemonic, or the shares of a backup
+arbitraryNewSecret :: Gen NewSecret
+arbitraryNewSecret =
+  oneof
+    [ NewMnemonic <$> arbitraryText <*> resize 12 (listOf arbitraryText),
+      NewShares <$> arbitraryText <*> arbitraryNatural <*> resize 5 (listOf $ resize 12 $ listOf arbitraryText)
+    ]
+
+-- | A transaction with the place of the portfolio that holds it
+arbitraryHeldTx :: Network -> Gen (Place, TxInfo)
+arbitraryHeldTx net = (,) <$> arbitraryPlace net <*> arbitraryTxInfo net
+
+-- | A network left out, with the failure of its store
+arbitraryFailedNetwork :: Gen (Network, Text)
+arbitraryFailedNetwork = (,) <$> arbitraryNetwork <*> arbitraryText
+
 arbitraryResponse :: Network -> Ctx -> Gen Response
 arbitraryResponse net ctx =
   oneof
     [ ResponseError <$> arbitraryText,
-      ResponseMnemonic
-        <$> arbitraryText
-        <*> resize 12 (listOf arbitraryText),
-      ResponseShares
-        <$> arbitraryText
+      ResponseNewPortfolio
+        <$> arbitraryMaybe arbitraryNewSecret
+        <*> arbitraryPortfolioView ctx
+        <*> resize 3 (listOf arbitraryNatural)
+        <*> arbitraryNatural,
+      ResponsePortfolio <$> arbitraryPortfolioView ctx,
+      ResponseFilled
+        <$> resize 3 (listOf arbitraryNatural)
         <*> arbitraryNatural
-        <*> resize 12 (listOf $ resize 12 $ listOf arbitraryText),
-      ResponseAccount <$> arbitraryDBAccount net ctx <*> arbitraryPositive,
-      ResponseAccResult
-        <$> arbitraryDBAccount net ctx
-        <*> arbitrary
-        <*> arbitraryText,
+        <*> resize 3 (listOf (arbitraryPortfolioView ctx)),
+      ResponseChecked <$> arbitraryPortfolioRef <*> arbitrary <*> arbitraryText,
+      ResponseDeleted <$> arbitraryText <*> resize 2 (listOf ((,) <$> arbitraryText <*> arbitraryNatural)),
+      ResponseDefaults <$> resize 4 (listOf ((,) <$> arbitraryText <*> arbitraryText)) <*> (cs <$> arbitraryText),
       ResponseFile <$> (cs <$> arbitraryText),
-      ResponseImport <$> arbitraryImportReport net ctx,
-      ResponseAccountFile <$> arbitraryFileShown net ctx,
-      ResponseAccounts <$> resize 20 (listOf $ (,) <$> arbitraryDBAccount net ctx <*> arbitraryPositive),
-      ResponseAddress <$> arbitraryDBAccount net ctx <*> arbitraryDBAddress net <*> arbitraryPositive,
+      ResponseImport <$> arbitraryImportReport net,
+      ResponseWalletFile <$> arbitraryFileShown net,
+      ResponsePortfolios <$> resize 5 (listOf (arbitraryPortfolioView ctx)),
+      ResponseAddress <$> arbitraryAccountRef net <*> arbitraryDBAddress net <*> arbitraryPositive,
       ResponseAddresses
-        <$> arbitraryDBAccount net ctx
-        <*> resize 20 (listOf $ (,) <$> arbitraryDBAddress net <*> arbitraryPositive),
+        <$> resize 3 (listOf $ arbitraryGroup net ((,) <$> arbitraryDBAddress net <*> arbitraryPositive)),
       ResponseBalances
-        <$> arbitraryDBAccount net ctx
-        <*> resize 20 (listOf $ (,) <$> arbitraryDBAddress net <*> arbitraryCoinBalance),
+        <$> resize 3 (listOf $ (,) <$> arbitraryGroup net ((,) <$> arbitraryDBAddress net <*> arbitraryCoinBalance) <*> arbitraryCoinBalance),
       ResponseDerivedAddr
-        <$> arbitraryDBAccount net ctx
+        <$> arbitraryAccountRef net
         <*> arbitraryChainPath
         <*> (fromJust . addrToText net <$> arbitraryAddress net),
-      ResponsePendingTxs
-        <$> arbitraryMaybe (arbitraryDBAccount net ctx)
-        <*> resize 20 (listOf $ (,) <$> arbitraryDBAccount net ctx <*> arbitraryTxInfo net),
+      ResponsePendingTxs <$> resize 10 (listOf (arbitraryHeldTx net)),
       ResponseTxs
-        <$> arbitraryDBAccount net ctx
-        <*> resize 20 (listOf $ ListedTx <$> arbitraryTxInfo net <*> arbitraryMaybe arbitrary),
-      ResponseTx <$> arbitraryDBAccount net ctx <*> arbitraryTxInfo net,
-      ResponseLabelledTxs <$> resize 3 (listOf $ (,) <$> arbitraryDBAccount net ctx <*> arbitraryTxInfo net),
-      ResponseHeldTxs <$> resize 3 (listOf $ (,) <$> arbitraryDBAccount net ctx <*> arbitraryTxInfo net),
+        <$> resize 3 (listOf $ arbitraryGroup net (ListedTx <$> arbitraryTxInfo net <*> arbitraryMaybe arbitrary)),
+      ResponseTx <$> arbitraryPlace net <*> arbitraryTxInfo net,
+      ResponseLabelledTxs <$> resize 3 (listOf (arbitraryHeldTx net)),
+      ResponseHeldTxs <$> resize 3 (listOf (arbitraryHeldTx net)),
       ResponsePrepared
-        <$> arbitraryDBAccount net ctx
+        <$> arbitraryPlace net
         <*> arbitraryTxInfo net
         <*> resize 20 (listOf arbitraryLeftCoin),
       ResponseOutsideTx net <$> arbitraryTxInfo net,
@@ -298,17 +370,22 @@ arbitraryResponse net ctx =
         <*> arbitraryNatural
         <*> arbitraryNatural,
       ResponseCoins
-        <$> arbitraryDBAccount net ctx
-        <*> resize 20 (listOf $ arbitraryJsonCoin net),
+        <$> resize 3 (listOf $ arbitraryGroup net (arbitraryJsonCoin net)),
       ResponseSync
-        <$> (resize 10 $ listOf $ arbitrarySyncRes net ctx)
-        <*> (resize 10 $ listOf $ (,) <$> arbitraryDBAccount net ctx <*> arbitraryText),
+        <$> (resize 10 $ listOf $ arbitrarySyncRes net)
+        <*> (resize 3 $ listOf arbitraryNetwork)
+        <*> (resize 3 $ listOf arbitraryFailedNetwork),
       ResponseRecover
         <$> (resize 2 $ listOf arbitraryNetwork)
         <*> arbitraryNatural
-        <*> (resize 10 $ listOf $ arbitrarySyncRes net ctx)
+        <*> arbitraryMaybe arbitraryNatural
+        <*> resize 3 (listOf arbitraryNatural)
+        <*> resize 3 (listOf arbitraryNatural)
+        <*> arbitraryNatural
+        <*> (resize 10 $ listOf $ arbitrarySyncRes net)
         <*> (resize 10 $ listOf $ (,) <$> arbitraryNetwork <*> arbitraryForeignFunds)
-        <*> (resize 2 $ listOf $ (,) <$> arbitraryNetwork <*> arbitraryText),
+        <*> (resize 3 $ listOf arbitraryNetwork)
+        <*> (resize 3 $ listOf arbitraryFailedNetwork),
       ResponseFees net <$> arbitraryFeeRates
     ]
 
@@ -321,11 +398,13 @@ arbitraryForeignFunds =
     <*> arbitraryNatural
     <*> arbitraryPositive
 
--- | What importacc did with a file
-arbitraryImportReport :: Network -> Ctx -> Gen ImportReport
-arbitraryImportReport net ctx =
+-- | What importwallet did with a file
+arbitraryImportReport :: Network -> Gen ImportReport
+arbitraryImportReport net =
   ImportReport
-    <$> resize 5 (listOf (arbitraryAccountImport net ctx))
+    <$> resize 3 (listOf arbitraryWalletImport)
+    <*> resize 5 (listOf (arbitraryAccountImport net))
+    <*> arbitraryNatural
     <*> arbitraryNatural
     <*> arbitraryNatural
     <*> arbitraryNatural
@@ -339,22 +418,33 @@ arbitraryImportReport net ctx =
     <*> arbitraryNatural
     <*> resize 5 (listOf arbitraryNatural)
 
+-- | What became of a wallet a file names, and of its portfolios
+arbitraryWalletImport :: Gen WalletImport
+arbitraryWalletImport =
+  WalletImport
+    <$> arbitraryNatural
+    <*> arbitraryMaybe arbitraryFingerprint
+    <*> arbitrary
+    <*> resize 3 (listOf arbitraryNatural)
+    <*> resize 3 (listOf (PortfolioImport <$> arbitraryNatural <*> arbitrary <*> arbitraryNatural <*> arbitraryNatural))
+
 -- | What became of an account a file names
-arbitraryAccountImport :: Network -> Ctx -> Gen AccountImport
-arbitraryAccountImport net ctx =
+arbitraryAccountImport :: Network -> Gen AccountImport
+arbitraryAccountImport net =
   oneof
-    [ AccountCreated <$> arbitraryDBAccount net ctx <*> arbitraryMaybe arbitraryText,
-      AccountKept <$> arbitraryDBAccount net ctx <*> arbitraryMaybe arbitraryText,
-      AccountRenamed <$> arbitraryText <*> arbitraryDBAccount net ctx,
-      AccountRefused <$> arbitraryText <*> arbitraryText
+    [ AccountAdded <$> arbitraryAccountRef net,
+      AccountHeld <$> arbitraryAccountRef net,
+      AccountLeftAside <$> arbitraryText <*> arbitraryText
     ]
 
--- | A file of accounts as show shows it
-arbitraryFileShown :: Network -> Ctx -> Gen FileShown
-arbitraryFileShown net ctx =
+-- | A file of a wallet as show shows it
+arbitraryFileShown :: Network -> Gen FileShown
+arbitraryFileShown net =
   FileShown
-    <$> resize 5 (listOf ((,) <$> arbitraryAccountImport net ctx <*> resize 5 (listOf arbitraryRecord)))
+    <$> resize 3 (listOf arbitraryWalletImport)
+    <*> resize 5 (listOf ((,) <$> arbitraryAccountImport net <*> resize 5 (listOf arbitraryRecord)))
     <*> resize 5 (listOf arbitraryRecord)
+    <*> arbitraryNatural
     <*> arbitraryNatural
     <*> arbitraryNatural
     <*> resize 5 (listOf arbitraryNatural)
@@ -374,6 +464,7 @@ arbitraryRecord =
     <*> arbitraryMaybe arbitrary
     <*> arbitraryMaybe arbitraryText
     <*> arbitraryMaybe arbitraryNatural
+    <*> arbitraryMaybe arbitraryText
 
 arbitraryKeyBytes :: Gen KeyBytes
 arbitraryKeyBytes = KeyBytes <$> arbitraryBS
@@ -385,14 +476,18 @@ arbitraryConfig =
     <*> count
     <*> count
     <*> arbitrary
-    <*> arbitraryMaybe arbitraryNetwork
+    <*> index
+    <*> index
+    <*> arbitraryNetwork
+    <*> arbitraryKind
     <*> elements [UnitBitcoin, UnitBit, UnitSatoshi]
     <*> elements [Compact, Verbose, Table]
-    <*> arbitrary
     <*> arbitraryMaybe arbitraryText
   where
     -- Every count of the configuration is at least one
     count = (+ 1) <$> arbitraryNatural
+    -- The index of a wallet or of a portfolio is below 2^31
+    index = (`mod` indexBound) <$> arbitraryNatural
 
 -- | The fee rates recent blocks paid, as fees answers them
 arbitraryFeeRates :: Gen FeeRates

@@ -27,7 +27,7 @@ module Haskoin.Wallet.Tx.Sweep
 where
 
 import Conduit (MonadUnliftIO)
-import Control.Monad (foldM, forM_, when)
+import Control.Monad (foldM, unless, when)
 import Control.Monad.Except
 import Control.Monad.State
 import qualified Data.ByteString as BS
@@ -42,13 +42,13 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Coin (checkCoinsPaid, coinText)
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Keys (AccountKind)
+import Haskoin.Wallet.Keys (AccountKind, PoolPath)
 import Haskoin.Wallet.Tx.LockTime (inputSequence, txVersion)
 import Haskoin.Wallet.Tx.Recipient (Share, shareAmounts)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Tx.SignData
-import Haskoin.Wallet.Tx.Signing (HeldChains, checkOutputReach, coinSigInput, parseOutsideTxSignData, parseTxSignData, spentCoins, verifySignedTx)
+import Haskoin.Wallet.Tx.Signing (HeldPool, checkOutputReach, coinSigInput, parseTxSignData, spentCoins, verifySignedTx)
 import Haskoin.Wallet.Tx.Size (checkFeeRate, checkStandardSize, inputKind, outputDustLimit, recipientOutputKind, scriptOutputKind, txSize)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
@@ -62,8 +62,9 @@ data SweepCoins = SweepCoins
     coins :: ![Store.Unspent],
     -- | The transactions the coins come from
     transactions :: ![Tx],
-    -- | The wallet's own addresses among the coins and the destinations
-    walletAddrs :: !(Map Address SoftPath),
+    -- | The addresses of the portfolio the sweep pays among the coins and
+    -- the destinations, with their paths in the portfolio
+    walletAddrs :: !(Map Address PoolPath),
     -- | The P2PKH addresses of the uncompressed encodings of the keys:
     -- their inputs carry a 65-byte public key instead of 33. Known only
     -- when the keys are given; a P2PKH coin of an unknown key is sized for
@@ -75,7 +76,7 @@ data SweepCoins = SweepCoins
 -- | Ask the store for the coins to sweep: every coin at the given
 -- addresses and at the addresses of the given keys, and the coins given by
 -- outpoint, each once; and the transactions they come from. The database
--- says which of the addresses involved belong to the account, when the
+-- says which of the addresses involved belong to the pool, when the
 -- sweep pays one; a sweep outside the wallet has none. The keys may be
 -- absent, when they are kept elsewhere: the sweep is then prepared from
 -- addresses or coins alone.
@@ -84,8 +85,8 @@ fetchSweepCoins ::
   Network ->
   Ctx ->
   Store ->
-  -- | The account the sweep pays, if any
-  Maybe DBAccountId ->
+  -- | The pool the sweep pays, if any
+  Maybe Pool ->
   -- | The private keys, if at hand
   [SecKey] ->
   -- | The addresses to sweep from
@@ -95,11 +96,11 @@ fetchSweepCoins ::
   -- | The destinations
   [Address] ->
   ExceptT String (DB m) SweepCoins
-fetchSweepCoins net ctx store accIdM secKeys sweepFrom given sweepTo = do
+fetchSweepCoins net ctx store poolM secKeys sweepFrom given sweepTo = do
   let addresses = nub $ sweepFrom <> concatMap (keyAddresses net ctx) secKeys
   when (null addresses && null given) $
     throwError "No private keys, addresses or coins to sweep from"
-  fromStore $ storeHealth store
+  fromStore $ checkHealth store
   found <-
     if null addresses
       then return []
@@ -116,7 +117,7 @@ fetchSweepCoins net ctx store accIdM secKeys sweepFrom given sweepTo = do
   -- fee is counted from the values of the coins
   transactions <- fromStore $ rawTransactions store spentFrom
   liftEither $ checkCoinsPaid transactions coins
-  walletAddrs <- maybe (return Map.empty) (\accId -> walletPaths net accId (mapMaybe (.address) coins <> sweepTo)) accIdM
+  walletAddrs <- maybe (return Map.empty) (\pool -> poolPaths pool (mapMaybe (.address) coins <> sweepTo)) poolM
   let uncompressedAddrs = nub $ uncompressedKeyAddr ctx <$> secKeys
   return SweepCoins {coins, transactions, walletAddrs, uncompressedAddrs}
 
@@ -238,23 +239,25 @@ sweptInputKind net ctx uncompressedAddrs coin = do
 {- Signing -}
 
 -- | Sign a transaction with the given private keys: every input is signed
--- with the key that matches the output script of its coin. The account,
--- its kind and its public key, only identifies the wallet's own inputs and
--- outputs, the paths of the 'TxSignData' being relative to it, with the
--- addresses the wallet holds of it, which bound its output paths
--- ('HeldChains'); a sweep outside the wallet has no account.
+-- with the key that matches the output script of its coin. The accounts
+-- of the pool the sweep pays, each by its kind and its public key, only
+-- identify the portfolio's own inputs and outputs, the paths of the
+-- 'TxSignData' being of them, with the addresses the wallet holds of
+-- them, which bound its output paths ('HeldPool'). A sweep outside the
+-- wallet has no account.
 signTxWithKeys ::
   Network ->
   Ctx ->
   TxSignData ->
-  Maybe (AccountKind, XPubKey, HeldChains) ->
+  [(AccountKind, XPubKey)] ->
+  HeldPool ->
   [SecKey] ->
   Either String (TxSignData, TxInfo)
-signTxWithKeys net ctx tsd accountPubM secKeys = do
+signTxWithKeys net ctx tsd accounts held secKeys = do
   when (isSigned tsd.txSignDataTx) $ Left "The transaction is already signed"
   when (null secKeys) $ Left "There are no private keys to sign"
   info <- parse tsd
-  forM_ accountPubM $ \(_, _, held) -> checkOutputReach held tsd
+  unless (null accounts) $ checkOutputReach held tsd
   -- The sweep builder refuses a fee rate of zero; the signer checks the fee itself
   when (info.txInfoSummary.summaryFee == 0) $ Left "The transaction pays no fee"
   -- The coin of every input, in the order of the inputs
@@ -265,7 +268,7 @@ signTxWithKeys net ctx tsd accountPubM secKeys = do
   signedInfo <- parse signedData
   return (signedData, signedInfo)
   where
-    parse = maybe (parseOutsideTxSignData net ctx) (\(kind, pub, _) -> parseTxSignData net ctx kind pub) accountPubM
+    parse = parseTxSignData net ctx accounts
 
 -- | The private keys, indexed by what identifies them in an output script.
 -- Every key is indexed with both encodings of its public key.

@@ -6,6 +6,7 @@ module Haskoin.Wallet.Tx.SweepSpec where
 
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans (lift)
+import Control.Monad.Trans.Except (ExceptT)
 import qualified Data.ByteString as BS
 import Data.IORef (newIORef, readIORef)
 import Data.Default (def)
@@ -18,13 +19,14 @@ import Data.Text (Text)
 import Data.Word (Word32, Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.Database (DB, Pool)
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Database.PendingTx
 import Haskoin.Wallet.Tx.Recipient (Share (..))
-import Haskoin.Wallet.Keys (AccountKind (..))
+import Haskoin.Wallet.Keys (AccountKind (..), PoolPath, legacyPath)
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..), TxType (..))
+import Haskoin.Wallet.Database.TxInfo (MyOutputs (..), TxInfo (..), TxSummary (..), TxType (..))
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Signing (noneHeld, parseTxSignData)
 import Haskoin.Wallet.Tx.Sweep
@@ -54,7 +56,7 @@ sweepSigner ctx v = do
   accountKey <- prefixError "account" $ accountSigningKey v.vecNetwork ctx v.vecAccount
   keys <- prefixError "sweep key" $ mapM (vectorKey ctx v.vecNetwork) specs
   let accountPub = deriveXPubKey ctx accountKey
-  return $ \c -> signTxWithKeys v.vecNetwork c v.vecSignData (Just (accountSpecKind v.vecAccount, accountPub, noneHeld)) keys
+  return $ \c -> signTxWithKeys v.vecNetwork c v.vecSignData [(accountSpecKind v.vecAccount, accountPub)] noneHeld keys
 
 {- Key addresses -}
 
@@ -185,14 +187,14 @@ sweepBuilderSpec ctx =
       tsd.txSignDataFeeRate `shouldBe` Just 10
     it "builds a transaction the sweep signer accepts" $ do
       tsd <- expectRight $ build destinations
-      (signed, info) <- expectRight $ signTxWithKeys btc ctx tsd (Just (Bip44, accountPub, noneHeld)) [sweptKey, walletKey]
+      (signed, info) <- expectRight $ signTxWithKeys btc ctx tsd [(Bip44, accountPub)] noneHeld [sweptKey, walletKey]
       isSigned signed.txSignDataTx `shouldBe` True
       -- The wallet receives one of the two outputs (746425) and gives up its coin (500000)
       info.txInfoSummary.summaryType `shouldBe` TxCredit
       info.txInfoSummary.summaryAmount `shouldBe` 246425
     it "estimates the size of the signed transaction part by part, every signature counted as 72 bytes" $ do
       tsd <- expectRight $ build destinations
-      (signed, _) <- expectRight $ signTxWithKeys btc ctx tsd (Just (Bip44, accountPub, noneHeld)) [sweptKey, walletKey]
+      (signed, _) <- expectRight $ signTxWithKeys btc ctx tsd [(Bip44, accountPub)] noneHeld [sweptKey, walletKey]
       let tx = signed.txSignDataTx
           legacy = tx {witness = []}
       -- The estimate is 659 bytes outside the witnesses and 221 of
@@ -214,9 +216,9 @@ sweepBuilderSpec ctx =
         `shouldBe` (878, 657, [0, 138, 23, 106, 107], [107, 0, 107, 0, 0])
     -- Outside the wallet, the coin of the wallet and the output it is paid
     -- are another wallet's too; the fee is the 7150 of the 715 virtual bytes
-    it "is signed without an account, every input and output another wallet's" $ do
+    it "is signed without an account when it is outside the wallet, every input and output another wallet's" $ do
       tsd <- expectRight $ build destinations
-      (signed, info) <- expectRight $ signTxWithKeys btc ctx tsd Nothing [sweptKey, walletKey]
+      (signed, info) <- expectRight $ signTxWithKeys btc ctx tsd [] noneHeld [sweptKey, walletKey]
       isSigned signed.txSignDataTx `shouldBe` True
       info.txInfoSummary.summaryFee `shouldBe` 7150
       (Map.null info.txInfoSummary.summaryMyInputs, Map.null info.txInfoSummary.summaryMyOutputs) `shouldBe` (True, True)
@@ -244,11 +246,20 @@ sweepBuilderSpec ctx =
       tsd <- expectRight $ build [(otherAddr 0, Remainder), (taprootAddr, Remainder)]
       ((.value) <$> tsd.txSignDataTx.outputs) `shouldBe` [746380, 746380]
       tsd.txSignDataOutputPaths `shouldBe` []
-      (_, info) <- expectRight $ signTxWithKeys btc ctx tsd (Just (Bip44, accountPub, noneHeld)) [sweptKey, walletKey]
+      (_, info) <- expectRight $ signTxWithKeys btc ctx tsd [(Bip44, accountPub)] noneHeld [sweptKey, walletKey]
       info.txInfoSummary.summaryFee `shouldBe` 7240
       Map.toList info.txInfoSummary.summaryOtherOutputs `shouldBe` [(otherAddr 0, 746380), (taprootAddr, 746380)]
       -- A sweep has no change: nothing of the fee is change
       info.txInfoSummary.summaryChangeInFee `shouldBe` Nothing
+    -- Everything to the first receiving address of the bip84 account of
+    -- the portfolio, a P2WPKH output of 31 bytes: 10 + 581 + 31 + 56 = 678
+    -- virtual bytes, a fee of 6780, and 1500000 - 6780 = 1493220
+    it "records the path of a destination of the bip84 account of the portfolio with its type, which the signer reads as the portfolio's" $ do
+      let paying = found {walletAddrs = Map.insert (segwitExternalAddr 0) (segwitPath (Deriv :/ 0 :/ 0)) found.walletAddrs}
+      tsd <- expectRight $ buildSweepSignData btc ctx seed paying [(segwitExternalAddr 0, Remainder)] 10 800002
+      tsd.txSignDataOutputPaths `shouldBe` [segwitPath (Deriv :/ 0 :/ 0)]
+      (_, info) <- expectRight $ signTxWithKeys btc ctx tsd (testPoolPubKeys ctx) noneHeld [sweptKey, walletKey]
+      info.txInfoSummary.summaryMyOutputs `shouldBe` Map.fromList [(segwitExternalAddr 0, MyOutputs 1493220 (segwitPath (Deriv :/ 0 :/ 0)) "")]
     -- The same 715 virtual bytes and fee of 7150: 1500000 - 500000 - 7150 = 992850
     it "pays a destination its fixed amount, the fee paid by the destination without one" $ do
       tsd <- expectRight $ build [(otherAddr 0, Fixed 500000), (externalAddr 1, Remainder)]
@@ -264,7 +275,7 @@ sweepBuilderSpec ctx =
       -- and counts its input as 148 bytes rather than 180: 683 virtual
       -- bytes for the 7150 of fee the builder set on 715
       tsd <- expectRight $ build destinations
-      info <- expectRight $ parseTxSignData btc ctx Bip44 accountPub tsd
+      info <- expectRight $ parseTxSignData btc ctx [(Bip44, accountPub)] tsd
       (info.txInfoSummary.summarySize, info.txInfoSummary.summaryFee, info.txInfoSummary.summaryFeeByte, info.txInfoSummary.summaryChangeInFee) `shouldBe` (683, 7150, 10, Nothing)
     it "refuses a fee larger than the coins" $
       buildWith 10000 destinations `shouldBe` Left "The coins, 1500000 satoshis, do not cover the fee, 7150000"
@@ -291,14 +302,14 @@ sweepBuilderSpec ctx =
       -- The wallet's coin of 500000 is swept in full
       let tx = spendingTx ctx [(txHash walletFunding, 0)] [(otherAddr 0, 500000)]
           unsigned = TxSignData tx [walletFunding] [firstExternal] [] Nothing Nothing [] noLabel
-      signTxWithKeys btc ctx unsigned (Just (Bip44, accountPub, noneHeld)) [walletKey] `shouldBe` Left "The transaction pays no fee"
+      signTxWithKeys btc ctx unsigned [(Bip44, accountPub)] noneHeld [walletKey] `shouldBe` Left "The transaction pays no fee"
     -- The coin is paid to the swept key's public key itself. haskoin-core
     -- gives such a coin no address, since the P2PKH address of the key
     -- would mislead, and hw names a coin by its address.
     it "refuses to sign a sweep of a coin paid to a public key itself (P2PK), which has no address" $ do
       let tx = spendingTx ctx [(txHash p2pkFunding, 0)] [(otherAddr 0, 98420)]
           unsigned = TxSignData tx [p2pkFunding] [] [] (Just 10) Nothing [] noLabel
-      signTxWithKeys btc ctx unsigned Nothing [sweptKey] `shouldBe` Left "There are non-standard inputs in the transaction"
+      signTxWithKeys btc ctx unsigned [] noneHeld [sweptKey] `shouldBe` Left "There are non-standard inputs in the transaction"
     -- A SegWit coin is spent with a compressed public key: a block may
     -- hold a spend with the other encoding, but nodes do not relay one.
     -- The coin here pays the hash of the swept key's uncompressed public
@@ -307,15 +318,15 @@ sweepBuilderSpec ctx =
     it "refuses to sign a SegWit coin of the uncompressed public key of a key given, which nodes would not relay" $ do
       let tx = spendingTx ctx [(txHash uncompressedWitnessFunding, 0)] [(otherAddr 0, 98000)]
           unsigned = TxSignData tx [uncompressedWitnessFunding] [] [] (Just 10) Nothing [] noLabel
-      signTxWithKeys btc ctx unsigned Nothing [sweptKey]
+      signTxWithKeys btc ctx unsigned [] noneHeld [sweptKey]
         `shouldBe` Left "The coin of input 0 (bc1qmtz9cyhf5zqaehgsd3apj2p9692zunjr89xa83) is a SegWit coin of an uncompressed public key: nodes do not relay a spend of it"
   where
     seed = mkStdGen 0
     -- The wallet: the test wallet of TestUtils, with its first two external addresses
     accountPub = testAccountPub ctx
-    firstExternal = Deriv :/ 0 :/ 0 :: SoftPath
-    secondExternal = Deriv :/ 0 :/ 1 :: SoftPath
-    walletKey = (derivePath ctx firstExternal testAccountKey).key
+    firstExternal = legacyPath (Deriv :/ 0 :/ 0)
+    secondExternal = legacyPath (Deriv :/ 0 :/ 1)
+    walletKey = (derivePath ctx (Deriv :/ 0 :/ 0 :: SoftPath) testAccountKey).key
     -- The coins: 100000 to 400000 at the four addresses of the swept key, and 500000 of the wallet's
     keyFunding = fundingTx ctx 1 (zip sweptKeyAddrs [100000, 200000, 300000, 400000])
     walletFunding = fundingTx ctx 2 [(externalAddr 0, 500000)]
@@ -410,78 +421,107 @@ fetchSpec ctx =
   describe "Fetching the coins of a sweep" $ do
     it "fetches the coins at the given addresses and the transactions they come from" $
       inDatabaseE $ do
-        accId <- account
-        found <- fetchSweepCoins btc ctx (toStore store) (Just accId) [] (take 2 sweptKeyAddrs) [] [otherAddr 0]
+        pool <- walletPool
+        found <- fetchSweepCoins btc ctx (toStore store) (Just pool) [] (take 2 sweptKeyAddrs) [] [otherAddr 0]
         liftIO $ summary found `shouldBe` ([(0, 100000), (1, 200000)], [keyFunding], Map.empty, [])
     it "asks the store for every address of a given key and notes its uncompressed address" $
       inDatabaseE $ do
-        accId <- account
+        pool <- walletPool
         asked <- liftIO $ newIORef []
-        found <- fetchSweepCoins btc ctx (notingUnspentRequests asked (toStore store)) (Just accId) [sweptKey] [] [] [otherAddr 0]
+        found <- fetchSweepCoins btc ctx (notingUnspentRequests asked (toStore store)) (Just pool) [sweptKey] [] [] [otherAddr 0]
         liftIO $ do
           readIORef asked `shouldReturn` [sweptKeyAddrs]
           summary found `shouldBe` ([(0, 100000), (1, 200000), (2, 300000), (3, 400000)], [keyFunding], Map.empty, [sweptKeyUncompressedAddr])
     it "takes the coins given by outpoint from their transactions, each coin once" $
       inDatabaseE $ do
-        accId <- account
-        found <- fetchSweepCoins btc ctx (toStore store) (Just accId) [] [sweptKeyAddrs !! 0] [OutPoint (txHash keyFunding) 0, OutPoint (txHash keyFunding) 3] [otherAddr 0]
+        pool <- walletPool
+        found <- fetchSweepCoins btc ctx (toStore store) (Just pool) [] [sweptKeyAddrs !! 0] [OutPoint (txHash keyFunding) 0, OutPoint (txHash keyFunding) 3] [otherAddr 0]
         liftIO $ summary found `shouldBe` ([(0, 100000), (3, 400000)], [keyFunding], Map.empty, [])
     it "records the paths of the wallet's addresses among the coins and the destinations" $
       inDatabaseE $ do
-        accId <- account
-        found <- fetchSweepCoins btc ctx (toStore store) (Just accId) [] [externalAddr 0, sweptKeyAddrs !! 0] [] [externalAddr 1, otherAddr 0]
+        pool <- walletPool
+        found <- fetchSweepCoins btc ctx (toStore store) (Just pool) [] [externalAddr 0, sweptKeyAddrs !! 0] [] [externalAddr 1, otherAddr 0]
         liftIO $ do
           ((.outpoint.hash) <$> found.coins) `shouldBe` [txHash keyFunding, txHash walletFunding]
           found.transactions `shouldBe` [keyFunding, walletFunding]
-          found.walletAddrs `shouldBe` Map.fromList [(externalAddr 0, Deriv :/ 0 :/ 0), (externalAddr 1, Deriv :/ 0 :/ 1)]
-    -- The same sweep outside the wallet, which pays no account
-    it "records no paths without an account" $
+          found.walletAddrs `shouldBe` Map.fromList [(externalAddr 0, legacyPath (Deriv :/ 0 :/ 0)), (externalAddr 1, legacyPath (Deriv :/ 0 :/ 1))]
+    -- The coins of the swept key, to the first receiving address of the
+    -- bip84 account of the portfolio
+    it "records the path of a destination of the bip84 account of the portfolio with its type" $
       inDatabaseE $ do
-        _ <- account
+        pool <- walletPool
+        found <- fetchSweepCoins btc ctx (toStore store) (Just pool) [] [sweptKeyAddrs !! 0] [] [segwitExternalAddr 0]
+        liftIO $ found.walletAddrs `shouldBe` Map.fromList [(segwitExternalAddr 0, segwitPath (Deriv :/ 0 :/ 0))]
+    it "records the paths of destinations of both accounts of the portfolio, each with its type" $
+      inDatabaseE $ do
+        pool <- walletPool
+        found <- fetchSweepCoins btc ctx (toStore store) (Just pool) [] [sweptKeyAddrs !! 0] [] [externalAddr 1, segwitExternalAddr 0]
+        liftIO $
+          found.walletAddrs
+            `shouldBe` Map.fromList [(externalAddr 1, legacyPath (Deriv :/ 0 :/ 1)), (segwitExternalAddr 0, segwitPath (Deriv :/ 0 :/ 0))]
+    -- The second test wallet holds the first of the two destinations. The
+    -- sweep pays portfolio 0 of the first wallet, so the path of the
+    -- second destination alone is recorded.
+    it "records no path of an address that another portfolio holds" $
+      inDatabaseE $ do
+        pool <- walletPool
+        (otherId, _) <- testNewAcc2 ctx
+        _ <- genExtAddress ctx def otherId ""
+        found <- fetchSweepCoins btc ctx (toStore store) (Just pool) [] [sweptKeyAddrs !! 0] [] [externalAddr2, externalAddr 1]
+        liftIO $ found.walletAddrs `shouldBe` Map.fromList [(externalAddr 1, legacyPath (Deriv :/ 0 :/ 1))]
+    -- The same sweep outside the wallet, which pays no portfolio
+    it "records no paths without a portfolio to pay" $
+      inDatabaseE $ do
+        _ <- walletPool
         found <- fetchSweepCoins btc ctx (toStore store) Nothing [] [externalAddr 0, sweptKeyAddrs !! 0] [] [externalAddr 1, otherAddr 0]
         liftIO $ found.walletAddrs `shouldBe` Map.empty
     it "finds nothing at an address without coins and asks for no raw transaction" $
       inDatabaseE $ do
-        accId <- account
+        pool <- walletPool
         asked <- liftIO $ newIORef []
-        found <- fetchSweepCoins btc ctx (notingRawRequests asked (toStore store)) (Just accId) [] [otherAddr 5] [] [otherAddr 0]
+        found <- fetchSweepCoins btc ctx (notingRawRequests asked (toStore store)) (Just pool) [] [otherAddr 5] [] [otherAddr 0]
         liftIO $ do
           summary found `shouldBe` ([], [], Map.empty, [])
           readIORef asked `shouldReturn` []
     it "refuses to fetch without keys, addresses or coins" $
       inDatabaseE $ do
-        accId <- account
+        pool <- walletPool
         lift $
           dbShouldFailWith "No private keys, addresses or coins to sweep from" $
-            fetchSweepCoins btc ctx (toStore store) (Just accId) [] [] [] [otherAddr 0]
+            fetchSweepCoins btc ctx (toStore store) (Just pool) [] [] [] [otherAddr 0]
     it "refuses a store that does not return the transaction a coin comes from" $
       inDatabaseE $ do
-        accId <- account
+        pool <- walletPool
         lift $
           dbShouldFailWith "The store was asked for 1 raw transactions but returned 0" $
-            fetchSweepCoins btc ctx (toStore store {fakeRawTransactions = []}) (Just accId) [] [sweptKeyAddrs !! 0] [] [otherAddr 0]
+            fetchSweepCoins btc ctx (toStore store {fakeRawTransactions = []}) (Just pool) [] [sweptKeyAddrs !! 0] [] [otherAddr 0]
     -- The wallet's funding pays externalAddr 0 500000. Its txid,
     -- b0716615...7af4, is worked out apart from hw.
     it "refuses a coin the store reports worth less than its transaction pays, which would leave the rest to the fee" $
       inDatabaseE $ do
-        accId <- account
+        pool <- walletPool
         let lying = store {fakeUnspents = [storeCoin ctx (txHash walletFunding, 0) Nothing (externalAddr 0) 5000]}
         lift $
           dbShouldFailWith "The store reports the coin b0716615da2b14afe38e3c4a06f618ea80e1ac83fe0d993d548a1ff2b2107af4:0 as worth 5000 satoshis, but its transaction pays 500000" $
-            fetchSweepCoins btc ctx (toStore lying) (Just accId) [] [externalAddr 0] [] [otherAddr 0]
+            fetchSweepCoins btc ctx (toStore lying) (Just pool) [] [externalAddr 0] [] [otherAddr 0]
     it "refuses a store that is not healthy" $
       inDatabaseE $ do
-        accId <- account
+        pool <- walletPool
         lift $
           dbShouldFailWith "The store is down" $
-            fetchSweepCoins btc ctx (unhealthy (toStore store)) (Just accId) [] [sweptKeyAddrs !! 0] [] [otherAddr 0]
+            fetchSweepCoins btc ctx (unhealthy (toStore store)) (Just pool) [] [sweptKeyAddrs !! 0] [] [otherAddr 0]
   where
-    -- The test wallet with its first two external addresses
-    account = do
-      (accId, _) <- testNewAcc ctx "main"
+    -- Portfolio 0 of the test wallet on Bitcoin, with the first two
+    -- receiving addresses of its bip44 account and the first one of its
+    -- bip84 account
+    walletPool :: ExceptT String (DB IO) Pool
+    walletPool = do
+      (accId, _) <- testNewAcc ctx
       _ <- genExtAddress ctx def accId ""
       _ <- genExtAddress ctx def accId ""
-      return accId
+      (segwitId, _) <- testNewSegwitAcc ctx
+      _ <- genExtAddress ctx def segwitId ""
+      testPool ctx
     keyFunding = fundingTx ctx 1 (zip sweptKeyAddrs [100000, 200000, 300000, 400000])
     walletFunding = fundingTx ctx 2 [(externalAddr 0, 500000)]
     store =
@@ -492,7 +532,7 @@ fetchSpec ctx =
         }
     -- What was fetched: the coins as (output index, value), the transactions,
     -- the wallet's paths and the uncompressed addresses
-    summary :: SweepCoins -> ([(Word32, Word64)], [Tx], Map.Map Address SoftPath, [Address])
+    summary :: SweepCoins -> ([(Word32, Word64)], [Tx], Map.Map Address PoolPath, [Address])
     summary found = ([(c.outpoint.index, c.value) | c <- found.coins], found.transactions, found.walletAddrs, found.uncompressedAddrs)
 
 {- Sweeping into the wallet -}
@@ -506,25 +546,26 @@ sweepIntoWalletSpec ctx =
   describe "Sweeping into the wallet" $ do
     it "keeps the sweep pending, signs it in place and reports the credit" $
       inDatabaseE $ do
-        (accId, _) <- testNewAcc ctx "main"
+        (accId, _) <- testNewAcc ctx
+        pool <- testPool ctx
         _ <- genExtAddress ctx def accId ""
         _ <- genExtAddress ctx def accId ""
         -- preparesweep: the coins of the swept key, 100000 to 400000, to the
         -- wallet's second external address and to an outside address. The
         -- wallet holds no coin, so none is locked.
-        found <- SweepCoins (coinsOf ctx keyFunding) [keyFunding] <$> walletPaths btc accId [externalAddr 1, otherAddr 0] <*> pure [sweptKeyUncompressedAddr]
+        found <- SweepCoins (coinsOf ctx keyFunding) [keyFunding] <$> poolPaths pool [externalAddr 1, otherAddr 0] <*> pure [sweptKeyUncompressedAddr]
         tsd <- liftEither $ buildSweepSignData btc ctx (mkStdGen 0) found [(externalAddr 1, Remainder), (otherAddr 0, Remainder)] 10 800002
         let pendingHash = nosigHash tsd.txSignDataTx
-        importPendingTx btc ctx accId tsd `dbShouldBeE` pendingHash
-        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
+        importPendingTx ctx pool tsd `dbShouldBeE` pendingHash
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx pool Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, False, False, False))]
-        coinsAfter btc accId AllCoins Nothing Nothing `dbShouldBeE` []
+        coinsAfter pool [accId] AllCoins Nothing Nothing `dbShouldBeE` []
         -- signsweep by nosigHash, with the outside key only
         held <- requirePendingTx pendingHash
         liftIO $ held.pendingTxOnline `shouldBe` False
-        (signed, info) <- liftEither $ signTxWithKeys btc ctx held.pendingTxData (Just (Bip44, accountPub, noneHeld)) [sweptKey]
-        importPendingTx btc ctx accId signed `dbShouldBeE` pendingHash
-        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
+        (signed, info) <- liftEither $ signTxWithKeys btc ctx held.pendingTxData [(Bip44, accountPub)] noneHeld [sweptKey]
+        importPendingTx ctx pool signed `dbShouldBeE` pendingHash
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx pool Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, False, False))]
         -- The wallet receives one of the two outputs: 10 bytes of overhead,
         -- inputs of 148 + 180 + 41 + 64, two P2PKH outputs and 2 + 1 + 1 +
@@ -538,17 +579,18 @@ sweepIntoWalletSpec ctx =
         -- broadcast marks it online, and the sync retires it once the store
         -- lists it
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
-        ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx pool Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, True, False))]
     it "refuses to keep a transaction that does not involve the wallet" $
       inDatabaseE $ do
-        (accId, _) <- testNewAcc ctx "main"
+        (accId, _) <- testNewAcc ctx
+        pool <- testPool ctx
         _ <- genExtAddress ctx def accId ""
         let tx = spendingTx ctx [(txHash keyFunding, 0)] [(otherAddr 0, 90000)]
             outside = TxSignData tx [keyFunding] [] [] (Just 10) Nothing [] noLabel
         lift $
           dbShouldFailWith "The transaction does not involve this wallet" $
-            importPendingTx btc ctx accId outside
+            importPendingTx ctx pool outside
   where
     accountPub = testAccountPub ctx
     keyFunding = fundingTx ctx 1 (zip sweptKeyAddrs [100000, 200000, 300000, 400000])

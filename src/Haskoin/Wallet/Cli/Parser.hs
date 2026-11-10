@@ -13,7 +13,7 @@
 module Haskoin.Wallet.Cli.Parser where
 
 import Control.Applicative (Alternative (..), optional)
-import Data.List (find, intercalate)
+import Data.List (find, intercalate, stripPrefix)
 import Data.Maybe (fromMaybe, isJust)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -23,8 +23,7 @@ import Haskoin
 import Haskoin.Wallet.Amounts (AmountUnit, readUnit)
 import Haskoin.Wallet.Tx.CoinSelection (CoinSelection (..), FeePayer (..))
 import Haskoin.Wallet.Cli.Completion
-  ( accountNames,
-    addressesToSpendFrom,
+  ( addressesToSpendFrom,
     coinsToLock,
     coinsToSpend,
     coinsToUnlock,
@@ -33,13 +32,15 @@ import Haskoin.Wallet.Cli.Completion
     idsToSend,
     labelTargets,
     pendingHashes,
+    portfolioIndexes,
     shownTargets,
     walletAddresses,
+    walletIndexes,
   )
-import Haskoin.Wallet.Database.Account (AccountChoice (..))
 import Haskoin.Wallet.Database.Address (AddrType, readChainPath)
+import Haskoin.Wallet.Database.Portfolio (PortfolioChoice (..))
 import Haskoin.Wallet.Tx.FeeRates (FeeRateChoice, readFeeRateChoice)
-import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), kindNamed, kindNames)
+import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), indexFits, kindNamed, kindNames)
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
 import Haskoin.Wallet.ShortId (CoinRef (..), HashRef (..), readHashRef)
 import Haskoin.Wallet.Cli.Parser.Args
@@ -58,48 +59,51 @@ import Text.RawString.QQ (r)
 -- another, being many or of the same type, come in a record of their own,
 -- read by name; the others come as arguments of distinct types.
 data Command
-  = CommandMnemonic !NewMnemonic
-  | -- | The name of the new account, its network, unless the default one,
-    -- and its kind
-    CommandCreateAcc !Text !(Maybe Network) !AccountKind
+  = CommandNewPortfolio !NewPortfolio
   | CommandRecover !Recover
-  | -- | The account whose mnemonic to check
-    CommandCheckMnemonic !AccountChoice
-  | -- | The network of a key the file places on none, unless the default
-    -- one, the kind of a key the file says no kind of, unless BIP44, and
-    -- the file of accounts and labels to import
-    CommandImportAcc !(Maybe Network) !(Maybe AccountKind) !FilePath
-  | -- | The accounts, or every one, and the file to write them to
-    CommandExportAcc !AccountChoice !FilePath
-  | CommandRenameAcc !RenameAcc
-  | -- | The accounts, or every one, and how to show each, or the CSV file
-    -- to write them to
-    CommandAccounts !AccountChoice !ListingOutput
-  | -- | The name of the account, with its network and its path to confirm
-    -- the deletion
-    CommandDeleteAcc !Text !Network !HardPath
+  | -- | The wallet to fill in, by its index, unless the default one
+    CommandFillWallet !(Maybe Natural)
+  | -- | The portfolio whose mnemonic to check
+    CommandCheckMnemonic !PortfolioChoice
+  | -- | The wallet the file must be of, when --wallet names it, the one
+    -- portfolio to import, when --portfolio names it, and the file
+    CommandImportWallet !PortfolioChoice !FilePath
+  | -- | The wallet to export, unless the default one, the one portfolio to
+    -- export, when --portfolio names it, and the file to write
+    CommandExportWallet !PortfolioChoice !FilePath
+  | -- | The portfolios, or every one, and how to show each, or the CSV
+    -- file to write them to
+    CommandPortfolios !PortfolioChoice !ListingOutput
+  | CommandSetDescription !SetDescription
+  | CommandSetDefault !SetDefault
+  | -- | The wallet and the portfolio to delete, which the user must name
+    CommandDeletePortfolio !PortfolioChoice
+  | -- | The wallet to delete, which the user must name, and its
+    -- fingerprint, typed to confirm the deletion
+    CommandDeleteWallet !(Maybe Natural) !Text
   | CommandReceive !Receive
-  | -- | The account --account names, what to show, or Nothing for the
-    -- newest receiving address of the account, and the network of a
-    -- transaction file that names none and involves no account
-    CommandShow !(Maybe Text) !(Maybe Shown) !(Maybe Network)
-  | -- | The account, whether its change addresses, how to show each
+  | -- | Where to look, and what to show, or Nothing for the newest
+    -- receiving address of the account
+    CommandShow !Target !(Maybe Shown)
+  | -- | Where to look, whether the change addresses, how to show each
     -- address or the CSV file to write them to, and the page
-    CommandAddresses !AccountChoice !Bool !ListingOutput !(Paging Text)
-  | -- | The account, how to show each address or the CSV file to write
+    CommandAddresses !Target !Bool !ListingOutput !(Paging Text)
+  | -- | Where to look, how to show each address or the CSV file to write
     -- them to, and the page
-    CommandBalances !AccountChoice !ListingOutput !(Paging Text)
+    CommandBalances !Target !ListingOutput !(Paging Text)
   | CommandLabel !Label
-  | -- | The account, how to show each transaction or the CSV file to
-    -- write them to, and the page
-    CommandTxs !AccountChoice !ListingOutput !(Paging HashRef)
+  | -- | The portfolio, the one network to list, or every one, how to show
+    -- each transaction or the CSV file to write them to, and the page
+    CommandTxs !PortfolioChoice !(Maybe Network) !ListingOutput !(Paging HashRef)
   | CommandPrepareTx !PrepareTx
   | CommandPrepareSendAll !PrepareSendAll
-  | -- | The accounts, or every one, how to show each transaction or the
-    -- CSV file to write them to, and the page
-    CommandPendingTxs !AccountChoice !ListingOutput !(Paging HashRef)
-  | -- | The account, and the transaction file
-    CommandImportTx !(Maybe Text) !FilePath
+  | -- | The portfolios, or every one, the one network to list, or every
+    -- one, how to show each transaction or the CSV file to write them
+    -- to, and the page
+    CommandPendingTxs !PortfolioChoice !(Maybe Network) !ListingOutput !(Paging HashRef)
+  | -- | The portfolio, when hw cannot tell it from the transaction, and
+    -- the transaction file
+    CommandImportTx !PortfolioChoice !FilePath
   | -- | The pending transaction, by either of its hashes, in full or by
     -- its short id, and the file to write it to
     CommandExportTx !HashRef !FilePath
@@ -111,28 +115,42 @@ data Command
   | CommandFees !(Maybe Network)
   | CommandSignMsg !SignMsg
   | CommandVerifyMsg !VerifyMsg
-  | -- | The account, whether the locked coins only, how to show each
+  | -- | Where to look, whether the locked coins only, how to show each
     -- coin or the CSV file to write them to, and the page
-    CommandCoins !AccountChoice !Bool !ListingOutput !(Paging CoinRef)
-  | CommandLockCoin !CoinRef
-  | CommandUnlockCoin !CoinRef
+    CommandCoins !Target !Bool !ListingOutput !(Paging CoinRef)
+  | -- | The coin, and its network when the wallet has it on several
+    CommandLockCoin !CoinRef !(Maybe Network)
+  | CommandUnlockCoin !CoinRef !(Maybe Network)
   | -- | A pending transaction, by its txid or its nosigHash, in full or by
     -- its short id, or the file of a signed one, whether to send it without asking, and the network
     -- of a file that names none and that the wallet does not hold
     CommandBroadcast !(Maybe HashRef) !(Maybe FilePath) !Bool !(Maybe Network)
   | CommandBumpFee !BumpFee
-  | -- | The accounts, or every one, and whether to sync from the start
-    CommandSync !AccountChoice !Bool
+  | -- | The portfolios, or every one, the one network to sync, or every
+    -- one, and whether to sync from the start
+    CommandSync !PortfolioChoice !(Maybe Network) !Bool
   | -- | The file of the copy, or none for the backups directory of hw
     CommandBackup !(Maybe FilePath)
-  | -- | The accounts, or every one, and the spreadsheet to write their
+  | -- | The portfolios, or every one, and the spreadsheet to write their
     -- listings to
-    CommandExportSheet !AccountChoice !FilePath
+    CommandExportSheet !PortfolioChoice !FilePath
   | CommandPrepareSweep !PrepareSweep
   | -- | What to sign, the file of the private keys, typed on the terminal
     -- without one, and the network of a file that names none and involves
-    -- no account
+    -- no portfolio
     CommandSignSweep !Signing !(Maybe KeySource) !(Maybe Network)
+  deriving (Eq, Show)
+
+-- | Where a command works, as its options say: the portfolio, by
+-- --wallet and --portfolio, then the account of it, by --network and
+-- --type. An option left out takes its default from the configuration,
+-- or, for a listing, leaves the listing whole: without --network or
+-- --type, addresses, balances and coins cover the whole portfolio.
+data Target = Target
+  { portfolio :: !PortfolioChoice,
+    network :: !(Maybe Network),
+    kind :: !(Maybe AccountKind)
+  }
   deriving (Eq, Show)
 
 -- | Where a listing goes: on the screen, in the view asked for, or to a
@@ -147,11 +165,11 @@ data ListingOutput = OnScreen !(Maybe View) | CsvFile !FilePath
 
 -- | The output a listing command asks for. Nothing for another command.
 listingOutputOf :: Command -> Maybe ListingOutput
-listingOutputOf (CommandAccounts _ output) = Just output
+listingOutputOf (CommandPortfolios _ output) = Just output
 listingOutputOf (CommandAddresses _ _ output _) = Just output
 listingOutputOf (CommandBalances _ output _) = Just output
-listingOutputOf (CommandTxs _ output _) = Just output
-listingOutputOf (CommandPendingTxs _ output _) = Just output
+listingOutputOf (CommandTxs _ _ output _) = Just output
+listingOutputOf (CommandPendingTxs _ _ output _) = Just output
 listingOutputOf (CommandCoins _ _ output _) = Just output
 listingOutputOf _ = Nothing
 
@@ -161,7 +179,7 @@ csvFileOf cmd = case listingOutputOf cmd of
   Just (CsvFile file) -> Just file
   _ -> Nothing
 
--- | How the command shows each element it lists, as asked of accounts,
+-- | How the command shows each element it lists, as asked of portfolios,
 -- addresses, balances, txs, pendingtxs and coins, or else in the listing
 -- view given, the key listing-view of the configuration. The other
 -- commands have one view, which the key does not change: it is about
@@ -172,8 +190,8 @@ viewOf listingView cmd
   | Just (OnScreen asked) <- listingOutputOf cmd = fromMaybe listingView asked
 -- The one coin they answer with, with every detail, as the other commands
 -- that answer with one element show it
-viewOf _ (CommandLockCoin _) = Verbose
-viewOf _ (CommandUnlockCoin _) = Verbose
+viewOf _ (CommandLockCoin _ _) = Verbose
+viewOf _ (CommandUnlockCoin _ _) = Verbose
 viewOf _ (CommandShow {}) = Verbose
 viewOf _ _ = Compact
 
@@ -204,19 +222,23 @@ txShownOf _ = FullTx
 
 -- | Whether the pager wraps the lines of the listing the command shows in
 -- the view given, rather than cut them at the edge of the screen
--- ("Haskoin.Wallet.Cli.Pager"). Only accounts in the verbose view wraps.
--- Its rows end with the output descriptor of each account, wider than
+-- ("Haskoin.Wallet.Cli.Pager"). Only portfolios in the verbose view wraps.
+-- Its rows hold the output descriptor of each account, wider than
 -- most screens, which the user copies into another wallet. A cut
 -- descriptor could not be copied from the screen. Every other view keeps
 -- its columns whole by cutting its lines.
 wrapsLines :: View -> Command -> Bool
-wrapsLines Verbose (CommandAccounts _ _) = True
+wrapsLines Verbose (CommandPortfolios _ _) = True
 wrapsLines _ _ = False
 
--- | The options of mnemonic
-data NewMnemonic = NewMnemonic
-  { -- | The bytes of entropy
-    entropy :: !Natural,
+-- | The options of newportfolio
+data NewPortfolio = NewPortfolio
+  { -- | Whether to ask for a mnemonic the user has already (--existing),
+    -- instead of making a new one
+    existing :: !Bool,
+    -- | The bytes of entropy of a new mnemonic, when --entropy is given:
+    -- 16 without it
+    entropy :: !(Maybe Natural),
     -- | Whether dice rolls are mixed in
     dice :: !Bool,
     -- | The shares of a backup to make in place of a mnemonic
@@ -227,38 +249,49 @@ data NewMnemonic = NewMnemonic
   deriving (Eq, Show)
 
 -- | The options of recover
-data Recover = Recover
-  { -- | The one network to search, when given. Without it, recover
-    -- searches Bitcoin and Bitcoin Cash, whatever the default network.
-    network :: !(Maybe Network),
-    -- | The accounts in a row without a payment that end the search
-    accountGap :: !Natural
+newtype Recover = Recover
+  { -- | The portfolios in a row without a payment that end the search
+    portfolioGap :: Natural
   }
   deriving (Eq, Show)
 
--- | The options of renameacc
-data RenameAcc = RenameAcc
-  { old :: !Text,
-    new :: !Text,
-    -- | The network of the account, when accounts of that name are on
-    -- several networks
-    network :: !(Maybe Network)
+-- | The options of setdescription
+data SetDescription = SetDescription
+  { -- | The new description. An empty one removes the description.
+    description :: !Text,
+    -- | The wallet and the portfolio to describe
+    portfolio :: !PortfolioChoice,
+    -- | Whether the description is that of the wallet (--of-wallet), not
+    -- of one of its portfolios
+    ofWallet :: !Bool
+  }
+  deriving (Eq, Show)
+
+-- | The options of setdefault: the defaults to write to the configuration
+-- file, each when its option is given
+data SetDefault = SetDefault
+  { wallet :: !(Maybe Natural),
+    portfolio :: !(Maybe Natural),
+    network :: !(Maybe Network),
+    kind :: !(Maybe AccountKind)
   }
   deriving (Eq, Show)
 
 -- | The options of receive
 data Receive = Receive
-  { account :: !AccountChoice,
+  { target :: !Target,
     label :: !(Maybe Text)
   }
   deriving (Eq, Show)
 
 -- | The options of label
 data Label = Label
-  { -- | What to label. It names its account too.
+  { -- | What to label. It tells where it is too.
     labelled :: !Labelled,
     -- | The new label. An empty one removes the label.
-    label :: !Text
+    label :: !Text,
+    -- | The network of an address the wallet has on several networks
+    network :: !(Maybe Network)
   }
   deriving (Eq, Show)
 
@@ -281,7 +314,7 @@ readLabelled word = maybe (LabelledAddress (cs word)) LabelledTx (readHashRef (c
 -- tells. The shapes of the five do not overlap, so a word is never taken
 -- for one kind when it was typed as another ('readShown').
 data Shown
-  = -- | The address at a path of a chain of the account, /0/i or /1/i
+  = -- | The address at a path of a chain of an account, /0/i or /1/i
     ShownPath !AddrType !KeyIndex
   | -- | An address of the wallet, as typed
     ShownAddress !Text
@@ -325,8 +358,10 @@ readShown word
 data PrepareTx = PrepareTx
   { -- | The addresses paid, each with its amount, as typed: ADDRESS:AMOUNT
     recipients :: ![Text],
-    -- | The account to pay from, unless the coins of coin control tell it
-    account :: !AccountChoice,
+    -- | The portfolio to pay from
+    portfolio :: !PortfolioChoice,
+    -- | The network of the payment
+    network :: !(Maybe Network),
     -- | The fee rate: a number of satoshis per virtual byte or a level of the
     -- rates recent blocks paid, or none to ask the user from those rates
     feeRate :: !(Maybe FeeRateChoice),
@@ -345,13 +380,18 @@ data PrepareTx = PrepareTx
     -- | Whether the strategy selects among the chosen coins (--select),
     -- instead of every one of them being spent
     select :: !Bool,
+    -- | Coin control: the one type of coins the payment may spend
+    -- (--coin-type), or any
+    coinType :: !(Maybe AccountKind),
     -- | Whether a fee rate above 100 satoshis per virtual byte is taken without
     -- asking (--yes)
     yes :: !Bool,
-    -- | Whether the change goes back to an address the payment spends
-    -- from (--change-back) or to a new change address (--new-change), when
-    -- the command says. Otherwise the configuration file says.
-    changeBack :: !(Maybe Bool)
+    -- | The address of the portfolio the change goes to (--change-back),
+    -- as typed, instead of a new change address
+    changeBack :: !(Maybe Text),
+    -- | The type of the new change address (--change-type), when the
+    -- command says. Otherwise the coins spent say.
+    changeType :: !(Maybe AccountKind)
   }
   deriving (Eq, Show)
 
@@ -359,7 +399,7 @@ data PrepareTx = PrepareTx
 data BumpFee = BumpFee
   { -- | The transaction to replace, by its id, in full or by its short id
     bumped :: !HashRef,
-    account :: !(Maybe Text),
+    portfolio :: !PortfolioChoice,
     -- | The fee rate of the replacement, as for preparetx
     feeRate :: !(Maybe FeeRateChoice),
     output :: !(Maybe FilePath),
@@ -373,8 +413,10 @@ data PrepareSendAll = PrepareSendAll
   { -- | The recipients as typed: an address, or an address and its amount,
     -- ADDRESS:AMOUNT
     recipients :: ![Text],
-    -- | The account to pay from, unless the coins of coin control tell it
-    account :: !AccountChoice,
+    -- | The portfolio to pay from
+    portfolio :: !PortfolioChoice,
+    -- | The network of the payment
+    network :: !(Maybe Network),
     -- | The fee rate: a number of satoshis per virtual byte or a level of the
     -- rates recent blocks paid, or none to ask the user from those rates
     feeRate :: !(Maybe FeeRateChoice),
@@ -388,6 +430,8 @@ data PrepareSendAll = PrepareSendAll
     coins :: ![CoinRef],
     -- | The addresses whose coins to send, instead of all of them
     spendFrom :: ![Text],
+    -- | The one type of coins to send (--coin-type), or both
+    coinType :: !(Maybe AccountKind),
     -- | What to do with the coins worth less than their fee, or Nothing to
     -- ask the user
     dustCoins :: !(Maybe DustCoins),
@@ -408,7 +452,9 @@ data SignMsg = SignMsg
     address :: !Text,
     message :: !Text,
     -- | The file the armored block is written to, instead of the screen
-    output :: !(Maybe FilePath)
+    output :: !(Maybe FilePath),
+    -- | The network of an address the wallet has on several networks
+    network :: !(Maybe Network)
   }
   deriving (Eq, Show)
 
@@ -430,8 +476,9 @@ data VerifyMsg = VerifyMsg
 
 -- | The options of preparesweep
 data PrepareSweep = PrepareSweep
-  { account :: !(Maybe Text),
-    -- | The network of a sweep that pays no account of the wallet
+  { -- | The portfolio the sweep pays, when its destinations do not tell it
+    portfolio :: !PortfolioChoice,
+    -- | The network of a sweep that pays no portfolio of the wallet
     network :: !(Maybe Network),
     -- | The private keys of the addresses swept, if at hand
     keys :: !(Maybe KeySource),
@@ -459,7 +506,8 @@ data PrepareSweep = PrepareSweep
 -- a pending transaction by its nosigHash, or an --input file signed to an
 -- --output file
 data Signing = Signing
-  { account :: !(Maybe Text),
+  { -- | The portfolio of the transaction, when hw cannot tell it
+    portfolio :: !PortfolioChoice,
     nosigHash :: !(Maybe HashRef),
     input :: !(Maybe FilePath),
     output :: !(Maybe FilePath)
@@ -470,7 +518,7 @@ data Signing = Signing
 signingOptions :: Args Signing
 signingOptions =
   Signing
-    <$> txAccountOption
+    <$> txPortfolioOption
     <*> optional nosigHashArg
     <*> inputFileMaybeOption
     <*> outputFileMaybeOption
@@ -517,7 +565,7 @@ program =
 hw is a BIP44 and BIP84 wallet for Bitcoin and Bitcoin Cash. It stores
 public keys only.
 |],
-      everydayNames = ["mnemonic", "recover", "accounts", "sync", "receive", "show", "addresses", "balances", "label", "coins", "fees", "backup"],
+      everydayNames = ["newportfolio", "recover", "portfolios", "sync", "receive", "show", "addresses", "balances", "label", "coins", "fees", "backup"],
       details =
         [r|
 A payment takes three steps:
@@ -534,24 +582,32 @@ the first 8 digits of the hash, as the listings show it, such as a1075db5, or
 a1075db5:1 for a coin. When two transactions of the wallet share those 8
 digits, hw names both and asks for the full hash.
 
-A command that acts on one account, such as receive, takes the only account of
-the wallet. In a wallet of several accounts, it takes the default account of
-the network, the account named default on that network. Without a default
-account, it takes the only account of the wallet on the network. Give
---account to use another one. --network names the network. Without it, that is
-the default-network of the configuration file, or btc.
+hw keeps a wallet for each mnemonic, and portfolios in each wallet. A portfolio
+holds every account of the wallet at one account index: portfolio0 holds the
+accounts at index 0, on every network and of both types of address. With one
+mnemonic, you work in portfolio0 of wallet0 and never pick an account. You
+only say the network and the type of address you want.
 
-A name is unique on its network, so each network can have an account named
-default. Name an account default with createacc or renameacc to make it the
-default of its network. recover names the first account it adds on a network
-so, when the wallet has no account there yet. When accounts of the --account
-name are on several networks, a command that acts on one account takes the one
-on the network, and accounts, sync and the other commands that act on every
-account take them all.
+Four options say where a command works. Each has a default, which a key of the
+configuration file changes, and which setdefault sets:
 
-To sign on an offline computer, create the account there with createacc. Copy
-it to the online computer with exportacc and importacc. Then carry each
-transaction between them with preparetx --output, signtx --input and
+  --wallet N        the wallet, by its index      wallet0      default-wallet
+  --portfolio N     the portfolio of that wallet  portfolio0   default-portfolio
+  --network NET     btc, bch or a test network    btc          default-network
+  --type TYPE       bip44 or bip84                bip44        default-type
+
+A bip44 account has legacy addresses, which start with 1 on Bitcoin. A bip84
+account has native SegWit addresses, which start with bc1q. Bitcoin Cash has
+bip44 accounts only: it takes bip44 whatever the default says, and refuses
+--type bip84.
+
+A payment spends the coins of a portfolio on one network, of both types
+together. A transaction is shown as the portfolio sees it: Incoming, Outgoing,
+or Internal when it moves funds between addresses of the portfolio.
+
+To sign on an offline computer, create the portfolio there with newportfolio.
+Copy it to the online computer with exportwallet and importwallet. Then carry
+each transaction between them with preparetx --output, signtx --input and
 broadcast --input.
 
 `recover` and preparesweep --key-file take a mnemonic or private keys too, but
@@ -569,7 +625,7 @@ The settings, such as the server, the default network, the unit, the view of
 the listings, the address gap and the pager, are in ~/.hw/config.json.
 
 The Tab key completes the commands, the options, and what the wallet holds:
-account names, the hashes of pending transactions, coins and addresses. The
+wallets and portfolios, the hashes of pending transactions, coins and addresses. The
 shell needs a script for it, which hw writes. In bash, add this line to
 ~/.bashrc:
 
@@ -582,16 +638,18 @@ Type hw COMMAND --help for the help of a command.
       globals = GlobalOptions <$> unitOption <*> jsonOption <*> noPagerOption,
       groups =
         [ CommandGroup
-            "Mnemonics and accounts"
-            [ mnemonicCommand,
-              createAccCommand,
+            "Wallets and portfolios"
+            [ newPortfolioCommand,
               recoverCommand,
+              fillWalletCommand,
               checkMnemonicCommand,
-              exportAccCommand,
-              importAccCommand,
-              accountsCommand,
-              renameAccCommand,
-              deleteAccCommand,
+              exportWalletCommand,
+              importWalletCommand,
+              portfoliosCommand,
+              setDescriptionCommand,
+              setDefaultCommand,
+              deletePortfolioCommand,
+              deleteWalletCommand,
               syncCommand
             ],
           CommandGroup
@@ -674,19 +732,28 @@ bit or sat. A bit is 100 satoshis. The default is the key unit of
 config.json, or btc.
 |]
 
-{- mnemonic -}
+{- newportfolio -}
 
-mnemonicCommand :: CommandSpec Command
-mnemonicCommand =
+newPortfolioCommand :: CommandSpec Command
+newPortfolioCommand =
   CommandSpec
-    { name = "mnemonic",
+    { name = "newportfolio",
       offline = True,
-      summary = "Generate a new mnemonic, or a backup in shares",
+      summary = "Make a mnemonic and its wallet, or add a portfolio to a wallet",
       details =
         [r|
-hw prints the mnemonic and stores nothing. Write it down and keep copies in
-safe places, away from computers and phones. Whoever has the mnemonic can
-spend the funds. If you lose it, the funds are lost.
+Without --existing, newportfolio makes a new mnemonic. A new mnemonic is a new
+wallet, so it creates that wallet with its portfolio0.
+
+newportfolio first asks for a passphrase, twice to catch a typo. Leave it
+empty for none. A mnemonic with a passphrase gives another master key, so it
+is another wallet: the passphrase is part of the secret, and must be kept too.
+
+It then prints the mnemonic, once, with the portfolio it created. Write the
+mnemonic down and keep copies in safe places, away from computers and phones.
+Whoever has the mnemonic can spend the funds. If you lose it, the funds are
+lost. hw stores the public keys of the portfolio only, never the mnemonic.
+checkmnemonic checks what you wrote down against the portfolio.
 
 The entropy comes from the operating system, read from /dev/random where the
 machine has it. With --dice, hw also mixes in rolls of a die, so that you do
@@ -699,30 +766,63 @@ tell nothing of it: with --shares 3 --threshold 2, any two of three. A share
 is a list of 20 words, or of 33 with --entropy 32. The commands that ask for
 the mnemonic take the shares in its place: type one, and hw asks for the
 next until it has enough. A single share, with --shares 1, is the whole
-backup, as a mnemonic is.
+backup, as a mnemonic is. A backup in shares is not a BIP39 mnemonic, and no
+mnemonic comes of it. A wallet that reads SLIP-39 shares restores it, and one
+that reads only BIP39 mnemonics cannot. Its passphrase has printable ASCII
+characters only, as its format asks.
 
-A backup in shares is not a BIP39 mnemonic, and no mnemonic comes of it. A
-wallet that reads SLIP-39 shares restores it, and one that reads only BIP39
-mnemonics cannot.
+With --existing, newportfolio asks for a mnemonic you have already, and its
+passphrase, each twice. It takes the shares of a backup in place of the
+mnemonic. It then adds a portfolio to the wallet of that mnemonic, at the
+lowest free index: portfolio1 when the wallet has portfolio0, and portfolio1
+too when it has portfolio0 and portfolio2. When the database has no wallet of
+the mnemonic yet, it creates the wallet with its portfolio0.
+
+A portfolio is created whole: an account for every network, the test networks
+included, and for both types of address. Those are five keys:
+
+  m/44'/0'/i'     bip44   btc
+  m/84'/0'/i'     bip84   btc
+  m/44'/145'/i'   bip44   bch
+  m/44'/1'/i'     bip44   every test network
+  m/84'/1'/i'     bip84   the test networks of Bitcoin
+
+The test networks share their keys, and hw keeps their addresses and coins
+apart. You never create an account: `receive` --network and --type pick one.
+
+The private keys are never stored. To keep them on an offline computer, run
+newportfolio there. Then copy the wallet to an online computer with
+exportwallet and importwallet.
+
+A passphrase with accents or other non-ASCII letters is normalized as BIP39
+asks, so that other wallets find the same seed. Older versions of hw did not
+normalize it. If the database has a wallet of this mnemonic made that way, and
+none of the normalized seed, --existing keeps to the old seed and says so.
 |],
       args =
-        CommandMnemonic
-          <$> (NewMnemonic <$> entropyOption <*> diceOption <*> sharesOption <*> thresholdOption)
+        CommandNewPortfolio
+          <$> (NewPortfolio <$> existingOption <*> entropyOption <*> diceOption <*> sharesOption <*> thresholdOption)
     }
 
-entropyOption :: Args Natural
+-- | Whether newportfolio asks for a mnemonic the user has already
+existingOption :: Args Bool
+existingOption =
+  switch $
+    long "existing"
+      <> help "Ask for a mnemonic you have already, and add a portfolio to its wallet, instead of making a new mnemonic"
+
+entropyOption :: Args (Maybe Natural)
 entropyOption =
-  option (maybeReader f) $
+  optional . option (maybeReader f) $
     short 'e'
       <> long "entropy"
       <> metavar "BYTES"
-      <> value 16
-      <> showDefault
       <> completeWith valid
       <> help
         [r|
 The bytes of entropy: 16, 20, 24, 28 or 32, for a mnemonic of 12, 15, 18, 21
 or 24 words. A backup in shares takes 16 or 32, for shares of 20 or 33 words.
+The default is 16.
 |]
   where
     valid = ["16", "20", "24", "28", "32"]
@@ -744,7 +844,7 @@ enough rolls for the seed and for each random value that splits it, and uses
 no roll twice.
 |]
 
--- | The shares of a backup that mnemonic makes in place of a mnemonic
+-- | The shares of a backup that newportfolio makes in place of a mnemonic
 sharesOption :: Args (Maybe Natural)
 sharesOption =
   optional . option (eitherReader $ upToSixteen "--shares" . cs) $
@@ -778,105 +878,34 @@ upToSixteen name typed =
       | otherwise -> Left ("The " <> name <> " value has to be between 1 and 16")
     Nothing -> Left ("Could not parse the " <> name <> " option")
 
-{- createacc -}
-
-createAccCommand :: CommandSpec Command
-createAccCommand =
-  CommandSpec
-    { name = "createacc",
-      offline = True,
-      summary = "Create an account from a mnemonic",
-      details =
-        [r|
-createacc asks for the mnemonic and the passphrase, each twice to catch a
-typo. It takes the shares of a backup in place of the mnemonic: type one,
-and hw asks for the next until it has enough. Shares are typed once, since
-their checksums catch a typo, and their passphrase has printable ASCII
-characters only, as their format asks.
-
-It derives the account key m/44'/coin'/index', or m/84'/coin'/index'
-with --type bip84, and stores only its public key. It takes the first index
-of the seed that has no account of that kind in the wallet on that network.
-For example, the first Bitcoin account is m/44'/0'/0', and the first native
-SegWit one is m/84'/0'/0'.
-
-A bip44 account has legacy P2PKH addresses, which start with 1 on Bitcoin,
-and is the default. A bip84 account has native SegWit P2WPKH addresses,
-which start with bc1q, and its payments pay about 40% less in fees. Other
-wallets create bip84 accounts by default. Bitcoin Cash has no SegWit, so it
-has bip44 accounts only.
-
-The private keys are never stored. To keep them on an offline computer,
-create the account there. Then copy it to an online computer with exportacc
-and importacc.
-
-createacc answers with every detail of the new account, as accounts --verbose
-shows it, its output descriptor last. Another wallet takes the account by its
-descriptor, to watch it.
-
-A passphrase with accents or other non-ASCII letters is normalized as BIP39
-asks, so that other wallets find the same seed. Older versions of hw did not
-normalize it. If the wallet has accounts of this mnemonic made that way, and
-none of the normalized seed, createacc keeps to the old seed and says so.
-|],
-      args =
-        CommandCreateAcc
-          <$> textArg "NAME" "The name of the new account"
-          <*> networkMaybeOption
-          <*> accountTypeOption
-    }
-
--- | The kind of the new account: bip44 unless given
-accountTypeOption :: Args AccountKind
-accountTypeOption =
-  option (eitherReader (readKind . cs)) $
-    short 't'
-      <> long "type"
-      <> metavar "TYPE"
-      <> value Bip44
-      <> showDefaultWith (const "bip44")
-      <> completeWith (cs <$> kindNames)
-      <> help "The kind of account: bip44, with legacy P2PKH addresses, or bip84, with native SegWit P2WPKH addresses, which pay lower fees"
-
--- | The kind of an account the file says no kind of, when given
-importTypeOption :: Args (Maybe AccountKind)
-importTypeOption =
-  optional . option (eitherReader (readKind . cs)) $
-    short 't'
-      <> long "type"
-      <> metavar "TYPE"
-      <> completeWith (cs <$> kindNames)
-      <> help "The kind of account of a key the file says no kind of, a bare xpub or tpub: bip44 or bip84. Without it, bip44. A descriptor, a zpub and a file of hw say their kind themselves, and a zpub with --type bip44 is refused."
-
 -- | A kind of account as typed: bip44 or bip84
 readKind :: Text -> Either String AccountKind
 readKind typed = maybe (Left ("The type of an account is " <> intercalate " or " (cs <$> kindNames))) Right (kindNamed typed)
 
 -- | The network, when given. Without it, a command that needs one takes the
--- default-network of the configuration file.
+-- default-network of the configuration file, or btc.
 networkMaybeOption :: Args (Maybe Network)
-networkMaybeOption = networkOptionWith "Without it, the default-network of the configuration file."
+networkMaybeOption = networkOptionWith "Without it, the default-network of the configuration file, or btc."
 
--- | The one network recover searches, when given. Without it, recover
--- searches Bitcoin and Bitcoin Cash: the default-network of the
--- configuration file does not apply, since a seed is often paid on both.
-recoverNetworkOption :: Args (Maybe Network)
-recoverNetworkOption =
-  networkOptionWith "Only it is searched. Without it, btc and bch are searched, whatever the default-network of the configuration file."
-
--- | The network of a sweep, when given. A sweep that pays an account of the
--- wallet is on the network of that account. One that pays none needs it.
+-- | The network of a sweep, when given. A sweep that pays a portfolio of
+-- the wallet is on the network of the addresses it pays. One that pays
+-- none needs it.
 sweepNetworkOption :: Args (Maybe Network)
 sweepNetworkOption =
-  networkOptionWith "Needed by a sweep that pays no account of this wallet. The default-network of the configuration file does not apply to it."
+  networkOptionWith "Needed by a sweep that pays no portfolio of this wallet. The default-network of the configuration file does not apply to it."
 
 -- | The network of a transaction file, when given. A file hw wrote names
--- its network, and a file that involves an account of the wallet is on
--- the network of that account. A file of another wallet that involves
--- none needs it.
+-- its network. A file of another wallet names none, and is read on this
+-- network.
 fileNetworkOption :: Args (Maybe Network)
 fileNetworkOption =
-  networkOptionWith "For a file that names no network and involves no account of this wallet, as a file of another wallet does. Without it, the default-network of the configuration file."
+  networkOptionWith "For a file that names no network, as a file of another wallet does. Without it, the default-network of the configuration file, or btc."
+
+-- | The network of an address or a coin the user names, when the wallet
+-- has it on several networks
+heldNetworkOption :: String -> Args (Maybe Network)
+heldNetworkOption what =
+  networkOptionWith ("Needed only when the wallet has the " <> what <> " on several networks: the test networks share their keys. Without it, the one on the default network.")
 
 -- | The network, when given, with the help of the command about it
 networkOptionWith :: String -> Args (Maybe Network)
@@ -901,35 +930,33 @@ recoverCommand =
   CommandSpec
     { name = "recover",
       offline = False,
-      summary = "Find the accounts of a mnemonic that were paid",
+      summary = "Find the portfolios of a mnemonic that were paid",
       details =
         [r|
 `recover` needs the mnemonic and the server at the same time, so it runs on an
 online computer and not on an offline one. A computer that was tampered with
 can steal a mnemonic typed on it. To keep the mnemonic offline, create the
-accounts on the offline computer with createacc instead. Copy them with
-exportacc and importacc, and run `sync`.
+portfolios on the offline computer with newportfolio --existing instead. Copy
+them with exportwallet and importwallet, and run `sync`.
 
 `recover` asks for the mnemonic, or for the shares of a backup, then searches
-for the accounts of its seed that were paid. It checks the accounts in order
-from index 0, and asks the server about the receiving addresses of each. Each
-account that was paid is added, named after the network and its index, such
-as btc0 or bch0, and synced. Accounts the wallet has already are skipped.
-On a network where the wallet has no account yet, the first account added is
-named default instead. It is then the default account of the network, which
-commands take without --account.
+for the portfolios of its seed that were paid. It checks the portfolios in
+order from portfolio0, and asks the server about the receiving addresses of
+every account of each: on every network, the test networks included, and of
+both types of address. When any account of a portfolio was ever paid, the
+whole portfolio is created, with every account, and synced. Portfolios the
+wallet has whole already are skipped.
 
-Without --network, `recover` searches Bitcoin, then Bitcoin Cash. The
-default-network of the configuration file does not apply. A seed is often paid
-on both, as every seed from before the fork of 2017 is. A test network is
-searched only when --network names it. When the server does not answer for
-one of the two, the other is still searched. The answer then names the one
-left out, and hw exits with an error, as `sync` does.
+The wallet is the one of the mnemonic. A wallet found gets its portfolio0
+whether that one was paid or not: a wallet always has portfolio0. When the
+database has partial portfolios of the mnemonic, made from the accounts of an
+earlier version of hw, `recover` fills them in, as fillwallet does.
 
-On Bitcoin, the bip44 accounts of the seed are searched first, then the
-bip84 ones, which most other wallets make: a bip84 account found is named
-with -segwit after the index, such as btc0-segwit. Bitcoin Cash has bip44
-accounts only.
+The server may not serve every network: the public one has no regtest chain.
+`recover` names the networks the server does not serve, and searches the
+others. When the server of a network is down, `recover` says so, searches the
+others, then exits with an error: a portfolio that was paid on that network
+alone was not found.
 
 `recover` also looks where other wallets keep their accounts, and tells of
 funds it cannot spend. On Bitcoin, those are the bip49 accounts of wrapped
@@ -939,92 +966,89 @@ accounts of Bitcoin, m/44'/0', where a wallet that held Bitcoin at the fork
 of 2017 has its Bitcoin Cash. No such account is added. Move its funds with
 a wallet that holds such accounts, to an address of this wallet.
 
-The search stops after --account-gap accounts in a row without a payment,
-counted for each kind of account apart. BIP44 stops at the first such
-account. hw looks further, since accounts created on an offline computer
-may never have been paid. On a terminal, a line tells which network and
-account `recover` is looking at, as `sync` does.
+The search stops after --portfolio-gap portfolios in a row where nothing was
+found. BIP44 stops at the first such account. hw looks further, since
+portfolios created on an offline computer may never have been paid. On a
+terminal, a line tells which portfolio `recover` is looking at, as `sync`
+does.
 
-After every 20 accounts of a kind the server reports paid, `recover` asks
-whether to keep looking. A server that lies reports them without end. A no
-stops the search, and no account is added.
+After every 20 portfolios the server reports paid, `recover` asks whether to
+keep looking. A server that lies reports them without end. A no stops the
+search, and nothing is added.
 
 hw normalizes a passphrase as BIP39 asks, and older versions did not. When
 nothing is found, `recover` also tries the passphrase as typed. It says so if
-that finds accounts.
+that finds portfolios.
 |],
       args =
         CommandRecover
-          <$> (Recover <$> recoverNetworkOption <*> accountGapOption)
+          <$> (Recover <$> portfolioGapOption)
     }
 
-accountGapOption :: Args Natural
-accountGapOption =
-  option (eitherReader accountGap) $
-    long "account-gap"
+portfolioGapOption :: Args Natural
+portfolioGapOption =
+  option (eitherReader portfolioGap) $
+    long "portfolio-gap"
       <> metavar "INT"
       <> value 10
       <> showDefault
       <> help
         [r|
-How many accounts in a row without a payment end the search, from 1 to 100.
-BIP44 uses 1. A larger gap finds accounts created on a signer that were never
-paid.
+How many portfolios in a row where nothing was found end the search, from 1 to
+100. A larger gap finds portfolios created on a signer that were never paid
+before a later one was.
 |]
   where
-    accountGap :: String -> Either String Natural
-    accountGap arg =
+    portfolioGap :: String -> Either String Natural
+    portfolioGap arg =
       case readNatural (cs arg) of
-        Just n | n >= 1 && n <= maxAccountGap -> Right n
-        _ -> Left $ "The account gap is a number of accounts, from 1 to " <> show maxAccountGap
-    -- Every account searched is a scan of its receiving chain at the store.
-    -- A larger gap keeps recover asking about accounts nobody created: 100
-    -- is ten times the default.
-    maxAccountGap :: Natural
-    maxAccountGap = 100
+        Just n | n >= 1 && n <= maxPortfolioGap -> Right n
+        _ -> Left $ "The portfolio gap is a number of portfolios, from 1 to " <> show maxPortfolioGap
+    -- Every portfolio searched is a scan of the receiving chain of each of
+    -- its accounts at the store. A larger gap keeps recover asking about
+    -- portfolios nobody created: 100 is ten times the default.
+    maxPortfolioGap :: Natural
+    maxPortfolioGap = 100
 
-{- deleteacc -}
+{- fillwallet -}
 
-deleteAccCommand :: CommandSpec Command
-deleteAccCommand =
+fillWalletCommand :: CommandSpec Command
+fillWalletCommand =
   CommandSpec
-    { name = "deleteacc",
-      offline = False,
-      summary = "Delete an account from the wallet",
+    { name = "fillwallet",
+      offline = True,
+      summary = "Fill in the partial portfolios of a wallet from its mnemonic",
       details =
         [r|
-deleteacc removes the account with its addresses, labels, transactions, coins
-and pending transactions. The NETWORK and the DERIVPATH must be those of the
-account, as `accounts` shows them. They confirm which account to delete.
+A portfolio is partial when it lacks some of its accounts. hw makes partial
+portfolios when it upgrades a database of version 0.9, which held single
+accounts: the other accounts of a portfolio are behind hardened steps of the
+path, so only the mnemonic can derive them. A partial portfolio works with the
+accounts it has. A command that needs another one, such as `receive` --type
+bip84, is refused until the portfolio is filled in. `portfolios` marks the
+partial ones.
 
-The funds stay on the chain, and the mnemonic can still spend them. The labels
-are lost.
+fillwallet asks for a mnemonic and its passphrase, or for the shares of a
+backup. It finds the wallets the mnemonic is of by their keys, whatever their
+index, so you do not need to know which wallet each mnemonic became. It adds
+every account their portfolios lack, and creates portfolio0 when the wallet
+has none. A mnemonic or a passphrase that gives the keys of no wallet is
+refused, and nothing changes. With --wallet, the mnemonic must be of that
+wallet.
+
+Version 0.9 kept no fingerprint of the master key, so an upgraded database
+cannot tell that its accounts on Bitcoin and on Bitcoin Cash are of one
+mnemonic. They start in two wallets. fillwallet finds every wallet the
+mnemonic is of, merges them into the one with the lowest index, and records
+the fingerprint. The answer names the wallets merged.
+
+When the mnemonic is on an offline computer, run fillwallet there. Then write
+the wallet to a file with exportwallet, and read that file on the online
+computer with importwallet, which fills in the portfolios there without the
+mnemonic.
 |],
-      args =
-        CommandDeleteAcc
-          <$> accountArg "NAME" "The name of the account to delete"
-          <*> networkArg
-          <*> fullDerivationOption
+      args = CommandFillWallet <$> walletOptionWith "The wallet the mnemonic must be of. Without it, the wallets the mnemonic is of, whatever their index."
     }
-
-fullDerivationOption :: Args HardPath
-fullDerivationOption =
-  argument (maybeReader parseHard) $
-    metavar "DERIVPATH"
-      <> help "The derivation path of the account, as `accounts` shows it. Quote it for the shell, as in \"/44'/0'/3'\"."
-
-networkArg :: Args Network
-networkArg =
-  argument (eitherReader (f . netByName)) $
-    metavar "NETWORK"
-      <> completeWith ((.name) <$> allNets)
-      <> help ("The network of the account: " <> nets)
-  where
-    nets = intercalate ", " ((.name) <$> allNets)
-    f :: Maybe Network -> Either String Network
-    f Nothing =
-      Left $ "Invalid network name. Select one of the following: " <> nets
-    f (Just res) = Right res
 
 {- checkmnemonic -}
 
@@ -1033,261 +1057,458 @@ checkMnemonicCommand =
   CommandSpec
     { name = "checkmnemonic",
       offline = True,
-      summary = "Check a mnemonic and passphrase against an account",
+      summary = "Check a mnemonic and passphrase against a portfolio",
       details =
         [r|
 checkmnemonic asks for the mnemonic and the passphrase, and checks that they
-give the public key of the account. Use it to test a mnemonic you wrote down,
-or the shares of a backup, before you rely on it. Nothing is signed. When they match, hw records the
-fingerprint of the seed, which `accounts` shows.
-
-When they do not match, hw looks for the key of the account at the other
-paths it knows. An account imported from its key alone was given its kind
-and its network by you, and the key may be of another kind, such as bip84,
-or of another network. checkmnemonic then says so, with the --type or the
---network to import the key again with, after deleteacc.
+give the public key of every account of the portfolio. Use it to test a
+mnemonic you wrote down, or the shares of a backup, before you rely on it.
+Nothing is signed, and nothing is changed.
 |],
       args =
         CommandCheckMnemonic
-          <$> accountChoiceOption
+          <$> portfolioChoiceOption
     }
 
--- | The account of a command that acts on one account: the one --account
--- names, or the only one of the wallet, or the default or only account of
--- the --network ('Haskoin.Wallet.Database.Account.chooseAccount')
-accountChoiceOption :: Args AccountChoice
-accountChoiceOption =
-  accountChoiceWith "The account to use: the one on the network, when accounts of that name are on several networks. Without it, the only account of the wallet, or else the account named default on the network, or else the only account on the network."
+{- The options that say where a command works -}
 
--- | The --account and --network of a command that acts on one account,
--- with the help of the command about --account. --network comes with
--- --account, since it names an account too: the default account of the
--- network.
-accountChoiceWith :: String -> Args AccountChoice
-accountChoiceWith what = AccountChoice <$> accountOptionWith what <*> defaultAccountNetworkOption
+-- | The --wallet option, with the help of the command about it
+walletOptionWith :: String -> Args (Maybe Natural)
+walletOptionWith = optional . walletIndexOption
 
--- | The network whose default or only account a command takes, when given
-defaultAccountNetworkOption :: Args (Maybe Network)
-defaultAccountNetworkOption =
-  networkOptionWith
-    "The network of the account. In a wallet of several accounts, the command uses the account named default on this network, or else the only account on it, when no --account is given. With --account, it must be the network of the account. Without it, the default-network of the configuration file, or btc."
+-- | The --portfolio option, with the help of the command about it
+portfolioOptionWith :: String -> Args (Maybe Natural)
+portfolioOptionWith = optional . portfolioIndexOption
 
--- | The --account and --network of a command that acts on every account
--- without them: each narrows the accounts down
--- ('Haskoin.Wallet.Database.Account.chooseAccounts')
-everyAccountChoiceOption :: Args AccountChoice
-everyAccountChoiceOption =
-  AccountChoice
-    <$> accountOptionWith "Only the accounts of this name, one on each network that has it. Without it, every account."
-    <*> networkOptionWith "Only the accounts of this network. Without it, those of every network."
+-- | The --wallet option of a command that needs it, deletewallet: the
+-- usage line shows it without brackets, and the parser refuses the
+-- command without it. A command that deletes must never fall back on a
+-- default.
+requiredWalletOption :: String -> Args (Maybe Natural)
+requiredWalletOption = fmap Just . walletIndexOption
 
--- | The account of a transaction, which hw finds in the transaction when
--- it can
-txAccountOption :: Args (Maybe Text)
-txAccountOption = accountOptionWith "The account of the transaction. Needed only when hw cannot tell it from the transaction."
+-- | The --portfolio option of a command that needs it, deleteportfolio,
+-- as 'requiredWalletOption' is for --wallet
+requiredPortfolioOption :: String -> Args (Maybe Natural)
+requiredPortfolioOption = fmap Just . portfolioIndexOption
 
--- | The --account option, with the help of the command about it
-accountOptionWith :: String -> Args (Maybe Text)
-accountOptionWith what =
-  optional . strOption $
-    short 'a'
-      <> long "account"
-      <> metavar "NAME"
-      <> completer (listIOCompleter accountNames)
-      <> help what
+-- | The --wallet option, given, with the help of the command about it
+walletIndexOption :: String -> Args Natural
+walletIndexOption what =
+  option (eitherReader (indexOf "wallet")) $
+    long "wallet"
+      <> metavar "INT"
+      <> completer (listIOCompleter walletIndexes)
+      <> help (what <> " A wallet is named by its index, as `portfolios` shows it: 0 for wallet0.")
 
-{- importacc -}
+-- | The --portfolio option, given, with the help of the command about it
+portfolioIndexOption :: String -> Args Natural
+portfolioIndexOption what =
+  option (eitherReader (indexOf "portfolio")) $
+    short 'p'
+      <> long "portfolio"
+      <> metavar "INT"
+      <> completer (listIOCompleter portfolioIndexes)
+      <> help (what <> " A portfolio is named by its index: 0 for portfolio0.")
 
-importAccCommand :: CommandSpec Command
-importAccCommand =
+-- | The index of a wallet or of a portfolio, as typed: a number, or the
+-- name the listings show, such as 2 or portfolio2. The first argument is
+-- the word the name starts with, wallet or portfolio. An index of 2^31 or
+-- more is refused ('indexFits'): it names no wallet and no portfolio, and
+-- the database would read it as another, smaller one.
+indexOf :: String -> String -> Either String Natural
+indexOf what typed =
+  case readNatural (cs (fromMaybe typed (stripPrefix what typed))) of
+    Nothing -> Left ("The --" <> what <> " value is the index of a " <> what <> ", such as 0")
+    Just index
+      | indexFits index -> Right index
+      | otherwise -> Left ("The --" <> what <> " value " <> typed <> " is too large: the index of a " <> what <> " is below 2147483648, which is 2^31")
+
+-- | The portfolio of a command that works in one: the one --wallet and
+-- --portfolio name, each with its default
+-- ('Haskoin.Wallet.Database.Portfolio.choosePortfolio')
+portfolioChoiceOption :: Args PortfolioChoice
+portfolioChoiceOption =
+  PortfolioChoice
+    <$> walletOptionWith "The wallet to use. Without it, the default-wallet of the configuration file, or wallet0."
+    <*> portfolioOptionWith "The portfolio to use. Without it, the default-portfolio of the configuration file, or portfolio0."
+
+-- | The portfolios of a command that covers every portfolio without an
+-- option: each option narrows them down
+-- ('Haskoin.Wallet.Database.Portfolio.choosePortfolios')
+everyPortfolioChoiceOption :: Args PortfolioChoice
+everyPortfolioChoiceOption =
+  PortfolioChoice
+    <$> walletOptionWith "Only the portfolios of this wallet. Without it and without --portfolio, those of every wallet. With --portfolio alone, the default wallet."
+    <*> portfolioOptionWith "Only this portfolio. Without it, every portfolio."
+
+-- | The portfolio of a transaction, which hw finds in the transaction
+-- when it can. The options only narrow the search
+-- ('Haskoin.Wallet.Database.Portfolio.narrowedBy'): --wallet alone to
+-- every portfolio of that wallet, --portfolio to one portfolio.
+txPortfolioOption :: Args PortfolioChoice
+txPortfolioOption =
+  PortfolioChoice
+    <$> walletOptionWith "Look for the portfolio of the transaction in this wallet only. Needed only when hw cannot tell the portfolio from the transaction."
+    <*> portfolioOptionWith "The portfolio of the transaction, in the default wallet without --wallet. Needed only when hw cannot tell it from the transaction: one that involves several portfolios is of the one that pays, which keeps it and signs it."
+
+-- | The --type option, with the help of the command about it
+typeOptionWith :: String -> Args (Maybe AccountKind)
+typeOptionWith what =
+  optional . option (eitherReader (readKind . cs)) $
+    short 't'
+      <> long "type"
+      <> metavar "TYPE"
+      <> completeWith (cs <$> kindNames)
+      <> help ("The type of address: bip44, legacy P2PKH addresses, or bip84, native SegWit P2WPKH addresses, which pay lower fees. " <> what)
+
+-- | Where a command that works on one account looks: the portfolio, then
+-- the network and the type, each with its default
+accountTargetOption :: Args Target
+accountTargetOption =
+  Target
+    <$> portfolioChoiceOption
+    <*> networkMaybeOption
+    <*> typeOptionWith "Without it, the default-type of the configuration file, or bip44. The networks of Bitcoin Cash have bip44 only, and refuse bip84."
+
+-- | Where a listing looks: the portfolio, then the network and the type,
+-- each of which narrows the listing when it is given
+listingTargetOption :: Args Target
+listingTargetOption =
+  Target
+    <$> portfolioChoiceOption
+    <*> networkOptionWith "Only this network. Without it, every network of the portfolio."
+    <*> typeOptionWith "Only the addresses of this type. Without it, both types."
+
+{- exportwallet and importwallet -}
+
+exportWalletCommand :: CommandSpec Command
+exportWalletCommand =
   CommandSpec
-    { name = "importacc",
+    { name = "exportwallet",
       offline = False,
-      summary = "Add the accounts and labels of a file",
-      details = importExportAccDetails,
+      summary = "Write the portfolios of a wallet and their labels to a file",
+      details = importExportWalletDetails,
       args =
-        CommandImportAcc
-          <$> importNetworkOption
-          <*> importTypeOption
-          <*> fileArgument "The file exportacc wrote, or a file of another wallet: BIP 329 labels, an output descriptor on a line, the file of Bitcoin Core's listdescriptors, or the generic JSON of a Coldcard"
+        CommandExportWallet
+          <$> ( PortfolioChoice
+                  <$> walletOptionWith "The wallet to write. Without it, the default wallet."
+                  <*> portfolioOptionWith "Write only this portfolio. Without it, every portfolio of the wallet."
+              )
+          <*> fileArgument "The file to write. It must not exist yet."
     }
 
--- | The network of the accounts a file of another wallet creates, which
--- names none
-importNetworkOption :: Args (Maybe Network)
-importNetworkOption =
-  networkOptionWith "For an account the file names no network for, as a file of another wallet does. Without it, the default-network of the configuration file."
+importWalletCommand :: CommandSpec Command
+importWalletCommand =
+  CommandSpec
+    { name = "importwallet",
+      offline = False,
+      summary = "Add the portfolios and labels of a file",
+      details = importExportWalletDetails,
+      args =
+        CommandImportWallet
+          <$> ( PortfolioChoice
+                  <$> walletOptionWith "The wallet the file must be of. hw finds the wallet from the file, so this only checks it."
+                  <*> portfolioOptionWith "Read only this portfolio of the file. Without it, every portfolio of the file."
+              )
+          <*> fileArgument "The file exportwallet wrote"
+    }
 
-importExportAccDetails :: String
-importExportAccDetails =
+importExportWalletDetails :: String
+importExportWalletDetails =
   [r|
-exportacc writes the accounts to a file, with their labels, in the format of
-BIP 329, which other wallets read and write. An account goes in as its public
-key M/44'/coin'/index', or M/84'/coin'/index' for a bip84 account, its name,
-its network, its kind and, when hw knows it, the fingerprint of its seed.
-Then come the labels of its receiving addresses and of its transactions, and
-the coins locked with lockcoin. The file holds no private key. Without
---account, every account goes in the file.
+exportwallet writes every portfolio of a wallet to a file, with its labels, in
+the format of BIP 329, which other wallets read and write. Each account goes
+in as its public key, with its path, its network, its type and, when hw knows
+it, the fingerprint of the mnemonic. Then come the labels of its receiving
+addresses and of its transactions, and the coins locked with lockcoin. The
+descriptions of the wallet and of its portfolios go in too. The file holds no
+private key. --portfolio writes one portfolio only.
 
-importacc reads such a file, from hw or from another wallet. An account the
-wallet does not have is added, named after the label of its key. The wallet
-can then watch it and prepare its payments without the mnemonic: this is how
-an online computer works with an offline signer. An account the wallet has
-learns the fingerprint of its seed, and takes the name a file of hw gives it.
-`show` FILE shows what importacc would make of a file, and changes nothing.
+importwallet reads such a file. It finds the wallet by the fingerprint the
+file gives, and each portfolio by its index. A wallet or a portfolio the
+database does not have is created. The database can then watch the portfolio
+and prepare its payments without the mnemonic: this is how an online computer
+works with an offline signer. --portfolio reads one portfolio only.
 
-importacc also reads the output descriptors other wallets hand an account
-over by: a descriptor on a line, such as pkh([bc560f95/44h/0h/0h]xpub.../<0;1>/*)
-for a bip44 account or wpkh([bc560f95/84h/0h/0h]xpub.../<0;1>/*) for a bip84
-one, a key alone, the file of Bitcoin Core's listdescriptors, or the generic
-JSON of a Coldcard. hw holds bip44
-and bip84 accounts, so a descriptor of another kind, such as sh(wpkh(...)),
-is refused, and the import goes on. A key alone says its kind when it is a
-zpub or a vpub, which some wallets write for a bip84 account; an xpub or a
-tpub alone is taken for a bip44 account, or for a bip84 one with --type
-bip84. A zpub with --type bip44 is refused, as the two contradict. An xpub
-alone says nothing of its path, so the answer notes that its kind was taken
-on trust, and what tells when it was wrong: a sync that finds none of its
-transactions. deleteacc, then import it again with the other --type. A
-descriptor names no network: give --network, or set a default
-network. An account a descriptor adds is named after its network, its index
-and its kind, as recover names one, since a descriptor carries no name:
-renameacc renames it. accounts --verbose shows the descriptor of each account
-of this wallet.
+A portfolio the database has is merged with the one of the file. importwallet
+never makes a second portfolio with the same index. It adds the accounts the
+portfolio lacks, and leaves the others as they are. This is how the partial
+portfolios of an upgraded database are filled in: run fillwallet and
+exportwallet on the computer that has the mnemonic, then importwallet here.
+When the two cannot be merged, importwallet refuses and changes nothing. That
+happens when an account of the file has another key than the same account of
+the database: the two are not of one mnemonic. It also refuses a key that
+another account of the database holds, whatever index the file writes it at,
+and two keys for accounts of one path: the test networks share the path
+m/44'/1'/0', so their bip44 accounts hold one key.
+
+importwallet cannot prove that the keys of a file are those of your mnemonic:
+only the mnemonic could. A file that names your fingerprint may still carry
+the keys of someone else, and the addresses receive would give out would be
+theirs. Import only a file you wrote with exportwallet on your own signer, or
+one that reached you over a channel you trust.
+
+An upgraded database knows no fingerprint, so importwallet recognizes its
+wallets by their keys, and gives them the fingerprint of the file. Wallets
+that turn out to be of one mnemonic are merged into one. The answer says so.
+
+importwallet imports whole wallets. A key alone, an xpub or an output
+descriptor from another wallet, is one account: it does not say which
+portfolio it belongs to. A file that holds such a key and no record is
+refused. An xpub record of another wallet, in a BIP 329 file, is left aside,
+and the answer says why.
+
+--portfolio reads the keys and the labels of one portfolio. The records of
+the other portfolios of the file are counted in the answer and not read. A
+wallet always has portfolio0, so a wallet created from another portfolio
+alone gets an empty portfolio0, which the answer shows: importwallet without
+--portfolio, or fillwallet, fills it in.
+
+exportwallet of a wallet whose fingerprint hw does not know, an upgraded one
+that was not filled in, writes keys without their origin, and says so.
+Another database cannot place them. Run fillwallet first.
 
 The labels and the locks of the file are set on the addresses, transactions
 and coins the wallet has. An address the wallet has not generated yet is
 derived from the path the file gives, up to a thousand past the last used
-address of its chain, and a transaction the file places in an account is
-labelled before `sync` fetches it. What hw cannot place is counted in the
-answer: run `sync`, then importacc again. The labels of inputs, of coins and
-of change addresses are left aside, since hw keeps none.
+address of its chain, and a transaction the origin of its record places in a
+portfolio is labelled before `sync` fetches it. A transaction record without
+an origin is labelled in the portfolios that have the transaction, on its
+network. What hw cannot place is counted in the
+answer: run `sync`, then importwallet again. The labels of inputs, of coins
+and of change addresses are left aside, since hw keeps none. A BIP 329 file
+of another wallet sets its labels the same way.
+
+`show` FILE shows what importwallet would make of a file, and changes
+nothing.
 
 The fingerprint is the four bytes that PSBTs and output descriptors write
-before a key of the seed. Each record of the file names its account by it, as
-in pkh([bc560f95/44'/0'/0']) or wpkh([bc560f95/84'/0'/0']). `accounts`
-groups the accounts of one seed by it.
+before a key of the mnemonic. Each record of the file names its account by
+it, as in pkh([bc560f95/44'/0'/0']) or wpkh([bc560f95/84'/0'/0']).
 |]
 
-{- exportacc -}
+{- portfolios -}
 
-exportAccCommand :: CommandSpec Command
-exportAccCommand =
+portfoliosCommand :: CommandSpec Command
+portfoliosCommand =
   CommandSpec
-    { name = "exportacc",
+    { name = "portfolios",
       offline = False,
-      summary = "Write the accounts and their labels to a file",
-      details = importExportAccDetails,
-      args =
-        CommandExportAcc
-          <$> everyAccountChoiceOption
-          <*> fileArgument "The file to write. It must not exist yet."
-    }
-
-{- renameacc -}
-
-renameAccCommand :: CommandSpec Command
-renameAccCommand =
-  CommandSpec
-    { name = "renameacc",
-      offline = False,
-      summary = "Rename an account",
+      summary = "Show the portfolios, their balances and descriptors",
       details =
         [r|
-A name is unique on its network. Accounts of several networks can share
-one, such as default, the name of the default account of each network.
-When accounts of that name are on several networks, --network tells which
-one to rename. The name default makes an account the default account of
-its network, which commands take without --account.
-|],
-      args =
-        CommandRenameAcc
-          <$> ( RenameAcc
-                  <$> accountArg "OLD" "The current name of the account"
-                  <*> textArg "NEW" "The new name"
-                  <*> networkOptionWith "The network of the account to rename. Needed only when accounts of that name are on several networks."
-              )
-    }
+Each portfolio starts with its name, portfolio0 and so on, its wallet, its
+description and the date it was created. Then comes a line for each network
+the portfolio has funds or addresses on: what it can spend there, what is
+unconfirmed, and how many coins and addresses it has. On btc, the figures add
+up the bip44 and the bip84 account. The portfolios of one wallet come
+together. A partial portfolio, which lacks accounts, says so: fillwallet
+fills it in.
 
--- | The name of an account, as an argument
-accountArg :: String -> String -> Args Text
-accountArg name desc =
-  argument str $
-    metavar name
-      <> completer (listIOCompleter accountNames)
-      <> help desc
+The spendable balance is what the portfolio can spend now on that network. It
+leaves out the coins locked by a pending transaction or by lockcoin, the
+coinbase coins with fewer than 100 confirmations, and the unconfirmed payments
+from other wallets. The unconfirmed coins of the wallet's own transactions
+count: its change, and what one of its portfolios pays another. preparetx can
+spend all of it, unless --min-conf asks for confirmations.
 
-{- accounts -}
-
-accountsCommand :: CommandSpec Command
-accountsCommand =
-  CommandSpec
-    { name = "accounts",
-      offline = False,
-      summary = "Show the accounts, their balances and descriptors",
-      details =
-        [r|
-Each account takes two lines. The first gives its name, its network and its
-derivation path, as deleteacc asks for them. The second gives what it can
-spend, what is unconfirmed, and how many coins it holds. The accounts of one
-seed come together.
-
-The spendable balance is what the account can spend now. It leaves out the
-coins locked by a pending transaction or by lockcoin, the coinbase coins with
-fewer than 100 confirmations, and the unconfirmed payments from other wallets.
-The unconfirmed coins of the wallet's own transactions count: its change, and
-what one of its accounts pays another. preparetx can spend all of it, unless
---min-conf asks for confirmations.
-
---verbose adds the fingerprint of the seed when known, how many receiving and
-change addresses the account has, when it was created, and the confirmed and
-unconfirmed balances the server gave at the last sync. It ends with the
-account as an output descriptor, the format of BIP 380 in which wallets take
-an account without its private key:
+--verbose lists every network of the portfolio, with the confirmed and
+unconfirmed balances the server gave at the last sync, and the fingerprint of
+the mnemonic when known. Under each network come its accounts, each with its
+path and its output descriptor, the format of BIP 380 in which wallets take an
+account without its private key:
 
   pkh([bc560f95/44h/0h/0h]xpub6CHK45s.../<0;1>/*)#vq597j87
   wpkh([bc560f95/84h/0h/0h]xpub6CQF8An.../<0;1>/*)#5nktextl
 
 The first is a bip44 account, the second a bip84 one. Paste it into a wallet
 that takes a descriptor, to watch the account there. The descriptor carries
-the public key of the account, the fingerprint of its seed and its derivation
-path, and the two chains of addresses, with a checksum. It holds no private
-key. When hw does not know the fingerprint of the seed, the descriptor names
-no origin, which a hardware wallet needs to match it. importacc reads a
-descriptor back.
+the public key of the account, the fingerprint of the mnemonic and the
+derivation path, and the two chains of addresses, with a checksum. It holds no
+private key. When hw does not know the fingerprint, as in a wallet that was
+upgraded and not filled in yet, the descriptor names no origin, which a
+hardware wallet needs to match it.
 
 A descriptor does not name its network. Bitcoin and Bitcoin Cash write the
 same keys, and every test network writes tpub keys.
 
-A bip84 account also shows its key in the form of SLIP-132, a zpub, or a vpub
-on a test network, in the row SLIP-132. Some wallets take only that form for a
-native SegWit account, and make a legacy wallet of an xpub. The key is the
-same, only its prefix differs. A bip44 account has no such row, since such
-wallets take its xpub as it is.
+Each account also shows its key in the form of SLIP-132, in the row SLIP-132:
+a zpub for a bip84 account, or a vpub on a test network. Some wallets take only
+that form for a native SegWit account, and make a legacy wallet of an xpub.
+The key is the same, only its prefix differs. A bip44 account shows its xpub
+there, or its tpub on a test network, since SLIP-132 gives the prefix of
+BIP32 to bip44 accounts.
 
 A descriptor is wider than most screens. On a terminal, the pager wraps the
 lines of --verbose rather than cut them at the edge of the screen, so that a
 descriptor can be copied whole.
 
-With --tabular, each account takes one row of a table, under a header that
-names the columns: its name, its network, its derivation path, what it can
-spend, what is unconfirmed, and how many coins it holds. The amounts are in the
-unit the header names. The first column is as wide as the longest name.
+With --tabular, each network of each portfolio takes one row of a table, under
+a header that names the columns: the wallet, the portfolio, the network, what
+it can spend, what is unconfirmed, how many coins and addresses it has, and
+the description of the portfolio, with the word partial for a partial one. The
+amounts are in the unit the header names.
 
-With --csv FILENAME, each account takes one row of a new CSV file, for a
-spreadsheet: its name, network and path, what it can spend, its confirmed and
-unconfirmed balances, its coins, how many receiving and change addresses it
-has, and when it was created. Amounts are in satoshis, and times in UTC. The
-file holds no key and no descriptor: anyone it reaches could see every
-address and every payment of the account with them.
+With --csv FILENAME, each network of each portfolio takes one row of a new CSV
+file, for a spreadsheet: the wallet, the portfolio and its description, the
+network, what it can spend, its confirmed and unconfirmed balances, its coins
+and addresses, and when the portfolio was created. Amounts are in satoshis,
+and times in UTC. The file holds no key and no descriptor: anyone it reaches
+could see every address and every payment of the portfolio with them.
 |],
       args =
-        CommandAccounts
-          <$> everyAccountChoiceOption
+        CommandPortfolios
+          <$> everyPortfolioChoiceOption
           <*> listingOutputOption
-            "Show every detail of each account: the fingerprint of its seed, its addresses, when it was created, each of its balances, and its output descriptor."
-            "Show each account on one row of a table: its name, network and path, what it can spend, what is unconfirmed, and its coins."
-            "accounts"
+            "Show every detail of each portfolio: the fingerprint of its mnemonic, every network with each of its balances, and the path, output descriptor and SLIP-132 key of every account."
+            "Show each network of each portfolio on one row of a table: the wallet, the portfolio, the network, what it can spend, what is unconfirmed, its coins and its addresses."
+            "portfolios"
+    }
+
+{- setdescription -}
+
+setDescriptionCommand :: CommandSpec Command
+setDescriptionCommand =
+  CommandSpec
+    { name = "setdescription",
+      offline = False,
+      summary = "Describe a portfolio or a wallet",
+      details =
+        [r|
+Wallets and portfolios have fixed names, wallet0 and portfolio0, which follow
+their indexes and cannot be changed. A description says what one is for, in
+your own words. `portfolios` shows it.
+
+setdescription sets the description of a portfolio, in place of the one it
+had: the one --wallet and --portfolio name, or the default one. With
+--of-wallet, it sets the description of the wallet instead. An empty
+DESCRIPTION, "", removes it.
+
+A database upgraded from version 0.9 has the names of its accounts as the
+descriptions of their portfolios.
+|],
+      args =
+        CommandSetDescription
+          <$> ( SetDescription
+                  <$> textArg "DESCRIPTION" "The new description, or \"\" to remove it. Quote it if it has spaces."
+                  <*> portfolioChoiceOption
+                  <*> switch (long "of-wallet" <> help "Describe the wallet, not one of its portfolios")
+              )
+    }
+
+{- setdefault -}
+
+setDefaultCommand :: CommandSpec Command
+setDefaultCommand =
+  CommandSpec
+    { name = "setdefault",
+      offline = False,
+      summary = "Set where the commands work when no option says",
+      details =
+        [r|
+setdefault writes the defaults of --wallet, --portfolio, --network and --type
+to the configuration file, ~/.hw/config.json, so that you do not have to edit
+it. Give the options to set, each with its new default:
+
+  hw setdefault --wallet 1          work in wallet1 from now on
+  hw setdefault --type bip84        give out native SegWit addresses
+  hw setdefault --network bch       work on Bitcoin Cash
+
+The keys are default-wallet, default-portfolio, default-network and
+default-type. The other keys of the file stay as they are. A wallet or a
+portfolio must exist to become the default: --portfolio is looked for in the
+wallet of --wallet, or in the default wallet.
+|],
+      args =
+        CommandSetDefault
+          <$> ( SetDefault
+                  <$> walletOptionWith "The new default wallet."
+                  <*> portfolioOptionWith "The new default portfolio."
+                  <*> networkOptionWith "It becomes the default network."
+                  <*> typeOptionWith "It becomes the default type."
+              )
+    }
+
+{- deleteportfolio -}
+
+deletePortfolioCommand :: CommandSpec Command
+deletePortfolioCommand =
+  CommandSpec
+    { name = "deleteportfolio",
+      offline = False,
+      summary = "Delete a portfolio that was never used",
+      details =
+        [r|
+deleteportfolio deletes the portfolio --portfolio names, which must be given.
+It deletes a portfolio only when all of these are true:
+
+  it is not portfolio0
+  it has the highest index in its wallet
+  it has never had any activity, and gave out no address
+
+Otherwise it refuses, and says which rule stopped it. A wallet always keeps
+portfolio0: deleting it would be pointless, since a new portfolio0 would be
+the same portfolio, with the same keys. The highest index goes first, so that
+the portfolios of a wallet keep no gap behind them. A portfolio that was paid
+is kept: `recover` would only find it again.
+
+Activity is a coin, a transaction, or a pending transaction. An address
+counts too, paid or not. A new portfolio has none: hw generates an address
+only when receive gives it out, when a payment takes one for its change, or
+when a file or a sync names it. Someone may pay such an address later, and
+the portfolio deleted would not see the payment.
+
+When the default portfolio is the one deleted, hw sets default-portfolio back
+to 0 in the configuration file, and says so.
+
+To stop using a mnemonic, delete its whole wallet with deletewallet.
+|],
+      args =
+        CommandDeletePortfolio
+          <$> ( PortfolioChoice
+                  <$> walletOptionWith "The wallet of the portfolio. Without it, the default wallet."
+                  <*> requiredPortfolioOption "The portfolio to delete. It must be given."
+              )
+    }
+
+{- deletewallet -}
+
+deleteWalletCommand :: CommandSpec Command
+deleteWalletCommand =
+  CommandSpec
+    { name = "deletewallet",
+      offline = False,
+      summary = "Delete a wallet with all of its portfolios",
+      details =
+        [r|
+deletewallet removes a wallet from the database, with all of its portfolios
+and their addresses, labels, transactions, coins and pending transactions. It
+is for a mnemonic you no longer use. Unlike deleteportfolio, it deletes a
+wallet that has had activity.
+
+--wallet names the wallet and must be given. The FINGERPRINT must be that of
+the wallet, as `portfolios` --verbose shows it. It confirms which wallet to
+delete. For a wallet whose fingerprint hw does not know, an upgraded one that
+was not filled in, type the word unknown.
+
+The funds stay on the chain, and the mnemonic can still spend them. The labels
+are lost: exportwallet writes them to a file first.
+
+The other wallets keep their names. When wallet0 is deleted, wallet1 is still
+wallet1, and the next new wallet becomes wallet0 again.
+
+When the default wallet is the one deleted, hw asks which of the wallets left
+becomes the default. When one wallet is left, it becomes the default. Either
+way, hw writes the new default to default-wallet in the configuration file,
+and says so. A new wallet0 made later then does not become the default by
+itself. When the new default wallet does not have the default portfolio, hw
+sets default-portfolio back to 0 too, and says so.
+|],
+      args =
+        (\fingerprint wallet -> CommandDeleteWallet wallet fingerprint)
+          <$> textArg "FINGERPRINT" "The fingerprint of the wallet, 8 hexadecimal digits, as `portfolios` --verbose shows it, or the word unknown for a wallet that has none"
+          <*> requiredWalletOption "The wallet to delete. It must be given."
     }
 
 {- receive -}
@@ -1300,9 +1521,16 @@ receiveCommand =
       summary = "Get a new address to receive a payment",
       details =
         [r|
-Each call gives the next receiving address of the account, at the path
-M/44'/coin'/index'/0/i. The wallet pays the change of its transactions to other
-addresses, at M/44'/coin'/index'/1/i. `addresses` --change lists them.
+Each call gives the next receiving address of an account of the portfolio:
+the one --network and --type pick, a bip44 address on btc without them. It is
+at the path M/44'/coin'/index'/0/i, or M/84'/coin'/index'/0/i for bip84, where
+index is that of the portfolio. The wallet pays the change of its transactions
+to other addresses, at .../1/i. `addresses` --change lists them.
+
+You never create an account. A portfolio has one for every network and type
+already. A partial portfolio, made when a database of version 0.9 was
+upgraded, may lack the one asked for: `receive` then refuses, and says how to
+fill the portfolio in.
 
 `receive` gives out at most 20 unused addresses in a row, or as many as the gap
 of the configuration file says. A wallet restored from the mnemonic stops
@@ -1315,7 +1543,7 @@ scan. The code holds a payment URI with the address and nothing else, so it does
 not hold the label. Piped into another program, or with --json, `receive` gives
 the text alone.
 |],
-      args = CommandReceive <$> (Receive <$> accountChoiceOption <*> labelOption)
+      args = CommandReceive <$> (Receive <$> accountTargetOption <*> labelOption)
     }
 
 labelOption :: Args (Maybe Text)
@@ -1333,11 +1561,11 @@ showCommand =
   CommandSpec
     { name = "show",
       offline = False,
-      summary = "Show an address, a transaction or a coin, or a file of a transaction or of accounts",
+      summary = "Show an address, a transaction or a coin, or a file of a transaction or of a wallet",
       details =
         [r|
 `show` shows one address, transaction or coin of the wallet, or a file of a
-transaction or of accounts, and changes nothing. The word given tells what it
+transaction or of a wallet, and changes nothing. The word given tells what it
 is:
 
   /0/i or /1/i   the receiving address i, or the change address i
@@ -1349,7 +1577,8 @@ is:
 A hash goes in full or by its short id, its first 8 digits. A file whose name
 looks like one of the others goes with its directory, such as ./a1075db5. With
 no word, `show` shows the newest receiving address of the account, the first
-one `addresses` lists. It hands out no new address.
+one `addresses` lists. It hands out no new address. The account is the one
+--network and --type pick in the portfolio, as for `receive`.
 
 An address the wallet holds is shown as `receive` shows a new one: its path,
 its label and what it received, and on a terminal its QR code under them. Use
@@ -1362,8 +1591,8 @@ nothing of the server, so it runs on an offline computer as well as online.
 Use it on the offline computer to check an address the online computer gave
 out. An online computer that was tampered with can show an address of its own
 in place of one of the account, and the payer would pay the attacker. The
-offline computer holds the same account, since createacc made it there, and
-derives the same addresses. Run `receive` online, then `show` on the offline
+offline computer holds the same portfolio, since newportfolio made it there,
+and derives the same addresses. Run `receive` online, then `show` on the offline
 computer with the path `receive` showed, and compare the two addresses.
 
 The address at a path the wallet holds is shown as any address of the wallet.
@@ -1376,21 +1605,22 @@ out, and it may lie past the gap that a restored wallet looks at. Look at the
 path too. A tampered online computer picks the path it shows, and a path far
 past the addresses you gave out is a sign of that.
 
-A transaction is shown in full, as each account that holds it sees it: a
-payment between two accounts of the wallet once for each. A coin is shown with
-every detail, as `coins` --verbose shows it.
+A transaction is shown in full, as each portfolio that holds it sees it: a
+payment between two portfolios once for each. A coin is shown with every
+detail, as `coins` --verbose shows it.
 
-A transaction file is shown as its account sees it, with the name of that
-account. The wallet keeps nothing of it. The file comes from preparetx
+A transaction file is shown as its portfolio sees it, with the name of that
+portfolio. A transaction between two portfolios is shown as the one that pays
+sees it, or with --portfolio as the one it pays sees it, incoming. The wallet
+keeps nothing of it. The file comes from preparetx
 --output, exporttx, signtx or preparesweep: a PSBT (BIP 174). Use it to check
 a transaction before you sign it, or before you send it. A transaction that
-involves no account, such as a sweep to addresses outside the wallet, is shown
-on the network its file names.
+involves no portfolio, such as a sweep to addresses outside the wallet, is
+shown on the network its file names.
 
 A file of another wallet is shown the same way: a PSBT in bytes, or in base64
 text, of version 0 or of version 2, that of BIP 370. Such a file names no
-network. The account it involves tells it. One that involves no account needs
---network, or the default-network of the configuration file.
+network. It is read on --network, or on the default network.
 
 The labels shown for a file, the transaction's, those of its addresses and
 those of the coins it spends, are the ones the file carries, as the wallet that
@@ -1398,36 +1628,37 @@ wrote it had them. They are not those of this wallet, which an offline computer
 does not have.
 
 A file that is neither a PSBT nor the hexadecimal of a transaction is read as
-a file of accounts, the file exportacc writes and importacc reads: BIP 329
-labels or output descriptors, from hw or from another wallet. `show` shows what
-importacc would make of it. Each account comes as
-`accounts` lists it, with whether the wallet holds it, or why importacc would
-refuse it. Under it come the labels of its addresses and transactions, and the
-coins it locks or unlocks. A record goes under the account its origin names. In
-a file of one account, a record without an origin goes under that account too.
-The labels of no account of the file come last, then what hw keeps no label
-for. An account the file names no network for is taken on --network, or the
-default-network of the configuration file, and a key that says no kind is
-taken for a bip44 account, as importacc takes them.
+a file of a wallet, the file exportwallet writes and importwallet reads: BIP
+329 records. `show` shows what importwallet would make of it. Each wallet of
+the file comes with its portfolios: created, or merged with the one the
+database has, and how many accounts would be added. Then each account comes
+with the labels of its addresses and transactions, and the coins it locks or
+unlocks. A record goes under the account its origin and its network name. The
+labels of no account of the file come last, then what hw keeps no label for.
+A file that importwallet would refuse is refused here too, with the reason.
 
---account names the account of a path and of the newest address. Without it,
-they are of the only account of the wallet, or else of the account named
-default on the network, or else of the only account on the network.
-With a transaction or a transaction file, --account keeps the view of that
-account. An address, a coin and a file of accounts tell their accounts, so
-`show` refuses --account with them.
-
---network goes with a path, with nothing to show, and with a file. With a path
-or nothing, it names the network of the account. With a file, it is the
-network of a file that names none. An address, a transaction and a coin are of
-an account, on the network of the account, so `show` refuses --network with
-them.
+--wallet and --portfolio name the portfolio of a path and of the newest
+address, and --network and --type its account. With a transaction or a
+transaction file, they keep the views of the portfolios they name: --wallet
+alone those of every portfolio of that wallet, and --portfolio that of one
+portfolio. With a file of a wallet, they narrow what is shown as they narrow what
+importwallet reads, and --network is refused: each record of such a file
+names its network. An address and a coin tell where they are, so `show`
+refuses --wallet, --portfolio and --type with them. --network then only tells
+apart an address or a coin the wallet has on several networks, since the test
+networks share their keys.
 |],
       args =
-        (\shown account network -> CommandShow account shown network)
+        (\shown target -> CommandShow target shown)
           <$> optional shownArg
-          <*> showAccountOption
-          <*> showNetworkOption
+          <*> ( Target
+                  <$> ( PortfolioChoice
+                          <$> walletOptionWith "The wallet of the path or of the newest address. Without it, the default wallet. With a transaction or a file, show only how the portfolios of this wallet see it."
+                          <*> portfolioOptionWith "The portfolio of the path or of the newest address. Without it, the default portfolio. With a transaction or a file, show only how this portfolio sees it, in the default wallet without --wallet."
+                      )
+                  <*> networkOptionWith "With a path or with nothing to show, the network of the account. With a file, the network of a file that names none. With an address or a coin, the network to find it on, when the wallet has it on several. Without it, the default-network of the configuration file, or btc."
+                  <*> typeOptionWith "With a path or with nothing to show, the type of the account. Without it, the default-type of the configuration file, or bip44."
+              )
     }
 
 -- | What show shows, read by its shape ('readShown'), with what the shell
@@ -1437,7 +1668,7 @@ shownArg =
   argument (eitherReader readShown) $
     metavar "PATH|ADDRESS|HASH|TXID:INDEX|FILENAME"
       <> completer (mkCompleter shownCompletion)
-      <> help "What to show: a path such as /0/3, an address of the wallet, a transaction by its txid or nosigHash, a coin, or a file of a transaction or of accounts. A hash goes in full or by its short id, the first 8 digits. Without it, the newest receiving address."
+      <> help "What to show: a path such as /0/3, an address of the wallet, a transaction by its txid or nosigHash, a coin, or a file of a transaction or of a wallet. A hash goes in full or by its short id, the first 8 digits. Without it, the newest receiving address."
 
 -- | What the shell offers for show. It offers the addresses, transactions
 -- and coins of the wallet ('shownTargets'), and the files and directories,
@@ -1454,20 +1685,6 @@ shownCompletion typed = do
   where
     readAsFile name = readShown name == Right (ShownFile name)
 
--- | The --account of show, which goes with some of what it shows only
-showAccountOption :: Args (Maybe Text)
-showAccountOption =
-  accountOptionWith "The account of the path or of the newest address. Without it, the only account of the wallet, or else the account named default on the network, or else the only account on the network. With a transaction or a transaction file, the account whose view to show."
-
--- | The --network of show, which goes with a path, with nothing to show,
--- and with a file. With a path or nothing, it names the network of the
--- account to show it of, as for receive. With a file, it is the network of a file
--- of another wallet, which may name none. An address, a transaction and a
--- coin are of an account, on the network of the account.
-showNetworkOption :: Args (Maybe Network)
-showNetworkOption =
-  networkOptionWith "With a path or with nothing to show, the network of the account to use: the account named default on it, or its only account, when no --account is given. With a file, the network of a transaction file that names none and involves no account of this wallet, or of an account that a file of accounts names no network for. Without it, the default-network of the configuration file, and btc for a default account."
-
 {- addresses -}
 
 addressesCommand :: CommandSpec Command
@@ -1475,13 +1692,18 @@ addressesCommand =
   CommandSpec
     { name = "addresses",
       offline = False,
-      summary = "List the receiving addresses of an account, or its change addresses",
+      summary = "List the receiving addresses of a portfolio, or its change addresses",
       details =
         [r|
-The newest addresses come first. Each takes two lines. The first gives its
+`addresses` lists every receiving address of the portfolio, grouped by network
+and by type: the bip44 addresses on btc, then the bip84 ones, then those on
+bch, and so on. A group the portfolio has no address in is left out. --network
+and --type show one network or one type only.
+
+In each group, the newest addresses come first. Each takes two lines. The first gives its
 derivation path, /0/i for a receiving address and /1/i for a change address,
 the address and its label. The second gives what it can spend now, as
-`accounts` describes, and what it received in how many transactions. An
+`portfolios` describes, and what it received in how many transactions. An
 address no transaction has paid yet is unused.
 
 --verbose adds the confirmed and unconfirmed balances of the address, how many
@@ -1494,13 +1716,17 @@ header names. An address no transaction has paid leaves its amounts empty.
 Change addresses have no label, so their table has no column for one.
 
 With --csv FILENAME, each address takes one row of a new CSV file, for a
-spreadsheet: its path, the address and its label, what it can spend, its
-confirmed and unconfirmed balances, what it received, its coins and its
-transactions, and when it was created. Amounts are in satoshis, and times in UTC.
+spreadsheet: its network and its type, its path, the address and its label,
+what it can spend, its confirmed and unconfirmed balances, what it received,
+its coins and its transactions, and when it was created. Amounts are in
+satoshis, and times in UTC.
+
+--after names an address of the listing. The listing goes on after it, in its
+group, then with the groups that follow.
 |],
       args =
         CommandAddresses
-          <$> accountChoiceOption
+          <$> listingTargetOption
           <*> changeAddressesOption
           <*> listingOutputOption
             "Show every detail of each address: its transactions, what it received, its balances, its coins, and when it was created."
@@ -1549,15 +1775,20 @@ balancesCommand =
   CommandSpec
     { name = "balances",
       offline = False,
-      summary = "List the addresses of an account that hold coins",
+      summary = "List the addresses of a portfolio that hold coins",
       details =
         [r|
-`balances` lists the receiving and change addresses that hold coins, the
-largest total first. Each takes two lines. The first gives its derivation
+`balances` lists the receiving and change addresses that hold coins, grouped
+by network, with the total of each network after its addresses. The totals
+repeat those of `portfolios`, on purpose: the same figures, beside the
+addresses they add up. On btc, the bip44 and the bip84 addresses are listed
+together. --network and --type show one network or one type only.
+
+On each network, the largest total comes first. Each takes two lines. The first gives its derivation
 path, /0/i for a receiving address and /1/i for a change address, the address
 and its label, or that it is a change address. The second gives three amounts.
 The total is the value of all
-its coins. The spendable amount is what it can spend now, as `accounts`
+its coins. The spendable amount is what it can spend now, as `portfolios`
 describes. The unspendable amount is the rest. It counts the coins locked by a
 pending transaction or by lockcoin, the unconfirmed payments from other
 wallets, and the coinbase coins with fewer than 100 confirmations. `coins`
@@ -1573,12 +1804,13 @@ names the columns: the path, the address, the three amounts, and the label, or
 that it is a change address. The amounts are in the unit the header names.
 
 With --csv FILENAME, each address takes one row of a new CSV file, for a
-spreadsheet: its path, the address and its label, its total, what it can spend,
-the three parts it cannot, and its coins. Amounts are in satoshis.
+spreadsheet: its network and its type, its path, the address and its label,
+its total, what it can spend, the three parts it cannot, and its coins.
+Amounts are in satoshis.
 |],
       args =
         CommandBalances
-          <$> accountChoiceOption
+          <$> listingTargetOption
           <*> listingOutputOption
             "Show every detail of each address: its total and its coins, its spendable amount, and what pending transactions lock, what you lock, and what is not spendable yet."
             "Show each address on one row of a table: its path, the address, its total, spendable and unspendable amounts, and its label."
@@ -1610,15 +1842,19 @@ shows, its nosigHash or its txid once signed. Its label goes with it to the
 files of exporttx and --output, and stays once the network has it. bumpfee
 gives a replacement the labels of the transactions it replaces. A transaction
 on the network is named by its txid, as txs shows it. It gets the label in
-every account that has it, such as both ends of a payment between two
-accounts. Either hash goes in full or by its short id, its first 8 digits.
+every portfolio that has it, such as both ends of a payment between two
+portfolios. Either hash goes in full or by its short id, its first 8 digits.
+
+An address tells where it is. The test networks share their keys, so the
+wallet may have the same address on several of them: --network then says
+which one to label.
 |],
       args =
         CommandLabel
-          <$> (Label <$> labelledArg <*> textArg "LABEL" "The new label, or \"\" to remove it")
+          <$> (Label <$> labelledArg <*> textArg "LABEL" "The new label, or \"\" to remove it" <*> heldNetworkOption "address")
     }
 
--- | The address or the transaction to label, which also tells its account
+-- | The address or the transaction to label, which also tells where it is
 labelledArg :: Args Labelled
 labelledArg =
   argument (readLabelled <$> str) $
@@ -1633,11 +1869,16 @@ txsCommand =
   CommandSpec
     { name = "txs",
       offline = False,
-      summary = "List the transactions of an account",
+      summary = "List the transactions of a portfolio",
       details =
         [r|
-The list is as of the last sync. Unconfirmed transactions come first, then
-the newest. The transactions you prepared, and those you sent that `sync` has
+`txs` lists the transactions of the portfolio, grouped by network. --network
+shows one network only. A transaction is shown as the portfolio sees it,
+whichever of its accounts it touches: one that spends bip44 and bip84 coins
+together is one transaction.
+
+The list is as of the last sync. On each network, unconfirmed transactions
+come first, then the newest. The transactions you prepared, and those you sent that `sync` has
 not seen yet, are in pendingtxs. `show` TXID shows one transaction in full.
 
 Each transaction takes two lines. The first starts with its short id, the first
@@ -1649,18 +1890,23 @@ the full count. An unconfirmed transaction shows its fee rate too, which tells
 how soon a block may take it. A dead one was replaced, or dropped from the
 network.
 
-The second line gives the balance of the account after the transaction. The
-newest one shows what the account holds, confirmed or not. A dead transaction
-shows no balance, and does not count. Then comes what the transaction is for. A
-payment received gives the path of the address it was paid at, such as /0/3,
-then the label of the payment, or else the label of the address. A payment
+The second line gives the balance of the portfolio on the network after the
+transaction. The newest one shows what the portfolio holds there, confirmed or
+not. A dead transaction shows no balance, and does not count. Then comes what
+the transaction is for. A payment received gives the address it was paid at by
+its type and its path, such as bip84/0/3, then the label of the payment, or
+else the label of the address. A payment
 gives its label, or else the address it pays, the largest when there are
 several. Nothing in it is cut, a long label or address included. On a
 terminal, the addresses of the wallet and their labels are blue.
 
-With --verbose, each transaction starts with its time, then its type: Outgoing,
-Incoming, or Internal for a transaction between addresses of the account. The
-txid is in full, then its short id. Every address is in full, and an address of
+With --verbose, each transaction starts with its time, then its type:
+Incoming when funds enter the portfolio, Outgoing when they leave it, or
+Internal when they move between its addresses, from a bip44 address to a bip84
+one for instance. A payment to another portfolio of the wallet is Outgoing
+here and Incoming there. Then come the network and the types of the
+portfolio's addresses the transaction involves. The txid is in full, then its
+short id. Every address is in full, and an address of
 the wallet has its path after it. Its label is on the line below, with the labels of the coins it
 spends, after the word from. Long labels wrap under the address.
 
@@ -1672,7 +1918,8 @@ dead one says dead. The last column, Description, says what the transaction is
 for, in the words of the compact view.
 
 With --csv FILENAME, each transaction takes one row of a new CSV file, for a
-spreadsheet: its time, type, amount, fee and fee rate, the balance after it,
+spreadsheet: its network, the types of address it involves, its time, type,
+amount, fee and fee rate, the balance after it,
 its status, confirmations and block, its txid in full and by its short id, and
 its label. Then come the address
 it pays the most, its path and label when it is one of the wallet, and how many
@@ -1680,7 +1927,8 @@ other addresses it pays. Amounts are in satoshis, and times in UTC.
 |],
       args =
         CommandTxs
-          <$> accountChoiceOption
+          <$> portfolioChoiceOption
+          <*> networkOptionWith "Only the transactions on this network. Without it, those on every network of the portfolio."
           <*> listingOutputOption
             txVerboseHelp
             "Show each transaction on one row of a table: its short id, time, type, amount, balance and confirmations, then what it is for: its label, the path of an address of the wallet, or the address paid."
@@ -1695,8 +1943,8 @@ other addresses it pays. Amounts are in satoshis, and times in UTC.
 -- the screen. Every listing offers them. Without any of them, the listing
 -- takes the view of the configuration, compact unless the key listing-view
 -- names another. --compact exists for a user whose configuration names
--- another view: it brings the compact view back for one listing, as
--- --new-change does for change-back. The help of --verbose comes first,
+-- another view: it brings the compact view back for one listing. The
+-- help of --verbose comes first,
 -- then that of --tabular, then the name of what the listing lists, for
 -- those of --compact and --csv.
 listingOutputOption :: String -> String -> String -> Args ListingOutput
@@ -1740,24 +1988,37 @@ On Bitcoin, the transaction is marked replaceable (BIP 125). Until it
 confirms, bumpfee can replace it with one that pays a higher fee. Bitcoin Cash
 does not replace transactions.
 
+preparetx chooses among every coin of the portfolio on the --network, so one
+transaction can spend bip44 and bip84 coins together. A SegWit coin costs
+less to spend, and the selection counts each coin at its own cost.
+
 Coin control: --coin and --spend-from choose the coins to spend. preparetx then
 spends every one of them that can be spent, and no other, whatever --strategy
 says. With --select, it spends only what the payment needs among them: the
 strategy selects among the chosen coins as it selects among all the coins of
-the account without coin control, and a chosen coin worth less than its fee
-stays. The chosen coins that cannot be spent, because they are locked or not
+the portfolio without coin control, and a chosen coin worth less than its fee
+stays. --coin-type takes the coins of one type only, bip44 or bip84, alone or
+with the other options: the strategy then selects among the coins of that
+type, and a coin of the other type chosen with --coin or --spend-from is
+refused. The chosen coins that cannot be spent, because they are locked or not
 confirmed enough, are listed with the reason, with or without --select. The
 list tells such a coin from one that --select left because the payment did
 not need it. When none can be spent, nothing is prepared.
 
-Change: the change goes to a new change address, unless --change-back sends it
-back to an address the payment spends from. Some banks accept payments only
-from addresses they have checked, and --change-back keeps the funds at such an
-address. When the coins come from several addresses, preparetx lists them and
-asks which one gets the change. With a single --spend-from address, the change
-goes back to it without a question. Setting change-back to true in the
-configuration file makes --change-back the default. --new-change then sends the
-change of one payment to a new change address.
+Change: the change goes to a new change address of the portfolio. Its type is
+the first of these that applies. The type --change-type asks for. Else the
+type of the coins the payment spends, when they are all of one type, so that a
+payment stays within one type of address. Else, for coins of both types, the
+default-type of the configuration file, or bip44. On Bitcoin Cash every coin
+is bip44, so the change is too, and --change-type bip84 is refused.
+
+--change-back ADDRESS sends the change to that address instead. It must be an
+address of the portfolio on the network of the payment, a receiving or a
+change address of either type. It may have been used already, or be the
+change of another pending transaction: you chose it. hw refuses any other
+address: change sent elsewhere would be a payment. Some banks accept payments
+only from addresses they have checked, and --change-back keeps the funds at
+such an address.
 
 No output is smaller than what nodes relay for its kind: 546 satoshis for a
 legacy P2PKH output, 294 for a native SegWit P2WPKH one. A smaller payment is
@@ -1778,7 +2039,8 @@ preparetx asks before it takes one. --yes answers both questions, for scripts.
         CommandPrepareTx
           <$> ( PrepareTx
                   <$> some paymentArg
-                  <*> payingAccountOption
+                  <*> payingPortfolioOption
+                  <*> paymentNetworkOption
                   <*> underFee feeOption
                   <*> underFee rcptPayOption
                   <*> underCoins minConfOption
@@ -1788,8 +2050,10 @@ preparetx asks before it takes one. --yes answers both questions, for scripts.
                   <*> underCoins (many coinOption)
                   <*> underCoins (many spendFromOption)
                   <*> underCoins selectOption
+                  <*> underCoins coinTypeOption
                   <*> underFee prepareYesOption
-                  <*> optionGroup "Change" changeBackOption
+                  <*> underChange changeBackOption
+                  <*> underChange changeTypeOption
               )
     }
 
@@ -1803,17 +2067,54 @@ underFee = optionGroup "Fee"
 underCoins :: Args a -> Args a
 underCoins = optionGroup "Coins"
 
--- | The account a payment spends from, which coin control can tell
-payingAccountOption :: Args AccountChoice
-payingAccountOption =
-  accountChoiceWith "The account to pay from. Without it, the account of the --coin or --spend-from given, or else the only account of the wallet, or else the account named default on the network, or else the only account on the network."
+-- | The options that say where the change of a payment goes, under their
+-- subheading of the help
+underChange :: Args a -> Args a
+underChange = optionGroup "Change"
 
--- | Where the change of preparetx goes, when the command says
-changeBackOption :: Args (Maybe Bool)
+-- | The portfolio a payment spends from. The coins of --coin and the
+-- addresses of --spend-from tell their portfolio, and the options then
+-- only narrow them down, as for the commands that find their portfolio
+-- by themselves.
+payingPortfolioOption :: Args PortfolioChoice
+payingPortfolioOption =
+  PortfolioChoice
+    <$> walletOptionWith "The wallet to pay from. Without it, the default-wallet of the configuration file, or wallet0. With --coin or --spend-from, the coins and addresses chosen tell their wallet, and this only narrows them down."
+    <*> portfolioOptionWith "The portfolio to pay from. Without it, the default-portfolio of the configuration file, or portfolio0. With --coin or --spend-from, the coins and addresses chosen tell their portfolio, and this only narrows them down."
+
+-- | The network of a payment, which the coins chosen tell when they are
+-- given
+paymentNetworkOption :: Args (Maybe Network)
+paymentNetworkOption =
+  networkOptionWith "The payment spends the coins of the portfolio on this network. Without it, the default-network of the configuration file, or btc. With --coin or --spend-from, the coins and addresses chosen tell their network, and this only narrows them down: the test networks share their keys."
+
+-- | Coin control: the one type of coins a payment may spend
+coinTypeOption :: Args (Maybe AccountKind)
+coinTypeOption =
+  optional . option (eitherReader (readKind . cs)) $
+    long "coin-type"
+      <> metavar "TYPE"
+      <> completeWith (cs <$> kindNames)
+      <> help "Coin control: spend coins of this type only, bip44 or bip84. Without it, coins of both types."
+
+-- | The address of the portfolio the change of preparetx goes to, in
+-- place of a new change address
+changeBackOption :: Args (Maybe Text)
 changeBackOption =
-  optional $
-    flag' True (long "change-back" <> help "Send the change back to an address the payment spends from")
-      <|> flag' False (long "new-change" <> help "Send the change to a new change address, even when the configuration file sets change-back")
+  optional . strOption $
+    long "change-back"
+      <> metavar "ADDRESS"
+      <> completer (mkCompleter walletAddresses)
+      <> help "Send the change to this address instead of a new change address. It must be an address of the portfolio, on the network of the payment. It may have been used, or be the change of another pending transaction."
+
+-- | The type of the new change address of preparetx, when the command says
+changeTypeOption :: Args (Maybe AccountKind)
+changeTypeOption =
+  optional . option (eitherReader (readKind . cs)) $
+    long "change-type"
+      <> metavar "TYPE"
+      <> completeWith (cs <$> kindNames)
+      <> help "The type of the new change address, bip44 or bip84. Without it, the type of the coins spent when they are all of one type, or else the default-type of the configuration file, or bip44."
 
 -- | A recipient of preparetx, ADDRESS:AMOUNT
 paymentArg :: Args Text
@@ -1837,11 +2138,12 @@ prepareSendAllCommand =
   CommandSpec
     { name = "preparesendall",
       offline = False,
-      summary = "Prepare a payment of all the coins of an account",
+      summary = "Prepare a payment of all the coins of a portfolio",
       details =
         [r|
-preparesendall prepares a transaction that sends every coin the account can
-spend now, with no change. That is the spendable balance `accounts` shows. Like
+preparesendall prepares a transaction that sends every coin the portfolio can
+spend now on the --network, of both types of address, with no change. That is
+the spendable balance `portfolios` shows for that network. Like
 preparetx, it needs no mnemonic. The transaction waits among the pending
 transactions for signtx.
 
@@ -1854,14 +2156,17 @@ A coin worth no more than the fee to spend it is a dust coin. Spending it
 lowers what the recipients get. Whether a coin is dust depends on the fee
 rate. preparesendall lists the dust coins, tells what spending or leaving them
 means, and asks whether to spend them. Any answer but yes leaves them in the
-account. --spend-dust or --leave-dust answers in advance, for scripts.
+portfolio. --spend-dust or --leave-dust answers in advance, for scripts.
 
 --coin and --spend-from send only the coins chosen, every one that can be
 spent, dust included. --spend-dust and --leave-dust do not apply then.
+--coin-type sends the coins of one type only. To move every legacy coin of a
+portfolio to a native SegWit address of it, send --coin-type bip44 to an
+address `receive` --type bip84 gave.
 
-The answer lists every coin the transaction leaves in the account, with the
+The answer lists every coin the transaction leaves in the portfolio, with the
 reason: dust, locked by you or by a pending transaction, not spendable yet, or
-not chosen with --coin or --spend-from.
+not chosen with --coin, --spend-from or --coin-type.
 
 The transaction gets a lock time as preparetx gives one. When the best block
 the wallet knows was mined more than eight hours ago, preparesendall asks
@@ -1876,13 +2181,15 @@ scripts.
         CommandPrepareSendAll
           <$> ( PrepareSendAll
                   <$> some sendAllRecipientArg
-                  <*> payingAccountOption
+                  <*> payingPortfolioOption
+                  <*> paymentNetworkOption
                   <*> underFee feeOption
                   <*> underCoins minConfOption
                   <*> outputFileMaybeOption
                   <*> txLabelOption
                   <*> underCoins (many coinOption)
                   <*> underCoins (many spendFromOption)
+                  <*> underCoins coinTypeOption
                   <*> underCoins dustCoinsOption
                   <*> underFee prepareYesOption
               )
@@ -1904,16 +2211,16 @@ dustCoinsOption :: Args (Maybe DustCoins)
 dustCoinsOption =
   optional $
     flag' SpendDust (long "spend-dust" <> help "Spend the coins worth less than their fee too, without asking")
-      <|> flag' LeaveDust (long "leave-dust" <> help "Leave the coins worth less than their fee in the account, without asking")
+      <|> flag' LeaveDust (long "leave-dust" <> help "Leave the coins worth less than their fee in the portfolio, without asking")
 
--- | An address of the account whose coins to spend
+-- | An address of the portfolio whose coins to spend
 spendFromOption :: Args Text
 spendFromOption =
   strOption $
     long "spend-from"
       <> metavar "ADDRESS"
       <> completer (mkCompleter addressesToSpendFrom)
-      <> help "Coin control: spend the coins at this address of the account. Repeat for several addresses."
+      <> help "Coin control: spend the coins at this address of the portfolio. Repeat for several addresses."
 
 -- | Whether the strategy selects among the coins of coin control, instead
 -- of every one of them being spent
@@ -1981,7 +2288,7 @@ minConfOption =
       <> metavar "INT"
       <> value 0
       <> showDefault
-      <> help "The confirmations a coin needs to be spent. At 0, the unconfirmed coins of the wallet's own transactions are spent, its change and what its accounts pay each other, but no unconfirmed payment from others."
+      <> help "The confirmations a coin needs to be spent. At 0, the unconfirmed coins of the wallet's own transactions are spent, its change and what its portfolios pay each other, but no unconfirmed payment from others."
 
 coinSelectionOption :: Args CoinSelection
 coinSelectionOption =
@@ -2046,8 +2353,14 @@ pendingTxsCommand =
         [r|
 A pending transaction is one that preparetx, preparesendall, bumpfee or
 preparesweep made, or that importtx added. It is unsigned, signed, or sent.
-`sync` retires it once the network lists it. The newest come first. `show`
-HASH shows one of them in full.
+`sync` retires it once the network lists it. `show` HASH shows one of them in
+full.
+
+pendingtxs lists the pending transactions of one portfolio, the one --wallet
+and --portfolio pick, each with its default, as txs does. They come in one
+list, by network, in the order portfolios shows the networks, and the newest
+first on each network. --network shows those of one network only. exportsheet
+gives those of every portfolio in one tab.
 
 Each takes two lines. The first starts with the short id of the transaction,
 the first 8 digits of its hash. The hash is the nosigHash of an unsigned
@@ -2057,23 +2370,23 @@ one works too. --verbose gives the hash in full, then its short id. The first
 line then gives the time the transaction was created, its amount and its
 status: not signed, signed and not sent, or sent, with its fee rate.
 
-The second line gives the account when every account is listed. A replacement
-that bumpfee made then names the transactions it replaces. Last comes what the
-transaction is for, as txs says it: its label, or else the address it pays. An
-address of the wallet is named by its derivation path.
+The second line says where the transaction is: its portfolio and its network.
+A replacement that bumpfee made then names the transactions it replaces. Last
+comes what the transaction is for, as txs says it: its label, or else the
+address it pays. An address of the wallet is named by its type and its
+derivation path.
 
 A transaction marked conflicted spends a coin that another transaction has
 spent, or that is gone, as the server said at the last sync. It cannot be sent
 while that lasts. Delete it with deletetx, which frees its coins.
 
 With --tabular, each transaction takes one row of a table, under a header that
-names the columns: its short id, its account when every account is listed, the
-time it was created, its type, its amount, its status, its fee rate in sat/vB,
-and what it is for, as txs --tabular says it. The account column is as wide as
-the longest name.
+names the columns: its short id, its portfolio and its network, the time it
+was created, its type, its amount, its status, its fee rate in sat/vB, and
+what it is for, as txs --tabular says it.
 
 With --csv FILENAME, each transaction takes one row of a new CSV file, for a
-spreadsheet: its account, when it was created, its type, amount, fee and fee
+spreadsheet: its wallet, its portfolio and its network, when it was created, its type, amount, fee and fee
 rate, its status, its nosigHash and its txid once signed, each in full and by
 its short id, and its label. Then come
 the address it pays the most, its path and label when it is one of the wallet,
@@ -2081,10 +2394,11 @@ and how many other addresses it pays. Amounts are in satoshis, and times in UTC.
 |],
       args =
         CommandPendingTxs
-          <$> everyAccountChoiceOption
+          <$> portfolioChoiceOption
+          <*> networkOptionWith "Only the pending transactions on this network. Without it, those on every network of the portfolio."
           <*> listingOutputOption
             txVerboseHelp
-            "Show each transaction on one row of a table: its short id, account, time, type, amount, status and fee rate, then what it is for."
+            "Show each transaction on one row of a table: its short id, portfolio, network, time, type, amount, status and fee rate, then what it is for."
             "pending transactions"
           <*> pagingOptions (afterOption "HASH" hashRefReader "Start after this pending transaction, by either of its hashes or its short id")
     }
@@ -2113,27 +2427,34 @@ its txid once it is signed, in full or by its short id.
 
 The file is a PSBT, the format of BIP 174 that most wallets
 read. It carries the transaction, the whole transaction each of its coins
-comes from, the keys of the account in it with their derivation paths, and
+comes from, the keys of the portfolio in it with their derivation paths, and
 the signatures once signed. What is hw's own goes in the proprietary fields
 of the format, under the identifier hw, which other software leaves aside:
 the network of the transaction, the fee rate it was built for, the
 transactions a replacement replaces, the label of the transaction, the
-labels of the account's addresses in it, and the labels of the coins it
+labels of the portfolio's addresses in it, and the labels of the coins it
 spends, as the wallet has them when it writes the file, for the offline
 computer to show. bitcoin-cli decodepsbt shows the file too.
 
-importtx adds the transaction of a file to the pending transactions of its
-account, and locks the coins it spends. When the wallet holds it already, the
-file takes its place, as when an offline computer returns it signed. The
-signatures are checked first. The wallet keeps its own labels, and shows the
-transaction with them.
+importtx adds the transaction of a file to the pending transactions of a
+portfolio, and locks the coins it spends. hw finds the portfolio by itself,
+from the addresses the transaction spends from and pays. A transaction that
+moves funds between two portfolios goes to the portfolio that pays. --wallet
+and --portfolio are needed only when hw cannot tell: when several portfolios
+pay, or when none pays and it pays several. They only narrow the search:
+--wallet alone to the portfolios of that wallet, --portfolio to one
+portfolio. A portfolio the transaction only pays, while another portfolio
+pays it, is refused: the one that pays keeps it. When the wallet holds the
+transaction already, the file takes its place, as when an offline computer
+returns it signed. The signatures are checked first. The wallet keeps its own
+labels, and shows the transaction with them.
 
 A file another wallet or a hardware wallet signed is imported the same way,
 in bytes or in base64 text, finalized or not: hw finalizes an input left
 signed, and refuses a signature that does not verify. What the file leaves
-out, the paths of the account's addresses once the signatures are final, the
+out, the paths of the portfolio's addresses once the signatures are final, the
 fee rate and the label, the wallet keeps from the version it holds. A file
-another wallet prepared for an account of this wallet is imported too, and
+another wallet prepared for a portfolio of this wallet is imported too, and
 signed with signtx.
 
 broadcast --input sends a signed file without importtx.
@@ -2178,7 +2499,7 @@ importTxCommand =
       details = importExportTxDetails,
       args =
         CommandImportTx
-          <$> txAccountOption
+          <$> txPortfolioOption
           <*> fileArgument "The transaction file to add"
     }
 
@@ -2216,9 +2537,11 @@ signTxCommand =
       summary = "Sign a pending transaction or a transaction file",
       details =
         [r|
-signtx asks for the mnemonic and the passphrase of the account, and signs the
-transaction. It asks again while they do not match the account. It takes the
-shares of a backup in place of the mnemonic.
+signtx asks for the mnemonic and the passphrase of the wallet, and signs the
+transaction. It asks again while they do not match the portfolio. It takes the
+shares of a backup in place of the mnemonic. A transaction that spends bip44
+and bip84 coins together is signed at once: the mnemonic gives the keys of
+both accounts.
 
 Give a pending transaction by its NOSIGHASH, in full or by its short id. The
 signed transaction then takes its place in the wallet, shown by its txid. Or give a transaction file with
@@ -2227,15 +2550,22 @@ to the --output file. Without --output, hw offers to replace the --input file,
 since the unsigned file is of no use once signed. It asks this before the
 mnemonic. A transaction of a file is shown with the labels the file carries,
 which go on to the signed file. A signed input names no key any more, as the
-format asks. The file still says which address of the account it spends from,
+format asks. The file still says which address of the portfolio it spends from,
 in a field of hw, so `show` shows the signed file as the payment it is, on
 the offline computer too.
 
-A file another wallet prepared for the account is signed the same way, in
+hw finds the portfolio of a file by itself, as importtx does. A transfer
+between two portfolios is signed by the one that pays it, and --portfolio
+naming the one it pays is refused. A file of a portfolio this database does
+not have yet is refused too, as on an offline computer that holds portfolio0
+alone. newportfolio --existing adds the next portfolio of the mnemonic there,
+and importwallet the portfolios of a file.
+
+A file another wallet prepared for the portfolio is signed the same way, in
 bytes or in base64 text, of version 0 or of version 2, that of BIP 370. The
 signed file keeps its version and every field of it, but those of the inputs
 signed that served the signers. hw signs with the
-sighash ALL only, and only when every input that is not the account's is
+sighash ALL only, and only when every input that is not the portfolio's is
 signed already.
 
 Signing sends nothing. Check the transaction with `show`, given its txid or its
@@ -2262,19 +2592,23 @@ coinsCommand =
   CommandSpec
     { name = "coins",
       offline = False,
-      summary = "List the coins of an account",
+      summary = "List the coins of a portfolio",
       details =
         [r|
-A coin is an unspent output of a transaction, written TXID:INDEX. The
-unconfirmed coins come first, then the newest. Each takes two lines. The first
+A coin is an unspent output of a transaction, written TXID:INDEX. `coins`
+lists every coin of the portfolio, grouped by network. On btc, the bip44 and
+the bip84 coins are listed together, as a payment spends them. --network and
+--type show one network or one type only.
+
+On each network, the unconfirmed coins come first, then the newest. Each takes two lines. The first
 starts with the short id of the coin:
 the first 8 digits of its txid, a colon, and its index, such as a1075db5:1.
 lockcoin, --coin and `show` take it, or the coin in full. The first line then gives the
 time of the transaction that paid the coin, in the time zone of the computer,
 its value, its state and its confirmations, up to 999+ confirmations. A coin
 that a pending transaction spends is "locked by tx". The second line gives the
-address that holds the coin, with its derivation path, then the label of the
-address. A coin at a change address says so there.
+address that holds the coin and its derivation path, then the label of the
+address. The address shows its type: a bip84 one starts with bc1q on Bitcoin. A coin at a change address says so there.
 
 With --verbose, each coin starts with the time of its transaction, and gives the
 full count of its confirmations on its first line. A coin that a pending
@@ -2292,14 +2626,15 @@ path, and the label of the address. A coin locked by a pending transaction says
 "locked by tx".
 
 With --csv FILENAME, each coin takes one row of a new CSV file, for a
-spreadsheet: the coin, TXID:INDEX, in full and by its short id, the time of its
+spreadsheet: its network and its type, the coin, TXID:INDEX, in full and by
+its short id, the time of its
 transaction, its value, its
 state, its confirmations and block, the address that holds it with its path
 and label, and the label of its transaction. Amounts are in satoshis, and times in UTC.
 
 A coin is spendable when the wallet can spend it now. Nothing locks it, a
 coinbase coin has 100 confirmations, and an unconfirmed coin comes from a
-transaction of the wallet: its change, or what another account of the wallet
+transaction of the wallet: its change, or what another portfolio of the wallet
 paid. The other coins become spendable once they confirm, or for a coinbase,
 once it matures.
 
@@ -2309,7 +2644,7 @@ unlockcoin.
 |],
       args =
         CommandCoins
-          <$> accountChoiceOption
+          <$> listingTargetOption
           <*> lockedOption
           <*> listingOutputOption
             "Show every detail of each coin: the full count of its confirmations, the label of its transaction, the coin in full and its short id, the block that holds it, the time of its transaction, and its address in full with its path."
@@ -2344,8 +2679,12 @@ and goes with the coin once it is spent elsewhere. `coins` --locked lists the
 locked coins.
 
 lockcoin shows the coin it locked with every detail, as `coins` --verbose does.
+
+A coin tells where it is. The test networks share their keys, so the wallet
+may have the same coin on several of them: --network then says which one to
+lock.
 |],
-      args = CommandLockCoin <$> coinArg coinsToLock
+      args = CommandLockCoin <$> coinArg coinsToLock <*> heldNetworkOption "coin"
     }
 
 unlockCoinCommand :: CommandSpec Command
@@ -2362,7 +2701,7 @@ transaction spends is freed by deleting that transaction with deletetx.
 unlockcoin shows the coin it freed with every detail, as `coins` --verbose
 does.
 |],
-      args = CommandUnlockCoin <$> coinArg coinsToUnlock
+      args = CommandUnlockCoin <$> coinArg coinsToUnlock <*> heldNetworkOption "coin"
     }
 
 -- | A coin of the wallet, as coins lists it, with the coins the shell
@@ -2425,18 +2764,18 @@ bumpFeeCommand =
       summary = "Replace a stuck payment with one that pays a higher fee",
       details =
         [r|
-bumpfee prepares a transaction that replaces a payment of the account that
+bumpfee prepares a transaction that replaces a payment of a portfolio that
 the network has not confirmed yet. The replacement pays a higher fee, as BIP
 125 allows on Bitcoin. It spends the same coins and pays the recipients the
 same amounts. The higher fee comes out of the change.
 
 When the change cannot pay the higher fee, hw offers to add confirmed coins of
-the account. When none would do, or when you decline them, hw offers to take
+the portfolio, of either type. When none would do, or when you decline them, hw offers to take
 what is missing from what the recipients receive instead: one of them pays it
 alone, or all of them pay it in equal shares, the first also paying the
 remainder. hw asks which, and leaves no recipient below the dust limit.
 
-Another transaction of the account may spend the change of the stuck one.
+Another transaction of the portfolio may spend the change of the stuck one.
 Replacing the stuck one would remove it too, so hw offers to replace both with
 one transaction that pays the recipients of both.
 
@@ -2454,6 +2793,10 @@ replaceable cannot. Neither can one that spends coins of another wallet, such
 as a sweep. Bitcoin Cash does not replace transactions. When the stuck
 transaction pays several addresses of the wallet besides its recipients, its
 change among them, the replacement gets one change output for all of them.
+Change that --change-back sent back to an address the payment spends from is
+still change, and pays the higher fee. Change that --change-back sent to
+another receiving address is a payment to the replacement: it is kept, and
+not reduced.
 
 The replacement gets a lock time as preparetx gives one. When the best block
 the wallet knows was mined more than eight hours ago, bumpfee asks whether to
@@ -2463,7 +2806,7 @@ prepare it anyway, with a lock time of 0, as preparetx does.
         CommandBumpFee
           <$> ( BumpFee
                   <$> bumpedArg
-                  <*> txAccountOption
+                  <*> txPortfolioOption
                   <*> replacementFeeOption
                   <*> outputFileMaybeOption
                   <*> yesOption "Answer yes to every question: a fee rate above 100 satoshis per virtual byte, a wallet behind the chain, adding coins, reducing what a lone recipient receives, and replacing the transactions that spend the change. Which of several recipients pays is still asked."
@@ -2526,8 +2869,8 @@ hardware wallet returns it, finalized or not. The signed transaction alone,
 in hexadecimal as a wallet gives it once finalized, is sent too, when the
 wallet holds its transaction. A file hw wrote names its network. One of
 another wallet names none: when the wallet holds its transaction, the
-account tells it; otherwise give --network, or a default-network in the
-configuration file.
+wallet tells it; otherwise it is sent on --network, or on the default
+network.
 |],
       args =
         CommandBroadcast
@@ -2553,12 +2896,14 @@ syncCommand =
   CommandSpec
     { name = "sync",
       offline = False,
-      summary = "Update the accounts from the network",
+      summary = "Update the portfolios from the network",
       details =
         [r|
-`sync` asks the server for the latest balances, transactions and coins of the
-accounts. For each account, it shows its balances as `accounts` does, the
-block it is synced to, and what changed.
+`sync` asks the server for the latest balances, transactions and coins of
+every portfolio, on every network, the test networks included. For each
+portfolio and network that holds or changed anything, it shows the balances
+as `portfolios` does, the block it is synced to, and what changed. --wallet,
+--portfolio and --network sync less.
 
 On a terminal, a line tells what `sync` is doing while it works, with a bar for
 the steps whose size it knows. The line goes to stderr and is gone when `sync`
@@ -2566,10 +2911,10 @@ ends, so scripts never see it.
 
 It first looks for used addresses past the ones each account has, as far as
 the gap of the configuration file, 20 by default. Someone paying to the
-account's public key, or another wallet of the same seed, may have used them.
-`sync` adds each used address it finds, with the ones before it. It keeps
-looking while it finds more, so the first sync of an account finds every
-address used so far. It misses an address that comes after more unused ones in
+account's public key, or another wallet of the same mnemonic, may have used
+them. `sync` adds each used address it finds, with the ones before it. It
+keeps looking while it finds more, so the first sync of a portfolio finds
+every address used so far. It misses an address that comes after more unused ones in
 a row than the gap. Raise the gap for one sync to look further. The same gap
 limits how many unused addresses hw `receive` gives out.
 
@@ -2591,11 +2936,19 @@ it, unless it is conflicted. So one the network refuses for good, for a fee
 below what the nodes relay for example, keeps coming back. Delete it with
 deletetx.
 
-When the server does not answer for a network, `sync` leaves out the accounts
-of that network and says why. It still syncs the other accounts, then exits
-with 1.
+A server seldom serves every network: the public one has no regtest chain.
+`sync` names the networks the server does not serve in one line, and syncs
+the others. That is no error.
+
+When the server of a network is down, `sync` leaves out that network and says
+why. It still syncs the other networks, then exits with an error, so that a
+script can tell.
 |],
-      args = CommandSync <$> everyAccountChoiceOption <*> fullOption
+      args =
+        CommandSync
+          <$> everyPortfolioChoiceOption
+          <*> networkOptionWith "Only this network. Without it, every network."
+          <*> fullOption
     }
 
 fullOption :: Args Bool
@@ -2604,7 +2957,7 @@ fullOption =
     long "full"
       <> help
         [r|
-Download the balances, transactions and coins of the account again and write
+Download the balances, transactions and coins of the portfolios again and write
 them anew, instead of only what changed, and replace any damaged copy of a raw
 transaction. A transaction the server no longer lists is marked as dead. Use it
 if the wallet shows something wrong. It keeps what the server cannot tell:
@@ -2622,8 +2975,8 @@ backupCommand =
       summary = "Copy the wallet database to a backup file",
       details =
         [r|
-The copy holds the whole wallet: accounts, addresses, labels, coins,
-transactions and pending transactions. It holds no private key. Without a
+The copy holds the whole database: wallets, portfolios, addresses, labels,
+coins, transactions and pending transactions. It holds no private key. Without a
 FILENAME, the copy goes to ~/.hw/backups, named after the format version of the
 database and the time.
 
@@ -2647,15 +3000,15 @@ exportSheetCommand =
       summary = "Write every listing of the wallet to a spreadsheet",
       details =
         [r|
-exportsheet writes the accounts, the addresses, the balances, the coins, the
+exportsheet writes the portfolios, the addresses, the balances, the coins, the
 transactions and the pending transactions to a new spreadsheet, a tab each, in
 the OpenDocument format of LibreOffice (.ods). Excel and Google Sheets open it
 too. Each tab holds every row of its listing, in the columns of its --csv file.
 
-The tabs hold every account, or the one --account names. Those of the
-addresses, the balances, the coins and the transactions start with a column
-that names the account of each row. The addresses of both chains share a tab,
-the receiving ones first.
+The tabs hold every portfolio, or those --wallet and --portfolio name. Each
+row starts with the columns that say where it is: its wallet, its portfolio
+and its network. The addresses of both chains share a tab, the receiving ones
+first.
 
 Each cell keeps its kind. A label is text, whatever it starts with, an amount
 is a number of satoshis, and a time is a time, in UTC. The header of each tab
@@ -2667,7 +3020,7 @@ whole history.
 |],
       args =
         CommandExportSheet
-          <$> everyAccountChoiceOption
+          <$> everyPortfolioChoiceOption
           <*> fileArgument "The spreadsheet to write, such as wallet.ods. It must not exist yet."
     }
 
@@ -2715,7 +3068,7 @@ signMsgCommand =
       summary = "Sign a message with the key of an address",
       details =
         [r|
-signmsg asks for the mnemonic of the account of the ADDRESS, or for the
+signmsg asks for the mnemonic of the wallet of the ADDRESS, or for the
 shares of its backup, and signs the message with the key of that address. The signature uses the Bitcoin Signed
 Message format, the legacy format of BIP 322. From a P2PKH address, which
 starts with 1, any wallet can verify it. From a native SegWit address,
@@ -2733,7 +3086,7 @@ saved to a file.
 |],
       args =
         CommandSignMsg
-          <$> (SignMsg <$> signAddressArg <*> signMsgArg <*> signedMessageOutputOption)
+          <$> (SignMsg <$> signAddressArg <*> signMsgArg <*> signedMessageOutputOption <*> heldNetworkOption "address")
     }
 
 signAddressArg :: Args Text
@@ -2859,14 +3212,17 @@ addresses without one share the rest in equal parts, and they pay the fee. So
 give at least one of them. When the rest does not cover the fee, nothing is
 prepared. preparesendall shares the coins the same way.
 
-A sweep that pays an address of this wallet belongs to the account of that
-address, on its network. hw finds the account however the address is written,
-such as a Bitcoin Cash address with or without its prefix, or in its legacy
-form. The sweep is kept as a pending transaction, to sign with signsweep by
-its nosigHash. --output also writes it to a file.
+A sweep that pays an address of this wallet belongs to the portfolio of that
+address, on its network. hw finds the portfolio from the --sweep-to addresses,
+however an address is written, such as a Bitcoin Cash address with or without
+its prefix, or in its legacy form. --wallet and --portfolio are needed only
+when those addresses belong to several portfolios. A sweep is on one network,
+so addresses of this wallet on two networks are refused. The sweep is kept as a
+pending transaction, to sign with signsweep by its nosigHash. --output also
+writes it to a file.
 
-A sweep that pays no address of this wallet needs no account, even in a
-wallet that has none. It needs --network and --output, and is signed from the
+A sweep that pays no address of this wallet needs no portfolio, even in a
+database that has none. It needs --network and --output, and is signed from the
 file. The default-network of the configuration file does not apply. Private
 keys, coins and the legacy addresses of Bitcoin Cash read the same on
 Bitcoin, so a wrong guess would sweep the coins of the other chain.
@@ -2882,7 +3238,10 @@ typed. --yes takes it without asking, for scripts.
       args =
         CommandPrepareSweep
           <$> ( PrepareSweep
-                  <$> accountOptionWith "The account the sweep pays. Needed only when the --sweep-to addresses are in several accounts."
+                  <$> ( PortfolioChoice
+                          <$> walletOptionWith "The wallet the sweep pays. Needed only when the --sweep-to addresses are in several portfolios."
+                          <*> portfolioOptionWith "The portfolio the sweep pays. Needed only when the --sweep-to addresses are in several portfolios."
+                      )
                   <*> sweepNetworkOption
                   <*> underCoinsSwept sweepKeysOption
                   <*> underCoinsSwept (many sweepFromOption)
@@ -2946,9 +3305,9 @@ signed sweep then goes to the --output file. Without --output, hw offers to
 replace the --input file. It asks this before the keys. A sweep of a file is
 shown with the labels the file carries, which go on to the signed file.
 
-A sweep that pays no account of this wallet needs no account here either. It
-is signed on the network its file names. A file of another wallet names
-none: give --network, or a default-network in the configuration file.
+A sweep that pays no portfolio of this wallet needs no portfolio here either.
+It is signed on the network its file names. A file of another wallet names
+none: it is signed on --network, or on the default network.
 |],
       args =
         CommandSignSweep

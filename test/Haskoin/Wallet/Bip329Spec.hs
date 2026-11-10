@@ -161,6 +161,29 @@ writingSpec = do
       recordLine segwitKey `shouldBe` line
       parseLine line `shouldBe` Right (LineRecord segwitKey)
 
+    -- The label of the record of a key is the description of its
+    -- portfolio, and the key wallet that of its wallet
+    it "writes the description of the wallet of a key after its purpose, and reads it back" $ do
+      let line = "{\"type\":\"xpub\",\"ref\":\"xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah\",\"label\":\"savings\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\",\"purpose\":44,\"wallet\":\"steel backup\"}"
+          key =
+            (record XpubRecord "xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah")
+              { recordLabel = Just "savings",
+                recordOrigin = Just "pkh([bc560f95/44'/0'/0'])",
+                recordNetwork = Just "btc",
+                recordPurpose = Just 44,
+                recordWallet = Just "steel backup"
+              }
+      recordLine key `shouldBe` line
+      parseLine line `shouldBe` Right (LineRecord key)
+
+    -- The test networks share their keys: the origin of a record alone
+    -- does not tell btctest from btctest4
+    it "writes the network of an address, a transaction or a coin after its origin, and reads it back" $ do
+      let line = "{\"type\":\"tx\",\"ref\":\"f91d0a8a78462bc59398f2c5d7a84fcff491c26ba54c4833478b202796c8aafd\",\"label\":\"Faucet\",\"origin\":\"pkh([bc560f95/44'/1'/0'])\",\"network\":\"btctest4\"}"
+          labelled = txVector {recordLabel = Just "Faucet", recordOrigin = Just "pkh([bc560f95/44'/1'/0'])", recordNetwork = Just "btctest4"}
+      recordLine labelled `shouldBe` line
+      parseLine line `shouldBe` Right (LineRecord labelled)
+
     it "writes a label as it is, in UTF-8, with a line break in it escaped" $ do
       recordLine (record AddrRecord "a") {recordLabel = Just "Caf\233 \9749"}
         `shouldBe` "{\"type\":\"addr\",\"ref\":\"a\",\"label\":\"Caf\233 \9749\"}"

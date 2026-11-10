@@ -3,10 +3,13 @@
 -- | A transaction labelled by the user: by preparetx, preparesendall and
 -- preparesweep, carried in its file to the signer and back, kept through
 -- sending and the sync, taken by the replacement bumpfee prepares, changed
--- by label, and shown by txs and pendingtxs. And the labels of the
--- account's addresses, carried in the file for the signer to show. Last,
--- the accounts with their labels and locks in the BIP 329 file exportacc
--- writes and importacc reads, from hw or from another wallet.
+-- by label, and shown by txs and pendingtxs. A label is a portfolio's:
+-- a transaction between two portfolios gets it in both. And the labels of
+-- the portfolio's addresses, of either type, carried in the file for the
+-- signer to show, and of an address two test networks share, on the
+-- network named. Last, the portfolios with their labels and locks in the
+-- BIP 329 file exportwallet writes and importwallet reads, from hw or from
+-- another wallet.
 module Haskoin.Wallet.Workflow.LabelSpec (spec) where
 
 import Data.IORef (modifyIORef)
@@ -15,13 +18,14 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.IO as TextIO
 import Haskoin
-import Haskoin.Wallet.Bip329 (parseLine, Line (..), Record (..), RecordType (..), readLines)
-import Haskoin.Wallet.Cli.Response (Response (..))
-import Haskoin.Wallet.Database (DBAccount (..))
+import Haskoin.Wallet.Bip329 (Line (..), Record (..), RecordType (..), parseLine, readLines)
+import Haskoin.Wallet.Cli.Response (Group (..), Response (..))
 import Haskoin.Wallet.Database.Coin (CoinLock (..))
+import Haskoin.Wallet.Database.Portfolio (Place)
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.HwTestUtils
-import Haskoin.Wallet.Labels (AccountImport (..), ImportReport (..))
+import Haskoin.Wallet.Keys (PoolPath, legacyPath)
+import Haskoin.Wallet.Labels (ImportReport (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData (..))
 import Haskoin.Wallet.Workflow.TestUtils
@@ -39,19 +43,26 @@ spec = prepareContext $ \ctx -> do
   historySpec ctx
   labelCommandSpec ctx
   shownSpec ctx
+  addressLabelSpec
   exportImportSpec ctx
 
--- | The transactions of the history, each by its id, with its label
+-- | The transactions of the history, each by its id, with its label, the
+-- sections of the listing one after the other
 historyLabels :: Response -> Either String [(String, Text)]
-historyLabels (ResponseTxs _ listed) =
-  Right [(Text.unpack (txHashToHex (chainTxid status)), txInfoLabel info) | ListedTx info _ <- listed, OnChain status <- [txInfoStatus info]]
+historyLabels (ResponseTxs groups) =
+  Right [(Text.unpack (txHashToHex (chainTxid status)), txInfoLabel info) | g <- groups, ListedTx info _ <- groupRows g, OnChain status <- [txInfoStatus info]]
 historyLabels other = Left (show other)
 
--- | The answer of label for a transaction: each account by name, with the
--- label of the transaction
-labelledOf :: Response -> Either String [(Text, Text)]
-labelledOf (ResponseLabelledTxs held) = Right [(dBAccountName acc, txInfoLabel info) | (acc, info) <- held]
+-- | The answer of label for a transaction: each portfolio that holds it,
+-- by where it is, with the label of the transaction
+labelledOf :: Response -> Either String [(Place, Text)]
+labelledOf (ResponseLabelledTxs held) = Right [(place, txInfoLabel info) | (place, info) <- held]
 labelledOf other = Left (show other)
+
+-- | The path of the first receiving address of the bip44 account, /0/0,
+-- as the labels of a transaction file name it
+firstReceiving :: PoolPath
+firstReceiving = legacyPath (Deriv :/ 0 :/ 0)
 
 -- | The id of the payment of the paid chain, as typed
 paidTxid :: Ctx -> String
@@ -91,7 +102,7 @@ preparingSpec ctx =
 
     it "is given by preparesweep to a sweep that pays the wallet" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         prepared <- txOf =<< answer home ["preparesweep", "--coin", coinArg (oldCoin ctx) 0, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10", "--label", "Old wallet"] []
         txInfoLabel prepared `shouldBe` "Old wallet"
@@ -149,21 +160,21 @@ fileSpec ctx =
         imported <- txOf =<< answer online ["importtx", signer </> "signed.psbt"] []
         txInfoLabel imported `shouldBe` "Rent of October"
 
--- The payment of the paid chain is at the first receiving address,
--- 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj at /0/0, which the transaction of
--- these tests spends. Its change goes to the first change address, which
--- takes no label. The file names the path of a labelled address, never
--- the address.
+-- The payment of the paid chain is at the first receiving address of the
+-- bip44 account of portfolio0 on btc, 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj
+-- at /0/0, which the transaction of these tests spends. Its change goes to
+-- the first change address, which takes no label. The file names the path
+-- of a labelled address, with the type of its account, never the address.
 addressLabelsSpec :: Ctx -> Spec
 addressLabelsSpec ctx =
-  describe "The labels of the account's addresses in a transaction file" $ do
+  describe "The labels of the portfolio's addresses in a transaction file" $ do
     it "go with the transaction to its --output file, by their paths, those that have one" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["label", textOf (externalAddr 0), "Salary"] []
         let file = home </> "unsigned.psbt"
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--output", file] []
-        (txFilePathLabels <$> readTxFile ctx file) `shouldReturn` Map.fromList [("/0/0", "Salary")]
+        (txFilePathLabels <$> readTxFile ctx file) `shouldReturn` Map.fromList [(firstReceiving, "Salary")]
 
     -- The address is labelled after the transaction is prepared
     it "are those of the wallet when exporttx writes the file" $
@@ -173,7 +184,7 @@ addressLabelsSpec ctx =
         _ <- answer home ["label", textOf (externalAddr 0), "Salary"] []
         let file = home </> "exported.psbt"
         _ <- answer home ["exporttx", nosig, file] []
-        (txFilePathLabels <$> readTxFile ctx file) `shouldReturn` Map.fromList [("/0/0", "Salary")]
+        (txFilePathLabels <$> readTxFile ctx file) `shouldReturn` Map.fromList [(firstReceiving, "Salary")]
 
     -- The address labelled is the one the payment spends from. A signed
     -- input names no key any more, and still the path of its address, in
@@ -186,7 +197,7 @@ addressLabelsSpec ctx =
         let file = home </> "signed.psbt"
         signed <- txOf =<< answer home ["signtx", nosig, "--output", file] seedOnce
         addressLabelsOf signed `shouldBe` Map.fromList [(externalAddr 0, "Salary"), (internalAddr 0, "")]
-        (txFilePathLabels <$> readTxFile ctx file) `shouldReturn` Map.fromList [("/0/0", "Salary")]
+        (txFilePathLabels <$> readTxFile ctx file) `shouldReturn` Map.fromList [(firstReceiving, "Salary")]
 
     -- The address is relabelled after the file is written
     it "are shown by show in place of the wallet's own" $
@@ -226,7 +237,7 @@ addressLabelsSpec ctx =
         _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
         signed <- txOf =<< answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
         addressLabelsOf signed `shouldBe` Map.fromList [(externalAddr 0, "Salary"), (internalAddr 0, "")]
-        (txFilePathLabels <$> readTxFile ctx (signer </> "signed.psbt")) `shouldReturn` Map.fromList [("/0/0", "Salary")]
+        (txFilePathLabels <$> readTxFile ctx (signer </> "signed.psbt")) `shouldReturn` Map.fromList [(firstReceiving, "Salary")]
 
     -- The address is relabelled while the file is away to be signed
     it "give way to the wallet's own when importtx takes the signed file back" $
@@ -387,32 +398,44 @@ labelCommandSpec ctx =
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
-        (labelledOf <$> hwJson home ["label", nosig, "Rent"] []) `shouldReturn` Right [("main", "Rent")]
+        (labelledOf <$> hwJson home ["label", nosig, "Rent"] []) `shouldReturn` Right [(mainPlace, "Rent")]
         (txInfoLabel <$> onePendingTx home) `shouldReturn` "Rent"
 
     it "labels a pending transaction by its txid once signed" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         _ <- paymentSigned home
         txid <- txidOf =<< onePendingTx home
-        (labelledOf <$> hwJson home ["label", txid, "Rent"] []) `shouldReturn` Right [("main", "Rent")]
+        (labelledOf <$> hwJson home ["label", txid, "Rent"] []) `shouldReturn` Right [(mainPlace, "Rent")]
 
     it "labels a transaction of the history by its txid" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        (labelledOf <$> hwJson home ["label", paidTxid ctx, "Salary"] []) `shouldReturn` Right [("main", "Salary")]
+        (labelledOf <$> hwJson home ["label", paidTxid ctx, "Salary"] []) `shouldReturn` Right [(mainPlace, "Salary")]
         (fmap (lookup (paidTxid ctx)) . historyLabels <$> hwJson home ["txs"] []) `shouldReturn` Right (Just "Salary")
 
     it "labels a transaction of the history by the short id of its txid, its first 8 digits" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        (labelledOf <$> hwJson home ["label", shortOf (paidTxid ctx), "Salary"] []) `shouldReturn` Right [("main", "Salary")]
+        (labelledOf <$> hwJson home ["label", shortOf (paidTxid ctx), "Salary"] []) `shouldReturn` Right [(mainPlace, "Salary")]
         (fmap (lookup (paidTxid ctx)) . historyLabels <$> hwJson home ["txs"] []) `shouldReturn` Right (Just "Salary")
 
     it "labels a pending transaction by the short id of its nosigHash" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
-        (labelledOf <$> hwJson home ["label", shortOf nosig, "Rent"] []) `shouldReturn` Right [("main", "Rent")]
+        (labelledOf <$> hwJson home ["label", shortOf nosig, "Rent"] []) `shouldReturn` Right [(mainPlace, "Rent")]
+
+    -- The payment pays 50000 to portfolio0 and 30000 to portfolio1
+    it "labels a transaction of the history in every portfolio that has it" $
+      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+        syncedTwoPortfolios home
+        (labelledOf <$> hwJson home ["label", txidArg (twoPortfoliosTx ctx), "Gift"] []) `shouldReturn` Right [(mainPlace, "Gift"), (portfolio1Place, "Gift")]
+
+    it "labels a transaction of the history of portfolio1 there, as txs of portfolio1 shows" $
+      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+        syncedTwoPortfolios home
+        _ <- answer home ["label", txidArg (twoPortfoliosTx ctx), "Gift"] []
+        (fmap (lookup (txidArg (twoPortfoliosTx ctx))) . historyLabels <$> hwJson home ["txs", "--portfolio", "1"] []) `shouldReturn` Right (Just "Gift")
 
     it "removes the label of a transaction with an empty one" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -437,13 +460,15 @@ shownSpec :: Ctx -> Spec
 shownSpec ctx =
   describe "A label as hw shows it" $ do
     -- The payment of 50000 received at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj,
-    -- the first receiving address
-    it "follows the path of the address a payment received is paid at, in txs" $
+    -- the first receiving address of the bip44 account. The bip84 account
+    -- of the portfolio has an address at /0/0 too, so the path names its
+    -- type.
+    it "follows the path of the address a payment received is paid at, with the type of its account, in txs" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["label", paidTxid ctx, "Salary"] []
         run <- hw home ["txs"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  balance 0.00050000 btc, at /0/0 \"Salary\"\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  balance 0.00050000 btc, at bip44/0/0 \"Salary\"\n"
 
     it "is a field of txs --verbose" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -452,22 +477,57 @@ shownSpec ctx =
         run <- hw home ["txs", "--verbose"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  Label    : \"Salary\"\n"
 
-    -- pendingtxs lists every account without --account, so it names the
-    -- account first
+    -- pendingtxs names where each transaction is first: portfolio0 of
+    -- wallet0, named without its wallet, on btc
     it "takes the place of the address a payment pays in pendingtxs" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--label", "Rent"] []
         run <- hw home ["pendingtxs"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  account main, \"Rent\"\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  portfolio0 btc, \"Rent\"\n"
 
-    it "is shown by label with the transaction, after its account and network" $
+    -- The payment pays the bip44 account alone
+    it "is shown by label with the transaction, after its portfolio, its network and the types it involves" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         run <- hw home ["label", paidTxid ctx, "Salary"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  Account  : main\n  Network  : btc\n  Label    : \"Salary\"\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  Portfolio: portfolio0\n  Network  : btc\n  Types    : bip44\n  Label    : \"Salary\"\n"
 
-{- The accounts and labels in a file -}
+{- The label of an address -}
+
+-- The first receiving address of the bip44 account of portfolio0 on the
+-- test networks of Bitcoin, mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih, is the same
+-- on btctest and on btctest4: they share the key of m/44'/1'/0'.
+addressLabelSpec :: Spec
+addressLabelSpec =
+  describe "label for an address" $ do
+    -- bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc is the first receiving
+    -- address of the bip84 account of portfolio0 on btc
+    it "labels an address of the bip84 account of the portfolio, as addresses of that account shows it" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive", "--type", "bip84"] []
+        _ <- answer home ["label", "bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc", "Savings"] []
+        (addressesOf <$> hwJson home ["addresses", "--type", "bip84"] []) `shouldReturn` Right [("bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc", "Savings")]
+
+    it "is refused for an address two test networks share without --network, naming the networks" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive", "--network", "btctest"] []
+        _ <- answer home ["receive", "--network", "btctest4"] []
+        (errorOf <$> hwJson home ["label", Text.unpack testnetExternalAddrText, "Faucet"] [])
+          `shouldReturn` Right "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and btctest4: give the --network"
+
+    it "labels an address two test networks share on the --network named alone" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive", "--network", "btctest"] []
+        _ <- answer home ["receive", "--network", "btctest4"] []
+        _ <- answer home ["label", Text.unpack testnetExternalAddrText, "Faucet", "--network", "btctest4"] []
+        (addressesOf <$> hwJson home ["addresses", "--network", "btctest4"] []) `shouldReturn` Right [(testnetExternalAddrText, "Faucet")]
+        (addressesOf <$> hwJson home ["addresses", "--network", "btctest"] []) `shouldReturn` Right [(testnetExternalAddrText, "")]
+
+{- The portfolios and labels in a file -}
 
 -- | A home synced with the paid chain, its payment labelled "Salary", the
 -- address it paid labelled "Wages", a second receiving address labelled
@@ -483,19 +543,39 @@ labelledHome ctx home = do
   _ <- answer home ["lockcoin", coinArg (payment ctx) 0] []
   return ()
 
--- | The lines exportacc writes for that home: the key of main, its two
--- labelled addresses, the payment, 1000 of fee for 50000 received, three
--- blocks deep and so without a height, and its coin, locked
+-- | The lines exportwallet writes for that home: the key of the bip44
+-- account of portfolio0 on btc, its two labelled addresses, the payment,
+-- 1000 of fee for 50000 received, three blocks deep and so without a
+-- height, and its coin, locked. Then the keys of the eleven other accounts
+-- of the portfolio, which have no label: the bip84 account on btc, the
+-- bip44 one on bch, and those of the test networks, which share the keys
+-- of m/44'/1'/0' and m/84'/1'/0'.
 labelledLines :: Ctx -> [Text]
 labelledLines ctx =
-  [ "{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\",\"purpose\":44}",
-    "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Wages\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"keypath\":\"/0/0\"}",
-    "{\"type\":\"addr\",\"ref\":\"1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg\",\"label\":\"From Bob\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"keypath\":\"/0/1\"}",
-    "{\"type\":\"tx\",\"ref\":\"" <> txid <> "\",\"label\":\"Salary\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"fee\":1000,\"value\":50000}",
-    "{\"type\":\"output\",\"ref\":\"" <> txid <> ":0\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"spendable\":false,\"keypath\":\"/0/0\",\"value\":50000}"
+  [ "{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\",\"purpose\":44}",
+    "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Wages\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\",\"keypath\":\"/0/0\"}",
+    "{\"type\":\"addr\",\"ref\":\"1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg\",\"label\":\"From Bob\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\",\"keypath\":\"/0/1\"}",
+    "{\"type\":\"tx\",\"ref\":\"" <> txid <> "\",\"label\":\"Salary\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\",\"fee\":1000,\"value\":50000}",
+    "{\"type\":\"output\",\"ref\":\"" <> txid <> ":0\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\",\"spendable\":false,\"keypath\":\"/0/0\",\"value\":50000}",
+    keyLine testSegwitAccountXPub "wpkh" "84'/0'" "btc" 84,
+    keyLine testAccountXPubBch "pkh" "44'/145'" "bch" 44,
+    keyLine testAccountXPubTest "pkh" "44'/1'" "btctest" 44,
+    keyLine testSegwitAccountXPubTest "wpkh" "84'/1'" "btctest" 84,
+    keyLine testAccountXPubTest "pkh" "44'/1'" "btctest4" 44,
+    keyLine testSegwitAccountXPubTest "wpkh" "84'/1'" "btctest4" 84,
+    keyLine testAccountXPubTest "pkh" "44'/1'" "btcreg" 44,
+    keyLine testSegwitAccountXPubTest "wpkh" "84'/1'" "btcreg" 84,
+    keyLine testAccountXPubTest "pkh" "44'/1'" "bchtest" 44,
+    keyLine testAccountXPubTest "pkh" "44'/1'" "bchtest4" 44,
+    keyLine testAccountXPubTest "pkh" "44'/1'" "bchreg" 44
   ]
   where
     txid = Text.pack (paidTxid ctx)
+    -- The record of the key of an account at index 0 of the test wallet,
+    -- of the script, purpose and coin type given, on the network
+    keyLine :: Text -> Text -> Text -> Text -> Int -> Text
+    keyLine key script purposeAndCoin net purpose =
+      "{\"type\":\"xpub\",\"ref\":\"" <> key <> "\",\"origin\":\"" <> script <> "([bc560f95/" <> purposeAndCoin <> "/0'])\",\"network\":\"" <> net <> "\",\"purpose\":" <> Text.pack (show purpose) <> "}"
 
 -- | The records of a file hw wrote, in order
 recordsOf :: FilePath -> IO [Record]
@@ -503,82 +583,83 @@ recordsOf file = do
   content <- TextIO.readFile file
   return [r | (_, line) <- readLines content, Right (LineRecord r) <- [parseLine line]]
 
--- | What became of each account importacc answered for, by name
-accountsImported :: Response -> Either String [(Text, String)]
-accountsImported (ResponseImport report) = Right (describe' <$> reportAccounts report)
-  where
-    describe' (AccountCreated acc _) = (dBAccountName acc, "created")
-    describe' (AccountKept acc _) = (dBAccountName acc, "kept")
-    describe' (AccountRenamed was acc) = (dBAccountName acc, "renamed from " <> Text.unpack was)
-    describe' (AccountRefused name _) = (name, "refused")
-accountsImported other = Left (show other)
-
--- | The addresses an answer of importacc counts as not in the wallet yet,
--- and of them those too far past the last used address to derive
+-- | The addresses an answer of importwallet counts as not in the wallet
+-- yet, and of them those too far past the last used address to derive
 missingAddressesOf :: Response -> Either String (Natural, Natural)
 missingAddressesOf (ResponseImport report) = Right (reportAddressesMissing report, reportAddressesTooFar report)
 missingAddressesOf other = Left (show other)
 
 exportImportSpec :: Ctx -> Spec
 exportImportSpec ctx =
-  describe "The accounts and labels in a file of BIP 329" $ do
-    it "are written by exportacc, the key of the account first, then its labelled addresses, its labelled transactions and its locked coins" $
+  describe "The portfolios and labels in a file of BIP 329" $ do
+    it "are written by exportwallet, the key of each account first, then its labelled addresses, its labelled transactions and its locked coins" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         labelledHome ctx home
-        _ <- answer home ["exportacc", home </> "labels.jsonl"] []
+        _ <- answer home ["exportwallet", home </> "labels.jsonl"] []
         (Text.lines <$> TextIO.readFile (home </> "labels.jsonl")) `shouldReturn` labelledLines ctx
 
-    it "are written for every account without --account, each key before the labels of its account" $
+    -- The keys and the addresses on btc: those of the bip44 and the bip84
+    -- account of portfolio0, then those of portfolio1, m/44'/0'/1' and
+    -- m/84'/0'/1'
+    it "are written for every portfolio of the wallet without --portfolio, each key before the labels of its account" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         labelledHome ctx home
-        _ <- answer home ["createacc", "second"] seedTwice
-        _ <- answer home ["receive", "--account", "second", "--label", "Savings"] []
-        _ <- answer home ["exportacc", home </> "labels.jsonl"] []
+        newTestPortfolio home
+        _ <- answer home ["receive", "--portfolio", "1", "--label", "Savings"] []
+        _ <- answer home ["exportwallet", home </> "labels.jsonl"] []
         records <- recordsOf (home </> "labels.jsonl")
-        [(recordType r, recordLabel r) | r <- records, recordType r `elem` [XpubRecord, AddrRecord]]
-          `shouldBe` [(XpubRecord, Just "main"), (AddrRecord, Just "Wages"), (AddrRecord, Just "From Bob"), (XpubRecord, Just "second"), (AddrRecord, Just "Savings")]
+        [(recordType r, recordRef r) | r <- records, recordNetwork r == Just "btc", recordType r `elem` [XpubRecord, AddrRecord]]
+          `shouldBe` [ (XpubRecord, testAccountXPub),
+                       (AddrRecord, "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"),
+                       (AddrRecord, "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"),
+                       (XpubRecord, testSegwitAccountXPub),
+                       (XpubRecord, testAccountXPub1),
+                       (AddrRecord, "17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo"),
+                       (XpubRecord, testSegwitAccountXPub1)
+                     ]
 
     it "include the label of a signed pending transaction, by its txid" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--label", "Rent"] []
         txid <- txidOf =<< txOf =<< answer home ["signtx", nosig] seedOnce
-        _ <- answer home ["exportacc", home </> "labels.jsonl"] []
+        _ <- answer home ["exportwallet", home </> "labels.jsonl"] []
         records <- recordsOf (home </> "labels.jsonl")
         [(recordRef r, recordLabel r) | r <- records, recordType r == TxRecord] `shouldBe` [(Text.pack txid, Just "Rent")]
 
-    -- The wallet is lost with its computer. recover finds the account from
-    -- the mnemonic, as default, with the one address the chain paid.
-    -- The file gives the account its name and its labels back, the
-    -- labelled address nobody paid among them. The unlabelled one nobody paid is gone, until
-    -- receive hands it out again.
-    it "are read back by importacc into the account recovered from the mnemonic, give or take the unused addresses without a label" $
+    -- The wallet is lost with its computer: deletewallet stands for that.
+    -- recover finds portfolio0 from the mnemonic, with the one address the
+    -- chain paid. The file gives the portfolio its labels back, the
+    -- labelled address nobody paid among them, and adds no account: the
+    -- portfolio recover made is whole. The unlabelled address nobody paid
+    -- is gone, until receive hands it out again.
+    it "are read back by importwallet into the portfolio recovered from the mnemonic, give or take the unused addresses without a label" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         labelledHome ctx home
-        _ <- answer home ["exportacc", home </> "labels.jsonl"] []
-        _ <- answer home ["deleteacc", "main", "btc", "/44'/0'/0'"] []
+        _ <- answer home ["exportwallet", home </> "labels.jsonl"] []
+        _ <- answer home ["deletewallet", "bc560f95", "--wallet", "0"] []
         _ <- answer home ["recover"] seedOnce
         (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [(externalAddrsText !! 0, "")]
-        (accountsImported <$> hwJson home ["importacc", home </> "labels.jsonl"] []) `shouldReturn` Right [("main", "renamed from default")]
-        (fingerprintsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("main", Just "bc560f95")]
+        (addedAccountsOf <$> hwJson home ["importwallet", home </> "labels.jsonl"] []) `shouldReturn` Right []
+        (fingerprintsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(mainPortfolioRef, Just "bc560f95")]
         -- Nothing to spend: the coin is locked again
-        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("main", 0, 0)]
+        (spendableOn btc <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(mainPortfolioRef, 0)]
         (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [(externalAddrsText !! 1, "From Bob"), (externalAddrsText !! 0, "Wages")]
         (fmap (lookup (paidTxid ctx)) . historyLabels <$> hwJson home ["txs"] []) `shouldReturn` Right (Just "Salary")
         (coinsShown <$> hwJson home ["coins"] []) `shouldReturn` Right [(OutPoint (txHash (payment ctx)) 0, 50000, 3, Just LockedByUser, False)]
 
-    -- A wallet that never synced: the account is created, its addresses
-    -- derived, and the transaction labelled by the origin of its account,
-    -- but the coin is not there to lock
-    it "are shown by importacc account by account, then the labels and locks set, then what to do for the rest" $
+    -- A wallet that never synced: the wallet and its portfolio are
+    -- created, the addresses derived, and the transaction labelled by the
+    -- origin of its record, but the coin is not there to lock
+    it "are shown by importwallet wallet by wallet, then the labels and locks set, then what to do for the rest" $
       withChain ctx (paidChain ctx) $ \home _ -> withHome $ \fresh -> do
         labelledHome ctx home
-        _ <- answer home ["exportacc", home </> "labels.jsonl"] []
-        run <- hw fresh ["importacc", home </> "labels.jsonl"] []
+        _ <- answer home ["exportwallet", home </> "labels.jsonl"] []
+        run <- hw fresh ["importwallet", home </> "labels.jsonl"] []
         runOut run
           `shouldBe` Text.unlines
-            [ "main  btc  /44'/0'/0'",
-              "  created",
+            [ "wallet0  bc560f95  created",
+              "  portfolio0  created, 12 accounts added",
               "",
               "Labels set: 2 addresses, 1 transaction",
               "Not in the wallet yet: 1 coin",
@@ -586,45 +667,46 @@ exportImportSpec ctx =
               "Next, sync the wallet, for the addresses, transactions and coins the file labels:",
               "  hw sync",
               "Then import the file again, for the labels it could not place:",
-              "  hw importacc " <> Text.pack (home </> "labels.jsonl")
+              "  hw importwallet " <> Text.pack (home </> "labels.jsonl")
             ]
 
     it "place what the wallet did not have once it is synced and the file imported again" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         labelledHome ctx home
-        _ <- answer home ["exportacc", home </> "labels.jsonl"] []
-        _ <- answer home ["deleteacc", "main", "btc", "/44'/0'/0'"] []
-        _ <- answer home ["importacc", home </> "labels.jsonl"] []
+        _ <- answer home ["exportwallet", home </> "labels.jsonl"] []
+        _ <- answer home ["deletewallet", "bc560f95", "--wallet", "0"] []
+        _ <- answer home ["importwallet", home </> "labels.jsonl"] []
         _ <- answer home ["sync"] []
-        run <- hw home ["importacc", home </> "labels.jsonl"] []
-        runOut run `shouldBe` "main  btc  /44'/0'/0'\n  already in the wallet\n\nLabels set: 2 addresses, 1 transaction\nCoins locked: 1\n"
+        run <- hw home ["importwallet", home </> "labels.jsonl"] []
+        runOut run `shouldBe` "wallet0  bc560f95  already in the database\n  portfolio0  nothing to add\n\nLabels set: 2 addresses, 1 transaction\nCoins locked: 1\n"
         (coinsShown <$> hwJson home ["coins"] []) `shouldReturn` Right [(OutPoint (txHash (payment ctx)) 0, 50000, 3, Just LockedByUser, False)]
 
-    -- As Sparrow writes them: the account named by its origin alone, with
-    -- its hardened steps marked h, and the labels of inputs and coins too
+    -- As another wallet writes them: the account named by its origin alone,
+    -- with its hardened steps marked h, no network, and the labels of
+    -- inputs and coins too
     it "are read from a file of another wallet, which names the account by its origin and keeps labels hw does not" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         let txid = Text.pack (paidTxid ctx)
-        TextIO.writeFile (home </> "sparrow.jsonl") $
+        TextIO.writeFile (home </> "other.jsonl") $
           Text.unlines
             [ "{\"type\":\"tx\",\"ref\":\"" <> txid <> "\",\"label\":\"Salary\",\"origin\":\"pkh([bc560f95/44h/0h/0h])\"}",
               "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Wages\"}",
               "{\"type\":\"output\",\"ref\":\"" <> txid <> ":0\",\"label\":\"Salary (received)\",\"spendable\":false}",
               "{\"type\":\"input\",\"ref\":\"" <> txid <> ":0\",\"label\":\"Payer (input)\"}"
             ]
-        run <- hw home ["importacc", home </> "sparrow.jsonl"] []
+        run <- hw home ["importwallet", home </> "other.jsonl"] []
         runOut run `shouldBe` "Labels set: 1 address, 1 transaction\nCoins locked: 1\nLeft aside: 1 record hw keeps no label for\n"
         (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [(externalAddrsText !! 0, "Wages")]
         (fmap (lookup (paidTxid ctx)) . historyLabels <$> hwJson home ["txs"] []) `shouldReturn` Right (Just "Salary")
 
-    -- The address /0/1001 of main, with /0/0 used: one past the thousand
-    -- that hw derives on the word of a file
+    -- The address /0/1001 of the bip44 account on btc, with /0/0 used: one
+    -- past the thousand that hw derives on the word of a file
     it "say which addresses hw would not derive, over a thousand past the last used one of their chain" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        TextIO.writeFile (home </> "far.jsonl") "{\"type\":\"addr\",\"ref\":\"1BUtUkmTvZHpz7wPeEJNTX4VLTgLNxKNt2\",\"label\":\"Far\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"keypath\":\"/0/1001\"}\n"
-        run <- hw home ["importacc", home </> "far.jsonl"] []
+        TextIO.writeFile (home </> "far.jsonl") "{\"type\":\"addr\",\"ref\":\"1BUtUkmTvZHpz7wPeEJNTX4VLTgLNxKNt2\",\"label\":\"Far\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\",\"keypath\":\"/0/1001\"}\n"
+        run <- hw home ["importwallet", home </> "far.jsonl"] []
         runOut run
           `shouldBe` Text.unlines
             [ "Labels set: none",
@@ -635,17 +717,45 @@ exportImportSpec ctx =
               "Next, sync the wallet, for the addresses, transactions and coins the file labels:",
               "  hw sync",
               "Then import the file again, for the labels it could not place:",
-              "  hw importacc " <> Text.pack (home </> "far.jsonl")
+              "  hw importwallet " <> Text.pack (home </> "far.jsonl")
             ]
-        (missingAddressesOf <$> hwJson home ["importacc", home </> "far.jsonl"] []) `shouldReturn` Right (1, 1)
+        (missingAddressesOf <$> hwJson home ["importwallet", home </> "far.jsonl"] []) `shouldReturn` Right (1, 1)
         (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [(externalAddrsText !! 0, "")]
 
-    -- The file of another wallet names no network for its key
-    it "create the account of a key of another wallet on the --network given, and refuse it without a network" $
+    -- The file of another wallet names no network and no purpose for its
+    -- key: it is one account, of no portfolio
+    it "leave aside the key of another wallet, which names no network, and say why" $
       withHome $ \home -> do
-        setDefaultNetwork home Nothing
         TextIO.writeFile (home </> "other.jsonl") ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"BIP39\"}\n")
-        run <- hw home ["importacc", home </> "other.jsonl"] []
-        runOut run `shouldBe` "BIP39\n  not imported: Give the --network, or a default-network in the configuration file\n\nLabels set: none\n"
-        (accountsImported <$> hwJson home ["importacc", home </> "other.jsonl", "--network", "btc"] []) `shouldReturn` Right [("BIP39", "created")]
-        (fingerprintsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("BIP39", Nothing)]
+        run <- hw home ["importwallet", home </> "other.jsonl"] []
+        runOut run
+          `shouldBe` Text.unlines
+            [ "xpub6CHK45s4...",
+              "  not imported: The record names no network. hw imports the wallets exportwallet writes, not a key alone: a key is one account, and does not say which portfolio it belongs to",
+              "",
+              "Labels set: none"
+            ]
+        (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right []
+
+    -- The payment of the paid chain pays portfolio0 alone, and the record
+    -- names its network, btc, and no origin
+    it "label a transaction whose record names a network and no origin in the portfolio that has it" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        syncedTwoPortfolios home
+        TextIO.writeFile (home </> "tx.jsonl") (noOriginRecord ctx)
+        (labelsSetOf <$> hwJson home ["importwallet", home </> "tx.jsonl"] []) `shouldReturn` Right (0, 1)
+        (fmap (lookup (paidTxid ctx)) . historyLabels <$> hwJson home ["txs"] []) `shouldReturn` Right (Just "Salary")
+
+    it "label such a transaction in no portfolio of the network that does not have it" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        syncedTwoPortfolios home
+        TextIO.writeFile (home </> "tx.jsonl") (noOriginRecord ctx)
+        _ <- answer home ["importwallet", home </> "tx.jsonl"] []
+        _ <- answer home ["exportwallet", "--portfolio", "1", home </> "portfolio1.jsonl"] []
+        records <- recordsOf (home </> "portfolio1.jsonl")
+        [recordRef r | r <- records, recordType r == TxRecord] `shouldBe` []
+
+-- | A record that labels the payment of the paid chain "Salary" on btc,
+-- without an origin
+noOriginRecord :: Ctx -> Text
+noOriginRecord ctx = "{\"type\":\"tx\",\"ref\":\"" <> Text.pack (paidTxid ctx) <> "\",\"label\":\"Salary\",\"network\":\"btc\"}\n"

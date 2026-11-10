@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -5,83 +6,156 @@
 -- | The answer of hw to a command, which the pretty printer shows to the
 -- user and --json writes for scripts. In JSON, an answer is an object that
 -- names its type, and reads back as the answer it was.
-module Haskoin.Wallet.Cli.Response (Response (..), responseFailed) where
+--
+-- An answer says where what it shows is: the wallet and the portfolio by
+-- their indexes, the network, and for an address the type of its account
+-- ('PortfolioRef', 'Place', 'AccountRef'). A listing that covers a whole
+-- portfolio comes in groups ('Group'), one for each network, or for each
+-- account for the addresses: each group says where it is, then lists its
+-- rows.
+module Haskoin.Wallet.Cli.Response
+  ( Response (..),
+    NewSecret (..),
+    Group (..),
+    AccountCounts (..),
+    groupAccountRef,
+    responseFailed,
+    joinListings,
+  )
+where
 
 import Data.Aeson
 import Data.Aeson.Types (Pair, Parser)
 import Data.Text (Text)
 import Data.Word (Word64)
 import Haskoin
-import Haskoin.Wallet.Database.Account (accountNetwork, accountWithKeys, accountWithSpendable, parseAccountWithSpendable)
-import Haskoin.Wallet.Database.Address (CoinBalance, addressWithCoinBalance, addressWithSpendable, parseAddressWithCoinBalance, parseAddressWithSpendable)
+import Haskoin.Wallet.Database (DBAddress)
+import Haskoin.Wallet.Database.Account (PortfolioView)
+import Haskoin.Wallet.Database.Address (CoinBalance (..), addressWithCoinBalance, addressWithSpendable, parseAddressWithCoinBalance, parseAddressWithSpendable)
 import Haskoin.Wallet.Database.Coin (JsonCoin, LeftCoin)
-import Haskoin.Wallet.Database (DBAccount, DBAddress)
-import Haskoin.Wallet.Keys (foreignKindName, foreignKindNamed)
-import Haskoin.Wallet.Labels (FileShown, ImportReport, fileShownPairs, parseFileShown, parseReport, reportPairs)
-import Haskoin.Wallet.Tx.FeeRates (FeeRates)
-import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..), foreignPath)
+import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), PortfolioRef (..), parsePlace, parsePortfolioRef, placePairs, portfolioRefPairs)
 import Haskoin.Wallet.Database.TxInfo (ListedTx, TxInfo)
+import Haskoin.Wallet.Keys (AccountKind, foreignKindName, foreignKindNamed)
+import Haskoin.Wallet.Labels (FileShown, ImportReport, fileShownPairs, parseFileShown, parseReport, reportPairs)
+import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..), foreignPath)
+import Haskoin.Wallet.Tx.FeeRates (FeeRates)
 import Numeric.Natural (Natural)
 
+-- | The secret newportfolio made and shows once: a mnemonic, or the shares
+-- of a backup. hw keeps neither.
+data NewSecret
+  = -- | A new mnemonic: the source of its entropy, and its words
+    NewMnemonic !Text ![Text]
+  | -- | The shares of a new backup: the source of its entropy, the number
+    -- of shares that rebuild the seed, and the words of each share
+    NewShares !Text !Natural ![[Text]]
+  deriving (Eq, Show)
+
+-- | An account of a group of a listing: its type, and how many addresses
+-- it has on its receiving chain and on its change chain. The screen pads
+-- the paths of a listing to the longest path these give, the same for
+-- every page of it.
+data AccountCounts = AccountCounts
+  { countsKind :: !AccountKind,
+    countsExternal :: !Natural,
+    countsInternal :: !Natural
+  }
+  deriving (Eq, Show)
+
+-- | A group of a listing: the rows of a portfolio on one network. addresses
+-- lists the addresses of one account in a group, and balances, coins and
+-- txs what both accounts of the network hold together. The group says
+-- where it is and which accounts it covers, then lists its rows.
+data Group row = Group
+  { groupPlace :: !Place,
+    -- | The accounts the group covers, BIP44 first: one for a group of
+    -- addresses, or for a listing narrowed to one type
+    groupAccounts :: ![AccountCounts],
+    groupRows :: ![row]
+  }
+  deriving (Eq, Show)
+
+-- | The account of a group of addresses, which covers one
+groupAccountRef :: Group row -> Maybe AccountRef
+groupAccountRef g = case groupAccounts g of
+  [only] -> Just (AccountRef (groupPlace g) (countsKind only))
+  _ -> Nothing
+
+-- | The answer of a command: what it did, or why it did nothing, with
+-- where it is. Each answer reads back from its JSON.
 data Response
   = -- | The command failed, and why
     ResponseError !Text
-  | -- | A new mnemonic: the source of its entropy, and its words
-    ResponseMnemonic !Text ![Text]
-  | -- | The shares of a new backup: the source of its entropy, the number
-    -- of shares that rebuild the seed, and the words of each share
-    ResponseShares !Text !Natural ![[Text]]
-  | -- | An account, with the balance it can spend now. The JSON gives it
-    -- with its output descriptor too ('accountWithKeys').
-    ResponseAccount !DBAccount !Word64
-  | -- | An account, whether the command did what it was asked, and what it
-    -- says of it
-    ResponseAccResult !DBAccount !Bool !Text
+  | -- | What newportfolio did: the secret it made, when it made one, the
+    -- portfolio it created, the indexes of the wallets of the same seed
+    -- it merged into the wallet of the portfolio, and how many accounts
+    -- it added to the other portfolios of that wallet to fill them in
+    ResponseNewPortfolio !(Maybe NewSecret) !PortfolioView ![Natural] !Natural
+  | -- | A portfolio as it is now, after a command that changed it
+    ResponsePortfolio !PortfolioView
+  | -- | The portfolios of a wallet once fillwallet filled them in: the
+    -- indexes of the wallets merged into it, how many accounts were added,
+    -- and the portfolios
+    ResponseFilled ![Natural] !Natural ![PortfolioView]
+  | -- | Whether a mnemonic matched a portfolio, and what hw says of it
+    ResponseChecked !PortfolioRef !Bool !Text
+  | -- | Something deleted, a portfolio or a wallet: what hw says of it,
+    -- and the defaults the configuration file was given, if any changed:
+    -- each key with its new value
+    ResponseDeleted !Text ![(Text, Natural)]
+  | -- | The defaults setdefault wrote to the configuration file: each key
+    -- with its new value, and the file
+    ResponseDefaults ![(Text, Text)] !FilePath
   | -- | The file the command wrote
     ResponseFile !FilePath
-  | -- | What importacc did with a file: the accounts it names, the labels
-    -- and locks set, and what it could not place
+  | -- | What importwallet did with a file: the wallets and the accounts it
+    -- names, the labels and locks set, and what it could not place
     ResponseImport !ImportReport
-  | -- | A file of accounts as show shows it, before it is imported: each
-    -- account as importacc would take it, with its labels and locks, and
-    -- the rest of the file. The wallet keeps nothing of it.
-    ResponseAccountFile !FileShown
-  | -- | Accounts, each with the balance it can spend now. The JSON gives
-    -- each with its output descriptor too ('accountWithKeys').
-    ResponseAccounts ![(DBAccount, Word64)]
-  | -- | An address of the account, with the balance it can spend now
-    ResponseAddress !DBAccount !DBAddress !Word64
-  | -- | Addresses of the account, each with the balance it can spend now
-    ResponseAddresses !DBAccount ![(DBAddress, Word64)]
-  | -- | Addresses of the account that hold coins, each with the balance of
-    -- its coins
-    ResponseBalances !DBAccount ![(DBAddress, CoinBalance)]
-  | -- | The address of the account at a path of one of its chains,
-    -- derived from the key of the account, which the wallet does not hold:
-    -- what show answers for such a path. The address is cut, its middle
-    -- hidden ("Haskoin.Wallet.CutAddress"), in JSON too, so that no script
-    -- pays it either. JSON gives it as "cutaddress", since it is no
-    -- address.
-    ResponseDerivedAddr !DBAccount !SoftPath !Text
-  | -- | Transactions of the account
-    ResponseTxs !DBAccount ![ListedTx]
-  | -- | Pending transactions, each with its account: those of the account
-    -- asked for, or of every account when none is
-    ResponsePendingTxs !(Maybe DBAccount) ![(DBAccount, TxInfo)]
-  | -- | A transaction of the account
-    ResponseTx !DBAccount !TxInfo
-  | -- | A transaction just labelled, as each account that holds it sees it:
-    -- the account of a pending one, or every account whose history has it
-    ResponseLabelledTxs ![(DBAccount, TxInfo)]
-  | -- | A transaction as each account that holds it sees it, as show
-    -- answers: the account of a pending one, or every account whose
-    -- history has it, such as both ends of a payment between two accounts
-    ResponseHeldTxs ![(DBAccount, TxInfo)]
-  | -- | A transaction of the account just prepared by preparetx or
-    -- preparesendall, with the coins it leaves in the account and why: the
-    -- coins that coin control chose and could not spend, and for a
-    -- send-all every coin it does not send
-    ResponsePrepared !DBAccount !TxInfo ![LeftCoin]
+  | -- | A file of a wallet as show shows it, before it is imported: each
+    -- wallet and each account as importwallet would leave it, with its
+    -- labels and locks, and the rest of the file. The database keeps
+    -- nothing of it.
+    ResponseWalletFile !FileShown
+  | -- | Portfolios, each with its figures on each network. The JSON gives
+    -- each account with its output descriptor.
+    ResponsePortfolios ![PortfolioView]
+  | -- | An address of an account, with the balance it can spend now
+    ResponseAddress !AccountRef !DBAddress !Word64
+  | -- | Addresses, grouped by account, each with the balance it can spend
+    -- now
+    ResponseAddresses ![Group (DBAddress, Word64)]
+  | -- | The addresses that hold coins, grouped by network, each with the
+    -- balance of its coins. Each group comes with the total of its
+    -- network, which the listing gives before the addresses. The total
+    -- counts every coin the listing covers on the network, whatever part
+    -- of them a page shows.
+    ResponseBalances ![(Group (DBAddress, CoinBalance), CoinBalance)]
+  | -- | The address of an account at a path of one of its chains, derived
+    -- from the key of the account, which the wallet does not hold: what
+    -- show answers for such a path. The address is cut, its middle hidden
+    -- ("Haskoin.Wallet.CutAddress"), in JSON too, so that no script pays
+    -- it either. JSON gives it as "cutaddress", since it is no address.
+    ResponseDerivedAddr !AccountRef !SoftPath !Text
+  | -- | Transactions, grouped by network, as the portfolio sees them
+    ResponseTxs ![Group ListedTx]
+  | -- | Pending transactions, each with where it is
+    ResponsePendingTxs ![(Place, TxInfo)]
+  | -- | A transaction of a portfolio on a network
+    ResponseTx !Place !TxInfo
+  | -- | A transaction just labelled, as each portfolio that holds it sees
+    -- it: the portfolio of a pending one, or every portfolio whose history
+    -- has it
+    ResponseLabelledTxs ![(Place, TxInfo)]
+  | -- | A transaction as each portfolio that holds it sees it, as show
+    -- answers: the portfolio of a pending one, or every portfolio whose
+    -- history has it, such as both ends of a payment between two
+    -- portfolios
+    ResponseHeldTxs ![(Place, TxInfo)]
+  | -- | A transaction just prepared by preparetx or preparesendall, with
+    -- the coins it leaves in the portfolio and why: the coins that coin
+    -- control chose and could not spend, and for a send-all every coin it
+    -- does not send
+    ResponsePrepared !Place !TxInfo ![LeftCoin]
   | -- | A transaction outside the wallet, a sweep between outside
     -- addresses, on its network
     ResponseOutsideTx !Network !TxInfo
@@ -90,26 +164,44 @@ data Response
   | -- | A pending transaction deleted, by its nosigHash and its id if it
     -- was signed, with the number of coins and of addresses it held
     ResponseDeleteTx !TxHash !(Maybe TxHash) !Natural !Natural
-  | -- | Coins of the account
-    ResponseCoins !DBAccount ![JsonCoin]
+  | -- | Coins, grouped by network
+    ResponseCoins ![Group JsonCoin]
   | -- | A signed message, its signature in base64, and the address that
     -- signed it
     ResponseSignMsg !Text !Text !Text
   | -- | A message, a signature in base64, the address it is said to be
     -- signed from, and whether it is
     ResponseVerifyMsg !Text !Text !Text !Bool
-  | -- | The sync of each account synced, and the accounts not synced, each
-    -- with the failure of its store
-    ResponseSync ![SyncRes] ![(DBAccount, Text)]
+  | -- | The sync of each portfolio on each network synced, the networks
+    -- the host does not serve, and the networks not synced, each with the
+    -- failure of its store
+    ResponseSync ![SyncRes] ![Network] ![(Network, Text)]
   | -- | What recover found of a seed. In order: the networks searched;
-    -- the gap of accounts the search ended on; the sync of each account
-    -- created, in the order of the networks, kinds and indices; the funds
-    -- of the seed at the accounts hw does not hold, each with its network;
-    -- and the networks left out, each with the failure of its store.
-    ResponseRecover ![Network] !Natural ![SyncRes] ![(Network, ForeignFunds)] ![(Network, Text)]
+    -- the gap of portfolios the search ended on; the wallet of the seed,
+    -- if it has one now; the indexes of the wallets merged into it; the
+    -- indexes of the portfolios created; how many accounts the portfolios
+    -- the wallet had were filled in with; the sync of each portfolio of
+    -- the wallet on each network searched; the funds of the seed at the
+    -- accounts hw does not hold, each with its network; the networks the
+    -- host does not serve; and the networks left out, each with the
+    -- failure of its store.
+    ResponseRecover ![Network] !Natural !(Maybe Natural) ![Natural] ![Natural] !Natural ![SyncRes] ![(Network, ForeignFunds)] ![Network] ![(Network, Text)]
   | -- | The fee rates recent blocks paid, on the network asked
     ResponseFees !Network !FeeRates
   deriving (Eq, Show)
+
+-- | Two answers of one listing as one: the groups of the second after
+-- those of the first. A listing that covers a whole portfolio is read
+-- group by group, and --json writes it as one answer. Any other pair
+-- gives the first.
+joinListings :: Response -> Response -> Response
+joinListings (ResponseAddresses a) (ResponseAddresses b) = ResponseAddresses (a <> b)
+joinListings (ResponseBalances a) (ResponseBalances b) = ResponseBalances (a <> b)
+joinListings (ResponseTxs a) (ResponseTxs b) = ResponseTxs (a <> b)
+joinListings (ResponseCoins a) (ResponseCoins b) = ResponseCoins (a <> b)
+joinListings (ResponsePendingTxs a) (ResponsePendingTxs b) = ResponsePendingTxs (a <> b)
+joinListings (ResponsePortfolios a) (ResponsePortfolios b) = ResponsePortfolios (a <> b)
+joinListings first _ = first
 
 {- JSON -}
 
@@ -117,54 +209,118 @@ data Response
 typed :: Text -> [Pair] -> Value
 typed kind fields = object (("type" .= kind) : fields)
 
+instance ToJSON NewSecret where
+  toJSON = \case
+    NewMnemonic source ws -> object ["entropysource" .= source, "mnemonic" .= ws]
+    NewShares source threshold shares -> object ["entropysource" .= source, "threshold" .= threshold, "shares" .= shares]
+
+instance FromJSON NewSecret where
+  parseJSON = withObject "new secret" $ \o -> do
+    sharesM <- o .:? "shares"
+    case sharesM of
+      Just shares -> NewShares <$> o .: "entropysource" <*> o .: "threshold" <*> return shares
+      Nothing -> NewMnemonic <$> o .: "entropysource" <*> o .: "mnemonic"
+
+instance ToJSON AccountCounts where
+  toJSON counts = object ["type" .= countsKind counts, "external" .= countsExternal counts, "internal" .= countsInternal counts]
+
+instance FromJSON AccountCounts where
+  parseJSON = withObject "account of a group" $ \o -> AccountCounts <$> o .: "type" <*> o .: "external" <*> o .: "internal"
+
+-- | The keys of a group, without its rows: where it is, and its accounts
+groupPairs :: Group row -> [Pair]
+groupPairs g = placePairs (groupPlace g) <> ["accounts" .= groupAccounts g]
+
+-- | A group back from its keys, with its rows read by the function given
+-- its network
+parseGroup :: (Network -> Object -> Parser [row]) -> Object -> Parser (Group row)
+parseGroup rowsOf o = do
+  place <- parsePlace o
+  Group place <$> o .: "accounts" <*> rowsOf (placeNetwork place) o
+
+-- | The balance of the coins of a network, as the JSON of balances gives
+-- it for a group
+coinBalancePairs :: CoinBalance -> [Pair]
+coinBalancePairs balance =
+  [ "total" .= coinBalanceTotal balance,
+    "spendable" .= coinBalanceSpendable balance,
+    "lockedbytx" .= coinBalanceLockedByTx balance,
+    "lockedbyuser" .= coinBalanceLockedByUser balance
+  ]
+
+-- | The balance of the coins of a network back from the keys
+-- 'coinBalancePairs' writes
+parseCoinBalance :: Object -> Parser CoinBalance
+parseCoinBalance o = CoinBalance <$> o .: "total" <*> o .: "spendable" <*> o .: "lockedbytx" <*> o .: "lockedbyuser"
+
 instance ToJSON Response where
   toJSON = \case
     ResponseError err -> typed "error" ["error" .= err]
-    ResponseMnemonic source ws ->
-      typed "mnemonic" ["entropysource" .= source, "mnemonic" .= ws]
-    ResponseShares source threshold shares ->
-      typed "shares" ["entropysource" .= source, "threshold" .= threshold, "shares" .= shares]
-    ResponseAccount acc spendable -> typed "account" ["account" .= accountWithKeys acc spendable]
-    ResponseAccResult acc result text -> typed "accresult" ["account" .= acc, "result" .= result, "text" .= text]
+    ResponseNewPortfolio secretM view merged filled ->
+      typed "newportfolio" ["secret" .= secretM, "portfolio" .= view, "merged" .= merged, "filled" .= filled]
+    ResponsePortfolio view -> typed "portfolio" ["portfolio" .= view]
+    ResponseFilled merged added views -> typed "filled" ["merged" .= merged, "added" .= added, "portfolios" .= views]
+    ResponseChecked ref result text -> typed "checked" (portfolioRefPairs ref <> ["result" .= result, "text" .= text])
+    ResponseDeleted text defaults ->
+      typed "deleted" ["text" .= text, "defaults" .= [object ["key" .= key, "value" .= value] | (key, value) <- defaults]]
+    ResponseDefaults defaults file ->
+      typed "defaults" ["defaults" .= [object ["key" .= key, "value" .= value] | (key, value) <- defaults], "file" .= file]
     ResponseFile file -> typed "file" ["file" .= file]
     ResponseImport report -> typed "import" (reportPairs report)
-    ResponseAccountFile shown -> typed "accountfile" (fileShownPairs shown)
-    ResponseAccounts accs -> typed "accounts" ["accounts" .= (uncurry accountWithKeys <$> accs)]
-    ResponseAddress acc addr spendable ->
-      typed "address" ["account" .= acc, "address" .= addressWithSpendable addr spendable]
-    ResponseAddresses acc addrs ->
-      typed "addresses" ["account" .= acc, "addresses" .= (uncurry addressWithSpendable <$> addrs)]
-    ResponseBalances acc addrs ->
-      typed "balances" ["account" .= acc, "addresses" .= (uncurry addressWithCoinBalance <$> addrs)]
-    ResponseDerivedAddr acc path cut ->
-      typed "derivedaddr" ["account" .= acc, "derivation" .= path, "cutaddress" .= cut]
-    ResponseTxs acc txs -> typed "txs" ["account" .= acc, "txs" .= (marshalValue (accountNetwork acc) <$> txs)]
-    ResponsePendingTxs asked held ->
-      typed "pendingtxs" ["account" .= asked, "txs" .= (heldTxJson <$> held)]
-    ResponseTx acc info -> typed "tx" ["account" .= acc, "tx" .= marshalValue (accountNetwork acc) info]
+    ResponseWalletFile shown -> typed "walletfile" (fileShownPairs shown)
+    ResponsePortfolios views -> typed "portfolios" ["portfolios" .= views]
+    ResponseAddress ref addr spendable ->
+      typed "address" ["account" .= ref, "address" .= addressWithSpendable addr spendable]
+    ResponseAddresses groups ->
+      typed "addresses" ["groups" .= [object (groupPairs g <> ["addresses" .= (uncurry addressWithSpendable <$> groupRows g)]) | g <- groups]]
+    ResponseBalances groups ->
+      typed
+        "balances"
+        [ "groups"
+            .= [ object (groupPairs g <> ["total" .= object (coinBalancePairs total), "addresses" .= (uncurry addressWithCoinBalance <$> groupRows g)])
+                 | (g, total) <- groups
+               ]
+        ]
+    ResponseDerivedAddr ref path cut ->
+      typed "derivedaddr" ["account" .= ref, "derivation" .= path, "cutaddress" .= cut]
+    ResponseTxs groups ->
+      typed "txs" ["groups" .= [object (groupPairs g <> ["txs" .= (marshalValue (placeNetwork (groupPlace g)) <$> groupRows g)]) | g <- groups]]
+    ResponsePendingTxs held -> typed "pendingtxs" ["txs" .= (heldTxJson <$> held)]
+    ResponseTx place info -> typed "tx" (placePairs place <> ["tx" .= marshalValue (placeNetwork place) info])
     ResponseLabelledTxs held -> typed "labelledtxs" ["txs" .= (heldTxJson <$> held)]
     ResponseHeldTxs held -> typed "heldtxs" ["txs" .= (heldTxJson <$> held)]
-    ResponsePrepared acc info left ->
-      typed "prepared" ["account" .= acc, "tx" .= marshalValue (accountNetwork acc) info, "left" .= left]
+    ResponsePrepared place info left ->
+      typed "prepared" (placePairs place <> ["tx" .= marshalValue (placeNetwork place) info, "left" .= left])
     ResponseOutsideTx net info -> typed "outsidetx" ["network" .= net.name, "tx" .= marshalValue net info]
     ResponseSentTx net txid -> typed "senttx" ["network" .= net.name, "txid" .= txid]
     ResponseDeleteTx nosigH txidM coins addrs ->
       typed "deletetx" ["nosighash" .= nosigH, "txid" .= txidM, "freedcoins" .= coins, "freedaddrs" .= addrs]
-    ResponseCoins acc coins -> typed "coins" ["account" .= acc, "coins" .= (marshalValue (accountNetwork acc) <$> coins)]
+    ResponseCoins groups ->
+      typed "coins" ["groups" .= [object (groupPairs g <> ["coins" .= (marshalValue (placeNetwork (groupPlace g)) <$> groupRows g)]) | g <- groups]]
     ResponseSignMsg message signature addr ->
       typed "signmsg" ["message" .= message, "signature" .= signature, "address" .= addr]
     ResponseVerifyMsg message signature addr valid ->
       typed "verifymsg" ["message" .= message, "signature" .= signature, "address" .= addr, "valid" .= valid]
-    ResponseSync results notSynced ->
-      typed "sync" ["syncres" .= (syncResJson <$> results), "notsynced" .= (notSyncedJson <$> notSynced)]
-    ResponseRecover searched gap results elsewhere notSearched ->
+    ResponseSync results notServed notSynced ->
+      typed
+        "sync"
+        [ "syncres" .= (syncResJson <$> results),
+          "notserved" .= ((.name) <$> notServed),
+          "notsynced" .= (failedNetworkJson <$> notSynced)
+        ]
+    ResponseRecover searched gap walletM merged created filled results elsewhere notServed notSearched ->
       typed
         "recover"
         [ "networks" .= ((.name) <$> searched),
-          "accountgap" .= gap,
+          "portfoliogap" .= gap,
+          "wallet" .= walletM,
+          "merged" .= merged,
+          "portfolios" .= created,
+          "filled" .= filled,
           "syncres" .= (syncResJson <$> results),
           "unspendable" .= (uncurry foreignFundsJson <$> elsewhere),
-          "notsearched" .= (notSearchedJson <$> notSearched)
+          "notserved" .= ((.name) <$> notServed),
+          "notsearched" .= (failedNetworkJson <$> notSearched)
         ]
     ResponseFees net rates -> typed "fees" ["network" .= net.name, "feerates" .= rates]
 
@@ -173,95 +329,117 @@ instance FromJSON Response where
     kind <- o .: "type"
     case kind :: Text of
       "error" -> ResponseError <$> o .: "error"
-      "mnemonic" -> ResponseMnemonic <$> o .: "entropysource" <*> o .: "mnemonic"
-      "shares" -> ResponseShares <$> o .: "entropysource" <*> o .: "threshold" <*> o .: "shares"
-      "account" -> uncurry ResponseAccount <$> (parseAccountWithSpendable =<< o .: "account")
-      "accresult" -> ResponseAccResult <$> o .: "account" <*> o .: "result" <*> o .: "text"
+      "newportfolio" -> ResponseNewPortfolio <$> o .:? "secret" <*> o .: "portfolio" <*> o .: "merged" <*> o .: "filled"
+      "portfolio" -> ResponsePortfolio <$> o .: "portfolio"
+      "filled" -> ResponseFilled <$> o .: "merged" <*> o .: "added" <*> o .: "portfolios"
+      "checked" -> ResponseChecked <$> parsePortfolioRef o <*> o .: "result" <*> o .: "text"
+      "deleted" -> ResponseDeleted <$> o .: "text" <*> (mapM keyValue =<< o .: "defaults")
+      "defaults" -> ResponseDefaults <$> (mapM keyValue =<< o .: "defaults") <*> o .: "file"
       "file" -> ResponseFile <$> o .: "file"
       "import" -> ResponseImport <$> parseReport o
-      "accountfile" -> ResponseAccountFile <$> parseFileShown o
-      "accounts" -> ResponseAccounts <$> (mapM parseAccountWithSpendable =<< o .: "accounts")
+      "walletfile" -> ResponseWalletFile <$> parseFileShown o
+      "portfolios" -> ResponsePortfolios <$> o .: "portfolios"
       "address" -> do
-        acc <- o .: "account"
-        uncurry (ResponseAddress acc) <$> (parseAddressWithSpendable =<< o .: "address")
-      "addresses" -> ResponseAddresses <$> o .: "account" <*> (mapM parseAddressWithSpendable =<< o .: "addresses")
-      "balances" -> ResponseBalances <$> o .: "account" <*> (mapM parseAddressWithCoinBalance =<< o .: "addresses")
+        ref <- o .: "account"
+        uncurry (ResponseAddress ref) <$> (parseAddressWithSpendable =<< o .: "address")
+      "addresses" -> ResponseAddresses <$> (mapM (withObject "group" (parseGroup (\_ g -> mapM parseAddressWithSpendable =<< g .: "addresses"))) =<< o .: "groups")
+      "balances" -> ResponseBalances <$> (mapM balanceGroup =<< o .: "groups")
       "derivedaddr" -> ResponseDerivedAddr <$> o .: "account" <*> o .: "derivation" <*> o .: "cutaddress"
-      "txs" -> do
-        acc <- o .: "account"
-        ResponseTxs acc <$> (mapM (unmarshalValue (accountNetwork acc)) =<< o .: "txs")
+      "txs" -> ResponseTxs <$> (mapM (marshalled "txs") =<< o .: "groups")
       "tx" -> do
-        acc <- o .: "account"
-        ResponseTx acc <$> (unmarshalValue (accountNetwork acc) =<< o .: "tx")
-      "pendingtxs" -> ResponsePendingTxs <$> o .: "account" <*> (mapM heldTx =<< o .: "txs")
+        place <- parsePlace o
+        ResponseTx place <$> (unmarshalValue (placeNetwork place) =<< o .: "tx")
+      "pendingtxs" -> ResponsePendingTxs <$> (mapM heldTx =<< o .: "txs")
       "labelledtxs" -> ResponseLabelledTxs <$> (mapM heldTx =<< o .: "txs")
       "heldtxs" -> ResponseHeldTxs <$> (mapM heldTx =<< o .: "txs")
       "prepared" -> do
-        acc <- o .: "account"
-        ResponsePrepared acc <$> (unmarshalValue (accountNetwork acc) =<< o .: "tx") <*> o .: "left"
+        place <- parsePlace o
+        ResponsePrepared place <$> (unmarshalValue (placeNetwork place) =<< o .: "tx") <*> o .: "left"
       "outsidetx" -> do
         net <- network o
         ResponseOutsideTx net <$> (unmarshalValue net =<< o .: "tx")
       "senttx" -> ResponseSentTx <$> network o <*> o .: "txid"
       "deletetx" -> ResponseDeleteTx <$> o .: "nosighash" <*> o .:? "txid" <*> o .: "freedcoins" <*> o .: "freedaddrs"
-      "coins" -> do
-        acc <- o .: "account"
-        ResponseCoins acc <$> (mapM (unmarshalValue (accountNetwork acc)) =<< o .: "coins")
+      "coins" -> ResponseCoins <$> (mapM (marshalled "coins") =<< o .: "groups")
       "signmsg" -> ResponseSignMsg <$> o .: "message" <*> o .: "signature" <*> o .: "address"
       "verifymsg" -> ResponseVerifyMsg <$> o .: "message" <*> o .: "signature" <*> o .: "address" <*> o .: "valid"
-      "sync" -> ResponseSync <$> (mapM parseSyncRes =<< o .: "syncres") <*> (mapM parseNotSynced =<< o .: "notsynced")
+      "sync" ->
+        ResponseSync
+          <$> (mapM parseSyncRes =<< o .: "syncres")
+          <*> (mapM networkNamed =<< o .: "notserved")
+          <*> (mapM parseFailedNetwork =<< o .: "notsynced")
       "recover" ->
         ResponseRecover
           <$> (mapM networkNamed =<< o .: "networks")
-          <*> o .: "accountgap"
+          <*> o .: "portfoliogap"
+          <*> o .:? "wallet"
+          <*> o .: "merged"
+          <*> o .: "portfolios"
+          <*> o .: "filled"
           <*> (mapM parseSyncRes =<< o .: "syncres")
           <*> (mapM parseForeignFunds =<< o .: "unspendable")
-          <*> (mapM parseNotSearched =<< o .: "notsearched")
+          <*> (mapM networkNamed =<< o .: "notserved")
+          <*> (mapM parseFailedNetwork =<< o .: "notsearched")
       "fees" -> ResponseFees <$> network o <*> o .: "feerates"
       _ -> fail "Invalid JSON response type"
     where
       network o = networkNamed =<< o .: "network"
-      -- A transaction with its account, which names its network
-      heldTx = withObject "transaction of an account" $ \entry -> do
-        acc <- entry .: "account"
-        (,) acc <$> (unmarshalValue (accountNetwork acc) =<< entry .: "tx")
+      keyValue :: (FromJSON v) => Value -> Parser (Text, v)
+      keyValue = withObject "default" $ \entry -> (,) <$> entry .: "key" <*> entry .: "value"
+      -- A transaction with where it is, which names its network
+      heldTx = withObject "transaction of a portfolio" $ \entry -> do
+        place <- parsePlace entry
+        (,) place <$> (unmarshalValue (placeNetwork place) =<< entry .: "tx")
+      -- A group of a listing whose rows are read on its network
+      marshalled :: (MarshalJSON Network row) => Data.Aeson.Key -> Value -> Parser (Group row)
+      marshalled key = withObject "group of a listing" (parseGroup (\net g -> mapM (unmarshalValue net) =<< g .: key))
+      balanceGroup = withObject "balances of a network" $ \entry ->
+        (,)
+          <$> parseGroup (\_ g -> mapM parseAddressWithCoinBalance =<< g .: "addresses") entry
+          <*> (parseCoinBalance =<< entry .: "total")
 
 -- | The network of a name in JSON
 networkNamed :: String -> Parser Network
 networkNamed = maybe (fail "Unknown network") return . netByName
 
--- | A transaction with its account in JSON, in a list of transactions of
--- several accounts
-heldTxJson :: (DBAccount, TxInfo) -> Value
-heldTxJson (acc, info) = object ["account" .= acc, "tx" .= marshalValue (accountNetwork acc) info]
+-- | A transaction with where it is in JSON, in a list of transactions of
+-- several portfolios
+heldTxJson :: (Place, TxInfo) -> Value
+heldTxJson (place, info) = object (placePairs place <> ["tx" .= marshalValue (placeNetwork place) info])
 
--- | The sync of an account in JSON, with what the account can spend now
+-- | The sync of a portfolio on a network in JSON, with what it holds and
+-- can spend now
 syncResJson :: SyncRes -> Value
-syncResJson (SyncRes acc spendable best height txs coins rebroadcast conflicted discovered) =
-  object
-    [ "account" .= accountWithSpendable acc spendable,
-      "bestblock" .= best,
-      "bestheight" .= height,
-      "txupdates" .= txs,
-      "coinupdates" .= coins,
-      "rebroadcast" .= rebroadcast,
-      "conflicted" .= conflicted,
-      "discovered" .= discovered
-    ]
-
--- | An account not synced in JSON, with the failure of its store
-notSyncedJson :: (DBAccount, Text) -> Value
-notSyncedJson (acc, failure) = object ["account" .= acc, "error" .= failure]
-
-parseNotSynced :: Value -> Parser (DBAccount, Text)
-parseNotSynced = withObject "notsynced" $ \o -> (,) <$> o .: "account" <*> o .: "error"
+syncResJson res =
+  object $
+    placePairs (syncResPlace res)
+      <> [ "balance"
+             .= object
+               [ "confirmed" .= syncResConfirmed res,
+                 "unconfirmed" .= syncResUnconfirmed res,
+                 "coins" .= syncResCoins res,
+                 "spendable" .= syncResSpendable res
+               ],
+           "bestblock" .= syncResBlockHash res,
+           "bestheight" .= syncResBlockHeight res,
+           "txupdates" .= syncResTxUpdates res,
+           "coinupdates" .= syncResCoinUpdates res,
+           "rebroadcast" .= syncResRebroadcast res,
+           "conflicted" .= syncResConflicted res,
+           "discovered" .= syncResNewAddrs res
+         ]
 
 parseSyncRes :: Value -> Parser SyncRes
 parseSyncRes =
   withObject "syncres" $ \o -> do
-    (acc, spendable) <- parseAccountWithSpendable =<< o .: "account"
-    SyncRes acc spendable
-      <$> o .: "bestblock"
+    place <- parsePlace o
+    balance <- o .: "balance"
+    SyncRes place
+      <$> balance .: "confirmed"
+      <*> balance .: "unconfirmed"
+      <*> balance .: "coins"
+      <*> balance .: "spendable"
+      <*> o .: "bestblock"
       <*> o .: "bestheight"
       <*> o .: "txupdates"
       <*> o .: "coinupdates"
@@ -269,13 +447,13 @@ parseSyncRes =
       <*> o .: "conflicted"
       <*> o .: "discovered"
 
--- | A network recover did not search in JSON, with the failure of its
--- store
-notSearchedJson :: (Network, Text) -> Value
-notSearchedJson (net, failure) = object ["network" .= net.name, "error" .= failure]
+-- | A network that was left out in JSON, with the failure of its store
+failedNetworkJson :: (Network, Text) -> Value
+failedNetworkJson (net, failure) = object ["network" .= net.name, "error" .= failure]
 
-parseNotSearched :: Value -> Parser (Network, Text)
-parseNotSearched = withObject "notsearched" $ \o -> (,) <$> (networkNamed =<< o .: "network") <*> o .: "error"
+-- | A network left out back from its JSON, as 'failedNetworkJson' writes it
+parseFailedNetwork :: Value -> Parser (Network, Text)
+parseFailedNetwork = withObject "network left out" $ \o -> (,) <$> (networkNamed =<< o .: "network") <*> o .: "error"
 
 -- | The funds of a seed at an account hw does not hold, in JSON: the
 -- network, the kind of the account, its path on the network and its
@@ -303,11 +481,13 @@ parseForeignFunds =
     (,) net <$> (ForeignFunds kind <$> o .: "index" <*> o .: "addresses" <*> o .: "balance")
 
 -- | Whether the answer is a failure, which hw exits with: an error, a
--- signature found not valid, a sync that left accounts out, or a recover
--- that left a network out, so that a script can tell from the exit code
+-- signature found not valid, a sync that left a network out because its
+-- store is down, or a recover that did, so that a script can tell from
+-- the exit code. A network the host does not
+-- serve is no failure.
 responseFailed :: Response -> Bool
 responseFailed (ResponseError _) = True
 responseFailed (ResponseVerifyMsg _ _ _ valid) = not valid
-responseFailed (ResponseSync _ notSynced) = not (null notSynced)
-responseFailed (ResponseRecover _ _ _ _ notSearched) = not (null notSearched)
+responseFailed (ResponseSync _ _ notSynced) = not (null notSynced)
+responseFailed (ResponseRecover _ _ _ _ _ _ _ _ _ notSearched) = not (null notSearched)
 responseFailed _ = False

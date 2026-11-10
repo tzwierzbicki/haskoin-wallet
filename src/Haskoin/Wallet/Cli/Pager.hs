@@ -6,10 +6,11 @@
 -- shows the colours, leaves the listing on the screen when it quits, and
 -- keeps each line on one line of the screen (-F, -R, -X and -S), unless
 -- LESS is set to something else. A table taller than the screen also
--- keeps its header on the screen, and the verbose view of accounts wraps
--- its lines instead, for its descriptors ('lessOptions'). A listing goes
--- out as it is when stdout is not a terminal, with --no-pager, and when
--- the pager named is empty or cat.
+-- keeps its header on the screen, unless the title of a section comes
+-- above it, and the verbose view of portfolios wraps its lines instead,
+-- for its descriptors ('lessOptions'). A listing goes out as it is when
+-- stdout is not a terminal, with --no-pager, and when the pager named is
+-- empty or cat.
 --
 -- The pager starts with the first chunk of the listing, not before it: how
 -- less shows a table depends on how tall the table is ('tableShown').
@@ -97,21 +98,31 @@ tableShown screenRows tableLines
 -- the function given says it shows, and is waited for after the action,
 -- as long as the user reads. Ctrl-C then goes to the pager, which handles
 -- it; hw ignores it meanwhile. A pager that is not installed is reported
--- on stderr, and the listing is printed without one.
-withPager :: Maybe String -> (Doc Style -> Shown) -> ((Doc Style -> IO Bool) -> IO a) -> IO a
+-- on stderr, and the listing is printed without one. So is a pager that
+-- cannot be looked for, in an environment without PATH ('pagerProgram').
+withPager :: Maybe String -> (Doc Style -> IO Shown) -> ((Doc Style -> IO Bool) -> IO a) -> IO a
 withPager pagerM shownOf action = do
   output <- outputOf stdout
   case pagerM of
     Nothing -> action (writeDoc stdout output)
     Just command -> do
       installed <- case words command of
-        program : _ -> findExecutable program
+        program : _ -> pagerProgram program
         [] -> return Nothing
       case installed of
         Nothing -> do
           hPutStrLn stderr $ "The pager " <> command <> " was not found. The listing is printed without one."
           action (writeDoc stdout output)
         Just _ -> pipedThrough command shownOf output action
+
+-- | The program of a pager command, found on the PATH as the shell finds
+-- it, or none. findExecutable fails when the environment has no PATH, as
+-- env -i leaves it: the pager then counts as not found, and the listing is
+-- still shown, rather than lost to the failure.
+pagerProgram :: String -> IO (Maybe FilePath)
+pagerProgram program = do
+  found <- try (findExecutable program) :: IO (Either IOException (Maybe FilePath))
+  return (either (const Nothing) id found)
 
 -- | A pager running: its input, its process, and what hw did on Ctrl-C
 -- before it started
@@ -120,7 +131,7 @@ data Running = Running !Handle !ProcessHandle !Handler
 -- | Run the action with a function that writes on the input of the pager
 -- command, which starts at the first document written, then wait for the
 -- pager
-pipedThrough :: String -> (Doc Style -> Shown) -> Output -> ((Doc Style -> IO Bool) -> IO a) -> IO a
+pipedThrough :: String -> (Doc Style -> IO Shown) -> Output -> ((Doc Style -> IO Bool) -> IO a) -> IO a
 pipedThrough command shownOf output action = do
   started <- newIORef Nothing
   let write doc = do
@@ -128,7 +139,7 @@ pipedThrough command shownOf output action = do
         Running input _ _ <- case running of
           Just pager -> return pager
           Nothing -> do
-            pager <- startPager command (shownOf doc)
+            pager <- startPager command =<< shownOf doc
             writeIORef started (Just pager)
             return pager
         writeDoc input output doc
@@ -179,9 +190,9 @@ stopPager (Running input pager previous) = do
 -- cuts, such as a long line of a diff, hides text until the user scrolls.
 -- Wrapping hides nothing, but here it would break what the columns show.
 --
--- The verbose view of accounts is the one listing whose lines wrap (no
+-- The verbose view of portfolios is the one listing whose lines wrap (no
 -- -S). Each account in it ends with its output descriptor, 148 columns or
--- more, which the user copies into another wallet. A descriptor cut at the
+-- more, and its SLIP-132 key, which the user copies into another wallet. A descriptor cut at the
 -- edge of the screen could not be copied, and less would stay open on
 -- every such listing, however short. Without -S, less leaves the wrapping
 -- to the terminal, which then copies the line whole, and quits by itself

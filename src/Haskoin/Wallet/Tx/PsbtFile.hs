@@ -6,26 +6,28 @@
 -- signtx, signsweep and broadcast read. The fields of the spec carry the
 -- transaction, the whole transaction every coin comes from, and for a
 -- SegWit coin its output alone as well, which the signers of such coins
--- want, the keys of the account in the inputs and outputs with their
+-- want, the keys of the portfolio in the inputs and outputs with their
 -- derivation paths, the sighash to sign with, and the signatures, as the
 -- final scripts and witnesses of the inputs. What is hw's own goes in
 -- proprietary fields under the identifier "hw": the network, the fee rate
 -- the transaction was built for, the transactions it replaces and its
 -- label in the global map, the label of an address on its input or output,
 -- the label a coin shows on its input, and the path of the address of the
--- account an input spends from.
+-- portfolio an input spends from.
 --
 -- A derivation record names a key by the fingerprint of the seed and the
 -- path from it, m/44'/0'/0'/0/5, when the wallet knows the seed, as the
 -- spec wants it and other signers expect it. Otherwise it names the key by
 -- the fingerprint of the account's own key and the path from it, /0/5, as
 -- Bitcoin Core does for a key whose origin it does not know. The signer
--- knows the seed, so a signed file names it, and the wallet that imports
--- the file learns its fingerprint. A PSBT does not say which account of
--- the wallet it is for: the reader tries the accounts given, by the keys
--- the records name, and gives the paths of the first one with a record,
--- relative to it, as the signing data wants them. The file carries no key
--- of the account beyond those of its addresses in the transaction.
+-- knows the seed, so a signed file names it. A PSBT does not say which
+-- portfolio it is for: the reader tries the pools given, each the
+-- accounts of a portfolio on a network, by the keys the records name, and
+-- gives the paths of the first one with a record, each with the kind of
+-- its account, as the signing data wants them. A transaction may spend
+-- the coins of the BIP44 and of the BIP84 account of a portfolio
+-- together, so a pool is matched as a whole. The file carries no key of
+-- an account beyond those of its addresses in the transaction.
 --
 -- A signed input is final: it carries its final script and witness, and
 -- no key, sighash or partial signature any more, as the finalizer of the
@@ -35,7 +37,8 @@
 -- leaves the fields the spec does not define, so the path of the address
 -- an input spends from stays, in the field of hw: the reader derives the
 -- key of each of its accounts there, and the input is of the account
--- whose address the coin pays. No table of addresses and no search is
+-- whose address the coin pays, which also tells the kind of the path. No
+-- table of addresses and no search is
 -- needed, so an offline signer that never handed out an address reads
 -- the file it signed. A file without that field, which another wallet
 -- prepared and finalized, is placed by the addresses the wallet knows.
@@ -68,7 +71,7 @@ module Haskoin.Wallet.Tx.PsbtFile
 where
 
 import Control.Applicative ((<|>))
-import Control.Monad (forM, forM_, unless, when)
+import Control.Monad (foldM, forM, forM_, unless, when)
 import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
@@ -84,7 +87,7 @@ import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
 import Data.Word (Word64)
 import Haskoin
-import Haskoin.Wallet.Keys (AccountKind, isChainPath, keyScript)
+import Haskoin.Wallet.Keys (AccountKind, PoolPath (..), isChainPath, keyScript, kindName, poolPathText)
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Signing (offChainPath, sigHashName, walletSigHash)
 import Haskoin.Wallet.Util (visibleText)
@@ -153,10 +156,10 @@ inputPathOf i bytes =
 
 {- Writing -}
 
--- | An address of the account at a path, as the file names it: its key,
+-- | An address of the portfolio at a path, as the file names it: its key,
 -- the script that pays it, and the derivation of the key
 data AddressKey = AddressKey
-  { addressPath :: !SoftPath,
+  { addressPath :: !PoolPath,
     addressPublic :: !PublicKey,
     addressScript :: !ByteString,
     addressDerivation :: !Derivation
@@ -168,7 +171,7 @@ data AddressKey = AddressKey
 addressKey :: Ctx -> FileAccount -> Maybe Fingerprint -> SoftPath -> AddressKey
 addressKey ctx acc fingerprintM path =
   AddressKey
-    { addressPath = path,
+    { addressPath = PoolPath acc.fileAccountKind path,
       addressPublic = public,
       addressScript = marshal ctx (keyScript acc.fileAccountKind ctx public),
       addressDerivation = case fingerprintM of
@@ -178,12 +181,21 @@ addressKey ctx acc fingerprintM path =
   where
     public = wrapPubKey True (derivePubPath ctx path acc.fileAccountXPub).key
 
--- | The PSBT of a transaction file, with the keys of the account given in
--- its derivation records: the account the paths of the file are relative
--- to. A file of a transaction outside the wallet, which has no path, needs
--- none. The file must name its network, as every file hw writes does.
-txFilePsbt :: Ctx -> Maybe FileAccount -> TxFile -> Either String Psbt
-txFilePsbt ctx accountM file = do
+-- | The address of a pool at a path: that of its account of the kind of
+-- the path. A path of a kind the pool has no account of is refused.
+poolAddressKey :: Ctx -> [FileAccount] -> Maybe Fingerprint -> PoolPath -> Either String AddressKey
+poolAddressKey ctx accounts fingerprintM path =
+  case [acc | acc <- accounts, acc.fileAccountKind == path.pathKind] of
+    acc : _ -> Right (addressKey ctx acc fingerprintM path.pathInAccount)
+    [] -> Left ("The path " <> cs (poolPathText path) <> " is of a " <> cs (kindName path.pathKind) <> " account, which the file was given no key of")
+
+-- | The PSBT of a transaction file, with the keys of the accounts given in
+-- its derivation records: the accounts of the pool the paths of the file
+-- are of, one of each kind. A file of a transaction outside the wallet,
+-- which has no path, needs none. The file must name its network, as every
+-- file hw writes does.
+txFilePsbt :: Ctx -> [FileAccount] -> TxFile -> Either String Psbt
+txFilePsbt ctx accounts file = do
   net <- maybe (Left "The file names no network") Right file.txFileNetwork
   let tsd = file.txFileData
       tx = tsd.txSignDataTx
@@ -196,24 +208,25 @@ txFilePsbt ctx accountM file = do
       maybe (Left ("Input " <> show i <> " spends an output its transaction does not have")) Right $
         listToMaybe (drop (fromIntegral input.outpoint.index) parent.outputs)
     return (parent, coin)
-  let fingerprintM = tsd.txSignDataFingerprint <|> (fileAccountFingerprint =<< accountM)
-  (inputKeys, outputKeys) <- case accountM of
-    Just acc -> do
-      forM_ (tsd.txSignDataInputPaths <> tsd.txSignDataOutputPaths) $ \path ->
-        unless (isChainPath path) $ Left (offChainPath path)
-      let keysOf = map (addressKey ctx acc fingerprintM)
-          inputKeys = keysOf tsd.txSignDataInputPaths
-          outputKeys = keysOf tsd.txSignDataOutputPaths
-      forM_ inputKeys $ \key ->
-        unless (any ((== key.addressScript) . (.script) . snd) coins) $
-          Left ("The path " <> pathToStr key.addressPath <> " is of no input of the transaction")
-      forM_ outputKeys $ \key ->
-        unless (any ((== key.addressScript) . (.script)) tx.outputs) $
-          Left ("The path " <> pathToStr key.addressPath <> " is of no output of the transaction")
-      return (inputKeys, outputKeys)
-    Nothing
-      | null tsd.txSignDataInputPaths && null tsd.txSignDataOutputPaths -> return ([], [])
-      | otherwise -> Left "The file has paths of an account, and no account to derive them from"
+  let fingerprintM = tsd.txSignDataFingerprint <|> listToMaybe (mapMaybe (.fileAccountFingerprint) accounts)
+  (inputKeys, outputKeys) <-
+    if null accounts
+      then
+        if null tsd.txSignDataInputPaths && null tsd.txSignDataOutputPaths
+          then return ([], [])
+          else Left "The file has paths of an account, and no account to derive them from"
+      else do
+        forM_ (tsd.txSignDataInputPaths <> tsd.txSignDataOutputPaths) $ \path ->
+          unless (isChainPath path.pathInAccount) $ Left (offChainPath path)
+        inputKeys <- mapM (poolAddressKey ctx accounts fingerprintM) tsd.txSignDataInputPaths
+        outputKeys <- mapM (poolAddressKey ctx accounts fingerprintM) tsd.txSignDataOutputPaths
+        forM_ inputKeys $ \key ->
+          unless (any ((== key.addressScript) . (.script) . snd) coins) $
+            Left ("The path " <> cs (poolPathText key.addressPath) <> " is of no input of the transaction")
+        forM_ outputKeys $ \key ->
+          unless (any ((== key.addressScript) . (.script)) tx.outputs) $
+            Left ("The path " <> cs (poolPathText key.addressPath) <> " is of no output of the transaction")
+        return (inputKeys, outputKeys)
   feeRateM <- forM tsd.txSignDataFeeRate $ \rate -> do
     when (rate > fromIntegral (maxBound :: Word64)) $ Left "The fee rate is beyond what the file can hold"
     return (S.runPut (S.putWord64le (fromIntegral rate)))
@@ -252,10 +265,12 @@ inputMap ctx net file keys input stack (parent, coin) =
   where
     unsigned = BS.null input.script && null stack
     segWitCoin = either (const False) isSegwit (unmarshal ctx coin.script)
-    -- The address of the account the input spends from: its path and its
-    -- label, and the derivation record of its key while a signer needs it
+    -- The address of the portfolio the input spends from: its path and its
+    -- label, and the derivation record of its key while a signer needs
+    -- it. The field holds the path below the key of the account alone:
+    -- the coin, by its script, says which account that is.
     spentAddressFields key =
-      [insertProprietary hwIdentifier inputPathField (inputPathBytes key.addressPath)]
+      [insertProprietary hwIdentifier inputPathField (inputPathBytes key.addressPath.pathInAccount)]
         <> [insertInputDerivation ctx key.addressPublic key.addressDerivation | unsigned]
         <> addressLabel file key
 
@@ -297,8 +312,8 @@ addressLabel file key =
 -- file has none. The transaction signed must be the file's, and the
 -- signed file must name its network, which says how a signature is
 -- verified.
-signedPsbt :: Ctx -> Maybe FileAccount -> Psbt -> TxFile -> Either String Psbt
-signedPsbt ctx accountM source file = do
+signedPsbt :: Ctx -> [FileAccount] -> Psbt -> TxFile -> Either String Psbt
+signedPsbt ctx accounts source file = do
   net <- maybe (Left "The file names no network") Right file.txFileNetwork
   let tsd = file.txFileData
       tx = tsd.txSignDataTx
@@ -306,13 +321,16 @@ signedPsbt ctx accountM source file = do
     Left "The transaction signed is not the one of the file"
   coins <- inputCoins source
   let stacks = tx.witness <> repeat []
-      -- The paths the account signed with, by the script of their address
-      spentPaths = case accountM of
-        Just acc -> Map.fromList [(key.addressScript, key.addressPath) | key <- addressKey ctx acc Nothing <$> tsd.txSignDataInputPaths]
-        Nothing -> Map.empty
+      -- The paths the accounts signed with, by the script of their address
+      spentPaths =
+        Map.fromList
+          [ (key.addressScript, key.addressPath)
+            | path <- tsd.txSignDataInputPaths,
+              Right key <- [poolAddressKey ctx accounts Nothing path]
+          ]
       withPath :: Maybe InputCoin -> PsbtMap -> PsbtMap
       withPath coinM m = case (\found -> Map.lookup found.coin.script spentPaths) =<< coinM of
-        Just path -> insertProprietary hwIdentifier inputPathField (inputPathBytes path) m
+        Just path -> insertProprietary hwIdentifier inputPathField (inputPathBytes path.pathInAccount) m
         Nothing -> m
       withSignatures = zipWith4 (signerFields net) coins tx.inputs stacks (zipWith withPath coins source.inputs)
       globals = case lookupProprietary hwIdentifier networkField source.globals of
@@ -322,8 +340,11 @@ signedPsbt ctx accountM source file = do
   final <- psbtPartialTransaction finalized
   unless (S.encode final == S.encode tx) $
     Left "The file, once finalized, does not hold the transaction signed"
-  let fingerprintM = tsd.txSignDataFingerprint <|> (fileAccountFingerprint =<< accountM)
-      namedBySeed records insert m = maybe (return m) (\(acc, fp) -> fromSeed records insert acc fp m) ((,) <$> accountM <*> fingerprintM)
+  let fingerprintM = tsd.txSignDataFingerprint <|> listToMaybe (mapMaybe (.fileAccountFingerprint) accounts)
+      -- Each account of the pool rewrites the records that name its own key
+      namedBySeed records insert m = case fingerprintM of
+        Nothing -> return m
+        Just fp -> foldM (\rewritten acc -> fromSeed records insert acc fp rewritten) m accounts
   inputs <- forM finalized.inputs (namedBySeed (inputDerivations ctx) (insertInputDerivation ctx))
   outputs <- forM finalized.outputs (namedBySeed (outputDerivations ctx) (insertOutputDerivation ctx))
   -- The file keeps its version. hw signs with the sighash ALL, with
@@ -387,31 +408,58 @@ data AccountMatch = AccountMatch
     matchLabels :: !(Map SoftPath Text)
   }
 
+-- | What a PSBT says of a pool, the accounts of a portfolio on a network:
+-- what it says of each of its accounts, put together, each path with the
+-- kind of its account
+data PoolMatch = PoolMatch
+  { poolMatchNetwork :: !(Maybe Network),
+    poolMatchInputPaths :: ![PoolPath],
+    poolMatchOutputPaths :: ![PoolPath],
+    poolMatchFingerprint :: !(Maybe Fingerprint),
+    poolMatchLabels :: !(Map PoolPath Text)
+  }
+
+-- | The matches of the accounts of a pool as one
+poolMatch :: [AccountMatch] -> PoolMatch
+poolMatch matches =
+  PoolMatch
+    { poolMatchNetwork = listToMaybe [m.matchAccount.fileAccountNetwork | m <- matches],
+      poolMatchInputPaths = concat [withKind m <$> m.matchInputPaths | m <- matches],
+      poolMatchOutputPaths = concat [withKind m <$> m.matchOutputPaths | m <- matches],
+      poolMatchFingerprint = listToMaybe (mapMaybe (.matchFingerprint) matches),
+      poolMatchLabels = Map.unions [Map.mapKeys (withKind m) m.matchLabels | m <- matches]
+    }
+  where
+    withKind :: AccountMatch -> SoftPath -> PoolPath
+    withKind m = PoolPath m.matchAccount.fileAccountKind
+
 -- | The transaction file of a PSBT, as the signing data of hw holds it,
--- with its paths relative to the account among those given that the file
--- names: the first with an address on an input, or else on an output,
--- those on the network the file names coming first. A derivation record
--- names an address of an account by its key. The field of hw of an input
--- names one by its path alone ('inputPathField'), which a signed input
--- still has: it is of the account whose address at that path the coin
--- pays, and of no account when none has it there. A PSBT that names none
--- of the accounts is read without paths, as a transaction outside the
--- wallet. Every input must carry the whole transaction its coin comes
--- from, which haskoin-core checks against the input. An input to be
--- signed with a sighash hw does not sign with is refused: that of the
--- account's network, or ALL, with FORKID on Bitcoin Cash, when no account
--- is involved.
+-- with its paths in the pool among those given that the file names. A
+-- pool is the accounts of a portfolio on a network, given together. The
+-- pool taken is the first with an address on an input, or else on an
+-- output, those on the network the file names coming first: a
+-- transaction that moves funds between two portfolios is read for the
+-- one that pays. A derivation record names an address of an account by
+-- its key. The field of hw of an input names one by its path alone
+-- ('inputPathField'), which a signed input still has: it is of the
+-- account whose address at that path the coin pays, and of no account
+-- when none has it there. A PSBT that names none of the pools is read
+-- without paths, as a transaction outside the wallet. Every input must
+-- carry the whole transaction its coin comes from, which haskoin-core
+-- checks against the input. An input to be signed with a sighash hw does
+-- not sign with is refused: that of the pool's network, or ALL, with
+-- FORKID on Bitcoin Cash, when no pool is involved.
 --
 -- An input signed but not finalized, as a hardware wallet leaves it, is
 -- finalized by haskoin-core's finalizePsbt, which verifies the signatures
 -- it uses against the coin and refuses one that does not verify. A
 -- signature is verified as its network has it: the network the file
--- names, else that of the account its records name, else the one given,
+-- names, else that of the pool its records name, else the one given,
 -- which a command takes from --network or from the configuration. When
 -- nothing names a network, nothing is finalized, and such an input reads
 -- as unsigned.
-psbtTxFile :: Ctx -> Maybe Network -> [FileAccount] -> Psbt -> Either String TxFile
-psbtTxFile ctx fallbackM accounts psbt = do
+psbtTxFile :: Ctx -> Maybe Network -> [[FileAccount]] -> Psbt -> Either String TxFile
+psbtTxFile ctx fallbackM pools psbt = do
   -- The coin of every input, as haskoin-core reads it from the fields of
   -- the input ('inputCoins'): the output of its previous transaction,
   -- which must be the transaction the input spends and have that output.
@@ -436,15 +484,15 @@ psbtTxFile ctx fallbackM accounts psbt = do
   fieldPaths <- forM (zip [0 :: Int ..] psbt.inputs) $ \(i, m) ->
     traverse (inputPathOf i) (lookupProprietary hwIdentifier inputPathField m)
   let spent = zip fieldPaths (map (fmap (.coin.script)) checkedCoins)
-  matches <- mapM (accountMatch ctx netM psbt spent) accounts
-  let onFileNetwork :: AccountMatch -> Bool
-      onFileNetwork m = maybe True (== m.matchAccount.fileAccountNetwork) netM
+  matches <- forM pools $ \accounts -> poolMatch <$> mapM (accountMatch ctx netM psbt spent) accounts
+  let onFileNetwork :: PoolMatch -> Bool
+      onFileNetwork m = maybe True (\net -> m.poolMatchNetwork == Just net) netM
       candidates =
         sortOn (not . onFileNetwork) $
-          [m | m <- matches, not (null m.matchInputPaths)]
-            <> [m | m <- matches, null m.matchInputPaths, not (null m.matchOutputPaths)]
-      signsWith :: AccountMatch -> Maybe Network
-      signsWith m = Just m.matchAccount.fileAccountNetwork
+          [m | m <- matches, not (null m.poolMatchInputPaths)]
+            <> [m | m <- matches, null m.poolMatchInputPaths, not (null m.poolMatchOutputPaths)]
+      signsWith :: PoolMatch -> Maybe Network
+      signsWith m = m.poolMatchNetwork
   chosen <- case candidates of
     [] -> do
       forM_ askedSigHashes $ \(i, sh) -> unless (acceptableSigHash netM sh) $ Left (sigHashRefusal i sh netM)
@@ -468,10 +516,10 @@ psbtTxFile ctx fallbackM accounts psbt = do
         TxSignData
           { txSignDataTx = tx,
             txSignDataInputs = nubOrdOn txHash parents,
-            txSignDataInputPaths = maybe [] (.matchInputPaths) chosen,
-            txSignDataOutputPaths = maybe [] (.matchOutputPaths) chosen,
+            txSignDataInputPaths = maybe [] (nubOrd . (.poolMatchInputPaths)) chosen,
+            txSignDataOutputPaths = maybe [] (nubOrd . (.poolMatchOutputPaths)) chosen,
             txSignDataFeeRate = feeRateM,
-            txSignDataFingerprint = (.matchFingerprint) =<< chosen,
+            txSignDataFingerprint = (.poolMatchFingerprint) =<< chosen,
             txSignDataReplaces = replaces,
             txSignDataLabel = label
           }
@@ -479,7 +527,7 @@ psbtTxFile ctx fallbackM accounts psbt = do
     TxFile
       { txFileNetwork = netM,
         txFileData = tsd,
-        txFilePathLabels = maybe Map.empty (.matchLabels) chosen,
+        txFilePathLabels = maybe Map.empty (.poolMatchLabels) chosen,
         txFileInputLabels = firstOfEach (mapMaybe id coinLabels)
       }
 

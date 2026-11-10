@@ -5,21 +5,22 @@ import Control.Monad (join, when)
 import Control.Monad.Except (ExceptT)
 import Data.String.Conversions (cs)
 import Data.Foldable (forM_)
+import Data.IORef (newIORef, readIORef, writeIORef)
 import qualified Data.ByteString.Char8 as C8
 import GHC.IO.Encoding (setFileSystemEncoding, setLocaleEncoding, utf8)
 import Haskoin (withContext)
-import Haskoin.Wallet.Commands (commandListing, commandResponse, namesOnSeveralNetworks)
+import Haskoin.Wallet.Commands (commandListing, commandResponse)
 import Haskoin.Wallet.Config (Config (..), commandUnit, databaseFile, initConfig)
 import Haskoin.Wallet.Amounts (AmountUnit)
 import Haskoin.Wallet.Database (DB, catchDatabaseInUse, runDB)
 import Haskoin.Wallet.Memory (keepMemoryPrivate)
-import Haskoin.Wallet.Cli.Listing (Listing, streamListing)
+import Haskoin.Wallet.Cli.Listing (ChunkAt (..), Sections, streamListing)
 import Haskoin.Wallet.Cli.Pager (Shown (..), pagerCommand, tableShown, withPager)
 import Haskoin.Wallet.Migration (Hooks (..), migrateDB)
 import Haskoin.Wallet.Backup (backupDatabase, migrationBackupDirectory)
 import Haskoin.Wallet.Cli.Parser (GlobalOptions (..), addressCodeOf, csvFileOf, parserMain, txShownOf, viewOf, wrapsLines)
 import Haskoin.Wallet.Cli.View (View (..))
-import Haskoin.Wallet.Cli.PrettyPrinter (chunkDoc, errorDoc, hasNextSteps, prettyPrinter, printNextSteps)
+import Haskoin.Wallet.Cli.PrettyPrinter (chunkDoc, errorDoc, prettyPrinter, printNextSteps, startsWithHeader)
 import Haskoin.Wallet.Cli.Response (Response (..), responseFailed)
 import Haskoin.Wallet.Cli.Style (renderPlain)
 import Haskoin.Wallet.Util (encodeJsonPretty)
@@ -62,27 +63,34 @@ clientMain = do
           then jsonPrinter res
           else do
             prettyPrinter unit view (addressCodeOf cmd) (txShownOf cmd) res
-            -- A step names an account with its --network when other
-            -- networks have its name, which the database tells
-            shared <- if hasNextSteps cmd res then namesOnSeveralNetworks cfg else return (const False)
-            printNextSteps shared cmd res
+            -- A step names a portfolio only when it is not the default
+            -- one, which the configuration tells
+            printNextSteps cfg cmd res
 
 -- | Print a listing on the screen, chunk by chunk, through the pager when
 -- there is one, its elements in the view given. The pager keeps the rows
 -- of a table whole, and the header of a table taller than the screen on
 -- the screen: the first chunk tells how tall the table is, the height of
--- the terminal how tall the screen. It wraps the lines of the listing
--- when told to, rather than cut them ('wrapsLines'). A listing that fails
--- exits as a failure, as an answer does.
-printListing :: Config -> Maybe String -> AmountUnit -> View -> Bool -> ExceptT String (DB IO) Listing -> IO ()
+-- the terminal how tall the screen. A listing in sections that say where
+-- they are starts with a title, not with the header of a table, so its
+-- header scrolls with its rows ('startsWithHeader'). The pager wraps the
+-- lines of the listing when told to, rather than cut them ('wrapsLines').
+-- A listing that fails exits as a failure, as an answer does.
+printListing :: Config -> Maybe String -> AmountUnit -> View -> Bool -> ExceptT String (DB IO) Sections -> IO ()
 printListing cfg pager unit view wraps listing = do
   screenRows <- fmap Terminal.height <$> Terminal.size
+  -- Whether the first chunk starts with the header of a table: the pager
+  -- starts at the first chunk, and asks then
+  headed <- newIORef False
   let shownOf doc
-        | wraps = WrappedLines
-        | view == Table = tableShown screenRows (length (lines (renderPlain doc)))
-        | otherwise = Lines
+        | wraps = return WrappedLines
+        | otherwise = do
+            pinned <- readIORef headed
+            return $ if pinned then tableShown screenRows (length (lines (renderPlain doc))) else Lines
   failed <- withPager pager shownOf $ \write -> do
-    streamed <- streamListing cfg listing $ \first answer -> write =<< chunkDoc unit view first answer
+    streamed <- streamListing cfg listing $ \at answer -> do
+      when (chunkFirst at) $ writeIORef headed (startsWithHeader view at answer)
+      write =<< chunkDoc unit view at answer
     case streamed of
       Left err -> write (errorDoc (cs err)) >> return True
       Right () -> return False

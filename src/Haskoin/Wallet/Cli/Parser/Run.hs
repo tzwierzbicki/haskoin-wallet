@@ -140,11 +140,11 @@ completionRequest program args = fromMaybe (args, "") $ do
     (indexM, typed, others) = completionParts args
 
 -- | The words typed, with a value typed against its option made a word of
--- its own: -amai becomes -a and mai, and --account=mai becomes --account
--- and mai, as zsh and fish keep that word whole. optparse-applicative
+-- its own: -nbt becomes -n and bt, and --network=bt becomes --network
+-- and bt, as zsh and fish keep that word whole. optparse-applicative
 -- completes a value only as a word of its own. Also the index of the word
 -- to complete among them, and what to put back before each word offered,
--- since the word offered replaces the whole word typed: -a or --account=,
+-- since the word offered replaces the whole word typed: -n or --network=,
 -- or nothing when no value was split.
 splitAttachedValue :: Program cmd opts -> Int -> [String] -> ([String], Int, String)
 splitAttachedValue program index typed = fromMaybe (typed, index, "") $ do
@@ -157,8 +157,8 @@ splitAttachedValue program index typed = fromMaybe (typed, index, "") $ do
 
 -- | The option and the value typed against it that the word holds, when
 -- the option is one of those that take a value, with what to put back
--- before each value offered: -amai is -a, mai and -a; --account=mai is
--- --account, mai and --account=. A short option alone is a word to
+-- before each value offered: -nbt is -n, bt and -n; --network=bt is
+-- --network, bt and --network=. A short option alone is a word to
 -- complete among the options, not a value.
 attachedValue :: [Name] -> String -> Maybe (String, String, String)
 attachedValue names word = case word of

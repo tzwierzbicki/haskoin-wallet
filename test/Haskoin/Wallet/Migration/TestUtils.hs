@@ -62,6 +62,39 @@ migrateToAndCollect target ctx = do
 migrateAndCollect :: Ctx -> DB IO (Either String (), [String], [Int])
 migrateAndCollect = migrateToAndCollect latestDatabaseVersion
 
+-- | The migration to a format version, with what it does outside the
+-- database written down in the order it does it: the line "Backup at
+-- version N" for a backup at version N, and each announcement as it is.
+-- 'migrateToAndCollect' keeps the backups apart from the announcements; a
+-- test of whether the backup comes before the steps reads the order here.
+migrateToAndLog :: Int -> Ctx -> DB IO (Either String (), [String])
+migrateToAndLog target ctx = do
+  happened <- liftIO $ newIORef []
+  let note line = modifyIORef happened (<> [line])
+      hooks =
+        Hooks
+          { announce = note,
+            backup = \version -> note ("Backup at version " <> show version)
+          }
+  result <- migrateDBTo target hooks ctx
+  events <- liftIO $ readIORef happened
+  return (result, events)
+
+-- | What the step to version 4 tells the user once a database with
+-- accounts is at version 4: its portfolios are partial, the accounts of
+-- one mnemonic on Bitcoin and on Bitcoin Cash are in two wallets, and how
+-- to fill them in. The spec of the step and the spec of the whole
+-- migration both expect it.
+partialPortfoliosNotice :: String
+partialPortfoliosNotice =
+  "The accounts of this database are now in portfolios. A portfolio holds every account of a mnemonic \
+  \at one account index, on every network. This database had only some of them, so its portfolios are \
+  \partial, and the accounts of one mnemonic on Bitcoin, on Bitcoin Cash and on the test networks are in \
+  \separate wallets. \
+  \`hw portfolios` lists them. To fill them in and bring each mnemonic into one wallet, run `hw fillwallet` \
+  \on the computer that has the mnemonic, once for each mnemonic. If that is another computer, run \
+  \`hw exportwallet FILE` there afterwards, and `hw importwallet FILE` here."
+
 -- | The schema of the database: the SQL that created each table and index
 databaseSchema :: DB IO [(Text, Text)]
 databaseSchema = do

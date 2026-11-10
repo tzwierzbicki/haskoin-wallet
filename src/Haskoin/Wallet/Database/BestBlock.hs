@@ -2,8 +2,8 @@
 
 -- | The best block of each network the wallet synced with: what the
 -- confirmations are counted from, and what the lock time of a new
--- transaction is drawn from. Also the block the last sync of each account
--- reached, which tells that account whether the chain moved under it.
+-- transaction is drawn from. Also the block the last sync of each pool
+-- reached, which tells that pool whether the chain moved under it.
 module Haskoin.Wallet.Database.BestBlock
   ( BestBlock (..),
     getBest,
@@ -80,34 +80,35 @@ updateBest net hash height time =
 bestKey :: Network -> P.Key DBBest
 bestKey net = DBBestKey (cs net.name)
 
-{- The block of an account -}
+{- The block of a pool -}
 
--- | The block the last sync of an account reached
+-- | The block the last sync of a pool reached
 data SyncedBlock = SyncedBlock
   { syncedHash :: !BlockHash,
     syncedHeight :: !BlockHeight
   }
   deriving (Eq, Show)
 
--- | The block the last sync of an account reached, or nothing before its
+-- | The block the last sync of a pool reached, or nothing before its
 -- first sync. A stored block that does not read is refused, as every row
 -- that does not read: taking it for no block at all would hide why the
 -- sync looks at everything. A full sync makes no such check and stores the
 -- block again.
-syncedBlock :: (MonadUnliftIO m) => DBAccountId -> ExceptT String (DB m) (Maybe SyncedBlock)
-syncedBlock accId = do
-  rowM <- lift $ P.get (DBSyncedBlockKey accId)
+syncedBlock :: (MonadUnliftIO m) => Pool -> ExceptT String (DB m) (Maybe SyncedBlock)
+syncedBlock pool = do
+  rowM <- lift $ P.get (DBSyncedBlockKey pool.poolPortfolio (poolNetworkName pool))
   forM rowM $ \row ->
-    liftMaybe "The block the last sync of the account reached does not read: sync --full stores it again" $
+    liftMaybe "The block the last sync of the portfolio reached does not read: sync --full stores it again" $
       SyncedBlock <$> hexToBlockHash (dBSyncedBlockBlock row) <*> word32 (dBSyncedBlockHeight row)
 
--- | Store the block a sync of an account reached, in place of the one
+-- | Store the block a sync of a pool reached, in place of the one
 -- before: the sync does so once it is done
-updateSyncedBlock :: (MonadUnliftIO m) => DBAccountId -> BlockHash -> BlockHeight -> DB m ()
-updateSyncedBlock accId hash height =
-  P.repsert (DBSyncedBlockKey accId) $
+updateSyncedBlock :: (MonadUnliftIO m) => Pool -> BlockHash -> BlockHeight -> DB m ()
+updateSyncedBlock pool hash height =
+  P.repsert (DBSyncedBlockKey pool.poolPortfolio (poolNetworkName pool)) $
     DBSyncedBlock
-      { dBSyncedBlockAccount = accId,
+      { dBSyncedBlockPortfolio = pool.poolPortfolio,
+        dBSyncedBlockNetwork = poolNetworkName pool,
         dBSyncedBlockBlock = blockHashToHex hash,
         dBSyncedBlockHeight = fromIntegral height
       }

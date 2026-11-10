@@ -26,6 +26,7 @@ module Haskoin.Wallet.SyncStatus
     Status,
     noStatus,
     tellSearch,
+    tellPortfolioSearch,
 
     -- * The store that tells
     tellingStore,
@@ -70,6 +71,9 @@ data Step
   | -- | Looking at the account of a seed at the path, with how many
     -- accounts were found paid so far
     LookingAtAccount HardPath Natural
+  | -- | Looking at the portfolio of a seed at the index, with how many
+    -- portfolios were found paid so far
+    LookingAtPortfolio Natural Natural
   deriving (Eq, Show)
 
 -- | What the store is asked about item by item, so that the total is known
@@ -120,6 +124,7 @@ statusText name step = case step of
   LookingForAddresses found -> subject <> "looking for used addresses, " <> show found <> " found"
   Counted task done total -> withBar (subject <> taskName task) done total (taskUnit task)
   LookingAtAccount path paid -> subject <> "looking at " <> pathToStr path <> ", " <> paidSoFar paid
+  LookingAtPortfolio index paid -> subject <> "looking at portfolio" <> show index <> ", " <> portfoliosPaidSoFar paid
   where
     subject = cutName name <> ": "
 
@@ -133,6 +138,11 @@ cutName name
 paidSoFar :: Natural -> String
 paidSoFar 1 = "1 account paid so far"
 paidSoFar paid = show paid <> " accounts paid so far"
+
+-- | How many portfolios were found paid so far
+portfoliosPaidSoFar :: Natural -> String
+portfoliosPaidSoFar 1 = "1 portfolio paid so far"
+portfoliosPaidSoFar paid = show paid <> " portfolios paid so far"
 
 -- | The label, then the bar and the numbers, as wide as the line allows
 withBar :: String -> Natural -> Natural -> String -> String
@@ -154,11 +164,13 @@ bar width done total = "[" <> replicate filled '#' <> replicate (width - filled)
 
 {- Telling the steps -}
 
--- | Where the steps of one account or one search go
+-- | Where the steps of one sync or one search go
 type Tell = Step -> IO ()
 
--- | Where the steps go, given what they are of: the name of an account, or
--- "recover on" a network for a search over the accounts of a seed
+-- | Where the steps go, given what they are of: a portfolio and its
+-- network, as in "portfolio0 btc", "recover" for the search over the
+-- portfolios of a seed, or "recover on" a network for a search over the
+-- accounts hw does not hold
 type Status = Text -> Tell
 
 -- | Nowhere: for the tests, and off a terminal
@@ -171,6 +183,13 @@ noStatus _ _ = return ()
 -- the network, since recover searches two in one run.
 tellSearch :: Status -> Network -> HardPath -> Natural -> IO ()
 tellSearch status net path paid = status ("recover on " <> Text.pack net.name) (LookingAtAccount path paid)
+
+-- | Tell that the search of recover is looking at the portfolio at the
+-- index, with how many portfolios it found paid so far. The line reads
+-- "recover: looking at portfolio3, 1 portfolio paid so far". It names no
+-- network: a portfolio is looked for on every network in turn.
+tellPortfolioSearch :: Status -> Natural -> Natural -> IO ()
+tellPortfolioSearch status index paid = status "recover" (LookingAtPortfolio index paid)
 
 {- The store that tells -}
 

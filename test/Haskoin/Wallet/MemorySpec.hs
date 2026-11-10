@@ -33,11 +33,11 @@ spec =
         withFile ("/proc/" <> show pid <> "/mem") ReadMode (\_ -> return ())
           `shouldThrow` isPermissionError
 
--- | Look at the process of hw while it asks for the mnemonic of a new
--- account, the first thing createacc does
+-- | Look at the process of hw while it asks for the mnemonic of a wallet
+-- the user has already, the first thing newportfolio --existing does
 whileHwAsksForMnemonic :: (ProcessID -> IO a) -> IO a
 whileHwAsksForMnemonic look =
-  withHome $ \home -> whileHwWaitsAt home ["createacc", "main"] "Mnemonic, or a share of a backup: " look
+  withHome $ \home -> whileHwWaitsAt home ["newportfolio", "--existing"] "Mnemonic, or a share of a backup: " look
 
 -- | A test of what Linux alone shows of a process
 onLinux :: Expectation -> Expectation

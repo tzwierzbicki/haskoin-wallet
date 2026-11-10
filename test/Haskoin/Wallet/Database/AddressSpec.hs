@@ -5,17 +5,23 @@
 -- gives out and the change addresses the wallet pays itself at, generated
 -- along the two chains of the account within the gap of BIP44, with their
 -- labels, balances and derivation paths. The account of these tests is
--- account 0 of the test wallet on Bitcoin, whose first ten addresses of
--- each chain are written out in "Haskoin.Wallet.TestUtils".
+-- the bip44 account of portfolio 0 of the test wallet on Bitcoin, whose
+-- first ten addresses of each chain are written out in
+-- "Haskoin.Wallet.TestUtils". The addresses of a pool, the accounts of a
+-- portfolio on one network together, are read with the type of their
+-- account. An address the user types names a row once its network is
+-- known, since the test networks share their keys.
 module Haskoin.Wallet.Database.AddressSpec (spec) where
 
 import Control.Monad (forM_, replicateM_)
 import Control.Monad.Except (ExceptT)
 import Control.Monad.Trans (lift, liftIO)
-import Data.Aeson (eitherDecode, toJSON)
+import Data.Aeson (eitherDecode, toJSON, (.=))
 import Data.Aeson.Types (parseEither)
 import Data.Default (def)
+import Data.List (sort)
 import qualified Data.Map.Strict as Map
+import Data.Maybe (mapMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Database.Persist as P
@@ -26,7 +32,8 @@ import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), foreignAddress)
+import Haskoin.Wallet.Database.Portfolio (PortfolioRef (..), portfolioPool, portfolioRef)
+import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), PoolPath (..), foreignAddress, legacyPath)
 import Haskoin.Wallet.TestUtils
 import Numeric.Natural (Natural)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), testIdentity)
@@ -40,6 +47,8 @@ spec = prepareContext $ \ctx -> do
   changeSpec ctx
   restoringSpec ctx
   databaseSpec ctx
+  poolSpec ctx
+  typedSpec ctx
   pathSpec
   derivingSpec ctx
   jsonSpec
@@ -48,7 +57,7 @@ spec = prepareContext $ \ctx -> do
 
 -- | The account of these tests
 account :: Ctx -> ExceptT String (DB IO) DBAccountId
-account ctx = fst <$> testNewAcc ctx "main"
+account ctx = fst <$> testNewAcc ctx
 
 -- | The next index of each chain of the account: external, then internal
 nextIndices :: DBAccountId -> ExceptT String (DB IO) (Int, Int)
@@ -63,6 +72,11 @@ listed accId addrType afterM countM = map dBAddressIndex <$> lift (addressesAfte
 -- | The index, derivation path, text, label and chain of an address
 addressRow :: DBAddress -> (Int, Text, Text, Text, Bool)
 addressRow a = (dBAddressIndex a, pathText (addrPath a), dBAddressAddress a, dBAddressLabel a, dBAddressInternal a)
+
+-- | The accounts that hold some of the addresses typed, by their keys, as
+-- a command finds them: each address read on the network of each account
+holders :: [Text] -> ExceptT String (DB IO) [DBAccountId]
+holders typed = map (\(_, accId, _) -> accId) <$> accountsHolding (\net -> mapMaybe (textToAddr net) typed)
 
 balanceOf :: DBAddress -> AddressBalance
 balanceOf a =
@@ -132,9 +146,9 @@ receivingSpec ctx =
         lift $ dbShouldFailWith receivingGap $ genExtAddress ctx cfg accId ""
         -- Nor does a paid receiving address extend the change gap, in the
         -- account of the second wallet
-        (other, _) <- testNewAcc2 ctx "other"
+        (other, _) <- testNewAcc2 ctx
         _ <- genExtAddress ctx cfg other ""
-        updateAddressBalances btc accId [paidOnce externalAddr2 1000]
+        updateAddressBalances btc other [paidOnce externalAddr2 1000]
         let held = [Deriv :/ 1 :/ i | i <- [0 .. 19]]
         replicateM_ 20 $ nextChangeAddress ctx cfg other held
         lift $ dbShouldFailWith changeGap $ nextChangeAddress ctx cfg other held
@@ -167,19 +181,22 @@ receivingSpec ctx =
       inDatabaseE $ do
         accId <- account ctx
         replicateM_ 3 $ genExtAddress ctx cfg accId ""
-        labelled <- labelAddress "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg" "Savings"
+        (_, _, typed) <- addressByText cfg Nothing "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"
+        labelled <- labelAddress typed "Savings"
         liftIO $ addressRow labelled `shouldBe` (1, "/0/1", "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "Savings", False)
+        (map dBAddressLabel <$> lift (addressesAfter accId AddrExternal Nothing Nothing)) `dbShouldBeE` ["", "Savings", ""]
 
     -- 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn is the first change address
     it "refuses to label a change address given by its text" $
       inDatabaseE $ do
         accId <- account ctx
         _ <- nextChangeAddress ctx cfg accId []
-        lift $ dbShouldFailWith "A change address takes no label. Only a receiving address does." $ labelAddress "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn" "Rent"
+        (_, _, typed) <- addressByText cfg Nothing "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"
+        lift $ dbShouldFailWith "A change address takes no label. Only a receiving address does." $ labelAddress typed "Rent"
 
     it "gives a bip84 account its P2WPKH addresses, which start with bc1q, on both chains" $
       inDatabaseE $ do
-        (accId, _) <- testNewSegwitAcc ctx "spending"
+        (accId, _) <- testNewSegwitAcc ctx
         first <- genExtAddress ctx cfg accId ""
         liftIO $ dBAddressAddress first `shouldBe` segwitExternalAddrsText !! 0
         change <- nextChangeAddress ctx cfg accId []
@@ -187,7 +204,7 @@ receivingSpec ctx =
 
     it "gives a Bitcoin Cash account addresses in the cash address format" $
       inDatabaseE $ do
-        (accId, _) <- testNewAccBch ctx "cash"
+        (accId, _) <- testNewAccBch ctx
         addr <- genExtAddress ctx cfg accId ""
         liftIO $ addressRow addr `shouldBe` (0, "/0/0", "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u", "", False)
 
@@ -299,8 +316,9 @@ restoringSpec ctx =
         extendChainTo ctx accId AddrExternal 10
         updateAddressBalances btc accId [paidOnce (externalAddr 9) 1000]
         (pathText . addrPath <$> genExtAddress ctx cfg accId "") `dbShouldBeE` "/0/10"
-        -- The discovered addresses count against the gap like the others
-        (accId2, _) <- testNewAcc ctx "second"
+        -- The discovered addresses count against the gap like the others,
+        -- here in the bip84 account of the portfolio
+        (accId2, _) <- testNewSegwitAcc ctx
         extendChainTo ctx accId2 AddrExternal 25
         lift $ dbShouldFailWith receivingGap $ genExtAddress ctx cfg accId2 ""
 
@@ -344,69 +362,97 @@ databaseSpec ctx =
         acc <- lift $ updateAccountBalances accId
         liftIO $ (dBAccountBalanceConfirmed acc, dBAccountBalanceUnconfirmed acc, dBAccountBalanceCoins acc) `shouldBe` (7000, 700, 3)
 
-    it "finds an address of the wallet by its text, with its account" $
+    -- Five addresses asked two at a time take three queries: the account
+    -- has the first three, and the last two are another wallet's. The
+    -- order of the rows is the query's, so they are compared sorted.
+    it "finds the addresses of an account among more than one query holds, a few at a time" $
+      inDatabaseE $ do
+        held <- testNewAcc ctx
+        replicateM_ 3 $ genExtAddress ctx cfg (fst held) ""
+        found <- lift $ storedAmongBy 2 [externalAddr 0, externalAddr 1, externalAddr 2, otherAddr 0, otherAddr 1] held
+        liftIO $
+          sort (map dBAddressAddress found)
+            `shouldBe` ["1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "1Dg6Kg7kQuyiZz41HRWXKUWKRu6ZyEf1Nr", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]
+
+    -- SQLite takes at most 32766 values in a query, and the first sync
+    -- of a large pool asks about more addresses. The account is one value
+    -- of the query too.
+    it "puts no more addresses in one query than SQLite takes, with the account" $
+      (inListBatch + 1) `shouldSatisfy` (<= 32766)
+
+    it "finds an address of the wallet by its text, with its account and the portfolio of that account" $
       inDatabaseE $ do
         accId <- account ctx
         _ <- genExtAddress ctx cfg accId ""
         change <- nextChangeAddress ctx cfg accId []
-        (acc, found) <- getAddressByText "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"
+        (portfolio, holder, found) <- addressByText cfg Nothing "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"
         liftIO $ do
           found `shouldBe` change
-          dBAccountName acc `shouldBe` "main"
-        lift $ dbShouldFailWith "Address does not exist" $ getAddressByText "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
+          holder `shouldBe` accId
+          portfolioRef portfolio `shouldBe` PortfolioRef 0 0
+
+    it "knows no address the wallet does not have, and names it" $
+      inDatabaseE $ do
+        accId <- account ctx
+        _ <- genExtAddress ctx cfg accId ""
+        lift $
+          dbShouldFailWith "The wallet has no address 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU" $
+            addressByText cfg Nothing "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
 
     -- bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u is the first
-    -- receiving address of cash, the Bitcoin Cash account of the test
-    -- wallet, as hw stores it. 1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ is the
+    -- receiving address of the account of portfolio 0 of the test wallet
+    -- on Bitcoin Cash, as hw stores it. 1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ is the
     -- same address in the legacy form.
     it "finds an address of the wallet written without its prefix, or in the legacy form" $
       inDatabaseE $ do
-        (cashId, _) <- testNewAccBch ctx "cash"
+        (cashId, _) <- testNewAccBch ctx
         stored <- genExtAddress ctx cfg cashId ""
         forM_ ["qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u", "1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ"] $ \written -> do
-          (acc, found) <- getAddressByText written
+          (_, holder, found) <- addressByText cfg Nothing written
           liftIO $ do
             found `shouldBe` stored
-            dBAccountName acc `shouldBe` "cash"
+            holder `shouldBe` cashId
 
     -- externalAddr2Text is the first receiving address of the second test
-    -- wallet; 1JCq8Aa9 is no address of the wallet
+    -- wallet; 1JCq8Aa9 is no address of the wallet. The accounts come in
+    -- the order of their wallets.
     it "finds the accounts of addresses by their text, each once, none for an address it does not have" $
       inDatabaseE $ do
         accId <- account ctx
-        (otherId, _) <- testNewAcc2 ctx "other"
+        (otherId, _) <- testNewAcc2 ctx
         _ <- genExtAddress ctx cfg accId ""
         _ <- genExtAddress ctx cfg otherId ""
-        (map fst <$> addressAccounts [externalAddr2Text, "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", externalAddr2Text])
-          `dbShouldBeE` [otherId, accId]
+        holders [externalAddr2Text, "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", externalAddr2Text]
+          `dbShouldBeE` [accId, otherId]
 
     -- bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u is the first
-    -- receiving address of cash, the Bitcoin Cash account of the test
-    -- wallet, as hw stores it. 1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ is the
+    -- receiving address of the account of portfolio 0 of the test wallet
+    -- on Bitcoin Cash, as hw stores it. 1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ is the
     -- same address in the legacy form.
     it "finds the account of a Bitcoin Cash address written without its prefix, or in the legacy form" $
       inDatabaseE $ do
-        (cashId, _) <- testNewAccBch ctx "cash"
+        (cashId, _) <- testNewAccBch ctx
         _ <- genExtAddress ctx cfg cashId ""
-        (map fst <$> addressAccounts ["qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"]) `dbShouldBeE` [cashId]
-        (map fst <$> addressAccounts ["1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ"]) `dbShouldBeE` [cashId]
+        holders ["qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"] `dbShouldBeE` [cashId]
+        holders ["1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ"] `dbShouldBeE` [cashId]
 
     -- 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj is the first receiving address of
-    -- main, on Bitcoin, and
+    -- the account on Bitcoin, and
     -- bitcoincash:qryq64fz8ch3qcfk8twj57crv0pgt0ef353f374c3t the same
-    -- address on Bitcoin Cash, which Bitcoin does not read
+    -- address on Bitcoin Cash, which Bitcoin does not read. The account of
+    -- the portfolio on Bitcoin Cash reads it, and has other keys.
     it "reads an address on the network of each account: a Bitcoin account has no Bitcoin Cash address" $
       inDatabaseE $ do
         accId <- account ctx
         _ <- genExtAddress ctx cfg accId ""
-        addressAccounts ["bitcoincash:qryq64fz8ch3qcfk8twj57crv0pgt0ef353f374c3t"] `dbShouldBeE` []
+        holders ["bitcoincash:qryq64fz8ch3qcfk8twj57crv0pgt0ef353f374c3t"] `dbShouldBeE` []
 
     it "keeps those of the given addresses that have transactions" $
       inDatabaseE $ do
         accId <- account ctx
         replicateM_ 2 $ genExtAddress ctx cfg accId ""
         updateAddressBalances btc accId [paidOnce (externalAddr 0) 1000]
-        lift (usedAddresses ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"])
+        lift (usedAddresses [accId] ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"])
           `dbShouldBeE` ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]
 
     it "lists the addresses of a chain newest first, after a given one when asked" $
@@ -455,7 +501,7 @@ databaseSpec ctx =
     it "gives the path of an address of the account, and nothing for another account's or an outsider's" $
       inDatabaseE $ do
         accId <- account ctx
-        (otherId, _) <- testNewAcc2 ctx "other"
+        (otherId, _) <- testNewAcc2 ctx
         _ <- genExtAddress ctx cfg accId ""
         _ <- nextChangeAddress ctx cfg accId []
         _ <- genExtAddress ctx cfg otherId ""
@@ -465,13 +511,193 @@ databaseSpec ctx =
         addressPath btc accId (otherAddr 0) `dbShouldBeE` Nothing
         listed accId AddrExternal Nothing Nothing `dbShouldBeE` [0]
 
-    it "keeps the account's addresses with their paths, once each" $
+{- The addresses of a pool -}
+
+-- The pool is what portfolio 0 of the test wallet holds on Bitcoin: its
+-- bip44 account, with the receiving address /0/0 and the change address
+-- /1/0, and its bip84 account, with the receiving address /0/0
+poolSpec :: Ctx -> Spec
+poolSpec ctx =
+  describe "The addresses of a pool" $ do
+    let cfg = def :: Config
+        bothAccounts = do
+          portfolio <- testPortfolio ctx
+          (legacyId, _) <- testNewAcc ctx
+          (segwitId, _) <- testNewSegwitAcc ctx
+          _ <- genExtAddress ctx cfg legacyId "Rent"
+          _ <- nextChangeAddress ctx cfg legacyId []
+          _ <- genExtAddress ctx cfg segwitId "Salary"
+          return (portfolioPool portfolio btc, legacyId, segwitId)
+    it "are those of both of its accounts, each with the type of its account and its path there" $
       inDatabaseE $ do
-        accId <- account ctx
-        _ <- genExtAddress ctx cfg accId ""
-        _ <- nextChangeAddress ctx cfg accId []
-        walletPaths btc accId [externalAddr 0, otherAddr 0, externalAddr 0, internalAddr 0]
-          `dbShouldBeE` Map.fromList [(externalAddr 0, Deriv :/ 0 :/ 0), (internalAddr 0, Deriv :/ 1 :/ 0)]
+        (pool, _, _) <- bothAccounts
+        (fst <$> poolAddressesMap pool)
+          `dbShouldBeE` Map.fromList
+            [ (externalAddr 0, PoolPath Bip44 (Deriv :/ 0 :/ 0)),
+              (internalAddr 0, PoolPath Bip44 (Deriv :/ 1 :/ 0)),
+              (segwitExternalAddr 0, PoolPath Bip84 (Deriv :/ 0 :/ 0))
+            ]
+
+    it "come with the balance of each, whichever account has it" $
+      inDatabaseE $ do
+        (pool, legacyId, segwitId) <- bothAccounts
+        updateAddressBalances btc legacyId [paidOnce (externalAddr 0) 5000]
+        updateAddressBalances btc segwitId [paidOnce (segwitExternalAddr 0) 7000]
+        (snd <$> poolAddressesMap pool)
+          `dbShouldBeE` Map.fromList
+            [ (externalAddr 0, AddressBalance 5000 0 1 1 5000),
+              (internalAddr 0, AddressBalance 0 0 0 0 0),
+              (segwitExternalAddr 0, AddressBalance 7000 0 1 1 7000)
+            ]
+
+    it "are found one by one with the account that has each, and none for an outsider's" $
+      inDatabaseE $ do
+        (pool, legacyId, segwitId) <- bothAccounts
+        poolAddressPath pool (internalAddr 0) `dbShouldBeE` Just (legacyId, PoolPath Bip44 (Deriv :/ 1 :/ 0))
+        poolAddressPath pool (segwitExternalAddr 0) `dbShouldBeE` Just (segwitId, PoolPath Bip84 (Deriv :/ 0 :/ 0))
+        poolAddressPath pool (otherAddr 0) `dbShouldBeE` Nothing
+
+    it "are kept among given addresses with their paths in the pool, once each" $
+      inDatabaseE $ do
+        (pool, _, _) <- bothAccounts
+        poolPaths pool [externalAddr 0, otherAddr 0, externalAddr 0, segwitExternalAddr 0, internalAddr 0]
+          `dbShouldBeE` Map.fromList
+            [ (externalAddr 0, legacyPath (Deriv :/ 0 :/ 0)),
+              (internalAddr 0, legacyPath (Deriv :/ 1 :/ 0)),
+              (segwitExternalAddr 0, PoolPath Bip84 (Deriv :/ 0 :/ 0))
+            ]
+
+    it "give their rows, with their labels, whichever account has them" $
+      inDatabaseE $ do
+        (pool, _, _) <- bothAccounts
+        (fmap dBAddressLabel <$> lift (poolAddressRow pool (externalAddr 0))) `dbShouldBeE` Just "Rent"
+        (fmap dBAddressLabel <$> lift (poolAddressRow pool (segwitExternalAddr 0))) `dbShouldBeE` Just "Salary"
+        lift (poolAddressRow pool (otherAddr 0)) `dbShouldBeE` Nothing
+
+    it "tell an address of the pool from any other" $
+      inDatabaseE $ do
+        (pool, _, _) <- bothAccounts
+        lift (inPool pool (segwitExternalAddr 0)) `dbShouldBeE` True
+        lift (inPool pool (otherAddr 0)) `dbShouldBeE` False
+
+    -- The first receiving address of the second test wallet, and that of
+    -- portfolio 1 of the test wallet, are in the database, in other pools
+    it "are those of its portfolio alone: not another wallet's, nor another portfolio's of the wallet" $
+      inDatabaseE $ do
+        (pool, _, _) <- bothAccounts
+        (otherId, _) <- testNewAcc2 ctx
+        _ <- genExtAddress ctx cfg otherId ""
+        second <- nextPortfolioOf ctx testMnemonic
+        (secondId, _) <- accountOf second btc Bip44
+        _ <- genExtAddress ctx cfg secondId ""
+        lift (inPool pool externalAddr2) `dbShouldBeE` False
+        lift (inPool pool account1Addr) `dbShouldBeE` False
+        lift (inPool (portfolioPool second btc) account1Addr) `dbShouldBeE` True
+
+    -- The bip44 account of the portfolio on bch has other keys
+    it "are those of its network alone" $
+      inDatabaseE $ do
+        (pool, _, _) <- bothAccounts
+        portfolio <- testPortfolio ctx
+        lift (inPool (portfolioPool portfolio bch) (externalAddr 0)) `dbShouldBeE` False
+        (Map.size . fst <$> poolAddressesMap (portfolioPool portfolio bch)) `dbShouldBeE` 0
+        (Map.size . fst <$> poolAddressesMap pool) `dbShouldBeE` 3
+
+{- An address the user types -}
+
+-- btctest and btctest4 share the coin type 1, so the bip44 accounts of a
+-- portfolio on them have the same key. The receiving address /0/0 of
+-- both is mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih, generated on each.
+typedSpec :: Ctx -> Spec
+typedSpec ctx =
+  describe "An address the user types that two test networks share" $ do
+    let cfg = def :: Config
+        onBothTestnets = do
+          portfolio <- testPortfolio ctx
+          (testnet3Id, _) <- accountOf portfolio btcTest Bip44
+          (testnet4Id, _) <- accountOf portfolio btcTest4 Bip44
+          first <- genExtAddress ctx cfg testnet3Id ""
+          second <- genExtAddress ctx cfg testnet4Id ""
+          return ((testnet3Id, first), (testnet4Id, second))
+        rowOf (_, accId, row) = (accId, row)
+    it "is the same text on both, in a row of each account" $
+      inDatabaseE $ do
+        ((testnet3Id, first), (testnet4Id, second)) <- onBothTestnets
+        liftIO $ do
+          dBAddressAddress first `shouldBe` "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih"
+          dBAddressAddress second `shouldBe` "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih"
+        (map rowOf <$> lift (findAddressByText "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih")) `dbShouldBeE` [(testnet3Id, first), (testnet4Id, second)]
+
+    -- A recipient typed on a command is read on the network of each
+    -- account
+    it "is held by the accounts of both networks" $
+      inDatabaseE $ do
+        ((testnet3Id, _), (testnet4Id, _)) <- onBothTestnets
+        holders ["mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih"] `dbShouldBeE` [testnet3Id, testnet4Id]
+
+    it "names the row on the --network" $
+      inDatabaseE $ do
+        (_, onTestnet4) <- onBothTestnets
+        (rowOf <$> addressByText cfg (Just btcTest4) "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih") `dbShouldBeE` onTestnet4
+
+    it "names the row on the default network without --network" $
+      inDatabaseE $ do
+        (onTestnet3, _) <- onBothTestnets
+        (rowOf <$> addressByText (configWith ["default-network" .= ("btctest" :: Text)]) Nothing "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih")
+          `dbShouldBeE` onTestnet3
+
+    it "takes --network over the default network" $
+      inDatabaseE $ do
+        (_, onTestnet4) <- onBothTestnets
+        (rowOf <$> addressByText (configWith ["default-network" .= ("btctest" :: Text)]) (Just btcTest4) "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih")
+          `dbShouldBeE` onTestnet4
+
+    -- The default network is btc, where the address is not
+    it "is refused without --network when the default network has no row of it, naming the networks that have" $
+      inDatabaseE $ do
+        _ <- onBothTestnets
+        lift $
+          dbShouldFailWith "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and btctest4: give the --network" $
+            addressByText cfg Nothing "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih"
+
+    it "is refused on a --network that has no row of it, naming the networks that have" $
+      inDatabaseE $ do
+        _ <- onBothTestnets
+        lift $
+          dbShouldFailWith "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and btctest4, not on the --network btcreg" $
+            addressByText cfg (Just btcRegTest) "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih"
+
+    -- Generated on btctest alone: the default network, btc, does not matter
+    it "names its one row without --network when one network alone has it" $
+      inDatabaseE $ do
+        portfolio <- testPortfolio ctx
+        (testnet3Id, _) <- accountOf portfolio btcTest Bip44
+        row <- genExtAddress ctx cfg testnet3Id ""
+        (rowOf <$> addressByText cfg Nothing "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih") `dbShouldBeE` (testnet3Id, row)
+
+    -- addresses --after and balances --after: each section of the listing
+    -- is given with its network and the row the address has in it
+    it "starts a listing after it in the one section that holds it" $
+      sectionOfAddress "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih" [(btc, Nothing), (btcTest, Just "row on btctest"), (btcRegTest, Nothing)]
+        `shouldBe` Right (Just (1, "row on btctest" :: Text))
+
+    -- Starting in the first section that holds it would loop: the last row
+    -- of the next page would be the address again
+    it "is refused as the start of a listing when several of its sections hold it, naming their networks" $
+      sectionOfAddress "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih" [(btcTest, Just "a"), (btcTest4, Just "b"), (btcRegTest, Just "c")]
+        `shouldBe` (Left "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest, btctest4 and btcreg: give the --network" :: Either String (Maybe (Int, Text)))
+
+    it "gives no section to start a listing in when no section holds it" $
+      sectionOfAddress "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih" [(btcTest, Nothing), (btcTest4, Nothing)]
+        `shouldBe` (Right Nothing :: Either String (Maybe (Int, Text)))
+
+    it "is labelled on the network named alone" $
+      inDatabaseE $ do
+        ((testnet3Id, _), (testnet4Id, _)) <- onBothTestnets
+        (_, _, typed) <- addressByText cfg (Just btcTest4) "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih"
+        _ <- labelAddress typed "Faucet"
+        (map dBAddressLabel <$> lift (addressesAfter testnet4Id AddrExternal Nothing Nothing)) `dbShouldBeE` ["Faucet"]
+        (map dBAddressLabel <$> lift (addressesAfter testnet3Id AddrExternal Nothing Nothing)) `dbShouldBeE` [""]
 
 pathSpec :: Spec
 pathSpec =

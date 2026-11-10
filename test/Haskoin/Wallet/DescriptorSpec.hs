@@ -1,21 +1,30 @@
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Output descriptors as hw reads and writes them: the descriptor of an
--- account, the checksum of BIP 380, the key origins of BIP 329 records,
--- and the descriptors the files of other wallets carry
+-- account, which takes the fingerprint of its origin from the wallet of
+-- the account, the checksum of BIP 380, the key origins of BIP 329
+-- records, and the descriptors the files of other wallets carry
 module Haskoin.Wallet.DescriptorSpec (spec) where
 
+import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans (lift)
 import qualified Data.Aeson as Json
 import Data.Text (Text)
+import qualified Database.Persist as P
 import Haskoin
+import Haskoin.Wallet.Database (DBWallet (..), EntityField (DBWalletFingerprint))
+import Haskoin.Wallet.Database.Account (accountDescriptorText)
+import Haskoin.Wallet.Database.Portfolio (Portfolio (..), getPortfolio)
 import Haskoin.Wallet.Descriptor
 import Haskoin.Wallet.Keys (AccountKind (..))
-import Haskoin.Wallet.TestUtils (testAccountXPub, testAccountXPubTest, testFingerprint, testSegwitAccountVPub, testSegwitAccountXPub, testSegwitAccountXPubTest, testSegwitAccountZPub)
+import Haskoin.Wallet.TestUtils
 import Test.Hspec
 
 spec :: Spec
 spec = do
   descriptorSpec
+  prepareContext walletDescriptorSpec
   checksumSpec
   keySpec
   originSpec
@@ -116,6 +125,66 @@ descriptorSpec =
       looksLikeDescriptor "xpub6CHK" `shouldBe` False
       looksLikeDescriptor "" `shouldBe` False
 
+{- The descriptor of an account of the wallet -}
+
+-- The checksums of the descriptors below were computed apart from hw, with
+-- the reference code of BIP 380, which gave back the three checksums the
+-- tests above have first.
+
+walletDescriptorSpec :: Ctx -> Spec
+walletDescriptorSpec ctx =
+  describe "The descriptor of an account of a wallet" $ do
+    -- Portfolio 1 of the test wallet: the fingerprint is the wallet's, and
+    -- the last step of the path the index of the portfolio
+    it "has the origin of its key: the fingerprint of its wallet, and its path with the index of its portfolio" $
+      inDatabaseE $ do
+        _ <- testPortfolio ctx
+        portfolio <- nextPortfolioOf ctx testMnemonic
+        (_, legacy) <- accountOf portfolio btc Bip44
+        (_, segwit) <- accountOf portfolio btc Bip84
+        liftIO $ do
+          accountDescriptorText portfolio legacy
+            `shouldBe` "pkh([bc560f95/44h/0h/1h]" <> testAccountXPub1 <> "/<0;1>/*)#nycrn993"
+          accountDescriptorText portfolio segwit
+            `shouldBe` "wpkh([bc560f95/84h/0h/1h]" <> testSegwitAccountXPub1 <> "/<0;1>/*)#h4u2qz9f"
+
+    it "has the coin type of its network in its origin: 145 on Bitcoin Cash, 1 on a test network" $
+      inDatabaseE $ do
+        portfolio <- testPortfolio ctx
+        (_, cash) <- accountOf portfolio bch Bip44
+        (_, test) <- accountOf portfolio btcTest4 Bip44
+        liftIO $ do
+          accountDescriptorText portfolio cash
+            `shouldBe` "pkh([bc560f95/44h/145h/0h]" <> testAccountXPubBch <> "/<0;1>/*)#trhxkymx"
+          accountDescriptorText portfolio test
+            `shouldBe` "pkh([bc560f95/44h/1h/0h]" <> testAccountXPubTest <> "/<0;1>/*)#etwa23nl"
+
+    -- As the step from hw 0.9 leaves a wallet, until fillwallet or
+    -- importwallet gives it the fingerprint of its seed
+    it "has no origin in a wallet without a fingerprint" $
+      inDatabaseE $ do
+        (portfolio, legacy, segwit) <- withoutFingerprint
+        liftIO $ do
+          accountDescriptorText portfolio legacy `shouldBe` "pkh(" <> testAccountXPub <> "/<0;1>/*)#mmejv52s"
+          accountDescriptorText portfolio segwit `shouldBe` "wpkh(" <> testSegwitAccountXPub <> "/<0;1>/*)#h3820wwk"
+
+    it "gains its origin once the wallet has its fingerprint" $
+      inDatabaseE $ do
+        (portfolio, legacy, _) <- withoutFingerprint
+        lift $ P.update portfolio.portfolioWalletId [DBWalletFingerprint P.=. Just testFingerprintText]
+        known <- getPortfolio portfolio.portfolioId
+        liftIO $ do
+          dBWalletFingerprint known.portfolioWallet `shouldBe` Just "bc560f95"
+          accountDescriptorText known legacy `shouldBe` mainDescriptor
+  where
+    -- Portfolio 0 of a wallet without a fingerprint, with the two accounts
+    -- of the test wallet on Bitcoin
+    withoutFingerprint = do
+      portfolio <- migrated ctx (testSeed ctx) 0 "" [(btc, Bip44), (btc, Bip84)]
+      (_, legacy) <- accountOf portfolio btc Bip44
+      (_, segwit) <- accountOf portfolio btc Bip84
+      return (portfolio, legacy, segwit)
+
 {- Checksums -}
 
 checksumSpec :: Spec
@@ -151,9 +220,13 @@ keySpec =
     it "writes a vpub for a bip84 account of a test network" $
       slip132Key Bip84 testSegwitAccountXPubTest `shouldBe` Just testSegwitAccountVPub
 
-    it "writes no SLIP-132 key for a bip44 account, whose xpub marks it" $ do
-      slip132Key Bip44 testAccountXPub `shouldBe` Nothing
-      slip132Key Bip44 testAccountXPubTest `shouldBe` Nothing
+    -- SLIP-132 gives a bip44 account the prefixes of BIP32
+    it "writes the key of a bip44 account as it is, an xpub, or a tpub on a test network" $ do
+      slip132Key Bip44 testAccountXPub `shouldBe` Just testAccountXPub
+      slip132Key Bip44 testAccountXPubTest `shouldBe` Just testAccountXPubTest
+
+    it "writes none for a bip44 account from a key that is not in the form of BIP32" $
+      slip132Key Bip44 testSegwitAccountZPub `shouldBe` Nothing
 
     it "writes none for text that is not an extended key" $
       slip132Key Bip84 "not a key" `shouldBe` Nothing

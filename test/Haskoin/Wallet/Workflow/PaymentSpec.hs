@@ -1,16 +1,18 @@
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | A payment as the user prepares it with preparetx, after a sync: the
 -- fee rates recent blocks paid, the coins received and locked, the amount
 -- and the fee, the confirmations asked of the coins, a fee rate too high,
--- coin control, and the change sent back.
+-- coin control, the bip44 and the bip84 coins of a portfolio spent
+-- together, the type of the change, and the change sent back to an
+-- address of the portfolio.
 module Haskoin.Wallet.Workflow.PaymentSpec (spec) where
 
 import Control.Monad (forM_, void)
 import qualified Data.Aeson as Json
-import Data.IORef (modifyIORef)
+import Data.IORef (modifyIORef, readIORef)
+import Data.List (sort)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -18,8 +20,9 @@ import Data.Text.Encoding (encodeUtf8)
 import qualified Database.Persist as P
 import Haskoin
 import Haskoin.Wallet.Cli.Response (Response (..))
-import Haskoin.Wallet.Database (DBAccount (..), DBRawTx, runDBWith)
+import Haskoin.Wallet.Database (DBRawTx, runDBWith)
 import Haskoin.Wallet.Database.Coin (CoinLock (..), LeftReason (..))
+import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.TestUtils
@@ -39,7 +42,10 @@ spec = prepareContext $ \ctx -> do
   minConfSpec ctx
   highFeeSpec ctx
   coinControlSpec ctx
+  bothTypesSpec ctx
+  changeTypeSpec ctx
   changeBackSpec ctx
+  bitcoinCashSpec ctx
 
 {- Fee rates -}
 
@@ -125,7 +131,7 @@ feesSpec ctx =
 
     it "stop preparetx without --fee-rate when the store cannot be reached: hw never guesses a rate" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002"] [])
           `shouldReturn` Right "The store at http://127.0.0.1:1/ could not be reached: the connection failed. Give a --fee-rate to go on without the rates recent blocks paid"
 
@@ -162,55 +168,61 @@ feesSpec ctx =
 
 {- Receiving -}
 
+-- | A payment of 50000 satoshis from another wallet to the first
+-- receiving address of the bip44 account of portfolio1 of the test wallet
+-- on btc, 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo
+portfolio1Payment :: Ctx -> Tx
+portfolio1Payment ctx = fundingTx ctx 1 [(account1Addr, 50000)]
+
 receivingSpec :: Ctx -> Spec
 receivingSpec ctx = do
   describe "A payment to the wallet" $ do
-    it "is found by sync, which tells what the account can spend" $
+    it "is found by sync, which tells what the portfolio can spend on the network" $
       withChain ctx (paidChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
-        (accountsOf <$> hwJson home ["sync"] []) `shouldReturn` Right [("main", 0, 50000)]
-        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("main", 0, 50000)]
+        (spendableOn btc <$> hwJson home ["sync"] []) `shouldReturn` Right [(mainPortfolioRef, 50000)]
+        (spendableOn btc <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(mainPortfolioRef, 50000)]
 
     -- 50000 satoshis are 0.0005 bitcoins and 500 bits
-    it "is shown by accounts in bitcoins, or in the unit of --unit" $
+    it "is shown by portfolios in bitcoins, or in the unit of --unit" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        (printed "0.00050000 btc" <$> hw home ["accounts"] []) `shouldReturn` True
-        (printed "50000 sats" <$> hw home ["accounts", "--unit", "sat"] []) `shouldReturn` True
-        (printed "500.00 bits" <$> hw home ["accounts", "--unit", "bit"] []) `shouldReturn` True
+        (printed "0.00050000 btc" <$> hw home ["portfolios"] []) `shouldReturn` True
+        (printed "50000 sats" <$> hw home ["portfolios", "--unit", "sat"] []) `shouldReturn` True
+        (printed "500.00 bits" <$> hw home ["portfolios", "--unit", "bit"] []) `shouldReturn` True
 
     -- The help says the two options go before or after the command
     it "is shown in the unit of --unit given before the command" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        (printed "50000 sats" <$> hw home ["--unit", "sat", "accounts"] []) `shouldReturn` True
+        (printed "50000 sats" <$> hw home ["--unit", "sat", "portfolios"] []) `shouldReturn` True
 
     it "is shown in the unit of the configuration file when --unit is not given" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         setUnit home "sat"
-        (printed "50000 sats" <$> hw home ["accounts"] []) `shouldReturn` True
+        (printed "50000 sats" <$> hw home ["portfolios"] []) `shouldReturn` True
 
     -- 50000 satoshis are 500 bits
     it "is shown in the unit of --unit, even when the configuration file names another" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         setUnit home "sat"
-        (printed "500.00 bits" <$> hw home ["accounts", "--unit", "bit"] []) `shouldReturn` True
+        (printed "500.00 bits" <$> hw home ["portfolios", "--unit", "bit"] []) `shouldReturn` True
 
     -- A script that reads the JSON answers is not affected by the unit
     it "is answered in JSON in satoshis, whatever the unit of the configuration file" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         setUnit home "bit"
-        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("main", 0, 50000)]
+        (spendableOn btc <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(mainPortfolioRef, 50000)]
 
     it "is answered in JSON with --json given before the command" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        run <- hw home ["--json", "accounts"] []
-        (accountsOf <$> Json.eitherDecodeStrict (encodeUtf8 (runOut run))) `shouldBe` Right (Right [("main", 0, 50000)])
+        run <- hw home ["--json", "portfolios"] []
+        (spendableOn btc <$> Json.eitherDecodeStrict (encodeUtf8 (runOut run))) `shouldBe` Right (Right [(mainPortfolioRef, 50000)])
 
     it "is listed by txs, with its confirmations" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -227,39 +239,44 @@ receivingSpec ctx = do
       withChain ctx (Chain 800002 [(payment ctx, Nothing)]) $ \home chain -> do
         synced home
         (coinsShown <$> hwJson home ["coins"] []) `shouldReturn` Right [(OutPoint (txHash (payment ctx)) 0, 50000, 0, Nothing, False)]
-        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("main", 0, 0)]
+        (spendableOn btc <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(mainPortfolioRef, 0)]
         modifyIORef chain mine
-        (accountsOf <$> hwJson home ["sync"] []) `shouldReturn` Right [("main", 0, 50000)]
+        (spendableOn btc <$> hwJson home ["sync"] []) `shouldReturn` Right [(mainPortfolioRef, 50000)]
         (coinsShown <$> hwJson home ["coins"] []) `shouldReturn` Right [(OutPoint (txHash (payment ctx)) 0, 50000, 1, Nothing, True)]
 
   -- Only this wallet can replace the payment, which spends the coin of
-  -- main. At 10 satoshis a byte, its 226 bytes cost 2260, so main keeps
-  -- 50000 - 30000 - 2260 = 17740 of change.
-  describe "A payment from another account of the wallet" $
-    it "can be spent while in the mempool, like the change of the account that paid it" $
+  -- portfolio0. At 10 satoshis a byte, its 226 bytes cost 2260, so
+  -- portfolio0 keeps 50000 - 30000 - 2260 = 17740 of change.
+  describe "A payment from another portfolio of the wallet" $
+    it "can be spent while in the mempool, like the change of the portfolio that paid it" $
       withChain ctx (paidChain ctx) $ \home _ -> do
-        createMain home
-        _ <- answer home ["createacc", "second"] seedTwice
-        _ <- answer home ["receive", "--account", "main"] []
-        secondAddr <- receiveFor home "second"
-        _ <- answer home ["sync"] []
-        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", secondAddr <> ":0.0003", "--account", "main", "--fee-rate", "10"] []
+        syncedTwoPortfolios home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo account1Addr "0.0003", "--fee-rate", "10"] []
         _ <- answer home ["signtx", nosig] seedOnce
         _ <- answer home ["broadcast", nosig, "--yes"] []
-        (accountsOf <$> hwJson home ["sync"] []) `shouldReturn` Right [("main", 0, 17740), ("second", 1, 30000)]
-        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--account", "second", "--fee-rate", "10"] []
+        (spendableOn btc <$> hwJson home ["sync"] []) `shouldReturn` Right [(PortfolioRef 0 0, 17740), (PortfolioRef 0 1, 30000)]
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--portfolio", "1", "--fee-rate", "10"] []
         spentFromWallet prepared `shouldBe` Map.fromList [(account1Addr, 30000)]
 
-  -- main holds the coin of 50000 the chain pays. Renamed default, it is
-  -- the account a payment spends from without --account.
-  describe "A payment from the default account" $
-    it "is prepared without --account in a wallet of several accounts" $
+  describe "A payment from the default portfolio" $ do
+    -- portfolio0 holds the coin of 50000 the chain pays, and portfolio1
+    -- holds nothing
+    it "is from portfolio0 without --portfolio, in a wallet of several portfolios" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        _ <- answer home ["createacc", "second"] seedTwice
-        _ <- answer home ["renameacc", "main", "default"] []
-        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
-        spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 50000)]
+        newTestPortfolio home
+        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        placeOf prepared `shouldBe` Right mainPlace
+        spentFromWallet <$> txOf prepared `shouldReturn` Map.fromList [(externalAddr 0, 50000)]
+
+    -- The chain pays portfolio1 alone
+    it "is from the portfolio the key default-portfolio of the configuration file names" $
+      withChain ctx (confirmedChain (portfolio1Payment ctx)) $ \home _ -> do
+        syncedTwoPortfolios home
+        setConfigKey home "default-portfolio" (Json.Number 1)
+        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        placeOf prepared `shouldBe` Right portfolio1Place
+        spentFromWallet <$> txOf prepared `shouldReturn` Map.fromList [(account1Addr, 50000)]
 
   describe "A coin locked by the user" $ do
     let twoCoins = fundingTx ctx 1 [(externalAddr 0, 50000), (externalAddr 0, 20000)]
@@ -311,56 +328,25 @@ receivingSpec ctx = do
 
   describe "A sync" $ do
     -- The store reports every address used, as one that lies does: after
-    -- a thousand on the receiving chain, sync asks, and a no leaves the
-    -- account as it was, without an address
+    -- a thousand on the receiving chain of the first account the sync
+    -- looks at, sync asks, and a no leaves the portfolio as it was,
+    -- without an address
     it "asks whether to keep looking when the store reports used addresses a thousand deep, and generates none of them when the answer is no" $
       withLyingChain ctx (paidChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         run <- hw home ["sync"] ["n"]
-        run `shouldSatisfy` printed "The store reports used addresses as far as 1000 on the receiving chain of the account main, and more beyond. Keep looking? [y/N] "
+        run `shouldSatisfy` printed "The store reports used addresses as far as 1000 on the receiving chain of the bip44 account of portfolio0 on btc, and more beyond. Keep looking? [y/N] "
         run `shouldSatisfy` printed "The scan stopped there."
         runExit run `shouldBe` ExitFailure 1
         (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [(externalAddrsText !! 0, "")]
 
     it "stops at the question when the input has ended, as a sync nobody watches does" $
       withLyingChain ctx (paidChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         run <- hw home ["sync"] []
         run `shouldSatisfy` printed "Keep looking? [y/N] "
         run `shouldSatisfy` printed "Cancelled: the input ended before the answer"
         runExit run `shouldBe` ExitFailure 1
-
-    -- The store answers every question about Bitcoin Cash with the error
-    -- page of a proxy, as when the store behind the proxy is down. hw
-    -- failed the whole sync before, with the error StringError "could not
-    -- decode error". The chain pays main 50000.
-    it "syncs the accounts whose store is up, and leaves out those whose store is down, with the failure of their store" $
-      withChainDownOn ctx [bch] (paidChain ctx) $ \home _ -> do
-        createMain home
-        _ <- answer home ["receive"] []
-        _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
-        answered <- hwJson home ["sync"] []
-        accountsOf answered `shouldBe` Right [("main", 0, 50000)]
-        (map fst <$> notSyncedOf answered) `shouldBe` Right ["cash"]
-        (map snd <$> notSyncedOf answered)
-          `shouldSatisfy` either (const False) (all (\failure -> "The store at http://127.0.0.1:" `Text.isPrefixOf` failure && "/ answered with an error hw could not read" `Text.isSuffixOf` failure))
-
-    it "exits with 1 when it left out an account, and prints why" $
-      withChainDownOn ctx [bch] (paidChain ctx) $ \home _ -> do
-        createMain home
-        _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
-        run <- hw home ["sync"] []
-        runExit run `shouldBe` ExitFailure 1
-        run `shouldSatisfy` printed "cash  bch  /44'/145'/0'\n  not synced: The store at http://127.0.0.1:"
-
-    -- The chain pays main: a sync of second alone leaves main as it was
-    it "updates only the account of --account" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
-        createMain home
-        _ <- answer home ["receive"] []
-        _ <- answer home ["createacc", "second"] seedTwice
-        (accountsOf <$> hwJson home ["sync", "--account", "second"] []) `shouldReturn` Right [("second", 1, 0)]
-        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("main", 0, 0), ("second", 1, 0)]
 
     -- The database lost the transaction the coin of the payment comes
     -- from, which signing needs. No balance changed, so only a full sync
@@ -497,31 +483,27 @@ paymentSpec ctx =
         runExit run `shouldBe` ExitFailure 1
         runErr run `shouldSatisfy` Text.isInfixOf "option --strategy: Invalid strategy. Select one of the following: least-waste, random-draw, largest-first, smallest-first"
 
-    it "is refused for more than the coins of the account" $
+    it "is refused for more than the coins of the portfolio" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.001", "--fee-rate", "10"] [])
           `shouldReturn` Right "The coins do not cover the amount and the fee"
 
-    -- The coin of the payment is of main, and the wallet has a second
-    -- account. Without --account, hw asked which account to use.
-    it "is from the account of the coins of --coin, without --account" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
-        synced home
-        _ <- answer home ["createacc", "second"] seedTwice
-        let coin = Text.unpack (txHashToHex (txHash (payment ctx))) <> ":0"
-        (fmap dBAccountName . accountOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coin, "--fee-rate", "10"] [])
-          `shouldReturn` Right "main"
+    -- The coin is of portfolio1, and the default portfolio is portfolio0:
+    -- the coin tells where the payment is from
+    it "is from the portfolio of the coins of --coin, without --portfolio" $
+      withChain ctx (confirmedChain (portfolio1Payment ctx)) $ \home _ -> do
+        syncedTwoPortfolios home
+        (placeOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (portfolio1Payment ctx) 0, "--fee-rate", "10"] [])
+          `shouldReturn` Right portfolio1Place
 
-    it "is refused an --account that does not hold the coins of --coin" $
+    it "is refused a --portfolio that does not hold the coins of --coin, naming where they are" $
       withChain ctx (paidChain ctx) $ \home _ -> do
-        synced home
-        _ <- answer home ["createacc", "second"] seedTwice
-        let coin = Text.unpack (txHashToHex (txHash (payment ctx))) <> ":0"
-        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coin, "--account", "second", "--fee-rate", "10"] [])
-          `shouldReturn` Right "The coins or addresses given are not in the account second"
+        syncedTwoPortfolios home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (payment ctx) 0, "--portfolio", "1", "--fee-rate", "10"] [])
+          `shouldReturn` Right "The coins or addresses given are in portfolio0 of wallet0 on btc, not where the options say"
 
-    it "is written to its --output file with the network of its account" $
+    it "is written to its --output file with the network of its portfolio" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", home </> "unsigned.psbt", "--fee-rate", "10"] []
@@ -568,7 +550,7 @@ minConfSpec ctx =
         spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 50000)]
 
     -- The payment sent spends the coin of 50000 and leaves 27740 of change
-    -- in the mempool, the only coin of the account
+    -- in the mempool, the only coin of the portfolio
     it "spends the unconfirmed change of the wallet's own payment without --min-conf" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         _ <- sentPayment home
@@ -645,7 +627,7 @@ highFeeSpec ctx =
     -- The keys would be typed for nothing
     it "is asked about by preparesweep before the private keys are typed" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         run <- hw home ["preparesweep", "--key-file", "-", "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--fee-rate", "101"] ["n"]
         runErr run `shouldSatisfy` Text.isInfixOf highFeeQuestion
         run `shouldSatisfy` printed highFeeRefused
@@ -654,7 +636,7 @@ highFeeSpec ctx =
 
     it "is taken by preparesweep when the user answers yes" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         keys <- writeKeyFile home
         prepared <- txOf =<< answer home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "101"] ["y"]
@@ -662,7 +644,7 @@ highFeeSpec ctx =
 
     it "is taken by preparesweep without asking with --yes" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         keys <- writeKeyFile home
         prepared <- txOf =<< answer home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "101", "--yes"] []
@@ -730,17 +712,16 @@ coinControlSpec ctx =
           `shouldReturn` Right "--select needs coins to select among: give --coin or --spend-from"
 
     -- 1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ is the first receiving address of
-    -- cash in the legacy form; hw stores it as
-    -- bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u. The wallet has
-    -- main too: the address names the account.
-    it "finds the account of a --spend-from address however it is written" $
+    -- the bip44 account of portfolio0 on bch in the legacy form; hw stores
+    -- it as bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u. The
+    -- default network is btc: the address names the network.
+    it "finds the portfolio and the network of a --spend-from address however it is written" $
       withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
-        createMain home
-        _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
-        _ <- receiveFor home "cash"
+        newTestPortfolio home
+        _ <- answer home ["receive", "--network", "bch"] []
         _ <- answer home ["sync"] []
         prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from", "1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ", "--fee-rate", "10"] []
-        (dBAccountName <$> accountOf prepared) `shouldBe` Right "cash"
+        placeOf prepared `shouldBe` Right (Place mainPortfolioRef bch)
         paidToOthers <$> txOf prepared `shouldReturn` Map.fromList [(otherAddr 0, 20000)]
 
     it "spends the coins chosen that can be spent, and lists the others with why" $
@@ -757,7 +738,7 @@ coinControlSpec ctx =
         synced home
         _ <- answer home ["lockcoin", coinArg (twoAddressesTx ctx) 1] []
         run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (twoAddressesTx ctx) 0, "--coin", coinArg (twoAddressesTx ctx) 1, "--fee-rate", "10"] []
-        let (transaction, staying) = Text.breakOn "in the account:" (runOut run)
+        let (transaction, staying) = Text.breakOn "in the portfolio:" (runOut run)
         transaction `shouldSatisfy` Text.isInfixOf "NoSigHash"
         staying `shouldSatisfy` Text.isInfixOf ("\n    0.00030000 btc  you locked it\n  " <> Text.pack (shortCoinArg (twoAddressesTx ctx) 1) <> "\n")
 
@@ -769,20 +750,20 @@ coinControlSpec ctx =
           `shouldReturn` Right ("None of the coins chosen can be spent now: " <> Text.pack (coinArg (twoAddressesTx ctx) 1) <> ", you locked it")
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
 
-    it "is refused a --spend-from address that is not in the account" $
+    it "is refused a --spend-from address that is not in the portfolio" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from", textOf (otherAddr 1), "--fee-rate", "10"] [])
-          `shouldReturn` Right "The address 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ is not in the account main"
+          `shouldReturn` Right "The address 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ is not in portfolio0 of wallet0 on btc"
 
-    it "is refused a --coin the account does not have" $
+    it "is refused a --coin the portfolio does not have" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         let unknown = Text.unpack (txHashToHex (fakeTxHash 9)) <> ":0"
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", unknown, "--fee-rate", "10"] [])
-          `shouldReturn` Right ("The account has no coin " <> Text.pack unknown)
+          `shouldReturn` Right ("The portfolio has no coin " <> Text.pack unknown <> " on the network of the payment")
 
-    it "lists nothing left in the account without coin control" $
+    it "lists nothing left in the portfolio without coin control" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         (leftOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []) `shouldReturn` Right []
@@ -794,59 +775,297 @@ coinControlSpec ctx =
         paidToOthers <$> txOf sendAll `shouldReturn` Map.fromList [(otherAddr 0, 48080)]
         leftOf sendAll `shouldBe` Right [(OutPoint (txHash (twoAddressesTx ctx)) 1, 30000, NotGiven)]
 
+{- The coins of both types of a portfolio -}
+
+-- The coins of 'bothTypesTx': 50000 at the first receiving address of the
+-- bip44 account of portfolio0 on btc, a P2PKH input of 148 bytes, and
+-- 30000 at the first receiving address of its bip84 account, a P2WPKH
+-- input of 68 virtual bytes. A transaction with a SegWit input has 10.5
+-- virtual bytes of its own, where one without has 10. A P2PKH output, to
+-- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU or to bip44 change, is 34 bytes, and
+-- a P2WPKH output, to bip84 change, 31.
+--
+-- A payment of 60000 needs both coins, 80000. With bip44 change: 10.5 +
+-- 148 + 68 + 34 + 34 = 294.5, so 295 virtual bytes, a fee of 2950 at 10
+-- satoshis a virtual byte, and 80000 - 60000 - 2950 = 17050 of change.
+bothTypesSpec :: Ctx -> Spec
+bothTypesSpec ctx =
+  describe "A payment from the bip44 and the bip84 coins of a portfolio" $ do
+    it "spends coins of both accounts in one transaction" $
+      withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
+        syncedBothTypes home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--fee-rate", "10"] []
+        spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 50000), (segwitExternalAddr 0, 30000)]
+
+    it "pays the fee of each input at its own size, the bip84 one less than the bip44 one" $
+      withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
+        syncedBothTypes home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--fee-rate", "10"] []
+        let summary = txInfoSummary prepared
+        (summaryFee summary, summarySize summary) `shouldBe` (2950, 295)
+        paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 17050)]
+
+    -- The inputs are compared sorted: their order is drawn at random
+    it "is signed with the mnemonic typed once, for both accounts, and sent" $
+      withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home chain -> do
+        syncedBothTypes home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--fee-rate", "10"] []
+        signed <- txOf =<< answer home ["signtx", nosig] seedOnce
+        pendingState signed `shouldBe` Just (True, False)
+        _ <- answer home ["broadcast", nosig, "--yes"] []
+        published <- inMempool <$> readIORef chain
+        ((\(spent, paid) -> (sort spent, paid)) . spendsAndPays ctx <$> published)
+          `shouldBe` [(sort [OutPoint (txHash (bothTypesTx ctx)) 0, OutPoint (txHash (bothTypesTx ctx)) 1], [(17050, Right (internalAddr 0)), (60000, Right (otherAddr 0))])]
+
+    it "leaves the change once mined, which the portfolio can spend" $
+      withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home chain -> do
+        syncedBothTypes home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--fee-rate", "10"] []
+        _ <- answer home ["signtx", nosig] seedOnce
+        _ <- answer home ["broadcast", nosig, "--yes"] []
+        modifyIORef chain mine
+        (spendableOn btc <$> hwJson home ["sync"] []) `shouldReturn` Right [(mainPortfolioRef, 17050)]
+
+    -- 10.5 + 68 + 34 + 31 = 143.5, so 144 virtual bytes, a fee of 1440, and
+    -- 30000 - 20000 - 1440 = 8560 of change, bip84 as the coin
+    it "spends the bip84 coins alone with --coin-type bip84" $
+      withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
+        syncedBothTypes home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin-type", "bip84", "--fee-rate", "10"] []
+        spentFromWallet prepared `shouldBe` Map.fromList [(segwitExternalAddr 0, 30000)]
+        paidToWallet prepared `shouldBe` Map.fromList [(segwitInternalAddr 0, 8560)]
+
+    -- 10 + 148 + 34 + 34 = 226 bytes, a fee of 2260, and 50000 - 20000 -
+    -- 2260 = 27740 of change, bip44 as the coin
+    it "spends the bip44 coins alone with --coin-type bip44" $
+      withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
+        syncedBothTypes home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin-type", "bip44", "--fee-rate", "10"] []
+        spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 50000)]
+        paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 27740)]
+
+    -- The bip84 coin holds 30000: both coins would cover 40000
+    it "is refused with --coin-type when the coins of that type do not cover it" $
+      withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
+        syncedBothTypes home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0004", "--coin-type", "bip84", "--fee-rate", "10"] [])
+          `shouldReturn` Right "The coins do not cover the amount and the fee"
+
+    it "refuses a coin of the other type chosen with --coin under --coin-type, naming it" $
+      withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
+        syncedBothTypes home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (bothTypesTx ctx) 0, "--coin-type", "bip84", "--fee-rate", "10"] [])
+          `shouldReturn` Right ("The coin " <> Text.pack (shortCoinArg (bothTypesTx ctx) 0) <> " is a bip44 coin, and --coin-type bip84 spends bip84 coins only")
+
+{- The type of the change -}
+
+-- | A coin of 50000 satoshis at the first receiving address of the bip84
+-- account of portfolio0 on btc, bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc
+segwitPayment :: Ctx -> Tx
+segwitPayment ctx = fundingTx ctx 11 [(segwitExternalAddr 0, 50000)]
+
+-- The rule of the specification: the type --change-type names; else the
+-- type of the coins spent, when they are all of one type; else, for coins
+-- of both types, the default-type of the configuration file; else bip44.
+-- The sizes are those above.
+changeTypeSpec :: Ctx -> Spec
+changeTypeSpec ctx =
+  describe "The type of the change of preparetx" $ do
+    -- 10 + 148 + 34 + 31 = 223 bytes, a fee of 2230, and 50000 - 20000 -
+    -- 2230 = 27770 of change
+    it "is the type --change-type names, bip84 for a payment of bip44 coins" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--change-type", "bip84", "--fee-rate", "10"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(segwitInternalAddr 0, 27770)]
+
+    -- 10.5 + 68 + 34 + 34 = 146.5, so 147 virtual bytes, a fee of 1470,
+    -- and 50000 - 20000 - 1470 = 28530 of change
+    it "is the type --change-type names, bip44 for a payment of bip84 coins" $
+      withChain ctx (confirmedChain (segwitPayment ctx)) $ \home _ -> do
+        syncedBothTypes home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--change-type", "bip44", "--fee-rate", "10"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 28530)]
+
+    -- 10.5 + 68 + 34 + 31 = 143.5, so 144 virtual bytes, a fee of 1440, and
+    -- 50000 - 20000 - 1440 = 28560 of change
+    it "is bip84 for a payment of bip84 coins alone" $
+      withChain ctx (confirmedChain (segwitPayment ctx)) $ \home _ -> do
+        syncedBothTypes home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(segwitInternalAddr 0, 28560)]
+
+    it "is the type of the coins spent, bip44, though the default-type of the configuration file is bip84" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        setConfigKey home "default-type" (Json.String "bip84")
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 27740)]
+
+    -- Smallest first spends the coin of 30000 alone, a bip84 coin: 144
+    -- virtual bytes, a fee of 1440, and 30000 - 20000 - 1440 = 8560 of
+    -- change. Largest first spends the coin of 50000 alone, a bip44 coin:
+    -- 226 bytes, a fee of 2260, and 27740 of change. Each payment is
+    -- deleted, which frees its coin for the next.
+    it "is the type of the coins the selection spends, among coins of both types" $
+      withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
+        syncedBothTypes home
+        forM_ [("smallest-first", segwitInternalAddr 0, 8560), ("largest-first", internalAddr 0, 27740)] $ \(strategy, change, amount) -> do
+          prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--strategy", strategy, "--fee-rate", "10"] []
+          paidToWallet prepared `shouldBe` Map.fromList [(change, amount)]
+          nosig <- nosigOf prepared
+          void $ answer home ["deletetx", nosig] []
+
+    -- 10.5 + 148 + 68 + 34 + 31 = 291.5, so 292 virtual bytes, a fee of
+    -- 2920, and 80000 - 60000 - 2920 = 17080 of change
+    it "is the default-type of the configuration file for coins of both types, bip84" $
+      withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
+        syncedBothTypes home
+        setConfigKey home "default-type" (Json.String "bip84")
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--fee-rate", "10"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(segwitInternalAddr 0, 17080)]
+
+    -- 295 virtual bytes, a fee of 2950, and 17050 of change, as above
+    it "is bip44 for coins of both types when the configuration file names no default-type" $
+      withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
+        syncedBothTypes home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--fee-rate", "10"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 17050)]
+
 {- The change sent back -}
 
--- A payment of 20000 from the coin of 50000 leaves 27740 of change. One of
--- 60000 needs the coins at both addresses, 80000: two inputs and two
--- outputs make 374 bytes, a fee of 3740, and 16260 of change.
+-- A payment of 20000 from the coin of 50000 makes one input and two P2PKH
+-- outputs, 226 bytes: a fee of 2260 at 10 satoshis a byte, and 50000 -
+-- 20000 - 2260 = 27740 of change. With a P2WPKH output for the change, 10
+-- + 148 + 34 + 31 = 223 bytes: a fee of 2230, and 27770 of change.
 changeBackSpec :: Ctx -> Spec
-changeBackSpec ctx =
-  describe "The change of preparetx sent back" $ do
-    let chain = confirmedChain (twoAddressesTx ctx)
-        fromBoth = ["preparetx", fixedTo (otherAddr 0) "0.0006", "--change-back", "--fee-rate", "10"]
-    it "goes to the one address the payment spends from, without a question" $
-      withChain ctx chain $ \home _ -> do
+changeBackSpec ctx = do
+  describe "The change of preparetx sent back with --change-back" $ do
+    it "goes to the address it names, one the payment spends from" $
+      withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
         synced home
-        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from", textOf (externalAddr 0), "--change-back", "--fee-rate", "10"] []
-        paidToWallet <$> txOf prepared `shouldReturn` Map.fromList [(externalAddr 0, 27740)]
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from", textOf (externalAddr 0), "--change-back", textOf (externalAddr 0), "--fee-rate", "10"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 27740)]
 
-    it "goes to the address whose path the user types, among those the payment spends from" $
-      withChain ctx chain $ \home _ -> do
+    -- receive hands out /0/1 after the /0/0 the payment spends from
+    it "goes to the receiving address of the portfolio it names, which the payment does not spend from" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        prepared <- answer home fromBoth ["/0/1"]
-        paidToWallet <$> txOf prepared `shouldReturn` Map.fromList [(externalAddr 1, 16260)]
+        second <- receiveWith home []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--change-back", second, "--fee-rate", "10"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 1, 27740)]
 
-    it "goes to the address with the largest total when the user types nothing" $
-      withChain ctx chain $ \home _ -> do
+    it "goes to a bip84 address of the portfolio it names, with the size of that type" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        prepared <- answer home fromBoth [""]
-        paidToWallet <$> txOf prepared `shouldReturn` Map.fromList [(externalAddr 0, 16260)]
+        segwit <- receiveWith home ["--type", "bip84"]
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--change-back", segwit, "--fee-rate", "10"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(segwitExternalAddr 0, 27770)]
+        summarySize (txInfoSummary prepared) `shouldBe` 223
 
-    it "is asked for with the addresses listed as balances lists them, the largest first" $
-      withChain ctx chain $ \home _ -> do
+    -- The payment sent left 27740 at the change address /1/0, mined since.
+    -- Paying 10000 of it: 226 bytes, a fee of 2260, and 27740 - 10000 -
+    -- 2260 = 15480 of change.
+    it "goes to a used change address it names" $
+      withChain ctx (paidChain ctx) $ \home chain -> do
+        _ <- sentPayment home
+        modifyIORef chain mine
+        _ <- answer home ["sync"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--change-back", textOf (internalAddr 0), "--fee-rate", "10"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 15480)]
+
+    -- The first payment, from the coin at /0/0, takes the change address
+    -- /1/0. The second spends the coin of 30000 at /0/1: 30000 - 10000 -
+    -- 2260 = 17740 of change.
+    it "goes to the change address of another pending transaction it names" $
+      withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
         synced home
-        run <- hw home fromBoth ["/0/1"]
-        runErr run `shouldSatisfy` Text.isInfixOf "The payment spends coins at 2 addresses. Its change can go back to any of them:\n/0/0  "
-        runErr run `shouldSatisfy` Text.isInfixOf ("/0/0  " <> externalAddrsText !! 0 <> "\n  total 0.00050000 btc")
-        runErr run `shouldSatisfy` Text.isInfixOf ("/0/1  " <> externalAddrsText !! 1 <> "\n  total 0.00030000 btc")
-        runErr run `shouldSatisfy` Text.isInfixOf "Which address gets the change? Type its path [/0/0]"
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from", textOf (externalAddr 0), "--fee-rate", "10"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--spend-from", textOf (externalAddr 1), "--change-back", textOf (internalAddr 0), "--fee-rate", "10"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 17740)]
 
-    it "goes back without --change-back when the configuration file says so" $
-      withChain ctx chain $ \home _ -> do
+    it "is refused an address outside the wallet, and nothing is prepared" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        setChangeBack home True
-        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from", textOf (externalAddr 0), "--fee-rate", "10"] []
-        paidToWallet <$> txOf prepared `shouldReturn` Map.fromList [(externalAddr 0, 27740)]
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--change-back", textOf (otherAddr 1), "--fee-rate", "10"] [])
+          `shouldReturn` Right "The change can only go back to an address of portfolio0 of wallet0 on btc, and 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ is not one"
+        (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
 
-    it "goes to a new change address with --new-change, whatever the configuration file says" $
-      withChain ctx chain $ \home _ -> do
+    -- 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo is the first receiving address of
+    -- portfolio1, which receive handed out
+    it "is refused an address of another portfolio of the wallet" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        syncedTwoPortfolios home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--change-back", textOf account1Addr, "--fee-rate", "10"] [])
+          `shouldReturn` Right "The change can only go back to an address of portfolio0 of wallet0 on btc, and 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo is not one"
+
+    -- 1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ is the first receiving address of
+    -- portfolio0 on bch, in the legacy form, which btc reads too
+    it "is refused an address of the portfolio on another network than the payment's" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        setChangeBack home True
-        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from", textOf (externalAddr 0), "--new-change", "--fee-rate", "10"] []
-        paidToWallet <$> txOf prepared `shouldReturn` Map.fromList [(internalAddr 0, 27740)]
+        _ <- answer home ["receive", "--network", "bch"] []
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--change-back", "1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ", "--fee-rate", "10"] [])
+          `shouldReturn` Right "The change can only go back to an address of portfolio0 of wallet0 on btc, and 1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ is not one"
 
-    it "cannot go back and to a new change address at once" $
-      withHome $ \home -> do
-        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--change-back", "--new-change", "--fee-rate", "10"] []
-        runExit run `shouldBe` ExitFailure 1
-        runErr run `shouldSatisfy` Text.isInfixOf "Invalid option `--new-change'"
+    it "is refused with --change-type, since the address has a type" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--change-back", textOf (externalAddr 0), "--change-type", "bip84", "--fee-rate", "10"] [])
+          `shouldReturn` Right "--change-back names the address of the change, which has a type: it takes no --change-type"
+
+  -- Without --change-back, the change goes to a new change address: one
+  -- no pending transaction pays, and that was never used
+  describe "The change address preparetx takes" $ do
+    it "is not the change address of another pending transaction" $
+      withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from", textOf (externalAddr 0), "--fee-rate", "10"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--spend-from", textOf (externalAddr 1), "--fee-rate", "10"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 1, 17740)]
+
+    it "is not a change address used before" $
+      withChain ctx (paidChain ctx) $ \home chain -> do
+        _ <- sentPayment home
+        modifyIORef chain mine
+        _ <- answer home ["sync"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--fee-rate", "10"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 1, 15480)]
+
+{- Bitcoin Cash -}
+
+-- | The first change address of the bip44 account of portfolio0 of the
+-- test wallet on Bitcoin Cash, m/44'/145'/0'/1/0, in the legacy form,
+-- derived apart from hw (see TEST-CHANGES, the transaction modules)
+cashChangeAddr :: Address
+cashChangeAddr = testAddress "1Eb2U8LPm71fMhgL5EF2fg4UktNkuGY6ia"
+
+-- The payment of 20000 from the coin of 50000 of 'cashCoinTx': 226 bytes,
+-- a fee of 2260 at 10 satoshis a byte, and 27740 of change
+bitcoinCashSpec :: Ctx -> Spec
+bitcoinCashSpec ctx =
+  describe "A payment on Bitcoin Cash" $ do
+    let cashSynced home = do
+          newTestPortfolio home
+          _ <- answer home ["receive", "--network", "bch"] []
+          void $ answer home ["sync"] []
+    it "sends its change to the bip44 account of the portfolio there" $
+      withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
+        cashSynced home
+        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--network", "bch", "--fee-rate", "10"] []
+        placeOf prepared `shouldBe` Right (Place mainPortfolioRef bch)
+        paidToWallet <$> txOf prepared `shouldReturn` Map.fromList [(cashChangeAddr, 27740)]
+
+    it "sends its change to a bip44 address, though the default-type of the configuration file is bip84" $
+      withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
+        cashSynced home
+        setConfigKey home "default-type" (Json.String "bip84")
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--network", "bch", "--fee-rate", "10"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(cashChangeAddr, 27740)]
+
+    it "refuses bip84 for its change or its coins, which Bitcoin Cash does not have" $
+      withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
+        cashSynced home
+        forM_ ["--change-type", "--coin-type"] $ \option ->
+          (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--network", "bch", option, "bip84", "--fee-rate", "10"] [])
+            `shouldReturn` Right "A bip84 account needs SegWit, which bch does not have"

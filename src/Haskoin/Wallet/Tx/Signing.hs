@@ -7,43 +7,47 @@
 
 -- | Analysis and signing of wallet transactions.
 --
--- An account has P2PKH addresses, when it is a BIP44 one, or P2WPKH
--- addresses, when it is a BIP84 one: its kind says which, and derives its
--- addresses from its public key ("Haskoin.Wallet.Keys".'keyAddress'). A
--- 'TxSignData' carries a transaction, the transactions it spends from and
--- the derivation paths of the wallet's own inputs and outputs.
--- 'parseTxSignData' summarizes it, for the commands that display or store
--- it, and 'signWalletTx' signs it:
+-- A transaction of the wallet is one of a pool: the accounts of a
+-- portfolio on one network, a BIP44 one with P2PKH addresses and, where
+-- the network has SegWit, a BIP84 one with P2WPKH addresses
+-- ("Haskoin.Wallet.Keys".'keyAddress'). One transaction may spend coins of
+-- both. A 'TxSignData' carries a transaction, the transactions it spends
+-- from and the paths of the portfolio's own inputs and outputs, each with
+-- the kind of its account. 'parseTxSignData' summarizes it against the
+-- public keys of the accounts, for the commands that display or store it,
+-- and 'signWalletTx' signs it with their private keys:
 --
 -- 1. finds the coin spent by every input in the dependent transactions;
 -- 2. checks that the transaction has inputs and outputs and spends every
 --    coin once, that the input and output paths are of the two chains of
---    the account, /0/n and /1/n, and derive exactly the wallet's addresses
---    in the transaction, and computes the fee and the amount;
+--    an account, /0/n and /1/n, and derive exactly the portfolio's
+--    addresses in the transaction, and computes the fee and the amount;
 -- 3. checks that no output path lies more than 'scanLimit' past what the
 --    wallet holds of its chain or an input spends from
 --    ('checkOutputReach'), as the reader of a file does once it knows the
---    account;
--- 4. signs every input of the wallet, which must be a coin of the kind of
---    the account, with the key derived from the path of its address: a
---    P2PKH coin with the legacy digest, a P2WPKH coin with the digest of
---    BIP 143, its signature in the witness. An input that is not the
---    wallet's must already be signed;
+--    portfolio;
+-- 4. signs every input of the portfolio, which must be a coin of the kind
+--    of the account its path names, with the key derived from that path
+--    below the key of that account: a P2PKH coin with the legacy digest, a
+--    P2WPKH coin with the digest of BIP 143, its signature in the witness.
+--    An input that is not the portfolio's must already be signed;
 -- 5. verifies every input of the signed transaction against the output
 --    script of its coin, and that every signature has the sighash the
 --    wallet signs with;
 -- 6. reports the signed transaction with the 'TxInfo' of the signed bytes,
 --    its size in virtual bytes.
 --
--- A transaction file carries the labels of the account's addresses in the
--- transaction, by their paths, and those of the transactions its coins
--- come from.
+-- A transaction file carries the labels of the portfolio's addresses in
+-- the transaction, by their paths, and those of the transactions its
+-- coins come from.
 -- 'parseTxFile' reads a file with them, 'labelsFromFile' puts them on a
 -- 'TxInfo', and 'labelledTxFile' writes them from one.
 module Haskoin.Wallet.Tx.Signing
   ( HeldChains (..),
+    HeldPool,
     noneHeld,
     heldChainsOf,
+    heldPoolOf,
     checkOutputReach,
     parseTxSignData,
     parseOutsideTxSignData,
@@ -71,6 +75,7 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import qualified Data.Set as Set
+import Data.String.Conversions (cs)
 import qualified Data.Text as Text
 import Data.Word (Word32, Word64)
 import Haskoin
@@ -87,7 +92,8 @@ import Haskoin.Wallet.Database.TxInfo
   )
 import Haskoin.Wallet.Database (DBAccount (..))
 import Haskoin.Wallet.Database.Address (scanLimit)
-import Haskoin.Wallet.Keys (AccountKind, isChainPath, keyAddress, kindCoinName, spendsScript)
+import Haskoin.Wallet.Database.Account (accountKind)
+import Haskoin.Wallet.Keys (AccountKind, PoolPath (..), isChainPath, keyAddress, kindCoinName, kindName, poolPathText, spendsScript)
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Size (accountOutputKind, accountOutputSize, inputKind, outputDustLimit, scriptOutputKind, signedTxSize, txSize)
 import Haskoin.Wallet.Util (addrToString, safeSubtract)
@@ -109,56 +115,59 @@ data HeldChains = HeldChains
   }
   deriving (Eq, Show)
 
--- | No address of either chain, as on an offline signer that never
+-- | The addresses the wallet has generated of each account of a pool, by
+-- the kind of the account. An account that is not listed holds none.
+type HeldPool = Map AccountKind HeldChains
+
+-- | No address of any account, as on an offline signer that never
 -- generates one
-noneHeld :: HeldChains
-noneHeld = HeldChains 0 0
+noneHeld :: HeldPool
+noneHeld = Map.empty
 
 -- | The addresses the wallet holds of the account of the row
 heldChainsOf :: DBAccount -> HeldChains
 heldChainsOf acc = HeldChains (fromIntegral (dBAccountExternal acc)) (fromIntegral (dBAccountInternal acc))
 
--- | The transaction of the signing data as the account of the kind and
--- the public key sees it: its summary, and its status as a transaction in
--- preparation, signed or not. Fails when the signing data is not
--- consistent, or when an input or output is at an address the network
--- cannot write. How far its output paths lie is not looked at here: a
--- reader finds the account of a file by whether its summary reads, and
--- then checks them ('checkOutputReach').
-parseTxSignData :: Network -> Ctx -> AccountKind -> XPubKey -> TxSignData -> Either String TxInfo
-parseTxSignData net ctx kind accountPub = parseAs net ctx (Just (kind, accountPub))
+-- | The addresses the wallet holds of the accounts of a pool
+heldPoolOf :: [DBAccount] -> HeldPool
+heldPoolOf accounts = Map.fromList [(accountKind acc, heldChainsOf acc) | acc <- accounts]
 
--- | The transaction of signing data that involves no account of the
--- wallet, as a sweep between outside addresses: its summary, as
--- 'parseTxSignData' gives it, with every input and output another
--- wallet's. The paths it may have are those of an account the wallet does
--- not have.
-parseOutsideTxSignData :: Network -> Ctx -> TxSignData -> Either String TxInfo
-parseOutsideTxSignData net ctx = parseAs net ctx Nothing
-
--- | The transaction of signing data, as the account of the kind and the
--- public key sees it, or as an outsider does without one
-parseAs :: Network -> Ctx -> Maybe (AccountKind, XPubKey) -> TxSignData -> Either String TxInfo
-parseAs net ctx accountPubM tsd = do
+-- | The transaction of the signing data as a pool sees it, given the kind
+-- and the public key of each of its accounts: its summary, and its status
+-- as a transaction in preparation, signed or not. Fails when the signing
+-- data is not consistent, or when an input or output is at an address the
+-- network cannot write. How far its output paths lie is not looked at
+-- here: a reader finds the portfolio of a file by whether its summary
+-- reads, and then checks them ('checkOutputReach').
+parseTxSignData :: Network -> Ctx -> [(AccountKind, XPubKey)] -> TxSignData -> Either String TxInfo
+parseTxSignData net ctx accounts tsd = do
   coins <- spentCoins net ctx tsd
-  summary <- summarize net ctx accountPubM tsd coins
+  summary <- summarize net ctx accounts tsd coins
   let tx = tsd.txSignDataTx
       txid = if isSigned tx then Just (txHash tx) else Nothing
   -- What only the database knows, the wallet's own state, is filled in
   -- for a transaction it holds
   return $ TxInfo summary (Pending (PendingStatus (nosigHash tx) txid False False Nothing tsd.txSignDataReplaces)) tsd.txSignDataLabel Map.empty
 
+-- | The transaction of signing data that involves no portfolio of the
+-- wallet, as a sweep between outside addresses: its summary, as
+-- 'parseTxSignData' gives it, with every input and output another
+-- wallet's. The paths it may have are those of an account the wallet does
+-- not have.
+parseOutsideTxSignData :: Network -> Ctx -> TxSignData -> Either String TxInfo
+parseOutsideTxSignData net ctx = parseTxSignData net ctx []
+
 {- Files -}
 
--- | The transaction of a file as the account sees it, with its labels as
+-- | The transaction of a file as the pool sees it, with its labels as
 -- the file carries them, not as this wallet has them: an offline computer
 -- has none of its own
-parseTxFile :: Network -> Ctx -> AccountKind -> XPubKey -> TxFile -> Either String TxInfo
-parseTxFile net ctx kind accountPub file =
-  labelsFromFile file <$> parseTxSignData net ctx kind accountPub (txFileData file)
+parseTxFile :: Network -> Ctx -> [(AccountKind, XPubKey)] -> TxFile -> Either String TxInfo
+parseTxFile net ctx accounts file =
+  labelsFromFile file <$> parseTxSignData net ctx accounts (txFileData file)
 
 -- | The transaction with its labels as a file carries them: those of the
--- account's addresses, by their paths, and those the coins it spends show.
+-- portfolio's addresses, by their paths, and those the coins it spends show.
 -- An address or a coin the file does not label has none. A label at a
 -- path, or of a transaction, that the transaction does not touch is left
 -- aside.
@@ -170,7 +179,7 @@ labelsFromFile file info =
   where
     labelOf path = Map.findWithDefault "" path (txFilePathLabels file)
 
--- | The file of a transaction of the account, with its labels as the
+-- | The file of a transaction of the portfolio, with its labels as the
 -- summary has them: those of its addresses that have one, by their paths,
 -- and those the coins it spends show
 labelledTxFile :: Network -> TxInfo -> TxSignData -> TxFile
@@ -189,41 +198,42 @@ verifySignedTx net ctx tsd = do
   coins <- spentCoins net ctx tsd
   verifyInputs net ctx tsd.txSignDataTx coins
 
--- | Sign a transaction of an account of the kind with its account private
--- key, the wallet holding no address of it ('signHeldWalletTx')
+-- | Sign a transaction of a pool with the private keys of its accounts,
+-- each with its kind, the wallet holding no address of them
+-- ('signHeldWalletTx')
 signWalletTx ::
   Network ->
   Ctx ->
-  AccountKind ->
   TxSignData ->
-  XPrvKey ->
+  [(AccountKind, XPrvKey)] ->
   Either String (TxSignData, TxInfo)
-signWalletTx net ctx kind = signHeldWalletTx net ctx kind noneHeld
+signWalletTx net ctx = signHeldWalletTx net ctx noneHeld
 
--- | Sign a transaction of an account of the kind with its account private
--- key, the wallet holding the given addresses of it: an output path too
--- far past them is refused ('checkOutputReach')
+-- | Sign a transaction of a pool with the private keys of its accounts,
+-- each with its kind, the wallet holding the given addresses of them: an
+-- output path too far past them is refused ('checkOutputReach'). One
+-- call signs the inputs of every account, so a payment that spends BIP44
+-- and BIP84 coins together is signed at once.
 signHeldWalletTx ::
   Network ->
   Ctx ->
-  AccountKind ->
-  HeldChains ->
+  HeldPool ->
   TxSignData ->
-  XPrvKey ->
+  [(AccountKind, XPrvKey)] ->
   Either String (TxSignData, TxInfo)
-signHeldWalletTx net ctx kind held tsd accountKey = do
+signHeldWalletTx net ctx held tsd accountKeys = do
   when (isSigned tsd.txSignDataTx) $ Left "The transaction is already signed"
-  let accountPub = deriveXPubKey ctx accountKey
+  let accountPubs = [(kind, deriveXPubKey ctx key) | (kind, key) <- accountKeys]
   coins <- spentCoins net ctx tsd
-  summary <- summarize net ctx (Just (kind, accountPub)) tsd coins
+  summary <- summarize net ctx accountPubs tsd coins
   checkOutputReach held tsd
   -- The builder refuses a fee rate of zero; the signer checks the fee itself
   when (summary.summaryFee == 0) $ Left "The transaction pays no fee"
-  signedTx <- signInputs net ctx kind accountKey summary.summaryMyInputs tsd.txSignDataTx coins
+  signedTx <- signInputs net ctx accountKeys summary.summaryMyInputs tsd.txSignDataTx coins
   verifyInputs net ctx signedTx coins
   let signedData = tsd {txSignDataTx = signedTx}
   -- Summarized again: the signed transaction has its real size and its id
-  info <- parseTxSignData net ctx kind accountPub signedData
+  info <- parseTxSignData net ctx accountPubs signedData
   return (signedData, info)
 
 {- Coins -}
@@ -286,18 +296,18 @@ sigHashName sh = base <> concat ["|ANYONECANPAY" | anyoneCanPay sh] <> concat ["
 {- Summary -}
 
 -- | The summary of the transaction of the signing data: the inputs and
--- outputs that are the wallet's, told by the paths and the kind and
--- public key of the account, the fee, the amount and the size in virtual
--- bytes, that of the bytes once signed and an estimate before. Without
--- the account, no input or output is the wallet's.
-summarize :: Network -> Ctx -> Maybe (AccountKind, XPubKey) -> TxSignData -> [SpentCoin] -> Either String TxSummary
-summarize net ctx accountM tsd coins = do
+-- outputs that are the portfolio's, told by the paths and by the kind and
+-- public key of each account of the pool, the fee, the amount and the
+-- size in virtual bytes, that of the bytes once signed and an estimate
+-- before. Without an account, no input or output is the portfolio's.
+summarize :: Network -> Ctx -> [(AccountKind, XPubKey)] -> TxSignData -> [SpentCoin] -> Either String TxSummary
+summarize net ctx accounts tsd coins = do
   when (null coins) $ Left "The transaction has no inputs"
   when (null tx.outputs) $ Left "The transaction has no outputs"
   when (length (nubOrd outpoints) /= length coins) $
     Left "The transaction spends the same coin twice"
   forM_ (tsd.txSignDataInputPaths <> tsd.txSignDataOutputPaths) $ \path ->
-    unless (isChainPath path) $ Left (offChainPath path)
+    unless (isChainPath (pathInAccount path)) $ Left (offChainPath path)
   outputs <- mapM outputAddress' tx.outputs
   fee <-
     maybe (Left "Fee is negative") Right $
@@ -341,13 +351,17 @@ summarize net ctx accountM tsd coins = do
       -- could not have held it: what is left once that output is paid for
       -- at the rate is below its dust limit, as the builder drops it.
       -- Beyond that, the fee is shown as it is, with no word to explain it.
+      -- The signing data does not say the type the change would have had,
+      -- so the limit is that of the types of the coins spent, the higher
+      -- one when they are of both.
       changeInFee = do
         guard (Map.null otherInputs)
         rate <- tsd.txSignDataFeeRate
-        (kind, _) <- accountM
         let excess = fee - min fee (rate * estimated)
-            changeOutputFee = rate * fromIntegral (accountOutputSize kind)
-        guard (excess < outputDustLimit (accountOutputKind kind) + changeOutputFee)
+            droppedBelow kind = outputDustLimit (accountOutputKind kind) + rate * fromIntegral (accountOutputSize kind)
+            spentKinds = nubOrd [i.myInputsPath.pathKind | i <- Map.elems myInputs]
+        guard (not (null spentKinds))
+        guard (excess < maximum (droppedBelow <$> spentKinds))
         return excess
   return
     TxSummary
@@ -376,58 +390,67 @@ summarize net ctx accountM tsd coins = do
     nonStandard = Left "There are non-standard outputs in the transaction"
     coinsValue :: [SpentCoin] -> Natural
     coinsValue spent = sum $ fromIntegral . (.value) <$> spent
-    -- The wallet addresses of the paths, of the kind of the account, each
-    -- path once, and all of them present in the transaction; none without
-    -- the account
-    pathAddresses :: String -> [SoftPath] -> [Address] -> Either String (Map Address SoftPath)
-    pathAddresses err paths present = case accountM of
-      Nothing -> return Map.empty
-      Just (kind, accountPub) -> do
-        let addresses =
-              Map.fromList
-                [(keyAddress kind ctx (derivePubPath ctx path accountPub), path) | path <- paths]
-        unless (Map.size addresses == length paths && all (`Set.member` Set.fromList present) (Map.keys addresses)) $
-          Left err
-        return addresses
+    -- The addresses of the portfolio at the paths, each of the kind of
+    -- its account and derived from the key of that account, each path
+    -- once, and all of them present in the transaction; none without an
+    -- account. A path of a kind the pool has no account of is refused.
+    pathAddresses :: String -> [PoolPath] -> [Address] -> Either String (Map Address PoolPath)
+    pathAddresses err paths present
+      | null accounts = return Map.empty
+      | otherwise = do
+          derived <- mapM addressAt paths
+          let addresses = Map.fromList derived
+          unless (Map.size addresses == length paths && all (`Set.member` Set.fromList present) (Map.keys addresses)) $
+            Left err
+          return addresses
+    addressAt :: PoolPath -> Either String (Address, PoolPath)
+    addressAt path = case lookup path.pathKind accounts of
+      Just accountPub -> Right (keyAddress path.pathKind ctx (derivePubPath ctx path.pathInAccount accountPub), path)
+      Nothing -> Left ("The path " <> cs (poolPathText path) <> " is of a " <> cs (kindName path.pathKind) <> " account, which the portfolio does not have on " <> net.name)
 
--- | Refuse an output path of the account more than 'scanLimit' addresses
+-- | Refuse an output path of an account more than 'scanLimit' addresses
 -- past the last address of its chain that the wallet holds or that an
 -- input spends from: at /1/n, n must be below the change addresses held,
--- or one past the highest input at /1/m, plus 'scanLimit', whichever is
--- further. A path not of the chains is refused apart ('isChainPath'). An
--- input spends a coin, so its address is in use, however far it lies: it
--- is not refused.
-checkOutputReach :: HeldChains -> TxSignData -> Either String ()
+-- or one past the highest input at /1/m of the same account, plus
+-- 'scanLimit', whichever is further. Each account of the pool has chains
+-- of its own, so a path is measured against the chain of its kind. A
+-- path not of the chains is refused apart ('isChainPath'). An input
+-- spends a coin, so its address is in use, however far it lies: it is
+-- not refused.
+checkOutputReach :: HeldPool -> TxSignData -> Either String ()
 checkOutputReach held tsd =
   forM_ outputPaths $ \path -> forM_ (chainIndex path) $ \(chain, index) ->
-    unless (fromIntegral index < reach chain + scanLimit) $ Left (farPath path)
+    unless (fromIntegral index < reach path.pathKind chain + scanLimit) $ Left (farPath path)
   where
     inputPaths = tsd.txSignDataInputPaths
     outputPaths = tsd.txSignDataOutputPaths
     -- One past the last address of the chain known to be the account's
-    reach chain = maximum $ held' chain : [fromIntegral i + 1 | Just (c, i) <- chainIndex <$> inputPaths, c == chain]
-    held' chain = if chain == 0 then held.heldReceiving else held.heldChange
-    chainIndex path = case pathToList path of
+    reach kind chain = maximum $ held' kind chain : [fromIntegral i + 1 | input <- inputPaths, input.pathKind == kind, Just (c, i) <- [chainIndex input], c == chain]
+    held' kind chain = case Map.lookup kind held of
+      Nothing -> 0
+      Just chains -> if chain == 0 then chains.heldReceiving else chains.heldChange
+    chainIndex :: PoolPath -> Maybe (KeyIndex, KeyIndex)
+    chainIndex path = case pathToList path.pathInAccount of
       [chain, index] -> Just (chain, index)
       _ -> Nothing
 
 -- | The refusal of an output path too far past the addresses of its chain
 -- ('checkOutputReach')
-farPath :: SoftPath -> String
+farPath :: PoolPath -> String
 farPath path =
   "The path "
-    <> pathToStr path
+    <> cs (poolPathText path)
     <> " of an output is over "
     <> show scanLimit
     <> " addresses past the last one of its chain that the wallet holds or the transaction spends from: no scan of the account would find what it pays there"
 
--- | The refusal of a path at which the account has no address: a path
+-- | The refusal of a path at which an account has no address: a path
 -- of a chain other than its two ('Haskoin.Wallet.Keys.isChainPath'). hw
 -- neither shows nor signs a transaction with one, and writes none to a
 -- file.
-offChainPath :: SoftPath -> String
+offChainPath :: PoolPath -> String
 offChainPath path =
-  "The path " <> pathToStr path <> " is of no address of the account: its addresses are at /0/n and /1/n"
+  "The path " <> cs (poolPathText path) <> " is of no address of the account: its addresses are at /0/n and /1/n"
 
 -- | The size the builder estimated, from the kinds of the coins and the
 -- scripts of the outputs. The signing data does not say whether a P2PKH
@@ -440,15 +463,16 @@ estimatedSize ctx coins tx =
 
 {- Signing -}
 
--- | Sign every input of the wallet with the key derived from the path of
--- its address. An account signs the coins of its kind alone: P2PKH coins
--- for a BIP44 account, P2WPKH coins for a BIP84 one, with the digest of
--- BIP 143 and the signature in the witness, which haskoin-core's signer
--- does by the script of the coin. An input that is not the wallet's is
--- left as it is: it must already be signed.
+-- | Sign every input of the portfolio with the key derived from the path
+-- of its address, below the private key of the account of its kind. An
+-- account signs the coins of its kind alone: P2PKH coins for a BIP44
+-- account, P2WPKH coins for a BIP84 one, with the digest of BIP 143 and
+-- the signature in the witness, which haskoin-core's signer does by the
+-- script of the coin. An input that is not the portfolio's is left as it
+-- is: it must already be signed.
 signInputs ::
-  Network -> Ctx -> AccountKind -> XPrvKey -> Map Address MyInputs -> Tx -> [SpentCoin] -> Either String Tx
-signInputs net ctx kind accountKey myInputs tx coins =
+  Network -> Ctx -> [(AccountKind, XPrvKey)] -> Map Address MyInputs -> Tx -> [SpentCoin] -> Either String Tx
+signInputs net ctx accountKeys myInputs tx coins =
   foldM signInput' tx (zip3 [0 ..] coins (signedInputs tx))
   where
     -- An input that is not the wallet's must already carry a signature, in
@@ -460,17 +484,22 @@ signInputs net ctx kind accountKey myInputs tx coins =
           -- The summary refuses such a path before anything is signed; the
           -- one place a private key is derived from a path does not rely
           -- on that
-          | not (isChainPath mine.myInputsPath) ->
+          | not (isChainPath mine.myInputsPath.pathInAccount) ->
               Left (offChainPath mine.myInputsPath)
-          | spendsScript kind coin.script ->
-              signInput net ctx partial i (coinSigInput net coin) (inputKey mine.myInputsPath)
+          | spendsScript kind coin.script -> do
+              accountKey <-
+                maybe (Left (describeInput net i coin <> " is of a " <> cs (kindName kind) <> " account, and no key of one was given")) Right $
+                  lookup kind accountKeys
+              signInput net ctx partial i (coinSigInput net coin) (inputKey accountKey mine.myInputsPath.pathInAccount)
           | otherwise ->
               Left $ describeInput net i coin <> " is not a " <> kindCoinName kind <> " coin"
+          where
+            kind = mine.myInputsPath.pathKind
         Nothing
           | not signedAlready ->
               Left $ describeInput net i coin <> " does not belong to the wallet"
           | otherwise -> return partial
-    inputKey path = wrapSecKey True (derivePath ctx path accountKey).key
+    inputKey accountKey path = wrapSecKey True (derivePath ctx path accountKey).key
 
 -- | Check every input of the signed transaction against the output script
 -- of its coin, and that every signature in it has the sighash the wallet

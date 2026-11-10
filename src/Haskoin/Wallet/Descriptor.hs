@@ -24,9 +24,9 @@
 -- is, with the kind it marks, and 'slip132Key' writes it for the wallets
 -- that take only that form, such as Electrum.
 --
--- This module is the format alone. "Haskoin.Wallet.Labels" makes an
--- account of a descriptor, and "Haskoin.Wallet.Database.Account" writes
--- the descriptor of an account, which @accounts --verbose@ shows.
+-- This module is the format alone. "Haskoin.Wallet.Labels" reads the keys
+-- and the origins of the records of a file, and "Haskoin.Wallet.Database.Account"
+-- writes the descriptor of an account, which @portfolios --verbose@ shows.
 module Haskoin.Wallet.Descriptor
   ( -- * Key origins
     Origin (..),
@@ -310,13 +310,20 @@ readAccountKey key =
 -- test network, for a BIP84 account. Electrum, BlueWallet and Trezor Suite
 -- take that form for a native SegWit account, since an xpub makes a legacy
 -- wallet there. The key is the same, only its four version bytes differ.
--- A BIP44 account has no such key, as its xpub marks it, and text that is
--- not an extended key has none.
+-- SLIP-132 gives a BIP44 account the version bytes of BIP32, so the key
+-- of a BIP44 account is its xpub, or its tpub, as it is. Text that is not
+-- an extended key of BIP32 has none.
 slip132Key :: AccountKind -> Text -> Maybe Text
 slip132Key kind key = do
   bytes <- extendedKeyBytes key
-  prefix <- find (\p -> p.prefixKind == kind && p.bip32Bytes == BS.take 4 bytes) markedPrefixes
-  return (encodeBase58Check (prefix.slip132Bytes <> BS.drop 4 bytes))
+  let version = BS.take 4 bytes
+  case kind of
+    Bip44 -> do
+      guard (version `elem` (bip32Bytes <$> markedPrefixes))
+      return key
+    Bip84 -> do
+      prefix <- find (\p -> p.prefixKind == kind && p.bip32Bytes == version) markedPrefixes
+      return (encodeBase58Check (prefix.slip132Bytes <> BS.drop 4 bytes))
 
 -- | The 78 bytes of an extended key, from its text, when its checksum and
 -- its length are right. A text longer than an extended key can be is

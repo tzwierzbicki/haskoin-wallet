@@ -3,16 +3,17 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 
--- | Replacing a stuck transaction of the account with one that pays a
+-- | Replacing a stuck transaction of a portfolio with one that pays a
 -- higher fee (BIP 125), as bumpfee prepares it. The replacement spends the
 -- coins of the stuck transaction and pays its recipients the same amounts:
 -- the higher fee comes out of its change. When the change cannot pay it,
--- confirmed coins of the account are added, as the user agrees: the network
--- takes no replacement that adds a coin it has not confirmed. When no coin
--- of the account would do, or the user wants none added, the recipients
+-- confirmed coins of the portfolio on the network are added, of either
+-- type, as the user agrees: the network takes no replacement that adds a
+-- coin it has not confirmed. When no coin of the portfolio would do, or
+-- the user wants none added, the recipients
 -- pay what is missing out of what they receive, as the user agrees: one of
 -- them alone, or all of them in equal shares ('reductions'). A transaction
--- of the account that spends the change of the stuck one dies with it, so
+-- of the portfolio that spends the change of the stuck one dies with it, so
 -- the replacement then replaces both, paying the recipients of both, as the
 -- user agrees.
 --
@@ -21,7 +22,7 @@
 -- broadcast sends it and retires those still pending.
 module Haskoin.Wallet.Tx.BumpFee
   ( Sent (..),
-    transactionAccounts,
+    transactionPools,
     stuckTransaction,
     checkReplaceable,
     marksReplaceable,
@@ -67,18 +68,19 @@ import qualified Database.Persist as P
 import Data.Word (Word32)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Database.Account (accountKind, accountNetwork, accountXPubKey, getAccounts)
-import Haskoin.Wallet.Database.Address (fromDBAddr, isIntPath, walletPaths)
-import Haskoin.Wallet.Database.Coin (coinParents, coinText)
-import Haskoin.Wallet.Tx.CoinSelection (CoinSelection (..), FeePayer (..), Selection (..))
 import Haskoin.Wallet.Config (Config)
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Database.PendingTx (PendingTx (..), changeAddress, lookupPendingTx, pendingTxs, signedWithId)
-import Haskoin.Wallet.Keys (AccountKind)
+import Haskoin.Wallet.Database.Account (defaultKindOn, poolsOnNetwork)
+import Haskoin.Wallet.Database.Address (fromDBAddr, isIntPath, poolPaths)
+import Haskoin.Wallet.Database.Coin (coinParents, coinText)
+import Haskoin.Wallet.Database.PendingTx (PendingTx (..), changeAddress, lookupPendingTx, pendingTxs, placeText, poolKeys, signedWithId)
+import Haskoin.Wallet.Database.Portfolio (poolPlace)
 import Haskoin.Wallet.Database.RawTx (lookupRawTx)
+import Haskoin.Wallet.Database.TxInfo (MyInputs (..), TxInfo (..), TxSummary (..), allPools, liveSummary, ownTransaction, txInfoBlockRefs, txInfoKey)
+import Haskoin.Wallet.Keys (AccountKind, PoolPath (..))
 import Haskoin.Wallet.Store (Store, fromStore, rawTransactions)
-import Haskoin.Wallet.Tx.Building (BuiltTx (..), ChosenPayment (..), CoinControl (..), WalletCoins (..), assemblePayment, choosePayment, recipientsPayFee)
-import Haskoin.Wallet.Database.TxInfo (MyInputs (..), TxInfo (..), TxSummary (..), liveSummary, ownTransaction, txInfoBlockRefs)
+import Haskoin.Wallet.Tx.Building (BuiltTx (..), ChosenPayment (..), CoinControl (..), WalletCoins (..), assemblePayment, changeKindRule, choosePayment, recipientsPayFee)
+import Haskoin.Wallet.Tx.CoinSelection (CoinSelection (..), FeePayer (..), Selection (..))
 import Haskoin.Wallet.Database.TxLabel (txLabel)
 import Haskoin.Wallet.Tx.SendAll (sendAllFee)
 import Haskoin.Wallet.Tx.SignData
@@ -90,7 +92,7 @@ import System.Random (StdGen)
 
 {- The transactions replaced -}
 
--- | A transaction of the account on the network and not yet in a block,
+-- | A transaction of the portfolio on the network and not yet in a block,
 -- with what replacing it needs
 data Sent = Sent
   { sentTx :: !Tx,
@@ -106,76 +108,77 @@ data Sent = Sent
 sentId :: Sent -> TxHash
 sentId s = txHash s.sentTx
 
--- | The accounts that hold a transaction, by its id or, while it is pending,
+-- | The pools that hold a transaction, by its id or, while it is pending,
 -- its nosigHash: among their pending transactions, or in their history
-transactionAccounts :: (MonadUnliftIO m) => TxHash -> ExceptT String (DB m) [(DBAccountId, DBAccount)]
-transactionAccounts tid = do
+transactionPools :: (MonadUnliftIO m) => TxHash -> ExceptT String (DB m) [Pool]
+transactionPools tid = do
   byNosig <- lookupPendingTx tid
-  accounts <- lift getAccounts
-  filterM (holds byNosig) accounts
+  pools <- lift allPools
+  filterM (holds byNosig) pools
   where
-    holds byNosig (accId, _) = do
-      pending <- sentPending accId tid
-      replacement <- pendingReplacementOf accId tid
-      inHistory <- lift $ isJust <$> P.get (DBTxInfoKey accId (hashBytes tid))
-      return $ isJust pending || isJust replacement || inHistory || ((pendingTxAccount <$> byNosig) == Just accId)
+    holds byNosig pool = do
+      pending <- sentPending pool tid
+      replacement <- pendingReplacementOf pool tid
+      inHistory <- lift $ isJust <$> P.get (txInfoKey pool tid)
+      return $ isJust pending || isJust replacement || inHistory || ((pendingTxPool <$> byNosig) == Just pool)
 
--- | The signed pending transaction of the account with the id, sent or not
-sentPending :: (MonadUnliftIO m) => DBAccountId -> TxHash -> ExceptT String (DB m) (Maybe PendingTx)
-sentPending accId tid = find (signedWithId tid) <$> pendingTxs accId
+-- | The signed pending transaction of the pool with the id, sent or not
+sentPending :: (MonadUnliftIO m) => Pool -> TxHash -> ExceptT String (DB m) (Maybe PendingTx)
+sentPending pool tid = find (signedWithId tid) <$> pendingTxs pool
 
--- | The pending transaction of the account that replaces the transaction,
+-- | The pending transaction of the pool that replaces the transaction,
 -- if any
-pendingReplacementOf :: (MonadUnliftIO m) => DBAccountId -> TxHash -> ExceptT String (DB m) (Maybe PendingTx)
-pendingReplacementOf accId tid = find names <$> pendingTxs accId
+pendingReplacementOf :: (MonadUnliftIO m) => Pool -> TxHash -> ExceptT String (DB m) (Maybe PendingTx)
+pendingReplacementOf pool tid = find names <$> pendingTxs pool
   where
     names p = tid `elem` txSignDataReplaces (pendingTxData p)
 
--- | The transaction of the account to replace, by its id: one the user
+-- | The transaction of the pool to replace, by its id: one the user
 -- sent, pending until the sync sees it on the network, or in the history
 -- and not yet in a block. The raw transactions the wallet no longer keeps,
 -- those of coins it has spent, come from the store. One replaced already
 -- is refused: its pending replacement is to be sent or deleted first, or
 -- bumped in its turn once it is sent.
-stuckTransaction :: (MonadUnliftIO m) => Ctx -> Store -> DBAccountId -> DBAccount -> TxHash -> ExceptT String (DB m) Sent
-stuckTransaction ctx store accId acc tid = do
-  replacementM <- pendingReplacementOf accId tid
+stuckTransaction :: (MonadUnliftIO m) => Ctx -> Store -> Pool -> TxHash -> ExceptT String (DB m) Sent
+stuckTransaction ctx store pool tid = do
+  replacementM <- pendingReplacementOf pool tid
   forM_ replacementM $ \r ->
     throwError $
       if r.pendingTxOnline
         then "The transaction is replaced by " <> hex (txHash (txSignDataTx r.pendingTxData)) <> ", which is sent: bump that one instead"
         else "A replacement of the transaction is pending: " <> hex (shownHash (txSignDataTx r.pendingTxData)) <> ". Send it, or delete it with deletetx"
   byNosig <- lookupPendingTx tid
-  bySignedId <- sentPending accId tid
+  bySignedId <- sentPending pool tid
   case catMaybes [byNosig, bySignedId] of
     p : _
-      | p.pendingTxOnline -> pendingSent ctx acc p
+      | p.pendingTxOnline -> pendingSent ctx p
       | otherwise -> throwError "The transaction is not sent yet: delete it with deletetx, and prepare it again at the fee rate you want"
     [] -> do
-      live <- liveSummary (accountNetwork acc) accId tid
+      live <- liveSummary pool tid
       case live of
-        Nothing -> throwError $ "The account has no transaction " <> hex tid <> " on the network, which may have dropped it"
+        Nothing -> throwError $ "The portfolio has no transaction " <> hex tid <> " on the network, which may have dropped it"
         Just (block, summary)
           | Store.confirmed block -> throwError "The transaction is in a block already: nothing can replace it"
           -- Before the transactions of its coins are fetched: those of a
           -- payment received are the payer's
           | not (ownTransaction summary) -> throwError notOwnPayment
-          | otherwise -> historySent store accId tid summary
+          | otherwise -> historySent store pool tid summary
 
 -- | A pending transaction the user sent, as bumpfee replaces it, with the
 -- label of its signing data
-pendingSent :: (MonadUnliftIO m) => Ctx -> DBAccount -> PendingTx -> ExceptT String (DB m) Sent
-pendingSent ctx acc p = do
-  info <- liftEither $ parseTxSignData (accountNetwork acc) ctx (accountKind acc) (accountXPubKey ctx acc) p.pendingTxData
+pendingSent :: (MonadUnliftIO m) => Ctx -> PendingTx -> ExceptT String (DB m) Sent
+pendingSent ctx p = do
+  keys <- lift $ poolKeys ctx p.pendingTxPool
+  info <- liftEither $ parseTxSignData p.pendingTxPool.poolNetwork ctx keys p.pendingTxData
   return $ Sent (txSignDataTx p.pendingTxData) info.txInfoSummary p.pendingTxData.txSignDataInputs p.pendingTxData.txSignDataLabel
 
--- | A transaction of the account's history, as bumpfee replaces it, with
--- the label the account gives it
-historySent :: (MonadUnliftIO m) => Store -> DBAccountId -> TxHash -> TxSummary -> ExceptT String (DB m) Sent
-historySent store accId tid summary = do
+-- | A transaction of the pool's history, as bumpfee replaces it, with
+-- the label the pool gives it
+historySent :: (MonadUnliftIO m) => Store -> Pool -> TxHash -> TxSummary -> ExceptT String (DB m) Sent
+historySent store pool tid summary = do
   raw <- liftMaybe ("The store has no transaction " <> hex tid) . listToMaybe =<< rawTxs store [tid]
   parents <- rawTxs store $ nubOrd [input.outpoint.hash | input <- raw.inputs]
-  label <- lift $ txLabel accId tid
+  label <- lift $ txLabel pool tid
   return $ Sent raw summary parents label
 
 -- | The raw transactions: those the wallet keeps, and the others from the
@@ -188,7 +191,7 @@ rawTxs store tids = do
   forM tids $ \tid -> liftMaybe ("The store has no transaction " <> hex tid) (Map.lookup tid byId)
 
 -- | Refuse to replace a transaction that does not spend the coins of the
--- account alone, or that does not mark itself replaceable. The network
+-- portfolio alone, or that does not mark itself replaceable. The network
 -- takes the replacement of one that does not, but the store hw reads
 -- would keep showing it in place of its replacement until a block
 -- confirms one of them: the store replaces only the transactions marked
@@ -206,71 +209,72 @@ marksReplaceable :: Tx -> Bool
 marksReplaceable transaction = any ((< 0xfffffffe) . (.sequence)) transaction.inputs
 
 -- | The refusal of a transaction that spends coins of another wallet: a
--- payment the account receives, or a sweep
+-- payment the portfolio receives, or a sweep
 notOwnPayment :: String
-notOwnPayment = "Only a payment from the coins of the account can be replaced: this transaction spends coins of another wallet"
+notOwnPayment = "Only a payment from the coins of the portfolio can be replaced: this transaction spends coins of another wallet"
 
 -- | The lowest fee rate, in satoshis per virtual byte, of a replacement of
 -- the transaction: above the rate it pays
 minimumRate :: Sent -> Natural
 minimumRate s = s.sentSummary.summaryFee `div` s.sentSummary.summarySize + 1
 
--- | The transactions of an account that spend an output of the given ones:
+-- | The transactions of a pool that spend an output of the given ones:
 -- its pending ones, and those of its history not yet in a block, each with
 -- its summary
-spendersIn :: (MonadUnliftIO m) => Network -> DBAccountId -> [TxHash] -> ExceptT String (DB m) ([PendingTx], [(TxHash, TxSummary)])
-spendersIn net accId tids = do
-  held <- pendingTxs accId
+spendersIn :: (MonadUnliftIO m) => Pool -> [TxHash] -> ExceptT String (DB m) ([PendingTx], [(TxHash, TxSummary)])
+spendersIn pool tids = do
+  held <- pendingTxs pool
   let spendsOne :: [OutPoint] -> Bool
       spendsOne = any ((`elem` tids) . (.hash))
       pending = [p | p <- held, spendsOne ((.outpoint) <$> (txSignDataTx p.pendingTxData).inputs)]
-  refs <- txInfoBlockRefs accId
+  refs <- txInfoBlockRefs pool
   history <- fmap catMaybes . forM [tid | (tid, ref) <- Map.toList refs, not (Store.confirmed ref)] $ \tid -> do
-    live <- liveSummary net accId tid
+    live <- liveSummary pool tid
     return $ case live of
       Just (_, summary)
         | spendsOne [outpoint | input <- Map.elems summary.summaryMyInputs, outpoint <- input.myInputsOutpoints] -> Just (tid, summary)
       _ -> Nothing
   return (pending, history)
 
--- | The transactions of the account that spend outputs of the given ones,
+-- | The transactions of the pool that spend outputs of the given ones,
 -- and those that spend theirs, which replacing these removes: sent and
 -- still pending, or in the history and not yet in a block. One prepared
 -- and not sent is refused: it would be left spending a coin that is gone.
-spendingChildren :: (MonadUnliftIO m) => Ctx -> Store -> DBAccountId -> DBAccount -> [Sent] -> ExceptT String (DB m) [Sent]
-spendingChildren ctx store accId acc parents = go (sentId <$> parents) []
+spendingChildren :: (MonadUnliftIO m) => Ctx -> Store -> Pool -> [Sent] -> ExceptT String (DB m) [Sent]
+spendingChildren ctx store pool parents = go (sentId <$> parents) []
   where
-    net = accountNetwork acc
     go [] found = return found
     go tids found = do
-      (pending, history) <- spendersIn net accId tids
+      (pending, history) <- spendersIn pool tids
       fromPending <- forM pending $ \p -> do
         unless p.pendingTxOnline $
           throwError $
             "The pending transaction " <> hex (nosigHash (txSignDataTx p.pendingTxData))
               <> " spends the change of the transaction: send it, or delete it with deletetx, before replacing them"
-        pendingSent ctx acc p
-      fromHistory <- forM history $ \(tid, summary) -> historySent store accId tid summary
+        pendingSent ctx p
+      fromHistory <- forM history $ \(tid, summary) -> historySent store pool tid summary
       let known = Set.fromList (sentId <$> parents <> found)
           new = Map.elems $ Map.fromList [(sentId s, s) | s <- fromPending <> fromHistory, sentId s `Set.notMember` known]
       go (sentId <$> new) (found <> new)
 
 -- | Refuse to replace transactions an output of which a transaction of
--- another account of the network spends: replacing them would remove it,
--- and hw cannot replace it from this account. An account may spend what
--- another account of the wallet paid it before it confirms, so hw builds
--- such a transaction itself: deletetx frees the way while it is pending,
--- and once it is sent, the payment is replaced from neither account.
-refuseSpentElsewhere :: (MonadUnliftIO m) => Network -> DBAccountId -> [Sent] -> ExceptT String (DB m) ()
-refuseSpentElsewhere net accId sents = do
-  others <- filter (\(otherId, other) -> otherId /= accId && accountNetwork other == net) <$> lift getAccounts
-  forM_ others $ \(otherId, other) -> do
-    (pending, history) <- spendersIn net otherId (sentId <$> sents)
+-- another portfolio spends on the network: replacing them would remove
+-- it, and hw cannot replace it from this portfolio. A portfolio may spend
+-- what another portfolio of the wallet paid it before it confirms, so hw
+-- builds such a transaction itself: deletetx frees the way while it is
+-- pending, and once it is sent, the payment is replaced from neither
+-- portfolio.
+refuseSpentElsewhere :: (MonadUnliftIO m) => Pool -> [Sent] -> ExceptT String (DB m) ()
+refuseSpentElsewhere pool sents = do
+  others <- filter (/= pool) <$> lift (poolsOnNetwork pool.poolNetwork)
+  forM_ others $ \other -> do
+    (pending, history) <- spendersIn other (sentId <$> sents)
     let spenders = [nosigHash (txSignDataTx p.pendingTxData) | p <- pending] <> (fst <$> history)
-    forM_ (listToMaybe spenders) $ \spender ->
+    forM_ (listToMaybe spenders) $ \spender -> do
+      place <- poolPlace other
       throwError $
-        "The transaction " <> hex spender <> " of the account " <> cs (dBAccountName other)
-          <> " spends an output of the transaction, and would be removed with it: hw cannot replace it from this account"
+        "The transaction " <> hex spender <> " of " <> placeText place
+          <> " spends an output of the transaction, and would be removed with it: hw cannot replace it from this portfolio"
 
 {- The replacement -}
 
@@ -280,14 +284,15 @@ refuseSpentElsewhere net accId sents = do
 -- what they pay, but their change and what one of them pays another; the
 -- address of their change, if any; the fees they paid; and their labels.
 data BumpPlan = BumpPlan
-  { -- | The kind of the account, which sizes its inputs and its change
-    planKind :: !AccountKind,
+  { -- | The type new change takes when the coins of the replacement are of
+    -- both types: the default type of the configuration on the network
+    planDefaultKind :: !AccountKind,
     planCoins :: ![Store.Unspent],
     planParents :: ![Tx],
-    planCoinPaths :: !(Map Address SoftPath),
+    planCoinPaths :: !(Map Address PoolPath),
     planRecipients :: ![(Address, Natural)],
-    planRecipientPaths :: !(Map Address SoftPath),
-    planChange :: !(Maybe (Address, SoftPath)),
+    planRecipientPaths :: !(Map Address PoolPath),
+    planChange :: !(Maybe (Address, PoolPath)),
     planFees :: !Natural,
     planReplaces :: ![TxHash],
     -- | The label of the replacement: see 'replacementLabel'
@@ -296,20 +301,23 @@ data BumpPlan = BumpPlan
   deriving (Eq, Show)
 
 -- | The plan of the replacement of the transactions. The change of a
--- transaction is what it pays the wallet on the change chain, or back to
--- an address it spends from, as --change-back does. What it pays another
--- address of the wallet is a payment, which the replacement keeps.
-bumpPlan :: (MonadUnliftIO m) => Network -> Ctx -> DBAccountId -> AccountKind -> [Sent] -> ExceptT String (DB m) BumpPlan
-bumpPlan net ctx accId kind sents = do
-  let replaced = Set.fromList (sentId <$> sents)
+-- transaction is what it pays the portfolio on a change chain, or back to
+-- an address it spends from. What it pays another address of the
+-- portfolio is a payment, which the replacement keeps: change sent to a
+-- receiving address with --change-back is such a payment, and is not
+-- reduced.
+bumpPlan :: (MonadUnliftIO m) => Ctx -> Config -> Pool -> [Sent] -> ExceptT String (DB m) BumpPlan
+bumpPlan ctx cfg pool sents = do
+  let net = pool.poolNetwork
+      replaced = Set.fromList (sentId <$> sents)
       parents = Map.fromList [(txHash parent, parent) | s <- sents, parent <- s.sentParents]
       spent = [input.outpoint | s <- sents, input <- s.sentTx.inputs]
       -- What one transaction replaced pays another stays out of both
       within = Set.fromList [outpoint | outpoint <- spent, outpoint.hash `Set.member` replaced]
   planned <- forM (nubOrd [outpoint | outpoint <- spent, outpoint `Set.notMember` within]) $ \outpoint -> do
     parent <- liftMaybe ("The transaction of the coin " <> coinText outpoint <> " is missing") (Map.lookup outpoint.hash parents)
-    coinOf ctx net accId outpoint parent
-  plannedPaths <- walletPaths net accId (mapMaybe (.address) planned)
+    coinOf ctx pool outpoint parent
+  plannedPaths <- poolPaths pool (mapMaybe (.address) planned)
   paid <-
     liftEither $
       sequence
@@ -318,14 +326,14 @@ bumpPlan net ctx accId kind sents = do
             (index, out) <- zip [0 ..] s.sentTx.outputs,
             OutPoint (sentId s) index `Set.notMember` within
         ]
-  paths <- walletPaths net accId [addr | (_, addr, _) <- paid]
-  let changeOf :: Sent -> Address -> Maybe (Address, SoftPath)
+  paths <- poolPaths pool [addr | (_, addr, _) <- paid]
+  let changeOf :: Sent -> Address -> Maybe (Address, PoolPath)
       changeOf s addr = case Map.lookup addr paths of
-        Just path | isIntPath path || addr `Map.member` s.sentSummary.summaryMyInputs -> Just (addr, path)
+        Just path | isIntPath (pathInAccount path) || addr `Map.member` s.sentSummary.summaryMyInputs -> Just (addr, path)
         _ -> Nothing
   return
     BumpPlan
-      { planKind = kind,
+      { planDefaultKind = defaultKindOn cfg net,
         planCoins = planned,
         planParents = nubOrd [parent | coin <- planned, Just parent <- [Map.lookup coin.outpoint.hash parents]],
         planCoinPaths = plannedPaths,
@@ -338,7 +346,7 @@ bumpPlan net ctx accId kind sents = do
       }
   where
     addressOf :: TxOut -> Either String Address
-    addressOf out = either (const $ Left "A transaction replaced pays an output without an address") Right (scriptToAddressBS net ctx out.script)
+    addressOf out = either (const $ Left "A transaction replaced pays an output without an address") Right (scriptToAddressBS pool.poolNetwork ctx out.script)
 
 -- | The label of a replacement: the labels of the transactions it
 -- replaces, the stuck one first, each label once, a semicolon between
@@ -348,11 +356,11 @@ replacementLabel sents = Text.intercalate "; " (nubOrd [s.sentLabel | s <- sents
 
 -- | The coin of an output of a transaction of the wallet, in the block of
 -- that transaction
-coinOf :: (MonadUnliftIO m) => Ctx -> Network -> DBAccountId -> OutPoint -> Tx -> ExceptT String (DB m) Store.Unspent
-coinOf ctx net accId outpoint parent = do
+coinOf :: (MonadUnliftIO m) => Ctx -> Pool -> OutPoint -> Tx -> ExceptT String (DB m) Store.Unspent
+coinOf ctx pool outpoint parent = do
   out <- liftMaybe ("The coin " <> coinText outpoint <> " is missing") (listToMaybe (drop (fromIntegral outpoint.index) parent.outputs))
-  addr <- liftEither $ either (const $ Left ("The coin " <> coinText outpoint <> " pays no address")) Right (scriptToAddressBS net ctx out.script)
-  live <- liveSummary net accId outpoint.hash
+  addr <- liftEither $ either (const $ Left ("The coin " <> coinText outpoint <> " pays no address")) Right (scriptToAddressBS pool.poolNetwork ctx out.script)
+  live <- liveSummary pool outpoint.hash
   (block, _) <- liftMaybe ("The transaction of the coin " <> coinText outpoint <> " is not in the history: sync first") live
   return
     Store.Unspent
@@ -364,27 +372,29 @@ coinOf ctx net accId outpoint parent = do
       }
 
 -- | The coins of the plan and the coins added, as the builder takes them
-walletCoinsOf :: BumpPlan -> [(Store.Unspent, Address, SoftPath)] -> WalletCoins
+walletCoinsOf :: BumpPlan -> [(Store.Unspent, Address, PoolPath)] -> WalletCoins
 walletCoinsOf plan added =
   WalletCoins
-    { ownKind = plan.planKind,
-      coins = plan.planCoins <> [coin | (coin, _, _) <- added],
+    { coins = plan.planCoins <> [coin | (coin, _, _) <- added],
       coinPaths = plan.planCoinPaths <> Map.fromList [(addr, path) | (_, addr, path) <- added],
       recipientPaths = plan.planRecipientPaths
     }
 
 -- | The coins of the replacement at the fee rate: all those of the plan,
--- and the coins added
-chooseBump :: Ctx -> StdGen -> BumpPlan -> [(Store.Unspent, Address, SoftPath)] -> Natural -> Either String ChosenPayment
+-- and the coins added. Its change is of the type of the change address of
+-- the plan, when the transactions replaced had change, or else of the
+-- type its coins call for ('changeKindRule').
+chooseBump :: Ctx -> StdGen -> BumpPlan -> [(Store.Unspent, Address, PoolPath)] -> Natural -> Either String ChosenPayment
 chooseBump ctx gen plan added feeByte =
-  choosePayment ctx gen LargestFirst found plan.planRecipients feeByte SenderPays (SpendChosen ((.outpoint) <$> found.coins))
+  choosePayment ctx gen LargestFirst found plan.planRecipients feeByte SenderPays (SpendChosen ((.outpoint) <$> found.coins)) changeKind
   where
     found = walletCoinsOf plan added
+    changeKind = maybe (changeKindRule plan.planDefaultKind found.coins) (pathKind . snd) plan.planChange
 
 -- | The coins to add for the replacement to pay its recipients and its fee:
 -- the largest first, as few as do, among the candidates. None when the
 -- coins of the plan do. Nothing when even all the candidates do not.
-coinsToAdd :: Ctx -> StdGen -> BumpPlan -> [(Store.Unspent, Address, SoftPath)] -> Natural -> Maybe [(Store.Unspent, Address, SoftPath)]
+coinsToAdd :: Ctx -> StdGen -> BumpPlan -> [(Store.Unspent, Address, PoolPath)] -> Natural -> Maybe [(Store.Unspent, Address, PoolPath)]
 coinsToAdd ctx gen plan candidates feeByte
   | covers [] = Just []
   | otherwise = find covers (drop 1 (inits (sortOn (\(coin, _, _) -> Down coin.value) candidates)))
@@ -437,7 +447,7 @@ reductions ctx plan feeByte = do
     amount = sum (snd <$> recipients)
     -- The replacement spends the coins in full, with no change: its fee is
     -- that of a send-all
-    fee = sendAllFee ctx plan.planKind feeByte plan.planCoins (fst <$> recipients)
+    fee = sendAllFee ctx feeByte plan.planCoins (fst <$> recipients)
     -- What each recipient gets paying the missing amount one way, when none
     -- is left below the dust limit
     reductionBy missing paidBy = do
@@ -472,8 +482,8 @@ reductions ctx plan feeByte = do
 data Funding
   = -- | Their change, which nothing needs to be asked about
     ChangePays
-  | -- | Confirmed coins of the account, added as the user agrees
-    CoinsAdded ![(Store.Unspent, Address, SoftPath)]
+  | -- | Confirmed coins of the portfolio, added as the user agrees
+    CoinsAdded ![(Store.Unspent, Address, PoolPath)]
   | -- | The recipients, out of what they receive, one way, as the user
     -- agrees
     RecipientsReduced !Reduction
@@ -481,9 +491,9 @@ data Funding
 
 -- | The fundings of the replacement at the fee rate, in the order bumpfee
 -- offers them: the change alone, when it pays; otherwise the coins of the
--- account to add, when some would do, then each way the recipients can
+-- portfolio to add, when some would do, then each way the recipients can
 -- pay. Refused when nothing pays: neither the coins, nor the recipients.
-fundings :: Ctx -> StdGen -> BumpPlan -> [(Store.Unspent, Address, SoftPath)] -> Natural -> Either String [Funding]
+fundings :: Ctx -> StdGen -> BumpPlan -> [(Store.Unspent, Address, PoolPath)] -> Natural -> Either String [Funding]
 fundings ctx gen plan candidates feeByte =
   case (coinsToAdd ctx gen plan candidates feeByte, reductions ctx plan feeByte) of
     (Just [], _) -> Right [ChangePays]
@@ -491,7 +501,7 @@ fundings ctx gen plan candidates feeByte =
     (Nothing, Right reduced) -> Right (RecipientsReduced <$> reduced)
     (Nothing, Left cannot) -> Left (noCoins <> ". " <> cannot)
   where
-    noCoins = "The coins of the transaction cannot pay its fee at " <> show feeByte <> " sat/vB, and no confirmed coins of the account would"
+    noCoins = "The coins of the transaction cannot pay its fee at " <> show feeByte <> " sat/vB, and no confirmed coins of the portfolio would"
 
 -- | The signing data of the replacement at the fee rate, from the coins of
 -- the plan and its funding, with the transactions those come from. Its
@@ -501,8 +511,7 @@ buildBump ::
   (MonadUnliftIO m) =>
   Ctx ->
   Config ->
-  Network ->
-  DBAccountId ->
+  Pool ->
   StdGen ->
   BumpPlan ->
   Funding ->
@@ -511,7 +520,7 @@ buildBump ::
   -- | Lock time
   Word32 ->
   ExceptT String (DB m) TxSignData
-buildBump ctx cfg net accId gen plan funding feeByte lockTime = do
+buildBump ctx cfg pool gen plan funding feeByte lockTime = do
   let (funded, added) = case funding of
         ChangePays -> (plan, [])
         CoinsAdded extra -> (plan, extra)
@@ -521,12 +530,17 @@ buildBump ctx cfg net accId gen plan funding feeByte lockTime = do
   chosen <- liftEither $ chooseBump ctx gen funded added feeByte
   change <-
     if chosen.selection.changeAmount > 0
-      then Just <$> maybe newChange return plan.planChange
+      then Just <$> maybe (newChange chosen.changeType) return plan.planChange
       else return Nothing
-  built <- liftEither $ assemblePayment net ctx found chosen change lockTime
+  built <- liftEither $ assemblePayment pool.poolNetwork ctx found chosen change lockTime
   return $ TxSignData built.tx (nubOrd (plan.planParents <> addedParents)) built.inputPaths built.outputPaths (Just feeByte) Nothing plan.planReplaces plan.planLabel
   where
-    newChange = liftEither . fromDBAddr net =<< changeAddress ctx cfg accId
+    -- A new change address of the pool, of the type the fee was counted for
+    newChange :: (MonadUnliftIO m) => AccountKind -> ExceptT String (DB m) (Address, PoolPath)
+    newChange kind = do
+      row <- changeAddress ctx cfg pool kind
+      (addr, path) <- liftEither $ fromDBAddr pool.poolNetwork row
+      return (addr, PoolPath kind path)
     -- The plan with the recipients paid what the reduction leaves them
     reducedPlan :: Reduction -> BumpPlan
     reducedPlan reduction = plan {planRecipients = [(addr, after) | (addr, _, after) <- reduction.reductionRecipients]}
@@ -563,7 +577,7 @@ childrenQuestion [_] = "Replace both with one transaction that pays the recipien
 childrenQuestion _ = "Replace them all with one transaction that pays all their recipients?"
 
 -- | The question after 'addedCoinsDoc' of the printer
-addedQuestion :: [(Store.Unspent, Address, SoftPath)] -> String
+addedQuestion :: [(Store.Unspent, Address, PoolPath)] -> String
 addedQuestion [_] = "Add it?"
 addedQuestion _ = "Add them?"
 

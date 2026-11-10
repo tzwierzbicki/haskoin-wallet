@@ -3,17 +3,21 @@
 
 -- | The keys of a seed: from its mnemonic and passphrase to the master key,
 -- to the signing key of an account along the path of its kind, BIP44 or
--- BIP84; the public side of a seed, its fingerprint and the public keys of
--- its accounts, which is all a command keeps of it outside signing; and
--- the private keys of a sweep, as users write them and where they come
--- from.
+-- BIP84; the accounts a portfolio is made of, one for each network and
+-- kind at the same account index; the path of an address in a portfolio
+-- on a network ('PoolPath'); the public side of a seed, its fingerprint
+-- and the public keys of its accounts, which is all a command keeps of it
+-- outside signing; and the private keys of a sweep, as users write them
+-- and where they come from.
 module Haskoin.Wallet.Keys where
 
 import Control.Applicative ((<|>))
 import Control.Exception (evaluate, try)
-import Control.Monad (filterM)
+import Control.Monad (filterM, forM)
 import Crypto.KDF.PBKDF2 (Parameters (..), fastPBKDF2_SHA512)
 import Data.ByteString (ByteString)
+import Data.Aeson (FromJSON (..), ToJSON (..), object, withObject, withText, (.!=), (.:), (.:?), (.=))
+import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -110,6 +114,84 @@ spendsScript kind script = case (kind, script) of
   (Bip44, PayPKHash _) -> True
   (Bip84, PayWitnessPKHash _) -> True
   _ -> False
+
+-- | The kind of account an address belongs to, by its form: a P2PKH
+-- address is of a BIP44 account, a P2WPKH one of a BIP84 account. Nothing
+-- for an address of another form, which no account of hw has. A coin of a
+-- portfolio is at an address of one of its accounts, so this tells the
+-- size of its input, and the type coins lists it under.
+addressKind :: Address -> Maybe AccountKind
+addressKind addr = case addr of
+  PubKeyAddress {} -> Just Bip44
+  WitnessPubKeyAddress {} -> Just Bip84
+  _ -> Nothing
+
+instance ToJSON AccountKind where
+  toJSON = Json.String . kindName
+
+instance FromJSON AccountKind where
+  parseJSON = withText "account type" $ \name ->
+    maybe (fail ("Unknown account type " <> cs name)) return (kindNamed name)
+
+{- The accounts of a portfolio -}
+
+-- | The networks of a portfolio, in the order hw lists them: Bitcoin,
+-- Bitcoin Cash, then the test networks of Bitcoin and those of Bitcoin
+-- Cash. A portfolio has accounts on every one of them, the test networks
+-- included, so that the user never creates an account: a network that is
+-- never used costs a few rows.
+portfolioNetworks :: [Network]
+portfolioNetworks = [btc, bch, btcTest, btcTest4, btcRegTest, bchTest, bchTest4, bchRegTest]
+
+-- | The place of a network among those of a portfolio, which orders
+-- whatever hw groups by network
+networkRank :: Network -> Int
+networkRank net = length (takeWhile ((/= net.name) . (.name)) portfolioNetworks)
+
+-- | Every account of a whole portfolio, by its network and its kind: each
+-- network of 'portfolioNetworks' with the kinds it has. Twelve accounts,
+-- from five keys: the test networks share the coin type 1, so the
+-- accounts of one kind on them have the same key.
+portfolioAccounts :: [(Network, AccountKind)]
+portfolioAccounts = [(net, kind) | net <- portfolioNetworks, kind <- networkKinds net]
+
+{- The path of an address in a portfolio -}
+
+-- | Where an address of a portfolio is on a network: the kind of the
+-- account that has it, and its path below the key of that account, /0/n
+-- or /1/n. A portfolio has up to two accounts on a network, one of each
+-- kind, so the path alone no longer tells an address. The signing data
+-- and the summaries of transactions name the addresses of the portfolio
+-- this way.
+data PoolPath = PoolPath
+  { -- | The kind of the account of the address
+    pathKind :: !AccountKind,
+    -- | The path of the address below the key of its account
+    pathInAccount :: !SoftPath
+  }
+  deriving (Eq, Ord, Show)
+
+-- | A path of a BIP44 account: what every path was before portfolios
+legacyPath :: SoftPath -> PoolPath
+legacyPath = PoolPath Bip44
+
+-- | A path as a view names it where the address is not written out, with
+-- the kind of its account in front, as in bip84/0/3: the path /0/3 is one
+-- address in the BIP44 account and another in the BIP84 one
+poolPathText :: PoolPath -> Text
+poolPathText path = kindName (pathKind path) <> cs (pathToStr (pathInAccount path))
+
+-- | In JSON, a path is an object with the path and the type of its
+-- account. A path written alone, as a text, is one of a BIP44 account:
+-- hw wrote it so before it had portfolios, and every account was a BIP44
+-- one then.
+instance ToJSON PoolPath where
+  toJSON path = object ["type" .= pathKind path, "path" .= pathInAccount path]
+
+instance FromJSON PoolPath where
+  parseJSON value = case value of
+    Json.String _ -> legacyPath <$> parseJSON value
+    _ -> withObject "path" (\o -> PoolPath <$> o .:? "type" .!= Bip44 <*> o .: "path") value
 
 {- The kinds of accounts hw does not hold -}
 
@@ -220,6 +302,21 @@ instance Show MnemonicPass where
     showParen (d > 10) $
       showString "MnemonicPass {mnemonicWords = <redacted>, mnemonicPass = <redacted>}"
 
+-- | The first index a wallet or a portfolio cannot have: 2^31, which is
+-- 2147483648. The index of a portfolio is the account index of its
+-- accounts, the last step of their paths. That step is hardened, and
+-- BIP32 has 2^31 hardened steps. A larger index would wrap around to a
+-- smaller one when it is made a step of a path, or a number of the
+-- database, and name another portfolio. A wallet index is no step of a
+-- path, and takes the same bound, so that the two indexes read alike.
+indexBound :: Natural
+indexBound = 0x80000000
+
+-- | Whether a wallet or a portfolio can have the index: below
+-- 'indexBound'
+indexFits :: Natural -> Bool
+indexFits index = index < indexBound
+
 -- | The path of an account of a kind: m/purpose'/coin'/account', with the
 -- purpose of the kind and the coin type of the network
 accountDeriv :: AccountKind -> Network -> Natural -> HardPath
@@ -239,6 +336,15 @@ isChainPath path = case pathToList path of
 -- | The index of an account from its public key: the last step of its path
 xPubIndex :: XPubKey -> Natural
 xPubIndex = fromIntegral . xPubChild
+
+-- | Whether two extended public keys are the same key: the same public key
+-- and the same chain code, which give the same addresses. The text of an
+-- extended key also holds its depth, the fingerprint of its parent and
+-- its child number. A file can write those as it likes, and the same key
+-- written with another child number would pass for another key, of
+-- another portfolio, with the addresses of the first.
+sameKey :: XPubKey -> XPubKey -> Bool
+sameKey a b = a.key == b.key && a.chain == b.chain
 
 -- | The master key of a seed: the root of its accounts on every network.
 -- The sentence and the passphrase are normalized to NFKD, as BIP39 asks,
@@ -398,6 +504,16 @@ seedOfMaster ctx master =
       seedAccountKey = \kind net index -> accountPubKey kind net ctx master index,
       seedForeignKey = \kind net index -> pubKeyAtPath ctx master (foreignDeriv kind net index)
     }
+
+-- | The keys of every account of the portfolio of a seed at an index, by
+-- network and kind ('portfolioAccounts'). Nothing when one of them is
+-- invalid: BIP32 says to skip such an index, so the seed has no portfolio
+-- there.
+seedPortfolioKeys :: PublicSeed -> Natural -> IO (Maybe [(Network, AccountKind, XPubKey)])
+seedPortfolioKeys seed index = do
+  keys <- forM portfolioAccounts $ \(net, kind) ->
+    fmap (\key -> (net, kind, key)) <$> seedAccountKey seed kind net index
+  return (sequence keys)
 
 -- | The accounts of a seed that have a key, of any kind hw holds on any
 -- network, at the index the key carries: none when the seed does not have

@@ -3,23 +3,24 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The command line of hw as the user meets it: the help, the version,
--- a command line hw cannot parse, the completion the shell asks for, and
--- how a command that fails says so and leaves nothing behind.
+-- a command line hw cannot parse, among them the commands and options
+-- that portfolios replaced, the completion the shell asks for, and how a
+-- command that fails says so and leaves nothing behind.
 module Haskoin.Wallet.Workflow.CommandLineSpec (spec) where
 
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Monad (forM_, replicateM_)
 import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Trans.Class (lift)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.IORef (modifyIORef)
 import Data.List (sort)
+import Data.Maybe (listToMaybe)
+import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin
 import Haskoin.Wallet.Database (databaseInUse, runDBWith)
-import Haskoin.Wallet.Database.Account (getAccountsNamed, renameAccount)
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (MnemonicPass (..))
 import Haskoin.Wallet.Migration (databaseVersion)
@@ -80,7 +81,7 @@ commandLineSpec ctx = do
       withHome $ \home -> do
         run <- hw home ["--help"] []
         runOut run `shouldSatisfy` Text.isInfixOf "The commands marked ! ask for a mnemonic or private keys."
-        runOut run `shouldSatisfy` Text.isInfixOf "! Generate a new mnemonic"
+        runOut run `shouldSatisfy` Text.isInfixOf "! Make a mnemonic and its wallet, or add a portfolio"
         runOut run `shouldSatisfy` (not . Text.isInfixOf "! Send a signed transaction")
 
     -- recover takes a mnemonic, and preparesweep private keys, but neither
@@ -88,7 +89,7 @@ commandLineSpec ctx = do
     it "does not mark a command that needs the server, even one that takes a secret" $
       withHome $ \home -> do
         run <- hw home ["--help"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "  recover                   Find the accounts of a mnemonic that were paid\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "  recover                   Find the portfolios of a mnemonic that were paid\n"
         runOut run `shouldSatisfy` Text.isInfixOf "  preparesweep              Prepare a transaction that moves coins"
 
     it "of the program names the commands that take a secret on an online computer" $
@@ -109,7 +110,7 @@ commandLineSpec ctx = do
     it "of recover says how to keep the mnemonic offline" $
       withHome $ \home -> do
         run <- hw home ["recover", "--help"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "To keep the mnemonic offline, create the accounts\non the offline computer with createacc instead."
+        runOut run `shouldSatisfy` Text.isInfixOf "To keep the mnemonic offline, create the\nportfolios on the offline computer with newportfolio --existing instead."
 
     it "of preparesweep warns that --key-file reads the keys on an online computer" $
       withHome $ \home -> do
@@ -162,7 +163,7 @@ commandLineSpec ctx = do
       withHome $ \home -> do
         run <- hw home [] []
         runExit run `shouldBe` ExitFailure 1
-        runErr run `shouldSatisfy` Text.isInfixOf "Mnemonics and accounts"
+        runErr run `shouldSatisfy` Text.isInfixOf "Wallets and portfolios"
 
     -- label runs with --help as the label, and finds no address in an
     -- empty wallet
@@ -170,7 +171,20 @@ commandLineSpec ctx = do
       withHome $ \home -> do
         run <- hw home ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "--", "--help"] []
         runExit run `shouldBe` ExitFailure 1
-        run `shouldSatisfy` printed "Address does not exist"
+        run `shouldSatisfy` printed "The wallet has no address 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"
+
+    -- The groups of the README, in its order
+    it "of the program lists the commands in their groups, wallets and portfolios first" $
+      withHome $ \home -> do
+        run <- hw home ["--help"] []
+        filter (`elem` helpGroups) (Text.lines (runOut run)) `shouldBe` helpGroups
+
+    it "of the program lists the commands of wallets and portfolios in their group, in the order of the README" $
+      withHome $ \home -> do
+        run <- hw home ["--help"] []
+        let commands = ["newportfolio", "recover", "fillwallet", "checkmnemonic", "exportwallet", "importwallet", "portfolios", "setdescription", "setdefault", "deleteportfolio", "deletewallet", "sync"]
+            group = takeWhile (/= "Addresses") (drop 1 (dropWhile (/= "Wallets and portfolios") (Text.lines (runOut run))))
+        [word | line <- group, Just word <- [listToMaybe (Text.words line)], word `elem` commands] `shouldBe` commands
 
   describe "The version" $ do
     it "of hw and of its database format is shown with --version, and hw exits with success" $
@@ -212,15 +226,15 @@ commandLineSpec ctx = do
 
     it "says what is wrong with the value of an option, then the usage of the command" $
       withHome $ \home -> do
-        run <- hw home ["mnemonic", "--shares", "20"] []
+        run <- hw home ["newportfolio", "--shares", "20"] []
         runExit run `shouldBe` ExitFailure 1
         runErr run `shouldSatisfy` Text.isInfixOf "Error: option --shares: The --shares value has to be between 1 and 16"
-        runErr run `shouldSatisfy` Text.isInfixOf "Usage: hw mnemonic"
+        runErr run `shouldSatisfy` Text.isInfixOf "Usage: hw newportfolio"
 
     it "ends with the help to read" $
       withHome $ \home -> do
-        run <- hw home ["mnemonic", "--shares", "20"] []
-        runErr run `shouldSatisfy` Text.isSuffixOf "Type hw mnemonic --help for the help of mnemonic.\n"
+        run <- hw home ["newportfolio", "--shares", "20"] []
+        runErr run `shouldSatisfy` Text.isSuffixOf "Type hw newportfolio --help for the help of newportfolio.\n"
 
     it "refuses a word of 9 digits for a hash, which is neither a short id nor a whole hash" $
       withHome $ \home -> do
@@ -245,14 +259,43 @@ commandLineSpec ctx = do
 
     it "says what a command misses, even when an option of every command follows" $
       withHome $ \home -> do
-        run <- hw home ["renameacc", "old", "--json"] []
+        run <- hw home ["setdescription", "--json"] []
         runExit run `shouldBe` ExitFailure 1
-        runErr run `shouldSatisfy` Text.isInfixOf "Missing: NEW"
+        runErr run `shouldSatisfy` Text.isInfixOf "Missing: DESCRIPTION"
+
+    -- newportfolio, portfolios, importwallet, exportwallet,
+    -- setdescription and deleteportfolio replace them
+    it "refuses the commands of accounts that portfolios replaced, as commands it does not know" $
+      withHome $ \home ->
+        forM_ ["createacc", "renameacc", "deleteacc", "importacc", "exportacc", "accounts", "mnemonic"] $ \command -> do
+          run <- hw home [command] []
+          runExit run `shouldBe` ExitFailure 1
+          runErr run `shouldSatisfy` Text.isInfixOf ("Invalid argument `" <> Text.pack command <> "'")
+
+    it "refuses --account, which --wallet and --portfolio replace" $
+      withHome $ \home -> do
+        run <- hw home ["receive", "--account", "main"] []
+        runExit run `shouldBe` ExitFailure 1
+        runErr run `shouldSatisfy` Text.isInfixOf "Invalid option `--account'"
+
+    it "refuses --new-change, which --change-back ADDRESS replaces" $
+      withHome $ \home -> do
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--new-change"] []
+        runExit run `shouldBe` ExitFailure 1
+        runErr run `shouldSatisfy` Text.isInfixOf "Invalid option `--new-change'"
+
+    -- recover searches every network
+    it "refuses --network for recover, and --account-gap, which --portfolio-gap replaces" $
+      withHome $ \home ->
+        forM_ [("--network", "btc"), ("--account-gap", "2")] $ \(option, value) -> do
+          run <- hw home ["recover", option, value] []
+          runExit run `shouldBe` ExitFailure 1
+          runErr run `shouldSatisfy` Text.isInfixOf ("Invalid option `" <> Text.pack option <> "'")
 
   describe "The completion the shell asks for" $ do
     it "offers an option of every command after the command" $
       withHome $ \home -> do
-        run <- hw home (tabAfter ["txs", "-atest3", "--js"]) []
+        run <- hw home (tabAfter ["txs", "-p3", "--js"]) []
         runOut run `shouldBe` "--json\n"
 
     it "offers --help after the command" $
@@ -271,65 +314,64 @@ commandLineSpec ctx = do
         run <- hw home (tabAfter ["txs", "--v"]) []
         runOut run `shouldBe` "--verbose\n"
 
-    it "offers the names of the accounts that start with the word typed after --account" $
+    it "offers the indexes of the portfolios after --portfolio" $
       withHome $ \home -> do
-        createMain home
-        _ <- answer home ["createacc", "second"] seedTwice
-        run <- hw home (tabAfter ["txs", "--account", "s"]) []
-        runOut run `shouldBe` "second\n"
+        newTestPortfolio home
+        newTestPortfolio home
+        run <- hw home (tabAfter ["txs", "--portfolio", ""]) []
+        runOut run `shouldBe` "0\n1\n"
 
-    it "offers the names of the accounts for an argument that names one" $
+    it "offers the indexes of the wallets after --wallet" $
       withHome $ \home -> do
-        createMain home
-        run <- hw home (tabAfter ["renameacc", "m"]) []
-        runOut run `shouldBe` "main\n"
+        newTestPortfolio home
+        newPortfolioOf home testMnemonic2
+        run <- hw home (tabAfter ["txs", "--wallet", ""]) []
+        runOut run `shouldBe` "0\n1\n"
 
-    -- Each name replaces the word typed, the option with the start of the
-    -- name
-    it "offers the names of the accounts after -a in the same word, -a before each" $
+    -- wallet1 has its portfolio0 alone, wallet0 portfolio0 and portfolio1
+    it "offers the indexes of the portfolios of the wallet --wallet names before --portfolio" $
       withHome $ \home -> do
-        createMain home
-        run <- hw home (tabAfter ["txs", "-am"]) []
-        runOut run `shouldBe` "-amain\n"
+        newTestPortfolio home
+        newTestPortfolio home
+        newPortfolioOf home testMnemonic2
+        run <- hw home (tabAfter ["txs", "--wallet", "1", "--portfolio", ""]) []
+        runOut run `shouldBe` "0\n"
 
-    -- zsh and fish keep --account=m one word, which the name offered
+    -- The index replaces the word typed, the option before it
+    it "offers the index of a portfolio after -p in the same word, -p before it, only when the wallet has it" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        run <- hw home (tabAfter ["txs", "-p1"]) []
+        runOut run `shouldBe` "-p1\n"
+        missing <- hw home (tabAfter ["txs", "-p2"]) []
+        runOut missing `shouldBe` ""
+
+    -- zsh and fish keep --portfolio= one word, which the index offered
     -- replaces whole
-    it "offers the names of the accounts after --account= in the same word, --account= before each" $
+    it "offers the indexes of the portfolios after --portfolio= in the same word, --portfolio= before each" $
       withHome $ \home -> do
-        createMain home
-        run <- hw home ("--bash-completion-enriched" : tabAfter ["txs", "--account=m"]) []
-        runOut run `shouldBe` "--account=main\n"
+        newTestPortfolio home
+        newTestPortfolio home
+        run <- hw home ("--bash-completion-enriched" : tabAfter ["txs", "--portfolio="]) []
+        runOut run `shouldBe` "--portfolio=0\n--portfolio=1\n"
 
-    it "offers every name after --account= alone" $
+    it "offers the networks that start with the word typed after --network" $
       withHome $ \home -> do
-        createMain home
-        _ <- answer home ["createacc", "second"] seedTwice
-        run <- hw home ("--bash-completion-enriched" : tabAfter ["txs", "--account="]) []
-        runOut run `shouldBe` "--account=main\n--account=second\n"
+        run <- hw home (tabAfter ["receive", "--network", "btct"]) []
+        runOut run `shouldBe` "btctest\nbtctest4\n"
+
+    it "offers the two types after --type" $
+      withHome $ \home -> do
+        run <- hw home (tabAfter ["receive", "--type", ""]) []
+        runOut run `shouldBe` "bip44\nbip84\n"
 
     -- txs has --verbose, which takes no value
     it "offers nothing after the = of an option that takes no value" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         run <- hw home ("--bash-completion-enriched" : tabAfter ["txs", "--verbose=m"]) []
         runOut run `shouldBe` ""
-
-    -- bash completes my savings up to its space, which it escapes
-    it "offers a name with a space after the space bash escaped, escaped for bash again" $
-      withHome $ \home -> do
-        _ <- answer home ["createacc", "my savings"] seedTwice
-        run <- hw home (tabAfter ["txs", "--account", "my\\ s"]) []
-        runOut run `shouldBe` "my\\ savings\n"
-
-    -- hw runs without a locale here. The name is passed to the database
-    -- rather than typed, as the arguments of the tests may not take an
-    -- accent.
-    it "offers a name with accents as it is" $
-      withHome $ \home -> do
-        createMain home
-        _ <- inDatabaseFile (home </> ".hw" </> "accounts.sqlite") (runExceptT (lift (getAccountsNamed "main") >>= mapM (\(accId, acc) -> renameAccount accId acc "épargne")))
-        run <- hw home (tabAfter ["txs", "--account", ""]) []
-        runOut run `shouldBe` "épargne\n"
 
     -- preparetx shows the nosigHash of the transaction it prepares
     it "offers the nosigHash of a transaction to sign after signtx" $
@@ -452,13 +494,6 @@ commandLineSpec ctx = do
         run <- hw home (tabAfter ["lockcoin", txid <> "\\:"]) []
         runOut run `shouldBe` Text.pack (txid <> "\\:0\n" <> txid <> "\\:1\n")
 
-    it "reads an account name bash escaped among the words typed" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
-        synced home
-        _ <- answer home ["renameacc", "main", "my savings"] []
-        run <- hw home (tabAfter ["preparetx", "--account", "my\\ savings", "--coin", take 4 paidCoin]) []
-        runOut run `shouldBe` offeredCoin
-
     -- Twenty-one payments to the first receiving address, one coin each
     let manyCoins n = Chain 800002 [(fundingTx ctx i [(externalAddr 0, 1000)], Just 800000) | i <- [1 .. n]]
         coinOf i = Text.unpack (txHashToHex (txHash (fundingTx ctx i [(externalAddr 0, 1000)])))
@@ -517,7 +552,7 @@ commandLineSpec ctx = do
         run <- hw home (tabAfter ["label", take 4 txid]) []
         runOut run `shouldBe` Text.pack txid <> "\n"
 
-    it "offers the id of a payment the account sent after bumpfee" $
+    it "offers the id of a payment the portfolio sent after bumpfee" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         txid <- sentPayment home
         run <- hw home (tabAfter ["bumpfee", take 4 txid]) []
@@ -554,24 +589,26 @@ commandLineSpec ctx = do
         run <- hw home (tabAfter ["bumpfee", take 4 paidTxid]) []
         runOut run `shouldBe` ""
 
-    -- bash breaks --account=main into --account, = and main
-    it "reads the account of --account=NAME among the words typed, as bash breaks it" $
+    -- bash breaks --portfolio=0 into --portfolio, = and 0. The coin is of
+    -- portfolio0.
+    it "reads the portfolio of --portfolio=INDEX among the words typed, as bash breaks it" $
       withChain ctx (paidChain ctx) $ \home _ -> do
-        synced home
-        run <- hw home (tabAfter ["preparetx", "--account", "=", "main", "--coin", take 4 paidCoin]) []
+        syncedTwoPortfolios home
+        run <- hw home (tabAfter ["preparetx", "--portfolio", "=", "0", "--coin", take 4 paidCoin]) []
         runOut run `shouldBe` offeredCoin
+        other <- hw home (tabAfter ["preparetx", "--portfolio", "=", "1", "--coin", take 4 paidCoin]) []
+        runOut other `shouldBe` ""
 
-    -- The account second has no coins
-    it "offers only the coins of the account named with --account after --coin" $
+    -- portfolio1 has no coins
+    it "offers only the coins of the portfolio --portfolio names after --coin" $
       withChain ctx (paidChain ctx) $ \home _ -> do
-        synced home
-        _ <- answer home ["createacc", "second"] seedTwice
-        run <- hw home (tabAfter ["preparetx", "--account", "second", "--coin", take 4 paidCoin]) []
+        syncedTwoPortfolios home
+        run <- hw home (tabAfter ["preparetx", "--portfolio", "1", "--coin", take 4 paidCoin]) []
         runOut run `shouldBe` ""
 
     it "offers the receiving addresses after label" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         run <- hw home (tabAfter ["label", "1KEn"]) []
         runOut run `shouldBe` "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\n"
@@ -610,7 +647,7 @@ commandLineSpec ctx = do
     -- main. The script of bash runs in the home.
     it "offers the files after show, with the addresses of the wallet" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         writeFile (home </> "1KEn-notes.psbt") ""
         (sort <$> bashCompletion home ["show", "1KEn"]) `shouldReturn` ["1KEn-notes.psbt", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]
@@ -623,7 +660,7 @@ commandLineSpec ctx = do
     -- show would take the bare name for a short id
     it "leaves out after show a file named like a short id, and offers it once ./ is typed" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         writeFile (home </> "a1075db5") ""
         bashCompletion home ["show", "a1"] `shouldReturn` []
         bashCompletion home ["show", "./a1"] `shouldReturn` ["./a1075db5"]
@@ -655,44 +692,46 @@ commandLineSpec ctx = do
     -- and finds it without the prefix
     it "offers a Bitcoin Cash address without its prefix, as bash would split the word at the colon" $
       withHome $ \home -> do
-        _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
-        _ <- answer home ["receive"] []
+        newTestPortfolio home
+        _ <- answer home ["receive", "--network", "bch"] []
         run <- hw home (tabAfter ["label", "q"]) []
         runOut run `shouldBe` "qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u\n"
 
     -- bash passes the word after a space as an empty word
-    it "offers the account names after a space, through the script of bash" $
+    it "offers the indexes of the portfolios after a space, through the script of bash" $
       withHome $ \home -> do
-        createMain home
-        bashCompletion home ["txs", "--account", ""] `shouldReturn` ["main"]
+        newTestPortfolio home
+        bashCompletion home ["txs", "--portfolio", ""] `shouldReturn` ["0"]
 
-    -- bash breaks --account=m into --account, = and m, and inserts the
-    -- name in place of the m
-    it "offers the account names after --account=, which bash breaks at the =, through the script of bash" $
+    -- bash breaks --portfolio=0 into --portfolio, = and 0, and inserts the
+    -- index in place of the 0
+    it "offers the indexes of the portfolios after --portfolio=, which bash breaks at the =, through the script of bash" $
       withHome $ \home -> do
-        createMain home
-        bashCompletion home ["txs", "--account", "=", "m"] `shouldReturn` ["main"]
-        bashCompletion home ["txs", "--account", "="] `shouldReturn` ["main"]
+        newTestPortfolio home
+        bashCompletion home ["txs", "--portfolio", "=", "0"] `shouldReturn` ["0"]
+        bashCompletion home ["txs", "--portfolio", "="] `shouldReturn` ["0"]
 
     -- The script of optparse-applicative expanded a* to the files of the
     -- directory it matches, axb here
-    it "passes a word with a star to hw as typed, and escapes the star of the name offered, through the script of bash" $
+    it "passes a word with a star to hw as typed, and escapes the star of the file offered, through the script of bash" $
       withHome $ \home -> do
-        _ <- answer home ["createacc", "a*b"] seedTwice
+        writeFile (home </> "a*b") ""
         createDirectory (home </> "axb")
-        bashCompletion home ["txs", "--account", "a*"] `shouldReturn` ["a\\*b"]
+        bashCompletion home ["importtx", "a*"] `shouldReturn` ["a\\*b"]
 
-    -- bash inserts a word as it is, and would take my savings for two
-    it "escapes a space in a name for bash" $
+    -- bash inserts a word as it is, and would take my savings.psbt for two
+    it "escapes a space in the name of a file for bash" $
       withHome $ \home -> do
-        _ <- answer home ["createacc", "my savings"] seedTwice
-        bashCompletion home ["txs", "--account", "my"] `shouldReturn` ["my\\ savings"]
+        writeFile (home </> "my savings.psbt") ""
+        bashCompletion home ["importtx", "my"] `shouldReturn` ["my\\ savings.psbt"]
 
-    it "does not escape a name for zsh and fish, which quote a word themselves" $
+    -- zsh and fish complete the files themselves, and are offered the
+    -- directories
+    it "does not escape the name of a directory for zsh and fish, which quote a word themselves" $
       withHome $ \home -> do
-        _ <- answer home ["createacc", "my savings"] seedTwice
-        run <- hw home ("--bash-completion-enriched" : tabAfter ["txs", "--account", "my"]) []
-        runOut run `shouldBe` "my savings\n"
+        createDirectory (home </> "my docs")
+        run <- hw home ("--bash-completion-enriched" : tabAfter ["importtx", "my"]) []
+        runOut run `shouldBe` "my docs/\n"
 
     it "offers a directory with a / for a FILENAME, and a file without, through the script of bash" $
       withHome $ \home -> do
@@ -722,13 +761,14 @@ commandLineSpec ctx = do
 
     it "offers the addresses after the --output file of signmsg" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         run <- hw home (tabAfter ["signmsg", "--output", "signed.txt", "1KEn"]) []
         runOut run `shouldBe` "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\n"
 
     -- The script of optparse-applicative added a / to any value that
-    -- names a directory, an account named src for instance
+    -- names a directory, a portfolio 0 beside a directory named 0 for
+    -- instance
     it "writes a script for fish that offers the lines hw prints, by the name given, as they are" $
       withHome $ \home -> do
         run <- hw home ["--fish-completion-script", "/opt/bin/hw"] []
@@ -760,33 +800,33 @@ commandLineSpec ctx = do
 
     -- A command holds the database from its first statement to its last,
     -- as a sync does while it waits on the store
-    it "offers the names of the accounts while a command holds the database" $
+    it "offers the indexes of the portfolios while a command holds the database" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         held <- newEmptyMVar
         release <- newEmptyMVar
         holder <- async $ runDBWith 100 (home </> ".hw" </> "accounts.sqlite") $ do
           liftIO $ putMVar held ()
           liftIO $ takeMVar release
         takeMVar held
-        run <- hw home (tabAfter ["txs", "--account", ""]) []
+        run <- hw home (tabAfter ["txs", "--portfolio", ""]) []
         putMVar release ()
         wait holder
-        runOut run `shouldBe` "main\n"
+        runOut run `shouldBe` "0\n"
 
     it "leaves the files of hw as they were" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         let database = home </> ".hw" </> "accounts.sqlite"
         stored <- BS.readFile database
-        _ <- hw home (tabAfter ["txs", "--account", ""]) []
+        _ <- hw home (tabAfter ["txs", "--portfolio", ""]) []
         BS.readFile database `shouldReturn` stored
         sort <$> listDirectory (home </> ".hw") `shouldReturn` ["accounts.sqlite", "config.json"]
 
     it "offers nothing, and creates nothing, in a home where hw never ran" $
       withHome $ \home -> do
         removeDirectoryRecursive (home </> ".hw")
-        run <- hw home (tabAfter ["txs", "--account", ""]) []
+        run <- hw home (tabAfter ["txs", "--portfolio", ""]) []
         runOut run `shouldBe` ""
         doesDirectoryExist (home </> ".hw") `shouldReturn` False
 
@@ -794,34 +834,36 @@ commandLineSpec ctx = do
     it "offers nothing from a database of an older version, which it leaves at that version" $
       withHome $ \home -> do
         version3Main (home </> ".hw" </> "accounts.sqlite")
-        run <- hw home (tabAfter ["txs", "--account", ""]) []
+        run <- hw home (tabAfter ["txs", "--portfolio", ""]) []
         runOut run `shouldBe` ""
         runDBWith 100 (home </> ".hw" </> "accounts.sqlite") (runExceptT databaseVersion) `shouldReturn` Right (Just 3)
 
   describe "A command that fails" $ do
     it "exits with 1, and tells why" $
       withHome $ \home -> do
-        run <- hw home ["receive", "--account", "nope"] []
+        newTestPortfolio home
+        run <- hw home ["receive", "--portfolio", "7"] []
         runExit run `shouldBe` ExitFailure 1
-        run `shouldSatisfy` printed "The account nope does not exist"
+        run `shouldSatisfy` printed "wallet0 has no portfolio7: portfolios lists the portfolios"
 
     -- A script may read the exit code or the JSON: both tell the failure.
     -- hw exited with 0 on an error in JSON before.
     it "exits with 1 with --json too, the error in its JSON" $
       withHome $ \home -> do
-        run <- hw home ["receive", "--account", "nope", "--json"] []
+        newTestPortfolio home
+        run <- hw home ["receive", "--portfolio", "7", "--json"] []
         runExit run `shouldBe` ExitFailure 1
-        (errorOf <$> hwJson home ["receive", "--account", "nope"] []) `shouldReturn` Right "The account nope does not exist"
+        (errorOf <$> hwJson home ["receive", "--portfolio", "7"] []) `shouldReturn` Right "wallet0 has no portfolio7: portfolios lists the portfolios"
 
     it "refuses an amount, with its reason" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "1.5sat", "--fee-rate", "10"] [])
           `shouldReturn` Right "The amount 1.5sat has decimals, but an amount in sats is whole"
 
     it "is refused an option it does not know, before the database is touched" $
       withHome $ \home -> do
-        run <- hw home ["accounts", "--unit", "eur"] []
+        run <- hw home ["portfolios", "--unit", "eur"] []
         runExit run `shouldBe` ExitFailure 1
         runErr run `shouldSatisfy` Text.isInfixOf "option --unit: cannot parse value `eur'"
         doesFileExist (home </> ".hw" </> "accounts.sqlite") `shouldReturn` False
@@ -847,8 +889,8 @@ commandLineSpec ctx = do
 
     it "is cancelled when the input ends before the answer, and leaves nothing" $
       withHome $ \home -> do
-        (errorOf <$> hwJson home ["createacc", "main"] [mnemonicWords testMnemonic]) `shouldReturn` Right "Cancelled: the input ended before the answer"
-        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right []
+        (errorOf <$> hwJson home ["newportfolio", "--existing"] [mnemonicWords testMnemonic]) `shouldReturn` Right "Cancelled: the input ended before the answer"
+        (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right []
 
     -- A rate of 2^64 wrapped around to zero: preparetx made a transaction
     -- without fee, which signtx refused
@@ -871,22 +913,22 @@ commandLineSpec ctx = do
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
 
     -- The store of the test home refuses every connection. hw crashed with
-    -- the exception of the web client before, and wrote no JSON. The sync
-    -- leaves the account out, with the failure of its store.
+    -- the exception of the web client before, and wrote no JSON. No
+    -- network can be synced, so the sync fails with the failure of the
+    -- store.
     it "tells when the store is out of reach, in its JSON too" $
       withHome $ \home -> do
-        createMain home
-        (notSyncedOf <$> hwJson home ["sync"] [])
-          `shouldReturn` Right [("main", "The store at http://127.0.0.1:1/ could not be reached: the connection failed")]
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["sync"] [])
+          `shouldReturn` Right "The store at http://127.0.0.1:1/ could not be reached: the connection failed"
 
     -- The web client decodes an answer only once hw uses it: hw crashed
     -- there before, with the error of the decoder
     it "tells when the store gives an answer it cannot read, as a server that is not a haskoin-store does" $
       withServerAnswering "not a store" $ \home url -> do
-        createMain home
-        notSynced <- notSyncedOf <$> hwJson home ["sync"] []
-        (map fst <$> notSynced) `shouldBe` Right ["main"]
-        (map snd <$> notSynced) `shouldSatisfy` either (const False) (all (Text.isPrefixOf ("The store at " <> Text.pack url <> " gave an answer hw could not read: ")))
+        newTestPortfolio home
+        failed <- errorOf <$> hwJson home ["sync"] []
+        failed `shouldSatisfy` either (const False) (Text.isPrefixOf ("The store at " <> Text.pack url <> " gave an answer hw could not read: "))
 
     -- 64 MiB is 67108864 bytes. The web client read a body in full: a
     -- store sending one without end filled the memory in seconds.
@@ -903,17 +945,17 @@ commandLineSpec ctx = do
     -- hw crashed with the exception of the system before, and wrote no JSON
     it "tells when a file it reads does not exist, naming it" $
       withHome $ \home -> do
-        createMain home
-        forM_ ["show", "importtx", "importacc"] $ \command ->
+        newTestPortfolio home
+        forM_ ["show", "importtx", "importwallet"] $ \command ->
           (errorOf <$> hwJson home [command, home </> "missing.json"] [])
             `shouldReturn` Right (noSuchFile (home </> "missing.json"))
 
     -- The JSON file of an earlier hw is such a file: this version reads
-    -- it no more. show reads files of accounts too, and names them as well
+    -- it no more. show reads files of wallets too, and names them as well
     -- ("Haskoin.Wallet.Workflow.ShowSpec").
     it "tells when a file it reads is no transaction file, naming it and the forms a transaction file takes" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         let file = home </> "earlier.json"
         writeFile file "{\"tx\": \"0100000000000000000000\", \"txinputs\": []}\n"
         (errorOf <$> hwJson home ["importtx", file] [])
@@ -921,9 +963,9 @@ commandLineSpec ctx = do
 
     it "tells when a file it writes has no directory to go in, naming it" $
       withHome $ \home -> do
-        createMain home
-        let file = home </> "missing" </> "main.json"
-        (errorOf <$> hwJson home ["exportacc", file] [])
+        newTestPortfolio home
+        let file = home </> "missing" </> "wallet.jsonl"
+        (errorOf <$> hwJson home ["exportwallet", file] [])
           `shouldReturn` Right ("The file " <> Text.pack file <> " could not be written: no such file or directory")
 
     -- preparetx writes its file last, once the transaction is pending and
@@ -947,8 +989,13 @@ commandLineSpec ctx = do
           liftIO $ putMVar held ()
           liftIO $ takeMVar release
         takeMVar held
-        run <- hw home ["accounts"] []
+        run <- hw home ["portfolios"] []
         putMVar release ()
         wait holder
         runExit run `shouldBe` ExitFailure 1
         run `shouldSatisfy` printed (Text.pack databaseInUse)
+
+-- | The groups of the commands in the help of the program, in their order,
+-- as the README has them
+helpGroups :: [Text]
+helpGroups = ["Wallets and portfolios", "Addresses", "Coins", "Payments", "Transactions", "Sweeps", "Messages", "The wallet"]

@@ -1,8 +1,10 @@
+{-# LANGUAGE DisambiguateRecordFields #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Haskoin.Wallet.Tx.CoinSelectionSpec where
 
+import qualified Data.Map.Strict as Map
 import Data.Word (Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -20,16 +22,23 @@ spec :: Spec
 spec =
   prepareContext $ \ctx -> do
     coinSelectionSpec ctx
+    coinKindSpec ctx
+    bothTypesSpec ctx
     changeAndFeeSpec ctx
     wasteSpec ctx
     wholeTransactionSpec ctx
     selectionPropertySpec ctx
 
--- Every coin pays the fee of its own input (148 bytes) and the target adds
--- the fee of the frame (10 bytes) and of the outputs (34 bytes each). With
--- one output at 10 satoshis per virtual byte: a coin is worth its amount - 1480, and
--- the target to cover is the amount + 440. The long-term fee rate is 10, the
--- value Bitcoin Core uses.
+-- Every coin pays the fee of its own input and the target adds the fee of
+-- the frame (10 bytes) and of the outputs (34 bytes each). The coins of
+-- 'coinsWorth' are P2PKH coins, of a bip44 account, whose input is 148
+-- bytes. With one output at 10 satoshis per virtual byte: such a coin is
+-- worth its amount - 1480, and the target to cover is the amount + 440.
+-- The coins of 'segwitCoinsWorth' are P2WPKH coins, of a bip84 account,
+-- whose input is 68 virtual bytes: 41 bytes and a quarter of its 108-byte
+-- witness. A transaction with such an input has 2 more bytes of witness
+-- data, and 1 for each P2PKH input beside it, which count a quarter too.
+-- The long-term fee rate is 10, the value Bitcoin Core uses.
 
 -- | A selection as its amounts: the coins, the change and the fee
 amounts :: Selection -> ([Word64], Word64, Word64)
@@ -55,11 +64,11 @@ coinSelectionSpec ctx =
       -- Fee: 10 + 148 + 2 * 34 = 226 bytes * 2 = 452
       -- Change: 400000 - 350000 - 452 = 49548
       select ctx LargestFirst 2 546 350000 four `shouldBe` Right ([400000], 49548, 452)
-    -- The input of a bip84 account is 68 virtual bytes, its change output 31
-    it "sizes the inputs and the change of a bip84 account as P2WPKH" $
+    -- The input of a bip84 coin is 68 virtual bytes, a bip84 change output 31
+    it "sizes a bip84 coin as a P2WPKH input, and change of the type bip84 as a P2WPKH output" $
       -- Fee: 10 + 41 + 34 + 31 = 116 bytes, then (2 + 108) / 4 rounded up to
       -- 28: 144 virtual bytes * 2 = 288. Change: 400000 - 350000 - 288 = 49712
-      (amounts <$> selectCoins LargestFirst (mkStdGen 0) (Payment Bip84 (FeeRates 2 10) SenderPays 546 [OutputPKHash] 350000) (coinsWorth ctx four))
+      (amounts <$> selectCoins LargestFirst (mkStdGen 0) (Payment Bip84 (FeeRates 2 10) SenderPays 546 [OutputPKHash] 350000) (segwitCoinsWorth ctx four))
         `shouldBe` Right ([400000], 49712, 288)
     it "spends the smallest coins first" $
       -- Fee: 10 + 3 * 148 + 2 * 34 = 522 bytes * 50 = 26100
@@ -114,6 +123,75 @@ coinSelectionSpec ctx =
     it "fails without coins" $
       -- Nothing covers 1 + 440
       select ctx LeastWaste 10 546 1 [] `shouldBe` Left "The coins do not cover the amount and the fee"
+
+{- The type of a coin -}
+
+coinKindSpec :: Ctx -> Spec
+coinKindSpec ctx =
+  describe "The type of a coin" $ do
+    it "is bip44 for a coin at a P2PKH address, whose input is P2PKH" $ do
+      (coinKind <$> coinsWorth ctx [50000]) `shouldBe` [Bip44]
+      (coinInput <$> coinsWorth ctx [50000]) `shouldBe` [InputPKHash]
+    it "is bip84 for a coin at a P2WPKH address, whose input is P2WPKH" $ do
+      (coinKind <$> segwitCoinsWorth ctx [50000]) `shouldBe` [Bip84]
+      (coinInput <$> segwitCoinsWorth ctx [50000]) `shouldBe` [InputWitnessPKHash]
+    -- The larger input, so that the fee of the coin is never too low
+    it "is bip44 for a coin the store lists without an address" $
+      (coinKind . withoutAddress <$> segwitCoinsWorth ctx [50000]) `shouldBe` [Bip44]
+    it "is told for several coins, each type once, bip44 first" $ do
+      coinKinds (segwitCoinsWorth ctx [30000, 20000] <> coinsWorth ctx [50000]) `shouldBe` [Bip44, Bip84]
+      coinKinds (segwitCoinsWorth ctx [30000, 20000]) `shouldBe` [Bip84]
+      coinKinds [] `shouldBe` []
+  where
+    withoutAddress :: Store.Unspent -> Store.Unspent
+    withoutAddress coin =
+      Store.Unspent
+        { Store.block = coin.block,
+          Store.outpoint = coin.outpoint,
+          Store.value = coin.value,
+          Store.script = coin.script,
+          Store.address = Nothing
+        }
+
+{- Coins of both types -}
+
+-- A payment of 250000 to one P2PKH output at 10 satoshis per virtual
+-- byte, with change of the type bip44, from the coins of a portfolio: a
+-- P2PKH coin of its bip44 account and P2WPKH coins of its bip84 account
+bothTypesSpec :: Ctx -> Spec
+bothTypesSpec ctx =
+  describe "A selection among coins of both types" $ do
+    let payment = Payment Bip44 (FeeRates 10 10) SenderPays 546 [OutputPKHash] 250000
+    it "sizes each coin by its own type: 148 bytes for the P2PKH coin and 68 for the P2WPKH one" $
+      -- 10 + 148 + 41 + 2 * 34 = 267 bytes, then (2 + 1 + 108) / 4 of
+      -- witness data, rounded up to 28: 295 virtual bytes * 10 = 2950
+      -- Change: 200000 + 100000 - 250000 - 2950 = 47050
+      (amounts <$> selectCoins SmallestFirst (mkStdGen 0) payment (coinsWorth ctx [200000] <> segwitCoinsWorth ctx [100000]))
+        `shouldBe` Right ([100000, 200000], 47050, 2950)
+    it "spends the chosen coins of both types together, each sized by its own type" $
+      (amounts <$> spendCoins payment (coinsWorth ctx [200000] <> segwitCoinsWorth ctx [100000]))
+        `shouldBe` Right ([200000, 100000], 47050, 2950)
+    -- At 10 satoshis per virtual byte the input of a P2WPKH coin costs 680
+    -- and that of a P2PKH coin 1480: a coin of 1000 is worth 320 as the
+    -- first and nothing as the second
+    it "spends a bip84 coin of 1000, worth more than the 680 of its input" $
+      -- 295 virtual bytes * 10 = 2950
+      -- Change: 1000 + 400000 - 350000 - 2950 = 48050
+      (amounts <$> selectCoins SmallestFirst (mkStdGen 0) payment {amount = 350000} (segwitCoinsWorth ctx [1000] <> coinsWorth ctx [400000]))
+        `shouldBe` Right ([1000, 400000], 48050, 2950)
+    it "leaves a bip44 coin of 1000, worth less than the 1480 of its input, beside a bip84 coin" $
+      -- The bip84 coin alone: 10 + 41 + 2 * 34 = 119 bytes, then (2 + 108)
+      -- / 4 rounded up to 28: 147 virtual bytes * 10 = 1470
+      -- Change: 400000 - 350000 - 1470 = 48530
+      (amounts <$> selectCoins SmallestFirst (mkStdGen 0) payment {amount = 350000} (coinsWorth ctx [1000] <> segwitCoinsWorth ctx [400000]))
+        `shouldBe` Right ([400000], 48530, 1470)
+    -- The same coins and the same payment, with change of the type bip84:
+    -- a P2WPKH output of 31 bytes, 3 less than a P2PKH one
+    it "sizes the change by its own type, whatever the types of the coins" $
+      -- 292 virtual bytes * 10 = 2920
+      -- Change: 200000 + 100000 - 250000 - 2920 = 47080
+      (amounts <$> spendCoins payment {changeKind = Bip84, dust = 294} (coinsWorth ctx [200000] <> segwitCoinsWorth ctx [100000]))
+        `shouldBe` Right ([200000, 100000], 47080, 2920)
 
 changeAndFeeSpec :: Ctx -> Spec
 changeAndFeeSpec ctx =
@@ -173,6 +251,16 @@ wasteSpec ctx =
       -- One input at 148 * (50 - 10) = 5920, plus a change output costing
       -- 50 * 34 + 10 * 148 = 3180
       waste (payment 50) (selection [400000] 38700 11300) `shouldBe` 9100
+    it "counts a bip84 coin at the 68 virtual bytes of its input, and bip84 change at 31 to create and 68 to spend" $
+      -- One input at 68 * (50 - 10) = 2720, plus a change output costing
+      -- 50 * 31 + 10 * 68 = 2230
+      waste (Payment Bip84 (FeeRates 50 10) SenderPays 294 [OutputPKHash] 350000) (Selection (segwitCoinsWorth ctx [400000]) 350000 42800 7200)
+        `shouldBe` 4950
+    it "counts each input of a selection of both types at its own size" $
+      -- Inputs of 148 + 68 = 216 bytes at 50 - 10 = 40 each: 8640, plus a
+      -- bip44 change output costing 50 * 34 + 10 * 148 = 3180
+      waste (payment 50) (Selection (coinsWorth ctx [200000] <> segwitCoinsWorth ctx [200000]) 350000 35250 14750)
+        `shouldBe` 11820
 
 -- The fee must pay the rate on the whole transaction, which is a little
 -- more than its parts. One bip84 input and one P2WPKH output: 10 + 68 + 31
@@ -188,14 +276,14 @@ wholeTransactionSpec ctx =
         -- 260 coins of 2000, 520000 in all
         smallCoins = [storeCoin ctx (fakeTxHash 1, i) (Just 1) (externalAddr 0) 2000 | i <- [0 .. 259]]
     it "refuses a bip84 coin of 21090 that covers the fee of the parts, 1090, but not of the whole, 1100" $
-      spendCoins segwitPayment (coinsWorth ctx [21090]) `shouldBe` Left "The chosen coins do not cover the amount and the fee"
+      spendCoins segwitPayment (segwitCoinsWorth ctx [21090]) `shouldBe` Left "The chosen coins do not cover the amount and the fee"
     it "pays a fee of 1100 with a bip84 coin of 21100, the rate on the whole" $
-      (amounts <$> spendCoins segwitPayment (coinsWorth ctx [21100])) `shouldBe` Right ([21100], 0, 1100)
+      (amounts <$> spendCoins segwitPayment (segwitCoinsWorth ctx [21100])) `shouldBe` Right ([21100], 0, 1100)
     it "selects no bip84 coin that covers the parts but not the whole" $
-      (amounts <$> selectCoins LargestFirst (mkStdGen 0) segwitPayment (coinsWorth ctx [21090]))
+      (amounts <$> selectCoins LargestFirst (mkStdGen 0) segwitPayment (segwitCoinsWorth ctx [21090]))
         `shouldBe` Left "The coins do not cover the amount and the fee"
     it "finds no exact match in a bip84 coin that covers the parts but not the whole" $
-      (amounts <$> selectCoins LeastWaste (mkStdGen 0) segwitPayment (coinsWorth ctx [21090]))
+      (amounts <$> selectCoins LeastWaste (mkStdGen 0) segwitPayment (segwitCoinsWorth ctx [21090]))
         `shouldBe` Left "The coins do not cover the amount and the fee"
     -- 520000 - 134760 = 385240, 20 short of 385260
     it "refuses 260 legacy coins that cover the fee with 1 byte to count the inputs but not with the 3 it takes" $
@@ -204,33 +292,40 @@ wholeTransactionSpec ctx =
     it "pays the rate on 260 legacy inputs when the coins cover the 3 bytes that count them" $
       (amounts <$> spendCoins (legacyPayment 134740) smallCoins) `shouldBe` Right (replicate 260 2000, 0, 385260)
 
--- Of coins of the account, of either kind, a payment to one output of
--- the kind at a rate of 1 to 50: whatever the selection, the fee pays the
--- rate on the size of the whole transaction, with its change output when
--- it has one, and the value of the coins goes to the recipient, the
--- change and the fee, every satoshi of it. The amount is at most half the
--- coins, so that most draws select. A fee short of the rate shows in a few
--- hundred draws, so the property takes 2000.
+-- Of coins of a portfolio, each of either type, a payment to one output
+-- with change of either type, at a rate of 1 to 50: whatever the
+-- selection, the fee pays the rate on the size of the whole transaction,
+-- each input sized by the type its coin was drawn with, with its change
+-- output when it has one, and the value of the coins goes to the
+-- recipient, the change and the fee, every satoshi of it. The amount is
+-- at most half the coins, so that most draws select. A fee short of the
+-- rate shows in a few hundred draws, so the property takes 2000.
 selectionPropertySpec :: Ctx -> Spec
 selectionPropertySpec ctx =
   describe "Any selection" $
     modifyMaxSuccess (const 2000) $
       prop "pays at least the rate on the whole transaction, and splits the value of its coins exactly" $
-      forAll draw $ \(kind, rate, values, amount) ->
-        let output = accountOutputKind kind
-            payment = Payment kind (FeeRates rate 10) SenderPays (fromIntegral (outputDustLimit output)) [output] amount
-            coins = [storeCoin ctx (fakeTxHash 1, i) (Just 1) (externalAddr 0) (fromIntegral v) | (i, v) <- zip [0 ..] values]
+      forAll draw $ \(changeType, rate, drawn, amount) ->
+        let output = accountOutputKind changeType
+            payment = Payment changeType (FeeRates rate 10) SenderPays (fromIntegral (outputDustLimit output)) [output] amount
+            coins = [storeCoin ctx (fakeTxHash 1, i) (Just 1) (addressOf kind) (fromIntegral v) | (i, (kind, v)) <- zip [0 ..] drawn]
+            -- The type each coin was drawn with, by its outpoint
+            drawnKinds = Map.fromList [(OutPoint (fakeTxHash 1) i, kind) | (i, (kind, _)) <- zip [0 ..] drawn]
          in case selectCoins LeastWaste (mkStdGen 0) payment coins of
               Left _ -> label "no selection" True
               Right s ->
-                let size = txSize (accountInput kind <$ s.selected) (output : [output | s.changeAmount > 0])
+                let size = txSize [accountInput (drawnKinds Map.! coin.outpoint) | coin <- s.selected] (output : [output | s.changeAmount > 0])
                  in label "selected" $
                       sum ((.value) <$> s.selected) == s.paid + s.changeAmount + s.feeAmount
                         && s.feeAmount >= rate * size
   where
+    -- An address of the test wallet of the type: P2PKH or P2WPKH
+    addressOf Bip44 = externalAddr 0
+    addressOf Bip84 = segwitExternalAddr 0
     draw = do
-      kind <- elements [Bip44, Bip84]
+      changeType <- elements [Bip44, Bip84]
       rate <- choose (1, 50)
-      values <- listOf1 (choose (1000, 1000000 :: Word64))
-      amount <- choose (1000, max 1000 (sum values `div` 2))
-      return (kind, rate, values, fromIntegral amount)
+      drawn <- listOf1 ((,) <$> elements [Bip44, Bip84] <*> choose (1000, 1000000 :: Word64))
+      let total = sum (snd <$> drawn)
+      amount <- choose (1000, max 1000 (total `div` 2))
+      return (changeType, rate, drawn, fromIntegral amount)

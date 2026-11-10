@@ -100,6 +100,7 @@ library
       Haskoin.Wallet.Database.BestBlock
       Haskoin.Wallet.Database.Coin
       Haskoin.Wallet.Database.PendingTx
+      Haskoin.Wallet.Database.Portfolio
       Haskoin.Wallet.Database.RawTx
       Haskoin.Wallet.Database.TxInfo
       Haskoin.Wallet.Database.TxLabel
@@ -288,6 +289,7 @@ test-suite spec
       Haskoin.Wallet.Database.BestBlockSpec
       Haskoin.Wallet.Database.CoinSpec
       Haskoin.Wallet.Database.PendingTxSpec
+      Haskoin.Wallet.Database.PortfolioSpec
       Haskoin.Wallet.Database.TxInfoSpec
       Haskoin.Wallet.Database.TxLabelSpec
       Haskoin.Wallet.DatabaseLockSpec
@@ -326,12 +328,12 @@ test-suite spec
       Haskoin.Wallet.Tx.SweepSpec
       Haskoin.Wallet.TxVectors
       Haskoin.Wallet.UtilSpec
-      Haskoin.Wallet.Workflow.AccountSpec
       Haskoin.Wallet.Workflow.BumpFeeSpec
       Haskoin.Wallet.Workflow.CommandLineSpec
       Haskoin.Wallet.Workflow.LabelSpec
       Haskoin.Wallet.Workflow.OutputSpec
       Haskoin.Wallet.Workflow.PaymentSpec
+      Haskoin.Wallet.Workflow.PortfolioSpec
       Haskoin.Wallet.Workflow.SendAllSpec
       Haskoin.Wallet.Workflow.ShowSpec
       Haskoin.Wallet.Workflow.SigningSpec

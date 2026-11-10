@@ -3,8 +3,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The signing data of a transaction: the transaction, the transactions it
--- spends from, which say what each input is worth, the derivation paths of
--- the wallet's own inputs and outputs, the fee rate it was built for, the
+-- spends from, which say what each input is worth, the paths of the
+-- portfolio's own inputs and outputs, each with the kind of its account
+-- ('PoolPath'), since a payment may spend the coins of a BIP44 and of a
+-- BIP84 account of the portfolio together, the fee rate it was built for, the
 -- fingerprint of the seed once it has been signed, and the label the user
 -- gave it. The builders produce it, the signers sign it, and the commands
 -- keep it among the pending transactions of the database, as JSON, and
@@ -12,7 +14,7 @@
 -- transaction is signed is read from the transaction itself. Before and
 -- after signing, the database keys it by its 'nosigHash'. hw shows it by
 -- its 'shownHash'. A file holds it with the network of the transaction and
--- the labels of the account's addresses in it, by their paths, a 'TxFile'.
+-- the labels of the portfolio's addresses in it, by their paths, a 'TxFile'.
 module Haskoin.Wallet.Tx.SignData where
 
 import Control.Monad
@@ -24,21 +26,26 @@ import qualified Data.Serialize as S
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin
+import Haskoin.Wallet.Keys (PoolPath)
 import Numeric.Natural (Natural)
 
 data TxSignData = TxSignData
   { txSignDataTx :: !Tx,
     txSignDataInputs :: ![Tx],
-    txSignDataInputPaths :: ![SoftPath],
-    txSignDataOutputPaths :: ![SoftPath],
+    -- | The paths of the addresses of the portfolio the transaction
+    -- spends from, each once
+    txSignDataInputPaths :: ![PoolPath],
+    -- | The paths of the addresses of the portfolio the transaction pays,
+    -- each once
+    txSignDataOutputPaths :: ![PoolPath],
     -- | The fee rate the transaction was built for, in satoshis per byte,
     -- when known: what the fee pays beyond that rate is change that was not
     -- worth an output
     txSignDataFeeRate :: !(Maybe Natural),
     -- | The fingerprint of the seed that signed the transaction, which the
-    -- signer writes so that an online wallet learns the seed of the account
+    -- signer writes into the derivation records of the file
     txSignDataFingerprint :: !(Maybe Fingerprint),
-    -- | The ids of the transactions of the account it replaces, as bumpfee
+    -- | The ids of the transactions of the portfolio it replaces, as bumpfee
     -- prepares it: a stuck transaction, and those that spend its change.
     -- None for any other transaction.
     txSignDataReplaces :: ![TxHash],
@@ -57,7 +64,8 @@ noLabel = Text.empty
 {- JSON, as the database keeps it -}
 
 -- The rows of older versions of hw carry a "signed" flag as well. It is
--- ignored: the transaction says whether it is signed.
+-- ignored: the transaction says whether it is signed. Their paths are
+-- texts, those of a BIP44 account, which a 'PoolPath' reads as such.
 
 instance FromJSON TxSignData where
   parseJSON =
@@ -95,17 +103,18 @@ instance MarshalJSON Ctx TxSignData where
 
 {- Files -}
 
--- | The labels of the account's addresses, by their paths in the account,
--- such as /0/5: the paths the signing data gives for the account's inputs
--- and outputs. A label can only name a path, so it can only land on an
--- address the reader derives itself from the account's key, never on
--- another wallet's. Only the addresses that have a label are listed.
-type PathLabels = Map SoftPath Text
+-- | The labels of the portfolio's addresses, by their paths in the
+-- portfolio, such as /0/5 of its BIP84 account: the paths the signing data
+-- gives for the portfolio's inputs and outputs. A label can only name a
+-- path, so it can only land on an address the reader derives itself from
+-- the key of an account, never on another wallet's. Only the addresses
+-- that have a label are listed.
+type PathLabels = Map PoolPath Text
 
 -- | A transaction file, as preparetx, preparesweep, signtx, signsweep and
 -- exporttx write it: the signing data, with the network of the transaction,
 -- which the transaction itself does not tell, and the labels the wallet
--- that wrote the file had: those of the account's addresses the
+-- that wrote the file had: those of the portfolio's addresses the
 -- transaction spends from or pays, by their paths, and those the coins it
 -- spends show, by the transaction that paid each (see
 -- 'Haskoin.Wallet.Database.TxInfo.coinLabel'). An offline computer has no
@@ -124,12 +133,6 @@ data TxFile = TxFile
 -- hash is read
 plainTxFile :: Maybe Network -> TxSignData -> TxFile
 plainTxFile netM tsd = TxFile netM tsd Map.empty Map.empty
-
--- | The refusal of a file that names no network, as a file of another
--- wallet, where nothing else tells the network of its transaction: no
--- account of the wallet it involves, and no --network
-noFileNetwork :: String
-noFileNetwork = "The file names no network, as a file of another wallet does, and involves no account of this wallet: give the --network, or a default-network in the configuration file"
 
 {- Signatures -}
 

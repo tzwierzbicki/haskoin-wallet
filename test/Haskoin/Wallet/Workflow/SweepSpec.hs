@@ -3,7 +3,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | A sweep of an old key, prepared by preparesweep and signed by
--- signsweep, into the wallet or elsewhere.
+-- signsweep, into a portfolio of the wallet or elsewhere. hw finds the
+-- portfolio and the network of the sweep from the --sweep-to addresses.
 module Haskoin.Wallet.Workflow.SweepSpec (spec) where
 
 import Data.IORef (modifyIORef, readIORef)
@@ -11,7 +12,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Text as Text
 import Haskoin
 import Haskoin.Wallet.Cli.Response (Response (..))
-import Haskoin.Wallet.Database (DBAccount (..))
+import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..))
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.TestUtils
@@ -41,7 +42,7 @@ sweepSpec ctx =
   describe "A sweep of an old key" $ do
     it "is prepared by preparesweep, signed by signsweep with the key, sent, and paid to the wallet" $
       withChain ctx (oldKeyChain ctx) $ \home chain -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         keys <- writeKeyFile home
         prepared <- txOf =<< answer home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
@@ -54,12 +55,12 @@ sweepSpec ctx =
         published <- inMempool <$> readIORef chain
         (spendsAndPays ctx <$> published) `shouldBe` [([OutPoint (txHash (oldCoin ctx)) 0], [(28080, Right (externalAddr 0))])]
         modifyIORef chain mine
-        (accountsOf <$> hwJson home ["sync"] []) `shouldReturn` Right [("main", 0, 28080)]
+        (spendableOn btc <$> hwJson home ["sync"] []) `shouldReturn` Right [(mainPortfolioRef, 28080)]
 
     -- The keys are typed on the terminal, as secret as a mnemonic
     it "is shown by signsweep before it asks for the private keys" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         keys <- writeKeyFile home
         nosig <- nosigOf =<< txOf =<< answer home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
@@ -73,7 +74,7 @@ sweepSpec ctx =
     -- blocks. The wallet has not synced: the sweep reads the server.
     it "gets the lock time of the best block of the server, or one up to 99 blocks below it" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         keys <- writeKeyFile home
         prepared <- txOf =<< answer home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
@@ -83,7 +84,7 @@ sweepSpec ctx =
     -- wallet can help, so there is nothing to ask
     it "gets a lock time of 0 when the best block of the server is more than eight hours old, without a question" $
       withChainMinedAgo ctx [] (9 * 3600) (oldKeyChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         keys <- writeKeyFile home
         prepared <- txOf =<< answer home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
@@ -93,14 +94,14 @@ sweepSpec ctx =
     -- is the same 192 bytes
     it "takes the coin of --coin, without its key or its address" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         prepared <- txOf =<< answer home ["preparesweep", "--coin", coinArg (oldCoin ctx) 0, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
         paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 28080)]
 
     it "takes the coins of the addresses in the --address-file" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         writeFile (home </> "addresses.txt") (textOf wikiAddr <> " old wallet\n")
         prepared <- txOf =<< answer home ["preparesweep", "--address-file", home </> "addresses.txt", "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
@@ -110,7 +111,7 @@ sweepSpec ctx =
     -- 20000 - 3400 = 46600
     it "takes the coins of the --address-file addresses along with those of --sweep-from" $
       withChain ctx (twoOldWalletsChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         writeFile (home </> "addresses.txt") (Text.unpack externalAddr2Text <> "\n")
         prepared <- txOf =<< answer home ["preparesweep", "--sweep-from", textOf wikiAddr, "--address-file", home </> "addresses.txt", "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
@@ -119,7 +120,7 @@ sweepSpec ctx =
     -- The keys would be typed for nothing
     it "is refused an --address-file that does not exist, before the keys are typed" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         run <- hw home ["preparesweep", "--key-file", "-", "--address-file", home </> "addresses.txt", "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--fee-rate", "10"] []
         run `shouldSatisfy` printed (noSuchFile (home </> "addresses.txt"))
         runErr run `shouldNotSatisfy` Text.isInfixOf "Private keys"
@@ -127,7 +128,7 @@ sweepSpec ctx =
     -- The last letter of the address on the third line is wrong
     it "is refused a line of the --address-file with words but no address, which is named" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         writeFile (home </> "addresses.txt") ("# The old wallet\n" <> textOf wikiAddr <> "\n1LoVGDgRs9hTfTNJNuXKSpywcbdvwRXpmX old wallet\n")
         (errorOf <$> hwJson home ["preparesweep", "--address-file", home </> "addresses.txt", "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--fee-rate", "10"] [])
           `shouldReturn` Right "No address on line 3: 1LoVGDgRs9hTfTNJNuXKSpywcbdvwRXpmX old wallet"
@@ -136,7 +137,7 @@ sweepSpec ctx =
     -- 27500 = 240 for the second destination
     it "is refused when what remains for a destination is below the dust limit" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         keys <- writeKeyFile home
         (errorOf <$> hwJson home ["preparesweep", "--key-file", keys, "--sweep-to", fixedTo (otherAddr 0) "27500sat", "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] [])
@@ -144,7 +145,7 @@ sweepSpec ctx =
 
     it "that pays outside the wallet is refused without an --output file" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         keys <- writeKeyFile home
         (errorOf <$> hwJson home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--fee-rate", "10"] [])
           `shouldReturn` Right "The sweep does not involve this wallet: give an --output file to write it to"
@@ -154,7 +155,7 @@ sweepSpec ctx =
     -- wallet cannot tell it
     it "that pays outside the wallet is written to its file only, signed from it, and sent on the network it names" $
       withChain ctx (oldKeyChain ctx) $ \home chain -> do
-        createMain home
+        newTestPortfolio home
         keys <- writeKeyFile home
         prepared <- txOf =<< answer home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--fee-rate", "10"] []
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 28080)]
@@ -169,7 +170,7 @@ sweepSpec ctx =
     -- The keys would be typed for nothing
     it "is refused an --output file that exists, before the keys are typed" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         writeFile (home </> "sweep.json") ""
         run <- hw home ["preparesweep", "--key-file", "-", "--sweep-to", textOf (otherAddr 0), "--output", home </> "sweep.json", "--fee-rate", "10"] []
         run `shouldSatisfy` printed (alreadyExists (home </> "sweep.json"))
@@ -178,7 +179,7 @@ sweepSpec ctx =
     -- The keys would be typed for nothing
     it "is refused an address that is not one, before the keys are typed" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         run <- hw home ["preparesweep", "--key-file", "-", "--sweep-to", "nonsense", "--network", "btc", "--output", home </> "sweep.json", "--fee-rate", "10"] []
         run `shouldSatisfy` printed "The address nonsense is not valid on btc"
         runErr run `shouldNotSatisfy` Text.isInfixOf "Private keys"
@@ -187,26 +188,26 @@ sweepSpec ctx =
     -- - 2260 = 17740 for the address without an amount
     it "pays a --sweep-to address its fixed amount, and what remains to the address without one" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         keys <- writeKeyFile home
         prepared <- txOf =<< answer home ["preparesweep", "--key-file", keys, "--sweep-to", fixedTo (otherAddr 0) "0.0001", "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 10000)]
         paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 17740)]
 
-    it "is of the account of a --sweep-to address that has an amount" $
+    it "is of the portfolio of a --sweep-to address that has an amount" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         keys <- writeKeyFile home
         prepared <- answer home ["preparesweep", "--key-file", keys, "--sweep-to", fixedTo (externalAddr 0) "0.0001", "--sweep-to", textOf (otherAddr 0), "--fee-rate", "10"] []
-        (dBAccountName <$> accountOf prepared) `shouldBe` Right "main"
+        placeOf prepared `shouldBe` Right mainPlace
         paidToWallet <$> txOf prepared `shouldReturn` Map.fromList [(externalAddr 0, 10000)]
 
     -- The keys would be typed for nothing
     it "is refused --sweep-to addresses that all have an amount, before the keys are typed" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         run <- hw home ["preparesweep", "--key-file", "-", "--sweep-to", fixedTo (otherAddr 0) "0.0001", "--network", "btc", "--output", home </> "sweep.json", "--fee-rate", "10"] []
         run `shouldSatisfy` printed "Give at least one address without an amount, to receive what remains once the fixed amounts and the fee are paid"
         runErr run `shouldNotSatisfy` Text.isInfixOf "Private keys"
@@ -214,47 +215,73 @@ sweepSpec ctx =
     -- A rate of 2^64 wrapped around to zero, and others to any fee
     it "is refused a fee rate past 32 bits, rather than wrapping around" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         keys <- writeKeyFile home
         (errorOf <$> hwJson home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "18446744073709551616"] [])
           `shouldReturn` Right "The fee rate must be at most 4294967295 satoshis per virtual byte"
 
-    -- The wallet has two accounts of the test seed, and the sweep is
-    -- pending in main
-    it "is signed by the account that holds it, without --account" $
+    -- The wallet has portfolio0 and portfolio1 of the test seed, and the
+    -- sweep is pending in portfolio1, which is not the default one
+    it "is signed by the portfolio that holds it, without --portfolio" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
-        _ <- answer home ["createacc", "second"] seedTwice
-        _ <- answer home ["receive", "--account", "main"] []
+        newTestPortfolio home
+        newTestPortfolio home
+        portfolio1Addr <- receiveWith home ["--portfolio", "1"]
         keys <- writeKeyFile home
-        nosig <- nosigOf =<< txOf =<< answer home ["preparesweep", "--account", "main", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
-        signed <- txOf =<< answer home ["signsweep", nosig, "--key-file", keys] []
-        pendingState signed `shouldBe` Just (True, False)
+        nosig <- nosigOf =<< txOf =<< answer home ["preparesweep", "--key-file", keys, "--sweep-to", portfolio1Addr, "--fee-rate", "10"] []
+        signed <- answer home ["signsweep", nosig, "--key-file", keys] []
+        placeOf signed `shouldBe` Right portfolio1Place
+        pendingState <$> txOf signed `shouldReturn` Just (True, False)
 
-    -- The wallet has a second account, and the destination is of main.
-    -- Without --account, hw asked which account to use.
-    it "is of the account it pays, without --account" $
+    -- 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo is the first receiving address of
+    -- portfolio1, and the default portfolio is portfolio0
+    it "is of the portfolio it pays, without --portfolio" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
-        _ <- answer home ["createacc", "second"] seedTwice
-        _ <- answer home ["receive", "--account", "main"] []
+        newTestPortfolio home
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        _ <- answer home ["receive", "--portfolio", "1"] []
         keys <- writeKeyFile home
-        (fmap dBAccountName . accountOf <$> hwJson home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] [])
-          `shouldReturn` Right "main"
+        (placeOf <$> hwJson home ["preparesweep", "--key-file", keys, "--sweep-to", "17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "--fee-rate", "10"] [])
+          `shouldReturn` Right portfolio1Place
 
-    it "is refused an --account it pays no address of" $
+    -- The second test mnemonic is wallet1, whose first receiving address
+    -- is 1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2, and the default wallet is
+    -- wallet0
+    it "is of the portfolio of another wallet it pays, without --wallet" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
-        _ <- answer home ["createacc", "second"] seedTwice
-        _ <- answer home ["receive", "--account", "main"] []
+        newTestPortfolio home
+        newPortfolioOf home testMnemonic2
+        _ <- answer home ["receive", "--wallet", "1"] []
         keys <- writeKeyFile home
-        (errorOf <$> hwJson home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--account", "second", "--fee-rate", "10"] [])
-          `shouldReturn` Right "The sweep pays no address of the account second"
+        (placeOf <$> hwJson home ["preparesweep", "--key-file", keys, "--sweep-to", "1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2", "--fee-rate", "10"] [])
+          `shouldReturn` Right (Place (PortfolioRef 1 0) btc)
+
+    -- The bip84 output of 31 bytes in place of a legacy one of 34: one
+    -- input and one output make 10 + 148 + 31 = 189 bytes, a fee of 1890,
+    -- and 30000 - 1890 = 28110 for the destination
+    it "pays a bip84 address of the portfolio, whose output is smaller" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        newTestPortfolio home
+        bip84Addr <- receiveWith home ["--type", "bip84"]
+        keys <- writeKeyFile home
+        prepared <- answer home ["preparesweep", "--key-file", keys, "--sweep-to", bip84Addr, "--fee-rate", "10"] []
+        placeOf prepared `shouldBe` Right mainPlace
+        paidToWallet <$> txOf prepared `shouldReturn` Map.fromList [(segwitExternalAddr 0, 28110)]
+
+    it "is refused a --portfolio it pays no address of, naming the portfolio it pays" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        keys <- writeKeyFile home
+        (errorOf <$> hwJson home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--portfolio", "1", "--fee-rate", "10"] [])
+          `shouldReturn` Right "The destinations of the sweep are in portfolio0 of wallet0 on btc, not where the options say"
 
     -- With no account at all, hw sweeps as a utility, through files: on the
     -- --network given, then on the network the file names
-    it "that pays outside the wallet is prepared, signed and sent from files in a wallet without accounts" $
+    it "that pays outside the wallet is prepared, signed and sent from files in a database without wallets" $
       withChain ctx (oldKeyChain ctx) $ \home chain -> do
         keys <- writeKeyFile home
         prepared <- answer home (outsideSweep home keys) []
@@ -264,7 +291,7 @@ sweepSpec ctx =
         _ <- answer home ["broadcast", "--input", home </> "signed.psbt", "--yes"] []
         published <- inMempool <$> readIORef chain
         (spendsAndPays ctx <$> published) `shouldBe` [([OutPoint (txHash (oldCoin ctx)) 0], [(28080, Right (otherAddr 0))])]
-        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right []
+        (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right []
 
     -- The configuration file of the test home names btc, and the key has a
     -- coin on Bitcoin. Keys, coins and the legacy addresses of Bitcoin Cash
@@ -274,47 +301,48 @@ sweepSpec ctx =
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
         keys <- writeKeyFile home
         (errorOf <$> hwJson home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (otherAddr 0), "--output", home </> "sweep.json", "--fee-rate", "10"] [])
-          `shouldReturn` Right "Give the --network of a sweep that pays no account of the wallet: the default-network of the configuration file does not apply to it"
+          `shouldReturn` Right "Give the --network of a sweep that pays no portfolio of the wallet: the default-network of the configuration file does not apply to it"
 
-    -- The default network is not a --network given: main is on btc
-    it "that pays the wallet is on the network of its account, whatever the default network" $
+    -- The default network is not a --network given: the address is of
+    -- the bip44 account of portfolio0 on btc
+    it "that pays the wallet is on the network of its address, whatever the default network" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         setDefaultNetwork home (Just "bch")
         keys <- writeKeyFile home
-        (fmap dBAccountName . accountOf <$> hwJson home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] [])
-          `shouldReturn` Right "main"
+        (placeOf <$> hwJson home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] [])
+          `shouldReturn` Right mainPlace
 
-    -- cash is the Bitcoin Cash account of the test wallet. hw stores its
-    -- first receiving address as
+    -- hw stores the first receiving address of portfolio0 on bch as
     -- bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u. The store has
     -- the coin of the key on Bitcoin Cash too.
-    it "that pays the wallet finds its account by a Bitcoin Cash address written without its prefix" $
+    it "that pays the wallet finds its portfolio by a Bitcoin Cash address written without its prefix" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
-        _ <- receiveFor home "cash"
+        newTestPortfolio home
+        _ <- answer home ["receive", "--network", "bch"] []
         keys <- writeKeyFile home
-        (fmap dBAccountName . accountOf <$> hwJson home ["preparesweep", "--key-file", keys, "--sweep-to", "qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u", "--fee-rate", "10"] [])
-          `shouldReturn` Right "cash"
+        (placeOf <$> hwJson home ["preparesweep", "--key-file", keys, "--sweep-to", "qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u", "--fee-rate", "10"] [])
+          `shouldReturn` Right (Place mainPortfolioRef bch)
 
-    -- 1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ is the same address of cash in the
-    -- legacy form, which Bitcoin reads too. The sweep is of cash all the
-    -- same, rather than outside the wallet on the default network btc.
-    it "that pays the wallet finds its account by a Bitcoin Cash address in the legacy form" $
+    -- 1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ is the same address in the
+    -- legacy form, which Bitcoin reads too. The sweep is of portfolio0 on
+    -- bch all the same, rather than outside the wallet on the default
+    -- network btc.
+    it "that pays the wallet finds its portfolio by a Bitcoin Cash address in the legacy form" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
-        _ <- receiveFor home "cash"
+        newTestPortfolio home
+        _ <- answer home ["receive", "--network", "bch"] []
         keys <- writeKeyFile home
-        (fmap dBAccountName . accountOf <$> hwJson home ["preparesweep", "--key-file", keys, "--sweep-to", "1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ", "--fee-rate", "10"] [])
-          `shouldReturn` Right "cash"
+        (placeOf <$> hwJson home ["preparesweep", "--key-file", keys, "--sweep-to", "1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ", "--fee-rate", "10"] [])
+          `shouldReturn` Right (Place mainPortfolioRef bch)
 
-    it "that pays outside the wallet is refused an --account" $
+    it "that pays outside the wallet is refused a --portfolio" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         keys <- writeKeyFile home
-        (errorOf <$> hwJson home (outsideSweep home keys <> ["--account", "main"]) [])
-          `shouldReturn` Right "The sweep pays no address of the account main"
+        (errorOf <$> hwJson home (outsideSweep home keys <> ["--portfolio", "0"]) [])
+          `shouldReturn` Right "The sweep pays no address of portfolio0 of wallet0"
 
     it "that pays outside the wallet is shown from its file, outside the wallet, on its network" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
@@ -326,73 +354,115 @@ sweepSpec ctx =
 
     it "that pays outside the wallet is not imported by importtx" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         keys <- writeKeyFile home
         _ <- answer home (outsideSweep home keys) []
         (errorOf <$> hwJson home ["importtx", home </> "sweep.json"] [])
-          `shouldReturn` Right "The transaction does not involve this wallet"
+          `shouldReturn` Right "The transaction does not involve this wallet. It may be of a portfolio this database does not have yet: newportfolio --existing adds the next portfolio of a mnemonic, and importwallet the portfolios of a file"
 
     -- No key of the wallet signs it: the mnemonic would be typed for nothing
     it "that pays outside the wallet is refused by signtx, before the mnemonic is asked" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         keys <- writeKeyFile home
         _ <- answer home (outsideSweep home keys) []
         run <- hw home ["signtx", "--input", home </> "sweep.json", "--output", home </> "signed.psbt"] seedOnce
         run `shouldSatisfy` printed "The transaction does not involve this wallet"
         run `shouldNotSatisfy` askedMnemonic
 
-    it "that pays outside the wallet is refused an --account to sign it" $
+    it "that pays outside the wallet is refused a --portfolio to sign it" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         keys <- writeKeyFile home
         _ <- answer home (outsideSweep home keys) []
-        (errorOf <$> hwJson home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.psbt", "--key-file", keys, "--account", "main"] [])
-          `shouldReturn` Right "The transaction does not involve the account main"
+        (errorOf <$> hwJson home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.psbt", "--key-file", keys, "--portfolio", "0"] [])
+          `shouldReturn` Right "The transaction does not involve portfolio0 of wallet0"
 
     -- A file of another wallet names no network, and the configuration
-    -- names no default network
-    it "that pays outside the wallet is not signed from a file of another wallet, which names no network, without a default network" $
+    -- names no default network: the default network is then btc
+    it "that pays outside the wallet is signed on btc from a file of another wallet, which names no network, without a default network" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
         setDefaultNetwork home Nothing
         keys <- writeKeyFile home
         _ <- answer home (outsideSweep home keys) []
         written <- readTxFile ctx (home </> "sweep.json")
         writeOtherWalletTxFile ctx (home </> "other.psbt") (txFileData written)
-        (errorOf <$> hwJson home ["signsweep", "--input", home </> "other.psbt", "--output", home </> "signed.psbt", "--key-file", keys] [])
-          `shouldReturn` Right "The file names no network, as a file of another wallet does, and involves no account of this wallet: give the --network, or a default-network in the configuration file"
+        signed <- answer home ["signsweep", "--input", home </> "other.psbt", "--output", home </> "signed.psbt", "--key-file", keys] []
+        signed `shouldSatisfy` \case ResponseOutsideTx net _ -> net == btc; _ -> False
+        pendingState <$> txOf signed `shouldReturn` Just (True, False)
 
-    -- main and second, two accounts of the test wallet, each with its first
-    -- receiving address
-    it "that pays two accounts asks which one, and is of the one --account names" $
+    -- portfolio0 and portfolio1 of the test wallet, each with the first
+    -- receiving address of its bip44 account on btc
+    it "that pays two portfolios is refused without --portfolio, naming them" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
-        _ <- answer home ["createacc", "second"] seedTwice
-        mainAddr <- receiveFor home "main"
-        secondAddr <- receiveFor home "second"
+        newTestPortfolio home
+        newTestPortfolio home
+        portfolio0Addr <- receiveWith home []
+        portfolio1Addr <- receiveWith home ["--portfolio", "1"]
         keys <- writeKeyFile home
-        let sweep = ["preparesweep", "--key-file", keys, "--sweep-to", mainAddr, "--sweep-to", secondAddr, "--fee-rate", "10"]
-        (errorOf <$> hwJson home sweep []) `shouldReturn` Right "Specify which account to use"
-        (fmap dBAccountName . accountOf <$> hwJson home (sweep <> ["--account", "second"]) []) `shouldReturn` Right "second"
+        (errorOf <$> hwJson home ["preparesweep", "--key-file", keys, "--sweep-to", portfolio0Addr, "--sweep-to", portfolio1Addr, "--fee-rate", "10"] [])
+          `shouldReturn` Right "The destinations of the sweep are in several portfolios, portfolio0 of wallet0 on btc and portfolio1 of wallet0 on btc: name one with --portfolio and --wallet"
 
-    -- main is on Bitcoin, and cash on Bitcoin Cash
-    it "that pays accounts of several networks is refused" $
+    it "that pays two portfolios is of the one --portfolio names" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
-        _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
-        mainAddr <- receiveFor home "main"
-        cashAddr <- receiveFor home "cash"
+        newTestPortfolio home
+        newTestPortfolio home
+        portfolio0Addr <- receiveWith home []
+        portfolio1Addr <- receiveWith home ["--portfolio", "1"]
         keys <- writeKeyFile home
-        (errorOf <$> hwJson home ["preparesweep", "--key-file", keys, "--sweep-to", mainAddr, "--sweep-to", cashAddr, "--fee-rate", "10"] [])
-          `shouldReturn` Right "The sweep pays accounts of several networks"
+        (placeOf <$> hwJson home ["preparesweep", "--key-file", keys, "--sweep-to", portfolio0Addr, "--sweep-to", portfolio1Addr, "--portfolio", "1", "--fee-rate", "10"] [])
+          `shouldReturn` Right portfolio1Place
 
-    it "that pays the wallet is refused a --network other than the one of its account" $
+    -- The first receiving addresses of portfolio0 on btc and on bch. A
+    -- sweep is on one network: the default network btc would read the
+    -- address of bch as one of Bitcoin.
+    it "that pays the portfolio on two networks is refused, naming them" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
+        btcAddr <- receiveWith home []
+        cashAddr <- receiveWith home ["--network", "bch"]
+        keys <- writeKeyFile home
+        (errorOf <$> hwJson home ["preparesweep", "--key-file", keys, "--sweep-to", btcAddr, "--sweep-to", cashAddr, "--fee-rate", "10"] [])
+          `shouldReturn` Right "The sweep pays addresses of the wallet on btc and bch: a sweep is on one network"
+
+    -- 1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ is the address of portfolio0 on
+    -- bch in the legacy form, which reads on btc as well
+    it "that pays the portfolio on two networks is refused when the address of Bitcoin Cash is in the legacy form" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        newTestPortfolio home
+        btcAddr <- receiveWith home []
+        _ <- answer home ["receive", "--network", "bch"] []
+        keys <- writeKeyFile home
+        (errorOf <$> hwJson home ["preparesweep", "--key-file", keys, "--sweep-to", btcAddr, "--sweep-to", "1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ", "--fee-rate", "10"] [])
+          `shouldReturn` Right "The sweep pays addresses of the wallet on btc and bch: a sweep is on one network"
+
+    -- btctest and btctest4 share their keys: receive hands out the same
+    -- first address on each, which the default network btc does not have
+    it "that pays an address two test networks share is refused without --network, naming the networks" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        newTestPortfolio home
+        sharedAddr <- receiveWith home ["--network", "btctest"]
+        _ <- answer home ["receive", "--network", "btctest4"] []
+        (errorOf <$> hwJson home ["preparesweep", "--coin", coinArg (oldCoin ctx) 0, "--sweep-to", sharedAddr, "--fee-rate", "10"] [])
+          `shouldReturn` Right "The destinations of the sweep are on btctest and btctest4: give the --network"
+
+    -- The coin is taken by its outpoint, which reads the same on every
+    -- network of the fake store
+    it "that pays an address two test networks share is of the --network named" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        newTestPortfolio home
+        sharedAddr <- receiveWith home ["--network", "btctest"]
+        _ <- answer home ["receive", "--network", "btctest4"] []
+        (placeOf <$> hwJson home ["preparesweep", "--coin", coinArg (oldCoin ctx) 0, "--sweep-to", sharedAddr, "--network", "btctest4", "--fee-rate", "10"] [])
+          `shouldReturn` Right (Place mainPortfolioRef btcTest4)
+
+    it "that pays the wallet is refused a --network other than the one of its address" $
+      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         keys <- writeKeyFile home
         (errorOf <$> hwJson home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--network", "bch", "--fee-rate", "10"] [])
-          `shouldReturn` Right "The sweep pays an account on btc, not on the --network bch"
+          `shouldReturn` Right "The destinations of the sweep are in portfolio0 of wallet0 on btc, not where the options say"
   where
     -- The sweep of the old key to another wallet, written to sweep.json
     outsideSweep home keys =

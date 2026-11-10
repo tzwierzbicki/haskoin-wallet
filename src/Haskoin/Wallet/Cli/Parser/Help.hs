@@ -198,7 +198,7 @@ optionRow known doc = row (rowNames doc) (fillSep (proseWords known (fromMaybe "
     -- The default is kept on one line
     defaultShown = [annotate Muted (parens ("default:" <+> pretty v)) | Just v <- [doc.defaultShown]]
 
--- | The names of an option in its row, -a, --account NAME, or the metavar
+-- | The names of an option in its row, -p, --portfolio INT, or the metavar
 -- of an argument. A long name without a short one is indented as if it
 -- had one, so that the long names line up.
 rowNames :: OptDoc -> Doc Style
@@ -379,7 +379,7 @@ alternatives :: Usage -> [Usage]
 alternatives (Choice a b) = alternatives a <> alternatives b
 alternatives usage = [usage]
 
--- | An option in the usage line, -a|--account NAME, or the metavar of an
+-- | An option in the usage line, -p|--portfolio INT, or the metavar of an
 -- argument
 itemDoc :: OptDoc -> Doc Style
 itemDoc doc = hsep (namesPart <> metavarPart)

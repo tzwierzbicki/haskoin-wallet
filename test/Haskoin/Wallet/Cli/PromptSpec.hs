@@ -1,14 +1,15 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | What hw asks the user on the terminal: the mnemonic, or the shares of
--- a backup, and the passphrase of a seed, once to check them against an
--- account or the chain, the mnemonic and the passphrase twice to create an
--- account; the signing key of an account, asked until the mnemonic and the
--- passphrase give it, three attempts at most; the private keys of a sweep,
--- from a file or typed; and the questions: yes or no, a pick among
--- choices, and an answer read as typed. A scripted terminal types the
--- lines of each test and keeps what hw shows; the real one is tested on
--- files.
+-- a backup, and the passphrase of a seed, once to check them against a
+-- portfolio or the chain, the mnemonic and the passphrase twice to add a
+-- portfolio, and the passphrase alone twice for a seed newportfolio made;
+-- the signing keys of the accounts of a portfolio, asked until the
+-- mnemonic and the passphrase give them, three attempts at most; the
+-- private keys of a sweep, from a file or typed; and the questions: yes or
+-- no, a pick among choices, and an answer read as typed. A scripted
+-- terminal types the lines of each test and keeps what hw shows; the real
+-- one is tested on files.
 module Haskoin.Wallet.Cli.PromptSpec (spec) where
 
 import Control.Monad (forM_)
@@ -38,6 +39,7 @@ spec = prepareContext $ \ctx -> do
   newSeedSpec
   seedOnceSpec
   signingSpec ctx
+  portfolioKeysSpec ctx
   matchingSpec ctx
   terminalSpec
   diceSpec
@@ -280,11 +282,11 @@ sharesSpec =
     it "is cancelled when the input ends before the last share" $
       answerOf (take 2 testShares) askSeedWords `shouldReturn` Left cancelled
 
-{- A new seed, as createacc asks for it -}
+{- A seed typed twice, as newportfolio --existing asks for it -}
 
 newSeedSpec :: Spec
-newSeedSpec =
-  describe "Asking for the seed of a new account, as createacc does" $ do
+newSeedSpec = do
+  describe "Asking for the seed of a new portfolio, as newportfolio --existing does" $ do
     it "takes the mnemonic and the passphrase twice each" $
       answering [testWords, testWords, testPassphrase, testPassphrase] askNewSeedSecret
         `shouldReturn` ( Right (MnemonicSecret testMnemonic),
@@ -368,6 +370,32 @@ newSeedSpec =
     it "takes the space and the tilde, the first and the last printable ASCII characters, in such a passphrase" $
       answerOf (testShares <> [" ~", " ~"]) askNewSeedSecret
         `shouldReturn` Right (SharesSecret testSharesBackup " ~")
+
+  -- newportfolio makes the words of a new mnemonic, or the shares of a
+  -- new backup, and the user types the passphrase alone
+  describe "Asking for the passphrase of a seed newportfolio made" $ do
+    it "takes the passphrase twice, and gives the secret of the words with it" $
+      answering [testPassphrase, testPassphrase] (`askNewPassphraseOf` MnemonicWords testWords)
+        `shouldReturn` (Right (MnemonicSecret testMnemonic), [passphrasePrompt, againPrompt], [])
+
+    it "asks once for a passphrase left empty" $
+      answering [""] (`askNewPassphraseOf` MnemonicWords testWords)
+        `shouldReturn` (Right (MnemonicSecret (MnemonicPass testWords "")), [passphrasePrompt], [])
+
+    it "asks for the passphrase twice again when the two differ" $
+      answering ["correct horse", "correct hrose", testPassphrase, testPassphrase] (`askNewPassphraseOf` MnemonicWords testWords)
+        `shouldReturn` ( Right (MnemonicSecret testMnemonic),
+                         [passphrasePrompt, againPrompt, "The passphrases do not match", passphrasePrompt, againPrompt],
+                         []
+                       )
+
+  describe "The backup that the shares of a new backup rebuild" $ do
+    -- Two of the three shares rebuild the backup
+    it "is rebuilt from as many shares as it takes" $
+      backupOfShares [firstOfThree, secondOfThree] `shouldBe` Right backupOfThree
+
+    it "is refused from fewer shares than it takes" $
+      backupOfShares [firstOfThree] `shouldBe` Left "The shares do not rebuild a backup"
 
 {- A seed typed once, as recover and checkmnemonic ask for it -}
 
@@ -457,6 +485,46 @@ signingSpec ctx =
     it "is cancelled when the input ends" $ do
       (answer, _, _) <- signingKeyOf [testWords]
       answer `shouldBe` Left cancelled
+
+{- The signing keys of a portfolio -}
+
+-- | The public key of the bip84 account 1 of the test wallet, of its
+-- portfolio 1
+segwitAccount1 :: Ctx -> XPubKey
+segwitAccount1 ctx = fromJust $ xPubImport btc ctx testSegwitAccountXPub1
+
+portfolioKeysSpec :: Ctx -> Spec
+portfolioKeysSpec ctx = do
+  describe "Asking for the signing keys of the accounts of a portfolio, as signtx does for a payment of both types" $ do
+    let keysOf accounts lines' = answering lines' $ \term -> exported <$> askSigningKeys term btc ctx 0 accounts
+        exported (seed, keys) = (fingerprintToText (seedFingerprint seed), [(kind, xPrvExport btc key) | (kind, key) <- keys])
+        mismatch = "The mnemonic or the passphrase does not match the portfolio"
+    it "gives the key of each account, with its type, from the mnemonic and the passphrase typed once" $
+      keysOf [(Bip44, testAccount ctx), (Bip84, testSegwitAccountPub ctx)] [testWords, testPassphrase]
+        `shouldReturn` ( Right (testFingerprintText, [(Bip44, testAccountXPrv), (Bip84, testSegwitAccountXPrv)]),
+                         [mnemonicPrompt, passphrasePrompt],
+                         []
+                       )
+
+    it "asks for both again after a wrong passphrase, saying it does not match the portfolio" $
+      keysOf [(Bip44, testAccount ctx), (Bip84, testSegwitAccountPub ctx)] [testWords, "correct horse", testWords, testPassphrase]
+        `shouldReturn` ( Right (testFingerprintText, [(Bip44, testAccountXPrv), (Bip84, testSegwitAccountXPrv)]),
+                         [mnemonicPrompt, passphrasePrompt, mismatch, mnemonicPrompt, passphrasePrompt],
+                         []
+                       )
+
+  describe "Matching the accounts of a portfolio with a mnemonic and a passphrase" $ do
+    let matching accounts = answerOf [] $ \term ->
+          isJust <$> matchAccounts term btc ctx 0 accounts (MnemonicSecret testMnemonic)
+    it "finds the accounts when the seed gives the key of each" $
+      matching [(Bip44, testAccount ctx), (Bip84, testSegwitAccountPub ctx)] `shouldReturn` Right True
+
+    -- The key of the bip84 account of portfolio 1 is not at index 0
+    it "finds nothing when the seed gives the key of one of them only" $
+      matching [(Bip44, testAccount ctx), (Bip84, segwitAccount1 ctx)] `shouldReturn` Right False
+
+    it "finds nothing for no account" $
+      matching [] `shouldReturn` Right False
 
 {- Matching an account -}
 

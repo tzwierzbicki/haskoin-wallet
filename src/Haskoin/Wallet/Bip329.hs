@@ -22,13 +22,17 @@
 -- @spendable@, the @keypath@ of an address or a coin, and the @height@,
 -- @fee@ and @value@ of a transaction or a coin, which the BIP lists among
 -- its additional fields. The other additional fields, @time@, @rate@,
--- @fmv@ and @heights@, are left aside as the BIP allows. hw adds two keys
--- of its own to an @xpub@ record: @network@, since an extended public key
--- alone does not tell Bitcoin from Bitcoin Cash, nor one test network from
--- another, and @purpose@, the first step of the path of the account, 44 or
--- 84, since the key alone does not tell a BIP44 account from a BIP84 one
--- either when the record carries no origin. The BIP defines no such keys;
--- the importers checked leave a key they do not know aside.
+-- @fmv@ and @heights@, are left aside as the BIP allows. hw adds three
+-- keys of its own. @network@ goes on every record: an extended public key
+-- alone does not tell Bitcoin from Bitcoin Cash, and the test networks
+-- share their keys, so not even an origin tells one of them from another.
+-- @purpose@ goes on an @xpub@ record: the first step of the path of the
+-- account, 44 or 84, since the key alone does not tell a BIP44 account
+-- from a BIP84 one either when the record carries no origin. @wallet@
+-- goes on an @xpub@ record too: the description of the wallet of the key,
+-- while the @label@ of the record is the description of its portfolio.
+-- The BIP defines no such keys; the importers checked leave a key they do
+-- not know aside.
 module Haskoin.Wallet.Bip329
   ( -- * Records
     Record (..),
@@ -126,12 +130,17 @@ data Record = Record
     -- | What a transaction brings the wallet, negative when it pays out,
     -- or the value of a coin, in satoshis
     recordValue :: !(Maybe Integer),
-    -- | The network of an extended public key, as hw names it: hw's own
-    -- key, on xpub records
+    -- | The network of what the record is of, as hw names it: hw's own
+    -- key, on every record hw writes. The test networks share their keys,
+    -- so an origin alone does not tell which of them a label is on.
     recordNetwork :: !(Maybe Text),
     -- | The purpose of the account of an extended public key, 44 or 84:
     -- hw's own key, on xpub records
-    recordPurpose :: !(Maybe Natural)
+    recordPurpose :: !(Maybe Natural),
+    -- | The description of the wallet of an extended public key: hw's own
+    -- key, on xpub records. The label of such a record is the description
+    -- of the portfolio of the key.
+    recordWallet :: !(Maybe Text)
   }
   deriving (Eq, Show)
 
@@ -149,7 +158,8 @@ record kind ref =
       recordFee = Nothing,
       recordValue = Nothing,
       recordNetwork = Nothing,
-      recordPurpose = Nothing
+      recordPurpose = Nothing,
+      recordWallet = Nothing
     }
 
 {- The lines of a file -}
@@ -202,6 +212,7 @@ lineParser = Json.withObject "record" $ \o -> do
           <*> o .:? "value"
           <*> o .:? "network"
           <*> o .:? "purpose"
+          <*> o .:? "wallet"
       return (LineRecord fields)
 
 spendableParser :: Json.Value -> Parser Bool
@@ -228,6 +239,7 @@ recordFields r =
     <> given "origin" (recordOrigin r)
     <> given "network" (recordNetwork r)
     <> given "purpose" (recordPurpose r)
+    <> given "wallet" (recordWallet r)
     <> given "spendable" (recordSpendable r)
     <> given "keypath" (recordKeypath r)
     <> given "height" (recordHeight r)

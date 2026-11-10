@@ -1,11 +1,27 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE OverloadedStrings #-}
 
--- | Synchronising an account with the store: the gap of addresses watched,
--- the balances, the transaction summaries, the coins and the raw
--- transactions they come from, and the pending transactions; and the
--- recovery of the accounts of a seed. The store is asked
--- through the 'Store' record of "Haskoin.Wallet.Store".
+-- | Synchronising the portfolios with the store, and recovering the
+-- portfolios of a seed. The store is asked through the 'Store' record of
+-- "Haskoin.Wallet.Store".
+--
+-- A sync works on one pool at a time: what a portfolio holds on one
+-- network, the accounts of both kinds together ('sync'). It watches the
+-- gap of addresses of each account, reads the balances, makes the
+-- summaries of the transactions against the addresses of every account of
+-- the pool, so that a summary is relative to the portfolio, and brings the
+-- coins, the raw transactions they come from and the pending transactions
+-- up to date.
+--
+-- sync and recover go over every network, the test networks included. A
+-- network the host does not serve is left out and named, and a network
+-- whose store is down is reported as a failure, while the others are
+-- worked on ('syncPools', 'recoverSeed'). A store may also fail later, on
+-- any question of a sync or a search. The work on its network ends there,
+-- and what that work wrote is undone, while the other networks go on
+-- ('storeFailureApart', 'syncEach'). A failure that is not the store's,
+-- such as the user who answers no to a question, still stops the command.
 module Haskoin.Wallet.Sync where
 
 import Conduit (MonadUnliftIO)
@@ -13,31 +29,31 @@ import Control.Monad
 import Control.Monad.Except
 import Control.Monad.Reader (MonadIO (..), MonadTrans (lift))
 import Data.Containers.ListUtils (nubOrd, nubOrdOn)
-import Data.Either (partitionEithers)
+import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.List (find, genericLength, partition, sort)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isNothing)
 import Data.Set (Set)
+import qualified Data.Set as Set
 import Data.String.Conversions (cs)
 import Data.Text (Text)
-import qualified Data.Text as Text
 import Data.Word (Word64)
-import qualified Data.Set as Set
 import Haskoin
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.Config
+import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.BestBlock
 import Haskoin.Wallet.Database.Coin
-import Haskoin.Wallet.Config
-import Haskoin.Wallet.Database
-import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind, PublicSeed (..), accountDeriv, foreignAddress, foreignDeriv, keyAddress, networkForeignKinds, networkKinds)
 import Haskoin.Wallet.Database.PendingTx
+import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.RawTx
+import Haskoin.Wallet.Database.TxInfo
+import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind, PublicSeed (..), accountDeriv, foreignAddress, foreignDeriv, keyAddress, kindName, networkForeignKinds, seedPortfolioKeys)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.SyncStatus
-import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
@@ -111,23 +127,24 @@ usedChainAddresses ctx store addressOf pub chain window from place watch = go fr
 reportedUsed :: Natural -> String -> String
 reportedUsed far place = "The store reports used addresses as far as " <> show far <> " " <> place <> ", and more beyond."
 
--- | Generate the addresses of the account that were used without its
+-- | Generate the addresses of an account that were used without its
 -- knowledge: the gap of addresses past the ones each chain has is asked
 -- about, and a used address found there moves the chain up to and
 -- including it. Someone paying the wallet from its public key, or another
 -- wallet of the same seed, uses addresses this one has not generated yet.
--- Returns how many addresses were generated.
-watchGap :: (MonadUnliftIO m) => Ctx -> Config -> Store -> DBAccountId -> Watcher (DB m) -> ExceptT String (DB m) Natural
-watchGap ctx cfg store accId watch = do
+-- The account is named for the question of the limit, as in "the bip84
+-- account of portfolio0 on btc". Returns how many addresses were
+-- generated.
+watchGap :: (MonadUnliftIO m) => Ctx -> Config -> Store -> String -> DBAccountId -> Watcher (DB m) -> ExceptT String (DB m) Natural
+watchGap ctx cfg store name accId watch = do
   acc <- getAccountById accId
   let pub = accountXPubKey ctx acc
-      name = cs (dBAccountName acc)
       extend addrType = do
         let have = fromIntegral $ dBAccountCount addrType acc
             -- Where the scan is, for the question of the limit
             place
-              | have == 0 = "on the " <> chainWord addrType <> " chain of the account " <> name
-              | otherwise = "past the " <> show have <> " " <> chainWord addrType <> (if have == 1 then " address" else " addresses") <> " the account " <> name <> " has"
+              | have == 0 = "on the " <> chainWord addrType <> " chain of " <> name
+              | otherwise = "past the " <> show have <> " " <> chainWord addrType <> (if have == 1 then " address " else " addresses ") <> name <> " has"
         next <- scanChain ctx store (accountKind acc) pub (addrDeriv addrType) (configGap cfg) have place watch
         extendChainTo ctx accId addrType next
         return (next - have)
@@ -138,63 +155,72 @@ chainWord :: AddrType -> String
 chainWord AddrExternal = "receiving"
 chainWord AddrInternal = "change"
 
-{- Recovering the accounts of a seed -}
+{- Recovering the portfolios of a seed -}
 
--- | How many accounts a search finds paid before it asks whether to go
--- on: twenty. Few seeds have that many paid accounts of one kind, and
--- the owner of one that does answers yes. A store that lies reports an
--- account paid at every index, without end. With one used address in
--- each, no chain of theirs reaches 'scanLimit', so the search over the
--- accounts has a limit of its own.
+-- | How many portfolios, or accounts of a kind hw does not hold, a search
+-- finds paid before it asks whether to go on: twenty. Few seeds have that
+-- many, and the owner of one that does answers yes. A store that lies
+-- reports a payment at every index, without end. With one used address
+-- in each, no chain reaches 'scanLimit', so the search over the indexes
+-- has a limit of its own.
 accountLimit :: Natural
 accountLimit = 20
 
--- | What a search finds at the index of an account
+-- | What a search finds at an index
 data Looked a
   = -- | Nothing to look at, which counts neither way: an index whose
-    -- child key is invalid, or an account the wallet has already
+    -- child key is invalid, or a portfolio the wallet has whole already
     PassedOver
-  | -- | An account that was never paid
+  | -- | An index that was never paid
     Unpaid
-  | -- | An account that was paid, with what the search keeps of it
+  | -- | An index that was paid, with what the search keeps of it
     Paid a
 
--- | The loop of a search over the accounts of a seed on a network, as
--- BIP44 describes it: index after index from 0, until the given number of
--- unpaid accounts in a row. The last argument looks at the account of an
--- index. The result is what it kept of each paid account, in the order of
--- the indices.
+-- | The loop of a search over the indexes of a seed, as BIP44 describes
+-- it: index after index from 0, until the given number of unpaid ones in
+-- a row. The last argument looks at an index. The result is what it kept
+-- of each paid index, in their order.
 --
--- After every 'accountLimit' accounts found paid, the question is asked.
--- It is told how many accounts the store reports, on which network, and
--- the path of the last one, which the third argument gives from its index.
--- A no stops the search with an error, so the command writes nothing. The
--- status line tells each account the search looks at, with its network.
--- recover searches two networks in one run, and a path alone does not
--- tell them apart: m/44'/0' is an account of Bitcoin on both.
-searchAccounts :: (MonadIO m) => Natural -> Network -> (Natural -> HardPath) -> Watcher m -> (Natural -> ExceptT String m (Looked a)) -> ExceptT String m [a]
-searchAccounts accountGap net pathOf watch look = go 0 0 0
+-- After every 'accountLimit' indexes found paid, the question is asked.
+-- It is told what the store reports so far, which the third argument
+-- words from how many were found and the index of the last one. A no
+-- stops the search with an error, so the command writes nothing. The
+-- second argument tells the status line each index the search looks at.
+searchIndexes :: (MonadIO m) => Natural -> (Natural -> Natural -> IO ()) -> (Natural -> Natural -> String) -> Watcher m -> (Natural -> ExceptT String m (Looked a)) -> ExceptT String m [a]
+searchIndexes gap tell reported watch look = go 0 0 0
   where
-    -- The accounts from the index on, after the given number of unpaid
-    -- accounts in a row, and of paid accounts since the search began
+    -- The indexes from the given one on, after the given number of unpaid
+    -- ones in a row, and of paid ones since the search began
     go index unpaid found
-      | unpaid >= accountGap = return []
+      | unpaid >= gap = return []
       | otherwise = do
-          liftIO $ tellSearch watch.status net (pathOf index) found
+          liftIO $ tell index found
           looked <- look index
           case looked of
             PassedOver -> go (index + 1) unpaid found
             Unpaid -> go (index + 1) (unpaid + 1) found
-            Paid account -> (account :) <$> onward index (found + 1)
-    -- The accounts after the paid one at the index, which is the given
-    -- number of them found: at every multiple of the limit, the question
-    -- decides
+            Paid kept -> (kept :) <$> onward index (found + 1)
+    -- The indexes after the paid one given, which is the given number of
+    -- them found: at every multiple of the limit, the question decides
     onward index found = do
       when (found `mod` accountLimit == 0) $ do
-        let reported = reportedPaid found net (pathOf index)
-        goOn <- watch.question reported
-        unless goOn $ throwError (reported <> " The search stopped there.")
+        let said = reported found index
+        goOn <- watch.question said
+        unless goOn $ throwError (said <> " The search stopped there.")
       go (index + 1) 0 found
+
+-- | The loop of a search over the accounts of a seed of one kind on a
+-- network ('searchIndexes'), which the funds at the accounts hw does not
+-- hold are found with. The status line tells each account the search
+-- looks at, with its network: a path alone does not tell the networks
+-- apart, since m\/44'\/0' is an account of Bitcoin on both.
+searchAccounts :: (MonadIO m) => Natural -> Network -> (Natural -> HardPath) -> Watcher m -> (Natural -> ExceptT String m (Looked a)) -> ExceptT String m [a]
+searchAccounts accountGap net pathOf watch =
+  searchIndexes
+    accountGap
+    (\index found -> tellSearch watch.status net (pathOf index) found)
+    (\found index -> reportedPaid found net (pathOf index))
+    watch
 
 -- | What a search reports when it reaches 'accountLimit': how many
 -- accounts the store reports paid, on which network, and the path of the
@@ -203,96 +229,134 @@ reportedPaid :: Natural -> Network -> HardPath -> String
 reportedPaid found net path =
   "The store reports payments to " <> show found <> " accounts of the seed on " <> net.name <> ", as far as the account " <> pathToStr path <> "."
 
--- | The accounts of a seed of a kind on a network that were paid, found as
--- BIP44 describes: account after account from index 0, the receiving
--- chain of each scanned for a used address within the gap. The search
--- ends after the given number of accounts in a row without one. The
--- standard stops at the first, but hw creates accounts on an offline
--- signer, where some never receive anything, so the gap of accounts is
--- the caller's. An account the wallet has already is passed over without
--- counting, and so is an index whose child key is invalid. After every
--- 'accountLimit' accounts found, the question is asked ('searchAccounts').
--- Returns the accounts found, with their keys.
-recoverableAccounts :: (MonadUnliftIO m) => Ctx -> Config -> Store -> AccountKind -> Network -> PublicSeed -> Natural -> Watcher (DB m) -> ExceptT String (DB m) [(Natural, XPubKey)]
-recoverableAccounts ctx cfg store kind net seed accountGap watch =
-  searchAccounts accountGap net (accountDeriv kind net) watch $ \index -> do
-    keyM <- liftIO $ seedAccountKey seed kind net index
-    case keyM of
-      Nothing -> return PassedOver
-      Just key -> do
-        held <- lift $ accountWithKey net ctx key
-        case held of
-          Just _ -> return PassedOver
-          Nothing -> do
-            paid <- (> 0) <$> scanChain ctx store kind key extDeriv (configGap cfg) 0 (seedAccountPlace net extDeriv (accountDeriv kind net index)) watch
-            return $ if paid then Paid (index, key) else Unpaid
+-- | What the search of recover reports when it reaches 'accountLimit':
+-- how many portfolios the store reports paid, and the last one
+reportedPortfolios :: Natural -> Natural -> String
+reportedPortfolios found index =
+  "The store reports payments to " <> show found <> " portfolios of the seed, as far as " <> cs (portfolioName index) <> "."
 
--- | The networks recover searches: the one --network names, or else
--- Bitcoin and Bitcoin Cash, in that order.
+-- | Whether a portfolio of a seed was ever paid, on any of the networks
+-- given, in any of its accounts there: the receiving chain of each is
+-- scanned for a used address within the gap, and the first one found
+-- settles it. The keys are those of the portfolio, by network and kind.
 --
--- The default-network of the configuration does not apply. A seed is
--- often paid on both networks, as every seed from before the fork of 2017
--- is, and the person restoring it may not know which. A search that took
--- the default would find half the funds and say nothing of the rest.
---
--- The test networks are left out unless named. Their coins have no value.
--- They all have coin type 1 and write tpub keys, and the wallet holds one
--- account per key, so a seed paid on two of them would get its account
--- on the first one searched alone. The public server does not serve all
--- of them either, and a search of every one would end most runs with
--- networks it could not search. A regtest chain never has a public server
--- at all.
-recoverNetworks :: Maybe Network -> [Network]
-recoverNetworks = maybe [btc, bch] pure
+-- A network whose store fails during a scan is not scanned any further,
+-- and the others are: it comes back with the failure of its store
+-- ('storeFailureApart'). A portfolio paid there alone is then not found.
+portfolioPaid :: (MonadIO m) => Ctx -> Config -> (Network -> Store) -> [Network] -> Natural -> [(Network, AccountKind, XPubKey)] -> Watcher m -> ExceptT String m (Bool, [(Network, String)])
+portfolioPaid ctx cfg storeOn networks index keys watch = go [(net, kind, key) | (net, kind, key) <- keys, net `elem` networks] []
+  where
+    go [] failed = return (False, reverse failed)
+    go ((net, kind, key) : others) failed = do
+      let place = seedAccountPlace net extDeriv (accountDeriv kind net index)
+      scanned <- storeFailureApart (storeOn net) $ \store -> scanChain ctx store kind key extDeriv (configGap cfg) 0 place watch
+      case scanned of
+        Left failure -> go [other | other@(otherNet, _, _) <- others, otherNet /= net] ((net, failure) : failed)
+        Right used
+          | used > 0 -> return (True, reverse failed)
+          | otherwise -> go others failed
 
--- | Recover the accounts of a seed on a network, of every kind the network
--- has, the BIP44 accounts first: those found paid are created, named as
--- 'recoveredNames' says, and synced, and every account of the seed records
--- its fingerprint. The gap of accounts counts for each kind apart. Returns
--- the sync of each account created, in the order of their kinds and
--- indices.
---
--- Every kind is searched before any account is created, so that the names
--- are known together: only the first account found takes the name of the
--- default account of the network.
-recoverSeed :: (MonadUnliftIO m) => Ctx -> Config -> Store -> Network -> PublicSeed -> Natural -> Watcher (DB m) -> ExceptT String (DB m) [SyncRes]
-recoverSeed ctx cfg store net seed accountGap watch = do
-  withDefault <- lift $ recoverTakesDefault net
-  found <- fmap concat . forM (networkKinds net) $ \kind -> do
-    paid <- recoverableAccounts ctx cfg store kind net seed accountGap watch
-    return [(kind, index, key) | (index, key) <- paid]
-  let names = recoveredNames withDefault net [(kind, index) | (kind, index, _) <- found]
-  created <- forM (zip names found) $ \(name, (kind, _, key)) ->
-    insertAccount kind net ctx name key (Just (seedFingerprint seed))
-  lift $ recordFingerprint ctx seed
-  forM created $ \(accId, _) -> sync ctx cfg store net accId False watch
+-- | What recover did with a seed
+data Recovered = Recovered
+  { -- | The wallet of the seed, when it has one now
+    recoveredWallet :: !(Maybe Natural),
+    -- | The indexes of the wallets of the seed merged into it
+    recoveredMerged :: ![Natural],
+    -- | The indexes of the portfolios recovered: those found paid that
+    -- the wallet did not have, which were created. The portfolio 0 a
+    -- wallet gets though it was never paid is not among them.
+    recoveredPortfolios :: ![Natural],
+    -- | How many accounts the portfolios the wallet had already were
+    -- filled in with
+    recoveredFilled :: !Natural,
+    -- | The sync of each pool of the wallet on the networks searched
+    recoveredSyncs :: ![SyncRes],
+    -- | The networks whose store failed during the search or the syncs,
+    -- each with the failure of its store: the search there ended with
+    -- it, and the syncs there were undone. The networks given that are
+    -- not among them were searched in full.
+    recoveredDown :: ![(Network, String)]
+  }
+  deriving (Eq, Show)
 
--- | Whether the first account recover creates on a network takes the name
--- of the default account, default: when the wallet has no account on the
--- network yet.
+-- | Recover the portfolios of a seed: those that were ever paid, on any of
+-- the networks given, are created whole, and synced on those networks.
 --
--- A recovered wallet of several accounts thus needs no --account on each
--- of its networks. An account the wallet has already on the network keeps
--- its place, as the only account there or as the default one the user
--- named. A recovered account named default would take over from it
--- without a word. Recovering a seed again, for the accounts created since,
--- would even make account 1 of the seed the default in place of account 0.
-recoverTakesDefault :: (MonadUnliftIO m) => Network -> DB m Bool
-recoverTakesDefault net = not . any (isOnNetwork net . snd) <$> getAccounts
-
--- | The names of the accounts recover creates on a network, from their
--- kinds and indices in the order found. With the flag of
--- 'recoverTakesDefault', the first one is named default, as the default
--- account of the network. Every other one is named after the network, its
--- index and its kind ('recoveredName').
+-- The search goes portfolio after portfolio from index 0, and ends after
+-- the given number of portfolios in a row where nothing was found. A
+-- portfolio is paid when any of its accounts was, of either kind, on any
+-- network searched: it is then created with every account, on every
+-- network, as newportfolio creates it. A portfolio the wallet has whole
+-- already is passed over without counting, and so is an index whose
+-- child key is invalid. After every 'accountLimit' portfolios found, the
+-- question is asked ('searchIndexes').
 --
--- The first account found is the bip44 account of the lowest index, or the
--- bip84 one of the lowest index when no bip44 account was paid.
-recoveredNames :: Bool -> Network -> [(AccountKind, Natural)] -> [Text]
-recoveredNames withDefault net found =
-  case [recoveredName kind net index | (kind, index) <- found] of
-    _ : rest | withDefault -> defaultAccountName : rest
-    names -> names
+-- The wallet of the seed is the one the database has for it, its wallets
+-- merged into one when hw 0.9 left several ('adoptSeed'), or a new one
+-- when a portfolio is found. The portfolios the wallet had are filled in
+-- from the seed, and it gets its portfolio 0 whether that one was paid
+-- or not: a wallet always has portfolio 0. A seed with no wallet and no
+-- paid portfolio leaves the database as it was.
+--
+-- A network that is not searched, because its store is down or the host
+-- does not serve it, is not among those given: a portfolio that was paid
+-- on that network alone is then not found. A network whose store fails
+-- during the search is searched no further, and the search goes on with
+-- the others. It is not synced, and the result names it with the failure
+-- of its store ('recoveredDown'). So is a network whose store fails
+-- during the syncs, whose syncs are undone ('syncEach').
+recoverSeed :: (MonadUnliftIO m) => Ctx -> Config -> (Network -> Store) -> [Network] -> PublicSeed -> Natural -> Watcher (DB m) -> ExceptT String (DB m) Recovered
+recoverSeed ctx cfg storeOn networks seed portfolioGap watch = do
+  -- The networks whose store failed so far in the search, with the failure
+  failedRef <- liftIO $ newIORef []
+  adopted <- adoptSeed ctx seed
+  let existing = adoptedWallet <$> adopted
+  held <- case existing of
+    Nothing -> return []
+    Just wallet -> lift $ walletPortfolios wallet
+  whole <- lift $ filterM (fmap not . isPartial . (.portfolioId)) held
+  let wholeIndexes = portfolioIndex . (.portfolioRow) <$> whole
+  found <- searchIndexes portfolioGap (tellPortfolioSearch watch.status) reportedPortfolios watch $ \index ->
+    if index `elem` wholeIndexes
+      then return PassedOver
+      else do
+        keysM <- liftIO $ seedPortfolioKeys seed index
+        case keysM of
+          Nothing -> return PassedOver
+          Just keys -> do
+            failedSoFar <- liftIO $ readIORef failedRef
+            let up = [net | net <- networks, net `notElem` (fst <$> failedSoFar)]
+            (paid, failed) <- portfolioPaid ctx cfg storeOn up index keys watch
+            liftIO $ modifyIORef' failedRef (<> failed)
+            return $ if paid then Paid index else Unpaid
+  failedInSearch <- liftIO $ readIORef failedRef
+  let searchedUp = [net | net <- networks, net `notElem` (fst <$> failedInSearch)]
+  if null found && isNothing existing
+    then return (Recovered Nothing [] [] 0 [] failedInSearch)
+    else do
+      wallet@(walletId, walletRow) <- maybe (lift (insertWallet (Just (seedFingerprint seed)))) return existing
+      -- The portfolios found that the wallet did not have. They are told
+      -- before the wallet gets its portfolio 0: a seed whose portfolio 0
+      -- alone was paid has recovered that portfolio, though it is made
+      -- with the wallet.
+      let created = [index | index <- found, index `notElem` (portfolioIndex . (.portfolioRow) <$> held)]
+      -- The portfolios the wallet had, and its portfolio 0, from the seed
+      filled <- fillWallet ctx seed wallet
+      forM_ created $ \index -> do
+        there <- lift $ portfolioAt walletId index
+        when (isNothing there) $ void $ createPortfolio ctx seed wallet index
+      portfolios <- lift $ walletPortfolios wallet
+      let pools = [portfolioPool portfolio net | portfolio <- portfolios, net <- searchedUp]
+      (syncs, failedInSyncs) <- syncEach ctx cfg storeOn pools False watch
+      return
+        Recovered
+          { recoveredWallet = Just (walletIndex walletRow),
+            recoveredMerged = maybe [] adoptedMerged adopted,
+            recoveredPortfolios = created,
+            recoveredFilled = if isNothing existing then 0 else filled,
+            recoveredSyncs = syncs,
+            recoveredDown = failedInSearch <> failedInSyncs
+          }
 
 -- | Where a chain of an account of the seed is, for the question of
 -- 'scanLimit': "on the receiving chain of the account /44'/0'/0' of the
@@ -301,18 +365,6 @@ recoveredNames withDefault net found =
 seedAccountPlace :: Network -> SoftPath -> HardPath -> String
 seedAccountPlace net chain path =
   "on the " <> (if chain == intDeriv then "change" else "receiving") <> " chain of the account " <> pathToStr path <> " of the seed on " <> net.name
-
--- | The name of a recovered account that is not the default one
--- ('recoveredNames'): the network and the index, as in btc0, for a BIP44
--- account, and with -segwit after them, as in btc0-segwit, for a BIP84 one.
--- importacc gives it to an account a file names not.
-recoveredName :: AccountKind -> Network -> Natural -> Text
-recoveredName kind net index = cs net.name <> cs (show index) <> suffix
-  where
-    suffix :: Text
-    suffix = case kind of
-      Bip44 -> Text.empty
-      Bip84 -> Text.pack "-segwit"
 
 {- The funds of a seed at accounts hw does not hold -}
 
@@ -365,9 +417,16 @@ foreignFunds ctx cfg store net seed accountGap watch =
 
 {- Synchronisation -}
 
+-- | What the sync of a pool did, and what the pool holds once synced
 data SyncRes = SyncRes
-  { syncResAccount :: !DBAccount,
-    -- | What the account can spend once synced ("Haskoin.Wallet.Database.Coin")
+  { -- | The portfolio and the network synced
+    syncResPlace :: !Place,
+    -- | What the pool holds, the balances of its accounts added up
+    syncResConfirmed :: !Word64,
+    syncResUnconfirmed :: !Word64,
+    -- | How many coins it holds
+    syncResCoins :: !Word64,
+    -- | What it can spend once synced ("Haskoin.Wallet.Database.Coin")
     syncResSpendable :: !Word64,
     syncResBlockHash :: !BlockHash,
     syncResBlockHeight :: !BlockHeight,
@@ -378,40 +437,103 @@ data SyncRes = SyncRes
     -- | Pending transactions a coin of which was spent by another
     -- transaction, or is gone
     syncResConflicted :: !Natural,
-    -- | Addresses found used past the ones the account had, and generated
+    -- | Addresses found used past the ones the accounts had, and generated
     syncResNewAddrs :: !Natural
   }
   deriving (Eq, Show)
 
--- | Sync the accounts, each with the store of its network. The store of
--- each network is first asked whether it is up. The accounts of a network
--- whose store is down are not synced, and the others are. One store out of
--- service then does not hold back the accounts of the other networks.
--- Returns the syncs, and the accounts not synced with the failure of their
--- store, both in the order of the accounts.
-syncAccounts :: (MonadUnliftIO m) => Ctx -> Config -> (Network -> Store) -> [(DBAccountId, DBAccount)] -> Bool -> Watcher (DB m) -> ExceptT String (DB m) ([SyncRes], [(DBAccount, String)])
-syncAccounts ctx cfg storeOn accs full watch = do
-  failures <- liftIO $ forM networks $ \net -> (,) net.name <$> healthFailure (storeOn net)
-  results <- forM accs $ \(accId, acc) -> do
-    let net = accountNetwork acc
-    case join (lookup net.name failures) of
-      Just failure -> return $ Left (acc, failure)
-      Nothing -> Right <$> sync ctx cfg (storeOn net) net accId full watch
-  let (notSynced, synced) = partitionEithers results
-  return (synced, notSynced)
+-- | What a sync over several networks did: the sync of each pool synced,
+-- the networks the host does not serve, and the networks whose store is
+-- down, each with the failure of its store
+data Synced = Synced
+  { syncedPools :: ![SyncRes],
+    syncedNotServed :: ![Network],
+    syncedDown :: ![(Network, String)]
+  }
+  deriving (Eq, Show)
+
+-- | Sync the pools, each with the store of its network. The store of each
+-- network is first asked whether it is up. The pools of a network the
+-- host does not serve, or whose store is down, are not synced, and the
+-- others are: one store out of service does not hold back the pools of
+-- the other networks. A command that syncs every network cannot do
+-- without this, since no host serves them all. A store that fails later,
+-- during the sync of a pool, leaves its network out from there: the sync
+-- of that pool is undone, the other pools of the network are not synced,
+-- and the syncs of the other networks stay ('syncEach'). Returns the
+-- syncs, in the order of the pools, and the networks left out, by why: a
+-- network whose store failed is named with its failure, after those that
+-- failed the first question. When no network can be synced at all, the
+-- sync fails ('requireSomeNetwork').
+syncPools :: (MonadUnliftIO m) => Ctx -> Config -> (Network -> Store) -> [Pool] -> Bool -> Watcher (DB m) -> ExceptT String (DB m) Synced
+syncPools ctx cfg storeOn pools full watch = do
+  served <- liftIO $ servedNetworks storeOn networks
+  unless (null pools) $ liftEither $ requireSomeNetwork (configHost cfg) served
+  (results, failed) <- syncEach ctx cfg storeOn [pool | pool <- pools, pool.poolNetwork `elem` servedUp served] full watch
+  return (Synced results (servedNot served) (servedDown served <> failed))
   where
     -- Network has no Ord instance, so the networks are told apart by name
-    networks = nubOrdOn (.name) (accountNetwork . snd <$> accs)
+    networks = nubOrdOn (.name) ((.poolNetwork) <$> pools)
 
--- | Bring an account up to date with the store.
+-- | Sync the pools in their order, each with the store of its network, and
+-- each in a savepoint of its own ('undoneIfRefused'). When the store of a
+-- network fails during the sync of a pool ('storeFailureApart'), the
+-- sync of that pool is undone alone, and the other pools of the network
+-- are not synced: the store is down. The syncs of the pools before stay,
+-- and the other networks go on. Any other failure fails the whole sync,
+-- as the user who answers no to a question means it to. Returns the
+-- syncs, and each network whose store failed with the failure, in the
+-- order they failed.
+syncEach :: (MonadUnliftIO m) => Ctx -> Config -> (Network -> Store) -> [Pool] -> Bool -> Watcher (DB m) -> ExceptT String (DB m) ([SyncRes], [(Network, String)])
+syncEach ctx cfg storeOn pools full watch = go pools [] []
+  where
+    go [] done failed = return (reverse done, reverse failed)
+    go (pool : rest) done failed
+      | pool.poolNetwork `elem` (fst <$> failed) = go rest done failed
+      | otherwise = do
+          outcome <- storeFailureApart (storeOn pool.poolNetwork) $ \store ->
+            undoneIfRefused (sync ctx cfg store pool full watch)
+          case outcome of
+            Right result -> go rest (result : done) failed
+            Left failure -> go rest done ((pool.poolNetwork, failure) : failed)
+
+-- | The label of a pool on the status line: its portfolio and its
+-- network, as "portfolio0 btc". The wallet is named when it is not
+-- wallet0, as "portfolio0 of wallet1 btc", as the lines of the answers
+-- name it: a sync goes over the portfolios of every wallet.
+poolLabel :: Place -> Text
+poolLabel place = portfolioOfPlace place <> " " <> cs (placeNetwork place).name
+
+-- | An account of a pool as the question of a scan names it: "the bip84
+-- account of portfolio0 on btc", the wallet named as 'poolLabel' names it
+accountPlaceName :: Place -> DBAccount -> String
+accountPlaceName place acc =
+  "the " <> cs (kindName (accountKind acc)) <> " account of " <> cs (portfolioOfPlace place) <> " on " <> (placeNetwork place).name
+
+-- | The portfolio of a place as a label names it: "portfolio0", or
+-- "portfolio0 of wallet1" for a wallet other than wallet0
+portfolioOfPlace :: Place -> Text
+portfolioOfPlace place =
+  portfolioName (refPortfolio ref) <> (if refWallet ref == 0 then "" else " of " <> walletName (refWallet ref))
+  where
+    ref = placePortfolio place
+
+-- | Bring a pool up to date with the store: the accounts of a portfolio
+-- on one network, together.
 --
--- Every sync first watches the gap of addresses past the ones the account
--- has: a used address found there is generated, with the ones before it,
--- and synced like the others. An incremental sync then looks only at the
--- addresses whose balance changed since the last sync, which is every
--- address a new, confirmed, replaced or dropped transaction touches.
+-- Every sync first watches the gap of addresses past the ones each
+-- account has: a used address found there is generated, with the ones
+-- before it, and synced like the others. An incremental sync then looks
+-- only at the addresses whose balance changed since the last sync, which
+-- is every address a new, confirmed, replaced or dropped transaction
+-- touches.
 --
--- When the chain may have moved under the account ('chainMayHaveMoved'),
+-- The summary of a transaction is made against the addresses of every
+-- account of the pool. A payment from a BIP44 address of the portfolio to
+-- a BIP84 one is then one internal transaction, and a payment that spends
+-- coins of both types is one debit.
+--
+-- When the chain may have moved under the pool ('chainMayHaveMoved'),
 -- the sync looks at every address, and also marks dead the summaries of
 -- transactions the store no longer lists. It still fetches only the
 -- transactions that moved: a reorganisation cannot change what a
@@ -428,60 +550,68 @@ syncAccounts ctx cfg storeOn accs full watch = do
 --
 -- The store must answer about the addresses and the transactions it is
 -- asked about, and no others: a store that lies gets no further than that,
--- and 'scanLimit' bounds what it can say of the addresses past the ones the
--- account has. Most steps reach the status line through the store
+-- and 'scanLimit' bounds what it can say of the addresses past the ones
+-- the accounts have. Most steps reach the status line through the store
 -- ("Haskoin.Wallet.SyncStatus").
-sync :: (MonadUnliftIO m) => Ctx -> Config -> Store -> Network -> DBAccountId -> Bool -> Watcher (DB m) -> ExceptT String (DB m) SyncRes
-sync ctx cfg plainStore net accId full watch = do
+sync :: (MonadUnliftIO m) => Ctx -> Config -> Store -> Pool -> Bool -> Watcher (DB m) -> ExceptT String (DB m) SyncRes
+sync ctx cfg plainStore pool full watch = do
+  let net = pool.poolNetwork
+  place <- poolPlace pool
+  accounts <- lift $ poolAccounts pool
   -- The questions to these stores tell the steps of the sync
-  tell <- watch.status . dBAccountName <$> getAccountById accId
-  let store = tellingStore tell plainStore
+  let tell = watch.status (poolLabel place)
+      store = tellingStore tell plainStore
   scanStore <- liftIO $ scanningStore tell plainStore
-  fromStore $ storeHealth store
+  fromStore $ checkHealth store
   -- The best block is taken before anything else, so that a block found
   -- during the sync is caught up with on the next one rather than missed
   best <- fromStore $ storeBestBlock store
   -- A full sync looks at everything anyway: only an incremental one asks
   -- whether the chain moved
-  everything <- if full then return True else chainMayHaveMoved store accId
-  found <- watchGap ctx cfg scanStore accId watch
-  -- The addresses of the account with their stored balances, and those the
+  everything <- if full then return True else chainMayHaveMoved store pool
+  found <- sum <$> forM accounts (\(accId, acc) -> watchGap ctx cfg scanStore (accountPlaceName place acc) accId watch)
+  -- The addresses of the pool with their stored balances, and those the
   -- store reports changed
-  (addrPaths, addrBals) <- allAddressesMap net accId
+  (addrPaths, addrBals) <- poolAddressesMap pool
   storeBals <- fromStore $ storeBalances store (Map.keys addrBals)
-  liftEither $ answeredAbout (Map.keys addrBals) storeBals
+  refusedAnswer store $ answeredAbout (Map.keys addrBals) storeBals
   let changedBals = if everything then storeBals else changedBalances storeBals addrBals
-  updateAddressBalances net accId changedBals
-  acc <- lift $ updateAccountBalances accId
+  -- Each account takes the balances of its own addresses
+  synced <- forM accounts $ \(accId, _) -> do
+    updateAddressBalances net accId changedBals
+    lift $ updateAccountBalances accId
   -- Their transactions, and the summaries to store or to mark dead
   listings <- listTxs cfg store net tell changedBals
   let listed = concatMap snd listings
   (toFetch, live) <-
     if full
-      then (,) (nubOrd ((.txid) <$> listed)) <$> liveTxids accId
+      then (,) (nubOrd ((.txid) <$> listed)) <$> liveTxids pool
       else do
-        known <- txInfoBlockRefs accId
-        untimed <- untimedSummaries accId
+        known <- txInfoBlockRefs pool
+        untimed <- untimedSummaries pool
         return (transactionsToFetch known untimed addrBals listings, Map.keysSet known)
   txs <- fromStore $ storeTransactions store toFetch
-  liftEither $ askedFor toFetch txs
-  liftEither $ mapM_ weighed txs
+  refusedAnswer store $ askedFor toFetch txs
+  refusedAnswer store $ mapM_ weighed txs
   updated <- lift $ forM (filter (not . (.deleted)) txs) $ \tx ->
-    repsertSummary net accId tx.txid tx.block (storeTime tx.timestamp) (storeSummary net addrPaths tx)
-  lift $ forM_ (deadTransactions everything live toFetch txs listed) $ markTxInfoDead accId
-  when full $ lift $ dropUnreadableDead net accId
+    repsertSummary pool tx.txid tx.block (storeTime tx.timestamp) (storeSummary net addrPaths tx)
+  lift $ forM_ (deadTransactions everything live toFetch txs listed) $ markTxInfoDead pool
+  when full $ lift $ dropUnreadableDead pool
   -- The coins, the pending transactions and the raw transactions
-  refreshed <- syncCoins ctx store net accId full changedBals
-  (resent, conflicted, retired) <- syncPending store accId (Set.fromList $ (.txid) <$> listed)
+  refreshed <- syncCoins ctx store pool full changedBals
+  (resent, conflicted, retired) <- syncPending store pool (Set.fromList $ (.txid) <$> listed)
   pruneRawTxs full refreshed retired
   lift $ do
     updateBest net (headerHash best.header) best.height best.header.timestamp
-    updateSyncedBlock accId (headerHash best.header) best.height
+    updateSyncedBlock pool (headerHash best.header) best.height
   -- After the best block, which matures the coins of a coinbase
-  spendable <- spendableBalance net accId
+  spendable <- spendableBalance pool
   return
     SyncRes
-      { syncResAccount = acc,
+      { syncResPlace = place,
+        syncResConfirmed = sum (dBAccountBalanceConfirmed <$> synced),
+        syncResUnconfirmed = sum (dBAccountBalanceUnconfirmed <$> synced),
+        syncResCoins = sum (dBAccountBalanceCoins <$> synced),
         syncResSpendable = spendable,
         syncResBlockHash = headerHash best.header,
         syncResBlockHeight = fromIntegral best.height,
@@ -492,18 +622,18 @@ sync ctx cfg plainStore net accId full watch = do
         syncResNewAddrs = found
       }
 
--- | Whether the chain may have moved under the account since its last
+-- | Whether the chain may have moved under the pool since its last
 -- sync: the block that sync reached is no longer in the main chain at its
 -- height. Balances alone do not show a reorganisation that leaves them
 -- unchanged while it moves transactions to other blocks, so the sync then
--- looks at every address. Each account asks about its own block: the first
+-- looks at every address. Each pool asks about its own block: the first
 -- one to see a reorganisation moves the best block of the network past it.
--- An account with no block may have moved too. It was never synced, which
+-- A pool with no block may have moved too. It was never synced, which
 -- makes every address new anyway, or it comes from a version of the
 -- database that kept no block.
-chainMayHaveMoved :: (MonadUnliftIO m) => Store -> DBAccountId -> ExceptT String (DB m) Bool
-chainMayHaveMoved store accId = do
-  syncedM <- syncedBlock accId
+chainMayHaveMoved :: (MonadUnliftIO m) => Store -> Pool -> ExceptT String (DB m) Bool
+chainMayHaveMoved store pool = do
+  syncedM <- syncedBlock pool
   case syncedM of
     Nothing -> return True
     Just synced -> do
@@ -562,8 +692,8 @@ listTxs cfg store net tell bals = do
   listings <- fromStore $ countedInParallel tell ListingTransactions (configParallelRequests cfg) [storeAddressTxs store bal.address (fromIntegral bal.txs) | bal <- used]
   forM (zip used listings) $ \(bal, refs) -> do
     when (fromIntegral (length refs) /= bal.txs) $
-      throwError $
-        "The store counts " <> show bal.txs <> " transactions for " <> addrToString net bal.address <> " but listed " <> show (length refs)
+      refusedAnswer store $
+        Left ("The store counts " <> show bal.txs <> " transactions for " <> addrToString net bal.address <> " but listed " <> show (length refs))
     return (bal, refs)
 
 {- The summaries -}
@@ -605,28 +735,36 @@ deadTransactions everything live fetched txs listed = nubOrd $ gone <> vanished
 
 {- The coins and their raw transactions -}
 
--- | The coins of the changed addresses, all of them, which the store must
--- list as many of as it counts, and the raw transactions they come from,
--- which signing needs. A raw transaction never changes, so the ones already
--- stored are not fetched again. A full sync checks them instead, and
--- fetches those that went wrong in the database. The raw transactions are
--- stored first, and a coin they do not pay as the store reports it is
--- refused before any coin is stored ('checkListedCoins'): its value is
--- what the builders count on.
-syncCoins :: (MonadUnliftIO m) => Ctx -> Store -> Network -> DBAccountId -> Bool -> [Store.Balance] -> ExceptT String (DB m) Refreshed
-syncCoins ctx store net accId full changedBals = do
-  let changedAddrs = (.address) <$> changedBals
+-- | The coins of the changed addresses of a pool, all of them, which the
+-- store must list as many of as it counts, and the raw transactions they
+-- come from, which signing needs. A raw transaction never changes, so the
+-- ones already stored are not fetched again. A full sync checks them
+-- instead, and fetches those that went wrong in the database. The raw
+-- transactions are stored first, and a coin they do not pay as the store
+-- reports it is refused before any coin is stored ('checkListedCoins'):
+-- its value is what the builders count on. Each account of the pool then
+-- takes the coins at its own addresses.
+syncCoins :: (MonadUnliftIO m) => Ctx -> Store -> Pool -> Bool -> [Store.Balance] -> ExceptT String (DB m) Refreshed
+syncCoins ctx store pool full changedBals = do
+  let net = pool.poolNetwork
+      changedAddrs = (.address) <$> changedBals
       counted = sum $ (.utxo) <$> changedBals
   unspents <- fromStore $ storeUnspents store changedAddrs
   when (fromIntegral (length unspents) /= counted) $
-    throwError $
-      "The store counts " <> show counted <> " coins for the addresses to update but listed " <> show (length unspents)
+    refusedAnswer store $
+      Left ("The store counts " <> show counted <> " coins for the addresses to update but listed " <> show (length unspents))
   let parents = nubOrd $ (.outpoint.hash) <$> unspents
   wanted <- lift $ if full then unsoundRawTxs parents else missingRawTxs parents
-  rawTxs <- fromStore $ rawTransactions store wanted
+  rawTxs <- answeredBy store $ fromStore $ rawTransactions store wanted
   lift $ forM_ rawTxs insertRawTx
-  checkListedCoins unspents
-  refreshCoins net ctx accId changedAddrs unspents
+  refusedAnswer store =<< checkListedCoins unspents
+  accounts <- lift $ poolAccounts pool
+  fmap mconcat . forM accounts $ \(accId, acc) -> do
+    own <- lift $ storedAmong changedAddrs (accId, acc)
+    ownAddrs <- liftEither $ mapM (textToAddrE net . dBAddressAddress) own
+    -- A set, as a first sync looks at thousands of addresses
+    let ownSet = Set.fromList ownAddrs
+    refreshCoins net ctx accId ownAddrs [coin | coin <- unspents, maybe False (`Set.member` ownSet) coin.address]
 
 -- | Drop the raw transactions no coin needs any more. A raw transaction is
 -- kept while a coin comes from it: the parents of the coins that are gone
@@ -643,7 +781,7 @@ pruneRawTxs full refreshed retired
 
 {- The pending transactions -}
 
--- | The pending transactions of the account after a sync, given the
+-- | The pending transactions of the pool after a sync, given the
 -- transactions the store listed. A signed one the store lists has reached
 -- the network and is retired, and so is one the network has under another
 -- id ('recordStanding'). Each takes its label to the id the network has it
@@ -654,9 +792,9 @@ pruneRawTxs full refreshed retired
 -- and the store may never have accepted it. A signed one the user has not
 -- sent is left alone. Returns how many were sent again, how many conflict,
 -- and the ids of those retired.
-syncPending :: (MonadUnliftIO m) => Store -> DBAccountId -> Set TxHash -> ExceptT String (DB m) (Natural, Natural, [TxHash])
-syncPending store accId seen = do
-  held <- pendingTxs accId
+syncPending :: (MonadUnliftIO m) => Store -> Pool -> Set TxHash -> ExceptT String (DB m) (Natural, Natural, [TxHash])
+syncPending store pool seen = do
+  held <- pendingTxs pool
   let (listed, waiting) = partition reached held
   (elsewhere, conflicted) <- recordStanding store waiting
   let done = [(p, txHash (txOf p)) | p <- listed] <> elsewhere

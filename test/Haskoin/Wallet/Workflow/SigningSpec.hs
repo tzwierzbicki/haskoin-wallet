@@ -1,16 +1,15 @@
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | A payment signed by signtx and sent by broadcast, on the same computer
--- or offline: the --input and --output files, what the signing commands
--- refuse before they ask for the mnemonic, and the question broadcast asks
--- before it sends.
+-- or offline: the --input and --output files, the portfolio a file is of,
+-- a transfer between two portfolios, what the signing commands refuse
+-- before they ask for the mnemonic, and the question broadcast asks before
+-- it sends.
 module Haskoin.Wallet.Workflow.SigningSpec (spec) where
 
-import Control.Monad (forM_, void)
+import Control.Monad (forM_)
 import Data.Char (isHexDigit)
-import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Base64 as Base64
 import qualified Data.Serialize as S
@@ -21,10 +20,9 @@ import qualified Data.Text as Text
 import Data.Word (Word64)
 import Haskoin
 import Haskoin.Wallet.Cli.Response (Response (..))
-import Haskoin.Wallet.Database (DBAccount (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.HwTestUtils
-import Haskoin.Wallet.Keys (AccountKind (..), keyAddress)
+import Haskoin.Wallet.Keys (AccountKind (..), keyAddress, legacyPath)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData (..), isSigned, noLabel)
 import Haskoin.Wallet.Workflow.TestUtils
@@ -43,14 +41,12 @@ spec = prepareContext $ \ctx -> do
 
 {- Signing -}
 
--- | Import the account main of the test wallet in a home, from a document
--- without the fingerprint of its seed, as hw wrote them before it recorded
--- fingerprints
-importWithoutFingerprint :: FilePath -> IO ()
-importWithoutFingerprint home = do
-  Json.encodeFile (home </> "main.json") $
-    Json.object ["xpubkey" Json..= testAccountXPub, "network" Json..= ("btc" :: Text), "name" Json..= ("main" :: Text)]
-  void $ answer home ["importacc", home </> "main.json"] []
+-- | A home whose database is the one hw 0.9 left with the account main of
+-- the test wallet ('version3Main'): the first command upgrades it into
+-- wallet0, which does not know the fingerprint of its mnemonic, with a
+-- partial portfolio0 that holds that account alone
+withUpgradedMain :: FilePath -> IO ()
+withUpgradedMain home = version3Main (home </> ".hw" </> "accounts.sqlite")
 
 -- | What the payment of 20000 satoshis spends and pays, as the store sees
 -- it once sent: the coin of the payment to the wallet, and 27740 of change
@@ -59,11 +55,11 @@ paymentSent ctx = ([OutPoint (txHash (payment ctx)) 0], [(20000, Right (otherAdd
 
 -- | What deletetx answers: the nosigHash and the txid of the transaction
 -- deleted, as typed, and how many coins and change addresses it freed
-deletedOf :: Response -> Either String (String, Maybe String, Natural, Natural)
-deletedOf (ResponseDeleteTx nosigH txidM coins addrs) = Right (hex nosigH, hex <$> txidM, coins, addrs)
+deletedTxOf :: Response -> Either String (String, Maybe String, Natural, Natural)
+deletedTxOf (ResponseDeleteTx nosigH txidM coins addrs) = Right (hex nosigH, hex <$> txidM, coins, addrs)
   where
     hex = Text.unpack . txHashToHex
-deletedOf other = Left (show other)
+deletedTxOf other = Left (show other)
 
 -- 20000 satoshis are paid at 10 satoshis a byte: the transaction of one
 -- input and two outputs is 226 bytes, so the fee is 2260, and the change
@@ -84,7 +80,7 @@ signingSpec ctx = do
         published <- inMempool <$> readIORef chain
         (spendsAndPays ctx <$> published) `shouldBe` [paymentSent ctx]
         modifyIORef chain mine
-        (accountsOf <$> hwJson home ["sync"] []) `shouldReturn` Right [("main", 0, 27740)]
+        (spendableOn btc <$> hwJson home ["sync"] []) `shouldReturn` Right [(mainPortfolioRef, 27740)]
 
     -- The answer of broadcast reads as once sent: what the wallet holds tells
     -- whether it marked the transaction online
@@ -131,7 +127,7 @@ signingSpec ctx = do
       withChain ctx (paidChain ctx) $ \home _ -> do
         nosig <- paymentSigned home
         txid <- txidOf =<< onePendingTx home
-        (deletedOf <$> hwJson home ["deletetx", txid] []) `shouldReturn` Right (nosig, Just txid, 1, 1)
+        (deletedTxOf <$> hwJson home ["deletetx", txid] []) `shouldReturn` Right (nosig, Just txid, 1, 1)
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
 
     -- As pendingtxs showed it, even when named by its nosigHash
@@ -156,53 +152,43 @@ signingSpec ctx = do
         run <- hw home ["deletetx", nosig] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  Freed    : 1 coin, 1 change address\n"
 
-    -- The chain pays the first address of the account of the backup on
-    -- testnet, and the account pays 20000 to another wallet
+    -- The chain pays the first address of the bip44 account of portfolio0
+    -- of the backup on testnet, and the portfolio pays 20000 to another
+    -- wallet there
     it "is signed from the shares of a backup, typed in place of the mnemonic" $
       withChain ctx (chainPaying ctx sharesTestnetAddr) $ \home _ -> do
-        _ <- answer home ["createacc", "vault", "--network", "btctest"] sharesForNew
-        _ <- answer home ["receive"] []
+        _ <- answer home ["newportfolio", "--existing"] sharesForNew
+        _ <- answer home ["receive", "--network", "btctest"] []
         _ <- answer home ["sync"] []
         let recipient = maybe (error "recipient") Text.unpack (addrToText btcTest (otherAddr 0))
-        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", recipient <> ":0.0002", "--fee-rate", "10"] []
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", recipient <> ":0.0002", "--network", "btctest", "--fee-rate", "10"] []
         signed <- txOf =<< answer home ["signtx", nosig] sharesOnce
         pendingState signed `shouldBe` Just (True, False)
 
-    -- The wallet has two accounts of the test seed, and the payment is
-    -- pending in main. Without --account, hw asked which account to use.
-    it "is signed by the account that holds it, without --account" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
-        synced home
-        _ <- answer home ["createacc", "second"] seedTwice
-        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--account", "main", "--fee-rate", "10"] []
-        signed <- txOf =<< answer home ["signtx", nosig] seedOnce
-        pendingState signed `shouldBe` Just (True, False)
+    -- The wallet has portfolio0 and portfolio1 of the test seed, and the
+    -- payment is pending in portfolio1, which the chain pays alone; the
+    -- default portfolio is portfolio0
+    it "is signed in the portfolio that holds it, without --portfolio" $
+      withChain ctx (chainPaying ctx account1Addr) $ \home _ -> do
+        syncedTwoPortfolios home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--portfolio", "1", "--fee-rate", "10"] []
+        signed <- answer home ["signtx", nosig] seedOnce
+        placeOf signed `shouldBe` Right portfolio1Place
+        pendingState <$> txOf signed `shouldReturn` Just (True, False)
 
-    -- The mnemonic of second would be typed for nothing: its key cannot
-    -- sign what main holds
-    it "is refused an --account that does not hold it, before the mnemonic is asked" $
+    -- The mnemonic would be typed for nothing: the keys of portfolio1
+    -- cannot sign what portfolio0 holds
+    it "is refused a --portfolio that does not hold it, before the mnemonic is asked" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        _ <- answer home ["createacc", "second"] seedTwice
-        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--account", "main", "--fee-rate", "10"] []
-        run <- hw home ["signtx", nosig, "--account", "second"] seedOnce
-        run `shouldSatisfy` printed "The transaction is pending in the account main, not in second"
+        newTestPortfolio home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        run <- hw home ["signtx", nosig, "--portfolio", "1"] seedOnce
+        run `shouldSatisfy` printed "The transaction is pending in portfolio0 of wallet0 on btc, not in portfolio1 of wallet0"
         run `shouldNotSatisfy` askedMnemonic
 
-    -- The account came from a document without the fingerprint of its
-    -- seed, which signtx records. The answer read the account before, and
-    -- showed none.
-    it "shows the account with the seed signtx recorded" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
-        importWithoutFingerprint home
-        _ <- answer home ["receive"] []
-        _ <- answer home ["sync"] []
-        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
-        (fmap dBAccountFingerprint . accountOf <$> hwJson home ["signtx", nosig] seedOnce)
-          `shouldReturn` Right (Just "bc560f95")
-
-  -- The signer holds the account and asks for its mnemonic; the online
-  -- computer holds the same account, imported, and talks to the store
+  -- The signer holds the portfolio and asks for its mnemonic; the online
+  -- computer holds the same portfolio, imported, and talks to the store
   describe "A payment signed offline" $ do
     it "is prepared online, signed offline, sent online, and confirmed by a sync" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online chain -> do
@@ -219,7 +205,7 @@ signingSpec ctx = do
         published <- inMempool <$> readIORef chain
         (spendsAndPays ctx <$> published) `shouldBe` [paymentSent ctx]
         modifyIORef chain mine
-        (accountsOf <$> hwJson online ["sync"] []) `shouldReturn` Right [("main", 0, 27740)]
+        (spendableOn btc <$> hwJson online ["sync"] []) `shouldReturn` Right [(mainPortfolioRef, 27740)]
         (txsOf <$> hwJson online ["pendingtxs"] []) `shouldReturn` Right []
         (txsOf <$> hwJson online ["txs"] []) `shouldReturn` Right [(TxDebit, -22260, Just 1), (TxCredit, 50000, Just 4)]
         (addressesOf <$> hwJson online ["addresses", "--change"] []) `shouldReturn` Right [(internalAddrsText !! 0, "")]
@@ -241,21 +227,23 @@ signingSpec ctx = do
         published <- inMempool <$> readIORef chain
         (spendsAndPays ctx <$> published) `shouldBe` [paymentSent ctx]
 
-    -- Both computers have a second account of the test wallet. The file
-    -- names neither the account nor main, the account of the payment: the
-    -- keys of main derive the addresses it spends, and the online wallet
-    -- holds it pending.
-    it "is shown, signed and imported back without --account, by wallets of several accounts" $
-      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
-        signerAndOnline signer online
-        _ <- answer signer ["createacc", "second"] seedTwice
-        _ <- answer signer ["exportacc", "--account", "second", signer </> "second.json"] []
-        _ <- answer online ["importacc", signer </> "second.json"] []
-        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--account", "main", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
-        (fmap dBAccountName . accountOf <$> hwJson signer ["show", online </> "unsigned.psbt"] []) `shouldReturn` Right "main"
+    -- Both computers have portfolio0 and portfolio1 of the test wallet, and
+    -- the payment is of portfolio1, which the chain pays alone. The file
+    -- names no portfolio: the keys of portfolio1 derive the addresses it
+    -- spends, and the online wallet holds it pending.
+    it "is shown, signed and imported back without --portfolio, by wallets of several portfolios" $
+      withHome $ \signer -> withChain ctx (chainPaying ctx account1Addr) $ \online _ -> do
+        newTestPortfolio signer
+        newTestPortfolio signer
+        _ <- answer signer ["exportwallet", signer </> "wallet.jsonl"] []
+        _ <- answer online ["importwallet", signer </> "wallet.jsonl"] []
+        _ <- answer online ["receive", "--portfolio", "1"] []
+        _ <- answer online ["sync"] []
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--portfolio", "1", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        (placeOf <$> hwJson signer ["show", online </> "unsigned.psbt"] []) `shouldReturn` Right portfolio1Place
         signed <- txOf =<< answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
         pendingState signed `shouldBe` Just (True, False)
-        (fmap dBAccountName . accountOf <$> hwJson online ["importtx", signer </> "signed.psbt"] []) `shouldReturn` Right "main"
+        (placeOf <$> hwJson online ["importtx", signer </> "signed.psbt"] []) `shouldReturn` Right portfolio1Place
 
     -- The signer has no coins: the file carries the transactions the
     -- payment spends, and the paths of the change
@@ -278,80 +266,155 @@ signingSpec ctx = do
         _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
         _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
         reviewed <- hwJson signer ["show", signer </> "signed.psbt"] []
-        (dBAccountName <$> accountOf reviewed) `shouldBe` Right "main"
+        placeOf reviewed `shouldBe` Right mainPlace
         shown <- txOf reviewed
         pendingState shown `shouldBe` Just (True, False)
-        -- 20000 paid and 2260 of fee leave the account
+        -- 20000 paid and 2260 of fee leave the portfolio
         txRow shown `shouldBe` (TxDebit, -22260, Nothing)
         spentFromWallet shown `shouldBe` Map.fromList [(externalAddr 0, 50000)]
         paidToOthers shown `shouldBe` Map.fromList [(otherAddr 0, 20000)]
         paidToWallet shown `shouldBe` Map.fromList [(internalAddr 0, 27740)]
 
     -- A payment of every coin has no change, so no output of the file
-    -- names the account either: the path of the address spent from is all
+    -- names the portfolio either: the path of the address spent from is all
     -- that does. One input and one output are 192 bytes, so the fee is
     -- 1920, and 50000 - 1920 = 48080 are paid.
-    it "of every coin of the account is shown again from its file on the signer once signed, as spent from its account" $
+    it "of every coin of the portfolio is shown again from its file on the signer once signed, as spent from its portfolio" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         signerAndOnline signer online
         _ <- answer online ["preparesendall", textOf (otherAddr 0), "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
         _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
         reviewed <- hwJson signer ["show", signer </> "signed.psbt"] []
-        (dBAccountName <$> accountOf reviewed) `shouldBe` Right "main"
+        placeOf reviewed `shouldBe` Right mainPlace
         shown <- txOf reviewed
         txRow shown `shouldBe` (TxDebit, -50000, Nothing)
         spentFromWallet shown `shouldBe` Map.fromList [(externalAddr 0, 50000)]
         paidToOthers shown `shouldBe` Map.fromList [(otherAddr 0, 48080)]
 
-    -- The payment is from main
-    it "is shown from its file with the name of its account" $
+    -- The payment is from the bip44 account of portfolio0 on btc
+    it "is shown from its file with its portfolio, its network and the types it involves" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
         run <- hw home ["show", home </> "payment.psbt"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  Account  : main\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  Portfolio: portfolio0\n  Network  : btc\n  Types    : bip44\n"
 
-    -- The payment is from main
-    it "is refused by show and importtx for an --account the transaction does not involve" $
+    -- The payment is from portfolio0
+    it "is refused by show and importtx for a --portfolio the transaction does not involve" $
       withHome $ \home -> do
-        createMain home
-        _ <- answer home ["createacc", "second"] seedTwice
+        newTestPortfolio home
+        newTestPortfolio home
         writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
         forM_ ["show", "importtx"] $ \command ->
-          (errorOf <$> hwJson home [command, home </> "payment.psbt", "--account", "second"] [])
-            `shouldReturn` Right "The transaction does not involve the account second"
+          (errorOf <$> hwJson home [command, home </> "payment.psbt", "--portfolio", "1"] [])
+            `shouldReturn` Right "The transaction does not involve portfolio1 of wallet0"
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
 
-    -- The online wallet has the account from a document without the
-    -- fingerprint of its seed. bc560f95 is the fingerprint of the test seed.
-    it "names the seed in the signed file, which the online wallet learns as it sends it" $
+    -- The online computer has portfolio0 from an upgrade of hw 0.9, which
+    -- does not know the fingerprint of the mnemonic. The signer writes the
+    -- fingerprint of the test seed into the file it signs. A wallet learns
+    -- its fingerprint from its mnemonic or from a file of the wallet, not
+    -- from a transaction file.
+    it "leaves the online wallet without a fingerprint, which a file the signer signed does not give it" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
-        createMain signer
-        importWithoutFingerprint online
+        newTestPortfolio signer
+        withUpgradedMain online
         _ <- answer online ["receive"] []
         _ <- answer online ["sync"] []
-        (fingerprintsOf <$> hwJson online ["accounts"] []) `shouldReturn` Right [("main", Nothing)]
         _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
         _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
         _ <- answer online ["broadcast", "--input", signer </> "signed.psbt", "--yes"] []
-        (fingerprintsOf <$> hwJson online ["accounts"] []) `shouldReturn` Right [("main", Just "bc560f95")]
+        (fingerprintsOf <$> hwJson online ["portfolios"] []) `shouldReturn` Right [(mainPortfolioRef, Nothing)]
 
     -- A hardware wallet signs only the records that name its own seed
-    it "says when it writes a file that names the keys without the seed's fingerprint, and no more once it has learnt it" $
-      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
-        createMain signer
-        importWithoutFingerprint online
+    it "says when it writes a file that names the keys without the fingerprint of the mnemonic, as an upgraded wallet does" $
+      withChain ctx (paidChain ctx) $ \online _ -> do
+        withUpgradedMain online
         _ <- answer online ["receive"] []
         _ <- answer online ["sync"] []
         prepared <- hw online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
         runExit prepared `shouldBe` ExitSuccess
-        runErr prepared `shouldSatisfy` Text.isInfixOf "The wallet does not know the fingerprint of the seed, so the file names the keys by the account's own key, which a hardware wallet does not sign. The wallet learns the fingerprint when signtx or signmsg signs with the seed, when importtx or broadcast takes a file signtx signed, or when importacc gives the origin of the account."
-        _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
-        imported <- txOf =<< answer online ["importtx", signer </> "signed.psbt"] []
-        nosig <- nosigOf imported
-        exported <- hw online ["exporttx", nosig, online </> "exported.psbt"] []
-        runExit exported `shouldBe` ExitSuccess
-        runErr exported `shouldBe` ""
+        runErr prepared `shouldSatisfy` Text.isInfixOf "The wallet does not know the fingerprint of its mnemonic, so the file names the keys by the account's own key, which a hardware wallet does not sign. The wallet learns the fingerprint from fillwallet, or from importwallet with a file of the computer that has the mnemonic."
+
+    it "says nothing of the fingerprint once importwallet took it from a file of the signer" $
+      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+        newTestPortfolio signer
+        withUpgradedMain online
+        _ <- answer online ["receive"] []
+        _ <- answer online ["sync"] []
+        _ <- answer signer ["exportwallet", signer </> "wallet.jsonl"] []
+        _ <- answer online ["importwallet", signer </> "wallet.jsonl"] []
+        prepared <- hw online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        runExit prepared `shouldBe` ExitSuccess
+        runErr prepared `shouldNotSatisfy` Text.isInfixOf "fingerprint"
+
+  -- portfolio0 pays 20000 of its coin of 50000 to the first receiving
+  -- address of portfolio1, 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo, with 2260 of
+  -- fee. The online computer prepares it. The signer holds both
+  -- portfolios, and not the payment, and handed out the address of
+  -- portfolio1 the payment pays: a database knows an address of its
+  -- portfolios once it has handed it out.
+  describe "A transfer between two portfolios, in its file" $ do
+    let transferFile online = do
+          syncedTwoPortfolios online
+          _ <- answer online ["preparetx", fixedTo account1Addr "0.0002", "--output", online </> "transfer.psbt", "--fee-rate", "10"] []
+          return (online </> "transfer.psbt")
+        twoPortfoliosSigner signer = do
+          newTestPortfolio signer
+          newTestPortfolio signer
+          _ <- answer signer ["receive", "--portfolio", "1"] []
+          return ()
+        -- The online computer deletes the transfer it holds pending, and
+        -- holds its coin again: importtx then finds the portfolio of the
+        -- file by itself
+        deletedTransfer online = do
+          file <- transferFile online
+          nosig <- nosigOf =<< onePendingTx online
+          _ <- answer online ["deletetx", nosig] []
+          return file
+    it "is imported by importtx into the portfolio that pays it" $
+      withChain ctx (paidChain ctx) $ \online _ -> do
+        file <- deletedTransfer online
+        (placeOf <$> hwJson online ["importtx", file] []) `shouldReturn` Right mainPlace
+
+    it "is refused by importtx with --portfolio of the portfolio it pays, naming the portfolio that pays it" $
+      withChain ctx (paidChain ctx) $ \online _ -> do
+        file <- deletedTransfer online
+        (errorOf <$> hwJson online ["importtx", file, "--portfolio", "1"] [])
+          `shouldReturn` Right "The transaction spends from portfolio0 of wallet0, the portfolio that pays it: it is kept pending there, and signed there"
+        (txsOf <$> hwJson online ["pendingtxs"] []) `shouldReturn` Right []
+        (txsOf <$> hwJson online ["pendingtxs", "--portfolio", "1"] []) `shouldReturn` Right []
+
+    it "is signed by the portfolio that pays it, without --portfolio" $
+      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+        file <- transferFile online
+        twoPortfoliosSigner signer
+        signed <- answer signer ["signtx", "--input", file, "--output", signer </> "signed.psbt"] seedOnce
+        placeOf signed `shouldBe` Right mainPlace
+        pendingState <$> txOf signed `shouldReturn` Just (True, False)
+
+    -- The mnemonic would be typed for nothing
+    it "is refused by signtx with --portfolio of the portfolio it pays, before the mnemonic is asked" $
+      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+        file <- transferFile online
+        twoPortfoliosSigner signer
+        run <- hw signer ["signtx", "--input", file, "--output", signer </> "signed.psbt", "--portfolio", "1"] seedOnce
+        run `shouldSatisfy` printed "The transaction spends from portfolio0 of wallet0, the portfolio that pays it: it is kept pending there, and signed there"
+        run `shouldNotSatisfy` askedMnemonic
+
+  -- The online computer holds portfolio0 and portfolio1, and the payment
+  -- is of portfolio1, which the chain pays alone. The signer holds
+  -- portfolio0 alone.
+  describe "A payment signed offline by a signer that lacks its portfolio" $
+    it "is refused before the mnemonic is asked, with how to add the portfolio" $
+      withHome $ \signer -> withChain ctx (chainPaying ctx account1Addr) $ \online _ -> do
+        syncedTwoPortfolios online
+        newTestPortfolio signer
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--portfolio", "1", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        run <- hw signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
+        run
+          `shouldSatisfy` printedSentence "The transaction does not involve this wallet. It may be of a portfolio this database does not have yet: newportfolio --existing adds the next portfolio of a mnemonic, and importwallet the portfolios of a file"
+        run `shouldNotSatisfy` askedMnemonic
 
 {- The files of other wallets -}
 
@@ -362,6 +425,11 @@ coreFile home name = do
   copyFile ("test/data/psbt/core" </> name) (home </> name)
   return (home </> name)
 
+-- | The network show shows a transaction outside the wallet on
+outsideNetworkOf :: Response -> Either String String
+outsideNetworkOf (ResponseOutsideTx net _) = Right net.name
+outsideNetworkOf other = Left (show other)
+
 -- | The files of other wallets, and the forms a file takes: base64 text,
 -- and the transaction alone in hexadecimal
 foreignFileSpec :: Ctx -> Spec
@@ -370,9 +438,9 @@ foreignFileSpec ctx =
     -- Core prepared 1 BTC from the coin of 50 BTC of /0/0 to another
     -- wallet, with the change at /1/0 and a fee of 2250. The signed file
     -- is the one Core accepts, pinned in TestUtils.
-    it "prepared by Bitcoin Core for the account is shown, and signed into that file, which is base64 text as Core gives it" $
+    it "prepared by Bitcoin Core for the portfolio is shown, and signed into that file, which is base64 text as Core gives it" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         prepared <- coreFile home "core-prepared.psbt"
         shown <- txOf =<< answer home ["show", prepared] []
         pendingState shown `shouldBe` Just (False, False)
@@ -386,9 +454,9 @@ foreignFileSpec ctx =
     -- Core's file has no field of hw. The wallet never handed out the
     -- address the payment spends from: signtx writes its path into the
     -- file it signs, which the wallet then follows.
-    it "prepared by Bitcoin Core and signed by hw is shown again as the payment of the account, by a wallet that never handed out its address" $
+    it "prepared by Bitcoin Core and signed by hw is shown again as the payment of the portfolio, by a wallet that never handed out its address" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         prepared <- coreFile home "core-prepared.psbt"
         _ <- answer home ["signtx", "--input", prepared, "--output", home </> "signed.psbt"] seedOnce
         shown <- txOf =<< answer home ["show", home </> "signed.psbt"] []
@@ -403,7 +471,7 @@ foreignFileSpec ctx =
     -- in TestUtils.
     it "prepared by Bitcoin Core as a PSBT of version 2 is shown and signed the same, into a file of version 2" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         prepared <- coreFile home "core-prepared-v2.psbt"
         shown <- txOf =<< answer home ["show", prepared] []
         paidToOthers shown `shouldBe` Map.fromList [(testAddress "1GfJmWwG2JUjrvQ6WjVfwaWpPgtbHDhSdE", 100000000)]
@@ -419,7 +487,7 @@ foreignFileSpec ctx =
     -- Core accepts, pinned in TestUtils.
     it "prepared by Bitcoin Core for a bip84 account is shown and signed into that file, the signature in the witness" $
       withHome $ \home -> do
-        _ <- answer home ["createacc", "spending", "--type", "bip84"] seedTwice
+        newTestPortfolio home
         prepared <- coreFile home "core-prepared-segwit.psbt"
         shown <- txOf =<< answer home ["show", prepared] []
         paidToOthers shown `shouldBe` Map.fromList [(testAddress "157L9V7wdL7pYt2nndN5NN5DMynh1HdYhF", 100000000)]
@@ -431,13 +499,10 @@ foreignFileSpec ctx =
 
     -- Core prepared 2.5 BTC of a wallet of its own to another address of
     -- that wallet, with a fee of 2250
-    it "prepared by Bitcoin Core for another wallet is shown on the --network given, or on the default network, and refused without one" $
+    it "prepared by Bitcoin Core for another wallet is shown outside the wallet on the --network given" $
       withHome $ \home -> do
-        createMain home
-        setDefaultNetwork home Nothing
+        newTestPortfolio home
         outside <- coreFile home "core-outside.psbt"
-        (errorOf <$> hwJson home ["show", outside] [])
-          `shouldReturn` Right "The file names no network, as a file of another wallet does, and involves no account of this wallet: give the --network, or a default-network in the configuration file"
         shown <- hwJson home ["show", outside, "--network", "btc"] []
         case shown of
           ResponseOutsideTx net info -> do
@@ -445,11 +510,22 @@ foreignFileSpec ctx =
             feeOf info `shouldBe` 2250
             paidToOthers info `shouldBe` Map.fromList [(testAddress "13tJFzYnF13gRMh6Z6eb44mLD9e9R8sHeZ", 250000000), (testAddress "1588dPBmgVnvS2N3BE5YHXUqXcb468zpsz", 4749997750)]
           other -> expectationFailure ("Not a transaction outside the wallet: " <> show other)
-        setDefaultNetwork home (Just "btc")
-        byDefault <- hwJson home ["show", outside] []
-        case byDefault of
-          ResponseOutsideTx net _ -> net.name `shouldBe` "btc"
-          other -> expectationFailure ("Not a transaction outside the wallet: " <> show other)
+
+    -- The file names no network, as a file of another wallet does
+    it "prepared by Bitcoin Core for another wallet is shown on the default network of the configuration file without --network" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        setDefaultNetwork home (Just "bch")
+        outside <- coreFile home "core-outside.psbt"
+        (outsideNetworkOf <$> hwJson home ["show", outside] []) `shouldReturn` Right "bch"
+
+    -- btc is the default network when the configuration file names none
+    it "prepared by Bitcoin Core for another wallet is shown on btc when the configuration file names no default network" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        setDefaultNetwork home Nothing
+        outside <- coreFile home "core-outside.psbt"
+        (outsideNetworkOf <$> hwJson home ["show", outside] []) `shouldReturn` Right "btc"
 
     it "written by hw names its network, which --network may only repeat" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -457,7 +533,7 @@ foreignFileSpec ctx =
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", home </> "unsigned.psbt", "--fee-rate", "10"] []
         (errorOf <$> hwJson home ["show", home </> "unsigned.psbt", "--network", "bch"] [])
           `shouldReturn` Right "The file is on btc, not on the --network bch"
-        (fmap dBAccountName . accountOf <$> hwJson home ["show", home </> "unsigned.psbt", "--network", "btc"] []) `shouldReturn` Right "main"
+        (placeOf <$> hwJson home ["show", home </> "unsigned.psbt", "--network", "btc"] []) `shouldReturn` Right mainPlace
 
     -- Bitcoin Core's finalizepsbt gives the transaction alone, in hexadecimal
     it "holding the signed transaction alone is sent when the wallet holds the transaction, and refused otherwise" $
@@ -507,7 +583,7 @@ foreignFileSpec ctx =
 -- | A payment of the test wallet to another wallet, unsigned
 unsignedPayment :: Ctx -> TxSignData
 unsignedPayment ctx =
-  TxSignData (spendingTx ctx [(txHash funding, 0)] [(otherAddr 0, 40000)]) [funding] [Deriv :/ 0 :/ 0] [] Nothing Nothing [] noLabel
+  TxSignData (spendingTx ctx [(txHash funding, 0)] [(otherAddr 0, 40000)]) [funding] [legacyPath (Deriv :/ 0 :/ 0)] [] Nothing Nothing [] noLabel
   where
     funding = fundingTx ctx 1 [(externalAddr 0, 50000)]
 
@@ -541,13 +617,17 @@ inputFileSpec ctx = do
           `shouldReturn` Right "The transaction is not signed"
 
     -- The file is written as another wallet writes it, without the
-    -- network, and the configuration names no default network
-    it "refuses a file of another wallet, which names no network, for a transaction the wallet does not hold, without a default network" $
-      withHome $ \home -> do
+    -- network, and the configuration names no default network: btc is
+    -- the default network then
+    it "sends a file of another wallet, which names no network, for a transaction the wallet does not hold, on btc without a default network" $
+      withChain ctx (paidChain ctx) $ \home chain -> do
         setDefaultNetwork home Nothing
         writeOtherWalletTxFile ctx (home </> "payment.psbt") (signedPayment ctx)
-        (errorOf <$> hwJson home ["broadcast", "--input", home </> "payment.psbt"] [])
-          `shouldReturn` Right "The file names no network, as a file of another wallet does, and involves no account of this wallet: give the --network, or a default-network in the configuration file"
+        sent <- hwJson home ["broadcast", "--input", home </> "payment.psbt", "--yes"] []
+        case sent of
+          ResponseSentTx net txid -> (net.name, txid) `shouldBe` ("btc", txHash (txSignDataTx (signedPayment ctx)))
+          other -> expectationFailure ("Not a transaction sent from outside the wallet: " <> show other)
+        (map txHash . inMempool <$> readIORef chain) `shouldReturn` [txHash (txSignDataTx (signedPayment ctx))]
 
   describe "signtx and signsweep" $ do
     let nosig = Text.unpack (txHashToHex (fakeTxHash 1))
@@ -570,7 +650,7 @@ inputFileSpec ctx = do
   describe "signtx, showing what the mnemonic signs" $ do
     it "shows the transaction as show does before it asks for the mnemonic" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
         run <- hw home ["signtx", "--input", home </> "payment.psbt", "--output", home </> "signed.psbt"] seedOnce
         let (beforeMnemonic, mnemonicOnward) = Text.breakOn "Mnemonic" (runErr run)
@@ -579,7 +659,7 @@ inputFileSpec ctx = do
 
     it "answers on the screen with the id of the signed transaction and the file written, not with the transaction again" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
         run <- hw home ["signtx", "--input", home </> "payment.psbt", "--output", home </> "signed.psbt"] seedOnce
         case Text.lines (runOut run) of
@@ -594,7 +674,7 @@ inputFileSpec ctx = do
     let question file = "Replace " <> Text.pack file <> " with the signed transaction? Give an --output file to write it elsewhere. [y/N] "
     it "replace the --input file with the signed transaction when the user agrees" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
         signed <- txOf =<< answer home ["signtx", "--input", home </> "payment.psbt"] (["y"] <> seedOnce)
         pendingState signed `shouldBe` Just (True, False)
@@ -603,7 +683,7 @@ inputFileSpec ctx = do
 
     it "ask whether to replace the --input file, naming --output" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
         run <- hw home ["signtx", "--input", home </> "payment.psbt"] (["y"] <> seedOnce)
         runErr run `shouldSatisfy` Text.isInfixOf (question (home </> "payment.psbt"))
@@ -611,7 +691,7 @@ inputFileSpec ctx = do
     -- The mnemonic would be typed for nothing
     it "ask before the mnemonic, and leave the file as it was when the user does not agree" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
         original <- BS.readFile (home </> "payment.psbt")
         run <- hw home ["signtx", "--input", home </> "payment.psbt"] (["n"] <> seedOnce)
@@ -621,7 +701,7 @@ inputFileSpec ctx = do
 
     it "do not ask with --output, and leave the --input file as it was" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
         original <- BS.readFile (home </> "payment.psbt")
         run <- hw home ["signtx", "--input", home </> "payment.psbt", "--output", home </> "signed.psbt"] seedOnce
@@ -651,7 +731,7 @@ inputFileSpec ctx = do
   describe "signtx, before it asks for the mnemonic," $ do
     it "refuses a transaction signed already" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         writeTxFile ctx (home </> "payment.psbt") (signedPayment ctx)
         run <- hw home ["signtx", "--input", home </> "payment.psbt", "--output", home </> "signed.psbt"] seedOnce
         run `shouldSatisfy` printed "The transaction is already signed"
@@ -667,19 +747,19 @@ inputFileSpec ctx = do
         run `shouldSatisfy` printed "The transaction is already online"
         run `shouldNotSatisfy` askedMnemonic
 
-    -- The payment is from main
-    it "refuses an --account the transaction does not involve" $
+    -- The payment is from portfolio0
+    it "refuses a --portfolio the transaction does not involve" $
       withHome $ \home -> do
-        createMain home
-        _ <- answer home ["createacc", "second"] seedTwice
+        newTestPortfolio home
+        newTestPortfolio home
         writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
-        run <- hw home ["signtx", "--input", home </> "payment.psbt", "--output", home </> "signed.psbt", "--account", "second"] seedOnce
-        run `shouldSatisfy` printed "The transaction does not involve the account second"
+        run <- hw home ["signtx", "--input", home </> "payment.psbt", "--output", home </> "signed.psbt", "--portfolio", "1"] seedOnce
+        run `shouldSatisfy` printed "The transaction does not involve portfolio1 of wallet0"
         run `shouldNotSatisfy` askedMnemonic
 
     it "refuses an --output file that exists" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
         writeFile (home </> "signed.psbt") ""
         run <- hw home ["signtx", "--input", home </> "payment.psbt", "--output", home </> "signed.psbt"] seedOnce
@@ -692,10 +772,10 @@ inputFileSpec ctx = do
     -- see the funds, since it scans /0/n and /1/n alone.
     it "refuses a file that names a key of the account at a path of no address of it, as show does" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         let hidden = spendingTx ctx [(txHash (payment ctx), 0)] [(addrAt27, 40000)]
             refusal = "Output 0 names a key of the account at /2/7, where it has no address: its addresses are at /0/n and /1/n"
-        psbt <- psbtOnBitcoin ctx (TxSignData hidden [payment ctx] ["/0/0"] [] (Just 10) Nothing [] noLabel)
+        psbt <- psbtOnBitcoin ctx (TxSignData hidden [payment ctx] [legacyPath (Deriv :/ 0 :/ 0)] [] (Just 10) Nothing [] noLabel)
         let naming = insertOutputDerivation ctx (keyAt27 ctx) (Derivation testFingerprint "m/44'/0'/0'/2/7")
         BS.writeFile (home </> "hidden.psbt") (encodePsbt (Psbt psbt.version psbt.unsignedTx psbt.globals psbt.inputs (naming <$> psbt.outputs)))
         review <- hw home ["show", home </> "hidden.psbt"] []
@@ -708,12 +788,12 @@ inputFileSpec ctx = do
     -- genuine record says: no scan of the account would find it there
     it "refuses a file whose change lies far past every address of its chain, as show does, and writes no signed file" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         let farPath = Deriv :/ 1 :/ 2000000000 :: SoftPath
             farChange = keyAddress Bip44 ctx (derivePubPath ctx farPath (testAccountPub ctx))
             tx = spendingTx ctx [(txHash (payment ctx), 0)] [(otherAddr 0, 20000), (farChange, 27740)]
-            refusal = "The path /1/2000000000 of an output is over 1000 addresses past the last one of its chain that the wallet holds or the transaction spends from: no scan of the account would find what it pays there"
-        writeTxFile ctx (home </> "far.psbt") (TxSignData tx [payment ctx] [Deriv :/ 0 :/ 0] [farPath] (Just 10) Nothing [] noLabel)
+            refusal = "The path bip44/1/2000000000 of an output is over 1000 addresses past the last one of its chain that the wallet holds or the transaction spends from: no scan of the account would find what it pays there"
+        writeTxFile ctx (home </> "far.psbt") (TxSignData tx [payment ctx] [legacyPath (Deriv :/ 0 :/ 0)] [legacyPath farPath] (Just 10) Nothing [] noLabel)
         review <- hw home ["show", home </> "far.psbt"] []
         review `shouldSatisfy` printed refusal
         run <- hw home ["signtx", "--input", home </> "far.psbt", "--output", home </> "signed.psbt"] seedOnce
@@ -743,12 +823,13 @@ confirmationSpec ctx =
         runErr run `shouldSatisfy` Text.isInfixOf "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
         runErr run `shouldSatisfy` Text.isInfixOf sendQuestion
 
-    -- The payment is from main, as show shows it
-    it "names the account of the transaction it shows" $
+    -- The payment is from the bip44 account of portfolio0 on btc, as show
+    -- shows it
+    it "names the portfolio, the network and the types of the transaction it shows" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         nosig <- paymentSigned home
         run <- hw home ["broadcast", nosig] ["n"]
-        runErr run `shouldSatisfy` Text.isInfixOf "\n  Account  : main\n"
+        runErr run `shouldSatisfy` Text.isInfixOf "\n  Portfolio: portfolio0\n  Network  : btc\n  Types    : bip44\n"
 
     it "sends it when the user answers yes, the --json answer kept clean" $
       withChain ctx (paidChain ctx) $ \home chain -> do

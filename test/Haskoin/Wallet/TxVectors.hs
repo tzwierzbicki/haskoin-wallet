@@ -15,6 +15,7 @@ import qualified Data.Serialize as S
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin
+import Haskoin.Wallet.Keys (AccountKind, PoolPath (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Tx.SignData
@@ -96,13 +97,29 @@ instance FromJSON Vector where
           "match" -> ExpectMatch <$> o .: "signed"
           "error" -> ExpectError <$> o .: "error"
           e -> fail $ "Invalid expect value: " <> Text.unpack e
+      account <- o .: "account"
       Vector
         <$> o .: "name"
         <*> (parseNetwork =<< o .: "network")
-        <*> o .: "account"
+        <*> pure account
         <*> o .:? "sweepKeys"
-        <*> o .: "txSignData"
+        <*> (inAccountOf (accountSpecKind account) <$> o .: "txSignData")
         <*> pure expect
+
+-- | The signing data of a vector, with its paths in the account of the
+-- vector. A vector has one account, and writes the paths of its own inputs
+-- and outputs relative to it, as "/0/3". Signing data names the kind of
+-- the account of each path since a portfolio has two accounts, and a path
+-- written alone reads as one of a BIP44 account. So the paths of a vector
+-- take the kind of its account here.
+inAccountOf :: AccountKind -> TxSignData -> TxSignData
+inAccountOf kind tsd =
+  tsd
+    { txSignDataInputPaths = ofAccount <$> tsd.txSignDataInputPaths,
+      txSignDataOutputPaths = ofAccount <$> tsd.txSignDataOutputPaths
+    }
+  where
+    ofAccount path = path {pathKind = kind}
 
 instance FromJSON Signed where
   parseJSON =

@@ -2,19 +2,24 @@
 {-# LANGUAGE QuasiQuotes #-}
 
 -- | The configuration file of hw: what it holds, how a file written by an
--- older hw or trimmed by hand reads, and the data directory around it
+-- older hw or trimmed by hand reads, the four keys that say where a
+-- command works, the data directory around the file, and the keys a
+-- command changes in it
 module Haskoin.Wallet.ConfigSpec (spec) where
 
 import Control.Monad.Except (runExceptT)
-import Data.Aeson (Value, eitherDecode, toJSON)
+import Data.Aeson (Value, eitherDecode, toJSON, (.=))
 import Data.Default (def)
+import Data.Either (isLeft)
 import Data.List (isPrefixOf)
 import Data.String.Conversions (cs)
-import Haskoin (bch)
+import Data.Text (Text)
+import Haskoin (bch, btc, btcTest)
 import Haskoin.Wallet.Amounts (AmountUnit (..))
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Config
-import Haskoin.Wallet.TestUtils (inScratchDirectory)
+import Haskoin.Wallet.Keys (AccountKind (..))
+import Haskoin.Wallet.TestUtils (configWith, inScratchDirectory)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), testIdentity)
 import Haskoin.Wallet.Arbitrary (arbitraryConfig)
 import System.Directory (createDirectory)
@@ -25,7 +30,9 @@ spec :: Spec
 spec = do
   fileSpec
   keySpec
+  defaultsSpec
   directorySpec
+  changeSpec
   -- A configuration reads back as it was written
   testIdentity def {jsonTests = [JsonBox arbitraryConfig]}
 
@@ -39,7 +46,7 @@ fileSpec =
       decodeConfig defaultFile `shouldBe` Right def
 
     it "reads a file of hw 0.9: its batch sizes and recovery-gap mean nothing now, the parallel requests take their default" $
-      decodeConfig hw09File `shouldBe` Right withoutNetwork
+      decodeConfig hw09File `shouldBe` Right def
 
     it "reads the number of parallel requests" $
       configParallelRequests <$> decodeConfig twoRequestsFile `shouldBe` Right 2
@@ -47,29 +54,14 @@ fileSpec =
 keySpec :: Spec
 keySpec =
   describe "A key of the configuration file" $ do
-    it "takes its default when missing, so an empty file is the default configuration, without a default network" $
-      decodeConfig "{}" `shouldBe` Right withoutNetwork
+    it "takes its default when missing, so an empty file is the default configuration" $
+      decodeConfig "{}" `shouldBe` Right def
 
     it "sets its value alone, the others keeping their defaults" $
-      decodeConfig [r|{"gap": 30}|] `shouldBe` Right withoutNetwork {configGap = 30}
+      decodeConfig [r|{"gap": 30}|] `shouldBe` Right def {configGap = 30}
 
     it "takes its default when null" $
-      decodeConfig [r|{"gap": null, "database-file": null, "unit": null, "listing-view": null}|] `shouldBe` Right withoutNetwork
-
-    -- For a user of one network: the commands that need one take it
-    -- without --network
-    it "names the default network of the commands" $
-      configDefaultNetwork <$> decodeConfig [r|{"default-network": "bch"}|] `shouldBe` Right (Just bch)
-
-    -- Unlike the other keys: a file that does not set it has none, and
-    -- --network must be given
-    it "leaves the commands without a default network when missing or null" $ do
-      configDefaultNetwork <$> decodeConfig "{}" `shouldBe` Right Nothing
-      configDefaultNetwork <$> decodeConfig [r|{"default-network": null}|] `shouldBe` Right Nothing
-
-    it "cannot be a network hw does not know" $
-      decodeConfig [r|{"default-network": "doge"}|]
-        `shouldSatisfy` either ("Error in $: The key \"default-network\" must be a network: " `isPrefixOf`) (const False)
+      decodeConfig [r|{"gap": null, "database-file": null, "unit": null, "listing-view": null}|] `shouldBe` Right def
 
     -- For a user who counts in satoshis: the amounts are shown in them, and
     -- read in them when typed without a unit
@@ -97,10 +89,10 @@ keySpec =
       decodeConfig [r|{"listing-view": "table"}|]
         `shouldBe` Left "Error in $: The key \"listing-view\" must be a view: compact, verbose, tabular"
 
-    -- A new file does not: the change of a payment goes to a new change
-    -- address unless --change-back says otherwise
-    it "sends the change of preparetx back to an address it spends from" $
-      configChangeBack <$> decodeConfig [r|{"change-back": true}|] `shouldBe` Right True
+    -- hw 0.10 before portfolios had this key. The change of a payment now
+    -- goes where --change-back ADDRESS says, or to a new change address.
+    it "means nothing any more when it is change-back, and the file still reads" $
+      decodeConfig [r|{"gap": 30, "change-back": true}|] `shouldBe` Right def {configGap = 30}
 
     it "names the database to work on" $
       configDatabaseFile <$> decodeConfig [r|{"database-file": "/backups/accounts.sqlite"}|]
@@ -117,6 +109,77 @@ keySpec =
     it "must be a number when its default is one" $
       decodeConfig [r|{"gap": "twenty"}|]
         `shouldBe` Left "Error in $.gap: parsing Natural failed, expected Number, but encountered String"
+
+-- | The four keys that say where a command works when its options do not:
+-- the wallet, the portfolio, the network and the type of account
+defaultsSpec :: Spec
+defaultsSpec =
+  describe "Where a command works without an option" $ do
+    it "is wallet 0 in a file without the key default-wallet" $
+      configDefaultWallet <$> decodeConfig "{}" `shouldBe` Right 0
+
+    it "is portfolio 0 in a file without the key default-portfolio" $
+      configDefaultPortfolio <$> decodeConfig "{}" `shouldBe` Right 0
+
+    it "is on btc in a file without the key default-network" $
+      configDefaultNetwork <$> decodeConfig "{}" `shouldBe` Right btc
+
+    it "is in the bip44 account in a file without the key default-type" $
+      configDefaultType <$> decodeConfig "{}" `shouldBe` Right Bip44
+
+    it "is the wallet the key default-wallet names by its index" $
+      configDefaultWallet <$> decodeConfig [r|{"default-wallet": 1}|] `shouldBe` Right 1
+
+    it "is the portfolio the key default-portfolio names by its index" $
+      configDefaultPortfolio <$> decodeConfig [r|{"default-portfolio": 2}|] `shouldBe` Right 2
+
+    it "is on the network the key default-network names" $
+      configDefaultNetwork <$> decodeConfig [r|{"default-network": "bch"}|] `shouldBe` Right bch
+
+    it "is in the account of the type the key default-type names" $
+      configDefaultType <$> decodeConfig [r|{"default-type": "bip84"}|] `shouldBe` Right Bip84
+
+    it "takes each key alone, the three others keeping their defaults" $
+      decodeConfig [r|{"default-portfolio": 3}|] `shouldBe` Right def {configDefaultPortfolio = 3}
+
+    -- A file trimmed by hand, or written by a tool that writes null for
+    -- what it does not set
+    it "is wallet 0, portfolio 0, btc and bip44 when the four keys are null" $
+      decodeConfig [r|{"default-wallet": null, "default-portfolio": null, "default-network": null, "default-type": null}|]
+        `shouldBe` Right def
+
+    it "cannot be on a network hw does not know" $
+      decodeConfig [r|{"default-network": "doge"}|]
+        `shouldSatisfy` either ("Error in $: The key \"default-network\" must be a network: " `isPrefixOf`) (const False)
+
+    -- hw looks for the funds of a bip49 account when it recovers a seed,
+    -- and holds no such account
+    it "cannot be in an account of a type hw does not hold, naming the types it holds" $
+      decodeConfig [r|{"default-type": "bip49"}|]
+        `shouldBe` Left "Error in $: The key \"default-type\" must be a type of account: bip44, bip84"
+
+    it "cannot be a wallet or a portfolio of a negative index" $ do
+      decodeConfig [r|{"default-wallet": -1}|] `shouldSatisfy` isLeft
+      decodeConfig [r|{"default-portfolio": -1}|] `shouldSatisfy` isLeft
+
+    -- 2^64 would wrap around to index 0 in the database
+    it "cannot be a portfolio of an index of 2^31 or more, naming the key" $
+      decodeConfig [r|{"default-portfolio": 18446744073709551616}|]
+        `shouldBe` Left "Error in $: The key \"default-portfolio\" must be an index below 2147483648, which is 2^31"
+
+    it "cannot be a wallet of an index of 2^31 or more, naming the key" $
+      decodeConfig [r|{"default-wallet": 2147483648}|]
+        `shouldBe` Left "Error in $: The key \"default-wallet\" must be an index below 2147483648, which is 2^31"
+
+    -- 2^31 - 1 = 2147483647, the last hardened step of BIP32
+    it "is the portfolio of the highest index an account can have" $
+      configDefaultPortfolio <$> decodeConfig [r|{"default-portfolio": 2147483647}|] `shouldBe` Right 2147483647
+
+    it "is on the network --network names, whatever the default network" $
+      commandNetwork (configWith ["default-network" .= ("bch" :: Text)]) (Just btcTest) `shouldBe` btcTest
+
+    it "is on the default network without --network" $
+      commandNetwork (configWith ["default-network" .= ("bch" :: Text)]) Nothing `shouldBe` bch
 
 directorySpec :: Spec
 directorySpec =
@@ -158,13 +221,71 @@ directorySpec =
       inScratchDirectory $ \dir -> do
         writeFile (configFile dir) hw09File
         cfg <- runExceptT $ readConfig dir
-        cfg `shouldBe` Right (withoutNetwork, ["The configuration file " <> configFile dir <> " has keys hw does not know, left aside: addr-batch, coin-batch, recovery-gap, tx-batch, tx-full-batch"])
+        cfg `shouldBe` Right (def, ["The configuration file " <> configFile dir <> " has keys hw does not know, left aside: addr-batch, coin-batch, recovery-gap, tx-batch, tx-full-batch"])
+
+    -- The file hw 0.10 wrote before portfolios had the key change-back
+    it "warns about the key change-back of an earlier hw, which it no longer knows, and reads the file" $
+      inScratchDirectory $ \dir -> do
+        writeFile (configFile dir) [r|{"gap": 30, "change-back": true}|]
+        cfg <- runExceptT $ readConfig dir
+        cfg `shouldBe` Right (def {configGap = 30}, ["The configuration file " <> configFile dir <> " has keys hw does not know, left aside: change-back"])
 
     it "warns about a mistyped key, whose setting would otherwise keep its default without a word" $
       inScratchDirectory $ \dir -> do
         writeFile (configFile dir) [r|{"gaps": 30}|]
         cfg <- runExceptT $ readConfig dir
-        cfg `shouldBe` Right (withoutNetwork, ["The configuration file " <> configFile dir <> " has keys hw does not know, left aside: gaps"])
+        cfg `shouldBe` Right (def, ["The configuration file " <> configFile dir <> " has keys hw does not know, left aside: gaps"])
+
+-- | The keys a command changes in the file: setdefault writes the defaults
+-- the user chooses, and deletewallet the default wallet it picks
+changeSpec :: Spec
+changeSpec =
+  describe "Setting keys of the configuration file" $ do
+    it "names the four keys that say where a command works as the file writes them" $
+      [defaultWalletKey, defaultPortfolioKey, defaultNetworkKey, defaultTypeKey]
+        `shouldBe` ["default-wallet", "default-portfolio", "default-network", "default-type"]
+
+    it "changes the keys given, which the configuration then reads" $
+      inScratchDirectory $ \dir -> do
+        writeFile (configFile dir) defaultFile
+        changed <- runExceptT $ setConfigKeys dir [("default-wallet", toJSON (1 :: Int)), ("default-network", toJSON ("bch" :: Text))]
+        changed `shouldBe` Right ()
+        cfg <- runExceptT $ readConfig dir
+        cfg `shouldBe` Right (def {configDefaultWallet = 1, configDefaultNetwork = bch}, [])
+
+    -- The file sets a gap of 30, and has a key of an earlier hw and a
+    -- mistyped one
+    it "leaves every other key of the file as it is, those hw does not know too" $
+      inScratchDirectory $ \dir -> do
+        writeFile (configFile dir) [r|{"gap": 30, "default-type": "bip84", "change-back": true, "gaps": 5}|]
+        changed <- runExceptT $ setConfigKeys dir [("default-portfolio", toJSON (2 :: Int))]
+        changed `shouldBe` Right ()
+        written <- readFile (configFile dir)
+        decodeValue written
+          `shouldBe` decodeValue [r|{"gap": 30, "default-type": "bip84", "change-back": true, "gaps": 5, "default-portfolio": 2}|]
+
+    it "adds a key the file did not have, and no other" $
+      inScratchDirectory $ \dir -> do
+        writeFile (configFile dir) "{}"
+        changed <- runExceptT $ setConfigKeys dir [("default-wallet", toJSON (1 :: Int))]
+        changed `shouldBe` Right ()
+        written <- readFile (configFile dir)
+        decodeValue written `shouldBe` decodeValue [r|{"default-wallet": 1}|]
+
+    it "changes nothing when no key is given" $
+      inScratchDirectory $ \dir -> do
+        writeFile (configFile dir) twoRequestsFile
+        changed <- runExceptT $ setConfigKeys dir []
+        changed `shouldBe` Right ()
+        written <- readFile (configFile dir)
+        decodeValue written `shouldBe` decodeValue twoRequestsFile
+
+    it "refuses a file that does not hold a JSON object, naming it, and leaves it as it is" $
+      inScratchDirectory $ \dir -> do
+        writeFile (configFile dir) "[1, 2]"
+        changed <- runExceptT $ setConfigKeys dir [("default-wallet", toJSON (1 :: Int))]
+        changed `shouldBe` Left ("The configuration file " <> configFile dir <> " does not hold a JSON object")
+        readFile (configFile dir) `shouldReturn` "[1, 2]"
 
 -- | What hw makes of the text of a configuration file
 decodeConfig :: String -> Either String Config
@@ -172,11 +293,6 @@ decodeConfig = eitherDecode . cs
 
 decodeValue :: String -> Value
 decodeValue = either error id . eitherDecode . cs
-
--- | The default configuration of a file that sets no default network, as
--- those of earlier versions of hw
-withoutNetwork :: Config
-withoutNetwork = def {configDefaultNetwork = Nothing}
 
 -- | The file hw writes when there is none
 defaultFile :: String
@@ -186,10 +302,12 @@ defaultFile =
   "gap": 20,
   "parallel-requests": 1,
   "database-file": null,
+  "default-wallet": 0,
+  "default-portfolio": 0,
   "default-network": "btc",
+  "default-type": "bip44",
   "unit": "btc",
   "listing-view": "compact",
-  "change-back": false,
   "pager": null
 }|]
 

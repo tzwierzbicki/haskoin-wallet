@@ -1,10 +1,12 @@
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The wallet database: the connection and its lock, and what every table
 -- shares. The tables are those of the latest format version, defined in
 -- "Haskoin.Wallet.Schema.V4" and exported again from here: a version that
 -- changes the tables gets a new schema module, and this module moves to it.
--- Each kind of row has a module of its own: "Haskoin.Wallet.Database.Account",
+-- Each kind of row has a module of its own: "Haskoin.Wallet.Database.Portfolio"
+-- for the wallets and their portfolios, "Haskoin.Wallet.Database.Account",
 -- "Haskoin.Wallet.Database.Address", "Haskoin.Wallet.Database.Coin", "Haskoin.Wallet.Database.TxInfo",
 -- "Haskoin.Wallet.Database.TxLabel", "Haskoin.Wallet.Database.RawTx",
 -- "Haskoin.Wallet.Database.PendingTx" and "Haskoin.Wallet.Database.BestBlock".
@@ -13,8 +15,9 @@
 -- balances of the addresses, the transaction summaries, the coins, the raw
 -- transactions, the best block, and whether a pending transaction is in
 -- conflict, which only the store can tell. From the user or a signer: the
--- accounts, the labels, the pending transactions, the coins the user locked
--- and the fingerprint of a seed.
+-- wallets, the portfolios and their accounts, the descriptions, the
+-- labels, the pending transactions, the coins the user locked and the
+-- fingerprint of a seed.
 --
 -- What follows from those facts by the rules of the wallet is computed
 -- when it is read, and stored nowhere: the confirmations, from the best
@@ -31,7 +34,7 @@
 -- totals. The amount of a summary is a column as well as a part of its
 -- blob, written with it, so that txs can add up amounts for its balances
 -- without decoding the blobs. The spendable balances depend on writes in many places, the
--- pending transactions of every account of a network and the best block
+-- pending transactions of every portfolio on a network and the best block
 -- among them, and are computed: from the few columns they need, and for
 -- the addresses shown only.
 module Haskoin.Wallet.Database
@@ -44,12 +47,15 @@ where
 import Conduit (MonadUnliftIO, ResourceT, runResourceT)
 import Control.Lens ((&), (.~))
 import Control.Monad
+import Control.Monad.Except (ExceptT (..), runExceptT)
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Logger (NoLoggingT, runNoLoggingT)
 import Control.Monad.Reader (ReaderT)
 import qualified Data.ByteString as BS
+import Data.Either (isLeft)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
+import Data.Text (Text)
 import Database.Esqueleto.Legacy as E
 import Database.Persist.SqlBackend.Internal (SqlBackend (..))
 import Database.Persist.Sqlite (SqliteConnectionInfo, extraPragmas, fkEnabled, mkSqliteConnectionInfo, walEnabled, withSqliteConnInfo)
@@ -60,6 +66,7 @@ import Haskoin.Wallet.FileIO (privateFile)
 import Haskoin.Wallet.Schema.KeyBytes
 import Haskoin.Wallet.Schema.V4
 import System.Directory (makeAbsolute)
+import Numeric.Natural (Natural)
 import UnliftIO.Exception (catch, throwIO)
 
 {- The connection and its lock -}
@@ -122,6 +129,29 @@ catchDatabaseInUse action = (Right <$> action) `catch` held
       SqliteException ErrorLocked _ _ -> return $ Left databaseInUse
       _ -> throwIO failure
 
+{- Pools -}
+
+-- | What a portfolio holds on one network: the coins of its accounts
+-- there, which a payment spends together whatever their kind, and its
+-- transactions. A portfolio has one pool for each network. The pool, not
+-- the account, owns the summaries of transactions, their labels, the
+-- pending transactions and the block the last sync reached: a transaction
+-- that spends a BIP44 coin and pays a BIP84 address of the same portfolio
+-- is one transaction of the pool, and moves nothing out of it.
+--
+-- A pool is the pair of its portfolio and its network. It has no row of
+-- its own: the accounts of the portfolio on the network are its members,
+-- and the rows it owns name the pair.
+data Pool = Pool
+  { poolPortfolio :: !DBPortfolioId,
+    poolNetwork :: !Network
+  }
+  deriving (Eq, Show)
+
+-- | The name of the network of a pool, as its rows store it
+poolNetworkName :: Pool -> Text
+poolNetworkName pool = cs pool.poolNetwork.name
+
 {- Reading without changing anything -}
 
 -- | Run a read of a database file that exists, for a caller that must
@@ -168,9 +198,9 @@ fileUri file = ("file://" <>) . concatMap escape <$> makeAbsolute file
 
 -- | Run an action, then undo the writes it made, and only those. What the
 -- command wrote before stays, and its transaction goes on. A savepoint of
--- SQLite marks the place to go back to. show uses this to take the
--- accounts of a file into the wallet as importacc would, read what became
--- of them, and keep none of them ("Haskoin.Wallet.Labels"). The action
+-- SQLite marks the place to go back to. show uses this to take a file
+-- of a wallet into the database as importwallet would, read what became
+-- of it, and keep nothing of it ("Haskoin.Wallet.Labels"). The action
 -- must not fail by an exception: the command fails with it then, and its
 -- whole transaction is undone.
 undoneAfter :: (MonadUnliftIO m) => DB m a -> DB m a
@@ -179,6 +209,31 @@ undoneAfter action = do
   result <- action
   rawExecute "ROLLBACK TO undone" []
   rawExecute "RELEASE undone" []
+  return result
+
+-- | Run an action that may refuse, and undo the writes it made when it
+-- does, and only those: the database is then as the action found it. A
+-- savepoint of SQLite marks the place to go back to, as for
+-- 'undoneAfter'. importwallet takes a file into the database this way
+-- ("Haskoin.Wallet.Labels"): a file that cannot be merged is found out
+-- once some of its accounts are in, and none of them must stay.
+--
+-- A command undoes its whole transaction when it fails, so a refusal
+-- never left anything behind for the user. This makes the refusal of the
+-- action whole by itself, whoever calls it. Like 'undoneAfter', the
+-- action must not fail by an exception.
+--
+-- sync puts the sync of each pool in one ("Haskoin.Wallet.Sync".'syncEach'):
+-- a pool whose store fails is undone alone, and the pools synced before it
+-- stay. Savepoints nest. A savepoint inside another one of the same name
+-- is rolled back and released first, as SQLite takes the latest one of a
+-- name.
+undoneIfRefused :: (MonadUnliftIO m) => ExceptT e (DB m) a -> ExceptT e (DB m) a
+undoneIfRefused action = ExceptT $ do
+  rawExecute "SAVEPOINT refused" []
+  result <- runExceptT action
+  when (isLeft result) $ rawExecute "ROLLBACK TO refused" []
+  rawExecute "RELEASE refused" []
   return result
 
 {- The tables -}
@@ -215,6 +270,14 @@ bytesToOutpoint :: KeyBytes -> Either String OutPoint
 bytesToOutpoint = S.decode . keyBytes
 
 {- Query helpers -}
+
+-- | How many values one query puts in an IN list at most: a thousand.
+-- SQLite takes at most 32766 parameters in a statement, and the first
+-- sync of a large wallet asks about every address of a pool at once,
+-- which can be more. A query about more values goes in several, each one
+-- short.
+inListBatch :: Natural
+inListBatch = 1000
 
 -- like `maybe` but for a maybe/value sandwich
 joinMaybe :: b -> (a -> b) -> Maybe (E.Value (Maybe a)) -> b

@@ -74,9 +74,9 @@ dropRawTxsWithoutCoins hashes = do
   return $ length unused
 
 -- | Whether a coin of the wallet, of any account, is an output of the
--- transaction. A coin is keyed by the bytes of its outpoint, the hash
--- first, so the coins of a transaction are a range of keys, from the
--- lowest index to the highest.
+-- transaction. The index of the coins by outpoint holds the bytes of the
+-- outpoint, the hash first, so the coins of a transaction are a range of
+-- it, from the lowest index to the highest.
 coinComesFrom :: (MonadUnliftIO m) => TxHash -> DB m Bool
 coinComesFrom hash = do
   found <- selectOne . from $ \c -> do

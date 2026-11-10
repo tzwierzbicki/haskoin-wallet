@@ -3,7 +3,9 @@
 -- | The best block of each network, as the database keeps it from one sync
 -- to the next, and the confirmations counted from it: those of the
 -- transactions txs lists, and those of the coins coins lists and the
--- builder spends.
+-- builder spends. Also the block the last sync of each pool reached, a
+-- portfolio on a network, which the best block of the network cannot
+-- stand for: each pool is synced apart.
 module Haskoin.Wallet.Database.BestBlockSpec (spec) where
 
 import Control.Monad.Trans (lift)
@@ -13,12 +15,14 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.BestBlock
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.Database.Portfolio (portfolioPool)
 import Haskoin.Wallet.TestUtils
 import Test.Hspec
 
 spec :: Spec
 spec = do
   storedSpec
+  prepareContext syncedSpec
   confirmationsSpec
 
 {- Fixtures -}
@@ -98,6 +102,65 @@ storedSpec =
       inDatabase $ do
         P.insert_ $ DBBest "btc" "00000000000000000004727b3cc0946dc2054f59e362369e0437325c0a992efb" 814037 (Just (-1))
         dbShouldFailWith "The stored best block of btc does not read: sync stores it again" $ getBest btc
+
+{- The block of a pool -}
+
+-- The pool is what portfolio 0 of the test wallet holds on Bitcoin
+syncedSpec :: Ctx -> Spec
+syncedSpec ctx =
+  describe "The block the last sync of a pool reached" $ do
+    it "is unknown before the first sync of the pool" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        syncedBlock pool `dbShouldBeE` Nothing
+
+    it "is read back as it was stored" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        lift $ updateSyncedBlock pool bitcoinBlock 814037
+        syncedBlock pool `dbShouldBeE` Just (SyncedBlock bitcoinBlock 814037)
+
+    it "is replaced by the next one, a single row for the pool" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        lift $ updateSyncedBlock pool bitcoinBlock 814037
+        lift $ updateSyncedBlock pool nextBitcoinBlock 814038
+        syncedBlock pool `dbShouldBeE` Just (SyncedBlock nextBitcoinBlock 814038)
+        lift (P.count ([] :: [P.Filter DBSyncedBlock])) `dbShouldBeE` 1
+
+    it "is kept apart for each network of a portfolio" $
+      inDatabaseE $ do
+        portfolio <- testPortfolio ctx
+        lift $ updateSyncedBlock (portfolioPool portfolio btc) bitcoinBlock 814037
+        lift $ updateSyncedBlock (portfolioPool portfolio btcTest) testnetBlock 2535443
+        syncedBlock (portfolioPool portfolio btc) `dbShouldBeE` Just (SyncedBlock bitcoinBlock 814037)
+        syncedBlock (portfolioPool portfolio btcTest) `dbShouldBeE` Just (SyncedBlock testnetBlock 2535443)
+        syncedBlock (portfolioPool portfolio bch) `dbShouldBeE` Nothing
+
+    -- Portfolio 1 of the wallet has not synced yet: the block portfolio 0
+    -- reached says nothing of it
+    it "is kept apart for each portfolio on a network" $
+      inDatabaseE $ do
+        first <- testPortfolio ctx
+        second <- nextPortfolioOf ctx testMnemonic
+        lift $ updateSyncedBlock (portfolioPool first btc) bitcoinBlock 814037
+        syncedBlock (portfolioPool first btc) `dbShouldBeE` Just (SyncedBlock bitcoinBlock 814037)
+        syncedBlock (portfolioPool second btc) `dbShouldBeE` Nothing
+
+    -- The best block of the network is one row for every portfolio
+    it "does not move with the best block of its network" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        lift $ updateSyncedBlock pool bitcoinBlock 814037
+        lift $ updateBest btc nextBitcoinBlock 814038 1698523063
+        syncedBlock pool `dbShouldBeE` Just (SyncedBlock bitcoinBlock 814037)
+
+    it "is stored under its portfolio and the name of its network, with the hash as it is displayed" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        lift $ updateSyncedBlock pool bitcoinBlock 814037
+        lift (tableRows "d_b_synced_block")
+          `dbShouldBeE` [[PersistInt64 1, PersistText "btc", PersistText "00000000000000000004727b3cc0946dc2054f59e362369e0437325c0a992efb", PersistInt64 814037]]
 
 {- Confirmations -}
 

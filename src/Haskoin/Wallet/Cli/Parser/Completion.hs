@@ -4,8 +4,8 @@
 --
 -- The script of zsh is the one of optparse-applicative. The scripts of
 -- bash and fish are hw's own. The ones of optparse-applicative added a /
--- to a value that is also the name of a directory, an account named src
--- for instance: bash's registered the program with -o filenames, and
+-- to a value that is also the name of a directory, the network btc in a
+-- directory that holds a directory btc for instance: bash's registered the program with -o filenames, and
 -- fish's tested each value. The one of bash also expanded the words typed
 -- as patterns, so that s* became the files of the directory. zsh adds a
 -- / to such a value too, and takes it out when the command runs.
@@ -110,12 +110,12 @@ scriptNameAfter _ [] = Nothing
 -- complete, the words typed, in order, and the other arguments.
 --
 -- The shell passes each word as typed, with the backslashes that escape
--- its characters: my\ savings, or TXID\: once bash has completed a coin
+-- its characters: my\ wallet.ods, or TXID\: once bash has completed a coin
 -- up to its colon. They are taken out, as the shell takes them out of
 -- the command it runs.
 --
--- bash breaks a word at its =, so that --account=main comes as --account,
--- = and main. The = is taken out: the value follows the option as a word
+-- bash breaks a word at its =, so that --network=btc comes as --network,
+-- = and btc. The = is taken out: the value follows the option as a word
 -- of its own, which optparse-applicative reads the same, and the index
 -- moves with the words. An = that is the word to complete stands for an
 -- empty value, since bash inserts what completes it after the =.

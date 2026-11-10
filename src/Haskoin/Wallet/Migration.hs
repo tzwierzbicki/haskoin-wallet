@@ -72,11 +72,12 @@ import qualified Haskoin.Wallet.Migration.V4 as V4
 -- | The version of the database format of this hw. Version 1 is the format
 -- of hw 0.8, before the version table existed; version 2 is the format of
 -- hw 0.9, whose version table holds the text "0.9"; from version 3 the
--- version table holds the number itself; version 4 identifies an account
--- by its key alone, with the fingerprint of its seed once known, instead of
--- filing it under a wallet, marks dead transactions instead of deleting
--- their summaries, and reads the coin locks and the change addresses from
--- the pending transactions instead of storing them.
+-- version table holds the number itself; version 4 files the accounts
+-- under portfolios and the portfolios under wallets, gives the
+-- transactions to a portfolio on a network instead of an account, marks
+-- dead transactions instead of deleting their summaries, and reads the
+-- coin locks and the change addresses from the pending transactions
+-- instead of storing them.
 -- Whenever the tables or the stored data must change, bump it, add the new tables as a module under
 -- "Haskoin.Wallet.Schema" and point "Haskoin.Wallet.Database" at them, and
 -- add the step as a module under "Haskoin.Wallet.Migration", listed in
@@ -86,19 +87,21 @@ latestDatabaseVersion = 4
 
 -- | A step from the version before 'stepTo' to 'stepTo'. It leaves the
 -- database as the hw of that version left it: its tables, its data and its
--- version stamp.
+-- version stamp. It answers with what the user must be told once it is
+-- done, if anything: what the step could not do by itself, and how the
+-- user does it.
 data Step m = Step
   { stepTo :: !Int,
     stepName :: !String,
-    stepAction :: ExceptT String (DB m) ()
+    stepAction :: ExceptT String (DB m) [String]
   }
 
 -- | The steps, in the order of their versions
 steps :: (MonadUnliftIO m) => Ctx -> [Step m]
 steps ctx =
-  [ Step 2 "the transaction summaries of hw 0.9" (V2.migrateDB ctx),
-    Step 3 "the version stored as a number" V3.migrateDB,
-    Step 4 "the accounts identified by their keys, without wallets" V4.migrateDB
+  [ Step 2 "the transaction summaries of hw 0.9" ([] <$ V2.migrateDB ctx),
+    Step 3 "the version stored as a number" ([] <$ V3.migrateDB),
+    Step 4 "the accounts filed under portfolios and wallets" V4.migrateDB
   ]
 
 {- The version of a database -}
@@ -150,9 +153,10 @@ versionOf value = throwError $ "Unknown database version " <> show value
 {- Migrating -}
 
 -- | What the migration does outside the database: announce each step before
--- it runs, and back up the database once before the first step, given the
--- version it is at. hw prints the announcements to stderr and copies the
--- database file; the tests collect them instead.
+-- it runs, and what a step has to tell the user once it is done, and back
+-- up the database once before the first step, given the version it is at.
+-- hw prints the announcements to stderr and copies the database file; the
+-- tests collect them instead.
 data Hooks = Hooks
   { announce :: String -> IO (),
     backup :: Int -> IO ()
@@ -193,4 +197,5 @@ migrate target hooks ctx = do
       unless (null pending) $ liftIO $ backup hooks stored
       forM_ pending $ \s -> do
         liftIO $ announce hooks $ "Migrating the database to version " <> show (stepTo s) <> ": " <> stepName s
-        stepAction s
+        notices <- stepAction s
+        liftIO $ mapM_ (announce hooks) notices

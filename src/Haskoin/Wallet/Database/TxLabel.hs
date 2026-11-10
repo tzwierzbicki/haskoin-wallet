@@ -1,7 +1,8 @@
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | The labels the user gives the transactions of an account on the
--- network, by account and txid. The sync never touches them, so a summary
+-- | The labels the user gives the transactions of a portfolio on a
+-- network, by pool and txid. The sync never touches them, so a summary
 -- it rewrites or marks dead keeps its label. A pending transaction keeps
 -- its label in its signing data instead, which its file carries, and the
 -- label moves here once the network has the transaction: see
@@ -16,22 +17,26 @@ import qualified Database.Persist as P
 import Haskoin
 import Haskoin.Wallet.Database
 
--- | The label of a transaction of the account, or none
-txLabel :: (MonadUnliftIO m) => DBAccountId -> TxHash -> DB m Text
-txLabel accId tid = maybe "" dBTxLabelLabel <$> P.get (DBTxLabelKey accId (hashBytes tid))
+-- | The key of the label of a transaction of the pool
+txLabelKey :: Pool -> TxHash -> P.Key DBTxLabel
+txLabelKey pool tid = DBTxLabelKey pool.poolPortfolio (poolNetworkName pool) (hashBytes tid)
 
--- | Every label of a transaction of the account, by transaction, in the
--- order of the ids: what exportacc writes
-accountTxLabels :: (MonadUnliftIO m) => DBAccountId -> DB m [(TxHash, Text)]
-accountTxLabels accId = do
-  rows <- P.selectList [DBTxLabelAccount P.==. accId] [P.Asc DBTxLabelTxid]
+-- | The label of a transaction of the pool, or none
+txLabel :: (MonadUnliftIO m) => Pool -> TxHash -> DB m Text
+txLabel pool tid = maybe "" dBTxLabelLabel <$> P.get (txLabelKey pool tid)
+
+-- | Every label of a transaction of the pool, by transaction, in the
+-- order of the ids: what exportwallet writes
+poolTxLabels :: (MonadUnliftIO m) => Pool -> DB m [(TxHash, Text)]
+poolTxLabels pool = do
+  rows <- P.selectList [DBTxLabelPortfolio P.==. pool.poolPortfolio, DBTxLabelNetwork P.==. poolNetworkName pool] [P.Asc DBTxLabelTxid]
   return $ rights [(\tid -> (tid, dBTxLabelLabel row)) <$> bytesToHash (dBTxLabelTxid row) | P.Entity _ row <- rows]
 
--- | Give a transaction of the account a label, in place of the one it had.
+-- | Give a transaction of the pool a label, in place of the one it had.
 -- An empty label removes it.
-setTxLabel :: (MonadUnliftIO m) => DBAccountId -> TxHash -> Text -> DB m ()
-setTxLabel accId tid label
+setTxLabel :: (MonadUnliftIO m) => Pool -> TxHash -> Text -> DB m ()
+setTxLabel pool tid label
   | Text.null label = P.delete key
-  | otherwise = P.repsert key (DBTxLabel accId (hashBytes tid) label)
+  | otherwise = P.repsert key (DBTxLabel pool.poolPortfolio (poolNetworkName pool) (hashBytes tid) label)
   where
-    key = DBTxLabelKey accId (hashBytes tid)
+    key = txLabelKey pool tid

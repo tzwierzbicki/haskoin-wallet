@@ -1,33 +1,46 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | How hw shows what it lists and answers with: a transaction, an
--- account, an address, a coin, a sync. Each has a compact view, the one
--- the listings show by default, and some a verbose view, that of --verbose
--- and of the commands that answer with one element. Every listing also
--- shows in a table, that of --tabular. The transactions are
--- those of the shared story of TestUtils, a payment of 50000 received at
--- /0/0 and then spent, and the rows are those of the account main, shown
--- at 'seenTimeInCet'.
+-- | How hw shows what it lists and answers with: a transaction, a
+-- portfolio, an address, a coin, a sync, an import. Each has a compact
+-- view, the one the listings show by default, and some a verbose view,
+-- that of --verbose and of the commands that answer with one element.
+-- Every listing also shows in a table, that of --tabular. A listing over a
+-- portfolio comes in sections, one for each network, or for each account
+-- for the addresses. The transactions are those of the shared story of
+-- TestUtils, a payment of 50000 received at /0/0 and then spent, and the
+-- rows are those of the bip44 account of portfolio0 of wallet0 on btc,
+-- shown at 'seenTimeInCet'.
 module Haskoin.Wallet.Cli.PrettyPrinterSpec (spec) where
 
+import Control.Exception (finally)
+import Data.Aeson ((.=))
+import Data.Default (def)
 import qualified Data.Map.Strict as Map
+import Data.Text (Text)
 import qualified Data.Text as Text
+import GHC.IO.Handle (hDuplicate, hDuplicateTo)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Database.Address (CoinBalance (..))
 import Haskoin.Wallet.Amounts (AmountUnit (..))
-import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..))
-import Haskoin.Wallet.Database (DBAccount (..), DBAddress (..))
-import Haskoin.Wallet.Keys (ForeignKind (..), MnemonicPass (..))
-import Haskoin.Wallet.Cli.View (View (..))
-import Haskoin.Wallet.Cli.PrettyPrinter
-import Haskoin.Wallet.Cli.Response (Response (..))
-import Haskoin.Wallet.Cli.Style (renderPlain)
-import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..))
 import Haskoin.Wallet.Bip329 (Record (..), RecordType (..), record)
-import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..))
-import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Cli.Listing (ChunkAt (..))
+import Haskoin.Wallet.Cli.Parser (AddressCode (..), Command (..), TxShown (..))
+import Haskoin.Wallet.Cli.PrettyPrinter
+import Haskoin.Wallet.Cli.Response (AccountCounts (..), Group (..), Response (..))
+import Haskoin.Wallet.Cli.Style (renderPlain)
+import Haskoin.Wallet.Cli.View (View (..))
+import Haskoin.Wallet.Database (DBAddress (..))
+import Haskoin.Wallet.Database.Account (AccountKeys (..), NetworkView (..), PortfolioView (..))
+import Haskoin.Wallet.Database.Address (CoinBalance (..))
+import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..))
+import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), PortfolioChoice (..), PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo
+import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), MnemonicPass (..), legacyPath)
+import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), PortfolioImport (..), WalletImport (..))
+import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..))
+import Haskoin.Wallet.TestUtils
+import System.FilePath ((</>))
+import qualified System.IO as IO
 import Test.Hspec
 
 spec :: Spec
@@ -37,15 +50,85 @@ spec = do
   tableSpec
   verboseSpec
   answerSpec
-  accountSpec
+  placeSpec
+  portfolioSpec
+  newPortfolioSpec
   importSpec
-  accountFileSpec
+  walletFileSpec
   addressSpec
   balanceSpec
   coinSpec
   syncSpec
+  recoverSpec
+  deletedSpec
+  sectionSpec
+  headerSpec
+  nextStepsSpec
   mnemonicSpec
   outsideTextSpec
+
+{- Fixtures of this spec -}
+
+-- | Portfolio 1 of wallet 2, which every line that says where an answer
+-- is names with its wallet
+otherRef :: PortfolioRef
+otherRef = PortfolioRef 2 1
+
+-- | What 'mainPortfolioView' holds on btc, without the keys of its
+-- accounts
+btcView :: NetworkView
+btcView = NetworkView btc 5000000 100000 4900000 3 17 []
+
+-- | A network of a portfolio where it holds nothing and has no address
+emptyOn :: Network -> NetworkView
+emptyOn net = NetworkView net 0 0 0 0 0 []
+
+-- | The keys of the two accounts of portfolio 0 on btc, as portfolios
+-- --verbose gives them. The checksums of the descriptors were computed
+-- apart from hw, and Bitcoin Core 32.1 gives the same
+-- (test/data/descriptors). The SLIP-132 key of a bip44 account is its
+-- xpub, and that of a bip84 account its zpub.
+legacyKeys, segwitKeys :: AccountKeys
+legacyKeys = AccountKeys Bip44 (Deriv :| 44 :| 0 :| 0) testAccountXPub ("pkh([bc560f95/44h/0h/0h]" <> testAccountXPub <> "/<0;1>/*)#vq597j87") (Just testAccountXPub)
+segwitKeys = AccountKeys Bip84 (Deriv :| 84 :| 0 :| 0) testSegwitAccountXPub ("wpkh([bc560f95/84h/0h/0h]" <> testSegwitAccountXPub <> "/<0;1>/*)#5nktextl") (Just testSegwitAccountZPub)
+
+-- | A whole portfolio 0 of wallet 0, as newportfolio creates it: two
+-- accounts on btc and on each test network of Bitcoin, one on the others,
+-- 2 + 1 + 2 + 2 + 2 + 1 + 1 + 1 = 12 accounts
+wholePortfolioView :: PortfolioView
+wholePortfolioView =
+  mainPortfolioView
+    { viewNetworks =
+        [ (emptyOn net) {networkViewAccounts = replicate count legacyKeys}
+          | (net, count) <- [(btc, 2), (bch, 1), (btcTest, 2), (btcTest4, 2), (btcRegTest, 2), (bchTest, 1), (bchTest4, 1), (bchRegTest, 1)]
+        ]
+    }
+
+-- | The second receiving address of the bip84 account of portfolio 0 on
+-- btc, which nothing has paid: bc1qqdensnp26rdechmq669tjk4s2wsyjr04nw3mc2,
+-- /0/1 of m/84'/0'/0'
+segwitAddressRow :: DBAddress
+segwitAddressRow = unusedAddressRow {dBAddressAddress = segwitExternalAddrsText !! 1}
+
+-- | The lines hw prints for an answer, as it prints them on stdout when
+-- stdout is a file: plain, without colours, 80 columns wide
+printedLines :: Response -> IO [String]
+printedLines answer =
+  inScratchDirectory $ \dir -> do
+    let file = dir </> "answer.txt"
+    IO.hFlush IO.stdout
+    saved <- hDuplicate IO.stdout
+    ( do
+        out <- IO.openFile file IO.WriteMode
+        hDuplicateTo out IO.stdout
+        IO.hClose out
+        responsePrinter UnitBitcoin Compact WithoutCode FullTx answer
+        IO.hFlush IO.stdout
+      )
+      `finally` (hDuplicateTo saved IO.stdout >> IO.hClose saved)
+    lines <$> IO.readFile' file
+
+{- Outside text and mnemonics -}
 
 -- What reaches a document without passing through a label, such as an
 -- error quoting a file, is written out as the document is printed
@@ -120,52 +203,388 @@ mnemonicSpec = do
       take 1 shown `shouldBe` ["Backup in 2 shares of 33 words, any 2 of them rebuild the seed, from /dev/random"]
       take 2 (drop 10 shown) `shouldBe` ["  29. strike    30. guitar    31. emphasis  32. enjoy", "  33. flexible"]
 
-accountSpec :: Spec
-accountSpec =
-  describe "An account as hw shows it" $ do
-    -- 5000000 satoshis spendable, 100000 unconfirmed
-    it "gives its name, network and path, then what it can spend, what is unconfirmed and its coins" $
-      renderedLines (compactAccountDoc UnitBitcoin mainAccountRow 5000000)
-        `shouldBe` [ "main  btc  /44'/0'/0'",
-                     "  spendable 0.05000000 btc, unconfirmed 0.00100000 btc, 3 coins"
+{- Where an answer is -}
+
+placeSpec :: Spec
+placeSpec = do
+  describe "The line that says where an answer is" $ do
+    it "names the portfolio, then the network, without the wallet when it is wallet0" $
+      renderedLines (placeLine mainPlace) `shouldBe` ["portfolio0  btc"]
+
+    it "names the wallet after the portfolio when it is not wallet0" $
+      renderedLines (placeLine (Place otherRef bch)) `shouldBe` ["portfolio1 of wallet2  bch"]
+
+    it "names an account by its portfolio, its network and its type" $
+      renderedLines (accountRefLine segwitAccountRef) `shouldBe` ["portfolio0  btc  bip84"]
+
+  -- Each of the five characters of 家族の貯金 takes two columns of the
+  -- terminal: 5 × 2 = 10, and 2 spaces make 12
+  describe "A text padded to a width" $
+    it "counts two columns for a wide character, so that what follows it lines up" $
+      block 12 "家族の貯金" `shouldBe` "家族の貯金  "
+
+{- Portfolios -}
+
+portfolioSpec :: Spec
+portfolioSpec = do
+  describe "A portfolio as portfolios shows it" $ do
+    -- 4900000 satoshis spendable on btc, 100000 unconfirmed
+    it "gives its name, its wallet and its description, the day it was created, then on a line what it holds on each network it has addresses or coins on" $
+      renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView)
+        `shouldBe` [ "portfolio0  wallet0  \"savings\"",
+                     "  created 14 Nov 2023",
+                     "  btc  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins, 17 addresses"
                    ]
 
-    it "leaves out the unconfirmed balance when there is none, and says an empty account has no coins" $
-      renderedLines (compactAccountDoc UnitBitcoin mainAccountRow {dBAccountBalanceUnconfirmed = 0, dBAccountBalanceCoins = 0} 0)
-        `shouldBe` [ "main  btc  /44'/0'/0'",
-                     "  spendable 0.00000000 btc, no coins"
+    it "names a wallet other than wallet0 the same way, after the portfolio" $
+      take 1 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewRef = otherRef}))
+        `shouldBe` ["portfolio1  wallet2  \"savings\""]
+
+    it "gives a portfolio without a description its name and its wallet alone" $
+      take 1 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewDescription = ""}))
+        `shouldBe` ["portfolio0  wallet0"]
+
+    -- A whole portfolio has an account on eight networks: bch holds
+    -- nothing here, and btctest4 has 2 addresses and no coin
+    it "leaves out the networks where it has neither an address nor a coin, lines up the figures of the others, and gives no unconfirmed amount when there is none" $ do
+      let three = mainPortfolioView {viewNetworks = [btcView, emptyOn bch, (emptyOn btcTest4) {networkViewAddresses = 2}]}
+      drop 2 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet three))
+        `shouldBe` [ "  btc       spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins, 17 addresses",
+                     "  btctest4  spendable 0.00000000 btc, no coins, 2 addresses"
                    ]
 
-    -- The checksums of the descriptors here were computed apart from hw,
-    -- and Bitcoin Core 32.1 gives the same (test/data/descriptors). A bip44
-    -- account has no row of SLIP-132, since its xpub marks its kind.
-    it "gives every detail with --verbose, the time it was created on the clock given, and ends with its descriptor" $
-      renderedLines (verboseAccountDoc UnitBitcoin seenTimeInCet mainAccountRow 5000000)
-        `shouldBe` [ "main  btc  /44'/0'/0'",
+    it "says a portfolio with no address on any network has none yet" $
+      renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewNetworks = [emptyOn btc, emptyOn bch]})
+        `shouldBe` [ "portfolio0  wallet0  \"savings\"",
+                     "  created 14 Nov 2023",
+                     "  no addresses yet"
+                   ]
+
+    it "gives the description of its wallet on a line of its own, under the first" $
+      take 2 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewWalletDescription = "laptop"}))
+        `shouldBe` ["portfolio0  wallet0  \"savings\"", "  wallet0 is \"laptop\""]
+
+    -- A partial portfolio comes from a database of hw 0.9
+    it "says a partial portfolio lacks accounts, and how to fill it in" $
+      drop 3 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewMissing = [(bch, Bip44), (btcTest, Bip44), (btcTest, Bip84)]}))
+        `shouldBe` ["  partial: it lacks 3 accounts, and fillwallet fills it in"]
+
+  describe "A portfolio as portfolios --verbose shows it" $ do
+    let withKeys = mainPortfolioView {viewNetworks = [btcView {networkViewAccounts = [legacyKeys, segwitKeys]}]}
+
+    it "gives its fingerprint and the time it was created on the clock given, then each network with its balances, and under it each account with its path, its descriptor and its SLIP-132 key" $
+      renderedLines (verbosePortfolioDoc UnitBitcoin seenTimeInCet withKeys)
+        `shouldBe` [ "portfolio0  wallet0  \"savings\"",
                      "  Fingerprint: bc560f95",
-                     "  Addresses  : 12 receiving, 3 change",
                      "  Created    : 14 Nov 2023 23:13:20 CET",
-                     "  Confirmed  : 0.05000000 btc",
-                     "  Unconfirmed: 0.00100000 btc",
-                     "  Spendable  : 0.05000000 btc",
-                     "  Coins      : 3",
-                     "  Descriptor : pkh([bc560f95/44h/0h/0h]" <> Text.unpack testAccountXPub <> "/<0;1>/*)#vq597j87"
+                     "  btc",
+                     "    Confirmed  : 0.05000000 btc",
+                     "    Unconfirmed: 0.00100000 btc",
+                     "    Spendable  : 0.04900000 btc",
+                     "    Coins      : 3",
+                     "    Addresses  : 17",
+                     "    bip44  /44'/0'/0'",
+                     "      Descriptor: pkh([bc560f95/44h/0h/0h]" <> Text.unpack testAccountXPub <> "/<0;1>/*)#vq597j87",
+                     "      SLIP-132  : " <> Text.unpack testAccountXPub,
+                     "    bip84  /84'/0'/0'",
+                     "      Descriptor: wpkh([bc560f95/84h/0h/0h]" <> Text.unpack testSegwitAccountXPub <> "/<0;1>/*)#5nktextl",
+                     "      SLIP-132  : " <> Text.unpack testSegwitAccountZPub
                    ]
+
+    it "gives every network the portfolio has an account on, those that hold nothing too" $
+      filter (`elem` ["  btc", "  bch"]) (renderedLines (verbosePortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewNetworks = [btcView, emptyOn bch]}))
+        `shouldBe` ["  btc", "  bch"]
 
     it "says the fingerprint is unknown when hw has not learnt it" $
-      (renderedLines (verboseAccountDoc UnitBitcoin seenTimeInCet mainAccountRow {dBAccountFingerprint = Nothing} 5000000) !! 1)
+      (renderedLines (verbosePortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewFingerprint = Nothing}) !! 1)
         `shouldBe` "  Fingerprint: unknown"
 
-    it "gives the descriptor without the origin of its key when the fingerprint is unknown" $
-      last (renderedLines (verboseAccountDoc UnitBitcoin seenTimeInCet mainAccountRow {dBAccountFingerprint = Nothing} 5000000))
-        `shouldBe` "  Descriptor : pkh(" <> Text.unpack testAccountXPub <> "/<0;1>/*)#mmejv52s"
+    it "names the accounts a partial portfolio lacks, and how to fill it in" $
+      (renderedLines (verbosePortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewMissing = [(bch, Bip44), (btcTest, Bip84)]}) !! 3)
+        `shouldBe` "  Partial    : lacks bch bip44, btctest bip84: fillwallet fills it in"
 
-    -- As the Coldcard file of test/data/descriptors writes the descriptor
-    it "ends a bip84 account with its descriptor in wpkh, then its key as a zpub on a row of its own" $
-      drop 8 (renderedLines (verboseAccountDoc UnitBitcoin seenTimeInCet segwitAccountRow 0))
-        `shouldBe` [ "  Descriptor : wpkh([bc560f95/84h/0h/0h]" <> Text.unpack testSegwitAccountXPub <> "/<0;1>/*)#5nktextl",
-                     "  SLIP-132   : " <> Text.unpack testSegwitAccountZPub
+    it "gives the description of its wallet as a field" $
+      (renderedLines (verbosePortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewWalletDescription = "laptop"}) !! 3)
+        `shouldBe` "  Wallet     : \"laptop\""
+
+  -- The columns of the portfolios: the wallet, the portfolio and the
+  -- network as wide as their widest cells, or as their headings, then 15
+  -- for "Spendable (btc)", 17 for "Unconfirmed (btc)", 5 for the coins, 9
+  -- for the addresses, then the description
+  describe "The table of portfolios --tabular" $ do
+    let ofMain = portfolioTableColumns UnitBitcoin [mainPortfolioView]
+
+    -- "wallet0" takes 7, "portfolio0" 10, and "Network" 7: 7 + 1 = 8 under
+    -- Wallet, 10 + 2 = 12 under Portfolio, 7 + 2 = 9 under Network, 15 + 2 =
+    -- 17 under Spendable, 17 + 2 = 19 under Unconfirmed, 5 + 2 = 7 under
+    -- Coins, 9 + 2 = 11 under Addresses and 11 + 1 = 12 under Description
+    it "names its columns in a header, the unit in the headings of the amounts, with a line under it" $
+      concatMap renderedLines (tableHeader ofMain)
+        `shouldBe` [ "Wallet  │ Portfolio  │ Network │ Spendable (btc) │ Unconfirmed (btc) │ Coins │ Addresses │ Description",
+                     "────────┼────────────┼─────────┼─────────────────┼───────────────────┼───────┼───────────┼────────────"
                    ]
+
+    it "gives a portfolio a row on a network: its wallet, its name, the network, what it can spend, what is unconfirmed, its coins and addresses, and its description" $
+      concatMap renderedLines (portfolioRowDocs UnitBitcoin ofMain mainPortfolioView)
+        `shouldBe` ["wallet0 │ portfolio0 │ btc     │      0.04900000 │        0.00100000 │     3 │        17 │ \"savings\""]
+
+    -- "btctest4" takes 8, more than "Network"
+    it "gives a portfolio a row for each network it has addresses or coins on, the column of the networks as wide as the widest" $ do
+      let two = mainPortfolioView {viewNetworks = [btcView, emptyOn bch, (emptyOn btcTest4) {networkViewAddresses = 2}]}
+          headed = portfolioTableColumns UnitBitcoin [two]
+      concatMap renderedLines (portfolioRowDocs UnitBitcoin headed two)
+        `shouldBe` [ "wallet0 │ portfolio0 │ btc      │      0.04900000 │        0.00100000 │     3 │        17 │ \"savings\"",
+                     "wallet0 │ portfolio0 │ btctest4 │      0.00000000 │        0.00000000 │     0 │         2 │ \"savings\""
+                   ]
+
+    it "gives a portfolio with no address one row, with no network and no figures" $ do
+      let unused = mainPortfolioView {viewNetworks = [emptyOn btc]}
+      concatMap renderedLines (portfolioRowDocs UnitBitcoin (portfolioTableColumns UnitBitcoin [unused]) unused)
+        `shouldBe` ["wallet0 │ portfolio0 │         │                 │                   │       │           │ \"savings\""]
+
+    it "says a partial portfolio is partial, after its description" $ do
+      let partial = mainPortfolioView {viewMissing = [(bch, Bip44)]}
+      concatMap renderedLines (portfolioRowDocs UnitBitcoin ofMain partial)
+        `shouldBe` ["wallet0 │ portfolio0 │ btc     │      0.04900000 │        0.00100000 │     3 │        17 │ \"savings\" partial"]
+
+    -- "wallet12" takes 8 and "portfolio10" 11: the listing is read whole
+    it "makes the columns of the wallets and of the portfolios of a chunk as wide as their widest names" $ do
+      let later = mainPortfolioView {viewRef = PortfolioRef 12 10, viewDescription = ""}
+      doc <- chunkDoc UnitBitcoin Table (ChunkAt True True False) (ResponsePortfolios [mainPortfolioView, later])
+      renderedLines doc
+        `shouldBe` [ "Wallet   │ Portfolio   │ Network │ Spendable (btc) │ Unconfirmed (btc) │ Coins │ Addresses │ Description",
+                     "─────────┼─────────────┼─────────┼─────────────────┼───────────────────┼───────┼───────────┼────────────",
+                     "wallet0  │ portfolio0  │ btc     │      0.04900000 │        0.00100000 │     3 │        17 │ \"savings\"",
+                     "wallet12 │ portfolio10 │ btc     │      0.04900000 │        0.00100000 │     3 │        17 │"
+                   ]
+
+newPortfolioSpec :: Spec
+newPortfolioSpec = do
+  describe "The portfolio newportfolio created, as its answer shows it" $ do
+    it "says it was created, naming the portfolio and its wallet, then gives the fingerprint and counts the accounts and names their networks" $
+      renderedLines (newPortfolioDoc wholePortfolioView)
+        `shouldBe` [ "Created portfolio0 of wallet0",
+                     "  Fingerprint: bc560f95",
+                     "  Accounts   : 12, on btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg"
+                   ]
+
+    it "names wallet0 in its sentence too, as every sentence does" $
+      take 1 (renderedLines (newPortfolioDoc wholePortfolioView {viewRef = PortfolioRef 0 1}))
+        `shouldBe` ["Created portfolio1 of wallet0"]
+
+    it "comes with what was merged into its wallet and filled in, after a blank line" $
+      printedLines (ResponseNewPortfolio Nothing wholePortfolioView {viewRef = PortfolioRef 1 2} [3] 6)
+        `shouldReturn` [ "Created portfolio2 of wallet1",
+                         "  Fingerprint: bc560f95",
+                         "  Accounts   : 12, on btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg",
+                         "",
+                         "wallet3 was merged into wallet1: the same mnemonic gives both.",
+                         "6 accounts were added to the portfolios wallet1 already had, which lacked them."
+                       ]
+
+  describe "The wallets merged into the wallet of a mnemonic" $ do
+    it "are named in a sentence, which says the same mnemonic gives both" $
+      concatMap renderedLines (mergedNote 0 [1]) `shouldBe` ["wallet1 was merged into wallet0: the same mnemonic gives both."]
+
+    it "are named together when there are several" $
+      concatMap renderedLines (mergedNote 0 [1, 2]) `shouldBe` ["wallet1 and wallet2 were merged into wallet0: the same mnemonic gives them all."]
+
+    it "say nothing when none was merged" $
+      concatMap renderedLines (mergedNote 0 []) `shouldBe` []
+
+  describe "The accounts added to the portfolios a wallet had" $ do
+    it "are counted in a sentence that names the wallet" $
+      concatMap renderedLines (filledNote 1 1) `shouldBe` ["1 account was added to the portfolios wallet1 already had, which lacked them."]
+
+    it "say nothing when none was added" $
+      concatMap renderedLines (filledNote 1 0) `shouldBe` []
+
+  describe "What fillwallet did, above the portfolios of the wallet" $ do
+    it "counts the accounts it added, naming the wallet, and the wallets it merged into it" $
+      renderedLines (filledDoc [2] 6 [mainPortfolioView {viewRef = PortfolioRef 1 0}])
+        `shouldBe` ["6 accounts added to wallet1", "wallet2 was merged into wallet1: the same mnemonic gives both."]
+
+    it "says the wallet lacks no account when every portfolio was whole" $
+      renderedLines (filledDoc [] 0 [mainPortfolioView]) `shouldBe` ["wallet0 lacks no account: every portfolio is whole"]
+
+{- Imports and files of a wallet -}
+
+-- | What importwallet did with a file of the wallets and accounts given,
+-- with nothing else: no label set, nothing missing or left aside
+importedWith :: [WalletImport] -> [AccountImport] -> ImportReport
+importedWith wallets accounts =
+  ImportReport
+    { reportWallets = wallets,
+      reportAccounts = accounts,
+      reportAddressLabels = 0,
+      reportTxLabels = 0,
+      reportCoinsLocked = 0,
+      reportCoinsUnlocked = 0,
+      reportAddressesMissing = 0,
+      reportAddressesTooFar = 0,
+      reportTxsMissing = 0,
+      reportCoinsMissing = 0,
+      reportOtherAccounts = 0,
+      reportOtherPortfolios = 0,
+      reportChangeAddresses = 0,
+      reportNotKept = 0,
+      reportUnreadable = []
+    }
+
+importSpec :: Spec
+importSpec =
+  describe "What importwallet did, as its answer shows it" $ do
+    it "names each wallet of the file with its fingerprint and that it was created, then each of its portfolios with what was added, then the labels set" $
+      renderedLines (importDoc (importedWith [WalletImport 0 (Just testFingerprint) True [] [PortfolioImport 0 True 12 0, PortfolioImport 1 True 12 0]] []))
+        `shouldBe` [ "wallet0  bc560f95  created",
+                     "  portfolio0  created, 12 accounts added",
+                     "  portfolio1  created, 12 accounts added",
+                     "",
+                     "Labels set: none"
+                   ]
+
+    it "says a wallet the database had is already in it, and names the wallets of the same mnemonic merged into it" $
+      take 2 (renderedLines (importDoc (importedWith [WalletImport 1 (Just testFingerprint) False [2, 3] [PortfolioImport 0 False 6 0]] [])))
+        `shouldBe` ["wallet1  bc560f95  already in the database  merged with wallet2 and wallet3", "  portfolio0  6 accounts added"]
+
+    it "says what a portfolio of the file still lacks" $
+      take 2 (renderedLines (importDoc (importedWith [WalletImport 0 (Just testFingerprint) False [] [PortfolioImport 2 False 0 6]] [])))
+        `shouldBe` ["wallet0  bc560f95  already in the database", "  portfolio2  nothing to add, still lacks 6 accounts"]
+
+    it "says the fingerprint of a wallet hw has not learnt is unknown" $
+      take 1 (renderedLines (importDoc (importedWith [WalletImport 0 Nothing False [] []] [])))
+        `shouldBe` ["wallet0  fingerprint unknown  already in the database"]
+
+    it "gives each key of the file left aside with why, apart from the wallets" $
+      renderedLines (importDoc (importedWith [] [AccountLeftAside "xpub6CHK45s4QJWp" "The record names no network"]))
+        `shouldBe` ["xpub6CHK45s4QJWp", "  not imported: The record names no network", "", "Labels set: none"]
+
+    it "counts the labels set, and the coins locked and unlocked" $
+      renderedLines (importDoc (importedWith [] []) {reportAddressLabels = 2, reportTxLabels = 1, reportCoinsLocked = 1, reportCoinsUnlocked = 3})
+        `shouldBe` ["Labels set: 2 addresses, 1 transaction", "Coins locked: 1", "Coins unlocked: 3"]
+
+    it "counts what the file labels that the wallet does not have yet" $
+      renderedLines (importDoc (importedWith [] []) {reportAddressesMissing = 1, reportTxsMissing = 2, reportCoinsMissing = 1})
+        `shouldBe` ["Labels set: none", "Not in the wallet yet: 1 address, 2 transactions, 1 coin"]
+
+    it "counts the records of the accounts the wallet does not have, and of the portfolios --portfolio leaves out, among those left aside" $
+      renderedLines (importDoc (importedWith [] []) {reportOtherAccounts = 2, reportOtherPortfolios = 3})
+        `shouldBe` ["Labels set: none", "Left aside: 2 records of accounts the wallet does not have, 3 records of the portfolios --portfolio leaves out"]
+
+    it "gives the lines of the file that are not records" $
+      renderedLines (importDoc (importedWith [] []) {reportUnreadable = [4, 7]})
+        `shouldBe` ["Labels set: none", "Lines that are not records: 4, 7"]
+
+-- | The id of a transaction, as a record of a file writes it
+fileTxid :: Text
+fileTxid = "0000000000000000000000000000000000000000000000000000000000000001"
+
+-- | A file of a wallet as show shows it, of the wallets and the accounts
+-- given, with what importwallet would do with them, and nothing else
+fileOf :: [WalletImport] -> [(AccountImport, [Record])] -> FileShown
+fileOf wallets accounts = FileShown wallets accounts [] 0 0 0 []
+
+-- | Wallet 0 with the fingerprint of the test wallet, which the database
+-- has, and its portfolio 0, which lacks nothing the file holds
+heldWallet :: WalletImport
+heldWallet = WalletImport 0 (Just testFingerprint) False [] [PortfolioImport 0 False 0 0]
+
+walletFileSpec :: Spec
+walletFileSpec =
+  describe "A file of a wallet as show shows it" $ do
+    it "gives each wallet of the file, with what importwallet would do with it and with each of its portfolios" $
+      renderedLines (walletFileDoc (fileOf [WalletImport 0 (Just testFingerprint) True [] [PortfolioImport 0 True 12 0]] []))
+        `shouldBe` ["wallet0  bc560f95  not in the database, and importwallet creates it", "  portfolio0  importwallet creates it, 12 accounts to add"]
+
+    it "says of a wallet the database has that it is in it" $
+      renderedLines (walletFileDoc (fileOf [heldWallet] []))
+        `shouldBe` ["wallet0  bc560f95  in the database", "  portfolio0  nothing to add"]
+
+    it "gives an account of the file by where it is, then its labels under a heading for each kind" $
+      renderedLines
+        ( walletFileDoc $
+            fileOf
+              [heldWallet]
+              [ ( AccountHeld mainAccountRef,
+                  [ (record AddrRecord "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj") {recordLabel = Just "Wages", recordKeypath = Just "/0/0"},
+                    (record TxRecord fileTxid) {recordLabel = Just "Salary"},
+                    (record OutputRecord (fileTxid <> ":0")) {recordSpendable = Just False}
+                  ]
+                )
+              ]
+        )
+        `shouldBe` [ "wallet0  bc560f95  in the database",
+                     "  portfolio0  nothing to add",
+                     "",
+                     "portfolio0  btc  bip44",
+                     "  Address labels",
+                     "    /0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Wages\"",
+                     "  Transaction labels",
+                     "    0000000000000000000000000000000000000000000000000000000000000001  \"Salary\"",
+                     "  Coins",
+                     "    0000000000000000000000000000000000000000000000000000000000000001:0  locked"
+                   ]
+
+    -- A whole portfolio has twelve accounts, most without a label
+    it "leaves out an account of the file without labels or locks" $
+      renderedLines (walletFileDoc (fileOf [heldWallet] [(AccountAdded segwitAccountRef, [])]))
+        `shouldBe` ["wallet0  bc560f95  in the database", "  portfolio0  nothing to add"]
+
+    it "gives why importwallet would leave a key aside, under the start of the key" $
+      renderedLines (walletFileDoc (fileOf [] [(AccountLeftAside "xpub6CHK45s4QJWp" "The record names no network", [])]))
+        `shouldBe` ["xpub6CHK45s4QJWp", "  importwallet leaves it aside: The record names no network"]
+
+    it "says a coin the file unlocks is unlocked" $
+      renderedLines (walletFileDoc (fileOf [] [(AccountHeld mainAccountRef, [(record OutputRecord (fileTxid <> ":1")) {recordSpendable = Just True}])]))
+        `shouldBe` [ "portfolio0  btc  bip44",
+                     "  Coins",
+                     "    0000000000000000000000000000000000000000000000000000000000000001:1  unlocked"
+                   ]
+
+    -- /0/10 is the longest path, five characters
+    it "pads the key paths of the addresses to the longest, and gives an address without one after the padding" $
+      renderedLines
+        ( walletFileDoc $
+            fileOf
+              []
+              [ ( AccountHeld mainAccountRef,
+                  [ (record AddrRecord "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj") {recordLabel = Just "Wages", recordKeypath = Just "/0/0"},
+                    (record AddrRecord "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg") {recordLabel = Just "From Bob", recordKeypath = Just "/0/10"},
+                    (record AddrRecord "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1") {recordLabel = Just "Rent"}
+                  ]
+                )
+              ]
+        )
+        `shouldBe` [ "portfolio0  btc  bip44",
+                     "  Address labels",
+                     "    /0/0   1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Wages\"",
+                     "    /0/10  1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg  \"From Bob\"",
+                     "           1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1  \"Rent\""
+                   ]
+
+    it "gives the labels of no account of the file last, then what hw keeps no label for and the lines that are not records" $
+      renderedLines (walletFileDoc (FileShown [] [] [(record TxRecord fileTxid) {recordLabel = Just "Salary"}] 0 1 2 [4, 7]))
+        `shouldBe` [ "Labels without an account in the file",
+                     "  Transaction labels",
+                     "    0000000000000000000000000000000000000000000000000000000000000001  \"Salary\"",
+                     "",
+                     "Left aside: 1 label of change addresses, 2 records hw keeps no label for",
+                     "Lines that are not records: 4, 7"
+                   ]
+
+    it "counts the records of the portfolios --portfolio leaves out, which importwallet would not read" $
+      renderedLines (walletFileDoc (FileShown [] [] [] 3 0 0 []))
+        `shouldBe` ["Left aside: 3 records of the portfolios --portfolio leaves out"]
+
+    -- What a file holds may be anything, an escape to clear the screen too
+    it "writes out an escape in a reference of the file, never as an order to the terminal" $
+      renderedLines (walletFileDoc (fileOf [] [(AccountHeld mainAccountRef, [(record AddrRecord "1KEn\ESC[2J") {recordLabel = Just "Wages"}])]))
+        `shouldBe` [ "portfolio0  btc  bip44",
+                     "  Address labels",
+                     "    1KEn\\x1b[2J  \"Wages\""
+                   ]
+
+{- Addresses -}
 
 addressSpec :: Spec
 addressSpec =
@@ -199,14 +618,20 @@ addressSpec =
                      "  Created     : 14 Nov 2023 23:13:20 CET"
                    ]
 
-    -- The address /0/3 of main, which the wallet has not handed out, so
-    -- it has no label and no balance. The note is on one line, since the
-    -- test lays it out with no width.
-    it "gives the address show derives at a path the wallet does not hold cut under its path, then its account and network, then what it is for" $
-      renderedLines (derivedAddrDoc mainAccountRow (Deriv :/ 0 :/ 3) "1yQZuJjA6w7h.........Cv22rKCas7F1")
+    -- receive answers with the address of an account of portfolio1 of
+    -- wallet2. The fields above the last are those of --verbose, whose
+    -- time is on the clock of the computer.
+    it "ends the address an answer gives with its account: its portfolio, its network and its type" $ do
+      shown <- addressAnswerDoc WithoutCode UnitBitcoin (AccountRef (Place otherRef btc) Bip84) segwitAddressRow 0
+      last (renderedLines shown) `shouldBe` "  Account     : portfolio1 of wallet2  btc  bip84"
+
+    -- The address /0/3 of the bip44 account, which the wallet has not
+    -- handed out, so it has no label and no balance. The note is on one
+    -- line, since the test lays it out with no width.
+    it "gives the address show derives at a path the wallet does not hold cut under its path, then its account, then what it is for" $
+      renderedLines (derivedAddrDoc mainAccountRef (Deriv :/ 0 :/ 3) "1yQZuJjA6w7h.........Cv22rKCas7F1")
         `shouldBe` [ "/0/3  1yQZuJjA6w7h.........Cv22rKCas7F1",
-                     "  Account  : main",
-                     "  Network  : btc",
+                     "  Account  : portfolio0  btc  bip44",
                      "",
                      "Compare both ends with the address that receive gave out at /0/3 on the online computer. If they match, that address is of this account, and you can give it out. If they differ, the online computer may have been tampered with, and you should not give the address out. Nobody can make another address with the same ends. This screen is for checking only, so the middle of the address is hidden. Give out the address as receive showed it."
                    ]
@@ -224,127 +649,6 @@ addressSpec =
                      "  Created     : 14 Nov 2023 23:13:20 CET",
                      "####",
                      "####"
-                   ]
-
-importSpec :: Spec
-importSpec =
-  describe "An account importacc created, as the answer shows it" $ do
-    it "gives the account as accounts lists it, then that it was created" $
-      renderedLines (accountImportDoc (AccountCreated mainAccountRow Nothing))
-        `shouldBe` [ "main  btc  /44'/0'/0'",
-                     "  created"
-                   ]
-
-    -- The screen wraps the note at 80 columns; the test renders unbounded
-    it "puts the note on a kind taken on trust under it, indented like the rest" $
-      renderedLines (accountImportDoc (AccountCreated segwitAccountRow (Just "The key says no kind. The account is bip84 because --type says so.")))
-        `shouldBe` [ "spending  btc  /84'/0'/0'",
-                     "  created",
-                     "  The key says no kind. The account is bip84 because --type says so."
-                   ]
-
-    -- The name of a refused account is the label of its record in the file
-    it "writes out a line break in the name of a refused account, which stays on its line" $
-      renderedLines (accountImportDoc (AccountRefused "main\ncreated" "The key does not read as a key of btc"))
-        `shouldBe` [ "main\\ncreated",
-                     "  not imported: The key does not read as a key of btc"
-                   ]
-
--- | The id of a transaction, as a record of a file writes it
-fileTxid :: Text.Text
-fileTxid = "0000000000000000000000000000000000000000000000000000000000000001"
-
--- | A file of accounts as show shows it, of the one account given, with
--- what importacc would do with it and its records, and nothing else
-fileOf :: AccountImport -> [Record] -> FileShown
-fileOf outcome records = FileShown [(outcome, records)] [] 0 0 []
-
-accountFileSpec :: Spec
-accountFileSpec =
-  describe "A file of accounts as show shows it" $ do
-    it "gives an account as accounts lists it, what importacc would do with it, then its labels under a heading for each kind" $
-      renderedLines
-        ( accountFileDoc $
-            fileOf
-              (AccountKept mainAccountRow Nothing)
-              [ (record AddrRecord "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj") {recordLabel = Just "Wages", recordKeypath = Just "/0/0"},
-                (record TxRecord fileTxid) {recordLabel = Just "Salary"},
-                (record OutputRecord (fileTxid <> ":0")) {recordSpendable = Just False}
-              ]
-        )
-        `shouldBe` [ "main  btc  /44'/0'/0'",
-                     "  in the wallet",
-                     "  Address labels",
-                     "    /0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Wages\"",
-                     "  Transaction labels",
-                     "    0000000000000000000000000000000000000000000000000000000000000001  \"Salary\"",
-                     "  Coins",
-                     "    0000000000000000000000000000000000000000000000000000000000000001:0  locked"
-                   ]
-
-    it "says of an account the wallet does not hold that importacc adds it" $
-      renderedLines (accountFileDoc (fileOf (AccountCreated mainAccountRow Nothing) []))
-        `shouldBe` [ "main  btc  /44'/0'/0'",
-                     "  not in the wallet, and importacc adds it"
-                   ]
-
-    it "names an account the wallet holds under another name, which importacc renames" $
-      renderedLines (accountFileDoc (fileOf (AccountRenamed "btc0" mainAccountRow) []))
-        `shouldBe` [ "main  btc  /44'/0'/0'",
-                     "  in the wallet as btc0, and importacc renames it"
-                   ]
-
-    -- Sparrow names the key of an account after its signer
-    it "gives why importacc would refuse an account, under the name the file gives it" $
-      renderedLines (accountFileDoc (fileOf (AccountRefused "BIP39" "Give the --network, or a default-network in the configuration file") []))
-        `shouldBe` [ "BIP39",
-                     "  importacc refuses it: Give the --network, or a default-network in the configuration file"
-                   ]
-
-    it "says a coin the file unlocks is unlocked" $
-      renderedLines (accountFileDoc (fileOf (AccountKept mainAccountRow Nothing) [(record OutputRecord (fileTxid <> ":1")) {recordSpendable = Just True}]))
-        `shouldBe` [ "main  btc  /44'/0'/0'",
-                     "  in the wallet",
-                     "  Coins",
-                     "    0000000000000000000000000000000000000000000000000000000000000001:1  unlocked"
-                   ]
-
-    -- /0/10 is the longest path, five characters
-    it "pads the key paths of the addresses to the longest, and gives an address without one after the padding" $
-      renderedLines
-        ( accountFileDoc $
-            fileOf
-              (AccountKept mainAccountRow Nothing)
-              [ (record AddrRecord "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj") {recordLabel = Just "Wages", recordKeypath = Just "/0/0"},
-                (record AddrRecord "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg") {recordLabel = Just "From Bob", recordKeypath = Just "/0/10"},
-                (record AddrRecord "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1") {recordLabel = Just "Rent"}
-              ]
-        )
-        `shouldBe` [ "main  btc  /44'/0'/0'",
-                     "  in the wallet",
-                     "  Address labels",
-                     "    /0/0   1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Wages\"",
-                     "    /0/10  1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg  \"From Bob\"",
-                     "           1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1  \"Rent\""
-                   ]
-
-    it "gives the labels of no account of the file last, then what hw keeps no label for and the lines that are not records" $
-      renderedLines (accountFileDoc (FileShown [] [(record TxRecord fileTxid) {recordLabel = Just "Salary"}] 1 2 [4, 7]))
-        `shouldBe` [ "Labels without an account in the file",
-                     "  Transaction labels",
-                     "    0000000000000000000000000000000000000000000000000000000000000001  \"Salary\"",
-                     "",
-                     "Left aside: 1 label of change addresses, 2 records hw keeps no label for",
-                     "Lines that are not records: 4, 7"
-                   ]
-
-    -- What a file holds may be anything, an escape to clear the screen too
-    it "writes out an escape in a reference of the file, never as an order to the terminal" $
-      renderedLines (accountFileDoc (fileOf (AccountKept mainAccountRow Nothing) [(record AddrRecord "1KEn\ESC[2J") {recordLabel = Just "Wages"}]))
-        `shouldBe` [ "main  btc  /44'/0'/0'",
-                     "  in the wallet",
-                     "  Address labels",
-                     "    1KEn\\x1b[2J  \"Wages\""
                    ]
 
 balanceSpec :: Spec
@@ -391,10 +695,18 @@ balanceSpec = do
                      "  Not spendable yet: 0.00000000 btc"
                    ]
 
+  -- The specification: balances gives a total for each network
+  describe "The line above the addresses balances lists on a network" $
+    it "says where they are, then the total, spendable and unspendable amounts of the network" $
+      renderedLines (balanceTitle UnitBitcoin mainPlace (CoinBalance 130000 100000 30000 0))
+        `shouldBe` ["portfolio0  btc  total 0.00130000 btc, spendable 0.00100000 btc, unspendable 0.00030000 btc"]
+
+{- Coins -}
+
 -- The coin of 'spendableCoinRow' at the first change address,
 -- 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn, which takes no label
 atChange :: JsonCoin
-atChange = spendableCoinRow {jsonCoinAddress = internalAddr 0, jsonCoinChange = True, jsonCoinPath = Just (Deriv :/ 1 :/ 0)}
+atChange = spendableCoinRow {jsonCoinAddress = internalAddr 0, jsonCoinChange = True, jsonCoinPath = Just (legacyPath (Deriv :/ 1 :/ 0))}
 
 coinSpec :: Spec
 coinSpec = do
@@ -515,13 +827,26 @@ coinSpec = do
                      "  Address : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  /0/0"
                    ]
 
+{- Syncs and recover -}
+
+-- | A sync of portfolio 0 on a network where it holds nothing and nothing
+-- changed
+quietOn :: PortfolioRef -> Network -> SyncRes
+quietOn ref net = quietSync {syncResPlace = Place ref net, syncResConfirmed = 0, syncResUnconfirmed = 0, syncResCoins = 0, syncResSpendable = 0}
+
+-- | What a store at an address that refuses every connection says
+downStore :: Text
+downStore = "The store at http://127.0.0.1:1/ did not answer"
+
 syncSpec :: Spec
 syncSpec =
-  describe "The sync of an account as hw shows it" $ do
-    it "gives the account as accounts does, the block it is synced to, and each kind of change on a line" $
+  describe "The sync of a portfolio as hw shows it" $ do
+    -- quietSync: portfolio0 on btc can spend 4900000 of its 3 coins, and
+    -- 100000 is unconfirmed
+    it "gives where it is, what the portfolio holds there, the block it is synced to, and each kind of change on a line" $
       renderedLines (syncResultDoc UnitBitcoin quietSync {syncResTxUpdates = 2, syncResCoinUpdates = 3, syncResRebroadcast = 1, syncResConflicted = 1, syncResNewAddrs = 4})
-        `shouldBe` [ "main  btc  /44'/0'/0'",
-                     "  spendable 0.05000000 btc, unconfirmed 0.00100000 btc, 3 coins",
+        `shouldBe` [ "portfolio0  btc",
+                     "  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins",
                      "  synced at block 800002",
                      "  2 transactions and 3 coins updated",
                      "  1 transaction sent again",
@@ -531,8 +856,8 @@ syncSpec =
 
     it "says nothing new when nothing changed" $
       renderedLines (syncResultDoc UnitBitcoin quietSync)
-        `shouldBe` [ "main  btc  /44'/0'/0'",
-                     "  spendable 0.05000000 btc, unconfirmed 0.00100000 btc, 3 coins",
+        `shouldBe` [ "portfolio0  btc",
+                     "  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins",
                      "  synced at block 800002, nothing new"
                    ]
 
@@ -542,15 +867,48 @@ syncSpec =
                      "  1 transaction updated"
                    ]
 
-    it "gives an account left out with why its store failed" $
-      renderedLines (notSyncedDoc (mainAccountRow, "The store at http://127.0.0.1:1/ did not answer"))
-        `shouldBe` [ "main  btc  /44'/0'/0'",
-                     "  not synced: The store at http://127.0.0.1:1/ did not answer"
+    it "names the wallet of the portfolio when it is not wallet0" $
+      take 1 (renderedLines (syncResultDoc UnitBitcoin quietSync {syncResPlace = Place otherRef btc}))
+        `shouldBe` ["portfolio1 of wallet2  btc"]
+
+    -- A portfolio has accounts on eight networks, most of which hold
+    -- nothing: those are named in one line for each portfolio
+    it "names the networks where a portfolio holds nothing and nothing changed in one line for each portfolio, below the others" $
+      renderedLines (syncResultsPrinter UnitBitcoin [quietSync, quietOn mainPortfolioRef bch, quietOn otherRef btc, quietOn mainPortfolioRef btcTest])
+        `shouldBe` [ "portfolio0  btc",
+                     "  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins",
+                     "  synced at block 800002, nothing new",
+                     "",
+                     "portfolio0  nothing on bch and btctest",
+                     "portfolio1 of wallet2  nothing on btc"
                    ]
 
-    it "gives a network recover left out with why its store failed" $
-      renderedLines (notSearchedDoc [(bch, "The store at http://127.0.0.1:1/ did not answer")])
-        `shouldBe` ["bch  not searched: The store at http://127.0.0.1:1/ did not answer"]
+    it "gives a block of its own to a network where the sync found something, though the portfolio holds nothing there" $
+      take 1 (renderedLines (syncResultsPrinter UnitBitcoin [(quietOn mainPortfolioRef bch) {syncResNewAddrs = 1}]))
+        `shouldBe` ["portfolio0  bch"]
+
+    -- A host that answers 404 does not serve the network: no failure
+    it "names the networks the host does not serve in one line" $
+      renderedLines (notServedDoc [btcTest, btcRegTest]) `shouldBe` ["Not served by the store: btctest, btcreg"]
+
+    it "gives each network left out with why its store failed" $
+      renderedLines (failedNetworksDoc "not synced" [(bch, downStore), (btcTest4, downStore)])
+        `shouldBe` [ "bch  not synced: The store at http://127.0.0.1:1/ did not answer",
+                     "btctest4  not synced: The store at http://127.0.0.1:1/ did not answer"
+                   ]
+
+    it "answers with the syncs, then the networks not served, then those down, a blank line between them" $
+      printedLines (ResponseSync [quietSync, quietOn mainPortfolioRef bch] [btcTest4] [(bchTest4, downStore)])
+        `shouldReturn` [ "portfolio0  btc",
+                         "  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins",
+                         "  synced at block 800002, nothing new",
+                         "",
+                         "portfolio0  nothing on bch",
+                         "",
+                         "Not served by the store: btctest4",
+                         "",
+                         "bchtest4  not synced: The store at http://127.0.0.1:1/ did not answer"
+                       ]
 
     it "lists the funds at paths hw cannot spend from: each account with its network, its path, its kind, its used addresses and what is left, then what to do" $
       renderedLines (foreignFundsDoc UnitBitcoin [(btc, ForeignFunds Bip49 0 3 70000), (btc, ForeignFunds Bip86 0 1 0)])
@@ -566,8 +924,6 @@ syncSpec =
                      "  btc  /49'/0'/10'  bip49, wrapped SegWit: 1 address used, 0.00001000 btc left"
                    ]
 
-    -- recover searches btc and bch, whose names are as long, but the
-    -- column lines up names of any length
     it "aligns the paths when the names of the networks differ in length" $
       take 2 (drop 1 (renderedLines (foreignFundsDoc UnitBitcoin [(btcTest4, ForeignFunds Bip49 0 1 1000), (btc, ForeignFunds Bip49 0 1 1000)])))
         `shouldBe` [ "  btctest4  /49'/1'/0'  bip49, wrapped SegWit: 1 address used, 0.00001000 btc left",
@@ -577,6 +933,67 @@ syncSpec =
     it "names the bip44 accounts of Bitcoin on Bitcoin Cash by the coin type of their path" $
       renderedLines (foreignFundsDoc UnitBitcoin [(bch, ForeignFunds Bip44OfBitcoin 0 2 50000)]) !! 1
         `shouldBe` "  bch  /44'/0'/0'  bip44 with the coin type of Bitcoin: 2 addresses used, 0.00050000 btc left"
+
+recoverSpec :: Spec
+recoverSpec =
+  describe "What recover found, as its answer shows it" $ do
+    it "names the portfolios it recovered and their wallet" $
+      concatMap renderedLines (recoveredDocs [btc, bch] 10 (Just 0) [] [0, 1] 0)
+        `shouldBe` ["Recovered portfolio0 and portfolio1 of wallet0"]
+
+    it "says no portfolio was paid on the networks searched, and when the search ended, when it found none" $
+      concatMap renderedLines (recoveredDocs [btc, bch, btcTest4] 10 Nothing [] [] 0)
+        `shouldBe` ["No portfolio of the mnemonic was paid on btc, bch or btctest4. The search ended after 10 portfolios in a row without a payment."]
+
+    it "says no new portfolio was paid when the wallet of the mnemonic had every one it found" $
+      concatMap renderedLines (recoveredDocs [btc] 10 (Just 1) [] [] 0)
+        `shouldBe` ["No new portfolio of the mnemonic was paid on btc. The search ended after 10 portfolios in a row without a payment."]
+
+    it "names the wallets of the mnemonic it merged, and counts the accounts it filled in" $
+      concatMap renderedLines (recoveredDocs [btc] 10 (Just 1) [2] [0] 6)
+        `shouldBe` [ "Recovered portfolio0 of wallet1",
+                     "wallet2 was merged into wallet1: the same mnemonic gives both.",
+                     "6 accounts were added to the portfolios wallet1 already had, which lacked them."
+                   ]
+
+    -- The network left out may have failed during the search or during
+    -- the syncs after it
+    it "answers with what it found, then the syncs, the networks not served, and those left out with why" $
+      printedLines (ResponseRecover [btc] 10 (Just 0) [] [0] 0 [quietSync] [] [btcTest4] [(bch, downStore)])
+        `shouldReturn` [ "Recovered portfolio0 of wallet0",
+                         "",
+                         "portfolio0  btc",
+                         "  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins",
+                         "  synced at block 800002, nothing new",
+                         "",
+                         "Not served by the store: btctest4",
+                         "",
+                         "bch  left out: The store at http://127.0.0.1:1/ did not answer"
+                       ]
+
+deletedSpec :: Spec
+deletedSpec =
+  describe "What deleteportfolio and deletewallet deleted, as their answers show it" $ do
+    it "says what was deleted" $
+      printedLines (ResponseDeleted "portfolio2 of wallet0 has been deleted" [])
+        `shouldReturn` ["portfolio2 of wallet0 has been deleted"]
+
+    it "says the key of the configuration file the default portfolio was written to, and its value" $
+      printedLines (ResponseDeleted "portfolio2 of wallet0 has been deleted" [("default-portfolio", 0)])
+        `shouldReturn` ["portfolio2 of wallet0 has been deleted", "The key default-portfolio of the configuration file is now 0."]
+
+    it "says the key of the configuration file the default wallet was written to, and its value" $
+      printedLines (ResponseDeleted "wallet0 has been deleted, with all of its portfolios" [("default-wallet", 1)])
+        `shouldReturn` ["wallet0 has been deleted, with all of its portfolios", "The key default-wallet of the configuration file is now 1."]
+
+    it "says each key of the configuration file it wrote, in the order written" $
+      printedLines (ResponseDeleted "wallet0 has been deleted, with all of its portfolios" [("default-wallet", 1), ("default-portfolio", 0)])
+        `shouldReturn` [ "wallet0 has been deleted, with all of its portfolios",
+                         "The key default-wallet of the configuration file is now 1.",
+                         "The key default-portfolio of the configuration file is now 0."
+                       ]
+
+{- Transactions -}
 
 headlineSpec :: Spec
 headlineSpec = do
@@ -595,15 +1012,15 @@ headlineSpec = do
       renderedLines (headlineDoc fullConfirmations UnitBitcoin (Just seenTimeInCet) info)
         `shouldBe` ["14 Nov 2023 23:13  Outgoing     -0.00041000 btc  2 confirmations"]
 
-    -- /0/0 pays 40000 to /0/1 and 9000 of change to /1/0: the account only
-    -- loses the fee of 1000
-    it "shows a transaction between addresses of the wallet as Internal, costing its fee" $ do
+    -- /0/0 pays 40000 to /0/1 and 9000 of change to /1/0: the portfolio
+    -- only loses the fee of 1000
+    it "shows a transaction between addresses of the portfolio as Internal, costing its fee" $ do
       let internal =
             spendSummary
               { summaryType = TxInternal,
                 summaryAmount = -1000,
                 summaryOtherOutputs = Map.empty,
-                summaryMyOutputs = Map.fromList [(externalAddr 1, MyOutputs 40000 (Deriv :/ 0 :/ 1) ""), (internalAddr 0, MyOutputs 9000 (Deriv :/ 1 :/ 0) "")]
+                summaryMyOutputs = Map.fromList [(externalAddr 1, MyOutputs 40000 (legacyPath (Deriv :/ 0 :/ 1)) ""), (internalAddr 0, MyOutputs 9000 (legacyPath (Deriv :/ 1 :/ 0)) "")]
               }
           info = TxInfo internal (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
       renderedLines (headlineDoc fullConfirmations UnitBitcoin (Just seenTimeInCet) info)
@@ -698,7 +1115,7 @@ compactSpec = do
       (renderedLines (compactTxDoc btc UnitBitcoin Nothing (Just 1208000) (Just seenTimeInCet) (spent "Rent of October" Map.empty)) !! 1)
         `shouldBe` "  balance 0.01208000 btc, \"Rent of October\""
 
-    it "shows an account left with nothing as zero" $
+    it "shows a portfolio left with nothing on the network as zero" $
       (renderedLines (compactTxDoc btc UnitBitcoin Nothing (Just 0) (Just seenTimeInCet) (spent "" Map.empty)) !! 1)
         `shouldBe` "  balance 0.00000000 btc, to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
 
@@ -734,15 +1151,24 @@ compactSpec = do
                      "  \"Rent of October\""
                    ]
 
-    it "names the address of the wallet a payment received is paid at by its path, with its label" $ do
+    -- Each account of a portfolio has an address at /0/0: the type tells
+    -- them apart
+    it "names the address of the portfolio a payment received is paid at by the type of its account and its path, with its label" $ do
       let info = TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "" Map.empty
       (renderedLines (compactTxDoc btc UnitBitcoin Nothing Nothing (Just seenTimeInCet) info) !! 1)
-        `shouldBe` "  at /0/0 \"Rent\""
+        `shouldBe` "  at bip44/0/0 \"Rent\""
+
+    -- bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc is /0/0 of m/84'/0'/0'
+    it "names an address of the bip84 account of the portfolio by bip84 and its path" $ do
+      let toSegwit = paymentSummary {summaryMyOutputs = Map.fromList [(segwitExternalAddr 0, MyOutputs 50000 (segwitPath (Deriv :/ 0 :/ 0)) "")]}
+          info = TxInfo toSegwit (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "" Map.empty
+      (renderedLines (compactTxDoc btc UnitBitcoin Nothing Nothing (Just seenTimeInCet) info) !! 1)
+        `shouldBe` "  at bip84/0/0"
 
     it "gives the label of a payment received after the path of its address, in place of the label of the address" $ do
       let info = TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "Salary" Map.empty
       (renderedLines (compactTxDoc btc UnitBitcoin Nothing Nothing (Just seenTimeInCet) info) !! 1)
-        `shouldBe` "  at /0/0 \"Salary\""
+        `shouldBe` "  at bip44/0/0 \"Salary\""
 
     -- otherAddr 1 is 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ
     it "gives the largest output of several, and counts the others" $ do
@@ -757,10 +1183,16 @@ compactSpec = do
       (renderedLines (compactTxDoc btc UnitBitcoin Nothing (Just 1208000) (Just seenTimeInCet) toTaproot) !! 1)
         `shouldBe` "  balance 0.01208000 btc, to bc1p8zl0j9e73592k9n6ftz4keyq24dq8djqd3rkcrepu2fw6zeryyjs8zz3ev"
 
-    it "names the account first in a listing of every account" $ do
+    -- pendingtxs names where each transaction is
+    it "names the portfolio and the network first when the listing names them" $ do
       let info = TxInfo spendSummary (Pending (PendingStatus a1075db5First Nothing False False (Just seenTime) [])) "" Map.empty
-      (renderedLines (compactTxDoc btc UnitBitcoin (Just mainAccountRow) Nothing (Just seenTimeInCet) info) !! 1)
-        `shouldBe` "  account main, to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
+      (renderedLines (compactTxDoc btc UnitBitcoin (Just mainPortfolioRef) Nothing (Just seenTimeInCet) info) !! 1)
+        `shouldBe` "  portfolio0 btc, to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
+
+    it "names the wallet of the portfolio there when it is not wallet0" $ do
+      let info = TxInfo spendSummary (Pending (PendingStatus a1075db5First Nothing False False (Just seenTime) [])) "" Map.empty
+      (renderedLines (compactTxDoc btc UnitBitcoin (Just otherRef) Nothing (Just seenTimeInCet) info) !! 1)
+        `shouldBe` "  portfolio1 of wallet2 btc, to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
 
     it "names the transaction a replacement replaces by its short id, before what it is for" $ do
       let info = TxInfo spendSummary (Pending (PendingStatus a1075db5First Nothing False False (Just seenTime) [b2d4f6a8Txid])) "" Map.empty
@@ -821,10 +1253,10 @@ tableSpec = do
       renderedLines (txRowDoc btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) unconfirmed)
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     0 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
-    it "shows a payment received with a plus sign, and the path of the address of the wallet it was paid at" $ do
+    it "shows a payment received with a plus sign, and the type and the path of the address of the portfolio it was paid at" $ do
       let info = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "" Map.empty
       renderedLines (txRowDoc btc UnitBitcoin (Just 50000) (Just seenTimeInCet) info)
-        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ at /0/0"]
+        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ at bip44/0/0"]
 
     it "gives the label of a transaction, quoted, in place of the address paid" $
       renderedLines (txRowDoc btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) (spent "Rent of October" Map.empty))
@@ -848,53 +1280,48 @@ tableSpec = do
     it "gives the label of a payment received after the path of the address it was paid at" $ do
       let info = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "Salary" Map.empty
       renderedLines (txRowDoc btc UnitBitcoin (Just 50000) (Just seenTimeInCet) info)
-        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ at /0/0 \"Salary\""]
+        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ at bip44/0/0 \"Salary\""]
 
     it "gives the label of the address a payment was received at when the payment has none" $ do
       let info = TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "" Map.empty
       renderedLines (txRowDoc btc UnitBitcoin (Just 50000) (Just seenTimeInCet) info)
-        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ at /0/0 \"Rent\""]
+        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ at bip44/0/0 \"Rent\""]
 
     it "gives the label of a payment received rather than the label of its address" $ do
       let info = TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "Salary" Map.empty
       renderedLines (txRowDoc btc UnitBitcoin (Just 50000) (Just seenTimeInCet) info)
-        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ at /0/0 \"Salary\""]
+        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ at bip44/0/0 \"Salary\""]
 
     -- 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn is the first change address
     it "says a payment received at a change address is at one" $ do
-      let atChangeAddress = paymentSummary {summaryMyOutputs = Map.fromList [(internalAddr 0, MyOutputs 50000 (Deriv :/ 1 :/ 0) "")]}
+      let atChangeAddress = paymentSummary {summaryMyOutputs = Map.fromList [(internalAddr 0, MyOutputs 50000 (legacyPath (Deriv :/ 1 :/ 0)) "")]}
           info = TxInfo atChangeAddress (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "" Map.empty
       renderedLines (txRowDoc btc UnitBitcoin (Just 50000) (Just seenTimeInCet) info)
-        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ at /1/0 change address"]
+        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ at bip44/1/0 change address"]
 
-    -- /0/0 pays 40000 to /0/1 and 9000 to /1/0: the account loses the fee
+    -- /0/0 pays 40000 to /0/1 and 9000 to /1/0: the portfolio loses the fee
     -- of 1000
-    it "gives the path of the address a transaction between addresses of the wallet pays the most, and counts the others" $ do
+    it "gives the path of the address a transaction between addresses of the portfolio pays the most, and counts the others" $ do
       let internal =
             spendSummary
               { summaryType = TxInternal,
                 summaryAmount = -1000,
                 summaryOtherOutputs = Map.empty,
-                summaryMyOutputs = Map.fromList [(externalAddr 1, MyOutputs 40000 (Deriv :/ 0 :/ 1) ""), (internalAddr 0, MyOutputs 9000 (Deriv :/ 1 :/ 0) "")]
+                summaryMyOutputs = Map.fromList [(externalAddr 1, MyOutputs 40000 (legacyPath (Deriv :/ 0 :/ 1)) ""), (internalAddr 0, MyOutputs 9000 (legacyPath (Deriv :/ 1 :/ 0)) "")]
               }
           info = TxInfo internal (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
       renderedLines (txRowDoc btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) info)
-        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Internal │    -0.00001000 │     0.01208000 │     2 │ to /0/1 and 1 more"]
+        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Internal │    -0.00001000 │     0.01208000 │     2 │ to bip44/0/1 and 1 more"]
 
     it "gives a long label of an address whole, after its path" $ do
-      let longLabel = paymentSummary {summaryMyOutputs = Map.fromList [(externalAddr 0, MyOutputs 50000 (Deriv :/ 0 :/ 0) "Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month")]}
+      let longLabel = paymentSummary {summaryMyOutputs = Map.fromList [(externalAddr 0, MyOutputs 50000 (legacyPath (Deriv :/ 0 :/ 0)) "Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month")]}
           info = TxInfo longLabel (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "" Map.empty
       renderedLines (txRowDoc btc UnitBitcoin (Just 50000) (Just seenTimeInCet) info)
-        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ at /0/0 \"Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month\""]
-
-    it "leaves the balance of a dead transaction empty" $ do
-      let dead = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.MemRef 1700000000) (Just seenTime) 0 True)) "" Map.empty
-      renderedLines (txRowDoc btc UnitBitcoin Nothing (Just seenTimeInCet) dead)
-        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │                │  dead │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │ at bip44/0/0 \"Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month\""]
 
     -- A dead transaction has 0 confirmations, as an unconfirmed one does,
-    -- but it will never confirm
-    it "says dead in place of the confirmations of a dead transaction" $ do
+    -- but it will never confirm, and the balance does not count it
+    it "leaves the balance of a dead transaction empty, and says dead in place of its confirmations" $ do
       let dead = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.MemRef 1700000000) (Just seenTime) 0 True)) "" Map.empty
       renderedLines (txRowDoc btc UnitBitcoin Nothing (Just seenTimeInCet) dead)
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │                │  dead │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
@@ -908,7 +1335,7 @@ tableSpec = do
     it "lets an amount wider than its column push the rest of its row" $ do
       let large = TxInfo paymentSummary {summaryAmount = 1250000000000} (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "" Map.empty
       renderedLines (txRowDoc btc UnitBitcoin (Just 50000) (Just seenTimeInCet) large)
-        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │ +12500.00000000 │     0.00050000 │     3 │ at /0/0"]
+        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │ +12500.00000000 │     0.00050000 │     3 │ at bip44/0/0"]
 
   -- The screen reads a listing in chunks. A transaction without a time
   -- shows "time unknown", whatever the time zone of the computer.
@@ -916,7 +1343,7 @@ tableSpec = do
     let listed = ListedTx (TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) Nothing 2 False)) "" Map.empty) (Just 1208000)
 
     it "starts with the header when it is the first one" $ do
-      doc <- chunkDoc UnitBitcoin Table True (ResponseTxs mainAccountRow [listed])
+      doc <- chunkDoc UnitBitcoin Table (ChunkAt True True False) (ResponseTxs [mainGroup [listed]])
       renderedLines doc
         `shouldBe` [ "Txid     │ Time              │ Type     │   Amount (btc) │  Balance (btc) │ Confs │ Description",
                      "─────────┼───────────────────┼──────────┼────────────────┼────────────────┼───────┼────────────",
@@ -924,28 +1351,36 @@ tableSpec = do
                    ]
 
     it "holds its rows alone when it is a later one, with no header and no blank line" $ do
-      doc <- chunkDoc UnitBitcoin Table False (ResponseTxs mainAccountRow [listed])
+      doc <- chunkDoc UnitBitcoin Table (ChunkAt False False False) (ResponseTxs [mainGroup [listed]])
       renderedLines doc
         `shouldBe` ["00000000 │ time unknown      │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "says there are no transactions, without a header, when there are none" $ do
-      doc <- chunkDoc UnitBitcoin Table True (ResponseTxs mainAccountRow [])
+      doc <- chunkDoc UnitBitcoin Table (ChunkAt True True False) (ResponseTxs [])
       renderedLines doc `shouldBe` ["There are no transactions to display"]
 
+    it "puts the line of its place above the header when the listing may cover several places" $ do
+      doc <- chunkDoc UnitBitcoin Table (ChunkAt True True True) (ResponseTxs [mainGroup [listed]])
+      renderedLines doc
+        `shouldBe` [ "portfolio0  btc",
+                     "Txid     │ Time              │ Type     │   Amount (btc) │  Balance (btc) │ Confs │ Description",
+                     "─────────┼───────────────────┼──────────┼────────────────┼────────────────┼───────┼────────────",
+                     "00000000 │ time unknown      │ Outgoing │    -0.00041000 │     0.01208000 │     2 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
+                   ]
+
   addressTableSpec
-  accountTableSpec
   coinTableSpec
   balanceTableSpec
   pendingTableSpec
 
--- The columns of the receiving addresses of main, with paths of 4
--- characters: 4 for the path, 34 for a base58 address, 15 for
--- "Spendable (btc)", 14 for "Received (btc)", 5 for the transactions, then
--- the label
+-- The columns of the receiving addresses of the bip44 account, with paths
+-- of 4 characters: 4 for the path, 34 for a base58 address, 15 for
+-- "Spendable (btc)", 14 for "Received (btc)", 5 for the transactions,
+-- then the label
 addressTableSpec :: Spec
 addressTableSpec = do
   describe "The table of addresses --tabular" $ do
-    let receiving = addressTableColumns UnitBitcoin mainAccountRow 4 False
+    let receiving = addressTableColumns UnitBitcoin btc [Bip44] 4 False
         changeAddressRow = paidAddressRow {dBAddressInternal = True, dBAddressAddress = "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", dBAddressLabel = ""}
 
     -- Under a heading, the line has a dash for each character and the
@@ -977,7 +1412,7 @@ addressTableSpec = do
         `shouldBe` ["/0/3 │ 1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1  │                 │                │     0 │"]
 
     it "gives the amounts as numbers alone, in satoshis when they are, with wider headings" $ do
-      let inSatoshis = addressTableColumns UnitSatoshi mainAccountRow 4 False
+      let inSatoshis = addressTableColumns UnitSatoshi btc [Bip44] 4 False
       concatMap renderedLines (take 1 (tableHeader inSatoshis) <> [addressRowDoc UnitSatoshi inSatoshis paidAddressRow 50000])
         `shouldBe` [ "Path │ Address                            │ Spendable (sats) │ Received (sats) │   Txs │ Label",
                      "/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │            50000 │           50000 │     1 │ \"Invoice 42\""
@@ -985,98 +1420,51 @@ addressTableSpec = do
 
     -- Under Txs, the last column, the line has 5 + 1 = 6 dashes
     it "has no column for a label in the table of change addresses, which never have one" $ do
-      let change = addressTableColumns UnitBitcoin mainAccountRow 4 True
+      let change = addressTableColumns UnitBitcoin btc [Bip44] 4 True
       concatMap renderedLines (tableHeader change <> [addressRowDoc UnitBitcoin change changeAddressRow 50000])
         `shouldBe` [ "Path │ Address                            │ Spendable (btc) │ Received (btc) │   Txs",
                      "─────┼────────────────────────────────────┼─────────────────┼────────────────┼──────",
                      "/1/0 │ 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn │      0.00050000 │     0.00050000 │     1"
                    ]
 
-    it "makes the column of the addresses of a BIP44 account 34 characters wide, the longest base58 address" $
-      addressWidth mainAccountRow `shouldBe` 34
+  describe "The width of the column of addresses" $ do
+    it "is 34 characters for a bip44 account of Bitcoin, the longest base58 address" $
+      addressWidth btc [Bip44] `shouldBe` 34
 
     -- bc1q, then 38 characters for the key hash and the checksum
-    it "makes the column of the addresses of a BIP84 account 42 characters wide, the length of every one" $
-      addressWidth segwitAccountRow `shouldBe` 42
+    it "is 42 characters for a bip84 account, the length of every one" $
+      addressWidth btc [Bip84] `shouldBe` 42
 
-  -- The newest receiving address of main is /0/11, of 5 characters
-  describe "A chunk of the table of addresses" $
+    it "is that of the wider type when the listing covers both" $
+      addressWidth btc [Bip44, Bip84] `shouldBe` 42
+
+    -- bitcoincash: takes 12 characters, and the address after it 42
+    it "is 54 characters on Bitcoin Cash, the address with its prefix" $
+      addressWidth bch [Bip44] `shouldBe` 54
+
+  -- The newest receiving address of the account is /0/11, of 5 characters
+  describe "A chunk of the table of addresses" $ do
     it "starts with the header when it is the first one, its paths as wide as the longest of the account" $ do
-      doc <- chunkDoc UnitBitcoin Table True (ResponseAddresses mainAccountRow [(paidAddressRow, 50000)])
+      doc <- chunkDoc UnitBitcoin Table (ChunkAt True True False) (ResponseAddresses [mainGroup [(paidAddressRow, 50000)]])
       renderedLines doc
         `shouldBe` [ "Path  │ Address                            │ Spendable (btc) │ Received (btc) │   Txs │ Label",
                      "──────┼────────────────────────────────────┼─────────────────┼────────────────┼───────┼──────",
                      "/0/0  │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │      0.00050000 │     0.00050000 │     1 │ \"Invoice 42\""
                    ]
 
--- The columns of the accounts: the name, the network and the path as
--- wide as the widest of the accounts, or as their headings, then 15 for
--- "Spendable (btc)", 17 for "Unconfirmed (btc)", and 5 for the coins.
--- main can spend 5000000 of its 3 coins, and 100000 is unconfirmed.
-accountTableSpec :: Spec
-accountTableSpec =
-  describe "The table of accounts --tabular" $ do
-    let ofMain = accountTableColumns UnitBitcoin [mainAccountRow]
+    it "puts the line of its account above the header when the listing may cover several accounts" $ do
+      doc <- chunkDoc UnitBitcoin Table (ChunkAt True True True) (ResponseAddresses [mainGroup [(paidAddressRow, 50000)]])
+      take 2 (renderedLines doc)
+        `shouldBe` ["portfolio0  btc  bip44", "Path  │ Address                            │ Spendable (btc) │ Received (btc) │   Txs │ Label"]
 
-    -- "main" and "btc" are shorter than "Account" and "Network", of 7
-    -- characters, and "/44'/0'/0'" takes 10: 7 + 1 = 8 under Account,
-    -- 7 + 2 = 9 under Network, 10 + 2 = 12 under Path, 15 + 2 = 17 under
-    -- Spendable, 17 + 2 = 19 under Unconfirmed, and 5 + 1 = 6 under Coins
-    it "names its columns in a header, the unit in the headings of the amounts, with a line under it" $
-      concatMap renderedLines (tableHeader ofMain)
-        `shouldBe` [ "Account │ Network │ Path       │ Spendable (btc) │ Unconfirmed (btc) │ Coins",
-                     "────────┼─────────┼────────────┼─────────────────┼───────────────────┼──────"
-                   ]
-
-    it "gives an account one row: its name, network and path, what it can spend, what is unconfirmed, and its coins" $
-      renderedLines (accountRowDoc UnitBitcoin ofMain mainAccountRow 5000000)
-        `shouldBe` ["main    │ btc     │ /44'/0'/0' │      0.05000000 │        0.00100000 │     3"]
-
-    it "gives the path of a bip84 account, and zero for what an unpaid account holds" $
-      renderedLines (accountRowDoc UnitBitcoin (accountTableColumns UnitBitcoin [segwitAccountRow]) segwitAccountRow 0)
-        `shouldBe` ["spending │ btc     │ /84'/0'/0' │      0.00000000 │        0.00000000 │     0"]
-
-    -- "family savings account" has 22 characters
-    it "gives a long name whole, in a first column as wide as it" $ do
-      let family = mainAccountRow {dBAccountName = "family savings account"}
-      renderedLines (accountRowDoc UnitBitcoin (accountTableColumns UnitBitcoin [family]) family 5000000)
-        `shouldBe` ["family savings account │ btc     │ /44'/0'/0' │      0.05000000 │        0.00100000 │     3"]
-
-    -- The eleventh account of Bitcoin Cash, of coin type 145, has the path
-    -- /44'/145'/10', of 13 characters
-    it "makes the column of paths as wide as the longest path" $ do
-      let eleventh = mainAccountRow {dBAccountNetwork = "bch", dBAccountIndex = 10}
-      renderedLines (accountRowDoc UnitBitcoin (accountTableColumns UnitBitcoin [eleventh]) eleventh 5000000)
-        `shouldBe` ["main    │ bch     │ /44'/145'/10' │      0.05000000 │        0.00100000 │     3"]
-
-    -- Each of the five characters of 家族の貯金 takes two columns of the
-    -- terminal: 5 × 2 = 10. "main" takes 4, and 6 spaces make 10.
-    it "counts two columns for a wide character, so that the columns line up after it" $ do
-      let family = mainAccountRow {dBAccountName = "家族の貯金"}
-          both = accountTableColumns UnitBitcoin [family, mainAccountRow]
-      concatMap renderedLines [accountRowDoc UnitBitcoin both family 5000000, accountRowDoc UnitBitcoin both mainAccountRow 5000000]
-        `shouldBe` [ "家族の貯金 │ btc     │ /44'/0'/0' │      0.05000000 │        0.00100000 │     3",
-                     "main       │ btc     │ /44'/0'/0' │      0.05000000 │        0.00100000 │     3"
-                   ]
-
-    -- "spending", of 8 characters, is the longest name of the two
-    it "makes the first column of a chunk as wide as the longest name of its accounts" $ do
-      doc <- chunkDoc UnitBitcoin Table True (ResponseAccounts [(mainAccountRow, 5000000), (segwitAccountRow, 0)])
-      renderedLines doc
-        `shouldBe` [ "Account  │ Network │ Path       │ Spendable (btc) │ Unconfirmed (btc) │ Coins",
-                     "─────────┼─────────┼────────────┼─────────────────┼───────────────────┼──────",
-                     "main     │ btc     │ /44'/0'/0' │      0.05000000 │        0.00100000 │     3",
-                     "spending │ btc     │ /84'/0'/0' │      0.00000000 │        0.00000000 │     0"
-                   ]
-
--- The columns of the coins of main, with paths of 4 characters: 17 for
--- the time, 14 for the value, 17 for the state, 5 for the confirmations,
--- 34 for a base58 address, 4 for the path, then the label. The coins are shown at
--- 'seenTimeInCet', 23:13 in Central Europe.
+-- The columns of the coins of the bip44 account, with paths of 4
+-- characters: 17 for the time, 14 for the value, 17 for the state, 5 for
+-- the confirmations, 34 for a base58 address, 4 for the path, then the
+-- label. The coins are shown at 'seenTimeInCet', 23:13 in Central Europe.
 coinTableSpec :: Spec
 coinTableSpec =
   describe "The table of coins --tabular" $ do
-    let headed = coinTableColumns UnitBitcoin mainAccountRow 4
+    let headed = coinTableColumns UnitBitcoin btc [Bip44] 4
         row = coinRowDoc btc UnitBitcoin headed (Just seenTimeInCet)
 
     -- Under a heading, the line has a dash for each character and the
@@ -1133,24 +1521,33 @@ coinTableSpec =
       renderedLines (row spendableCoinRow {jsonCoinAddressLabel = "Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month"})
         `shouldBe` ["00000000:0   │ 14 Nov 2023 23:13 │     0.00050000 │ spendable         │     3 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ /0/0 │ \"Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month\""]
 
-    -- main has 12 receiving addresses and 3 change addresses: its longest
-    -- path is /0/11, of 5 characters. A coin without a time shows "time
-    -- unknown", whatever the time zone of the computer.
+    -- The account has 12 receiving addresses and 3 change addresses: its
+    -- longest path is /0/11, of 5 characters. A coin without a time shows
+    -- "time unknown", whatever the time zone of the computer.
     it "takes the width of the paths from the longest path of the account, in a chunk of coins" $ do
-      doc <- chunkDoc UnitBitcoin Table True (ResponseCoins mainAccountRow [spendableCoinRow {jsonCoinTime = Nothing}])
+      doc <- chunkDoc UnitBitcoin Table (ChunkAt True True False) (ResponseCoins [mainGroup [spendableCoinRow {jsonCoinTime = Nothing}]])
       renderedLines doc
         `shouldBe` [ "Coin         │ Time              │    Value (btc) │ State             │ Confs │ Address                            │ Path  │ Label",
                      "─────────────┼───────────────────┼────────────────┼───────────────────┼───────┼────────────────────────────────────┼───────┼──────",
                      "00000000:0   │ time unknown      │     0.00050000 │ spendable         │     3 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ /0/0  │"
                    ]
 
--- The columns of the balances of main, with paths of 4 characters: 4 for
--- the path, 34 for a base58 address, 14 for "Total (btc)", 15 for
--- "Spendable (btc)", 17 for "Unspendable (btc)", then the label
+    -- The coins of both accounts of btc are listed together: the column of
+    -- addresses takes the 42 characters of a bip84 address
+    it "makes the column of addresses of a chunk of the coins of both types as wide as a bip84 address" $ do
+      let both = Group mainPlace [AccountCounts Bip44 12 3, AccountCounts Bip84 2 0] [spendableCoinRow {jsonCoinTime = Nothing}]
+      doc <- chunkDoc UnitBitcoin Table (ChunkAt True True False) (ResponseCoins [both])
+      take 1 (renderedLines doc)
+        `shouldBe` ["Coin         │ Time              │    Value (btc) │ State             │ Confs │ Address                                    │ Path  │ Label"]
+
+-- The columns of the balances of the bip44 account, with paths of 4
+-- characters: 4 for the path, 34 for a base58 address, 14 for "Total
+-- (btc)", 15 for "Spendable (btc)", 17 for "Unspendable (btc)", then the
+-- label
 balanceTableSpec :: Spec
 balanceTableSpec =
   describe "The table of balances --tabular" $ do
-    let headed = balanceTableColumns UnitBitcoin mainAccountRow 4
+    let headed = balanceTableColumns UnitBitcoin btc [Bip44] 4
         changeAddressRow = paidAddressRow {dBAddressInternal = True, dBAddressAddress = "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", dBAddressLabel = ""}
 
     -- 4 + 1 = 5 under Path, 34 + 2 = 36 under Address, 14 + 2 = 16 under
@@ -1176,121 +1573,88 @@ balanceTableSpec =
       renderedLines (balanceRowDoc UnitBitcoin headed changeAddressRow (CoinBalance 9000 9000 0 0))
         `shouldBe` ["/1/0 │ 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn │     0.00009000 │      0.00009000 │        0.00000000 │ change address"]
 
-    -- main has 12 receiving addresses and 3 change addresses: its longest
-    -- path is /0/11, of 5 characters
-    it "takes the width of the paths from the longest path of the account, in a chunk of balances" $ do
-      doc <- chunkDoc UnitBitcoin Table True (ResponseBalances mainAccountRow [(paidAddressRow, CoinBalance 80000 50000 30000 0)])
+    -- The account has 12 receiving addresses and 3 change addresses: its
+    -- longest path is /0/11, of 5 characters. balances gives the total of
+    -- the network above its addresses, even narrowed to one network.
+    it "starts a chunk with the line of the network and its total, then the header, the paths as wide as the longest of the account" $ do
+      doc <- chunkDoc UnitBitcoin Table (ChunkAt True True False) (ResponseBalances [(mainGroup [(paidAddressRow, CoinBalance 80000 50000 30000 0)], CoinBalance 80000 50000 30000 0)])
       renderedLines doc
-        `shouldBe` [ "Path  │ Address                            │    Total (btc) │ Spendable (btc) │ Unspendable (btc) │ Label",
+        `shouldBe` [ "portfolio0  btc  total 0.00080000 btc, spendable 0.00050000 btc, unspendable 0.00030000 btc",
+                     "Path  │ Address                            │    Total (btc) │ Spendable (btc) │ Unspendable (btc) │ Label",
                      "──────┼────────────────────────────────────┼────────────────┼─────────────────┼───────────────────┼──────",
                      "/0/0  │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │     0.00080000 │      0.00050000 │        0.00030000 │ \"Invoice 42\""
                    ]
 
--- The columns of the pending transactions: the account when every account
--- is listed, as wide as its longest name, 17 for the time, 8 for
--- the type, 14 for the amount, 10 for the status and 6 for the fee rate,
--- then what it is for
+-- The columns of the pending transactions: the short id, the portfolio
+-- and the network of each, as wide as the widest the listing holds or as
+-- their headings, 17 for the time, 8 for the type, 14 for the amount, 10
+-- for the status and 6 for the fee rate, then what it is for
 pendingTableSpec :: Spec
 pendingTableSpec =
   describe "The table of pending transactions --tabular" $ do
-    let ofOne = pendingTableColumns UnitBitcoin Nothing
-        ofMain = pendingTableColumns UnitBitcoin (Just [mainAccountRow])
+    let ofMain = pendingTableColumns UnitBitcoin [mainPlace]
         preparedWith signedM online conflicted = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) signedM online conflicted (Just seenTime) [])) "" Map.empty
         unsigned = preparedWith Nothing False False
         timeless = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing [])) "" Map.empty
+        rowOf = pendingRowDoc UnitBitcoin ofMain mainPlace (Just seenTimeInCet)
 
-    -- 8 + 1 = 9 under Hash, 17 + 2 = 19 under Time, 8 + 2 = 10 under Type,
-    -- 14 + 2 = 16 under Amount, 10 + 2 = 12 under Status, 6 + 2 = 8 under
-    -- sat/vB, and 11 + 1 = 12 under Description
-    it "names its columns in a header, without the account when it lists one account" $
-      concatMap renderedLines (tableHeader ofOne)
-        `shouldBe` [ "Hash     │ Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Description",
-                     "─────────┼───────────────────┼──────────┼────────────────┼────────────┼────────┼────────────"
-                   ]
-
-    -- "main" is shorter than "Account", of 7 characters: 7 + 2 = 9 under
-    -- Account, after the 8 + 1 = 9 under Hash
-    it "names the account after the short id when it lists every account" $
+    -- "portfolio0" takes 10, more than "Portfolio", and "btc" less than
+    -- "Network", of 7: 8 + 1 = 9 under Hash, 10 + 2 = 12 under Portfolio,
+    -- 7 + 2 = 9 under Network, 17 + 2 = 19 under Time, 8 + 2 = 10 under
+    -- Type, 14 + 2 = 16 under Amount, 10 + 2 = 12 under Status, 6 + 2 = 8
+    -- under sat/vB, and 11 + 1 = 12 under Description
+    it "names its columns in a header: the short id, then the portfolio and the network, which each transaction names" $
       concatMap renderedLines (tableHeader ofMain)
-        `shouldBe` [ "Hash     │ Account │ Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Description",
-                     "─────────┼─────────┼───────────────────┼──────────┼────────────────┼────────────┼────────┼────────────"
+        `shouldBe` [ "Hash     │ Portfolio  │ Network │ Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Description",
+                     "─────────┼────────────┼─────────┼───────────────────┼──────────┼────────────────┼────────────┼────────┼────────────"
                    ]
 
     -- 40000 paid + 1000 of fee = 41000, at 4 sat/vB. The hashes of
     -- fakeTxHash all start with 00000000.
-    it "gives a transaction one row: its time, type, amount, status, fee rate and short id, then what it is for" $
-      renderedLines (pendingRowDoc btc UnitBitcoin ofOne Nothing (Just seenTimeInCet) unsigned)
-        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+    it "gives a transaction one row: its short id, its portfolio and network, its time, type, amount, status and fee rate, then what it is for" $
+      renderedLines (rowOf unsigned)
+        `shouldBe` ["00000000 │ portfolio0 │ btc     │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "gives the short id of the nosigHash of a transaction not signed" $ do
       let notSigned = TxInfo spendSummary (Pending (PendingStatus a1075db5First Nothing False False (Just seenTime) [])) "" Map.empty
-      renderedLines (pendingRowDoc btc UnitBitcoin ofOne Nothing (Just seenTimeInCet) notSigned)
-        `shouldBe` ["a1075db5 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+      renderedLines (rowOf notSigned)
+        `shouldBe` ["a1075db5 │ portfolio0 │ btc     │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
-    it "gives the short id of the txid of a signed transaction, which the commands take" $ do
+    it "gives the short id of the txid of a signed transaction, which the commands take, and says it is signed" $ do
       let signed = TxInfo spendSummary (Pending (PendingStatus a1075db5First (Just b2d4f6a8Txid) False False (Just seenTime) [])) "" Map.empty
-      renderedLines (pendingRowDoc btc UnitBitcoin ofOne Nothing (Just seenTimeInCet) signed)
-        `shouldBe` ["b2d4f6a8 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ signed     │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
-
-    it "says a signed transaction not sent yet is signed" $
-      renderedLines (pendingRowDoc btc UnitBitcoin ofOne Nothing (Just seenTimeInCet) (preparedWith (Just (fakeTxHash 2)) False False))
-        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ signed     │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+      renderedLines (rowOf signed)
+        `shouldBe` ["b2d4f6a8 │ portfolio0 │ btc     │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ signed     │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "says a transaction sent that the sync has not seen yet is sent" $
-      renderedLines (pendingRowDoc btc UnitBitcoin ofOne Nothing (Just seenTimeInCet) (preparedWith (Just (fakeTxHash 2)) True False))
-        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ sent       │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+      renderedLines (rowOf (preparedWith (Just (fakeTxHash 2)) True False))
+        `shouldBe` ["00000000 │ portfolio0 │ btc     │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ sent       │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "says a transaction in conflict is conflicted, and leaves its fee rate empty" $
-      renderedLines (pendingRowDoc btc UnitBitcoin ofOne Nothing (Just seenTimeInCet) (preparedWith (Just (fakeTxHash 2)) False True))
-        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ conflicted │        │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+      renderedLines (rowOf (preparedWith (Just (fakeTxHash 2)) False True))
+        `shouldBe` ["00000000 │ portfolio0 │ btc     │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ conflicted │        │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
-    it "names the account of the transaction after its short id when it lists every account" $
-      renderedLines (pendingRowDoc btc UnitBitcoin ofMain (Just mainAccountRow) (Just seenTimeInCet) unsigned)
-        `shouldBe` ["00000000 │ main    │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
-
-    -- "family savings" has 14 characters, more than "main" and "Account"
-    it "makes the column of accounts as wide as the longest name it lists" $ do
-      let family = mainAccountRow {dBAccountName = "family savings"}
-          both = pendingTableColumns UnitBitcoin (Just [mainAccountRow, family])
-      concatMap renderedLines [pendingRowDoc btc UnitBitcoin both (Just family) (Just seenTimeInCet) unsigned, pendingRowDoc btc UnitBitcoin both (Just mainAccountRow) (Just seenTimeInCet) unsigned]
-        `shouldBe` [ "00000000 │ family savings │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU",
-                     "00000000 │ main           │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
+    -- "portfolio1 of wallet2" takes 21 characters
+    it "names the wallet of a portfolio that is not of wallet0, the column as wide as the widest it holds" $ do
+      let elsewhere = Place otherRef btc
+          both = pendingTableColumns UnitBitcoin [mainPlace, elsewhere]
+      concatMap renderedLines [pendingRowDoc UnitBitcoin both elsewhere (Just seenTimeInCet) unsigned, pendingRowDoc UnitBitcoin both mainPlace (Just seenTimeInCet) unsigned]
+        `shouldBe` [ "00000000 │ portfolio1 of wallet2 │ btc     │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU",
+                     "00000000 │ portfolio0            │ btc     │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
                    ]
 
-    it "gives a long name whole, in a first column as wide as it" $ do
-      let family = mainAccountRow {dBAccountName = "family savings account for travel"}
-      renderedLines (pendingRowDoc btc UnitBitcoin (pendingTableColumns UnitBitcoin (Just [family])) (Just family) (Just seenTimeInCet) unsigned)
-        `shouldBe` ["00000000 │ family savings account for travel │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
-
-    -- The 13 characters of 家族の貯金と旅行の口座です take 26 columns: main
-    -- takes 4, and 22 spaces pad it
-    it "counts two columns for a wide character, so that the columns line up after it" $ do
-      let family = mainAccountRow {dBAccountName = "家族の貯金と旅行の口座です"}
-          both = pendingTableColumns UnitBitcoin (Just [mainAccountRow, family])
-      concatMap renderedLines [pendingRowDoc btc UnitBitcoin both (Just family) (Just seenTimeInCet) unsigned, pendingRowDoc btc UnitBitcoin both (Just mainAccountRow) (Just seenTimeInCet) unsigned]
-        `shouldBe` [ "00000000 │ 家族の貯金と旅行の口座です │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU",
-                     "00000000 │ main                       │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
-                   ]
-
-    it "gives the label of a payment in place of the address it pays, as the table of txs does" $ do
-      let labelled = unsigned {txInfoLabel = "Rent of October"}
-      renderedLines (pendingRowDoc btc UnitBitcoin ofOne Nothing (Just seenTimeInCet) labelled)
-        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ \"Rent of October\""]
+    it "gives the label of a payment in place of the address it pays, as the table of txs does" $
+      renderedLines (rowOf unsigned {txInfoLabel = "Rent of October"})
+        `shouldBe` ["00000000 │ portfolio0 │ btc     │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ \"Rent of October\""]
 
     -- A transaction without a time shows "time unknown", whatever the time
-    -- zone of the computer
-    it "names the accounts in a chunk of the pending transactions of every account" $ do
-      doc <- chunkDoc UnitBitcoin Table True (ResponsePendingTxs Nothing [(mainAccountRow, timeless)])
+    -- zone of the computer. The listing is one list, with no title.
+    it "names where each transaction is in a chunk, under the header" $ do
+      doc <- chunkDoc UnitBitcoin Table (ChunkAt True True False) (ResponsePendingTxs [(mainPlace, timeless)])
       renderedLines doc
-        `shouldBe` [ "Hash     │ Account │ Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Description",
-                     "─────────┼─────────┼───────────────────┼──────────┼────────────────┼────────────┼────────┼────────────",
-                     "00000000 │ main    │ time unknown      │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
+        `shouldBe` [ "Hash     │ Portfolio  │ Network │ Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Description",
+                     "─────────┼────────────┼─────────┼───────────────────┼──────────┼────────────────┼────────────┼────────┼────────────",
+                     "00000000 │ portfolio0 │ btc     │ time unknown      │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
                    ]
-
-    it "leaves the accounts out of a chunk of the pending transactions of one account" $ do
-      doc <- chunkDoc UnitBitcoin Table False (ResponsePendingTxs (Just mainAccountRow) [(mainAccountRow, timeless)])
-      renderedLines doc
-        `shouldBe` ["00000000 │ time unknown      │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
 verboseSpec :: Spec
 verboseSpec =
@@ -1312,7 +1676,7 @@ verboseSpec =
 
     -- In satoshis, "50000 sats" takes 10 characters and "9000 sats" 9:
     -- the amounts are right-aligned, and the paths start in one column
-    it "lines up the paths of the addresses of the wallet after amounts of different widths" $ do
+    it "lines up the paths of the addresses of the portfolio after amounts of different widths" $ do
       let info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
       drop 5 (renderedLines (verboseTxDoc btc UnitSatoshi [] Nothing (Just seenTimeInCet) info))
         `shouldBe` [ "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  50000 sats  /0/0",
@@ -1345,7 +1709,7 @@ verboseSpec =
                    ]
 
     -- "  From     : " takes 13 characters
-    it "shows the label of an address of the wallet, quoted, on the line below, under the address" $ do
+    it "shows the label of an address of the portfolio, quoted, on the line below, under the address" $ do
       let info = TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
       take 2 (drop 5 (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info)))
         `shouldBe` [ "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0",
@@ -1360,20 +1724,20 @@ verboseSpec =
 
     -- The spending from the first change address, 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn
     it "marks a change address spent from as one, on the line below the address" $ do
-      let fromChange = spendSummary {summaryMyInputs = Map.fromList [(internalAddr 0, MyInputs 50000 (Deriv :/ 1 :/ 0) "" [OutPoint (fakeTxHash 1) 0])]}
+      let fromChange = spendSummary {summaryMyInputs = Map.fromList [(internalAddr 0, MyInputs 50000 (legacyPath (Deriv :/ 1 :/ 0)) "" [OutPoint (fakeTxHash 1) 0])]}
           info = TxInfo fromChange (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
       take 2 (drop 5 (renderedLines (verboseTxDoc btc UnitBitcoin [] Nothing (Just seenTimeInCet) info)))
         `shouldBe` [ "  From     : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00050000 btc  /1/0",
                      "             change address"
                    ]
 
-    -- A transfer of the account to its first change address, which the
+    -- A transfer of the portfolio to its first change address, which the
     -- compact view names as the address paid
     it "marks a change address an internal transaction pays as one" $ do
       let toChange = spendSummary {summaryType = TxInternal, summaryOtherOutputs = Map.empty}
           info = TxInfo toChange (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
       (renderedLines (compactTxDoc btc UnitBitcoin Nothing Nothing (Just seenTimeInCet) info) !! 1)
-        `shouldBe` "  to /1/0 change address"
+        `shouldBe` "  to bip44/1/0 change address"
 
     it "gives the labels of the coins of an address spent from without a label of its own on the line below" $ do
       let info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" (Map.fromList [(fakeTxHash 1, "Salary")])
@@ -1454,6 +1818,35 @@ verboseSpec =
                      "             0000000000000000000000000000000000000000000000000000000000000006"
                    ]
 
+    -- The specification: the summary of a transaction gains its network
+    -- and the types of the portfolio's addresses it involves
+    it "gives in a listing the network of the transaction and the types of the addresses of the portfolio it involves, first" $ do
+      let info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
+      take 3 (renderedLines (verboseTxDoc btc UnitBitcoin (whereFields btc Nothing info) Nothing (Just seenTimeInCet) info))
+        `shouldBe` [ "14 Nov 2023 23:13  Outgoing     -0.00041000 btc  2 confirmations",
+                     "  Network  : btc",
+                     "  Types    : bip44"
+                   ]
+
+    -- The coin of 50000 at /0/0 of the bip44 account pays 40000 to /0/0
+    -- of the bip84 account and 9000 of change to /1/0 of the bip44 one
+    it "names both types for a transaction between the two accounts of the portfolio on btc" $ do
+      let toSegwit =
+            spendSummary
+              { summaryType = TxInternal,
+                summaryAmount = -1000,
+                summaryOtherOutputs = Map.empty,
+                summaryMyOutputs = Map.fromList [(segwitExternalAddr 0, MyOutputs 40000 (segwitPath (Deriv :/ 0 :/ 0)) ""), (internalAddr 0, MyOutputs 9000 (legacyPath (Deriv :/ 1 :/ 0)) "")]
+              }
+          info = TxInfo toSegwit (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty
+      concatMap renderedLines (whereFields btc Nothing info) `shouldBe` ["Network  : btc", "Types    : bip44, bip84"]
+
+    -- A sweep between outside addresses involves no address of a portfolio
+    it "gives no types for a transaction that involves no address of the portfolio" $ do
+      let outside = spendSummary {summaryMyInputs = Map.empty, summaryMyOutputs = Map.empty}
+          info = TxInfo outside (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing [])) "" Map.empty
+      concatMap renderedLines (whereFields btc Nothing info) `shouldBe` ["Network  : btc"]
+
 answerSpec :: Spec
 answerSpec =
   describe "The transaction a command answers with" $ do
@@ -1465,25 +1858,147 @@ answerSpec =
       shown <- txAnswerDoc btc Nothing UnitBitcoin info
       (renderedLines shown !! 1) `shouldBe` "  Network  : btc"
 
-    it "names its account, then its network, below its first line" $ do
-      shown <- txAnswerDoc btc (Just mainAccountRow) UnitBitcoin info
-      take 2 (drop 1 (renderedLines shown))
-        `shouldBe` [ "  Account  : main",
-                     "  Network  : btc"
+    it "names its portfolio, then its network and the types of the portfolio's addresses it involves, below its first line" $ do
+      shown <- txAnswerDoc btc (Just mainPortfolioRef) UnitBitcoin info
+      take 3 (drop 1 (renderedLines shown))
+        `shouldBe` [ "  Portfolio: portfolio0",
+                     "  Network  : btc",
+                     "  Types    : bip44"
                    ]
 
-    it "gives its label after its account and its network" $ do
-      shown <- txAnswerDoc btc (Just mainAccountRow) UnitBitcoin info {txInfoLabel = "Rent of October"}
-      take 3 (drop 1 (renderedLines shown))
-        `shouldBe` [ "  Account  : main",
+    it "names the wallet of its portfolio when it is not wallet0" $ do
+      shown <- txAnswerDoc bch (Just otherRef) UnitBitcoin info
+      take 2 (drop 1 (renderedLines shown))
+        `shouldBe` [ "  Portfolio: portfolio1 of wallet2",
+                     "  Network  : bch"
+                   ]
+
+    it "gives its label after where it is" $ do
+      shown <- txAnswerDoc btc (Just mainPortfolioRef) UnitBitcoin info {txInfoLabel = "Rent of October"}
+      take 4 (drop 1 (renderedLines shown))
+        `shouldBe` [ "  Portfolio: portfolio0",
                      "  Network  : btc",
+                     "  Types    : bip44",
                      "  Label    : \"Rent of October\""
                    ]
 
     -- A label from a file that tries to write a recipient line of its own
     it "writes out a line break in its label, which stays on the line of the label" $ do
-      shown <- txAnswerDoc btc (Just mainAccountRow) UnitBitcoin info {txInfoLabel = "Rent\n  To       : 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ"}
-      take 2 (drop 3 (renderedLines shown))
+      shown <- txAnswerDoc btc (Just mainPortfolioRef) UnitBitcoin info {txInfoLabel = "Rent\n  To       : 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ"}
+      take 2 (drop 4 (renderedLines shown))
         `shouldBe` [ "  Label    : \"Rent\\n  To       : 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ\"",
                      "  NoSigHash: 0000000000000000000000000000000000000000000000000000000000000007"
                    ]
+
+{- Listings in sections -}
+
+sectionSpec :: Spec
+sectionSpec =
+  describe "A listing in sections, on the screen" $ do
+    -- The coin has no time, so the clock of the computer plays no part
+    let coin = spendableCoinRow {jsonCoinTime = Nothing}
+        coinLines =
+          [ "00000000:0  time unknown           0.00050000 btc  spendable, 3 confirmations",
+            "  at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  /0/0"
+          ]
+
+    it "gives a section no line of its place when the options narrow the listing to one place" $ do
+      doc <- chunkDoc UnitBitcoin Compact (ChunkAt True True False) (ResponseCoins [mainGroup [coin]])
+      renderedLines doc `shouldBe` coinLines
+
+    it "gives a section the line of its place, then a blank line, when the listing may cover several places" $ do
+      doc <- chunkDoc UnitBitcoin Compact (ChunkAt True True True) (ResponseCoins [mainGroup [coin]])
+      renderedLines doc `shouldBe` ["portfolio0  btc", ""] <> coinLines
+
+    it "sets a section that starts below another apart from it by a blank line" $ do
+      doc <- chunkDoc UnitBitcoin Compact (ChunkAt False True True) (ResponseCoins [Group (Place otherRef btc) [AccountCounts Bip44 1 0] [coin]])
+      renderedLines doc `shouldBe` ["", "portfolio1 of wallet2  btc", ""] <> coinLines
+
+    it "gives a chunk that goes on in its section its rows alone, after the blank line that sets them apart" $ do
+      doc <- chunkDoc UnitBitcoin Compact (ChunkAt False False True) (ResponseCoins [mainGroup [coin]])
+      renderedLines doc `shouldBe` "" : coinLines
+
+    it "gives each section of the addresses the line of its account" $ do
+      doc <- chunkDoc UnitBitcoin Compact (ChunkAt True True True) (ResponseAddresses [Group mainPlace [AccountCounts Bip84 2 0] [(segwitAddressRow, 0)]])
+      renderedLines doc
+        `shouldBe` ["portfolio0  btc  bip84", "", "/0/1  bc1qqdensnp26rdechmq669tjk4s2wsyjr04nw3mc2", "  unused"]
+
+    -- The account has 12 receiving and 3 change addresses: the paths are
+    -- padded to /0/11, of 5 characters
+    it "always gives the sections of balances the line of their place with the total of the network, though the listing is narrowed to it" $ do
+      doc <- chunkDoc UnitBitcoin Compact (ChunkAt True True False) (ResponseBalances [(mainGroup [(paidAddressRow, CoinBalance 80000 50000 30000 0)], CoinBalance 130000 100000 30000 0)])
+      renderedLines doc
+        `shouldBe` [ "portfolio0  btc  total 0.00130000 btc, spendable 0.00100000 btc, unspendable 0.00030000 btc",
+                     "",
+                     "/0/0   1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Invoice 42\"",
+                     "  total 0.00080000 btc, spendable 0.00050000 btc, unspendable 0.00030000 btc"
+                   ]
+
+    it "says once that a listing has no rows, without the line of a place" $ do
+      doc <- chunkDoc UnitBitcoin Compact (ChunkAt True True True) (ResponseTxs [])
+      renderedLines doc `shouldBe` ["There are no transactions to display"]
+
+-- The pager keeps the first lines it is given on the screen, for the
+-- header of a table taller than the screen
+headerSpec :: Spec
+headerSpec =
+  describe "Whether a listing starts with the header of a table, which the pager keeps on the screen" $ do
+    let txs = ResponseTxs [mainGroup []]
+
+    it "is true of a table narrowed to one place" $
+      startsWithHeader Table (ChunkAt True True False) txs `shouldBe` True
+
+    it "is false of a table whose sections say where they are, since the line of a place comes first" $
+      startsWithHeader Table (ChunkAt True True True) txs `shouldBe` False
+
+    it "is false of a view that is no table" $
+      startsWithHeader Compact (ChunkAt True True False) txs `shouldBe` False
+
+    it "is false of the table of balances, whose sections always say where they are" $
+      startsWithHeader Table (ChunkAt True True False) (ResponseBalances [(mainGroup [], CoinBalance 0 0 0 0)]) `shouldBe` False
+
+    it "is true of the table of portfolios, which is one list" $
+      startsWithHeader Table (ChunkAt True True False) (ResponsePortfolios [mainPortfolioView]) `shouldBe` True
+
+{- Next steps -}
+
+nextStepsSpec :: Spec
+nextStepsSpec =
+  describe "The next steps after a sync" $ do
+    let synced cfg results = renderedLines <$> nextStepsPrinter cfg (CommandSync (PortfolioChoice Nothing Nothing) Nothing False) (ResponseSync results [] [])
+        holdingIn ref = quietSync {syncResPlace = Place ref btc}
+
+    it "name no portfolio when the sync showed the default one" $
+      synced def [quietSync] `shouldBe` Just ["Next, see the transactions:", "  hw txs"]
+
+    it "name --portfolio when the portfolio the sync showed is not the default one" $
+      synced def [holdingIn (PortfolioRef 0 1)] `shouldBe` Just ["Next, see the transactions:", "  hw txs --portfolio 1"]
+
+    it "name --wallet alone when the portfolio is the default index in another wallet" $
+      synced def [holdingIn (PortfolioRef 2 0)] `shouldBe` Just ["Next, see the transactions:", "  hw txs --wallet 2"]
+
+    it "name --wallet and --portfolio when neither is the default" $
+      synced def [holdingIn otherRef] `shouldBe` Just ["Next, see the transactions:", "  hw txs --wallet 2 --portfolio 1"]
+
+    it "name nothing the configuration file makes the default" $
+      synced (configWith ["default-wallet" .= (2 :: Int), "default-portfolio" .= (1 :: Int)]) [holdingIn otherRef]
+        `shouldBe` Just ["Next, see the transactions:", "  hw txs"]
+
+    it "name wallet0 when the configuration file makes another wallet the default" $
+      synced (configWith ["default-wallet" .= (2 :: Int)]) [quietSync] `shouldBe` Just ["Next, see the transactions:", "  hw txs --wallet 0"]
+
+    -- Several portfolios are left to the user: txs then shows the default
+    it "name no portfolio when the sync showed several" $
+      synced def [quietSync, holdingIn otherRef] `shouldBe` Just ["Next, see the transactions:", "  hw txs"]
+
+    it "name the portfolio of a pending transaction in conflict in the step that finds it" $
+      synced def [(holdingIn (PortfolioRef 0 1)) {syncResConflicted = 1}]
+        `shouldBe` Just
+          [ "Next, find the pending transaction in conflict, which can no longer be sent:",
+            "  hw pendingtxs --portfolio 1",
+            "Then delete it, to free its coins:",
+            "  hw deletetx HASH"
+          ]
+
+    it "are none after a sync that synced nothing" $
+      synced def [] `shouldBe` Nothing

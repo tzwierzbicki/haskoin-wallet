@@ -12,7 +12,7 @@ module Haskoin.Wallet.HwTestUtils
     Run (..),
     withHome,
     setDefaultNetwork,
-    setChangeBack,
+    setConfigKey,
     setUnit,
     setListingView,
     hw,
@@ -31,6 +31,8 @@ module Haskoin.Wallet.HwTestUtils
     inMempool,
     withChain,
     withChainDownOn,
+    withChainServing,
+    withChainFailingOn,
     withChainMinedAgo,
     withLyingChain,
     withServerAnswering,
@@ -43,6 +45,7 @@ import Control.Monad (filterM, join)
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Aeson as Json
+import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
@@ -62,7 +65,7 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebCommon (HeightParam (..), LimitParam (..), Param (..))
 import Haskoin.Wallet.Cli.Response (Response)
-import Haskoin.Wallet.Store (Store (..))
+import Haskoin.Wallet.Store (Store (..), checkHealth)
 import Haskoin.Wallet.TestUtils (addressScript, blockMinedAt, otherAddr)
 import Network.HTTP.Types (hContentType, status200, status404, status502)
 import Network.Wai (Application, pathInfo, queryString, requestMethod, responseLBS, strictRequestBody)
@@ -119,10 +122,10 @@ setDefaultNetwork :: FilePath -> Maybe Text -> IO ()
 setDefaultNetwork home netM =
   editConfig home $ maybe (KeyMap.delete "default-network") (KeyMap.insert "default-network" . Json.String) netM
 
--- | Set whether preparetx sends the change back to an address it spends
--- from without --change-back, in the configuration file of a home
-setChangeBack :: FilePath -> Bool -> IO ()
-setChangeBack home on = editConfig home (KeyMap.insert "change-back" (Json.Bool on))
+-- | Set a key of the configuration file of a home, such as default-type
+-- or default-wallet, to the value given
+setConfigKey :: FilePath -> Text -> Json.Value -> IO ()
+setConfigKey home key value = editConfig home (KeyMap.insert (Key.fromText key) value)
 
 -- | Set the unit of the amounts without --unit, by its name, in the
 -- configuration file of a home
@@ -466,7 +469,8 @@ chainStore ctx ref bestTime =
           then chain
           else
             let kept = withoutConflicts tx chain
-             in kept {chainTxs = kept.chainTxs <> [(tx, Nothing)]}
+             in kept {chainTxs = kept.chainTxs <> [(tx, Nothing)]},
+      storeFailed = \_ -> return ()
     }
   where
     now = liftIO (readIORef ref)
@@ -499,6 +503,50 @@ withChainDownOn ctx downs = withChainMinedAgo ctx downs 180
 -- synced with it is behind the chain
 withChainMinedAgo :: Ctx -> [Network] -> Word32 -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
 withChainMinedAgo ctx = withChainStore ctx id
+
+-- | 'withChain', with a host that serves the given networks only, and is
+-- down on those of the second list: a question about any other network
+-- gets a 404, as a host answers for a network it has no store of. The
+-- public server serves four of the eight networks of a portfolio.
+withChainServing :: Ctx -> [Network] -> [Network] -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
+withChainServing ctx served downs chain test = do
+  ref <- newIORef chain
+  bestTime <- subtract 180 . floor <$> getPOSIXTime
+  testWithApplication (return (servingOnly (served <> downs) (downOn downs (storeApp ctx (chainStore ctx ref bestTime))))) $ \port ->
+    withHome $ \home -> do
+      useStore home ("http://127.0.0.1:" <> show port <> "/")
+      test home ref
+
+-- | The server, with a store for the given networks only: a question
+-- about another network gets a 404
+servingOnly :: [Network] -> Application -> Application
+servingOnly served app req respond
+  | any (\net -> [Text.pack net.name] == take 1 (pathInfo req)) served = app req respond
+  | otherwise = respond $ responseLBS status404 [] "Not found"
+
+-- | 'withChain', with the store of the given networks failing once hw has
+-- checked its health: the health check is answered as a store that is up
+-- answers it, and every later question about those networks gets the
+-- error page of a proxy in front of a store that stopped answering. hw
+-- finds the network up when a command starts, and its store failing in
+-- the middle of the work, which 'withChainDownOn' cannot show.
+withChainFailingOn :: Ctx -> [Network] -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
+withChainFailingOn ctx failing chain test = do
+  ref <- newIORef chain
+  bestTime <- subtract 180 . floor <$> getPOSIXTime
+  testWithApplication (return (failingAfterHealth failing (storeApp ctx (chainStore ctx ref bestTime)))) $ \port ->
+    withHome $ \home -> do
+      useStore home ("http://127.0.0.1:" <> show port <> "/")
+      test home ref
+
+-- | The server, failing on the given networks after their health check:
+-- any question about one of them but the health check gets the error page
+-- of 'downOn'
+failingAfterHealth :: [Network] -> Application -> Application
+failingAfterHealth failing app req respond
+  | any (\net -> [Text.pack net.name] == take 1 (pathInfo req)) failing && drop 1 (pathInfo req) /= ["health"] =
+      respond $ responseLBS status502 [] "<html><body><h1>502 Bad Gateway</h1></body></html>"
+  | otherwise = app req respond
 
 -- | 'withChain', with a store that reports every address used, as a store
 -- that lies does
@@ -563,7 +611,7 @@ storeApp ctx store req respond = do
   where
     route :: ExceptT String IO BL.ByteString
     route = case (requestMethod req, drop 1 (pathInfo req)) of
-      ("GET", ["health"]) -> encoded healthy <$ storeHealth store
+      ("GET", ["health"]) -> encoded healthy <$ checkHealth store
       ("GET", ["block", "best"]) -> encoded <$> storeBestBlock store
       ("GET", ["block", "latest"]) -> encoded . Store.SerialList <$> storeLatestBlocks store
       ("GET", ["transactions", "block", h]) -> do

@@ -4,13 +4,21 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 
--- | The coins of an account, the unspent outputs the store knows at its
--- addresses: kept up to date by the sync, listed for the user and offered
--- to the transaction builder when they can be spent. Whether a coin can be
--- spent ('canSpend') is computed when it is read, from the coins, the
--- pending transactions and the best block, and stored nowhere: so is the
--- spendable balance of an account and of its addresses.
+-- | The coins of the accounts, the unspent outputs the store knows at
+-- their addresses: kept up to date by the sync, listed for the user and
+-- offered to the transaction builder when they can be spent. Whether a
+-- coin can be spent ('canSpend') is computed when it is read, from the
+-- coins, the pending transactions and the best block, and stored nowhere:
+-- so is the spendable balance of a pool and of its addresses.
+--
+-- A coin is at an address, so its row names the account of that address.
+-- A payment spends from a pool, the accounts of a portfolio on one
+-- network together: the coins of a pool are those of its accounts, BIP44
+-- and BIP84 ones mixed ('spendableCoins'). A coin is keyed by its account
+-- and its outpoint. The test networks share their keys, and a store that
+-- serves two of them the same chain reports the same coin on both.
 module Haskoin.Wallet.Database.Coin
   ( JsonCoin (..),
     CoinLock (..),
@@ -35,10 +43,12 @@ module Haskoin.Wallet.Database.Coin
     coinBalancesAt,
     lockCoin,
     unlockCoin,
-    walletCoinShown,
+    walletCoin,
+    shownCoin,
+    coinRows,
     setLockedByUser,
     userLockedCoins,
-    coinAccounts,
+    coinHolders,
     checkCoinOutput,
     checkListedCoins,
     checkCoinsPaid,
@@ -48,8 +58,10 @@ module Haskoin.Wallet.Database.Coin
     refreshCoins,
     LeftReason (..),
     LeftCoin (..),
+    leftReasons,
     leftReasonText,
     leftCoins,
+    leftOfOtherType,
     labelsOfCoins,
     chosenCoins,
   )
@@ -64,9 +76,9 @@ import Control.Monad.State (StateT, evalStateT, gets, modify)
 import Data.Aeson ((.:?), (.!=), FromJSON (..), ToJSON (..), Value (String), object, withObject, withText, (.:), (.=))
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
-import Data.Containers.ListUtils (nubOrd)
+import Data.Containers.ListUtils (nubOrd, nubOrdOn)
 import Data.Either (rights)
-import Data.List (intercalate, sortOn)
+import Data.List (genericTake, intercalate, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, fromMaybe, listToMaybe, mapMaybe)
@@ -85,12 +97,15 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.BestBlock
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Database.Account (accountNetwork, getAccountById, getAccountsById)
+import Haskoin.Wallet.Config (Config, configDefaultNetwork)
+import Haskoin.Wallet.Database.Account (accountNetwork, accountPool, getAccountById, getAccountsById, networksText, poolAccounts)
 import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath)
+import Haskoin.Wallet.Database.Portfolio (Place, poolPlace)
+import Haskoin.Wallet.Keys (PoolPath (..), addressKind)
 import Haskoin.Wallet.Database.PendingTx (lockedOutpoints, userLockedOutpoints)
 import Haskoin.Wallet.Database.RawTx (getRawTx, lookupRawTx)
 import Haskoin.Wallet.ShortId (ShortId, shortIdKey)
-import Haskoin.Wallet.Database.TxInfo (coinLabel, coinLabels, liveSummaries, spentTxids, transactionTime, walletAddressRow, walletTransaction)
+import Haskoin.Wallet.Database.TxInfo (coinLabel, coinLabels, liveSummaries, spentTxids, transactionTime, walletTransaction)
 import Haskoin.Wallet.Util (rowLimit)
 import Numeric.Natural (Natural)
 
@@ -113,9 +128,10 @@ data JsonCoin = JsonCoin
     jsonCoinAddressLabel :: !Text,
     -- | Whether the address that holds it is a change address
     jsonCoinChange :: !Bool,
-    -- | The derivation path of the address that holds it, which the
+    -- | Where the address that holds it is in the portfolio: the kind of
+    -- its account and its path below the key of that account, which the
     -- compact views show in place of the address
-    jsonCoinPath :: !(Maybe SoftPath),
+    jsonCoinPath :: !(Maybe PoolPath),
     -- | The time of the transaction that paid it ('transactionTime'),
     -- which its views start with, as the views of a transaction do
     jsonCoinTime :: !(Maybe UTCTime)
@@ -150,7 +166,8 @@ instance MarshalJSON Network JsonCoin where
         "txlabel" .= jsonCoinTxLabel c,
         "addresslabel" .= jsonCoinAddressLabel c,
         "change" .= jsonCoinChange c,
-        "path" .= jsonCoinPath c,
+        "path" .= (pathInAccount <$> jsonCoinPath c),
+        "type" .= (pathKind <$> jsonCoinPath c),
         "time" .= jsonCoinTime c
       ]
   unmarshalValue net =
@@ -166,22 +183,22 @@ instance MarshalJSON Network JsonCoin where
         <*> o .:? "txlabel" .!= ""
         <*> o .:? "addresslabel" .!= ""
         <*> o .:? "change" .!= False
-        <*> o .:? "path"
+        <*> (liftA2 PoolPath <$> o .:? "type" <*> o .:? "path")
         <*> o .:? "time"
 
 -- | A coin row as the user sees it: its confirmations counted from the best
 -- block, its lock, spendable when the builder may spend it now, the label
 -- it shows, the time of its transaction, and the label, the kind and the
 -- path of its address
-toJsonCoin :: (MonadUnliftIO m) => Spending -> DBCoin -> ExceptT String (DB m) JsonCoin
-toJsonCoin rules row = do
+toJsonCoin :: (MonadUnliftIO m) => Spending -> Pool -> DBCoin -> ExceptT String (DB m) JsonCoin
+toJsonCoin rules pool row = do
   outpoint <- liftEither $ coinOutpoint row
   addr <- liftEither $ coinAddress rules.spendingNetwork outpoint row
   block <- liftEither $ readBlock outpoint (dBCoinBlockRef row)
   spendable <- canSpend rules 0 outpoint block
-  label <- lift $ coinLabel rules.spendingNetwork (dBCoinAccount row) outpoint.hash
-  addrRowM <- lift $ walletAddressRow rules.spendingNetwork addr
-  time <- lift $ transactionTime (dBCoinAccount row) outpoint.hash
+  label <- lift $ coinLabel pool outpoint.hash
+  addrRowM <- lift $ fmap P.entityVal <$> P.getBy (UniqueAddress (dBCoinAccount row) (dBCoinAddress row))
+  time <- lift $ transactionTime pool outpoint.hash
   return
     JsonCoin
       { jsonCoinOutpoint = outpoint,
@@ -194,14 +211,14 @@ toJsonCoin rules row = do
         jsonCoinTxLabel = label,
         jsonCoinAddressLabel = maybe "" dBAddressLabel addrRowM,
         jsonCoinChange = maybe False dBAddressInternal addrRowM,
-        jsonCoinPath = addrPath <$> addrRowM,
+        jsonCoinPath = PoolPath <$> addressKind addr <*> (addrPath <$> addrRowM),
         jsonCoinTime = time
       }
 
 -- | The labels the coins show ('coinLabel'), by the transaction that paid
 -- each, for what lists them
-labelsOfCoins :: (MonadUnliftIO m) => Network -> DBAccountId -> [Store.Unspent] -> DB m (Map TxHash Text)
-labelsOfCoins net accId coins = coinLabels net accId ((.outpoint.hash) <$> coins)
+labelsOfCoins :: (MonadUnliftIO m) => Pool -> [Store.Unspent] -> DB m (Map TxHash Text)
+labelsOfCoins pool coins = coinLabels pool ((.outpoint.hash) <$> coins)
 
 {- Coin rows -}
 
@@ -261,9 +278,23 @@ coinText outpoint = cs (txHashToHex outpoint.hash) <> ":" <> show outpoint.index
 readStored :: String -> Either String a -> Either String a
 readStored message = either (const $ Left message) Right
 
--- | The coin rows of an account
-accountCoins :: (MonadUnliftIO m) => DBAccountId -> ExceptT String (DB m) [DBCoin]
-accountCoins accId = lift $ map P.entityVal <$> P.selectList [DBCoinAccount P.==. accId] []
+-- | The coin rows of a pool: those of each of its accounts
+poolCoins :: (MonadUnliftIO m) => Pool -> ExceptT String (DB m) [DBCoin]
+poolCoins pool = lift $ do
+  accounts <- map fst <$> poolAccounts pool
+  map P.entityVal <$> P.selectList [DBCoinAccount P.<-. accounts] []
+
+-- | The key of the row of a coin of an account
+coinKey :: DBAccountId -> OutPoint -> P.Key DBCoin
+coinKey accId outpoint = DBCoinKey accId (outpointBytes outpoint)
+
+-- | Every row of a coin, by its outpoint: one for each account that holds
+-- it. A coin is at one address, and an address in one account on a
+-- network, so the rows are of accounts on different networks: the test
+-- networks share their keys, and the same coin may be reported on two of
+-- them.
+coinRows :: (MonadUnliftIO m) => OutPoint -> DB m [DBCoin]
+coinRows outpoint = map P.entityVal <$> P.selectList [DBCoinOutpoint P.==. outpointBytes outpoint] []
 
 -- | The coins of the store by the text of their address, each coin once,
 -- by its outpoint as the rows key it. A coin without an address, or at one
@@ -282,19 +313,26 @@ groupCoins net ctx coins = Map.fromListWith Map.union (mapMaybe entry coins)
 
 {- Listing -}
 
--- | Which coins of an account coins lists: all of them, or the locked ones
+-- | Which coins of a pool coins lists: all of them, or the locked ones
 data CoinFilter = AllCoins | LockedCoins
   deriving (Eq, Show)
 
--- | The coins of the account, spendable or not, in the order of their
--- block references as the store encodes them: the mempool first, then the
--- newest blocks first. Coins with the same block reference, the outputs of
--- one transaction for instance, follow the order of their outpoints, so
--- that the order is settled. Those after the coin given, by its block and
--- its outpoint, or the first ones, up to the count, or all of them.
-coinsAfter :: (MonadUnliftIO m) => Network -> DBAccountId -> CoinFilter -> Maybe (Store.BlockRef, OutPoint) -> Maybe Natural -> ExceptT String (DB m) [JsonCoin]
-coinsAfter net accId shown afterM countM = do
-  rules <- spendingOf net
+-- | The coins of the given accounts of a pool, spendable or not, in the
+-- order of their block references as the store encodes them: the mempool
+-- first, then the newest blocks first. Coins with the same block
+-- reference, the outputs of one transaction for instance, follow the
+-- order of their outpoints, so that the order is settled. Those after the
+-- coin given, by its block and its outpoint, or the first ones, up to the
+-- count, or all of them.
+--
+-- The accounts are those of the pool, or the one of a type alone. Each
+-- account is read in that order from its own index, up to the count, and
+-- the rows are merged: the first rows of the whole are among the first
+-- rows of each. One query over two accounts would sort every coin of both
+-- for each page.
+coinsAfter :: (MonadUnliftIO m) => Pool -> [DBAccountId] -> CoinFilter -> Maybe (Store.BlockRef, OutPoint) -> Maybe Natural -> ExceptT String (DB m) [JsonCoin]
+coinsAfter pool accIds shown afterM countM = do
+  rules <- spendingOf pool.poolNetwork
   let lockedOnly = case shown of
         AllCoins -> []
         LockedCoins -> [DBCoinOutpoint P.<-. map outpointBytes (Map.keys rules.spendingLocks)]
@@ -307,12 +345,13 @@ coinsAfter net accId shown afterM countM = do
            in (DBCoinBlockRef P.>=. blockBytes)
                 : ([DBCoinBlockRef P.>. blockBytes] P.||. [DBCoinOutpoint P.>. outpointBytes outpoint])
       count = maybe [] (\n -> [P.LimitTo (rowLimit n)]) countM
-  rows <-
+  perAccount <- forM accIds $ \accId ->
     lift $
       P.selectList
         ((DBCoinAccount P.==. accId) : lockedOnly <> after)
         ([P.Asc DBCoinBlockRef, P.Asc DBCoinOutpoint] <> count)
-  mapM (toJsonCoin rules . P.entityVal) rows
+  let merged = sortOn (\row -> (dBCoinBlockRef row, dBCoinOutpoint row)) (P.entityVal <$> concat perAccount)
+  mapM (toJsonCoin rules pool) (maybe id genericTake countM merged)
 
 -- | At most the given number of coin rows of the account whose transaction
 -- id, as hw shows it, starts with the hexadecimal digits, by their
@@ -342,8 +381,9 @@ coinsStarting accId digits atMost = do
     pairs (a : b : more) = [a, b] : pairs more
     pairs _ = []
 
--- | The coins of the wallet, of every account, whose transaction has the
--- short id and that are at the index among its outputs. The key holds the
+-- | The coins of the wallet, of every account, each once, whose
+-- transaction has the short id and that are at the index among its
+-- outputs. The key holds the
 -- txid in the reverse order of the digits hw shows ('outpointBytes'), then
 -- the index in 4 bytes, the lowest first. So the key ends with the short
 -- id reversed, then the index. No index of the keys reads the end of a
@@ -354,7 +394,7 @@ coinsWith short index = do
     rawSql
       "select outpoint from d_b_coin where substr(outpoint, 29, 8) = ?"
       [P.toPersistValue keyEnd]
-  return $ rights (bytesToOutpoint . unSingle <$> rows)
+  return $ nubOrd (rights (bytesToOutpoint . unSingle <$> rows))
   where
     keyEnd = BS.reverse (shortIdKey short) <> S.runPut (S.putWord32le index)
 
@@ -369,20 +409,20 @@ coinAddressesStarting accId start atMost = do
       [P.toPersistValue accId, P.toPersistValue (Text.length start), P.toPersistValue start, P.toPersistValue (rowLimit atMost :: Int)]
   return (unSingle <$> rows)
 
--- | The block of a coin of the account, the one --after names, or why
+-- | The block of a coin of the accounts, the one --after names, or why
 -- there is none
-coinBlock :: (MonadUnliftIO m) => DBAccountId -> OutPoint -> ExceptT String (DB m) Store.BlockRef
-coinBlock accId outpoint = do
-  rowM <- lift $ P.get (DBCoinKey (outpointBytes outpoint))
-  case rowM of
-    Just row | dBCoinAccount row == accId -> liftEither $ readBlock outpoint (dBCoinBlockRef row)
-    _ -> throwError $ "The coin " <> coinText outpoint <> " is not in the account"
+coinBlock :: (MonadUnliftIO m) => [DBAccountId] -> OutPoint -> ExceptT String (DB m) Store.BlockRef
+coinBlock accIds outpoint = do
+  rows <- lift $ catMaybes <$> mapM (\accId -> P.get (coinKey accId outpoint)) accIds
+  case rows of
+    row : _ -> liftEither $ readBlock outpoint (dBCoinBlockRef row)
+    [] -> throwError $ "The coin " <> coinText outpoint <> " is not among the coins listed"
 
 {- Spending -}
 
 -- | What deciding whether the coins of a network can be spent reads once:
 -- the network, the height of its best block, and the locks of its coins.
--- The rules are the same for every account of the network.
+-- The rules are the same for every portfolio on the network.
 data Spending = Spending
   { spendingNetwork :: !Network,
     spendingBest :: !(Maybe BlockHeight),
@@ -408,7 +448,7 @@ coinLocks net = do
 -- confirmations: nothing locks it, neither a pending transaction nor the
 -- user, a coin from a coinbase has matured, and an unconfirmed coin comes
 -- from a transaction the wallet trusts ('trustedTx'): one it made itself,
--- whether the coin is its change or what one of its accounts paid another.
+-- whether the coin is its change or what one of its portfolios paid another.
 -- At zero confirmations, this says whether the coin can be spent now: the
 -- spendable flag and balances.
 canSpend :: (MonadUnliftIO m) => Spending -> Natural -> OutPoint -> Store.BlockRef -> ExceptT String (DB m) Bool
@@ -420,21 +460,25 @@ canSpend rules minConf outpoint block
   where
     confirmations = getConfirmations rules.spendingBest block
 
--- | The coins the builder may spend, with at least the confirmations asked,
--- as the store last reported them
-spendableCoins :: (MonadUnliftIO m) => Network -> Ctx -> DBAccountId -> Natural -> ExceptT String (DB m) [Store.Unspent]
-spendableCoins net ctx accId minConf = do
+-- | The coins of a pool the builder may spend, with at least the
+-- confirmations asked, as the store last reported them: those of every
+-- account of the portfolio on the network, so that a payment can spend
+-- BIP44 and BIP84 coins together
+spendableCoins :: (MonadUnliftIO m) => Ctx -> Pool -> Natural -> ExceptT String (DB m) [Store.Unspent]
+spendableCoins ctx pool minConf = do
+  let net = pool.poolNetwork
   rules <- spendingOf net
-  coins <- liftEither . mapM (storedUnspent net ctx) =<< accountCoins accId
+  coins <- liftEither . mapM (storedUnspent net ctx) =<< poolCoins pool
   filterM (\coin -> canSpend rules minConf coin.outpoint coin.block) coins
 
 -- | The coins the builder may not spend with at least the confirmations
 -- asked, the others of 'spendableCoins', each with its lock. A coin without
 -- a lock is not confirmed enough yet, or is a coinbase not yet mature.
-unspendableCoins :: (MonadUnliftIO m) => Network -> Ctx -> DBAccountId -> Natural -> ExceptT String (DB m) [(Store.Unspent, Maybe CoinLock)]
-unspendableCoins net ctx accId minConf = do
+unspendableCoins :: (MonadUnliftIO m) => Ctx -> Pool -> Natural -> ExceptT String (DB m) [(Store.Unspent, Maybe CoinLock)]
+unspendableCoins ctx pool minConf = do
+  let net = pool.poolNetwork
   rules <- spendingOf net
-  coins <- liftEither . mapM (storedUnspent net ctx) =<< accountCoins accId
+  coins <- liftEither . mapM (storedUnspent net ctx) =<< poolCoins pool
   held <- filterM (\coin -> not <$> canSpend rules minConf coin.outpoint coin.block) coins
   return [(coin, Map.lookup coin.outpoint rules.spendingLocks) | coin <- held]
 
@@ -446,65 +490,69 @@ unspendableCoins net ctx accId minConf = do
 spendableAtAddresses :: (MonadUnliftIO m) => Network -> DBAccountId -> [Text] -> ExceptT String (DB m) (Map Text Word64)
 spendableAtAddresses net accId addrs = do
   rules <- spendingOf net
-  coins <- balanceColumns accId (Just addrs)
+  coins <- balanceColumns [accId] (Just addrs)
   Map.fromListWith (+) <$> spendableValues rules coins
 
--- | The value of all the coins of the account that can be spent now
-spendableBalance :: (MonadUnliftIO m) => Network -> DBAccountId -> ExceptT String (DB m) Word64
-spendableBalance net accId = do
-  rules <- spendingOf net
-  coins <- balanceColumns accId Nothing
+-- | The value of all the coins of a pool that can be spent now: those of
+-- every account of the portfolio on the network
+spendableBalance :: (MonadUnliftIO m) => Pool -> ExceptT String (DB m) Word64
+spendableBalance pool = do
+  rules <- spendingOf pool.poolNetwork
+  accounts <- lift $ map fst <$> poolAccounts pool
+  coins <- balanceColumns accounts Nothing
   sum . map snd <$> spendableValues rules coins
 
--- | The addresses of the account that hold coins, each with the balance
--- of its coins, the largest total first. Addresses with the same total
--- follow the order of their derivation paths, so that the order is
--- settled. Those after the address given, with its balance, or the first
--- ones, up to the count, or all of them. The order adds up every coin of
--- the account, in one query; the spendable values are read for the
--- addresses listed only.
-coinBalancesAfter :: (MonadUnliftIO m) => Network -> DBAccountId -> Maybe (DBAddress, CoinBalance) -> Maybe Natural -> ExceptT String (DB m) [(DBAddress, CoinBalance)]
-coinBalancesAfter net accId = coinBalances net accId Nothing
+-- | The addresses of the given accounts of a pool that hold coins, each
+-- with the balance of its coins, the largest total first. Addresses with
+-- the same total follow the order of their accounts, then of their
+-- derivation paths, so that the order is settled. Those after the address
+-- given, with its balance, or the first ones, up to the count, or all of
+-- them. The order adds up every coin of the accounts, in one query; the
+-- spendable values are read for the addresses listed only.
+coinBalancesAfter :: (MonadUnliftIO m) => Network -> [DBAccountId] -> Maybe (DBAddress, CoinBalance) -> Maybe Natural -> ExceptT String (DB m) [(DBAddress, CoinBalance)]
+coinBalancesAfter net accIds = coinBalances net accIds Nothing
 
--- | Those of the given addresses of the account that hold coins, each with
--- the balance of its coins, in the order of 'coinBalancesAfter'
-coinBalancesAt :: (MonadUnliftIO m) => Network -> DBAccountId -> [Text] -> ExceptT String (DB m) [(DBAddress, CoinBalance)]
-coinBalancesAt net accId addrs = coinBalances net accId (Just addrs) Nothing Nothing
+-- | Those of the given addresses of the accounts that hold coins, each
+-- with the balance of its coins, in the order of 'coinBalancesAfter'
+coinBalancesAt :: (MonadUnliftIO m) => Network -> [DBAccountId] -> [Text] -> ExceptT String (DB m) [(DBAddress, CoinBalance)]
+coinBalancesAt net accIds addrs = coinBalances net accIds (Just addrs) Nothing Nothing
 
--- | The addresses of the account that hold coins, each with the balance of
--- its coins, the largest total first: at the given addresses or at all of
--- them, after the given one or from the first, up to the count or all of
--- them
+-- | The addresses of the accounts that hold coins, each with the balance
+-- of its coins, the largest total first: at the given addresses or at all
+-- of them, after the given one or from the first, up to the count or all
+-- of them
 coinBalances ::
   (MonadUnliftIO m) =>
   Network ->
-  DBAccountId ->
+  [DBAccountId] ->
   Maybe [Text] ->
   Maybe (DBAddress, CoinBalance) ->
   Maybe Natural ->
   ExceptT String (DB m) [(DBAddress, CoinBalance)]
-coinBalances net accId addrsM afterM countM = do
+coinBalances net accIds addrsM afterM countM = do
   rows <- lift . select . from $ \(c `InnerJoin` a) -> do
     on $ c ^. DBCoinAccount ==. a ^. DBAddressAccount &&. c ^. DBCoinAddress ==. a ^. DBAddressAddress
-    where_ $ c ^. DBCoinAccount ==. val accId
+    where_ $ c ^. DBCoinAccount `in_` valList accIds
     forM_ addrsM $ \addrs -> where_ $ c ^. DBCoinAddress `in_` valList addrs
     groupBy (a ^. DBAddressAccount, a ^. DBAddressInternal, a ^. DBAddressIndex)
     let total = sum_ (c ^. DBCoinValue)
-    -- After the address given: a smaller total, or the same total and a
-    -- path after its own
+    -- After the address given: a smaller total, or the same total and an
+    -- account, then a path, after its own
     forM_ afterM $ \(addr, balance) -> do
       let given = just (val (coinBalanceTotal balance))
+          sameAccount = a ^. DBAddressAccount ==. val (dBAddressAccount addr)
           pathAfter =
             a ^. DBAddressInternal >. val (dBAddressInternal addr)
               ||. (a ^. DBAddressInternal ==. val (dBAddressInternal addr) &&. a ^. DBAddressIndex >. val (dBAddressIndex addr))
-      having $ total <. given ||. (total ==. given &&. pathAfter)
-    orderBy [desc total, asc (a ^. DBAddressInternal), asc (a ^. DBAddressIndex)]
+          placeAfter = a ^. DBAddressAccount >. val (dBAddressAccount addr) ||. (sameAccount &&. pathAfter)
+      having $ total <. given ||. (total ==. given &&. placeAfter)
+    orderBy [desc total, asc (a ^. DBAddressAccount), asc (a ^. DBAddressInternal), asc (a ^. DBAddressIndex)]
     forM_ countM $ limit . rowLimit
     return (a, total)
   -- An address of the page holds a coin at least, so its total is never null
   let held = [(P.entityVal a, fromMaybe 0 total) | (a, Value total) <- rows]
   rules <- spendingOf net
-  coins <- balanceColumns accId (Just (dBAddressAddress . fst <$> held))
+  coins <- balanceColumns accIds (Just (dBAddressAddress . fst <$> held))
   byAddress <- Map.fromListWith (<>) <$> mapM (coinShare rules) coins
   return [(addr, Map.findWithDefault (CoinBalance total 0 0 0) (dBAddressAddress addr) byAddress) | (addr, total) <- held]
 
@@ -518,13 +566,13 @@ coinShare rules (outpoint, addr, value, block) = do
       partIf held = if held then value else 0
   return (addr, CoinBalance value (partIf spendable) (partIf (lock == Just LockedByTransaction)) (partIf (lock == Just LockedByUser)))
 
--- | What the spendable balances read of the coins of an account, at the
--- given addresses or at all of them: the outpoint, address, value and
--- block of each.
-balanceColumns :: (MonadUnliftIO m) => DBAccountId -> Maybe [Text] -> ExceptT String (DB m) [(OutPoint, Text, Word64, Store.BlockRef)]
-balanceColumns accId addrsM = do
+-- | What the spendable balances read of the coins of accounts of one
+-- network, at the given addresses or at all of them: the outpoint,
+-- address, value and block of each.
+balanceColumns :: (MonadUnliftIO m) => [DBAccountId] -> Maybe [Text] -> ExceptT String (DB m) [(OutPoint, Text, Word64, Store.BlockRef)]
+balanceColumns accIds addrsM = do
   rows <- lift . select . from $ \c -> do
-    where_ $ c ^. DBCoinAccount ==. val accId
+    where_ $ c ^. DBCoinAccount `in_` valList accIds
     forM_ addrsM $ \addrs -> where_ $ c ^. DBCoinAddress `in_` valList addrs
     return (c ^. DBCoinOutpoint, c ^. DBCoinAddress, c ^. DBCoinValue, c ^. DBCoinBlockRef)
   liftEither $ forM rows $ \(Value key, Value addr, Value value, Value blockBytes) -> do
@@ -559,10 +607,10 @@ isCoinbaseTx tid = maybe False coinbase <$> lookupRawTx tid
 -- can be spent by this same rule. Whoever holds the keys of the inputs can
 -- replace the transaction until it confirms, which also undoes every
 -- transaction built on it. When the inputs are coins of the wallet's own
--- accounts, that is the user: the change of a payment and what one account
--- pays another are as safe as each other. A transaction the sync has not
--- stored for every account that spends in it, or has found dead, is not
--- trusted.
+-- portfolios, that is the user: the change of a payment and what one
+-- portfolio pays another are as safe as each other. A transaction the
+-- sync has not stored for every portfolio that spends in it, or has found
+-- dead, is not trusted.
 --
 -- The walk keeps what it found of each transaction, so that a parent two
 -- transactions share is looked at once. A transaction met again while its
@@ -609,66 +657,77 @@ trustedTx net tid = evalStateT (trusted tid) Map.empty
 -- unlocks it. Only a free coin can be locked: one a pending transaction
 -- holds is refused, and so is one the user locked already. The lock stays
 -- while the coin confirms, and goes with the coin once it is spent.
--- Returns the account of the coin and the coin as coins shows it.
-lockCoin :: (MonadUnliftIO m) => OutPoint -> ExceptT String (DB m) (DBAccount, JsonCoin)
-lockCoin outpoint = do
-  (net, row) <- walletCoin outpoint
+-- Returns where the coin is and the coin as coins shows it.
+lockCoin :: (MonadUnliftIO m) => (Network, DBCoin) -> ExceptT String (DB m) (Place, JsonCoin)
+lockCoin (net, row) = do
+  outpoint <- liftEither $ coinOutpoint row
   locks <- coinLocks net
   case Map.lookup outpoint locks of
     Just LockedByTransaction -> throwError "The coin is already locked by a pending transaction"
     Just LockedByUser -> throwError "The coin is already locked"
-    Nothing -> setLockedByUser outpoint True
-  shownCoin net row
+    Nothing -> setLockedByUser (dBCoinAccount row) outpoint True
+  shownCoin (net, row)
 
 -- | Unlock a coin the user locked. A coin a pending transaction holds is
 -- freed by deleting that transaction instead.
-unlockCoin :: (MonadUnliftIO m) => OutPoint -> ExceptT String (DB m) (DBAccount, JsonCoin)
-unlockCoin outpoint = do
-  (net, row) <- walletCoin outpoint
+unlockCoin :: (MonadUnliftIO m) => (Network, DBCoin) -> ExceptT String (DB m) (Place, JsonCoin)
+unlockCoin (net, row) = do
+  outpoint <- liftEither $ coinOutpoint row
   locks <- coinLocks net
   case Map.lookup outpoint locks of
-    Just LockedByUser -> setLockedByUser outpoint False
+    Just LockedByUser -> setLockedByUser (dBCoinAccount row) outpoint False
     Just LockedByTransaction -> throwError "The coin is locked by a pending transaction, not by the user: deletetx frees it"
     Nothing -> throwError "The coin is not locked"
-  shownCoin net row
+  shownCoin (net, row)
 
--- | A coin of the wallet by its outpoint, as coins shows it now, with its
--- account: what show answers. It changes nothing.
-walletCoinShown :: (MonadUnliftIO m) => OutPoint -> ExceptT String (DB m) (DBAccount, JsonCoin)
-walletCoinShown outpoint = uncurry shownCoin =<< walletCoin outpoint
+-- | The accounts that hold the coins, each once, on any network. A coin
+-- the wallet does not hold has none.
+coinHolders :: (MonadUnliftIO m) => [OutPoint] -> ExceptT String (DB m) [(DBAccountId, DBAccount)]
+coinHolders outpoints = do
+  rows <- lift $ concat <$> mapM coinRows outpoints
+  getAccountsById $ nubOrd $ dBCoinAccount <$> rows
 
--- | The accounts that hold the coins, each once. A coin the wallet does not
--- hold has none.
-coinAccounts :: (MonadUnliftIO m) => [OutPoint] -> ExceptT String (DB m) [(DBAccountId, DBAccount)]
-coinAccounts outpoints = do
-  rows <- lift $ mapM (P.get . DBCoinKey . outpointBytes) outpoints
-  getAccountsById $ nubOrd $ dBCoinAccount <$> catMaybes rows
+-- | The one row of a coin the user named, by its outpoint, with the
+-- network of its account. A coin with rows on several networks names the
+-- one on the network given, the --network of the command, or else the one
+-- on the default network of the configuration. When neither settles it,
+-- the user is asked for --network, with the networks named.
+walletCoin :: (MonadUnliftIO m) => Config -> Maybe Network -> OutPoint -> ExceptT String (DB m) (Network, DBCoin)
+walletCoin cfg netM outpoint = do
+  rows <- lift $ coinRows outpoint
+  found <- forM rows $ \row -> (,row) . accountNetwork <$> getAccountById (dBCoinAccount row)
+  let onNetwork net = [held | held@(rowNet, _) <- found, rowNet == net]
+      networks = nubOrdOn (.name) (fst <$> found)
+  case (netM, found) of
+    (_, []) -> throwError ("The wallet has no coin " <> coinText outpoint)
+    (Just net, _) -> case onNetwork net of
+      held : _ -> return held
+      [] -> throwError $ "The coin " <> coinText outpoint <> " is on " <> networksText networks <> ", not on the --network " <> net.name
+    (Nothing, [held]) -> return held
+    (Nothing, _) -> case onNetwork (configDefaultNetwork cfg) of
+      held : _ -> return held
+      [] -> throwError $ "The coin " <> coinText outpoint <> " is on " <> networksText networks <> ": give the --network"
 
--- | A coin of the wallet by its outpoint, with the network of its account
-walletCoin :: (MonadUnliftIO m) => OutPoint -> ExceptT String (DB m) (Network, DBCoin)
-walletCoin outpoint = do
-  rowM <- lift $ P.get (DBCoinKey $ outpointBytes outpoint)
-  row <- liftMaybe ("The wallet has no coin " <> coinText outpoint) rowM
-  acc <- getAccountById (dBCoinAccount row)
-  return (accountNetwork acc, row)
-
-setLockedByUser :: (MonadUnliftIO m) => OutPoint -> Bool -> ExceptT String (DB m) ()
-setLockedByUser outpoint locked =
-  lift $ P.update (DBCoinKey $ outpointBytes outpoint) [DBCoinLockedByUser P.=. locked]
+setLockedByUser :: (MonadUnliftIO m) => DBAccountId -> OutPoint -> Bool -> ExceptT String (DB m) ()
+setLockedByUser accId outpoint locked =
+  lift $ P.update (coinKey accId outpoint) [DBCoinLockedByUser P.=. locked]
 
 -- | The coins of the account the user locked, in the order of their
--- outpoints: what exportacc writes
+-- outpoints: what exportwallet writes
 userLockedCoins :: (MonadUnliftIO m) => DBAccountId -> DB m [DBCoin]
 userLockedCoins accId =
   map P.entityVal <$> P.selectList [DBCoinAccount P.==. accId, DBCoinLockedByUser P.==. True] [P.Asc DBCoinOutpoint]
 
--- | A coin as coins shows it now, with its account
-shownCoin :: (MonadUnliftIO m) => Network -> DBCoin -> ExceptT String (DB m) (DBAccount, JsonCoin)
-shownCoin net row = do
+-- | A coin as coins shows it now, with where it is: what show answers. It
+-- changes nothing.
+shownCoin :: (MonadUnliftIO m) => (Network, DBCoin) -> ExceptT String (DB m) (Place, JsonCoin)
+shownCoin (net, row) = do
   acc <- getAccountById (dBCoinAccount row)
+  let pool = accountPool acc
+  place <- poolPlace pool
   rules <- spendingOf net
-  coin <- toJsonCoin rules row
-  return (acc, coin)
+  coin <- toJsonCoin rules pool row
+  return (place, coin)
 
 {- The coins against their transactions -}
 
@@ -690,16 +749,23 @@ checkCoinOutput parent coin = do
   where
     named = "The store reports the coin " <> coinText coin.outpoint
 
--- | Refuse a coin the store lists that the raw transaction stored under
--- the hash of its outpoint does not pay ('checkCoinOutput'). The sync asks
--- this once it has stored the raw transactions, before it stores a coin.
--- A coin whose raw transaction is not stored is not checked: no builder
--- spends it, since signing needs the raw transaction.
-checkListedCoins :: (MonadUnliftIO m) => [Store.Unspent] -> ExceptT String (DB m) ()
-checkListedCoins coins =
-  forM_ coins $ \coin -> do
+-- | Whether the raw transaction stored under the hash of its outpoint
+-- pays each coin the store lists ('checkCoinOutput'): Left the reason to
+-- refuse the answer of the store, for the first coin it does not pay. The
+-- sync asks this once it has stored the raw transactions, before it
+-- stores a coin. A coin whose raw transaction is not stored is not
+-- checked: no builder spends it, since signing needs the raw transaction.
+--
+-- The refusal is given, not thrown: it is a failure of the store, which
+-- the sync tells the store of ("Haskoin.Wallet.Store".'refusedAnswer').
+-- A failure of the action itself is one of the database: a stored raw
+-- transaction that does not read.
+checkListedCoins :: (MonadUnliftIO m) => [Store.Unspent] -> ExceptT String (DB m) (Either String ())
+checkListedCoins coins = do
+  checks <- forM coins $ \coin -> do
     parentM <- lookupRawTx coin.outpoint.hash
-    forM_ parentM $ \parent -> liftEither (checkCoinOutput parent coin)
+    return $ maybe (Right ()) (`checkCoinOutput` coin) parentM
+  return (sequence_ checks)
 
 -- | The transactions the coins come from, each once, in the order of the
 -- coins, as a builder puts them in the signing data: read from the
@@ -785,7 +851,7 @@ refreshCoins net ctx accId addrs unspents = mconcat <$> mapM refreshAddress addr
                 S.encode coin.block /= dBCoinBlockRef row || coin.value /= dBCoinValue row
             ]
       lift $ forM_ gone deleteCoin
-      lift $ forM_ moved rewriteCoin
+      lift $ forM_ moved (rewriteCoin accId)
       inserted <- mapM (insertCoin net accId) new
       return
         Refreshed
@@ -801,10 +867,10 @@ insertCoin net accId coin = do
     liftMaybe ("The coin " <> coinText coin.outpoint <> " pays no address of the network") $
       addrToText net =<< coin.address
   time <- liftIO getCurrentTime
-  -- A row with this key holds the coin under another address or account,
-  -- which only a database gone wrong does. The coin takes the row over, so
-  -- that a full sync gets past it, and what the user locked stays locked.
-  let key = DBCoinKey (outpointBytes coin.outpoint)
+  -- A row with this key holds the coin under another address, which only
+  -- a database gone wrong does. The coin takes the row over, so that a
+  -- full sync gets past it, and what the user locked stays locked.
+  let key = coinKey accId coin.outpoint
   previousM <- lift $ P.get key
   let row =
         DBCoin
@@ -821,20 +887,21 @@ insertCoin net accId coin = do
 
 -- | Give a stored coin the block and the value the store now reports for
 -- it. Whether the user locked it stays.
-rewriteCoin :: (MonadUnliftIO m) => Store.Unspent -> DB m ()
-rewriteCoin coin =
+rewriteCoin :: (MonadUnliftIO m) => DBAccountId -> Store.Unspent -> DB m ()
+rewriteCoin accId coin =
   P.update
-    (DBCoinKey $ outpointBytes coin.outpoint)
+    (coinKey accId coin.outpoint)
     [DBCoinBlockRef P.=. S.encode coin.block, DBCoinValue P.=. coin.value]
 
 -- | Delete a stored coin
 deleteCoin :: (MonadUnliftIO m) => DBCoin -> DB m ()
-deleteCoin row = P.delete (DBCoinKey $ dBCoinOutpoint row)
+deleteCoin row = P.delete (DBCoinKey (dBCoinAccount row) (dBCoinOutpoint row))
 
 {- The coins a transaction leaves -}
 
--- | Why a transaction just prepared leaves a coin of the account: a coin
--- that coin control chose, or, for a send-all, any coin of the account
+-- | Why a transaction just prepared leaves a coin of the portfolio: a coin
+-- that coin control chose, or, for a send-all, any coin of the portfolio
+-- on the network
 data LeftReason
   = -- | Worth less than the fee to spend it, and left as the user chose
     WorthLessThanFee
@@ -844,6 +911,8 @@ data LeftReason
     NotSpendableYet
   | -- | Spendable, but not among the coins chosen with --coin or --spend-from
     NotGiven
+  | -- | Spendable, but of the type of address --coin-type leaves out
+    OtherType
   deriving (Eq, Show)
 
 instance ToJSON LeftReason where
@@ -853,11 +922,11 @@ instance FromJSON LeftReason where
   parseJSON = withText "LeftReason" $ \name ->
     case filter ((== cs name) . reasonName) leftReasons of
       [reason] -> return reason
-      _ -> fail $ "Unknown reason a coin stays in the account: " <> cs name
+      _ -> fail $ "Unknown reason a coin stays in the portfolio: " <> cs name
 
 -- | Every reason, in the order the answer lists the coins in
 leftReasons :: [LeftReason]
-leftReasons = [WorthLessThanFee, Locked LockedByUser, Locked LockedByTransaction, NotSpendableYet, NotGiven]
+leftReasons = [WorthLessThanFee, Locked LockedByUser, Locked LockedByTransaction, NotSpendableYet, NotGiven, OtherType]
 
 -- | The name of a reason in JSON
 reasonName :: LeftReason -> String
@@ -867,6 +936,7 @@ reasonName = \case
   Locked LockedByTransaction -> "lockedbytransaction"
   NotSpendableYet -> "notspendableyet"
   NotGiven -> "notgiven"
+  OtherType -> "othertype"
 
 -- | A reason as the user reads it
 leftReasonText :: LeftReason -> String
@@ -876,13 +946,14 @@ leftReasonText = \case
   Locked LockedByTransaction -> "a pending transaction spends it"
   NotSpendableYet -> "not spendable yet"
   NotGiven -> "not chosen with --coin or --spend-from"
+  OtherType -> "not of the type --coin-type sends"
 
 -- | Why a coin the builder may not spend stays, from its lock: without one,
 -- it is not spendable yet
 lockReason :: Maybe CoinLock -> LeftReason
 lockReason = maybe NotSpendableYet Locked
 
--- | A coin of the account a transaction leaves in it, and why
+-- | A coin of the portfolio a transaction leaves in it, and why
 data LeftCoin = LeftCoin
   { leftCoinOutpoint :: !OutPoint,
     leftCoinValue :: !Word64,
@@ -905,7 +976,7 @@ instance FromJSON LeftCoin where
   parseJSON = withObject "LeftCoin" $ \o ->
     LeftCoin <$> o .: "outpoint" <*> o .: "value" <*> o .: "reason" <*> o .:? "txlabel" .!= ""
 
--- | The coins of the account a transaction leaves, by reason in the order
+-- | The coins of the portfolio a transaction leaves, by reason in the order
 -- of 'leftReasons', the largest first: the dust coins left, the coins the
 -- builder may not spend with their locks, and the spendable coins not
 -- chosen with coin control. Each shows its label, among those given
@@ -921,12 +992,21 @@ leftCoins labels dustLeft unspendable notGiven =
     leftOf :: LeftReason -> Store.Unspent -> LeftCoin
     leftOf reason coin = LeftCoin coin.outpoint coin.value reason (Map.findWithDefault "" coin.outpoint.hash labels)
 
+-- | The spendable coins a send-all leaves because --coin-type sends the
+-- other type, the largest first, each with its label among those given.
+-- They come after the coins 'leftCoins' lists.
+leftOfOtherType :: Map TxHash Text -> [Store.Unspent] -> [LeftCoin]
+leftOfOtherType labels others =
+  sortOn
+    (Down . leftCoinValue)
+    [LeftCoin coin.outpoint coin.value OtherType (Map.findWithDefault "" coin.outpoint.hash labels) | coin <- others]
+
 {- Coin control -}
 
--- | The coins that coin control chose among the coins of the account, by
+-- | The coins that coin control chose among the coins of the pool, by
 -- their outpoints and by the addresses that hold them: those the builder
 -- may spend now, and the others, each with its lock. The addresses count,
--- not their text. An outpoint the account does not hold is refused, and so
+-- not their text. An outpoint the pool does not hold is refused, and so
 -- is a choice none of whose coins can be spent, with why.
 chosenCoins ::
   -- | The outpoints chosen
@@ -940,7 +1020,7 @@ chosenCoins ::
   Either String ([Store.Unspent], [(Store.Unspent, Maybe CoinLock)])
 chosenCoins outpoints addrs spendable unspendable = do
   forM_ outpoints $ \outpoint ->
-    unless (outpoint `elem` held) $ Left $ "The account has no coin " <> coinText outpoint
+    unless (outpoint `elem` held) $ Left $ "The portfolio has no coin " <> coinText outpoint <> " on the network of the payment"
   when (null chosenSpendable) $
     Left $ case chosenHeld of
       [] -> "The addresses chosen with --spend-from hold no coins"

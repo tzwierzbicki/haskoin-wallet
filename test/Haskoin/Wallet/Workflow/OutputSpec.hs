@@ -5,8 +5,14 @@
 -- | What hw shows: the listings, their paging and the view the
 -- configuration file names for them, a transaction as hw
 -- lays it out, the pending transactions, the balances of the addresses,
--- the coins, the next step shown after a payment or a sweep, the CSV
--- files of --csv, and the spreadsheet of exportsheet.
+-- the coins, the next step shown after a payment or a sweep, the pager,
+-- the CSV files of --csv, and the spreadsheet of exportsheet.
+--
+-- A listing over a portfolio comes in sections, one for each network, or
+-- for each account for addresses. A section says where it is in a title
+-- line when the listing covers several places, and balances always titles
+-- it, with the total of the network. pendingtxs lists one portfolio, in
+-- one list sorted by network, each transaction naming its place.
 module Haskoin.Wallet.Workflow.OutputSpec (spec) where
 
 import Codec.Archive.Zip (findEntryByPath, fromEntry, toArchive)
@@ -14,6 +20,7 @@ import Control.Monad (forM_, replicateM_, void)
 import Data.Bits ((.&.))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
+import qualified Data.Aeson as Json
 import Data.IORef (modifyIORef)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -21,18 +28,20 @@ import Data.Text.Encoding (decodeUtf8)
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Data.Word (Word64)
 import Haskoin
-import Haskoin.Wallet.Cli.Response (Response (..))
-import Haskoin.Wallet.Database (DBAccount (..), DBAddress (..))
+import Haskoin.Wallet.Cli.Response (Group (..), Response (..))
+import Haskoin.Wallet.Database (DBAddress (..))
 import Haskoin.Wallet.Database.Address (CoinBalance (..), coinBalanceUnspendable)
 import Haskoin.Wallet.Database.Coin (JsonCoin (..))
+import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.HwTestUtils
+import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Workflow.TestUtils
 import System.Directory (doesFileExist)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
-import System.Posix.Files (fileMode, getFileStatus)
+import System.Posix.Files (fileMode, getFileStatus, setFileMode)
 import Test.Hspec
 
 spec :: Spec
@@ -42,19 +51,19 @@ spec = prepareContext $ \ctx -> do
 
     it "tells on a terminal what sync is doing" $
       withChain ctx (paidChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         run <- hwOnTerminal home ["sync"] []
-        run `shouldSatisfy` shown "\rmain: checking the store\ESC[0K"
+        run `shouldSatisfy` shown "\rportfolio0 btc: checking the store\ESC[0K"
 
     it "shows on a sync with nothing new as well" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         run <- hwOnTerminal home ["sync"] []
-        run `shouldSatisfy` shown "\rmain: reading balances  [--------------------]  0/1 addresses\ESC[0K"
+        run `shouldSatisfy` shown "\rportfolio0 btc: reading balances  [--------------------]  0/1 addresses\ESC[0K"
 
     it "is gone from the terminal when sync ends" $
       withChain ctx (paidChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         run <- hwOnTerminal home ["sync"] []
         runErr run `shouldSatisfy` Text.isSuffixOf "\r\ESC[0K"
 
@@ -67,7 +76,7 @@ spec = prepareContext $ \ctx -> do
 
     it "writes nothing off a terminal" $
       withChain ctx (paidChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         run <- hw home ["sync"] []
         runErr run `shouldBe` ""
 
@@ -75,17 +84,26 @@ spec = prepareContext $ \ctx -> do
     -- it starts at the left edge and nothing is left behind it
     it "makes room for the question of a scan" $
       withLyingChain ctx (paidChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         run <- hwOnTerminal home ["sync"] ["n"]
         run `shouldSatisfy` shown "\r\ESC[0KThe store reports used addresses as far as 1000"
 
-    -- Bitcoin is searched first, then Bitcoin Cash, whose bip44 accounts
-    -- are at m/44'/145'
-    it "tells on a terminal which network and account recover looks at, after the mnemonic is typed" $
+    -- The chain pays portfolio0, so the search has found one portfolio
+    -- paid when it looks at portfolio1
+    it "tells on a terminal which portfolio recover looks at, after the mnemonic is typed" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         run <- hwOnTerminal home ["recover"] seedOnce
-        run `shouldSatisfy` shown "\rrecover on btc: looking at /44'/0'/0', 0 accounts paid so far\ESC[0K"
-        run `shouldSatisfy` shown "\rrecover on bch: looking at /44'/145'/0', 0 accounts paid so far\ESC[0K"
+        run `shouldSatisfy` shown "\rrecover: looking at portfolio0, 0 portfolios paid so far\ESC[0K"
+        run `shouldSatisfy` shown "\rrecover: looking at portfolio1, 1 portfolio paid so far\ESC[0K"
+
+    -- The funds at paths hw cannot spend from: bip49 at m/49' on Bitcoin,
+    -- and the accounts of Bitcoin, at m/44'/0', on Bitcoin Cash. A path
+    -- alone would not tell the two networks apart.
+    it "tells on a terminal which network and account recover looks at for the funds hw cannot spend" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        run <- hwOnTerminal home ["recover"] seedOnce
+        run `shouldSatisfy` shown "\rrecover on btc: looking at /49'/0'/0', 0 accounts paid so far\ESC[0K"
+        run `shouldSatisfy` shown "\rrecover on bch: looking at /44'/0'/0', 0 accounts paid so far\ESC[0K"
 
   listingSpec ctx
   listingViewSpec ctx
@@ -95,28 +113,32 @@ spec = prepareContext $ \ctx -> do
   exportSheetSpec ctx
   balancesListSpec ctx
   coinsListSpec ctx
+  sectionsSpec ctx
+  syncAnswerSpec ctx
+  pagerSpec ctx
   addressCodeSpec ctx
   nextStepSpec ctx
 
 {- Listings -}
 
--- | How many rows a listing shows
+-- | How many rows a listing shows, over all its sections
 rowsOf :: Response -> Either String Int
-rowsOf (ResponseAddresses _ addrs) = Right (length addrs)
-rowsOf (ResponseBalances _ addrs) = Right (length addrs)
-rowsOf (ResponseTxs _ txs) = Right (length txs)
-rowsOf (ResponsePendingTxs _ held) = Right (length held)
-rowsOf (ResponseCoins _ coins) = Right (length coins)
+rowsOf (ResponseAddresses groups) = Right (sum (length . groupRows <$> groups))
+rowsOf (ResponseBalances groups) = Right (sum (length . groupRows . fst <$> groups))
+rowsOf (ResponseTxs groups) = Right (sum (length . groupRows <$> groups))
+rowsOf (ResponsePendingTxs held) = Right (length held)
+rowsOf (ResponseCoins groups) = Right (sum (length . groupRows <$> groups))
 rowsOf other = Left (show other)
 
 -- | What names each row of a listing, as --after takes it: the address,
--- the coin, the txid, or the hash of a pending transaction as shown
+-- the coin, the txid, or the hash of a pending transaction as shown. The
+-- sections of a listing come one after the other.
 keysOf :: Response -> Either String [String]
-keysOf (ResponseAddresses _ addrs) = Right (Text.unpack . dBAddressAddress . fst <$> addrs)
-keysOf (ResponseBalances _ addrs) = Right (Text.unpack . dBAddressAddress . fst <$> addrs)
-keysOf (ResponseTxs _ listed) = Right [Text.unpack (txHashToHex (chainTxid status)) | ListedTx info _ <- listed, OnChain status <- [txInfoStatus info]]
-keysOf (ResponsePendingTxs _ held) = Right [Text.unpack (txHashToHex (pendingShownHash status)) | (_, info) <- held, Pending status <- [txInfoStatus info]]
-keysOf (ResponseCoins _ coins) = Right [Text.unpack (txHashToHex outpoint.hash) <> ":" <> show outpoint.index | coin <- coins, let outpoint = jsonCoinOutpoint coin]
+keysOf (ResponseAddresses groups) = Right [Text.unpack (dBAddressAddress addr) | g <- groups, (addr, _) <- groupRows g]
+keysOf (ResponseBalances groups) = Right [Text.unpack (dBAddressAddress addr) | (g, _) <- groups, (addr, _) <- groupRows g]
+keysOf (ResponseTxs groups) = Right [Text.unpack (txHashToHex (chainTxid status)) | g <- groups, ListedTx info _ <- groupRows g, OnChain status <- [txInfoStatus info]]
+keysOf (ResponsePendingTxs held) = Right [Text.unpack (txHashToHex (pendingShownHash status)) | (_, info) <- held, Pending status <- [txInfoStatus info]]
+keysOf (ResponseCoins groups) = Right [Text.unpack (txHashToHex outpoint.hash) <> ":" <> show outpoint.index | g <- groups, coin <- groupRows g, let outpoint = jsonCoinOutpoint coin]
 keysOf other = Left (show other)
 
 -- | The listings, each with one row in a synced home with a payment
@@ -127,7 +149,7 @@ listings = ["addresses", "txs", "coins", "pendingtxs", "balances"]
 
 -- | The time of each transaction an answer lists
 timesOf :: Response -> Either String [Maybe UTCTime]
-timesOf (ResponseTxs _ listed) = Right (chainTime . chainOf . listedTxInfo <$> listed)
+timesOf (ResponseTxs groups) = Right [chainTime (chainOf (listedTxInfo listed)) | g <- groups, listed <- groupRows g]
 timesOf other = Left (show other)
 
 listingSpec :: Ctx -> Spec
@@ -142,57 +164,62 @@ listingSpec ctx = do
   describe "A listing" $ do
     it "shows every row without --max" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         replicateM_ 6 (answer home ["receive"] [])
         (rowsOf <$> hwJson home ["addresses"] []) `shouldReturn` Right 6
 
     -- The header takes two lines: the headings, and the line under them.
-    -- Each of the 6 addresses takes one row.
-    it "shows each address on one row under a header with addresses --tabular" $
+    -- Each of the 6 addresses takes one row. --network and --type narrow
+    -- the listing to one account, which needs no title.
+    it "shows each address on one row under a header with addresses --tabular, for one account" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         replicateM_ 6 (answer home ["receive"] [])
-        listed <- runOut <$> hw home ["addresses", "--tabular"] []
+        listed <- runOut <$> hw home ["addresses", "--network", "btc", "--type", "bip44", "--tabular"] []
         length (Text.lines listed) `shouldBe` 8
 
-    -- The header takes two lines, and the account one row
-    it "shows each account on one row under a header with accounts --tabular" $
+    -- The listing covers every account of the portfolio, so its section
+    -- says which account it is, above the two lines of the header and the
+    -- row of the address
+    it "puts the title of the account above the header with addresses --tabular, over the whole portfolio" $
       withHome $ \home -> do
-        createMain home
-        listed <- runOut <$> hw home ["accounts", "--tabular"] []
-        length (Text.lines listed) `shouldBe` 3
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        listed <- Text.lines . runOut <$> hw home ["addresses", "--tabular"] []
+        (take 1 listed, length listed) `shouldBe` (["portfolio0  btc  bip44"], 4)
 
-    -- The second account of the seed has the path /44'/0'/1'. Its name
-    -- has 22 characters, the width of the first column.
-    it "gives every name whole with accounts --tabular, in a first column as wide as the longest" $
+    -- The header takes two lines. A portfolio that has no address yet has
+    -- one row, with no network.
+    it "shows a portfolio on one row under a header with portfolios --tabular" $
       withHome $ \home -> do
-        createMain home
-        _ <- answer home ["createacc", "family savings account"] seedTwice
-        listed <- Text.lines . runOut <$> hw home ["accounts", "--tabular"] []
-        take 1 listed `shouldBe` ["Account                │ Network │ Path       │ Spendable (btc) │ Unconfirmed (btc) │ Coins"]
-        listed `shouldContain` ["family savings account │ btc     │ /44'/0'/1' │      0.00000000 │        0.00000000 │     0"]
+        newTestPortfolio home
+        listed <- runOut <$> hw home ["portfolios", "--tabular"] []
+        length (Text.lines listed) `shouldBe` 3
 
     -- The payment waits in the mempool. Yellow is colour 33 of the
     -- terminal. --no-pager prints the listing itself.
-    it "shows the unconfirmed balance of an account in yellow on a terminal, as what cannot be spent yet" $
+    it "shows the unconfirmed balance of a portfolio in yellow on a terminal, as what cannot be spent yet" $
       withChain ctx (Chain 800002 [(payment ctx, Nothing)]) $ \home _ -> do
         synced home
-        run <- hwOnScreen [] home ["accounts", "--no-pager"]
+        run <- hwOnScreen [] home ["portfolios", "--no-pager"]
         runOut run `shouldSatisfy` Text.isInfixOf "unconfirmed \ESC[0;33m0.00050000\ESC[0m btc"
 
-    -- The header takes two lines, and the coin of the payment one row
-    it "shows each coin on one row under a header with coins --tabular" $
+    -- The header takes two lines, and the coin of the payment one row.
+    -- --network narrows the listing to one network, which needs no
+    -- title.
+    it "shows each coin on one row under a header with coins --tabular, on one network" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        listed <- runOut <$> hw home ["coins", "--tabular"] []
+        listed <- runOut <$> hw home ["coins", "--network", "btc", "--tabular"] []
         length (Text.lines listed) `shouldBe` 3
 
-    -- The header takes two lines, and the address paid one row
-    it "shows each address on one row under a header with balances --tabular" $
+    -- The title of the network with its total, the two lines of the
+    -- header, and the address paid on one row
+    it "shows each address on one row under the title of its network and a header with balances --tabular" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         listed <- runOut <$> hw home ["balances", "--tabular"] []
-        length (Text.lines listed) `shouldBe` 3
+        length (Text.lines listed) `shouldBe` 4
 
     -- The header takes two lines, and the payment prepared one row
     it "shows each pending transaction on one row under a header with pendingtxs --tabular" $
@@ -212,33 +239,33 @@ listingSpec ctx = do
     -- 2^64 + 1 wrapped around to 1, and showed one address of the three
     it "shows every row with a --max past 64 bits, rather than wrapping around" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         replicateM_ 3 $ answer home ["receive"] []
         (rowsOf <$> hwJson home ["addresses", "--max", "18446744073709551617"] []) `shouldReturn` Right 3
 
     it "refuses a --max of 0" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         run <- hw home ["addresses", "--max", "0"] []
         runExit run `shouldBe` ExitFailure 1
         runErr run `shouldSatisfy` Text.isInfixOf "option --max: cannot parse value `0'"
 
     it "refuses to start after a row that is not in it" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         (errorOf <$> hwJson home ["addresses", "--after", Text.unpack (internalAddrsText !! 0)] [])
-          `shouldReturn` Right ("The address " <> internalAddrsText !! 0 <> " is not a receiving address of the account")
+          `shouldReturn` Right ("The address " <> internalAddrsText !! 0 <> " is not among the addresses listed")
 
-    -- second is an account of its own, without any row
-    it "shows the rows of the account of --account only" $
+    -- portfolio1 is a portfolio of its own, without any row
+    it "shows the rows of the portfolio of --portfolio only" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
-        _ <- answer home ["createacc", "second"] seedTwice
+        newTestPortfolio home
         forM_ listings $ \listing -> do
-          (rowsOf <$> hwJson home [listing, "--account", "main"] []) `shouldReturn` Right 1
-          (rowsOf <$> hwJson home [listing, "--account", "second"] []) `shouldReturn` Right 0
+          (rowsOf <$> hwJson home [listing, "--portfolio", "0"] []) `shouldReturn` Right 1
+          (rowsOf <$> hwJson home [listing, "--portfolio", "1"] []) `shouldReturn` Right 0
 
     -- Two of each: the addresses /0/0 and /0/1, the two payments to them,
     -- their coins, and a payment prepared from each coin
@@ -266,6 +293,37 @@ listingSpec ctx = do
           keys <- either fail return . keysOf =<< hwJson home [listing] []
           (keysOf <$> hwJson home [listing, "--after", shortKey (keys !! 0)] []) `shouldReturn` Right [keys !! 1]
 
+    -- btctest and btctest4 share their keys, so each has the address in a
+    -- section of its own: starting in the first of them would loop
+    it "refuses to start addresses after an address two test networks share, and asks for the --network" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive", "--network", "btctest"] []
+        _ <- answer home ["receive", "--network", "btctest4"] []
+        (errorOf <$> hwJson home ["addresses", "--after", "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih"] [])
+          `shouldReturn` Right "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and btctest4: give the --network"
+
+    -- Two addresses handed out on each network, the same two. The newer,
+    -- /0/1, is listed first, then mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih at
+    -- /0/0.
+    it "starts addresses after an address two test networks share on the --network named" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive", "--network", "btctest"] []
+        _ <- answer home ["receive", "--network", "btctest"] []
+        _ <- answer home ["receive", "--network", "btctest4"] []
+        newer <- receiveWith home ["--network", "btctest4"]
+        (addressesOf <$> hwJson home ["addresses", "--network", "btctest4", "--after", newer] [])
+          `shouldReturn` Right [("mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih", "")]
+
+    -- The host serves btctest and btctest4 alone, and the coin is at the
+    -- address on both
+    it "refuses to start balances after an address two test networks share, and asks for the --network" $
+      withChainServing ctx [btcTest, btcTest4] [] (confirmedChain (testnetCoinTx ctx)) $ \home _ -> do
+        testnetCoinSynced home
+        (errorOf <$> hwJson home ["balances", "--after", "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih"] [])
+          `shouldReturn` Right "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and btctest4: give the --network"
+
     -- The two payments of the test before, signed. The newer is listed
     -- first.
     it "shows the pending transactions after the signed one --after names by its txid" $
@@ -282,15 +340,16 @@ listingSpec ctx = do
 listingViewSpec :: Ctx -> Spec
 listingViewSpec ctx =
   describe "The view of the listings that the configuration file names" $ do
-    -- The first column is as wide as its heading, which is longer than
-    -- the name main
+    -- Each column is as wide as its heading, which is longer than the
+    -- cells under it. The portfolio has one address on btc.
     it "shows a listing in that view when no option asks for one" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
         setListingView home "tabular"
-        listed <- Text.lines . runOut <$> hw home ["accounts"] []
-        take 1 listed `shouldBe` ["Account │ Network │ Path       │ Spendable (btc) │ Unconfirmed (btc) │ Coins"]
-        listed `shouldContain` ["main    │ btc     │ /44'/0'/0' │      0.00000000 │        0.00000000 │     0"]
+        listed <- Text.lines . runOut <$> hw home ["portfolios"] []
+        take 1 listed `shouldBe` ["Wallet  │ Portfolio  │ Network │ Spendable (btc) │ Unconfirmed (btc) │ Coins │ Addresses │ Description"]
+        listed `shouldContain` ["wallet0 │ portfolio0 │ btc     │      0.00000000 │        0.00000000 │     0 │         1 │"]
 
     -- Only the verbose view gives the block of a coin
     it "can be the verbose view" $
@@ -300,43 +359,45 @@ listingViewSpec ctx =
         run <- hw home ["coins"] []
         Text.lines (runOut run) `shouldContain` ["  Block   : 800000"]
 
-    -- A table has a line of dashes under its headings, the second line,
-    -- which no other view has. The payment prepared gives each listing
-    -- a row.
+    -- A table has a line of dashes under its headings, which no other
+    -- view has: the second line, or the third under the title of a
+    -- section. The payment prepared gives each listing a row.
     it "is the view of each of the six listings" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         setListingView home "tabular"
         let ruleOfTable line = not (Text.null line) && Text.all (`elem` ("─┼" :: String)) line
-        forM_ ("accounts" : listings) $ \listing -> do
+        forM_ ("portfolios" : listings) $ \listing -> do
           listed <- Text.lines . runOut <$> hw home [listing] []
           -- The name of the listing goes with the check, so that a
           -- failure tells which listing it was
-          (listing, ruleOfTable <$> take 1 (drop 1 listed)) `shouldBe` (listing, [True])
+          (listing, any ruleOfTable (take 3 listed)) `shouldBe` (listing, True)
 
-    -- The two lines of the compact view of an account nothing has paid
+    -- The compact view of a portfolio nothing has paid, in three lines:
+    -- its name, the day it was created, which is today, and that it has
+    -- no address yet
     it "gives way to --compact, which shows the compact view" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         setListingView home "tabular"
-        run <- hw home ["accounts", "--compact"] []
-        runOut run `shouldBe` "main  btc  /44'/0'/0'\n  spendable 0.00000000 btc, no coins\n"
+        listed <- Text.lines . runOut <$> hw home ["portfolios", "--compact"] []
+        (take 1 listed, drop 2 listed) `shouldBe` (["portfolio0  wallet0"], ["  no addresses yet"])
 
     -- Only the verbose view gives the fingerprint of the seed
     it "gives way to the view another option asks for" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         setListingView home "tabular"
-        run <- hw home ["accounts", "--verbose"] []
+        run <- hw home ["portfolios", "--verbose"] []
         runOut run `shouldSatisfy` Text.isInfixOf ("\n  Fingerprint: " <> testFingerprintText <> "\n")
 
     -- A script that reads the JSON answers is not affected by the view
     it "leaves the JSON answer of a listing as it is" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         setListingView home "tabular"
-        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("main", 0, 0)]
+        (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [mainPortfolioRef]
 
     -- lockcoin answers with one coin, as a listing of coins does, but it
     -- is not a listing. The block is in its verbose view only.
@@ -393,7 +454,7 @@ layoutSpec ctx =
     it "shows the change a payment sends back to the address it spends from" $
       withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
         synced home
-        shown <- shownPayment home ["--spend-from", textOf (externalAddr 0), "--change-back"]
+        shown <- shownPayment home ["--spend-from", textOf (externalAddr 0), "--change-back", textOf (externalAddr 0)]
         shown `shouldSatisfy` Text.isInfixOf "  Change   : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00027740 btc  /0/0\n"
 
     -- The payer's coins are worth 121000, nothing to the wallet
@@ -409,11 +470,13 @@ layoutSpec ctx =
         listed <- runOut <$> hw home ["txs", "--verbose"] []
         listed `shouldSatisfy` Text.isInfixOf "  To       : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0\n"
 
-    it "shows the path of the address of the wallet a payment received is paid at, in txs" $
+    -- A portfolio has an address at /0/0 in each of its accounts on btc,
+    -- so the path names the type of the account
+    it "shows the type and the path of the address of the portfolio a payment received is paid at, in txs" $
       withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
         synced home
         listed <- runOut <$> hw home ["txs"] []
-        listed `shouldSatisfy` Text.isInfixOf "\n  balance 0.00050000 btc, at /0/0\n"
+        listed `shouldSatisfy` Text.isInfixOf "\n  balance 0.00050000 btc, at bip44/0/0\n"
 
     -- Blue is colour 34 of the terminal, and 3 sets italics, as labels
     -- have them. --no-pager prints the listing itself, which a pager would
@@ -422,7 +485,7 @@ layoutSpec ctx =
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         run <- hwOnScreen [] home ["txs", "--no-pager"]
-        runOut run `shouldSatisfy` Text.isInfixOf "at \ESC[0;34m/0/0\ESC[0m"
+        runOut run `shouldSatisfy` Text.isInfixOf "at \ESC[0;34mbip44/0/0\ESC[0m"
 
     it "shows the label of an address of the wallet in its blue on a terminal, in italics" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -445,17 +508,18 @@ layoutSpec ctx =
         compact `shouldNotSatisfy` Text.isInfixOf (Text.pack (textOf (otherAddr 1)))
         verbose `shouldNotSatisfy` Text.isInfixOf (Text.pack (textOf (otherAddr 1)))
 
+    -- --network narrows the listing to one network, which needs no title
     it "lists each transaction in two lines without --verbose" $
       withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
         synced home
-        listed <- runOut <$> hw home ["txs"] []
+        listed <- runOut <$> hw home ["txs", "--network", "btc"] []
         length (Text.lines listed) `shouldBe` 2
 
     -- The two payments, two lines each, and a blank line between them
     it "sets the transactions apart with a blank line without --verbose" $
       withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
         synced home
-        listed <- runOut <$> hw home ["txs"] []
+        listed <- runOut <$> hw home ["txs", "--network", "btc"] []
         map Text.null (Text.lines listed) `shouldBe` [False, False, True, False, False]
 
     -- The header takes two lines: the headings, and the line under them.
@@ -463,26 +527,26 @@ layoutSpec ctx =
     it "lists each transaction on one row under a header with --tabular" $
       withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
         synced home
-        listed <- runOut <$> hw home ["txs", "--tabular"] []
+        listed <- runOut <$> hw home ["txs", "--network", "btc", "--tabular"] []
         length (Text.lines listed) `shouldBe` 4
 
     -- The newest payment brought 30000 to the 50000: 50000 + 30000 = 80000
     it "puts the balance after each transaction next to its amount with --tabular" $
       withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
         synced home
-        listed <- runOut <$> hw home ["txs", "--tabular"] []
+        listed <- runOut <$> hw home ["txs", "--network", "btc", "--tabular"] []
         map (Text.isInfixOf "│    +0.00030000 │     0.00080000 │") (Text.lines listed) `shouldBe` [False, False, True, False]
         map (Text.isInfixOf "│    +0.00050000 │     0.00050000 │") (Text.lines listed) `shouldBe` [False, False, False, True]
 
     -- The newest payment brought 30000 to the 50000 at /0/1: 50000 + 30000
     -- = 80000
-    it "shows the balance after each transaction, the newest with what the account holds" $
+    it "shows the balance after each transaction, the newest with what the portfolio holds on the network" $
       withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
         synced home
         listed <- runOut <$> hw home ["txs"] []
         filter ("balance" `Text.isInfixOf`) (Text.lines listed)
-          `shouldBe` [ "  balance 0.00080000 btc, at /0/1",
-                       "  balance 0.00050000 btc, at /0/0"
+          `shouldBe` [ "  balance 0.00080000 btc, at bip44/0/1",
+                       "  balance 0.00050000 btc, at bip44/0/0"
                      ]
 
     it "shows the balance after each transaction as a field in txs --verbose" $
@@ -558,32 +622,53 @@ layoutSpec ctx =
         sent `shouldSatisfy` Text.isInfixOf "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  /1/0\n             change address\n"
         shown `shouldNotSatisfy` Text.isInfixOf "  Change   : "
 
--- old key
-paymentAndKeyChain :: Ctx -> Chain
-paymentAndKeyChain ctx = Chain 800002 [(payment ctx, Just 800000), (oldCoin ctx, Just 800000)]
+{- Pending transactions -}
 
--- | A home with the accounts main and second, main holding a payment, and
--- second a sweep of the old key, prepared after it
-twoAccountsPending :: FilePath -> IO ()
-twoAccountsPending home = do
-  createMain home
-  _ <- answer home ["createacc", "second"] seedTwice
-  _ <- answer home ["receive", "--account", "main"] []
+-- | A home with portfolio0 and portfolio1 of the test wallet, synced with
+-- 'twoPortfoliosTx', and a payment prepared in each: 20000 from the coin
+-- of 50000 of portfolio0, then 10000 from the coin of 30000 of portfolio1
+twoPortfoliosPending :: FilePath -> IO ()
+twoPortfoliosPending home = do
+  syncedTwoPortfolios home
+  _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+  void $ answer home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--portfolio", "1", "--fee-rate", "10"] []
+
+-- | A chain that pays portfolio0 of the test wallet on two networks: on
+-- btc 50000 at the bip44 /0/0 and 30000 at the bip44 /0/1, and on bch
+-- 50000 at the bip44 /0/0
+twoNetworksChain :: Ctx -> Chain
+twoNetworksChain ctx = Chain 800002 [(payment ctx, Just 800000), (newerPayment ctx, Just 800000), (cashCoinTx ctx, Just 800000)]
+
+-- | A home with portfolio0 of the test wallet, synced with
+-- 'twoNetworksChain', and three payments prepared in this order: one
+-- from the coin of 50000 on btc, one on bch, and one from the coin of
+-- 30000 on btc. The nosigHash of each, in that order.
+threePendingOnTwoNetworks :: Ctx -> FilePath -> IO (String, String, String)
+threePendingOnTwoNetworks ctx home = do
+  newTestPortfolio home
+  _ <- answer home ["receive"] []
+  _ <- answer home ["receive", "--network", "bch"] []
   _ <- answer home ["sync"] []
-  _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--account", "main", "--fee-rate", "10"] []
-  secondAddr <- receiveFor home "second"
-  keys <- writeKeyFile home
-  void $ answer home ["preparesweep", "--key-file", keys, "--sweep-to", secondAddr, "--fee-rate", "10"] []
+  olderOnBtc <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (payment ctx) 0, "--fee-rate", "10"] []
+  onBch <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--network", "bch", "--fee-rate", "10"] []
+  newerOnBtc <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--coin", coinArg (newerPayment ctx) 0, "--fee-rate", "10"] []
+  return (olderOnBtc, onBch, newerOnBtc)
 
--- | The account pendingtxs was asked for, and the account of each pending
--- transaction it lists
-pendingAccountsOf :: Response -> Either String (Maybe Text, [Text])
-pendingAccountsOf (ResponsePendingTxs asked held) = Right (dBAccountName <$> asked, dBAccountName . fst <$> held)
-pendingAccountsOf other = Left (show other)
+-- | Where each pending transaction pendingtxs lists is
+pendingPlacesOf :: Response -> Either String [Place]
+pendingPlacesOf (ResponsePendingTxs held) = Right (fst <$> held)
+pendingPlacesOf other = Left (show other)
+
+-- | The network of each pending transaction pendingtxs lists, with its
+-- nosigHash
+pendingNetworksOf :: Response -> Either String [(String, String)]
+pendingNetworksOf (ResponsePendingTxs held) =
+  Right [((placeNetwork place).name, Text.unpack (txHashToHex (pendingNosigHash status))) | (place, info) <- held, Pending status <- [txInfoStatus info]]
+pendingNetworksOf other = Left (show other)
 
 -- | When each pending transaction pendingtxs lists was created
 createdTimesOf :: Response -> Either String [Maybe UTCTime]
-createdTimesOf (ResponsePendingTxs _ held) = Right (created . snd <$> held)
+createdTimesOf (ResponsePendingTxs held) = Right (created . snd <$> held)
   where
     created info = case txInfoStatus info of
       Pending status -> pendingCreated status
@@ -593,47 +678,72 @@ createdTimesOf other = Left (show other)
 pendingListSpec :: Ctx -> Spec
 pendingListSpec ctx =
   describe "The pending transactions pendingtxs lists" $ do
-    it "are those of every account without --account, newest first, each with its account" $
-      withChain ctx (paymentAndKeyChain ctx) $ \home _ -> do
-        twoAccountsPending home
-        (pendingAccountsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right (Nothing, ["second", "main"])
+    it "are those of the default portfolio without --portfolio, each with its place" $
+      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+        twoPortfoliosPending home
+        (pendingPlacesOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right [mainPlace]
 
-    it "are those of the account of --account only" $
-      withChain ctx (paymentAndKeyChain ctx) $ \home _ -> do
-        twoAccountsPending home
-        (pendingAccountsOf <$> hwJson home ["pendingtxs", "--account", "main"] []) `shouldReturn` Right (Just "main", ["main"])
+    it "are those of the portfolio --portfolio names" $
+      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+        twoPortfoliosPending home
+        (pendingPlacesOf <$> hwJson home ["pendingtxs", "--portfolio", "1"] []) `shouldReturn` Right [portfolio1Place]
 
-    it "show their account when listed for every account" $
-      withChain ctx (paymentAndKeyChain ctx) $ \home _ -> do
-        twoAccountsPending home
-        run <- hw home ["pendingtxs"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  account second, "
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  account main, "
+    it "are those of the portfolio the key default-portfolio of the configuration file names" $
+      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+        twoPortfoliosPending home
+        setConfigKey home "default-portfolio" (Json.toJSON (1 :: Int))
+        (pendingPlacesOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right [portfolio1Place]
 
-    it "show their account as a field with --verbose when listed for every account" $
-      withChain ctx (paymentAndKeyChain ctx) $ \home _ -> do
-        twoAccountsPending home
+    -- The payment on bch was prepared between the two on btc. btc comes
+    -- before bch among the networks of a portfolio.
+    it "are sorted by network, in the order of the networks of a portfolio, and the newest first on each" $
+      withChain ctx (twoNetworksChain ctx) $ \home _ -> do
+        (olderOnBtc, onBch, newerOnBtc) <- threePendingOnTwoNetworks ctx home
+        (pendingNetworksOf <$> hwJson home ["pendingtxs"] [])
+          `shouldReturn` Right [("btc", newerOnBtc), ("btc", olderOnBtc), ("bch", onBch)]
+
+    it "are those of the --network named alone" $
+      withChain ctx (twoNetworksChain ctx) $ \home _ -> do
+        (_, onBch, _) <- threePendingOnTwoNetworks ctx home
+        (pendingNetworksOf <$> hwJson home ["pendingtxs", "--network", "bch"] []) `shouldReturn` Right [("bch", onBch)]
+
+    it "name the portfolio and the network of each on its second line" $
+      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+        twoPortfoliosPending home
+        run <- hw home ["pendingtxs", "--portfolio", "1"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  portfolio1 btc, "
+
+    -- The second test mnemonic is wallet1, whose first receiving address
+    -- the chain pays
+    it "name the wallet of a portfolio that is not of wallet0" $
+      withChain ctx (chainPaying ctx externalAddr2) $ \home _ -> do
+        newTestPortfolio home
+        newPortfolioOf home testMnemonic2
+        _ <- answer home ["receive", "--wallet", "1"] []
+        _ <- answer home ["sync"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--wallet", "1", "--fee-rate", "10"] []
+        run <- hw home ["pendingtxs", "--wallet", "1"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  portfolio0 of wallet1 btc, "
+
+    it "show their portfolio and their network as fields with --verbose" $
+      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+        twoPortfoliosPending home
         run <- hw home ["pendingtxs", "--verbose"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  Account  : second\n"
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  Account  : main\n"
-
-    it "do not show their account when listed for one account" $
-      withChain ctx (paymentAndKeyChain ctx) $ \home _ -> do
-        twoAccountsPending home
-        run <- hw home ["pendingtxs", "--account", "main"] []
-        runOut run `shouldNotSatisfy` Text.isInfixOf "account main"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  Portfolio: portfolio0\n  Network  : btc\n"
 
     it "take two lines each without --verbose" $
-      withChain ctx (paymentAndKeyChain ctx) $ \home _ -> do
-        twoAccountsPending home
-        run <- hw home ["pendingtxs", "--account", "main"] []
+      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+        twoPortfoliosPending home
+        run <- hw home ["pendingtxs"] []
         length (Text.lines (runOut run)) `shouldBe` 2
 
-    -- The payment of main and the sweep of second, two lines each, and a
-    -- blank line between them
+    -- Two payments of the default portfolio, two lines each, and a blank
+    -- line between them
     it "are set apart by a blank line without --verbose" $
-      withChain ctx (paymentAndKeyChain ctx) $ \home _ -> do
-        twoAccountsPending home
+      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (payment ctx) 0, "--fee-rate", "10"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--coin", coinArg (newerPayment ctx) 0, "--fee-rate", "10"] []
         run <- hw home ["pendingtxs"] []
         map Text.null (Text.lines (runOut run)) `shouldBe` [False, False, True, False, False]
 
@@ -684,11 +794,19 @@ pendingListSpec ctx =
 {- Balances -}
 
 -- | The addresses balances lists, each by its text, with the total, the
--- spendable and the unspendable balances of its coins
+-- spendable and the unspendable balances of its coins, the sections of
+-- the listing one after the other
 balancesOf :: Response -> Either String [(Text, Word64, Word64, Word64)]
-balancesOf (ResponseBalances _ addrs) =
-  Right [(dBAddressAddress addr, coinBalanceTotal b, coinBalanceSpendable b, coinBalanceUnspendable b) | (addr, b) <- addrs]
+balancesOf (ResponseBalances groups) =
+  Right [(dBAddressAddress addr, coinBalanceTotal b, coinBalanceSpendable b, coinBalanceUnspendable b) | (g, _) <- groups, (addr, b) <- groupRows g]
 balancesOf other = Left (show other)
+
+-- | The total balances gives each network of the listing, with what can
+-- be spent of it: the value of every coin of the portfolio there
+balanceTotalsOf :: Response -> Either String [(String, Word64, Word64)]
+balanceTotalsOf (ResponseBalances groups) =
+  Right [((placeNetwork (groupPlace g)).name, coinBalanceTotal total, coinBalanceSpendable total) | (g, total) <- groups]
+balanceTotalsOf other = Left (show other)
 
 -- The coin of the paid chain is in block 800000, three blocks deep at best
 -- block 800002. Only the verbose view gives the block.
@@ -761,11 +879,230 @@ balancesListSpec ctx =
         run <- hw home ["balances"] []
         runOut run `shouldSatisfy` Text.isInfixOf ("/0/0  " <> externalAddrsText !! 0 <> "\n  total 0.00050000 btc, spendable 0.00000000 btc, unspendable 0.00050000 btc\n")
 
+    -- 50000 at the bip44 /0/0 and 30000 at the bip84 /0/0 on btc: 50000
+    -- + 30000 = 80000. 50000 on bch.
+    it "give each network its total, which adds up both accounts on btc" $
+      withChain ctx (Chain 800002 [(bothTypesTx ctx, Just 800000), (cashCoinTx ctx, Just 800000)]) $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        _ <- answer home ["receive", "--type", "bip84"] []
+        _ <- answer home ["receive", "--network", "bch"] []
+        _ <- answer home ["sync"] []
+        (balanceTotalsOf <$> hwJson home ["balances"] []) `shouldReturn` Right [("btc", 80000, 80000), ("bch", 50000, 50000)]
+
+    -- The title line of the network: its place, then the total of its
+    -- coins, what can be spent now, and the rest
+    it "give the total of the network in the title of its section" $
+      withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
+        syncedBothTypes home
+        run <- hw home ["balances"] []
+        take 1 (Text.lines (runOut run))
+          `shouldBe` ["portfolio0  btc  total 0.00080000 btc, spendable 0.00080000 btc, unspendable 0.00000000 btc"]
+
+    -- --network narrows the listing to one network, and the title stays
+    it "give the total of the network in the title of its section, though --network names one" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home ["balances", "--network", "btc"] []
+        take 1 (Text.lines (runOut run))
+          `shouldBe` ["portfolio0  btc  total 0.00050000 btc, spendable 0.00050000 btc, unspendable 0.00000000 btc"]
+
     it "are none before a payment, which balances says" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         run <- hw home ["balances"] []
         runOut run `shouldSatisfy` Text.isInfixOf "There are no addresses with coins to display"
+
+{- Sections -}
+
+-- | The lines of a listing that are the titles of its sections: those
+-- that name portfolio0
+titlesOf :: Text -> [Text]
+titlesOf = filter (Text.isPrefixOf "portfolio0") . Text.lines
+
+-- A listing over the whole portfolio covers several places, so each
+-- section says where it is on a line of its own
+sectionsSpec :: Ctx -> Spec
+sectionsSpec ctx =
+  describe "A listing over a whole portfolio" $ do
+    -- The addresses of the bip44 account come before those of the bip84
+    -- account
+    it "lists the addresses of each account under a title that names the account" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        _ <- answer home ["receive", "--type", "bip84"] []
+        (titlesOf . runOut <$> hw home ["addresses"] []) `shouldReturn` ["portfolio0  btc  bip44", "portfolio0  btc  bip84"]
+
+    -- A blank line ends each address, the last of a section included,
+    -- before the title of the next section
+    it "sets the sections apart with a blank line" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        _ <- answer home ["receive", "--type", "bip84"] []
+        (Text.lines . runOut <$> hw home ["addresses"] [])
+          `shouldReturn` [ "portfolio0  btc  bip44",
+                           "",
+                           "/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj",
+                           "  unused",
+                           "",
+                           "portfolio0  btc  bip84",
+                           "",
+                           "/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc",
+                           "  unused"
+                         ]
+
+    -- btc comes before bch among the networks of a portfolio
+    it "lists the coins of each network under a title that names the network" $
+      withChain ctx (Chain 800002 [(payment ctx, Just 800000), (cashCoinTx ctx, Just 800000)]) $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        _ <- answer home ["receive", "--network", "bch"] []
+        _ <- answer home ["sync"] []
+        (titlesOf . runOut <$> hw home ["coins"] []) `shouldReturn` ["portfolio0  btc", "portfolio0  bch"]
+
+    it "lists the transactions of each network under a title that names the network" $
+      withChain ctx (Chain 800002 [(payment ctx, Just 800000), (cashCoinTx ctx, Just 800000)]) $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        _ <- answer home ["receive", "--network", "bch"] []
+        _ <- answer home ["sync"] []
+        (titlesOf . runOut <$> hw home ["txs"] []) `shouldReturn` ["portfolio0  btc", "portfolio0  bch"]
+
+    -- The payment of 50000 on btc: the title, a blank line, as above the
+    -- addresses, then the two lines of the payment
+    it "titles the one network that has rows, and leaves the others out" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        listed <- Text.lines . runOut <$> hw home ["txs"] []
+        (take 1 listed, Text.null <$> listed) `shouldBe` (["portfolio0  btc"], [False, True, False, False])
+
+    -- The title of a network in --verbose and --tabular too
+    it "titles each section in every view" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        forM_ ["--compact", "--verbose", "--tabular"] $ \view -> do
+          listed <- Text.lines . runOut <$> hw home ["coins", view] []
+          (view, take 1 listed) `shouldBe` (view, ["portfolio0  btc"])
+
+    -- A portfolio of another wallet is named with its wallet
+    it "names the wallet of a portfolio that is not of wallet0 in the titles" $
+      withChain ctx (chainPaying ctx externalAddr2) $ \home _ -> do
+        newTestPortfolio home
+        newPortfolioOf home testMnemonic2
+        _ <- answer home ["receive", "--wallet", "1"] []
+        _ <- answer home ["sync"] []
+        (take 1 . Text.lines . runOut <$> hw home ["coins", "--wallet", "1"] []) `shouldReturn` ["portfolio0 of wallet1  btc"]
+
+{- The answer of sync -}
+
+-- sync goes over every network of every portfolio, and most of them
+-- hold nothing
+syncAnswerSpec :: Ctx -> Spec
+syncAnswerSpec ctx =
+  describe "The answer of sync" $
+    -- portfolio0 holds the coin of 50000 on btc, and nothing else. The
+    -- sync before found it, so this one finds nothing new.
+    it "shows each network a portfolio holds something on, then the quiet networks of each portfolio in one line" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        syncedTwoPortfolios home
+        run <- hw home ["sync"] []
+        take 6 (Text.lines (runOut run))
+          `shouldBe` [ "portfolio0  btc",
+                       "  spendable 0.00050000 btc, 1 coin",
+                       "  synced at block 800002, nothing new",
+                       "",
+                       "portfolio0  nothing on bch, btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg",
+                       "portfolio1  nothing on btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg"
+                     ]
+
+{- The pager -}
+
+-- | Run hw on a terminal through a pager that keeps what it was given:
+-- the options hw gave less in LESS, and the lines of the listing. The
+-- pager is a script named less, which answers less --version as less 668
+-- does, so that hw gives it the options of that version. hw looks for the
+-- pager on the PATH, and NO_COLOR keeps the listing plain.
+paged :: FilePath -> [String] -> IO (Text, [Text])
+paged home args = do
+  let pager = home </> "less"
+  writeFile pager $
+    unlines
+      [ "#!/bin/sh",
+        "if [ \"$1\" = --version ]; then echo 'less 668 (a pager of the tests)'; exit 0; fi",
+        "printf '%s' \"$LESS\" > \"$HOME/less-options\"",
+        "exec /bin/cat > \"$HOME/paged\""
+      ]
+  setFileMode pager 0o700
+  _ <- hwOnScreen [("HW_PAGER", pager), ("PATH", "/usr/bin:/bin"), ("NO_COLOR", "1")] home args
+  options <- Text.pack <$> readFile (home </> "less-options")
+  listed <- Text.lines . Text.pack <$> readFile (home </> "paged")
+  return (options, listed)
+
+-- The terminal of the tests has no size, so every table counts as taller
+-- than the screen, which is when less can keep its header at the top
+pagerSpec :: Ctx -> Spec
+pagerSpec ctx =
+  describe "A listing on a terminal" $ do
+    it "goes through the pager whole, as hw prints it without one" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        (_, listed) <- paged home ["addresses"]
+        listed `shouldBe` ["portfolio0  btc  bip44", "", "/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "  unused"]
+
+    -- --header=2 keeps the line of headings and the line under it
+    it "keeps the header of a table on the screen as its rows scroll, when the listing is of one place" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        (fst <$> paged home ["addresses", "--network", "btc", "--type", "bip44", "--tabular"]) `shouldReturn` "FRXS --header=2"
+
+    it "keeps the header of the table of portfolios on the screen as its rows scroll" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (fst <$> paged home ["portfolios", "--tabular"]) `shouldReturn` "FRXS --header=2"
+
+    -- The first lines of the listing are the title of its section, not
+    -- the header of the table
+    it "lets the header of a table scroll with its rows under the title of a section" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        (fst <$> paged home ["addresses", "--tabular"]) `shouldReturn` "FRXS"
+
+    it "lets the header of a table of balances scroll with its rows, under the title of its network" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        (fst <$> paged home ["balances", "--network", "btc", "--tabular"]) `shouldReturn` "FRXS"
+
+    -- Each account ends with its descriptor, which the user copies whole
+    it "wraps the lines of portfolios --verbose rather than cut them" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (fst <$> paged home ["portfolios", "--verbose"]) `shouldReturn` "FRX"
+
+    -- Each address on one line of the screen, cut at its edge
+    it "cuts the lines of a compact listing at the edge of the screen" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        (fst <$> paged home ["addresses"]) `shouldReturn` "FRXS"
+
+    -- The terminal of the tests gives hw no PATH, so less, the pager
+    -- without HW_PAGER, cannot be found. A new line reaches the terminal
+    -- as a carriage return and a line feed.
+    it "is printed without a pager, which hw says, when there is no PATH to find one" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        run <- hwOnScreen [("NO_COLOR", "1")] home ["addresses"]
+        (runExit run, runErr run, runOut run)
+          `shouldBe` ( ExitSuccess,
+                       "The pager less was not found. The listing is printed without one.\n",
+                       "portfolio0  btc  bip44\r\n\r\n/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\r\n  unused\r\n"
+                     )
 
 {- Next steps -}
 
@@ -784,9 +1121,10 @@ showsCommand command run = command `Text.isInfixOf` runOut run
 screen :: FilePath -> [String] -> IO [Text]
 screen home args = Text.lines . Text.filter (/= '\r') . runOut <$> hwOnScreen [("NO_COLOR", "1")] home args
 
--- | The lines of an answer under the text of an address, which takes 8
+-- | The lines of an answer under the text of an address, which takes 9:
+-- its path and the address, seven figures, and its account
 codeUnderAddress :: [Text] -> [Text]
-codeUnderAddress = drop 8
+codeUnderAddress = drop 9
 
 -- An address given out, as a terminal receives it
 addressCodeSpec :: Ctx -> Spec
@@ -794,64 +1132,68 @@ addressCodeSpec ctx = do
   describe "An address on a terminal" $ do
     it "comes with its QR code from receive, under its text" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         (codeUnderAddress <$> screen home ["receive"]) `shouldReturn` p2pkhAddressCode
 
-    -- The eighth line tells when it was created, which changes
+    -- The eighth line tells when it was created, which changes. The ninth
+    -- names the account of the address.
     it "keeps its text whole above the code, with nothing beside it" $
       withHome $ \home -> do
-        createMain home
-        (take 7 <$> screen home ["receive", "--label", "rent"])
-          `shouldReturn` [ "/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"rent\"",
-                           "  Transactions: 0",
-                           "  Received    : 0.00000000 btc",
-                           "  Confirmed   : 0.00000000 btc",
-                           "  Unconfirmed : 0.00000000 btc",
-                           "  Spendable   : 0.00000000 btc",
-                           "  Coins       : 0"
-                         ]
+        newTestPortfolio home
+        shown <- screen home ["receive", "--label", "rent"]
+        (take 7 shown, take 1 (drop 8 shown))
+          `shouldBe` ( [ "/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"rent\"",
+                         "  Transactions: 0",
+                         "  Received    : 0.00000000 btc",
+                         "  Confirmed   : 0.00000000 btc",
+                         "  Unconfirmed : 0.00000000 btc",
+                         "  Spendable   : 0.00000000 btc",
+                         "  Coins       : 0"
+                       ],
+                       ["  Account     : portfolio0  btc  bip44"]
+                     )
 
     it "shows the same text as off a terminal" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         piped <- hw home ["show", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"] []
-        (take 8 <$> screen home ["show", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]) `shouldReturn` Text.lines (runOut piped)
+        (take 9 <$> screen home ["show", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]) `shouldReturn` Text.lines (runOut piped)
 
     it "draws the code of a BIP84 account from its bech32 address" $
       withHome $ \home -> do
-        _ <- answer home ["createacc", "segwit", "--type", "bip84"] seedTwice
-        (codeUnderAddress <$> screen home ["receive"]) `shouldReturn` p2wpkhAddressCode
+        newTestPortfolio home
+        (codeUnderAddress <$> screen home ["receive", "--type", "bip84"]) `shouldReturn` p2wpkhAddressCode
 
     -- Black is colour 16 of the palette, and white 231
     it "draws the code in black on white, whatever the colours of the terminal" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         run <- hwOnScreen [] home ["receive"]
         runOut run `shouldSatisfy` Text.isInfixOf "\ESC[0;38;5;16;48;5;231m"
 
     it "sets no colour with NO_COLOR, and still draws the code" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         run <- hwOnScreen [("NO_COLOR", "1")] home ["receive"]
         runOut run `shouldSatisfy` (not . Text.isInfixOf "\ESC[")
         runOut run `shouldSatisfy` Text.isInfixOf "█"
 
     it "has no code when the answer goes to a pipe" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         run <- hw home ["receive"] []
         runOut run `shouldSatisfy` (not . Text.isInfixOf "█")
 
     it "has no code with --json, even on a terminal" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         run <- hwOnScreen [] home ["receive", "--json"]
         runOut run `shouldSatisfy` (not . Text.isInfixOf "█")
 
     it "has no code in the answer of label, which gives out no address" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         run <- hwOnScreen [] home ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "rent"]
         runOut run `shouldSatisfy` (not . Text.isInfixOf "█")
@@ -859,44 +1201,44 @@ addressCodeSpec ctx = do
   describe "show for an address" $ do
     it "shows the QR code of an address the wallet holds" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         (codeUnderAddress <$> screen home ["show", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]) `shouldReturn` p2pkhAddressCode
 
     it "hands out no new address" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         _ <- answer home ["show", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"] []
         (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "")]
 
     it "answers in JSON as receive does" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         given <- hwJson home ["receive"] []
         (addressesOf <$> hwJson home ["show", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"] []) `shouldReturn` addressesOf given
 
-    -- 1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1 is /0/3 of main, which receive
+    -- 1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1 is /0/3 of portfolio0, which receive
     -- has not given out
     it "refuses an address the wallet does not hold, and shows no code" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         run <- hwOnScreen [] home ["show", "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1"]
         runExit run `shouldBe` ExitFailure 1
         runOut run `shouldSatisfy` Text.isInfixOf "The wallet has no address 1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1"
         runOut run `shouldSatisfy` (not . Text.isInfixOf "█")
 
-    it "finds the account of the address, whatever the default account" $
+    -- The default type is bip44, and the address is of the bip84 account
+    it "finds the account of the address, whatever the default type" $
       withHome $ \home -> do
-        createMain home
-        _ <- answer home ["createacc", "segwit", "--type", "bip84"] seedTwice
-        _ <- answer home ["receive", "--account", "segwit"] []
-        (fmap dBAccountName . accountOf <$> hwJson home ["show", "bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc"] []) `shouldReturn` Right "segwit"
+        newTestPortfolio home
+        _ <- answer home ["receive", "--type", "bip84"] []
+        (accountRefOf <$> hwJson home ["show", "bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc"] []) `shouldReturn` Right (AccountRef mainPlace Bip84)
 
     it "takes a Bitcoin Cash address without its prefix, and shows the whole address" $
       withHome $ \home -> do
-        _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
-        _ <- answer home ["receive", "--account", "cash"] []
+        newTestPortfolio home
+        _ <- answer home ["receive", "--network", "bch"] []
         (take 1 <$> screen home ["show", "qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"])
           `shouldReturn` ["/0/0  bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"]
 
@@ -910,20 +1252,20 @@ addressCodeSpec ctx = do
   describe "show for a path or for the newest address" $ do
     it "shows the QR code at a path the wallet holds" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         (codeUnderAddress <$> screen home ["show", "/0/0"]) `shouldReturn` p2pkhAddressCode
 
     -- receive gave out none: /0/0 may lie past the gap of a restored wallet
     it "shows no code at a path the wallet does not hold" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         run <- hwOnScreen [] home ["show", "/0/0"]
         runOut run `shouldSatisfy` (not . Text.isInfixOf "█")
 
     it "shows the QR code of the newest receiving address without a word" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         (codeUnderAddress <$> screen home ["show"]) `shouldReturn` p2pkhAddressCode
 
@@ -977,32 +1319,48 @@ nextStepSpec ctx =
         run <- hw signer ["signtx", "--input", online </> "unsigned.psbt"] (["y"] <> seedOnce)
         run `shouldSatisfy` showsCommand ("hw broadcast --input " <> Text.pack (online </> "unsigned.psbt"))
 
-    it "is to sync the account of the transaction that broadcast sent" $
+    -- sync covers every portfolio on every network
+    it "is to sync the wallet once broadcast sent the transaction" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         nosig <- paymentSigned home
         run <- hw home ["broadcast", nosig, "--yes"] []
-        run `shouldSatisfy` showsCommand "hw sync --account main"
+        run `shouldSatisfy` showsCommand "hw sync\n"
 
-    it "is to see the transactions of the account synced" $
+    -- The payment is in the default portfolio, which txs lists without
+    -- an option
+    it "is to see the transactions sync found, with no option for the default portfolio" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         run <- hw home ["sync"] []
-        run `shouldSatisfy` showsCommand "hw txs --account main"
+        run `shouldSatisfy` showsCommand "hw txs\n"
 
-    it "names the account without --network when no other network has its name" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
-        synced home
+    -- The chain pays 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo, the first
+    -- receiving address of portfolio1, and nothing of portfolio0
+    it "names the --portfolio of the transactions sync found when it is not the default one" $
+      withChain ctx (chainPaying ctx account1Addr) $ \home _ -> do
+        syncedTwoPortfolios home
         run <- hw home ["sync"] []
-        run `shouldSatisfy` showsCommand "hw txs --account main\n"
+        run `shouldSatisfy` showsCommand "hw txs --portfolio 1\n"
 
-    -- main is on bch too, so txs --account main alone would take the one of
-    -- the default network
-    it "names the --network of an account whose name another network has" $
+    -- The chain pays the first receiving address of wallet1, the wallet of
+    -- the second test mnemonic, and nothing of wallet0
+    it "names the --wallet of the transactions sync found when it is not the default one" $
+      withChain ctx (chainPaying ctx externalAddr2) $ \home _ -> do
+        newTestPortfolio home
+        newPortfolioOf home testMnemonic2
+        _ <- answer home ["receive", "--wallet", "1"] []
+        _ <- answer home ["sync"] []
+        run <- hw home ["sync"] []
+        run `shouldSatisfy` showsCommand "hw txs --wallet 1\n"
+
+    -- The key default-portfolio makes portfolio1 the default, and the
+    -- payment is of portfolio0
+    it "names --portfolio 0 when the configuration file names another default portfolio" $
       withChain ctx (paidChain ctx) $ \home _ -> do
-        synced home
-        _ <- answer home ["createacc", "main", "--network", "bch"] seedTwice
-        run <- hw home ["sync", "--account", "main", "--network", "btc"] []
-        run `shouldSatisfy` showsCommand "hw txs --account main --network btc\n"
+        syncedTwoPortfolios home
+        setConfigKey home "default-portfolio" (Json.toJSON (1 :: Int))
+        run <- hw home ["sync"] []
+        run `shouldSatisfy` showsCommand "hw txs --portfolio 0\n"
 
     -- Another transaction of the mempool spends the coin of the payment
     it "is to find and delete the pending transaction a sync found in conflict" $
@@ -1011,13 +1369,14 @@ nextStepSpec ctx =
         let other = spendingTx ctx [(txHash (payment ctx), 0)] [(otherAddr 1, 40000)]
         modifyIORef chain $ \c -> c {chainTxs = c.chainTxs <> [(other, Nothing)]}
         run <- hw home ["sync"] []
-        run `shouldSatisfy` showsCommand "hw pendingtxs --account main"
+        run `shouldSatisfy` showsCommand "hw pendingtxs\n"
         run `shouldSatisfy` showsCommand "hw deletetx HASH"
 
-    -- The key of the old wallet is in a file, and the sweep pays main
+    -- The key of the old wallet is in a file, and the sweep pays
+    -- portfolio0
     it "is to sign the sweep preparesweep made with the keys of its file, or to export it to sign it where the keys are" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         keys <- writeKeyFile home
         run <- hw home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
@@ -1029,7 +1388,7 @@ nextStepSpec ctx =
     -- for the key on the terminal
     it "is to sign the sweep preparesweep made from addresses, the keys typed when asked" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         run <- hw home ["preparesweep", "--sweep-from", textOf wikiAddr, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
         short <- onePendingShortId home
@@ -1037,12 +1396,12 @@ nextStepSpec ctx =
 
     it "is to sign the file of the sweep where the keys are, when preparesweep wrote one" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         run <- hw home ["preparesweep", "--sweep-from", textOf wikiAddr, "--sweep-to", textOf (externalAddr 0), "--output", home </> "sweep.json", "--fee-rate", "10"] []
         run `shouldSatisfy` showsCommand ("hw signsweep --input " <> Text.pack (home </> "sweep.json") <> "\n")
 
-    -- In a wallet without accounts, the sweep is in its file only
+    -- In a database without wallets, the sweep is in its file only
     it "is to sign the file of a sweep outside the wallet with the keys of its file" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
         keys <- writeKeyFile home
@@ -1051,7 +1410,7 @@ nextStepSpec ctx =
 
     it "is to send the sweep signsweep signed in the wallet, by the short id of its txid" $
       withChain ctx (oldKeyChain ctx) $ \home _ -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         keys <- writeKeyFile home
         nosig <- nosigOf =<< txOf =<< answer home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
@@ -1066,13 +1425,12 @@ nextStepSpec ctx =
         run <- hw home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.psbt", "--key-file", keys] []
         run `shouldSatisfy` showsCommand ("hw broadcast --input " <> Text.pack (home </> "signed.psbt"))
 
-    -- The name with a space would be two words for the shell
-    it "quotes an account name the shell would split" $
+    -- The name of the file with a space would be two words for the shell
+    it "quotes a file name the shell would split" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        _ <- answer home ["renameacc", "main", "my main"] []
-        run <- hw home ["sync"] []
-        run `shouldSatisfy` showsCommand "hw txs --account 'my main'"
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", home </> "my payment.psbt", "--fee-rate", "10"] []
+        run `shouldSatisfy` showsCommand ("hw signtx --input '" <> Text.pack (home </> "my payment.psbt") <> "'\n")
 
     it "is not shown with --json, whose output is the answer alone" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -1095,7 +1453,7 @@ csvSpec ctx =
         run <- hw home ["balances", "--csv", file] []
         runOut run `shouldBe` "Written to " <> Text.pack file <> "\n"
         BS.readFile file
-          `shouldReturn` "\xEF\xBB\xBF\&Path,Address,Label,Total (sats),Spendable (sats),Locked by tx (sats),Locked by you (sats),Not spendable yet (sats),Coins\r\n/0/0,1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj,,50000,50000,0,0,0,1\r\n"
+          `shouldReturn` "\xEF\xBB\xBF\&Network,Type,Path,Address,Label,Total (sats),Spendable (sats),Locked by tx (sats),Locked by you (sats),Not spendable yet (sats),Coins\r\nbtc,bip44,/0/0,1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj,,50000,50000,0,0,0,1\r\n"
 
     -- The store saw the payment at 22:13:20 UTC, 23:13:20 in Central
     -- Europe in November
@@ -1105,15 +1463,15 @@ csvSpec ctx =
         let file = home </> "txs.csv"
         _ <- hwWithEnv [("TZ", centralEurope)] home ["txs", "--csv", file] []
         content <- BS.readFile file
-        content `shouldSatisfy` BS.isInfixOf "\r\n2023-11-14T22:13:20,Incoming,"
+        content `shouldSatisfy` BS.isInfixOf "\r\nbtc,2023-11-14T22:13:20,Incoming,"
 
     it "writes the headings alone for a listing with no rows" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         let file = home </> "pending.csv"
         _ <- answer home ["pendingtxs", "--csv", file] []
         BS.readFile file
-          `shouldReturn` "\xEF\xBB\xBF\&Account,Created (UTC),Type,Amount (sats),Fee (sats),Fee rate (sat/vB),Status,Nosighash,Short nosighash,Txid,Short txid,Label,Address,Path,Address label,Other addresses\r\n"
+          `shouldReturn` "\xEF\xBB\xBF\&Wallet,Portfolio,Network,Created (UTC),Type,Address types,Amount (sats),Fee (sats),Fee rate (sat/vB),Status,Nosighash,Short nosighash,Txid,Short txid,Label,Address,Path,Address label,Other addresses\r\n"
 
     -- 50000 at /0/0 is the largest total, before 30000 at /0/1
     it "writes the rows --max allows, the first ones of the listing" $
@@ -1122,29 +1480,39 @@ csvSpec ctx =
         let file = home </> "balances.csv"
         _ <- answer home ["balances", "--csv", file, "--max", "1"] []
         BS.readFile file
-          `shouldReturn` "\xEF\xBB\xBF\&Path,Address,Label,Total (sats),Spendable (sats),Locked by tx (sats),Locked by you (sats),Not spendable yet (sats),Coins\r\n/0/0,1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj,,50000,50000,0,0,0,1\r\n"
+          `shouldReturn` "\xEF\xBB\xBF\&Network,Type,Path,Address,Label,Total (sats),Spendable (sats),Locked by tx (sats),Locked by you (sats),Not spendable yet (sats),Coins\r\nbtc,bip44,/0/0,1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj,,50000,50000,0,0,0,1\r\n"
+
+    -- Each network of the portfolio on a row of its own, eight in all,
+    -- after the row of the headings
+    it "gives the portfolios a row for each network, after a Network column" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "portfolios.csv"
+        _ <- answer home ["portfolios", "--csv", file] []
+        rows <- Text.lines . decodeUtf8 <$> BS.readFile file
+        (take 1 rows, length rows) `shouldBe` (["\xFEFFWallet,Portfolio,Description,Network,Spendable (sats),Confirmed (sats),Unconfirmed (sats),Coins,Addresses,Created (UTC)\r"], 9)
 
     it "is refused a --csv file that exists, and the file is kept" $
       withHome $ \home -> do
-        createMain home
-        let file = home </> "accounts.csv"
+        newTestPortfolio home
+        let file = home </> "portfolios.csv"
         writeFile file "kept\n"
-        run <- hw home ["accounts", "--csv", file] []
+        run <- hw home ["portfolios", "--csv", file] []
         run `shouldSatisfy` printed (alreadyExists file)
         readFile file `shouldReturn` "kept\n"
 
     it "can be read and written by its owner alone" $
       withHome $ \home -> do
-        createMain home
-        let file = home </> "accounts.csv"
-        _ <- answer home ["accounts", "--csv", file] []
+        newTestPortfolio home
+        let file = home </> "portfolios.csv"
+        _ <- answer home ["portfolios", "--csv", file] []
         (.&. 0o777) . fileMode <$> getFileStatus file `shouldReturn` 0o600
 
     it "is answered in --json by the file written" $
       withHome $ \home -> do
-        createMain home
-        let file = home </> "accounts.csv"
-        hwJson home ["accounts", "--csv", file] [] `shouldReturn` ResponseFile file
+        newTestPortfolio home
+        let file = home </> "portfolios.csv"
+        hwJson home ["portfolios", "--csv", file] [] `shouldReturn` ResponseFile file
 
 {- The spreadsheet of exportsheet -}
 
@@ -1162,7 +1530,7 @@ exportSheetSpec ctx =
     -- first entry of the archive and its name, mimetype
     it "is written to the file exportsheet names, as an OpenDocument spreadsheet, and hw says where" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         let file = home </> "wallet.ods"
         run <- hw home ["exportsheet", file] []
         runOut run `shouldBe` "Written to " <> Text.pack file <> "\n"
@@ -1170,14 +1538,14 @@ exportSheetSpec ctx =
 
     it "has a tab for each listing, in the order of the help" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         let file = home </> "wallet.ods"
         _ <- answer home ["exportsheet", file] []
-        tabsOf <$> contentOf file `shouldReturn` ["Accounts", "Addresses", "Balances", "Coins", "Transactions", "Pending transactions"]
+        tabsOf <$> contentOf file `shouldReturn` ["Portfolios", "Addresses", "Balances", "Coins", "Transactions", "Pending transactions"]
 
     -- The coin of the payment, 3 confirmations deep, can be spent: 50000
     -- in all and spendable, nothing locked or waiting, in one coin
-    it "gives the balance of each address, as numbers of satoshis, after a first column that names its account" $
+    it "gives the balance of each address, as numbers of satoshis, after the columns that say where it is" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         let file = home </> "wallet.ods"
@@ -1187,7 +1555,11 @@ exportSheetSpec ctx =
           `shouldSatisfy` Text.isInfixOf
             ( Text.concat
                 [ "<table:table-row>",
-                  "<table:table-cell office:value-type=\"string\"><text:p>main</text:p></table:table-cell>",
+                  -- Wallet, portfolio, network and type
+                  "<table:table-cell office:value-type=\"string\"><text:p>wallet0</text:p></table:table-cell>",
+                  "<table:table-cell office:value-type=\"string\"><text:p>portfolio0</text:p></table:table-cell>",
+                  "<table:table-cell office:value-type=\"string\"><text:p>btc</text:p></table:table-cell>",
+                  "<table:table-cell office:value-type=\"string\"><text:p>bip44</text:p></table:table-cell>",
                   "<table:table-cell office:value-type=\"string\"><text:p>/0/0</text:p></table:table-cell>",
                   "<table:table-cell office:value-type=\"string\"><text:p>1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj</text:p></table:table-cell>",
                   -- No label
@@ -1204,40 +1576,51 @@ exportSheetSpec ctx =
                 ]
             )
 
-    it "holds the account --account names alone" $
+    it "holds the portfolio --portfolio names alone" $
       withHome $ \home -> do
-        createMain home
-        _ <- answer home ["createacc", "savings"] seedTwice
-        let file = home </> "savings.ods"
-        _ <- answer home ["exportsheet", "--account", "savings", file] []
+        newTestPortfolio home
+        newTestPortfolio home
+        let file = home </> "portfolio1.ods"
+        _ <- answer home ["exportsheet", "--portfolio", "1", file] []
         content <- contentOf file
-        (Text.isInfixOf "<text:p>savings</text:p>" content, Text.isInfixOf "<text:p>main</text:p>" content) `shouldBe` (True, False)
+        (Text.isInfixOf "<text:p>portfolio1</text:p>" content, Text.isInfixOf "<text:p>portfolio0</text:p>" content) `shouldBe` (True, False)
+
+    -- pendingtxs lists one portfolio, and the spreadsheet every portfolio
+    -- it holds: the payment of portfolio0 and that of portfolio1
+    it "holds the pending transactions of every portfolio in one tab" $
+      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+        twoPortfoliosPending home
+        let file = home </> "wallet.ods"
+        _ <- answer home ["exportsheet", file] []
+        content <- contentOf file
+        let (_, pendingTab) = Text.breakOn "<table:table table:name=\"Pending transactions\"" content
+        (Text.isInfixOf "<text:p>portfolio0</text:p>" pendingTab, Text.isInfixOf "<text:p>portfolio1</text:p>" pendingTab) `shouldBe` (True, True)
 
     it "is refused a file that exists, and the file is kept" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         let file = home </> "wallet.ods"
         writeFile file "kept\n"
         run <- hw home ["exportsheet", file] []
         run `shouldSatisfy` printed (alreadyExists file)
         readFile file `shouldReturn` "kept\n"
 
-    it "is refused in a wallet without accounts, and writes no file" $
+    it "is refused in a database without wallets, and writes no file" $
       withHome $ \home -> do
         let file = home </> "wallet.ods"
         run <- hw home ["exportsheet", file] []
-        run `shouldSatisfy` printed "There are no accounts in the wallet"
+        run `shouldSatisfy` printed "There is no wallet yet: newportfolio makes one, and recover or importwallet bring one back"
         doesFileExist file `shouldReturn` False
 
     it "can be read and written by its owner alone" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         let file = home </> "wallet.ods"
         _ <- answer home ["exportsheet", file] []
         (.&. 0o777) . fileMode <$> getFileStatus file `shouldReturn` 0o600
 
     it "is answered in --json by the file written" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         let file = home </> "wallet.ods"
         hwJson home ["exportsheet", file] [] `shouldReturn` ResponseFile file

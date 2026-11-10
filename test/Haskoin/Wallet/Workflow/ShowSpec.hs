@@ -1,23 +1,34 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | What show shows of the wallet, from the word typed: an address by its
+-- | What show shows of a portfolio, from the word typed: an address by its
 -- path, derived as an offline computer checks it, and cut when the wallet
 -- does not hold it ("Haskoin.Wallet.CutAddress"), the newest receiving
 -- address without a word, a transaction by either of its hashes, a coin,
--- a transaction file by its name, and a file of accounts, as importacc
--- would take it. Then what show refuses. The
--- addresses typed in full, and the QR codes show draws, are with the other
--- screens in "Haskoin.Wallet.Workflow.OutputSpec". What a file holds, and
--- how show reads the files of other wallets, is in
+-- a transaction file by its name, and a file of a wallet, as importwallet
+-- would take it. Then what show refuses. The addresses typed in full, and
+-- the QR codes show draws, are with the other screens in
+-- "Haskoin.Wallet.Workflow.OutputSpec". What a file holds, and how show
+-- reads the files of other wallets, is in
 -- "Haskoin.Wallet.Workflow.SigningSpec".
+--
+-- A path, the newest address and the account of a file are of the
+-- portfolio --wallet and --portfolio pick, and of the account --network
+-- and --type pick in it. A transaction is shown as each portfolio that
+-- holds it sees it. An address and a coin tell where they are, but the
+-- test networks share their keys: the wallet may hold the same address,
+-- and the same coin, on two of them, and --network then says which.
 module Haskoin.Wallet.Workflow.ShowSpec (spec) where
 
 import Control.Monad (forM_, replicateM_)
 import qualified Data.Text as Text
 import qualified Data.Text.IO as TextIO
 import Haskoin
-import Haskoin.Wallet.Database (DBAccount (..))
+import Haskoin.Wallet.Cli.Response (Response (..))
+import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..))
+import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..), TxType (..))
 import Haskoin.Wallet.HwTestUtils
+import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Workflow.TestUtils
 import System.Exit (ExitCode (..))
@@ -30,8 +41,10 @@ spec = prepareContext $ \ctx -> do
   newestSpec
   txSpec ctx
   coinSpec ctx
+  addressSpec
+  testNetworksSpec ctx
   fileSpec ctx
-  accountFileSpec
+  walletFileSpec
   refusedSpec
 
 {- An address by its path -}
@@ -44,33 +57,33 @@ pathSpec =
     -- its last 12.
     it "is the one receive gave out online at the path receive showed, cut on the signer that never handed it out" $
       withHome $ \signer -> withHome $ \online -> do
-        createMain signer
-        _ <- answer signer ["exportacc", signer </> "main.json"] []
-        _ <- answer online ["importacc", signer </> "main.json"] []
+        newTestPortfolio signer
+        _ <- answer signer ["exportwallet", signer </> "wallet.jsonl"] []
+        _ <- answer online ["importwallet", signer </> "wallet.jsonl"] []
         replicateM_ 3 $ answer online ["receive"] []
         (addressesOf <$> hwJson online ["receive"] []) `shouldReturn` Right [("1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1", "")]
         (cutAddressOf <$> hwJson signer ["show", "/0/3"] []) `shouldReturn` Right "1yQZuJjA6w7h.........Cv22rKCas7F1"
 
     -- The ends of 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn, the change address
-    -- /1/0 of main
-    it "is a change address for a path on the change chain, before the account spends" $
+    -- /1/0 of the bip44 account on btc
+    it "is a change address for a path on the change chain, before the portfolio spends" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         (cutAddressOf <$> hwJson home ["show", "/1/0"] []) `shouldReturn` Right "17KiDLpE3r92..........tgHqEVJrznvn"
 
-    it "is shown cut under its path, then its account and network, when the wallet does not hold it" $
+    -- portfolio0 of wallet0 is named without its wallet
+    it "is shown cut under its path, then its portfolio, network and type, when the wallet does not hold it" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         run <- hw home ["show", "/0/3"] []
-        take 3 (Text.lines (runOut run))
+        take 2 (Text.lines (runOut run))
           `shouldBe` [ "/0/3  1yQZuJjA6w7h.........Cv22rKCas7F1",
-                       "  Account  : main",
-                       "  Network  : btc"
+                       "  Account  : portfolio0  btc  bip44"
                      ]
 
     it "comes cut with a note on how to check it, and to give out the address as receive showed it" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         run <- hw home ["show", "/0/3"] []
         run
           `shouldSatisfy` printedSentence
@@ -78,45 +91,51 @@ pathSpec =
 
     it "is cut in JSON too, which holds nowhere the whole address, so that no script pays it" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         run <- hw home ["show", "/0/3", "--json"] []
         runOut run `shouldSatisfy` (not . Text.isInfixOf "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1")
 
     it "is shown as receive gave it out, with its label, when the wallet holds it" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         given <- hwJson home ["receive", "--label", "rent"] []
         hwJson home ["show", "/0/0"] [] `shouldReturn` given
 
     -- The ends of 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo, the first receiving
-    -- address of second, account 1 of the seed
-    it "is of the --account named, which a wallet of several accounts needs" $
+    -- address of the bip44 account of portfolio1 on btc, m/44'/0'/1'
+    it "is of the portfolio --portfolio names" $
       withHome $ \home -> do
-        createMain home
-        _ <- answer home ["createacc", "second"] seedTwice
-        (cutAddressOf <$> hwJson home ["show", "/0/0", "--account", "second"] []) `shouldReturn` Right "17Hc4H2HwzLf..........QPGpNEvK2NUo"
-        (errorOf <$> hwJson home ["show", "/0/0"] [])
-          `shouldReturn` Right "Specify which account to use with --account: the wallet has several accounts on btc, and none is named default"
+        newTestPortfolio home
+        newTestPortfolio home
+        (cutAddressOf <$> hwJson home ["show", "/0/0", "--portfolio", "1"] []) `shouldReturn` Right "17Hc4H2HwzLf..........QPGpNEvK2NUo"
 
-    -- hw stores the address /0/0 of cash, the Bitcoin Cash account of the
-    -- test wallet, as bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u.
-    -- Cut, it shows bitcoincash:q and 13 characters, then the last 14.
-    it "is written as the network of the account writes it" $
+    -- The ends of 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj, the first receiving
+    -- address of the bip44 account of portfolio0 on btc
+    it "is of the default portfolio, portfolio0, without --portfolio in a wallet of several portfolios" $
       withHome $ \home -> do
-        _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
-        (cutAddressOf <$> hwJson home ["show", "/0/0"] []) `shouldReturn` Right "bitcoincash:qzvzk6v4gdxt70..............pfzercknlz3k4u"
+        newTestPortfolio home
+        newTestPortfolio home
+        (cutAddressOf <$> hwJson home ["show", "/0/0"] []) `shouldReturn` Right "1KEn7jEXa7KC..........qRJBLnPMmrLj"
 
-    -- The default account of bch is account 0 of the seed on bch, cash of
-    -- the test above
-    it "is of the default account of the --network, in a wallet of several accounts" $
+    -- hw stores the address /0/0 of the bip44 account on Bitcoin Cash as
+    -- bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u. Cut, it
+    -- shows bitcoincash:q and 13 characters, then the last 14.
+    it "is of the account of the --network named, written as that network writes it" $
       withHome $ \home -> do
-        createMain home
-        _ <- answer home ["createacc", "default", "--network", "bch"] seedTwice
+        newTestPortfolio home
         (cutAddressOf <$> hwJson home ["show", "/0/0", "--network", "bch"] []) `shouldReturn` Right "bitcoincash:qzvzk6v4gdxt70..............pfzercknlz3k4u"
+
+    -- The ends of bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc, the first
+    -- receiving address of the bip84 account on btc, m/84'/0'/0': its
+    -- first 17 characters and its last 13
+    it "is of the account of the --type named, bip84 on btc" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (cutAddressOf <$> hwJson home ["show", "/0/0", "--type", "bip84"] []) `shouldReturn` Right "bc1qynnywxcvs9dwu............eyprgqeacxwtc"
 
     it "hands out nothing: the wallet has no address after it, and receive starts at the first" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["show", "/0/5"] []
         _ <- answer home ["show", "/1/5"] []
         (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right []
@@ -128,7 +147,7 @@ pathSpec =
     -- which no address, hash or coin has
     it "is refused for a path that is not that of an address, with the two forms" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         forM_ ["/2/0", "/0/3'", "/0", "/0/3/1", "0/3", "m/0/3", "/0/2147483648"] $ \path -> do
           run <- hw home ["show", path] []
           runExit run `shouldBe` ExitFailure 1
@@ -141,31 +160,38 @@ newestSpec =
   describe "The newest receiving address, shown without a word" $ do
     it "is the one receive gave out last, with its label" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         _ <- answer home ["receive", "--label", "rent"] []
         (addressesOf <$> hwJson home ["show"] []) `shouldReturn` Right [(externalAddrsText !! 1, "rent")]
 
     it "hands out no new address" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
         _ <- answer home ["show"] []
         (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [(externalAddrsText !! 1, "")]
 
     -- 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo is the first receiving address of
-    -- second, account 1 of the seed
-    it "is that of the --account named" $
+    -- the bip44 account of portfolio1 on btc
+    it "is that of the portfolio --portfolio names" $
       withHome $ \home -> do
-        createMain home
-        _ <- answer home ["createacc", "second"] seedTwice
-        _ <- answer home ["receive", "--account", "main"] []
-        _ <- answer home ["receive", "--account", "second"] []
-        (addressesOf <$> hwJson home ["show", "--account", "second"] []) `shouldReturn` Right [("17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "")]
+        newTestPortfolio home
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        _ <- answer home ["receive", "--portfolio", "1"] []
+        (addressesOf <$> hwJson home ["show", "--portfolio", "1"] []) `shouldReturn` Right [("17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "")]
+
+    -- receive gave out an address of the bip44 account only
+    it "is that of the account --type picks, which may have given out none" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        (errorOf <$> hwJson home ["show", "--type", "bip84"] []) `shouldReturn` Right "The account has no receiving address yet: receive gives out the first one"
 
     it "is refused while the account has given out none" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         (errorOf <$> hwJson home ["show"] []) `shouldReturn` Right "The account has no receiving address yet: receive gives out the first one"
 
 {- A transaction -}
@@ -173,50 +199,64 @@ newestSpec =
 txSpec :: Ctx -> Spec
 txSpec ctx =
   describe "A transaction shown by its hash" $ do
-    -- The paid chain pays 50000 to the first receiving address of main
-    it "is a transaction of the history by its txid, as its account sees it" $
+    -- The paid chain pays 50000 to the first receiving address of the bip44
+    -- account of portfolio0 on btc
+    it "is a transaction of the history by its txid, as its portfolio sees it" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        (heldTxsOf <$> hwJson home ["show", txidArg (payment ctx)] []) `shouldReturn` Right [("main", 50000)]
+        (heldTxsOf <$> hwJson home ["show", txidArg (payment ctx)] []) `shouldReturn` Right [(mainPlace, 50000)]
 
     it "is found by the short id of its txid, its first 8 digits" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        (heldTxsOf <$> hwJson home ["show", shortOf (txidArg (payment ctx))] []) `shouldReturn` Right [("main", 50000)]
+        (heldTxsOf <$> hwJson home ["show", shortOf (txidArg (payment ctx))] []) `shouldReturn` Right [(mainPlace, 50000)]
 
     -- The payment spends the coin of 50000, pays 20000 and gets 27740 back
-    -- as change: 50000 - 27740 = 22260 leave the account, 20000 paid and
+    -- as change: 50000 - 27740 = 22260 leave the portfolio, 20000 paid and
     -- 2260 of fee
     it "is a pending transaction by its nosigHash" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
-        (heldTxsOf <$> hwJson home ["show", nosig] []) `shouldReturn` Right [("main", -22260)]
+        (heldTxsOf <$> hwJson home ["show", nosig] []) `shouldReturn` Right [(mainPlace, -22260)]
 
     it "is a pending transaction by its txid once signed" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         _ <- paymentSigned home
         txid <- txidOf =<< onePendingTx home
-        (heldTxsOf <$> hwJson home ["show", txid] []) `shouldReturn` Right [("main", -22260)]
+        (heldTxsOf <$> hwJson home ["show", txid] []) `shouldReturn` Right [(mainPlace, -22260)]
 
-    -- The payment pays 50000 to the first receiving address of main and
-    -- 30000 to the first receiving address of second
-    it "is shown once for each account that holds it, with what it pays each" $
-      withChain ctx (twoAccountsChain ctx) $ \home _ -> do
-        twoAccountsSynced home
-        (heldTxsOf <$> hwJson home ["show", txidArg (twoAccountsPayment ctx)] []) `shouldReturn` Right [("main", 50000), ("second", 30000)]
+    -- The payment pays 50000 to portfolio0 and 30000 to portfolio1
+    it "is shown once for each portfolio that holds it, with what it pays each" $
+      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+        syncedTwoPortfolios home
+        (heldTxsOf <$> hwJson home ["show", txidArg (twoPortfoliosTx ctx)] []) `shouldReturn` Right [(mainPlace, 50000), (portfolio1Place, 30000)]
 
-    it "is shown as the --account named sees it, and as that account only" $
-      withChain ctx (twoAccountsChain ctx) $ \home _ -> do
-        twoAccountsSynced home
-        (heldTxsOf <$> hwJson home ["show", txidArg (twoAccountsPayment ctx), "--account", "second"] []) `shouldReturn` Right [("second", 30000)]
+    it "is shown as the portfolio --portfolio names sees it, and as that portfolio only" $
+      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+        syncedTwoPortfolios home
+        (heldTxsOf <$> hwJson home ["show", txidArg (twoPortfoliosTx ctx), "--portfolio", "1"] []) `shouldReturn` Right [(portfolio1Place, 30000)]
 
-    it "is refused with an --account that does not hold it" $
+    -- The payment pays portfolio0 and portfolio1 of wallet0, and portfolio0
+    -- of wallet1, the wallet of the second test mnemonic, 20000 at
+    -- 1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2
+    it "is shown with --wallet alone as every portfolio of that wallet sees it, and as no portfolio of another wallet" $
+      withChain ctx (confirmedChain (twoWalletsTx ctx)) $ \home _ -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        newPortfolioOf home testMnemonic2
+        _ <- answer home ["receive"] []
+        _ <- answer home ["receive", "--portfolio", "1"] []
+        _ <- answer home ["receive", "--wallet", "1"] []
+        _ <- answer home ["sync"] []
+        (heldTxsOf <$> hwJson home ["show", txidArg (twoWalletsTx ctx), "--wallet", "0"] []) `shouldReturn` Right [(mainPlace, 50000), (portfolio1Place, 30000)]
+
+    it "is refused with a --portfolio that does not hold it, naming the portfolio" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        _ <- answer home ["createacc", "second"] seedTwice
-        (errorOf <$> hwJson home ["show", txidArg (payment ctx), "--account", "second"] [])
-          `shouldReturn` Right ("The transaction " <> Text.pack (txidArg (payment ctx)) <> " is not in the account second")
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["show", txidArg (payment ctx), "--portfolio", "1"] [])
+          `shouldReturn` Right ("The transaction " <> Text.pack (txidArg (payment ctx)) <> " is not in portfolio1 of wallet0")
 
     it "is refused when the wallet does not have it, by its short id as by its txid" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -225,26 +265,11 @@ txSpec ctx =
         (errorOf <$> hwJson home ["show", "ab00000000000000000000000000000000000000000000000000000000000000"] [])
           `shouldReturn` Right "The wallet has no transaction ab00000000000000000000000000000000000000000000000000000000000000"
 
--- | A payment from another wallet of 50000 to the first receiving address
--- of main and 30000 to the first receiving address of second
-twoAccountsPayment :: Ctx -> Tx
-twoAccountsPayment ctx = fundingTx ctx 3 [(externalAddr 0, 50000), (account1Addr, 30000)]
-
--- | A chain whose block 800000 holds that payment, two blocks below its
--- best
-twoAccountsChain :: Ctx -> Chain
-twoAccountsChain = confirmedChain . twoAccountsPayment
-
--- | A home with the accounts main and second, each with its first
--- receiving address given out, synced with the chain of the store
-twoAccountsSynced :: FilePath -> IO ()
-twoAccountsSynced home = do
-  createMain home
-  _ <- answer home ["createacc", "second"] seedTwice
-  _ <- answer home ["receive", "--account", "main"] []
-  _ <- answer home ["receive", "--account", "second"] []
-  _ <- answer home ["sync"] []
-  return ()
+-- | A payment from another wallet to portfolio0 and portfolio1 of the test
+-- wallet, 50000 and 30000, and to portfolio0 of the second test wallet,
+-- 20000
+twoWalletsTx :: Ctx -> Tx
+twoWalletsTx ctx = fundingTx ctx 4 [(externalAddr 0, 50000), (account1Addr, 30000), (externalAddr2, 20000)]
 
 {- A coin -}
 
@@ -262,11 +287,13 @@ coinSpec ctx =
         synced home
         (coinsShown <$> hwJson home ["show", shortCoinArg (payment ctx) 0] []) `shouldReturn` Right [(OutPoint (txHash (payment ctx)) 0, 50000, 3, Nothing, True)]
 
-    -- The wallet holds this one coin, so coins --verbose lists it alone
-    it "is shown with every detail, as coins --verbose shows it" $
+    -- The wallet holds this one coin, so coins --verbose lists it alone.
+    -- --network keeps the listing to the one place of the coin, which it
+    -- shows without a title.
+    it "is shown with every detail, as coins --verbose shows it on its network" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        verbose <- hw home ["coins", "--verbose"] []
+        verbose <- hw home ["coins", "--verbose", "--network", "btc"] []
         shown <- hw home ["show", coinArg (payment ctx) 0] []
         runOut shown `shouldBe` runOut verbose
 
@@ -275,17 +302,71 @@ coinSpec ctx =
         synced home
         (errorOf <$> hwJson home ["show", "ab000000:0"] []) `shouldReturn` Right "The wallet has no coin ab000000:0"
 
+{- An address by its text -}
+
+addressSpec :: Spec
+addressSpec =
+  describe "An address shown by its text" $ do
+    -- The address is the first receiving address of the bip84 account of
+    -- portfolio1 on btc, m/84'/0'/1'/0/0
+    it "is shown with the account that holds it, of whatever portfolio and type" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        addr <- receiveWith home ["--portfolio", "1", "--type", "bip84"]
+        (accountRefOf <$> hwJson home ["show", addr] []) `shouldReturn` Right (AccountRef portfolio1Place Bip84)
+
+{- An address and a coin on two test networks -}
+
+testNetworksSpec :: Ctx -> Spec
+testNetworksSpec ctx =
+  describe "An address or a coin the wallet has on two test networks" $ do
+    it "is refused without --network when the default network has none of them, naming the networks" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive", "--network", "btctest"] []
+        _ <- answer home ["receive", "--network", "btctest4"] []
+        (errorOf <$> hwJson home ["show", Text.unpack testnetExternalAddrText] [])
+          `shouldReturn` Right "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and btctest4: give the --network"
+
+    it "is the address of the --network named" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive", "--network", "btctest"] []
+        _ <- answer home ["receive", "--network", "btctest4"] []
+        (placeOf <$> hwJson home ["show", Text.unpack testnetExternalAddrText, "--network", "btctest4"] []) `shouldReturn` Right (Place mainPortfolioRef btcTest4)
+
+    it "is refused on a --network that has no row of it, naming those that have" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive", "--network", "btctest"] []
+        _ <- answer home ["receive", "--network", "btctest4"] []
+        (errorOf <$> hwJson home ["show", Text.unpack testnetExternalAddrText, "--network", "btcreg"] [])
+          `shouldReturn` Right "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and btctest4, not on the --network btcreg"
+
+    it "is a coin refused without --network when the default network has none of it, naming the networks" $
+      withChainServing ctx [btcTest, btcTest4] [] (confirmedChain (testnetCoinTx ctx)) $ \home _ -> do
+        testnetCoinSynced home
+        (errorOf <$> hwJson home ["show", coinArg (testnetCoinTx ctx) 0] [])
+          `shouldReturn` Right ("The coin " <> Text.pack (coinArg (testnetCoinTx ctx) 0) <> " is on btctest and btctest4: give the --network")
+
+    it "is the coin of the --network named" $
+      withChainServing ctx [btcTest, btcTest4] [] (confirmedChain (testnetCoinTx ctx)) $ \home _ -> do
+        testnetCoinSynced home
+        (coinNetworksOf <$> hwJson home ["show", coinArg (testnetCoinTx ctx) 0, "--network", "btctest4"] [])
+          `shouldReturn` Right [("btctest4", OutPoint (txHash (testnetCoinTx ctx)) 0)]
+
 {- A transaction file -}
 
 fileSpec :: Ctx -> Spec
 fileSpec ctx =
   describe "A transaction file shown by its name" $ do
-    -- hw runs in the home. The payment of preparetx is from main.
+    -- hw runs in the home. The payment of preparetx is from portfolio0.
     it "is read from the directory the command runs in, when its name has no directory" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--output", home </> "unsigned.psbt"] []
-        (fmap dBAccountName . accountOf <$> hwJson home ["show", "unsigned.psbt"] []) `shouldReturn` Right "main"
+        (placeOf <$> hwJson home ["show", "unsigned.psbt"] []) `shouldReturn` Right mainPlace
 
     -- The bare name is taken for the short id of a transaction the wallet
     -- does not have
@@ -293,117 +374,159 @@ fileSpec ctx =
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--output", home </> "a1075db5"] []
-        (fmap dBAccountName . accountOf <$> hwJson home ["show", "./a1075db5"] []) `shouldReturn` Right "main"
+        (placeOf <$> hwJson home ["show", "./a1075db5"] []) `shouldReturn` Right mainPlace
         (errorOf <$> hwJson home ["show", "a1075db5"] []) `shouldReturn` Right "The wallet has no transaction a1075db5"
 
-{- A file of accounts -}
+    -- portfolio0 pays 20000 of its coin of 50000 to the first receiving
+    -- address of portfolio1, with 2260 of fee: 22260 leave it. The signer
+    -- holds both portfolios, and not the payment. It gave out the address
+    -- of portfolio1 the payment pays: a database knows an address of its
+    -- portfolios once it has handed it out.
+    it "is shown as the portfolio that pays sees it, when it moves funds between two portfolios" $
+      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+        transferFile online
+        twoPortfoliosSigner signer
+        (seenBy <$> hwJson signer ["show", online </> "transfer.psbt"] []) `shouldReturn` Right (mainPlace, TxDebit, -22260)
 
--- | A file of accounts as exportacc writes it for main of the test seed:
--- its key, an address labelled Wages and a transaction labelled Salary
-mainAccountFile :: Text.Text
-mainAccountFile =
+    it "is shown with --portfolio as the portfolio it pays sees it, incoming" $
+      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+        transferFile online
+        twoPortfoliosSigner signer
+        (seenBy <$> hwJson signer ["show", online </> "transfer.psbt", "--portfolio", "1"] []) `shouldReturn` Right (portfolio1Place, TxCredit, 20000)
+  where
+    -- The online computer holds portfolio0 alone: it pays an address of
+    -- portfolio1 as any other
+    transferFile online = do
+      synced online
+      _ <- answer online ["preparetx", fixedTo account1Addr "0.0002", "--fee-rate", "10", "--output", online </> "transfer.psbt"] []
+      return ()
+    twoPortfoliosSigner signer = do
+      newTestPortfolio signer
+      newTestPortfolio signer
+      _ <- answer signer ["receive", "--portfolio", "1"] []
+      return ()
+    -- Where show shows the transaction, and what it is to that portfolio
+    seenBy = \case
+      ResponseTx place info -> Right (place, summaryType (txInfoSummary info), summaryAmount (txInfoSummary info))
+      other -> Left (show other)
+
+{- A file of a wallet -}
+
+-- | A file of a wallet as exportwallet writes it for portfolio0 of the test
+-- wallet with the key of its bip44 account on btc alone: an address
+-- labelled Wages and a transaction labelled Salary
+mainWalletFile :: Text.Text
+mainWalletFile =
   Text.unlines
-    [ "{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"main\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\",\"purpose\":44}",
-      "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Wages\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"keypath\":\"/0/0\"}",
-      "{\"type\":\"tx\",\"ref\":\"0000000000000000000000000000000000000000000000000000000000000001\",\"label\":\"Salary\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\"}"
+    [ "{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\",\"purpose\":44}",
+      "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Wages\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\",\"keypath\":\"/0/0\"}",
+      "{\"type\":\"tx\",\"ref\":\"0000000000000000000000000000000000000000000000000000000000000001\",\"label\":\"Salary\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\"}"
     ]
 
-accountFileSpec :: Spec
-accountFileSpec =
-  describe "A file of accounts shown by its name" $ do
-    it "is shown account by account, as importacc would take each, with the labels of the file under it" $
+walletFileSpec :: Spec
+walletFileSpec =
+  describe "A file of a wallet shown by its name" $ do
+    -- The file names one account of the twelve of a portfolio
+    it "is shown wallet by wallet and account by account, as importwallet would take each, with the labels of the file under its account" $
       withHome $ \home -> do
-        TextIO.writeFile (home </> "labels.jsonl") mainAccountFile
-        run <- hw home ["show", "labels.jsonl"] []
+        TextIO.writeFile (home </> "wallet.jsonl") mainWalletFile
+        run <- hw home ["show", "wallet.jsonl"] []
         runOut run
           `shouldBe` Text.unlines
-            [ "main  btc  /44'/0'/0'",
-              "  not in the wallet, and importacc adds it",
+            [ "wallet0  bc560f95  not in the database, and importwallet creates it",
+              "  portfolio0  importwallet creates it, 1 account to add, still lacks 11 accounts",
+              "",
+              "portfolio0  btc  bip44",
               "  Address labels",
               "    /0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Wages\"",
               "  Transaction labels",
               "    0000000000000000000000000000000000000000000000000000000000000001  \"Salary\""
             ]
 
-    it "leaves the wallet without the accounts it shows" $
+    it "leaves the database without the wallet and the portfolio it shows" $
       withHome $ \home -> do
-        TextIO.writeFile (home </> "labels.jsonl") mainAccountFile
-        _ <- answer home ["show", "labels.jsonl"] []
-        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right []
+        TextIO.writeFile (home </> "wallet.jsonl") mainWalletFile
+        _ <- answer home ["show", "wallet.jsonl"] []
+        (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right []
 
-    it "says of an account the wallet holds that it is in the wallet" $
+    it "says of a portfolio the database holds whole that importwallet adds nothing to it" $
       withHome $ \home -> do
-        createMain home
-        TextIO.writeFile (home </> "labels.jsonl") mainAccountFile
-        run <- hw home ["show", "labels.jsonl"] []
-        run `shouldSatisfy` printed "main  btc  /44'/0'/0'\n  in the wallet\n"
+        newTestPortfolio home
+        TextIO.writeFile (home </> "wallet.jsonl") mainWalletFile
+        run <- hw home ["show", "wallet.jsonl"] []
+        run `shouldSatisfy` printed "wallet0  bc560f95  in the database\n  portfolio0  nothing to add\n"
 
-    -- A key alone names no network, as another wallet writes it
-    it "takes an account the file names no network for on the --network given" $
+    it "is refused with --network, since each record of the file names its network" $
       withHome $ \home -> do
-        setDefaultNetwork home Nothing
+        TextIO.writeFile (home </> "wallet.jsonl") mainWalletFile
+        (errorOf <$> hwJson home ["show", "wallet.jsonl", "--network", "btc"] [])
+          `shouldReturn` Right "show takes no --network with a file of a wallet: each of its records names its network"
+
+    it "is refused with --portfolio of a portfolio the file has nothing of, naming those it has" $
+      withHome $ \home -> do
+        TextIO.writeFile (home </> "wallet.jsonl") mainWalletFile
+        (errorOf <$> hwJson home ["show", "wallet.jsonl", "--portfolio", "1"] [])
+          `shouldReturn` Right "The file has no portfolio1: it has portfolio0"
+
+    -- A key alone, as another wallet writes it, is one account, of no
+    -- portfolio
+    it "is refused when it holds a key alone and no record" $
+      withHome $ \home -> do
         TextIO.writeFile (home </> "key.txt") (testAccountXPub <> "\n")
-        run <- hw home ["show", "key.txt", "--network", "btc"] []
-        run `shouldSatisfy` printed "btc0  btc  /44'/0'/0'\n  not in the wallet, and importacc adds it\n"
-
-    it "says importacc would refuse an account the file names no network for, without --network or a default network" $
-      withHome $ \home -> do
-        setDefaultNetwork home Nothing
-        TextIO.writeFile (home </> "key.txt") (testAccountXPub <> "\n")
-        run <- hw home ["show", "key.txt"] []
-        run `shouldSatisfy` printed "xpub6CHK45s4...\n  importacc refuses it: Give the --network, or a default-network in the configuration file\n"
+        (errorOf <$> hwJson home ["show", "key.txt"] [])
+          `shouldReturn` Right "The file key.txt could not be read: Neither a transaction file, a PSBT in bytes or in base64 text or the hexadecimal of a transaction, nor a file of a wallet that importwallet reads"
 
 {- What show refuses -}
 
 refusedSpec :: Spec
 refusedSpec =
   describe "show" $ do
-    it "refuses --account with an address, which tells its account" $
+    it "refuses --portfolio with an address, which tells where it is" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
-        (errorOf <$> hwJson home ["show", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "--account", "main"] [])
-          `shouldReturn` Right "An address tells its account, so show takes no --account with it"
+        (errorOf <$> hwJson home ["show", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "--portfolio", "0"] [])
+          `shouldReturn` Right "An address tells where it is, so show takes no --wallet and no --portfolio with it"
 
-    it "refuses --account with a coin, which tells its account" $
+    it "refuses --wallet with a coin, which tells where it is" $
       withHome $ \home -> do
-        createMain home
-        (errorOf <$> hwJson home ["show", "ab000000:0", "--account", "main"] [])
-          `shouldReturn` Right "A coin tells its account, so show takes no --account with it"
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["show", "ab000000:0", "--wallet", "0"] [])
+          `shouldReturn` Right "A coin tells where it is, so show takes no --wallet and no --portfolio with it"
 
-    it "refuses --network with an address, which is on the network of its account" $
+    it "refuses --type with an address, which is of the type of its account" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         _ <- answer home ["receive"] []
-        (errorOf <$> hwJson home ["show", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "--network", "btc"] [])
-          `shouldReturn` Right "show takes no --network with an address, which is on the network of its account"
+        (errorOf <$> hwJson home ["show", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "--type", "bip44"] [])
+          `shouldReturn` Right "show takes no --type with an address"
 
-    it "refuses --network with a coin, which is on the network of its account" $
+    it "refuses --type with a coin, which is of the type of its account" $
       withHome $ \home -> do
-        createMain home
-        (errorOf <$> hwJson home ["show", "ab000000:0", "--network", "btc"] [])
-          `shouldReturn` Right "show takes no --network with a coin, which is on the network of its account"
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["show", "ab000000:0", "--type", "bip44"] [])
+          `shouldReturn` Right "show takes no --type with a coin"
 
-    it "refuses --account with a file of accounts, which tells its accounts" $
+    it "refuses --type with a file, which tells the types of its accounts" $
       withHome $ \home -> do
-        createMain home
-        TextIO.writeFile (home </> "labels.jsonl") mainAccountFile
-        (errorOf <$> hwJson home ["show", "labels.jsonl", "--account", "main"] [])
-          `shouldReturn` Right "A file of accounts tells its accounts, so show takes no --account with it"
+        newTestPortfolio home
+        TextIO.writeFile (home </> "wallet.jsonl") mainWalletFile
+        (errorOf <$> hwJson home ["show", "wallet.jsonl", "--type", "bip44"] [])
+          `shouldReturn` Right "show takes no --type with a file"
 
     -- The JSON file of a transaction of an earlier hw is such a file
-    it "refuses a file that is neither a transaction file nor a file of accounts, naming the forms of both" $
+    it "refuses a file that is neither a transaction file nor a file of a wallet, naming the forms of both" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         let file = home </> "earlier.json"
         writeFile file "{\"tx\": \"0100000000000000000000\", \"txinputs\": []}\n"
         (errorOf <$> hwJson home ["show", file] [])
-          `shouldReturn` Right ("The file " <> Text.pack file <> " could not be read: Neither a transaction file, a PSBT in bytes or in base64 text or the hexadecimal of a transaction, nor a file of accounts that importacc reads")
+          `shouldReturn` Right ("The file " <> Text.pack file <> " could not be read: Neither a transaction file, a PSBT in bytes or in base64 text or the hexadecimal of a transaction, nor a file of a wallet that importwallet reads")
 
     -- A short id with its last digit missing, which no file of the home is
     -- named
     it "names the five things it shows for a word that is none of them and names no file" $
       withHome $ \home -> do
-        createMain home
+        newTestPortfolio home
         (errorOf <$> hwJson home ["show", "a1075db"] [])
-          `shouldReturn` Right "a1075db is not a path, an address, a transaction or a coin, and no file has that name: show takes a path such as /0/3, an address of the wallet, a txid or a nosigHash, a coin TXID:INDEX, or a file of a transaction or of accounts, each hash in full or by its short id, its first 8 digits"
+          `shouldReturn` Right "a1075db is not a path, an address, a transaction or a coin, and no file has that name: show takes a path such as /0/3, an address of the wallet, a txid or a nosigHash, a coin TXID:INDEX, or a file of a transaction or of a wallet, each hash in full or by its short id, its first 8 digits"

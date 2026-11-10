@@ -12,11 +12,12 @@ import System.Posix.Files (setFileCreationMask)
 import System.Posix.Types (FileMode)
 import Conduit (runConduit, sinkList, (.|))
 import Control.Exception (bracket, finally)
-import Control.Monad (forM, unless, void, when)
+import Control.Monad (forM, forM_, unless, void, when)
 import Control.Monad.Except (ExceptT, throwError)
 import Control.Monad.Trans (lift, liftIO)
 import Control.Monad.Trans.Except (runExceptT)
-import Data.Aeson (FromJSON (..), eitherDecodeFileStrict, encode, withObject, (.!=), (.:), (.:?))
+import Data.Aeson (FromJSON (..), eitherDecodeFileStrict, encode, object, withObject, (.!=), (.:), (.:?))
+import Data.Aeson.Types (Pair, parseEither)
 import Data.Default (def)
 import qualified Data.ByteString as BS
 import Data.Either (fromRight, isLeft)
@@ -35,16 +36,18 @@ import Database.Persist.Sqlite (runSqlite)
 import Haskoin
 import Haskoin.Crypto.Keys.Slip39 (EncryptedMasterSecret (..))
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Database.Account (insertAccount, nextAccount)
+import Haskoin.Wallet.Database.Account (Adopted (..), NetworkView (..), PortfolioView (..), adoptSeed, createPortfolio, insertAccount, nextPortfolioIndex, poolAccountOf)
+import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), Portfolio (..), PortfolioRef (..), insertPortfolio, insertWallet, portfolioAt, portfolioPool)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database.Coin (JsonCoin (..))
-import Haskoin.Wallet.Database (DB, DBAccount (..), DBAccountId, DBAddress (..), DBPendingTx (..), hashBytes, migrateAll)
+import Haskoin.Wallet.Database (DB, DBAccount (..), DBAccountId, DBAddress (..), DBPendingTx (..), DBWallet, DBWalletId, Pool (..), hashBytes, migrateAll, poolNetworkName)
 import Haskoin.Wallet.Entropy (Sources (..), systemEntropy)
-import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), MnemonicPass (..), PublicSeed (..), SeedSecret (..), foreignAddress, keyAddress, kindNamed, seedOf, signingKey)
+import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), MnemonicPass (..), PoolPath (..), PublicSeed (..), SeedSecret (..), foreignAddress, keyAddress, kindNamed, legacyPath, seedOf, signingKey)
 import Haskoin.Wallet.ShortId (ShortId, readShortId)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync (ScanQuestion, SyncRes (..), Watcher (Watcher))
 import Haskoin.Wallet.SyncStatus (Status, Step, noStatus)
+import Haskoin.Wallet.Cli.Response (AccountCounts (..), Group (..))
 import Haskoin.Wallet.Cli.Style (Style, renderPlain)
 import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), MyInputs (..), MyOutputs (..), PendingStatus (..), TxInfo (..), TxStatus (..), TxSummary (..), TxType (..), pendingSigned)
 import Haskoin.Wallet.Tx.SignData (TxSignData (..), noLabel, nosigHash)
@@ -102,6 +105,12 @@ walletInFile database prepare = do
 -- | Create the tables of a schema: the wallet's ('migrateAll') or an old one
 createTables :: Migration -> DB IO ()
 createTables = void . runMigrationQuiet
+
+-- | The configuration a file with these keys alone gives, as hw reads
+-- it: every other key keeps its default. The keys are written as the
+-- file names them, so that a test of a default names its key.
+configWith :: [Pair] -> Config
+configWith keys = either (error . ("configWith: " <>)) id (parseEither parseJSON (object keys))
 
 -- | The creation time of the rows the tests write
 fixtureTime :: UTCTime
@@ -190,18 +199,62 @@ storedVersions = do
   rows <- rawSql "select version, typeof(version) from d_b_version" []
   return [(value, storageClass) | (Single value, Single storageClass) <- rows]
 
--- | The next BIP44 account of a seed on a network, stored as createacc
--- stores it: with the fingerprint of the seed
-newAccountOf :: Ctx -> MnemonicPass -> Network -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
+-- | Portfolio 0 of a seed, whole, as newportfolio creates it, with the
+-- wallet of the seed: both are created when the database does not have
+-- them, so a test asks for the portfolio wherever it needs it
+portfolioOf :: Ctx -> MnemonicPass -> ExceptT String (DB IO) Portfolio
+portfolioOf ctx mnem = do
+  let seed = forceRight $ seedOf ctx mnem
+  held <- walletOfSeed ctx seed
+  found <- lift $ portfolioAt (fst held) 0
+  case found of
+    Just (key, row) -> return (Portfolio key row (fst held) (snd held))
+    Nothing -> createPortfolio ctx seed held 0
+
+-- | The next portfolio of a seed, whole, at the lowest free index of its
+-- wallet, as newportfolio --existing creates it: portfolio 0 first, then
+-- portfolio 1
+nextPortfolioOf :: Ctx -> MnemonicPass -> ExceptT String (DB IO) Portfolio
+nextPortfolioOf ctx mnem = do
+  let seed = forceRight $ seedOf ctx mnem
+  held <- walletOfSeed ctx seed
+  index <- lift $ nextPortfolioIndex seed (fst held)
+  createPortfolio ctx seed held index
+
+-- | The wallet of a seed in the database, created with the fingerprint of
+-- the seed when the database has none
+walletOfSeed :: Ctx -> PublicSeed -> ExceptT String (DB IO) (DBWalletId, DBWallet)
+walletOfSeed ctx seed = do
+  adopted <- adoptSeed ctx seed
+  maybe (lift (insertWallet (Just (seedFingerprint seed)))) (return . adoptedWallet) adopted
+
+-- | A portfolio as the step from the database of hw 0.9 leaves it: in a
+-- new wallet whose fingerprint is not known, at the index, described,
+-- with those accounts of the seed alone
+migrated :: Ctx -> PublicSeed -> Natural -> Text -> [(Network, AccountKind)] -> ExceptT String (DB IO) Portfolio
+migrated ctx seed index description accounts = do
+  (walletId, wallet) <- lift $ insertWallet Nothing
+  (key, row) <- insertPortfolio walletId index description
+  forM_ accounts $ \(net, kind) -> do
+    xpub <- liftIO $ maybe (fail "migrated: the child key at this index is invalid") return =<< seedAccountKey seed kind net index
+    insertAccount key kind net ctx xpub
+  return (Portfolio key row walletId wallet)
+
+-- | The account of a kind of a portfolio on a network
+accountOf :: Portfolio -> Network -> AccountKind -> ExceptT String (DB IO) (DBAccountId, DBAccount)
+accountOf portfolio net = poolAccountOf (portfolioPool portfolio net)
+
+-- | The BIP44 account of portfolio 0 of a seed on a network, the portfolio
+-- created when missing
+newAccountOf :: Ctx -> MnemonicPass -> Network -> ExceptT String (DB IO) (DBAccountId, DBAccount)
 newAccountOf = newAccountOfKind Bip44
 
--- | The next account of a seed of a kind on a network, stored as createacc
--- stores it: with the fingerprint of the seed
-newAccountOfKind :: AccountKind -> Ctx -> MnemonicPass -> Network -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
-newAccountOfKind kind ctx mnem net name = do
-  let seed = forceRight $ seedOf ctx mnem
-  (_, pub) <- lift $ nextAccount kind net ctx seed
-  insertAccount kind net ctx name pub (Just (seedFingerprint seed))
+-- | The account of a kind of portfolio 0 of a seed on a network, the
+-- portfolio created when missing
+newAccountOfKind :: AccountKind -> Ctx -> MnemonicPass -> Network -> ExceptT String (DB IO) (DBAccountId, DBAccount)
+newAccountOfKind kind ctx mnem net = do
+  portfolio <- portfolioOf ctx mnem
+  accountOf portfolio net kind
 
 -- | The public side of the two test seeds
 testSeed, testSeed2 :: Ctx -> PublicSeed
@@ -259,38 +312,97 @@ firstAddrsBy ctx keyOfAccount addressOf count =
     key <- fromMaybe (error "firstAddrsBy: no key at the index") <$> keyOfAccount index
     return $ fromMaybe (error "firstAddrsBy: no address for the key") (addressOf (derivePubPath ctx (Deriv :/ 0 :/ 0 :: SoftPath) key))
 
--- | A new account of the test wallet in the database, with the given name
-testNewAcc :: Ctx -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
+-- | Portfolio 0 of the test wallet in the database, whole, created when
+-- missing
+testPortfolio :: Ctx -> ExceptT String (DB IO) Portfolio
+testPortfolio ctx = portfolioOf ctx testMnemonic
+
+-- | What portfolio 0 of the test wallet holds on Bitcoin: its pool there
+testPool :: Ctx -> ExceptT String (DB IO) Pool
+testPool ctx = (`portfolioPool` btc) <$> testPortfolio ctx
+
+-- | The BIP44 account of portfolio 0 of the test wallet on Bitcoin,
+-- m/44'/0'/0', the portfolio created when missing
+testNewAcc :: Ctx -> ExceptT String (DB IO) (DBAccountId, DBAccount)
 testNewAcc ctx = newAccountOf ctx testMnemonic btc
 
--- | A new account of the second test wallet in the database
-testNewAcc2 :: Ctx -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
+-- | The same account of the second test wallet
+testNewAcc2 :: Ctx -> ExceptT String (DB IO) (DBAccountId, DBAccount)
 testNewAcc2 ctx = newAccountOf ctx testMnemonic2 btc
 
--- | A new Bitcoin Cash account of the test wallet in the database
-testNewAccBch :: Ctx -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
+-- | The account of portfolio 0 of the test wallet on Bitcoin Cash,
+-- m/44'/145'/0'
+testNewAccBch :: Ctx -> ExceptT String (DB IO) (DBAccountId, DBAccount)
 testNewAccBch ctx = newAccountOf ctx testMnemonic bch
 
--- | A new BIP84 account of the test wallet in the database, with the given
--- name: its first one, m/84'/0'/0'
-testNewSegwitAcc :: Ctx -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
+-- | The BIP84 account of portfolio 0 of the test wallet on Bitcoin,
+-- m/84'/0'/0'
+testNewSegwitAcc :: Ctx -> ExceptT String (DB IO) (DBAccountId, DBAccount)
 testNewSegwitAcc ctx = newAccountOfKind Bip84 ctx testMnemonic btc
 
 {- Rows of the wallet -}
 
--- | The account main of the test wallet as its row holds it: account 0 of
--- the test mnemonic on Bitcoin, with 12 receiving and 3 change addresses,
--- 0.05 btc confirmed and 0.001 btc unconfirmed in 3 coins, created at
--- 'seenTime'
+-- | The BIP44 account of portfolio 0 of the test wallet on Bitcoin as its
+-- row holds it: m/44'/0'/0' of the test mnemonic, in the portfolio of key
+-- 1, with 12 receiving and 3 change addresses, 0.05 btc confirmed and
+-- 0.001 btc unconfirmed in 3 coins, created at 'seenTime'
 mainAccountRow :: DBAccount
-mainAccountRow = DBAccount "main" 0 44 "btc" 12 3 testAccountXPub (Just testFingerprintText) 5000000 100000 3 seenTime
+mainAccountRow = DBAccount (toSqlKey 1) "btc" 44 12 3 testAccountXPub 5000000 100000 3 seenTime
 
--- | The BIP84 account spending of the test wallet as its row holds it:
--- account 0 of the test mnemonic on Bitcoin at m/84'/0'/0', with 2
--- receiving addresses handed out, no change address and nothing received,
--- created at 'seenTime'
+-- | The BIP84 account of the same portfolio on Bitcoin as its row holds
+-- it: m/84'/0'/0' of the test mnemonic, with 2 receiving addresses handed
+-- out, no change address and nothing received, created at 'seenTime'
 segwitAccountRow :: DBAccount
-segwitAccountRow = DBAccount "spending" 0 84 "btc" 2 0 testSegwitAccountXPub (Just testFingerprintText) 0 0 0 seenTime
+segwitAccountRow = DBAccount (toSqlKey 1) "btc" 84 2 0 testSegwitAccountXPub 0 0 0 seenTime
+
+-- | How the answers name portfolio 0 of wallet 0, and what it holds on
+-- Bitcoin
+mainPortfolioRef :: PortfolioRef
+mainPortfolioRef = PortfolioRef 0 0
+
+mainPlace :: Place
+mainPlace = Place mainPortfolioRef btc
+
+-- | How the answers name the two accounts of that place
+mainAccountRef, segwitAccountRef :: AccountRef
+mainAccountRef = AccountRef mainPlace Bip44
+segwitAccountRef = AccountRef mainPlace Bip84
+
+-- | Rows of the BIP44 account of that place, as a listing groups them: a
+-- group of 'mainPlace' that covers the account of 'mainAccountRow', with
+-- its 12 receiving and 3 change addresses
+mainGroup :: [row] -> Group row
+mainGroup = Group mainPlace [AccountCounts Bip44 12 3]
+
+-- | Portfolio 0 of wallet 0 as portfolios shows it, with the two accounts
+-- above on Bitcoin and no other: described as "savings", in a wallet
+-- without a description whose fingerprint is that of the test mnemonic,
+-- created at 'seenTime'. On Bitcoin it holds 0.05 btc confirmed and
+-- 0.001 btc unconfirmed in 3 coins, can spend 0.049 btc now, and has 17
+-- addresses, 12 + 3 of the BIP44 account and 2 of the BIP84 one. It is
+-- partial: the view lists no missing account, which a test that needs
+-- them adds.
+mainPortfolioView :: PortfolioView
+mainPortfolioView =
+  PortfolioView
+    { viewRef = mainPortfolioRef,
+      viewDescription = "savings",
+      viewWalletDescription = "",
+      viewFingerprint = Just testFingerprint,
+      viewCreated = seenTime,
+      viewMissing = [],
+      viewNetworks =
+        [ NetworkView
+            { networkViewNetwork = btc,
+              networkViewConfirmed = 5000000,
+              networkViewUnconfirmed = 100000,
+              networkViewSpendable = 4900000,
+              networkViewCoins = 3,
+              networkViewAddresses = 17,
+              networkViewAccounts = []
+            }
+        ]
+    }
 
 -- | The first receiving address of that account as its row holds it,
 -- labelled "Invoice 42": paid 50000 in one transaction, which it still
@@ -306,11 +418,13 @@ unusedAddressRow = DBAddress (toSqlKey 1) False 1 (externalAddrsText !! 1) "" 0 
 -- lists it: in block 800000, 3 confirmations deep, free and spendable,
 -- paid by a transaction the store saw at 'seenTime'
 spendableCoinRow :: JsonCoin
-spendableCoinRow = JsonCoin (OutPoint (fakeTxHash 1) 0) (externalAddr 0) 50000 (Store.BlockRef 800000 1) 3 Nothing True "" "" False (Just (Deriv :/ 0 :/ 0)) (Just seenTime)
+spendableCoinRow = JsonCoin (OutPoint (fakeTxHash 1) 0) (externalAddr 0) 50000 (Store.BlockRef 800000 1) 3 Nothing True "" "" False (Just (legacyPath (Deriv :/ 0 :/ 0))) (Just seenTime)
 
--- | A sync of main that found nothing new, at block 800002
+-- | A sync of portfolio 0 on Bitcoin that found nothing new, at block
+-- 800002: it holds 0.05 btc confirmed and 0.001 btc unconfirmed in 3
+-- coins, and can spend 0.049 btc now
 quietSync :: SyncRes
-quietSync = SyncRes mainAccountRow 5000000 (fakeBlockHash 2) 800002 0 0 0 0 0
+quietSync = SyncRes mainPlace 5000000 100000 3 4900000 (fakeBlockHash 2) 800002 0 0 0 0 0
 
 {- Transaction summaries -}
 
@@ -331,7 +445,7 @@ paymentSummary =
       summaryChangeInFee = Nothing,
       summarySize = 226,
       summaryLockTime = 0,
-      summaryMyOutputs = Map.fromList [(externalAddr 0, MyOutputs 50000 (Deriv :/ 0 :/ 0) "")],
+      summaryMyOutputs = Map.fromList [(externalAddr 0, MyOutputs 50000 (legacyPath (Deriv :/ 0 :/ 0)) "")],
       summaryOtherOutputs = Map.empty,
       summaryNonStdOutputs = [],
       summaryMyInputs = Map.empty,
@@ -350,18 +464,18 @@ spendSummary =
       summaryChangeInFee = Nothing,
       summarySize = 226,
       summaryLockTime = 0,
-      summaryMyOutputs = Map.fromList [(internalAddr 0, MyOutputs 9000 (Deriv :/ 1 :/ 0) "")],
+      summaryMyOutputs = Map.fromList [(internalAddr 0, MyOutputs 9000 (legacyPath (Deriv :/ 1 :/ 0)) "")],
       summaryOtherOutputs = Map.fromList [(otherAddr 0, 40000)],
       summaryNonStdOutputs = [],
-      summaryMyInputs = Map.fromList [(externalAddr 0, MyInputs 50000 (Deriv :/ 0 :/ 0) "" [OutPoint (fakeTxHash 1) 0])],
+      summaryMyInputs = Map.fromList [(externalAddr 0, MyInputs 50000 (legacyPath (Deriv :/ 0 :/ 0)) "" [OutPoint (fakeTxHash 1) 0])],
       summaryOtherInputs = Map.empty,
       summaryNonStdInputs = []
     }
 
 -- | The summaries once the receiving address is labelled "Rent"
 paymentToRent, spendFromRent :: TxSummary
-paymentToRent = paymentSummary {summaryMyOutputs = Map.fromList [(externalAddr 0, MyOutputs 50000 (Deriv :/ 0 :/ 0) "Rent")]}
-spendFromRent = spendSummary {summaryMyInputs = Map.fromList [(externalAddr 0, MyInputs 50000 (Deriv :/ 0 :/ 0) "Rent" [OutPoint (fakeTxHash 1) 0])]}
+paymentToRent = paymentSummary {summaryMyOutputs = Map.fromList [(externalAddr 0, MyOutputs 50000 (legacyPath (Deriv :/ 0 :/ 0)) "Rent")]}
+spendFromRent = spendSummary {summaryMyInputs = Map.fromList [(externalAddr 0, MyInputs 50000 (legacyPath (Deriv :/ 0 :/ 0)) "Rent" [OutPoint (fakeTxHash 1) 0])]}
 
 -- | The state of a transaction in preparation: its nosigHash, and whether
 -- it is signed, sent and in conflict. Nothing for a transaction on the chain.
@@ -588,12 +702,13 @@ builtTx ctx lockTime spent paid =
 fundingTx :: Ctx -> Word8 -> [(Address, Natural)] -> Tx
 fundingTx ctx w = spendingTx ctx [(fakeTxHash w, 0)]
 
--- | A pending transaction of an account as its row holds it: unsigned,
+-- | A pending transaction of a pool as its row holds it: unsigned,
 -- without derivation paths or label, holding the coins its inputs spend
-pendingRow :: DBAccountId -> Tx -> DBPendingTx
-pendingRow accId tx =
+pendingRow :: Pool -> Tx -> DBPendingTx
+pendingRow pool tx =
   DBPendingTx
-    { dBPendingTxAccount = accId,
+    { dBPendingTxPortfolio = pool.poolPortfolio,
+      dBPendingTxNetwork = poolNetworkName pool,
       dBPendingTxNosigHash = hashBytes (nosigHash tx),
       dBPendingTxBlob = BS.toStrict $ encode $ TxSignData tx [] [] [] Nothing Nothing [] noLabel,
       dBPendingTxOnline = False,
@@ -636,6 +751,17 @@ fundingWorth ctx values = fundingTx ctx 1 $ zip (externalAddr <$> [0 ..]) values
 coinsWorth :: Ctx -> [Natural] -> [Store.Unspent]
 coinsWorth ctx = coinsOf ctx . fundingWorth ctx
 
+-- | The transaction funding coins worth the given amounts, on the receiving
+-- addresses /0/0, /0/1, ... of the BIP84 account of the test wallet: what
+-- 'fundingWorth' is for its BIP44 account
+segwitFundingWorth :: Ctx -> [Natural] -> Tx
+segwitFundingWorth ctx values = fundingTx ctx 2 $ zip (segwitExternalAddr <$> [0 ..]) values
+
+-- | The coins of 'segwitFundingWorth', as the store reports them: P2WPKH
+-- coins, where those of 'coinsWorth' are P2PKH
+segwitCoinsWorth :: Ctx -> [Natural] -> [Store.Unspent]
+segwitCoinsWorth ctx = coinsOf ctx . segwitFundingWorth ctx
+
 -- | The output script paying an address
 addressScript :: Ctx -> Address -> BS.ByteString
 addressScript ctx addr =
@@ -677,6 +803,14 @@ testAccountXPub = "xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZa
 -- next account of the seed
 testAccountXPub1 :: Text
 testAccountXPub1 = "xpub6CHK45s4QJWpt9C5kpAnypsE5ratNMWRGE3pZNQgGnxHTvZ1y6E65mSKMmz7V5ZUnVq5JMgq1Qros98GhLMCK7eoDaNo8kjqNdJzD8otqLW"
+
+-- | The public key of the BIP84 account 1 of the test wallet, m/84'/0'/1':
+-- the bip84 account of its portfolio 1 on Bitcoin. It was derived apart
+-- from hw, with the Python tool of the message-signing vectors and a
+-- serialization of BIP32 written for it, which gave back the keys of
+-- portfolio 0 and 'testAccountXPub1' first.
+testSegwitAccountXPub1 :: Text
+testSegwitAccountXPub1 = "xpub6CQF8An9YzRXqxfmHLF5ffeqd5vqfyHz9swNS5zjqMYLi3pwH43TAnCq8fERvv3qMUUsTwBEaT6jXudbsdaZZps2CGhucwM61PoTFpBvDX5"
 
 -- | The keys of the BIP84 account 0 of the test wallet, m/84'/0'/0', and
 -- the first ten addresses of its two chains. The public key and the first
@@ -728,6 +862,11 @@ segwitInternalAddrsText =
     "bc1qknv3fy496fhy5nrs95jch9d2rq5a5dwx8qmsf4",
     "bc1qetesxsjf99fje2q696gkl7xam5cv0lran49a8k"
   ]
+
+-- | A path of the BIP84 account of a pool, as 'legacyPath' is one of its
+-- BIP44 account
+segwitPath :: SoftPath -> PoolPath
+segwitPath = PoolPath Bip84
 
 -- | The receiving address /0/i and the change address /1/i of the BIP84
 -- account
@@ -819,13 +958,23 @@ taprootInternalAddr i = testAddress (taprootInternalAddrsText !! i)
 testAccountKey :: XPrvKey
 testAccountKey = fromMaybe (error "testAccountKey") $ xPrvImport btc testAccountXPrv
 
--- | The signing data signed with the account key of the test wallet, for
+-- | The signing data signed with the account keys of the test wallet, for
 -- the fixtures that need a transaction with real signatures
 signedByWallet :: Ctx -> TxSignData -> TxSignData
-signedByWallet ctx tsd = fst $ forceRight $ signWalletTx btc ctx Bip44 tsd testAccountKey
+signedByWallet ctx tsd = fst $ forceRight $ signWalletTx btc ctx tsd testPoolPrvKeys
 
 testAccountPub :: Ctx -> XPubKey
 testAccountPub ctx = fromMaybe (error "testAccountPub") $ xPubImport btc ctx testAccountXPub
+
+-- | The private keys of the two accounts of portfolio 0 of the test wallet
+-- on Bitcoin, each with its kind, as the signer takes them: m/44'/0'/0'
+-- and m/84'/0'/0'
+testPoolPrvKeys :: [(AccountKind, XPrvKey)]
+testPoolPrvKeys = [(Bip44, testAccountKey), (Bip84, testSegwitAccountKey)]
+
+-- | Their public keys, as a transaction is read against them
+testPoolPubKeys :: Ctx -> [(AccountKind, XPubKey)]
+testPoolPubKeys ctx = [(Bip44, testAccountPub ctx), (Bip84, testSegwitAccountPub ctx)]
 
 -- | The QR code of the first receiving address of the test wallet, as a
 -- terminal draws it. It holds bitcoin:1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj.
@@ -999,6 +1148,17 @@ testAccountXPubBch = "xpub6DXWb36CzdZvWbtSrYQkbxtapXciSuuQYJhtg4ysKAcppi5bjxxHPB
 testAccountXPubTest :: Text
 testAccountXPubTest = "tpubDCEeDpHvZZ49SMZ4VkifyjwqyJjKVFkbJHzhxZJiQgcMa2vnQnMhyXcu1ZZcReuwrprnxVnJsJGro7xdrEABAtK4AGZGqv2r4H7WytWLbPm"
 
+-- | The first receiving address of the bip44 account of portfolio 0 of the
+-- test wallet on a test network of Bitcoin, m/44'/1'/0'/0/0. The text is
+-- the same on btctest, btctest4 and btcreg: they share the coin type 1,
+-- so the key, and the form of their P2PKH addresses. Derived apart from
+-- hw with the Python tool of the message-signing vectors.
+testnetExternalAddrText :: Text
+testnetExternalAddrText = "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih"
+
+testnetExternalAddr :: Address
+testnetExternalAddr = fromMaybe (error "testnetExternalAddr") (textToAddr btcTest testnetExternalAddrText)
+
 bchExternalAddrText :: Text
 bchExternalAddrText = "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"
 
@@ -1077,7 +1237,8 @@ toStore fake =
         return $ filter ((`elem` (Just <$> addrs)) . (.address)) fake.fakeUnspents,
       storeRawTransactions = \tids ->
         return [tx | (tid, tx) <- fake.fakeRawTransactions, tid `elem` tids],
-      storePublish = \_ -> return ()
+      storePublish = \_ -> return (),
+      storeFailed = \_ -> return ()
     }
 
 -- | A store with nothing in it: no transactions, no coins, no balances
@@ -1095,9 +1256,14 @@ emptyStore =
       fakeRawTransactions = []
     }
 
--- | The store, failing its health check
+-- | The store, failing its health check: it is there, and down
 unhealthy :: Store -> Store
-unhealthy store = store {storeHealth = throwError "The store is down"}
+unhealthy store = store {storeHealth = throwError (Unhealthy "The store is down")}
+
+-- | The store of a network the host does not serve: its health check says
+-- so, which is no failure
+notServed :: Store -> Store
+notServed store = store {storeHealth = throwError (NotServed "The host does not serve the network")}
 
 -- | The store, noting every transaction handed to it for the network
 notingPublished :: IORef [Tx] -> Store -> Store

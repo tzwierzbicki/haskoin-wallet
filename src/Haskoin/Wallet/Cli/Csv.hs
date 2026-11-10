@@ -19,7 +19,7 @@
 -- * A text that starts with =, +, -, @, a tab or a carriage return gets
 --   an apostrophe in front ('formulaGuard'). A spreadsheet would run it as
 --   a formula, and a label can come from a file: from another wallet
---   through importacc, or from the online computer through a transaction
+--   through importwallet, or from the online computer through a transaction
 --   file. A formula there could send the rows of the sheet to a web
 --   server. The apostrophe shows in the cell, which is the price.
 -- * The file starts with the byte order mark of UTF-8, the sign Excel

@@ -75,7 +75,7 @@ paymentSpec =
       readPayment bch UnitBitcoin "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"
         `shouldBe` Left "The recipient bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a has no amount: write it ADDRESS:AMOUNT, as in bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a:0.001"
 
--- preparesweep looks for the account it pays before it knows the network
+-- preparesweep looks for the portfolio it pays before it knows the network
 -- to read the amounts on
 addressSpec :: Spec
 addressSpec =

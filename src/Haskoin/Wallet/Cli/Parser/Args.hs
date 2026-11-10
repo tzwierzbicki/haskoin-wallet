@@ -148,7 +148,7 @@ instance Semigroup OptDoc where
 instance Monoid OptDoc where
   mempty = OptDoc {names = [], metavar = Nothing, help = Nothing, defaultShown = Nothing, subheading = Nothing}
 
--- | A name of an option: -a, or --account
+-- | A name of an option: -p, or --portfolio
 data Name = Short Char | Long String
   deriving (Eq, Show)
 

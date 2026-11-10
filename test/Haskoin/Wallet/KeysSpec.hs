@@ -4,27 +4,30 @@
 -- | The keys of the test wallets, derived from their mnemonics. The shared
 -- wallet of "Haskoin.Wallet.TestUtils" writes its keys and the fingerprint
 -- of its seed out in full; these tests tie those values to the derivation.
--- Then the keys and the addresses of other wallets, which hw must derive as
--- they do. Then the private keys of a sweep, in every format a user may
--- write them.
+-- Then the accounts a portfolio is made of, and the keys a seed gives
+-- them. Then the keys and the addresses of other wallets, which hw must
+-- derive as they do. Then the private keys of a sweep, in every format a
+-- user may write them.
 module Haskoin.Wallet.KeysSpec where
 
 import Control.Monad (forM_)
 import Control.Monad.Except (ExceptT)
 import Crypto.KDF.PBKDF2 (Parameters (..), fastPBKDF2_SHA512)
+import qualified Data.Aeson as Json
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Default (def)
+import Data.List (nub)
 import Data.Maybe (fromJust)
 import Data.Text (Text)
 import Data.Text.Encoding (encodeUtf8)
 import Haskoin
 import Haskoin.Crypto.Keys.Slip39 (EncryptedMasterSecret (..))
-import Haskoin.Wallet.Database.Account (insertAccount)
 import Haskoin.Wallet.Database.Address (genExtAddress, nextChangeAddress)
 import Haskoin.Wallet.Database (DB, DBAddress (..))
 import Haskoin.Wallet.Keys
 import Haskoin.Wallet.TestUtils
+import Numeric.Natural (Natural)
 import Test.Hspec
 
 spec :: Spec
@@ -58,7 +61,10 @@ spec = do
         seed <- expectRight $ seedOf ctx testMnemonic
         (fmap (xPubExport btc ctx) <$> seedAccountKey seed Bip84 btc 0) `shouldReturn` Just testSegwitAccountXPub
     kindSpec ctx
+    portfolioKeysSpec ctx
     foreignKindSpec ctx
+  portfolioAccountsSpec
+  poolPathSpec
   passphraseSpec
   otherImplementationsSpec
 
@@ -113,6 +119,138 @@ kindSpec ctx =
       checkKindOnNetwork btc Bip84 `shouldBe` Right ()
   where
     firstKey = Deriv :/ 0 :/ 0 :: SoftPath
+
+{- The accounts of a portfolio -}
+
+-- | The twelve accounts of a whole portfolio, by the name of their
+-- network and of their type, in the order hw lists them: the table of the
+-- specification, a row for each network of each of its five paths
+twelveAccounts :: [(String, Text)]
+twelveAccounts =
+  [ ("btc", "bip44"),
+    ("btc", "bip84"),
+    ("bch", "bip44"),
+    ("btctest", "bip44"),
+    ("btctest", "bip84"),
+    ("btctest4", "bip44"),
+    ("btctest4", "bip84"),
+    ("btcreg", "bip44"),
+    ("btcreg", "bip84"),
+    ("bchtest", "bip44"),
+    ("bchtest4", "bip44"),
+    ("bchreg", "bip44")
+  ]
+
+portfolioAccountsSpec :: Spec
+portfolioAccountsSpec =
+  describe "The accounts of a portfolio" $ do
+    it "are on eight networks: Bitcoin, Bitcoin Cash, then the test networks of each" $
+      map (.name) portfolioNetworks `shouldBe` ["btc", "bch", "btctest", "btctest4", "btcreg", "bchtest", "bchtest4", "bchreg"]
+
+    it "are twelve: bip44 and bip84 on the networks of Bitcoin, bip44 alone on those of Bitcoin Cash" $
+      [(net.name, kindName kind) | (net, kind) <- portfolioAccounts] `shouldBe` twelveAccounts
+
+    -- The five paths of the table of the specification, for portfolio 0
+    -- and for portfolio 1, whose last step is 1'
+    it "are at five paths, the test networks sharing the coin type 1, with the index of the portfolio as the last step" $ do
+      let pathsOf index = nub [pathToStr (accountDeriv kind net index) | (net, kind) <- portfolioAccounts]
+      pathsOf 0 `shouldBe` ["/44'/0'/0'", "/84'/0'/0'", "/44'/145'/0'", "/44'/1'/0'", "/84'/1'/0'"]
+      pathsOf 1 `shouldBe` ["/44'/0'/1'", "/84'/0'/1'", "/44'/145'/1'", "/44'/1'/1'", "/84'/1'/1'"]
+
+    it "rank their networks in the order hw lists them, which orders whatever it groups by network" $
+      map networkRank [btc, bch, btcTest, btcTest4, btcRegTest, bchTest, bchTest4, bchRegTest] `shouldBe` [0, 1, 2, 3, 4, 5, 6, 7]
+
+-- | The keys of portfolio 1 of the test wallet that the shared fixtures
+-- do not have: m/44'/145'/1', m/44'/1'/1' and m/84'/1'/1'. They were
+-- derived apart from hw, as 'testSegwitAccountXPub1' was.
+testAccountXPubBch1, testAccountXPubTest1, testSegwitAccountXPubTest1 :: Text
+testAccountXPubBch1 = "xpub6DXWb36CzdZvXczuQJkPWfPZTkZFQR6KtWaBdkSJVn1JnDxFhax8mHVEuJiVRKGnWFAsJE2z1xm8b537zZ5HCpeagMTgRtscewKyNg241hE"
+testAccountXPubTest1 = "tpubDCEeDpHvZZ49UfWyCY8mu8dLCVf81KVQtKKETQrQZnpsWQVoHUCo6aZbpXrRaBaNLzVGB28pj6Bmq639gp2NAi5scUt6LbN6HuNW4d8fkhq"
+testSegwitAccountXPubTest1 = "tpubDDRUQfT52zY86TAPcsutu2TitBXF4PTq1AqJBBwR9HRynX8pG6ZBk66o7ifWhKtxA5vdK9wv5N1U3mcX8X5vYGhszGZkw6xmbxC8n2Fv6vA"
+
+portfolioKeysSpec :: Ctx -> Spec
+portfolioKeysSpec ctx =
+  describe "The keys of a portfolio of a seed" $ do
+    it "are twelve, one for each account of the portfolio, in their order" $ do
+      keys <- portfolioKeys 0
+      [(net.name, kindName kind) | (net, kind, _) <- keys] `shouldBe` twelveAccounts
+
+    it "are, for portfolio 0 on btc, the keys at m/44'/0'/0' and m/84'/0'/0'" $ do
+      keys <- portfolioKeys 0
+      keyOf keys btc Bip44 `shouldBe` [testAccountXPub]
+      keyOf keys btc Bip84 `shouldBe` [testSegwitAccountXPub]
+
+    it "are, for portfolio 0 on bch, the key at m/44'/145'/0'" $ do
+      keys <- portfolioKeys 0
+      keyOf keys bch Bip44 `shouldBe` [testAccountXPubBch]
+
+    -- The coin type of every test network is 1
+    it "are one key for the bip44 accounts of the six test networks, the key at m/44'/1'/0'" $ do
+      keys <- portfolioKeys 0
+      concatMap (\net -> keyOf keys net Bip44) [btcTest, btcTest4, btcRegTest, bchTest, bchTest4, bchRegTest]
+        `shouldBe` replicate 6 testAccountXPubTest
+
+    it "are one key for the bip84 accounts of the three test networks of Bitcoin, the key at m/84'/1'/0'" $ do
+      keys <- portfolioKeys 0
+      concatMap (\net -> keyOf keys net Bip84) [btcTest, btcTest4, btcRegTest]
+        `shouldBe` replicate 3 testSegwitAccountXPubTest
+
+    it "are no bip84 key on the networks of Bitcoin Cash, which have no SegWit" $ do
+      keys <- portfolioKeys 0
+      concatMap (\net -> keyOf keys net Bip84) [bch, bchTest, bchTest4, bchRegTest] `shouldBe` []
+
+    -- Twelve accounts from five keys
+    it "are, for portfolio 1, the keys at the same paths with 1' as the last step" $ do
+      keys <- portfolioKeys 1
+      keyOf keys btc Bip44 `shouldBe` [testAccountXPub1]
+      keyOf keys btc Bip84 `shouldBe` [testSegwitAccountXPub1]
+      keyOf keys bch Bip44 `shouldBe` [testAccountXPubBch1]
+      keyOf keys btcTest4 Bip44 `shouldBe` [testAccountXPubTest1]
+      keyOf keys bchRegTest Bip44 `shouldBe` [testAccountXPubTest1]
+      keyOf keys btcRegTest Bip84 `shouldBe` [testSegwitAccountXPubTest1]
+
+    it "are those of another seed for another mnemonic" $ do
+      second <- expectRight $ seedOf ctx testMnemonic2
+      keys <- maybe (fail "The seed has no portfolio 0") return =<< seedPortfolioKeys second 0
+      keyOf keys btc Bip44 `shouldBe` [testAccountXPub2]
+
+    -- BIP32 says to skip an index whose child key is invalid
+    it "are none at an index where a child key is invalid, so the seed has no portfolio there" $
+      (fmap length <$> seedPortfolioKeys (seedWithoutIndex1 ctx) 1) `shouldReturn` Nothing
+  where
+    portfolioKeys :: Natural -> IO [(Network, AccountKind, XPubKey)]
+    portfolioKeys index = do
+      seed <- expectRight $ seedOf ctx testMnemonic
+      maybe (fail "The seed has no portfolio at the index") return =<< seedPortfolioKeys seed index
+    -- The keys of the accounts of a kind on a network, as their network
+    -- writes them
+    keyOf :: [(Network, AccountKind, XPubKey)] -> Network -> AccountKind -> [Text]
+    keyOf keys net kind = [xPubExport net ctx key | (keyNet, keyKind, key) <- keys, keyNet == net, keyKind == kind]
+
+{- The path of an address in a portfolio -}
+
+poolPathSpec :: Spec
+poolPathSpec =
+  describe "The path of an address of a portfolio on a network" $ do
+    it "is named with the type of its account in front, since both accounts have an address at /0/3" $ do
+      poolPathText (PoolPath Bip84 (Deriv :/ 0 :/ 3)) `shouldBe` "bip84/0/3"
+      poolPathText (PoolPath Bip44 (Deriv :/ 0 :/ 3)) `shouldBe` "bip44/0/3"
+
+    it "is a path of the bip44 account when nothing says its type, as every path was before portfolios" $
+      legacyPath (Deriv :/ 1 :/ 0) `shouldBe` PoolPath Bip44 (Deriv :/ 1 :/ 0)
+
+    it "is read from JSON without a type as a path of the bip44 account" $
+      Json.eitherDecode "{\"path\":\"/0/3\"}" `shouldBe` Right (PoolPath Bip44 (Deriv :/ 0 :/ 3))
+
+    it "is refused in JSON with a type hw does not hold" $
+      (Json.eitherDecode "{\"type\":\"bip49\",\"path\":\"/0/3\"}" :: Either String PoolPath)
+        `shouldBe` Left "Error in $.type: Unknown account type bip49"
+
+    it "tells the type of account of an address by its form: P2PKH for bip44, P2WPKH for bip84, none for another form" $ do
+      addressKind (externalAddr 0) `shouldBe` Just Bip44
+      addressKind (segwitExternalAddr 0) `shouldBe` Just Bip84
+      addressKind (wrappedExternalAddr 0) `shouldBe` Nothing
+      addressKind (taprootExternalAddr 0) `shouldBe` Nothing
 
 {- The kinds of accounts hw does not hold -}
 
@@ -528,12 +666,11 @@ knownWallets =
   ]
 
 -- | The first receiving and change addresses of the first Bitcoin account
--- of a mnemonic and a passphrase, as hw gives them once the account is in
--- the database
+-- of a mnemonic and a passphrase, as hw gives them once portfolio 0 of the
+-- wallet is in the database
 firstAddresses :: Ctx -> Text -> Text -> ExceptT String (DB IO) (Text, Text)
 firstAddresses ctx mnemonic passphrase = do
-  key <- liftEither $ signingKey Bip44 btc ctx (MnemonicPass mnemonic passphrase) 0
-  (accId, _) <- insertAccount Bip44 btc ctx "known" (deriveXPubKey ctx key) Nothing
+  (accId, _) <- newAccountOf ctx (MnemonicPass mnemonic passphrase) btc
   receiving <- genExtAddress ctx def accId ""
   change <- nextChangeAddress ctx def accId []
   return (dBAddressAddress receiving, dBAddressAddress change)

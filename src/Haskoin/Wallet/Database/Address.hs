@@ -14,6 +14,16 @@
 -- when no transaction has used it and no pending transaction pays it; the
 -- pending transactions are read in "Haskoin.Wallet.Database.PendingTx", which asks
 -- for the change address with them.
+--
+-- A row belongs to its account. The transactions and the payments work on
+-- a pool, the accounts of a portfolio on one network together, so the
+-- addresses of a pool are read here too, each with its 'PoolPath': the
+-- kind of its account and its path below the key of that account
+-- ('poolAddressesMap', 'poolPaths').
+--
+-- The test networks share their keys, so the same address may be in the
+-- accounts of a portfolio on several of them. An address the user types
+-- names one row only once the network is known ('addressByText').
 module Haskoin.Wallet.Database.Address where
 
 import Conduit (MonadUnliftIO)
@@ -26,6 +36,8 @@ import Data.Aeson
 import Data.Aeson.Types (Pair, Parser)
 import qualified Data.Aeson.Types as Json
 import Data.List (genericTake, nub)
+import Data.List.Split (chunksOf)
+import Data.Maybe (isJust)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, listToMaybe, mapMaybe)
@@ -41,7 +53,8 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Keys (AccountKind, keyAddress)
+import Haskoin.Wallet.Database.Portfolio (Portfolio)
+import Haskoin.Wallet.Keys (AccountKind, PoolPath (..), keyAddress)
 import Haskoin.Wallet.Util (addrToTextE, readNatural, rowLimit, textToAddrE)
 import Numeric.Natural (Natural)
 
@@ -302,7 +315,7 @@ checkGap cfg accId addrType = do
 -- | How far hw generates past the last used address of a chain on its
 -- own: a thousand addresses. A scan looks at this many before it asks
 -- whether to go on, while the store reports a used address in every
--- window ("Haskoin.Wallet.Sync"), and importacc derives no address from
+-- window ("Haskoin.Wallet.Sync"), and importwallet derives no address from
 -- the key path of a record beyond that many past the last used one
 -- ('withinScanLimit'). A thousand is far more than an account gains
 -- between two syncs. A store that lies reports used addresses without
@@ -315,7 +328,7 @@ scanLimit = 1000
 
 -- | Whether an index of a chain is within 'scanLimit' of the last used
 -- address of the chain, or of its start when none is used: how far
--- importacc derives an address from the key path of a record. The gap
+-- importwallet derives an address from the key path of a record. The gap
 -- does not apply, since the file says the address was used.
 withinScanLimit :: (MonadUnliftIO m) => DBAccountId -> AddrType -> KeyIndex -> DB m Bool
 withinScanLimit accId addrType index = do
@@ -351,12 +364,10 @@ setAddrLabel accId idx label = do
   lift $ P.update key [DBAddressLabel P.=. label]
   return row {dBAddressLabel = label}
 
--- | Label a receiving address of the wallet, written in any form
--- 'getAddressByText' reads. The address tells its account. A change
+-- | Label a receiving address of an account, given its row. A change
 -- address takes no label.
-labelAddress :: (MonadUnliftIO m) => Text -> Text -> ExceptT String (DB m) DBAddress
-labelAddress addrTxt label = do
-  (_, addr) <- getAddressByText addrTxt
+labelAddress :: (MonadUnliftIO m) => DBAddress -> Text -> ExceptT String (DB m) DBAddress
+labelAddress addr label = do
   when (dBAddressInternal addr) $
     throwError "A change address takes no label. Only a receiving address does."
   setAddrLabel (dBAddressAccount addr) (dBAddressIndex addr) label
@@ -382,34 +393,74 @@ updateAddressBalances net accId storeBals =
         a ^. DBAddressAddress ==. val addrT
           &&. a ^. DBAddressAccount ==. val accId
 
--- | An address of the wallet, however it is written, with its account: see
--- 'addressesAmong'. An account key is in the wallet once, so an address is
--- of one account at most.
-getAddressByText :: (MonadUnliftIO m) => Text -> ExceptT String (DB m) (DBAccount, DBAddress)
-getAddressByText addrTxt =
-  maybe (throwError "Address does not exist") return =<< lift (findAddressByText addrTxt)
-
--- | The address of the wallet a text names, as 'getAddressByText' finds
--- it, or Nothing when no account holds it
-findAddressByText :: (MonadUnliftIO m) => Text -> DB m (Maybe (DBAccount, DBAddress))
+-- | Every row of an address the user typed, however it is written, each
+-- with its account and the portfolio of that account: see
+-- 'addressesAmong'. A key is in the database once on a network, so an
+-- address has one row at most on a network. It has a row on each test
+-- network where the portfolio generated it, since those networks share
+-- their keys.
+findAddressByText :: (MonadUnliftIO m) => Text -> DB m [(Portfolio, DBAccountId, DBAddress)]
 findAddressByText addrTxt = do
   accounts <- getAccounts
-  found <- forM accounts $ \(accId, acc) -> map (acc,) <$> addressesAmong [addrTxt] (accId, acc)
-  return (listToMaybe (concat found))
+  fmap concat . forM accounts $ \(portfolio, accId, acc) ->
+    map (portfolio,accId,) <$> addressesAmong [addrTxt] (accId, acc)
 
--- | The accounts that have the addresses, each once, however the addresses
--- are written: see 'addressesAmong'. An address the wallet does not have
--- has none.
-addressAccounts :: (MonadUnliftIO m) => [Text] -> ExceptT String (DB m) [(DBAccountId, DBAccount)]
-addressAccounts addrs = accountsHolding (\net -> mapMaybe (textToAddr net) addrs)
+-- | The one row of an address the user typed, with its account and the
+-- portfolio of that account. An address with rows on several networks
+-- names the one on the network given, the --network of the command, or
+-- else the one on the default network of the configuration. When neither
+-- settles it, the user is asked for --network, with the networks named:
+-- hw does not guess which chain an address is meant on.
+addressByText :: (MonadUnliftIO m) => Config -> Maybe Network -> Text -> ExceptT String (DB m) (Portfolio, DBAccountId, DBAddress)
+addressByText cfg netM addrTxt = do
+  found <- lift $ findAddressByText addrTxt
+  accounts <- forM found $ \row@(_, accId, _) -> (row,) . accountNetwork <$> getAccountById accId
+  let onNetwork net = [row | (row, rowNet) <- accounts, rowNet == net]
+      networks = nub (snd <$> accounts)
+  case (netM, found) of
+    (_, []) -> throwError noSuchAddress
+    (Just net, _) -> case onNetwork net of
+      row : _ -> return row
+      [] -> throwError $ "The address " <> cs addrTxt <> " is on " <> networksText networks <> ", not on the --network " <> net.name
+    (Nothing, [row]) -> return row
+    (Nothing, _) -> case onNetwork (configDefaultNetwork cfg) of
+      row : _ -> return row
+      [] -> throwError (onSeveralNetworks addrTxt networks)
+  where
+    noSuchAddress = "The wallet has no address " <> cs addrTxt
+
+-- | The refusal of an address the user typed that the wallet has on
+-- several networks, when nothing says which one is meant: the test
+-- networks share their keys, and hw does not guess the chain
+onSeveralNetworks :: Text -> [Network] -> String
+onSeveralNetworks addrTxt networks =
+  "The address " <> cs addrTxt <> " is on " <> networksText (nub networks) <> ": give the --network"
+
+-- | The section a listing goes on in after the address --after names,
+-- among the sections of the listing, each given with its network and the
+-- row the address has in it, if any: the index of the one section that
+-- holds the address, with its row, or Nothing when none holds it.
+--
+-- The test networks share their keys, so the same address is in the
+-- sections of several networks when the listing covers them. Starting in
+-- the first of those would loop: its last row names the address again,
+-- and the listing would go on in the first section each time. So an
+-- address that several sections hold is refused, and the user is asked
+-- for --network, as 'addressByText' asks for it.
+sectionOfAddress :: Text -> [(Network, Maybe row)] -> Either String (Maybe (Int, row))
+sectionOfAddress addrTxt sections =
+  case [(i, net, row) | (i, (net, Just row)) <- zip [0 ..] sections] of
+    [] -> Right Nothing
+    [(i, _, row)] -> Right (Just (i, row))
+    several -> Left (onSeveralNetworks addrTxt [net | (_, net, _) <- several])
 
 -- | The accounts that have some of the addresses each account reads on its
--- network, each once: the addresses of a text that reads differently on
--- each network, such as a recipient with its amount
-accountsHolding :: (MonadUnliftIO m) => (Network -> [Address]) -> ExceptT String (DB m) [(DBAccountId, DBAccount)]
+-- network, each once, with their portfolios: the addresses of a text that
+-- reads differently on each network, such as a recipient with its amount
+accountsHolding :: (MonadUnliftIO m) => (Network -> [Address]) -> ExceptT String (DB m) [(Portfolio, DBAccountId, DBAccount)]
 accountsHolding readOn = lift $ filterM holds =<< getAccounts
   where
-    holds held@(_, acc) = not . null <$> storedAmong (readOn (accountNetwork acc)) held
+    holds (_, accId, acc) = not . null <$> storedAmong (readOn (accountNetwork acc)) (accId, acc)
 
 -- | The addresses of the account among the given ones. The account reads
 -- them on its network, and compares the addresses themselves, not their
@@ -418,21 +469,30 @@ accountsHolding readOn = lift $ filterM holds =<< getAccounts
 addressesAmong :: (MonadUnliftIO m) => [Text] -> (DBAccountId, DBAccount) -> DB m [DBAddress]
 addressesAmong addrs held@(_, acc) = storedAmong (mapMaybe (textToAddr (accountNetwork acc)) addrs) held
 
--- | The addresses of the account among the given addresses of its network
+-- | The addresses of the account among the given addresses of its network.
+-- They are looked for 'inListBatch' at a time: the sync asks about every
+-- address of a pool whose balance changed, every one on its first sync,
+-- and SQLite takes no more than 32766 of them in one query.
 storedAmong :: (MonadUnliftIO m) => [Address] -> (DBAccountId, DBAccount) -> DB m [DBAddress]
-storedAmong addrs (accId, acc) = do
+storedAmong = storedAmongBy inListBatch
+
+-- | 'storedAmong', looking for the given number of addresses in each
+-- query
+storedAmongBy :: (MonadUnliftIO m) => Natural -> [Address] -> (DBAccountId, DBAccount) -> DB m [DBAddress]
+storedAmongBy batch addrs (accId, acc) = do
   let net = accountNetwork acc
       -- The text hw stores for each address
       stored = mapMaybe (addrToText net) addrs
-  rows <- select . from $ \a -> do
-    where_ $
-      a ^. DBAddressAccount ==. val accId
-        &&. a ^. DBAddressAddress `in_` valList stored
-    return a
-  return $ entityVal <$> rows
+  fmap concat . forM (chunksOf (fromIntegral (max 1 batch)) stored) $ \some -> do
+    rows <- select . from $ \a -> do
+      where_ $
+        a ^. DBAddressAccount ==. val accId
+          &&. a ^. DBAddressAddress `in_` valList some
+      return a
+    return $ entityVal <$> rows
 
 -- | The receiving addresses of the account that have a label, in the order
--- of the chain: what exportacc writes
+-- of the chain: what exportwallet writes
 labelledAddresses :: (MonadUnliftIO m) => DBAccountId -> DB m [DBAddress]
 labelledAddresses accId = do
   rows <- select . from $ \a -> do
@@ -444,12 +504,16 @@ labelledAddresses accId = do
     return a
   return $ entityVal <$> rows
 
--- | Those of the addresses that have transactions on the chain
-usedAddresses :: (MonadUnliftIO m) => [Text] -> DB m [Text]
-usedAddresses addrs = do
+-- | Those of the addresses, among the addresses of the accounts, that
+-- have transactions on the chain. The accounts are those of one network:
+-- the same address on another network is another row, with a history of
+-- its own.
+usedAddresses :: (MonadUnliftIO m) => [DBAccountId] -> [Text] -> DB m [Text]
+usedAddresses accIds addrs = do
   rows <- select . from $ \a -> do
     where_ $
-      a ^. DBAddressAddress `in_` valList addrs
+      a ^. DBAddressAccount `in_` valList accIds
+        &&. a ^. DBAddressAddress `in_` valList addrs
         &&. a ^. DBAddressBalanceTxs >. val 0
     return $ a ^. DBAddressAddress
   return $ unValue <$> rows
@@ -485,7 +549,7 @@ addressesAfter accId addrType afterM countM = do
 listedAddress :: (MonadUnliftIO m) => Network -> DBAccountId -> AddrType -> Text -> ExceptT String (DB m) DBAddress
 listedAddress net accId addrType text = do
   _ <- liftEither $ textToAddrE net text
-  rowM <- lift $ P.getBy (UniqueAddress text)
+  rowM <- lift $ P.getBy (UniqueAddress accId text)
   case rowM of
     Just (Entity _ row)
       | dBAddressAccount row == accId && dBAddressInternal row == isInternal addrType -> return row
@@ -520,11 +584,48 @@ addressPath net accId addr = do
     return (a ^. DBAddressInternal, a ^. DBAddressIndex)
   return $ (\(Value internal, Value index) -> chainPath internal index) <$> rowM
 
--- | The addresses that belong to the account, with their derivation paths
-walletPaths :: (MonadUnliftIO m) => Network -> DBAccountId -> [Address] -> ExceptT String (DB m) (Map Address SoftPath)
-walletPaths net accId addrs = Map.fromList . catMaybes <$> mapM pathOf (nub addrs)
+{- The addresses of a pool -}
+
+-- | Every address of a pool, with its path in the pool and its balance:
+-- the addresses of each account of the portfolio on the network, of
+-- either kind. A summary of a transaction is made against all of them, so
+-- that it tells what the transaction means to the portfolio.
+poolAddressesMap :: (MonadUnliftIO m) => Pool -> ExceptT String (DB m) (Map Address PoolPath, Map Address AddressBalance)
+poolAddressesMap pool = do
+  accounts <- lift $ poolAccounts pool
+  maps <- forM accounts $ \(accId, acc) -> do
+    (paths, balances) <- allAddressesMap pool.poolNetwork accId
+    return (Map.map (PoolPath (accountKind acc)) paths, balances)
+  return (Map.unions (fst <$> maps), Map.unions (snd <$> maps))
+
+-- | The path in the pool of an address of one of its accounts, with that
+-- account, or Nothing for an address that is not the pool's
+poolAddressPath :: (MonadUnliftIO m) => Pool -> Address -> ExceptT String (DB m) (Maybe (DBAccountId, PoolPath))
+poolAddressPath pool addr = do
+  accounts <- lift $ poolAccounts pool
+  found <- forM accounts $ \(accId, acc) ->
+    fmap (\path -> (accId, PoolPath (accountKind acc) path)) <$> addressPath pool.poolNetwork accId addr
+  return (listToMaybe (catMaybes found))
+
+-- | The addresses that belong to the pool, with their paths in it
+poolPaths :: (MonadUnliftIO m) => Pool -> [Address] -> ExceptT String (DB m) (Map Address PoolPath)
+poolPaths pool addrs = Map.fromList . catMaybes <$> mapM pathOf (nub addrs)
   where
-    pathOf addr = fmap (\path -> (addr, path)) <$> addressPath net accId addr
+    pathOf addr = fmap (\(_, path) -> (addr, path)) <$> poolAddressPath pool addr
+
+-- | The row of an address of the pool, if one of its accounts has it
+poolAddressRow :: (MonadUnliftIO m) => Pool -> Address -> DB m (Maybe DBAddress)
+poolAddressRow pool addr =
+  case addrToText pool.poolNetwork addr of
+    Nothing -> return Nothing
+    Just addrT -> do
+      accounts <- poolAccounts pool
+      rows <- forM accounts $ \(accId, _) -> P.getBy (UniqueAddress accId addrT)
+      return (entityVal <$> listToMaybe (catMaybes rows))
+
+-- | Whether an address is one of the pool
+inPool :: (MonadUnliftIO m) => Pool -> Address -> DB m Bool
+inPool pool addr = isJust <$> poolAddressRow pool addr
 
 {- Derivation paths -}
 
