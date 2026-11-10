@@ -11,6 +11,7 @@ import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Monad (forM_, replicateM_)
 import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Class (lift)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.IORef (modifyIORef)
@@ -18,7 +19,7 @@ import Data.List (sort)
 import qualified Data.Text as Text
 import Haskoin
 import Haskoin.Wallet.Database (databaseInUse, runDBWith)
-import Haskoin.Wallet.Database.Account (renameAccount)
+import Haskoin.Wallet.Database.Account (getAccountsNamed, renameAccount)
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (MnemonicPass (..))
 import Haskoin.Wallet.Migration (databaseVersion)
@@ -326,7 +327,7 @@ commandLineSpec ctx = do
     it "offers a name with accents as it is" $
       withHome $ \home -> do
         createMain home
-        _ <- inDatabaseFile (home </> ".hw" </> "accounts.sqlite") (runExceptT (renameAccount "main" "épargne"))
+        _ <- inDatabaseFile (home </> ".hw" </> "accounts.sqlite") (runExceptT (lift (getAccountsNamed "main") >>= mapM (\(accId, acc) -> renameAccount accId acc "épargne")))
         run <- hw home (tabAfter ["txs", "--account", ""]) []
         runOut run `shouldBe` "épargne\n"
 

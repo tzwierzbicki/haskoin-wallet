@@ -41,7 +41,7 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin (Network (..), Tx, TxHash, txHash, txHashToHex)
-import Haskoin.Wallet.Database.Account (accountNetwork, getAccountByName, getAccountNames, getAccounts)
+import Haskoin.Wallet.Database.Account (accountNetwork, getAccountNames, getAccounts, getAccountsNamed)
 import Haskoin.Wallet.Database.Address (AddrType (..), addressesStarting)
 import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..), coinAddressesStarting, coinText, coinsStarting, spendableAtAddresses, spendingOf, toJsonCoin)
 import Haskoin.Wallet.Config (configAsItIs, databaseFileIn)
@@ -111,11 +111,11 @@ accountNamed = go . takeWhile (/= "--")
       | otherwise = go rest
     go [] = Nothing
 
--- | The account of the name, or every account without one. A name no
--- account has gives none.
+-- | The accounts of the name, on every network, or every account without
+-- one. A name no account has gives none.
 accountsNamed :: Maybe Text -> DB IO [(DBAccountId, DBAccount)]
 accountsNamed Nothing = getAccounts
-accountsNamed (Just name) = either (const []) pure <$> runExceptT (getAccountByName name)
+accountsNamed (Just name) = getAccountsNamed name
 
 {- The pending transactions -}
 

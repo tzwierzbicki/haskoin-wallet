@@ -55,15 +55,22 @@ Accounts and backups:
   accounts, their labels and their locked coins. `show FILE` shows what
   `importacc` would make of such a file, and changes nothing.
 - Default accounts. In a wallet of several accounts, a command that acts on one
-  account takes the account named `default-btc` on Bitcoin, `default-bch` on
-  Bitcoin Cash, and so on, without `--account`. Without a default account, it
-  takes the only account on the network. `--network` names the network, and
-  without it the `default-network` of the configuration, or `btc`. `receive`,
-  `show`, `addresses`, `balances`, `coins`, `txs`, `preparetx`,
-  `preparesendall` and `checkmnemonic` take `--network` for it. Only an
-  account of a network can take the name of its default account. `recover`
-  gives it to the first account it finds on a network where the wallet has no
-  account yet. A wallet of one account still needs no `--account`.
+  account takes the account named `default` on its network without
+  `--account`. Without a default account, it takes the only account on the
+  network. `--network` names the network, and without it the
+  `default-network` of the configuration, or `btc`. `receive`, `show`,
+  `addresses`, `balances`, `coins`, `txs`, `preparetx`, `preparesendall` and
+  `checkmnemonic` take `--network` for it. `recover` names `default` the
+  first account it finds on a network where the wallet has no account yet. A
+  wallet of one account still needs no `--account`.
+- A name is unique on its network, not in the whole wallet: accounts of
+  several networks can share one, such as `default`. A command that acts on
+  one account takes the account of the name on `--network`, or on the
+  default network. `accounts`, `sync`, `pendingtxs`, `exportacc` and
+  `exportsheet` take every account of the name, and their new `--network`
+  narrows them down to one network. `renameacc --network` tells which account
+  to rename when the name is on several networks. The next steps a command
+  suggests give the `--network` of such an account.
 
 Addresses:
 

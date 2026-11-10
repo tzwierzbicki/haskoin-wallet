@@ -516,7 +516,7 @@ listingSpec ctx =
         (first, second) <- twoPending ctx cfg accId
         ((pendingFlags <$>) <$> pendingTxsAfter ctx accId Nothing Nothing)
           `dbShouldBeE` [Just ((second, False, False, False)), Just ((first, False, False, False))]
-        cursor <- pendingCursor (Just accId) second
+        cursor <- pendingCursor (Just [accId]) second
         ((pendingFlags <$>) <$> pendingTxsAfter ctx accId (Just cursor) (Just 1))
           `dbShouldBeE` [Just ((first, False, False, False))]
 
@@ -525,9 +525,9 @@ listingSpec ctx =
         (accId, _) <- testNewAcc ctx "test"
         otherId <- otherAccount ctx cfg
         (first, _) <- twoPending ctx cfg accId
-        cursor <- pendingCursor (Just accId) first
+        cursor <- pendingCursor (Just [accId]) first
         pendingCursor Nothing first `dbShouldBeE` cursor
-        lift $ dbShouldFailWith "The pending transaction is not in the account" $ pendingCursor (Just otherId) first
+        lift $ dbShouldFailWith "The pending transaction is not in the account" $ pendingCursor (Just [otherId]) first
         lift $ dbShouldFailWith "The pending transaction does not exist" $ pendingCursor Nothing (fakeTxHash 9)
 
     -- The listing is ordered by the nosigHash, whichever hash names the
@@ -539,7 +539,7 @@ listingSpec ctx =
         (signed, _) <- liftEither $ signWalletTx btc ctx Bip44 unsigned testAccountKey
         let key = nosigHash unsigned.txSignDataTx
         lift $ P.insert_ $ DBPendingTx accId (hashBytes key) (blob signed) False False fixtureTime
-        pendingCursor (Just accId) (txHash signed.txSignDataTx) `dbShouldBeE` (fixtureTime, key)
+        pendingCursor (Just [accId]) (txHash signed.txSignDataTx) `dbShouldBeE` (fixtureTime, key)
     it "lists nothing for an account without any" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx "test"
@@ -556,7 +556,7 @@ listingSpec ctx =
         swept <- importPendingTx btc ctx otherId (sweepOfSecondFunding ctx)
         (map (\(acc, info) -> (dBAccountName acc, pendingFlags info)) <$> pendingAfter ctx Nothing Nothing Nothing)
           `dbShouldBeE` [("other", Just (swept, False, False, False)), ("test", Just (paid, False, False, False))]
-        (map (\(acc, info) -> (dBAccountName acc, pendingFlags info)) <$> pendingAfter ctx (Just otherId) Nothing Nothing)
+        (map (\(acc, info) -> (dBAccountName acc, pendingFlags info)) <$> pendingAfter ctx (Just [otherId]) Nothing Nothing)
           `dbShouldBeE` [("other", Just (swept, False, False, False))]
 
     it "gives each the time it was created" $

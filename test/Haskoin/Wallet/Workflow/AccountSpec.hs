@@ -51,69 +51,144 @@ spec = prepareContext $ \ctx -> do
 {- The default account of a network -}
 
 -- In a wallet of several accounts, a command that acts on one account
--- takes the one named default-btc on btc, default-bch on bch. main is
--- account 0 of the test seed on btc, and a second account on btc is
--- account 1, whose first receiving address is
--- 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo. The first account of the seed on
--- bch is account 0, whose first receiving address is
--- bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u. The
+-- takes the one named default on its network. main is account 0 of the
+-- test seed on btc, and a second account on btc is account 1, whose first
+-- receiving address is 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo. The first
+-- account of the seed on bch is account 0, whose first receiving address
+-- is bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u. The
 -- configuration file of the test home names btc.
 defaultAccountSpec :: Spec
 defaultAccountSpec = do
   describe "The default account of a network" $ do
-      it "is the account receive gives an address of, in a wallet of several accounts" $
-        withHome $ \home -> do
-          createMain home
-          _ <- answer home ["createacc", "default-btc"] seedTwice
-          (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [("17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "")]
+    it "is the account receive gives an address of, in a wallet of several accounts" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "default"] seedTwice
+        (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [("17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "")]
 
-      it "is that of the --network given, which checkmnemonic --network bch checks" $
-        withHome $ \home -> do
-          createMain home
-          _ <- answer home ["createacc", "default-bch", "--network", "bch"] seedTwice
-          checked <- hwJson home ["checkmnemonic", "--network", "bch"] seedOnce
-          checked `shouldSatisfy` \case ResponseAccResult acc True _ -> dBAccountName acc == "default-bch"; _ -> False
+    it "is that of the --network given, which checkmnemonic --network bch checks" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "default", "--network", "bch"] seedTwice
+        checked <- hwJson home ["checkmnemonic", "--network", "bch"] seedOnce
+        checked `shouldSatisfy` \case ResponseAccResult acc True _ -> dBAccountNetwork acc == "bch"; _ -> False
 
-      it "is that of the default-network of the configuration file without --network" $
-        withHome $ \home -> do
-          createMain home
-          _ <- answer home ["createacc", "default-bch", "--network", "bch"] seedTwice
-          setDefaultNetwork home (Just "bch")
-          (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [("bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u", "")]
+    it "is that of the default-network of the configuration file without --network" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "default", "--network", "bch"] seedTwice
+        setDefaultNetwork home (Just "bch")
+        (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [("bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u", "")]
 
-      it "is that of btc when the configuration file names no default network" $
-        withHome $ \home -> do
-          createMain home
-          _ <- answer home ["createacc", "default-btc"] seedTwice
-          setDefaultNetwork home Nothing
-          (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [("17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "")]
+    it "is that of btc when the configuration file names no default network" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "default"] seedTwice
+        setDefaultNetwork home Nothing
+        (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [("17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "")]
 
-      it "is made by renameacc, which gives an account its name" $
-        withHome $ \home -> do
-          createMain home
-          _ <- answer home ["createacc", "second"] seedTwice
-          _ <- answer home ["renameacc", "second", "default-btc"] []
-          (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [("17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "")]
+    it "is made by renameacc, which gives an account its name" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "second"] seedTwice
+        _ <- answer home ["renameacc", "second", "default"] []
+        (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [("17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "")]
 
-      it "is missing from a network of several accounts none of which has its name, and the user is asked for --account" $
-        withHome $ \home -> do
-          createMain home
-          _ <- answer home ["createacc", "second"] seedTwice
-          (errorOf <$> hwJson home ["receive"] [])
-            `shouldReturn` Right "Specify which account to use with --account: the wallet has several accounts on btc, and none is default-btc, the default account of btc"
+    it "is missing from a network of several accounts none of which has its name, and the user is asked for --account" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "second"] seedTwice
+        (errorOf <$> hwJson home ["receive"] [])
+          `shouldReturn` Right "Specify which account to use with --account: the wallet has several accounts on btc, and none is named default"
 
-      it "cannot be of another network: createacc refuses default-btc on bch, before the mnemonic is asked" $
-        withHome $ \home -> do
-          run <- hw home ["createacc", "default-btc", "--network", "bch"] seedTwice
-          runExit run `shouldBe` ExitFailure 1
-          run `shouldSatisfy` printed "Only an account of btc can be named default-btc, the default account of btc"
-          run `shouldNotSatisfy` askedMnemonic
+    -- The default account of bch is account 0 of the seed on bch
+    it "can be named on each network: the default account of btc leaves receive --network bch to that of bch" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "default"] seedTwice
+        _ <- answer home ["createacc", "default", "--network", "bch"] seedTwice
+        _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
+        (addressesOf <$> hwJson home ["receive", "--network", "bch"] []) `shouldReturn` Right [("bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u", "")]
 
-      it "is not what --account and --network name together: the account must be on the network" $
-        withHome $ \home -> do
-          createMain home
-          (errorOf <$> hwJson home ["receive", "--account", "main", "--network", "bch"] [])
-            `shouldReturn` Right "The account main is on btc, not on the --network bch"
+    it "is not what --account and --network name together: the account must be on the network" $
+      withHome $ \home -> do
+        createMain home
+        (errorOf <$> hwJson home ["receive", "--account", "main", "--network", "bch"] [])
+          `shouldReturn` Right "The account main is on btc, not on the --network bch"
+
+  -- An account named main on btc, account 0 of the test seed there, whose
+  -- first receiving address is 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj, and one
+  -- named main on bch, account 0 of the seed there, whose first receiving
+  -- address is bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u. The
+  -- configuration file of the test home names btc.
+  describe "A name on several networks" $ do
+    it "is taken by createacc for an account of a network where no account has it" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "main", "--network", "bch"] seedTwice
+        run <- hw home ["accounts"] []
+        run `shouldSatisfy` printed "main  btc  /44'/0'/0'"
+        run `shouldSatisfy` printed "main  bch  /44'/145'/0'"
+
+    it "is refused by createacc on a network where an account has it, before the mnemonic is asked" $
+      withHome $ \home -> do
+        createMain home
+        run <- hw home ["createacc", "main"] seedTwice
+        run `shouldSatisfy` printed "The account main already exists on btc"
+        run `shouldNotSatisfy` askedMnemonic
+
+    it "is the account on the --network for a command that acts on one account" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "main", "--network", "bch"] seedTwice
+        (addressesOf <$> hwJson home ["receive", "--account", "main", "--network", "bch"] []) `shouldReturn` Right [("bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u", "")]
+
+    it "is the account on the default network without --network, for a command that acts on one account" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "main", "--network", "bch"] seedTwice
+        (addressesOf <$> hwJson home ["receive", "--account", "main"] []) `shouldReturn` Right [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "")]
+
+    -- cash is on bch alone
+    it "on one network alone is the account of that network, whatever the default network" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
+        (addressesOf <$> hwJson home ["receive", "--account", "cash"] []) `shouldReturn` Right [("bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u", "")]
+
+    it "is every account of the name for accounts --account" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "main", "--network", "bch"] seedTwice
+        _ <- answer home ["createacc", "second"] seedTwice
+        run <- hw home ["accounts", "--account", "main"] []
+        run `shouldSatisfy` printed "main  btc  /44'/0'/0'"
+        run `shouldSatisfy` printed "main  bch  /44'/145'/0'"
+        run `shouldNotSatisfy` printed "second"
+
+    it "is narrowed down to the account of the --network by accounts --network" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "main", "--network", "bch"] seedTwice
+        run <- hw home ["accounts", "--account", "main", "--network", "bch"] []
+        run `shouldSatisfy` printed "main  bch  /44'/145'/0'"
+        run `shouldNotSatisfy` printed "main  btc"
+
+    it "needs the --network for renameacc, which asks for it" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "main", "--network", "bch"] seedTwice
+        (errorOf <$> hwJson home ["renameacc", "main", "cash"] [])
+          `shouldReturn` Right "Specify which account to rename with --network: the accounts named main are on bch and btc"
+
+    it "is renamed on the --network by renameacc, and the account of the other network keeps it" $
+      withHome $ \home -> do
+        createMain home
+        _ <- answer home ["createacc", "main", "--network", "bch"] seedTwice
+        _ <- answer home ["renameacc", "main", "cash", "--network", "bch"] []
+        run <- hw home ["accounts"] []
+        run `shouldSatisfy` printed "cash  bch  /44'/145'/0'"
+        run `shouldSatisfy` printed "main  btc  /44'/0'/0'"
 
   -- Without a default account, a network of one account needs no
   -- --account either. main is account 0 of the test seed on btc, whose
@@ -199,7 +274,7 @@ accountSpec =
         createMain home
         run <- hw home ["createacc", "main"] seedTwice
         runExit run `shouldBe` ExitFailure 1
-        run `shouldSatisfy` printed "The account main already exists"
+        run `shouldSatisfy` printed "The account main already exists on btc"
         run `shouldNotSatisfy` askedMnemonic
 
     -- The configuration file of the test home names btc
@@ -469,9 +544,9 @@ segwitSpec ctx =
     -- of the bip84 account 0 of the seed
     it "is recovered by recover beside the bip44 account of the seed, named btc0-segwit" $
       withChain ctx (Chain 800002 [(payment ctx, Just 800000), (fundingTx ctx 3 [(segwitExternalAddr 0, 30000)], Just 800000)]) $ \home _ -> do
-        (accountsOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right [("default-btc", 0, 50000), ("btc0-segwit", 0, 30000)]
+        (accountsOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right [("default", 0, 50000), ("btc0-segwit", 0, 30000)]
         run <- hw home ["accounts"] []
-        run `shouldSatisfy` printed "default-btc  btc  /44'/0'/0'"
+        run `shouldSatisfy` printed "default  btc  /44'/0'/0'"
         run `shouldSatisfy` printed "btc0-segwit  btc  /84'/0'/0'"
 
 -- | The signature of the message "hello" by the address /0/0 of the bip84
@@ -845,7 +920,7 @@ sharesSpec ctx =
     it "is found by recover from its shares, when it was paid" $
       withChain ctx (chainPaying ctx sharesTestnetAddr) $ \home _ ->
         (accountsOf <$> hwJson home ["recover", "--network", "btctest"] sharesOnce)
-          `shouldReturn` Right [("default-btctest", 0, 50000)]
+          `shouldReturn` Right [("default", 0, 50000)]
 
 {- Signed messages -}
 
@@ -1107,15 +1182,15 @@ recoverSpec ctx =
     -- named as its default account
     it "are those paid, added and synced" $
       withChain ctx (paidChain ctx) $ \home _ -> do
-        (accountsOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right [("default-btc", 0, 50000)]
-        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("default-btc", 0, 50000)]
+        (accountsOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right [("default", 0, 50000)]
+        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("default", 0, 50000)]
 
     -- The chain pays the first receiving address of the accounts 0 and 1
     -- of the seed on btc
-    it "are named default-btc for the first one found, and after their network and index for the others" $ do
+    it "are named default for the first one found, and after their network and index for the others" $ do
       firstAddrs <- firstAddrsOfAccounts ctx 2
       withChain ctx (Chain 800002 [(fundingTx ctx 1 [(addr, 50000) | addr <- firstAddrs], Just 800000)]) $ \home _ ->
-        (accountsOf <$> hwJson home ["recover", "--network", "btc"] seedOnce) `shouldReturn` Right [("default-btc", 0, 50000), ("btc1", 1, 50000)]
+        (accountsOf <$> hwJson home ["recover", "--network", "btc"] seedOnce) `shouldReturn` Right [("default", 0, 50000), ("btc1", 1, 50000)]
 
     -- main is account 0 of the seed, which recover passes over. The chain
     -- pays account 1 only.
@@ -1124,37 +1199,37 @@ recoverSpec ctx =
         createMain home
         (accountsOf <$> hwJson home ["recover", "--network", "btc", "--account-gap", "2"] seedOnce) `shouldReturn` Right [("btc1", 1, 50000)]
 
-    -- The first receiving address of default-bch, account 0 of the seed on
+    -- The first receiving address of default on bch, account 0 of the seed on
     -- bch, is paid, so receive would give out the next one
     it "leave a default account on each network, which checkmnemonic --network bch checks without --account" $
       withChain ctx (bothNetworksChain ctx) $ \home _ -> do
         _ <- answer home ["recover"] seedOnce
         checked <- hwJson home ["checkmnemonic", "--network", "bch"] seedOnce
-        checked `shouldSatisfy` \case ResponseAccResult acc True _ -> dBAccountName acc == "default-bch"; _ -> False
+        checked `shouldSatisfy` \case ResponseAccResult acc True _ -> (dBAccountName acc, dBAccountNetwork acc) == ("default", "bch"); _ -> False
 
     -- The chain pays account 1 only. Account 0 is one without a payment.
     it "are looked for until --account-gap accounts in a row without a payment" $
       withChain ctx (chainPaying ctx account1Addr) $ \home _ -> do
         (accountsOf <$> hwJson home ["recover", "--account-gap", "1"] seedOnce) `shouldReturn` Right []
-        (accountsOf <$> hwJson home ["recover", "--account-gap", "2"] seedOnce) `shouldReturn` Right [("default-btc", 1, 50000)]
+        (accountsOf <$> hwJson home ["recover", "--account-gap", "2"] seedOnce) `shouldReturn` Right [("default", 1, 50000)]
 
     -- The configuration file of the test home names btc. The chain pays the
     -- first receiving address of account 0 of the seed on Bitcoin Cash.
     it "are looked for on the --network given" $
       withChain ctx (chainPaying ctx bchExternalAddr) $ \home _ ->
-        (accountsOf <$> hwJson home ["recover", "--network", "bch"] seedOnce) `shouldReturn` Right [("default-bch", 0, 50000)]
+        (accountsOf <$> hwJson home ["recover", "--network", "bch"] seedOnce) `shouldReturn` Right [("default", 0, 50000)]
 
     -- The configuration file of the test home names btc. The chain pays the
     -- first receiving address of account 0 of the seed on Bitcoin, and the
     -- one on Bitcoin Cash, at m/44'/145'/0'.
     it "are looked for on Bitcoin, then on Bitcoin Cash, without --network, whatever the default network" $
       withChain ctx (bothNetworksChain ctx) $ \home _ ->
-        (accountsOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right [("default-btc", 0, 50000), ("default-bch", 0, 20000)]
+        (accountsOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right [("default", 0, 50000), ("default", 0, 20000)]
 
     it "are looked for on Bitcoin and Bitcoin Cash when the configuration file names no default network" $
       withChain ctx (bothNetworksChain ctx) $ \home _ -> do
         setDefaultNetwork home Nothing
-        (accountsOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right [("default-btc", 0, 50000), ("default-bch", 0, 20000)]
+        (accountsOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right [("default", 0, 50000), ("default", 0, 20000)]
 
     -- The chain pays the first receiving address of the bip44 account 0 of
     -- the test backup in shares on testnet, m/44'/1'/0'/0/0, which recover
@@ -1168,7 +1243,7 @@ recoverSpec ctx =
     it "are added on the network whose store is up when the other one is down" $
       withChainDownOn ctx [bch] (bothNetworksChain ctx) $ \home _ -> do
         _ <- hwJson home ["recover"] seedOnce
-        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("default-btc", 0, 50000)]
+        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("default", 0, 50000)]
 
     it "name last the network whose store is down, which was not searched" $
       withChainDownOn ctx [bch] (bothNetworksChain ctx) $ \home _ -> do
@@ -1198,16 +1273,16 @@ recoverSpec ctx =
     it "come with the funds at the bip49 and bip86 paths of the seed, which hw cannot spend and adds no account for" $
       withChain ctx (paidElsewhereChain ctx) $ \home _ -> do
         found <- hwJson home ["recover", "--network", "btc"] seedOnce
-        accountsOf found `shouldBe` Right [("default-btc", 0, 50000)]
+        accountsOf found `shouldBe` Right [("default", 0, 50000)]
         unspendableOf found `shouldBe` Right [("btc", "bip49", "/49'/0'/0'", 1, 30000), ("btc", "bip86", "/86'/0'/0'", 1, 7000)]
-        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("default-btc", 0, 50000)]
+        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("default", 0, 50000)]
 
     -- The coins of account 0 at m/44'/0'/0' are on both chains, as those of
     -- a seed from before the fork of Bitcoin Cash are
     it "are shown before those funds, each of which with its network, its path, its kind, its used addresses and what is left, then what to do" $
       withChain ctx (paidElsewhereChain ctx) $ \home _ -> do
         run <- hw home ["recover"] seedOnce
-        run `shouldSatisfy` printed "default-btc  btc  /44'/0'/0'\n"
+        run `shouldSatisfy` printed "default  btc  /44'/0'/0'\n"
         run `shouldSatisfy` printed "\n\nThe seed was paid at paths hw cannot spend from:\n  btc  /49'/0'/0'  bip49, wrapped SegWit: 1 address used, 0.00030000 btc left\n  btc  /86'/0'/0'  bip86, Taproot: 1 address used, 0.00007000 btc left\n  bch  /44'/0'/0'  bip44 with the coin type of Bitcoin: 1 address used, 0.00050000 btc left\n  A wallet that holds such accounts can move the funds to an address of this wallet.\n"
 
     it "are said to be none on either network when none was paid, before the funds at the paths hw cannot spend from" $
@@ -1237,14 +1312,14 @@ recoverSpec ctx =
       withChain ctx (chainPaying ctx cafeTypedAddr) $ \home _ -> do
         run <- hw home ["recover"] cafeOnce
         runErr run `shouldSatisfy` Text.isInfixOf "The accounts found come from the passphrase as typed"
-        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("default-btc", 0, 50000)]
-        (fingerprintsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("default-btc", Just cafeTypedFingerprint)]
+        (accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("default", 0, 50000)]
+        (fingerprintsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("default", Just cafeTypedFingerprint)]
 
     it "are those of the normalized passphrase, as BIP39 derives them, without a word about the other" $
       withChain ctx (chainPaying ctx cafeNormalizedAddr) $ \home _ -> do
         run <- hw home ["recover"] cafeOnce
         runErr run `shouldNotSatisfy` Text.isInfixOf "as typed"
-        (fingerprintsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("default-btc", Just cafeNormalizedFingerprint)]
+        (fingerprintsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("default", Just cafeNormalizedFingerprint)]
 
     -- The chain pays 50000 to the first receiving address of each of the
     -- accounts 0 to 20 of the seed: 21 accounts, one more than recover
@@ -1266,7 +1341,7 @@ recoverSpec ctx =
         found <- hwJson home ["recover", "--network", "btc"] (seedOnce <> ["y"])
         (map (\(name, _, _) -> name) <$> accountsOf found)
           `shouldBe` Right
-            [ "default-btc", "btc1", "btc2", "btc3", "btc4", "btc5", "btc6",
+            [ "default", "btc1", "btc2", "btc3", "btc4", "btc5", "btc6",
               "btc7", "btc8", "btc9", "btc10", "btc11", "btc12", "btc13",
               "btc14", "btc15", "btc16", "btc17", "btc18", "btc19", "btc20"
             ]
@@ -1319,15 +1394,15 @@ passphraseSpec ctx =
         runErr run `shouldNotSatisfy` Text.isInfixOf "as typed"
         (fingerprintsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("main", Just cafeNormalizedFingerprint)]
 
-    -- default-btc was recovered from the passphrase as typed
+    -- default was recovered from the passphrase as typed
     it "is of the seed of the passphrase as typed when the wallet has an account of it and none of the other, which createacc says" $
       withChain ctx (chainPaying ctx cafeTypedAddr) $ \home _ -> do
         _ <- answer home ["recover"] cafeOnce
         run <- hw home ["createacc", "second"] cafeTwice
         runErr run `shouldSatisfy` Text.isInfixOf "to keep them together"
-        (fmap sort . accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("default-btc", 0, 50000), ("second", 1, 0)]
+        (fmap sort . accountsOf <$> hwJson home ["accounts"] []) `shouldReturn` Right [("default", 0, 50000), ("second", 1, 0)]
         (fmap sort . fingerprintsOf <$> hwJson home ["accounts"] [])
-          `shouldReturn` Right [("default-btc", Just cafeTypedFingerprint), ("second", Just cafeTypedFingerprint)]
+          `shouldReturn` Right [("default", Just cafeTypedFingerprint), ("second", Just cafeTypedFingerprint)]
 
     -- main is of the seed of BIP39, btc0 of the passphrase as typed
     it "is of the seed BIP39 derives when the wallet has accounts of both seeds" $

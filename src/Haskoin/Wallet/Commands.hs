@@ -11,6 +11,7 @@
 module Haskoin.Wallet.Commands
   ( commandResponse,
     commandListing,
+    namesOnSeveralNetworks,
 
     -- * Listings
     cmdCsv,
@@ -73,6 +74,7 @@ module Haskoin.Wallet.Commands
 where
 
 import Control.Applicative ((<|>))
+import Control.Exception (try)
 import Control.Monad (forM, join, unless, void, when, (<=<))
 import Control.Monad.Except (ExceptT, runExceptT, throwError, withExceptT)
 import Control.Monad.IO.Class (liftIO)
@@ -98,6 +100,7 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
 import Data.Word (Word64)
 import Database.Persist.Sqlite (transactionUndo)
+import Database.Sqlite (SqliteException)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Account
@@ -243,6 +246,35 @@ answered = either (ResponseError . cs) id
 -- configuration in a wallet of several accounts ('chooseAccount')
 chosenAccount :: Config -> AccountChoice -> ExceptT String (DB IO) (DBAccountId, DBAccount)
 chosenAccount cfg = chooseAccount (defaultAccountNetwork cfg)
+
+-- | The accounts of a command that acts on every account, as the user
+-- chose them ('chooseAccounts'), which must be some
+chosenAccountsOf :: AccountChoice -> ExceptT String (DB IO) [(DBAccountId, DBAccount)]
+chosenAccountsOf choice = do
+  accs <- chooseAccounts choice
+  when (null accs) $
+    throwError $ case choice.namedNetwork of
+      Just net -> "The wallet has no account on " <> net.name
+      Nothing -> "There are no accounts in the wallet"
+  return accs
+
+-- | Whether the name of an account is on several networks, for the
+-- command lines an answer suggests next: such an account needs --network
+-- beside --account ('Haskoin.Wallet.Cli.PrettyPrinter.nextStepsPrinter').
+-- The names are read once the command is done, without the lock of the
+-- commands, as the shell completion reads them. When they cannot be read,
+-- every account is taken for one, since a step can always carry its
+-- --network.
+namesOnSeveralNetworks :: Config -> IO (DBAccount -> Bool)
+namesOnSeveralNetworks cfg = do
+  file <- databaseFile cfg
+  readNames <- trySqlite (runDBReadOnly file getAccounts)
+  return $ case readNames of
+    Left _ -> const True
+    Right accounts -> \acc -> length [() | (_, other) <- accounts, dBAccountName other == dBAccountName acc] > 1
+  where
+    trySqlite :: IO a -> IO (Either SqliteException a)
+    trySqlite = try
 
 {- Answers -}
 
@@ -450,32 +482,36 @@ cmdImportAcc ctx cfg netM kindM file =
     content <- liftEitherIO $ readTextFile file
     ResponseImport <$> importFile ctx (commandNetwork cfg netM) kindM content
 
--- | Write the account, or every account, to a BIP 329 file with its labels
--- and the coins the user locked
-cmdExportAcc :: Ctx -> Config -> Maybe Text -> FilePath -> IO Response
-cmdExportAcc ctx cfg account file =
+-- | Write the accounts the user chose, or every account, to a BIP 329 file
+-- with their labels and the coins the user locked
+cmdExportAcc :: Ctx -> Config -> AccountChoice -> FilePath -> IO Response
+cmdExportAcc ctx cfg choice file =
   runDBResponse cfg $ do
-    accs <- getAccountsByName account
-    when (null accs) $ throwError "There are no accounts in the wallet"
+    accs <- chosenAccountsOf choice
     checkPathFree file
     records <- concat <$> mapM (accountRecords ctx) accs
     liftEitherIO $ writeTextFile file (recordsText records)
     return $ ResponseFile file
 
+-- | Rename an account: the one of the name on the --network, or the only
+-- account of the name ('accountToRename')
 cmdRenameAcc :: Config -> RenameAcc -> IO Response
 cmdRenameAcc cfg opts =
   runDBResponse cfg $ do
-    _ <- renameAccount opts.old opts.new
-    accountAnswer . fst =<< getAccountByName opts.new
+    (accId, acc) <- accountToRename opts.network opts.old
+    _ <- renameAccount accId acc opts.new
+    accountAnswer accId
 
 -- | Delete an account, given its network and its path too, which must be
 -- those of the account
 cmdDeleteAcc :: Config -> Text -> Network -> HardPath -> IO Response
 cmdDeleteAcc cfg name net path =
   runDBResponse cfg $ do
-    (accId, acc) <- getAccountByName name
-    unless (accountNetwork acc == net) $
-      throwError "The network of the account to delete did not match"
+    named <- lift $ getAccountsNamed name
+    when (null named) $ throwError ("The account " <> cs name <> " does not exist")
+    (accId, acc) <-
+      liftMaybe "The network of the account to delete did not match" $
+        find ((== net) . accountNetwork . snd) named
     unless (path == accountPath acc) $
       throwError "The full derivation path of the account to delete did not match"
     lift $ deleteAccount accId
@@ -504,15 +540,15 @@ cmdCsv cfg file listing = do
 -- hold ('walletSheets'). The six listings are read in one transaction, so
 -- that the tabs agree with each other: the balances with the coins, and
 -- the coins with the transactions.
-cmdExportSheet :: Ctx -> Config -> Maybe Text -> FilePath -> IO Response
-cmdExportSheet ctx cfg account file =
+cmdExportSheet :: Ctx -> Config -> AccountChoice -> FilePath -> IO Response
+cmdExportSheet ctx cfg choice file =
   runDBResponse cfg $ do
     checkPathFree file
-    accs <- getAccountsByName account
-    when (null accs) $ throwError "There are no accounts in the wallet"
-    accounts <- sheetOf (accountsListing account)
-    held <- forM accs $ \(_, acc) -> (acc,) <$> accountSheets (AccountChoice (Just (dBAccountName acc)) Nothing)
-    pending <- sheetOf (pendingTxsListing ctx account everyRow)
+    accs <- chosenAccountsOf choice
+    accounts <- sheetOf (accountsListing choice)
+    -- Each account by its name and network, which name one account
+    held <- forM accs $ \(_, acc) -> (acc,) <$> accountSheets (AccountChoice (Just (dBAccountName acc)) (Just (accountNetwork acc)))
+    pending <- sheetOf (pendingTxsListing ctx choice everyRow)
     now <- liftIO getCurrentTime
     liftEitherIO $ writeFileBytes file (workbookOds now (walletSheets accounts held pending))
     return $ ResponseFile file
@@ -536,24 +572,25 @@ sheetOf listing = do
   -- Every listing has a sheet: an answer without one would be a bug
   maybe (throwError "The listing has no sheet") return (listingSheet answer)
 
-cmdAccounts :: Config -> Maybe Text -> IO Response
-cmdAccounts cfg account = readListing cfg (accountsListing account)
+cmdAccounts :: Config -> AccountChoice -> IO Response
+cmdAccounts cfg choice = readListing cfg (accountsListing choice)
 
--- | The accounts, each with the balance it can spend now, in the order
--- 'getAccounts' gives them: an account names the one to go on after
-accountsListing :: Maybe Text -> ExceptT String (DB IO) Listing
-accountsListing account =
+-- | The accounts the user chose, or every account, each with the balance
+-- it can spend now, in the order 'getAccounts' gives them: an account
+-- names the one to go on after, by its name and network
+accountsListing :: AccountChoice -> ExceptT String (DB IO) Listing
+accountsListing choice =
   return
     Listing
       { listingStart = Nothing,
         listingMax = Nothing,
         listingRows = \afterM countM -> do
-          accs <- getAccountsByName account
+          accs <- chooseAccounts choice
           let following = case afterM of
                 Nothing -> accs
-                Just name -> drop 1 $ dropWhile ((/= name) . dBAccountName . snd) accs
+                Just cursor -> drop 1 $ dropWhile ((/= cursor) . nameAndNetwork . snd) accs
           mapM withSpendable $ maybe id genericTake countM following,
-        listingCursor = Right . dBAccountName . fst,
+        listingCursor = Right . nameAndNetwork . fst,
         listingAnswer = ResponseAccounts,
         -- Every chunk reads every account anyway, and the table of
         -- accounts takes the width of its names from all of them
@@ -759,17 +796,18 @@ shownAccountFile ctx cfg givenM file bytes = do
 -- | A transaction of the wallet, pending or on the chain, as each account
 -- that holds it sees it, or as the account --account names sees it. The
 -- short id is matched among the transactions of every account, as label
--- matches it.
+-- matches it. A name on several networks is the account of the name that
+-- holds the transaction, which is on one network.
 shownTxs :: Ctx -> Maybe Text -> HashRef -> ExceptT String (DB IO) Response
 shownTxs ctx account named = do
-  askedM <- forM account getAccountByName
+  for_ account (accountsNamedOn Nothing)
   hash <- walletTxHashOf named
   views <- transactionViews ctx hash
-  kept <- case askedM of
+  kept <- case account of
     Nothing -> return views
-    Just (askedId, asked) ->
-      case [view | view@(heldId, _, _) <- views, heldId == askedId] of
-        [] -> throwError ("The transaction " <> hashRefText named <> " is not in the account " <> cs (dBAccountName asked))
+    Just name ->
+      case [view | view@(_, acc, _) <- views, dBAccountName acc == name] of
+        [] -> throwError ("The transaction " <> hashRefText named <> " is not in the account " <> cs name)
         mine -> return mine
   return $ ResponseHeldTxs [(acc, info) | (_, acc, info) <- kept]
 
@@ -898,26 +936,31 @@ txsListing cfg account paging = do
         listingWhole = False
       }
 
-cmdPendingTxs :: Ctx -> Config -> Maybe Text -> Paging HashRef -> IO Response
-cmdPendingTxs ctx cfg account paging = readListing cfg (pendingTxsListing ctx account paging)
+cmdPendingTxs :: Ctx -> Config -> AccountChoice -> Paging HashRef -> IO Response
+cmdPendingTxs ctx cfg choice paging = readListing cfg (pendingTxsListing ctx choice paging)
 
--- | The pending transactions of the account, or of every account, newest
--- first. The one to go on after is named by either of its hashes. The
--- listing goes on after the time it was created and its nosigHash.
-pendingTxsListing :: Ctx -> Maybe Text -> Paging HashRef -> ExceptT String (DB IO) Listing
-pendingTxsListing ctx account paging = do
-  asked <- forM account getAccountByName
-  let accIdM = fst <$> asked
-  start <- forM paging.pagingAfter (pendingCursor accIdM <=< pendingHashOf)
+-- | The pending transactions of the accounts the user chose, or of every
+-- account, newest first. The one to go on after is named by either of its
+-- hashes. The listing goes on after the time it was created and its
+-- nosigHash. When the choice gives one account, the answer names it, and
+-- its transactions do not each name it.
+pendingTxsListing :: Ctx -> AccountChoice -> Paging HashRef -> ExceptT String (DB IO) Listing
+pendingTxsListing ctx choice paging = do
+  chosen <- if choice == AccountChoice Nothing Nothing then return Nothing else Just <$> chooseAccounts choice
+  let accIdsM = map fst <$> chosen
+      asked = case chosen of
+        Just [(_, acc)] -> Just acc
+        _ -> Nothing
+  start <- forM paging.pagingAfter (pendingCursor accIdsM <=< pendingHashOf)
   return
     Listing
       { listingStart = start,
         listingMax = paging.pagingMax,
-        listingRows = pendingAfter ctx accIdM,
+        listingRows = pendingAfter ctx accIdsM,
         listingCursor = \(_, info) -> case txInfoStatus info of
           Pending pending | Just created <- pendingCreated pending -> Right (created, pendingNosigHash pending)
           _ -> Left "pendingtxs lists the transactions the wallet holds only",
-        listingAnswer = ResponsePendingTxs (snd <$> asked),
+        listingAnswer = ResponsePendingTxs asked,
         -- A few transactions, read whole: the table of them sizes its
         -- column of accounts to the longest name
         listingWhole = True
@@ -1634,7 +1677,7 @@ cmdPrepareSweep ctx cfg unit opts =
     holders <- accountsHolding (\net -> mapMaybe (recipientAddress net) opts.sweepTo)
     case nonEmpty holders of
       Nothing -> do
-        for_ opts.account $ \name -> getAccountByName name >> throwError (paysNo name)
+        for_ opts.account $ \name -> accountsNamedOn Nothing name >> throwError (paysNo name)
         net <-
           liftMaybe
             "Give the --network of a sweep that pays no account of the wallet: the default-network of the configuration file does not apply to it"
@@ -1729,12 +1772,11 @@ scanQuestion line found = do
 terminalWatcher :: StatusLine -> Watcher (DB IO)
 terminalWatcher line = Watcher {question = scanQuestion line, status = showStep line}
 
-cmdSync :: Ctx -> Config -> Maybe Text -> Bool -> IO Response
-cmdSync ctx cfg account full =
+cmdSync :: Ctx -> Config -> AccountChoice -> Bool -> IO Response
+cmdSync ctx cfg choice full =
   withStatusLine $ \line ->
     runDBResponse cfg $ do
-      accs <- getAccountsByName account
-      when (null accs) $ throwError "There are no accounts in the wallet"
+      accs <- chosenAccountsOf choice
       (results, notSynced) <- syncAccounts ctx cfg (webStore ctx cfg) accs full (terminalWatcher line)
       return $ ResponseSync results [(acc, cs failure) | (acc, failure) <- notSynced]
 

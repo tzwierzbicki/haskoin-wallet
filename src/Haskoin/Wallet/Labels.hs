@@ -502,7 +502,7 @@ importKey ctx netM kindM r = do
       forM_ fingerprintM (learnFingerprint heldId)
       case recordLabel r of
         Just new | new /= dBAccountName held && isJust namedM -> do
-          renamed <- attempt (renameAccount (dBAccountName held) new)
+          renamed <- attempt (renameAccount heldId held new)
           acc <- getAccountById heldId
           return $ case renamed of
             Right _ -> AccountRenamed (dBAccountName held) acc

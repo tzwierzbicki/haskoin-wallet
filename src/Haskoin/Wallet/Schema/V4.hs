@@ -31,7 +31,10 @@
 -- gone as well. An account carries its purpose, the first step of its
 -- path: 44 for a BIP44 account with P2PKH addresses, which every account
 -- was before hw had BIP84 accounts, so the column defaults to it, and 84
--- for a BIP84 account with P2WPKH addresses. A summary says whether its transaction is dead, replaced or
+-- for a BIP84 account with P2WPKH addresses. The name of an account is
+-- unique on its network, not in the whole wallet: each network can have an
+-- account named default, the one its commands take without --account. A
+-- summary says whether its transaction is dead, replaced or
 -- dropped from the network, where version 3 deleted it, and the time the
 -- store gives its transaction: when the store first saw it, in its mempool
 -- or in a block. A summary of version 3 has no time until the next sync
@@ -99,7 +102,7 @@ DBAccount
   balanceUnconfirmed Word64
   balanceCoins Word64
   created UTCTime default=CURRENT_TIMESTAMP
-  UniqueName name
+  UniqueName name network
   UniqueXPubKey xPubKey
   deriving Show
   deriving Eq

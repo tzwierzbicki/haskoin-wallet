@@ -154,15 +154,15 @@ pendingHashesWith short = do
       let tx = txSignDataTx p.pendingTxData
        in nosigHash tx : [txHash tx | isSigned tx]
 
--- | The rows of an account, or of every account, newest first, and those
+-- | The rows of the accounts, or of every account, newest first, and those
 -- created at the same time by their nosigHashes, so that the order is
 -- settled: those after the transaction given, by when it was created and
 -- its nosigHash, or the first ones, up to the count, or all of them
-pendingRows :: (MonadUnliftIO m) => Maybe DBAccountId -> Maybe (UTCTime, TxHash) -> Maybe Natural -> DB m [Entity DBPendingTx]
-pendingRows accIdM afterM countM =
+pendingRows :: (MonadUnliftIO m) => Maybe [DBAccountId] -> Maybe (UTCTime, TxHash) -> Maybe Natural -> DB m [Entity DBPendingTx]
+pendingRows accIdsM afterM countM =
   select . from $ \p -> do
-    forM_ accIdM $ \accId ->
-      where_ $ p ^. DBPendingTxAccount ==. val accId
+    forM_ accIdsM $ \accIds ->
+      where_ $ p ^. DBPendingTxAccount `in_` valList accIds
     forM_ afterM $ \(created, nosigH) ->
       where_ $
         p ^. DBPendingTxCreated <=. val created
@@ -173,33 +173,34 @@ pendingRows accIdM afterM countM =
 
 -- | The pending transactions of an account, newest first
 pendingTxs :: (MonadUnliftIO m) => DBAccountId -> ExceptT String (DB m) [PendingTx]
-pendingTxs accId = liftEither . mapM fromRow =<< lift (pendingRows (Just accId) Nothing Nothing)
+pendingTxs accId = liftEither . mapM fromRow =<< lift (pendingRows (Just [accId]) Nothing Nothing)
 
 -- | The pending transactions of an account as summaries, newest first:
 -- those after the transaction given, or the first ones, up to the count,
 -- or all of them
 pendingTxsAfter :: (MonadUnliftIO m) => Ctx -> DBAccountId -> Maybe (UTCTime, TxHash) -> Maybe Natural -> ExceptT String (DB m) [TxInfo]
-pendingTxsAfter ctx accId afterM countM = map snd <$> pendingAfter ctx (Just accId) afterM countM
+pendingTxsAfter ctx accId afterM countM = map snd <$> pendingAfter ctx (Just [accId]) afterM countM
 
--- | The pending transactions of an account, or of every account, newest
+-- | The pending transactions of the accounts, or of every account, newest
 -- first, each as a summary with its account: those after the transaction
 -- given, or the first ones, up to the count, or all of them
-pendingAfter :: (MonadUnliftIO m) => Ctx -> Maybe DBAccountId -> Maybe (UTCTime, TxHash) -> Maybe Natural -> ExceptT String (DB m) [(DBAccount, TxInfo)]
-pendingAfter ctx accIdM afterM countM = do
-  held <- liftEither . mapM fromRow =<< lift (pendingRows accIdM afterM countM)
+pendingAfter :: (MonadUnliftIO m) => Ctx -> Maybe [DBAccountId] -> Maybe (UTCTime, TxHash) -> Maybe Natural -> ExceptT String (DB m) [(DBAccount, TxInfo)]
+pendingAfter ctx accIdsM afterM countM = do
+  held <- liftEither . mapM fromRow =<< lift (pendingRows accIdsM afterM countM)
   forM held $ \p -> do
     acc <- getAccountById p.pendingTxAccount
     (acc,) <$> pendingSummary ctx acc p
 
 -- | Where the listing goes on after the pending transaction --after names,
 -- by either of its hashes: when it was created, and its nosigHash, which
--- orders the transactions created at the same time. Or why the account, or
--- any account, does not hold it.
-pendingCursor :: (MonadUnliftIO m) => Maybe DBAccountId -> TxHash -> ExceptT String (DB m) (UTCTime, TxHash)
-pendingCursor accIdM named = do
+-- orders the transactions created at the same time. Or why the accounts,
+-- or any account, do not hold it.
+pendingCursor :: (MonadUnliftIO m) => Maybe [DBAccountId] -> TxHash -> ExceptT String (DB m) (UTCTime, TxHash)
+pendingCursor accIdsM named = do
   p <- requirePendingTx named
-  case accIdM of
-    Just accId | p.pendingTxAccount /= accId -> throwError "The pending transaction is not in the account"
+  case accIdsM of
+    Just [accId] | p.pendingTxAccount /= accId -> throwError "The pending transaction is not in the account"
+    Just accIds | p.pendingTxAccount `notElem` accIds -> throwError "The pending transaction is not in the accounts of the name"
     _ -> return (p.pendingTxCreated, nosigHash (txSignDataTx p.pendingTxData))
 
 -- | The transaction of the signing data as the account sees it: parsed
@@ -649,7 +650,7 @@ transactionAccount ctx nameM netM tsd = do
         throwError "The transaction involves an account of another network"
       case nonEmpty (fst <$> involved) of
         Nothing -> do
-          forM_ nameM $ \name -> getAccountByName name >> throwError (notInvolved name)
+          forM_ nameM $ \name -> accountsNamedOn Nothing name >> throwError (notInvolved name)
           return (Nothing, tsd)
         Just candidates -> do
           chosen <- accountAmong notInvolved nameM candidates

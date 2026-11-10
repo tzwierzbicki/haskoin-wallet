@@ -43,13 +43,13 @@ spec = do
       usageOf "addresses" `shouldBe` "[-a|--account NAME] [-n|--network NETWORK] [--change] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT]"
 
     it "offers accounts --compact, --verbose, --tabular and --csv as a choice" $
-      usageOf "accounts" `shouldBe` "[-a|--account NAME] [--compact | (-v|--verbose) | --tabular | --csv FILENAME]"
+      usageOf "accounts" `shouldBe` "[-a|--account NAME] [-n|--network NETWORK] [--compact | (-v|--verbose) | --tabular | --csv FILENAME]"
 
     it "offers coins --compact, --verbose, --tabular and --csv as a choice" $
       usageOf "coins" `shouldBe` "[-a|--account NAME] [-n|--network NETWORK] [--locked] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after TXID:INDEX] [--max INT]"
 
     it "offers pendingtxs --compact, --verbose, --tabular and --csv as a choice" $
-      usageOf "pendingtxs" `shouldBe` "[-a|--account NAME] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after HASH] [--max INT]"
+      usageOf "pendingtxs" `shouldBe` "[-a|--account NAME] [-n|--network NETWORK] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after HASH] [--max INT]"
 
     it "offers balances --compact, --verbose, --tabular and --csv as a choice" $
       usageOf "balances" `shouldBe` "[-a|--account NAME] [-n|--network NETWORK] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT]"
@@ -147,10 +147,10 @@ spec = do
   -- which the user copies whole from the screen
   describe "Whether the pager wraps the lines of a listing" $ do
     it "wraps those of accounts --verbose" $
-      wrapsLines Verbose (CommandAccounts Nothing (OnScreen (Just Verbose))) `shouldBe` True
+      wrapsLines Verbose (CommandAccounts (AccountChoice Nothing Nothing) (OnScreen (Just Verbose))) `shouldBe` True
 
     it "cuts those of the compact view of accounts, which shows no descriptor" $
-      wrapsLines Compact (CommandAccounts Nothing (OnScreen Nothing)) `shouldBe` False
+      wrapsLines Compact (CommandAccounts (AccountChoice Nothing Nothing) (OnScreen Nothing)) `shouldBe` False
 
     it "cuts those of the verbose view of another listing, such as txs" $
       wrapsLines Verbose (CommandTxs (AccountChoice Nothing Nothing) (OnScreen (Just Verbose)) (Paging Nothing Nothing)) `shouldBe` False

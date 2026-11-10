@@ -317,7 +317,14 @@ importKeySpec ctx =
         _ <- testNewAcc2 ctx "main"
         report <- importFile ctx Nothing Nothing (mainKeyLine <> "{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub1 <> "\",\"label\":\"second\",\"network\":\"btc\"}\n")
         liftIO $ map created (reportAccounts report) `shouldBe` [Nothing, Just ("second", testAccountXPub1)]
-        liftIO $ take 1 (reportAccounts report) `shouldBe` [AccountRefused "main" "The account main already exists"]
+        liftIO $ take 1 (reportAccounts report) `shouldBe` [AccountRefused "main" "The account main already exists on btc"]
+
+    -- The wallet has the account main on bch, the file one on btc
+    it "takes a name an account of another network has" $
+      inDatabaseE $ do
+        _ <- testNewAccBch ctx "main"
+        report <- importFile ctx Nothing Nothing mainKeyLine
+        liftIO $ map created (reportAccounts report) `shouldBe` [Just ("main", testAccountXPub)]
 
     it "renames the account the wallet holds under the key to its label" $
       inDatabaseE $ do
@@ -338,7 +345,7 @@ importKeySpec ctx =
         _ <- testNewAcc ctx "main"
         _ <- testNewAcc2 ctx "savings"
         report <- importFile ctx Nothing Nothing ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"savings\",\"network\":\"btc\"}\n")
-        liftIO $ map kept (reportAccounts report) `shouldBe` [Just ("main", Just "The account savings already exists")]
+        liftIO $ map kept (reportAccounts report) `shouldBe` [Just ("main", Just "The account savings already exists on btc")]
 
     it "gives an account stored without the fingerprint of its seed the one of the origin" $
       inDatabaseE $ do

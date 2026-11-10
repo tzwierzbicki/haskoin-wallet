@@ -2125,11 +2125,16 @@ agoText now time
 
 -- | What the user does next after a command of a payment or a sweep,
 -- preparetx, preparesendall, preparesweep, signtx, signsweep, broadcast or
--- sync, below its answer. In the pretty output only: a script reading the JSON answer knows
--- its next step.
-printNextSteps :: Command -> Response -> IO ()
-printNextSteps cmd res =
-  forM_ (nextStepsPrinter cmd res) $ \steps -> putStrLn "" >> renderIO steps
+-- sync, below its answer. In the pretty output only: a script reading the
+-- JSON answer knows its next step. The first argument tells the accounts
+-- whose name is on several networks ('nextStepsPrinter').
+printNextSteps :: (DBAccount -> Bool) -> Command -> Response -> IO ()
+printNextSteps shared cmd res =
+  forM_ (nextStepsPrinter shared cmd res) $ \steps -> putStrLn "" >> renderIO steps
+
+-- | Whether the answer of the command has steps to suggest next
+hasNextSteps :: Command -> Response -> Bool
+hasNextSteps cmd res = isJust (nextStepsPrinter (const False) cmd res)
 
 -- | A failure, as an answer or a listing reports it
 errorDoc :: Text -> Doc Style
@@ -2262,8 +2267,14 @@ chunkDoc unit view first answer = do
 -- | The steps the user may take next, after a command of a payment or a
 -- sweep, if any. Each step is a command line, styled as the help shows
 -- commands, options and metavars.
-nextStepsPrinter :: Command -> Response -> Maybe (Doc Style)
-nextStepsPrinter cmd res =
+--
+-- A step names an account by --account. When the first argument tells
+-- that accounts of other networks have its name, the step gives its
+-- --network too. Without it, a command that acts on one account would take
+-- the account of that name on the default network, which may be another
+-- one. A name on one network needs no --network, and the step stays short.
+nextStepsPrinter :: (DBAccount -> Bool) -> Command -> Response -> Maybe (Doc Style)
+nextStepsPrinter shared cmd res =
   case (cmd, res) of
     (CommandPrepareTx opts, ResponsePrepared _ info _)
       | Just shown <- shownOf info -> afterPreparing opts.output shown
@@ -2297,7 +2308,7 @@ nextStepsPrinter cmd res =
       where
         steps = renameSteps <> syncSteps
         renameSteps =
-          [ ("Next, name the account, which the file did not", hwLine "renameacc" [pretty (shellWord (cs (dBAccountName acc))) `withStyle` Account, metavarWord "NAME"])
+          [ ("Next, name the account, which the file did not", hwLine "renameacc" ([pretty (shellWord (cs (dBAccountName acc))) `withStyle` Account, metavarWord "NAME"] <> networkArgs acc))
             | AccountCreated acc _ <- reportAccounts report,
               dBAccountName acc == recoveredName (accountKind acc) (accountNetwork acc) (accountIndex acc)
           ]
@@ -2346,8 +2357,10 @@ nextStepsPrinter cmd res =
     keysArgs (Just (KeysInFile file)) = [optionWord "--key-file", fileWord file]
     keysArgs _ = []
     -- The account of the next command, named when there is one
-    accountArgs [acc] = [optionWord "--account", styled Account (shellWord (cs (dBAccountName acc)))]
+    accountArgs [acc] = [optionWord "--account", styled Account (shellWord (cs (dBAccountName acc)))] <> networkArgs acc
     accountArgs _ = [optionWord "--account", metavarWord "NAME"]
+    -- The --network of an account whose name other networks have too
+    networkArgs acc = [arg | shared acc, arg <- [optionWord "--network", pretty (dBAccountNetwork acc)]]
 
 -- | Steps, each with what it does and the command that does it
 stepsPrinter :: [(String, Doc Style)] -> Maybe (Doc Style)

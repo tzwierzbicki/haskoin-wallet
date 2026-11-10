@@ -8,7 +8,7 @@ import Data.Foldable (forM_)
 import qualified Data.ByteString.Char8 as C8
 import GHC.IO.Encoding (setFileSystemEncoding, setLocaleEncoding, utf8)
 import Haskoin (withContext)
-import Haskoin.Wallet.Commands (commandListing, commandResponse)
+import Haskoin.Wallet.Commands (commandListing, commandResponse, namesOnSeveralNetworks)
 import Haskoin.Wallet.Config (Config (..), commandUnit, databaseFile, initConfig)
 import Haskoin.Wallet.Amounts (AmountUnit)
 import Haskoin.Wallet.Database (DB, catchDatabaseInUse, runDB)
@@ -19,7 +19,7 @@ import Haskoin.Wallet.Migration (Hooks (..), migrateDB)
 import Haskoin.Wallet.Backup (backupDatabase, migrationBackupDirectory)
 import Haskoin.Wallet.Cli.Parser (GlobalOptions (..), addressCodeOf, csvFileOf, parserMain, txShownOf, viewOf, wrapsLines)
 import Haskoin.Wallet.Cli.View (View (..))
-import Haskoin.Wallet.Cli.PrettyPrinter (chunkDoc, errorDoc, prettyPrinter, printNextSteps)
+import Haskoin.Wallet.Cli.PrettyPrinter (chunkDoc, errorDoc, hasNextSteps, prettyPrinter, printNextSteps)
 import Haskoin.Wallet.Cli.Response (Response (..), responseFailed)
 import Haskoin.Wallet.Cli.Style (renderPlain)
 import Haskoin.Wallet.Util (encodeJsonPretty)
@@ -62,7 +62,10 @@ clientMain = do
           then jsonPrinter res
           else do
             prettyPrinter unit view (addressCodeOf cmd) (txShownOf cmd) res
-            printNextSteps cmd res
+            -- A step names an account with its --network when other
+            -- networks have its name, which the database tells
+            shared <- if hasNextSteps cmd res then namesOnSeveralNetworks cfg else return (const False)
+            printNextSteps shared cmd res
 
 -- | Print a listing on the screen, chunk by chunk, through the pager when
 -- there is one, its elements in the view given. The pager keeps the rows

@@ -989,6 +989,21 @@ nextStepSpec ctx =
         run <- hw home ["sync"] []
         run `shouldSatisfy` showsCommand "hw txs --account main"
 
+    it "names the account without --network when no other network has its name" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home ["sync"] []
+        run `shouldSatisfy` showsCommand "hw txs --account main\n"
+
+    -- main is on bch too, so txs --account main alone would take the one of
+    -- the default network
+    it "names the --network of an account whose name another network has" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["createacc", "main", "--network", "bch"] seedTwice
+        run <- hw home ["sync", "--account", "main", "--network", "btc"] []
+        run `shouldSatisfy` showsCommand "hw txs --account main --network btc\n"
+
     -- Another transaction of the mempool spends the coin of the payment
     it "is to find and delete the pending transaction a sync found in conflict" $
       withChain ctx (paidChain ctx) $ \home chain -> do

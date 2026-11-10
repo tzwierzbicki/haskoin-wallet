@@ -268,34 +268,30 @@ recoverSeed ctx cfg store net seed accountGap watch = do
   forM created $ \(accId, _) -> sync ctx cfg store net accId False watch
 
 -- | Whether the first account recover creates on a network takes the name
--- of the default account of the network, such as default-btc: when the
--- wallet has no account on the network yet, and no account of another
--- network has that name, as one from an earlier hw can.
+-- of the default account, default: when the wallet has no account on the
+-- network yet.
 --
 -- A recovered wallet of several accounts thus needs no --account on each
 -- of its networks. An account the wallet has already on the network keeps
 -- its place, as the only account there or as the default one the user
--- named. A recovered account named default-btc would take over from it
+-- named. A recovered account named default would take over from it
 -- without a word. Recovering a seed again, for the accounts created since,
 -- would even make account 1 of the seed the default in place of account 0.
 recoverTakesDefault :: (MonadUnliftIO m) => Network -> DB m Bool
-recoverTakesDefault net = do
-  accounts <- getAccounts
-  taken <- existsAccount (defaultAccountName net)
-  return $ not taken && not (any ((== net) . accountNetwork . snd) accounts)
+recoverTakesDefault net = not . any (isOnNetwork net . snd) <$> getAccounts
 
 -- | The names of the accounts recover creates on a network, from their
 -- kinds and indices in the order found. With the flag of
--- 'recoverTakesDefault', the first one is named as the default account of
--- the network, such as default-btc. Every other one is named after the
--- network, its index and its kind ('recoveredName').
+-- 'recoverTakesDefault', the first one is named default, as the default
+-- account of the network. Every other one is named after the network, its
+-- index and its kind ('recoveredName').
 --
 -- The first account found is the bip44 account of the lowest index, or the
 -- bip84 one of the lowest index when no bip44 account was paid.
 recoveredNames :: Bool -> Network -> [(AccountKind, Natural)] -> [Text]
 recoveredNames withDefault net found =
   case [recoveredName kind net index | (kind, index) <- found] of
-    _ : rest | withDefault -> defaultAccountName net : rest
+    _ : rest | withDefault -> defaultAccountName : rest
     names -> names
 
 -- | Where a chain of an account of the seed is, for the question of

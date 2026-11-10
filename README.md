@@ -226,9 +226,8 @@ names it. Without `--account`, the command takes:
 
 1. The only account, in a wallet of one account.
 2. The default account of the network, in a wallet of several accounts. It is
-   the account named `default-` and the name of the network: `default-btc` on
-   `btc`, `default-bch` on `bch`. `--network` names the network. Without it,
-   the network is the `default-network` of the
+   the account named `default` on that network. `--network` names the
+   network. Without it, the network is the `default-network` of the
    [configuration](#configuration), or `btc`.
 3. The only account on that network, when the network has no default account.
    In a wallet of `btc0` and `bch0`, `receive --network bch` takes `bch0`.
@@ -240,29 +239,51 @@ all, the command asks for `--account`. Make an account the default with
 account yet:
 
 ```console
-hw renameacc main default-btc               # main is now the default on btc
-hw createacc default-bch --network bch      # and this one on bch
-hw receive                                  # an address of default-btc
-hw receive --network bch                    # an address of default-bch
+hw renameacc main default                   # main is now the default on btc
+hw createacc default --network bch          # and this one on bch
+hw receive                                  # an address of default on btc
+hw receive --network bch                    # an address of default on bch
 hw preparetx ADDRESS:0.01 --network bch --fee-rate low
 ```
 
 The default is a name rather than a setting, so `accounts` shows it, and a
 file of [`exportacc`](#hw-exportacc) carries it to another wallet.
 
+**One name on several networks.** A name is unique on its network, not in the
+whole wallet. That is how each network has its own `default`, and any other
+name can be shared too, such as `savings` on `btc` and on `bch`. `--account`
+then picks among them by the network:
+
+- A command that acts on one account takes the account of that name on
+  `--network`, or else on the `default-network`, or `btc`. A name on one
+  network alone needs no `--network`.
+- `accounts`, `sync`, `pendingtxs`, `exportacc` and `exportsheet` take every
+  account of the name. Their `--network` narrows them down to one network,
+  with or without `--account`.
+- [`renameacc`](#hw-renameacc) asks for `--network` when the name is on
+  several networks.
+
+```console
+hw createacc savings --network bch          # beside savings on btc
+hw receive --account savings --network bch  # an address of savings on bch
+hw sync --account savings                   # both accounts named savings
+hw accounts --network bch                   # every account on bch
+```
+
 > **Good to know**
 >
-> - **Only an account of `btc` can be named `default-btc`.** `createacc`,
->   `renameacc` and `importacc` refuse that name for an account of another
->   network. It would look like the default of a network it is not on.
 > - **`--network` and `--account` must agree.** With both, the account must be
 >   on that network, and the command refuses it otherwise.
 > - **A wallet of one account takes it on any network.** The
 >   `default-network` does not pass it over. `--network` must then be its
 >   network.
 > - **The default account wins over the only one.** A second account on
->   `btc` changes nothing for a wallet with a `default-btc`. Without one, it
->   makes the commands on `btc` ask for `--account`.
+>   `btc` changes nothing for a wallet with a `default` on `btc`. Without one,
+>   it makes the commands on `btc` ask for `--account`.
+> - **The next steps name the network when they must.** After `sync` or
+>   `broadcast`, `hw` suggests a command such as `hw txs --account savings`.
+>   When accounts of other networks have that name, the command carries the
+>   `--network` of the account too.
 > - **Some commands find the account themselves.** `signtx`, `importtx`,
 >   `bumpfee` and `preparesweep` take the account of the transaction, and
 >   `preparetx --coin` or `--spend-from` the account of the coins. When a
@@ -509,7 +530,11 @@ the network.
 hw createacc savings
 hw createacc spending --type bip84
 hw createacc cash --network bch
+hw createacc default --network bch          # the default account of bch
 ```
+
+The name must be new on the network of the account. An account of another
+network may have it, as each network has its own `default`.
 
 An account is of one of two kinds:
 
@@ -544,8 +569,8 @@ network would say nothing of the other. A test network is searched only when
 The accounts are named after their network and index: `btc0`, `btc1`, `bch0`
 and so on for the `bip44` accounts, and `btc0-segwit`, `btc1-segwit` and so on
 for the `bip84` ones. On a network where the wallet has no account yet, the
-first account found is named `default-btc` or `default-bch` instead. It is
-then the [default account](#the-account-of-a-command) that commands take
+first account found is named `default` instead. It is then the
+[default account](#the-account-of-a-command) of the network, which commands take
 without `--account`. The first one found is the `bip44` account of the lowest
 index, or the `bip84` one when no `bip44` account was paid. The search stops
 after 10 accounts in a row without a
@@ -583,7 +608,7 @@ to an address of `hw`.
 >   it exits with an error, as `sync` does. Run `recover` again once the
 >   server answers. The accounts found the first time are skipped.
 > - **An account the wallet has keeps its place.** On a network where the
->   wallet has an account already, `recover` names no account `default-btc`.
+>   wallet has an account already, `recover` names no account `default`.
 >   Otherwise, recovering a seed again, for the accounts created since, would
 >   make its account 1 the default in place of account 0.
 
@@ -594,7 +619,7 @@ to test a mnemonic you wrote down, or the shares of a backup. Nothing is signed.
 
 ```console
 hw checkmnemonic --account savings
-hw checkmnemonic --network bch              # default-bch, in a wallet of several accounts
+hw checkmnemonic --network bch              # default on bch, in a wallet of several accounts
 ```
 
 When they do not match, it says if they give the key at another path. An account
@@ -604,8 +629,9 @@ imported from its key alone may have been given the wrong `--type` or
 #### `hw exportacc`
 
 `hw exportacc FILE` writes the accounts and their labels to a file, which
-[`importacc`](#hw-importacc) adds to another wallet. `--account` writes one
-account instead of all of them.
+[`importacc`](#hw-importacc) adds to another wallet. `--account` writes the
+accounts of one name instead of all of them, and `--network` those of one
+network.
 
 ```console
 hw exportacc --account vault vault.jsonl    # on the offline computer
@@ -714,6 +740,7 @@ hw accounts --verbose --account vault       # the descriptor of vault, for anoth
 hw accounts --tabular
 hw accounts --csv accounts.csv
 hw accounts --account savings --unit sat
+hw accounts --network bch                   # the accounts on bch
 ```
 
 **The descriptor.** A `bip44` account gives
@@ -749,12 +776,16 @@ descriptor back.
 
 ```console
 hw renameacc savings rainy-day
-hw renameacc rainy-day default-btc          # the default account of btc
+hw renameacc rainy-day default              # the default account of its network
+hw renameacc savings cash --network bch     # savings on bch, not on btc
 ```
 
-The name `default-btc` makes an account the default account of `btc`, as
-[The account of a command](#the-account-of-a-command) explains. Only an
-account of `btc` can take it.
+The name `default` makes an account the default account of its network, as
+[The account of a command](#the-account-of-a-command) explains. A name is
+unique on its network, so the new name may be that of an account of another
+network. When accounts of the old name are on several networks, `--network`
+tells which one to rename. `renameacc` asks for it rather than guess, since
+the account renamed would change what the commands of its network take.
 
 #### `hw deleteacc`
 
@@ -781,6 +812,7 @@ changed. Run it before you prepare a payment and after you send one.
 ```console
 hw sync
 hw sync --account savings --full
+hw sync --network bch                       # the accounts on bch only
 ```
 
 `--full` downloads the account's data again and writes it anew. Use it if the
@@ -1328,12 +1360,12 @@ Lists the pending transactions: prepared, signed, or sent and not yet seen by
 [short id](#short-ids) of the nosigHash until the transaction is signed, then
 with that of its txid. It gives the time the transaction was created, its
 amount and its status, with its fee rate. The second gives its account when
-every account is listed, the transactions a replacement replaces, and what the
-transaction is for. A conflicted one can no longer be sent.
+several accounts are listed, the transactions a replacement replaces, and what
+the transaction is for. A conflicted one can no longer be sent.
 [`show HASH`](#hw-show) shows one of them in full.
 
 `--tabular` shows each transaction on one row of a table: its short id, its
-account when every account is listed, the time it was created, its type, its
+account when several accounts are listed, the time it was created, its type, its
 amount, its status, its fee rate in sat/vB, and what it is for, as
 `txs --tabular` says it. The account column is as wide as the longest name.
 
@@ -1348,6 +1380,7 @@ hw pendingtxs
 hw pendingtxs --verbose
 hw pendingtxs --tabular
 hw pendingtxs --csv pending.csv
+hw pendingtxs --account savings             # on every network that has savings
 ```
 
 > **Good to know**
@@ -1498,7 +1531,7 @@ pending transactions. The file is an OpenDocument spreadsheet (`.ods`), the form
 LibreOffice, which Excel and Google Sheets open too. Each tab holds every row
 of its listing, in the columns of its [CSV file](#listings).
 
-The tabs hold every account, or the one `--account` names. The addresses, the
+The tabs hold every account, or those `--account` and `--network` name. The addresses, the
 balances, the coins and the transactions start with a column that names the
 account of each row, so that one tab sorts and sums across the wallet. The
 addresses of both chains share a tab, the receiving ones first.

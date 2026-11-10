@@ -96,7 +96,7 @@ pathSpec =
         _ <- answer home ["createacc", "second"] seedTwice
         (cutAddressOf <$> hwJson home ["show", "/0/0", "--account", "second"] []) `shouldReturn` Right "17Hc4H2HwzLf..........QPGpNEvK2NUo"
         (errorOf <$> hwJson home ["show", "/0/0"] [])
-          `shouldReturn` Right "Specify which account to use with --account: the wallet has several accounts on btc, and none is default-btc, the default account of btc"
+          `shouldReturn` Right "Specify which account to use with --account: the wallet has several accounts on btc, and none is named default"
 
     -- hw stores the address /0/0 of cash, the Bitcoin Cash account of the
     -- test wallet, as bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u.
@@ -106,11 +106,12 @@ pathSpec =
         _ <- answer home ["createacc", "cash", "--network", "bch"] seedTwice
         (cutAddressOf <$> hwJson home ["show", "/0/0"] []) `shouldReturn` Right "bitcoincash:qzvzk6v4gdxt70..............pfzercknlz3k4u"
 
-    -- default-bch is account 0 of the seed on bch, cash of the test above
+    -- The default account of bch is account 0 of the seed on bch, cash of
+    -- the test above
     it "is of the default account of the --network, in a wallet of several accounts" $
       withHome $ \home -> do
         createMain home
-        _ <- answer home ["createacc", "default-bch", "--network", "bch"] seedTwice
+        _ <- answer home ["createacc", "default", "--network", "bch"] seedTwice
         (cutAddressOf <$> hwJson home ["show", "/0/0", "--network", "bch"] []) `shouldReturn` Right "bitcoincash:qzvzk6v4gdxt70..............pfzercknlz3k4u"
 
     it "hands out nothing: the wallet has no address after it, and receive starts at the first" $

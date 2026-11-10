@@ -68,7 +68,7 @@ spec =
           liftIO $ takeMVar release
         takeMVar held
         -- The command waits its full 'busyTimeout' before answering
-        cmdRenameAcc (def :: Config) {configDatabaseFile = Just database} (RenameAcc "main" "savings")
+        cmdRenameAcc (def :: Config) {configDatabaseFile = Just database} (RenameAcc "main" "savings" Nothing)
           `shouldReturn` ResponseError (cs databaseInUse)
         putMVar release ()
         wait holder

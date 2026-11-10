@@ -250,14 +250,14 @@ receivingSpec ctx = do
         prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--account", "second", "--fee-rate", "10"] []
         spentFromWallet prepared `shouldBe` Map.fromList [(account1Addr, 30000)]
 
-  -- main holds the coin of 50000 the chain pays. Renamed default-btc, it
-  -- is the account a payment spends from without --account.
+  -- main holds the coin of 50000 the chain pays. Renamed default, it is
+  -- the account a payment spends from without --account.
   describe "A payment from the default account" $
     it "is prepared without --account in a wallet of several accounts" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["createacc", "second"] seedTwice
-        _ <- answer home ["renameacc", "main", "default-btc"] []
+        _ <- answer home ["renameacc", "main", "default"] []
         prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 50000)]
 

@@ -191,7 +191,7 @@ commandNetwork cfg given = given <|> configDefaultNetwork cfg
 -- something on a network, such as createacc, must not guess the network:
 -- the configuration or the user must name it. Choosing an account makes
 -- nothing. It finds an account the wallet has already on btc: the one
--- named default-btc, or the only one there.
+-- named default, or the only one there.
 defaultAccountNetwork :: Config -> Network
 defaultAccountNetwork cfg = fromMaybe btc (configDefaultNetwork cfg)
 

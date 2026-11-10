@@ -174,10 +174,16 @@ creatingSpec ctx =
         (_, acc) <- watchOnly ctx btc 3 "third"
         liftIO $ (dBAccountIndex acc, pathToStr (accountPath acc), dBAccountFingerprint acc) `shouldBe` (3, "/44'/0'/3'", Nothing)
 
-    it "refuses a name already taken" $
+    it "refuses a name an account of its network has" $
       inDatabaseE $ do
         _ <- testNewAcc ctx "main"
-        lift $ dbShouldFailWith "The account main already exists" $ watchOnly ctx btc 1 "main"
+        lift $ dbShouldFailWith "The account main already exists on btc" $ watchOnly ctx btc 1 "main"
+
+    it "takes a name an account of another network has" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        (_, cash) <- testNewAccBch ctx "main"
+        liftIO $ (dBAccountName cash, dBAccountNetwork cash) `shouldBe` ("main", "bch")
 
     it "refuses an empty name, a space at either end, and a line break" $
       inDatabaseE $ lift $ do
@@ -205,17 +211,32 @@ creatingSpec ctx =
 
 namingSpec :: Ctx -> Spec
 namingSpec ctx = do
-  describe "Finding an account by name" $ do
-    it "finds the account of the name" $
+  -- The accounts are listed by network, bch before btc, as getAccounts
+  -- orders those of one seed
+  describe "Finding the accounts of a name" $ do
+    it "finds the account of the name on each network that has it" $
       inDatabaseE $ do
-        (accId, acc) <- testNewAcc ctx "main"
+        _ <- testNewAcc ctx "main"
         _ <- testNewAcc ctx "savings"
-        getAccountByName "main" `dbShouldBeE` (accId, acc)
+        _ <- testNewAccBch ctx "main"
+        (map (nameAndNetwork . snd) . NonEmpty.toList <$> accountsNamedOn Nothing "main") `dbShouldBeE` [("main", "bch"), ("main", "btc")]
+
+    it "finds the account of the name on the network given" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        cashMain <- testNewAccBch ctx "main"
+        accountsNamedOn (Just bch) "main" `dbShouldBeE` NonEmpty.singleton cashMain
 
     it "knows no account of a name it does not have" $
       inDatabaseE $ do
         _ <- testNewAcc ctx "main"
-        lift $ dbShouldFailWith "The account nobody does not exist" $ getAccountByName "nobody"
+        lift $ dbShouldFailWith "The account nobody does not exist" $ accountsNamedOn Nothing "nobody"
+
+    it "refuses a network where no account has the name, naming the networks of the name" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        _ <- testNewAccBch ctx "main"
+        lift $ dbShouldFailWith "The account main is on bch and btc, not on the --network btctest" $ accountsNamedOn (Just btcTest) "main"
 
   -- As a command that acts on one account takes it: by --account, as the
   -- only one, or as the default or only account of the network. The first
@@ -240,23 +261,23 @@ namingSpec ctx = do
         cashAcc <- testNewAccBch ctx "cash"
         chooseAccount btc unnamed `dbShouldBeE` cashAcc
 
-    it "is default-btc in a wallet of several accounts, when the default network is btc" $
+    it "is the account named default in a wallet of several accounts, when the default network is btc" $
       inDatabaseE $ do
         _ <- testNewAcc ctx "main"
-        defaultAcc <- testNewAcc ctx "default-btc"
+        defaultAcc <- testNewAcc ctx "default"
         _ <- testNewAcc ctx "savings"
         chooseAccount btc unnamed `dbShouldBeE` defaultAcc
 
-    it "is default-bch without --network, when the default network is bch" $
+    it "is the account named default on bch without --network, when the default network is bch" $
       inDatabaseE $ do
-        _ <- testNewAcc ctx "default-btc"
-        cashAcc <- testNewAccBch ctx "default-bch"
+        _ <- testNewAcc ctx "default"
+        cashAcc <- testNewAccBch ctx "default"
         chooseAccount bch unnamed `dbShouldBeE` cashAcc
 
-    it "is the default account of the --network, whatever the default network" $
+    it "is the account named default on the --network, whatever the default network" $
       inDatabaseE $ do
-        _ <- testNewAcc ctx "default-btc"
-        cashAcc <- testNewAccBch ctx "default-bch"
+        _ <- testNewAcc ctx "default"
+        cashAcc <- testNewAccBch ctx "default"
         chooseAccount btc (byNetwork bch) `dbShouldBeE` cashAcc
 
     it "is the only account on the --network, in a wallet without default accounts" $
@@ -276,7 +297,7 @@ namingSpec ctx = do
         _ <- testNewAcc ctx "main"
         _ <- testNewAcc ctx "savings"
         lift $
-          dbShouldFailWith "Specify which account to use with --account: the wallet has several accounts on btc, and none is default-btc, the default account of btc" $
+          dbShouldFailWith "Specify which account to use with --account: the wallet has several accounts on btc, and none is named default" $
             chooseAccount btc unnamed
 
     it "asks for --account or --network when the wallet has no account on the network" $
@@ -291,18 +312,36 @@ namingSpec ctx = do
       inDatabaseE $ do
         _ <- testNewAcc ctx "main"
         _ <- testNewAcc ctx "savings"
-        _ <- testNewAccBch ctx "default-bch"
+        _ <- testNewAccBch ctx "default"
         lift $
-          dbShouldFailWith "Specify which account to use with --account: the wallet has several accounts on btc, and none is default-btc, the default account of btc" $
+          dbShouldFailWith "Specify which account to use with --account: the wallet has several accounts on btc, and none is named default" $
             chooseAccount btc unnamed
 
-    -- An earlier hw let an account of bch be named default-btc
-    it "takes the only account on btc, and not an account named default-btc on bch" $
+    it "is the only account of the --account name, though it is on another network than the default one" $
       inDatabaseE $ do
-        mainAcc <- testNewAcc ctx "main"
-        (cashId, _) <- testNewAccBch ctx "cash"
-        lift $ P.update cashId [DBAccountName P.=. "default-btc"]
-        chooseAccount btc unnamed `dbShouldBeE` mainAcc
+        _ <- testNewAcc ctx "main"
+        cashAcc <- testNewAccBch ctx "cash"
+        chooseAccount btc (byName "cash") `dbShouldBeE` cashAcc
+
+    it "is the account of the --account name on the --network, when accounts of that name are on several networks" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        cashMain <- testNewAccBch ctx "main"
+        chooseAccount btc (AccountChoice (Just "main") (Just bch)) `dbShouldBeE` cashMain
+
+    it "is the account of the --account name on the default network without --network, when accounts of that name are on several networks" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        cashMain <- testNewAccBch ctx "main"
+        chooseAccount bch (byName "main") `dbShouldBeE` cashMain
+
+    it "asks for --network when accounts of the --account name are on several networks, and none on the default network" $
+      inDatabaseE $ do
+        _ <- testNewAccBch ctx "main"
+        _ <- newAccountOf ctx testMnemonic btcTest "main"
+        lift $
+          dbShouldFailWith "Specify which account to use with --network: the accounts named main are on bch and btctest, and none on btc" $
+            chooseAccount btc (byName "main")
 
     it "refuses the account --account names when it is not on the --network" $
       inDatabaseE $ do
@@ -324,27 +363,55 @@ namingSpec ctx = do
         _ <- testNewAcc ctx "main"
         lift $ dbShouldFailWith "The account nobody does not exist" $ chooseAccount btc (byName "nobody")
 
-  -- As accounts and sync take them, with --account or without
-  describe "Finding the accounts of a name" $ do
+  -- As accounts, sync and the other commands that act on every account
+  -- take them, with --account and --network or without. The accounts are
+  -- listed by network, bch before btc.
+  describe "Choosing the accounts of a command that acts on every account" $ do
+    let everyAccount = AccountChoice Nothing Nothing
     it "is the account of the name" $
       inDatabaseE $ do
         mainAcc <- testNewAcc ctx "main"
         _ <- testNewAcc ctx "savings"
-        getAccountsByName (Just "main") `dbShouldBeE` [mainAcc]
+        chooseAccounts (AccountChoice (Just "main") Nothing) `dbShouldBeE` [mainAcc]
 
-    it "is every account without a name" $
+    it "is every account of the name, one on each network that has it" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        _ <- testNewAcc ctx "savings"
+        _ <- testNewAccBch ctx "main"
+        (map (nameAndNetwork . snd) <$> chooseAccounts (AccountChoice (Just "main") Nothing)) `dbShouldBeE` [("main", "bch"), ("main", "btc")]
+
+    it "is the account of the name on the --network" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        cashMain <- testNewAccBch ctx "main"
+        chooseAccounts (AccountChoice (Just "main") (Just bch)) `dbShouldBeE` [cashMain]
+
+    it "is every account of the --network without a name" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        _ <- testNewAcc ctx "savings"
+        _ <- testNewAccBch ctx "cash"
+        (map (nameAndNetwork . snd) <$> chooseAccounts (AccountChoice Nothing (Just btc))) `dbShouldBeE` [("main", "btc"), ("savings", "btc")]
+
+    it "is every account without a name or a network" $
       inDatabaseE $ do
         mainAcc <- testNewAcc ctx "main"
         savingsAcc <- testNewAcc ctx "savings"
-        getAccountsByName Nothing `dbShouldBeE` [mainAcc, savingsAcc]
+        chooseAccounts everyAccount `dbShouldBeE` [mainAcc, savingsAcc]
 
     it "is none without a name in an empty wallet" $
-      inDatabaseE $ getAccountsByName Nothing `dbShouldBeE` []
+      inDatabaseE $ chooseAccounts everyAccount `dbShouldBeE` []
 
     it "knows no account of a name it does not have" $
       inDatabaseE $ do
         _ <- testNewAcc ctx "main"
-        lift $ dbShouldFailWith "The account nobody does not exist" $ getAccountsByName (Just "nobody")
+        lift $ dbShouldFailWith "The account nobody does not exist" $ chooseAccounts (AccountChoice (Just "nobody") Nothing)
+
+    it "refuses a --network where no account has the name" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        lift $ dbShouldFailWith "The account main is on btc, not on the --network bch" $ chooseAccounts (AccountChoice (Just "main") (Just bch))
 
   describe "Finding accounts by id" $
     it "gives the accounts of the ids, in their order" $
@@ -389,64 +456,86 @@ namingSpec ctx = do
 
     it "asks for --account when they are several, though one of them is the default account" $
       inDatabaseE $ do
-        defaultAcc <- testNewAcc ctx "default-btc"
+        defaultAcc <- testNewAcc ctx "default"
         savingsAcc <- testNewAcc ctx "savings"
         lift $ dbShouldFailWith "Specify which account to use" $ accountAmong refused Nothing (NonEmpty.fromList [defaultAcc, savingsAcc])
 
-  describe "The name of a default account" $ do
-    it "is default- and the name of the network" $ do
-      defaultAccountName btc `shouldBe` "default-btc"
-      defaultAccountName btcTest `shouldBe` "default-btctest"
-
-    it "is given to an account of its network" $
+    it "is the account of the --account name among them, though an account of another network has the name" $
       inDatabaseE $ do
-        (_, acc) <- testNewAccBch ctx "default-bch"
-        lift $ return (dBAccountName acc) `dbShouldBe` "default-bch"
+        mainAcc <- testNewAcc ctx "main"
+        savingsAcc <- testNewAcc ctx "savings"
+        _ <- testNewAccBch ctx "main"
+        accountAmong refused (Just "main") (NonEmpty.fromList [mainAcc, savingsAcc]) `dbShouldBeE` mainAcc
 
-    it "is refused to an account of another network" $
-      inDatabaseE $
-        lift $
-          dbShouldFailWith "Only an account of btc can be named default-btc, the default account of btc" $
-            testNewAccBch ctx "default-btc"
+  describe "The name of the default account" $ do
+    it "is default, on every network" $
+      defaultAccountName `shouldBe` "default"
 
-    it "is taken by renameacc for an account of its network" $
+    it "is given to an account on each network" $
       inDatabaseE $ do
-        (_, acc) <- testNewAcc ctx "main"
-        renameAccount "main" "default-btc" `dbShouldBeE` acc {dBAccountName = "default-btc"}
+        _ <- testNewAcc ctx "default"
+        _ <- testNewAccBch ctx "default"
+        (map (nameAndNetwork . snd) <$> lift getAccounts) `dbShouldBeE` [("default", "bch"), ("default", "btc")]
 
-    it "is refused by renameacc for an account of another network" $
+    it "is taken by renameacc" $
       inDatabaseE $ do
-        _ <- testNewAcc ctx "main"
-        lift $
-          dbShouldFailWith "Only an account of bch can be named default-bch, the default account of bch" $
-            renameAccount "main" "default-bch"
+        (accId, acc) <- testNewAcc ctx "main"
+        renameAccount accId acc "default" `dbShouldBeE` acc {dBAccountName = "default"}
 
   describe "Renaming an account" $ do
     it "changes its name and nothing else" $
       inDatabaseE $ do
         (accId, acc) <- testNewAcc ctx "main"
-        renameAccount "main" "salary" `dbShouldBeE` acc {dBAccountName = "salary"}
-        getAccountByName "salary" `dbShouldBeE` (accId, acc {dBAccountName = "salary"})
+        renameAccount accId acc "salary" `dbShouldBeE` acc {dBAccountName = "salary"}
+        lift (getAccountsNamed "salary") `dbShouldBeE` [(accId, acc {dBAccountName = "salary"})]
 
     it "changes nothing when the name is the one it has" $
       inDatabaseE $ do
-        (_, acc) <- testNewAcc ctx "main"
-        renameAccount "main" "main" `dbShouldBeE` acc
+        (accId, acc) <- testNewAcc ctx "main"
+        renameAccount accId acc "main" `dbShouldBeE` acc
 
-    it "refuses a name already taken" $
+    it "refuses a name an account of its network has" $
+      inDatabaseE $ do
+        (accId, acc) <- testNewAcc ctx "main"
+        _ <- testNewAcc ctx "savings"
+        lift $ dbShouldFailWith "The account savings already exists on btc" $ renameAccount accId acc "savings"
+
+    it "takes a name an account of another network has" $
       inDatabaseE $ do
         _ <- testNewAcc ctx "main"
-        _ <- testNewAcc ctx "savings"
-        lift $ dbShouldFailWith "The account savings already exists" $ renameAccount "main" "savings"
-
-    it "refuses to rename an account that does not exist" $
-      inDatabaseE $ lift $ dbShouldFailWith "The account nobody does not exist" $ renameAccount "nobody" "somebody"
+        (cashId, cash) <- testNewAccBch ctx "cash"
+        renameAccount cashId cash "main" `dbShouldBeE` cash {dBAccountName = "main"}
 
     it "holds the new name to the same rules as a first one" $
       inDatabaseE $ do
+        (accId, acc) <- testNewAcc ctx "main"
+        lift $ dbShouldFailWith "The account name must not be empty" $ renameAccount accId acc ""
+        lift $ dbShouldFailWith "The account name must not start or end with a space" $ renameAccount accId acc "salary "
+
+  -- The account renameacc OLD NEW renames, with --network or without
+  describe "Choosing the account to rename" $ do
+    it "is the only account of the name, on whatever network" $
+      inDatabaseE $ do
         _ <- testNewAcc ctx "main"
-        lift $ dbShouldFailWith "The account name must not be empty" $ renameAccount "main" ""
-        lift $ dbShouldFailWith "The account name must not start or end with a space" $ renameAccount "main" "salary "
+        cashAcc <- testNewAccBch ctx "cash"
+        accountToRename Nothing "cash" `dbShouldBeE` cashAcc
+
+    it "is the account of the name on the --network" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        cashMain <- testNewAccBch ctx "main"
+        accountToRename (Just bch) "main" `dbShouldBeE` cashMain
+
+    it "asks for --network when accounts of the name are on several networks" $
+      inDatabaseE $ do
+        _ <- testNewAcc ctx "main"
+        _ <- testNewAccBch ctx "main"
+        lift $
+          dbShouldFailWith "Specify which account to rename with --network: the accounts named main are on bch and btc" $
+            accountToRename Nothing "main"
+
+    it "refuses a name the wallet does not have" $
+      inDatabaseE $ lift $ dbShouldFailWith "The account nobody does not exist" $ accountToRename Nothing "nobody"
 
 {- The fingerprint of the seed -}
 
@@ -578,7 +667,7 @@ balanceSpec ctx =
           (accId, _) <- testNewAcc ctx "main"
           _ <- genExtAddress ctx def accId ""
           refreshCoins btc ctx accId [externalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
-        shownSpendable <$> cmdAccounts wallet Nothing `shouldReturn` Right [("main", 50000)]
+        shownSpendable <$> cmdAccounts wallet (AccountChoice Nothing Nothing) `shouldReturn` Right [("main", 50000)]
 
     it "are shown by hw addresses with the balance each address can spend now" $
       inScratchDirectory $ \dir -> do
@@ -613,7 +702,7 @@ documentSpec ctx =
       inScratchDirectory $ \dir -> do
         offline <- walletInFile (dir </> "offline.sqlite") (testNewAcc ctx "main")
         let file = dir </> "main.jsonl"
-        cmdExportAcc ctx offline (Just "main") file `shouldReturn` ResponseFile file
+        cmdExportAcc ctx offline (AccountChoice (Just "main") Nothing) file `shouldReturn` ResponseFile file
         readFile file `shouldReturn` mainRecord <> "\n"
 
     it "creates the account in the online wallet, with the fingerprint" $

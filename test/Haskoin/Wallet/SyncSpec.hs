@@ -1243,10 +1243,10 @@ spec = prepareContext $ \ctx -> do
 
     -- The wallet has no account on btc, so the first one found is its
     -- default account
-    it "creates the accounts found, the first named default-btc and the others after the network and their index, with the fingerprint of the seed, and syncs them" $
+    it "creates the accounts found, the first named default and the others after the network and their index, with the fingerprint of the seed, and syncs them" $
       inDatabaseE $ do
         results <- recoverSeed ctx cfg (toStore paidAccounts) btc (testSeed ctx) 2 noQuestion
-        liftIO $ map (dBAccountName . syncResAccount) results `shouldBe` ["default-btc", "btc2"]
+        liftIO $ map (dBAccountName . syncResAccount) results `shouldBe` ["default", "btc2"]
         liftIO $ map (dBAccountFingerprint . syncResAccount) results `shouldBe` [Just "bc560f95", Just "bc560f95"]
         liftIO $ map syncResNewAddrs results `shouldBe` [1, 1]
         (map (dBAccountIndex . snd) <$> lift getAccounts) `dbShouldBeE` [0, 2]
@@ -1256,33 +1256,31 @@ spec = prepareContext $ \ctx -> do
           coins accId `dbShouldBeE` [OutPoint tid 0]) (zip accs [(50000, fakeTxHash 1), (20000, fakeTxHash 2)])
 
     -- main is account 0 of the seed, which the search passes over
-    it "leaves the name default-btc unused when the wallet has an account on btc already" $
+    it "leaves the name default unused when the wallet has an account on btc already" $
       inDatabaseE $ do
         _ <- testNewAcc ctx "main"
         results <- recoverSeed ctx cfg (toStore paidAccounts) btc (testSeed ctx) 2 noQuestion
         liftIO $ map (dBAccountName . syncResAccount) results `shouldBe` ["btc2"]
 
-    it "names the first account default-btc when the wallet has accounts on other networks only" $
+    it "names the first account default when the wallet has accounts on other networks only" $
       inDatabaseE $ do
         _ <- testNewAccBch ctx "cash"
         results <- recoverSeed ctx cfg (toStore paidAccounts) btc (testSeed ctx) 2 noQuestion
-        liftIO $ map (dBAccountName . syncResAccount) results `shouldBe` ["default-btc", "btc2"]
+        liftIO $ map (dBAccountName . syncResAccount) results `shouldBe` ["default", "btc2"]
 
-    -- An earlier hw let an account of bch be named default-btc
-    it "names no account default-btc when an account of another network has that name" $
+    it "names the first account default though the default account of another network has that name" $
       inDatabaseE $ do
-        (cashId, _) <- testNewAccBch ctx "cash"
-        lift $ P.update cashId [DBAccountName P.=. "default-btc"]
+        _ <- testNewAccBch ctx "default"
         results <- recoverSeed ctx cfg (toStore paidAccounts) btc (testSeed ctx) 2 noQuestion
-        liftIO $ map (dBAccountName . syncResAccount) results `shouldBe` ["btc0", "btc2"]
+        liftIO $ map (dBAccountName . syncResAccount) results `shouldBe` ["default", "btc2"]
 
     -- The chain pays the first receiving address of the bip84 account 0 of
     -- the seed, and no bip44 account
-    it "names the first bip84 account default-btc when no bip44 account was paid" $
+    it "names the first bip84 account default when no bip44 account was paid" $
       inDatabaseE $ do
         let store = paidStore ctx [(segwitExternalAddr 0, 30000)]
         results <- recoverSeed ctx cfg (toStore store) btc (testSeed ctx) 1 noQuestion
-        liftIO $ map (dBAccountName . syncResAccount) results `shouldBe` ["default-btc"]
+        liftIO $ map (dBAccountName . syncResAccount) results `shouldBe` ["default"]
 
     it "creates nothing for a seed that was never paid" $
       inDatabaseE $ do
@@ -1295,7 +1293,7 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         let store = paidStore ctx [(externalAddr 0, 50000), (segwitExternalAddr 0, 30000)]
         results <- recoverSeed ctx cfg (toStore store) btc (testSeed ctx) 1 noQuestion
-        liftIO $ map (dBAccountName . syncResAccount) results `shouldBe` ["default-btc", "btc0-segwit"]
+        liftIO $ map (dBAccountName . syncResAccount) results `shouldBe` ["default", "btc0-segwit"]
         liftIO $ map (pathToStr . accountPath . syncResAccount) results `shouldBe` ["/44'/0'/0'", "/84'/0'/0'"]
         liftIO $ map syncResSpendable results `shouldBe` [50000, 30000]
 
