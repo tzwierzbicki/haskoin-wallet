@@ -188,9 +188,12 @@ portfolioRows :: PortfolioView -> [(PortfolioView, NetworkView)]
 portfolioRows portfolio = (portfolio,) <$> viewNetworks portfolio
 
 -- | The columns of the portfolios, a row for each network of each: the
--- wallet, the portfolio and its description, the network, what the
--- portfolio can spend there now, the balances the store gave, its coins
--- and its addresses, and when the portfolio was created. What the verbose
+-- wallet, the portfolio, whether it is the active one, its description,
+-- the network, what the portfolio can spend there now, the balances the
+-- store gave, its coins and its addresses, and when the portfolio was
+-- created. The column Active says yes or no, words that a filter of the
+-- spreadsheet picks, rather than the * of the screen and an empty cell.
+-- What the verbose
 -- view gives, but the keys of the accounts and the fingerprint of the
 -- mnemonic. A key in a spreadsheet would let anyone it reaches see every
 -- address and every payment of the account. A fingerprint has 8
@@ -201,6 +204,7 @@ portfolioColumns :: [Column (PortfolioView, NetworkView)]
 portfolioColumns =
   [ Column "Wallet" $ \(portfolio, _) -> TextCell (walletName (refWallet (viewRef portfolio))),
     Column "Portfolio" $ \(portfolio, _) -> TextCell (portfolioName (refPortfolio (viewRef portfolio))),
+    Column "Active" $ \(portfolio, _) -> TextCell (if viewActive portfolio then "yes" else "no"),
     Column "Description" $ \(portfolio, _) -> textCell (viewDescription portfolio),
     Column "Network" $ onNetwork (\net -> TextCell (cs (networkViewNetwork net).name)),
     Column "Spendable (sats)" $ onNetwork (satoshiCell . networkViewSpendable),

@@ -47,6 +47,10 @@ import Haskoin.Wallet.ShortId (ShortId, readShortId)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync (ScanQuestion, SyncRes (..), Watcher (Watcher))
 import Haskoin.Wallet.SyncStatus (Status, Step, noStatus)
+import Haskoin.Wallet.Cli.Parser (Command, program)
+import qualified Options.Applicative as O
+import Haskoin.Wallet.Cli.Parser.Args (Args (..), CommandSpec (..))
+import Haskoin.Wallet.Cli.Parser.Run (commandNamed)
 import Haskoin.Wallet.Cli.Response (AccountCounts (..), Group (..))
 import Haskoin.Wallet.Cli.Style (Style, renderPlain)
 import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), MyInputs (..), MyOutputs (..), PendingStatus (..), TxInfo (..), TxStatus (..), TxSummary (..), TxType (..), pendingSigned)
@@ -198,6 +202,20 @@ storedVersions :: DB IO [(PersistValue, Text)]
 storedVersions = do
   rows <- rawSql "select version, typeof(version) from d_b_version" []
   return [(value, storageClass) | (Single value, Single storageClass) <- rows]
+
+-- | What the command line reads from the words typed after hw: the command
+-- the first word names, with its options, or the first line of why the
+-- words are refused, as hw prints it after "Error: "
+parsedLine :: [String] -> Either String Command
+parsedLine [] = Left "No command"
+parsedLine (name : rest) =
+  case commandNamed program name of
+    Nothing -> Left ("hw has no command " <> name)
+    Just command ->
+      case O.execParserPure O.defaultPrefs (O.info command.args.parser mempty) rest of
+        O.Success parsed -> Right parsed
+        O.Failure failure -> Left (takeWhile (/= '\n') (fst (O.renderFailure failure "hw")))
+        O.CompletionInvoked _ -> Left "A request of the shell"
 
 -- | Portfolio 0 of a seed, whole, as newportfolio creates it, with the
 -- wallet of the seed: both are created when the database does not have
@@ -362,7 +380,8 @@ mainGroup :: [row] -> Group row
 mainGroup = Group mainPlace [AccountCounts Bip44 12 3]
 
 -- | Portfolio 0 of wallet 0 as portfolios shows it, with the two accounts
--- above on Bitcoin and no other: described as "savings", in a wallet
+-- above on Bitcoin and no other: the active portfolio, described as
+-- "savings", in a wallet
 -- without a description whose fingerprint is that of the test mnemonic,
 -- created at 'seenTime'. On Bitcoin it holds 0.05 btc confirmed and
 -- 0.001 btc unconfirmed in 3 coins, can spend 0.049 btc now, and has 17
@@ -373,6 +392,7 @@ mainPortfolioView :: PortfolioView
 mainPortfolioView =
   PortfolioView
     { viewRef = mainPortfolioRef,
+      viewActive = True,
       viewDescription = "savings",
       viewWalletDescription = "",
       viewFingerprint = testFingerprint,

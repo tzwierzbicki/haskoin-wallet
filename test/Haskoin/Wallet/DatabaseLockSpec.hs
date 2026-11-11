@@ -15,7 +15,6 @@ import Database.Persist.Sql (Single (..), rawExecute, rawSql)
 import Haskoin.Wallet.Commands (cmdSetDescription)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Database.Portfolio (defaultPortfolio)
 import Haskoin.Wallet.Cli.Parser (SetDescription (..))
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.TestUtils (inScratchDirectory)
@@ -69,7 +68,7 @@ spec =
           liftIO $ takeMVar release
         takeMVar held
         -- The command waits its full 'busyTimeout' before answering
-        cmdSetDescription (def :: Config) {configDatabaseFile = Just database} (SetDescription "savings" defaultPortfolio False)
+        cmdSetDescription (def :: Config) {configDatabaseFile = Just database} (SetDescription "savings" False)
           `shouldReturn` ResponseError (cs databaseInUse)
         putMVar release ()
         wait holder

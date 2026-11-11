@@ -38,6 +38,16 @@
 -- and 84 for a BIP84 account with P2WPKH addresses. Its index is that of
 -- its portfolio, and the fingerprint of its seed that of its wallet.
 --
+-- One portfolio is the active one: the commands work in it, without an
+-- option that names it, until the command switch makes another one
+-- active. It is a fact the user decides, so it is kept, in a table of its
+-- own that holds one row at most: the row at the slot 0, which names the
+-- portfolio. The first portfolio created in a database becomes active. A
+-- database without any portfolio has no row there. The configuration
+-- file does not hold it: a key of the file could name a portfolio the
+-- database does not have, as after the user points database-file at a
+-- backup, and the two could disagree.
+--
 -- The test networks all have the coin type 1, so the accounts of a
 -- portfolio on two of them have the same key and the same addresses.
 -- Every unique key therefore names the network, or the account, which is
@@ -121,6 +131,13 @@ DBPortfolio
   description Text default=''
   created UTCTime default=CURRENT_TIMESTAMP
   UniquePortfolio wallet index
+  deriving Show
+  deriving Eq
+
+DBActivePortfolio
+  slot Int
+  portfolio DBPortfolioId
+  Primary slot
   deriving Show
   deriving Eq
 

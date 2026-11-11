@@ -13,9 +13,11 @@
 -- answer of hw is read, and the payments and chains of the fixtures.
 --
 -- A home holds portfolios, made from the test mnemonic with newportfolio
--- --existing: portfolio0 of wallet0 first, then portfolio1. The fake store
--- serves the same chain on every network, and each sync covers the eight
--- networks of a portfolio. A payment to an address of the bip44 account of
+-- --existing: portfolio0 of wallet0 first, then portfolio1. portfolio0,
+-- the first created, is the active portfolio, the one the commands work
+-- in, until a switch ('switchTo'). The fake store serves the same chain
+-- on every network, and each sync covers the eight networks of every
+-- portfolio. A payment to an address of the bip44 account of
 -- portfolio0 on btc, as the chains below make, is seen on btc alone: the
 -- other networks derive other keys. The answers are read from the JSON hw
 -- writes with --json, each place named by its 'Place' or its
@@ -33,6 +35,8 @@ module Haskoin.Wallet.Workflow.TestUtils
     answer,
     newTestPortfolio,
     newPortfolioOf,
+    switchTo,
+    activePortfolioIn,
     receiveWith,
     synced,
     syncedBothTypes,
@@ -59,6 +63,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     printedSentence,
     portfolio1Place,
     portfolioRefsOf,
+    activePortfoliosOf,
     spendableOn,
     fingerprintsOf,
     descriptorsOf,
@@ -210,10 +215,21 @@ newPortfolioOf home mnem = void $ answer home ["newportfolio", "--existing"] (se
 newTestPortfolio :: FilePath -> IO ()
 newTestPortfolio home = newPortfolioOf home testMnemonic
 
+-- | The portfolio portfolios marks as the active one in a home, the one
+-- the commands work in: none in a database without a portfolio
+activePortfolioIn :: FilePath -> IO (Either String [PortfolioRef])
+activePortfolioIn home = activePortfoliosOf <$> hwJson home ["portfolios"] []
+
+-- | Make the portfolio of the indexes given, of a wallet and of one of its
+-- portfolios, the active one of a home, as switch --wallet --portfolio
+-- does: the commands that run next work in it
+switchTo :: FilePath -> Natural -> Natural -> IO ()
+switchTo home wallet portfolio = void $ answer home ["switch", "--wallet", show wallet, "--portfolio", show portfolio] []
+
 -- | The address receive hands out with the options given, as text: the
 -- first receiving address of the bip44 account of portfolio0 on btc
--- without options, and with --network, --type, --portfolio or --wallet
--- one of another account
+-- without options in a home of the test wallet, and with --network or
+-- --type one of another account of the active portfolio
 receiveWith :: FilePath -> [String] -> IO String
 receiveWith home options = do
   shown <- addressesOf <$> answer home ("receive" : options) []
@@ -244,13 +260,17 @@ syncedBothTypes home = do
 -- | A home with portfolio0 and portfolio1 of the test wallet, the first
 -- receiving address of the bip44 account of each on btc handed out,
 -- 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj and 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo,
--- and synced with the chain of the store
+-- and synced with the chain of the store. portfolio0, the first one
+-- created, is the active portfolio afterwards, as it was before: receive
+-- gives the address of portfolio1 after a switch to it, and a switch back.
 syncedTwoPortfolios :: FilePath -> IO ()
 syncedTwoPortfolios home = do
   newTestPortfolio home
   newTestPortfolio home
   _ <- answer home ["receive"] []
-  _ <- answer home ["receive", "--portfolio", "1"] []
+  switchTo home 0 1
+  _ <- answer home ["receive"] []
+  switchTo home 0 0
   void $ answer home ["sync"] []
 
 -- | A home with portfolio0 of the test wallet, its first receiving address
@@ -301,7 +321,7 @@ sentPayment home = do
   nosig <- paymentSigned home
   txidOf =<< txOf =<< answer home ["broadcast", nosig, "--yes"] []
 
--- | The one pending transaction of a home, in its default portfolio
+-- | The one pending transaction of a home, in its active portfolio
 onePendingTx :: FilePath -> IO TxInfo
 onePendingTx home = do
   listed <- hwJson home ["pendingtxs"] []
@@ -373,7 +393,8 @@ portfolio1Place :: Place
 portfolio1Place = Place (PortfolioRef 0 1) btc
 
 -- | The portfolios an answer shows, as portfolios lists them, or as
--- newportfolio leaves them: each by its wallet and its index
+-- newportfolio leaves them, or switch makes active: each by its wallet
+-- and its index
 portfolioRefsOf :: Response -> Either String [PortfolioRef]
 portfolioRefsOf response = fmap viewRef <$> portfolioViewsOf response
 
@@ -382,16 +403,22 @@ portfolioViewsOf :: Response -> Either String [PortfolioView]
 portfolioViewsOf = \case
   ResponsePortfolios views -> Right views
   ResponsePortfolio view -> Right [view]
-  ResponseNewPortfolio _ view -> Right [view]
+  ResponseSwitched view -> Right [view]
+  ResponseNewPortfolio _ view _ -> Right [view]
   other -> Left (show other)
+
+-- | The portfolios an answer marks as the active one, as portfolios marks
+-- it in its JSON: one at most
+activePortfoliosOf :: Response -> Either String [PortfolioRef]
+activePortfoliosOf response = fmap viewRef . filter viewActive <$> portfolioViewsOf response
 
 -- | What each portfolio of an answer can spend now on the network: from
 -- the figures portfolios shows, or from what sync and recover synced. A
 -- portfolio without an account on the network is left out.
 spendableOn :: Network -> Response -> Either String [(PortfolioRef, Word64)]
 spendableOn net = \case
-  ResponseSync results _ _ -> Right (fromSyncs results)
-  ResponseRecover _ _ _ _ results _ _ _ -> Right (fromSyncs results)
+  ResponseSync results _ _ _ -> Right (fromSyncs results)
+  ResponseRecover _ _ _ _ results _ _ _ _ -> Right (fromSyncs results)
   other -> do
     views <- portfolioViewsOf other
     return [(viewRef v, networkViewSpendable n) | v <- views, n <- viewNetworks v, networkViewNetwork n == net]
@@ -434,18 +461,17 @@ checkedOf :: Response -> Either String (Bool, Text)
 checkedOf (ResponseChecked _ result text) = Right (result, text)
 checkedOf other = Left (show other)
 
--- | What deleteportfolio or deletewallet says it deleted, and the keys of
--- the configuration file it set, each with its new value
-deletedOf :: Response -> Either String (Text, [(Text, Natural)])
-deletedOf (ResponseDeleted text defaults) = Right (text, defaults)
+-- | What deleteportfolio or deletewallet says it deleted
+deletedOf :: Response -> Either String Text
+deletedOf (ResponseDeleted text) = Right text
 deletedOf other = Left (show other)
 
 -- | The pools sync or recover synced, each by its portfolio and its
 -- network, with what it can spend now
 syncedOf :: Response -> Either String [(Place, Word64)]
 syncedOf = \case
-  ResponseSync results _ _ -> Right (fromSyncs results)
-  ResponseRecover _ _ _ _ results _ _ _ -> Right (fromSyncs results)
+  ResponseSync results _ _ _ -> Right (fromSyncs results)
+  ResponseRecover _ _ _ _ results _ _ _ _ -> Right (fromSyncs results)
   other -> Left (show other)
   where
     fromSyncs results = [(syncResPlace s, syncResSpendable s) | s <- results]
@@ -453,39 +479,39 @@ syncedOf = \case
 -- | The networks the host does not serve, as sync and recover name them
 notServedOf :: Response -> Either String [String]
 notServedOf = \case
-  ResponseSync _ unserved _ -> Right ((.name) <$> unserved)
-  ResponseRecover _ _ _ _ _ _ unserved _ -> Right ((.name) <$> unserved)
+  ResponseSync _ unserved _ _ -> Right ((.name) <$> unserved)
+  ResponseRecover _ _ _ _ _ _ unserved _ _ -> Right ((.name) <$> unserved)
   other -> Left (show other)
 
 -- | The networks a sync left out, each with the failure of its store
 notSyncedOf :: Response -> Either String [(String, Text)]
-notSyncedOf (ResponseSync _ _ notSynced) = Right [(net.name, failure) | (net, failure) <- notSynced]
+notSyncedOf (ResponseSync _ _ notSynced _) = Right [(net.name, failure) | (net, failure) <- notSynced]
 notSyncedOf other = Left (show other)
 
 -- | What recover found of a seed: the index of its wallet, if it has one
 -- now, and the indexes of the portfolios it created
 recoveredOf :: Response -> Either String (Maybe Natural, [Natural])
-recoveredOf (ResponseRecover _ _ walletM created _ _ _ _) = Right (walletM, created)
+recoveredOf (ResponseRecover _ _ walletM created _ _ _ _ _) = Right (walletM, created)
 recoveredOf other = Left (show other)
 
 -- | The networks recover left out, each with the failure of its store, as
 -- it prints them after "left out"
 leftOutOf :: Response -> Either String [(String, Text)]
-leftOutOf (ResponseRecover _ _ _ _ _ _ _ leftOut) = Right [(net.name, failure) | (net, failure) <- leftOut]
+leftOutOf (ResponseRecover _ _ _ _ _ _ _ leftOut _) = Right [(net.name, failure) | (net, failure) <- leftOut]
 leftOutOf other = Left (show other)
 
 -- | The funds recover found at paths hw cannot spend from: the network,
 -- the kind and the path of each account, how many of its addresses were
 -- used, and what they hold in satoshis
 unspendableOf :: Response -> Either String [(String, Text, String, Natural, Word64)]
-unspendableOf (ResponseRecover _ _ _ _ _ elsewhere _ _) =
+unspendableOf (ResponseRecover _ _ _ _ _ elsewhere _ _ _) =
   Right [(net.name, foreignKindName (foreignKind funds), pathToStr (foreignPath net funds), foreignUsed funds, foreignBalance funds) | (net, funds) <- elsewhere]
 unspendableOf other = Left (show other)
 
 -- | The wallets importwallet answers for, each by its index, with whether
 -- it created the wallet
 walletsImportedOf :: Response -> Either String [(Natural, Bool)]
-walletsImportedOf (ResponseImport report) =
+walletsImportedOf (ResponseImport report _) =
   Right [(walletImportIndex w, walletImportCreated w) | w <- reportWallets report]
 walletsImportedOf other = Left (show other)
 
@@ -493,7 +519,7 @@ walletsImportedOf other = Left (show other)
 -- wallet and its own, with whether it created the portfolio, whole, or
 -- found it in the database
 portfoliosImportedOf :: Response -> Either String [(Natural, Natural, Bool)]
-portfoliosImportedOf (ResponseImport report) =
+portfoliosImportedOf (ResponseImport report _) =
   Right
     [ (walletImportIndex w, portfolioImportIndex p, portfolioImportCreated p)
       | w <- reportWallets report,
@@ -504,19 +530,19 @@ portfoliosImportedOf other = Left (show other)
 -- | The accounts importwallet added to the database, with the portfolios
 -- it created
 addedAccountsOf :: Response -> Either String [AccountRef]
-addedAccountsOf (ResponseImport report) = Right [ref | AccountAdded ref <- reportAccounts report]
+addedAccountsOf (ResponseImport report _) = Right [ref | AccountAdded ref <- reportAccounts report]
 addedAccountsOf other = Left (show other)
 
 -- | The key records importwallet left aside, by the start of their key,
 -- each with the reason
 leftAsideOf :: Response -> Either String [(Text, Text)]
-leftAsideOf (ResponseImport report) = Right [(key, why) | AccountLeftAside key why <- reportAccounts report]
+leftAsideOf (ResponseImport report _) = Right [(key, why) | AccountLeftAside key why <- reportAccounts report]
 leftAsideOf other = Left (show other)
 
 -- | How many labels importwallet set: on addresses, and on transactions,
 -- each portfolio counting once
 labelsSetOf :: Response -> Either String (Natural, Natural)
-labelsSetOf (ResponseImport report) = Right (reportAddressLabels report, reportTxLabels report)
+labelsSetOf (ResponseImport report _) = Right (reportAddressLabels report, reportTxLabels report)
 labelsSetOf other = Left (show other)
 
 -- | Where the address, the transaction or the payment of an answer is: its

@@ -43,15 +43,20 @@ spec = do
 portfolioSheetSpec :: Spec
 portfolioSheetSpec =
   describe "The sheet of portfolios" $ do
-    it "names its columns: the wallet, the portfolio and its description, then the network, without the keys or the fingerprint of the seed" $
+    it "names its columns: the wallet, the portfolio, whether it is the active one and its description, then the network, without the keys or the fingerprint of the seed" $
       sheetHeadings <$> listingSheet (ResponsePortfolios [])
-        `shouldBe` Just ["Wallet", "Portfolio", "Description", "Network", "Spendable (sats)", "Confirmed (sats)", "Unconfirmed (sats)", "Coins", "Addresses", "Created (UTC)"]
+        `shouldBe` Just ["Wallet", "Portfolio", "Active", "Description", "Network", "Spendable (sats)", "Confirmed (sats)", "Unconfirmed (sats)", "Coins", "Addresses", "Created (UTC)"]
 
-    -- portfolio0 holds 5000000 confirmed and 100000 unconfirmed on btc, in
-    -- 3 coins, can spend 4900000 now, and has 17 addresses there
-    it "gives a portfolio a row on its network: its wallet, its name and description, the network, its amounts in satoshis, its coins and addresses, and when it was created" $
+    -- portfolio0 is the active portfolio. It holds 5000000 confirmed and
+    -- 100000 unconfirmed on btc, in 3 coins, can spend 4900000 now, and has
+    -- 17 addresses there.
+    it "gives a portfolio a row on its network: its wallet, its name, yes for the active one, its description, the network, its amounts in satoshis, its coins and addresses, and when it was created" $
       sheetRows <$> listingSheet (ResponsePortfolios [mainPortfolioView])
-        `shouldBe` Just [[TextCell "wallet0", TextCell "portfolio0", TextCell "savings", TextCell "btc", SatoshiCell 4900000, SatoshiCell 5000000, SatoshiCell 100000, CountCell 3, CountCell 17, TimeCell seenTime]]
+        `shouldBe` Just [[TextCell "wallet0", TextCell "portfolio0", TextCell "yes", TextCell "savings", TextCell "btc", SatoshiCell 4900000, SatoshiCell 5000000, SatoshiCell 100000, CountCell 3, CountCell 17, TimeCell seenTime]]
+
+    it "says no in the column Active of a portfolio that is not the active one" $
+      map (take 3) . sheetRows <$> listingSheet (ResponsePortfolios [mainPortfolioView {viewActive = False}])
+        `shouldBe` Just [[TextCell "wallet0", TextCell "portfolio0", TextCell "no"]]
 
     -- A whole portfolio has an account on eight networks
     it "gives a portfolio a row for each network it has an account on, in the order of its networks" $ do
@@ -59,14 +64,14 @@ portfolioSheetSpec =
           both = mainPortfolioView {viewNetworks = viewNetworks mainPortfolioView <> [onBch]}
       sheetRows <$> listingSheet (ResponsePortfolios [both])
         `shouldBe` Just
-          [ [TextCell "wallet0", TextCell "portfolio0", TextCell "savings", TextCell "btc", SatoshiCell 4900000, SatoshiCell 5000000, SatoshiCell 100000, CountCell 3, CountCell 17, TimeCell seenTime],
-            [TextCell "wallet0", TextCell "portfolio0", TextCell "savings", TextCell "bch", SatoshiCell 0, SatoshiCell 0, SatoshiCell 0, CountCell 0, CountCell 0, TimeCell seenTime]
+          [ [TextCell "wallet0", TextCell "portfolio0", TextCell "yes", TextCell "savings", TextCell "btc", SatoshiCell 4900000, SatoshiCell 5000000, SatoshiCell 100000, CountCell 3, CountCell 17, TimeCell seenTime],
+            [TextCell "wallet0", TextCell "portfolio0", TextCell "yes", TextCell "savings", TextCell "bch", SatoshiCell 0, SatoshiCell 0, SatoshiCell 0, CountCell 0, CountCell 0, TimeCell seenTime]
           ]
 
     it "gives the rows of each portfolio after those of the one before, each named by its wallet and its index" $ do
-      let other = mainPortfolioView {viewRef = PortfolioRef 2 1, viewDescription = ""}
-      map (take 4) . sheetRows <$> listingSheet (ResponsePortfolios [mainPortfolioView, other])
-        `shouldBe` Just [[TextCell "wallet0", TextCell "portfolio0", TextCell "savings", TextCell "btc"], [TextCell "wallet2", TextCell "portfolio1", EmptyCell, TextCell "btc"]]
+      let other = mainPortfolioView {viewRef = PortfolioRef 2 1, viewActive = False, viewDescription = ""}
+      map (take 5) . sheetRows <$> listingSheet (ResponsePortfolios [mainPortfolioView, other])
+        `shouldBe` Just [[TextCell "wallet0", TextCell "portfolio0", TextCell "yes", TextCell "savings", TextCell "btc"], [TextCell "wallet2", TextCell "portfolio1", TextCell "no", EmptyCell, TextCell "btc"]]
 
 addressSheetSpec :: Spec
 addressSheetSpec =

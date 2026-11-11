@@ -666,22 +666,22 @@ sendPending ctx storeOn beforeSending named = do
 -- data with the paths of that pool's addresses it leaves out, as
 -- 'withWalletPaths' fills them in.
 --
--- The pool is the one that holds the transaction pending, which the
--- portfolios the user names must include. A file of another network
--- than the holder's is refused. Otherwise it is one of the pools the
--- transaction involves ('involvement'): those whose keys derive the
--- addresses it spends or pays, at the paths it gives or the wallet knows.
--- The pool that pays comes first: a transaction that moves funds between
--- two portfolios is of the portfolio it spends from, which must lock the
--- coins and sign. With no pool that pays, it is of the one it pays. When
--- several pay, or none pays and it pays several, the user names the
--- portfolio.
+-- The pool is the one that holds the transaction pending. A file of
+-- another network than the holder's is refused. Otherwise it is one of
+-- the pools the transaction involves ('involvement'): those whose keys
+-- derive the addresses it spends or pays, at the paths it gives or the
+-- wallet knows. The pool that pays comes first: a transaction that moves
+-- funds between two portfolios is of the portfolio it spends from, which
+-- must lock the coins and sign. With no pool that pays, it is of the one
+-- it pays. So the command finds the portfolio by itself, and the user
+-- names none.
 --
--- --wallet and --portfolio narrow the pools looked at ('Narrowed'): to
--- every portfolio of a wallet, or to one portfolio. A refusal names them
--- as the user did. Narrowed to the portfolio a transfer pays, the pool is
--- that one, which shows the transfer as incoming. That pool must not keep
--- the transaction or sign it ('refusePaidElsewhere').
+-- When several pay, or none pays and it pays several, the pool of the
+-- active portfolio is taken, when it is one of them: the user who
+-- switched to a portfolio means that one. Otherwise the refusal names
+-- them, for the user to switch to the one to use. The active portfolio
+-- settles nothing else: a transfer is of the portfolio that pays it,
+-- whichever is active, since that one locks its coins and signs.
 --
 -- The test networks share their keys, so a transaction of a file that
 -- names no network may involve the same portfolio on several of them. The
@@ -697,29 +697,22 @@ sendPending ctx storeOn beforeSending named = do
 transactionPool ::
   (MonadUnliftIO m) =>
   Ctx ->
-  -- | The portfolios --wallet and --portfolio leave, when either is given
-  Maybe Narrowed ->
+  -- | The active portfolio, when the database has one
+  Maybe DBPortfolioId ->
   -- | The network of the file, or of --network
   Maybe Network ->
   -- | The default network of the configuration
   Network ->
   TxSignData ->
   ExceptT String (DB m) (Maybe Pool, TxSignData)
-transactionPool ctx narrowedM netM fallback tsd = do
+transactionPool ctx activeM netM fallback tsd = do
   heldM <- lookupPendingTx (nosigHash (txSignDataTx tsd))
   case heldM of
     Just held -> do
       let pool = held.pendingTxPool
       unless (onTxNetwork pool) $
         throwError "The transaction is pending on another network"
-      forM_ narrowedM $ \narrowed ->
-        unless (allowedBy narrowedM pool.poolPortfolio) $ do
-          place <- poolPlace pool
-          throwError ("The transaction is pending in " <> placeText place <> ", not in " <> narrowed.narrowedText)
-      completed <- withWalletPaths ctx pool tsd
-      accounts <- lift $ poolAccounts pool
-      liftEither $ checkOutputReach (heldPoolOf (snd <$> accounts)) completed
-      return (Just pool, completed)
+      reachedPool pool =<< withWalletPaths ctx pool tsd
     Nothing -> do
       pools <- candidatePools
       parsed <- forM pools $ \pool -> (pool,) <$> involvement ctx pool tsd
@@ -734,36 +727,30 @@ transactionPool ctx narrowedM netM fallback tsd = do
           -- on the wrong chain.
           elsewhere <- involvedElsewhere
           when elsewhere $ throwError "The transaction involves an account of another network"
-          forM_ narrowedM $ \narrowed -> throwError ("The transaction does not involve " <> narrowed.narrowedText)
           return (Nothing, tsd)
-        [(pool, completed, _)] -> do
-          accounts <- lift $ poolAccounts pool
-          liftEither $ checkOutputReach (heldPoolOf (snd <$> accounts)) completed
-          return (Just pool, completed)
-        several -> do
-          places <- mapM (\(pool, _, _) -> poolPlace pool) several
-          throwError $
-            "The transaction "
-              <> (if null paying then "pays" else "spends from")
-              <> " several portfolios, "
-              <> intercalateAnd (placeText <$> places)
-              <> ": name the one to use with --portfolio and --wallet"
+        [(pool, completed, _)] -> reachedPool pool completed
+        several
+          | [(pool, completed, _)] <- [candidate | candidate@(pool, _, _) <- several, Just pool.poolPortfolio == activeM] -> reachedPool pool completed
+          | otherwise -> do
+              places <- mapM (\(pool, _, _) -> poolPlace pool) several
+              throwError $
+                "The transaction "
+                  <> (if null paying then "pays" else "spends from")
+                  <> " several portfolios, "
+                  <> intercalateAnd (placeText <$> places)
+                  <> ": switch to the one to use first"
   where
     onTxNetwork :: Pool -> Bool
     onTxNetwork pool = maybe True (== pool.poolNetwork) netM
-    -- The pools of the portfolios the options leave, or of every portfolio
-    narrowedPools = case narrowedM of
-      Just narrowed -> lift $ concat <$> mapM (portfolioPools . (.portfolioId)) narrowed.narrowedPortfolios
-      Nothing -> lift allPools
-    -- The pools to try: those of the portfolios the options leave, on the
-    -- network of the transaction when it is known
-    candidatePools = filter onTxNetwork <$> narrowedPools
+    -- The pools to try: those of every portfolio, on the network of the
+    -- transaction when it is known
+    candidatePools = filter onTxNetwork <$> lift allPools
     -- Whether the transaction involves a pool on another network than the
     -- one named, when one is named: the pools the candidates left out
     involvedElsewhere = case netM of
       Nothing -> return False
       Just _ -> do
-        pools <- narrowedPools
+        pools <- lift allPools
         fmap or . forM (filter (not . onTxNetwork) pools) $ \pool -> isJust <$> involvement ctx pool tsd
     -- The pools found, on one network: when they are on several, those on
     -- the default network, or a refusal when it is none of them
@@ -779,6 +766,15 @@ transactionPool ctx narrowedM netM fallback tsd = do
                   <> ". Set the network to read it on with setdefault --network"
             onFallback -> return onFallback
         _ -> return found
+
+-- | The pool of a transaction, with its signing data completed, once the
+-- paths of its outputs are checked against the addresses the pool holds
+-- ('checkOutputReach')
+reachedPool :: (MonadUnliftIO m) => Pool -> TxSignData -> ExceptT String (DB m) (Maybe Pool, TxSignData)
+reachedPool pool completed = do
+  accounts <- lift $ poolAccounts pool
+  liftEither $ checkOutputReach (heldPoolOf (snd <$> accounts)) completed
+  return (Just pool, completed)
 
 -- | Whether the portfolio of a summary pays the transaction: it spends a
 -- coin of its own
@@ -808,32 +804,6 @@ involvement ctx pool tsd = do
     Nothing -> do
       withOwnPaths <- withWalletPaths ctx pool tsd {txSignDataInputPaths = [], txSignDataOutputPaths = []}
       return (listToMaybe (involving withOwnPaths))
-
--- | Refuse to keep or to sign a transaction in a pool that does not pay
--- it, when another pool of the wallet on its network does. A transaction
--- between two portfolios is kept pending in the one that pays it: that
--- one locks the coins it spends, and its keys sign it. --portfolio may
--- name the portfolio a transfer pays, for show to show the transfer as
--- that portfolio sees it, but importtx, signtx and signsweep refuse it.
--- A transaction no pool of the wallet pays, such as a sweep of outside
--- coins, is kept in the pool it pays, and nothing is refused. The
--- signing data is that of the file, before 'withWalletPaths' completes it
--- for a pool.
-refusePaidElsewhere :: (MonadUnliftIO m) => Ctx -> Pool -> TxSignData -> ExceptT String (DB m) ()
-refusePaidElsewhere ctx pool tsd = do
-  paysHere <- pays pool
-  unless paysHere $ do
-    others <- filter (\other -> other /= pool && other.poolNetwork == pool.poolNetwork) <$> lift allPools
-    payers <- filterM pays others
-    payerTexts <- mapM (fmap portfolioText . getPortfolio . (.poolPortfolio)) payers
-    case payerTexts of
-      [] -> return ()
-      [payer] ->
-        throwError ("The transaction spends from " <> payer <> ", the portfolio that pays it: it is kept pending there, and signed there")
-      several ->
-        throwError ("The transaction spends from " <> intercalateAnd several <> ", the portfolios that pay it: it is kept pending in one of them, and signed there. Name that one with --portfolio and --wallet")
-  where
-    pays candidate = maybe False (paysFrom . snd) <$> involvement ctx candidate tsd
 
 -- | Items as a sentence lists them: "a", "a and b", "a, b and c"
 intercalateAnd :: [String] -> String

@@ -12,11 +12,16 @@
 -- writes nothing, and does not wait for another command. When it cannot
 -- read the database, the shell offers nothing for the word.
 --
--- The options typed before the word narrow what is offered ('Typed'):
--- --wallet and --portfolio to a portfolio, --network and --type to its
--- accounts. The defaults of the configuration are not applied. Without
--- an option, every portfolio counts, so that the shell offers a value
--- the user may still narrow down with an option typed after it.
+-- Most values are offered from every portfolio: the commands that take
+-- them find their portfolio by themselves. Coin control takes its coins
+-- and addresses from the active portfolio alone, and refuses the others,
+-- so --coin, --spend-from and --change-back are offered those of the
+-- active portfolio ('Looked'). The options typed before the word narrow
+-- what is offered ('Typed'): --wallet the portfolios of switch, and
+-- --network and --type the accounts. The defaults of the configuration
+-- are not applied. Without an option, every network counts, so that the
+-- shell offers a value the user may still narrow down with an option
+-- typed after it.
 module Haskoin.Wallet.Cli.Completion
   ( offeredAtMost,
     walletIndexes,
@@ -31,7 +36,9 @@ module Haskoin.Wallet.Cli.Completion
     labelTargets,
     shownTargets,
     walletAddresses,
+    activeAddresses,
     addressesToSpendFrom,
+    Looked (..),
     Typed (..),
     optionsTyped,
     readForCompletion,
@@ -44,7 +51,7 @@ import Data.Char (isHexDigit)
 import Data.Either (fromRight, rights)
 import Data.List (isPrefixOf, nub, stripPrefix)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, isNothing)
+import Data.Maybe (fromMaybe, isNothing, listToMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -56,7 +63,7 @@ import Haskoin.Wallet.Database.Account (accountKind, accountNetwork, accountPool
 import Haskoin.Wallet.Database.Address (AddrType (..), addressesStarting)
 import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..), coinAddressesStarting, coinText, coinsStarting, spendableAtAddresses, spendingOf, toJsonCoin)
 import Haskoin.Wallet.Database.PendingTx (PendingTx (..), fromRow, pendingRows, pendingTxs)
-import Haskoin.Wallet.Database.Portfolio (Portfolio (..), getAllPortfolios, portfolioIndex, walletIndex)
+import Haskoin.Wallet.Database.Portfolio (Portfolio (..), activePortfolioId, getAllPortfolios, portfolioIndex, walletIndex)
 import Haskoin.Wallet.Database.RawTx (lookupRawTx)
 import Haskoin.Wallet.Database.TxInfo (mempoolSummaries, ownTransaction, txidsStarting)
 import Haskoin.Wallet.Keys (AccountKind, indexFits, kindNamed)
@@ -92,27 +99,33 @@ fewEnough values
 
 {- Wallets and portfolios -}
 
--- | The indexes of the wallets, for --wallet
+-- | The indexes of the wallets, for the --wallet of switch and
+-- deletewallet
 walletIndexes :: IO [String]
 walletIndexes = readForCompletion $ do
   portfolios <- getAllPortfolios
   return (nub [show (walletIndex p.portfolioWallet) | p <- portfolios])
 
--- | The indexes of the portfolios, for --portfolio: those of the wallet
--- --wallet names among the words typed, or of every wallet
+-- | The indexes of the portfolios, for the --portfolio of switch,
+-- deleteportfolio and exportwallet: those of the wallet --wallet names
+-- among the words typed, or else of the wallet of the active portfolio,
+-- where the three look without --wallet. A database without an active
+-- portfolio has no portfolio, and nothing is offered.
 portfolioIndexes :: IO [String]
 portfolioIndexes = do
   typed <- typedOptions
   readForCompletion $ do
     portfolios <- getAllPortfolios
-    return (nub [show (portfolioIndex p.portfolioRow) | p <- portfolios, ofWallet typed p])
+    activeM <- activePortfolioId
+    let activeWallet = [walletIndex p.portfolioWallet | p <- portfolios, Just p.portfolioId == activeM]
+        wallet = maybe (listToMaybe activeWallet) Just typed.typedWallet
+    return (nub [show (portfolioIndex p.portfolioRow) | p <- portfolios, Just (walletIndex p.portfolioWallet) == wallet])
 
--- | What the options typed before the word to complete say of where the
--- command works: the wallet, the portfolio, the network and the type,
--- each when its option was typed
+-- | What the options typed before the word to complete say: the wallet of
+-- switch, and the network and the type of the accounts a value is
+-- offered from, each when its option was typed
 data Typed = Typed
   { typedWallet :: !(Maybe Natural),
-    typedPortfolio :: !(Maybe Natural),
     typedNetwork :: !(Maybe Network),
     typedKind :: !(Maybe AccountKind)
   }
@@ -128,18 +141,17 @@ typedOptions = do
     Just index -> optionsTyped (drop 1 (take index typed))
     Nothing -> optionsTyped []
 
--- | What the words say with --wallet, --portfolio, --network and --type,
--- as optparse reads them: --wallet N or --wallet=N, and the short forms
--- -p N, -n NET and -t TYPE, with or without a space. --wallet has no
--- short form. A wallet or a portfolio is typed by its index or by its
--- name, 2 or portfolio2 ('typedIndex'). Words after -- are arguments.
+-- | What the words say with --wallet, --network and --type, as optparse
+-- reads them: --wallet N or --wallet=N, and the short forms -n NET and
+-- -t TYPE, with or without a space. --wallet has no short form. A wallet
+-- is typed by its index or by its name, 2 or wallet2 ('typedIndex').
+-- Words after -- are arguments.
 -- bash breaks --wallet=N into words, which 'completionParts' joins again;
 -- zsh and fish pass it whole. A value that does not read is as no option.
 optionsTyped :: [String] -> Typed
 optionsTyped typed =
   Typed
     { typedWallet = typedIndex "wallet" =<< valueOf "--wallet" Nothing,
-      typedPortfolio = typedIndex "portfolio" =<< valueOf "--portfolio" (Just "-p"),
       typedNetwork = netByName =<< valueOf "--network" (Just "-n"),
       typedKind = kindNamed . cs =<< valueOf "--type" (Just "-t")
     }
@@ -166,22 +178,23 @@ typedIndex what word = do
   index <- readNatural (cs (fromMaybe word (stripPrefix what word)))
   if indexFits index then Just index else Nothing
 
--- | Whether a portfolio is of the wallet the options name, or any wallet
--- without --wallet
-ofWallet :: Typed -> Portfolio -> Bool
-ofWallet typed p = maybe True (== walletIndex p.portfolioWallet) typed.typedWallet
+-- | The portfolios a value is offered from: every one, for a command that
+-- finds its portfolio by itself, or the active one alone, for coin
+-- control, which refuses the coins and addresses of another
+data Looked = EveryPortfolio | ActivePortfolioOnly
+  deriving (Eq, Show)
 
--- | The accounts the options name: those of the wallet, the portfolio,
--- the network and the type typed, each narrowing the choice, or every
--- account without any option
-accountsTyped :: Typed -> DB IO [(DBAccountId, DBAccount)]
-accountsTyped typed = do
+-- | The accounts of the portfolios looked in that the options name: those
+-- of the network and the type typed, each narrowing the choice, or every
+-- account of those portfolios without any option
+accountsTyped :: Looked -> Typed -> DB IO [(DBAccountId, DBAccount)]
+accountsTyped looked typed = do
   accounts <- getAccounts
+  activeM <- activePortfolioId
   return
     [ (accId, acc)
       | (p, accId, acc) <- accounts,
-        ofWallet typed p,
-        maybe True (== portfolioIndex p.portfolioRow) typed.typedPortfolio,
+        looked == EveryPortfolio || Just p.portfolioId == activeM,
         maybe True (== accountNetwork acc) typed.typedNetwork,
         maybe True (== accountKind acc) typed.typedKind
     ]
@@ -233,12 +246,13 @@ hexOf = cs . txHashToHex
 -- that are in the mempool and its own payments. One replaced already is
 -- left out, and one marked not replaceable when hw holds its bytes to
 -- tell. They are few, since the network confirms or drops them: those of
--- the portfolios the options name, or of every portfolio, are all read.
+-- every portfolio, as bumpfee finds the portfolio by the transaction, are
+-- all read.
 idsToBump :: String -> IO [String]
 idsToBump typed = do
   options <- typedOptions
   readForCompletion $ do
-    accounts <- accountsTyped options
+    accounts <- accountsTyped EveryPortfolio options
     found <- forM [pool | pool <- poolsOf accounts, pool.poolNetwork.replaceByFee] $ \pool ->
       fromRight [] <$> runExceptT (replaceableOf pool)
     return $ fewEnough [hash | tid <- concat found, let hash = hexOf tid, typed `isPrefixOf` hash]
@@ -259,38 +273,41 @@ replaceableOf pool = do
 {- The coins -}
 
 -- | The coins free to lock, for lockcoin: those nothing locks, neither a
--- pending transaction nor the user, as lockcoin refuses the others
+-- pending transaction nor the user, as lockcoin refuses the others. A
+-- coin tells its portfolio, so every portfolio counts.
 coinsToLock :: String -> IO [String]
-coinsToLock = coinsWhere (isNothing . jsonCoinLock)
+coinsToLock = coinsWhere EveryPortfolio (isNothing . jsonCoinLock)
 
 -- | The coins the user locked, for unlockcoin, the only ones it frees
 coinsToUnlock :: String -> IO [String]
-coinsToUnlock = coinsWhere ((== Just LockedByUser) . jsonCoinLock)
+coinsToUnlock = coinsWhere EveryPortfolio ((== Just LockedByUser) . jsonCoinLock)
 
--- | The coins that can be spent now, for --coin. Coin control refuses a
--- choice none of whose coins can be spent.
+-- | The coins of the active portfolio that can be spent now, for --coin.
+-- Coin control refuses a coin of another portfolio, and a choice none of
+-- whose coins can be spent.
 coinsToSpend :: String -> IO [String]
-coinsToSpend = coinsWhere jsonCoinSpendable
+coinsToSpend = coinsWhere ActivePortfolioOnly jsonCoinSpendable
 
--- | The coins that start with the word typed and pass the test, as coins
--- lists them: TXID:INDEX, each once. Among more than 'offeredAtMost' that
--- start with the word, locked or not, none.
-coinsWhere :: (JsonCoin -> Bool) -> String -> IO [String]
-coinsWhere keep typed = do
+-- | The coins of the portfolios looked in that start with the word typed
+-- and pass the test, as coins lists them: TXID:INDEX, each once. Among
+-- more than 'offeredAtMost' that start with the word, locked or not,
+-- none.
+coinsWhere :: Looked -> (JsonCoin -> Bool) -> String -> IO [String]
+coinsWhere looked keep typed = do
   options <- typedOptions
   readForCompletion $ do
-    coins <- walletCoinsStarting options typed
+    coins <- walletCoinsStarting looked options typed
     return $ fewEnough (nub [coinText (jsonCoinOutpoint coin) | coin <- coins, keep coin])
 
--- | The coins of the accounts the options name, or of every account, that
--- start with the word typed, as coins lists them: the hexadecimal digits
+-- | The coins of the accounts the options name in the portfolios looked
+-- in, that start with the word typed, as coins lists them: the hexadecimal digits
 -- of the word are matched in the database, which gives one more than
 -- 'offeredAtMost' of them at most from each account, and a colon and an
 -- index after the digits are matched here, among those. Whether a coin is
 -- locked, and whether it can be spent now, are those of the listing.
-walletCoinsStarting :: Typed -> String -> DB IO [JsonCoin]
-walletCoinsStarting options typed = do
-  accounts <- accountsTyped options
+walletCoinsStarting :: Looked -> Typed -> String -> DB IO [JsonCoin]
+walletCoinsStarting looked options typed = do
+  accounts <- accountsTyped looked options
   fmap concat . forM accounts $ \(accId, acc) -> do
     rows <- fewEnough <$> coinsStarting accId (takeWhile isHexDigit (take 64 typed)) askedFor
     listed <- fromRight [] <$> runExceptT (spendingOf (accountNetwork acc) >>= \rules -> mapM (toJsonCoin rules (accountPool acc)) rows)
@@ -306,7 +323,7 @@ walletCoinsStarting options typed = do
 -- none.
 labelTargets :: String -> IO [String]
 labelTargets typed = readForCompletion $ do
-  accounts <- accountsTyped (optionsTyped [])
+  accounts <- accountsTyped EveryPortfolio (optionsTyped [])
   addresses <- concat <$> sequence [addressesStarting accId AddrExternal (cs typed) askedFor | (accId, _) <- accounts]
   held <- rights . map fromRow <$> pendingRows Nothing Nothing Nothing
   let pending = [hash | p <- held, let hash = hexOf (shownHash (txOf p)), typed `isPrefixOf` hash]
@@ -329,7 +346,7 @@ labelTargets typed = readForCompletion $ do
 -- by the parser of show, which knows what show reads as a file.
 shownTargets :: String -> IO [String]
 shownTargets typed = readForCompletion $ do
-  accounts <- accountsTyped (optionsTyped [])
+  accounts <- accountsTyped EveryPortfolio (optionsTyped [])
   addresses <- concat <$> sequence [addressesStarting accId chain (cs typed) askedFor | (accId, _) <- accounts, chain <- [AddrExternal, AddrInternal]]
   held <- rights . map fromRow <$> pendingRows Nothing Nothing Nothing
   let pending = [hash | p <- held, let hash = hexOf (shownHash (txOf p)), typed `isPrefixOf` hash]
@@ -338,7 +355,7 @@ shownTargets typed = readForCompletion $ do
     if all isHexDigit typed
       then do
         txids <- concat <$> sequence [txidsStarting pool typed askedFor | pool <- poolsOf accounts]
-        found <- walletCoinsStarting (optionsTyped []) typed
+        found <- walletCoinsStarting EveryPortfolio (optionsTyped []) typed
         return (hexOf <$> txids, [coinText (jsonCoinOutpoint coin) | coin <- found])
       else return ([], [])
   return $ fewEnough (nub ((offeredAddress <$> addresses) <> pending <> history <> coins))
@@ -346,30 +363,36 @@ shownTargets typed = readForCompletion $ do
 {- The addresses -}
 
 -- | Every address of the wallet, for signmsg, which signs with the key of
--- any of them
+-- any of them, and finds its portfolio by the address
 walletAddresses :: String -> IO [String]
-walletAddresses = addressesOf [AddrExternal, AddrInternal]
+walletAddresses = addressesOf EveryPortfolio [AddrExternal, AddrInternal]
+
+-- | Every address of the active portfolio, for --change-back, which
+-- refuses an address of another portfolio
+activeAddresses :: String -> IO [String]
+activeAddresses = addressesOf ActivePortfolioOnly [AddrExternal, AddrInternal]
 
 -- | The addresses of the chains given, of the accounts the options name
--- or of every account, each once, that start with the word typed: the
--- database gives one more than 'offeredAtMost' of them at most from each
--- chain of each account
-addressesOf :: [AddrType] -> String -> IO [String]
-addressesOf chains typed = do
+-- in the portfolios looked in, each once, that start with the word typed:
+-- the database gives one more than 'offeredAtMost' of them at most from
+-- each chain of each account
+addressesOf :: Looked -> [AddrType] -> String -> IO [String]
+addressesOf looked chains typed = do
   options <- typedOptions
   readForCompletion $ do
-    accounts <- accountsTyped options
+    accounts <- accountsTyped looked options
     found <- concat <$> sequence [addressesStarting accId chain (cs typed) askedFor | (accId, _) <- accounts, chain <- chains]
     return $ fewEnough (nub (offeredAddress <$> found))
 
--- | The addresses that hold coins that can be spent now, for --spend-from,
--- among the addresses that hold coins and start with the word typed. Coin
--- control refuses addresses that hold none.
+-- | The addresses of the active portfolio that hold coins that can be
+-- spent now, for --spend-from, among the addresses that hold coins and
+-- start with the word typed. Coin control refuses addresses of another
+-- portfolio, and addresses that hold none.
 addressesToSpendFrom :: String -> IO [String]
 addressesToSpendFrom typed = do
   options <- typedOptions
   readForCompletion $ do
-    accounts <- accountsTyped options
+    accounts <- accountsTyped ActivePortfolioOnly options
     found <- forM accounts $ \(accId, acc) -> do
       candidates <- fewEnough <$> coinAddressesStarting accId (cs typed) askedFor
       spendable <- fromRight Map.empty <$> runExceptT (spendableAtAddresses (accountNetwork acc) accId candidates)

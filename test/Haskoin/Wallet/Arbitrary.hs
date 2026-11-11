@@ -23,8 +23,8 @@ import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Bip329 (Record (..))
-import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), PortfolioRef (..))
-import Haskoin.Wallet.Keys (AccountKind (..), PoolPath (..), accountDeriv, indexBound, networkKinds)
+import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter (..), Place (..), PortfolioRef (..))
+import Haskoin.Wallet.Keys (AccountKind (..), PoolPath (..), accountDeriv, networkKinds)
 import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), PortfolioImport (..), WalletImport (..))
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..))
 import Haskoin.Wallet.Sync
@@ -96,6 +96,7 @@ arbitraryPortfolioView :: Ctx -> Gen PortfolioView
 arbitraryPortfolioView ctx =
   PortfolioView
     <$> arbitraryPortfolioRef
+    <*> arbitrary
     <*> arbitraryText
     <*> arbitraryText
     <*> arbitraryFingerprint
@@ -327,13 +328,15 @@ arbitraryResponse net ctx =
     [ ResponseError <$> arbitraryText,
       ResponseNewPortfolio
         <$> arbitraryMaybe arbitraryNewSecret
-        <*> arbitraryPortfolioView ctx,
+        <*> arbitraryPortfolioView ctx
+        <*> arbitraryActiveAfter,
       ResponsePortfolio <$> arbitraryPortfolioView ctx,
+      ResponseSwitched <$> arbitraryPortfolioView ctx,
       ResponseChecked <$> arbitraryPortfolioRef <*> arbitrary <*> arbitraryText,
-      ResponseDeleted <$> arbitraryText <*> resize 2 (listOf ((,) <$> arbitraryText <*> arbitraryNatural)),
+      ResponseDeleted <$> arbitraryText,
       ResponseDefaults <$> resize 4 (listOf ((,) <$> arbitraryText <*> arbitraryText)) <*> (cs <$> arbitraryText),
       ResponseFile <$> (cs <$> arbitraryText),
-      ResponseImport <$> arbitraryImportReport net,
+      ResponseImport <$> arbitraryImportReport net <*> arbitraryMaybe arbitraryActiveAfter,
       ResponseWalletFile <$> arbitraryFileShown net,
       ResponsePortfolios <$> resize 5 (listOf (arbitraryPortfolioView ctx)),
       ResponseAddress <$> arbitraryAccountRef net <*> arbitraryDBAddress net <*> arbitraryPositive,
@@ -367,7 +370,8 @@ arbitraryResponse net ctx =
       ResponseSync
         <$> (resize 10 $ listOf $ arbitrarySyncRes net)
         <*> (resize 3 $ listOf arbitraryNetwork)
-        <*> (resize 3 $ listOf arbitraryFailedNetwork),
+        <*> (resize 3 $ listOf arbitraryFailedNetwork)
+        <*> arbitraryMaybe arbitraryPortfolioRef,
       ResponseRecover
         <$> (resize 2 $ listOf arbitraryNetwork)
         <*> arbitraryNatural
@@ -376,9 +380,15 @@ arbitraryResponse net ctx =
         <*> (resize 10 $ listOf $ arbitrarySyncRes net)
         <*> (resize 10 $ listOf $ (,) <$> arbitraryNetwork <*> arbitraryForeignFunds)
         <*> (resize 3 $ listOf arbitraryNetwork)
-        <*> (resize 3 $ listOf arbitraryFailedNetwork),
+        <*> (resize 3 $ listOf arbitraryFailedNetwork)
+        <*> arbitraryMaybe arbitraryActiveAfter,
       ResponseFees net <$> arbitraryFeeRates
     ]
+
+-- | The active portfolio after a command that may create portfolios, and
+-- whether the command activated it
+arbitraryActiveAfter :: Gen ActiveAfter
+arbitraryActiveAfter = ActiveAfter <$> arbitraryPortfolioRef <*> arbitrary
 
 -- | The funds of a seed at an account hw does not hold, of any kind
 arbitraryForeignFunds :: Gen ForeignFunds
@@ -466,8 +476,6 @@ arbitraryConfig =
     <*> count
     <*> count
     <*> arbitrary
-    <*> index
-    <*> index
     <*> arbitraryNetwork
     <*> arbitraryKind
     <*> elements [UnitBitcoin, UnitBit, UnitSatoshi]
@@ -476,8 +484,6 @@ arbitraryConfig =
   where
     -- Every count of the configuration is at least one
     count = (+ 1) <$> arbitraryNatural
-    -- The index of a wallet or of a portfolio is below 2^31
-    index = (`mod` indexBound) <$> arbitraryNatural
 
 -- | The fee rates recent blocks paid, as fees answers them
 arbitraryFeeRates :: Gen FeeRates

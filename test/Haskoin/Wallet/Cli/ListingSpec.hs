@@ -25,7 +25,7 @@ import Haskoin.Wallet.Commands (addressesListing, txsListing)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Address (genExtAddress)
-import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioChoice (..))
+import Haskoin.Wallet.Database.Portfolio (Place (..), requireActivePortfolio)
 import Haskoin.Wallet.Database.TxInfo (ListedTx (..), markTxInfoDead, repsertSummary)
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
@@ -166,11 +166,11 @@ sectionsSpec =
 -- | The receiving addresses of the bip44 account of portfolio 0 on btc,
 -- as addresses --network btc --type bip44 lists them
 onMainAccount :: Target
-onMainAccount = Target (PortfolioChoice Nothing Nothing) (Just btc) (Just Bip44)
+onMainAccount = Target (Just btc) (Just Bip44)
 
 -- | The whole portfolio 0, as addresses lists it without an option
 wholePortfolio :: Target
-wholePortfolio = Target (PortfolioChoice Nothing Nothing) Nothing Nothing
+wholePortfolio = Target Nothing Nothing
 
 addressesSpec :: Ctx -> Spec
 addressesSpec ctx =
@@ -275,7 +275,8 @@ walletWithPayments ctx dir count dead =
 streamedBalances :: Config -> IO [[Maybe Integer]]
 streamedBalances wallet = do
   seen <- newIORef []
-  result <- streamListing wallet (txsListing wallet (PortfolioChoice Nothing Nothing) (Just btc) (Paging Nothing Nothing)) $ \_ answer -> do
+  let listing = requireActivePortfolio >>= \portfolio -> txsListing portfolio (Just btc) (Paging Nothing Nothing)
+  result <- streamListing wallet listing $ \_ answer -> do
     case answer of
       ResponseTxs groups -> modifyIORef seen ((listedTxBalance <$> concatMap groupRows groups) :)
       _ -> return ()
@@ -311,7 +312,8 @@ streamedWithResult wallet target paging = streamedFrom wallet target paging (con
 streamedFrom :: Config -> Target -> Paging Text -> (Int -> Bool) -> IO ([(ChunkAt, [(AccountKind, [Int])])], Either String ())
 streamedFrom wallet target paging keepReading = do
   seen <- newIORef []
-  result <- streamListing wallet (addressesListing wallet target False paging) $ \at answer -> do
+  let listing = requireActivePortfolio >>= \portfolio -> addressesListing portfolio target False paging
+  result <- streamListing wallet listing $ \at answer -> do
     let groups = case answer of
           ResponseAddresses gs -> [(kindOf g, dBAddressIndex . fst <$> groupRows g) | g <- gs]
           _ -> []

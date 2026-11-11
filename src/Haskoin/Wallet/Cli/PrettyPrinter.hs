@@ -36,7 +36,6 @@ import Data.Time.Format
 import Data.Word
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath, chainPath, coinBalanceNotSpendableYet, coinBalanceUnspendable, isIntPath, pathText)
 import Haskoin.Wallet.Amounts
@@ -46,7 +45,7 @@ import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..), levelName, rateAt)
 import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), PoolPath (..), foreignKindDescription, kindName, poolPathText, portfolioAccounts)
 import Haskoin.Wallet.Bip329 (Record (..), RecordType (..), parseKeypath)
-import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), PortfolioImport (..), WalletImport (..), reportNeedsSync)
+import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), PortfolioImport (..), WalletImport (..), importCreated, reportNeedsSync)
 import Haskoin.Wallet.MessageSigning (signedMessageText)
 import Haskoin.Wallet.Cli.Listing (ChunkAt (..))
 import Haskoin.Wallet.Cli.Parser (AddressCode (..), BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), TxShown (..), program)
@@ -229,16 +228,30 @@ listedPortfolioDoc view unit portfolio = do
     -- The table is laid out by rowsPrinter ('portfolioRowDocs')
     _ -> compactPortfolioDoc unit created portfolio
 
--- | The first line of a portfolio: its name, its wallet, and its
--- description when it has one. The listing of the portfolios always names
--- the wallet, since it is where the wallets are told apart.
+-- | The first line of a portfolio: the mark of the active one, its name,
+-- its wallet, and its description when it has one. The listing of the
+-- portfolios always names the wallet, since it is where the wallets are
+-- told apart. The mark is a column of its own before the name, a * for the
+-- active portfolio and a space for the others, so that the names line up
+-- and the eye finds the active one at the edge of the listing. The lines
+-- under the first one are indented past the mark.
 portfolioLine :: PortfolioView -> Doc Style
 portfolioLine portfolio =
-  columns $
-    [ pretty (portfolioName (refPortfolio (viewRef portfolio))) `withStyle` Account,
-      pretty (walletName (refWallet (viewRef portfolio)))
-    ]
-      <> [labelWord description | let description = viewDescription portfolio, not (Text.null description)]
+  activeMark portfolio
+    <+> columns
+      ( [ pretty (portfolioName (refPortfolio (viewRef portfolio))) `withStyle` Account,
+          pretty (walletName (refWallet (viewRef portfolio)))
+        ]
+          <> [labelWord description | let description = viewDescription portfolio, not (Text.null description)]
+      )
+
+-- | The mark of the active portfolio, the one the commands work in: a *
+-- in the colour of what is as it should be, or a space for another
+-- portfolio
+activeMark :: PortfolioView -> Doc Style
+activeMark portfolio
+  | viewActive portfolio = styled Good "*"
+  | otherwise = " "
 
 -- | The networks of a portfolio that a short view shows: those it has an
 -- address or a coin on. A whole portfolio has an account on every network,
@@ -258,14 +271,15 @@ networkFigures unit net = commaList (spendable : unconfirmed <> [coins, addresse
     coins = text (counted (fromIntegral (networkViewCoins net)) "coin" "coins")
     addresses = text (counted (networkViewAddresses net) "address" "addresses")
 
--- | A portfolio in a few lines: its first line, the description of its
--- wallet when it has one, the date it was created, then a line for each
--- network it has addresses or coins on, with what it holds there
+-- | A portfolio in a few lines: its first line, with the mark of the
+-- active portfolio, the description of its wallet when it has one, the
+-- date it was created, then a line for each network it has addresses or
+-- coins on, with what it holds there
 compactPortfolioDoc :: AmountUnit -> ZonedTime -> PortfolioView -> Doc Style
 compactPortfolioDoc unit created portfolio =
   vcat $
     portfolioLine portfolio
-      : (indent 2 <$> (ofWallet <> [("created" <+> text (dayText created))] <> networks))
+      : (indent 4 <$> (ofWallet <> [("created" <+> text (dayText created))] <> networks))
   where
     -- What the user said of the wallet, which its name does not tell
     ofWallet = [pretty (walletName (refWallet (viewRef portfolio))) <+> "is" <+> labelWord description | let description = viewWalletDescription portfolio, not (Text.null description)]
@@ -293,7 +307,7 @@ verbosePortfolioDoc :: AmountUnit -> ZonedTime -> PortfolioView -> Doc Style
 verbosePortfolioDoc unit created portfolio =
   vcat $
     portfolioLine portfolio
-      : ( indent 2
+      : ( indent 4
             <$> ( [ field 11 "Fingerprint" <> pretty (fingerprintToText (viewFingerprint portfolio)),
                     field 11 "Created" <> text (secondText created)
                   ]
@@ -456,15 +470,17 @@ foreignFundsDoc unit elsewhere =
 {- Imports -}
 
 -- | What importwallet did with a file: each wallet the file names, with
--- what became of it and of its portfolios, then the keys left aside, a
+-- what became of it and of its portfolios, then which portfolio is active
+-- when the import created one ('activeDoc'), then the keys left aside, a
 -- blank line between them, then the labels and locks set, what the file
 -- labels that the wallet does not have yet, with the addresses among them
 -- that hw would not derive from their key path, what hw keeps no label
 -- for, and the lines that are not records
-importDoc :: ImportReport -> Doc Style
-importDoc report =
+importDoc :: ImportReport -> Maybe ActiveAfter -> Doc Style
+importDoc report activeM =
   vcat . intersperse mempty $
     (walletImportDoc False <$> reportWallets report)
+      <> [activeDoc active | Just active <- [activeM], not (null (importCreated report))]
       <> [leftAsideDoc "not imported:" name why | AccountLeftAside name why <- reportAccounts report]
       <> [vcat summary]
   where
@@ -1598,10 +1614,13 @@ heldAmountCell unit amnt = (if amnt > 0 then annotate Incoming else id) (text (c
 -- The listing is read whole, so its first columns are as wide as their
 -- widest cells.
 
--- | The columns of the table of portfolios, for the portfolios listed
+-- | The columns of the table of portfolios, for the portfolios listed. The
+-- first one, without a heading, marks the active portfolio, as the other
+-- views do.
 portfolioTableColumns :: AmountUnit -> [PortfolioView] -> [Column]
 portfolioTableColumns unit portfolios =
-  [ column "Wallet" (widestCell (cs . walletName . refWallet . viewRef) portfolios) LeftSide,
+  [ column "" 1 LeftSide,
+    column "Wallet" (widestCell (cs . walletName . refWallet . viewRef) portfolios) LeftSide,
     column "Portfolio" (widestCell (cs . portfolioName . refPortfolio . viewRef) portfolios) LeftSide,
     column "Network" (widestCell (\net -> (networkViewNetwork net).name) (concatMap activeNetworks portfolios)) LeftSide,
     column (amountHeading "Spendable" unit) amountWidth RightSide,
@@ -1637,7 +1656,8 @@ portfolioRowDocs unit headed portfolio =
       ]
   where
     named =
-      [ pretty (walletName (refWallet (viewRef portfolio))),
+      [ activeMark portfolio,
+        pretty (walletName (refWallet (viewRef portfolio))),
         pretty (portfolioName (refPortfolio (viewRef portfolio))) `withStyle` Account
       ]
     describedCell =
@@ -2178,19 +2198,18 @@ responsePrinter unit view code shown answer =
     ResponsePendingTxs {} -> listing
     ResponseCoins {} -> listing
     ResponseError err -> renderIO $ errorDoc err
-    ResponseNewPortfolio secretM portfolio ->
+    ResponseNewPortfolio secretM portfolio active ->
       renderIO . vcat . intersperse mempty $
         [secretDoc secret | Just secret <- [secretM]]
-          <> [newPortfolioDoc portfolio]
+          <> [newPortfolioDoc portfolio active]
     ResponsePortfolio portfolio -> renderIO =<< listedPortfolioDoc Compact unit portfolio
+    -- The outcome first, then the portfolio as portfolios shows it
+    ResponseSwitched portfolio -> do
+      portfolioDoc <- listedPortfolioDoc Compact unit portfolio
+      renderIO $ vcat [text ("The active portfolio is now " <> refText (viewRef portfolio) <> "."), portfolioDoc]
     -- In green when the mnemonic matches, in red otherwise
     ResponseChecked _ matches said -> renderIO $ styled (if matches then Good else Failure) (cs said)
-    ResponseDeleted said newDefaults ->
-      renderIO . vcat $
-        styled Good (cs said)
-          : [ text ("The key " <> cs key <> " of the configuration file is now " <> show value <> ".")
-              | (key, value) <- newDefaults
-            ]
+    ResponseDeleted said -> renderIO $ styled Good (cs said)
     ResponseDefaults defaults file ->
       renderIO . vcat $
         [field pad key <> pretty value | (key, value) <- defaults]
@@ -2198,7 +2217,7 @@ responsePrinter unit view code shown answer =
       where
         pad = fromIntegral (maximum (0 : (Text.length . fst <$> defaults)))
     ResponseFile f -> renderIO $ "Written to" <+> styled UserText f
-    ResponseImport report -> renderIO $ importDoc report
+    ResponseImport report active -> renderIO $ importDoc report active
     ResponseWalletFile file -> renderIO $ walletFileDoc file
     ResponseAddress ref addr spendable ->
       renderIO =<< addressAnswerDoc code unit ref addr spendable
@@ -2245,14 +2264,14 @@ responsePrinter unit view code shown answer =
           then styled Good ("The key of " <> cs addr <> " signed this message")
           else styled Failure ("This is not a signature of this message by the key of " <> cs addr)
     -- The networks left out last, where the user sees them
-    ResponseSync results notServed notSynced ->
+    ResponseSync results notServed notSynced _ ->
       renderIO . vcat . intersperse mempty $
         [syncResultsPrinter unit results | not (null results)]
           <> [notServedDoc notServed | not (null notServed)]
           <> [failedNetworksDoc "not synced" notSynced | not (null notSynced)]
-    ResponseRecover searched gap walletM created results elsewhere notServed notSearched ->
+    ResponseRecover searched gap walletM created results elsewhere notServed notSearched activeM ->
       renderIO . vcat . intersperse mempty $
-        [recoveredDoc searched gap walletM created]
+        [vcat (recoveredDoc searched gap walletM created : [activeDoc active | Just active <- [activeM], not (null created)])]
           <> [syncResultsPrinter unit results | not (null results)]
           <> [foreignFundsDoc unit elsewhere | not (null elsewhere)]
           <> [notServedDoc notServed | not (null notServed)]
@@ -2271,10 +2290,11 @@ secretDoc (NewShares source threshold shares) = sharesDoc source threshold share
 
 -- | The portfolio newportfolio created: its name and its wallet, the
 -- fingerprint of the wallet, which names the mnemonic from then on, and
--- the accounts it has. A new portfolio has every account, so the line
--- only counts them and names their networks.
-newPortfolioDoc :: PortfolioView -> Doc Style
-newPortfolioDoc portfolio =
+-- the accounts it has, then which portfolio is active ('activeDoc'). A new
+-- portfolio has every account, so the line only counts them and names
+-- their networks.
+newPortfolioDoc :: PortfolioView -> ActiveAfter -> Doc Style
+newPortfolioDoc portfolio active =
   vcat $
     (styled Good "Created" <+> (pretty (portfolioName (refPortfolio ref)) `withStyle` Account) <+> "of" <+> pretty (walletName (refWallet ref)))
       : ( indent 2
@@ -2282,10 +2302,27 @@ newPortfolioDoc portfolio =
                   field 11 "Accounts" <> text (show accounts <> ", on " <> andList networks)
                 ]
         )
+      <> [activeDoc active]
   where
     ref = viewRef portfolio
     accounts = sum (length . networkViewAccounts <$> viewNetworks portfolio)
     networks = (.name) . networkViewNetwork <$> viewNetworks portfolio
+
+-- | A portfolio as a sentence names it, with its wallet always:
+-- "portfolio1 of wallet0"
+refText :: PortfolioRef -> String
+refText ref = cs (portfolioName (refPortfolio ref)) <> " of " <> cs (walletName (refWallet ref))
+
+-- | What a command that created portfolios says of the active one, the
+-- one the commands work in: that it made the first portfolio of the
+-- database the active one, or which one is still active. switch, which a
+-- next step names, makes a new one active ('switchStep').
+activeDoc :: ActiveAfter -> Doc Style
+activeDoc active
+  | active.activeAfterActivated = text (refText ref <> " is the active portfolio: the commands work in it.")
+  | otherwise = text ("The active portfolio is still " <> refText ref <> ".")
+  where
+    ref = active.activeAfterRef
 
 -- | What recover found, above the syncs of the portfolios: the portfolios
 -- it created, or that the search found none
@@ -2353,13 +2390,13 @@ agoText now time
 
 -- | What the user does next after a command of a payment or a sweep,
 -- preparetx, preparesendall, preparesweep, signtx, signsweep, broadcast,
--- importwallet or sync, below its answer. In the pretty output only: a
--- script reading the JSON answer knows its next step. The configuration
--- tells the default wallet and portfolio, which a step does not name
+-- importwallet or sync, or after a command that created a portfolio that
+-- is not the active one, below its answer. In the pretty output only: a
+-- script reading the JSON answer knows its next step
 -- ('nextStepsPrinter').
-printNextSteps :: Config -> Command -> Response -> IO ()
-printNextSteps cfg cmd res =
-  forM_ (nextStepsPrinter cfg cmd res) $ \steps -> putStrLn "" >> renderIO steps
+printNextSteps :: Command -> Response -> IO ()
+printNextSteps cmd res =
+  forM_ (nextStepsPrinter cmd res) $ \steps -> putStrLn "" >> renderIO steps
 
 -- | A failure, as an answer or a listing reports it
 errorDoc :: Text -> Doc Style
@@ -2464,8 +2501,9 @@ sectionsPrinter unit view titled = \case
         if view == Table
           then Rows none title (txTableHeader unit) docs False
           else Rows none title [] docs True
-  -- The listing covers every portfolio on every network unless the
-  -- options narrow it, so each transaction says where it is
+  -- The listing covers every network of the active portfolio, or every
+  -- portfolio in the tab of exportsheet, so each transaction says where
+  -- it is
   ResponsePendingTxs held -> do
     let none = text "There are no pending transactions"
         -- The listing is read whole: these are all its places
@@ -2573,12 +2611,21 @@ startsWithHeader view at answer = view == Table && not (chunkTitled at) && not b
 -- sweep, if any. Each step is a command line, styled as the help shows
 -- commands, options and metavars.
 --
--- A step names a portfolio by --wallet and --portfolio, and only when
--- they are not the defaults of the configuration: the next command takes
--- the defaults by itself, and a user of one portfolio reads no option.
-nextStepsPrinter :: Config -> Command -> Response -> Maybe (Doc Style)
-nextStepsPrinter cfg cmd res =
+-- A step names no portfolio: the next command works in the active one, or
+-- finds its portfolio by itself. newportfolio, recover and importwallet
+-- leave the active portfolio as it was when the database had one, and
+-- their step is then the switch to the first portfolio they created
+-- ('switchStep'). A sync covers every portfolio, so the pending
+-- transaction in conflict it found may be in another portfolio than the
+-- active one, which pendingtxs lists alone: the steps then start with
+-- the switch to that portfolio ('conflictSteps').
+nextStepsPrinter :: Command -> Response -> Maybe (Doc Style)
+nextStepsPrinter cmd res =
   case (cmd, res) of
+    (CommandNewPortfolio _, ResponseNewPortfolio _ view active)
+      | not active.activeAfterActivated -> stepsPrinter [switchStep (viewRef view)]
+    (CommandRecover _, ResponseRecover _ _ (Just wallet) created@(_ : _) _ _ _ _ (Just active))
+      | not active.activeAfterActivated -> stepsPrinter [switchStep (PortfolioRef wallet (minimum created))]
     (CommandPrepareTx opts, ResponsePrepared _ info _)
       | Just shown <- shownOf info -> afterPreparing opts.output shown
     (CommandPrepareSendAll opts, ResponsePrepared _ info _)
@@ -2603,23 +2650,29 @@ nextStepsPrinter cfg cmd res =
     (CommandSignSweep signing _ _, ResponseOutsideTx _ info) -> afterSigning signing info
     (CommandBroadcast {}, ResponseTx _ _) ->
       stepsPrinter [("Next, sync the wallet to follow the transaction", hwLine "sync" [])]
-    -- The file may label things the wallet does not have yet
-    (CommandImportWallet _ file, ResponseImport report)
-      | reportNeedsSync report ->
-          stepsPrinter
-            [ ("Next, sync the wallet, for the addresses, transactions and coins the file labels", hwLine "sync" []),
-              ("Then import the file again, for the labels it could not place", hwLine "importwallet" [fileWord file])
+    -- The file may label things the wallet does not have yet, and it may
+    -- bring portfolios that the active one leaves aside
+    (CommandImportWallet _ file, ResponseImport report activeM)
+      | not (null steps) -> stepsPrinter steps
+      where
+        steps =
+          concat
+            [ [ ("Next, sync the wallet, for the addresses, transactions and coins the file labels", hwLine "sync" []),
+                ("Then import the file again, for the labels it could not place", hwLine "importwallet" [fileWord file])
+              ]
+              | reportNeedsSync report
             ]
+            <> [ switchStep first
+                 | Just active <- [activeM],
+                   not active.activeAfterActivated,
+                   first : _ <- [importCreated report]
+               ]
     -- A sync that synced nothing has nothing new to see
-    (CommandSync {}, ResponseSync results _ _)
+    (CommandSync {}, ResponseSync results _ _ activeM)
       | not (null results) ->
-          case filter ((> 0) . syncResConflicted) results of
-            [] -> stepsPrinter [("Next, see the transactions", hwLine "txs" (portfolioArgs (syncResPlace <$> filter syncWorthShowing results)))]
-            conflicted ->
-              stepsPrinter
-                [ ("Next, find the pending transaction in conflict, which can no longer be sent", hwLine "pendingtxs" (portfolioArgs (syncResPlace <$> conflicted))),
-                  ("Then delete it, to free its coins", hwLine "deletetx" [metavarWord "HASH"])
-                ]
+          case nub [placePortfolio (syncResPlace result) | result <- results, syncResConflicted result > 0] of
+            [] -> stepsPrinter (txsSteps activeM (nub [placePortfolio (syncResPlace result) | result <- results, syncResTxUpdates result > 0]))
+            conflicts -> stepsPrinter (conflictSteps activeM conflicts)
     _ -> Nothing
   where
     -- The short id of a transaction in preparation, as its answer shows
@@ -2648,14 +2701,63 @@ nextStepsPrinter cfg cmd res =
     -- Without a file, signsweep asks for the keys on the terminal
     keysArgs (Just (KeysInFile file)) = [optionWord "--key-file", fileWord file]
     keysArgs _ = []
-    -- The portfolio of the next command, when the places are all in one
-    -- portfolio and it is not the default one. Several portfolios are
-    -- left to the user: the command then shows the default one.
-    portfolioArgs places = case nub (placePortfolio <$> places) of
-      [ref] ->
-        [arg | refWallet ref /= configDefaultWallet cfg, arg <- [optionWord "--wallet", text (show (refWallet ref))]]
-          <> [arg | refPortfolio ref /= configDefaultPortfolio cfg, arg <- [optionWord "--portfolio", text (show (refPortfolio ref))]]
-      _ -> []
+
+-- | The step that makes a portfolio a command created the active one, to
+-- work in it: the switch to it, which names its wallet always, since the
+-- active portfolio may be of another wallet
+switchStep :: PortfolioRef -> (String, Doc Style)
+switchStep ref = ("To work in " <> refText ref <> ", make it the active one", switchLine ref)
+
+-- | The command line that makes a portfolio the active one, which names
+-- its wallet always
+switchLine :: PortfolioRef -> Doc Style
+switchLine ref = hwLine "switch" [optionWord "--wallet", text (show (refWallet ref)), optionWord "--portfolio", text (show (refPortfolio ref))]
+
+-- | The steps after a sync that found pending transactions in conflict,
+-- given the active portfolio and the portfolios that hold them, each
+-- once. pendingtxs lists the active portfolio alone, and deletetx finds
+-- the transaction by itself. So the steps are pendingtxs and deletetx
+-- when the active portfolio holds every conflict. Otherwise they start
+-- with the switch to the portfolio of the conflict, or to each of the
+-- portfolios in turn when there are several, the active one among them
+-- if it holds one: a pendingtxs typed without a switch would not show
+-- the transaction.
+conflictSteps :: Maybe PortfolioRef -> [PortfolioRef] -> [(String, Doc Style)]
+conflictSteps activeM conflicts = case conflicts of
+  [only]
+    | Just only == activeM ->
+        [ ("Next, find the pending transaction in conflict, which can no longer be sent", hwLine "pendingtxs" []),
+          ("Then delete it, to free its coins", hwLine "deletetx" [metavarWord "HASH"])
+        ]
+    | otherwise ->
+        [ ("Next, switch to " <> refText only <> ", where a pending transaction is in conflict", switchLine only),
+          ("Then find the pending transaction in conflict, which can no longer be sent", hwLine "pendingtxs" []),
+          ("Then delete it, to free its coins", hwLine "deletetx" [metavarWord "HASH"])
+        ]
+  several ->
+    [ ("Next, switch in turn to each portfolio where a pending transaction is in conflict", vcat (switchLine <$> several)),
+      ("In each, find the pending transactions in conflict, which can no longer be sent", hwLine "pendingtxs" []),
+      ("Then delete them, to free their coins", hwLine "deletetx" [metavarWord "HASH"])
+    ]
+
+-- | The steps after a sync that found no conflict, given the active
+-- portfolio and the portfolios whose transactions it updated, each once.
+-- txs lists the active portfolio alone. So the step is txs when the sync
+-- updated the active portfolio, or none. When it updated other portfolios
+-- alone, the steps start with the switch to the one, or to each in turn:
+-- a txs typed without a switch would show none of what the sync found.
+txsSteps :: Maybe PortfolioRef -> [PortfolioRef] -> [(String, Doc Style)]
+txsSteps activeM updated
+  | null updated || maybe False (`elem` updated) activeM = [("Next, see the transactions", hwLine "txs" [])]
+  | otherwise = case updated of
+      [only] ->
+        [ ("Next, switch to " <> refText only <> ", where the sync found new transactions", switchLine only),
+          ("Then see the transactions", hwLine "txs" [])
+        ]
+      several ->
+        [ ("Next, switch in turn to each portfolio where the sync found new transactions", vcat (switchLine <$> several)),
+          ("In each, see the transactions", hwLine "txs" [])
+        ]
 
 -- | Steps, each with what it does and the command that does it
 stepsPrinter :: [(String, Doc Style)] -> Maybe (Doc Style)

@@ -8,19 +8,20 @@
 -- the coins, the next step shown after a payment or a sweep, the pager,
 -- the CSV files of --csv, and the spreadsheet of exportsheet.
 --
--- A listing over a portfolio comes in sections, one for each network, or
--- for each account for addresses. A section says where it is in a title
--- line when the listing covers several places, and balances always titles
--- it, with the total of the network. pendingtxs lists one portfolio, in
--- one list sorted by network, each transaction naming its place.
+-- A listing covers the active portfolio, and portfolios and exportsheet
+-- every portfolio, the active one marked. A listing over a portfolio comes
+-- in sections, one for each network, or for each account for addresses. A
+-- section says where it is in a title line when the listing covers
+-- several places, and balances always titles it, with the total of the
+-- network. pendingtxs lists the active portfolio, in one list sorted by
+-- network, each transaction naming its place.
 module Haskoin.Wallet.Workflow.OutputSpec (spec) where
 
 import Codec.Archive.Zip (findEntryByPath, fromEntry, toArchive)
-import Control.Monad (forM_, replicateM_, void)
+import Control.Monad (forM_, replicateM_)
 import Data.Bits ((.&.))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
-import qualified Data.Aeson as Json
 import Data.IORef (modifyIORef)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -258,14 +259,16 @@ listingSpec ctx = do
           `shouldReturn` Right ("The address " <> internalAddrsText !! 0 <> " is not among the addresses listed")
 
     -- portfolio1 is a portfolio of its own, without any row
-    it "shows the rows of the portfolio of --portfolio only" $
+    it "shows the rows of the active portfolio only" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         newTestPortfolio home
-        forM_ listings $ \listing -> do
-          (rowsOf <$> hwJson home [listing, "--portfolio", "0"] []) `shouldReturn` Right 1
-          (rowsOf <$> hwJson home [listing, "--portfolio", "1"] []) `shouldReturn` Right 0
+        forM_ listings $ \listing ->
+          (rowsOf <$> hwJson home [listing] []) `shouldReturn` Right 1
+        switchTo home 0 1
+        forM_ listings $ \listing ->
+          (rowsOf <$> hwJson home [listing] []) `shouldReturn` Right 0
 
     -- Two of each: the addresses /0/0 and /0/1, the two payments to them,
     -- their coins, and a payment prepared from each coin
@@ -348,8 +351,8 @@ listingViewSpec ctx =
         _ <- answer home ["receive"] []
         setListingView home "tabular"
         listed <- Text.lines . runOut <$> hw home ["portfolios"] []
-        take 1 listed `shouldBe` ["Wallet  │ Portfolio  │ Network │ Spendable (btc) │ Unconfirmed (btc) │ Coins │ Addresses │ Description"]
-        listed `shouldContain` ["wallet0 │ portfolio0 │ btc     │      0.00000000 │        0.00000000 │     0 │         1 │"]
+        take 1 listed `shouldBe` ["  │ Wallet  │ Portfolio  │ Network │ Spendable (btc) │ Unconfirmed (btc) │ Coins │ Addresses │ Description"]
+        listed `shouldContain` ["* │ wallet0 │ portfolio0 │ btc     │      0.00000000 │        0.00000000 │     0 │         1 │"]
 
     -- Only the verbose view gives the block of a coin
     it "can be the verbose view" $
@@ -375,14 +378,14 @@ listingViewSpec ctx =
           (listing, any ruleOfTable (take 3 listed)) `shouldBe` (listing, True)
 
     -- The compact view of a portfolio nothing has paid, in three lines:
-    -- its name, the day it was created, which is today, and that it has
-    -- no address yet
+    -- its name, marked as the active portfolio, the day it was created,
+    -- which is today, and that it has no address yet
     it "gives way to --compact, which shows the compact view" $
       withHome $ \home -> do
         newTestPortfolio home
         setListingView home "tabular"
         listed <- Text.lines . runOut <$> hw home ["portfolios", "--compact"] []
-        (take 1 listed, drop 2 listed) `shouldBe` (["portfolio0  wallet0"], ["  no addresses yet"])
+        (take 1 listed, drop 2 listed) `shouldBe` (["* portfolio0  wallet0"], ["    no addresses yet"])
 
     -- Only the verbose view gives the fingerprint of the seed
     it "gives way to the view another option asks for" $
@@ -390,7 +393,7 @@ listingViewSpec ctx =
         newTestPortfolio home
         setListingView home "tabular"
         run <- hw home ["portfolios", "--verbose"] []
-        runOut run `shouldSatisfy` Text.isInfixOf ("\n  Fingerprint: " <> testFingerprintText <> "\n")
+        runOut run `shouldSatisfy` Text.isInfixOf ("\n    Fingerprint: " <> testFingerprintText <> "\n")
 
     -- A script that reads the JSON answers is not affected by the view
     it "leaves the JSON answer of a listing as it is" $
@@ -626,12 +629,15 @@ layoutSpec ctx =
 
 -- | A home with portfolio0 and portfolio1 of the test wallet, synced with
 -- 'twoPortfoliosTx', and a payment prepared in each: 20000 from the coin
--- of 50000 of portfolio0, then 10000 from the coin of 30000 of portfolio1
+-- of 50000 of portfolio0, then 10000 from the coin of 30000 of portfolio1,
+-- while it is active. portfolio0 is active again afterwards.
 twoPortfoliosPending :: FilePath -> IO ()
 twoPortfoliosPending home = do
   syncedTwoPortfolios home
   _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
-  void $ answer home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--portfolio", "1", "--fee-rate", "10"] []
+  switchTo home 0 1
+  _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--fee-rate", "10"] []
+  switchTo home 0 0
 
 -- | A chain that pays portfolio0 of the test wallet on two networks: on
 -- btc 50000 at the bip44 /0/0 and 30000 at the bip44 /0/1, and on bch
@@ -678,20 +684,15 @@ createdTimesOf other = Left (show other)
 pendingListSpec :: Ctx -> Spec
 pendingListSpec ctx =
   describe "The pending transactions pendingtxs lists" $ do
-    it "are those of the default portfolio without --portfolio, each with its place" $
+    it "are those of the active portfolio, each with its place" $
       withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
         twoPortfoliosPending home
         (pendingPlacesOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right [mainPlace]
 
-    it "are those of the portfolio --portfolio names" $
+    it "are those of the portfolio switch made active" $
       withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
         twoPortfoliosPending home
-        (pendingPlacesOf <$> hwJson home ["pendingtxs", "--portfolio", "1"] []) `shouldReturn` Right [portfolio1Place]
-
-    it "are those of the portfolio the key default-portfolio of the configuration file names" $
-      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
-        twoPortfoliosPending home
-        setConfigKey home "default-portfolio" (Json.toJSON (1 :: Int))
+        switchTo home 0 1
         (pendingPlacesOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right [portfolio1Place]
 
     -- The payment on bch was prepared between the two on btc. btc comes
@@ -710,7 +711,8 @@ pendingListSpec ctx =
     it "name the portfolio and the network of each on its second line" $
       withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
         twoPortfoliosPending home
-        run <- hw home ["pendingtxs", "--portfolio", "1"] []
+        switchTo home 0 1
+        run <- hw home ["pendingtxs"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  portfolio1 btc, "
 
     -- The second test mnemonic is wallet1, whose first receiving address
@@ -719,10 +721,11 @@ pendingListSpec ctx =
       withChain ctx (chainPaying ctx externalAddr2) $ \home _ -> do
         newTestPortfolio home
         newPortfolioOf home testMnemonic2
-        _ <- answer home ["receive", "--wallet", "1"] []
+        switchTo home 1 0
+        _ <- answer home ["receive"] []
         _ <- answer home ["sync"] []
-        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--wallet", "1", "--fee-rate", "10"] []
-        run <- hw home ["pendingtxs", "--wallet", "1"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        run <- hw home ["pendingtxs"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  portfolio0 of wallet1 btc, "
 
     it "show their portfolio and their network as fields with --verbose" $
@@ -991,9 +994,10 @@ sectionsSpec ctx =
       withChain ctx (chainPaying ctx externalAddr2) $ \home _ -> do
         newTestPortfolio home
         newPortfolioOf home testMnemonic2
-        _ <- answer home ["receive", "--wallet", "1"] []
+        switchTo home 1 0
+        _ <- answer home ["receive"] []
         _ <- answer home ["sync"] []
-        (take 1 . Text.lines . runOut <$> hw home ["coins", "--wallet", "1"] []) `shouldReturn` ["portfolio0 of wallet1  btc"]
+        (take 1 . Text.lines . runOut <$> hw home ["coins"] []) `shouldReturn` ["portfolio0 of wallet1  btc"]
 
 {- The answer of sync -}
 
@@ -1326,43 +1330,36 @@ nextStepSpec ctx =
         run <- hw home ["broadcast", nosig, "--yes"] []
         run `shouldSatisfy` showsCommand "hw sync\n"
 
-    -- The payment is in the default portfolio, which txs lists without
+    -- The payment is in the active portfolio, which txs lists without
     -- an option
-    it "is to see the transactions sync found, with no option for the default portfolio" $
+    it "is to see the transactions sync found, with no option for the active portfolio" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         run <- hw home ["sync"] []
         run `shouldSatisfy` showsCommand "hw txs\n"
 
     -- The chain pays 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo, the first
-    -- receiving address of portfolio1, and nothing of portfolio0
-    it "names the --portfolio of the transactions sync found when it is not the default one" $
+    -- receiving address of portfolio1, and nothing of portfolio0, which is
+    -- active. txs lists the active portfolio alone, so the steps start with
+    -- the switch to portfolio1. The sync checked is the first one, which
+    -- finds the payment.
+    it "starts with the switch to see the transactions sync found in another portfolio than the active one" $
       withChain ctx (chainPaying ctx account1Addr) $ \home _ -> do
-        syncedTwoPortfolios home
-        run <- hw home ["sync"] []
-        run `shouldSatisfy` showsCommand "hw txs --portfolio 1\n"
-
-    -- The chain pays the first receiving address of wallet1, the wallet of
-    -- the second test mnemonic, and nothing of wallet0
-    it "names the --wallet of the transactions sync found when it is not the default one" $
-      withChain ctx (chainPaying ctx externalAddr2) $ \home _ -> do
         newTestPortfolio home
-        newPortfolioOf home testMnemonic2
-        _ <- answer home ["receive", "--wallet", "1"] []
-        _ <- answer home ["sync"] []
+        newTestPortfolio home
+        switchTo home 0 1
+        _ <- answer home ["receive"] []
+        switchTo home 0 0
         run <- hw home ["sync"] []
-        run `shouldSatisfy` showsCommand "hw txs --wallet 1\n"
+        run
+          `shouldSatisfy` showsCommand
+            "Next, switch to portfolio1 of wallet0, where the sync found new transactions:\n\
+            \  hw switch --wallet 0 --portfolio 1\n\
+            \Then see the transactions:\n\
+            \  hw txs\n"
 
-    -- The key default-portfolio makes portfolio1 the default, and the
-    -- payment is of portfolio0
-    it "names --portfolio 0 when the configuration file names another default portfolio" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
-        syncedTwoPortfolios home
-        setConfigKey home "default-portfolio" (Json.toJSON (1 :: Int))
-        run <- hw home ["sync"] []
-        run `shouldSatisfy` showsCommand "hw txs --portfolio 0\n"
-
-    -- Another transaction of the mempool spends the coin of the payment
+    -- Another transaction of the mempool spends the coin of the payment,
+    -- which is of the active portfolio
     it "is to find and delete the pending transaction a sync found in conflict" $
       withChain ctx (paidChain ctx) $ \home chain -> do
         _ <- paymentSigned home
@@ -1371,6 +1368,48 @@ nextStepSpec ctx =
         run <- hw home ["sync"] []
         run `shouldSatisfy` showsCommand "hw pendingtxs\n"
         run `shouldSatisfy` showsCommand "hw deletetx HASH"
+        run `shouldNotSatisfy` showsCommand "hw switch"
+
+    -- The payment in conflict is of portfolio0, and portfolio1 is active:
+    -- pendingtxs alone would list portfolio1, without the payment
+    it "is to switch to the portfolio of the pending transaction a sync found in conflict first, when another portfolio is active" $
+      withChain ctx (paidChain ctx) $ \home chain -> do
+        _ <- paymentSigned home
+        newTestPortfolio home
+        switchTo home 0 1
+        let other = spendingTx ctx [(txHash (payment ctx), 0)] [(otherAddr 1, 40000)]
+        modifyIORef chain $ \c -> c {chainTxs = c.chainTxs <> [(other, Nothing)]}
+        run <- hw home ["sync"] []
+        run
+          `shouldSatisfy` showsCommand
+            "Next, switch to portfolio0 of wallet0, where a pending transaction is in conflict:\n\
+            \  hw switch --wallet 0 --portfolio 0\n\
+            \Then find the pending transaction in conflict, which can no longer be sent:\n\
+            \  hw pendingtxs\n\
+            \Then delete it, to free its coins:\n\
+            \  hw deletetx HASH\n"
+
+    -- A payment is signed in each portfolio, from its coin of
+    -- 'twoPortfoliosTx', and the mempool spends both coins otherwise
+    it "is to switch in turn to each portfolio that holds a pending transaction a sync found in conflict, when there are several" $
+      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home chain -> do
+        syncedTwoPortfolios home
+        forM_ [0, 1] $ \portfolio -> do
+          switchTo home 0 portfolio
+          nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--fee-rate", "10"] []
+          answer home ["signtx", nosig] seedOnce
+        let other = spendingTx ctx [(txHash (twoPortfoliosTx ctx), 0), (txHash (twoPortfoliosTx ctx), 1)] [(otherAddr 1, 70000)]
+        modifyIORef chain $ \c -> c {chainTxs = c.chainTxs <> [(other, Nothing)]}
+        run <- hw home ["sync"] []
+        run
+          `shouldSatisfy` showsCommand
+            "Next, switch in turn to each portfolio where a pending transaction is in conflict:\n\
+            \  hw switch --wallet 0 --portfolio 0\n\
+            \  hw switch --wallet 0 --portfolio 1\n\
+            \In each, find the pending transactions in conflict, which can no longer be sent:\n\
+            \  hw pendingtxs\n\
+            \Then delete them, to free their coins:\n\
+            \  hw deletetx HASH\n"
 
     -- The key of the old wallet is in a file, and the sweep pays
     -- portfolio0
@@ -1490,7 +1529,19 @@ csvSpec ctx =
         let file = home </> "portfolios.csv"
         _ <- answer home ["portfolios", "--csv", file] []
         rows <- Text.lines . decodeUtf8 <$> BS.readFile file
-        (take 1 rows, length rows) `shouldBe` (["\xFEFFWallet,Portfolio,Description,Network,Spendable (sats),Confirmed (sats),Unconfirmed (sats),Coins,Addresses,Created (UTC)\r"], 9)
+        (take 1 rows, length rows) `shouldBe` (["\xFEFFWallet,Portfolio,Active,Description,Network,Spendable (sats),Confirmed (sats),Unconfirmed (sats),Coins,Addresses,Created (UTC)\r"], 9)
+
+    -- Eight rows of each portfolio, one for each network
+    it "says yes in the column Active of the portfolios for each row of the active one, and no for the others" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        switchTo home 0 1
+        let file = home </> "portfolios.csv"
+        _ <- answer home ["portfolios", "--csv", file] []
+        rows <- drop 1 . Text.lines . decodeUtf8 <$> BS.readFile file
+        map (Text.intercalate "," . take 3 . Text.splitOn ",") rows
+          `shouldBe` replicate 8 "wallet0,portfolio0,no" <> replicate 8 "wallet0,portfolio1,yes"
 
     it "is refused a --csv file that exists, and the file is kept" $
       withHome $ \home -> do
@@ -1576,14 +1627,15 @@ exportSheetSpec ctx =
                 ]
             )
 
-    it "holds the portfolio --portfolio names alone" $
+    it "holds every portfolio, whichever is active" $
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        let file = home </> "portfolio1.ods"
-        _ <- answer home ["exportsheet", "--portfolio", "1", file] []
+        switchTo home 0 1
+        let file = home </> "wallet.ods"
+        _ <- answer home ["exportsheet", file] []
         content <- contentOf file
-        (Text.isInfixOf "<text:p>portfolio1</text:p>" content, Text.isInfixOf "<text:p>portfolio0</text:p>" content) `shouldBe` (True, False)
+        (Text.isInfixOf "<text:p>portfolio0</text:p>" content, Text.isInfixOf "<text:p>portfolio1</text:p>" content) `shouldBe` (True, True)
 
     -- pendingtxs lists one portfolio, and the spreadsheet every portfolio
     -- it holds: the payment of portfolio0 and that of portfolio1

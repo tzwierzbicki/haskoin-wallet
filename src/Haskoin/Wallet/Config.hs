@@ -3,10 +3,17 @@
 
 -- | The configuration of hw: the file config.json of the data directory,
 -- written with the defaults when there is none, and the paths of that
--- directory. Four of its keys say where a command works when its options
--- do not: the wallet, the portfolio, the network and the type of account
--- ('configDefaultWallet' and the three after it). setdefault and
--- deletewallet change them in the file ('setConfigKeys').
+-- directory. Two of its keys say where in a portfolio a command works when
+-- its options do not: the network and the type of account
+-- ('configDefaultNetwork' and 'configDefaultType'). setdefault changes
+-- them in the file ('setConfigKeys').
+--
+-- The portfolio a command works in is no key of the file: it is the
+-- active portfolio, which the database keeps and switch changes
+-- ("Haskoin.Wallet.Database.Portfolio"). The keys default-wallet and
+-- default-portfolio of earlier builds of hw 0.10 are gone. A file that
+-- still has them reads, and the warning of the keys hw does not know
+-- names them ('configWarnings').
 module Haskoin.Wallet.Config where
 
 import Control.Monad (unless)
@@ -28,7 +35,7 @@ import Haskoin.Store.WebClient
 import Haskoin.Wallet.Amounts (AmountUnit (..), readUnit, unitName)
 import Haskoin.Wallet.Cli.View (View (..), readView, viewName, viewNames)
 import Haskoin.Wallet.FileIO
-import Haskoin.Wallet.Keys (AccountKind (..), indexFits, kindName, kindNamed, kindNames)
+import Haskoin.Wallet.Keys (AccountKind (..), kindName, kindNamed, kindNames)
 import Numeric.Natural (Natural)
 import qualified System.Directory as D
 import System.FilePath ((</>))
@@ -74,17 +81,6 @@ data Config = Config
     configParallelRequests :: Natural,
     -- | The database to work on, instead of accounts.sqlite in ~/.hw
     configDatabaseFile :: Maybe FilePath,
-    -- | The wallet a command works on when --wallet is not given, by its
-    -- index: wallet0 unless the user chose another. A user with one
-    -- mnemonic has one wallet and never sets it. deletewallet writes it
-    -- when the default wallet is the one deleted, so that a wallet made
-    -- later, which takes the lowest free index, does not become the
-    -- default by itself.
-    configDefaultWallet :: Natural,
-    -- | The portfolio of that wallet a command works on when --portfolio
-    -- is not given, by its index: portfolio0 unless the user chose
-    -- another. Most users only ever need portfolio 0.
-    configDefaultPortfolio :: Natural,
     -- | The network of a command that needs one when --network is not
     -- given: btc unless the user chose another. A sweep that pays no
     -- portfolio does not take it: it needs its --network. sync and
@@ -132,8 +128,6 @@ instance FromJSON Config where
         <*> count "gap" configGap
         <*> count "parallel-requests" configParallelRequests
         <*> o .:? "database-file"
-        <*> (key "default-wallet" configDefaultWallet >>= anIndex "default-wallet")
-        <*> (key "default-portfolio" configDefaultPortfolio >>= anIndex "default-portfolio")
         <*> (networkNamed =<< key "default-network" ((.name) . configDefaultNetwork))
         <*> (typeNamed =<< key "default-type" (kindName . configDefaultType))
         -- Missing or null, the key reads as the name of the default unit
@@ -166,14 +160,6 @@ viewNamed text = maybe (fail refused) return (readView text)
   where
     refused = "The key \"listing-view\" must be a view: " <> intercalate ", " (cs <$> viewNames)
 
--- | The index of a wallet or of a portfolio must be below 2^31
--- ('indexFits'). A larger one names no wallet and no portfolio: as a
--- number of the database, it would wrap around to the index of another.
-anIndex :: Key -> Natural -> Parser Natural
-anIndex name index
-  | indexFits index = return index
-  | otherwise = fail $ "The key " <> show name <> " must be an index below 2147483648, which is 2^31"
-
 -- | A count of the configuration cannot be zero: a gap of zero would refuse
 -- every new address, and zero requests at a time would send none
 atLeastOne :: Key -> Natural -> Parser Natural
@@ -187,8 +173,6 @@ instance ToJSON Config where
         "gap" .= configGap cfg,
         "parallel-requests" .= configParallelRequests cfg,
         "database-file" .= configDatabaseFile cfg,
-        "default-wallet" .= configDefaultWallet cfg,
-        "default-portfolio" .= configDefaultPortfolio cfg,
         "default-network" .= (configDefaultNetwork cfg).name,
         "default-type" .= kindName (configDefaultType cfg),
         "unit" .= unitName (configUnit cfg),
@@ -203,8 +187,6 @@ instance Default Config where
         configGap = 20,
         configParallelRequests = 1,
         configDatabaseFile = Nothing,
-        configDefaultWallet = 0,
-        configDefaultPortfolio = 0,
         configDefaultNetwork = btc,
         configDefaultType = Bip44,
         configUnit = UnitBitcoin,
@@ -238,8 +220,9 @@ readConfig dir = do
   return (cfg, configWarnings file value)
 
 -- | A warning naming the keys of the file hw does not know: a key of an
--- earlier version, or a typo that would otherwise leave a setting at its
--- default without a word
+-- earlier version, such as default-wallet and default-portfolio, which the
+-- active portfolio of the database replaced, or a typo that would
+-- otherwise leave a setting at its default without a word
 configWarnings :: FilePath -> Value -> [String]
 configWarnings file (Object o)
   | null unknown = []
@@ -279,9 +262,8 @@ configAsItIs dir = do
 -- nothing but the keys given changes. The values must be ones the keys
 -- take: the caller writes what 'Config' reads back.
 --
--- setdefault writes the defaults the user chooses this way, and
--- deletewallet the default wallet it picks. The user then never has to
--- edit the file by hand.
+-- setdefault writes the defaults the user chooses this way. The user then
+-- never has to edit the file by hand.
 setConfigKeys :: FilePath -> [(Text, Value)] -> ExceptT String IO ()
 setConfigKeys dir changes = do
   let file = configFile dir
@@ -292,9 +274,8 @@ setConfigKeys dir changes = do
       liftEither =<< liftIO (replaceJsonFile file (Object changed))
     _ -> liftEither (Left ("The configuration file " <> file <> " does not hold a JSON object"))
 
--- | The names of the four keys that say where a command works
-defaultWalletKey, defaultPortfolioKey, defaultNetworkKey, defaultTypeKey :: Text
-defaultWalletKey = Text.pack "default-wallet"
-defaultPortfolioKey = Text.pack "default-portfolio"
+-- | The names of the two keys that say where in a portfolio a command
+-- works
+defaultNetworkKey, defaultTypeKey :: Text
 defaultNetworkKey = Text.pack "default-network"
 defaultTypeKey = Text.pack "default-type"

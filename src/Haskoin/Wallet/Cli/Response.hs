@@ -33,7 +33,7 @@ import Haskoin.Wallet.Database (DBAddress)
 import Haskoin.Wallet.Database.Account (PortfolioView)
 import Haskoin.Wallet.Database.Address (CoinBalance (..), addressWithCoinBalance, addressWithSpendable, parseAddressWithCoinBalance, parseAddressWithSpendable)
 import Haskoin.Wallet.Database.Coin (JsonCoin, LeftCoin)
-import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), PortfolioRef (..), parsePlace, parsePortfolioRef, placePairs, portfolioRefPairs)
+import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter, Place (..), PortfolioRef (..), parsePlace, parsePortfolioRef, placePairs, portfolioRefPairs)
 import Haskoin.Wallet.Database.TxInfo (ListedTx, TxInfo)
 import Haskoin.Wallet.Keys (AccountKind, foreignKindName, foreignKindNamed)
 import Haskoin.Wallet.Labels (FileShown, ImportReport, fileShownPairs, parseFileShown, parseReport, reportPairs)
@@ -86,25 +86,27 @@ groupAccountRef g = case groupAccounts g of
 data Response
   = -- | The command failed, and why
     ResponseError !Text
-  | -- | What newportfolio did: the secret it made, when it made one, and
-    -- the portfolio it created
-    ResponseNewPortfolio !(Maybe NewSecret) !PortfolioView
+  | -- | What newportfolio did: the secret it made, when it made one, the
+    -- portfolio it created, and the active portfolio after it, which is
+    -- the new one in a database that had none
+    ResponseNewPortfolio !(Maybe NewSecret) !PortfolioView !ActiveAfter
   | -- | A portfolio as it is now, after a command that changed it
     ResponsePortfolio !PortfolioView
+  | -- | The portfolio switch made the active one
+    ResponseSwitched !PortfolioView
   | -- | Whether a mnemonic matched a portfolio, and what hw says of it
     ResponseChecked !PortfolioRef !Bool !Text
-  | -- | Something deleted, a portfolio or a wallet: what hw says of it,
-    -- and the defaults the configuration file was given, if any changed:
-    -- each key with its new value
-    ResponseDeleted !Text ![(Text, Natural)]
+  | -- | Something deleted, a portfolio or a wallet: what hw says of it
+    ResponseDeleted !Text
   | -- | The defaults setdefault wrote to the configuration file: each key
     -- with its new value, and the file
     ResponseDefaults ![(Text, Text)] !FilePath
   | -- | The file the command wrote
     ResponseFile !FilePath
   | -- | What importwallet did with a file: the wallets and the accounts it
-    -- names, the labels and locks set, and what it could not place
-    ResponseImport !ImportReport
+    -- names, the labels and locks set, and what it could not place; then
+    -- the active portfolio after it, if the database has one
+    ResponseImport !ImportReport !(Maybe ActiveAfter)
   | -- | A file of a wallet as show shows it, before it is imported: each
     -- wallet and each account as importwallet would leave it, with its
     -- labels and locks, and the rest of the file. The database keeps
@@ -167,18 +169,22 @@ data Response
     -- signed from, and whether it is
     ResponseVerifyMsg !Text !Text !Text !Bool
   | -- | The sync of each portfolio on each network synced, the networks
-    -- the host does not serve, and the networks not synced, each with the
-    -- failure of its store
-    ResponseSync ![SyncRes] ![Network] ![(Network, Text)]
+    -- the host does not serve, the networks not synced, each with the
+    -- failure of its store, and the active portfolio, if the database has
+    -- one. A sync covers every portfolio, and the steps after it work in
+    -- the active one: pendingtxs lists it alone, so a pending transaction
+    -- in conflict in another portfolio needs a switch first.
+    ResponseSync ![SyncRes] ![Network] ![(Network, Text)] !(Maybe PortfolioRef)
   | -- | What recover found of a seed. In order: the networks searched;
     -- the gap of portfolios the search ended on; the wallet of the seed,
     -- if it has one now; the indexes of the portfolios created; the sync
     -- of each portfolio of the wallet on each network searched; the funds
     -- of the seed at the
     -- accounts hw does not hold, each with its network; the networks the
-    -- host does not serve; and the networks left out, each with the
-    -- failure of its store.
-    ResponseRecover ![Network] !Natural !(Maybe Natural) ![Natural] ![SyncRes] ![(Network, ForeignFunds)] ![Network] ![(Network, Text)]
+    -- host does not serve; the networks left out, each with the failure
+    -- of its store; and the active portfolio after it, if the database has
+    -- one.
+    ResponseRecover ![Network] !Natural !(Maybe Natural) ![Natural] ![SyncRes] ![(Network, ForeignFunds)] ![Network] ![(Network, Text)] !(Maybe ActiveAfter)
   | -- | The fee rates recent blocks paid, on the network asked
     ResponseFees !Network !FeeRates
   deriving (Eq, Show)
@@ -249,16 +255,16 @@ parseCoinBalance o = CoinBalance <$> o .: "total" <*> o .: "spendable" <*> o .: 
 instance ToJSON Response where
   toJSON = \case
     ResponseError err -> typed "error" ["error" .= err]
-    ResponseNewPortfolio secretM view ->
-      typed "newportfolio" ["secret" .= secretM, "portfolio" .= view]
+    ResponseNewPortfolio secretM view active ->
+      typed "newportfolio" ["secret" .= secretM, "portfolio" .= view, "activeportfolio" .= active]
     ResponsePortfolio view -> typed "portfolio" ["portfolio" .= view]
+    ResponseSwitched view -> typed "switch" ["portfolio" .= view]
     ResponseChecked ref result text -> typed "checked" (portfolioRefPairs ref <> ["result" .= result, "text" .= text])
-    ResponseDeleted text defaults ->
-      typed "deleted" ["text" .= text, "defaults" .= [object ["key" .= key, "value" .= value] | (key, value) <- defaults]]
+    ResponseDeleted text -> typed "deleted" ["text" .= text]
     ResponseDefaults defaults file ->
       typed "defaults" ["defaults" .= [object ["key" .= key, "value" .= value] | (key, value) <- defaults], "file" .= file]
     ResponseFile file -> typed "file" ["file" .= file]
-    ResponseImport report -> typed "import" (reportPairs report)
+    ResponseImport report active -> typed "import" (reportPairs report <> ["activeportfolio" .= active])
     ResponseWalletFile shown -> typed "walletfile" (fileShownPairs shown)
     ResponsePortfolios views -> typed "portfolios" ["portfolios" .= views]
     ResponseAddress ref addr spendable ->
@@ -293,14 +299,15 @@ instance ToJSON Response where
       typed "signmsg" ["message" .= message, "signature" .= signature, "address" .= addr]
     ResponseVerifyMsg message signature addr valid ->
       typed "verifymsg" ["message" .= message, "signature" .= signature, "address" .= addr, "valid" .= valid]
-    ResponseSync results notServed notSynced ->
+    ResponseSync results notServed notSynced activeM ->
       typed
         "sync"
         [ "syncres" .= (syncResJson <$> results),
           "notserved" .= ((.name) <$> notServed),
-          "notsynced" .= (failedNetworkJson <$> notSynced)
+          "notsynced" .= (failedNetworkJson <$> notSynced),
+          "activeportfolio" .= activeM
         ]
-    ResponseRecover searched gap walletM created results elsewhere notServed notSearched ->
+    ResponseRecover searched gap walletM created results elsewhere notServed notSearched active ->
       typed
         "recover"
         [ "networks" .= ((.name) <$> searched),
@@ -310,7 +317,8 @@ instance ToJSON Response where
           "syncres" .= (syncResJson <$> results),
           "unspendable" .= (uncurry foreignFundsJson <$> elsewhere),
           "notserved" .= ((.name) <$> notServed),
-          "notsearched" .= (failedNetworkJson <$> notSearched)
+          "notsearched" .= (failedNetworkJson <$> notSearched),
+          "activeportfolio" .= active
         ]
     ResponseFees net rates -> typed "fees" ["network" .= net.name, "feerates" .= rates]
 
@@ -319,13 +327,14 @@ instance FromJSON Response where
     kind <- o .: "type"
     case kind :: Text of
       "error" -> ResponseError <$> o .: "error"
-      "newportfolio" -> ResponseNewPortfolio <$> o .:? "secret" <*> o .: "portfolio"
+      "newportfolio" -> ResponseNewPortfolio <$> o .:? "secret" <*> o .: "portfolio" <*> o .: "activeportfolio"
       "portfolio" -> ResponsePortfolio <$> o .: "portfolio"
+      "switch" -> ResponseSwitched <$> o .: "portfolio"
       "checked" -> ResponseChecked <$> parsePortfolioRef o <*> o .: "result" <*> o .: "text"
-      "deleted" -> ResponseDeleted <$> o .: "text" <*> (mapM keyValue =<< o .: "defaults")
+      "deleted" -> ResponseDeleted <$> o .: "text"
       "defaults" -> ResponseDefaults <$> (mapM keyValue =<< o .: "defaults") <*> o .: "file"
       "file" -> ResponseFile <$> o .: "file"
-      "import" -> ResponseImport <$> parseReport o
+      "import" -> ResponseImport <$> parseReport o <*> o .:? "activeportfolio"
       "walletfile" -> ResponseWalletFile <$> parseFileShown o
       "portfolios" -> ResponsePortfolios <$> o .: "portfolios"
       "address" -> do
@@ -357,6 +366,7 @@ instance FromJSON Response where
           <$> (mapM parseSyncRes =<< o .: "syncres")
           <*> (mapM networkNamed =<< o .: "notserved")
           <*> (mapM parseFailedNetwork =<< o .: "notsynced")
+          <*> o .:? "activeportfolio"
       "recover" ->
         ResponseRecover
           <$> (mapM networkNamed =<< o .: "networks")
@@ -367,6 +377,7 @@ instance FromJSON Response where
           <*> (mapM parseForeignFunds =<< o .: "unspendable")
           <*> (mapM networkNamed =<< o .: "notserved")
           <*> (mapM parseFailedNetwork =<< o .: "notsearched")
+          <*> o .:? "activeportfolio"
       "fees" -> ResponseFees <$> network o <*> o .: "feerates"
       _ -> fail "Invalid JSON response type"
     where
@@ -475,6 +486,6 @@ parseForeignFunds =
 responseFailed :: Response -> Bool
 responseFailed (ResponseError _) = True
 responseFailed (ResponseVerifyMsg _ _ _ valid) = not valid
-responseFailed (ResponseSync _ _ notSynced) = not (null notSynced)
-responseFailed (ResponseRecover _ _ _ _ _ _ _ notSearched) = not (null notSearched)
+responseFailed (ResponseSync _ _ notSynced _) = not (null notSynced)
+responseFailed (ResponseRecover _ _ _ _ _ _ _ notSearched _) = not (null notSearched)
 responseFailed _ = False

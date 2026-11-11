@@ -4,8 +4,9 @@
 
 -- | The command line of hw as the user meets it: the help, the version,
 -- a command line hw cannot parse, among them the commands and options
--- that portfolios replaced, the completion the shell asks for, and how a
--- command that fails says so and leaves nothing behind.
+-- that portfolios and the active portfolio replaced, the completion the
+-- shell asks for, and how a command that fails says so and leaves nothing
+-- behind.
 module Haskoin.Wallet.Workflow.CommandLineSpec (spec) where
 
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
@@ -183,7 +184,7 @@ commandLineSpec ctx = do
     it "of the program lists the commands of wallets and portfolios in their group, in the order of the README" $
       withHome $ \home -> do
         run <- hw home ["--help"] []
-        let commands = ["newportfolio", "recover", "checkmnemonic", "exportwallet", "importwallet", "portfolios", "setdescription", "setdefault", "deleteportfolio", "deletewallet", "sync"]
+        let commands = ["newportfolio", "recover", "checkmnemonic", "exportwallet", "importwallet", "portfolios", "switch", "setdescription", "setdefault", "deleteportfolio", "deletewallet", "sync"]
             group = takeWhile (/= "Addresses") (drop 1 (dropWhile (/= "Wallets and portfolios") (Text.lines (runOut run))))
         [word | line <- group, Just word <- [listToMaybe (Text.words line)], word `elem` commands] `shouldBe` commands
 
@@ -282,11 +283,35 @@ commandLineSpec ctx = do
         runExit run `shouldBe` ExitFailure 1
         runErr run `shouldSatisfy` Text.isInfixOf "Invalid argument `fillwallet'"
 
-    it "refuses --account, which --wallet and --portfolio replace" $
+    it "refuses --account, which the active portfolio replaces" $
       withHome $ \home -> do
         run <- hw home ["receive", "--account", "main"] []
         runExit run `shouldBe` ExitFailure 1
         runErr run `shouldSatisfy` Text.isInfixOf "Invalid option `--account'"
+
+    -- The commands work in the active portfolio, which switch changes
+    it "refuses --wallet and --portfolio for the commands that work in the active portfolio" $
+      withHome $ \home ->
+        refusesOptions home ["--wallet", "--portfolio"] ["receive", "addresses", "balances", "coins", "txs", "pendingtxs", "preparetx", "preparesendall", "checkmnemonic", "setdescription", "setdefault"]
+
+    it "refuses --wallet and --portfolio for the commands that cover every portfolio" $
+      withHome $ \home ->
+        refusesOptions home ["--wallet", "--portfolio"] ["portfolios", "sync", "exportsheet"]
+
+    it "refuses --wallet and --portfolio for the commands that find their portfolio by themselves" $
+      withHome $ \home ->
+        refusesOptions home ["--wallet", "--portfolio"] ["importtx", "signtx", "signsweep", "bumpfee", "preparesweep", "label", "lockcoin", "unlockcoin", "signmsg"]
+
+    -- Their --portfolio names a portfolio of the wallet of the active
+    -- portfolio, or one of a file of a wallet
+    it "refuses --wallet for the commands that keep --portfolio" $
+      withHome $ \home ->
+        refusesOptions home ["--wallet"] ["deleteportfolio", "exportwallet", "importwallet", "show"]
+
+    -- deletewallet deletes a whole wallet
+    it "refuses --portfolio for deletewallet" $
+      withHome $ \home ->
+        refusesOptions home ["--portfolio"] ["deletewallet"]
 
     it "refuses --new-change, which --change-back ADDRESS replaces" $
       withHome $ \home -> do
@@ -305,7 +330,7 @@ commandLineSpec ctx = do
   describe "The completion the shell asks for" $ do
     it "offers an option of every command after the command" $
       withHome $ \home -> do
-        run <- hw home (tabAfter ["txs", "-p3", "--js"]) []
+        run <- hw home (tabAfter ["txs", "-nbtc", "--js"]) []
         runOut run `shouldBe` "--json\n"
 
     it "offers --help after the command" $
@@ -324,18 +349,52 @@ commandLineSpec ctx = do
         run <- hw home (tabAfter ["txs", "--v"]) []
         runOut run `shouldBe` "--verbose\n"
 
-    it "offers the indexes of the portfolios after --portfolio" $
+    it "offers the indexes of the portfolios of the wallet of the active portfolio after the --portfolio of switch" $
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        run <- hw home (tabAfter ["txs", "--portfolio", ""]) []
+        run <- hw home (tabAfter ["switch", "--portfolio", ""]) []
         runOut run `shouldBe` "0\n1\n"
 
-    it "offers the indexes of the wallets after --wallet" $
+    -- wallet1 has its portfolio0 alone, wallet0 portfolio0 and portfolio1
+    it "offers the indexes of the portfolios of the wallet of the active portfolio after a switch to another wallet" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        newPortfolioOf home testMnemonic2
+        switchTo home 1 0
+        run <- hw home (tabAfter ["switch", "--portfolio", ""]) []
+        runOut run `shouldBe` "0\n"
+
+    it "offers the indexes of the portfolios after the --portfolio of deleteportfolio and of exportwallet too" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        forM_ ["deleteportfolio", "exportwallet"] $ \command -> do
+          run <- hw home (tabAfter [command, "--portfolio", ""]) []
+          (command, runOut run) `shouldBe` (command, "0\n1\n")
+
+    -- The portfolio is one of the file, which the database may not have
+    it "offers no index after the --portfolio of importwallet and of show, which names a portfolio of a file" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        forM_ ["importwallet", "show"] $ \command -> do
+          run <- hw home (tabAfter [command, "--portfolio", ""]) []
+          (command, runOut run) `shouldBe` (command, "")
+
+    it "offers the indexes of the wallets after the --wallet of switch" $
       withHome $ \home -> do
         newTestPortfolio home
         newPortfolioOf home testMnemonic2
-        run <- hw home (tabAfter ["txs", "--wallet", ""]) []
+        run <- hw home (tabAfter ["switch", "--wallet", ""]) []
+        runOut run `shouldBe` "0\n1\n"
+
+    it "offers the indexes of the wallets after the --wallet of deletewallet" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newPortfolioOf home testMnemonic2
+        run <- hw home (tabAfter ["deletewallet", "--wallet", ""]) []
         runOut run `shouldBe` "0\n1\n"
 
     -- wallet1 has its portfolio0 alone, wallet0 portfolio0 and portfolio1
@@ -344,7 +403,7 @@ commandLineSpec ctx = do
         newTestPortfolio home
         newTestPortfolio home
         newPortfolioOf home testMnemonic2
-        run <- hw home (tabAfter ["txs", "--wallet", "1", "--portfolio", ""]) []
+        run <- hw home (tabAfter ["switch", "--wallet", "1", "--portfolio", ""]) []
         runOut run `shouldBe` "0\n"
 
     -- The index replaces the word typed, the option before it
@@ -352,9 +411,9 @@ commandLineSpec ctx = do
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        run <- hw home (tabAfter ["txs", "-p1"]) []
+        run <- hw home (tabAfter ["switch", "-p1"]) []
         runOut run `shouldBe` "-p1\n"
-        missing <- hw home (tabAfter ["txs", "-p2"]) []
+        missing <- hw home (tabAfter ["switch", "-p2"]) []
         runOut missing `shouldBe` ""
 
     -- zsh and fish keep --portfolio= one word, which the index offered
@@ -363,7 +422,7 @@ commandLineSpec ctx = do
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        run <- hw home ("--bash-completion-enriched" : tabAfter ["txs", "--portfolio="]) []
+        run <- hw home ("--bash-completion-enriched" : tabAfter ["switch", "--portfolio="]) []
         runOut run `shouldBe` "--portfolio=0\n--portfolio=1\n"
 
     it "offers the networks that start with the word typed after --network" $
@@ -599,21 +658,25 @@ commandLineSpec ctx = do
         run <- hw home (tabAfter ["bumpfee", take 4 paidTxid]) []
         runOut run `shouldBe` ""
 
-    -- bash breaks --portfolio=0 into --portfolio, = and 0. The coin is of
-    -- portfolio0.
-    it "reads the portfolio of --portfolio=INDEX among the words typed, as bash breaks it" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
-        syncedTwoPortfolios home
-        run <- hw home (tabAfter ["preparetx", "--portfolio", "=", "0", "--coin", take 4 paidCoin]) []
-        runOut run `shouldBe` offeredCoin
-        other <- hw home (tabAfter ["preparetx", "--portfolio", "=", "1", "--coin", take 4 paidCoin]) []
-        runOut other `shouldBe` ""
+    -- bash breaks --wallet=1 into --wallet, = and 1. wallet0 has
+    -- portfolio0 and portfolio1, wallet1 portfolio0 alone.
+    it "reads the wallet of --wallet=INDEX among the words typed, as bash breaks it" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        newPortfolioOf home testMnemonic2
+        run <- hw home (tabAfter ["switch", "--wallet", "=", "1", "--portfolio", ""]) []
+        runOut run `shouldBe` "0\n"
+        other <- hw home (tabAfter ["switch", "--wallet", "=", "0", "--portfolio", ""]) []
+        runOut other `shouldBe` "0\n1\n"
 
-    -- portfolio1 has no coins
-    it "offers only the coins of the portfolio --portfolio names after --coin" $
+    -- The coin is of portfolio0, and portfolio1, which has no coins, is
+    -- active: coin control refuses a coin of another portfolio
+    it "offers only the coins of the active portfolio after --coin" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         syncedTwoPortfolios home
-        run <- hw home (tabAfter ["preparetx", "--portfolio", "1", "--coin", take 4 paidCoin]) []
+        switchTo home 0 1
+        run <- hw home (tabAfter ["preparetx", "--coin", take 4 paidCoin]) []
         runOut run `shouldBe` ""
 
     it "offers the receiving addresses after label" $
@@ -711,15 +774,15 @@ commandLineSpec ctx = do
     it "offers the indexes of the portfolios after a space, through the script of bash" $
       withHome $ \home -> do
         newTestPortfolio home
-        bashCompletion home ["txs", "--portfolio", ""] `shouldReturn` ["0"]
+        bashCompletion home ["switch", "--portfolio", ""] `shouldReturn` ["0"]
 
     -- bash breaks --portfolio=0 into --portfolio, = and 0, and inserts the
     -- index in place of the 0
     it "offers the indexes of the portfolios after --portfolio=, which bash breaks at the =, through the script of bash" $
       withHome $ \home -> do
         newTestPortfolio home
-        bashCompletion home ["txs", "--portfolio", "=", "0"] `shouldReturn` ["0"]
-        bashCompletion home ["txs", "--portfolio", "="] `shouldReturn` ["0"]
+        bashCompletion home ["switch", "--portfolio", "=", "0"] `shouldReturn` ["0"]
+        bashCompletion home ["switch", "--portfolio", "="] `shouldReturn` ["0"]
 
     -- The script of optparse-applicative expanded a* to the files of the
     -- directory it matches, axb here
@@ -819,7 +882,7 @@ commandLineSpec ctx = do
           liftIO $ putMVar held ()
           liftIO $ takeMVar release
         takeMVar held
-        run <- hw home (tabAfter ["txs", "--portfolio", ""]) []
+        run <- hw home (tabAfter ["switch", "--portfolio", ""]) []
         putMVar release ()
         wait holder
         runOut run `shouldBe` "0\n"
@@ -829,14 +892,14 @@ commandLineSpec ctx = do
         newTestPortfolio home
         let database = home </> ".hw" </> "accounts.sqlite"
         stored <- BS.readFile database
-        _ <- hw home (tabAfter ["txs", "--portfolio", ""]) []
+        _ <- hw home (tabAfter ["switch", "--portfolio", ""]) []
         BS.readFile database `shouldReturn` stored
         sort <$> listDirectory (home </> ".hw") `shouldReturn` ["accounts.sqlite", "config.json"]
 
     it "offers nothing, and creates nothing, in a home where hw never ran" $
       withHome $ \home -> do
         removeDirectoryRecursive (home </> ".hw")
-        run <- hw home (tabAfter ["txs", "--portfolio", ""]) []
+        run <- hw home (tabAfter ["switch", "--portfolio", ""]) []
         runOut run `shouldBe` ""
         doesDirectoryExist (home </> ".hw") `shouldReturn` False
 
@@ -844,7 +907,7 @@ commandLineSpec ctx = do
     it "offers nothing from a database of an older version, which it leaves at that version" $
       withHome $ \home -> do
         inDatabaseFile (home </> ".hw" </> "accounts.sqlite") version2Database
-        run <- hw home (tabAfter ["txs", "--portfolio", ""]) []
+        run <- hw home (tabAfter ["switch", "--portfolio", ""]) []
         runOut run `shouldBe` ""
         runDBWith 100 (home </> ".hw" </> "accounts.sqlite") (runExceptT databaseVersion) `shouldReturn` Right (Just 2)
 
@@ -852,7 +915,7 @@ commandLineSpec ctx = do
     it "exits with 1, and tells why" $
       withHome $ \home -> do
         newTestPortfolio home
-        run <- hw home ["receive", "--portfolio", "7"] []
+        run <- hw home ["switch", "--portfolio", "7"] []
         runExit run `shouldBe` ExitFailure 1
         run `shouldSatisfy` printed "wallet0 has no portfolio7: portfolios lists the portfolios"
 
@@ -861,9 +924,9 @@ commandLineSpec ctx = do
     it "exits with 1 with --json too, the error in its JSON" $
       withHome $ \home -> do
         newTestPortfolio home
-        run <- hw home ["receive", "--portfolio", "7", "--json"] []
+        run <- hw home ["switch", "--portfolio", "7", "--json"] []
         runExit run `shouldBe` ExitFailure 1
-        (errorOf <$> hwJson home ["receive", "--portfolio", "7"] []) `shouldReturn` Right "wallet0 has no portfolio7: portfolios lists the portfolios"
+        (errorOf <$> hwJson home ["switch", "--portfolio", "7"] []) `shouldReturn` Right "wallet0 has no portfolio7: portfolios lists the portfolios"
 
     it "refuses an amount, with its reason" $
       withHome $ \home -> do
@@ -1009,3 +1072,15 @@ commandLineSpec ctx = do
 -- as the README has them
 helpGroups :: [Text]
 helpGroups = ["Wallets and portfolios", "Addresses", "Coins", "Payments", "Transactions", "Sweeps", "Messages", "The wallet"]
+
+-- | Check that each command refuses each option as one it does not have,
+-- before it reads anything: hw exits with 1 and names the option. The
+-- option comes right after the command, so that nothing else the command
+-- misses is told first. The name of the command and of the option go with
+-- the check, so that a failure tells which they were.
+refusesOptions :: FilePath -> [String] -> [String] -> IO ()
+refusesOptions home options commands =
+  forM_ commands $ \command -> forM_ options $ \option -> do
+    run <- hw home [command, option, "1"] []
+    (command, option, runExit run) `shouldBe` (command, option, ExitFailure 1)
+    (command, option, Text.isInfixOf ("Invalid option `" <> Text.pack option <> "'") (runErr run)) `shouldBe` (command, option, True)

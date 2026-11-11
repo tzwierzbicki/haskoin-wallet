@@ -46,6 +46,7 @@ spec = prepareContext $ \ctx -> do
   mergeSpec ctx
   refusalSpec ctx
   scopeSpec ctx
+  activeSpec ctx
   foreignSpec ctx
   roundTripSpec ctx
   importAddressSpec ctx
@@ -768,7 +769,51 @@ twoPortfoliosFile ctx = do
 
 -- | The scope of importwallet --portfolio 1
 portfolioOne :: ImportScope
-portfolioOne = ImportScope (Just 1) Nothing
+portfolioOne = ImportScope (Just 1)
+
+-- | The active portfolio after an import: the first portfolio created in
+-- a database that had none, as importwallet makes it. An import into a
+-- database that has one leaves it.
+activeSpec :: Ctx -> Spec
+activeSpec ctx =
+  describe "The active portfolio after a file is imported" $ do
+    it "is portfolio0 of the wallet of the file, in a database that had no portfolio" $
+      inDatabaseE $ do
+        _ <- importFile ctx wholeFile testWalletFile
+        activePortfolioRef `dbShouldBeE` Just (PortfolioRef 0 0)
+
+    -- The file brings portfolios 0 and 1 of the test wallet, in the order
+    -- of their indexes
+    it "is the first portfolio the file creates, portfolio0, when it creates two" $
+      inDatabaseE $ do
+        content <- liftIO (twoPortfoliosFile ctx)
+        report <- importFile ctx wholeFile content
+        liftIO $ importCreated report `shouldBe` [PortfolioRef 0 0, PortfolioRef 0 1]
+        activePortfolioRef `dbShouldBeE` Just (PortfolioRef 0 0)
+
+    -- The database has portfolio0 of the second test wallet, wallet0; the
+    -- file creates wallet1 with its portfolio0
+    it "is the one the database had, when the file creates a portfolio of another wallet" $
+      inDatabaseE $ do
+        _ <- portfolioOf ctx testMnemonic2
+        _ <- importFile ctx wholeFile testWalletFile
+        activePortfolioRef `dbShouldBeE` Just (PortfolioRef 0 0)
+        (map portfolioRef <$> lift getAllPortfolios) `dbShouldBeE` [PortfolioRef 0 0, PortfolioRef 1 0]
+
+    -- The database has portfolio 0 of the test wallet; --portfolio 1
+    -- creates portfolio 1
+    it "is the one the database had, when the file creates another portfolio of its wallet" $
+      inDatabaseE $ do
+        _ <- testPortfolio ctx
+        content <- liftIO (twoPortfoliosFile ctx)
+        _ <- importFile ctx portfolioOne content
+        activePortfolioRef `dbShouldBeE` Just (PortfolioRef 0 0)
+
+    -- show reads a file as importwallet would, and undoes what it did
+    it "is still none after show reads a file in a database without a portfolio" $
+      inDatabaseE $ do
+        _ <- fileShown ctx wholeFile (readWalletFile testWalletFile)
+        activePortfolioRef `dbShouldBeE` Nothing
 
 scopeSpec :: Ctx -> Spec
 scopeSpec ctx =
@@ -804,7 +849,7 @@ scopeSpec ctx =
         content <- liftIO (twoPortfoliosFile ctx)
         report <- importFile ctx portfolioOne content
         liftIO $ reportTxLabels report `shouldBe` 1
-        second <- choosePortfolio def (PortfolioChoice Nothing (Just 1))
+        second <- (`portfolioNamed` 1) =<< walletNamed 0
         lift (txLabel (portfolioPool second btc) (fakeTxHash 1)) `dbShouldBeE` "Rent"
 
     -- The file has one label of portfolio 0, for its first receiving
@@ -848,7 +893,7 @@ scopeSpec ctx =
         content <- liftIO (twoPortfoliosFile ctx)
         lift $
           dbShouldFailWith "The file has no portfolio2: it has portfolio0 and portfolio1" $
-            importFile ctx (ImportScope (Just 2) Nothing) content
+            importFile ctx (ImportScope (Just 2)) content
 
     it "refuses a portfolio of a file of labels alone, which holds the key of no portfolio, when no label names it" $
       inDatabaseE $
@@ -990,8 +1035,8 @@ roundTripSpec ctx =
       inDatabaseE $ do
         report <- importFile ctx wholeFile content
         liftIO $ reportTxLabels report `shouldBe` 2
-        savings <- choosePortfolio def (PortfolioChoice Nothing (Just 0))
-        spending <- choosePortfolio def (PortfolioChoice Nothing (Just 1))
+        savings <- (`portfolioNamed` 0) =<< walletNamed 0
+        spending <- (`portfolioNamed` 1) =<< walletNamed 0
         lift (txLabel (portfolioPool savings btc) (fakeTxHash 1)) `dbShouldBeE` "First salary"
         lift (txLabel (portfolioPool spending bch) (fakeTxHash 2)) `dbShouldBeE` "Refund"
         lift (txLabel (portfolioPool spending btc) (fakeTxHash 1)) `dbShouldBeE` ""
@@ -1505,7 +1550,7 @@ showFileSpec ctx = do
         content <- liftIO (twoPortfoliosFile ctx)
         lift $
           dbShouldFailWith "The file has no portfolio2: it has portfolio0 and portfolio1" $
-            fileShown ctx (ImportScope (Just 2) Nothing) (readWalletFile content)
+            fileShown ctx (ImportScope (Just 2)) (readWalletFile content)
 
     it "counts no label of another portfolio in a file shown whole" $
       inDatabaseE $ do

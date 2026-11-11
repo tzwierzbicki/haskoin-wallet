@@ -1832,6 +1832,27 @@ spec = prepareContext $ \ctx -> do
         walletsHeld `dbShouldBeE` []
         accountsHeld `dbShouldBeE` []
 
+    -- Portfolio 2 alone was paid, and the new wallet gets its portfolio 0
+    -- first, as every wallet has it
+    it "makes portfolio 0 of the new wallet the active portfolio, in a database without a portfolio, though portfolio 2 alone was paid" $
+      inDatabaseE $ do
+        _ <- recoverOn [btc] (paidStore ctx [(account2Addr, 20000)]) (testSeed ctx) 3
+        activePortfolioRef `dbShouldBeE` Just (PortfolioRef 0 0)
+
+    -- wallet0 is of the second test mnemonic; the test mnemonic recovers
+    -- wallet1 with its portfolios 0 and 2
+    it "leaves the active portfolio of the database as it is when it creates the portfolios of another wallet" $
+      inDatabaseE $ do
+        _ <- portfolioOf ctx testMnemonic2
+        _ <- recoverOn [btc] paidAccounts (testSeed ctx) 2
+        activePortfolioRef `dbShouldBeE` Just (PortfolioRef 0 0)
+        (map portfolioRef <$> lift getAllPortfolios) `dbShouldBeE` [PortfolioRef 0 0, PortfolioRef 1 0, PortfolioRef 1 2]
+
+    it "makes no portfolio active for a seed that was never paid" $
+      inDatabaseE $ do
+        _ <- recoverOn portfolioNetworks emptyStore (testSeed ctx) 2
+        activePortfolioRef `dbShouldBeE` Nothing
+
     -- The wallet has portfolio 0, whole. Portfolio 2 alone was paid: were
     -- portfolio 0 counted as never paid, it would make the gap of 2 with
     -- portfolio 1, and portfolio 2 would not be found.

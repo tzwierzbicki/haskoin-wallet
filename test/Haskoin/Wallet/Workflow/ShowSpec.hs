@@ -12,10 +12,11 @@
 -- reads the files of other wallets, is in
 -- "Haskoin.Wallet.Workflow.SigningSpec".
 --
--- A path, the newest address and the account of a file are of the
--- portfolio --wallet and --portfolio pick, and of the account --network
--- and --type pick in it. A transaction is shown as each portfolio that
--- holds it sees it. An address and a coin tell where they are, but the
+-- A path and the newest address are of the active portfolio, which
+-- switch changes, and of the account --network and --type pick in it. A
+-- transaction is shown as each portfolio that holds it sees it, whichever
+-- is active. --portfolio names one portfolio of a file of a wallet, and
+-- goes with nothing else. An address and a coin tell where they are, but the
 -- test networks share their keys: the wallet may hold the same address,
 -- and the same coin, on two of them, and --network then says which.
 module Haskoin.Wallet.Workflow.ShowSpec (spec) where
@@ -25,11 +26,12 @@ import qualified Data.Text as Text
 import qualified Data.Text.IO as TextIO
 import Haskoin
 import Haskoin.Wallet.Cli.Response (Response (..))
-import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..))
+import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..), TxType (..))
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Tx.SignData (TxSignData (..), noLabel)
 import Haskoin.Wallet.Workflow.TestUtils
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
@@ -103,15 +105,16 @@ pathSpec =
 
     -- The ends of 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo, the first receiving
     -- address of the bip44 account of portfolio1 on btc, m/44'/0'/1'
-    it "is of the portfolio --portfolio names" $
+    it "is of the portfolio switch made active" $
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        (cutAddressOf <$> hwJson home ["show", "/0/0", "--portfolio", "1"] []) `shouldReturn` Right "17Hc4H2HwzLf..........QPGpNEvK2NUo"
+        switchTo home 0 1
+        (cutAddressOf <$> hwJson home ["show", "/0/0"] []) `shouldReturn` Right "17Hc4H2HwzLf..........QPGpNEvK2NUo"
 
     -- The ends of 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj, the first receiving
     -- address of the bip44 account of portfolio0 on btc
-    it "is of the default portfolio, portfolio0, without --portfolio in a wallet of several portfolios" $
+    it "is of the active portfolio, portfolio0, the first one created, in a wallet of several portfolios" $
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
@@ -174,13 +177,14 @@ newestSpec =
 
     -- 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo is the first receiving address of
     -- the bip44 account of portfolio1 on btc
-    it "is that of the portfolio --portfolio names" $
+    it "is that of the portfolio switch made active" $
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
         _ <- answer home ["receive"] []
-        _ <- answer home ["receive", "--portfolio", "1"] []
-        (addressesOf <$> hwJson home ["show", "--portfolio", "1"] []) `shouldReturn` Right [("17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "")]
+        switchTo home 0 1
+        _ <- answer home ["receive"] []
+        (addressesOf <$> hwJson home ["show"] []) `shouldReturn` Right [("17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "")]
 
     -- receive gave out an address of the bip44 account only
     it "is that of the account --type picks, which may have given out none" $
@@ -232,31 +236,27 @@ txSpec ctx =
         syncedTwoPortfolios home
         (heldTxsOf <$> hwJson home ["show", txidArg (twoPortfoliosTx ctx)] []) `shouldReturn` Right [(mainPlace, 50000), (portfolio1Place, 30000)]
 
-    it "is shown as the portfolio --portfolio names sees it, and as that portfolio only" $
+    it "is shown once for each portfolio that holds it, whichever is active" $
       withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
         syncedTwoPortfolios home
-        (heldTxsOf <$> hwJson home ["show", txidArg (twoPortfoliosTx ctx), "--portfolio", "1"] []) `shouldReturn` Right [(portfolio1Place, 30000)]
+        switchTo home 0 1
+        (heldTxsOf <$> hwJson home ["show", txidArg (twoPortfoliosTx ctx)] []) `shouldReturn` Right [(mainPlace, 50000), (portfolio1Place, 30000)]
 
     -- The payment pays portfolio0 and portfolio1 of wallet0, and portfolio0
     -- of wallet1, the wallet of the second test mnemonic, 20000 at
-    -- 1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2
-    it "is shown with --wallet alone as every portfolio of that wallet sees it, and as no portfolio of another wallet" $
+    -- 1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2. receive gives out the first
+    -- address of each while it is active.
+    it "is shown once for each portfolio that holds it, of every wallet" $
       withChain ctx (confirmedChain (twoWalletsTx ctx)) $ \home _ -> do
         newTestPortfolio home
         newTestPortfolio home
         newPortfolioOf home testMnemonic2
-        _ <- answer home ["receive"] []
-        _ <- answer home ["receive", "--portfolio", "1"] []
-        _ <- answer home ["receive", "--wallet", "1"] []
+        forM_ [(0, 0), (0, 1), (1, 0)] $ \(wallet, portfolio) -> do
+          switchTo home wallet portfolio
+          answer home ["receive"] []
         _ <- answer home ["sync"] []
-        (heldTxsOf <$> hwJson home ["show", txidArg (twoWalletsTx ctx), "--wallet", "0"] []) `shouldReturn` Right [(mainPlace, 50000), (portfolio1Place, 30000)]
-
-    it "is refused with a --portfolio that does not hold it, naming the portfolio" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
-        synced home
-        newTestPortfolio home
-        (errorOf <$> hwJson home ["show", txidArg (payment ctx), "--portfolio", "1"] [])
-          `shouldReturn` Right ("The transaction " <> Text.pack (txidArg (payment ctx)) <> " is not in portfolio1 of wallet0")
+        (heldTxsOf <$> hwJson home ["show", txidArg (twoWalletsTx ctx)] [])
+          `shouldReturn` Right [(mainPlace, 50000), (portfolio1Place, 30000), (Place (PortfolioRef 1 0) btc, 20000)]
 
     it "is refused when the wallet does not have it, by its short id as by its txid" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -308,12 +308,15 @@ addressSpec :: Spec
 addressSpec =
   describe "An address shown by its text" $ do
     -- The address is the first receiving address of the bip84 account of
-    -- portfolio1 on btc, m/84'/0'/1'/0/0
+    -- portfolio1 on btc, m/84'/0'/1'/0/0, which receive gave out while
+    -- portfolio1 was active. portfolio0 is active when it is shown.
     it "is shown with the account that holds it, of whatever portfolio and type" $
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        addr <- receiveWith home ["--portfolio", "1", "--type", "bip84"]
+        switchTo home 0 1
+        addr <- receiveWith home ["--type", "bip84"]
+        switchTo home 0 0
         (accountRefOf <$> hwJson home ["show", addr] []) `shouldReturn` Right (AccountRef portfolio1Place Bip84)
 
 {- An address and a coin on two test networks -}
@@ -358,6 +361,31 @@ testNetworksSpec ctx =
 
 {- A transaction file -}
 
+-- | A payment of another wallet, unsigned, that pays 20000 to the first
+-- receiving address of the bip44 account of portfolio0 on btc and 10000
+-- to that of portfolio1, 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo, from a coin
+-- of 50000 of its own: it spends from no portfolio of the test wallet
+twoPortfoliosPaidFile :: Ctx -> TxSignData
+twoPortfoliosPaidFile ctx =
+  TxSignData (spendingTx ctx [(txHash funding, 0)] [(externalAddr 0, 20000), (account1Addr, 10000), (otherAddr 1, 19000)]) [funding] [] [] Nothing Nothing [] noLabel
+  where
+    funding = fundingTx ctx 6 [(otherAddr 0, 50000)]
+
+-- | A home with portfolio0 and portfolio1 of the test wallet, each of
+-- which gave out its first receiving address while it was active, and
+-- the file of 'twoPortfoliosPaidFile' in it: its path. portfolio0 is
+-- active.
+withTwoPortfoliosPaidFile :: Ctx -> FilePath -> IO FilePath
+withTwoPortfoliosPaidFile ctx home = do
+  newTestPortfolio home
+  newTestPortfolio home
+  forM_ [0, 1] $ \portfolio -> do
+    switchTo home 0 portfolio
+    answer home ["receive"] []
+  switchTo home 0 0
+  writeTxFile ctx (home </> "incoming.psbt") (twoPortfoliosPaidFile ctx)
+  return (home </> "incoming.psbt")
+
 fileSpec :: Ctx -> Spec
 fileSpec ctx =
   describe "A transaction file shown by its name" $ do
@@ -388,11 +416,30 @@ fileSpec ctx =
         twoPortfoliosSigner signer
         (seenBy <$> hwJson signer ["show", online </> "transfer.psbt"] []) `shouldReturn` Right (mainPlace, TxDebit, -22260)
 
-    it "is shown with --portfolio as the portfolio it pays sees it, incoming" $
+    -- The portfolio that pays locks its coins and signs
+    it "is shown as the portfolio that pays sees it, though the portfolio it pays is active" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         transferFile online
         twoPortfoliosSigner signer
-        (seenBy <$> hwJson signer ["show", online </> "transfer.psbt", "--portfolio", "1"] []) `shouldReturn` Right (portfolio1Place, TxCredit, 20000)
+        switchTo signer 0 1
+        (seenBy <$> hwJson signer ["show", online </> "transfer.psbt"] []) `shouldReturn` Right (mainPlace, TxDebit, -22260)
+
+    -- The user who switched to a portfolio means that one
+    it "is shown as the active portfolio sees it, when it pays several portfolios and spends from none, the active one among them" $
+      withHome $ \home -> do
+        file <- withTwoPortfoliosPaidFile ctx home
+        switchTo home 0 1
+        (seenBy <$> hwJson home ["show", file] []) `shouldReturn` Right (portfolio1Place, TxCredit, 10000)
+
+    -- portfolio0 of wallet1, the wallet of the second test mnemonic, is
+    -- active
+    it "is refused when it pays several portfolios and spends from none, the active one none of them, naming them and saying to switch" $
+      withHome $ \home -> do
+        file <- withTwoPortfoliosPaidFile ctx home
+        newPortfolioOf home testMnemonic2
+        switchTo home 1 0
+        (errorOf <$> hwJson home ["show", file] [])
+          `shouldReturn` Right "The transaction pays several portfolios, portfolio0 of wallet0 on btc and portfolio1 of wallet0 on btc: switch to the one to use first"
   where
     -- The online computer holds portfolio0 alone: it pays an address of
     -- portfolio1 as any other
@@ -403,8 +450,9 @@ fileSpec ctx =
     twoPortfoliosSigner signer = do
       newTestPortfolio signer
       newTestPortfolio signer
-      _ <- answer signer ["receive", "--portfolio", "1"] []
-      return ()
+      switchTo signer 0 1
+      _ <- answer signer ["receive"] []
+      switchTo signer 0 0
     -- Where show shows the transaction, and what it is to that portfolio
     seenBy = \case
       ResponseTx place info -> Right (place, summaryType (txInfoSummary info), summaryAmount (txInfoSummary info))
@@ -521,18 +569,14 @@ walletFileSpec =
 refusedSpec :: Spec
 refusedSpec =
   describe "show" $ do
-    it "refuses --portfolio with an address, which tells where it is" $
+    -- An address, a coin, a path, and the newest address without a word
+    it "refuses --portfolio with anything but a file of a wallet, where it names a portfolio of the file" $
       withHome $ \home -> do
         newTestPortfolio home
         _ <- answer home ["receive"] []
-        (errorOf <$> hwJson home ["show", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "--portfolio", "0"] [])
-          `shouldReturn` Right "An address tells where it is, so show takes no --wallet and no --portfolio with it"
-
-    it "refuses --wallet with a coin, which tells where it is" $
-      withHome $ \home -> do
-        newTestPortfolio home
-        (errorOf <$> hwJson home ["show", "ab000000:0", "--wallet", "0"] [])
-          `shouldReturn` Right "A coin tells where it is, so show takes no --wallet and no --portfolio with it"
+        forM_ [["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"], ["ab000000:0"], ["/0/0"], []] $ \shown ->
+          (errorOf <$> hwJson home (["show"] <> shown <> ["--portfolio", "0"]) [])
+            `shouldReturn` Right "show takes --portfolio only with a file of a wallet, where it names one portfolio of the file. The rest is shown in the active portfolio, or where it is"
 
     it "refuses --type with an address, which is of the type of its account" $
       withHome $ \home -> do

@@ -58,7 +58,7 @@ clientMain = do
     either die return (join migrated)
     -- A listing goes to the screen, unless --json or --csv asks for it
     -- whole: then it is an answer as any other
-    case commandListing ctx cfg cmd of
+    case commandListing ctx cmd of
       Just listing | not json, Nothing <- csvFileOf cmd -> do
         pager <- pagerCommand noPager cfg
         printListing cfg pager unit view (wrapsLines view cmd) listing
@@ -68,9 +68,7 @@ clientMain = do
           then jsonPrinter res
           else do
             prettyPrinter unit view (addressCodeOf cmd) (txShownOf cmd) res
-            -- A step names a portfolio only when it is not the default
-            -- one, which the configuration tells
-            printNextSteps cfg cmd res
+            printNextSteps cmd res
 
 -- | Print a listing on the screen, chunk by chunk, through the pager when
 -- there is one, its elements in the view given. The pager keeps the rows

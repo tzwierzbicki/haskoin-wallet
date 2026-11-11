@@ -129,10 +129,11 @@ sendAllSpec ctx =
 
     -- The wallet has portfolio0 and portfolio1, and the coins are of
     -- portfolio1: 340 bytes, a fee of 3400, as for the same coins above
-    it "are those of the portfolio --portfolio names" $
+    it "are those of the portfolio switch made active" $
       withChain ctx (confirmedChain (portfolio1CoinsTx ctx)) $ \home _ -> do
         syncedTwoPortfolios home
-        prepared <- answer home ["preparesendall", textOf (otherAddr 0), "--portfolio", "1", "--fee-rate", "10"] []
+        switchTo home 0 1
+        prepared <- answer home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "10"] []
         placeOf prepared `shouldBe` Right portfolio1Place
         paidToOthers <$> txOf prepared `shouldReturn` Map.fromList [(otherAddr 0, 76600)]
 

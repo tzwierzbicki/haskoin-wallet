@@ -384,24 +384,21 @@ bumpFeeSpec ctx = do
         (pendingNosigsOf <$> hwJson online ["pendingtxs"] []) `shouldReturn` Right [bumpNosig]
 
   -- The payment of 20000 from the coin of 50000 of portfolio1, at 10 and
-  -- then at 20 satoshis a byte, as above: its replacement pays 4520
+  -- then at 20 satoshis a byte, as above: its replacement pays 4520.
+  -- portfolio1 is active while the payment is prepared, and portfolio0
+  -- once it is sent.
   describe "A stuck payment of a portfolio" $ do
-    it "is replaced in the portfolio that pays it, which bumpfee finds without --portfolio" $
+    it "is replaced in the portfolio that pays it, which bumpfee finds whichever portfolio is active" $
       withChain ctx (chainPaying ctx account1Addr) $ \home _ -> do
         syncedTwoPortfolios home
-        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--portfolio", "1", "--fee-rate", "10"] []
+        switchTo home 0 1
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        switchTo home 0 0
         stuck <- signAndSend home nosig
         answered <- answer home ["bumpfee", stuck, "--fee-rate", "20"] []
         placeOf answered `shouldBe` Right portfolio1Place
         bumped <- txOf answered
         (paidToOthers bumped, feeOf bumped) `shouldBe` (Map.fromList [(otherAddr 0, 20000)], 4520)
-
-    it "is refused with a --portfolio that does not hold it, naming that portfolio" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
-        stuck <- sentPayment home
-        newTestPortfolio home
-        (errorOf <$> hwJson home ["bumpfee", stuck, "--portfolio", "1", "--fee-rate", "20"] [])
-          `shouldReturn` Right "The transaction is not in portfolio1 of wallet0"
 
     -- The payment of 60000 from the coins of both types of 'bothTypesTx':
     -- 10.5 + 148 + 68 + 34 + 34 = 294.5, so 295 virtual bytes. At 10

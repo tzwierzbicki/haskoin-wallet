@@ -123,7 +123,7 @@ setDefaultNetwork home netM =
   editConfig home $ maybe (KeyMap.delete "default-network") (KeyMap.insert "default-network" . Json.String) netM
 
 -- | Set a key of the configuration file of a home, such as default-type
--- or default-wallet, to the value given
+-- or listing-view, to the value given
 setConfigKey :: FilePath -> Text -> Json.Value -> IO ()
 setConfigKey home key value = editConfig home (KeyMap.insert (Key.fromText key) value)
 

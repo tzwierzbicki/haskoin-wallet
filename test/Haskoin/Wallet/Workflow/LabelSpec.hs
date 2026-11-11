@@ -435,7 +435,8 @@ labelCommandSpec ctx =
       withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
         syncedTwoPortfolios home
         _ <- answer home ["label", txidArg (twoPortfoliosTx ctx), "Gift"] []
-        (fmap (lookup (txidArg (twoPortfoliosTx ctx))) . historyLabels <$> hwJson home ["txs", "--portfolio", "1"] []) `shouldReturn` Right (Just "Gift")
+        switchTo home 0 1
+        (fmap (lookup (txidArg (twoPortfoliosTx ctx))) . historyLabels <$> hwJson home ["txs"] []) `shouldReturn` Right (Just "Gift")
 
     it "removes the label of a transaction with an empty one" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -586,7 +587,7 @@ recordsOf file = do
 -- | The addresses an answer of importwallet counts as not in the wallet
 -- yet, and of them those too far past the last used address to derive
 missingAddressesOf :: Response -> Either String (Natural, Natural)
-missingAddressesOf (ResponseImport report) = Right (reportAddressesMissing report, reportAddressesTooFar report)
+missingAddressesOf (ResponseImport report _) = Right (reportAddressesMissing report, reportAddressesTooFar report)
 missingAddressesOf other = Left (show other)
 
 exportImportSpec :: Ctx -> Spec
@@ -605,7 +606,9 @@ exportImportSpec ctx =
       withChain ctx (paidChain ctx) $ \home _ -> do
         labelledHome ctx home
         newTestPortfolio home
-        _ <- answer home ["receive", "--portfolio", "1", "--label", "Savings"] []
+        switchTo home 0 1
+        _ <- answer home ["receive", "--label", "Savings"] []
+        switchTo home 0 0
         _ <- answer home ["exportwallet", home </> "labels.jsonl"] []
         records <- recordsOf (home </> "labels.jsonl")
         [(recordType r, recordRef r) | r <- records, recordNetwork r == Just "btc", recordType r `elem` [XpubRecord, AddrRecord]]
@@ -650,7 +653,8 @@ exportImportSpec ctx =
 
     -- A wallet that never synced: the wallet and its portfolio are
     -- created, the addresses derived, and the transaction labelled by the
-    -- origin of its record, but the coin is not there to lock
+    -- origin of its record, but the coin is not there to lock. The
+    -- portfolio is the first of the database, which makes it active.
     it "are shown by importwallet wallet by wallet, then the labels and locks set, then what to do for the rest" $
       withChain ctx (paidChain ctx) $ \home _ -> withHome $ \fresh -> do
         labelledHome ctx home
@@ -660,6 +664,8 @@ exportImportSpec ctx =
           `shouldBe` Text.unlines
             [ "wallet0  bc560f95  created",
               "  portfolio0  created, 12 accounts added",
+              "",
+              "portfolio0 of wallet0 is the active portfolio: the commands work in it.",
               "",
               "Labels set: 2 addresses, 1 transaction",
               "Not in the wallet yet: 1 coin",

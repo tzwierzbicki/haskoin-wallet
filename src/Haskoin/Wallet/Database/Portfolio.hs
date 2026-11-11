@@ -6,9 +6,11 @@
 --
 -- A wallet is the master key of one mnemonic. A portfolio holds every
 -- account of a wallet at one account index, on every network and of
--- every kind. The user of one mnemonic works in portfolio 0 of wallet 0
--- and never names an account: a command is told the network and the type
--- of address it works on, and the rest follows.
+-- every kind. The commands work in the active portfolio, which the
+-- database keeps, and never name an account: a command is told the
+-- network and the type of address it works on, and the rest follows. The
+-- user of one mnemonic works in portfolio 0 of wallet 0, which became
+-- active as it was created.
 --
 -- Wallets and portfolios have no names of their own. Each is named by its
 -- index, wallet0 and portfolio0, which the user cannot change, and each
@@ -22,11 +24,11 @@
 -- deleting wallet0 leaves wallet1 as it is, and the next wallet made is
 -- wallet0 again.
 --
--- This module holds the rows of the two tables, the portfolio a command
--- works in as its options and the configuration say ('choosePortfolio'),
--- and how the answers name a portfolio, a network of it, and an account
--- of it ('PortfolioRef', 'Place', 'AccountRef'). The accounts themselves
--- are in "Haskoin.Wallet.Database.Account".
+-- This module holds the rows of the two tables, the active portfolio, the
+-- one a command works in ('requireActivePortfolio', 'switchTo'), and how
+-- the answers name a portfolio, a network of it, and an account of it
+-- ('PortfolioRef', 'Place', 'AccountRef'). The accounts themselves are in
+-- "Haskoin.Wallet.Database.Account".
 module Haskoin.Wallet.Database.Portfolio where
 
 import Conduit (MonadUnliftIO)
@@ -37,14 +39,13 @@ import Control.Monad.Reader (MonadTrans (lift))
 import Data.Aeson
 import Data.Aeson.Types (Pair, Parser)
 import Data.Char (isControl)
-import Data.Maybe (fromMaybe, isJust)
+import Data.Maybe (isJust, isNothing)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (getCurrentTime)
 import qualified Database.Persist as P
 import Haskoin
-import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Keys (AccountKind, accountDeriv, indexFits, kindName)
 import Numeric.Natural (Natural)
@@ -265,7 +266,9 @@ portfolioAt walletId index
   | otherwise = fmap entityPair <$> P.getBy (UniquePortfolio walletId (fromIntegral index))
 
 -- | A new portfolio of a wallet at an index, which must be free and below
--- 2^31 ('indexFits'), with a description
+-- 2^31 ('indexFits'), with a description. It becomes the active portfolio
+-- when the database has none ('activateIfNone'), as the first portfolio
+-- of a database does, here where every portfolio row is written.
 insertPortfolio :: (MonadUnliftIO m) => DBWalletId -> Natural -> Text -> ExceptT String (DB m) (DBPortfolioId, DBPortfolio)
 insertPortfolio walletId index description = do
   liftEither $ checkDescription description
@@ -281,6 +284,7 @@ insertPortfolio walletId index description = do
             dBPortfolioCreated = time
           }
   key <- lift $ P.insert portfolio
+  _ <- lift $ activateIfNone key
   return (key, portfolio)
 
 -- | Set the description of a portfolio, in place of the one it had. An
@@ -344,123 +348,150 @@ walletPortfolios (walletId, wallet) =
 poolPlace :: (MonadUnliftIO m) => Pool -> ExceptT String (DB m) Place
 poolPlace pool = (`portfolioPlace` pool.poolNetwork) <$> getPortfolio pool.poolPortfolio
 
-{- The portfolio a command works in -}
+{- The active portfolio -}
 
--- | The --wallet and --portfolio of a command, as the user typed them.
--- Each is an index. The one left out takes the default of the
--- configuration ('chooseWallet', 'choosePortfolio'), which the parser
--- does not read.
-data PortfolioChoice = PortfolioChoice
-  { chosenWallet :: !(Maybe Natural),
-    chosenPortfolio :: !(Maybe Natural)
-  }
-  deriving (Eq, Show)
+-- The commands work in one portfolio, the active one, which no option
+-- names. The command switch makes another one active, and nothing else
+-- does, but the creation of the first portfolio of a database, which
+-- becomes active as it is created ('activateIfNone'). The choice is kept
+-- in the database, in the one row of its table: a fact the user decides,
+-- which the next command finds as the last one left it.
+--
+-- Options and keys of the configuration file with defaults did this job
+-- before, --wallet and --portfolio on most commands, and the keys
+-- default-wallet and default-portfolio. They were turned down for a state
+-- that is easy to keep track of: one portfolio at a time, which
+-- portfolios marks, rather than a default and options that override it
+-- on each command. A command line names a portfolio only where it names
+-- its target, and never takes it from the state: switch, deletewallet
+-- and deleteportfolio. exportwallet, importwallet and show of a file of a
+-- wallet name one portfolio of the file.
 
--- | No --wallet and no --portfolio: the defaults
-defaultPortfolio :: PortfolioChoice
-defaultPortfolio = PortfolioChoice Nothing Nothing
+-- | The key of the one row of the table of the active portfolio
+activeSlot :: P.Key DBActivePortfolio
+activeSlot = DBActivePortfolioKey 0
 
--- | The wallet a command works on: the one --wallet names by its index,
--- or the default wallet of the configuration, wallet0 unless the key
--- default-wallet says otherwise. A wallet that does not exist is
--- refused. The refusal of a default names the key, so that the user
--- knows where the index came from.
-chooseWallet :: (MonadUnliftIO m) => Config -> Maybe Natural -> ExceptT String (DB m) (DBWalletId, DBWallet)
-chooseWallet cfg given = do
-  wallets <- lift getWallets
-  when (null wallets) $ throwError noWallets
-  let index = fromMaybe (configDefaultWallet cfg) given
-  case filter ((== index) . walletIndex . snd) wallets of
-    found : _ -> return found
-    [] -> throwError $ case given of
-      Just _ -> "There is no " <> cs (walletName index) <> ": portfolios lists the wallets"
-      Nothing ->
-        "The key default-wallet of the configuration file names "
-          <> cs (walletName index)
-          <> ", which does not exist: give --wallet, or change the key with setdefault"
+-- | The key of the active portfolio, if the database has one. A database
+-- without any portfolio has none.
+activePortfolioId :: (MonadUnliftIO m) => DB m (Maybe DBPortfolioId)
+activePortfolioId = fmap dBActivePortfolioPortfolio <$> P.get activeSlot
 
--- | The refusal of a command that needs a wallet when the database has
+-- | The active portfolio, with its wallet, if the database has one
+activePortfolio :: (MonadUnliftIO m) => ExceptT String (DB m) (Maybe Portfolio)
+activePortfolio = mapM getPortfolio =<< lift activePortfolioId
+
+-- | The active portfolio, the one a command works in. A database without
+-- any portfolio has none, and the command is refused ('noWallets').
+requireActivePortfolio :: (MonadUnliftIO m) => ExceptT String (DB m) Portfolio
+requireActivePortfolio = liftMaybe noWallets =<< activePortfolio
+
+-- | How the answers name the active portfolio, if the database has one
+activePortfolioRef :: (MonadUnliftIO m) => ExceptT String (DB m) (Maybe PortfolioRef)
+activePortfolioRef = fmap portfolioRef <$> activePortfolio
+
+-- | The refusal of a command that needs a portfolio when the database has
 -- none
 noWallets :: String
 noWallets = "There is no wallet yet: newportfolio makes one, and recover or importwallet bring one back"
 
--- | The portfolio a command works in: the one --portfolio names by its
--- index, in the wallet 'chooseWallet' gives, or the default portfolio of
--- the configuration, portfolio0 unless the key default-portfolio says
--- otherwise. A portfolio the wallet does not have is refused, and the
--- refusal of a default names the key.
-choosePortfolio :: (MonadUnliftIO m) => Config -> PortfolioChoice -> ExceptT String (DB m) Portfolio
-choosePortfolio cfg choice = do
-  (walletId, wallet) <- chooseWallet cfg choice.chosenWallet
-  let index = fromMaybe (configDefaultPortfolio cfg) choice.chosenPortfolio
-      name = cs (walletName (walletIndex wallet)) :: String
-  found <- lift $ portfolioAt walletId index
-  case found of
-    Just (key, row) -> return (Portfolio key row walletId wallet)
-    Nothing -> throwError $ case choice.chosenPortfolio of
-      Just _ -> name <> " has no " <> cs (portfolioName index) <> ": portfolios lists the portfolios"
-      Nothing ->
-        "The key default-portfolio of the configuration file names "
-          <> cs (portfolioName index)
-          <> ", which "
-          <> name
-          <> " does not have: give --portfolio, or change the key with setdefault"
+-- | Make the portfolio of the key the active one, in place of the one
+-- that was
+setActivePortfolio :: (MonadUnliftIO m) => DBPortfolioId -> DB m ()
+setActivePortfolio key = P.repsert activeSlot (DBActivePortfolio 0 key)
 
--- | The portfolios a command that covers several works on: the one
--- --portfolio names, in the wallet --wallet names or the default one;
--- every portfolio of the wallet --wallet names; or, without either
--- option, every portfolio of every wallet. sync, portfolios and
--- exportsheet work on these: looking at one portfolio too many does no
--- harm, and a user of several wallets wants them all synced.
-choosePortfolios :: (MonadUnliftIO m) => Config -> PortfolioChoice -> ExceptT String (DB m) [Portfolio]
-choosePortfolios cfg choice = case (choice.chosenWallet, choice.chosenPortfolio) of
-  (Nothing, Nothing) -> lift getAllPortfolios
-  (_, Just _) -> pure <$> choosePortfolio cfg choice
-  (Just _, Nothing) -> lift . walletPortfolios =<< chooseWallet cfg choice.chosenWallet
+-- | Make the portfolio of the key the active one when the database has
+-- none, and say whether it did. The first portfolio created in a
+-- database, or after the last wallet was deleted, becomes active this
+-- way. Once a portfolio is active, only switch changes it.
+activateIfNone :: (MonadUnliftIO m) => DBPortfolioId -> DB m Bool
+activateIfNone key = do
+  current <- activePortfolioId
+  case current of
+    Just _ -> return False
+    Nothing -> setActivePortfolio key >> return True
 
-{- The portfolios a command that finds its portfolio may take -}
-
--- | The portfolios --wallet and --portfolio leave to a command that finds
--- its portfolio by itself, from a transaction or from addresses, with how
--- a refusal names them.
---
--- Such a command looks in every portfolio when neither option is given.
--- --wallet alone leaves every portfolio of that wallet. --portfolio leaves
--- one portfolio, of the default wallet without --wallet. So the options
--- only narrow the search, and never pick a default portfolio: the user
--- who types --wallet 0 means "somewhere in wallet0", not "in portfolio0 of
--- wallet0". A refusal names what the user typed: "wallet0" for --wallet
--- alone, "portfolio1 of wallet0" with --portfolio. 'choosePortfolio' is
--- for the other commands, which work in one portfolio with its defaults.
-data Narrowed = Narrowed
-  { -- | The portfolios left, in the order of their indexes
-    narrowedPortfolios :: ![Portfolio],
-    -- | How a sentence names them: "wallet0", or "portfolio1 of wallet0"
-    narrowedText :: !String
+-- | The active portfolio after a command that may create portfolios:
+-- newportfolio, recover and importwallet. The answer of such a command
+-- says which portfolio is active, and whether the command made it so: a
+-- user who adds a portfolio to a database that has one already keeps
+-- working in the one that was active, and is told how to switch.
+data ActiveAfter = ActiveAfter
+  { activeAfterRef :: !PortfolioRef,
+    -- | Whether the command made it active: it created the first
+    -- portfolio of the database
+    activeAfterActivated :: !Bool
   }
   deriving (Eq, Show)
 
--- | The portfolios the options of a command that finds its portfolio by
--- itself leave, as 'Narrowed' says. Nothing without either option: every
--- portfolio is left. A wallet or a portfolio the database does not have
--- is refused, as 'chooseWallet' and 'choosePortfolio' refuse it.
-narrowedBy :: (MonadUnliftIO m) => Config -> PortfolioChoice -> ExceptT String (DB m) (Maybe Narrowed)
-narrowedBy cfg choice = case (choice.chosenWallet, choice.chosenPortfolio) of
-  (Nothing, Nothing) -> return Nothing
-  (_, Just _) -> Just . onePortfolio <$> choosePortfolio cfg choice
-  (Just _, Nothing) -> do
-    held@(_, wallet) <- chooseWallet cfg choice.chosenWallet
-    portfolios <- lift (walletPortfolios held)
-    return (Just (Narrowed portfolios (cs (walletName (walletIndex wallet)))))
+-- | The keys of the active portfolio after a command in the JSON of its
+-- answer: those of the portfolio, and whether the command activated it
+instance ToJSON ActiveAfter where
+  toJSON after = object (portfolioRefPairs after.activeAfterRef <> ["activated" .= after.activeAfterActivated])
 
--- | One portfolio alone, as --portfolio leaves it, named in full
-onePortfolio :: Portfolio -> Narrowed
-onePortfolio portfolio = Narrowed [portfolio] (portfolioText portfolio)
+instance FromJSON ActiveAfter where
+  parseJSON = withObject "active portfolio" $ \o -> ActiveAfter <$> parsePortfolioRef o <*> o .: "activated"
 
--- | Whether the options leave the portfolio of the key: any portfolio
--- when they leave every one
-allowedBy :: Maybe Narrowed -> DBPortfolioId -> Bool
-allowedBy narrowedM key = maybe True (elem key . map (.portfolioId) . (.narrowedPortfolios)) narrowedM
+-- | Run a command that may create portfolios, and give the active
+-- portfolio after it, with whether the command activated it. Nothing when
+-- the database has no portfolio after the command either.
+withActiveAfter :: (MonadUnliftIO m) => ExceptT String (DB m) a -> ExceptT String (DB m) (a, Maybe ActiveAfter)
+withActiveAfter action = do
+  before <- lift activePortfolioId
+  result <- action
+  (,) result <$> activeAfterFrom before
+
+-- | The active portfolio now, given the key of the one before a command
+-- that may create portfolios: the command activated it when there was
+-- none before
+activeAfterFrom :: (MonadUnliftIO m) => Maybe DBPortfolioId -> ExceptT String (DB m) (Maybe ActiveAfter)
+activeAfterFrom before = do
+  after <- activePortfolioRef
+  return ((\ref -> ActiveAfter ref (isNothing before)) <$> after)
+
+{- Naming a wallet and a portfolio -}
+
+-- | The wallet of an index the user typed, or a refusal that tells where
+-- the wallets are listed, or how to make one in a database without any
+-- ('noWallets')
+walletNamed :: (MonadUnliftIO m) => Natural -> ExceptT String (DB m) (DBWalletId, DBWallet)
+walletNamed index = do
+  found <- lift $ walletAt index
+  wallets <- lift getWallets
+  case found of
+    Just held -> return held
+    Nothing
+      | null wallets -> throwError noWallets
+      | otherwise -> throwError ("There is no " <> cs (walletName index) <> ": portfolios lists the wallets")
+
+-- | The portfolio of a wallet at an index the user typed, with the
+-- wallet, or a refusal that tells where the portfolios are listed
+portfolioNamed :: (MonadUnliftIO m) => (DBWalletId, DBWallet) -> Natural -> ExceptT String (DB m) Portfolio
+portfolioNamed (walletId, wallet) index = do
+  found <- lift $ portfolioAt walletId index
+  case found of
+    Just (key, row) -> return (Portfolio key row walletId wallet)
+    Nothing -> throwError (cs (walletName (walletIndex wallet)) <> " has no " <> cs (portfolioName index) <> ": portfolios lists the portfolios")
+
+-- | Make the portfolio --wallet and --portfolio name the active one, as
+-- switch does, and give it. Without --wallet, the portfolio is one of the
+-- wallet of the active portfolio: a user of one mnemonic types the index
+-- of a portfolio alone. A wallet or a portfolio the database does not
+-- have is refused, and so is any switch in a database without any
+-- portfolio ('noWallets').
+switchTo :: (MonadUnliftIO m) => Maybe Natural -> Natural -> ExceptT String (DB m) Portfolio
+switchTo walletM index = do
+  current <- requireActivePortfolio
+  wallet <- case walletM of
+    Just walletIx -> walletNamed walletIx
+    Nothing -> return (current.portfolioWalletId, current.portfolioWallet)
+  portfolio <- portfolioNamed wallet index
+  lift $ setActivePortfolio portfolio.portfolioId
+  return portfolio
+
+-- | The command that makes a portfolio active, as a refusal or a next
+-- step tells the user to run it: "switch --wallet 0 --portfolio 1"
+switchCommandText :: PortfolioRef -> String
+switchCommandText ref = "switch --wallet " <> show (refWallet ref) <> " --portfolio " <> show (refPortfolio ref)
 
 -- | A portfolio as a sentence names it: "portfolio0 of wallet0"
 portfolioText :: Portfolio -> String

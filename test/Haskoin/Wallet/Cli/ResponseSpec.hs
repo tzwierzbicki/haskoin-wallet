@@ -11,7 +11,8 @@ import Haskoin (bch, btc, btcTest4, prepareContext)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), testIdentity)
 import Haskoin.Wallet.Arbitrary (arbitraryResponse)
 import Haskoin.Wallet.Cli.Response (Response (..), responseFailed)
-import Haskoin.Wallet.TestUtils (quietSync)
+import Haskoin.Wallet.Database.Portfolio (ActiveAfter (..), PortfolioRef (..))
+import Haskoin.Wallet.TestUtils (mainPortfolioRef, quietSync)
 import Test.Hspec
 
 spec :: Spec
@@ -25,22 +26,25 @@ spec = do
   -- network, as the public one serves no regtest, is no failure.
   describe "An answer hw exits with a failure for" $ do
     it "is a sync that left out a network whose store is down" $
-      responseFailed (ResponseSync [quietSync] [] [(bch, downStore)]) `shouldBe` True
+      responseFailed (ResponseSync [quietSync] [] [(bch, downStore)] (Just mainPortfolioRef)) `shouldBe` True
 
     it "is not a sync that left out a network the host does not serve" $
-      responseFailed (ResponseSync [quietSync] [btcTest4] []) `shouldBe` False
+      responseFailed (ResponseSync [quietSync] [btcTest4] [] (Just mainPortfolioRef)) `shouldBe` False
 
     it "is not a sync of every network" $
-      responseFailed (ResponseSync [quietSync] [] []) `shouldBe` False
+      responseFailed (ResponseSync [quietSync] [] [] (Just mainPortfolioRef)) `shouldBe` False
 
     it "is a recover that left out a network whose store is down" $
-      responseFailed (ResponseRecover [btc] 10 (Just 0) [0] [quietSync] [] [] [(bch, downStore)]) `shouldBe` True
+      responseFailed (ResponseRecover [btc] 10 (Just 0) [0] [quietSync] [] [] [(bch, downStore)] recoveredActive) `shouldBe` True
 
     it "is not a recover that left out a network the host does not serve" $
-      responseFailed (ResponseRecover [btc] 10 (Just 0) [0] [quietSync] [] [btcTest4] []) `shouldBe` False
+      responseFailed (ResponseRecover [btc] 10 (Just 0) [0] [quietSync] [] [btcTest4] [] recoveredActive) `shouldBe` False
 
     it "is an error" $
       responseFailed (ResponseError "There are no portfolios in the wallet") `shouldBe` True
   where
     downStore :: Text
     downStore = "The store at http://127.0.0.1:1/ did not answer"
+    -- A recovery into a database without a portfolio makes portfolio0 of
+    -- the new wallet the active one
+    recoveredActive = Just (ActiveAfter (PortfolioRef 0 0) True)

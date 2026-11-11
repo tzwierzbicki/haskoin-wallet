@@ -159,26 +159,17 @@ signingSpec ctx = do
         pendingState signed `shouldBe` Just (True, False)
 
     -- The wallet has portfolio0 and portfolio1 of the test seed, and the
-    -- payment is pending in portfolio1, which the chain pays alone; the
-    -- default portfolio is portfolio0
-    it "is signed in the portfolio that holds it, without --portfolio" $
+    -- payment is pending in portfolio1, which the chain pays alone. It is
+    -- prepared while portfolio1 is active, and signed once portfolio0 is.
+    it "is signed in the portfolio that holds it, whichever is active" $
       withChain ctx (chainPaying ctx account1Addr) $ \home _ -> do
         syncedTwoPortfolios home
-        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--portfolio", "1", "--fee-rate", "10"] []
+        switchTo home 0 1
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        switchTo home 0 0
         signed <- answer home ["signtx", nosig] seedOnce
         placeOf signed `shouldBe` Right portfolio1Place
         pendingState <$> txOf signed `shouldReturn` Just (True, False)
-
-    -- The mnemonic would be typed for nothing: the keys of portfolio1
-    -- cannot sign what portfolio0 holds
-    it "is refused a --portfolio that does not hold it, before the mnemonic is asked" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
-        synced home
-        newTestPortfolio home
-        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
-        run <- hw home ["signtx", nosig, "--portfolio", "1"] seedOnce
-        run `shouldSatisfy` printed "The transaction is pending in portfolio0 of wallet0 on btc, not in portfolio1 of wallet0"
-        run `shouldNotSatisfy` askedMnemonic
 
   -- The signer holds the portfolio and asks for its mnemonic; the online
   -- computer holds the same portfolio, imported, and talks to the store
@@ -223,16 +214,19 @@ signingSpec ctx = do
     -- Both computers have portfolio0 and portfolio1 of the test wallet, and
     -- the payment is of portfolio1, which the chain pays alone. The file
     -- names no portfolio: the keys of portfolio1 derive the addresses it
-    -- spends, and the online wallet holds it pending.
-    it "is shown, signed and imported back without --portfolio, by wallets of several portfolios" $
+    -- spends, and the online wallet holds it pending. portfolio0 is
+    -- active on both computers once the payment is prepared.
+    it "is shown, signed and imported back by wallets of several portfolios, whichever is active" $
       withHome $ \signer -> withChain ctx (chainPaying ctx account1Addr) $ \online _ -> do
         newTestPortfolio signer
         newTestPortfolio signer
         _ <- answer signer ["exportwallet", signer </> "wallet.jsonl"] []
         _ <- answer online ["importwallet", signer </> "wallet.jsonl"] []
-        _ <- answer online ["receive", "--portfolio", "1"] []
+        switchTo online 0 1
+        _ <- answer online ["receive"] []
         _ <- answer online ["sync"] []
-        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--portfolio", "1", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        switchTo online 0 0
         (placeOf <$> hwJson signer ["show", online </> "unsigned.psbt"] []) `shouldReturn` Right portfolio1Place
         signed <- txOf =<< answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
         pendingState signed `shouldBe` Just (True, False)
@@ -292,17 +286,6 @@ signingSpec ctx = do
         run <- hw home ["show", home </> "payment.psbt"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  Portfolio: portfolio0\n  Network  : btc\n  Types    : bip44\n"
 
-    -- The payment is from portfolio0
-    it "is refused by show and importtx for a --portfolio the transaction does not involve" $
-      withHome $ \home -> do
-        newTestPortfolio home
-        newTestPortfolio home
-        writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
-        forM_ ["show", "importtx"] $ \command ->
-          (errorOf <$> hwJson home [command, home </> "payment.psbt", "--portfolio", "1"] [])
-            `shouldReturn` Right "The transaction does not involve portfolio1 of wallet0"
-        (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
-
   -- portfolio0 pays 20000 of its coin of 50000 to the first receiving
   -- address of portfolio1, 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo, with 2260 of
   -- fee. The online computer prepares it. The signer holds both
@@ -314,11 +297,13 @@ signingSpec ctx = do
           syncedTwoPortfolios online
           _ <- answer online ["preparetx", fixedTo account1Addr "0.0002", "--output", online </> "transfer.psbt", "--fee-rate", "10"] []
           return (online </> "transfer.psbt")
+        -- receive gives out the address of portfolio1 while it is active
         twoPortfoliosSigner signer = do
           newTestPortfolio signer
           newTestPortfolio signer
-          _ <- answer signer ["receive", "--portfolio", "1"] []
-          return ()
+          switchTo signer 0 1
+          _ <- answer signer ["receive"] []
+          switchTo signer 0 0
         -- The online computer deletes the transfer it holds pending, and
         -- holds its coin again: importtx then finds the portfolio of the
         -- file by itself
@@ -332,30 +317,21 @@ signingSpec ctx = do
         file <- deletedTransfer online
         (placeOf <$> hwJson online ["importtx", file] []) `shouldReturn` Right mainPlace
 
-    it "is refused by importtx with --portfolio of the portfolio it pays, naming the portfolio that pays it" $
+    -- The portfolio that pays locks the coins it spends, and signs
+    it "is imported by importtx into the portfolio that pays it, though the portfolio it pays is active" $
       withChain ctx (paidChain ctx) $ \online _ -> do
         file <- deletedTransfer online
-        (errorOf <$> hwJson online ["importtx", file, "--portfolio", "1"] [])
-          `shouldReturn` Right "The transaction spends from portfolio0 of wallet0, the portfolio that pays it: it is kept pending there, and signed there"
-        (txsOf <$> hwJson online ["pendingtxs"] []) `shouldReturn` Right []
-        (txsOf <$> hwJson online ["pendingtxs", "--portfolio", "1"] []) `shouldReturn` Right []
+        switchTo online 0 1
+        (placeOf <$> hwJson online ["importtx", file] []) `shouldReturn` Right mainPlace
 
-    it "is signed by the portfolio that pays it, without --portfolio" $
+    it "is signed by the portfolio that pays it, though the portfolio it pays is active" $
       withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
         file <- transferFile online
         twoPortfoliosSigner signer
+        switchTo signer 0 1
         signed <- answer signer ["signtx", "--input", file, "--output", signer </> "signed.psbt"] seedOnce
         placeOf signed `shouldBe` Right mainPlace
         pendingState <$> txOf signed `shouldReturn` Just (True, False)
-
-    -- The mnemonic would be typed for nothing
-    it "is refused by signtx with --portfolio of the portfolio it pays, before the mnemonic is asked" $
-      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
-        file <- transferFile online
-        twoPortfoliosSigner signer
-        run <- hw signer ["signtx", "--input", file, "--output", signer </> "signed.psbt", "--portfolio", "1"] seedOnce
-        run `shouldSatisfy` printed "The transaction spends from portfolio0 of wallet0, the portfolio that pays it: it is kept pending there, and signed there"
-        run `shouldNotSatisfy` askedMnemonic
 
   -- The online computer holds portfolio0 and portfolio1, and the payment
   -- is of portfolio1, which the chain pays alone. The signer holds
@@ -365,7 +341,8 @@ signingSpec ctx = do
       withHome $ \signer -> withChain ctx (chainPaying ctx account1Addr) $ \online _ -> do
         syncedTwoPortfolios online
         newTestPortfolio signer
-        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--portfolio", "1", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        switchTo online 0 1
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
         run <- hw signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
         run
           `shouldSatisfy` printedSentence "The transaction does not involve this wallet. It may be of a portfolio this database does not have yet: newportfolio --existing adds the next portfolio of a mnemonic, and importwallet the portfolios of a file"
@@ -700,16 +677,6 @@ inputFileSpec ctx = do
         _ <- answer home ["broadcast", nosig, "--yes"] []
         run <- hw home ["signtx", nosig] seedOnce
         run `shouldSatisfy` printed "The transaction is already online"
-        run `shouldNotSatisfy` askedMnemonic
-
-    -- The payment is from portfolio0
-    it "refuses a --portfolio the transaction does not involve" $
-      withHome $ \home -> do
-        newTestPortfolio home
-        newTestPortfolio home
-        writeTxFile ctx (home </> "payment.psbt") (unsignedPayment ctx)
-        run <- hw home ["signtx", "--input", home </> "payment.psbt", "--output", home </> "signed.psbt", "--portfolio", "1"] seedOnce
-        run `shouldSatisfy` printed "The transaction does not involve portfolio1 of wallet0"
         run `shouldNotSatisfy` askedMnemonic
 
     it "refuses an --output file that exists" $

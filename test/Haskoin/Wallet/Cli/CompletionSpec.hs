@@ -22,41 +22,33 @@ spec :: Spec
 spec = do
   describe "The options typed before the word to complete" $ do
     it "name the wallet after --wallet" $
-      optionsTyped ["receive", "--wallet", "1"] `shouldBe` Typed (Just 1) Nothing Nothing Nothing
+      optionsTyped ["switch", "--wallet", "1"] `shouldBe` Typed (Just 1) Nothing Nothing
 
     -- zsh and fish pass --wallet=1 whole; bash breaks it, and the words
     -- are joined again before they are read
     it "name the wallet in --wallet=1" $
-      optionsTyped ["receive", "--wallet=1"] `shouldBe` Typed (Just 1) Nothing Nothing Nothing
+      optionsTyped ["switch", "--wallet=1"] `shouldBe` Typed (Just 1) Nothing Nothing
 
-    it "name the portfolio after --portfolio, or after -p" $ do
-      optionsTyped ["coins", "--portfolio", "2"] `shouldBe` Typed Nothing (Just 2) Nothing Nothing
-      optionsTyped ["coins", "-p", "2"] `shouldBe` Typed Nothing (Just 2) Nothing Nothing
-
-    it "name the portfolio typed against -p, as -p2" $
-      optionsTyped ["coins", "-p2"] `shouldBe` Typed Nothing (Just 2) Nothing Nothing
-
-    -- The command line takes portfolio2 for 2, and wallet1 for 1, as the
-    -- listings name them
-    it "name the portfolio and the wallet by the names the listings give them, as the command line takes them" $
-      optionsTyped ["coins", "--wallet", "wallet1", "--portfolio", "portfolio2"] `shouldBe` Typed (Just 1) (Just 2) Nothing Nothing
+    -- The command line takes wallet1 for 1, as the listings name it
+    it "name the wallet by the name the listings give it, as the command line takes it" $
+      optionsTyped ["switch", "--wallet", "wallet1"] `shouldBe` Typed (Just 1) Nothing Nothing
 
     it "name the network after --network or -n, and the type after --type or -t" $ do
-      optionsTyped ["receive", "--network", "bch", "--type", "bip44"] `shouldBe` Typed Nothing Nothing (Just bch) (Just Bip44)
-      optionsTyped ["receive", "-n", "bch", "-t", "bip84"] `shouldBe` Typed Nothing Nothing (Just bch) (Just Bip84)
+      optionsTyped ["receive", "--network", "bch", "--type", "bip44"] `shouldBe` Typed Nothing (Just bch) (Just Bip44)
+      optionsTyped ["receive", "-n", "bch", "-t", "bip84"] `shouldBe` Typed Nothing (Just bch) (Just Bip84)
 
-    it "name all four together, whatever their order" $
-      optionsTyped ["preparetx", "-t", "bip84", "--network", "bch", "-p", "3", "--wallet", "2"] `shouldBe` Typed (Just 2) (Just 3) (Just bch) (Just Bip84)
+    it "name all three together, whatever their order" $
+      optionsTyped ["receive", "-t", "bip84", "--network", "bch", "--wallet", "2"] `shouldBe` Typed (Just 2) (Just bch) (Just Bip84)
 
     -- -w is --sweep-from on preparesweep
     it "name no wallet after -w, since --wallet has no short form" $
-      optionsTyped ["preparesweep", "-w", "1"] `shouldBe` Typed Nothing Nothing Nothing Nothing
+      optionsTyped ["preparesweep", "-w", "1"] `shouldBe` Typed Nothing Nothing Nothing
 
     it "name nothing by a value that names no network or no type, as if the option were not typed" $
-      optionsTyped ["receive", "--network", "btcx", "--type", "bip49"] `shouldBe` Typed Nothing Nothing Nothing Nothing
+      optionsTyped ["receive", "--network", "btcx", "--type", "bip49"] `shouldBe` Typed Nothing Nothing Nothing
 
     it "name nothing after --, where every word is an argument" $
-      optionsTyped ["signmsg", "--", "--wallet", "1", "-p", "2"] `shouldBe` Typed Nothing Nothing Nothing Nothing
+      optionsTyped ["signmsg", "--", "--wallet", "1", "-n", "bch"] `shouldBe` Typed Nothing Nothing Nothing
 
   describe "What the shell is offered for an option" $ do
     -- The networks of a portfolio: btc, bch and the six test networks

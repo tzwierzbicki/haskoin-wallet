@@ -8,9 +8,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 ## [Unreleased]
 
 These changes will be released as version 0.10.0. Most of `hw` was rewritten
-for this version. It replaces single accounts with wallets and portfolios. It
-adds native SegWit addresses, backups in shares, PSBT files, coin control and
-fee bumping. It does not read the database of an earlier version, and many
+for this version. It replaces single accounts with wallets and portfolios, and
+the commands work in one active portfolio, which `switch` changes. It adds
+native SegWit addresses, backups in shares, PSBT files, coin control and fee
+bumping. It does not read the database of an earlier version, and many
 commands and options have new names, so read
 [Before you upgrade](#before-you-upgrade) first.
 
@@ -34,7 +35,9 @@ commands and options have new names, so read
   mnemonic at one account index, on every network and of both types of
   address. An account of 0.9 comes back in the portfolio of its index.
   `setdescription` gives a portfolio a description in place of the name of
-  an account.
+  an account. No command names an account with `--account` any more. The
+  commands work in the active portfolio, so a script that worked on one
+  account runs `hw switch --portfolio N` before its commands.
 - **Transaction files are now PSBTs.** `hw` 0.10 reads no JSON transaction file
   of an earlier version. Prepare such a transaction again.
 - **Account files are now wallet files.** `importwallet` refuses an account
@@ -66,15 +69,28 @@ Wallets and portfolios:
   at one account index: on Bitcoin, on Bitcoin Cash and on their test
   networks, with legacy and native SegWit addresses. With one mnemonic, you
   work in `portfolio0` of `wallet0` and never create or pick an account.
-- Four options say where a command works: `--wallet`, `--portfolio`,
-  `--network` and `--type`. Their defaults are `wallet0`, `portfolio0`, `btc`
-  and `bip44`. The keys `default-wallet`, `default-portfolio`,
-  `default-network` and `default-type` of the configuration change them, and
-  `setdefault` writes those keys.
-- The commands that find the portfolio of a transaction by themselves, such as
-  `show`, `importtx` and `signtx`, take `--wallet` and `--portfolio` to narrow
-  the search only. `--wallet` alone looks in every portfolio of that wallet. A
-  transfer between two portfolios is kept and signed in the one that pays it.
+- The active portfolio. The commands work in one portfolio, which the
+  database keeps. You always know where `hw` works, and never type it. The
+  first portfolio created in a database becomes the active one. After that,
+  only `switch` changes it.
+- `switch --portfolio N` makes another portfolio active, with `--wallet N` for
+  a portfolio of another wallet. It refuses a wallet or a portfolio the
+  database does not have, and needs no server.
+- `portfolios` marks the active portfolio with a `*`. Its JSON gives
+  `"active"` for each portfolio, and its CSV file and the tab of the
+  portfolios of `exportsheet` a column `Active`. `newportfolio`, `recover` and
+  `importwallet` say which portfolio is active, and give the `switch` to a
+  portfolio they created that is not.
+- Two options pick an account in the active portfolio: `--network` and
+  `--type`. Their defaults are `btc` and `bip44`. The keys `default-network`
+  and `default-type` of the configuration change them, and `setdefault`
+  writes those keys.
+- `portfolios`, `sync` and `exportsheet` cover every portfolio of every
+  wallet. The commands given a transaction, a coin or an address find its
+  portfolio by themselves, such as `show`, `importtx`, `signtx` and `label`.
+  When several portfolios are candidates, they take the active one, or name
+  them and ask for a `switch`. A transfer between two portfolios is kept and
+  signed in the one that pays it.
 - Native SegWit addresses, as BIP84 derives them: `receive --type bip84`.
   Their payments pay about 40% less in fees. The networks of Bitcoin Cash have
   `bip44` addresses only. They take `bip44` whatever the default type says,
@@ -93,17 +109,18 @@ Wallets and portfolios:
   descriptor can be copied whole.
 - `exportwallet` and `importwallet` use the BIP329 format. The file carries
   every portfolio of a wallet, with its labels and its locked coins.
+  `exportwallet` writes the wallet of the active portfolio.
   `importwallet` creates each portfolio of the file that the database lacks,
   whole, and checks that the portfolios it has hold the keys of the file.
   `--portfolio` writes or reads one portfolio only. `importwallet` also sets the labels of a BIP329 file of another
   wallet. `show FILE` shows what `importwallet` would make of a file, and
   changes nothing. A transaction record without an origin labels the
   transaction only in the portfolios that have it, on its network.
-- `setdescription` describes a portfolio, or a wallet with `--of-wallet`.
-- `deletewallet` deletes a wallet with all of its portfolios. The fingerprint
-  of the wallet confirms it. When it deletes the default wallet, it writes the
-  new default to `default-wallet`, and sets `default-portfolio` back to 0 when
-  the new default wallet does not have that portfolio.
+- `setdescription` describes the active portfolio, or its wallet with
+  `--of-wallet`.
+- `deletewallet` deletes a wallet with all of its portfolios. `--wallet` names
+  the wallet, and its fingerprint confirms it. It refuses the wallet of the
+  active portfolio while the database has another wallet.
 
 Addresses:
 
@@ -128,8 +145,8 @@ Payments:
 - A payment spends the coins of a portfolio on one network, legacy and native
   SegWit together.
 - Coin control. `--coin TXID:INDEX` and `--spend-from ADDRESS` choose the coins
-  to spend. `--select` picks among them. `--coin-type TYPE` keeps the coins of
-  one type, `bip44` or `bip84`.
+  of the active portfolio to spend. `--select` picks among them.
+  `--coin-type TYPE` keeps the coins of one type, `bip44` or `bip84`.
 - `--strategy` sets how coins are selected. The default, `least-waste`, keeps
   the coins that waste the least fee.
 - `lockcoin` and `unlockcoin` keep a coin from being spent. `coins --locked`
@@ -191,10 +208,10 @@ Using `hw`:
   with the identifiers and amounts of the JSON answer in columns of their own.
   Amounts are in satoshis and times in UTC. A label that a spreadsheet would
   run as a formula gets an apostrophe in front.
-- `exportsheet FILE` writes the six listings of every portfolio, or of those
-  `--wallet` and `--portfolio` name, to a new OpenDocument spreadsheet, a tab
-  each. Each cell keeps its kind: text, a number of satoshis, or a time in
-  UTC. The header of each tab stays at the top as its rows scroll.
+- `exportsheet FILE` writes the six listings of every portfolio to a new
+  OpenDocument spreadsheet, a tab each. Each cell keeps its kind: text, a
+  number of satoshis, or a time in UTC. The header of each tab stays at the
+  top as its rows scroll.
 - Short ids: the first 8 digits of a hash name a transaction, a pending
   transaction or a coin (`a1075db5:1`) wherever the whole hash does. Each row
   of a table and each element of a compact view starts with it. `--verbose`
@@ -242,10 +259,12 @@ Using `hw`:
   fingerprint of that key. Output descriptors, wallet files and transaction
   files name every key of the wallet by it.
 - `deleteportfolio` replaces `deleteacc` for a portfolio that was never used.
-  It refuses `portfolio0`, a portfolio that is not the last of its wallet, and
-  one that has had activity or gave out an address. `deletewallet` deletes a
-  whole wallet.
-- `checkmnemonic` checks a mnemonic against every account of a portfolio.
+  `--portfolio` names a portfolio of the wallet of the active portfolio. It
+  refuses `portfolio0`, the active portfolio, a portfolio that is not the last
+  of its wallet, and one that has had activity or gave out an address.
+  `deletewallet` deletes a whole wallet.
+- `checkmnemonic` checks a mnemonic against every account of the active
+  portfolio.
 - `backup` copies the whole database, labels and pending transactions
   included. To restore it, put the copy in place of `~/.hw/accounts.sqlite`.
 - `signtx` and `signsweep` show the transaction before they ask for the secret.
@@ -275,7 +294,7 @@ Using `hw`:
 | `renameacc` | `setdescription` |
 | `deleteacc` | `deleteportfolio`, and `deletewallet` for a whole wallet |
 | `exportacc`, `importacc` | `exportwallet`, `importwallet` |
-| `--account NAME` | `--portfolio N` and `--wallet N`, with `--network` and `--type` for an account |
+| `--account NAME` | The active portfolio, which `switch --portfolio N` changes, with `--wallet N` for another mnemonic. `--network` and `--type` pick an account in it. |
 | `syncacc` | `sync` |
 | `discoveracc` | `recover`, which now finds every paid portfolio |
 | `testacc` | `checkmnemonic` |
@@ -336,10 +355,9 @@ changes:
   accounts of one path, such as the bip44 accounts of the test networks, with
   different keys. It cannot prove that the keys of a file are those of your
   mnemonic: import only a file you trust, as the README says.
-- **An index of 2^31 or more is refused.** `--wallet`, `--portfolio` and the
-  keys `default-wallet` and `default-portfolio` take an index below 2^31, the
-  hardened steps of BIP32. A larger one wrapped around to a smaller one, and
-  named another portfolio.
+- **An index of 2^31 or more is refused.** `--wallet` and `--portfolio` take
+  an index below 2^31, the hardened steps of BIP32. A larger one wrapped
+  around to a smaller one, and named another portfolio.
 - **A transaction file cannot hide funds.** `hw` refuses a key of an account
   at any path but `/0/n` and `/1/n`. It refuses an output of an account more
   than a thousand addresses past the last one it knows.

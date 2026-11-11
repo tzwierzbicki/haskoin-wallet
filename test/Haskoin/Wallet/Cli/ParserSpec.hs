@@ -34,10 +34,9 @@ import Haskoin.Wallet.Cli.Parser.Run (Request (..), commandNamed, requestOf)
 import Haskoin.Wallet.Cli.Style (renderPlain)
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Database.Address (AddrType (..))
-import Haskoin.Wallet.Database.Portfolio (PortfolioChoice (..))
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.ShortId (HashRef (..), coinRefText, shortIdText)
-import qualified Options.Applicative as O
+import Haskoin.Wallet.TestUtils (parsedLine)
 import Test.Hspec
 
 spec :: Spec
@@ -48,7 +47,7 @@ spec = do
     it "come in the groups of the README, each command in its order" $
       [(group.title, [command.name | command <- group.commands]) | group <- program.groups]
         `shouldBe` [ ( "Wallets and portfolios",
-                       ["newportfolio", "recover", "checkmnemonic", "exportwallet", "importwallet", "portfolios", "setdescription", "setdefault", "deleteportfolio", "deletewallet", "sync"]
+                       ["newportfolio", "recover", "checkmnemonic", "exportwallet", "importwallet", "portfolios", "switch", "setdescription", "setdefault", "deleteportfolio", "deletewallet", "sync"]
                      ),
                      ("Addresses", ["receive", "show", "addresses", "balances", "label"]),
                      ("Coins", ["coins", "lockcoin", "unlockcoin"]),
@@ -63,43 +62,24 @@ spec = do
       filter (isJust . commandNamed program) ["mnemonic", "createacc", "renameacc", "deleteacc", "importacc", "exportacc", "accounts"]
         `shouldBe` []
 
-    -- A command line for each command, with what it needs, and --wallet 1
-    -- wherever the command takes --portfolio
+    -- A command line for each command, with what it needs, and the
+    -- --wallet and --portfolio of the commands that keep them
     it "each read a command line with the arguments it needs" $ do
       map fst everyCommandLine `shouldBe` concatMap (map (.name) . (.commands)) program.groups
       [name | (name, args) <- everyCommandLine, not (isRight (parsedLine (name : args)))] `shouldBe` []
 
   describe "The options that say where a command works" $ do
-    -- The specification: every command that takes --portfolio also takes
-    -- --wallet. Those that work in a portfolio, or find theirs by
-    -- themselves, take both.
-    it "give --wallet to every command that takes --portfolio" $ do
+    -- The commands work in the active portfolio. --portfolio is left to
+    -- switch, to deleteportfolio, which names its target, and to the
+    -- commands that name a portfolio of a file of a wallet.
+    it "give --portfolio only to switch, deleteportfolio and the commands that read or write a file of a wallet" $
       filter (takesOption "portfolio") commandNames
-        `shouldBe` [ "checkmnemonic",
-                     "exportwallet",
-                     "importwallet",
-                     "portfolios",
-                     "setdescription",
-                     "setdefault",
-                     "deleteportfolio",
-                     "sync",
-                     "receive",
-                     "show",
-                     "addresses",
-                     "balances",
-                     "coins",
-                     "preparetx",
-                     "preparesendall",
-                     "signtx",
-                     "bumpfee",
-                     "txs",
-                     "pendingtxs",
-                     "importtx",
-                     "preparesweep",
-                     "signsweep",
-                     "exportsheet"
-                   ]
-      filter (\name -> takesOption "portfolio" name && not (takesOption "wallet" name)) commandNames `shouldBe` []
+        `shouldBe` ["exportwallet", "importwallet", "switch", "deleteportfolio", "show"]
+
+    -- --wallet is left to switch, and to deletewallet, which names its
+    -- target
+    it "give --wallet only to switch and deletewallet" $
+      filter (takesOption "wallet") commandNames `shouldBe` ["switch", "deletewallet"]
 
     -- -w is --sweep-from on preparesweep
     it "give --wallet no short name" $
@@ -107,21 +87,19 @@ spec = do
         `shouldBe` []
 
     it "read the wallet --wallet names by its index" $
-      parsedLine ["receive", "--wallet", "1"]
-        `shouldBe` Right (CommandReceive (Receive (Target (PortfolioChoice (Just 1) Nothing) Nothing Nothing) Nothing))
+      parsedLine ["switch", "--wallet", "1", "--portfolio", "0"] `shouldBe` Right (CommandSwitch (Just 1) 0)
 
     it "read the portfolio --portfolio or -p names by its index, or by its name" $ do
-      let ofPortfolio2 = Right (CommandReceive (Receive (Target (PortfolioChoice Nothing (Just 2)) Nothing Nothing) Nothing))
-      parsedLine ["receive", "--portfolio", "2"] `shouldBe` ofPortfolio2
-      parsedLine ["receive", "-p", "2"] `shouldBe` ofPortfolio2
-      parsedLine ["receive", "--portfolio", "portfolio2"] `shouldBe` ofPortfolio2
+      let toPortfolio2 = Right (CommandSwitch Nothing 2)
+      parsedLine ["switch", "--portfolio", "2"] `shouldBe` toPortfolio2
+      parsedLine ["switch", "-p", "2"] `shouldBe` toPortfolio2
+      parsedLine ["switch", "--portfolio", "portfolio2"] `shouldBe` toPortfolio2
 
     it "read the wallet --wallet names by its name too" $
-      parsedLine ["receive", "--wallet", "wallet1"]
-        `shouldBe` Right (CommandReceive (Receive (Target (PortfolioChoice (Just 1) Nothing) Nothing Nothing) Nothing))
+      parsedLine ["switch", "--wallet", "wallet1", "-p", "0"] `shouldBe` Right (CommandSwitch (Just 1) 0)
 
     it "read the network of --network or -n, and the type of --type or -t" $ do
-      let onBch = Right (CommandReceive (Receive (Target (PortfolioChoice Nothing Nothing) (Just bch) (Just Bip44)) Nothing))
+      let onBch = Right (CommandReceive (Receive (Target (Just bch) (Just Bip44)) Nothing))
       parsedLine ["receive", "--network", "bch", "--type", "bip44"] `shouldBe` onBch
       parsedLine ["receive", "-n", "bch", "-t", "bip44"] `shouldBe` onBch
 
@@ -130,15 +108,14 @@ spec = do
 
     -- 2^31 = 2147483648, the number of hardened indexes of BIP32
     it "take the index 2147483647, the highest an account can have" $
-      parsedLine ["receive", "--portfolio", "2147483647"]
-        `shouldBe` Right (CommandReceive (Receive (Target (PortfolioChoice Nothing (Just 2147483647)) Nothing Nothing) Nothing))
+      parsedLine ["switch", "--portfolio", "2147483647"] `shouldBe` Right (CommandSwitch Nothing 2147483647)
 
     it "refuse a portfolio of an index of 2^31 or more" $
-      parsedLine ["receive", "--portfolio", "2147483648"]
+      parsedLine ["switch", "--portfolio", "2147483648"]
         `shouldBe` Left "option --portfolio: The --portfolio value 2147483648 is too large: the index of a portfolio is below 2147483648, which is 2^31"
 
     it "refuse a wallet of an index of 2^31 or more" $
-      parsedLine ["receive", "--wallet", "2147483648"]
+      parsedLine ["switch", "--wallet", "2147483648", "--portfolio", "0"]
         `shouldBe` Left "option --wallet: The --wallet value 2147483648 is too large: the index of a wallet is below 2147483648, which is 2^31"
 
     -- 2^64 + 1 would wrap around to 1 as a number of 64 bits
@@ -146,8 +123,16 @@ spec = do
       parsedLine ["deleteportfolio", "--portfolio", "18446744073709551617"]
         `shouldBe` Left "option --portfolio: The --portfolio value 18446744073709551617 is too large: the index of a portfolio is below 2147483648, which is 2^31"
 
-    it "leave out --account, which --wallet and --portfolio replace" $
+    it "leave out --account, which the active portfolio replaces" $
       parsedLine ["receive", "--account", "main"] `shouldBe` Left "Invalid option `--account'"
+
+    -- switch is how the active portfolio changes, so it names the portfolio
+    it "refuse switch without --portfolio, with or without --wallet" $ do
+      parsedLine ["switch"] `shouldBe` Left "Missing: (-p|--portfolio INT)"
+      parsedLine ["switch", "--wallet", "1"] `shouldBe` Left "Missing: (-p|--portfolio INT)"
+
+    it "make show --portfolio name a portfolio of a file of a wallet" $
+      parsedLine ["show", "wallet.jsonl", "--portfolio", "1"] `shouldBe` Right (CommandShow (Target Nothing Nothing) (Just 1) (Just (ShownFile "wallet.jsonl")))
 
   describe "The options of the commands of portfolios and payments" $ do
     it "make newportfolio ask for a mnemonic the user has with --existing" $
@@ -170,8 +155,8 @@ spec = do
     it "refuse deletewallet without --wallet, which it never takes from the default" $
       parsedLine ["deletewallet", "bc560f95"] `shouldBe` Left "Missing: --wallet INT"
 
-    it "refuse deleteportfolio without --portfolio, which it never takes from the default" $
-      parsedLine ["deleteportfolio", "--wallet", "1"] `shouldBe` Left "Missing: (-p|--portfolio INT)"
+    it "refuse deleteportfolio without --portfolio, which it never takes from the active portfolio" $
+      parsedLine ["deleteportfolio"] `shouldBe` Left "Missing: (-p|--portfolio INT)"
 
     it "make --change-back of preparetx take an address" $
       (.changeBack) <$> preparedWith ["--change-back", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]
@@ -192,45 +177,48 @@ spec = do
 
   describe "The usage line of a command" $ do
     it "puts an option that may be left out in brackets, its names separated by a bar" $
-      usageOf "receive" `shouldBe` "[--wallet INT] [-p|--portfolio INT] [-n|--network NETWORK] [-t|--type TYPE] [-l|--label LABEL]"
+      usageOf "receive" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [-l|--label LABEL]"
 
     -- The recipients and the coins may be repeated, and the strategy has a
     -- default
     it "lists the options of preparetx as they are typed" $
       usageOf "preparetx"
-        `shouldBe` "ADDRESS:AMOUNT... [--wallet INT] [-p|--portfolio INT] [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--strategy STRATEGY] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS]... [--select] [--coin-type TYPE] [-y|--yes] [--change-back ADDRESS] [--change-type TYPE]"
+        `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--strategy STRATEGY] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS]... [--select] [--coin-type TYPE] [-y|--yes] [--change-back ADDRESS] [--change-type TYPE]"
 
     it "follows what may be given several times with ..., after the brackets of an optional one" $
       usageOf "preparesendall"
-        `shouldBe` "ADDRESS[:AMOUNT]... [--wallet INT] [-p|--portfolio INT] [-n|--network NETWORK] [-f|--fee-rate RATE] [-m|--min-conf INT] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS]... [--coin-type TYPE] [--spend-dust | --leave-dust] [-y|--yes]"
+        `shouldBe` "ADDRESS[:AMOUNT]... [-n|--network NETWORK] [-f|--fee-rate RATE] [-m|--min-conf INT] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS]... [--coin-type TYPE] [--spend-dust | --leave-dust] [-y|--yes]"
 
     it "offers txs --compact, --verbose, --tabular and --csv as a choice, since a table has no room for every detail and a file is not the screen" $
-      usageOf "txs" `shouldBe` "[--wallet INT] [-p|--portfolio INT] [-n|--network NETWORK] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after TXID] [--max INT]"
+      usageOf "txs" `shouldBe` "[-n|--network NETWORK] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after TXID] [--max INT]"
 
     it "offers addresses --compact, --verbose, --tabular and --csv as a choice too" $
-      usageOf "addresses" `shouldBe` "[--wallet INT] [-p|--portfolio INT] [-n|--network NETWORK] [-t|--type TYPE] [--change] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT]"
+      usageOf "addresses" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [--change] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT]"
 
     it "offers portfolios --compact, --verbose, --tabular and --csv as a choice" $
-      usageOf "portfolios" `shouldBe` "[--wallet INT] [-p|--portfolio INT] [--compact | (-v|--verbose) | --tabular | --csv FILENAME]"
+      usageOf "portfolios" `shouldBe` "[--compact | (-v|--verbose) | --tabular | --csv FILENAME]"
 
     it "offers coins --compact, --verbose, --tabular and --csv as a choice" $
-      usageOf "coins" `shouldBe` "[--wallet INT] [-p|--portfolio INT] [-n|--network NETWORK] [-t|--type TYPE] [--locked] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after TXID:INDEX] [--max INT]"
+      usageOf "coins" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [--locked] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after TXID:INDEX] [--max INT]"
 
     it "offers pendingtxs --compact, --verbose, --tabular and --csv as a choice" $
-      usageOf "pendingtxs" `shouldBe` "[--wallet INT] [-p|--portfolio INT] [-n|--network NETWORK] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after HASH] [--max INT]"
+      usageOf "pendingtxs" `shouldBe` "[-n|--network NETWORK] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after HASH] [--max INT]"
 
     it "offers balances --compact, --verbose, --tabular and --csv as a choice" $
-      usageOf "balances" `shouldBe` "[--wallet INT] [-p|--portfolio INT] [-n|--network NETWORK] [-t|--type TYPE] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT]"
+      usageOf "balances" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT]"
 
     it "puts the word of show, which may be left out, before its options" $
-      usageOf "show" `shouldBe` "[PATH|ADDRESS|HASH|TXID:INDEX|FILENAME] [--wallet INT] [-p|--portfolio INT] [-n|--network NETWORK] [-t|--type TYPE]"
+      usageOf "show" `shouldBe` "[PATH|ADDRESS|HASH|TXID:INDEX|FILENAME] [-n|--network NETWORK] [-t|--type TYPE] [-p|--portfolio INT]"
+
+    it "puts the --portfolio of switch, which must be given, in parentheses, after the --wallet it may take" $
+      usageOf "switch" `shouldBe` "[--wallet INT] (-p|--portfolio INT)"
 
     it "puts a choice in parentheses, and a required option with two names too" $
       usageOf "verifymsg" `shouldBe` "(ADDRESS SIGNATURE MESSAGE | (-i|--input FILENAME)) [-n|--network NETWORK]"
 
     it "shows an option that has to be given at least once as required" $
       usageOf "preparesweep"
-        `shouldBe` "[--wallet INT] [-p|--portfolio INT] [-n|--network NETWORK] [-k|--key-file FILENAME] [-w|--sweep-from ADDRESS]... [--address-file FILENAME] (-t|--sweep-to ADDRESS[:AMOUNT])... [-c|--coin TXID:INDEX]... [-o|--output FILENAME] [-l|--label LABEL] [-f|--fee-rate RATE] [-y|--yes]"
+        `shouldBe` "[-n|--network NETWORK] [-k|--key-file FILENAME] [-w|--sweep-from ADDRESS]... [--address-file FILENAME] (-t|--sweep-to ADDRESS[:AMOUNT])... [-c|--coin TXID:INDEX]... [-o|--output FILENAME] [-l|--label LABEL] [-f|--fee-rate RATE] [-y|--yes]"
 
   describe "What label labels" $ do
     it "is a transaction for a word of 64 hexadecimal digits" $
@@ -315,13 +303,13 @@ spec = do
   -- which the user copies whole from the screen
   describe "Whether the pager wraps the lines of a listing" $ do
     it "wraps those of portfolios --verbose" $
-      wrapsLines Verbose (CommandPortfolios (PortfolioChoice Nothing Nothing) (OnScreen (Just Verbose))) `shouldBe` True
+      wrapsLines Verbose (CommandPortfolios (OnScreen (Just Verbose))) `shouldBe` True
 
     it "cuts those of the compact view of portfolios, which shows no descriptor" $
-      wrapsLines Compact (CommandPortfolios (PortfolioChoice Nothing Nothing) (OnScreen Nothing)) `shouldBe` False
+      wrapsLines Compact (CommandPortfolios (OnScreen Nothing)) `shouldBe` False
 
     it "cuts those of the verbose view of another listing, such as txs" $
-      wrapsLines Verbose (CommandTxs (PortfolioChoice Nothing Nothing) Nothing (OnScreen (Just Verbose)) (Paging Nothing Nothing)) `shouldBe` False
+      wrapsLines Verbose (CommandTxs Nothing (OnScreen (Just Verbose)) (Paging Nothing Nothing)) `shouldBe` False
 
   describe "The commands a text of the help names" $ do
     it "are those named in it, in its order" $
@@ -410,45 +398,47 @@ spec = do
       or [Long option `elem` doc.names | command <- allCommands, command.name == name, doc <- command.args.rows]
 
 -- | A command line for each command of the help, in the order of the help:
--- what the command needs, and --wallet 1 where it takes --portfolio
+-- what the command needs, with --wallet and --portfolio where the command
+-- keeps them
 everyCommandLine :: [(String, [String])]
 everyCommandLine =
   [ ("newportfolio", []),
     ("recover", []),
-    ("checkmnemonic", ["--wallet", "1", "-p", "2"]),
-    ("exportwallet", ["--wallet", "1", "wallet.jsonl"]),
-    ("importwallet", ["--wallet", "1", "wallet.jsonl"]),
-    ("portfolios", ["--wallet", "1"]),
-    ("setdescription", ["Savings", "--wallet", "1", "--portfolio", "2"]),
-    ("setdefault", ["--wallet", "1", "-p", "2", "-n", "bch", "-t", "bip44"]),
-    ("deleteportfolio", ["--wallet", "1", "--portfolio", "2"]),
+    ("checkmnemonic", []),
+    ("exportwallet", ["-p", "2", "wallet.jsonl"]),
+    ("importwallet", ["-p", "2", "wallet.jsonl"]),
+    ("portfolios", []),
+    ("switch", ["--wallet", "1", "--portfolio", "2"]),
+    ("setdescription", ["Savings"]),
+    ("setdefault", ["-n", "bch", "-t", "bip44"]),
+    ("deleteportfolio", ["--portfolio", "2"]),
     ("deletewallet", ["bc560f95", "--wallet", "1"]),
-    ("sync", ["--wallet", "1"]),
-    ("receive", ["--wallet", "1", "-t", "bip84"]),
-    ("show", ["/0/0", "--wallet", "1"]),
-    ("addresses", ["--wallet", "1"]),
-    ("balances", ["--wallet", "1"]),
+    ("sync", []),
+    ("receive", ["-t", "bip84"]),
+    ("show", ["/0/0"]),
+    ("addresses", []),
+    ("balances", []),
     ("label", ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Rent"]),
-    ("coins", ["--wallet", "1"]),
+    ("coins", []),
     ("lockcoin", ["a1075db5:1"]),
     ("unlockcoin", ["a1075db5:1"]),
     ("fees", []),
-    ("preparetx", [payment, "--wallet", "1"]),
-    ("preparesendall", ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "--wallet", "1"]),
-    ("signtx", ["a1075db5", "--wallet", "1"]),
+    ("preparetx", [payment]),
+    ("preparesendall", ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]),
+    ("signtx", ["a1075db5"]),
     ("broadcast", ["a1075db5"]),
-    ("bumpfee", ["a1075db5", "--wallet", "1"]),
-    ("txs", ["--wallet", "1"]),
-    ("pendingtxs", ["--wallet", "1"]),
+    ("bumpfee", ["a1075db5"]),
+    ("txs", []),
+    ("pendingtxs", []),
     ("exporttx", ["a1075db5", "tx.psbt"]),
-    ("importtx", ["--wallet", "1", "tx.psbt"]),
+    ("importtx", ["tx.psbt"]),
     ("deletetx", ["a1075db5"]),
-    ("preparesweep", ["--sweep-to", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "--wallet", "1"]),
-    ("signsweep", ["a1075db5", "--wallet", "1"]),
+    ("preparesweep", ["--sweep-to", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]),
+    ("signsweep", ["a1075db5"]),
     ("signmsg", ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Hello"]),
     ("verifymsg", ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "c2lnbmF0dXJl", "Hello"]),
     ("backup", []),
-    ("exportsheet", ["--wallet", "1", "wallet.ods"])
+    ("exportsheet", ["wallet.ods"])
   ]
 
 -- | A payment of 0.001 btc to an address of another wallet, as preparetx
@@ -463,16 +453,3 @@ preparedWith options = case parsedLine (["preparetx", payment] <> options) of
   Right other -> Left ("Not a preparetx: " <> show other)
   Left err -> Left err
 
--- | What the command line reads from the words typed after hw: the command
--- the first word names, with its options, or the first line of why the
--- words are refused, as hw prints it after "Error: "
-parsedLine :: [String] -> Either String Command
-parsedLine [] = Left "No command"
-parsedLine (name : rest) =
-  case commandNamed program name of
-    Nothing -> Left ("hw has no command " <> name)
-    Just command ->
-      case O.execParserPure O.defaultPrefs (O.info command.args.parser mempty) rest of
-        O.Success parsed -> Right parsed
-        O.Failure failure -> Left (takeWhile (/= '\n') (fst (O.renderFailure failure "hw")))
-        O.CompletionInvoked _ -> Left "A request of the shell"

@@ -255,13 +255,14 @@ receivingSpec ctx = do
         _ <- answer home ["signtx", nosig] seedOnce
         _ <- answer home ["broadcast", nosig, "--yes"] []
         (spendableOn btc <$> hwJson home ["sync"] []) `shouldReturn` Right [(PortfolioRef 0 0, 17740), (PortfolioRef 0 1, 30000)]
-        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--portfolio", "1", "--fee-rate", "10"] []
+        switchTo home 0 1
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         spentFromWallet prepared `shouldBe` Map.fromList [(account1Addr, 30000)]
 
-  describe "A payment from the default portfolio" $ do
+  describe "A payment from the active portfolio" $ do
     -- portfolio0 holds the coin of 50000 the chain pays, and portfolio1
-    -- holds nothing
-    it "is from portfolio0 without --portfolio, in a wallet of several portfolios" $
+    -- holds nothing. portfolio0, the first portfolio created, is active.
+    it "is from portfolio0, the first portfolio created, in a wallet of several portfolios" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         newTestPortfolio home
@@ -270,10 +271,10 @@ receivingSpec ctx = do
         spentFromWallet <$> txOf prepared `shouldReturn` Map.fromList [(externalAddr 0, 50000)]
 
     -- The chain pays portfolio1 alone
-    it "is from the portfolio the key default-portfolio of the configuration file names" $
+    it "is from the portfolio switch made active" $
       withChain ctx (confirmedChain (portfolio1Payment ctx)) $ \home _ -> do
         syncedTwoPortfolios home
-        setConfigKey home "default-portfolio" (Json.Number 1)
+        switchTo home 0 1
         prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         placeOf prepared `shouldBe` Right portfolio1Place
         spentFromWallet <$> txOf prepared `shouldReturn` Map.fromList [(account1Addr, 50000)]
@@ -489,19 +490,36 @@ paymentSpec ctx =
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.001", "--fee-rate", "10"] [])
           `shouldReturn` Right "The coins do not cover the amount and the fee"
 
-    -- The coin is of portfolio1, and the default portfolio is portfolio0:
-    -- the coin tells where the payment is from
-    it "is from the portfolio of the coins of --coin, without --portfolio" $
+    -- The coin is of portfolio1, which switch made active
+    it "is from the active portfolio with a --coin of it" $
       withChain ctx (confirmedChain (portfolio1Payment ctx)) $ \home _ -> do
         syncedTwoPortfolios home
+        switchTo home 0 1
         (placeOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (portfolio1Payment ctx) 0, "--fee-rate", "10"] [])
           `shouldReturn` Right portfolio1Place
 
-    it "is refused a --portfolio that does not hold the coins of --coin, naming where they are" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+    -- The coin is of portfolio1, and portfolio0 is active: a payment from
+    -- another portfolio than the one the user works in would surprise.
+    -- The coin is named by its short id.
+    it "is refused a --coin of another portfolio than the active one, naming the portfolio that holds it and the switch to it" $
+      withChain ctx (confirmedChain (portfolio1Payment ctx)) $ \home _ -> do
         syncedTwoPortfolios home
-        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (payment ctx) 0, "--portfolio", "1", "--fee-rate", "10"] [])
-          `shouldReturn` Right "The coins or addresses given are in portfolio0 of wallet0 on btc, not where the options say"
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (portfolio1Payment ctx) 0, "--fee-rate", "10"] [])
+          `shouldReturn` Right ("The coin " <> Text.pack (shortCoinArg (portfolio1Payment ctx) 0) <> " is in portfolio1 of wallet0, not in the active portfolio: run switch --wallet 0 --portfolio 1 first")
+        (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+
+    it "is refused a --spend-from address of another portfolio than the active one, naming the portfolio that holds it and the switch to it" $
+      withChain ctx (confirmedChain (portfolio1Payment ctx)) $ \home _ -> do
+        syncedTwoPortfolios home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from", textOf account1Addr, "--fee-rate", "10"] [])
+          `shouldReturn` Right "The address 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo is in portfolio1 of wallet0, not in the active portfolio: run switch --wallet 0 --portfolio 1 first"
+
+    -- The coin of the payment is on btc
+    it "is refused a --network that holds none of the coins of --coin, naming the network they are on" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (payment ctx) 0, "--network", "bch", "--fee-rate", "10"] [])
+          `shouldReturn` Right "The coins or addresses given are on btc, not on the --network bch"
 
     it "is written to its --output file with the network of its portfolio" $
       withChain ctx (paidChain ctx) $ \home _ -> do

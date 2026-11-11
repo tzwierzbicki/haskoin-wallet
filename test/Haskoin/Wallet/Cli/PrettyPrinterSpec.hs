@@ -13,8 +13,6 @@
 module Haskoin.Wallet.Cli.PrettyPrinterSpec (spec) where
 
 import Control.Exception (finally)
-import Data.Aeson ((.=))
-import Data.Default (def)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -24,7 +22,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Amounts (AmountUnit (..))
 import Haskoin.Wallet.Bip329 (Record (..), RecordType (..), record)
 import Haskoin.Wallet.Cli.Listing (ChunkAt (..))
-import Haskoin.Wallet.Cli.Parser (AddressCode (..), Command (..), TxShown (..))
+import Haskoin.Wallet.Cli.Parser (AddressCode (..), Command (..), NewPortfolio (..), Recover (..), TxShown (..))
 import Haskoin.Wallet.Cli.PrettyPrinter
 import Haskoin.Wallet.Cli.Response (AccountCounts (..), Group (..), Response (..))
 import Haskoin.Wallet.Cli.Style (renderPlain)
@@ -33,7 +31,7 @@ import Haskoin.Wallet.Database (DBAddress (..))
 import Haskoin.Wallet.Database.Account (AccountKeys (..), NetworkView (..), PortfolioView (..))
 import Haskoin.Wallet.Database.Address (CoinBalance (..))
 import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..))
-import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), PortfolioChoice (..), PortfolioRef (..))
+import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter (..), Place (..), PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), MnemonicPass (..), legacyPath)
 import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), PortfolioImport (..), WalletImport (..))
@@ -228,131 +226,160 @@ placeSpec = do
 portfolioSpec :: Spec
 portfolioSpec = do
   describe "A portfolio as portfolios shows it" $ do
-    -- 4900000 satoshis spendable on btc, 100000 unconfirmed
-    it "gives its name, its wallet and its description, the day it was created, then on a line what it holds on each network it has addresses or coins on" $
+    -- 4900000 satoshis spendable on btc, 100000 unconfirmed. The view is
+    -- of the active portfolio.
+    it "marks the active portfolio with a *, gives its name, its wallet and its description, then under them the day it was created and on a line what it holds on each network it has addresses or coins on" $
       renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView)
-        `shouldBe` [ "portfolio0  wallet0  \"savings\"",
-                     "  created 14 Nov 2023",
-                     "  btc  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins, 17 addresses"
+        `shouldBe` [ "* portfolio0  wallet0  \"savings\"",
+                     "    created 14 Nov 2023",
+                     "    btc  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins, 17 addresses"
                    ]
+
+    -- The mark takes a column of its own, so that the names line up
+    it "starts the first line of a portfolio that is not the active one with a space where the mark goes" $
+      take 1 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewActive = False}))
+        `shouldBe` ["  portfolio0  wallet0  \"savings\""]
 
     it "names a wallet other than wallet0 the same way, after the portfolio" $
       take 1 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewRef = otherRef}))
-        `shouldBe` ["portfolio1  wallet2  \"savings\""]
+        `shouldBe` ["* portfolio1  wallet2  \"savings\""]
 
     it "gives a portfolio without a description its name and its wallet alone" $
       take 1 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewDescription = ""}))
-        `shouldBe` ["portfolio0  wallet0"]
+        `shouldBe` ["* portfolio0  wallet0"]
 
     -- A whole portfolio has an account on eight networks: bch holds
     -- nothing here, and btctest4 has 2 addresses and no coin
     it "leaves out the networks where it has neither an address nor a coin, lines up the figures of the others, and gives no unconfirmed amount when there is none" $ do
       let three = mainPortfolioView {viewNetworks = [btcView, emptyOn bch, (emptyOn btcTest4) {networkViewAddresses = 2}]}
       drop 2 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet three))
-        `shouldBe` [ "  btc       spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins, 17 addresses",
-                     "  btctest4  spendable 0.00000000 btc, no coins, 2 addresses"
+        `shouldBe` [ "    btc       spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins, 17 addresses",
+                     "    btctest4  spendable 0.00000000 btc, no coins, 2 addresses"
                    ]
 
     it "says a portfolio with no address on any network has none yet" $
       renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewNetworks = [emptyOn btc, emptyOn bch]})
-        `shouldBe` [ "portfolio0  wallet0  \"savings\"",
-                     "  created 14 Nov 2023",
-                     "  no addresses yet"
+        `shouldBe` [ "* portfolio0  wallet0  \"savings\"",
+                     "    created 14 Nov 2023",
+                     "    no addresses yet"
                    ]
 
     it "gives the description of its wallet on a line of its own, under the first" $
       take 2 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewWalletDescription = "laptop"}))
-        `shouldBe` ["portfolio0  wallet0  \"savings\"", "  wallet0 is \"laptop\""]
+        `shouldBe` ["* portfolio0  wallet0  \"savings\"", "    wallet0 is \"laptop\""]
 
   describe "A portfolio as portfolios --verbose shows it" $ do
     let withKeys = mainPortfolioView {viewNetworks = [btcView {networkViewAccounts = [legacyKeys, segwitKeys]}]}
 
     it "gives its fingerprint and the time it was created on the clock given, then each network with its balances, and under it each account with its path, its descriptor and its SLIP-132 key" $
       renderedLines (verbosePortfolioDoc UnitBitcoin seenTimeInCet withKeys)
-        `shouldBe` [ "portfolio0  wallet0  \"savings\"",
-                     "  Fingerprint: bc560f95",
-                     "  Created    : 14 Nov 2023 23:13:20 CET",
-                     "  btc",
-                     "    Confirmed  : 0.05000000 btc",
-                     "    Unconfirmed: 0.00100000 btc",
-                     "    Spendable  : 0.04900000 btc",
-                     "    Coins      : 3",
-                     "    Addresses  : 17",
-                     "    bip44  /44'/0'/0'",
-                     "      Descriptor: pkh([bc560f95/44h/0h/0h]" <> Text.unpack testAccountXPub <> "/<0;1>/*)#vq597j87",
-                     "      SLIP-132  : " <> Text.unpack testAccountXPub,
-                     "    bip84  /84'/0'/0'",
-                     "      Descriptor: wpkh([bc560f95/84h/0h/0h]" <> Text.unpack testSegwitAccountXPub <> "/<0;1>/*)#5nktextl",
-                     "      SLIP-132  : " <> Text.unpack testSegwitAccountZPub
+        `shouldBe` [ "* portfolio0  wallet0  \"savings\"",
+                     "    Fingerprint: bc560f95",
+                     "    Created    : 14 Nov 2023 23:13:20 CET",
+                     "    btc",
+                     "      Confirmed  : 0.05000000 btc",
+                     "      Unconfirmed: 0.00100000 btc",
+                     "      Spendable  : 0.04900000 btc",
+                     "      Coins      : 3",
+                     "      Addresses  : 17",
+                     "      bip44  /44'/0'/0'",
+                     "        Descriptor: pkh([bc560f95/44h/0h/0h]" <> Text.unpack testAccountXPub <> "/<0;1>/*)#vq597j87",
+                     "        SLIP-132  : " <> Text.unpack testAccountXPub,
+                     "      bip84  /84'/0'/0'",
+                     "        Descriptor: wpkh([bc560f95/84h/0h/0h]" <> Text.unpack testSegwitAccountXPub <> "/<0;1>/*)#5nktextl",
+                     "        SLIP-132  : " <> Text.unpack testSegwitAccountZPub
                    ]
 
+    it "starts the first line of a portfolio that is not the active one with a space where the mark goes" $
+      take 1 (renderedLines (verbosePortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewActive = False}))
+        `shouldBe` ["  portfolio0  wallet0  \"savings\""]
+
     it "gives every network the portfolio has an account on, those that hold nothing too" $
-      filter (`elem` ["  btc", "  bch"]) (renderedLines (verbosePortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewNetworks = [btcView, emptyOn bch]}))
-        `shouldBe` ["  btc", "  bch"]
+      filter (`elem` ["    btc", "    bch"]) (renderedLines (verbosePortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewNetworks = [btcView, emptyOn bch]}))
+        `shouldBe` ["    btc", "    bch"]
 
     it "gives the description of its wallet as a field" $
       (renderedLines (verbosePortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewWalletDescription = "laptop"}) !! 3)
-        `shouldBe` "  Wallet     : \"laptop\""
+        `shouldBe` "    Wallet     : \"laptop\""
 
-  -- The columns of the portfolios: the wallet, the portfolio and the
+  -- The columns of the portfolios: the mark of the active portfolio, 1
+  -- wide without a heading, then the wallet, the portfolio and the
   -- network as wide as their widest cells, or as their headings, then 15
   -- for "Spendable (btc)", 17 for "Unconfirmed (btc)", 5 for the coins, 9
   -- for the addresses, then the description
   describe "The table of portfolios --tabular" $ do
     let ofMain = portfolioTableColumns UnitBitcoin [mainPortfolioView]
 
-    -- "wallet0" takes 7, "portfolio0" 10, and "Network" 7: 7 + 1 = 8 under
-    -- Wallet, 10 + 2 = 12 under Portfolio, 7 + 2 = 9 under Network, 15 + 2 =
-    -- 17 under Spendable, 17 + 2 = 19 under Unconfirmed, 5 + 2 = 7 under
-    -- Coins, 9 + 2 = 11 under Addresses and 11 + 1 = 12 under Description
-    it "names its columns in a header, the unit in the headings of the amounts, with a line under it" $
+    -- The mark takes 1: 1 + 1 = 2 under it. "wallet0" takes 7,
+    -- "portfolio0" 10, and "Network" 7: 7 + 2 = 9 under Wallet, 10 + 2 = 12
+    -- under Portfolio, 7 + 2 = 9 under Network, 15 + 2 = 17 under
+    -- Spendable, 17 + 2 = 19 under Unconfirmed, 5 + 2 = 7 under Coins, 9 +
+    -- 2 = 11 under Addresses and 11 + 1 = 12 under Description
+    it "names its columns in a header, the column of the mark without a heading and the unit in the headings of the amounts, with a line under it" $
       concatMap renderedLines (tableHeader ofMain)
-        `shouldBe` [ "Wallet  │ Portfolio  │ Network │ Spendable (btc) │ Unconfirmed (btc) │ Coins │ Addresses │ Description",
-                     "────────┼────────────┼─────────┼─────────────────┼───────────────────┼───────┼───────────┼────────────"
+        `shouldBe` [ "  │ Wallet  │ Portfolio  │ Network │ Spendable (btc) │ Unconfirmed (btc) │ Coins │ Addresses │ Description",
+                     "──┼─────────┼────────────┼─────────┼─────────────────┼───────────────────┼───────┼───────────┼────────────"
                    ]
 
-    it "gives a portfolio a row on a network: its wallet, its name, the network, what it can spend, what is unconfirmed, its coins and addresses, and its description" $
+    it "gives a portfolio a row on a network: the mark of the active portfolio, its wallet, its name, the network, what it can spend, what is unconfirmed, its coins and addresses, and its description" $
       concatMap renderedLines (portfolioRowDocs UnitBitcoin ofMain mainPortfolioView)
-        `shouldBe` ["wallet0 │ portfolio0 │ btc     │      0.04900000 │        0.00100000 │     3 │        17 │ \"savings\""]
+        `shouldBe` ["* │ wallet0 │ portfolio0 │ btc     │      0.04900000 │        0.00100000 │     3 │        17 │ \"savings\""]
+
+    it "leaves the column of the mark blank in the row of a portfolio that is not the active one" $
+      concatMap renderedLines (portfolioRowDocs UnitBitcoin ofMain mainPortfolioView {viewActive = False})
+        `shouldBe` ["  │ wallet0 │ portfolio0 │ btc     │      0.04900000 │        0.00100000 │     3 │        17 │ \"savings\""]
 
     -- "btctest4" takes 8, more than "Network"
     it "gives a portfolio a row for each network it has addresses or coins on, the column of the networks as wide as the widest" $ do
       let two = mainPortfolioView {viewNetworks = [btcView, emptyOn bch, (emptyOn btcTest4) {networkViewAddresses = 2}]}
           headed = portfolioTableColumns UnitBitcoin [two]
       concatMap renderedLines (portfolioRowDocs UnitBitcoin headed two)
-        `shouldBe` [ "wallet0 │ portfolio0 │ btc      │      0.04900000 │        0.00100000 │     3 │        17 │ \"savings\"",
-                     "wallet0 │ portfolio0 │ btctest4 │      0.00000000 │        0.00000000 │     0 │         2 │ \"savings\""
+        `shouldBe` [ "* │ wallet0 │ portfolio0 │ btc      │      0.04900000 │        0.00100000 │     3 │        17 │ \"savings\"",
+                     "* │ wallet0 │ portfolio0 │ btctest4 │      0.00000000 │        0.00000000 │     0 │         2 │ \"savings\""
                    ]
 
     it "gives a portfolio with no address one row, with no network and no figures" $ do
       let unused = mainPortfolioView {viewNetworks = [emptyOn btc]}
       concatMap renderedLines (portfolioRowDocs UnitBitcoin (portfolioTableColumns UnitBitcoin [unused]) unused)
-        `shouldBe` ["wallet0 │ portfolio0 │         │                 │                   │       │           │ \"savings\""]
+        `shouldBe` ["* │ wallet0 │ portfolio0 │         │                 │                   │       │           │ \"savings\""]
 
-    -- "wallet12" takes 8 and "portfolio10" 11: the listing is read whole
+    -- "wallet12" takes 8 and "portfolio10" 11: the listing is read whole.
+    -- 8 + 2 = 10 under Wallet, 11 + 2 = 13 under Portfolio.
     it "makes the columns of the wallets and of the portfolios of a chunk as wide as their widest names" $ do
-      let later = mainPortfolioView {viewRef = PortfolioRef 12 10, viewDescription = ""}
+      let later = mainPortfolioView {viewRef = PortfolioRef 12 10, viewActive = False, viewDescription = ""}
       doc <- chunkDoc UnitBitcoin Table (ChunkAt True True False) (ResponsePortfolios [mainPortfolioView, later])
       renderedLines doc
-        `shouldBe` [ "Wallet   │ Portfolio   │ Network │ Spendable (btc) │ Unconfirmed (btc) │ Coins │ Addresses │ Description",
-                     "─────────┼─────────────┼─────────┼─────────────────┼───────────────────┼───────┼───────────┼────────────",
-                     "wallet0  │ portfolio0  │ btc     │      0.04900000 │        0.00100000 │     3 │        17 │ \"savings\"",
-                     "wallet12 │ portfolio10 │ btc     │      0.04900000 │        0.00100000 │     3 │        17 │"
+        `shouldBe` [ "  │ Wallet   │ Portfolio   │ Network │ Spendable (btc) │ Unconfirmed (btc) │ Coins │ Addresses │ Description",
+                     "──┼──────────┼─────────────┼─────────┼─────────────────┼───────────────────┼───────┼───────────┼────────────",
+                     "* │ wallet0  │ portfolio0  │ btc     │      0.04900000 │        0.00100000 │     3 │        17 │ \"savings\"",
+                     "  │ wallet12 │ portfolio10 │ btc     │      0.04900000 │        0.00100000 │     3 │        17 │"
                    ]
 
 newPortfolioSpec :: Spec
 newPortfolioSpec = do
   describe "The portfolio newportfolio created, as its answer shows it" $ do
-    it "says it was created, naming the portfolio and its wallet, then gives the fingerprint and counts the accounts and names their networks" $
-      renderedLines (newPortfolioDoc wholePortfolioView)
+    -- The first portfolio of the database, which became active
+    it "says it was created, naming the portfolio and its wallet, then gives the fingerprint, counts the accounts and names their networks, and says it is the active portfolio" $
+      renderedLines (newPortfolioDoc wholePortfolioView (ActiveAfter (PortfolioRef 0 0) True))
         `shouldBe` [ "Created portfolio0 of wallet0",
                      "  Fingerprint: bc560f95",
-                     "  Accounts   : 12, on btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg"
+                     "  Accounts   : 12, on btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg",
+                     "portfolio0 of wallet0 is the active portfolio: the commands work in it."
                    ]
 
     it "names wallet0 in its sentence too, as every sentence does" $
-      take 1 (renderedLines (newPortfolioDoc wholePortfolioView {viewRef = PortfolioRef 0 1}))
+      take 1 (renderedLines (newPortfolioDoc wholePortfolioView {viewRef = PortfolioRef 0 1, viewActive = False} (ActiveAfter (PortfolioRef 0 0) False)))
         `shouldBe` ["Created portfolio1 of wallet0"]
+
+    -- portfolio1 is added to a database where portfolio0 is active
+    it "says which portfolio is still active when the one it created is not" $
+      drop 3 (renderedLines (newPortfolioDoc wholePortfolioView {viewRef = PortfolioRef 0 1, viewActive = False} (ActiveAfter (PortfolioRef 0 0) False)))
+        `shouldBe` ["The active portfolio is still portfolio0 of wallet0."]
+
+  describe "The portfolio switch made the active one, as its answer shows it" $
+    it "says the portfolio is the active one now, then shows it as portfolios does, marked" $ do
+      shown <- printedLines (ResponseSwitched mainPortfolioView {viewRef = PortfolioRef 0 1})
+      take 2 shown `shouldBe` ["The active portfolio is now portfolio1 of wallet0.", "* portfolio1  wallet0  \"savings\""]
 
 {- Imports and files of a wallet -}
 
@@ -378,41 +405,62 @@ importedWith wallets accounts =
       reportUnreadable = []
     }
 
+-- | What an import says when it created no portfolio, in a database whose
+-- active portfolio is portfolio0 of wallet0
+stillActive :: Maybe ActiveAfter
+stillActive = Just (ActiveAfter (PortfolioRef 0 0) False)
+
 importSpec :: Spec
 importSpec =
   describe "What importwallet did, as its answer shows it" $ do
-    it "names each wallet of the file with its fingerprint and that it was created, then each of its portfolios with what was added, then the labels set" $
-      renderedLines (importDoc (importedWith [WalletImport 0 testFingerprint True [PortfolioImport 0 True, PortfolioImport 1 True]] []))
+    -- The file brings the first portfolios of the database, and portfolio0
+    -- became active
+    it "names each wallet of the file with its fingerprint and that it was created, then each of its portfolios with what was added, then the active portfolio, then the labels set" $
+      renderedLines (importDoc (importedWith [WalletImport 0 testFingerprint True [PortfolioImport 0 True, PortfolioImport 1 True]] []) (Just (ActiveAfter (PortfolioRef 0 0) True)))
         `shouldBe` [ "wallet0  bc560f95  created",
                      "  portfolio0  created, 12 accounts added",
                      "  portfolio1  created, 12 accounts added",
+                     "",
+                     "portfolio0 of wallet0 is the active portfolio: the commands work in it.",
+                     "",
+                     "Labels set: none"
+                   ]
+
+    -- The database had portfolio0 of wallet0, the active one, and the file
+    -- brings wallet1
+    it "says which portfolio is still active when the portfolios it created are not" $
+      renderedLines (importDoc (importedWith [WalletImport 1 testFingerprint2 True [PortfolioImport 0 True]] []) (Just (ActiveAfter (PortfolioRef 0 0) False)))
+        `shouldBe` [ "wallet1  4435aa1c  created",
+                     "  portfolio0  created, 12 accounts added",
+                     "",
+                     "The active portfolio is still portfolio0 of wallet0.",
                      "",
                      "Labels set: none"
                    ]
 
     -- A portfolio the database has is whole already
     it "says a wallet the database had is already in it, and that its portfolio gets nothing" $
-      take 2 (renderedLines (importDoc (importedWith [WalletImport 1 testFingerprint False [PortfolioImport 0 False]] [])))
+      take 2 (renderedLines (importDoc (importedWith [WalletImport 1 testFingerprint False [PortfolioImport 0 False]] []) stillActive))
         `shouldBe` ["wallet1  bc560f95  already in the database", "  portfolio0  nothing to add"]
 
     it "gives each key of the file left aside with why, apart from the wallets" $
-      renderedLines (importDoc (importedWith [] [AccountLeftAside "xpub6CHK45s4QJWp" "The record names no network"]))
+      renderedLines (importDoc (importedWith [] [AccountLeftAside "xpub6CHK45s4QJWp" "The record names no network"]) stillActive)
         `shouldBe` ["xpub6CHK45s4QJWp", "  not imported: The record names no network", "", "Labels set: none"]
 
     it "counts the labels set, and the coins locked and unlocked" $
-      renderedLines (importDoc (importedWith [] []) {reportAddressLabels = 2, reportTxLabels = 1, reportCoinsLocked = 1, reportCoinsUnlocked = 3})
+      renderedLines (importDoc ((importedWith [] []) {reportAddressLabels = 2, reportTxLabels = 1, reportCoinsLocked = 1, reportCoinsUnlocked = 3}) stillActive)
         `shouldBe` ["Labels set: 2 addresses, 1 transaction", "Coins locked: 1", "Coins unlocked: 3"]
 
     it "counts what the file labels that the wallet does not have yet" $
-      renderedLines (importDoc (importedWith [] []) {reportAddressesMissing = 1, reportTxsMissing = 2, reportCoinsMissing = 1})
+      renderedLines (importDoc ((importedWith [] []) {reportAddressesMissing = 1, reportTxsMissing = 2, reportCoinsMissing = 1}) stillActive)
         `shouldBe` ["Labels set: none", "Not in the wallet yet: 1 address, 2 transactions, 1 coin"]
 
     it "counts the records of the accounts the wallet does not have, and of the portfolios --portfolio leaves out, among those left aside" $
-      renderedLines (importDoc (importedWith [] []) {reportOtherAccounts = 2, reportOtherPortfolios = 3})
+      renderedLines (importDoc ((importedWith [] []) {reportOtherAccounts = 2, reportOtherPortfolios = 3}) stillActive)
         `shouldBe` ["Labels set: none", "Left aside: 2 records of accounts the wallet does not have, 3 records of the portfolios --portfolio leaves out"]
 
     it "gives the lines of the file that are not records" $
-      renderedLines (importDoc (importedWith [] []) {reportUnreadable = [4, 7]})
+      renderedLines (importDoc ((importedWith [] []) {reportUnreadable = [4, 7]}) stillActive)
         `shouldBe` ["Labels set: none", "Lines that are not records: 4, 7"]
 
 -- | The id of a transaction, as a record of a file writes it
@@ -838,7 +886,7 @@ syncSpec =
                    ]
 
     it "answers with the syncs, then the networks not served, then those down, a blank line between them" $
-      printedLines (ResponseSync [quietSync, quietOn mainPortfolioRef bch] [btcTest4] [(bchTest4, downStore)])
+      printedLines (ResponseSync [quietSync, quietOn mainPortfolioRef bch] [btcTest4] [(bchTest4, downStore)] (Just mainPortfolioRef))
         `shouldReturn` [ "portfolio0  btc",
                          "  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins",
                          "  synced at block 800002, nothing new",
@@ -889,11 +937,23 @@ recoverSpec =
       renderedLines (recoveredDoc [btc] 10 (Just 1) [])
         `shouldBe` ["No new portfolio of the mnemonic was paid on btc. The search ended after 10 portfolios in a row without a payment."]
 
+    -- The database had portfolio0 of wallet0, which stays active, and
+    -- recover created wallet1
+    it "says which portfolio is still active when the portfolios it recovered are not" $
+      take 2 <$> printedLines (ResponseRecover [btc] 10 (Just 1) [0] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) False)))
+        `shouldReturn` ["Recovered portfolio0 of wallet1", "The active portfolio is still portfolio0 of wallet0."]
+
+    it "says nothing of the active portfolio when it recovered none" $
+      printedLines (ResponseRecover [btc] 10 (Just 0) [] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) False)))
+        `shouldReturn` ["No new portfolio of the mnemonic was paid on btc. The search ended after 10 portfolios in a row without a payment."]
+
     -- The network left out may have failed during the search or during
-    -- the syncs after it
-    it "answers with what it found, then the syncs, the networks not served, and those left out with why" $
-      printedLines (ResponseRecover [btc] 10 (Just 0) [0] [quietSync] [] [btcTest4] [(bch, downStore)])
+    -- the syncs after it. The database had no portfolio, and portfolio0
+    -- became active.
+    it "answers with what it found and the active portfolio, then the syncs, the networks not served, and those left out with why" $
+      printedLines (ResponseRecover [btc] 10 (Just 0) [0] [quietSync] [] [btcTest4] [(bch, downStore)] (Just (ActiveAfter (PortfolioRef 0 0) True)))
         `shouldReturn` [ "Recovered portfolio0 of wallet0",
+                         "portfolio0 of wallet0 is the active portfolio: the commands work in it.",
                          "",
                          "portfolio0  btc",
                          "  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins",
@@ -906,25 +966,10 @@ recoverSpec =
 
 deletedSpec :: Spec
 deletedSpec =
-  describe "What deleteportfolio and deletewallet deleted, as their answers show it" $ do
+  describe "What deleteportfolio and deletewallet deleted, as their answers show it" $
     it "says what was deleted" $
-      printedLines (ResponseDeleted "portfolio2 of wallet0 has been deleted" [])
+      printedLines (ResponseDeleted "portfolio2 of wallet0 has been deleted")
         `shouldReturn` ["portfolio2 of wallet0 has been deleted"]
-
-    it "says the key of the configuration file the default portfolio was written to, and its value" $
-      printedLines (ResponseDeleted "portfolio2 of wallet0 has been deleted" [("default-portfolio", 0)])
-        `shouldReturn` ["portfolio2 of wallet0 has been deleted", "The key default-portfolio of the configuration file is now 0."]
-
-    it "says the key of the configuration file the default wallet was written to, and its value" $
-      printedLines (ResponseDeleted "wallet0 has been deleted, with all of its portfolios" [("default-wallet", 1)])
-        `shouldReturn` ["wallet0 has been deleted, with all of its portfolios", "The key default-wallet of the configuration file is now 1."]
-
-    it "says each key of the configuration file it wrote, in the order written" $
-      printedLines (ResponseDeleted "wallet0 has been deleted, with all of its portfolios" [("default-wallet", 1), ("default-portfolio", 0)])
-        `shouldReturn` [ "wallet0 has been deleted, with all of its portfolios",
-                         "The key default-wallet of the configuration file is now 1.",
-                         "The key default-portfolio of the configuration file is now 0."
-                       ]
 
 {- Transactions -}
 
@@ -1896,42 +1941,123 @@ headerSpec =
 {- Next steps -}
 
 nextStepsSpec :: Spec
-nextStepsSpec =
+nextStepsSpec = do
   describe "The next steps after a sync" $ do
-    let synced cfg results = renderedLines <$> nextStepsPrinter cfg (CommandSync (PortfolioChoice Nothing Nothing) Nothing False) (ResponseSync results [] [])
+    -- portfolio0 of wallet0 is the active portfolio
+    let synced results = renderedLines <$> nextStepsPrinter (CommandSync Nothing False) (ResponseSync results [] [] (Just mainPortfolioRef))
         holdingIn ref = quietSync {syncResPlace = Place ref btc}
+        conflictIn ref net = quietSync {syncResPlace = Place ref net, syncResConflicted = 1}
+        updatedIn ref = quietSync {syncResPlace = Place ref btc, syncResTxUpdates = 2}
 
-    it "name no portfolio when the sync showed the default one" $
-      synced def [quietSync] `shouldBe` Just ["Next, see the transactions:", "  hw txs"]
+    it "name no portfolio when the sync showed the active one" $
+      synced [quietSync] `shouldBe` Just ["Next, see the transactions:", "  hw txs"]
 
-    it "name --portfolio when the portfolio the sync showed is not the default one" $
-      synced def [holdingIn (PortfolioRef 0 1)] `shouldBe` Just ["Next, see the transactions:", "  hw txs --portfolio 1"]
+    -- txs lists the active portfolio: no option names another
+    it "name no portfolio when the sync showed another one" $
+      synced [holdingIn otherRef] `shouldBe` Just ["Next, see the transactions:", "  hw txs"]
 
-    it "name --wallet alone when the portfolio is the default index in another wallet" $
-      synced def [holdingIn (PortfolioRef 2 0)] `shouldBe` Just ["Next, see the transactions:", "  hw txs --wallet 2"]
+    it "name no portfolio when the sync found new transactions in the active portfolio, and in another one" $
+      synced [updatedIn mainPortfolioRef, updatedIn otherRef] `shouldBe` Just ["Next, see the transactions:", "  hw txs"]
 
-    it "name --wallet and --portfolio when neither is the default" $
-      synced def [holdingIn otherRef] `shouldBe` Just ["Next, see the transactions:", "  hw txs --wallet 2 --portfolio 1"]
+    -- txs lists the active portfolio alone, which would show none of the
+    -- new transactions
+    it "start with the switch to the portfolio where the sync found new transactions, when it is not the active one" $
+      synced [quietSync, updatedIn otherRef]
+        `shouldBe` Just
+          [ "Next, switch to portfolio1 of wallet2, where the sync found new transactions:",
+            "  hw switch --wallet 2 --portfolio 1",
+            "Then see the transactions:",
+            "  hw txs"
+          ]
 
-    it "name nothing the configuration file makes the default" $
-      synced (configWith ["default-wallet" .= (2 :: Int), "default-portfolio" .= (1 :: Int)]) [holdingIn otherRef]
-        `shouldBe` Just ["Next, see the transactions:", "  hw txs"]
+    it "switch in turn to each of the portfolios where the sync found new transactions, when none is the active one" $
+      synced [updatedIn (PortfolioRef 0 1), updatedIn otherRef]
+        `shouldBe` Just
+          [ "Next, switch in turn to each portfolio where the sync found new transactions:",
+            "  hw switch --wallet 0 --portfolio 1",
+            "  hw switch --wallet 2 --portfolio 1",
+            "In each, see the transactions:",
+            "  hw txs"
+          ]
 
-    it "name wallet0 when the configuration file makes another wallet the default" $
-      synced (configWith ["default-wallet" .= (2 :: Int)]) [quietSync] `shouldBe` Just ["Next, see the transactions:", "  hw txs --wallet 0"]
-
-    -- Several portfolios are left to the user: txs then shows the default
-    it "name no portfolio when the sync showed several" $
-      synced def [quietSync, holdingIn otherRef] `shouldBe` Just ["Next, see the transactions:", "  hw txs"]
-
-    it "name the portfolio of a pending transaction in conflict in the step that finds it" $
-      synced def [(holdingIn (PortfolioRef 0 1)) {syncResConflicted = 1}]
+    -- pendingtxs lists the active portfolio, which holds the conflict
+    it "name no portfolio in the steps that find a pending transaction in conflict in the active portfolio" $
+      synced [holdingIn (PortfolioRef 0 1), conflictIn mainPortfolioRef btc]
         `shouldBe` Just
           [ "Next, find the pending transaction in conflict, which can no longer be sent:",
-            "  hw pendingtxs --portfolio 1",
+            "  hw pendingtxs",
             "Then delete it, to free its coins:",
             "  hw deletetx HASH"
           ]
 
+    -- pendingtxs lists the active portfolio alone, which would not show
+    -- the transaction
+    it "start with the switch to the portfolio of a pending transaction in conflict that is not the active one" $
+      synced [quietSync, conflictIn (PortfolioRef 0 1) btc]
+        `shouldBe` Just
+          [ "Next, switch to portfolio1 of wallet0, where a pending transaction is in conflict:",
+            "  hw switch --wallet 0 --portfolio 1",
+            "Then find the pending transaction in conflict, which can no longer be sent:",
+            "  hw pendingtxs",
+            "Then delete it, to free its coins:",
+            "  hw deletetx HASH"
+          ]
+
+    it "switch once to a portfolio that has pending transactions in conflict on two networks" $
+      synced [conflictIn otherRef btc, conflictIn otherRef bch]
+        `shouldBe` Just
+          [ "Next, switch to portfolio1 of wallet2, where a pending transaction is in conflict:",
+            "  hw switch --wallet 2 --portfolio 1",
+            "Then find the pending transaction in conflict, which can no longer be sent:",
+            "  hw pendingtxs",
+            "Then delete it, to free its coins:",
+            "  hw deletetx HASH"
+          ]
+
+    -- The active portfolio is one of the two, and the user goes through
+    -- both in the order of the sync
+    it "switch in turn to each portfolio that has a pending transaction in conflict, when there are several" $
+      synced [conflictIn mainPortfolioRef btc, conflictIn otherRef bch]
+        `shouldBe` Just
+          [ "Next, switch in turn to each portfolio where a pending transaction is in conflict:",
+            "  hw switch --wallet 0 --portfolio 0",
+            "  hw switch --wallet 2 --portfolio 1",
+            "In each, find the pending transactions in conflict, which can no longer be sent:",
+            "  hw pendingtxs",
+            "Then delete them, to free their coins:",
+            "  hw deletetx HASH"
+          ]
+
     it "are none after a sync that synced nothing" $
-      synced def [] `shouldBe` Nothing
+      synced [] `shouldBe` Nothing
+
+  -- The step names the wallet always: the active portfolio may be of
+  -- another one
+  describe "The next steps after a command that created a portfolio" $ do
+    let existing = CommandNewPortfolio (NewPortfolio True Nothing False Nothing Nothing)
+        secondView = wholePortfolioView {viewRef = PortfolioRef 0 1, viewActive = False}
+    it "are the switch to the portfolio newportfolio created, when another one stays active" $
+      (renderedLines <$> nextStepsPrinter existing (ResponseNewPortfolio Nothing secondView (ActiveAfter (PortfolioRef 0 0) False)))
+        `shouldBe` Just ["To work in portfolio1 of wallet0, make it the active one:", "  hw switch --wallet 0 --portfolio 1"]
+
+    it "are none when newportfolio made the portfolio it created the active one" $
+      (renderedLines <$> nextStepsPrinter existing (ResponseNewPortfolio Nothing wholePortfolioView (ActiveAfter (PortfolioRef 0 0) True)))
+        `shouldBe` Nothing
+
+    -- recover created portfolios 0 and 2 of wallet1, and portfolio0 of
+    -- wallet0 stays active
+    it "are the switch to the first portfolio recover created, when another one stays active" $
+      (renderedLines <$> nextStepsPrinter (CommandRecover (Recover 10)) (ResponseRecover [btc] 10 (Just 1) [0, 2] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) False))))
+        `shouldBe` Just ["To work in portfolio0 of wallet1, make it the active one:", "  hw switch --wallet 1 --portfolio 0"]
+
+    it "are none when recover made a portfolio it created the active one" $
+      (renderedLines <$> nextStepsPrinter (CommandRecover (Recover 10)) (ResponseRecover [btc] 10 (Just 0) [0] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) True))))
+        `shouldBe` Nothing
+
+    it "are the switch to the first portfolio importwallet created, when another one stays active" $
+      (renderedLines <$> nextStepsPrinter (CommandImportWallet Nothing "wallet.jsonl") (ResponseImport (importedWith [WalletImport 1 testFingerprint2 True [PortfolioImport 0 True]] []) (Just (ActiveAfter (PortfolioRef 0 0) False))))
+        `shouldBe` Just ["To work in portfolio0 of wallet1, make it the active one:", "  hw switch --wallet 1 --portfolio 0"]
+
+    it "are none when importwallet made a portfolio it created the active one" $
+      (renderedLines <$> nextStepsPrinter (CommandImportWallet Nothing "wallet.jsonl") (ResponseImport (importedWith [WalletImport 0 testFingerprint True [PortfolioImport 0 True]] []) (Just (ActiveAfter (PortfolioRef 0 0) True))))
+        `shouldBe` Nothing

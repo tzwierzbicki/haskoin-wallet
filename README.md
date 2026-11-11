@@ -12,9 +12,10 @@ and the transactions to sign.
 
 `hw` keeps a wallet for each mnemonic, and portfolios in each wallet. A
 portfolio holds every account of the mnemonic at one account index, on every
-network and of both types of address. With one mnemonic, you work in
-`portfolio0` and never create or pick an account. You only say which network
-and which type of address you want.
+network and of both types of address. The commands work in one portfolio, the
+active one. With one mnemonic, that is `portfolio0`, and you never create or
+pick an account. You only say which network and which type of address you
+want.
 
 `hw` keeps its wallets in a SQLite database, and asks a [haskoin-store] server
 about the chain. The database holds public keys only. Your mnemonic is never
@@ -112,8 +113,10 @@ hw sync
 ```
 
 `newportfolio` makes a mnemonic, shows it once, and creates `wallet0` with its
-`portfolio0`. The portfolio has an account for every network and for both
-types of address from the start, so there is no account to create. `receive`
+`portfolio0`. It is the first portfolio of the database, so it becomes the
+active one, and every command above works in it. The portfolio has an account
+for every network and for both types of address from the start, so there is no
+account to create. `receive`
 gives a legacy address on Bitcoin. Two options ask for another kind of
 address, and `setdefault` changes what `receive` gives without them:
 
@@ -123,8 +126,8 @@ hw receive --network bch                    # an address on Bitcoin Cash
 hw setdefault --type bip84                  # native SegWit from now on
 ```
 
-[Where a command works](#where-a-command-works) explains wallets, portfolios
-and these options.
+[Where a command works](#where-a-command-works) explains wallets, portfolios,
+the active portfolio and these options.
 
 `preparetx` prints the nosigHash of the new transaction, and the commands to
 run next. A nosigHash is a hash of the transaction without its signatures. It
@@ -168,6 +171,11 @@ The file of `exportwallet` holds public keys and no private key. The online
 computer can then give out addresses, watch the funds and prepare payments,
 and it never sees the mnemonic.
 
+Each computer keeps its own [active portfolio](#the-active-portfolio). On
+both, the first portfolio created becomes the active one, so both work in
+`portfolio0`. `signtx` works whichever portfolio is active. It finds the
+portfolio from the transaction.
+
 A hardware wallet, or another wallet with the keys, can sign the file in place
 of the offline computer. See [Transaction files](#transaction-files).
 
@@ -185,7 +193,9 @@ hw show /0/7                                # on the offline computer: the same 
 ```
 
 Give `show` the options you gave `receive`. An address that
-`receive --type bip84` gave out is checked with `show /0/7 --type bip84`.
+`receive --type bip84` gave out is checked with `show /0/7 --type bip84`. Both
+computers must also have the same portfolio active, since each command works
+in the active one. `portfolios` marks it with a `*` on each.
 
 The ends are enough, since nobody can make another address with the same ends.
 The middle is hidden so that nobody pays an address that the wallet never gave
@@ -253,13 +263,16 @@ These options work with every command, before or after it:
 `hw` never asks you to create an account or to name one. It keeps a wallet for
 each mnemonic, and portfolios in each wallet. A portfolio holds every account
 of the wallet at one account index, on every network and of both types of
-address. With one mnemonic, you work in `portfolio0` of `wallet0`. You only say
-the network and the type of address you want, and each has a default.
+address. The commands work in one portfolio, the active one, which the
+database keeps. With one mnemonic, that is `portfolio0` of `wallet0`, and you
+never name it. You only say the network and the type of address you want, and
+each has a default.
 
 | Term | What it is |
 |---|---|
 | Wallet | The master key of one mnemonic. A mnemonic with a passphrase gives another master key, so it is another wallet. |
 | Portfolio | All the accounts of a wallet that have the same account index. `portfolio0` holds the accounts at index 0. |
+| Active portfolio | The portfolio the commands work in. The first portfolio created becomes active, and only [`switch`](#hw-switch) changes it. |
 | Account | One derivation path, `m/purpose'/coin type'/index'`, on one network. |
 | Type | The type of address of an account: `bip44` or `bip84`. |
 
@@ -322,31 +335,77 @@ and the next new wallet becomes `wallet0` again. The fingerprint of its master
 key is what tells a wallet apart for good, and `portfolios --verbose` shows
 it.
 
-#### The four options
+#### The active portfolio
 
-Four options say where a command works. Each has a default, and a key of the
+The database keeps one portfolio as the active one. Most commands work in it.
+`receive` gives out its addresses, `txs` lists its transactions, and
+`preparetx` pays from it. None of them takes an option to name another
+portfolio.
+
+The first portfolio created in a database becomes the active one, whether
+`newportfolio`, `recover` or `importwallet` creates it. A command that creates
+several makes the first one active: `portfolio0` of a new wallet, or else the
+lowest index it creates. A portfolio created later does not become active. The
+answer of the command says which portfolio is still active, and its next step
+is the `switch` to the new one. After that, only [`switch`](#hw-switch)
+changes the active portfolio:
+
+```console
+hw switch --portfolio 1                     # portfolio1 of the same wallet
+hw switch --wallet 1 --portfolio 0          # portfolio0 of wallet1, another mnemonic
+```
+
+The portfolio stays active for every command until the next `switch`.
+[`portfolios`](#hw-portfolios) marks it with a `*`:
+
+```console
+$ hw portfolios
+* portfolio0  wallet0  "daily spending"
+    created 11 Nov 2026
+    btc  spendable 0.00000000 btc, no coins, 1 address
+
+  portfolio1  wallet0  "savings"
+    created 11 Nov 2026
+    btc  spendable 0.00000000 btc, no coins, 1 address
+```
+
+**Why one active portfolio.** You always know where `hw` works, and you never
+type it. An option on every command would make you name the portfolio each
+time. A slip of the finger would then give out an address of the wrong
+portfolio, or pay from it. A default in the configuration file is hard to keep
+track of. It sits in another file than the portfolios, so it can name a
+portfolio that was deleted, or one of another database. The active portfolio
+is kept in the database itself, beside the portfolios. So it always names one
+that exists. `switch` refuses a portfolio the database does not have.
+`deleteportfolio` refuses the active portfolio. `deletewallet` refuses its
+wallet while the database has another wallet to switch to.
+
+The price is a state that the command line does not show. `portfolios` shows
+it, and so do the answers that create a portfolio. A script that needs a given
+portfolio runs `switch` before its commands, and the switch stays after the
+script ends.
+
+`switch` names a wallet and a portfolio by their index, `0` for `wallet0`, or
+by their name, as in `--portfolio portfolio1`. An index is below 2147483648,
+which is 2^31. The index of a portfolio is the last step of the paths of its
+accounts, and [BIP32] has that many hardened steps. `hw` refuses a larger
+index.
+
+#### The two options
+
+Two options say where a command works in the active portfolio. They pick one
+of its accounts. Each has a default, and a key of the
 [configuration](#configuration) changes it.
 
 | Option | What it picks | Default | Configuration key |
 |---|---|---|---|
-| `--wallet N` | The wallet, by its index: `0` for `wallet0` | `0` | `default-wallet` |
-| `--portfolio N`, or `-p` | The portfolio of that wallet, by its index: `0` for `portfolio0` | `0` | `default-portfolio` |
 | `--network NET`, or `-n` | `btc`, `bch` or a test network | `btc` | `default-network` |
 | `--type TYPE`, or `-t` | `bip44` or `bip84` | `bip44` | `default-type` |
 
-`--wallet` and `--portfolio` pick the portfolio. `--network` and `--type` pick
-an account inside it. Every command that takes `--portfolio` also takes
-`--wallet`. An index is below 2147483648, which is 2^31: the index of a
-portfolio is the last step of the paths of its accounts, and [BIP32] has that
-many hardened steps. `hw` refuses a larger index, in an option and in the
-configuration file alike.
-
 ```console
-hw receive                                  # portfolio0 of wallet0, on btc, bip44
+hw receive                                  # the active portfolio, on btc, bip44
 hw receive --type bip84                     # the same portfolio, a native SegWit address
 hw receive --network bch                    # the same portfolio, on Bitcoin Cash
-hw receive --portfolio 1                    # portfolio1 of wallet0
-hw receive --wallet 1                       # portfolio0 of wallet1, another mnemonic
 ```
 
 [`setdefault`](#hw-setdefault) writes the defaults to the configuration file,
@@ -355,10 +414,14 @@ so that you do not have to edit it:
 ```console
 hw setdefault --type bip84                  # native SegWit addresses from now on
 hw setdefault --network bch                 # work on Bitcoin Cash
-hw setdefault --wallet 1                    # work in wallet1
 ```
 
 The default type is `bip44`, the one type every network has.
+
+The network and the type keep their defaults in the configuration file. They
+are a preference, the same for every portfolio. They also never name something
+that a command can delete. The portfolio is part of the wallet, so the
+database keeps it.
 
 **Bitcoin Cash has `bip44` only.** The networks of Bitcoin Cash, `bch`,
 `bchtest`, `bchtest4` and `bchreg`, have no SegWit. They take `bip44` whatever
@@ -368,29 +431,50 @@ address of Bitcoin Cash.
 
 #### What each command takes
 
-The commands do not all take the four options the same way. A listing would be
-of little use if it showed one account only, and a command that is given a
-transaction already knows where it belongs.
+The commands do not all work in the active portfolio. A command about the whole
+wallet, such as `sync`, covers every portfolio. A command that is given a
+transaction, a coin or an address already knows where it belongs, so it needs
+no `switch`.
 
-| Commands | What the options do |
+| Commands | Where they work |
 |---|---|
-| `receive`, and `show` with a path or with no word | They work on one account. `--network` and `--type` pick it, each with its default. |
-| `preparetx`, `preparesendall` | They spend the coins of the portfolio on `--network`, of both types together. `--coin-type` keeps the coins of one type. |
-| `addresses`, `balances`, `coins`, `txs`, `pendingtxs` | They list the whole portfolio, in a section for each network, or in one list sorted by network for `pendingtxs`. `--network` and `--type` show one network or one type only. `txs` and `pendingtxs` take no `--type`. |
-| `portfolios`, `sync`, `exportsheet` | They cover every portfolio of every wallet. `--wallet` and `--portfolio` narrow them down, and `--network` does for `sync`. |
-| `signtx`, `signsweep`, `importtx`, `bumpfee`, `preparesweep`, and `show` with a transaction or a transaction file | They find the portfolio from the transaction. `--wallet` and `--portfolio` only narrow the search: `--wallet` alone to every portfolio of that wallet, `--portfolio` to one portfolio. They never pick a default portfolio. |
+| `receive`, and `show` with a path or with no word | On one account of the active portfolio. `--network` and `--type` pick it, each with its default. |
+| `preparetx`, `preparesendall` | They spend the coins of the active portfolio on one network, of both types together. `--coin-type` keeps the coins of one type. The coins of `--coin` and the addresses of `--spend-from` must be in the active portfolio. |
+| `addresses`, `balances`, `coins`, `txs`, `pendingtxs` | They list the whole active portfolio, in a section for each network, or in one list sorted by network for `pendingtxs`. `--network` and `--type` show one network or one type only. `txs` and `pendingtxs` take no `--type`. |
+| `checkmnemonic`, `setdescription` | On the active portfolio. `setdescription --of-wallet` describes its wallet. |
+| `exportwallet` | On the wallet of the active portfolio. `--portfolio` writes one portfolio of it only. |
+| `portfolios`, `sync`, `exportsheet` | They cover every portfolio of every wallet. `--network` narrows `sync` down to one network. |
+| `signtx`, `signsweep`, `importtx`, `bumpfee`, `preparesweep`, and `show` with a transaction or a transaction file | They find the portfolio from the transaction, or from the destinations of a sweep. The active portfolio settles a choice between several, as the next paragraph says. |
 | `label`, `lockcoin`, `unlockcoin`, `signmsg`, and `show` with an address or a coin | An address and a coin tell where they are. `--network` is needed only when the wallet has the address or the coin on several test networks. |
-| `checkmnemonic`, `setdescription` | `--wallet` and `--portfolio` pick the portfolio, each with its default. |
-| `exportwallet`, `importwallet` | `--wallet` picks the wallet of `exportwallet`, and checks the wallet of the file for `importwallet`. `--portfolio` writes or reads one portfolio only. |
-| `deleteportfolio`, `deletewallet` | They take no default. `--portfolio` or `--wallet` must name what to delete. |
+| `importwallet`, and `show` with a file of a wallet | They find the wallet from the file. `--portfolio` names one portfolio of the file, and reads only that one. |
+| `switch` | `--portfolio` names the portfolio to make active, and `--wallet` its wallet. Without `--wallet`, it is the wallet of the active portfolio. |
+| `deleteportfolio`, `deletewallet` | They never take what to delete from the active portfolio. `deleteportfolio --portfolio` names a portfolio of the wallet of the active portfolio, and refuses the active one. `deletewallet --wallet` names a wallet, and refuses the wallet of the active portfolio while another wallet exists. |
+
+A transaction can involve several portfolios. A transfer between two portfolios
+belongs to the one that pays it, since that one locks the coins and signs. When
+several portfolios pay, or when none pays and the transaction pays several,
+`hw` takes the active portfolio if it is one of them. Otherwise it names them,
+and stops:
+
+```console
+$ hw importtx signed.psbt
+Error: The transaction spends from several portfolios, portfolio0 of wallet0 on btc and portfolio0 of wallet1 on btc: switch to the one to use first
+```
+
+`switch` to the one you mean, and run the command again. The destinations of a
+sweep follow the same rule. The active portfolio settles nothing else. A
+transfer stays with the portfolio that pays it, whichever portfolio is active.
 
 A listing and the details of an address or a transaction name the portfolio
 they are about. They name the wallet only when that is not `wallet0`, as in
 `portfolio1 of wallet2`. A user of one mnemonic then reads no wallet name
 there. `portfolios` is the exception and always names the wallet. A message in
 a sentence names both, as in `Created portfolio0 of wallet0`. The next steps a
-command suggests carry `--wallet` and `--portfolio` only when they differ from
-the defaults.
+command suggests work in the active portfolio, so they name no portfolio. A
+step about another portfolio starts with the `switch` to it. That is the step
+after a command creates a portfolio that does not become active. It is also
+the first step after a `sync` that finds a pending transaction in conflict in
+another portfolio, or new transactions in other portfolios alone.
 
 #### What the accounts of a portfolio share
 
@@ -417,23 +501,16 @@ On a network, the accounts of a portfolio work as one:
 >   The two keys set the account `receive` gives an address of. They also set
 >   the network a payment spends on, and the type of its change when it spends
 >   coins of both types.
-> - **`--portfolio` alone means the default wallet.** `hw sync --portfolio 1`
->   syncs `portfolio1` of the default wallet, not the `portfolio1` of every
->   wallet.
-> - **A default must exist.** `setdefault` refuses a wallet or a portfolio the
->   database does not have. A command given `--portfolio 5` in a wallet without
->   one stops with `wallet0 has no portfolio5`.
 > - **Some commands find the portfolio themselves.** `signtx`, `importtx`,
->   `bumpfee` and `preparesweep` take the portfolio of the transaction, and
->   `preparetx --coin` or `--spend-from` that of the coins chosen. A
->   transaction between two portfolios belongs to the one that pays. The
->   options are refused when they name a portfolio the transaction does not
->   involve. `importtx`, `signtx` and `signsweep` also refuse the portfolio a
->   transfer pays, since the one that pays keeps it and signs it. `show`
->   takes that portfolio, and shows the transfer as it sees it.
-> - **`--wallet` alone means any portfolio of that wallet** for these
->   commands. `hw show TXID --wallet 1` shows the transaction as each
->   portfolio of `wallet1` that holds it sees it, not only `portfolio0`.
+>   `bumpfee` and `preparesweep` take the portfolio of the transaction,
+>   whichever portfolio is active. A transaction between two portfolios
+>   belongs to the one that pays. `show` shows a transaction file as that
+>   portfolio sees it, and a transaction of the wallet as each portfolio that
+>   holds it sees it.
+> - **Coin control works in the active portfolio.** `preparetx --coin` and
+>   `--spend-from` take the coins and addresses of the active portfolio only.
+>   One of another portfolio is refused, with the portfolio that holds it and
+>   the switch to it.
 > - **A sweep that pays no portfolio needs `--network`.** The default network
 >   does not apply to it. See [`preparesweep`](#hw-preparesweep).
 
@@ -461,8 +538,8 @@ lines. This is the compact view. `--verbose` gives every detail of each
 element. `--tabular` gives each element one row of a table. The section of each
 command says what its views show.
 
-`addresses`, `balances`, `coins` and `txs` list a whole portfolio, so their
-rows come in sections. There is a section for each network, and `addresses`
+`addresses`, `balances`, `coins` and `txs` list the whole active portfolio, so
+their rows come in sections. There is a section for each network, and `addresses`
 has one for each type on a network as well. A title line above each section
 says where its rows are:
 
@@ -625,12 +702,13 @@ server, so they are not marked.
 | **[Wallets and portfolios](#wallets-and-portfolios)** | |
 | [`newportfolio`](#hw-newportfolio) `!` | Make a mnemonic and its wallet, or add a portfolio to a wallet |
 | [`recover`](#hw-recover) | Find the portfolios of a mnemonic that were paid |
-| [`checkmnemonic`](#hw-checkmnemonic) `!` | Check a mnemonic and passphrase against a portfolio |
-| [`exportwallet`](#hw-exportwallet) | Write the portfolios of a wallet and their labels to a file |
+| [`checkmnemonic`](#hw-checkmnemonic) `!` | Check a mnemonic and passphrase against the active portfolio |
+| [`exportwallet`](#hw-exportwallet) | Write the wallet of the active portfolio and its labels to a file |
 | [`importwallet`](#hw-importwallet) | Add the portfolios and labels of a file |
 | [`portfolios`](#hw-portfolios) | Show the portfolios, their balances and descriptors |
+| [`switch`](#hw-switch) | Make another portfolio the active one |
 | [`setdescription`](#hw-setdescription) | Describe a portfolio or a wallet |
-| [`setdefault`](#hw-setdefault) | Set where the commands work when no option says |
+| [`setdefault`](#hw-setdefault) | Set the network and the type of address the commands take |
 | [`deleteportfolio`](#hw-deleteportfolio) | Delete a portfolio that was never used |
 | [`deletewallet`](#hw-deletewallet) | Delete a wallet with all of its portfolios |
 | [`sync`](#hw-sync) | Update the portfolios from the network |
@@ -707,6 +785,7 @@ Mnemonic of 12 words, from /dev/random
 Created portfolio0 of wallet0
   Fingerprint: bc560f95
   Accounts   : 12, on btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg
+portfolio0 of wallet0 is the active portfolio: the commands work in it.
 ```
 
 Write the mnemonic down and keep copies in safe places, away from computers and
@@ -722,6 +801,26 @@ a portfolio to the wallet of that mnemonic, at the lowest free index. That is
 wallet has `portfolio0` and `portfolio2`. The wallet of the mnemonic is the one
 with the fingerprint of its master key. When the database has no wallet of
 the mnemonic yet, it creates the wallet with its `portfolio0`.
+
+**The active portfolio.** The first portfolio of a database becomes the
+[active one](#the-active-portfolio), where the commands work. A portfolio
+added later does not. `newportfolio` then says which portfolio is still
+active, and gives the `switch` to the new one:
+
+```console
+$ hw newportfolio --existing
+...
+Created portfolio1 of wallet0
+  Fingerprint: bc560f95
+  Accounts   : 12, on btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg
+The active portfolio is still portfolio0 of wallet0.
+
+To work in portfolio1 of wallet0, make it the active one:
+  hw switch --wallet 0 --portfolio 1
+```
+
+A new portfolio does not take over. The commands you type next keep working
+where they did, and you switch when you mean it.
 
 **A portfolio is created whole.** It gets an account for every network, the
 test networks included, and for both types of address. They are the twelve
@@ -793,6 +892,12 @@ always has `portfolio0`. The portfolios the wallet has already are skipped. A
 wallet with the fingerprint of the mnemonic and other keys is refused, and
 nothing changes. A fingerprint is four bytes, which two mnemonics may share.
 
+In a database without any portfolio, the first portfolio `recover` creates
+becomes the [active one](#the-active-portfolio). That is `portfolio0` of the
+new wallet, even when only a later portfolio was paid. In a database that has
+an active portfolio, it stays active. `recover` then says so, and its next
+step is the `switch` to the first portfolio it found paid.
+
 The search stops after 10 portfolios in a row where nothing was found, or the
 number `--portfolio-gap` gives. [BIP44] stops at the first unused account. `hw`
 looks further, since a portfolio created on an offline computer may never have
@@ -847,15 +952,17 @@ to an address of `hw`.
 
 #### `hw checkmnemonic`
 
-Checks that a mnemonic and passphrase give the public key of every account of a
-portfolio. Use it to test a mnemonic you wrote down, or the shares of a backup,
-before you rely on it. Nothing is signed, and nothing is changed.
+Checks that a mnemonic and passphrase give the public key of every account of
+the active portfolio. Use it to test a mnemonic you wrote down, or the shares
+of a backup, before you rely on it. Nothing is signed, and nothing is changed.
 
 ```console
-hw checkmnemonic                            # against portfolio0 of wallet0
-hw checkmnemonic --portfolio 1
-hw checkmnemonic --wallet 1                 # the wallet of another mnemonic
+hw checkmnemonic                            # against the active portfolio
+hw switch --wallet 1 --portfolio 0          # to check the mnemonic of wallet1
+hw checkmnemonic
 ```
+
+To check another portfolio, switch to it first.
 
 It answers that the mnemonic and passphrase matched the portfolio, or that
 they did not. A check never changes the wallet, even when the mnemonic
@@ -863,16 +970,20 @@ matches.
 
 #### `hw exportwallet`
 
-`hw exportwallet FILE` writes every portfolio of a wallet to a file, with its
-labels. [`importwallet`](#hw-importwallet) adds the file to another database.
-`--portfolio` writes one portfolio only, and `--wallet` picks another wallet
-than the default one.
+`hw exportwallet FILE` writes every portfolio of the wallet of the active
+portfolio to a file, with its labels. [`importwallet`](#hw-importwallet) adds
+the file to another database. `--portfolio` writes one portfolio of that wallet
+only. To write another wallet, switch to one of its portfolios first.
 
 ```console
 hw exportwallet wallet.jsonl                # on the offline computer
 hw exportwallet savings.jsonl --portfolio 1 # portfolio1 only
-hw exportwallet other.jsonl --wallet 1      # the wallet of another mnemonic
+hw switch --wallet 1 --portfolio 0          # then the wallet of another mnemonic
+hw exportwallet other.jsonl
 ```
+
+The file does not carry the active portfolio. Each database keeps its own, and
+[`importwallet`](#hw-importwallet) says which one it is after the import.
 
 The file is in the format of [BIP 329], which other wallets read and write. Each
 account goes in as its public key, with its path, its network, its type and the
@@ -910,8 +1021,17 @@ wallet0  bc560f95  created
   portfolio0  created, 12 accounts added
   portfolio1  created, 12 accounts added
 
+portfolio0 of wallet0 is the active portfolio: the commands work in it.
+
 Labels set: 2 addresses
 ```
+
+**The active portfolio.** In a database without any portfolio, the first
+portfolio `importwallet` creates becomes the
+[active one](#the-active-portfolio). That is `portfolio0` of the file, as
+above. In a database that has an active portfolio, it stays active.
+`importwallet` then says so, and its next step is the `switch` to the first
+portfolio it created.
 
 **Wallets and portfolios.** `importwallet` finds the wallet by the fingerprint
 the file gives, and each portfolio by its index. It creates a portfolio the
@@ -963,9 +1083,18 @@ $ hw importwallet wallet.jsonl --portfolio 1
 wallet0  bc560f95  already in the database
   portfolio1  created, 12 accounts added
 
+The active portfolio is still portfolio0 of wallet0.
+
 Labels set: 1 address
 Left aside: 1 record of the portfolios --portfolio leaves out
+
+To work in portfolio1 of wallet0, make it the active one:
+  hw switch --wallet 0 --portfolio 1
 ```
+
+Here `--portfolio` names a portfolio of the file, not the portfolio a command
+works in. The wallet comes from the fingerprint of the file, so no option
+names it.
 
 A wallet always has `portfolio0`. So `importwallet` creates a wallet only from
 a file that brings its `portfolio0`. In a database that does not have the
@@ -1003,8 +1132,6 @@ labels the same way.
 >   [Check an address before you give it out](#check-an-address-before-you-give-it-out)
 >   tells: `hw show /0/0 --network NETWORK --type TYPE` there must show the
 >   ends of the first address `receive` gives here on that network and type.
-> - **`--wallet` only checks.** `importwallet` finds the wallet from the file.
->   With `--wallet`, it refuses a file that is of another wallet.
 > - **A description you set is kept.** A wallet or a portfolio that has a
 >   description keeps it. One that has none, or that `importwallet` creates,
 >   takes the description of the file.
@@ -1021,21 +1148,25 @@ labels the same way.
 #### `hw portfolios`
 
 Shows the portfolios of every wallet, with their balances. Each portfolio
-starts with its name, its wallet and its description. Then come the date it
+starts with a `*` when it is the [active one](#the-active-portfolio), or a
+space, then its name, its wallet and its description. Then come the date it
 was created, and a line for each network it has addresses or coins on: what it
 can spend there, what is unconfirmed, and how many coins and addresses it has.
 
 ```console
 $ hw portfolios
-portfolio0  wallet0  "daily spending"
-  created 10 Nov 2026
-  btc  spendable 0.00150000 btc, 3 coins, 5 addresses
-  bch  spendable 0.00000000 btc, no coins, 1 address
+* portfolio0  wallet0  "daily spending"
+    created 10 Nov 2026
+    btc  spendable 0.00150000 btc, 3 coins, 5 addresses
+    bch  spendable 0.00000000 btc, no coins, 1 address
 
-portfolio1  wallet0  "savings"
-  created 10 Nov 2026
-  btc  spendable 0.25000000 btc, 1 coin, 1 address
+  portfolio1  wallet0  "savings"
+    created 10 Nov 2026
+    btc  spendable 0.25000000 btc, 1 coin, 1 address
 ```
+
+The `*` is green on a terminal. It takes a column of its own, so that the names
+line up whichever portfolio is active.
 
 The figures are those of a network. On `btc`, they add up the `bip44` and the
 `bip84` account, since a payment spends both. The spendable balance leaves out
@@ -1043,9 +1174,8 @@ locked coins, coinbase coins not yet mature, and unconfirmed payments from
 other wallets. A network the portfolio never used has no line, so a portfolio
 with twelve accounts still reads in a few lines.
 
-Without an option, `portfolios` lists every portfolio of every wallet. The
-portfolios of one wallet come together. `--wallet` keeps those of one wallet,
-and `--portfolio` one portfolio.
+`portfolios` lists every portfolio of every wallet, whichever one is active.
+The portfolios of one wallet come together.
 
 `--verbose` adds the fingerprint of the mnemonic and the time the portfolio was
 created. It lists every network of the portfolio, each with its confirmed,
@@ -1057,22 +1187,33 @@ key. Paste the descriptor into a wallet that takes one, to watch the account
 there.
 
 `--tabular` gives one row of a table to each network a portfolio has addresses
-or coins on: the wallet, the portfolio, the network, what it can spend, what is
-unconfirmed, its coins, its addresses, and the description of the portfolio.
-The first columns are as wide as their longest cell, which no row cuts.
+or coins on. The first column has no heading, and holds the `*` of the active
+portfolio. Then come the wallet, the portfolio, the network, what it can spend,
+what is unconfirmed, its coins, its addresses, and the description of the
+portfolio. The first columns are as wide as their longest cell, which no row
+cuts.
+
+```console
+$ hw portfolios --tabular
+  │ Wallet  │ Portfolio  │ Network │ Spendable (btc) │ Unconfirmed (btc) │ Coins │ Addresses │ Description
+──┼─────────┼────────────┼─────────┼─────────────────┼───────────────────┼───────┼───────────┼────────────
+* │ wallet0 │ portfolio0 │ btc     │      0.00000000 │        0.00000000 │     0 │         1 │ "daily spending"
+  │ wallet0 │ portfolio1 │ btc     │      0.00000000 │        0.00000000 │     0 │         1 │ "savings"
+```
 
 `--csv FILE` writes one row for each network of each portfolio to a
-[CSV file](#listings): the wallet, the portfolio and its description, the
-network, what it can spend, its confirmed and unconfirmed balances, its coins
-and addresses, and when the portfolio was created. The file holds no key and no
+[CSV file](#listings). Its columns are the wallet, the portfolio, `Active`, the
+description of the portfolio, the network, what it can spend, its confirmed and
+unconfirmed balances, its coins and addresses, and when the portfolio was
+created. `Active` says `yes` for the active portfolio, and `no` for the
+others. The file holds no key and no
 descriptor, since they would show every address and payment of the portfolio
-to anyone the file reaches.
+to anyone the file reaches. `--json` says whether each portfolio is the active
+one, as `"active": true` or `false`.
 
 ```console
 hw portfolios
-hw portfolios --verbose
-hw portfolios --verbose --portfolio 1       # the descriptors of portfolio1, for another wallet
-hw portfolios --wallet 1                    # the portfolios of wallet1
+hw portfolios --verbose                     # the descriptors, for another wallet
 hw portfolios --tabular
 hw portfolios --csv portfolios.csv
 hw portfolios --unit sat
@@ -1107,64 +1248,132 @@ descriptor back.
 > - **The lines of `portfolios --verbose` wrap on a terminal.** A descriptor is
 >   wider than most screens. The pager wraps these lines rather than cut them
 >   at the edge of the screen, so that you can copy a descriptor whole.
-> - **`--portfolio` alone lists that portfolio of the default wallet.** Give
->   `--wallet` too for the portfolio of another wallet.
 > - **[`balances`](#hw-balances) repeats these totals.** It gives the same
 >   figures for a network, beside the addresses they add up.
 
-#### `hw setdescription`
+#### `hw switch`
 
-`hw setdescription DESCRIPTION` sets the description of a portfolio, or of a
-wallet with `--of-wallet`. It takes the place of the description it had. An
-empty description, `""`, removes it.
+`hw switch [--wallet N] --portfolio N` makes another portfolio the
+[active one](#the-active-portfolio). The commands work in it from then on,
+until the next `switch`. The database keeps it.
 
 ```console
-hw setdescription "daily spending"          # the default portfolio
-hw setdescription savings --portfolio 1
+hw switch --portfolio 1                     # portfolio1 of the same wallet
+hw switch --wallet 1 --portfolio 0          # portfolio0 of wallet1
+```
+
+`--portfolio` names the portfolio, and must be given. `--wallet` names its
+wallet. Without `--wallet`, the portfolio is one of the wallet of the active
+portfolio. So after `hw switch --wallet 1 --portfolio 0`, the command
+`hw switch --portfolio 2` goes to `portfolio2` of `wallet1`.
+
+The answer shows the portfolio as `portfolios` shows it, with its `*`:
+
+```console
+$ hw switch --portfolio 1
+The active portfolio is now portfolio1 of wallet0.
+* portfolio1  wallet0  "savings"
+    created 11 Nov 2026
+    btc  spendable 0.00000000 btc, no coins, 1 address
+```
+
+`switch` refuses a wallet or a portfolio the database does not have, and the
+active portfolio stays as it was:
+
+```console
+$ hw switch --portfolio 5
+Error: wallet0 has no portfolio5: portfolios lists the portfolios
+$ hw switch --wallet 2 --portfolio 0
+Error: There is no wallet2: portfolios lists the wallets
+```
+
+`switch` needs no server, so it works on an offline computer too.
+
+The commands that find their portfolio by themselves need no `switch`. They
+are `importtx`, `signtx`, `signsweep`, `bumpfee`, `preparesweep`, `label`,
+`lockcoin`, `unlockcoin`, `signmsg`, and `show` of a transaction, a coin or an
+address. When they cannot tell between several portfolios, they take the
+active one if it is among them. Otherwise they name them, and you switch to
+the one to use. See [What each command takes](#what-each-command-takes).
+
+> **Good to know**
+>
+> - **A database without any portfolio has no active portfolio.** `switch`
+>   is refused there, with `There is no wallet yet: newportfolio makes one, and
+>   recover or importwallet bring one back`. The first portfolio created
+>   becomes active by itself.
+> - **The switch stays.** It is written to the database, not to the
+>   configuration file. After `hw switch --portfolio 1` for one payment,
+>   `receive` gives out addresses of `portfolio1` too. Switch back when you are
+>   done. A script that switches leaves the next commands you type in the
+>   portfolio it switched to.
+> - **Each computer has its own.** The offline and the online computer each
+>   keep their active portfolio, and the file of `exportwallet` does not carry
+>   it. To check an address of another portfolio with [`show`](#hw-show),
+>   switch to that portfolio on both.
+
+#### `hw setdescription`
+
+`hw setdescription DESCRIPTION` sets the description of the active portfolio,
+or of its wallet with `--of-wallet`. It takes the place of the description it
+had. An empty description, `""`, removes it.
+
+```console
+hw setdescription "daily spending"          # the active portfolio
 hw setdescription "paper backup in the safe" --of-wallet
-hw setdescription "" --portfolio 1          # removes the description
+hw setdescription ""                        # removes the description
+hw switch --portfolio 1                     # then describe portfolio1
+hw setdescription savings
+```
+
+It answers with the portfolio, as `portfolios` shows it:
+
+```console
+$ hw setdescription "paper backup in the safe" --of-wallet
+* portfolio0  wallet0  "daily spending"
+    wallet0 is "paper backup in the safe"
+    created 11 Nov 2026
+    btc  spendable 0.00000000 btc, no coins, 1 address
 ```
 
 Wallets and portfolios have fixed names, which follow their indexes and cannot
 be changed. A description says what one is for, in your own words.
 `portfolios` shows it, and the file of [`exportwallet`](#hw-exportwallet)
-carries it. `--wallet` and `--portfolio` name the portfolio to describe, or the
-wallet with `--of-wallet`. Without them, it is the default one.
+carries it. To describe another portfolio, switch to it first. To describe
+another wallet, switch to one of its portfolios.
 
 A description is free text on one line, and names nothing. No command takes
 one in place of an index, so two portfolios may have the same description.
 
 #### `hw setdefault`
 
-Writes the defaults of `--wallet`, `--portfolio`, `--network` and `--type` to
-the [configuration file](#configuration), so that you do not have to edit it.
-Give the options to set, each with its new default.
+Writes the defaults of `--network` and `--type` to the
+[configuration file](#configuration), so that you do not have to edit it. Give
+the options to set, each with its new default.
 
 ```console
 hw setdefault --type bip84                  # give out native SegWit addresses
 hw setdefault --network bch                 # work on Bitcoin Cash
-hw setdefault --wallet 1                    # work in wallet1 from now on
-hw setdefault --portfolio 1 --network bch   # two defaults at once
+hw setdefault --network bch --type bip84    # two defaults at once
 ```
 
 It answers with the keys it wrote:
 
 ```console
-$ hw setdefault --portfolio 1 --network bch
-default-portfolio: 1
-default-network  : bch
+$ hw setdefault --network bch --type bip84
+default-network: bch
+default-type   : bip84
 Written to /home/you/.hw/config.json
 ```
 
-The keys are `default-wallet`, `default-portfolio`, `default-network` and
-`default-type`. The other keys of the file stay as they are.
-[Where a command works](#where-a-command-works) says what each default does.
+The keys are `default-network` and `default-type`. The other keys of the file
+stay as they are. [The two options](#the-two-options) says what each default
+does.
 
 > **Good to know**
 >
-> - **A wallet or a portfolio must exist to become the default.**
->   `--portfolio` is looked for in the wallet of `--wallet`, or in the default
->   wallet.
+> - **The portfolio is no default.** The commands work in the active
+>   portfolio, which the database keeps. [`switch`](#hw-switch) changes it.
 > - **A default of `bip84` leaves Bitcoin Cash on `bip44`.** The networks of
 >   Bitcoin Cash have `bip44` addresses only, whatever `default-type` says.
 > - **Each computer has its own defaults.** They are settings of the
@@ -1173,10 +1382,12 @@ The keys are `default-wallet`, `default-portfolio`, `default-network` and
 
 #### `hw deleteportfolio`
 
-`hw deleteportfolio --portfolio N` deletes a portfolio that was never used. It
-deletes a portfolio only when all of these are true:
+`hw deleteportfolio --portfolio N` deletes a portfolio that was never used, in
+the wallet of the active portfolio. It deletes a portfolio only when all of
+these are true:
 
 - It is not `portfolio0`.
+- It is not the [active portfolio](#the-active-portfolio).
 - It has the highest index in its wallet. `portfolio1` cannot be deleted while
   `portfolio2` exists.
 - It has never had any activity, and gave out no address.
@@ -1185,14 +1396,23 @@ Otherwise it refuses, and says which rule stopped it.
 
 ```console
 hw deleteportfolio --portfolio 2
-hw deleteportfolio --portfolio 1 --wallet 1
+hw switch --wallet 1 --portfolio 0          # to delete a portfolio of wallet1
+hw deleteportfolio --portfolio 1
 ```
 
 Each rule has its reason. A wallet always keeps `portfolio0`. Deleting it
 would be pointless, since a new `portfolio0` would be the same portfolio, with
-the same keys. The highest index goes first, so that the portfolios of a wallet
-keep no gap behind them. A portfolio that was paid is kept, since `recover`
-would only find it again.
+the same keys. The active portfolio is where the commands work, so the
+database must keep it. Switch to another portfolio before you delete it:
+
+```console
+$ hw deleteportfolio --portfolio 1
+Error: portfolio1 of wallet0 is the active portfolio: switch to another portfolio first
+```
+
+The highest index goes first, so that the portfolios of a wallet keep no gap
+behind them. A portfolio that was paid is kept, since `recover` would only
+find it again.
 
 Activity is a coin, a transaction, or a pending transaction. An address counts
 too, whether it was paid or not. A new portfolio has no address, since `hw`
@@ -1204,11 +1424,13 @@ would be lost. So `hw` keeps it.
 
 > **Good to know**
 >
-> - **`--portfolio` must be given.** `deleteportfolio` takes no default
->   portfolio, so that the default one is never deleted by accident. Without
->   `--wallet`, the portfolio is one of the default wallet.
-> - **Deleting the default portfolio sets the default back to `portfolio0`.**
->   `hw` writes `default-portfolio` to the configuration file, and says so.
+> - **`--portfolio` must be given.** A deletion names what it deletes, and
+>   never takes it from the active portfolio. So a portfolio is never deleted
+>   by accident.
+> - **It looks in the wallet of the active portfolio.** To delete a portfolio
+>   of another wallet, switch to a portfolio of that wallet first. A portfolio that wallet does not have is
+>   refused, as in `wallet0 has no portfolio3: portfolios lists the
+>   portfolios`.
 > - **To stop using a mnemonic, delete its whole wallet** with
 >   [`deletewallet`](#hw-deletewallet).
 
@@ -1221,25 +1443,37 @@ pending transactions. It is for a mnemonic you no longer use. Unlike
 the chain, and the mnemonic can still spend them.
 
 ```console
-hw portfolios --verbose --wallet 1          # shows the fingerprint of wallet1
+hw portfolios --verbose                     # shows the fingerprint of each wallet
 hw deletewallet 4435aa1c --wallet 1
 ```
 
 `--wallet` names the wallet and must be given. The fingerprint must be that of
 the wallet, as `portfolios --verbose` shows it. It confirms which wallet to
 delete. An index alone is easy to mistype, and the fingerprint tells one
-mnemonic from another.
+mnemonic from another. `deletewallet` never takes the wallet from the active
+portfolio, so that no wallet is deleted by accident.
 
 The other wallets keep their names. When `wallet0` is deleted, `wallet1` is
 still `wallet1`, and the next new wallet becomes `wallet0` again.
 
-When the default wallet is the one deleted, `hw` asks which of the wallets left
-becomes the default. When one wallet is left, it becomes the default. Either
-way, `hw` writes the new default to `default-wallet` in the configuration file,
-and says so. A new `wallet0` made later then does not become the default by
-itself. When the new default wallet does not have the default portfolio, `hw`
-sets `default-portfolio` back to 0 too, and says so. Every command without
-`--portfolio` would otherwise refuse to run.
+`deletewallet` refuses the wallet of the
+[active portfolio](#the-active-portfolio) while the database has another
+wallet. The commands would otherwise be left with no portfolio to work in.
+Switch to a portfolio of another wallet first:
+
+```console
+$ hw deletewallet bc560f95 --wallet 0
+Error: wallet0 holds the active portfolio, portfolio0 of wallet0: switch to a portfolio of another wallet first
+```
+
+The last wallet can be deleted, active portfolio and all. The database then
+has no active portfolio, and the first portfolio created after it becomes the
+active one:
+
+```console
+$ hw deletewallet bc560f95 --wallet 0
+wallet0 has been deleted, with all of its portfolios. The database has no wallet left: the first portfolio created next becomes the active one
+```
 
 > **Good to know**
 >
@@ -1258,14 +1492,14 @@ mnemonic used. Run it before you prepare a payment and after you send one.
 ```console
 hw sync
 hw sync --network btc                       # one network only
-hw sync --portfolio 1 --full                # portfolio1 of the default wallet
-hw sync --wallet 1                          # every portfolio of wallet1
+hw sync --full
 ```
 
 `sync` covers every portfolio of every wallet, on every network, the test
-networks included. A portfolio has an account on each network, and a payment
-may arrive on any of them. `--wallet`, `--portfolio` and `--network` sync
-less.
+networks included, whichever portfolio is active. A portfolio has an account
+on each network, and a payment may arrive on any of them. A payment to a
+portfolio you are not working in is still seen. `--network` syncs one network
+only.
 
 Each portfolio and network that holds or changed anything gets a block of its
 own: its balances, the block it is synced to, and what changed. The networks
@@ -1316,21 +1550,30 @@ ends, so scripts never see it.
 > - **`sync` sends again what you sent.** A transaction the server no longer
 >   knows is sent again, since nodes forget unconfirmed transactions. See
 >   [`broadcast`](#hw-broadcast).
+> - **A pending transaction in conflict may be in another portfolio.** `sync`
+>   covers every portfolio, and [`pendingtxs`](#hw-pendingtxs) lists the
+>   active one. When `sync` marks a transaction of another portfolio
+>   conflicted, its next steps start with the `switch` to that portfolio.
+>   Then `pendingtxs` shows the transaction, and `deletetx` frees its coins.
+>   In the same way, when `sync` finds new transactions in other portfolios
+>   alone, its next steps start with the `switch` to them, before `txs`.
 
 ### Addresses
 
 #### `hw receive`
 
-Gives the next receiving address of an account of the portfolio. `--network`
-and `--type` pick the account. Without them, it is a `bip44` address on `btc`,
-or what [the defaults](#the-four-options) say. On a terminal, the QR code of
-the address comes under it, for the payer to scan.
+Gives the next receiving address of an account of the
+[active portfolio](#the-active-portfolio). `--network` and `--type` pick the
+account. Without them, it is a `bip44` address on `btc`, or what
+[the defaults](#the-two-options) say. On a terminal, the QR code of the
+address comes under it, for the payer to scan.
 
 ```console
 hw receive --label "invoice 42"
 hw receive --type bip84                     # a native SegWit address
 hw receive --network bch                    # an address on Bitcoin Cash
-hw receive --portfolio 1 --type bip84       # in portfolio1
+hw switch --portfolio 1                     # then an address of portfolio1
+hw receive --type bip84
 ```
 
 The answer ends with the account of the address: its portfolio, its network
@@ -1378,7 +1621,7 @@ of a wallet, and changes nothing. The word tells what it is, by its shape:
 
 | Word | What `show` shows |
 |---|---|
-| none | The newest receiving address of the account, the first one `addresses` lists |
+| none | The newest receiving address of the account of the active portfolio, the first one `addresses` lists |
 | `/0/i` or `/1/i` | The receiving address `i`, or the change address `i`, derived from the public key, and cut when the wallet does not hold it |
 | An address | That address of the wallet, a change address too |
 | A txid or a nosigHash | That transaction, pending or in the history |
@@ -1390,7 +1633,7 @@ A hash goes in full or by its [short id](#short-ids).
 ```console
 hw show                                     # the newest receiving address
 hw show /0/7                                # the address at a path
-hw show /1/2 --portfolio 1 --type bip84     # a change address of another account
+hw show /1/2 --type bip84                   # a change address of the bip84 account
 hw show ADDRESS
 hw show a1075db5                            # a transaction by its short id
 hw show a1075db5:1                          # a coin
@@ -1403,7 +1646,7 @@ one, with its QR code on a terminal. Use it to give an address out again.
 `show` hands out no new address.
 
 **A path.** `show` derives the address at a path from the public key of the
-account. The account is the one `--network` and `--type` pick in the
+account. The account is the one `--network` and `--type` pick in the active
 portfolio, as for `receive`. It needs no mnemonic and no server, so it runs on
 the offline computer too. There it checks an address the online computer gave
 out: see [Check an address](#check-an-address-before-you-give-it-out).
@@ -1433,18 +1676,16 @@ lie past the gap of 20 that a restored wallet looks at, and no `sync` would
 find a payment there.
 
 **A transaction.** A transaction is shown in full, as each portfolio that
-holds it sees it. A payment between two portfolios of the wallet is shown once
-for each, outgoing in one and incoming in the other. `--portfolio` keeps the
-view of one portfolio, and `--wallet` alone the views of the portfolios of
-that wallet.
+holds it sees it, whichever portfolio is active. A payment between two
+portfolios of the wallet is shown once for each, outgoing in one and incoming
+in the other.
 
 **A transaction file.** `show` shows the transaction in a file as its
 portfolio sees it, with the name of that portfolio, without changing the
-wallet. A transaction between two portfolios is shown as the one that pays sees
-it. With `--portfolio`, it is shown as the portfolio it pays sees it, incoming,
-unless the wallet holds it pending in the one that pays. Run `show` on the
-offline computer before you sign, and on the online
-computer before you send. The labels it shows are those the file carries, so an
+wallet. It finds the portfolio by itself, as `importtx` does. A transaction
+between two portfolios is shown as the one that pays sees it. Run `show` on
+the offline computer before you sign, and on the online computer before you
+send. The labels it shows are those the file carries, so an
 offline computer sees the labels of the online wallet. A file of another wallet
 that involves no portfolio of the wallet needs `--network`: see
 [Files of other wallets](#files-of-other-wallets).
@@ -1494,20 +1735,20 @@ key alone and no record.
 >   too.
 > - **Give `show` the account `receive` used.** A portfolio has an address at
 >   `/0/7` in each of its accounts. `show /0/7` derives the one of the default
->   network and type. For an address that `receive --type bip84` gave out, run
->   `show /0/7 --type bip84`. The row `Account` says which account each
->   command used.
+>   network and type, in the active portfolio. For an address that
+>   `receive --type bip84` gave out, run `show /0/7 --type bip84`. The row
+>   `Account` says which account each command used.
 > - **Without a word, the address may have been paid already.** `show` gives
 >   out the newest address again, as it is. Run `receive` for a new one.
-> - **`--wallet` and `--portfolio` go with a path, a transaction, a file, or no
->   word.** With a path or no word, they name the portfolio. With a
->   transaction or a transaction file, they keep the views of the portfolios
->   they name: `--portfolio` one portfolio, and `--wallet` alone every
->   portfolio of that wallet. With a file of a wallet, they narrow what is shown, as they narrow what
+> - **`--portfolio` goes with a file of a wallet only.** It names one
+>   portfolio of the file, and narrows what is shown, as it narrows what
 >   `importwallet` reads. The records of the portfolios left out are counted
 >   on one line. A `--portfolio` the file has nothing of is refused, as
->   `importwallet` refuses it. An address and a coin tell where they are, so `show` refuses
->   the two options with them.
+>   `importwallet` refuses it. With any other word, `show` refuses it: "show
+>   takes --portfolio only with a file of a wallet, where it names one
+>   portfolio of the file. The rest is shown in the active portfolio, or where
+>   it is". A path and no word are of the active portfolio. A transaction, an
+>   address and a coin tell where they are.
 > - **`--type` goes with a path, or no word.** It names the account, with
 >   `--network`. `show` refuses it with anything else.
 > - **`--network` goes with most words.** With a path or no word, it names the
@@ -1515,10 +1756,12 @@ key alone and no record.
 >   none. With an address or a coin, it tells apart one that the wallet has on
 >   several test networks. `show` refuses it with a file of a wallet, since each
 >   record of such a file names its network.
-> - **A file that involves several portfolios may need `--portfolio`.** A
->   transaction between two portfolios is shown as the one that pays sees it.
->   When several portfolios pay, or when none pays and the transaction pays
->   several, `show` cannot tell. Name one with `--portfolio` and `--wallet`.
+> - **A file that involves several portfolios may need a `switch`.** A
+>   transaction between two portfolios is shown as the one that pays sees it,
+>   whichever portfolio is active. When several portfolios pay, or when none
+>   pays and the transaction pays several, `show` takes the active one among
+>   them. When the active one is none of them, `show` names them. Switch to
+>   one of them, and run `show` again.
 > - **A file named like a hash, an address or a path is taken for one.** Type
 >   its directory before it, as in `hw show ./a1075db5`. Tab offers such a file
 >   once you type `./`.
@@ -1532,8 +1775,8 @@ key alone and no record.
 
 #### `hw addresses`
 
-Lists the receiving addresses of a portfolio, or its change addresses with
-`--change`. The addresses come in sections, one for each network and type: the
+Lists the receiving addresses of the active portfolio, or its change addresses
+with `--change`. The addresses come in sections, one for each network and type: the
 `bip44` addresses on `btc`, then the `bip84` ones, then those on `bch`, and so
 on. A title line above each section names the portfolio, the network and the
 type. A section the portfolio has no address in is left out. `--network` and
@@ -1588,9 +1831,9 @@ hw addresses --max 10 --after ADDRESS
 
 #### `hw balances`
 
-Lists the addresses of a portfolio that hold coins, grouped by network. The
-title line of each network gives its total: the value of every coin of the
-portfolio there, what it can spend now, and the rest. On `btc`, the `bip44`
+Lists the addresses of the active portfolio that hold coins, grouped by
+network. The title line of each network gives its total: the value of every
+coin of the portfolio there, what it can spend now, and the rest. On `btc`, the `bip44`
 and the `bip84` addresses are listed together, as a payment spends them.
 `--network` and `--type` show one network or one type only.
 
@@ -1651,8 +1894,8 @@ hw label TXID ""                            # removes the label
 ```
 
 **An address.** The address tells its portfolio and its account, so `label`
-takes no `--wallet`, `--portfolio` or `--type`. Change addresses take no
-label.
+takes no `--type`, and labels it whichever portfolio is active. Change
+addresses take no label.
 
 **A transaction.** Name a pending one by the hash `pendingtxs` shows, and one of
 the history by its txid. Either goes in full or by its [short id](#short-ids). A
@@ -1675,8 +1918,9 @@ between two portfolios of the wallet gets the label in both.
 
 #### `hw coins`
 
-Lists the coins of a portfolio, grouped by network. On `btc`, the `bip44` and
-the `bip84` coins are listed together, as a payment spends them. `--network`
+Lists the coins of the active portfolio, grouped by network. On `btc`, the
+`bip44` and the `bip84` coins are listed together, as a payment spends them.
+`--network`
 and `--type` show one network or one type only. On each network, the
 unconfirmed coins come first, then the newest. Each coin takes two lines:
 
@@ -1743,8 +1987,8 @@ hw lockcoin TXHASH:1
 hw lockcoin a1075db5:1                      # the short id coins shows
 ```
 
-A coin tells where it is, so `lockcoin` takes no `--wallet` and no
-`--portfolio`. The test networks share their keys, so the wallet may have the
+A coin tells where it is, so `lockcoin` locks it whichever portfolio is
+active. The test networks share their keys, so the wallet may have the
 same coin on several of them. `--network` then says which one to lock.
 
 #### `hw unlockcoin`
@@ -1783,14 +2027,14 @@ hw fees --network bch
 #### `hw preparetx`
 
 `hw preparetx ADDRESS:AMOUNT...` prepares a payment, unsigned, and keeps it as a
-pending transaction. It needs no mnemonic. It spends the coins of the portfolio
-on one network, the one `--network` names or the default one.
+pending transaction. It needs no mnemonic. It spends the coins of the
+[active portfolio](#the-active-portfolio) on one network, the one `--network`
+names or the default one. To pay from another portfolio, switch to it first.
 
 ```console
 hw preparetx ADDRESS:0.0005 --fee-rate median --label "rent of October"
 hw preparetx ADDRESS1:10000sat ADDRESS2:250bits --fee-rate 5
 hw preparetx ADDRESS:0.01 --network bch --fee-rate low
-hw preparetx ADDRESS:0.01 --portfolio 1 --fee-rate low
 hw preparetx ADDRESS:0.01 --coin-type bip44 --fee-rate low
 hw preparetx ADDRESS:0.01 --spend-from MYADDRESS --change-back MYADDRESS --fee-rate low
 hw preparetx ADDRESS:0.01 --spend-from MYADDRESS --select --fee-rate low
@@ -1799,8 +2043,7 @@ hw preparetx ADDRESS:0.01 --recipients-pay --fee-rate high --output unsigned.psb
 
 | Option | What it does |
 |---|---|
-| `--wallet N`, `--portfolio N` | Name the portfolio to pay from. Without them, it is the default one. With `--coin` or `--spend-from`, the coins chosen tell their portfolio, and these only narrow it down. |
-| `--network NET` | Names the network of the payment. Without it, it is the default network. With `--coin` or `--spend-from`, the coins chosen tell their network, and it only narrows it down. |
+| `--network NET` | Names the network of the payment. Without it, it is the network of the coins chosen with `--coin` or `--spend-from`, or else the default network. With them, it only tells apart the test networks, which share their keys. |
 | `--fee-rate RATE` | Sets the fee rate: a number of satoshis per virtual byte, or `low`, `median` or `high`. Without it, `hw` shows [the rates](#hw-fees) and asks. |
 | `--recipients-pay` | Takes the fee out of the amounts paid, in equal shares. |
 | `--coin TXID:INDEX` | Chooses a coin to spend, in full or by its [short id](#short-ids). Every coin chosen is spent. Repeat it for several coins. |
@@ -1809,7 +2052,7 @@ hw preparetx ADDRESS:0.01 --recipients-pay --fee-rate high --output unsigned.psb
 | `--coin-type TYPE` | Spends coins of one type only, `bip44` or `bip84`. Without it, coins of both types. |
 | `--strategy STRATEGY` | Sets how the coins are selected: `least-waste`, the default, `random-draw`, `largest-first` or `smallest-first`. |
 | `--min-conf N` | Sets the confirmations a coin needs to be spent. The default is 0. |
-| `--change-back ADDRESS` | Sends the change to this address of the portfolio, instead of a new change address. |
+| `--change-back ADDRESS` | Sends the change to this address of the active portfolio, instead of a new change address. |
 | `--change-type TYPE` | Sets the type of the new change address, `bip44` or `bip84`. |
 | `--output FILE` | Also writes the transaction to a [file](#transaction-files). |
 | `--label LABEL` | Gives the transaction a label, which goes with it to its file and stays once the network has it. |
@@ -1839,7 +2082,7 @@ On a network of Bitcoin Cash, every coin is `bip44`, so the change is too. An
 option that asks for `bip84` there is refused.
 
 **`--change-back ADDRESS`** sends the change to that address instead. It must
-be an address of the portfolio on the network of the payment. A receiving
+be an address of the active portfolio on the network of the payment. A receiving
 address and a change address will both do, of either type. The address may
 have been used already, or be the change of another pending transaction: you
 chose it. A new change address that `hw` takes by itself is always one that
@@ -1865,14 +2108,16 @@ type of its own, so `--change-back` and `--change-type` do not go together.
 >   `preparesendall` and `bumpfee` ask whether to go on with a lock time of 0,
 >   or to sync first. A `sync` first is the better answer: it also finds the
 >   coins spent or received since. `--yes` goes on without asking.
-> - **`--coin` and `--spend-from` tell where the payment is.** The coins and
->   the addresses chosen belong to one portfolio on one network, and
->   `preparetx` pays from there. The default wallet and the default portfolio
->   do not apply then. `--wallet`, `--portfolio` and `--network` only narrow the
->   search, and must agree with the coins when given. `--wallet` alone keeps
->   the coins of that wallet, whatever its portfolio. `--network` is needed
->   when the coins are on several test networks and none of them is the
->   default network.
+> - **`--coin` and `--spend-from` take the coins of the active portfolio.** A
+>   coin or an address of another portfolio is refused, with the portfolio
+>   that holds it and the switch to it, as in `The coin a1075db5:1 is in
+>   portfolio1 of wallet0, not in the active portfolio: run switch --wallet
+>   0 --portfolio 1 first`. Every payment spends from one portfolio, and coin
+>   control keeps to the one you work in.
+> - **`--coin` and `--spend-from` tell the network.** The coins and the
+>   addresses chosen are on one network, and `preparetx` pays there.
+>   `--network` must agree with them when given. It is needed when the coins
+>   are on several test networks and none of them is the default network.
 > - **The type of the change and the coins depend on each other.** The fee
 >   depends on the type of the change output, and the type of the change on the
 >   coins chosen. With coins of both types to choose from, `hw` chooses for
@@ -1905,11 +2150,10 @@ The answer lists every coin the transaction leaves in the portfolio, with the
 reason: dust, locked by you or by a pending transaction, not spendable yet, or
 not chosen with `--coin`, `--spend-from` or `--coin-type`.
 
-`--wallet`, `--portfolio`, `--network`, `--fee-rate`, `--coin`, `--spend-from`,
-`--min-conf`, `--output`, `--label` and `--yes` work as for
-[`preparetx`](#hw-preparetx). With `--coin` or `--spend-from`, the coins chosen
-tell the portfolio and the network, and the first three options only narrow
-them down.
+`--network`, `--fee-rate`, `--coin`, `--spend-from`, `--min-conf`, `--output`,
+`--label` and `--yes` work as for [`preparetx`](#hw-preparetx). The coins of
+`--coin` and `--spend-from` must be in the active portfolio. They tell the
+network, and `--network` must agree with them.
 
 #### `hw signtx`
 
@@ -1929,11 +2173,11 @@ hw signtx --input unsigned.psbt --output signed.psbt
 A transaction that spends `bip44` and `bip84` coins together is signed at once.
 The mnemonic gives the keys of both accounts.
 
-`signtx` finds the portfolio from the transaction. `--wallet` and `--portfolio`
-are needed only when it cannot tell: see
-[What each command takes](#what-each-command-takes). A transfer between two
-portfolios is signed by the one that pays it. `signtx --portfolio` naming the
-portfolio it pays is refused, and the refusal names the one that pays.
+`signtx` finds the portfolio from the transaction, whichever portfolio is
+active. A transfer between two portfolios is signed by the one that pays it.
+When it cannot tell between several portfolios, it takes the active one if it
+is among them. Otherwise it names them, and you switch to the one to use.
+[What each command takes](#what-each-command-takes) gives the rule.
 
 On an offline computer, a file of a portfolio the database does not have is
 refused: "The transaction does not involve this wallet". That is the case of a
@@ -1974,7 +2218,10 @@ The extra fee comes out of the change. When the change cannot pay it, `hw`
 offers to add confirmed coins of the portfolio, of either type, or to take what
 is missing from what the recipients receive, asking which of them pays.
 
-`bumpfee` finds the portfolio from the transaction, as `signtx` does.
+`bumpfee` finds the portfolio from the transaction, as `signtx` does: the one
+that holds it, or among several the one that pays it. When it cannot tell, it
+takes the active portfolio if it is one of them. Otherwise it names them, and
+you switch to the one that pays.
 
 `--output FILENAME` also writes the replacement to a new file, a PSBT, as
 `preparetx --output` does. `--yes` answers yes to every question but the choice
@@ -1992,8 +2239,8 @@ of which recipient pays, which it cannot make for you.
 
 #### `hw txs`
 
-Lists the transactions of a portfolio, grouped by network, as of the last
-sync. `--network` shows one network only. On each network, the unconfirmed
+Lists the transactions of the active portfolio, grouped by network, as of the
+last sync. `--network` shows one network only. On each network, the unconfirmed
 transactions come first, then the newest. [`show TXID`](#hw-show) shows one of
 them in full.
 
@@ -2070,7 +2317,6 @@ addresses it pays.
 ```console
 hw txs
 hw txs --network bch
-hw txs --portfolio 1
 hw txs --verbose
 hw txs --tabular
 hw txs --csv txs.csv
@@ -2091,9 +2337,9 @@ hw txs --max 20 --after TXID
 
 #### `hw pendingtxs`
 
-Lists the pending transactions of the portfolio: prepared, signed, or sent and
-not yet seen by `sync`. `--wallet` and `--portfolio` pick the portfolio, each
-with its default, as for [`txs`](#hw-txs). `--network` shows one network only.
+Lists the pending transactions of the active portfolio, as [`txs`](#hw-txs)
+does: prepared, signed, or sent and not yet seen by `sync`. `--network` shows
+one network only.
 They take two lines each, as in `txs`. The first starts with the
 [short id](#short-ids) of the nosigHash until the transaction is signed, then
 with that of its txid. It gives the time the transaction was created, its
@@ -2125,8 +2371,6 @@ hw pendingtxs
 hw pendingtxs --verbose
 hw pendingtxs --tabular
 hw pendingtxs --csv pending.csv
-hw pendingtxs --portfolio 1                 # portfolio1 of the default wallet
-hw pendingtxs --wallet 1                    # the default portfolio of wallet1
 hw pendingtxs --network bch
 ```
 
@@ -2136,8 +2380,9 @@ hw pendingtxs --network bch
 >   sees the transaction on the network, or until `deletetx` deletes it. Delete
 >   the transactions you abandon.
 > - **A transaction left in another portfolio does not show.** `pendingtxs`
->   lists one portfolio, as the other listings do. Give `--portfolio` to see
->   another one, or look at the tab of `exportsheet`.
+>   lists the active portfolio, as the other listings do. Switch to another
+>   portfolio to see its pending transactions, or look at the tab of
+>   `exportsheet`, which holds those of every portfolio.
 
 #### `hw exporttx`
 
@@ -2160,13 +2405,13 @@ hw importtx signed.psbt
 
 `hw` finds the portfolio by itself, from the addresses the transaction spends
 from and pays. A transaction that moves funds between two portfolios goes to
-the portfolio that pays, since that one must lock the coins and sign.
-`--wallet` and `--portfolio` are needed only when `hw` cannot tell. That is
-when several portfolios pay, or when none pays and the transaction pays
-several. They only narrow the search: `--wallet` alone to every portfolio of
-that wallet, `--portfolio` to one portfolio. A portfolio that the transaction
-only pays, while another portfolio pays it, is refused, and the refusal names
-the one that pays.
+the portfolio that pays, since that one must lock the coins and sign. That
+holds whichever portfolio is active.
+
+`hw` cannot tell when several portfolios pay, or when none pays and the
+transaction pays several. It then takes the active portfolio if it is one of
+them. Otherwise it names them, and imports nothing. Switch to the one to use,
+and import the file again.
 
 #### `hw deletetx`
 
@@ -2205,9 +2450,10 @@ file. `--yes` takes a fee rate above 100 satoshis per virtual byte without
 asking, as for `preparetx`.
 
 A sweep that pays an address of this wallet belongs to the portfolio of that
-address, on its network. `hw` finds both from the `--sweep-to` addresses.
-`--wallet` and `--portfolio` are needed only when those addresses belong to
-several portfolios. A sweep is on one network, so `--sweep-to` addresses of
+address, on its network. `hw` finds both from the `--sweep-to` addresses. When
+those addresses belong to several portfolios, the sweep is of the active one
+if it is among them. Otherwise `hw` names them, and you switch to the one to
+keep the sweep in. A sweep is on one network, so `--sweep-to` addresses of
 this wallet on two networks are refused.
 
 A sweep that pays no address of this wallet needs `--network` and `--output`,
@@ -2271,9 +2517,9 @@ a SegWit address.
 >   either end makes the signature fail. `hw` warns about them.
 > - **`signmsg` and `verifymsg` work with P2PKH and SegWit addresses of one
 >   key,** not with Taproot ones.
-> - **The address tells its portfolio.** `signmsg` takes no `--wallet` and no
->   `--portfolio`. `--network` is needed only when the wallet has the address
->   on several test networks, which share their keys.
+> - **The address tells its portfolio.** `signmsg` signs with it whichever
+>   portfolio is active. `--network` is needed only when the wallet has the
+>   address on several test networks, which share their keys.
 
 #### `hw verifymsg`
 
@@ -2316,10 +2562,11 @@ the pending transactions. The file is an OpenDocument spreadsheet (`.ods`), the
 format of LibreOffice, which Excel and Google Sheets open too. Each tab holds
 every row of its listing, in the columns of its [CSV file](#listings).
 
-The tabs hold every portfolio of every wallet, or those `--wallet` and
-`--portfolio` name. Each row starts with the columns that say where it is: its
-wallet, its portfolio and its network. So one tab sorts and sums across the
-wallet. The addresses of both chains share a tab, the receiving ones first.
+The tabs hold every portfolio of every wallet, whichever one is active. Each
+row starts with the columns that say where it is: its wallet, its portfolio and
+its network. So one tab sorts and sums across the wallet. The tab of the
+portfolios says which one is active, in its column Active. The addresses of
+both chains share a tab, the receiving ones first.
 
 Each cell keeps its kind, unlike in a CSV file. A label is text, whatever it
 starts with, and keeps its leading zeros. An amount is a number of satoshis,
@@ -2329,7 +2576,6 @@ moment, so the tabs agree with each other.
 
 ```console
 hw exportsheet wallet.ods
-hw exportsheet savings.ods --portfolio 1
 ```
 
 > **Good to know**
@@ -2450,8 +2696,6 @@ On its first command, `hw` creates the directory `~/.hw`. It holds the database
 | Key | Default | What it sets |
 |---|---|---|
 | `host` | `https://api.haskoin.com/` | The haskoin-store server |
-| `default-wallet` | `0` | The wallet of a command given no `--wallet`, by its index |
-| `default-portfolio` | `0` | The portfolio of a command given no `--portfolio`, by its index |
 | `default-network` | `btc` | The network of a command given no `--network` |
 | `default-type` | `bip44` | The type of address of a command given no `--type`: `bip44` or `bip84`. The networks of Bitcoin Cash take `bip44` whatever it says. |
 | `unit` | `btc` | The unit of the amounts of a command given no `--unit`: `btc`, `bit` or `sat` |
@@ -2461,10 +2705,13 @@ On its first command, `hw` creates the directory `~/.hw`. It holds the database
 | `database-file` | `null` | Another database, instead of `~/.hw/accounts.sqlite` |
 | `pager` | `null` | The pager a listing goes through on a terminal, instead of `less` or `PAGER`. `""` is none. |
 
-The four `default-` keys say [where a command works](#where-a-command-works)
-when no option does. [`setdefault`](#hw-setdefault) writes them, so that you do
-not have to edit the file. `deleteportfolio` and `deletewallet` write them too,
-when they delete a default.
+The two `default-` keys say which account of the portfolio a command takes when
+no option does. [`setdefault`](#hw-setdefault) writes them, so that you do not
+have to edit the file. It is the one command that changes the file.
+
+The portfolio a command works in is not in the file. It is the
+[active portfolio](#the-active-portfolio), which the database keeps and
+[`switch`](#hw-switch) changes.
 
 The default network and type do not apply everywhere. `sync` and `recover`
 cover every network. The listings `addresses`, `balances`, `coins` and `txs`
@@ -2525,17 +2772,24 @@ name, so `hw` must be on your `PATH`.
 
 Each command is offered what it takes from your wallet:
 
-- The indexes of your wallets and portfolios, after `--wallet` and
-  `--portfolio`.
+- The indexes of your wallets after `--wallet`, for `switch` and
+  `deletewallet`.
+- The indexes of your portfolios after `--portfolio`, for `switch`,
+  `deleteportfolio` and `exportwallet`. They are those of the wallet that
+  `--wallet` names, or else of the wallet of the active portfolio.
+  `importwallet --portfolio` and `show --portfolio` name a portfolio of a file,
+  which the database does not know, so they are offered none.
 - The hashes of your pending transactions. `signtx` offers those to sign,
   `broadcast` those signed and not sent yet, and `exporttx` and `deletetx`
   all of them.
 - The transactions `bumpfee` can replace: your own payments on Bitcoin that
   are not in a block yet.
 - Your coins. `lockcoin` offers the free ones, `unlockcoin` those you locked,
-  and `--coin` those you can spend now.
+  and `--coin` those of the active portfolio that you can spend now.
 - Your addresses. `label` offers the receiving addresses, `show` and `signmsg`
-  all of them, and `--spend-from` those that hold coins you can spend now.
+  all of them, `--spend-from` those of the active portfolio that hold coins
+  you can spend now, and `--change-back` every address of the active
+  portfolio.
 - Your transactions. `label` and `show` offer them by their txid, and the
   pending ones by the hash `pendingtxs` shows. `show` offers your coins too.
 
@@ -2543,10 +2797,14 @@ Each command is offered what it takes from your wallet:
 looks like a hash, an address or a path, since `show` would read it as one.
 Type `./` first, and Tab offers it.
 
-The options typed before the word narrow what is offered. After `--wallet` and
-`--portfolio`, a command offers what that portfolio holds only. `--network` and
+Most values come from every portfolio, since the commands that take them find
+their portfolio by themselves. Coin control is the exception. It refuses the
+coins and addresses of another portfolio than the active one, so `--coin`,
+`--spend-from` and `--change-back` offer those of the active portfolio alone.
+
+The options typed before the word narrow what is offered. `--network` and
 `--type` narrow it down to the accounts they pick. The defaults of the
-configuration are not applied here. Without an option, every portfolio counts,
+configuration are not applied here. Without an option, every network counts,
 so that Tab offers a value you may still narrow down with an option typed
 after it.
 
@@ -2677,6 +2935,11 @@ finds the addresses each portfolio used.
 >   [A mnemonic split into parts](#a-mnemonic-split-into-parts).
 > - **The configuration file of 0.9 still reads.** `hw` 0.10 names the keys it
 >   no longer has, such as `recovery-gap`, and leaves them aside.
+> - **A configuration file of a build of 0.10 made before its release still
+>   reads too.** It may hold the keys `default-wallet` and
+>   `default-portfolio`, which `hw` 0.10 names and leaves aside. The
+>   [active portfolio](#the-active-portfolio) takes their place. Run
+>   [`switch`](#hw-switch) to choose it.
 
 ### Accounts become portfolios
 
@@ -2696,26 +2959,31 @@ Take three accounts of one mnemonic:
 
 ```console
 $ hw portfolios
-portfolio0  wallet0
-  created 11 Nov 2026
-  btc  spendable 0.01200000 btc, 2 coins, 14 addresses
-  bch  spendable 0.00000000 btc, no coins, 3 addresses
+* portfolio0  wallet0
+    created 11 Nov 2026
+    btc  spendable 0.01200000 btc, 2 coins, 14 addresses
+    bch  spendable 0.00000000 btc, no coins, 3 addresses
 
-portfolio1  wallet0
-  created 11 Nov 2026
-  btc  spendable 0.25000000 btc, 1 coin, 2 addresses
+  portfolio1  wallet0
+    created 11 Nov 2026
+    btc  spendable 0.25000000 btc, 1 coin, 2 addresses
 ```
 
 The names of the accounts stay in the old database. A portfolio has a
-description in their place, which [`setdescription`](#hw-setdescription) sets:
+description in their place, which [`setdescription`](#hw-setdescription) sets
+on the active portfolio:
 
 ```console
 hw setdescription main
-hw setdescription savings --portfolio 1
+hw switch --portfolio 1
+hw setdescription savings
+hw switch --portfolio 0                     # back to portfolio0
 ```
 
 **What you type now.** The commands that worked on accounts have new names,
-and `--account` is gone:
+and `--account` is gone. You no longer name the account a command works on.
+The commands work in the [active portfolio](#the-active-portfolio), which
+[`switch`](#hw-switch) changes:
 
 | In 0.9 | In 0.10 |
 |---|---|
@@ -2725,7 +2993,7 @@ and `--account` is gone:
 | `renameacc` | `setdescription` |
 | `deleteacc` | `deleteportfolio`, or `deletewallet` for a whole mnemonic |
 | `exportacc`, `importacc` | `exportwallet`, `importwallet` |
-| `--account NAME` | `--portfolio N`, with `--wallet N` for another mnemonic, then `--network` and `--type` |
+| `--account NAME` | `hw switch --portfolio N` before the commands, with `--wallet N` for another mnemonic, then `--network` and `--type` on each command |
 
 ### Reading the old database
 

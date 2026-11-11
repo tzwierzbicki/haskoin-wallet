@@ -95,6 +95,7 @@ module Haskoin.Wallet.Labels
     reportPairs,
     parseReport,
     reportNeedsSync,
+    importCreated,
 
     -- * The file show shows
     FileShown (..),
@@ -304,6 +305,18 @@ data AccountImport
     AccountLeftAside !Text !Text
   deriving (Eq, Show)
 
+-- | The portfolios an import created, in the order of the report: the
+-- wallets in the order of their first keys, and the portfolios of each in
+-- the order of their indexes. The first one became the active portfolio
+-- when the database had none.
+importCreated :: ImportReport -> [PortfolioRef]
+importCreated report =
+  [ PortfolioRef (walletImportIndex wallet) (portfolioImportIndex portfolio)
+    | wallet <- reportWallets report,
+      portfolio <- walletImportPortfolios wallet,
+      portfolioImportCreated portfolio
+  ]
+
 -- | The account an xpub record left in the wallet, added or found, if any
 importedAccount :: AccountImport -> Maybe AccountRef
 importedAccount = \case
@@ -338,19 +351,19 @@ emptyReport wallets accounts unreadable =
     }
 
 -- | What of a file importwallet takes: every portfolio of it, or the one
--- --portfolio names, into the wallet the file is of, which --wallet may
--- only confirm
-data ImportScope = ImportScope
+-- --portfolio names, into the wallet the file is of. The file names its
+-- wallet by the fingerprint of the seed, so the user does not name it:
+-- the active portfolio plays no part either, since the file may be of
+-- another wallet.
+newtype ImportScope = ImportScope
   { -- | The one portfolio to import, by its index, or all of them
-    scopePortfolio :: !(Maybe Natural),
-    -- | The wallet the file must be of, when the user names it
-    scopeWallet :: !(Maybe (DBWalletId, DBWallet))
+    scopePortfolio :: Maybe Natural
   }
   deriving (Eq, Show)
 
 -- | Everything a file holds
 wholeFile :: ImportScope
-wholeFile = ImportScope Nothing Nothing
+wholeFile = ImportScope Nothing
 
 -- | Import the content of a file of a wallet, as 'readWalletFile' reads
 -- it, within the scope given. A file that cannot be imported is refused
@@ -576,11 +589,6 @@ importWallet ::
   ExceptT String (DB m) (WalletImport, [(WalletKey, AccountImport)])
 importWallet ctx scope fingerprint keys = do
   existing <- lift $ walletWithFingerprint fingerprint
-  forM_ scope.scopeWallet $ \(wantedId, wanted) ->
-    unless (Just wantedId == (fst <$> existing)) $
-      throwError $
-        "The file is not of " <> cs (walletName (walletIndex wanted)) <> ": it is of "
-          <> maybe "a wallet the database does not have" (cs . walletName . walletIndex . snd) existing
   let indexes = sort (nub ((.walletKeyIndex) <$> keys))
       shownFingerprint = cs (fingerprintToText fingerprint) :: String
   when (isNothing existing && 0 `notElem` indexes) $

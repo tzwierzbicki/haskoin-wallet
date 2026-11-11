@@ -16,11 +16,12 @@
 -- since a public key of an account derives none of the others: their
 -- paths are hardened. So hw never makes one.
 --
--- A command reaches an account through the portfolio it works in, then
--- the network and the type its options or the configuration give
+-- A command reaches an account through the portfolio it works in, the
+-- active one, then the network and the type its options or the
+-- configuration give
 -- ('chooseAccount'). A command that spends or lists transactions works on
 -- a pool, the accounts of the portfolio on one network together
--- ('choosePool').
+-- ('portfolioPool').
 --
 -- A seed has one wallet, the one with its fingerprint ('seedWallet'). The
 -- fingerprint is 32 bits of a hash, and another seed may have it. So the
@@ -248,11 +249,6 @@ chooseAccount cfg portfolio netM kindM = do
   kind <- liftEither $ chooseKind cfg net kindM
   poolAccountOf (portfolioPool portfolio net) kind
 
--- | What the portfolio holds on the network a command works on, the one
--- --network names or the default one: its pool
-choosePool :: Config -> Portfolio -> Maybe Network -> Pool
-choosePool cfg portfolio netM = portfolioPool portfolio (commandNetwork cfg netM)
-
 {- Storing accounts -}
 
 -- | Store an account of a kind on a network in a portfolio, from its
@@ -389,6 +385,12 @@ createPortfolio ctx seed held index = do
 -- so are two keys for the accounts of one path, as the test networks
 -- share theirs ('checkSharedPath'). These are checked before the first
 -- row is written, so that a refusal leaves the database as it was.
+--
+-- The portfolio becomes the active one when the database has none
+-- ('insertPortfolio'): the first portfolio of a database is where the
+-- commands work, without a switch. A command that creates several creates
+-- them in the order of their indexes, so that the first one, portfolio0
+-- of a new wallet or the lowest index created, becomes active.
 createPortfolioWith ::
   (MonadUnliftIO m) =>
   Ctx ->
@@ -483,9 +485,14 @@ seedWallet ctx seed = do
 
 -- | Delete a portfolio with everything it holds: its accounts, their
 -- addresses and coins, its summaries, the labels of its transactions, its
--- pending transactions and the blocks its syncs reached
+-- pending transactions and the blocks its syncs reached. When it is the
+-- active portfolio, the database is left without one: deleteportfolio
+-- refuses the active portfolio, and deletewallet the wallet of the active
+-- portfolio unless it is the last, so this happens only when the last
+-- wallet goes, and the next portfolio created becomes active.
 deletePortfolio :: (MonadUnliftIO m) => DBPortfolioId -> DB m ()
 deletePortfolio portfolioKey = do
+  P.deleteWhere [DBActivePortfolioPortfolio P.==. portfolioKey]
   accounts <- P.selectKeysList [DBAccountPortfolio P.==. portfolioKey] []
   P.deleteWhere [DBAddressAccount P.<-. accounts]
   P.deleteWhere [DBCoinAccount P.<-. accounts]
@@ -530,10 +537,14 @@ portfolioHasActivity portfolioKey = do
 
 {- A portfolio as portfolios shows it -}
 
--- | A portfolio as portfolios shows it: how the answers name it, what the
--- user and the database say of it, and its figures on each network.
+-- | A portfolio as portfolios shows it: how the answers name it, whether
+-- it is the active one, what the user and the database say of it, and
+-- its figures on each network.
 data PortfolioView = PortfolioView
   { viewRef :: !PortfolioRef,
+    -- | Whether it is the active portfolio, the one the commands work in,
+    -- which portfolios marks
+    viewActive :: !Bool,
     viewDescription :: !Text,
     -- | The description of its wallet
     viewWalletDescription :: !Text,
@@ -580,6 +591,7 @@ data AccountKeys = AccountKeys
 -- 'Haskoin.Wallet.Database.Coin.spendableBalance'
 portfolioView :: (MonadUnliftIO m) => Portfolio -> (Pool -> ExceptT String (DB m) Word64) -> ExceptT String (DB m) PortfolioView
 portfolioView portfolio spendableOf = do
+  activeM <- lift activePortfolioId
   accounts <- lift $ portfolioAccountRows portfolio.portfolioId
   networks <- forM (nub (accountNetwork . snd <$> accounts)) $ \net -> do
     let onNet = [acc | (_, acc) <- accounts, accountNetwork acc == net]
@@ -600,6 +612,7 @@ portfolioView portfolio spendableOf = do
   return
     PortfolioView
       { viewRef = portfolioRef portfolio,
+        viewActive = activeM == Just portfolio.portfolioId,
         viewDescription = dBPortfolioDescription portfolio.portfolioRow,
         viewWalletDescription = dBWalletDescription portfolio.portfolioWallet,
         viewFingerprint = portfolioFingerprint portfolio,
@@ -659,6 +672,7 @@ instance ToJSON PortfolioView where
     object $
       portfolioRefPairs (viewRef view)
         <> [ "name" .= portfolioName (refPortfolio (viewRef view)),
+             "active" .= viewActive view,
              "description" .= viewDescription view,
              "walletdescription" .= viewWalletDescription view,
              "fingerprint" .= viewFingerprint view,
@@ -670,6 +684,7 @@ instance FromJSON PortfolioView where
   parseJSON = withObject "portfolio" $ \o ->
     PortfolioView
       <$> parsePortfolioRef o
+      <*> o .: "active"
       <*> o .: "description"
       <*> o .: "walletdescription"
       <*> o .: "fingerprint"

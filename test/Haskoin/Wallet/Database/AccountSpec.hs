@@ -218,6 +218,18 @@ creatingSpec ctx = do
           [(dBAccountExternal acc, dBAccountInternal acc, dBAccountBalanceConfirmed acc, dBAccountBalanceUnconfirmed acc, dBAccountBalanceCoins acc) | (_, acc) <- accounts]
             `shouldBe` replicate 12 (0, 0, 0, 0, 0)
 
+    -- newportfolio and recover create their portfolios this way
+    it "makes the first portfolio created in the database the active one" $
+      inDatabaseE $ do
+        portfolio <- testPortfolio ctx
+        lift activePortfolioId `dbShouldBeE` Just portfolio.portfolioId
+
+    it "leaves the active portfolio as it is when it creates another one" $
+      inDatabaseE $ do
+        first <- testPortfolio ctx
+        _ <- nextPortfolioOf ctx testMnemonic
+        lift activePortfolioId `dbShouldBeE` Just first.portfolioId
+
     it "files the portfolio under the wallet of the seed, which keeps the fingerprint" $
       inDatabaseE $ do
         portfolio <- testPortfolio ctx
@@ -492,21 +504,6 @@ choosingSpec ctx = do
       chooseKind def bchRegTest (Just Bip84) `shouldBe` Left "A bip84 account needs SegWit, which bchreg does not have"
 
   describe "The pool of a portfolio a command works on" $ do
-    it "is what the portfolio holds on btc without an option" $
-      inDatabaseE $ do
-        portfolio <- testPortfolio ctx
-        liftIO $ choosePool def portfolio Nothing `shouldBe` Pool portfolio.portfolioId btc
-
-    it "is what the portfolio holds on the network --network names" $
-      inDatabaseE $ do
-        portfolio <- testPortfolio ctx
-        liftIO $ choosePool def portfolio (Just bch) `shouldBe` Pool portfolio.portfolioId bch
-
-    it "is what the portfolio holds on the network the key default-network names" $
-      inDatabaseE $ do
-        portfolio <- testPortfolio ctx
-        liftIO $ choosePool (configWith ["default-network" .= ("bch" :: Text)]) portfolio Nothing `shouldBe` Pool portfolio.portfolioId bch
-
     it "has the accounts of the portfolio on the network, bip44 first" $
       inDatabaseE $ do
         portfolio <- testPortfolio ctx
@@ -693,7 +690,7 @@ deletingSpec ctx = do
       inScratchDirectory $ \dir -> do
         wallet <- walletInFile (dir </> "wallet.sqlite") twoWallets
         commandResponse ctx wallet UnitBitcoin (CommandDeleteWallet (Just 1) "4435aa1c")
-          `shouldReturn` ResponseDeleted "wallet1 has been deleted, with all of its portfolios" []
+          `shouldReturn` ResponseDeleted "wallet1 has been deleted, with all of its portfolios"
 
     -- Every wallet has its fingerprint: the word unknown is no fingerprint
     it "refuses the word unknown in place of the fingerprint of the wallet, and deletes nothing" $
@@ -791,7 +788,7 @@ balanceSpec ctx =
           (accId, _) <- testNewAcc ctx
           _ <- genExtAddress ctx def accId ""
           refreshCoins btc ctx accId [externalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
-        shownSpendable <$> commandResponse ctx wallet UnitBitcoin (CommandPortfolios defaultPortfolio (OnScreen Nothing))
+        shownSpendable <$> commandResponse ctx wallet UnitBitcoin (CommandPortfolios (OnScreen Nothing))
           `shouldReturn` Right [("btc", 50000)]
 
     it "are shown by hw addresses with the balance each address can spend now" $
@@ -802,7 +799,7 @@ balanceSpec ctx =
           _ <- genExtAddress ctx def accId ""
           refreshCoins btc ctx accId [externalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
         -- Newest first: the second address holds nothing
-        addressSpendable <$> commandResponse ctx wallet UnitBitcoin (CommandAddresses (Target defaultPortfolio (Just btc) (Just Bip44)) False (OnScreen Nothing) (Paging Nothing Nothing))
+        addressSpendable <$> commandResponse ctx wallet UnitBitcoin (CommandAddresses (Target (Just btc) (Just Bip44)) False (OnScreen Nothing) (Paging Nothing Nothing))
           `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", 0), ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", 50000)]
 
     it "add up those of its addresses" $
@@ -963,6 +960,14 @@ viewSpec ctx =
           viewFingerprint view `shouldBe` testFingerprint
           viewCreated view `shouldBe` seenTime
 
+    it "says whether it is the active portfolio: the first one created is, the next one is not" $
+      inDatabaseE $ do
+        first <- testPortfolio ctx
+        second <- nextPortfolioOf ctx testMnemonic
+        firstView <- portfolioView first (\_ -> return 0)
+        secondView <- portfolioView second (\_ -> return 0)
+        liftIO $ (viewActive firstView, viewActive secondView) `shouldBe` (True, False)
+
     it "names networks as a sentence does" $ do
       networksText [btc] `shouldBe` "btc"
       networksText [btc, bch] `shouldBe` "btc and bch"
@@ -970,7 +975,8 @@ viewSpec ctx =
 
 {- JSON -}
 
--- | Portfolio 1 of wallet 0 as portfolios shows it: described, holding on
+-- | Portfolio 1 of wallet 0 as portfolios shows it: not the active one,
+-- described, holding on
 -- btc 5000 confirmed and 300 unconfirmed in 2 coins, 4800 of it
 -- spendable, at 3 addresses, with the keys of its two accounts there,
 -- which are those of account 0 of the test wallet. A portfolio has every
@@ -979,6 +985,7 @@ fixtureView :: PortfolioView
 fixtureView =
   PortfolioView
     { viewRef = PortfolioRef 0 1,
+      viewActive = False,
       viewDescription = "savings",
       viewWalletDescription = "steel backup",
       viewFingerprint = testFingerprint,
@@ -1005,6 +1012,7 @@ viewJson =
   "wallet": 0,
   "portfolio": 1,
   "name": "portfolio1",
+  "active": false,
   "description": "savings",
   "walletdescription": "steel backup",
   "fingerprint": "bc560f95",
@@ -1040,6 +1048,9 @@ jsonSpec =
     it "is written as portfolios prints it, its figures by network, and read back" $ do
       eitherDecode (cs viewJson) `shouldBe` Right (toJSON fixtureView)
       eitherDecode (cs viewJson) `shouldBe` Right fixtureView
+
+    it "says that the portfolio is the active one with active true" $
+      eitherDecode (cs (Text.replace "\"active\": false" "\"active\": true" (cs viewJson))) `shouldBe` Right (toJSON fixtureView {viewActive = True})
 
     -- Every wallet has its fingerprint
     it "refuses a portfolio without the fingerprint of its wallet" $

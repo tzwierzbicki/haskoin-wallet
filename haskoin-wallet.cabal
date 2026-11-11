@@ -277,6 +277,7 @@ test-suite spec
       Haskoin.Wallet.Cli.QrCodeSpec
       Haskoin.Wallet.Cli.ResponseSpec
       Haskoin.Wallet.Cli.SheetSpec
+      Haskoin.Wallet.CommandsSpec
       Haskoin.Wallet.ConfigSpec
       Haskoin.Wallet.CutAddressSpec
       Haskoin.Wallet.Database.AccountSpec

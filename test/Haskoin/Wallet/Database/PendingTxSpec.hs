@@ -65,7 +65,6 @@ spec =
     conflictsSpec ctx
     fingerprintSpec ctx
     poolOfTxSpec ctx
-    payerSpec ctx
 
 -- | Nothing before sending: the transaction goes on, as with broadcast --yes
 withoutAsking :: (Monad m) => Network -> Maybe Place -> TxInfo -> ExceptT String m ()
@@ -1314,14 +1313,21 @@ testnetSpend ctx =
     parent = spendingTx ctx [(fakeTxHash 4, 0)] [(testnetExternalAddr, 30000)]
 
 -- The payment is from portfolio 0 of the test wallet, wallet0, on
--- Bitcoin. The other portfolio is portfolio 0 of the second test wallet,
--- wallet1. The third argument of transactionPool is the network of the
--- file or of --network, and the fourth the default network.
+-- Bitcoin, the active portfolio as the first one created. The other
+-- portfolio is portfolio 0 of the second test wallet, wallet1. The first
+-- argument of transactionPool after the context is the active portfolio,
+-- the second the network of the file or of --network, and the third the
+-- default network.
 poolOfTxSpec :: Ctx -> Spec
 poolOfTxSpec ctx =
   describe "The pool of a transaction to sign, show or import" $ do
     let cfg = def :: Config
         found = fmap fst
+        -- The pool as the commands look for it, with the active portfolio
+        -- of the database
+        poolFound netM fallback tsd = do
+          activeM <- lift activePortfolioId
+          transactionPool ctx activeM netM fallback tsd
     it "is the pool that holds it pending" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx
@@ -1329,17 +1335,17 @@ poolOfTxSpec ctx =
         unsigned <- unsignedPayment ctx cfg accId
         _ <- importTo ctx accId unsigned
         pool <- poolOf accId
-        found (transactionPool ctx Nothing Nothing btc unsigned) `dbShouldBeE` Just pool
+        found (poolFound Nothing btc unsigned) `dbShouldBeE` Just pool
 
-    it "refuses another portfolio than the one that holds it pending, naming both" $
+    it "is the pool that holds it pending, though another portfolio is active" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx
         other <- portfolioOf ctx testMnemonic2
         unsigned <- unsignedPayment ctx cfg accId
         _ <- importTo ctx accId unsigned
-        lift $
-          dbShouldFailWith "The transaction is pending in portfolio0 of wallet0 on btc, not in portfolio0 of wallet1" $
-            transactionPool ctx (Just (onePortfolio other)) Nothing btc unsigned
+        lift $ setActivePortfolio other.portfolioId
+        pool <- poolOf accId
+        found (poolFound Nothing btc unsigned) `dbShouldBeE` Just pool
 
     it "refuses a file of another network than the one it is pending on" $
       inDatabaseE $ do
@@ -1348,7 +1354,7 @@ poolOfTxSpec ctx =
         _ <- importTo ctx accId unsigned
         lift $
           dbShouldFailWith "The transaction is pending on another network" $
-            transactionPool ctx Nothing (Just bch) btc unsigned
+            poolFound (Just bch) btc unsigned
 
     it "is the pool whose keys derive the addresses it spends, when it is not pending" $
       inDatabaseE $ do
@@ -1356,7 +1362,7 @@ poolOfTxSpec ctx =
         _ <- testNewAcc2 ctx
         unsigned <- unsignedPayment ctx cfg accId
         pool <- poolOf accId
-        found (transactionPool ctx Nothing Nothing btc unsigned) `dbShouldBeE` Just pool
+        found (poolFound Nothing btc unsigned) `dbShouldBeE` Just pool
 
     -- As a file signed and finalized by other software, which names no key
     -- of its signed inputs, or a file another wallet prepared, which may
@@ -1367,7 +1373,7 @@ poolOfTxSpec ctx =
         _ <- testNewAcc2 ctx
         unsigned <- unsignedPayment ctx cfg accId
         pool <- poolOf accId
-        (chosen, completed) <- transactionPool ctx Nothing Nothing btc (withoutPaths unsigned)
+        (chosen, completed) <- poolFound Nothing btc (withoutPaths unsigned)
         liftIO $ do
           chosen `shouldBe` Just pool
           txSignDataInputPaths completed `shouldBe` [legacyPath (Deriv :/ 0 :/ 0)]
@@ -1384,70 +1390,29 @@ poolOfTxSpec ctx =
         fundAccount ctx cfg accId
         transfer <- payment ctx cfg accId [] account1Addr 8000
         pool <- poolOf accId
-        found (transactionPool ctx Nothing Nothing btc (withoutPaths transfer)) `dbShouldBeE` Just pool
+        found (poolFound Nothing btc (withoutPaths transfer)) `dbShouldBeE` Just pool
 
-    -- The same transfer: portfolio 1 is involved too, since it is paid
-    it "is the pool of the portfolio that is paid when --portfolio names it, for a transaction between two portfolios" $
-      inDatabaseE $ do
-        (accId, _) <- testNewAcc ctx
-        second <- nextPortfolioOf ctx testMnemonic
-        (secondId, _) <- accountOf second btc Bip44
-        _ <- genExtAddress ctx cfg secondId ""
-        fundAccount ctx cfg accId
-        transfer <- payment ctx cfg accId [] account1Addr 8000
-        found (transactionPool ctx (Just (onePortfolio second)) Nothing btc (withoutPaths transfer)) `dbShouldBeE` Just (portfolioPool second btc)
-
-    -- The file of the transfer names the paths of portfolio 0, which the
-    -- keys of portfolio 1 do not derive: portfolio 1 reads it with the
-    -- paths it knows of its own addresses
-    it "is the pool of the portfolio a transfer pays when --portfolio names it, though the file names the paths of the one that pays" $
-      inDatabaseE $ do
-        (_, second, transfer) <- transferToPortfolio1 ctx cfg
-        found (transactionPool ctx (Just (onePortfolio second)) Nothing btc transfer) `dbShouldBeE` Just (portfolioPool second btc)
-
-    -- Portfolio 1 gets 8000, and spends none of the coins
-    it "reads a transfer as the portfolio it pays sees it, when --portfolio names that one: incoming" $
-      inDatabaseE $ do
-        (_, second, transfer) <- transferToPortfolio1 ctx cfg
-        (_, completed) <- transactionPool ctx (Just (onePortfolio second)) Nothing btc transfer
-        summary <- txInfoSummary <$> txInfoOf ctx (portfolioPool second btc) completed
-        liftIO $ (summaryType summary, summaryAmount summary, Map.keys (summaryMyInputs summary)) `shouldBe` (TxCredit, 8000, [])
-
-    it "is the pool of the portfolio that pays a transfer, without an option, though the file names its paths" $
+    it "is the pool of the portfolio that pays a transfer, though the file names its paths" $
       inDatabaseE $ do
         (payer, _, transfer) <- transferToPortfolio1 ctx cfg
-        found (transactionPool ctx Nothing Nothing btc transfer) `dbShouldBeE` Just payer
+        found (poolFound Nothing btc transfer) `dbShouldBeE` Just payer
 
-    -- Portfolio 1 of wallet0 is paid; portfolio 0 is the default one
-    it "is the pool of any portfolio of the wallet --wallet names alone, not only of the default portfolio" $
+    -- The portfolio that pays locks the coins and signs, so the active
+    -- portfolio does not take a transfer from it
+    it "is the pool of the portfolio that pays a transfer, though the portfolio it pays is the active one" $
+      inDatabaseE $ do
+        (payer, second, transfer) <- transferToPortfolio1 ctx cfg
+        lift $ setActivePortfolio second.portfolioId
+        found (poolFound Nothing btc transfer) `dbShouldBeE` Just payer
+
+    -- Portfolio 1 of wallet0 is paid; portfolio 0 is the active one
+    it "is the pool of the portfolio it pays, though another portfolio is active" $
       inDatabaseE $ do
         _ <- testPortfolio ctx
         second <- nextPortfolioOf ctx testMnemonic
         (secondId, _) <- accountOf second btc Bip44
         _ <- genExtAddress ctx cfg secondId ""
-        narrowedM <- narrowedBy cfg (PortfolioChoice (Just 0) Nothing)
-        found (transactionPool ctx narrowedM Nothing btc (incomingToPortfolio1 ctx)) `dbShouldBeE` Just (portfolioPool second btc)
-
-    it "refuses the wallet --wallet names alone when it involves none of its portfolios, naming the wallet" $
-      inDatabaseE $ do
-        (accId, _) <- testNewAcc ctx
-        _ <- portfolioOf ctx testMnemonic2
-        unsigned <- unsignedPayment ctx cfg accId
-        narrowedM <- narrowedBy cfg (PortfolioChoice (Just 1) Nothing)
-        lift $
-          dbShouldFailWith "The transaction does not involve wallet1" $
-            transactionPool ctx narrowedM Nothing btc unsigned
-
-    it "refuses the wallet --wallet names alone when the transaction is pending in another, naming both" $
-      inDatabaseE $ do
-        (accId, _) <- testNewAcc ctx
-        _ <- portfolioOf ctx testMnemonic2
-        unsigned <- unsignedPayment ctx cfg accId
-        _ <- importTo ctx accId unsigned
-        narrowedM <- narrowedBy cfg (PortfolioChoice (Just 1) Nothing)
-        lift $
-          dbShouldFailWith "The transaction is pending in portfolio0 of wallet0 on btc, not in wallet1" $
-            transactionPool ctx narrowedM Nothing btc unsigned
+        found (poolFound Nothing btc (incomingToPortfolio1 ctx)) `dbShouldBeE` Just (portfolioPool second btc)
 
     it "is the pool of the portfolio it pays, when no portfolio of the wallet pays" $
       inDatabaseE $ do
@@ -1455,43 +1420,57 @@ poolOfTxSpec ctx =
         _ <- testNewAcc2 ctx
         fundAccount ctx cfg accId
         pool <- poolOf accId
-        found (transactionPool ctx Nothing Nothing btc (incoming ctx)) `dbShouldBeE` Just pool
+        found (poolFound Nothing btc (incoming ctx)) `dbShouldBeE` Just pool
 
-    it "asks for --portfolio when several portfolios pay, naming them" $
+    -- Portfolio 0 of wallet0 is the active one
+    it "is the pool of the active portfolio, among several that pay" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx
         fundAccount ctx cfg accId
         _ <- otherAccount ctx cfg
-        lift $
-          dbShouldFailWith "The transaction spends from several portfolios, portfolio0 of wallet0 on btc and portfolio0 of wallet1 on btc: name the one to use with --portfolio and --wallet" $
-            transactionPool ctx Nothing Nothing btc (jointSpend ctx)
+        pool <- poolOf accId
+        found (poolFound Nothing btc (jointSpend ctx)) `dbShouldBeE` Just pool
 
-    it "is the pool of the portfolio --portfolio names, among several that pay" $
+    it "is the pool of the active portfolio among several that pay, after a switch to the other one" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx
         fundAccount ctx cfg accId
         otherId <- otherAccount ctx cfg
         other <- portfolioOf ctx testMnemonic2
+        lift $ setActivePortfolio other.portfolioId
         otherPool <- poolOf otherId
-        found (transactionPool ctx (Just (onePortfolio other)) Nothing btc (jointSpend ctx)) `dbShouldBeE` Just otherPool
+        found (poolFound Nothing btc (jointSpend ctx)) `dbShouldBeE` Just otherPool
 
-    it "asks for --portfolio when no portfolio pays and it pays several, naming them" $
+    -- Portfolio 1 of wallet0, which pays nothing, is made the active one
+    it "is refused when several portfolios pay and the active one is none of them, naming them and saying to switch" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx
         fundAccount ctx cfg accId
         _ <- otherAccount ctx cfg
+        third <- nextPortfolioOf ctx testMnemonic
+        lift $ setActivePortfolio third.portfolioId
         lift $
-          dbShouldFailWith "The transaction pays several portfolios, portfolio0 of wallet0 on btc and portfolio0 of wallet1 on btc: name the one to use with --portfolio and --wallet" $
-            transactionPool ctx Nothing Nothing btc (jointPayout ctx)
+          dbShouldFailWith "The transaction spends from several portfolios, portfolio0 of wallet0 on btc and portfolio0 of wallet1 on btc: switch to the one to use first" $
+            poolFound Nothing btc (jointSpend ctx)
 
-    it "refuses a portfolio it does not involve" $
+    it "is the pool of the active portfolio when no portfolio pays and it pays several" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx
-        other <- portfolioOf ctx testMnemonic2
-        unsigned <- unsignedPayment ctx cfg accId
+        fundAccount ctx cfg accId
+        _ <- otherAccount ctx cfg
+        pool <- poolOf accId
+        found (poolFound Nothing btc (jointPayout ctx)) `dbShouldBeE` Just pool
+
+    it "is refused when no portfolio pays, it pays several and the active one is none of them, naming them and saying to switch" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc ctx
+        fundAccount ctx cfg accId
+        _ <- otherAccount ctx cfg
+        third <- nextPortfolioOf ctx testMnemonic
+        lift $ setActivePortfolio third.portfolioId
         lift $
-          dbShouldFailWith "The transaction does not involve portfolio0 of wallet1" $
-            transactionPool ctx (Just (onePortfolio other)) Nothing btc unsigned
+          dbShouldFailWith "The transaction pays several portfolios, portfolio0 of wallet0 on btc and portfolio0 of wallet1 on btc: switch to the one to use first" $
+            poolFound Nothing btc (jointPayout ctx)
 
     it "refuses a network other than that of the account it involves" $
       inDatabaseE $ do
@@ -1499,73 +1478,40 @@ poolOfTxSpec ctx =
         unsigned <- unsignedPayment ctx cfg accId
         lift $
           dbShouldFailWith "The transaction involves an account of another network" $
-            transactionPool ctx Nothing (Just bch) btc unsigned
+            poolFound (Just bch) btc unsigned
 
     -- A whole portfolio has accounts on Bitcoin and on Bitcoin Cash: on
     -- either network, and without one
     it "is none when it involves no portfolio" $
       inDatabaseE $ do
         _ <- testPortfolio ctx
-        found (transactionPool ctx Nothing (Just bch) btc (outsideTx ctx)) `dbShouldBeE` Nothing
-        found (transactionPool ctx Nothing Nothing btc (outsideTx ctx)) `dbShouldBeE` Nothing
+        found (poolFound (Just bch) btc (outsideTx ctx)) `dbShouldBeE` Nothing
+        found (poolFound Nothing btc (outsideTx ctx)) `dbShouldBeE` Nothing
 
     it "leaves the signing data of a transaction that involves no portfolio as it is" $
       inDatabaseE $ do
         _ <- testPortfolio ctx
-        (snd <$> transactionPool ctx Nothing Nothing btc (outsideTx ctx)) `dbShouldBeE` outsideTx ctx
-
-    it "refuses a portfolio when it involves no portfolio" $
-      inDatabaseE $ do
-        portfolio <- testPortfolio ctx
-        lift $
-          dbShouldFailWith "The transaction does not involve portfolio0 of wallet0" $
-            transactionPool ctx (Just (onePortfolio portfolio)) (Just btc) btc (outsideTx ctx)
+        (snd <$> poolFound Nothing btc (outsideTx ctx)) `dbShouldBeE` outsideTx ctx
 
     it "is none in a database without a wallet" $
       inDatabaseE $
-        found (transactionPool ctx Nothing (Just btcTest) btc (outsideTx ctx)) `dbShouldBeE` Nothing
+        found (poolFound (Just btcTest) btc (outsideTx ctx)) `dbShouldBeE` Nothing
 
     -- Every test network has the coin type 1: the key that derives the
     -- address the transaction spends is that of the portfolio on each
     it "is on the default network when the file names none and the test networks share its keys" $
       inDatabaseE $ do
         portfolio <- testPortfolio ctx
-        found (transactionPool ctx Nothing Nothing btcTest4 (testnetSpend ctx)) `dbShouldBeE` Just (portfolioPool portfolio btcTest4)
+        found (poolFound Nothing btcTest4 (testnetSpend ctx)) `dbShouldBeE` Just (portfolioPool portfolio btcTest4)
 
     it "is on the network of the file, or of --network, whatever the default network" $
       inDatabaseE $ do
         portfolio <- testPortfolio ctx
-        found (transactionPool ctx Nothing (Just btcRegTest) btcTest4 (testnetSpend ctx)) `dbShouldBeE` Just (portfolioPool portfolio btcRegTest)
+        found (poolFound (Just btcRegTest) btcTest4 (testnetSpend ctx)) `dbShouldBeE` Just (portfolioPool portfolio btcRegTest)
 
     it "is refused when the file names no network, the test networks share its keys, and the default network is none of them" $
       inDatabaseE $ do
         _ <- testPortfolio ctx
         lift $
           dbShouldFailWith "The transaction names no network, and the test networks share their keys: it could be on btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg. Set the network to read it on with setdefault --network" $
-            transactionPool ctx Nothing Nothing btc (testnetSpend ctx)
-
--- A transfer between two portfolios is kept and signed in the one that
--- pays it, whatever --portfolio names
-payerSpec :: Ctx -> Spec
-payerSpec ctx =
-  describe "The portfolio that keeps and signs a transaction" $ do
-    let cfg = def :: Config
-    it "is not the portfolio a transfer pays: that one is refused, and the one that pays is named" $
-      inDatabaseE $ do
-        (_, second, transfer) <- transferToPortfolio1 ctx cfg
-        lift $
-          dbShouldFailWith "The transaction spends from portfolio0 of wallet0, the portfolio that pays it: it is kept pending there, and signed there" $
-            refusePaidElsewhere ctx (portfolioPool second btc) transfer
-
-    it "is the portfolio that pays a transfer" $
-      inDatabaseE $ do
-        (payer, _, transfer) <- transferToPortfolio1 ctx cfg
-        refusePaidElsewhere ctx payer transfer `dbShouldBeE` ()
-
-    it "is the portfolio a transaction pays, when no portfolio of the wallet pays it" $
-      inDatabaseE $ do
-        (accId, _) <- testNewAcc ctx
-        _ <- testNewAcc2 ctx
-        fundAccount ctx cfg accId
-        pool <- poolOf accId
-        refusePaidElsewhere ctx pool (incoming ctx) `dbShouldBeE` ()
+            poolFound Nothing btc (testnetSpend ctx)

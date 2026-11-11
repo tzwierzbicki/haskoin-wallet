@@ -4,9 +4,11 @@
 
 -- | Wallets and portfolios as the user keeps them, from newportfolio to
 -- deletewallet: a new mnemonic and a backup in shares, the portfolios of a
--- mnemonic the user has, the four options that say where a command works
--- and their defaults, what portfolios shows, the descriptions and the
--- defaults the user sets, the portfolios and wallets deleted, the files of
+-- mnemonic the user has, the active portfolio, the first one created and
+-- then the one switch makes active, the two options that say where a
+-- command works in it and their defaults, what portfolios shows, the
+-- descriptions and the defaults the user sets, the portfolios and wallets
+-- deleted, the files of
 -- exportwallet and importwallet between a signer and an online computer,
 -- which create whole portfolios only, the databases of other versions of
 -- hw, which hw refuses and leaves as they are, the bip84 account of a
@@ -17,7 +19,8 @@
 --
 -- A home holds the portfolios of the test mnemonic, made with
 -- newportfolio --existing: portfolio0 of wallet0 first, then portfolio1.
--- The second test mnemonic makes wallet1. The fake store serves the same
+-- The second test mnemonic makes wallet1. portfolio0 of wallet0, the first
+-- portfolio created, is the active one until a switch. The fake store serves the same
 -- chain on every network, so a payment to an address of portfolio0 on btc
 -- is seen on btc alone: the other networks derive other keys.
 module Haskoin.Wallet.Workflow.PortfolioSpec (spec) where
@@ -33,7 +36,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin
 import Haskoin.Wallet.Cli.Response (NewSecret (..), Response (..))
-import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..))
+import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..))
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (AccountKind (..), MnemonicPass (..))
@@ -54,6 +57,8 @@ spec = prepareContext $ \ctx -> do
   newSharesSpec
   existingSpec
   sharesSeedSpec ctx
+  activeSpec ctx
+  switchSpec
   optionsSpec
   portfoliosSpec ctx
   checkMnemonicSpec
@@ -108,11 +113,6 @@ mainDescriptor = "pkh([bc560f95/44h/0h/0h]" <> testAccountXPub <> "/<0;1>/*)#vq5
 segwitDescriptor :: Text
 segwitDescriptor = "wpkh([bc560f95/84h/0h/0h]" <> testSegwitAccountXPub <> "/<0;1>/*)#5nktextl"
 
--- | The words of the test mnemonic with another passphrase: another seed,
--- so a third wallet beside those of the two test mnemonics
-thirdMnemonic :: MnemonicPass
-thirdMnemonic = MnemonicPass (mnemonicWords testMnemonic) "another passphrase"
-
 -- | The database file of a home
 databaseOf :: FilePath -> FilePath
 databaseOf home = home </> ".hw" </> "accounts.sqlite"
@@ -160,16 +160,16 @@ newMnemonicSpec =
     it "has 12 words of the entropy of /dev/random by default, and 24 words for 32 bytes" $
       withHome $ \home -> do
         whole <- answer home ["newportfolio"] [""]
-        whole `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic "/dev/random" ws)) _ -> length ws == 12; _ -> False
+        whole `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic "/dev/random" ws)) _ _ -> length ws == 12; _ -> False
         long <- answer home ["newportfolio", "--entropy", "32"] [""]
-        long `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ -> length ws == 24; _ -> False
+        long `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ _ -> length ws == 24; _ -> False
 
     -- BIP39 adds a word of 11 bits for every 4 bytes of entropy
     it "has 15, 18 and 21 words for 20, 24 and 28 bytes of --entropy" $
       withHome $ \home ->
         forM_ [("20", 15), ("24", 18), ("28", 21)] $ \(bytes, count) -> do
           made <- answer home ["newportfolio", "--entropy", bytes] [""]
-          made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ -> length ws == count; _ -> False
+          made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ _ -> length ws == count; _ -> False
 
     it "is refused an --entropy other than 16, 20, 24, 28 or 32 bytes" $
       withHome $ \home -> do
@@ -207,7 +207,7 @@ newMnemonicSpec =
       withHome $ \home -> do
         made <- answer home ["newportfolio"] ["secret", "secret"]
         mnemonic <- case made of
-          ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ -> return (Text.unwords ws)
+          ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ _ -> return (Text.unwords ws)
           other -> fail ("Not a new mnemonic: " <> show other)
         (checkedOf <$> hwJson home ["checkmnemonic"] [mnemonic, "secret"])
           `shouldReturn` Right (True, "The mnemonic and passphrase matched portfolio0 of wallet0")
@@ -218,7 +218,8 @@ newMnemonicSpec =
           `shouldReturn` Right "The passphrases do not match"
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right []
 
-    -- The words come first, then the portfolio, which hw keeps
+    -- The words come first, then the portfolio, which hw keeps, and the
+    -- active portfolio, which it is in a database that had none
     it "prints the mnemonic once, its words numbered, then the portfolio it created" $
       withHome $ \home -> do
         run <- hw home ["newportfolio"] [""]
@@ -227,7 +228,12 @@ newMnemonicSpec =
         -- Three lines of four words, numbered
         map (Text.take 5) (take 3 (drop 1 shown)) `shouldBe` ["   1.", "   5.", "   9."]
         drop 4 shown `shouldSatisfy` \case
-          ["", "Created portfolio0 of wallet0", fingerprint, "  Accounts   : 12, on btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg"] -> "  Fingerprint: " `Text.isPrefixOf` fingerprint
+          [ "",
+            "Created portfolio0 of wallet0",
+            fingerprint,
+            "  Accounts   : 12, on btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg",
+            "portfolio0 of wallet0 is the active portfolio: the commands work in it."
+            ] -> "  Fingerprint: " `Text.isPrefixOf` fingerprint
           _ -> False
 
     it "refuses --entropy, --dice, --shares and --threshold with --existing, before the mnemonic is asked" $
@@ -245,18 +251,18 @@ newSharesSpec =
     it "comes in the shares of --shares, of 20 words each, with the threshold of --threshold" $
       withHome $ \home -> do
         made <- answer home ["newportfolio", "--shares", "3", "--threshold", "2"] [""]
-        made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares "/dev/random" 2 shares)) _ -> map length shares == [20, 20, 20]; _ -> False
+        made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares "/dev/random" 2 shares)) _ _ -> map length shares == [20, 20, 20]; _ -> False
 
     it "has shares of 33 words for 32 bytes of --entropy" $
       withHome $ \home -> do
         made <- answer home ["newportfolio", "--shares", "2", "--threshold", "2", "--entropy", "32"] [""]
-        made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares _ 2 shares)) _ -> map length shares == [33, 33]; _ -> False
+        made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares _ 2 shares)) _ _ -> map length shares == [33, 33]; _ -> False
 
     it "is one share, the whole backup, with --shares 1, with or without --threshold 1" $
       withHome $ \home ->
         forM_ [["newportfolio", "--shares", "1"], ["newportfolio", "--shares", "1", "--threshold", "1"]] $ \args -> do
           made <- answer home args [""]
-          made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares _ 1 [share])) _ -> length share == 20; _ -> False
+          made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares _ 1 [share])) _ _ -> length share == 20; _ -> False
 
     -- A heading, then each share under its number, five lines of four
     -- words: 1 + 2 x 7 lines, then a blank line and the portfolio
@@ -272,7 +278,7 @@ newSharesSpec =
       withHome $ \home -> withHome $ \firstHome -> withHome $ \lastHome -> do
         made <- answer home ["newportfolio", "--shares", "3", "--threshold", "2"] [""]
         shares <- case made of
-          ResponseNewPortfolio (Just (NewShares _ _ shares@[_, _, _])) _ -> return (Text.unwords <$> shares)
+          ResponseNewPortfolio (Just (NewShares _ _ shares@[_, _, _])) _ _ -> return (Text.unwords <$> shares)
           other -> fail $ "Not a backup in three shares: " <> show other
         fromFirst <- accountXPubsOf <$> answer firstHome ["newportfolio", "--existing"] (take 2 shares <> [""])
         fromLast <- accountXPubsOf <$> answer lastHome ["newportfolio", "--existing"] (reverse (drop 1 shares) <> [""])
@@ -357,10 +363,15 @@ existingSpec =
         (fmap (map (\(_, net, kind, key) -> (net, kind, key))) . accountXPubsOf <$> answer home ["newportfolio", "--existing"] seedTwice)
           `shouldReturn` Right portfolio0Keys
 
+    -- The first portfolio of the database becomes the active one
     it "prints the portfolio it created, with the fingerprint of its wallet and its twelve accounts" $
       withHome $ \home -> do
         run <- hw home ["newportfolio", "--existing"] seedTwice
-        runOut run `shouldBe` "Created portfolio0 of wallet0\n  Fingerprint: bc560f95\n  Accounts   : 12, on btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg\n"
+        runOut run
+          `shouldBe` "Created portfolio0 of wallet0\n\
+                     \  Fingerprint: bc560f95\n\
+                     \  Accounts   : 12, on btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg\n\
+                     \portfolio0 of wallet0 is the active portfolio: the commands work in it.\n"
 
     -- m/44'/0'/1' and m/84'/0'/1' of the test seed
     it "is portfolio1 when the wallet has portfolio0, with the keys at the account index 1" $
@@ -387,7 +398,7 @@ existingSpec =
         newTestPortfolio home
         (portfolioRefsOf <$> answer home ["newportfolio", "--existing"] (seedTwiceOf testMnemonic2)) `shouldReturn` Right [PortfolioRef 1 0]
 
-    -- wallet0 is of the second test mnemonic, and the default wallet.
+    -- wallet0 is of the second test mnemonic, and holds the active portfolio.
     -- wallet1 is of the test mnemonic, with portfolio0.
     it "is the next portfolio of the wallet with the fingerprint of the seed, among the wallets of other seeds" $
       withHome $ \home -> do
@@ -486,10 +497,11 @@ sharesSeedSpec ctx =
         recoveredOf found `shouldBe` Right (Just 0, [0])
         (lookup (Place (PortfolioRef 0 0) btcTest) <$> syncedOf found) `shouldBe` Right (Just 50000)
 
-{- Where a command works -}
+{- The active portfolio -}
 
 -- | A home with portfolio0 and portfolio1 of wallet0, of the test
--- mnemonic, and portfolio0 of wallet1, of the second one
+-- mnemonic, and portfolio0 of wallet1, of the second one. portfolio0 of
+-- wallet0, the first created, is the active portfolio.
 threePortfolios :: FilePath -> IO ()
 threePortfolios home = do
   newTestPortfolio home
@@ -497,15 +509,278 @@ threePortfolios home = do
   newPortfolioOf home testMnemonic2
 
 -- The first receiving addresses: 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj of
+-- the bip44 account of portfolio0 on btc, 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo
+-- of portfolio1, and 1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2 of portfolio0 of
+-- wallet1
+activeSpec :: Ctx -> Spec
+activeSpec ctx =
+  describe "The active portfolio, the one the commands work in" $ do
+    it "is the portfolio newportfolio makes in a database without any" $
+      withHome $ \home -> do
+        _ <- answer home ["newportfolio"] [""]
+        activePortfolioIn home `shouldReturn` Right [PortfolioRef 0 0]
+
+    it "is the portfolio newportfolio --existing makes in a database without any" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        activePortfolioIn home `shouldReturn` Right [PortfolioRef 0 0]
+
+    it "stays the first portfolio created when newportfolio --existing makes the next one of its wallet" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        activePortfolioIn home `shouldReturn` Right [PortfolioRef 0 0]
+
+    -- A new mnemonic is a wallet of its own, wallet1
+    it "stays the first portfolio created when newportfolio makes a new wallet" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["newportfolio"] [""]
+        activePortfolioIn home `shouldReturn` Right [PortfolioRef 0 0]
+
+    it "is said by newportfolio to stay, with the switch to the portfolio it made" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home ["newportfolio", "--existing"] seedTwice
+        runOut run
+          `shouldBe` "Created portfolio1 of wallet0\n\
+                     \  Fingerprint: bc560f95\n\
+                     \  Accounts   : 12, on btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg\n\
+                     \The active portfolio is still portfolio0 of wallet0.\n\
+                     \\n\
+                     \To work in portfolio1 of wallet0, make it the active one:\n\
+                     \  hw switch --wallet 0 --portfolio 1\n"
+
+    -- A wallet is created with its portfolio0, the lowest index, though
+    -- the chain pays the first receiving address of portfolio1 alone
+    it "is portfolio0 of the wallet recover creates in a database without any, though portfolio1 alone was paid" $
+      withChain ctx (chainPaying ctx account1Addr) $ \home _ -> do
+        _ <- answer home ["recover"] seedOnce
+        activePortfolioIn home `shouldReturn` Right [PortfolioRef 0 0]
+
+    it "is said by recover to be the portfolio it recovered, in a database without any" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        run <- hw home ["recover"] seedOnce
+        take 2 (Text.lines (runOut run))
+          `shouldBe` ["Recovered portfolio0 of wallet0", "portfolio0 of wallet0 is the active portfolio: the commands work in it."]
+
+    -- The chain pays the first receiving address of the second test
+    -- mnemonic, whose wallet recover creates as wallet1
+    it "stays as it was when recover creates the portfolios of another wallet" $
+      withChain ctx (chainPaying ctx externalAddr2) $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["recover"] (seedOnceOf testMnemonic2)
+        activePortfolioIn home `shouldReturn` Right [PortfolioRef 0 0]
+
+    it "is said by recover to stay, with the switch to the portfolio it recovered" $
+      withChain ctx (chainPaying ctx externalAddr2) $ \home _ -> do
+        newTestPortfolio home
+        run <- hw home ["recover"] (seedOnceOf testMnemonic2)
+        run `shouldSatisfy` printed "Recovered portfolio0 of wallet1\nThe active portfolio is still portfolio0 of wallet0.\n"
+        run `shouldSatisfy` printed "\nTo work in portfolio0 of wallet1, make it the active one:\n  hw switch --wallet 1 --portfolio 0\n"
+
+    -- The file has portfolio0 and portfolio1: the first one created is
+    -- portfolio0
+    it "is portfolio0 of the wallet importwallet creates in a database without any" $
+      withHome $ \signer -> withHome $ \online -> do
+        file <- twoPortfoliosFile signer
+        _ <- answer online ["importwallet", file] []
+        activePortfolioIn online `shouldReturn` Right [PortfolioRef 0 0]
+
+    it "stays as it was when importwallet creates a portfolio of its wallet" $
+      withHome $ \signer -> withHome $ \online -> do
+        file <- twoPortfoliosFile signer
+        newTestPortfolio online
+        _ <- answer online ["importwallet", file] []
+        activePortfolioIn online `shouldReturn` Right [PortfolioRef 0 0]
+
+    it "is said by importwallet to stay, with the switch to the first portfolio it created" $
+      withHome $ \signer -> withHome $ \online -> do
+        file <- twoPortfoliosFile signer
+        newTestPortfolio online
+        run <- hw online ["importwallet", file] []
+        runOut run
+          `shouldBe` Text.unlines
+            [ "wallet0  bc560f95  already in the database",
+              "  portfolio0  nothing to add",
+              "  portfolio1  created, 12 accounts added",
+              "",
+              "The active portfolio is still portfolio0 of wallet0.",
+              "",
+              "Labels set: none",
+              "",
+              "To work in portfolio1 of wallet0, make it the active one:",
+              "  hw switch --wallet 0 --portfolio 1"
+            ]
+
+    it "is kept from one command to the next, until the next switch" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        _ <- answer home ["switch", "--portfolio", "1"] []
+        receiveWith home [] `shouldReturn` "17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo"
+        (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [("17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "")]
+        _ <- answer home ["switch", "--portfolio", "0"] []
+        receiveWith home [] `shouldReturn` Text.unpack (externalAddrsText !! 0)
+
+    -- A copy of the database is a database of its own
+    it "is kept in the database, which a copy made by backup has too" $
+      withHome $ \home -> withHome $ \restored -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        _ <- answer home ["switch", "--portfolio", "1"] []
+        _ <- answer home ["backup", home </> "copy.sqlite"] []
+        copyFile (home </> "copy.sqlite") (databaseOf restored)
+        activePortfolioIn restored `shouldReturn` Right [PortfolioRef 0 1]
+
+    it "is not written to the configuration file, which switch leaves as it was" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        earlier <- configFileOf home
+        _ <- answer home ["switch", "--portfolio", "1"] []
+        configFileOf home `shouldReturn` earlier
+
+    it "is the first portfolio created after the last wallet is deleted" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["deletewallet", "bc560f95", "--wallet", "0"] []
+        newPortfolioOf home testMnemonic2
+        activePortfolioIn home `shouldReturn` Right [PortfolioRef 0 0]
+
+    -- A configuration file of an earlier build of hw 0.10 may still have
+    -- them. wallet1 is of the second test mnemonic.
+    it "is not the one the keys default-wallet and default-portfolio of an earlier build name" $
+      withHome $ \home -> do
+        threePortfolios home
+        setConfigKey home "default-wallet" (Json.Number 1)
+        setConfigKey home "default-portfolio" (Json.Number 0)
+        receiveWith home [] `shouldReturn` Text.unpack (externalAddrsText !! 0)
+
+    it "comes with a warning about the keys default-wallet and default-portfolio of an earlier build, which hw leaves aside" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        setConfigKey home "default-wallet" (Json.Number 0)
+        setConfigKey home "default-portfolio" (Json.Number 0)
+        run <- hw home ["receive"] []
+        runExit run `shouldBe` ExitSuccess
+        runErr run
+          `shouldSatisfy` Text.isInfixOf ("The configuration file " <> Text.pack (home </> ".hw" </> "config.json") <> " has keys hw does not know, left aside: default-portfolio, default-wallet\n")
+
+{- Switching -}
+
+-- The store of the test home refuses every connection: switch needs none,
+-- as on an offline computer
+switchSpec :: Spec
+switchSpec =
+  describe "A portfolio made active by switch" $ do
+    it "is the portfolio --portfolio names, in the wallet of the active portfolio without --wallet" $
+      withHome $ \home -> do
+        threePortfolios home
+        _ <- answer home ["switch", "--portfolio", "1"] []
+        activePortfolioIn home `shouldReturn` Right [PortfolioRef 0 1]
+
+    it "is the portfolio of the wallet --wallet names" $
+      withHome $ \home -> do
+        threePortfolios home
+        _ <- answer home ["switch", "--wallet", "1", "--portfolio", "0"] []
+        activePortfolioIn home `shouldReturn` Right [PortfolioRef 1 0]
+
+    -- wallet1 has portfolio0 and portfolio1 of the second test mnemonic
+    it "is in the wallet of the portfolio active now without --wallet, after a switch to another wallet" $
+      withHome $ \home -> do
+        threePortfolios home
+        newPortfolioOf home testMnemonic2
+        _ <- answer home ["switch", "--wallet", "1", "--portfolio", "0"] []
+        _ <- answer home ["switch", "--portfolio", "1"] []
+        activePortfolioIn home `shouldReturn` Right [PortfolioRef 1 1]
+
+    it "takes the names the listings give, wallet1 and portfolio0, for --wallet and --portfolio" $
+      withHome $ \home -> do
+        threePortfolios home
+        _ <- answer home ["switch", "--wallet", "wallet1", "--portfolio", "portfolio0"] []
+        activePortfolioIn home `shouldReturn` Right [PortfolioRef 1 0]
+
+    it "is where the commands work next: receive gives out an address of the portfolio of the other wallet" $
+      withHome $ \home -> do
+        threePortfolios home
+        _ <- answer home ["switch", "--wallet", "1", "--portfolio", "0"] []
+        receiveWith home [] `shouldReturn` Text.unpack externalAddr2Text
+
+    -- The portfolio as portfolios shows it, with the mark of the active one
+    it "is shown in the answer, marked, after a line that says it is the active portfolio now" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        run <- hw home ["switch", "--portfolio", "1"] []
+        Text.lines (runOut run) `shouldSatisfy` \case
+          ["The active portfolio is now portfolio1 of wallet0.", "* portfolio1  wallet0", created, "    no addresses yet"] -> "    created " `Text.isPrefixOf` created
+          _ -> False
+
+    it "is answered in JSON with the portfolio, marked as the active one" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        (activePortfoliosOf <$> hwJson home ["switch", "--portfolio", "1"] []) `shouldReturn` Right [PortfolioRef 0 1]
+
+    it "is refused a --wallet the database does not have, naming where the wallets are listed, and the active portfolio stays" $
+      withHome $ \home -> do
+        threePortfolios home
+        (errorOf <$> hwJson home ["switch", "--wallet", "3", "--portfolio", "0"] [])
+          `shouldReturn` Right "There is no wallet3: portfolios lists the wallets"
+        activePortfolioIn home `shouldReturn` Right [PortfolioRef 0 0]
+
+    it "is refused a --portfolio the wallet --wallet names does not have" $
+      withHome $ \home -> do
+        threePortfolios home
+        (errorOf <$> hwJson home ["switch", "--wallet", "1", "--portfolio", "1"] [])
+          `shouldReturn` Right "wallet1 has no portfolio1: portfolios lists the portfolios"
+
+    it "is refused a --portfolio the wallet of the active portfolio does not have, without --wallet" $
+      withHome $ \home -> do
+        threePortfolios home
+        (errorOf <$> hwJson home ["switch", "--portfolio", "7"] [])
+          `shouldReturn` Right "wallet0 has no portfolio7: portfolios lists the portfolios"
+
+    it "is refused in a database without a portfolio, which is told how to make one" $
+      withHome $ \home ->
+        (errorOf <$> hwJson home ["switch", "--portfolio", "0"] [])
+          `shouldReturn` Right "There is no wallet yet: newportfolio makes one, and recover or importwallet bring one back"
+
+    it "is refused without --portfolio, which switch never takes from the active portfolio" $
+      withHome $ \home -> do
+        threePortfolios home
+        run <- hw home ["switch", "--wallet", "1"] []
+        runExit run `shouldBe` ExitFailure 1
+        runErr run `shouldSatisfy` Text.isInfixOf "Missing: (-p|--portfolio INT)"
+        activePortfolioIn home `shouldReturn` Right [PortfolioRef 0 0]
+
+    -- An account index of BIP32 is below 2^31 = 2147483648: an index of
+    -- 2^64 would wrap around to portfolio0
+    it "is refused a --portfolio or a --wallet of 2^31 or more" $
+      withHome $ \home ->
+        forM_ [("--portfolio", "portfolio", ["--wallet", "0"]), ("--wallet", "wallet", ["--portfolio", "0"])] $ \(option, what, other) ->
+          forM_ ["2147483648", "18446744073709551616"] $ \index -> do
+            run <- hw home (["switch", option, index] <> other) []
+            runExit run `shouldBe` ExitFailure 1
+            runErr run `shouldSatisfy` Text.isInfixOf ("option " <> Text.pack option <> ": The " <> Text.pack option <> " value " <> Text.pack index <> " is too large: the index of a " <> what <> " is below 2147483648, which is 2^31")
+
+    it "takes the index 2^31 - 1 for --portfolio, the highest a portfolio can have" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["switch", "--portfolio", "2147483647"] [])
+          `shouldReturn` Right "wallet0 has no portfolio2147483647: portfolios lists the portfolios"
+
+{- Where a command works in the active portfolio -}
+
+-- The first receiving addresses: 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj of
 -- the bip44 account of portfolio0 on btc, the bip84 one
 -- bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc, the one on bch
--- bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u, the one of
--- portfolio1 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo, and the one of
--- portfolio0 of wallet1 1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2. The
+-- bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u. The
 -- configuration file of the test home names btc.
 optionsSpec :: Spec
 optionsSpec =
-  describe "Where a command works, which four options and their defaults say" $ do
+  describe "Where a command works in the active portfolio, which two options and their defaults say" $ do
     it "is the bip44 account of portfolio0 of wallet0 on btc without an option or a key" $
       withHome $ \home -> do
         threePortfolios home
@@ -521,21 +796,11 @@ optionsSpec =
         threePortfolios home
         receiveWith home ["--type", "bip84"] `shouldReturn` Text.unpack (segwitExternalAddrsText !! 0)
 
-    it "is the portfolio --portfolio names, in the default wallet" $
+    it "is the account of the type --type names in the portfolio switch made active" $
       withHome $ \home -> do
         threePortfolios home
-        receiveWith home ["--portfolio", "1"] `shouldReturn` "17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo"
-
-    it "is in the wallet --wallet names, in its default portfolio" $
-      withHome $ \home -> do
-        threePortfolios home
-        receiveWith home ["--wallet", "1"] `shouldReturn` Text.unpack externalAddr2Text
-
-    it "takes the names the listings give, portfolio1 and wallet1, for --portfolio and --wallet" $
-      withHome $ \home -> do
-        threePortfolios home
-        receiveWith home ["--portfolio", "portfolio1"] `shouldReturn` "17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo"
-        receiveWith home ["--wallet", "wallet1"] `shouldReturn` Text.unpack externalAddr2Text
+        _ <- answer home ["switch", "--portfolio", "1"] []
+        (accountRefOf <$> answer home ["receive", "--type", "bip84"] []) `shouldReturn` Right (AccountRef portfolio1Place Bip84)
 
     it "is on the network the key default-network names" $
       withHome $ \home -> do
@@ -549,29 +814,11 @@ optionsSpec =
         setConfigKey home "default-type" (Json.String "bip84")
         receiveWith home [] `shouldReturn` Text.unpack (segwitExternalAddrsText !! 0)
 
-    it "is the portfolio the key default-portfolio names" $
-      withHome $ \home -> do
-        threePortfolios home
-        setConfigKey home "default-portfolio" (Json.Number 1)
-        receiveWith home [] `shouldReturn` "17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo"
-
-    it "is in the wallet the key default-wallet names" $
-      withHome $ \home -> do
-        threePortfolios home
-        setConfigKey home "default-wallet" (Json.Number 1)
-        receiveWith home [] `shouldReturn` Text.unpack externalAddr2Text
-
     it "is on the --network given rather than the one of the key default-network" $
       withHome $ \home -> do
         threePortfolios home
         setConfigKey home "default-network" (Json.String "bch")
         receiveWith home ["--network", "btc"] `shouldReturn` Text.unpack (externalAddrsText !! 0)
-
-    it "is the --portfolio given rather than the one of the key default-portfolio" $
-      withHome $ \home -> do
-        threePortfolios home
-        setConfigKey home "default-portfolio" (Json.Number 1)
-        receiveWith home ["--portfolio", "0"] `shouldReturn` Text.unpack (externalAddrsText !! 0)
 
     -- Bitcoin Cash has no SegWit
     it "is the bip44 account on bch though the key default-type says bip84" $
@@ -608,61 +855,6 @@ optionsSpec =
         runExit run `shouldBe` ExitFailure 1
         runErr run `shouldSatisfy` Text.isInfixOf "option --type: The type of an account is bip44 or bip84"
 
-    it "is refused with a --portfolio the wallet does not have, naming the wallet" $
-      withHome $ \home -> do
-        threePortfolios home
-        (errorOf <$> hwJson home ["receive", "--portfolio", "7"] [])
-          `shouldReturn` Right "wallet0 has no portfolio7: portfolios lists the portfolios"
-        (errorOf <$> hwJson home ["receive", "--wallet", "1", "--portfolio", "1"] [])
-          `shouldReturn` Right "wallet1 has no portfolio1: portfolios lists the portfolios"
-
-    it "is refused with a --wallet that does not exist" $
-      withHome $ \home -> do
-        threePortfolios home
-        (errorOf <$> hwJson home ["receive", "--wallet", "3"] [])
-          `shouldReturn` Right "There is no wallet3: portfolios lists the wallets"
-
-    it "is refused with a key default-wallet that names no wallet, naming the key" $
-      withHome $ \home -> do
-        threePortfolios home
-        setConfigKey home "default-wallet" (Json.Number 3)
-        (errorOf <$> hwJson home ["receive"] [])
-          `shouldReturn` Right "The key default-wallet of the configuration file names wallet3, which does not exist: give --wallet, or change the key with setdefault"
-
-    it "is refused with a key default-portfolio the default wallet does not have, naming the key" $
-      withHome $ \home -> do
-        threePortfolios home
-        setConfigKey home "default-portfolio" (Json.Number 3)
-        (errorOf <$> hwJson home ["receive"] [])
-          `shouldReturn` Right "The key default-portfolio of the configuration file names portfolio3, which wallet0 does not have: give --portfolio, or change the key with setdefault"
-
-    -- An account index of BIP32 is below 2^31 = 2147483648: an index of
-    -- 2^64 would wrap around to portfolio0
-    it "is refused with a --portfolio or a --wallet of 2^31 or more" $
-      withHome $ \home ->
-        forM_ [("--portfolio", "portfolio"), ("--wallet", "wallet")] $ \(option, what) ->
-          forM_ ["2147483648", "18446744073709551616"] $ \index -> do
-            run <- hw home ["receive", option, index] []
-            runExit run `shouldBe` ExitFailure 1
-            runErr run `shouldSatisfy` Text.isInfixOf ("option " <> Text.pack option <> ": The " <> Text.pack option <> " value " <> Text.pack index <> " is too large: the index of a " <> what <> " is below 2147483648, which is 2^31")
-
-    it "takes the index 2^31 - 1 for --portfolio, the highest a portfolio can have" $
-      withHome $ \home -> do
-        newTestPortfolio home
-        (errorOf <$> hwJson home ["receive", "--portfolio", "2147483647"] [])
-          `shouldReturn` Right "wallet0 has no portfolio2147483647: portfolios lists the portfolios"
-
-    it "is refused with a key default-portfolio or default-wallet of 2^31 or more, naming the key" $
-      withHome $ \home -> do
-        newTestPortfolio home
-        forM_ ["default-portfolio", "default-wallet"] $ \key -> do
-          setConfigKey home "default-portfolio" (Json.Number 0)
-          setConfigKey home "default-wallet" (Json.Number 0)
-          setConfigKey home key (Json.Number 2147483648)
-          run <- hw home ["receive"] []
-          runExit run `shouldBe` ExitFailure 1
-          run `shouldSatisfy` printed ("The key \"" <> key <> "\" must be an index below 2147483648, which is 2^31")
-
 {- The portfolios -}
 
 -- | A chain whose block 800000 pays 50000 to the first receiving address
@@ -685,15 +877,50 @@ portfoliosSpec ctx =
         (portfolioRefsOf <$> hwJson home ["portfolios"] [])
           `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 0 1, PortfolioRef 1 0]
 
-    it "are listed for the wallet --wallet names alone" $
+    it "are listed every one, whichever is active" $
       withHome $ \home -> do
         threePortfolios home
-        (portfolioRefsOf <$> hwJson home ["portfolios", "--wallet", "1"] []) `shouldReturn` Right [PortfolioRef 1 0]
+        _ <- answer home ["switch", "--wallet", "1", "--portfolio", "0"] []
+        (portfolioRefsOf <$> hwJson home ["portfolios"] [])
+          `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 0 1, PortfolioRef 1 0]
 
-    it "are listed for the portfolio --portfolio names alone, in the default wallet" $
+    -- As git branch marks the current branch: the lines under the first
+    -- of each portfolio are indented by 4, past the mark
+    it "mark the active portfolio with a * at the start of its first line, and the others with a space" $
       withHome $ \home -> do
         threePortfolios home
-        (portfolioRefsOf <$> hwJson home ["portfolios", "--portfolio", "1"] []) `shouldReturn` Right [PortfolioRef 0 1]
+        _ <- answer home ["switch", "--portfolio", "1"] []
+        run <- hw home ["portfolios"] []
+        filter (Text.isInfixOf "  wallet") (Text.lines (runOut run))
+          `shouldBe` ["  portfolio0  wallet0", "* portfolio1  wallet0", "  portfolio0  wallet1"]
+
+    it "mark the active portfolio the same way with --verbose" $
+      withHome $ \home -> do
+        threePortfolios home
+        _ <- answer home ["switch", "--wallet", "1", "--portfolio", "0"] []
+        run <- hw home ["portfolios", "--verbose"] []
+        filter (Text.isInfixOf "  wallet") (Text.lines (runOut run))
+          `shouldBe` ["  portfolio0  wallet0", "  portfolio1  wallet0", "* portfolio0  wallet1"]
+
+    it "say in JSON which portfolio is the active one" $
+      withHome $ \home -> do
+        threePortfolios home
+        _ <- answer home ["switch", "--portfolio", "1"] []
+        (activePortfoliosOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 1]
+
+    -- A table of portfolios nothing paid: a row each, no network
+    it "mark the active portfolio with --tabular in a first column, which has no heading" $
+      withHome $ \home -> do
+        threePortfolios home
+        _ <- answer home ["switch", "--portfolio", "1"] []
+        run <- hw home ["portfolios", "--tabular"] []
+        map (Text.take 26) (Text.lines (runOut run))
+          `shouldBe` [ "  │ Wallet  │ Portfolio  │",
+                       "──┼─────────┼────────────┼",
+                       "  │ wallet0 │ portfolio0 │",
+                       "* │ wallet0 │ portfolio1 │",
+                       "  │ wallet1 │ portfolio0 │"
+                     ]
 
     it "say there is none to display in a database without wallets" $
       withHome $ \home -> do
@@ -711,7 +938,7 @@ portfoliosSpec ctx =
       withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
         syncedBothTypes home
         run <- hw home ["portfolios"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  btc  spendable 0.00080000 btc, 2 coins, 2 addresses\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n    btc  spendable 0.00080000 btc, 2 coins, 2 addresses\n"
 
     it "keep the figures of each network apart" $
       withChain ctx (bothNetworksChain ctx) $ \home _ -> do
@@ -724,27 +951,28 @@ portfoliosSpec ctx =
         spendableOn bch listed `shouldBe` Right [(PortfolioRef 0 0, 20000)]
 
     -- Nothing has paid the portfolio, and it has handed out no address:
-    -- the networks it has accounts on are not worth a line each
+    -- the networks it has accounts on are not worth a line each. It is the
+    -- active portfolio, marked.
     it "say of a portfolio that gave out no address that it has none yet" $
       withHome $ \home -> do
         newTestPortfolio home
         run <- hw home ["portfolios"] []
         Text.lines (runOut run) `shouldSatisfy` \case
-          ["portfolio0  wallet0", created, "  no addresses yet"] -> "  created " `Text.isPrefixOf` created
+          ["* portfolio0  wallet0", created, "    no addresses yet"] -> "    created " `Text.isPrefixOf` created
           _ -> False
 
     it "are listed with --verbose with the fingerprint of the seed of their wallet" $
       withHome $ \home -> do
         newTestPortfolio home
         run <- hw home ["portfolios", "--verbose"] []
-        runOut run `shouldSatisfy` Text.isInfixOf ("\n  Fingerprint: " <> testFingerprintText <> "\n")
+        runOut run `shouldSatisfy` Text.isInfixOf ("\n    Fingerprint: " <> testFingerprintText <> "\n")
 
     -- The time is in the time zone of the computer, Central Europe here
     it "are listed with --verbose with the time they were created, to the second" $
       withHome $ \home -> do
         newTestPortfolio home
         run <- hwWithEnv [("TZ", centralEurope)] home ["portfolios", "--verbose"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  Created    : "
+        runOut run `shouldSatisfy` Text.isInfixOf "\n    Created    : "
         runOut run `shouldSatisfy` (\out -> " CET\n" `Text.isInfixOf` out || " CEST\n" `Text.isInfixOf` out)
 
     -- A wallet that takes only the SLIP-132 form for a native SegWit
@@ -753,20 +981,20 @@ portfoliosSpec ctx =
       withHome $ \home -> do
         newTestPortfolio home
         run <- hw home ["portfolios", "--verbose"] []
-        runOut run `shouldSatisfy` Text.isInfixOf ("\n    bip84  /84'/0'/0'\n      Descriptor: " <> segwitDescriptor <> "\n      SLIP-132  : " <> testSegwitAccountZPub <> "\n")
+        runOut run `shouldSatisfy` Text.isInfixOf ("\n      bip84  /84'/0'/0'\n        Descriptor: " <> segwitDescriptor <> "\n        SLIP-132  : " <> testSegwitAccountZPub <> "\n")
 
     -- SLIP-132 gives bip44 accounts the prefix of BIP32
     it "are listed with --verbose with the descriptor of the bip44 account on btc, and its xpub as its SLIP-132 key" $
       withHome $ \home -> do
         newTestPortfolio home
         run <- hw home ["portfolios", "--verbose"] []
-        runOut run `shouldSatisfy` Text.isInfixOf ("\n    bip44  /44'/0'/0'\n      Descriptor: " <> mainDescriptor <> "\n      SLIP-132  : " <> testAccountXPub <> "\n")
+        runOut run `shouldSatisfy` Text.isInfixOf ("\n      bip44  /44'/0'/0'\n        Descriptor: " <> mainDescriptor <> "\n        SLIP-132  : " <> testAccountXPub <> "\n")
 
     it "are listed with --verbose with every network of the portfolio, whatever it holds there" $
       withHome $ \home -> do
         newTestPortfolio home
         run <- hw home ["portfolios", "--verbose"] []
-        filter (`elem` map (("  " <>) . Text.pack) networkNames) (Text.lines (runOut run)) `shouldBe` map (("  " <>) . Text.pack) networkNames
+        filter (`elem` map (("    " <>) . Text.pack) networkNames) (Text.lines (runOut run)) `shouldBe` map (("    " <>) . Text.pack) networkNames
 
     it "give in JSON the descriptor of each account" $
       withHome $ \home -> do
@@ -790,15 +1018,16 @@ portfoliosSpec ctx =
         (fmap (filter (\(ref, net, kind, _) -> (ref, net, kind) == (PortfolioRef 0 1, "btc", Bip44))) . descriptorsOf <$> hwJson home ["portfolios"] [])
           `shouldReturn` Right [(PortfolioRef 0 1, "btc", Bip44, "pkh([bc560f95/44h/0h/1h]" <> testAccountXPub1 <> "/<0;1>/*)#nycrn993")]
 
-    -- 80000 spendable on btc, in 2 coins at 2 addresses
+    -- 80000 spendable on btc, in 2 coins at 2 addresses. The first column
+    -- marks the active portfolio.
     it "are listed with --tabular one row for each network a portfolio holds something on, under a header" $
       withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
         syncedBothTypes home
         run <- hw home ["portfolios", "--tabular"] []
         Text.lines (runOut run)
-          `shouldBe` [ "Wallet  │ Portfolio  │ Network │ Spendable (btc) │ Unconfirmed (btc) │ Coins │ Addresses │ Description",
-                       "────────┼────────────┼─────────┼─────────────────┼───────────────────┼───────┼───────────┼────────────",
-                       "wallet0 │ portfolio0 │ btc     │      0.00080000 │        0.00000000 │     2 │         2 │"
+          `shouldBe` [ "  │ Wallet  │ Portfolio  │ Network │ Spendable (btc) │ Unconfirmed (btc) │ Coins │ Addresses │ Description",
+                       "──┼─────────┼────────────┼─────────┼─────────────────┼───────────────────┼───────┼───────────┼────────────",
+                       "* │ wallet0 │ portfolio0 │ btc     │      0.00080000 │        0.00000000 │     2 │         2 │"
                      ]
 
 {- A mnemonic checked -}
@@ -819,18 +1048,20 @@ checkMnemonicSpec =
           `shouldReturn` Right (False, "The mnemonic and passphrase did not match portfolio0 of wallet0")
 
     -- wallet1 is of the second test mnemonic
-    it "is checked against the portfolio of the wallet --wallet names, whose seed is the one to type" $
+    it "is checked against the active portfolio, of a wallet switch made active, whose seed is the one to type" $
       withHome $ \home -> do
         threePortfolios home
-        (checkedOf <$> hwJson home ["checkmnemonic", "--wallet", "1"] (seedOnceOf testMnemonic2))
+        _ <- answer home ["switch", "--wallet", "1", "--portfolio", "0"] []
+        (checkedOf <$> hwJson home ["checkmnemonic"] (seedOnceOf testMnemonic2))
           `shouldReturn` Right (True, "The mnemonic and passphrase matched portfolio0 of wallet1")
-        (checkedOf <$> hwJson home ["checkmnemonic", "--wallet", "1"] seedOnce)
+        (checkedOf <$> hwJson home ["checkmnemonic"] seedOnce)
           `shouldReturn` Right (False, "The mnemonic and passphrase did not match portfolio0 of wallet1")
 
-    it "is checked against the portfolio --portfolio names" $
+    it "is checked against the portfolio switch made active" $
       withHome $ \home -> do
         threePortfolios home
-        (checkedOf <$> hwJson home ["checkmnemonic", "--portfolio", "1"] seedOnce)
+        _ <- answer home ["switch", "--portfolio", "1"] []
+        (checkedOf <$> hwJson home ["checkmnemonic"] seedOnce)
           `shouldReturn` Right (True, "The mnemonic and passphrase matched portfolio1 of wallet0")
 
 {- Descriptions -}
@@ -838,34 +1069,44 @@ checkMnemonicSpec =
 descriptionSpec :: Spec
 descriptionSpec =
   describe "The description set by setdescription" $ do
-    it "is that of the default portfolio, which portfolios shows after its name and its wallet" $
+    it "is that of the active portfolio, which portfolios shows after its name and its wallet" $
       withHome $ \home -> do
         threePortfolios home
         _ <- answer home ["setdescription", "Savings"] []
         run <- hw home ["portfolios"] []
-        run `shouldSatisfy` printed "portfolio0  wallet0  \"Savings\"\n"
-        run `shouldSatisfy` printed "portfolio1  wallet0\n"
+        run `shouldSatisfy` printed "* portfolio0  wallet0  \"Savings\"\n"
+        run `shouldSatisfy` printed "  portfolio1  wallet0\n"
 
-    it "is that of the portfolio --wallet and --portfolio name" $
+    it "is that of the portfolio switch made active" $
       withHome $ \home -> do
         threePortfolios home
-        _ <- answer home ["setdescription", "Savings", "--wallet", "0", "--portfolio", "1"] []
+        _ <- answer home ["switch", "--portfolio", "1"] []
+        _ <- answer home ["setdescription", "Savings"] []
         run <- hw home ["portfolios"] []
-        run `shouldSatisfy` printed "portfolio1  wallet0  \"Savings\"\n"
-        run `shouldSatisfy` printed "portfolio0  wallet0\n"
+        run `shouldSatisfy` printed "* portfolio1  wallet0  \"Savings\"\n"
+        run `shouldSatisfy` printed "  portfolio0  wallet0\n"
 
+    -- wallet0 has two portfolios, wallet1 one
     it "is that of the wallet with --of-wallet, which portfolios shows under each of its portfolios" $
       withHome $ \home -> do
         threePortfolios home
         _ <- answer home ["setdescription", "Family", "--of-wallet"] []
-        run <- hw home ["portfolios", "--wallet", "0"] []
-        length (filter (== "  wallet0 is \"Family\"") (Text.lines (runOut run))) `shouldBe` 2
+        run <- hw home ["portfolios"] []
+        filter (Text.isInfixOf "is \"Family\"") (Text.lines (runOut run)) `shouldBe` ["    wallet0 is \"Family\"", "    wallet0 is \"Family\""]
+
+    it "is that of the wallet of the active portfolio with --of-wallet, after a switch to another wallet" $
+      withHome $ \home -> do
+        threePortfolios home
+        _ <- answer home ["switch", "--wallet", "1", "--portfolio", "0"] []
+        _ <- answer home ["setdescription", "Family", "--of-wallet"] []
+        run <- hw home ["portfolios"] []
+        filter (Text.isInfixOf "is \"Family\"") (Text.lines (runOut run)) `shouldBe` ["    wallet1 is \"Family\""]
 
     it "is shown at once in the answer, with the portfolio" $
       withHome $ \home -> do
         newTestPortfolio home
         run <- hw home ["setdescription", "Savings"] []
-        take 1 (Text.lines (runOut run)) `shouldBe` ["portfolio0  wallet0  \"Savings\""]
+        take 1 (Text.lines (runOut run)) `shouldBe` ["* portfolio0  wallet0  \"Savings\""]
 
     it "is removed by an empty description" $
       withHome $ \home -> do
@@ -873,7 +1114,7 @@ descriptionSpec =
         _ <- answer home ["setdescription", "Savings"] []
         _ <- answer home ["setdescription", ""] []
         run <- hw home ["portfolios"] []
-        take 1 (Text.lines (runOut run)) `shouldBe` ["portfolio0  wallet0"]
+        take 1 (Text.lines (runOut run)) `shouldBe` ["* portfolio0  wallet0"]
 
     it "is refused with a line break, and the one before is kept" $
       withHome $ \home -> do
@@ -882,7 +1123,7 @@ descriptionSpec =
         (errorOf <$> hwJson home ["setdescription", "two\nlines"] [])
           `shouldReturn` Right "The description must not contain a line break or a control character"
         run <- hw home ["portfolios"] []
-        take 1 (Text.lines (runOut run)) `shouldBe` ["portfolio0  wallet0  \"Savings\""]
+        take 1 (Text.lines (runOut run)) `shouldBe` ["* portfolio0  wallet0  \"Savings\""]
 
     it "is refused with a space at either end" $
       withHome $ \home -> do
@@ -891,29 +1132,21 @@ descriptionSpec =
           (errorOf <$> hwJson home ["setdescription", description] [])
             `shouldReturn` Right "The description must not start or end with a space"
 
-    it "is refused --portfolio with --of-wallet, which describes the wallet" $
-      withHome $ \home -> do
-        threePortfolios home
-        (errorOf <$> hwJson home ["setdescription", "Family", "--of-wallet", "--portfolio", "1"] [])
-          `shouldReturn` Right "--of-wallet describes the wallet: it takes no --portfolio"
-
 {- Defaults -}
 
 setDefaultSpec :: Spec
 setDefaultSpec =
   describe "The defaults setdefault writes" $ do
-    it "are the four keys of the configuration file, each with its value" $
+    it "are the two keys of the configuration file, each with its value" $
       withHome $ \home -> do
         threePortfolios home
-        _ <- answer home ["setdefault", "--wallet", "1", "--portfolio", "0", "--network", "bch", "--type", "bip84"] []
+        _ <- answer home ["setdefault", "--network", "bch", "--type", "bip84"] []
         config <- configFileOf home
         config
           `shouldBe` Just
             ( Json.object
                 [ "default-network" Json..= ("bch" :: Text),
-                  "default-portfolio" Json..= (0 :: Int),
                   "default-type" Json..= ("bip84" :: Text),
-                  "default-wallet" Json..= (1 :: Int),
                   "host" Json..= ("http://127.0.0.1:1/" :: Text)
                 ]
             )
@@ -937,48 +1170,30 @@ setDefaultSpec =
     it "are said in the answer, key by key, with the file they were written to" $
       withHome $ \home -> do
         threePortfolios home
-        run <- hw home ["setdefault", "--portfolio", "1", "--network", "bch"] []
-        runOut run `shouldBe` "default-portfolio: 1\ndefault-network  : bch\nWritten to " <> Text.pack (home </> ".hw" </> "config.json") <> "\n"
+        run <- hw home ["setdefault", "--network", "bch", "--type", "bip84"] []
+        runOut run `shouldBe` "default-network: bch\ndefault-type   : bip84\nWritten to " <> Text.pack (home </> ".hw" </> "config.json") <> "\n"
 
-    it "make the commands work where they say: receive gives an address of the default portfolio set" $
+    it "make the commands work where they say: receive gives an address of the default type set" $
       withHome $ \home -> do
         threePortfolios home
-        _ <- answer home ["setdefault", "--portfolio", "1"] []
-        receiveWith home [] `shouldReturn` "17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo"
-
-    it "are refused a wallet that does not exist, and the file is left as it was" $
-      withHome $ \home -> do
-        newTestPortfolio home
-        earlier <- configFileOf home
-        (errorOf <$> hwJson home ["setdefault", "--wallet", "3"] []) `shouldReturn` Right "There is no wallet3: portfolios lists the wallets"
-        configFileOf home `shouldReturn` earlier
-
-    it "are refused a portfolio the default wallet does not have" $
-      withHome $ \home -> do
-        newTestPortfolio home
-        (errorOf <$> hwJson home ["setdefault", "--portfolio", "5"] []) `shouldReturn` Right "wallet0 has no portfolio5"
-
-    -- The commands would refuse the pair of keys otherwise
-    it "are refused a default wallet without the default portfolio, and ask for its --portfolio too" $
-      withHome $ \home -> do
-        threePortfolios home
-        _ <- answer home ["setdefault", "--portfolio", "1"] []
-        (errorOf <$> hwJson home ["setdefault", "--wallet", "1"] [])
-          `shouldReturn` Right "wallet1 has no portfolio1, the default portfolio: give its --portfolio too"
-        _ <- answer home ["setdefault", "--wallet", "1", "--portfolio", "0"] []
-        receiveWith home [] `shouldReturn` Text.unpack externalAddr2Text
+        _ <- answer home ["setdefault", "--type", "bip84"] []
+        receiveWith home [] `shouldReturn` Text.unpack (segwitExternalAddrsText !! 0)
 
     it "are refused when no option names one" $
       withHome $ \home -> do
         newTestPortfolio home
-        (errorOf <$> hwJson home ["setdefault"] []) `shouldReturn` Right "Give the default to set: --wallet, --portfolio, --network or --type"
+        (errorOf <$> hwJson home ["setdefault"] []) `shouldReturn` Right "Give the default to set: --network or --type"
 
-    it "are refused a --portfolio of 2^31 or more, which no account can have" $
+    -- The active portfolio is in the database, and switch changes it
+    it "are refused --wallet and --portfolio, which switch replaces, and the file is left as it was" $
       withHome $ \home -> do
-        newTestPortfolio home
-        run <- hw home ["setdefault", "--portfolio", "2147483648"] []
-        runExit run `shouldBe` ExitFailure 1
-        runErr run `shouldSatisfy` Text.isInfixOf "The --portfolio value 2147483648 is too large: the index of a portfolio is below 2147483648, which is 2^31"
+        threePortfolios home
+        earlier <- configFileOf home
+        forM_ ["--wallet", "--portfolio"] $ \option -> do
+          run <- hw home ["setdefault", option, "1"] []
+          runExit run `shouldBe` ExitFailure 1
+          runErr run `shouldSatisfy` Text.isInfixOf ("Invalid option `" <> Text.pack option <> "'")
+        configFileOf home `shouldReturn` earlier
 
 {- Deleting a portfolio -}
 
@@ -989,7 +1204,7 @@ deletePortfolioSpec ctx =
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        (deletedOf <$> hwJson home ["deleteportfolio", "--portfolio", "1"] []) `shouldReturn` Right ("portfolio1 of wallet0 has been deleted", [])
+        (deletedOf <$> hwJson home ["deleteportfolio", "--portfolio", "1"] []) `shouldReturn` Right "portfolio1 of wallet0 has been deleted"
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0]
 
     it "is said to be deleted in one line" $
@@ -999,13 +1214,25 @@ deletePortfolioSpec ctx =
         run <- hw home ["deleteportfolio", "--portfolio", "1"] []
         runOut run `shouldBe` "portfolio1 of wallet0 has been deleted\n"
 
-    it "is the one of the wallet --wallet names" $
+    -- wallet1 has portfolio0 and portfolio1 of the second test mnemonic
+    it "is one of the wallet of the active portfolio" $
       withHome $ \home -> do
         newTestPortfolio home
         newPortfolioOf home testMnemonic2
         newPortfolioOf home testMnemonic2
-        (deletedOf <$> hwJson home ["deleteportfolio", "--wallet", "1", "--portfolio", "1"] []) `shouldReturn` Right ("portfolio1 of wallet1 has been deleted", [])
+        _ <- answer home ["switch", "--wallet", "1", "--portfolio", "0"] []
+        (deletedOf <$> hwJson home ["deleteportfolio", "--portfolio", "1"] []) `shouldReturn` Right "portfolio1 of wallet1 has been deleted"
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 1 0]
+
+    -- wallet0 has portfolio0 alone, and wallet1 has a portfolio1
+    it "is looked for in the wallet of the active portfolio alone, and one of another wallet is kept" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newPortfolioOf home testMnemonic2
+        newPortfolioOf home testMnemonic2
+        (errorOf <$> hwJson home ["deleteportfolio", "--portfolio", "1"] [])
+          `shouldReturn` Right "wallet0 has no portfolio1: portfolios lists the portfolios"
+        (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 1 0, PortfolioRef 1 1]
 
     -- The index is free again, and the keys at it are the same
     it "leaves its index to the next newportfolio --existing, which makes it again with the same keys" $
@@ -1030,12 +1257,25 @@ deletePortfolioSpec ctx =
         (errorOf <$> hwJson home ["deleteportfolio", "--portfolio", "1"] [])
           `shouldReturn` Right "portfolio1 of wallet0 is not the last portfolio of its wallet: portfolio2 goes first"
 
-    -- Nobody paid the address, which someone may pay later
+    -- Which portfolio the user works in next is theirs to say
+    it "is never the active portfolio, and the refusal says to switch to another one first" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        _ <- answer home ["switch", "--portfolio", "1"] []
+        (errorOf <$> hwJson home ["deleteportfolio", "--portfolio", "1"] [])
+          `shouldReturn` Right "portfolio1 of wallet0 is the active portfolio: switch to another portfolio first"
+        (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 0 1]
+
+    -- Nobody paid the address, which someone may pay later. receive gave
+    -- it out in portfolio1, active then.
     it "is never one that gave out an address with receive" $
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        _ <- answer home ["receive", "--portfolio", "1"] []
+        switchTo home 0 1
+        _ <- answer home ["receive"] []
+        switchTo home 0 0
         (errorOf <$> hwJson home ["deleteportfolio", "--portfolio", "1"] [])
           `shouldReturn` Right "portfolio1 of wallet0 has had activity or gave out an address, so it is kept: a payment to it would go unseen, and recover would find it again. deletewallet deletes a whole wallet"
 
@@ -1050,34 +1290,31 @@ deletePortfolioSpec ctx =
           `shouldReturn` Right "portfolio1 of wallet0 has had activity or gave out an address, so it is kept: a payment to it would go unseen, and recover would find it again. deletewallet deletes a whole wallet"
         (spendableOn btc <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, 0), (PortfolioRef 0 1, 50000)]
 
-    it "sets the key default-portfolio back to 0 when it is the default portfolio" $
+    it "writes nothing to the configuration file" $
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        _ <- answer home ["setdefault", "--portfolio", "1"] []
-        (deletedOf <$> hwJson home ["deleteportfolio", "--portfolio", "1"] [])
-          `shouldReturn` Right ("portfolio1 of wallet0 has been deleted", [("default-portfolio", 0)])
-        configFileOf home `shouldReturn` Just (Json.object ["default-network" Json..= ("btc" :: Text), "default-portfolio" Json..= (0 :: Int), "host" Json..= ("http://127.0.0.1:1/" :: Text)])
+        earlier <- configFileOf home
+        _ <- answer home ["deleteportfolio", "--portfolio", "1"] []
+        configFileOf home `shouldReturn` earlier
 
-    it "says so when it sets the key default-portfolio back to 0" $
+    -- --json is an option of every command, which is not the one missing
+    it "must be named by --portfolio, which deleteportfolio never takes from the active portfolio" $
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        _ <- answer home ["setdefault", "--portfolio", "1"] []
-        run <- hw home ["deleteportfolio", "--portfolio", "1"] []
-        runOut run `shouldBe` "portfolio1 of wallet0 has been deleted\nThe key default-portfolio of the configuration file is now 0.\n"
-
-    it "must be named by --portfolio, which deleteportfolio never takes from the default" $
-      withHome $ \home -> do
-        newTestPortfolio home
-        newTestPortfolio home
-        _ <- answer home ["setdefault", "--portfolio", "1"] []
-        run <- hw home ["deleteportfolio", "--wallet", "0"] []
+        switchTo home 0 1
+        run <- hw home ["deleteportfolio", "--json"] []
         runExit run `shouldBe` ExitFailure 1
         runErr run `shouldSatisfy` Text.isInfixOf "Missing: (-p|--portfolio INT)"
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 0 1]
 
 {- Deleting a wallet -}
+
+-- | The answer of deletewallet when it deletes the last wallet of the
+-- database
+lastWalletDeleted :: Text
+lastWalletDeleted = "wallet0 has been deleted, with all of its portfolios. The database has no wallet left: the first portfolio created next becomes the active one."
 
 deleteWalletSpec :: Ctx -> Spec
 deleteWalletSpec ctx =
@@ -1088,7 +1325,7 @@ deleteWalletSpec ctx =
         threePortfolios home
         newPortfolioOf home testMnemonic2
         (deletedOf <$> hwJson home ["deletewallet", "4435aa1c", "--wallet", "1"] [])
-          `shouldReturn` Right ("wallet1 has been deleted, with all of its portfolios", [])
+          `shouldReturn` Right "wallet1 has been deleted, with all of its portfolios"
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 0 1]
 
     it "is refused a fingerprint that is not that of the wallet, and nothing is deleted" $
@@ -1107,92 +1344,73 @@ deleteWalletSpec ctx =
           `shouldReturn` Right "The fingerprint given is not that of wallet0: portfolios --verbose shows it. Nothing was deleted"
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0]
 
-    it "must be named by --wallet, which deletewallet never takes from the default" $
+    it "must be named by --wallet, which deletewallet never takes from the active portfolio" $
       withHome $ \home -> do
         newTestPortfolio home
         run <- hw home ["deletewallet", "bc560f95"] []
         runExit run `shouldBe` ExitFailure 1
         runErr run `shouldSatisfy` Text.isInfixOf "Missing: --wallet INT"
 
-    -- The funds stay on the chain, and the mnemonic can still spend them
+    -- The funds stay on the chain, and the mnemonic can still spend them.
+    -- The wallet is the last one, that of the active portfolio.
     it "is deleted though it was paid" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        (deletedOf <$> hwJson home ["deletewallet", "bc560f95", "--wallet", "0"] [])
-          `shouldReturn` Right ("wallet0 has been deleted, with all of its portfolios", [("default-wallet", 0)])
+        (deletedOf <$> hwJson home ["deletewallet", "bc560f95", "--wallet", "0"] []) `shouldReturn` Right lastWalletDeleted
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right []
 
-    it "gives its place as the default to the only wallet left, which the key default-wallet names" $
+    -- Which portfolio the user works in next is theirs to say
+    it "is refused the wallet of the active portfolio while another wallet exists, and says to switch to a portfolio of another wallet first" $
       withHome $ \home -> do
         threePortfolios home
+        (errorOf <$> hwJson home ["deletewallet", "bc560f95", "--wallet", "0"] [])
+          `shouldReturn` Right "wallet0 holds the active portfolio, portfolio0 of wallet0: switch to a portfolio of another wallet first"
+        (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 0 1, PortfolioRef 1 0]
+
+    it "deletes the wallet that held the active portfolio once a portfolio of another wallet is active" $
+      withHome $ \home -> do
+        threePortfolios home
+        switchTo home 1 0
         (deletedOf <$> hwJson home ["deletewallet", "bc560f95", "--wallet", "0"] [])
-          `shouldReturn` Right ("wallet0 has been deleted, with all of its portfolios", [("default-wallet", 1)])
-        configFileOf home `shouldReturn` Just (Json.object ["default-network" Json..= ("btc" :: Text), "default-wallet" Json..= (1 :: Int), "host" Json..= ("http://127.0.0.1:1/" :: Text)])
+          `shouldReturn` Right "wallet0 has been deleted, with all of its portfolios"
+        (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 1 0]
 
-    it "says which wallet is the default now" $
+    it "deletes the last wallet, the one of the active portfolio, and says that the first portfolio created next becomes active" $
       withHome $ \home -> do
-        threePortfolios home
+        newTestPortfolio home
+        newTestPortfolio home
         run <- hw home ["deletewallet", "bc560f95", "--wallet", "0"] []
-        runOut run `shouldBe` "wallet0 has been deleted, with all of its portfolios\nThe key default-wallet of the configuration file is now 1.\n"
+        runOut run `shouldBe` lastWalletDeleted <> "\n"
 
-    -- wallet1 has portfolio0 alone: a default portfolio1 there would make
-    -- every command without --portfolio refuse to run
-    it "sets the default portfolio back to 0 when the new default wallet does not have it, and says so" $
+    it "leaves no active portfolio once the last wallet is deleted, which switch says with how to make a wallet" $
       withHome $ \home -> do
-        threePortfolios home
-        _ <- hw home ["setdefault", "--portfolio", "1"] []
-        run <- hw home ["deletewallet", "bc560f95", "--wallet", "0"] []
-        runOut run
-          `shouldBe` "wallet0 has been deleted, with all of its portfolios\n\
-                     \The key default-wallet of the configuration file is now 1.\n\
-                     \The key default-portfolio of the configuration file is now 0.\n"
-        configFileOf home `shouldReturn` Just (Json.object ["default-network" Json..= ("btc" :: Text), "default-portfolio" Json..= (0 :: Int), "default-wallet" Json..= (1 :: Int), "host" Json..= ("http://127.0.0.1:1/" :: Text)])
-
-    it "keeps the default portfolio when the new default wallet has it" $
-      withHome $ \home -> do
-        threePortfolios home
-        newPortfolioOf home testMnemonic2
-        _ <- hw home ["setdefault", "--portfolio", "1"] []
-        (deletedOf <$> hwJson home ["deletewallet", "bc560f95", "--wallet", "0"] [])
-          `shouldReturn` Right ("wallet0 has been deleted, with all of its portfolios", [("default-wallet", 1)])
-        configFileOf home `shouldReturn` Just (Json.object ["default-network" Json..= ("btc" :: Text), "default-portfolio" Json..= (1 :: Int), "default-wallet" Json..= (1 :: Int), "host" Json..= ("http://127.0.0.1:1/" :: Text)])
-
-    -- wallet1 is of the second test mnemonic, wallet2 of the third
-    it "asks which wallet becomes the default when several are left, naming them" $
-      withHome $ \home -> do
-        threePortfolios home
-        newPortfolioOf home thirdMnemonic
-        run <- hw home ["deletewallet", "bc560f95", "--wallet", "0"] ["wallet2"]
-        run `shouldSatisfy` printed "The default wallet is the one deleted. Which wallet becomes the default? wallet1 and wallet2"
-
-    it "makes the wallet picked among several the default" $
-      withHome $ \home -> do
-        threePortfolios home
-        newPortfolioOf home thirdMnemonic
-        (deletedOf <$> hwJson home ["deletewallet", "bc560f95", "--wallet", "0"] ["2"])
-          `shouldReturn` Right ("wallet0 has been deleted, with all of its portfolios", [("default-wallet", 2)])
+        newTestPortfolio home
+        _ <- answer home ["deletewallet", "bc560f95", "--wallet", "0"] []
+        (errorOf <$> hwJson home ["switch", "--portfolio", "0"] [])
+          `shouldReturn` Right "There is no wallet yet: newportfolio makes one, and recover or importwallet bring one back"
 
     it "leaves the names of the other wallets: wallet1 is still wallet1" $
       withHome $ \home -> do
         threePortfolios home
+        switchTo home 1 0
         _ <- answer home ["deletewallet", "bc560f95", "--wallet", "0"] []
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 1 0]
 
-    -- The key default-wallet names wallet1, so the new wallet0 is not the
-    -- default
-    it "gives the next new wallet the name wallet0 again, which does not become the default" $
+    -- portfolio0 of wallet1 is active, so the new wallet0 is not
+    it "gives the next new wallet the name wallet0 again, which does not become active" $
       withHome $ \home -> do
         threePortfolios home
+        switchTo home 1 0
         _ <- answer home ["deletewallet", "bc560f95", "--wallet", "0"] []
         (portfolioRefsOf <$> answer home ["newportfolio", "--existing"] seedTwice) `shouldReturn` Right [PortfolioRef 0 0]
         receiveWith home [] `shouldReturn` Text.unpack externalAddr2Text
 
-    it "leaves the default as it is when it is not the default wallet" $
+    it "writes nothing to the configuration file" $
       withHome $ \home -> do
         threePortfolios home
+        switchTo home 1 0
         earlier <- configFileOf home
-        (deletedOf <$> hwJson home ["deletewallet", "4435aa1c", "--wallet", "1"] [])
-          `shouldReturn` Right ("wallet1 has been deleted, with all of its portfolios", [])
+        _ <- answer home ["deletewallet", "bc560f95", "--wallet", "0"] []
         configFileOf home `shouldReturn` earlier
 
 {- Wallet files -}
@@ -1229,6 +1447,15 @@ walletFileSpec ctx =
         _ <- answer online ["importwallet", signer </> "wallet.jsonl"] []
         receiveWith online [] `shouldReturn` Text.unpack (externalAddrsText !! 0)
         receiveWith online ["--type", "bip84"] `shouldReturn` Text.unpack (segwitExternalAddrsText !! 0)
+
+    -- wallet1 is of the second test mnemonic, of the fingerprint 4435aa1c
+    it "is written by exportwallet for the wallet of the active portfolio" $
+      withHome $ \signer -> withHome $ \online -> do
+        threePortfolios signer
+        switchTo signer 1 0
+        _ <- answer signer ["exportwallet", signer </> "wallet.jsonl"] []
+        _ <- answer online ["importwallet", signer </> "wallet.jsonl"] []
+        (fingerprintsOf <$> hwJson online ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, "4435aa1c")]
 
     it "is written with every portfolio of the wallet without --portfolio" $
       withHome $ \signer -> withHome $ \online -> do
@@ -1583,7 +1810,7 @@ addressSpec ctx =
         newTestPortfolio home
         replicateM_ 2 $ answer home ["receive"] []
         run <- hw home ["portfolios"] []
-        run `shouldSatisfy` printed "\n  btc  spendable 0.00000000 btc, no coins, 2 addresses\n"
+        run `shouldSatisfy` printed "\n    btc  spendable 0.00000000 btc, no coins, 2 addresses\n"
 
     it "take the label given to receive" $
       withHome $ \home -> do
@@ -1647,16 +1874,20 @@ addressSpec ctx =
         (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [(externalAddrsText !! 1, "salary"), (externalAddrsText !! 0, "")]
 
     -- 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo is the first receiving address of
-    -- portfolio1
-    it "are named by label in the portfolio they belong to, with no --portfolio" $
+    -- portfolio1, which receive gave out while it was active. portfolio0
+    -- is active when the address is labelled.
+    it "are named by label in the portfolio they belong to, whichever is active" $
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
         _ <- answer home ["receive"] []
-        _ <- answer home ["receive", "--portfolio", "1"] []
+        switchTo home 0 1
+        _ <- answer home ["receive"] []
+        switchTo home 0 0
         (addressesOf <$> hwJson home ["label", "17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "rent"] []) `shouldReturn` Right [("17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "rent")]
         (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [(externalAddrsText !! 0, "")]
-        (addressesOf <$> hwJson home ["addresses", "--portfolio", "1"] []) `shouldReturn` Right [("17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "rent")]
+        switchTo home 0 1
+        (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [("17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "rent")]
 
     -- The sixth receiving address of the bip44 account, which receive has
     -- not given out
@@ -1707,24 +1938,18 @@ syncSpec ctx =
         (syncedOf <$> hwJson home ["sync"] [])
           `shouldReturn` Right [(place, if place == mainPlace then 50000 else if place == portfolio1Place then 30000 else 0) | place <- twoPortfoliosPlaces]
 
-    it "covers the portfolio --portfolio names alone" $
+    it "covers every portfolio, whichever is active" $
       withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
         newTestPortfolio home
         newTestPortfolio home
-        (fmap (map fst) . syncedOf <$> hwJson home ["sync", "--portfolio", "1"] []) `shouldReturn` Right (drop 8 twoPortfoliosPlaces)
-        (spendableOn btc <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, 0), (PortfolioRef 0 1, 30000)]
+        switchTo home 0 1
+        (fmap (map fst) . syncedOf <$> hwJson home ["sync"] []) `shouldReturn` Right twoPortfoliosPlaces
 
     it "covers the network --network names alone" $
       withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
         newTestPortfolio home
         newTestPortfolio home
         (syncedOf <$> hwJson home ["sync", "--network", "btc"] []) `shouldReturn` Right [(mainPlace, 50000), (portfolio1Place, 30000)]
-
-    it "covers the portfolios of the wallet --wallet names alone" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
-        newTestPortfolio home
-        newPortfolioOf home testMnemonic2
-        (fmap (map (placePortfolio . fst)) . syncedOf <$> hwJson home ["sync", "--wallet", "1"] []) `shouldReturn` Right (replicate 8 (PortfolioRef 1 0))
 
     -- A portfolio that holds nothing and changed nothing on a network gets
     -- no block of its own there
@@ -1908,7 +2133,7 @@ recoverSpec ctx =
         run <- hw home ["recover"] seedOnce
         take 1 (Text.lines (runOut run)) `shouldBe` ["No new portfolio of the mnemonic was paid on btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4 or bchreg. The search ended after 10 portfolios in a row without a payment."]
 
-    -- wallet0 is of the second test mnemonic, and the default wallet.
+    -- wallet0 is of the second test mnemonic, and holds the active portfolio.
     -- wallet1 is of the test mnemonic, with portfolio0. The chain pays
     -- portfolio0 and portfolio1 of the test seed.
     it "are added to the wallet with the fingerprint of the seed, among the wallets of other seeds, those it lacks alone" $ do

@@ -2,8 +2,8 @@
 
 -- | The wallets and their portfolios: named by their indexes, which a new
 -- one takes the lowest free of, described by the user, listed in the
--- order of their indexes, chosen by a command from its options and the
--- configuration, and named in the answers. The accounts of a portfolio
+-- order of their indexes, the active one, which switch changes, and how
+-- the answers name them. The accounts of a portfolio
 -- are in "Haskoin.Wallet.Database.AccountSpec": most tests here need the
 -- rows of the wallets and of the portfolios alone.
 module Haskoin.Wallet.Database.PortfolioSpec (spec) where
@@ -18,8 +18,7 @@ import Data.Either (isLeft)
 import Data.Text (Text)
 import Haskoin
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), testIdentity)
-import Haskoin.Wallet.Arbitrary (arbitraryAccountRef, arbitraryPlace, arbitraryPortfolioRef)
-import Haskoin.Wallet.Config (Config)
+import Haskoin.Wallet.Arbitrary (arbitraryAccountRef, arbitraryActiveAfter, arbitraryPlace, arbitraryPortfolioRef)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account (deleteWallet)
 import Haskoin.Wallet.Database.Portfolio
@@ -35,16 +34,16 @@ spec = do
   walletsSpec
   portfoliosSpec
   descriptionsSpec
-  choosingSpec
-  choosingSeveralSpec
-  narrowingSpec
+  activeSpec
+  switchSpec
   placesSpec
   jsonSpec
   -- How the answers name a portfolio, a network of it and an account of
-  -- it reads back as it was written
+  -- it, and the active portfolio after a command, read back as they were
+  -- written
   testIdentity
     def
-      { jsonTests = [JsonBox arbitraryPortfolioRef, JsonBox (arbitraryPlace btc), JsonBox (arbitraryAccountRef btc), JsonBox (arbitraryAccountRef bch)]
+      { jsonTests = [JsonBox arbitraryPortfolioRef, JsonBox (arbitraryPlace btc), JsonBox (arbitraryAccountRef btc), JsonBox (arbitraryAccountRef bch), JsonBox arbitraryActiveAfter]
       }
 
 {- Fixtures -}
@@ -64,21 +63,9 @@ twoWallets = do
 walletNames :: DB IO [Text]
 walletNames = map (walletName . walletIndex . snd) <$> getWallets
 
--- | The portfolio a command works in, as the answers name it
-chosen :: Config -> Maybe Natural -> Maybe Natural -> ExceptT String (DB IO) PortfolioRef
-chosen cfg walletM portfolioM = portfolioRef <$> choosePortfolio cfg (PortfolioChoice walletM portfolioM)
-
--- | The portfolios a command that covers several works on, as the answers
--- name them
-chosenSeveral :: Config -> Maybe Natural -> Maybe Natural -> ExceptT String (DB IO) [PortfolioRef]
-chosenSeveral cfg walletM portfolioM = map portfolioRef <$> choosePortfolios cfg (PortfolioChoice walletM portfolioM)
-
--- | The portfolios the options of a command that finds its portfolio by
--- itself leave, as the answers name them, with how a refusal names them
-narrowedTo :: Config -> Maybe Natural -> Maybe Natural -> ExceptT String (DB IO) (Maybe ([PortfolioRef], String))
-narrowedTo cfg walletM portfolioM = fmap refsAndText <$> narrowedBy cfg (PortfolioChoice walletM portfolioM)
-  where
-    refsAndText narrowed = (portfolioRef <$> narrowedPortfolios narrowed, narrowedText narrowed)
+-- | The portfolio switch makes the active one, as the answers name it
+switched :: Maybe Natural -> Natural -> ExceptT String (DB IO) PortfolioRef
+switched walletM index = portfolioRef <$> switchTo walletM index
 
 {- Names -}
 
@@ -282,79 +269,92 @@ descriptionsSpec =
         lift $ dbShouldFailWith "The description must not contain a line break or a control character" $ setPortfolioDescription key "a\nb"
         lift $ dbShouldFailWith "The description must not start or end with a space" $ setWalletDescription walletId " a"
 
-{- The portfolio a command works in -}
+{- The active portfolio -}
+
+activeSpec :: Spec
+activeSpec =
+  describe "The active portfolio, where the commands work" $ do
+    it "is the first portfolio created in the database" $
+      inDatabaseE $ do
+        (walletId, _) <- lift $ insertWallet testFingerprint
+        (key, _) <- insertPortfolio walletId 0 ""
+        lift activePortfolioId `dbShouldBeE` Just key
+
+    -- portfolio1 of wallet0 and portfolio0 of wallet1 come after
+    -- portfolio0 of wallet0
+    it "stays the first one when more portfolios are created" $
+      inDatabaseE $ do
+        twoWallets
+        activePortfolioRef `dbShouldBeE` Just (PortfolioRef 0 0)
+
+    it "is none in a database without a portfolio" $
+      inDatabaseE $ activePortfolioRef `dbShouldBeE` Nothing
+
+    it "is refused to a command in a database without a portfolio, which is told how to make one" $
+      inDatabase $
+        dbShouldFailWith "There is no wallet yet: newportfolio makes one, and recover or importwallet bring one back" requireActivePortfolio
+
+    it "is none once the last wallet is deleted" $
+      inDatabaseE $ do
+        (walletId, _) <- lift $ insertWallet testFingerprint
+        _ <- insertPortfolio walletId 0 ""
+        lift $ deleteWallet walletId
+        activePortfolioRef `dbShouldBeE` Nothing
+
+    -- The new wallet takes the index 0 again: its portfolio0 is another
+    -- row than the one deleted
+    it "is the first portfolio created after the last wallet was deleted" $
+      inDatabaseE $ do
+        (first, _) <- lift $ insertWallet testFingerprint
+        _ <- insertPortfolio first 0 ""
+        lift $ deleteWallet first
+        (second, _) <- lift $ insertWallet testFingerprint2
+        (key, _) <- insertPortfolio second 0 ""
+        lift activePortfolioId `dbShouldBeE` Just key
+
+{- switch -}
 
 -- The database has wallet0 with portfolios 0 and 1, and wallet1 with
--- portfolio 0
-choosingSpec :: Spec
-choosingSpec =
-  describe "The portfolio a command works in" $ do
-    it "is portfolio 0 of wallet 0 without an option" $
+-- portfolio 0. portfolio0 of wallet0 is active, as the first one created.
+switchSpec :: Spec
+switchSpec =
+  describe "A switch" $ do
+    it "makes the portfolio --portfolio names the active one, in the wallet of the active portfolio without --wallet" $
       inDatabaseE $ do
         twoWallets
-        chosen def Nothing Nothing `dbShouldBeE` PortfolioRef 0 0
+        switched Nothing 1 `dbShouldBeE` PortfolioRef 0 1
+        activePortfolioRef `dbShouldBeE` Just (PortfolioRef 0 1)
 
-    it "is in the wallet --wallet names" $
+    it "makes the portfolio of the wallet --wallet names the active one" $
       inDatabaseE $ do
         twoWallets
-        chosen def (Just 1) Nothing `dbShouldBeE` PortfolioRef 1 0
+        switched (Just 1) 0 `dbShouldBeE` PortfolioRef 1 0
+        activePortfolioRef `dbShouldBeE` Just (PortfolioRef 1 0)
 
-    it "is the portfolio --portfolio names" $
+    -- After a switch to wallet1, --portfolio 0 alone is portfolio0 of
+    -- wallet1, not of wallet0
+    it "takes the wallet of the portfolio active now without --wallet, after a switch to another wallet" $
       inDatabaseE $ do
         twoWallets
-        chosen def Nothing (Just 1) `dbShouldBeE` PortfolioRef 0 1
+        _ <- switched (Just 1) 0
+        switched Nothing 0 `dbShouldBeE` PortfolioRef 1 0
 
-    it "is in the wallet the key default-wallet names" $
+    it "refuses a --wallet the database does not have, and leaves the active portfolio as it was" $
       inDatabaseE $ do
         twoWallets
-        chosen (configWith ["default-wallet" .= (1 :: Int)]) Nothing Nothing `dbShouldBeE` PortfolioRef 1 0
-
-    it "is the portfolio the key default-portfolio names" $
-      inDatabaseE $ do
-        twoWallets
-        chosen (configWith ["default-portfolio" .= (1 :: Int)]) Nothing Nothing `dbShouldBeE` PortfolioRef 0 1
-
-    it "takes --wallet over the key default-wallet" $
-      inDatabaseE $ do
-        twoWallets
-        chosen (configWith ["default-wallet" .= (1 :: Int)]) (Just 0) Nothing `dbShouldBeE` PortfolioRef 0 0
-
-    it "takes --portfolio over the key default-portfolio" $
-      inDatabaseE $ do
-        twoWallets
-        chosen (configWith ["default-portfolio" .= (1 :: Int)]) Nothing (Just 0) `dbShouldBeE` PortfolioRef 0 0
-
-    it "refuses a default wallet that does not exist, naming the key default-wallet" $
-      inDatabaseE $ do
-        twoWallets
-        lift $
-          dbShouldFailWith "The key default-wallet of the configuration file names wallet3, which does not exist: give --wallet, or change the key with setdefault" $
-            chosen (configWith ["default-wallet" .= (3 :: Int)]) Nothing Nothing
-
-    it "refuses a default portfolio the wallet does not have, naming the key default-portfolio" $
-      inDatabaseE $ do
-        twoWallets
-        lift $
-          dbShouldFailWith "The key default-portfolio of the configuration file names portfolio4, which wallet0 does not have: give --portfolio, or change the key with setdefault" $
-            chosen (configWith ["default-portfolio" .= (4 :: Int)]) Nothing Nothing
-
-    -- portfolio 1 is the default, and wallet1 has portfolio 0 alone
-    it "refuses a default portfolio the wallet --wallet names does not have, though the default wallet has it" $
-      inDatabaseE $ do
-        twoWallets
-        lift $
-          dbShouldFailWith "The key default-portfolio of the configuration file names portfolio1, which wallet1 does not have: give --portfolio, or change the key with setdefault" $
-            chosen (configWith ["default-portfolio" .= (1 :: Int)]) (Just 1) Nothing
-
-    it "refuses a --wallet that does not exist" $
-      inDatabaseE $ do
-        twoWallets
-        lift $ dbShouldFailWith "There is no wallet2: portfolios lists the wallets" $ chosen def (Just 2) Nothing
+        lift $ dbShouldFailWith "There is no wallet2: portfolios lists the wallets" $ switched (Just 2) 0
+        activePortfolioRef `dbShouldBeE` Just (PortfolioRef 0 0)
 
     it "refuses a --portfolio the wallet does not have" $
       inDatabaseE $ do
         twoWallets
-        lift $ dbShouldFailWith "wallet1 has no portfolio1: portfolios lists the portfolios" $ chosen def (Just 1) (Just 1)
+        lift $ dbShouldFailWith "wallet1 has no portfolio1: portfolios lists the portfolios" $ switched (Just 1) 1
+
+    -- wallet0 has no portfolio2, though wallet1 does not matter here
+    it "refuses a --portfolio the wallet of the active portfolio does not have, without --wallet" $
+      inDatabaseE $ do
+        twoWallets
+        lift $ dbShouldFailWith "wallet0 has no portfolio2: portfolios lists the portfolios" $ switched Nothing 2
 
     -- 2^64 = 18446744073709551616 would wrap around to portfolio0
     it "refuses a --portfolio of 2^64, though the wallet has portfolio0" $
@@ -362,86 +362,15 @@ choosingSpec =
         twoWallets
         lift $
           dbShouldFailWith "wallet0 has no portfolio18446744073709551616: portfolios lists the portfolios" $
-            chosen def Nothing (Just 18446744073709551616)
+            switched Nothing 18446744073709551616
 
-    it "has none to work in while the database has no wallet, and says how to make one" $
-      inDatabaseE $
-        lift $
-          dbShouldFailWith "There is no wallet yet: newportfolio makes one, and recover or importwallet bring one back" $
-            chosen def Nothing Nothing
+    it "is refused in a database without a portfolio, which is told how to make one" $
+      inDatabase $
+        dbShouldFailWith "There is no wallet yet: newportfolio makes one, and recover or importwallet bring one back" $
+          switched (Just 0) 0
 
--- As sync, portfolios and exportsheet take them
-choosingSeveralSpec :: Spec
-choosingSeveralSpec =
-  describe "The portfolios of a command that covers several" $ do
-    it "are every portfolio of every wallet without an option, in the order of the wallets and of their portfolios" $
-      inDatabaseE $ do
-        twoWallets
-        chosenSeveral def Nothing Nothing `dbShouldBeE` [PortfolioRef 0 0, PortfolioRef 0 1, PortfolioRef 1 0]
-
-    it "are every portfolio of the wallet --wallet names" $
-      inDatabaseE $ do
-        twoWallets
-        chosenSeveral def (Just 0) Nothing `dbShouldBeE` [PortfolioRef 0 0, PortfolioRef 0 1]
-
-    it "are the one portfolio --portfolio names, in the default wallet" $
-      inDatabaseE $ do
-        twoWallets
-        chosenSeveral def Nothing (Just 1) `dbShouldBeE` [PortfolioRef 0 1]
-
-    it "are the one portfolio --wallet and --portfolio name together" $
-      inDatabaseE $ do
-        twoWallets
-        chosenSeveral def (Just 1) (Just 0) `dbShouldBeE` [PortfolioRef 1 0]
-
-    -- A command that covers every portfolio does not read the defaults
-    it "are every portfolio of every wallet whatever the defaults of the configuration" $
-      inDatabaseE $ do
-        twoWallets
-        chosenSeveral (configWith ["default-wallet" .= (1 :: Int)]) Nothing Nothing
-          `dbShouldBeE` [PortfolioRef 0 0, PortfolioRef 0 1, PortfolioRef 1 0]
-
-    it "are none in a database without a wallet" $
-      inDatabaseE $ chosenSeveral def Nothing Nothing `dbShouldBeE` []
-
--- As show of a transaction, importtx, signtx, signsweep, bumpfee,
--- preparesweep and coin control take them: the options only narrow the
--- search, and never pick a default portfolio
-narrowingSpec :: Spec
-narrowingSpec =
-  describe "The portfolios a command that finds its portfolio by itself looks in" $ do
-    it "are every portfolio without an option" $
-      inDatabaseE $ do
-        twoWallets
-        narrowedTo def Nothing Nothing `dbShouldBeE` Nothing
-
-    it "are every portfolio of the wallet --wallet names alone, named by the wallet" $
-      inDatabaseE $ do
-        twoWallets
-        narrowedTo def (Just 0) Nothing `dbShouldBeE` Just ([PortfolioRef 0 0, PortfolioRef 0 1], "wallet0")
-
-    -- The default portfolio is portfolio 1: --wallet 0 alone still leaves
-    -- portfolio 0 as well
-    it "are every portfolio of the wallet --wallet names alone, whatever the key default-portfolio says" $
-      inDatabaseE $ do
-        twoWallets
-        narrowedTo (configWith ["default-portfolio" .= (1 :: Int)]) (Just 0) Nothing
-          `dbShouldBeE` Just ([PortfolioRef 0 0, PortfolioRef 0 1], "wallet0")
-
-    it "are the one portfolio --portfolio names, of the default wallet, named in full" $
-      inDatabaseE $ do
-        twoWallets
-        narrowedTo def Nothing (Just 1) `dbShouldBeE` Just ([PortfolioRef 0 1], "portfolio1 of wallet0")
-
-    it "are the one portfolio --wallet and --portfolio name together" $
-      inDatabaseE $ do
-        twoWallets
-        narrowedTo def (Just 1) (Just 0) `dbShouldBeE` Just ([PortfolioRef 1 0], "portfolio0 of wallet1")
-
-    it "refuse a --wallet that does not exist" $
-      inDatabaseE $ do
-        twoWallets
-        lift $ dbShouldFailWith "There is no wallet2: portfolios lists the wallets" $ narrowedTo def (Just 2) Nothing
+    it "names itself in a refusal or a next step as the command to type" $
+      switchCommandText (PortfolioRef 1 2) `shouldBe` "switch --wallet 1 --portfolio 2"
 
 {- How the answers name a place -}
 
@@ -451,14 +380,15 @@ placesSpec =
     it "names what a portfolio holds on a network by the indexes of its wallet and its own, and the network" $
       inDatabaseE $ do
         twoWallets
-        portfolio <- choosePortfolio def (PortfolioChoice (Just 0) (Just 1))
+        wallet <- walletNamed 0
+        portfolio <- portfolioNamed wallet 1
         liftIO $ portfolioPlace portfolio bch `shouldBe` Place (PortfolioRef 0 1) bch
         poolPlace (portfolioPool portfolio bch) `dbShouldBeE` Place (PortfolioRef 0 1) bch
 
     it "gives the pool of a portfolio on a network: the portfolio and the network" $
       inDatabaseE $ do
         twoWallets
-        portfolio <- choosePortfolio def defaultPortfolio
+        portfolio <- requireActivePortfolio
         liftIO $ portfolioPool portfolio btcTest `shouldBe` Pool (portfolioId portfolio) btcTest
 
     -- m/purpose'/coin type'/index': 84 for bip84, 0 for btc, 145 for bch
@@ -492,6 +422,11 @@ jsonSpec =
     it "refuses a network hw does not know, naming it" $
       (eitherDecode "{\"wallet\": 1, \"portfolio\": 2, \"network\": \"nope\"}" :: Either String Place)
         `shouldBe` Left "Error in $: Unknown network nope"
+
+    it "writes the active portfolio after a command as its wallet and its index, with whether the command activated it, and reads it back" $ do
+      let json = "{\"wallet\": 0, \"portfolio\": 1, \"activated\": false}"
+      eitherDecode json `shouldBe` Right (toJSON (ActiveAfter (PortfolioRef 0 1) False))
+      eitherDecode json `shouldBe` Right (ActiveAfter (PortfolioRef 0 1) False)
 
     it "writes the pairs of a place flat, for the answers that place something" $
       Json.object (placePairs (Place (PortfolioRef 0 1) btc))
