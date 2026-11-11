@@ -12,7 +12,7 @@ import System.Posix.Files (setFileCreationMask)
 import System.Posix.Types (FileMode)
 import Conduit (runConduit, sinkList, (.|))
 import Control.Exception (bracket, finally)
-import Control.Monad (forM, forM_, unless, void, when)
+import Control.Monad (forM, unless, void, when)
 import Control.Monad.Except (ExceptT, throwError)
 import Control.Monad.Trans (lift, liftIO)
 import Control.Monad.Trans.Except (runExceptT)
@@ -36,8 +36,8 @@ import Database.Persist.Sqlite (runSqlite)
 import Haskoin
 import Haskoin.Crypto.Keys.Slip39 (EncryptedMasterSecret (..))
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Database.Account (Adopted (..), NetworkView (..), PortfolioView (..), adoptSeed, createPortfolio, insertAccount, nextPortfolioIndex, poolAccountOf)
-import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), Portfolio (..), PortfolioRef (..), insertPortfolio, insertWallet, portfolioAt, portfolioPool)
+import Haskoin.Wallet.Database.Account (NetworkView (..), PortfolioView (..), createPortfolio, nextPortfolioIndex, poolAccountOf, seedWallet)
+import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), Portfolio (..), PortfolioRef (..), insertWallet, portfolioAt, portfolioPool)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database.Coin (JsonCoin (..))
 import Haskoin.Wallet.Database (DB, DBAccount (..), DBAccountId, DBAddress (..), DBPendingTx (..), DBWallet, DBWalletId, Pool (..), hashBytes, migrateAll, poolNetworkName)
@@ -221,24 +221,11 @@ nextPortfolioOf ctx mnem = do
   index <- lift $ nextPortfolioIndex seed (fst held)
   createPortfolio ctx seed held index
 
--- | The wallet of a seed in the database, created with the fingerprint of
--- the seed when the database has none
+-- | The wallet of a seed in the database, the one with its fingerprint,
+-- created when the database has none
 walletOfSeed :: Ctx -> PublicSeed -> ExceptT String (DB IO) (DBWalletId, DBWallet)
-walletOfSeed ctx seed = do
-  adopted <- adoptSeed ctx seed
-  maybe (lift (insertWallet (Just (seedFingerprint seed)))) (return . adoptedWallet) adopted
-
--- | A portfolio as the step from the database of hw 0.9 leaves it: in a
--- new wallet whose fingerprint is not known, at the index, described,
--- with those accounts of the seed alone
-migrated :: Ctx -> PublicSeed -> Natural -> Text -> [(Network, AccountKind)] -> ExceptT String (DB IO) Portfolio
-migrated ctx seed index description accounts = do
-  (walletId, wallet) <- lift $ insertWallet Nothing
-  (key, row) <- insertPortfolio walletId index description
-  forM_ accounts $ \(net, kind) -> do
-    xpub <- liftIO $ maybe (fail "migrated: the child key at this index is invalid") return =<< seedAccountKey seed kind net index
-    insertAccount key kind net ctx xpub
-  return (Portfolio key row walletId wallet)
+walletOfSeed ctx seed =
+  maybe (lift (insertWallet (seedFingerprint seed))) return =<< seedWallet ctx seed
 
 -- | The account of a kind of a portfolio on a network
 accountOf :: Portfolio -> Network -> AccountKind -> ExceptT String (DB IO) (DBAccountId, DBAccount)
@@ -379,18 +366,17 @@ mainGroup = Group mainPlace [AccountCounts Bip44 12 3]
 -- without a description whose fingerprint is that of the test mnemonic,
 -- created at 'seenTime'. On Bitcoin it holds 0.05 btc confirmed and
 -- 0.001 btc unconfirmed in 3 coins, can spend 0.049 btc now, and has 17
--- addresses, 12 + 3 of the BIP44 account and 2 of the BIP84 one. It is
--- partial: the view lists no missing account, which a test that needs
--- them adds.
+-- addresses, 12 + 3 of the BIP44 account and 2 of the BIP84 one. A
+-- portfolio has every network: the view leaves the others out, as the
+-- printers show only the networks a view gives them.
 mainPortfolioView :: PortfolioView
 mainPortfolioView =
   PortfolioView
     { viewRef = mainPortfolioRef,
       viewDescription = "savings",
       viewWalletDescription = "",
-      viewFingerprint = Just testFingerprint,
+      viewFingerprint = testFingerprint,
       viewCreated = seenTime,
-      viewMissing = [],
       viewNetworks =
         [ NetworkView
             { networkViewNetwork = btc,

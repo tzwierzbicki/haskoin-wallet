@@ -401,8 +401,8 @@ readForCompletion action = handleAny (const (return [])) $ do
       exists <- D.doesFileExist file
       if exists then runDBReadOnly file readCurrent else return []
   where
-    -- A database of an older version is migrated by the next command, and
-    -- one of a newer version is refused. Their tables may differ.
+    -- A database of another version is refused by every command. Its
+    -- tables may differ.
     readCurrent = do
       version <- runExceptT databaseVersion
       if version == Right (Just latestDatabaseVersion) then action else return []

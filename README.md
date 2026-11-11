@@ -205,8 +205,9 @@ out. See [`show`](#hw-show).
 - **The database and the wallet files are private.** They hold no private key.
   But the public keys in them reveal every address and balance of your
   portfolios. `hw` makes `~/.hw` and the database yours alone to read. A
-  database made by `hw` 0.9 or earlier keeps the permissions it had:
-  [make it private](#a-wallet-readable-by-others).
+  directory `~/.hw` made by `hw` 0.9 or earlier keeps the permissions it had,
+  and so does the old database in it.
+  [Make them private](#a-wallet-readable-by-others).
 - **An online computer can show a wrong address.** One that was tampered with
   shows an address of its own, and the payer pays the attacker.
   [Check an address](#check-an-address-before-you-give-it-out) with `show`
@@ -380,7 +381,7 @@ transaction already knows where it belongs.
 | `signtx`, `signsweep`, `importtx`, `bumpfee`, `preparesweep`, and `show` with a transaction or a transaction file | They find the portfolio from the transaction. `--wallet` and `--portfolio` only narrow the search: `--wallet` alone to every portfolio of that wallet, `--portfolio` to one portfolio. They never pick a default portfolio. |
 | `label`, `lockcoin`, `unlockcoin`, `signmsg`, and `show` with an address or a coin | An address and a coin tell where they are. `--network` is needed only when the wallet has the address or the coin on several test networks. |
 | `checkmnemonic`, `setdescription` | `--wallet` and `--portfolio` pick the portfolio, each with its default. |
-| `fillwallet`, `exportwallet`, `importwallet` | `--wallet` picks the wallet. `exportwallet` and `importwallet` take `--portfolio` to write or read one portfolio only. |
+| `exportwallet`, `importwallet` | `--wallet` picks the wallet of `exportwallet`, and checks the wallet of the file for `importwallet`. `--portfolio` writes or reads one portfolio only. |
 | `deleteportfolio`, `deletewallet` | They take no default. `--portfolio` or `--wallet` must name what to delete. |
 
 A listing and the details of an address or a transaction name the portfolio
@@ -435,11 +436,6 @@ On a network, the accounts of a portfolio work as one:
 >   portfolio of `wallet1` that holds it sees it, not only `portfolio0`.
 > - **A sweep that pays no portfolio needs `--network`.** The default network
 >   does not apply to it. See [`preparesweep`](#hw-preparesweep).
-> - **A portfolio of an upgraded database may lack accounts.** `hw` 0.9 kept
->   single accounts, so the upgrade makes partial portfolios. A command that
->   needs an account the portfolio lacks is refused, and says how to fill the
->   portfolio in. See
->   [Accounts become portfolios](#accounts-become-portfolios).
 
 ### Amounts
 
@@ -629,7 +625,6 @@ server, so they are not marked.
 | **[Wallets and portfolios](#wallets-and-portfolios)** | |
 | [`newportfolio`](#hw-newportfolio) `!` | Make a mnemonic and its wallet, or add a portfolio to a wallet |
 | [`recover`](#hw-recover) | Find the portfolios of a mnemonic that were paid |
-| [`fillwallet`](#hw-fillwallet) `!` | Fill in the partial portfolios of a wallet from its mnemonic |
 | [`checkmnemonic`](#hw-checkmnemonic) `!` | Check a mnemonic and passphrase against a portfolio |
 | [`exportwallet`](#hw-exportwallet) | Write the portfolios of a wallet and their labels to a file |
 | [`importwallet`](#hw-importwallet) | Add the portfolios and labels of a file |
@@ -724,7 +719,8 @@ before a key of the mnemonic.
 mnemonic and its passphrase, each twice, or for the shares of a backup. It adds
 a portfolio to the wallet of that mnemonic, at the lowest free index. That is
 `portfolio1` when the wallet has `portfolio0`. It is `portfolio1` too when the
-wallet has `portfolio0` and `portfolio2`. When the database has no wallet of
+wallet has `portfolio0` and `portfolio2`. The wallet of the mnemonic is the one
+with the fingerprint of its master key. When the database has no wallet of
 the mnemonic yet, it creates the wallet with its `portfolio0`.
 
 **A portfolio is created whole.** It gets an account for every network, the
@@ -758,9 +754,14 @@ The commands that ask for a mnemonic take the shares in its place. Type one, and
 >   shares restores it. One that reads only BIP39 mnemonics cannot.
 > - **The passphrase of a backup in shares** has printable ASCII characters
 >   only.
-> - **`--existing` fills in the wallet first.** When the wallet of the mnemonic
->   has [partial portfolios](#accounts-become-portfolios), `newportfolio`
->   fills them in before it adds the new one, as `fillwallet` does.
+> - **A passphrase with accents keeps to the wallet `recover` made.** `hw`
+>   normalizes a passphrase as BIP39 asks, and `hw` 0.9 did not. `recover`
+>   makes a wallet of the passphrase as typed when only that one finds funds.
+>   When the database has such a wallet, and none of the passphrase normalized,
+>   `--existing` adds to it and says so. In a database without either, it
+>   creates the wallet of the passphrase normalized. It then warns that a
+>   wallet of an earlier `hw` has other keys, and points to `recover`. See
+>   [A passphrase with accents](#a-passphrase-with-accents).
 
 #### `hw recover`
 
@@ -785,10 +786,12 @@ The search covers every network, whatever `default-network` says. A mnemonic
 is often paid on both chains, as every mnemonic from before the fork of 2017
 is. A search of one network would say nothing of the other.
 
-The wallet is the one of the mnemonic, which `recover` creates when the
-database does not have it. A wallet found gets its `portfolio0` whether that
-one was paid or not, since a wallet always has `portfolio0`. The portfolios
-the wallet has whole already are skipped.
+The wallet is the one of the mnemonic. `recover` finds it by the fingerprint
+of its master key, or creates it when the database does not have it. A new
+wallet gets its `portfolio0` whether that one was paid or not, since a wallet
+always has `portfolio0`. The portfolios the wallet has already are skipped. A
+wallet with the fingerprint of the mnemonic and other keys is refused, and
+nothing changes. A fingerprint is four bytes, which two mnemonics may share.
 
 The search stops after 10 portfolios in a row where nothing was found, or the
 number `--portfolio-gap` gives. [BIP44] stops at the first unused account. `hw`
@@ -837,74 +840,10 @@ to an address of `hw`.
 >   paths of other wallets. Only the networks searched in full are named as
 >   searched. Any other error, such as a no to one of its questions, stops
 >   `recover`, and nothing is added.
-> - **`recover` fills in partial portfolios.** When the database has
->   [partial portfolios](#accounts-become-portfolios) of the mnemonic,
->   `recover` fills them in first, as `fillwallet` does.
 > - **A passphrase with accents is tried both ways.** `hw` normalizes a
 >   passphrase as BIP39 asks, and earlier versions did not. When nothing is
 >   found, `recover` also tries the passphrase as typed, and says so if that
 >   finds portfolios. See [A passphrase with accents](#a-passphrase-with-accents).
-
-#### `hw fillwallet`
-
-Fills in the partial portfolios of a wallet from its mnemonic. A portfolio is
-partial when it lacks some of its accounts. `hw` makes partial portfolios when
-it upgrades a database of version 0.9, which held single accounts.
-[Accounts become portfolios](#accounts-become-portfolios) tells the whole
-story. A wallet made by this version has whole portfolios, and never needs
-`fillwallet`.
-
-```console
-hw fillwallet                               # the wallets of the mnemonic
-hw fillwallet --wallet 1                    # check that it is of wallet1
-```
-
-`fillwallet` asks for a mnemonic and its passphrase, or for the shares of a
-backup. It adds every account the portfolios of its wallets lack. It needs the
-mnemonic because the other accounts of a portfolio are behind hardened steps of
-the path. No public key the database holds can derive them.
-
-`fillwallet` finds the wallets of the mnemonic by their keys, whatever their
-index. You do not need to know which wallet each mnemonic became after an
-upgrade: run `fillwallet` once for each mnemonic. The default wallet plays no
-part. A mnemonic or a passphrase that gives the keys of no wallet is refused,
-and nothing changes. With `--wallet`, the mnemonic must be of that wallet.
-
-An upgraded database keeps the accounts of one mnemonic on Bitcoin, on Bitcoin
-Cash and on the test networks in separate wallets, since it cannot tell that
-they belong together.
-`fillwallet` finds every wallet the mnemonic is of. It merges them into the one
-with the lowest index, and records the fingerprint of the mnemonic. The answer
-names the wallets it merged:
-
-```console
-$ hw fillwallet
-21 accounts added to wallet0
-wallet1 was merged into wallet0: the same mnemonic gives both.
-
-portfolio0  wallet0  "main, cash"
-  created 01 Mar 2024
-  btc  spendable 0.01200000 btc, 2 coins, 14 addresses
-  bch  spendable 0.00000000 btc, no coins, 3 addresses
-
-portfolio1  wallet0  "savings"
-  created 02 Mar 2024
-  btc  spendable 0.25000000 btc, 1 coin, 2 addresses
-```
-
-> **Good to know**
->
-> - **Run `fillwallet` where the mnemonic is.** On an offline computer, run it
->   there. Then write the wallet to a file with
->   [`exportwallet`](#hw-exportwallet), and read that file on the online
->   computer with [`importwallet`](#hw-importwallet). That fills in the
->   portfolios there without the mnemonic.
-> - **`fillwallet` gives a wallet its `portfolio0`** when it has none.
-> - **When the default wallet is merged into another, the default follows.**
->   `hw` writes the new `default-wallet` to the configuration file, and says
->   so.
-> - **A wallet that is whole is left as it is.** `fillwallet` then answers
->   that the wallet lacks no account.
 
 #### `hw checkmnemonic`
 
@@ -919,9 +858,8 @@ hw checkmnemonic --wallet 1                 # the wallet of another mnemonic
 ```
 
 It answers that the mnemonic and passphrase matched the portfolio, or that
-they did not. A check never changes the wallet. It records no fingerprint and
-merges no wallets, even when the mnemonic matches. That is the work of
-[`fillwallet`](#hw-fillwallet).
+they did not. A check never changes the wallet, even when the mnemonic
+matches.
 
 #### `hw exportwallet`
 
@@ -951,13 +889,6 @@ else, whichever network or type of address you use later.
 > - **The file shows every address of the wallet.** It holds no private key,
 >   but its public keys reveal every address and balance of the portfolios.
 >   `hw` makes it readable by you alone.
-> - **Fill in an upgraded wallet before you export it.** An upgraded wallet
->   that was not [filled in](#accounts-become-portfolios) does not know the
->   fingerprint of its mnemonic. Its file then gives the keys without their
->   origin. Another database cannot tell which portfolio each key belongs to,
->   and `importwallet` leaves them aside there. `exportwallet` warns about it,
->   and still writes the file. Run `fillwallet` first, then `exportwallet`
->   again.
 
 #### `hw importwallet`
 
@@ -983,24 +914,25 @@ Labels set: 2 addresses
 ```
 
 **Wallets and portfolios.** `importwallet` finds the wallet by the fingerprint
-the file gives, and each portfolio by its index. It creates a wallet or a
-portfolio the database does not have. The database can then watch the
-portfolio and prepare its payments without the mnemonic. This is how an online
-computer works with an offline signer.
+the file gives, and each portfolio by its index. It creates a portfolio the
+database does not have, whole, with the twelve accounts of the file. The
+database can then watch the portfolio and prepare its payments without the
+mnemonic. This is how an online computer works with an offline signer.
 
-**Merging.** A portfolio the database has is merged with the one of the file.
-`importwallet` adds the accounts the portfolio lacks, and leaves the others as
-they are. It never makes a second portfolio with the same index. Such a
-portfolio would hold the same keys, since the mnemonic and the index decide
-them. This merge is how the
-[partial portfolios](#accounts-become-portfolios) of an upgraded database are
-filled in on a computer that never sees the mnemonic.
+**A portfolio the database has** is left as it is, and the answer says
+`nothing to add`. `importwallet` never makes a second portfolio with the same
+index. Such a portfolio would hold the same keys, since the mnemonic and the
+index decide them. A portfolio has every account from the start, so
+`importwallet` adds no account to one either. The keys of the file must be the
+ones the portfolio holds. Otherwise `importwallet` refuses and changes nothing,
+since the file and the database are then not of one mnemonic.
 
-When the two cannot be merged, `importwallet` refuses and changes nothing. That
-happens when an account of the file has another key than the same account of
-the database. The two are then not of one mnemonic. `importwallet` also
-refuses two other files:
+`importwallet` also refuses three other files, and changes nothing:
 
+- **A portfolio without all of its accounts.** A portfolio the database does
+  not have is created whole, or not at all. A file that gives only some of its
+  twelve accounts is refused, with the advice to write the file again on the
+  computer that has the whole portfolio.
 - **A key the database holds, at another index.** The text of a key names its
   index, and a file can write any index there. The same key at another index
   would give a second portfolio the addresses of the first. `importwallet`
@@ -1013,13 +945,6 @@ refuses two other files:
   the path and the networks: `receive` would give different addresses on
   networks that must give the same.
 
-**Wallets without a fingerprint.** An upgraded database knows no fingerprint.
-`importwallet` recognizes its wallets by their keys, and gives them the
-fingerprint of the file. Wallets that turn out to be of one mnemonic are merged
-into one, and the answer says so. When the default wallet is one of those
-merged, `hw` writes the index of the wallet they were merged into to
-`default-wallet`, and says so, as [`fillwallet`](#hw-fillwallet) does.
-
 **A key alone is not imported.** `importwallet` imports whole wallets. An
 extended public key or an output descriptor from another wallet is one account.
 It does not say which portfolio it belongs to, and `hw` keeps no account
@@ -1030,22 +955,23 @@ record, is refused.
 
 **One portfolio of the file.** `--portfolio` reads the keys and the labels of
 one portfolio. The records of the other portfolios are not read. The answer
-counts them on one line, and `--json` gives the count as `otherportfolios`. A
-wallet always has `portfolio0`. So a wallet created from another portfolio
-alone gets an empty `portfolio0`, which the answer shows:
+counts them on one line, and `--json` gives the count as `otherportfolios`.
+Here the database had `portfolio0` of the wallet already:
 
 ```console
 $ hw importwallet wallet.jsonl --portfolio 1
-wallet0  bc560f95  created
-  portfolio0  created, nothing to add, still lacks 12 accounts
+wallet0  bc560f95  already in the database
   portfolio1  created, 12 accounts added
 
-Labels set: none
-Left aside: 2 records of the portfolios --portfolio leaves out
+Labels set: 1 address
+Left aside: 1 record of the portfolios --portfolio leaves out
 ```
 
-`importwallet` without `--portfolio`, or `fillwallet`, fills that `portfolio0`
-in.
+A wallet always has `portfolio0`. So `importwallet` creates a wallet only from
+a file that brings its `portfolio0`. In a database that does not have the
+wallet yet, `--portfolio 1` is refused, and so is a file that
+`exportwallet --portfolio 1` wrote. Import the whole file of the wallet
+instead.
 
 A `--portfolio` the file has nothing of is refused, with the portfolios the
 file has: `The file has no portfolio2: it has portfolio0 and portfolio1`. An
@@ -1069,8 +995,8 @@ labels the same way.
 > - **Import only a file you trust.** Without the mnemonic, `importwallet`
 >   cannot prove that the keys of a file are those of your mnemonic. A file
 >   that names the fingerprint of your wallet may still carry the keys of
->   someone else. It would fill in your partial portfolios with them, or add a
->   portfolio of them, and `receive` would then give out addresses of theirs.
+>   someone else. It would add a portfolio of them, and `receive` would then
+>   give out addresses of theirs.
 >   Import only a file you wrote with `exportwallet` on your own signer, or
 >   one that reached you over a channel you trust. Before you give out an
 >   address of a new account, check one address of it on the signer, as
@@ -1115,8 +1041,7 @@ The figures are those of a network. On `btc`, they add up the `bip44` and the
 `bip84` account, since a payment spends both. The spendable balance leaves out
 locked coins, coinbase coins not yet mature, and unconfirmed payments from
 other wallets. A network the portfolio never used has no line, so a portfolio
-with twelve accounts still reads in a few lines. A partial portfolio, which
-lacks accounts, says so. [`fillwallet`](#hw-fillwallet) fills it in.
+with twelve accounts still reads in a few lines.
 
 Without an option, `portfolios` lists every portfolio of every wallet. The
 portfolios of one wallet come together. `--wallet` keeps those of one wallet,
@@ -1133,9 +1058,8 @@ there.
 
 `--tabular` gives one row of a table to each network a portfolio has addresses
 or coins on: the wallet, the portfolio, the network, what it can spend, what is
-unconfirmed, its coins, its addresses, and the description of the portfolio,
-with the word `partial` for a partial one. The first columns are as wide as
-their longest cell, which no row cuts.
+unconfirmed, its coins, its addresses, and the description of the portfolio.
+The first columns are as wide as their longest cell, which no row cuts.
 
 `--csv FILE` writes one row for each network of each portfolio to a
 [CSV file](#listings): the wallet, the portfolio and its description, the
@@ -1157,10 +1081,8 @@ hw portfolios --unit sat
 **The descriptor.** A `bip44` account gives
 `pkh([bc560f95/44h/0h/0h]xpub.../<0;1>/*)#vq597j87`. It carries the public key
 of the account, the fingerprint of the mnemonic and the derivation path, the
-two chains of addresses, and a checksum. It holds no private key. When `hw`
-does not know the fingerprint, the descriptor names no origin, which a hardware
-wallet needs, and the row `Fingerprint` says `unknown`. That is the case of a
-wallet that was upgraded and not [filled in](#accounts-become-portfolios) yet.
+two chains of addresses, and a checksum. It holds no private key. A hardware
+wallet matches the account to its mnemonic by the fingerprint and the path.
 A descriptor names no network: Bitcoin and Bitcoin Cash write the same keys,
 and every test network writes `tpub` keys.
 
@@ -1301,14 +1223,12 @@ the chain, and the mnemonic can still spend them.
 ```console
 hw portfolios --verbose --wallet 1          # shows the fingerprint of wallet1
 hw deletewallet 4435aa1c --wallet 1
-hw deletewallet unknown --wallet 2          # an upgraded wallet that was not filled in
 ```
 
 `--wallet` names the wallet and must be given. The fingerprint must be that of
 the wallet, as `portfolios --verbose` shows it. It confirms which wallet to
 delete. An index alone is easy to mistype, and the fingerprint tells one
-mnemonic from another. For a wallet whose fingerprint `hw` does not know, type
-the word `unknown`.
+mnemonic from another.
 
 The other wallets keep their names. When `wallet0` is deleted, `wallet1` is
 still `wallet1`, and the next new wallet becomes `wallet0` again.
@@ -1441,9 +1361,6 @@ portfolio.
 >   them, or raise `gap` in the [configuration file](#configuration).
 > - **Bitcoin Cash has `bip44` addresses only.** `receive --network bch` gives
 >   one whatever `default-type` says, and `--type bip84` is refused there.
-> - **A partial portfolio may lack the account asked for.** `receive` then
->   refuses, and says how to fill the portfolio in. See
->   [Accounts become portfolios](#accounts-become-portfolios).
 > - **The code holds a payment URI** as [BIP 321] describes, with the address
 >   and nothing else. The label stays in the wallet.
 > - **The code takes 37 columns and 19 lines.** On a narrower terminal, its lines
@@ -1536,8 +1453,9 @@ that involves no portfolio of the wallet needs `--network`: see
 transaction is read as `importwallet` reads it: the file of `exportwallet`, or a
 [BIP 329] file of another wallet. `show` shows what `importwallet` would make
 of it, and changes nothing. Each wallet of the file comes with its portfolios.
-A portfolio is created, or merged with the one the database has, and the line
-says how many accounts would be added. Then each account comes with the labels
+The line of a portfolio says whether `importwallet` creates it, with its twelve
+accounts, or finds it in the database already, with nothing to add. Then each
+account comes with the labels
 of its addresses and transactions, and the coins it locks or unlocks. Run it
 before `importwallet`, to see what the file holds:
 
@@ -2384,7 +2302,11 @@ hw backup ~/hw-2026-10-30.sqlite
 ```
 
 To restore a backup, replace `~/.hw/accounts.sqlite` with the copy, or point
-`database-file` in `~/.hw/config.json` to it.
+`database-file` in `~/.hw/config.json` to it. Then run any command. A copy of
+the database of an earlier version is refused, and left as it is, as the
+database itself is. So is a copy made by a newer `hw`.
+[Upgrading from an earlier version](#upgrading-from-an-earlier-version) tells
+how to create the wallet again instead.
 
 #### `hw exportsheet`
 
@@ -2463,14 +2385,13 @@ control characters written out, such as `\x1b` for an escape or `\n` for a
 line break, so that a label cannot rewrite what the screen shows, a recipient
 for instance.
 
-The file names the keys by the fingerprint of the mnemonic, which a hardware
-wallet needs to find its own. A wallet knows its fingerprint when
-`newportfolio` or `recover` created it, or once `fillwallet` or `importwallet`
-gave it one. A wallet of an upgraded database knows none until then.
-`preparetx` says so when it writes a file without it. Such a file names the
-keys by the account's own key, which a hardware wallet does not sign. A signed
-file teaches the wallet no fingerprint. `fillwallet` and `importwallet` do,
-since they also bring the wallets of one mnemonic together.
+The file names the keys by the fingerprint of the mnemonic and their full
+path, which a hardware wallet needs to find its own. Every wallet has its
+fingerprint from the moment it exists. `newportfolio` and `recover` take it
+from the mnemonic, and `importwallet` from the file of the wallet. A file of
+another wallet may name a key of the portfolio by the fingerprint of the
+account's own key instead. `hw` reads it, and names the fingerprint of the
+mnemonic in the file it signs.
 
 ### Files of other wallets
 
@@ -2656,157 +2577,141 @@ Use `hw` 0.10. Never use version 0.8 or earlier.
 [CHANGELOG.md](CHANGELOG.md) lists what changed in each version, and the
 commands and options that were renamed or removed.
 
-`hw` 0.10 upgrades the database of 0.8 and 0.9 on its first command. It backs
-the database up to `~/.hw/migration-backups` first. Do not run an older `hw`
-on the upgraded database. `hw` 0.8 would rewrite parts of it in a format that
-0.10 cannot read.
+`hw` 0.10 does not read the database of an earlier version. You create the
+wallet again from its mnemonic, once. Your funds are not at risk. They are on
+the chain, and the mnemonic finds them again.
+
+### Why the database is not upgraded
+
+`hw` 0.9 kept single accounts, which you created one by one. `hw` 0.10 keeps
+[portfolios](#where-a-command-works) of twelve accounts each. The accounts that
+0.9 did not have are behind hardened steps of their paths, so only the
+mnemonic can derive them. `hw` 0.9 also kept no fingerprint of the master key,
+and the files of 0.10 name every key by it. An upgrade without the mnemonic
+would have left half-made wallets, to be completed from the mnemonic later.
+Creating the wallet again from the mnemonic is the same work, and leaves
+nothing half made.
+
+### What `hw` 0.10 says
+
+Every command refuses a database of `hw` 0.8 or 0.9. It writes nothing to the
+file, and makes no copy of it. The message names the file, and the commands to
+run next:
+
+```console
+$ hw portfolios
+The database /home/you/.hw/accounts.sqlite was made by an earlier version of hw, at format version 2.
+hw 0.10.0 does not read it, and has left it as it is. To go on, move it aside
+and create the wallet again from its mnemonic:
+
+  mv /home/you/.hw/accounts.sqlite /home/you/.hw/accounts-old.sqlite
+  hw recover
+
+recover finds the portfolios of the mnemonic that were paid. On an offline
+computer, run hw newportfolio --existing instead, once for each account index
+the old wallet used, from 0 up to the highest. Then carry the portfolios to the
+online computer with exportwallet and importwallet. The labels of the old
+database are not carried over.
+```
+
+A database of `hw` 0.8 is at format version 1, and one of 0.9 at version 2.
+`hw` 0.10 reads version 5, which `hw --version` shows. A database of a build of
+0.10 made before its release, at version 3 or 4, is refused the same way.
+
+### Create the wallet again
+
+**On an online computer.** Move the old database aside, as the message says.
+Then run [`recover`](#hw-recover), which asks for the mnemonic:
+
+```console
+mv ~/.hw/accounts.sqlite ~/.hw/accounts-old.sqlite
+hw recover
+```
+
+`recover` finds the portfolios of the mnemonic that were paid, on every
+network, and creates each one whole. It then syncs them. Run it once for each
+mnemonic the old database held. Each mnemonic becomes a wallet of its own.
+
+**With an offline computer.** `recover` needs the server, so it takes the
+mnemonic on the online computer. To keep the mnemonic offline, create the
+portfolios on the offline computer, and carry them over in a file:
+
+1. On the offline computer, move the old database aside. Create the portfolios
+   from the mnemonic, and write them to a file:
+
+   ```console
+   mv ~/.hw/accounts.sqlite ~/.hw/accounts-old.sqlite
+   hw newportfolio --existing                  # portfolio0
+   hw newportfolio --existing                  # portfolio1, for a second account
+   hw exportwallet wallet.jsonl
+   ```
+
+2. On the online computer, move the old database aside. Read the file, then
+   sync:
+
+   ```console
+   mv ~/.hw/accounts.sqlite ~/.hw/accounts-old.sqlite
+   hw importwallet wallet.jsonl
+   hw sync
+   ```
+
+Each `newportfolio --existing` adds the portfolio at the lowest free index,
+`portfolio0` first. Run it once for each account index the old wallet used,
+and for the free indexes between them. The index is the third step of the path
+of an account. An account at `/44'/0'/2'` is at index 2, so it needs three
+runs, for `portfolio0`, `portfolio1` and `portfolio2`. The first `sync` then
+finds the addresses each portfolio used.
+
+> **Good to know**
+>
+> - **The old file is left as it is.** `hw` 0.9 can still read it. Keep it
+>   until the new wallet shows all of your funds.
+> - **The labels of the old database are not carried over.** Nor are the names
+>   of its accounts and its pending transactions. `hw` 0.9 still shows them, as
+>   [Reading the old database](#reading-the-old-database) tells.
+> - **A backup file of `hw` 0.9 is not read either.** The `backup` command of
+>   0.9 wrote a file that only its `restore` reads.
+> - **A passphrase with accents needs care on an offline computer.** See
+>   [A passphrase with accents](#a-passphrase-with-accents).
+> - **A mnemonic split into parts cannot be typed into `hw` 0.10.** See
+>   [A mnemonic split into parts](#a-mnemonic-split-into-parts).
+> - **The configuration file of 0.9 still reads.** `hw` 0.10 names the keys it
+>   no longer has, such as `recovery-gap`, and leaves them aside.
 
 ### Accounts become portfolios
 
 `hw` 0.9 kept single accounts, which you created and named one by one. `hw`
 0.10 keeps [portfolios](#where-a-command-works). A portfolio holds every
 account of a mnemonic at one account index, on every network and of both types
-of address. The upgrade files your accounts under portfolios by itself. It asks
-for no mnemonic, so it leaves the portfolios partial, and one command fills
-them in afterwards.
+of address. So an account of 0.9 comes back in the portfolio of its index.
+Take three accounts of one mnemonic:
 
-**What the upgrade creates.**
-
-- **A portfolio for every account index the database uses.** Accounts at the
-  indexes 0 and 2 give `portfolio0` and `portfolio2`. The gap is kept. Index 1
-  stays free, and the next `newportfolio --existing` uses it.
-- **A wallet for each mnemonic and coin type.** `hw` 0.9 kept no fingerprint of
-  the master key. It knew which accounts shared a mnemonic on one coin type,
-  and nothing more. So the accounts of one mnemonic on Bitcoin and on Bitcoin
-  Cash start in two wallets, and those on the test networks in a third.
-  Accounts of different mnemonics never share a wallet. The upgrade does not
-  guess, since a wrong guess would put two mnemonics in one wallet.
-- **Wallets numbered by age.** The wallet with the oldest account is
-  `wallet0`.
-- **The names of the accounts as descriptions.** A portfolio takes the name of
-  its account as its description. A portfolio made of several accounts gets
-  all their names, with commas between them.
-  [`setdescription`](#hw-setdescription) changes it at any time.
-- **Partial portfolios.** A portfolio holds only the accounts the 0.9
-  database had, which are all `bip44` accounts. Their addresses, labels,
-  transactions, coins and pending transactions stay with them.
-- **An empty `portfolio0`** in a wallet that had no account at index 0, since
-  a wallet always has `portfolio0`.
-- **The date of each portfolio** is that of its oldest account. An empty
-  `portfolio0` takes a date once it has accounts: that of the accounts a merge
-  brings it, or the day it is filled in.
-
-Take a 0.9 database with three accounts of one mnemonic:
-
-| 0.9 account | Network | Path | It becomes |
+| 0.9 account | Network | Path | It comes back in |
 |---|---|---|---|
-| `main` | `btc` | `/44'/0'/0'` | `portfolio0` of `wallet0` |
-| `savings` | `btc` | `/44'/0'/1'` | `portfolio1` of `wallet0` |
-| `cash` | `bch` | `/44'/145'/0'` | `portfolio0` of `wallet1` |
+| `main` | `btc` | `/44'/0'/0'` | `portfolio0` |
+| `savings` | `btc` | `/44'/0'/1'` | `portfolio1` |
+| `cash` | `bch` | `/44'/145'/0'` | `portfolio0` |
+
+`main` and `cash` share `portfolio0`, which shows a line for each network:
 
 ```console
 $ hw portfolios
-portfolio0  wallet0  "main"
-  created 01 Mar 2024
-  btc  spendable 0.01200000 btc, 2 coins, 14 addresses
-  partial: it lacks 11 accounts, and fillwallet fills it in
-
-portfolio1  wallet0  "savings"
-  created 02 Mar 2024
-  btc  spendable 0.25000000 btc, 1 coin, 2 addresses
-  partial: it lacks 11 accounts, and fillwallet fills it in
-
-portfolio0  wallet1  "cash"
-  created 03 Mar 2024
-  bch  spendable 0.00000000 btc, no coins, 3 addresses
-  partial: it lacks 11 accounts, and fillwallet fills it in
-```
-
-**Why it asks for no mnemonic.** A 0.9 database holds only the extended public
-key of each account. The other accounts of a portfolio are behind a hardened
-step of the path, so these keys cannot derive them. Only the mnemonic can. But
-the upgrade runs by itself on the first command, on whichever computer that
-is, and it must not need a secret there. So it creates partial portfolios, and
-prints this message once:
-
-> The accounts of this database are now in portfolios. A portfolio holds every
-> account of a mnemonic at one account index, on every network. This database
-> had only some of them, so its portfolios are partial, and the accounts of one
-> mnemonic on Bitcoin, on Bitcoin Cash and on the test networks are in separate
-> wallets. `hw portfolios` lists them. To fill them in and bring each mnemonic into one
-> wallet, run `hw fillwallet` on the computer that has the mnemonic, once for
-> each mnemonic. If that is another computer, run `hw exportwallet FILE` there
-> afterwards, and `hw importwallet FILE` here.
-
-**Before the portfolios are filled in.** A partial portfolio works with the
-accounts it has. You can receive, sync and pay as before. A command that needs
-an account the portfolio lacks is refused, and says how to fill the portfolio
-in. `receive` refuses `--type bip84`, for example, in a portfolio that has no
-`bip84` account yet:
-
-```console
-$ hw receive --type bip84
-Error: portfolio0 of wallet0 has no bip84 account on btc yet. It is a partial portfolio, which lacks accounts. Fill it in with fillwallet on the computer that has the mnemonic, or with importwallet and a file of the whole wallet that exportwallet wrote there.
-```
-
-Until then, the accounts on Bitcoin Cash are in another wallet than those on
-Bitcoin. `--wallet` reaches them, as in `hw receive --wallet 1 --network bch`.
-The wallets also have no fingerprint yet. `portfolios --verbose` says
-`unknown`, the descriptors name no origin, and a transaction file names the
-keys in a way a hardware wallet does not sign.
-
-**Filling the portfolios in.** Run [`fillwallet`](#hw-fillwallet) on the
-computer that has the mnemonic, once for each mnemonic. It finds the wallets of
-the mnemonic by their keys, so you need not know which wallet each mnemonic
-became. It adds every account the portfolios lack. It also merges the wallets
-of the mnemonic into the one with the lowest index, and records the
-fingerprint:
-
-```console
-$ hw fillwallet
-21 accounts added to wallet0
-wallet1 was merged into wallet0: the same mnemonic gives both.
-
-portfolio0  wallet0  "main, cash"
-  created 01 Mar 2024
+portfolio0  wallet0
+  created 11 Nov 2026
   btc  spendable 0.01200000 btc, 2 coins, 14 addresses
   bch  spendable 0.00000000 btc, no coins, 3 addresses
 
-portfolio1  wallet0  "savings"
-  created 02 Mar 2024
+portfolio1  wallet0
+  created 11 Nov 2026
   btc  spendable 0.25000000 btc, 1 coin, 2 addresses
 ```
 
-The mnemonic must give the keys the wallet holds. A wrong word or a wrong
-passphrase gives other keys, so `fillwallet` refuses it and changes nothing.
-
-When the mnemonic stays on an offline computer, fill the portfolios in there,
-and carry them to the online computer in a file:
-
-1. On the offline computer, fill in the wallet and write it to a file:
-
-   ```console
-   hw fillwallet
-   hw exportwallet wallet.jsonl
-   ```
-
-2. On the online computer, read the file:
-
-   ```console
-   hw importwallet wallet.jsonl
-   ```
-
-[`importwallet`](#hw-importwallet) merges the whole portfolios of the file into
-the partial ones. It recognizes the wallets by their keys, and gives them the
-fingerprint of the file. The online computer never sees the mnemonic.
+The names of the accounts stay in the old database. A portfolio has a
+description in their place, which [`setdescription`](#hw-setdescription) sets:
 
 ```console
-$ hw importwallet wallet.jsonl
-wallet0  bc560f95  already in the database  merged with wallet1
-  portfolio0  10 accounts added
-  portfolio1  11 accounts added
-
-Labels set: none
+hw setdescription main
+hw setdescription savings --portfolio 1
 ```
 
 **What you type now.** The commands that worked on accounts have new names,
@@ -2822,25 +2727,26 @@ and `--account` is gone:
 | `exportacc`, `importacc` | `exportwallet`, `importwallet` |
 | `--account NAME` | `--portfolio N`, with `--wallet N` for another mnemonic, then `--network` and `--type` |
 
-> **Good to know**
->
-> - **An offline computer without the old database has nothing to fill in.**
->   Run `newportfolio --existing` there instead, once for each portfolio you
->   have, then `exportwallet`. `importwallet` merges that file into the partial
->   portfolios the same way.
-> - **`recover` fills the portfolios in too**, but it takes the mnemonic on an
->   online computer. So does `newportfolio --existing`, before it adds a
->   portfolio.
-> - **Fill a wallet in before you export it.** A wallet that is not filled in
->   has no fingerprint, so its file names the keys without their origin.
->   Another database cannot tell which portfolio each key belongs to.
->   `exportwallet` warns about it, and `importwallet` leaves such keys aside in
->   a database that does not hold them already.
-> - **An account file of 0.9 is refused.** `importwallet` reads the file of
->   `exportwallet`, which holds whole portfolios. Write the wallet again with
->   `exportwallet`.
-> - **A wallet that is not filled in has no fingerprint.**
->   [`deletewallet`](#hw-deletewallet) takes the word `unknown` in its place.
+### Reading the old database
+
+The old file keeps the labels, the names of the accounts and the pending
+transactions of `hw` 0.9. `hw` 0.10 left it as it is, so `hw` 0.9 still reads
+it. Run `hw` 0.9 with a `HOME` of its own, on a copy of the file:
+
+```console
+mkdir -p ~/hw-0.9/.hw
+cp ~/.hw/accounts-old.sqlite ~/hw-0.9/.hw/accounts.sqlite
+HOME=~/hw-0.9 hw-0.9 accounts               # hw-0.9 is the binary of hw 0.9
+HOME=~/hw-0.9 hw-0.9 addrs --account main   # the labels of the addresses of main
+```
+
+Set again the labels you want to keep with [`label`](#hw-label), which takes
+the address. A pending transaction cannot be carried over. Prepare it again
+with `hw` 0.10. One that `hw` 0.9 signed already can still be sent with its
+`sendtx`.
+
+Keep `hw` 0.9 to that copy. It does not know the database of `hw` 0.10, and
+must not be run on it.
 
 ### Accounts derived wrongly
 
@@ -2858,14 +2764,14 @@ not lost, but take care when you move them:
 
 Versions up to 0.9 could split a mnemonic with `mnemonic --split` into parts
 that were all needed to rebuild it. `hw` 0.10 neither makes nor reads such
-parts. Use `hw` 0.9 to move the funds of such a mnemonic to an address of
-`hw` 0.10.
+parts, so it cannot create the wallet of such a mnemonic again. Use `hw` 0.9 to
+move the funds of such a mnemonic to an address of `hw` 0.10.
 
-Run `hw` 0.9 with a `HOME` of its own, such as `HOME=$(mktemp -d)`. It then
-makes a database apart and leaves the upgraded one alone. There,
-`createacc --split N` asks for each of the N parts. Sync the account with
-`syncacc`. Then pay its funds to an address of `hw` 0.10 with `preparetx`,
-`signtx --split N` and `sendtx`.
+Run `hw` 0.9 on a copy of the [old database](#reading-the-old-database), which
+holds the account. Or run it with an empty `HOME` of its own, such as
+`HOME=$(mktemp -d)`, where `createacc --split N` asks for each of the N parts.
+Either way, sync the account with `syncacc`. Then pay its funds to an address
+of `hw` 0.10 with `preparetx`, `signtx --split N` and `sendtx`.
 
 [Backups in shares](#hw-newportfolio) take the place of parts. A chosen number of
 shares is enough, and a wrong share is told.
@@ -2874,19 +2780,32 @@ shares is enough, and a wrong share is told.
 
 A passphrase with accents or other non-ASCII letters is normalized as BIP39
 asks since `hw` 0.10. Earlier versions did not normalize it, so their accounts
-come from another seed than other wallets find. `hw` 0.10 still finds and signs
-those accounts, and warns. Move their funds to a wallet created with 0.10.
+come from another seed than other wallets find.
+
+[`recover`](#hw-recover) finds those accounts all the same. When the passphrase
+normalized finds nothing, it tries the passphrase as typed, and says so.
+`signtx` and `signmsg` then sign for them, and warn. Move their funds to a
+wallet created with 0.10.
+
+`newportfolio --existing` asks no server, so it cannot tell which of the two
+seeds holds funds. In a new database, it creates the wallet of the passphrase
+normalized, which holds none of the funds of an earlier version, and warns so.
+On an offline computer, move those funds with `hw` 0.9 first, from a copy of
+the [old database](#reading-the-old-database), to an address of a wallet
+created with 0.10. Or run `recover` on the online computer, which takes the
+mnemonic there.
 
 ### A wallet readable by others
 
 `hw` 0.9 and earlier let the system give `~/.hw` and the database the
 permissions of your umask, which often lets the other users of the computer
-read them. `hw` 0.10 makes a new wallet private, and leaves an existing one as
-it is. Make yours private:
+read them. `hw` 0.10 makes its new database private. It leaves a directory
+`~/.hw` made by an earlier version as it is, and the old database in it too.
+Make them private:
 
 ```console
 chmod 700 ~/.hw
-chmod 600 ~/.hw/accounts.sqlite
+chmod 600 ~/.hw/accounts-old.sqlite
 ```
 
 ### Transaction files of an earlier version

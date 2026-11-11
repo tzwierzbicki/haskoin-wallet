@@ -205,13 +205,16 @@ data Chains = BothChains | ReceivingChain | ChangeChain
   deriving (Eq, Show)
 
 -- | The descriptor of an account of a kind: its key in the script function
--- of the kind, pkh or wpkh, with its origin when the fingerprint of the
--- seed is known, and both chains
-accountDescriptor :: AccountKind -> Maybe Fingerprint -> HardPath -> Text -> Descriptor
-accountDescriptor kind fingerprintM path key =
+-- of the kind, pkh or wpkh, with its origin, the fingerprint of the seed
+-- and the path of the account, and both chains. Every wallet of hw knows
+-- its fingerprint, so a descriptor hw writes always has its origin, which
+-- a hardware wallet needs to match the account to its seed. A descriptor
+-- of another wallet may have none ('descriptorKeyOrigin').
+accountDescriptor :: AccountKind -> Fingerprint -> HardPath -> Text -> Descriptor
+accountDescriptor kind fingerprint path key =
   Descriptor
     { descriptorScripts = kindScripts kind,
-      descriptorKeyOrigin = (\fingerprint -> (fingerprint, toGeneric path)) <$> fingerprintM,
+      descriptorKeyOrigin = Just (fingerprint, toGeneric path),
       descriptorKey = key,
       descriptorChains = BothChains
     }

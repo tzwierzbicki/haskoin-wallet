@@ -30,7 +30,7 @@ import Control.Monad.Except
 import Control.Monad.Reader (MonadIO (..), MonadTrans (lift))
 import Data.Containers.ListUtils (nubOrd, nubOrdOn)
 import Data.IORef (modifyIORef', newIORef, readIORef)
-import Data.List (find, genericLength, partition, sort)
+import Data.List (find, genericLength, nub, partition, sort)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isNothing)
@@ -260,15 +260,10 @@ portfolioPaid ctx cfg storeOn networks index keys watch = go [(net, kind, key) |
 data Recovered = Recovered
   { -- | The wallet of the seed, when it has one now
     recoveredWallet :: !(Maybe Natural),
-    -- | The indexes of the wallets of the seed merged into it
-    recoveredMerged :: ![Natural],
     -- | The indexes of the portfolios recovered: those found paid that
-    -- the wallet did not have, which were created. The portfolio 0 a
+    -- the wallet did not have, which were created. The portfolio 0 a new
     -- wallet gets though it was never paid is not among them.
     recoveredPortfolios :: ![Natural],
-    -- | How many accounts the portfolios the wallet had already were
-    -- filled in with
-    recoveredFilled :: !Natural,
     -- | The sync of each pool of the wallet on the networks searched
     recoveredSyncs :: ![SyncRes],
     -- | The networks whose store failed during the search or the syncs,
@@ -286,17 +281,17 @@ data Recovered = Recovered
 -- the given number of portfolios in a row where nothing was found. A
 -- portfolio is paid when any of its accounts was, of either kind, on any
 -- network searched: it is then created with every account, on every
--- network, as newportfolio creates it. A portfolio the wallet has whole
--- already is passed over without counting, and so is an index whose
--- child key is invalid. After every 'accountLimit' portfolios found, the
--- question is asked ('searchIndexes').
+-- network, as newportfolio creates it. A portfolio the wallet has
+-- already, whole as every portfolio is, is passed over without counting,
+-- and so is an index whose child key is invalid. After every
+-- 'accountLimit' portfolios found, the question is asked
+-- ('searchIndexes').
 --
--- The wallet of the seed is the one the database has for it, its wallets
--- merged into one when hw 0.9 left several ('adoptSeed'), or a new one
--- when a portfolio is found. The portfolios the wallet had are filled in
--- from the seed, and it gets its portfolio 0 whether that one was paid
--- or not: a wallet always has portfolio 0. A seed with no wallet and no
--- paid portfolio leaves the database as it was.
+-- The wallet of the seed is the one the database has with its
+-- fingerprint ('seedWallet'), or a new one when a portfolio is found. A
+-- new wallet gets its portfolio 0 whether that one was paid or not: a
+-- wallet always has portfolio 0. A seed with no wallet and no paid
+-- portfolio leaves the database as it was.
 --
 -- A network that is not searched, because its store is down or the host
 -- does not serve it, is not among those given: a portfolio that was paid
@@ -309,15 +304,13 @@ recoverSeed :: (MonadUnliftIO m) => Ctx -> Config -> (Network -> Store) -> [Netw
 recoverSeed ctx cfg storeOn networks seed portfolioGap watch = do
   -- The networks whose store failed so far in the search, with the failure
   failedRef <- liftIO $ newIORef []
-  adopted <- adoptSeed ctx seed
-  let existing = adoptedWallet <$> adopted
+  existing <- seedWallet ctx seed
   held <- case existing of
     Nothing -> return []
     Just wallet -> lift $ walletPortfolios wallet
-  whole <- lift $ filterM (fmap not . isPartial . (.portfolioId)) held
-  let wholeIndexes = portfolioIndex . (.portfolioRow) <$> whole
+  let heldIndexes = portfolioIndex . (.portfolioRow) <$> held
   found <- searchIndexes portfolioGap (tellPortfolioSearch watch.status) reportedPortfolios watch $ \index ->
-    if index `elem` wholeIndexes
+    if index `elem` heldIndexes
       then return PassedOver
       else do
         keysM <- liftIO $ seedPortfolioKeys seed index
@@ -332,28 +325,23 @@ recoverSeed ctx cfg storeOn networks seed portfolioGap watch = do
   failedInSearch <- liftIO $ readIORef failedRef
   let searchedUp = [net | net <- networks, net `notElem` (fst <$> failedInSearch)]
   if null found && isNothing existing
-    then return (Recovered Nothing [] [] 0 [] failedInSearch)
+    then return (Recovered Nothing [] [] failedInSearch)
     else do
-      wallet@(walletId, walletRow) <- maybe (lift (insertWallet (Just (seedFingerprint seed)))) return existing
-      -- The portfolios found that the wallet did not have. They are told
-      -- before the wallet gets its portfolio 0: a seed whose portfolio 0
-      -- alone was paid has recovered that portfolio, though it is made
-      -- with the wallet.
-      let created = [index | index <- found, index `notElem` (portfolioIndex . (.portfolioRow) <$> held)]
-      -- The portfolios the wallet had, and its portfolio 0, from the seed
-      filled <- fillWallet ctx seed wallet
-      forM_ created $ \index -> do
-        there <- lift $ portfolioAt walletId index
-        when (isNothing there) $ void $ createPortfolio ctx seed wallet index
+      wallet <- maybe (lift (insertWallet (seedFingerprint seed))) return existing
+      -- The portfolios found that the wallet did not have. A seed whose
+      -- portfolio 0 alone was paid has recovered that portfolio, though a
+      -- new wallet would get it anyway.
+      let created = [index | index <- found, index `notElem` heldIndexes]
+          -- A new wallet gets its portfolio 0, paid or not
+          creating = nub ([0 | isNothing existing] <> created)
+      forM_ creating $ createPortfolio ctx seed wallet
       portfolios <- lift $ walletPortfolios wallet
       let pools = [portfolioPool portfolio net | portfolio <- portfolios, net <- searchedUp]
       (syncs, failedInSyncs) <- syncEach ctx cfg storeOn pools False watch
       return
         Recovered
-          { recoveredWallet = Just (walletIndex walletRow),
-            recoveredMerged = maybe [] adoptedMerged adopted,
+          { recoveredWallet = Just (walletIndex (snd wallet)),
             recoveredPortfolios = created,
-            recoveredFilled = if isNothing existing then 0 else filled,
             recoveredSyncs = syncs,
             recoveredDown = failedInSearch <> failedInSyncs
           }
@@ -588,8 +576,7 @@ sync ctx cfg plainStore pool full watch = do
       then (,) (nubOrd ((.txid) <$> listed)) <$> liveTxids pool
       else do
         known <- txInfoBlockRefs pool
-        untimed <- untimedSummaries pool
-        return (transactionsToFetch known untimed addrBals listings, Map.keysSet known)
+        return (transactionsToFetch known addrBals listings, Map.keysSet known)
   txs <- fromStore $ storeTransactions store toFetch
   refusedAnswer store $ askedFor toFetch txs
   refusedAnswer store $ mapM_ weighed txs
@@ -699,18 +686,16 @@ listTxs cfg store net tell bals = do
 {- The summaries -}
 
 -- | What to fetch in full, from the summaries known with their blocks, the
--- summaries without their time, the stored balances and the listings of
--- the changed addresses: the listed transactions that are new or whose
--- block changed; the unconfirmed summaries, whose transactions may have
--- been confirmed, replaced or dropped since the last sync; the summaries
--- without their time, stored before hw kept it, whatever their addresses;
--- and every transaction of an address that has transactions for the first
--- time. A summary is built with the addresses the wallet knows at the
--- time, so a transaction that also paid an address generated later, say a
--- batch payout from someone deriving the public key, shows that output as
--- somebody else's until it is rebuilt.
-transactionsToFetch :: Map TxHash Store.BlockRef -> [TxHash] -> Map Address AddressBalance -> [(Store.Balance, [Store.TxRef])] -> [TxHash]
-transactionsToFetch known untimed addrBals listings = nubOrd $ changed <> unconfirmed <> untimed <> firstSeen
+-- stored balances and the listings of the changed addresses: the listed
+-- transactions that are new or whose block changed; the unconfirmed
+-- summaries, whose transactions may have been confirmed, replaced or
+-- dropped since the last sync; and every transaction of an address that
+-- has transactions for the first time. A summary is built with the
+-- addresses the wallet knows at the time, so a transaction that also paid
+-- an address generated later, say a batch payout from someone deriving the
+-- public key, shows that output as somebody else's until it is rebuilt.
+transactionsToFetch :: Map TxHash Store.BlockRef -> Map Address AddressBalance -> [(Store.Balance, [Store.TxRef])] -> [TxHash]
+transactionsToFetch known addrBals listings = nubOrd $ changed <> unconfirmed <> firstSeen
   where
     changed = [r.txid | (_, refs) <- listings, r <- refs, Map.lookup r.txid known /= Just r.block]
     unconfirmed = [tid | (tid, ref) <- Map.toList known, not (Store.confirmed ref)]

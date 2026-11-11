@@ -413,20 +413,53 @@ fileSpec ctx =
 {- A file of a wallet -}
 
 -- | A file of a wallet as exportwallet writes it for portfolio0 of the test
--- wallet with the key of its bip44 account on btc alone: an address
--- labelled Wages and a transaction labelled Salary
+-- wallet: the keys of its twelve accounts, an address of its bip44 account
+-- on btc labelled Wages, and a transaction there labelled Salary
 mainWalletFile :: Text.Text
-mainWalletFile =
-  Text.unlines
-    [ "{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\",\"purpose\":44}",
-      "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Wages\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\",\"keypath\":\"/0/0\"}",
-      "{\"type\":\"tx\",\"ref\":\"0000000000000000000000000000000000000000000000000000000000000001\",\"label\":\"Salary\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\"}"
-    ]
+mainWalletFile = Text.unlines (portfolio0KeyRecords <> mainLabelRecords)
+
+-- | The same file with the key of the bip44 account on btc alone, one
+-- account of the twelve of portfolio0: a part of a portfolio, which
+-- importwallet does not create
+mainAccountFile :: Text.Text
+mainAccountFile = Text.unlines (take 1 portfolio0KeyRecords <> mainLabelRecords)
+
+-- | The records of the keys of the twelve accounts of portfolio0 of the
+-- test wallet, as exportwallet writes them, bip44 first on each network.
+-- The test networks share the keys of their paths, m/44'/1'/0' and
+-- m/84'/1'/0'.
+portfolio0KeyRecords :: [Text.Text]
+portfolio0KeyRecords =
+  [ record testAccountXPub "pkh([bc560f95/44'/0'/0'])" "btc" "44",
+    record testSegwitAccountXPub "wpkh([bc560f95/84'/0'/0'])" "btc" "84",
+    record testAccountXPubBch "pkh([bc560f95/44'/145'/0'])" "bch" "44",
+    record testAccountXPubTest "pkh([bc560f95/44'/1'/0'])" "btctest" "44",
+    record testSegwitAccountXPubTest "wpkh([bc560f95/84'/1'/0'])" "btctest" "84",
+    record testAccountXPubTest "pkh([bc560f95/44'/1'/0'])" "btctest4" "44",
+    record testSegwitAccountXPubTest "wpkh([bc560f95/84'/1'/0'])" "btctest4" "84",
+    record testAccountXPubTest "pkh([bc560f95/44'/1'/0'])" "btcreg" "44",
+    record testSegwitAccountXPubTest "wpkh([bc560f95/84'/1'/0'])" "btcreg" "84",
+    record testAccountXPubTest "pkh([bc560f95/44'/1'/0'])" "bchtest" "44",
+    record testAccountXPubTest "pkh([bc560f95/44'/1'/0'])" "bchtest4" "44",
+    record testAccountXPubTest "pkh([bc560f95/44'/1'/0'])" "bchreg" "44"
+  ]
+  where
+    record key origin net purpose =
+      "{\"type\":\"xpub\",\"ref\":\"" <> key <> "\",\"origin\":\"" <> origin <> "\",\"network\":\"" <> net <> "\",\"purpose\":" <> purpose <> "}"
+
+-- | The labels of 'mainWalletFile', of its bip44 account on btc: an
+-- address labelled Wages and a transaction labelled Salary
+mainLabelRecords :: [Text.Text]
+mainLabelRecords =
+  [ "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Wages\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\",\"keypath\":\"/0/0\"}",
+    "{\"type\":\"tx\",\"ref\":\"0000000000000000000000000000000000000000000000000000000000000001\",\"label\":\"Salary\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\"}"
+  ]
 
 walletFileSpec :: Spec
 walletFileSpec =
   describe "A file of a wallet shown by its name" $ do
-    -- The file names one account of the twelve of a portfolio
+    -- The file names the twelve accounts of portfolio0, and labels in one
+    -- of them
     it "is shown wallet by wallet and account by account, as importwallet would take each, with the labels of the file under its account" $
       withHome $ \home -> do
         TextIO.writeFile (home </> "wallet.jsonl") mainWalletFile
@@ -434,7 +467,7 @@ walletFileSpec =
         runOut run
           `shouldBe` Text.unlines
             [ "wallet0  bc560f95  not in the database, and importwallet creates it",
-              "  portfolio0  importwallet creates it, 1 account to add, still lacks 11 accounts",
+              "  portfolio0  importwallet creates it, 12 accounts to add",
               "",
               "portfolio0  btc  bip44",
               "  Address labels",
@@ -448,6 +481,13 @@ walletFileSpec =
         TextIO.writeFile (home </> "wallet.jsonl") mainWalletFile
         _ <- answer home ["show", "wallet.jsonl"] []
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right []
+
+    -- importwallet creates a portfolio only whole
+    it "is refused when it gives a part of a portfolio the database does not have, as importwallet refuses it" $
+      withHome $ \home -> do
+        TextIO.writeFile (home </> "account.jsonl") mainAccountFile
+        (errorOf <$> hwJson home ["show", "account.jsonl"] [])
+          `shouldReturn` Right "The file gives 1 of the 12 accounts of portfolio0 of the wallet bc560f95, which the database does not have: importwallet creates a portfolio only whole, with every account. Write the file with exportwallet on the computer that has the whole portfolio"
 
     it "says of a portfolio the database holds whole that importwallet adds nothing to it" $
       withHome $ \home -> do

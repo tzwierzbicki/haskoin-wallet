@@ -7,6 +7,7 @@ import Control.Monad.IO.Class (liftIO)
 import Data.Default (def)
 import Data.List (isPrefixOf, isSuffixOf)
 import Data.String.Conversions (cs)
+import Data.Text (Text)
 import Data.Time (LocalTime (..), TimeOfDay (..), ZonedTime (..), fromGregorian, utc)
 import qualified Database.Persist as P
 import Database.Persist.Sql (PersistValue (..), transactionSave)
@@ -14,10 +15,8 @@ import Haskoin.Wallet.Backup (backupDatabase, backupName)
 import Haskoin.Wallet.Commands (cmdBackup)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Migration (latestDatabaseVersion)
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.TestUtils
-import qualified Haskoin.Wallet.Schema.V2 as V2
 import System.Directory (listDirectory)
 import System.FilePath (takeDirectory, takeFileName, (</>))
 import Test.Hspec
@@ -34,22 +33,22 @@ spec = do
         let database = dir </> "accounts.sqlite"
             backups = dir </> "backups"
         inDatabaseFile database $ do
-          createTables V2.migrateAll
-          P.insert_ $ V2.DBVersion "0.9"
-          P.insert_ $ V2.DBWallet "892eb8e4"
-        copy <- either fail return =<< backupDatabase database backups 2
+          createTables migrateAll
+          P.insert_ $ DBVersion 5
+          P.insert_ $ DBBest "btc" bestBlockHash 800105 Nothing
+        copy <- either fail return =<< backupDatabase database backups 5
         takeDirectory copy `shouldBe` backups
-        takeFileName copy `shouldSatisfy` \name -> "accounts-version-2-" `isPrefixOf` name && ".sqlite" `isSuffixOf` name
-        inDatabaseFile copy storedVersions `shouldReturn` [(PersistText "0.9", "text")]
-        inDatabaseFile copy (tableRows "d_b_wallet") `shouldReturn` [[PersistText "892eb8e4"]]
+        takeFileName copy `shouldSatisfy` \name -> "accounts-version-5-" `isPrefixOf` name && ".sqlite" `isSuffixOf` name
+        inDatabaseFile copy storedVersions `shouldReturn` [(PersistInt64 5, "integer")]
+        inDatabaseFile copy (tableRows "d_b_best") `shouldReturn` [[PersistText "btc", PersistText bestBlockHash, PersistInt64 800105, PersistNull]]
 
     -- SQLite writes the copy next to its path, and it then takes the path
     it "leaves no other file next to it" $
       inScratchDirectory $ \dir -> do
         let database = dir </> "accounts.sqlite"
             backups = dir </> "backups"
-        inDatabaseFile database $ createTables V2.migrateAll
-        copy <- either fail return =<< backupDatabase database backups 2
+        inDatabaseFile database $ createTables migrateAll
+        copy <- either fail return =<< backupDatabase database backups 5
         listDirectory backups `shouldReturn` [takeFileName copy]
 
     it "includes the rows still in the write-ahead log" $
@@ -58,11 +57,11 @@ spec = do
         -- Committed while the connection is open: the rows are in the
         -- write-ahead log, not yet in the file
         copy <- inDatabaseFile database $ do
-          createTables V2.migrateAll
-          P.insert_ $ V2.DBVersion "0.9"
+          createTables migrateAll
+          P.insert_ $ DBVersion 5
           transactionSave
-          liftIO $ either fail return =<< backupDatabase database (dir </> "backups") 2
-        inDatabaseFile copy storedVersions `shouldReturn` [(PersistText "0.9", "text")]
+          liftIO $ either fail return =<< backupDatabase database (dir </> "backups") 5
+        inDatabaseFile copy storedVersions `shouldReturn` [(PersistInt64 5, "integer")]
 
     -- A file stands where the directory would go
     it "is not made when its directory cannot be created, and says why" $
@@ -71,7 +70,7 @@ spec = do
             backups = dir </> "taken" </> "backups"
         inDatabaseFile database $ createTables migrateAll
         writeFile (dir </> "taken") ""
-        backupDatabase database backups 2
+        backupDatabase database backups 5
           `shouldReturn` Left ("The directory " <> backups <> " could not be created: not a directory")
 
   describe "The backup command" $ do
@@ -81,12 +80,12 @@ spec = do
             copy = dir </> "copy.sqlite"
         inDatabaseFile database $ do
           createTables migrateAll
-          P.insert_ $ DBVersion latestDatabaseVersion
-          P.insert_ $ DBBest "btc" "00000000000000000002a7c4c1e48d76c5a37902165a270156b7a8d72728a054" 800105 Nothing
+          P.insert_ $ DBVersion 5
+          P.insert_ $ DBBest "btc" bestBlockHash 800105 Nothing
         cmdBackup (configUsing database) (Just copy) `shouldReturn` ResponseFile copy
-        inDatabaseFile copy storedVersions `shouldReturn` [(PersistInt64 (fromIntegral latestDatabaseVersion), "integer")]
+        inDatabaseFile copy storedVersions `shouldReturn` [(PersistInt64 5, "integer")]
         inDatabaseFile copy (tableRows "d_b_best")
-          `shouldReturn` [[PersistText "btc", PersistText "00000000000000000002a7c4c1e48d76c5a37902165a270156b7a8d72728a054", PersistInt64 800105, PersistNull]]
+          `shouldReturn` [[PersistText "btc", PersistText bestBlockHash, PersistInt64 800105, PersistNull]]
 
     it "refuses to overwrite a file" $
       inScratchDirectory $ \dir -> do
@@ -113,6 +112,10 @@ spec = do
         cmdBackup (configUsing database) (Just copy)
           `shouldReturn` ResponseError (cs $ "The database could not be copied to " <> copy <> ": it is not an SQLite database")
         listDirectory dir `shouldReturn` ["accounts.sqlite"]
+
+-- | The hash of the best block the databases of the tests hold
+bestBlockHash :: Text
+bestBlockHash = "00000000000000000002a7c4c1e48d76c5a37902165a270156b7a8d72728a054"
 
 -- | The configuration of an hw whose database is the given file
 configUsing :: FilePath -> Config

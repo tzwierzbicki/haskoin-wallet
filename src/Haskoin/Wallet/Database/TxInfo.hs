@@ -292,9 +292,7 @@ txInfoHash info =
 -- same for a transaction on the chain and one in preparation, and addresses
 -- are written as the text of the network. An address of the portfolio is
 -- written with its path below the key of its account and the type of that
--- account. The summaries hw 0.9 stored have no type: every account was a
--- BIP44 one then, so a path without a type is read as one of a BIP44
--- account, and those summaries read as they are.
+-- account ('PoolPath').
 
 instance Json.ToJSON MyOutputs where
   toJSON (MyOutputs v p l) =
@@ -330,8 +328,7 @@ instance Json.FromJSON MyInputs where
         <$> o .: "value"
         <*> parseJSON (Json.Object o)
         <*> o .: "label"
-        -- The summaries stored by earlier versions of hw have no outpoints
-        <*> o .:? "outpoints" .!= []
+        <*> o .: "outpoints"
 
 instance MarshalJSON Network TxSummary where
   marshalValue net = object . summaryPairs net
@@ -393,20 +390,13 @@ summaryParser net o =
     <*> o .: "feebyte"
     <*> o .:? "changeinfee"
     <*> o .: "size"
-    -- The summaries stored by earlier versions of hw have no lock time
-    <*> o .:? "locktime" .!= 0
+    <*> o .: "locktime"
     <*> (mapTextAddr net =<< o .: "myoutputs")
     <*> (mapTextAddr net =<< o .: "otheroutputs")
     <*> (mapM (unmarshalValue net) =<< o .: "nonstdoutputs")
     <*> (mapTextAddr net =<< o .: "myinputs")
-    <*> (mapTextAddr net =<< mapM otherInputValue =<< o .: "otherinputs")
+    <*> (mapTextAddr net =<< o .: "otherinputs")
     <*> (mapM (unmarshalValue net) =<< o .: "nonstdinputs")
-  where
-    -- The summaries stored by earlier versions of hw wrote an object per
-    -- input of others, with its value
-    otherInputValue :: Json.Value -> Parser Natural
-    otherInputValue (Json.Object input) = input .: "value"
-    otherInputValue value = parseJSON value
 
 -- | The keys of a status. A transaction in preparation is written with the
 -- block, confirmations and dead flag of one that is nowhere yet, so that
@@ -576,21 +566,6 @@ liveTxids pool = do
       return (t ^. DBTxInfoTxid)
   Set.fromList <$> liftEither (mapM (bytesToHash . unValue) rows)
 
--- | The live summaries of a pool without their time, stored before hw
--- kept it, as the step to version 4 of the database copied them: the sync
--- fetches their transactions again to learn it. An index holds these rows
--- alone, so that asking costs nothing once every summary has its time.
-untimedSummaries :: (MonadUnliftIO m) => Pool -> ExceptT String (DB m) [TxHash]
-untimedSummaries pool = do
-  rows <-
-    lift . select . from $ \t -> do
-      where_ $
-        ofPool pool t
-          &&. isNothing (t ^. DBTxInfoTime)
-          &&. t ^. DBTxInfoDead ==. val False
-      return (t ^. DBTxInfoTxid)
-  liftEither $ mapM (bytesToHash . unValue) rows
-
 -- | The live transactions of the pool in the mempool, with their
 -- summaries, by their ids, up to the count. The index on the block
 -- references finds them: a mempool reference sorts before every block
@@ -708,7 +683,7 @@ repsertSummary pool tid ref time summary = do
             dBTxInfoNetwork = poolNetworkName pool,
             dBTxInfoTxid = hashBytes tid,
             dBTxInfoBlockRef = S.encode ref,
-            dBTxInfoTime = Just time,
+            dBTxInfoTime = time,
             dBTxInfoAmount = fromInteger (summaryAmount summary),
             dBTxInfoBlob = BS.toStrict $ marshalJSON net summary,
             dBTxInfoDead = False,
@@ -824,7 +799,7 @@ chainTxInfo heightM row = do
   summary <- liftEither $ decodeSummary net tid (dBTxInfoBlob row)
   let dead = dBTxInfoDead row
       confirmations = if dead then 0 else getConfirmations heightM ref
-      status = ChainStatus tid ref (dBTxInfoTime row) confirmations dead
+      status = ChainStatus tid ref (Just (dBTxInfoTime row)) confirmations dead
   label <- lift $ txLabel pool tid
   lift $ fillTxInfoLabels pool $ TxInfo summary (OnChain status) label Map.empty
 
@@ -920,9 +895,9 @@ coinLabels pool tids = do
 -- | The time of a transaction of the pool: when the store first saw
 -- it, as the history of the pool holds it. A coin shows the time of
 -- the transaction that paid it, as a transaction shows its own. None when
--- the store gave no time, or when the pool has no such transaction.
+-- the pool has no such transaction.
 transactionTime :: (MonadUnliftIO m) => Pool -> TxHash -> DB m (Maybe UTCTime)
-transactionTime pool tid = (dBTxInfoTime =<<) <$> P.get (txInfoKey pool tid)
+transactionTime pool tid = fmap dBTxInfoTime <$> P.get (txInfoKey pool tid)
 
 -- | The transaction with the labels of the portfolio's addresses, those it
 -- spends from and those it pays, as the function gives them from the

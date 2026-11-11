@@ -29,7 +29,7 @@ import Data.Time (UTCTime)
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Database.Account (accountPool, getAccountById, insertAccount)
+import Haskoin.Wallet.Database.Account (accountPool, getAccountById)
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Tx.CoinSelection (CoinSelection (..), FeePayer (..))
@@ -297,7 +297,7 @@ lockedCoins accId = map (\c -> (jsonCoinAddress c, transactionLocked c)) <$> coi
 corePayment :: Ctx -> IO TxSignData
 corePayment ctx = do
   text <- BS.readFile "test/data/psbt/core/pending-payment-finalized.psbt"
-  file <- expectRight $ psbtTxFile ctx Nothing [[FileAccount (testAccountPub ctx) Bip44 "m/44'/0'/0'" (Just testFingerprint) btc]] =<< decodePsbtBase64 text
+  file <- expectRight $ psbtTxFile ctx Nothing [[FileAccount (testAccountPub ctx) Bip44 "m/44'/0'/0'" testFingerprint btc]] =<< decodePsbtBase64 text
   return (txFileData file)
 
 importingSpec :: Ctx -> Spec
@@ -1192,8 +1192,8 @@ conflictsSpec ctx =
 
 {- The fingerprint a signed transaction names -}
 
--- A wallet learns the fingerprint of its seed from the seed, or from a
--- file of the wallet. A signed transaction names the seed that signed it,
+-- A wallet has the fingerprint of its seed from the seed, or from a file
+-- of the wallet. A signed transaction names the seed that signed it,
 -- which the wallet cannot check against its keys.
 fingerprintSpec :: Ctx -> Spec
 fingerprintSpec ctx =
@@ -1207,17 +1207,7 @@ fingerprintSpec ctx =
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx
         _ <- importTo ctx accId =<< signedNaming testFingerprint2 accId
-        (fmap (dBWalletFingerprint . snd) <$> lift (walletAt 0)) `dbShouldBeE` Just (Just "bc560f95")
-
-    -- The wallet is as the step from hw 0.9 leaves it: one account, and no
-    -- fingerprint
-    it "is not taken for the fingerprint of a wallet that has none yet" $
-      inDatabaseE $ do
-        (walletId, _) <- lift $ insertWallet Nothing
-        (portfolioKey, _) <- insertPortfolio walletId 0 ""
-        (accId, _) <- insertAccount portfolioKey Bip44 btc ctx (testAccountPub ctx)
-        _ <- importTo ctx accId =<< signedNaming testFingerprint accId
-        (fmap (dBWalletFingerprint . snd) <$> lift (walletAt 0)) `dbShouldBeE` Just Nothing
+        (fmap (dBWalletFingerprint . snd) <$> lift (walletAt 0)) `dbShouldBeE` Just "bc560f95"
 
     -- A counterparty names the seed 4435aa1c in a file the user signed,
     -- and hands it over first: the next genuine file, of another payment,

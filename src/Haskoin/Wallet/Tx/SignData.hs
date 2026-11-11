@@ -63,10 +63,6 @@ noLabel = Text.empty
 
 {- JSON, as the database keeps it -}
 
--- The rows of older versions of hw carry a "signed" flag as well. It is
--- ignored: the transaction says whether it is signed. Their paths are
--- texts, those of a BIP44 account, which a 'PoolPath' reads as such.
-
 instance FromJSON TxSignData where
   parseJSON =
     withObject "txsigndata" $ \o -> do

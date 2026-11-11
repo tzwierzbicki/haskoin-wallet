@@ -1,4 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
@@ -37,7 +38,6 @@ module Haskoin.Wallet.Commands
     -- * Wallets and portfolios
     cmdNewPortfolio,
     cmdRecover,
-    cmdFillWallet,
     cmdCheckMnemonic,
     cmdImportWallet,
     cmdExportWallet,
@@ -132,7 +132,7 @@ import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Entropy
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Keys
-import Haskoin.Wallet.Labels (ImportReport (..), ImportScope (..), WalletImport (..), fileShown, holdsAnything, importFile, readWalletFile, walletRecords)
+import Haskoin.Wallet.Labels (ImportScope (..), fileShown, holdsAnything, importFile, readWalletFile, walletRecords)
 import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
 import Haskoin.Wallet.Shares (genShares)
@@ -180,7 +180,6 @@ commandResponse ctx cfg unit = \case
   -- Wallets and portfolios
   CommandNewPortfolio opts -> cmdNewPortfolio ctx cfg opts
   CommandRecover opts -> cmdRecover ctx cfg opts
-  CommandFillWallet walletM -> cmdFillWallet ctx cfg walletM
   CommandCheckMnemonic choice -> cmdCheckMnemonic ctx cfg choice
   CommandImportWallet choice file -> cmdImportWallet ctx cfg choice file
   CommandExportWallet choice file -> cmdExportWallet ctx cfg choice file
@@ -259,18 +258,13 @@ answered = either (ResponseError . cs) id
 
 -- | The accounts of the portfolio a listing covers: every one, or only
 -- those on --network, or of --type. A type the network does not have is
--- refused. So is a choice the portfolio has no account for, as a partial
--- portfolio may: the refusal says how to fill it in.
+-- refused. Every other choice keeps an account: a portfolio has every
+-- account of every network.
 listedAccounts :: Portfolio -> Maybe Network -> Maybe AccountKind -> ExceptT String (DB IO) [(DBAccountId, DBAccount)]
 listedAccounts portfolio netM kindM = do
   for_ ((,) <$> netM <*> kindM) $ liftEither . uncurry checkKindOnNetwork
   accounts <- lift $ portfolioAccountRows portfolio.portfolioId
-  let kept = [held | held@(_, acc) <- accounts, maybe True (== accountNetwork acc) netM, maybe True (== accountKind acc) kindM]
-  when (null kept) $
-    throwError $ case netM of
-      Just net -> missingAccount portfolio net kindM
-      Nothing -> portfolioText portfolio <> " has no " <> maybe "" ((<> " ") . cs . kindName) kindM <> "account yet. " <> howToFillIn
-  return kept
+  return [held | held@(_, acc) <- accounts, maybe True (== accountNetwork acc) netM, maybe True (== accountKind acc) kindM]
 
 -- | The accounts a listing covers, by network, in the order of the
 -- networks of a portfolio: what the portfolio holds on each network is
@@ -317,23 +311,6 @@ writeDefaults :: [(Text, Json.Value)] -> ExceptT String (DB IO) ()
 writeDefaults changes = do
   dir <- liftIO hwDataDirectory
   ExceptT . liftIO . runExceptT $ setConfigKeys dir changes
-
--- | Keep the default wallet a wallet that exists, once wallets were merged
--- into another: when the default wallet is one of those merged, the key
--- default-wallet takes the index of the wallet they were merged into, and
--- the user is told, on stderr
-keepDefaultWallet :: Config -> Natural -> [Natural] -> ExceptT String (DB IO) ()
-keepDefaultWallet cfg target merged =
-  when (configDefaultWallet cfg `elem` merged) $ do
-    writeDefaults [(defaultWalletKey, Json.toJSON target)]
-    liftIO . tell terminal $
-      "The key default-wallet of the configuration file is now "
-        <> show target
-        <> ": "
-        <> cs (walletName (configDefaultWallet cfg))
-        <> ", the default wallet, was merged into "
-        <> cs (walletName target)
-        <> "."
 
 {- Answers -}
 
@@ -387,9 +364,10 @@ coinAnswer (_, row) (place, coin) = do
 
 -- | Make a new mnemonic, or the shares of a new backup, with its wallet
 -- and the portfolio 0 of it. Or, with --existing, ask for a mnemonic the
--- user has and add a portfolio to its wallet, at the lowest free index.
--- A portfolio is created whole, with every account
--- ('Haskoin.Wallet.Keys.portfolioAccounts').
+-- user has and add a portfolio to its wallet, the one with its
+-- fingerprint ('seedWallet'), at the lowest free index, or create the
+-- wallet with its portfolio 0. A portfolio is created whole, with every
+-- account ('Haskoin.Wallet.Keys.portfolioAccounts').
 cmdNewPortfolio :: Ctx -> Config -> NewPortfolio -> IO Response
 cmdNewPortfolio ctx cfg opts
   | opts.existing = runDBResponse cfg $ do
@@ -397,17 +375,11 @@ cmdNewPortfolio ctx cfg opts
         throwError "--entropy, --dice, --shares and --threshold make a new mnemonic: they do not go with --existing"
       secret <- askNewSeedSecret terminal
       seed <- seedToCreateWith ctx secret
-      adopted <- adoptSeed ctx seed
-      (held, merged, filled) <- case adopted of
-        Nothing -> (,[],0) <$> lift (insertWallet (Just (seedFingerprint seed)))
-        -- The portfolios the wallet has come first: a partial one is
-        -- filled in before another one is added
-        Just found -> (adoptedWallet found,adoptedMerged found,) <$> fillWallet ctx seed (adoptedWallet found)
+      held <- maybe (lift (insertWallet (seedFingerprint seed))) return =<< seedWallet ctx seed
       index <- lift $ nextPortfolioIndex seed (fst held)
       portfolio <- createPortfolio ctx seed held index
       view <- viewOfPortfolio portfolio
-      keepDefaultWallet cfg (walletIndex (snd held)) merged
-      return $ ResponseNewPortfolio Nothing view merged filled
+      return $ ResponseNewPortfolio Nothing view
   | otherwise = do
       -- The secret is made and its passphrase asked before the database
       -- is held: the user may take a while
@@ -422,10 +394,10 @@ cmdNewPortfolio ctx cfg opts
           for_ clash $ \(_, wallet) ->
             throwError $
               "The new mnemonic has the fingerprint of " <> cs (walletName (walletIndex wallet)) <> ": nothing was created. Run the command again for another mnemonic"
-          held <- lift $ insertWallet (Just (seedFingerprint seed))
+          held <- lift $ insertWallet (seedFingerprint seed)
           portfolio <- createPortfolio ctx seed held 0
           view <- viewOfPortfolio portfolio
-          return $ ResponseNewPortfolio (Just shown) view [] 0
+          return $ ResponseNewPortfolio (Just shown) view
   where
     sources =
       Sources
@@ -454,10 +426,11 @@ cmdNewPortfolio ctx cfg opts
 -- | The seed newportfolio --existing adds a portfolio from: the one BIP39
 -- derives from the mnemonic and the passphrase, or the one SLIP-39
 -- derives from a backup in shares and its passphrase. For a mnemonic with
--- a passphrase that normalizing changes, hw derived another seed before,
--- from the passphrase as typed. When the database has a wallet of that
--- seed and none of the other, the new portfolio is of it too, so that one
--- seed keeps one wallet, and the user is told.
+-- a passphrase that normalizing changes, hw 0.9 derived another seed,
+-- from the passphrase as typed, and recover makes a wallet of that seed
+-- when it finds its funds. When the database has a wallet of that seed
+-- and none of the other, the new portfolio is of it too, so that one
+-- mnemonic keeps one wallet, and the user is told.
 seedToCreateWith :: Ctx -> SeedSecret -> ExceptT String (DB IO) PublicSeed
 seedToCreateWith ctx secret = do
   seed <- liftEither $ secretSeed ctx secret
@@ -465,11 +438,14 @@ seedToCreateWith ctx secret = do
   case typedM of
     Nothing -> return seed
     Just typed -> do
-      ofNormalized <- not . null <$> seedWallets ctx seed
-      ofTyped <- not . null <$> seedWallets ctx typed
-      if ofTyped && not ofNormalized
-        then liftIO (tell terminal typedPassphraseCreated) >> return typed
-        else return seed
+      ofNormalized <- isJust <$> seedWallet ctx seed
+      ofTyped <- isJust <$> seedWallet ctx typed
+      if
+        | ofTyped && not ofNormalized -> liftIO (tell terminal typedPassphraseCreated) >> return typed
+        -- A wallet hw 0.9 made from this passphrase has the keys of the
+        -- passphrase as typed, and this one will not
+        | not ofNormalized -> liftIO (tell terminal typedPassphraseNew) >> return seed
+        | otherwise -> return seed
 
 -- | Recover the portfolios of a seed that were paid, from its mnemonic or
 -- the shares of its backup: see "Haskoin.Wallet.Sync". The search covers
@@ -525,78 +501,16 @@ cmdRecover ctx cfg opts =
         storeFailureApart (storeOn net) $ \store -> map (net,) <$> foreignFunds ctx cfg store net seed opts.portfolioGap watch
       let elsewhere = concat [funds | Right funds <- fundsSearched]
           failed = failedInRecovery <> [(net, failure) | (net, Left failure) <- zip (upAfter failedInRecovery) fundsSearched]
-      for_ (recoveredWallet recovered) $ \wallet -> keepDefaultWallet cfg wallet (recoveredMerged recovered)
       return $
         ResponseRecover
           (upAfter failed)
           opts.portfolioGap
           (recoveredWallet recovered)
-          (recoveredMerged recovered)
           (recoveredPortfolios recovered)
-          (recoveredFilled recovered)
           (recoveredSyncs recovered)
           elsewhere
           (servedNot served)
           [(net, cs failure) | (net, failure) <- servedDown served <> failed]
-
--- | The seed of a secret whose wallets pass the test, if either of its
--- seeds has such wallets: the one derived as BIP39 asks, or, when
--- normalizing changes the passphrase, the one hw derived before from the
--- passphrase as typed. The wallets of a seed are those whose keys it
--- derives ('seedWallets'). fillwallet --wallet N asks for a seed that
--- wallet N is of, and fillwallet alone for a seed any wallet is of.
-seedWithWallets :: Ctx -> SeedSecret -> ([(DBWalletId, DBWallet)] -> Bool) -> ExceptT String (DB IO) (Maybe PublicSeed)
-seedWithWallets ctx secret wanted = do
-  seed <- liftEither $ secretSeed ctx secret
-  typedM <- liftEither $ secretTypedSeed ctx secret
-  owners <- filterM (fmap wanted . seedWallets ctx) (seed : maybeToList typedM)
-  return (listToMaybe owners)
-
--- | Fill in the partial portfolios of the wallets of a mnemonic, or the
--- shares of its backup: every account their portfolios lack is added,
--- and portfolio 0 is made when the wallet has none. The wallets of the
--- same mnemonic are merged into one, which then knows its fingerprint
--- ('adoptSeed'): a database upgraded from hw 0.9 keeps the accounts of
--- one mnemonic on Bitcoin and on Bitcoin Cash in two wallets.
---
--- Without --wallet, the wallets are those the mnemonic is of, whatever
--- their indexes, which its keys tell: the user of an upgraded database
--- runs fillwallet once for each mnemonic, without knowing which wallet
--- each one became. The default wallet does not matter here. With
--- --wallet, the mnemonic must be of that wallet. Either way a mnemonic
--- that gives other keys is refused, and nothing changes.
-cmdFillWallet :: Ctx -> Config -> Maybe Natural -> IO Response
-cmdFillWallet ctx cfg walletM =
-  runDBResponse cfg $ do
-    -- Before the user types the mnemonic, not after
-    chosenM <- case walletM of
-      Just _ -> Just <$> chooseWallet cfg walletM
-      Nothing -> do
-        wallets <- lift getWallets
-        when (null wallets) $ throwError noWallets
-        return Nothing
-    secret <- askSeedSecret terminal
-    let refusal = notOfWallets secret (walletIndex . snd <$> chosenM)
-        wanted wallets = case chosenM of
-          Just (chosenId, _) -> any ((== chosenId) . fst) wallets
-          Nothing -> not (null wallets)
-    seed <- liftMaybe refusal =<< seedWithWallets ctx secret wanted
-    adopted <- liftMaybe refusal =<< adoptSeed ctx seed
-    let held = adoptedWallet adopted
-        merged = adoptedMerged adopted
-    added <- fillWallet ctx seed held
-    views <- mapM viewOfPortfolio =<< lift (walletPortfolios held)
-    keepDefaultWallet cfg (walletIndex (snd held)) merged
-    return $ ResponseFilled merged added views
-  where
-    -- The refusal of a mnemonic of no wallet, or not of the one --wallet
-    -- names
-    notOfWallets :: SeedSecret -> Maybe Natural -> String
-    notOfWallets secret indexM =
-      (case secret of MnemonicSecret _ -> "The mnemonic or the passphrase is"; SharesSecret _ _ -> "The shares or the passphrase are")
-        <> case indexM of
-          Just index -> " not of " <> cs (walletName index) <> ": they give other keys than the ones it holds. Nothing was changed"
-          Nothing -> " of no wallet of the database: they give other keys than the ones the wallets hold. Nothing was changed"
 
 -- | Check a mnemonic and its passphrase, or the shares of a backup,
 -- against a portfolio: they match when they give the key of every account
@@ -606,8 +520,6 @@ cmdCheckMnemonic ctx cfg choice =
   runDBResponse cfg $ do
     portfolio <- choosePortfolio cfg choice
     accounts <- lift $ portfolioAccountRows portfolio.portfolioId
-    when (null accounts) $
-      throwError (portfolioText portfolio <> " has no account to check a mnemonic against. " <> howToFillIn)
     secret <- askSeedSecret terminal
     seed <- liftEither $ secretSeed ctx secret
     typedM <- liftEither $ secretTypedSeed ctx secret
@@ -636,11 +548,6 @@ typedPassphraseChecked =
 -- must be of. The answer says what became of each wallet and each
 -- portfolio of the file, and what the file labels that the wallet does
 -- not have yet.
---
--- A file of a wallet of hw 0.9 merges the wallets of its seed into one,
--- as fillwallet does. When the default wallet is one of those merged,
--- the key default-wallet then names the wallet they were merged into
--- ('keepDefaultWallet'): it would name a wallet that is gone otherwise.
 cmdImportWallet :: Ctx -> Config -> PortfolioChoice -> FilePath -> IO Response
 cmdImportWallet ctx cfg choice file =
   runDBResponse cfg $ do
@@ -649,9 +556,9 @@ cmdImportWallet ctx cfg choice file =
     -- A key or a descriptor alone, or a file of another kind, holds no
     -- record: it is refused, not read as an empty file
     unless (holdsAnything (readWalletFile content)) $ throwError (couldNotRead file notAWalletFile)
-    report <- importFile ctx scope content
-    for_ (reportWallets report) $ \wallet ->
-      keepDefaultWallet cfg (walletImportIndex wallet) (walletImportMerged wallet)
+    -- The import is undone whole when it is refused, which the refusal
+    -- says. show shares its refusals, and changes nothing either way.
+    report <- withExceptT (<> ". Nothing was changed") (importFile ctx scope content)
     return (ResponseImport report)
 
 -- | Why a file without any record is refused by importwallet
@@ -678,19 +585,7 @@ cmdExportWallet ctx cfg choice file =
     checkPathFree file
     records <- walletRecords ctx portfolios
     liftEitherIO $ writeTextFile file (recordsText records)
-    -- On stderr, to keep the --json answer clean
-    when (any (isNothing . portfolioFingerprint) portfolios) $
-      liftIO $ tell terminal noOriginWarning
     return $ ResponseFile file
-
--- | What exportwallet tells of a wallet whose fingerprint hw does not
--- know: its file names no origin, so it does not say which portfolio
--- each key belongs to
-noOriginWarning :: String
-noOriginWarning =
-  "The wallet does not know the fingerprint of its mnemonic, so the file names its keys without their origin. \
-  \Another database cannot tell which portfolio each key belongs to, and importwallet leaves them aside there. \
-  \Run fillwallet first, then exportwallet again."
 
 -- | Set the description of a portfolio, or of its wallet with
 -- --of-wallet. An empty description removes it.
@@ -770,7 +665,7 @@ cmdDeletePortfolio cfg choice =
 
 -- | Delete a wallet with all of its portfolios, whatever they hold. The
 -- wallet must be named, and its fingerprint given, which confirms the
--- wallet: the word unknown for a wallet that has none. When it was the
+-- wallet. When it was the
 -- default wallet, a wallet left takes its place, the only one or the one
 -- the user picks, and the key default-wallet is written. The default
 -- portfolio goes back to portfolio 0 when the new default wallet does not
@@ -782,13 +677,8 @@ cmdDeleteWallet cfg walletM typed =
     index <- liftMaybe "Give the --wallet to delete: deletewallet takes no default" walletM
     (walletId, wallet) <- chooseWallet cfg (Just index)
     let name = cs (walletName index) :: String
-    case walletFingerprint wallet of
-      Just fingerprint ->
-        unless (Text.toLower (Text.strip typed) == fingerprintToText fingerprint) $
-          throwError ("The fingerprint given is not that of " <> name <> ": portfolios --verbose shows it. Nothing was deleted")
-      Nothing ->
-        unless (Text.toLower (Text.strip typed) == "unknown") $
-          throwError (name <> " has no known fingerprint: type the word unknown in place of it. Nothing was deleted")
+    unless (Text.toLower (Text.strip typed) == fingerprintToText (walletFingerprint wallet)) $
+      throwError ("The fingerprint given is not that of " <> name <> ": portfolios --verbose shows it. Nothing was deleted")
     lift $ deleteWallet walletId
     -- The raw transactions its coins came from are of no use any more
     _ <- dropOrphanRawTxs
@@ -853,9 +743,7 @@ cmdExportSheet ctx cfg choice file =
     portfolios <- choosePortfolios cfg choice
     when (null portfolios) $ throwError noWallets
     summary <- sheetOf (portfoliosListing cfg choice)
-    -- A portfolio without an account has nothing to list
-    listed <- filterM (fmap (not . null) . lift . portfolioAccountRows . (.portfolioId)) portfolios
-    held <- mapM portfolioSheets listed
+    held <- mapM portfolioSheets portfolios
     -- The pending transactions of every portfolio exported, in one tab
     pendingPools <-
       if choice == defaultPortfolio
@@ -964,8 +852,7 @@ coinNamed none = \case
 {- Addresses -}
 
 -- | Give out the next receiving address of the account --network and
--- --type pick in the portfolio. A partial portfolio may lack the account,
--- and the refusal then says how to fill it in ('chooseAccount').
+-- --type pick in the portfolio ('chooseAccount')
 cmdReceive :: Ctx -> Config -> Receive -> IO Response
 cmdReceive ctx cfg opts =
   runDBResponse cfg $ do
@@ -1289,17 +1176,11 @@ cmdUnlockCoin cfg named netM =
 {- Transactions -}
 
 -- | The pools of a portfolio a listing of transactions covers: every
--- network it has an account on, or the --network alone, which it must
--- have an account on
+-- network of the portfolio, or the --network alone
 listedPools :: Portfolio -> Maybe Network -> ExceptT String (DB IO) [Pool]
 listedPools portfolio netM = do
   pools <- lift $ portfolioPools portfolio.portfolioId
-  let kept = [pool | pool <- pools, maybe True (== pool.poolNetwork) netM]
-  when (null kept) $
-    throwError $ case netM of
-      Just net -> missingAccount portfolio net Nothing
-      Nothing -> portfolioText portfolio <> " has no account yet. " <> howToFillIn
-  return kept
+  return [pool | pool <- pools, maybe True (== pool.poolNetwork) netM]
 
 -- | The transactions of the portfolio on the chain, a section for each
 -- network, or for the one --network keeps, in the order txs lists them,
@@ -1434,7 +1315,7 @@ notInWallet =
 
 -- | The keys of an account, as the derivation records of its files name
 -- them: with its path in its portfolio, and the fingerprint of its
--- wallet, when hw knows it
+-- wallet
 fileAccountOf :: Ctx -> Portfolio -> DBAccount -> FileAccount
 fileAccountOf ctx portfolio acc =
   FileAccount (accountXPubKey ctx acc) (accountKind acc) (accountPath portfolio acc) (portfolioFingerprint portfolio) (accountNetwork acc)
@@ -1537,25 +1418,13 @@ fileNetwork givenM fileM = case (givenM, fileM) of
   _ -> return (fileM <|> givenM)
 
 -- | Write a transaction file as a PSBT, with the keys of the accounts of
--- its pool when it has one, at a path that must be free. The user is
--- told, on stderr, when the file names the keys without the fingerprint
--- of the mnemonic, which a hardware wallet needs to find its keys: the
--- wallet does not know it yet.
+-- its pool when it has one, named by the fingerprint of the mnemonic and
+-- their paths, at a path that must be free
 writeTxFile :: Ctx -> Maybe Pool -> FilePath -> TxFile -> ExceptT String (DB IO) ()
 writeTxFile ctx poolM file txFile = do
   accounts <- maybe (return []) (poolFileAccounts ctx) poolM
   psbt <- liftEither $ txFilePsbt ctx accounts txFile
   liftEitherIO $ writeFileBytes file (encodePsbt psbt)
-  for_ poolM $ \pool -> do
-    portfolio <- getPortfolio pool.poolPortfolio
-    when (isNothing (portfolioFingerprint portfolio) && isNothing (txSignDataFingerprint (txFileData txFile))) $
-      liftIO $ hPutStrLn stderr noFingerprintWarning
-
--- | What the user is told when a file names the keys of an account by
--- the account's own key, as the wallet does not know the fingerprint of
--- its mnemonic
-noFingerprintWarning :: String
-noFingerprintWarning = "The wallet does not know the fingerprint of its mnemonic, so the file names the keys by the account's own key, which a hardware wallet does not sign. The wallet learns the fingerprint from fillwallet, or from importwallet with a file of the computer that has the mnemonic."
 
 -- | Write a transaction of the network to the --output file, when there is
 -- one, with the labels of its addresses as its summary has them, and the
@@ -1705,7 +1574,7 @@ controlledPool cfg choice netM outpoints spendFrom = do
   pool <- case nub (byCoin <> byAddress) of
     [] -> do
       portfolio <- choosePortfolio cfg choice
-      choosePool cfg portfolio netM
+      return (choosePool cfg portfolio netM)
     held -> poolAmong cfg choice netM "The coins or addresses given" held
   let net = pool.poolNetwork
   place <- poolPlace pool
@@ -2297,10 +2166,6 @@ cmdSync ctx cfg choice netM full =
       when (null portfolios) $ throwError noWallets
       pools <- concat <$> mapM (lift . portfolioPools . (.portfolioId)) portfolios
       let chosen = [pool | pool <- pools, maybe True (== pool.poolNetwork) netM]
-      when (null chosen) $
-        throwError $ case netM of
-          Just net -> "No portfolio to sync has an account on " <> net.name <> ". " <> howToFillIn
-          Nothing -> "No portfolio to sync has an account. " <> howToFillIn
       synced <- syncPools ctx cfg (webStore ctx cfg) chosen full (terminalWatcher line)
       return $ ResponseSync (syncedPools synced) (syncedNotServed synced) [(net, cs failure) | (net, failure) <- syncedDown synced]
 
@@ -2372,7 +2237,7 @@ signedMessageFromFile file = do
 -- | Copy the database to the given file, which must not exist, or into the
 -- backups directory of hw under a name carrying the format version and the
 -- time. The database is at the latest format version, since every command
--- migrates it first.
+-- refuses one of another version first ("Haskoin.Wallet.Migration").
 cmdBackup :: Config -> Maybe FilePath -> IO Response
 cmdBackup cfg fileM =
   runResponse $ do

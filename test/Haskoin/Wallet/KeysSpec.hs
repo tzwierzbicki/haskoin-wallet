@@ -239,8 +239,11 @@ poolPathSpec =
     it "is a path of the bip44 account when nothing says its type, as every path was before portfolios" $
       legacyPath (Deriv :/ 1 :/ 0) `shouldBe` PoolPath Bip44 (Deriv :/ 1 :/ 0)
 
-    it "is read from JSON without a type as a path of the bip44 account" $
-      Json.eitherDecode "{\"path\":\"/0/3\"}" `shouldBe` Right (PoolPath Bip44 (Deriv :/ 0 :/ 3))
+    -- hw writes the type of every path it stores, and reads no database
+    -- of hw 0.9, which wrote a path alone
+    it "is refused in JSON without the type of its account" $
+      (Json.eitherDecode "{\"path\":\"/0/3\"}" :: Either String PoolPath)
+        `shouldBe` Left "Error in $: key \"type\" not found"
 
     it "is refused in JSON with a type hw does not hold" $
       (Json.eitherDecode "{\"type\":\"bip49\",\"path\":\"/0/3\"}" :: Either String PoolPath)
@@ -305,29 +308,8 @@ foreignKindSpec ctx =
       addressAt (Deriv :/ 0 :/ 0) `shouldBe` Just "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr"
       addressAt (Deriv :/ 0 :/ 1) `shouldBe` Just "bc1p4qhjn9zdvkux4e44uhx8tc55attvtyu358kutcqkudyccelu0was9fqzwh"
       addressAt (Deriv :/ 1 :/ 0) `shouldBe` Just "bc1p3qkhfews2uk44qtvauqyr2ttdsw7svhkl9nkm9s9c3x4ax5h60wqwruhk7"
-
-    it "tell where a seed has a key: the kind and the network of the account whose key it is, at the index of the key" $ do
-      seed <- expectRight $ seedOf ctx testMnemonic
-      (held <$> accountsWithKey seed (testAccountPub ctx)) `shouldReturn` [("bip44", "btc")]
-      (held <$> accountsWithKey seed (testSegwitAccountPub ctx)) `shouldReturn` [("bip84", "btc")]
-      -- The key of the second test wallet is of another seed
-      (held <$> accountsWithKey seed (fromJust (xPubImport btc ctx testAccountXPub2))) `shouldReturn` []
-      -- The test networks all have the coin type 1
-      (held <$> accountsWithKey seed (fromJust (xPubImport btcTest ctx testAccountXPubTest)))
-        `shouldReturn` [("bip44", "btctest"), ("bip44", "btctest4"), ("bip44", "bchtest4"), ("bip44", "bchtest"), ("bip44", "btcreg"), ("bip44", "bchreg")]
-
-    it "tell when a seed has a key at an account of a kind hw does not hold, the bip44 accounts of Bitcoin on Bitcoin Cash included" $ do
-      seed <- expectRight $ seedOf ctx testMnemonic
-      (elsewhere <$> foreignAccountsWithKey seed (testWrappedAccountPub ctx)) `shouldReturn` [("bip49", "btc")]
-      (elsewhere <$> foreignAccountsWithKey seed (testTaprootAccountPub ctx)) `shouldReturn` [("bip86", "btc")]
-      (elsewhere <$> foreignAccountsWithKey seed (testAccountPub ctx)) `shouldReturn` [("bip44", "bch")]
-      (elsewhere <$> foreignAccountsWithKey seed (testSegwitAccountPub ctx)) `shouldReturn` []
   where
     firstKey = Deriv :/ 0 :/ 0 :: SoftPath
-    held :: [(AccountKind, Network)] -> [(Text, String)]
-    held found = [(kindName kind, net.name) | (kind, net) <- found]
-    elsewhere :: [(ForeignKind, Network)] -> [(Text, String)]
-    elsewhere found = [(foreignKindName kind, net.name) | (kind, net) <- found]
     abandonMnemonic = MnemonicPass "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about" ""
 
 {- The seed hw derived before, from the passphrase as typed -}

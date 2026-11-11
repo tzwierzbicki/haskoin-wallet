@@ -13,10 +13,10 @@ module Haskoin.Wallet.Keys where
 
 import Control.Applicative ((<|>))
 import Control.Exception (evaluate, try)
-import Control.Monad (filterM, forM)
+import Control.Monad (forM)
 import Crypto.KDF.PBKDF2 (Parameters (..), fastPBKDF2_SHA512)
 import Data.ByteString (ByteString)
-import Data.Aeson (FromJSON (..), ToJSON (..), object, withObject, withText, (.!=), (.:), (.:?), (.=))
+import Data.Aeson (FromJSON (..), ToJSON (..), object, withObject, withText, (.:), (.=))
 import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
 import Data.String.Conversions (cs)
@@ -171,7 +171,7 @@ data PoolPath = PoolPath
   }
   deriving (Eq, Ord, Show)
 
--- | A path of a BIP44 account: what every path was before portfolios
+-- | A path of a BIP44 account, whose P2PKH addresses are the legacy ones
 legacyPath :: SoftPath -> PoolPath
 legacyPath = PoolPath Bip44
 
@@ -182,16 +182,12 @@ poolPathText :: PoolPath -> Text
 poolPathText path = kindName (pathKind path) <> cs (pathToStr (pathInAccount path))
 
 -- | In JSON, a path is an object with the path and the type of its
--- account. A path written alone, as a text, is one of a BIP44 account:
--- hw wrote it so before it had portfolios, and every account was a BIP44
--- one then.
+-- account
 instance ToJSON PoolPath where
   toJSON path = object ["type" .= pathKind path, "path" .= pathInAccount path]
 
 instance FromJSON PoolPath where
-  parseJSON value = case value of
-    Json.String _ -> legacyPath <$> parseJSON value
-    _ -> withObject "path" (\o -> PoolPath <$> o .:? "type" .!= Bip44 <*> o .: "path") value
+  parseJSON = withObject "path" (\o -> PoolPath <$> o .: "type" <*> o .: "path")
 
 {- The kinds of accounts hw does not hold -}
 
@@ -514,21 +510,6 @@ seedPortfolioKeys seed index = do
   keys <- forM portfolioAccounts $ \(net, kind) ->
     fmap (\key -> (net, kind, key)) <$> seedAccountKey seed kind net index
   return (sequence keys)
-
--- | The accounts of a seed that have a key, of any kind hw holds on any
--- network, at the index the key carries: none when the seed does not have
--- it there. An account imported from its key alone, which says nothing of
--- its path, may have been given the wrong kind or network. This tells
--- which it has.
-accountsWithKey :: PublicSeed -> XPubKey -> IO [(AccountKind, Network)]
-accountsWithKey seed key =
-  filterM (\(kind, net) -> (== Just key) <$> seedAccountKey seed kind net (xPubIndex key)) [(kind, net) | net <- allNets, kind <- networkKinds net]
-
--- | The accounts of a foreign kind of a seed that have a key, as
--- 'accountsWithKey' finds those of the kinds hw holds
-foreignAccountsWithKey :: PublicSeed -> XPubKey -> IO [(ForeignKind, Network)]
-foreignAccountsWithKey seed key =
-  filterM (\(kind, net) -> (== Just key) <$> seedForeignKey seed kind net (xPubIndex key)) [(kind, net) | net <- allNets, kind <- networkForeignKinds net]
 
 {- Private keys of a sweep -}
 

@@ -86,17 +86,11 @@ groupAccountRef g = case groupAccounts g of
 data Response
   = -- | The command failed, and why
     ResponseError !Text
-  | -- | What newportfolio did: the secret it made, when it made one, the
-    -- portfolio it created, the indexes of the wallets of the same seed
-    -- it merged into the wallet of the portfolio, and how many accounts
-    -- it added to the other portfolios of that wallet to fill them in
-    ResponseNewPortfolio !(Maybe NewSecret) !PortfolioView ![Natural] !Natural
+  | -- | What newportfolio did: the secret it made, when it made one, and
+    -- the portfolio it created
+    ResponseNewPortfolio !(Maybe NewSecret) !PortfolioView
   | -- | A portfolio as it is now, after a command that changed it
     ResponsePortfolio !PortfolioView
-  | -- | The portfolios of a wallet once fillwallet filled them in: the
-    -- indexes of the wallets merged into it, how many accounts were added,
-    -- and the portfolios
-    ResponseFilled ![Natural] !Natural ![PortfolioView]
   | -- | Whether a mnemonic matched a portfolio, and what hw says of it
     ResponseChecked !PortfolioRef !Bool !Text
   | -- | Something deleted, a portfolio or a wallet: what hw says of it,
@@ -178,14 +172,13 @@ data Response
     ResponseSync ![SyncRes] ![Network] ![(Network, Text)]
   | -- | What recover found of a seed. In order: the networks searched;
     -- the gap of portfolios the search ended on; the wallet of the seed,
-    -- if it has one now; the indexes of the wallets merged into it; the
-    -- indexes of the portfolios created; how many accounts the portfolios
-    -- the wallet had were filled in with; the sync of each portfolio of
-    -- the wallet on each network searched; the funds of the seed at the
+    -- if it has one now; the indexes of the portfolios created; the sync
+    -- of each portfolio of the wallet on each network searched; the funds
+    -- of the seed at the
     -- accounts hw does not hold, each with its network; the networks the
     -- host does not serve; and the networks left out, each with the
     -- failure of its store.
-    ResponseRecover ![Network] !Natural !(Maybe Natural) ![Natural] ![Natural] !Natural ![SyncRes] ![(Network, ForeignFunds)] ![Network] ![(Network, Text)]
+    ResponseRecover ![Network] !Natural !(Maybe Natural) ![Natural] ![SyncRes] ![(Network, ForeignFunds)] ![Network] ![(Network, Text)]
   | -- | The fee rates recent blocks paid, on the network asked
     ResponseFees !Network !FeeRates
   deriving (Eq, Show)
@@ -256,10 +249,9 @@ parseCoinBalance o = CoinBalance <$> o .: "total" <*> o .: "spendable" <*> o .: 
 instance ToJSON Response where
   toJSON = \case
     ResponseError err -> typed "error" ["error" .= err]
-    ResponseNewPortfolio secretM view merged filled ->
-      typed "newportfolio" ["secret" .= secretM, "portfolio" .= view, "merged" .= merged, "filled" .= filled]
+    ResponseNewPortfolio secretM view ->
+      typed "newportfolio" ["secret" .= secretM, "portfolio" .= view]
     ResponsePortfolio view -> typed "portfolio" ["portfolio" .= view]
-    ResponseFilled merged added views -> typed "filled" ["merged" .= merged, "added" .= added, "portfolios" .= views]
     ResponseChecked ref result text -> typed "checked" (portfolioRefPairs ref <> ["result" .= result, "text" .= text])
     ResponseDeleted text defaults ->
       typed "deleted" ["text" .= text, "defaults" .= [object ["key" .= key, "value" .= value] | (key, value) <- defaults]]
@@ -308,15 +300,13 @@ instance ToJSON Response where
           "notserved" .= ((.name) <$> notServed),
           "notsynced" .= (failedNetworkJson <$> notSynced)
         ]
-    ResponseRecover searched gap walletM merged created filled results elsewhere notServed notSearched ->
+    ResponseRecover searched gap walletM created results elsewhere notServed notSearched ->
       typed
         "recover"
         [ "networks" .= ((.name) <$> searched),
           "portfoliogap" .= gap,
           "wallet" .= walletM,
-          "merged" .= merged,
           "portfolios" .= created,
-          "filled" .= filled,
           "syncres" .= (syncResJson <$> results),
           "unspendable" .= (uncurry foreignFundsJson <$> elsewhere),
           "notserved" .= ((.name) <$> notServed),
@@ -329,9 +319,8 @@ instance FromJSON Response where
     kind <- o .: "type"
     case kind :: Text of
       "error" -> ResponseError <$> o .: "error"
-      "newportfolio" -> ResponseNewPortfolio <$> o .:? "secret" <*> o .: "portfolio" <*> o .: "merged" <*> o .: "filled"
+      "newportfolio" -> ResponseNewPortfolio <$> o .:? "secret" <*> o .: "portfolio"
       "portfolio" -> ResponsePortfolio <$> o .: "portfolio"
-      "filled" -> ResponseFilled <$> o .: "merged" <*> o .: "added" <*> o .: "portfolios"
       "checked" -> ResponseChecked <$> parsePortfolioRef o <*> o .: "result" <*> o .: "text"
       "deleted" -> ResponseDeleted <$> o .: "text" <*> (mapM keyValue =<< o .: "defaults")
       "defaults" -> ResponseDefaults <$> (mapM keyValue =<< o .: "defaults") <*> o .: "file"
@@ -373,9 +362,7 @@ instance FromJSON Response where
           <$> (mapM networkNamed =<< o .: "networks")
           <*> o .: "portfoliogap"
           <*> o .:? "wallet"
-          <*> o .: "merged"
           <*> o .: "portfolios"
-          <*> o .: "filled"
           <*> (mapM parseSyncRes =<< o .: "syncres")
           <*> (mapM parseForeignFunds =<< o .: "unspendable")
           <*> (mapM networkNamed =<< o .: "notserved")
@@ -489,5 +476,5 @@ responseFailed :: Response -> Bool
 responseFailed (ResponseError _) = True
 responseFailed (ResponseVerifyMsg _ _ _ valid) = not valid
 responseFailed (ResponseSync _ _ notSynced) = not (null notSynced)
-responseFailed (ResponseRecover _ _ _ _ _ _ _ _ _ notSearched) = not (null notSearched)
+responseFailed (ResponseRecover _ _ _ _ _ _ _ notSearched) = not (null notSearched)
 responseFailed _ = False

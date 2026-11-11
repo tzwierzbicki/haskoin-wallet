@@ -11,7 +11,6 @@ import Data.Aeson.Types (parseMaybe)
 import Data.List (nub)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isJust, mapMaybe)
-import qualified Data.Serialize as S
 import Haskoin
 import Haskoin.Wallet.Keys (AccountKind (..), PoolPath (..), keyAddress, legacyPath)
 import Haskoin.Wallet.TestUtils
@@ -101,36 +100,6 @@ fileSpec ctx = do
         `shouldBe` Just [Json.object ["type" .= ("bip84" :: Text), "path" .= ("/0/0" :: Text)]]
       parseMaybe Json.parseJSON written `shouldBe` Just (segwitUnsigned ctx)
 
-    -- The signing data as hw 0.9 kept it, written out key by key: a path
-    -- was a text, since every account was a bip44 one, and a flag said
-    -- whether the transaction was signed
-    it "reads a path written as a text alone, as hw 0.9 wrote it, as a path of the bip44 account" $ do
-      let old =
-            Json.object
-              [ "tx" .= encodeHex (S.encode tsd.txSignDataTx),
-                "txinputs" .= [encodeHex (S.encode (simpleFunding ctx))],
-                "inputpaths" .= ["/0/3" :: Text],
-                "outputpaths" .= ["/1/0" :: Text, "/0/7"],
-                "feerate" .= (10 :: Int),
-                "fingerprint" .= Json.Null,
-                "signed" .= False
-              ]
-      parseMaybe Json.parseJSON old
-        `shouldBe` Just
-          ( TxSignData
-              tsd.txSignDataTx
-              [simpleFunding ctx]
-              [PoolPath Bip44 (Deriv :/ 0 :/ 3)]
-              [PoolPath Bip44 (Deriv :/ 1 :/ 0), PoolPath Bip44 (Deriv :/ 0 :/ 7)]
-              (Just 10)
-              Nothing
-              []
-              ""
-          )
-
-  -- The labels a file carries name paths in the portfolio, each with the
-  -- type of its account, never addresses: "Haskoin.Wallet.Tx.PsbtFile"
-  -- puts them on the derivation records
   describe "A transaction file" $ do
     let tsd = simpleTransaction ctx
     -- The coin spent is at the first receiving address, /0/0, and the

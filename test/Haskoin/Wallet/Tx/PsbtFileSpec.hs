@@ -9,6 +9,7 @@ import Control.Monad (forM_)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.Map.Strict as Map
+import Data.List (stripPrefix)
 import Data.Maybe (fromMaybe)
 import qualified Data.Serialize as S
 import Data.Text.Encoding (decodeUtf8)
@@ -63,27 +64,21 @@ segwitPaymentFile ctx = TxFile (Just btc) (segwitPayment ctx) Map.empty Map.empt
 -- | The bip84 account of portfolio 0 of the test wallet on Bitcoin,
 -- m/84'/0'/0', with the fingerprint of its wallet
 segwitSeed :: Ctx -> FileAccount
-segwitSeed ctx = FileAccount (testSegwitAccountPub ctx) Bip84 "m/84'/0'/0'" (Just testFingerprint) btc
+segwitSeed ctx = FileAccount (testSegwitAccountPub ctx) Bip84 "m/84'/0'/0'" testFingerprint btc
 
 -- | The bip44 account of the same portfolio, m/44'/0'/0', with the
--- fingerprint of its wallet known, and with it unknown, as in a wallet
--- that came from hw 0.9 and was not filled in yet
-knownSeed, unknownSeed :: Ctx -> FileAccount
-knownSeed ctx = FileAccount (testAccountPub ctx) Bip44 "m/44'/0'/0'" (Just testFingerprint) btc
-unknownSeed ctx = (knownSeed ctx) {fileAccountFingerprint = Nothing}
+-- fingerprint of its wallet
+knownSeed :: Ctx -> FileAccount
+knownSeed ctx = FileAccount (testAccountPub ctx) Bip44 "m/44'/0'/0'" testFingerprint btc
 
 -- | The bip44 account of portfolio 0 of the second test wallet
 otherWallet :: Ctx -> FileAccount
-otherWallet ctx = FileAccount (fromMaybe (error "otherWallet") (xPubImport btc ctx testAccountXPub2)) Bip44 "m/44'/0'/0'" (Just testFingerprint2) btc
+otherWallet ctx = FileAccount (fromMaybe (error "otherWallet") (xPubImport btc ctx testAccountXPub2)) Bip44 "m/44'/0'/0'" testFingerprint2 btc
 
 -- | What portfolio 0 of the test wallet holds on Bitcoin, its pool: its
 -- bip44 and its bip84 account, with the fingerprint of the wallet
 walletPool :: Ctx -> [FileAccount]
 walletPool ctx = [knownSeed ctx, segwitSeed ctx]
-
--- | The same pool in a wallet whose fingerprint is unknown
-unknownPool :: Ctx -> [FileAccount]
-unknownPool ctx = [acc {fileAccountFingerprint = Nothing} | acc <- walletPool ctx]
 
 -- | The transactions funding the coins of 'bothPayment': 30000 at the
 -- first receiving address of the bip44 account, and 20000 at that of the
@@ -110,10 +105,34 @@ bothPayment ctx =
 bothPaymentFile :: Ctx -> TxFile
 bothPaymentFile ctx = TxFile (Just btc) (bothPayment ctx) Map.empty Map.empty
 
--- | The file as hw writes it for an account alone, as a partial portfolio
--- has it
+-- | The file as hw writes it with the keys of one account, the one the
+-- paths of the file are of
 written :: Ctx -> FileAccount -> TxFile -> IO Psbt
 written ctx acc file = expectRight (txFilePsbt ctx [acc] file)
+
+-- | The PSBT with the records of the keys of the bip44 account of the test
+-- wallet named by the fingerprint of the account's own key, 892eb8e4, and
+-- the path from it, /0/0, in place of the seed and the full path: as
+-- Bitcoin Core names a key it watches without the origin of its account.
+-- hw itself always names the seed.
+namedByOwnKey :: Ctx -> Psbt -> IO Psbt
+namedByOwnKey ctx psbt = do
+  inputs <- mapM (rename (inputDerivations ctx) (insertInputDerivation ctx)) psbt.inputs
+  outputs <- mapM (rename (outputDerivations ctx) (insertOutputDerivation ctx)) psbt.outputs
+  return (Psbt psbt.version psbt.unsignedTx psbt.globals inputs outputs)
+  where
+    accountSteps = pathToList ("m/44'/0'/0'" :: DerivPath)
+    rename :: (PsbtMap -> Either String [(PublicKey, Derivation)]) -> (PublicKey -> Derivation -> PsbtMap -> PsbtMap) -> PsbtMap -> IO PsbtMap
+    rename records insert m = do
+      found <- expectRight (records m)
+      return $
+        foldr
+          ( \(public, d) -> case stripPrefix accountSteps (pathToList d.path) of
+              Just rest | d.fingerprint == testFingerprint -> insert public (Derivation (fingerprintOf "892eb8e4") (listToPath rest))
+              _ -> id
+          )
+          m
+          found
 
 -- | The file as hw reads it back among the pools given, each the accounts
 -- of a portfolio on a network
@@ -184,21 +203,8 @@ segwitPaymentText = "cHNidP8BAHQCAAAAAf0HLBjt2BsDcA3jyok02bxCoNYoJWOnc0LyAZ3uZ+k
 writingSpec :: Ctx -> Spec
 writingSpec ctx =
   describe "The PSBT of a transaction file" $ do
-    it "names the key of the account's input by the fingerprint of the seed and the full path, when the wallet knows the seed" $ do
+    it "names the key of the account's input by the fingerprint of the seed and the full path" $ do
       psbt <- written ctx (knownSeed ctx) (paymentFile ctx)
-      records <- shownDerivations ctx (inputDerivations ctx) (inputAt 0 psbt)
-      records `shouldBe` [("032f6437022256c854e0090e7d6c8b65e96606ef7f405399e0f0187c93097ac0f9", Derivation testFingerprint "m/44'/0'/0'/0/0")]
-
-    it "names it by the fingerprint of the account's own key and the path from it, when the seed is unknown" $ do
-      psbt <- written ctx (unknownSeed ctx) (paymentFile ctx)
-      records <- shownDerivations ctx (inputDerivations ctx) (inputAt 0 psbt)
-      records `shouldBe` [("032f6437022256c854e0090e7d6c8b65e96606ef7f405399e0f0187c93097ac0f9", Derivation (fingerprintOf "892eb8e4") "/0/0")]
-
-    -- The signer names the seed in the signing data: the wallet that holds
-    -- the account need not know it
-    it "names it by the seed the signing data names, which the signer gives" $ do
-      let file = (paymentFile ctx) {txFileData = (payment ctx) {txSignDataFingerprint = Just testFingerprint}}
-      psbt <- written ctx (unknownSeed ctx) file
       records <- shownDerivations ctx (inputDerivations ctx) (inputAt 0 psbt)
       records `shouldBe` [("032f6437022256c854e0090e7d6c8b65e96606ef7f405399e0f0187c93097ac0f9", Derivation testFingerprint "m/44'/0'/0'/0/0")]
 
@@ -293,11 +299,9 @@ writingSpec ctx =
 
     -- The file names no key of the account beyond those of its addresses
     -- in the transaction: the user chose not to put the account's key in it
-    it "writes no key of the account in the global map, whether the seed is known or not" $ do
+    it "writes no key of the account in the global map" $ do
       known <- written ctx (knownSeed ctx) (paymentFile ctx)
-      unknown <- written ctx (unknownSeed ctx) (paymentFile ctx)
       xpubRecords btc ctx known.globals `shouldBe` Right []
-      xpubRecords btc ctx unknown.globals `shouldBe` Right []
       Map.keys known.globals `shouldBe` [proprietaryKey (Proprietary "hw" 0 ""), proprietaryKey (Proprietary "hw" 1 "")]
 
     it "writes the labels of the account's addresses on their inputs and outputs, and the label a coin shows on its input" $ do
@@ -360,10 +364,9 @@ signingIntoSpec ctx =
 
     it "is the file hw writes for the signed transaction, when the file was hw's own" $ do
       let signed = signedWithSeed ctx
-      forM_ [knownSeed ctx, unknownSeed ctx] $ \acc -> do
-        source <- written ctx acc (paymentFile ctx)
-        fromScratch <- written ctx acc (paymentFile ctx) {txFileData = signed}
-        signedPsbt ctx [acc] source (paymentFile ctx) {txFileData = signed} `shouldBe` Right fromScratch
+      source <- written ctx (knownSeed ctx) (paymentFile ctx)
+      fromScratch <- written ctx (knownSeed ctx) (paymentFile ctx) {txFileData = signed}
+      signedPsbt ctx [knownSeed ctx] source (paymentFile ctx) {txFileData = signed} `shouldBe` Right fromScratch
 
     it "keeps every field of the file it did not write: a key hw does not know in each map, and a field of another wallet" $ do
       source <- written ctx (knownSeed ctx) (paymentFile ctx)
@@ -411,9 +414,9 @@ signingIntoSpec ctx =
 
     -- The signed input names no key any more. The change output still
     -- names its key, by the seed now.
-    it "names the key of the account's change output by the seed the signer names, where the file named it by the account's own key" $ do
-      source <- written ctx (unknownSeed ctx) (paymentFile ctx)
-      signed <- expectRight $ signedPsbt ctx [unknownSeed ctx] source (paymentFile ctx) {txFileData = signedWithSeed ctx}
+    it "names the key of the account's change output by the seed, where a file of another wallet named it by the account's own key" $ do
+      source <- namedByOwnKey ctx =<< written ctx (knownSeed ctx) (paymentFile ctx)
+      signed <- expectRight $ signedPsbt ctx [knownSeed ctx] source (paymentFile ctx) {txFileData = signedWithSeed ctx}
       inputDerivations ctx (inputAt 0 signed) `shouldBe` Right []
       change <- shownDerivations ctx (outputDerivations ctx) (outputAt 1 signed)
       change `shouldBe` [("0376f2e706458dd75673ba19b8efd842efddd9bc0ae41e31339dffcf917b6db6eb", Derivation testFingerprint "m/44'/0'/0'/1/0")]
@@ -491,8 +494,9 @@ readingSpec ctx =
       file <- readBack ctx [[knownSeed ctx]] =<< written ctx (knownSeed ctx) labelled
       file `shouldBe` labelled {txFileData = labelled.txFileData {txSignDataFingerprint = Just testFingerprint}}
 
-    it "is the file written, as is, when the records name the account's own key" $ do
-      file <- readBack ctx [[unknownSeed ctx]] =<< written ctx (unknownSeed ctx) (paymentFile ctx)
+    -- Such records carry no fingerprint of the seed
+    it "is the file written, as is, when the records name the account's own key, as another wallet may" $ do
+      file <- readBack ctx [[knownSeed ctx]] =<< namedByOwnKey ctx =<< written ctx (knownSeed ctx) (paymentFile ctx)
       file `shouldBe` paymentFile ctx
 
     it "is signed when the file was written signed" $ do
@@ -559,11 +563,6 @@ readingSpec ctx =
       file <- readBack ctx [[otherWallet ctx], [knownSeed ctx]] =<< written ctx (knownSeed ctx) (paymentFile ctx)
       file.txFileData.txSignDataInputPaths `shouldBe` [legacyPath "/0/0"]
       file.txFileData.txSignDataOutputPaths `shouldBe` [legacyPath "/1/0"]
-
-    it "tells an account that did not know its seed the fingerprint the records carry" $ do
-      file <- readBack ctx [[unknownSeed ctx]] =<< written ctx (knownSeed ctx) (paymentFile ctx)
-      file.txFileData.txSignDataInputPaths `shouldBe` [legacyPath "/0/0"]
-      file.txFileData.txSignDataFingerprint `shouldBe` Just testFingerprint
 
     it "leaves aside the records of another wallet, and reads the transaction as outside the wallet" $ do
       file <- readBack ctx [[otherWallet ctx]] =<< written ctx (knownSeed ctx) (paymentFile ctx)
@@ -789,21 +788,20 @@ readingSpec ctx =
     -- by the seed. It carries no field of hw: no network, no fee rate.
     it "reads a file Bitcoin Core prepared for the account, and tells the account the seed" $ do
       psbt <- coreFile "core-prepared.psbt"
-      forM_ [knownSeed ctx, unknownSeed ctx] $ \acc -> do
-        file <- readBack ctx [[otherWallet ctx], [acc]] psbt
-        file.txFileNetwork `shouldBe` Nothing
-        file.txFileData.txSignDataInputPaths `shouldBe` [legacyPath "/0/0"]
-        file.txFileData.txSignDataOutputPaths `shouldBe` [legacyPath "/1/0"]
-        file.txFileData.txSignDataFingerprint `shouldBe` Just testFingerprint
-        file.txFileData.txSignDataFeeRate `shouldBe` Nothing
-        file.txFileData.txSignDataReplaces `shouldBe` []
-        file.txFileData.txSignDataLabel `shouldBe` ""
-        map txHash file.txFileData.txSignDataInputs `shouldBe` ["fede72ccadbf9f16f826e3078578b0660526a37b48d4f894ab26f4cf5a95e89c"]
-        info <- expectRight $ parseTxFile btc ctx [(Bip44, testAccountPub ctx)] file
-        info.txInfoSummary.summaryFee `shouldBe` 2250
-        info.txInfoSummary.summaryOtherOutputs `shouldBe` Map.fromList [(testAddress "1GfJmWwG2JUjrvQ6WjVfwaWpPgtbHDhSdE", 100000000)]
-        Map.keys info.txInfoSummary.summaryMyOutputs `shouldBe` [internalAddr 0]
-        Map.keys info.txInfoSummary.summaryMyInputs `shouldBe` [externalAddr 0]
+      file <- readBack ctx [[otherWallet ctx], [knownSeed ctx]] psbt
+      file.txFileNetwork `shouldBe` Nothing
+      file.txFileData.txSignDataInputPaths `shouldBe` [legacyPath "/0/0"]
+      file.txFileData.txSignDataOutputPaths `shouldBe` [legacyPath "/1/0"]
+      file.txFileData.txSignDataFingerprint `shouldBe` Just testFingerprint
+      file.txFileData.txSignDataFeeRate `shouldBe` Nothing
+      file.txFileData.txSignDataReplaces `shouldBe` []
+      file.txFileData.txSignDataLabel `shouldBe` ""
+      map txHash file.txFileData.txSignDataInputs `shouldBe` ["fede72ccadbf9f16f826e3078578b0660526a37b48d4f894ab26f4cf5a95e89c"]
+      info <- expectRight $ parseTxFile btc ctx [(Bip44, testAccountPub ctx)] file
+      info.txInfoSummary.summaryFee `shouldBe` 2250
+      info.txInfoSummary.summaryOtherOutputs `shouldBe` Map.fromList [(testAddress "1GfJmWwG2JUjrvQ6WjVfwaWpPgtbHDhSdE", 100000000)]
+      Map.keys info.txInfoSummary.summaryMyOutputs `shouldBe` [internalAddr 0]
+      Map.keys info.txInfoSummary.summaryMyInputs `shouldBe` [externalAddr 0]
 
     -- The same payment as Core writes it by default since 32.0: a PSBT of
     -- version 2, whose fields describe the transaction
@@ -1008,16 +1006,6 @@ poolSpec ctx =
       outputs <- mapM (shownDerivations ctx (outputDerivations ctx)) psbt.outputs
       outputs `shouldBe` [[], [("0312bee54c4d0cddd28c6ad9b5e56f15c72e2b0b9802ced3370964a6bd058a0e0a", Derivation testFingerprint "m/84'/0'/0'/1/0")]]
 
-    -- A wallet that came from hw 0.9 has no fingerprint until it is
-    -- filled in: each key is named from the key of its own account
-    it "names each key by the fingerprint of its own account's key when the wallet has no fingerprint" $ do
-      psbt <- expectRight $ txFilePsbt ctx (unknownPool ctx) (bothPaymentFile ctx)
-      inputs <- mapM (shownDerivations ctx (inputDerivations ctx)) psbt.inputs
-      inputs
-        `shouldBe` [ [("032f6437022256c854e0090e7d6c8b65e96606ef7f405399e0f0187c93097ac0f9", Derivation (fingerprintOf "892eb8e4") "/0/0")],
-                     [("027652defbc098321da485da6175de8b878f433f0d893343552625c9cd50933f53", Derivation (fingerprintOf "659a27ed") "/0/0")]
-                   ]
-
     -- The coin of the bip44 account is spent as it is, and that of the
     -- bip84 account has its output beside its transaction
     it "writes the coin itself on the input of the bip84 account alone" $ do
@@ -1029,11 +1017,6 @@ poolSpec ctx =
       psbt <- expectRight $ txFilePsbt ctx (walletPool ctx) (bothPaymentFile ctx)
       file <- readBack ctx [walletPool ctx] psbt
       file `shouldBe` (bothPaymentFile ctx) {txFileData = (bothPayment ctx) {txSignDataFingerprint = Just testFingerprint}}
-
-    it "reads back with no fingerprint when the wallet that wrote it had none" $ do
-      psbt <- expectRight $ txFilePsbt ctx (unknownPool ctx) (bothPaymentFile ctx)
-      file <- readBack ctx [unknownPool ctx] psbt
-      file `shouldBe` bothPaymentFile ctx
 
     it "is found among several pools as the pool both of its inputs are of" $ do
       psbt <- expectRight $ txFilePsbt ctx (walletPool ctx) (bothPaymentFile ctx)

@@ -264,11 +264,6 @@ portfolioSpec = do
       take 2 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewWalletDescription = "laptop"}))
         `shouldBe` ["portfolio0  wallet0  \"savings\"", "  wallet0 is \"laptop\""]
 
-    -- A partial portfolio comes from a database of hw 0.9
-    it "says a partial portfolio lacks accounts, and how to fill it in" $
-      drop 3 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewMissing = [(bch, Bip44), (btcTest, Bip44), (btcTest, Bip84)]}))
-        `shouldBe` ["  partial: it lacks 3 accounts, and fillwallet fills it in"]
-
   describe "A portfolio as portfolios --verbose shows it" $ do
     let withKeys = mainPortfolioView {viewNetworks = [btcView {networkViewAccounts = [legacyKeys, segwitKeys]}]}
 
@@ -294,14 +289,6 @@ portfolioSpec = do
     it "gives every network the portfolio has an account on, those that hold nothing too" $
       filter (`elem` ["  btc", "  bch"]) (renderedLines (verbosePortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewNetworks = [btcView, emptyOn bch]}))
         `shouldBe` ["  btc", "  bch"]
-
-    it "says the fingerprint is unknown when hw has not learnt it" $
-      (renderedLines (verbosePortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewFingerprint = Nothing}) !! 1)
-        `shouldBe` "  Fingerprint: unknown"
-
-    it "names the accounts a partial portfolio lacks, and how to fill it in" $
-      (renderedLines (verbosePortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewMissing = [(bch, Bip44), (btcTest, Bip84)]}) !! 3)
-        `shouldBe` "  Partial    : lacks bch bip44, btctest bip84: fillwallet fills it in"
 
     it "gives the description of its wallet as a field" $
       (renderedLines (verbosePortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewWalletDescription = "laptop"}) !! 3)
@@ -342,11 +329,6 @@ portfolioSpec = do
       concatMap renderedLines (portfolioRowDocs UnitBitcoin (portfolioTableColumns UnitBitcoin [unused]) unused)
         `shouldBe` ["wallet0 │ portfolio0 │         │                 │                   │       │           │ \"savings\""]
 
-    it "says a partial portfolio is partial, after its description" $ do
-      let partial = mainPortfolioView {viewMissing = [(bch, Bip44)]}
-      concatMap renderedLines (portfolioRowDocs UnitBitcoin ofMain partial)
-        `shouldBe` ["wallet0 │ portfolio0 │ btc     │      0.04900000 │        0.00100000 │     3 │        17 │ \"savings\" partial"]
-
     -- "wallet12" takes 8 and "portfolio10" 11: the listing is read whole
     it "makes the columns of the wallets and of the portfolios of a chunk as wide as their widest names" $ do
       let later = mainPortfolioView {viewRef = PortfolioRef 12 10, viewDescription = ""}
@@ -371,41 +353,6 @@ newPortfolioSpec = do
     it "names wallet0 in its sentence too, as every sentence does" $
       take 1 (renderedLines (newPortfolioDoc wholePortfolioView {viewRef = PortfolioRef 0 1}))
         `shouldBe` ["Created portfolio1 of wallet0"]
-
-    it "comes with what was merged into its wallet and filled in, after a blank line" $
-      printedLines (ResponseNewPortfolio Nothing wholePortfolioView {viewRef = PortfolioRef 1 2} [3] 6)
-        `shouldReturn` [ "Created portfolio2 of wallet1",
-                         "  Fingerprint: bc560f95",
-                         "  Accounts   : 12, on btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg",
-                         "",
-                         "wallet3 was merged into wallet1: the same mnemonic gives both.",
-                         "6 accounts were added to the portfolios wallet1 already had, which lacked them."
-                       ]
-
-  describe "The wallets merged into the wallet of a mnemonic" $ do
-    it "are named in a sentence, which says the same mnemonic gives both" $
-      concatMap renderedLines (mergedNote 0 [1]) `shouldBe` ["wallet1 was merged into wallet0: the same mnemonic gives both."]
-
-    it "are named together when there are several" $
-      concatMap renderedLines (mergedNote 0 [1, 2]) `shouldBe` ["wallet1 and wallet2 were merged into wallet0: the same mnemonic gives them all."]
-
-    it "say nothing when none was merged" $
-      concatMap renderedLines (mergedNote 0 []) `shouldBe` []
-
-  describe "The accounts added to the portfolios a wallet had" $ do
-    it "are counted in a sentence that names the wallet" $
-      concatMap renderedLines (filledNote 1 1) `shouldBe` ["1 account was added to the portfolios wallet1 already had, which lacked them."]
-
-    it "say nothing when none was added" $
-      concatMap renderedLines (filledNote 1 0) `shouldBe` []
-
-  describe "What fillwallet did, above the portfolios of the wallet" $ do
-    it "counts the accounts it added, naming the wallet, and the wallets it merged into it" $
-      renderedLines (filledDoc [2] 6 [mainPortfolioView {viewRef = PortfolioRef 1 0}])
-        `shouldBe` ["6 accounts added to wallet1", "wallet2 was merged into wallet1: the same mnemonic gives both."]
-
-    it "says the wallet lacks no account when every portfolio was whole" $
-      renderedLines (filledDoc [] 0 [mainPortfolioView]) `shouldBe` ["wallet0 lacks no account: every portfolio is whole"]
 
 {- Imports and files of a wallet -}
 
@@ -435,7 +382,7 @@ importSpec :: Spec
 importSpec =
   describe "What importwallet did, as its answer shows it" $ do
     it "names each wallet of the file with its fingerprint and that it was created, then each of its portfolios with what was added, then the labels set" $
-      renderedLines (importDoc (importedWith [WalletImport 0 (Just testFingerprint) True [] [PortfolioImport 0 True 12 0, PortfolioImport 1 True 12 0]] []))
+      renderedLines (importDoc (importedWith [WalletImport 0 testFingerprint True [PortfolioImport 0 True, PortfolioImport 1 True]] []))
         `shouldBe` [ "wallet0  bc560f95  created",
                      "  portfolio0  created, 12 accounts added",
                      "  portfolio1  created, 12 accounts added",
@@ -443,17 +390,10 @@ importSpec =
                      "Labels set: none"
                    ]
 
-    it "says a wallet the database had is already in it, and names the wallets of the same mnemonic merged into it" $
-      take 2 (renderedLines (importDoc (importedWith [WalletImport 1 (Just testFingerprint) False [2, 3] [PortfolioImport 0 False 6 0]] [])))
-        `shouldBe` ["wallet1  bc560f95  already in the database  merged with wallet2 and wallet3", "  portfolio0  6 accounts added"]
-
-    it "says what a portfolio of the file still lacks" $
-      take 2 (renderedLines (importDoc (importedWith [WalletImport 0 (Just testFingerprint) False [] [PortfolioImport 2 False 0 6]] [])))
-        `shouldBe` ["wallet0  bc560f95  already in the database", "  portfolio2  nothing to add, still lacks 6 accounts"]
-
-    it "says the fingerprint of a wallet hw has not learnt is unknown" $
-      take 1 (renderedLines (importDoc (importedWith [WalletImport 0 Nothing False [] []] [])))
-        `shouldBe` ["wallet0  fingerprint unknown  already in the database"]
+    -- A portfolio the database has is whole already
+    it "says a wallet the database had is already in it, and that its portfolio gets nothing" $
+      take 2 (renderedLines (importDoc (importedWith [WalletImport 1 testFingerprint False [PortfolioImport 0 False]] [])))
+        `shouldBe` ["wallet1  bc560f95  already in the database", "  portfolio0  nothing to add"]
 
     it "gives each key of the file left aside with why, apart from the wallets" $
       renderedLines (importDoc (importedWith [] [AccountLeftAside "xpub6CHK45s4QJWp" "The record names no network"]))
@@ -487,13 +427,13 @@ fileOf wallets accounts = FileShown wallets accounts [] 0 0 0 []
 -- | Wallet 0 with the fingerprint of the test wallet, which the database
 -- has, and its portfolio 0, which lacks nothing the file holds
 heldWallet :: WalletImport
-heldWallet = WalletImport 0 (Just testFingerprint) False [] [PortfolioImport 0 False 0 0]
+heldWallet = WalletImport 0 testFingerprint False [PortfolioImport 0 False]
 
 walletFileSpec :: Spec
 walletFileSpec =
   describe "A file of a wallet as show shows it" $ do
     it "gives each wallet of the file, with what importwallet would do with it and with each of its portfolios" $
-      renderedLines (walletFileDoc (fileOf [WalletImport 0 (Just testFingerprint) True [] [PortfolioImport 0 True 12 0]] []))
+      renderedLines (walletFileDoc (fileOf [WalletImport 0 testFingerprint True [PortfolioImport 0 True]] []))
         `shouldBe` ["wallet0  bc560f95  not in the database, and importwallet creates it", "  portfolio0  importwallet creates it, 12 accounts to add"]
 
     it "says of a wallet the database has that it is in it" $
@@ -938,28 +878,21 @@ recoverSpec :: Spec
 recoverSpec =
   describe "What recover found, as its answer shows it" $ do
     it "names the portfolios it recovered and their wallet" $
-      concatMap renderedLines (recoveredDocs [btc, bch] 10 (Just 0) [] [0, 1] 0)
+      renderedLines (recoveredDoc [btc, bch] 10 (Just 0) [0, 1])
         `shouldBe` ["Recovered portfolio0 and portfolio1 of wallet0"]
 
     it "says no portfolio was paid on the networks searched, and when the search ended, when it found none" $
-      concatMap renderedLines (recoveredDocs [btc, bch, btcTest4] 10 Nothing [] [] 0)
+      renderedLines (recoveredDoc [btc, bch, btcTest4] 10 Nothing [])
         `shouldBe` ["No portfolio of the mnemonic was paid on btc, bch or btctest4. The search ended after 10 portfolios in a row without a payment."]
 
     it "says no new portfolio was paid when the wallet of the mnemonic had every one it found" $
-      concatMap renderedLines (recoveredDocs [btc] 10 (Just 1) [] [] 0)
+      renderedLines (recoveredDoc [btc] 10 (Just 1) [])
         `shouldBe` ["No new portfolio of the mnemonic was paid on btc. The search ended after 10 portfolios in a row without a payment."]
-
-    it "names the wallets of the mnemonic it merged, and counts the accounts it filled in" $
-      concatMap renderedLines (recoveredDocs [btc] 10 (Just 1) [2] [0] 6)
-        `shouldBe` [ "Recovered portfolio0 of wallet1",
-                     "wallet2 was merged into wallet1: the same mnemonic gives both.",
-                     "6 accounts were added to the portfolios wallet1 already had, which lacked them."
-                   ]
 
     -- The network left out may have failed during the search or during
     -- the syncs after it
     it "answers with what it found, then the syncs, the networks not served, and those left out with why" $
-      printedLines (ResponseRecover [btc] 10 (Just 0) [] [0] 0 [quietSync] [] [btcTest4] [(bch, downStore)])
+      printedLines (ResponseRecover [btc] 10 (Just 0) [0] [quietSync] [] [btcTest4] [(bch, downStore)])
         `shouldReturn` [ "Recovered portfolio0 of wallet0",
                          "",
                          "portfolio0  btc",

@@ -24,6 +24,7 @@ import Haskoin.Wallet.Database (databaseInUse, runDBWith)
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (MnemonicPass (..))
 import Haskoin.Wallet.Migration (databaseVersion)
+import Haskoin.Wallet.Migration.TestUtils (version2Database)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Workflow.TestUtils
 import System.Directory (createDirectory, doesDirectoryExist, doesFileExist, listDirectory, removeDirectoryRecursive)
@@ -182,7 +183,7 @@ commandLineSpec ctx = do
     it "of the program lists the commands of wallets and portfolios in their group, in the order of the README" $
       withHome $ \home -> do
         run <- hw home ["--help"] []
-        let commands = ["newportfolio", "recover", "fillwallet", "checkmnemonic", "exportwallet", "importwallet", "portfolios", "setdescription", "setdefault", "deleteportfolio", "deletewallet", "sync"]
+        let commands = ["newportfolio", "recover", "checkmnemonic", "exportwallet", "importwallet", "portfolios", "setdescription", "setdefault", "deleteportfolio", "deletewallet", "sync"]
             group = takeWhile (/= "Addresses") (drop 1 (dropWhile (/= "Wallets and portfolios") (Text.lines (runOut run))))
         [word | line <- group, Just word <- [listToMaybe (Text.words line)], word `elem` commands] `shouldBe` commands
 
@@ -191,7 +192,7 @@ commandLineSpec ctx = do
       withHome $ \home -> do
         run <- hw home ["--version"] []
         runExit run `shouldBe` ExitSuccess
-        runOut run `shouldBe` "Software version: 0.10.0\nDatabase version: 4\n"
+        runOut run `shouldBe` "Software version: 0.10.0\nDatabase version: 5\n"
 
     it "is shown without touching the database" $
       withHome $ \home -> do
@@ -271,6 +272,15 @@ commandLineSpec ctx = do
           run <- hw home [command] []
           runExit run `shouldBe` ExitFailure 1
           runErr run `shouldSatisfy` Text.isInfixOf ("Invalid argument `" <> Text.pack command <> "'")
+
+    -- fillwallet filled in the portfolios the step from hw 0.9 left
+    -- partial: hw 0.10 reads no database of hw 0.9, and has no partial
+    -- portfolio
+    it "refuses fillwallet, as a command it does not know" $
+      withHome $ \home -> do
+        run <- hw home ["fillwallet"] seedOnce
+        runExit run `shouldBe` ExitFailure 1
+        runErr run `shouldSatisfy` Text.isInfixOf "Invalid argument `fillwallet'"
 
     it "refuses --account, which --wallet and --portfolio replace" $
       withHome $ \home -> do
@@ -830,13 +840,13 @@ commandLineSpec ctx = do
         runOut run `shouldBe` ""
         doesDirectoryExist (home </> ".hw") `shouldReturn` False
 
-    -- The next command migrates it
+    -- A database of hw 0.9, which every command refuses
     it "offers nothing from a database of an older version, which it leaves at that version" $
       withHome $ \home -> do
-        version3Main (home </> ".hw" </> "accounts.sqlite")
+        inDatabaseFile (home </> ".hw" </> "accounts.sqlite") version2Database
         run <- hw home (tabAfter ["txs", "--portfolio", ""]) []
         runOut run `shouldBe` ""
-        runDBWith 100 (home </> ".hw" </> "accounts.sqlite") (runExceptT databaseVersion) `shouldReturn` Right (Just 3)
+        runDBWith 100 (home </> ".hw" </> "accounts.sqlite") (runExceptT databaseVersion) `shouldReturn` Right (Just 2)
 
   describe "A command that fails" $ do
     it "exits with 1, and tells why" $

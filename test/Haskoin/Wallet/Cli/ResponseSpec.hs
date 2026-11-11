@@ -34,10 +34,10 @@ spec = do
       responseFailed (ResponseSync [quietSync] [] []) `shouldBe` False
 
     it "is a recover that left out a network whose store is down" $
-      responseFailed (ResponseRecover [btc] 10 (Just 0) [] [0] 0 [quietSync] [] [] [(bch, downStore)]) `shouldBe` True
+      responseFailed (ResponseRecover [btc] 10 (Just 0) [0] [quietSync] [] [] [(bch, downStore)]) `shouldBe` True
 
     it "is not a recover that left out a network the host does not serve" $
-      responseFailed (ResponseRecover [btc] 10 (Just 0) [] [0] 0 [quietSync] [] [btcTest4] []) `shouldBe` False
+      responseFailed (ResponseRecover [btc] 10 (Just 0) [0] [quietSync] [] [btcTest4] []) `shouldBe` False
 
     it "is an error" $
       responseFailed (ResponseError "There are no portfolios in the wallet") `shouldBe` True

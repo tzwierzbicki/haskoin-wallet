@@ -10,12 +10,15 @@
 module Haskoin.Wallet.TxVectors where
 
 import Control.Monad (forM_)
-import Data.Aeson (FromJSON (..), withObject, (.!=), (.:), (.:?))
+import Data.Aeson (FromJSON (..), withObject, (.!=), (.:), (.:?), (.=))
+import qualified Data.Aeson as Json
+import qualified Data.Aeson.KeyMap as KeyMap
+import Data.Aeson.Types (Parser)
 import qualified Data.Serialize as S
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin
-import Haskoin.Wallet.Keys (AccountKind, PoolPath (..))
+import Haskoin.Wallet.Keys (AccountKind)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Tx.SignData
@@ -103,23 +106,24 @@ instance FromJSON Vector where
         <*> (parseNetwork =<< o .: "network")
         <*> pure account
         <*> o .:? "sweepKeys"
-        <*> (inAccountOf (accountSpecKind account) <$> o .: "txSignData")
+        <*> (signDataOf (accountSpecKind account) =<< o .: "txSignData")
         <*> pure expect
 
 -- | The signing data of a vector, with its paths in the account of the
 -- vector. A vector has one account, and writes the paths of its own inputs
--- and outputs relative to it, as "/0/3". Signing data names the kind of
--- the account of each path since a portfolio has two accounts, and a path
--- written alone reads as one of a BIP44 account. So the paths of a vector
--- take the kind of its account here.
-inAccountOf :: AccountKind -> TxSignData -> TxSignData
-inAccountOf kind tsd =
-  tsd
-    { txSignDataInputPaths = ofAccount <$> tsd.txSignDataInputPaths,
-      txSignDataOutputPaths = ofAccount <$> tsd.txSignDataOutputPaths
-    }
+-- and outputs alone, relative to it, as "/0/3", which the tools of the
+-- vectors read. hw writes the kind of the account with each path, since a
+-- portfolio has two accounts, and reads no path without it. So each path
+-- of a vector is given the kind of its account here, before hw reads the
+-- signing data.
+signDataOf :: AccountKind -> Json.Value -> Parser TxSignData
+signDataOf kind = withObject "txSignData" $ \o -> parseJSON (Json.Object (KeyMap.mapWithKey withKind o))
   where
-    ofAccount path = path {pathKind = kind}
+    withKind key value
+      | key `elem` ["inputpaths", "outputpaths"], Json.Array paths <- value = Json.Array (ofAccount <$> paths)
+      | otherwise = value
+    ofAccount (Json.String path) = Json.object ["type" .= kind, "path" .= path]
+    ofAccount other = other
 
 instance FromJSON Signed where
   parseJSON =

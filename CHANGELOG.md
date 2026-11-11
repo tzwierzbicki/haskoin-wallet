@@ -10,51 +10,50 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 These changes will be released as version 0.10.0. Most of `hw` was rewritten
 for this version. It replaces single accounts with wallets and portfolios. It
 adds native SegWit addresses, backups in shares, PSBT files, coin control and
-fee bumping. Many commands and options have new names, so read
+fee bumping. It does not read the database of an earlier version, and many
+commands and options have new names, so read
 [Before you upgrade](#before-you-upgrade) first.
 
 ### Before you upgrade
 
-- **The database is upgraded on the first command.** `hw` 0.10 upgrades a
-  database of 0.8 or 0.9, after it backs it up to `~/.hw/migration-backups`.
-  Do not run an older `hw` on the upgraded database. `hw` 0.8 would rewrite
-  parts of it in a format 0.10 cannot read.
+- **`hw` 0.10 does not read the database of 0.9.** It refuses a database of
+  0.8 or 0.9, writes nothing to it, and says how to go on. `hw` 0.9 kept
+  single accounts and no fingerprint of the master key, so only the mnemonic
+  can make the whole portfolios of 0.10. Move the old database aside and
+  create the wallet again from its mnemonic. On an online computer, `recover`
+  finds the portfolios that were paid. To keep the mnemonic offline, run
+  `newportfolio --existing` on the offline computer, once for each account
+  index the old wallet used, from 0 up to the highest.
+  Then carry the portfolios to the online computer with `exportwallet` and
+  `importwallet`. The README tells the steps under
+  [Upgrading from an earlier version](README.md#upgrading-from-an-earlier-version).
+- **The labels of the old database are not carried over.** Nor are the names
+  of its accounts and its pending transactions. The old file is left as it is,
+  so `hw` 0.9 can still read it and show them.
 - **Accounts become portfolios.** A portfolio holds every account of a
   mnemonic at one account index, on every network and of both types of
-  address. The upgrade creates a portfolio for every account index the
-  database uses, and keeps the gaps between them. The names of the accounts
-  become the descriptions of their portfolios.
-- **The portfolios of an upgraded database are partial.** The upgrade asks for
-  no mnemonic, so a portfolio holds only the accounts 0.9 had. It works with
-  them. A command that needs another account, such as `receive --type bip84`,
-  is refused until the portfolio is filled in. `hw` 0.9 kept no fingerprint of
-  the master key, so the accounts of one mnemonic on Bitcoin, on Bitcoin Cash
-  and on the test networks also start in separate wallets.
-- **`fillwallet` fills the portfolios in.** Run it on the computer that has
-  the mnemonic, once for each mnemonic. It finds the wallets of the mnemonic
-  by their keys, whatever their index. It adds the accounts the portfolios
-  lack, and brings the wallets of one mnemonic into one. For an online
-  computer that never sees the mnemonic, run `exportwallet` on the offline
-  computer afterwards, and `importwallet` on the online one. Fill a wallet in
-  before you export it. Until then its file names the keys without their
-  origin, which another database cannot place, and `exportwallet` warns about
-  it. The README tells the whole story under
-  [Accounts become portfolios](README.md#accounts-become-portfolios).
+  address. An account of 0.9 comes back in the portfolio of its index.
+  `setdescription` gives a portfolio a description in place of the name of
+  an account.
 - **Transaction files are now PSBTs.** `hw` 0.10 reads no JSON transaction file
   of an earlier version. Prepare such a transaction again.
 - **Account files are now wallet files.** `importwallet` refuses an account
   file that `exportacc` 0.9 wrote. Write the wallet again with `exportwallet`.
 - **Scripts that call `hw` need checking.** Commands and options were renamed,
   and many answers changed. See [Renamed](#renamed) and [Removed](#removed).
-- **A passphrase with accents is now normalized**, as BIP39 asks. Accounts that
-  earlier versions made from such a passphrase still work, with a warning.
-  Move their funds to a wallet made with 0.10.
+- **A passphrase with accents is now normalized**, as BIP39 asks. `recover`
+  still finds the accounts that earlier versions made from such a passphrase,
+  and `signtx` signs for them, with a warning. In a new database,
+  `newportfolio --existing` creates the wallet of the passphrase normalized,
+  which does not hold those funds. Move their funds to a wallet made with 0.10, as the README says under
+  [A passphrase with accents](README.md#a-passphrase-with-accents).
 - **A mnemonic split into parts** with `--split` is no longer read. Move its
   funds with `hw` 0.9, as the README says under
   [A mnemonic split into parts](README.md#a-mnemonic-split-into-parts).
-- **An existing database keeps its file permissions.** Earlier versions often
-  left it readable by other users. Make it private with `chmod 700 ~/.hw` and
-  `chmod 600 ~/.hw/accounts.sqlite`.
+- **A directory `~/.hw` of an earlier version keeps its permissions.** Earlier
+  versions often left it and the database readable by other users. `hw` 0.10
+  makes its new database private. Make the rest private with `chmod 700 ~/.hw`
+  and `chmod 600 ~/.hw/accounts-old.sqlite`.
 - **The license is now MIT**, the license of haskoin-core. Released versions
   stay under the Unlicense.
 
@@ -88,19 +87,15 @@ Wallets and portfolios:
 - `recover` finds the portfolios of a mnemonic that were paid, on every
   network, creates them whole and syncs them. It also tells of funds at paths
   `hw` cannot spend from, such as wrapped SegWit and Taproot accounts.
-- `fillwallet` fills in the partial portfolios of an upgraded database from
-  the mnemonic of their wallet, and merges the wallets of one mnemonic. It
-  finds those wallets by their keys, whatever their index. `--wallet` checks
-  that the mnemonic is of that wallet.
 - `portfolios --verbose` shows each account as an output descriptor (BIP380),
   and with its key in the form of SLIP132: a zpub for a `bip84` account, and
   the xpub of a `bip44` one. Its lines wrap on a terminal, so that a
   descriptor can be copied whole.
 - `exportwallet` and `importwallet` use the BIP329 format. The file carries
   every portfolio of a wallet, with its labels and its locked coins.
-  `importwallet` merges a portfolio of the file into the one the database has,
-  and adds the accounts it lacks. `--portfolio` writes or reads one portfolio
-  only. `importwallet` also sets the labels of a BIP329 file of another
+  `importwallet` creates each portfolio of the file that the database lacks,
+  whole, and checks that the portfolios it has hold the keys of the file.
+  `--portfolio` writes or reads one portfolio only. `importwallet` also sets the labels of a BIP329 file of another
   wallet. `show FILE` shows what `importwallet` would make of a file, and
   changes nothing. A transaction record without an origin labels the
   transaction only in the portfolios that have it, on its network.
@@ -243,9 +238,9 @@ Using `hw`:
 - Wallets and portfolios have fixed names that follow their index, such as
   `wallet0` and `portfolio0`. A description, set with `setdescription`, takes
   the place of the name of an account.
-- A wallet is the master key of one mnemonic, and `hw` records its
-  fingerprint. A wallet of an upgraded database learns it from `fillwallet`
-  or `importwallet`.
+- A wallet is the master key of one mnemonic, and `hw` records the
+  fingerprint of that key. Output descriptors, wallet files and transaction
+  files name every key of the wallet by it.
 - `deleteportfolio` replaces `deleteacc` for a portfolio that was never used.
   It refuses `portfolio0`, a portfolio that is not the last of its wallet, and
   one that has had activity or gave out an address. `deletewallet` deletes a
@@ -311,7 +306,11 @@ Using `hw`:
   or an output descriptor is one account. `importwallet` refuses a file that
   holds nothing else, and leaves aside such a key in a BIP329 file of another
   wallet.
-- `restore`. Put a backup in place of the database instead.
+- The upgrade of the database of an earlier version. `hw` 0.10 reads only a
+  database of its own format, version 5. It refuses a database of 0.8 or 0.9,
+  or a copy of one, and leaves it as it is.
+- `restore`, and the backup files that `backup` 0.9 wrote. A backup is now a
+  copy of the database. Put it in place of the database to restore it.
 - `rolldice`. Roll real dice and type them in with `newportfolio --dice`.
 - `--dust`. Each output takes the dust limit of its kind.
 - `--split`, which split a mnemonic into parts and read them back. `hw` 0.10

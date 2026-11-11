@@ -3,8 +3,9 @@
 
 -- | The wallet database: the connection and its lock, and what every table
 -- shares. The tables are those of the latest format version, defined in
--- "Haskoin.Wallet.Schema.V4" and exported again from here: a version that
--- changes the tables gets a new schema module, and this module moves to it.
+-- "Haskoin.Wallet.Schema.V5" and exported again from here: a version that
+-- changes the tables gets a new schema module, and this module moves to it
+-- ("Haskoin.Wallet.Migration").
 -- Each kind of row has a module of its own: "Haskoin.Wallet.Database.Portfolio"
 -- for the wallets and their portfolios, "Haskoin.Wallet.Database.Account",
 -- "Haskoin.Wallet.Database.Address", "Haskoin.Wallet.Database.Coin", "Haskoin.Wallet.Database.TxInfo",
@@ -39,7 +40,7 @@
 -- the addresses shown only.
 module Haskoin.Wallet.Database
   ( module Haskoin.Wallet.Database,
-    module Haskoin.Wallet.Schema.V4,
+    module Haskoin.Wallet.Schema.V5,
     module Haskoin.Wallet.Schema.KeyBytes,
   )
 where
@@ -64,7 +65,7 @@ import Haskoin
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.FileIO (privateFile)
 import Haskoin.Wallet.Schema.KeyBytes
-import Haskoin.Wallet.Schema.V4
+import Haskoin.Wallet.Schema.V5
 import System.Directory (makeAbsolute)
 import Numeric.Natural (Natural)
 import UnliftIO.Exception (catch, throwIO)
@@ -215,8 +216,8 @@ undoneAfter action = do
 -- does, and only those: the database is then as the action found it. A
 -- savepoint of SQLite marks the place to go back to, as for
 -- 'undoneAfter'. importwallet takes a file into the database this way
--- ("Haskoin.Wallet.Labels"): a file that cannot be merged is found out
--- once some of its accounts are in, and none of them must stay.
+-- ("Haskoin.Wallet.Labels"): a file that cannot be imported may be found
+-- out once some of its portfolios are in, and none of them must stay.
 --
 -- A command undoes its whole transaction when it fails, so a refusal
 -- never left anything behind for the user. This makes the refusal of the

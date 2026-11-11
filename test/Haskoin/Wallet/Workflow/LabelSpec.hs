@@ -641,7 +641,7 @@ exportImportSpec ctx =
         _ <- answer home ["recover"] seedOnce
         (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [(externalAddrsText !! 0, "")]
         (addedAccountsOf <$> hwJson home ["importwallet", home </> "labels.jsonl"] []) `shouldReturn` Right []
-        (fingerprintsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(mainPortfolioRef, Just "bc560f95")]
+        (fingerprintsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(mainPortfolioRef, "bc560f95")]
         -- Nothing to spend: the coin is locked again
         (spendableOn btc <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(mainPortfolioRef, 0)]
         (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [(externalAddrsText !! 1, "From Bob"), (externalAddrsText !! 0, "Wages")]

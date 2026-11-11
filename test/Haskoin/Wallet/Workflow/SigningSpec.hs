@@ -41,13 +41,6 @@ spec = prepareContext $ \ctx -> do
 
 {- Signing -}
 
--- | A home whose database is the one hw 0.9 left with the account main of
--- the test wallet ('version3Main'): the first command upgrades it into
--- wallet0, which does not know the fingerprint of its mnemonic, with a
--- partial portfolio0 that holds that account alone
-withUpgradedMain :: FilePath -> IO ()
-withUpgradedMain home = version3Main (home </> ".hw" </> "accounts.sqlite")
-
 -- | What the payment of 20000 satoshis spends and pays, as the store sees
 -- it once sent: the coin of the payment to the wallet, and 27740 of change
 paymentSent :: Ctx -> ([OutPoint], [(Word64, Either String Address)])
@@ -309,44 +302,6 @@ signingSpec ctx = do
           (errorOf <$> hwJson home [command, home </> "payment.psbt", "--portfolio", "1"] [])
             `shouldReturn` Right "The transaction does not involve portfolio1 of wallet0"
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
-
-    -- The online computer has portfolio0 from an upgrade of hw 0.9, which
-    -- does not know the fingerprint of the mnemonic. The signer writes the
-    -- fingerprint of the test seed into the file it signs. A wallet learns
-    -- its fingerprint from its mnemonic or from a file of the wallet, not
-    -- from a transaction file.
-    it "leaves the online wallet without a fingerprint, which a file the signer signed does not give it" $
-      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
-        newTestPortfolio signer
-        withUpgradedMain online
-        _ <- answer online ["receive"] []
-        _ <- answer online ["sync"] []
-        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
-        _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
-        _ <- answer online ["broadcast", "--input", signer </> "signed.psbt", "--yes"] []
-        (fingerprintsOf <$> hwJson online ["portfolios"] []) `shouldReturn` Right [(mainPortfolioRef, Nothing)]
-
-    -- A hardware wallet signs only the records that name its own seed
-    it "says when it writes a file that names the keys without the fingerprint of the mnemonic, as an upgraded wallet does" $
-      withChain ctx (paidChain ctx) $ \online _ -> do
-        withUpgradedMain online
-        _ <- answer online ["receive"] []
-        _ <- answer online ["sync"] []
-        prepared <- hw online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
-        runExit prepared `shouldBe` ExitSuccess
-        runErr prepared `shouldSatisfy` Text.isInfixOf "The wallet does not know the fingerprint of its mnemonic, so the file names the keys by the account's own key, which a hardware wallet does not sign. The wallet learns the fingerprint from fillwallet, or from importwallet with a file of the computer that has the mnemonic."
-
-    it "says nothing of the fingerprint once importwallet took it from a file of the signer" $
-      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
-        newTestPortfolio signer
-        withUpgradedMain online
-        _ <- answer online ["receive"] []
-        _ <- answer online ["sync"] []
-        _ <- answer signer ["exportwallet", signer </> "wallet.jsonl"] []
-        _ <- answer online ["importwallet", signer </> "wallet.jsonl"] []
-        prepared <- hw online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
-        runExit prepared `shouldBe` ExitSuccess
-        runErr prepared `shouldNotSatisfy` Text.isInfixOf "fingerprint"
 
   -- portfolio0 pays 20000 of its coin of 50000 to the first receiving
   -- address of portfolio1, 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo, with 2260 of

@@ -21,7 +21,7 @@ module Haskoin.Wallet.Cli.PrettyPrinter where
 import Control.Applicative ((<|>))
 import Control.Monad
 import Data.Char (isAlphaNum)
-import Data.List (intercalate, intersperse, nub, sortOn)
+import Data.List (genericLength, intercalate, intersperse, nub, sortOn)
 import Data.List.Split (chunksOf)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe)
@@ -44,7 +44,7 @@ import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..), levelName, rateAt)
-import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), PoolPath (..), foreignKindDescription, kindName, poolPathText)
+import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), PoolPath (..), foreignKindDescription, kindName, poolPathText, portfolioAccounts)
 import Haskoin.Wallet.Bip329 (Record (..), RecordType (..), parseKeypath)
 import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), PortfolioImport (..), WalletImport (..), reportNeedsSync)
 import Haskoin.Wallet.MessageSigning (signedMessageText)
@@ -258,21 +258,14 @@ networkFigures unit net = commaList (spendable : unconfirmed <> [coins, addresse
     coins = text (counted (fromIntegral (networkViewCoins net)) "coin" "coins")
     addresses = text (counted (networkViewAddresses net) "address" "addresses")
 
--- | What a partial portfolio is told to be, and how to fill it in
-partialWords :: PortfolioView -> Doc Style
-partialWords portfolio =
-  styled Waiting "partial:"
-    <+> text ("it lacks " <> counted (fromIntegral (length (viewMissing portfolio))) "account" "accounts" <> ", and fillwallet fills it in")
-
 -- | A portfolio in a few lines: its first line, the description of its
 -- wallet when it has one, the date it was created, then a line for each
--- network it has addresses or coins on, with what it holds there, and a
--- line when it is partial
+-- network it has addresses or coins on, with what it holds there
 compactPortfolioDoc :: AmountUnit -> ZonedTime -> PortfolioView -> Doc Style
 compactPortfolioDoc unit created portfolio =
   vcat $
     portfolioLine portfolio
-      : (indent 2 <$> (ofWallet <> [("created" <+> text (dayText created))] <> networks <> [partialWords portfolio | viewPartial portfolio]))
+      : (indent 2 <$> (ofWallet <> [("created" <+> text (dayText created))] <> networks))
   where
     -- What the user said of the wallet, which its name does not tell
     ofWallet = [pretty (walletName (refWallet (viewRef portfolio))) <+> "is" <+> labelWord description | let description = viewWalletDescription portfolio, not (Text.null description)]
@@ -286,10 +279,10 @@ compactPortfolioDoc unit created portfolio =
 -- portfolio and of its wallet, then every network it has an account on,
 -- with each of its balances, and under each network its accounts, each
 -- with its path and the keys another wallet takes it by. The output
--- descriptor comes whole, without its origin when the fingerprint is
--- unknown, as the row Fingerprint then says. A bip84 account adds its key
--- in the form of SLIP-132, a zpub or a vpub, for the wallets that take
--- only that form.
+-- descriptor comes whole, with its origin, the fingerprint of the row
+-- Fingerprint and the path of the account. Each account adds its key in
+-- the form of SLIP-132, a zpub or a vpub for a bip84 account, for the
+-- wallets that take only that form.
 --
 -- A descriptor row takes 148 columns or more, and a zpub row 126. The
 -- terminal wraps such a row, which goes on at the first column of the
@@ -301,11 +294,10 @@ verbosePortfolioDoc unit created portfolio =
   vcat $
     portfolioLine portfolio
       : ( indent 2
-            <$> ( [ field 11 "Fingerprint" <> maybe (styled Muted "unknown") (pretty . fingerprintToText) (viewFingerprint portfolio),
+            <$> ( [ field 11 "Fingerprint" <> pretty (fingerprintToText (viewFingerprint portfolio)),
                     field 11 "Created" <> text (secondText created)
                   ]
                     <> [field 11 "Wallet" <> labelWord description | let description = viewWalletDescription portfolio, not (Text.null description)]
-                    <> [field 11 "Partial" <> text ("lacks " <> intercalate ", " [net.name <> " " <> cs (kindName kind) | (net, kind) <- viewMissing portfolio] <> ": fillwallet fills it in") | viewPartial portfolio]
                     <> concatMap networkBlock (viewNetworks portfolio)
                 )
         )
@@ -505,33 +497,31 @@ importDoc report =
 
 -- | A wallet a file names, and what became of it, or what would with the
 -- flag: its name and the fingerprint of its seed, whether it was created
--- or found, the wallets of the same seed merged into it, then a line for
--- each portfolio the file names, with whether it was created, how many
--- accounts were added, and how many it still lacks
+-- or found, then a line for each portfolio the file names, with whether
+-- it was created with its accounts or found whole
 walletImportDoc :: Bool -> WalletImport -> Doc Style
 walletImportDoc dryRun wallet =
   vcat $
     columns
-      ( [ pretty (walletName (walletImportIndex wallet)) `withStyle` Account,
-          maybe (styled Muted "fingerprint unknown") (pretty . fingerprintToText) (walletImportFingerprint wallet),
-          status
-        ]
-          <> [text ("merged with " <> andList (cs . walletName <$> merged)) | let merged = walletImportMerged wallet, not (null merged)]
-      )
+      [ pretty (walletName (walletImportIndex wallet)) `withStyle` Account,
+        pretty (fingerprintToText (walletImportFingerprint wallet)),
+        status
+      ]
       : (indent 2 . portfolioDoc <$> walletImportPortfolios wallet)
   where
     status
       | walletImportCreated wallet = if dryRun then "not in the database, and importwallet creates it" else styled Good "created"
       | otherwise = if dryRun then "in the database" else "already in the database"
+    -- A portfolio created gets every account at once, one it has gets
+    -- none
     portfolioDoc p =
       columns
         [ pretty (portfolioName (portfolioImportIndex p)) `withStyle` Account,
-          commaList (text <$> ([created | portfolioImportCreated p] <> [added (portfolioImportAdded p)] <> [lacks n | let n = portfolioImportMissing p, n > 0]))
+          commaList (text <$> if portfolioImportCreated p then [created, added (genericLength portfolioAccounts)] else [added 0])
         ]
     created = if dryRun then "importwallet creates it" else "created"
     added 0 = "nothing to add"
     added n = counted n "account" "accounts" <> (if dryRun then " to add" else " added")
-    lacks n = "still lacks " <> counted n "account" "accounts"
 
 -- | A key of a file that is not one of an account of a wallet of hw: the
 -- start of the key, and why it is left aside
@@ -1651,9 +1641,7 @@ portfolioRowDocs unit headed portfolio =
         pretty (portfolioName (refPortfolio (viewRef portfolio))) `withStyle` Account
       ]
     describedCell =
-      hsep $
-        [labelWord description | let description = viewDescription portfolio, not (Text.null description)]
-          <> [styled Waiting "partial" | viewPartial portfolio]
+      hsep [labelWord description | let description = viewDescription portfolio, not (Text.null description)]
 
 {- The table of coins -}
 
@@ -2190,15 +2178,11 @@ responsePrinter unit view code shown answer =
     ResponsePendingTxs {} -> listing
     ResponseCoins {} -> listing
     ResponseError err -> renderIO $ errorDoc err
-    ResponseNewPortfolio secretM portfolio merged filled ->
+    ResponseNewPortfolio secretM portfolio ->
       renderIO . vcat . intersperse mempty $
         [secretDoc secret | Just secret <- [secretM]]
           <> [newPortfolioDoc portfolio]
-          <> [vcat notes | let wallet = refWallet (viewRef portfolio), let notes = mergedNote wallet merged <> filledNote wallet filled, not (null notes)]
     ResponsePortfolio portfolio -> renderIO =<< listedPortfolioDoc Compact unit portfolio
-    ResponseFilled merged added portfolios -> do
-      docs <- mapM (listedPortfolioDoc Compact unit) portfolios
-      renderIO . vcat . intersperse mempty $ filledDoc merged added portfolios : docs
     -- In green when the mnemonic matches, in red otherwise
     ResponseChecked _ matches said -> renderIO $ styled (if matches then Good else Failure) (cs said)
     ResponseDeleted said newDefaults ->
@@ -2266,9 +2250,9 @@ responsePrinter unit view code shown answer =
         [syncResultsPrinter unit results | not (null results)]
           <> [notServedDoc notServed | not (null notServed)]
           <> [failedNetworksDoc "not synced" notSynced | not (null notSynced)]
-    ResponseRecover searched gap walletM merged created filled results elsewhere notServed notSearched ->
+    ResponseRecover searched gap walletM created results elsewhere notServed notSearched ->
       renderIO . vcat . intersperse mempty $
-        [vcat (recoveredDocs searched gap walletM merged created filled)]
+        [recoveredDoc searched gap walletM created]
           <> [syncResultsPrinter unit results | not (null results)]
           <> [foreignFundsDoc unit elsewhere | not (null elsewhere)]
           <> [notServedDoc notServed | not (null notServed)]
@@ -2294,7 +2278,7 @@ newPortfolioDoc portfolio =
   vcat $
     (styled Good "Created" <+> (pretty (portfolioName (refPortfolio ref)) `withStyle` Account) <+> "of" <+> pretty (walletName (refWallet ref)))
       : ( indent 2
-            <$> [ field 11 "Fingerprint" <> maybe (styled Muted "unknown") (pretty . fingerprintToText) (viewFingerprint portfolio),
+            <$> [ field 11 "Fingerprint" <> pretty (fingerprintToText (viewFingerprint portfolio)),
                   field 11 "Accounts" <> text (show accounts <> ", on " <> andList networks)
                 ]
         )
@@ -2303,60 +2287,15 @@ newPortfolioDoc portfolio =
     accounts = sum (length . networkViewAccounts <$> viewNetworks portfolio)
     networks = (.name) . networkViewNetwork <$> viewNetworks portfolio
 
--- | The wallets of the same mnemonic a command merged into the wallet it
--- was given the mnemonic of, in a line, or nothing when it merged none. A
--- database of an earlier version keeps the accounts of one mnemonic on
--- Bitcoin and on Bitcoin Cash in two wallets, until a command is given
--- the mnemonic.
-mergedNote :: Natural -> [Natural] -> [Doc Style]
-mergedNote wallet merged =
-  [ text $
-      andList (cs . walletName <$> merged)
-        <> (if length merged == 1 then " was" else " were")
-        <> " merged into "
-        <> cs (walletName wallet)
-        <> ": the same mnemonic gives "
-        <> (if length merged == 1 then "both." else "them all.")
-    | not (null merged)
-  ]
-
--- | The accounts a command added to the portfolios the wallet already
--- had, which lacked them, in a line, or nothing when it added none
-filledNote :: Natural -> Natural -> [Doc Style]
-filledNote wallet filled =
-  [ text (counted filled "account was" "accounts were" <> " added to the portfolios " <> cs (walletName wallet) <> " already had, which lacked them.")
-    | filled > 0
-  ]
-
--- | What fillwallet did, above the portfolios of the wallet: how many
--- accounts it added, and the wallets of the same mnemonic it merged into
--- the wallet
-filledDoc :: [Natural] -> Natural -> [PortfolioView] -> Doc Style
-filledDoc merged added portfolios =
-  vcat $
-    [ styled Good $ case added of
-        0 -> name <> " lacks no account: every portfolio is whole"
-        _ -> counted added "account" "accounts" <> " added to " <> name
-    ]
-      <> mergedNote wallet merged
-  where
-    wallet = maybe 0 (refWallet . viewRef) (listToMaybe portfolios)
-    name = cs (walletName wallet) :: String
-
 -- | What recover found, above the syncs of the portfolios: the portfolios
--- it created, or that the search found none, and what it did with a
--- wallet the database already had for the mnemonic
-recoveredDocs :: [Network] -> Natural -> Maybe Natural -> [Natural] -> [Natural] -> Natural -> [Doc Style]
-recoveredDocs searched gap walletM merged created filled =
+-- it created, or that the search found none
+recoveredDoc :: [Network] -> Natural -> Maybe Natural -> [Natural] -> Doc Style
+recoveredDoc searched gap walletM created =
   case walletM of
-    Nothing -> [text ("No portfolio of the mnemonic was paid on " <> orList ((.name) <$> searched) <> ". " <> ended)]
-    Just wallet ->
-      [ case created of
-          [] -> text ("No new portfolio of the mnemonic was paid on " <> orList ((.name) <$> searched) <> ". " <> ended)
-          _ -> styled Good "Recovered" <+> (text (andList (cs . portfolioName <$> created)) `withStyle` Account) <+> "of" <+> pretty (walletName wallet)
-      ]
-        <> mergedNote wallet merged
-        <> filledNote wallet filled
+    Nothing -> text ("No portfolio of the mnemonic was paid on " <> orList ((.name) <$> searched) <> ". " <> ended)
+    Just wallet -> case created of
+      [] -> text ("No new portfolio of the mnemonic was paid on " <> orList ((.name) <$> searched) <> ". " <> ended)
+      _ -> styled Good "Recovered" <+> (text (andList (cs . portfolioName <$> created)) `withStyle` Account) <+> "of" <+> pretty (walletName wallet)
   where
     ended = "The search ended after " <> counted gap "portfolio" "portfolios in a row" <> " without a payment."
 

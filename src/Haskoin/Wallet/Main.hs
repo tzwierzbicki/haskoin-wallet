@@ -16,7 +16,7 @@ import Haskoin.Wallet.Database (DB, catchDatabaseInUse, runDB)
 import Haskoin.Wallet.Memory (keepMemoryPrivate)
 import Haskoin.Wallet.Cli.Listing (ChunkAt (..), Sections, streamListing)
 import Haskoin.Wallet.Cli.Pager (Shown (..), pagerCommand, tableShown, withPager)
-import Haskoin.Wallet.Migration (Hooks (..), migrateDB)
+import Haskoin.Wallet.Migration (Hooks (..), checkDatabaseFile, migrateDB)
 import Haskoin.Wallet.Backup (backupDatabase, migrationBackupDirectory)
 import Haskoin.Wallet.Cli.Parser (GlobalOptions (..), addressCodeOf, csvFileOf, parserMain, txShownOf, viewOf, wrapsLines)
 import Haskoin.Wallet.Cli.View (View (..))
@@ -49,7 +49,12 @@ clientMain = do
     let unit = commandUnit cfg unitGiven
         -- The view an option asks for, or that of the configuration
         view = viewOf (configListingView cfg) cmd
-    migrated <- catchDatabaseInUse $ runDB cfg (migrateDB (migrationHooks cfg) ctx)
+    -- A database of an earlier version is refused, untouched, and the
+    -- refusal names its file. Its version is read without a connection
+    -- that writes, which would change the journal mode of its file.
+    database <- databaseFile cfg
+    either die return . join =<< catchDatabaseInUse (checkDatabaseFile ctx database)
+    migrated <- catchDatabaseInUse $ runDB cfg (migrateDB (migrationHooks cfg) database ctx)
     either die return (join migrated)
     -- A listing goes to the screen, unless --json or --csv asks for it
     -- whole: then it is an answer as any other

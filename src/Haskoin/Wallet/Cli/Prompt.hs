@@ -39,6 +39,7 @@ module Haskoin.Wallet.Cli.Prompt
     matchAccount,
     matchAccounts,
     typedPassphraseCreated,
+    typedPassphraseNew,
     typedPassphraseRecovered,
     readRolls,
     askDiceEntropy,
@@ -418,6 +419,17 @@ typedPassphraseCreated :: String
 typedPassphraseCreated =
   "The portfolios of this wallet come from the passphrase as typed, which hw did not normalize as BIP39 asks, \
   \and so does the new one, to keep them together: other wallets would not find them from this mnemonic and passphrase."
+
+-- | What the user is told when newportfolio --existing makes the first
+-- wallet of a mnemonic with a passphrase that normalizing changes. hw 0.9
+-- and earlier derived their keys from the passphrase as typed, so a wallet
+-- they made from it holds none of the keys of the new one, and its funds
+-- would seem lost.
+typedPassphraseNew :: String
+typedPassphraseNew =
+  "hw normalizes this passphrase as BIP39 asks, and the keys come from it so. \
+  \hw 0.9 and earlier derived their keys from the passphrase as typed, so a wallet they made from it has other keys. \
+  \To find such a wallet, run recover on an online computer: it tries the passphrase both ways."
 
 -- | What the user is told when recover finds portfolios from the
 -- passphrase as typed

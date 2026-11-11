@@ -116,17 +116,6 @@ spec = prepareContext $ \ctx -> do
         _ <- syncWith (paymentStore ctx) pool
         (map (chainTime . chainOf) <$> txsAfter pool Nothing Nothing) `dbShouldBeE` [Just seenTime]
 
-    -- As the step to version 4 of the database left it: the balances are
-    -- unchanged, and no address is listed
-    it "fetches again a transaction whose summary has no time, and stores its time" $
-      inDatabaseE $ do
-        pool <- account
-        _ <- syncWith (paymentStore ctx) pool
-        lift $ P.update (txInfoKey pool (fakeTxHash 1)) [DBTxInfoTime P.=. Nothing]
-        res <- syncWith (paymentStore ctx) pool
-        liftIO $ syncResTxUpdates res `shouldBe` 1
-        (map (chainTime . chainOf) <$> txsAfter pool Nothing Nothing) `dbShouldBeE` [Just seenTime]
-
     it "reports what the portfolio can spend on the network once synced" $
       inDatabaseE $ do
         pool <- account
@@ -748,7 +737,7 @@ spec = prepareContext $ \ctx -> do
         liftIO $ readIORef asked `shouldReturn` [800002, 800003]
 
     -- No reorganisation tells of it: only looking at every address does
-    it "makes a sync look at every address when the portfolio has none, as after a migration" $
+    it "makes a sync look at every address when the portfolio has no block it last synced to" $
       inDatabaseE $ do
         pool <- account
         _ <- syncWith (twoPaymentsStore ctx) pool
@@ -1727,7 +1716,7 @@ spec = prepareContext $ \ctx -> do
         -- A recovery on the networks, each asked of the same store
         recoverOn networks store seed gap = recoverSeed ctx cfg (const (toStore store)) networks seed gap noQuestion
         found networks store seed gap = recoveredPortfolios <$> recoverOn networks store seed gap
-        nothingRecovered = Recovered Nothing [] [] 0 [] []
+        nothingRecovered = Recovered Nothing [] [] []
         placeOf portfolio = Place (PortfolioRef 0 portfolio)
 
     it "finds the portfolios that were paid, looking past a run of unpaid ones shorter than the gap" $
@@ -1812,8 +1801,8 @@ spec = prepareContext $ \ctx -> do
     it "creates the wallet of the seed for the portfolios found, with the fingerprint of the seed" $
       inDatabaseE $ do
         recovered <- recoverOn [btc] paidAccounts (testSeed ctx) 2
-        liftIO $ (recoveredWallet recovered, recoveredMerged recovered, recoveredFilled recovered) `shouldBe` (Just 0, [], 0)
-        walletsHeld `dbShouldBeE` [(0, Just "bc560f95")]
+        liftIO $ recoveredWallet recovered `shouldBe` Just 0
+        walletsHeld `dbShouldBeE` [(0, "bc560f95")]
 
     -- Each portfolio is synced on the networks searched. The first
     -- receiving address of each was found used on Bitcoin, and generated.
@@ -1850,36 +1839,31 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         _ <- testPortfolio ctx
         recovered <- recoverOn [btc] (paidStore ctx [(account2Addr, 20000)]) (testSeed ctx) 2
-        liftIO $ (recoveredWallet recovered, recoveredPortfolios recovered, recoveredFilled recovered) `shouldBe` (Just 0, [2], 0)
+        liftIO $ (recoveredWallet recovered, recoveredPortfolios recovered) `shouldBe` (Just 0, [2])
 
-    -- As the step from hw 0.9 leaves a wallet: portfolio 0 with its bip44
-    -- account on Bitcoin alone, and no fingerprint. 12 - 1 = 11 accounts
-    -- are added.
-    it "fills in a partial portfolio of the wallet of the seed, and gives the wallet its fingerprint" $
+    -- wallet0 is of the second test mnemonic, 4435aa1c, and wallet1 of the
+    -- test mnemonic, bc560f95. Portfolio 2 of the test mnemonic was paid.
+    it "adds the portfolios found to the wallet with the fingerprint of the seed, among the wallets of other seeds" $
       inDatabaseE $ do
-        _ <- migrated ctx (testSeed ctx) 0 "" [(btc, Bip44)]
-        recovered <- recoverOn [btc] paidAccounts (testSeed ctx) 1
-        liftIO $ (recoveredWallet recovered, recoveredPortfolios recovered, recoveredFilled recovered) `shouldBe` (Just 0, [], 11)
-        walletsHeld `dbShouldBeE` [(0, Just "bc560f95")]
-        accountsHeld `dbShouldBeE` twelveOf 0
+        _ <- portfolioOf ctx testMnemonic2
+        _ <- testPortfolio ctx
+        recovered <- recoverOn [btc] (paidStore ctx [(account2Addr, 20000)]) (testSeed ctx) 3
+        liftIO $ (recoveredWallet recovered, recoveredPortfolios recovered) `shouldBe` (Just 1, [2])
+        portfolios <- lift getAllPortfolios
+        liftIO $
+          [(walletIndex portfolio.portfolioWallet, portfolioIndex portfolio.portfolioRow) | portfolio <- portfolios]
+            `shouldBe` [(0, 0), (1, 0), (1, 2)]
 
-    it "fills in the wallet of the seed the database has, though no portfolio was found paid" $
-      inDatabaseE $ do
-        _ <- migrated ctx (testSeed ctx) 0 "" [(btc, Bip44)]
-        recovered <- recoverOn [btc] emptyStore (testSeed ctx) 1
-        liftIO $ (recoveredWallet recovered, recoveredPortfolios recovered, recoveredFilled recovered) `shouldBe` (Just 0, [], 11)
-        liftIO $ map syncResPlace (recoveredSyncs recovered) `shouldBe` [placeOf 0 btc]
-
-    -- hw 0.9 left the accounts of one mnemonic on Bitcoin and on Bitcoin
-    -- Cash in two wallets. Their portfolio 0 has 2 accounts once merged,
-    -- and gains 10.
-    it "merges the wallets of the seed that hw 0.9 left apart, and names the one that is gone" $
-      inDatabaseE $ do
-        _ <- migrated ctx (testSeed ctx) 0 "" [(btc, Bip44)]
-        _ <- migrated ctx (testSeed ctx) 0 "" [(bch, Bip44)]
-        recovered <- recoverOn [btc] emptyStore (testSeed ctx) 1
-        liftIO $ (recoveredWallet recovered, recoveredMerged recovered, recoveredFilled recovered) `shouldBe` (Just 0, [1], 10)
-        walletsHeld `dbShouldBeE` [(0, Just "bc560f95")]
+    -- The wallet bears the fingerprint of the test mnemonic, and holds the
+    -- portfolio 0 of the second one: a fingerprint is 32 bits of a hash
+    it "refuses a wallet with the fingerprint of the seed and the keys of another seed" $
+      inDatabase $ do
+        dbShouldFailWith
+          "wallet0 has the fingerprint of this seed and other keys: it is of another seed with the same fingerprint. Nothing was changed"
+          $ do
+            held <- lift $ insertWallet testFingerprint
+            _ <- createPortfolio ctx (testSeed2 ctx) held 0
+            recoverOn [btc] paidAccounts (testSeed ctx) 2
 
     -- Portfolio 0 is paid, 1 is not, 2 is, and 3 and 4 are not, which ends
     -- the search with a gap of 2. Each line tells what came before it.
@@ -1980,7 +1964,7 @@ spec = prepareContext $ \ctx -> do
     it "does not find a portfolio that was paid only on the network left out" $
       inDatabaseE $ do
         (_, recovered) <- recoverWhereUp cashDown 1
-        liftIO $ recovered `shouldBe` Recovered Nothing [] [] 0 [] []
+        liftIO $ recovered `shouldBe` Recovered Nothing [] [] []
         walletsHeld `dbShouldBeE` []
 
     it "finds that portfolio once the store of the network is up" $
@@ -2003,7 +1987,7 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         (served, recovered) <- recoverWhereUp cashNotServed 1
         liftIO $ served `shouldBe` Served {servedUp = [btc], servedNot = [bch], servedDown = []}
-        liftIO $ recovered `shouldBe` Recovered Nothing [] [] 0 [] []
+        liftIO $ recovered `shouldBe` Recovered Nothing [] [] []
 
     -- The store of Bitcoin Cash answers its health check, then fails on
     -- the first addresses it is asked about
@@ -2225,35 +2209,29 @@ spec = prepareContext $ \ctx -> do
         knownIn block = Map.fromList [(fakeTxHash 1, block)]
 
     it "fetches a listed transaction it does not know" $
-      transactionsToFetch Map.empty [] (stored (externalAddr 0) 1) [listing (externalAddr 0) 1 [payment]]
+      transactionsToFetch Map.empty (stored (externalAddr 0) 1) [listing (externalAddr 0) 1 [payment]]
         `shouldBe` [fakeTxHash 1]
 
     it "leaves alone a known transaction listed in its block" $
-      transactionsToFetch (knownIn (Store.BlockRef 800000 1)) [] (stored (externalAddr 0) 1) [listing (externalAddr 0) 1 [payment]]
+      transactionsToFetch (knownIn (Store.BlockRef 800000 1)) (stored (externalAddr 0) 1) [listing (externalAddr 0) 1 [payment]]
         `shouldBe` []
 
     it "fetches a known transaction again when it moved to another block" $
-      transactionsToFetch (knownIn (Store.BlockRef 800001 3)) [] (stored (externalAddr 0) 1) [listing (externalAddr 0) 1 [payment]]
+      transactionsToFetch (knownIn (Store.BlockRef 800001 3)) (stored (externalAddr 0) 1) [listing (externalAddr 0) 1 [payment]]
         `shouldBe` [fakeTxHash 1]
 
     it "fetches the unconfirmed transactions again, listed or not" $
-      transactionsToFetch (knownIn (Store.MemRef 1700000000)) [] Map.empty []
+      transactionsToFetch (knownIn (Store.MemRef 1700000000)) Map.empty []
         `shouldBe` [fakeTxHash 1]
 
     it "fetches every transaction of an address that has transactions for the first time" $
       -- The known payment also paid this address, which its summary does
       -- not show yet: it is rebuilt along with the new transaction
-      transactionsToFetch (knownIn (Store.BlockRef 800000 1)) [] (stored (externalAddr 1) 0) [listing (externalAddr 1) 2 [payment, Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 3)]]
+      transactionsToFetch (knownIn (Store.BlockRef 800000 1)) (stored (externalAddr 1) 0) [listing (externalAddr 1) 2 [payment, Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 3)]]
         `shouldMatchList` [fakeTxHash 1, fakeTxHash 3]
 
-    -- As the step to version 4 of the database copied it, before hw kept
-    -- the time
-    it "fetches a summary without its time again, its address unchanged" $
-      transactionsToFetch (knownIn (Store.BlockRef 800000 1)) [fakeTxHash 1] (stored (externalAddr 0) 1) []
-        `shouldBe` [fakeTxHash 1]
-
     it "names a transaction once when two addresses list it" $
-      transactionsToFetch Map.empty [] (stored (externalAddr 0) 1 <> stored (externalAddr 1) 1) [listing (externalAddr 0) 1 [payment], listing (externalAddr 1) 1 [payment]]
+      transactionsToFetch Map.empty (stored (externalAddr 0) 1 <> stored (externalAddr 1) 1) [listing (externalAddr 0) 1 [payment], listing (externalAddr 1) 1 [payment]]
         `shouldBe` [fakeTxHash 1]
 
   describe "Telling the dead transactions" $ do
@@ -3323,7 +3301,7 @@ pendingHashes pool = do
   return [txHash (txSignDataTx (pendingTxData p)) | p <- rows, isSigned (txSignDataTx (pendingTxData p))]
 
 -- | The wallets of the database: the index and the fingerprint of each
-walletsHeld :: ExceptT String (DB IO) [(Natural, Maybe Text)]
+walletsHeld :: ExceptT String (DB IO) [(Natural, Text)]
 walletsHeld = map (\(_, wallet) -> (walletIndex wallet, dBWalletFingerprint wallet)) <$> lift getWallets
 
 -- | The accounts of the database: the index of the portfolio of each, its

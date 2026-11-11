@@ -8,8 +8,8 @@
 --
 -- An account goes in the file as an @xpub@ record: its key, its origin
 -- @pkh([fingerprint/44'/coin'/index'])@, or
--- @wpkh([fingerprint/84'/coin'/index'])@ for a BIP84 account, when hw
--- knows the fingerprint of the seed, and under hw's own keys its network,
+-- @wpkh([fingerprint/84'/coin'/index'])@ for a BIP84 account, which names
+-- the fingerprint of the seed, and under hw's own keys its network,
 -- its purpose, 44 or 84, and the description of its wallet. The label of
 -- the record is the description of the portfolio. Then come the labelled
 -- receiving addresses of the account, each with its key path, the
@@ -24,18 +24,23 @@
 -- watches the chain in one file.
 --
 -- Reading a file, importwallet takes the @xpub@ records first. They are
--- sorted by the fingerprint of their seed, which names their wallet, and
--- by the index of their path, which names their portfolio. A wallet or a
--- portfolio the database does not have is created. A portfolio it has is
--- merged with the one of the file: the accounts it lacks are added, and
--- the accounts it has must hold the keys the file gives them. This merge
--- is how the partial portfolios made from a database of hw 0.9 are filled
--- in, on a computer that never sees the mnemonic. When the two cannot be
--- merged, because an account of the file has another key than the same
--- account of the database, the import is refused whole. So is a key that
--- another account of the network holds, whatever child number the file
--- writes it with, and two keys for accounts of one path, as the test
--- networks share theirs ("Haskoin.Wallet.Database.Account".'insertAccount').
+-- sorted by the fingerprint of their origin, which names their wallet, and
+-- by the index of their path, which names their portfolio. A wallet is
+-- the one with that fingerprint, and each portfolio is taken whole or not
+-- at all. A portfolio the database has must hold every key the file gives
+-- it, and nothing is added to it: a key it does not hold means the file
+-- and the database are not of one mnemonic, and the import is refused. A
+-- portfolio the database does not have is created with its twelve
+-- accounts, so the file must give all of them. A portfolio that lacks
+-- accounts would need the mnemonic to be completed, since a public key of
+-- an account derives none of the others, and the online computer never
+-- sees the mnemonic. A wallet the database does not have is created with
+-- its portfolio0, which every wallet has, so the file must bring that one
+-- whole. The import is refused whole when any of this fails, and so is a
+-- key that another account of the network holds, whatever child number
+-- the file writes it with, and two keys for accounts of one path, as the
+-- test networks share theirs
+-- ("Haskoin.Wallet.Database.Account".'createPortfolioWith').
 --
 -- Nothing in a file proves that its keys are those of the mnemonic of the
 -- wallet it names: only the mnemonic could. importwallet trusts the file,
@@ -43,12 +48,9 @@
 -- file the user wrote on their own signer, or got over a channel they
 -- trust.
 --
--- A wallet made from a database of hw 0.9 has no fingerprint. It is
--- recognized by its keys: a file that gives a key of such a wallet is of
--- that wallet, which then takes the fingerprint of the file. hw 0.9 could
--- not tell that the accounts of one seed on Bitcoin and on Bitcoin Cash
--- belonged together and left them in two wallets, which the file brings
--- into one.
+-- Every key record hw writes names its origin. A key record without one
+-- is of the wallet of the account that holds its key in the database, if
+-- any, and is left aside otherwise.
 --
 -- An @xpub@ record that is not one of hw's, with no network or no type of
 -- account, is the key of one account. It does not say which portfolio of
@@ -109,11 +111,11 @@ import Control.Monad
 import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Reader (MonadTrans (lift))
-import Data.Aeson ((.:), (.:?), (.=))
+import Data.Aeson ((.:), (.=))
 import qualified Data.Aeson as Json
 import Data.Aeson.Types (Pair, Parser)
 import Data.Bits (clearBit, testBit)
-import Data.List (elemIndex, nub, partition, sort, sortOn)
+import Data.List (elemIndex, nub, nubBy, partition, sort)
 import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, listToMaybe, mapMaybe, maybeToList)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -132,7 +134,7 @@ import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..), allPools, liveSummary, txInfoKey)
 import Haskoin.Wallet.Database.TxLabel (poolTxLabels, setTxLabel)
 import Haskoin.Wallet.Descriptor
-import Haskoin.Wallet.Keys (AccountKind (..), accountDeriv, checkKindOnNetwork, kindName, kindOfPurpose, kindPurpose, xPubIndex)
+import Haskoin.Wallet.Keys (AccountKind (..), accountDeriv, checkKindOnNetwork, kindName, kindOfPurpose, kindPurpose, portfolioAccounts, sameKey, xPubIndex)
 import Haskoin.Wallet.Tx.SignData (TxSignData (..), isSigned)
 import Haskoin.Wallet.Util (visibleText)
 import Numeric.Natural (Natural)
@@ -200,10 +202,10 @@ accountRecords ctx portfolio withTransactions (accId, acc) = do
     net = accountNetwork acc
     pool = accountPool acc
     kind = accountKind acc
-    originM = originText . (\fingerprint -> accountOrigin kind fingerprint (accountPath portfolio acc)) <$> portfolioFingerprint portfolio
-    -- Every record names the account it is of: its origin, when the seed
-    -- is known, and its network, which the origin does not tell
-    ofAccount r = r {recordOrigin = originM, recordNetwork = Just (dBAccountNetwork acc)}
+    origin = originText (accountOrigin kind (portfolioFingerprint portfolio) (accountPath portfolio acc))
+    -- Every record names the account it is of: its origin, and its
+    -- network, which the origin does not tell
+    ofAccount r = r {recordOrigin = Just origin, recordNetwork = Just (dBAccountNetwork acc)}
     keyRecord =
       (ofAccount (record XpubRecord (dBAccountXPubKey acc)))
         { recordLabel = given (dBPortfolioDescription portfolio.portfolioRow),
@@ -272,34 +274,28 @@ data ImportReport = ImportReport
 data WalletImport = WalletImport
   { -- | The index of the wallet in the database
     walletImportIndex :: !Natural,
-    -- | The fingerprint of its seed, when it is known now
-    walletImportFingerprint :: !(Maybe Fingerprint),
+    -- | The fingerprint of its seed
+    walletImportFingerprint :: !Fingerprint,
     -- | Whether the import created it
     walletImportCreated :: !Bool,
-    -- | The indexes of the wallets of the same seed merged into it, which
-    -- are gone
-    walletImportMerged :: ![Natural],
     -- | What became of each of its portfolios the file names, in the
     -- order of their indexes
     walletImportPortfolios :: ![PortfolioImport]
   }
   deriving (Eq, Show)
 
--- | What became of a portfolio the file names
+-- | What became of a portfolio the file names: created whole, with its
+-- twelve accounts, or found in the database, which had it whole already
 data PortfolioImport = PortfolioImport
   { portfolioImportIndex :: !Natural,
     -- | Whether the import created it
-    portfolioImportCreated :: !Bool,
-    -- | How many accounts the import added to it
-    portfolioImportAdded :: !Natural,
-    -- | How many accounts it still lacks
-    portfolioImportMissing :: !Natural
+    portfolioImportCreated :: !Bool
   }
   deriving (Eq, Show)
 
 -- | What became of an account the file names
 data AccountImport
-  = -- | Added to its portfolio, which did not have it
+  = -- | Added with its portfolio, which the import created
     AccountAdded !AccountRef
   | -- | Its portfolio had it already, with the key of the file
     AccountHeld !AccountRef
@@ -357,10 +353,9 @@ wholeFile :: ImportScope
 wholeFile = ImportScope Nothing Nothing
 
 -- | Import the content of a file of a wallet, as 'readWalletFile' reads
--- it, within the scope given. A file that cannot be merged with the
--- database is refused whole: the accounts the import added before it
--- found that out are undone ('undoneIfRefused'), so that a refused file
--- changes nothing.
+-- it, within the scope given. A file that cannot be imported is refused
+-- whole: the portfolios the import created before it found that out are
+-- undone ('undoneIfRefused'), so that a refused file changes nothing.
 importFile :: (MonadUnliftIO m) => Ctx -> ImportScope -> Text -> ExceptT String (DB m) ImportReport
 importFile ctx scope content = undoneIfRefused $ do
   let file = readWalletFile content
@@ -532,26 +527,26 @@ readWalletKey ctx r = do
 -- what became of each wallet and of each account, in the order of the
 -- records.
 --
--- The keys are sorted by wallet: by the fingerprint of their origin, or,
--- for a key without one, by the wallet of the account that holds it in
--- the database. A key that names no wallet either way is left aside. Each
--- wallet is then merged with the database ('importWallet').
+-- The keys are sorted by wallet, by the fingerprint of their origin. A
+-- key without an origin names the wallet of the account that holds it in
+-- the database, and is left aside when none does. Each wallet is then
+-- imported ('importWallet').
 importKeys :: (MonadUnliftIO m) => Ctx -> ImportScope -> [Record] -> ExceptT String (DB m) ([WalletImport], [AccountImport])
 importKeys ctx scope records = do
   let readKeys = [(r, readWalletKey ctx r) | r <- records]
       inScope :: WalletKey -> Bool
       inScope key = maybe True (== key.walletKeyIndex) scope.scopePortfolio
-  -- Each key in scope with the wallet it names
+  -- Each key in scope with the fingerprint of the wallet it names
   named <- forM [key | (_, Right key) <- readKeys, inScope key] $ \key ->
     case key.walletKeyFingerprint of
-      Just fingerprint -> return (key, Just (Right fingerprint))
+      Just fingerprint -> return (key, Just fingerprint)
       Nothing -> do
         heldM <- lift $ accountWithKey key.walletKeyNetwork ctx key.walletKeyXPub
         ownerM <- forM heldM $ \(_, acc) -> portfolioOfAccount acc
-        return (key, Left . (.portfolioWalletId) <$> ownerM)
-  let groups = nub [name | (_, Just name) <- named]
-  imported <- forM groups $ \name ->
-    importWallet ctx scope (either (const Nothing) Just name) [key | (key, Just other) <- named, other == name]
+        return (key, portfolioFingerprint <$> ownerM)
+  let fingerprints = nub [fingerprint | (_, Just fingerprint) <- named]
+  imported <- forM fingerprints $ \fingerprint ->
+    importWallet ctx scope fingerprint [key | (key, Just other) <- named, other == fingerprint]
   let outcomes = concatMap snd imported
       outcomeOf r = case lookup r [(key.walletKeyRecord, outcome) | (key, outcome) <- outcomes] of
         Just outcome -> Just outcome
@@ -563,112 +558,143 @@ importKeys ctx scope records = do
           Nothing -> Nothing
   return (fst <$> imported, mapMaybe outcomeOf records)
 
--- | Merge the keys of one wallet of a file into the database, and say
--- what became of the wallet and of each key.
+-- | Import the keys of one wallet of a file, the wallet of the
+-- fingerprint, and say what became of the wallet and of each key.
 --
--- The wallet of the database is the one with the fingerprint of the file,
--- or one without a fingerprint that holds a key of the file: a wallet
--- made from a database of hw 0.9, which the file then gives its
--- fingerprint. Several such wallets are of one seed, and are merged into
--- one ('mergeWallets'). Without any, a new wallet is created.
---
--- Each key goes to the portfolio of its index, created when the wallet
--- does not have it, with the description the file gives. An account the
--- portfolio has must hold the key of the file, or the import is refused:
--- the file and the database are then not of the same seed, and no merge
--- of them would be a wallet. A wallet always has portfolio 0, so an empty
--- one is made when the file brings none.
+-- Each portfolio of the file is taken whole ('importPortfolio'). A wallet
+-- the database does not have is created, with its portfolio0, which every
+-- wallet has: a file that does not bring that portfolio is refused, and
+-- so is importwallet --portfolio N of such a wallet, with the advice to
+-- import the whole file. The wallet takes the description the file gives
+-- it when it has none.
 importWallet ::
   (MonadUnliftIO m) =>
   Ctx ->
   ImportScope ->
-  Maybe Fingerprint ->
+  Fingerprint ->
   [WalletKey] ->
   ExceptT String (DB m) (WalletImport, [(WalletKey, AccountImport)])
-importWallet ctx scope fingerprintM keys = do
-  -- The wallets that hold a key of the file, and the one of its fingerprint
-  holders <- fmap (nub . catMaybes) . forM keys $ \key -> do
-    heldM <- lift $ accountWithKey key.walletKeyNetwork ctx key.walletKeyXPub
-    forM heldM $ \(_, acc) -> (.portfolioWalletId) <$> portfolioOfAccount acc
-  byFingerprint <- maybe (return Nothing) (lift . walletWithFingerprint) fingerprintM
-  holdersRows <- forM holders $ \walletId -> (walletId,) <$> getWalletById walletId
-  let candidates = sortOn (walletIndex . snd) (nub (maybeToList byFingerprint <> holdersRows))
-  forM_ ((,) <$> fingerprintM <*> pure candidates) $ \(fingerprint, found) ->
-    forM_ found $ \(_, wallet) ->
-      forM_ (walletFingerprint wallet) $ \known ->
-        unless (known == fingerprint) $
-          throwError $
-            cs (walletName (walletIndex wallet)) <> " holds a key of the file, and is of the seed " <> cs (fingerprintToText known) <> ", not of " <> cs (fingerprintToText fingerprint) <> ": the two cannot be merged"
-  ((targetId, _), created, merged) <- case candidates of
-    [] -> (,True,[]) <$> lift (insertWallet fingerprintM)
-    first@(firstId, _) : others -> do
-      forM_ others (mergeWallets firstId)
-      return (first, False, walletIndex . snd <$> others)
-  forM_ fingerprintM $ \fingerprint ->
-    lift $ P.update targetId [DBWalletFingerprint P.=. Just (fingerprintToText fingerprint)]
-  wallet <- getWalletById targetId
+importWallet ctx scope fingerprint keys = do
+  existing <- lift $ walletWithFingerprint fingerprint
   forM_ scope.scopeWallet $ \(wantedId, wanted) ->
-    unless (wantedId == targetId) $
+    unless (Just wantedId == (fst <$> existing)) $
       throwError $
         "The file is not of " <> cs (walletName (walletIndex wanted)) <> ": it is of "
-          <> (if created then "a wallet the database does not have" else cs (walletName (walletIndex wallet)))
+          <> maybe "a wallet the database does not have" (cs . walletName . walletIndex . snd) existing
+  let indexes = sort (nub ((.walletKeyIndex) <$> keys))
+      shownFingerprint = cs (fingerprintToText fingerprint) :: String
+  when (isNothing existing && 0 `notElem` indexes) $
+    throwError $ case scope.scopePortfolio of
+      Just index ->
+        "The database has no wallet of the fingerprint "
+          <> shownFingerprint
+          <> ", and importwallet --portfolio "
+          <> show index
+          <> " does not create one: a wallet is created with its portfolio0. Import the whole file, without --portfolio"
+      Nothing ->
+        "The file does not have portfolio0 of the wallet "
+          <> shownFingerprint
+          <> ", which the database does not have: a wallet is created with its portfolio0. \
+             \Import a file of the whole wallet, as exportwallet writes it without --portfolio"
+  (walletId, created) <- case existing of
+    Just (walletId, _) -> return (walletId, False)
+    Nothing -> (\(walletId, _) -> (walletId, True)) <$> lift (insertWallet fingerprint)
   -- The description of the wallet, when it has none
+  described <- getWalletById walletId
   forM_ (listToMaybe (mapMaybe (recordWallet . (.walletKeyRecord)) keys)) $ \description ->
-    when (Text.null (dBWalletDescription wallet)) $ setWalletDescription targetId description
-  outcomes <- forM keys $ \key -> do
-    let index = key.walletKeyIndex
-        description = fromMaybe "" (recordLabel key.walletKeyRecord)
-    existing <- lift $ portfolioAt targetId index
-    (portfolioKey, row, isNew) <- case existing of
-      Just (portfolioKey, row) -> return (portfolioKey, row, False)
-      Nothing -> (\(portfolioKey, row) -> (portfolioKey, row, True)) <$> insertPortfolio targetId index description
-    when (Text.null (dBPortfolioDescription row) && not (Text.null description)) $
-      setPortfolioDescription portfolioKey description
-    let portfolio = Portfolio portfolioKey row targetId wallet
-        ref = AccountRef (portfolioPlace portfolio key.walletKeyNetwork) key.walletKeyKind
-    heldM <- lift $ poolAccount (portfolioPool portfolio key.walletKeyNetwork) key.walletKeyKind
-    outcome <- case heldM of
-      Just (_, acc)
-        | accountXPubKey ctx acc == key.walletKeyXPub -> return (AccountHeld ref)
-        | otherwise ->
-            throwError $
-              "The " <> cs (kindName key.walletKeyKind) <> " account of " <> portfolioText portfolio <> " on " <> key.walletKeyNetwork.name
-                <> " has another key than the file gives it: the two cannot be merged"
-      Nothing -> AccountAdded ref <$ insertAccount portfolioKey key.walletKeyKind key.walletKeyNetwork ctx key.walletKeyXPub
-    return (key, outcome, index, isNew)
-  -- A wallet always has portfolio 0. The one made here is empty, and the
-  -- answer shows it, so that the user is not surprised by a partial
-  -- portfolio the file did not bring.
-  zero <- lift $ portfolioAt targetId 0
-  when (isNothing zero) $ void $ insertPortfolio targetId 0 ""
-  let indexes = sort (nub ([0 | isNothing zero] <> [index | (_, _, index, _) <- outcomes]))
-  portfolios <- forM indexes $ \index -> do
-    held <- lift $ portfolioAt targetId index
-    missing <- maybe (return 0) (fmap length . lift . missingAccounts . fst) held
-    return
-      PortfolioImport
-        { portfolioImportIndex = index,
-          portfolioImportCreated = (index == 0 && isNothing zero) || or [isNew | (_, _, i, isNew) <- outcomes, i == index],
-          portfolioImportAdded = fromIntegral (length [() | (_, AccountAdded _, i, _) <- outcomes, i == index]),
-          portfolioImportMissing = fromIntegral missing
-        }
+    when (Text.null (dBWalletDescription described)) $ setWalletDescription walletId description
+  wallet <- getWalletById walletId
+  imported <- forM indexes $ \index ->
+    importPortfolio ctx (walletId, wallet) created index [key | key <- keys, key.walletKeyIndex == index]
   let summary =
         WalletImport
           { walletImportIndex = walletIndex wallet,
-            walletImportFingerprint = walletFingerprint wallet,
+            walletImportFingerprint = fingerprint,
             walletImportCreated = created,
-            walletImportMerged = merged,
-            walletImportPortfolios = portfolios
+            walletImportPortfolios = fst <$> imported
           }
-  return (summary, [(key, outcome) | (key, outcome, _, _) <- outcomes])
+  return (summary, concatMap snd imported)
+
+-- | Import the keys of one portfolio of a wallet, at an index, and say
+-- what became of the portfolio and of each key. The flag says whether the
+-- import has just created the wallet, which the refusals then name by its
+-- fingerprint: a refusal undoes it.
+--
+-- A portfolio the wallet has is whole already. Every key of the file must
+-- be the one its account holds, or the import is refused: the file and
+-- the database are then not of one mnemonic. Nothing is added to it, and
+-- it takes the description the file gives it when it has none.
+--
+-- A portfolio the wallet does not have is created with the twelve
+-- accounts of the file, and with the description the file gives it: the
+-- file must give a key for each of them ('wholePortfolioKeys').
+importPortfolio ::
+  (MonadUnliftIO m) =>
+  Ctx ->
+  (DBWalletId, DBWallet) ->
+  Bool ->
+  Natural ->
+  [WalletKey] ->
+  ExceptT String (DB m) (PortfolioImport, [(WalletKey, AccountImport)])
+importPortfolio ctx (walletId, wallet) newWallet index keys = do
+  existing <- lift $ portfolioAt walletId index
+  let description = listToMaybe (filter (not . Text.null) (mapMaybe (recordLabel . (.walletKeyRecord)) keys))
+      place
+        | newWallet = cs (portfolioName index) <> " of the wallet " <> cs (fingerprintToText (walletFingerprint wallet))
+        | otherwise = cs (portfolioName index) <> " of " <> cs (walletName (walletIndex wallet))
+      refOf :: Portfolio -> WalletKey -> AccountRef
+      refOf portfolio key = AccountRef (portfolioPlace portfolio key.walletKeyNetwork) key.walletKeyKind
+  case existing of
+    Just (portfolioKey, row) -> do
+      let portfolio = Portfolio portfolioKey row walletId wallet
+      outcomes <- forM keys $ \key -> do
+        (_, acc) <- poolAccountOf (portfolioPool portfolio key.walletKeyNetwork) key.walletKeyKind
+        unless (accountXPubKey ctx acc == key.walletKeyXPub) $
+          throwError $
+            "The " <> cs (kindName key.walletKeyKind) <> " account of " <> portfolioText portfolio <> " on " <> key.walletKeyNetwork.name
+              <> " has another key than the file gives it: the file and the database are not of one mnemonic"
+        return (key, AccountHeld (refOf portfolio key))
+      forM_ description $ \text ->
+        when (Text.null (dBPortfolioDescription row)) $ setPortfolioDescription portfolioKey text
+      return (PortfolioImport index False, outcomes)
+    Nothing -> do
+      accountKeys <- liftEither $ wholePortfolioKeys place keys
+      portfolio <- createPortfolioWith ctx (walletId, wallet) index (fromMaybe "" description) accountKeys
+      return (PortfolioImport index True, [(key, AccountAdded (refOf portfolio key)) | key <- keys])
+
+-- | The key of each of the twelve accounts of a portfolio, from the keys
+-- of a file for it, in the order of 'portfolioAccounts'. A record may be
+-- in the file twice, as when two files were joined, but an account with
+-- two keys is refused, and so is a portfolio the file does not give every
+-- account of: hw creates a portfolio whole or not at all. The text names
+-- the portfolio, for the refusals.
+wholePortfolioKeys :: String -> [WalletKey] -> Either String [(Network, AccountKind, XPubKey)]
+wholePortfolioKeys place keys = do
+  found <- forM portfolioAccounts $ \(net, kind) ->
+    case nubBy sameKey [key.walletKeyXPub | key <- keys, key.walletKeyNetwork == net, key.walletKeyKind == kind] of
+      [] -> Right Nothing
+      [xpub] -> Right (Just (net, kind, xpub))
+      _ -> Left ("The file gives two keys for the " <> cs (kindName kind) <> " account of " <> place <> " on " <> net.name)
+  let given = catMaybes found
+  unless (length given == length portfolioAccounts) $
+    Left $
+      "The file gives "
+        <> show (length given)
+        <> " of the "
+        <> show (length portfolioAccounts)
+        <> " accounts of "
+        <> place
+        <> ", which the database does not have: importwallet creates a portfolio only whole, with every account. \
+           \Write the file with exportwallet on the computer that has the whole portfolio"
+  return given
 
 {- Labels, locks and what is left aside -}
 
 -- | The accounts of the database a record is of: those on the network it
 -- names, when it names one, and of those, the accounts its origin names,
--- when it has one hw can read: of its kind, at its path, in a wallet of
--- its seed or of a seed hw does not know yet. Nothing when the record has
--- neither, and every account is a candidate.
+-- when it has one hw can read: of its kind, at its path, in the wallet of
+-- its seed. Nothing when the record has neither, and every account is a
+-- candidate.
 accountsOfRecord :: [(Portfolio, DBAccountId, DBAccount)] -> Record -> Maybe [(Portfolio, DBAccountId, DBAccount)]
 accountsOfRecord accounts r =
   case (recordNetwork r, recordOrigin r) of
@@ -683,7 +709,7 @@ accountsOfRecord accounts r =
           | Just kind <- kindOfScripts (originScripts origin) ->
               accountKind acc == kind
                 && toGeneric (accountPath portfolio acc) == originPath origin
-                && maybe True (== originFingerprint origin) (portfolioFingerprint portfolio)
+                && originFingerprint origin == portfolioFingerprint portfolio
         _ -> False
 
 -- | Import a record of anything but a key, and count what was done with it
@@ -818,10 +844,10 @@ firstJust (x : xs) f = do
 -- network when it names one, and is counted among the transactions the
 -- wallet does not have yet when none has it.
 --
--- A network alone names no portfolio. exportwallet writes no origin for a
--- wallet whose fingerprint hw does not know, and the records of such a
--- file would otherwise label the transaction in every portfolio on their
--- network, which the next export would write under each of them.
+-- A network alone names no portfolio. A file of another wallet may give
+-- no origin, and its records would otherwise label the transaction in
+-- every portfolio on their network, which the next export would write
+-- under each of them.
 labelTxRecord :: (MonadUnliftIO m) => [(Portfolio, DBAccountId, DBAccount)] -> ImportReport -> Record -> TxHash -> ExceptT String (DB m) ImportReport
 labelTxRecord accounts report r tid =
   case recordLabel r of
@@ -912,17 +938,17 @@ data FileShown = FileShown
 holdsAnything :: WalletFile -> Bool
 holdsAnything file = not (null (fileKeys file) && null (fileRecords file) && fileOtherTypes file == 0)
 
--- | Show a file of a wallet. Its wallets are merged into the database as
--- importwallet merges them, then that is undone ('undoneAfter'), so that
+-- | Show a file of a wallet. Its wallets are imported into the database as
+-- importwallet imports them, then that is undone ('undoneAfter'), so that
 -- the database keeps nothing. Each wallet and each account shows as
 -- importwallet would leave it: created, found, added or left aside, with
--- the reasons importwallet gives. A file that cannot be merged is refused
--- with the refusal of importwallet, and so is a --portfolio the file has
--- nothing of ('checkScopeHeld').
+-- the reasons importwallet gives. A file that importwallet would refuse is
+-- refused with its refusal, and so is a --portfolio the file has nothing
+-- of ('checkScopeHeld').
 --
--- Merging the wallets in and undoing it gives the very answer
--- importwallet would give, without its rules written twice, once to do
--- and once to tell what it would do. The two could not drift apart.
+-- Importing the wallets and undoing it gives the very answer importwallet
+-- would give, without its rules written twice, once to do and once to
+-- tell what it would do. The two could not drift apart.
 fileShown :: (MonadUnliftIO m) => Ctx -> ImportScope -> WalletFile -> ExceptT String (DB m) FileShown
 fileShown ctx scope file = do
   liftEither $ checkScopeHeld ctx scope (fileKeys file) (snd <$> fileRecords file)
@@ -947,14 +973,14 @@ sortRecords ctx file wallets outcomes =
   where
     sorted = sortRecord ctx <$> fileRecords file
     placed = [(accountOf r, r) | ShownRecord r <- sorted]
-    -- What names each account of the file: its network, and its origin
-    -- when the fingerprint of its wallet is known
+    -- What names each account of the file: its network, and its origin,
+    -- from the fingerprint of its wallet
     names = accountName <$> outcomes
     accountName :: AccountImport -> Maybe (Text, Maybe Origin)
     accountName outcome = do
       ref <- importedAccount outcome
       let place = accountRefPlace ref
-          fingerprintM = listToMaybe [fingerprint | wallet <- wallets, walletImportIndex wallet == refWallet (placePortfolio place), Just fingerprint <- [walletImportFingerprint wallet]]
+          fingerprintM = listToMaybe [walletImportFingerprint wallet | wallet <- wallets, walletImportIndex wallet == refWallet (placePortfolio place)]
       return (cs (placeNetwork place).name, (\fingerprint -> accountOrigin (accountRefKind ref) fingerprint (accountRefPath ref)) <$> fingerprintM)
     -- The place of the account of a record among the accounts of the
     -- file: the one on its network with its origin
@@ -1079,14 +1105,12 @@ instance Json.ToJSON PortfolioImport where
   toJSON p =
     Json.object
       [ "portfolio" .= portfolioImportIndex p,
-        "created" .= portfolioImportCreated p,
-        "added" .= portfolioImportAdded p,
-        "missing" .= portfolioImportMissing p
+        "created" .= portfolioImportCreated p
       ]
 
 instance Json.FromJSON PortfolioImport where
   parseJSON = Json.withObject "portfolio import" $ \o ->
-    PortfolioImport <$> o .: "portfolio" <*> o .: "created" <*> o .: "added" <*> o .: "missing"
+    PortfolioImport <$> o .: "portfolio" <*> o .: "created"
 
 instance Json.ToJSON WalletImport where
   toJSON w =
@@ -1094,13 +1118,12 @@ instance Json.ToJSON WalletImport where
       [ "wallet" .= walletImportIndex w,
         "fingerprint" .= walletImportFingerprint w,
         "created" .= walletImportCreated w,
-        "merged" .= walletImportMerged w,
         "portfolios" .= walletImportPortfolios w
       ]
 
 instance Json.FromJSON WalletImport where
   parseJSON = Json.withObject "wallet import" $ \o ->
-    WalletImport <$> o .: "wallet" <*> o .:? "fingerprint" <*> o .: "created" <*> o .: "merged" <*> o .: "portfolios"
+    WalletImport <$> o .: "wallet" <*> o .: "fingerprint" <*> o .: "created" <*> o .: "portfolios"
 
 -- | The keys of what became of an account, which show adds the records of
 -- the account to: its status, the account when the wallet has it, and the

@@ -182,13 +182,10 @@ blockCell = \case
 
 {- Portfolios -}
 
--- | The rows of a portfolio in the sheet of portfolios: one for each
--- network it has an account on, or one without a network for a portfolio
--- that has no account yet, so that it shows
-portfolioRows :: PortfolioView -> [(PortfolioView, Maybe NetworkView)]
-portfolioRows portfolio = case viewNetworks portfolio of
-  [] -> [(portfolio, Nothing)]
-  networks -> (portfolio,) . Just <$> networks
+-- | The rows of a portfolio in the sheet of portfolios: one for each of
+-- its networks
+portfolioRows :: PortfolioView -> [(PortfolioView, NetworkView)]
+portfolioRows portfolio = (portfolio,) <$> viewNetworks portfolio
 
 -- | The columns of the portfolios, a row for each network of each: the
 -- wallet, the portfolio and its description, the network, what the
@@ -200,7 +197,7 @@ portfolioRows portfolio = case viewNetworks portfolio of
 -- hexadecimal digits, and about one in 40 has no letter: a spreadsheet
 -- would read it as a number, and drop its leading zeros, without a word.
 -- The verbose view of portfolios gives both.
-portfolioColumns :: [Column (PortfolioView, Maybe NetworkView)]
+portfolioColumns :: [Column (PortfolioView, NetworkView)]
 portfolioColumns =
   [ Column "Wallet" $ \(portfolio, _) -> TextCell (walletName (refWallet (viewRef portfolio))),
     Column "Portfolio" $ \(portfolio, _) -> TextCell (portfolioName (refPortfolio (viewRef portfolio))),
@@ -214,7 +211,7 @@ portfolioColumns =
     Column "Created (UTC)" $ \(portfolio, _) -> TimeCell (viewCreated portfolio)
   ]
   where
-    onNetwork cell (_, netM) = maybe EmptyCell cell netM
+    onNetwork cell (_, net) = cell net
 
 -- | The columns that say where a row of several portfolios is: its
 -- wallet, its portfolio and its network

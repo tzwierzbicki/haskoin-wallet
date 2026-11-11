@@ -770,8 +770,7 @@ checkListedCoins coins = do
 -- | The transactions the coins come from, each once, in the order of the
 -- coins, as a builder puts them in the signing data: read from the
 -- database, and each coin checked against its output ('checkCoinOutput'),
--- so that no transaction is built on a value that a store got wrong and
--- an earlier version of hw stored.
+-- so that no transaction is built on a value that a store got wrong.
 coinParents :: (MonadUnliftIO m) => [Store.Unspent] -> ExceptT String (DB m) [Tx]
 coinParents coins = do
   parents <- mapM getRawTx $ nubOrd $ (.outpoint.hash) <$> coins

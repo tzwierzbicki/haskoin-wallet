@@ -8,14 +8,10 @@
 module Haskoin.Wallet.DescriptorSpec (spec) where
 
 import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Trans (lift)
 import qualified Data.Aeson as Json
 import Data.Text (Text)
-import qualified Database.Persist as P
 import Haskoin
-import Haskoin.Wallet.Database (DBWallet (..), EntityField (DBWalletFingerprint))
 import Haskoin.Wallet.Database.Account (accountDescriptorText)
-import Haskoin.Wallet.Database.Portfolio (Portfolio (..), getPortfolio)
 import Haskoin.Wallet.Descriptor
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
@@ -59,17 +55,13 @@ descriptorSpec :: Spec
 descriptorSpec =
   describe "The descriptor of an account" $ do
     it "is its key in pkh, with the origin of the key, both chains and its checksum, hardened steps marked with an h" $
-      descriptorText (accountDescriptor Bip44 (Just testFingerprint) account0 testAccountXPub) `shouldBe` mainDescriptor
+      descriptorText (accountDescriptor Bip44 testFingerprint account0 testAccountXPub) `shouldBe` mainDescriptor
 
     -- The descriptor of the bip84 section of the Coldcard file of
     -- test/data/descriptors, for the bip84 account of the test wallet
     it "is its key in wpkh for a bip84 account, as a Coldcard writes it" $ do
-      descriptorText (accountDescriptor Bip84 (Just testFingerprint) segwitAccount0 testSegwitAccountXPub) `shouldBe` segwitDescriptor
+      descriptorText (accountDescriptor Bip84 testFingerprint segwitAccount0 testSegwitAccountXPub) `shouldBe` segwitDescriptor
       parseDescriptor segwitDescriptor `shouldBe` Right (Descriptor ["wpkh"] (Just (testFingerprint, toGeneric segwitAccount0)) testSegwitAccountXPub BothChains)
-
-    it "names no origin when the fingerprint of the seed is unknown" $
-      descriptorText (accountDescriptor Bip44 Nothing account0 testAccountXPub)
-        `shouldBe` "pkh(" <> testAccountXPub <> "/<0;1>/*)#mmejv52s"
 
     it "reads back as written" $
       parseDescriptor mainDescriptor `shouldBe` Right mainParsed
@@ -158,32 +150,6 @@ walletDescriptorSpec ctx =
             `shouldBe` "pkh([bc560f95/44h/145h/0h]" <> testAccountXPubBch <> "/<0;1>/*)#trhxkymx"
           accountDescriptorText portfolio test
             `shouldBe` "pkh([bc560f95/44h/1h/0h]" <> testAccountXPubTest <> "/<0;1>/*)#etwa23nl"
-
-    -- As the step from hw 0.9 leaves a wallet, until fillwallet or
-    -- importwallet gives it the fingerprint of its seed
-    it "has no origin in a wallet without a fingerprint" $
-      inDatabaseE $ do
-        (portfolio, legacy, segwit) <- withoutFingerprint
-        liftIO $ do
-          accountDescriptorText portfolio legacy `shouldBe` "pkh(" <> testAccountXPub <> "/<0;1>/*)#mmejv52s"
-          accountDescriptorText portfolio segwit `shouldBe` "wpkh(" <> testSegwitAccountXPub <> "/<0;1>/*)#h3820wwk"
-
-    it "gains its origin once the wallet has its fingerprint" $
-      inDatabaseE $ do
-        (portfolio, legacy, _) <- withoutFingerprint
-        lift $ P.update portfolio.portfolioWalletId [DBWalletFingerprint P.=. Just testFingerprintText]
-        known <- getPortfolio portfolio.portfolioId
-        liftIO $ do
-          dBWalletFingerprint known.portfolioWallet `shouldBe` Just "bc560f95"
-          accountDescriptorText known legacy `shouldBe` mainDescriptor
-  where
-    -- Portfolio 0 of a wallet without a fingerprint, with the two accounts
-    -- of the test wallet on Bitcoin
-    withoutFingerprint = do
-      portfolio <- migrated ctx (testSeed ctx) 0 "" [(btc, Bip44), (btc, Bip84)]
-      (_, legacy) <- accountOf portfolio btc Bip44
-      (_, segwit) <- accountOf portfolio btc Bip84
-      return (portfolio, legacy, segwit)
 
 {- Checksums -}
 

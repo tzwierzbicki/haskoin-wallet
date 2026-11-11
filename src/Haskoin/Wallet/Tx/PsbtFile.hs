@@ -15,12 +15,13 @@
 -- the label a coin shows on its input, and the path of the address of the
 -- portfolio an input spends from.
 --
--- A derivation record names a key by the fingerprint of the seed and the
--- path from it, m/44'/0'/0'/0/5, when the wallet knows the seed, as the
--- spec wants it and other signers expect it. Otherwise it names the key by
--- the fingerprint of the account's own key and the path from it, /0/5, as
--- Bitcoin Core does for a key whose origin it does not know. The signer
--- knows the seed, so a signed file names it. A PSBT does not say which
+-- A derivation record hw writes names a key by the fingerprint of the seed
+-- and the path from it, m/44'/0'/0'/0/5, as the spec wants it and other
+-- signers expect it: every wallet of hw knows the fingerprint of its seed.
+-- A file of another wallet may name a key by the fingerprint of the
+-- account's own key and the path from it, /0/5, as Bitcoin Core does for
+-- a key whose origin it does not know. hw reads such a record, and names
+-- the key by the seed in the file it signs. A PSBT does not say which
 -- portfolio it is for: the reader tries the pools given, each the
 -- accounts of a portfolio on a network, by the keys the records name, and
 -- gives the paths of the first one with a record, each with the kind of
@@ -101,8 +102,8 @@ data FileAccount = FileAccount
     fileAccountKind :: !AccountKind,
     -- | The path of the account from the seed, m/purpose'/coin'/index'
     fileAccountPath :: !HardPath,
-    -- | The fingerprint of the seed, when the wallet has learnt it
-    fileAccountFingerprint :: !(Maybe Fingerprint),
+    -- | The fingerprint of the seed, which the wallet of the account keeps
+    fileAccountFingerprint :: !Fingerprint,
     -- | The network of the account, which says the sighash it signs with
     fileAccountNetwork :: !Network
   }
@@ -166,27 +167,25 @@ data AddressKey = AddressKey
   }
 
 -- | The address of the account at a path, its script of the kind of the
--- account, with its key derived from the seed when its fingerprint is
--- known, from the account's key otherwise
-addressKey :: Ctx -> FileAccount -> Maybe Fingerprint -> SoftPath -> AddressKey
-addressKey ctx acc fingerprintM path =
+-- account, with its key derived from the seed: the fingerprint of the
+-- seed and the full path
+addressKey :: Ctx -> FileAccount -> SoftPath -> AddressKey
+addressKey ctx acc path =
   AddressKey
     { addressPath = PoolPath acc.fileAccountKind path,
       addressPublic = public,
       addressScript = marshal ctx (keyScript acc.fileAccountKind ctx public),
-      addressDerivation = case fingerprintM of
-        Just fingerprint -> Derivation fingerprint (listToPath (pathToList acc.fileAccountPath <> pathToList path))
-        Nothing -> Derivation (xPubFP ctx acc.fileAccountXPub) (toGeneric path)
+      addressDerivation = Derivation acc.fileAccountFingerprint (listToPath (pathToList acc.fileAccountPath <> pathToList path))
     }
   where
     public = wrapPubKey True (derivePubPath ctx path acc.fileAccountXPub).key
 
 -- | The address of a pool at a path: that of its account of the kind of
 -- the path. A path of a kind the pool has no account of is refused.
-poolAddressKey :: Ctx -> [FileAccount] -> Maybe Fingerprint -> PoolPath -> Either String AddressKey
-poolAddressKey ctx accounts fingerprintM path =
+poolAddressKey :: Ctx -> [FileAccount] -> PoolPath -> Either String AddressKey
+poolAddressKey ctx accounts path =
   case [acc | acc <- accounts, acc.fileAccountKind == path.pathKind] of
-    acc : _ -> Right (addressKey ctx acc fingerprintM path.pathInAccount)
+    acc : _ -> Right (addressKey ctx acc path.pathInAccount)
     [] -> Left ("The path " <> cs (poolPathText path) <> " is of a " <> cs (kindName path.pathKind) <> " account, which the file was given no key of")
 
 -- | The PSBT of a transaction file, with the keys of the accounts given in
@@ -208,7 +207,6 @@ txFilePsbt ctx accounts file = do
       maybe (Left ("Input " <> show i <> " spends an output its transaction does not have")) Right $
         listToMaybe (drop (fromIntegral input.outpoint.index) parent.outputs)
     return (parent, coin)
-  let fingerprintM = tsd.txSignDataFingerprint <|> listToMaybe (mapMaybe (.fileAccountFingerprint) accounts)
   (inputKeys, outputKeys) <-
     if null accounts
       then
@@ -218,8 +216,8 @@ txFilePsbt ctx accounts file = do
       else do
         forM_ (tsd.txSignDataInputPaths <> tsd.txSignDataOutputPaths) $ \path ->
           unless (isChainPath path.pathInAccount) $ Left (offChainPath path)
-        inputKeys <- mapM (poolAddressKey ctx accounts fingerprintM) tsd.txSignDataInputPaths
-        outputKeys <- mapM (poolAddressKey ctx accounts fingerprintM) tsd.txSignDataOutputPaths
+        inputKeys <- mapM (poolAddressKey ctx accounts) tsd.txSignDataInputPaths
+        outputKeys <- mapM (poolAddressKey ctx accounts) tsd.txSignDataOutputPaths
         forM_ inputKeys $ \key ->
           unless (any ((== key.addressScript) . (.script) . snd) coins) $
             Left ("The path " <> cs (poolPathText key.addressPath) <> " is of no input of the transaction")
@@ -306,9 +304,9 @@ addressLabel file key =
 -- lets a wallet that never handed out the address read the signed file.
 --
 -- The derivation records that are left, those of the outputs and of the
--- inputs still unsigned, and that named the keys of the account by the
--- account's own key, when the wallet did not know the seed, are rewritten
--- from the seed the signer names. The network goes in hw's field when the
+-- inputs still unsigned, and that name the keys of the account by the
+-- account's own key, as a file of another wallet may, are rewritten from
+-- the seed of the account. The network goes in hw's field when the
 -- file has none. The transaction signed must be the file's, and the
 -- signed file must name its network, which says how a signature is
 -- verified.
@@ -326,7 +324,7 @@ signedPsbt ctx accounts source file = do
         Map.fromList
           [ (key.addressScript, key.addressPath)
             | path <- tsd.txSignDataInputPaths,
-              Right key <- [poolAddressKey ctx accounts Nothing path]
+              Right key <- [poolAddressKey ctx accounts path]
           ]
       withPath :: Maybe InputCoin -> PsbtMap -> PsbtMap
       withPath coinM m = case (\found -> Map.lookup found.coin.script spentPaths) =<< coinM of
@@ -340,11 +338,9 @@ signedPsbt ctx accounts source file = do
   final <- psbtPartialTransaction finalized
   unless (S.encode final == S.encode tx) $
     Left "The file, once finalized, does not hold the transaction signed"
-  let fingerprintM = tsd.txSignDataFingerprint <|> listToMaybe (mapMaybe (.fileAccountFingerprint) accounts)
-      -- Each account of the pool rewrites the records that name its own key
-      namedBySeed records insert m = case fingerprintM of
-        Nothing -> return m
-        Just fp -> foldM (\rewritten acc -> fromSeed records insert acc fp rewritten) m accounts
+  let -- Each account of the pool rewrites the records that name its own
+      -- key, from the seed of its wallet
+      namedBySeed records insert m = foldM (\rewritten acc -> fromSeed records insert acc rewritten) m accounts
   inputs <- forM finalized.inputs (namedBySeed (inputDerivations ctx) (insertInputDerivation ctx))
   outputs <- forM finalized.outputs (namedBySeed (outputDerivations ctx) (insertOutputDerivation ctx))
   -- The file keeps its version. hw signs with the sighash ALL, with
@@ -383,14 +379,13 @@ signedPsbt ctx accounts source file = do
       (PsbtMap -> Either String [(PublicKey, Derivation)]) ->
       (PublicKey -> Derivation -> PsbtMap -> PsbtMap) ->
       FileAccount ->
-      Fingerprint ->
       PsbtMap ->
       Either String PsbtMap
-    fromSeed records insert acc fingerprint m = do
+    fromSeed records insert acc m = do
       found <- records m
       return $
         foldr
-          (\(public, d) -> insert public (Derivation fingerprint (listToPath (pathToList acc.fileAccountPath <> pathToList d.path))))
+          (\(public, d) -> insert public (Derivation acc.fileAccountFingerprint (listToPath (pathToList acc.fileAccountPath <> pathToList d.path))))
           m
           [(public, d) | (public, d) <- found, d.fingerprint == xPubFP ctx acc.fileAccountXPub]
 
@@ -606,9 +601,9 @@ matchRecord ctx acc place (public, derivation)
     fingerprint = derivation.fingerprint
     indices = pathToList derivation.path
     -- Whether the record's fingerprint is the account's: the fingerprint of
-    -- its seed, when known, or of its own key
+    -- its seed, or of its own key
     namesAccount fromSeed = case fromSeed of
-      Just f -> Just f == acc.fileAccountFingerprint
+      Just f -> f == acc.fileAccountFingerprint
       Nothing -> True
     -- Whether the record's key is the account's at a soft path below it.
     -- The path comes from the file and may be of any length, so it is

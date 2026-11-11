@@ -15,26 +15,28 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 
--- | The tables of the database format version 4, the latest one:
+-- | The tables of the database format version 5, the latest one:
 -- "Haskoin.Wallet.Database" exports them again as the tables of hw. They
 -- stay here as they are once a later version changes them, so that the
--- step to that version still has them.
+-- step to that version still has them ("Haskoin.Wallet.Migration").
 --
--- Version 4 files the accounts under portfolios, and the portfolios under
+-- Version 5 is the format of hw 0.10. It reads no database of an earlier
+-- version: a user of hw 0.9 creates the wallet again from its mnemonic.
+-- The earlier formats kept single accounts, and hw 0.9 kept no
+-- fingerprint of the master key, which only the mnemonic gives.
+--
+-- The accounts are filed under portfolios, and the portfolios under
 -- wallets. A wallet is the master key of one mnemonic. It has an index,
 -- which names it, wallet0 and so on, a description, and the fingerprint
--- of its master key. The fingerprint is not known for a wallet that the
--- step from version 3 made: hw 0.9 kept the fingerprint of the first
--- account of a seed on its coin type, not that of the master key. It is
--- learnt when the wallet is filled in from its mnemonic or from a file.
--- A portfolio holds every account of its wallet that has the same account
--- index, on every network and of every kind. It has that index, which
--- names it, portfolio0 and so on, a description, and the date it was
--- created. An account is one derivation path on one network: it has its
--- portfolio, its network and its purpose, the first step of its path, 44
--- for a BIP44 account with P2PKH addresses and 84 for a BIP84 account with
--- P2WPKH addresses. Its index is that of its portfolio, and the
--- fingerprint of its seed that of its wallet.
+-- of its master key, which every wallet has, each its own. A portfolio
+-- holds every account of its wallet that has the same account index, on
+-- every network and of every kind: all twelve of them, from the moment it
+-- exists. It has that index, which names it, portfolio0 and so on, a
+-- description, and the date it was created. An account is one derivation
+-- path on one network: it has its portfolio, its network and its purpose,
+-- the first step of its path, 44 for a BIP44 account with P2PKH addresses
+-- and 84 for a BIP84 account with P2WPKH addresses. Its index is that of
+-- its portfolio, and the fingerprint of its seed that of its wallet.
 --
 -- The test networks all have the coin type 1, so the accounts of a
 -- portfolio on two of them have the same key and the same addresses.
@@ -49,28 +51,26 @@
 -- block the last sync reached name a portfolio and a network. An address
 -- and a coin name their account.
 --
--- The rest is as the first form of version 4 had it. A summary says
--- whether its transaction is dead, replaced or dropped from the network,
--- where version 3 deleted it, and the time the store gives its
--- transaction: when the store first saw it, in its mempool or in a block.
--- A summary of version 3 has no time until the next sync fetches its
--- transaction again. A summary also keeps its amount in a column, beside
--- the blob that holds it, so that txs can add up the amounts without
--- reading the blobs. A coin keeps its address, which gives its script,
--- and no longer the whole coin as the store reported it. Whether a coin
--- is locked and whether a change address is free are read from the
--- pending transactions, which the locked column of the coins and the free
--- column of the addresses could only disagree with. A coin keeps instead
--- whether the user locked it, which only the user can tell. A pending
--- transaction keeps whether the store, at the last sync, found one of its
--- coins spent by another transaction or gone. The labels the user gives
--- the transactions have a table of their own, which the sync never
--- touches: a summary it rewrites or marks dead keeps its label. A pending
--- transaction keeps its label in its signing data until then. The block
--- the last sync of a portfolio reached on a network has a table of its
--- own, with a row once it has synced. The best block of the network
--- cannot serve: each portfolio is synced apart, and the first one to see
--- a reorganisation of the chain moves that block past it for the others.
+-- A summary says whether its transaction is dead, replaced or dropped
+-- from the network, and keeps the time the store gives its transaction:
+-- when the store first saw it, in its mempool or in a block. A summary
+-- also keeps its amount in a column, beside the blob that holds it, so
+-- that txs can add up the amounts without reading the blobs. A coin keeps
+-- its address, which gives its script, and not the whole coin as the
+-- store reported it. Whether a coin is locked and whether a change
+-- address is free are read from the pending transactions, which a locked
+-- column of the coins and a free column of the addresses could only
+-- disagree with. A coin keeps instead whether the user locked it, which
+-- only the user can tell. A pending transaction keeps whether the store,
+-- at the last sync, found one of its coins spent by another transaction
+-- or gone. The labels the user gives the transactions have a table of
+-- their own, which the sync never touches: a summary it rewrites or marks
+-- dead keeps its label. A pending transaction keeps its label in its
+-- signing data until then. The block the last sync of a portfolio reached
+-- on a network has a table of its own, with a row once it has synced.
+-- The best block of the network cannot serve: each portfolio is synced
+-- apart, and the first one to see a reorganisation of the chain moves
+-- that block past it for the others.
 --
 -- The keys are made for large wallets. An address is keyed by its account,
 -- its chain and its index, the order `addresses` lists it in, and its
@@ -80,14 +80,13 @@
 -- not its hexadecimal text: half the size in every key and index. The
 -- 'tableIndexes' below are the ones persistent cannot declare: a covering
 -- index that serves the ordering of txs, the sums of its balances and the
--- scan of the sync without touching the rows; the summaries without
--- their time, which only a database of version 3 had; the account of
--- every coin; the coins of an address of an account with their values,
--- which the sync refreshes and balances adds up without touching the
--- rows; the coins of an account in the order coins lists them; the coins
--- by their outpoint, for a command that names a coin without its account;
--- and the pending transactions of a portfolio on a network.
-module Haskoin.Wallet.Schema.V4 where
+-- scan of the sync without touching the rows; the account of every coin;
+-- the coins of an address of an account with their values, which the
+-- sync refreshes and balances adds up without touching the rows; the
+-- coins of an account in the order coins lists them; the coins by their
+-- outpoint, for a command that names a coin without its account; and the
+-- pending transactions of a portfolio on a network.
+module Haskoin.Wallet.Schema.V5 where
 
 import Data.ByteString (ByteString)
 import Data.Int (Int64)
@@ -108,11 +107,11 @@ DBVersion
 
 DBWallet
   index Int
-  fingerprint Text Maybe
+  fingerprint Text
   description Text default=''
   created UTCTime default=CURRENT_TIMESTAMP
   UniqueWalletIndex index
-  UniqueWalletFingerprint fingerprint !force
+  UniqueWalletFingerprint fingerprint
   deriving Show
   deriving Eq
 
@@ -163,7 +162,7 @@ DBTxInfo
   network Text
   txid KeyBytes
   blockRef ByteString
-  time UTCTime Maybe
+  time UTCTime
   amount Int64
   blob ByteString
   dead Bool default=0
@@ -231,13 +230,12 @@ DBSyncedBlock
 |]
 
 -- | The indexes of the tables above that persistent cannot declare, created
--- right after them, for a new database and by the step to this version
--- alike. A later version that has persistent rebuild one of these tables
--- loses its indexes and must create them again.
+-- right after them, in a new database. A later version that has
+-- persistent rebuild one of these tables loses its indexes, and its step
+-- must create them again.
 tableIndexes :: [Text]
 tableIndexes =
   [ "create index d_b_tx_info_pool_block_ref on d_b_tx_info (portfolio, network, block_ref, txid, dead, amount)",
-    "create index d_b_tx_info_untimed on d_b_tx_info (portfolio, network) where time is null",
     "create index d_b_coin_account on d_b_coin (account)",
     "create index d_b_coin_account_address on d_b_coin (account, address, value)",
     "create index d_b_coin_account_block_ref on d_b_coin (account, block_ref, outpoint)",

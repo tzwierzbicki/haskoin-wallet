@@ -113,13 +113,8 @@ library
       Haskoin.Wallet.Memory
       Haskoin.Wallet.MessageSigning
       Haskoin.Wallet.Migration
-      Haskoin.Wallet.Migration.V2
-      Haskoin.Wallet.Migration.V3
-      Haskoin.Wallet.Migration.V4
       Haskoin.Wallet.Schema.KeyBytes
-      Haskoin.Wallet.Schema.V2
-      Haskoin.Wallet.Schema.V3
-      Haskoin.Wallet.Schema.V4
+      Haskoin.Wallet.Schema.V5
       Haskoin.Wallet.Shares
       Haskoin.Wallet.ShortId
       Haskoin.Wallet.Store
@@ -304,11 +299,7 @@ test-suite spec
       Haskoin.Wallet.MemorySpec
       Haskoin.Wallet.MessageSigningSpec
       Haskoin.Wallet.Migration.TestUtils
-      Haskoin.Wallet.Migration.V2Spec
-      Haskoin.Wallet.Migration.V3Spec
-      Haskoin.Wallet.Migration.V4Spec
       Haskoin.Wallet.MigrationSpec
-      Haskoin.Wallet.Schema.V1
       Haskoin.Wallet.SharesSpec
       Haskoin.Wallet.ShortIdSpec
       Haskoin.Wallet.StoreSpec

@@ -14,6 +14,7 @@ import Control.Monad.Trans (lift, liftIO)
 import Data.Aeson (eitherDecode, toJSON, (.=))
 import qualified Data.Aeson as Json
 import Data.Default (def)
+import Data.Either (isLeft)
 import Data.Text (Text)
 import Haskoin
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), testIdentity)
@@ -26,6 +27,7 @@ import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
 import Numeric.Natural (Natural)
 import Test.Hspec
+import UnliftIO.Exception (SomeException, try)
 
 spec :: Spec
 spec = do
@@ -52,8 +54,8 @@ spec = do
 -- mnemonic, with portfolio 0
 twoWallets :: ExceptT String (DB IO) ()
 twoWallets = do
-  (first, _) <- lift $ insertWallet (Just testFingerprint)
-  (second, _) <- lift $ insertWallet (Just testFingerprint2)
+  (first, _) <- lift $ insertWallet testFingerprint
+  (second, _) <- lift $ insertWallet testFingerprint2
   _ <- insertPortfolio first 0 ""
   _ <- insertPortfolio first 1 ""
   void $ insertPortfolio second 0 ""
@@ -105,61 +107,60 @@ walletsSpec =
   describe "The wallets of the database" $ do
     it "are numbered from 0 in the order they were made" $
       inDatabase $ do
-        _ <- insertWallet (Just testFingerprint)
-        _ <- insertWallet (Just testFingerprint2)
+        _ <- insertWallet testFingerprint
+        _ <- insertWallet testFingerprint2
         walletNames `dbShouldBe` ["wallet0", "wallet1"]
 
     it "keep their names when another one is deleted: without wallet0, wallet1 is still wallet1" $
       inDatabase $ do
-        (first, _) <- insertWallet (Just testFingerprint)
-        _ <- insertWallet (Just testFingerprint2)
+        (first, _) <- insertWallet testFingerprint
+        _ <- insertWallet testFingerprint2
         deleteWallet first
         walletNames `dbShouldBe` ["wallet1"]
 
     it "give the next wallet the name a deleted one left: wallet0 again" $
       inDatabase $ do
-        (first, _) <- insertWallet (Just testFingerprint)
-        _ <- insertWallet (Just testFingerprint2)
+        (first, _) <- insertWallet testFingerprint
+        _ <- insertWallet testFingerprint2
         deleteWallet first
-        (_, again) <- insertWallet Nothing
+        (_, again) <- insertWallet testFingerprint
         liftIO $ walletName (walletIndex again) `shouldBe` "wallet0"
         walletNames `dbShouldBe` ["wallet0", "wallet1"]
 
     it "keep the fingerprint of their master key, and start without a description" $
       inDatabase $ do
-        (_, wallet) <- insertWallet (Just testFingerprint)
+        (_, wallet) <- insertWallet testFingerprint
         liftIO $ do
-          dBWalletFingerprint wallet `shouldBe` Just "bc560f95"
-          walletFingerprint wallet `shouldBe` Just testFingerprint
+          dBWalletFingerprint wallet `shouldBe` "bc560f95"
+          walletFingerprint wallet `shouldBe` testFingerprint
           dBWalletDescription wallet `shouldBe` ""
 
-    -- As the step from the database of hw 0.9 makes them
-    it "may have no fingerprint yet, several of them at once" $
+    it "have each a fingerprint of its own: the database refuses a second wallet with one it has" $
       inDatabase $ do
-        (_, first) <- insertWallet Nothing
-        (_, second) <- insertWallet Nothing
-        liftIO $ (walletFingerprint first, walletFingerprint second) `shouldBe` (Nothing, Nothing)
-        walletNames `dbShouldBe` ["wallet0", "wallet1"]
+        _ <- insertWallet testFingerprint
+        second <- try (insertWallet testFingerprint)
+        liftIO $ (isLeft (second :: Either SomeException (DBWalletId, DBWallet))) `shouldBe` True
 
     it "are found by their index" $
       inDatabase $ do
-        _ <- insertWallet (Just testFingerprint)
-        second <- insertWallet (Just testFingerprint2)
+        _ <- insertWallet testFingerprint
+        second <- insertWallet testFingerprint2
         walletAt 1 `dbShouldBe` Just second
         walletAt 2 `dbShouldBe` Nothing
 
     -- 2^64 = 18446744073709551616, which a number of 64 bits holds as 0
     it "have none at an index of 2^64, which would wrap around to wallet0" $
       inDatabase $ do
-        _ <- insertWallet (Just testFingerprint)
+        _ <- insertWallet testFingerprint
         walletAt 18446744073709551616 `dbShouldBe` Nothing
 
+    -- 5596eb4d is the fingerprint of the seed of the shares of the tests
     it "are found by the fingerprint of their master key" $
       inDatabase $ do
-        _ <- insertWallet Nothing
-        second <- insertWallet (Just testFingerprint2)
+        _ <- insertWallet testFingerprint
+        second <- insertWallet testFingerprint2
         walletWithFingerprint testFingerprint2 `dbShouldBe` Just second
-        walletWithFingerprint testFingerprint `dbShouldBe` Nothing
+        walletWithFingerprint (fingerprintOf "5596eb4d") `dbShouldBe` Nothing
 
 {- Portfolios -}
 
@@ -168,7 +169,7 @@ portfoliosSpec =
   describe "The portfolios of a wallet" $ do
     it "are stored at their index, with the wallet they are of" $
       inDatabaseE $ do
-        (walletId, _) <- lift $ insertWallet (Just testFingerprint)
+        (walletId, _) <- lift $ insertWallet testFingerprint
         (_, row) <- insertPortfolio walletId 3 ""
         liftIO $ do
           portfolioIndex row `shouldBe` 3
@@ -178,7 +179,7 @@ portfoliosSpec =
 
     it "are listed in the order of their indexes, whatever the order they were made in" $
       inDatabaseE $ do
-        (walletId, _) <- lift $ insertWallet (Just testFingerprint)
+        (walletId, _) <- lift $ insertWallet testFingerprint
         _ <- insertPortfolio walletId 2 ""
         _ <- insertPortfolio walletId 0 ""
         _ <- insertPortfolio walletId 1 ""
@@ -186,7 +187,7 @@ portfoliosSpec =
 
     it "are found by their index in their wallet" $
       inDatabaseE $ do
-        (walletId, _) <- lift $ insertWallet (Just testFingerprint)
+        (walletId, _) <- lift $ insertWallet testFingerprint
         first <- insertPortfolio walletId 0 ""
         lift (portfolioAt walletId 0) `dbShouldBeE` Just first
         lift (portfolioAt walletId 1) `dbShouldBeE` Nothing
@@ -194,7 +195,7 @@ portfoliosSpec =
     -- 2^64 + 1 = 18446744073709551617, which a number of 64 bits holds as 1
     it "have none at an index of 2^64 + 1, which would wrap around to portfolio1" $
       inDatabaseE $ do
-        (walletId, _) <- lift $ insertWallet (Just testFingerprint)
+        (walletId, _) <- lift $ insertWallet testFingerprint
         _ <- insertPortfolio walletId 0 ""
         _ <- insertPortfolio walletId 1 ""
         lift (portfolioAt walletId 18446744073709551617) `dbShouldBeE` Nothing
@@ -202,19 +203,19 @@ portfoliosSpec =
     -- 2^31 = 2147483648, past the last hardened step of a path
     it "have none at the index 2^31, which no account can have" $
       inDatabaseE $ do
-        (walletId, _) <- lift $ insertWallet (Just testFingerprint)
+        (walletId, _) <- lift $ insertWallet testFingerprint
         lift (portfolioAt walletId 2147483648) `dbShouldBeE` Nothing
 
     it "cannot be made at the index 2^31, which no account can have" $
       inDatabaseE $ do
-        (walletId, _) <- lift $ insertWallet (Just testFingerprint)
+        (walletId, _) <- lift $ insertWallet testFingerprint
         lift $
           dbShouldFailWith "portfolio2147483648 cannot be: the index of a portfolio is below 2147483648, which is 2^31" $
             insertPortfolio walletId 2147483648 ""
 
     it "have one portfolio at an index: a second one is refused" $
       inDatabaseE $ do
-        (walletId, _) <- lift $ insertWallet (Just testFingerprint)
+        (walletId, _) <- lift $ insertWallet testFingerprint
         _ <- insertPortfolio walletId 0 ""
         lift $ dbShouldFailWith "The wallet has portfolio0 already" $ insertPortfolio walletId 0 ""
 
@@ -225,19 +226,13 @@ portfoliosSpec =
 
     it "are read with their wallet, which gives the fingerprint of their seed" $
       inDatabaseE $ do
-        (walletId, wallet) <- lift $ insertWallet (Just testFingerprint)
+        (walletId, wallet) <- lift $ insertWallet testFingerprint
         (key, row) <- insertPortfolio walletId 1 ""
         portfolio <- getPortfolio key
         liftIO $ do
           portfolio `shouldBe` Portfolio key row walletId wallet
           portfolioRef portfolio `shouldBe` PortfolioRef 0 1
-          portfolioFingerprint portfolio `shouldBe` Just testFingerprint
-
-    it "know no fingerprint while their wallet has none" $
-      inDatabaseE $ do
-        (walletId, _) <- lift $ insertWallet Nothing
-        (key, _) <- insertPortfolio walletId 0 ""
-        (portfolioFingerprint <$> getPortfolio key) `dbShouldBeE` Nothing
+          portfolioFingerprint portfolio `shouldBe` testFingerprint
 
 {- Descriptions -}
 
@@ -258,21 +253,21 @@ descriptionsSpec =
 
     it "is set on a portfolio in place of the one it had" $
       inDatabaseE $ do
-        (walletId, _) <- lift $ insertWallet (Just testFingerprint)
+        (walletId, _) <- lift $ insertWallet testFingerprint
         (key, _) <- insertPortfolio walletId 0 "savings"
         setPortfolioDescription key "spending"
         (fmap (dBPortfolioDescription . snd) <$> lift (portfolioAt walletId 0)) `dbShouldBeE` Just "spending"
 
     it "is removed from a portfolio by an empty one" $
       inDatabaseE $ do
-        (walletId, _) <- lift $ insertWallet (Just testFingerprint)
+        (walletId, _) <- lift $ insertWallet testFingerprint
         (key, _) <- insertPortfolio walletId 0 "savings"
         setPortfolioDescription key ""
         (fmap (dBPortfolioDescription . snd) <$> lift (portfolioAt walletId 0)) `dbShouldBeE` Just ""
 
     it "is set on a wallet in place of the one it had, and leaves its portfolios theirs" $
       inDatabaseE $ do
-        (walletId, _) <- lift $ insertWallet (Just testFingerprint)
+        (walletId, _) <- lift $ insertWallet testFingerprint
         _ <- insertPortfolio walletId 0 "savings"
         setWalletDescription walletId "paper backup in the safe"
         setWalletDescription walletId "steel backup in the safe"
@@ -281,7 +276,7 @@ descriptionsSpec =
 
     it "is held to its rules when a portfolio is made with one, or given one" $
       inDatabaseE $ do
-        (walletId, _) <- lift $ insertWallet (Just testFingerprint)
+        (walletId, _) <- lift $ insertWallet testFingerprint
         (key, _) <- insertPortfolio walletId 0 ""
         lift $ dbShouldFailWith "The description must not start or end with a space" $ insertPortfolio walletId 1 "savings "
         lift $ dbShouldFailWith "The description must not contain a line break or a control character" $ setPortfolioDescription key "a\nb"

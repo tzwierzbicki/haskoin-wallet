@@ -61,8 +61,6 @@ import Text.RawString.QQ (r)
 data Command
   = CommandNewPortfolio !NewPortfolio
   | CommandRecover !Recover
-  | -- | The wallet to fill in, by its index, unless the default one
-    CommandFillWallet !(Maybe Natural)
   | -- | The portfolio whose mnemonic to check
     CommandCheckMnemonic !PortfolioChoice
   | -- | The wallet the file must be of, when --wallet names it, the one
@@ -550,8 +548,8 @@ program :: Program Command GlobalOptions
 program =
   Program
     { name = "hw",
-      -- The database has the format of this hw: every command migrates it
-      -- first, and refuses one of a newer hw
+      -- The database has the format of this hw: every command refuses one
+      -- of another version first
       version =
         intercalate
           "\n"
@@ -641,7 +639,6 @@ Type hw COMMAND --help for the help of a command.
             "Wallets and portfolios"
             [ newPortfolioCommand,
               recoverCommand,
-              fillWalletCommand,
               checkMnemonicCommand,
               exportWalletCommand,
               importWalletCommand,
@@ -795,9 +792,12 @@ newportfolio there. Then copy the wallet to an online computer with
 exportwallet and importwallet.
 
 A passphrase with accents or other non-ASCII letters is normalized as BIP39
-asks, so that other wallets find the same seed. Older versions of hw did not
-normalize it. If the database has a wallet of this mnemonic made that way, and
-none of the normalized seed, --existing keeps to the old seed and says so.
+asks, so that other wallets find the same seed. hw 0.9 did not normalize it,
+and `recover` finds the funds of such a seed. If the database has a wallet of
+the passphrase as typed, and none of the normalized one, --existing keeps to
+that wallet and says so. In a database with neither, --existing makes the
+wallet of the normalized passphrase. It then warns that a wallet hw 0.9 made
+from this passphrase has other keys, which `recover` finds.
 |],
       args =
         CommandNewPortfolio
@@ -945,12 +945,13 @@ order from portfolio0, and asks the server about the receiving addresses of
 every account of each: on every network, the test networks included, and of
 both types of address. When any account of a portfolio was ever paid, the
 whole portfolio is created, with every account, and synced. Portfolios the
-wallet has whole already are skipped.
+wallet has already are skipped.
 
-The wallet is the one of the mnemonic. A wallet found gets its portfolio0
-whether that one was paid or not: a wallet always has portfolio0. When the
-database has partial portfolios of the mnemonic, made from the accounts of an
-earlier version of hw, `recover` fills them in, as fillwallet does.
+The wallet is the one of the mnemonic, which hw finds by the fingerprint of
+its master key. A new wallet gets its portfolio0 whether that one was paid or
+not: a wallet always has portfolio0. A wallet of the same fingerprint whose
+keys are not those of the mnemonic is refused: a fingerprint is four bytes,
+which two mnemonics may share.
 
 The server may not serve every network: the public one has no regtest chain.
 `recover` names the networks the server does not serve, and searches the
@@ -976,9 +977,9 @@ After every 20 portfolios the server reports paid, `recover` asks whether to
 keep looking. A server that lies reports them without end. A no stops the
 search, and nothing is added.
 
-hw normalizes a passphrase as BIP39 asks, and older versions did not. When
-nothing is found, `recover` also tries the passphrase as typed. It says so if
-that finds portfolios.
+hw normalizes a passphrase as BIP39 asks, and hw 0.9 did not. When nothing is
+found, `recover` also tries the passphrase as typed. It says so if that finds
+portfolios.
 |],
       args =
         CommandRecover
@@ -1009,46 +1010,6 @@ before a later one was.
     -- portfolios nobody created: 100 is ten times the default.
     maxPortfolioGap :: Natural
     maxPortfolioGap = 100
-
-{- fillwallet -}
-
-fillWalletCommand :: CommandSpec Command
-fillWalletCommand =
-  CommandSpec
-    { name = "fillwallet",
-      offline = True,
-      summary = "Fill in the partial portfolios of a wallet from its mnemonic",
-      details =
-        [r|
-A portfolio is partial when it lacks some of its accounts. hw makes partial
-portfolios when it upgrades a database of version 0.9, which held single
-accounts: the other accounts of a portfolio are behind hardened steps of the
-path, so only the mnemonic can derive them. A partial portfolio works with the
-accounts it has. A command that needs another one, such as `receive` --type
-bip84, is refused until the portfolio is filled in. `portfolios` marks the
-partial ones.
-
-fillwallet asks for a mnemonic and its passphrase, or for the shares of a
-backup. It finds the wallets the mnemonic is of by their keys, whatever their
-index, so you do not need to know which wallet each mnemonic became. It adds
-every account their portfolios lack, and creates portfolio0 when the wallet
-has none. A mnemonic or a passphrase that gives the keys of no wallet is
-refused, and nothing changes. With --wallet, the mnemonic must be of that
-wallet.
-
-Version 0.9 kept no fingerprint of the master key, so an upgraded database
-cannot tell that its accounts on Bitcoin and on Bitcoin Cash are of one
-mnemonic. They start in two wallets. fillwallet finds every wallet the
-mnemonic is of, merges them into the one with the lowest index, and records
-the fingerprint. The answer names the wallets merged.
-
-When the mnemonic is on an offline computer, run fillwallet there. Then write
-the wallet to a file with exportwallet, and read that file on the online
-computer with importwallet, which fills in the portfolios there without the
-mnemonic.
-|],
-      args = CommandFillWallet <$> walletOptionWith "The wallet the mnemonic must be of. Without it, the wallets the mnemonic is of, whatever their index."
-    }
 
 {- checkmnemonic -}
 
@@ -1219,39 +1180,36 @@ importExportWalletDetails =
   [r|
 exportwallet writes every portfolio of a wallet to a file, with its labels, in
 the format of BIP 329, which other wallets read and write. Each account goes
-in as its public key, with its path, its network, its type and, when hw knows
-it, the fingerprint of the mnemonic. Then come the labels of its receiving
+in as its public key, with its path, its network, its type and the
+fingerprint of the mnemonic. Then come the labels of its receiving
 addresses and of its transactions, and the coins locked with lockcoin. The
 descriptions of the wallet and of its portfolios go in too. The file holds no
 private key. --portfolio writes one portfolio only.
 
 importwallet reads such a file. It finds the wallet by the fingerprint the
-file gives, and each portfolio by its index. A wallet or a portfolio the
-database does not have is created. The database can then watch the portfolio
-and prepare its payments without the mnemonic: this is how an online computer
-works with an offline signer. --portfolio reads one portfolio only.
+file gives, and each portfolio by its index. A portfolio the database does not
+have is created whole, with the twelve accounts of the file. The database can
+then watch the portfolio and prepare its payments without the mnemonic: this
+is how an online computer works with an offline signer. --portfolio reads one
+portfolio only.
 
-A portfolio the database has is merged with the one of the file. importwallet
-never makes a second portfolio with the same index. It adds the accounts the
-portfolio lacks, and leaves the others as they are. This is how the partial
-portfolios of an upgraded database are filled in: run fillwallet and
-exportwallet on the computer that has the mnemonic, then importwallet here.
-When the two cannot be merged, importwallet refuses and changes nothing. That
-happens when an account of the file has another key than the same account of
-the database: the two are not of one mnemonic. It also refuses a key that
-another account of the database holds, whatever index the file writes it at,
-and two keys for accounts of one path: the test networks share the path
-m/44'/1'/0', so their bip44 accounts hold one key.
+A portfolio the database has already is left as it is. importwallet never
+makes a second portfolio with the same index, and adds no account to one: a
+portfolio has every account from the start. The keys of the file must be the
+ones the portfolio holds. Otherwise importwallet refuses and changes nothing:
+the file and the database are not of one mnemonic.
+
+importwallet also refuses, and changes nothing, a file that would create a
+portfolio without all twelve of its accounts, a key that another account of
+the database holds, whatever index the file writes it at, and two keys for
+accounts of one path: the test networks share the path m/44'/1'/0', so their
+bip44 accounts hold one key.
 
 importwallet cannot prove that the keys of a file are those of your mnemonic:
 only the mnemonic could. A file that names your fingerprint may still carry
 the keys of someone else, and the addresses receive would give out would be
 theirs. Import only a file you wrote with exportwallet on your own signer, or
 one that reached you over a channel you trust.
-
-An upgraded database knows no fingerprint, so importwallet recognizes its
-wallets by their keys, and gives them the fingerprint of the file. Wallets
-that turn out to be of one mnemonic are merged into one. The answer says so.
 
 importwallet imports whole wallets. A key alone, an xpub or an output
 descriptor from another wallet, is one account: it does not say which
@@ -1261,13 +1219,9 @@ and the answer says why.
 
 --portfolio reads the keys and the labels of one portfolio. The records of
 the other portfolios of the file are counted in the answer and not read. A
-wallet always has portfolio0, so a wallet created from another portfolio
-alone gets an empty portfolio0, which the answer shows: importwallet without
---portfolio, or fillwallet, fills it in.
-
-exportwallet of a wallet whose fingerprint hw does not know, an upgraded one
-that was not filled in, writes keys without their origin, and says so.
-Another database cannot place them. Run fillwallet first.
+wallet always has portfolio0, so a wallet the database does not have is
+created only from a file that brings its portfolio0: importwallet --portfolio
+1 of such a wallet is refused. Import the whole file instead.
 
 The labels and the locks of the file are set on the addresses, transactions
 and coins the wallet has. An address the wallet has not generated yet is
@@ -1303,8 +1257,7 @@ description and the date it was created. Then comes a line for each network
 the portfolio has funds or addresses on: what it can spend there, what is
 unconfirmed, and how many coins and addresses it has. On btc, the figures add
 up the bip44 and the bip84 account. The portfolios of one wallet come
-together. A partial portfolio, which lacks accounts, says so: fillwallet
-fills it in.
+together.
 
 The spendable balance is what the portfolio can spend now on that network. It
 leaves out the coins locked by a pending transaction or by lockcoin, the
@@ -1315,7 +1268,7 @@ spend all of it, unless --min-conf asks for confirmations.
 
 --verbose lists every network of the portfolio, with the confirmed and
 unconfirmed balances the server gave at the last sync, and the fingerprint of
-the mnemonic when known. Under each network come its accounts, each with its
+the mnemonic. Under each network come its accounts, each with its
 path and its output descriptor, the format of BIP 380 in which wallets take an
 account without its private key:
 
@@ -1326,9 +1279,8 @@ The first is a bip44 account, the second a bip84 one. Paste it into a wallet
 that takes a descriptor, to watch the account there. The descriptor carries
 the public key of the account, the fingerprint of the mnemonic and the
 derivation path, and the two chains of addresses, with a checksum. It holds no
-private key. When hw does not know the fingerprint, as in a wallet that was
-upgraded and not filled in yet, the descriptor names no origin, which a
-hardware wallet needs to match it.
+private key. A hardware wallet matches the account to its mnemonic by the
+fingerprint and the path.
 
 A descriptor does not name its network. Bitcoin and Bitcoin Cash write the
 same keys, and every test network writes tpub keys.
@@ -1347,8 +1299,8 @@ descriptor can be copied whole.
 With --tabular, each network of each portfolio takes one row of a table, under
 a header that names the columns: the wallet, the portfolio, the network, what
 it can spend, what is unconfirmed, how many coins and addresses it has, and
-the description of the portfolio, with the word partial for a partial one. The
-amounts are in the unit the header names.
+the description of the portfolio. The amounts are in the unit the header
+names.
 
 With --csv FILENAME, each network of each portfolio takes one row of a new CSV
 file, for a spreadsheet: the wallet, the portfolio and its description, the
@@ -1384,9 +1336,6 @@ setdescription sets the description of a portfolio, in place of the one it
 had: the one --wallet and --portfolio name, or the default one. With
 --of-wallet, it sets the description of the wallet instead. An empty
 DESCRIPTION, "", removes it.
-
-A database upgraded from version 0.9 has the names of its accounts as the
-descriptions of their portfolios.
 |],
       args =
         CommandSetDescription
@@ -1489,8 +1438,7 @@ wallet that has had activity.
 
 --wallet names the wallet and must be given. The FINGERPRINT must be that of
 the wallet, as `portfolios` --verbose shows it. It confirms which wallet to
-delete. For a wallet whose fingerprint hw does not know, an upgraded one that
-was not filled in, type the word unknown.
+delete.
 
 The funds stay on the chain, and the mnemonic can still spend them. The labels
 are lost: exportwallet writes them to a file first.
@@ -1507,7 +1455,7 @@ sets default-portfolio back to 0 too, and says so.
 |],
       args =
         (\fingerprint wallet -> CommandDeleteWallet wallet fingerprint)
-          <$> textArg "FINGERPRINT" "The fingerprint of the wallet, 8 hexadecimal digits, as `portfolios` --verbose shows it, or the word unknown for a wallet that has none"
+          <$> textArg "FINGERPRINT" "The fingerprint of the wallet, 8 hexadecimal digits, as `portfolios` --verbose shows it"
           <*> requiredWalletOption "The wallet to delete. It must be given."
     }
 
@@ -1528,9 +1476,7 @@ index is that of the portfolio. The wallet pays the change of its transactions
 to other addresses, at .../1/i. `addresses` --change lists them.
 
 You never create an account. A portfolio has one for every network and type
-already. A partial portfolio, made when a database of version 0.9 was
-upgraded, may lack the one asked for: `receive` then refuses, and says how to
-fill the portfolio in.
+already.
 
 `receive` gives out at most 20 unused addresses in a row, or as many as the gap
 of the configuration file says. A wallet restored from the mnemonic stops
@@ -1630,8 +1576,8 @@ does not have.
 A file that is neither a PSBT nor the hexadecimal of a transaction is read as
 a file of a wallet, the file exportwallet writes and importwallet reads: BIP
 329 records. `show` shows what importwallet would make of it. Each wallet of
-the file comes with its portfolios: created, or merged with the one the
-database has, and how many accounts would be added. Then each account comes
+the file comes with its portfolios: created with their accounts, or found in
+the database already. Then each account comes
 with the labels of its addresses and transactions, and the coins it locks or
 unlocks. A record goes under the account its origin and its network name. The
 labels of no account of the file come last, then what hw keeps no label for.
@@ -2981,9 +2927,9 @@ FILENAME, the copy goes to ~/.hw/backups, named after the format version of the
 database and the time.
 
 To restore a backup, replace ~/.hw/accounts.sqlite with the copy, or point
-database-file in ~/.hw/config.json to it. Then run any command. A copy made by
-an older hw is upgraded, after hw backs it up again to ~/.hw/migration-backups.
-A copy made by a newer hw is refused.
+database-file in ~/.hw/config.json to it. Then run any command. A copy of the
+database of hw 0.9 or earlier is refused, and left as it is: create the wallet
+again from its mnemonic instead. So is a copy of the database of a newer hw.
 |],
       args =
         CommandBackup

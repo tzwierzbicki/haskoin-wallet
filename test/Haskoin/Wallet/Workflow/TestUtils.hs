@@ -64,8 +64,6 @@ module Haskoin.Wallet.Workflow.TestUtils
     descriptorsOf,
     slip132KeysOf,
     accountXPubsOf,
-    missingAccountsOf,
-    filledOf,
     checkedOf,
     deletedOf,
     syncedOf,
@@ -126,7 +124,6 @@ module Haskoin.Wallet.Workflow.TestUtils
     wikiAddr,
     oldCoin,
     oldKeyChain,
-    version3Main,
   )
 where
 
@@ -138,7 +135,6 @@ import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Word (Word64)
-import qualified Database.Persist as P
 import Haskoin
 import Haskoin.Wallet.Cli.Response (Group (..), Response (..), groupAccountRef)
 import Haskoin.Wallet.Database (DBAddress (..))
@@ -149,7 +145,6 @@ import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (AccountKind (..), MnemonicPass (..), PoolPath, foreignKindName)
 import Haskoin.Wallet.Labels (AccountImport (..), ImportReport (..), PortfolioImport (..), WalletImport (..))
-import qualified Haskoin.Wallet.Schema.V3 as V3
 import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..), foreignPath)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.PsbtFile (FileAccount (..), hwIdentifier, networkField, psbtTxFile, txFilePsbt)
@@ -161,7 +156,7 @@ import System.FilePath ((</>))
 
 -- | The words and the passphrase of a mnemonic, typed once each, as the
 -- commands that check a seed ask for them: signtx, checkmnemonic,
--- fillwallet, recover
+-- recover
 seedOnceOf :: MnemonicPass -> [Text]
 seedOnceOf mnem = [mnemonicWords mnem, mnemonicPass mnem]
 
@@ -378,7 +373,7 @@ portfolio1Place :: Place
 portfolio1Place = Place (PortfolioRef 0 1) btc
 
 -- | The portfolios an answer shows, as portfolios lists them, or as
--- newportfolio and fillwallet leave them: each by its wallet and its index
+-- newportfolio leaves them: each by its wallet and its index
 portfolioRefsOf :: Response -> Either String [PortfolioRef]
 portfolioRefsOf response = fmap viewRef <$> portfolioViewsOf response
 
@@ -387,8 +382,7 @@ portfolioViewsOf :: Response -> Either String [PortfolioView]
 portfolioViewsOf = \case
   ResponsePortfolios views -> Right views
   ResponsePortfolio view -> Right [view]
-  ResponseNewPortfolio _ view _ _ -> Right [view]
-  ResponseFilled _ _ views -> Right views
+  ResponseNewPortfolio _ view -> Right [view]
   other -> Left (show other)
 
 -- | What each portfolio of an answer can spend now on the network: from
@@ -397,7 +391,7 @@ portfolioViewsOf = \case
 spendableOn :: Network -> Response -> Either String [(PortfolioRef, Word64)]
 spendableOn net = \case
   ResponseSync results _ _ -> Right (fromSyncs results)
-  ResponseRecover _ _ _ _ _ _ results _ _ _ -> Right (fromSyncs results)
+  ResponseRecover _ _ _ _ results _ _ _ -> Right (fromSyncs results)
   other -> do
     views <- portfolioViewsOf other
     return [(viewRef v, networkViewSpendable n) | v <- views, n <- viewNetworks v, networkViewNetwork n == net]
@@ -405,11 +399,11 @@ spendableOn net = \case
     fromSyncs results = [(placePortfolio (syncResPlace s), syncResSpendable s) | s <- results, placeNetwork (syncResPlace s) == net]
 
 -- | The portfolios of an answer, with the fingerprint of the seed of their
--- wallet when hw knows it
-fingerprintsOf :: Response -> Either String [(PortfolioRef, Maybe Text)]
+-- wallet, which every wallet has
+fingerprintsOf :: Response -> Either String [(PortfolioRef, Text)]
 fingerprintsOf response = do
   views <- portfolioViewsOf response
-  return [(viewRef v, fingerprintToText <$> viewFingerprint v) | v <- views]
+  return [(viewRef v, fingerprintToText (viewFingerprint v)) | v <- views]
 
 -- | The accounts of the portfolios of an answer, each by its portfolio,
 -- its network and its type, with its output descriptor, as portfolios
@@ -426,22 +420,6 @@ slip132KeysOf response = fmap (\(ref, net, keys) -> (ref, net, keysKind keys, ke
 -- holds it: an xpub, or a tpub on a test network, whatever its type
 accountXPubsOf :: Response -> Either String [(PortfolioRef, String, AccountKind, Text)]
 accountXPubsOf response = fmap (\(ref, net, keys) -> (ref, net, keysKind keys, keysXPubKey keys)) <$> accountKeysOf response
-
--- | The portfolios of an answer, each with the accounts it lacks, by
--- network and type: none for a whole portfolio, and some for a partial
--- one, as an upgrade from hw 0.9 leaves it
-missingAccountsOf :: Response -> Either String [(PortfolioRef, [(String, AccountKind)])]
-missingAccountsOf response = fmap (\v -> (viewRef v, [(net.name, kind) | (net, kind) <- viewMissing v])) <$> portfolioViewsOf response
-
--- | What fillwallet and newportfolio --existing say they did to the
--- wallet before anything else: the indexes of the wallets of the same
--- mnemonic merged into it, and how many accounts they added to its
--- partial portfolios
-filledOf :: Response -> Either String ([Natural], Natural)
-filledOf = \case
-  ResponseFilled merged added _ -> Right (merged, added)
-  ResponseNewPortfolio _ _ merged added -> Right (merged, added)
-  other -> Left (show other)
 
 -- | The keys of each account of the portfolios of an answer, with the
 -- portfolio and the network of the account
@@ -467,7 +445,7 @@ deletedOf other = Left (show other)
 syncedOf :: Response -> Either String [(Place, Word64)]
 syncedOf = \case
   ResponseSync results _ _ -> Right (fromSyncs results)
-  ResponseRecover _ _ _ _ _ _ results _ _ _ -> Right (fromSyncs results)
+  ResponseRecover _ _ _ _ results _ _ _ -> Right (fromSyncs results)
   other -> Left (show other)
   where
     fromSyncs results = [(syncResPlace s, syncResSpendable s) | s <- results]
@@ -476,7 +454,7 @@ syncedOf = \case
 notServedOf :: Response -> Either String [String]
 notServedOf = \case
   ResponseSync _ unserved _ -> Right ((.name) <$> unserved)
-  ResponseRecover _ _ _ _ _ _ _ _ unserved _ -> Right ((.name) <$> unserved)
+  ResponseRecover _ _ _ _ _ _ unserved _ -> Right ((.name) <$> unserved)
   other -> Left (show other)
 
 -- | The networks a sync left out, each with the failure of its store
@@ -487,43 +465,44 @@ notSyncedOf other = Left (show other)
 -- | What recover found of a seed: the index of its wallet, if it has one
 -- now, and the indexes of the portfolios it created
 recoveredOf :: Response -> Either String (Maybe Natural, [Natural])
-recoveredOf (ResponseRecover _ _ walletM _ created _ _ _ _ _) = Right (walletM, created)
+recoveredOf (ResponseRecover _ _ walletM created _ _ _ _) = Right (walletM, created)
 recoveredOf other = Left (show other)
 
 -- | The networks recover left out, each with the failure of its store, as
 -- it prints them after "left out"
 leftOutOf :: Response -> Either String [(String, Text)]
-leftOutOf (ResponseRecover _ _ _ _ _ _ _ _ _ leftOut) = Right [(net.name, failure) | (net, failure) <- leftOut]
+leftOutOf (ResponseRecover _ _ _ _ _ _ _ leftOut) = Right [(net.name, failure) | (net, failure) <- leftOut]
 leftOutOf other = Left (show other)
 
 -- | The funds recover found at paths hw cannot spend from: the network,
 -- the kind and the path of each account, how many of its addresses were
 -- used, and what they hold in satoshis
 unspendableOf :: Response -> Either String [(String, Text, String, Natural, Word64)]
-unspendableOf (ResponseRecover _ _ _ _ _ _ _ elsewhere _ _) =
+unspendableOf (ResponseRecover _ _ _ _ _ elsewhere _ _) =
   Right [(net.name, foreignKindName (foreignKind funds), pathToStr (foreignPath net funds), foreignUsed funds, foreignBalance funds) | (net, funds) <- elsewhere]
 unspendableOf other = Left (show other)
 
 -- | The wallets importwallet answers for, each by its index, with whether
--- it created the wallet, and the indexes of the wallets it merged into it
-walletsImportedOf :: Response -> Either String [(Natural, Bool, [Natural])]
+-- it created the wallet
+walletsImportedOf :: Response -> Either String [(Natural, Bool)]
 walletsImportedOf (ResponseImport report) =
-  Right [(walletImportIndex w, walletImportCreated w, walletImportMerged w) | w <- reportWallets report]
+  Right [(walletImportIndex w, walletImportCreated w) | w <- reportWallets report]
 walletsImportedOf other = Left (show other)
 
 -- | The portfolios importwallet answers for, each by the index of its
--- wallet and its own, with whether it created the portfolio and how many
--- accounts it added to it
-portfoliosImportedOf :: Response -> Either String [(Natural, Natural, Bool, Natural)]
+-- wallet and its own, with whether it created the portfolio, whole, or
+-- found it in the database
+portfoliosImportedOf :: Response -> Either String [(Natural, Natural, Bool)]
 portfoliosImportedOf (ResponseImport report) =
   Right
-    [ (walletImportIndex w, portfolioImportIndex p, portfolioImportCreated p, portfolioImportAdded p)
+    [ (walletImportIndex w, portfolioImportIndex p, portfolioImportCreated p)
       | w <- reportWallets report,
         p <- walletImportPortfolios w
     ]
 portfoliosImportedOf other = Left (show other)
 
--- | The accounts importwallet added to the portfolios of the database
+-- | The accounts importwallet added to the database, with the portfolios
+-- it created
 addedAccountsOf :: Response -> Either String [AccountRef]
 addedAccountsOf (ResponseImport report) = Right [ref | AccountAdded ref <- reportAccounts report]
 addedAccountsOf other = Left (show other)
@@ -710,9 +689,9 @@ spendsAndPays ctx tx = ((.outpoint) <$> tx.inputs, sortOn fst [(out.value, scrip
 -- first account of the second wallet, as the derivation records of their
 -- files name their keys
 mainFileAccount, segwitFileAccount, otherFileAccount :: Ctx -> FileAccount
-mainFileAccount ctx = FileAccount (testAccountPub ctx) Bip44 "m/44'/0'/0'" (Just testFingerprint) btc
-segwitFileAccount ctx = FileAccount (testSegwitAccountPub ctx) Bip84 "m/84'/0'/0'" (Just testFingerprint) btc
-otherFileAccount ctx = FileAccount (fromMaybe (error "otherFileAccount") (xPubImport btc ctx testAccountXPub2)) Bip44 "m/44'/0'/0'" (Just testFingerprint2) btc
+mainFileAccount ctx = FileAccount (testAccountPub ctx) Bip44 "m/44'/0'/0'" testFingerprint btc
+segwitFileAccount ctx = FileAccount (testSegwitAccountPub ctx) Bip84 "m/84'/0'/0'" testFingerprint btc
+otherFileAccount ctx = FileAccount (fromMaybe (error "otherFileAccount") (xPubImport btc ctx testAccountXPub2)) Bip44 "m/44'/0'/0'" testFingerprint2 btc
 
 -- | The transaction file at the path, as hw wrote it: a PSBT, read with
 -- the paths of portfolio0 of the test wallet on Bitcoin, both of its
@@ -825,18 +804,3 @@ oldCoin ctx = fundingTx ctx 2 [(wikiAddr, 30000)]
 -- | A chain whose block 800000 holds the coin of the key
 oldKeyChain :: Ctx -> Chain
 oldKeyChain ctx = Chain 800002 [(oldCoin ctx, Just 800000)]
-
--- | A database of version 3, as hw 0.9 left it, holding the account main
--- of the test wallet, m/44'/0'/0' on btc, in its wallet 892eb8e4, with its
--- first receiving address. The upgrade makes of it wallet0 without a
--- fingerprint, with a partial portfolio0 described as main.
-version3Main :: FilePath -> IO ()
-version3Main file =
-  inDatabaseFile file $ do
-    createTables V3.migrateAll
-    P.insert_ $ V3.DBVersion 3
-    P.insert_ $ V3.DBWallet "892eb8e4"
-    P.insert_ $ V3.DBAccount "main" wallet 0 "btc" "/44'/0'/0'" 1 0 testAccountXPub 0 0 0 fixtureTime
-    P.insert_ $ V3.DBAddress 0 wallet "/44'/0'/0'" "/0/0" (externalAddrsText !! 0) "" 0 0 0 0 0 False False fixtureTime
-  where
-    wallet = V3.DBWalletKey "892eb8e4"

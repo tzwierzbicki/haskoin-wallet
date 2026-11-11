@@ -68,11 +68,6 @@ portfolioSheetSpec =
       map (take 4) . sheetRows <$> listingSheet (ResponsePortfolios [mainPortfolioView, other])
         `shouldBe` Just [[TextCell "wallet0", TextCell "portfolio0", TextCell "savings", TextCell "btc"], [TextCell "wallet2", TextCell "portfolio1", EmptyCell, TextCell "btc"]]
 
-    -- A migrated wallet may get an empty portfolio0, which must still show
-    it "gives a portfolio without any account one row, with no network and no amounts" $
-      sheetRows <$> listingSheet (ResponsePortfolios [mainPortfolioView {viewNetworks = []}])
-        `shouldBe` Just [[TextCell "wallet0", TextCell "portfolio0", TextCell "savings", EmptyCell, EmptyCell, EmptyCell, EmptyCell, EmptyCell, EmptyCell, TimeCell seenTime]]
-
 addressSheetSpec :: Spec
 addressSheetSpec =
   describe "The sheet of addresses" $ do

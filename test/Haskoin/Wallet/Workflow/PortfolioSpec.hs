@@ -8,11 +8,12 @@
 -- and their defaults, what portfolios shows, the descriptions and the
 -- defaults the user sets, the portfolios and wallets deleted, the files of
 -- exportwallet and importwallet between a signer and an online computer,
--- the partial portfolios of an upgrade from hw 0.9 and fillwallet, which
--- fills them in, the bip84 account of a portfolio, its addresses and their
--- labels, sync over every portfolio and every network, recover, which
--- finds whole portfolios, a passphrase as typed, the messages the keys
--- sign and check, and the backup of the database.
+-- which create whole portfolios only, the databases of other versions of
+-- hw, which hw refuses and leaves as they are, the bip84 account of a
+-- portfolio, its addresses and their labels, sync over every portfolio and
+-- every network, recover, which finds whole portfolios, a passphrase as
+-- typed, the messages the keys sign and check, and the backup of the
+-- database.
 --
 -- A home holds the portfolios of the test mnemonic, made with
 -- newportfolio --existing: portfolio0 of wallet0 first, then portfolio1.
@@ -21,32 +22,27 @@
 -- is seen on btc alone: the other networks derive other keys.
 module Haskoin.Wallet.Workflow.PortfolioSpec (spec) where
 
-import Control.Monad (forM_, replicateM_, void)
-import Control.Monad.Except (runExceptT)
+import Control.Monad (forM_, replicateM_)
 import qualified Data.Aeson as Json
 import Data.Bits ((.&.))
 import qualified Data.ByteString as BS
 import Data.IORef (modifyIORef)
-import Data.List (isInfixOf)
+import Data.List (isInfixOf, sort)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Data.Time (addUTCTime)
-import qualified Database.Persist as P
 import Haskoin
 import Haskoin.Wallet.Cli.Response (NewSecret (..), Response (..))
-import Haskoin.Wallet.Database (runDBWith)
 import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..))
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (AccountKind (..), MnemonicPass (..))
-import Haskoin.Wallet.Migration (databaseVersion)
-import qualified Haskoin.Wallet.Schema.V3 as V3
+import Haskoin.Wallet.Migration.TestUtils (olderDatabases, version2Database, version6Database)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData (..))
 import Haskoin.Wallet.Workflow.TestUtils
 import Numeric.Natural (Natural)
-import System.Directory (copyFile)
+import System.Directory (copyFile, listDirectory)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.Posix.Files (fileMode, getFileStatus)
@@ -66,8 +62,7 @@ spec = prepareContext $ \ctx -> do
   deletePortfolioSpec ctx
   deleteWalletSpec ctx
   walletFileSpec ctx
-  fillWalletSpec
-  upgradeSpec
+  otherVersionSpec
   segwitSpec ctx
   addressSpec ctx
   syncSpec ctx
@@ -99,11 +94,6 @@ twelveAccounts =
     ("bchreg", Bip44)
   ]
 
--- | The accounts of a whole portfolio but the bip44 account on btc: what
--- the partial portfolio0 of 'version3Main' lacks
-allButMain :: [(String, AccountKind)]
-allButMain = drop 1 twelveAccounts
-
 -- | The networks of a portfolio, in their order
 networkNames :: [String]
 networkNames = ["btc", "bch", "btctest", "btctest4", "btcreg", "bchtest", "bchtest4", "bchreg"]
@@ -123,36 +113,9 @@ segwitDescriptor = "wpkh([bc560f95/84h/0h/0h]" <> testSegwitAccountXPub <> "/<0;
 thirdMnemonic :: MnemonicPass
 thirdMnemonic = MnemonicPass (mnemonicWords testMnemonic) "another passphrase"
 
--- | A database of version 3, as hw 0.9 left it, with the two accounts of
--- the test mnemonic in the two wallets hw 0.9 filed them under: main,
--- m/44'/0'/0' on btc, in its wallet 892eb8e4 ('version3Main'), and cash,
--- m/44'/145'/0' on bch, made a day later, in its wallet e5c9e2d7. The
--- upgrade makes of them wallet0 and wallet1, numbered by their oldest
--- account, each with a partial portfolio0 and no fingerprint.
-version3MainAndCash :: FilePath -> IO ()
-version3MainAndCash file = do
-  version3Main file
-  inDatabaseFile file $ do
-    P.insert_ $ V3.DBWallet "e5c9e2d7"
-    P.insert_ $ V3.DBAccount "cash" (V3.DBWalletKey "e5c9e2d7") 0 "bch" "/44'/145'/0'" 0 0 testAccountXPubBch 0 0 0 (addUTCTime 86400 fixtureTime)
-
 -- | The database file of a home
 databaseOf :: FilePath -> FilePath
 databaseOf home = home </> ".hw" </> "accounts.sqlite"
-
--- | A home whose database is the one of 'version3Main', upgraded by its
--- first command
-upgradedMain :: FilePath -> IO ()
-upgradedMain home = do
-  version3Main (databaseOf home)
-  void $ answer home ["portfolios"] []
-
--- | A home whose database is the one of 'version3MainAndCash', upgraded
--- by its first command
-upgradedMainAndCash :: FilePath -> IO ()
-upgradedMainAndCash home = do
-  version3MainAndCash (databaseOf home)
-  void $ answer home ["portfolios"] []
 
 -- | A signer with portfolio0 and portfolio1 of the test wallet, which
 -- exportwallet wrote to the file given, in the home of the signer
@@ -175,6 +138,15 @@ fileWithKeyReplaced signer key replacement = do
   writeFile (signer </> "replaced.jsonl") (Text.unpack (Text.replace key replacement content))
   return (signer </> "replaced.jsonl")
 
+-- | The file exportwallet wrote on a signer, at the path given, without
+-- its records that hold the text given, in the home of the signer: a file
+-- that gives some of the accounts of its portfolios
+fileWithout :: FilePath -> FilePath -> Text -> IO FilePath
+fileWithout signer file text = do
+  records <- Text.lines . Text.pack <$> readFile file
+  writeFile (signer </> "part.jsonl") (Text.unpack (Text.unlines (filter (not . Text.isInfixOf text) records)))
+  return (signer </> "part.jsonl")
+
 -- | The JSON of the configuration file of a home, as its keys are now
 configFileOf :: FilePath -> IO (Maybe Json.Value)
 configFileOf home = Json.decodeFileStrict (home </> ".hw" </> "config.json")
@@ -188,16 +160,16 @@ newMnemonicSpec =
     it "has 12 words of the entropy of /dev/random by default, and 24 words for 32 bytes" $
       withHome $ \home -> do
         whole <- answer home ["newportfolio"] [""]
-        whole `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic "/dev/random" ws)) _ _ _ -> length ws == 12; _ -> False
+        whole `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic "/dev/random" ws)) _ -> length ws == 12; _ -> False
         long <- answer home ["newportfolio", "--entropy", "32"] [""]
-        long `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ _ _ -> length ws == 24; _ -> False
+        long `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ -> length ws == 24; _ -> False
 
     -- BIP39 adds a word of 11 bits for every 4 bytes of entropy
     it "has 15, 18 and 21 words for 20, 24 and 28 bytes of --entropy" $
       withHome $ \home ->
         forM_ [("20", 15), ("24", 18), ("28", 21)] $ \(bytes, count) -> do
           made <- answer home ["newportfolio", "--entropy", bytes] [""]
-          made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ _ _ -> length ws == count; _ -> False
+          made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ -> length ws == count; _ -> False
 
     it "is refused an --entropy other than 16, 20, 24, 28 or 32 bytes" $
       withHome $ \home -> do
@@ -235,7 +207,7 @@ newMnemonicSpec =
       withHome $ \home -> do
         made <- answer home ["newportfolio"] ["secret", "secret"]
         mnemonic <- case made of
-          ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ _ _ -> return (Text.unwords ws)
+          ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ -> return (Text.unwords ws)
           other -> fail ("Not a new mnemonic: " <> show other)
         (checkedOf <$> hwJson home ["checkmnemonic"] [mnemonic, "secret"])
           `shouldReturn` Right (True, "The mnemonic and passphrase matched portfolio0 of wallet0")
@@ -273,18 +245,18 @@ newSharesSpec =
     it "comes in the shares of --shares, of 20 words each, with the threshold of --threshold" $
       withHome $ \home -> do
         made <- answer home ["newportfolio", "--shares", "3", "--threshold", "2"] [""]
-        made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares "/dev/random" 2 shares)) _ _ _ -> map length shares == [20, 20, 20]; _ -> False
+        made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares "/dev/random" 2 shares)) _ -> map length shares == [20, 20, 20]; _ -> False
 
     it "has shares of 33 words for 32 bytes of --entropy" $
       withHome $ \home -> do
         made <- answer home ["newportfolio", "--shares", "2", "--threshold", "2", "--entropy", "32"] [""]
-        made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares _ 2 shares)) _ _ _ -> map length shares == [33, 33]; _ -> False
+        made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares _ 2 shares)) _ -> map length shares == [33, 33]; _ -> False
 
     it "is one share, the whole backup, with --shares 1, with or without --threshold 1" $
       withHome $ \home ->
         forM_ [["newportfolio", "--shares", "1"], ["newportfolio", "--shares", "1", "--threshold", "1"]] $ \args -> do
           made <- answer home args [""]
-          made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares _ 1 [share])) _ _ _ -> length share == 20; _ -> False
+          made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares _ 1 [share])) _ -> length share == 20; _ -> False
 
     -- A heading, then each share under its number, five lines of four
     -- words: 1 + 2 x 7 lines, then a blank line and the portfolio
@@ -300,7 +272,7 @@ newSharesSpec =
       withHome $ \home -> withHome $ \firstHome -> withHome $ \lastHome -> do
         made <- answer home ["newportfolio", "--shares", "3", "--threshold", "2"] [""]
         shares <- case made of
-          ResponseNewPortfolio (Just (NewShares _ _ shares@[_, _, _])) _ _ _ -> return (Text.unwords <$> shares)
+          ResponseNewPortfolio (Just (NewShares _ _ shares@[_, _, _])) _ -> return (Text.unwords <$> shares)
           other -> fail $ "Not a backup in three shares: " <> show other
         fromFirst <- accountXPubsOf <$> answer firstHome ["newportfolio", "--existing"] (take 2 shares <> [""])
         fromLast <- accountXPubsOf <$> answer lastHome ["newportfolio", "--existing"] (reverse (drop 1 shares) <> [""])
@@ -377,7 +349,7 @@ existingSpec =
 
     it "is in a wallet with the fingerprint of the seed of the mnemonic" $
       withHome $ \home ->
-        (fingerprintsOf <$> answer home ["newportfolio", "--existing"] seedTwice) `shouldReturn` Right [(PortfolioRef 0 0, Just testFingerprintText)]
+        (fingerprintsOf <$> answer home ["newportfolio", "--existing"] seedTwice) `shouldReturn` Right [(PortfolioRef 0 0, testFingerprintText)]
 
     -- m/44'/0'/0', m/84'/0'/0', m/44'/145'/0', m/44'/1'/0' and m/84'/1'/0'
     it "holds the twelve accounts of the five keys the seed derives at the paths of portfolio0" $
@@ -399,29 +371,29 @@ existingSpec =
         (filter (\(_, net, _, _) -> net == "btc") <$> accountXPubsOf added)
           `shouldBe` Right [(PortfolioRef 0 1, "btc", Bip44, testAccountXPub1), (PortfolioRef 0 1, "btc", Bip84, testSegwitAccountXPub1)]
 
-    -- The online computer gets portfolio2 alone from the file of a signer,
-    -- with the empty portfolio0 a wallet always has
+    -- The online computer has portfolio0, and gets portfolio2 alone from
+    -- the file of a signer
     it "is portfolio1 when the wallet has portfolio0 and portfolio2: the lowest free index" $
       withHome $ \signer -> withHome $ \online -> do
         replicateM_ 3 (newTestPortfolio signer)
         _ <- answer signer ["exportwallet", "--portfolio", "2", signer </> "portfolio2.jsonl"] []
+        newTestPortfolio online
         _ <- answer online ["importwallet", signer </> "portfolio2.jsonl"] []
         newTestPortfolio online
         (portfolioRefsOf <$> hwJson online ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 0 1, PortfolioRef 0 2]
-
-    -- The wallet has an empty portfolio0, which lacks its twelve accounts
-    it "fills in first the partial portfolios of the wallet of the mnemonic, and says how many accounts it added" $
-      withHome $ \signer -> withHome $ \online -> do
-        replicateM_ 3 (newTestPortfolio signer)
-        _ <- answer signer ["exportwallet", "--portfolio", "2", signer </> "portfolio2.jsonl"] []
-        _ <- answer online ["importwallet", signer </> "portfolio2.jsonl"] []
-        (filledOf <$> answer online ["newportfolio", "--existing"] seedTwice) `shouldReturn` Right ([], 12)
-        (missingAccountsOf <$> hwJson online ["portfolios", "--portfolio", "0"] []) `shouldReturn` Right [(PortfolioRef 0 0, [])]
 
     it "is portfolio0 of wallet1 for a second mnemonic, beside wallet0" $
       withHome $ \home -> do
         newTestPortfolio home
         (portfolioRefsOf <$> answer home ["newportfolio", "--existing"] (seedTwiceOf testMnemonic2)) `shouldReturn` Right [PortfolioRef 1 0]
+
+    -- wallet0 is of the second test mnemonic, and the default wallet.
+    -- wallet1 is of the test mnemonic, with portfolio0.
+    it "is the next portfolio of the wallet with the fingerprint of the seed, among the wallets of other seeds" $
+      withHome $ \home -> do
+        newPortfolioOf home testMnemonic2
+        newTestPortfolio home
+        (portfolioRefsOf <$> answer home ["newportfolio", "--existing"] seedTwice) `shouldReturn` Right [PortfolioRef 1 1]
 
     -- Under the umask 022, SQLite would make the database rw-r--r--
     it "is kept in a database its owner alone can read, whatever the umask lets" $
@@ -467,7 +439,7 @@ sharesSeedSpec ctx =
     it "is in a wallet with the fingerprint of its seed" $
       withHome $ \home -> do
         _ <- answer home ["newportfolio", "--existing"] sharesForNew
-        (fingerprintsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, Just testSharesFingerprintText)]
+        (fingerprintsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, testSharesFingerprintText)]
 
     -- The first share is a group of one, the three others are of a group
     -- that needs three: two groups, as the backup needs
@@ -829,25 +801,6 @@ portfoliosSpec ctx =
                        "wallet0 │ portfolio0 │ btc     │      0.00080000 │        0.00000000 │     2 │         2 │"
                      ]
 
-    it "mark a partial portfolio, with the number of accounts it lacks and what fills it in" $
-      withHome $ \home -> do
-        upgradedMain home
-        run <- hw home ["portfolios"] []
-        run `shouldSatisfy` printed "\n  partial: it lacks 11 accounts, and fillwallet fills it in\n"
-
-    it "give in JSON the accounts a partial portfolio lacks" $
-      withHome $ \home -> do
-        upgradedMain home
-        (missingAccountsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, allButMain)]
-
-    -- The database of hw 0.9 knew the key of main and no fingerprint
-    it "give the descriptor without its origin when the wallet does not know its fingerprint, which the row Fingerprint says" $
-      withHome $ \home -> do
-        upgradedMain home
-        run <- hw home ["portfolios", "--verbose"] []
-        run `shouldSatisfy` printed "\n  Fingerprint: unknown\n"
-        run `shouldSatisfy` printed ("\n      Descriptor: pkh(" <> testAccountXPub <> "/<0;1>/*)#mmejv52s\n")
-
 {- A mnemonic checked -}
 
 checkMnemonicSpec :: Spec
@@ -879,14 +832,6 @@ checkMnemonicSpec =
         threePortfolios home
         (checkedOf <$> hwJson home ["checkmnemonic", "--portfolio", "1"] seedOnce)
           `shouldReturn` Right (True, "The mnemonic and passphrase matched portfolio1 of wallet0")
-
-    -- fillwallet records the fingerprint, a check does not
-    it "matches a partial portfolio of an upgrade by the accounts it has, and writes no fingerprint" $
-      withHome $ \home -> do
-        upgradedMain home
-        (checkedOf <$> hwJson home ["checkmnemonic"] seedOnce)
-          `shouldReturn` Right (True, "The mnemonic and passphrase matched portfolio0 of wallet0")
-        (fingerprintsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, Nothing)]
 
 {- Descriptions -}
 
@@ -1153,18 +1098,14 @@ deleteWalletSpec ctx =
           `shouldReturn` Right "The fingerprint given is not that of wallet1: portfolios --verbose shows it. Nothing was deleted"
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 0 1, PortfolioRef 1 0]
 
-    it "takes the word unknown for a wallet whose fingerprint hw does not know" $
+    -- Every wallet has its fingerprint: no word stands for one hw does not
+    -- know
+    it "is refused the word unknown in place of its fingerprint, and nothing is deleted" $
       withHome $ \home -> do
-        upgradedMain home
-        (deletedOf <$> hwJson home ["deletewallet", "unknown", "--wallet", "0"] [])
-          `shouldReturn` Right ("wallet0 has been deleted, with all of its portfolios", [("default-wallet", 0)])
-        (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right []
-
-    it "asks for the word unknown for a wallet whose fingerprint hw does not know" $
-      withHome $ \home -> do
-        upgradedMain home
-        (errorOf <$> hwJson home ["deletewallet", "bc560f95", "--wallet", "0"] [])
-          `shouldReturn` Right "wallet0 has no known fingerprint: type the word unknown in place of it. Nothing was deleted"
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["deletewallet", "unknown", "--wallet", "0"] [])
+          `shouldReturn` Right "The fingerprint given is not that of wallet0: portfolios --verbose shows it. Nothing was deleted"
+        (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0]
 
     it "must be named by --wallet, which deletewallet never takes from the default" $
       withHome $ \home -> do
@@ -1271,13 +1212,13 @@ walletFileSpec ctx =
         newTestPortfolio signer
         _ <- answer signer ["exportwallet", signer </> "wallet.jsonl"] []
         _ <- answer online ["importwallet", signer </> "wallet.jsonl"] []
-        (fingerprintsOf <$> hwJson online ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, Just testFingerprintText)]
+        (fingerprintsOf <$> hwJson online ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, testFingerprintText)]
 
     it "is imported whole, the twelve accounts of each portfolio with their keys" $
       withHome $ \signer -> withHome $ \online -> do
         newTestPortfolio signer
         _ <- answer signer ["exportwallet", signer </> "wallet.jsonl"] []
-        (portfoliosImportedOf <$> hwJson online ["importwallet", signer </> "wallet.jsonl"] []) `shouldReturn` Right [(0, 0, True, 12)]
+        (portfoliosImportedOf <$> hwJson online ["importwallet", signer </> "wallet.jsonl"] []) `shouldReturn` Right [(0, 0, True)]
         (fmap (map (\(_, net, kind, key) -> (net, kind, key))) . accountXPubsOf <$> hwJson online ["portfolios"] [])
           `shouldReturn` Right portfolio0Keys
 
@@ -1295,52 +1236,97 @@ walletFileSpec ctx =
         _ <- answer online ["importwallet", file] []
         (portfolioRefsOf <$> hwJson online ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 0 1]
 
-    -- A wallet always has portfolio0: importwallet makes it empty
-    it "is written with the one portfolio exportwallet --portfolio names, and imported beside an empty portfolio0" $
+    -- The online computer has portfolio0 of the wallet already
+    it "is written with the one portfolio exportwallet --portfolio names, and imported into the wallet the database has" $
       withHome $ \signer -> withHome $ \online -> do
         newTestPortfolio signer
         newTestPortfolio signer
         _ <- answer signer ["exportwallet", "--portfolio", "1", signer </> "portfolio1.jsonl"] []
+        newTestPortfolio online
         (portfoliosImportedOf <$> hwJson online ["importwallet", signer </> "portfolio1.jsonl"] [])
-          `shouldReturn` Right [(0, 0, True, 0), (0, 1, True, 12)]
+          `shouldReturn` Right [(0, 1, True)]
 
+    -- The online computer has portfolio0 of the wallet already
     it "is read one portfolio at a time with importwallet --portfolio" $
       withHome $ \signer -> withHome $ \online -> do
         file <- twoPortfoliosFile signer
+        newTestPortfolio online
         (portfoliosImportedOf <$> hwJson online ["importwallet", "--portfolio", "1", file] [])
-          `shouldReturn` Right [(0, 0, True, 0), (0, 1, True, 12)]
+          `shouldReturn` Right [(0, 1, True)]
+
+    -- A wallet is created with its portfolio0
+    it "is refused a file without the portfolio0 of a wallet the database does not have, and nothing is created" $
+      withHome $ \signer -> withHome $ \online -> do
+        newTestPortfolio signer
+        newTestPortfolio signer
+        _ <- answer signer ["exportwallet", "--portfolio", "1", signer </> "portfolio1.jsonl"] []
+        (errorOf <$> hwJson online ["importwallet", signer </> "portfolio1.jsonl"] [])
+          `shouldReturn` Right "The file does not have portfolio0 of the wallet bc560f95, which the database does not have: a wallet is created with its portfolio0. Import a file of the whole wallet, as exportwallet writes it without --portfolio. Nothing was changed"
+        (portfolioRefsOf <$> hwJson online ["portfolios"] []) `shouldReturn` Right []
+
+    it "is refused importwallet --portfolio 1 of a wallet the database does not have, and nothing is created" $
+      withHome $ \signer -> withHome $ \online -> do
+        file <- twoPortfoliosFile signer
+        (errorOf <$> hwJson online ["importwallet", "--portfolio", "1", file] [])
+          `shouldReturn` Right "The database has no wallet of the fingerprint bc560f95, and importwallet --portfolio 1 does not create one: a wallet is created with its portfolio0. Import the whole file, without --portfolio. Nothing was changed"
+        (portfolioRefsOf <$> hwJson online ["portfolios"] []) `shouldReturn` Right []
+
+    -- The file gives the 8 accounts of portfolio1 that are not bip84: the 12
+    -- but the 4 bip84 ones, of btc, btctest, btctest4 and btcreg
+    it "is refused when it would create a portfolio without all twelve of its accounts, and nothing is created" $
+      withHome $ \signer -> withHome $ \online -> do
+        newTestPortfolio signer
+        newTestPortfolio signer
+        _ <- answer signer ["exportwallet", "--portfolio", "1", signer </> "portfolio1.jsonl"] []
+        part <- fileWithout signer (signer </> "portfolio1.jsonl") "\"purpose\":84"
+        newTestPortfolio online
+        (errorOf <$> hwJson online ["importwallet", part] [])
+          `shouldReturn` Right "The file gives 8 of the 12 accounts of portfolio1 of wallet0, which the database does not have: importwallet creates a portfolio only whole, with every account. Write the file with exportwallet on the computer that has the whole portfolio. Nothing was changed"
+        (portfolioRefsOf <$> hwJson online ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0]
+
+    -- The 8 accounts of portfolio0 that are not bip84, as above
+    it "is refused the portfolio0 of a new wallet without all twelve of its accounts, and no wallet is created" $
+      withHome $ \signer -> withHome $ \online -> do
+        newTestPortfolio signer
+        _ <- answer signer ["exportwallet", signer </> "wallet.jsonl"] []
+        part <- fileWithout signer (signer </> "wallet.jsonl") "\"purpose\":84"
+        (errorOf <$> hwJson online ["importwallet", part] [])
+          `shouldReturn` Right "The file gives 8 of the 12 accounts of portfolio0 of the wallet bc560f95, which the database does not have: importwallet creates a portfolio only whole, with every account. Write the file with exportwallet on the computer that has the whole portfolio. Nothing was changed"
+        (portfolioRefsOf <$> hwJson online ["portfolios"] []) `shouldReturn` Right []
+
+    -- The database has portfolio0 whole: the file need not give every
+    -- account of it
+    it "takes a file that gives some of the accounts of a portfolio the database has, which gets nothing" $
+      withHome $ \signer -> withHome $ \online -> do
+        newTestPortfolio signer
+        _ <- answer signer ["exportwallet", signer </> "wallet.jsonl"] []
+        part <- fileWithout signer (signer </> "wallet.jsonl") "\"purpose\":84"
+        newTestPortfolio online
+        (portfoliosImportedOf <$> hwJson online ["importwallet", part] []) `shouldReturn` Right [(0, 0, False)]
 
     it "is refused importwallet --portfolio of a portfolio the file has nothing of, naming the portfolios it has" $
       withHome $ \signer -> withHome $ \online -> do
         file <- twoPortfoliosFile signer
         (errorOf <$> hwJson online ["importwallet", "--portfolio", "5", file] [])
-          `shouldReturn` Right "The file has no portfolio5: it has portfolio0 and portfolio1"
+          `shouldReturn` Right "The file has no portfolio5: it has portfolio0 and portfolio1. Nothing was changed"
         (portfolioRefsOf <$> hwJson online ["portfolios"] []) `shouldReturn` Right []
-
-    -- The upgrade left portfolio0 with its bip44 account on btc alone
-    it "is merged into the portfolio of the same index, which gets the accounts it lacked" $
-      withHome $ \signer -> withHome $ \online -> do
-        newTestPortfolio signer
-        _ <- answer signer ["exportwallet", signer </> "wallet.jsonl"] []
-        upgradedMain online
-        (portfoliosImportedOf <$> hwJson online ["importwallet", signer </> "wallet.jsonl"] []) `shouldReturn` Right [(0, 0, False, 11)]
-        (missingAccountsOf <$> hwJson online ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, [])]
-
-    it "gives a wallet without a fingerprint the one of the file it is merged with" $
-      withHome $ \signer -> withHome $ \online -> do
-        newTestPortfolio signer
-        _ <- answer signer ["exportwallet", signer </> "wallet.jsonl"] []
-        upgradedMain online
-        _ <- answer online ["importwallet", signer </> "wallet.jsonl"] []
-        (fingerprintsOf <$> hwJson online ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, Just testFingerprintText)]
 
     it "never makes a second portfolio with an index the wallet has, when imported again" $
       withHome $ \signer -> withHome $ \online -> do
         newTestPortfolio signer
         _ <- answer signer ["exportwallet", signer </> "wallet.jsonl"] []
         _ <- answer online ["importwallet", signer </> "wallet.jsonl"] []
-        (portfoliosImportedOf <$> hwJson online ["importwallet", signer </> "wallet.jsonl"] []) `shouldReturn` Right [(0, 0, False, 0)]
+        (portfoliosImportedOf <$> hwJson online ["importwallet", signer </> "wallet.jsonl"] []) `shouldReturn` Right [(0, 0, False)]
         (portfolioRefsOf <$> hwJson online ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0]
+
+    it "adds no account to a portfolio the database has, which keeps the twelve keys it had" $
+      withHome $ \signer -> withHome $ \online -> do
+        newTestPortfolio signer
+        _ <- answer signer ["exportwallet", signer </> "wallet.jsonl"] []
+        newTestPortfolio online
+        (addedAccountsOf <$> hwJson online ["importwallet", signer </> "wallet.jsonl"] []) `shouldReturn` Right []
+        (fmap (map (\(_, net, kind, key) -> (net, kind, key))) . accountXPubsOf <$> hwJson online ["portfolios"] [])
+          `shouldReturn` Right portfolio0Keys
 
     -- The key of the second test mnemonic at m/44'/0'/0', in place of the
     -- one of the test mnemonic
@@ -1349,20 +1335,23 @@ walletFileSpec ctx =
         file <- fileWithKeyReplaced signer testAccountXPub testAccountXPub2
         newTestPortfolio online
         (errorOf <$> hwJson online ["importwallet", file] [])
-          `shouldReturn` Right "The bip44 account of portfolio0 of wallet0 on btc has another key than the file gives it: the two cannot be merged"
+          `shouldReturn` Right "The bip44 account of portfolio0 of wallet0 on btc has another key than the file gives it: the file and the database are not of one mnemonic. Nothing was changed"
 
-    -- The key of portfolio0 on btc, written with the child number of the
-    -- account index 5, which the file names: the same key, since its
-    -- public key and its chain code are the same
+    -- The file of portfolio1, whose bip44 account on btc has the key of
+    -- portfolio0 there, written with the child number of the account index
+    -- 1: the same key, since its public key and its chain code are the same
     it "is refused when it gives a key another portfolio holds, though under another child index" $
-      withHome $ \online -> do
-        newTestPortfolio online
+      withHome $ \signer -> withHome $ \online -> do
+        newTestPortfolio signer
+        newTestPortfolio signer
+        _ <- answer signer ["exportwallet", "--portfolio", "1", signer </> "portfolio1.jsonl"] []
         let key = testAccountPub ctx
-            renumbered = xPubExport btc ctx (XPubKey key.depth key.parent 0x80000005 key.chain key.key)
-            record = "{\"type\":\"xpub\",\"ref\":\"" <> renumbered <> "\",\"origin\":\"pkh([bc560f95/44'/0'/5'])\",\"network\":\"btc\",\"purpose\":44}"
-        writeFile (online </> "renumbered.jsonl") (Text.unpack record <> "\n")
-        (errorOf <$> hwJson online ["importwallet", online </> "renumbered.jsonl"] [])
-          `shouldReturn` Right "portfolio0 of wallet0 already has this key on btc"
+            renumbered = xPubExport btc ctx (XPubKey key.depth key.parent 0x80000001 key.chain key.key)
+        content <- Text.pack <$> readFile (signer </> "portfolio1.jsonl")
+        writeFile (signer </> "renumbered.jsonl") (Text.unpack (Text.replace testAccountXPub1 renumbered content))
+        newTestPortfolio online
+        (errorOf <$> hwJson online ["importwallet", signer </> "renumbered.jsonl"] [])
+          `shouldReturn` Right "portfolio0 of wallet0 already has this key on btc. Nothing was changed"
         (portfolioRefsOf <$> hwJson online ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0]
 
     -- The tpub of the bip44 account 0 of the backup in shares on btctest4,
@@ -1378,7 +1367,7 @@ walletFileSpec ctx =
               | otherwise = line
         writeFile (signer </> "twins.jsonl") (Text.unpack (Text.unlines (twin <$> records)))
         (errorOf <$> hwJson online ["importwallet", signer </> "twins.jsonl"] [])
-          `shouldReturn` Right "The bip44 account /44'/1'/0' of portfolio0 of wallet0 has one key on btctest and would get another on btctest4: the networks of one path share its key"
+          `shouldReturn` Right "The bip44 account /44'/1'/0' of portfolio0 of wallet0 has one key on btctest and would get another on btctest4: the networks of one path share its key. Nothing was changed"
         (portfolioRefsOf <$> hwJson online ["portfolios"] []) `shouldReturn` Right []
 
     -- A key alone is one account, of no portfolio
@@ -1394,34 +1383,6 @@ walletFileSpec ctx =
         (errorOf <$> hwJson home ["importwallet", home </> "descriptor.txt"] [])
           `shouldReturn` Right ("The file " <> Text.pack (home </> "descriptor.txt") <> " could not be read: It holds no record of a wallet. importwallet reads the file exportwallet writes. A key or a descriptor alone is one account, and does not say which portfolio it belongs to")
 
-    -- The upgrade made wallet0 of main and wallet1 of cash, both of the
-    -- test mnemonic: the file of the whole wallet merges them into wallet0
-    it "keeps the key default-wallet on the wallet that stays when it merges the default wallet into another" $
-      withHome $ \signer -> withHome $ \online -> do
-        newTestPortfolio signer
-        _ <- answer signer ["exportwallet", signer </> "wallet.jsonl"] []
-        upgradedMainAndCash online
-        _ <- answer online ["setdefault", "--wallet", "1"] []
-        (walletsImportedOf <$> hwJson online ["importwallet", signer </> "wallet.jsonl"] []) `shouldReturn` Right [(0, False, [1])]
-        configFileOf online `shouldReturn` Just (Json.object ["default-network" Json..= ("btc" :: Text), "default-wallet" Json..= (0 :: Int), "host" Json..= ("http://127.0.0.1:1/" :: Text)])
-
-    it "says it moved the key default-wallet to the wallet that stays" $
-      withHome $ \signer -> withHome $ \online -> do
-        newTestPortfolio signer
-        _ <- answer signer ["exportwallet", signer </> "wallet.jsonl"] []
-        upgradedMainAndCash online
-        _ <- answer online ["setdefault", "--wallet", "1"] []
-        run <- hw online ["importwallet", signer </> "wallet.jsonl"] []
-        run `shouldSatisfy` printed "The key default-wallet of the configuration file is now 0: wallet1, the default wallet, was merged into wallet0."
-
-    -- Its keys go out without their origin, which another database needs
-    -- to place them
-    it "is written by exportwallet with a warning when the wallet does not know its fingerprint" $
-      withHome $ \home -> do
-        upgradedMain home
-        run <- hw home ["exportwallet", home </> "wallet.jsonl"] []
-        runErr run `shouldSatisfy` Text.isInfixOf "The wallet does not know the fingerprint of its mnemonic, so the file names its keys without their origin."
-
     it "is not written over a file that exists" $
       withHome $ \home -> do
         newTestPortfolio home
@@ -1429,137 +1390,103 @@ walletFileSpec ctx =
         (errorOf <$> hwJson home ["exportwallet", home </> "wallet.jsonl"] []) `shouldReturn` Right (alreadyExists (home </> "wallet.jsonl"))
         readFile (home </> "wallet.jsonl") `shouldReturn` "kept\n"
 
-{- Filling in partial portfolios -}
+{- Databases of other versions of hw -}
 
-fillWalletSpec :: Spec
-fillWalletSpec =
-  describe "The partial portfolios filled in by fillwallet" $ do
-    it "get every account they lacked from the mnemonic" $
+-- | A command of each kind, with what the user types for it: a listing,
+-- one that writes to the database, one that asks for a mnemonic, and two
+-- that ask the store
+commandsOfEachKind :: [([String], [Text])]
+commandsOfEachKind =
+  [ (["portfolios"], []),
+    (["receive"], []),
+    (["newportfolio", "--existing"], seedTwice),
+    (["recover"], seedOnce),
+    (["sync"], [])
+  ]
+
+-- | The refusal of a database of hw 0.9, at format version 2, in a home,
+-- as hw prints it: what to do, with commands that name the file where it
+-- is
+version2Refusal :: FilePath -> Text
+version2Refusal home =
+  "The database "
+    <> file
+    <> " was made by an earlier version of hw, at format version 2.\n\
+       \hw 0.10.0 does not read it, and has left it as it is. To go on, move it aside\n\
+       \and create the wallet again from its mnemonic:\n\
+       \\n\
+       \  mv "
+    <> file
+    <> " "
+    <> Text.pack (home </> ".hw" </> "accounts-old.sqlite")
+    <> "\n\
+       \  hw recover\n\
+       \\n\
+       \recover finds the portfolios of the mnemonic that were paid. On an offline\n\
+       \computer, run hw newportfolio --existing instead, once for each account index\n\
+       \the old wallet used, from 0 up to the highest. Then carry the portfolios to the\n\
+       \online computer with exportwallet and importwallet. The labels of the old\n\
+       \database are not carried over.\n"
+  where
+    file = Text.pack (databaseOf home)
+
+otherVersionSpec :: Spec
+otherVersionSpec = do
+  describe "A database of an earlier version of hw" $ do
+    it "is refused by every command, with the instructions to create the wallet again, which name its file where it is" $
       withHome $ \home -> do
-        upgradedMain home
-        (filledOf <$> hwJson home ["fillwallet"] seedOnce) `shouldReturn` Right ([], 11)
-        (fmap (map (\(_, net, kind, key) -> (net, kind, key))) . accountXPubsOf <$> hwJson home ["portfolios"] [])
-          `shouldReturn` Right portfolio0Keys
+        inDatabaseFile (databaseOf home) version2Database
+        forM_ commandsOfEachKind $ \(args, typed) ->
+          (runErr <$> hw home args typed) `shouldReturn` version2Refusal home
 
-    it "are whole afterwards, which portfolios says by no longer marking them" $
+    it "makes every command exit with 1, and print nothing on its output" $
       withHome $ \home -> do
-        upgradedMain home
-        _ <- answer home ["fillwallet"] seedOnce
-        (missingAccountsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, [])]
+        inDatabaseFile (databaseOf home) version2Database
+        forM_ commandsOfEachKind $ \(args, typed) -> do
+          run <- hw home args typed
+          runExit run `shouldBe` ExitFailure 1
+          runOut run `shouldBe` ""
 
-    it "are in a wallet that knows the fingerprint of its mnemonic afterwards" $
-      withHome $ \home -> do
-        upgradedMain home
-        _ <- answer home ["fillwallet"] seedOnce
-        (fingerprintsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, Just testFingerprintText)]
-
-    it "are refused a mnemonic of no wallet of the database, and nothing changes" $
-      withHome $ \home -> do
-        upgradedMain home
-        (errorOf <$> hwJson home ["fillwallet"] (seedOnceOf testMnemonic2))
-          `shouldReturn` Right "The mnemonic or the passphrase is of no wallet of the database: they give other keys than the ones the wallets hold. Nothing was changed"
-        (missingAccountsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, allButMain)]
-
-    -- hw 0.9 filed main and cash under two wallets
-    it "bring the two wallets of one mnemonic into the one with the lower index" $
-      withHome $ \home -> do
-        upgradedMainAndCash home
-        (filledOf <$> hwJson home ["fillwallet"] seedOnce) `shouldReturn` Right ([1], 10)
-        (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0]
-
-    it "say which wallets were merged" $
-      withHome $ \home -> do
-        upgradedMainAndCash home
-        run <- hw home ["fillwallet"] seedOnce
-        run `shouldSatisfy` printed "wallet1 was merged into wallet0: the same mnemonic gives both."
-
-    -- wallet1 is of the second mnemonic, and the default: fillwallet finds
-    -- wallet0 by its keys
-    it "are those of the wallet the mnemonic is of without --wallet, whatever the default wallet" $
-      withHome $ \home -> do
-        upgradedMain home
-        newPortfolioOf home testMnemonic2
-        _ <- answer home ["setdefault", "--wallet", "1"] []
-        (portfolioRefsOf <$> hwJson home ["fillwallet"] seedOnce) `shouldReturn` Right [PortfolioRef 0 0]
-        (missingAccountsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, []), (PortfolioRef 1 0, [])]
-
-    -- main is in wallet0 and cash in wallet1, both of the test mnemonic:
-    -- --wallet 1 is a wallet it is of, and the two are merged as without it
-    it "are those of every wallet the mnemonic is of with --wallet too, which only checks that the mnemonic is of the wallet named" $
-      withHome $ \home -> do
-        upgradedMainAndCash home
-        (filledOf <$> hwJson home ["fillwallet", "--wallet", "1"] seedOnce) `shouldReturn` Right ([1], 10)
-        (missingAccountsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, [])]
-
-    it "are refused with --wallet a mnemonic of another wallet, and nothing changes" $
-      withHome $ \home -> do
-        upgradedMain home
-        newPortfolioOf home testMnemonic2
-        (errorOf <$> hwJson home ["fillwallet", "--wallet", "1"] seedOnce)
-          `shouldReturn` Right "The mnemonic or the passphrase is not of wallet1: they give other keys than the ones it holds. Nothing was changed"
-        (missingAccountsOf <$> hwJson home ["portfolios", "--wallet", "0"] []) `shouldReturn` Right [(PortfolioRef 0 0, allButMain)]
-
-    it "are none in a whole wallet, which fillwallet says lacks no account" $
-      withHome $ \home -> do
-        newTestPortfolio home
-        run <- hw home ["fillwallet"] seedOnce
-        run `shouldSatisfy` printed "wallet0 lacks no account: every portfolio is whole"
-
-    it "are not looked for in a database without wallets, which fillwallet says before the mnemonic is asked" $
-      withHome $ \home -> do
-        run <- hw home ["fillwallet"] seedOnce
-        run `shouldSatisfy` printed "There is no wallet yet: newportfolio makes one, and recover or importwallet bring one back"
-        run `shouldNotSatisfy` askedMnemonic
-
-    it "are refused a --wallet of 2^31 or more" $
-      withHome $ \home -> do
-        run <- hw home ["fillwallet", "--wallet", "2147483648"] seedOnce
-        runExit run `shouldBe` ExitFailure 1
-        runErr run `shouldSatisfy` Text.isInfixOf "The --wallet value 2147483648 is too large: the index of a wallet is below 2147483648, which is 2^31"
-
-{- A database of hw 0.9 -}
-
-upgradeSpec :: Spec
-upgradeSpec =
-  describe "A database of hw 0.9" $ do
-    it "is upgraded by the first command, backed up first" $
-      withHome $ \home -> do
-        version3Main (databaseOf home)
+    -- 1 is hw 0.8, which had no version table, 2 hw 0.9, 3 and 4 unreleased
+    -- builds of hw 0.10
+    it "is refused at each of the versions 1 to 4, which the refusal names" $
+      forM_ olderDatabases $ \(version, _, database) -> withHome $ \home -> do
+        inDatabaseFile (databaseOf home) database
         run <- hw home ["portfolios"] []
-        runExit run `shouldBe` ExitSuccess
-        runErr run `shouldSatisfy` Text.isInfixOf "Migrating the database to version 4: the accounts filed under portfolios and wallets"
-        runErr run `shouldSatisfy` Text.isInfixOf "The database at version 3 was backed up to"
-        runDBWith 100 (databaseOf home) (runExceptT databaseVersion) `shouldReturn` Right (Just 4)
+        take 1 (Text.lines (runErr run))
+          `shouldBe` ["The database " <> Text.pack (databaseOf home) <> " was made by an earlier version of hw, at format version " <> Text.pack version <> "."]
 
-    it "is upgraded with a notice of how to fill in its partial portfolios" $
+    it "is left byte for byte as it was, with no copy of it and no other file beside it" $
       withHome $ \home -> do
-        version3Main (databaseOf home)
-        run <- hw home ["portfolios"] []
-        run `shouldSatisfy` printedSentence "To fill them in and bring each mnemonic into one wallet, run `hw fillwallet` on the computer that has the mnemonic, once for each mnemonic."
+        inDatabaseFile (databaseOf home) version2Database
+        stored <- BS.readFile (databaseOf home)
+        forM_ commandsOfEachKind $ \(args, typed) -> hw home args typed
+        BS.readFile (databaseOf home) `shouldReturn` stored
+        sort <$> listDirectory (home </> ".hw") `shouldReturn` ["accounts.sqlite", "config.json"]
 
-    -- The account main of hw 0.9 is m/44'/0'/0' on btc, at the index 0
-    it "has a partial portfolio0 of the account it held, described by the name of the account" $
+    it "is refused before hw asks for a mnemonic" $
       withHome $ \home -> do
-        upgradedMain home
-        run <- hw home ["portfolios"] []
-        take 1 (Text.lines (runOut run)) `shouldBe` ["portfolio0  wallet0  \"main\""]
-        (missingAccountsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, allButMain)]
+        inDatabaseFile (databaseOf home) version2Database
+        forM_ [(["newportfolio", "--existing"], seedTwice), (["checkmnemonic"], seedOnce)] $ \(args, typed) -> do
+          run <- hw home args typed
+          run `shouldNotSatisfy` askedMnemonic
 
-    it "keeps the addresses of its account" $
+  describe "A database of a newer version of hw, at version 6" $ do
+    it "is refused by every command, which says it is newer than this hw and exits with 1" $
       withHome $ \home -> do
-        upgradedMain home
-        (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [(externalAddrsText !! 0, "")]
+        inDatabaseFile (databaseOf home) version6Database
+        forM_ commandsOfEachKind $ \(args, typed) -> do
+          run <- hw home args typed
+          runExit run `shouldBe` ExitFailure 1
+          runErr run `shouldBe` "The database is at version 6, newer than the version 5 of this hw\n"
 
-    it "gives out the next address of the account it has" $
+    it "is left byte for byte as it was, with no copy of it and no other file beside it" $
       withHome $ \home -> do
-        upgradedMain home
-        receiveWith home [] `shouldReturn` Text.unpack (externalAddrsText !! 1)
-
-    it "refuses receive --type bip84, which its partial portfolio lacks, and says how to fill it in" $
-      withHome $ \home -> do
-        upgradedMain home
-        (errorOf <$> hwJson home ["receive", "--type", "bip84"] [])
-          `shouldReturn` Right "portfolio0 of wallet0 has no bip84 account on btc yet. It is a partial portfolio, which lacks accounts. Fill it in with fillwallet on the computer that has the mnemonic, or with importwallet and a file of the whole wallet that exportwallet wrote there."
+        inDatabaseFile (databaseOf home) version6Database
+        stored <- BS.readFile (databaseOf home)
+        forM_ commandsOfEachKind $ \(args, typed) -> hw home args typed
+        BS.readFile (databaseOf home) `shouldReturn` stored
+        sort <$> listDirectory (home </> ".hw") `shouldReturn` ["accounts.sqlite", "config.json"]
 
 {- The bip84 account of a portfolio -}
 
@@ -1981,12 +1908,16 @@ recoverSpec ctx =
         run <- hw home ["recover"] seedOnce
         take 1 (Text.lines (runOut run)) `shouldBe` ["No new portfolio of the mnemonic was paid on btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4 or bchreg. The search ended after 10 portfolios in a row without a payment."]
 
-    -- The upgrade left portfolio0 with its bip44 account on btc alone
-    it "fill in the partial portfolios of the wallet of the seed, as fillwallet does" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
-        upgradedMain home
-        _ <- answer home ["recover"] seedOnce
-        (missingAccountsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, [])]
+    -- wallet0 is of the second test mnemonic, and the default wallet.
+    -- wallet1 is of the test mnemonic, with portfolio0. The chain pays
+    -- portfolio0 and portfolio1 of the test seed.
+    it "are added to the wallet with the fingerprint of the seed, among the wallets of other seeds, those it lacks alone" $ do
+      chain <- paidPortfoliosChain ctx 2
+      withChain ctx chain $ \home _ -> do
+        newPortfolioOf home testMnemonic2
+        newTestPortfolio home
+        (recoveredOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right (Just 1, [1])
+        (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 1 0, PortfolioRef 1 1]
 
     -- The server answers for every network but Bitcoin Cash
     it "are found on the networks whose store is up when the store of one is down" $
@@ -2102,13 +2033,13 @@ recoverSpec ctx =
       withChain ctx (chainPaying ctx cafeTypedAddr) $ \home _ -> do
         run <- hw home ["recover"] cafeOnce
         runErr run `shouldSatisfy` Text.isInfixOf "The portfolios found come from the passphrase as typed"
-        (fingerprintsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, Just cafeTypedFingerprint)]
+        (fingerprintsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, cafeTypedFingerprint)]
 
     it "are those of the normalized passphrase, as BIP39 derives them, without a word about the other" $
       withChain ctx (chainPaying ctx cafeNormalizedAddr) $ \home _ -> do
         run <- hw home ["recover"] cafeOnce
         runErr run `shouldNotSatisfy` Text.isInfixOf "as typed"
-        (fingerprintsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, Just cafeNormalizedFingerprint)]
+        (fingerprintsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, cafeNormalizedFingerprint)]
 
 {- The passphrase as typed -}
 
@@ -2123,9 +2054,25 @@ passphraseSpec ctx =
   describe "A portfolio made from a passphrase with accents" $ do
     it "is of the seed BIP39 derives, when the database has no wallet of the passphrase as typed" $
       withHome $ \home -> do
+        _ <- hw home ["newportfolio", "--existing"] cafeTwice
+        (fingerprintsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, cafeNormalizedFingerprint)]
+
+    -- hw 0.9 derived its keys from the passphrase as typed: a wallet it
+    -- made from "café" has the keys of aa280627, and the new one those of
+    -- a3a04db1, whose funds would seem lost
+    it "warns that a wallet of an earlier hw has other keys, and points to recover, when the database has a wallet of neither seed" $
+      withHome $ \home -> do
         run <- hw home ["newportfolio", "--existing"] cafeTwice
-        runErr run `shouldNotSatisfy` Text.isInfixOf "as typed"
-        (fingerprintsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, Just cafeNormalizedFingerprint)]
+        runErr run
+          `shouldSatisfy` Text.isInfixOf
+            "hw normalizes this passphrase as BIP39 asks, and the keys come from it so. \
+            \hw 0.9 and earlier derived their keys from the passphrase as typed, so a wallet they made from it has other keys. \
+            \To find such a wallet, run recover on an online computer: it tries the passphrase both ways."
+
+    it "gives no such warning for a passphrase that normalizing leaves as it is" $
+      withHome $ \home -> do
+        run <- hw home ["newportfolio", "--existing"] seedTwice
+        runErr run `shouldNotSatisfy` Text.isInfixOf "normalizes this passphrase"
 
     -- recover found the wallet of the passphrase as typed
     it "is of the seed of the passphrase as typed when the database has a wallet of it and none of the other, which newportfolio says" $
@@ -2134,7 +2081,7 @@ passphraseSpec ctx =
         run <- hw home ["newportfolio", "--existing"] cafeTwice
         runErr run `shouldSatisfy` Text.isInfixOf "to keep them together"
         (fingerprintsOf <$> hwJson home ["portfolios"] [])
-          `shouldReturn` Right [(PortfolioRef 0 0, Just cafeTypedFingerprint), (PortfolioRef 0 1, Just cafeTypedFingerprint)]
+          `shouldReturn` Right [(PortfolioRef 0 0, cafeTypedFingerprint), (PortfolioRef 0 1, cafeTypedFingerprint)]
 
     -- The online computer has the wallet of the passphrase as typed,
     -- which recover found, and the one BIP39 derives, from the file of a
@@ -2148,7 +2095,7 @@ passphraseSpec ctx =
         run <- hw online ["newportfolio", "--existing"] cafeTwice
         runErr run `shouldNotSatisfy` Text.isInfixOf "as typed"
         (fingerprintsOf <$> hwJson online ["portfolios"] [])
-          `shouldReturn` Right [(PortfolioRef 0 0, Just cafeTypedFingerprint), (PortfolioRef 1 0, Just cafeNormalizedFingerprint), (PortfolioRef 1 1, Just cafeNormalizedFingerprint)]
+          `shouldReturn` Right [(PortfolioRef 0 0, cafeTypedFingerprint), (PortfolioRef 1 0, cafeNormalizedFingerprint), (PortfolioRef 1 1, cafeNormalizedFingerprint)]
 
 {- Signed messages -}
 

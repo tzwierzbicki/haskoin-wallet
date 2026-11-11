@@ -48,7 +48,7 @@ spec = do
     it "come in the groups of the README, each command in its order" $
       [(group.title, [command.name | command <- group.commands]) | group <- program.groups]
         `shouldBe` [ ( "Wallets and portfolios",
-                       ["newportfolio", "recover", "fillwallet", "checkmnemonic", "exportwallet", "importwallet", "portfolios", "setdescription", "setdefault", "deleteportfolio", "deletewallet", "sync"]
+                       ["newportfolio", "recover", "checkmnemonic", "exportwallet", "importwallet", "portfolios", "setdescription", "setdefault", "deleteportfolio", "deletewallet", "sync"]
                      ),
                      ("Addresses", ["receive", "show", "addresses", "balances", "label"]),
                      ("Coins", ["coins", "lockcoin", "unlockcoin"]),
@@ -415,7 +415,6 @@ everyCommandLine :: [(String, [String])]
 everyCommandLine =
   [ ("newportfolio", []),
     ("recover", []),
-    ("fillwallet", ["--wallet", "1"]),
     ("checkmnemonic", ["--wallet", "1", "-p", "2"]),
     ("exportwallet", ["--wallet", "1", "wallet.jsonl"]),
     ("importwallet", ["--wallet", "1", "wallet.jsonl"]),

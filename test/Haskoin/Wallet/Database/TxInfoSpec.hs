@@ -437,10 +437,6 @@ jsonSpec ctx =
       eitherDecode (cs json) `shouldBe` Right (toJSON output)
       eitherDecode (cs json) `shouldBe` Right output
 
-    -- As hw 0.9 stored it, when every account was a bip44 one
-    it "reads an address of the portfolio written without a type as one of its bip44 account" $
-      eitherDecode "{\"value\": 50000, \"path\": \"/0/0\", \"label\": \"\"}" `shouldBe` Right (MyOutputs 50000 (PoolPath Bip44 (Deriv :/ 0 :/ 0)) "")
-
     it "writes the label of a transaction among its other keys" $ do
       let info = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "Salary" Map.empty
       (KeyMap.lookup "label" <$> (eitherDecode (marshalJSON btc info) :: Either String Object)) `shouldBe` Right (Just "Salary")
@@ -462,59 +458,12 @@ jsonSpec ctx =
       let info = TxInfo paymentSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing [])) "" Map.empty
       (unmarshalJSON btc . encode . Object . withoutCreated <$> eitherDecode (marshalJSON btc info)) `shouldBe` Right (Just info)
 
-    it "reads the summaries stored by earlier versions of hw" $ do
-      -- Those blobs carried the status too, wrote the inputs of others as
-      -- objects, knew no outpoints, and the oldest have no change in fee
-      let oldPayment :: String
-          oldPayment =
-            [r|{
-              "txid": "0000000000000000000000000000000000000000000000000000000000000001",
-              "type": "credit",
-              "amount": 50000,
-              "myoutputs": {"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj": {"value": 50000, "path": "/0/0", "label": ""}},
-              "otheroutputs": {},
-              "nonstdoutputs": [],
-              "myinputs": {},
-              "otherinputs": {"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU": {"value": 51000}},
-              "nonstdinputs": [],
-              "size": 226,
-              "fee": 1000,
-              "feebyte": 4,
-              "block": {"height": 800000, "position": 1},
-              "confirmations": 0,
-              "pending": null
-            }|]
-          oldSpend :: String
-          oldSpend =
-            [r|{
-              "txid": "0000000000000000000000000000000000000000000000000000000000000002",
-              "type": "debit",
-              "amount": -41000,
-              "myoutputs": {"17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn": {"value": 9000, "path": "/1/0", "label": ""}},
-              "otheroutputs": {"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU": 40000},
-              "nonstdoutputs": [],
-              "myinputs": {"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj": {"value": 50000, "path": "/0/0", "label": ""}},
-              "otherinputs": {},
-              "nonstdinputs": [],
-              "size": 226,
-              "fee": 1000,
-              "feebyte": 4,
-              "changeinfee": null,
-              "block": {"height": 800001, "position": 1},
-              "confirmations": 0,
-              "pending": null,
-              "dead": false
-            }|]
-      unmarshalJSON btc (cs oldPayment) `shouldBe` Just paymentSummary
-      unmarshalJSON btc (cs oldSpend)
-        `shouldBe` Just spendSummary {summaryMyInputs = Map.fromList [(externalAddr 0, MyInputs 50000 (legacyPath (Deriv :/ 0 :/ 0)) "" [])]}
-
     it "refuses a stored summary with an address that is not one of the network" $ do
       let json :: String
           json =
             [r|{
-              "type": "credit", "amount": 50000, "fee": 1000, "feebyte": 4, "size": 226,
-              "myoutputs": {"nonsense": {"value": 50000, "path": "/0/0", "label": ""}},
+              "type": "credit", "amount": 50000, "fee": 1000, "feebyte": 4, "size": 226, "locktime": 0,
+              "myoutputs": {"nonsense": {"value": 50000, "path": "/0/0", "type": "bip44", "label": ""}},
               "otheroutputs": {}, "nonstdoutputs": [], "myinputs": {}, "otherinputs": {}, "nonstdinputs": []
             }|]
           parsed :: Either String TxSummary
@@ -551,20 +500,7 @@ storingSpec ctx =
       inDatabaseE $ do
         pool <- testPool ctx
         _ <- record pool (payment ctx)
-        (fmap dBTxInfoTime <$> lift (storedRow pool (fakeTxHash 1))) `dbShouldBeE` Just (Just seenTime)
-
-    -- Summaries of version 3 of the database, as the migration copied them
-    it "tells the live summaries without their time, for the sync to fetch them again" $
-      inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (payment ctx)
-        _ <- record pool (spend ctx)
-        _ <- record pool (creditTx ctx (fakeTxHash 3) (Store.BlockRef 800002 1) (externalAddr 0) 20000)
-        let untime tid = lift $ P.update (txInfoKey pool tid) [DBTxInfoTime P.=. Nothing]
-        untime (fakeTxHash 1)
-        untime (fakeTxHash 3)
-        lift $ markTxInfoDead pool (fakeTxHash 3)
-        untimedSummaries pool `dbShouldBeE` [fakeTxHash 1]
+        (fmap dBTxInfoTime <$> lift (storedRow pool (fakeTxHash 1))) `dbShouldBeE` Just seenTime
 
     it "maps the live transactions to their blocks, leaving the dead ones out" $
       inDatabaseE $ do
@@ -672,7 +608,7 @@ listingSpec ctx =
     it "refuses a stored summary that does not decode, naming the transaction" $
       inDatabaseE $ do
         pool <- testPool ctx
-        lift $ P.insert_ $ DBTxInfo pool.poolPortfolio "btc" (hashBytes (fakeTxHash 9)) (S.encode (Store.BlockRef 800000 1)) (Just seenTime) 0 "nonsense" False fixtureTime
+        lift $ P.insert_ $ DBTxInfo pool.poolPortfolio "btc" (hashBytes (fakeTxHash 9)) (S.encode (Store.BlockRef 800000 1)) seenTime 0 "nonsense" False fixtureTime
         lift $
           dbShouldFailWith "The stored summary of transaction 0000000000000000000000000000000000000000000000000000000000000009 does not decode" $
             txsAfter pool Nothing Nothing

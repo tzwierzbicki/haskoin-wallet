@@ -8,9 +8,13 @@
 -- one network, m/purpose'/coin'/index': it has its portfolio, whose index
 -- is the last step of the path, its network, and its kind
 -- ("Haskoin.Wallet.Keys".'AccountKind'), with its key, its balances and
--- its address counts. The user never creates or names an account. A whole
--- portfolio has every account of 'portfolioAccounts', made together from
--- the seed ('createPortfolio').
+-- its address counts. The user never creates or names an account. A
+-- portfolio has every account of 'portfolioAccounts' from the moment it
+-- exists: they are made together, from the seed of the wallet or from the
+-- keys of a file of it ('createPortfolio', 'createPortfolioWith'). A
+-- portfolio that lacks accounts would need the mnemonic to be completed,
+-- since a public key of an account derives none of the others: their
+-- paths are hardened. So hw never makes one.
 --
 -- A command reaches an account through the portfolio it works in, then
 -- the network and the type its options or the configuration give
@@ -18,27 +22,18 @@
 -- a pool, the accounts of the portfolio on one network together
 -- ('choosePool').
 --
--- A portfolio is partial when it lacks some of its accounts. The step from
--- the database of hw 0.9 makes such portfolios, since a public account
--- key cannot derive the other accounts of its portfolio: the paths
--- between them are hardened. The seed fills them in ('fillWallet'), and so
--- does a file of the wallet. Until then a partial portfolio works with
--- the accounts it has, and a command that needs another one says how to
--- fill it in ('missingAccount').
---
--- The same seed must be one wallet. hw 0.9 could not tell that its
--- accounts on Bitcoin and on Bitcoin Cash were of one seed, so the step
--- from its database leaves them in two wallets. A command that holds the
--- seed finds every wallet whose keys the seed derives and merges them
--- into one ('adoptSeed').
+-- A seed has one wallet, the one with its fingerprint ('seedWallet'). The
+-- fingerprint is 32 bits of a hash, and another seed may have it. So the
+-- keys of the wallet are checked against those the seed derives, and a
+-- wallet of the fingerprint with other keys is refused, rather than given
+-- the portfolios of this seed.
 --
 -- A key is held by one account of a network at most. It is compared as a
 -- key, its public key and chain code, and not as the text of an extended
 -- key, which also names a child number that a file can change
 -- ('accountWithKey'). The test networks share their keys, so the accounts
 -- of a portfolio at one path hold one key, on each of those networks
--- ('checkSharedPath'). A portfolio is dated by its oldest account
--- ('insertAccount', 'mergePortfolios').
+-- ('checkSharedPath').
 module Haskoin.Wallet.Database.Account where
 
 import Conduit (MonadUnliftIO)
@@ -49,10 +44,9 @@ import Control.Monad.Reader (MonadTrans (lift))
 import Data.Aeson
 import Data.Aeson.Types (Parser)
 import Data.List (intercalate, nub, sortOn)
-import Data.Maybe (catMaybes, fromJust, fromMaybe, isJust, isNothing, listToMaybe)
+import Data.Maybe (fromJust, fromMaybe, isJust, listToMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
-import qualified Data.Text as Text
 import Data.Time (UTCTime, getCurrentTime)
 import Data.Word (Word64)
 import Database.Esqueleto.Legacy as E hiding (isNothing)
@@ -102,10 +96,10 @@ accountRef portfolio acc = AccountRef (portfolioPlace portfolio (accountNetwork 
 -- | The output descriptor of an account of the portfolio, as other wallets
 -- and Bitcoin Core take an account without its private key
 -- ("Haskoin.Wallet.Descriptor"): its key in the script function of its
--- kind, pkh or wpkh, with the origin of the key when hw knows the
--- fingerprint of the seed, which the wallet of the portfolio keeps, and
--- both chains. A descriptor without its origin still watches the account,
--- but a hardware wallet cannot match it to its seed.
+-- kind, pkh or wpkh, with the origin of the key, which names the
+-- fingerprint of the seed that the wallet of the portfolio keeps, and
+-- both chains. A hardware wallet matches the account to its seed by the
+-- origin.
 accountDescriptorText :: Portfolio -> DBAccount -> Text
 accountDescriptorText portfolio acc =
   descriptorText (accountDescriptor (accountKind acc) (portfolioFingerprint portfolio) (accountPath portfolio acc) (dBAccountXPubKey acc))
@@ -181,8 +175,7 @@ poolAccountOf pool kind =
   liftMaybe ("The portfolio has no " <> cs (kindName kind) <> " account on " <> pool.poolNetwork.name) =<< lift (poolAccount pool kind)
 
 -- | The pools of a portfolio: one for each network it has an account on,
--- in the order of the networks of a portfolio. A whole portfolio has all
--- eight, and a partial one those of the accounts it has.
+-- in the order of the networks of a portfolio, which is all eight
 portfolioPools :: (MonadUnliftIO m) => DBPortfolioId -> DB m [Pool]
 portfolioPools portfolioKey = do
   accounts <- portfolioAccountRows portfolioKey
@@ -240,8 +233,9 @@ chooseKind cfg net given = case given of
 
 -- | The account of the portfolio a command works on: on the network
 -- --network names or the default one, of the type --type names or the
--- default one ('chooseKind'). A partial portfolio may lack it, and the
--- refusal then says how to fill the portfolio in ('missingAccount').
+-- default one ('chooseKind'). A portfolio has an account of every type
+-- each of its networks has, and 'chooseKind' refuses a type the network
+-- does not have.
 chooseAccount ::
   (MonadUnliftIO m) =>
   Config ->
@@ -252,45 +246,12 @@ chooseAccount ::
 chooseAccount cfg portfolio netM kindM = do
   let net = commandNetwork cfg netM
   kind <- liftEither $ chooseKind cfg net kindM
-  found <- lift $ poolAccount (portfolioPool portfolio net) kind
-  maybe (throwError (missingAccount portfolio net (Just kind))) return found
+  poolAccountOf (portfolioPool portfolio net) kind
 
 -- | What the portfolio holds on the network a command works on, the one
--- --network names or the default one: its pool, which must have an
--- account. A partial portfolio may have none on the network, and the
--- refusal then says how to fill the portfolio in.
-choosePool :: (MonadUnliftIO m) => Config -> Portfolio -> Maybe Network -> ExceptT String (DB m) Pool
-choosePool cfg portfolio netM = do
-  let pool = portfolioPool portfolio (commandNetwork cfg netM)
-  accounts <- lift $ poolAccounts pool
-  when (null accounts) $ throwError (missingAccount portfolio pool.poolNetwork Nothing)
-  return pool
-
--- | The refusal of an account a partial portfolio does not have yet: of a
--- kind on a network, or of any kind there. It names the portfolio and
--- says how to fill it in, since the user cannot create the account.
-missingAccount :: Portfolio -> Network -> Maybe AccountKind -> String
-missingAccount portfolio net kindM =
-  cs (portfolioName (portfolioIndex portfolio.portfolioRow))
-    <> " of "
-    <> cs (walletName (walletIndex portfolio.portfolioWallet))
-    <> " has no "
-    <> maybe "" ((<> " ") . cs . kindName) kindM
-    <> "account on "
-    <> net.name
-    <> " yet. "
-    <> howToFillIn
-
--- | How a partial portfolio is filled in, as the refusals and the answers
--- tell it. A portfolio is partial when an upgrade from hw 0.9 made it,
--- with the accounts 0.9 kept, and when importwallet made it, from a file
--- that lacks it: the portfolio0 every wallet has is empty then. So the
--- text says what is missing, and not where it came from.
-howToFillIn :: String
-howToFillIn =
-  "It is a partial portfolio, which lacks accounts. \
-  \Fill it in with fillwallet on the computer that has the mnemonic, \
-  \or with importwallet and a file of the whole wallet that exportwallet wrote there."
+-- --network names or the default one: its pool
+choosePool :: Config -> Portfolio -> Maybe Network -> Pool
+choosePool cfg portfolio netM = portfolioPool portfolio (commandNetwork cfg netM)
 
 {- Storing accounts -}
 
@@ -298,14 +259,8 @@ howToFillIn =
 -- public key. A kind the network does not have is refused, and so is a
 -- key another account of the network holds: the same seed would then be
 -- in the database twice. So is a key that another account of the
--- portfolio at the same path does not hold ('checkSharedPath').
---
--- The first account of a portfolio gives the portfolio its creation date,
--- since the date of a portfolio is that of its oldest account. A
--- portfolio is without accounts until then only when it was made empty:
--- the portfolio 0 that the upgrade from hw 0.9 or importwallet makes for
--- a wallet that has none. Its date was then that of its wallet, or of the
--- import, and the day it is filled in is when its accounts begin.
+-- portfolio at the same path does not hold ('checkSharedPath'). A
+-- portfolio gets its accounts as it is created ('createPortfolioWith').
 insertAccount ::
   (MonadUnliftIO m) =>
   DBPortfolioId ->
@@ -319,8 +274,6 @@ insertAccount portfolioKey kind net ctx xpub = do
   checkKeyFree net ctx xpub
   checkSharedPath portfolioKey kind net ctx xpub
   time <- liftIO getCurrentTime
-  firstOne <- lift $ null <$> P.selectKeysList [DBAccountPortfolio P.==. portfolioKey] [P.LimitTo 1]
-  when firstOne $ lift $ P.update portfolioKey [DBPortfolioCreated P.=. time]
   let account =
         DBAccount
           { dBAccountPortfolio = portfolioKey,
@@ -358,8 +311,8 @@ checkKeyFree net ctx xpub = do
 -- three test networks of Bitcoin another: each path gives one key. Two
 -- keys there are not of one seed, and receive would give different
 -- addresses on two networks that must give the same. A file of a wallet
--- that does so is refused, whether it makes the portfolio or fills it in.
--- The refusal names the path and the two networks.
+-- that does so is refused. The refusal names the path and the two
+-- networks.
 checkSharedPath :: (MonadUnliftIO m) => DBPortfolioId -> AccountKind -> Network -> Ctx -> XPubKey -> ExceptT String (DB m) ()
 checkSharedPath portfolioKey kind net ctx xpub = do
   held <- lift $ portfolioAccountRows portfolioKey
@@ -411,57 +364,75 @@ updateAccountBalances accId = do
         where_ $ a ^. DBAddressAccount ==. val accId
         return $ sum_ $ a ^. field
 
-{- Whole and partial portfolios -}
-
--- | The accounts a portfolio lacks, by network and kind, in the order of
--- 'portfolioAccounts': none for a whole portfolio
-missingAccounts :: (MonadUnliftIO m) => DBPortfolioId -> DB m [(Network, AccountKind)]
-missingAccounts portfolioKey = do
-  held <- portfolioAccountRows portfolioKey
-  let has (net, kind) = any (\(_, acc) -> accountNetwork acc == net && accountKind acc == kind) held
-  return (filter (not . has) portfolioAccounts)
-
--- | Whether a portfolio lacks some of its accounts
-isPartial :: (MonadUnliftIO m) => DBPortfolioId -> DB m Bool
-isPartial portfolioKey = not . null <$> missingAccounts portfolioKey
-
--- | Add to a portfolio the accounts it lacks, with the keys the seed
--- derives at its index, and say how many were added. An account the
--- portfolio has must hold the key the seed derives for it: a portfolio of
--- another seed is refused, and nothing is added. Every account is
--- checked before the first one is added, those the portfolio has and
--- those it lacks, whose keys no other portfolio may hold: a refusal
--- leaves the portfolio as it was, whether or not the caller undoes its
--- transaction.
-fillPortfolio :: (MonadUnliftIO m) => Ctx -> PublicSeed -> Portfolio -> ExceptT String (DB m) Natural
-fillPortfolio ctx seed portfolio = do
-  let index = portfolioIndex portfolio.portfolioRow
-      name = cs (portfolioName index) :: String
-  keys <-
-    liftMaybe ("The seed has no keys for " <> name <> ": a key at that index is invalid, and BIP32 skips it")
-      =<< liftIO (seedPortfolioKeys seed index)
-  held <- lift $ portfolioAccountRows portfolio.portfolioId
-  lacking <- fmap catMaybes . forM keys $ \(net, kind, key) ->
-    case [acc | (_, acc) <- held, accountNetwork acc == net, accountKind acc == kind] of
-      acc : _
-        | accountXPubKey ctx acc == key -> return Nothing
-        | otherwise ->
-            throwError $
-              "The " <> cs (kindName kind) <> " account of " <> name <> " on " <> net.name <> " is not of this seed: it has another key"
-      [] -> return (Just (net, kind, key))
-  forM_ lacking $ \(net, _, key) -> checkKeyFree net ctx key
-  forM_ lacking $ \(net, kind, key) -> insertAccount portfolio.portfolioId kind net ctx key
-  return (fromIntegral (length lacking))
+{- Creating portfolios -}
 
 -- | Create a whole portfolio of a wallet at an index, which must be free,
--- from the seed of the wallet: every account of 'portfolioAccounts'. The
--- portfolio is read again once it has them, since its first account gives
--- it its creation date ('insertAccount').
+-- with the keys the seed of the wallet derives there: every account of
+-- 'portfolioAccounts'. An index whose child key is invalid, which BIP32
+-- says to skip, is refused: 'nextPortfolioIndex' passes it over.
 createPortfolio :: (MonadUnliftIO m) => Ctx -> PublicSeed -> (DBWalletId, DBWallet) -> Natural -> ExceptT String (DB m) Portfolio
-createPortfolio ctx seed (walletId, wallet) index = do
-  (key, row) <- insertPortfolio walletId index ""
-  _ <- fillPortfolio ctx seed (Portfolio key row walletId wallet)
-  getPortfolio key
+createPortfolio ctx seed held index = do
+  keys <-
+    liftMaybe ("The seed has no keys for " <> cs (portfolioName index) <> ": a key at that index is invalid, and BIP32 skips it")
+      =<< liftIO (seedPortfolioKeys seed index)
+  createPortfolioWith ctx held index "" keys
+
+-- | Create a whole portfolio of a wallet at an index, which must be free,
+-- with a description and the key of each of its accounts: newportfolio
+-- and recover give the keys the seed derives ('createPortfolio'), and
+-- importwallet those of a file. The portfolio and its twelve accounts are
+-- written together, and the portfolio is dated as they are.
+--
+-- The keys must be those of the twelve accounts of 'portfolioAccounts',
+-- each once: a portfolio has all of them or does not exist. A key that
+-- another account of its network holds is refused ('checkKeyFree'), and
+-- so are two keys for the accounts of one path, as the test networks
+-- share theirs ('checkSharedPath'). These are checked before the first
+-- row is written, so that a refusal leaves the database as it was.
+createPortfolioWith ::
+  (MonadUnliftIO m) =>
+  Ctx ->
+  (DBWalletId, DBWallet) ->
+  Natural ->
+  Text ->
+  [(Network, AccountKind, XPubKey)] ->
+  ExceptT String (DB m) Portfolio
+createPortfolioWith ctx (walletId, wallet) index description keys = do
+  let given = [(net, kind) | (net, kind, _) <- keys]
+      name = cs (portfolioName index) <> " of " <> cs (walletName (walletIndex wallet)) :: String
+  unless (length given == length portfolioAccounts && all (`elem` given) portfolioAccounts) $
+    throwError (name <> " cannot be created without a key for each of its twelve accounts, one for every network and type")
+  forM_ keys $ \(net, _, key) -> checkKeyFree net ctx key
+  forM_ (take 1 (sharedPathClashes keys)) $ \(kind, one, other) ->
+    throwError $
+      "The "
+        <> cs (kindName kind)
+        <> " account "
+        <> pathToStr (accountDeriv kind one index)
+        <> " of "
+        <> name
+        <> " has one key on "
+        <> one.name
+        <> " and would get another on "
+        <> other.name
+        <> ": the networks of one path share its key"
+  (key, row) <- insertPortfolio walletId index description
+  forM_ keys $ \(net, kind, xpub) -> insertAccount key kind net ctx xpub
+  return (Portfolio key row walletId wallet)
+
+-- | The accounts of the keys given that share a path and have two keys,
+-- by their kind and their two networks: the test networks share the coin
+-- type 1, so their accounts of one kind must hold one key ('checkSharedPath')
+sharedPathClashes :: [(Network, AccountKind, XPubKey)] -> [(AccountKind, Network, Network)]
+sharedPathClashes keys =
+  [ (kind, one, other)
+    | ((one, kind, key), i) <- zip keys [0 :: Int ..],
+      ((other, otherKind, otherKey), j) <- zip keys [0 ..],
+      i < j,
+      otherKind == kind,
+      other.bip44Coin == one.bip44Coin,
+      not (sameKey key otherKey)
+  ]
 
 -- | The lowest index at which the wallet has no portfolio and the seed
 -- has keys, with those keys: where newportfolio creates the next
@@ -479,20 +450,6 @@ nextPortfolioIndex seed walletId = do
             if isJust keys then return index else go (index + 1)
   go 0
 
--- | Fill in every portfolio of a wallet from its seed, and make its
--- portfolio 0 when it has none: a wallet always has portfolio 0. Returns
--- how many accounts were added. The wallet must be the seed's
--- ('adoptSeed').
-fillWallet :: (MonadUnliftIO m) => Ctx -> PublicSeed -> (DBWalletId, DBWallet) -> ExceptT String (DB m) Natural
-fillWallet ctx seed held@(walletId, _) = do
-  first <- lift $ portfolioAt walletId 0
-  made <- case first of
-    Just _ -> return 0
-    Nothing -> fromIntegral . length <$> (lift . portfolioAccountRows . (.portfolioId) =<< createPortfolio ctx seed held 0)
-  portfolios <- lift $ walletPortfolios held
-  filled <- sum <$> mapM (fillPortfolio ctx seed) portfolios
-  return (made + filled)
-
 {- The wallet of a seed -}
 
 -- | Whether the seed derives the key of an account of a portfolio at the
@@ -502,160 +459,25 @@ seedDerives ctx seed portfolio acc = do
   derived <- seedAccountKey seed (accountKind acc) (accountNetwork acc) (portfolioIndex portfolio.portfolioRow)
   return (derived == Just (accountXPubKey ctx acc))
 
--- | The wallets of a seed: those whose master key has its fingerprint, and
--- those of no known fingerprint whose accounts the seed derives. The
--- second kind is how a wallet made from the accounts of hw 0.9 is
--- recognized, since that version kept no master fingerprint.
+-- | The wallet of a seed: the one whose master key has the fingerprint of
+-- the seed, if the database has it. newportfolio --existing and recover
+-- add their portfolios to it.
 --
--- The keys decide, not the fingerprint, which is 32 bits of a hash. A
--- wallet with the fingerprint of the seed and a key the seed does not
--- derive is of another seed, and is refused rather than mixed with this
--- one. So is a wallet that holds keys of the seed among others.
-seedWallets :: (MonadUnliftIO m) => Ctx -> PublicSeed -> ExceptT String (DB m) [(DBWalletId, DBWallet)]
-seedWallets ctx seed = do
-  wallets <- lift getWallets
-  fmap concat . forM wallets $ \held@(_, wallet) -> do
+-- The fingerprint is 32 bits of a hash, so another seed may have it. The
+-- portfolios of the wallet must hold the keys the seed derives at their
+-- indexes: a wallet of the fingerprint with other keys is of another
+-- seed, and is refused rather than given the portfolios of this one.
+seedWallet :: (MonadUnliftIO m) => Ctx -> PublicSeed -> ExceptT String (DB m) (Maybe (DBWalletId, DBWallet))
+seedWallet ctx seed = do
+  foundM <- lift $ walletWithFingerprint (seedFingerprint seed)
+  forM_ foundM $ \held@(_, wallet) -> do
     portfolios <- lift $ walletPortfolios held
     accounts <- fmap concat . forM portfolios $ \portfolio ->
       map ((portfolio,) . snd) <$> lift (portfolioAccountRows portfolio.portfolioId)
     derived <- liftIO $ mapM (uncurry (seedDerives ctx seed)) accounts
-    let name = cs (walletName (walletIndex wallet)) :: String
-        sameFingerprint = walletFingerprint wallet == Just (seedFingerprint seed)
-    if
-      | null accounts -> return [held | sameFingerprint]
-      | and derived -> return [held]
-      | or derived -> throwError (name <> " holds keys of this seed among keys of another: its accounts are not of one seed")
-      | sameFingerprint -> throwError (name <> " has the fingerprint of this seed and other keys: it is of another seed with the same fingerprint")
-      | otherwise -> return []
-
--- | What became of the wallets of a seed once a command holding the seed
--- took them over ('adoptSeed')
-data Adopted = Adopted
-  { -- | The wallet of the seed, with its fingerprint
-    adoptedWallet :: !(DBWalletId, DBWallet),
-    -- | The indexes of the wallets merged into it, which are gone
-    adoptedMerged :: ![Natural]
-  }
-  deriving (Eq, Show)
-
--- | Make the wallets of a seed one wallet that knows its fingerprint, and
--- give that wallet, or Nothing when the database has no wallet of the
--- seed. The wallets of the seed ('seedWallets') are merged into the one
--- with the lowest index ('mergeWallets'), which then records the
--- fingerprint of the seed.
---
--- The commands that make portfolios from a seed do this first:
--- newportfolio with a mnemonic the user has already, recover and
--- fillwallet. The seed proves which wallets are its own, which nothing
--- else in the database of hw 0.9 does.
-adoptSeed :: (MonadUnliftIO m) => Ctx -> PublicSeed -> ExceptT String (DB m) (Maybe Adopted)
-adoptSeed ctx seed = do
-  matches <- seedWallets ctx seed
-  case matches of
-    [] -> return Nothing
-    (targetId, _) : others -> do
-      forM_ others (mergeWallets targetId)
-      lift $ P.update targetId [DBWalletFingerprint P.=. Just (fingerprintToText (seedFingerprint seed))]
-      wallet <- getWalletById targetId
-      return $ Just (Adopted (targetId, wallet) (walletIndex . snd <$> others))
-
--- | Merge a wallet into another one of the same seed, and delete it. Each
--- of its portfolios moves to the other wallet, or into the portfolio the
--- other wallet has at the same index ('mergePortfolios'). The description
--- of the wallet that stays keeps what the other one said.
---
--- The wallet that stays is given by its key, and its description is read
--- here, at each merge. A seed may have three wallets or more, merged one
--- after the other into the same one. A row read before the first merge
--- would hold the description from before it, and each merge would write
--- that one with its own: only the last description merged would stay.
-mergeWallets :: (MonadUnliftIO m) => DBWalletId -> (DBWalletId, DBWallet) -> ExceptT String (DB m) ()
-mergeWallets targetId (sourceId, source) = do
-  portfolios <- lift $ getPortfolios sourceId
-  forM_ portfolios $ \moved@(movedId, row) -> do
-    existing <- lift $ portfolioAt targetId (portfolioIndex row)
-    case existing of
-      Nothing -> lift $ P.update movedId [DBPortfolioWallet P.=. targetId]
-      Just kept -> mergePortfolios kept moved
-  target <- getWalletById targetId
-  lift $ P.update targetId [DBWalletDescription P.=. joinDescriptions [dBWalletDescription target, dBWalletDescription source]]
-  lift $ P.delete sourceId
-
--- | Descriptions joined into one, each once, the empty ones left out: a
--- wallet or a portfolio made of several keeps what each was called
-joinDescriptions :: [Text] -> Text
-joinDescriptions = Text.intercalate ", " . nub . filter (not . Text.null)
-
--- | Merge a portfolio into another one of the same seed and index, and
--- delete it: its accounts move, with their addresses and coins, and so do
--- its transactions, their labels and its pending transactions. The two
--- must not have the same account: the keys would differ, or be twice in
--- the database.
---
--- A network both portfolios have an account on is a pool of two accounts
--- from then on, and its live summaries were made for one account alone.
--- They are dropped, with the block the sync reached, so that the next
--- sync makes them again for the pool. The dead summaries are kept, and
--- move to the portfolio that stays: the store no longer lists a dead
--- transaction, so no sync would make them again, and the history would
--- lose them for good. When both portfolios have the same transaction
--- dead, the summary of the one that stays is kept. The labels are kept
--- too, that of the portfolio that stays winning.
---
--- The portfolio that stays keeps the older of the two creation dates. A
--- portfolio without accounts gives no date: the empty portfolio 0 that
--- the upgrade from hw 0.9 makes for a wallet without an account at index
--- 0 bears the date of its wallet, which may be older than any account
--- the merge brings it. The date of a portfolio is that of its oldest
--- account.
-mergePortfolios :: (MonadUnliftIO m) => (DBPortfolioId, DBPortfolio) -> (DBPortfolioId, DBPortfolio) -> ExceptT String (DB m) ()
-mergePortfolios (keptId, kept) (movedId, moved) = do
-  keptAccounts <- lift $ portfolioAccountRows keptId
-  movedAccounts <- lift $ portfolioAccountRows movedId
-  forM_ movedAccounts $ \(_, acc) ->
-    when (any (\(_, other) -> dBAccountNetwork other == dBAccountNetwork acc && dBAccountPurpose other == dBAccountPurpose acc) keptAccounts) $
-      throwError $
-        "The two portfolios " <> cs (portfolioName (portfolioIndex kept)) <> " of the seed both have a " <> cs (kindName (accountKind acc)) <> " account on " <> cs (dBAccountNetwork acc) <> ": they cannot be merged"
-  let shared = [network | network <- nub (dBAccountNetwork . snd <$> movedAccounts), network `elem` (dBAccountNetwork . snd <$> keptAccounts)]
-  lift $ do
-    forM_ shared $ \network -> do
-      forM_ [keptId, movedId] $ \key -> do
-        P.deleteWhere [DBTxInfoPortfolio P.==. key, DBTxInfoNetwork P.==. network, DBTxInfoDead P.==. False]
-        P.deleteWhere [DBSyncedBlockPortfolio P.==. key, DBSyncedBlockNetwork P.==. network]
-      -- A dead summary of the portfolio that stays wins over the same one
-      -- of the other
-      deads <- P.selectList [DBTxInfoPortfolio P.==. movedId, DBTxInfoNetwork P.==. network] []
-      forM_ deads $ \(P.Entity deadKey dead) -> do
-        P.delete deadKey
-        heldM <- P.get (DBTxInfoKey keptId network (dBTxInfoTxid dead))
-        when (isNothing heldM) $ P.insert_ (dead {dBTxInfoPortfolio = keptId})
-      -- A label of the portfolio that stays wins over one of the other
-      labels <- P.selectList [DBTxLabelPortfolio P.==. movedId, DBTxLabelNetwork P.==. network] []
-      forM_ labels $ \(P.Entity labelKey label) -> do
-        P.delete labelKey
-        heldM <- P.get (DBTxLabelKey keptId network (dBTxLabelTxid label))
-        when (isNothing heldM) $ P.insert_ (label {dBTxLabelPortfolio = keptId})
-    P.updateWhere [DBAccountPortfolio P.==. movedId] [DBAccountPortfolio P.=. keptId]
-    P.updateWhere [DBTxInfoPortfolio P.==. movedId] [DBTxInfoPortfolio P.=. keptId]
-    P.updateWhere [DBTxLabelPortfolio P.==. movedId] [DBTxLabelPortfolio P.=. keptId]
-    P.updateWhere [DBPendingTxPortfolio P.==. movedId] [DBPendingTxPortfolio P.=. keptId]
-    P.updateWhere [DBSyncedBlockPortfolio P.==. movedId] [DBSyncedBlockPortfolio P.=. keptId]
-    P.update
-      keptId
-      [ DBPortfolioDescription P.=. joinDescriptions [dBPortfolioDescription kept, dBPortfolioDescription moved],
-        DBPortfolioCreated P.=. mergedCreated (keptAccounts, kept) (movedAccounts, moved)
-      ]
-    P.delete movedId
-
--- | The creation date of two portfolios merged into one: the older of
--- their dates, among those of the portfolios that have accounts. A
--- portfolio without accounts has no date of an account to give
--- ('mergePortfolios'). When neither has any, the older date stays.
-mergedCreated :: ([a], DBPortfolio) -> ([a], DBPortfolio) -> UTCTime
-mergedCreated (keptAccounts, kept) (movedAccounts, moved) =
-  case [dBPortfolioCreated row | (accounts, row) <- [(keptAccounts, kept), (movedAccounts, moved)], not (null accounts)] of
-    [] -> min (dBPortfolioCreated kept) (dBPortfolioCreated moved)
-    dated -> minimum dated
+    unless (and derived) $
+      throwError (cs (walletName (walletIndex wallet)) <> " has the fingerprint of this seed and other keys: it is of another seed with the same fingerprint. Nothing was changed")
+  return foundM
 
 {- Deleting -}
 
@@ -715,14 +537,11 @@ data PortfolioView = PortfolioView
     viewDescription :: !Text,
     -- | The description of its wallet
     viewWalletDescription :: !Text,
-    -- | The fingerprint of the seed of its wallet, when hw knows it
-    viewFingerprint :: !(Maybe Fingerprint),
+    -- | The fingerprint of the seed of its wallet
+    viewFingerprint :: !Fingerprint,
     viewCreated :: !UTCTime,
-    -- | The accounts it lacks, by network and type: none for a whole
-    -- portfolio
-    viewMissing :: ![(Network, AccountKind)],
-    -- | Its figures on each network it has an account on, in the order of
-    -- the networks of a portfolio
+    -- | Its figures on each of its networks, in the order of the networks
+    -- of a portfolio
     viewNetworks :: ![NetworkView]
   }
   deriving (Eq, Show)
@@ -762,7 +581,6 @@ data AccountKeys = AccountKeys
 portfolioView :: (MonadUnliftIO m) => Portfolio -> (Pool -> ExceptT String (DB m) Word64) -> ExceptT String (DB m) PortfolioView
 portfolioView portfolio spendableOf = do
   accounts <- lift $ portfolioAccountRows portfolio.portfolioId
-  missing <- lift $ missingAccounts portfolio.portfolioId
   networks <- forM (nub (accountNetwork . snd <$> accounts)) $ \net -> do
     let onNet = [acc | (_, acc) <- accounts, accountNetwork acc == net]
     spendable <- spendableOf (portfolioPool portfolio net)
@@ -786,13 +604,8 @@ portfolioView portfolio spendableOf = do
         viewWalletDescription = dBWalletDescription portfolio.portfolioWallet,
         viewFingerprint = portfolioFingerprint portfolio,
         viewCreated = dBPortfolioCreated portfolio.portfolioRow,
-        viewMissing = missing,
         viewNetworks = networks
       }
-
--- | Whether the view is of a partial portfolio, which lacks accounts
-viewPartial :: PortfolioView -> Bool
-viewPartial = not . null . viewMissing
 
 instance ToJSON AccountKeys where
   toJSON keys =
@@ -850,8 +663,6 @@ instance ToJSON PortfolioView where
              "walletdescription" .= viewWalletDescription view,
              "fingerprint" .= viewFingerprint view,
              "created" .= viewCreated view,
-             "partial" .= viewPartial view,
-             "missing" .= [object ["network" .= net.name, "type" .= kind] | (net, kind) <- viewMissing view],
              "networks" .= viewNetworks view
            ]
 
@@ -861,12 +672,9 @@ instance FromJSON PortfolioView where
       <$> parsePortfolioRef o
       <*> o .: "description"
       <*> o .: "walletdescription"
-      <*> o .:? "fingerprint"
+      <*> o .: "fingerprint"
       <*> o .: "created"
-      <*> (mapM missing =<< o .: "missing")
       <*> o .: "networks"
-    where
-      missing = withObject "missing account" $ \m -> (,) <$> (networkNamedIn =<< m .: "network") <*> m .: "type"
 
 -- | The networks of a text, as a sentence names them: "btc", "btc and
 -- bch", "btc, bch and btctest"
@@ -876,7 +684,3 @@ networksText nets =
     [] -> ""
     [one] -> one
     final : others -> intercalate ", " (reverse others) <> " and " <> final
-
--- | Whether nothing is known of the seed of a wallet
-fingerprintUnknown :: DBWallet -> Bool
-fingerprintUnknown = isNothing . dBWalletFingerprint

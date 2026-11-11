@@ -24,7 +24,7 @@ import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Bip329 (Record (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), PortfolioRef (..))
-import Haskoin.Wallet.Keys (AccountKind (..), PoolPath (..), accountDeriv, indexBound, networkKinds, portfolioAccounts)
+import Haskoin.Wallet.Keys (AccountKind (..), PoolPath (..), accountDeriv, indexBound, networkKinds)
 import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), PortfolioImport (..), WalletImport (..))
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..))
 import Haskoin.Wallet.Sync
@@ -98,9 +98,8 @@ arbitraryPortfolioView ctx =
     <$> arbitraryPortfolioRef
     <*> arbitraryText
     <*> arbitraryText
-    <*> arbitraryMaybe arbitraryFingerprint
+    <*> arbitraryFingerprint
     <*> arbitraryUTCTime
-    <*> sublistOf portfolioAccounts
     <*> resize 3 (listOf (arbitraryNetworkView ctx))
 
 arbitraryNetworkView :: Ctx -> Gen NetworkView
@@ -328,14 +327,8 @@ arbitraryResponse net ctx =
     [ ResponseError <$> arbitraryText,
       ResponseNewPortfolio
         <$> arbitraryMaybe arbitraryNewSecret
-        <*> arbitraryPortfolioView ctx
-        <*> resize 3 (listOf arbitraryNatural)
-        <*> arbitraryNatural,
+        <*> arbitraryPortfolioView ctx,
       ResponsePortfolio <$> arbitraryPortfolioView ctx,
-      ResponseFilled
-        <$> resize 3 (listOf arbitraryNatural)
-        <*> arbitraryNatural
-        <*> resize 3 (listOf (arbitraryPortfolioView ctx)),
       ResponseChecked <$> arbitraryPortfolioRef <*> arbitrary <*> arbitraryText,
       ResponseDeleted <$> arbitraryText <*> resize 2 (listOf ((,) <$> arbitraryText <*> arbitraryNatural)),
       ResponseDefaults <$> resize 4 (listOf ((,) <$> arbitraryText <*> arbitraryText)) <*> (cs <$> arbitraryText),
@@ -380,8 +373,6 @@ arbitraryResponse net ctx =
         <*> arbitraryNatural
         <*> arbitraryMaybe arbitraryNatural
         <*> resize 3 (listOf arbitraryNatural)
-        <*> resize 3 (listOf arbitraryNatural)
-        <*> arbitraryNatural
         <*> (resize 10 $ listOf $ arbitrarySyncRes net)
         <*> (resize 10 $ listOf $ (,) <$> arbitraryNetwork <*> arbitraryForeignFunds)
         <*> (resize 3 $ listOf arbitraryNetwork)
@@ -423,10 +414,9 @@ arbitraryWalletImport :: Gen WalletImport
 arbitraryWalletImport =
   WalletImport
     <$> arbitraryNatural
-    <*> arbitraryMaybe arbitraryFingerprint
+    <*> arbitraryFingerprint
     <*> arbitrary
-    <*> resize 3 (listOf arbitraryNatural)
-    <*> resize 3 (listOf (PortfolioImport <$> arbitraryNatural <*> arbitrary <*> arbitraryNatural <*> arbitraryNatural))
+    <*> resize 3 (listOf (PortfolioImport <$> arbitraryNatural <*> arbitrary))
 
 -- | What became of an account a file names
 arbitraryAccountImport :: Network -> Gen AccountImport

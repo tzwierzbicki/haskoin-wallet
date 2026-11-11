@@ -185,11 +185,13 @@ instance FromJSON AccountRef where
 walletIndex :: DBWallet -> Natural
 walletIndex = fromIntegral . dBWalletIndex
 
--- | The fingerprint of the master key of a wallet, when hw knows it. It
--- does not for a wallet made from the accounts of hw 0.9, until the
--- wallet is filled in.
-walletFingerprint :: DBWallet -> Maybe Fingerprint
-walletFingerprint wallet = eitherToMaybe . textToFingerprint =<< dBWalletFingerprint wallet
+-- | The fingerprint of the master key of a wallet. Every wallet has one:
+-- hw creates a wallet from its seed, or from a file of the wallet, which
+-- names it. No two wallets have the same.
+walletFingerprint :: DBWallet -> Fingerprint
+walletFingerprint wallet =
+  either (const (error "Invalid fingerprint in database")) id $
+    textToFingerprint (dBWalletFingerprint wallet)
 
 -- | Every wallet, in the order of their indexes
 getWallets :: (MonadUnliftIO m) => DB m [(DBWalletId, DBWallet)]
@@ -212,21 +214,24 @@ walletAt index
 getWalletById :: (MonadUnliftIO m) => DBWalletId -> ExceptT String (DB m) DBWallet
 getWalletById walletId = liftMaybe "Invalid wallet" =<< lift (P.get walletId)
 
--- | The wallet whose master key has the fingerprint, if there is one
+-- | The wallet whose master key has the fingerprint, if there is one.
+-- This is how hw finds the wallet of a seed, and of a file of a wallet.
 walletWithFingerprint :: (MonadUnliftIO m) => Fingerprint -> DB m (Maybe (DBWalletId, DBWallet))
 walletWithFingerprint fingerprint =
-  fmap entityPair <$> P.selectFirst [DBWalletFingerprint P.==. Just (fingerprintToText fingerprint)] []
+  fmap entityPair <$> P.getBy (UniqueWalletFingerprint (fingerprintToText fingerprint))
 
 -- | A new wallet, at the lowest free index, with the fingerprint of its
--- master key when known, and no description
-insertWallet :: (MonadUnliftIO m) => Maybe Fingerprint -> DB m (DBWalletId, DBWallet)
-insertWallet fingerprintM = do
+-- master key, and no description. The caller has looked for a wallet of
+-- the fingerprint first ('walletWithFingerprint'): the database refuses a
+-- second one.
+insertWallet :: (MonadUnliftIO m) => Fingerprint -> DB m (DBWalletId, DBWallet)
+insertWallet fingerprint = do
   taken <- map (walletIndex . snd) <$> getWallets
   time <- liftIO getCurrentTime
   let wallet =
         DBWallet
           { dBWalletIndex = fromIntegral (lowestFree taken),
-            dBWalletFingerprint = fingerprintToText <$> fingerprintM,
+            dBWalletFingerprint = fingerprintToText fingerprint,
             dBWalletDescription = "",
             dBWalletCreated = time
           }
@@ -303,9 +308,8 @@ data Portfolio = Portfolio
 portfolioRef :: Portfolio -> PortfolioRef
 portfolioRef portfolio = PortfolioRef (walletIndex portfolio.portfolioWallet) (portfolioIndex portfolio.portfolioRow)
 
--- | The fingerprint of the seed of the portfolio, that of its wallet,
--- when hw knows it
-portfolioFingerprint :: Portfolio -> Maybe Fingerprint
+-- | The fingerprint of the seed of the portfolio, that of its wallet
+portfolioFingerprint :: Portfolio -> Fingerprint
 portfolioFingerprint = walletFingerprint . (.portfolioWallet)
 
 -- | What the portfolio holds on a network
