@@ -1,11 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The web client of hw, as it tells why it could not ask the store: an
--- error the store answered, a store out of reach, or an answer it could
--- not read, and whether it reached the host at all. Then the health
--- checks of the stores of several networks, which tell a network the host
--- does not serve from a store that is down, and stop at a host hw could
--- not reach.
+-- error the store answered, in binary or in JSON, a store out of reach,
+-- or an answer it could not read, and whether it reached the host at
+-- all. Then the raw transactions in an answer, in the formats of the old
+-- and new versions of haskoin-store, and the health checks of the stores
+-- of several networks, which tell a network the host does not serve from
+-- a store that is down, and stop at a host hw could not reach.
 -- The questions themselves are played out against scripted stores in the
 -- specs of the sync and of the pending transactions.
 module Haskoin.Wallet.StoreSpec (spec) where
@@ -13,14 +14,19 @@ module Haskoin.Wallet.StoreSpec (spec) where
 import Control.Exception (ErrorCall (..), throwIO, toException)
 import Control.Monad.Except (ExceptT, catchError, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
+import qualified Data.ByteString.Lazy as BL
+import Data.Bytes.Put (runPutL)
+import Data.Bytes.Serial (serialize)
 import Data.Default (def)
 import Data.IORef (modifyIORef, newIORef, readIORef)
+import Data.String.Conversions (cs)
 import Data.Word (Word64)
 import qualified Haskoin.Store.Data as Store
 import Haskoin (Network, bch, bchRegTest, btc, btcRegTest, btcTest, prepareContext, txHash)
 import Haskoin.Wallet.Config (Config (..))
+import Haskoin.Wallet.HwTestUtils (withServerSending)
 import Haskoin.Wallet.Store
-import Haskoin.Wallet.TestUtils (emptyStore, fakeTxHash, notServed, otherAddr, replaced, spendingTx, storeTx, toStore, unhealthy, unreachableHost)
+import Haskoin.Wallet.TestUtils (emptyStore, fakeTxHash, hexBytes, notServed, otherAddr, replaced, spendingTx, storeTx, toStore, unhealthy, unreachableHost)
 import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), defaultRequest)
 import Network.TLS (AlertDescription (..), TLSError (..), TLSException (..))
 import Test.Hspec
@@ -37,7 +43,9 @@ failingWith content = liftIO $ throwIO (HttpExceptionRequest defaultRequest cont
 spec :: Spec
 spec = do
   callSpec
+  answeredErrorSpec
   reachedSpec
+  rawSpec
   healthSpec
   failureSpec
   broadcastSpec
@@ -81,6 +89,25 @@ callSpec =
       called (return [5, error "not enough bytes"])
         `shouldReturn` Left "The store at http://store.test/ gave an answer hw could not read: not enough bytes"
 
+-- | The error in an answer of the store. haskoin-store sends it in binary
+-- from version 1.9.0, and sent it in JSON before.
+answeredErrorSpec :: Spec
+answeredErrorSpec =
+  describe "The error in an answer of the store" $ do
+    -- 03 is the error of the user, then its length, 6, in eight bytes,
+    -- and the bytes of "bad tx"
+    it "is read in binary when the store sends binary, as haskoin-store does from version 1.9.0" $
+      answeredError (Just "application/octet-stream") (hexBytes "030000000000000006626164207478")
+        `shouldBe` Just (Store.UserError "bad tx")
+
+    it "is read in JSON when the store sends JSON, as haskoin-store did before" $
+      answeredError (Just "application/json; charset=utf-8") "{\"error\":\"not-found-or-invalid-arg\",\"message\":\"Item not found\"}"
+        `shouldBe` Just Store.ThingNotFound
+
+    it "is none for the error page of a proxy in front of a store that is down" $
+      answeredError (Just "text/html") "<html><body><h1>502 Bad Gateway</h1></body></html>"
+        `shouldBe` Nothing
+
 -- | The failures of a call, told apart by whether the host was reached.
 -- The health check needs to know: a host that could not be reached would
 -- fail the same way for every network.
@@ -111,6 +138,45 @@ reachedSpec =
     it "does not take any other failure inside the web client for a host it could not reach" $
       runExceptT (webCallApart "http://store.test/" (failingWith (InternalException (toException (ErrorCall "boom")))))
         `shouldReturn` Left (CallFailed "The store at http://store.test/ could not be reached: InternalException boom")
+
+-- | The raw transactions in an answer of the store. haskoin-store writes
+-- their count first from version 1.9.0, and wrote them one after the other
+-- before. The public server can run both versions at once.
+rawSpec :: Spec
+rawSpec =
+  prepareContext $ \ctx ->
+    describe "The raw transactions in an answer of the store" $ do
+      let payment = spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 20000)]
+          otherPayment = spendingTx ctx [(fakeTxHash 2, 0)] [(otherAddr 1, 30000)]
+          bytesOf tx = runPutL (serialize tx)
+          hex = BL.fromStrict . hexBytes
+
+      it "are read with their count first, as haskoin-store writes them from version 1.9.0" $
+        rawTxsAnswer (hex "0000000000000002" <> bytesOf payment <> bytesOf otherPayment)
+          `shouldBe` Right [payment, otherPayment]
+
+      it "are read one after the other, as haskoin-store wrote them before" $
+        rawTxsAnswer (bytesOf payment <> bytesOf otherPayment)
+          `shouldBe` Right [payment, otherPayment]
+
+      it "are none when the count is zero" $
+        rawTxsAnswer (hex "0000000000000000") `shouldBe` Right []
+
+      -- An older store that knows none of the transactions asked
+      it "are none when the answer of an older store is empty" $
+        rawTxsAnswer "" `shouldBe` Right []
+
+      -- Three counted, and two sent
+      it "are refused when the count does not match the transactions after it" $
+        rawTxsAnswer (hex "0000000000000003" <> bytesOf payment <> bytesOf otherPayment)
+          `shouldBe` Left "the list of raw transactions is in neither format of haskoin-store, with its count first or without"
+
+      -- What a store of version 1.9.0 answers, which hw could not read
+      -- before
+      it "are read with their count first from the web store" $
+        withServerSending (hex "0000000000000001" <> bytesOf payment) $ \_ url ->
+          runExceptT (storeRawTransactions (webStore ctx (def :: Config) {configHost = cs url} btc) [txHash payment])
+            `shouldReturn` Right [payment]
 
 -- | The health checks of the stores of several networks. sync and recover
 -- go over every network, and no host serves them all.

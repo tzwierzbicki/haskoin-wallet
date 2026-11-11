@@ -648,5 +648,6 @@ storeApp ctx store req respond = do
     query name = do
       found <- optionalQuery name
       maybe (throwError $ "Missing parameter " <> show name) return found
-    -- A store whose blocks, transactions and peers are all as they should be
-    healthy = Store.HealthCheck (Store.BlockHealth 0 0 7) (Store.TimeHealth 0 3600) (Store.TimeHealth 0 3600) (Store.MaxHealth 0 10000) (Store.CountHealth 8 1) "btc" "fake" 1700000000
+    -- A store whose blocks, transactions and peers are all as they should
+    -- be, without a Redis cache
+    healthy = Store.HealthCheck (Store.BlockHealth 0 0 7) (Store.TimeHealth 0 3600) (Store.TimeHealth 0 3600) (Store.MaxHealth 0 10000) (Store.CountHealth 8 1) "btc" "fake" 1700000000 Nothing

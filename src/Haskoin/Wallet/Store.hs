@@ -19,9 +19,9 @@ import Control.Monad.Reader (MonadIO (..), MonadTrans (lift))
 import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
-import Data.Bytes.Get (runGetL)
+import Data.Bytes.Get (getWord64be, isEmpty, runGetL, runGetS)
 import Data.Bytes.Put (runPutL)
-import Data.Bytes.Serial (Serial, deserialize, serialize)
+import Data.Bytes.Serial (deserialize, serialize)
 import Data.Default (def)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.List (intercalate)
@@ -39,7 +39,7 @@ import Haskoin.Wallet.Config
 import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), Request)
 import qualified Network.HTTP.Client as HTTP
 import Network.TLS (TLSException (HandshakeFailed))
-import Network.HTTP.Types (StdMethod (..))
+import Network.HTTP.Types (StdMethod (..), hContentType)
 import Network.HTTP.Types.Status (statusCode, statusIsSuccessful)
 import qualified Network.Wreq as Wreq
 import Numeric.Natural (Natural)
@@ -173,8 +173,7 @@ webCallApart host action =
     unreachable e
       | beforeRequest e = return $ Left (HostUnreached (unreachableStore host e))
       | otherwise = return $ Left (CallFailed (unreachableStore host e))
-    unreadable (ErrorCall reason) =
-      return $ Left (CallFailed ("The store at " <> cs host <> " gave an answer hw could not read: " <> reason))
+    unreadable (ErrorCall reason) = return $ Left (CallFailed (unreadableAnswer host reason))
     tooLong AnswerTooLong =
       return $ Left (CallFailed ("The store at " <> cs host <> " sent an answer of more than " <> show (answerLimit `div` (1024 * 1024)) <> " MiB, which hw does not read"))
 
@@ -221,25 +220,65 @@ data AnswerTooLong = AnswerTooLong
 instance Exception AnswerTooLong
 
 -- | A call to the store, as the web client of haskoin-store makes it
--- ('apiCall'), with the body of the answer read no further than
--- 'answerLimit' bytes. The request is the client's: the path and the
--- query of the resource, binary answers, and an error the store answers
--- read from its body.
+-- ('apiCall'), its answer decoded as the client decodes it
+-- ('storeAnswer')
 storeCall :: (ApiResource a b) => Ctx -> ApiConfig -> a -> ExceptT Store.Except IO b
-storeCall ctx (ApiConfig net apiHost) res = do
+storeCall ctx api res = runGetL deserialize <$> storeAnswer ctx api res
+
+-- | The body of the answer to a call to the store, not decoded yet, and
+-- read no further than 'answerLimit' bytes. The request is the one of the
+-- web client of haskoin-store: the path and the query of the resource,
+-- binary answers, and an error the store answers read from its body. Most
+-- answers are decoded as the client decodes them ('storeCall'). The raw
+-- transactions are decoded the way of hw, which reads the formats of
+-- every version of the store ('rawTxsAnswer').
+storeAnswer :: (ApiResource a b) => Ctx -> ApiConfig -> a -> ExceptT Store.Except IO BL.ByteString
+storeAnswer ctx (ApiConfig net apiHost) res = do
   query <- liftEither $ queryOptions net ctx res
   let url = apiHost <> net.name <> cs (queryPath net ctx res)
       options = appEndo (query <> binary) (Wreq.defaults & Wreq.manager %~ either (Left . boundedAnswers) Right)
   case resourceMethod (asProxy res) of
-    GET -> decoded =<< liftIO (try (Wreq.getWith options url))
+    GET -> answerBody =<< liftIO (try (Wreq.getWith options url))
     POST -> case resourceBody res of
-      Just (PostBox body) -> decoded =<< liftIO (try (Wreq.postWith options url (runPutL (serialize body))))
+      Just (PostBox body) -> answerBody =<< liftIO (try (Wreq.postWith options url (runPutL (serialize body))))
       Nothing -> throwError $ Store.StringError "Could not post resource"
     _ -> throwError $ Store.StringError "Unsupported HTTP method"
   where
-    decoded :: (Serial b) => Either Store.Except (Wreq.Response BL.ByteString) -> ExceptT Store.Except IO b
-    decoded = either throwError (return . runGetL deserialize . (^. Wreq.responseBody))
+    answerBody :: Either Store.Except (Wreq.Response BL.ByteString) -> ExceptT Store.Except IO BL.ByteString
+    answerBody = either throwError (return . (^. Wreq.responseBody))
     binary = Endo $ (Wreq.header "Accept" .~ ["application/octet-stream"]) . (Wreq.checkResponse ?~ checkStatus)
+
+-- | The raw transactions in the answer of the store to 'GetTxsRaw', in
+-- either of the formats of haskoin-store, or why they could not be read.
+-- From version 1.9.0, the store writes the number of transactions first,
+-- in eight bytes, as it writes every other list. Before, it wrote the
+-- transactions alone, one after the other. The public server can run both
+-- versions at once, one on each network, so hw reads both. The web client
+-- of haskoin-store reads only one of them, the one of its own version.
+--
+-- The count is tried first, and must match the transactions that follow
+-- it to the end of the answer. An answer of an older store cannot pass
+-- for one with a count. Its first eight bytes would count billions of
+-- transactions, unless its first transaction has version 0, which nodes
+-- do not relay. Even then, the bytes after the first eight would have to
+-- make up that many whole transactions. An answer with a count is never
+-- read the other way, since it always reads with its count.
+rawTxsAnswer :: BL.ByteString -> Either String [Tx]
+rawTxsAnswer body = case runGetS counted bytes of
+  Right txs -> Right txs
+  Left _ -> either (const (Left inNeitherFormat)) Right (runGetS toTheEnd bytes)
+  where
+    bytes = BL.toStrict body
+    counted = do
+      count <- getWord64be
+      txs <- toTheEnd
+      unless (fromIntegral (length txs) == count) $ fail "the count does not match the transactions"
+      return txs
+    -- Transactions one after the other, up to the end of the answer
+    toTheEnd = do
+      done <- isEmpty
+      if done then return [] else (:) <$> deserialize <*> toTheEnd
+    inNeitherFormat = "the list of raw transactions is in neither format of haskoin-store, with its count first or without"
 
 -- | The query of a resource, as the web client of haskoin-store writes it
 queryOptions :: (ApiResource a b) => Network -> Ctx -> a -> Either Store.Except (Endo Wreq.Options)
@@ -250,21 +289,36 @@ queryOptions net ctx res = mconcat <$> mapM option (snd (queryParams res))
       return $ Endo $ Wreq.param (paramLabel p) .~ [Text.intercalate "," values]
 
 -- | Refuse an answer of the store that is not a success, with the error
--- the store gave in its body, as the web client of haskoin-store does. A
--- health check answers 503 with its report when the store is not well. A
--- health check answered with 404 comes from a host that has no store of
--- the network: 'NetworkNotServed'.
+-- the store gave in its body, as the web client of haskoin-store does
+-- ('answeredError'). A health check answers 503 with its report when the
+-- store is not well. A health check answered with 404 comes from a host
+-- that has no store of the network: 'NetworkNotServed'.
 checkStatus :: Request -> HTTP.Response HTTP.BodyReader -> IO ()
 checkStatus req res
   | statusIsSuccessful status = return ()
   | isHealthCheck && statusCode status == 503 = return ()
   | isHealthCheck && statusCode status == 404 = throwIO NetworkNotServed
   | otherwise = do
-      except <- Json.decodeStrict <$> HTTP.responseBody res
-      throwIO $ fromMaybe (Store.StringError "could not decode error") except
+      body <- HTTP.responseBody res
+      throwIO $ fromMaybe (Store.StringError "could not decode error") (answeredError contentType body)
   where
+    contentType = lookup hContentType (HTTP.responseHeaders res)
     status = HTTP.responseStatus res
     isHealthCheck = "/health" `Text.isSuffixOf` cs (HTTP.path req)
+
+-- | The error in the body of an answer of the store, read as the
+-- Content-Type of the answer says. haskoin-store sends its errors in
+-- binary from version 1.9.0, to a client that asks for binary answers as
+-- hw does. Older versions sent every error in JSON. The public server can
+-- run both versions at once, one on each network. Nothing when the body is
+-- no error of haskoin-store, as the error page of a proxy in front of a
+-- store that is down.
+answeredError :: Maybe BS.ByteString -> BS.ByteString -> Maybe Store.Except
+answeredError contentType body
+  | binary = either (const Nothing) Just (runGetS deserialize body)
+  | otherwise = Json.decodeStrict body
+  where
+    binary = maybe False ("application/octet-stream" `BS.isPrefixOf`) contentType
 
 -- | The settings of the connections, their answers read no further than
 -- 'answerLimit' bytes: past it, 'AnswerTooLong'
@@ -279,6 +333,11 @@ boundedAnswers settings = settings {HTTP.managerModifyResponse = bounded <=< HTT
             when (total > answerLimit) $ throwIO AnswerTooLong
             return chunk
       return res {HTTP.responseBody = body}
+
+-- | The message of an answer of the store that hw could not read, and
+-- why
+unreadableAnswer :: Text -> String -> String
+unreadableAnswer host reason = "The store at " <> cs host <> " gave an answer hw could not read: " <> reason
 
 -- | The message of an error the store answered. The web client reads the
 -- error from the body of the answer. A body it cannot read comes as the
@@ -339,7 +398,9 @@ webStore ctx cfg net =
       storeUnspents =
         batched $ \addrs -> serial <$> call (GetAddrsUnspent addrs everything),
       storeRawTransactions =
-        batched $ \tids -> raw <$> call (GetTxsRaw tids),
+        batched $ \tids -> do
+          body <- webCall host (storeAnswer ctx api (GetTxsRaw tids))
+          either (throwError . unreadableAnswer host) return (rawTxsAnswer body),
       storePublish = \tx -> do
         Store.TxId published <- call (PostTx tx)
         unless (published == txHash tx) $
@@ -354,7 +415,6 @@ webStore ctx cfg net =
     -- answer, the answers in the order asked
     batched ask items = concat <$> mapM ask (chunksOf (fromIntegral requestBatch) items)
     serial (Store.SerialList xs) = xs
-    raw (Store.RawResultList xs) = xs
     -- A limit of zero asks the store for everything. Without a limit, the
     -- store answers with its default page of a hundred items and says
     -- nothing about the rest.

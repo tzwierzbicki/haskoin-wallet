@@ -253,6 +253,13 @@ Using `hw`:
   When `hw` cannot reach the server at all, because the connection fails or
   times out or its TLS handshake fails, it checks no further network there.
   Those networks are named with the same error.
+- `hw` reads the answers of haskoin-store 1.9.0, and those of older versions.
+  Version 1.9.0 writes the number of raw transactions before them, and sends
+  its errors in binary. With such a server, `sync`, `recover`, `preparesweep`
+  and `bumpfee` failed with "gave an answer hw could not read", and every
+  error of the server showed as "an error hw could not read", without its
+  reason. The public server can run both versions at once, one on each
+  network.
 - A transaction is shown as its portfolio sees it: `Incoming` when funds enter
   the portfolio, `Outgoing` when they leave it, and `Internal` when they move
   between its addresses.
