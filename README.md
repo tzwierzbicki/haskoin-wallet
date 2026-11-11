@@ -444,7 +444,7 @@ no `switch`.
 | `receive`, and `show` with a path or with no word | On one account of the active portfolio. `--network` and `--type` pick it, each with its default. |
 | `preparetx`, `preparesendall` | They spend the coins of the active portfolio on one network, of both types together. `--coin-type` keeps the coins of one type. The coins of `--coin` and the addresses of `--spend-from` must be in the active portfolio. |
 | `addresses`, `balances`, `coins`, `txs`, `pendingtxs` | They list the whole active portfolio, in a section for each network, or in one list sorted by network for `pendingtxs`. `--network` and `--type` show one network or one type only. `txs` and `pendingtxs` take no `--type`. |
-| `checkmnemonic`, and `label` with a path or with a description alone | On the active portfolio. `label DESCRIPTION --of-wallet` describes its wallet. |
+| `checkmnemonic`, `label` with a description alone, and `label` and `signmsg` with a path | On the active portfolio. `label DESCRIPTION --of-wallet` describes its wallet. |
 | `exportwallet` | On the wallet of the active portfolio. `--portfolio` writes one portfolio of it only. |
 | `portfolios`, `sync`, `exportsheet` | They cover every portfolio of every wallet. `--network` narrows `sync` down to one network. |
 | `signtx`, `signsweep`, `importtx`, `bumpfee`, `preparesweep`, and `show` with a transaction or a transaction file | They find the portfolio from the transaction, or from the destinations of a sweep. The active portfolio settles a choice between several, as the next paragraph says. |
@@ -574,7 +574,12 @@ front, such as `bip84/0/0`. The path inside the account, `/0/0`, would name an
 address in each account of a network, and `balances` and `coins` list both
 accounts of `btc` together. The type costs five columns, and saves you from
 telling the two apart by the form of the address. The network is in the title
-of the section. `show` takes a path as the views write it.
+of the section. You can type a path back where a command takes an address of
+the wallet: `show`, `label`, `signmsg`, `--spend-from` and `--change-back`
+take `bip84/0/0` as well as the address. A path is one of the active
+portfolio. The network the command works on tells which address it is, and
+`--network` picks one when the portfolio has an address at the path on
+several networks.
 
 If you always want the same view, set the key `listing-view` of the
 [configuration](#configuration) to `verbose` or `tabular`. `--compact` then
@@ -2095,6 +2100,7 @@ hw preparetx ADDRESS:0.01 --network bch --fee-rate low
 hw preparetx ADDRESS:0.01 --coin-type bip44 --fee-rate low
 hw preparetx ADDRESS:0.01 --spend-from MYADDRESS --change-back MYADDRESS --fee-rate low
 hw preparetx ADDRESS:0.01 --spend-from MYADDRESS --select --fee-rate low
+hw preparetx ADDRESS:0.01 --spend-from bip44/1/0 --fee-rate low   # an address by its path
 hw preparetx ADDRESS:0.01 --recipients-pay --fee-rate high --output unsigned.psbt
 ```
 
@@ -2104,12 +2110,12 @@ hw preparetx ADDRESS:0.01 --recipients-pay --fee-rate high --output unsigned.psb
 | `--fee-rate RATE` | Sets the fee rate: a number of satoshis per virtual byte, or `low`, `median` or `high`. Without it, `hw` shows [the rates](#hw-fees) and asks. |
 | `--recipients-pay` | Takes the fee out of the amounts paid, in equal shares. |
 | `--coin TXID:INDEX` | Chooses a coin to spend, in full or by its [short id](#short-ids). Every coin chosen is spent. Repeat it for several coins. |
-| `--spend-from ADDRESS` | Chooses the coins at an address to spend. Every coin chosen is spent. Repeat it for several addresses. |
+| `--spend-from ADDRESS` | Chooses the coins at an address to spend, given by itself or by its path, such as `bip44/1/0`. Every coin chosen is spent. Repeat it for several addresses. |
 | `--select` | Spends only what the payment needs among the coins chosen, as `--strategy` selects them. |
 | `--coin-type TYPE` | Spends coins of one type only, `bip44` or `bip84`. Without it, coins of both types. |
 | `--strategy STRATEGY` | Sets how the coins are selected: `least-waste`, the default, `random-draw`, `largest-first` or `smallest-first`. |
 | `--min-conf N` | Sets the confirmations a coin needs to be spent. The default is 0. |
-| `--change-back ADDRESS` | Sends the change to this address of the active portfolio, instead of a new change address. |
+| `--change-back ADDRESS` | Sends the change to this address of the active portfolio, given by itself or by its path, instead of a new change address. |
 | `--change-type TYPE` | Sets the type of the new change address, `bip44` or `bip84`. |
 | `--output FILE` | Also writes the transaction to a [file](#transaction-files). |
 | `--label LABEL` | Gives the transaction a label, which goes with it to its file and stays once the network has it. |
@@ -2148,6 +2154,13 @@ a payment. Some banks accept payments only from addresses they have checked,
 and `--change-back` keeps the funds at such an address. The address has a
 type of its own, so `--change-back` and `--change-type` do not go together.
 
+**An address by its path.** `--spend-from` and `--change-back` take the path of
+an address of the active portfolio, as the views write it, such as
+`bip44/1/0`. The path needs its type, since a payment spends both types and
+`preparetx` has no `--type`. The portfolio must have the address, as
+`addresses` and `addresses --change` list them. A path tells the networks
+where the portfolio has an address at it, as an address tells its network.
+
 > **Good to know**
 >
 > - **An amount without a unit is in bitcoins**, or in the unit of the
@@ -2172,7 +2185,8 @@ type of its own, so `--change-back` and `--change-type` do not go together.
 >   0 first`. Every payment spends from one portfolio, and coin
 >   control keeps to the one you work in.
 > - **`--coin` and `--spend-from` tell the network.** The coins and the
->   addresses chosen are on one network, and `preparetx` pays there.
+>   addresses chosen are on one network, and `preparetx` pays there. A path
+>   is on each network where the portfolio has an address at it.
 >   `--network` must agree with them when given. It is needed when the coins
 >   are on several test networks and none of them is the default network.
 > - **The type of the change and the coins depend on each other.** The fee
@@ -2556,12 +2570,15 @@ It is signed on the network its file names.
 
 #### `hw signmsg`
 
-`hw signmsg ADDRESS MESSAGE` signs a message with the key of an address of the
-wallet. It asks for the mnemonic of the wallet of that address. `--output`
-writes the signed message to a file instead of printing it.
+`hw signmsg ADDRESS|PATH MESSAGE` signs a message with the key of an address of
+the wallet. It asks for the mnemonic of the wallet of that address. `--output`
+writes the signed message to a file instead of printing it. The address may be
+given by its path in the active portfolio, with its type, such as `bip84/0/3`.
+The signed message then names the address itself.
 
 ```console
 hw signmsg MYADDRESS "I control this address" --output signed.txt
+hw signmsg bip84/0/3 "I control this address"
 ```
 
 From a P2PKH address, any wallet verifies the signature. From a native SegWit
@@ -2576,8 +2593,9 @@ a SegWit address.
 > - **`signmsg` and `verifymsg` work with P2PKH and SegWit addresses of one
 >   key,** not with Taproot ones.
 > - **The address tells its portfolio.** `signmsg` signs with it whichever
->   portfolio is active. `--network` is needed only when the wallet has the
->   address on several test networks, which share their keys.
+>   portfolio is active. A path is one of the active portfolio. `--network` is
+>   needed only when the wallet has the address, or an address at the path, on
+>   several networks, and none of them is the default network.
 
 #### `hw verifymsg`
 

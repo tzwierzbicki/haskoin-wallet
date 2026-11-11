@@ -17,10 +17,12 @@ import Haskoin.Wallet.Cli.Parser
     Labelled (..),
     ListingOutput (..),
     NewPortfolio (..),
+    PrepareSendAll (..),
     PrepareTx (..),
     Receive (..),
     Recover (..),
     Shown (..),
+    SignMsg (..),
     Target (..),
     program,
     readCoinRef,
@@ -35,7 +37,7 @@ import Haskoin.Wallet.Cli.Parser.Help (mentionedCommands, usageParts)
 import Haskoin.Wallet.Cli.Parser.Run (Request (..), commandNamed, requestOf)
 import Haskoin.Wallet.Cli.Style (renderPlain)
 import Haskoin.Wallet.Cli.View (View (..))
-import Haskoin.Wallet.Database.Address (AddrType (..))
+import Haskoin.Wallet.Database.Address (AddrType (..), AddressNamed (..))
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.ShortId (HashRef (..), coinRefText, shortIdText)
 import Haskoin.Wallet.TestUtils (parsedLine)
@@ -188,7 +190,39 @@ spec = do
 
     it "make --change-back of preparetx take an address" $
       (.changeBack) <$> preparedWith ["--change-back", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]
-        `shouldBe` Right (Just "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj")
+        `shouldBe` Right (Just (NamedByAddress "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"))
+
+    it "make --change-back of preparetx take the path of an address, with its type" $
+      (.changeBack) <$> preparedWith ["--change-back", "bip84/1/0"]
+        `shouldBe` Right (Just (NamedByPath Bip84 AddrInternal 0))
+
+    it "make --spend-from of preparetx take the path of an address, with its type" $
+      (.spendFrom) <$> preparedWith ["--spend-from", "bip44/1/0", "--spend-from", "bip84/0/2"]
+        `shouldBe` Right [NamedByPath Bip44 AddrInternal 0, NamedByPath Bip84 AddrExternal 2]
+
+    -- preparetx has no --type, and spends both types of address
+    it "refuse a --spend-from path without its type, naming the two forms with a type" $
+      preparedWith ["--spend-from", "/1/0"]
+        `shouldBe` Left "option --spend-from: The path /1/0 needs the type of its account in front, as the views write it: bip44/1/0 or bip84/1/0"
+
+    it "refuse a --spend-from word of the shape of a path that is no path, with the two forms of a path" $
+      preparedWith ["--spend-from", "m/1/0"]
+        `shouldBe` Left "option --spend-from: The path m/1/0 is not that of an address: /0/i is the receiving address i, and /1/i the change address i"
+
+    it "make --spend-from of preparesendall take the path of an address too" $
+      case parsedLine ["preparesendall", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "--spend-from", "bip44/1/0"] of
+        Right (CommandPrepareSendAll opts) -> opts.spendFrom `shouldBe` [NamedByPath Bip44 AddrInternal 0]
+        other -> expectationFailure ("Not a preparesendall: " <> show other)
+
+    it "make signmsg take the path of the address that signs, with its type" $
+      case parsedLine ["signmsg", "bip84/0/3", "Hello"] of
+        Right (CommandSignMsg opts) -> opts.address `shouldBe` NamedByPath Bip84 AddrExternal 3
+        other -> expectationFailure ("Not a signmsg: " <> show other)
+
+    it "make signmsg take an address, as typed" $
+      case parsedLine ["signmsg", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Hello"] of
+        Right (CommandSignMsg opts) -> opts.address `shouldBe` NamedByAddress "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"
+        other -> expectationFailure ("Not a signmsg: " <> show other)
 
     it "refuse --change-back without its address" $
       preparedWith ["--change-back"] `shouldBe` Left "The option `--change-back` expects an argument."
@@ -211,11 +245,11 @@ spec = do
     -- default
     it "lists the options of preparetx as they are typed" $
       usageOf "preparetx"
-        `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--strategy STRATEGY] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS]... [--select] [--coin-type TYPE] [-y|--yes] [--change-back ADDRESS] [--change-type TYPE]"
+        `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--strategy STRATEGY] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--select] [--coin-type TYPE] [-y|--yes] [--change-back ADDRESS|PATH] [--change-type TYPE]"
 
     it "follows what may be given several times with ..., after the brackets of an optional one" $
       usageOf "preparesendall"
-        `shouldBe` "ADDRESS[:AMOUNT]... [-n|--network NETWORK] [-f|--fee-rate RATE] [-m|--min-conf INT] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS]... [--coin-type TYPE] [--spend-dust | --leave-dust] [-y|--yes]"
+        `shouldBe` "ADDRESS[:AMOUNT]... [-n|--network NETWORK] [-f|--fee-rate RATE] [-m|--min-conf INT] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--coin-type TYPE] [--spend-dust | --leave-dust] [-y|--yes]"
 
     it "offers txs --compact, --verbose, --tabular and --csv as a choice, since a table has no room for every detail and a file is not the screen" $
       usageOf "txs" `shouldBe` "[-n|--network NETWORK] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after TXID] [--max INT]"

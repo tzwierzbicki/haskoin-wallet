@@ -161,6 +161,10 @@ Payments:
 - Coin control. `--coin TXID:INDEX` and `--spend-from ADDRESS` choose the coins
   of the active portfolio to spend. `--select` picks among them.
   `--coin-type TYPE` keeps the coins of one type, `bip44` or `bip84`.
+- `--spend-from` and `--change-back` take the path of an address of the
+  active portfolio too, as the views write it, such as `bip44/1/0`. The path
+  needs its type. It tells the networks where the portfolio has an address
+  at it, as an address tells its network.
 - `--strategy` sets how coins are selected. The default, `least-waste`, keeps
   the coins that waste the least fee.
 - `lockcoin` and `unlockcoin` keep a coin from being spent. `coins --locked`
@@ -190,7 +194,8 @@ Transaction files:
 
 Messages:
 
-- `signmsg` signs a message in the Bitcoin Signed Message format.
+- `signmsg` signs a message in the Bitcoin Signed Message format. It takes
+  the address, or its path in the active portfolio, such as `bip84/0/3`.
 - `verifymsg` checks such a signature against its address.
 
 Using `hw`:

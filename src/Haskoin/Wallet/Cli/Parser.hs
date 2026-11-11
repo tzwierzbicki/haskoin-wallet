@@ -38,7 +38,7 @@ import Haskoin.Wallet.Cli.Completion
     walletAddresses,
     walletIndexes,
   )
-import Haskoin.Wallet.Database.Address (AddrType, readTypedChainPath)
+import Haskoin.Wallet.Database.Address (AddrType, AddressNamed, readAddressNamed, readTypedChainPath)
 import Haskoin.Wallet.Tx.FeeRates (FeeRateChoice, readFeeRateChoice)
 import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), indexFits, kindNamed, kindNames)
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
@@ -392,8 +392,9 @@ data PrepareTx = PrepareTx
     -- | Coin control: the coins chosen by their outpoints, in full or by
     -- their short ids (--coin)
     coins :: ![CoinRef],
-    -- | Coin control: the addresses whose coins are chosen (--spend-from)
-    spendFrom :: ![Text],
+    -- | Coin control: the addresses whose coins are chosen (--spend-from),
+    -- by themselves or by their paths
+    spendFrom :: ![AddressNamed],
     -- | Whether the strategy selects among the chosen coins (--select),
     -- instead of every one of them being spent
     select :: !Bool,
@@ -404,8 +405,8 @@ data PrepareTx = PrepareTx
     -- asking (--yes)
     yes :: !Bool,
     -- | The address of the portfolio the change goes to (--change-back),
-    -- as typed, instead of a new change address
-    changeBack :: !(Maybe Text),
+    -- by itself or by its path, instead of a new change address
+    changeBack :: !(Maybe AddressNamed),
     -- | The type of the new change address (--change-type), when the
     -- command says. Otherwise the coins spent say.
     changeType :: !(Maybe AccountKind)
@@ -442,8 +443,9 @@ data PrepareSendAll = PrepareSendAll
     -- | The coins to send, instead of all of them, in full or by their
     -- short ids
     coins :: ![CoinRef],
-    -- | The addresses whose coins to send, instead of all of them
-    spendFrom :: ![Text],
+    -- | The addresses whose coins to send, instead of all of them, by
+    -- themselves or by their paths
+    spendFrom :: ![AddressNamed],
     -- | The one type of coins to send (--coin-type), or both
     coinType :: !(Maybe AccountKind),
     -- | What to do with the coins worth less than their fee, or Nothing to
@@ -462,12 +464,13 @@ data DustCoins = SpendDust | LeaveDust
 
 -- | The options of signmsg
 data SignMsg = SignMsg
-  { -- | The address of the wallet that signs
-    address :: !Text,
+  { -- | The address of the wallet that signs, by itself or by its path
+    address :: !AddressNamed,
     message :: !Text,
     -- | The file the armored block is written to, instead of the screen
     output :: !(Maybe FilePath),
-    -- | The network of an address the wallet has on several networks
+    -- | The network of an address or a path the wallet has on several
+    -- networks
     network :: !(Maybe Network)
   }
   deriving (Eq, Show)
@@ -926,6 +929,14 @@ fileNetworkOption =
 heldNetworkOption :: String -> Args (Maybe Network)
 heldNetworkOption what =
   networkOptionWith ("Needed only when the wallet has the " <> what <> " on several networks: the test networks share their keys. Without it, the one on the default network.")
+
+-- | The network of an address of the wallet the user names, by itself or
+-- by its path, when the wallet has it on several networks: the test
+-- networks share their keys, and a portfolio has an address at the same
+-- path on each network it gave one out on ('chooseOnNetwork')
+namedAddressNetworkOption :: Args (Maybe Network)
+namedAddressNetworkOption =
+  networkOptionWith "With an address or a path, the network to find it on, when the wallet has it on several. Without it, the only one, or else the one on the default network."
 
 -- | The network, when given, with the help of the command about it
 networkOptionWith :: String -> Args (Maybe Network)
@@ -1877,7 +1888,7 @@ takes the only one, or else the one on the default network.
                     (metavar "LABEL" <> help "The new label or description, or \"\" to remove it. Quote it if it has spaces.")
                   <*> switch (long "of-wallet" <> help "With the label alone, describe the wallet of the active portfolio, not the portfolio")
                   <*> ( Target
-                          <$> networkOptionWith "With an address or a path, the network to label it on, when the wallet has it on several. Without it, the only one, or else the one on the default network."
+                          <$> namedAddressNetworkOption
                           <*> typeOptionWith "With a path without its type, such as /0/3, the type of its account. Without it, the default-type of the configuration file, or bip44."
                       )
               )
@@ -2014,7 +2025,8 @@ costs less to spend, and the selection counts each coin at its own cost.
 
 Coin control: --coin and --spend-from choose the coins to spend, which must be
 in the active portfolio: a coin or an address of another portfolio is refused,
-with the portfolio that holds it. preparetx then spends every one of them that
+with the portfolio that holds it. --spend-from takes an address, or its path
+in the active portfolio, with its type, as the views write it: bip44/1/0. preparetx then spends every one of them that
 can be spent, and no other, whatever --strategy says. With --select, it spends only what the payment needs among them: the
 strategy selects among the chosen coins as it selects among all the coins of
 the portfolio without coin control, and a chosen coin worth less than its fee
@@ -2035,7 +2047,7 @@ is bip44, so the change is too, and --change-type bip84 is refused.
 
 --change-back ADDRESS sends the change to that address instead. It must be an
 address of the portfolio on the network of the payment, a receiving or a
-change address of either type. It may have been used already, or be the
+change address of either type. Its path will do too, such as bip84/1/0. It may have been used already, or be the
 change of another pending transaction: you chose it. hw refuses any other
 address: change sent elsewhere would be a payment. Some banks accept payments
 only from addresses they have checked, and --change-back keeps the funds at
@@ -2109,13 +2121,13 @@ coinTypeOption =
 
 -- | The address of the portfolio the change of preparetx goes to, in
 -- place of a new change address
-changeBackOption :: Args (Maybe Text)
+changeBackOption :: Args (Maybe AddressNamed)
 changeBackOption =
-  optional . strOption $
+  optional . option (eitherReader readAddressNamed) $
     long "change-back"
-      <> metavar "ADDRESS"
+      <> metavar "ADDRESS|PATH"
       <> completer (mkCompleter activeAddresses)
-      <> help "Send the change to this address instead of a new change address. It must be an address of the active portfolio, on the network of the payment. It may have been used, or be the change of another pending transaction."
+      <> help "Send the change to this address instead of a new change address, or to the address at this path, such as bip84/1/0. It must be an address of the active portfolio, on the network of the payment. It may have been used, or be the change of another pending transaction."
 
 -- | The type of the new change address of preparetx, when the command says
 changeTypeOption :: Args (Maybe AccountKind)
@@ -2225,13 +2237,13 @@ dustCoinsOption =
       <|> flag' LeaveDust (long "leave-dust" <> help "Leave the coins worth less than their fee in the portfolio, without asking")
 
 -- | An address of the portfolio whose coins to spend
-spendFromOption :: Args Text
+spendFromOption :: Args AddressNamed
 spendFromOption =
-  strOption $
+  option (eitherReader readAddressNamed) $
     long "spend-from"
-      <> metavar "ADDRESS"
+      <> metavar "ADDRESS|PATH"
       <> completer (mkCompleter addressesToSpendFrom)
-      <> help "Coin control: spend the coins at this address of the portfolio. Repeat for several addresses."
+      <> help "Coin control: spend the coins at this address of the portfolio, or at this path, such as bip44/1/0. Repeat for several addresses."
 
 -- | Whether the strategy selects among the coins of coin control, instead
 -- of every one of them being spent
@@ -3082,7 +3094,7 @@ signMsgCommand =
       summary = "Sign a message with the key of an address",
       details =
         [r|
-signmsg asks for the mnemonic of the wallet of the ADDRESS, or for the
+signmsg asks for the mnemonic of the wallet of the address, or for the
 shares of its backup, and signs the message with the key of that address. The signature uses the Bitcoin Signed
 Message format, the legacy format of BIP 322. From a P2PKH address, which
 starts with 1, any wallet can verify it. From a native SegWit address,
@@ -3100,15 +3112,15 @@ saved to a file.
 |],
       args =
         CommandSignMsg
-          <$> (SignMsg <$> signAddressArg <*> signMsgArg <*> signedMessageOutputOption <*> heldNetworkOption "address")
+          <$> (SignMsg <$> signAddressArg <*> signMsgArg <*> signedMessageOutputOption <*> namedAddressNetworkOption)
     }
 
-signAddressArg :: Args Text
+signAddressArg :: Args AddressNamed
 signAddressArg =
-  strArgument $
-    metavar "ADDRESS"
+  argument (eitherReader readAddressNamed) $
+    metavar "ADDRESS|PATH"
       <> completer (mkCompleter walletAddresses)
-      <> help "The address whose key signs. It must be an address of this wallet."
+      <> help "The address whose key signs. It must be an address of this wallet. A path, such as bip84/0/3, names the address at that path in the active portfolio."
 
 signMsgArg :: Args Text
 signMsgArg =

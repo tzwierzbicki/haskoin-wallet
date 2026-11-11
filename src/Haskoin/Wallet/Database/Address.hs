@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
@@ -29,8 +30,9 @@
 -- accounts of a portfolio on several of them. An address the user types
 -- names one row only once the network is known ('addressByText'). So does
 -- a path the user types, since a portfolio has an address at the same
--- path on each network it gave one out on ('heldReceivingAt'). Both pick
--- the network by one rule ('chooseOnNetwork').
+-- path on each network it gave one out on ('heldAddressAt'). Both pick
+-- the network by one rule ('chooseOnNetwork'). A command that takes an
+-- address of the wallet takes its path too ('AddressNamed').
 module Haskoin.Wallet.Database.Address where
 
 import Conduit (MonadUnliftIO)
@@ -43,7 +45,7 @@ import Data.Aeson
 import Data.Aeson.Types (Pair, Parser)
 import qualified Data.Aeson.Types as Json
 import Data.Char (isDigit)
-import Data.List (genericTake, nub)
+import Data.List (genericTake, intercalate, nub)
 import Data.List.Split (chunksOf)
 import Data.Maybe (isJust)
 import Data.Map.Strict (Map)
@@ -450,12 +452,13 @@ addressByText cfg netM addrTxt = do
       throwError $ "The address " <> cs addrTxt <> " is on " <> networksText networks <> ", not on the --network " <> net.name
     Left (OnSeveralNetworks networks) -> throwError (onSeveralNetworks addrTxt networks)
 
--- | The row of the receiving address at an index of a portfolio, with its
--- account: what label takes for a path, such as bip84/0/3. The account is
--- of the type given, or else of the default type of its network
+-- | The row of the address at a path of a portfolio, with its account:
+-- what label and signmsg take for a path, such as bip84/0/3. The account
+-- is of the type given, or else of the default type of its network
 -- ('defaultKindOn'). The wallet must hold the address. A path past the
--- addresses the portfolio gave out has no row to keep a label, and is
--- refused: only receive gives out addresses, within the gap.
+-- addresses the portfolio gave out has no row, and is refused: only
+-- receive gives out addresses, within the gap, and only a payment takes
+-- a change address.
 --
 -- A portfolio has an address at the same path on each network it gave one
 -- out on, so a path names one row only once the network is known. It is
@@ -463,28 +466,105 @@ addressByText cfg netM addrTxt = do
 -- default network, as for an address ('chooseOnNetwork'). A type given
 -- that the network given does not have is refused, as 'chooseKind'
 -- refuses it.
-heldReceivingAt :: (MonadUnliftIO m) => Config -> Portfolio -> Maybe Network -> Maybe AccountKind -> KeyIndex -> ExceptT String (DB m) (DBAccountId, DBAddress)
-heldReceivingAt cfg portfolio netM kindM index = do
+heldAddressAt :: (MonadUnliftIO m) => Config -> Portfolio -> Maybe Network -> Maybe AccountKind -> AddrType -> KeyIndex -> ExceptT String (DB m) (DBAccountId, DBAddress)
+heldAddressAt cfg portfolio netM kindM addrType index = do
   forM_ ((,) <$> netM <*> kindM) $ \(net, kind) -> liftEither (checkKindOnNetwork net kind)
-  accounts <- lift $ portfolioAccountRows portfolio.portfolioId
-  found <- fmap catMaybes . forM accounts $ \(accId, acc) -> do
-    let net = accountNetwork acc
-    if accountKind acc == fromMaybe (defaultKindOn cfg net) kindM
-      then fmap (\row -> ((accId, row), net)) <$> lift (P.get (DBAddressKey accId False (fromIntegral index)))
-      else return Nothing
+  found <- lift $ rowsAtPath cfg portfolio kindM addrType index
   case chooseOnNetwork cfg netM found of
     Right held -> return held
     Left FoundNowhere ->
-      throwError $ owner <> " has no address at " <> typedPath <> ": addresses lists the addresses it gave out"
+      throwError $ owner <> " has no address at " <> typedPath <> ": " <> listedBy
     Left (NotOnGivenNetwork net networks) ->
       throwError $ owner <> " has an address at " <> typedPath <> " on " <> networksText networks <> ", not on the --network " <> net.name
     Left (OnSeveralNetworks networks) ->
       throwError $ owner <> " has an address at " <> typedPath <> " on " <> networksText networks <> ": give the --network"
   where
     owner = portfolioText portfolio
-    -- The path as the user typed it, with its type when it was given
-    path = chainPath False (fromIntegral index)
-    typedPath = maybe (pathToStr path) (\kind -> cs (poolPathText (PoolPath kind path))) kindM
+    typedPath = chainPathText kindM addrType index
+    listedBy = case addrType of
+      AddrExternal -> "addresses lists the addresses it gave out"
+      AddrInternal -> "addresses --change lists the change addresses it took"
+
+-- | The rows of a portfolio at a path of one of its chains, each with its
+-- account and its network: one on each network where the portfolio has
+-- an address there. The account is of the type given, or else of the
+-- default type of its network ('defaultKindOn'), so that a path without
+-- its type, as in /0/3, is of the account receive gives out addresses of.
+rowsAtPath :: (MonadUnliftIO m) => Config -> Portfolio -> Maybe AccountKind -> AddrType -> KeyIndex -> DB m [((DBAccountId, DBAddress), Network)]
+rowsAtPath cfg portfolio kindM addrType index = do
+  accounts <- portfolioAccountRows portfolio.portfolioId
+  fmap catMaybes . forM accounts $ \(accId, acc) -> do
+    let net = accountNetwork acc
+    if accountKind acc == fromMaybe (defaultKindOn cfg net) kindM
+      then fmap (\row -> ((accId, row), net)) <$> addressAt accId addrType index
+      else return Nothing
+
+-- | The row of an account at an index of one of its chains, if the account
+-- has an address there
+addressAt :: (MonadUnliftIO m) => DBAccountId -> AddrType -> KeyIndex -> DB m (Maybe DBAddress)
+addressAt accId addrType index = P.get (DBAddressKey accId (isInternal addrType) (fromIntegral index))
+
+-- | A path as the user typed it, with the type of its account when it has
+-- one: bip84/1/0, or /1/0
+chainPathText :: Maybe AccountKind -> AddrType -> KeyIndex -> String
+chainPathText kindM addrType index =
+  maybe (pathToStr path) (\kind -> cs (poolPathText (PoolPath kind path))) kindM
+  where
+    path = addrDeriv addrType :/ index
+
+{- An address the user names by its text or its path -}
+
+-- | An address of the wallet as the user names it, where a command takes
+-- an address of the wallet: the address itself, as typed, or its path in
+-- the active portfolio, with the type of its account, as the views write
+-- it (bip84/1/0). The views name every address of the wallet by its path,
+-- so the user can type back what a view shows. A path is short to type,
+-- and the network the command works on, or its --network, tells which
+-- address it is.
+data AddressNamed
+  = NamedByAddress !Text
+  | NamedByPath !AccountKind !AddrType !KeyIndex
+  deriving (Eq, Show)
+
+-- | An address of the wallet as the user types it, by its shape: a path
+-- when it has the shape of one ('readTypedChainPath'), an address
+-- otherwise. A path must start with the type of its account. The options
+-- that read it have no --type to complete a path without it, and a
+-- portfolio has an address at /1/0 in each of its accounts on a network.
+-- A word of the shape of a path that is no path is refused, with the
+-- forms to write.
+readAddressNamed :: String -> Either String AddressNamed
+readAddressNamed word = case readTypedChainPath (cs word) of
+  Nothing -> Right (NamedByAddress (cs word))
+  Just (Left refusal) -> Left refusal
+  Just (Right (Just kind, addrType, index)) -> Right (NamedByPath kind addrType index)
+  Just (Right (Nothing, _, _)) ->
+    Left $
+      "The path "
+        <> word
+        <> " needs the type of its account in front, as the views write it: "
+        <> intercalate " or " [cs name <> word | name <- kindNames]
+
+-- | How the messages name an address the user named: as typed, or by its
+-- path with its type
+addressNamedText :: AddressNamed -> String
+addressNamedText = \case
+  NamedByAddress typed -> cs typed
+  NamedByPath kind addrType index -> chainPathText (Just kind) addrType index
+
+-- | The address of a pool that the user named, when the pool holds it. An
+-- address is read on the network of the pool, and found whatever its
+-- form ('inPool'). A path is that of the account of its type in the pool.
+poolAddressNamed :: (MonadUnliftIO m) => Pool -> AddressNamed -> ExceptT String (DB m) (Maybe Address)
+poolAddressNamed pool = \case
+  NamedByAddress typed -> do
+    addr <- liftEither $ textToAddrE pool.poolNetwork typed
+    held <- lift $ inPool pool addr
+    return (if held then Just addr else Nothing)
+  NamedByPath kind addrType index -> do
+    accountM <- lift $ poolAccount pool kind
+    rowM <- lift $ maybe (return Nothing) (\(accId, _) -> addressAt accId addrType index) accountM
+    traverse (liftEither . textToAddrE pool.poolNetwork . dBAddressAddress) rowM
 
 -- | Why none of the rows found, each on its network, is the one a command
 -- means ('chooseOnNetwork')

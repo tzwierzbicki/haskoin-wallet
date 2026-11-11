@@ -1094,7 +1094,7 @@ sumCoinBalances balances =
 --
 -- An address and a transaction tell where they are, so they are labelled
 -- in their portfolio, whichever is active. A path means nothing without a
--- portfolio, so it is one of the active portfolio ('heldReceivingAt'). An
+-- portfolio, so it is one of the active portfolio ('heldAddressAt'). An
 -- address or a path the wallet has on several networks is the one on the
 -- --network, the only one, or else the one on the default network
 -- ('chooseOnNetwork'). --type goes only with a path without its type. An
@@ -1118,7 +1118,7 @@ cmdLabel ctx cfg opts =
           LabelledPath kindM AddrExternal index -> do
             when (isJust kindM) $ refuseType "a path that starts with its type"
             portfolio <- requireActivePortfolio
-            (accId, row) <- heldReceivingAt cfg portfolio opts.target.network (kindM <|> opts.target.kind) index
+            (accId, row) <- heldAddressAt cfg portfolio opts.target.network (kindM <|> opts.target.kind) AddrExternal index
             addressAnswer accId =<< labelAddress row opts.label
           LabelledPath _ AddrInternal _ ->
             throwError changeTakesNoLabel
@@ -1599,23 +1599,32 @@ preparedAnswer ctx pool changeBackM output tsd left = do
 -- address must be one of the pool: the address counts, not its text, so a
 -- Bitcoin Cash address is found without its prefix, or in its legacy
 -- form.
-controlledPool :: Config -> Maybe Network -> [OutPoint] -> [Text] -> ExceptT String (DB IO) (Pool, [Address])
+--
+-- A --spend-from path, such as bip44/1/0, is one of the active portfolio.
+-- It tells the networks where the portfolio has an address at that path,
+-- as an address tells the networks that hold it ('rowsAtPath'). The
+-- address spent from is then the one at the path on the network of the
+-- payment.
+controlledPool :: Config -> Maybe Network -> [OutPoint] -> [AddressNamed] -> ExceptT String (DB IO) (Pool, [Address])
 controlledPool cfg netM outpoints spendFrom = do
   portfolio <- requireActivePortfolio
   byCoin <- forM outpoints $ \outpoint -> do
     holders <- map (accountPool . snd) <$> coinHolders [outpoint]
     networksInActive ("The coin " <> shortCoinText outpoint) portfolio holders
-  byAddress <- forM spendFrom $ \typed -> do
-    holders <- map (\(_, _, acc) -> accountPool acc) <$> accountsHolding (\net -> maybeToList (textToAddr net typed))
-    networksInActive ("The address " <> cs typed) portfolio holders
+  byAddress <- forM spendFrom $ \case
+    NamedByAddress typed -> do
+      holders <- map (\(_, _, acc) -> accountPool acc) <$> accountsHolding (\net -> maybeToList (textToAddr net typed))
+      networksInActive ("The address " <> cs typed) portfolio holders
+    NamedByPath kind addrType index -> map snd <$> lift (rowsAtPath cfg portfolio (Just kind) addrType index)
   net <- liftEither $ paymentNetwork cfg netM (nub (concat (byCoin <> byAddress)))
   let pool = portfolioPool portfolio net
       place = portfolioPlace portfolio net
-  addrs <- forM spendFrom $ \typed -> do
-    addr <- liftEither $ textToAddrE net typed
-    held <- lift $ inPool pool addr
-    unless held $ throwError ("The address " <> cs typed <> " is not in " <> placeText place)
-    return addr
+  addrs <- forM spendFrom $ \named -> do
+    addrM <- poolAddressNamed pool named
+    case (addrM, named) of
+      (Just addr, _) -> return addr
+      (Nothing, NamedByAddress typed) -> throwError ("The address " <> cs typed <> " is not in " <> placeText place)
+      (Nothing, NamedByPath {}) -> throwError (placeText place <> " has no address at " <> addressNamedText named)
   return (pool, addrs)
 
 -- | The networks of the active portfolio that hold a coin or an address
@@ -1670,8 +1679,8 @@ refuseOtherType kindM chosen =
 --
 -- The change goes to a new change address of the portfolio, of the type
 -- the builder works out ("Haskoin.Wallet.Tx.Building".'changeKindRule'),
--- or back to the address --change-back names, which must be one of the
--- portfolio on the network of the payment.
+-- or back to the address --change-back names, by itself or by its path,
+-- which must be one of the portfolio on the network of the payment.
 cmdPrepareTx :: Ctx -> Config -> AmountUnit -> PrepareTx -> IO Response
 cmdPrepareTx ctx cfg unit opts =
   runDBResponse cfg $ do
@@ -1690,13 +1699,14 @@ cmdPrepareTx ctx cfg unit opts =
       void $ poolAccountOf pool kind
     changeTo <- case opts.changeBack of
       Nothing -> return (NewChangeAddress opts.changeType)
-      Just typed -> do
-        addr <- liftEither $ textToAddrE net typed
-        held <- lift $ inPool pool addr
+      Just named -> do
+        addrM <- poolAddressNamed pool named
         place <- poolPlace pool
-        unless held $
-          throwError ("The change can only go back to an address of " <> placeText place <> ", and " <> cs typed <> " is not one")
-        return (ChangeBackTo addr)
+        let refused = "The change can only go back to an address of " <> placeText place <> ", and "
+        case (addrM, named) of
+          (Just addr, _) -> return (ChangeBackTo addr)
+          (Nothing, NamedByAddress typed) -> throwError (refused <> cs typed <> " is not one")
+          (Nothing, NamedByPath {}) -> throwError (refused <> "it has none at " <> addressNamedText named)
     -- Before the transaction is built, not after
     for_ opts.output checkPathFree
     recipients <- liftEither $ mapM (readPayment net unit) opts.recipients
@@ -2238,16 +2248,28 @@ cmdSync ctx cfg netM full =
 -- | Sign a message with the key of an address of the wallet. The answer is
 -- the signed message, or the --output file its armored block went to. An
 -- address the wallet has on several networks is the one on the --network,
--- or on the default network ('addressByText').
+-- or on the default network ('addressByText'). An address tells its
+-- portfolio, whichever is active. A path, such as bip84/0/3, is one of
+-- the active portfolio, on the network picked the same way
+-- ('heldAddressAt'). The signed message names the address as typed, or
+-- as the wallet stores it for a path.
 cmdSignMsg :: Ctx -> Config -> SignMsg -> IO Response
 cmdSignMsg ctx cfg opts =
   runDBResponse cfg $ do
     -- Before the mnemonic is asked, not after
     for_ opts.output checkPathFree
-    (portfolio, accId, addrDB) <- addressByText cfg opts.network opts.address
+    (portfolio, accId, addrDB) <- case opts.address of
+      NamedByAddress typed -> addressByText cfg opts.network typed
+      NamedByPath kind addrType index -> do
+        portfolio <- requireActivePortfolio
+        (accId, row) <- heldAddressAt cfg portfolio opts.network (Just kind) addrType index
+        return (portfolio, accId, row)
     acc <- getAccountById accId
     let net = accountNetwork acc
-    addr <- liftEither $ textToAddrE net opts.address
+        signer = case opts.address of
+          NamedByAddress typed -> typed
+          NamedByPath {} -> dBAddressAddress addrDB
+    addr <- liftEither $ textToAddrE net signer
     -- Warned before the mnemonic is asked, so that the user can stop. On
     -- stderr, to keep the armored block and the --json output clean.
     liftIO $ mapM_ (hPutStrLn stderr) $ signingWarnings opts.message
@@ -2255,9 +2277,9 @@ cmdSignMsg ctx cfg opts =
     let addrKey = derivePath ctx (addrPath addrDB) accountPrvKey
     signature <- encodeSignature <$> liftEither (signMessage ctx addr addrKey.key opts.message)
     case opts.output of
-      Nothing -> return $ ResponseSignMsg opts.message signature opts.address
+      Nothing -> return $ ResponseSignMsg opts.message signature signer
       Just file -> do
-        liftEitherIO $ writeTextFile file (signedMessageText opts.address signature opts.message)
+        liftEitherIO $ writeTextFile file (signedMessageText signer signature opts.message)
         return $ ResponseFile file
 
 -- | Check a signed message: whether the key of the address signed it. The

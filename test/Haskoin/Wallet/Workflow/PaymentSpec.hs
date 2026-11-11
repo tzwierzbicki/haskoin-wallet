@@ -793,6 +793,56 @@ coinControlSpec ctx =
         paidToOthers <$> txOf sendAll `shouldReturn` Map.fromList [(otherAddr 0, 48080)]
         leftOf sendAll `shouldBe` Right [(OutPoint (txHash (twoAddressesTx ctx)) 1, 30000, NotGiven)]
 
+    -- bip44/0/0 is 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj, which holds the coin
+    -- of 50000; the coin of 30000 is at bip44/0/1
+    it "spends the coins at the address at a --spend-from path, and only them" $
+      withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
+        synced home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from", "bip44/0/0", "--fee-rate", "10"] []
+        spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 50000)]
+
+    -- The payment sent left 50000 - 20000 - 2260 = 27740 at the change
+    -- address bip44/1/0, mined since
+    it "spends the coins at the change address at a --spend-from path" $
+      withChain ctx (paidChain ctx) $ \home chain -> do
+        _ <- sentPayment home
+        modifyIORef chain mine
+        _ <- answer home ["sync"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--spend-from", "bip44/1/0", "--fee-rate", "10"] []
+        spentFromWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 27740)]
+
+    -- The portfolio has an address at bip44/0/0 on bch alone, and the
+    -- default network is btc
+    it "pays on the only network where the portfolio has an address at the --spend-from path" $
+      withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive", "--network", "bch"] []
+        _ <- answer home ["sync"] []
+        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from", "bip44/0/0", "--fee-rate", "10"] []
+        placeOf prepared `shouldBe` Right (Place mainPortfolioRef bch)
+
+    -- The portfolio has an address at bip44/0/0 on btc and on btctest
+    it "pays on the default network when the portfolio has an address at the --spend-from path on several, the default one among them" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["receive", "--network", "btctest"] []
+        prepared <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from", "bip44/0/0", "--fee-rate", "10"] []
+        placeOf prepared `shouldBe` Right (Place mainPortfolioRef btc)
+
+    it "is refused a --spend-from path the portfolio has no address at on the network of the payment" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from", "bip44/0/5", "--fee-rate", "10"] [])
+          `shouldReturn` Right "portfolio0 of wallet0 on btc has no address at bip44/0/5"
+
+    -- The coin of 50000 at bip44/0/0, one input and one output: 192 bytes,
+    -- a fee of 1920, and 50000 - 1920 = 48080 sent
+    it "makes preparesendall send the coins at a --spend-from path" $
+      withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
+        synced home
+        sendAll <- answer home ["preparesendall", textOf (otherAddr 0), "--spend-from", "bip44/0/0", "--fee-rate", "10"] []
+        paidToOthers <$> txOf sendAll `shouldReturn` Map.fromList [(otherAddr 0, 48080)]
+
 {- The coins of both types of a portfolio -}
 
 -- The coins of 'bothTypesTx': 50000 at the first receiving address of the
@@ -1031,6 +1081,31 @@ changeBackSpec ctx = do
         synced home
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--change-back", textOf (externalAddr 0), "--change-type", "bip84", "--fee-rate", "10"] [])
           `shouldReturn` Right "--change-back names the address of the change, which has a type: it takes no --change-type"
+
+    -- receive hands out bip44/0/1, 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg
+    it "goes to the receiving address at the path it names" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["receive"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--change-back", "bip44/0/1", "--fee-rate", "10"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 1, 27740)]
+
+    -- The payment sent left 27740 at the change address bip44/1/0, mined
+    -- since. Paying 10000 of it: 27740 - 10000 - 2260 = 15480 of change.
+    it "goes to the used change address at the path it names" $
+      withChain ctx (paidChain ctx) $ \home chain -> do
+        _ <- sentPayment home
+        modifyIORef chain mine
+        _ <- answer home ["sync"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--change-back", "bip44/1/0", "--fee-rate", "10"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 15480)]
+
+    -- The bip84 account took no change address yet
+    it "is refused a path the portfolio has no address at on the network of the payment" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--change-back", "bip84/1/0", "--fee-rate", "10"] [])
+          `shouldReturn` Right "The change can only go back to an address of portfolio0 of wallet0 on btc, and it has none at bip84/1/0"
 
   -- Without --change-back, the change goes to a new change address: one
   -- no pending transaction pays, and that was never used

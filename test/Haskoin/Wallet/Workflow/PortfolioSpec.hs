@@ -2390,6 +2390,39 @@ messageSpec =
               "H98t/71A7/ED0lRtdsnAiVwcgUv+5sZr7WJwpHS3YFcCcTKtSG/rx2ooIXOTMbdhApTDjcfGjTu3Sjgh6Pl5qQc="
               (Text.pack written)
 
+    it "is signed by the key of the address at a path of the active portfolio, which the answer names" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        signed <- hwJson home ["signmsg", "bip44/0/0", "hello"] seedOnce
+        signed `shouldBe` ResponseSignMsg "hello" helloSignature "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"
+
+    -- The portfolio has an address at bip44/0/0 on bch alone, and the
+    -- default network is btc. The signature is the one of that address
+    -- above, written in any form.
+    it "is signed at a path on the only network where the portfolio has an address there, named as the wallet stores it" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive", "--network", "bch"] []
+        hwJson home ["signmsg", "bip44/0/0", "hello"] seedOnce
+          `shouldReturn` ResponseSignMsg
+            "hello"
+            "H98t/71A7/ED0lRtdsnAiVwcgUv+5sZr7WJwpHS3YFcCcTKtSG/rx2ooIXOTMbdhApTDjcfGjTu3Sjgh6Pl5qQc="
+            "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"
+
+    it "is refused for a path the active portfolio gave out no address at, before the mnemonic is asked" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home ["signmsg", "bip44/0/0", "hello"] seedOnce
+        run `shouldSatisfy` printed "portfolio0 of wallet0 has no address at bip44/0/0: addresses lists the addresses it gave out"
+        run `shouldNotSatisfy` askedMnemonic
+
+    it "is refused for a change path the active portfolio took no address at, naming the listing of change addresses" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["signmsg", "bip44/1/0", "hello"] seedOnce)
+          `shouldReturn` Right "portfolio0 of wallet0 has no address at bip44/1/0: addresses --change lists the change addresses it took"
+
     it "is refused after three seeds that are not the wallet's" $
       withHome $ \home -> do
         newTestPortfolio home
