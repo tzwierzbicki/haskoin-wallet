@@ -912,10 +912,7 @@ addressAtPath ctx cfg target addrType index = do
   portfolio <- requireActivePortfolio
   (accId, acc) <- chooseAccount cfg portfolio target.network target.kind
   let path = addrDeriv addrType :/ index
-  addrM <- liftIO $ deriveChainAddress ctx (accountKind acc) (accountXPubKey ctx acc) (addrDeriv addrType) index
-  -- BIP32 says to skip an index whose child key is invalid, so the chain
-  -- has no address there: see "Haskoin.Wallet.Database.Address"
-  addr <- liftMaybe ("There is no address at " <> cs (poolPathText (PoolPath (accountKind acc) path)) <> ": the key at that index is invalid, and the chain skips it") addrM
+  addr <- derivedAddressAt ctx acc addrType index
   -- The row is looked up by the address derived, not by its path, so that
   -- the answer shows what the key derives in either case
   held <- lift $ storedAmong [addr] (accId, acc)
@@ -2246,41 +2243,57 @@ cmdSync ctx cfg netM full =
       return $ ResponseSync (syncedPools synced) (syncedNotServed synced) [(net, cs failure) | (net, failure) <- syncedDown synced] activeM
 
 -- | Sign a message with the key of an address of the wallet. The answer is
--- the signed message, or the --output file its armored block went to. An
--- address the wallet has on several networks is the one on the --network,
--- or on the default network ('addressByText'). An address tells its
--- portfolio, whichever is active. A path, such as bip84/0/3, is one of
--- the active portfolio, on the network picked the same way
--- ('heldAddressAt'). The signed message names the address as typed, or
--- as the wallet stores it for a path.
+-- the signed message, or the --output file its armored block went to.
+--
+-- An address tells its portfolio, whichever is active. The wallet must
+-- hold it. One it has on several networks is the one on the --network,
+-- or on the default network ('addressByText').
+--
+-- A path, such as bip84/0/3, names the address the public key of the
+-- account derives there, in the active portfolio, on the --network or the
+-- default network, as show derives it ('derivedAddressAt'). It needs no
+-- row. The offline computer never gives out an address, since receive
+-- runs online, and holds none: a path is how it signs. The signed message
+-- names the address as typed, or, for a path, in the form the wallet
+-- stores, so that the reader sees which address signed.
 cmdSignMsg :: Ctx -> Config -> SignMsg -> IO Response
 cmdSignMsg ctx cfg opts =
   runDBResponse cfg $ do
     -- Before the mnemonic is asked, not after
     for_ opts.output checkPathFree
-    (portfolio, accId, addrDB) <- case opts.address of
-      NamedByAddress typed -> addressByText cfg opts.network typed
+    (portfolio, acc, path, signer) <- case opts.address of
+      NamedByAddress typed -> do
+        (portfolio, accId, row) <- addressByTextOr (notHeldToSign typed) cfg opts.network typed
+        acc <- getAccountById accId
+        return (portfolio, acc, addrPath row, typed)
       NamedByPath kind addrType index -> do
         portfolio <- requireActivePortfolio
-        (accId, row) <- heldAddressAt cfg portfolio opts.network (Just kind) addrType index
-        return (portfolio, accId, row)
-    acc <- getAccountById accId
+        (_, acc) <- chooseAccount cfg portfolio opts.network (Just kind)
+        derived <- derivedAddressAt ctx acc addrType index
+        stored <- liftEither $ addrToTextE (accountNetwork acc) derived
+        return (portfolio, acc, addrDeriv addrType :/ index, stored)
     let net = accountNetwork acc
-        signer = case opts.address of
-          NamedByAddress typed -> typed
-          NamedByPath {} -> dBAddressAddress addrDB
     addr <- liftEither $ textToAddrE net signer
     -- Warned before the mnemonic is asked, so that the user can stop. On
     -- stderr, to keep the armored block and the --json output clean.
     liftIO $ mapM_ (hPutStrLn stderr) $ signingWarnings opts.message
     (_, accountPrvKey) <- askSigningKey terminal (accountKind acc) net ctx (portfolioIndex portfolio.portfolioRow) (accountXPubKey ctx acc)
-    let addrKey = derivePath ctx (addrPath addrDB) accountPrvKey
+    let addrKey = derivePath ctx path accountPrvKey
     signature <- encodeSignature <$> liftEither (signMessage ctx addr addrKey.key opts.message)
     case opts.output of
       Nothing -> return $ ResponseSignMsg opts.message signature signer
       Just file -> do
         liftEitherIO $ writeTextFile file (signedMessageText signer signature opts.message)
         return $ ResponseFile file
+
+-- | The refusal of signmsg for an address the wallet does not hold. A
+-- computer holds the addresses it gave out, and the offline one gives out
+-- none, so the refusal points to the path, which needs no row.
+notHeldToSign :: Text -> String
+notHeldToSign typed =
+  "The wallet has no address "
+    <> cs typed
+    <> ". A computer holds only the addresses it gave out. On another one, such as the offline computer, give the path of the address instead, as addresses shows it, such as bip84/0/3"
 
 -- | Check a signed message: whether the key of the address signed it. The
 -- wallet is not needed: the address can be anyone's.

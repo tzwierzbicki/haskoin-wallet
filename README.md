@@ -448,7 +448,7 @@ no `switch`.
 | `exportwallet` | On the wallet of the active portfolio. `--portfolio` writes one portfolio of it only. |
 | `portfolios`, `sync`, `exportsheet` | They cover every portfolio of every wallet. `--network` narrows `sync` down to one network. |
 | `signtx`, `signsweep`, `importtx`, `bumpfee`, `preparesweep`, and `show` with a transaction or a transaction file | They find the portfolio from the transaction, or from the destinations of a sweep. The active portfolio settles a choice between several, as the next paragraph says. |
-| `lockcoin`, `unlockcoin`, `signmsg`, `show` with an address or a coin, and `label` with an address or a transaction | An address and a coin tell where they are. A transaction gets its label in every portfolio that holds it. `--network` is needed only when the wallet has the address or the coin on several test networks. |
+| `lockcoin`, `unlockcoin`, `signmsg` and `show` with an address or a coin, and `label` with an address or a transaction | An address and a coin tell where they are. A transaction gets its label in every portfolio that holds it. `--network` is needed only when the wallet has the address or the coin on several test networks. |
 | `importwallet`, and `show` with a file of a wallet | They find the wallet from the file. `--portfolio` names one portfolio of the file, and reads only that one. |
 | `switch` | Its argument names the portfolio to make active, or `--portfolio` does, and `--wallet` names its wallet. Without `--wallet`, it is the wallet of the active portfolio. |
 | `deleteportfolio`, `deletewallet` | They never take what to delete from the active portfolio. `deleteportfolio --portfolio` names a portfolio of the wallet of the active portfolio, and refuses the active one. `deletewallet --wallet` names a wallet, and refuses the wallet of the active portfolio while another wallet exists. |
@@ -579,7 +579,9 @@ the wallet: `show`, `label`, `signmsg`, `--spend-from` and `--change-back`
 take `bip84/0/0` as well as the address. A path is one of the active
 portfolio. The network the command works on tells which address it is, and
 `--network` picks one when the portfolio has an address at the path on
-several networks.
+several networks. `show` and `signmsg` derive the address at a path from the
+public key, so they take any path, on the offline computer too. The others
+take the path of an address the portfolio holds.
 
 If you always want the same view, set the key `listing-view` of the
 [configuration](#configuration) to `verbose` or `tabular`. `--compact` then
@@ -2572,13 +2574,20 @@ It is signed on the network its file names.
 
 `hw signmsg ADDRESS|PATH MESSAGE` signs a message with the key of an address of
 the wallet. It asks for the mnemonic of the wallet of that address. `--output`
-writes the signed message to a file instead of printing it. The address may be
-given by its path in the active portfolio, with its type, such as `bip84/0/3`.
-The signed message then names the address itself.
+writes the signed message to a file instead of printing it.
+
+An address must be one the wallet holds, one this computer gave out. The
+offline computer gives out none, since `receive` runs online. There, give the
+path of the address instead, with its type, as `addresses` shows it online,
+such as `bip84/0/3`. `signmsg` derives the address at the path from the public
+key of the account, as [`show`](#hw-show) does. It is in the active portfolio,
+on `--network` or the default network. The signed message names that address,
+so you see which one signed.
 
 ```console
 hw signmsg MYADDRESS "I control this address" --output signed.txt
-hw signmsg bip84/0/3 "I control this address"
+hw signmsg bip84/0/3 "I control this address"   # on the offline computer
+hw signmsg bip44/0/0 "I control this address" --network bch
 ```
 
 From a P2PKH address, any wallet verifies the signature. From a native SegWit
@@ -2593,9 +2602,13 @@ a SegWit address.
 > - **`signmsg` and `verifymsg` work with P2PKH and SegWit addresses of one
 >   key,** not with Taproot ones.
 > - **The address tells its portfolio.** `signmsg` signs with it whichever
->   portfolio is active. A path is one of the active portfolio. `--network` is
->   needed only when the wallet has the address, or an address at the path, on
->   several networks, and none of them is the default network.
+>   portfolio is active. `--network` is needed only when the wallet has the
+>   address on several test networks, which share their keys, and none of them
+>   is the default network.
+> - **Sign with an address you gave out.** A path takes any index, and the
+>   signed message shows its address in full. An address far past the ones you
+>   gave out may lie past the gap of 20 that a restored wallet looks at, and no
+>   `sync` would find a payment there.
 
 #### `hw verifymsg`
 

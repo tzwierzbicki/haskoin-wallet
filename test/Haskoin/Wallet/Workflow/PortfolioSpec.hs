@@ -2397,31 +2397,61 @@ messageSpec =
         signed <- hwJson home ["signmsg", "bip44/0/0", "hello"] seedOnce
         signed `shouldBe` ResponseSignMsg "hello" helloSignature "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"
 
-    -- The portfolio has an address at bip44/0/0 on bch alone, and the
-    -- default network is btc. The signature is the one of that address
-    -- above, written in any form.
-    it "is signed at a path on the only network where the portfolio has an address there, named as the wallet stores it" $
+    -- A new portfolio holds no address, as on the offline computer, where
+    -- receive never runs
+    it "is signed at a path on a computer that gave out no address, from the public key of the account" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        signed <- hwJson home ["signmsg", "bip44/0/0", "hello"] seedOnce
+        signed `shouldBe` ResponseSignMsg "hello" helloSignature "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"
+
+    -- The wallet gave out bip44/0/0 on bch alone, and the default network
+    -- is btc
+    it "is signed at a path on the default network without --network, whatever networks the wallet gave the address out on" $
       withHome $ \home -> do
         newTestPortfolio home
         _ <- answer home ["receive", "--network", "bch"] []
-        hwJson home ["signmsg", "bip44/0/0", "hello"] seedOnce
+        signed <- hwJson home ["signmsg", "bip44/0/0", "hello"] seedOnce
+        signed `shouldBe` ResponseSignMsg "hello" helloSignature "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"
+
+    -- The signature is the one of that address above, written in any form
+    it "is signed at a path on the --network named, which the answer names as the wallet stores it" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        hwJson home ["signmsg", "bip44/0/0", "hello", "--network", "bch"] seedOnce
           `shouldReturn` ResponseSignMsg
             "hello"
             "H98t/71A7/ED0lRtdsnAiVwcgUv+5sZr7WJwpHS3YFcCcTKtSG/rx2ooIXOTMbdhApTDjcfGjTu3Sjgh6Pl5qQc="
             "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"
 
-    it "is refused for a path the active portfolio gave out no address at, before the mnemonic is asked" $
+    -- 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn is the first change address of the
+    -- bip44 account of portfolio0 on btc. verifymsg checks the signature
+    -- against it.
+    it "is signed at a change path by the key of the change address there" $
       withHome $ \home -> do
         newTestPortfolio home
-        run <- hw home ["signmsg", "bip44/0/0", "hello"] seedOnce
-        run `shouldSatisfy` printed "portfolio0 of wallet0 has no address at bip44/0/0: addresses lists the addresses it gave out"
+        signed <- hwJson home ["signmsg", "bip44/1/0", "hello"] seedOnce
+        case signed of
+          ResponseSignMsg _ signature signer -> do
+            signer `shouldBe` "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"
+            hwJson home ["verifymsg", "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", Text.unpack signature, "hello"] []
+              `shouldReturn` ResponseVerifyMsg "hello" signature "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn" True
+          other -> expectationFailure ("Not a signed message: " <> show other)
+
+    it "is refused at a path of a type the network does not have, before the mnemonic is asked" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home ["signmsg", "bip84/0/0", "hello", "--network", "bch"] seedOnce
+        run `shouldSatisfy` printed "A bip84 account needs SegWit, which bch does not have"
         run `shouldNotSatisfy` askedMnemonic
 
-    it "is refused for a change path the active portfolio took no address at, naming the listing of change addresses" $
+    -- 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ is of another wallet. The wallet
+    -- would hold an address of its own only once this computer gave it out.
+    it "is refused for an address the wallet does not hold, with the path to give instead" $
       withHome $ \home -> do
         newTestPortfolio home
-        (errorOf <$> hwJson home ["signmsg", "bip44/1/0", "hello"] seedOnce)
-          `shouldReturn` Right "portfolio0 of wallet0 has no address at bip44/1/0: addresses --change lists the change addresses it took"
+        (errorOf <$> hwJson home ["signmsg", "1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ", "hello"] seedOnce)
+          `shouldReturn` Right "The wallet has no address 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ. A computer holds only the addresses it gave out. On another one, such as the offline computer, give the path of the address instead, as addresses shows it, such as bip84/0/3"
 
     it "is refused after three seeds that are not the wallet's" $
       withHome $ \home -> do

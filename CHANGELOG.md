@@ -195,7 +195,9 @@ Transaction files:
 Messages:
 
 - `signmsg` signs a message in the Bitcoin Signed Message format. It takes
-  the address, or its path in the active portfolio, such as `bip84/0/3`.
+  the address, or its path in the active portfolio, such as `bip84/0/3`. It
+  derives the address at a path from the public key, so the offline computer,
+  which gives out no address, signs by path.
 - `verifymsg` checks such a signature against its address.
 
 Using `hw`:

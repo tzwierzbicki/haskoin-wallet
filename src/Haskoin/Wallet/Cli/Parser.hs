@@ -3106,13 +3106,22 @@ The message is signed exactly as given. hw warns about spaces or line breaks
 at its start or end. Copying a message easily changes them, and the signature
 would then fail to verify.
 
+An address must be one the wallet holds, one this computer gave out. The
+offline computer gives out none, since receive runs online. There, give the
+path of the address instead, with its type, as addresses shows it online,
+such as bip84/0/3. signmsg derives the address at the path from the public
+key of the account, in the active portfolio, on --network or the default
+network, as show does. The signed message names that address. Sign with an
+address you gave out: a payment to an address far past the others would not
+be found.
+
 With --output, hw writes the armored block to a file instead of printing it.
 verifymsg --input can then check the file. It also reads the --json answer,
 saved to a file.
 |],
       args =
         CommandSignMsg
-          <$> (SignMsg <$> signAddressArg <*> signMsgArg <*> signedMessageOutputOption <*> namedAddressNetworkOption)
+          <$> (SignMsg <$> signAddressArg <*> signMsgArg <*> signedMessageOutputOption <*> signNetworkOption)
     }
 
 signAddressArg :: Args AddressNamed
@@ -3120,7 +3129,13 @@ signAddressArg =
   argument (eitherReader readAddressNamed) $
     metavar "ADDRESS|PATH"
       <> completer (mkCompleter walletAddresses)
-      <> help "The address whose key signs. It must be an address of this wallet. A path, such as bip84/0/3, names the address at that path in the active portfolio."
+      <> help "The address whose key signs. It must be an address this wallet holds. A path, such as bip84/0/3, names the address the active portfolio derives there, held or not, as on the offline computer."
+
+-- | The network of signmsg: that of an address the wallet has on several,
+-- or that of the account of a path, which the path does not say
+signNetworkOption :: Args (Maybe Network)
+signNetworkOption =
+  networkOptionWith "With an address, the network to find it on, when the wallet has it on several. Without it, the only one, or else the one on the default network. With a path, the network of its account. Without it, the default-network of the configuration file, or btc."
 
 signMsgArg :: Args Text
 signMsgArg =

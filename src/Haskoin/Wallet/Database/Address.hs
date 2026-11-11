@@ -442,12 +442,17 @@ findAddressByText addrTxt = do
 -- settles it, the user is asked for --network, with the networks named:
 -- hw does not guess which chain an address is meant on.
 addressByText :: (MonadUnliftIO m) => Config -> Maybe Network -> Text -> ExceptT String (DB m) (Portfolio, DBAccountId, DBAddress)
-addressByText cfg netM addrTxt = do
+addressByText cfg netM addrTxt = addressByTextOr ("The wallet has no address " <> cs addrTxt) cfg netM addrTxt
+
+-- | 'addressByText', with the refusal of an address the wallet does not
+-- have given: a command can say there what the user may do instead
+addressByTextOr :: (MonadUnliftIO m) => String -> Config -> Maybe Network -> Text -> ExceptT String (DB m) (Portfolio, DBAccountId, DBAddress)
+addressByTextOr notHeld cfg netM addrTxt = do
   found <- lift $ findAddressByText addrTxt
   onNetworks <- forM found $ \row@(_, accId, _) -> (row,) . accountNetwork <$> getAccountById accId
   case chooseOnNetwork cfg netM onNetworks of
     Right row -> return row
-    Left FoundNowhere -> throwError $ "The wallet has no address " <> cs addrTxt
+    Left FoundNowhere -> throwError notHeld
     Left (NotOnGivenNetwork net networks) ->
       throwError $ "The address " <> cs addrTxt <> " is on " <> networksText networks <> ", not on the --network " <> net.name
     Left (OnSeveralNetworks networks) -> throwError (onSeveralNetworks addrTxt networks)
@@ -907,6 +912,23 @@ addrPoolPath net addr = do
 -- | The address of a row with its derivation path
 fromDBAddr :: Network -> DBAddress -> Either String (Address, SoftPath)
 fromDBAddr net row = (,addrPath row) <$> textToAddrE net (dBAddressAddress row)
+
+-- | The address the public key of an account derives at an index of one
+-- of its chains, whether the wallet holds it or not: what show and
+-- signmsg take a path for. They need no row, so they work on a computer
+-- that never gave the address out, such as the offline one. An index
+-- whose child key is invalid has no address, as BIP32 says, and is
+-- refused.
+derivedAddressAt :: (MonadIO m) => Ctx -> DBAccount -> AddrType -> KeyIndex -> ExceptT String m Address
+derivedAddressAt ctx acc addrType index = do
+  addrM <- liftIO $ deriveChainAddress ctx kind (accountXPubKey ctx acc) (addrDeriv addrType) index
+  liftMaybe invalidIndex addrM
+  where
+    kind = accountKind acc
+    invalidIndex =
+      "There is no address at "
+        <> chainPathText (Just kind) addrType index
+        <> ": the key at that index is invalid, and the chain skips it"
 
 -- | The address of a chain of an account of the kind at an index, or
 -- Nothing when the child key at that index is invalid: haskoin-core throws
