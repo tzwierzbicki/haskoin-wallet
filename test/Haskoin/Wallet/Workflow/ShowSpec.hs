@@ -79,7 +79,7 @@ pathSpec =
         newTestPortfolio home
         run <- hw home ["show", "/0/3"] []
         take 2 (Text.lines (runOut run))
-          `shouldBe` [ "/0/3  1yQZuJjA6w7h.........Cv22rKCas7F1",
+          `shouldBe` [ "bip44/0/3  1yQZuJjA6w7h.........Cv22rKCas7F1",
                        "  Account  : portfolio0  btc  bip44"
                      ]
 
@@ -89,7 +89,7 @@ pathSpec =
         run <- hw home ["show", "/0/3"] []
         run
           `shouldSatisfy` printedSentence
-            "Compare both ends with the address that receive gave out at /0/3 on the online computer. If they match, that address is of this account, and you can give it out. If they differ, the online computer may have been tampered with, and you should not give the address out. Nobody can make another address with the same ends. This screen is for checking only, so the middle of the address is hidden. Give out the address as receive showed it."
+            "Compare both ends with the address that receive gave out at bip44/0/3 on the online computer. If they match, that address is of this account, and you can give it out. If they differ, the online computer may have been tampered with, and you should not give the address out. Nobody can make another address with the same ends. This screen is for checking only, so the middle of the address is hidden. Give out the address as receive showed it."
 
     it "is cut in JSON too, which holds nowhere the whole address, so that no script pays it" $
       withHome $ \home -> do
@@ -135,6 +135,20 @@ pathSpec =
       withHome $ \home -> do
         newTestPortfolio home
         (cutAddressOf <$> hwJson home ["show", "/0/0", "--type", "bip84"] []) `shouldReturn` Right "bc1qynnywxcvs9dwu............eyprgqeacxwtc"
+
+    -- The ends of bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc again, though
+    -- the default type is bip44: the path names its account
+    it "is of the account of the type the path starts with, as the views write it" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (cutAddressOf <$> hwJson home ["show", "bip84/0/0"] []) `shouldReturn` Right "bc1qynnywxcvs9dwu............eyprgqeacxwtc"
+
+    it "is refused for a type hw holds no account of, naming the types it holds" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home ["show", "bip49/0/3"] []
+        runExit run `shouldBe` ExitFailure 1
+        runErr run `shouldSatisfy` Text.isInfixOf "The path bip49/0/3 is of no type of account hw holds: a path starts with bip44 or bip84, such as bip84/0/3, or with no type, such as /0/3"
 
     it "hands out nothing: the wallet has no address after it, and receive starts at the first" $
       withHome $ \home -> do
@@ -519,7 +533,7 @@ walletFileSpec =
               "",
               "portfolio0  btc  bip44",
               "  Address labels",
-              "    /0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Wages\"",
+              "    bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Wages\"",
               "  Transaction labels",
               "    0000000000000000000000000000000000000000000000000000000000000001  \"Salary\""
             ]
@@ -584,6 +598,13 @@ refusedSpec =
         _ <- answer home ["receive"] []
         (errorOf <$> hwJson home ["show", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "--type", "bip44"] [])
           `shouldReturn` Right "show takes no --type with an address"
+
+    -- The path names the type of its account already
+    it "refuses --type with a path that starts with its type" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["show", "bip84/0/0", "--type", "bip84"] [])
+          `shouldReturn` Right "show takes no --type with a path that starts with its type"
 
     it "refuses --type with a coin, which is of the type of its account" $
       withHome $ \home -> do

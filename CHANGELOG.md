@@ -126,16 +126,19 @@ Addresses:
 
 - `receive` shows a QR code of the new address on the terminal.
 - `show` shows one thing of the wallet, as the word typed tells: the address at
-  a path such as `/0/3`, an address, a transaction by its txid or nosigHash, a
-  coin `TXID:INDEX`, or a file, any other word. Without a word, it shows the
+  a path such as `bip84/0/3`, an address, a transaction by its txid or
+  nosigHash, a coin `TXID:INDEX`, or a file, any other word. A path takes the
+  type of its account in front, as every view writes it. Without the type,
+  as in `/0/3`, it is of the type `--type` picks. Without a word, it shows the
   newest receiving address. A file is a transaction file, as its portfolio
   sees it, or a file of a wallet, as `importwallet` would take it, with the
   labels of the file under each account.
   An address the wallet holds comes with its QR code, to give it out again.
-  Run `show /0/3` on the offline computer to check an address the online one
-  gives out: it derives the address from the public key. An address at a path
-  the wallet does not hold is shown cut, its middle hidden behind dots, in JSON
-  too. Its ends carry 128 bits, enough to compare, and nobody can pay it.
+  Run `show bip84/0/3` on the offline computer, with the path the online one
+  gave out, to check the address: it derives the address from the public key.
+  An address at a path the wallet does not hold is shown cut, its middle
+  hidden behind dots, in JSON too. Its ends carry 128 bits, enough to compare,
+  and nobody can pay it.
 - `balances` lists the addresses that hold coins, grouped by network, with a
   total for each network.
 - `label` labels transactions too, and the prepare commands take `--label`.
@@ -193,10 +196,15 @@ Using `hw`:
   sorted by network.
 - The compact views count the confirmations up to `999+ confirmations`.
   `--verbose` and the JSON answers give the full count.
+- Every view writes the path of an address of the wallet with the type of its
+  account in front, such as `bip84/0/3`. A portfolio has an address at `/0/3`
+  in each of its accounts on a network, and `balances` and `coins` list both
+  accounts of a network together. The JSON answers give the `"type"` of an
+  address beside its path, and the CSV files a column `Type`.
 - Transactions name the addresses of the wallet by their type and derivation
-  path, such as `bip84/0/3`, and show them and their labels in blue.
-  `--verbose` gives every address in full. `coins` gives the address of a coin
-  in full, with its path.
+  path, and show them and their labels in blue. `--verbose` gives every
+  address in full, with its path. `coins` gives the address of a coin in full,
+  with its path.
 - `txs` shows the balance of the portfolio on the network after each
   transaction.
 - `--tabular` shows each element of a listing on one row of a table, in

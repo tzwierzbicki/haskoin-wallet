@@ -216,7 +216,7 @@ addressLabelsSpec ctx =
         _ <- answer online ["label", textOf (externalAddr 0), "Salary"] []
         _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
         run <- hw signer ["show", online </> "unsigned.psbt"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0\n             \"Salary\"\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0\n             \"Salary\"\n"
 
     -- ESC [ 1 A moves the cursor up a line: a file could rewrite the lines
     -- above the label, the recipient among them
@@ -291,7 +291,7 @@ coinLabelsSpec ctx =
         _ <- answer home ["label", paidTxid ctx, "Salary"] []
         _ <- answer home ["label", textOf (externalAddr 0), "Wages"] []
         run <- hw home ["coins"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  /0/0  \"Wages\"\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  bip44/0/0  \"Wages\"\n"
 
     -- The change of the payment of 20000 is the one coin left
     it "is none on the change of a payment the user made and labelled" $
@@ -316,7 +316,7 @@ coinLabelsSpec ctx =
         _ <- answer online ["label", textOf (externalAddr 0), "Wages"] []
         _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
         run <- hw signer ["show", online </> "unsigned.psbt"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0\n             \"Wages\"  from \"Salary\"\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0\n             \"Wages\"  from \"Salary\"\n"
 
     -- The line below the address starts at column 13, under the address,
     -- and wraps before column 80, each new line under the address again
@@ -327,7 +327,7 @@ coinLabelsSpec ctx =
         _ <- answer home ["label", textOf (externalAddr 0), "Label for an address blablabla"] []
         run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         Text.lines (runOut run)
-          `shouldContain` [ "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0",
+          `shouldContain` [ "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0",
                             "             \"Label for an address blablabla\"  from \"This is a very long label",
                             "             for an internal transaction that was done on oct 31.",
                             "             Bloooooooooooooob! Bloooooooooooooooob!\""
@@ -354,7 +354,7 @@ changeAddressSpec ctx =
         modifyIORef chain mine
         _ <- answer home ["sync"] []
         run <- hw home ["coins"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  at 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  /1/0  change address\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  at 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  bip44/1/0  change address\n"
 
     it "is said to be one by a transaction that spends from it" $
       withChain ctx (paidChain ctx) $ \home chain -> do
@@ -362,7 +362,7 @@ changeAddressSpec ctx =
         modifyIORef chain mine
         _ <- answer home ["sync"] []
         run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--fee-rate", "10"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  From     : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  /1/0\n             change address\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  From     : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  bip44/1/0\n             change address\n"
 
 historySpec :: Ctx -> Spec
 historySpec ctx =

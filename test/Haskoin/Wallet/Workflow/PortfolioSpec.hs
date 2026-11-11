@@ -1864,7 +1864,7 @@ addressSpec ctx =
       withHome $ \home -> do
         newTestPortfolio home
         run <- hw home ["receive"] []
-        runOut run `shouldSatisfy` Text.isPrefixOf ("/0/0  " <> externalAddrsText !! 0 <> "\n  Transactions: 0\n")
+        runOut run `shouldSatisfy` Text.isPrefixOf ("bip44/0/0  " <> externalAddrsText !! 0 <> "\n  Transactions: 0\n")
 
     it "are named by label, given by their text" $
       withHome $ \home -> do

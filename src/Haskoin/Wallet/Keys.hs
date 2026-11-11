@@ -175,9 +175,11 @@ data PoolPath = PoolPath
 legacyPath :: SoftPath -> PoolPath
 legacyPath = PoolPath Bip44
 
--- | A path as a view names it where the address is not written out, with
--- the kind of its account in front, as in bip84/0/3: the path /0/3 is one
--- address in the BIP44 account and another in the BIP84 one
+-- | A path as every view writes it, with the kind of its account in
+-- front, as in bip84/0/3: the path /0/3 is one address in the BIP44
+-- account and another in the BIP84 one. A view that writes the address in
+-- full writes its path so too, so that one address has one name
+-- everywhere, and show reads it back.
 poolPathText :: PoolPath -> Text
 poolPathText path = kindName (pathKind path) <> cs (pathToStr (pathInAccount path))
 

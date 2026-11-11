@@ -732,6 +732,33 @@ pathSpec =
       forM_ ["/2/3", "/0/3'", "/0", "/0/3/1", "0/3", "m/0/3", "M/0/3", "/0/-1", "/0/2147483648", "/0/4294967296", "/0/", "/00/3", "/0/3 ", "", "abc"] $ \typed ->
         readChainPath typed `shouldBe` Left ("The path " <> cs typed <> " is not that of an address: /0/i is the receiving address i, and /1/i the change address i")
 
+    it "reads a path that starts with the type of its account, as the views write it, in any case" $ do
+      readTypedChainPath "bip84/0/3" `shouldBe` Just (Right (Just Bip84, AddrExternal, 3))
+      readTypedChainPath "bip44/1/2" `shouldBe` Just (Right (Just Bip44, AddrInternal, 2))
+      readTypedChainPath "BIP84/0/3" `shouldBe` Just (Right (Just Bip84, AddrExternal, 3))
+
+    it "reads a path without a type, and leaves the type to the command" $
+      readTypedChainPath "/0/3" `shouldBe` Just (Right (Nothing, AddrExternal, 3))
+
+    it "refuses a path of a type hw holds no account of, naming the types it holds" $
+      readTypedChainPath "bip49/0/3" `shouldBe` Just (Left "The path bip49/0/3 is of no type of account hw holds: a path starts with bip44 or bip84, such as bip84/0/3, or with no type, such as /0/3")
+
+    it "refuses a path after a type that is not that of an address, naming the path as typed" $
+      readTypedChainPath "bip84/0/3'" `shouldBe` Just (Left "The path bip84/0/3' is not that of an address: /0/i is the receiving address i, and /1/i the change address i")
+
+    -- A letter in front of a path is read as a type only in the form bipN
+    -- and right before the first slash. Every other word names something
+    -- else, such as a file.
+    it "takes no other word for a path" $
+      forM_ ["unsigned.psbt", "./bip84/0/3", "bip84", "bip/0/3", "bip84x/0/3", "bip84-0/3"] $ \typed ->
+        readTypedChainPath typed `shouldBe` Nothing
+
+    -- 1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1 is P2PKH, and
+    -- bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc P2WPKH
+    it "tells the type of the account of a row by the form of its address" $ do
+      addrPoolPath btc fixtureRow `shouldBe` Just (PoolPath Bip44 (Deriv :/ 0 :/ 3))
+      addrPoolPath btc fixtureRow {dBAddressAddress = "bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc"} `shouldBe` Just (PoolPath Bip84 (Deriv :/ 0 :/ 3))
+
     it "reads the path of a row from its chain and index" $ do
       addrPath fixtureRow `shouldBe` Deriv :/ 0 :/ 3
       addrPath fixtureRow {dBAddressInternal = True} `shouldBe` Deriv :/ 1 :/ 3
@@ -788,12 +815,15 @@ jsonSpec =
       eitherDecode (cs json) `shouldBe` Right (toJSON fixtureRow)
       eitherDecode (cs json) `shouldBe` Right fixtureRow
 
-    it "prints an address with the balance it can spend among its balances, as hw addresses does, and reads it back" $ do
+    -- 1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1 is P2PKH: an address of a bip44
+    -- account
+    it "prints an address with the type of its account and the balance it can spend among its balances, as hw addresses does, and reads it back" $ do
       let json :: String
           json =
             [r|{
               "account": 1,
               "index": 3,
+              "type": "bip44",
               "derivation": "/0/3",
               "address": "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1",
               "label": "Savings",
@@ -801,17 +831,18 @@ jsonSpec =
               "internal": false,
               "created": "2023-11-01T00:00:00Z"
             }|]
-      eitherDecode (cs json) `shouldBe` Right (addressWithSpendable fixtureRow 4800)
+      eitherDecode (cs json) `shouldBe` Right (addressWithSpendable btc fixtureRow 4800)
       (parseEither parseAddressWithSpendable =<< eitherDecode (cs json)) `shouldBe` Right (fixtureRow, 4800)
 
     -- The two coins hold 5300: the 5000 confirmed can be spent, the 300
     -- unconfirmed cannot yet, and nothing locks them
-    it "prints an address with the balance of its coins among its balances, as balances does, and reads it back" $ do
+    it "prints an address with the type of its account and the balance of its coins among its balances, as balances does, and reads it back" $ do
       let json :: String
           json =
             [r|{
               "account": 1,
               "index": 3,
+              "type": "bip44",
               "derivation": "/0/3",
               "address": "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1",
               "label": "Savings",
@@ -819,5 +850,5 @@ jsonSpec =
               "internal": false,
               "created": "2023-11-01T00:00:00Z"
             }|]
-      eitherDecode (cs json) `shouldBe` Right (addressWithCoinBalance fixtureRow (CoinBalance 5300 5000 0 0))
+      eitherDecode (cs json) `shouldBe` Right (addressWithCoinBalance btc fixtureRow (CoinBalance 5300 5000 0 0))
       (parseEither parseAddressWithCoinBalance =<< eitherDecode (cs json)) `shouldBe` Right (fixtureRow, CoinBalance 5300 5000 0 0)

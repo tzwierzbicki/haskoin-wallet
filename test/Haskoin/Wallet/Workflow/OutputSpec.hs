@@ -433,14 +433,14 @@ layoutSpec ctx =
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         shown <- shownPayment home []
-        shown `shouldSatisfy` Text.isInfixOf "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0\n"
+        shown `shouldSatisfy` Text.isInfixOf "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0\n"
 
     it "shows the labels of the addresses of the wallet" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "salary"] []
         shown <- shownPayment home []
-        shown `shouldSatisfy` Text.isInfixOf "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0\n             \"salary\"\n"
+        shown `shouldSatisfy` Text.isInfixOf "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0\n             \"salary\"\n"
 
     it "shows the recipients of a payment" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -452,13 +452,13 @@ layoutSpec ctx =
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         shown <- shownPayment home []
-        shown `shouldSatisfy` Text.isInfixOf "  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  /1/0\n"
+        shown `shouldSatisfy` Text.isInfixOf "  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  bip44/1/0\n"
 
     it "shows the change a payment sends back to the address it spends from" $
       withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
         synced home
         shown <- shownPayment home ["--spend-from", textOf (externalAddr 0), "--change-back", textOf (externalAddr 0)]
-        shown `shouldSatisfy` Text.isInfixOf "  Change   : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00027740 btc  /0/0\n"
+        shown `shouldSatisfy` Text.isInfixOf "  Change   : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00027740 btc  bip44/0/0\n"
 
     -- The payer's coins are worth 121000, nothing to the wallet
     it "shows the addresses the payer of a payment received spends from, without their amounts, in txs --verbose" $
@@ -471,7 +471,7 @@ layoutSpec ctx =
       withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
         synced home
         listed <- runOut <$> hw home ["txs", "--verbose"] []
-        listed `shouldSatisfy` Text.isInfixOf "  To       : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  /0/0\n"
+        listed `shouldSatisfy` Text.isInfixOf "  To       : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0\n"
 
     -- A portfolio has an address at /0/0 in each of its accounts on btc,
     -- so the path names the type of the account
@@ -621,8 +621,8 @@ layoutSpec ctx =
         let firstLine = Text.takeWhile (/= '\n') shown
             (_, sent) = Text.breakOn "  To       : " shown
         firstLine `shouldSatisfy` Text.isInfixOf "  Internal  "
-        sent `shouldSatisfy` Text.isInfixOf "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg  0.00020000 btc  /0/1\n"
-        sent `shouldSatisfy` Text.isInfixOf "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  /1/0\n             change address\n"
+        sent `shouldSatisfy` Text.isInfixOf "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg  0.00020000 btc  bip44/0/1\n"
+        sent `shouldSatisfy` Text.isInfixOf "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  bip44/1/0\n             change address\n"
         shown `shouldNotSatisfy` Text.isInfixOf "  Change   : "
 
 {- Pending transactions -}
@@ -947,12 +947,12 @@ sectionsSpec ctx =
         (Text.lines . runOut <$> hw home ["addresses"] [])
           `shouldReturn` [ "portfolio0  btc  bip44",
                            "",
-                           "/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj",
+                           "bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj",
                            "  unused",
                            "",
                            "portfolio0  btc  bip84",
                            "",
-                           "/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc",
+                           "bip84/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc",
                            "  unused"
                          ]
 
@@ -1054,7 +1054,7 @@ pagerSpec ctx =
         newTestPortfolio home
         _ <- answer home ["receive"] []
         (_, listed) <- paged home ["addresses"]
-        listed `shouldBe` ["portfolio0  btc  bip44", "", "/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "  unused"]
+        listed `shouldBe` ["portfolio0  btc  bip44", "", "bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "  unused"]
 
     -- --header=2 keeps the line of headings and the line under it
     it "keeps the header of a table on the screen as its rows scroll, when the listing is of one place" $
@@ -1105,7 +1105,7 @@ pagerSpec ctx =
         (runExit run, runErr run, runOut run)
           `shouldBe` ( ExitSuccess,
                        "The pager less was not found. The listing is printed without one.\n",
-                       "portfolio0  btc  bip44\r\n\r\n/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\r\n  unused\r\n"
+                       "portfolio0  btc  bip44\r\n\r\nbip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\r\n  unused\r\n"
                      )
 
 {- Next steps -}
@@ -1146,7 +1146,7 @@ addressCodeSpec ctx = do
         newTestPortfolio home
         shown <- screen home ["receive", "--label", "rent"]
         (take 7 shown, take 1 (drop 8 shown))
-          `shouldBe` ( [ "/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"rent\"",
+          `shouldBe` ( [ "bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"rent\"",
                          "  Transactions: 0",
                          "  Received    : 0.00000000 btc",
                          "  Confirmed   : 0.00000000 btc",
@@ -1244,14 +1244,14 @@ addressCodeSpec ctx = do
         newTestPortfolio home
         _ <- answer home ["receive", "--network", "bch"] []
         (take 1 <$> screen home ["show", "qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"])
-          `shouldReturn` ["/0/0  bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"]
+          `shouldReturn` ["bip44/0/0  bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"]
 
     it "shows a change address at its path on the change chain" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         (take 1 <$> screen home ["show", "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"])
-          `shouldReturn` ["/1/0  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"]
+          `shouldReturn` ["bip44/1/0  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"]
 
   describe "show for a path or for the newest address" $ do
     it "shows the QR code at a path the wallet holds" $

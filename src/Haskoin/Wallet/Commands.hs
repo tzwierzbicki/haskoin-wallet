@@ -856,11 +856,13 @@ cmdReceive ctx cfg opts =
 -- or stored.
 --
 -- A path and the newest address are of the account the options pick in
--- the active portfolio, as for receive. An address and a coin tell where
--- they are, so --type is refused with them rather than ignored: the user
--- who typed it may have meant another thing to show. --network then only
--- tells apart an address or a coin the wallet has on several networks, as
--- the test networks share their keys. A transaction is shown as each
+-- the active portfolio, as for receive. A path that starts with its type,
+-- as the views write it (bip84/0/3), names its account itself. An address
+-- and a coin tell where they are too, so --type is refused with them, and
+-- with such a path, rather than ignored: the user who typed it may have
+-- meant another thing to show. --network then only tells apart an address
+-- or a coin the wallet has on several networks, as the test networks share
+-- their keys. A transaction is shown as each
 -- portfolio that holds it sees it, whichever is active. A file of a
 -- wallet is read as importwallet reads it, with --portfolio, which names
 -- one portfolio of the file, and goes with no other word.
@@ -871,7 +873,10 @@ cmdShow ctx cfg target filePortfolioM shownM =
     case shownM of
       Just (ShownFile file) -> shownFile ctx cfg target filePortfolioM file
       Nothing -> newestReceiving cfg target
-      Just (ShownPath addrType index) -> addressAtPath ctx cfg target addrType index
+      Just (ShownPath Nothing addrType index) -> addressAtPath ctx cfg target addrType index
+      Just (ShownPath (Just kind) addrType index) -> do
+        refuseType "a path that starts with its type"
+        addressAtPath ctx cfg (Target target.network (Just kind)) addrType index
       Just (ShownAddress typed) -> do
         refuseType "an address"
         (_, accId, addr) <- addressByText cfg target.network typed
@@ -926,7 +931,7 @@ addressAtPath ctx cfg target addrType index = do
   addrM <- liftIO $ deriveChainAddress ctx (accountKind acc) (accountXPubKey ctx acc) (addrDeriv addrType) index
   -- BIP32 says to skip an index whose child key is invalid, so the chain
   -- has no address there: see "Haskoin.Wallet.Database.Address"
-  addr <- liftMaybe ("There is no address at " <> cs (pathText path) <> ": the key at that index is invalid, and the chain skips it") addrM
+  addr <- liftMaybe ("There is no address at " <> cs (poolPathText (PoolPath (accountKind acc) path)) <> ": the key at that index is invalid, and the chain skips it") addrM
   -- The row is looked up by the address derived, not by its path, so that
   -- the answer shows what the key derives in either case
   held <- lift $ storedAmong [addr] (accId, acc)

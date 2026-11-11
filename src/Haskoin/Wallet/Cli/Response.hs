@@ -33,7 +33,7 @@ import Haskoin.Wallet.Database (DBAddress)
 import Haskoin.Wallet.Database.Account (PortfolioView)
 import Haskoin.Wallet.Database.Address (CoinBalance (..), addressWithCoinBalance, addressWithSpendable, parseAddressWithCoinBalance, parseAddressWithSpendable)
 import Haskoin.Wallet.Database.Coin (JsonCoin, LeftCoin)
-import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter, Place (..), PortfolioRef (..), parsePlace, parsePortfolioRef, placePairs, portfolioRefPairs)
+import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter, Place (..), PortfolioRef (..), accountRefNetwork, parsePlace, parsePortfolioRef, placePairs, portfolioRefPairs)
 import Haskoin.Wallet.Database.TxInfo (ListedTx, TxInfo)
 import Haskoin.Wallet.Keys (AccountKind, foreignKindName, foreignKindNamed)
 import Haskoin.Wallet.Labels (FileShown, ImportReport, fileShownPairs, parseFileShown, parseReport, reportPairs)
@@ -74,6 +74,10 @@ data Group row = Group
     groupRows :: ![row]
   }
   deriving (Eq, Show)
+
+-- | The network of a group
+groupNetwork :: Group row -> Network
+groupNetwork = placeNetwork . groupPlace
 
 -- | The account of a group of addresses, which covers one
 groupAccountRef :: Group row -> Maybe AccountRef
@@ -268,14 +272,14 @@ instance ToJSON Response where
     ResponseWalletFile shown -> typed "walletfile" (fileShownPairs shown)
     ResponsePortfolios views -> typed "portfolios" ["portfolios" .= views]
     ResponseAddress ref addr spendable ->
-      typed "address" ["account" .= ref, "address" .= addressWithSpendable addr spendable]
+      typed "address" ["account" .= ref, "address" .= addressWithSpendable (accountRefNetwork ref) addr spendable]
     ResponseAddresses groups ->
-      typed "addresses" ["groups" .= [object (groupPairs g <> ["addresses" .= (uncurry addressWithSpendable <$> groupRows g)]) | g <- groups]]
+      typed "addresses" ["groups" .= [object (groupPairs g <> ["addresses" .= (uncurry (addressWithSpendable (groupNetwork g)) <$> groupRows g)]) | g <- groups]]
     ResponseBalances groups ->
       typed
         "balances"
         [ "groups"
-            .= [ object (groupPairs g <> ["total" .= object (coinBalancePairs total), "addresses" .= (uncurry addressWithCoinBalance <$> groupRows g)])
+            .= [ object (groupPairs g <> ["total" .= object (coinBalancePairs total), "addresses" .= (uncurry (addressWithCoinBalance (groupNetwork g)) <$> groupRows g)])
                  | (g, total) <- groups
                ]
         ]

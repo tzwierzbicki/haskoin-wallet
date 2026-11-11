@@ -188,14 +188,16 @@ out, so it shows it cut, with a dot for each character of its middle. Compare
 the two ends with the address the online computer shows.
 
 ```console
-hw receive                                  # on the online computer: /0/7 and the address
-hw show /0/7                                # on the offline computer: the same ends?
+hw receive                                  # on the online computer: bip44/0/7 and the address
+hw show bip44/0/7                           # on the offline computer: the same ends?
 ```
 
-Give `show` the options you gave `receive`. An address that
-`receive --type bip84` gave out is checked with `show /0/7 --type bip84`. Both
-computers must also have the same portfolio active, since each command works
-in the active one. `portfolios` marks it with a `*` on each.
+Give `show` the path as `receive` wrote it, with its type: `bip44/0/7`, or
+`bip84/0/7` for an address of `receive --type bip84`. The type names the
+account, since each account of a network has an address at `/0/7`. Give
+`show` the `--network` you gave `receive` too. Both computers must also have
+the same portfolio active, since each command works in the active one.
+`portfolios` marks it with a `*` on each.
 
 The ends are enough, since nobody can make another address with the same ends.
 The middle is hidden so that nobody pays an address that the wallet never gave
@@ -547,25 +549,31 @@ says where its rows are:
 $ hw addresses
 portfolio0  btc  bip44
 
-/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  "Wages"
+bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  "Wages"
   unused
 
 portfolio0  btc  bip84
 
-/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc  "Savings plan"
+bip84/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc  "Savings plan"
   unused
 
 portfolio0  bch  bip44
 
-/0/0  bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u
+bip44/0/0  bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u
   unused
 ```
 
 A section without rows is left out. `--network` and `--type` narrow a listing
 down. A listing narrowed to one place has no title, since the command line
 already says where it is. `balances` keeps its title, which gives the total of
-the network. A path such as `/0/0` is the path inside the account, so two
-sections can both have one.
+the network.
+
+Every view writes the path of an address with the type of its account in
+front, such as `bip84/0/0`. The path inside the account, `/0/0`, would name an
+address in each account of a network, and `balances` and `coins` list both
+accounts of `btc` together. The type costs five columns, and saves you from
+telling the two apart by the form of the address. The network is in the title
+of the section. `show` takes a path as the views write it.
 
 If you always want the same view, set the key `listing-view` of the
 [configuration](#configuration) to `verbose` or `tabular`. `--compact` then
@@ -1138,8 +1146,9 @@ labels the same way.
 >   one that reached you over a channel you trust. Before you give out an
 >   address of a new account, check one address of it on the signer, as
 >   [Check an address before you give it out](#check-an-address-before-you-give-it-out)
->   tells: `hw show /0/0 --network NETWORK --type TYPE` there must show the
->   ends of the first address `receive` gives here on that network and type.
+>   tells: `hw show TYPE/0/0 --network NETWORK`, such as `bip84/0/0`, there
+>   must show the ends of the first address `receive` gives here on that
+>   network and type.
 > - **A description you set is kept.** A wallet or a portfolio that has a
 >   description keeps it. One that has none, or that `importwallet` creates,
 >   takes the description of the file.
@@ -1595,7 +1604,7 @@ and its type.
 
 ```console
 $ hw receive --label "Wages"
-/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  "Wages"
+bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  "Wages"
   Transactions: 0
   Received    : 0.00000000 btc
   Confirmed   : 0.00000000 btc
@@ -1607,9 +1616,9 @@ $ hw receive --label "Wages"
 ```
 
 You never create an account first. A portfolio has one for every network and
-type already. The path `/0/0` is the path inside the account. The full path of
-this address is `m/44'/0'/0'/0/0`, where the third step is the index of the
-portfolio.
+type already. The path `bip44/0/0` gives the type of the account, then the
+path inside it. The full path of this address is `m/44'/0'/0'/0/0`, where the
+third step is the index of the portfolio.
 
 > **Good to know**
 >
@@ -1636,7 +1645,7 @@ of a wallet, and changes nothing. The word tells what it is, by its shape:
 | Word | What `show` shows |
 |---|---|
 | none | The newest receiving address of the account of the active portfolio, the first one `addresses` lists |
-| `/0/i` or `/1/i` | The receiving address `i`, or the change address `i`, derived from the public key, and cut when the wallet does not hold it |
+| `bip84/0/i` or `bip84/1/i` | The receiving address `i`, or the change address `i`, of the account of that type, derived from the public key, and cut when the wallet does not hold it. Without the type, as `/0/i`, of the account `--type` picks |
 | An address | That address of the wallet, a change address too |
 | A txid or a nosigHash | That transaction, pending or in the history |
 | `TXID:INDEX` | That coin, with every detail, as `coins --verbose` shows it |
@@ -1646,8 +1655,9 @@ A hash goes in full or by its [short id](#short-ids).
 
 ```console
 hw show                                     # the newest receiving address
-hw show /0/7                                # the address at a path
-hw show /1/2 --type bip84                   # a change address of the bip84 account
+hw show bip84/0/7                           # the address at a path of the bip84 account
+hw show /0/7                                # the same path, of the account --type picks
+hw show bip44/1/2                           # a change address
 hw show ADDRESS
 hw show a1075db5                            # a transaction by its short id
 hw show a1075db5:1                          # a coin
@@ -1660,9 +1670,11 @@ one, with its QR code on a terminal. Use it to give an address out again.
 `show` hands out no new address.
 
 **A path.** `show` derives the address at a path from the public key of the
-account. The account is the one `--network` and `--type` pick in the active
-portfolio, as for `receive`. It needs no mnemonic and no server, so it runs on
-the offline computer too. There it checks an address the online computer gave
+account. A path starts with the type of its account, as the views write it,
+such as `bip84/0/7`. A path without a type, such as `/0/7`, is of the account
+that `--type` picks, as for `receive`, and `--type` is refused with a path that
+names its type. `--network` picks the network, in the active portfolio. It
+needs no mnemonic and no server, so it runs on the offline computer too. There it checks an address the online computer gave
 out: see [Check an address](#check-an-address-before-you-give-it-out).
 
 An address the wallet holds is shown as any other. One the wallet does not
@@ -1670,16 +1682,16 @@ hold, as on the offline computer, is shown cut. A dot stands for each character
 of its middle, and a note says how to check it:
 
 ```console
-$ hw show /0/308
-/0/308  169h8ryuSwhG..........Cpzv9Q8PGum5
+$ hw show bip44/0/308
+bip44/0/308  169h8ryuSwhG..........Cpzv9Q8PGum5
   Account  : portfolio0  btc  bip44
 
-Compare both ends with the address that receive gave out at /0/308 on the online
-computer. If they match, that address is of this account, and you can give it
-out. If they differ, the online computer may have been tampered with, and you
-should not give the address out. Nobody can make another address with the same
-ends. This screen is for checking only, so the middle of the address is hidden.
-Give out the address as receive showed it.
+Compare both ends with the address that receive gave out at bip44/0/308 on the
+online computer. If they match, that address is of this account, and you can
+give it out. If they differ, the online computer may have been tampered with,
+and you should not give the address out. Nobody can make another address with
+the same ends. This screen is for checking only, so the middle of the address is
+hidden. Give out the address as receive showed it.
 ```
 
 The ends carry at least 128 bits. To make an address with the same ends, an
@@ -1722,11 +1734,11 @@ wallet0  bc560f95  not in the database, and importwallet creates it
 
 portfolio0  btc  bip44
   Address labels
-    /0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  "Wages"
+    bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  "Wages"
 
 portfolio0  btc  bip84
   Address labels
-    /0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc  "Savings plan"
+    bip84/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc  "Savings plan"
 ```
 
 The labels of no account of the file come last, then what `hw` keeps no label
@@ -1747,11 +1759,12 @@ key alone and no record.
 >   address of the account. A path far past the addresses you gave out is a
 >   sign of that. `show` takes any path, so that a large account can be checked
 >   too.
-> - **Give `show` the account `receive` used.** A portfolio has an address at
->   `/0/7` in each of its accounts. `show /0/7` derives the one of the default
->   network and type, in the active portfolio. For an address that
->   `receive --type bip84` gave out, run `show /0/7 --type bip84`. The row
->   `Account` says which account each command used.
+> - **Give `show` the path as `receive` wrote it.** A portfolio has an address
+>   at `/0/7` in each of its accounts. `receive` writes the path with the type
+>   of its account, such as `bip84/0/7`, and `show bip84/0/7` derives the
+>   address of that account. `show /0/7` derives the one of the default type.
+>   Give `show` the `--network` of `receive` too. The row `Account` says which
+>   account each command used.
 > - **Without a word, the address may have been paid already.** `show` gives
 >   out the newest address again, as it is. Run `receive` for a new one.
 > - **`--portfolio` goes with a file of a wallet only.** It names one
@@ -1797,26 +1810,26 @@ type. A section the portfolio has no address in is left out. `--network` and
 `--type` show one network or one type only.
 
 In each section, the newest addresses come first. Each takes two lines: its
-path, the address and its label, then what it can spend and what it received,
-or that it is unused. `--verbose` adds its balances, its coins and when it was
+type and its path, such as `bip44/0/0`, the address and its label, then what
+it can spend and what it received, or that it is unused. `--verbose` adds its balances, its coins and when it was
 created.
 
 ```console
 $ hw addresses --network btc
 portfolio0  btc  bip44
 
-/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  "Wages"
+bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  "Wages"
   unused
 
 portfolio0  btc  bip84
 
-/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc  "Savings plan"
+bip84/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc  "Savings plan"
   unused
 ```
 
 `--tabular` shows each address on one row of a table, as `txs --tabular` does.
-The columns are the path, the address, what it can spend, what it received, in
-how many transactions, and its label. Each section has its title and its own
+The columns are the type and the path, the address, what it can spend, what it
+received, in how many transactions, and its label. Each section has its title and its own
 table. An unused address leaves its amounts empty. The table of change
 addresses has no label column, since change addresses take no label.
 
@@ -1838,8 +1851,9 @@ hw addresses --max 10 --after ADDRESS
 
 > **Good to know**
 >
-> - **A path is that of its section.** Each account has its own `/0/0`. The
->   title of the section says which account a path belongs to.
+> - **A path names its account by its type.** Each account has its own
+>   `/0/0`, so a path starts with the type of its account, such as
+>   `bip84/0/0`. The title of the section gives the portfolio and the network.
 > - **`--after` goes on in the section of the address.** The listing then
 >   goes on with the sections that follow.
 
@@ -1855,18 +1869,19 @@ and the `bip84` addresses are listed together, as a payment spends them.
 $ hw balances
 portfolio0  btc  total 0.00170000 btc, spendable 0.00150000 btc, unspendable 0.00020000 btc
 
-/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  "Wages"
+bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  "Wages"
   total 0.00120000 btc, spendable 0.00120000 btc, unspendable 0.00000000 btc
 
-/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc  "Savings plan"
+bip84/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc  "Savings plan"
   total 0.00050000 btc, spendable 0.00030000 btc, unspendable 0.00020000 btc
 ```
 
 On each network, the largest total comes first. Each address takes two lines:
-its path, the address and its label, or `change address`, then its three
-amounts. The unspendable amount counts the coins a pending transaction or
-`lockcoin` locks, the unconfirmed payments from other wallets, and the coinbase
-coins not yet mature.
+its type and its path, the address and its label, or `change address`, then
+its three amounts. The type tells the two `/0/0` apart. The unspendable
+amount counts the coins a pending transaction or `lockcoin` locks, the
+unconfirmed payments from other wallets, and the coinbase coins not yet
+mature.
 
 The totals repeat those of [`portfolios`](#hw-portfolios), on purpose. They are
 the same figures, beside the addresses they add up. A total is that of one
@@ -1877,9 +1892,9 @@ can spend now, and what it cannot in three parts. They are what pending
 transactions lock, what you locked with `lockcoin`, and what is not spendable
 yet, which waits for a confirmation.
 
-`--tabular` shows each address on one row of a table: its path, the address,
-the value of its coins, what it can spend now and the rest, and its label, or
-`change address`.
+`--tabular` shows each address on one row of a table: its type and its path,
+the address, the value of its coins, what it can spend now and the rest, and
+its label, or `change address`.
 
 `--csv FILE` writes the addresses to a [CSV file](#listings): the network and
 the type of each, its path, the address and its label, its total, what it can
@@ -1942,13 +1957,14 @@ unconfirmed coins come first, then the newest. Each coin takes two lines:
    `lockcoin` and `--coin` take. Then the time of the transaction that paid it,
    its value, its state, spendable or locked, and its confirmations, up to
    `999+ confirmations`. A coin a pending transaction spends is `locked by tx`.
-2. The address that holds it, in full, with its derivation path, then the label
-   of the address, or `change address` when it is one.
+2. The address that holds it, in full, with its type and its derivation path,
+   such as `bip44/0/0`, then the label of the address, or `change address`
+   when it is one.
 
 This is the one listing that gives an address of the wallet in full in its
 compact view. What tells a coin apart is the address that holds it, more than
-its path. The address also tells the type of the coin: a legacy address holds a
-`bip44` coin, and a native SegWit one a `bip84` coin. It is also the one view
+its path. The path gives the type of the coin, which the address tells too: a
+legacy address holds a `bip44` coin, and a native SegWit one a `bip84` coin. It is also the one view
 that keeps the label of an address in full on the line of the address, so that
 each coin takes two lines. Everywhere else an address is in full, its label is
 on the line below, and where a view gives only the path, the label stays on
@@ -2277,9 +2293,10 @@ What a transaction is for is said as the last column of the table says it:
 - Either says how many other addresses it pays, as in `and 2 more`.
 
 The type comes before the path because a portfolio has an address at `/0/3` in
-each of its accounts on a network. Nothing in the line is cut, a long label or
-address included. On a terminal, the addresses of the wallet and their labels
-are blue, which sets them apart from the addresses of others.
+each of its accounts on a network, as in every view. Nothing in the line is
+cut, a long label or address included. On a terminal, the addresses of the
+wallet and their labels are blue, which sets them apart from the addresses of
+others.
 
 The amount has a plus sign when it comes in. The status counts the
 confirmations up to `999+ confirmations`. An unconfirmed transaction shows its

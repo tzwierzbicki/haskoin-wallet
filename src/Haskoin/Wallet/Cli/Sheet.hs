@@ -62,11 +62,11 @@ import Haskoin.Wallet.Cli.PrettyPrinter (Payee (..), TxAddress (..), coinStateTe
 import Haskoin.Wallet.Cli.Response (Group (..), Response (..))
 import Haskoin.Wallet.Database (DBAddress (..))
 import Haskoin.Wallet.Database.Account (NetworkView (..), PortfolioView (..))
-import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath, coinBalanceNotSpendableYet, pathText)
+import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath, addrPoolPath, coinBalanceNotSpendableYet, pathText)
 import Haskoin.Wallet.Database.Coin (JsonCoin (..), coinText)
 import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..), portfolioName, walletName)
 import Haskoin.Wallet.Database.TxInfo
-import Haskoin.Wallet.Keys (PoolPath (..), addressKind, kindName)
+import Haskoin.Wallet.Keys (PoolPath (..), kindName)
 import Haskoin.Wallet.ShortId (shortCoinText, shortHashText)
 import Numeric.Natural (Natural)
 
@@ -239,7 +239,7 @@ networkColumn = Column "Network" $ \(net, _) -> TextCell (cs net.name)
 addressNameColumns :: [Column (Network, DBAddress)]
 addressNameColumns =
   [ Column "Network" $ \(net, _) -> TextCell (cs net.name),
-    Column "Type" $ \(net, addr) -> maybe EmptyCell (TextCell . kindName) (addressKind =<< textToAddr net (dBAddressAddress addr)),
+    Column "Type" $ \(net, addr) -> maybe EmptyCell (TextCell . kindName . pathKind) (addrPoolPath net addr),
     Column "Path" (pathCell . addrPath . snd),
     Column "Address" (TextCell . dBAddressAddress . snd),
     Column "Label" (textCell . dBAddressLabel . snd)

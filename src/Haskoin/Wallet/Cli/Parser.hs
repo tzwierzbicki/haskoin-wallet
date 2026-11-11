@@ -38,7 +38,7 @@ import Haskoin.Wallet.Cli.Completion
     walletAddresses,
     walletIndexes,
   )
-import Haskoin.Wallet.Database.Address (AddrType, readChainPath)
+import Haskoin.Wallet.Database.Address (AddrType, readTypedChainPath)
 import Haskoin.Wallet.Tx.FeeRates (FeeRateChoice, readFeeRateChoice)
 import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), indexFits, kindNamed, kindNames)
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
@@ -310,8 +310,9 @@ readLabelled word = maybe (LabelledAddress (cs word)) LabelledTx (readHashRef (c
 -- tells. The shapes of the five do not overlap, so a word is never taken
 -- for one kind when it was typed as another ('readShown').
 data Shown
-  = -- | The address at a path of a chain of an account, /0/i or /1/i
-    ShownPath !AddrType !KeyIndex
+  = -- | The address at a path of a chain of an account, /0/i or /1/i,
+    -- perhaps after the type of the account, as in bip84/0/i
+    ShownPath !(Maybe AccountKind) !AddrType !KeyIndex
   | -- | An address of the wallet, as typed
     ShownAddress !Text
   | -- | A transaction, pending or on the chain, by its txid or, while it
@@ -326,9 +327,11 @@ data Shown
 -- | What a word typed for show names, by its shape. The four kinds of the
 -- wallet have strict shapes, and any other word names a file.
 --
--- * A path is made of digits and slashes, such as /0/3. A word of those,
---   perhaps with the m, h and ' of a BIP32 path, is a path or is refused
---   as one. So 0/3 and m/0/3 are told how to write a path.
+-- * A path is made of digits and slashes, such as /0/3, perhaps after the
+--   type of its account, as the views write it: bip84/0/3. A word of
+--   those, perhaps with the m, h and ' of a BIP32 path, is a path or is
+--   refused as one ('readTypedChainPath'). So 0/3 and m/0/3 are told how
+--   to write a path, and so is bip49/0/3, a type hw holds no account of.
 -- * A coin has a colon after 8 or 64 hexadecimal digits.
 -- * A hash has 8 or 64 hexadecimal digits and nothing else, as for label.
 -- * An address reads as an address on one of the networks. Its checksum
@@ -342,13 +345,11 @@ data Shown
 -- name.
 readShown :: String -> Either String Shown
 readShown word
-  | isPathShaped = uncurry ShownPath <$> readChainPath (cs word)
+  | Just path <- readTypedChainPath (cs word) = (\(kindM, addrType, index) -> ShownPath kindM addrType index) <$> path
   | Just coin <- readCoinRef word = Right (ShownCoin coin)
   | Just hash <- readHashRef (cs word) = Right (ShownTx hash)
   | any (\net -> isJust (textToAddr net (cs word))) allNets = Right (ShownAddress (cs word))
   | otherwise = Right (ShownFile word)
-  where
-    isPathShaped = '/' `elem` word && all (`elem` ("0123456789/mMhH'" :: String)) word
 
 -- | The options of preparetx
 data PrepareTx = PrepareTx
@@ -1531,7 +1532,9 @@ showCommand =
 transaction or of a wallet, and changes nothing. The word given tells what it
 is:
 
-  /0/i or /1/i   the receiving address i, or the change address i
+  TYPE/0/i       the receiving address i of the account of the type, such
+                 as bip84/0/3
+  TYPE/1/i       the change address i of the account of the type
   ADDRESS        an address of the wallet
   HASH           a transaction, by its txid, or its nosigHash while pending
   TXID:INDEX     a coin
@@ -1549,14 +1552,18 @@ it to give an address out again. Any address of the wallet will do, a change
 address too. An address the wallet does not hold is refused, so the code never
 pays anyone else.
 
-A path is derived from the public key of the account. It needs no mnemonic and
-nothing of the server, so it runs on an offline computer as well as online.
+A path starts with the type of its account, as every view writes it. Without
+the type, as in /0/3, it is of the account --type picks, and --type is refused
+with a path that has its type. A path is derived from the public key of the
+account. It needs no mnemonic and nothing of the server, so it runs on an
+offline computer as well as online.
 Use it on the offline computer to check an address the online computer gave
 out. An online computer that was tampered with can show an address of its own
 in place of one of the account, and the payer would pay the attacker. The
 offline computer holds the same portfolio, since newportfolio made it there,
 and derives the same addresses. Run `receive` online, then `show` on the offline
-computer with the path `receive` showed, and compare the two addresses.
+computer with the path `receive` showed, such as bip84/0/3, and compare the two
+addresses.
 
 The address at a path the wallet holds is shown as any address of the wallet.
 One the wallet does not hold, as on the offline computer, is shown cut: its two
@@ -1613,7 +1620,7 @@ several networks, since the test networks share their keys.
           <$> optional shownArg
           <*> ( Target
                   <$> networkOptionWith "With a path or with nothing to show, the network of the account. With a file, the network of a file that names none. With an address or a coin, the network to find it on, when the wallet has it on several. Without it, the default-network of the configuration file, or btc."
-                  <*> typeOptionWith "With a path or with nothing to show, the type of the account. Without it, the default-type of the configuration file, or bip44."
+                  <*> typeOptionWith "With a path without its type, such as /0/3, or with nothing to show, the type of the account. Without it, the default-type of the configuration file, or bip44."
               )
           <*> filePortfolioOption "With a file of a wallet, show only this portfolio of the file, as importwallet --portfolio reads it."
     }
@@ -1625,7 +1632,7 @@ shownArg =
   argument (eitherReader readShown) $
     metavar "PATH|ADDRESS|HASH|TXID:INDEX|FILENAME"
       <> completer (mkCompleter shownCompletion)
-      <> help "What to show: a path such as /0/3, an address of the wallet, a transaction by its txid or nosigHash, a coin, or a file of a transaction or of a wallet. A hash goes in full or by its short id, the first 8 digits. Without it, the newest receiving address."
+      <> help "What to show: a path such as bip84/0/3, an address of the wallet, a transaction by its txid or nosigHash, a coin, or a file of a transaction or of a wallet. A hash goes in full or by its short id, the first 8 digits. Without it, the newest receiving address."
 
 -- | What the shell offers for show. It offers the addresses, transactions
 -- and coins of the wallet ('shownTargets'), and the files and directories,
@@ -1657,8 +1664,9 @@ network and by type: the bip44 addresses on btc, then the bip84 ones, then
 those on bch, and so on. A group the portfolio has no address in is left out.
 --network and --type show one network or one type only.
 
-In each group, the newest addresses come first. Each takes two lines. The first gives its
-derivation path, /0/i for a receiving address and /1/i for a change address,
+In each group, the newest addresses come first. Each takes two lines. The
+first gives the type of its account and its derivation path, such as
+bip84/0/3, /0/i for a receiving address and /1/i for a change address, then
 the address and its label. The second gives what it can spend now, as
 `portfolios` describes, and what it received in how many transactions. An
 address no transaction has paid yet is unused.
@@ -1742,9 +1750,12 @@ repeat those of `portfolios`, on purpose: the same figures, beside the
 addresses they add up. On btc, the bip44 and the bip84 addresses are listed
 together. --network and --type show one network or one type only.
 
-On each network, the largest total comes first. Each takes two lines. The first gives its derivation
-path, /0/i for a receiving address and /1/i for a change address, the address
-and its label, or that it is a change address. The second gives three amounts.
+On each network, the largest total comes first. Each takes two lines. The
+first gives the type of its account and its derivation path, such as
+bip84/0/3, /0/i for a receiving address and /1/i for a change address, then
+the address and its label, or that it is a change address. The type tells
+apart the addresses of the bip44 and the bip84 accounts, which both have a
+/0/3. The second gives three amounts.
 The total is the value of all
 its coins. The spendable amount is what it can spend now, as `portfolios`
 describes. The unspendable amount is the rest. It counts the coins locked by a
@@ -2550,8 +2561,10 @@ lockcoin, --coin and `show` take it, or the coin in full. The first line then gi
 time of the transaction that paid the coin, in the time zone of the computer,
 its value, its state and its confirmations, up to 999+ confirmations. A coin
 that a pending transaction spends is "locked by tx". The second line gives the
-address that holds the coin and its derivation path, then the label of the
-address. The address shows its type: a bip84 one starts with bc1q on Bitcoin. A coin at a change address says so there.
+address that holds the coin, then the type of its account and its derivation
+path, such as bip84/0/3, then the label of the address. The address shows its
+type too: a bip84 one starts with bc1q on Bitcoin. A coin at a change address
+says so there.
 
 With --verbose, each coin starts with the time of its transaction, and gives the
 full count of its confirmations on its first line. A coin that a pending

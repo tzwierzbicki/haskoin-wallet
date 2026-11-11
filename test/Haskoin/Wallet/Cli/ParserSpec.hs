@@ -240,9 +240,18 @@ spec = do
       readLabelled "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u" `shouldBe` LabelledAddress "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"
 
   describe "What show shows, by the shape of the word" $ do
-    it "is the receiving address i for /0/i, and the change address i for /1/i" $ do
-      readShown "/0/3" `shouldBe` Right (ShownPath AddrExternal 3)
-      readShown "/1/0" `shouldBe` Right (ShownPath AddrInternal 0)
+    it "is the receiving address i for /0/i, and the change address i for /1/i, of no type yet" $ do
+      readShown "/0/3" `shouldBe` Right (ShownPath Nothing AddrExternal 3)
+      readShown "/1/0" `shouldBe` Right (ShownPath Nothing AddrInternal 0)
+
+    it "is the address of the account of the type for a path that starts with its type, as the views write it" $ do
+      readShown "bip84/0/3" `shouldBe` Right (ShownPath (Just Bip84) AddrExternal 3)
+      readShown "bip44/1/0" `shouldBe` Right (ShownPath (Just Bip44) AddrInternal 0)
+
+    -- bip49 has the form of a type, so the word was meant as a path, not as
+    -- a file in a directory bip49
+    it "is refused as a path for a type hw holds no account of" $
+      readShown "bip49/0/3" `shouldBe` Left "The path bip49/0/3 is of no type of account hw holds: a path starts with bip44 or bip84, such as bip84/0/3, or with no type, such as /0/3"
 
     -- A word of digits and slashes, with perhaps the m, h and ' of a BIP32
     -- path, was meant as a path

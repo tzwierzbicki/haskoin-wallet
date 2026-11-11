@@ -467,7 +467,7 @@ bumpFeeSpec ctx = do
         stuck <- stuckPayment home
         run <- hw home ["bumpfee", stuck, "--fee-rate", "60"] ["y"]
         run `shouldSatisfy` printedSentence "The coins of the transaction cannot pay its fee at 60 sat/vB, and this coin of the portfolio would:"
-        runErr run `shouldSatisfy` Text.isInfixOf ("\n    0.00030000 btc  at " <> externalAddrsText !! 1 <> "  /0/1\n  " <> Text.pack (shortCoinArg (twoAddressesTx ctx) 1) <> "\n")
+        runErr run `shouldSatisfy` Text.isInfixOf ("\n    0.00030000 btc  at " <> externalAddrsText !! 1 <> "  bip44/0/1\n  " <> Text.pack (shortCoinArg (twoAddressesTx ctx) 1) <> "\n")
         runErr run `shouldSatisfy` Text.isInfixOf "Add it? [y/N]"
 
     -- Without the coin, the replacement of 192 bytes pays 11520 and has no

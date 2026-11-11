@@ -19,7 +19,11 @@
 -- a pool, the accounts of a portfolio on one network together, so the
 -- addresses of a pool are read here too, each with its 'PoolPath': the
 -- kind of its account and its path below the key of that account
--- ('poolAddressesMap', 'poolPaths').
+-- ('poolAddressesMap', 'poolPaths'). A row does not keep the kind of its
+-- account. The form of its address tells it ('addrPoolPath'), so that the
+-- views and the JSON answers name every address of a portfolio by its kind
+-- and its path, as in bip84/0/3. A path the user types may start with its
+-- kind the same way ('readTypedChainPath').
 --
 -- The test networks share their keys, so the same address may be in the
 -- accounts of a portfolio on several of them. An address the user types
@@ -35,6 +39,7 @@ import Control.Monad.Reader (MonadTrans (lift))
 import Data.Aeson
 import Data.Aeson.Types (Pair, Parser)
 import qualified Data.Aeson.Types as Json
+import Data.Char (isDigit)
 import Data.List (genericTake, nub)
 import Data.List.Split (chunksOf)
 import Data.Maybe (isJust)
@@ -54,7 +59,7 @@ import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Portfolio (Portfolio)
-import Haskoin.Wallet.Keys (AccountKind, PoolPath (..), keyAddress)
+import Haskoin.Wallet.Keys (AccountKind, PoolPath (..), addressKind, keyAddress, kindNamed, kindNames)
 import Haskoin.Wallet.Util (addrToTextE, readNatural, rowLimit, textToAddrE)
 import Numeric.Natural (Natural)
 
@@ -88,11 +93,13 @@ addrDeriv AddrExternal = extDeriv
 instance ToJSON DBAddress where
   toJSON addr = object (addressPairs addr [])
 
--- | An address in JSON with its spendable balance among its balances.
--- Nothing stores that balance: hw computes it from the coins wherever it
--- shows the balances of an address ("Haskoin.Wallet.Database.Coin").
-addressWithSpendable :: DBAddress -> Word64 -> Json.Value
-addressWithSpendable addr spendable = object (addressPairs addr ["spendable" .= spendable])
+-- | An address of the network in JSON, as an answer gives it, with its
+-- spendable balance among its balances. Nothing stores that balance: hw
+-- computes it from the coins wherever it shows the balances of an address
+-- ("Haskoin.Wallet.Database.Coin"). The type of its account comes with
+-- its path ('addressTypePairs').
+addressWithSpendable :: Network -> DBAddress -> Word64 -> Json.Value
+addressWithSpendable net addr spendable = object (addressTypePairs net addr <> addressPairs addr ["spendable" .= spendable])
 
 -- | An address and its spendable balance, as 'addressWithSpendable' writes them
 parseAddressWithSpendable :: Json.Value -> Parser (DBAddress, Word64)
@@ -101,21 +108,24 @@ parseAddressWithSpendable value = do
   spendable <- withObject "DBAddress" (\o -> o .: "balance" >>= \bal -> bal .: "spendable") value
   return (addr, spendable)
 
--- | An address in JSON with the balance of its coins among its balances:
--- the total, the spendable and the unspendable values, and the parts of
--- the unspendable one, as balances --verbose shows them
-addressWithCoinBalance :: DBAddress -> CoinBalance -> Json.Value
-addressWithCoinBalance addr balance =
+-- | An address of the network in JSON, as balances gives it, with the
+-- balance of its coins among its balances: the total, the spendable and
+-- the unspendable values, and the parts of the unspendable one, as
+-- balances --verbose shows them. The type of its account comes with its
+-- path ('addressTypePairs').
+addressWithCoinBalance :: Network -> DBAddress -> CoinBalance -> Json.Value
+addressWithCoinBalance net addr balance =
   object $
-    addressPairs
-      addr
-      [ "total" .= coinBalanceTotal balance,
-        "spendable" .= coinBalanceSpendable balance,
-        "unspendable" .= coinBalanceUnspendable balance,
-        "lockedbytx" .= coinBalanceLockedByTx balance,
-        "lockedbyuser" .= coinBalanceLockedByUser balance,
-        "notspendableyet" .= coinBalanceNotSpendableYet balance
-      ]
+    addressTypePairs net addr
+      <> addressPairs
+        addr
+        [ "total" .= coinBalanceTotal balance,
+          "spendable" .= coinBalanceSpendable balance,
+          "unspendable" .= coinBalanceUnspendable balance,
+          "lockedbytx" .= coinBalanceLockedByTx balance,
+          "lockedbyuser" .= coinBalanceLockedByUser balance,
+          "notspendableyet" .= coinBalanceNotSpendableYet balance
+        ]
 
 -- | An address and the balance of its coins, as 'addressWithCoinBalance'
 -- writes them. The unspendable value and the value not spendable yet
@@ -127,6 +137,16 @@ parseAddressWithCoinBalance value = do
   return (addr, balance)
   where
     readBalance bal = CoinBalance <$> bal .: "total" <*> bal .: "spendable" <*> bal .: "lockedbytx" <*> bal .: "lockedbyuser"
+
+-- | The key of the type of the account of an address of the network,
+-- beside its "derivation": a group of balances lists the addresses of both
+-- accounts of a network, and each has one at /0/3. The coins and the
+-- transactions write the path of an address of the wallet with its type
+-- the same way. None for an address that does not read on the network,
+-- which hw never stores. The row does not keep the type, so a row read
+-- back from JSON ignores it.
+addressTypePairs :: Network -> DBAddress -> [Pair]
+addressTypePairs net addr = ["type" .= pathKind path | Just path <- [addrPoolPath net addr]]
 
 -- | The keys of an address, with more balances than those it stores when
 -- they are given
@@ -657,11 +677,11 @@ chainIndex path =
     [1, i] -> Just (AddrInternal, i)
     _ -> Nothing
 
--- | The chain and index of a path the user types, written as addresses
--- shows a path: /0/i for the receiving address i, /1/i for the change
--- address i. Every other text is refused, with the two forms: a hardened
--- step, a third step, another chain, or an index of 2^31 or more, which
--- BIP32 keeps for hardened steps. The index is read here and not by the
+-- | The chain and index of a path the user types, without the type of its
+-- account ('readTypedChainPath' reads that): /0/i for the receiving
+-- address i, /1/i for the change address i. Every other text is refused,
+-- with the two forms: a hardened step, a third step, another chain, or an
+-- index of 2^31 or more, which BIP32 keeps for hardened steps. The index is read here and not by the
 -- path parser of haskoin-core, which reads it as a 32-bit number modulo
 -- 2^32, and would take /0/4294967296 for /0/0.
 readChainPath :: Text -> Either String (AddrType, KeyIndex)
@@ -672,11 +692,69 @@ readChainPath text =
         Just i <- readNatural index,
         i < 0x80000000 ->
           Right (addrType, fromIntegral i)
-    _ -> Left $ "The path " <> cs text <> " is not that of an address: /0/i is the receiving address i, and /1/i the change address i"
+    _ -> Left (notChainPath text)
+
+-- | The refusal of a path typed that is not that of an address, with the
+-- two forms
+notChainPath :: Text -> String
+notChainPath text = "The path " <> cs text <> " is not that of an address: /0/i is the receiving address i, and /1/i the change address i"
+
+-- | Whether a word has the shape of a path that 'readChainPath' reads or
+-- refuses: a slash, and nothing but digits, slashes and the m, h and '
+-- of a BIP32 path. So 0/3 and m/0/3 are paths, refused with the forms to
+-- write, rather than names of files.
+isChainPathShaped :: Text -> Bool
+isChainPathShaped text = Text.elem '/' text && Text.all (`elem` ("0123456789/mMhH'" :: String)) text
+
+-- | The type of account a path the user types starts with, if any, then
+-- the path, as the views write it ('Haskoin.Wallet.Keys.poolPathText'):
+-- bip84/0/3, or /0/3 without the type. Nothing for a word that is no path: neither of the
+-- shape of 'isChainPathShaped', nor that shape after a word of the form
+-- bipN. A path names an address of a portfolio only with its type, as a
+-- portfolio has an address at /0/3 in each of its accounts on a network.
+-- So what a view shows can be typed back. Without the type, the command
+-- picks the account from its options. A type hw holds no account of,
+-- such as bip49, is refused with the types it does hold, and so is a path
+-- 'readChainPath' refuses, which the refusal names as typed, with its type.
+readTypedChainPath :: Text -> Maybe (Either String (Maybe AccountKind, AddrType, KeyIndex))
+readTypedChainPath text
+  | isChainPathShaped text = Just (untyped <$> readChainPath text)
+  | isTypeName typeName && isChainPathShaped rest && Text.isPrefixOf "/" rest = Just $ do
+      kind <- maybe (Left unknownType) Right (kindNamed typeName)
+      (addrType, index) <- either (const (Left (notChainPath text))) Right (readChainPath rest)
+      return (Just kind, addrType, index)
+  | otherwise = Nothing
+  where
+    (typeName, rest) = Text.breakOn "/" text
+    untyped (addrType, index) = (Nothing, addrType, index)
+    -- bip and digits, in any case, as the types are named
+    isTypeName name = case Text.splitAt 3 (Text.toLower name) of
+      ("bip", digits) -> not (Text.null digits) && Text.all isDigit digits
+      _ -> False
+    unknownType =
+      "The path "
+        <> cs text
+        <> " is of no type of account hw holds: a path starts with "
+        <> cs (Text.intercalate " or " kindNames)
+        <> ", such as bip84/0/3, or with no type, such as /0/3"
 
 -- | The derivation path of a row
 addrPath :: DBAddress -> SoftPath
 addrPath addr = chainPath (dBAddressInternal addr) (dBAddressIndex addr)
+
+-- | Where the address of a row is in its portfolio: the type of its
+-- account and its path below the key of that account ('PoolPath'). A
+-- portfolio has up to two accounts on a network, so the path of the row
+-- alone does not tell its address. The row does not store the type. The
+-- form of the address tells it, since each type of account has addresses
+-- of one form ('addressKind'), and hw reads it so rather than look up the
+-- account. Nothing for an address that does not read on the network
+-- given, which hw never stores.
+addrPoolPath :: Network -> DBAddress -> Maybe PoolPath
+addrPoolPath net addr = do
+  address <- textToAddr net (dBAddressAddress addr)
+  kind <- addressKind address
+  return (PoolPath kind (addrPath addr))
 
 -- | The address of a row with its derivation path
 fromDBAddr :: Network -> DBAddress -> Either String (Address, SoftPath)

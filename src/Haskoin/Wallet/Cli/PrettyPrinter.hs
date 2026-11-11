@@ -37,7 +37,7 @@ import Data.Word
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Account
-import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath, chainPath, coinBalanceNotSpendableYet, coinBalanceUnspendable, isIntPath, pathText)
+import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath, addrPoolPath, chainPath, coinBalanceNotSpendableYet, coinBalanceUnspendable, isIntPath, pathText)
 import Haskoin.Wallet.Amounts
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Database
@@ -559,7 +559,7 @@ walletFileDoc shown =
   vcat . intersperse mempty $
     (walletImportDoc True <$> shownWallets shown)
       <> [doc | (outcome, records) <- shownAccounts shown, doc <- fileAccountDocs outcome records]
-      <> [vcat ("Labels without an account in the file" : (indent 2 <$> recordsDocs others)) | let others = shownOthers shown, not (null others)]
+      <> [vcat ("Labels without an account in the file" : (indent 2 <$> recordsDocs Nothing others)) | let others = shownOthers shown, not (null others)]
       <> [vcat rest | not (null rest)]
   where
     rest =
@@ -579,17 +579,20 @@ fileAccountDocs outcome records = case outcome of
   AccountHeld ref -> withRecords ref
   AccountLeftAside name why -> [leftAsideDoc "importwallet leaves it aside:" name why]
   where
-    withRecords ref = [vcat (accountRefLine ref : (indent 2 <$> recordsDocs records)) | not (null records)]
+    withRecords ref = [vcat (accountRefLine ref : (indent 2 <$> recordsDocs (Just (accountRefKind ref)) records)) | not (null records)]
 
 -- | The labels and locks of records, under a heading for each kind. An
 -- address comes after its key path, when its record gives one, the paths
--- padded to the longest. A public key comes in place of an address, in
--- hexadecimal. A transaction comes by its txid and a coin by its
+-- padded to the longest. The key path of the records of an account has
+-- the type of the account given in front, as every view writes a path
+-- (bip84/0/3). Records of no account keep the key path alone, since
+-- nothing says which account it is in. A public key comes in place of an
+-- address, in hexadecimal. A transaction comes by its txid and a coin by its
 -- outpoint, in full: the wallet may hold neither, so a short id could
 -- name nothing. What comes from the file is written out, never as an
 -- order to the terminal.
-recordsDocs :: [Record] -> [Doc Style]
-recordsDocs records =
+recordsDocs :: Maybe AccountKind -> [Record] -> [Doc Style]
+recordsDocs kindM records =
   section "Address labels" (labelledAddressRow <$> ofTypes [AddrRecord, PubkeyRecord])
     <> section "Transaction labels" (txRow <$> ofTypes [TxRecord])
     <> section "Coins" (coinRow <$> ofTypes [OutputRecord])
@@ -597,7 +600,8 @@ recordsDocs records =
     ofTypes kinds = filter ((`elem` kinds) . recordType) records
     section :: String -> [Doc Style] -> [Doc Style]
     section title rows = [vcat (styled Field title : (indent 2 <$> rows)) | not (null rows)]
-    keypathOf r = maybe "" pathToStr (parseKeypath =<< recordKeypath r)
+    keypathOf r = maybe "" typedPath (parseKeypath =<< recordKeypath r)
+    typedPath path = maybe (pathToStr path) (\kind -> cs (poolPathText (PoolPath kind path))) kindM
     keypathWidth = fromIntegral (maximum (0 : (length . keypathOf <$> ofTypes [AddrRecord, PubkeyRecord])))
     reference r = pretty (visibleText (recordRef r))
     labelOf r = [labelWord label | Just label <- [recordLabel r], not (Text.null label)]
@@ -607,29 +611,41 @@ recordsDocs records =
 
 {- Addresses -}
 
--- | An address as addresses lists it, in the view asked for, the time it
--- was created in the time zone of the computer. Its path is padded to the
--- given width, that of the longest path listed ('pathWidth').
-listedAddressDoc :: View -> AmountUnit -> Natural -> DBAddress -> Word64 -> IO (Doc Style)
-listedAddressDoc view unit pad addr spendable = do
+-- | An address of the network as addresses lists it, in the view asked
+-- for, the time it was created in the time zone of the computer. Its path
+-- is padded to the given width, that of the longest path of its section
+-- ('longestPathWidth').
+listedAddressDoc :: View -> Network -> AmountUnit -> Natural -> DBAddress -> Word64 -> IO (Doc Style)
+listedAddressDoc view net unit pad addr spendable = do
   created <- utcToLocalZonedTime (dBAddressCreated addr)
   return $ case view of
-    Compact -> compactAddressDoc unit pad addr spendable
-    Verbose -> verboseAddressDoc unit pad created addr spendable
+    Compact -> compactAddressDoc net unit pad addr spendable
+    Verbose -> verboseAddressDoc net unit pad created addr spendable
     -- The table needs the account for the width of its addresses:
     -- rowsPrinter lays it out ('addressRowDoc')
-    Table -> compactAddressDoc unit pad addr spendable
+    Table -> compactAddressDoc net unit pad addr spendable
 
--- | The first line of an address: its derivation path, which tells
--- receiving and change addresses apart, padded to the width given, then
--- the address and its label. In a listing of addresses of both kinds, a
+-- | The first line of an address of the network: its type and its
+-- derivation path ('rowPathText'), which tell which address of the
+-- portfolio it is, receiving or change, padded to the width given, then
+-- the address and its label. In a listing of addresses of both chains, a
 -- change address says so in place of a label, which it never has.
-addressLine :: Bool -> Natural -> DBAddress -> Doc Style
-addressLine mixed pad addr =
+addressLine :: Network -> Bool -> Natural -> DBAddress -> Doc Style
+addressLine net mixed pad addr =
   columns $
-    [text (block pad (cs (pathText (addrPath addr)))), pretty (dBAddressAddress addr)]
+    [text (block pad (cs (rowPathText net addr))), pretty (dBAddressAddress addr)]
       <> [labelWord label | let label = dBAddressLabel addr, not (Text.null label)]
       <> [changeWord | mixed, dBAddressInternal addr]
+
+-- | The path of an address of the wallet on the network, as every view
+-- writes it: the type of its account in front, as in bip84/0/3
+-- ('poolPathText'). A portfolio has an address at /0/3 in each of its
+-- accounts on a network, so the path alone would name two. The type
+-- costs five columns, and saves the user from reading the address to
+-- tell them apart. The path is alone for an address that does not read on
+-- the network, which hw never stores.
+rowPathText :: Network -> DBAddress -> Text
+rowPathText net addr = maybe (pathText (addrPath addr)) poolPathText (addrPoolPath net addr)
 
 -- | What marks a change address where a label would go: the user cannot
 -- label one, and hw knows which addresses are change
@@ -639,9 +655,9 @@ changeWord = styled Muted "change address"
 -- | An address in two lines: its first line, then what it can spend now
 -- and what it received in how many transactions, or that it is unused.
 -- addresses lists one kind of address at a time, so none is marked.
-compactAddressDoc :: AmountUnit -> Natural -> DBAddress -> Word64 -> Doc Style
-compactAddressDoc unit pad addr spendable =
-  vcat [addressLine False pad addr, indent 2 activity]
+compactAddressDoc :: Network -> AmountUnit -> Natural -> DBAddress -> Word64 -> Doc Style
+compactAddressDoc net unit pad addr spendable =
+  vcat [addressLine net False pad addr, indent 2 activity]
   where
     txs = fromIntegral (dBAddressBalanceTxs addr)
     activity
@@ -653,10 +669,10 @@ compactAddressDoc unit pad addr spendable =
             ]
 
 -- | An address with every detail: its first line, then its fields
-verboseAddressDoc :: AmountUnit -> Natural -> ZonedTime -> DBAddress -> Word64 -> Doc Style
-verboseAddressDoc unit pad created addr spendable =
+verboseAddressDoc :: Network -> AmountUnit -> Natural -> ZonedTime -> DBAddress -> Word64 -> Doc Style
+verboseAddressDoc net unit pad created addr spendable =
   vcat $
-    addressLine False pad addr
+    addressLine net False pad addr
       : ( indent 2
             <$> [ field 12 "Transactions" <> countPrinter (fromIntegral (dBAddressBalanceTxs addr)),
                   field 12 "Received" <> amountPrinter unit (dBAddressBalanceReceived addr),
@@ -673,7 +689,8 @@ verboseAddressDoc unit pad created addr spendable =
 -- screen
 addressAnswerDoc :: AddressCode -> AmountUnit -> AccountRef -> DBAddress -> Word64 -> IO (Doc Style)
 addressAnswerDoc code unit ref addr spendable = do
-  details <- listedAddressDoc Verbose unit (pathWidth [addr]) addr spendable
+  -- One address: its path needs no padding
+  details <- listedAddressDoc Verbose (accountRefNetwork ref) unit 0 addr spendable
   terminal <- hIsTerminalDevice stdout
   let rows
         | code == WithCode && terminal = fromMaybe [] (qrRows (paymentUri (accountRefNetwork ref) (dBAddressAddress addr)))
@@ -698,29 +715,32 @@ withCodeDoc :: Doc Style -> [Text] -> Doc Style
 withCodeDoc details rows = vcat (details : (annotate QrCode . pretty <$> rows))
 
 -- | The address at a path of the account that show derives, when the
--- wallet does not hold it: its path and the address cut, as the first
--- line of addresses, then its account, then what the cut form is for. The wallet holds no row for it, so it has no label and no
+-- wallet does not hold it: its type and its path, and the address cut, as
+-- the first line of addresses, then its account, then what the cut form
+-- is for. The wallet holds no row for it, so it has no label and no
 -- balance. The user compares its ends with the address the online
 -- computer showed, and the note says why the middle is missing, which a
 -- user would otherwise take for a fault ("Haskoin.Wallet.CutAddress").
 derivedAddrDoc :: AccountRef -> SoftPath -> Text -> Doc Style
 derivedAddrDoc ref path cut =
   vcat
-    [ columns [text (cs (pathText path)), pretty cut],
+    [ columns [text (cs (poolPathText typed)), pretty cut],
       indent 2 (accountRefField 9 ref),
       mempty,
-      sentence (wordsOf (cutAddressNote path))
+      sentence (wordsOf (cutAddressNote typed))
     ]
+  where
+    typed = PoolPath (accountRefKind ref) path
 
 -- | How to check an address with its cut form, and why its middle is
 -- hidden. The user reads it in the middle of a payment, about to give the
 -- address out, so it says what to do in each case and alarms only when
 -- the ends differ. Why the address must not be paid from this screen, that
 -- it may lie past the gap, is in the help and the README instead.
-cutAddressNote :: SoftPath -> String
+cutAddressNote :: PoolPath -> String
 cutAddressNote path =
   "Compare both ends with the address that receive gave out at "
-    <> pathToStr path
+    <> cs (poolPathText path)
     <> " on the online computer."
     <> " If they match, that address is of this account, and you can give it out."
     <> " If they differ, the online computer may have been tampered with, and you should not give the address out."
@@ -728,25 +748,21 @@ cutAddressNote path =
     <> " This screen is for checking only, so the middle of the address is hidden."
     <> " Give out the address as receive showed it."
 
--- | The width of the longest derivation path of the addresses listed
-pathWidth :: [DBAddress] -> Natural
-pathWidth addrs = fromIntegral $ maximum (0 : (Text.length . pathText . addrPath <$> addrs))
-
 -- | An address as balances lists it, in the view asked for. The table
 -- needs the account for the widths of its columns: rowsPrinter lays it
 -- out ('balanceRowDoc').
-listedBalanceDoc :: View -> AmountUnit -> Natural -> DBAddress -> CoinBalance -> Doc Style
-listedBalanceDoc view unit pad addr balance = case view of
-  Verbose -> verboseBalanceDoc unit pad addr balance
-  _ -> coinBalanceDoc unit pad addr balance
+listedBalanceDoc :: View -> Network -> AmountUnit -> Natural -> DBAddress -> CoinBalance -> Doc Style
+listedBalanceDoc view net unit pad addr balance = case view of
+  Verbose -> verboseBalanceDoc net unit pad addr balance
+  _ -> coinBalanceDoc net unit pad addr balance
 
 -- | An address as balances shows it: its first line, with a change
 -- address marked as one among the receiving addresses, then the value of
 -- its coins, what it can spend now, and the rest, which waits
-coinBalanceDoc :: AmountUnit -> Natural -> DBAddress -> CoinBalance -> Doc Style
-coinBalanceDoc unit pad addr balance =
+coinBalanceDoc :: Network -> AmountUnit -> Natural -> DBAddress -> CoinBalance -> Doc Style
+coinBalanceDoc net unit pad addr balance =
   vcat
-    [ addressLine True pad addr,
+    [ addressLine net True pad addr,
       indent 2 $
         commaList
           [ "total" <+> amountPrinter unit (coinBalanceTotal balance),
@@ -761,10 +777,10 @@ coinBalanceDoc unit pad addr balance =
 -- coin: locked by a pending transaction, locked by the user, or not
 -- spendable yet. The compact view gives the sum of the three; this one
 -- tells which to wait for, and which to unlock.
-verboseBalanceDoc :: AmountUnit -> Natural -> DBAddress -> CoinBalance -> Doc Style
-verboseBalanceDoc unit pad addr balance =
+verboseBalanceDoc :: Network -> AmountUnit -> Natural -> DBAddress -> CoinBalance -> Doc Style
+verboseBalanceDoc net unit pad addr balance =
   vcat $
-    addressLine True pad addr
+    addressLine net True pad addr
       : ( indent 2
             <$> [ field 17 "Total" <> amountPrinter unit (coinBalanceTotal balance),
                   field 17 "Coins" <> countPrinter (fromIntegral (dBAddressBalanceCoins addr)),
@@ -782,12 +798,6 @@ verboseBalanceDoc unit pad addr balance =
 waitingAmount :: AmountUnit -> Word64 -> Doc Style
 waitingAmount unit 0 = neutralAmount unit 0
 waitingAmount unit v = amountIn (Just Waiting) unit (fromIntegral v)
-
--- | Addresses as balances lists them, their paths aligned, a blank line
--- between them. preparetx --change-back shows the addresses it can send
--- the change back to this way.
-coinBalancesPrinter :: AmountUnit -> [(DBAddress, CoinBalance)] -> Doc Style
-coinBalancesPrinter unit addrs = vcat . intersperse mempty $ uncurry (coinBalanceDoc unit (pathWidth (fst <$> addrs))) <$> addrs
 
 {- Coins -}
 
@@ -863,7 +873,7 @@ coinStateText lockedByTransaction coin = case jsonCoinLock coin of
 coinAddressDoc :: Network -> JsonCoin -> Doc Style
 coinAddressDoc net coin =
   withNotesBelow
-    (fullAddressWords net (jsonCoinAddress coin) (pathInAccount <$> jsonCoinPath coin))
+    (fullAddressWords net (jsonCoinAddress coin) (jsonCoinPath coin))
     (ownAddressNoteBelow (jsonCoinAddressLabel coin) (jsonCoinChange coin))
 
 -- | A coin in two lines, as the compact view of a transaction is laid
@@ -888,7 +898,7 @@ compactCoinDoc :: Network -> AmountUnit -> Maybe ZonedTime -> JsonCoin -> Doc St
 compactCoinDoc net unit time coin =
   vcat
     [ columns (shortCoinWord coin : coinLineCells "locked by tx" cappedConfirmations unit time coin),
-      indent 2 ("at" <+> columns (fullAddressWords net (jsonCoinAddress coin) (pathInAccount <$> jsonCoinPath coin) : ownAddressNote (jsonCoinAddressLabel coin) (jsonCoinChange coin)))
+      indent 2 ("at" <+> columns (fullAddressWords net (jsonCoinAddress coin) (jsonCoinPath coin) : ownAddressNote (jsonCoinAddressLabel coin) (jsonCoinChange coin)))
     ]
 
 -- | The short id of a coin at the start of a line, faint, padded to the
@@ -1234,9 +1244,9 @@ payeeWordsNoted net noteOf (Payee preposition row others) =
 -- address is what tells a coin apart ('compactCoinDoc').
 
 -- | The path of an address of the wallet, in its colour, with the type
--- of its account in front, as in bip84/0/3. A portfolio has an address at
--- /0/3 in each of its accounts on a network, and the type tells them
--- apart where the address itself is not written out.
+-- of its account in front, as in bip84/0/3 ('poolPathText'). A portfolio
+-- has an address at /0/3 in each of its accounts on a network. Here the
+-- address itself is not written out, so the type alone tells them apart.
 ownPathWord :: PoolPath -> Doc Style
 ownPathWord path = styled OwnAddress (cs (poolPathText path))
 
@@ -1265,15 +1275,17 @@ ownAddressNoteBelow :: Text -> Bool -> [Doc Style]
 ownAddressNoteBelow label change =
   [annotate OwnAddress (wrappingLabelWord label) | not (Text.null label)] <> [changeWord | change]
 
--- | An address of the wallet in full, in its colour, then its derivation
--- path, if known, faint: the path adds to the address, which is what
--- another wallet or a block explorer shows
-fullAddressWords :: Network -> Address -> Maybe SoftPath -> Doc Style
+-- | An address of the wallet in full, in its colour, then its type and
+-- its derivation path, if known, faint: the path adds to the address,
+-- which is what another wallet or a block explorer shows
+fullAddressWords :: Network -> Address -> Maybe PoolPath -> Doc Style
 fullAddressWords net addr pathM = columns (ownAddressWord net addr : [trailingPathWord path | Just path <- [pathM]])
 
--- | The derivation path after an address in full, faint
-trailingPathWord :: SoftPath -> Doc Style
-trailingPathWord = styled Muted . pathToStr
+-- | The type and the derivation path after an address in full, faint, as
+-- in bip84/0/3. The form of the address tells its type too, but only to
+-- a reader who knows the forms, and every view writes a path the same way.
+trailingPathWord :: PoolPath -> Doc Style
+trailingPathWord = styled Muted . cs . poolPathText
 
 -- | A line that starts with an address in full, and below it, starting
 -- under the address, what is said of the address: its label, or the mark
@@ -1579,13 +1591,13 @@ addressWidth net kinds = fromIntegral (maximum (0 : [length (addrToString net (w
 -- unless zero, in how many transactions, then its label. An address no
 -- transaction paid leaves its amounts empty, which sets it apart from one
 -- that was paid and spent everything.
-addressRowDoc :: AmountUnit -> [Column] -> DBAddress -> Word64 -> Doc Style
-addressRowDoc unit headed addr spendable =
+addressRowDoc :: AmountUnit -> Network -> [Column] -> DBAddress -> Word64 -> Doc Style
+addressRowDoc unit net headed addr spendable =
   tableLine (zip headed cells)
   where
     used = dBAddressBalanceTxs addr > 0
     cells =
-      [ text (cs (pathText (addrPath addr))),
+      [ text (cs (rowPathText net addr)),
         pretty (dBAddressAddress addr),
         if used then heldAmountCell unit spendable else mempty,
         if used then heldAmountCell unit (dBAddressBalanceReceived addr) else mempty,
@@ -1717,7 +1729,7 @@ coinRowDoc net unit headed time coin =
         coinState "locked by tx" coin,
         confsCell (jsonCoinConfirmations coin),
         ownAddressWord net (jsonCoinAddress coin),
-        maybe mempty (trailingPathWord . pathInAccount) (jsonCoinPath coin),
+        maybe mempty trailingPathWord (jsonCoinPath coin),
         -- The label has a column of its own
         hsep (ownAddressNote (jsonCoinAddressLabel coin) (jsonCoinChange coin))
       ]
@@ -1745,12 +1757,12 @@ balanceTableColumns unit net kinds pad =
 -- given: its path, the address, the value of its coins and what it can
 -- spend, in green unless zero, the rest in yellow unless zero, then its
 -- label, or that it is a change address
-balanceRowDoc :: AmountUnit -> [Column] -> DBAddress -> CoinBalance -> Doc Style
-balanceRowDoc unit headed addr balance =
+balanceRowDoc :: AmountUnit -> Network -> [Column] -> DBAddress -> CoinBalance -> Doc Style
+balanceRowDoc unit net headed addr balance =
   tableLine $
     zip
       headed
-      [ text (cs (pathText (addrPath addr))),
+      [ text (cs (rowPathText net addr)),
         pretty (dBAddressAddress addr),
         heldAmountCell unit (coinBalanceTotal balance),
         heldAmountCell unit (coinBalanceSpendable balance),
@@ -1970,7 +1982,7 @@ addressColumns net unit rows =
   AddressColumns
     { addressColumn = widest [addrToString net (txAddress row) | row <- rows],
       valueColumn = widest [valueText unit v | Just v <- txAddressValue <$> rows],
-      pathColumn = widest [pathToStr (pathInAccount p) | Just (p, _) <- txAddressOwn <$> rows]
+      pathColumn = widest [cs (poolPathText p) | Just (p, _) <- txAddressOwn <$> rows]
     }
   where
     widest = maximum . (0 :) . map shownWidth
@@ -1993,7 +2005,7 @@ addressRow net unit widths ownStyle marked row =
     firstLine =
       [(addressColumn widths, address, addressDoc)]
         <> [(valueColumn widths, padding value <> value, valueDoc value) | Just v <- [txAddressValue row], let value = valueText unit v]
-        <> [(pathColumn widths, pathToStr soft, trailingPathWord soft) | Just (path, _) <- [txAddressOwn row], let soft = pathInAccount path]
+        <> [(pathColumn widths, cs (poolPathText path), trailingPathWord path) | Just (path, _) <- [txAddressOwn row]]
     notes = case txAddressOwn row of
       Just (path, label) ->
         ownAddressNoteBelow label (marked && isIntPath (pathInAccount path))
@@ -2128,7 +2140,7 @@ addedCoinsDoc net unit labels feeByte added =
   where
     them = if length added == 1 then "this coin" else "these coins"
     header = sentence $ wordsOf "The coins of the transaction cannot pay its fee at" <> [rateDoc feeByte <> ","] <> wordsOf ("and " <> them <> " of the portfolio would:")
-    held addr path = "at" <+> fullAddressWords net addr (Just (pathInAccount path))
+    held addr path = "at" <+> fullAddressWords net addr (Just path)
 
 -- | What bumpfee says of the ways the recipients can pay, those of
 -- 'reductions', before it asks which: each recipient, numbered when there
@@ -2477,9 +2489,9 @@ sectionsPrinter unit view titled = \case
           headed = addressTableColumns unit net (countsKind <$> groupAccounts g) pad internal
           title = [maybe (placeLine (groupPlace g)) accountRefLine (groupAccountRef g) | titled]
       if view == Table
-        then return $ Rows none title (tableHeader headed) (uncurry (addressRowDoc unit headed) <$> addrs) False
+        then return $ Rows none title (tableHeader headed) (uncurry (addressRowDoc unit net headed) <$> addrs) False
         else do
-          docs <- mapM (uncurry (listedAddressDoc view unit pad)) addrs
+          docs <- mapM (uncurry (listedAddressDoc view net unit pad)) addrs
           return $ Rows none title [] docs True
   ResponseBalances groups ->
     sections (text "There are no addresses with coins to display") groups $ \none (g, total) -> do
@@ -2490,8 +2502,8 @@ sectionsPrinter unit view titled = \case
           title = [balanceTitle unit (groupPlace g) total]
       return $
         if view == Table
-          then Rows none title (tableHeader headed) (uncurry (balanceRowDoc unit headed) <$> addrs) False
-          else Rows none title [] (uncurry (listedBalanceDoc view unit pad) <$> addrs) True
+          then Rows none title (tableHeader headed) (uncurry (balanceRowDoc unit net headed) <$> addrs) False
+          else Rows none title [] (uncurry (listedBalanceDoc view net unit pad) <$> addrs) True
   ResponseTxs groups ->
     sections (text "There are no transactions to display") groups $ \none g -> do
       let net = placeNetwork (groupPlace g)
@@ -2551,14 +2563,16 @@ balanceTitle unit place total =
     ]
 
 -- | The width of the longest derivation path of the accounts on the
--- chains, False for the receiving one and True for the change one: that
--- of the newest address there
+-- chains, False for the receiving one and True for the change one, with
+-- the type of the account in front, as the views write it: that of the
+-- newest address there
 longestPathWidth :: [AccountCounts] -> [Bool] -> Natural
 longestPathWidth accounts chains = fromIntegral $ maximum (0 : [width account internal | account <- accounts, internal <- chains])
   where
     width account internal =
       let count = if internal then countsInternal account else countsExternal account
-       in if count == 0 then 0 else Text.length (pathText (chainPath internal (fromIntegral (count - 1))))
+          newest = PoolPath (countsKind account) (chainPath internal (fromIntegral (count - 1)))
+       in if count == 0 then 0 else Text.length (poolPathText newest)
 
 -- | A whole listing: its sections that have rows, a blank line between
 -- them, or what to say when none has a row
