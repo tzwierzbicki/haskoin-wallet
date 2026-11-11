@@ -903,7 +903,8 @@ number `--portfolio-gap` gives. [BIP44] stops at the first unused account. `hw`
 looks further, since a portfolio created on an offline computer may never have
 been paid before a later one was. After a thousand used addresses in a row, it
 asks whether to keep looking, as [`sync`](#hw-sync) does. On a terminal, a line
-tells which portfolio it is looking at.
+tells which portfolio it is looking at. Before the mnemonic, the line tells the
+network whose server `recover` is checking.
 
 After every 20 portfolios the server reports paid, `recover` asks whether to
 keep looking. A server that lies reports them without end. A no stops the
@@ -937,6 +938,13 @@ to an address of `hw`.
 >   searches the other networks, then exits with an error. A portfolio that
 >   was paid on that network alone was not found. Run `recover` again once the
 >   server answers. The portfolios found the first time are skipped.
+> - **A server `hw` cannot reach is down for every network.** When the
+>   connection fails or times out, or its TLS handshake fails, `recover`
+>   checks no further network there. They would fail the same way, and a
+>   timeout takes 30 seconds each time. They are named as not searched, with
+>   that error. With no network left, `recover` stops before it asks for the
+>   mnemonic. A `host` of `https://` for a server that speaks plain HTTP
+>   fails this way.
 > - **A server can also fail during the search.** `recover` then searches that
 >   network no further, syncs nothing there, and goes on with the others. It
 >   keeps the portfolios it found, names the network with the error as not
@@ -1525,8 +1533,9 @@ transactions. A reorganization of the chain does not need it: `sync` sees one
 by itself.
 
 On a terminal, a line tells what `sync` is doing while it works, with a bar for
-the steps whose size it knows. The line goes to stderr and is gone when `sync`
-ends, so scripts never see it.
+the steps whose size it knows. It starts with the network whose server `sync`
+is checking. The line goes to stderr and is gone when `sync` ends, so scripts
+never see it.
 
 > **Good to know**
 >
@@ -1536,6 +1545,11 @@ ends, so scripts never see it.
 > - **A network whose server is down is an error.** `sync` leaves out that
 >   network and says why. It still syncs the other networks, then exits with
 >   an error, so that a script can tell.
+> - **A server `hw` cannot reach is down for every network.** When the
+>   connection fails or times out, or its TLS handshake fails, `sync` checks no
+>   further network there. They would fail the same way, and a timeout takes
+>   30 seconds each time. They are named as not synced, with that error. With
+>   no network left, `sync` stops with that error.
 > - **A server can also fail in the middle of a sync.** The portfolio `sync`
 >   was working on is then left as it was before, and the other portfolios of
 >   that network are not synced. The portfolios synced before stay synced, and

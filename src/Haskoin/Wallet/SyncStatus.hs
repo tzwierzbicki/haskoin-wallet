@@ -14,7 +14,9 @@
 --
 -- The sync itself says little about all this. Most of the steps are told by
 -- the store it asks: 'tellingStore' and 'scanningStore' wrap the store,
--- and each question tells the step it belongs to.
+-- and each question tells the step it belongs to. Before any of it, sync
+-- and recover ask the store of every network whether it is up, which
+-- 'checkingHealth' tells: a host that does not answer can take a while.
 module Haskoin.Wallet.SyncStatus
   ( -- * The steps
     Step (..),
@@ -29,6 +31,7 @@ module Haskoin.Wallet.SyncStatus
     tellPortfolioSearch,
 
     -- * The store that tells
+    checkingHealth,
     tellingStore,
     scanningStore,
     countedInParallel,
@@ -63,6 +66,9 @@ import System.IO (Handle, hFlush, hPutStr, stderr)
 data Step
   = -- | Asking the store whether it is up, and where the chain is
     CheckingStore
+  | -- | Asking the store of the network whether it is up, before the work
+    -- starts. sync and recover ask the store of every network first.
+    CheckingHealth Network
   | -- | Scanning past the addresses the account has, with how many of them
     -- were found used so far
     LookingForAddresses Natural
@@ -121,6 +127,7 @@ nameWidth = 20
 statusText :: Text -> Step -> String
 statusText name step = case step of
   CheckingStore -> subject <> "checking the store"
+  CheckingHealth net -> subject <> "checking the health of the store of " <> net.name
   LookingForAddresses found -> subject <> "looking for used addresses, " <> show found <> " found"
   Counted task done total -> withBar (subject <> taskName task) done total (taskUnit task)
   LookingAtAccount path paid -> subject <> "looking at " <> pathToStr path <> ", " <> paidSoFar paid
@@ -170,7 +177,8 @@ type Tell = Step -> IO ()
 -- | Where the steps go, given what they are of: a portfolio and its
 -- network, as in "portfolio0 btc", "recover" for the search over the
 -- portfolios of a seed, or "recover on" a network for a search over the
--- accounts hw does not hold
+-- accounts hw does not hold. The first health checks are of "sync" or
+-- "recover", and their step names the network ('CheckingHealth').
 type Status = Text -> Tell
 
 -- | Nowhere: for the tests, and off a terminal
@@ -192,6 +200,17 @@ tellPortfolioSearch :: Status -> Natural -> Natural -> IO ()
 tellPortfolioSearch status index paid = status "recover" (LookingAtPortfolio index paid)
 
 {- The store that tells -}
+
+-- | The store of each network, telling that it checks the health of the
+-- store when asked whether it is up. sync and recover ask the store of
+-- every network first, before anything else is on the line. Without the
+-- line, a host that does not answer would leave the screen empty for as
+-- long as the web client waits.
+checkingHealth :: Tell -> (Network -> Store) -> Network -> Store
+checkingHealth tell storeOn net =
+  store {storeHealth = liftIO (tell (CheckingHealth net)) >> storeHealth store}
+  where
+    store = storeOn net
 
 -- | The store, telling the steps of a sync as it is asked. It asks about a
 -- long list one batch at a time, so that the count moves as the answers

@@ -441,7 +441,9 @@ data Synced = Synced
   deriving (Eq, Show)
 
 -- | Sync the pools, each with the store of its network. The store of each
--- network is first asked whether it is up. The pools of a network the
+-- network is first asked whether it is up, which the line tells. Once the
+-- host could not be reached, the stores of the networks after are not
+-- asked, and are down ('servedNetworks'). The pools of a network the
 -- host does not serve, or whose store is down, are not synced, and the
 -- others are: one store out of service does not hold back the pools of
 -- the other networks. A command that syncs every network cannot do
@@ -455,7 +457,7 @@ data Synced = Synced
 -- sync fails ('requireSomeNetwork').
 syncPools :: (MonadUnliftIO m) => Ctx -> Config -> (Network -> Store) -> [Pool] -> Bool -> Watcher (DB m) -> ExceptT String (DB m) Synced
 syncPools ctx cfg storeOn pools full watch = do
-  served <- liftIO $ servedNetworks storeOn networks
+  served <- liftIO $ servedNetworks (checkingHealth (watch.status "sync") storeOn) networks
   unless (null pools) $ liftEither $ requireSomeNetwork (configHost cfg) served
   (results, failed) <- syncEach ctx cfg storeOn [pool | pool <- pools, pool.poolNetwork `elem` servedUp served] full watch
   return (Synced results (servedNot served) (servedDown served <> failed))

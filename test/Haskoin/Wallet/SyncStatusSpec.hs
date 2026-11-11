@@ -38,6 +38,11 @@ spec = prepareContext $ \ctx -> do
     it "names the portfolio and its network, then what the sync is doing" $
       statusText "portfolio0 btc" CheckingStore `shouldBe` "portfolio0 btc: checking the store"
 
+    -- Before the mnemonic is typed, the store of every network is asked
+    -- whether it is up
+    it "tells which network recover checks the health of the store of" $
+      statusText "recover" (CheckingHealth btcTest4) `shouldBe` "recover: checking the health of the store of btctest4"
+
     it "tells how many used addresses a scan found" $
       statusText "portfolio0 btc" (LookingForAddresses 340) `shouldBe` "portfolio0 btc: looking for used addresses, 340 found"
 
@@ -117,6 +122,12 @@ spec = prepareContext $ \ctx -> do
       steps <- newIORef []
       tellSearch (notingSteps steps) bch (Deriv :| 44 :| 0 :| 2) 1
       readIORef steps `shouldReturn` [("recover on bch", LookingAtAccount (Deriv :| 44 :| 0 :| 2) 1)]
+
+  describe "The store of a first health check" $ do
+    it "tells that it checks the health of the store of its network when asked whether it is up" $ do
+      steps <- newIORef []
+      _ <- runExceptT (storeHealth (checkingHealth (notingSteps steps "recover") (const (toStore emptyStore)) bch))
+      readIORef steps `shouldReturn` [("recover", CheckingHealth bch)]
 
   describe "The store of a sync" $ do
     let telling steps = tellingStore (notingSteps steps "portfolio0 btc")

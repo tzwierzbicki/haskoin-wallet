@@ -11,7 +11,7 @@ module Haskoin.Wallet.Store where
 
 import Control.Concurrent (threadDelay)
 import Control.DeepSeq (NFData, force)
-import Control.Exception (ErrorCall (..), Exception, Handler (..), catches, evaluate, throwIO, try)
+import Control.Exception (ErrorCall (..), Exception, Handler (..), catches, evaluate, fromException, throwIO, try)
 import Control.Lens ((%~), (&), (.~), (?~), (^.))
 import Control.Monad
 import Control.Monad.Except
@@ -38,6 +38,7 @@ import Haskoin.Store.WebCommon (ApiResource (..), Param (..), ParamBox (..), Pos
 import Haskoin.Wallet.Config
 import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), Request)
 import qualified Network.HTTP.Client as HTTP
+import Network.TLS (TLSException (HandshakeFailed))
 import Network.HTTP.Types (StdMethod (..))
 import Network.HTTP.Types.Status (statusCode, statusIsSuccessful)
 import qualified Network.Wreq as Wreq
@@ -89,21 +90,29 @@ data Store = Store
 
 {- The health of a store -}
 
--- | Why a store cannot be asked about its network. The two cases are told
+-- | Why a store cannot be asked about its network. The cases are told
 -- apart because sync and recover go over every network, and a host
 -- seldom serves them all: the public server has no test network of
 -- Bitcoin version 3, and nobody serves a regtest chain to the public. A
 -- network the host does not serve is no failure of the store, and is
 -- reported as such. A store that is down is one: its network was not
--- looked at, and a payment there may have been missed.
+-- looked at, and a payment there may have been missed. A host that hw
+-- could not reach at all is told apart too, because it fails the same
+-- way for every network ('servedNetworks').
 data HealthFailure
   = -- | The host has no store of the network: it answered the health
     -- check with 404, Not Found. The message names the host and the
     -- network.
     NotServed !String
-  | -- | The store cannot be reached, answers with an error, or reports
-    -- that it is not well. The message says which.
+  | -- | The host was reached, and the store of the network answers with an
+    -- error, does not answer in time, sends an answer hw cannot read, or
+    -- reports that it is not well. The message says which.
     Unhealthy !String
+  | -- | hw could not reach the host: the connection failed or timed out,
+    -- or its TLS handshake failed ('beforeRequest'). The message says
+    -- which. No part of the request was sent, so the store of every other
+    -- network at the host would fail the same way.
+    Unreachable !String
   deriving (Eq, Show)
 
 -- | The message of a health failure, for a command that needs the store
@@ -111,6 +120,7 @@ healthMessage :: HealthFailure -> String
 healthMessage failure = case failure of
   NotServed message -> message
   Unhealthy message -> message
+  Unreachable message -> message
 
 -- | Check the health of a store, any failure as its message: for a
 -- command on one network, which stops there
@@ -128,20 +138,70 @@ instance Exception NetworkNotServed
 
 -- | A call of the web client to the store at the host, every failure shown
 -- as a message: an error the store answered, a store hw could not reach,
--- or an answer it could not read. The web client decodes an answer only
--- once it is used, so the answer is read in full here, where its failure
--- is caught.
+-- or an answer it could not read ('webCallApart')
 webCall :: (NFData a) => Text -> ExceptT Store.Except IO a -> ExceptT String IO a
-webCall host action =
+webCall host = withExceptT callFailureMessage . webCallApart host
+
+-- | Why a call of the web client failed, told apart by whether it reached
+-- the host. Only the health check needs to know. A host that could not be
+-- reached would fail the same way for every network, so the checks of the
+-- other networks are not made ('servedNetworks').
+data CallFailure
+  = -- | hw could not reach the host, and sent no part of the request
+    -- ('beforeRequest')
+    HostUnreached !String
+  | -- | The host was reached, and the call failed after that: an error the
+    -- store answered, no answer in time, or an answer hw could not read
+    CallFailed !String
+  deriving (Eq, Show)
+
+-- | The message of a failed call, whichever way it failed
+callFailureMessage :: CallFailure -> String
+callFailureMessage failure = case failure of
+  HostUnreached message -> message
+  CallFailed message -> message
+
+-- | 'webCall', with its failures told apart by whether the host was
+-- reached. The web client decodes an answer only once it is used, so the
+-- answer is read in full here, where its failure is caught.
+webCallApart :: (NFData a) => Text -> ExceptT Store.Except IO a -> ExceptT CallFailure IO a
+webCallApart host action =
   ExceptT $ (answered =<< runExceptT action) `catches` [Handler unreachable, Handler unreadable, Handler tooLong]
   where
-    answered (Left err) = return $ Left (storeError host err)
+    answered (Left err) = return $ Left (CallFailed (storeError host err))
     answered (Right answer) = Right <$> evaluate (force answer)
-    unreachable e = return $ Left (unreachableStore host e)
+    unreachable e
+      | beforeRequest e = return $ Left (HostUnreached (unreachableStore host e))
+      | otherwise = return $ Left (CallFailed (unreachableStore host e))
     unreadable (ErrorCall reason) =
-      return $ Left ("The store at " <> cs host <> " gave an answer hw could not read: " <> reason)
+      return $ Left (CallFailed ("The store at " <> cs host <> " gave an answer hw could not read: " <> reason))
     tooLong AnswerTooLong =
-      return $ Left ("The store at " <> cs host <> " sent an answer of more than " <> show (answerLimit `div` (1024 * 1024)) <> " MiB, which hw does not read")
+      return $ Left (CallFailed ("The store at " <> cs host <> " sent an answer of more than " <> show (answerLimit `div` (1024 * 1024)) <> " MiB, which hw does not read"))
+
+-- | Whether the web client failed before it sent any part of the request.
+-- That is when the connection to the host failed or timed out, or when
+-- its TLS handshake failed. Up to there, only the scheme, the name and the
+-- port of the host count. The path, which names the network, is not sent
+-- yet. So the call for every other network at the host would fail the
+-- same way.
+--
+-- Every other failure comes after the request was sent, and may be of one
+-- network alone. A proxy in front of several stores sends the path of
+-- each network to a store of its own, and one of them can be slow or
+-- down. A store that does not answer in time is such a failure, and so is
+-- a TLS failure after the handshake.
+beforeRequest :: HttpException -> Bool
+beforeRequest e = case e of
+  HttpExceptionRequest _ (ConnectionFailure _) -> True
+  HttpExceptionRequest _ ConnectionTimeout -> True
+  -- http-client passes the failures of the TLS library on inside its
+  -- catch-all constructor, which holds other failures too
+  HttpExceptionRequest _ (InternalException inner) -> handshakeFailed inner
+  _ -> False
+  where
+    handshakeFailed inner = case fromException inner of
+      Just (HandshakeFailed _) -> True
+      _ -> False
 
 {- Calls -}
 
@@ -255,11 +315,13 @@ webStore ctx cfg net =
   Store
     { storeHealth = do
         -- A host without a store of the network answers 404, which is
-        -- told apart from every other failure
-        answer <- liftIO $ try (runExceptT (call GetHealth))
+        -- told apart from every other failure. So is a host hw could not
+        -- reach at all.
+        answer <- liftIO $ try (runExceptT (webCallApart host (storeCall ctx api GetHealth)))
         case answer of
           Left NetworkNotServed -> throwError (NotServed ("The store at " <> cs host <> " does not serve " <> net.name))
-          Right (Left failure) -> throwError (Unhealthy failure)
+          Right (Left (HostUnreached failure)) -> throwError (Unreachable failure)
+          Right (Left (CallFailed failure)) -> throwError (Unhealthy failure)
           Right (Right health) ->
             unless (Store.isOK health) $
               throwError (Unhealthy "The indexer health check has failed"),
@@ -386,7 +448,8 @@ healthFailure store = either Just (const Nothing) <$> runExceptT (storeHealth st
 -- | What the health checks of the stores of several networks say, each
 -- network in one of three groups, in the order given: those to work on,
 -- those the host does not serve, and those whose store fails, with the
--- failure
+-- failure. The networks after one whose host hw could not reach are among
+-- those that fail, with the same failure ('servedNetworks').
 data Served = Served
   { servedUp :: ![Network],
     servedNot :: ![Network],
@@ -394,16 +457,35 @@ data Served = Served
   }
   deriving (Eq, Show)
 
--- | Ask the store of each network whether it is up
+-- | Ask the store of each network whether it is up, in the order given.
+--
+-- Once hw could not reach the host ('Unreachable'), it asks no further.
+-- The stores of the networks after are at the same host, and would fail
+-- the same way, so they are down with the same failure. The web client
+-- waits 30 seconds for a connection. Asked again for each of the eight
+-- networks of a portfolio, a host that does not answer would take four
+-- minutes.
+--
+-- A store that answers that it is down tells nothing of the others, and
+-- the checks go on. A proxy can send each network to a store of its own.
 servedNetworks :: (Network -> Store) -> [Network] -> IO Served
 servedNetworks storeOn nets = do
-  checked <- forM nets $ \net -> (,) net <$> healthFailure (storeOn net)
+  checked <- checkUntilUnreachable nets
   return
     Served
       { servedUp = [net | (net, Nothing) <- checked],
         servedNot = [net | (net, Just (NotServed _)) <- checked],
-        servedDown = [(net, message) | (net, Just (Unhealthy message)) <- checked]
+        servedDown = [(net, healthMessage failure) | (net, Just failure) <- checked, isDown failure]
       }
+  where
+    checkUntilUnreachable [] = return []
+    checkUntilUnreachable (net : rest) = do
+      failure <- healthFailure (storeOn net)
+      case failure of
+        Just (Unreachable _) -> return ((net, failure) : [(other, failure) | other <- rest])
+        _ -> ((net, failure) :) <$> checkUntilUnreachable rest
+    isDown (NotServed _) = False
+    isDown _ = True
 
 -- | Refuse to go on when no network can be worked on: every store that
 -- is there fails, with the failure of the first, or the host serves none

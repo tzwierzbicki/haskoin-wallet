@@ -79,6 +79,9 @@ dependencies:
   # see Haskoin.Wallet.Cli.Pager
   - terminal-size >= 0.3
   - time >= 1.12.2
+  # The failure of a TLS handshake, which tells a host hw could not reach:
+  # see Haskoin.Wallet.Store
+  - tls >= 2.0
   - unicode-transforms >= 0.4
   - unix >= 2.8
   - transformers >= 0.5.6.2

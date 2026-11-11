@@ -220,7 +220,8 @@ Using `hw`:
   asks for the full hash.
   `preparesweep --coin` takes whole txids only. The JSON answers and the files
   keep whole hashes.
-- `sync` and `recover` show what they are doing on a status line.
+- `sync` and `recover` show what they are doing on a status line. It starts
+  with the network whose server they are checking.
 - Tab completion in bash, zsh and fish. It completes commands, options,
   wallets and portfolios, coins, addresses and pending transactions.
 - `hw --version` shows the version of `hw` and of its database format.
@@ -249,6 +250,9 @@ Using `hw`:
   fails in the middle of the work is treated the same way: what `sync` wrote
   for the portfolio it was working on is undone, the syncs done before stay,
   and the other networks go on. `recover` keeps the portfolios it found.
+  When `hw` cannot reach the server at all, because the connection fails or
+  times out or its TLS handshake fails, it checks no further network there.
+  Those networks are named with the same error.
 - A transaction is shown as its portfolio sees it: `Incoming` when funds enter
   the portfolio, `Outgoing` when they leave it, and `Internal` when they move
   between its addresses.

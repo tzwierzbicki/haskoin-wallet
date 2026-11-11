@@ -1271,6 +1271,11 @@ unhealthy store = store {storeHealth = throwError (Unhealthy "The store is down"
 notServed :: Store -> Store
 notServed store = store {storeHealth = throwError (NotServed "The host does not serve the network")}
 
+-- | The store at a host hw could not reach: its health check says so, as
+-- the check of every other network at the host would
+unreachableHost :: Store -> Store
+unreachableHost store = store {storeHealth = throwError (Unreachable "The store at https://api.haskoin.com/ could not be reached: the connection timed out")}
+
 -- | The store, noting every transaction handed to it for the network
 notingPublished :: IORef [Tx] -> Store -> Store
 notingPublished published store =

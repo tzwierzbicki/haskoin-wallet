@@ -148,7 +148,7 @@ import Haskoin.Wallet.Shares (genShares)
 import Haskoin.Wallet.ShortId
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
-import Haskoin.Wallet.SyncStatus (StatusLine (..), withStatusLine)
+import Haskoin.Wallet.SyncStatus (StatusLine (..), checkingHealth, withStatusLine)
 import Haskoin.Wallet.Tx.Building (ChangeTo (..), CoinControl (..), buildTxSignData, coinWithPath)
 import Haskoin.Wallet.Tx.BumpFee
 import Haskoin.Wallet.Tx.CoinSelection (coinKind)
@@ -477,16 +477,18 @@ seedToCreateWith ctx secret = do
 -- the answer says which portfolio is active.
 --
 -- The store of each network is asked whether it is up before the mnemonic
--- is typed. A network the host does not serve is named and left out, and
--- so is one whose store is down, which also makes the command exit with
--- an error once the others are searched: a portfolio that was paid on
--- that network alone is not found. When no network can be searched, the
--- command fails before the mnemonic: the computer is offline, or the host
--- is wrong. A store that fails later, during the search, the syncs or the
--- search of the funds at other paths, is named the same way: its network
--- is searched no further, and the others are, and the wallet found is
--- kept ('storeFailureApart'). The answer names as searched the networks
--- that were searched in full.
+-- is typed, which the line tells. Once the host could not be reached, the
+-- stores of the networks after are not asked, and are down
+-- ('servedNetworks'). A network the host does not serve is named and left
+-- out, and so is one whose store is down, which also makes the command
+-- exit with an error once the others are searched: a portfolio that was
+-- paid on that network alone is not found. When no network can be
+-- searched, the command fails before the mnemonic: the computer is
+-- offline, or the host is wrong. A store that fails later, during the
+-- search, the syncs or the search of the funds at other paths, is named
+-- the same way: its network is searched no further, and the others are,
+-- and the wallet found is kept ('storeFailureApart'). The answer names as
+-- searched the networks that were searched in full.
 --
 -- The funds of the seed at the accounts hw does not hold are told, not
 -- taken. When the seed has no wallet and no paid portfolio, and
@@ -501,8 +503,10 @@ cmdRecover ctx cfg opts =
       let storeOn = webStore ctx cfg
           watch = terminalWatcher line
       -- An offline computer hears it before the mnemonic is typed
-      served <- liftIO $ servedNetworks storeOn portfolioNetworks
+      served <- liftIO $ servedNetworks (checkingHealth (watch.status "recover") storeOn) portfolioNetworks
       liftEither $ requireSomeNetwork (configHost cfg) served
+      -- The question for the mnemonic starts on a clean line
+      liftIO $ eraseStatus line
       let searched = servedUp served
       activeBefore <- lift activePortfolioId
       -- Typed once: a mistyped mnemonic finds no paid portfolio

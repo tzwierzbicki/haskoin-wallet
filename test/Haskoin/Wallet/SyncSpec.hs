@@ -1522,6 +1522,14 @@ spec = prepareContext $ \ctx -> do
         _ <- syncPools ctx cfg storeOn [portfolioPool first btc, portfolioPool first bch, portfolioPool second bch] False noQuestion
         liftIO $ readIORef checks `shouldReturn` 1
 
+    -- Both stores are up
+    it "tells on the line that it checks the health of the store of each network, before it syncs" $
+      inDatabaseE $ do
+        (mainPool, cashPool) <- twoNetworks
+        steps <- liftIO $ newIORef []
+        _ <- syncPools ctx cfg (const (toStore emptyStore)) [mainPool, cashPool] False noQuestion {status = notingSteps steps}
+        liftIO $ (take 2 <$> readIORef steps) `shouldReturn` [("sync", CheckingHealth btc), ("sync", CheckingHealth bch)]
+
     it "fails with the failure of the first store when the store of every network is down" $
       inDatabaseE $ do
         (mainPool, cashPool) <- twoNetworks

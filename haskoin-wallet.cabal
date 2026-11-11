@@ -185,6 +185,7 @@ library
     , terminal-size >=0.3
     , text >=1.2.4.0
     , time >=1.12.2
+    , tls >=2.0
     , transformers >=0.5.6.2
     , unicode-transforms >=0.4
     , unix >=2.8
@@ -249,6 +250,7 @@ executable hw
     , terminal-size >=0.3
     , text >=1.2.4.0
     , time >=1.12.2
+    , tls >=2.0
     , transformers >=0.5.6.2
     , unicode-transforms >=0.4
     , unix >=2.8
@@ -386,6 +388,7 @@ test-suite spec
     , terminal-size >=0.3
     , text >=1.2.4.0
     , time >=1.12.2
+    , tls >=2.0
     , transformers >=0.5.6.2
     , typed-process >=0.2.6
     , unicode-transforms >=0.4
