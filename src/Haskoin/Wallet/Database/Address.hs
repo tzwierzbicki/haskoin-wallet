@@ -27,7 +27,10 @@
 --
 -- The test networks share their keys, so the same address may be in the
 -- accounts of a portfolio on several of them. An address the user types
--- names one row only once the network is known ('addressByText').
+-- names one row only once the network is known ('addressByText'). So does
+-- a path the user types, since a portfolio has an address at the same
+-- path on each network it gave one out on ('heldReceivingAt'). Both pick
+-- the network by one rule ('chooseOnNetwork').
 module Haskoin.Wallet.Database.Address where
 
 import Conduit (MonadUnliftIO)
@@ -45,7 +48,7 @@ import Data.List.Split (chunksOf)
 import Data.Maybe (isJust)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes, listToMaybe, mapMaybe)
+import Data.Maybe (catMaybes, fromMaybe, listToMaybe, mapMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -58,8 +61,8 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Database.Portfolio (Portfolio)
-import Haskoin.Wallet.Keys (AccountKind, PoolPath (..), addressKind, keyAddress, kindNamed, kindNames)
+import Haskoin.Wallet.Database.Portfolio (Portfolio (..), portfolioText)
+import Haskoin.Wallet.Keys (AccountKind, PoolPath (..), addressKind, checkKindOnNetwork, keyAddress, kindNamed, kindNames, poolPathText)
 import Haskoin.Wallet.Util (addrToTextE, readNatural, rowLimit, textToAddrE)
 import Numeric.Natural (Natural)
 
@@ -389,8 +392,13 @@ setAddrLabel accId idx label = do
 labelAddress :: (MonadUnliftIO m) => DBAddress -> Text -> ExceptT String (DB m) DBAddress
 labelAddress addr label = do
   when (dBAddressInternal addr) $
-    throwError "A change address takes no label. Only a receiving address does."
+    throwError changeTakesNoLabel
   setAddrLabel (dBAddressAccount addr) (dBAddressIndex addr) label
+
+-- | The refusal of a label for a change address. Its payments are the
+-- change of the transactions of the wallet, which their own labels name.
+changeTakesNoLabel :: String
+changeTakesNoLabel = "A change address takes no label. Only a receiving address does."
 
 {- Addresses in the database -}
 
@@ -434,20 +442,80 @@ findAddressByText addrTxt = do
 addressByText :: (MonadUnliftIO m) => Config -> Maybe Network -> Text -> ExceptT String (DB m) (Portfolio, DBAccountId, DBAddress)
 addressByText cfg netM addrTxt = do
   found <- lift $ findAddressByText addrTxt
-  accounts <- forM found $ \row@(_, accId, _) -> (row,) . accountNetwork <$> getAccountById accId
-  let onNetwork net = [row | (row, rowNet) <- accounts, rowNet == net]
-      networks = nub (snd <$> accounts)
-  case (netM, found) of
-    (_, []) -> throwError noSuchAddress
-    (Just net, _) -> case onNetwork net of
-      row : _ -> return row
-      [] -> throwError $ "The address " <> cs addrTxt <> " is on " <> networksText networks <> ", not on the --network " <> net.name
-    (Nothing, [row]) -> return row
-    (Nothing, _) -> case onNetwork (configDefaultNetwork cfg) of
-      row : _ -> return row
-      [] -> throwError (onSeveralNetworks addrTxt networks)
+  onNetworks <- forM found $ \row@(_, accId, _) -> (row,) . accountNetwork <$> getAccountById accId
+  case chooseOnNetwork cfg netM onNetworks of
+    Right row -> return row
+    Left FoundNowhere -> throwError $ "The wallet has no address " <> cs addrTxt
+    Left (NotOnGivenNetwork net networks) ->
+      throwError $ "The address " <> cs addrTxt <> " is on " <> networksText networks <> ", not on the --network " <> net.name
+    Left (OnSeveralNetworks networks) -> throwError (onSeveralNetworks addrTxt networks)
+
+-- | The row of the receiving address at an index of a portfolio, with its
+-- account: what label takes for a path, such as bip84/0/3. The account is
+-- of the type given, or else of the default type of its network
+-- ('defaultKindOn'). The wallet must hold the address. A path past the
+-- addresses the portfolio gave out has no row to keep a label, and is
+-- refused: only receive gives out addresses, within the gap.
+--
+-- A portfolio has an address at the same path on each network it gave one
+-- out on, so a path names one row only once the network is known. It is
+-- the one on the network given, or the only one, or else the one on the
+-- default network, as for an address ('chooseOnNetwork'). A type given
+-- that the network given does not have is refused, as 'chooseKind'
+-- refuses it.
+heldReceivingAt :: (MonadUnliftIO m) => Config -> Portfolio -> Maybe Network -> Maybe AccountKind -> KeyIndex -> ExceptT String (DB m) (DBAccountId, DBAddress)
+heldReceivingAt cfg portfolio netM kindM index = do
+  forM_ ((,) <$> netM <*> kindM) $ \(net, kind) -> liftEither (checkKindOnNetwork net kind)
+  accounts <- lift $ portfolioAccountRows portfolio.portfolioId
+  found <- fmap catMaybes . forM accounts $ \(accId, acc) -> do
+    let net = accountNetwork acc
+    if accountKind acc == fromMaybe (defaultKindOn cfg net) kindM
+      then fmap (\row -> ((accId, row), net)) <$> lift (P.get (DBAddressKey accId False (fromIntegral index)))
+      else return Nothing
+  case chooseOnNetwork cfg netM found of
+    Right held -> return held
+    Left FoundNowhere ->
+      throwError $ owner <> " has no address at " <> typedPath <> ": addresses lists the addresses it gave out"
+    Left (NotOnGivenNetwork net networks) ->
+      throwError $ owner <> " has an address at " <> typedPath <> " on " <> networksText networks <> ", not on the --network " <> net.name
+    Left (OnSeveralNetworks networks) ->
+      throwError $ owner <> " has an address at " <> typedPath <> " on " <> networksText networks <> ": give the --network"
   where
-    noSuchAddress = "The wallet has no address " <> cs addrTxt
+    owner = portfolioText portfolio
+    -- The path as the user typed it, with its type when it was given
+    path = chainPath False (fromIntegral index)
+    typedPath = maybe (pathToStr path) (\kind -> cs (poolPathText (PoolPath kind path))) kindM
+
+-- | Why none of the rows found, each on its network, is the one a command
+-- means ('chooseOnNetwork')
+data NetworkMiss
+  = -- | No row was found, on any network
+    FoundNowhere
+  | -- | No row is on the --network given. The rows are on the networks
+    -- listed.
+    NotOnGivenNetwork !Network ![Network]
+  | -- | The rows are on the networks listed, and none of them is the
+    -- default network
+    OnSeveralNetworks ![Network]
+
+-- | The one row a command means among those found, each on its network:
+-- the one on the --network given, or the only one found, or else the one
+-- on the default network of the configuration. An address the user types
+-- can be on several networks, since the test networks share their keys.
+-- A portfolio has an address at a path on each network it gave one out
+-- on. When none of the three settles it, the user is asked for the
+-- --network: hw does not guess which chain is meant. The caller says what
+-- was not found, in its own words.
+chooseOnNetwork :: Config -> Maybe Network -> [(row, Network)] -> Either NetworkMiss row
+chooseOnNetwork cfg netM found =
+  case (netM, found) of
+    (_, []) -> Left FoundNowhere
+    (Just net, _) -> firstOn net (NotOnGivenNetwork net networks)
+    (Nothing, [(row, _)]) -> Right row
+    (Nothing, _) -> firstOn (configDefaultNetwork cfg) (OnSeveralNetworks networks)
+  where
+    networks = nub (snd <$> found)
+    firstOn net missing = maybe (Left missing) Right (lookup net [(rowNet, row) | (row, rowNet) <- found])
 
 -- | The refusal of an address the user typed that the wallet has on
 -- several networks, when nothing says which one is meant: the test

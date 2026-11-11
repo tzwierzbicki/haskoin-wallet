@@ -50,7 +50,6 @@ module Haskoin.Wallet.Commands
     cmdImportWallet,
     cmdExportWallet,
     cmdSwitch,
-    cmdSetDescription,
     cmdSetDefault,
     cmdDeletePortfolio,
     cmdDeleteWallet,
@@ -193,7 +192,6 @@ commandResponse ctx cfg unit = \case
   CommandImportWallet portfolioM file -> cmdImportWallet ctx cfg portfolioM file
   CommandExportWallet portfolioM file -> cmdExportWallet ctx cfg portfolioM file
   CommandSwitch walletM index -> cmdSwitch cfg walletM index
-  CommandSetDescription opts -> cmdSetDescription cfg opts
   CommandSetDefault opts -> cmdSetDefault cfg opts
   CommandDeletePortfolio indexM -> cmdDeletePortfolio cfg indexM
   CommandDeleteWallet walletM fingerprint -> cmdDeleteWallet cfg walletM fingerprint
@@ -622,20 +620,6 @@ cmdSwitch cfg walletM index =
   runDBResponse cfg $ do
     portfolio <- switchTo walletM index
     ResponseSwitched <$> viewOfPortfolio portfolio
-
--- | Set the description of the active portfolio, or of its wallet with
--- --of-wallet. An empty description removes it. The answer shows the
--- active portfolio, with the description of its wallet too.
-cmdSetDescription :: Config -> SetDescription -> IO Response
-cmdSetDescription cfg opts =
-  runDBResponse cfg $ do
-    liftEither $ checkDescription opts.description
-    portfolio <- requireActivePortfolio
-    if opts.ofWallet
-      then setWalletDescription portfolio.portfolioWalletId opts.description
-      else setPortfolioDescription portfolio.portfolioId opts.description
-    -- Read again, with the new description
-    ResponsePortfolio <$> (viewOfPortfolio =<< getPortfolio portfolio.portfolioId)
 
 -- | Write the defaults the options give to the configuration file: the
 -- network and the type of address. The portfolio the commands work in is
@@ -1103,22 +1087,78 @@ sumCoinBalances balances =
       coinBalanceLockedByUser = sum (coinBalanceLockedByUser <$> balances)
     }
 
--- | Label a receiving address, or a transaction: see 'labelTransaction'.
--- An address the wallet has on several networks is the one on the
--- --network, or on the default network ('addressByText').
+-- | Label what the word before the label names: a receiving address, the
+-- receiving address at a path of the active portfolio, or a transaction
+-- ('labelTransaction'). With the label alone, describe the active
+-- portfolio, or its wallet with --of-wallet ('describeActive').
+--
+-- An address and a transaction tell where they are, so they are labelled
+-- in their portfolio, whichever is active. A path means nothing without a
+-- portfolio, so it is one of the active portfolio ('heldReceivingAt'). An
+-- address or a path the wallet has on several networks is the one on the
+-- --network, the only one, or else the one on the default network
+-- ('chooseOnNetwork'). --type goes only with a path without its type. An
+-- address and a typed path say their type, and a transaction has none.
+-- An option that would change nothing is refused rather than ignored, as
+-- show refuses it.
 cmdLabel :: Ctx -> Config -> Label -> IO Response
 cmdLabel ctx cfg opts =
   runDBResponse cfg $
     case opts.labelled of
-      LabelledAddress typed -> do
-        (_, accId, row) <- addressByText cfg opts.network typed
-        addr <- labelAddress row opts.label
-        addressAnswer accId addr
-      LabelledTx named -> do
-        when (isJust opts.network) $
-          throwError "label takes no --network with a transaction: its label is the same in every portfolio that holds it"
-        hash <- walletTxHashOf named
-        ResponseLabelledTxs <$> labelTransaction ctx hash opts.label
+      Nothing -> describeActive opts
+      Just word -> do
+        when opts.ofWallet $
+          throwError "label takes --of-wallet only with the label alone, which is then the description of the wallet: hw label DESCRIPTION --of-wallet"
+        labelled <- liftEither (readLabelled word)
+        case labelled of
+          LabelledAddress typed -> do
+            refuseType "an address"
+            (_, accId, row) <- addressByText cfg opts.target.network typed
+            addressAnswer accId =<< labelAddress row opts.label
+          LabelledPath kindM AddrExternal index -> do
+            when (isJust kindM) $ refuseType "a path that starts with its type"
+            portfolio <- requireActivePortfolio
+            (accId, row) <- heldReceivingAt cfg portfolio opts.target.network (kindM <|> opts.target.kind) index
+            addressAnswer accId =<< labelAddress row opts.label
+          LabelledPath _ AddrInternal _ ->
+            throwError changeTakesNoLabel
+          LabelledTx named -> do
+            refuseType "a transaction"
+            when (isJust opts.target.network) $
+              throwError "label takes no --network with a transaction: its label is the same in every portfolio that holds it"
+            hash <- walletTxHashOf named
+            ResponseLabelledTxs <$> labelTransaction ctx hash opts.label
+  where
+    refuseType what =
+      when (isJust opts.target.kind) $
+        throwError ("label takes no --type with " <> what)
+
+-- | Set the description of the active portfolio, or of its wallet with
+-- --of-wallet, to the label typed alone. An empty description removes it.
+-- The answer shows the active portfolio, with the description of its
+-- wallet too.
+--
+-- A word that has the shape of something label labels, such as an
+-- address, is refused ('labelledShapeOf'). The user most likely left out
+-- its label, and the portfolio would lose its description for the
+-- address. A description is of the whole portfolio, or of the whole
+-- wallet, so --network and --type are refused with it.
+describeActive :: Label -> ExceptT String (DB IO) Response
+describeActive opts = do
+  let typed = cs opts.label
+  for_ (labelledShapeOf typed) $ \shape ->
+    throwError (typed <> " reads as " <> shape <> ", not as a description. To label it, give the label after it: hw label " <> typed <> " LABEL")
+  when (isJust opts.target.network) $
+    throwError "label takes no --network with the label alone: a description is of the whole portfolio, or of the whole wallet"
+  when (isJust opts.target.kind) $
+    throwError "label takes no --type with the label alone: a description is of the whole portfolio, or of the whole wallet"
+  liftEither $ checkDescription opts.label
+  portfolio <- requireActivePortfolio
+  if opts.ofWallet
+    then setWalletDescription portfolio.portfolioWalletId opts.label
+    else setPortfolioDescription portfolio.portfolioId opts.label
+  -- Read again, with the new description
+  ResponsePortfolio <$> (viewOfPortfolio =<< getPortfolio portfolio.portfolioId)
 
 {- Coins -}
 

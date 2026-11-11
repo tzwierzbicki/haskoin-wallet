@@ -329,7 +329,8 @@ You cannot rename them. The name of a portfolio is its account index, so it is
 the same on every computer that holds the wallet. A name you chose would have
 to be kept in step between the offline and the online computer. A description
 says what a wallet or a portfolio is for, in your own words.
-[`setdescription`](#hw-setdescription) sets it, and `portfolios` shows it.
+[`label`](#hw-label) sets it, given the description alone, and `portfolios`
+shows it.
 
 A new wallet takes the lowest free index. The other wallets keep their names
 when one is deleted. When `wallet0` is deleted, `wallet1` is still `wallet1`,
@@ -443,11 +444,11 @@ no `switch`.
 | `receive`, and `show` with a path or with no word | On one account of the active portfolio. `--network` and `--type` pick it, each with its default. |
 | `preparetx`, `preparesendall` | They spend the coins of the active portfolio on one network, of both types together. `--coin-type` keeps the coins of one type. The coins of `--coin` and the addresses of `--spend-from` must be in the active portfolio. |
 | `addresses`, `balances`, `coins`, `txs`, `pendingtxs` | They list the whole active portfolio, in a section for each network, or in one list sorted by network for `pendingtxs`. `--network` and `--type` show one network or one type only. `txs` and `pendingtxs` take no `--type`. |
-| `checkmnemonic`, `setdescription` | On the active portfolio. `setdescription --of-wallet` describes its wallet. |
+| `checkmnemonic`, and `label` with a path or with a description alone | On the active portfolio. `label DESCRIPTION --of-wallet` describes its wallet. |
 | `exportwallet` | On the wallet of the active portfolio. `--portfolio` writes one portfolio of it only. |
 | `portfolios`, `sync`, `exportsheet` | They cover every portfolio of every wallet. `--network` narrows `sync` down to one network. |
 | `signtx`, `signsweep`, `importtx`, `bumpfee`, `preparesweep`, and `show` with a transaction or a transaction file | They find the portfolio from the transaction, or from the destinations of a sweep. The active portfolio settles a choice between several, as the next paragraph says. |
-| `label`, `lockcoin`, `unlockcoin`, `signmsg`, and `show` with an address or a coin | An address and a coin tell where they are. `--network` is needed only when the wallet has the address or the coin on several test networks. |
+| `lockcoin`, `unlockcoin`, `signmsg`, `show` with an address or a coin, and `label` with an address or a transaction | An address and a coin tell where they are. A transaction gets its label in every portfolio that holds it. `--network` is needed only when the wallet has the address or the coin on several test networks. |
 | `importwallet`, and `show` with a file of a wallet | They find the wallet from the file. `--portfolio` names one portfolio of the file, and reads only that one. |
 | `switch` | Its argument names the portfolio to make active, or `--portfolio` does, and `--wallet` names its wallet. Without `--wallet`, it is the wallet of the active portfolio. |
 | `deleteportfolio`, `deletewallet` | They never take what to delete from the active portfolio. `deleteportfolio --portfolio` names a portfolio of the wallet of the active portfolio, and refuses the active one. `deletewallet --wallet` names a wallet, and refuses the wallet of the active portfolio while another wallet exists. |
@@ -715,7 +716,6 @@ server, so they are not marked.
 | [`importwallet`](#hw-importwallet) | Add the portfolios and labels of a file |
 | [`portfolios`](#hw-portfolios) | Show the portfolios, their balances and descriptors |
 | [`switch`](#hw-switch) | Make another portfolio the active one |
-| [`setdescription`](#hw-setdescription) | Describe a portfolio or a wallet |
 | [`setdefault`](#hw-setdefault) | Set the network and the type of address the commands take |
 | [`deleteportfolio`](#hw-deleteportfolio) | Delete a portfolio that was never used |
 | [`deletewallet`](#hw-deletewallet) | Delete a wallet with all of its portfolios |
@@ -725,7 +725,7 @@ server, so they are not marked.
 | [`show`](#hw-show) | Show an address, a transaction or a coin, or a file of a transaction or of a wallet |
 | [`addresses`](#hw-addresses) | List the receiving addresses of a portfolio, or its change addresses |
 | [`balances`](#hw-balances) | List the addresses of a portfolio that hold coins |
-| [`label`](#hw-label) | Set the label of a receiving address or of a transaction |
+| [`label`](#hw-label) | Label an address or a transaction, or describe a portfolio or a wallet |
 | **[Coins](#coins)** | |
 | [`coins`](#hw-coins) | List the coins of a portfolio |
 | [`lockcoin`](#hw-lockcoin) | Keep a coin from being spent |
@@ -1338,39 +1338,6 @@ the one to use. See [What each command takes](#what-each-command-takes).
 >   it. To check an address of another portfolio with [`show`](#hw-show),
 >   switch to that portfolio on both.
 
-#### `hw setdescription`
-
-`hw setdescription DESCRIPTION` sets the description of the active portfolio,
-or of its wallet with `--of-wallet`. It takes the place of the description it
-had. An empty description, `""`, removes it.
-
-```console
-hw setdescription "daily spending"          # the active portfolio
-hw setdescription "paper backup in the safe" --of-wallet
-hw setdescription ""                        # removes the description
-hw switch 1                                 # then describe portfolio1
-hw setdescription savings
-```
-
-It answers with the portfolio, as `portfolios` shows it:
-
-```console
-$ hw setdescription "paper backup in the safe" --of-wallet
-* portfolio0  wallet0  "daily spending"
-    wallet0 is "paper backup in the safe"
-    created 11 Nov 2026
-    btc  spendable 0.00000000 btc, no coins, 1 address
-```
-
-Wallets and portfolios have fixed names, which follow their indexes and cannot
-be changed. A description says what one is for, in your own words.
-`portfolios` shows it, and the file of [`exportwallet`](#hw-exportwallet)
-carries it. To describe another portfolio, switch to it first. To describe
-another wallet, switch to one of its portfolios.
-
-A description is free text on one line, and names nothing. No command takes
-one in place of an index, so two portfolios may have the same description.
-
 #### `hw setdefault`
 
 Writes the defaults of `--network` and `--type` to the
@@ -1920,20 +1887,45 @@ hw balances --csv balances.csv
 
 #### `hw label`
 
-`hw label ADDRESS LABEL` sets the label of a receiving address, and
-`hw label TXID LABEL` the label of a transaction. An empty label, `""`, removes
-the label.
+`hw label [ADDRESS|TXID|PATH] LABEL` sets the label of a receiving address or
+of a transaction. With the label alone, it sets the description of the active
+portfolio, or of its wallet with `--of-wallet`. Each takes the place of the one
+it had. An empty label, `""`, removes it.
+
+| Words | What `label` labels |
+|---|---|
+| `ADDRESS LABEL` | That receiving address of the wallet |
+| `bip84/0/i LABEL` | The receiving address `i` of the account of that type, in the active portfolio. Without the type, as `/0/i`, of the account `--type` picks |
+| `TXID LABEL` | That transaction, by its txid, or by its nosigHash while it is pending |
+| `DESCRIPTION` | The active portfolio, or its wallet with `--of-wallet` |
 
 ```console
 hw label ADDRESS "rent from Bob"
+hw label bip84/0/3 "rent from Bob"          # the address at a path
+hw label /0/3 "rent from Bob" --type bip84  # the same path, of the account --type picks
 hw label NOSIGHASH "rent of October"
 hw label TXID "salary"
 hw label TXID ""                            # removes the label
+hw label "daily spending"                   # describes the active portfolio
+hw label "paper backup in the safe" --of-wallet
+hw switch 1                                 # then describe portfolio1
+hw label savings
 ```
+
+A label and a description do the same job. They say what a thing is for, in
+your own words. So one command sets them all, and the words you type tell which
+thing.
 
 **An address.** The address tells its portfolio and its account, so `label`
 takes no `--type`, and labels it whichever portfolio is active. Change
 addresses take no label.
+
+**A path.** A path names an address of the active portfolio, as the views write
+it, such as `bip84/0/3`. It is a path of the receiving chain, `/0/i`, since
+change addresses take no label. The portfolio must have given the address out,
+as `addresses` lists them. A path without a type, such as `/0/3`, is of the
+account that `--type` picks, or of the default type. `--type` is refused with
+a path that names its type.
 
 **A transaction.** Name a pending one by the hash `pendingtxs` shows, and one of
 the history by its txid. Either goes in full or by its [short id](#short-ids). A
@@ -1945,12 +1937,38 @@ is away stays when the signed file comes back.
 gives a replacement the labels of the transactions it replaces. A transaction
 between two portfolios of the wallet gets the label in both.
 
+**A portfolio or a wallet.** With the label alone, `label` describes the active
+portfolio, or its wallet with `--of-wallet`. `portfolios` shows the
+description, and the file of [`exportwallet`](#hw-exportwallet) carries it.
+`label` answers with the portfolio, as `portfolios` shows it:
+
+```console
+$ hw label "paper backup in the safe" --of-wallet
+* portfolio0  wallet0  "daily spending"
+    wallet0 is "paper backup in the safe"
+    created 11 Nov 2026
+    btc  spendable 0.00000000 btc, no coins, 1 address
+```
+
+Wallets and portfolios have fixed names, which follow their indexes and cannot
+be changed. To describe another portfolio, switch to it first. To describe
+another wallet, switch to one of its portfolios.
+
 > **Good to know**
 >
-> - **`--network` is for the test networks.** They share their keys, so the
->   wallet may have the same address on several of them. `--network` then says
->   which one to label. Without it, `label` takes the one on the default
->   network.
+> - **`--network` picks one of several.** The test networks share their keys,
+>   so the wallet may have the same address on several of them. A portfolio
+>   has an address at the same path on each network it gave one out on.
+>   `--network` then says which one to label. Without it, `label` takes the
+>   only one, or else the one on the default network.
+> - **A word alone is a description.** If you leave out the label, as in
+>   `hw label bip84/0/3`, the word you typed would replace the description of
+>   the portfolio. So `label` refuses a word alone that reads as an address, a
+>   path or a transaction id, and says to give the label after it. Such a word
+>   cannot be a description.
+> - **A description is free text on one line, and names nothing.** No command
+>   takes one in place of an index, so two portfolios may have the same
+>   description.
 
 ### Coins
 
@@ -3010,13 +3028,13 @@ $ hw portfolios
 ```
 
 The names of the accounts stay in the old database. A portfolio has a
-description in their place, which [`setdescription`](#hw-setdescription) sets
-on the active portfolio:
+description in their place, which [`label`](#hw-label) sets on the active
+portfolio, given the description alone:
 
 ```console
-hw setdescription main
+hw label main
 hw switch 1
-hw setdescription savings
+hw label savings
 hw switch 0                                 # back to portfolio0
 ```
 
@@ -3030,7 +3048,7 @@ The commands work in the [active portfolio](#the-active-portfolio), which
 | `mnemonic`, then `createacc` | `newportfolio` |
 | `createacc`, for one more account of a mnemonic | `newportfolio --existing` |
 | `accounts` | `portfolios` |
-| `renameacc` | `setdescription` |
+| `renameacc` | `label DESCRIPTION` |
 | `deleteacc` | `deleteportfolio`, or `deletewallet` for a whole mnemonic |
 | `exportacc`, `importacc` | `exportwallet`, `importwallet` |
 | `--account NAME` | `hw switch N` before the commands, with `--wallet N` for another mnemonic, then `--network` and `--type` on each command |
@@ -3049,7 +3067,7 @@ HOME=~/hw-0.9 hw-0.9 addrs --account main   # the labels of the addresses of mai
 ```
 
 Set again the labels you want to keep with [`label`](#hw-label), which takes
-the address. A pending transaction cannot be carried over. Prepare it again
+the address, or its path, such as `bip44/0/3`. A pending transaction cannot be carried over. Prepare it again
 with `hw` 0.10. One that `hw` 0.9 signed already can still be sent with its
 `sendtx`.
 

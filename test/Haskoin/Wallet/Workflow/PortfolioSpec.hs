@@ -1080,11 +1080,11 @@ checkMnemonicSpec =
 
 descriptionSpec :: Spec
 descriptionSpec =
-  describe "The description set by setdescription" $ do
+  describe "The description label sets, given alone" $ do
     it "is that of the active portfolio, which portfolios shows after its name and its wallet" $
       withHome $ \home -> do
         threePortfolios home
-        _ <- answer home ["setdescription", "Savings"] []
+        _ <- answer home ["label", "Savings"] []
         run <- hw home ["portfolios"] []
         run `shouldSatisfy` printed "* portfolio0  wallet0  \"Savings\"\n"
         run `shouldSatisfy` printed "  portfolio1  wallet0\n"
@@ -1093,7 +1093,7 @@ descriptionSpec =
       withHome $ \home -> do
         threePortfolios home
         _ <- answer home ["switch", "--portfolio", "1"] []
-        _ <- answer home ["setdescription", "Savings"] []
+        _ <- answer home ["label", "Savings"] []
         run <- hw home ["portfolios"] []
         run `shouldSatisfy` printed "* portfolio1  wallet0  \"Savings\"\n"
         run `shouldSatisfy` printed "  portfolio0  wallet0\n"
@@ -1102,7 +1102,7 @@ descriptionSpec =
     it "is that of the wallet with --of-wallet, which portfolios shows under each of its portfolios" $
       withHome $ \home -> do
         threePortfolios home
-        _ <- answer home ["setdescription", "Family", "--of-wallet"] []
+        _ <- answer home ["label", "Family", "--of-wallet"] []
         run <- hw home ["portfolios"] []
         filter (Text.isInfixOf "is \"Family\"") (Text.lines (runOut run)) `shouldBe` ["    wallet0 is \"Family\"", "    wallet0 is \"Family\""]
 
@@ -1110,29 +1110,29 @@ descriptionSpec =
       withHome $ \home -> do
         threePortfolios home
         _ <- answer home ["switch", "--wallet", "1", "--portfolio", "0"] []
-        _ <- answer home ["setdescription", "Family", "--of-wallet"] []
+        _ <- answer home ["label", "Family", "--of-wallet"] []
         run <- hw home ["portfolios"] []
         filter (Text.isInfixOf "is \"Family\"") (Text.lines (runOut run)) `shouldBe` ["    wallet1 is \"Family\""]
 
     it "is shown at once in the answer, with the portfolio" $
       withHome $ \home -> do
         newTestPortfolio home
-        run <- hw home ["setdescription", "Savings"] []
+        run <- hw home ["label", "Savings"] []
         take 1 (Text.lines (runOut run)) `shouldBe` ["* portfolio0  wallet0  \"Savings\""]
 
     it "is removed by an empty description" $
       withHome $ \home -> do
         newTestPortfolio home
-        _ <- answer home ["setdescription", "Savings"] []
-        _ <- answer home ["setdescription", ""] []
+        _ <- answer home ["label", "Savings"] []
+        _ <- answer home ["label", ""] []
         run <- hw home ["portfolios"] []
         take 1 (Text.lines (runOut run)) `shouldBe` ["* portfolio0  wallet0"]
 
     it "is refused with a line break, and the one before is kept" $
       withHome $ \home -> do
         newTestPortfolio home
-        _ <- answer home ["setdescription", "Savings"] []
-        (errorOf <$> hwJson home ["setdescription", "two\nlines"] [])
+        _ <- answer home ["label", "Savings"] []
+        (errorOf <$> hwJson home ["label", "two\nlines"] [])
           `shouldReturn` Right "The description must not contain a line break or a control character"
         run <- hw home ["portfolios"] []
         take 1 (Text.lines (runOut run)) `shouldBe` ["* portfolio0  wallet0  \"Savings\""]
@@ -1141,8 +1141,36 @@ descriptionSpec =
       withHome $ \home -> do
         newTestPortfolio home
         forM_ [" Savings", "Savings "] $ \description ->
-          (errorOf <$> hwJson home ["setdescription", description] [])
+          (errorOf <$> hwJson home ["label", description] [])
             `shouldReturn` Right "The description must not start or end with a space"
+
+    -- The user most likely left out the label of the address
+    it "is refused for a word alone that reads as an address, and the one before is kept" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["label", "Savings"] []
+        (errorOf <$> hwJson home ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"] [])
+          `shouldReturn` Right "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj reads as an address, not as a description. To label it, give the label after it: hw label 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj LABEL"
+        run <- hw home ["portfolios"] []
+        take 1 (Text.lines (runOut run)) `shouldBe` ["* portfolio0  wallet0  \"Savings\""]
+
+    it "is refused for a word alone that reads as a path" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["label", "bip84/0/3"] [])
+          `shouldReturn` Right "bip84/0/3 reads as a path, not as a description. To label it, give the label after it: hw label bip84/0/3 LABEL"
+
+    it "is refused with --network, since it is of the whole portfolio" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["label", "Savings", "--network", "btc"] [])
+          `shouldReturn` Right "label takes no --network with the label alone: a description is of the whole portfolio, or of the whole wallet"
+
+    it "is refused with --type, since it is of the whole portfolio" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["label", "Savings", "--type", "bip84"] [])
+          `shouldReturn` Right "label takes no --type with the label alone: a description is of the whole portfolio, or of the whole wallet"
 
 {- Defaults -}
 

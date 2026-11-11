@@ -184,7 +184,7 @@ commandLineSpec ctx = do
     it "of the program lists the commands of wallets and portfolios in their group, in the order of the README" $
       withHome $ \home -> do
         run <- hw home ["--help"] []
-        let commands = ["newportfolio", "recover", "checkmnemonic", "exportwallet", "importwallet", "portfolios", "switch", "setdescription", "setdefault", "deleteportfolio", "deletewallet", "sync"]
+        let commands = ["newportfolio", "recover", "checkmnemonic", "exportwallet", "importwallet", "portfolios", "switch", "setdefault", "deleteportfolio", "deletewallet", "sync"]
             group = takeWhile (/= "Addresses") (drop 1 (dropWhile (/= "Wallets and portfolios") (Text.lines (runOut run))))
         [word | line <- group, Just word <- [listToMaybe (Text.words line)], word `elem` commands] `shouldBe` commands
 
@@ -261,12 +261,12 @@ commandLineSpec ctx = do
 
     it "says what a command misses, even when an option of every command follows" $
       withHome $ \home -> do
-        run <- hw home ["setdescription", "--json"] []
+        run <- hw home ["label", "--json"] []
         runExit run `shouldBe` ExitFailure 1
-        runErr run `shouldSatisfy` Text.isInfixOf "Missing: DESCRIPTION"
+        runErr run `shouldSatisfy` Text.isInfixOf "Missing: LABEL"
 
-    -- newportfolio, portfolios, importwallet, exportwallet,
-    -- setdescription and deleteportfolio replace them
+    -- newportfolio, portfolios, importwallet, exportwallet, label and
+    -- deleteportfolio replace them
     it "refuses the commands of accounts that portfolios replaced, as commands it does not know" $
       withHome $ \home ->
         forM_ ["createacc", "renameacc", "deleteacc", "importacc", "exportacc", "accounts", "mnemonic"] $ \command -> do
@@ -292,7 +292,7 @@ commandLineSpec ctx = do
     -- The commands work in the active portfolio, which switch changes
     it "refuses --wallet and --portfolio for the commands that work in the active portfolio" $
       withHome $ \home ->
-        refusesOptions home ["--wallet", "--portfolio"] ["receive", "addresses", "balances", "coins", "txs", "pendingtxs", "preparetx", "preparesendall", "checkmnemonic", "setdescription", "setdefault"]
+        refusesOptions home ["--wallet", "--portfolio"] ["receive", "addresses", "balances", "coins", "txs", "pendingtxs", "preparetx", "preparesendall", "checkmnemonic", "setdefault"]
 
     it "refuses --wallet and --portfolio for the commands that cover every portfolio" $
       withHome $ \home ->

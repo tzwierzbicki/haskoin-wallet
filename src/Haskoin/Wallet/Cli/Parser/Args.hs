@@ -32,6 +32,7 @@ module Haskoin.Wallet.Cli.Parser.Args
     flag',
     argument,
     strArgument,
+    optionalBefore,
     short,
     long,
     metavar,
@@ -59,7 +60,7 @@ module Haskoin.Wallet.Cli.Parser.Args
   )
 where
 
-import Control.Applicative (Alternative (..))
+import Control.Applicative (Alternative (..), optional)
 import Data.Maybe (isJust)
 import Data.String (IsString)
 import Options.Applicative (HasCompleter, OptionFields, ReadM, eitherReader, listIOCompleter, maybeReader, mkCompleter, str)
@@ -210,6 +211,33 @@ argument rdr m = one m (isJust m.defaultValue) (O.argument rdr m.optparse)
 
 strArgument :: (IsString s) => Mod O.ArgumentFields s -> Args s
 strArgument = argument str
+
+-- | An argument that may be left out, before one that may not, as in
+-- label [ADDRESS] LABEL. One word is the second argument. Two words are
+-- the first argument, then the second. Both are read as they are typed,
+-- since the first word may be either of the two.
+--
+-- optparse-applicative matches the arguments in their order, and does not
+-- go back. With 'optional' before a required argument, it would take a
+-- word alone for the optional one, then find the required one missing. So
+-- the parser reads a word that is always there, then perhaps a second
+-- one, and moves the first word over when a second one follows. The word
+-- that is always there takes the shell completion of the first argument,
+-- since the shell completes it first. It takes the name of the second
+-- argument, which optparse-applicative gives when nothing was typed. The
+-- usage line and the help show the two arguments as the user types them.
+optionalBefore :: Mod O.ArgumentFields String -> Mod O.ArgumentFields String -> Args (Maybe String, String)
+optionalBefore first second =
+  Args
+    { usage = Sequence (Optional (Item first.doc)) (Item second.doc),
+      rows = [first.doc, second.doc],
+      parser = arrange <$> O.strArgument alwaysThere <*> optional (O.strArgument second.optparse)
+    }
+  where
+    -- A later metavar takes the place of an earlier one
+    alwaysThere = first.optparse <> foldMap O.metavar second.doc.metavar
+    arrange word Nothing = (Nothing, word)
+    arrange word (Just next) = (Just word, next)
 
 -- | One option, flag or argument: its row of the help, its place in the
 -- usage line, optional when it has a default, and its parser

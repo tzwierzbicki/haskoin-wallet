@@ -7,9 +7,10 @@
 -- a transaction between two portfolios gets it in both. And the labels of
 -- the portfolio's addresses, of either type, carried in the file for the
 -- signer to show, and of an address two test networks share, on the
--- network named. Last, the portfolios with their labels and locks in the
--- BIP 329 file exportwallet writes and importwallet reads, from hw or from
--- another wallet.
+-- network named. Then the address at a path of the active portfolio, on
+-- the network label picks. Last, the portfolios with their labels and
+-- locks in the BIP 329 file exportwallet writes and importwallet reads,
+-- from hw or from another wallet.
 module Haskoin.Wallet.Workflow.LabelSpec (spec) where
 
 import Data.IORef (modifyIORef)
@@ -44,6 +45,7 @@ spec = prepareContext $ \ctx -> do
   labelCommandSpec ctx
   shownSpec ctx
   addressLabelSpec
+  pathLabelSpec
   exportImportSpec ctx
 
 -- | The transactions of the history, each by its id, with its label, the
@@ -519,6 +521,20 @@ addressLabelSpec =
         (errorOf <$> hwJson home ["label", Text.unpack testnetExternalAddrText, "Faucet"] [])
           `shouldReturn` Right "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and btctest4: give the --network"
 
+    it "refuses --type with an address, which says its type" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        (errorOf <$> hwJson home ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Rent", "--type", "bip44"] [])
+          `shouldReturn` Right "label takes no --type with an address"
+
+    it "refuses --of-wallet with an address, since --of-wallet describes a wallet with the label alone" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        (errorOf <$> hwJson home ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Rent", "--of-wallet"] [])
+          `shouldReturn` Right "label takes --of-wallet only with the label alone, which is then the description of the wallet: hw label DESCRIPTION --of-wallet"
+
     it "labels an address two test networks share on the --network named alone" $
       withHome $ \home -> do
         newTestPortfolio home
@@ -527,6 +543,119 @@ addressLabelSpec =
         _ <- answer home ["label", Text.unpack testnetExternalAddrText, "Faucet", "--network", "btctest4"] []
         (addressesOf <$> hwJson home ["addresses", "--network", "btctest4"] []) `shouldReturn` Right [(testnetExternalAddrText, "Faucet")]
         (addressesOf <$> hwJson home ["addresses", "--network", "btctest"] []) `shouldReturn` Right [(testnetExternalAddrText, "")]
+
+{- The label of the address at a path -}
+
+-- The first receiving addresses of portfolio0 of the test wallet:
+-- 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj of its bip44 account on btc,
+-- bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc of its bip84 account there,
+-- and mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih of its bip44 account on btctest and
+-- on btctest4, which share the key of m/44'/1'/0'. That of portfolio1 on
+-- btc is 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo.
+pathLabelSpec :: Spec
+pathLabelSpec =
+  describe "label for a path" $ do
+    it "labels the receiving address at a path that starts with its type, as addresses shows it" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        _ <- answer home ["label", "bip44/0/0", "Rent"] []
+        (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Rent")]
+
+    it "labels the address at a path without its type in the account of the type --type names" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive", "--type", "bip84"] []
+        _ <- answer home ["label", "/0/0", "Savings", "--type", "bip84"] []
+        (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [("bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc", "Savings")]
+
+    -- addresses lists the bip44 addresses of btc, then the bip84 ones
+    it "labels the address at a path without its type in the account of the default type, without --type" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["setdefault", "--type", "bip84"] []
+        _ <- answer home ["receive", "--type", "bip44"] []
+        _ <- answer home ["receive", "--type", "bip84"] []
+        _ <- answer home ["label", "/0/0", "Savings"] []
+        (addressesOf <$> hwJson home ["addresses"] [])
+          `shouldReturn` Right [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", ""), ("bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc", "Savings")]
+
+    it "labels the address at the path in the active portfolio, not in another one that has an address there" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        switchTo home 0 1
+        _ <- answer home ["receive"] []
+        (addressesOf <$> hwJson home ["label", "bip44/0/0", "Savings"] []) `shouldReturn` Right [("17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "Savings")]
+        switchTo home 0 0
+        (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "")]
+
+    it "refuses a path the active portfolio gave out no address at, naming the listing of those it gave out" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        (errorOf <$> hwJson home ["label", "bip44/0/1", "Rent"] [])
+          `shouldReturn` Right "portfolio0 of wallet0 has no address at bip44/0/1: addresses lists the addresses it gave out"
+
+    it "refuses the path of a change address, which takes no label" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["label", "bip44/1/0", "Rent"] [])
+          `shouldReturn` Right "A change address takes no label. Only a receiving address does."
+
+    it "refuses --type with a path that starts with its type" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        (errorOf <$> hwJson home ["label", "bip44/0/0", "Rent", "--type", "bip84"] [])
+          `shouldReturn` Right "label takes no --type with a path that starts with its type"
+
+    it "refuses --type bip84 on a network of Bitcoin Cash, which has no SegWit" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["label", "/0/0", "Rent", "--type", "bip84", "--network", "bch"] [])
+          `shouldReturn` Right "A bip84 account needs SegWit, which bch does not have"
+
+    it "labels the address at the path on the only network the portfolio has one there, though it is not the default network" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive", "--network", "btctest"] []
+        _ <- answer home ["label", "bip44/0/0", "Faucet"] []
+        (addressesOf <$> hwJson home ["addresses", "--network", "btctest"] []) `shouldReturn` Right [(testnetExternalAddrText, "Faucet")]
+
+    it "labels the address at the path on the default network, when the portfolio has one there on several networks" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        _ <- answer home ["receive", "--network", "btctest"] []
+        _ <- answer home ["label", "bip44/0/0", "Rent"] []
+        (addressesOf <$> hwJson home ["addresses", "--network", "btc"] []) `shouldReturn` Right [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Rent")]
+        (addressesOf <$> hwJson home ["addresses", "--network", "btctest"] []) `shouldReturn` Right [(testnetExternalAddrText, "")]
+
+    it "labels the address at the path on the --network named, when the portfolio has one there on several networks" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        _ <- answer home ["receive", "--network", "btctest"] []
+        _ <- answer home ["label", "bip44/0/0", "Faucet", "--network", "btctest"] []
+        (addressesOf <$> hwJson home ["addresses", "--network", "btctest"] []) `shouldReturn` Right [(testnetExternalAddrText, "Faucet")]
+        (addressesOf <$> hwJson home ["addresses", "--network", "btc"] []) `shouldReturn` Right [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "")]
+
+    it "is refused on several networks, none of them the default one, without --network, naming the networks" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive", "--network", "btctest"] []
+        _ <- answer home ["receive", "--network", "btctest4"] []
+        (errorOf <$> hwJson home ["label", "bip44/0/0", "Faucet"] [])
+          `shouldReturn` Right "portfolio0 of wallet0 has an address at bip44/0/0 on btctest and btctest4: give the --network"
+
+    it "is refused on a --network where the portfolio has no address at the path, naming the networks where it has one" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive", "--network", "btctest"] []
+        (errorOf <$> hwJson home ["label", "bip44/0/0", "Faucet", "--network", "btc"] [])
+          `shouldReturn` Right "portfolio0 of wallet0 has an address at bip44/0/0 on btctest, not on the --network btc"
 
 {- The portfolios and labels in a file -}
 

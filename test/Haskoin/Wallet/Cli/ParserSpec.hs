@@ -13,6 +13,7 @@ import Haskoin (bch, txHashToHex)
 import Haskoin.Wallet.Cli.Listing (Paging (..))
 import Haskoin.Wallet.Cli.Parser
   ( Command (..),
+    Label (..),
     Labelled (..),
     ListingOutput (..),
     NewPortfolio (..),
@@ -23,6 +24,7 @@ import Haskoin.Wallet.Cli.Parser
     Target (..),
     program,
     readCoinRef,
+    labelledShapeOf,
     readLabelled,
     readShown,
     wrapsLines,
@@ -47,7 +49,7 @@ spec = do
     it "come in the groups of the README, each command in its order" $
       [(group.title, [command.name | command <- group.commands]) | group <- program.groups]
         `shouldBe` [ ( "Wallets and portfolios",
-                       ["newportfolio", "recover", "checkmnemonic", "exportwallet", "importwallet", "portfolios", "switch", "setdescription", "setdefault", "deleteportfolio", "deletewallet", "sync"]
+                       ["newportfolio", "recover", "checkmnemonic", "exportwallet", "importwallet", "portfolios", "switch", "setdefault", "deleteportfolio", "deletewallet", "sync"]
                      ),
                      ("Addresses", ["receive", "show", "addresses", "balances", "label"]),
                      ("Coins", ["coins", "lockcoin", "unlockcoin"]),
@@ -249,21 +251,69 @@ spec = do
   describe "What label labels" $ do
     it "is a transaction for a word of 64 hexadecimal digits" $
       case readLabelled "ab00000000000000000000000000000000000000000000000000000000000001" of
-        LabelledTx (FullHash tid) -> txHashToHex tid `shouldBe` "ab00000000000000000000000000000000000000000000000000000000000001"
+        Right (LabelledTx (FullHash tid)) -> txHashToHex tid `shouldBe` "ab00000000000000000000000000000000000000000000000000000000000001"
         other -> expectationFailure $ "Not a transaction: " <> show other
 
     it "is a transaction by its short id, for a word of 8 hexadecimal digits" $
       case readLabelled "a1075db5" of
-        LabelledTx (ShortHash short) -> shortIdText short `shouldBe` "a1075db5"
+        Right (LabelledTx (ShortHash short)) -> shortIdText short `shouldBe` "a1075db5"
         other -> expectationFailure $ "Not a short id: " <> show other
 
     -- No address has 9 characters, so label refuses it as an address
     it "is an address for a word of 9 hexadecimal digits, which is neither a short id nor a txid" $
-      readLabelled "a1075db5c" `shouldBe` LabelledAddress "a1075db5c"
+      readLabelled "a1075db5c" `shouldBe` Right (LabelledAddress "a1075db5c")
 
     it "is an address, as typed, for any other word" $ do
-      readLabelled "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" `shouldBe` LabelledAddress "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"
-      readLabelled "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u" `shouldBe` LabelledAddress "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"
+      readLabelled "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" `shouldBe` Right (LabelledAddress "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj")
+      readLabelled "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u" `shouldBe` Right (LabelledAddress "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u")
+
+    it "is the receiving address i of the account of the type for TYPE/0/i, as the views write a path" $
+      readLabelled "bip84/0/3" `shouldBe` Right (LabelledPath (Just Bip84) AddrExternal 3)
+
+    it "is the receiving address i of no type yet for /0/i, which --type or the default type completes" $
+      readLabelled "/0/3" `shouldBe` Right (LabelledPath Nothing AddrExternal 3)
+
+    -- label refuses a change address, and says so
+    it "is the change address i for /1/i" $
+      readLabelled "bip44/1/2" `shouldBe` Right (LabelledPath (Just Bip44) AddrInternal 2)
+
+    it "is refused for a word of the shape of a path that is no path, with the two forms of a path" $
+      readLabelled "m/0/3" `shouldBe` Left "The path m/0/3 is not that of an address: /0/i is the receiving address i, and /1/i the change address i"
+
+  describe "The words of label" $ do
+    it "are the description of the active portfolio for a word alone" $
+      parsedLine ["label", "Savings"] `shouldBe` Right (CommandLabel (Label Nothing "Savings" False (Target Nothing Nothing)))
+
+    it "are what to label, then its label, for two words" $
+      parsedLine ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Rent"]
+        `shouldBe` Right (CommandLabel (Label (Just "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj") "Rent" False (Target Nothing Nothing)))
+
+    it "are two at most" $
+      parsedLine ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Rent", "October"] `shouldBe` Left "Invalid argument `October'"
+
+    it "are shown in the usage line with what to label first, in brackets, since it may be left out" $
+      usageOf "label" `shouldBe` "[ADDRESS|TXID|PATH] LABEL [--of-wallet] [-n|--network NETWORK] [-t|--type TYPE]"
+
+  describe "A word alone for label, which label takes for a description" $ do
+    it "reads as an address when it is one on some network" $
+      labelledShapeOf "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" `shouldBe` Just "an address"
+
+    it "reads as a path when it is one" $
+      labelledShapeOf "bip84/0/3" `shouldBe` Just "a path"
+
+    it "reads as the id of a transaction for 8 hexadecimal digits, the length of a short id" $
+      labelledShapeOf "a1075db5" `shouldBe` Just "the id of a transaction"
+
+    it "reads as nothing label labels for an everyday word" $
+      labelledShapeOf "Savings" `shouldBe` Nothing
+
+    -- The word has the shape of a path, and readLabelled refuses it as one
+    it "reads as nothing label labels for digits and a slash that are no path, such as 50/50" $
+      labelledShapeOf "50/50" `shouldBe` Nothing
+
+    -- It reads as an address on no network
+    it "reads as nothing label labels for a word that is an address on no network" $
+      labelledShapeOf "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj0" `shouldBe` Nothing
 
   describe "What show shows, by the shape of the word" $ do
     it "is the receiving address i for /0/i, and the change address i for /1/i, of no type yet" $ do
@@ -444,7 +494,6 @@ everyCommandLine =
     ("importwallet", ["-p", "2", "wallet.jsonl"]),
     ("portfolios", []),
     ("switch", ["2", "--wallet", "1"]),
-    ("setdescription", ["Savings"]),
     ("setdefault", ["-n", "bch", "-t", "bip44"]),
     ("deleteportfolio", ["--portfolio", "2"]),
     ("deletewallet", ["bc560f95", "--wallet", "1"]),

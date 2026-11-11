@@ -130,20 +130,20 @@ workingSpec ctx =
           ResponseAddress ref addr _ -> (ref, dBAddressAddress addr) `shouldBe` (AccountRef (Place (PortfolioRef 0 1) btc) Bip44, "17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo")
           other -> expectationFailure ("Not an address: " <> show other)
 
-    it "describe the active portfolio with setdescription" $
+    it "describe the active portfolio with label, given the description alone" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir (twoPortfolios ctx)
         _ <- hwAnswer ctx wallet ["switch", "--portfolio", "1"]
-        described <- hwAnswer ctx wallet ["setdescription", "savings"]
+        described <- hwAnswer ctx wallet ["label", "savings"]
         case described of
           ResponsePortfolio view -> (viewRef view, viewDescription view) `shouldBe` (PortfolioRef 0 1, "savings")
           other -> expectationFailure ("Not a portfolio: " <> show other)
 
-    it "describe the wallet of the active portfolio with setdescription --of-wallet" $
+    it "describe the wallet of the active portfolio with label --of-wallet, given the description alone" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir (twoWallets ctx)
         _ <- hwAnswer ctx wallet ["switch", "--wallet", "1", "--portfolio", "0"]
-        described <- hwAnswer ctx wallet ["setdescription", "laptop", "--of-wallet"]
+        described <- hwAnswer ctx wallet ["label", "laptop", "--of-wallet"]
         case described of
           ResponsePortfolio view -> (viewRef view, viewWalletDescription view) `shouldBe` (PortfolioRef 1 0, "laptop")
           other -> expectationFailure ("Not a portfolio: " <> show other)

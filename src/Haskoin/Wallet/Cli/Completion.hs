@@ -319,9 +319,11 @@ walletCoinsStarting looked options typed = do
 -- | What label labels, for its first argument, among what starts with the
 -- word typed: the receiving addresses, since a change address takes no
 -- label; the pending transactions, by the hash pendingtxs shows; and the
--- transactions of the history, by their ids. label names no portfolio, so
--- every portfolio counts. Among more than 'offeredAtMost' of them all,
--- none.
+-- transactions of the history, by their ids. An address and a transaction
+-- tell their portfolio, so every portfolio counts. Among more than
+-- 'offeredAtMost' of them all, none. A path is not offered, as for show:
+-- it is short to type. Nor is a description, the first word when it comes
+-- alone, which is the user's own text.
 labelTargets :: String -> IO [String]
 labelTargets typed = readForCompletion $ do
   accounts <- accountsTyped EveryPortfolio (optionsTyped [])

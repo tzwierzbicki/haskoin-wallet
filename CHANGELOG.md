@@ -34,8 +34,8 @@ commands and options have new names, so read
 - **Accounts become portfolios.** A portfolio holds every account of a
   mnemonic at one account index, on every network and of both types of
   address. An account of 0.9 comes back in the portfolio of its index.
-  `setdescription` gives a portfolio a description in place of the name of
-  an account. No command names an account with `--account` any more. The
+  `label` with the description alone gives the active portfolio a
+  description in place of the name of an account. No command names an account with `--account` any more. The
   commands work in the active portfolio, so a script that worked on one
   account runs `hw switch N` before its commands.
 - **Transaction files are now PSBTs.** `hw` 0.10 reads no JSON transaction file
@@ -121,8 +121,10 @@ Wallets and portfolios:
   wallet. `show FILE` shows what `importwallet` would make of a file, and
   changes nothing. A transaction record without an origin labels the
   transaction only in the portfolios that have it, on its network.
-- `setdescription` describes the active portfolio, or its wallet with
-  `--of-wallet`.
+- `label` with the description alone describes the active portfolio, or its
+  wallet with `--of-wallet`. One command sets every label and description.
+  `label` refuses a word alone that reads as an address, a path or a
+  transaction id, since its label is most likely missing.
 - `deletewallet` deletes a wallet with all of its portfolios. `--wallet` names
   the wallet, and its fingerprint confirms it. It refuses the wallet of the
   active portfolio while the database has another wallet.
@@ -147,6 +149,10 @@ Addresses:
 - `balances` lists the addresses that hold coins, grouped by network, with a
   total for each network.
 - `label` labels transactions too, and the prepare commands take `--label`.
+- `label` takes a path of the active portfolio, such as `bip84/0/3`, or `/0/3`
+  with `--type`. The portfolio must have given out the address. On several
+  networks, `--network` picks one. Without it, `label` takes the only one, or
+  else the one on the default network.
 
 Payments:
 
@@ -277,8 +283,8 @@ Using `hw`:
   the portfolio, `Outgoing` when they leave it, and `Internal` when they move
   between its addresses.
 - Wallets and portfolios have fixed names that follow their index, such as
-  `wallet0` and `portfolio0`. A description, set with `setdescription`, takes
-  the place of the name of an account.
+  `wallet0` and `portfolio0`. A description, set with `label`, takes the place
+  of the name of an account.
 - A wallet is the master key of one mnemonic, and `hw` records the
   fingerprint of that key. Output descriptors, wallet files and transaction
   files name every key of the wallet by it.
@@ -315,7 +321,7 @@ Using `hw`:
 |---|---|
 | `mnemonic`, `createacc` | `newportfolio`, and `newportfolio --existing` for a mnemonic you have |
 | `accounts` | `portfolios` |
-| `renameacc` | `setdescription` |
+| `renameacc` | `label DESCRIPTION` |
 | `deleteacc` | `deleteportfolio`, and `deletewallet` for a whole wallet |
 | `exportacc`, `importacc` | `exportwallet`, `importwallet` |
 | `--account NAME` | The active portfolio, which `switch N` changes, with `--wallet N` for another mnemonic. `--network` and `--type` pick an account in it. |
@@ -335,12 +341,13 @@ Using `hw`:
 | `--prvkeys` | `--key-file` |
 | `--addrfile` | `--address-file` |
 
-`label` now takes the address instead of its index.
+`label` now takes the address, or its path such as `bip44/0/3`, instead of its
+index.
 
 ### Removed
 
-- Account names. A portfolio is named after its index, and `setdescription`
-  describes it.
+- Account names. A portfolio is named after its index, and `label` describes
+  it.
 - `createacc --network` and `createacc --derivation`. A portfolio has an
   account on every network, and `newportfolio --existing` takes the lowest
   free index of the wallet.
