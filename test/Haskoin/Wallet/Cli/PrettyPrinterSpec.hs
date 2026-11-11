@@ -1994,7 +1994,7 @@ nextStepsSpec = do
       synced [quietSync, updatedIn otherRef]
         `shouldBe` Just
           [ "Next, switch to portfolio1 of wallet2, where the sync found new transactions:",
-            "  hw switch --wallet 2 --portfolio 1",
+            "  hw switch 1 --wallet 2",
             "Then see the transactions:",
             "  hw txs"
           ]
@@ -2003,8 +2003,8 @@ nextStepsSpec = do
       synced [updatedIn (PortfolioRef 0 1), updatedIn otherRef]
         `shouldBe` Just
           [ "Next, switch in turn to each portfolio where the sync found new transactions:",
-            "  hw switch --wallet 0 --portfolio 1",
-            "  hw switch --wallet 2 --portfolio 1",
+            "  hw switch 1 --wallet 0",
+            "  hw switch 1 --wallet 2",
             "In each, see the transactions:",
             "  hw txs"
           ]
@@ -2025,7 +2025,7 @@ nextStepsSpec = do
       synced [quietSync, conflictIn (PortfolioRef 0 1) btc]
         `shouldBe` Just
           [ "Next, switch to portfolio1 of wallet0, where a pending transaction is in conflict:",
-            "  hw switch --wallet 0 --portfolio 1",
+            "  hw switch 1 --wallet 0",
             "Then find the pending transaction in conflict, which can no longer be sent:",
             "  hw pendingtxs",
             "Then delete it, to free its coins:",
@@ -2036,7 +2036,7 @@ nextStepsSpec = do
       synced [conflictIn otherRef btc, conflictIn otherRef bch]
         `shouldBe` Just
           [ "Next, switch to portfolio1 of wallet2, where a pending transaction is in conflict:",
-            "  hw switch --wallet 2 --portfolio 1",
+            "  hw switch 1 --wallet 2",
             "Then find the pending transaction in conflict, which can no longer be sent:",
             "  hw pendingtxs",
             "Then delete it, to free its coins:",
@@ -2049,8 +2049,8 @@ nextStepsSpec = do
       synced [conflictIn mainPortfolioRef btc, conflictIn otherRef bch]
         `shouldBe` Just
           [ "Next, switch in turn to each portfolio where a pending transaction is in conflict:",
-            "  hw switch --wallet 0 --portfolio 0",
-            "  hw switch --wallet 2 --portfolio 1",
+            "  hw switch 0 --wallet 0",
+            "  hw switch 1 --wallet 2",
             "In each, find the pending transactions in conflict, which can no longer be sent:",
             "  hw pendingtxs",
             "Then delete them, to free their coins:",
@@ -2067,7 +2067,7 @@ nextStepsSpec = do
         secondView = wholePortfolioView {viewRef = PortfolioRef 0 1, viewActive = False}
     it "are the switch to the portfolio newportfolio created, when another one stays active" $
       (renderedLines <$> nextStepsPrinter existing (ResponseNewPortfolio Nothing secondView (ActiveAfter (PortfolioRef 0 0) False)))
-        `shouldBe` Just ["To work in portfolio1 of wallet0, make it the active one:", "  hw switch --wallet 0 --portfolio 1"]
+        `shouldBe` Just ["To work in portfolio1 of wallet0, make it the active one:", "  hw switch 1 --wallet 0"]
 
     it "are none when newportfolio made the portfolio it created the active one" $
       (renderedLines <$> nextStepsPrinter existing (ResponseNewPortfolio Nothing wholePortfolioView (ActiveAfter (PortfolioRef 0 0) True)))
@@ -2077,7 +2077,7 @@ nextStepsSpec = do
     -- wallet0 stays active
     it "are the switch to the first portfolio recover created, when another one stays active" $
       (renderedLines <$> nextStepsPrinter (CommandRecover (Recover 10)) (ResponseRecover [btc] 10 (Just 1) [0, 2] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) False))))
-        `shouldBe` Just ["To work in portfolio0 of wallet1, make it the active one:", "  hw switch --wallet 1 --portfolio 0"]
+        `shouldBe` Just ["To work in portfolio0 of wallet1, make it the active one:", "  hw switch 0 --wallet 1"]
 
     it "are none when recover made a portfolio it created the active one" $
       (renderedLines <$> nextStepsPrinter (CommandRecover (Recover 10)) (ResponseRecover [btc] 10 (Just 0) [0] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) True))))
@@ -2085,7 +2085,7 @@ nextStepsSpec = do
 
     it "are the switch to the first portfolio importwallet created, when another one stays active" $
       (renderedLines <$> nextStepsPrinter (CommandImportWallet Nothing "wallet.jsonl") (ResponseImport (importedWith [WalletImport 1 testFingerprint2 True [PortfolioImport 0 True]] []) (Just (ActiveAfter (PortfolioRef 0 0) False))))
-        `shouldBe` Just ["To work in portfolio0 of wallet1, make it the active one:", "  hw switch --wallet 1 --portfolio 0"]
+        `shouldBe` Just ["To work in portfolio0 of wallet1, make it the active one:", "  hw switch 0 --wallet 1"]
 
     it "are none when importwallet made a portfolio it created the active one" $
       (renderedLines <$> nextStepsPrinter (CommandImportWallet Nothing "wallet.jsonl") (ResponseImport (importedWith [WalletImport 0 testFingerprint True [PortfolioImport 0 True]] []) (Just (ActiveAfter (PortfolioRef 0 0) True))))

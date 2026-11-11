@@ -370,7 +370,7 @@ switchSpec =
           switched (Just 0) 0
 
     it "names itself in a refusal or a next step as the command to type" $
-      switchCommandText (PortfolioRef 1 2) `shouldBe` "switch --wallet 1 --portfolio 2"
+      switchCommandText (PortfolioRef 1 2) `shouldBe` "switch 2 --wallet 1"
 
 {- How the answers name a place -}
 

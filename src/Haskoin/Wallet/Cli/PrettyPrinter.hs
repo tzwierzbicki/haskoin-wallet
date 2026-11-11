@@ -2725,7 +2725,7 @@ switchStep ref = ("To work in " <> refText ref <> ", make it the active one", sw
 -- | The command line that makes a portfolio the active one, which names
 -- its wallet always
 switchLine :: PortfolioRef -> Doc Style
-switchLine ref = hwLine "switch" [optionWord "--wallet", text (show (refWallet ref)), optionWord "--portfolio", text (show (refPortfolio ref))]
+switchLine ref = hwLine "switch" [text (show (refPortfolio ref)), optionWord "--wallet", text (show (refWallet ref))]
 
 -- | The steps after a sync that found pending transactions in conflict,
 -- given the active portfolio and the portfolios that hold them, each

@@ -353,8 +353,8 @@ is the `switch` to the new one. After that, only [`switch`](#hw-switch)
 changes the active portfolio:
 
 ```console
-hw switch --portfolio 1                     # portfolio1 of the same wallet
-hw switch --wallet 1 --portfolio 0          # portfolio0 of wallet1, another mnemonic
+hw switch 1                                 # portfolio1 of the same wallet
+hw switch 0 --wallet 1                      # portfolio0 of wallet1, another mnemonic
 ```
 
 The portfolio stays active for every command until the next `switch`.
@@ -388,7 +388,7 @@ portfolio runs `switch` before its commands, and the switch stays after the
 script ends.
 
 `switch` names a wallet and a portfolio by their index, `0` for `wallet0`, or
-by their name, as in `--portfolio portfolio1`. An index is below 2147483648,
+by their name, as in `hw switch portfolio1`. An index is below 2147483648,
 which is 2^31. The index of a portfolio is the last step of the paths of its
 accounts, and [BIP32] has that many hardened steps. `hw` refuses a larger
 index.
@@ -449,7 +449,7 @@ no `switch`.
 | `signtx`, `signsweep`, `importtx`, `bumpfee`, `preparesweep`, and `show` with a transaction or a transaction file | They find the portfolio from the transaction, or from the destinations of a sweep. The active portfolio settles a choice between several, as the next paragraph says. |
 | `label`, `lockcoin`, `unlockcoin`, `signmsg`, and `show` with an address or a coin | An address and a coin tell where they are. `--network` is needed only when the wallet has the address or the coin on several test networks. |
 | `importwallet`, and `show` with a file of a wallet | They find the wallet from the file. `--portfolio` names one portfolio of the file, and reads only that one. |
-| `switch` | `--portfolio` names the portfolio to make active, and `--wallet` its wallet. Without `--wallet`, it is the wallet of the active portfolio. |
+| `switch` | Its argument names the portfolio to make active, or `--portfolio` does, and `--wallet` names its wallet. Without `--wallet`, it is the wallet of the active portfolio. |
 | `deleteportfolio`, `deletewallet` | They never take what to delete from the active portfolio. `deleteportfolio --portfolio` names a portfolio of the wallet of the active portfolio, and refuses the active one. `deletewallet --wallet` names a wallet, and refuses the wallet of the active portfolio while another wallet exists. |
 
 A transaction can involve several portfolios. A transfer between two portfolios
@@ -824,7 +824,7 @@ Created portfolio1 of wallet0
 The active portfolio is still portfolio0 of wallet0.
 
 To work in portfolio1 of wallet0, make it the active one:
-  hw switch --wallet 0 --portfolio 1
+  hw switch 1 --wallet 0
 ```
 
 A new portfolio does not take over. The commands you type next keep working
@@ -974,7 +974,7 @@ of a backup, before you rely on it. Nothing is signed, and nothing is changed.
 
 ```console
 hw checkmnemonic                            # against the active portfolio
-hw switch --wallet 1 --portfolio 0          # to check the mnemonic of wallet1
+hw switch 0 --wallet 1                      # to check the mnemonic of wallet1
 hw checkmnemonic
 ```
 
@@ -994,7 +994,7 @@ only. To write another wallet, switch to one of its portfolios first.
 ```console
 hw exportwallet wallet.jsonl                # on the offline computer
 hw exportwallet savings.jsonl --portfolio 1 # portfolio1 only
-hw switch --wallet 1 --portfolio 0          # then the wallet of another mnemonic
+hw switch 0 --wallet 1                      # then the wallet of another mnemonic
 hw exportwallet other.jsonl
 ```
 
@@ -1105,7 +1105,7 @@ Labels set: 1 address
 Left aside: 1 record of the portfolios --portfolio leaves out
 
 To work in portfolio1 of wallet0, make it the active one:
-  hw switch --wallet 0 --portfolio 1
+  hw switch 1 --wallet 0
 ```
 
 Here `--portfolio` names a portfolio of the file, not the portfolio a command
@@ -1270,24 +1270,33 @@ descriptor back.
 
 #### `hw switch`
 
-`hw switch [--wallet N] --portfolio N` makes another portfolio the
+`hw switch PORTFOLIO [--wallet N]` makes another portfolio the
 [active one](#the-active-portfolio). The commands work in it from then on,
 until the next `switch`. The database keeps it.
 
 ```console
-hw switch --portfolio 1                     # portfolio1 of the same wallet
-hw switch --wallet 1 --portfolio 0          # portfolio0 of wallet1
+hw switch 1                                 # portfolio1 of the same wallet
+hw switch portfolio1                        # the same, by its name
+hw switch 0 --wallet 1                      # portfolio0 of wallet1
 ```
 
-`--portfolio` names the portfolio, and must be given. `--wallet` names its
+`PORTFOLIO` names the portfolio, and must be given. `--wallet` names its
 wallet. Without `--wallet`, the portfolio is one of the wallet of the active
-portfolio. So after `hw switch --wallet 1 --portfolio 0`, the command
-`hw switch --portfolio 2` goes to `portfolio2` of `wallet1`.
+portfolio. So after `hw switch 0 --wallet 1`, the command `hw switch 2` goes
+to `portfolio2` of `wallet1`.
+
+**Why the portfolio needs no option.** It is the one value `switch` must have,
+and you type `switch` often. So it goes without an option, as the word of
+`show` does. The wallet stays an option: most databases have one wallet, and
+`hw switch 0 1` would leave you to remember which number is which.
+`--portfolio N` names the portfolio too, for a script that names each value by
+its option. `hw switch --portfolio 1` is `hw switch 1`. Give the portfolio
+once: `switch` refuses it as both its argument and `--portfolio`.
 
 The answer shows the portfolio as `portfolios` shows it, with its `*`:
 
 ```console
-$ hw switch --portfolio 1
+$ hw switch 1
 The active portfolio is now portfolio1 of wallet0.
 * portfolio1  wallet0  "savings"
     created 11 Nov 2026
@@ -1298,9 +1307,9 @@ The active portfolio is now portfolio1 of wallet0.
 active portfolio stays as it was:
 
 ```console
-$ hw switch --portfolio 5
+$ hw switch 5
 Error: wallet0 has no portfolio5: portfolios lists the portfolios
-$ hw switch --wallet 2 --portfolio 0
+$ hw switch 0 --wallet 2
 Error: There is no wallet2: portfolios lists the wallets
 ```
 
@@ -1320,7 +1329,7 @@ the one to use. See [What each command takes](#what-each-command-takes).
 >   recover or importwallet bring one back`. The first portfolio created
 >   becomes active by itself.
 > - **The switch stays.** It is written to the database, not to the
->   configuration file. After `hw switch --portfolio 1` for one payment,
+>   configuration file. After `hw switch 1` for one payment,
 >   `receive` gives out addresses of `portfolio1` too. Switch back when you are
 >   done. A script that switches leaves the next commands you type in the
 >   portfolio it switched to.
@@ -1339,7 +1348,7 @@ had. An empty description, `""`, removes it.
 hw setdescription "daily spending"          # the active portfolio
 hw setdescription "paper backup in the safe" --of-wallet
 hw setdescription ""                        # removes the description
-hw switch --portfolio 1                     # then describe portfolio1
+hw switch 1                                 # then describe portfolio1
 hw setdescription savings
 ```
 
@@ -1413,7 +1422,7 @@ Otherwise it refuses, and says which rule stopped it.
 
 ```console
 hw deleteportfolio --portfolio 2
-hw switch --wallet 1 --portfolio 0          # to delete a portfolio of wallet1
+hw switch 0 --wallet 1                      # to delete a portfolio of wallet1
 hw deleteportfolio --portfolio 1
 ```
 
@@ -1595,7 +1604,7 @@ address comes under it, for the payer to scan.
 hw receive --label "invoice 42"
 hw receive --type bip84                     # a native SegWit address
 hw receive --network bch                    # an address on Bitcoin Cash
-hw switch --portfolio 1                     # then an address of portfolio1
+hw switch 1                                 # then an address of portfolio1
 hw receive --type bip84
 ```
 
@@ -2141,8 +2150,8 @@ type of its own, so `--change-back` and `--change-type` do not go together.
 > - **`--coin` and `--spend-from` take the coins of the active portfolio.** A
 >   coin or an address of another portfolio is refused, with the portfolio
 >   that holds it and the switch to it, as in `The coin a1075db5:1 is in
->   portfolio1 of wallet0, not in the active portfolio: run switch --wallet
->   0 --portfolio 1 first`. Every payment spends from one portfolio, and coin
+>   portfolio1 of wallet0, not in the active portfolio: run switch 1 --wallet
+>   0 first`. Every payment spends from one portfolio, and coin
 >   control keeps to the one you work in.
 > - **`--coin` and `--spend-from` tell the network.** The coins and the
 >   addresses chosen are on one network, and `preparetx` pays there.
@@ -2805,9 +2814,9 @@ Each command is offered what it takes from your wallet:
 
 - The indexes of your wallets after `--wallet`, for `switch` and
   `deletewallet`.
-- The indexes of your portfolios after `--portfolio`, for `switch`,
-  `deleteportfolio` and `exportwallet`. They are those of the wallet that
-  `--wallet` names, or else of the wallet of the active portfolio.
+- The indexes of your portfolios after `switch`, and after `--portfolio` for
+  `switch`, `deleteportfolio` and `exportwallet`. They are those of the wallet
+  that `--wallet` names, or else of the wallet of the active portfolio.
   `importwallet --portfolio` and `show --portfolio` name a portfolio of a file,
   which the database does not know, so they are offered none.
 - The hashes of your pending transactions. `signtx` offers those to sign,
@@ -3006,9 +3015,9 @@ on the active portfolio:
 
 ```console
 hw setdescription main
-hw switch --portfolio 1
+hw switch 1
 hw setdescription savings
-hw switch --portfolio 0                     # back to portfolio0
+hw switch 0                                 # back to portfolio0
 ```
 
 **What you type now.** The commands that worked on accounts have new names,
@@ -3024,7 +3033,7 @@ The commands work in the [active portfolio](#the-active-portfolio), which
 | `renameacc` | `setdescription` |
 | `deleteacc` | `deleteportfolio`, or `deletewallet` for a whole mnemonic |
 | `exportacc`, `importacc` | `exportwallet`, `importwallet` |
-| `--account NAME` | `hw switch --portfolio N` before the commands, with `--wallet N` for another mnemonic, then `--network` and `--type` on each command |
+| `--account NAME` | `hw switch N` before the commands, with `--wallet N` for another mnemonic, then `--network` and `--type` on each command |
 
 ### Reading the old database
 

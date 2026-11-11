@@ -106,11 +106,12 @@ walletIndexes = readForCompletion $ do
   portfolios <- getAllPortfolios
   return (nub [show (walletIndex p.portfolioWallet) | p <- portfolios])
 
--- | The indexes of the portfolios, for the --portfolio of switch,
--- deleteportfolio and exportwallet: those of the wallet --wallet names
--- among the words typed, or else of the wallet of the active portfolio,
--- where the three look without --wallet. A database without an active
--- portfolio has no portfolio, and nothing is offered.
+-- | The indexes of the portfolios, for the argument and the --portfolio
+-- of switch, and the --portfolio of deleteportfolio and exportwallet:
+-- those of the wallet --wallet names among the words typed, or else of
+-- the wallet of the active portfolio, where the three look without
+-- --wallet. A database without an active portfolio has no portfolio, and
+-- nothing is offered.
 portfolioIndexes :: IO [String]
 portfolioIndexes = do
   typed <- typedOptions

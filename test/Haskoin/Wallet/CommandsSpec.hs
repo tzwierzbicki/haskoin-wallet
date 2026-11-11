@@ -176,13 +176,13 @@ coinControlSpec ctx =
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir (coinOfPortfolio1 ctx)
         hwAnswer ctx wallet (paymentWords <> ["--coin", coinWord])
-          `shouldReturn` ResponseError "The coin 00000000:0 is in portfolio1 of wallet0, not in the active portfolio: run switch --wallet 0 --portfolio 1 first"
+          `shouldReturn` ResponseError "The coin 00000000:0 is in portfolio1 of wallet0, not in the active portfolio: run switch 1 --wallet 0 first"
 
     it "refuses an address of --spend-from of another portfolio than the active one, naming the portfolio that holds it and the switch to it" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir (coinOfPortfolio1 ctx)
         hwAnswer ctx wallet (paymentWords <> ["--spend-from", "17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo"])
-          `shouldReturn` ResponseError "The address 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo is in portfolio1 of wallet0, not in the active portfolio: run switch --wallet 0 --portfolio 1 first"
+          `shouldReturn` ResponseError "The address 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo is in portfolio1 of wallet0, not in the active portfolio: run switch 1 --wallet 0 first"
 
     -- The payment is on the network of its coins, which --network may not
     -- contradict

@@ -549,7 +549,7 @@ activeSpec ctx =
                      \The active portfolio is still portfolio0 of wallet0.\n\
                      \\n\
                      \To work in portfolio1 of wallet0, make it the active one:\n\
-                     \  hw switch --wallet 0 --portfolio 1\n"
+                     \  hw switch 1 --wallet 0\n"
 
     -- A wallet is created with its portfolio0, the lowest index, though
     -- the chain pays the first receiving address of portfolio1 alone
@@ -577,7 +577,7 @@ activeSpec ctx =
         newTestPortfolio home
         run <- hw home ["recover"] (seedOnceOf testMnemonic2)
         run `shouldSatisfy` printed "Recovered portfolio0 of wallet1\nThe active portfolio is still portfolio0 of wallet0.\n"
-        run `shouldSatisfy` printed "\nTo work in portfolio0 of wallet1, make it the active one:\n  hw switch --wallet 1 --portfolio 0\n"
+        run `shouldSatisfy` printed "\nTo work in portfolio0 of wallet1, make it the active one:\n  hw switch 0 --wallet 1\n"
 
     -- The file has portfolio0 and portfolio1: the first one created is
     -- portfolio0
@@ -610,7 +610,7 @@ activeSpec ctx =
               "Labels set: none",
               "",
               "To work in portfolio1 of wallet0, make it the active one:",
-              "  hw switch --wallet 0 --portfolio 1"
+              "  hw switch 1 --wallet 0"
             ]
 
     it "is kept from one command to the next, until the next switch" $
@@ -674,6 +674,18 @@ activeSpec ctx =
 switchSpec :: Spec
 switchSpec =
   describe "A portfolio made active by switch" $ do
+    it "is the portfolio its argument names, in the wallet of the active portfolio without --wallet" $
+      withHome $ \home -> do
+        threePortfolios home
+        _ <- answer home ["switch", "1"] []
+        activePortfolioIn home `shouldReturn` Right [PortfolioRef 0 1]
+
+    it "is the portfolio its argument names, in the wallet --wallet names" $
+      withHome $ \home -> do
+        threePortfolios home
+        _ <- answer home ["switch", "0", "--wallet", "1"] []
+        activePortfolioIn home `shouldReturn` Right [PortfolioRef 1 0]
+
     it "is the portfolio --portfolio names, in the wallet of the active portfolio without --wallet" $
       withHome $ \home -> do
         threePortfolios home
@@ -747,12 +759,12 @@ switchSpec =
         (errorOf <$> hwJson home ["switch", "--portfolio", "0"] [])
           `shouldReturn` Right "There is no wallet yet: newportfolio makes one, and recover or importwallet bring one back"
 
-    it "is refused without --portfolio, which switch never takes from the active portfolio" $
+    it "is refused without a portfolio, which switch never takes from the active portfolio" $
       withHome $ \home -> do
         threePortfolios home
         run <- hw home ["switch", "--wallet", "1"] []
         runExit run `shouldBe` ExitFailure 1
-        runErr run `shouldSatisfy` Text.isInfixOf "Missing: (-p|--portfolio INT)"
+        runErr run `shouldSatisfy` Text.isInfixOf "Missing: (PORTFOLIO | (-p|--portfolio INT))"
         activePortfolioIn home `shouldReturn` Right [PortfolioRef 0 0]
 
     -- An account index of BIP32 is below 2^31 = 2147483648: an index of

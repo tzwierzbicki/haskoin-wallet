@@ -505,14 +505,14 @@ paymentSpec ctx =
       withChain ctx (confirmedChain (portfolio1Payment ctx)) $ \home _ -> do
         syncedTwoPortfolios home
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (portfolio1Payment ctx) 0, "--fee-rate", "10"] [])
-          `shouldReturn` Right ("The coin " <> Text.pack (shortCoinArg (portfolio1Payment ctx) 0) <> " is in portfolio1 of wallet0, not in the active portfolio: run switch --wallet 0 --portfolio 1 first")
+          `shouldReturn` Right ("The coin " <> Text.pack (shortCoinArg (portfolio1Payment ctx) 0) <> " is in portfolio1 of wallet0, not in the active portfolio: run switch 1 --wallet 0 first")
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
 
     it "is refused a --spend-from address of another portfolio than the active one, naming the portfolio that holds it and the switch to it" $
       withChain ctx (confirmedChain (portfolio1Payment ctx)) $ \home _ -> do
         syncedTwoPortfolios home
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from", textOf account1Addr, "--fee-rate", "10"] [])
-          `shouldReturn` Right "The address 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo is in portfolio1 of wallet0, not in the active portfolio: run switch --wallet 0 --portfolio 1 first"
+          `shouldReturn` Right "The address 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo is in portfolio1 of wallet0, not in the active portfolio: run switch 1 --wallet 0 first"
 
     -- The coin of the payment is on btc
     it "is refused a --network that holds none of the coins of --coin, naming the network they are on" $

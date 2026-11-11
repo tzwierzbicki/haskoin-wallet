@@ -489,9 +489,10 @@ switchTo walletM index = do
   return portfolio
 
 -- | The command that makes a portfolio active, as a refusal or a next
--- step tells the user to run it: "switch --wallet 0 --portfolio 1"
+-- step tells the user to run it: "switch 1 --wallet 0". It names the
+-- wallet always, since the active portfolio may be of another wallet.
 switchCommandText :: PortfolioRef -> String
-switchCommandText ref = "switch --wallet " <> show (refWallet ref) <> " --portfolio " <> show (refPortfolio ref)
+switchCommandText ref = "switch " <> show (refPortfolio ref) <> " --wallet " <> show (refWallet ref)
 
 -- | A portfolio as a sentence names it: "portfolio0 of wallet0"
 portfolioText :: Portfolio -> String

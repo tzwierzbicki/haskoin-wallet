@@ -1354,7 +1354,7 @@ nextStepSpec ctx =
         run
           `shouldSatisfy` showsCommand
             "Next, switch to portfolio1 of wallet0, where the sync found new transactions:\n\
-            \  hw switch --wallet 0 --portfolio 1\n\
+            \  hw switch 1 --wallet 0\n\
             \Then see the transactions:\n\
             \  hw txs\n"
 
@@ -1383,7 +1383,7 @@ nextStepSpec ctx =
         run
           `shouldSatisfy` showsCommand
             "Next, switch to portfolio0 of wallet0, where a pending transaction is in conflict:\n\
-            \  hw switch --wallet 0 --portfolio 0\n\
+            \  hw switch 0 --wallet 0\n\
             \Then find the pending transaction in conflict, which can no longer be sent:\n\
             \  hw pendingtxs\n\
             \Then delete it, to free its coins:\n\
@@ -1404,8 +1404,8 @@ nextStepSpec ctx =
         run
           `shouldSatisfy` showsCommand
             "Next, switch in turn to each portfolio where a pending transaction is in conflict:\n\
-            \  hw switch --wallet 0 --portfolio 0\n\
-            \  hw switch --wallet 0 --portfolio 1\n\
+            \  hw switch 0 --wallet 0\n\
+            \  hw switch 1 --wallet 0\n\
             \In each, find the pending transactions in conflict, which can no longer be sent:\n\
             \  hw pendingtxs\n\
             \Then delete them, to free their coins:\n\

@@ -37,7 +37,7 @@ commands and options have new names, so read
   `setdescription` gives a portfolio a description in place of the name of
   an account. No command names an account with `--account` any more. The
   commands work in the active portfolio, so a script that worked on one
-  account runs `hw switch --portfolio N` before its commands.
+  account runs `hw switch N` before its commands.
 - **Transaction files are now PSBTs.** `hw` 0.10 reads no JSON transaction file
   of an earlier version. Prepare such a transaction again.
 - **Account files are now wallet files.** `importwallet` refuses an account
@@ -73,9 +73,14 @@ Wallets and portfolios:
   database keeps. You always know where `hw` works, and never type it. The
   first portfolio created in a database becomes the active one. After that,
   only `switch` changes it.
-- `switch --portfolio N` makes another portfolio active, with `--wallet N` for
-  a portfolio of another wallet. It refuses a wallet or a portfolio the
-  database does not have, and needs no server.
+- `switch N` makes portfolio N the active one, with `--wallet N` for a
+  portfolio of another wallet. The portfolio goes without an option, since
+  it is the one value `switch` needs: `hw switch 1`, or `hw switch
+  portfolio1` by its name. `--portfolio N` names it too, for a script that
+  names each value by its option. It refuses a wallet or a portfolio the
+  database does not have, and needs no server. The next steps and refusals
+  that send you to another portfolio write the switch as `hw switch 1
+  --wallet 0`.
 - `portfolios` marks the active portfolio with a `*`. Its JSON gives
   `"active"` for each portfolio, and its CSV file and the tab of the
   portfolios of `exportsheet` a column `Active`. `newportfolio`, `recover` and
@@ -313,7 +318,7 @@ Using `hw`:
 | `renameacc` | `setdescription` |
 | `deleteacc` | `deleteportfolio`, and `deletewallet` for a whole wallet |
 | `exportacc`, `importacc` | `exportwallet`, `importwallet` |
-| `--account NAME` | The active portfolio, which `switch --portfolio N` changes, with `--wallet N` for another mnemonic. `--network` and `--type` pick an account in it. |
+| `--account NAME` | The active portfolio, which `switch N` changes, with `--wallet N` for another mnemonic. `--network` and `--type` pick an account in it. |
 | `syncacc` | `sync` |
 | `discoveracc` | `recover`, which now finds every paid portfolio |
 | `testacc` | `checkmnemonic` |

@@ -72,7 +72,7 @@ data Command
   | -- | How to show each portfolio, or the CSV file to write them to
     CommandPortfolios !ListingOutput
   | -- | The wallet of the portfolio to make active, when --wallet names
-    -- it, and the portfolio
+    -- it, and the portfolio, which the argument or --portfolio names
     CommandSwitch !(Maybe Natural) !Natural
   | CommandSetDescription !SetDescription
   | CommandSetDefault !SetDefault
@@ -579,8 +579,8 @@ becomes active, so with one mnemonic you work in portfolio0 of wallet0 and
 never name it. `portfolios` marks the active one with a *, and switch makes
 another one active, until the next switch:
 
-  hw switch --portfolio 1              portfolio1 of the same wallet
-  hw switch --wallet 1 --portfolio 0   portfolio0 of wallet1
+  hw switch 1               portfolio1 of the same wallet
+  hw switch 0 --wallet 1    portfolio0 of wallet1
 
 Two options say where a command works in the portfolio. Each has a default,
 which a key of the configuration file changes, and which setdefault sets:
@@ -1075,18 +1075,27 @@ portfolioIndexOption what =
       <> completer (listIOCompleter portfolioIndexes)
       <> help (what <> " A portfolio is named by its index: 0 for portfolio0.")
 
--- | The index of a wallet or of a portfolio, as typed: a number, or the
--- name the listings show, such as 2 or portfolio2. The first argument is
--- the word the name starts with, wallet or portfolio. An index of 2^31 or
--- more is refused ('indexFits'): it names no wallet and no portfolio, and
--- the database would read it as another, smaller one.
+-- | The index of a wallet or of a portfolio, as the value of its option
+-- is typed: a number, or the name the listings show, such as 2 or
+-- portfolio2. The first argument is the word the name starts with, wallet
+-- or portfolio. A refusal names the value as the value of the option,
+-- "The --portfolio value" ('indexNamed').
 indexOf :: String -> String -> Either String Natural
-indexOf what typed =
+indexOf what = indexNamed what ("The --" <> what <> " value")
+
+-- | The index of a wallet or of a portfolio, as typed, with how a refusal
+-- names the value: "The --portfolio value" for an option, or "The
+-- portfolio" for the argument of switch. The first argument is the word
+-- the name starts with, wallet or portfolio. An index of 2^31 or more is
+-- refused ('indexFits'): it names no wallet and no portfolio, and the
+-- database would read it as another, smaller one.
+indexNamed :: String -> String -> String -> Either String Natural
+indexNamed what valueName typed =
   case readNatural (cs (fromMaybe typed (stripPrefix what typed))) of
-    Nothing -> Left ("The --" <> what <> " value is the index of a " <> what <> ", such as 0")
+    Nothing -> Left (valueName <> " " <> typed <> " is not an index, such as 0, or a name, such as " <> what <> "0")
     Just index
       | indexFits index -> Right index
-      | otherwise -> Left ("The --" <> what <> " value " <> typed <> " is too large: the index of a " <> what <> " is below 2147483648, which is 2^31")
+      | otherwise -> Left (valueName <> " " <> typed <> " is too large: the index of a " <> what <> " is below 2147483648, which is 2^31")
 
 -- | The --portfolio option of importwallet and show, which names one
 -- portfolio of a file of a wallet, with the help of the command about it.
@@ -1318,13 +1327,18 @@ switchCommand =
         [r|
 The commands work in the active portfolio: receive gives out its addresses,
 `txs` lists its transactions, and preparetx pays from it. switch makes the
-portfolio --portfolio names the active one, in the wallet --wallet names, or
-in the wallet of the active portfolio without --wallet. It stays active for
-every command until the next switch: the database keeps it. `portfolios` marks
-it with a *.
+portfolio PORTFOLIO names the active one, in the wallet --wallet names, or in
+the wallet of the active portfolio without --wallet. It stays active for every
+command until the next switch: the database keeps it. `portfolios` marks it
+with a *.
 
-  hw switch --portfolio 1              portfolio1 of the same wallet
-  hw switch --wallet 1 --portfolio 0   portfolio0 of wallet1
+  hw switch 1               portfolio1 of the same wallet
+  hw switch portfolio1      the same, by the name `portfolios` shows
+  hw switch 0 --wallet 1    portfolio0 of wallet1
+
+--portfolio names the portfolio as an option instead, for a script that names
+each value by its option. hw switch --portfolio 1 is hw switch 1. Give the
+portfolio once, as PORTFOLIO or with --portfolio.
 
 The first portfolio of a database becomes active as newportfolio, `recover` or
 importwallet creates it. A portfolio they add later does not: they say which
@@ -1338,10 +1352,26 @@ transaction involves several portfolios and hw cannot tell which one to take,
 it takes the active one, or names them for you to switch to the one to use.
 |],
       args =
-        CommandSwitch
-          <$> walletOptionWith "The wallet of the portfolio. Without it, the wallet of the active portfolio."
-          <*> portfolioIndexOption "The portfolio to make active. It must be given."
+        switchOf
+          <$> (switchPortfolioArg <|> portfolioIndexOption "The portfolio to make active, as an option instead of PORTFOLIO.")
+          <*> walletOptionWith "The wallet of the portfolio. Without it, the wallet of the active portfolio."
     }
+  where
+    -- The portfolio comes first on the command line, and the wallet after
+    -- it, since the wallet is often left out
+    switchOf portfolio walletM = CommandSwitch walletM portfolio
+
+-- | The portfolio switch makes active, as its argument: an index, such as
+-- 1, or the name the listings show, such as portfolio1. It is the one
+-- value switch needs, so it goes without an option, and --portfolio is
+-- the same value for a script that names each value by its option. The
+-- shell offers the portfolios of the wallet, as for --portfolio.
+switchPortfolioArg :: Args Natural
+switchPortfolioArg =
+  argument (eitherReader (indexNamed "portfolio" "The portfolio")) $
+    metavar "PORTFOLIO"
+      <> completer (listIOCompleter portfolioIndexes)
+      <> help "The portfolio to make active, by its index, such as 1, or by its name, such as portfolio1."
 
 {- setdescription -}
 

@@ -221,10 +221,10 @@ activePortfolioIn :: FilePath -> IO (Either String [PortfolioRef])
 activePortfolioIn home = activePortfoliosOf <$> hwJson home ["portfolios"] []
 
 -- | Make the portfolio of the indexes given, of a wallet and of one of its
--- portfolios, the active one of a home, as switch --wallet --portfolio
+-- portfolios, the active one of a home, as switch PORTFOLIO --wallet
 -- does: the commands that run next work in it
 switchTo :: FilePath -> Natural -> Natural -> IO ()
-switchTo home wallet portfolio = void $ answer home ["switch", "--wallet", show wallet, "--portfolio", show portfolio] []
+switchTo home wallet portfolio = void $ answer home ["switch", show portfolio, "--wallet", show wallet] []
 
 -- | The address receive hands out with the options given, as text: the
 -- first receiving address of the bip44 account of portfolio0 on btc
