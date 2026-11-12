@@ -256,11 +256,12 @@ Using `hw`:
 - `--unit btc|bit|sat` sets the unit of amounts. An amount can carry its own
   unit, as in `1000sat`.
 - The key `unit` of the configuration sets the unit of the amounts of a
-  command given no `--unit`.
+  command given no `--unit`. `setdefault --unit` writes it.
 - The key `listing-view` of the configuration sets the view of the six
   listings given no `--compact`, `--verbose` or `--tabular`. It is `compact`,
   `verbose` or `tabular`. `--compact` shows the compact view whatever the key
-  says.
+  says. `setdefault` writes the key from `--compact`, `--verbose` or
+  `--tabular`.
 
 ### Changed
 

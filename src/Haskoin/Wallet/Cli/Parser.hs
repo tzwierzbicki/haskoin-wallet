@@ -254,10 +254,18 @@ newtype Recover = Recover
   deriving (Eq, Show)
 
 -- | The options of setdefault: the defaults to write to the configuration
--- file, each when its option is given
+-- file, each when its option is given. Each default is set with the option
+-- whose default it is, so that a user types what they would type to a
+-- command for one run.
 data SetDefault = SetDefault
   { network :: !(Maybe Network),
-    kind :: !(Maybe AccountKind)
+    kind :: !(Maybe AccountKind),
+    -- | The unit of the amounts. --unit goes with every command, so the
+    -- parser of setdefault does not read it. 'parserMain' takes it from
+    -- the options of every command ('withUnitToSet').
+    unit :: !(Maybe AmountUnit),
+    -- | The view of the listings, from --compact, --verbose or --tabular
+    view :: !(Maybe View)
   }
   deriving (Eq, Show)
 
@@ -554,7 +562,17 @@ data GlobalOptions = GlobalOptions
 -- request for help, and a command line that cannot be parsed, print what
 -- they have to and leave.
 parserMain :: IO (Command, GlobalOptions)
-parserMain = runProgram program
+parserMain = withUnitToSet <$> runProgram program
+
+-- | setdefault writes the unit that --unit names. --unit is one of the
+-- options of every command, which the parser of a command does not see. A
+-- second --unit of setdefault alone would clash with it. So the unit is
+-- handed to setdefault here, after both are parsed. Every other command
+-- keeps the options as they are.
+withUnitToSet :: (Command, GlobalOptions) -> (Command, GlobalOptions)
+withUnitToSet (CommandSetDefault opts, globals) =
+  (CommandSetDefault opts {unit = globals.globalUnit}, globals)
+withUnitToSet parsed = parsed
 
 -- | hw: its commands by group, the options every command takes, and the
 -- help of the program
@@ -640,6 +658,7 @@ spreadsheet instead, every row whole.
 The options --unit, --json and --no-pager go before or after the command.
 The settings, such as the server, the default network, the unit, the view of
 the listings, the address gap and the pager, are in ~/.hw/config.json.
+setdefault writes the defaults among them.
 
 The Tab key completes the commands, the options, and what the wallet holds:
 wallets and portfolios, the hashes of pending transactions, coins and addresses. The
@@ -745,7 +764,7 @@ unitOption =
         [r|
 The unit of the amounts shown, and of the amounts typed without a unit: btc,
 bit or sat. A bit is 100 satoshis. The default is the key unit of
-config.json, or btc.
+config.json, or btc. setdefault --unit sets that key.
 |]
 
 {- newportfolio -}
@@ -1412,25 +1431,41 @@ setDefaultCommand =
   CommandSpec
     { name = "setdefault",
       offline = False,
-      summary = "Set the network and the type of address the commands take",
+      summary = "Set the default network, type of address, unit and listing view",
       details =
         [r|
-setdefault writes the defaults of --network and --type to the configuration
-file, ~/.hw/config.json, so that you do not have to edit it. Give the options
-to set, each with its new default:
+setdefault writes defaults to the configuration file, ~/.hw/config.json, so
+that you do not have to edit it. Give each option you want as the default, as
+you would give it to a command:
 
   hw setdefault --type bip84        give out native SegWit addresses
   hw setdefault --network bch       work on Bitcoin Cash
+  hw setdefault --unit sat          show and read amounts in satoshis
+  hw setdefault --tabular           show the listings as tables
 
-The keys are default-network and default-type. The other keys of the file stay
-as they are. The portfolio the commands work in is no default of the file: it
-is the active portfolio, which switch changes.
+--unit sets the unit of the amounts, shown and typed. hw --help lists it with
+the options of every command. --compact, --verbose and --tabular set the view
+of the listings: portfolios, addresses, balances, txs, pendingtxs and coins.
+One of them given to a listing still changes its view for that listing.
+
+The keys are default-network, default-type, unit and listing-view. The other
+keys of the file stay as they are. The portfolio the commands work in is no
+default of the file. It is the active portfolio, which switch changes.
 |],
       args =
         CommandSetDefault
           <$> ( SetDefault
                   <$> networkOptionWith "It becomes the default network."
                   <*> typeOptionWith "It becomes the default type."
+                  -- --unit is read with the options of every command
+                  -- ('withUnitToSet')
+                  <*> pure Nothing
+                  <*> optional
+                    ( viewFlags
+                        "The listings show each element in a few lines, as they do when no view is set."
+                        "The listings show every detail of each element."
+                        "The listings show each element on one row of a table."
+                    )
               )
     }
 
@@ -1982,14 +2017,22 @@ listingOutputOption :: String -> String -> String -> Args ListingOutput
 listingOutputOption verboseHelp tabularHelp listed =
   fromMaybe (OnScreen Nothing)
     <$> optional
-      ( flag' (OnScreen (Just Compact)) (long "compact" <> help compactHelp)
-          <|> flag' (OnScreen (Just Verbose)) (short 'v' <> long "verbose" <> help verboseHelp)
-          <|> flag' (OnScreen (Just Table)) (long "tabular" <> help tabularHelp)
+      ( OnScreen . Just <$> viewFlags compactHelp verboseHelp tabularHelp
           <|> CsvFile <$> strOption (long "csv" <> metavar "FILENAME" <> fileCompletion <> help csvHelp)
       )
   where
-    compactHelp = "Show the " <> listed <> " in a few lines each. It is the default, unless the key listing-view of config.json names another view."
+    compactHelp = "Show the " <> listed <> " in a few lines each. It is the default, unless setdefault or the key listing-view of config.json names another view."
     csvHelp = "Write the " <> listed <> " to this file, one on each row, as CSV for a spreadsheet, with amounts in satoshis and times in UTC. The file must not exist yet."
+
+-- | The view of a listing, from one of --compact, --verbose and
+-- --tabular, with their help in that order. The listings read them, and
+-- setdefault reads them for the view it makes the default, so that both
+-- take the same words.
+viewFlags :: String -> String -> String -> Args View
+viewFlags compactHelp verboseHelp tabularHelp =
+  flag' Compact (long "compact" <> help compactHelp)
+    <|> flag' Verbose (short 'v' <> long "verbose" <> help verboseHelp)
+    <|> flag' Table (long "tabular" <> help tabularHelp)
 
 txVerboseHelp :: String
 txVerboseHelp = "Show every detail of each transaction: its label, its hash in full and its short id, each address it spends from or pays, with its amount, path and label, the labels of the coins spent as `coins` shows them, and the fee."

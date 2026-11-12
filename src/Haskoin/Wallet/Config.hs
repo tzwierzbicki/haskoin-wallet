@@ -5,8 +5,10 @@
 -- written with the defaults when there is none, and the paths of that
 -- directory. Two of its keys say where in a portfolio a command works when
 -- its options do not: the network and the type of account
--- ('configDefaultNetwork' and 'configDefaultType'). setdefault changes
--- them in the file ('setConfigKeys').
+-- ('configDefaultNetwork' and 'configDefaultType'). Two more say how the
+-- answers look: the unit of the amounts and the view of the listings
+-- ('configUnit' and 'configListingView'). setdefault changes these four in
+-- the file ('setConfigKeys').
 --
 -- The portfolio a command works in is no key of the file: it is the
 -- active portfolio, which the database keeps and switch changes
@@ -279,3 +281,9 @@ setConfigKeys dir changes = do
 defaultNetworkKey, defaultTypeKey :: Text
 defaultNetworkKey = Text.pack "default-network"
 defaultTypeKey = Text.pack "default-type"
+
+-- | The names of the two keys that say how the answers look: the unit of
+-- the amounts and the view of the listings
+unitKey, listingViewKey :: Text
+unitKey = Text.pack "unit"
+listingViewKey = Text.pack "listing-view"

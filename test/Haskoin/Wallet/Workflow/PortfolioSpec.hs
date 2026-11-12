@@ -63,7 +63,7 @@ spec = prepareContext $ \ctx -> do
   portfoliosSpec ctx
   checkMnemonicSpec
   descriptionSpec
-  setDefaultSpec
+  setDefaultSpec ctx
   deletePortfolioSpec ctx
   deleteWalletSpec ctx
   walletFileSpec ctx
@@ -1174,8 +1174,8 @@ descriptionSpec =
 
 {- Defaults -}
 
-setDefaultSpec :: Spec
-setDefaultSpec =
+setDefaultSpec :: Ctx -> Spec
+setDefaultSpec ctx =
   describe "The defaults setdefault writes" $ do
     it "are the two keys of the configuration file, each with its value" $
       withHome $ \home -> do
@@ -1219,10 +1219,94 @@ setDefaultSpec =
         _ <- answer home ["setdefault", "--type", "bip84"] []
         receiveWith home [] `shouldReturn` Text.unpack (segwitExternalAddrsText !! 0)
 
+    -- The file of a test home names the fake store and the network btc
+    it "include the unit of --unit, written to the key unit" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["setdefault", "--unit", "sat"] []
+        config <- configFileOf home
+        config
+          `shouldBe` Just
+            ( Json.object
+                [ "default-network" Json..= ("btc" :: Text),
+                  "host" Json..= ("http://127.0.0.1:1/" :: Text),
+                  "unit" Json..= ("sat" :: Text)
+                ]
+            )
+
+    -- --unit goes before or after any command
+    it "include the unit of --unit given before the command" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["--unit", "sat", "setdefault"] []
+        config <- configFileOf home
+        config
+          `shouldBe` Just
+            ( Json.object
+                [ "default-network" Json..= ("btc" :: Text),
+                  "host" Json..= ("http://127.0.0.1:1/" :: Text),
+                  "unit" Json..= ("sat" :: Text)
+                ]
+            )
+
+    -- --unit takes bits for bit, as an amount does, and the help names
+    -- the unit bit
+    it "write a unit by the name the help gives it, whatever name was typed" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["setdefault", "--unit", "bits"] []
+        config <- configFileOf home
+        config
+          `shouldBe` Just
+            ( Json.object
+                [ "default-network" Json..= ("btc" :: Text),
+                  "host" Json..= ("http://127.0.0.1:1/" :: Text),
+                  "unit" Json..= ("bit" :: Text)
+                ]
+            )
+
+    -- The portfolio has 50000 satoshis on btc
+    it "make the amounts shown in the unit set" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["setdefault", "--unit", "sat"] []
+        (printed "50000 sats" <$> hw home ["portfolios"] []) `shouldReturn` True
+
+    it "include the view each of --compact, --verbose and --tabular names, written to the key listing-view" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        forM_ [("--compact", "compact"), ("--verbose", "verbose"), ("--tabular", "tabular" :: Text)] $ \(option, view) -> do
+          _ <- answer home ["setdefault", option] []
+          config <- configFileOf home
+          config
+            `shouldBe` Just
+              ( Json.object
+                  [ "default-network" Json..= ("btc" :: Text),
+                    "host" Json..= ("http://127.0.0.1:1/" :: Text),
+                    "listing-view" Json..= view
+                  ]
+              )
+
+    -- The table of portfolios starts with its headings, which no other
+    -- view has
+    it "make the listings show the view set" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["setdefault", "--tabular"] []
+        listed <- Text.lines . runOut <$> hw home ["portfolios"] []
+        take 1 listed `shouldBe` ["  │ Wallet  │ Portfolio  │ Network │ Spendable (btc) │ Unconfirmed (btc) │ Coins │ Addresses │ Description"]
+
+    -- The keys are padded to the longest, listing-view, of 12 letters
+    it "say the unit and the view in the answer, key by key" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home ["setdefault", "--unit", "sat", "--tabular"] []
+        runOut run `shouldBe` "unit        : sat\nlisting-view: tabular\nWritten to " <> Text.pack (home </> ".hw" </> "config.json") <> "\n"
+
     it "are refused when no option names one" $
       withHome $ \home -> do
         newTestPortfolio home
-        (errorOf <$> hwJson home ["setdefault"] []) `shouldReturn` Right "Give the default to set: --network or --type"
+        (errorOf <$> hwJson home ["setdefault"] []) `shouldReturn` Right "Give the default to set: --network, --type, --unit, --compact, --verbose or --tabular"
 
     -- The active portfolio is in the database, and switch changes it
     it "are refused --wallet and --portfolio, which switch replaces, and the file is left as it was" $

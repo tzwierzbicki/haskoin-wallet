@@ -223,6 +223,9 @@ changeSpec =
     it "names the two keys that say where in a portfolio a command works as the file writes them" $
       [defaultNetworkKey, defaultTypeKey] `shouldBe` ["default-network", "default-type"]
 
+    it "names the keys of the unit and of the view of the listings as the file writes them" $
+      [unitKey, listingViewKey] `shouldBe` ["unit", "listing-view"]
+
     it "changes the keys given, which the configuration then reads" $
       inScratchDirectory $ \dir -> do
         writeFile (configFile dir) defaultFile

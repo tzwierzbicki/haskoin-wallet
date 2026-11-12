@@ -27,8 +27,9 @@
 -- A command that changes a default writes it to the configuration file
 -- inside its transaction, as its last step ('writeDefaults'): when the
 -- file cannot be written, the database is left as it was, so that the two
--- never disagree. Only setdefault does, and only for the network and the
--- type: the active portfolio is in the database.
+-- never disagree. Only setdefault does. It writes the network, the type,
+-- the unit and the view of the listings. The active portfolio is no key of
+-- the file: it is in the database.
 module Haskoin.Wallet.Commands
   ( commandResponse,
     commandListing,
@@ -115,7 +116,7 @@ import Data.Word (Word64)
 import Database.Persist.Sqlite (transactionUndo)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Amounts (AmountUnit)
+import Haskoin.Wallet.Amounts (AmountUnit, unitName)
 import Haskoin.Wallet.Backup (backupDatabase, backupDirectory, copyDatabase)
 import Haskoin.Wallet.Bip329 (recordsText)
 import Haskoin.Wallet.Cli.Csv (sheetCsv)
@@ -126,6 +127,7 @@ import Haskoin.Wallet.Cli.PrettyPrinter (addedCoinsDoc, agoText, childrenDoc, du
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Sheet (PortfolioSheets (..), Sheet, listingSheet, stacked, walletSheets)
+import Haskoin.Wallet.Cli.View (viewName)
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.CutAddress (cutAddress)
 import Haskoin.Wallet.Database
@@ -622,19 +624,23 @@ cmdSwitch cfg walletM index =
     ResponseSwitched <$> viewOfPortfolio portfolio
 
 -- | Write the defaults the options give to the configuration file: the
--- network and the type of address. The portfolio the commands work in is
--- no default of the file: switch makes another one active.
+-- network, the type of address, the unit and the view of the listings.
+-- Each is written by the name the file reads back, which is also the name
+-- the answer shows. The portfolio the commands work in is no default of
+-- the file: switch makes another one active.
 cmdSetDefault :: Config -> SetDefault -> IO Response
 cmdSetDefault cfg opts =
   runDBResponse cfg $ do
-    when (isNothing opts.network && isNothing opts.kind) $
-      throwError "Give the default to set: --network or --type"
     let changes =
-          [(defaultNetworkKey, Json.toJSON net.name, cs net.name) | Just net <- [opts.network]]
-            <> [(defaultTypeKey, Json.toJSON (kindName kind), kindName kind) | Just kind <- [opts.kind]]
-    writeDefaults [(key, value) | (key, value, _) <- changes]
+          [(defaultNetworkKey, cs net.name) | Just net <- [opts.network]]
+            <> [(defaultTypeKey, kindName kind) | Just kind <- [opts.kind]]
+            <> [(unitKey, unitName unit) | Just unit <- [opts.unit]]
+            <> [(listingViewKey, viewName view) | Just view <- [opts.view]]
+    when (null changes) $
+      throwError "Give the default to set: --network, --type, --unit, --compact, --verbose or --tabular"
+    writeDefaults [(key, Json.toJSON name) | (key, name) <- changes]
     file <- configFile <$> liftIO hwDataDirectory
-    return $ ResponseDefaults [(key, shown) | (key, _, shown) <- changes] file
+    return $ ResponseDefaults changes file
 
 -- | Delete a portfolio of the wallet of the active portfolio that was
 -- never used: not portfolio 0, not the active one, the last of its

@@ -256,7 +256,7 @@ These options work with every command, before or after it:
 
 | Option | What it does |
 |---|---|
-| `--unit UNIT` | Sets the unit of the amounts shown, and of the amounts typed without a unit: `btc`, `bit` or `sat`. A bit is 100 satoshis. The default is the key `unit` of the [configuration](#configuration), or `btc`. |
+| `--unit UNIT` | Sets the unit of the amounts shown, and of the amounts typed without a unit: `btc`, `bit` or `sat`. A bit is 100 satoshis. The default is the key `unit` of the [configuration](#configuration), or `btc`. [`setdefault --unit`](#hw-setdefault) sets that key. |
 | `--json` | Prints the answer as JSON. Questions and warnings go to stderr. |
 | `--no-pager` | Prints a listing as it is, through no pager. |
 
@@ -527,9 +527,10 @@ An amount can end with `btc`, `bit`, `bits`, `sat` or `sats`. Bitcoins take up
 to 8 decimals, bits up to 2, and satoshis none. `ADDRESS:0.00001`,
 `ADDRESS:10bits` and `ADDRESS:1000sat` pay the same.
 
-If you count in satoshis or in bits, set the key `unit` of the
-[configuration](#configuration). Amounts are then shown in that unit. An
-amount typed without a unit is read in it too. A script should give `--unit`,
+If you count in satoshis or in bits, make it your unit with
+[`setdefault`](#hw-setdefault), as in `hw setdefault --unit sat`. It writes the
+key `unit` of the [configuration](#configuration). Amounts are then shown in
+that unit. An amount typed without a unit is read in it too. A script should give `--unit`,
 or write the unit after each amount, so that the configuration cannot change
 what it pays. JSON answers give every amount in satoshis, whatever the unit.
 
@@ -583,9 +584,11 @@ several networks. `show` and `signmsg` derive the address at a path from the
 public key, so they take any path, on the offline computer too. The others
 take the path of an address the portfolio holds.
 
-If you always want the same view, set the key `listing-view` of the
-[configuration](#configuration) to `verbose` or `tabular`. `--compact` then
-brings back the compact view for one listing. The key changes the screen alone.
+If you always want the same view, make it the default with
+[`setdefault`](#hw-setdefault), as in `hw setdefault --tabular`. It writes the
+key `listing-view` of the [configuration](#configuration). `--compact` then
+brings back the compact view for one listing, and `hw setdefault --compact`
+brings it back for good. The key changes the screen alone.
 `--json` and `--csv` answer as they would without it. A command that answers
 with one element, such as `lockcoin`, keeps its own view.
 
@@ -723,7 +726,7 @@ server, so they are not marked.
 | [`importwallet`](#hw-importwallet) | Add the portfolios and labels of a file |
 | [`portfolios`](#hw-portfolios) | Show the portfolios, their balances and descriptors |
 | [`switch`](#hw-switch) | Make another portfolio the active one |
-| [`setdefault`](#hw-setdefault) | Set the network and the type of address the commands take |
+| [`setdefault`](#hw-setdefault) | Set the default network, type of address, unit and listing view |
 | [`deleteportfolio`](#hw-deleteportfolio) | Delete a portfolio that was never used |
 | [`deletewallet`](#hw-deletewallet) | Delete a wallet with all of its portfolios |
 | [`sync`](#hw-sync) | Update the portfolios from the network |
@@ -1347,13 +1350,22 @@ the one to use. See [What each command takes](#what-each-command-takes).
 
 #### `hw setdefault`
 
-Writes the defaults of `--network` and `--type` to the
-[configuration file](#configuration), so that you do not have to edit it. Give
-the options to set, each with its new default.
+Writes defaults to the [configuration file](#configuration), so that you do
+not have to edit it. Give each option you want as the default, as you would
+give it to a command:
+
+| Option | The default it sets | Key |
+|---|---|---|
+| `--network NET` | The network | `default-network` |
+| `--type TYPE` | The type of address | `default-type` |
+| `--unit UNIT` | The unit of the amounts | `unit` |
+| `--compact`, `--verbose` or `--tabular` | The [view of the listings](#listings) | `listing-view` |
 
 ```console
 hw setdefault --type bip84                  # give out native SegWit addresses
 hw setdefault --network bch                 # work on Bitcoin Cash
+hw setdefault --unit sat                    # show and read amounts in satoshis
+hw setdefault --tabular                     # show the listings as tables
 hw setdefault --network bch --type bip84    # two defaults at once
 ```
 
@@ -1366,9 +1378,10 @@ default-type   : bip84
 Written to /home/you/.hw/config.json
 ```
 
-The keys are `default-network` and `default-type`. The other keys of the file
-stay as they are. [The two options](#the-two-options) says what each default
-does.
+The other keys of the file stay as they are.
+[The two options](#the-two-options) says what the network and the type do.
+[Amounts](#amounts) and [Listings](#listings) say what the unit and the view
+do.
 
 > **Good to know**
 >
@@ -1376,6 +1389,12 @@ does.
 >   portfolio, which the database keeps. [`switch`](#hw-switch) changes it.
 > - **A default of `bip84` leaves Bitcoin Cash on `bip44`.** The networks of
 >   Bitcoin Cash have `bip44` addresses only, whatever `default-type` says.
+> - **An option still wins for one command.** `hw txs --verbose` or
+>   `hw txs --unit btc` shows that one listing its own way, whatever the
+>   defaults say.
+> - **`hw setdefault --help` does not list `--unit`.** It is one of the
+>   [options of every command](#options-of-every-command), which `hw --help`
+>   lists. It goes before or after `setdefault`, as with any command.
 > - **Each computer has its own defaults.** They are settings of the
 >   configuration file, not of the database. The file of `exportwallet` does
 >   not carry them.
@@ -2802,8 +2821,9 @@ On its first command, `hw` creates the directory `~/.hw`. It holds the database
 | `pager` | `null` | The pager a listing goes through on a terminal, instead of `less` or `PAGER`. `""` is none. |
 
 The two `default-` keys say which account of the portfolio a command takes when
-no option does. [`setdefault`](#hw-setdefault) writes them, so that you do not
-have to edit the file. It is the one command that changes the file.
+no option does. `unit` and `listing-view` say how the answers look.
+[`setdefault`](#hw-setdefault) writes these four keys, so that you do not have
+to edit the file. It is the one command that changes the file.
 
 The portfolio a command works in is not in the file. It is the
 [active portfolio](#the-active-portfolio), which the database keeps and

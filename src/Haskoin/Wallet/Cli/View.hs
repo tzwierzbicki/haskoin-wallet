@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | The views of a listing: how accounts, addresses, balances, txs,
+-- | The views of a listing: how portfolios, addresses, balances, txs,
 -- pendingtxs and coins show each element on the screen.
 --
 -- A listing has three views. The compact view gives each element in a few
@@ -11,8 +11,8 @@
 --
 -- A user picks a view for one listing with --compact, --verbose or
 -- --tabular. A user who always wants the same one sets the key
--- listing-view of config.json, and the option then overrides it for one
--- listing. The type lives in a module of its own because both the command
+-- listing-view of config.json, with setdefault and the same option, and
+-- the option then overrides it for one listing. The type lives in a module of its own because both the command
 -- line ("Haskoin.Wallet.Cli.Parser") and the configuration
 -- ("Haskoin.Wallet.Config") name it, and the configuration cannot depend
 -- on the command line, which reads it for shell completion.
