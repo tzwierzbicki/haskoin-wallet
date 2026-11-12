@@ -43,6 +43,7 @@ failingWith content = liftIO $ throwIO (HttpExceptionRequest defaultRequest cont
 spec :: Spec
 spec = do
   callSpec
+  urlSpec
   answeredErrorSpec
   reachedSpec
   rawSpec
@@ -177,6 +178,33 @@ rawSpec =
         withServerSending (hex "0000000000000001" <> bytesOf payment) $ \_ url ->
           runExceptT (storeRawTransactions (webStore ctx (def :: Config) {configHost = cs url} btc) [txHash payment])
             `shouldReturn` Right [payment]
+
+-- | The web address of the store of a network, made from the host of the
+-- configuration. Users type the host with a slash at the end or without.
+urlSpec :: Spec
+urlSpec =
+  describe "The web address of the store" $ do
+    it "puts a slash between a host without one at the end and the network" $
+      resourceUrl "http://localhost:3000" btc "/block/best"
+        `shouldBe` "http://localhost:3000/btc/block/best"
+
+    it "adds no second slash after a host that ends with one" $
+      resourceUrl "https://api.haskoin.com/" btc "/block/best"
+        `shouldBe` "https://api.haskoin.com/btc/block/best"
+
+    -- A proxy that serves its stores under a path of its own
+    it "keeps the path of the host in front of the network" $
+      resourceUrl "http://proxy.test/stores" btc "/block/best"
+        `shouldBe` "http://proxy.test/stores/btc/block/best"
+
+    -- The server answers that it knows none of the transactions asked. The
+    -- host is its address with the slash at the end taken off.
+    prepareContext $ \ctx ->
+      it "is reached with a host typed without a slash at the end" $
+        withServerSending (BL.fromStrict (hexBytes "0000000000000000")) $ \_ url -> do
+          let hostWithoutSlash = cs (init url)
+          runExceptT (storeRawTransactions (webStore ctx (def :: Config) {configHost = hostWithoutSlash} btc) [fakeTxHash 1])
+            `shouldReturn` Right []
 
 -- | The health checks of the stores of several networks. sync and recover
 -- go over every network, and no host serves them all.

@@ -71,7 +71,9 @@ databaseFile cfg = (`databaseFileIn` cfg) <$> hwDataDirectory
 -- | The settings of hw. Each one has a default, which a new configuration
 -- file is written with and which a key missing from the file keeps.
 data Config = Config
-  { -- | The web address of the haskoin-store that hw asks about the chain
+  { -- | The web address of the haskoin-store that hw asks about the chain.
+    -- It may end with a slash or not. The name of the network goes after
+    -- it, with a slash between ('Haskoin.Wallet.Store.resourceUrl').
     configHost :: Text,
     -- | The gap of BIP44: how many unused addresses hw generates past the
     -- last used one of a chain, and looks at for payments on a sync

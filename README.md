@@ -2980,7 +2980,7 @@ On its first command, `hw` creates the directory `~/.hw`. It holds the database
 
 | Key | Default | What it sets |
 |---|---|---|
-| `host` | `https://api.haskoin.com/` | The haskoin-store server |
+| `host` | `https://api.haskoin.com/` | The address of the haskoin-store server, with or without a slash at the end |
 | `default-network` | `btc` | The network of a command given no `--network` |
 | `default-type` | `bip44` | The type of address of a command given no `--type`: `bip44` or `bip84`. The networks of Bitcoin Cash take `bip44` whatever it says. |
 | `unit` | `btc` | The unit of the amounts of a command given no `--unit`: `btc`, `bit` or `sat` |

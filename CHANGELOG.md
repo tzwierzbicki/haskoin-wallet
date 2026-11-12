@@ -431,6 +431,10 @@ index.
 
 ### Fixed
 
+- A `host` without a slash at the end now works. `hw` put the name of the
+  network right after the host, so `http://localhost:3000` became
+  `http://localhost:3000btc/...`. Every call to the server failed with an
+  address that is not valid. `hw` now adds the slash when the host has none.
 - `sync` sees a replacement that leaves the balance of an address as it was.
   A fee bump of a payment to another portfolio pays the same amount to the
   same address, and the portfolio paid missed the replacement. It showed the

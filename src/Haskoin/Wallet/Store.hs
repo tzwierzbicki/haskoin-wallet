@@ -24,7 +24,7 @@ import Data.Bytes.Put (runPutL)
 import Data.Bytes.Serial (deserialize, serialize)
 import Data.Default (def)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
-import Data.List (intercalate)
+import Data.List (intercalate, isSuffixOf)
 import Data.List.Split (chunksOf)
 import Data.Maybe (fromMaybe)
 import Data.Monoid (Endo (..), appEndo)
@@ -235,7 +235,7 @@ storeCall ctx api res = runGetL deserialize <$> storeAnswer ctx api res
 storeAnswer :: (ApiResource a b) => Ctx -> ApiConfig -> a -> ExceptT Store.Except IO BL.ByteString
 storeAnswer ctx (ApiConfig net apiHost) res = do
   query <- liftEither $ queryOptions net ctx res
-  let url = apiHost <> net.name <> cs (queryPath net ctx res)
+  let url = resourceUrl apiHost net (cs (queryPath net ctx res))
       options = appEndo (query <> binary) (Wreq.defaults & Wreq.manager %~ either (Left . boundedAnswers) Right)
   case resourceMethod (asProxy res) of
     GET -> answerBody =<< liftIO (try (Wreq.getWith options url))
@@ -247,6 +247,29 @@ storeAnswer ctx (ApiConfig net apiHost) res = do
     answerBody :: Either Store.Except (Wreq.Response BL.ByteString) -> ExceptT Store.Except IO BL.ByteString
     answerBody = either throwError (return . (^. Wreq.responseBody))
     binary = Endo $ (Wreq.header "Accept" .~ ["application/octet-stream"]) . (Wreq.checkResponse ?~ checkStatus)
+
+-- | The web address of a resource of the store of a network. It is the
+-- host, then the name of the network, then the path of the resource, such
+-- as https://api.haskoin.com/btc/block/best.
+--
+-- Users type the host with a slash at the end or without one. The web
+-- client of haskoin-store puts the name of the network right after the
+-- host, so it needs that slash. Without it, http://localhost:3000 gave
+-- http://localhost:3000btc/block/best, which names no host at all. So hw
+-- adds the slash when the host has none, and keeps the host as it is
+-- otherwise. A host with a path keeps its path in front of the network.
+-- That is the case of a proxy at http://proxy.example/stores, for
+-- instance.
+--
+-- The slash is added here, where the address is made, and not when the
+-- configuration is read. So every store hw makes gets it, and the
+-- messages about the store name the host as the user typed it.
+resourceUrl :: String -> Network -> String -> String
+resourceUrl host net path = withSlash <> net.name <> path
+  where
+    withSlash
+      | "/" `isSuffixOf` host = host
+      | otherwise = host <> "/"
 
 -- | The raw transactions in the answer of the store to 'GetTxsRaw', in
 -- either of the formats of haskoin-store, or why they could not be read.
