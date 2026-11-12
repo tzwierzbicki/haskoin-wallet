@@ -529,6 +529,15 @@ portfolioOfPlace place =
 -- a BIP84 one is then one internal transaction, and a payment that spends
 -- coins of both types is one debit.
 --
+-- The sync also settles where txs lists each transaction
+-- ('Haskoin.Wallet.Database.TxInfo.Standing'). A summary is stored at the
+-- position of its transaction in its block. Once the summaries are stored,
+-- the transactions of each block that got one take their turns again
+-- ('Haskoin.Wallet.Database.TxInfo.orderBlock'), since a block of Bitcoin
+-- Cash may put a transaction before one it spends from. A transaction
+-- found dead stays where txs listed it when the pool last saw it alive
+-- ('lastSeenAliveAt').
+--
 -- When the chain may have moved under the pool ('chainMayHaveMoved'),
 -- the sync looks at every address, and also marks dead the summaries of
 -- transactions the store no longer lists. It still fetches only the
@@ -565,6 +574,7 @@ sync ctx cfg plainStore pool full watch = do
   -- A full sync looks at everything anyway: only an incremental one asks
   -- whether the chain moved
   everything <- if full then return True else chainMayHaveMoved store pool
+  lastSeenAlive <- lastSeenAliveAt pool best.height
   found <- sum <$> forM accounts (\(accId, acc) -> watchGap ctx cfg scanStore (accountPlaceName place acc) accId watch)
   -- The addresses of the pool with their stored balances, and those to
   -- look at: every one, or those the store reports changed and those a
@@ -592,10 +602,18 @@ sync ctx cfg plainStore pool full watch = do
   txs <- fromStore $ storeTransactions store toFetch
   refusedAnswer store $ askedFor toFetch txs
   refusedAnswer store $ mapM_ weighed txs
-  updated <- lift $ forM (filter (not . (.deleted)) txs) $ \tx ->
+  let stored = filter (not . (.deleted)) txs
+  updated <- lift $ forM stored $ \tx ->
     repsertSummary pool tx.txid tx.block (storeTime tx.timestamp) (storeSummary net addrPaths tx)
+  -- A transaction that died in the mempool stands at the block the pool
+  -- had reached when it was last seen alive, at the sync before this one
   let dead = deadTransactions everything live toFetch txs listed
-  lift $ forM_ dead $ markTxInfoDead pool
+  lift $ forM_ dead $ markTxInfoDead pool lastSeenAlive
+  -- The transactions of each block that got one take their turns again,
+  -- now that every summary of this sync is stored. The dead ones are
+  -- marked first: a full sync has then written or marked dead every
+  -- summary, so a live one that does not read cannot stop it here.
+  forM_ (nubOrd [height | Store.BlockRef height _ <- (.block) <$> stored]) $ orderBlock pool
   when full $ lift $ dropUnreadableDead pool
   -- The coins, the pending transactions and the raw transactions
   refreshed <- syncCoins ctx store pool full lookedAt
@@ -621,6 +639,22 @@ sync ctx cfg plainStore pool full watch = do
         syncResConflicted = conflicted,
         syncResNewAddrs = found
       }
+
+-- | The height at which a transaction this sync finds dead was last seen
+-- alive: the block the sync before this one reached. A transaction that
+-- died in the mempool stands there in txs
+-- ('Haskoin.Wallet.Database.TxInfo.DiedAt'). A pool that was never synced
+-- has no live transaction to find dead, and gets the height this sync
+-- reaches. So does a pool whose stored block does not read. An incremental
+-- sync has refused that block before it comes here
+-- ('chainMayHaveMoved'). A full sync stores it again, and must not stop at
+-- it.
+lastSeenAliveAt :: (MonadUnliftIO m) => Pool -> BlockHeight -> ExceptT String (DB m) BlockHeight
+lastSeenAliveAt pool reached = do
+  synced <- lift $ runExceptT (syncedBlock pool)
+  return $ case synced of
+    Right (Just block) -> block.syncedHeight
+    _ -> reached
 
 -- | Whether the chain may have moved under the pool since its last
 -- sync: the block that sync reached is no longer in the main chain at its

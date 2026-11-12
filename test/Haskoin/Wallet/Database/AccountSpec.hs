@@ -755,7 +755,7 @@ activitySpec ctx =
       inDatabaseE $ do
         portfolio <- testPortfolio ctx
         _ <- lift $ repsertSummary (portfolioPool portfolio btc) (fakeTxHash 1) (Store.MemRef 0) fixtureTime paymentSummary
-        lift $ markTxInfoDead (portfolioPool portfolio btc) (fakeTxHash 1)
+        lift $ markTxInfoDead (portfolioPool portfolio btc) 800000 (fakeTxHash 1)
         lift (portfolioHasActivity portfolio.portfolioId) `dbShouldBeE` True
 
     it "is true once it has a pending transaction" $

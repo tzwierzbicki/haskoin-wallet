@@ -63,13 +63,19 @@
 --
 -- A summary says whether its transaction is dead, replaced or dropped
 -- from the network, and keeps the time the store gives its transaction:
--- when the store first saw it, in its mempool or in a block. A summary
+-- the time of its block once it is confirmed, and before that the time
+-- the store first saw it. A summary also keeps where txs lists it, its
+-- standing ('Haskoin.Wallet.Database.TxInfo.Standing'), as bytes that
+-- sort in the order of txs. The block reference cannot serve for that. It
+-- is what the store reports, which the sync compares with what the store
+-- lists. A dead transaction has no block, and a block of Bitcoin Cash
+-- does not keep a transaction after the ones it spends from. A summary
 -- also keeps its amount in a column, beside the blob that holds it, so
 -- that txs can add up the amounts without reading the blobs. A coin keeps
 -- its address, which gives its script, and not the whole coin as the
 -- store reported it. It also keeps the time of the summary of its
--- transaction, which coins shows and lists it by. The sync writes both,
--- the summary first. Whether a coin is locked and whether a change
+-- transaction, which coins shows. The sync writes both, the summary
+-- first. Whether a coin is locked and whether a change
 -- address is free are read from the pending transactions, which a locked
 -- column of the coins and a free column of the addresses could only
 -- disagree with. A coin keeps instead whether the user locked it, which
@@ -92,22 +98,21 @@
 -- not its hexadecimal text: half the size in every key and index. The
 -- 'tableIndexes' below are the ones persistent cannot declare.
 --
--- * Two covering indexes of the summaries of a pool, which serve txs
---   without touching the rows. txs lists the unconfirmed transactions
---   first, then the others, the newest first in each
---   ('Haskoin.Wallet.Database.TxInfo.TimeKey'). The index by block
---   reference finds the unconfirmed ones, which the scan of the sync
---   reads too. The index by time gives the others in their order, and
---   adds up their amounts for the balances.
+-- * Two covering indexes of the summaries of a pool, which serve txs and
+--   the sync without touching the rows. The index by block reference
+--   finds the unconfirmed transactions and those of one block, and the
+--   scan of the sync reads it too. The index by standing gives the
+--   transactions in the order of txs
+--   ('Haskoin.Wallet.Database.TxInfo.Standing'), and adds up their
+--   amounts for the balances.
 --
 -- * The account of every coin.
 --
 -- * The coins of an address of an account with their values, which the
 --   sync refreshes and balances adds up without touching the rows.
 --
--- * The coins of an account by block reference, which finds the
---   unconfirmed ones, and by time, which gives the others in the order
---   coins lists them.
+-- * The coins of an account by block reference, the order coins lists
+--   them in.
 --
 -- * The coins by their outpoint, for a command that names a coin without
 --   its account.
@@ -196,6 +201,7 @@ DBTxInfo
   network Text
   txid KeyBytes
   blockRef ByteString
+  standing ByteString
   time UTCTime
   amount Int64
   blob ByteString
@@ -271,11 +277,10 @@ DBSyncedBlock
 tableIndexes :: [Text]
 tableIndexes =
   [ "create index d_b_tx_info_pool_block_ref on d_b_tx_info (portfolio, network, block_ref, txid, dead, amount)",
-    "create index d_b_tx_info_pool_time on d_b_tx_info (portfolio, network, time desc, block_ref, txid, dead, amount)",
+    "create index d_b_tx_info_pool_standing on d_b_tx_info (portfolio, network, standing, txid, dead, amount)",
     "create index d_b_coin_account on d_b_coin (account)",
     "create index d_b_coin_account_address on d_b_coin (account, address, value)",
     "create index d_b_coin_account_block_ref on d_b_coin (account, block_ref, outpoint)",
-    "create index d_b_coin_account_time on d_b_coin (account, time desc, block_ref, outpoint)",
     "create index d_b_coin_outpoint on d_b_coin (outpoint)",
     "create index d_b_pending_tx_pool on d_b_pending_tx (portfolio, network)"
   ]

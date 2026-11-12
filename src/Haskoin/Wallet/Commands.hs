@@ -1200,9 +1200,9 @@ coinsListing portfolio target locked paging = do
     Nothing -> return (networks, Nothing)
     Just named -> do
       outpoint <- coinNamed ("The coin " <> coinRefText named <> " is not among those listed") named
-      keys <- forM networks $ \(_, onNet) -> lift (runExceptT (coinTimeKeyOf (fst <$> onNet) outpoint))
-      case [(i, key) | (i, Right key) <- zip [0 :: Int ..] keys] of
-        (i, key) : _ -> return (drop i networks, Just (key, outpoint))
+      blocks <- forM networks $ \(_, onNet) -> lift (runExceptT (coinBlock (fst <$> onNet) outpoint))
+      case [(i, block) | (i, Right block) <- zip [0 :: Int ..] blocks] of
+        (i, block) : _ -> return (drop i networks, Just (block, outpoint))
         [] -> throwError ("The coin " <> coinRefText named <> " is not among those listed")
   return $ Sections (length networks > 1) paging.pagingMax (zipWith section (startM : repeat Nothing) from)
 
@@ -1234,7 +1234,7 @@ listedPools portfolio netM = do
 -- | The transactions of a portfolio on the chain, a section for each
 -- network, or for the one --network keeps, in the order txs lists them,
 -- each with the balance after it on its network. A transaction names the
--- one to go on after, with where it stands in the order of txs and the
+-- one to go on after, with where it stands in txs ('Standing') and the
 -- balance so far, so that a chunk adds up nothing. Only --after adds up the transactions above it.
 -- The listing starts in the section of the first network that has the
 -- transaction.

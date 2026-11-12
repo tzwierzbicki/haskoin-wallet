@@ -742,17 +742,31 @@ spec = prepareContext $ \ctx -> do
                           (Just (fakeTxHash 2), Just 30000)
                         ]
 
-    -- The payment replaced was confirmed after all, and its replacement
-    -- died. The store took the payment in again from its block, which the
-    -- miner dated an hour after the replacement: 1700003700. The
-    -- replacement has the time of the fixtures, 1700000000.
-    it "lists a payment confirmed after all above the replacement that died, by their times" $
+    -- The wallet saw the payment, then its replacement, while the chain
+    -- was at block 799999. Block 800000 then confirmed the payment after
+    -- all, and the replacement died.
+    it "lists a payment a later block confirmed after all above its replacement that died" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (mempoolStore ctx) pool
-        _ <- syncWith (sameAmountReplacedStore ctx) pool
-        _ <- syncWith (replacementLostStore ctx) pool
+        let at799999 store = store {fakeBest = blockAt 799999 1, fakeBlocks = [blockAt 799999 1]}
+        _ <- syncWith (at799999 (mempoolStore ctx)) pool
+        _ <- syncWith (at799999 (sameAmountReplacedStore ctx)) pool
+        _ <- syncWith ((replacementLostStore ctx) {fakeBlocks = [blockAt 799999 1, blockAt 800002 1]}) pool
         listedBalances pool `dbShouldBeE` [(Just (fakeTxHash 1), Just 50000), (Just (fakeTxHash 2), Nothing)]
+
+    -- The block puts the spending of the 20000, transaction 8, at
+    -- position 1, before the payment it spends, transaction 3, at position
+    -- 5, as a block of Bitcoin Cash may. 30000 + 20000 = 50000 after the
+    -- payment, and 50000 - 20000 = 30000 after its spending.
+    it "lists a spending above the payment it spends in its block, though the block puts it first" $
+      inDatabaseE $ do
+        pool <- account
+        _ <- syncWith (spentBeforePaidStore ctx) pool
+        listedBalances pool
+          `dbShouldBeE` [ (Just (fakeTxHash 8), Just 30000),
+                          (Just (fakeTxHash 3), Just 50000),
+                          (Just (fakeTxHash 2), Just 30000)
+                        ]
 
     -- One chain serves both portfolios, so its reorganisation concerns both
     it "marks a payment a reorganisation left out as dead in every portfolio hw sync goes through" $
@@ -956,6 +970,20 @@ spec = prepareContext $ \ctx -> do
         res <- fullSync pool
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (0, 0)
 
+    -- The spending stands after the payment it spends, not at its own
+    -- position in the block: writing it again must not count as a change
+    it "reports no update over a database that was right, though a block puts a spending before its payment" $
+      inDatabaseE $ do
+        pool <- account
+        _ <- syncWith (spentBeforePaidStore ctx) pool
+        res <- sync ctx cfg (toStore (spentBeforePaidStore ctx)) pool True noQuestion
+        liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (0, 0)
+        listedBalances pool
+          `dbShouldBeE` [ (Just (fakeTxHash 8), Just 30000),
+                          (Just (fakeTxHash 3), Just 50000),
+                          (Just (fakeTxHash 2), Just 30000)
+                        ]
+
     it "writes the amount of a summary again, which --after adds up" $
       inDatabaseE $ do
         pool <- syncedAccount
@@ -997,7 +1025,7 @@ spec = prepareContext $ \ctx -> do
     it "brings back to life a transaction the store lists" $
       inDatabaseE $ do
         pool <- syncedAccount
-        lift $ markTxInfoDead pool (fakeTxHash 3)
+        lift $ markTxInfoDead pool 800002 (fakeTxHash 3)
         _ <- fullSync pool
         listedBalances pool `dbShouldBeE` rightBalances
 
@@ -1006,12 +1034,12 @@ spec = prepareContext $ \ctx -> do
         pool <- syncedAccount
         _ <- lift $ repsertSummary pool (fakeTxHash 9) (Store.BlockRef 800001 5) fixtureTime paymentSummary
         _ <- fullSync pool
-        -- Its time, fixtureTime, 1 Nov 2023, is older than the 14 Nov 2023
-        -- of the others, so txs lists it last
+        -- It keeps the place of its block: position 5 of block 800001,
+        -- above the payment at position 1
         listedBalances pool
           `dbShouldBeE` [ (Just (fakeTxHash 3), Just 50000),
-                          (Just (fakeTxHash 2), Just 30000),
-                          (Just (fakeTxHash 9), Nothing)
+                          (Just (fakeTxHash 9), Nothing),
+                          (Just (fakeTxHash 2), Just 30000)
                         ]
 
     -- txs refuses a row that does not read, and nothing can write this one
@@ -1019,7 +1047,7 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         pool <- syncedAccount
         _ <- lift $ repsertSummary pool (fakeTxHash 9) (Store.BlockRef 800001 5) fixtureTime paymentSummary
-        lift $ markTxInfoDead pool (fakeTxHash 9)
+        lift $ markTxInfoDead pool 800002 (fakeTxHash 9)
         lift $ P.update (summaryKey pool 9) [DBTxInfoBlob P.=. "nonsense"]
         _ <- fullSync pool
         listedBalances pool `dbShouldBeE` rightBalances
@@ -2657,6 +2685,27 @@ spentPaymentStore ctx =
         fakeTransactions (twoPaymentsStore ctx)
           <> [spendingStoreTx ctx (fakeTxHash 8) (Store.BlockRef 800002 5) (fakeTxHash 3, 0) (externalAddr 0) [(otherAddr 0, 19000)]],
       fakeUnspents = [coinOf ctx (fakeTxHash 2) (Just 800001) (externalAddr 0) 30000]
+    }
+
+-- | 'spentPaymentStore' with the block in another order: the spending,
+-- transaction 8, at position 1, and the payment it spends, transaction 3,
+-- at position 5
+spentBeforePaidStore :: Ctx -> FakeStore
+spentBeforePaidStore ctx =
+  (spentPaymentStore ctx)
+    { fakeTxRefs =
+        [ ( externalAddr 0,
+            [ Store.TxRef (Store.BlockRef 800002 5) (fakeTxHash 3),
+              Store.TxRef (Store.BlockRef 800002 1) (fakeTxHash 8),
+              Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 2)
+            ]
+          )
+        ],
+      fakeTransactions =
+        [ creditTx ctx (fakeTxHash 2) (Store.BlockRef 800001 1) (externalAddr 0) 30000,
+          creditTx ctx (fakeTxHash 3) (Store.BlockRef 800002 5) (externalAddr 0) 20000,
+          spendingStoreTx ctx (fakeTxHash 8) (Store.BlockRef 800002 1) (fakeTxHash 3, 0) (externalAddr 0) [(otherAddr 0, 19000)]
+        ]
     }
 
 -- | After a reorganisation that put transaction 9, a payment of 15000, in

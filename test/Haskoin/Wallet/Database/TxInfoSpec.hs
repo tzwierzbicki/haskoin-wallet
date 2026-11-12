@@ -27,7 +27,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
-import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
+import Data.Time (UTCTime (..), fromGregorian)
 import Data.Word (Word64)
 import qualified Database.Persist as P
 import Haskoin
@@ -55,6 +55,7 @@ spec = prepareContext $ \ctx -> do
   jsonSpec ctx
   storingSpec ctx
   elsewhereSpec ctx
+  standingSpec
   listingSpec ctx
   balanceSpec ctx
   historySpec ctx
@@ -116,9 +117,15 @@ summarized = storeSummary btc ourPaths
 record :: Pool -> Store.Transaction -> ExceptT String (DB IO) Bool
 record pool tx = lift $ repsertSummary pool tx.txid tx.block (storeTime tx.timestamp) (summarized tx)
 
--- | The id of each listed transaction, in the order of the listing
-listedIds :: Pool -> Maybe (TimeKey, TxHash) -> Maybe Natural -> ExceptT String (DB IO) [TxHash]
+-- | The id of each listed transaction, in the order of the listing: those
+-- after the transaction given, or from the top, up to the count
+listedIds :: Pool -> Maybe TxHash -> Maybe Natural -> ExceptT String (DB IO) [TxHash]
 listedIds pool afterM countM = map (chainTxid . chainOf) <$> txsAfter pool afterM countM
+
+-- | The balance txs goes on from after a transaction: the balance before
+-- that transaction
+balanceBefore :: Pool -> TxHash -> ExceptT String (DB IO) Integer
+balanceBefore pool tid = txsCursorBalance <$> txsCursorAt pool tid
 
 -- | The block and the confirmations of each listed transaction
 listedBlocks :: Pool -> ExceptT String (DB IO) [(Store.BlockRef, Natural)]
@@ -534,14 +541,14 @@ storingSpec ctx =
         _ <- record pool (payment ctx)
         _ <- record pool (spend ctx)
         txInfoBlockRefs pool `dbShouldBeE` Map.fromList [(fakeTxHash 1, Store.BlockRef 800000 1), (fakeTxHash 2, Store.BlockRef 800001 1)]
-        lift $ markTxInfoDead pool (fakeTxHash 2)
+        lift $ markTxInfoDead pool 800001 (fakeTxHash 2)
         txInfoBlockRefs pool `dbShouldBeE` Map.fromList [(fakeTxHash 1, Store.BlockRef 800000 1)]
 
     it "brings a dead summary back when the store lists the transaction again" $
       inDatabaseE $ do
         pool <- testPool ctx
         _ <- record pool (spend ctx)
-        lift $ markTxInfoDead pool (fakeTxHash 2)
+        lift $ markTxInfoDead pool 800001 (fakeTxHash 2)
         listedDead pool `dbShouldBeE` [True]
         record pool (spend ctx) `dbShouldBeE` True
         listedDead pool `dbShouldBeE` [False]
@@ -551,8 +558,96 @@ storingSpec ctx =
       inDatabaseE $ do
         pool <- testPool ctx
         _ <- record pool (payment ctx)
-        lift $ markTxInfoDead pool (fakeTxHash 9)
+        lift $ markTxInfoDead pool 800000 (fakeTxHash 9)
         listedDead pool `dbShouldBeE` [False]
+
+    -- The block puts the spending, at position 2, before the payment it
+    -- spends, at position 5
+    it "keeps the turn a transaction has in its block when its summary is stored again there" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (paymentAt ctx (Store.BlockRef 800000 5))
+        _ <- record pool (spendAt ctx (Store.BlockRef 800000 2))
+        orderBlock pool 800000
+        record pool (spendAt ctx (Store.BlockRef 800000 2)) `dbShouldBeE` False
+        listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 2, fakeTxHash 1]
+
+standingSpec :: Spec
+standingSpec =
+  describe "Where a transaction stands in txs" $ do
+    it "moves no row when each spends from rows before it only" $
+      spendersLast fst snd [('a', ""), ('b', "a"), ('c', "ab")] `shouldBe` [('a', ""), ('b', "a"), ('c', "ab")]
+
+    it "moves a row that spends from a later one to right after it, and no other" $
+      spendersLast fst snd [('b', "a"), ('c', ""), ('a', ""), ('d', "")] `shouldBe` [('c', ""), ('a', ""), ('b', "a"), ('d', "")]
+
+    it "moves a row to after the last of the rows it spends from" $
+      spendersLast fst snd [('c', "ab"), ('a', ""), ('d', ""), ('b', "")] `shouldBe` [('a', ""), ('d', ""), ('b', ""), ('c', "ab")]
+
+    it "moves a row that spends from a moved one after it" $
+      spendersLast fst snd [('c', "b"), ('b', "a"), ('a', "")] `shouldBe` [('a', ""), ('b', "a"), ('c', "b")]
+
+    it "leaves a row that spends from none of the rows given where it is" $
+      spendersLast fst snd [('b', "z"), ('a', "")] `shouldBe` [('b', "z"), ('a', "")]
+
+    -- Position 1 pays, position 5 spends it: the order of a block of
+    -- Bitcoin
+    it "gives the transactions of a block their own positions when each comes after the ones it spends from" $
+      blockStandings 800000 [(fakeTxHash 2, 5, [fakeTxHash 1]), (fakeTxHash 1, 1, [])]
+        `shouldBe` [(fakeTxHash 1, InBlock 800000 1 0), (fakeTxHash 2, InBlock 800000 5 0)]
+
+    -- Transaction 2, at position 2, spends transaction 1, at position 5.
+    -- Transaction 3, at position 3, spends neither.
+    it "gives a transaction the block puts before one it spends from the turn right after that one" $
+      blockStandings 800000 [(fakeTxHash 2, 2, [fakeTxHash 1]), (fakeTxHash 3, 3, []), (fakeTxHash 1, 5, [])]
+        `shouldBe` [(fakeTxHash 3, InBlock 800000 3 0), (fakeTxHash 1, InBlock 800000 5 0), (fakeTxHash 2, InBlock 800000 5 1)]
+
+    -- Transaction 2 spends transaction 1, and transaction 3 spends
+    -- transaction 2. Transaction 4, at position 7, comes after them all.
+    it "gives each of a chain of moved transactions one step more, and the next transaction its own position" $
+      blockStandings 800000 [(fakeTxHash 3, 1, [fakeTxHash 2]), (fakeTxHash 2, 2, [fakeTxHash 1]), (fakeTxHash 1, 5, []), (fakeTxHash 4, 7, [])]
+        `shouldBe` [ (fakeTxHash 1, InBlock 800000 5 0),
+                     (fakeTxHash 2, InBlock 800000 5 1),
+                     (fakeTxHash 3, InBlock 800000 5 2),
+                     (fakeTxHash 4, InBlock 800000 7 0)
+                   ]
+
+    it "gives a transaction that spends from another block its own position" $
+      blockStandings 800000 [(fakeTxHash 2, 2, [fakeTxHash 9])] `shouldBe` [(fakeTxHash 2, InBlock 800000 2 0)]
+
+    it "stores an unconfirmed transaction as one byte" $
+      standingBytes InMempool `shouldBe` hexBytes "00"
+
+    -- 0xffffffff - 800000 = 0xfff3caff, 0xffffffff - 1 = 0xfffffffe,
+    -- 0xffffffff - 0 = 0xffffffff
+    it "stores a confirmed transaction as its height, then its turn, each counted down from the highest" $
+      standingBytes (InBlock 800000 1 0) `shouldBe` hexBytes "01fff3caff01fffffffeffffffff"
+
+    -- 0xffffffffffffffff - 1700000000 = 0xffffffff9aac0eff
+    it "stores a dead transaction as the height it died at, then its time, each counted down from the highest" $
+      standingBytes (DiedAt 800000 seenTime) `shouldBe` hexBytes "01fff3caff00ffffffff9aac0eff"
+
+    it "sorts the stored standings in the order of txs" $ do
+      let inOrder =
+            [ InMempool,
+              -- Died once the sync had reached block 800001
+              DiedAt 800001 (addingSeconds 600),
+              DiedAt 800001 seenTime,
+              -- The transactions of block 800001, the last turn first
+              InBlock 800001 7 1,
+              InBlock 800001 7 0,
+              InBlock 800001 2 0,
+              DiedAt 800000 seenTime,
+              InBlock 800000 9 0
+            ]
+      sort (standingBytes <$> reverse inOrder) `shouldBe` (standingBytes <$> inOrder)
+
+    it "stands a summary in the mempool, or at its own position in its block" $ do
+      refStanding (Store.MemRef 1700000000) `shouldBe` InMempool
+      refStanding (Store.BlockRef 800000 3) `shouldBe` InBlock 800000 3 0
+  where
+    -- 14 Nov 2023 22:13:20 UTC and the seconds given: 600 make 22:23:20
+    addingSeconds seconds = UTCTime (fromGregorian 2023 11 14) (22 * 3600 + 13 * 60 + 20 + seconds)
 
 listingSpec :: Ctx -> Spec
 listingSpec ctx =
@@ -566,8 +661,7 @@ listingSpec ctx =
           _ <- record pool (creditTx ctx (fakeTxHash 3) (Store.BlockRef 800001 0) (externalAddr 0) 50000)
           _ <- record pool (creditTx ctx (fakeTxHash 4) (Store.MemRef 1700000000) (externalAddr 0) 50000)
           return ()
-    -- The four payments have the same time, 1700000000
-    it "lists transactions of one time as their blocks go: the mempool first, then the newest blocks first, and within a block the last first" $
+    it "lists the mempool first, then the newest blocks first, and within a block the last first" $
       inDatabaseE $ do
         pool <- testPool ctx
         fourPayments pool
@@ -578,32 +672,32 @@ listingSpec ctx =
         pool <- testPool ctx
         fourPayments pool
         listedIds pool Nothing (Just 2) `dbShouldBeE` [fakeTxHash 4, fakeTxHash 3]
-        listedIds pool (Just (TimeKey False seenTime (Store.BlockRef 800001 0), fakeTxHash 3)) (Just 2) `dbShouldBeE` [fakeTxHash 2, fakeTxHash 1]
-        listedIds pool (Just (TimeKey False seenTime (Store.BlockRef 800000 1), fakeTxHash 1)) (Just 2) `dbShouldBeE` []
+        listedIds pool (Just (fakeTxHash 3)) (Just 2) `dbShouldBeE` [fakeTxHash 2, fakeTxHash 1]
+        listedIds pool (Just (fakeTxHash 1)) (Just 2) `dbShouldBeE` []
 
-    it "goes on after the last unconfirmed transaction with the newest of the others" $
+    it "goes on after the last unconfirmed transaction with the newest confirmed one" $
       inDatabaseE $ do
         pool <- testPool ctx
         fourPayments pool
-        listedIds pool (Just (TimeKey True seenTime (Store.MemRef 1700000000), fakeTxHash 4)) (Just 1) `dbShouldBeE` [fakeTxHash 3]
+        listedIds pool (Just (fakeTxHash 4)) (Just 1) `dbShouldBeE` [fakeTxHash 3]
 
-    -- Payment 1 waited in the mempool from 1700000000 and went into block
-    -- 800001. Payment 2, sent 600 seconds later, went into block 800000
-    -- before it.
-    it "lists the confirmed transactions by their time, the newest first, whatever their blocks" $
+    it "refuses to go on after a transaction the pool does not have" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        fourPayments pool
+        lift $
+          dbShouldFailWith "The transaction 0000000000000000000000000000000000000000000000000000000000000005 is not in the portfolio on btc" $
+            txsCursorAt pool (fakeTxHash 5)
+
+    -- Block 800000 is dated 1700000600, ten minutes after block 800001
+    -- above it, dated 1700000000
+    it "lists the confirmed transactions by their blocks, the newest first, whatever the times of the blocks" $
       inDatabaseE $ do
         pool <- testPool ctx
         _ <- record pool (creditTx ctx (fakeTxHash 1) (Store.BlockRef 800001 1) (externalAddr 0) 50000)
         _ <- record pool (seenAt 1700000600 (creditTx ctx (fakeTxHash 2) (Store.BlockRef 800000 1) (externalAddr 0) 30000))
-        listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 2, fakeTxHash 1]
-
-    it "goes on after a confirmed transaction with the next older one, whatever their blocks" $
-      inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (creditTx ctx (fakeTxHash 1) (Store.BlockRef 800001 1) (externalAddr 0) 50000)
-        _ <- record pool (seenAt 1700000600 (creditTx ctx (fakeTxHash 2) (Store.BlockRef 800000 1) (externalAddr 0) 30000))
-        -- Payment 2 stands at 1700000600, 600 seconds after seenTime
-        listedIds pool (Just (TimeKey False (addUTCTime 600 seenTime) (Store.BlockRef 800000 1), fakeTxHash 2)) Nothing `dbShouldBeE` [fakeTxHash 1]
+        listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 1, fakeTxHash 2]
+        listedIds pool (Just (fakeTxHash 1)) Nothing `dbShouldBeE` [fakeTxHash 2]
 
     -- The block of payment 1 is dated an hour ahead, as miners of test
     -- networks date them: 1700000000 + 3600 = 1700003600. Payment 2 is in
@@ -615,35 +709,122 @@ listingSpec ctx =
         _ <- record pool (seenAt 1700000600 (creditTx ctx (fakeTxHash 2) (Store.MemRef 1700000600) (externalAddr 0) 30000))
         listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 2, fakeTxHash 1]
 
-    -- Payment 2 died in the mempool at 1700000600, between payment 1 in
-    -- block 800000 at 1700000000 and payment 3 in block 800001 at
-    -- 1700003600
-    it "lists a transaction that died in the mempool at its time among the confirmed ones" $
+    it "lists the unconfirmed transactions the newest first, by the time the store first saw each" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (seenAt 1700000600 (creditTx ctx (fakeTxHash 1) (Store.MemRef 1700000600) (externalAddr 0) 50000))
+        _ <- record pool (creditTx ctx (fakeTxHash 2) (Store.MemRef 1700000000) (externalAddr 0) 30000)
+        _ <- record pool (seenAt 1700001200 (creditTx ctx (fakeTxHash 3) (Store.MemRef 1700001200) (externalAddr 0) 20000))
+        listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 3, fakeTxHash 1, fakeTxHash 2]
+
+    -- The store saw the payment, transaction 1, and its spending,
+    -- transaction 2, in the same second. By their ids alone the payment
+    -- would come first.
+    it "lists an unconfirmed transaction above the one it spends from, though the store saw both in one second" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (paymentAt ctx (Store.MemRef 1700000000))
+        _ <- record pool (spendAt ctx (Store.MemRef 1700000000))
+        listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 2, fakeTxHash 1]
+        listedIds pool (Just (fakeTxHash 2)) Nothing `dbShouldBeE` [fakeTxHash 1]
+
+    -- The store dates the spending ten minutes before the payment it
+    -- spends, as a second store behind the same address may
+    it "lists an unconfirmed transaction above the one it spends from, though the store dates it earlier" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (seenAt 1700000600 (paymentAt ctx (Store.MemRef 1700000600)))
+        _ <- record pool (spendAt ctx (Store.MemRef 1700000000))
+        listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 2, fakeTxHash 1]
+
+    -- A block of Bitcoin Cash is sorted by transaction id. This one puts
+    -- the spending at position 2, an unrelated payment at position 3, and
+    -- the payment the spending spends at position 5.
+    it "lists a transaction above the one it spends from in its block, though the block puts it first, and moves no other" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (spendAt ctx (Store.BlockRef 800000 2))
+        _ <- record pool (creditTx ctx (fakeTxHash 3) (Store.BlockRef 800000 3) (externalAddr 0) 70000)
+        _ <- record pool (paymentAt ctx (Store.BlockRef 800000 5))
+        orderBlock pool 800000
+        listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 2, fakeTxHash 1, fakeTxHash 3]
+        listedIds pool (Just (fakeTxHash 2)) Nothing `dbShouldBeE` [fakeTxHash 1, fakeTxHash 3]
+
+    it "moves the transactions of a block the pool has no other transaction in nowhere" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (paymentAt ctx (Store.BlockRef 800000 5))
+        _ <- record pool (spendAt ctx (Store.BlockRef 800001 2))
+        orderBlock pool 800000
+        orderBlock pool 800001
+        listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 2, fakeTxHash 1]
+
+    -- Payment 2 was last seen alive, in the mempool, when the pool had
+    -- reached block 800000, where payment 1 is. Payment 3 came later, in
+    -- block 800001.
+    it "lists a transaction that died in the mempool above the blocks the pool knew when it was last alive, and below the later ones" $
       inDatabaseE $ do
         pool <- testPool ctx
         _ <- record pool (creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000)
+        _ <- record pool (creditTx ctx (fakeTxHash 2) (Store.MemRef 1700000000) (externalAddr 0) 30000)
+        lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
+        _ <- record pool (creditTx ctx (fakeTxHash 3) (Store.BlockRef 800001 1) (externalAddr 0) 20000)
+        listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 3, fakeTxHash 2, fakeTxHash 1]
+        listedIds pool (Just (fakeTxHash 2)) Nothing `dbShouldBeE` [fakeTxHash 1]
+
+    it "lists a dead transaction below the unconfirmed ones" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (creditTx ctx (fakeTxHash 1) (Store.MemRef 1700000000) (externalAddr 0) 50000)
         _ <- record pool (seenAt 1700000600 (creditTx ctx (fakeTxHash 2) (Store.MemRef 1700000600) (externalAddr 0) 30000))
-        _ <- record pool (seenAt 1700003600 (creditTx ctx (fakeTxHash 3) (Store.BlockRef 800001 1) (externalAddr 0) 20000))
-        lift $ markTxInfoDead pool (fakeTxHash 2)
+        lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
+        listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 1, fakeTxHash 2]
+
+    -- Both were last seen alive when the pool had reached block 800000.
+    -- The store first saw transaction 1 at 1700000000 and transaction 2 at
+    -- 1700000600.
+    it "lists the transactions that died in the mempool at one height the newest first" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (creditTx ctx (fakeTxHash 1) (Store.MemRef 1700000000) (externalAddr 0) 50000)
+        _ <- record pool (seenAt 1700000600 (creditTx ctx (fakeTxHash 2) (Store.MemRef 1700000600) (externalAddr 0) 30000))
+        lift $ markTxInfoDead pool 800000 (fakeTxHash 1)
+        lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
+        listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 2, fakeTxHash 1]
+
+    -- Payment 2 died at block 800000. Marked dead again at block 800005,
+    -- it stays under payment 3 of block 800003.
+    it "leaves a dead transaction where it first died when it is marked dead again" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (creditTx ctx (fakeTxHash 2) (Store.MemRef 1700000000) (externalAddr 0) 30000)
+        lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
+        _ <- record pool (creditTx ctx (fakeTxHash 3) (Store.BlockRef 800003 1) (externalAddr 0) 20000)
+        lift $ markTxInfoDead pool 800005 (fakeTxHash 2)
+        listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 3, fakeTxHash 2]
+
+    -- Payment 2, of block 800001, was left out by a reorganisation the
+    -- pool saw at block 800005. It stays between payment 3 of block 800002
+    -- and payment 1 of block 800000.
+    it "leaves a confirmed transaction that dies at the place of its block" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000)
+        _ <- record pool (creditTx ctx (fakeTxHash 2) (Store.BlockRef 800001 1) (externalAddr 0) 30000)
+        _ <- record pool (creditTx ctx (fakeTxHash 3) (Store.BlockRef 800002 1) (externalAddr 0) 20000)
+        lift $ markTxInfoDead pool 800005 (fakeTxHash 2)
         listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 3, fakeTxHash 2, fakeTxHash 1]
 
-    it "names a transaction that died in the mempool as one of the others, for --after" $
+    -- Payment 2 died at block 800000, then the store listed it again, in
+    -- block 800002, above payment 3 of block 800001
+    it "lists a transaction that comes back to life at its block" $
       inDatabaseE $ do
         pool <- testPool ctx
-        _ <- record pool (seenAt 1700000600 (creditTx ctx (fakeTxHash 2) (Store.MemRef 1700000600) (externalAddr 0) 30000))
-        lift $ markTxInfoDead pool (fakeTxHash 2)
-        -- 22:13:20 UTC + 600 seconds = 22:23:20 UTC
-        txTimeKey pool (fakeTxHash 2) `dbShouldBeE` TimeKey False (UTCTime (fromGregorian 2023 11 14) (22 * 3600 + 23 * 60 + 20)) (Store.MemRef 1700000600)
-
-    it "names where a transaction of the pool stands in txs, for --after, and refuses one the pool does not have" $
-      inDatabaseE $ do
-        pool <- testPool ctx
-        fourPayments pool
-        txTimeKey pool (fakeTxHash 3) `dbShouldBeE` TimeKey False seenTime (Store.BlockRef 800001 0)
-        txTimeKey pool (fakeTxHash 4) `dbShouldBeE` TimeKey True seenTime (Store.MemRef 1700000000)
-        lift $
-          dbShouldFailWith "The transaction 0000000000000000000000000000000000000000000000000000000000000005 is not in the portfolio on btc" $
-            txTimeKey pool (fakeTxHash 5)
+        _ <- record pool (creditTx ctx (fakeTxHash 2) (Store.MemRef 1700000000) (externalAddr 0) 30000)
+        lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
+        _ <- record pool (creditTx ctx (fakeTxHash 3) (Store.BlockRef 800001 1) (externalAddr 0) 20000)
+        _ <- record pool (creditTx ctx (fakeTxHash 2) (Store.BlockRef 800002 1) (externalAddr 0) 30000)
+        listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 2, fakeTxHash 3]
 
     it "counts the confirmations from the best block, one when it is unknown or behind, none in the mempool" $
       inDatabaseE $ do
@@ -672,7 +853,7 @@ listingSpec ctx =
         pool <- testPool ctx
         _ <- record pool (payment ctx)
         lift $ updateBest btc (fakeBlockHash 0) 800002 1700000000
-        lift $ markTxInfoDead pool (fakeTxHash 1)
+        lift $ markTxInfoDead pool 800002 (fakeTxHash 1)
         (map chainOf <$> txsAfter pool Nothing Nothing) `dbShouldBeE` [ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 0 True]
 
     it "fills in the labels of the portfolio's addresses as they are today" $
@@ -689,7 +870,7 @@ listingSpec ctx =
     it "refuses a stored summary that does not decode, naming the transaction" $
       inDatabaseE $ do
         pool <- testPool ctx
-        lift $ P.insert_ $ DBTxInfo pool.poolPortfolio "btc" (hashBytes (fakeTxHash 9)) (S.encode (Store.BlockRef 800000 1)) seenTime 0 "nonsense" False fixtureTime
+        lift $ P.insert_ $ DBTxInfo pool.poolPortfolio "btc" (hashBytes (fakeTxHash 9)) (S.encode (Store.BlockRef 800000 1)) (standingBytes (InBlock 800000 1 0)) seenTime 0 "nonsense" False fixtureTime
         lift $
           dbShouldFailWith "The stored summary of transaction 0000000000000000000000000000000000000000000000000000000000000009 does not decode" $
             txsAfter pool Nothing Nothing
@@ -744,7 +925,7 @@ listingSpec ctx =
         lift $ setTxLabel pool (fakeTxHash 2) "Rent"
         _ <- record pool (spendAt ctx (Store.BlockRef 800002 4))
         (map txInfoLabel <$> txsAfter pool Nothing Nothing) `dbShouldBeE` ["Rent"]
-        lift $ markTxInfoDead pool (fakeTxHash 2)
+        lift $ markTxInfoDead pool 800002 (fakeTxHash 2)
         (map txInfoLabel <$> txsAfter pool Nothing Nothing) `dbShouldBeE` ["Rent"]
 
     -- Without a best block, a transaction in a block has one confirmation
@@ -937,7 +1118,9 @@ balanceSpec ctx =
         -- A payment of 70000 listed between the payment and its spending
         paymentBetween = creditTx ctx (fakeTxHash 3) (Store.BlockRef 800000 5) (externalAddr 0) 70000
         -- Three payments whose times and blocks disagree, and what the
-        -- pool holds after them
+        -- pool holds after them: payment 1 of 50000 in block 800001,
+        -- dated 1700000000, payment 2 of 20000 in block 800000 under it,
+        -- dated 1700000600, payment 3 of 30000 in the mempool
         timedPayments pool = do
           _ <- record pool (creditTx ctx (fakeTxHash 1) (Store.BlockRef 800001 1) (externalAddr 0) 50000)
           _ <- record pool (seenAt 1700000600 (creditTx ctx (fakeTxHash 2) (Store.BlockRef 800000 1) (externalAddr 0) 20000))
@@ -966,49 +1149,63 @@ balanceSpec ctx =
         -- The spending took 41000: 9000 + 41000 = 50000
         listedBalances pool Nothing `dbShouldBeE` [Just 9000, Just 50000]
 
-    -- Payment 1 of 50000 in block 800001 at 1700000000, payment 2 of
-    -- 20000 in block 800000 at 1700000600, payment 3 of 30000 in the
-    -- mempool at 1700001200: 100000 in all
-    it "walks the balances down in the order of txs, by time, whatever the blocks" $
+    -- 50000 + 20000 + 30000 = 100000 in all, listed as payment 3, then
+    -- payment 1, then payment 2
+    it "walks the balances down in the order of the blocks, whatever their times" $
       inDatabaseE $ do
         pool <- testPool ctx
         timedPayments pool
-        -- 100000 - 30000 = 70000, then 70000 - 20000 = 50000
-        listedBalances pool Nothing `dbShouldBeE` [Just 100000, Just 70000, Just 50000]
+        -- 100000 - 30000 = 70000, then 70000 - 50000 = 20000
+        listedBalances pool Nothing `dbShouldBeE` [Just 100000, Just 70000, Just 20000]
 
-    it "takes off the unconfirmed transactions and the confirmed ones above by time for --after" $
+    it "takes off the unconfirmed transactions and the confirmed ones of the blocks above for --after" $
       inDatabaseE $ do
         pool <- testPool ctx
         timedPayments pool
-        -- 100000 - 30000 - 20000 = 50000 before payment 2, which stands at
-        -- 22:13:20 UTC + 600 seconds = 22:23:20 UTC
-        txsCursorAt pool (fakeTxHash 2)
-          `dbShouldBeE` TxsCursor (TimeKey False (UTCTime (fromGregorian 2023 11 14) (22 * 3600 + 23 * 60 + 20)) (Store.BlockRef 800000 1)) (fakeTxHash 2) 50000
+        -- 100000 - 30000 - 50000 = 20000 after payment 2, and nothing
+        -- before it
+        balanceBefore pool (fakeTxHash 1) `dbShouldBeE` 20000
+        balanceBefore pool (fakeTxHash 2) `dbShouldBeE` 0
+
+    -- The payment of 50000 is in block 800000, dated 1700000420. Its
+    -- spending, which takes 41000, is in block 800001, dated seven minutes
+    -- before it, 1700000000. Listed by time, the spending would come
+    -- under the payment, with 9000 - 50000 = -41000 beside it.
+    it "shows no balance the portfolio never held when a block is dated before the one under it" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (seenAt 1700000420 (payment ctx))
+        _ <- record pool (spend ctx)
+        holding pool 9000 0
+        listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 2, fakeTxHash 1]
+        -- 9000 + 41000 = 50000
+        listedBalances pool Nothing `dbShouldBeE` [Just 9000, Just 50000]
 
     it "gives a dead transaction no balance, and takes nothing off for it" $
       inDatabaseE $ do
         pool <- paidAndSpent
         _ <- record pool paymentBetween
-        lift $ markTxInfoDead pool (fakeTxHash 3)
+        lift $ markTxInfoDead pool 800000 (fakeTxHash 3)
         listedBalances pool Nothing `dbShouldBeE` [Just 9000, Nothing, Just 50000]
 
     it "hands each transaction on with the balance before it, a dead one included" $
       inDatabaseE $ do
         pool <- paidAndSpent
         _ <- record pool paymentBetween
-        lift $ markTxInfoDead pool (fakeTxHash 3)
+        lift $ markTxInfoDead pool 800000 (fakeTxHash 3)
         (map (txsCursorBalance . snd) <$> listedTxsAfter pool Nothing Nothing) `dbShouldBeE` [50000, 50000, 0]
 
     it "goes on from the balance the cursor carries, for the next chunk" $
       inDatabaseE $ do
         pool <- paidAndSpent
-        listedBalances pool (Just (TxsCursor (TimeKey False seenTime (Store.BlockRef 800001 1)) (fakeTxHash 2) 12345)) `dbShouldBeE` [Just 12345]
+        cursor <- txsCursorAt pool (fakeTxHash 2)
+        listedBalances pool (Just cursor {txsCursorBalance = 12345}) `dbShouldBeE` [Just 12345]
 
     it "starts after a transaction with the balance before it, for --after" $
       inDatabaseE $ do
         pool <- paidAndSpent
         -- 9000 + 41000 = 50000
-        txsCursorAt pool (fakeTxHash 2) `dbShouldBeE` TxsCursor (TimeKey False seenTime (Store.BlockRef 800001 1)) (fakeTxHash 2) 50000
+        balanceBefore pool (fakeTxHash 2) `dbShouldBeE` 50000
 
     it "takes off the transactions above the one --after names" $
       inDatabaseE $ do
@@ -1016,42 +1213,56 @@ balanceSpec ctx =
         _ <- record pool laterPayment
         holding pool 79000 0
         -- 79000 - 70000 + 41000 = 50000
-        txsCursorAt pool (fakeTxHash 2) `dbShouldBeE` TxsCursor (TimeKey False seenTime (Store.BlockRef 800001 1)) (fakeTxHash 2) 50000
+        balanceBefore pool (fakeTxHash 2) `dbShouldBeE` 50000
 
     it "takes off no dead transaction for --after" $
       inDatabaseE $ do
         pool <- paidAndSpent
         _ <- record pool laterPayment
-        lift $ markTxInfoDead pool (fakeTxHash 3)
+        lift $ markTxInfoDead pool 800002 (fakeTxHash 3)
         -- 9000 + 41000 = 50000, the dead 70000 left out
-        txsCursorAt pool (fakeTxHash 2) `dbShouldBeE` TxsCursor (TimeKey False seenTime (Store.BlockRef 800001 1)) (fakeTxHash 2) 50000
+        balanceBefore pool (fakeTxHash 2) `dbShouldBeE` 50000
 
     it "takes off the transaction --after names even when it is dead: nothing" $
       inDatabaseE $ do
         pool <- paidAndSpent
         _ <- record pool laterPayment
-        lift $ markTxInfoDead pool (fakeTxHash 3)
-        txsCursorAt pool (fakeTxHash 3) `dbShouldBeE` TxsCursor (TimeKey False seenTime (Store.BlockRef 800002 1)) (fakeTxHash 3) 9000
+        lift $ markTxInfoDead pool 800002 (fakeTxHash 3)
+        balanceBefore pool (fakeTxHash 3) `dbShouldBeE` 9000
 
-    -- Two transactions of one block go by their ids: ab before cd
-    it "takes off the transactions of one block as far as the one --after names, in the order of their ids" $
+    -- The store saw the payment and its spending in the same second. The
+    -- spending is listed above the payment it spends.
+    it "takes off the unconfirmed transactions as far as the one --after names, a spending before its payment" $
       inDatabaseE $ do
         pool <- testPool ctx
-        lift $ do
-          _ <- repsertSummary pool idAb (Store.MemRef 1700000000) seenTime paymentSummary
-          void $ repsertSummary pool idCd (Store.MemRef 1700000000) seenTime spendSummary
+        _ <- record pool (paymentAt ctx (Store.MemRef 1700000000))
+        _ <- record pool (spendAt ctx (Store.MemRef 1700000000))
+        holding pool 0 9000
+        listedBalances pool Nothing `dbShouldBeE` [Just 9000, Just 50000]
+        -- 9000 + 41000 = 50000
+        balanceBefore pool (fakeTxHash 2) `dbShouldBeE` 50000
+        -- 50000 - 50000 = 0
+        balanceBefore pool (fakeTxHash 1) `dbShouldBeE` 0
+
+    -- The block puts the spending, at position 2, before the payment it
+    -- spends, at position 5, as a block of Bitcoin Cash may
+    it "walks the balances of a block down from a spending to the payment it spends, though the block puts it first" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (paymentAt ctx (Store.BlockRef 800000 5))
+        _ <- record pool (spendAt ctx (Store.BlockRef 800000 2))
+        orderBlock pool 800000
         holding pool 9000 0
-        -- 9000 - 50000 = -41000: listed in this order, the balance dips
-        txsCursorAt pool idAb `dbShouldBeE` TxsCursor (TimeKey True seenTime (Store.MemRef 1700000000)) idAb (-41000)
-        -- -41000 + 41000 = 0
-        txsCursorAt pool idCd `dbShouldBeE` TxsCursor (TimeKey True seenTime (Store.MemRef 1700000000)) idCd 0
+        -- 9000 + 41000 = 50000
+        listedBalances pool Nothing `dbShouldBeE` [Just 9000, Just 50000]
+        balanceBefore pool (fakeTxHash 2) `dbShouldBeE` 50000
 
     it "leaves the transactions of other portfolios out of what --after adds up" $
       inDatabaseE $ do
         pool <- paidAndSpent
         otherPool <- (`portfolioPool` btc) <$> portfolioOf ctx testMnemonic2
         _ <- lift $ repsertSummary otherPool (fakeTxHash 8) (Store.BlockRef 800002 1) seenTime paymentSummary
-        txsCursorAt pool (fakeTxHash 2) `dbShouldBeE` TxsCursor (TimeKey False seenTime (Store.BlockRef 800001 1)) (fakeTxHash 2) 50000
+        balanceBefore pool (fakeTxHash 2) `dbShouldBeE` 50000
 
     it "stores what a transaction adds or takes in its row, for --after to add up" $
       inDatabaseE $ do
@@ -1084,7 +1295,7 @@ historySpec ctx =
                         TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "" Map.empty Map.empty
                       ]
         -- A reorganisation leaves the spending out: the payment stands
-        lift $ markTxInfoDead pool (fakeTxHash 2)
+        lift $ markTxInfoDead pool 800002 (fakeTxHash 2)
         txsAfter pool Nothing Nothing
           `dbShouldBeE` [ TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 0 True)) "" Map.empty Map.empty,
                         TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "" Map.empty Map.empty

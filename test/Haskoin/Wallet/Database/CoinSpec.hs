@@ -44,7 +44,7 @@ import Haskoin.Wallet.Database.Portfolio (Place (..), portfolioPool)
 import Haskoin.Wallet.Database.RawTx (insertRawTx)
 import Haskoin.Wallet.Keys (AccountKind (..), PoolPath (..), legacyPath)
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.Database.TxInfo (TimeKey (..), repsertSummary, storeSummary, storeTime)
+import Haskoin.Wallet.Database.TxInfo (repsertSummary, storeSummary, storeTime)
 import Haskoin.Wallet.Database.TxLabel (setTxLabel)
 import Data.Word (Word32, Word64, Word8)
 import Numeric.Natural (Natural)
@@ -176,14 +176,14 @@ storedAt addr = lift $ map P.entityVal <$> P.selectList [DBCoinAddress P.==. add
 
 -- | The coins of an account as coins lists them when narrowed to its
 -- type: those after the coin given, or the first ones, up to the count
-accountCoins :: DBAccountId -> CoinFilter -> Maybe (TimeKey, OutPoint) -> Maybe Natural -> ExceptT String (DB IO) [JsonCoin]
+accountCoins :: DBAccountId -> CoinFilter -> Maybe (Store.BlockRef, OutPoint) -> Maybe Natural -> ExceptT String (DB IO) [JsonCoin]
 accountCoins accId shown afterM countM = do
   pool <- poolOf accId
   coinsAfter pool [accId] shown afterM countM
 
 -- | The coins of the account as coins lists them: outpoint, confirmations
 -- and lock
-listed :: DBAccountId -> Maybe (TimeKey, OutPoint) -> Maybe Natural -> ExceptT String (DB IO) [(OutPoint, Natural, Maybe CoinLock)]
+listed :: DBAccountId -> Maybe (Store.BlockRef, OutPoint) -> Maybe Natural -> ExceptT String (DB IO) [(OutPoint, Natural, Maybe CoinLock)]
 listed accId afterM countM = map (\c -> (jsonCoinOutpoint c, jsonCoinConfirmations c, jsonCoinLock c)) <$> accountCoins accId AllCoins afterM countM
 
 -- | The coins of the account as coins lists them, and whether each can be
@@ -449,23 +449,23 @@ refreshingSpec ctx =
 listingSpec :: Ctx -> Spec
 listingSpec ctx =
   describe "Listing the coins of an account, as coins does" $ do
-    -- The three coins were paid at the same time, 1700000000
-    it "lists coins paid at one time as their blocks go: the unconfirmed ones first, then the confirmed ones from the newest block" $
+    it "lists the unconfirmed coins first, then the confirmed ones from the newest block" $
       inDatabaseE $ do
         accId <- account ctx
         threeCoins ctx accId
         (map fst3 <$> listed accId Nothing Nothing) `dbShouldBeE` [thirdCoin, secondCoin, firstCoin]
 
-    -- The coin of transaction 1 is in block 800001, paid at 1700000000.
-    -- The coin of transaction 2 is in block 800000, paid 600 seconds later.
-    it "lists the confirmed coins by the time of the transactions that paid them, the newest first, whatever their blocks" $
+    -- The coin of transaction 1 is in block 800001, dated 1700000000. The
+    -- coin of transaction 2 is in block 800000 under it, dated 600 seconds
+    -- later.
+    it "lists the confirmed coins by their blocks, the newest first, whatever the times of the blocks" $
       inDatabaseE $ do
         accId <- account ctx
         let seenWhen tid = if tid == fakeTxHash 2 then addUTCTime 600 seenTime else seenTime
         _ <-
           refreshCoins btc ctx accId seenWhen [externalAddr 0]
             [storeCoin ctx (fakeTxHash 1, 0) (Just 800001) (externalAddr 0) 10000, storeCoin ctx (fakeTxHash 2, 0) (Just 800000) (externalAddr 0) 20000]
-        (map fst3 <$> listed accId Nothing Nothing) `dbShouldBeE` [OutPoint (fakeTxHash 2) 0, OutPoint (fakeTxHash 1) 0]
+        (map fst3 <$> listed accId Nothing Nothing) `dbShouldBeE` [OutPoint (fakeTxHash 1) 0, OutPoint (fakeTxHash 2) 0]
 
     -- The coin of transaction 1 is in a block dated an hour after
     -- 1700000000. The coin of transaction 2 is in the mempool, paid at
@@ -484,9 +484,9 @@ listingSpec ctx =
         accId <- account ctx
         threeCoins ctx accId
         (map fst3 <$> listed accId Nothing (Just 1)) `dbShouldBeE` [thirdCoin]
-        (map fst3 <$> listed accId (Just (TimeKey True seenTime (Store.MemRef 0), thirdCoin)) (Just 1)) `dbShouldBeE` [secondCoin]
-        (map fst3 <$> listed accId (Just (TimeKey False seenTime (Store.BlockRef 800001 0), secondCoin)) (Just 2)) `dbShouldBeE` [firstCoin]
-        listed accId (Just (TimeKey False seenTime (Store.BlockRef 800000 0), firstCoin)) Nothing `dbShouldBeE` []
+        (map fst3 <$> listed accId (Just (Store.MemRef 0, thirdCoin)) (Just 1)) `dbShouldBeE` [secondCoin]
+        (map fst3 <$> listed accId (Just (Store.BlockRef 800001 0, secondCoin)) (Just 2)) `dbShouldBeE` [firstCoin]
+        listed accId (Just (Store.BlockRef 800000 0, firstCoin)) Nothing `dbShouldBeE` []
 
     it "lists the outputs of one transaction by their index, so that no page repeats one" $
       inDatabaseE $ do
@@ -494,17 +494,17 @@ listingSpec ctx =
         let output i = storeCoin ctx (fakeTxHash 4, i) (Just 800000) (externalAddr 0) 10000
         _ <- refresh ctx accId [output 2, output 0, output 1]
         (map fst3 <$> listed accId Nothing Nothing) `dbShouldBeE` [OutPoint (fakeTxHash 4) 0, OutPoint (fakeTxHash 4) 1, OutPoint (fakeTxHash 4) 2]
-        (map fst3 <$> listed accId (Just (TimeKey False seenTime (Store.BlockRef 800000 0), OutPoint (fakeTxHash 4) 0)) (Just 1)) `dbShouldBeE` [OutPoint (fakeTxHash 4) 1]
+        (map fst3 <$> listed accId (Just (Store.BlockRef 800000 0, OutPoint (fakeTxHash 4) 0)) (Just 1)) `dbShouldBeE` [OutPoint (fakeTxHash 4) 1]
 
-    it "names where a coin of the accounts listed stands in coins, for --after, and refuses one they do not have" $
+    it "names the block of a coin of the accounts listed, for --after, and refuses one they do not have" $
       inDatabaseE $ do
         accId <- account ctx
         threeCoins ctx accId
-        coinTimeKeyOf [accId] thirdCoin `dbShouldBeE` TimeKey True seenTime (Store.MemRef 0)
-        coinTimeKeyOf [accId] secondCoin `dbShouldBeE` TimeKey False seenTime (Store.BlockRef 800001 0)
+        coinBlock [accId] thirdCoin `dbShouldBeE` Store.MemRef 0
+        coinBlock [accId] secondCoin `dbShouldBeE` Store.BlockRef 800001 0
         lift $
           dbShouldFailWith "The coin 0000000000000000000000000000000000000000000000000000000000000009:0 is not among the coins listed" $
-            coinTimeKeyOf [accId] (OutPoint (fakeTxHash 9) 0)
+            coinBlock [accId] (OutPoint (fakeTxHash 9) 0)
 
     it "counts the confirmations from the best block, and none in the mempool" $
       inDatabaseE $ do
@@ -1185,7 +1185,7 @@ bothTypesSpec ctx =
       inDatabaseE $ do
         (pool, legacyId, segwitId) <- bothFunded
         (map jsonCoinOutpoint <$> coinsAfter pool [legacyId, segwitId] AllCoins Nothing (Just 1)) `dbShouldBeE` [segwitCoin]
-        (map jsonCoinOutpoint <$> coinsAfter pool [legacyId, segwitId] AllCoins (Just (TimeKey False seenTime (Store.BlockRef 800001 0), segwitCoin)) (Just 1))
+        (map jsonCoinOutpoint <$> coinsAfter pool [legacyId, segwitId] AllCoins (Just (Store.BlockRef 800001 0, segwitCoin)) (Just 1))
           `dbShouldBeE` [firstCoin]
 
     it "are listed for one type alone when the listing is narrowed to it" $
@@ -1194,11 +1194,11 @@ bothTypesSpec ctx =
         (map jsonCoinOutpoint <$> coinsAfter pool [segwitId] AllCoins Nothing Nothing) `dbShouldBeE` [segwitCoin]
         (map jsonCoinOutpoint <$> coinsAfter pool [legacyId] AllCoins Nothing Nothing) `dbShouldBeE` [firstCoin]
 
-    it "name where a coin of either account stands in coins, for --after" $
+    it "name the block of a coin of either account, for --after" $
       inDatabaseE $ do
         (_, legacyId, segwitId) <- bothFunded
-        coinTimeKeyOf [legacyId, segwitId] segwitCoin `dbShouldBeE` TimeKey False seenTime (Store.BlockRef 800001 0)
-        coinTimeKeyOf [legacyId, segwitId] firstCoin `dbShouldBeE` TimeKey False seenTime (Store.BlockRef 800000 0)
+        coinBlock [legacyId, segwitId] segwitCoin `dbShouldBeE` Store.BlockRef 800001 0
+        coinBlock [legacyId, segwitId] firstCoin `dbShouldBeE` Store.BlockRef 800000 0
 
     it "give the balance of the coins at the addresses of both accounts, the largest first" $
       inDatabaseE $ do

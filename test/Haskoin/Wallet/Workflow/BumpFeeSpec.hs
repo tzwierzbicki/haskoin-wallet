@@ -161,9 +161,10 @@ bumpFeeSpec ctx = do
         (filter (\(tid, _, _) -> tid `elem` [stuck, replacement]) <$> historyOf history)
           `shouldSatisfy` either (const False) (\rows -> sort rows == sort [(stuck, True, 0), (replacement, False, 1)])
 
-    -- The stuck transaction stays first, at its place in the mempool. The
-    -- replacement left 25480 of the 50000 paid.
-    it "counts only its replacement in the balances of the history: the dead transaction shows none" $
+    -- The block that confirmed the replacement came after the wallet last
+    -- saw the stuck payment alive, so the replacement is listed above it.
+    -- The replacement left 25480 of the 50000 paid.
+    it "counts only its replacement in the balances of the history: the dead transaction shows none, under its replacement" $
       withChain ctx (paidChain ctx) $ \home chain -> do
         stuck <- sentPayment home
         _ <- answer home ["sync"] []
@@ -171,7 +172,7 @@ bumpFeeSpec ctx = do
         _ <- signAndSend home nosig
         modifyIORef chain mine
         _ <- answer home ["sync"] []
-        (txBalancesOf <$> hwJson home ["txs"] []) `shouldReturn` Right [Nothing, Just 25480, Just 50000]
+        (txBalancesOf <$> hwJson home ["txs"] []) `shouldReturn` Right [Just 25480, Nothing, Just 50000]
 
     it "leaves the pending transactions once its replacement is sent" $
       withChain ctx (paidChain ctx) $ \home _ -> do

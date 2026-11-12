@@ -259,7 +259,8 @@ txsSpec ctx =
 
 -- | Portfolio 0 of the test wallet on btc, with the given number of
 -- payments of 50000 to its bip44 account, each in a block of its own,
--- holding them all but the one marked dead
+-- holding them all but the one marked dead. That one died when the sync
+-- had reached its block, so it keeps its place among the others.
 walletWithPayments :: Ctx -> FilePath -> Word8 -> Word8 -> IO Config
 walletWithPayments ctx dir count dead =
   walletInFile (dir </> "wallet.sqlite") $ do
@@ -268,7 +269,7 @@ walletWithPayments ctx dir count dead =
     lift $ do
       forM_ [1 .. count] $ \n ->
         repsertSummary pool (fakeTxHash n) (Store.BlockRef (800000 + fromIntegral n) 1) fixtureTime paymentSummary
-      markTxInfoDead pool (fakeTxHash dead)
+      markTxInfoDead pool (800000 + fromIntegral dead) (fakeTxHash dead)
       P.update accId [DBAccountBalanceConfirmed P.=. fromIntegral (count - 1) * 50000]
 
 -- | The balances of txs on btc, chunk by chunk, as the screen reads them

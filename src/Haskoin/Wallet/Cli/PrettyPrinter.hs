@@ -1152,10 +1152,10 @@ txAnswerDoc net seenM unit info = do
   let paths = maybe activePaths pathsSeenFrom seenM
   return $ verboseTxDoc paths net unit (whereFields net (seenPortfolioDoc <$> seenM) info) Nothing time info
 
--- | The time a transaction shows: when the store first saw it, for one on
--- the chain, or when the wallet started holding it, for one in
--- preparation. None when hw does not know it: for a summary the next sync
--- has to fetch again, or a transaction read from a file.
+-- | The time a transaction shows: the time the store gives it
+-- ('chainTime'), for one on the chain, or when the wallet started holding
+-- it, for one in preparation. None when hw does not know it, as for a
+-- transaction read from a file.
 txTime :: TxInfo -> Maybe UTCTime
 txTime info = case txInfoStatus info of
   OnChain status -> chainTime status

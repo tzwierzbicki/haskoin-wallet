@@ -327,14 +327,21 @@ Using `hw`:
 - A transaction is shown as its portfolio sees it: `Incoming` when funds enter
   the portfolio, `Outgoing` when they leave it, and `Internal` when they move
   between its addresses.
-- `txs` and `coins` list by time. The unconfirmed transactions or coins come
-  first, then the others, and each part lists the newest first, by the time
-  shown. A coin shows the time of the transaction that paid it. A dead
-  transaction is listed at its time among the others. Rows of the same time
-  keep the order of their blocks. The exports of both follow the same order.
-  The listings went by block alone before. A payment that waited in the
-  mempool while later ones confirmed was then listed above them, and a
-  transaction that died unconfirmed stayed at the top for good.
+- `txs` and `coins` list in the order of the chain, the newest first. The
+  unconfirmed transactions or coins come first, then the others by their
+  block and their place in it. The balance of the portfolio changed in that
+  order, so the running balance of `txs` shows only balances the portfolio
+  held, and the balance beside a confirmed transaction stays as it is. The
+  times shown can run a little out of order, since a block can be dated before
+  the block under it. A coin shows the time of the transaction that paid it.
+  The exports of both follow the same order.
+- `txs` lists an unconfirmed transaction above the ones it spends from, even
+  when the server saw them in the same second. On Bitcoin Cash, whose blocks
+  are sorted by transaction id, it does the same inside a block.
+- A dead transaction stays where it was when the wallet last saw it alive. One
+  that was confirmed keeps the place of its block. One that died unconfirmed
+  stays above the blocks the wallet knew then, and goes down the list as
+  later blocks come. It stayed at the top for good before.
 - Wallets and portfolios have fixed names that follow their index, such as
   `wallet0` and `portfolio0`. A description, set with `label`, takes the place
   of the name of an account.
