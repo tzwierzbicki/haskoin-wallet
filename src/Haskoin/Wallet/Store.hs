@@ -17,11 +17,9 @@ import Control.Monad
 import Control.Monad.Except
 import Control.Monad.Reader (MonadIO (..), MonadTrans (lift))
 import qualified Data.Aeson as Json
+import qualified Data.Aeson.Types as Json (parseEither)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
-import Data.Bytes.Get (getWord64be, isEmpty, runGetL, runGetS)
-import Data.Bytes.Put (runPutL)
-import Data.Bytes.Serial (deserialize, serialize)
 import Data.Default (def)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.List (intercalate, isSuffixOf)
@@ -31,17 +29,19 @@ import Data.Monoid (Endo (..), appEndo)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import Data.Text.Encoding (encodeUtf8)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebClient
-import Haskoin.Store.WebCommon (ApiResource (..), Param (..), ParamBox (..), PostBox (..), asProxy, paramLabel, queryPath)
+import Haskoin.Store.WebCommon (ApiResource (..), ApiResponse (..), Param (..), ParamBox (..), PostBox (..), asProxy, paramLabel, queryPath)
 import Haskoin.Wallet.Config
-import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), Request)
+import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), Request, RequestBody (RequestBodyBS))
 import qualified Network.HTTP.Client as HTTP
 import Network.TLS (TLSException (HandshakeFailed))
-import Network.HTTP.Types (StdMethod (..), hContentType)
+import Network.HTTP.Types (StdMethod (..))
 import Network.HTTP.Types.Status (statusCode, statusIsSuccessful)
 import qualified Network.Wreq as Wreq
+import Network.Wreq.Types (Payload (Raw))
 import Numeric.Natural (Natural)
 import UnliftIO.Async (pooledMapConcurrentlyN)
 
@@ -162,18 +162,25 @@ callFailureMessage failure = case failure of
   CallFailed message -> message
 
 -- | 'webCall', with its failures told apart by whether the host was
--- reached. The web client decodes an answer only once it is used, so the
--- answer is read in full here, where its failure is caught.
+-- reached.
+--
+-- An answer that is not the JSON of what was asked fails the call
+-- ('AnswerUnreadable'). The answer is also read in full here. A reader of
+-- haskoin-store-data can still fail late, with an error call, on a value
+-- it reads only once the value is used. The time of a health check is one.
+-- Read in full here, such an answer fails the call the same way, and
+-- crashes no command later.
 webCallApart :: (NFData a) => Text -> ExceptT Store.Except IO a -> ExceptT CallFailure IO a
 webCallApart host action =
-  ExceptT $ (answered =<< runExceptT action) `catches` [Handler unreachable, Handler unreadable, Handler tooLong]
+  ExceptT $ (answered =<< runExceptT action) `catches` [Handler unreachable, Handler unreadable, Handler failedLate, Handler tooLong]
   where
     answered (Left err) = return $ Left (CallFailed (storeError host err))
     answered (Right answer) = Right <$> evaluate (force answer)
     unreachable e
       | beforeRequest e = return $ Left (HostUnreached (unreachableStore host e))
       | otherwise = return $ Left (CallFailed (unreachableStore host e))
-    unreadable (ErrorCall reason) = return $ Left (CallFailed (unreadableAnswer host reason))
+    unreadable (AnswerUnreadable reason) = return $ Left (CallFailed (unreadableAnswer host reason))
+    failedLate (ErrorCall reason) = return $ Left (CallFailed (unreadableAnswer host reason))
     tooLong AnswerTooLong =
       return $ Left (CallFailed ("The store at " <> cs host <> " sent an answer of more than " <> show (answerLimit `div` (1024 * 1024)) <> " MiB, which hw does not read"))
 
@@ -204,8 +211,10 @@ beforeRequest e = case e of
 
 {- Calls -}
 
--- | The most bytes hw reads of one answer of the store: 64 MiB, sixteen
--- times a full block. The answers about a wallet's addresses and
+-- | The most bytes hw reads of one answer of the store: 64 MiB. The
+-- largest answer hw asks for is the transactions of a block. In JSON,
+-- those of a full block of 1.6 MB took 6.7 MB, so the limit leaves room
+-- for about ten of them. The answers about a wallet's addresses and
 -- transactions, a hundred at a time ('requestBatch'), are far smaller. A
 -- store that sends more is refused before the answer is decoded: the web
 -- client of haskoin-store reads a body in full, and a body without end
@@ -219,34 +228,61 @@ data AnswerTooLong = AnswerTooLong
 
 instance Exception AnswerTooLong
 
--- | A call to the store, as the web client of haskoin-store makes it
--- ('apiCall'), its answer decoded as the client decodes it
--- ('storeAnswer')
-storeCall :: (ApiResource a b) => Ctx -> ApiConfig -> a -> ExceptT Store.Except IO b
-storeCall ctx api res = runGetL deserialize <$> storeAnswer ctx api res
+-- | The failure of an answer that is not the JSON of what was asked, with
+-- the reason the JSON reader gave. A server that is not a haskoin-store
+-- sends such an answer, and so does a proxy that answers 200 with a page of
+-- its own.
+newtype AnswerUnreadable = AnswerUnreadable String
+  deriving (Show)
 
--- | The body of the answer to a call to the store, not decoded yet, and
--- read no further than 'answerLimit' bytes. The request is the one of the
--- web client of haskoin-store: the path and the query of the resource,
--- binary answers, and an error the store answers read from its body. Most
--- answers are decoded as the client decodes them ('storeCall'). The raw
--- transactions are decoded the way of hw, which reads the formats of
--- every version of the store ('rawTxsAnswer').
-storeAnswer :: (ApiResource a b) => Ctx -> ApiConfig -> a -> ExceptT Store.Except IO BL.ByteString
-storeAnswer ctx (ApiConfig net apiHost) res = do
+instance Exception AnswerUnreadable
+
+-- | A call to the store, and its answer, read from JSON.
+--
+-- hw talks to the store in JSON, and in nothing else. haskoin-store had a
+-- binary encoding of its API too, which hw asked for before. The store
+-- dropped it in version 1.10, and answers in JSON alone since. Every
+-- older version of the store answers in JSON when asked. So JSON reads
+-- every version, and hw needs one reader. The public server can run
+-- several versions at once, one on each network.
+--
+-- The request is the one of the web client of haskoin-store ('apiCall'):
+-- the path and the query of the resource, a transaction posted in hex, and
+-- an error the store answers read from its body ('checkStatus'). hw makes
+-- the request itself, because that client cannot do three things hw needs.
+-- It reads a body without end in full, where hw stops at 'answerLimit'
+-- bytes. It needs the host to end with a slash ('resourceUrl'). And it
+-- does not tell a host without a store of the network from a store that
+-- fails ('NetworkNotServed').
+--
+-- An answer that does not read fails with 'AnswerUnreadable', and not as
+-- an error of the store: the store answered no error.
+storeCall :: (ApiResource a b) => Ctx -> ApiConfig -> a -> ExceptT Store.Except IO b
+storeCall ctx (ApiConfig net apiHost) res = do
   query <- liftEither $ queryOptions net ctx res
   let url = resourceUrl apiHost net (cs (queryPath net ctx res))
-      options = appEndo (query <> binary) (Wreq.defaults & Wreq.manager %~ either (Left . boundedAnswers) Right)
-  case resourceMethod (asProxy res) of
+      options = appEndo (query <> json) (Wreq.defaults & Wreq.manager %~ either (Left . boundedAnswers) Right)
+  body <- case resourceMethod (asProxy res) of
     GET -> answerBody =<< liftIO (try (Wreq.getWith options url))
     POST -> case resourceBody res of
-      Just (PostBox body) -> answerBody =<< liftIO (try (Wreq.postWith options url (runPutL (serialize body))))
+      Just (PostBox text) -> answerBody =<< liftIO (try (Wreq.postWith options url (plainText text)))
       Nothing -> throwError $ Store.StringError "Could not post resource"
     _ -> throwError $ Store.StringError "Unsupported HTTP method"
+  either (liftIO . throwIO . AnswerUnreadable) return (readAnswer net ctx body)
   where
     answerBody :: Either Store.Except (Wreq.Response BL.ByteString) -> ExceptT Store.Except IO BL.ByteString
     answerBody = either throwError (return . (^. Wreq.responseBody))
-    binary = Endo $ (Wreq.header "Accept" .~ ["application/octet-stream"]) . (Wreq.checkResponse ?~ checkStatus)
+    json = Endo $ (Wreq.header "Accept" .~ ["application/json"]) . (Wreq.checkResponse ?~ checkStatus)
+    -- The body of a request, which the store reads as text: a transaction
+    -- to publish goes in hex
+    plainText text = Raw "text/plain" (RequestBodyBS (encodeUtf8 text))
+
+-- | The answer in the body of a response of the store, read from its JSON,
+-- or why it does not read. The reader is the one haskoin-store-data gives
+-- for the type of the answer ('parseResponse'). It takes the network
+-- because an address is written as its network writes it.
+readAnswer :: (ApiResponse b) => Network -> Ctx -> BL.ByteString -> Either String b
+readAnswer net ctx body = Json.eitherDecode body >>= Json.parseEither (parseResponse net ctx)
 
 -- | The web address of a resource of the store of a network. It is the
 -- host, then the name of the network, then the path of the resource, such
@@ -271,38 +307,6 @@ resourceUrl host net path = withSlash <> net.name <> path
       | "/" `isSuffixOf` host = host
       | otherwise = host <> "/"
 
--- | The raw transactions in the answer of the store to 'GetTxsRaw', in
--- either of the formats of haskoin-store, or why they could not be read.
--- From version 1.9.0, the store writes the number of transactions first,
--- in eight bytes, as it writes every other list. Before, it wrote the
--- transactions alone, one after the other. The public server can run both
--- versions at once, one on each network, so hw reads both. The web client
--- of haskoin-store reads only one of them, the one of its own version.
---
--- The count is tried first, and must match the transactions that follow
--- it to the end of the answer. An answer of an older store cannot pass
--- for one with a count. Its first eight bytes would count billions of
--- transactions, unless its first transaction has version 0, which nodes
--- do not relay. Even then, the bytes after the first eight would have to
--- make up that many whole transactions. An answer with a count is never
--- read the other way, since it always reads with its count.
-rawTxsAnswer :: BL.ByteString -> Either String [Tx]
-rawTxsAnswer body = case runGetS counted bytes of
-  Right txs -> Right txs
-  Left _ -> either (const (Left inNeitherFormat)) Right (runGetS toTheEnd bytes)
-  where
-    bytes = BL.toStrict body
-    counted = do
-      count <- getWord64be
-      txs <- toTheEnd
-      unless (fromIntegral (length txs) == count) $ fail "the count does not match the transactions"
-      return txs
-    -- Transactions one after the other, up to the end of the answer
-    toTheEnd = do
-      done <- isEmpty
-      if done then return [] else (:) <$> deserialize <*> toTheEnd
-    inNeitherFormat = "the list of raw transactions is in neither format of haskoin-store, with its count first or without"
-
 -- | The query of a resource, as the web client of haskoin-store writes it
 queryOptions :: (ApiResource a b) => Network -> Ctx -> a -> Either Store.Except (Endo Wreq.Options)
 queryOptions net ctx res = mconcat <$> mapM option (snd (queryParams res))
@@ -323,25 +327,16 @@ checkStatus req res
   | isHealthCheck && statusCode status == 404 = throwIO NetworkNotServed
   | otherwise = do
       body <- HTTP.responseBody res
-      throwIO $ fromMaybe (Store.StringError "could not decode error") (answeredError contentType body)
+      throwIO $ fromMaybe (Store.StringError "could not decode error") (answeredError body)
   where
-    contentType = lookup hContentType (HTTP.responseHeaders res)
     status = HTTP.responseStatus res
     isHealthCheck = "/health" `Text.isSuffixOf` cs (HTTP.path req)
 
--- | The error in the body of an answer of the store, read as the
--- Content-Type of the answer says. haskoin-store sends its errors in
--- binary from version 1.9.0, to a client that asks for binary answers as
--- hw does. Older versions sent every error in JSON. The public server can
--- run both versions at once, one on each network. Nothing when the body is
--- no error of haskoin-store, as the error page of a proxy in front of a
--- store that is down.
-answeredError :: Maybe BS.ByteString -> BS.ByteString -> Maybe Store.Except
-answeredError contentType body
-  | binary = either (const Nothing) Just (runGetS deserialize body)
-  | otherwise = Json.decodeStrict body
-  where
-    binary = maybe False ("application/octet-stream" `BS.isPrefixOf`) contentType
+-- | The error in the body of an answer of the store, which is JSON.
+-- Nothing when the body is no error of haskoin-store, as the error page of
+-- a proxy in front of a store that is down.
+answeredError :: BS.ByteString -> Maybe Store.Except
+answeredError = Json.decodeStrict
 
 -- | The settings of the connections, their answers read no further than
 -- 'answerLimit' bytes: past it, 'AnswerTooLong'
@@ -421,9 +416,7 @@ webStore ctx cfg net =
       storeUnspents =
         batched $ \addrs -> serial <$> call (GetAddrsUnspent addrs everything),
       storeRawTransactions =
-        batched $ \tids -> do
-          body <- webCall host (storeAnswer ctx api (GetTxsRaw tids))
-          either (throwError . unreadableAnswer host) return (rawTxsAnswer body),
+        batched $ \tids -> raw <$> call (GetTxsRaw tids),
       storePublish = \tx -> do
         Store.TxId published <- call (PostTx tx)
         unless (published == txHash tx) $
@@ -438,6 +431,7 @@ webStore ctx cfg net =
     -- answer, the answers in the order asked
     batched ask items = concat <$> mapM ask (chunksOf (fromIntegral requestBatch) items)
     serial (Store.SerialList xs) = xs
+    raw (Store.RawResultList txs) = txs
     -- A limit of zero asks the store for everything. Without a limit, the
     -- store answers with its default page of a hundred items and says
     -- nothing about the rest.

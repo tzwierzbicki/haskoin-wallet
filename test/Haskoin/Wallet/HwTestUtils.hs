@@ -1,4 +1,5 @@
 {-# LANGUAGE DisambiguateRecordFields #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
@@ -49,9 +50,6 @@ import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
-import Data.Bytes.Get (runGetL)
-import Data.Bytes.Put (runPutL)
-import Data.Bytes.Serial (Serial, deserialize, serialize)
 import Data.IORef (IORef, modifyIORef, newIORef, readIORef)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, listToMaybe)
@@ -598,46 +596,56 @@ withServerSending body test =
     answering _ respond = respond $ responseLBS status200 [] body
 
 -- | The web API of haskoin-store, as its web client asks it, answering
--- from a store: the paths, the parameters and the binary encoding of
--- haskoin-store-data. A question it does not know is a 404. The store is
--- the same on every network, as the coins of a key from before the fork
--- of Bitcoin Cash are on both chains.
+-- from a store: the paths, the parameters and the JSON of
+-- haskoin-store-data. A transaction is posted in hex, as the store reads
+-- it. A question it does not know is a 404. The store is the same on every
+-- network, as the coins of a key from before the fork of Bitcoin Cash are
+-- on both chains.
 storeApp :: Ctx -> Store -> Application
 storeApp ctx store req respond = do
   answer <- runExceptT route
   respond $ case answer of
-    Right body -> responseLBS status200 [(hContentType, "application/octet-stream")] body
+    Right body -> responseLBS status200 [(hContentType, "application/json")] body
     Left err -> responseLBS status404 [] (BL.fromStrict (encodeUtf8 (Text.pack err)))
   where
     route :: ExceptT String IO BL.ByteString
     route = case (requestMethod req, drop 1 (pathInfo req)) of
-      ("GET", ["health"]) -> encoded healthy <$ checkHealth store
-      ("GET", ["block", "best"]) -> encoded <$> storeBestBlock store
-      ("GET", ["block", "latest"]) -> encoded . Store.SerialList <$> storeLatestBlocks store
+      ("GET", ["health"]) -> Json.encode healthy <$ checkHealth store
+      ("GET", ["block", "best"]) -> onNetwork <$> storeBestBlock store
+      ("GET", ["block", "latest"]) -> listOnNetwork <$> storeLatestBlocks store
       ("GET", ["transactions", "block", h]) -> do
         hash <- fromPath h
-        encoded . Store.SerialList <$> storeBlockTransactions store hash
+        listOnNetwork <$> storeBlockTransactions store hash
       ("GET", ["block", "height", h]) -> do
         HeightParam height <- fromPath h
-        encoded . Store.SerialList <$> storeBlocksAtHeight store (fromIntegral height)
-      ("GET", ["address", "balances"]) -> encoded . Store.SerialList <$> (storeBalances store =<< query "addresses")
+        listOnNetwork <$> storeBlocksAtHeight store (fromIntegral height)
+      ("GET", ["address", "balances"]) -> listOnNetwork <$> (storeBalances store =<< query "addresses")
       ("GET", ["address", a, "transactions"]) -> do
         addr <- fromPath a
         limit <- maybe 0 (\(LimitParam l) -> l) <$> optionalQuery "limit"
-        encoded . Store.SerialList <$> storeAddressTxs store addr limit
-      ("GET", ["address", "unspent"]) -> encoded . Store.SerialList <$> (storeUnspents store =<< query "addresses")
-      ("GET", ["transactions"]) -> encoded . Store.SerialList <$> (storeTransactions store =<< query "txids")
-      ("GET", ["transactions", "raw"]) -> encoded . Store.RawResultList <$> (storeRawTransactions store =<< query "txids")
+        Json.encode <$> storeAddressTxs store addr limit
+      ("GET", ["address", "unspent"]) -> listOnNetwork <$> (storeUnspents store =<< query "addresses")
+      ("GET", ["transactions"]) -> listOnNetwork <$> (storeTransactions store =<< query "txids")
+      ("GET", ["transactions", "raw"]) -> Json.encode . Store.RawResultList <$> (storeRawTransactions store =<< query "txids")
       ("POST", ["transactions"]) -> do
-        tx <- runGetL deserialize <$> liftIO (strictRequestBody req)
+        tx <- postedTx . BL.toStrict =<< liftIO (strictRequestBody req)
         storePublish store tx
-        return $ encoded (Store.TxId (txHash tx))
+        return $ Json.encode (Store.TxId (txHash tx))
       (method, path) -> throwError $ "The fake store does not answer " <> show method <> " " <> show path
     -- The network the web client names first in the path, which reads
-    -- the addresses of the question
+    -- the addresses of the question and writes those of the answer
     net = fromMaybe btc (netByName . Text.unpack =<< listToMaybe (pathInfo req))
-    encoded :: (Serial a) => a -> BL.ByteString
-    encoded = runPutL . serialize
+    -- The JSON of an answer that holds addresses, which each network
+    -- writes its own way
+    onNetwork :: (MarshalJSON Network a) => a -> BL.ByteString
+    onNetwork = Json.encode . marshalValue net
+    listOnNetwork :: (MarshalJSON Network a) => [a] -> BL.ByteString
+    listOnNetwork = Json.encode . map (marshalValue net)
+    -- The transaction in the body of a request, which is its hex
+    postedTx :: BS.ByteString -> ExceptT String IO Tx
+    postedTx body =
+      maybe (throwError "The body is not a transaction in hex") return $
+        eitherToMaybe . S.decode =<< decodeHex (decodeUtf8 body)
     fromPath :: (Param p) => Text -> ExceptT String IO p
     fromPath text = maybe (throwError $ "Unreadable path: " <> show (pathInfo req)) return (parseParam net ctx [text])
     optionalQuery :: (Param p) => BS.ByteString -> ExceptT String IO (Maybe p)

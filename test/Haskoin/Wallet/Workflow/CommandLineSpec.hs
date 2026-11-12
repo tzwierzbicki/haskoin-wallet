@@ -1058,8 +1058,8 @@ commandLineSpec ctx = do
         (errorOf <$> hwJson home ["sync"] [])
           `shouldReturn` Right "The store at http://127.0.0.1:1/ could not be reached: the connection failed"
 
-    -- The web client decodes an answer only once hw uses it: hw crashed
-    -- there before, with the error of the decoder
+    -- The answer is not the JSON hw asked for. hw crashed on such an
+    -- answer before, with the error of the reader.
     it "tells when the store gives an answer it cannot read, as a server that is not a haskoin-store does" $
       withServerAnswering "not a store" $ \home url -> do
         newTestPortfolio home

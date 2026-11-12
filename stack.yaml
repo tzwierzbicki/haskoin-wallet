@@ -9,7 +9,7 @@ extra-deps:
   - git: https://github.com/jprupp/haskoin-core.git
     commit: 584cd831bc2ec96f38354f99c7303c701c719fe4
   - git: https://github.com/jprupp/haskoin-store-data.git
-    commit: 5cb9bf052f391ddd92a43a61ad7849a6b51a3444
+    commit: 601c60640347cd673c57a517ecb15491152a5979
   - git: https://github.com/jprupp/secp256k1-haskell.git
     commit: cc779313a93f63c0920f944caf5a9bb0be231dbe
   - base16-2.0

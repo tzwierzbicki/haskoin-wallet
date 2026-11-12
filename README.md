@@ -3001,6 +3001,9 @@ On its first command, `hw` creates the directory `~/.hw`. It holds the database
 | `database-file` | `null` | Another database, instead of `~/.hw/accounts.sqlite` |
 | `pager` | `null` | The pager a listing goes through on a terminal, instead of `less` or `PAGER`. `""` is none. |
 
+`hw` talks to the server in JSON, which every version of haskoin-store
+answers. A server of version 1.10 or later answers in nothing else.
+
 The two `default-` keys say which account of the portfolio a command takes when
 no option does. `unit` and `listing-view` say how the answers look.
 [`setdefault`](#hw-setdefault) writes these four keys, so that you do not have
@@ -3317,6 +3320,11 @@ with `hw` 0.10. One that `hw` 0.9 signed already can still be sent with its
 
 Keep `hw` 0.9 to that copy. It does not know the database of `hw` 0.10, and
 must not be run on it.
+
+The commands of `hw` 0.9 that ask the server, such as `syncacc` and `sendtx`,
+need a haskoin-store older than version 1.10. `hw` 0.9 reads the binary answers
+of the server, and a haskoin-store of version 1.10 or later answers in JSON
+alone. Reading the old file, as above, asks no server.
 
 ### Accounts derived wrongly
 
