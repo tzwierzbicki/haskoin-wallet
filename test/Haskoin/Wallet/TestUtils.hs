@@ -29,14 +29,14 @@ import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Data.Time (TimeZone (..), UTCTime (UTCTime), ZonedTime, fromGregorian, utcToZonedTime)
+import Data.Time (LocalTime (..), TimeOfDay (..), TimeZone (..), UTCTime (UTCTime), ZonedTime, fromGregorian, utcToZonedTime)
 import Data.Word (Word32, Word64, Word8)
 import Database.Persist.Sql (Migration, PersistValue, Single (..), rawQuery, rawSql, runMigrationQuiet, toSqlKey)
 import Database.Persist.Sqlite (runSqlite)
 import Haskoin
 import Haskoin.Crypto.Keys.Slip39 (EncryptedMasterSecret (..))
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Database.Account (NetworkView (..), PortfolioView (..), createPortfolio, nextPortfolioIndex, poolAccountOf, seedWallet)
+import Haskoin.Wallet.Database.Account (AccountKeys (..), NetworkView (..), PortfolioView (..), createPortfolio, nextPortfolioIndex, poolAccountOf, seedWallet)
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), Portfolio (..), PortfolioRef (..), insertWallet, portfolioAt, portfolioPool)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database.Coin (JsonCoin (..))
@@ -52,6 +52,7 @@ import qualified Options.Applicative as O
 import Haskoin.Wallet.Cli.Parser.Args (Args (..), CommandSpec (..))
 import Haskoin.Wallet.Cli.Parser.Run (commandNamed)
 import Haskoin.Wallet.Cli.Response (AccountCounts (..), Group (..))
+import Haskoin.Wallet.Cli.Sheet (Cell (..), Sheet (..))
 import Haskoin.Wallet.Cli.Style (Style, renderPlain)
 import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), MyInputs (..), MyOutputs (..), PendingStatus (..), TxInfo (..), TxStatus (..), TxSummary (..), TxType (..), pendingSigned)
 import Haskoin.Wallet.Tx.SignData (TxSignData (..), noLabel, nosigHash)
@@ -132,10 +133,34 @@ fixtureTime = UTCTime (fromGregorian 2023 11 1) 0
 seenTime :: UTCTime
 seenTime = UTCTime (fromGregorian 2023 11 14) (22 * 3600 + 13 * 60 + 20)
 
+-- | The zone of a clock of Central Europe in winter, an hour ahead of UTC
+cet :: TimeZone
+cet = TimeZone 60 False "CET"
+
 -- | 'seenTime' on a clock of Central Europe, an hour ahead of UTC in
 -- November: 14 Nov 2023 23:13:20 CET
 seenTimeInCet :: ZonedTime
-seenTimeInCet = utcToZonedTime (TimeZone 60 False "CET") seenTime
+seenTimeInCet = utcToZonedTime cet seenTime
+
+-- | What a clock of Central Europe reads at 'seenTime': 22:13:20 UTC + 1
+-- hour = 23:13:20
+seenLocalInCet :: LocalTime
+seenLocalInCet = LocalTime (fromGregorian 2023 11 14) (TimeOfDay 23 13 20)
+
+-- | The three cells a sheet gives 'seenTime' on that clock: the time in
+-- UTC, as the clock reads it, and how far the clock is from UTC
+seenTimeCells :: [Cell]
+seenTimeCells = [TimeCell seenTime, LocalTimeCell seenLocalInCet, TextCell "UTC+01:00"]
+
+-- | The cells of each row of a sheet under the headings given, in the
+-- order given: what a test of a wide sheet looks at. A heading the sheet
+-- does not have fails the test.
+cellsUnder :: [Text] -> Sheet -> [[Cell]]
+cellsUnder headings sheet = [[row !! column heading | heading <- headings] | row <- sheetRows sheet]
+  where
+    column heading = case lookup heading (zip (sheetHeadings sheet) [0 ..]) of
+      Just index -> index
+      Nothing -> error ("The sheet has no column " <> show heading)
 
 -- | The lines of a document of hw, without its colours
 renderedLines :: Doc Style -> [String]
@@ -416,6 +441,15 @@ mainPortfolioView =
             }
         ]
     }
+
+-- | The keys of the two accounts of portfolio 0 on btc, as portfolios
+-- --verbose gives them. The checksums of the descriptors were computed
+-- apart from hw, and Bitcoin Core 32.1 gives the same
+-- (test/data/descriptors). The SLIP-132 key of a bip44 account is its
+-- xpub, and that of a bip84 account its zpub.
+legacyKeys, segwitKeys :: AccountKeys
+legacyKeys = AccountKeys Bip44 (Deriv :| 44 :| 0 :| 0) testAccountXPub ("pkh([bc560f95/44h/0h/0h]" <> testAccountXPub <> "/<0;1>/*)#vq597j87") (Just testAccountXPub)
+segwitKeys = AccountKeys Bip84 (Deriv :| 84 :| 0 :| 0) testSegwitAccountXPub ("wpkh([bc560f95/84h/0h/0h]" <> testSegwitAccountXPub <> "/<0;1>/*)#5nktextl") (Just testSegwitAccountZPub)
 
 -- | The first receiving address of that account as its row holds it,
 -- labelled "Invoice 42": paid 50000 in one transaction, which it still

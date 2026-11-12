@@ -14,8 +14,10 @@
 --   zeros. Labels are kept as they are, with no apostrophe in front.
 -- * An amount in satoshis is a number, shown with the separators of
 --   thousands of the computer: 5,000,000, or 5 000 000.
--- * A time is a time, in UTC, shown as 2023-11-14 22:13:20. It sorts and
---   counts as one.
+-- * A time is a time, shown as 2023-11-14 22:13:20. It sorts and counts
+--   as one. A spreadsheet has no time zones. So a time in UTC and a local
+--   time are cells of the same kind, and the heading of the column says
+--   which it is.
 --
 -- The headings are bold, and the header stays at the top of the sheet as
 -- its rows scroll, as less keeps the header of a table. A column is as wide
@@ -50,7 +52,7 @@ import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
-import Data.Time.Format (defaultTimeLocale, formatTime)
+import Data.Time.Format (FormatTime, defaultTimeLocale, formatTime)
 import Haskoin.Wallet.Cli.Sheet (Cell (..), Sheet (..))
 import Text.DocLayout (realLength)
 
@@ -192,11 +194,16 @@ cellXml = \case
   TextCell t -> tableCell [("office:value-type", "string")] (paragraphXml t)
   SatoshiCell amount -> tableCell [("table:style-name", "satoshis"), ("office:value-type", "float"), ("office:value", showText amount)] (showText amount)
   CountCell n -> tableCell [("office:value-type", "float"), ("office:value", showText n)] (showText n)
-  TimeCell time ->
-    tableCell
-      [("table:style-name", "time"), ("office:value-type", "date"), ("office:date-value", Text.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S" time))]
-      (Text.pack (formatTime defaultTimeLocale "%Y-%m-%d %H:%M:%S" time))
+  TimeCell time -> timeXml time
+  LocalTimeCell time -> timeXml time
   EmptyCell -> "<table:table-cell/>"
+  where
+    -- A time to the second, in UTC or as its clock read it
+    timeXml :: (FormatTime time) => time -> Text
+    timeXml time =
+      tableCell
+        [("table:style-name", "time"), ("office:value-type", "date"), ("office:date-value", Text.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S" time))]
+        (Text.pack (formatTime defaultTimeLocale "%Y-%m-%d %H:%M:%S" time))
 
 -- | A cell with its attributes and its paragraph
 tableCell :: [(Text, Text)] -> Text -> Text
@@ -274,6 +281,7 @@ shownLength = \case
      in digits + (digits - 1) `div` 3 + (if amount < 0 then 1 else 0)
   CountCell n -> length (show n)
   TimeCell _ -> 19
+  LocalTimeCell _ -> 19
   EmptyCell -> 0
 
 {- The view -}

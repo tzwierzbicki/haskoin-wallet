@@ -145,7 +145,7 @@ import Haskoin.Wallet.Cli.Parser
 import Haskoin.Wallet.Cli.PrettyPrinter (SeenFrom (..), addedCoinsDoc, agoText, childrenDoc, dustReportDoc, feeRatesDoc, pathsSeenFrom, reducedDoc, renderOn, txAnswerDoc)
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response
-import Haskoin.Wallet.Cli.Sheet (PortfolioSheets (..), Sheet, listingSheet, stacked, walletSheets)
+import Haskoin.Wallet.Cli.Sheet (PortfolioSheets (..), Sheet, localListingSheet, stacked, walletSheets)
 import Haskoin.Wallet.Cli.View (viewName)
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.CutAddress (cutAddress)
@@ -849,7 +849,9 @@ cmdDeleteWallet cfg walletM typed =
 -- and answer with the file ("Haskoin.Wallet.Cli.Csv"). The listing is
 -- read whole, in one transaction, as --json reads it, then written: the
 -- file is either whole or not there. A path that is taken is refused
--- before the listing is read.
+-- before the listing is read. The file holds the sheet of the listing
+-- ('localListingSheet'), the one exportsheet writes to the tab of the
+-- listing, so that the rows of one file fit the other.
 cmdCsv :: Config -> FilePath -> ExceptT String (DB IO) Sections -> IO Response
 cmdCsv cfg file listing = do
   free <- runExceptT (checkPathFree file)
@@ -857,20 +859,22 @@ cmdCsv cfg file listing = do
     Left err -> return (ResponseError (cs err))
     Right () -> do
       answer <- readListing cfg listing
-      case listingSheet answer of
+      sheetM <- localListingSheet answer
+      case sheetM of
         -- The listing failed, and its answer says why
         Nothing -> return answer
         Just sheet -> either (ResponseError . cs) (const (ResponseFile file)) <$> writeFileBytes file (sheetCsv sheet)
 
 -- | Write every listing of every portfolio to a new OpenDocument
 -- spreadsheet, a tab each ("Haskoin.Wallet.Cli.Ods"), and answer with the
--- file. The tabs hold what the CSV files of the listings hold
--- ('walletSheets'). The listings are read in one transaction, so that the
--- tabs agree with each other: the balances with the coins, and the coins
--- with the transactions. The spreadsheet is the record of the whole
--- wallet, so the active portfolio does not narrow it. It holds what the
--- listings show: the networks the configuration hides are left out of
--- it, as they are of each listing.
+-- file. Each tab holds the sheet of its listing, the one --csv writes,
+-- for every portfolio ('walletSheets'). So the rows of a CSV file fit
+-- under the headings of its tab. The listings are read in one
+-- transaction, so that the tabs agree with each other: the balances with
+-- the coins, and the coins with the transactions. The spreadsheet is the
+-- record of the whole wallet, so the active portfolio does not narrow it.
+-- It holds what the listings show: the networks the configuration hides
+-- are left out of it, as they are of each listing.
 cmdExportSheet :: Ctx -> Config -> FilePath -> IO Response
 cmdExportSheet ctx cfg file =
   runDBResponse cfg $ do
@@ -894,19 +898,19 @@ cmdExportSheet ctx cfg file =
       let whole = Target Nothing Nothing
       receiving <- sheetOf (addressesListing cfg portfolio whole False everyRow)
       change <- sheetOf (addressesListing cfg portfolio whole True everyRow)
-      sheets <-
-        PortfolioSheets (stacked [receiving, change])
-          <$> sheetOf (balancesListing cfg portfolio whole everyRow)
-          <*> sheetOf (coinsListing cfg portfolio whole False everyRow)
-          <*> sheetOf (txsListing cfg portfolio Nothing everyRow)
-      return (portfolioRef portfolio, sheets)
+      PortfolioSheets (stacked [receiving, change])
+        <$> sheetOf (balancesListing cfg portfolio whole everyRow)
+        <*> sheetOf (coinsListing cfg portfolio whole False everyRow)
+        <*> sheetOf (txsListing cfg portfolio Nothing everyRow)
 
--- | The sheet of a listing, read whole in the transaction the caller runs
+-- | The sheet of a listing, read whole in the transaction the caller
+-- runs, its local times on the clock of this computer
 sheetOf :: ExceptT String (DB IO) Sections -> ExceptT String (DB IO) Sheet
 sheetOf listing = do
   answer <- wholeListing listing
+  sheetM <- liftIO (localListingSheet answer)
   -- Every listing has a sheet: an answer without one would be a bug
-  maybe (throwError "The listing has no sheet") return (listingSheet answer)
+  maybe (throwError "The listing has no sheet") return sheetM
 
 -- | Every portfolio, each with what it can spend now on each network hw
 -- shows and whether it is the active one, in the order of the wallets and

@@ -1424,12 +1424,14 @@ coins and addresses it has, and the description of the portfolio. The amounts
 are in the unit the header names.
 
 With --csv FILENAME, each network of each portfolio takes one row of a new CSV
-file, for a spreadsheet: the wallet, the portfolio, whether it is the active
-one, its description, the network, what it can spend, its confirmed and
-unconfirmed balances, its coins and addresses, and when the portfolio was
-created. Amounts are in satoshis,
-and times in UTC. The file holds no key and no descriptor: anyone it reaches
-could see every address and every payment of the portfolio with them.
+file, for a spreadsheet: the wallet, the portfolio, the network and the types
+of its accounts there, whether it is the active portfolio, its description and
+that of its wallet, the paths of its accounts, what it can spend, its confirmed
+and unconfirmed balances, its coins and addresses, and when the portfolio was
+created. Amounts are in satoshis. Each time comes in UTC, then in local time,
+then with the offset of that local time from UTC. The file holds no key and no
+descriptor: anyone it reaches could see every address and every payment of the
+portfolio with them.
 |],
       args =
         CommandPortfolios
@@ -1857,10 +1859,11 @@ header names. An address no transaction has paid leaves its amounts empty.
 Change addresses have no label, so their table has no column for one.
 
 With --csv FILENAME, each address takes one row of a new CSV file, for a
-spreadsheet: its network and its type, its path, the address and its label,
-what it can spend, its confirmed and unconfirmed balances, what it received,
-its coins and its transactions, and when it was created. Amounts are in
-satoshis, and times in UTC.
+spreadsheet: its wallet, portfolio, network and type, the address, its path,
+its chain, receiving or change, and its label, what it can spend, its confirmed
+and unconfirmed balances, what it received, its coins and its transactions, and
+when it was created. Amounts are in satoshis. Each time comes in UTC, then in
+local time, then with the offset of that local time from UTC.
 
 --after names an address of the listing. The listing goes on after it, in its
 group, then with the groups that follow.
@@ -1949,9 +1952,12 @@ names the columns: the path, the address, the three amounts, and the label, or
 that it is a change address. The amounts are in the unit the header names.
 
 With --csv FILENAME, each address takes one row of a new CSV file, for a
-spreadsheet: its network and its type, its path, the address and its label,
-its total, what it can spend, the three parts it cannot, and its coins.
-Amounts are in satoshis.
+spreadsheet: its wallet, portfolio, network and type, the address, its path,
+its chain and its label, its total, what it can spend and the three parts it
+cannot. Then come the columns addresses --csv ends with: its confirmed and
+unconfirmed balances, what it received, its coins and its transactions, and
+when it was created. Amounts are in satoshis. Each time comes in UTC, then in
+local time, then with the offset of that local time from UTC.
 |],
       args =
         CommandBalances
@@ -2103,12 +2109,18 @@ for, in the words of the compact view. The description of a dead transaction
 that was replaced names its replacement first.
 
 With --csv FILENAME, each transaction takes one row of a new CSV file, for a
-spreadsheet: its network, the types of address it involves, its time, type,
-amount, fee and fee rate, the balance after it,
-its status, confirmations and block, its txid in full and by its short id, and
-its label. Then come the address
-it pays the most, its path and label when it is one of the wallet, and how many
-other addresses it pays. Amounts are in satoshis, and times in UTC.
+spreadsheet: its wallet, portfolio and network, the types of address it
+involves, its txid in full and by its short id, its time, its direction,
+Incoming, Outgoing or Internal, its amount, fee, fee rate and size, the balance
+after it, its status, confirmations and block, the transaction that replaced
+it when it is dead, and its label.
+
+Then come four of its addresses: the two it spends the most from, the one it
+pays the most, and its change. Each has its path and label when it is one of
+the portfolio, and its value. One more column counts the addresses that have
+no column of their own. The lock time comes last. Amounts are in satoshis.
+Each time comes in UTC, then in local time, then with the offset of that local
+time from UTC.
 |],
       args =
         CommandTxs
@@ -2140,7 +2152,7 @@ listingOutputOption verboseHelp tabularHelp listed =
       )
   where
     compactHelp = "Show the " <> listed <> " in a few lines each. It is the default, unless setdefault or the key listing-view of config.json names another view."
-    csvHelp = "Write the " <> listed <> " to this file, one on each row, as CSV for a spreadsheet, with amounts in satoshis and times in UTC. The file must not exist yet."
+    csvHelp = "Write the " <> listed <> " to this file, one on each row, as CSV for a spreadsheet, with amounts in satoshis and times in UTC and in local time. The file must not exist yet."
 
 -- | The view of a listing, from one of --compact, --verbose and
 -- --tabular, with their help in that order. The listings read them, and
@@ -2597,11 +2609,12 @@ status, its fee rate in sat/vB, and what it is for, as txs --tabular says it. Th
 names first, in yellow, the transactions it replaces.
 
 With --csv FILENAME, each transaction takes one row of a new CSV file, for a
-spreadsheet: its wallet, its portfolio and its network, when it was created, its type, amount, fee and fee
-rate, its status, its nosigHash and its txid once signed, each in full and by
-its short id, and its label. Then come
-the address it pays the most, its path and label when it is one of the wallet,
-and how many other addresses it pays. Amounts are in satoshis, and times in UTC.
+spreadsheet, in the columns of txs --csv that apply to it, in the same order.
+Its nosigHash comes before its txid, each in full and by its short id. It has
+no time on the chain, no balance, confirmations or block. It adds the change
+its fee took in, and the transactions it replaces. When it was created comes
+last. Amounts are in satoshis. Each time comes in UTC, then in local time,
+then with the offset of that local time from UTC.
 |],
       args =
         CommandPendingTxs
@@ -2835,11 +2848,13 @@ path, and the label of the address. A coin locked by a pending transaction says
 "locked by tx".
 
 With --csv FILENAME, each coin takes one row of a new CSV file, for a
-spreadsheet: its network and its type, the coin, TXID:INDEX, in full and by
-its short id, the time of its
-transaction, its value, its
-state, its confirmations and block, the address that holds it with its path
-and label, and the label of its transaction. Amounts are in satoshis, and times in UTC.
+spreadsheet: its wallet, portfolio, network and type, the coin, TXID:INDEX, in
+full and by its short id, its txid in full and by its short id, the index of
+its output, the time of its transaction, its value, its state, its
+confirmations and block, the address that holds it with its path, chain and
+label, and the label of its transaction. Amounts are in satoshis. Each time
+comes in UTC, then in local time, then with the offset of that local time from
+UTC.
 
 A coin is spendable when the wallet can spend it now. Nothing locks it, a
 coinbase coin has 100 confirmations, and an unconfirmed coin comes from a
@@ -3226,16 +3241,18 @@ exportSheetCommand =
 exportsheet writes the portfolios, the addresses, the balances, the coins, the
 transactions and the pending transactions to a new spreadsheet, a tab each, in
 the OpenDocument format of LibreOffice (.ods). Excel and Google Sheets open it
-too. Each tab holds every row of its listing, in the columns of its --csv file.
+too. Each tab holds every row of its listing, in the columns of its --csv
+file, in the same order: rows copied from one fit the other.
 
 The tabs hold every portfolio of every wallet. Each row starts with the
-columns that say where it is: its wallet, its portfolio and its network. The
-tab of the portfolios says which one is active. The addresses of both chains
-share a tab, the receiving ones first.
+columns that say where it is: its wallet, its portfolio, its network and its
+type. The tab of the portfolios says which one is active. The addresses of both
+chains share a tab, the receiving ones first. Each time comes in UTC, then in
+local time, then with the offset of that local time from UTC.
 
 Each cell keeps its kind. A label is text, whatever it starts with, an amount
-is a number of satoshis, and a time is a time, in UTC. The header of each tab
-stays at the top as its rows scroll.
+is a number of satoshis, and a time is a time. The header of each tab stays at
+the top as its rows scroll.
 
 The six listings are read at one moment, so the tabs agree with each other.
 The file must not exist yet. It is readable by you alone, since it tells your

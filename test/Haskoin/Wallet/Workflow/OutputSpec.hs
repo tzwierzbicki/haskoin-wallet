@@ -1583,34 +1583,62 @@ nextStepSpec ctx =
 csvSpec :: Ctx -> Spec
 csvSpec ctx =
   describe "A listing written with --csv" $ do
-    -- The coin of the payment, 3 confirmations deep, can be spent. The
-    -- file starts with EF BB BF, the byte order mark of UTF-8.
+    let -- The lines of a CSV file, without the mark it starts with
+        linesOf file = filter (not . Text.null) . Text.splitOn "\r\n" . Text.drop 1 . decodeUtf8 <$> BS.readFile file
+        -- A line without its last three fields: when the wallet created
+        -- the element, which is the time of the test
+        withoutCreated = Text.intercalate "," . reverse . drop 3 . reverse . Text.splitOn ","
+        balanceHeadings = "Wallet,Portfolio,Network,Type,Address,Path,Chain,Address label,Total (sats),Spendable (sats),Locked by tx (sats),Locked by you (sats),Not spendable yet (sats),Confirmed (sats),Unconfirmed (sats),Received (sats),Coins,Transactions,Created (UTC),Created (local),Created (offset)"
+
+    -- The coin of the payment, 3 confirmations deep, can be spent: 50000
+    -- in all and spendable, nothing locked or waiting. The store counts
+    -- 50000 confirmed and received at /0/0, in one coin and one
+    -- transaction.
     it "is written to the file --csv names, a row for each address that holds coins, and hw says where" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         let file = home </> "balances.csv"
         run <- hw home ["balances", "--csv", file] []
         runOut run `shouldBe` "Written to " <> Text.pack file <> "\n"
-        BS.readFile file
-          `shouldReturn` "\xEF\xBB\xBF\&Network,Type,Path,Address,Label,Total (sats),Spendable (sats),Locked by tx (sats),Locked by you (sats),Not spendable yet (sats),Coins\r\nbtc,bip44,/0/0,1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj,,50000,50000,0,0,0,1\r\n"
+        rows <- linesOf file
+        (take 1 rows, withoutCreated <$> drop 1 rows)
+          `shouldBe` ([balanceHeadings], ["wallet0,portfolio0,btc,bip44,1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj,/0/0,receiving,,50000,50000,0,0,0,50000,0,50000,1,1"])
+
+    -- EF BB BF is the byte order mark of UTF-8: 3 bytes, then the 24
+    -- characters of the first three headings and their commas
+    it "starts with the byte order mark of UTF-8, then its headings" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "balances.csv"
+        _ <- answer home ["balances", "--csv", file] []
+        BS.take 27 <$> BS.readFile file `shouldReturn` "\xEF\xBB\xBF\&Wallet,Portfolio,Network"
 
     -- The store saw the payment at 22:13:20 UTC, 23:13:20 in Central
-    -- Europe in November
-    it "gives the time of a transaction in UTC, whatever the time zone of the computer" $
+    -- Europe in November, an hour ahead of UTC
+    it "gives the time of a transaction in UTC, then on the clock of the computer, then how far that clock is from UTC" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         let file = home </> "txs.csv"
         _ <- hwWithEnv [("TZ", centralEurope)] home ["txs", "--csv", file] []
         content <- BS.readFile file
-        content `shouldSatisfy` BS.isInfixOf "\r\nbtc,2023-11-14T22:13:20,Incoming,"
+        content `shouldSatisfy` BS.isInfixOf ",2023-11-14T22:13:20,2023-11-14T23:13:20,UTC+01:00,Incoming,"
+
+    it "names the wallet, the portfolio, the network and the type on every row, though the listing covers one portfolio" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        let file = home </> "coins.csv"
+        _ <- answer home ["coins", "--csv", file] []
+        rows <- linesOf file
+        Text.intercalate "," . take 4 . Text.splitOn "," <$> rows
+          `shouldBe` ["Wallet,Portfolio,Network,Type", "wallet0,portfolio0,btc,bip44"]
 
     it "writes the headings alone for a listing with no rows" $
       withHome $ \home -> do
         newTestPortfolio home
         let file = home </> "pending.csv"
         _ <- answer home ["pendingtxs", "--csv", file] []
-        BS.readFile file
-          `shouldReturn` "\xEF\xBB\xBF\&Wallet,Portfolio,Network,Created (UTC),Type,Address types,Amount (sats),Fee (sats),Fee rate (sat/vB),Status,Nosighash,Short nosighash,Txid,Short txid,Label,Address,Path,Address label,Other addresses\r\n"
+        linesOf file
+          `shouldReturn` ["Wallet,Portfolio,Network,Type,Nosighash,Short nosighash,Txid,Short txid,Direction,Amount (sats),Fee (sats),Fee rate (sat/vB),Size (vB),Change in fee (sats),Status,Replaces,Transaction label,From 1 address,From 1 path,From 1 label,From 1 value (sats),From 2 address,From 2 path,From 2 label,From 2 value (sats),To address,To path,To label,To value (sats),Change address,Change path,Change value (sats),Other addresses,Lock time,Created (UTC),Created (local),Created (offset)"]
 
     -- 50000 at /0/0 is the largest total, before 30000 at /0/1
     it "writes the rows --max allows, the first ones of the listing" $
@@ -1618,30 +1646,52 @@ csvSpec ctx =
         synced home
         let file = home </> "balances.csv"
         _ <- answer home ["balances", "--csv", file, "--max", "1"] []
-        BS.readFile file
-          `shouldReturn` "\xEF\xBB\xBF\&Network,Type,Path,Address,Label,Total (sats),Spendable (sats),Locked by tx (sats),Locked by you (sats),Not spendable yet (sats),Coins\r\nbtc,bip44,/0/0,1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj,,50000,50000,0,0,0,1\r\n"
+        rows <- linesOf file
+        (take 1 rows, withoutCreated <$> drop 1 rows)
+          `shouldBe` ([balanceHeadings], ["wallet0,portfolio0,btc,bip44,1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj,/0/0,receiving,,50000,50000,0,0,0,50000,0,50000,1,1"])
 
     -- Each network of the portfolio on a row of its own, eight in all,
     -- after the row of the headings
-    it "gives the portfolios a row for each network, after a Network column" $
+    it "gives the portfolios a row for each network" $
       withHome $ \home -> do
         newTestPortfolio home
         let file = home </> "portfolios.csv"
         _ <- answer home ["portfolios", "--csv", file] []
-        rows <- Text.lines . decodeUtf8 <$> BS.readFile file
-        (take 1 rows, length rows) `shouldBe` (["\xFEFFWallet,Portfolio,Active,Description,Network,Spendable (sats),Confirmed (sats),Unconfirmed (sats),Coins,Addresses,Created (UTC)\r"], 9)
+        rows <- linesOf file
+        (take 1 rows, length rows) `shouldBe` (["Wallet,Portfolio,Network,Type,Active,Description,Wallet description,Account paths,Spendable (sats),Confirmed (sats),Unconfirmed (sats),Coins,Addresses,Created (UTC),Created (local),Created (offset)"], 9)
 
-    -- Eight rows of each portfolio, one for each network
-    it "says yes in the column Active of the portfolios for each row of the active one, and no for the others" $
+    -- A portfolio has a bip44 and a bip84 account on Bitcoin and on its
+    -- test networks, and a bip44 account alone on Bitcoin Cash and on its
+    -- test networks. The two types of a row are one field, in quotes
+    -- since it holds a comma.
+    it "starts each row of the portfolios with its wallet, its portfolio, its network and the types of its accounts there, then yes for the active portfolio and no for the others" $
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
         switchTo home 0 1
         let file = home </> "portfolios.csv"
         _ <- answer home ["portfolios", "--csv", file] []
-        rows <- drop 1 . Text.lines . decodeUtf8 <$> BS.readFile file
-        map (Text.intercalate "," . take 3 . Text.splitOn ",") rows
-          `shouldBe` replicate 8 "wallet0,portfolio0,no" <> replicate 8 "wallet0,portfolio1,yes"
+        rows <- drop 1 <$> linesOf file
+        let expected =
+              [ "wallet0,portfolio0,btc,\"bip44, bip84\",no,",
+                "wallet0,portfolio0,bch,bip44,no,",
+                "wallet0,portfolio0,btctest,\"bip44, bip84\",no,",
+                "wallet0,portfolio0,btctest4,\"bip44, bip84\",no,",
+                "wallet0,portfolio0,btcreg,\"bip44, bip84\",no,",
+                "wallet0,portfolio0,bchtest,bip44,no,",
+                "wallet0,portfolio0,bchtest4,bip44,no,",
+                "wallet0,portfolio0,bchreg,bip44,no,",
+                "wallet0,portfolio1,btc,\"bip44, bip84\",yes,",
+                "wallet0,portfolio1,bch,bip44,yes,",
+                "wallet0,portfolio1,btctest,\"bip44, bip84\",yes,",
+                "wallet0,portfolio1,btctest4,\"bip44, bip84\",yes,",
+                "wallet0,portfolio1,btcreg,\"bip44, bip84\",yes,",
+                "wallet0,portfolio1,bchtest,bip44,yes,",
+                "wallet0,portfolio1,bchtest4,bip44,yes,",
+                "wallet0,portfolio1,bchreg,bip44,yes,"
+              ]
+        [Text.take (Text.length start) row | (start, row) <- zip expected rows] `shouldBe` expected
+        length rows `shouldBe` 16
 
     it "is refused a --csv file that exists, and the file is kept" $
       withHome $ \home -> do
@@ -1695,7 +1745,10 @@ exportSheetSpec ctx =
         tabsOf <$> contentOf file `shouldReturn` ["Portfolios", "Addresses", "Balances", "Coins", "Transactions", "Pending transactions"]
 
     -- The coin of the payment, 3 confirmations deep, can be spent: 50000
-    -- in all and spendable, nothing locked or waiting, in one coin
+    -- in all and spendable, nothing locked or waiting. The store counts
+    -- 50000 confirmed and received at /0/0, in one coin and one
+    -- transaction. The row ends with when the address was created, the
+    -- time of the test, which is left out.
     it "gives the balance of each address, as numbers of satoshis, after the columns that say where it is" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
@@ -1711,8 +1764,10 @@ exportSheetSpec ctx =
                   "<table:table-cell office:value-type=\"string\"><text:p>portfolio0</text:p></table:table-cell>",
                   "<table:table-cell office:value-type=\"string\"><text:p>btc</text:p></table:table-cell>",
                   "<table:table-cell office:value-type=\"string\"><text:p>bip44</text:p></table:table-cell>",
-                  "<table:table-cell office:value-type=\"string\"><text:p>/0/0</text:p></table:table-cell>",
+                  -- Address, path and chain
                   "<table:table-cell office:value-type=\"string\"><text:p>1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj</text:p></table:table-cell>",
+                  "<table:table-cell office:value-type=\"string\"><text:p>/0/0</text:p></table:table-cell>",
+                  "<table:table-cell office:value-type=\"string\"><text:p>receiving</text:p></table:table-cell>",
                   -- No label
                   "<table:table-cell/>",
                   -- Total, spendable, locked by tx, locked by you, not spendable yet
@@ -1721,9 +1776,51 @@ exportSheetSpec ctx =
                   "<table:table-cell table:style-name=\"satoshis\" office:value-type=\"float\" office:value=\"0\"><text:p>0</text:p></table:table-cell>",
                   "<table:table-cell table:style-name=\"satoshis\" office:value-type=\"float\" office:value=\"0\"><text:p>0</text:p></table:table-cell>",
                   "<table:table-cell table:style-name=\"satoshis\" office:value-type=\"float\" office:value=\"0\"><text:p>0</text:p></table:table-cell>",
-                  -- Coins
+                  -- Confirmed, unconfirmed and received
+                  "<table:table-cell table:style-name=\"satoshis\" office:value-type=\"float\" office:value=\"50000\"><text:p>50000</text:p></table:table-cell>",
+                  "<table:table-cell table:style-name=\"satoshis\" office:value-type=\"float\" office:value=\"0\"><text:p>0</text:p></table:table-cell>",
+                  "<table:table-cell table:style-name=\"satoshis\" office:value-type=\"float\" office:value=\"50000\"><text:p>50000</text:p></table:table-cell>",
+                  -- Coins and transactions
                   "<table:table-cell office:value-type=\"float\" office:value=\"1\"><text:p>1</text:p></table:table-cell>",
-                  "</table:table-row>"
+                  "<table:table-cell office:value-type=\"float\" office:value=\"1\"><text:p>1</text:p></table:table-cell>"
+                ]
+            )
+
+    -- The headings of a tab are the texts of its header row. No heading
+    -- holds a comma, so those of a CSV file are apart by its commas.
+    it "has in each tab the headings of the CSV file of its listing, in the same order, so that the rows of one fit the other" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        let file = home </> "wallet.ods"
+        _ <- answer home ["exportsheet", file] []
+        content <- contentOf file
+        let headingsOfTab name =
+              let (_, tab) = Text.breakOn ("<table:table table:name=\"" <> name <> "\"") content
+                  header = fst (Text.breakOn "</table:table-header-rows>" tab)
+               in [Text.takeWhile (/= '<') rest | rest <- drop 1 (Text.splitOn "<text:p>" header)]
+            headingsOfCsv listing = do
+              let csv = home </> (listing <> ".csv")
+              _ <- answer home [listing, "--csv", csv] []
+              Text.splitOn "," . Text.takeWhile (/= '\r') . Text.drop 1 . decodeUtf8 <$> BS.readFile csv
+            listings = [("Portfolios", "portfolios"), ("Addresses", "addresses"), ("Balances", "balances"), ("Coins", "coins"), ("Transactions", "txs"), ("Pending transactions", "pendingtxs")]
+        inCsv <- mapM (headingsOfCsv . snd) listings
+        map (headingsOfTab . fst) listings `shouldBe` inCsv
+        map length inCsv `shouldSatisfy` all (> 4)
+
+    -- The store saw the payment at 22:13:20 UTC, 23:13:20 in Central
+    -- Europe in November, an hour ahead of UTC
+    it "gives the time of a transaction in UTC, then on the clock of the computer, then how far that clock is from UTC" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        let file = home </> "wallet.ods"
+        _ <- hwWithEnv [("TZ", centralEurope)] home ["exportsheet", file] []
+        content <- contentOf file
+        content
+          `shouldSatisfy` Text.isInfixOf
+            ( Text.concat
+                [ "<table:table-cell table:style-name=\"time\" office:value-type=\"date\" office:date-value=\"2023-11-14T22:13:20\"><text:p>2023-11-14 22:13:20</text:p></table:table-cell>",
+                  "<table:table-cell table:style-name=\"time\" office:value-type=\"date\" office:date-value=\"2023-11-14T23:13:20\"><text:p>2023-11-14 23:13:20</text:p></table:table-cell>",
+                  "<table:table-cell office:value-type=\"string\"><text:p>UTC+01:00</text:p></table:table-cell>"
                 ]
             )
 

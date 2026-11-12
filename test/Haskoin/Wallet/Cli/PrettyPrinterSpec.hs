@@ -28,7 +28,7 @@ import Haskoin.Wallet.Cli.Response (AccountCounts (..), Group (..), Response (..
 import Haskoin.Wallet.Cli.Style (renderPlain)
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Database (DBAddress (..))
-import Haskoin.Wallet.Database.Account (AccountKeys (..), NetworkView (..), PortfolioView (..))
+import Haskoin.Wallet.Database.Account (NetworkView (..), PortfolioView (..))
 import Haskoin.Wallet.Database.Address (CoinBalance (..))
 import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..), LeftCoin (..), LeftReason (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter (..), Place (..), PortfolioRef (..), WalletNaming (..))
@@ -105,15 +105,6 @@ btcView = NetworkView btc 5000000 100000 4900000 3 17 []
 -- | A network of a portfolio where it holds nothing and has no address
 emptyOn :: Network -> NetworkView
 emptyOn net = NetworkView net 0 0 0 0 0 []
-
--- | The keys of the two accounts of portfolio 0 on btc, as portfolios
--- --verbose gives them. The checksums of the descriptors were computed
--- apart from hw, and Bitcoin Core 32.1 gives the same
--- (test/data/descriptors). The SLIP-132 key of a bip44 account is its
--- xpub, and that of a bip84 account its zpub.
-legacyKeys, segwitKeys :: AccountKeys
-legacyKeys = AccountKeys Bip44 (Deriv :| 44 :| 0 :| 0) testAccountXPub ("pkh([bc560f95/44h/0h/0h]" <> testAccountXPub <> "/<0;1>/*)#vq597j87") (Just testAccountXPub)
-segwitKeys = AccountKeys Bip84 (Deriv :| 84 :| 0 :| 0) testSegwitAccountXPub ("wpkh([bc560f95/84h/0h/0h]" <> testSegwitAccountXPub <> "/<0;1>/*)#5nktextl") (Just testSegwitAccountZPub)
 
 -- | A whole portfolio 0 of wallet 0, as newportfolio creates it: two
 -- accounts on btc and on each test network of Bitcoin, one on the others,

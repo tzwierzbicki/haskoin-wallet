@@ -829,18 +829,43 @@ hw txs --max 20 --after TXID --json
 ```
 
 `--csv FILE` writes a listing to a new file instead, for a spreadsheet. Each
-element takes a row, and the columns hold what the JSON answer holds, such as
-the txid, the coin and the fee, each in a column of its own. The first columns
-say where the row is, such as its network, and its type for an address or a
-coin. Each hash comes in full, then by its [short id](#short-ids). Amounts are in
-satoshis, as whole numbers, whatever `--unit` says. Times are in UTC, as
-`2023-11-14T22:13:20`, whatever the time zone of the computer. `--after` and
-`--max` choose the rows, as they do on the screen.
+element takes a row. The columns hold every figure `hw` has of it, such as the
+txid, the coin and the fee, each in a column of its own. Each hash comes in
+full, then by its [short id](#short-ids). Amounts are in satoshis, as whole
+numbers, whatever `--unit` says. `--after` and `--max` choose the rows, as they
+do on the screen.
 
 ```console
 hw txs --csv txs.csv
 hw coins --csv coins.csv
 ```
+
+The file of a listing has the columns of its tab in the spreadsheet of
+[`exportsheet`](#hw-exportsheet): the same columns, in the same order, filled
+the same way. Rows copied from one fit under the headings of the other. The
+columns follow four rules in every listing, so that knowing one file tells you
+where to look in the others.
+
+- **The account comes first.** Every row starts with `Wallet`, `Portfolio`,
+  `Network` and `Type`, though a listing covers one portfolio. A row of several
+  accounts names each type, as in `bip44, bip84`.
+- **Then comes what the listing is about.** The file of `coins` goes on with
+  the coin, and that of `txs` with the txid.
+- **A heading means one thing.** Two listings give the columns they share
+  under the same headings, in the same order. The label of an address is
+  `Address label` everywhere, and that of a transaction is `Transaction label`.
+  `Type` is the type of the account. So the column that says `Incoming`,
+  `Outgoing` or `Internal` is `Direction`, which the screen calls the type of
+  a transaction.
+- **The date `hw` created the element comes last.** A portfolio, an address
+  and a pending transaction have one. The time of a transaction is what a
+  history is sorted by, so it comes right after the txid.
+
+Each time takes three columns. `Time (UTC)` gives it in UTC, as
+`2023-11-14T22:13:20`, whatever the time zone of the computer. `Time (local)`
+gives it on the clock of the computer, in the same form, as the screen shows
+it. `Time (offset)` says how far that clock was from UTC at that time, as in
+`UTC+01:00`. A time of the summer has the offset of summer time.
 
 > **Good to know**
 >
@@ -859,6 +884,13 @@ hw coins --csv coins.csv
 > - **A spreadsheet set to a decimal comma may expect semicolons.** Excel may
 >   then show each row in one cell. Import the file with the comma as the
 >   separator rather than open it. LibreOffice asks which separator to use.
+> - **A cell that names several things holds a comma.** The two types of a
+>   row, the paths of two accounts and the txids of two replacements are apart
+>   by a comma and a space. The CSV file puts such a cell in quotes, as the
+>   format asks. A script that splits each line at its commas must mind the
+>   quotes, or read `--json` instead.
+> - **The offset of a local time starts with `UTC`.** A spreadsheet would read
+>   `+01:00` alone as a time of day, or as a formula.
 > - **The file tells your history.** Its addresses, amounts and labels tell
 >   whoever reads it what you hold and whom you paid. `hw` makes it readable
 >   by you alone.
@@ -1460,11 +1492,12 @@ $ hw portfolios --tabular
 ```
 
 `--csv FILE` writes one row for each shown network of each portfolio to a
-[CSV file](#listings). Its columns are the wallet, the portfolio, `Active`, the
-description of the portfolio, the network, what it can spend, its confirmed and
-unconfirmed balances, its coins and addresses, and when the portfolio was
-created. `Active` says `yes` for the active portfolio, and `no` for the
-others. The file holds no key and no
+[CSV file](#listings). Its columns are the wallet, the portfolio, the network
+and the types of the accounts of the portfolio there, `Active`, the
+description of the portfolio and that of its wallet, the paths of its accounts,
+what it can spend, its confirmed and unconfirmed balances, its coins and
+addresses, and when the portfolio was created. `Active` says `yes` for the
+active portfolio, and `no` for the others. The file holds no key and no
 descriptor, since they would show every address and payment of the portfolio
 to anyone the file reaches. `--json` says whether each portfolio is the active
 one, as `"active": true` or `false`.
@@ -2125,10 +2158,11 @@ received, in how many transactions, and its label. Each section has its title an
 table. An unused address leaves its amounts empty. The table of change
 addresses has no label column, since change addresses take no label.
 
-`--csv FILE` writes the addresses to a [CSV file](#listings): the network and
-the type of each, its path, the address and its label, what it can spend, its
-confirmed and unconfirmed balances, what it received, its coins and
-transactions, and when it was created.
+`--csv FILE` writes the addresses to a [CSV file](#listings): the wallet, the
+portfolio, the network and the type of each, the address, its path, its chain
+and its label, what it can spend, its confirmed and unconfirmed balances, what
+it received, its coins and transactions, and when it was created. `Chain` says
+`receiving` or `change`.
 
 ```console
 hw addresses
@@ -2188,9 +2222,13 @@ yet, which waits for a confirmation.
 the address, the value of its coins, what it can spend now and the rest, and
 its label, or `change address`.
 
-`--csv FILE` writes the addresses to a [CSV file](#listings): the network and
-the type of each, its path, the address and its label, its total, what it can
-spend, the three parts it cannot, and its coins.
+`--csv FILE` writes the addresses to a [CSV file](#listings): the wallet, the
+portfolio, the network and the type of each, the address, its path, its chain
+and its label, its total, what it can spend, and the three parts it cannot.
+Then come the columns the file of [`addresses`](#hw-addresses) ends with: its
+confirmed and unconfirmed balances, what it received, its coins and
+transactions, and when it was created. The two files split the same coins two
+ways: this one by what you can spend, that one by what is confirmed.
 
 ```console
 hw balances
@@ -2330,10 +2368,13 @@ for, not what its change is.
 the time of its transaction, its value, its state, its confirmations up to
 `999+`, the address that holds it with its path, and the label of the address.
 
-`--csv FILE` writes the coins to a [CSV file](#listings): the network and the
-type of each, the coin as `TXID:INDEX`, in full and by its short id, the time
-of its transaction, its value, state, confirmations and block, the address that
-holds it with its path, and the labels of the address and of the transaction.
+`--csv FILE` writes the coins to a [CSV file](#listings): the wallet, the
+portfolio, the network and the type of each, the coin as `TXID:INDEX`, in full
+and by its short id, its txid in full and by its short id, the index of its
+output, the time of its transaction, its value, state, confirmations and
+block, the address that holds it with its path and chain, and the labels of
+the address and of the transaction. The txid has columns of its own, so that a
+coin is matched with its transaction in the file of [`txs`](#hw-txs).
 
 [`show TXID:INDEX`](#hw-show) shows one coin, with every detail, and the
 account that holds it.
@@ -2758,12 +2799,20 @@ with its replacement, as in `replaced by 2b69e4f4, to 1JCq…`. The header names
 the unit of the amounts, so the cells hold numbers alone. The table leaves out
 the fee rate. `txs` without `--tabular` shows it.
 
-`--csv FILE` writes the transactions to a [CSV file](#listings): the network of
-each and the types of address it involves, its time, type, amount, fee and fee
-rate, the balance after it, its status, confirmations and block, its txid in
-full and by its short id, and its label. Then come the address it pays the
-most, its path and label when it is one of the wallet, and how many other
-addresses it pays.
+`--csv FILE` writes the transactions to a [CSV file](#listings). Each row
+starts with the wallet, the portfolio and the network of the transaction, and
+the types of address it involves. Then come its txid, in full and by its short
+id, its time, its direction, amount, fee, fee rate and size, the balance after
+it, its status, confirmations and block, and its label. `Replaced by` gives
+the txid of the transaction that replaced a dead one, in full.
+
+A transaction can spend from any number of addresses and pay any number, and a
+file has a fixed number of columns. So the file names four addresses of each
+transaction, as `--verbose` lists them under From, To and Change: the two it
+spends the most from, the one it pays the most, and its change. Each has its
+path and label when it is one of the portfolio, and its value. `Other
+addresses` counts the addresses that have no column of their own. The lock time
+comes last.
 
 ```console
 hw txs
@@ -2821,9 +2870,16 @@ hw txs --max 20 --after TXID
 > - **A payment that no sync saw leaves no dead transaction.** When you bump a
 >   payment before any sync has seen it, the history never holds it. `txs`
 >   then shows the replacement alone.
-> - **The CSV file and the spreadsheet do not name the replacement.** Their
->   Status column says `dead`. `txs --json` gives the replacements of each
->   transaction under `replacedby`, by their txids in full.
+> - **The CSV file and the spreadsheet name the replacement by its txid in
+>   full.** Their Status column says `dead`, and `Replaced by` gives the txid.
+>   Several replacements share the cell, apart by a comma and a space. `txs
+>   --json` gives them under `replacedby`.
+> - **The CSV file leaves the value of a payer's address empty.** In a payment
+>   you received, the addresses under `From` are of another wallet. Its coins
+>   are nothing to yours, so `hw` shows none of their values, as on the screen.
+> - **A transaction between your own addresses fills no `Change` column.** No
+>   output of it can be told to be the change. The address it pays the most is
+>   under `To`, and `Other addresses` counts the rest.
 > - **A block of Bitcoin Cash is sorted by transaction id.** It can put a
 >   payment before the one it spends from. `txs` lists such a payment right
 >   above the one it spends from, and moves no other, so the balance stays
@@ -2873,11 +2929,14 @@ replacement starts with the transactions it replaces, in yellow, as in
 `replaces a1075db5, to bc1q…`. The wallet, portfolio and network columns are
 as wide as their longest cell.
 
-`--csv FILE` writes the pending transactions to a [CSV file](#listings): the
-wallet, the portfolio and the network of each, when it was created, its type,
-amount, fee and fee rate, its status, its nosigHash and its txid once signed,
-each in full and by its short id, its label, and the address it pays the most,
-as `txs --csv` gives it.
+`--csv FILE` writes the pending transactions to a [CSV file](#listings), in the
+columns of [`txs --csv`](#hw-txs) that apply to them, in the same order. The
+nosigHash comes before the txid, each in full and by its short id, and the
+txid is empty until the transaction is signed. `Change in fee` gives the
+change the fee took in, too small for an output. `Replaces` gives the txids of
+the transactions a replacement of `bumpfee` replaces. The file has no time on
+the chain, no balance, confirmations or block. When the transaction was
+created comes last.
 
 ```console
 hw pendingtxs
@@ -3096,21 +3155,25 @@ how to create the wallet again instead.
 the portfolios, the addresses, the balances, the coins, the transactions and
 the pending transactions. The file is an OpenDocument spreadsheet (`.ods`), the
 format of LibreOffice, which Excel and Google Sheets open too. Each tab holds
-every row of its listing, in the columns of its [CSV file](#listings).
+every row of its listing, in the columns of its [CSV file](#listings), in the
+same order. Rows copied from a CSV file fit under the headings of its tab, and
+the other way round.
 
 The tabs hold every portfolio of every wallet, whichever one is active, on the
 [networks `hw` shows](#shown-and-hidden-networks). A hidden network has no row
 in any tab. Each
-row starts with the columns that say where it is: its wallet, its portfolio and
-its network. So one tab sorts and sums across the wallet. The tab of the
-portfolios says which one is active, in its column Active. The addresses of
-both chains share a tab, the receiving ones first.
+row starts with the columns that say where it is: its wallet, its portfolio,
+its network and its type. So one tab sorts and sums across the wallet. The tab
+of the portfolios says which one is active, in its column Active. The
+addresses of both chains share a tab, the receiving ones first, and the column
+Chain tells them apart.
 
 Each cell keeps its kind, unlike in a CSV file. A label is text, whatever it
 starts with, and keeps its leading zeros. An amount is a number of satoshis,
-shown with separators of thousands. A time is a date, in UTC. The header of
-each tab stays at the top as its rows scroll. The six listings are read at one
-moment, so the tabs agree with each other.
+shown with separators of thousands. A time is a date. It comes in UTC, then
+on the clock of the computer, and a third column says how far that clock was
+from UTC. The header of each tab stays at the top as its rows scroll. The six
+listings are read at one moment, so the tabs agree with each other.
 
 ```console
 hw exportsheet wallet.ods

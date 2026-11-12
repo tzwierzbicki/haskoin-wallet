@@ -11,11 +11,14 @@
 -- * Amounts are in satoshis, whole numbers with no decimal point. A
 --   spreadsheet set to a decimal comma, as in French or German, would
 --   read 0.00050000 as text, and its sums would leave it out.
--- * Times are in UTC, as 2023-11-14T22:13:20, the form of ISO 8601,
+-- * Times are written as 2023-11-14T22:13:20, the form of ISO 8601,
 --   which LibreOffice reads as a time with its default settings. With a
 --   space in place of the T, it reads text, unless "Detect special
 --   numbers" is ticked as it imports the file. An offset after the time,
---   such as +01:00, would make it read text too.
+--   such as +01:00, would make it read text too. So a time in UTC and a
+--   local time are written the same way, and the heading of the column
+--   says which it is. The offset of a local time has a column of its own
+--   ("Haskoin.Wallet.Cli.Sheet").
 -- * A text that starts with =, +, -, @, a tab or a carriage return gets
 --   an apostrophe in front ('formulaGuard'). A spreadsheet would run it as
 --   a formula, and a label can come from a file: from another wallet
@@ -69,15 +72,22 @@ csvLine :: [Text] -> Text
 csvLine fields = Text.intercalate "," fields <> "\r\n"
 
 -- | A cell as a field of the file: text guarded and quoted as it needs,
--- amounts and counts as whole numbers, a time in UTC to the second in the
--- form of ISO 8601, and nothing for an empty cell
+-- amounts and counts as whole numbers, a time to the second in the form
+-- of ISO 8601, in UTC or as its clock read it, and nothing for an empty
+-- cell
 cellField :: Cell -> Text
 cellField = \case
   TextCell t -> quoted (formulaGuard t)
   SatoshiCell amount -> Text.pack (show amount)
   CountCell n -> Text.pack (show n)
-  TimeCell time -> Text.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S" time)
+  TimeCell time -> Text.pack (formatTime defaultTimeLocale isoToTheSecond time)
+  LocalTimeCell time -> Text.pack (formatTime defaultTimeLocale isoToTheSecond time)
   EmptyCell -> ""
+
+-- | The form of ISO 8601 for a time to the second, without its zone:
+-- 2023-11-14T22:13:20
+isoToTheSecond :: String
+isoToTheSecond = "%Y-%m-%dT%H:%M:%S"
 
 -- | A text that a spreadsheet would run as a formula, with an apostrophe
 -- in front: one that starts with =, +, - or @, or with a tab or a carriage

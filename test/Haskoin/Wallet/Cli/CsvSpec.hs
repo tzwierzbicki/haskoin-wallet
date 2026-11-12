@@ -6,7 +6,7 @@ module Haskoin.Wallet.Cli.CsvSpec (spec) where
 
 import Haskoin.Wallet.Cli.Csv (cellField, formulaGuard, sheetCsv)
 import Haskoin.Wallet.Cli.Sheet (Cell (..), Sheet (..))
-import Haskoin.Wallet.TestUtils (seenTime)
+import Haskoin.Wallet.TestUtils (seenLocalInCet, seenTime)
 import Test.Hspec
 
 spec :: Spec
@@ -34,6 +34,14 @@ spec = do
     -- seenTime is 14 Nov 2023 22:13:20 UTC
     it "gives a time in UTC in the form of ISO 8601, to the second" $
       cellField (TimeCell seenTime) `shouldBe` "2023-11-14T22:13:20"
+
+    -- A clock of Central Europe reads 23:13:20 at seenTime
+    it "gives a local time as its clock read it, in the same form, without its zone" $
+      cellField (LocalTimeCell seenLocalInCet) `shouldBe` "2023-11-14T23:13:20"
+
+    -- The offset starts with a letter, so that it needs no apostrophe
+    it "gives the offset of a local time as it is, with no apostrophe in front" $
+      cellField (TextCell "UTC+01:00") `shouldBe` "UTC+01:00"
 
     it "gives a text as it is when it needs no quotes" $
       cellField (TextCell "Rent of October") `shouldBe` "Rent of October"

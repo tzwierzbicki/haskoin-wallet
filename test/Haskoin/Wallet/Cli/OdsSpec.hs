@@ -11,7 +11,7 @@ import qualified Data.ByteString.Lazy as BL
 import qualified Data.Text as Text
 import Haskoin.Wallet.Cli.Ods (cellXml, columnMillimetres, paragraphXml, settingsXml, tableXml, workbookOds)
 import Haskoin.Wallet.Cli.Sheet (Cell (..), Sheet (..))
-import Haskoin.Wallet.TestUtils (seenTime)
+import Haskoin.Wallet.TestUtils (seenLocalInCet, seenTime)
 import Test.Hspec
 
 spec :: Spec
@@ -51,6 +51,11 @@ spec = do
     it "is a date for a time, shown to the second" $
       cellXml (TimeCell seenTime)
         `shouldBe` "<table:table-cell table:style-name=\"time\" office:value-type=\"date\" office:date-value=\"2023-11-14T22:13:20\"><text:p>2023-11-14 22:13:20</text:p></table:table-cell>"
+
+    -- A clock of Central Europe reads 23:13:20 at seenTime
+    it "is a date for a local time too, with what its clock read and no zone" $
+      cellXml (LocalTimeCell seenLocalInCet)
+        `shouldBe` "<table:table-cell table:style-name=\"time\" office:value-type=\"date\" office:date-value=\"2023-11-14T23:13:20\"><text:p>2023-11-14 23:13:20</text:p></table:table-cell>"
 
     it "is an empty element for an empty cell" $
       cellXml EmptyCell `shouldBe` "<table:table-cell/>"
@@ -99,6 +104,10 @@ spec = do
     -- -41000 shows as -41,000, of 7: 2 × 7 + 3 = 17.
     it "counts an amount with its separators of thousands and its sign" $
       columnMillimetres (Sheet ["Sats", "Paid"] [[SatoshiCell 5000000, SatoshiCell (-41000)]]) `shouldBe` [21, 17]
+
+    -- 2023-11-14 22:13:20 has 19 characters: 2 × 19 + 3 = 41
+    it "counts a time, in UTC or local, as it shows to the second" $
+      columnMillimetres (Sheet ["Time", "Local"] [[TimeCell seenTime, LocalTimeCell seenLocalInCet]]) `shouldBe` [41, 41]
 
     -- A txid has 64 characters: 2 × 64 + 3 = 131
     it "stops growing at 64 characters, those of a txid" $

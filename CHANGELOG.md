@@ -311,13 +311,27 @@ Using `hw`:
   table taller than the screen at the top, when the table has no section
   titles.
 - `--csv FILE` writes a listing to a new CSV file, for a spreadsheet: every row,
-  with the identifiers and amounts of the JSON answer in columns of their own.
-  Amounts are in satoshis and times in UTC. A label that a spreadsheet would
-  run as a formula gets an apostrophe in front.
+  with every identifier and amount in a column of its own. Amounts are in
+  satoshis. A label that a spreadsheet would run as a formula gets an
+  apostrophe in front.
 - `exportsheet FILE` writes the six listings of every portfolio to a new
   OpenDocument spreadsheet, a tab each. Each cell keeps its kind: text, a
-  number of satoshis, or a time in UTC. The header of each tab stays at the
-  top as its rows scroll.
+  number of satoshis, or a time. The header of each tab stays at the top as
+  its rows scroll.
+- The CSV file of a listing and its tab in the spreadsheet have the same
+  columns, in the same order, so rows copied from one fit the other. Every
+  listing starts with `Wallet`, `Portfolio`, `Network` and `Type`, goes on with
+  what it lists, and ends with the date `hw` created the element when it has
+  one. Two listings give the columns they share under the same headings, in
+  the same order.
+- Each time of a CSV file or of the spreadsheet takes three columns: in UTC,
+  on the clock of the computer, and the offset of that clock from UTC, as in
+  `UTC+01:00`.
+- The CSV file and the tab of `txs` and of `pendingtxs` name four addresses of
+  each transaction, each with its path, label and value: the two it spends the
+  most from, the one it pays the most, and its change. `Other addresses` counts
+  the rest. `Replaced by` names what replaced a dead transaction, and
+  `Replaces` what a replacement of `bumpfee` replaces.
 - Short ids: the first 8 digits of a hash name a transaction, a pending
   transaction or a coin (`a1075db5:1`) wherever the whole hash does. Each row
   of a table and each element of a compact view starts with it. `--verbose`

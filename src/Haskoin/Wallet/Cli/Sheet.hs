@@ -3,72 +3,148 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 
--- | A listing as a sheet of a spreadsheet: a row of headings, then a row
--- for each element, as --csv writes it to a file ("Haskoin.Wallet.Cli.Csv").
+-- | A listing as a sheet of a spreadsheet. A sheet is a row of headings,
+-- then a row for each element. --csv writes the sheet of a listing to a
+-- file ("Haskoin.Wallet.Cli.Csv"). exportsheet writes the sheets of the
+-- six listings to one spreadsheet, a tab each ("Haskoin.Wallet.Cli.Ods").
 --
 -- A sheet is not the table of the screen, which --tabular shows. The
--- screen has 80 columns or so, and a table there gives up what does
--- not fit: the fee, and the hashes in full, of which it gives the short
--- ids alone. A spreadsheet has room, and is where the user sorts,
--- filters and sums. So a sheet gives what the answer in JSON gives: every
--- identifier the commands take, every amount, and the label of the
--- address apart from that of the transaction, each in a column of its
--- own. It gives no colours and no paddings, and cuts nothing. Each hash
--- comes in full, then by its short id, the first 8 digits, which the
--- screen shows ("Haskoin.Wallet.ShortId"): the short id finds a row of
--- the sheet on the screen, and the full hash finds it anywhere else.
+-- screen has 80 columns or so. A table there gives up what does not fit,
+-- such as the fee and the hashes in full. A spreadsheet has room, and it
+-- is where the user sorts, filters and sums. So a sheet gives every
+-- figure hw has of an element, each in a column of its own. It gives
+-- every identifier the commands take, every amount, the label of the
+-- address apart from that of the transaction, and the addresses of a
+-- transaction. It gives no colours and no paddings, and cuts nothing.
 --
--- Each cell has a kind ('Cell'): text, an amount in satoshis, a count, a
--- time. A CSV file holds text alone, so its writer decides how each kind
--- is written. A file with typed cells, such as an OpenDocument or an
--- Office Open XML spreadsheet, would keep each kind, and could be written
--- from the same sheets.
+-- Each hash comes in full, then by its short id, the first 8 digits,
+-- which the screen shows ("Haskoin.Wallet.ShortId"). The short id finds a
+-- row of the sheet on the screen. The full hash finds it anywhere else.
 --
--- The columns of a sheet are fixed, whatever the rows: a script, or a
+-- Each cell has a kind ('Cell'), such as text, an amount in satoshis, a
+-- count or a time. A CSV file holds text alone, so its writer decides
+-- how each kind is written. An OpenDocument spreadsheet keeps each kind.
+--
+-- = One format for both files
+--
+-- The sheet of a listing is the same in its CSV file and in its tab of
+-- the spreadsheet. Both have the same columns, in the same order, filled
+-- the same way. Rows copied from one paste under the headings of the
+-- other.
+--
+-- So the CSV file of a listing names the wallet and the portfolio on
+-- every row. The listing covers one portfolio, and every row says the
+-- same. The other choice was to leave them out of the CSV file, as hw
+-- did before. The columns of the two files were then two apart, and no
+-- row of one fitted the other.
+--
+-- = The order of the columns
+--
+-- The columns follow four rules. A user who knows one sheet then finds
+-- their way in the others.
+--
+-- 1. Every sheet starts with the account of the row. Its columns are
+--    Wallet, Portfolio, Network and Type. A row of several accounts names
+--    each type, as in "bip44, bip84". Such a row is a transaction between
+--    the two accounts of a portfolio, or a portfolio on a network where
+--    it has both.
+--
+-- 2. Then comes what the listing is about, the most telling first. The
+--    sheet of the coins goes on with the coin, in full and by its short
+--    id. The sheet of the transactions goes on with the txid.
+--
+-- 3. A heading means one thing. Two sheets give the columns they share
+--    in the same order. So the label of an address is Address label in
+--    every sheet, and that of a transaction is Transaction label. The
+--    screen calls Incoming, Outgoing and Internal the type of a
+--    transaction. A sheet keeps Type for the type of the account, and
+--    names that column Direction.
+--
+-- 4. The date the wallet created the element comes last, when it has
+--    one. A portfolio, an address and a pending transaction have one. The
+--    time of a transaction, or of the transaction that paid a coin, is
+--    not such a date. A history is sorted by it, so it comes right after
+--    the identifier.
+--
+-- The columns of a sheet are fixed, whatever the rows. A script, or a
 -- sheet that refers to the columns of another, finds each column where it
--- was. A value unknown, or one that does not apply, such as the block of
--- an unconfirmed transaction, leaves its cell empty.
+-- was. A value unknown, or one that does not apply, leaves its cell
+-- empty. The block of an unconfirmed transaction is one.
 --
--- A listing over a portfolio covers several networks, and for the
--- addresses both types. Its sheet has one row for each element, whatever
--- its network, with the network in a first column, and the type of an
--- address in a second: a sheet has no sections, and its user filters on a
--- column instead.
+-- = Times
 --
--- exportsheet writes the six listings to one spreadsheet, a tab each
--- ('walletSheets'), for every portfolio at once. The sheets of the
--- listings of one portfolio then get two first columns that name its
--- wallet and the portfolio, and the rows of each portfolio follow those
--- of the one before.
+-- Each time takes three columns ('timeColumns').
+--
+-- The first gives it in UTC. One zone for every row sorts them right
+-- across the changes of the clocks. It is also the time a block explorer
+-- shows.
+--
+-- The second gives it on the clock of the computer, as the screen of hw
+-- does.
+--
+-- The third says how far that clock was from UTC, as in UTC+01:00. The
+-- offset is that of the day of the time, not of the day of the export. A
+-- time of the summer is in summer time. Without this column, a local
+-- time would not say which of the two hours it means when the clocks go
+-- back.
+--
+-- The zone of each time comes from the computer, which is an action. The
+-- columns take it as a function instead ('ZoneAt'). They stay pure, and
+-- a test gives the zone it wants. 'localListingSheet' reads the zones of
+-- the computer.
+--
+-- = The addresses of a transaction
+--
+-- A transaction spends from any number of addresses and pays any number.
+-- A sheet has a fixed number of columns. So a transaction names four
+-- addresses, each with its path, its label and its value
+-- ('namedAddresses'). They are the two it spends the most from, the one
+-- it pays the most, and its change. It counts the others in one column.
+-- Four addresses tell most payments whole. Such a payment spends one or
+-- two coins, pays one address and takes its change.
+--
+-- = The spreadsheet of the wallet
+--
+-- exportsheet writes the six listings for every portfolio at once
+-- ('walletSheets'). The rows of each portfolio follow those of the one
+-- before in each tab.
 module Haskoin.Wallet.Cli.Sheet
   ( Cell (..),
     Sheet (..),
+    ZoneAt,
     listingSheet,
+    localListingSheet,
+    sheetTimes,
     PortfolioSheets (..),
     walletSheets,
-    withPortfolioColumns,
     stacked,
   )
 where
 
 import Control.Monad (mfilter)
-import Data.Maybe (isNothing)
+import Data.Bifunctor (bimap)
+import Data.Containers.ListUtils (nubOrd)
+import Data.List (sortOn)
+import qualified Data.Map.Strict as Map
+import Data.Maybe (isNothing, listToMaybe)
+import Data.Ord (Down (..))
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Data.Time (UTCTime)
+import Data.Time (LocalTime, TimeZone, UTCTime, getTimeZone, utc, utcToLocalTime)
+import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.Word (Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Cli.PrettyPrinter (HeldAddress (..), Payee (..), TxAddress (..), coinStateText, mainPayee, pendingStatusText, txTime, typeWord)
+import Haskoin.Wallet.Cli.PrettyPrinter (HeldAddress (..), TxAddress (..), coinStateText, paidTo, pendingStatusText, spentFrom, txTime, typeWord)
 import Haskoin.Wallet.Cli.Response (Group (..), Response (..))
 import Haskoin.Wallet.Database (DBAddress (..))
-import Haskoin.Wallet.Database.Account (NetworkView (..), PortfolioView (..))
+import Haskoin.Wallet.Database.Account (AccountKeys (..), NetworkView (..), PortfolioView (..))
 import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath, addrPoolPath, coinBalanceNotSpendableYet, pathText)
 import Haskoin.Wallet.Database.Coin (JsonCoin (..), coinText)
 import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..), portfolioName, walletName)
 import Haskoin.Wallet.Database.TxInfo
-import Haskoin.Wallet.Keys (PoolPath (..), kindName)
+import Haskoin.Wallet.Keys (AccountKind, PoolPath (..), kindName)
 import Haskoin.Wallet.ShortId (shortCoinText, shortHashText)
 import Numeric.Natural (Natural)
 
@@ -87,9 +163,12 @@ data Cell
   | -- | A whole number that counts something: confirmations, coins,
     -- addresses, a block height, satoshis per virtual byte
     CountCell !Natural
-  | -- | A time, in UTC: a spreadsheet has no time zones, and one zone for
-    -- every row sorts them right across the changes of the clocks
+  | -- | A time in UTC
     TimeCell !UTCTime
+  | -- | A time as a clock read it, in the zone the column beside it
+    -- names. A spreadsheet has no time zones, so the cell holds the
+    -- reading of the clock alone.
+    LocalTimeCell !LocalTime
   | -- | Nothing: a value hw does not know, or one that does not apply
     EmptyCell
   deriving (Eq, Show)
@@ -120,24 +199,49 @@ sheetOf columns elements =
 through :: (element -> part) -> [Column part] -> [Column element]
 through part columns = [Column heading (cell . part) | Column heading cell <- columns]
 
--- | The sheet of the answer of a listing: portfolios, addresses,
--- balances, coins, txs or pendingtxs. Nothing for any other answer, an
--- error included. The rows of the groups of an answer follow each other,
--- each with the network of its group.
-listingSheet :: Response -> Maybe Sheet
-listingSheet = \case
-  ResponsePortfolios portfolios -> Just (sheetOf portfolioColumns (concatMap portfolioRows portfolios))
-  ResponseAddresses groups -> Just (sheetOf addressColumns (concatMap onNetwork groups))
-  ResponseBalances groups -> Just (sheetOf balanceColumns (concatMap (onNetwork . fst) groups))
-  ResponseCoins groups -> Just (sheetOf coinColumns (concatMap onNetwork groups))
-  ResponseTxs groups -> Just (sheetOf txColumns (concatMap onNetwork groups))
-  -- A sheet names the wallet of every row, in a column of its own
-  ResponsePendingTxs _ held -> Just (sheetOf pendingColumns held)
+-- | The zone of the clock of the computer at a time. It is summer time
+-- or not, as it was on that day. The sheets take it as a function, so
+-- that they are made without asking the computer.
+type ZoneAt = UTCTime -> TimeZone
+
+-- | The sheet of the answer of a listing, which is one of portfolios,
+-- addresses, balances, coins, txs and pendingtxs. Nothing for any other
+-- answer, an error included. The rows of the groups of an answer follow
+-- each other, each with the portfolio and the network of its group. The
+-- function gives the zone each time is read in for its local columns.
+listingSheet :: ZoneAt -> Response -> Maybe Sheet
+listingSheet zoneAt = \case
+  ResponsePortfolios portfolios -> Just (sheetOf (portfolioColumns zoneAt) (concatMap portfolioRows portfolios))
+  ResponseAddresses groups -> Just (sheetOf (addressColumns zoneAt) (concatMap inPlace groups))
+  ResponseBalances groups -> Just (sheetOf (balanceColumns zoneAt) (concatMap (inPlace . fst) groups))
+  ResponseCoins groups -> Just (sheetOf (coinColumns zoneAt) (concatMap inPlace groups))
+  ResponseTxs groups -> Just (sheetOf (txColumns zoneAt) (concatMap inPlace groups))
+  ResponsePendingTxs _ held -> Just (sheetOf (pendingColumns zoneAt) held)
   _ -> Nothing
   where
-    -- The rows of a group, each with the network of the group
-    onNetwork :: Group row -> [(Network, row)]
-    onNetwork g = (placeNetwork (groupPlace g),) <$> groupRows g
+    -- The rows of a group, each with the portfolio and the network of
+    -- the group
+    inPlace :: Group row -> [(Place, row)]
+    inPlace g = (groupPlace g,) <$> groupRows g
+
+-- | The sheet of the answer of a listing, its local times on the clock of
+-- this computer ('listingSheet').
+--
+-- The zone of a time is read from the computer, and a sheet takes the
+-- zones as a function. So the sheet is made twice. The first one, all in
+-- UTC, tells which times the sheet holds. The second one has the zone of
+-- each. A zone changes no time in UTC, so the times of the first sheet
+-- are those of the second, and none is left without its zone.
+localListingSheet :: Response -> IO (Maybe Sheet)
+localListingSheet answer = case listingSheet (const utc) answer of
+  Nothing -> return Nothing
+  Just inUtc -> do
+    zones <- Map.fromList <$> mapM (\time -> (time,) <$> getTimeZone time) (nubOrd (sheetTimes inUtc))
+    return $ listingSheet (\time -> Map.findWithDefault utc time zones) answer
+
+-- | Every time a sheet gives in UTC, in the order of its rows
+sheetTimes :: Sheet -> [UTCTime]
+sheetTimes sheet = [time | TimeCell time <- concat (sheetRows sheet)]
 
 {- Cells -}
 
@@ -154,10 +258,6 @@ satoshiCell = SatoshiCell . toInteger
 -- | A count in a cell
 countCell :: (Integral a) => a -> Cell
 countCell = CountCell . fromIntegral
-
--- | A time in a cell, or an empty cell for a time hw does not know
-timeCell :: Maybe UTCTime -> Cell
-timeCell = maybe EmptyCell TimeCell
 
 -- | A derivation path in a cell, as hw writes it: /0/3
 pathCell :: SoftPath -> Cell
@@ -176,6 +276,11 @@ hashCell = TextCell . txHashToHex
 shortHashCell :: TxHash -> Cell
 shortHashCell = TextCell . cs . shortHashText
 
+-- | Hashes in one cell, each in full, apart by a comma and a space. An
+-- empty cell for none.
+hashesCell :: [TxHash] -> Cell
+hashesCell = textCell . Text.intercalate ", " . map txHashToHex
+
 -- | The height of the block of a transaction in a cell, or an empty cell
 -- for one in no block yet
 blockCell :: Store.BlockRef -> Cell
@@ -183,45 +288,11 @@ blockCell = \case
   Store.BlockRef height _ -> countCell height
   Store.MemRef _ -> EmptyCell
 
-{- Portfolios -}
+{- Columns that several sheets share -}
 
--- | The rows of a portfolio in the sheet of portfolios: one for each of
--- its networks
-portfolioRows :: PortfolioView -> [(PortfolioView, NetworkView)]
-portfolioRows portfolio = (portfolio,) <$> viewNetworks portfolio
-
--- | The columns of the portfolios, a row for each network of each: the
--- wallet, the portfolio, whether it is the active one, its description,
--- the network, what the portfolio can spend there now, the balances the
--- store gave, its coins and its addresses, and when the portfolio was
--- created. The column Active says yes or no, words that a filter of the
--- spreadsheet picks, rather than the * of the screen and an empty cell.
--- What the verbose
--- view gives, but the keys of the accounts and the fingerprint of the
--- mnemonic. A key in a spreadsheet would let anyone it reaches see every
--- address and every payment of the account. A fingerprint has 8
--- hexadecimal digits, and about one in 40 has no letter: a spreadsheet
--- would read it as a number, and drop its leading zeros, without a word.
--- The verbose view of portfolios gives both.
-portfolioColumns :: [Column (PortfolioView, NetworkView)]
-portfolioColumns =
-  [ Column "Wallet" $ \(portfolio, _) -> TextCell (walletName (refWallet (viewRef portfolio))),
-    Column "Portfolio" $ \(portfolio, _) -> TextCell (portfolioName (refPortfolio (viewRef portfolio))),
-    Column "Active" $ \(portfolio, _) -> TextCell (if viewActive portfolio then "yes" else "no"),
-    Column "Description" $ \(portfolio, _) -> textCell (viewDescription portfolio),
-    Column "Network" $ onNetwork (\net -> TextCell (cs (networkViewNetwork net).name)),
-    Column "Spendable (sats)" $ onNetwork (satoshiCell . networkViewSpendable),
-    Column "Confirmed (sats)" $ onNetwork (satoshiCell . networkViewConfirmed),
-    Column "Unconfirmed (sats)" $ onNetwork (satoshiCell . networkViewUnconfirmed),
-    Column "Coins" $ onNetwork (countCell . networkViewCoins),
-    Column "Addresses" $ onNetwork (countCell . networkViewAddresses),
-    Column "Created (UTC)" $ \(portfolio, _) -> TimeCell (viewCreated portfolio)
-  ]
-  where
-    onNetwork cell (_, net) = cell net
-
--- | The columns that say where a row of several portfolios is: its
--- wallet, its portfolio and its network
+-- | The first three columns of every sheet. They say where a row is, by
+-- its wallet, its portfolio and its network. The type of the account
+-- follows them ('typeColumn').
 placeColumns :: [Column Place]
 placeColumns =
   [ Column "Wallet" (TextCell . walletName . refWallet . placePortfolio),
@@ -229,166 +300,286 @@ placeColumns =
     Column "Network" (\place -> TextCell (cs (placeNetwork place).name))
   ]
 
--- | The column of the network of a row of a listing over a portfolio
-networkColumn :: Column (Network, row)
-networkColumn = Column "Network" $ \(net, _) -> TextCell (cs net.name)
+-- | The fourth column of every sheet. It gives the type of the account
+-- of a row, bip44 or bip84. A row of several accounts names each type,
+-- apart by a comma and a space. The cell is empty for a row that has
+-- none.
+typeColumn :: (element -> [AccountKind]) -> Column element
+typeColumn kinds = Column "Type" (textCell . Text.intercalate ", " . map kindName . kinds)
+
+-- | The column of the chain of an address. It says receiving for an
+-- address the user hands out, and change for one the wallet pays its
+-- change to. The path tells it too, by its first number. A word is what
+-- a filter of the spreadsheet picks.
+chainColumn :: (element -> Bool) -> Column element
+chainColumn isChange = Column "Chain" $ \element -> TextCell (if isChange element then "change" else "receiving")
+
+-- | The three columns of a time, under the name given. They give the
+-- time in UTC, then on the clock of the computer, then how far that clock
+-- was from UTC then ('offsetText'). All three are empty for a time hw
+-- does not know.
+timeColumns :: ZoneAt -> Text -> (element -> Maybe UTCTime) -> [Column element]
+timeColumns zoneAt name timeOf =
+  [ Column (name <> " (UTC)") (maybe EmptyCell TimeCell . timeOf),
+    Column (name <> " (local)") (maybe EmptyCell (\time -> LocalTimeCell (utcToLocalTime (zoneAt time) time)) . timeOf),
+    Column (name <> " (offset)") (maybe EmptyCell (TextCell . offsetText . zoneAt) . timeOf)
+  ]
+
+-- | How far the clock of a zone is from UTC, as UTC+01:00 or UTC-03:30.
+-- The letters come first for the sake of the spreadsheet. It would read
+-- +01:00 alone as a time of day, or as a formula.
+offsetText :: TimeZone -> Text
+offsetText zone = "UTC" <> Text.pack (formatTime defaultTimeLocale "%Ez" zone)
+
+{- Portfolios -}
+
+-- | The rows of a portfolio in the sheet of portfolios, one for each of
+-- its networks
+portfolioRows :: PortfolioView -> [(PortfolioView, NetworkView)]
+portfolioRows portfolio = (portfolio,) <$> viewNetworks portfolio
+
+-- | The columns of the portfolios, a row for each network of each. They
+-- give where the portfolio is and the types of its accounts there,
+-- whether it is the active one, its description and that of its wallet,
+-- the paths of its accounts, what it can spend there now, the balances
+-- the store gave, its coins and its addresses, and when it was created.
+--
+-- The column Active says yes or no. A filter of the spreadsheet picks
+-- those words. It could not pick the * of the screen and an empty cell.
+--
+-- The sheet gives what the verbose view gives, but the keys of the
+-- accounts and the fingerprint of the mnemonic. A key in a spreadsheet
+-- would let anyone it reaches see every address and every payment of the
+-- account. A fingerprint has 8 hexadecimal digits, and about one in 40
+-- has no letter. A spreadsheet would read such a one as a number, and
+-- drop its leading zeros, without a word. The verbose view of portfolios
+-- gives both.
+portfolioColumns :: ZoneAt -> [Column (PortfolioView, NetworkView)]
+portfolioColumns zoneAt =
+  through placeOf placeColumns
+    <> [ typeColumn (map keysKind . networkViewAccounts . snd),
+         Column "Active" $ \(portfolio, _) -> TextCell (if viewActive portfolio then "yes" else "no"),
+         Column "Description" $ \(portfolio, _) -> textCell (viewDescription portfolio),
+         Column "Wallet description" $ \(portfolio, _) -> textCell (viewWalletDescription portfolio),
+         Column "Account paths" $ onNetwork (textCell . Text.intercalate ", " . map (cs . pathToStr . keysPath) . networkViewAccounts),
+         Column "Spendable (sats)" $ onNetwork (satoshiCell . networkViewSpendable),
+         Column "Confirmed (sats)" $ onNetwork (satoshiCell . networkViewConfirmed),
+         Column "Unconfirmed (sats)" $ onNetwork (satoshiCell . networkViewUnconfirmed),
+         Column "Coins" $ onNetwork (countCell . networkViewCoins),
+         Column "Addresses" $ onNetwork (countCell . networkViewAddresses)
+       ]
+    <> timeColumns zoneAt "Created" (Just . viewCreated . fst)
+  where
+    placeOf (portfolio, net) = Place (viewRef portfolio) (networkViewNetwork net)
+    onNetwork cell (_, net) = cell net
 
 {- Addresses and balances -}
 
--- | The columns that name an address of the portfolio: its network, the
--- type of its account, its path there, the address and its label.
--- addresses and balances start with them. The path alone does not name
--- an address: each account of the portfolio has one at /0/3.
-addressNameColumns :: [Column (Network, DBAddress)]
+-- | The columns that name an address of a portfolio. They give where it
+-- is, the type of its account, the address, its path there, its chain
+-- and its label. addresses and balances start with them. The address
+-- comes before its path. It is what another wallet or a block explorer
+-- shows, and what every other sheet names it by. The path alone does not
+-- name an address, since each account of the portfolio has one at
+-- \/0\/3.
+addressNameColumns :: [Column (Place, DBAddress)]
 addressNameColumns =
-  [ Column "Network" $ \(net, _) -> TextCell (cs net.name),
-    Column "Type" $ \(net, addr) -> maybe EmptyCell (TextCell . kindName . pathKind) (addrPoolPath net addr),
-    Column "Path" (pathCell . addrPath . snd),
-    Column "Address" (TextCell . dBAddressAddress . snd),
-    Column "Label" (textCell . dBAddressLabel . snd)
-  ]
+  through fst placeColumns
+    <> [ typeColumn (\(place, addr) -> maybe [] (pure . pathKind) (addrPoolPath (placeNetwork place) addr)),
+         Column "Address" (TextCell . dBAddressAddress . snd),
+         Column "Path" (pathCell . addrPath . snd),
+         chainColumn (dBAddressInternal . snd),
+         Column "Address label" (textCell . dBAddressLabel . snd)
+       ]
 
--- | The columns of the addresses, each with what it can spend now: what
--- the verbose view gives
-addressColumns :: [Column (Network, (DBAddress, Word64))]
-addressColumns =
+-- | The columns of what the store counts at an address. addresses and
+-- balances end with them. They give its confirmed and unconfirmed
+-- balances, all it ever received, its coins and its transactions. Then
+-- come the columns of when the wallet created the address.
+addressStoreColumns :: ZoneAt -> [Column DBAddress]
+addressStoreColumns zoneAt =
+  [ Column "Confirmed (sats)" (satoshiCell . dBAddressBalanceConfirmed),
+    Column "Unconfirmed (sats)" (satoshiCell . dBAddressBalanceUnconfirmed),
+    Column "Received (sats)" (satoshiCell . dBAddressBalanceReceived),
+    Column "Coins" (countCell . dBAddressBalanceCoins),
+    Column "Transactions" (countCell . dBAddressBalanceTxs)
+  ]
+    <> timeColumns zoneAt "Created" (Just . dBAddressCreated)
+
+-- | The columns of the addresses, each with what it can spend now. They
+-- give what the verbose view gives.
+addressColumns :: ZoneAt -> [Column (Place, (DBAddress, Word64))]
+addressColumns zoneAt =
   through (fmap fst) addressNameColumns
-    <> through
-      snd
-      [ Column "Spendable (sats)" $ \(_, spendable) -> satoshiCell spendable,
-        Column "Confirmed (sats)" $ \(addr, _) -> satoshiCell (dBAddressBalanceConfirmed addr),
-        Column "Unconfirmed (sats)" $ \(addr, _) -> satoshiCell (dBAddressBalanceUnconfirmed addr),
-        Column "Received (sats)" $ \(addr, _) -> satoshiCell (dBAddressBalanceReceived addr),
-        Column "Coins" $ \(addr, _) -> countCell (dBAddressBalanceCoins addr),
-        Column "Transactions" $ \(addr, _) -> countCell (dBAddressBalanceTxs addr),
-        Column "Created (UTC)" $ \(addr, _) -> TimeCell (dBAddressCreated addr)
-      ]
+    <> [Column "Spendable (sats)" $ \(_, (_, spendable)) -> satoshiCell spendable]
+    <> through (fst . snd) (addressStoreColumns zoneAt)
 
 -- | The columns of the addresses that hold coins, each with the balance
--- of its coins: what the verbose view gives, the value the wallet cannot
--- spend in its three parts
-balanceColumns :: [Column (Network, (DBAddress, CoinBalance))]
-balanceColumns =
+-- of its coins. They give what the verbose view gives, with the value
+-- the wallet cannot spend in its three parts. Then come the columns of
+-- the store that the sheet of the addresses has too. The two sheets
+-- split the same coins two ways. This one splits them by what the wallet
+-- can spend, and that one by what is confirmed.
+balanceColumns :: ZoneAt -> [Column (Place, (DBAddress, CoinBalance))]
+balanceColumns zoneAt =
   through (fmap fst) addressNameColumns
     <> through
-      snd
-      [ Column "Total (sats)" $ \(_, balance) -> satoshiCell (coinBalanceTotal balance),
-        Column "Spendable (sats)" $ \(_, balance) -> satoshiCell (coinBalanceSpendable balance),
-        Column "Locked by tx (sats)" $ \(_, balance) -> satoshiCell (coinBalanceLockedByTx balance),
-        Column "Locked by you (sats)" $ \(_, balance) -> satoshiCell (coinBalanceLockedByUser balance),
-        Column "Not spendable yet (sats)" $ \(_, balance) -> satoshiCell (coinBalanceNotSpendableYet balance),
-        Column "Coins" $ \(addr, _) -> countCell (dBAddressBalanceCoins addr)
+      (snd . snd)
+      [ Column "Total (sats)" (satoshiCell . coinBalanceTotal),
+        Column "Spendable (sats)" (satoshiCell . coinBalanceSpendable),
+        Column "Locked by tx (sats)" (satoshiCell . coinBalanceLockedByTx),
+        Column "Locked by you (sats)" (satoshiCell . coinBalanceLockedByUser),
+        Column "Not spendable yet (sats)" (satoshiCell . coinBalanceNotSpendableYet)
       ]
+    <> through (fst . snd) (addressStoreColumns zoneAt)
 
 {- Coins -}
 
--- | The columns of the coins: the network, the coin, in full and by its
--- short id, as lockcoin and --coin take it, the time of the transaction
--- that paid it, its value, its state and its confirmations, the address
--- that holds it, with the type of its account and its path there, and
--- both labels
-coinColumns :: [Column (Network, JsonCoin)]
-coinColumns =
-  networkColumn
-    : through
-      snd
-      [ Column "Coin" (TextCell . cs . coinText . jsonCoinOutpoint),
-        Column "Short coin" (TextCell . cs . shortCoinText . jsonCoinOutpoint),
-        Column "Time (UTC)" (timeCell . jsonCoinTime),
-        Column "Value (sats)" (satoshiCell . jsonCoinValue),
-        Column "State" (TextCell . cs . coinStateText "locked by a pending transaction"),
-        Column "Confirmations" (countCell . jsonCoinConfirmations),
-        Column "Block" (blockCell . jsonCoinBlock)
-      ]
-    <> [Column "Address" (\(net, coin) -> addressCell net (jsonCoinAddress coin))]
+-- | The columns of the coins. They give where the coin is and the type
+-- of its account. Then the coin, in full and by its short id, as
+-- lockcoin and --coin take it. Then the transaction that paid it, in
+-- full and by its short id, and the index of its output there. Then the
+-- time of that transaction, the value of the coin, its state, its
+-- confirmations and its block. Then the address that holds it, with its
+-- path, its chain and its label, and the label of the transaction.
+--
+-- The txid is in the name of the coin already. It has columns of its own
+-- so that a coin is matched with its row in the sheet of the
+-- transactions. That sheet names each transaction by its txid.
+coinColumns :: ZoneAt -> [Column (Place, JsonCoin)]
+coinColumns zoneAt =
+  through fst placeColumns
     <> through
       snd
-      [ Column "Type" (maybe EmptyCell (TextCell . kindName . pathKind) . jsonCoinPath),
-        Column "Path" (maybe EmptyCell (pathCell . pathInAccount) . jsonCoinPath),
+      ( [ typeColumn (maybe [] (pure . pathKind) . jsonCoinPath),
+          Column "Coin" (TextCell . cs . coinText . jsonCoinOutpoint),
+          Column "Short coin" (TextCell . cs . shortCoinText . jsonCoinOutpoint),
+          Column "Txid" (\coin -> hashCell (jsonCoinOutpoint coin).hash),
+          Column "Short txid" (\coin -> shortHashCell (jsonCoinOutpoint coin).hash),
+          Column "Output index" (\coin -> countCell (jsonCoinOutpoint coin).index)
+        ]
+          <> timeColumns zoneAt "Time" jsonCoinTime
+          <> [ Column "Value (sats)" (satoshiCell . jsonCoinValue),
+               Column "State" (TextCell . cs . coinStateText "locked by a pending transaction"),
+               Column "Confirmations" (countCell . jsonCoinConfirmations),
+               Column "Block" (blockCell . jsonCoinBlock)
+             ]
+      )
+    <> [Column "Address" (\(place, coin) -> addressCell (placeNetwork place) (jsonCoinAddress coin))]
+    <> through
+      snd
+      [ Column "Path" (maybe EmptyCell (pathCell . pathInAccount) . jsonCoinPath),
+        chainColumn jsonCoinChange,
         Column "Address label" (textCell . jsonCoinAddressLabel),
         Column "Transaction label" (textCell . jsonCoinTxLabel)
       ]
 
 {- Transactions -}
 
+-- The sheets of txs and of pendingtxs are made of the same columns, in
+-- the same order. Each adds its own between them. txs adds the time of
+-- the transaction, the balance after it and where it stands on the
+-- chain. pendingtxs adds the nosigHash, what the transaction replaces
+-- and when the wallet started holding it.
+
 -- | The columns of the transactions of the portfolio, each with the
--- balance after it on its network: the network, when, what it adds or
--- takes, where it stands, its txid in full and by its short id, and what
--- it is for
-txColumns :: [Column (Network, ListedTx)]
-txColumns =
-  [networkColumn, Column "Time (UTC)" (timeCell . txTime . listedTxInfo . snd)]
+-- balance after it on its network. They give where the transaction is
+-- and the types of the accounts it involves, its txid in full and by its
+-- short id, its time, its direction, what it adds or takes, its fee, the
+-- balance, where it stands, what replaced it, its label, its addresses
+-- and its lock time.
+txColumns :: ZoneAt -> [Column (Place, ListedTx)]
+txColumns zoneAt =
+  through held (txAccountColumns <> txidColumns)
+    <> timeColumns zoneAt "Time" (txTime . listedTxInfo . snd)
     <> through held amountColumns
     <> [Column "Balance (sats)" (maybe EmptyCell SatoshiCell . listedTxBalance . snd)]
     <> through
       held
       ( [ statusColumn,
-          Column "Confirmations" $ \(_, info) -> case txInfoStatus info of
-            OnChain status -> countCell (chainConfirmations status)
-            Pending _ -> EmptyCell,
-          Column "Block" $ \(_, info) -> case txInfoStatus info of
-            OnChain status -> blockCell (chainBlock status)
-            Pending _ -> EmptyCell
+          Column "Confirmations" $ onChain (countCell . chainConfirmations),
+          Column "Block" $ onChain (blockCell . chainBlock),
+          Column "Replaced by" $ onChain (hashesCell . chainReplacedBy),
+          txLabelColumn
         ]
-          <> txidColumns
-          <> purposeColumns
+          <> txAddressColumns
+          <> [lockTimeColumn]
       )
   where
     held = fmap listedTxInfo
+    -- A cell of what the chain says of a transaction. txs lists no
+    -- transaction in preparation, whose cell would be empty.
+    onChain cell (_, info) = case txInfoStatus info of
+      OnChain status -> cell status
+      Pending _ -> EmptyCell
 
--- | The columns of the pending transactions, each with where it is: its
--- wallet, its portfolio and its network, when the wallet started holding
--- it, what it adds or takes, how far it got, both its hashes, each in
--- full and by its short id, and what it is for
-pendingColumns :: [Column (Place, TxInfo)]
-pendingColumns =
-  through fst placeColumns
-    <> [Column "Created (UTC)" $ \(_, info) -> timeCell (txTime info)]
-    <> through
-      held
-      ( amountColumns
-          <> [ statusColumn,
-               Column "Nosighash" $ \(_, info) -> maybe EmptyCell hashCell (nosigHashOf info),
-               Column "Short nosighash" $ \(_, info) -> maybe EmptyCell shortHashCell (nosigHashOf info)
-             ]
-          <> txidColumns
-          <> purposeColumns
-      )
+-- | The columns of the pending transactions. They give where the
+-- transaction is and the types of the accounts it involves, both its
+-- hashes, each in full and by its short id, its direction, what it adds
+-- or takes, its fee, how far it got, what it replaces, its label, its
+-- addresses, its lock time, and when the wallet started holding it. The
+-- nosigHash comes first. It names the transaction before and after it is
+-- signed, and the txid is empty until then.
+pendingColumns :: ZoneAt -> [Column (Place, TxInfo)]
+pendingColumns zoneAt =
+  txAccountColumns
+    <> [ Column "Nosighash" $ inPreparation (hashCell . pendingNosigHash),
+         Column "Short nosighash" $ inPreparation (shortHashCell . pendingNosigHash)
+       ]
+    <> txidColumns
+    <> amountColumns
+    <> [ Column "Change in fee (sats)" $ \(_, info) -> maybe EmptyCell satoshiCell (summaryChangeInFee (txInfoSummary info)),
+         statusColumn,
+         Column "Replaces" $ inPreparation (hashesCell . pendingReplaces),
+         txLabelColumn
+       ]
+    <> txAddressColumns
+    <> [lockTimeColumn]
+    <> timeColumns zoneAt "Created" (txTime . snd)
   where
-    held (place, info) = (placeNetwork place, info)
-    nosigHashOf info = case txInfoStatus info of
-      Pending status -> Just (pendingNosigHash status)
-      OnChain _ -> Nothing
+    -- A cell of what the wallet keeps of a transaction in preparation.
+    -- pendingtxs lists no other.
+    inPreparation cell (_, info) = case txInfoStatus info of
+      Pending status -> cell status
+      OnChain _ -> EmptyCell
 
--- | The columns of what a transaction adds to the portfolio or takes
--- from it: its type, the types of the addresses of the portfolio it
--- involves, its amount, fee included, its fee and its fee rate. The fee
--- of a payment received is the fee its payer paid.
-amountColumns :: [Column (Network, TxInfo)]
-amountColumns =
-  [ Column "Type" $ \(_, info) -> TextCell (cs (typeWord (summaryType (txInfoSummary info)))),
-    Column "Address types" $ \(_, info) -> textCell (Text.intercalate ", " (kindName <$> summaryKinds (txInfoSummary info))),
-    Column "Amount (sats)" $ \(_, info) -> SatoshiCell (summaryAmount (txInfoSummary info)),
-    Column "Fee (sats)" $ \(_, info) -> satoshiCell (summaryFee (txInfoSummary info)),
-    Column "Fee rate (sat/vB)" $ \(_, info) -> countCell (summaryFeeByte (txInfoSummary info))
-  ]
-
--- | The column of where a transaction stands ('statusText')
-statusColumn :: Column (Network, TxInfo)
-statusColumn = Column "Status" $ \(_, info) -> TextCell (statusText (txInfoStatus info))
+-- | The first four columns of a sheet of transactions. They give where
+-- the transaction is, and the types of the accounts of the portfolio it
+-- involves, those it spends from and those it pays.
+txAccountColumns :: [Column (Place, TxInfo)]
+txAccountColumns = through fst placeColumns <> [typeColumn (summaryKinds . txInfoSummary . snd)]
 
 -- | The columns of the txid of a transaction, in full then by its short
 -- id, both empty for one in preparation not signed yet
-txidColumns :: [Column (Network, TxInfo)]
+txidColumns :: [Column (Place, TxInfo)]
 txidColumns =
   [ Column "Txid" $ \(_, info) -> maybe EmptyCell hashCell (txInfoHash info),
     Column "Short txid" $ \(_, info) -> maybe EmptyCell shortHashCell (txInfoHash info)
   ]
 
+-- | The columns of what a transaction adds to the portfolio or takes
+-- from it. They give its direction, its amount, fee included, its fee,
+-- its fee rate and its size. The rate is counted on that size. The fee
+-- of a payment received is the fee its payer paid.
+amountColumns :: [Column (Place, TxInfo)]
+amountColumns =
+  through
+    (txInfoSummary . snd)
+    [ Column "Direction" (TextCell . cs . typeWord . summaryType),
+      Column "Amount (sats)" (SatoshiCell . summaryAmount),
+      Column "Fee (sats)" (satoshiCell . summaryFee),
+      Column "Fee rate (sat/vB)" (countCell . summaryFeeByte),
+      Column "Size (vB)" (countCell . summarySize)
+    ]
+
+-- | The column of where a transaction stands ('statusText')
+statusColumn :: Column (Place, TxInfo)
+statusColumn = Column "Status" $ \(_, info) -> TextCell (statusText (txInfoStatus info))
+
 -- | Where a transaction stands, in words. One on the chain is confirmed,
--- unconfirmed, or dead: replaced or dropped, never to confirm. One in
--- preparation is as far as it got: not signed, signed, sent or
--- conflicted ('pendingStatusText').
+-- unconfirmed, or dead. A dead one was replaced or dropped, and never
+-- confirms. One in preparation is as far as it got, which is one of not
+-- signed, signed, sent and conflicted ('pendingStatusText').
 statusText :: TxStatus -> Text
 statusText = \case
   OnChain status
@@ -397,26 +588,100 @@ statusText = \case
     | otherwise -> "confirmed"
   Pending status -> cs (pendingStatusText status)
 
--- | The columns of what a transaction is for: its label, then the
--- address it pays the most ('mainPayee'), in full. An address of the
--- portfolio comes with its path and its label. An address of another
--- portfolio comes without them: the sheet has no column for the portfolio
--- of a path, and a path alone would read as one of the portfolio of the
--- sheet. The views say what is left as "and 2 more": a count of the other
--- addresses paid.
-purposeColumns :: [Column (Network, TxInfo)]
-purposeColumns =
-  [ Column "Label" $ \(_, info) -> textCell (txInfoLabel info),
-    Column "Address" $ \(net, info) -> maybe EmptyCell (addressCell net . txAddress . payeeRow) (payeeOf info),
-    Column "Path" $ \(_, info) -> maybe EmptyCell (pathCell . pathInAccount . heldPath) (ownPayee info),
-    Column "Address label" $ \(_, info) -> maybe EmptyCell (textCell . heldLabel) (ownPayee info),
-    Column "Other addresses" $ \(_, info) -> countCell (maybe 0 payeeOthers (payeeOf info))
-  ]
+-- | The column of the label of a transaction
+txLabelColumn :: Column (Place, TxInfo)
+txLabelColumn = Column "Transaction label" $ \(_, info) -> textCell (txInfoLabel info)
+
+-- | The column of the lock time of a transaction, as the transaction
+-- holds it. It is the block the transaction waits for, or a Unix time
+-- from 500,000,000 up. The cell is empty for a transaction that has
+-- none. The lock time says the least of a transaction, so it comes after
+-- its addresses.
+lockTimeColumn :: Column (Place, TxInfo)
+lockTimeColumn = Column "Lock time" $ \(_, info) -> case summaryLockTime (txInfoSummary info) of
+  0 -> EmptyCell
+  lockTime -> countCell lockTime
+
+{- The addresses of a transaction -}
+
+-- | The addresses of a transaction that its sheet names, each in columns
+-- of its own, and how many it leaves out
+data NamedAddresses = NamedAddresses
+  { -- | The address it spends the most from
+    firstFrom :: !(Maybe TxAddress),
+    -- | The address it spends the most from after that one
+    secondFrom :: !(Maybe TxAddress),
+    -- | The address it pays the most
+    mainTo :: !(Maybe TxAddress),
+    -- | The address it sends the most change to
+    mainChange :: !(Maybe TxAddress),
+    -- | How many other addresses it spends from, pays, or sends change to
+    otherAddresses :: !Int
+  }
+
+-- | The addresses a sheet names of a transaction. The transaction spends
+-- from addresses, pays addresses and sends change, as its verbose view
+-- lists them under From, To and Change ('spentFrom', 'paidTo'). The sheet
+-- names the two it spends the most from, the one it pays the most and the
+-- one it sends the most change to. An address whose value hw does not
+-- know, one another wallet spends from, comes after those it knows.
+--
+-- What tells change from a payment is the direction of the transaction,
+-- as in the verbose view. A payment the portfolio makes sends its change
+-- back to the portfolio. A payment it receives has none here, since the
+-- change of the payer is nothing to the portfolio. A transaction between
+-- the addresses of the portfolio has none either, since no output of it
+-- can be told to be the change.
+namedAddresses :: TxInfo -> NamedAddresses
+namedAddresses info =
+  NamedAddresses
+    { firstFrom = listToMaybe from,
+      secondFrom = listToMaybe (drop 1 from),
+      mainTo = listToMaybe to,
+      mainChange = listToMaybe change,
+      otherAddresses = length (drop 2 from) + length (drop 1 to) + length (drop 1 change)
+    }
   where
-    payeeOf = mainPayee
-    -- The path and the label of the address paid, when it is of the
-    -- portfolio of the transaction
-    ownPayee info = mfilter (isNothing . heldIn) (txAddressHeld . payeeRow =<< payeeOf info)
+    from = largestFirst (spentFrom info)
+    (to, change) = bimap largestFirst largestFirst (paidTo info)
+    -- The sort keeps the order of addresses of the same value, so that
+    -- the same transaction always names the same ones
+    largestFirst = sortOn (Down . txAddressValue)
+
+-- | The columns of the addresses of a transaction. They give the two it
+-- spends the most from, the one it pays the most, its change, and the
+-- count of the addresses those leave out ('namedAddresses').
+txAddressColumns :: [Column (Place, TxInfo)]
+txAddressColumns =
+  namedAddressColumns "From 1" True firstFrom
+    <> namedAddressColumns "From 2" True secondFrom
+    <> namedAddressColumns "To" True mainTo
+    -- A change address has no label
+    <> namedAddressColumns "Change" False mainChange
+    <> [Column "Other addresses" $ \(_, info) -> countCell (otherAddresses (namedAddresses info))]
+
+-- | The columns of one address a transaction names, under the name
+-- given, in the order of the sheet of the addresses. They give the
+-- address in full, its path, its label when the flag asks for it, and
+-- what the transaction spends from it or pays it.
+--
+-- An address of the portfolio comes with its path and its label. An
+-- address of another portfolio comes without them. The sheet has no
+-- column for the portfolio of a path, and a path alone would read as one
+-- of the portfolio of the row. The value is empty for an address another
+-- wallet spends from, since its coins are nothing to this one.
+namedAddressColumns :: Text -> Bool -> (NamedAddresses -> Maybe TxAddress) -> [Column (Place, TxInfo)]
+namedAddressColumns name labelled named =
+  [ Column (name <> " address") $ \(place, info) -> maybe EmptyCell (addressCell (placeNetwork place) . txAddress) (namedOf info),
+    Column (name <> " path") $ \(_, info) -> maybe EmptyCell (pathCell . pathInAccount . heldPath) (ownOf info)
+  ]
+    <> [Column (name <> " label") $ \(_, info) -> maybe EmptyCell (textCell . heldLabel) (ownOf info) | labelled]
+    <> [Column (name <> " value (sats)") $ \(_, info) -> maybe EmptyCell satoshiCell (txAddressValue =<< namedOf info)]
+  where
+    namedOf = named . namedAddresses
+    -- Where the address is, when it is of the portfolio of the
+    -- transaction
+    ownOf info = mfilter (isNothing . heldIn) (txAddressHeld =<< namedOf info)
 
 {- The spreadsheet of the wallet -}
 
@@ -432,16 +697,17 @@ data PortfolioSheets = PortfolioSheets
   deriving (Eq, Show)
 
 -- | The sheets of the spreadsheet of exportsheet, each with the name of
--- its tab, in the order of the help: the portfolios, the addresses, the
--- balances, the coins and the transactions of each portfolio given, and
--- the pending transactions. A sheet of one portfolio gets two first
--- columns that name its wallet and the portfolio
--- ('withPortfolioColumns'), as the portfolios and the pending
--- transactions name theirs, and the rows of the portfolios follow each
--- other ('stacked'). One sheet for all of them, rather than a tab for
--- each portfolio, sorts and sums across the wallet. Amounts of Bitcoin
--- and of Bitcoin Cash then share a column: the network tells them apart.
-walletSheets :: Sheet -> [(PortfolioRef, PortfolioSheets)] -> Sheet -> [(Text, Sheet)]
+-- its tab, in the order of the help. They are the portfolios, then the
+-- addresses, the balances, the coins and the transactions of each
+-- portfolio given, then the pending transactions. Each tab is the sheet
+-- of its listing as --csv writes it, and the rows of the portfolios
+-- follow each other ('stacked').
+--
+-- One sheet holds all the portfolios, rather than a tab for each. It
+-- sorts and sums across the wallet, since every row names its wallet and
+-- its portfolio. Amounts of Bitcoin and of Bitcoin Cash then share a
+-- column, and the network tells them apart.
+walletSheets :: Sheet -> [PortfolioSheets] -> Sheet -> [(Text, Sheet)]
 walletSheets portfolios held pending =
   [ ("Portfolios", portfolios),
     ("Addresses", ofEach addressesSheet),
@@ -451,16 +717,7 @@ walletSheets portfolios held pending =
     ("Pending transactions", pending)
   ]
   where
-    ofEach part = stacked [withPortfolioColumns ref (part sheets) | (ref, sheets) <- held]
-
--- | A sheet with two first columns, Wallet and Portfolio, that name the
--- portfolio given on every row
-withPortfolioColumns :: PortfolioRef -> Sheet -> Sheet
-withPortfolioColumns ref sheet =
-  Sheet
-    { sheetHeadings = "Wallet" : "Portfolio" : sheetHeadings sheet,
-      sheetRows = ([TextCell (walletName (refWallet ref)), TextCell (portfolioName (refPortfolio ref))] <>) <$> sheetRows sheet
-    }
+    ofEach part = stacked (part <$> held)
 
 -- | Sheets of the same columns as one: the headings of the first, then
 -- the rows of each, one sheet after the other. None makes a sheet of no
