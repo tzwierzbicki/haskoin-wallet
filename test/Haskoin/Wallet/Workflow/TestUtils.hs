@@ -146,7 +146,7 @@ import Haskoin.Wallet.Cli.Response (Group (..), Response (..), groupAccountRef)
 import Haskoin.Wallet.Database (DBAddress (..))
 import Haskoin.Wallet.Database.Account (AccountKeys (..), NetworkView (..), PortfolioView (..))
 import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..), LeftCoin (..), LeftReason (..))
-import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), PortfolioRef (..))
+import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), PortfolioRef (..), accountRefNetwork)
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (AccountKind (..), MnemonicPass (..), PoolPath, foreignKindName)
@@ -618,6 +618,7 @@ coinLabelsShown response = fmap (\c -> (c.jsonCoinOutpoint, c.jsonCoinTxLabel)) 
 -- | The coins of an answer, each with the network of its section
 coinNetworksOf :: Response -> Either String [(String, OutPoint)]
 coinNetworksOf (ResponseCoins groups) = Right [((placeNetwork (groupPlace g)).name, c.jsonCoinOutpoint) | g <- groups, c <- groupRows g]
+coinNetworksOf (ResponseCoin ref c _) = Right [((accountRefNetwork ref).name, c.jsonCoinOutpoint)]
 coinNetworksOf other = Left (show other)
 
 -- | The coins of an answer, each with the path of its address in the
@@ -628,6 +629,7 @@ coinPathsOf response = fmap (\c -> (c.jsonCoinOutpoint, c.jsonCoinPath)) <$> coi
 -- | The rows of an answer of coins, every section together
 coinRowsOf :: Response -> Either String [JsonCoin]
 coinRowsOf (ResponseCoins groups) = Right (concatMap groupRows groups)
+coinRowsOf (ResponseCoin _ coin _) = Right [coin]
 coinRowsOf other = Left (show other)
 
 -- | The coins preparetx or preparesendall leaves in the portfolio, as its

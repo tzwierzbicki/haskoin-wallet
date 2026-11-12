@@ -982,6 +982,15 @@ verboseCoinDoc net unit time coin =
               <> [field 8 "Address" <> coinAddressDoc net coin]
         )
 
+-- | A coin as an answer shows it: with every detail, as coins --verbose
+-- does, then the account that holds it, as the answer of an address ends.
+-- The account says when it is not of the active portfolio given
+-- ('seenPortfolioDoc'). The time is in the time zone of the computer.
+coinAnswerDoc :: AmountUnit -> Maybe PortfolioRef -> AccountRef -> JsonCoin -> IO (Doc Style)
+coinAnswerDoc unit activeM ref coin = do
+  time <- traverse utcToLocalZonedTime (jsonCoinTime coin)
+  return $ vcat [verboseCoinDoc (accountRefNetwork ref) unit time coin, indent 2 (accountRefField 8 activeM ref)]
+
 {- Transactions -}
 
 -- A transaction shows in one of three views. The compact and the verbose
@@ -2316,6 +2325,7 @@ responsePrinter unit view code shown answer =
     ResponseAddress ref addr spendable activeM ->
       renderIO =<< addressAnswerDoc code unit activeM ref addr spendable
     ResponseDerivedAddr ref path addr -> renderIO $ derivedAddrDoc ref path addr
+    ResponseCoin ref coin activeM -> renderIO =<< coinAnswerDoc unit activeM ref coin
     ResponseTx place txInfo activeM ->
       renderIO =<< txAnswerDoc (placeNetwork place) (Just (SeenFrom (placePortfolio place) activeM)) unit txInfo
     -- Each portfolio's view of the transaction, a blank line between them

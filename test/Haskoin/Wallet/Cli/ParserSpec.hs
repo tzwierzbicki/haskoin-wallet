@@ -32,7 +32,7 @@ import Haskoin.Wallet.Cli.Parser
     wrapsLines,
   )
 import Haskoin.Wallet.Cli.Parser.Args (Args (..), CommandGroup (..), CommandSpec (..), Name (..), OptDoc (..), Program (..))
-import Haskoin.Wallet.Cli.Parser.Completion (completionParts)
+import Haskoin.Wallet.Cli.Parser.Completion (completionParts, keptByBash)
 import Haskoin.Wallet.Cli.Parser.Help (mentionedCommands, usageParts)
 import Haskoin.Wallet.Cli.Parser.Run (Request (..), commandNamed, requestOf)
 import Haskoin.Wallet.Cli.Style (renderPlain)
@@ -490,6 +490,41 @@ spec = do
     it "complete an empty value for an = under the cursor, after which bash inserts the value" $
       completionParts (wordsTyped 3 ["hw", "txs", "--network", "="])
         `shouldBe` (Just 3, ["hw", "txs", "--network", ""], [])
+
+    -- bash breaks a1075db5:1 at the colon typed, into three words
+    it "are joined where bash broke a word at a colon, the index moved along" $
+      completionParts (wordsTyped 4 ["hw", "lockcoin", "a1075db5", ":", "1"])
+        `shouldBe` (Just 2, ["hw", "lockcoin", "a1075db5:1"], [])
+
+    -- The cursor is right after the colon, which bash makes the word to
+    -- complete
+    it "complete the word up to its colon when the colon is under the cursor" $
+      completionParts (wordsTyped 3 ["hw", "lockcoin", "a1075db5", ":"])
+        `shouldBe` (Just 2, ["hw", "lockcoin", "a1075db5:"], [])
+
+    it "are joined where bash broke a word at a colon before the word to complete, which moves up" $
+      completionParts (wordsTyped 5 ["hw", "label", "bitcoincash", ":", "qzvzk", "rent"])
+        `shouldBe` (Just 3, ["hw", "label", "bitcoincash:qzvzk", "rent"], [])
+
+    -- bash breaks --coin=a1075db5:1 at the = and at the colon
+    it "are joined at the colon and the = of a value typed against its option" $
+      completionParts (wordsTyped 6 ["hw", "preparetx", "--coin", "=", "a1075db5", ":", "1"])
+        `shouldBe` (Just 3, ["hw", "preparetx", "--coin", "a1075db5:1"], [])
+
+    -- zsh and fish pass a word whole: a colon alone is one the user typed
+    it "are not joined at a colon for zsh and fish, which do not break a word there" $
+      completionParts ("--bash-completion-enriched" : wordsTyped 3 ["hw", "label", "rent", ":"])
+        `shouldBe` (Just 3, ["hw", "label", "rent", ":"], ["--bash-completion-enriched"])
+
+    it "say that bash keeps the word up to the colon it broke the word to complete at" $
+      keptByBash (wordsTyped 4 ["hw", "lockcoin", "a1075db5", ":", "1"]) `shouldBe` "a1075db5:"
+
+    it "say that bash keeps the word with its colon when the colon is under the cursor" $
+      keptByBash (wordsTyped 3 ["hw", "lockcoin", "a1075db5", ":"]) `shouldBe` "a1075db5:"
+
+    -- An escaped colon breaks nothing: bash replaces the whole word
+    it "say that bash keeps nothing of a word it did not break" $
+      keptByBash (wordsTyped 2 ["hw", "lockcoin", "a1075db5\\:"]) `shouldBe` ""
 
     it "ask for the script of bash with the name to run hw by" $
       requestOf unitOptions ["--bash-completion-script", "/usr/local/bin/hw"] `shouldBe` BashScript "/usr/local/bin/hw"

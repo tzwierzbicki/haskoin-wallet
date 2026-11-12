@@ -16,7 +16,7 @@ module Haskoin.Wallet.Cli.Parser.Run
 where
 
 import Control.Applicative (empty, (<|>))
-import Data.List (find, isPrefixOf, isSuffixOf)
+import Data.List (find, isPrefixOf, isSuffixOf, stripPrefix)
 import Data.Maybe (fromMaybe, isNothing, listToMaybe)
 import Haskoin.Wallet.Cli.Parser.Args
 import Haskoin.Wallet.Cli.Parser.Completion
@@ -70,8 +70,12 @@ runProgram program = do
         scriptRequest = any ("-completion-script" `isSuffixOf`) args
         -- A word offered, as the shell inserts it: escaped for bash, and
         -- after the short option when the value was typed against it,
-        -- since the word replaces the option and the value both
-        offered word = valueOption <> (if enrichedRequest args then word else escapedForBash word)
+        -- since the word replaces the option and the value both. bash
+        -- keeps a word up to a colon it broke it at, so the word offered
+        -- leaves that part out.
+        offered word = valueOption <> (if enrichedRequest args then word else escapedForBash (afterKept word))
+        kept = keptByBash args
+        afterKept word = fromMaybe word (stripPrefix kept word)
 
     typedAlone :: CommandSpec cmd -> [String] -> Bool
     typedAlone c args = dropWhile (/= c.name) args == [c.name]

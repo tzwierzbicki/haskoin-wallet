@@ -316,13 +316,14 @@ coinSpec ctx =
 
     -- The wallet holds this one coin, so coins --verbose lists it alone.
     -- --network keeps the listing to the one place of the coin, which it
-    -- shows without a title.
-    it "is shown with every detail, as coins --verbose shows it on its network" $
+    -- shows without a title. The coin is at the first receiving address of
+    -- the bip44 account of portfolio0 on btc.
+    it "is shown with every detail, as coins --verbose shows it on its network, then with the account that holds it" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         verbose <- hw home ["coins", "--verbose", "--network", "btc"] []
         shown <- hw home ["show", coinArg (payment ctx) 0] []
-        runOut shown `shouldBe` runOut verbose
+        Text.lines (runOut shown) `shouldBe` Text.lines (runOut verbose) <> ["  Account : portfolio0  btc  bip44"]
 
     it "is refused when the wallet does not hold it" $
       withChain ctx (paidChain ctx) $ \home _ -> do

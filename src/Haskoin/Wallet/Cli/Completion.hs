@@ -22,6 +22,12 @@
 -- are not applied. Without an option, every network counts, so that the
 -- shell offers a value the user may still narrow down with an option
 -- typed after it.
+--
+-- A value is offered in the form typed, so that the word goes on as the
+-- user started it: a coin by the short id of its txid after a short id
+-- and a colon, and a Bitcoin Cash address with its prefix after the
+-- prefix. bash then keeps the part up to the colon and inserts the rest
+-- ("Haskoin.Wallet.Cli.Parser.Completion").
 module Haskoin.Wallet.Cli.Completion
   ( offeredAtMost,
     walletIndexes,
@@ -47,7 +53,7 @@ where
 
 import Control.Monad (forM)
 import Control.Monad.Except (ExceptT, runExceptT)
-import Data.Char (isHexDigit)
+import Data.Char (isDigit, isHexDigit)
 import Data.Either (fromRight, rights)
 import Data.List (isPrefixOf, nub, stripPrefix)
 import qualified Data.Map.Strict as Map
@@ -55,7 +61,7 @@ import Data.Maybe (fromMaybe, isNothing, listToMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Haskoin (Network (..), Tx, TxHash, netByName, txHash, txHashToHex)
+import Haskoin (Network (..), OutPoint (..), Tx, TxHash, allNets, netByName, txHash, txHashToHex)
 import Haskoin.Wallet.Cli.Parser.Completion (completionParts)
 import Haskoin.Wallet.Config (configAsItIs, databaseFileIn)
 import Haskoin.Wallet.Database (DB, DBAccount, DBAccountId, Pool (..), runDBReadOnly)
@@ -290,29 +296,50 @@ coinsToSpend :: String -> IO [String]
 coinsToSpend = coinsWhere ActivePortfolioOnly jsonCoinSpendable
 
 -- | The coins of the portfolios looked in that start with the word typed
--- and pass the test, as coins lists them: TXID:INDEX, each once. Among
--- more than 'offeredAtMost' that start with the word, locked or not,
--- none.
+-- and pass the test, as the shell offers them ('offeredCoin'), each once.
+-- Among more than 'offeredAtMost' that start with the word, locked or
+-- not, none.
 coinsWhere :: Looked -> (JsonCoin -> Bool) -> String -> IO [String]
 coinsWhere looked keep typed = do
   options <- typedOptions
   readForCompletion $ do
     coins <- walletCoinsStarting looked options typed
-    return $ fewEnough (nub [coinText (jsonCoinOutpoint coin) | coin <- coins, keep coin])
+    return $ fewEnough (nub [offeredCoin typed (jsonCoinOutpoint coin) | coin <- coins, keep coin])
 
 -- | The coins of the accounts the options name in the portfolios looked
--- in, that start with the word typed, as coins lists them: the hexadecimal digits
--- of the word are matched in the database, which gives one more than
--- 'offeredAtMost' of them at most from each account, and a colon and an
--- index after the digits are matched here, among those. Whether a coin is
--- locked, and whether it can be spent now, are those of the listing.
+-- in, that start with the word typed, as the shell offers them
+-- ('offeredCoin'): the hexadecimal digits of the word are matched in the
+-- database, which gives one more than 'offeredAtMost' of them at most
+-- from each account, and a colon and an index after the digits are
+-- matched here, among those. Whether a coin is locked, and whether it can
+-- be spent now, are those of the listing.
 walletCoinsStarting :: Looked -> Typed -> String -> DB IO [JsonCoin]
 walletCoinsStarting looked options typed = do
   accounts <- accountsTyped looked options
   fmap concat . forM accounts $ \(accId, acc) -> do
     rows <- fewEnough <$> coinsStarting accId (takeWhile isHexDigit (take 64 typed)) askedFor
     listed <- fromRight [] <$> runExceptT (spendingOf (accountNetwork acc) >>= \rules -> mapM (toJsonCoin rules (accountPool acc)) rows)
-    return [coin | coin <- listed, typed `isPrefixOf` coinText (jsonCoinOutpoint coin)]
+    return [coin | coin <- listed, typed `isPrefixOf` offeredCoin typed (jsonCoinOutpoint coin)]
+
+-- | A coin as the shell offers it for the word typed: as coins lists it,
+-- TXID:INDEX, or by its short id when the word typed starts with a short
+-- id and a colon, as in a1075db5:, so that the word goes on as it was
+-- typed. The commands take a coin either way. Offering the coin in full
+-- then would not do: bash keeps the a1075db5: typed and inserts only what
+-- follows it ("Haskoin.Wallet.Cli.Parser.Completion").
+offeredCoin :: String -> OutPoint -> String
+offeredCoin typed outpoint = case break (== ':') typed of
+  (short, ':' : _) | length short == shortIdLength -> short <> ":" <> show outpoint.index
+  _ -> coinText outpoint
+  where
+    shortIdLength = 8
+
+-- | Whether the word typed may start a coin: hexadecimal digits, then, if
+-- anything, a colon and the digits of an index
+startsLikeCoin :: String -> Bool
+startsLikeCoin typed = case break (== ':') typed of
+  (digits, ':' : index) -> all isHexDigit digits && all isDigit index
+  (digits, _) -> all isHexDigit digits
 
 {- What label labels -}
 
@@ -327,7 +354,7 @@ walletCoinsStarting looked options typed = do
 labelTargets :: String -> IO [String]
 labelTargets typed = readForCompletion $ do
   accounts <- accountsTyped EveryPortfolio (optionsTyped [])
-  addresses <- concat <$> sequence [addressesStarting accId AddrExternal (cs typed) askedFor | (accId, _) <- accounts]
+  addresses <- concat <$> sequence [addressesStarting accId AddrExternal (addressStart typed) askedFor | (accId, _) <- accounts]
   held <- rights . map fromRow <$> pendingRows Nothing Nothing Nothing
   let pending = [hash | p <- held, let hash = hexOf (shownHash (txOf p)), typed `isPrefixOf` hash]
   -- A word that is no hexadecimal number starts no txid
@@ -335,7 +362,7 @@ labelTargets typed = readForCompletion $ do
     if all isHexDigit typed
       then concat <$> sequence [txidsStarting pool typed askedFor | pool <- poolsOf accounts]
       else return []
-  return $ fewEnough (nub ((offeredAddress <$> addresses) <> pending <> (hexOf <$> history)))
+  return $ fewEnough (nub (offeredAddresses typed addresses <> pending <> (hexOf <$> history)))
 
 {- What show shows -}
 
@@ -350,18 +377,20 @@ labelTargets typed = readForCompletion $ do
 shownTargets :: String -> IO [String]
 shownTargets typed = readForCompletion $ do
   accounts <- accountsTyped EveryPortfolio (optionsTyped [])
-  addresses <- concat <$> sequence [addressesStarting accId chain (cs typed) askedFor | (accId, _) <- accounts, chain <- [AddrExternal, AddrInternal]]
+  addresses <- concat <$> sequence [addressesStarting accId chain (addressStart typed) askedFor | (accId, _) <- accounts, chain <- [AddrExternal, AddrInternal]]
   held <- rights . map fromRow <$> pendingRows Nothing Nothing Nothing
   let pending = [hash | p <- held, let hash = hexOf (shownHash (txOf p)), typed `isPrefixOf` hash]
-  -- A word that is no hexadecimal number starts no txid, and no coin
-  (history, coins) <-
+  -- A word that is no hexadecimal number starts no txid, and one that is
+  -- not one, or one with a colon and an index, starts no coin
+  history <-
     if all isHexDigit typed
-      then do
-        txids <- concat <$> sequence [txidsStarting pool typed askedFor | pool <- poolsOf accounts]
-        found <- walletCoinsStarting EveryPortfolio (optionsTyped []) typed
-        return (hexOf <$> txids, [coinText (jsonCoinOutpoint coin) | coin <- found])
-      else return ([], [])
-  return $ fewEnough (nub ((offeredAddress <$> addresses) <> pending <> history <> coins))
+      then concat <$> sequence [txidsStarting pool typed askedFor | pool <- poolsOf accounts]
+      else return []
+  coins <-
+    if startsLikeCoin typed
+      then walletCoinsStarting EveryPortfolio (optionsTyped []) typed
+      else return []
+  return $ fewEnough (nub (offeredAddresses typed addresses <> pending <> (hexOf <$> history) <> [offeredCoin typed (jsonCoinOutpoint coin) | coin <- coins]))
 
 {- The addresses -}
 
@@ -384,8 +413,8 @@ addressesOf looked chains typed = do
   options <- typedOptions
   readForCompletion $ do
     accounts <- accountsTyped looked options
-    found <- concat <$> sequence [addressesStarting accId chain (cs typed) askedFor | (accId, _) <- accounts, chain <- chains]
-    return $ fewEnough (nub (offeredAddress <$> found))
+    found <- concat <$> sequence [addressesStarting accId chain (addressStart typed) askedFor | (accId, _) <- accounts, chain <- chains]
+    return $ fewEnough (nub (offeredAddresses typed found))
 
 -- | The addresses of the active portfolio that hold coins that can be
 -- spent now, for --spend-from, among the addresses that hold coins and
@@ -397,16 +426,39 @@ addressesToSpendFrom typed = do
   readForCompletion $ do
     accounts <- accountsTyped ActivePortfolioOnly options
     found <- forM accounts $ \(accId, acc) -> do
-      candidates <- fewEnough <$> coinAddressesStarting accId (cs typed) askedFor
+      candidates <- fewEnough <$> coinAddressesStarting accId (addressStart typed) askedFor
       spendable <- fromRight Map.empty <$> runExceptT (spendableAtAddresses (accountNetwork acc) accId candidates)
       return (Map.keys spendable)
-    return $ fewEnough (nub (offeredAddress <$> concat found))
+    return $ fewEnough (nub (offeredAddresses typed (concat found)))
 
--- | An address as the shell offers it. A Bitcoin Cash address goes without
--- its prefix, such as bitcoincash:, because bash splits a word at a colon.
--- hw finds the address written either way.
-offeredAddress :: Text -> String
-offeredAddress = cs . snd . Text.breakOnEnd ":"
+-- | The start of an address the word typed gives, as the stored addresses
+-- are matched on it ('addressesStarting'): after the prefix of a Bitcoin
+-- Cash address, such as bitcoincash:, when the word starts with one,
+-- since an address is matched after its prefix
+addressStart :: String -> Text
+addressStart typed = case cashAddrPrefixOf typed of
+  Just prefix -> cs (drop (length prefix + 1) typed)
+  Nothing -> cs typed
+
+-- | The addresses found for the word typed, as the shell offers them, in
+-- the form typed. A Bitcoin Cash address goes without its prefix, unless
+-- the word starts with it: then it goes whole, and only an address with
+-- that prefix is offered. hw finds the address written either way. bash
+-- keeps the bitcoincash: of a word it broke at the colon, and inserts only
+-- what follows ("Haskoin.Wallet.Cli.Parser.Completion").
+offeredAddresses :: String -> [Text] -> [String]
+offeredAddresses typed found = case cashAddrPrefixOf typed of
+  Just _ -> [cs addr | addr <- found, cs typed `Text.isPrefixOf` addr]
+  Nothing -> [cs (snd (Text.breakOnEnd ":" addr)) | addr <- found]
+
+-- | The prefix of a Bitcoin Cash address the word typed starts with, before
+-- its colon: bitcoincash, bchtest or bchreg
+cashAddrPrefixOf :: String -> Maybe String
+cashAddrPrefixOf typed = case break (== ':') typed of
+  (prefix, ':' : _) | prefix `elem` prefixes -> Just prefix
+  _ -> Nothing
+  where
+    prefixes = [cs prefix | net <- allNets, Just prefix <- [net.cashAddrPrefix]]
 
 {- Reading the database -}
 

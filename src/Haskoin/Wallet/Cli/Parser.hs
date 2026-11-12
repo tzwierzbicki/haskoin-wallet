@@ -181,16 +181,12 @@ csvFileOf cmd = case listingOutputOf cmd of
 -- addresses, balances, txs, pendingtxs and coins, or else in the listing
 -- view given, the key listing-view of the configuration. The other
 -- commands have one view, which the key does not change: it is about
--- listings. A listing written to a CSV file answers with the file, in the
--- compact view.
+-- listings. An answer with one element, such as the coin of lockcoin,
+-- shows it with every detail whatever the view. A listing written to a CSV
+-- file answers with the file, in the compact view.
 viewOf :: View -> Command -> View
 viewOf listingView cmd
   | Just (OnScreen asked) <- listingOutputOf cmd = fromMaybe listingView asked
--- The one coin they answer with, with every detail, as the other commands
--- that answer with one element show it
-viewOf _ (CommandLockCoin _ _) = Verbose
-viewOf _ (CommandUnlockCoin _ _) = Verbose
-viewOf _ (CommandShow {}) = Verbose
 viewOf _ _ = Compact
 
 -- | Whether an address in an answer comes with its QR code, on a terminal

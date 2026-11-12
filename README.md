@@ -472,15 +472,15 @@ A command that finds the portfolio by itself may answer about another
 portfolio than the active one. The paths and labels it shows are then those of
 that portfolio. The field that names the portfolio says so, in yellow on a
 terminal. For a transaction it reads
-`Portfolio: portfolio0, not the active portfolio1`, and for an address
-`Account     : portfolio0, not the active portfolio1  btc  bip84`. A transfer
-is shown as the portfolio that pays it sees it, even while the portfolio it
-pays is active. That portfolio signs it, so what `signtx` shows before the
-mnemonic matches what the mnemonic signs.
+`Portfolio: portfolio0, not the active portfolio1`. For an address or a coin,
+the `Account` field reads `portfolio0, not the active portfolio1  btc  bip84`.
+A transfer is shown as the portfolio that pays it sees it, even while the
+portfolio it pays is active. That portfolio signs it, so what `signtx` shows
+before the mnemonic matches what the mnemonic signs.
 
-A listing and the details of an address or a transaction name the portfolio
-they are about. They name the wallet only when that is not `wallet0`, as in
-`portfolio1 of wallet2`. A user of one mnemonic then reads no wallet name
+A listing and the details of an address, a coin or a transaction name the
+portfolio they are about. They name the wallet only when that is not
+`wallet0`, as in `portfolio1 of wallet2`. A user of one mnemonic then reads no wallet name
 there. `portfolios` is the exception and always names the wallet. A message in
 a sentence names both, as in `Created portfolio0 of wallet0`. The next steps a
 command suggests work in the active portfolio, so they name no portfolio. A
@@ -1661,7 +1661,7 @@ of a wallet, and changes nothing. The word tells what it is, by its shape:
 | `bip84/0/i` or `bip84/1/i` | The receiving address `i`, or the change address `i`, of the account of that type, derived from the public key, and cut when the wallet does not hold it. Without the type, as `/0/i`, of the account `--type` picks |
 | An address | That address of the wallet, a change address too |
 | A txid or a nosigHash | That transaction, pending or in the history |
-| `TXID:INDEX` | That coin, with every detail, as `coins --verbose` shows it |
+| `TXID:INDEX` | That coin, with every detail, as `coins --verbose` shows it, then the account that holds it |
 | Any other word | That file: a [transaction file](#transaction-files), as its portfolio sees it, or a file of a wallet, as [`importwallet`](#hw-importwallet) would take it |
 
 A hash goes in full or by its [short id](#short-ids).
@@ -2056,7 +2056,8 @@ type of each, the coin as `TXID:INDEX`, in full and by its short id, the time
 of its transaction, its value, state, confirmations and block, the address that
 holds it with its path, and the labels of the address and of the transaction.
 
-[`show TXID:INDEX`](#hw-show) shows one coin, with every detail.
+[`show TXID:INDEX`](#hw-show) shows one coin, with every detail, and the
+account that holds it.
 
 ```console
 hw coins
@@ -2078,7 +2079,8 @@ hw coins --locked
 
 Keeps a coin from being spent. It takes the coin by its
 [short id](#short-ids), as `coins` shows it, or in full. It shows the coin with
-every detail, as `coins --verbose` does.
+every detail, as `coins --verbose` does, then the account that holds it. That
+field says when the account is not of the active portfolio.
 
 ```console
 hw lockcoin TXHASH:1
@@ -2091,8 +2093,8 @@ same coin on several of them. `--network` then says which one to lock.
 
 #### `hw unlockcoin`
 
-Frees a coin locked with `lockcoin`. It shows the coin with every detail, as
-`coins --verbose` does. It takes `--network` as `lockcoin` does.
+Frees a coin locked with `lockcoin`. It shows the coin as `lockcoin` does,
+and takes `--network` as `lockcoin` does.
 
 ```console
 hw unlockcoin TXHASH:1
@@ -2943,7 +2945,8 @@ Each command is offered what it takes from your wallet:
 - The transactions `bumpfee` can replace: your own payments on Bitcoin that
   are not in a block yet.
 - Your coins. `lockcoin` offers the free ones, `unlockcoin` those you locked,
-  and `--coin` those of the active portfolio that you can spend now.
+  and `--coin` those of the active portfolio that you can spend now. After a
+  short id and a colon, such as `a1075db5:`, Tab completes the index.
 - Your addresses. `label` offers the receiving addresses, `show` and `signmsg`
   all of them, `--spend-from` those of the active portfolio that hold coins
   you can spend now, and `--change-back` every address of the active
@@ -2979,12 +2982,16 @@ nothing in it, and it does not wait for another `hw` command, such as a long
 
 ### Colons in bash
 
-bash splits a word at a colon. So a Bitcoin Cash address is offered without
-its prefix, such as `bitcoincash:`, and `hw` reads it either way. A coin of a
-transaction that paid you several coins completes up to its colon in bash,
-which bash writes `\:`. Press Tab again to list the coins, or type the index.
-The backslash goes when the command runs, as it does in a name with a space,
-`my\ savings`.
+bash splits a word at a colon. `hw` joins the word again, so a colon you type
+completes as in zsh and fish. `a1075db5:` and Tab offers the indexes of the
+coins of that transaction, and `bitcoincash:q` and Tab completes the address.
+bash keeps what you typed up to the colon, and adds the rest.
+
+A Bitcoin Cash address typed without its prefix, such as `bitcoincash:`, is
+offered without it, and `hw` reads it either way. A coin of a transaction that
+paid you several coins completes up to its colon, which bash writes `\:`. Press
+Tab again to list the coins, or type the index. The backslash goes when the
+command runs, as it does in a name with a space, `my\ savings`.
 
 ## Upgrading from an earlier version
 

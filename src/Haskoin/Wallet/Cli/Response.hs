@@ -14,9 +14,9 @@
 -- account for the addresses: each group says where it is, then lists its
 -- rows.
 --
--- An answer about one address or one transaction carries the active
--- portfolio too. A command given an address or a transaction finds its
--- portfolio by itself, whichever is active, so the answer may be about
+-- An answer about one address, one coin or one transaction carries the
+-- active portfolio too. A command given one of them finds its portfolio
+-- by itself, whichever is active, so the answer may be about
 -- another one. The screen then says so, since the paths and the labels it
 -- shows are of that portfolio. JSON leaves the active portfolio out: the
 -- answer names its own portfolio, and portfolios names the active one. An
@@ -183,6 +183,12 @@ data Response
     ResponseDeleteTx !TxHash !(Maybe TxHash) !Natural !Natural
   | -- | Coins, grouped by network
     ResponseCoins ![Group JsonCoin]
+  | -- | One coin with every detail, with the account that holds it, as
+    -- show, lockcoin and unlockcoin answer, and the active portfolio,
+    -- which may be another one: a coin tells where it is. It is an answer
+    -- of its own, rather than a listing of one coin, so that it says its
+    -- account, as the answer of an address does.
+    ResponseCoin !AccountRef !JsonCoin !(Maybe PortfolioRef)
   | -- | A signed message, its signature in base64, and the address that
     -- signed it
     ResponseSignMsg !Text !Text !Text
@@ -339,6 +345,8 @@ instance ToJSON Response where
       typed "deletetx" ["nosighash" .= nosigH, "txid" .= txidM, "freedcoins" .= coins, "freedaddrs" .= addrs]
     ResponseCoins groups ->
       typed "coins" ["groups" .= [object (groupPairs g <> ["coins" .= (marshalValue (placeNetwork (groupPlace g)) <$> groupRows g)]) | g <- groups]]
+    ResponseCoin ref coin _ ->
+      typed "coin" ["account" .= ref, "coin" .= marshalValue (accountRefNetwork ref) coin]
     ResponseSignMsg message signature addr ->
       typed "signmsg" ["message" .= message, "signature" .= signature, "address" .= addr]
     ResponseVerifyMsg message signature addr valid ->
@@ -409,6 +417,10 @@ instance FromJSON Response where
       "senttx" -> ResponseSentTx <$> network o <*> o .: "txid"
       "deletetx" -> ResponseDeleteTx <$> o .: "nosighash" <*> o .:? "txid" <*> o .: "freedcoins" <*> o .: "freedaddrs"
       "coins" -> ResponseCoins <$> (mapM (marshalled "coins") =<< o .: "groups")
+      "coin" -> do
+        ref <- o .: "account"
+        coin <- unmarshalValue (accountRefNetwork ref) =<< o .: "coin"
+        return (ResponseCoin ref coin activeLeftOut)
       "signmsg" -> ResponseSignMsg <$> o .: "message" <*> o .: "signature" <*> o .: "address"
       "verifymsg" -> ResponseVerifyMsg <$> o .: "message" <*> o .: "signature" <*> o .: "address" <*> o .: "valid"
       "sync" ->

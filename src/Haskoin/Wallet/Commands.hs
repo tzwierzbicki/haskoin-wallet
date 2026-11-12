@@ -376,12 +376,13 @@ grouped :: ([group] -> Response) -> ([row] -> group) -> [row] -> Response
 grouped answer _ [] = answer []
 grouped answer group rows = answer [group rows]
 
--- | The coin of an answer in its group: the pool of its account
+-- | The answer showing a coin, with the account that holds it. The account
+-- may be of another portfolio than the active one: show, lockcoin and
+-- unlockcoin find the coin in every portfolio.
 coinAnswer :: (Network, DBCoin) -> (Place, JsonCoin) -> ExceptT String (DB IO) Response
-coinAnswer (_, row) (place, coin) = do
-  acc <- getAccountById (dBCoinAccount row)
-  accounts <- lift $ poolAccounts (accountPool acc)
-  return $ ResponseCoins [Group place (accountCounts . snd <$> accounts) [coin]]
+coinAnswer (_, row) (_, coin) = do
+  ref <- accountRefOf =<< getAccountById (dBCoinAccount row)
+  ResponseCoin ref coin <$> activePortfolioRef
 
 {- Wallets and portfolios -}
 

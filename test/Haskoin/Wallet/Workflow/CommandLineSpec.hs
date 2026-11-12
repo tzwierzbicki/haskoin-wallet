@@ -563,6 +563,39 @@ commandLineSpec ctx = do
         run <- hw home (tabAfter ["lockcoin", txid <> "\\:"]) []
         runOut run `shouldBe` Text.pack (txid <> "\\:0\n" <> txid <> "\\:1\n")
 
+    -- A colon typed as it is breaks the word in bash, which keeps the
+    -- TXID: and inserts what is offered after it
+    it "offers the indexes of the coins of a transaction after a colon typed after its txid, through the script of bash" $ do
+      let twoCoins = fundingTx ctx 1 [(externalAddr 0, 50000), (externalAddr 0, 20000)]
+          txid = Text.unpack (txHashToHex (txHash twoCoins))
+      withChain ctx (Chain 800002 [(twoCoins, Just 800000)]) $ \home _ -> do
+        synced home
+        bashCompletion home ["lockcoin", txid, ":"] `shouldReturn` ["0", "1"]
+
+    it "offers the indexes of the coins of a transaction after a colon typed after the short id of its txid, through the script of bash" $ do
+      let twoCoins = fundingTx ctx 1 [(externalAddr 0, 50000), (externalAddr 0, 20000)]
+          txid = Text.unpack (txHashToHex (txHash twoCoins))
+      withChain ctx (Chain 800002 [(twoCoins, Just 800000)]) $ \home _ -> do
+        synced home
+        bashCompletion home ["lockcoin", take 8 txid, ":"] `shouldReturn` ["0", "1"]
+
+    it "completes the index typed after the colon of a coin, through the script of bash" $ do
+      let twoCoins = fundingTx ctx 1 [(externalAddr 0, 50000), (externalAddr 0, 20000)]
+          txid = Text.unpack (txHashToHex (txHash twoCoins))
+      withChain ctx (Chain 800002 [(twoCoins, Just 800000)]) $ \home _ -> do
+        synced home
+        bashCompletion home ["lockcoin", take 8 txid, ":", "1"] `shouldReturn` ["1"]
+
+    -- zsh and fish pass the word whole, and get the coin as it was typed,
+    -- by the short id of its txid
+    it "offers the coins of a transaction after the short id of its txid and a colon, for zsh and fish" $ do
+      let twoCoins = fundingTx ctx 1 [(externalAddr 0, 50000), (externalAddr 0, 20000)]
+          short = take 8 (Text.unpack (txHashToHex (txHash twoCoins)))
+      withChain ctx (Chain 800002 [(twoCoins, Just 800000)]) $ \home _ -> do
+        synced home
+        run <- hw home ("--bash-completion-enriched" : tabAfter ["lockcoin", short <> ":"]) []
+        runOut run `shouldBe` Text.pack (short <> ":0\n" <> short <> ":1\n")
+
     -- Twenty-one payments to the first receiving address, one coin each
     let manyCoins n = Chain 800002 [(fundingTx ctx i [(externalAddr 0, 1000)], Just 800000) | i <- [1 .. n]]
         coinOf i = Text.unpack (txHashToHex (txHash (fundingTx ctx i [(externalAddr 0, 1000)])))
@@ -708,6 +741,12 @@ commandLineSpec ctx = do
         run <- hw home (tabAfter ["show", "17Ki"]) []
         runOut run `shouldBe` "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn\n"
 
+    -- The one coin of the wallet in the paid chain, at index 0
+    it "offers the index of a coin after show, the short id of its txid and a colon, through the script of bash" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        bashCompletion home ["show", take 8 (txidArg (payment ctx)), ":"] `shouldReturn` ["0"]
+
     -- The payment of the paid chain, by its txid, and its one coin of the
     -- wallet, TXID:0, which bash takes as it is: TXID\:0
     it "offers the transactions and the coins of the wallet after show, by their first digits" $
@@ -769,6 +808,22 @@ commandLineSpec ctx = do
         _ <- answer home ["receive", "--network", "bch"] []
         run <- hw home (tabAfter ["label", "q"]) []
         runOut run `shouldBe` "qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u\n"
+
+    -- bash breaks the word at the colon typed, keeps bitcoincash: and
+    -- inserts what is offered after it
+    it "completes a Bitcoin Cash address typed with its prefix, through the script of bash" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive", "--network", "bch"] []
+        bashCompletion home ["label", "bitcoincash", ":", "q"] `shouldReturn` ["qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"]
+
+    -- zsh and fish replace the word whole, so the prefix stays
+    it "offers a Bitcoin Cash address typed with its prefix with that prefix, for zsh and fish" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive", "--network", "bch"] []
+        run <- hw home ("--bash-completion-enriched" : tabAfter ["label", "bitcoincash:q"]) []
+        runOut run `shouldBe` "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u\n"
 
     -- bash passes the word after a space as an empty word
     it "offers the indexes of the portfolios after a space, through the script of bash" $

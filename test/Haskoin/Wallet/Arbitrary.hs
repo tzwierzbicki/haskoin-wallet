@@ -372,6 +372,7 @@ arbitraryResponse net ctx =
         <*> arbitraryNatural,
       ResponseCoins
         <$> resize 3 (listOf $ arbitraryGroup net (arbitraryJsonCoin net)),
+      ResponseCoin <$> arbitraryAccountRef net <*> arbitraryJsonCoin net <*> pure Nothing,
       ResponseSync
         <$> (resize 10 $ listOf $ arbitrarySyncRes net)
         <*> (resize 3 $ listOf arbitraryNetwork)

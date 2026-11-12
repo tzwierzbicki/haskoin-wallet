@@ -799,6 +799,28 @@ coinSpec = do
       (renderedLines (verboseCoinDoc btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinConfirmations = 1234}) !! 0)
         `shouldBe` "14 Nov 2023 23:13      0.00050000 btc  spendable, 1234 confirmations"
 
+  -- The coin has no time, so the clock of the computer plays no part.
+  -- spendableCoinRow is at the first receiving address of the bip44
+  -- account of portfolio0 on btc.
+  describe "A coin as lockcoin, unlockcoin and show answer with it" $ do
+    let coin = spendableCoinRow {jsonCoinTime = Nothing}
+
+    it "gives every detail, as coins --verbose does, then the account that holds it: its portfolio, its network and its type" $ do
+      shown <- coinAnswerDoc UnitBitcoin (Just mainPortfolioRef) mainAccountRef coin
+      renderedLines shown
+        `shouldBe` [ "time unknown           0.00050000 btc  spendable, 3 confirmations",
+                     "  Coin    : 0000000000000000000000000000000000000000000000000000000000000001:0",
+                     "  Short id: 00000000:0",
+                     "  Block   : 800000",
+                     "  Address : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  bip44/0/0",
+                     "  Account : portfolio0  btc  bip44"
+                   ]
+
+    -- lockcoin finds a coin of portfolio0 while portfolio1 is active
+    it "says the account of the coin is not of the active portfolio, and names the active one, when another one is active" $ do
+      shown <- coinAnswerDoc UnitBitcoin (Just (PortfolioRef 0 1)) mainAccountRef coin
+      last (renderedLines shown) `shouldBe` "  Account : portfolio0, not the active portfolio1  btc  bip44"
+
     it "says 1 confirmation in the singular" $
       (renderedLines (verboseCoinDoc btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinConfirmations = 1}) !! 0)
         `shouldBe` "14 Nov 2023 23:13      0.00050000 btc  spendable, 1 confirmation"

@@ -96,12 +96,13 @@ Wallets and portfolios:
   When several portfolios are candidates, they take the active one, or name
   them and ask for a `switch`. A transfer between two portfolios is kept and
   signed in the one that pays it.
-- The details of an address or a transaction say when they are about another
-  portfolio than the active one, in yellow on a terminal:
+- The details of an address, a coin or a transaction say when they are about
+  another portfolio than the active one, in yellow on a terminal:
   `Portfolio: portfolio0, not the active portfolio1`. Their paths and labels
-  are of that portfolio. `show`, `label`, `importtx`, `signtx`, `broadcast`,
-  `bumpfee` and `preparesweep` say it, and so does the transaction that
-  `signtx` shows before it asks for the mnemonic. The JSON is unchanged.
+  are of that portfolio. `show`, `label`, `lockcoin`, `unlockcoin`,
+  `importtx`, `signtx`, `broadcast`, `bumpfee` and `preparesweep` say it, and
+  so does the transaction that `signtx` shows before it asks for the
+  mnemonic. Their JSON gives no active portfolio.
 - Native SegWit addresses, as BIP84 derives them: `receive --type bip84`.
   Their payments pay about 40% less in fees. The networks of Bitcoin Cash have
   `bip44` addresses only. They take `bip44` whatever the default type says,
@@ -177,7 +178,9 @@ Payments:
 - `--strategy` sets how coins are selected. The default, `least-waste`, keeps
   the coins that waste the least fee.
 - `lockcoin` and `unlockcoin` keep a coin from being spent. `coins --locked`
-  lists the locked coins.
+  lists the locked coins. They show the coin with every detail, then the
+  account that holds it, as `show TXID:INDEX` does. Their JSON answer is of
+  the type `coin`, with the `account` and the `coin`.
 - `fees` shows the fee rates of recent blocks. `--fee-rate low`, `median` or
   `high` takes one of them. Without `--fee-rate`, the prepare commands ask.
   There is no default rate any more.
@@ -264,7 +267,10 @@ Using `hw`:
 - `sync` and `recover` show what they are doing on a status line. It starts
   with the network whose server they are checking.
 - Tab completion in bash, zsh and fish. It completes commands, options,
-  wallets and portfolios, coins, addresses and pending transactions.
+  wallets and portfolios, coins, addresses and pending transactions. A coin
+  completes after the short id of its txid and a colon, as in `a1075db5:`.
+  In bash too, which splits a word at a colon typed as it is: `hw` joins the
+  word again.
 - `hw --version` shows the version of `hw` and of its database format.
 - `--unit btc|bit|sat` sets the unit of amounts. An amount can carry its own
   unit, as in `1000sat`.

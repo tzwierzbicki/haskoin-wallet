@@ -320,6 +320,16 @@ receivingSpec ctx = do
         (locks . coinsShown <$> hwJson home ["coins", "--locked"] []) `shouldReturn` Right [(firstCoin, Just LockedByUser)]
         (fmap length . coinsShown <$> hwJson home ["coins"] []) `shouldReturn` Right 2
 
+    -- The coin is of portfolio0, at its first receiving address, and
+    -- portfolio1 is active
+    it "is shown by lockcoin with its account, which says it is not of the active portfolio" $
+      withChain ctx chain $ \home _ -> do
+        synced home
+        newTestPortfolio home
+        switchTo home 0 1
+        run <- hw home ("lockcoin" : coinArgs) []
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  Account : portfolio0, not the active portfolio1  btc  bip44\n"
+
     it "is not spent by preparetx" $
       withChain ctx chain $ \home _ -> do
         synced home

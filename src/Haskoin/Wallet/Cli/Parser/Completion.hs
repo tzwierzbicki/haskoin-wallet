@@ -15,6 +15,7 @@ module Haskoin.Wallet.Cli.Parser.Completion
     fishScript,
     fishScriptName,
     completionParts,
+    keptByBash,
     completionArgs,
     enrichedRequest,
     escapedForBash,
@@ -114,6 +115,10 @@ scriptNameAfter _ [] = Nothing
 -- up to its colon. They are taken out, as the shell takes them out of
 -- the command it runs.
 --
+-- bash breaks a word at a colon typed as it is, so that TXID:0 comes as
+-- TXID, : and 0. The pieces are joined again, and the index moves with
+-- the words.
+--
 -- bash breaks a word at its =, so that --network=btc comes as --network,
 -- = and btc. The = is taken out: the value follows the option as a word
 -- of its own, which optparse-applicative reads the same, and the index
@@ -122,18 +127,80 @@ scriptNameAfter _ [] = Nothing
 completionParts :: [String] -> (Maybe Int, [String], [String])
 completionParts args = (index', words', others)
   where
-    (indexM, typed, others) = partsOf args
-    (words', index') = withoutEquals (readMaybe =<< indexM) (map unescaped typed)
-    partsOf ("--bash-completion-index" : i : rest) = (Just i, ws, os)
-      where
-        (_, ws, os) = partsOf rest
-    partsOf ("--bash-completion-word" : w : rest) = (i, w : ws, os)
-      where
-        (i, ws, os) = partsOf rest
-    partsOf (a : rest) = (i, ws, a : os)
-      where
-        (i, ws, os) = partsOf rest
-    partsOf [] = (Nothing, [], [])
+    (_, _, others) = requestParts args
+    (joined, joinedIndex, _) = bashWords args
+    (words', index') = withoutEquals joinedIndex (map unescaped joined)
+
+-- | What bash keeps of the word to complete: the part up to the last
+-- colon it broke the word at, which it leaves as it is. It replaces only
+-- what follows. So a value offered for TXID: must leave out the TXID:
+-- the word starts with, which hw matched it on. It is empty for a word
+-- bash did not break, and for zsh and fish.
+keptByBash :: [String] -> String
+keptByBash args = unescaped kept
+  where
+    (_, _, kept) = bashWords args
+
+-- | The words of a request as the shell typed them, with the index of the
+-- word to complete and what bash keeps of it. The words bash broke at a
+-- colon are joined again. zsh and fish do not break a word at a colon,
+-- and their words are as they come.
+bashWords :: [String] -> ([String], Maybe Int, String)
+bashWords args
+  | enrichedRequest args = (typed, index, "")
+  | otherwise = joinedAtColons index typed
+  where
+    (indexM, typed, _) = requestParts args
+    index = readMaybe =<< indexM
+
+-- | The arguments of a request, apart: the index of the word to complete,
+-- as typed, the words, and the other arguments
+requestParts :: [String] -> (Maybe String, [String], [String])
+requestParts ("--bash-completion-index" : i : rest) = (Just i, ws, os)
+  where
+    (_, ws, os) = requestParts rest
+requestParts ("--bash-completion-word" : w : rest) = (i, w : ws, os)
+  where
+    (i, ws, os) = requestParts rest
+requestParts (a : rest) = (i, ws, a : os)
+  where
+    (i, ws, os) = requestParts rest
+requestParts [] = (Nothing, [], [])
+
+-- | The words with those bash broke at a colon joined again, the index of
+-- the word to complete moved along, and what bash keeps of that word
+-- ('keptByBash').
+--
+-- bash breaks a word at a colon typed as it is: TXID:0 comes as TXID, :
+-- and 0, and TXID: as TXID and :, with the colon as the word to complete.
+-- Joined, the word is matched whole, as zsh and fish pass it. A colon
+-- bash escaped, as in TXID\:, breaks nothing. hw takes no word that is a
+-- colon alone, so each colon among the words is one bash broke a word at.
+-- The script could send the whole line, to tell a colon typed alone from
+-- the others. That was turned down: it adds a loop over the line to the
+-- script, for a case no command has. Only the words up to the one to
+-- complete are joined. Those after it play no part in its completion.
+joinedAtColons :: Maybe Int -> [String] -> ([String], Maybe Int, String)
+joinedAtColons indexM typed = case indexM of
+  Just index
+    | index >= 0 && index < length typed ->
+        let (upToCursor, after) = splitAt (index + 1) typed
+            groups = piecesOf upToCursor
+         in (map concat groups <> after, Just (length groups - 1), keptOf (last groups))
+  _ -> (typed, indexM, "")
+  where
+    -- The pieces of each word, in order: a colon and the piece after it
+    -- go with the word before them
+    piecesOf = reverse . map reverse . foldl glue []
+    glue (current@(previous : _) : done) piece
+      | piece == ":" || previous == ":" = (piece : current) : done
+    glue done piece = [piece] : done
+    -- bash keeps the pieces before the one under the cursor, and the
+    -- colon itself when the cursor is on it
+    keptOf pieces = case reverse pieces of
+      ":" : _ -> concat pieces
+      _ : before -> concat (reverse before)
+      [] -> ""
 
 -- | The words without the = bash broke a word at, after an option, with
 -- the index of the word to complete moved along: see 'completionParts'
