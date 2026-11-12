@@ -67,7 +67,9 @@
 -- also keeps its amount in a column, beside the blob that holds it, so
 -- that txs can add up the amounts without reading the blobs. A coin keeps
 -- its address, which gives its script, and not the whole coin as the
--- store reported it. Whether a coin is locked and whether a change
+-- store reported it. It also keeps the time of the summary of its
+-- transaction, which coins shows and lists it by. The sync writes both,
+-- the summary first. Whether a coin is locked and whether a change
 -- address is free are read from the pending transactions, which a locked
 -- column of the coins and a free column of the addresses could only
 -- disagree with. A coin keeps instead whether the user locked it, which
@@ -88,14 +90,29 @@
 -- from its network, its purpose and the index of its portfolio.
 -- Transaction ids, outpoints and nosigHashes are the bytes of the hash,
 -- not its hexadecimal text: half the size in every key and index. The
--- 'tableIndexes' below are the ones persistent cannot declare: a covering
--- index that serves the ordering of txs, the sums of its balances and the
--- scan of the sync without touching the rows; the account of every coin;
--- the coins of an address of an account with their values, which the
--- sync refreshes and balances adds up without touching the rows; the
--- coins of an account in the order coins lists them; the coins by their
--- outpoint, for a command that names a coin without its account; and the
--- pending transactions of a portfolio on a network.
+-- 'tableIndexes' below are the ones persistent cannot declare.
+--
+-- * Two covering indexes of the summaries of a pool, which serve txs
+--   without touching the rows. txs lists the unconfirmed transactions
+--   first, then the others, the newest first in each
+--   ('Haskoin.Wallet.Database.TxInfo.TimeKey'). The index by block
+--   reference finds the unconfirmed ones, which the scan of the sync
+--   reads too. The index by time gives the others in their order, and
+--   adds up their amounts for the balances.
+--
+-- * The account of every coin.
+--
+-- * The coins of an address of an account with their values, which the
+--   sync refreshes and balances adds up without touching the rows.
+--
+-- * The coins of an account by block reference, which finds the
+--   unconfirmed ones, and by time, which gives the others in the order
+--   coins lists them.
+--
+-- * The coins by their outpoint, for a command that names a coin without
+--   its account.
+--
+-- * The pending transactions of a portfolio on a network.
 module Haskoin.Wallet.Schema.V5 where
 
 import Data.ByteString (ByteString)
@@ -203,6 +220,7 @@ DBCoin
   address Text
   value Word64
   blockRef ByteString
+  time UTCTime
   lockedByUser Bool default=0
   created UTCTime default=CURRENT_TIMESTAMP
   Primary account outpoint
@@ -253,9 +271,11 @@ DBSyncedBlock
 tableIndexes :: [Text]
 tableIndexes =
   [ "create index d_b_tx_info_pool_block_ref on d_b_tx_info (portfolio, network, block_ref, txid, dead, amount)",
+    "create index d_b_tx_info_pool_time on d_b_tx_info (portfolio, network, time desc, block_ref, txid, dead, amount)",
     "create index d_b_coin_account on d_b_coin (account)",
     "create index d_b_coin_account_address on d_b_coin (account, address, value)",
     "create index d_b_coin_account_block_ref on d_b_coin (account, block_ref, outpoint)",
+    "create index d_b_coin_account_time on d_b_coin (account, time desc, block_ref, outpoint)",
     "create index d_b_coin_outpoint on d_b_coin (outpoint)",
     "create index d_b_pending_tx_pool on d_b_pending_tx (portfolio, network)"
   ]

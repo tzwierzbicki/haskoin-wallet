@@ -311,6 +311,14 @@ Using `hw`:
 - A transaction is shown as its portfolio sees it: `Incoming` when funds enter
   the portfolio, `Outgoing` when they leave it, and `Internal` when they move
   between its addresses.
+- `txs` and `coins` list by time. The unconfirmed transactions or coins come
+  first, then the others, and each part lists the newest first, by the time
+  shown. A coin shows the time of the transaction that paid it. A dead
+  transaction is listed at its time among the others. Rows of the same time
+  keep the order of their blocks. The exports of both follow the same order.
+  The listings went by block alone before. A payment that waited in the
+  mempool while later ones confirmed was then listed above them, and a
+  transaction that died unconfirmed stayed at the top for good.
 - Wallets and portfolios have fixed names that follow their index, such as
   `wallet0` and `portfolio0`. A description, set with `label`, takes the place
   of the name of an account.

@@ -76,7 +76,7 @@ coinOfPortfolio1 ctx = do
   second <- nextPortfolioOf ctx testMnemonic
   (accId, _) <- accountOf second btc Bip44
   _ <- genExtAddress ctx def accId ""
-  void $ refreshCoins btc ctx accId [account1Addr] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) account1Addr 50000]
+  void $ refreshCoins btc ctx accId (const seenTime) [account1Addr] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) account1Addr 50000]
 
 -- | The coin of 'coinOfPortfolio1' as the command line takes it
 coinWord :: String

@@ -11,11 +11,13 @@ import qualified Data.Serialize as S
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Conduit (runConduit, sinkList, (.|))
-import Database.Esqueleto.Legacy (renderQuerySelect)
-import Database.Persist.Sql (PersistValue (..), rawQuery)
+import Database.Esqueleto.Legacy (renderQuerySelect, val)
+import Database.Persist.Sql (PersistValue (..), rawQuery, toSqlKey)
 import Haskoin
+import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Database.TxInfo (liveSummariesQuery)
+import Haskoin.Wallet.Database.Coin (otherCoinsQuery, unconfirmedCoinsQuery)
+import Haskoin.Wallet.Database.TxInfo (TimeKey (..), confirmedAmountsQuery, liveSummariesQuery, otherSummariesQuery, unconfirmedSummariesQuery)
 import Haskoin.Wallet.TestUtils
 import Data.Default (def)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), testIdentity)
@@ -77,40 +79,53 @@ indexesSpec =
             \order by sum(c.value) desc, a.internal, a.\"index\" limit 100"
         liftIO $ plan `shouldSatisfy` any ("SEARCH c USING COVERING INDEX d_b_coin_account_address " `Text.isPrefixOf`)
 
-    it "give the coins of an account in the order coins lists them, without sorting them" $
+    -- coins lists the unconfirmed coins of an account first. They are few,
+    -- and are sorted after the query.
+    it "find the unconfirmed coins of an account from the index on the block references" $
       inMemory $ do
         globalMigration
-        plan <- queryPlan "select * from d_b_coin where account = 1 order by block_ref, outpoint limit 100"
-        liftIO $ plan `shouldBe` ["SEARCH d_b_coin USING INDEX d_b_coin_account_block_ref (account=?)"]
+        plan <- queryPlanOf =<< renderQuerySelect (unconfirmedCoinsQuery (toSqlKey 1) (const (val True)))
+        liftIO $ plan `shouldBe` ["SEARCH d_b_coin USING INDEX d_b_coin_account_block_ref (account=? AND block_ref<?)"]
 
-    -- A chunk of coins starts where the one before ended: at its last block
+    it "give the confirmed coins of an account in the order coins lists them, without sorting them" $
+      inMemory $ do
+        globalMigration
+        plan <- queryPlanOf =<< renderQuerySelect (otherCoinsQuery (toSqlKey 1) (const (val True)) Nothing (Just 100))
+        liftIO $ plan `shouldBe` ["SEARCH d_b_coin USING INDEX d_b_coin_account_time (account=?)"]
+
+    -- A chunk of coins starts where the one before ended: at its last time
     -- in the index, then past its last coin
-    it "find the coins after a given one from the index, without sorting them" $
+    it "find the confirmed coins after a given one from the index, without sorting them" $
       inMemory $ do
         globalMigration
-        plan <-
-          queryPlan
-            "select * from d_b_coin where account = 1 and block_ref >= x'0001' and (block_ref > x'0001' or outpoint > x'ff') \
-            \order by block_ref, outpoint limit 100"
-        liftIO $ plan `shouldBe` ["SEARCH d_b_coin USING INDEX d_b_coin_account_block_ref (account=? AND block_ref>?)"]
+        plan <- queryPlanOf =<< renderQuerySelect (otherCoinsQuery (toSqlKey 1) (const (val True)) (Just (confirmedAt, OutPoint (fakeTxHash 1) 0)) (Just 100))
+        liftIO $ plan `shouldBe` ["SEARCH d_b_coin USING INDEX d_b_coin_account_time (account=? AND time<?)"]
 
-    -- The transactions belong to a portfolio on a network
-    it "find the transactions of a portfolio on a network after a given one from the index, without sorting them" $
+    -- The transactions belong to a portfolio on a network. txs lists the
+    -- unconfirmed ones first. They are few, and are sorted after the query.
+    it "find the unconfirmed transactions of a portfolio on a network from the index on the block references" $
       inMemory $ do
         globalMigration
-        plan <-
-          queryPlan
-            "select txid, block_ref, time, dead, blob from d_b_tx_info where portfolio = 1 and network = 'btc' and block_ref >= x'0001' and (block_ref > x'0001' or txid > x'ff') \
-            \order by block_ref, txid limit 100"
-        liftIO $ plan `shouldBe` ["SEARCH d_b_tx_info USING INDEX d_b_tx_info_pool_block_ref (portfolio=? AND network=? AND block_ref>?)"]
+        plan <- queryPlanOf =<< renderQuerySelect (unconfirmedSummariesQuery pool)
+        liftIO $ plan `shouldBe` ["SEARCH d_b_tx_info USING INDEX d_b_tx_info_pool_block_ref (portfolio=? AND network=? AND block_ref<?)"]
 
-    it "add up the amounts down to a given transaction from the index alone, without reading the rows" $
+    it "give the other transactions of a portfolio on a network in the order txs lists them, without sorting them" $
       inMemory $ do
         globalMigration
-        plan <-
-          queryPlan
-            "select sum(amount) from d_b_tx_info where portfolio = 1 and network = 'btc' and dead = 0 and block_ref <= x'0001' and (block_ref < x'0001' or txid <= x'ff')"
-        liftIO $ plan `shouldBe` ["SEARCH d_b_tx_info USING COVERING INDEX d_b_tx_info_pool_block_ref (portfolio=? AND network=? AND block_ref<?)"]
+        plan <- queryPlanOf =<< renderQuerySelect (otherSummariesQuery pool Nothing (Just 100))
+        liftIO $ plan `shouldBe` ["SEARCH d_b_tx_info USING INDEX d_b_tx_info_pool_time (portfolio=? AND network=?)"]
+
+    it "find the other transactions of a portfolio on a network after a given one from the index, without sorting them" $
+      inMemory $ do
+        globalMigration
+        plan <- queryPlanOf =<< renderQuerySelect (otherSummariesQuery pool (Just (confirmedAt, fakeTxHash 1)) (Just 100))
+        liftIO $ plan `shouldBe` ["SEARCH d_b_tx_info USING INDEX d_b_tx_info_pool_time (portfolio=? AND network=? AND time<?)"]
+
+    it "add up the amounts of the other transactions down to a given one from the index alone, without reading the rows" $
+      inMemory $ do
+        globalMigration
+        plan <- queryPlanOf =<< renderQuerySelect (confirmedAmountsQuery pool confirmedAt (fakeTxHash 1))
+        liftIO $ plan `shouldBe` ["SEARCH d_b_tx_info USING COVERING INDEX d_b_tx_info_pool_time (portfolio=? AND network=? AND time>?)"]
 
     -- lockcoin and show name a coin without its account, and the key of a
     -- coin starts with its account
@@ -139,6 +154,15 @@ indexesSpec =
         globalMigration
         plan <- queryPlan "select * from d_b_pending_tx where portfolio = 1 and network = 'btc'"
         liftIO $ plan `shouldBe` ["SEARCH d_b_pending_tx USING INDEX d_b_pending_tx_pool (portfolio=? AND network=?)"]
+
+-- | Portfolio 1 on Bitcoin, which the queries of the summaries name
+pool :: Pool
+pool = Pool (toSqlKey 1) btc
+
+-- | Where a confirmed transaction or coin of block 800000 stands in txs and
+-- coins, at 'seenTime'
+confirmedAt :: TimeKey
+confirmedAt = TimeKey False seenTime (Store.BlockRef 800000 1)
 
 -- | The steps SQLite takes to answer a query
 queryPlan :: Text -> DB IO [Text]

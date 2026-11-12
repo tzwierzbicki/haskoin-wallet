@@ -8,7 +8,7 @@
 module Haskoin.Wallet.Workflow.BumpFeeSpec (spec) where
 
 import Data.IORef (modifyIORef, readIORef)
-import Data.List (findIndex, sort)
+import Data.List (find, findIndex, sort)
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as Text
 import Haskoin
@@ -439,6 +439,27 @@ bumpFeeSpec ctx = do
         switchTo home 0 0
         history <- hwJson home ["txs"] []
         (sort <$> historyOf history) `shouldBe` Right (sort [(stuck, True, 0), (replacement, False, 0)])
+
+    -- A miner that never saw the replacement puts the stuck payment in
+    -- block 800003, and the network drops the replacement. The stuck
+    -- payment has 1 confirmation at that best block.
+    it "stays in the history of the portfolio it pays, dead, when the network confirms the stuck payment instead" $
+      withChain ctx (chainPaying ctx account1Addr) $ \home chain -> do
+        syncedTwoPortfolios home
+        switchTo home 0 1
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (externalAddr 0) "0.0002", "--fee-rate", "10"] []
+        stuck <- signAndSend home nosig
+        sent <- readIORef chain
+        stuckTx <- maybe (fail "The stuck payment is not on the chain") return $ find ((== stuck) . txidArg) (fst <$> sent.chainTxs)
+        _ <- answer home ["sync"] []
+        bumpNosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
+        replacement <- signAndSend home bumpNosig
+        _ <- answer home ["sync"] []
+        modifyIORef chain $ \now -> mine now {chainTxs = [entry | entry@(tx, _) <- now.chainTxs, txidArg tx /= replacement] <> [(stuckTx, Nothing)]}
+        _ <- answer home ["sync"] []
+        switchTo home 0 0
+        history <- hwJson home ["txs"] []
+        (sort <$> historyOf history) `shouldBe` Right (sort [(stuck, False, 1), (replacement, True, 0)])
 
     -- The payment of 60000 from the coins of both types of 'bothTypesTx':
     -- 10.5 + 148 + 68 + 34 + 34 = 294.5, so 295 virtual bytes. At 10

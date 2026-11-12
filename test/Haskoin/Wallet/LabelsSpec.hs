@@ -196,7 +196,7 @@ paymentCoin = OutPoint (fakeTxHash 1) 0
 -- locked by the user or not
 coinStoredAt :: Text -> DBAccountId -> Bool -> DB IO ()
 coinStoredAt addr accId locked =
-  P.insert_ $ DBCoin accId (outpointBytes paymentCoin) addr 50000 (S.encode (Store.BlockRef 800000 1)) locked fixtureTime
+  P.insert_ $ DBCoin accId (outpointBytes paymentCoin) addr 50000 (S.encode (Store.BlockRef 800000 1)) seenTime locked fixtureTime
 
 -- | The coin of the payment stored in the account, at the first receiving
 -- address of the test wallet

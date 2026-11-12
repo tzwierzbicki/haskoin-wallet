@@ -125,7 +125,7 @@ filled ctx portfolio addr n = do
   let pool = portfolioPool portfolio btc
   (accId, _) <- accountOf portfolio btc Bip44
   _ <- genExtAddress ctx def accId ""
-  _ <- refreshCoins btc ctx accId [addr] [storeCoin ctx (fakeTxHash n, 0) (Just 800000) addr 1000]
+  _ <- refreshCoins btc ctx accId (const seenTime) [addr] [storeCoin ctx (fakeTxHash n, 0) (Just 800000) addr 1000]
   _ <- lift $ repsertSummary pool (fakeTxHash n) (Store.BlockRef 800000 1) fixtureTime paymentSummary
   lift $ setTxLabel pool (fakeTxHash n) "rent"
   lift $ P.insert_ $ pendingRow pool (spendingTx ctx [(fakeTxHash n, 0)] [(otherAddr 0, 900)])
@@ -742,7 +742,7 @@ activitySpec ctx =
       inDatabaseE $ do
         portfolio <- testPortfolio ctx
         (accId, _) <- accountOf portfolio btc Bip84
-        _ <- refreshCoins btc ctx accId [segwitExternalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (segwitExternalAddr 0) 1000]
+        _ <- refreshCoins btc ctx accId (const seenTime) [segwitExternalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (segwitExternalAddr 0) 1000]
         lift (portfolioHasActivity portfolio.portfolioId) `dbShouldBeE` True
 
     it "is true once it has a transaction in its history" $
@@ -787,7 +787,7 @@ balanceSpec ctx =
         wallet <- walletInFile (dir </> "wallet.sqlite") $ do
           (accId, _) <- testNewAcc ctx
           _ <- genExtAddress ctx def accId ""
-          refreshCoins btc ctx accId [externalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
+          refreshCoins btc ctx accId (const seenTime) [externalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
         shownSpendable <$> commandResponse ctx wallet UnitBitcoin (CommandPortfolios (OnScreen Nothing))
           `shouldReturn` Right [("btc", 50000)]
 
@@ -797,7 +797,7 @@ balanceSpec ctx =
           (accId, _) <- testNewAcc ctx
           _ <- genExtAddress ctx def accId ""
           _ <- genExtAddress ctx def accId ""
-          refreshCoins btc ctx accId [externalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
+          refreshCoins btc ctx accId (const seenTime) [externalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
         -- Newest first: the second address holds nothing
         addressSpendable <$> commandResponse ctx wallet UnitBitcoin (CommandAddresses (Target (Just btc) (Just Bip44)) False (OnScreen Nothing) (Paging Nothing Nothing))
           `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", 0), ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", 50000)]
@@ -914,8 +914,8 @@ viewSpec ctx =
       inDatabaseE $ do
         (legacyId, _) <- testNewAcc ctx
         (segwitId, _) <- testNewSegwitAcc ctx
-        _ <- refreshCoins btc ctx legacyId [externalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
-        _ <- refreshCoins btc ctx segwitId [segwitExternalAddr 0] [storeCoin ctx (fakeTxHash 2, 0) (Just 800000) (segwitExternalAddr 0) 30000]
+        _ <- refreshCoins btc ctx legacyId (const seenTime) [externalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
+        _ <- refreshCoins btc ctx segwitId (const seenTime) [segwitExternalAddr 0] [storeCoin ctx (fakeTxHash 2, 0) (Just 800000) (segwitExternalAddr 0) 30000]
         portfolio <- testPortfolio ctx
         view <- portfolioView portfolio spendableBalance
         -- 50000 + 30000 = 80000

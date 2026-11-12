@@ -28,6 +28,7 @@ import Data.Maybe (fromMaybe, mapMaybe)
 import qualified Data.Serialize as S
 import qualified Data.Set as Set
 import Data.Text (Text)
+import Data.Time (UTCTime (..), fromGregorian)
 import Data.Word (Word32, Word64, Word8)
 import qualified Database.Persist as P
 import Haskoin
@@ -115,6 +116,17 @@ spec = prepareContext $ \ctx -> do
         pool <- account
         _ <- syncWith (paymentStore ctx) pool
         (map (chainTime . chainOf) <$> txsAfter pool Nothing Nothing) `dbShouldBeE` [Just seenTime]
+
+    it "gives a coin the time the store gives the transaction that paid it" $
+      inDatabaseE $ do
+        pool <- account
+        -- The store saw the payment 600 seconds after seenTime
+        let paidLater = (paymentStore ctx) {fakeTransactions = [seenAt 1700000600 (creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000)]}
+        _ <- syncWith paidLater pool
+        accIds <- accountIds pool
+        -- 22:13:20 UTC + 600 seconds = 22:23:20 UTC
+        (map jsonCoinTime <$> coinsAfter pool accIds AllCoins Nothing Nothing)
+          `dbShouldBeE` [Just (UTCTime (fromGregorian 2023 11 14) (22 * 3600 + 23 * 60 + 20))]
 
     it "reports what the portfolio can spend on the network once synced" $
       inDatabaseE $ do
@@ -730,6 +742,18 @@ spec = prepareContext $ \ctx -> do
                           (Just (fakeTxHash 2), Just 30000)
                         ]
 
+    -- The payment replaced was confirmed after all, and its replacement
+    -- died. The store took the payment in again from its block, which the
+    -- miner dated an hour after the replacement: 1700003700. The
+    -- replacement has the time of the fixtures, 1700000000.
+    it "lists a payment confirmed after all above the replacement that died, by their times" $
+      inDatabaseE $ do
+        pool <- account
+        _ <- syncWith (mempoolStore ctx) pool
+        _ <- syncWith (sameAmountReplacedStore ctx) pool
+        _ <- syncWith (replacementLostStore ctx) pool
+        listedBalances pool `dbShouldBeE` [(Just (fakeTxHash 1), Just 50000), (Just (fakeTxHash 2), Nothing)]
+
     -- One chain serves both portfolios, so its reorganisation concerns both
     it "marks a payment a reorganisation left out as dead in every portfolio hw sync goes through" $
       inDatabaseE $ do
@@ -982,10 +1006,12 @@ spec = prepareContext $ \ctx -> do
         pool <- syncedAccount
         _ <- lift $ repsertSummary pool (fakeTxHash 9) (Store.BlockRef 800001 5) fixtureTime paymentSummary
         _ <- fullSync pool
+        -- Its time, fixtureTime, 1 Nov 2023, is older than the 14 Nov 2023
+        -- of the others, so txs lists it last
         listedBalances pool
           `dbShouldBeE` [ (Just (fakeTxHash 3), Just 50000),
-                          (Just (fakeTxHash 9), Nothing),
-                          (Just (fakeTxHash 2), Just 30000)
+                          (Just (fakeTxHash 2), Just 30000),
+                          (Just (fakeTxHash 9), Nothing)
                         ]
 
     -- txs refuses a row that does not read, and nothing can write this one
@@ -1027,7 +1053,7 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         pool <- syncedAccount
         accId <- bip44Id pool
-        lift $ P.insert_ $ DBCoin accId (outpointBytes (OutPoint (fakeTxHash 9) 0)) "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" 1000 (S.encode (Store.BlockRef 800000 1)) False fixtureTime
+        lift $ P.insert_ $ DBCoin accId (outpointBytes (OutPoint (fakeTxHash 9) 0)) "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" 1000 (S.encode (Store.BlockRef 800000 1)) seenTime False fixtureTime
         _ <- fullSync pool
         coins pool `dbShouldBeE` [OutPoint (fakeTxHash 2) 0, OutPoint (fakeTxHash 3) 0]
 
@@ -2442,6 +2468,15 @@ sameAmountReplacedStore ctx =
         ],
       fakeUnspents = [coinOf ctx (fakeTxHash 2) Nothing (externalAddr 0) 50000],
       fakeRawTransactions = [(fakeTxHash 2, fundingTx ctx 2 [(externalAddr 0, 50000)])]
+    }
+
+-- | The payment of 'mempoolStore' confirmed in block 800000 after all, and
+-- the replacement of 'sameAmountReplacedStore' gone from the store. The
+-- store took the payment in again from the block, dated 1700003700.
+replacementLostStore :: Ctx -> FakeStore
+replacementLostStore ctx =
+  (paymentStore ctx)
+    { fakeTransactions = [seenAt 1700003700 (creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000)]
     }
 
 -- | The coin of 'paymentStore' spent in the mempool by transaction 3, which

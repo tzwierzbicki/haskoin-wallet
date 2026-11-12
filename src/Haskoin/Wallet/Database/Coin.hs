@@ -19,6 +19,11 @@
 -- and BIP84 ones mixed ('spendableCoins'). A coin is keyed by its account
 -- and its outpoint. The test networks share their keys, and a store that
 -- serves two of them the same chain reports the same coin on both.
+--
+-- A coin also keeps the time of the transaction that paid it, which the
+-- sync writes from the summary of that transaction. coins shows it, and
+-- lists the coins by it, as txs lists the transactions
+-- ('Haskoin.Wallet.Database.TxInfo.TimeKey').
 module Haskoin.Wallet.Database.Coin
   ( JsonCoin (..),
     CoinLock (..),
@@ -32,7 +37,10 @@ module Haskoin.Wallet.Database.Coin
     coinsStarting,
     coinsWith,
     coinAddressesStarting,
-    coinBlock,
+    coinTimeKeyOf,
+    listedCoinsAfter,
+    otherCoinsQuery,
+    unconfirmedCoinsQuery,
     Spending (..),
     spendingOf,
     spendableCoins,
@@ -81,7 +89,7 @@ import Data.Either (rights)
 import Data.List (genericTake, intercalate, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes, fromMaybe, listToMaybe, mapMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isJust, listToMaybe, mapMaybe)
 import Data.Ord (Down (..))
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
@@ -91,7 +99,8 @@ import qualified Data.Text as Text
 import Database.Persist.Sql (Single (..), rawSql)
 import Data.Time (UTCTime, getCurrentTime)
 import Data.Word (Word32, Word64)
-import Database.Esqueleto.Legacy (InnerJoin (..), Value (..), asc, desc, from, groupBy, having, in_, just, limit, on, orderBy, select, sum_, val, valList, where_, (&&.), (<.), (==.), (>.), (^.), (||.))
+import Database.Esqueleto.Legacy (InnerJoin (..), SqlExpr, SqlQuery, Value (..), asc, desc, from, groupBy, having, in_, just, limit, not_, on, orderBy, select, sum_, val, valList, where_, (&&.), (<.), (==.), (>.), (^.), (||.))
+import qualified Database.Esqueleto.Legacy as E
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -105,7 +114,7 @@ import Haskoin.Wallet.Keys (PoolPath (..), addressKind)
 import Haskoin.Wallet.Database.PendingTx (lockedOutpoints, userLockedOutpoints)
 import Haskoin.Wallet.Database.RawTx (getRawTx, lookupRawTx)
 import Haskoin.Wallet.ShortId (ShortId, shortIdKey)
-import Haskoin.Wallet.Database.TxInfo (coinLabel, coinLabels, liveSummaries, spentTxids, transactionTime, walletTransaction)
+import Haskoin.Wallet.Database.TxInfo (TimeKey (..), afterInTime, coinLabel, coinLabels, firstBlockRef, inTimeOrder, liveSummaries, spentTxids, timeOrder, walletTransaction)
 import Haskoin.Wallet.Util (rowLimit)
 import Numeric.Natural (Natural)
 
@@ -132,8 +141,10 @@ data JsonCoin = JsonCoin
     -- its account and its path below the key of that account, which the
     -- compact views show in place of the address
     jsonCoinPath :: !(Maybe PoolPath),
-    -- | The time of the transaction that paid it ('transactionTime'),
-    -- which its views start with, as the views of a transaction do
+    -- | The time of the transaction that paid it, which the sync stores
+    -- with the coin ('refreshCoins'). Its views start with it, as the
+    -- views of a transaction do, and coins lists it by it. Every coin of
+    -- the database has one. A coin read from JSON may have none.
     jsonCoinTime :: !(Maybe UTCTime)
   }
   deriving (Eq, Show)
@@ -198,7 +209,6 @@ toJsonCoin rules pool row = do
   spendable <- canSpend rules 0 outpoint block
   label <- lift $ coinLabel pool outpoint.hash
   addrRowM <- lift $ fmap P.entityVal <$> P.getBy (UniqueAddress (dBCoinAccount row) (dBCoinAddress row))
-  time <- lift $ transactionTime pool outpoint.hash
   return
     JsonCoin
       { jsonCoinOutpoint = outpoint,
@@ -212,7 +222,7 @@ toJsonCoin rules pool row = do
         jsonCoinAddressLabel = maybe "" dBAddressLabel addrRowM,
         jsonCoinChange = maybe False dBAddressInternal addrRowM,
         jsonCoinPath = PoolPath <$> addressKind addr <*> (addrPath <$> addrRowM),
-        jsonCoinTime = time
+        jsonCoinTime = Just (dBCoinTime row)
       }
 
 -- | The labels the coins show ('coinLabel'), by the transaction that paid
@@ -317,41 +327,93 @@ groupCoins net ctx coins = Map.fromListWith Map.union (mapMaybe entry coins)
 data CoinFilter = AllCoins | LockedCoins
   deriving (Eq, Show)
 
+-- | Where a coin row stands in the order of coins ('TimeKey'): a coin is
+-- unconfirmed while the transaction that paid it is in the mempool, and
+-- has the time of that transaction
+coinTimeKey :: DBCoin -> Either String TimeKey
+coinTimeKey row = do
+  outpoint <- coinOutpoint row
+  block <- readBlock outpoint (dBCoinBlockRef row)
+  return
+    TimeKey
+      { timeKeyUnconfirmed = not (Store.confirmed block),
+        timeKeyTime = dBCoinTime row,
+        timeKeyBlock = block
+      }
+
+-- | Each coin row with the value it sorts by in the order of coins
+withCoinOrder :: [DBCoin] -> Either String [((Bool, Down UTCTime, ByteString, KeyBytes), DBCoin)]
+withCoinOrder = mapM (\row -> (\key -> (timeOrder key (dBCoinOutpoint row), row)) <$> coinTimeKey row)
+
+-- | The query of the second part of coins for an account: its confirmed
+-- coins that the filter keeps, in their order, after the coin given in
+-- that part, up to the count. The index by time gives them in that order,
+-- from the one given on. A coin is confirmed when its block reference is
+-- not one of the mempool. Written as a range, the planner would take the
+-- index on the block references for it, and sort every confirmed coin for
+-- each page.
+otherCoinsQuery :: DBAccountId -> (SqlExpr (P.Entity DBCoin) -> SqlExpr (E.Value Bool)) -> Maybe (TimeKey, OutPoint) -> Maybe Natural -> SqlQuery (SqlExpr (P.Entity DBCoin))
+otherCoinsQuery accId kept afterM countM =
+  from $ \c -> do
+    where_ $
+      c ^. DBCoinAccount ==. val accId
+        &&. not_ (c ^. DBCoinBlockRef <. val firstBlockRef)
+        &&. kept c
+    forM_ afterM $ \(key, outpoint) ->
+      where_ $ afterInTime (c ^. DBCoinTime) (c ^. DBCoinBlockRef) (c ^. DBCoinOutpoint) key (outpointBytes outpoint)
+    inTimeOrder (c ^. DBCoinTime) (c ^. DBCoinBlockRef) (c ^. DBCoinOutpoint)
+    forM_ countM $ limit . rowLimit
+    return c
+
+-- | The query of the first part of coins for an account: its unconfirmed
+-- coins that the filter keeps, in no order. The index on the block
+-- references finds them.
+unconfirmedCoinsQuery :: DBAccountId -> (SqlExpr (P.Entity DBCoin) -> SqlExpr (E.Value Bool)) -> SqlQuery (SqlExpr (P.Entity DBCoin))
+unconfirmedCoinsQuery accId kept =
+  from $ \c -> do
+    where_ $
+      c ^. DBCoinAccount ==. val accId
+        &&. c ^. DBCoinBlockRef <. val firstBlockRef
+        &&. kept c
+    return c
+
 -- | The coins of the given accounts of a pool, spendable or not, in the
--- order of their block references as the store encodes them: the mempool
--- first, then the newest blocks first. Coins with the same block
--- reference, the outputs of one transaction for instance, follow the
--- order of their outpoints, so that the order is settled. Those after the
--- coin given, by its block and its outpoint, or the first ones, up to the
--- count, or all of them.
+-- order of coins ('TimeKey'): the unconfirmed ones first, then the
+-- others, the newest first in each. Those after the coin given, by where
+-- it stands and its outpoint, or the first ones, up to the count, or all
+-- of them.
 --
 -- The accounts are those of the pool, or the one of a type alone. Each
--- account is read in that order from its own index, up to the count, and
--- the rows are merged: the first rows of the whole are among the first
--- rows of each. One query over two accounts would sort every coin of both
--- for each page.
-coinsAfter :: (MonadUnliftIO m) => Pool -> [DBAccountId] -> CoinFilter -> Maybe (Store.BlockRef, OutPoint) -> Maybe Natural -> ExceptT String (DB m) [JsonCoin]
-coinsAfter pool accIds shown afterM countM = do
+-- account is read in that order, its confirmed coins from its own index
+-- up to the count, and the rows are merged: the first rows of the whole
+-- are among the first rows of each. One query over two accounts would
+-- sort every coin of both for each page. The unconfirmed coins are few,
+-- and are read whole and sorted here.
+coinsAfter :: (MonadUnliftIO m) => Pool -> [DBAccountId] -> CoinFilter -> Maybe (TimeKey, OutPoint) -> Maybe Natural -> ExceptT String (DB m) [JsonCoin]
+coinsAfter pool accIds shown afterM countM = map fst <$> listedCoinsAfter pool accIds shown afterM countM
+
+-- | 'coinsAfter', each coin with where it stands in the order of coins
+-- and its outpoint: what the listing goes on after
+listedCoinsAfter :: (MonadUnliftIO m) => Pool -> [DBAccountId] -> CoinFilter -> Maybe (TimeKey, OutPoint) -> Maybe Natural -> ExceptT String (DB m) [(JsonCoin, (TimeKey, OutPoint))]
+listedCoinsAfter pool accIds shown afterM countM = do
   rules <- spendingOf pool.poolNetwork
-  let lockedOnly = case shown of
-        AllCoins -> []
-        LockedCoins -> [DBCoinOutpoint P.<-. map outpointBytes (Map.keys rules.spendingLocks)]
-      -- From the block of the coin given on, which the index on the block
-      -- references finds, and past the coin itself within that block
-      after = case afterM of
-        Nothing -> []
-        Just (block, outpoint) ->
-          let blockBytes = S.encode block
-           in (DBCoinBlockRef P.>=. blockBytes)
-                : ([DBCoinBlockRef P.>. blockBytes] P.||. [DBCoinOutpoint P.>. outpointBytes outpoint])
-      count = maybe [] (\n -> [P.LimitTo (rowLimit n)]) countM
-  perAccount <- forM accIds $ \accId ->
-    lift $
-      P.selectList
-        ((DBCoinAccount P.==. accId) : lockedOnly <> after)
-        ([P.Asc DBCoinBlockRef, P.Asc DBCoinOutpoint] <> count)
-  let merged = sortOn (\row -> (dBCoinBlockRef row, dBCoinOutpoint row)) (P.entityVal <$> concat perAccount)
-  mapM (toJsonCoin rules pool) (maybe id genericTake countM merged)
+  let kept c = case shown of
+        AllCoins -> val True
+        LockedCoins -> c ^. DBCoinOutpoint `in_` valList (map outpointBytes (Map.keys rules.spendingLocks))
+      -- The cursor, when it is in the second part: the whole first part
+      -- comes before it
+      inSecond = mfilter (not . (.timeKeyUnconfirmed) . fst) afterM
+      cursor = (\(key, outpoint) -> timeOrder key (outpointBytes outpoint)) <$> afterM
+  perAccount <- forM accIds $ \accId -> lift $ do
+    firstPart <- if isJust inSecond then return [] else map P.entityVal <$> select (unconfirmedCoinsQuery accId kept)
+    secondPart <- map P.entityVal <$> select (otherCoinsQuery accId kept inSecond countM)
+    return (firstPart <> secondPart)
+  keyed <- liftEither $ withCoinOrder (concat perAccount)
+  let following = [row | (order, row) <- sortOn fst keyed, maybe True (order >) cursor]
+  forM (maybe id genericTake countM following) $ \row -> do
+    coin <- toJsonCoin rules pool row
+    key <- liftEither $ coinTimeKey row
+    return (coin, (key, jsonCoinOutpoint coin))
 
 -- | At most the given number of coin rows of the account whose transaction
 -- id, as hw shows it, starts with the hexadecimal digits, by their
@@ -409,13 +471,13 @@ coinAddressesStarting accId start atMost = do
       [P.toPersistValue accId, P.toPersistValue (Text.length start), P.toPersistValue start, P.toPersistValue (rowLimit atMost :: Int)]
   return (unSingle <$> rows)
 
--- | The block of a coin of the accounts, the one --after names, or why
--- there is none
-coinBlock :: (MonadUnliftIO m) => [DBAccountId] -> OutPoint -> ExceptT String (DB m) Store.BlockRef
-coinBlock accIds outpoint = do
+-- | Where a coin of the accounts stands in the order of coins, for the
+-- one --after names, or why there is none
+coinTimeKeyOf :: (MonadUnliftIO m) => [DBAccountId] -> OutPoint -> ExceptT String (DB m) TimeKey
+coinTimeKeyOf accIds outpoint = do
   rows <- lift $ catMaybes <$> mapM (\accId -> P.get (coinKey accId outpoint)) accIds
   case rows of
-    row : _ -> liftEither $ readBlock outpoint (dBCoinBlockRef row)
+    row : _ -> liftEither $ coinTimeKey row
     [] -> throwError $ "The coin " <> coinText outpoint <> " is not among the coins listed"
 
 {- Spending -}
@@ -821,18 +883,26 @@ instance Monoid Refreshed where
 
 -- | Bring the coins of the account at the addresses in line with what the
 -- store lists: insert the coins that are new, rewrite those whose block
--- changed, delete those the store no longer lists. A coin the store lists
--- twice is stored once. The value of a coin never changes, so a value that
--- differs is a stored one gone wrong, which a full sync repairs here.
+-- or time changed, delete those the store no longer lists. A coin the
+-- store lists twice is stored once. The value of a coin never changes, so
+-- a value that differs is a stored one gone wrong, which a full sync
+-- repairs here.
+--
+-- Each coin takes the time of the transaction that paid it, which the
+-- function given tells: the time of its summary, which the sync stores
+-- before the coins. coins shows a coin with that time, and lists it by
+-- that time. The time of a summary changes only when its transaction is
+-- fetched again, and the coins at its addresses are then refreshed too.
 refreshCoins ::
   (MonadUnliftIO m) =>
   Network ->
   Ctx ->
   DBAccountId ->
+  (TxHash -> UTCTime) ->
   [Address] ->
   [Store.Unspent] ->
   ExceptT String (DB m) Refreshed
-refreshCoins net ctx accId addrs unspents = mconcat <$> mapM refreshAddress addrs
+refreshCoins net ctx accId timeOf addrs unspents = mconcat <$> mapM refreshAddress addrs
   where
     listed = groupCoins net ctx unspents
     refreshAddress addr = do
@@ -847,11 +917,13 @@ refreshCoins net ctx accId addrs unspents = mconcat <$> mapM refreshAddress addr
           moved =
             [ coin
               | (coin, row) <- Map.elems (Map.intersectionWith (,) current stored),
-                S.encode coin.block /= dBCoinBlockRef row || coin.value /= dBCoinValue row
+                S.encode coin.block /= dBCoinBlockRef row
+                  || coin.value /= dBCoinValue row
+                  || timeOf coin.outpoint.hash /= dBCoinTime row
             ]
       lift $ forM_ gone deleteCoin
-      lift $ forM_ moved (rewriteCoin accId)
-      inserted <- mapM (insertCoin net accId) new
+      lift $ forM_ moved $ \coin -> rewriteCoin accId (timeOf coin.outpoint.hash) coin
+      inserted <- mapM (\coin -> insertCoin net accId (timeOf coin.outpoint.hash) coin) new
       return
         Refreshed
           { refreshedCount = length gone + length moved + length new,
@@ -859,9 +931,10 @@ refreshCoins net ctx accId addrs unspents = mconcat <$> mapM refreshAddress addr
             deletedCoins = gone
           }
 
--- | Store a coin of the account, at the address it pays
-insertCoin :: (MonadUnliftIO m) => Network -> DBAccountId -> Store.Unspent -> ExceptT String (DB m) DBCoin
-insertCoin net accId coin = do
+-- | Store a coin of the account, at the address it pays, with the time
+-- of the transaction that paid it
+insertCoin :: (MonadUnliftIO m) => Network -> DBAccountId -> UTCTime -> Store.Unspent -> ExceptT String (DB m) DBCoin
+insertCoin net accId paidAt coin = do
   addr <-
     liftMaybe ("The coin " <> coinText coin.outpoint <> " pays no address of the network") $
       addrToText net =<< coin.address
@@ -878,6 +951,7 @@ insertCoin net accId coin = do
             dBCoinAddress = addr,
             dBCoinValue = coin.value,
             dBCoinBlockRef = S.encode coin.block,
+            dBCoinTime = paidAt,
             dBCoinLockedByUser = maybe False dBCoinLockedByUser previousM,
             dBCoinCreated = time
           }
@@ -885,12 +959,13 @@ insertCoin net accId coin = do
   return row
 
 -- | Give a stored coin the block and the value the store now reports for
--- it. Whether the user locked it stays.
-rewriteCoin :: (MonadUnliftIO m) => DBAccountId -> Store.Unspent -> DB m ()
-rewriteCoin accId coin =
+-- it, and the time of the transaction that paid it. Whether the user
+-- locked it stays.
+rewriteCoin :: (MonadUnliftIO m) => DBAccountId -> UTCTime -> Store.Unspent -> DB m ()
+rewriteCoin accId paidAt coin =
   P.update
     (coinKey accId coin.outpoint)
-    [DBCoinBlockRef P.=. S.encode coin.block, DBCoinValue P.=. coin.value]
+    [DBCoinBlockRef P.=. S.encode coin.block, DBCoinValue P.=. coin.value, DBCoinTime P.=. paidAt]
 
 -- | Delete a stored coin
 deleteCoin :: (MonadUnliftIO m) => DBCoin -> DB m ()

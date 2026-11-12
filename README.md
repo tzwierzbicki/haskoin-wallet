@@ -2023,7 +2023,10 @@ Lists the coins of the active portfolio, grouped by network. On `btc`, the
 `bip44` and the `bip84` coins are listed together, as a payment spends them.
 `--network`
 and `--type` show one network or one type only. On each network, the
-unconfirmed coins come first, then the newest. Each coin takes two lines:
+unconfirmed coins come first, then the others. Each part lists the newest
+first, by the time of the transaction that paid the coin, which the listing
+shows. Coins of the same time keep the order of their blocks. Each coin takes
+two lines:
 
 1. The [short id](#short-ids) of the coin, such as `a1075db5:1`, which
    `lockcoin` and `--coin` take. Then the time of the transaction that paid it,
@@ -2374,8 +2377,10 @@ of which recipient pays, which it cannot make for you.
 
 Lists the transactions of the active portfolio, grouped by network, as of the
 last sync. `--network` shows one network only. On each network, the unconfirmed
-transactions come first, then the newest. [`show TXID`](#hw-show) shows one of
-them in full.
+transactions come first, then the others. Each part lists the newest first, by
+the time shown. A dead transaction is among the others, at its time.
+Transactions of the same time keep the order of their blocks.
+[`show TXID`](#hw-show) shows one of them in full.
 
 A transaction is shown as the portfolio sees it, whichever of its accounts it
 touches. One that spends `bip44` and `bip84` coins together is one
@@ -2468,6 +2473,14 @@ hw txs --max 20 --after TXID
 > - **The balance is that of one network.** It adds up the accounts of the
 >   portfolio on that network. Each section of the listing has its own
 >   running balance.
+> - **The time is when the server first saw the transaction.** One that the
+>   server first saw in a block has the time of that block, which its miner
+>   set. That happens when the server dropped a payment for its replacement,
+>   and a block then confirmed the payment after all. Miners of test networks
+>   often date blocks ahead, by up to two hours, so such a time can be in the
+>   future. The list follows the times, so a transaction can come above one
+>   of a later block. The running balance follows the list, and between two
+>   such transactions it can show an amount the portfolio never held.
 
 #### `hw pendingtxs`
 

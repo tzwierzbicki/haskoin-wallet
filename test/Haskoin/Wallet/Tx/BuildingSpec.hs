@@ -657,7 +657,7 @@ fundedAt ctx cfg values = do
   let fund = fundingWorth ctx values
       addrs = externalAddr <$> [0 .. length values - 1]
   lift $ insertRawTx fund
-  _ <- refreshCoins btc ctx accId addrs [storeCoin ctx (txHash fund, i) (Just 0) addr value | (i, addr, value) <- zip3 [0 ..] addrs values]
+  _ <- refreshCoins btc ctx accId (const seenTime) addrs [storeCoin ctx (txHash fund, i) (Just 0) addr value | (i, addr, value) <- zip3 [0 ..] addrs values]
   return (pool, fund)
 
 -- | The same portfolio holding coins of both types: those of 'fundedAt'
@@ -672,7 +672,7 @@ fundedBoth ctx cfg legacyValues segwitValues = do
   let fund = segwitFundingWorth ctx segwitValues
       addrs = segwitExternalAddr <$> [0 .. length segwitValues - 1]
   lift $ insertRawTx fund
-  _ <- refreshCoins btc ctx segwitId addrs [storeCoin ctx (txHash fund, i) (Just 0) addr value | (i, addr, value) <- zip3 [0 ..] addrs segwitValues]
+  _ <- refreshCoins btc ctx segwitId (const seenTime) addrs [storeCoin ctx (txHash fund, i) (Just 0) addr value | (i, addr, value) <- zip3 [0 ..] addrs segwitValues]
   return pool
 
 -- | The outpoint of the i-th coin of 'segwitFundingWorth'
@@ -733,7 +733,7 @@ databaseSpec ctx =
         (accId, _) <- testNewAcc ctx
         lift $ updateBest btc (fakeBlockHash 0) 0 1700000000
         _ <- genExtAddress ctx cfg accId ""
-        _ <- refreshCoins btc ctx accId [externalAddr 0] [storeCoin ctx (fakeTxHash 9, 0) (Just 0) (externalAddr 0) 400000]
+        _ <- refreshCoins btc ctx accId (const seenTime) [externalAddr 0] [storeCoin ctx (fakeTxHash 9, 0) (Just 0) (externalAddr 0) 400000]
         result <- lift $ runExceptT $ paying ctx cfg pool Nothing 350000 NoCoinControl (NewChangeAddress Nothing)
         liftIO $
           result
@@ -749,7 +749,7 @@ databaseSpec ctx =
         _ <- genExtAddress ctx cfg accId ""
         let fund = fundingWorth ctx [100000000]
         lift $ insertRawTx fund
-        _ <- refreshCoins btc ctx accId [externalAddr 0] [storeCoin ctx (txHash fund, 0) (Just 0) (externalAddr 0) 400000]
+        _ <- refreshCoins btc ctx accId (const seenTime) [externalAddr 0] [storeCoin ctx (txHash fund, 0) (Just 0) (externalAddr 0) 400000]
         result <- lift $ runExceptT $ paying ctx cfg pool Nothing 350000 NoCoinControl (NewChangeAddress Nothing)
         liftIO $
           result
@@ -1107,7 +1107,7 @@ fundedCash ctx cfg = do
   _ <- genExtAddress ctx cfg accId ""
   let fund = fundingTx ctx 1 [(bchExternalAddr, 400000)]
   lift $ insertRawTx fund
-  _ <- refreshCoins bch ctx accId [bchExternalAddr] [storeCoin ctx (txHash fund, 0) (Just 0) bchExternalAddr 400000]
+  _ <- refreshCoins bch ctx accId (const seenTime) [bchExternalAddr] [storeCoin ctx (txHash fund, 0) (Just 0) bchExternalAddr 400000]
   return (portfolioPool portfolio bch)
 
 -- | The first change address of the test wallet on Bitcoin Cash,

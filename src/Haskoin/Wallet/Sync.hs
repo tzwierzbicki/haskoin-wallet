@@ -38,6 +38,7 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.String.Conversions (cs)
 import Data.Text (Text)
+import Data.Time (getCurrentTime)
 import Data.Word (Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -770,13 +771,20 @@ syncCoins ctx store pool full lookedAt = do
   rawTxs <- answeredBy store $ fromStore $ rawTransactions store wanted
   lift $ forM_ rawTxs insertRawTx
   refusedAnswer store =<< checkListedCoins unspents
+  -- Each coin takes the time of the summary of its transaction, which the
+  -- sync stored before. The store lists that transaction under the
+  -- address of the coin, so the summary is there. A coin without one
+  -- takes the time hw learns of it.
+  times <- lift $ transactionTimes pool parents
+  now <- liftIO getCurrentTime
+  let timeOf tid = Map.findWithDefault now tid times
   accounts <- lift $ poolAccounts pool
   fmap mconcat . forM accounts $ \(accId, acc) -> do
     own <- lift $ storedAmong lookedAtAddrs (accId, acc)
     ownAddrs <- liftEither $ mapM (textToAddrE net . dBAddressAddress) own
     -- A set, as a first sync looks at thousands of addresses
     let ownSet = Set.fromList ownAddrs
-    refreshCoins net ctx accId ownAddrs [coin | coin <- unspents, maybe False (`Set.member` ownSet) coin.address]
+    refreshCoins net ctx accId timeOf ownAddrs [coin | coin <- unspents, maybe False (`Set.member` ownSet) coin.address]
 
 -- | Drop the raw transactions no coin needs any more. A raw transaction is
 -- kept while a coin comes from it: the parents of the coins that are gone

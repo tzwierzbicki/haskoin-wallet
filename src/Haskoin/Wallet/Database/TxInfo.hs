@@ -30,10 +30,11 @@ import Data.Char (toUpper)
 import Data.Containers.ListUtils (nubOrd)
 import Data.Either (isLeft, partitionEithers, rights)
 import Data.Int (Int64)
-import Data.List (mapAccumL)
+import Data.List (genericLength, genericTake, mapAccumL, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust)
+import Data.Ord (Down (..))
 import qualified Data.Serialize as S
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -269,14 +270,84 @@ data ListedTx = ListedTx
   }
   deriving (Eq, Show)
 
--- | Where txs goes on: after a transaction, by its block and its id, and
--- with the balance before it, which is the balance after the next one
+-- | Where txs goes on: after a transaction, by where it stands in the
+-- order of txs and by its id, and with the balance before it, which is the
+-- balance after the next one
 data TxsCursor = TxsCursor
-  { txsCursorBlock :: !Store.BlockRef,
+  { txsCursorKey :: !TimeKey,
     txsCursorTxid :: !TxHash,
     txsCursorBalance :: !Integer
   }
   deriving (Eq, Show)
+
+{- The order of the listings that show a time -}
+
+-- | Where a transaction or a coin stands in the listings that show a time,
+-- txs and coins, and the exports of both. They list the unconfirmed ones
+-- first, then the others. Each part lists the newest first, by the time
+-- the views show: the time the store gives the transaction. Two rows of
+-- the same time go by their block reference as the store encodes it, the
+-- newest block and the last in a block first. Then they go by their key,
+-- the txid or the outpoint, so that the order is settled. The transactions
+-- of one block often share its time, so they keep the order of the block.
+--
+-- A transaction is unconfirmed when it is live and in the mempool. A dead
+-- one goes among the others, at its time: it will never be confirmed.
+-- Listed by block alone, a transaction that died in the mempool stayed
+-- above every block for good. The block order also disagrees with the
+-- times shown when a payment waits in the mempool while later ones
+-- confirm. The time alone, without the two parts, would put a payment
+-- whose block is dated ahead above the unconfirmed ones. Miners of test
+-- networks often date blocks ahead, by up to two hours.
+data TimeKey = TimeKey
+  { -- | Whether it is in the first part, of the unconfirmed ones
+    timeKeyUnconfirmed :: !Bool,
+    timeKeyTime :: !UTCTime,
+    timeKeyBlock :: !Store.BlockRef
+  }
+  deriving (Eq, Show)
+
+-- | A key of the listings by time and the key of the row after it, as a
+-- value that sorts in their order: the unconfirmed part first, the newest
+-- first, then the block reference and the key as the database sorts them
+timeOrder :: TimeKey -> KeyBytes -> (Bool, Down UTCTime, BS.ByteString, KeyBytes)
+timeOrder key rowKey = (not key.timeKeyUnconfirmed, Down key.timeKeyTime, S.encode key.timeKeyBlock, rowKey)
+
+-- | The reference where the blocks start, in the order the store encodes
+-- references in: every reference of the mempool sorts before it, and
+-- every reference of a block from it on
+firstBlockRef :: BS.ByteString
+firstBlockRef = S.encode (Store.BlockRef maxBound maxBound)
+
+-- | The rows that come after a row in a part of the listings by time,
+-- given the time, the block reference and the key of each row, and those
+-- of the row: an older time, or the same time and a later block
+-- reference, or the same block and a greater key. The time comes first,
+-- as a range, for the index by time.
+afterInTime :: (P.PersistField k) => SqlExpr (E.Value UTCTime) -> SqlExpr (E.Value BS.ByteString) -> SqlExpr (E.Value k) -> TimeKey -> k -> SqlExpr (E.Value Bool)
+afterInTime time block key at rowKey =
+  time <=. val at.timeKeyTime
+    &&. ( time <. val at.timeKeyTime
+            ||. (block >=. val blockBytes &&. (block >. val blockBytes ||. key >. val rowKey))
+        )
+  where
+    blockBytes = S.encode at.timeKeyBlock
+
+-- | The rows of a part of the listings by time from its top down to a
+-- row, that row included: the reverse of 'afterInTime'
+throughInTime :: (P.PersistField k) => SqlExpr (E.Value UTCTime) -> SqlExpr (E.Value BS.ByteString) -> SqlExpr (E.Value k) -> TimeKey -> k -> SqlExpr (E.Value Bool)
+throughInTime time block key at rowKey =
+  time >=. val at.timeKeyTime
+    &&. ( time >. val at.timeKeyTime
+            ||. (block <=. val blockBytes &&. (block <. val blockBytes ||. key <=. val rowKey))
+        )
+  where
+    blockBytes = S.encode at.timeKeyBlock
+
+-- | The order of a part of the listings by time, given the time, the
+-- block reference and the key of each row
+inTimeOrder :: (P.PersistField k) => SqlExpr (E.Value UTCTime) -> SqlExpr (E.Value BS.ByteString) -> SqlExpr (E.Value k) -> SqlQuery ()
+inTimeOrder time block key = orderBy [desc time, asc block, asc key]
 
 -- | The id of the transaction, when it has one: a transaction in
 -- preparation has none until it is signed
@@ -566,18 +637,21 @@ liveTxids pool = do
       return (t ^. DBTxInfoTxid)
   Set.fromList <$> liftEither (mapM (bytesToHash . unValue) rows)
 
+-- | Whether a summary is of an unconfirmed transaction, live and in the
+-- mempool. The index on the block references finds them: a reference of
+-- the mempool sorts before every reference of a block.
+summaryUnconfirmed :: SqlExpr (Entity DBTxInfo) -> SqlExpr (E.Value Bool)
+summaryUnconfirmed t =
+  t ^. DBTxInfoBlockRef <. val firstBlockRef
+    &&. t ^. DBTxInfoDead ==. val False
+
 -- | The live transactions of the pool in the mempool, with their
--- summaries, by their ids, up to the count, or all of them. The index on
--- the block references finds them: a mempool reference sorts before every
--- block reference, as the listings rely on.
+-- summaries, by their ids, up to the count, or all of them
 mempoolSummaries :: (MonadUnliftIO m) => Pool -> Maybe Natural -> ExceptT String (DB m) [(TxHash, TxSummary)]
 mempoolSummaries pool countM = do
   rows <-
     lift . select . from $ \t -> do
-      where_ $
-        ofPool pool t
-          &&. t ^. DBTxInfoBlockRef <. val firstBlock
-          &&. t ^. DBTxInfoDead ==. val False
+      where_ $ ofPool pool t &&. summaryUnconfirmed t
       orderBy [asc (t ^. DBTxInfoTxid)]
       forM_ countM $ limit . rowLimit
       return (t ^. DBTxInfoTxid, t ^. DBTxInfoBlob)
@@ -585,10 +659,6 @@ mempoolSummaries pool countM = do
     tid <- liftEither $ bytesToHash tidBytes
     summary <- liftEither $ decodeSummary pool.poolNetwork tid blob
     return (tid, summary)
-  where
-    -- The first block reference in the order of the references: the
-    -- highest block comes first
-    firstBlock = S.encode (Store.BlockRef maxBound maxBound)
 
 -- | The addresses of the pool that its live transactions in the mempool
 -- spend from or pay, as their summaries name them. An incremental sync
@@ -716,31 +786,91 @@ repsertSummary pool tid ref time summary = do
       P.insert_ row
       return True
 
--- | The pool's transactions on the chain, in the order of their block
--- references as the store encodes them: the mempool first, then the newest
--- blocks first, and those with the same block reference by their ids, so
--- that the order is settled. Those after the transaction given, by its
--- block and its id, or the first ones, up to the count, or all of them.
--- Each is as 'chainTxInfo' reports it.
-txsAfter :: (MonadUnliftIO m) => Pool -> Maybe (Store.BlockRef, TxHash) -> Maybe Natural -> ExceptT String (DB m) [TxInfo]
+-- | Where the summary of a row stands in the order of txs ('TimeKey')
+summaryTimeKey :: DBTxInfo -> Either String TimeKey
+summaryTimeKey row = do
+  ref <- S.decode (dBTxInfoBlockRef row)
+  return
+    TimeKey
+      { timeKeyUnconfirmed = not (dBTxInfoDead row) && not (Store.confirmed ref),
+        timeKeyTime = dBTxInfoTime row,
+        timeKeyBlock = ref
+      }
+
+-- | A summary row as a value that sorts in the order of txs
+summaryOrder :: DBTxInfo -> Either String (Bool, Down UTCTime, BS.ByteString, KeyBytes)
+summaryOrder row = (`timeOrder` dBTxInfoTxid row) <$> summaryTimeKey row
+
+-- | Each summary row with the value it sorts by in the order of txs
+withSummaryOrder :: [DBTxInfo] -> Either String [((Bool, Down UTCTime, BS.ByteString, KeyBytes), DBTxInfo)]
+withSummaryOrder = mapM (\row -> (\order -> (order, row)) <$> summaryOrder row)
+
+-- | The summaries of the unconfirmed transactions of the pool, the first
+-- part of txs, in their order. The index on the block references finds
+-- them, and they are few, so they are sorted here.
+unconfirmedSummaryRows :: (MonadUnliftIO m) => Pool -> ExceptT String (DB m) [DBTxInfo]
+unconfirmedSummaryRows pool = do
+  rows <- lift . select $ unconfirmedSummariesQuery pool
+  keyed <- liftEither $ withSummaryOrder (entityVal <$> rows)
+  return $ snd <$> sortOn fst keyed
+
+-- | The query of 'unconfirmedSummaryRows', in no order
+unconfirmedSummariesQuery :: Pool -> SqlQuery (SqlExpr (Entity DBTxInfo))
+unconfirmedSummariesQuery pool =
+  from $ \t -> do
+    where_ $ ofPool pool t &&. summaryUnconfirmed t
+    return t
+
+-- | The query of the second part of txs: the summaries of the pool that
+-- are not of an unconfirmed transaction, in their order, after the
+-- transaction given in that part, up to the count. The index by time gives
+-- them in that order, from the one given on.
+otherSummariesQuery :: Pool -> Maybe (TimeKey, TxHash) -> Maybe Natural -> SqlQuery (SqlExpr (Entity DBTxInfo))
+otherSummariesQuery pool afterM countM =
+  from $ \t -> do
+    where_ $ ofPool pool t &&. not_ (summaryUnconfirmed t)
+    forM_ afterM $ \(key, tid) ->
+      where_ $ afterInTime (t ^. DBTxInfoTime) (t ^. DBTxInfoBlockRef) (t ^. DBTxInfoTxid) key (hashBytes tid)
+    inTimeOrder (t ^. DBTxInfoTime) (t ^. DBTxInfoBlockRef) (t ^. DBTxInfoTxid)
+    forM_ countM $ limit . rowLimit
+    return t
+
+-- | The summary rows of txs after the transaction given, by where it
+-- stands and its id, or the first ones, up to the count, or all of them.
+-- The first part, of the unconfirmed transactions, comes whole from
+-- 'unconfirmedSummaryRows'. The second part comes from the index by time.
+summaryRowsAfter :: (MonadUnliftIO m) => Pool -> Maybe (TimeKey, TxHash) -> Maybe Natural -> ExceptT String (DB m) [DBTxInfo]
+summaryRowsAfter pool afterM countM = do
+  firstPart <- case afterM of
+    -- A cursor in the second part is past the whole first part
+    Just (key, _) | not key.timeKeyUnconfirmed -> return []
+    _ -> do
+      rows <- unconfirmedSummaryRows pool
+      past <- case afterM of
+        Nothing -> return rows
+        Just (key, tid) -> do
+          let cursor = timeOrder key (hashBytes tid)
+          keyed <- liftEither $ withSummaryOrder rows
+          return [row | (order, row) <- keyed, order > cursor]
+      return $ maybe id genericTake countM past
+  let left = (\n -> n - genericLength firstPart) <$> countM
+      -- The cursor, when it is in the second part
+      inSecond = mfilter (not . (.timeKeyUnconfirmed) . fst) afterM
+  secondPart <-
+    if left == Just 0
+      then return []
+      else map entityVal <$> lift (select (otherSummariesQuery pool inSecond left))
+  return (firstPart <> secondPart)
+
+-- | The pool's transactions on the chain in the order of txs ('TimeKey'):
+-- those after the transaction given, by where it stands and its id, or
+-- the first ones, up to the count, or all of them. Each is as
+-- 'chainTxInfo' reports it.
+txsAfter :: (MonadUnliftIO m) => Pool -> Maybe (TimeKey, TxHash) -> Maybe Natural -> ExceptT String (DB m) [TxInfo]
 txsAfter pool afterM countM = do
-  let net = pool.poolNetwork
-  rows <-
-    lift . select . from $ \t -> do
-      where_ $ ofPool pool t
-      -- From the block of the transaction given on, which the index on
-      -- the block references finds, and past the transaction itself
-      -- within that block
-      forM_ afterM $ \(block, tid) -> do
-        let blockBytes = val (S.encode block)
-        where_ $
-          t ^. DBTxInfoBlockRef >=. blockBytes
-            &&. (t ^. DBTxInfoBlockRef >. blockBytes ||. t ^. DBTxInfoTxid >. val (hashBytes tid))
-      orderBy [asc (t ^. DBTxInfoBlockRef), asc (t ^. DBTxInfoTxid)]
-      forM_ countM $ limit . rowLimit
-      return t
-  heightM <- bestHeight net
-  forM rows $ chainTxInfo heightM . entityVal
+  rows <- summaryRowsAfter pool afterM countM
+  heightM <- bestHeight pool.poolNetwork
+  forM rows $ chainTxInfo heightM
 
 -- | What a pool holds, confirmed or not: the totals of its accounts added
 -- up, the balance after its newest transaction
@@ -748,26 +878,33 @@ poolTotal :: (MonadUnliftIO m) => Pool -> DB m Integer
 poolTotal pool = sum . map (accountTotal . snd) <$> poolAccounts pool
 
 -- | The transactions of txs after the cursor, or the first ones, up to the
--- count, or all of them. Each comes with the balance before it, which the
--- cursor after it carries. The first transaction of the listing starts
--- from what the pool holds, and each one below from the balance before
--- the one above it.
-listedTxsAfter :: (MonadUnliftIO m) => Pool -> Maybe TxsCursor -> Maybe Natural -> ExceptT String (DB m) [(ListedTx, Integer)]
+-- count, or all of them. Each comes with the cursor to go on after it,
+-- which carries the balance before it. The first transaction of the
+-- listing starts from what the pool holds, and each one below from the
+-- balance before the one above it.
+listedTxsAfter :: (MonadUnliftIO m) => Pool -> Maybe TxsCursor -> Maybe Natural -> ExceptT String (DB m) [(ListedTx, TxsCursor)]
 listedTxsAfter pool afterM countM = do
   total <- lift $ poolTotal pool
-  infos <- txsAfter pool (position <$> afterM) countM
+  rows <- summaryRowsAfter pool (position <$> afterM) countM
+  heightM <- bestHeight pool.poolNetwork
+  listed <- forM rows $ \row -> do
+    info <- chainTxInfo heightM row
+    key <- liftEither $ summaryTimeKey row
+    tid <- liftEither $ bytesToHash (dBTxInfoTxid row)
+    return (info, key, tid)
   let start = maybe total txsCursorBalance afterM
-  return $ snd (mapAccumL withBalance start infos)
+  return $ snd (mapAccumL withBalance start listed)
   where
-    position cursor = (txsCursorBlock cursor, txsCursorTxid cursor)
+    position cursor = (txsCursorKey cursor, txsCursorTxid cursor)
 
--- | A transaction with the balance after it, and that balance without
--- the transaction: the balance before it, and after the next one down. A
--- dead transaction takes nothing away, since the balance leaves it out.
-withBalance :: Integer -> TxInfo -> (Integer, (ListedTx, Integer))
-withBalance after info
-  | txInfoDead info = (after, (ListedTx info Nothing, after))
-  | otherwise = (before, (ListedTx info (Just after), before))
+-- | A transaction with the balance after it, and the cursor after it,
+-- which carries that balance without the transaction: the balance before
+-- it, and after the next one down. A dead transaction takes nothing away,
+-- since the balance leaves it out.
+withBalance :: Integer -> (TxInfo, TimeKey, TxHash) -> (Integer, (ListedTx, TxsCursor))
+withBalance after (info, key, tid)
+  | txInfoDead info = (after, (ListedTx info Nothing, TxsCursor key tid after))
+  | otherwise = (before, (ListedTx info (Just after), TxsCursor key tid before))
   where
     before = after - summaryAmount (txInfoSummary info)
 
@@ -775,25 +912,43 @@ withBalance after info
 -- every transaction down to that one
 txsCursorAt :: (MonadUnliftIO m) => Pool -> TxHash -> ExceptT String (DB m) TxsCursor
 txsCursorAt pool tid = do
-  block <- txBlock pool tid
-  above <- lift $ amountsThrough pool block tid
+  key <- txTimeKey pool tid
+  above <- amountsThrough pool key tid
   total <- lift $ poolTotal pool
-  return $ TxsCursor block tid (total - above)
+  return $ TxsCursor key tid (total - above)
 
 -- | What the live transactions of the pool add up to, from the top of
--- txs down to the transaction given, that one included. The index on the
--- block references holds the amounts, so the sum reads no row.
-amountsThrough :: (MonadUnliftIO m) => Pool -> Store.BlockRef -> TxHash -> DB m Integer
-amountsThrough pool block tid = do
-  total <- selectOne . from $ \t -> do
-    let blockBytes = val (S.encode block)
+-- txs down to the transaction given, that one included. The unconfirmed
+-- ones are few, and are added up here. The index by time holds the
+-- amounts of the others, so their sum reads no row.
+amountsThrough :: (MonadUnliftIO m) => Pool -> TimeKey -> TxHash -> ExceptT String (DB m) Integer
+amountsThrough pool key tid = do
+  unconfirmed <- unconfirmedSummaryRows pool
+  keyed <- liftEither $ withSummaryOrder unconfirmed
+  let cursor = timeOrder key (hashBytes tid)
+      firstPart = sum [toInteger (dBTxInfoAmount row) | (order, row) <- keyed, order <= cursor]
+  if key.timeKeyUnconfirmed
+    then return firstPart
+    else (firstPart +) <$> lift (confirmedAmountsThrough pool key tid)
+
+-- | What the live transactions of the second part of txs add up to, from
+-- its top down to the transaction given, that one included. A live
+-- transaction there is a confirmed one: the dead ones add nothing.
+confirmedAmountsThrough :: (MonadUnliftIO m) => Pool -> TimeKey -> TxHash -> DB m Integer
+confirmedAmountsThrough pool key tid = do
+  total <- selectOne $ confirmedAmountsQuery pool key tid
+  return $ toInteger (joinMaybe (0 :: Int64) id total)
+
+-- | The query of 'confirmedAmountsThrough'
+confirmedAmountsQuery :: Pool -> TimeKey -> TxHash -> SqlQuery (SqlExpr (E.Value (Maybe Int64)))
+confirmedAmountsQuery pool key tid =
+  from $ \t -> do
     where_ $
       ofPool pool t
         &&. t ^. DBTxInfoDead ==. val False
-        &&. t ^. DBTxInfoBlockRef <=. blockBytes
-        &&. (t ^. DBTxInfoBlockRef <. blockBytes ||. t ^. DBTxInfoTxid <=. val (hashBytes tid))
+        &&. t ^. DBTxInfoBlockRef >=. val firstBlockRef
+        &&. throughInTime (t ^. DBTxInfoTime) (t ^. DBTxInfoBlockRef) (t ^. DBTxInfoTxid) key (hashBytes tid)
     return $ sum_ (t ^. DBTxInfoAmount)
-  return $ toInteger (joinMaybe (0 :: Int64) id total)
 
 -- | A transaction of the pool on the chain, as txs shows it, if the
 -- pool has it, dead or alive
@@ -820,13 +975,13 @@ chainTxInfo heightM row = do
   label <- lift $ txLabel pool tid
   lift $ fillTxInfoLabels pool $ TxInfo summary (OnChain status) label Map.empty
 
--- | The block of a transaction of the pool, the one --after names, or
--- why there is none
-txBlock :: (MonadUnliftIO m) => Pool -> TxHash -> ExceptT String (DB m) Store.BlockRef
-txBlock pool tid = do
+-- | Where a transaction of the pool stands in the order of txs, for the
+-- one --after names, or why the pool does not have it
+txTimeKey :: (MonadUnliftIO m) => Pool -> TxHash -> ExceptT String (DB m) TimeKey
+txTimeKey pool tid = do
   rowM <- lift $ P.get (txInfoKey pool tid)
   row <- liftMaybe ("The transaction " <> cs (txHashToHex tid) <> " is not in the portfolio on " <> pool.poolNetwork.name) rowM
-  liftEither $ S.decode (dBTxInfoBlockRef row)
+  liftEither $ summaryTimeKey row
 
 -- | At most the given number of ids of the pool's transactions on the
 -- chain that start with the hexadecimal digits, in the order of their ids:
@@ -909,12 +1064,15 @@ coinLabels pool tids = do
   labelled <- forM (nubOrd tids) $ \tid -> (,) tid <$> coinLabel pool tid
   return $ Map.fromList [(tid, label) | (tid, label) <- labelled, not (Text.null label)]
 
--- | The time of a transaction of the pool: when the store first saw
--- it, as the history of the pool holds it. A coin shows the time of
--- the transaction that paid it, as a transaction shows its own. None when
--- the pool has no such transaction.
-transactionTime :: (MonadUnliftIO m) => Pool -> TxHash -> DB m (Maybe UTCTime)
-transactionTime pool tid = fmap dBTxInfoTime <$> P.get (txInfoKey pool tid)
+-- | The times of transactions of the pool, by their ids: when the store
+-- first saw each, as the history of the pool holds it. The sync gives a
+-- coin the time of the transaction that paid it, which coins shows and
+-- lists it by, as txs does a transaction. A transaction the pool has no
+-- summary of is left out.
+transactionTimes :: (MonadUnliftIO m) => Pool -> [TxHash] -> DB m (Map TxHash UTCTime)
+transactionTimes pool tids = do
+  found <- forM (nubOrd tids) $ \tid -> fmap (\row -> (tid, dBTxInfoTime row)) <$> P.get (txInfoKey pool tid)
+  return $ Map.fromList [entry | Just entry <- found]
 
 -- | The transaction with the labels of the portfolio's addresses, those it
 -- spends from and those it pays, as the function gives them from the

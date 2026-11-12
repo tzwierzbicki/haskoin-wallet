@@ -1190,18 +1190,18 @@ coinsListing portfolio target locked paging = do
       section startM (net, onNet) =
         Listing
           { listingStart = startM,
-            listingRows = coinsAfter (portfolioPool portfolio net) (fst <$> onNet) shown,
-            listingCursor = \coin -> Right (jsonCoinBlock coin, jsonCoinOutpoint coin),
-            listingAnswer = grouped ResponseCoins (groupOf portfolio net onNet),
+            listingRows = listedCoinsAfter (portfolioPool portfolio net) (fst <$> onNet) shown,
+            listingCursor = Right . snd,
+            listingAnswer = grouped ResponseCoins (groupOf portfolio net onNet) . map fst,
             listingWhole = False
           }
   (from, startM) <- case paging.pagingAfter of
     Nothing -> return (networks, Nothing)
     Just named -> do
       outpoint <- coinNamed ("The coin " <> coinRefText named <> " is not among those listed") named
-      blocks <- forM networks $ \(_, onNet) -> lift (runExceptT (coinBlock (fst <$> onNet) outpoint))
-      case [(i, block) | (i, Right block) <- zip [0 :: Int ..] blocks] of
-        (i, block) : _ -> return (drop i networks, Just (block, outpoint))
+      keys <- forM networks $ \(_, onNet) -> lift (runExceptT (coinTimeKeyOf (fst <$> onNet) outpoint))
+      case [(i, key) | (i, Right key) <- zip [0 :: Int ..] keys] of
+        (i, key) : _ -> return (drop i networks, Just (key, outpoint))
         [] -> throwError ("The coin " <> coinRefText named <> " is not among those listed")
   return $ Sections (length networks > 1) paging.pagingMax (zipWith section (startM : repeat Nothing) from)
 
@@ -1233,8 +1233,8 @@ listedPools portfolio netM = do
 -- | The transactions of a portfolio on the chain, a section for each
 -- network, or for the one --network keeps, in the order txs lists them,
 -- each with the balance after it on its network. A transaction names the
--- one to go on after, with its block and the balance so far, so that a
--- chunk adds up nothing. Only --after adds up the transactions above it.
+-- one to go on after, with where it stands in the order of txs and the
+-- balance so far, so that a chunk adds up nothing. Only --after adds up the transactions above it.
 -- The listing starts in the section of the first network that has the
 -- transaction.
 txsListing :: Portfolio -> Maybe Network -> Paging HashRef -> ExceptT String (DB IO) Sections
@@ -1246,9 +1246,7 @@ txsListing portfolio netM paging = do
       Listing
         { listingStart = startM,
           listingRows = listedTxsAfter pool,
-          listingCursor = \(listed, before) -> case txInfoStatus (listedTxInfo listed) of
-            OnChain chain -> Right (TxsCursor (chainBlock chain) (chainTxid chain) before)
-            Pending _ -> Left "txs lists transactions of the chain only",
+          listingCursor = Right . snd,
           listingAnswer = grouped ResponseTxs (groupOf portfolio pool.poolNetwork accounts) . map fst,
           listingWhole = False
         }

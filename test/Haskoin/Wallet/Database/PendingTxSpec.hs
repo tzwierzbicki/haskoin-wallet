@@ -182,7 +182,7 @@ fundAccount ctx cfg accId = do
   _ <- genExtAddress ctx cfg accId ""
   _ <- changeOf ctx cfg accId
   lift $ insertRawTx (funding ctx)
-  _ <- refreshCoins btc ctx accId externalAddrs [storeCoin ctx (txHash (funding ctx), 0) (Just 0) (externalAddr 0) 20000]
+  _ <- refreshCoins btc ctx accId (const seenTime) externalAddrs [storeCoin ctx (txHash (funding ctx), 0) (Just 0) (externalAddr 0) 20000]
   return ()
 
 -- | The account funded as by 'fundAccount', with its second external
@@ -197,6 +197,7 @@ fundAccountTwice ctx cfg accId = do
       btc
       ctx
       accId
+      (const seenTime)
       externalAddrs
       [ storeCoin ctx (txHash (funding ctx), 0) (Just 0) (externalAddr 0) 20000,
         storeCoin ctx (txHash (secondFunding ctx), 0) (Just 0) (externalAddr 1) 10000
@@ -577,7 +578,7 @@ importingSpec ctx =
         _ <- genExtAddress ctx cfg segwitId ""
         let segwitFunding = spendingTx ctx [(fakeTxHash 2, 0)] [(segwitExternalAddr 0, 10000)]
         lift $ insertRawTx segwitFunding
-        _ <- refreshCoins btc ctx segwitId [segwitExternalAddr 0] [storeCoin ctx (txHash segwitFunding, 0) (Just 0) (segwitExternalAddr 0) 10000]
+        _ <- refreshCoins btc ctx segwitId (const seenTime) [segwitExternalAddr 0] [storeCoin ctx (txHash segwitFunding, 0) (Just 0) (segwitExternalAddr 0) 10000]
         unsigned <- payment ctx cfg accId [] (otherAddr 0) 25000
         pendingHash <- importTo ctx accId (signedByWallet ctx unsigned)
         summaries <- pendingOf ctx accId Nothing Nothing

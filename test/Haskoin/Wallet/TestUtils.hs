@@ -1414,6 +1414,13 @@ inputFrom ctx (spentHash, spentIndex) from amount =
 outputTo :: Ctx -> Address -> Word64 -> Store.StoreOutput
 outputTo ctx to amount = Store.StoreOutput amount (addressScript ctx to) Nothing (Just to)
 
+-- | The same transaction with another time, in seconds since 1970: the
+-- store first saw it then, or took it from a block of that time. The
+-- transactions above all have the time 1700000000, 'seenTime'.
+seenAt :: Word64 -> Store.Transaction -> Store.Transaction
+seenAt time (Store.Transaction b v l i o d r _ x s w f) =
+  Store.Transaction b v l i o d r time x s w f
+
 -- | The same transaction, replaced or dropped: the store keeps it, marked
 -- as deleted
 replaced :: Store.Transaction -> Store.Transaction
