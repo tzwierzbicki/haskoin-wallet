@@ -443,10 +443,10 @@ no `switch`.
 |---|---|
 | `receive`, and `show` with a path or with no word | On one account of the active portfolio. `--network` and `--type` pick it, each with its default. |
 | `preparetx`, `preparesendall` | They spend the coins of the active portfolio on one network, of both types together. `--coin-type` keeps the coins of one type. The coins of `--coin` and the addresses of `--spend-from` must be in the active portfolio. |
-| `addresses`, `balances`, `coins`, `txs`, `pendingtxs` | They list the whole active portfolio, in a section for each network, or in one list sorted by network for `pendingtxs`. `--network` and `--type` show one network or one type only. `txs` and `pendingtxs` take no `--type`. |
+| `addresses`, `balances`, `coins`, `txs` | They list the whole active portfolio, in a section for each network. `--network` and `--type` show one network or one type only. `txs` takes no `--type`. |
 | `checkmnemonic`, `label` with a description alone, and `label` and `signmsg` with a path | On the active portfolio. `label DESCRIPTION --of-wallet` describes its wallet. |
 | `exportwallet` | On the wallet of the active portfolio. `--portfolio` writes one portfolio of it only. |
-| `portfolios`, `sync`, `exportsheet` | They cover every portfolio of every wallet. `--network` narrows `sync` down to one network. |
+| `portfolios`, `pendingtxs`, `sync`, `exportsheet` | They cover every portfolio of every wallet. `--network` narrows `pendingtxs` and `sync` down to one network. |
 | `signtx`, `signsweep`, `importtx`, `bumpfee`, `preparesweep`, and `show` with a transaction or a transaction file | They find the portfolio from the transaction, or from the destinations of a sweep. The active portfolio settles a choice between several, as the next paragraph says. |
 | `lockcoin`, `unlockcoin`, `signmsg` and `show` with an address or a coin, and `label` with an address or a transaction | An address and a coin tell where they are. A transaction gets its label in every portfolio that holds it. `--network` is needed only when the wallet has the address or the coin on several test networks. |
 | `importwallet`, and `show` with a file of a wallet | They find the wallet from the file. `--portfolio` names one portfolio of the file, and reads only that one. |
@@ -1576,11 +1576,11 @@ never see it.
 >   knows is sent again, since nodes forget unconfirmed transactions. See
 >   [`broadcast`](#hw-broadcast).
 > - **A pending transaction in conflict may be in another portfolio.** `sync`
->   covers every portfolio, and [`pendingtxs`](#hw-pendingtxs) lists the
->   active one. When `sync` marks a transaction of another portfolio
->   conflicted, its next steps start with the `switch` to that portfolio.
->   Then `pendingtxs` shows the transaction, and `deletetx` frees its coins.
->   In the same way, when `sync` finds new transactions in other portfolios
+>   and [`pendingtxs`](#hw-pendingtxs) both cover every portfolio. So the next
+>   steps of `sync` are `pendingtxs`, which shows the transaction wherever it
+>   is, and `deletetx`, which frees its coins, with no `switch`.
+> - **New transactions may be in another portfolio.** `txs` lists the active
+>   portfolio alone. When `sync` finds new transactions in other portfolios
 >   alone, its next steps start with the `switch` to them, before `txs`.
 
 ### Addresses
@@ -2430,31 +2430,38 @@ hw txs --max 20 --after TXID
 
 #### `hw pendingtxs`
 
-Lists the pending transactions of the active portfolio, as [`txs`](#hw-txs)
-does: prepared, signed, or sent and not yet seen by `sync`. `--network` shows
-one network only.
+Lists the pending transactions of every portfolio of every wallet: prepared,
+signed, or sent and not yet seen by `sync`. Unlike the other listings, it does
+not keep to the [active portfolio](#the-active-portfolio). Each pending
+transaction waits for you to sign, send or delete it, and one forgotten in
+another portfolio keeps its coins locked. The commands that take one find its
+portfolio by themselves, so none needs a `switch`. `--network` shows one
+network only.
+
 They take two lines each, as in `txs`. The first starts with the
 [short id](#short-ids) of the nosigHash until the transaction is signed, then
 with that of its txid. It gives the time the transaction was created, its
 amount and its status, with its fee rate. The second says where the
-transaction is, by its portfolio and its network. It then names the
+transaction is, by its portfolio and its network, and by its wallet too when
+the database has more than one, as in `portfolio0 of wallet1 btc`. It then
+names the
 transactions a replacement replaces, in yellow on a terminal, and says what the
 transaction is for. `--verbose` names those transactions in full, in yellow too.
 A conflicted one can no longer be sent. [`show HASH`](#hw-show) shows one of them
 in full.
 
-It is one list rather than a list in sections, sorted by network, in the order
-`portfolios` shows the networks, and the newest first on each network. Each
-transaction names its place instead. The pending transactions of every
-portfolio are in the tab of pending transactions of
-[`exportsheet`](#hw-exportsheet).
+It is one list rather than a list in sections, sorted by wallet and portfolio,
+then by network in the order `portfolios` shows the networks, and the newest
+first on each network. Each transaction names its place instead. The tab of
+pending transactions of [`exportsheet`](#hw-exportsheet) holds them too.
 
 `--tabular` shows each transaction on one row of a table: its short id, its
-portfolio and its network, the time it was created, its type, its amount, its
-status, its fee rate in sat/vB, and what it is for, as `txs --tabular` says it.
-The description of a replacement starts with the transactions it replaces, in
-yellow, as in `replaces a1075db5, to bc1q…`. The portfolio and network columns
-are as wide as their longest cell.
+wallet when the database has more than one, its portfolio and its network, the
+time it was created, its type, its amount, its status, its fee rate in sat/vB,
+and what it is for, as `txs --tabular` says it. The description of a
+replacement starts with the transactions it replaces, in yellow, as in
+`replaces a1075db5, to bc1q…`. The wallet, portfolio and network columns are
+as wide as their longest cell.
 
 `--csv FILE` writes the pending transactions to a [CSV file](#listings): the
 wallet, the portfolio and the network of each, when it was created, its type,
@@ -2479,10 +2486,10 @@ hw pendingtxs --network bch
 >   network keeps only one of a replacement and the transactions it replaces.
 >   Until a block holds one of them, the payment stands in both, and the
 >   replaced one is still in `txs`.
-> - **A transaction left in another portfolio does not show.** `pendingtxs`
->   lists the active portfolio, as the other listings do. Switch to another
->   portfolio to see its pending transactions, or look at the tab of
->   `exportsheet`, which holds those of every portfolio.
+> - **The wallet is named only when there are several.** A database of one
+>   wallet has no other to tell it from, so the views leave its name out.
+>   With two wallets or more, every view names the wallet of each
+>   transaction, `wallet0` too.
 
 #### `hw exporttx`
 
@@ -2831,7 +2838,7 @@ The portfolio a command works in is not in the file. It is the
 
 The default network and type do not apply everywhere. `sync` and `recover`
 cover every network. The listings `addresses`, `balances`, `coins` and `txs`
-show the whole portfolio. A sweep that pays no portfolio needs its
+show the whole portfolio, and `pendingtxs` every portfolio. A sweep that pays no portfolio needs its
 `--network`.
 
 The networks are `btc`, `bch`, `btctest`, `btctest4`, `bchtest4`, `bchtest`,

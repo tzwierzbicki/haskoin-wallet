@@ -24,7 +24,7 @@ import Haskoin.Wallet.Bip329 (Record (..), RecordType (..), record)
 import Haskoin.Wallet.Cli.Listing (ChunkAt (..))
 import Haskoin.Wallet.Cli.Parser (AddressCode (..), Command (..), NewPortfolio (..), Recover (..), TxShown (..))
 import Haskoin.Wallet.Cli.PrettyPrinter
-import Haskoin.Wallet.Cli.Response (AccountCounts (..), Group (..), Response (..))
+import Haskoin.Wallet.Cli.Response (AccountCounts (..), Group (..), Response (..), WalletNaming (..))
 import Haskoin.Wallet.Cli.Style (renderPlain)
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Database (DBAddress (..))
@@ -1174,13 +1174,19 @@ compactSpec = do
     -- pendingtxs names where each transaction is
     it "names the portfolio and the network first when the listing names them" $ do
       let info = TxInfo spendSummary (Pending (PendingStatus a1075db5First Nothing False False (Just seenTime) [])) "" Map.empty
-      (renderedLines (compactTxDoc btc UnitBitcoin (Just mainPortfolioRef) Nothing (Just seenTimeInCet) info) !! 1)
+      (renderedLines (compactTxDoc btc UnitBitcoin (Just (WithoutWallets, mainPortfolioRef)) Nothing (Just seenTimeInCet) info) !! 1)
         `shouldBe` "  portfolio0 btc, to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
 
-    it "names the wallet of the portfolio there when it is not wallet0" $ do
+    it "names the wallet of the portfolio there, wallet0 too, when the database has several wallets" $ do
       let info = TxInfo spendSummary (Pending (PendingStatus a1075db5First Nothing False False (Just seenTime) [])) "" Map.empty
-      (renderedLines (compactTxDoc btc UnitBitcoin (Just otherRef) Nothing (Just seenTimeInCet) info) !! 1)
-        `shouldBe` "  portfolio1 of wallet2 btc, to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
+      (renderedLines (compactTxDoc btc UnitBitcoin (Just (WithWallets, mainPortfolioRef)) Nothing (Just seenTimeInCet) info) !! 1)
+        `shouldBe` "  portfolio0 of wallet0 btc, to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
+
+    -- The one wallet may be wallet2, once the others were deleted
+    it "leaves the wallet out when the database has one wallet, even when it is not wallet0" $ do
+      let info = TxInfo spendSummary (Pending (PendingStatus a1075db5First Nothing False False (Just seenTime) [])) "" Map.empty
+      (renderedLines (compactTxDoc btc UnitBitcoin (Just (WithoutWallets, otherRef)) Nothing (Just seenTimeInCet) info) !! 1)
+        `shouldBe` "  portfolio1 btc, to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
 
     it "names the transaction a replacement replaces by its short id, before what it is for" $ do
       let info = TxInfo spendSummary (Pending (PendingStatus a1075db5First Nothing False False (Just seenTime) [b2d4f6a8Txid])) "" Map.empty
@@ -1575,18 +1581,19 @@ balanceTableSpec =
                      "bip44/0/0  │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │     0.00080000 │      0.00050000 │        0.00030000 │ \"Invoice 42\""
                    ]
 
--- The columns of the pending transactions: the short id, the portfolio
--- and the network of each, as wide as the widest the listing holds or as
--- their headings, 17 for the time, 8 for the type, 14 for the amount, 10
--- for the status and 6 for the fee rate, then what it is for
+-- The columns of the pending transactions: the short id, the wallet when
+-- the database has several, the portfolio and the network of each, as
+-- wide as the widest the listing holds or as their headings, 17 for the
+-- time, 8 for the type, 14 for the amount, 10 for the status and 6 for
+-- the fee rate, then what it is for
 pendingTableSpec :: Spec
 pendingTableSpec =
   describe "The table of pending transactions --tabular" $ do
-    let ofMain = pendingTableColumns UnitBitcoin [mainPlace]
+    let ofMain = pendingTableColumns UnitBitcoin WithoutWallets [mainPlace]
         preparedWith signedM online conflicted = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) signedM online conflicted (Just seenTime) [])) "" Map.empty
         unsigned = preparedWith Nothing False False
         timeless = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing [])) "" Map.empty
-        rowOf = pendingRowDoc UnitBitcoin ofMain mainPlace (Just seenTimeInCet)
+        rowOf = pendingRowDoc UnitBitcoin WithoutWallets ofMain mainPlace (Just seenTimeInCet)
 
     -- "portfolio0" takes 10, more than "Portfolio", and "btc" less than
     -- "Network", of 7: 8 + 1 = 9 under Hash, 10 + 2 = 12 under Portfolio,
@@ -1623,14 +1630,27 @@ pendingTableSpec =
       renderedLines (rowOf (preparedWith (Just (fakeTxHash 2)) False True))
         `shouldBe` ["00000000 │ portfolio0 │ btc     │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ conflicted │        │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
-    -- "portfolio1 of wallet2" takes 21 characters
-    it "names the wallet of a portfolio that is not of wallet0, the column as wide as the widest it holds" $ do
-      let elsewhere = Place otherRef btc
-          both = pendingTableColumns UnitBitcoin [mainPlace, elsewhere]
-      concatMap renderedLines [pendingRowDoc UnitBitcoin both elsewhere (Just seenTimeInCet) unsigned, pendingRowDoc UnitBitcoin both mainPlace (Just seenTimeInCet) unsigned]
-        `shouldBe` [ "00000000 │ portfolio1 of wallet2 │ btc     │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU",
-                     "00000000 │ portfolio0            │ btc     │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
+    -- "wallet0" takes 7, more than "Wallet": 7 + 2 = 9 under Wallet
+    it "puts a column of the wallet before the portfolio when the database has several wallets" $
+      concatMap renderedLines (tableHeader (pendingTableColumns UnitBitcoin WithWallets [mainPlace]))
+        `shouldBe` [ "Hash     │ Wallet  │ Portfolio  │ Network │ Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Description",
+                     "─────────┼─────────┼────────────┼─────────┼───────────────────┼──────────┼────────────────┼────────────┼────────┼────────────"
                    ]
+
+    it "names the wallet of each transaction in that column, wallet0 too, and its portfolio alone in the next" $ do
+      let elsewhere = Place otherRef btc
+          both = pendingTableColumns UnitBitcoin WithWallets [mainPlace, elsewhere]
+      concatMap renderedLines [pendingRowDoc UnitBitcoin WithWallets both elsewhere (Just seenTimeInCet) unsigned, pendingRowDoc UnitBitcoin WithWallets both mainPlace (Just seenTimeInCet) unsigned]
+        `shouldBe` [ "00000000 │ wallet2 │ portfolio1 │ btc     │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU",
+                     "00000000 │ wallet0 │ portfolio0 │ btc     │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
+                   ]
+
+    -- The one wallet may be wallet2, once the others were deleted
+    it "leaves the wallet out when the database has one wallet, even when it is not wallet0" $ do
+      let elsewhere = Place otherRef btc
+          alone = pendingTableColumns UnitBitcoin WithoutWallets [elsewhere]
+      renderedLines (pendingRowDoc UnitBitcoin WithoutWallets alone elsewhere (Just seenTimeInCet) unsigned)
+        `shouldBe` ["00000000 │ portfolio1 │ btc     │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "names the transaction a replacement replaces by its short id, before what it is for, as the compact view does" $ do
       let replacement = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False (Just seenTime) [b2d4f6a8Txid])) "" Map.empty
@@ -1644,7 +1664,7 @@ pendingTableSpec =
     -- A transaction without a time shows "time unknown", whatever the time
     -- zone of the computer. The listing is one list, with no title.
     it "names where each transaction is in a chunk, under the header" $ do
-      doc <- chunkDoc UnitBitcoin Table (ChunkAt True True False) (ResponsePendingTxs [(mainPlace, timeless)])
+      doc <- chunkDoc UnitBitcoin Table (ChunkAt True True False) (ResponsePendingTxs WithoutWallets [(mainPlace, timeless)])
       renderedLines doc
         `shouldBe` [ "Hash     │ Portfolio  │ Network │ Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Description",
                      "─────────┼────────────┼─────────┼───────────────────┼──────────┼────────────────┼────────────┼────────┼────────────",
@@ -1654,6 +1674,25 @@ pendingTableSpec =
 verboseSpec :: Spec
 verboseSpec =
   describe "The verbose view of a transaction" $ do
+    -- pendingtxs --verbose names where each transaction is, first among
+    -- the fields. A transaction without a time reads the same in every
+    -- time zone.
+    it "names the wallet of its portfolio in a listing, wallet0 too, when the database has several wallets" $ do
+      let timeless = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing [])) "" Map.empty
+      shown <- listedTxDoc Verbose btc UnitBitcoin (Just (WithWallets, mainPortfolioRef)) Nothing timeless
+      take 2 (drop 1 (renderedLines shown))
+        `shouldBe` [ "  Portfolio: portfolio0 of wallet0",
+                     "  Network  : btc"
+                   ]
+
+    it "leaves the wallet out of a listing of one wallet, even when it is not wallet0" $ do
+      let timeless = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing [])) "" Map.empty
+      shown <- listedTxDoc Verbose bch UnitBitcoin (Just (WithoutWallets, otherRef)) Nothing timeless
+      take 2 (drop 1 (renderedLines shown))
+        `shouldBe` [ "  Portfolio: portfolio1",
+                     "  Network  : bch"
+                   ]
+
     -- The input is the coin of 50000 at /0/0. 40000 go out and 9000 come
     -- back as change to /1/0.
     it "lists the address a payment spends from, the one it pays, and its change, in columns" $ do
@@ -2014,7 +2053,6 @@ nextStepsSpec = do
             "  hw txs"
           ]
 
-    -- pendingtxs lists the active portfolio, which holds the conflict
     it "name no portfolio in the steps that find a pending transaction in conflict in the active portfolio" $
       synced [holdingIn (PortfolioRef 0 1), conflictIn mainPortfolioRef btc]
         `shouldBe` Just
@@ -2024,39 +2062,22 @@ nextStepsSpec = do
             "  hw deletetx HASH"
           ]
 
-    -- pendingtxs lists the active portfolio alone, which would not show
-    -- the transaction
-    it "start with the switch to the portfolio of a pending transaction in conflict that is not the active one" $
+    -- pendingtxs lists every portfolio, and deletetx finds the portfolio
+    -- of the transaction by itself
+    it "name no portfolio either for a pending transaction in conflict in another portfolio than the active one" $
       synced [quietSync, conflictIn (PortfolioRef 0 1) btc]
         `shouldBe` Just
-          [ "Next, switch to portfolio1 of wallet0, where a pending transaction is in conflict:",
-            "  hw switch 1 --wallet 0",
-            "Then find the pending transaction in conflict, which can no longer be sent:",
+          [ "Next, find the pending transaction in conflict, which can no longer be sent:",
             "  hw pendingtxs",
             "Then delete it, to free its coins:",
             "  hw deletetx HASH"
           ]
 
-    it "switch once to a portfolio that has pending transactions in conflict on two networks" $
-      synced [conflictIn otherRef btc, conflictIn otherRef bch]
-        `shouldBe` Just
-          [ "Next, switch to portfolio1 of wallet2, where a pending transaction is in conflict:",
-            "  hw switch 1 --wallet 2",
-            "Then find the pending transaction in conflict, which can no longer be sent:",
-            "  hw pendingtxs",
-            "Then delete it, to free its coins:",
-            "  hw deletetx HASH"
-          ]
-
-    -- The active portfolio is one of the two, and the user goes through
-    -- both in the order of the sync
-    it "switch in turn to each portfolio that has a pending transaction in conflict, when there are several" $
+    -- One in the active portfolio, one in a portfolio of another wallet
+    it "speak of the pending transactions in conflict in the plural when the sync found several" $
       synced [conflictIn mainPortfolioRef btc, conflictIn otherRef bch]
         `shouldBe` Just
-          [ "Next, switch in turn to each portfolio where a pending transaction is in conflict:",
-            "  hw switch 0 --wallet 0",
-            "  hw switch 1 --wallet 2",
-            "In each, find the pending transactions in conflict, which can no longer be sent:",
+          [ "Next, find the pending transactions in conflict, which can no longer be sent:",
             "  hw pendingtxs",
             "Then delete them, to free their coins:",
             "  hw deletetx HASH"

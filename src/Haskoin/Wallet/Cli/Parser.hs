@@ -2422,10 +2422,12 @@ preparesweep made, or that importtx added. It is unsigned, signed, or sent.
 `sync` retires it once the network lists it. `show` HASH shows one of them in
 full.
 
-pendingtxs lists the pending transactions of the active portfolio, as txs
-does. They come in one list, by network, in the order portfolios shows the
-networks, and the newest first on each network. --network shows those of one
-network only. exportsheet gives those of every portfolio in one tab.
+pendingtxs lists the pending transactions of every portfolio of every wallet,
+not those of the active portfolio alone. Each one waits for you to sign, send
+or delete it, and the commands that take one find its portfolio by
+themselves, without a switch. They come in one list, by wallet and portfolio,
+then by network in the order portfolios shows the networks, and the newest
+first on each network. --network shows those of one network only.
 
 Each takes two lines. The first starts with the short id of the transaction,
 the first 8 digits of its hash. The hash is the nosigHash of an unsigned
@@ -2436,6 +2438,8 @@ line then gives the time the transaction was created, its amount and its
 status: not signed, signed and not sent, or sent, with its fee rate.
 
 The second line says where the transaction is: its portfolio and its network.
+When the database has more than one wallet, it names the wallet too, as in
+portfolio0 of wallet1.
 A replacement that bumpfee made then names the transactions it replaces, in
 yellow on a terminal: the network keeps only one of them. Last comes what the
 transaction is for, as txs says it: its label, or else the address it pays. An
@@ -2447,9 +2451,9 @@ spent, or that is gone, as the server said at the last sync. It cannot be sent
 while that lasts. Delete it with deletetx, which frees its coins.
 
 With --tabular, each transaction takes one row of a table, under a header that
-names the columns: its short id, its portfolio and its network, the time it
-was created, its type, its amount, its status, its fee rate in sat/vB, and
-what it is for, as txs --tabular says it. The description of a replacement
+names the columns: its short id, its wallet when there are several, its
+portfolio and its network, the time it was created, its type, its amount, its
+status, its fee rate in sat/vB, and what it is for, as txs --tabular says it. The description of a replacement
 names first, in yellow, the transactions it replaces.
 
 With --csv FILENAME, each transaction takes one row of a new CSV file, for a
@@ -2461,10 +2465,10 @@ and how many other addresses it pays. Amounts are in satoshis, and times in UTC.
 |],
       args =
         CommandPendingTxs
-          <$> networkOptionWith "Only the pending transactions on this network. Without it, those on every network of the portfolio."
+          <$> networkOptionWith "Only the pending transactions on this network. Without it, those on every network of every portfolio."
           <*> listingOutputOption
             txVerboseHelp
-            "Show each transaction on one row of a table: its short id, portfolio, network, time, type, amount, status and fee rate, then what it is for."
+            "Show each transaction on one row of a table: its short id, wallet when there are several, portfolio, network, time, type, amount, status and fee rate, then what it is for."
             "pending transactions"
           <*> pagingOptions (afterOption "HASH" hashRefReader "Start after this pending transaction, by either of its hashes or its short id")
     }
@@ -2998,10 +3002,10 @@ even under another id, as when a miner or another signer changed its
 signatures. One you sent that the server no longer knows is sent again, since
 nodes forget unconfirmed transactions. One whose coin another transaction
 spent, or that is gone, is marked conflicted. A signed transaction you never
-sent is left alone. `pendingtxs` lists the active portfolio alone, so when the
-conflicted one is in another portfolio, the next steps `sync` prints start with
-the `switch` to it. `txs` lists the active portfolio alone too, so when `sync`
-finds new transactions in other portfolios alone, its next steps start with the
+sent is left alone. `pendingtxs` lists every portfolio, so the next steps
+`sync` prints after a conflict are `pendingtxs` and deletetx, wherever the
+conflicted one is. `txs` lists the active portfolio alone, so when `sync` finds
+new transactions in other portfolios alone, its next steps start with the
 `switch` to them.
 
 A sent transaction is sent again on every sync while the server does not list

@@ -129,7 +129,8 @@ listingSheet = \case
   ResponseBalances groups -> Just (sheetOf balanceColumns (concatMap (onNetwork . fst) groups))
   ResponseCoins groups -> Just (sheetOf coinColumns (concatMap onNetwork groups))
   ResponseTxs groups -> Just (sheetOf txColumns (concatMap onNetwork groups))
-  ResponsePendingTxs held -> Just (sheetOf pendingColumns held)
+  -- A sheet names the wallet of every row, in a column of its own
+  ResponsePendingTxs _ held -> Just (sheetOf pendingColumns held)
   _ -> Nothing
   where
     -- The rows of a group, each with the network of the group

@@ -90,8 +90,8 @@ Wallets and portfolios:
   `--type`. Their defaults are `btc` and `bip44`. The keys `default-network`
   and `default-type` of the configuration change them, and `setdefault`
   writes those keys.
-- `portfolios`, `sync` and `exportsheet` cover every portfolio of every
-  wallet. The commands given a transaction, a coin or an address find its
+- `portfolios`, `pendingtxs`, `sync` and `exportsheet` cover every portfolio
+  of every wallet. The commands given a transaction, a coin or an address find its
   portfolio by themselves, such as `show`, `importtx`, `signtx` and `label`.
   When several portfolios are candidates, they take the active one, or name
   them and ask for a `switch`. A transfer between two portfolios is kept and
@@ -212,8 +212,12 @@ Using `hw`:
 - `addresses`, `balances`, `coins` and `txs` list a whole portfolio, in a
   section for each network, and for each type as well for `addresses`. A title
   line says where each section is. `--network` and `--type` narrow a listing
-  down. `pendingtxs` lists the pending transactions of a portfolio in one list,
-  sorted by network.
+  down. `pendingtxs` lists the pending transactions of every portfolio of
+  every wallet in one list, sorted by wallet, portfolio and network. Its views
+  name the wallet of each transaction when the database has more than one, the
+  table in a column of its own. After a `sync` that found a transaction in
+  conflict, the next steps are `pendingtxs` and `deletetx`, without a
+  `switch`.
 - The compact views count the confirmations up to `999+ confirmations`.
   `--verbose` and the JSON answers give the full count.
 - Every view writes the path of an address of the wallet with the type of its

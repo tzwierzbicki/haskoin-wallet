@@ -41,6 +41,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     synced,
     syncedBothTypes,
     syncedTwoPortfolios,
+    paymentOfSecondWallet,
     testnetCoinSynced,
     signerAndOnline,
     writeKeyFile,
@@ -273,6 +274,19 @@ syncedTwoPortfolios home = do
   switchTo home 0 0
   void $ answer home ["sync"] []
 
+-- | A home with the test wallet, wallet0, and the wallet of the second
+-- test mnemonic, wallet1, whose first receiving address 'chainPaying'
+-- pays. portfolio0 of wallet1 is active, synced, and has a payment
+-- prepared.
+paymentOfSecondWallet :: FilePath -> IO ()
+paymentOfSecondWallet home = do
+  newTestPortfolio home
+  newPortfolioOf home testMnemonic2
+  switchTo home 1 0
+  _ <- answer home ["receive"] []
+  _ <- answer home ["sync"] []
+  void $ answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+
 -- | A home with portfolio0 of the test wallet, its first receiving address
 -- on the test networks handed out on btctest and on btctest4, which share
 -- it, mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih, and synced. With a host that
@@ -326,7 +340,7 @@ onePendingTx :: FilePath -> IO TxInfo
 onePendingTx home = do
   listed <- hwJson home ["pendingtxs"] []
   case listed of
-    ResponsePendingTxs [(_, info)] -> return info
+    ResponsePendingTxs _ [(_, info)] -> return info
     other -> fail $ "Not one pending transaction: " <> show other
 
 -- | The text of an address of the tests on Bitcoin
@@ -633,7 +647,7 @@ txOf other = fail $ "Not a transaction: " <> show other
 -- other: type, amount, and confirmations once on the chain
 txsOf :: Response -> Either String [(TxType, Integer, Maybe Natural)]
 txsOf (ResponseTxs groups) = Right [txRow (listedTxInfo listed) | g <- groups, listed <- groupRows g]
-txsOf (ResponsePendingTxs held) = Right (txRow . snd <$> held)
+txsOf (ResponsePendingTxs _ held) = Right (txRow . snd <$> held)
 txsOf other = Left (show other)
 
 -- | A transaction as 'txsOf' gives it

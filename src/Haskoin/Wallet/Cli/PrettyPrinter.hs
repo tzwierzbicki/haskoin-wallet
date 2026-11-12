@@ -189,6 +189,19 @@ portfolioWords ref =
   cs (portfolioName (refPortfolio ref))
     <> (if refWallet ref == 0 then "" else " of " <> cs (walletName (refWallet ref)))
 
+-- | A portfolio as pendingtxs names it, which lists every wallet: with
+-- its wallet whenever the database has several, wallet0 too, as in
+-- "portfolio0 of wallet0", and alone when it has one ('WalletNaming').
+-- 'portfolioWords' leaves wallet0 out, which an answer about one
+-- transaction can do, but a list of several wallets cannot: there,
+-- "portfolio0" would read as the portfolio0 of any of them.
+listedPortfolioWords :: WalletNaming -> PortfolioRef -> String
+listedPortfolioWords naming ref = case naming of
+  WithWallets -> name <> " of " <> cs (walletName (refWallet ref))
+  WithoutWallets -> name
+  where
+    name = cs (portfolioName (refPortfolio ref))
+
 -- | The line that says where the rows under it are: the portfolio, then
 -- the network
 placeLine :: Place -> Doc Style
@@ -952,24 +965,25 @@ verboseCoinDoc net unit time coin =
 
 -- | A transaction as a listing shows it, in the view asked for, with its
 -- time in the time zone of the computer. A listing of every portfolio
--- names the portfolio of each transaction. The balance after it is the
--- one txs gives: the other listings have none.
-listedTxDoc :: View -> Network -> AmountUnit -> Maybe PortfolioRef -> Maybe Integer -> TxInfo -> IO (Doc Style)
+-- names the portfolio of each transaction, with its wallet or not as the
+-- listing names the wallets ('listedPortfolioWords'). The balance after
+-- it is the one txs gives: the other listings have none.
+listedTxDoc :: View -> Network -> AmountUnit -> Maybe (WalletNaming, PortfolioRef) -> Maybe Integer -> TxInfo -> IO (Doc Style)
 listedTxDoc view net unit portfolioM balanceM info = do
   time <- localTxTime info
   return $ case view of
     Compact -> compactTxDoc net unit portfolioM balanceM time info
-    Verbose -> verboseTxDoc net unit (whereFields net portfolioM info) balanceM time info
+    Verbose -> verboseTxDoc net unit (whereFields net (uncurry listedPortfolioWords <$> portfolioM) info) balanceM time info
     Table -> txRowDoc net unit balanceM time info
 
 -- | The fields that say where a transaction is, first in its verbose
--- view: its portfolio, when the view names it, its network, and the types
--- of the portfolio's addresses it involves, when it involves any. A
--- portfolio holds coins of both types on Bitcoin, and the types tell
--- which of them a transaction touched.
-whereFields :: Network -> Maybe PortfolioRef -> TxInfo -> [Doc Style]
+-- view: its portfolio, in the words given, when the view names it, its
+-- network, and the types of the portfolio's addresses it involves, when
+-- it involves any. A portfolio holds coins of both types on Bitcoin, and
+-- the types tell which of them a transaction touched.
+whereFields :: Network -> Maybe String -> TxInfo -> [Doc Style]
 whereFields net portfolioM info =
-  [field 9 "Portfolio" <> (text (portfolioWords ref) `withStyle` Account) | Just ref <- [portfolioM]]
+  [field 9 "Portfolio" <> (text named `withStyle` Account) | Just named <- [portfolioM]]
     <> [field 9 "Network" <> text net.name]
     <> [field 9 "Types" <> text (intercalate ", " (cs . kindName <$> kinds)) | let kinds = summaryKinds (txInfoSummary info), not (null kinds)]
 
@@ -981,7 +995,7 @@ whereFields net portfolioM info =
 txAnswerDoc :: Network -> Maybe PortfolioRef -> AmountUnit -> TxInfo -> IO (Doc Style)
 txAnswerDoc net portfolioM unit info = do
   time <- localTxTime info
-  return $ verboseTxDoc net unit (whereFields net portfolioM info) Nothing time info
+  return $ verboseTxDoc net unit (whereFields net (portfolioWords <$> portfolioM) info) Nothing time info
 
 -- | The time a transaction shows: when the store first saw it, for one on
 -- the chain, or when the wallet started holding it, for one in
@@ -1143,8 +1157,10 @@ countCap = 999
 -- the first column of the table: the eye finds it there to copy it, and
 -- each transaction starts where its id does.
 --
--- The second line gives the details, a comma between them: the account,
--- in a listing of every account; the balance after the transaction, in
+-- The second line gives the details, a comma between them: the
+-- portfolio and the network, in a listing of every portfolio, with the
+-- wallet when the listing names the wallets ('listedPortfolioWords'); the
+-- balance after the transaction, in
 -- txs; the transactions a replacement that bumpfee prepared replaces, in
 -- yellow ('replacesNote'); and last what the transaction is for, in the
 -- words of the last column of the table ('purposeCell'). The label of a payment says what it is for
@@ -1154,14 +1170,14 @@ countCap = 999
 -- full, and the type of the transaction, which the sign of the amount and
 -- the words "at" and "to" tell here. A transaction with no detail, which
 -- pays no address and has no label, takes one line.
-compactTxDoc :: Network -> AmountUnit -> Maybe PortfolioRef -> Maybe Integer -> Maybe ZonedTime -> TxInfo -> Doc Style
+compactTxDoc :: Network -> AmountUnit -> Maybe (WalletNaming, PortfolioRef) -> Maybe Integer -> Maybe ZonedTime -> TxInfo -> Doc Style
 compactTxDoc net unit portfolioM balanceM time info@(TxInfo summary status label _) =
   vcat $
     compactHeadline unit time info
       : [indent 2 (hcat (intersperse ", " details)) | not (null details)]
   where
     details =
-      [(text (portfolioWords ref) `withStyle` Account) <+> text net.name | Just ref <- [portfolioM]]
+      [(text (listedPortfolioWords naming ref) `withStyle` Account) <+> text net.name | Just (naming, ref) <- [portfolioM]]
         <> ["balance" <+> neutralAmount unit balance | Just balance <- [balanceM]]
         <> maybeToList (replacesNote status)
         <> [purpose | not (null (renderPlain purpose))]
@@ -1792,24 +1808,29 @@ balanceRowDoc unit net headed addr balance =
 {- The table of pending transactions -}
 
 -- The table of pending transactions gives what the compact view gives:
--- the short id of the hash the other commands take first, the time it was
--- created, its type, its amount, how far it got, its fee rate, and what
--- it is for, as the table of txs says it. A replacement says first, in
--- yellow, which transactions it replaces, as the compact view does. A listing of every account
--- names the account of each in a column after the short id. The listing
--- is read whole ('listingWhole'), so that column is as wide as the
--- longest name it shows, as in the table of accounts. The hash in full
--- would make a row too wide. The verbose view gives it.
+-- the short id of the hash the other commands take first, where the
+-- transaction is, the time it was created, its type, its amount, how far
+-- it got, its fee rate, and what it is for, as the table of txs says it.
+-- A replacement says first, in yellow, which transactions it replaces, as
+-- the compact view does. Where it is takes a column for the wallet when
+-- the database has several, then one for the portfolio and one for the
+-- network. The listing is read whole ('listingWhole'), so these columns
+-- are as wide as the longest name they show, as in the table of
+-- portfolios. The hash in full would make a row too wide. The verbose
+-- view gives it.
 
 -- | The columns of the table of pending transactions: the short id first,
--- then a column of accounts when the listing has every account's, those
--- given, whose longest name sets its width
-pendingTableColumns :: AmountUnit -> [Place] -> [Column]
-pendingTableColumns unit places =
-  [ column "Hash" shortIdWidth LeftSide,
-    column "Portfolio" (widestCell (portfolioWords . placePortfolio) places) LeftSide,
-    column "Network" (widestCell (\place -> (placeNetwork place).name) places) LeftSide
-  ]
+-- then the wallet when the listing names the wallets, the portfolio and
+-- the network, each as wide as the widest the places given hold. The
+-- wallet has a column of its own, as in the table of portfolios, so that
+-- the eye runs down the wallets apart from the portfolios.
+pendingTableColumns :: AmountUnit -> WalletNaming -> [Place] -> [Column]
+pendingTableColumns unit naming places =
+  [column "Hash" shortIdWidth LeftSide]
+    <> [column "Wallet" (widestCell (cs . walletName . refWallet . placePortfolio) places) LeftSide | naming == WithWallets]
+    <> [ column "Portfolio" (widestCell (cs . portfolioName . refPortfolio . placePortfolio) places) LeftSide,
+         column "Network" (widestCell (\place -> (placeNetwork place).name) places) LeftSide
+       ]
     <> [ column "Time" minuteWidth LeftSide,
          column "Type" typeWidth LeftSide,
          column (amountHeading "Amount" unit) amountWidth RightSide,
@@ -1825,18 +1846,20 @@ pendingStatusWidth :: Natural
 pendingStatusWidth = 10
 
 -- | A pending transaction on one row of its table, under the columns
--- given: its short id, its account when given, the time it was created,
+-- given: its short id, its wallet when the listing names the wallets,
+-- its portfolio and its network, the time it was created,
 -- its type, its amount, how far it got, its fee rate, and what it is for
 -- ('purposeCell'), after the transactions it replaces, if any
 -- ('replacesNote'). One in conflict can no longer be sent: its fee rate no
 -- longer matters, and its cell is empty.
-pendingRowDoc :: AmountUnit -> [Column] -> Place -> Maybe ZonedTime -> TxInfo -> Doc Style
-pendingRowDoc unit headed place time (TxInfo summary status label _) =
+pendingRowDoc :: AmountUnit -> WalletNaming -> [Column] -> Place -> Maybe ZonedTime -> TxInfo -> Doc Style
+pendingRowDoc unit naming headed place time (TxInfo summary status label _) =
   tableLine . zip headed $
-    [ hashWord status,
-      text (portfolioWords (placePortfolio place)) `withStyle` Account,
-      text net.name
-    ]
+    [hashWord status]
+      <> [pretty (walletName (refWallet ref)) | naming == WithWallets]
+      <> [ pretty (portfolioName (refPortfolio ref)) `withStyle` Account,
+           text net.name
+         ]
       <> [ timeCell time,
            text (typeWord (summaryType summary)),
            signedAmountCell unit (summaryAmount summary),
@@ -1846,6 +1869,7 @@ pendingRowDoc unit headed place time (TxInfo summary status label _) =
          ]
   where
     net = placeNetwork place
+    ref = placePortfolio place
     -- pendingtxs lists the transactions in preparation only
     (statusCell, rateCell) = case status of
       Pending pending
@@ -2533,19 +2557,19 @@ sectionsPrinter unit view titled = \case
         if view == Table
           then Rows none title (txTableHeader unit) docs False
           else Rows none title [] docs True
-  -- The listing covers every network of the active portfolio, or every
-  -- portfolio in the tab of exportsheet, so each transaction says where
-  -- it is
-  ResponsePendingTxs held -> do
+  -- The listing covers every portfolio of every wallet, so each
+  -- transaction says where it is, with its wallet when the database has
+  -- several
+  ResponsePendingTxs naming held -> do
     let none = text "There are no pending transactions"
         -- The listing is read whole: these are all its places
-        headed = pendingTableColumns unit (fst <$> held)
+        headed = pendingTableColumns unit naming (fst <$> held)
     if view == Table
       then do
-        rows <- mapM (\(place, info) -> pendingRowDoc unit headed place <$> localTxTime info <*> pure info) held
+        rows <- mapM (\(place, info) -> pendingRowDoc unit naming headed place <$> localTxTime info <*> pure info) held
         return $ Just [Rows none [] (tableHeader headed) rows False]
       else do
-        docs <- mapM (\(place, info) -> listedTxDoc view (placeNetwork place) unit (Just (placePortfolio place)) Nothing info) held
+        docs <- mapM (\(place, info) -> listedTxDoc view (placeNetwork place) unit (Just (naming, placePortfolio place)) Nothing info) held
         return $ Just [apartRows none docs]
   ResponseCoins groups ->
     sections (text "There are no coins to display") groups $ \none g -> do
@@ -2649,10 +2673,11 @@ startsWithHeader view at answer = view == Table && not (chunkTitled at) && not b
 -- finds its portfolio by itself. newportfolio, recover and importwallet
 -- leave the active portfolio as it was when the database had one, and
 -- their step is then the switch to the first portfolio they created
--- ('switchStep'). A sync covers every portfolio, so the pending
--- transaction in conflict it found may be in another portfolio than the
--- active one, which pendingtxs lists alone: the steps then start with
--- the switch to that portfolio ('conflictSteps').
+-- ('switchStep'). A sync covers every portfolio, so the new
+-- transactions it found may be in another portfolio than the active one,
+-- which txs lists alone: the steps then start with the switch to that
+-- portfolio ('txsSteps'). A pending transaction in conflict needs no
+-- switch, since pendingtxs lists every portfolio ('conflictSteps').
 nextStepsPrinter :: Command -> Response -> Maybe (Doc Style)
 nextStepsPrinter cmd res =
   case (cmd, res) of
@@ -2704,9 +2729,9 @@ nextStepsPrinter cmd res =
     -- A sync that synced nothing has nothing new to see
     (CommandSync {}, ResponseSync results _ _ activeM)
       | not (null results) ->
-          case nub [placePortfolio (syncResPlace result) | result <- results, syncResConflicted result > 0] of
-            [] -> stepsPrinter (txsSteps activeM (nub [placePortfolio (syncResPlace result) | result <- results, syncResTxUpdates result > 0]))
-            conflicts -> stepsPrinter (conflictSteps activeM conflicts)
+          case sum (syncResConflicted <$> results) of
+            0 -> stepsPrinter (txsSteps activeM (nub [placePortfolio (syncResPlace result) | result <- results, syncResTxUpdates result > 0]))
+            conflicts -> stepsPrinter (conflictSteps conflicts)
     _ -> Nothing
   where
     -- The short id of a transaction in preparation, as its answer shows
@@ -2748,31 +2773,20 @@ switchLine :: PortfolioRef -> Doc Style
 switchLine ref = hwLine "switch" [text (show (refPortfolio ref)), optionWord "--wallet", text (show (refWallet ref))]
 
 -- | The steps after a sync that found pending transactions in conflict,
--- given the active portfolio and the portfolios that hold them, each
--- once. pendingtxs lists the active portfolio alone, and deletetx finds
--- the transaction by itself. So the steps are pendingtxs and deletetx
--- when the active portfolio holds every conflict. Otherwise they start
--- with the switch to the portfolio of the conflict, or to each of the
--- portfolios in turn when there are several, the active one among them
--- if it holds one: a pendingtxs typed without a switch would not show
--- the transaction.
-conflictSteps :: Maybe PortfolioRef -> [PortfolioRef] -> [(String, Doc Style)]
-conflictSteps activeM conflicts = case conflicts of
-  [only]
-    | Just only == activeM ->
-        [ ("Next, find the pending transaction in conflict, which can no longer be sent", hwLine "pendingtxs" []),
-          ("Then delete it, to free its coins", hwLine "deletetx" [metavarWord "HASH"])
-        ]
-    | otherwise ->
-        [ ("Next, switch to " <> refText only <> ", where a pending transaction is in conflict", switchLine only),
-          ("Then find the pending transaction in conflict, which can no longer be sent", hwLine "pendingtxs" []),
-          ("Then delete it, to free its coins", hwLine "deletetx" [metavarWord "HASH"])
-        ]
-  several ->
-    [ ("Next, switch in turn to each portfolio where a pending transaction is in conflict", vcat (switchLine <$> several)),
-      ("In each, find the pending transactions in conflict, which can no longer be sent", hwLine "pendingtxs" []),
-      ("Then delete them, to free their coins", hwLine "deletetx" [metavarWord "HASH"])
-    ]
+-- given how many it found. They are pendingtxs, to find them, and
+-- deletetx, to delete them, wherever they are: pendingtxs lists every
+-- portfolio, and deletetx finds the portfolio of a transaction by
+-- itself. So no step switches, whichever portfolio is active.
+conflictSteps :: Natural -> [(String, Doc Style)]
+conflictSteps conflicts
+  | conflicts == 1 =
+      [ ("Next, find the pending transaction in conflict, which can no longer be sent", hwLine "pendingtxs" []),
+        ("Then delete it, to free its coins", hwLine "deletetx" [metavarWord "HASH"])
+      ]
+  | otherwise =
+      [ ("Next, find the pending transactions in conflict, which can no longer be sent", hwLine "pendingtxs" []),
+        ("Then delete them, to free their coins", hwLine "deletetx" [metavarWord "HASH"])
+      ]
 
 -- | The steps after a sync that found no conflict, given the active
 -- portfolio and the portfolios whose transactions it updated, each once.

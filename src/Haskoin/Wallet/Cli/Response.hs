@@ -15,6 +15,8 @@
 -- rows.
 module Haskoin.Wallet.Cli.Response
   ( Response (..),
+    WalletNaming (..),
+    walletNamingOf,
     NewSecret (..),
     Group (..),
     AccountCounts (..),
@@ -138,8 +140,9 @@ data Response
     ResponseDerivedAddr !AccountRef !SoftPath !Text
   | -- | Transactions, grouped by network, as the portfolio sees them
     ResponseTxs ![Group ListedTx]
-  | -- | Pending transactions, each with where it is
-    ResponsePendingTxs ![(Place, TxInfo)]
+  | -- | Pending transactions, each with where it is, and whether the
+    -- screen names the wallet of each portfolio
+    ResponsePendingTxs !WalletNaming ![(Place, TxInfo)]
   | -- | A transaction of a portfolio on a network
     ResponseTx !Place !TxInfo
   | -- | A transaction just labelled, as each portfolio that holds it sees
@@ -175,9 +178,10 @@ data Response
   | -- | The sync of each portfolio on each network synced, the networks
     -- the host does not serve, the networks not synced, each with the
     -- failure of its store, and the active portfolio, if the database has
-    -- one. A sync covers every portfolio, and the steps after it work in
-    -- the active one: pendingtxs lists it alone, so a pending transaction
-    -- in conflict in another portfolio needs a switch first.
+    -- one. A sync covers every portfolio. txs, a step after it, lists the
+    -- active portfolio alone, so new transactions in another portfolio
+    -- need a switch first. pendingtxs lists every portfolio, so a pending
+    -- transaction in conflict needs none.
     ResponseSync ![SyncRes] ![Network] ![(Network, Text)] !(Maybe PortfolioRef)
   | -- | What recover found of a seed. In order: the networks searched;
     -- the gap of portfolios the search ended on; the wallet of the seed,
@@ -193,6 +197,24 @@ data Response
     ResponseFees !Network !FeeRates
   deriving (Eq, Show)
 
+-- | Whether a listing of several wallets names the wallet of each
+-- portfolio on the screen. A database of one wallet has no other to tell
+-- it from, so its name would only take room: "portfolio0" says it all.
+-- A database of several names every wallet, wallet0 too, since a
+-- portfolio named alone could be of any of them. pendingtxs lists every
+-- wallet, and sets it from the wallets of the database
+-- ('walletNamingOf'), not from those it lists: two wallets of which one
+-- has pending transactions still need the name.
+data WalletNaming = WithWallets | WithoutWallets
+  deriving (Eq, Show)
+
+-- | How a listing names the wallets, from how many wallets the database
+-- has
+walletNamingOf :: Int -> WalletNaming
+walletNamingOf count
+  | count > 1 = WithWallets
+  | otherwise = WithoutWallets
+
 -- | Two answers of one listing as one: the groups of the second after
 -- those of the first. A listing that covers a whole portfolio is read
 -- group by group, and --json writes it as one answer. Any other pair
@@ -202,7 +224,7 @@ joinListings (ResponseAddresses a) (ResponseAddresses b) = ResponseAddresses (a 
 joinListings (ResponseBalances a) (ResponseBalances b) = ResponseBalances (a <> b)
 joinListings (ResponseTxs a) (ResponseTxs b) = ResponseTxs (a <> b)
 joinListings (ResponseCoins a) (ResponseCoins b) = ResponseCoins (a <> b)
-joinListings (ResponsePendingTxs a) (ResponsePendingTxs b) = ResponsePendingTxs (a <> b)
+joinListings (ResponsePendingTxs naming a) (ResponsePendingTxs _ b) = ResponsePendingTxs naming (a <> b)
 joinListings (ResponsePortfolios a) (ResponsePortfolios b) = ResponsePortfolios (a <> b)
 joinListings first _ = first
 
@@ -287,7 +309,9 @@ instance ToJSON Response where
       typed "derivedaddr" ["account" .= ref, "derivation" .= path, "cutaddress" .= cut]
     ResponseTxs groups ->
       typed "txs" ["groups" .= [object (groupPairs g <> ["txs" .= (marshalValue (placeNetwork (groupPlace g)) <$> groupRows g)]) | g <- groups]]
-    ResponsePendingTxs held -> typed "pendingtxs" ["txs" .= (heldTxJson <$> held)]
+    -- Each transaction names its wallet, so the naming of the screen is
+    -- left out
+    ResponsePendingTxs _ held -> typed "pendingtxs" ["txs" .= (heldTxJson <$> held)]
     ResponseTx place info -> typed "tx" (placePairs place <> ["tx" .= marshalValue (placeNetwork place) info])
     ResponseLabelledTxs held -> typed "labelledtxs" ["txs" .= (heldTxJson <$> held)]
     ResponseHeldTxs held -> typed "heldtxs" ["txs" .= (heldTxJson <$> held)]
@@ -351,7 +375,9 @@ instance FromJSON Response where
       "tx" -> do
         place <- parsePlace o
         ResponseTx place <$> (unmarshalValue (placeNetwork place) =<< o .: "tx")
-      "pendingtxs" -> ResponsePendingTxs <$> (mapM heldTx =<< o .: "txs")
+      -- The JSON names every wallet, and leaves out how the screen names
+      -- them: a decoded answer names none
+      "pendingtxs" -> ResponsePendingTxs WithoutWallets <$> (mapM heldTx =<< o .: "txs")
       "labelledtxs" -> ResponseLabelledTxs <$> (mapM heldTx =<< o .: "txs")
       "heldtxs" -> ResponseHeldTxs <$> (mapM heldTx =<< o .: "txs")
       "prepared" -> do

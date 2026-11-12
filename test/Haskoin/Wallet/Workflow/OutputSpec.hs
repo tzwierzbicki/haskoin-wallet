@@ -33,7 +33,7 @@ import Haskoin.Wallet.Cli.Response (Group (..), Response (..))
 import Haskoin.Wallet.Database (DBAddress (..))
 import Haskoin.Wallet.Database.Address (CoinBalance (..), coinBalanceUnspendable)
 import Haskoin.Wallet.Database.Coin (JsonCoin (..))
-import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..))
+import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (AccountKind (..))
@@ -127,7 +127,7 @@ rowsOf :: Response -> Either String Int
 rowsOf (ResponseAddresses groups) = Right (sum (length . groupRows <$> groups))
 rowsOf (ResponseBalances groups) = Right (sum (length . groupRows . fst <$> groups))
 rowsOf (ResponseTxs groups) = Right (sum (length . groupRows <$> groups))
-rowsOf (ResponsePendingTxs held) = Right (length held)
+rowsOf (ResponsePendingTxs _ held) = Right (length held)
 rowsOf (ResponseCoins groups) = Right (sum (length . groupRows <$> groups))
 rowsOf other = Left (show other)
 
@@ -138,7 +138,7 @@ keysOf :: Response -> Either String [String]
 keysOf (ResponseAddresses groups) = Right [Text.unpack (dBAddressAddress addr) | g <- groups, (addr, _) <- groupRows g]
 keysOf (ResponseBalances groups) = Right [Text.unpack (dBAddressAddress addr) | (g, _) <- groups, (addr, _) <- groupRows g]
 keysOf (ResponseTxs groups) = Right [Text.unpack (txHashToHex (chainTxid status)) | g <- groups, ListedTx info _ <- groupRows g, OnChain status <- [txInfoStatus info]]
-keysOf (ResponsePendingTxs held) = Right [Text.unpack (txHashToHex (pendingShownHash status)) | (_, info) <- held, Pending status <- [txInfoStatus info]]
+keysOf (ResponsePendingTxs _ held) = Right [Text.unpack (txHashToHex (pendingShownHash status)) | (_, info) <- held, Pending status <- [txInfoStatus info]]
 keysOf (ResponseCoins groups) = Right [Text.unpack (txHashToHex outpoint.hash) <> ":" <> show outpoint.index | g <- groups, coin <- groupRows g, let outpoint = jsonCoinOutpoint coin]
 keysOf other = Left (show other)
 
@@ -258,16 +258,19 @@ listingSpec ctx = do
         (errorOf <$> hwJson home ["addresses", "--after", Text.unpack (internalAddrsText !! 0)] [])
           `shouldReturn` Right ("The address " <> internalAddrsText !! 0 <> " is not among the addresses listed")
 
-    -- portfolio1 is a portfolio of its own, without any row
-    it "shows the rows of the active portfolio only" $
+    -- portfolio1 is a portfolio of its own, without any row. pendingtxs
+    -- lists every portfolio, as "The pending transactions pendingtxs
+    -- lists" checks.
+    it "shows the rows of the active portfolio only, but for pendingtxs" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         newTestPortfolio home
-        forM_ listings $ \listing ->
+        let ofActive = filter (/= "pendingtxs") listings
+        forM_ ofActive $ \listing ->
           (rowsOf <$> hwJson home [listing] []) `shouldReturn` Right 1
         switchTo home 0 1
-        forM_ listings $ \listing ->
+        forM_ ofActive $ \listing ->
           (rowsOf <$> hwJson home [listing] []) `shouldReturn` Right 0
 
     -- Two of each: the addresses /0/0 and /0/1, the two payments to them,
@@ -662,19 +665,19 @@ threePendingOnTwoNetworks ctx home = do
 
 -- | Where each pending transaction pendingtxs lists is
 pendingPlacesOf :: Response -> Either String [Place]
-pendingPlacesOf (ResponsePendingTxs held) = Right (fst <$> held)
+pendingPlacesOf (ResponsePendingTxs _ held) = Right (fst <$> held)
 pendingPlacesOf other = Left (show other)
 
 -- | The network of each pending transaction pendingtxs lists, with its
 -- nosigHash
 pendingNetworksOf :: Response -> Either String [(String, String)]
-pendingNetworksOf (ResponsePendingTxs held) =
+pendingNetworksOf (ResponsePendingTxs _ held) =
   Right [((placeNetwork place).name, Text.unpack (txHashToHex (pendingNosigHash status))) | (place, info) <- held, Pending status <- [txInfoStatus info]]
 pendingNetworksOf other = Left (show other)
 
 -- | When each pending transaction pendingtxs lists was created
 createdTimesOf :: Response -> Either String [Maybe UTCTime]
-createdTimesOf (ResponsePendingTxs held) = Right (created . snd <$> held)
+createdTimesOf (ResponsePendingTxs _ held) = Right (created . snd <$> held)
   where
     created info = case txInfoStatus info of
       Pending status -> pendingCreated status
@@ -684,16 +687,25 @@ createdTimesOf other = Left (show other)
 pendingListSpec :: Ctx -> Spec
 pendingListSpec ctx =
   describe "The pending transactions pendingtxs lists" $ do
-    it "are those of the active portfolio, each with its place" $
+    -- portfolio0 is active, and each portfolio has one
+    it "are those of every portfolio, each with its place" $
       withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
         twoPortfoliosPending home
-        (pendingPlacesOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right [mainPlace]
+        (pendingPlacesOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right [mainPlace, portfolio1Place]
 
-    it "are those of the portfolio switch made active" $
+    it "are the same whichever portfolio is active" $
       withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
         twoPortfoliosPending home
         switchTo home 0 1
-        (pendingPlacesOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right [portfolio1Place]
+        (pendingPlacesOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right [mainPlace, portfolio1Place]
+
+    -- The payment is of portfolio0 of wallet1, and portfolio0 of wallet0
+    -- is active
+    it "are those of every wallet" $
+      withChain ctx (chainPaying ctx externalAddr2) $ \home _ -> do
+        paymentOfSecondWallet home
+        switchTo home 0 0
+        (pendingPlacesOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right [Place (PortfolioRef 1 0) btc]
 
     -- The payment on bch was prepared between the two on btc. btc comes
     -- before bch among the networks of a portfolio.
@@ -708,25 +720,25 @@ pendingListSpec ctx =
         (_, onBch, _) <- threePendingOnTwoNetworks ctx home
         (pendingNetworksOf <$> hwJson home ["pendingtxs", "--network", "bch"] []) `shouldReturn` Right [("bch", onBch)]
 
+    -- The database has one wallet, so no line names it
     it "name the portfolio and the network of each on its second line" $
       withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
         twoPortfoliosPending home
-        switchTo home 0 1
         run <- hw home ["pendingtxs"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  portfolio1 btc, "
 
-    -- The second test mnemonic is wallet1, whose first receiving address
-    -- the chain pays
-    it "name the wallet of a portfolio that is not of wallet0" $
+    it "name the wallet of each portfolio when the database has several wallets" $
       withChain ctx (chainPaying ctx externalAddr2) $ \home _ -> do
-        newTestPortfolio home
-        newPortfolioOf home testMnemonic2
-        switchTo home 1 0
-        _ <- answer home ["receive"] []
-        _ <- answer home ["sync"] []
-        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        paymentOfSecondWallet home
         run <- hw home ["pendingtxs"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  portfolio0 of wallet1 btc, "
+
+    -- "wallet1" takes 7, more than "Wallet"
+    it "give the wallet a column of the table when the database has several wallets" $
+      withChain ctx (chainPaying ctx externalAddr2) $ \home _ -> do
+        paymentOfSecondWallet home
+        listed <- Text.lines . runOut <$> hw home ["pendingtxs", "--tabular"] []
+        take 1 listed `shouldBe` ["Hash     │ Wallet  │ Portfolio  │ Network │ Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Description"]
 
     it "show their portfolio and their network as fields with --verbose" $
       withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
@@ -735,8 +747,9 @@ pendingListSpec ctx =
         runOut run `shouldSatisfy` Text.isInfixOf "\n  Portfolio: portfolio0\n  Network  : btc\n"
 
     it "take two lines each without --verbose" $
-      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
-        twoPortfoliosPending home
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         run <- hw home ["pendingtxs"] []
         length (Text.lines (runOut run)) `shouldBe` 2
 
@@ -1370,9 +1383,9 @@ nextStepSpec ctx =
         run `shouldSatisfy` showsCommand "hw deletetx HASH"
         run `shouldNotSatisfy` showsCommand "hw switch"
 
-    -- The payment in conflict is of portfolio0, and portfolio1 is active:
-    -- pendingtxs alone would list portfolio1, without the payment
-    it "is to switch to the portfolio of the pending transaction a sync found in conflict first, when another portfolio is active" $
+    -- The payment in conflict is of portfolio0, and portfolio1 is active.
+    -- pendingtxs lists both.
+    it "is to find and delete the pending transaction a sync found in conflict, without a switch, when another portfolio is active" $
       withChain ctx (paidChain ctx) $ \home chain -> do
         _ <- paymentSigned home
         newTestPortfolio home
@@ -1382,16 +1395,15 @@ nextStepSpec ctx =
         run <- hw home ["sync"] []
         run
           `shouldSatisfy` showsCommand
-            "Next, switch to portfolio0 of wallet0, where a pending transaction is in conflict:\n\
-            \  hw switch 0 --wallet 0\n\
-            \Then find the pending transaction in conflict, which can no longer be sent:\n\
+            "Next, find the pending transaction in conflict, which can no longer be sent:\n\
             \  hw pendingtxs\n\
             \Then delete it, to free its coins:\n\
             \  hw deletetx HASH\n"
+        run `shouldNotSatisfy` showsCommand "hw switch"
 
     -- A payment is signed in each portfolio, from its coin of
     -- 'twoPortfoliosTx', and the mempool spends both coins otherwise
-    it "is to switch in turn to each portfolio that holds a pending transaction a sync found in conflict, when there are several" $
+    it "is to find and delete the pending transactions a sync found in conflict in several portfolios, without a switch" $
       withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home chain -> do
         syncedTwoPortfolios home
         forM_ [0, 1] $ \portfolio -> do
@@ -1403,13 +1415,11 @@ nextStepSpec ctx =
         run <- hw home ["sync"] []
         run
           `shouldSatisfy` showsCommand
-            "Next, switch in turn to each portfolio where a pending transaction is in conflict:\n\
-            \  hw switch 0 --wallet 0\n\
-            \  hw switch 1 --wallet 0\n\
-            \In each, find the pending transactions in conflict, which can no longer be sent:\n\
+            "Next, find the pending transactions in conflict, which can no longer be sent:\n\
             \  hw pendingtxs\n\
             \Then delete them, to free their coins:\n\
             \  hw deletetx HASH\n"
+        run `shouldNotSatisfy` showsCommand "hw switch"
 
     -- The key of the old wallet is in a file, and the sweep pays
     -- portfolio0

@@ -21,8 +21,8 @@
 -- given: a transaction, a coin, an address, the destinations of a sweep.
 -- When several portfolios are candidates, the active one is taken when it
 -- is one of them; otherwise the refusal names them, for the user to
--- switch to the one to use. portfolios, sync and exportsheet cover every
--- portfolio.
+-- switch to the one to use. portfolios, pendingtxs, sync and exportsheet
+-- cover every portfolio.
 --
 -- A command that changes a default writes it to the configuration file
 -- inside its transaction, as its last step ('writeDefaults'): when the
@@ -234,8 +234,8 @@ commandResponse ctx cfg unit = \case
     notAListing = ResponseError "The command has no listing to answer with"
 
 -- | The listing of a command that lists, which the screen reads chunk by
--- chunk, or Nothing for a command that answers at once. portfolios lists
--- every portfolio, and the others list the active one.
+-- chunk, or Nothing for a command that answers at once. portfolios and
+-- pendingtxs list every portfolio, and the others list the active one.
 commandListing :: Ctx -> Command -> Maybe (ExceptT String (DB IO) Sections)
 commandListing ctx = \case
   CommandPortfolios _ -> Just portfoliosListing
@@ -243,7 +243,7 @@ commandListing ctx = \case
   CommandBalances target _ paging -> Just $ inActive $ \portfolio -> balancesListing portfolio target paging
   CommandCoins target locked _ paging -> Just $ inActive $ \portfolio -> coinsListing portfolio target locked paging
   CommandTxs netM _ paging -> Just $ inActive $ \portfolio -> txsListing portfolio netM paging
-  CommandPendingTxs netM _ paging -> Just $ inActive $ \portfolio -> pendingTxsListing ctx portfolio netM paging
+  CommandPendingTxs netM _ paging -> Just $ pendingTxsListing ctx netM paging
   _ -> Nothing
   where
     inActive listing = listing =<< requireActivePortfolio
@@ -1250,26 +1250,33 @@ txsListing portfolio netM paging = do
         [] -> throwError ("The transaction " <> hashRefText named <> " is not among those listed")
   return $ Sections (length pools > 1) paging.pagingMax (zipWith ($) from (startM : repeat Nothing))
 
--- | The pending transactions of a portfolio, as txs lists its
--- transactions, on every network it has an account on, or on the
--- --network alone ('pendingListing'). pendingtxs is about the active
--- portfolio, as the other listings are, so that a user of two portfolios
--- sees what waits in the one at hand.
-pendingTxsListing :: Ctx -> Portfolio -> Maybe Network -> Paging HashRef -> ExceptT String (DB IO) Sections
-pendingTxsListing ctx portfolio netM paging = do
-  pools <- listedPools portfolio netM
-  pendingListing ctx (Just pools) paging
+-- | The pending transactions of every portfolio of every wallet, on
+-- every network, or on the --network alone ('pendingListing'). Unlike
+-- the other listings, pendingtxs does not keep to the active portfolio.
+-- A pending transaction waits for the user: to be signed, sent or
+-- deleted. One left in another portfolio would be forgotten, and the
+-- coins it spends stay locked until then. There are few of them, so one
+-- list of them all stays short. The commands that take one find its
+-- portfolio by themselves, so the user acts on it without a switch.
+pendingTxsListing :: Ctx -> Maybe Network -> Paging HashRef -> ExceptT String (DB IO) Sections
+pendingTxsListing ctx netM paging = do
+  poolsM <- case netM of
+    Nothing -> return Nothing
+    Just net -> Just . filter ((== net) . (.poolNetwork)) <$> lift allPools
+  pendingListing ctx poolsM paging
 
 -- | The pending transactions of the pools, or of every pool, in one list
--- rather than in sections: by portfolio and by network, in the order of
--- the networks of a portfolio, and the newest first on each. Each says
--- where it is. The one to go on after is named by either of its hashes.
--- There are few of them, so the listing is read whole, and its table
--- sizes its columns to all of them. pendingtxs lists the pools of one
--- portfolio, and exportsheet those of every portfolio it exports.
+-- rather than in sections: by wallet, by portfolio and by network, in the
+-- order of the networks of a portfolio, and the newest first on each.
+-- Each says where it is, with its wallet when the database has several
+-- ('walletNamingOf'). The one to go on after is named by either of its
+-- hashes. There are few of them, so the listing is read whole, and its
+-- table sizes its columns to all of them. pendingtxs lists every pool, or
+-- those of one network, and exportsheet every pool.
 pendingListing :: Ctx -> Maybe [Pool] -> Paging HashRef -> ExceptT String (DB IO) Sections
 pendingListing ctx poolsM paging = do
   start <- forM paging.pagingAfter (fmap snd . pendingCursor poolsM <=< pendingHashOf)
+  naming <- lift $ walletNamingOf . length <$> getWallets
   return . oneSection paging.pagingMax $
     Listing
       { listingStart = start,
@@ -1280,7 +1287,7 @@ pendingListing ctx poolsM paging = do
                 Just cursor -> drop 1 $ dropWhile ((/= Just cursor) . pendingHashOfRow) held
           return $ maybe id genericTake countM following,
         listingCursor = maybe (Left "pendingtxs lists the transactions the wallet holds only") Right . pendingHashOfRow,
-        listingAnswer = ResponsePendingTxs,
+        listingAnswer = ResponsePendingTxs naming,
         listingWhole = True
       }
   where
