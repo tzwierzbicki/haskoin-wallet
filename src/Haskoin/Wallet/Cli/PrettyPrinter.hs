@@ -24,7 +24,7 @@ import Data.Char (isAlphaNum)
 import Data.List (genericLength, intercalate, intersperse, nub, sortOn)
 import Data.List.Split (chunksOf)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe)
+import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe, maybeToList)
 import Data.Ord (Down (..))
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -1145,9 +1145,9 @@ countCap = 999
 --
 -- The second line gives the details, a comma between them: the account,
 -- in a listing of every account; the balance after the transaction, in
--- txs; the transactions a replacement that bumpfee prepared replaces; and
--- last what the transaction is for, in the words of the last column of
--- the table ('purposeCell'). The label of a payment says what it is for
+-- txs; the transactions a replacement that bumpfee prepared replaces, in
+-- yellow ('replacesNote'); and last what the transaction is for, in the
+-- words of the last column of the table ('purposeCell'). The label of a payment says what it is for
 -- better than the address it pays, and takes its place. What it is for
 -- has no width to fix in advance, so it ends the line: a long address or
 -- label pushes nothing after it. The verbose view gives every address in
@@ -1163,9 +1163,23 @@ compactTxDoc net unit portfolioM balanceM time info@(TxInfo summary status label
     details =
       [(text (portfolioWords ref) `withStyle` Account) <+> text net.name | Just ref <- [portfolioM]]
         <> ["balance" <+> neutralAmount unit balance | Just balance <- [balanceM]]
-        <> ["replaces" <+> shortIdList replaced | Pending p <- [status], let replaced = pendingReplaces p, not (null replaced)]
+        <> maybeToList (replacesNote status)
         <> [purpose | not (null (renderPlain purpose))]
     purpose = purposeCell net label summary
+
+-- | What a replacement says of the transactions it replaces, by their
+-- short ids: "replaces a1075db5". Nothing for a transaction that replaces
+-- none. It is yellow, as what waits for something: the network keeps only
+-- one of the transactions, and until it mines one of them, a payment
+-- stands in two places. The user may not expect it, since the replaced
+-- transaction is still in the history, so it stands out in every view
+-- that shows a pending transaction.
+replacesNote :: TxStatus -> Maybe (Doc Style)
+replacesNote = \case
+  Pending pending
+    | not (null (pendingReplaces pending)) ->
+        Just (("replaces" <+> shortIdList (pendingReplaces pending)) `withStyle` Waiting)
+  _ -> Nothing
 
 -- | The first line of the compact view of a transaction: its short id,
 -- faint for one on the chain ('hashWord'), its time to the minute, what
@@ -1780,7 +1794,8 @@ balanceRowDoc unit net headed addr balance =
 -- The table of pending transactions gives what the compact view gives:
 -- the short id of the hash the other commands take first, the time it was
 -- created, its type, its amount, how far it got, its fee rate, and what
--- it is for, as the table of txs says it. A listing of every account
+-- it is for, as the table of txs says it. A replacement says first, in
+-- yellow, which transactions it replaces, as the compact view does. A listing of every account
 -- names the account of each in a column after the short id. The listing
 -- is read whole ('listingWhole'), so that column is as wide as the
 -- longest name it shows, as in the table of accounts. The hash in full
@@ -1812,7 +1827,8 @@ pendingStatusWidth = 10
 -- | A pending transaction on one row of its table, under the columns
 -- given: its short id, its account when given, the time it was created,
 -- its type, its amount, how far it got, its fee rate, and what it is for
--- ('purposeCell'). One in conflict can no longer be sent: its fee rate no
+-- ('purposeCell'), after the transactions it replaces, if any
+-- ('replacesNote'). One in conflict can no longer be sent: its fee rate no
 -- longer matters, and its cell is empty.
 pendingRowDoc :: AmountUnit -> [Column] -> Place -> Maybe ZonedTime -> TxInfo -> Doc Style
 pendingRowDoc unit headed place time (TxInfo summary status label _) =
@@ -1826,7 +1842,7 @@ pendingRowDoc unit headed place time (TxInfo summary status label _) =
            signedAmountCell unit (summaryAmount summary),
            statusCell,
            rateCell,
-           purposeCell net label summary
+           descriptionCell
          ]
   where
     net = placeNetwork place
@@ -1836,6 +1852,9 @@ pendingRowDoc unit headed place time (TxInfo summary status label _) =
         | pendingConflicted pending -> (pendingStatusWord pending, mempty)
         | otherwise -> (pendingStatusWord pending, text (show (summaryFeeByte summary)))
       OnChain _ -> (tableConfirmations status, mempty)
+    -- The words of the compact view, a comma between them
+    purpose = purposeCell net label summary
+    descriptionCell = hcat . intersperse ", " $ maybeToList (replacesNote status) <> [purpose | not (null (renderPlain purpose))]
 
 -- | A transaction with every detail: its first line, then its fields. The
 -- lines given come first: its account in a listing of every account, or
@@ -1882,7 +1901,8 @@ statusFields time (OnChain status) =
 -- nosigHash until it is signed, then its id, which the network will know.
 statusFields time (Pending status) =
   hashFields (Just PendingHash) (if pendingSigned status then "Txid" else "NoSigHash") (pendingShownHash status)
-    <> [ field 9 "Replaces" <> align (vcat [text (cs $ txHashToHex replaced) | replaced <- pendingReplaces status])
+    -- Yellow, as in the compact view ('replacesNote')
+    <> [ field 9 "Replaces" <> align (vcat [text (cs $ txHashToHex replaced) `withStyle` Waiting | replaced <- pendingReplaces status])
        | not (null (pendingReplaces status))
        ]
     <> [field 9 "Created" <> text (secondText t) | Just t <- [time]]

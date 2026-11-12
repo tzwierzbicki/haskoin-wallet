@@ -2419,8 +2419,9 @@ They take two lines each, as in `txs`. The first starts with the
 with that of its txid. It gives the time the transaction was created, its
 amount and its status, with its fee rate. The second says where the
 transaction is, by its portfolio and its network. It then names the
-transactions a replacement replaces, and says what the transaction is for. A
-conflicted one can no longer be sent. [`show HASH`](#hw-show) shows one of them
+transactions a replacement replaces, in yellow on a terminal, and says what the
+transaction is for. `--verbose` names those transactions in full, in yellow too.
+A conflicted one can no longer be sent. [`show HASH`](#hw-show) shows one of them
 in full.
 
 It is one list rather than a list in sections, sorted by network, in the order
@@ -2432,7 +2433,9 @@ portfolio are in the tab of pending transactions of
 `--tabular` shows each transaction on one row of a table: its short id, its
 portfolio and its network, the time it was created, its type, its amount, its
 status, its fee rate in sat/vB, and what it is for, as `txs --tabular` says it.
-The portfolio and network columns are as wide as their longest cell.
+The description of a replacement starts with the transactions it replaces, in
+yellow, as in `replaces a1075db5, to bc1q…`. The portfolio and network columns
+are as wide as their longest cell.
 
 `--csv FILE` writes the pending transactions to a [CSV file](#listings): the
 wallet, the portfolio and the network of each, when it was created, its type,
@@ -2453,6 +2456,10 @@ hw pendingtxs --network bch
 > - **A pending transaction locks its coins.** They stay locked until `sync`
 >   sees the transaction on the network, or until `deletetx` deletes it. Delete
 >   the transactions you abandon.
+> - **A replacement is yellow until the network takes one transaction.** The
+>   network keeps only one of a replacement and the transactions it replaces.
+>   Until a block holds one of them, the payment stands in both, and the
+>   replaced one is still in `txs`.
 > - **A transaction left in another portfolio does not show.** `pendingtxs`
 >   lists the active portfolio, as the other listings do. Switch to another
 >   portfolio to see its pending transactions, or look at the tab of

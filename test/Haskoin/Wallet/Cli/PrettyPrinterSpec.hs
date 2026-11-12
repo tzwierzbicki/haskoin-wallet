@@ -1632,6 +1632,11 @@ pendingTableSpec =
                      "00000000 │ portfolio0            │ btc     │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
                    ]
 
+    it "names the transaction a replacement replaces by its short id, before what it is for, as the compact view does" $ do
+      let replacement = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False (Just seenTime) [b2d4f6a8Txid])) "" Map.empty
+      renderedLines (rowOf replacement)
+        `shouldBe` ["00000000 │ portfolio0 │ btc     │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ replaces b2d4f6a8, to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+
     it "gives the label of a payment in place of the address it pays, as the table of txs does" $
       renderedLines (rowOf unsigned {txInfoLabel = "Rent of October"})
         `shouldBe` ["00000000 │ portfolio0 │ btc     │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │      4 │ \"Rent of October\""]

@@ -87,7 +87,9 @@ data Style
   | -- | A state as it should be: signed, spendable, valid
     Good
   | -- | A state that waits for something, often the user: not signed,
-    -- locked, not confirmed yet
+    -- locked, not confirmed yet. A replacement too, with the transactions
+    -- it replaces: the network keeps one of them, and the payment waits in
+    -- two places until it mines one.
     Waiting
   | -- | An address of the wallet, or the derivation path that names it,
     -- and its label, in a transaction or a coin. They share a colour, so

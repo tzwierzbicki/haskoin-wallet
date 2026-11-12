@@ -2393,10 +2393,11 @@ line then gives the time the transaction was created, its amount and its
 status: not signed, signed and not sent, or sent, with its fee rate.
 
 The second line says where the transaction is: its portfolio and its network.
-A replacement that bumpfee made then names the transactions it replaces. Last
-comes what the transaction is for, as txs says it: its label, or else the
-address it pays. An address of the wallet is named by its type and its
-derivation path.
+A replacement that bumpfee made then names the transactions it replaces, in
+yellow on a terminal: the network keeps only one of them. Last comes what the
+transaction is for, as txs says it: its label, or else the address it pays. An
+address of the wallet is named by its type and its derivation path. --verbose
+names the transactions replaced in full, in yellow too.
 
 A transaction marked conflicted spends a coin that another transaction has
 spent, or that is gone, as the server said at the last sync. It cannot be sent
@@ -2405,7 +2406,8 @@ while that lasts. Delete it with deletetx, which frees its coins.
 With --tabular, each transaction takes one row of a table, under a header that
 names the columns: its short id, its portfolio and its network, the time it
 was created, its type, its amount, its status, its fee rate in sat/vB, and
-what it is for, as txs --tabular says it.
+what it is for, as txs --tabular says it. The description of a replacement
+names first, in yellow, the transactions it replaces.
 
 With --csv FILENAME, each transaction takes one row of a new CSV file, for a
 spreadsheet: its wallet, its portfolio and its network, when it was created, its type, amount, fee and fee

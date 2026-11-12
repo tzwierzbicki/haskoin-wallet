@@ -177,6 +177,8 @@ Payments:
   answer in advance.
 - `bumpfee` replaces a stuck Bitcoin payment with one that pays a higher fee.
   The Bitcoin transactions `hw` builds are now marked replaceable (BIP125).
+  `pendingtxs` names the transactions a replacement replaces in each of its
+  views, the table included, in yellow on a terminal.
 - `preparetx --change-back ADDRESS` sends the change to an address of the
   portfolio, instead of a new change address. The address may have been used
   already, or be the change of another pending transaction.

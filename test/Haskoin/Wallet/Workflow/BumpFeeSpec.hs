@@ -126,6 +126,29 @@ bumpFeeSpec ctx = do
         run <- hw home ["pendingtxs"] []
         runOut run `shouldSatisfy` Text.isInfixOf ("\n  portfolio0 btc, replaces " <> Text.pack (shortOf stuck) <> ", ")
 
+    -- Yellow is colour 33 of the terminal. --no-pager prints the listing
+    -- itself.
+    it "is named by its replacement in yellow on a terminal, in the compact view of pendingtxs" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        stuck <- sentPayment home
+        _ <- answer home ["bumpfee", stuck, "--fee-rate", "20"] []
+        run <- hwOnScreen [] home ["pendingtxs", "--no-pager"]
+        runOut run `shouldSatisfy` Text.isInfixOf ("\ESC[0;33mreplaces " <> Text.pack (shortOf stuck) <> "\ESC[0m")
+
+    it "is named by its replacement in yellow on a terminal, in the description of the table of pendingtxs" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        stuck <- sentPayment home
+        _ <- answer home ["bumpfee", stuck, "--fee-rate", "20"] []
+        run <- hwOnScreen [] home ["pendingtxs", "--tabular", "--no-pager"]
+        runOut run `shouldSatisfy` Text.isInfixOf ("\ESC[0;33mreplaces " <> Text.pack (shortOf stuck) <> "\ESC[0m")
+
+    it "is named by its replacement in full and in yellow on a terminal, in the verbose view of pendingtxs" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        stuck <- sentPayment home
+        _ <- answer home ["bumpfee", stuck, "--fee-rate", "20"] []
+        run <- hwOnScreen [] home ["pendingtxs", "--verbose", "--no-pager"]
+        runOut run `shouldSatisfy` Text.isInfixOf ("\ESC[0;33m" <> Text.pack stuck <> "\ESC[0m")
+
     it "gives way to its replacement once sent: the history shows it dead, and the replacement confirmed" $
       withChain ctx (paidChain ctx) $ \home chain -> do
         stuck <- sentPayment home
