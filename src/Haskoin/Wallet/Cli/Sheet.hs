@@ -38,6 +38,10 @@
 -- did before. The columns of the two files were then two apart, and no
 -- row of one fitted the other.
 --
+-- The spreadsheet has two more tabs, which hold the addresses of the
+-- transactions ('txAddressSheet'). No listing lists those, so --csv has
+-- no file for them.
+--
 -- = The order of the columns
 --
 -- The columns follow four rules. A user who knows one sheet then finds
@@ -47,7 +51,8 @@
 --    Wallet, Portfolio, Network and Type. A row of several accounts names
 --    each type, as in "bip44, bip84". Such a row is a transaction between
 --    the two accounts of a portfolio, or a portfolio on a network where
---    it has both.
+--    it has both. In a sheet of the addresses of transactions, Type is
+--    the type of the account that holds the address of the row.
 --
 -- 2. Then comes what the listing is about, the most telling first. The
 --    sheet of the coins goes on with the coin, in full and by its short
@@ -96,25 +101,38 @@
 -- = The addresses of a transaction
 --
 -- A transaction spends from any number of addresses and pays any number.
--- A sheet has a fixed number of columns. So a transaction names four
--- addresses, each with its path, its label and its value
--- ('namedAddresses'). They are the two it spends the most from, the one
--- it pays the most, and its change. It counts the others in one column.
--- Four addresses tell most payments whole. Such a payment spends one or
--- two coins, pays one address and takes its change.
+-- A sheet has a fixed number of columns. No number of columns holds
+-- every address of every transaction. So the addresses are given twice.
+--
+-- The row of a transaction names three of them, each with its path, its
+-- label and its value ('mainAddressColumns'). They are the address it
+-- spends the most from, the one it pays the most, and its change. It
+-- counts the others in one column. Three addresses tell an ordinary
+-- payment at a glance. More of them would widen every row for the few
+-- transactions that have more.
+--
+-- A sheet of its own then has a row for each address of each transaction
+-- ('txAddressSheet'). It leaves none out, whatever their number. A
+-- spreadsheet works well on such rows. Its user filters on an address,
+-- sums by label, and finds every payment to one address, even where that
+-- address was not paid the most. The txid matches each row with the row
+-- of its transaction.
 --
 -- = The spreadsheet of the wallet
 --
--- exportsheet writes the six listings for every portfolio at once
--- ('walletSheets'). The rows of each portfolio follow those of the one
--- before in each tab.
+-- exportsheet writes the six listings for every portfolio at once, and
+-- the addresses of their transactions ('walletSheets'). The rows of each
+-- portfolio follow those of the one before in each tab.
 module Haskoin.Wallet.Cli.Sheet
   ( Cell (..),
     Sheet (..),
     ZoneAt,
     listingSheet,
+    txAddressSheet,
     localListingSheet,
+    localTxSheets,
     sheetTimes,
+    TxSheets (..),
     PortfolioSheets (..),
     walletSheets,
     stacked,
@@ -122,11 +140,10 @@ module Haskoin.Wallet.Cli.Sheet
 where
 
 import Control.Monad (mfilter)
-import Data.Bifunctor (bimap)
 import Data.Containers.ListUtils (nubOrd)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (isNothing, listToMaybe)
+import Data.Maybe (fromMaybe, isNothing, listToMaybe)
 import Data.Ord (Down (..))
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -140,7 +157,7 @@ import Haskoin.Wallet.Cli.PrettyPrinter (HeldAddress (..), TxAddress (..), coinS
 import Haskoin.Wallet.Cli.Response (Group (..), Response (..))
 import Haskoin.Wallet.Database (DBAddress (..))
 import Haskoin.Wallet.Database.Account (AccountKeys (..), NetworkView (..), PortfolioView (..))
-import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath, addrPoolPath, coinBalanceNotSpendableYet, pathText)
+import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath, addrPoolPath, coinBalanceNotSpendableYet, isIntPath, pathText)
 import Haskoin.Wallet.Database.Coin (JsonCoin (..), coinText)
 import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..), portfolioName, walletName)
 import Haskoin.Wallet.Database.TxInfo
@@ -218,26 +235,52 @@ listingSheet zoneAt = \case
   ResponseTxs groups -> Just (sheetOf (txColumns zoneAt) (concatMap inPlace groups))
   ResponsePendingTxs _ held -> Just (sheetOf (pendingColumns zoneAt) held)
   _ -> Nothing
-  where
-    -- The rows of a group, each with the portfolio and the network of
-    -- the group
-    inPlace :: Group row -> [(Place, row)]
-    inPlace g = (groupPlace g,) <$> groupRows g
 
--- | The sheet of the answer of a listing, its local times on the clock of
--- this computer ('listingSheet').
+-- | The sheet of the addresses of the transactions of an answer of txs or
+-- of pendingtxs. It has a row for each address each transaction spends
+-- from or pays ('txAddressRows'), in the order of the transactions.
+-- Nothing for any other answer. The function gives the zone each time is
+-- read in for its local columns.
+txAddressSheet :: ZoneAt -> Response -> Maybe Sheet
+txAddressSheet zoneAt = \case
+  ResponseTxs groups -> Just (sheetOf (txAddressRowColumns zoneAt) (concatMap (txAddressRows . fmap listedTxInfo) (concatMap inPlace groups)))
+  ResponsePendingTxs _ held -> Just (sheetOf (pendingAddressRowColumns zoneAt) (concatMap txAddressRows held))
+  _ -> Nothing
+
+-- | The rows of a group of an answer, each with the portfolio and the
+-- network of the group
+inPlace :: Group row -> [(Place, row)]
+inPlace g = (groupPlace g,) <$> groupRows g
+
+-- | A sheet of an answer, its local times on the clock of this computer.
+-- The function given makes the sheet with the zones it is given.
 --
 -- The zone of a time is read from the computer, and a sheet takes the
 -- zones as a function. So the sheet is made twice. The first one, all in
 -- UTC, tells which times the sheet holds. The second one has the zone of
 -- each. A zone changes no time in UTC, so the times of the first sheet
 -- are those of the second, and none is left without its zone.
-localListingSheet :: Response -> IO (Maybe Sheet)
-localListingSheet answer = case listingSheet (const utc) answer of
+withLocalZones :: (ZoneAt -> Response -> Maybe Sheet) -> Response -> IO (Maybe Sheet)
+withLocalZones sheetWith answer = case sheetWith (const utc) answer of
   Nothing -> return Nothing
   Just inUtc -> do
     zones <- Map.fromList <$> mapM (\time -> (time,) <$> getTimeZone time) (nubOrd (sheetTimes inUtc))
-    return $ listingSheet (\time -> Map.findWithDefault utc time zones) answer
+    return $ sheetWith (\time -> Map.findWithDefault utc time zones) answer
+
+-- | The sheet of the answer of a listing, its local times on the clock of
+-- this computer ('listingSheet')
+localListingSheet :: Response -> IO (Maybe Sheet)
+localListingSheet = withLocalZones listingSheet
+
+-- | The two sheets of an answer of txs or of pendingtxs, their local
+-- times on the clock of this computer: the transactions ('listingSheet'),
+-- and the addresses of each ('txAddressSheet'). Nothing for any other
+-- answer.
+localTxSheets :: Response -> IO (Maybe TxSheets)
+localTxSheets answer = do
+  transactions <- withLocalZones listingSheet answer
+  addresses <- withLocalZones txAddressSheet answer
+  return (TxSheets <$> transactions <*> addresses)
 
 -- | Every time a sheet gives in UTC, in the order of its rows
 sheetTimes :: Sheet -> [UTCTime]
@@ -312,7 +355,12 @@ typeColumn kinds = Column "Type" (textCell . Text.intercalate ", " . map kindNam
 -- change to. The path tells it too, by its first number. A word is what
 -- a filter of the spreadsheet picks.
 chainColumn :: (element -> Bool) -> Column element
-chainColumn isChange = Column "Chain" $ \element -> TextCell (if isChange element then "change" else "receiving")
+chainColumn isChange = Column "Chain" (TextCell . chainWord . isChange)
+
+-- | The word for the chain of an address, given whether it is a change
+-- address
+chainWord :: Bool -> Text
+chainWord isChange = if isChange then "change" else "receiving"
 
 -- | The three columns of a time, under the name given. They give the
 -- time in UTC, then on the clock of the computer, then how far that clock
@@ -502,7 +550,7 @@ txColumns zoneAt =
           Column "Replaced by" $ onChain (hashesCell . chainReplacedBy),
           txLabelColumn
         ]
-          <> txAddressColumns
+          <> mainAddressColumns
           <> [lockTimeColumn]
       )
   where
@@ -523,9 +571,7 @@ txColumns zoneAt =
 pendingColumns :: ZoneAt -> [Column (Place, TxInfo)]
 pendingColumns zoneAt =
   txAccountColumns
-    <> [ Column "Nosighash" $ inPreparation (hashCell . pendingNosigHash),
-         Column "Short nosighash" $ inPreparation (shortHashCell . pendingNosigHash)
-       ]
+    <> nosigHashColumns
     <> txidColumns
     <> amountColumns
     <> [ Column "Change in fee (sats)" $ \(_, info) -> maybe EmptyCell satoshiCell (summaryChangeInFee (txInfoSummary info)),
@@ -533,15 +579,24 @@ pendingColumns zoneAt =
          Column "Replaces" $ inPreparation (hashesCell . pendingReplaces),
          txLabelColumn
        ]
-    <> txAddressColumns
+    <> mainAddressColumns
     <> [lockTimeColumn]
     <> timeColumns zoneAt "Created" (txTime . snd)
-  where
-    -- A cell of what the wallet keeps of a transaction in preparation.
-    -- pendingtxs lists no other.
-    inPreparation cell (_, info) = case txInfoStatus info of
-      Pending status -> cell status
-      OnChain _ -> EmptyCell
+
+-- | A cell of what the wallet keeps of a transaction in preparation.
+-- pendingtxs lists no other, whose cell would be empty.
+inPreparation :: (PendingStatus -> Cell) -> (Place, TxInfo) -> Cell
+inPreparation cell (_, info) = case txInfoStatus info of
+  Pending status -> cell status
+  OnChain _ -> EmptyCell
+
+-- | The columns of the nosigHash of a transaction in preparation, in
+-- full then by its short id
+nosigHashColumns :: [Column (Place, TxInfo)]
+nosigHashColumns =
+  [ Column "Nosighash" $ inPreparation (hashCell . pendingNosigHash),
+    Column "Short nosighash" $ inPreparation (shortHashCell . pendingNosigHash)
+  ]
 
 -- | The first four columns of a sheet of transactions. They give where
 -- the transaction is, and the types of the accounts of the portfolio it
@@ -563,14 +618,19 @@ txidColumns =
 -- of a payment received is the fee its payer paid.
 amountColumns :: [Column (Place, TxInfo)]
 amountColumns =
-  through
-    (txInfoSummary . snd)
-    [ Column "Direction" (TextCell . cs . typeWord . summaryType),
-      Column "Amount (sats)" (SatoshiCell . summaryAmount),
-      Column "Fee (sats)" (satoshiCell . summaryFee),
-      Column "Fee rate (sat/vB)" (countCell . summaryFeeByte),
-      Column "Size (vB)" (countCell . summarySize)
-    ]
+  directionColumn
+    : through
+      (txInfoSummary . snd)
+      [ Column "Amount (sats)" (SatoshiCell . summaryAmount),
+        Column "Fee (sats)" (satoshiCell . summaryFee),
+        Column "Fee rate (sat/vB)" (countCell . summaryFeeByte),
+        Column "Size (vB)" (countCell . summarySize)
+      ]
+
+-- | The column of the direction of a transaction: Incoming, Outgoing or
+-- Internal, as the screen names its type
+directionColumn :: Column (Place, TxInfo)
+directionColumn = Column "Direction" $ \(_, info) -> TextCell (cs (typeWord (summaryType (txInfoSummary info))))
 
 -- | The column of where a transaction stands ('statusText')
 statusColumn :: Column (Place, TxInfo)
@@ -604,27 +664,21 @@ lockTimeColumn = Column "Lock time" $ \(_, info) -> case summaryLockTime (txInfo
 
 {- The addresses of a transaction -}
 
--- | The addresses of a transaction that its sheet names, each in columns
--- of its own, and how many it leaves out
-data NamedAddresses = NamedAddresses
-  { -- | The address it spends the most from
-    firstFrom :: !(Maybe TxAddress),
-    -- | The address it spends the most from after that one
-    secondFrom :: !(Maybe TxAddress),
-    -- | The address it pays the most
-    mainTo :: !(Maybe TxAddress),
-    -- | The address it sends the most change to
-    mainChange :: !(Maybe TxAddress),
-    -- | How many other addresses it spends from, pays, or sends change to
-    otherAddresses :: !Int
+-- | The addresses of a transaction, by what it does with them, as its
+-- verbose view lists them under From, To and Change. In each list the
+-- address of the largest value comes first.
+data TxAddresses = TxAddresses
+  { -- | The addresses it spends from
+    spentAddresses :: ![TxAddress],
+    -- | The addresses it pays
+    paidAddresses :: ![TxAddress],
+    -- | The addresses it sends its change to
+    changeAddresses :: ![TxAddress]
   }
 
--- | The addresses a sheet names of a transaction. The transaction spends
--- from addresses, pays addresses and sends change, as its verbose view
--- lists them under From, To and Change ('spentFrom', 'paidTo'). The sheet
--- names the two it spends the most from, the one it pays the most and the
--- one it sends the most change to. An address whose value hw does not
--- know, one another wallet spends from, comes after those it knows.
+-- | The addresses of a transaction ('spentFrom', 'paidTo'), the largest
+-- value first under each role. An address whose value hw does not know,
+-- one another wallet spends from, comes after those it knows.
 --
 -- What tells change from a payment is the direction of the transaction,
 -- as in the verbose view. A payment the portfolio makes sends its change
@@ -632,89 +686,208 @@ data NamedAddresses = NamedAddresses
 -- change of the payer is nothing to the portfolio. A transaction between
 -- the addresses of the portfolio has none either, since no output of it
 -- can be told to be the change.
-namedAddresses :: TxInfo -> NamedAddresses
-namedAddresses info =
-  NamedAddresses
-    { firstFrom = listToMaybe from,
-      secondFrom = listToMaybe (drop 1 from),
-      mainTo = listToMaybe to,
-      mainChange = listToMaybe change,
-      otherAddresses = length (drop 2 from) + length (drop 1 to) + length (drop 1 change)
-    }
+txAddresses :: TxInfo -> TxAddresses
+txAddresses info = TxAddresses (largestFirst (spentFrom info)) (largestFirst to) (largestFirst change)
   where
-    from = largestFirst (spentFrom info)
-    (to, change) = bimap largestFirst largestFirst (paidTo info)
+    (to, change) = paidTo info
     -- The sort keeps the order of addresses of the same value, so that
-    -- the same transaction always names the same ones
+    -- the same transaction always gives the same order
     largestFirst = sortOn (Down . txAddressValue)
 
--- | The columns of the addresses of a transaction. They give the two it
--- spends the most from, the one it pays the most, its change, and the
--- count of the addresses those leave out ('namedAddresses').
-txAddressColumns :: [Column (Place, TxInfo)]
-txAddressColumns =
-  namedAddressColumns "From 1" True firstFrom
-    <> namedAddressColumns "From 2" True secondFrom
-    <> namedAddressColumns "To" True mainTo
+-- | The columns of the addresses the row of a transaction names. They
+-- give the address it spends the most from, the one it pays the most,
+-- its change, and the count of the addresses those leave out. The sheet
+-- of the addresses has a row for each of them all ('txAddressSheet').
+mainAddressColumns :: [Column (Place, TxInfo)]
+mainAddressColumns =
+  mainAddressOf "From" True spentAddresses
+    <> mainAddressOf "To" True paidAddresses
     -- A change address has no label
-    <> namedAddressColumns "Change" False mainChange
-    <> [Column "Other addresses" $ \(_, info) -> countCell (otherAddresses (namedAddresses info))]
+    <> mainAddressOf "Change" False changeAddresses
+    <> [Column "Other addresses" $ \(_, info) -> countCell (unnamedAddresses (txAddresses info))]
 
--- | The columns of one address a transaction names, under the name
--- given, in the order of the sheet of the addresses. They give the
--- address in full, its path, its label when the flag asks for it, and
--- what the transaction spends from it or pays it.
+-- | How many addresses of a transaction its row does not name: all of
+-- each role but the first
+unnamedAddresses :: TxAddresses -> Int
+unnamedAddresses addresses = sum [length (drop 1 (role addresses)) | role <- [spentAddresses, paidAddresses, changeAddresses]]
+
+-- | The columns of the first address of a role, under the name given,
+-- in the order of the sheet of the addresses. They give the address in
+-- full, its path, its label when the flag asks for it, and what the
+-- transaction spends from it or pays it.
 --
 -- An address of the portfolio comes with its path and its label. An
--- address of another portfolio comes without them. The sheet has no
--- column for the portfolio of a path, and a path alone would read as one
--- of the portfolio of the row. The value is empty for an address another
--- wallet spends from, since its coins are nothing to this one.
-namedAddressColumns :: Text -> Bool -> (NamedAddresses -> Maybe TxAddress) -> [Column (Place, TxInfo)]
-namedAddressColumns name labelled named =
-  [ Column (name <> " address") $ \(place, info) -> maybe EmptyCell (addressCell (placeNetwork place) . txAddress) (namedOf info),
+-- address of another portfolio comes without them. The row has no column
+-- for the portfolio of a path, and a path alone would read as one of the
+-- portfolio of the row. The sheet of the addresses names that portfolio.
+-- The value is empty for an address another wallet spends from, since
+-- its coins are nothing to this one.
+mainAddressOf :: Text -> Bool -> (TxAddresses -> [TxAddress]) -> [Column (Place, TxInfo)]
+mainAddressOf name labelled role =
+  [ Column (name <> " address") $ \(place, info) -> maybe EmptyCell (addressCell (placeNetwork place) . txAddress) (mainOf info),
     Column (name <> " path") $ \(_, info) -> maybe EmptyCell (pathCell . pathInAccount . heldPath) (ownOf info)
   ]
     <> [Column (name <> " label") $ \(_, info) -> maybe EmptyCell (textCell . heldLabel) (ownOf info) | labelled]
-    <> [Column (name <> " value (sats)") $ \(_, info) -> maybe EmptyCell satoshiCell (txAddressValue =<< namedOf info)]
+    <> [Column (name <> " value (sats)") $ \(_, info) -> maybe EmptyCell satoshiCell (txAddressValue =<< mainOf info)]
   where
-    namedOf = named . namedAddresses
+    mainOf = listToMaybe . role . txAddresses
     -- Where the address is, when it is of the portfolio of the
     -- transaction
-    ownOf info = mfilter (isNothing . heldIn) (txAddressHeld =<< namedOf info)
+    ownOf info = mfilter (isNothing . heldIn) (txAddressHeld =<< mainOf info)
+
+{- The sheet of the addresses of transactions -}
+
+-- | An address of a transaction, as a row of the sheet of the addresses
+-- of transactions
+data TxAddressRow = TxAddressRow
+  { -- | The portfolio and the network of the transaction
+    rowPlace :: !Place,
+    rowTx :: !TxInfo,
+    -- | What the transaction does with the address: from, to or change
+    rowRole :: !Text,
+    rowAddress :: !TxAddress
+  }
+
+-- | The rows of a transaction in the sheet of the addresses: one for each
+-- address it spends from, then for each it pays, then for each it sends
+-- change to, the largest value first under each role ('txAddresses'). So
+-- the first row of a role is the address the row of the transaction
+-- names. An input or an output that has no address, such as a note in
+-- the chain, has no row.
+txAddressRows :: (Place, TxInfo) -> [TxAddressRow]
+txAddressRows (place, info) =
+  [ TxAddressRow place info role address
+  | (role, addresses) <- [("from", spentAddresses found), ("to", paidAddresses found), ("change", changeAddresses found)],
+    address <- addresses
+  ]
+  where
+    found = txAddresses info
+
+-- | The transaction of a row, with where it is, as the columns of a
+-- transaction read it
+rowTxInPlace :: TxAddressRow -> (Place, TxInfo)
+rowTxInPlace row = (rowPlace row, rowTx row)
+
+-- | Where the address of a row is in the wallet, when the wallet holds it
+rowHeld :: TxAddressRow -> Maybe HeldAddress
+rowHeld = txAddressHeld . rowAddress
+
+-- | The first four columns of a sheet of the addresses of transactions.
+-- The first three say where the transaction is. Type is the type of the
+-- account that holds the address, as in the sheet of the addresses. It
+-- goes with the path of the row. It is empty for an address of another
+-- wallet.
+txAddressAccountColumns :: [Column TxAddressRow]
+txAddressAccountColumns = through rowPlace placeColumns <> [typeColumn (maybe [] (pure . pathKind . heldPath) . rowHeld)]
+
+-- | The columns of the address of a row: what the transaction does with
+-- it, its value there, the address in full, then its path, its chain and
+-- its label, and the wallet and the portfolio that hold it.
+--
+-- The value comes before the address, as in the sheet of the coins. The
+-- role and the value then stand side by side, and read as "from 50000".
+--
+-- The path, the chain and the label are those of an address the wallet
+-- holds. They are empty for an address of another wallet. The last two
+-- columns name the portfolio that holds the address. For most rows it is
+-- the portfolio of the transaction, and they repeat the first columns.
+-- For a payment between two portfolios it is the other one. The row of a
+-- transaction leaves the path of such an address out, since nothing
+-- there says whose path it is. Here the two columns say it.
+txAddressOwnColumns :: [Column TxAddressRow]
+txAddressOwnColumns =
+  [ Column "Role" (TextCell . rowRole),
+    Column "Value (sats)" (maybe EmptyCell satoshiCell . txAddressValue . rowAddress),
+    Column "Address" (\row -> addressCell (placeNetwork (rowPlace row)) (txAddress (rowAddress row))),
+    Column "Path" (maybe EmptyCell (pathCell . pathInAccount . heldPath) . rowHeld),
+    Column "Chain" (maybe EmptyCell (TextCell . chainWord . isIntPath . pathInAccount . heldPath) . rowHeld),
+    Column "Address label" (maybe EmptyCell (textCell . heldLabel) . rowHeld),
+    Column "Held by wallet" (maybe EmptyCell (TextCell . walletName . refWallet) . holder),
+    Column "Held by portfolio" (maybe EmptyCell (TextCell . portfolioName . refPortfolio) . holder)
+  ]
+  where
+    -- The portfolio that holds the address: another one when the address
+    -- says so, or else the portfolio of the transaction
+    holder row = fromMaybe (placePortfolio (rowPlace row)) . heldIn <$> rowHeld row
+
+-- | The columns of the addresses of the transactions of txs. Each row
+-- starts as the row of its transaction does, so that the two are
+-- matched: where it is, the txid in full and by its short id, the time,
+-- the direction and the status. Then come the columns of the address
+-- ('txAddressOwnColumns'), and the label of the transaction.
+--
+-- The row repeats the time, the direction and the status of its
+-- transaction. A spreadsheet joins two sheets poorly, and its user
+-- filters these rows by date, or leaves the dead transactions out,
+-- without looking anything up.
+txAddressRowColumns :: ZoneAt -> [Column TxAddressRow]
+txAddressRowColumns zoneAt =
+  txAddressAccountColumns
+    <> through rowTxInPlace txidColumns
+    <> timeColumns zoneAt "Time" (txTime . rowTx)
+    <> through rowTxInPlace [directionColumn, statusColumn]
+    <> txAddressOwnColumns
+    <> through rowTxInPlace [txLabelColumn]
+
+-- | The columns of the addresses of the pending transactions: those of
+-- 'txAddressRowColumns' that apply, in the same order. The nosigHash
+-- comes before the txid, as in the sheet of the pending transactions. A
+-- pending transaction has no time on the chain, and when the wallet
+-- started holding it comes last.
+pendingAddressRowColumns :: ZoneAt -> [Column TxAddressRow]
+pendingAddressRowColumns zoneAt =
+  txAddressAccountColumns
+    <> through rowTxInPlace (nosigHashColumns <> txidColumns <> [directionColumn, statusColumn])
+    <> txAddressOwnColumns
+    <> through rowTxInPlace [txLabelColumn]
+    <> timeColumns zoneAt "Created" (txTime . rowTx)
 
 {- The spreadsheet of the wallet -}
 
+-- | The two sheets of a listing of transactions: the transactions, a row
+-- each, and their addresses, a row for each address of each
+data TxSheets = TxSheets
+  { transactionsSheet :: !Sheet,
+    txAddressesSheet :: !Sheet
+  }
+  deriving (Eq, Show)
+
 -- | The sheets of the listings of one portfolio that exportsheet writes:
 -- its addresses, of both chains, the balances of those that hold coins,
--- its coins, locked or not, and its transactions, each over every network
+-- its coins, locked or not, and its transactions with their addresses,
+-- each over every network
 data PortfolioSheets = PortfolioSheets
   { addressesSheet :: !Sheet,
     balancesSheet :: !Sheet,
     coinsSheet :: !Sheet,
-    txsSheet :: !Sheet
+    txsSheets :: !TxSheets
   }
   deriving (Eq, Show)
 
 -- | The sheets of the spreadsheet of exportsheet, each with the name of
 -- its tab, in the order of the help. They are the portfolios, then the
 -- addresses, the balances, the coins and the transactions of each
--- portfolio given, then the pending transactions. Each tab is the sheet
--- of its listing as --csv writes it, and the rows of the portfolios
--- follow each other ('stacked').
+-- portfolio given, then the pending transactions. Each of these six tabs
+-- is the sheet of its listing as --csv writes it, and the rows of the
+-- portfolios follow each other ('stacked'). The tab of the addresses of
+-- the transactions comes right after that of the transactions, and
+-- likewise for the pending ones. The longest name has 29 characters.
+-- Excel takes 31 at most.
 --
 -- One sheet holds all the portfolios, rather than a tab for each. It
 -- sorts and sums across the wallet, since every row names its wallet and
 -- its portfolio. Amounts of Bitcoin and of Bitcoin Cash then share a
 -- column, and the network tells them apart.
-walletSheets :: Sheet -> [PortfolioSheets] -> Sheet -> [(Text, Sheet)]
+walletSheets :: Sheet -> [PortfolioSheets] -> TxSheets -> [(Text, Sheet)]
 walletSheets portfolios held pending =
   [ ("Portfolios", portfolios),
     ("Addresses", ofEach addressesSheet),
     ("Balances", ofEach balancesSheet),
     ("Coins", ofEach coinsSheet),
-    ("Transactions", ofEach txsSheet),
-    ("Pending transactions", pending)
+    ("Transactions", ofEach (transactionsSheet . txsSheets)),
+    ("Transaction addresses", ofEach (txAddressesSheet . txsSheets)),
+    ("Pending transactions", transactionsSheet pending),
+    ("Pending transaction addresses", txAddressesSheet pending)
   ]
   where
     ofEach part = stacked (part <$> held)

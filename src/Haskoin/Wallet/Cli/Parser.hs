@@ -2115,12 +2115,13 @@ Incoming, Outgoing or Internal, its amount, fee, fee rate and size, the balance
 after it, its status, confirmations and block, the transaction that replaced
 it when it is dead, and its label.
 
-Then come four of its addresses: the two it spends the most from, the one it
+Then come three of its addresses: the one it spends the most from, the one it
 pays the most, and its change. Each has its path and label when it is one of
 the portfolio, and its value. One more column counts the addresses that have
-no column of their own. The lock time comes last. Amounts are in satoshis.
-Each time comes in UTC, then in local time, then with the offset of that local
-time from UTC.
+no column of their own. exportsheet lists every address of every transaction
+in a tab of its own. The lock time comes last. Amounts are in satoshis. Each
+time comes in UTC, then in local time, then with the offset of that local time
+from UTC.
 |],
       args =
         CommandTxs
@@ -3244,6 +3245,15 @@ the OpenDocument format of LibreOffice (.ods). Excel and Google Sheets open it
 too. Each tab holds every row of its listing, in the columns of its --csv
 file, in the same order: rows copied from one fit the other.
 
+Two more tabs hold the addresses of the transactions and of the pending
+transactions. The row of a transaction names three addresses: the one it
+spends the most from, the one it pays the most, and its change. These tabs
+have a row for every address of every transaction instead: its role, from, to
+or change, its value, the address, its path, chain and label when the wallet
+holds it, and the wallet and portfolio that hold it. Each row repeats the
+txid, the time, the direction and the status of its transaction. --csv writes
+no file of these rows.
+
 The tabs hold every portfolio of every wallet. Each row starts with the
 columns that say where it is: its wallet, its portfolio, its network and its
 type. The tab of the portfolios says which one is active. The addresses of both
@@ -3254,7 +3264,7 @@ Each cell keeps its kind. A label is text, whatever it starts with, an amount
 is a number of satoshis, and a time is a time. The header of each tab stays at
 the top as its rows scroll.
 
-The six listings are read at one moment, so the tabs agree with each other.
+The listings are read at one moment, so the tabs agree with each other.
 The file must not exist yet. It is readable by you alone, since it tells your
 whole history.
 |],

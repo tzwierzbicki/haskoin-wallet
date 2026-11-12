@@ -628,9 +628,11 @@ values.
 >   portfolio shows that way there.
 > - **The other portfolio must be in the same database.** A portfolio kept on
 >   another computer is another wallet to this one.
-> - **The spreadsheets do not name it.** `exportsheet` and `--csv` give the
->   address of another portfolio without a path, as an address of another
->   wallet.
+> - **The row of a transaction in a spreadsheet does not name it.**
+>   `exportsheet` and `--csv` give the address of another portfolio without a
+>   path there, as an address of another wallet. The tab of the addresses of
+>   transactions of [`exportsheet`](#hw-exportsheet) names the portfolio that
+>   holds it, with its path.
 
 #### How the views name a portfolio
 
@@ -2807,12 +2809,13 @@ it, its status, confirmations and block, and its label. `Replaced by` gives
 the txid of the transaction that replaced a dead one, in full.
 
 A transaction can spend from any number of addresses and pay any number, and a
-file has a fixed number of columns. So the file names four addresses of each
-transaction, as `--verbose` lists them under From, To and Change: the two it
+file has a fixed number of columns. So the file names three addresses of each
+transaction, as `--verbose` lists them under From, To and Change: the one it
 spends the most from, the one it pays the most, and its change. Each has its
 path and label when it is one of the portfolio, and its value. `Other
 addresses` counts the addresses that have no column of their own. The lock time
-comes last.
+comes last. The spreadsheet of [`exportsheet`](#hw-exportsheet) lists every
+address of every transaction, in a tab of its own.
 
 ```console
 hw txs
@@ -3159,6 +3162,29 @@ every row of its listing, in the columns of its [CSV file](#listings), in the
 same order. Rows copied from a CSV file fit under the headings of its tab, and
 the other way round.
 
+Two more tabs hold the addresses of the transactions. `Transaction addresses`
+comes after the transactions, and `Pending transaction addresses` after the
+pending ones. The row of a transaction has room for three addresses, and
+counts the others. These tabs have a row for every address instead, however
+many a transaction spends from or pays. So you can filter on an address, sum
+by label, or find every payment to one address, even where it was not the one
+paid the most.
+
+| Column | What it holds |
+|---|---|
+| `Wallet`, `Portfolio`, `Network` | Where the transaction is |
+| `Type` | The type of the account that holds the address, empty for an address of another wallet |
+| `Txid`, `Short txid` | The transaction, which matches the row with its row in the tab of the transactions. A pending transaction has its nosigHash first |
+| `Time`, `Direction`, `Status` | Those of the transaction, repeated on each of its rows. A pending transaction has no time here, and ends with when it was created |
+| `Role` | `from` for an address it spends from, `to` for one it pays, `change` for its change, as [`show`](#hw-show) lists them |
+| `Value (sats)` | What the transaction spends from the address or pays it |
+| `Address`, `Path`, `Chain`, `Address label` | The address in full, then where it is and its label, when the wallet holds it |
+| `Held by wallet`, `Held by portfolio` | The portfolio that holds the address, empty for an address of another wallet |
+| `Transaction label` | The label of the transaction, repeated on each of its rows |
+
+Under each role, the address of the largest value comes first. It is the one
+the row of the transaction names. `--csv` writes no file of these rows.
+
 The tabs hold every portfolio of every wallet, whichever one is active, on the
 [networks `hw` shows](#shown-and-hidden-networks). A hidden network has no row
 in any tab. Each
@@ -3172,7 +3198,7 @@ Each cell keeps its kind, unlike in a CSV file. A label is text, whatever it
 starts with, and keeps its leading zeros. An amount is a number of satoshis,
 shown with separators of thousands. A time is a date. It comes in UTC, then
 on the clock of the computer, and a third column says how far that clock was
-from UTC. The header of each tab stays at the top as its rows scroll. The six
+from UTC. The header of each tab stays at the top as its rows scroll. The
 listings are read at one moment, so the tabs agree with each other.
 
 ```console
@@ -3184,6 +3210,19 @@ hw exportsheet wallet.ods
 > - **Amounts of Bitcoin and of Bitcoin Cash share a column** when the wallet
 >   holds both. The Network column tells them apart: filter on it before you
 >   sum.
+> - **Filter the dead transactions out before you sum the addresses.** The
+>   tab of the addresses keeps the rows of a dead transaction, as the tab of
+>   the transactions keeps the transaction. Their Status says `dead`.
+> - **A payment between two of your portfolios is in the tab twice.** It is a
+>   transaction of each portfolio, so each lists its addresses. The first
+>   columns say whose transaction a row is of, and `Held by portfolio` says
+>   who holds the address.
+> - **A payment you received lists your own addresses under `to`.** The other
+>   addresses its payer paid, their change among them, are nothing to your
+>   portfolio and have no row. An address the payer spent from has a row
+>   without a value.
+> - **An input or an output without an address has no row.** A note written
+>   in the chain pays no address, for instance.
 > - **The spreadsheet tells your history.** `hw` makes it readable by you
 >   alone. A spreadsheet program may still keep copies, such as backups and
 >   recent files.

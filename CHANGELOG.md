@@ -327,11 +327,17 @@ Using `hw`:
 - Each time of a CSV file or of the spreadsheet takes three columns: in UTC,
   on the clock of the computer, and the offset of that clock from UTC, as in
   `UTC+01:00`.
-- The CSV file and the tab of `txs` and of `pendingtxs` name four addresses of
-  each transaction, each with its path, label and value: the two it spends the
+- The CSV file and the tab of `txs` and of `pendingtxs` name three addresses of
+  each transaction, each with its path, label and value: the one it spends the
   most from, the one it pays the most, and its change. `Other addresses` counts
   the rest. `Replaced by` names what replaced a dead transaction, and
   `Replaces` what a replacement of `bumpfee` replaces.
+- The spreadsheet of `exportsheet` has two more tabs, `Transaction addresses`
+  and `Pending transaction addresses`. They have a row for every address of
+  every transaction: its role, `from`, `to` or `change`, its value, the
+  address, its path, chain and label, and the portfolio that holds it. Each
+  row repeats the txid, the time, the direction, the status and the label of
+  its transaction.
 - Short ids: the first 8 digits of a hash name a transaction, a pending
   transaction or a coin (`a1075db5:1`) wherever the whole hash does. Each row
   of a table and each element of a compact view starts with it. `--verbose`

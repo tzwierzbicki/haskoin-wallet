@@ -4,7 +4,8 @@
 -- and the cells of its rows, with their kinds. Both files hold the same
 -- sheet of a listing. Every sheet starts with the account of a row, its
 -- wallet, portfolio, network and type, and two sheets give the columns
--- they share in the same order.
+-- they share in the same order. exportsheet also writes the addresses of
+-- the transactions, a row for each address.
 module Haskoin.Wallet.Cli.SheetSpec (spec) where
 
 import qualified Data.Map.Strict as Map
@@ -14,7 +15,7 @@ import Data.Word (Word8)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Cli.Response (AccountCounts (..), Group (..), Response (..))
-import Haskoin.Wallet.Cli.Sheet (Cell (..), PortfolioSheets (..), Sheet (..), listingSheet, sheetTimes, stacked, walletSheets)
+import Haskoin.Wallet.Cli.Sheet (Cell (..), PortfolioSheets (..), Sheet (..), TxSheets (..), listingSheet, sheetTimes, stacked, txAddressSheet, walletSheets)
 import Haskoin.Wallet.Database (DBAddress (..))
 import Haskoin.Wallet.Database.Account (NetworkView (..), PortfolioView (..))
 import Haskoin.Wallet.Database.Address (CoinBalance (..))
@@ -40,35 +41,40 @@ cetSheet = listingSheet (const cet)
 
 spec :: Spec
 spec = do
-  describe "The sheet of a listing" $ do
-    -- The answer of each of the six listings with no rows, by its name
-    let emptyListings =
-          [ ("portfolios" :: String, ResponsePortfolios []),
-            ("addresses", ResponseAddresses []),
-            ("balances", ResponseBalances []),
-            ("coins", ResponseCoins []),
-            ("txs", ResponseTxs []),
-            ("pendingtxs", ResponsePendingTxs Nothing [])
-          ]
-
+  describe "The sheet of a listing" $
     it "is none for an answer that lists nothing, such as an error" $
       cetSheet (ResponseError "There are no portfolios in the wallet") `shouldBe` Nothing
 
-    it "starts with the wallet, the portfolio, the network and the type, whatever the listing" $
-      [(name, take 4 . sheetHeadings <$> cetSheet answer) | (name, answer) <- emptyListings]
-        `shouldBe` [(name, Just ["Wallet", "Portfolio", "Network", "Type"]) | name <- ["portfolios", "addresses", "balances", "coins", "txs", "pendingtxs"]]
+  describe "The sheets of the spreadsheet" $ do
+    -- Each of the eight sheets with no rows, by its name: those of the
+    -- six listings, and those of the addresses of the transactions and of
+    -- the pending transactions
+    let emptySheets =
+          [ ("portfolios" :: String, cetSheet (ResponsePortfolios [])),
+            ("addresses", cetSheet (ResponseAddresses [])),
+            ("balances", cetSheet (ResponseBalances [])),
+            ("coins", cetSheet (ResponseCoins [])),
+            ("txs", cetSheet (ResponseTxs [])),
+            ("tx addresses", txAddressSheet (const cet) (ResponseTxs [])),
+            ("pendingtxs", cetSheet (ResponsePendingTxs Nothing [])),
+            ("pending addresses", txAddressSheet (const cet) (ResponsePendingTxs Nothing []))
+          ]
+        headingsOf = maybe [] sheetHeadings
+
+    it "all start with the wallet, the portfolio, the network and the type" $
+      [(name, take 4 (headingsOf sheet)) | (name, sheet) <- emptySheets]
+        `shouldBe` [(name, ["Wallet", "Portfolio", "Network", "Type"]) | name <- ["portfolios", "addresses", "balances", "coins", "txs", "tx addresses", "pendingtxs", "pending addresses"]]
 
     -- The headings two sheets share, as each sheet orders them
-    it "gives the columns two listings share in the same order in both" $ do
-      let headingsOf answer = maybe [] sheetHeadings (cetSheet answer)
-          sharedIn a b = filter (`elem` headingsOf b) (headingsOf a)
-      [(nameA, nameB) | (nameA, a) <- emptyListings, (nameB, b) <- emptyListings, sharedIn a b /= sharedIn b a]
+    it "give the columns two of them share in the same order in both" $ do
+      let sharedIn a b = filter (`elem` headingsOf b) (headingsOf a)
+      [(nameA, nameB) | (nameA, a) <- emptySheets, (nameB, b) <- emptySheets, sharedIn a b /= sharedIn b a]
         `shouldBe` []
 
-    it "ends with the date the wallet created the element, for the listings whose elements have one" $ do
-      let lastThree answer = reverse . take 3 . reverse . sheetHeadings <$> cetSheet answer
-      [lastThree answer | answer <- [ResponsePortfolios [], ResponseAddresses [], ResponseBalances [], ResponsePendingTxs Nothing []]]
-        `shouldBe` replicate 4 (Just ["Created (UTC)", "Created (local)", "Created (offset)"])
+    it "end with the date the wallet created the element, for those whose elements have one" $ do
+      let lastThree = reverse . take 3 . reverse . headingsOf
+      [(name, lastThree sheet) | (name, sheet) <- emptySheets, name `elem` ["portfolios", "addresses", "balances", "pendingtxs", "pending addresses"]]
+        `shouldBe` [(name, ["Created (UTC)", "Created (local)", "Created (offset)"]) | name <- ["portfolios", "addresses", "balances", "pendingtxs", "pending addresses"]]
 
   timeColumnsSpec
   portfolioSheetSpec
@@ -77,6 +83,8 @@ spec = do
   coinSheetSpec
   txSheetSpec
   pendingSheetSpec
+  txAddressSheetSpec
+  pendingAddressSheetSpec
   walletSheetSpec
 
 -- | The three columns of a time, shown on the time of a coin
@@ -274,17 +282,53 @@ onChain :: TxSummary -> Word8 -> Store.BlockRef -> Natural -> Bool -> Text -> Tx
 onChain summary txid block confirmations dead label =
   TxInfo summary (OnChain (ChainStatus (fakeTxHash txid) block (Just seenTime) confirmations dead [])) label Map.empty Map.empty
 
+-- | A payment to two addresses of another wallet from three coins: 50000,
+-- 30000 and 20000 at /0/0, /0/1 and /0/2 pay 60000 to
+-- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU and 30000 to
+-- 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ, with 9000 of change to /1/0. 100000
+-- - 60000 - 30000 - 9000 = 1000 of fee, so 91000 leave the portfolio.
+batchSummary :: TxSummary
+batchSummary =
+  spendSummary
+    { summaryAmount = -91000,
+      summaryMyInputs =
+        Map.fromList
+          [ (externalAddr 0, MyInputs 50000 (legacyPath (Deriv :/ 0 :/ 0)) "" [OutPoint (fakeTxHash 1) 0]),
+            (externalAddr 1, MyInputs 30000 (legacyPath (Deriv :/ 0 :/ 1)) "" [OutPoint (fakeTxHash 3) 0]),
+            (externalAddr 2, MyInputs 20000 (legacyPath (Deriv :/ 0 :/ 2)) "" [OutPoint (fakeTxHash 4) 0])
+          ],
+      summaryOtherOutputs = Map.fromList [(otherAddr 0, 60000), (otherAddr 1, 30000)]
+    }
+
+-- | A transaction between the addresses of the portfolio: /0/0 pays 40000
+-- to /0/1 and 9000 to /1/0, and the portfolio loses the fee of 1000
+internalSummary :: TxSummary
+internalSummary =
+  spendSummary
+    { summaryType = TxInternal,
+      summaryAmount = -1000,
+      summaryOtherOutputs = Map.empty,
+      summaryMyOutputs = Map.fromList [(externalAddr 1, MyOutputs 40000 (legacyPath (Deriv :/ 0 :/ 1)) ""), (internalAddr 0, MyOutputs 9000 (legacyPath (Deriv :/ 1 :/ 0)) "")]
+    }
+
+-- | The payment of 'spendSummary', confirmed, whose 40000 go to an address
+-- of portfolio1 of the same wallet: /0/4 of its bip44 account, labelled
+-- "Holidays" there
+paidToPortfolio1 :: TxInfo
+paidToPortfolio1 =
+  TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty (Map.fromList [(otherAddr 0, HeldElsewhere (PortfolioRef 0 1) (legacyPath (Deriv :/ 0 :/ 4)) "Holidays")])
+
 txSheetSpec :: Spec
 txSheetSpec =
   describe "The sheet of txs" $ do
     let sheetOfTxs txs = cetSheet (ResponseTxs [mainGroup txs])
         under headings info = cellsUnder headings <$> sheetOfTxs [ListedTx info (Just 9000)]
         spent = onChain spendSummary 2 (Store.BlockRef 800001 1) 2 False ""
-        fromColumns = ["From 1 address", "From 1 path", "From 1 label", "From 1 value (sats)", "From 2 address", "From 2 path", "From 2 label", "From 2 value (sats)"]
+        fromColumns = ["From address", "From path", "From label", "From value (sats)"]
         toColumns = ["To address", "To path", "To label", "To value (sats)"]
         changeColumns = ["Change address", "Change path", "Change value (sats)"]
 
-    it "names its columns: the accounts of the transaction, its txid, its time, what it does to the portfolio, where it stands, its label, then two addresses it spends from, one it pays, its change and the count of the others" $
+    it "names its columns: the accounts of the transaction, its txid, its time, what it does to the portfolio, where it stands, its label, then the address it spends the most from, the one it pays the most, its change and the count of the others" $
       sheetHeadings <$> cetSheet (ResponseTxs [])
         `shouldBe` Just
           [ "Wallet", "Portfolio", "Network", "Type",
@@ -293,8 +337,7 @@ txSheetSpec =
             "Direction", "Amount (sats)", "Fee (sats)", "Fee rate (sat/vB)", "Size (vB)", "Balance (sats)",
             "Status", "Confirmations", "Block", "Replaced by",
             "Transaction label",
-            "From 1 address", "From 1 path", "From 1 label", "From 1 value (sats)",
-            "From 2 address", "From 2 path", "From 2 label", "From 2 value (sats)",
+            "From address", "From path", "From label", "From value (sats)",
             "To address", "To path", "To label", "To value (sats)",
             "Change address", "Change path", "Change value (sats)",
             "Other addresses",
@@ -315,9 +358,8 @@ txSheetSpec =
               -- Confirmed in block 800000, replaced by nothing
               <> [TextCell "confirmed", CountCell 3, CountCell 800000, EmptyCell]
               <> [TextCell "Salary"]
-              -- From 1 is of another wallet, and there is no From 2
+              -- From, an address of another wallet
               <> [TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, EmptyCell]
-              <> [EmptyCell, EmptyCell, EmptyCell, EmptyCell]
               -- To, without a label, and no change
               <> [TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", EmptyCell, SatoshiCell 50000]
               <> [EmptyCell, EmptyCell, EmptyCell]
@@ -338,9 +380,8 @@ txSheetSpec =
               <> [TextCell "Outgoing", SatoshiCell (-41000), SatoshiCell 1000, CountCell 4, CountCell 226, SatoshiCell 9000]
               <> [TextCell "confirmed", CountCell 2, CountCell 800001, EmptyCell]
               <> [EmptyCell]
-              -- From 1, and no From 2
+              -- From
               <> [TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", EmptyCell, SatoshiCell 50000]
-              <> [EmptyCell, EmptyCell, EmptyCell, EmptyCell]
               -- To, then the change
               <> [TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, SatoshiCell 40000]
               <> [TextCell "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", TextCell "/1/0", SatoshiCell 9000]
@@ -371,7 +412,7 @@ txSheetSpec =
         `shouldBe` Just [[TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "Rent", SatoshiCell 50000]]
 
     it "gives the label of the address a payment spends from in the column of its label" $
-      under ["From 1 address", "From 1 path", "From 1 label", "From 1 value (sats)"] (onChain spendFromRent 2 (Store.BlockRef 800001 1) 2 False "")
+      under fromColumns (onChain spendFromRent 2 (Store.BlockRef 800001 1) 2 False "")
         `shouldBe` Just [[TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "Rent", SatoshiCell 50000]]
 
     it "says an unconfirmed transaction is unconfirmed, with 0 confirmations and no block" $
@@ -399,8 +440,9 @@ txSheetSpec =
 
     -- /0/0 is 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj and /0/1 is
     -- 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg. The larger coin is at /0/1 in the
-    -- first transaction and at /0/0 in the second.
-    it "names the address a transaction spends the most from first, then the next one, whichever address each is" $ do
+    -- first transaction and at /0/0 in the second. The other address it
+    -- spends from has no column, and is counted.
+    it "names the address a transaction spends the most from, whichever address it is, and counts the other one" $ do
       let spending atFirst atSecond =
             onChain
               spendSummary
@@ -415,51 +457,32 @@ txSheetSpec =
               2
               False
               ""
-      (under fromColumns (spending 20000 30000), under fromColumns (spending 30000 20000))
-        `shouldBe` ( Just [[TextCell "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", TextCell "/0/1", EmptyCell, SatoshiCell 30000, TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", EmptyCell, SatoshiCell 20000]],
-                     Just [[TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", EmptyCell, SatoshiCell 30000, TextCell "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", TextCell "/0/1", EmptyCell, SatoshiCell 20000]]
+      (under (fromColumns <> ["Other addresses"]) (spending 20000 30000), under (fromColumns <> ["Other addresses"]) (spending 30000 20000))
+        `shouldBe` ( Just [[TextCell "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", TextCell "/0/1", EmptyCell, SatoshiCell 30000, CountCell 1]],
+                     Just [[TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", EmptyCell, SatoshiCell 30000, CountCell 1]]
                    )
 
     -- Coins of 50000, 30000 and 20000 at /0/0, /0/1 and /0/2 pay 60000 to
     -- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU and 30000 to
     -- 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ, with 9000 of change to /1/0. The
-    -- sheet names two of the three it spends from and one of the two it
-    -- pays: 1 + 1 = 2 others.
-    it "names the address a payment pays the most, and counts the addresses that have no column: those it spends from past the second, and those it pays past the first" $ do
-      let batch =
-            spendSummary
-              { summaryAmount = -91000,
-                summaryMyInputs =
-                  Map.fromList
-                    [ (externalAddr 0, MyInputs 50000 (legacyPath (Deriv :/ 0 :/ 0)) "" [OutPoint (fakeTxHash 1) 0]),
-                      (externalAddr 1, MyInputs 30000 (legacyPath (Deriv :/ 0 :/ 1)) "" [OutPoint (fakeTxHash 3) 0]),
-                      (externalAddr 2, MyInputs 20000 (legacyPath (Deriv :/ 0 :/ 2)) "" [OutPoint (fakeTxHash 4) 0])
-                    ],
-                summaryOtherOutputs = Map.fromList [(otherAddr 0, 60000), (otherAddr 1, 30000)]
-              }
-      under (toColumns <> ["Other addresses"]) (onChain batch 2 (Store.BlockRef 800001 1) 2 False "")
-        `shouldBe` Just [[TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, SatoshiCell 60000, CountCell 2]]
+    -- row names one of the three it spends from, one of the two it pays,
+    -- and its change: 2 + 1 + 0 = 3 others.
+    it "names the address a payment pays the most, and counts the addresses that have no column: those it spends from and those it pays past the first of each" $
+      under (toColumns <> ["Other addresses"]) (onChain batchSummary 2 (Store.BlockRef 800001 1) 2 False "")
+        `shouldBe` Just [[TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, SatoshiCell 60000, CountCell 3]]
 
     -- /0/0 pays 40000 to /0/1 and 9000 to /1/0, and the portfolio loses
     -- the fee of 1000. Neither output can be told to be the change, as in
     -- the verbose view: /0/1 is paid the most, and /1/0 is the other
     -- address.
-    it "gives a transaction between the addresses of the portfolio the address it pays the most and no change, and counts the other address it pays" $ do
-      let internal =
-            spendSummary
-              { summaryType = TxInternal,
-                summaryAmount = -1000,
-                summaryOtherOutputs = Map.empty,
-                summaryMyOutputs = Map.fromList [(externalAddr 1, MyOutputs 40000 (legacyPath (Deriv :/ 0 :/ 1)) ""), (internalAddr 0, MyOutputs 9000 (legacyPath (Deriv :/ 1 :/ 0)) "")]
-              }
-      under (toColumns <> changeColumns <> ["Other addresses"]) (onChain internal 2 (Store.BlockRef 800001 1) 2 False "")
+    it "gives a transaction between the addresses of the portfolio the address it pays the most and no change, and counts the other address it pays" $
+      under (toColumns <> changeColumns <> ["Other addresses"]) (onChain internalSummary 2 (Store.BlockRef 800001 1) 2 False "")
         `shouldBe` Just [[TextCell "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", TextCell "/0/1", EmptyCell, SatoshiCell 40000, EmptyCell, EmptyCell, EmptyCell, CountCell 1]]
 
     -- The payment of 40000 goes to an address of portfolio1, labelled
-    -- there. The sheet has no column for the portfolio of a path.
-    it "gives an address of another portfolio of the wallet in full, with its value, without its path or its label there" $ do
-      let toOther = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty (Map.fromList [(otherAddr 0, HeldElsewhere (PortfolioRef 0 1) (legacyPath (Deriv :/ 0 :/ 4)) "Holidays")])
-      under toColumns toOther
+    -- there. The row has no column for the portfolio of a path.
+    it "gives an address of another portfolio of the wallet in full, with its value, without its path or its label there" $
+      under toColumns paidToPortfolio1
         `shouldBe` Just [[TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, SatoshiCell 40000]]
 
     it "gives the lock time of a transaction that has one, the block it waits for" $
@@ -486,8 +509,7 @@ pendingSheetSpec =
             "Direction", "Amount (sats)", "Fee (sats)", "Fee rate (sat/vB)", "Size (vB)", "Change in fee (sats)",
             "Status", "Replaces",
             "Transaction label",
-            "From 1 address", "From 1 path", "From 1 label", "From 1 value (sats)",
-            "From 2 address", "From 2 path", "From 2 label", "From 2 value (sats)",
+            "From address", "From path", "From label", "From value (sats)",
             "To address", "To path", "To label", "To value (sats)",
             "Change address", "Change path", "Change value (sats)",
             "Other addresses",
@@ -508,9 +530,8 @@ pendingSheetSpec =
               -- It replaces nothing, and has no label
               <> [TextCell "not signed", EmptyCell]
               <> [EmptyCell]
-              -- From 1, and no From 2
+              -- From
               <> [TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", EmptyCell, SatoshiCell 50000]
-              <> [EmptyCell, EmptyCell, EmptyCell, EmptyCell]
               -- To, then the change
               <> [TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, SatoshiCell 40000]
               <> [TextCell "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", TextCell "/1/0", SatoshiCell 9000]
@@ -542,25 +563,247 @@ pendingSheetSpec =
       (cellsUnder ["Wallet", "Portfolio", "Network"] <$> cetSheet (ResponsePendingTxs Nothing [(Place (PortfolioRef 2 1) bch, prepared Nothing False False)]))
         `shouldBe` Just [[TextCell "wallet2", TextCell "portfolio1", TextCell "bch"]]
 
+-- | The sheet of the addresses of the transactions of txs
+txAddressSheetSpec :: Spec
+txAddressSheetSpec =
+  describe "The sheet of the addresses of transactions" $ do
+    let sheetOfAddresses infos = txAddressSheet (const cet) (ResponseTxs [mainGroup [ListedTx info (Just 9000) | info <- infos]])
+        under headings infos = cellsUnder headings <$> sheetOfAddresses infos
+        spent = onChain spendSummary 2 (Store.BlockRef 800001 1) 2 False ""
+
+    it "is none for an answer that lists no transactions, such as coins" $
+      txAddressSheet (const cet) (ResponseCoins []) `shouldBe` Nothing
+
+    it "names its columns: the account of the address, the transaction as its own row starts, with its time, direction and status, then what it does with the address, the address and who holds it, and the label of the transaction" $
+      sheetHeadings <$> txAddressSheet (const cet) (ResponseTxs [])
+        `shouldBe` Just
+          [ "Wallet", "Portfolio", "Network", "Type",
+            "Txid", "Short txid",
+            "Time (UTC)", "Time (local)", "Time (offset)",
+            "Direction", "Status",
+            "Role", "Value (sats)",
+            "Address", "Path", "Chain", "Address label",
+            "Held by wallet", "Held by portfolio",
+            "Transaction label"
+          ]
+
+    -- The coin of 50000 at /0/0 pays 40000 to
+    -- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, of another wallet, and 9000 of
+    -- change to /1/0, 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn
+    it "gives a payment a row for the address it spends from, one for the address it pays and one for its change, each with the transaction, its role and its value" $
+      sheetRows <$> sheetOfAddresses [spent]
+        `shouldBe` Just
+          [ [TextCell "wallet0", TextCell "portfolio0", TextCell "btc", TextCell "bip44"]
+              <> [TextCell "0000000000000000000000000000000000000000000000000000000000000002", TextCell "00000000"]
+              <> seenTimeCells
+              <> [TextCell "Outgoing", TextCell "confirmed"]
+              <> [TextCell "from", SatoshiCell 50000]
+              <> [TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "receiving", EmptyCell]
+              <> [TextCell "wallet0", TextCell "portfolio0"]
+              <> [EmptyCell],
+            -- An address of another wallet has no type, path, chain,
+            -- label or holder
+            [TextCell "wallet0", TextCell "portfolio0", TextCell "btc", EmptyCell]
+              <> [TextCell "0000000000000000000000000000000000000000000000000000000000000002", TextCell "00000000"]
+              <> seenTimeCells
+              <> [TextCell "Outgoing", TextCell "confirmed"]
+              <> [TextCell "to", SatoshiCell 40000]
+              <> [TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, EmptyCell]
+              <> [EmptyCell, EmptyCell]
+              <> [EmptyCell],
+            [TextCell "wallet0", TextCell "portfolio0", TextCell "btc", TextCell "bip44"]
+              <> [TextCell "0000000000000000000000000000000000000000000000000000000000000002", TextCell "00000000"]
+              <> seenTimeCells
+              <> [TextCell "Outgoing", TextCell "confirmed"]
+              <> [TextCell "change", SatoshiCell 9000]
+              <> [TextCell "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", TextCell "/1/0", TextCell "change", EmptyCell]
+              <> [TextCell "wallet0", TextCell "portfolio0"]
+              <> [EmptyCell]
+          ]
+
+    -- The payer spent from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, and paid
+    -- 50000 at /0/0, labelled "Rent"
+    it "gives a payment received a row for the address of its payer, without a value, and one for the address it was paid at, with its label" $
+      under ["Direction", "Role", "Value (sats)", "Address", "Path", "Address label"] [onChain paymentToRent 1 (Store.BlockRef 800000 1) 3 False ""]
+        `shouldBe` Just
+          [ [TextCell "Incoming", TextCell "from", EmptyCell, TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell],
+            [TextCell "Incoming", TextCell "to", SatoshiCell 50000, TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "Rent"]
+          ]
+
+    -- Three addresses spent from, two paid and one change: 3 + 2 + 1 = 6
+    -- rows, where the row of the transaction names 3 and counts 3
+    it "gives every address of a transaction a row, however many it spends from and pays, the largest value first under each role" $
+      under ["Role", "Value (sats)", "Address"] [onChain batchSummary 2 (Store.BlockRef 800001 1) 2 False ""]
+        `shouldBe` Just
+          [ [TextCell "from", SatoshiCell 50000, TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"],
+            [TextCell "from", SatoshiCell 30000, TextCell "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"],
+            [TextCell "from", SatoshiCell 20000, TextCell "1Dg6Kg7kQuyiZz41HRWXKUWKRu6ZyEf1Nr"],
+            [TextCell "to", SatoshiCell 60000, TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"],
+            [TextCell "to", SatoshiCell 30000, TextCell "1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ"],
+            [TextCell "change", SatoshiCell 9000, TextCell "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"]
+          ]
+
+    -- The larger coin is at /0/1 in the first transaction and at /0/0 in
+    -- the second
+    it "lists the address a transaction spends the most from first, whichever address it is" $ do
+      let spending atFirst atSecond =
+            onChain
+              spendSummary
+                { summaryMyInputs =
+                    Map.fromList
+                      [ (externalAddr 0, MyInputs atFirst (legacyPath (Deriv :/ 0 :/ 0)) "" [OutPoint (fakeTxHash 1) 0]),
+                        (externalAddr 1, MyInputs atSecond (legacyPath (Deriv :/ 0 :/ 1)) "" [OutPoint (fakeTxHash 3) 0])
+                      ]
+                }
+              2
+              (Store.BlockRef 800001 1)
+              2
+              False
+              ""
+          fromRows info = take 2 <$> under ["Role", "Value (sats)", "Path"] [info]
+      (fromRows (spending 20000 30000), fromRows (spending 30000 20000))
+        `shouldBe` ( Just [[TextCell "from", SatoshiCell 30000, TextCell "/0/1"], [TextCell "from", SatoshiCell 20000, TextCell "/0/0"]],
+                     Just [[TextCell "from", SatoshiCell 30000, TextCell "/0/0"], [TextCell "from", SatoshiCell 20000, TextCell "/0/1"]]
+                   )
+
+    -- /0/0 pays 40000 to /0/1 and 9000 to /1/0. Neither output can be
+    -- told to be the change, as in the verbose view. The chain of /1/0
+    -- says it is a change address.
+    it "lists both addresses a transaction between the addresses of the portfolio pays under to, each with its chain" $
+      under ["Role", "Value (sats)", "Path", "Chain"] [onChain internalSummary 2 (Store.BlockRef 800001 1) 2 False ""]
+        `shouldBe` Just
+          [ [TextCell "from", SatoshiCell 50000, TextCell "/0/0", TextCell "receiving"],
+            [TextCell "to", SatoshiCell 40000, TextCell "/0/1", TextCell "receiving"],
+            [TextCell "to", SatoshiCell 9000, TextCell "/1/0", TextCell "change"]
+          ]
+
+    -- The coin at /0/0 of the bip44 account pays 40000 to
+    -- bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc, /0/0 of the bip84 account,
+    -- and 9000 to /1/0 of the bip44 one
+    it "gives each address the type of the account that holds it, which tells apart two addresses at the same path" $ do
+      let toSegwit =
+            internalSummary
+              { summaryMyOutputs = Map.fromList [(segwitExternalAddr 0, MyOutputs 40000 (segwitPath (Deriv :/ 0 :/ 0)) ""), (internalAddr 0, MyOutputs 9000 (legacyPath (Deriv :/ 1 :/ 0)) "")]
+              }
+      under ["Type", "Role", "Address", "Path"] [onChain toSegwit 2 (Store.BlockRef 800001 1) 2 False ""]
+        `shouldBe` Just
+          [ [TextCell "bip44", TextCell "from", TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0"],
+            [TextCell "bip84", TextCell "to", TextCell "bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc", TextCell "/0/0"],
+            [TextCell "bip44", TextCell "to", TextCell "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", TextCell "/1/0"]
+          ]
+
+    -- The payment of portfolio0 goes to /0/4 of the bip44 account of
+    -- portfolio1, labelled "Holidays" there. The address it spends from
+    -- and its change are of portfolio0.
+    it "names the portfolio that holds each address, with the type, path, chain and label of an address of another portfolio of the wallet there" $
+      under ["Portfolio", "Role", "Type", "Address", "Path", "Chain", "Address label", "Held by wallet", "Held by portfolio"] [paidToPortfolio1]
+        `shouldBe` Just
+          [ [TextCell "portfolio0", TextCell "from", TextCell "bip44", TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "receiving", EmptyCell, TextCell "wallet0", TextCell "portfolio0"],
+            [TextCell "portfolio0", TextCell "to", TextCell "bip44", TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", TextCell "/0/4", TextCell "receiving", TextCell "Holidays", TextCell "wallet0", TextCell "portfolio1"],
+            [TextCell "portfolio0", TextCell "change", TextCell "bip44", TextCell "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", TextCell "/1/0", TextCell "change", EmptyCell, TextCell "wallet0", TextCell "portfolio0"]
+          ]
+
+    it "repeats the label of the transaction on each of its rows" $
+      under ["Role", "Transaction label"] [onChain spendSummary 2 (Store.BlockRef 800001 1) 2 False "Rent of May"]
+        `shouldBe` Just [[TextCell "from", TextCell "Rent of May"], [TextCell "to", TextCell "Rent of May"], [TextCell "change", TextCell "Rent of May"]]
+
+    it "says dead on each row of a dead transaction, so that a filter leaves them out of a sum" $
+      under ["Role", "Status"] [onChain spendSummary 2 (Store.MemRef 1700000000) 0 True ""]
+        `shouldBe` Just [[TextCell "from", TextCell "dead"], [TextCell "to", TextCell "dead"], [TextCell "change", TextCell "dead"]]
+
+    -- The payment received has two addresses, and the payment made three
+    it "gives the rows of each transaction after those of the transaction before, in the order of txs" $
+      under ["Txid", "Role"] [onChain paymentSummary 1 (Store.BlockRef 800000 1) 3 False "", spent]
+        `shouldBe` Just
+          [ [TextCell "0000000000000000000000000000000000000000000000000000000000000001", TextCell "from"],
+            [TextCell "0000000000000000000000000000000000000000000000000000000000000001", TextCell "to"],
+            [TextCell "0000000000000000000000000000000000000000000000000000000000000002", TextCell "from"],
+            [TextCell "0000000000000000000000000000000000000000000000000000000000000002", TextCell "to"],
+            [TextCell "0000000000000000000000000000000000000000000000000000000000000002", TextCell "change"]
+          ]
+
+-- | The sheet of the addresses of the pending transactions
+pendingAddressSheetSpec :: Spec
+pendingAddressSheetSpec =
+  describe "The sheet of the addresses of pending transactions" $ do
+    let prepared = TxInfo spendSummary (Pending (PendingStatus a1075db5First Nothing False False (Just seenTime) [])) "" Map.empty Map.empty
+
+    it "names its columns: those of the addresses of transactions in the same order, with both hashes first, no time on the chain, and when the wallet started holding the transaction last" $
+      sheetHeadings <$> txAddressSheet (const cet) (ResponsePendingTxs Nothing [])
+        `shouldBe` Just
+          [ "Wallet", "Portfolio", "Network", "Type",
+            "Nosighash", "Short nosighash", "Txid", "Short txid",
+            "Direction", "Status",
+            "Role", "Value (sats)",
+            "Address", "Path", "Chain", "Address label",
+            "Held by wallet", "Held by portfolio",
+            "Transaction label",
+            "Created (UTC)", "Created (local)", "Created (offset)"
+          ]
+
+    -- The coin of 50000 at /0/0 pays 40000 to
+    -- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU and 9000 of change to /1/0
+    it "gives a transaction not signed a row for each of its addresses, named by its nosigHash, with no txid" $
+      sheetRows <$> txAddressSheet (const cet) (ResponsePendingTxs Nothing [(mainPlace, prepared)])
+        `shouldBe` Just
+          [ [TextCell "wallet0", TextCell "portfolio0", TextCell "btc", TextCell "bip44"]
+              <> [TextCell "a1075db5c0ffee00000000000000000000000000000000000000000000000001", TextCell "a1075db5", EmptyCell, EmptyCell]
+              <> [TextCell "Outgoing", TextCell "not signed"]
+              <> [TextCell "from", SatoshiCell 50000]
+              <> [TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "receiving", EmptyCell]
+              <> [TextCell "wallet0", TextCell "portfolio0"]
+              <> [EmptyCell]
+              <> seenTimeCells,
+            [TextCell "wallet0", TextCell "portfolio0", TextCell "btc", EmptyCell]
+              <> [TextCell "a1075db5c0ffee00000000000000000000000000000000000000000000000001", TextCell "a1075db5", EmptyCell, EmptyCell]
+              <> [TextCell "Outgoing", TextCell "not signed"]
+              <> [TextCell "to", SatoshiCell 40000]
+              <> [TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, EmptyCell]
+              <> [EmptyCell, EmptyCell]
+              <> [EmptyCell]
+              <> seenTimeCells,
+            [TextCell "wallet0", TextCell "portfolio0", TextCell "btc", TextCell "bip44"]
+              <> [TextCell "a1075db5c0ffee00000000000000000000000000000000000000000000000001", TextCell "a1075db5", EmptyCell, EmptyCell]
+              <> [TextCell "Outgoing", TextCell "not signed"]
+              <> [TextCell "change", SatoshiCell 9000]
+              <> [TextCell "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", TextCell "/1/0", TextCell "change", EmptyCell]
+              <> [TextCell "wallet0", TextCell "portfolio0"]
+              <> [EmptyCell]
+              <> seenTimeCells
+          ]
+
 walletSheetSpec :: Spec
 walletSheetSpec = do
   let ofPortfolio name path = Sheet ["Portfolio", "Path"] [[TextCell name, TextCell path]]
-      sheetsOf sheet = PortfolioSheets sheet sheet sheet sheet
+      noSheet = Sheet [] []
+      -- The sheets of a portfolio, the same sheet under each listing but
+      -- the addresses of its transactions, which have their own
+      sheetsOf sheet addressSheet = PortfolioSheets sheet sheet sheet (TxSheets sheet addressSheet)
 
   describe "The sheets of the spreadsheet of the wallet" $ do
-    it "are named after the six listings, in the order of the help" $
-      map fst (walletSheets (Sheet [] []) [] (Sheet [] []))
-        `shouldBe` ["Portfolios", "Addresses", "Balances", "Coins", "Transactions", "Pending transactions"]
+    it "are named after the six listings, in the order of the help, each sheet of addresses of transactions right after its transactions" $
+      map fst (walletSheets noSheet [] (TxSheets noSheet noSheet))
+        `shouldBe` ["Portfolios", "Addresses", "Balances", "Coins", "Transactions", "Transaction addresses", "Pending transactions", "Pending transaction addresses"]
 
     it "give the rows of each portfolio one portfolio after the other, under the headings of its listing, with no column added" $
-      lookup "Addresses" (walletSheets (Sheet [] []) [sheetsOf (ofPortfolio "portfolio0" "/0/0"), sheetsOf (ofPortfolio "portfolio1" "/0/7")] (Sheet [] []))
+      lookup "Addresses" (walletSheets noSheet [sheetsOf (ofPortfolio "portfolio0" "/0/0") noSheet, sheetsOf (ofPortfolio "portfolio1" "/0/7") noSheet] (TxSheets noSheet noSheet))
         `shouldBe` Just (Sheet ["Portfolio", "Path"] [[TextCell "portfolio0", TextCell "/0/0"], [TextCell "portfolio1", TextCell "/0/7"]])
 
-    it "keep the sheets of the portfolios and the pending transactions as the listings give them" $ do
+    it "give the addresses of the transactions of each portfolio in a tab apart from its transactions, one portfolio after the other" $ do
+      let roles name role = Sheet ["Portfolio", "Role"] [[TextCell name, TextCell role]]
+          sheets = walletSheets noSheet [sheetsOf (ofPortfolio "portfolio0" "/0/0") (roles "portfolio0" "from"), sheetsOf (ofPortfolio "portfolio1" "/0/7") (roles "portfolio1" "to")] (TxSheets noSheet noSheet)
+      (lookup "Transactions" sheets, lookup "Transaction addresses" sheets)
+        `shouldBe` ( Just (Sheet ["Portfolio", "Path"] [[TextCell "portfolio0", TextCell "/0/0"], [TextCell "portfolio1", TextCell "/0/7"]]),
+                     Just (Sheet ["Portfolio", "Role"] [[TextCell "portfolio0", TextCell "from"], [TextCell "portfolio1", TextCell "to"]])
+                   )
+
+    it "keep the sheets of the portfolios, of the pending transactions and of their addresses as they are given" $ do
       let portfolios = Sheet ["Wallet", "Portfolio"] [[TextCell "wallet0", TextCell "portfolio0"]]
           pendingSheet = Sheet ["Wallet", "Portfolio", "Status"] [[TextCell "wallet0", TextCell "portfolio0", TextCell "signed"]]
-          sheets = walletSheets portfolios [sheetsOf (ofPortfolio "portfolio0" "/0/0")] pendingSheet
-      (lookup "Portfolios" sheets, lookup "Pending transactions" sheets) `shouldBe` (Just portfolios, Just pendingSheet)
+          pendingAddresses = Sheet ["Wallet", "Portfolio", "Role"] [[TextCell "wallet0", TextCell "portfolio0", TextCell "from"]]
+          sheets = walletSheets portfolios [sheetsOf (ofPortfolio "portfolio0" "/0/0") noSheet] (TxSheets pendingSheet pendingAddresses)
+      (lookup "Portfolios" sheets, lookup "Pending transactions" sheets, lookup "Pending transaction addresses" sheets)
+        `shouldBe` (Just portfolios, Just pendingSheet, Just pendingAddresses)
 
   describe "Sheets stacked" $ do
     it "are the rows of each one after the other, under the headings of the first" $

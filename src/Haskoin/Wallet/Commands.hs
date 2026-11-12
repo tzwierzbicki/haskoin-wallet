@@ -145,7 +145,7 @@ import Haskoin.Wallet.Cli.Parser
 import Haskoin.Wallet.Cli.PrettyPrinter (SeenFrom (..), addedCoinsDoc, agoText, childrenDoc, dustReportDoc, feeRatesDoc, pathsSeenFrom, reducedDoc, renderOn, txAnswerDoc)
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response
-import Haskoin.Wallet.Cli.Sheet (PortfolioSheets (..), Sheet, localListingSheet, stacked, walletSheets)
+import Haskoin.Wallet.Cli.Sheet (PortfolioSheets (..), Sheet, TxSheets, localListingSheet, localTxSheets, stacked, walletSheets)
 import Haskoin.Wallet.Cli.View (viewName)
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.CutAddress (cutAddress)
@@ -867,14 +867,16 @@ cmdCsv cfg file listing = do
 
 -- | Write every listing of every portfolio to a new OpenDocument
 -- spreadsheet, a tab each ("Haskoin.Wallet.Cli.Ods"), and answer with the
--- file. Each tab holds the sheet of its listing, the one --csv writes,
--- for every portfolio ('walletSheets'). So the rows of a CSV file fit
--- under the headings of its tab. The listings are read in one
--- transaction, so that the tabs agree with each other: the balances with
--- the coins, and the coins with the transactions. The spreadsheet is the
--- record of the whole wallet, so the active portfolio does not narrow it.
--- It holds what the listings show: the networks the configuration hides
--- are left out of it, as they are of each listing.
+-- file. The tab of a listing holds its sheet, the one --csv writes, for
+-- every portfolio ('walletSheets'). So the rows of a CSV file fit under
+-- the headings of its tab. Two more tabs hold the addresses of the
+-- transactions and of the pending transactions, a row for each address.
+-- The listings are read in one transaction, so that the tabs agree with
+-- each other: the balances with the coins, the coins with the
+-- transactions, and the addresses with their transactions. The
+-- spreadsheet is the record of the whole wallet, so the active portfolio
+-- does not narrow it. It holds what the listings show: the networks the
+-- configuration hides are left out of it, as they are of each listing.
 cmdExportSheet :: Ctx -> Config -> FilePath -> IO Response
 cmdExportSheet ctx cfg file =
   runDBResponse cfg $ do
@@ -883,8 +885,9 @@ cmdExportSheet ctx cfg file =
     when (null portfolios) $ throwError noWallets
     summary <- sheetOf (portfoliosListing cfg)
     held <- mapM portfolioSheets portfolios
-    -- The pending transactions of every portfolio, in one tab
-    pending <- sheetOf (pendingTxsListing ctx cfg Nothing everyRow)
+    -- The pending transactions of every portfolio in one tab, and their
+    -- addresses in another
+    pending <- txSheetsOf (pendingTxsListing ctx cfg Nothing everyRow)
     now <- liftIO getCurrentTime
     liftEitherIO $ writeFileBytes file (workbookOds now (walletSheets summary held pending))
     return $ ResponseFile file
@@ -893,7 +896,7 @@ cmdExportSheet ctx cfg file =
     everyRow = Paging Nothing Nothing
     -- The listings of one portfolio, over every network hw shows: its
     -- receiving addresses then its change addresses, its balances, all
-    -- its coins, and its transactions
+    -- its coins, and its transactions with their addresses
     portfolioSheets portfolio = do
       let whole = Target Nothing Nothing
       receiving <- sheetOf (addressesListing cfg portfolio whole False everyRow)
@@ -901,16 +904,27 @@ cmdExportSheet ctx cfg file =
       PortfolioSheets (stacked [receiving, change])
         <$> sheetOf (balancesListing cfg portfolio whole everyRow)
         <*> sheetOf (coinsListing cfg portfolio whole False everyRow)
-        <*> sheetOf (txsListing cfg portfolio Nothing everyRow)
+        <*> txSheetsOf (txsListing cfg portfolio Nothing everyRow)
 
 -- | The sheet of a listing, read whole in the transaction the caller
 -- runs, its local times on the clock of this computer
 sheetOf :: ExceptT String (DB IO) Sections -> ExceptT String (DB IO) Sheet
-sheetOf listing = do
+sheetOf = sheetsOf localListingSheet
+
+-- | The two sheets of a listing of transactions, read once: its
+-- transactions and their addresses. Both come from one reading, so that
+-- every address is of a transaction of the other sheet.
+txSheetsOf :: ExceptT String (DB IO) Sections -> ExceptT String (DB IO) TxSheets
+txSheetsOf = sheetsOf localTxSheets
+
+-- | What the function given makes of the answer of a listing, read whole
+-- in the transaction the caller runs: its sheet, or its sheets
+sheetsOf :: (Response -> IO (Maybe sheets)) -> ExceptT String (DB IO) Sections -> ExceptT String (DB IO) sheets
+sheetsOf sheetsFrom listing = do
   answer <- wholeListing listing
-  sheetM <- liftIO (localListingSheet answer)
+  made <- liftIO (sheetsFrom answer)
   -- Every listing has a sheet: an answer without one would be a bug
-  maybe (throwError "The listing has no sheet") return sheetM
+  maybe (throwError "The listing has no sheet") return made
 
 -- | Every portfolio, each with what it can spend now on each network hw
 -- shows and whether it is the active one, in the order of the wallets and

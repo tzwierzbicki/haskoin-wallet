@@ -1638,7 +1638,7 @@ csvSpec ctx =
         let file = home </> "pending.csv"
         _ <- answer home ["pendingtxs", "--csv", file] []
         linesOf file
-          `shouldReturn` ["Wallet,Portfolio,Network,Type,Nosighash,Short nosighash,Txid,Short txid,Direction,Amount (sats),Fee (sats),Fee rate (sat/vB),Size (vB),Change in fee (sats),Status,Replaces,Transaction label,From 1 address,From 1 path,From 1 label,From 1 value (sats),From 2 address,From 2 path,From 2 label,From 2 value (sats),To address,To path,To label,To value (sats),Change address,Change path,Change value (sats),Other addresses,Lock time,Created (UTC),Created (local),Created (offset)"]
+          `shouldReturn` ["Wallet,Portfolio,Network,Type,Nosighash,Short nosighash,Txid,Short txid,Direction,Amount (sats),Fee (sats),Fee rate (sat/vB),Size (vB),Change in fee (sats),Status,Replaces,Transaction label,From address,From path,From label,From value (sats),To address,To path,To label,To value (sats),Change address,Change path,Change value (sats),Other addresses,Lock time,Created (UTC),Created (local),Created (offset)"]
 
     -- 50000 at /0/0 is the largest total, before 30000 at /0/1
     it "writes the rows --max allows, the first ones of the listing" $
@@ -1737,12 +1737,53 @@ exportSheetSpec ctx =
         runOut run `shouldBe` "Written to " <> Text.pack file <> "\n"
         BS.take 54 . BS.drop 30 <$> BS.readFile file `shouldReturn` "mimetypeapplication/vnd.oasis.opendocument.spreadsheet"
 
-    it "has a tab for each listing, in the order of the help" $
+    it "has a tab for each listing, in the order of the help, and one for the addresses of the transactions after each tab of transactions" $
       withHome $ \home -> do
         newTestPortfolio home
         let file = home </> "wallet.ods"
         _ <- answer home ["exportsheet", file] []
-        tabsOf <$> contentOf file `shouldReturn` ["Portfolios", "Addresses", "Balances", "Coins", "Transactions", "Pending transactions"]
+        tabsOf <$> contentOf file `shouldReturn` ["Portfolios", "Addresses", "Balances", "Coins", "Transactions", "Transaction addresses", "Pending transactions", "Pending transaction addresses"]
+
+    -- The payment pays 50000 at /0/0 of the bip44 account,
+    -- 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj, a receiving address without a
+    -- label, which portfolio0 of wallet0 holds
+    it "gives the address a payment was received at a row in the tab of the addresses of transactions: its role, its value, the address, its path and chain, and the portfolio that holds it" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        let file = home </> "wallet.ods"
+        _ <- answer home ["exportsheet", file] []
+        content <- contentOf file
+        let (_, fromTab) = Text.breakOn "<table:table table:name=\"Transaction addresses\"" content
+            tab = fst (Text.breakOn "</table:table>" fromTab)
+        tab
+          `shouldSatisfy` Text.isInfixOf
+            ( Text.concat
+                [ "<table:table-cell office:value-type=\"string\"><text:p>to</text:p></table:table-cell>",
+                  "<table:table-cell table:style-name=\"satoshis\" office:value-type=\"float\" office:value=\"50000\"><text:p>50000</text:p></table:table-cell>",
+                  "<table:table-cell office:value-type=\"string\"><text:p>1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj</text:p></table:table-cell>",
+                  "<table:table-cell office:value-type=\"string\"><text:p>/0/0</text:p></table:table-cell>",
+                  "<table:table-cell office:value-type=\"string\"><text:p>receiving</text:p></table:table-cell>",
+                  -- No label
+                  "<table:table-cell/>",
+                  "<table:table-cell office:value-type=\"string\"><text:p>wallet0</text:p></table:table-cell>",
+                  "<table:table-cell office:value-type=\"string\"><text:p>portfolio0</text:p></table:table-cell>"
+                ]
+            )
+
+    -- The prepared payment spends from one address of the portfolio, pays
+    -- one address of another wallet and sends its change back: 3 rows,
+    -- after the row of the headings
+    it "gives each address of a pending transaction a row in the tab of the addresses of pending transactions" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        let file = home </> "wallet.ods"
+        _ <- answer home ["exportsheet", file] []
+        content <- contentOf file
+        let (_, fromTab) = Text.breakOn "<table:table table:name=\"Pending transaction addresses\"" content
+            tab = fst (Text.breakOn "</table:table>" fromTab)
+            roleCells = [role | role <- ["from", "to", "change"], Text.isInfixOf ("<text:p>" <> role <> "</text:p>") tab]
+        (Text.count "<table:table-row>" tab, roleCells) `shouldBe` (4, ["from", "to", "change"])
 
     -- The coin of the payment, 3 confirmations deep, can be spent: 50000
     -- in all and spendable, nothing locked or waiting. The store counts
@@ -1802,9 +1843,9 @@ exportSheetSpec ctx =
               let csv = home </> (listing <> ".csv")
               _ <- answer home [listing, "--csv", csv] []
               Text.splitOn "," . Text.takeWhile (/= '\r') . Text.drop 1 . decodeUtf8 <$> BS.readFile csv
-            listings = [("Portfolios", "portfolios"), ("Addresses", "addresses"), ("Balances", "balances"), ("Coins", "coins"), ("Transactions", "txs"), ("Pending transactions", "pendingtxs")]
-        inCsv <- mapM (headingsOfCsv . snd) listings
-        map (headingsOfTab . fst) listings `shouldBe` inCsv
+            tabsOfListings = [("Portfolios", "portfolios"), ("Addresses", "addresses"), ("Balances", "balances"), ("Coins", "coins"), ("Transactions", "txs"), ("Pending transactions", "pendingtxs")]
+        inCsv <- mapM (headingsOfCsv . snd) tabsOfListings
+        map (headingsOfTab . fst) tabsOfListings `shouldBe` inCsv
         map length inCsv `shouldSatisfy` all (> 4)
 
     -- The store saw the payment at 22:13:20 UTC, 23:13:20 in Central
