@@ -523,12 +523,18 @@ bumpFeeSpec ctx = do
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
           `shouldBe` (Map.fromList [(otherAddr 0, 40000)], Map.fromList [(internalAddr 0, 17560)], 22440)
 
-    it "names the coin it asks to add, by its short id" $
+    -- The coin is 3 confirmations deep, its transaction seen at
+    -- 1700000000, 23:13 in Central Europe
+    it "shows the coin it asks to add as coins shows it, its short id first" $
       withChain ctx chain $ \home _ -> do
         stuck <- stuckPayment home
-        run <- hw home ["bumpfee", stuck, "--fee-rate", "60"] ["y"]
+        run <- hwWithEnv [("TZ", centralEurope)] home ["bumpfee", stuck, "--fee-rate", "60"] ["y"]
         run `shouldSatisfy` printedSentence "The coins of the transaction cannot pay its fee at 60 sat/vB, and this coin of the portfolio would:"
-        runErr run `shouldSatisfy` Text.isInfixOf ("\n    0.00030000 btc  at " <> externalAddrsText !! 1 <> "  bip44/0/1\n  " <> Text.pack (shortCoinArg (twoAddressesTx ctx) 1) <> "\n")
+        runErr run
+          `shouldSatisfy` Text.isInfixOf
+            ( "\n" <> Text.pack (shortCoinArg (twoAddressesTx ctx) 1) <> "  14 Nov 2023 23:13      0.00030000 btc  spendable, 3 confirmations\n"
+                <> "  at 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg  bip44/0/1\n"
+            )
         runErr run `shouldSatisfy` Text.isInfixOf "Add it? [y/N]"
 
     -- Without the coin, the replacement of 192 bytes pays 11520 and has no

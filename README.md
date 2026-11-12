@@ -2189,7 +2189,7 @@ only, not every `bip44` coin. To spend the coins at two addresses, give
 `--spend-from` twice. A coin chosen with `--coin` or `--spend-from` that
 `--coin-type` leaves out is refused, since the two options disagree about it.
 A chosen coin with too few confirmations for `--min-conf` is not spent, and the
-answer lists it with the reason.
+answer lists it as [`coins`](#hw-coins) shows it, with the reason.
 
 **The change.** The change goes to a new change address of the portfolio. Its
 type is the first of these that applies:
@@ -2270,16 +2270,18 @@ hw preparesendall MYSEGWITADDRESS --coin-type bip44 --fee-rate low
 ```
 
 `hw` asks whether to spend the coins worth less than their fee, unless
-`--spend-dust` or `--leave-dust` answers.
+`--spend-dust` or `--leave-dust` answers. It shows each of those coins as
+[`coins`](#hw-coins) does, then the fee rates it is worth spending at.
 
 The filter `--coin-type` sends the coins of one type only. The last example
 moves every legacy coin of a portfolio to a native SegWit address of it, one
 that `receive --type bip84` gave.
 
-The answer lists every coin the transaction leaves in the portfolio, with the
-reason: dust, locked by you or by a pending transaction, not spendable yet,
-not chosen with `--coin` or `--spend-from`, or not of the type `--coin-type`
-sends.
+The answer lists every coin the transaction leaves in the portfolio, as
+`coins` shows it, then the reason: dust, locked by you or by a pending
+transaction, not spendable yet, not chosen with `--coin` or `--spend-from`, or
+not of the type `--coin-type` sends. With `--json`, each coin left has the keys
+of a coin of `coins --json`, and `reason` beside them.
 
 `--network`, `--fee-rate`, `--output`, `--label` and `--yes` work as for
 [`preparetx`](#hw-preparetx). So do the choosers and the filters of coin
@@ -2352,7 +2354,8 @@ hw broadcast TXID                           # the txid of the replacement
 
 The extra fee comes out of the change. When the change cannot pay it, `hw`
 offers to add confirmed coins of the portfolio, of either type, or to take what
-is missing from what the recipients receive, asking which of them pays.
+is missing from what the recipients receive, asking which of them pays. It
+shows the coins it offers to add as [`coins`](#hw-coins) does.
 
 `bumpfee` finds the portfolio from the transaction, as `signtx` does: the one
 that holds it, or among several the one that pays it. When it cannot tell, it

@@ -338,7 +338,7 @@ instance ToJSON Response where
     ResponseLabelledTxs held _ -> typed "labelledtxs" ["txs" .= (heldTxJson <$> held)]
     ResponseHeldTxs held _ -> typed "heldtxs" ["txs" .= (heldTxJson <$> held)]
     ResponsePrepared place info left _ ->
-      typed "prepared" (placePairs place <> ["tx" .= marshalValue (placeNetwork place) info, "left" .= left])
+      typed "prepared" (placePairs place <> ["tx" .= marshalValue (placeNetwork place) info, "left" .= (marshalValue (placeNetwork place) <$> left)])
     ResponseOutsideTx net info -> typed "outsidetx" ["network" .= net.name, "tx" .= marshalValue net info]
     ResponseSentTx net txid -> typed "senttx" ["network" .= net.name, "txid" .= txid]
     ResponseDeleteTx nosigH txidM coins addrs ->
@@ -409,7 +409,7 @@ instance FromJSON Response where
       "prepared" -> do
         place <- parsePlace o
         info <- unmarshalValue (placeNetwork place) =<< o .: "tx"
-        left <- o .: "left"
+        left <- mapM (unmarshalValue (placeNetwork place)) =<< o .: "left"
         return (ResponsePrepared place info left activeLeftOut)
       "outsidetx" -> do
         net <- network o

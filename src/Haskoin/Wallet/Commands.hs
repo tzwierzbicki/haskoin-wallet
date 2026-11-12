@@ -161,7 +161,7 @@ import Haskoin.Wallet.Tx.LockTime (isStale, lockTimeFor)
 import Haskoin.Wallet.Tx.PsbtFile (FileAccount (..), psbtTxFile, signedPsbt, txFilePsbt)
 import Haskoin.Wallet.Tx.Recipient (Share, checkSharing, readPayment, readRecipient, recipientAddress)
 import Haskoin.Wallet.Tx.SendAll
-  ( DustReport,
+  ( DustReport (dustCoins),
     buildSendAllSignData,
     dustQuestion,
     dustReport,
@@ -1599,9 +1599,11 @@ cmdFees ctx cfg netM =
     return $ ResponseFees net rates
 
 -- | Keep a transaction of the pool just prepared, as 'keepPrepared' does,
--- and answer with the coins it leaves in the portfolio, and why
-preparedAnswer :: Ctx -> Pool -> Maybe Address -> Maybe FilePath -> TxSignData -> [LeftCoin] -> ExceptT String (DB IO) Response
-preparedAnswer ctx pool changeBackM output tsd left = do
+-- and answer with the coins it leaves in the portfolio, each as coins
+-- shows it, and why it stays
+preparedAnswer :: Ctx -> Pool -> Maybe Address -> Maybe FilePath -> TxSignData -> [(OutPoint, LeftReason)] -> ExceptT String (DB IO) Response
+preparedAnswer ctx pool changeBackM output tsd leftOut = do
+  left <- leftCoinsOf pool leftOut
   info <- storePrepared ctx pool changeBackM output tsd
   place <- poolPlace pool
   ResponsePrepared place info left <$> activePortfolioRef
@@ -1749,8 +1751,7 @@ cmdPrepareTx ctx cfg unit opts =
           (chosen, held) <- liftEither $ chosenCoins coins spendFrom spendable unspendable
           refuseOtherType opts.coinType (chosen <> (fst <$> held))
           let outpoints = (.outpoint) <$> chosen
-          labels <- lift $ labelsOfCoins pool (fst <$> held)
-          return (if opts.select then SelectAmongChosen outpoints else SpendChosen outpoints, leftCoins labels [] held [])
+          return (if opts.select then SelectAmongChosen outpoints else SpendChosen outpoints, leftOutpoints [] held [])
     gen <- liftIO initStdGen
     let (lockTime, buildGen) = lockTimeFor heightM gen
     tsd <- buildTxSignData ctx cfg buildGen opts.strategy pool opts.coinType recipients feeByte lockTime opts.feePayer opts.minConf control changeTo
@@ -1787,18 +1788,17 @@ cmdPrepareSendAll ctx cfg unit opts =
     confirmFeeRate opts.yes feeByte
     spendable <- spendableCoins ctx pool opts.minConf
     unspendable <- unspendableCoins ctx pool opts.minConf
-    labels <- lift $ labelsOfCoins pool (spendable <> (fst <$> unspendable))
     (sent, left) <-
       if controlled
         then do
           (sent, held) <- liftEither $ chosenCoins coins spendFrom spendable unspendable
           refuseOtherType opts.coinType (sent <> (fst <$> held))
-          return (sent, leftCoins labels [] unspendable (notSent sent spendable))
+          return (sent, leftOutpoints [] unspendable (notSent sent spendable))
         else do
           -- The coins of the other type stay, whatever they are worth
           let (ofType, others) = partition (\coin -> maybe True (== coinKind coin) opts.coinType) spendable
-          sent <- coinsWithDust labels feeByte recipients (not (null unspendable && null others)) ofType
-          return (sent, leftCoins labels (notSent sent ofType) unspendable [] <> leftOfOtherType labels others)
+          sent <- coinsWithDust pool feeByte recipients (not (null unspendable && null others)) ofType
+          return (sent, leftOutpoints (notSent sent ofType) unspendable [] <> leftOfOtherType others)
     gen <- liftIO initStdGen
     let (lockTime, buildGen) = lockTimeFor heightM gen
     tsd <- buildSendAllSignData ctx buildGen pool sent recipients feeByte lockTime
@@ -1810,8 +1810,8 @@ cmdPrepareSendAll ctx cfg unit opts =
     -- without a question when spending them too would leave too little for
     -- the recipients, and when the other coins cannot pay the recipients
     -- either, which the builder then tells.
-    coinsWithDust :: Map TxHash Text -> Natural -> [(Address, Share)] -> Bool -> [Store.Unspent] -> ExceptT String (DB IO) [Store.Unspent]
-    coinsWithDust labels feeByte recipients othersStay spendable
+    coinsWithDust :: Pool -> Natural -> [(Address, Share)] -> Bool -> [Store.Unspent] -> ExceptT String (DB IO) [Store.Unspent]
+    coinsWithDust pool feeByte recipients othersStay spendable
       | null dust || null worth = return spendable
       | otherwise =
           case opts.dustCoins of
@@ -1823,10 +1823,12 @@ cmdPrepareSendAll ctx cfg unit opts =
       where
         (dust, worth) = partition (isDustCoin feeByte) spendable
         paying sending = sendAllAmounts ctx feeByte sending recipients
-        -- On stderr, with the question, to keep the --json answer clean
+        -- On stderr, with the question, to keep the --json answer clean.
+        -- Each coin is shown as coins shows it.
         askAboutDust :: DustReport -> ExceptT String (DB IO) [Store.Unspent]
         askAboutDust report = do
-          liftIO $ renderOn stderr (dustReportDoc unit labels report)
+          views <- poolCoinViews pool ((.outpoint) <$> report.dustCoins)
+          liftIO $ renderOn stderr =<< dustReportDoc pool.poolNetwork unit views report
           spending <- askYes terminal (dustQuestion report)
           return $ if spending then spendable else worth
 
@@ -2044,7 +2046,6 @@ cmdBumpFee ctx cfg unit opts =
     let (lockTime, buildGen) = lockTimeFor (either (const Nothing) id behind) gen
     -- The network takes no replacement that adds an unconfirmed coin
     confirmed <- spendableCoins ctx pool 1
-    labels <- lift $ labelsOfCoins pool confirmed
     candidates <- forM confirmed $ \coin -> (\(addr, path) -> (coin, addr, path)) <$> coinWithPath pool coin
     offered <- liftEither $ fundings ctx buildGen plan candidates feeByte
     built <- forM offered $ \funding -> do
@@ -2061,7 +2062,7 @@ cmdBumpFee ctx cfg unit opts =
       liftIO $ renderOn stderr (childrenDoc children)
       agreed <- if opts.yes then return True else askYes terminal (childrenQuestion children)
       unless agreed $ throwError "The transaction was not replaced"
-    tsd <- agreedFunding net unit labels feeByte opts.yes built
+    tsd <- agreedFunding pool unit feeByte opts.yes built
     preparedAnswer ctx pool Nothing opts.output tsd []
   where
     -- The pool the transaction is replaced in: the one that holds it, or
@@ -2085,11 +2086,11 @@ cmdBumpFee ctx cfg unit opts =
 -- | The replacement of the funding the user agrees to, among those built,
 -- each told on stderr with what it is about, to keep the --json answer
 -- clean. The change needs no agreement. The coins to add are asked about
--- first, with the labels they show, then the recipients: whether the lone
+-- first, each as coins shows it, then the recipients: whether the lone
 -- one pays, or which of several does, or all of them, a choice --yes does
 -- not make. None agreed, the transaction stays as it is.
-agreedFunding :: Network -> AmountUnit -> Map TxHash Text -> Natural -> Bool -> [(Funding, TxSignData)] -> ExceptT String (DB IO) TxSignData
-agreedFunding net unit labels feeByte yes built =
+agreedFunding :: Pool -> AmountUnit -> Natural -> Bool -> [(Funding, TxSignData)] -> ExceptT String (DB IO) TxSignData
+agreedFunding pool unit feeByte yes built =
   case built of
     (ChangePays, tsd) : _ -> return tsd
     _ -> do
@@ -2098,9 +2099,11 @@ agreedFunding net unit labels feeByte yes built =
       liftMaybe "The transaction was not replaced" fromRecipients
   where
     agreedTo asked = if yes then return True else askYes terminal asked
+    net = pool.poolNetwork
     offerCoins [] = return Nothing
     offerCoins ((added, tsd) : _) = do
-      liftIO $ renderOn stderr (addedCoinsDoc net unit labels feeByte added)
+      views <- poolCoinViews pool [coin.outpoint | (coin, _, _) <- added]
+      liftIO $ renderOn stderr =<< addedCoinsDoc net unit feeByte views
       agreed <- agreedTo (addedQuestion added)
       return $ if agreed then Just tsd else Nothing
     offerReductions [] = return Nothing

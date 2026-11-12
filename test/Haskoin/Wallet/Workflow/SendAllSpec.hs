@@ -102,16 +102,23 @@ sendAllSpec ctx =
         leftOf sendAll `shouldBe` Right [(OutPoint (txHash (twoCoinsTx ctx)) 1, 30000, Locked LockedByUser)]
 
     -- 30000 satoshis are 0.0003 bitcoins
-    it "that stay in the portfolio are shown after the transaction, each with why" $
+    -- The coin is 3 confirmations deep, its transaction seen at
+    -- 1700000000, 23:13 in Central Europe
+    it "that stay in the portfolio are shown after the transaction, each as coins shows it, then why it stays" $
       withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
         synced home
         _ <- answer home ["lockcoin", coinArg (twoCoinsTx ctx) 1] []
-        run <- hw home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "10"] []
+        run <- hwWithEnv [("TZ", centralEurope)] home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "10"] []
         -- The transaction, then the coins staying, then the next steps
         let (beforeSteps, steps) = Text.breakOn "Next, sign it" (runOut run)
             (transaction, staying) = Text.breakOn "in the portfolio:" beforeSteps
         transaction `shouldSatisfy` Text.isInfixOf "NoSigHash"
-        staying `shouldSatisfy` Text.isInfixOf ("\n    0.00030000 btc  you locked it\n  " <> Text.pack (shortCoinArg (twoCoinsTx ctx) 1) <> "\n")
+        staying
+          `shouldSatisfy` Text.isInfixOf
+            ( "\n" <> Text.pack (shortCoinArg (twoCoinsTx ctx) 1) <> "  14 Nov 2023 23:13      0.00030000 btc  locked by you, 3 confirmations\n"
+                <> "  at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  bip44/0/0\n"
+                <> "  you locked it\n"
+            )
         steps `shouldSatisfy` Text.isInfixOf "hw signtx"
 
     it "are sent at a fee rate above 100 satoshis per virtual byte only if the user takes it" $

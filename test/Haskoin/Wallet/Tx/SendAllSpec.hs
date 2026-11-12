@@ -21,7 +21,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Tx.Recipient (Share (..))
 import Haskoin.Wallet.Amounts (AmountUnit (..))
 import Haskoin.Wallet.Cli.PrettyPrinter (dustReportDoc)
-import Haskoin.Wallet.Database.Coin (spendableCoins)
+import Haskoin.Wallet.Database.Coin (JsonCoin, spendableCoins)
 import Haskoin.Wallet.Keys (AccountKind (..), PoolPath, legacyPath)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.Building (BuiltTx (..), WalletCoins (..), fetchWalletCoins)
@@ -108,6 +108,16 @@ threeDustReport ctx othersStaying =
 -- | The report on one dust coin beside the coins of 50000 and 30000
 oneDustReport :: Ctx -> Natural -> DustReport
 oneDustReport ctx value = dustReport ctx 10 [(otherAddr 0, Remainder)] (twoCoins ctx) [coin ctx 2 0 value] False
+
+-- | The three dust coins of 'threeDustReport' as coins shows them: each
+-- at the receiving address of the bip44 account with its index
+threeDustViews :: Ctx -> [JsonCoin]
+threeDustViews ctx = [coinViewAt (legacyPath (Deriv :/ 0 :/ i)) (coin ctx 2 i v) | (i, v) <- [(0, 1200), (1, 900), (2, 546)]]
+
+-- | The dust coin of 'oneDustReport' of the value given as coins shows it,
+-- at the first receiving address of the bip44 account
+oneDustView :: Ctx -> Natural -> [JsonCoin]
+oneDustView ctx value = [coinViewAt (legacyPath (Deriv :/ 0 :/ 0)) (coin ctx 2 0 value)]
 
 -- | The report on the dust coins given beside the coins of 50000 and
 -- 30000, all sent to one address
@@ -265,27 +275,34 @@ reportSpec ctx =
 
     -- In bitcoins, the unit by default: 1480 satoshis are 0.00001480 btc
     -- The coins are outputs of transaction 2, whose txid starts with
-    -- 00000000: each shows by its short id, as --coin takes it
-    it "lists the dust coins, the largest first, each with its value and the rates it is worth spending at, then what spending and leaving them does" $
-      renderedLines (dustReportDoc UnitBitcoin Map.empty (threeDustReport ctx False))
+    -- 00000000, at the first three receiving addresses of the bip44
+    -- account. Each shows as coins shows it, by its short id first, as
+    -- --coin takes it.
+    it "lists the dust coins, the largest first, each as coins shows it with the rates it is worth spending at, then what spending and leaving them does" $ do
+      shown <- renderedLines <$> dustReportDoc btc UnitBitcoin (threeDustViews ctx) (threeDustReport ctx False)
+      shown
         `shouldBe` [ "3 coins cost more to spend than they are worth at 10 sat/vB, 0.00001480 btc each:",
                      "",
-                     "    0.00001200 btc  worth spending at 8 sat/vB or less",
-                     "  00000000:0",
+                     "00000000:0  time unknown           0.00001200 btc  spendable, 3 confirmations",
+                     "  at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  bip44/0/0",
+                     "  worth spending at 8 sat/vB or less",
                      "",
-                     "    0.00000900 btc  worth spending at 6 sat/vB or less",
-                     "  00000000:1",
+                     "00000000:1  time unknown           0.00000900 btc  spendable, 3 confirmations",
+                     "  at 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg  bip44/0/1",
+                     "  worth spending at 6 sat/vB or less",
                      "",
-                     "    0.00000546 btc  worth spending at 3 sat/vB or less",
-                     "  00000000:2",
+                     "00000000:2  time unknown           0.00000546 btc  spendable, 3 confirmations",
+                     "  at 1Dg6Kg7kQuyiZz41HRWXKUWKRu6ZyEf1Nr  bip44/0/2",
+                     "  worth spending at 3 sat/vB or less",
                      "",
                      "Spending them adds 0.00004440 btc of fee for 0.00002646 btc of coins. What remains for the addresses without an amount is 0.00074806 btc instead of 0.00076600 btc, 0.00001794 btc less, and the portfolio has no coin left on the network.",
                      "Leaving them, the portfolio keeps 0.00002646 btc. Once the other coins are gone, they can only be spent together, at 4 sat/vB or less."
                    ]
 
     -- In satoshis, as --unit sat asks
-    it "does not say the portfolio has no coin left when other coins stay in it" $
-      (renderedLines (dustReportDoc UnitSatoshi Map.empty (threeDustReport ctx True)) !! 11)
+    it "does not say the portfolio has no coin left when other coins stay in it" $ do
+      shown <- renderedLines <$> dustReportDoc btc UnitSatoshi (threeDustViews ctx) (threeDustReport ctx True)
+      (shown !! 14)
         `shouldBe` "Spending them adds 4440 sats of fee for 2646 sats of coins. What remains for the addresses without an amount is 74806 sats instead of 76600 sats, 1794 sats less."
 
     it "asks whether to spend them too" $
@@ -295,20 +312,25 @@ reportSpec ctx =
     -- least 546 at up to (1200 - 546) / 192 = 3 satoshis a byte
     it "tells of one dust coin in the singular" $ do
       let report = oneDustReport ctx 1200
-          shown = renderedLines (dustReportDoc UnitSatoshi Map.empty report)
+      shown <- renderedLines <$> dustReportDoc btc UnitSatoshi (oneDustView ctx 1200) report
       (shown !! 0) `shouldBe` "1 coin costs more to spend than it is worth at 10 sat/vB, 1480 sats:"
-      (shown !! 6) `shouldBe` "Leaving it, the portfolio keeps 1200 sats. Once the other coins are gone, it can only be spent at 3 sat/vB or less."
+      (shown !! 7) `shouldBe` "Leaving it, the portfolio keeps 1200 sats. Once the other coins are gone, it can only be spent at 3 sat/vB or less."
       dustQuestion report `shouldBe` "Spend it too?"
 
     -- At 1 satoshi a byte, the 192 bytes leave 600 - 192 = 408
-    it "tells when the dust coins can never be spent alone" $
-      (renderedLines (dustReportDoc UnitSatoshi Map.empty (oneDustReport ctx 600)) !! 6)
+    it "tells when the dust coins can never be spent alone" $ do
+      shown <- renderedLines <$> dustReportDoc btc UnitSatoshi (oneDustView ctx 600) (oneDustReport ctx 600)
+      (shown !! 7)
         `shouldBe` "Leaving it, the portfolio keeps 600 sats. Once the other coins are gone, it can never be spent: any fee would leave less than 546 sats."
 
     -- Its input costs 148 at 1 satoshi a byte
-    it "tells of a coin worth less than its fee at any rate" $
-      (renderedLines (dustReportDoc UnitSatoshi Map.empty (oneDustReport ctx 148)) !! 2)
-        `shouldBe` "           148 sats  worth less than its fee at any rate"
+    it "tells of a coin worth less than its fee at any rate" $ do
+      shown <- renderedLines <$> dustReportDoc btc UnitSatoshi (oneDustView ctx 148) (oneDustReport ctx 148)
+      take 3 (drop 2 shown)
+        `shouldBe` [ "00000000:0  time unknown                  148 sats  spendable, 3 confirmations",
+                     "  at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  bip44/0/0",
+                     "  worth less than its fee at any rate"
+                   ]
 
     -- A bip84 coin of 600 is dust at 10 satoshis a byte, where its input
     -- costs 680. Beside the two bip44 coins, it makes the transaction one
@@ -338,15 +360,19 @@ reportSpec ctx =
     -- 680, so the first line gives no fee, and each coin gives its own.
     -- The coin of 1200 is worth spending up to (1200 - 1) / 148 = 8
     -- satoshis a byte, and the coin of 600 up to (600 - 1) / 68 = 8.
-    it "gives each dust coin the fee of its own input when the dust coins are of both types" $
-      take 7 (renderedLines (dustReportDoc UnitSatoshi Map.empty (dustReportOf ctx [coin ctx 2 0 1200, segwitCoin ctx 2 1 600])))
+    it "gives each dust coin the fee of its own input when the dust coins are of both types" $ do
+      let views = [coinViewAt (legacyPath (Deriv :/ 0 :/ 0)) (coin ctx 2 0 1200), coinViewAt (segwitPath (Deriv :/ 0 :/ 1)) (segwitCoin ctx 2 1 600)]
+      shown <- renderedLines <$> dustReportDoc btc UnitSatoshi views (dustReportOf ctx [coin ctx 2 0 1200, segwitCoin ctx 2 1 600])
+      take 9 shown
         `shouldBe` [ "2 coins cost more to spend than they are worth at 10 sat/vB:",
                      "",
-                     "          1200 sats  costs 1480 sats, worth spending at 8 sat/vB or less",
-                     "  00000000:0",
+                     "00000000:0  time unknown                 1200 sats  spendable, 3 confirmations",
+                     "  at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  bip44/0/0",
+                     "  costs 1480 sats, worth spending at 8 sat/vB or less",
                      "",
-                     "           600 sats  costs 680 sats, worth spending at 8 sat/vB or less",
-                     "  00000000:1"
+                     "00000000:1  time unknown                  600 sats  spendable, 3 confirmations",
+                     "  at bc1qqdensnp26rdechmq669tjk4s2wsyjr04nw3mc2  bip84/0/1",
+                     "  costs 680 sats, worth spending at 8 sat/vB or less"
                    ]
 
 {- The signing data, from a portfolio in the database -}

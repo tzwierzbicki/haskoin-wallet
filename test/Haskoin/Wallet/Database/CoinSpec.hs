@@ -1504,22 +1504,21 @@ leftSpec :: Ctx -> Spec
 leftSpec ctx =
   describe "The coins a transaction leaves in the portfolio" $ do
     it "are none when it leaves none" $
-      leftCoins Map.empty [] [] [] `shouldBe` []
+      leftOutpoints [] [] [] `shouldBe` []
 
     -- The dust coins left, the coins the builder may not spend, and a coin
     -- not chosen with coin control
     it "are listed by reason, the largest coins first" $
-      leftCoins
-        Map.empty
+      leftOutpoints
         [unspentAt ctx 2 0 900, unspentAt ctx 2 1 1200]
         [(unspentAt ctx 3 0 5000, Nothing), (unspentAt ctx 3 1 20000, Just LockedByTransaction), (unspentAt ctx 3 2 30000, Just LockedByUser)]
         [unspentAt ctx 4 0 40000]
-        `shouldBe` [ LeftCoin (OutPoint (fakeTxHash 2) 1) 1200 WorthLessThanFee "",
-                     LeftCoin (OutPoint (fakeTxHash 2) 0) 900 WorthLessThanFee "",
-                     LeftCoin (OutPoint (fakeTxHash 3) 2) 30000 (Locked LockedByUser) "",
-                     LeftCoin (OutPoint (fakeTxHash 3) 1) 20000 (Locked LockedByTransaction) "",
-                     LeftCoin (OutPoint (fakeTxHash 3) 0) 5000 NotSpendableYet "",
-                     LeftCoin (OutPoint (fakeTxHash 4) 0) 40000 NotGiven ""
+        `shouldBe` [ (OutPoint (fakeTxHash 2) 1, WorthLessThanFee),
+                     (OutPoint (fakeTxHash 2) 0, WorthLessThanFee),
+                     (OutPoint (fakeTxHash 3) 2, Locked LockedByUser),
+                     (OutPoint (fakeTxHash 3) 1, Locked LockedByTransaction),
+                     (OutPoint (fakeTxHash 3) 0, NotSpendableYet),
+                     (OutPoint (fakeTxHash 4) 0, NotGiven)
                    ]
 
     it "tell the user why each stays" $
@@ -1529,14 +1528,22 @@ leftSpec ctx =
     -- A send-all with --coin-type bip84 leaves the bip44 coins, and the
     -- other way round
     it "are the spendable coins of the type --coin-type leaves out, the largest first, with the reason othertype" $
-      leftOfOtherType Map.empty [unspentAt ctx 5 0 5000, unspentAt ctx 5 1 30000]
-        `shouldBe` [ LeftCoin (OutPoint (fakeTxHash 5) 1) 30000 OtherType "",
-                     LeftCoin (OutPoint (fakeTxHash 5) 0) 5000 OtherType ""
+      leftOfOtherType [unspentAt ctx 5 0 5000, unspentAt ctx 5 1 30000]
+        `shouldBe` [ (OutPoint (fakeTxHash 5) 1, OtherType),
+                     (OutPoint (fakeTxHash 5) 0, OtherType)
                    ]
 
-    it "show on a coin of the other type the label of the payment that paid it" $
-      leftOfOtherType (Map.fromList [(fakeTxHash 5, "Salary")]) [unspentAt ctx 5 0 5000]
-        `shouldBe` [LeftCoin (OutPoint (fakeTxHash 5) 0) 5000 OtherType "Salary"]
+    it "are each shown as coins shows it, with the label of the payment that paid it, and why it stays" $
+      inDatabaseE $ do
+        accId <- account ctx
+        _ <- refresh ctx accId [confirmedPayment ctx]
+        summarise accId (firstPaymentTx ctx)
+        labelTx accId (fakeTxHash 1) "Salary"
+        pool <- poolOf accId
+        left <- leftCoinsOf pool [(firstCoin, OtherType)]
+        liftIO $
+          [(jsonCoinOutpoint coin.leftCoin, jsonCoinValue coin.leftCoin, jsonCoinTxLabel coin.leftCoin, coin.leftCoinReason) | coin <- left]
+            `shouldBe` [(firstCoin, 50000, "Salary", OtherType)]
 
     it "tell the user that a coin of the other type stays for its type, and name that reason othertype in JSON" $ do
       leftReasonText OtherType `shouldBe` "not of the type --coin-type sends"
@@ -1546,14 +1553,28 @@ leftSpec ctx =
     it "list the coins of the other type after every other reason" $
       leftReasons `shouldBe` [WorthLessThanFee, Locked LockedByUser, Locked LockedByTransaction, NotSpendableYet, NotGiven, OtherType]
 
-    it "are written in JSON with their outpoint, their value and why they stay" $
-      Json.toJSON (LeftCoin (OutPoint (fakeTxHash 2) 0) 900 WorthLessThanFee "")
-        `shouldBe` Json.object
-          [ "outpoint" .= Json.object ["txid" .= ("0000000000000000000000000000000000000000000000000000000000000002" :: Text), "index" .= (0 :: Int)],
-            "value" .= (900 :: Int),
-            "reason" .= ("dust" :: Text),
-            "txlabel" .= ("" :: Text)
-          ]
+    it "are written in JSON as coins writes the coin, with why they stay, and read back" $ do
+      let left = LeftCoin (JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True "" "" False (Just (legacyPath (Deriv :/ 0 :/ 0))) (Just seenTime)) WorthLessThanFee
+          json :: String
+          json =
+            [r|{
+              "outpoint": {"txid": "0000000000000000000000000000000000000000000000000000000000000001", "index": 0},
+              "address": "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj",
+              "value": 50000,
+              "block": {"height": 800000, "position": 0},
+              "confirmations": 3,
+              "lock": null,
+              "spendable": true,
+              "txlabel": "",
+              "addresslabel": "",
+              "change": false,
+              "path": "/0/0",
+              "type": "bip44",
+              "time": "2023-11-14T22:13:20Z",
+              "reason": "dust"
+            }|]
+      eitherDecode (cs json) `shouldBe` Right (marshalValue btc left)
+      unmarshalJSON btc (cs json) `shouldBe` Just left
 
     it "name each reason in JSON" $
       (Json.toJSON <$> [WorthLessThanFee, Locked LockedByUser, Locked LockedByTransaction, NotSpendableYet, NotGiven])

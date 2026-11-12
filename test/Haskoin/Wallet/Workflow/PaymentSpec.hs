@@ -779,15 +779,21 @@ coinControlSpec ctx =
         paidToWallet <$> txOf prepared `shouldReturn` Map.fromList [(internalAddr 0, 27740)]
         leftOf prepared `shouldBe` Right [(OutPoint (txHash (twoAddressesTx ctx)) 1, 30000, Locked LockedByUser)]
 
-    -- 30000 satoshis are 0.0003 bitcoins
-    it "shows the coins chosen that cannot be spent after the transaction" $
+    -- 30000 satoshis are 0.0003 bitcoins. The coin is 3 confirmations
+    -- deep, its transaction seen at 1700000000, 23:13 in Central Europe.
+    it "shows the coins chosen that cannot be spent after the transaction, each as coins shows it, then why it stays" $
       withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
         synced home
         _ <- answer home ["lockcoin", coinArg (twoAddressesTx ctx) 1] []
-        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (twoAddressesTx ctx) 0, "--coin", coinArg (twoAddressesTx ctx) 1, "--fee-rate", "10"] []
+        run <- hwWithEnv [("TZ", centralEurope)] home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (twoAddressesTx ctx) 0, "--coin", coinArg (twoAddressesTx ctx) 1, "--fee-rate", "10"] []
         let (transaction, staying) = Text.breakOn "in the portfolio:" (runOut run)
         transaction `shouldSatisfy` Text.isInfixOf "NoSigHash"
-        staying `shouldSatisfy` Text.isInfixOf ("\n    0.00030000 btc  you locked it\n  " <> Text.pack (shortCoinArg (twoAddressesTx ctx) 1) <> "\n")
+        staying
+          `shouldSatisfy` Text.isInfixOf
+            ( "\n" <> Text.pack (shortCoinArg (twoAddressesTx ctx) 1) <> "  14 Nov 2023 23:13      0.00030000 btc  locked by you, 3 confirmations\n"
+                <> "  at 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg  bip44/0/1\n"
+                <> "  you locked it\n"
+            )
 
     it "prepares nothing when none of the coins chosen can be spent, and tells why" $
       withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do

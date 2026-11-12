@@ -221,6 +221,10 @@ Using `hw`:
 - Listings show a compact view, two lines for each transaction or coin, and
   `--verbose` shows every detail. On a terminal they go through a pager, which
   keeps each line on one line of the screen, so that the columns line up.
+- A coin looks the same wherever `hw` shows it. The questions of `bumpfee` and
+  `preparesendall` and the coins a payment leaves show each coin as `coins`
+  does, then what they say of it. The JSON of a coin a payment leaves has the
+  keys of a coin of `coins --json`, and its reason.
 - `addresses`, `balances`, `coins` and `txs` list a whole portfolio, in a
   section for each network, and for each type as well for `addresses`. A title
   line says where each section is. `--network` and `--type` narrow a listing

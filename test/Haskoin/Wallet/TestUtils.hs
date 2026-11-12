@@ -426,6 +426,13 @@ unusedAddressRow = DBAddress (toSqlKey 1) False 1 (externalAddrsText !! 1) "" 0 
 spendableCoinRow :: JsonCoin
 spendableCoinRow = JsonCoin (OutPoint (fakeTxHash 1) 0) (externalAddr 0) 50000 (Store.BlockRef 800000 1) 3 Nothing True "" "" False (Just (legacyPath (Deriv :/ 0 :/ 0))) (Just seenTime)
 
+-- | A coin of the store as coins lists it, at the path given: 3
+-- confirmations deep, free and spendable, without labels. Its time is
+-- unknown, so that the clock of the computer plays no part in its views.
+coinViewAt :: PoolPath -> Store.Unspent -> JsonCoin
+coinViewAt path coin =
+  JsonCoin coin.outpoint (fromMaybe (error "coinViewAt: a coin without an address") coin.address) coin.value coin.block 3 Nothing True "" "" False (Just path) Nothing
+
 -- | A sync of portfolio 0 on Bitcoin that found nothing new, at block
 -- 800002: it holds 0.05 btc confirmed and 0.001 btc unconfirmed in 3
 -- coins, and can spend 0.049 btc now

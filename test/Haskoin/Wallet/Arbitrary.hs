@@ -190,13 +190,8 @@ arbitraryJsonCoin net =
 arbitraryCoinLock :: Gen CoinLock
 arbitraryCoinLock = elements [LockedByTransaction, LockedByUser]
 
-arbitraryLeftCoin :: Gen LeftCoin
-arbitraryLeftCoin =
-  LeftCoin
-    <$> arbitraryOutPoint
-    <*> arbitraryPositive
-    <*> elements leftReasons
-    <*> arbitraryText
+arbitraryLeftCoin :: Network -> Gen LeftCoin
+arbitraryLeftCoin net = LeftCoin <$> arbitraryJsonCoin net <*> elements leftReasons
 
 -- | The labels of a few transactions, by id
 arbitraryTxidLabels :: Gen (Map.Map TxHash Text)
@@ -361,7 +356,7 @@ arbitraryResponse net ctx =
       ResponsePrepared
         <$> arbitraryPlace net
         <*> arbitraryTxInfo net
-        <*> resize 20 (listOf arbitraryLeftCoin)
+        <*> resize 20 (listOf (arbitraryLeftCoin net))
         <*> pure Nothing,
       ResponseOutsideTx net <$> arbitraryTxInfo net,
       ResponseSentTx <$> arbitraryNetwork <*> arbitraryTxHash,

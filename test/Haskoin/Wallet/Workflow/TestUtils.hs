@@ -635,7 +635,7 @@ coinRowsOf other = Left (show other)
 -- | The coins preparetx or preparesendall leaves in the portfolio, as its
 -- answer lists them: outpoint, value and why
 leftOf :: Response -> Either String [(OutPoint, Word64, LeftReason)]
-leftOf (ResponsePrepared _ _ left _) = Right [(c.leftCoinOutpoint, c.leftCoinValue, c.leftCoinReason) | c <- left]
+leftOf (ResponsePrepared _ _ left _) = Right [(jsonCoinOutpoint c.leftCoin, jsonCoinValue c.leftCoin, c.leftCoinReason) | c <- left]
 leftOf other = Left (show other)
 
 -- | The transaction of an answer, of a portfolio or outside the wallet

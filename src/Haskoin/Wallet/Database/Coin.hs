@@ -66,11 +66,13 @@ module Haskoin.Wallet.Database.Coin
     refreshCoins,
     LeftReason (..),
     LeftCoin (..),
+    leftOutpoints,
+    leftCoinsOf,
+    poolCoinViews,
+    jsonCoinPairs,
     leftReasons,
     leftReasonText,
-    leftCoins,
     leftOfOtherType,
-    labelsOfCoins,
     chosenCoins,
   )
 where
@@ -82,6 +84,7 @@ import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Reader (MonadTrans (lift))
 import Control.Monad.State (StateT, evalStateT, gets, modify)
 import Data.Aeson ((.:?), (.!=), FromJSON (..), ToJSON (..), Value (String), object, withObject, withText, (.:), (.=))
+import Data.Aeson.Types (Pair)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Containers.ListUtils (nubOrd, nubOrdOn)
@@ -114,7 +117,7 @@ import Haskoin.Wallet.Keys (PoolPath (..), addressKind)
 import Haskoin.Wallet.Database.PendingTx (lockedOutpoints, userLockedOutpoints)
 import Haskoin.Wallet.Database.RawTx (getRawTx, lookupRawTx)
 import Haskoin.Wallet.ShortId (ShortId, shortIdKey)
-import Haskoin.Wallet.Database.TxInfo (TimeKey (..), afterInTime, coinLabel, coinLabels, firstBlockRef, inTimeOrder, liveSummaries, spentTxids, timeOrder, walletTransaction)
+import Haskoin.Wallet.Database.TxInfo (TimeKey (..), afterInTime, coinLabel, firstBlockRef, inTimeOrder, liveSummaries, spentTxids, timeOrder, walletTransaction)
 import Haskoin.Wallet.Util (rowLimit)
 import Numeric.Natural (Natural)
 
@@ -165,22 +168,7 @@ instance FromJSON CoinLock where
     other -> fail $ "Unknown coin lock: " <> cs other
 
 instance MarshalJSON Network JsonCoin where
-  marshalValue net c =
-    object
-      [ "outpoint" .= jsonCoinOutpoint c,
-        "address" .= marshalValue net (jsonCoinAddress c),
-        "value" .= jsonCoinValue c,
-        "block" .= jsonCoinBlock c,
-        "confirmations" .= jsonCoinConfirmations c,
-        "lock" .= jsonCoinLock c,
-        "spendable" .= jsonCoinSpendable c,
-        "txlabel" .= jsonCoinTxLabel c,
-        "addresslabel" .= jsonCoinAddressLabel c,
-        "change" .= jsonCoinChange c,
-        "path" .= (pathInAccount <$> jsonCoinPath c),
-        "type" .= (pathKind <$> jsonCoinPath c),
-        "time" .= jsonCoinTime c
-      ]
+  marshalValue net c = object (jsonCoinPairs net c)
   unmarshalValue net =
     withObject "JsonCoin" $ \o ->
       JsonCoin
@@ -196,6 +184,25 @@ instance MarshalJSON Network JsonCoin where
         <*> o .:? "change" .!= False
         <*> (liftA2 PoolPath <$> o .:? "type" <*> o .:? "path")
         <*> o .:? "time"
+
+-- | The keys of a coin in JSON, its address in the text of the network.
+-- A coin a payment leaves has them too, beside why it stays ('leftCoinsOf').
+jsonCoinPairs :: Network -> JsonCoin -> [Pair]
+jsonCoinPairs net c =
+  [ "outpoint" .= jsonCoinOutpoint c,
+    "address" .= marshalValue net (jsonCoinAddress c),
+    "value" .= jsonCoinValue c,
+    "block" .= jsonCoinBlock c,
+    "confirmations" .= jsonCoinConfirmations c,
+    "lock" .= jsonCoinLock c,
+    "spendable" .= jsonCoinSpendable c,
+    "txlabel" .= jsonCoinTxLabel c,
+    "addresslabel" .= jsonCoinAddressLabel c,
+    "change" .= jsonCoinChange c,
+    "path" .= (pathInAccount <$> jsonCoinPath c),
+    "type" .= (pathKind <$> jsonCoinPath c),
+    "time" .= jsonCoinTime c
+  ]
 
 -- | A coin row as the user sees it: its confirmations counted from the best
 -- block, its lock, spendable when the builder may spend it now, the label
@@ -224,11 +231,6 @@ toJsonCoin rules pool row = do
         jsonCoinPath = PoolPath <$> addressKind addr <*> (addrPath <$> addrRowM),
         jsonCoinTime = Just (dBCoinTime row)
       }
-
--- | The labels the coins show ('coinLabel'), by the transaction that paid
--- each, for what lists them
-labelsOfCoins :: (MonadUnliftIO m) => Pool -> [Store.Unspent] -> DB m (Map TxHash Text)
-labelsOfCoins pool coins = coinLabels pool ((.outpoint.hash) <$> coins)
 
 {- Coin rows -}
 
@@ -1027,53 +1029,64 @@ leftReasonText = \case
 lockReason :: Maybe CoinLock -> LeftReason
 lockReason = maybe NotSpendableYet Locked
 
--- | A coin of the portfolio a transaction leaves in it, and why
+-- | A coin of the portfolio a transaction leaves in it, and why. The
+-- answer of preparetx and preparesendall lists them after the
+-- transaction, each as coins shows it, with why it stays. Its JSON is
+-- that of the coin, with the reason beside.
 data LeftCoin = LeftCoin
-  { leftCoinOutpoint :: !OutPoint,
-    leftCoinValue :: !Word64,
-    leftCoinReason :: !LeftReason,
-    -- | The label the coin shows ('coinLabel'), or none
-    leftCoinTxLabel :: !Text
+  { -- | The coin as coins shows it now
+    leftCoin :: !JsonCoin,
+    leftCoinReason :: !LeftReason
   }
   deriving (Eq, Show)
 
-instance ToJSON LeftCoin where
-  toJSON coin =
-    object
-      [ "outpoint" .= leftCoinOutpoint coin,
-        "value" .= leftCoinValue coin,
-        "reason" .= leftCoinReason coin,
-        "txlabel" .= leftCoinTxLabel coin
-      ]
+instance MarshalJSON Network LeftCoin where
+  marshalValue net left = object (jsonCoinPairs net left.leftCoin <> ["reason" .= left.leftCoinReason])
+  unmarshalValue net value = LeftCoin <$> unmarshalValue net value <*> withObject "LeftCoin" (.: "reason") value
 
-instance FromJSON LeftCoin where
-  parseJSON = withObject "LeftCoin" $ \o ->
-    LeftCoin <$> o .: "outpoint" <*> o .: "value" <*> o .: "reason" <*> o .:? "txlabel" .!= ""
-
--- | The coins of the portfolio a transaction leaves, by reason in the order
--- of 'leftReasons', the largest first: the dust coins left, the coins the
--- builder may not spend with their locks, and the spendable coins not
--- chosen with coin control. Each shows its label, among those given
--- ('labelsOfCoins').
-leftCoins :: Map TxHash Text -> [Store.Unspent] -> [(Store.Unspent, Maybe CoinLock)] -> [Store.Unspent] -> [LeftCoin]
-leftCoins labels dustLeft unspendable notGiven =
-  concat [sortOn (Down . leftCoinValue) [left | left <- everyLeft, leftCoinReason left == reason] | reason <- leftReasons]
+-- | Why the coins of the portfolio a transaction leaves stay, each by its
+-- outpoint, by reason in the order of 'leftReasons', the largest first:
+-- the dust coins left, the coins the builder may not spend with their
+-- locks, and the spendable coins not chosen with coin control.
+-- 'leftCoinsOf' then finds them as coins shows them.
+leftOutpoints :: [Store.Unspent] -> [(Store.Unspent, Maybe CoinLock)] -> [Store.Unspent] -> [(OutPoint, LeftReason)]
+leftOutpoints dustLeft unspendable notGiven =
+  [ (coin.outpoint, reason)
+    | reason <- leftReasons,
+      coin <- sortOn (Down . (.value)) [coin | (coin, why) <- everyLeft, why == reason]
+  ]
   where
     everyLeft =
-      [leftOf WorthLessThanFee coin | coin <- dustLeft]
-        <> [leftOf (lockReason lock) coin | (coin, lock) <- unspendable]
-        <> [leftOf NotGiven coin | coin <- notGiven]
-    leftOf :: LeftReason -> Store.Unspent -> LeftCoin
-    leftOf reason coin = LeftCoin coin.outpoint coin.value reason (Map.findWithDefault "" coin.outpoint.hash labels)
+      [(coin, WorthLessThanFee) | coin <- dustLeft]
+        <> [(coin, lockReason lock) | (coin, lock) <- unspendable]
+        <> [(coin, NotGiven) | coin <- notGiven]
 
 -- | The spendable coins a send-all leaves because --coin-type sends the
--- other type, the largest first, each with its label among those given.
--- They come after the coins 'leftCoins' lists.
-leftOfOtherType :: Map TxHash Text -> [Store.Unspent] -> [LeftCoin]
-leftOfOtherType labels others =
-  sortOn
-    (Down . leftCoinValue)
-    [LeftCoin coin.outpoint coin.value OtherType (Map.findWithDefault "" coin.outpoint.hash labels) | coin <- others]
+-- other type, each by its outpoint, the largest first. They come after
+-- the coins 'leftOutpoints' gives.
+leftOfOtherType :: [Store.Unspent] -> [(OutPoint, LeftReason)]
+leftOfOtherType others = [(coin.outpoint, OtherType) | coin <- sortOn (Down . (.value)) others]
+
+-- | The coins a transaction leaves in the pool, each as coins shows it
+-- now, with why it stays, in the order given
+leftCoinsOf :: (MonadUnliftIO m) => Pool -> [(OutPoint, LeftReason)] -> ExceptT String (DB m) [LeftCoin]
+leftCoinsOf pool left = do
+  views <- poolCoinViews pool (fst <$> left)
+  let byOutpoint = Map.fromList [(jsonCoinOutpoint view, view) | view <- views]
+  return [LeftCoin view reason | (outpoint, reason) <- left, Just view <- [Map.lookup outpoint byOutpoint]]
+
+-- | The coins of the pool with these outpoints, as coins shows them now,
+-- in the order given. The reports of preparesendall and bumpfee show
+-- coins so before their questions, and the answers of preparetx and
+-- preparesendall the coins a payment leaves. An outpoint the pool does
+-- not hold is left out.
+poolCoinViews :: (MonadUnliftIO m) => Pool -> [OutPoint] -> ExceptT String (DB m) [JsonCoin]
+poolCoinViews pool outpoints = do
+  rules <- spendingOf pool.poolNetwork
+  accIds <- lift $ map fst <$> poolAccounts pool
+  rows <- lift $ forM outpoints $ \outpoint ->
+    listToMaybe . catMaybes <$> mapM (\accId -> P.get (coinKey accId outpoint)) accIds
+  mapM (toJsonCoin rules pool) (catMaybes rows)
 
 {- Coin control -}
 

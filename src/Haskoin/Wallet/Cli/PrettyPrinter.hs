@@ -2123,21 +2123,31 @@ cellsLine cells = hcat (intersperse "  " (padded cells))
     padded [(_, _, doc)] = [doc]
     padded ((width, content, doc) : rest) = (doc <> pretty (replicate (width - shownWidth content) ' ')) : padded rest
 
--- | The coins a transaction just prepared leaves in the account, each with
--- why, a blank line between them
-leftCoinsDoc :: AmountUnit -> [LeftCoin] -> Doc Style
-leftCoinsDoc unit left =
-  vcat . intersperse mempty $
-    text (counted (fromIntegral (length left)) "coin stays" "coins stay" <> " in the portfolio:")
-      : [questionCoinDoc unit coin.leftCoinOutpoint (fromIntegral coin.leftCoinValue) coin.leftCoinTxLabel (text (leftReasonText coin.leftCoinReason)) | coin <- left]
+-- | The coins a transaction just prepared leaves in the portfolio on its
+-- network, each with why it stays ('reportCoinDoc'), a blank line between
+-- them
+leftCoinsDoc :: Network -> AmountUnit -> [LeftCoin] -> IO (Doc Style)
+leftCoinsDoc net unit left = do
+  coins <- forM left $ \coin -> reportCoinDoc net unit [text (leftReasonText coin.leftCoinReason)] coin.leftCoin
+  return . vcat . intersperse mempty $
+    text (counted (fromIntegral (length left)) "coin stays" "coins stay" <> " in the portfolio:") : coins
+
+-- | A coin in a report, before a question or after a transaction just
+-- prepared: as the compact view of coins shows it, then what the report
+-- says of it, a line each. A coin looks the same wherever hw shows it, and
+-- the user tells it by its short id, its time, its value and its address,
+-- as coins lists it.
+reportCoinDoc :: Network -> AmountUnit -> [Doc Style] -> JsonCoin -> IO (Doc Style)
+reportCoinDoc net unit said coin = do
+  time <- traverse utcToLocalZonedTime (jsonCoinTime coin)
+  return $ vcat (compactCoinDoc net unit time coin : (indent 2 <$> said))
 
 {- The questions of preparesendall and bumpfee -}
 
 -- The reports the commands show on stderr before they ask. A sentence
--- wraps at the width of the screen, as the help does. A coin takes two
--- lines, as in a listing: its value with what is said of it, then the
--- short id of the coin, as --coin takes it. The amounts are in the unit
--- asked for.
+-- wraps at the width of the screen, as the help does. A coin is shown as
+-- coins shows it, then what the report says of it ('reportCoinDoc'). The
+-- amounts are in the unit asked for.
 
 -- | A sentence of words and amounts, wrapped at the width of the screen
 sentence :: [Doc Style] -> Doc Style
@@ -2147,28 +2157,20 @@ sentence = fillSep
 wordsOf :: String -> [Doc Style]
 wordsOf = map pretty . words
 
--- | A coin in a question: its value, then what is said of it, then the
--- label it shows if any, then the short id of the coin, as --coin and
--- lockcoin take it
-questionCoinDoc :: AmountUnit -> OutPoint -> Natural -> Text -> Doc Style -> Doc Style
-questionCoinDoc unit outpoint value label said =
-  vcat $
-    [columns [amountCell (Just Incoming) "" unit (fromIntegral value), said]]
-      <> [indent 2 (labelWord label) | not (Text.null label)]
-      <> [indent 2 (styled Muted (shortCoinText outpoint))]
-
 -- | A fee rate, in satoshis per virtual byte
 rateDoc :: Natural -> Doc Style
 rateDoc feeByte = text (show feeByte <> " sat/vB")
 
 -- | The report on the coins worth less than their fee, as preparesendall
--- shows it before its question: the coins, each with the rates it is worth
--- spending at and the label it shows among those given, then what
+-- shows it before its question: the coins, each as coins shows it among
+-- the views given, with the rates it is worth spending at, then what
 -- spending them and leaving them does
-dustReportDoc :: AmountUnit -> Map.Map TxHash Text -> DustReport -> Doc Style
-dustReportDoc unit labels report =
-  vcat . intersperse mempty $ [header] <> (dustCoinDoc <$> report.dustCoins) <> [vcat [spent, left]]
+dustReportDoc :: Network -> AmountUnit -> [JsonCoin] -> DustReport -> IO (Doc Style)
+dustReportDoc net unit views report = do
+  coins <- sequence [reportCoinDoc net unit [worth coin] view | coin <- report.dustCoins, Just view <- [Map.lookup coin.outpoint byOutpoint]]
+  return . vcat . intersperse mempty $ [header] <> coins <> [vcat [spent, left]]
   where
+    byOutpoint = Map.fromList [(jsonCoinOutpoint view, view) | view <- views]
     count = length report.dustCoins
     one = count == 1
     them = if one then "it" else "them"
@@ -2182,7 +2184,6 @@ dustReportDoc unit labels report =
         | one -> sentence $ wordsOf "1 coin costs more to spend than it is worth at" <> [rateDoc report.rate <> ",", amount fee <> ":"]
         | otherwise -> sentence $ wordsOf (show count <> " coins cost more to spend than they are worth at") <> [rateDoc report.rate <> ",", amount fee] <> wordsOf "each:"
       _ -> sentence $ wordsOf (show count <> " coins cost more to spend than they are worth at") <> [rateDoc report.rate <> ":"]
-    dustCoinDoc coin = questionCoinDoc unit coin.outpoint (fromIntegral coin.value) (Map.findWithDefault "" coin.outpoint.hash labels) (worth coin)
     worth coin = hsep (ownFee coin <> [worthAt coin])
     ownFee coin = ["costs" <+> amount (inputFee report.rate coin) <> "," | length fees > 1]
     worthAt coin = case worthSpendingUpTo coin of
@@ -2222,16 +2223,14 @@ childrenDoc children =
       : [indent 2 (styled Muted (shortHashText (sentId child))) | child <- children]
 
 -- | What bumpfee says of the coins to add, before it asks to add them: each
--- with the address that holds it and its path, and the label it shows
--- among those given
-addedCoinsDoc :: Network -> AmountUnit -> Map.Map TxHash Text -> Natural -> [(Store.Unspent, Address, PoolPath)] -> Doc Style
-addedCoinsDoc net unit labels feeByte added =
-  vcat . intersperse mempty $
-    header : [questionCoinDoc unit coin.outpoint (fromIntegral coin.value) (Map.findWithDefault "" coin.outpoint.hash labels) (held addr path) | (coin, addr, path) <- added]
+-- as coins shows it ('reportCoinDoc')
+addedCoinsDoc :: Network -> AmountUnit -> Natural -> [JsonCoin] -> IO (Doc Style)
+addedCoinsDoc net unit feeByte added = do
+  coins <- mapM (reportCoinDoc net unit []) added
+  return . vcat . intersperse mempty $ header : coins
   where
     them = if length added == 1 then "this coin" else "these coins"
     header = sentence $ wordsOf "The coins of the transaction cannot pay its fee at" <> [rateDoc feeByte <> ","] <> wordsOf ("and " <> them <> " of the portfolio would:")
-    held addr path = "at" <+> fullAddressWords net addr (Just path)
 
 -- | What bumpfee says of the ways the recipients can pay, those of
 -- 'reductions', before it asks which: each recipient, numbered when there
@@ -2334,7 +2333,7 @@ responsePrinter unit view code shown answer =
     -- The coins left in the portfolio below the transaction, apart from it
     ResponsePrepared place txInfo left activeM -> do
       renderIO =<< txAnswerDoc (placeNetwork place) (Just (SeenFrom (placePortfolio place) activeM)) unit txInfo
-      unless (null left) $ putStrLn "" >> renderIO (leftCoinsDoc unit left)
+      unless (null left) $ putStrLn "" >> (renderIO =<< leftCoinsDoc (placeNetwork place) unit left)
     ResponseOutsideTx net txInfo -> renderIO =<< txAnswerDoc net Nothing unit txInfo
     ResponseSentTx net h ->
       renderIO $
