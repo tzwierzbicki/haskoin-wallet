@@ -415,6 +415,8 @@ importedWith wallets accounts =
   ImportReport
     { reportWallets = wallets,
       reportAccounts = accounts,
+      reportWalletLabels = 0,
+      reportPortfolioLabels = 0,
       reportAddressLabels = 0,
       reportTxLabels = 0,
       reportCoinsLocked = 0,
@@ -425,6 +427,8 @@ importedWith wallets accounts =
       reportCoinsMissing = 0,
       reportOtherAccounts = 0,
       reportOtherPortfolios = 0,
+      reportWalletLabelsKept = 0,
+      reportPortfolioLabelsKept = 0,
       reportChangeAddresses = 0,
       reportNotKept = 0,
       reportUnreadable = []
@@ -475,6 +479,14 @@ importSpec =
     it "counts the labels set, and the coins locked and unlocked" $
       renderedLines (importDoc ((importedWith [] []) {reportAddressLabels = 2, reportTxLabels = 1, reportCoinsLocked = 1, reportCoinsUnlocked = 3}) stillActive)
         `shouldBe` ["Labels set: 2 addresses, 1 transaction", "Coins locked: 1", "Coins unlocked: 3"]
+
+    it "counts the labels set on wallets and portfolios before those of addresses and transactions" $
+      renderedLines (importDoc ((importedWith [] []) {reportWalletLabels = 1, reportPortfolioLabels = 2, reportAddressLabels = 2, reportTxLabels = 1}) stillActive)
+        `shouldBe` ["Labels set: 1 wallet, 2 portfolios, 2 addresses, 1 transaction"]
+
+    it "counts the labels of wallets and portfolios that keep their own description among those left aside" $
+      renderedLines (importDoc ((importedWith [] []) {reportWalletLabelsKept = 1, reportPortfolioLabelsKept = 2}) stillActive)
+        `shouldBe` ["Labels set: none", "Left aside: 1 label of a wallet that keeps its own, 2 labels of portfolios that keep their own"]
 
     it "counts what the file labels that the wallet does not have yet" $
       renderedLines (importDoc ((importedWith [] []) {reportAddressesMissing = 1, reportTxsMissing = 2, reportCoinsMissing = 1}) stillActive)

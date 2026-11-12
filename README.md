@@ -1136,7 +1136,7 @@ wallet0  bc560f95  created
 
 portfolio0 of wallet0 is the active portfolio: the commands work in it.
 
-Labels set: 2 addresses
+Labels set: 1 wallet, 2 portfolios, 2 addresses
 ```
 
 **The active portfolio.** In a database without any portfolio, the first
@@ -1198,7 +1198,7 @@ wallet0  bc560f95  already in the database
 
 The active portfolio is still portfolio0 of wallet0.
 
-Labels set: 1 address
+Labels set: 1 wallet, 1 portfolio, 1 address
 Left aside: 1 record of the portfolios --portfolio leaves out
 
 To work in portfolio1 of wallet0, make it the active one:
@@ -1232,6 +1232,13 @@ address of its chain. What it cannot place, it counts: run `sync`, then
 aside, since `hw` keeps none. A [BIP 329] file of another wallet sets its
 labels the same way.
 
+The `Labels set` line counts the wallets, portfolios, addresses and
+transactions that took a label of the file. The label of a wallet or a
+portfolio is its description. Each wallet and each portfolio counts once,
+though the file writes its description with each of its keys. One that has
+that description already counts too, as when you import the same file again. `--json` gives the counts as `walletlabels`,
+`portfoliolabels`, `addresslabels` and `txlabels`.
+
 > **Good to know**
 >
 > - **Import only a file you trust.** Without the mnemonic, `importwallet`
@@ -1248,7 +1255,11 @@ labels the same way.
 >   network and type.
 > - **A description you set is kept.** A wallet or a portfolio that has a
 >   description keeps it. One that has none, or that `importwallet` creates,
->   takes the description of the file.
+>   takes the description of the file. When the file gives another one, the
+>   answer says so under `Left aside`, as
+>   `1 label of a portfolio that keeps its own`. `--json` counts them as
+>   `walletlabelskept` and `portfoliolabelskept`. To take the description of
+>   the file, set it with [`label`](#hw-label).
 > - **`importwallet` derives no address over a thousand past the last used one
 >   of its chain.** A file names any path, and a wrong one would have `hw` derive
 >   addresses for days. Such an address is counted as not in the wallet yet, and

@@ -424,6 +424,10 @@ arbitraryImportReport net =
     <*> arbitraryNatural
     <*> arbitraryNatural
     <*> arbitraryNatural
+    <*> arbitraryNatural
+    <*> arbitraryNatural
+    <*> arbitraryNatural
+    <*> arbitraryNatural
     <*> resize 5 (listOf arbitraryNatural)
 
 -- | What became of a wallet a file names, and of its portfolios

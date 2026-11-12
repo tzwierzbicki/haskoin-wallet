@@ -1114,6 +1114,31 @@ descriptionSpec =
         run <- hw home ["portfolios"] []
         filter (Text.isInfixOf "is \"Family\"") (Text.lines (runOut run)) `shouldBe` ["    wallet1 is \"Family\""]
 
+    it "goes with exportwallet and importwallet, which counts the description of the wallet and of each portfolio among the labels set" $
+      withHome $ \signer -> withHome $ \online -> do
+        newTestPortfolio signer
+        newTestPortfolio signer
+        _ <- answer signer ["label", "Family", "--of-wallet"] []
+        _ <- answer signer ["label", "Spending"] []
+        _ <- answer signer ["switch", "1"] []
+        _ <- answer signer ["label", "Savings"] []
+        _ <- answer signer ["exportwallet", signer </> "wallet.jsonl"] []
+        run <- hw online ["importwallet", signer </> "wallet.jsonl"] []
+        filter (Text.isPrefixOf "Labels set") (Text.lines (runOut run)) `shouldBe` ["Labels set: 1 wallet, 2 portfolios"]
+
+    it "is kept by importwallet against that of the file, which it says it left aside" $
+      withHome $ \signer -> withHome $ \online -> do
+        newTestPortfolio signer
+        _ <- answer signer ["label", "Savings"] []
+        _ <- answer signer ["exportwallet", signer </> "wallet.jsonl"] []
+        newTestPortfolio online
+        _ <- answer online ["label", "Rent"] []
+        run <- hw online ["importwallet", signer </> "wallet.jsonl"] []
+        filter (\line -> any (`Text.isPrefixOf` line) ["Labels set", "Left aside"]) (Text.lines (runOut run))
+          `shouldBe` ["Labels set: none", "Left aside: 1 label of a portfolio that keeps its own"]
+        listed <- hw online ["portfolios"] []
+        take 1 (Text.lines (runOut listed)) `shouldBe` ["* portfolio0  wallet0  \"Rent\""]
+
     it "is shown at once in the answer, with the portfolio" $
       withHome $ \home -> do
         newTestPortfolio home

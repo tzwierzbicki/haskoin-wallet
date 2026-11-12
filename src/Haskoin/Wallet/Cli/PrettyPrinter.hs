@@ -600,10 +600,16 @@ foreignFundsDoc unit elsewhere =
 -- | What importwallet did with a file: each wallet the file names, with
 -- what became of it and of its portfolios, then which portfolio is active
 -- when the import created one ('activeDoc'), then the keys left aside, a
--- blank line between them, then the labels and locks set, what the file
--- labels that the wallet does not have yet, with the addresses among them
--- that hw would not derive from their key path, what hw keeps no label
--- for, and the lines that are not records
+-- blank line between them. Then come the labels and locks set, what the
+-- file labels that the wallet does not have yet, with the addresses among
+-- them that hw would not derive from their key path, what is left aside,
+-- and the lines that are not records.
+--
+-- The labels set go from the largest thing to the smallest: wallets,
+-- portfolios, addresses, transactions. The label of a wallet or a
+-- portfolio is its description. Left aside are the labels of wallets and
+-- portfolios that keep a description of their own, and what hw keeps no
+-- label for.
 importDoc :: ImportReport -> Maybe ActiveAfter -> Doc Style
 importDoc report activeM =
   vcat . intersperse mempty $
@@ -620,20 +626,32 @@ importDoc report activeM =
         <> [indent 2 (sentence (wordsOf (tooFar n))) | let n = reportAddressesTooFar report, n > 0]
         <> ["Left aside:" <+> commaList (text <$> aside) | not (null aside)]
         <> [styled Failure "Lines that are not records:" <+> text (intercalate ", " (show <$> reportUnreadable report)) | not (null (reportUnreadable report))]
-    labelsLine = case countedIf (reportAddressLabels report) "address" "addresses" <> countedIf (reportTxLabels report) "transaction" "transactions" of
+    labelsLine = case labelsSet of
       [] -> "Labels set:" <+> styled Muted "none"
       parts -> "Labels set:" <+> commaList (text <$> parts)
+    labelsSet =
+      countedIf (reportWalletLabels report) "wallet" "wallets"
+        <> countedIf (reportPortfolioLabels report) "portfolio" "portfolios"
+        <> countedIf (reportAddressLabels report) "address" "addresses"
+        <> countedIf (reportTxLabels report) "transaction" "transactions"
     missing =
       countedIf (reportAddressesMissing report) "address" "addresses"
         <> countedIf (reportTxsMissing report) "transaction" "transactions"
         <> countedIf (reportCoinsMissing report) "coin" "coins"
     aside =
-      [counted n "record" "records" <> " of accounts the wallet does not have" | let n = reportOtherAccounts report, n > 0]
+      keptOwn (reportWalletLabelsKept report) "wallet" "wallets"
+        <> keptOwn (reportPortfolioLabelsKept report) "portfolio" "portfolios"
+        <> [counted n "record" "records" <> " of accounts the wallet does not have" | let n = reportOtherAccounts report, n > 0]
         <> [counted n "record" "records" <> " of the portfolios --portfolio leaves out" | let n = reportOtherPortfolios report, n > 0]
         <> [counted n "label" "labels" <> " of change addresses" | let n = reportChangeAddresses report, n > 0]
         <> [counted n "record" "records" <> " hw keeps no label for" | let n = reportNotKept report, n > 0]
     -- A count with its noun, when there is anything to count
     countedIf n singular plural = [counted n singular plural | n > 0]
+    -- The labels of the file that wallets or portfolios did not take,
+    -- since each keeps a description of its own: "1 label of a portfolio
+    -- that keeps its own", "2 labels of portfolios that keep their own"
+    keptOwn n singular plural =
+      countedIf n ("label of a " <> singular <> " that keeps its own") ("labels of " <> plural <> " that keep their own")
     -- Why hw derived none of these addresses from their key path: a file
     -- names any path, and hw generates no further than the scan limit
     -- past the last used address of a chain

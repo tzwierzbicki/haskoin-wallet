@@ -42,6 +42,14 @@
 -- test networks share theirs
 -- ("Haskoin.Wallet.Database.Account".'createPortfolioWith').
 --
+-- A wallet and a portfolio take the labels of their key records as their
+-- descriptions when they have none, and keep their own otherwise
+-- ('takeLabel'). The report counts each wallet and each portfolio once,
+-- though each of its key records carries its label. A label taken counts
+-- among the labels set, beside those of addresses and transactions. A
+-- label that meets a description of the user's own counts apart, among
+-- what is left aside. So the answer accounts for every label of the file.
+--
 -- Nothing in a file proves that its keys are those of the mnemonic of the
 -- wallet it names: only the mnemonic could. importwallet trusts the file,
 -- as any import of public keys must, and the help says to import only a
@@ -239,6 +247,14 @@ data ImportReport = ImportReport
     -- | What became of each account the file names, in the order of its
     -- xpub records
     reportAccounts :: ![AccountImport],
+    -- | The labels set on wallets, as their descriptions. A wallet counts
+    -- when it bears the label of the file after the import: it had no
+    -- description and took it, or had that one already. It counts once,
+    -- however many key records carry its label.
+    reportWalletLabels :: !Natural,
+    -- | The labels set on portfolios, as their descriptions, counted as
+    -- those of wallets
+    reportPortfolioLabels :: !Natural,
     -- | The labels set on addresses
     reportAddressLabels :: !Natural,
     -- | The labels set on transactions, each portfolio counting once
@@ -261,6 +277,12 @@ data ImportReport = ImportReport
     -- | The records of the portfolios --portfolio leaves out, which are
     -- not read
     reportOtherPortfolios :: !Natural,
+    -- | The labels the file gives wallets that keep a description of
+    -- their own, which differs from it
+    reportWalletLabelsKept :: !Natural,
+    -- | The labels the file gives portfolios that keep a description of
+    -- their own, which differs from it
+    reportPortfolioLabelsKept :: !Natural,
     -- | The labels of change addresses, which hw does not keep
     reportChangeAddresses :: !Natural,
     -- | The records hw keeps no label for: inputs, the labels of coins,
@@ -270,6 +292,49 @@ data ImportReport = ImportReport
     reportUnreadable :: ![Natural]
   }
   deriving (Eq, Show)
+
+-- | What became of the label a file gives a wallet or a portfolio, which
+-- hw keeps as its description. Each key record of a portfolio carries the
+-- label of the portfolio and that of its wallet. So a wallet or a
+-- portfolio has one outcome, however many of its key records the file
+-- holds.
+data LabelOutcome
+  = -- | The file gives it no label
+    NoLabelGiven
+  | -- | It bears the label of the file: it had no description and took
+    -- it, or had that one already
+    LabelTaken
+  | -- | It keeps a description of its own, which differs from the label
+    -- of the file
+    OwnLabelKept
+  deriving (Eq)
+
+-- | What became of the labels a file gives its wallets and its
+-- portfolios: an outcome for each wallet, and one for each portfolio
+data LabelsTaken = LabelsTaken
+  { walletLabelOutcomes :: ![LabelOutcome],
+    portfolioLabelOutcomes :: ![LabelOutcome]
+  }
+
+instance Semigroup LabelsTaken where
+  LabelsTaken wallets portfolios <> LabelsTaken moreWallets morePortfolios =
+    LabelsTaken (wallets <> moreWallets) (portfolios <> morePortfolios)
+
+instance Monoid LabelsTaken where
+  mempty = LabelsTaken [] []
+
+-- | Count in a report what became of the labels of wallets and
+-- portfolios
+withLabelsTaken :: LabelsTaken -> ImportReport -> ImportReport
+withLabelsTaken labels report =
+  report
+    { reportWalletLabels = countOf LabelTaken (walletLabelOutcomes labels),
+      reportPortfolioLabels = countOf LabelTaken (portfolioLabelOutcomes labels),
+      reportWalletLabelsKept = countOf OwnLabelKept (walletLabelOutcomes labels),
+      reportPortfolioLabelsKept = countOf OwnLabelKept (portfolioLabelOutcomes labels)
+    }
+  where
+    countOf outcome = fromIntegral . length . filter (== outcome)
 
 -- | What became of a wallet the file names
 data WalletImport = WalletImport
@@ -335,6 +400,8 @@ emptyReport wallets accounts unreadable =
   ImportReport
     { reportWallets = wallets,
       reportAccounts = accounts,
+      reportWalletLabels = 0,
+      reportPortfolioLabels = 0,
       reportAddressLabels = 0,
       reportTxLabels = 0,
       reportCoinsLocked = 0,
@@ -345,6 +412,8 @@ emptyReport wallets accounts unreadable =
       reportCoinsMissing = 0,
       reportOtherAccounts = 0,
       reportOtherPortfolios = 0,
+      reportWalletLabelsKept = 0,
+      reportPortfolioLabelsKept = 0,
       reportChangeAddresses = 0,
       reportNotKept = 0,
       reportUnreadable = unreadable
@@ -430,12 +499,13 @@ classifyLine (number, line) = case parseLine line of
 importRecords :: (MonadUnliftIO m) => Ctx -> ImportScope -> [Record] -> [(Natural, Record)] -> [Natural] -> ExceptT String (DB m) ImportReport
 importRecords ctx scope keys others unreadable = do
   liftEither $ checkScopeHeld ctx scope keys (snd <$> others)
-  (wallets, accountImports) <- importKeys ctx scope keys
+  (wallets, labels, accountImports) <- importKeys ctx scope keys
   accounts <- lift getAccounts
   -- The records of the portfolios left out are counted, and not read:
   -- their labels would be looked for in the portfolios that are
   let (inScope, leftOut) = partition (recordInScope scope . snd) others
-  report <- foldM (importRecord ctx accounts) (emptyReport wallets accountImports unreadable) inScope
+      keysImported = withLabelsTaken labels (emptyReport wallets accountImports unreadable)
+  report <- foldM (importRecord ctx accounts) keysImported inScope
   return report {reportOtherPortfolios = fromIntegral (length leftOut)}
 
 -- | Whether a record is of a portfolio the scope reads. With --portfolio,
@@ -537,14 +607,14 @@ readWalletKey ctx r = do
     noTypeKey = "The record does not say the type of its account. hw imports the wallets exportwallet writes, not a key alone"
 
 -- | Import the wallets the key records name, within the scope, and say
--- what became of each wallet and of each account, in the order of the
--- records.
+-- what became of each wallet, of the labels of the wallets and of their
+-- portfolios, and of each account, in the order of the records.
 --
 -- The keys are sorted by wallet, by the fingerprint of their origin. A
 -- key without an origin names the wallet of the account that holds it in
 -- the database, and is left aside when none does. Each wallet is then
 -- imported ('importWallet').
-importKeys :: (MonadUnliftIO m) => Ctx -> ImportScope -> [Record] -> ExceptT String (DB m) ([WalletImport], [AccountImport])
+importKeys :: (MonadUnliftIO m) => Ctx -> ImportScope -> [Record] -> ExceptT String (DB m) ([WalletImport], LabelsTaken, [AccountImport])
 importKeys ctx scope records = do
   let readKeys = [(r, readWalletKey ctx r) | r <- records]
       inScope :: WalletKey -> Bool
@@ -560,7 +630,7 @@ importKeys ctx scope records = do
   let fingerprints = nub [fingerprint | (_, Just fingerprint) <- named]
   imported <- forM fingerprints $ \fingerprint ->
     importWallet ctx scope fingerprint [key | (key, Just other) <- named, other == fingerprint]
-  let outcomes = concatMap snd imported
+  let outcomes = concat [keyOutcomes | (_, _, keyOutcomes) <- imported]
       outcomeOf r = case lookup r [(key.walletKeyRecord, outcome) | (key, outcome) <- outcomes] of
         Just outcome -> Just outcome
         Nothing -> case lookup r readKeys of
@@ -569,24 +639,29 @@ importKeys ctx scope records = do
             | not (inScope key) -> Nothing
             | otherwise -> Just (AccountLeftAside (shownKey r) "The record has no origin, and no account of the database holds its key: nothing says which wallet it is of")
           Nothing -> Nothing
-  return (fst <$> imported, mapMaybe outcomeOf records)
+  return
+    ( [wallet | (wallet, _, _) <- imported],
+      mconcat [labels | (_, labels, _) <- imported],
+      mapMaybe outcomeOf records
+    )
 
 -- | Import the keys of one wallet of a file, the wallet of the
--- fingerprint, and say what became of the wallet and of each key.
+-- fingerprint, and say what became of the wallet, of the labels of the
+-- wallet and of its portfolios, and of each key.
 --
 -- Each portfolio of the file is taken whole ('importPortfolio'). A wallet
 -- the database does not have is created, with its portfolio0, which every
 -- wallet has: a file that does not bring that portfolio is refused, and
 -- so is importwallet --portfolio N of such a wallet, with the advice to
--- import the whole file. The wallet takes the description the file gives
--- it when it has none.
+-- import the whole file. The wallet takes the label the file gives it as
+-- its description when it has none ('takeLabel').
 importWallet ::
   (MonadUnliftIO m) =>
   Ctx ->
   ImportScope ->
   Fingerprint ->
   [WalletKey] ->
-  ExceptT String (DB m) (WalletImport, [(WalletKey, AccountImport)])
+  ExceptT String (DB m) (WalletImport, LabelsTaken, [(WalletKey, AccountImport)])
 importWallet ctx scope fingerprint keys = do
   existing <- lift $ walletWithFingerprint fingerprint
   let indexes = sort (nub ((.walletKeyIndex) <$> keys))
@@ -607,10 +682,12 @@ importWallet ctx scope fingerprint keys = do
   (walletId, created) <- case existing of
     Just (walletId, _) -> return (walletId, False)
     Nothing -> (\(walletId, _) -> (walletId, True)) <$> lift (insertWallet fingerprint)
-  -- The description of the wallet, when it has none
-  described <- getWalletById walletId
-  forM_ (listToMaybe (mapMaybe (recordWallet . (.walletKeyRecord)) keys)) $ \description ->
-    when (Text.null (dBWalletDescription described)) $ setWalletDescription walletId description
+  held <- getWalletById walletId
+  walletLabel <-
+    takeLabel
+      (dBWalletDescription held)
+      (firstLabel (recordWallet . (.walletKeyRecord) <$> keys))
+      (setWalletDescription walletId)
   wallet <- getWalletById walletId
   imported <- forM indexes $ \index ->
     importPortfolio ctx (walletId, wallet) created index [key | key <- keys, key.walletKeyIndex == index]
@@ -619,23 +696,45 @@ importWallet ctx scope fingerprint keys = do
           { walletImportIndex = walletIndex wallet,
             walletImportFingerprint = fingerprint,
             walletImportCreated = created,
-            walletImportPortfolios = fst <$> imported
+            walletImportPortfolios = [portfolio | (portfolio, _, _) <- imported]
           }
-  return (summary, concatMap snd imported)
+      labels = LabelsTaken [walletLabel] [portfolioLabel | (_, portfolioLabel, _) <- imported]
+  return (summary, labels, concat [keyOutcomes | (_, _, keyOutcomes) <- imported])
+
+-- | The first label of a wallet or a portfolio that its key records give,
+-- leaving out empty ones. Each key record carries the labels, so a file
+-- joined from two may give two. The first one is taken.
+firstLabel :: [Maybe Text] -> Maybe Text
+firstLabel = listToMaybe . filter (not . Text.null) . catMaybes
+
+-- | Give a wallet or a portfolio the label of the file as its
+-- description, with the action that sets it, and say what became of the
+-- label. The description it has is given first. One it has is kept: the
+-- user set it, and an import adds to what the user did, and undoes
+-- nothing of it.
+takeLabel :: (Monad m) => Text -> Maybe Text -> (Text -> m ()) -> m LabelOutcome
+takeLabel held givenM setDescription = case givenM of
+  Nothing -> return NoLabelGiven
+  Just given
+    | given == held -> return LabelTaken
+    | Text.null held -> LabelTaken <$ setDescription given
+    | otherwise -> return OwnLabelKept
 
 -- | Import the keys of one portfolio of a wallet, at an index, and say
--- what became of the portfolio and of each key. The flag says whether the
--- import has just created the wallet, which the refusals then name by its
--- fingerprint: a refusal undoes it.
+-- what became of the portfolio, of its label and of each key. The flag
+-- says whether the import has just created the wallet, which the refusals
+-- then name by its fingerprint: a refusal undoes it.
 --
 -- A portfolio the wallet has is whole already. Every key of the file must
 -- be the one its account holds, or the import is refused: the file and
 -- the database are then not of one mnemonic. Nothing is added to it, and
--- it takes the description the file gives it when it has none.
+-- it takes the label the file gives it as its description when it has
+-- none ('takeLabel').
 --
 -- A portfolio the wallet does not have is created with the twelve
--- accounts of the file, and with the description the file gives it: the
--- file must give a key for each of them ('wholePortfolioKeys').
+-- accounts of the file, and with the label the file gives it as its
+-- description: the file must give a key for each of them
+-- ('wholePortfolioKeys').
 importPortfolio ::
   (MonadUnliftIO m) =>
   Ctx ->
@@ -643,10 +742,10 @@ importPortfolio ::
   Bool ->
   Natural ->
   [WalletKey] ->
-  ExceptT String (DB m) (PortfolioImport, [(WalletKey, AccountImport)])
+  ExceptT String (DB m) (PortfolioImport, LabelOutcome, [(WalletKey, AccountImport)])
 importPortfolio ctx (walletId, wallet) newWallet index keys = do
   existing <- lift $ portfolioAt walletId index
-  let description = listToMaybe (filter (not . Text.null) (mapMaybe (recordLabel . (.walletKeyRecord)) keys))
+  let description = firstLabel (recordLabel . (.walletKeyRecord) <$> keys)
       place
         | newWallet = cs (portfolioName index) <> " of the wallet " <> cs (fingerprintToText (walletFingerprint wallet))
         | otherwise = cs (portfolioName index) <> " of " <> cs (walletName (walletIndex wallet))
@@ -662,13 +761,13 @@ importPortfolio ctx (walletId, wallet) newWallet index keys = do
             "The " <> cs (kindName key.walletKeyKind) <> " account of " <> portfolioText portfolio <> " on " <> key.walletKeyNetwork.name
               <> " has another key than the file gives it: the file and the database are not of one mnemonic"
         return (key, AccountHeld (refOf portfolio key))
-      forM_ description $ \text ->
-        when (Text.null (dBPortfolioDescription row)) $ setPortfolioDescription portfolioKey text
-      return (PortfolioImport index False, outcomes)
+      label <- takeLabel (dBPortfolioDescription row) description (setPortfolioDescription portfolioKey)
+      return (PortfolioImport index False, label, outcomes)
     Nothing -> do
       accountKeys <- liftEither $ wholePortfolioKeys place keys
       portfolio <- createPortfolioWith ctx (walletId, wallet) index (fromMaybe "" description) accountKeys
-      return (PortfolioImport index True, [(key, AccountAdded (refOf portfolio key)) | key <- keys])
+      let label = maybe NoLabelGiven (const LabelTaken) description
+      return (PortfolioImport index True, label, [(key, AccountAdded (refOf portfolio key)) | key <- keys])
 
 -- | The key of each of the twelve accounts of a portfolio, from the keys
 -- of a file for it, in the order of 'portfolioAccounts'. A record may be
@@ -960,7 +1059,7 @@ holdsAnything file = not (null (fileKeys file) && null (fileRecords file) && fil
 fileShown :: (MonadUnliftIO m) => Ctx -> ImportScope -> WalletFile -> ExceptT String (DB m) FileShown
 fileShown ctx scope file = do
   liftEither $ checkScopeHeld ctx scope (fileKeys file) (snd <$> fileRecords file)
-  (wallets, outcomes) <- liftEither =<< lift (undoneAfter (runExceptT (importKeys ctx scope (fileKeys file))))
+  (wallets, _, outcomes) <- liftEither =<< lift (undoneAfter (runExceptT (importKeys ctx scope (fileKeys file))))
   let (inScope, leftOut) = partition (recordInScope scope . snd) (fileRecords file)
       shown = sortRecords ctx file {fileRecords = inScope} wallets outcomes
   return shown {shownOtherPortfolios = fromIntegral (length leftOut)}
@@ -1075,6 +1174,8 @@ reportPairs :: ImportReport -> [Pair]
 reportPairs report =
   [ "wallets" .= reportWallets report,
     "accounts" .= (Json.object . accountImportPairs <$> reportAccounts report),
+    "walletlabels" .= reportWalletLabels report,
+    "portfoliolabels" .= reportPortfolioLabels report,
     "addresslabels" .= reportAddressLabels report,
     "txlabels" .= reportTxLabels report,
     "coinslocked" .= reportCoinsLocked report,
@@ -1085,6 +1186,8 @@ reportPairs report =
     "coinsmissing" .= reportCoinsMissing report,
     "otheraccounts" .= reportOtherAccounts report,
     "otherportfolios" .= reportOtherPortfolios report,
+    "walletlabelskept" .= reportWalletLabelsKept report,
+    "portfoliolabelskept" .= reportPortfolioLabelsKept report,
     "changeaddresses" .= reportChangeAddresses report,
     "notkept" .= reportNotKept report,
     "unreadable" .= reportUnreadable report
@@ -1095,6 +1198,8 @@ parseReport o =
   ImportReport
     <$> o .: "wallets"
     <*> (mapM parseAccountImport =<< o .: "accounts")
+    <*> o .: "walletlabels"
+    <*> o .: "portfoliolabels"
     <*> o .: "addresslabels"
     <*> o .: "txlabels"
     <*> o .: "coinslocked"
@@ -1105,6 +1210,8 @@ parseReport o =
     <*> o .: "coinsmissing"
     <*> o .: "otheraccounts"
     <*> o .: "otherportfolios"
+    <*> o .: "walletlabelskept"
+    <*> o .: "portfoliolabelskept"
     <*> o .: "changeaddresses"
     <*> o .: "notkept"
     <*> o .: "unreadable"

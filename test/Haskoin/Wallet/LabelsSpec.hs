@@ -83,6 +83,13 @@ mainKeyLine, segwitKeyLine :: Text
 mainKeyLine = keyLine testAccountXPub mainOrigin "btc" "44"
 segwitKeyLine = keyLine testSegwitAccountXPub segwitOrigin "btc" "84"
 
+-- | The key of the bip44 account of portfolio 0 of the test wallet on
+-- Bitcoin, as exportwallet writes it for a portfolio described "savings"
+-- in a wallet described "steel backup"
+describedKeyLine :: Text
+describedKeyLine =
+  "{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"savings\",\"origin\":\"" <> mainOrigin <> "\",\"network\":\"btc\",\"purpose\":44,\"wallet\":\"steel backup\"}\n"
+
 -- | The keys of the two accounts of portfolio 1 of the test wallet on
 -- Bitcoin, m/44'/0'/1' and m/84'/0'/1'
 secondKeyLine, secondSegwitKeyLine :: Text
@@ -246,7 +253,7 @@ addressLabels accId = do
 
 -- | A report of an import that changed nothing
 nothingDone :: ImportReport
-nothingDone = ImportReport [] [] 0 0 0 0 0 0 0 0 0 0 0 0 []
+nothingDone = ImportReport [] [] 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 []
 
 -- | What a file of one key that is left aside reports: the start of the
 -- key and the reason
@@ -432,7 +439,7 @@ importKeySpec ctx =
 
     it "gives a new portfolio its label as its description, and a new wallet the description under the key wallet" $
       inDatabaseE $ do
-        _ <- importFile ctx wholeFile (Text.replace mainKeyLine ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"savings\",\"origin\":\"" <> mainOrigin <> "\",\"network\":\"btc\",\"purpose\":44,\"wallet\":\"steel backup\"}\n") testWalletFile)
+        _ <- importFile ctx wholeFile (Text.replace mainKeyLine describedKeyLine testWalletFile)
         lift walletsStored `dbShouldBeE` [(0, "bc560f95", "steel backup")]
         lift portfoliosStored `dbShouldBeE` [(0, 0, "savings")]
 
@@ -441,9 +448,47 @@ importKeySpec ctx =
         portfolio <- testPortfolio ctx
         setPortfolioDescription portfolio.portfolioId "rent"
         setWalletDescription portfolio.portfolioWalletId "paper backup"
-        _ <- importFile ctx wholeFile ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"savings\",\"origin\":\"" <> mainOrigin <> "\",\"network\":\"btc\",\"purpose\":44,\"wallet\":\"steel backup\"}\n")
+        _ <- importFile ctx wholeFile describedKeyLine
         lift walletsStored `dbShouldBeE` [(0, "bc560f95", "paper backup")]
         lift portfoliosStored `dbShouldBeE` [(0, 0, "rent")]
+
+    it "counts the labels a new wallet and a new portfolio take from the file among the labels set" $
+      inDatabaseE $ do
+        report <- importFile ctx wholeFile (Text.replace mainKeyLine describedKeyLine testWalletFile)
+        liftIO $ (reportWalletLabels report, reportPortfolioLabels report) `shouldBe` (1, 1)
+
+    -- exportwallet writes the labels on each of the twelve keys
+    it "counts the labels of a wallet and a portfolio once, though each of the twelve keys of the portfolio carries them" $
+      inDatabaseE $ do
+        let labelled = Text.replace ",\"origin\"" ",\"label\":\"savings\",\"origin\"" (Text.replace "}\n" ",\"wallet\":\"steel backup\"}\n" testWalletFile)
+        report <- importFile ctx wholeFile labelled
+        liftIO $ (reportWalletLabels report, reportPortfolioLabels report) `shouldBe` (1, 1)
+
+    -- As when the same file is imported again
+    it "counts the labels of a wallet and a portfolio that had them already among the labels set" $
+      inDatabaseE $ do
+        portfolio <- testPortfolio ctx
+        setPortfolioDescription portfolio.portfolioId "savings"
+        setWalletDescription portfolio.portfolioWalletId "steel backup"
+        report <- importFile ctx wholeFile describedKeyLine
+        liftIO $ (reportWalletLabels report, reportPortfolioLabels report) `shouldBe` (1, 1)
+
+    it "counts the labels of the file that the wallet and the portfolio keep their own descriptions against as kept, and not as set" $
+      inDatabaseE $ do
+        portfolio <- testPortfolio ctx
+        setPortfolioDescription portfolio.portfolioId "rent"
+        setWalletDescription portfolio.portfolioWalletId "paper backup"
+        report <- importFile ctx wholeFile describedKeyLine
+        liftIO $
+          (reportWalletLabels report, reportPortfolioLabels report, reportWalletLabelsKept report, reportPortfolioLabelsKept report)
+            `shouldBe` (0, 0, 1, 1)
+
+    it "counts no label of a wallet or a portfolio when the file gives none" $
+      inDatabaseE $ do
+        report <- importFile ctx wholeFile testWalletFile
+        liftIO $
+          (reportWalletLabels report, reportPortfolioLabels report, reportWalletLabelsKept report, reportPortfolioLabelsKept report)
+            `shouldBe` (0, 0, 0, 0)
 
     it "is taken once when the file has it twice" $
       inDatabaseE $ do
@@ -1586,7 +1631,8 @@ reportJsonSpec :: Spec
 reportJsonSpec =
   describe "The report of importwallet in JSON" $ do
     -- The answer of importwallet --json for a file that made wallet0 with
-    -- its portfolio 0, left a key aside, set a label and left one out
+    -- its portfolio 0, gave both their descriptions, left a key aside, set
+    -- the label of an address and left one out
     it "writes what became of each wallet, each portfolio and each account, then the counts" $
       Json.object (reportPairs report)
         `shouldBe` fromMaybe
@@ -1595,8 +1641,9 @@ reportJsonSpec =
               "{\"wallets\":[{\"wallet\":0,\"fingerprint\":\"bc560f95\",\"created\":true,\"portfolios\":[{\"portfolio\":0,\"created\":true}]}],\
               \\"accounts\":[{\"status\":\"added\",\"account\":{\"wallet\":0,\"portfolio\":0,\"network\":\"btc\",\"type\":\"bip44\",\"derivation\":\"/44'/0'/0'\"}},\
               \{\"status\":\"leftaside\",\"name\":\"xpub6CQF8An9...\",\"reason\":\"Unknown network nowhere\"}],\
+              \\"walletlabels\":1,\"portfoliolabels\":1,\
               \\"addresslabels\":1,\"txlabels\":0,\"coinslocked\":0,\"coinsunlocked\":0,\"addressesmissing\":0,\"addressestoofar\":0,\"txsmissing\":0,\"coinsmissing\":0,\
-              \\"otheraccounts\":0,\"otherportfolios\":1,\"changeaddresses\":0,\"notkept\":0,\"unreadable\":[]}"
+              \\"otheraccounts\":0,\"otherportfolios\":1,\"walletlabelskept\":0,\"portfoliolabelskept\":0,\"changeaddresses\":0,\"notkept\":0,\"unreadable\":[]}"
           )
 
     it "writes an account the wallet had already as held" $
@@ -1605,14 +1652,17 @@ reportJsonSpec =
           (error "The expected JSON does not read")
           ( Json.decode
               "{\"wallets\":[],\"accounts\":[{\"status\":\"held\",\"account\":{\"wallet\":0,\"portfolio\":1,\"network\":\"bch\",\"type\":\"bip44\",\"derivation\":\"/44'/145'/1'\"}}],\
+              \\"walletlabels\":0,\"portfoliolabels\":0,\
               \\"addresslabels\":0,\"txlabels\":0,\"coinslocked\":0,\"coinsunlocked\":0,\"addressesmissing\":0,\"addressestoofar\":0,\"txsmissing\":0,\"coinsmissing\":0,\
-              \\"otheraccounts\":0,\"otherportfolios\":0,\"changeaddresses\":0,\"notkept\":0,\"unreadable\":[]}"
+              \\"otheraccounts\":0,\"otherportfolios\":0,\"walletlabelskept\":0,\"portfoliolabelskept\":0,\"changeaddresses\":0,\"notkept\":0,\"unreadable\":[]}"
           )
   where
     report =
       nothingDone
         { reportWallets = [WalletImport 0 testFingerprint True [PortfolioImport 0 True]],
           reportAccounts = [AccountAdded (accountAt 0 0 btc Bip44), AccountLeftAside "xpub6CQF8An9..." "Unknown network nowhere"],
+          reportWalletLabels = 1,
+          reportPortfolioLabels = 1,
           reportAddressLabels = 1,
           reportOtherPortfolios = 1
         }

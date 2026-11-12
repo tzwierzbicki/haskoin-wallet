@@ -140,6 +140,10 @@ Wallets and portfolios:
   wallet. `show FILE` shows what `importwallet` would make of a file, and
   changes nothing. A transaction record without an origin labels the
   transaction only in the portfolios that have it, on its network.
+  The answer of `importwallet` counts the labels it set on wallets,
+  portfolios, addresses and transactions. The label of a wallet or a
+  portfolio is its description. A wallet or a portfolio that keeps a
+  description of its own is counted under `Left aside`.
 - `label` with the description alone describes the active portfolio, or its
   wallet with `--of-wallet`. One command sets every label and description.
   `label` refuses a word alone that reads as an address, a path or a
